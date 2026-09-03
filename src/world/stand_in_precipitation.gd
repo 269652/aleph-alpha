@@ -27,6 +27,25 @@ const MID_LATITUDE_RAIN := 0.6
 const POLAR_RAIN := 0.1
 
 
+## Stand-in for hydrology.md's Layer 4 lake balance until the live one
+## exists: a basin holds water when the rain its whole catchment delivers,
+## per cell of lake, at least matches what a cell of open water loses to
+## evaporation. Real terminal lakes sit where evaporation over their
+## surface balances inflow; with no live level to solve for, the phase-1
+## reading is binary -- full to the spill, or dry ground. Two tenths of a
+## full-rain cell per lake cell: a subtropical pocket fed only by itself
+## (0.08) dries out, an equatorial one (1.0) or any basin with a catchment
+## a few times its own size holds. Pinned by
+## test_a_basin_holds_water_only_when_its_catchment_out_delivers_evaporation.
+const LAKE_MIN_INFLOW_PER_CELL := 0.2
+
+
+static func lake_holds_water(inflow: float, cell_count: int) -> bool:
+	if cell_count <= 0:
+		return false
+	return inflow / float(cell_count) >= LAKE_MIN_INFLOW_PER_CELL
+
+
 ## Precipitation proxy in [0, 1] at a latitude in degrees (either sign).
 ## Piecewise cosine between the four anchors above: smooth, no overshoot.
 static func at_latitude(latitude_deg: float) -> float:

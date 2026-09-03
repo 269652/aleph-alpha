@@ -57,6 +57,7 @@ func _initialize() -> void:
 	print("bake: %dx%d, %d land cells, %d channel cells (Q>=30), %d lake cells, %d depressions" % [
 		data.width, data.height, land, channels, lakes, data.depressions.size()
 	])
+	_print_depression_histograms(data)
 
 	var candidates: Array = []
 	for py in data.height:
@@ -87,6 +88,54 @@ func _initialize() -> void:
 				"tile": tile, "curated_distance": curated,
 			})
 	candidates.sort_custom(func(a, b): return a["discharge"] > b["discharge"])
+	_print_candidates(candidates, count, lat_min, lat_max, lon_min, lon_max)
+	quit()
+
+
+## Depression size, depth (spill minus floor, in 8-bit asset steps of
+## 56.5 m) and inflow-per-cell histograms -- the numbers the lake filters
+## in tools/bake_hydrology.gd are chosen against.
+func _print_depression_histograms(data: HydrologyData) -> void:
+	var step := 1.0 / 255.0
+	var by_size := {}
+	var by_depth := {}
+	var by_inflow := {}
+	var cells_by_size := {}
+	for depression in data.depressions:
+		var size_bucket := _bucket(int(depression["cell_count"]), [4, 8, 16, 32, 64, 128, 512, 100000])
+		by_size[size_bucket] = by_size.get(size_bucket, 0) + 1
+		cells_by_size[size_bucket] = cells_by_size.get(size_bucket, 0) + int(depression["cell_count"])
+		var depth_steps := (float(depression["spill_elevation"]) - float(depression["floor_elevation"])) / step
+		var depth_bucket := _bucket(int(floor(depth_steps + 0.5)), [1, 2, 3, 5, 10, 100000])
+		by_depth[depth_bucket] = by_depth.get(depth_bucket, 0) + 1
+		var inflow := data.discharge_at(int(depression["spill_index"])) / float(depression["cell_count"])
+		var inflow_bucket := _bucket(int(floor(inflow * 10.0)), [1, 3, 6, 10, 30, 100, 100000])
+		by_inflow[inflow_bucket] = by_inflow.get(inflow_bucket, 0) + 1
+	print("depressions by cell count (upper bound: count / cells): %s" % _sorted(by_size, cells_by_size))
+	print("depressions by depth in 8-bit steps (upper bound: count): %s" % _sorted(by_depth, {}))
+	print("depressions by inflow per cell, tenths of full rain (upper bound: count): %s" % _sorted(by_inflow, {}))
+
+
+func _bucket(value: int, bounds: Array) -> int:
+	for bound in bounds:
+		if value <= bound:
+			return bound
+	return bounds[-1]
+
+
+func _sorted(counts: Dictionary, cells: Dictionary) -> String:
+	var keys := counts.keys()
+	keys.sort()
+	var parts: Array = []
+	for key in keys:
+		if cells.is_empty():
+			parts.append("<=%d: %d" % [key, counts[key]])
+		else:
+			parts.append("<=%d: %d / %d" % [key, counts[key], cells[key]])
+	return ", ".join(parts)
+
+
+func _print_candidates(candidates: Array, count: int, lat_min: float, lat_max: float, lon_min: float, lon_max: float) -> void:
 	print("strongest emergent channels in lat %.1f..%.1f lon %.1f..%.1f (>= %d tiles from curated rivers):" % [
 		lat_min, lat_max, lon_min, lon_max, int(CURATED_CLEARANCE_TILES)
 	])
@@ -95,4 +144,3 @@ func _initialize() -> void:
 		print("  lat %8.4f lon %8.4f  Q=%8.1f  elev %5.0fm  tile (%d, %d)  curated %.0f tiles away" % [
 			c["lat"], c["lon"], c["discharge"], c["elevation_m"], c["tile"].x, c["tile"].y, c["curated_distance"]
 		])
-	quit()

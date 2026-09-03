@@ -380,6 +380,10 @@ func nearest_river_at(global_x: int, global_y: int) -> Dictionary:
 	var curated := _river_catalog.nearest_river_at(
 		global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES
 	)
+	# Every answer carries its own half-width: the catalog's uniform one
+	# for a curated river, the discharge-derived one for a baked channel
+	# (a confluence widens where discharges add up).
+	curated["half_width_tiles"] = RiverCatalog.RIVER_HALF_WIDTH_TILES
 	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
 	if curated.distance_tiles <= apron or _hydrology == null or not hydrology_rivers_enabled:
 		return curated
@@ -392,7 +396,19 @@ func nearest_river_at(global_x: int, global_y: int) -> Dictionary:
 		"course_fraction": 0.0,
 		"course_bearing_deg": channel["course_bearing_deg"],
 		"signed_across_tiles": channel["signed_across_tiles"],
+		"half_width_tiles": channel["half_width_tiles"],
 	}
+
+
+## Whether a tile lies on a river or on the bank apron the flow overlay
+## paints just past its waterline -- the gate for a boulder to bend the
+## water. A rock sitting ON the bank (first playtest: "wrap shorelines
+## around edge boulders") is exactly the case is_river_at_global misses:
+## the waterline has to part around it, so it must be an obstacle too.
+func is_within_river_apron(global_x: int, global_y: int) -> bool:
+	var nearest := nearest_river_at(global_x, global_y)
+	var half_width: float = nearest.get("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES)
+	return nearest.distance_tiles <= half_width + RiverCatalog.RIVER_BANK_APRON_TILES
 
 
 ## Real meters of river depth at (global_x, global_y) -- the depth SOLVED

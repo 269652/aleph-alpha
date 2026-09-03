@@ -26,6 +26,13 @@ const StandInPrecipitation = preload("res://src/world/stand_in_precipitation.gd"
 ## smallest lake the data can physically represent (hydrology.md Layer 0).
 const MIN_DEPRESSION_AREA_CELLS := 4
 
+## A basin shallower than this (spill minus floor) is one 8-bit step of
+## the asset, not a lake: the first bake found 8,794 of its 10,776
+## depressions exactly one step deep, scattered over every flat plain
+## ("ponds spawn everywhere"). One and a half steps keeps every basin at
+## least two steps deep and drops every one-step pocket.
+const MIN_BASIN_DEPTH := 1.5 / 255.0
+
 
 func _initialize() -> void:
 	var started := Time.get_ticks_msec()
@@ -41,10 +48,10 @@ func _initialize() -> void:
 
 	var network = DrainageNetwork.new().build(
 		heights, width, height, EarthChunkGenerator.EARTH_SEA_LEVEL, true,
-		DrainageNetwork.DEFAULT_MIN_DEPRESSION_DEPTH, MIN_DEPRESSION_AREA_CELLS
+		DrainageNetwork.DEFAULT_MIN_DEPRESSION_DEPTH, MIN_DEPRESSION_AREA_CELLS, MIN_BASIN_DEPTH
 	)
-	print("bake_hydrology: filled and routed, %d depressions (%.1fs)" % [
-		network.depressions.size(), (Time.get_ticks_msec() - started) / 1000.0
+	print("bake_hydrology: filled and routed, %d depressions at least %.1f steps deep (%.1fs)" % [
+		network.depressions.size(), MIN_BASIN_DEPTH * 255.0, (Time.get_ticks_msec() - started) / 1000.0
 	])
 
 	var weights := PackedFloat32Array()
@@ -55,6 +62,20 @@ func _initialize() -> void:
 		for x in width:
 			weights[y * width + x] = rain
 	var discharge: PackedFloat32Array = network.accumulate_weighted(weights)
+
+	# The stand-in lake balance: a basin whose catchment delivers too
+	# little rain per lake cell is dry ground, not a lake. Its inflow is
+	# the accumulated discharge at its spill cell, where everything the
+	# basin collects passes on its way out.
+	var dry := PackedInt32Array()
+	for depression in network.depressions:
+		var inflow: float = discharge[int(depression["spill_index"])]
+		if not StandInPrecipitation.lake_holds_water(inflow, int(depression["cell_count"])):
+			dry.append(int(depression["id"]))
+	network.drop_depressions(dry)
+	print("bake_hydrology: %d basins dried out for lack of inflow, %d lakes remain" % [
+		dry.size(), network.depressions.size()
+	])
 
 	var data = HydrologyData.new().build_from_network(network, discharge)
 	data.save_to(HydrologyData.DEFAULT_DIRECTORY)

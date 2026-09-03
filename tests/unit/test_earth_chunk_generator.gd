@@ -613,11 +613,20 @@ func test_with_hydrology_rivers_enabled_a_channel_tile_is_a_river_with_solved_hy
 		generator.river_depth_meters_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y), hydraulics.depth_m, 1e-9
 	)
 
-	# The flow overlay's geometry, in the catalog's own shape.
+	# The flow overlay's geometry, in the catalog's own shape, plus the
+	# channel's own half-width.
 	var nearest := generator.nearest_river_at(GREENWICH_TILE.x, GREENWICH_TILE.y)
 	assert_eq(nearest.name, "")
-	assert_lte(nearest.distance_tiles, RiverCatalog.RIVER_HALF_WIDTH_TILES)
+	assert_lte(nearest.distance_tiles, nearest.half_width_tiles)
+	assert_gt(nearest.half_width_tiles, 0.0)
 	assert_almost_eq(nearest.course_bearing_deg, 0.0, 1e-6, "the outlet flows due north to the sea row")
+
+	# A bank tile just past the waterline is in the apron (a boulder there
+	# bends the water); a tile well beyond it is not.
+	var bank_x := GREENWICH_TILE.x + int(ceil(nearest.half_width_tiles))
+	assert_false(generator.is_river_at_global(bank_x, GREENWICH_TILE.y))
+	assert_true(generator.is_within_river_apron(bank_x, GREENWICH_TILE.y))
+	assert_false(generator.is_within_river_apron(GREENWICH_TILE.x + 12, GREENWICH_TILE.y))
 
 	# Still an overlay: the tile's biome is ordinary land.
 	assert_true(BiomeClassifier.KNOWN_BIOMES.has(generator.biome_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)))
@@ -631,7 +640,9 @@ func test_a_curated_river_is_authoritative_over_the_hydrology_fallback():
 		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 	)
 	assert_true(generator.is_river_at_global(dreisam.x, dreisam.y))
-	assert_eq(generator.nearest_river_at(dreisam.x, dreisam.y).name, "Dreisam")
+	var nearest := generator.nearest_river_at(dreisam.x, dreisam.y)
+	assert_eq(nearest.name, "Dreisam")
+	assert_almost_eq(nearest.half_width_tiles, RiverCatalog.RIVER_HALF_WIDTH_TILES, 1e-9, "curated rivers keep the catalog's width")
 	assert_eq(generator.river_hydraulics_at_global(dreisam.x, dreisam.y).river_name, "Dreisam")
 
 

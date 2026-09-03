@@ -4,28 +4,34 @@ extends RefCounted
 ## actually gets", plus "Valleys are read back into the elevation"): given
 ## a game tile's global coordinate and its own macro elevation, answers
 ## whether it is in a lake or on a river channel, how deep the water is in
-## real metres, and how much the valley there suppresses procedural fine
-## detail and lowers the ground. Reads only the baked HydrologyData (the
-## tile's asset cell and its 3x3 neighbourhood), so a chunk stays a pure
-## slice of one global function -- no chunk-relative state, no seams.
+## real metres, how wide the channel is right there, and how much the
+## valley suppresses procedural fine detail and lowers the ground. Reads
+## only the baked HydrologyData (the tile's asset cell and its 3x3
+## neighbourhood), so a chunk stays a pure slice of one global function --
+## no chunk-relative state, no seams.
 ##
-## Phase 1 stand-ins (hydrology.md "Implementation order"): every lake
-## candidate is filled to its spill (the live lake balance is phase 3),
-## discharge is the bake's latitude-rain accumulation, and channels are
-## straight cell-centre polylines (the seeded meander is a follow-up).
+## Channel geometry (first playtest, 2026-09-03: "make curves smoother",
+## "springs -- rivers just start out of nothing", "two rivers flowing into
+## each other should produce the combined volume"):
+##   - each channel cell owns one quadratic Bezier from the midpoint toward
+##     its mainstem upstream, through its own centre, to the midpoint toward
+##     its downstream; adjacent cells share endpoints and tangents, so the
+##     centreline is smooth through every corner by construction;
+##   - width is hydraulic geometry of the cell's own discharge, interpolated
+##     along the curve, so a confluence widens exactly where the discharges
+##     add up;
+##   - a headwater cell's curve starts at its SOURCE (the cell that drains
+##     into it, even below the river threshold) at spring width, so a river
+##     tapers in from a point rather than appearing full-width.
+##
+## Phase 1 stand-ins: every lake candidate is filled to its spill (the live
+## lake balance is phase 3) and discharge is the bake's latitude-rain
+## accumulation.
 
 const HydrologyData = preload("res://src/world/hydrology_data.gd")
 const DrainageNetwork = preload("res://src/world/drainage_network.gd")
 const TerrainRelief = preload("res://src/world/terrain_relief.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
-
-## A hydrology channel is exactly as wide as a curated river
-## (docs/concept/rivers.md "Width": one uniform, tested half-width, the
-## honest MVP until the flow overlay takes a per-cell width), so the
-## overlay that draws the water and the read that decides "in the river"
-## agree tile for tile. width_tiles_for_discharge below shapes only the
-## VALLEY around the channel, not the water itself.
-const CHANNEL_HALF_WIDTH_TILES := RiverCatalog.RIVER_HALF_WIDTH_TILES
 
 ## Real metres per unit of the normalized elevation encoding
 ## (EarthElevationSource: 0.0 = -8000m, 1.0 = +6400m).
@@ -42,16 +48,27 @@ const RIVER_MIN_DISCHARGE := 30.0
 ## the width exaggerated toward legibility exactly as stone.md does for
 ## pebbles -- a real 300m river is narrower than one 1km tile and would be
 ## invisible -- so widths are stretched at the small end, monotone, and
-## capped. Depth is NOT exaggerated: it feeds water_movement_model.gd's
-## wade/swim line in real metres.
+## capped: one tile at the threshold, one more per doubling of discharge,
+## twelve at most. Depth is NOT exaggerated: it feeds the wade/swim line in
+## real metres.
 const MIN_LEGIBLE_WIDTH_TILES := 1.0
-const WIDTH_TILES_PER_DOUBLING := 0.5
+const WIDTH_TILES_PER_DOUBLING := 1.0
 const MAX_WIDTH_TILES := 12.0
 ## d = DEPTH_COEFFICIENT_M * Q^DEPTH_EXPONENT: 1.2m at the threshold (a
 ## fordable stream, under WaterMovementModel.WADE_DEPTH_METERS), ~5m at
 ## 1,000, ~30m at 100,000 -- the right order for the largest rivers.
 const DEPTH_COEFFICIENT_M := 0.3
 const DEPTH_EXPONENT := 0.4
+
+## Half-width of a river at its source: the spring. Narrower than the
+## thinnest river (MIN_LEGIBLE_WIDTH_TILES / 2), so a headwater tapers IN
+## to its first cell rather than bulging at the start.
+const SPRING_HALF_WIDTH_TILES := 0.3
+
+## How many straight pieces each cell's Bezier is sampled into for the
+## distance query. Six keeps the corner error under a tenth of a tile on a
+## right-angle turn between cells ten tiles apart.
+const CURVE_SEGMENTS := 6
 
 ## The valley: fine detail is fully suppressed on the channel, ramps back
 ## to full over this many tiles beyond the channel's edge, and the ground
@@ -60,6 +77,15 @@ const DEPTH_EXPONENT := 0.4
 ## its floor.
 const VALLEY_HALF_WIDTH_TILES := 3.0
 const VALLEY_CARVE_METERS_PER_DOUBLING := 6.0
+
+## A lake's shoreline is the real elevation contour at its spill, and the
+## flow overlay draws it from an "across" field exactly like a river bank
+## (|across| == 1 at the waterline): across = 1 + (elevation - spill) /
+## LAKE_SHORE_BAND, so the shore band is this many real metres of depth
+## from the waterline to full deep-water colour.
+const LAKE_SHORE_BAND_M := 20.0
+## across value handed back where no lake is anywhere near: dry.
+const LAKE_ACROSS_DRY := 2.0
 
 const NO_LAKE := -1.0
 
@@ -112,14 +138,38 @@ func cell_of_tile(global_x: int, global_y: int) -> int:
 ## --- lakes ---
 
 
-## Water-surface elevation (normalized) over this tile if its cell is in
-## a lake candidate, else NO_LAKE. Phase 1: every candidate sits at its
-## spill.
+## Water-surface elevation (normalized) that could cover this tile: the
+## highest spill among the depressions of its own asset cell and the eight
+## around it, else NO_LAKE. The 3x3 read matters: a depression's cells are
+## the ones whose CENTRE sits below the spill, but the bilinear elevation
+## dips below the spill inside neighbouring cells too, and water covers
+## everything lower that touches it -- so the shoreline follows the real
+## contour instead of stopping at the cell edge. Phase 1: every candidate
+## sits at its spill.
 func lake_surface_at_global(global_x: int, global_y: int) -> float:
-	var depression := _data.depression_at(cell_of_tile(global_x, global_y))
-	if depression == DrainageNetwork.NO_DEPRESSION:
-		return NO_LAKE
-	return _data.depressions[depression]["spill_elevation"]
+	var pixel := pixel_of_tile(global_x, global_y)
+	var pixel_x := floori(pixel.x)
+	var pixel_y := floori(pixel.y)
+	var surface := NO_LAKE
+	for dy in range(-1, 2):
+		var y := pixel_y + dy
+		if y < 0 or y >= _data.height:
+			continue
+		for dx in range(-1, 2):
+			var depression := _data.depression_at(cell_index_at(pixel_x + dx, y))
+			if depression == DrainageNetwork.NO_DEPRESSION:
+				continue
+			surface = maxf(surface, _data.depressions[depression]["spill_elevation"])
+	return surface
+
+
+## The flow overlay's across value for a lake shoreline (see
+## LAKE_SHORE_BAND_M): below 1 is water, 1 is the waterline, above is dry.
+static func lake_across(macro_elevation: float, surface: float) -> float:
+	if surface == NO_LAKE:
+		return LAKE_ACROSS_DRY
+	var depth_m := (surface - macro_elevation) * METERS_PER_ELEVATION_UNIT
+	return clampf(1.0 - depth_m / LAKE_SHORE_BAND_M, 0.0, LAKE_ACROSS_DRY)
 
 
 ## --- hydraulic geometry ---
@@ -151,25 +201,33 @@ func _carve_for_discharge(discharge: float) -> float:
 ##   kind               "lake" | "river" | ""
 ##   depth_m            real metres of water over the tile (0 when dry)
 ##   discharge          the channel's discharge when kind is "river"
+##   half_width_tiles   the channel's half-width at this tile's nearest point
+##   lake_across        the lake shoreline field (LAKE_ACROSS_DRY when none near)
 ##   fine_detail_scale  0..1 multiplier on EarthChunkGenerator's noise term
 ##   carve              normalized elevation to subtract along the channel
 func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
-	var lake_surface := lake_surface_at_global(global_x, global_y)
-	if lake_surface != NO_LAKE and macro_elevation < lake_surface:
+	var surface := lake_surface_at_global(global_x, global_y)
+	var across := lake_across(macro_elevation, surface)
+	if surface != NO_LAKE and macro_elevation < surface:
 		return {
 			"kind": "lake",
-			"depth_m": (lake_surface - macro_elevation) * METERS_PER_ELEVATION_UNIT,
+			"depth_m": (surface - macro_elevation) * METERS_PER_ELEVATION_UNIT,
 			"discharge": 0.0,
+			"half_width_tiles": 0.0,
+			"lake_across": across,
 			"fine_detail_scale": 0.0,
 			"carve": 0.0,
 		}
 
 	var channel := _nearest_channel(global_x, global_y)
 	if channel.is_empty():
-		return {"kind": "", "depth_m": 0.0, "discharge": 0.0, "fine_detail_scale": 1.0, "carve": 0.0}
+		return {
+			"kind": "", "depth_m": 0.0, "discharge": 0.0, "half_width_tiles": 0.0,
+			"lake_across": across, "fine_detail_scale": 1.0, "carve": 0.0,
+		}
 
 	var discharge: float = channel["discharge"]
-	var half_width := CHANNEL_HALF_WIDTH_TILES
+	var half_width: float = channel["half_width_tiles"]
 	var distance: float = channel["distance_tiles"]
 	var full_carve := _carve_for_discharge(discharge)
 	if distance <= half_width:
@@ -177,6 +235,8 @@ func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 			"kind": "river",
 			"depth_m": depth_meters_for_discharge(discharge),
 			"discharge": discharge,
+			"half_width_tiles": half_width,
+			"lake_across": across,
 			"fine_detail_scale": 0.0,
 			"carve": full_carve,
 		}
@@ -185,44 +245,48 @@ func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 		"kind": "",
 		"depth_m": 0.0,
 		"discharge": 0.0,
+		"half_width_tiles": half_width,
+		"lake_across": across,
 		"fine_detail_scale": shoulder,
 		"carve": full_carve * (1.0 - shoulder),
 	}
 
 
 ## The nearest channel's geometry in exactly the shape
-## RiverCatalog.nearest_river_at answers with, so the river flow overlay
-## can draw a hydrology channel through the same code path as a curated
-## river: {distance_tiles, signed_across_tiles, course_bearing_deg,
-## discharge}, or empty when no channel within valley reach. Sign and
-## bearing follow the catalog's own conventions (tangent.cross(point -
-## closest); compass bearing of the downstream tangent).
+## RiverCatalog.nearest_river_at answers with (plus the local half-width),
+## so the river flow overlay draws a hydrology channel through the same
+## code path as a curated river: {distance_tiles, signed_across_tiles,
+## course_bearing_deg, discharge, half_width_tiles}, or empty when no
+## channel is within valley reach. Sign and bearing follow the catalog's
+## conventions (tangent.cross(point - closest); compass bearing of the
+## downstream tangent).
 func nearest_channel_geometry(global_x: int, global_y: int) -> Dictionary:
 	var channel := _nearest_channel(global_x, global_y)
 	if channel.is_empty():
 		return {}
-	var segment: Dictionary = channel["segment"]
-	var tangent: Vector2 = segment["tangent"]
+	var tangent: Vector2 = channel["tangent"]
 	var point := Vector2(float(global_x) + 0.5, float(global_y) + 0.5)
 	return {
 		"distance_tiles": channel["distance_tiles"],
-		"signed_across_tiles": tangent.cross(point - segment["closest"]),
+		"signed_across_tiles": tangent.cross(point - channel["closest"]),
 		"course_bearing_deg": RiverCatalog.bearing_degrees(tangent),
 		"discharge": channel["discharge"],
+		"half_width_tiles": channel["half_width_tiles"],
 	}
 
 
-## The channel whose centreline is nearest this tile, in valley reach, as
-## {discharge, width_tiles, distance_tiles, segment}; empty when none of
-## the 3x3 surrounding cells carries a river. A tile inside several
-## channels' reach takes the one it is closest to.
+## The channel whose bank is nearest this tile, in valley reach, as
+## {discharge, distance_tiles, half_width_tiles, closest, tangent}; empty
+## when none of the 3x3 surrounding cells carries a river. Measured in
+## bank terms (distance minus local half-width) so a big river's valley
+## wins over a tributary's beside it.
 func _nearest_channel(global_x: int, global_y: int) -> Dictionary:
 	var tile_center := Vector2(float(global_x) + 0.5, float(global_y) + 0.5)
 	var pixel := pixel_of_tile(global_x, global_y)
 	var pixel_x := floori(pixel.x)
 	var pixel_y := floori(pixel.y)
 	var best := {}
-	var best_distance := INF
+	var best_reach := INF
 	for dy in range(-1, 2):
 		var y := pixel_y + dy
 		if y < 0 or y >= _data.height:
@@ -234,55 +298,112 @@ func _nearest_channel(global_x: int, global_y: int) -> Dictionary:
 			var discharge := _data.discharge_at(cell)
 			if discharge < river_min_discharge:
 				continue
-			var segment := _nearest_segment(tile_center, cell)
-			var distance: float = segment["distance"]
-			if distance - CHANNEL_HALF_WIDTH_TILES > VALLEY_HALF_WIDTH_TILES or distance >= best_distance:
+			var hit := _nearest_on_curve(tile_center, cell)
+			var reach: float = hit["distance"] - hit["half_width"]
+			if reach > VALLEY_HALF_WIDTH_TILES or reach >= best_reach:
 				continue
-			best_distance = distance
+			best_reach = reach
 			best = {
 				"discharge": discharge,
-				"width_tiles": width_tiles_for_discharge(discharge),
-				"distance_tiles": distance,
-				"segment": segment,
+				"distance_tiles": hit["distance"],
+				"half_width_tiles": hit["half_width"],
+				"closest": hit["closest"],
+				"tangent": hit["tangent"],
 			}
 	return best
 
 
-## The closest point on a channel cell's centreline to `point`, as
-## {distance, closest, tangent} with the tangent pointing DOWNSTREAM. The
-## centreline is the polyline mainstem-upstream centre -> this centre ->
-## downstream centre (the downstream may be the sea cell: that segment is
-## the river mouth). Every polyline point is shifted by whole world
-## widths to sit nearest the point, so a channel crossing the date-line
+## The cell's centreline: a quadratic Bezier from `start` through the
+## cell centre (the control point) to `end`, as {points, half_widths} --
+## CURVE_SEGMENTS + 1 samples with the half-width interpolated from
+## `start_half_width` to `end_half_width`. Every point is shifted by whole
+## world widths to sit nearest `near`, so a channel crossing the date-line
 ## seam measures correctly.
-func _nearest_segment(point: Vector2, cell: int) -> Dictionary:
-	var center := _nearest_wrapped(tile_of_pixel_center(cell % _data.width, _cell_y(cell)), point)
-	var best := {"distance": INF, "closest": center, "tangent": Vector2(0.0, -1.0)}
-	var upstream := _mainstem_upstream(cell)
+func _curve_for_cell(cell: int, near: Vector2) -> Dictionary:
+	var center := _nearest_wrapped(_center_of(cell), near)
+	var own_half := width_tiles_for_discharge(_data.discharge_at(cell)) / 2.0
+
+	var start := center
+	var start_half := SPRING_HALF_WIDTH_TILES
+	var upstream := _mainstem_upstream(cell, true)
 	if upstream >= 0:
-		var upstream_center := _nearest_wrapped(tile_of_pixel_center(upstream % _data.width, _cell_y(upstream)), point)
-		best = _closer_segment(best, point, upstream_center, center)
+		var upstream_center := _nearest_wrapped(_center_of(upstream), near)
+		start = (upstream_center + center) / 2.0
+		start_half = (width_tiles_for_discharge(_data.discharge_at(upstream)) / 2.0 + own_half) / 2.0
+	else:
+		# A headwater: the curve begins at the SOURCE, the cell draining
+		# into this one even below the river threshold, at spring width --
+		# the river tapers in from a point instead of starting full-width.
+		var source := _mainstem_upstream(cell, false)
+		if source >= 0:
+			start = _nearest_wrapped(_center_of(source), near)
+
+	var end := center
+	var end_half := own_half
 	var downstream := _downstream(cell)
 	if downstream >= 0:
-		var downstream_center := _nearest_wrapped(tile_of_pixel_center(downstream % _data.width, _cell_y(downstream)), point)
-		best = _closer_segment(best, point, center, downstream_center)
-	if best["distance"] == INF:
-		best["distance"] = point.distance_to(center)
+		var downstream_center := _nearest_wrapped(_center_of(downstream), near)
+		if _data.is_sea(downstream):
+			end = downstream_center  # the mouth runs to the sea cell's centre
+		else:
+			end = (center + downstream_center) / 2.0
+			end_half = (own_half + width_tiles_for_discharge(_data.discharge_at(downstream)) / 2.0) / 2.0
+
+	var half_widths := PackedFloat32Array()
+	half_widths.resize(CURVE_SEGMENTS + 1)
+	for i in CURVE_SEGMENTS + 1:
+		half_widths[i] = lerpf(start_half, end_half, float(i) / float(CURVE_SEGMENTS))
+	return {"points": centerline_curve(start, center, end, CURVE_SEGMENTS), "half_widths": half_widths}
+
+
+## A quadratic Bezier from `a` to `b` bending toward `control`, sampled
+## into `segments` straight pieces (segments + 1 points). The curve passes
+## through both endpoints and never through the control point itself, so
+## a right-angle corner between cells becomes a rounded bend.
+static func centerline_curve(a: Vector2, control: Vector2, b: Vector2, segments: int) -> PackedVector2Array:
+	var points := PackedVector2Array()
+	points.resize(segments + 1)
+	for i in segments + 1:
+		var t := float(i) / float(segments)
+		var u := 1.0 - t
+		points[i] = a * (u * u) + control * (2.0 * u * t) + b * (t * t)
+	return points
+
+
+## The closest point on a channel cell's centreline curve to `point`, as
+## {distance, closest, tangent, half_width} with the tangent pointing
+## DOWNSTREAM and the half-width interpolated along the curve.
+func _nearest_on_curve(point: Vector2, cell: int) -> Dictionary:
+	var curve := _curve_for_cell(cell, point)
+	var points: PackedVector2Array = curve["points"]
+	var half_widths: PackedFloat32Array = curve["half_widths"]
+	var best := {
+		"distance": INF, "closest": points[0], "tangent": Vector2(0.0, -1.0), "half_width": half_widths[0]
+	}
+	for i in points.size() - 1:
+		var a := points[i]
+		var b := points[i + 1]
+		var ab := b - a
+		var length_squared := ab.length_squared()
+		var t := 0.0
+		if length_squared > 0.0:
+			t = clampf((point - a).dot(ab) / length_squared, 0.0, 1.0)
+		var closest := a + ab * t
+		var distance := point.distance_to(closest)
+		if distance >= best["distance"]:
+			continue
+		var tangent: Vector2 = ab.normalized() if length_squared > 0.0 else best["tangent"]
+		best = {
+			"distance": distance,
+			"closest": closest,
+			"tangent": tangent,
+			"half_width": lerpf(half_widths[i], half_widths[i + 1], t),
+		}
 	return best
 
 
-## `best` or the point's projection onto segment a->b, whichever is closer.
-static func _closer_segment(best: Dictionary, point: Vector2, a: Vector2, b: Vector2) -> Dictionary:
-	var ab := b - a
-	var length_squared := ab.length_squared()
-	if length_squared == 0.0:
-		return best
-	var t := clampf((point - a).dot(ab) / length_squared, 0.0, 1.0)
-	var closest := a + ab * t
-	var distance := point.distance_to(closest)
-	if distance >= best["distance"]:
-		return best
-	return {"distance": distance, "closest": closest, "tangent": ab.normalized()}
+func _center_of(cell: int) -> Vector2:
+	return tile_of_pixel_center(cell % _data.width, _cell_y(cell))
 
 
 func _nearest_wrapped(candidate: Vector2, point: Vector2) -> Vector2:
@@ -312,8 +433,9 @@ func _downstream(cell: int) -> int:
 
 
 ## Of the neighbours draining into `cell`, the one carrying the most
-## discharge (the mainstem), or -1 for a headwater.
-func _mainstem_upstream(cell: int) -> int:
+## discharge (the mainstem), or -1 if none. With `channels_only`, only
+## neighbours that are rivers themselves count -- a headwater has none.
+func _mainstem_upstream(cell: int, channels_only: bool) -> int:
 	var best := -1
 	var best_discharge := -1.0
 	var x := cell % _data.width
@@ -326,6 +448,8 @@ func _mainstem_upstream(cell: int) -> int:
 		if _data.is_sea(neighbor) or _downstream(neighbor) != cell:
 			continue
 		var discharge := _data.discharge_at(neighbor)
+		if channels_only and discharge < river_min_discharge:
+			continue
 		if discharge > best_discharge:
 			best_discharge = discharge
 			best = neighbor

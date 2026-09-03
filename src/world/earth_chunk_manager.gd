@@ -3734,15 +3734,11 @@ func _paint_water_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# tiles under the flow layer's smooth bank curve -- the flow
 			# overlay is now the river's entire water surface, clipped at
 			# the real bank line, with the ground showing past it.
-			# ...plus lakes (docs/concept/hydrology.md): standing water with
-			# a real shoreline, which is exactly what this shore-distance
-			# overlay draws well -- the square-tile objection above was
-			# about a river's smooth bank curve, which a lake has no need of.
-			var cell_index := y * chunk.width + x
-			var is_water: bool = (
-				chunk.biome[cell_index] == "ocean"
-				or (cell_index < chunk.is_lake.size() and chunk.is_lake[cell_index] == 1)
-			)
+			# Lakes are NOT painted here either: they ride the river flow
+			# overlay as still water, so their shoreline is the same smooth
+			# elevation contour a river bank gets (first playtest: this
+			# overlay's square tiles read as "a very different art style").
+			var is_water: bool = chunk.biome[y * chunk.width + x] == "ocean"
 			if not is_water:
 				continue
 			var land_directions := _land_directions_at(global.x, global.y)
@@ -3799,19 +3795,45 @@ func _paint_hillshade_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 ## above (which paints every cell): only water should ever show a flowing
 ## current. Rivers previously looked exactly like still ocean water
 ## (reported: "rivers should flow").
+## A dry tile whose lake-shoreline across (HydrologyField.lake_across) is
+## below this still gets painted, so the waterline's feather has a cell to
+## draw in wherever the shore is gentle; a steep shore jumps well past it
+## and the waterline then falls inside the wet cell anyway.
+const LAKE_PAINT_ACROSS := 1.6
+
+
 func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	if _river_flow_layer == null:
 		return
 	var origin := chunk_coord * CHUNK_SIZE
-	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
 	for y in chunk.height:
 		for x in chunk.width:
 			var global := origin + Vector2i(x, y)
+			# LAKES first (docs/concept/hydrology.md): a lake tile, or a dry
+			# tile inside its shoreline's paint band, writes the elevation-
+			# contour across with ZERO current, so the shader draws the same
+			# smooth waterline, ink and feather it gives a river bank and
+			# nothing moves -- first playtest: "ponds have a very different
+			# art style, make them more like the rivers' contour lines".
+			var probe := generator.hydrology_at_global(global.x, global.y)
+			var lake_across: float = probe["lake_across"]
+			if probe["kind"] == "lake" or lake_across < LAKE_PAINT_ACROSS:
+				_write_flow_across_texel(global, lake_across, 0.0, 0.0)
+				_river_flow_boulder_tiles.erase(global)
+				_river_flow_layer.set_cell(
+					global, 0, _terrain_renderer.atlas_coords_for_river_flow(0.0, false)
+				)
+				continue
 			# The generator's own nearest_river_at: the curated answer
 			# wherever a curated river reaches, else (when enabled) the
 			# nearest baked hydrology channel in the same shape -- see
-			# docs/concept/hydrology.md's relationship to rivers.md.
+			# docs/concept/hydrology.md's relationship to rivers.md. Each
+			# answer carries its own half-width (the catalog's uniform one,
+			# or the baked channel's discharge-derived one), and the across
+			# texel is normalized by THAT, so a confluence reads wider.
 			var nearest := generator.nearest_river_at(global.x, global.y)
+			var half_width: float = nearest.get("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES)
+			var apron := half_width + RiverCatalog.RIVER_BANK_APRON_TILES
 			# Painted out past the bank line (the apron): the shader clips
 			# the water at the REAL bank curve, |across| == 1, and that
 			# curve runs through cells whose centres sit beyond the
@@ -3830,7 +3852,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 				)
 				_write_flow_across_texel(
 					global,
-					nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES,
+					nearest.signed_across_tiles / half_width,
 					nearest.course_bearing_deg,
 					apron_hydraulics.velocity_m_s
 				)
@@ -3844,9 +3866,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# waterline, and the fast flag comes from the real solved
 			# current.
 			var hydraulics := generator.river_hydraulics_at_global(global.x, global.y)
-			var across_fraction: float = (
-				nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
-			)
+			var across_fraction: float = nearest.signed_across_tiles / half_width
 			_write_flow_across_texel(
 				global, across_fraction,
 				nearest.course_bearing_deg, hydraulics.velocity_m_s
@@ -6810,7 +6830,10 @@ func flow_boulder_at_global(global_x: int, global_y: int) -> bool:
 		return true
 	if BuildingPiece.has_piece(piece):
 		return false
-	if not generator.is_river_at_global(global_x, global_y):
+	# On the river OR on its bank apron: a rock at the water's edge must
+	# part the waterline around itself too ("wrap shorelines around edge
+	# boulders"), not only a rock standing mid-stream.
+	if not generator.is_within_river_apron(global_x, global_y):
 		return false
 	var biome := biome_at_global(global_x, global_y)
 	if not StonePlacement.STONE_BIOMES.has(biome):

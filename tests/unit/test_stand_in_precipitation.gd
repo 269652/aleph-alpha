@@ -39,6 +39,26 @@ func test_the_subtropical_minimum_sits_in_the_desert_belt():
 	assert_between(driest_latitude, 20.0, 35.0)
 
 
+## Whether a basin holds water at all in the stand-in: its catchment's
+## accumulated rain per lake cell against the evaporation a cell of open
+## water loses. First playtest: "ponds don't spawn everywhere -- just
+## where water flows and rain accumulates".
+func test_a_basin_holds_water_only_when_its_catchment_out_delivers_evaporation():
+	var threshold: float = StandInPrecipitation.LAKE_MIN_INFLOW_PER_CELL
+	assert_true(StandInPrecipitation.lake_holds_water(threshold * 10.0, 10))
+	assert_false(StandInPrecipitation.lake_holds_water(threshold * 5.0, 10))
+	assert_false(StandInPrecipitation.lake_holds_water(0.0, 1))
+
+
+func test_a_desert_pocket_dries_out_and_a_humid_basin_of_the_same_size_does_not():
+	# Same 4-cell basin fed by a 4-cell catchment: at the subtropical
+	# minimum the inflow is a trickle; at the equator it is plenty.
+	var desert_inflow: float = 4.0 * StandInPrecipitation.at_latitude(StandInPrecipitation.SUBTROPICAL_DRY_LATITUDE)
+	var humid_inflow: float = 4.0 * StandInPrecipitation.at_latitude(0.0)
+	assert_false(StandInPrecipitation.lake_holds_water(desert_inflow, 4))
+	assert_true(StandInPrecipitation.lake_holds_water(humid_inflow, 4))
+
+
 func test_the_curve_is_symmetric_across_the_equator():
 	for degree in range(0, 91, 5):
 		assert_almost_eq(

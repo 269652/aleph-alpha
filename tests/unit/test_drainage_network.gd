@@ -164,6 +164,50 @@ func test_depressions_smaller_than_the_minimum_area_are_filled_through():
 	assert_true(network.is_sea(path[-1]))
 
 
+func test_shallow_basins_below_the_minimum_depth_are_filled_through():
+	# The crater is 0.3 deep (spill 0.6, floor 0.3). The real asset's
+	# one-step pockets are what this filter exists for: 82% of the bake's
+	# depressions were exactly one 8-bit step deep.
+	var kept = DrainageNetwork.new().build(
+		_crater_with_north_notch(), 7, 7, SEA_LEVEL, false,
+		DrainageNetwork.DEFAULT_MIN_DEPRESSION_DEPTH, 1, 0.2
+	)
+	assert_eq(kept.depressions.size(), 1)
+	var dropped = DrainageNetwork.new().build(
+		_crater_with_north_notch(), 7, 7, SEA_LEVEL, false,
+		DrainageNetwork.DEFAULT_MIN_DEPRESSION_DEPTH, 1, 0.4
+	)
+	assert_eq(dropped.depressions.size(), 0)
+	assert_eq(dropped.depression_id[4 * 7 + 3], DrainageNetwork.NO_DEPRESSION)
+	assert_almost_eq(dropped.filled[4 * 7 + 3], 0.6, 1e-4, "still filled and routed")
+
+
+func test_dropping_depressions_unlabels_their_cells_and_keeps_ids_dense():
+	# Two craters: one in the west, one in the east, each with its own
+	# channel north to the sea.
+	var heights := _grid(9, 7, 0.8)
+	for x in 9:
+		heights[x] = 0.2
+	for y in range(3, 6):
+		for x in [1, 2, 6, 7]:
+			heights[y * 9 + x] = 0.3
+	for y in [1, 2]:
+		heights[y * 9 + 1] = 0.6
+		heights[y * 9 + 7] = 0.6
+	var network = DrainageNetwork.new().build(heights, 9, 7, SEA_LEVEL)
+	assert_eq(network.depressions.size(), 2)
+	var west_id: int = network.depression_id[4 * 9 + 1]
+	var east_id: int = network.depression_id[4 * 9 + 6]
+	assert_ne(west_id, east_id)
+
+	network.drop_depressions(PackedInt32Array([west_id]))
+	assert_eq(network.depressions.size(), 1)
+	assert_eq(network.depression_id[4 * 9 + 1], DrainageNetwork.NO_DEPRESSION)
+	assert_eq(network.depression_id[4 * 9 + 6], 0, "the survivor is renumbered to 0")
+	assert_eq(network.depressions[0]["id"], 0)
+	assert_eq(network.depressions[0]["cell_count"], 6)
+
+
 func test_weighted_accumulation_with_unit_weights_matches_the_cell_count():
 	var network = DrainageNetwork.new().build(_crater_with_north_notch(), 7, 7, SEA_LEVEL)
 	var weights := _grid(7, 7, 1.0)

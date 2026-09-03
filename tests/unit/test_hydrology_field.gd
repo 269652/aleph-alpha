@@ -151,8 +151,8 @@ func test_the_channel_suppresses_fine_detail_and_carves():
 
 
 func test_fine_detail_ramps_back_beside_the_channel():
-	# Two tiles east of the centreline is inside the valley shoulder but
-	# outside the channel: partly suppressed, partly carved.
+	# Two and a half tiles east of the centreline is inside the valley
+	# shoulder but outside the channel: partly suppressed, partly carved.
 	var shoulder: Dictionary = field.probe(37, 14, 0.7)
 	assert_eq(shoulder["kind"], "")
 	assert_between(shoulder["fine_detail_scale"], 0.01, 0.99)
@@ -192,8 +192,117 @@ func test_channel_geometry_is_empty_away_from_any_channel():
 	assert_true(field.nearest_channel_geometry(65, 45).is_empty())
 
 
-func test_a_channel_is_exactly_as_wide_as_a_curated_river():
-	# rivers.md's uniform half-width, so the overlay and the read agree.
-	assert_eq(field.probe(36, 14, 0.6)["kind"], "river", "inside the half-width")
-	assert_eq(field.probe(38, 14, 0.6)["kind"], "", "outside it")
-	assert_almost_eq(HydrologyField.CHANNEL_HALF_WIDTH_TILES, 2.0, 1e-9)
+func test_a_channel_is_as_wide_as_its_own_discharge_says():
+	# Half-width comes from the cell's discharge (one tile at the
+	# threshold, one more per doubling), so the overlay and the read agree
+	# tile for tile and a bigger river is visibly wider.
+	var geometry: Dictionary = field.nearest_channel_geometry(35, 14)
+	var expected := field.width_tiles_for_discharge(geometry["discharge"]) / 2.0
+	assert_almost_eq(geometry["half_width_tiles"], expected, 0.15, "interpolated along the curve, near the cell's own width at its centre")
+	assert_eq(field.probe(35, 14, 0.6)["kind"], "river", "inside the half-width")
+	assert_eq(field.probe(35 + 4, 14, 0.6)["kind"], "", "outside it")
+
+
+## --- confluence, springs, curves (first playtest feedback) ---
+
+
+func test_width_grows_where_discharges_add_up():
+	# One more doubling of discharge is one more tile of width, so the
+	# reach below a confluence is wider than either branch above it.
+	var branch := field.width_tiles_for_discharge(TEST_MIN_DISCHARGE * 4.0)
+	var combined := field.width_tiles_for_discharge(TEST_MIN_DISCHARGE * 8.0)
+	assert_almost_eq(combined - branch, HydrologyField.WIDTH_TILES_PER_DOUBLING, 1e-9)
+
+
+func test_the_outlet_is_wider_than_the_reach_feeding_it():
+	# Cell (3,1) carries everything cell (3,2) does plus its own catchment.
+	var outlet: Dictionary = field.nearest_channel_geometry(35, 14)
+	var feeder: Dictionary = field.nearest_channel_geometry(35, 24)
+	assert_gt(outlet["discharge"], feeder["discharge"])
+	assert_gte(outlet["half_width_tiles"], feeder["half_width_tiles"])
+
+
+## A parallel-columns bake: sea along the top, land rising southward one
+## step per row, so every column is its own straight stream. Read as a
+## 77-tile world (11 tiles per cell) so cell centres land on tile centres.
+func _slope_field() -> HydrologyField:
+	var heights := PackedFloat32Array()
+	heights.resize(49)
+	for y in 7:
+		for x in 7:
+			heights[y * 7 + x] = 0.2 if y == 0 else 0.5 + 0.05 * float(y)
+	var network = DrainageNetwork.new().build(heights, 7, 7, SEA_LEVEL)
+	var weights := PackedFloat32Array()
+	weights.resize(49)
+	weights.fill(1.0)
+	var data := HydrologyData.new()
+	data.build_from_network(network, network.accumulate_weighted(weights))
+	var built := HydrologyField.new(data, 77, 77)
+	built.river_min_discharge = TEST_MIN_DISCHARGE
+	return built
+
+
+func test_a_river_tapers_in_from_its_source_instead_of_starting_full_width():
+	# Column 3: cells (3,1) Q=6 and (3,2) Q=5 are the river; (3,3) Q=4 is
+	# the source. Cell centres: x = 38.5; y = 27.1 for row 2, 38.0 for row 3.
+	var slope := _slope_field()
+	var at_source: Dictionary = slope.nearest_channel_geometry(38, 37)
+	var at_head: Dictionary = slope.nearest_channel_geometry(38, 27)
+	assert_false(at_source.is_empty(), "the head's curve reaches back to the source")
+	assert_almost_eq(at_source["half_width_tiles"], HydrologyField.SPRING_HALF_WIDTH_TILES, 0.1)
+	assert_gt(at_head["half_width_tiles"], at_source["half_width_tiles"])
+	assert_eq(slope.probe(38, 41, 0.75)["kind"], "", "nothing upstream of the source")
+
+
+func test_the_spring_is_narrower_than_the_thinnest_river():
+	assert_lt(HydrologyField.SPRING_HALF_WIDTH_TILES, HydrologyField.MIN_LEGIBLE_WIDTH_TILES / 2.0)
+
+
+func test_a_right_angle_corner_is_rounded_not_cut():
+	# A cell whose upstream lies north and downstream lies east: the curve
+	# from the north midpoint to the east midpoint must bend AROUND the
+	# cell centre, never pass through it, and keep its endpoints exact.
+	var north := Vector2(0.0, -5.0)
+	var center := Vector2(0.0, 0.0)
+	var east := Vector2(5.0, 0.0)
+	var curve := HydrologyField.centerline_curve(north, center, east, HydrologyField.CURVE_SEGMENTS)
+	assert_eq(curve[0], north)
+	assert_eq(curve[curve.size() - 1], east)
+	var nearest_to_corner := INF
+	for point in curve:
+		nearest_to_corner = minf(nearest_to_corner, point.distance_to(center))
+	assert_gt(nearest_to_corner, 1.0, "the corner is cut off, not visited")
+	# And the turn is gradual: no two consecutive pieces differ by more
+	# than a quarter of the whole ninety-degree turn.
+	for i in range(1, curve.size() - 1):
+		var a := (curve[i] - curve[i - 1]).normalized()
+		var b := (curve[i + 1] - curve[i]).normalized()
+		assert_lt(absf(a.angle_to(b)), PI / 8.0 + 1e-6)
+
+
+## --- lakes as a shoreline field (the same across the river bank uses) ---
+
+
+func test_a_lake_bed_reads_as_deep_water_in_the_across_field():
+	assert_eq(field.probe(35, 45, 0.3)["lake_across"], 0.0)
+
+
+func test_the_waterline_sits_at_across_one_and_dry_ground_beyond_it():
+	var spill := field.lake_surface_at_global(35, 45)
+	assert_almost_eq(HydrologyField.lake_across(spill, spill), 1.0, 1e-9)
+	var one_metre_under := spill - 1.0 / HydrologyField.METERS_PER_ELEVATION_UNIT
+	assert_lt(HydrologyField.lake_across(one_metre_under, spill), 1.0)
+	assert_gt(HydrologyField.lake_across(spill + 0.01, spill), 1.0)
+	assert_eq(HydrologyField.lake_across(0.5, HydrologyField.NO_LAKE), HydrologyField.LAKE_ACROSS_DRY)
+
+
+func test_the_shoreline_follows_the_contour_into_a_neighbouring_cell():
+	# Cell (1,4) is plateau, not a depression, but it touches the crater:
+	# a tile there whose own bilinear elevation dips below the spill is
+	# under water, because water covers everything lower that it touches.
+	assert_eq(field.probe(15, 45, 0.55)["kind"], "lake")
+	assert_eq(field.probe(15, 45, 0.7)["kind"], "")
+
+
+func test_far_from_any_lake_the_across_field_is_dry():
+	assert_eq(field.probe(65, 15, 0.8)["lake_across"], HydrologyField.LAKE_ACROSS_DRY)

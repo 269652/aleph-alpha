@@ -96,6 +96,8 @@ uniform float wader_wake_trail = 0.8;
 uniform float drift_px_per_mps = 9.0;
 // The real-speed threshold above which strokes brighten (m/s).
 uniform float fast_flow_m_s = 0.6;
+uniform float still_flow_m_s = 0.02;
+uniform float still_ripple = 0.25;
 uniform vec3 band0_color : source_color = vec3(0.30, 0.60, 0.66);
 uniform vec3 band1_color : source_color = vec3(0.22, 0.50, 0.62);
 uniform vec3 band2_color : source_color = vec3(0.16, 0.40, 0.56);
@@ -197,6 +199,14 @@ void fragment() {
 	vec2 flow_perp = vec2(-flow_dir.y, flow_dir.x);
 	float speed_mps = map_data.a;
 	float is_fast = step(fast_flow_m_s, speed_mps);
+	// STILL WATER: a lake is painted through this same overlay (its
+	// shoreline is the real elevation contour, written as an across field
+	// exactly like a river bank) with zero current. It must not DRIFT --
+	// a lake never creeps -- but it still RIPPLES: the two-phase morph
+	// keeps running at a fraction of its strength, so the contour strokes
+	// breathe in place instead of freezing. The gate is a hard step.
+	float moving = step(still_flow_m_s, speed_mps);
+	float advect_gate = mix(still_ripple, 1.0, moving);
 	// THE SMOOTHING PASS ("it's still visible that the base are square
 	// tiles"): the baked across is quantized per tile, so lines, cel
 	// boundaries and the waterline all side-step together on the same
@@ -317,8 +327,8 @@ void fragment() {
 	// field above deliberately does NOT drift: boils hold station over the
 	// bed while the surface pours through them.
 	float drift = TIME * drift_px_per_mps * speed_mps * noise_scale;
-	float sample_a = line_field(q - flow_dir * (advect_strength * phase_a + drift), flow_dir);
-	float sample_b = line_field(q - flow_dir * (advect_strength * phase_b + drift), flow_dir);
+	float sample_a = line_field(q - flow_dir * (advect_strength * phase_a * advect_gate + drift * moving), flow_dir);
+	float sample_b = line_field(q - flow_dir * (advect_strength * phase_b * advect_gate + drift * moving), flow_dir);
 	// Triangular weight: 1 at a phase's birth, 0 at its death.
 	float blend = abs(1.0 - 2.0 * phase_a);
 	float n = mix(sample_a, sample_b, blend);
@@ -417,7 +427,8 @@ void fragment() {
 	// the modulate ceiling: the gleam of a real river reflecting skylight,
 	// the brightest thing the night allows.
 	stroke_ink = mix(stroke_ink, moonlight_ink, night_lift);
-	float wave_alpha = min(wave * line_strength * mix(1.0, night_stroke_boost, night_lift), 1.0);
+	float wave_alpha = min(
+		wave * line_strength * mix(1.0, night_stroke_boost, night_lift) * mix(0.35, 1.0, moving), 1.0);
 	body = mix(body, stroke_ink, wave_alpha);
 
 	// The SHORE HIGHLIGHT: one constant pale line tracing the bank just
@@ -678,6 +689,8 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("flow_map_tiles", float(FLOW_MAP_TILES))
 	material.set_shader_parameter("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES)
 	material.set_shader_parameter("tile_px", TILE_PX)
+	material.set_shader_parameter("still_flow_m_s", STILL_FLOW_M_S)
+	material.set_shader_parameter("still_ripple", STILL_RIPPLE)
 	material.set_shader_parameter("bank_feather", BANK_FEATHER)
 	material.set_shader_parameter("across_jitter", ACROSS_JITTER)
 	material.set_shader_parameter("jitter_scale", JITTER_SCALE)
@@ -843,6 +856,27 @@ static func cel_level(shade: float, checker: float) -> int:
 ## nothing translates across the screen.
 static func is_fast_flow(velocity_m_s: float) -> bool:
 	return velocity_m_s >= FAST_FLOW_M_S
+
+
+## Below this current the overlay draws STILL water: no advection, no
+## drift, quiet strokes -- a lake (docs/concept/hydrology.md), painted
+## through this shader with zero velocity so its shoreline gets the same
+## smooth contour, ink and feather a river bank does. Two centimetres a
+## second is below any current the Manning solve returns for a real
+## channel (the slowest reach the model admits is ~0.4 m/s), so no river
+## ever reads as still. Pinned by test_still_water_neither_advects_nor_drifts.
+const STILL_FLOW_M_S := 0.02
+
+
+static func is_still_water(velocity_m_s: float) -> bool:
+	return velocity_m_s < STILL_FLOW_M_S
+
+
+## How much of the two-phase surface morph still water keeps: enough for
+## the contour strokes to visibly breathe (real ponds ripple under wind),
+## far too little to read as a current. Strictly between none and a
+## river's full morph, by test.
+const STILL_RIPPLE := 0.25
 
 
 ## The CPU mirror of the shader's two-phase crossfade, for headless testing.

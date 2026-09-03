@@ -1386,3 +1386,30 @@ func test_the_shader_loops_over_a_wader_array():
 	assert_true(
 		RiverFlowShader.SHADER_CODE.contains("for (int w = 0; w < wader_count; w++)")
 	)
+
+
+## Lakes ride this overlay with zero current (docs/concept/hydrology.md,
+## first playtest: "ponds have a very different art style"): still water
+## must not advect or drift, and no real river may ever read as still.
+func test_still_water_neither_advects_nor_drifts():
+	assert_true(RiverFlowShader.is_still_water(0.0))
+	assert_false(RiverFlowShader.is_still_water(0.39), "the slowest Manning reach is not still")
+	assert_lt(RiverFlowShader.STILL_FLOW_M_S, RiverFlowShader.FAST_FLOW_M_S)
+	assert_true(RiverFlowShader.SHADER_CODE.contains("float moving = step(still_flow_m_s, speed_mps);"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("float advect_gate = mix(still_ripple, 1.0, moving);"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("advect_strength * phase_a * advect_gate + drift * moving"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("advect_strength * phase_b * advect_gate + drift * moving"))
+	var material := flow.shared_material()
+	assert_almost_eq(
+		float(material.get_shader_parameter("still_flow_m_s")), RiverFlowShader.STILL_FLOW_M_S, 1e-9
+	)
+	assert_almost_eq(
+		float(material.get_shader_parameter("still_ripple")), RiverFlowShader.STILL_RIPPLE, 1e-9
+	)
+
+
+## Still water ripples (the strokes breathe in place) but never flows:
+## the ripple fraction sits strictly between frozen and a river's morph.
+func test_still_water_ripples_without_flowing():
+	assert_gt(RiverFlowShader.STILL_RIPPLE, 0.0)
+	assert_lt(RiverFlowShader.STILL_RIPPLE, 0.5)

@@ -84,7 +84,8 @@ func build(
 	a_sea_level: float,
 	a_wrap_x: bool = false,
 	min_depression_depth: float = DEFAULT_MIN_DEPRESSION_DEPTH,
-	min_depression_cells: int = 1
+	min_depression_cells: int = 1,
+	min_basin_depth: float = 0.0
 ) -> RefCounted:
 	width = a_width
 	height = a_height
@@ -93,8 +94,35 @@ func build(
 	_fill(heights)
 	_route()
 	_accumulate()
-	_label_depressions(heights, min_depression_depth, min_depression_cells)
+	_label_depressions(heights, min_depression_depth, min_depression_cells, min_basin_depth)
 	return self
+
+
+## Removes the given depressions (by id): their cells go back to
+## NO_DEPRESSION -- still filled and routed exactly as before, they are
+## just not lake candidates -- and the survivors are renumbered densely so
+## ids stay valid indices into `depressions`. The bake drops basins whose
+## catchment delivers too little rain to hold water (see
+## StandInPrecipitation.lake_holds_water).
+func drop_depressions(ids: PackedInt32Array) -> void:
+	if ids.is_empty():
+		return
+	var new_id := PackedInt32Array()
+	new_id.resize(depressions.size())
+	var survivors: Array[Dictionary] = []
+	for old_id in depressions.size():
+		if ids.has(old_id):
+			new_id[old_id] = NO_DEPRESSION
+			continue
+		new_id[old_id] = survivors.size()
+		var depression := depressions[old_id].duplicate()
+		depression["id"] = survivors.size()
+		survivors.append(depression)
+	for index in depression_id.size():
+		var old_id := depression_id[index]
+		if old_id != NO_DEPRESSION:
+			depression_id[index] = new_id[old_id]
+	depressions = survivors
 
 
 func is_sea(index: int) -> bool:
@@ -257,10 +285,13 @@ func accumulate_weighted(weights: PackedFloat32Array) -> PackedFloat32Array:
 ## lowest original cell. Nested basins merge into one component here --
 ## the depression TREE hydrology.md describes is not built yet.
 ##
-## Components smaller than `min_cells` are data noise (one stray 8-bit
-## step in the asset): their cells stay filled and routed exactly as
-## before, they just are not lake candidates.
-func _label_depressions(heights: PackedFloat32Array, min_depth: float, min_cells: int) -> void:
+## Components smaller than `min_cells`, or shallower (spill minus floor)
+## than `min_basin_depth`, are data noise (one stray 8-bit step in the
+## asset): their cells stay filled and routed exactly as before, they
+## just are not lake candidates.
+func _label_depressions(
+	heights: PackedFloat32Array, min_depth: float, min_cells: int, min_basin_depth: float
+) -> void:
 	var count := width * height
 	depression_id.resize(count)
 	depression_id.fill(NO_DEPRESSION)
@@ -292,9 +323,9 @@ func _label_depressions(heights: PackedFloat32Array, min_depth: float, min_cells
 					continue
 				depression_id[neighbor] = id
 				stack.append(neighbor)
-		if members.size() < min_cells:
-			# Too small to be a lake: unlabel, and the id is reused by the
-			# next component so ids stay dense.
+		if members.size() < min_cells or spill_elevation - floor_elevation < min_basin_depth:
+			# Too small or too shallow to be a lake: unlabel, and the id is
+			# reused by the next component so ids stay dense.
 			for member in members:
 				depression_id[member] = NO_DEPRESSION
 			continue
