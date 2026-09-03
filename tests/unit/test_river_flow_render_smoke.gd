@@ -73,6 +73,15 @@ func test_a_real_tile_map_layer_with_the_shared_river_flow_material_runs_several
 ## fraction. A control at the origin separates "the harness is broken"
 ## from "the far coordinates are broken".
 func test_the_strokes_survive_far_world_coordinates_on_the_real_gpu():
+	if DisplayServer.get_name() == "headless":
+		# No rendering device, so the SubViewport's texture reads back
+		# null and every sampled fraction is 0. Asserting through that
+		# reports "the field is dead at Basel" when the truth is that
+		# nothing rendered at all -- the built-in origin control fails
+		# too, which is the tell. Run this from the editor or a windowed
+		# build; there is no CPU mirror for what it checks.
+		pending("needs a real GPU: --headless has no rendering device")
+		return
 	var origin_fraction := await _stroke_pixel_fraction_at(Vector2(0.0, 0.0))
 	var basel := Vector2(20870.0 * 16.0, 4750.0 * 16.0)
 	var far_fraction := await _stroke_pixel_fraction_at(basel)
