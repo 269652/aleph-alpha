@@ -206,6 +206,44 @@ func _accumulate() -> void:
 				queue.append(downstream)
 
 
+## `accumulation` with a per-cell weight instead of a count of 1: the
+## total of `weights` over every land cell draining through each cell
+## (itself included), a sea cell again collecting only what arrives.
+## With runoff as the weight this is a stand-in discharge (hydrology.md
+## phase 1); with unit weights it reproduces `accumulation` exactly.
+## Same headwaters-first order as _accumulate.
+func accumulate_weighted(weights: PackedFloat32Array) -> PackedFloat32Array:
+	var count := width * height
+	var totals := PackedFloat32Array()
+	totals.resize(count)
+	var indegree := PackedInt32Array()
+	indegree.resize(count)
+	indegree.fill(0)
+	for index in count:
+		totals[index] = 0.0 if _sea[index] == 1 else weights[index]
+		var downstream := downstream_index(index)
+		if downstream >= 0:
+			indegree[downstream] += 1
+
+	var queue := PackedInt32Array()
+	for index in count:
+		if _sea[index] == 0 and indegree[index] == 0:
+			queue.append(index)
+	var head := 0
+	while head < queue.size():
+		var index := queue[head]
+		head += 1
+		var downstream := downstream_index(index)
+		if downstream < 0:
+			continue
+		totals[downstream] += totals[index]
+		if _sea[downstream] == 0:
+			indegree[downstream] -= 1
+			if indegree[downstream] == 0:
+				queue.append(downstream)
+	return totals
+
+
 ## A depression is an 8-connected component of cells the fill raised by
 ## more than `min_depth`. Its spill is the component's lowest filled cell
 ## (the whole component sits at spill + a few epsilon), its floor the

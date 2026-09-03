@@ -150,6 +150,28 @@ func test_east_edge_drains_west_across_the_seam_only_when_wrapping():
 	assert_eq(clamped.downstream_index(4), 3)
 
 
+func test_weighted_accumulation_with_unit_weights_matches_the_cell_count():
+	var network = DrainageNetwork.new().build(_crater_with_north_notch(), 7, 7, SEA_LEVEL)
+	var weights := _grid(7, 7, 1.0)
+	var weighted: PackedFloat32Array = network.accumulate_weighted(weights)
+	for index in 49:
+		assert_almost_eq(weighted[index], float(network.accumulation[index]), 1e-5)
+
+
+func test_weighted_accumulation_carries_upstream_runoff_through_a_dry_cell():
+	# One column, sea at the top: rain only on the two headwater cells. The
+	# dry cell just above the sea still carries their runoff -- a river
+	# leaving wet mountains does not stop at the first desert cell.
+	var heights := PackedFloat32Array([0.2, 0.6, 0.7, 0.8, 0.9])
+	var network = DrainageNetwork.new().build(heights, 1, 5, SEA_LEVEL)
+	var weights := PackedFloat32Array([0.0, 0.0, 0.0, 0.5, 0.5])
+	var weighted: PackedFloat32Array = network.accumulate_weighted(weights)
+	assert_almost_eq(weighted[4], 0.5, 1e-6)
+	assert_almost_eq(weighted[3], 1.0, 1e-6)
+	assert_almost_eq(weighted[1], 1.0, 1e-6, "dry cell carries what arrives from upstream")
+	assert_almost_eq(weighted[0], 1.0, 1e-6, "sea receives it all")
+
+
 func test_build_is_deterministic():
 	var first = DrainageNetwork.new().build(_crater_with_north_notch(), 7, 7, SEA_LEVEL)
 	var second = DrainageNetwork.new().build(_crater_with_north_notch(), 7, 7, SEA_LEVEL)
