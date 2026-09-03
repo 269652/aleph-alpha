@@ -748,6 +748,13 @@ func _process(frame_delta: float) -> void:
 	# because plenty of stub worlds in tests cannot answer.
 	if _world.has_method("ambient_warmth"):
 		_needs.regulate_temperature(_world.ambient_warmth(position), delta)
+	# Active snowfall slows grazing (see GrazerForaging.snowing and
+	# docs/concept/weather.md's "Weather feeds creature behaviour") -- reads
+	# the SAME per-frame boolean the ground's own snow accumulation reads
+	# (EarthChunkManager.is_snowing), guarded the same way ambient_warmth
+	# is just above, so a stub world that doesn't answer it changes nothing.
+	if _world.has_method("is_snowing"):
+		_forage.snowing = _world.is_snowing()
 	if not _restrained:
 		_struggle_fatigue = Taming.fatigue_after_rest(_struggle_fatigue, delta)
 	energy = AnimalReproduction.decay(energy, delta)

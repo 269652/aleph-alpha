@@ -1982,6 +1982,13 @@ class ForageWorld:
 	var worms: Array = []
 	var grazed: Array = []
 	var taken_fruit: Array = []
+	## Whether snow is actively falling -- see docs/concept/weather.md's
+	## "Weather feeds creature behaviour". Settable per test; defaults to
+	## false, matching EarthChunkManager.is_snowing() before any step_snow.
+	var snowing := false
+
+	func is_snowing() -> bool:
+		return snowing
 
 	func biome_at_global(_x: int, _y: int) -> String:
 		return "grassland"
@@ -2067,6 +2074,46 @@ func test_eating_a_tuft_settles_the_hunger_that_sent_it_there():
 		if not world.grazed.is_empty():
 			break
 	assert_false(horse._needs.is_hungry(), "a fed animal is not still hunting for food")
+
+
+## The full-stack version of GrazerForaging's own snow-slows-grazing claim
+## (see test_grazer_foraging.gd and docs/concept/weather.md's "Weather feeds
+## creature behaviour"): the SAME creature logic, wired all the way through
+## CreatureMarker, run under two weather states from an identical start on an
+## identical visible tuft, produces a real behavioural difference. A world
+## that answers is_snowing() (the same duck-typed guard ambient_warmth
+## already uses) measurably slows how fast a hungry grazer actually eats.
+func test_active_snowfall_measurably_slows_a_hungry_grazer():
+	var clear_world := ForageWorld.new()
+	clear_world.grass = [{"position": Vector2(20, 0)}]
+	var clear_horse := _hungry_grazer("horse", clear_world)
+	var clear_frames := 0
+	for i in 900:
+		clear_horse._process(1.0 / 60.0)
+		if not clear_world.grazed.is_empty():
+			clear_frames = i
+			break
+	assert_false(clear_world.grazed.is_empty(), "precondition: the clear-weather horse must actually feed")
+
+	var snowy_world := ForageWorld.new()
+	snowy_world.grass = [{"position": Vector2(20, 0)}]
+	snowy_world.snowing = true
+	var snowy_horse := _hungry_grazer("horse", snowy_world)
+	for _i in (clear_frames + 1):
+		snowy_horse._process(1.0 / 60.0)
+	assert_true(
+		snowy_world.grazed.is_empty(),
+		"an otherwise-identical horse under active snowfall should not have finished its first bite yet"
+	)
+
+	# ...and it is genuinely slower, not stuck: given a generous further
+	# budget it does still feed.
+	for _i in 900:
+		snowy_horse._process(1.0 / 60.0)
+		if not snowy_world.grazed.is_empty():
+			break
+	assert_false(snowy_world.grazed.is_empty(), "a snowed-on horse still eats -- it just takes longer")
+	assert_false(snowy_horse._needs.is_hungry(), "and is fed once it does")
 
 
 ## A deer is a mixed feeder and works windfall; a horse is a strict grazer and

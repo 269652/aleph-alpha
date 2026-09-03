@@ -6235,6 +6235,23 @@ func test_snow_accumulates_while_it_falls():
 	assert_almost_eq(manager.snow_depth(), 1.0, 0.02)
 
 
+## is_snowing() exposes the SAME per-frame active-precipitation boolean
+## World already computes and hands to step_snow to accumulate against (see
+## docs/concept/weather.md's "Weather feeds creature behaviour") -- a second
+## reader (CreatureMarker) has to read that one answer rather than deriving
+## its own, or an animal could disagree with the ground about whether it's
+## snowing right now.
+func test_is_snowing_reflects_the_last_step_snow_call():
+	manager.step_snow(true, 0.0)  # cold and snowing
+	assert_true(manager.is_snowing())
+	manager.step_snow(false, 1.0)  # warm and dry
+	assert_false(manager.is_snowing())
+
+
+func test_is_snowing_defaults_to_false_before_any_step():
+	assert_false(manager.is_snowing())
+
+
 ## The five tests that used to live here (a partial snowfall paints a MIX of
 ## bare/covered tiles; painted tiles carry a real per-tile variant; coverage
 ## advances within a single depth band; a realistic step_snow-driven
