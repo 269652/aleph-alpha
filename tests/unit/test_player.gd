@@ -1076,13 +1076,35 @@ func test_talking_with_no_villager_nearby_shows_a_no_one_message():
 	assert_string_contains(player.talk_message, "No one")
 
 
-func test_talking_near_a_villager_shows_that_villagers_own_greeting():
+## Talking now OPENS A CONVERSATION rather than flashing a greeting banner.
+##
+## `NpcGreeting` was always a stand-in -- its own header says it is
+## "explicitly NOT the real Live Dialogue System: no branching, no memory, no
+## quest hooks" -- and the real engine (DialogueContext -> DialogueTopic ->
+## DialogueMove -> DialogueBeat -> OfflineRenderer) had been built and tested
+## with no production caller at all. This is that caller.
+##
+## Player's job ends at producing the REQUEST; World owns the window, and the
+## ledger that has to outlive any one NpcMarker.
+func test_talking_near_a_villager_opens_a_conversation_with_them():
 	var npc := _add_fake_npc_near_player(7)
-	var greeting := NpcGreeting.new()
 
 	_tap_talk()
 
-	assert_eq(player.talk_message, greeting.greeting_for(npc.identity))
+	assert_false(player.pending_talk_request.is_empty(), "the talk key produced no conversation")
+	assert_eq(
+		String(player.pending_talk_request["frame"]["npc_id"]),
+		"npc:%d" % npc.identity.seed_value
+	)
+	npc.free()
+
+
+## ...and the banner is only ever the "nobody here" case now, so a real
+## conversation never also flashes a line behind its own window.
+func test_talking_to_someone_does_not_also_flash_a_banner():
+	var npc := _add_fake_npc_near_player(7)
+	_tap_talk()
+	assert_eq(player.talk_message, "")
 	npc.free()
 
 
@@ -1953,11 +1975,18 @@ func test_poor_condition_slows_the_player_down():
 	var healthy: float = player.current_speed_multiplier
 	player.survival.fitness = 0.0
 	player._authority_step(0.016)
-	assert_almost_eq(
-		player.current_speed_multiplier / healthy,
+	# Not an EXACT ratio any more: penalties compose rather than multiply (see
+	# MovementPenalty), so a penalty landing alongside weather and slope no
+	# longer contributes its bare factor. What still holds, and is what the
+	# mechanic actually promises, is a two-sided bracket -- the penalty really
+	# bites, and composition never makes it bite HARDER than the module's own
+	# number says.
+	var ratio := player.current_speed_multiplier / healthy
+	assert_lt(ratio, 1.0, "a player whose overall condition has collapsed should move slower")
+	assert_gte(
+		ratio,
 		ConditionPenalty.speed_multiplier(0.0),
-		0.01,
-		"a player whose overall condition has collapsed should move slower, by exactly the penalty the module states"
+		"composition must never punish more than the module's own worst penalty"
 	)
 
 
@@ -1980,11 +2009,15 @@ func test_unattended_hunger_eventually_slows_the_player_down_via_condition():
 		player.survival.warmth = 1.0
 		player._authority_step(1.0)
 	assert_lt(player.survival.fitness, 0.5, "precondition: sustained starvation should have run condition down")
+	# Bracketed rather than pinned to the bare factor, for the same reason as
+	# test_poor_condition_slows_the_player_down above (see MovementPenalty).
+	var starved_ratio := player.current_speed_multiplier / well_fed
 	assert_lt(
-		player.current_speed_multiplier / well_fed,
-		ConditionPenalty.speed_multiplier(0.5),
+		starved_ratio,
+		1.0,
 		"hunger left unattended must have a real mechanical consequence (docs/concept/survival.md, 'Debuffs, not death')"
 	)
+	assert_gte(starved_ratio, ConditionPenalty.speed_multiplier(0.0))
 
 
 ## Every slot has to actually DO its verb. Feed was easy to get right and the
@@ -2220,11 +2253,15 @@ func test_crouching_is_slower_than_walking():
 	player._authority_step(0.016)
 	Input.action_release("crouch")
 
-	assert_almost_eq(
-		player.current_speed_multiplier / upright,
+	# Bracketed rather than exact: penalties compose (see MovementPenalty), so
+	# crouching alongside weather and slope no longer contributes its bare
+	# factor. It still costs, and never more than FlightDistance says.
+	var crouch_ratio := player.current_speed_multiplier / upright
+	assert_lt(crouch_ratio, 1.0, "crouching should cost something")
+	assert_gte(
+		crouch_ratio,
 		FlightDistanceForPlayer.CROUCH_SPEED_MULTIPLIER,
-		0.01,
-		"crouching should cost exactly the penalty FlightDistance states"
+		"composition must never punish more than FlightDistance's own penalty"
 	)
 
 

@@ -1752,6 +1752,44 @@ Reported live, looking at a real grassland chunk at noon: *"the bare grass parts
 ✅ Ant mounds are no longer invisible -- see "Ant mounds, and the traffic on them" below, which closed this the same day.
 
 
+### The dialogue engine was built, tested, and dark (2026-09-03)
+
+An audit for "what needs a second look" turned up the largest instance of this repo's recurring pattern — simulation without a consumer — by an order of magnitude.
+
+| module | lines | tests | production callers, before |
+|---|---|---|---|
+| `DialogueContext` | 866 | 38 | **0** |
+| `DialogueTopic` | 822 | 37 | **0** |
+| `DialogueMove` | 233 | 22 | **0** |
+| `NpcVoice` | 249 | 20 | **0** |
+| `NpcRecognition` | 318 | 29 | **0** |
+
+~2,700 lines and ~146 tests, and the talk key showed `NpcGreeting` — an eight-entry lookup on personality trait, one banner line, whose own header says it is *"explicitly NOT the real Live Dialogue System."* `dialogue.md`'s status list read ⬜ for all of it, so the ledger was stale in the other direction too.
+
+✅ **`DialogueBeat`** — the beat contract. Quantities and names live in `slots` and are substituted by the core, never written into the sentence by whatever produced it; `required_slots` is what lets a phrasing that dropped a placeholder be *rejected* rather than rendered with a hole in it. `cache_key_of` is `(voice_key, topic_id, kind, fact_band)` — **not** the NPC, which is the whole reason baking phrasings ahead of time is tractable: a handful of voices and situation bands against thousands of villagers.
+
+✅ **`OfflineRenderer`** — the five-slot plan (OPENER, CORE, HEDGE, ASIDE, CLOSER). Only the CORE carries meaning. This is the guaranteed floor the AI-seam argument rests on: no model, no network, no cache.
+
+✅ **`Conversation`, `ConversationSources`, `ConversationWindow`, and the talk key wired to them.** Talking now opens a real exchange — the villager's most salient real fact, in their own voice, choices built from the beat's own slots, and a ledger (held by World, because every `NpcMarker` is freed on chunk unload) that burns topics so asking again gives you the *second* thing.
+
+✅ **`player_settled` was emitted by the world and claimed by no topic** — one of the 21 baseline test failures, and a real hole: a village could watch someone move in and have nothing to say about it.
+
+🐛 **Three bugs, all caught after the tests were green.**
+- The verbosity pools were keyed backwards, so the tersest voice in the game produced the *longest* sentence. Caught by a test comparing a blunt terse villager against a warm talkative one.
+- Fifteen of twenty-three topics had no template and all rendered the same fallback line — *seen in the running game*, where the very first villager said "There's that, at least." Fifteen different pieces of news reading as one remark is the mad-libs mill pillar 2 exists to prevent, only worse. Every topic now has its own sentence, pinned.
+- `{name}` resolved to the **speaker**, so Joric would say "You'll have met Joric, then."
+
+🐛 **And one only the running game could have shown: the window opened and drew nothing.** A bare `Control` does not lay out its children, and `PRESET_CENTER_BOTTOM` anchors both edges to one point — so the panel came out zero-sized at the very bottom of the screen and rendered off it. Every test passed. Positioned now the way every other HUD card here is: anchored to an edge, then offset in from it.
+
+⬜ **`NpcRecognition` still has no caller.** Every beat renders at `RECOGNITION_STRANGER`, and nothing is written when you talk, so recognition never advances past stranger — pillar 3 ("the player is a node in the graph") is the largest remaining gap in this system.
+
+⬜ **`QuestOffer`/`QuestReward`/`NpcAsk` do not exist**, so the emergent-quest design is unbuilt: a villager can tell you they are short three rock and cannot yet ask you for them.
+
+⬜ **No typewriter reveal**; the line appears at once.
+
+⬜ **The AI seam is not built and does not need to be.** The beat contract leaves it open at exactly one point — a model receives a beat and returns one rephrasing of `template` with every placeholder intact — and `cache_key_of` means a phrasing baked into the repo ahead of time and one fetched live are the same artifact. Different wording, never different game state.
+
+
 ### A smoothing pass over mechanics and gameplay (2026-09-03)
 
 Not new systems -- the edges between the ones that exist. Five of these were found by measuring the real constants, and two by playing.

@@ -36,6 +36,8 @@ const Sickness = preload("res://src/gameplay/sickness.gd")
 const ColdExposure = preload("res://src/gameplay/cold_exposure.gd")
 const WoundModel = preload("res://src/gameplay/wound_model.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
+const ConversationSources = preload("res://src/dialogue/conversation_sources.gd")
+const DialogueContext = preload("res://src/dialogue/dialogue_context.gd")
 const MovementPenalty = preload("res://src/gameplay/movement_penalty.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
@@ -3719,6 +3721,19 @@ func sell_food_to_village(market, item_id: String, amount: int) -> bool:
 ## EarthChunkManager.nearest_npc_near) to hear that NPC's own deterministic
 ## greeting line (see NpcGreeting) -- the minimal talk-interaction stand-in,
 ## not the real Live Dialogue System. The HUD reads talk_message.
+## A talk request the world can open a conversation from, or {} when there is
+## nobody to talk to.
+##
+## The frame rather than a rendered line, which is what made the old path a
+## dead end: `NpcGreeting.greeting_for` returned a finished string, so there
+## was nowhere for the dialogue engine to attach. Static and pure so the
+## contract is testable without a world.
+static func new_talk_request(frame: Dictionary) -> Dictionary:
+	if frame.is_empty() or String(frame.get("npc_id", "")).is_empty():
+		return {}
+	return {"frame": frame}
+
+
 func _talk_step(delta: float) -> void:
 	var talk_pressed := (
 		Input.is_action_pressed("talk") if _controlled_locally() else _pending_talk_pressed
@@ -3726,14 +3741,32 @@ func _talk_step(delta: float) -> void:
 	var just_pressed := _rising_edge("talk", talk_pressed, _last_talk_input)
 	_last_talk_input = talk_pressed
 	if just_pressed:
-		var npc = _chunk_manager.nearest_npc_near(position, TALK_RADIUS) if _chunk_manager != null else null
-		_talk_result_message = (
-			_npc_greeting.greeting_for(npc.identity) if npc != null else "No one to talk to nearby."
-		)
-		_talk_result_timer = TALK_MESSAGE_DURATION
+		# Builds the frame and hands it up. World owns the window (it owns
+		# every other UI surface), and the ledger has to outlive this Player --
+		# NpcMarkers are freed on chunk unload, so a ledger held here would
+		# forget what was said the moment the village went out of range.
+		pending_talk_request = _talk_request_here()
+		if pending_talk_request.is_empty():
+			_talk_result_message = "No one to talk to nearby."
+			_talk_result_timer = TALK_MESSAGE_DURATION
 
 	_talk_result_timer = maxf(0.0, _talk_result_timer - delta)
 	talk_message = _talk_result_message if _talk_result_timer > 0.0 else ""
+
+
+## Set on the frame the talk key goes down; World consumes and clears it.
+var pending_talk_request: Dictionary = {}
+
+
+func _talk_request_here() -> Dictionary:
+	if _chunk_manager == null:
+		return {}
+	var npc = _chunk_manager.nearest_npc_near(position, TALK_RADIUS)
+	if npc == null or npc.identity == null:
+		return {}
+	var npc_id := "npc:%d" % npc.identity.seed_value
+	var sources := ConversationSources.gather(_chunk_manager, npc.identity, npc_id, inventory, wallet)
+	return new_talk_request(DialogueContext.build(npc_id, sources))
 
 
 ## Authority-only: on the rising edge of the build input, either places the

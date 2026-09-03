@@ -161,7 +161,14 @@ const MEMORY_TOPIC_EVENT_TYPES := {
 	],
 	TOPIC_BOSS: ["world_boss_promoted", "world_boss_defeated"],
 	TOPIC_PATH: ["path_worn", "path_reclaimed"],
-	TOPIC_PLAYER_DEED: ["player_claimed_property"],
+	# Both real deeds a player does that a villager would witness and repeat:
+	# claiming a property, and settling in the first place. `player_settled`
+	# was emitted by earth_chunk_manager.gd and claimed by no topic at all --
+	# so a village could watch someone move in and have nothing to say about
+	# it. Caught by test_every_event_type_the_substrate_really_emits_is_
+	# claimed_by_some_topic, which exists to make exactly this kind of hole
+	# loud rather than silent.
+	TOPIC_PLAYER_DEED: ["player_claimed_property", "player_settled"],
 }
 
 ## How far apart two accounts of the same event have to be before the

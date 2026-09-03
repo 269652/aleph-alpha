@@ -234,13 +234,42 @@ to keep.
 
 ## Status
 
-- ⬜ Everything below is being built now; this doc is the spec, written first.
+**Corrected 2026-09-03.** This list read ⬜ for everything, and had done since
+the doc was written — while six of the pipeline's modules were built, tested
+and merged. What was actually missing was the last three stages and the wire,
+which is why none of it was reachable: the talk key showed a one-line greeting
+from `NpcGreeting`, an eight-entry lookup on personality trait whose own header
+says it is *"explicitly NOT the real Live Dialogue System."*
+
+- ✅ `DialogueContext`, `DialogueTopic`, `DialogueMove`, `NpcVoice`,
+  `NpcSeenLedger` — built and tested (~2,700 lines, ~146 tests) well before
+  this correction, with **no production caller at all**.
+- ✅ `DialogueBeat` — the beat contract, built 2026-09-03. Quantities and names
+  live in `slots` and are substituted by the core; `required_slots` is what
+  lets a phrasing that dropped a placeholder be rejected rather than rendered
+  with a hole in it. `cache_key_of` is `(voice_key, topic_id, kind,
+  fact_band)` — **not** the NPC, which is what makes baking phrasings ahead of
+  time tractable at all.
+- ✅ `OfflineRenderer` — the five-slot plan (OPENER, CORE, HEDGE, ASIDE,
+  CLOSER), built 2026-09-03. Only the CORE carries meaning. This is the
+  guaranteed floor the whole AI-seam argument rests on: it needs no model, no
+  network and no cache.
+- ✅ `Conversation` + `ConversationSources` + `ConversationWindow`, and the
+  talk key wired to them (2026-09-03). Talking now opens a real exchange:
+  the villager's most salient real fact, in their own voice, with choices
+  built from the beat's own slots, and a ledger that burns topics so asking
+  again gives you the *second* thing.
 - ⬜ Substrate: witness wiring, `production_failed` change-guard, `VillageWages`,
   `SettlementFood`, 8-occupation recipe map.
-- ⬜ `NpcVoice`, `DialogueContext`, `DialogueTopic`, `DialogueMove`,
+- ⬜ (superseded by the corrected list above) `NpcVoice`, `DialogueContext`, `DialogueTopic`, `DialogueMove`,
   `NpcSeenLedger`, `DialogueBeat`, `OfflineRenderer`.
-- ⬜ `ConversationWindow` + typewriter; opens on the existing talk key.
+- 🚧 `ConversationWindow` — built and wired to the talk key; the typewriter
+  reveal is not done (the line appears at once).
 - ⬜ `NpcRecognition`, player-conversation events, the rumor-vector loop.
+  `NpcRecognition` is built and has 29 tests and still no caller: every beat
+  is currently rendered at `RECOGNITION_STRANGER`, so pillar 3 ("the player is
+  a node in the graph") is the largest remaining gap. Nothing is written when
+  you talk, so recognition never advances past stranger.
 - ⬜ `QuestOffer`, `QuestReward`, `NpcAsk`, contract propose/accept/fulfil/lapse.
 - ⬜ **Not planned in this pass:** any LLM provider, settings tab, network code
   or baked phrasing pack. The seam above is documented, not implemented.

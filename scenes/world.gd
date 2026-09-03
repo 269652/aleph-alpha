@@ -72,6 +72,9 @@ const FruitSpoilage = preload("res://src/gameplay/fruit_spoilage.gd")
 const EscapeAction = preload("res://src/ui/escape_action.gd")
 const HotkeyRouting = preload("res://src/ui/hotkey_routing.gd")
 const ConditionReadout = preload("res://src/ui/condition_readout.gd")
+const ConversationWindow = preload("res://scenes/conversation_window.gd")
+const Conversation = preload("res://src/dialogue/conversation.gd")
+const NpcSeenLedger = preload("res://src/dialogue/npc_seen_ledger.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const WorldReset = preload("res://src/world/world_reset.gd")
 const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
@@ -696,6 +699,7 @@ func _ready() -> void:
 	_build_death_label()
 	_build_survival_bar()
 	_build_xp_bar()
+	_build_conversation_window()
 	_build_land_sense_label()
 	_build_message_stack()
 	_build_joust_view()
@@ -1698,6 +1702,7 @@ func _update_cast_label(local_player: Player) -> void:
 ## A talk-result banner (see Player._talk_step/NpcGreeting).
 func _update_talk_label(local_player: Player) -> void:
 	_set_message_banner(_talk_banner, local_player.talk_message)
+	_open_pending_conversation(local_player)
 
 
 ## The joust arcade-cabinet overlay (see JoustMatchView's own doc comment)
@@ -2508,6 +2513,34 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if HotkeyRouting.accepts_gameplay_hotkeys(console_open):
 		_handle_hotbar_hotkeys(event)
+
+
+## The live conversation window, and the ledger of what has been said.
+##
+## The ledger lives here rather than on Player or NpcMarker because it has to
+## outlive both: every NpcMarker is freed on chunk unload, so a ledger held
+## there would forget what a villager had told you the moment their village
+## went out of range -- and "the ledger burns topics" is the mechanism that
+## makes talking twice give you the SECOND most salient thing rather than the
+## first again.
+var _conversation_window: ConversationWindow
+var _npc_seen_ledger := NpcSeenLedger.new()
+
+
+## Opens the window on whatever the talk key produced, if anything.
+func _open_pending_conversation(local_player: Player) -> void:
+	if local_player.pending_talk_request.is_empty():
+		return
+	var request: Dictionary = local_player.pending_talk_request
+	local_player.pending_talk_request = {}
+	if _conversation_window == null or _conversation_window.is_open():
+		return
+	_conversation_window.open_with(Conversation.open(request["frame"], _npc_seen_ledger))
+
+
+func _build_conversation_window() -> void:
+	_conversation_window = ConversationWindow.new()
+	_ui.add_child(_conversation_window)
 
 
 ## Escape closes whatever is open, innermost first, and only opens the
