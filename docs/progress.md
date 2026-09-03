@@ -1628,6 +1628,26 @@ gradually leaf by leaf or shed their leaves or see them turn orange"*,
   `wander_radius` as an instance property first, a hard parse error
   blocking the whole game. Found and fixed; verified against its own
   `test_a_growing_juvenile_wanders_tighter_to_its_home_than_an_adult`.
+- **Follow-up, later session**: the fix above patched the call site back to
+  the pre-existing `wander_radius` instance-property workaround, but the
+  6th-argument call it replaced wasn't itself the merge mistake --
+  `tests/unit/test_creature_wander.gd` (added by that same lost branch)
+  already asserted `direction_at`/`step_position` accept an optional
+  trailing `radius` parameter, and neither ever actually gained one, so the
+  whole test file failed to parse and GUT silently skipped it (21 tests,
+  never running from that point on -- `[GUT WARNING]: Ignoring script ...
+  because it does not extend GutTest`, easy to miss in a full-suite run).
+  `CreatureWander.direction_at`/`step_position` now take that parameter for
+  real -- defaults to `-1.0`, a sentinel for "not supplied" that falls back
+  to the instance's own `wander_radius`, so every existing caller (this
+  workaround included) reproduced today's exact heading unchanged at the
+  moment it landed. `creature_marker.gd`'s `_wander_step` was then switched
+  to pass `_wander_radius()` straight through as that argument instead of
+  writing it into the shared `_wander` instance first, finishing the
+  refactor the original call site was reaching for. 21/21 in
+  `test_creature_wander.gd`, 186/186 in `test_creature_marker.gd`
+  (`test_a_growing_juvenile_wanders_tighter_to_its_home_than_an_adult`
+  included) and `test_fish_marker.gd` unaffected.
 - **Addendum, same session -- the bird fix above wasn't enough**: reported
   live again after the radius-only fix ("Birds still cycle between two
   fixed points"). Root cause of why: growing `BIRD_WANDER_RADIUS` alone
