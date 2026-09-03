@@ -129,10 +129,12 @@ pass over the elevation asset's own grid *offline, once* (the "no point at
 which a global drainage pass could run" objection above is answered by not
 running it live), ships the result as data, and hands baked channels to
 this doc's flow overlay and Manning solve through
-`EarthChunkGenerator.nearest_river_at` in the catalog's own shape. It stays
-behind `EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED` (off) until the real
-bake has been run and looked at in play. Curated rivers remain
-authoritative wherever they reach.
+`EarthChunkGenerator.nearest_river_at` in the catalog's own shape. It sat
+behind `EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED` until the real bake
+had been run; the same day the bake ranked the Loire and the Gironde as
+western France's strongest channels, the flag went on and the spawn moved
+onto the Loire at Nantes (an emergent river, no curated course near it).
+Curated rivers remain authoritative wherever they reach.
 
 ## Rendering: overlay, not a new biome
 

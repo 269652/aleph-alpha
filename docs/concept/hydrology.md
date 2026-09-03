@@ -575,10 +575,21 @@ Phase 1 is written, red-first, on branch `claude/hydrology-spec`
 (2026-09-03): `drainage_network.gd`, `stand_in_precipitation.gd`,
 `hydrology_data.gd`, `tools/bake_hydrology.gd`, `hydrology_field.gd`, and
 the generator/chunk-manager/player wiring above, with their tests. **None
-of the tests have been run yet** (deferred at the user's request), **the
-bake has not been run over the real asset**, and nothing is merged to
-`main`; the river fallback stays off until the bake has been seen in play.
-Phases 2-5 are design only. Depends on
+of the tests have been run yet** (deferred at the user's request) and
+nothing is merged to `main`. **The bake has been run** over the real asset
+(154 s; 197,109 channel cells at Q>=30 and 10,776 depressions covering
+6.6% of land, more than the real ~2% because every one-step basin of the
+8-bit asset counts) and ships in `assets/data/hydrology`.
+`tools/probe_hydrology.gd` ranked the Loire below Nantes and then the
+Gironde as the strongest emergent channels in western France, so the
+network finds the real rivers; on that evidence
+`HYDROLOGY_RIVERS_ENABLED` is on and the spawn moved to the Loire at
+Nantes (`World.SPAWN_LATITUDE`), where the game was launched and the
+flowing channel seen on screen. Open from that first look: the player
+appeared mid-channel in swimming mode although `tools/probe_spawn.gd`
+shows dry land two tiles from the spawn tile, so the dry-land spawn
+search wants checking with `test_world_spawn_location.gd`. Phases 2-5
+are design only. Depends on
 [climate_dynamics.md](climate_dynamics.md) for precipitation (also
 unimplemented). `hydraulic_erosion.gd` is superseded by the drainage bake
 for Earth and stays as-is for future procedural planets
