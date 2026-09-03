@@ -30,6 +30,32 @@ const KNOWN_BIOMES: Array[String] = [
 	"ocean", "mountain", "tundra", "forest", "grassland", "rainforest", "desert"
 ]
 
+## Fresh water (docs/concept/hydrology.md "Water kinds"): a lake is a
+## depression the drainage bake found, filled to its spill; a river is a
+## channel carrying enough routed discharge. Kept OUT of KNOWN_BIOMES on
+## purpose -- every renderer atlas, corner family, and spawn table keyed on
+## that list keeps working unchanged, and the renderer draws fresh water
+## with ocean's art (TerrainRenderer.art_biome). Pinned by
+## test_known_biomes_stay_the_land_and_ocean_vocabulary.
+const FRESH_WATER_BIOMES: Array[String] = ["lake", "river"]
+const WATER_BIOMES: Array[String] = ["ocean", "lake", "river"]
+## Every name classify() can return.
+const ALL_BIOMES: Array[String] = [
+	"ocean", "mountain", "tundra", "forest", "grassland", "rainforest", "desert", "lake", "river"
+]
+
+
+## The one predicate every former `== "ocean"` check reads instead, so
+## the water overlay, the swim model, fish, and shore logic all work on
+## fresh water with no second implementation.
+static func is_water(biome_name: String) -> bool:
+	return WATER_BIOMES.has(biome_name)
+
+
+## Drinkable-by-kind (salinity is a per-cell side field, not a biome).
+static func is_fresh_water(biome_name: String) -> bool:
+	return FRESH_WATER_BIOMES.has(biome_name)
+
 ## Classifies a map cell into a biome name from its elevation, temperature, and
 ## moisture, all normalized to [0.0, 1.0]. sea_level/mountain_level default to
 ## the fictional-noise-tuned constants; callers driving real elevation data
@@ -43,16 +69,24 @@ const KNOWN_BIOMES: Array[String] = [
 ## driving this project's mountain-ore-vein placement, just read from slope
 ## instead of elevation. Never overrides ocean, which is checked first and
 ## unconditionally.
+##
+## water_kind is hydrology's answer for this cell ("lake"/"river" from
+## HydrologyField, or "" for dry ground). It is returned ahead of every
+## land check, exactly as ocean is, and only ocean outranks it: a lake
+## bed is a lake whatever its temperature, moisture, or slope.
 func classify(
 	elevation: float,
 	temperature: float,
 	moisture: float,
 	sea_level: float = SEA_LEVEL,
 	mountain_level: float = MOUNTAIN_LEVEL,
-	slope_deg: float = SLOPE_NOT_PROVIDED
+	slope_deg: float = SLOPE_NOT_PROVIDED,
+	water_kind: String = ""
 ) -> String:
 	if elevation < sea_level:
 		return "ocean"
+	if water_kind != "":
+		return water_kind
 	if elevation >= mountain_level:
 		return "mountain"
 	if slope_deg >= 0.0 and slope_deg >= SLOPE_MOUNTAIN_THRESHOLD_DEG:
@@ -111,4 +145,4 @@ func _is_more_dominant_biome(candidate: String, count: int, best_biome: String, 
 		return true
 	if count != best_count:
 		return count > best_count
-	return KNOWN_BIOMES.find(candidate) < KNOWN_BIOMES.find(best_biome)
+	return ALL_BIOMES.find(candidate) < ALL_BIOMES.find(best_biome)

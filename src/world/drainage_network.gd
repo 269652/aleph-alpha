@@ -77,7 +77,8 @@ func build(
 	a_height: int,
 	a_sea_level: float,
 	a_wrap_x: bool = false,
-	min_depression_depth: float = DEFAULT_MIN_DEPRESSION_DEPTH
+	min_depression_depth: float = DEFAULT_MIN_DEPRESSION_DEPTH,
+	min_depression_cells: int = 1
 ) -> RefCounted:
 	width = a_width
 	height = a_height
@@ -86,7 +87,7 @@ func build(
 	_fill(heights)
 	_route()
 	_accumulate()
-	_label_depressions(heights, min_depression_depth)
+	_label_depressions(heights, min_depression_depth, min_depression_cells)
 	return self
 
 
@@ -249,7 +250,11 @@ func accumulate_weighted(weights: PackedFloat32Array) -> PackedFloat32Array:
 ## (the whole component sits at spill + a few epsilon), its floor the
 ## lowest original cell. Nested basins merge into one component here --
 ## the depression TREE hydrology.md describes is not built yet.
-func _label_depressions(heights: PackedFloat32Array, min_depth: float) -> void:
+##
+## Components smaller than `min_cells` are data noise (one stray 8-bit
+## step in the asset): their cells stay filled and routed exactly as
+## before, they just are not lake candidates.
+func _label_depressions(heights: PackedFloat32Array, min_depth: float, min_cells: int) -> void:
 	var count := width * height
 	depression_id.resize(count)
 	depression_id.fill(NO_DEPRESSION)
@@ -259,7 +264,7 @@ func _label_depressions(heights: PackedFloat32Array, min_depth: float) -> void:
 		if depression_id[start] != NO_DEPRESSION or not _is_raised(heights, start, min_depth):
 			continue
 		var id := depressions.size()
-		var cell_count := 0
+		var members := PackedInt32Array()
 		var spill_elevation := filled[start]
 		var spill_index := start
 		var floor_elevation := float(heights[start])
@@ -268,7 +273,7 @@ func _label_depressions(heights: PackedFloat32Array, min_depth: float) -> void:
 		while stack.size() > 0:
 			var index := stack[stack.size() - 1]
 			stack.resize(stack.size() - 1)
-			cell_count += 1
+			members.append(index)
 			if filled[index] < spill_elevation:
 				spill_elevation = filled[index]
 				spill_index = index
@@ -281,9 +286,15 @@ func _label_depressions(heights: PackedFloat32Array, min_depth: float) -> void:
 					continue
 				depression_id[neighbor] = id
 				stack.append(neighbor)
+		if members.size() < min_cells:
+			# Too small to be a lake: unlabel, and the id is reused by the
+			# next component so ids stay dense.
+			for member in members:
+				depression_id[member] = NO_DEPRESSION
+			continue
 		depressions.append({
 			"id": id,
-			"cell_count": cell_count,
+			"cell_count": members.size(),
 			"spill_elevation": spill_elevation,
 			"spill_index": spill_index,
 			"floor_elevation": floor_elevation,

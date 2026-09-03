@@ -150,6 +150,20 @@ func test_east_edge_drains_west_across_the_seam_only_when_wrapping():
 	assert_eq(clamped.downstream_index(4), 3)
 
 
+func test_depressions_smaller_than_the_minimum_area_are_filled_through():
+	# The 9-cell crater is data noise when the minimum is 10: no lake
+	# candidate, but its cells still drain (the fill is unchanged).
+	var network = DrainageNetwork.new().build(
+		_crater_with_north_notch(), 7, 7, SEA_LEVEL, false,
+		DrainageNetwork.DEFAULT_MIN_DEPRESSION_DEPTH, 10
+	)
+	assert_eq(network.depressions.size(), 0)
+	assert_eq(network.depression_id[4 * 7 + 3], DrainageNetwork.NO_DEPRESSION)
+	assert_almost_eq(network.filled[4 * 7 + 3], 0.6, 1e-4)
+	var path := _walk_to_sea(network, 4 * 7 + 3)
+	assert_true(network.is_sea(path[-1]))
+
+
 func test_weighted_accumulation_with_unit_weights_matches_the_cell_count():
 	var network = DrainageNetwork.new().build(_crater_with_north_notch(), 7, 7, SEA_LEVEL)
 	var weights := _grid(7, 7, 1.0)
