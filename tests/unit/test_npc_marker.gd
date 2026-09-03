@@ -336,9 +336,10 @@ func test_instruction_script_falls_back_to_the_planner_entry_when_no_rule_matche
 		+ "    if inventory_at_least(wood, 999): haul(wood, well)\n"
 		+ "}"
 	)
-	# No otherwise, and the lone condition never holds (the built frame's
-	# inventory is always empty) -- the evaluator returns null every tick, so
-	# the planner's own "stall" entry must still win.
+	# No otherwise, and the lone condition never holds (this test never sets
+	# marker.inventory, so the built frame reads its default empty {}) --
+	# the evaluator returns null every tick, so the planner's own "stall"
+	# entry must still win.
 	marker.schedule = [
 		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
 		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
@@ -349,3 +350,62 @@ func test_instruction_script_falls_back_to_the_planner_entry_when_no_rule_matche
 	for i in 200:
 		marker._process(1.0)
 	assert_lt(marker.position.distance_to(marker.landmarks["stall"]), 1.0)
+
+
+# -- per-NPC inventory (docs/concept/npc_instructions.md, closing the
+# "inventory_at_least cannot yet be truthfully exercised" gap): NpcMarker
+# carries a real `inventory` Dictionary (item_id -> int count), read
+# honestly by _instruction_frame() instead of always reporting {}. --
+
+func test_default_inventory_is_an_empty_dictionary():
+	assert_eq(marker.inventory, {})
+
+
+## Proves instruction_at_least now reads a real, non-empty NpcMarker.inventory
+## -- a rule gated on real held wood fires because the NPC genuinely holds
+## enough, not because the frame was stubbed.
+func test_instruction_at_least_reads_a_real_non_empty_inventory():
+	marker.inventory = {"wood": 25}
+	marker.instruction_script = _instruction_ast(
+		"instruct \"X\" {\n"
+		+ "    if inventory_at_least(wood, 20): haul(wood, well)\n"
+		+ "    otherwise: haul(wood, gate)\n"
+		+ "}"
+	)
+	# The planner would send this NPC to "stall"; with 25 real held wood
+	# (>= 20), the first rule must win and send it to "well" instead of
+	# falling through to "gate".
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
+		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
+		{"time_block": "evening", "location_tag": "stall", "activity": "work"},
+		{"time_block": "night", "location_tag": "stall", "activity": "work"},
+	]
+	marker.position = Vector2(0, 0)
+	for i in 200:
+		marker._process(1.0)
+	assert_lt(marker.position.distance_to(marker.landmarks["well"]), 1.0)
+	assert_gt(marker.position.distance_to(marker.landmarks["gate"]), 1.0)
+
+
+## The same script, with too little real held wood, must fall through to
+## the "otherwise" rule instead -- proves the frame's inventory count is the
+## real number, not just "non-empty".
+func test_instruction_at_least_fails_when_real_inventory_is_below_the_threshold():
+	marker.inventory = {"wood": 5}
+	marker.instruction_script = _instruction_ast(
+		"instruct \"X\" {\n"
+		+ "    if inventory_at_least(wood, 20): haul(wood, well)\n"
+		+ "    otherwise: haul(wood, gate)\n"
+		+ "}"
+	)
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
+		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
+		{"time_block": "evening", "location_tag": "stall", "activity": "work"},
+		{"time_block": "night", "location_tag": "stall", "activity": "work"},
+	]
+	marker.position = Vector2(0, 0)
+	for i in 200:
+		marker._process(1.0)
+	assert_lt(marker.position.distance_to(marker.landmarks["gate"]), 1.0)

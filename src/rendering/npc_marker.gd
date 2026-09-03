@@ -64,6 +64,15 @@ var economy: NpcEconomy = null
 ## NpcInstructionEvaluator.evaluate consumes directly.
 var instruction_script = null
 
+## This NPC's real held items (docs/concept/npc_instructions.md, the
+## per-NPC/household inventory `_instruction_frame()` reads for
+## `inventory_at_least`). A real Dictionary (item_id -> int count), NOT
+## null-checked like `economy`/`instruction_script` above -- an empty
+## inventory is a valid real state (an NPC that genuinely holds nothing),
+## not an absence to guard against. Read/written via NpcInventory's pure
+## add/remove/count_of helpers (src/world/npc_inventory.gd).
+var inventory := {}
+
 
 ## Swaps in a different planner (e.g. a future real LLM-backed one) -- see
 ## NpcPlanner.Planner. Defaults to the deterministic FakeNpcPlanner.
@@ -140,16 +149,18 @@ func _current_hour() -> int:
 ## Builds the flat context Dictionary NpcInstructionEvaluator's condition
 ## primitives read (docs/concept/npc_instructions.md, "Execution / wiring":
 ## "context is a flat Dictionary ... nothing that isn't already live
-## state") -- currently just this NPC's own hunger need, the one live need
-## signal NpcMarker already carries via `economy`. `inventory` stays empty
-## (the primitives' own fail-open/empty-is-not-an-error convention, see
-## npc_instruction_primitives.gd) until a real per-NPC/household inventory
-## exists -- out of this step's scope.
+## state") -- this NPC's own hunger need (the one live need signal NpcMarker
+## already carries via `economy`) and its real `inventory` Dictionary, now
+## that src/world/npc_inventory.gd exists to back it. An NPC that holds
+## nothing genuinely reports an empty inventory here -- the primitives' own
+## fail-open/empty-is-not-an-error convention (see
+## npc_instruction_primitives.gd) still applies, it's just backed by real
+## state now instead of always being stubbed.
 func _instruction_frame() -> Dictionary:
 	var needs := {}
 	if economy != null:
 		needs["hunger"] = economy.needs.hunger
-	return {"inventory": {}, "needs": needs}
+	return {"inventory": inventory, "needs": needs}
 
 
 ## Adapts an instruction action descriptor (NpcInstructionPrimitives' own
