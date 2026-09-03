@@ -250,10 +250,19 @@ watched the bird peck at them.
   / `EarthChunkManager.step_ants`, see "Ants: myrmecochory" below. This
   closes the placement half of the "other soil fauna" item above, AND the
   "forest/rainforest mound has nothing to harvest" gap this doc used to name
-  (fixed 2026-08-26, see "Windfall foraging" in that section). The rest of
-  the original item (a rendered presence, and ants as prey or as
-  non-windfall detritivores) is still open, see that section's own scope
-  note.
+  (fixed 2026-08-26, see "Windfall foraging" in that section).
+- ✅ Visible mounds — `src/rendering/procedural_ant_mound_sprite.gd`, one
+  `Sprite2D` per colony entrance, built by
+  `EarthChunkManager._sync_mound_sprites` and re-synced when the decoration
+  centre moves. Closes the "no rendered ant or mound sprite" scope note this
+  doc used to carry (2026-09-02).
+- ✅ Visible traffic — `src/gameplay/ant_traffic.gd`, a crew of workers per
+  mound trickling out from the drawn entrance and back, drawn as one
+  `MultiMeshInstance2D` for the whole world. Ambient animation rather than a
+  second simulation, bounded by the colony's own `FORAGE_RADIUS_TILES` so it
+  can never advertise a reach the simulation does not have.
+- ⬜ Ants as prey, and ants as non-windfall detritivores — still open, see
+  that section's own scope note.
 - ⬜ Insect larvae, snails, and any other soil fauna beyond ants — the table
   and the patch-sim contract extend to them the same way ants did, nothing
   else is needed structurally, but nothing has built one yet.
@@ -391,13 +400,106 @@ already use. This is what actually closes the "forest/rainforest mound has
 nothing to harvest" gap named above — a real, tested, live-wired mechanism,
 not just a placement fact.
 
+### What the player sees (added 2026-09-02)
+
+The "logic first, sprite later" split this doc's scope note used to describe is
+now closed on the sprite half. Reported live, looking at a real grassland
+chunk: *"the bare grass parts feel empty."* Ten colonies per chunk were quietly
+moving seed around ground that drew nothing at all — the same "the simulation
+is right and the world is not showing it" gap this doc's earthworm half already
+went through once.
+
+**The mound.** A low dome of fine excavated soil with a dark entrance hole and
+an apron of spoil thrown out to one side — which is what an ant mound in a
+meadow actually looks like from above, and why the silhouette is lopsided
+rather than a symmetric ring. One `Sprite2D` per mound, the same shape
+`DesertScrub` uses, because mounds are genuinely sparse (`MAX_MOUNDS` 10 per
+32×32 chunk); the dense-carpet MultiMesh treatment
+[ground_cover.md](ground_cover.md) needs would be machinery for nothing here.
+
+Three properties of the art are pinned by test rather than by eye, and all
+three come from looking at a real render rather than from theory:
+
+- **A mound is ONE connected feature.** The first version threw its spoil as
+  isolated grains up to 1.7 radii out, and the mounds grew *whiskers* — lone
+  dark pixels floating in vivid green, which read as spatter, not as soil. The
+  spoil is now a contiguous apron off the rim, solid where it leaves the dome
+  and stippling out over a short edge, and anything the stipple still strands
+  is erased (`test_a_mound_is_one_connected_feature`). The same render also
+  showed that a *wholly* stippled apron grows radial one-pixel spikes and the
+  mound reads as something with legs, which is why `SPOIL_SOLID_FRACTION`
+  exists.
+- **It is lit from above and shaded against its own rim.** Three flat tones,
+  not a gradient — banding is what makes a heap read as a heap in pixel art.
+  Pinned as pure functions (`dome_lighting`/`dome_colour`, `apron_is_shaded`)
+  rather than by averaging the finished image, because the apron's random
+  bearing pollutes any such average.
+- **Each mound wears its own grain.** The loose speckle was originally sampled
+  at `int(centre.x) * 31` — and the centre is the middle of a fixed-size
+  canvas, so that was the constant 16 for *every mound ever drawn*: all ten
+  colonies in a chunk shared one grain pattern and differed only in radius and
+  bearing (`test_the_grain_pattern_differs_between_mounds`).
+
+Mounds are the one decoration layer with nothing to throttle: a colony's
+entrances are fixed at chunk construction and never move, so the only thing
+that can change is whether the chunk is drawn at all. They are re-synced at
+exactly that moment — when the decoration centre changes in
+`_sync_decoration_and_grass_tracking` — rather than on a `step_*` accumulator
+that would walk every loaded chunk every few seconds to discover nothing had
+happened. Without it a chunk that leaves decoration range and comes back stays
+permanently bare, because it is still *loaded* and `_load_chunk` never runs
+again (`test_mounds_come_back_when_the_player_returns`).
+
+**Traffic, and a deliberate divergence.** The scope note below says a colony is
+"not something that needs (or would even read as) an individually-pathed
+sprite", and that stays true of **simulation**: there is still no per-ant
+`CreatureMarker`, no ant AI, no ant pathfinding, and the foraging that actually
+moves seed is still the colony-level roll it always was.
+
+What was added is **ambient animation** — a few workers trickling out from the
+entrance and back — which is a different thing, and is the same category as
+`WindSway` animating grass blades that nothing simulates individually. The
+reason to add it is the report this work came from: static props are exactly
+what read as empty, and movement is what living ground has. A mound with
+workers on it reads as a colony; a bump of soil reads as a rock.
+
+Two rules keep the decoration honest rather than a second, lying simulation:
+
+- **The drawn range never exceeds the simulated one.** A worker's furthest
+  excursion is bounded by `AntColony.FORAGE_RADIUS_TILES` — the same radius
+  `_forage_seed_near_mound` actually searches — so the traffic can never
+  advertise a reach the colony does not have. Pinned by
+  `test_a_worker_never_ranges_further_than_the_colony_actually_forages`.
+- **Every trip starts and ends at the entrance.** Workers come out of the nest
+  and go back into it; one that drifted away would read as an escaped bug
+  rather than as a colony.
+
+`AntTraffic` is pure and engine-free: a worker's offset from its own entrance is
+a function of its seed and the elapsed time, so nothing is stored per ant and
+the whole thing is testable headlessly. Its out-and-back profile is a **sine
+rather than a triangle** — a triangle peaks with a corner, which reverses the
+worker's direction in a single frame and reads as a bounce; the sine is also
+what keeps the per-frame step under `MAX_STEP_PX_PER_FRAME`.
+
+Workers are measured from the mound's **drawn entrance**, not from the centre
+of its tile: `ProceduralAntMoundSprite.entrance_offset` is public for exactly
+that reason, and is pinned against the painted hole
+(`test_the_entrance_offset_lands_on_the_painted_hole`) so it cannot drift away
+from the thing the player can see.
+
+They are drawn as **one `MultiMeshInstance2D` for the whole world**, not a node
+per ant — the opposite choice from the mounds, and for the opposite reason.
+Mounds are static and sparse, so nodes cost nothing; workers move every frame,
+and ten mounds a chunk times a crew each is exactly the sprite count
+`DecorationLod` exists to prevent. This is also the one decoration layer that
+is deliberately **not** throttled: a worker's whole job is to be moving, there
+is no node churn to throttle, and a five-second refresh would draw ants that
+teleport.
+
 ### What is explicitly NOT in this pass
 
-- **No rendered ant or mound sprite.** Mounds are a pure simulation effect
-  this pass — real, and driving the world (a seed genuinely disappears and
-  a new grass patch genuinely appears), but nothing draws them. The
-  earthworm/robin pair went through exactly this same "logic first, sprite
-  later" split; ants stop at the logic half for now.
+- ~~**No rendered ant or mound sprite.**~~ **Closed 2026-09-02** — see "What
+  the player sees" above. The rest of this list still stands.
 - **Ants are not bird prey.** `FlyerDiet` is not extended with an insect
   food type here — a real robin or sparrow eating ants at a mound would be
   a genuine, well-grounded follow-on (the same insectivore mechanism this

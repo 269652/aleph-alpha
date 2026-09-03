@@ -129,3 +129,31 @@ func test_a_meter_percent_never_leaves_the_zero_to_a_hundred_range():
 	assert_eq(World.meter_label_text("Water", World.reserve_for_deficit(-0.3)), "Water 100%")
 	assert_eq(World.meter_label_text("Stamina", 2.0), "Stamina 100%")
 	assert_eq(World.meter_label_text("Stamina", -1.0), "Stamina 0%")
+
+
+# -- the wind, where the player can read it -----------------------------------
+#
+# The wind decides which side of an animal gives you away (see WindScent,
+# CreatureMarker._smells_a_player). A mechanic the player cannot read is a
+# mechanic they cannot play around, so the status line names it.
+
+const WindScentForHud = preload("res://src/world/wind_scent.gd")
+
+
+func test_the_status_line_names_the_wind():
+	var line := World.status_line_wind(Vector2.RIGHT)
+	assert_true(line.contains("westerly"), "a wind blowing east is a westerly: %s" % line)
+
+
+## Still air is not a wind, and printing "Wind: " with nothing after it would
+## be worse than printing nothing.
+func test_still_air_says_nothing():
+	assert_eq(World.status_line_wind(Vector2.ZERO), "")
+
+
+func test_every_wind_gets_a_readable_name():
+	for degrees in 24:
+		var angle := deg_to_rad(float(degrees) * 15.0)
+		var line := World.status_line_wind(Vector2(cos(angle), sin(angle)))
+		assert_true(line.begins_with("Wind: "), "%d degrees printed %s" % [degrees * 15, line])
+		assert_gt(line.length(), "Wind: ".length())

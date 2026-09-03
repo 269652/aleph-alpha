@@ -344,3 +344,86 @@ func test_stash_drops_the_overflow_at_the_players_feet_when_inventory_is_full():
 			if node.item_stack.item.id == "carrot" and player.position.distance_to(node.position) < 1.0:
 				found = true
 	assert_true(found, "the carrot that didn't fit should be dropped at the player's own feet, not lost")
+
+
+# -- putting a bait down (see docs/concept/animal_husbandry.md "The approach")
+#
+# The approach layer's first verb is "drop a food item and step back", and the
+# whole simulation half of it is live -- EarthChunkManager.smells_near
+# publishes ground food, CreatureMarker._seek_by_smell walks a grazer up the
+# gradient, take_bait_at lets it eat what it reached. A live session found the
+# gap: there was no gesture. The inventory window's own header offers
+# "drag to move" only, and dragging a stack out onto the world does nothing
+# (verified in play), so a player could not put food on the ground at all.
+#
+# So the stash key gains a contextual second meaning, exactly the way E did
+# (see docs/concept/stone.md's held-item concept): with something in hand it
+# still stashes, and with an EMPTY hand it puts a bait down.
+
+
+func _ground_carrot_count() -> int:
+	var found := 0
+	for node in get_tree().get_nodes_in_group(DroppedItem.GROUP_NAME):
+		if node is DroppedItem and not node.is_queued_for_deletion() and node.item_stack != null:
+			if node.item_stack.item.id == "carrot":
+				found += node.item_stack.count
+	return found
+
+
+func test_putting_a_bait_down_leaves_food_on_the_ground():
+	player.inventory.add(Item.new("carrot", "Carrot", "food", 20), 3)
+	var before := _ground_carrot_count()
+
+	_tap_stash()
+
+	assert_eq(_ground_carrot_count(), before + 1, "one carrot should be lying on the ground")
+
+
+## Exactly one, so a bait is a considered act rather than tipping out the bag.
+func test_putting_a_bait_down_spends_exactly_one():
+	player.inventory.add(Item.new("carrot", "Carrot", "food", 20), 3)
+	_tap_stash()
+	assert_eq(player.inventory.count_of("carrot"), 2)
+
+
+## Carrying no food at all is not an error, it is nothing happening.
+func test_nothing_is_put_down_with_no_food_carried():
+	player.inventory.add(Item.new("wood", "Wood", "material", 40), 5)
+	var before := _ground_carrot_count()
+	_tap_stash()
+	assert_eq(_ground_carrot_count(), before)
+	assert_eq(player.inventory.count_of("wood"), 5, "a material is not bait")
+
+
+## The existing meaning is untouched: with something in hand the key still
+## stashes, and does NOT also put a bait down.
+func test_the_stash_key_still_stashes_when_something_is_in_hand():
+	player.inventory.add(Item.new("carrot", "Carrot", "food", 20), 3)
+	_add_dropped_carrot(Vector2(5, 0))
+	Input.action_press("pickup")
+	player._pickup_step(0.016)
+	Input.action_release("pickup")
+	player._pickup_step(0.016)
+	assert_true(player.is_holding_item(), "precondition: something in hand")
+	var before := _ground_carrot_count()
+
+	_tap_stash()
+
+	assert_false(player.is_holding_anything())
+	assert_eq(player.inventory.count_of("carrot"), 4, "the held carrot went into the bag")
+	assert_eq(_ground_carrot_count(), before, "stashing must not also drop a bait")
+
+
+## Which food goes down when several are carried. The taming treat wins, so
+## the common case -- a player with carrots and a haunch of meat, standing at a
+## sheep -- puts down the thing the sheep wants.
+func test_the_taming_treat_is_preferred_as_bait():
+	assert_eq(Player.bait_item_id_from(["meat", "carrot", "apple"]), "carrot")
+
+
+func test_any_food_will_do_when_there_is_no_treat():
+	assert_eq(Player.bait_item_id_from(["wood", "apple", "rock"]), "apple")
+
+
+func test_nothing_is_bait_when_nothing_carried_is_food():
+	assert_eq(Player.bait_item_id_from(["wood", "rock", "iron_sword"]), "")

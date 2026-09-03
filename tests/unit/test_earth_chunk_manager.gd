@@ -9688,3 +9688,47 @@ func test_an_unloaded_settlement_really_declines_by_eating_through_its_stores():
 		1,
 		"leaving a real ruin behind it, offscreen, with no player anywhere near"
 	)
+
+
+## Where a villager lives, read back off the same settling events
+## _households_in_settlement already walks in the other direction.
+##
+## ConversationSources.gather asked for exactly this by calling
+## `settlement_id_for_npc`, and no such method existed -- so the fail-open
+## returned "" for every villager in the running game, and EVERY
+## settlement-derived source a conversation reads (the production shortfall
+## list, village status, tier, specialization, food stock, the market itself)
+## was looked up against "" and came back empty. A villager could only ever
+## talk about their own memories. Found by test_village_errand_floor.gd.
+func test_settlement_id_for_npc_says_where_a_villager_lives():
+	var chunk_coord := Vector2i(93, 93)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(4), NpcIdentity.new(6)])
+
+	assert_eq(manager.settlement_id_for_npc("npc:4"), EntityRef.for_settlement(chunk_coord))
+	assert_eq(manager.settlement_id_for_npc("npc:6"), EntityRef.for_settlement(chunk_coord))
+
+
+## A villager who never settled anywhere lives nowhere, and that is an
+## ordinary answer rather than an error -- a wanderer is a real thing.
+func test_a_villager_who_settled_nowhere_lives_nowhere():
+	assert_eq(manager.settlement_id_for_npc("npc:999"), "")
+	assert_eq(manager.settlement_id_for_npc(""), "")
+
+
+## The two directions have to agree: every villager a settlement claims must
+## claim that settlement back.
+func test_where_a_villager_lives_agrees_with_who_the_settlement_claims():
+	var chunk_coord := Vector2i(95, 95)
+	var seeds := [3, 7, 9]
+	var identities: Array = []
+	for seed_value in seeds:
+		identities.append(NpcIdentity.new(seed_value))
+	manager.record_settlement_founded_if_new(chunk_coord, identities)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+
+	var claimed := manager.household_count_for_settlement(settlement_id)
+	var claiming := 0
+	for seed_value in seeds:
+		if manager.settlement_id_for_npc("npc:%d" % seed_value) == settlement_id:
+			claiming += 1
+	assert_eq(claiming, claimed)

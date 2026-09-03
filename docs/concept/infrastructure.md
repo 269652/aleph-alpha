@@ -93,6 +93,24 @@ implemented either, but the two are designed to land together.
 
 - ✅ **Path wearing/recovery mechanism** (`PathScarring`) — pre-existing,
   player-only, real per-tile wear with decay, rendered as earth tiles.
+- ✅ **A path is quicker to walk** (`PathScarring.speed_multiplier`,
+  `Player._path_speed_multiplier`, pushed in by `World._step_path_scarring`).
+  Added 2026-09-03, and it closes the loop this model had always been missing
+  half of: repeated movement wears a path, the path is quicker to walk, and
+  being quicker to walk is what makes it worth using again. Until this, wearing
+  a path in cost the player time and bought them nothing but a texture change —
+  a desire path that nobody desired.
+
+  The advantage is **continuous in the wear** rather than switching on at
+  `WORN_THRESHOLD`: real ground compacts progressively under repeated use, so a
+  half-worn track already helps a little, and the loop reinforces smoothly
+  instead of paying out all at once. It is bracketed from both sides
+  (`test_the_advantage_is_worth_having_and_not_absurd`) so it can drift into
+  neither "pointless" nor "the only way to travel", it is capped with the wear
+  itself so walking one tile forever cannot compound into a slipstream, and it
+  is never below 1.0 — a path is never a hindrance. It reads the *same* wear
+  number the renderer does, so the tile the world drew as a path is exactly the
+  tile that is faster.
 - ✅ **Path formation/reclamation is a real, causally-grounded event** — see
   `docs/progress.md`'s Emergence Phase 8 entry for exactly what's wired.
 - ⬜ Trail/road tiers (higher wear thresholds, their own rendering).

@@ -70,12 +70,20 @@ const DragSlot = preload("res://src/ui/drag_slot.gd")
 const TimeLapse = preload("res://src/gameplay/time_lapse.gd")
 const FruitSpoilage = preload("res://src/gameplay/fruit_spoilage.gd")
 const EscapeAction = preload("res://src/ui/escape_action.gd")
+const HotkeyRouting = preload("res://src/ui/hotkey_routing.gd")
+const ConditionReadout = preload("res://src/ui/condition_readout.gd")
+const ConversationWindow = preload("res://scenes/conversation_window.gd")
+const Conversation = preload("res://src/dialogue/conversation.gd")
+const NpcAsk = preload("res://src/dialogue/npc_ask.gd")
+const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
+const NpcSeenLedger = preload("res://src/dialogue/npc_seen_ledger.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const WorldReset = preload("res://src/world/world_reset.gd")
 const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
 const Compass = preload("res://src/gameplay/compass.gd")
 const MapProjection = preload("res://src/world/map_projection.gd")
 const Spyglass = preload("res://src/gameplay/spyglass.gd")
+const WindScent = preload("res://src/world/wind_scent.gd")
 const WeatherForecast = preload("res://src/gameplay/weather_forecast.gd")
 const SeasonAlmanac = preload("res://src/world/season_almanac.gd")
 const FieldJournal = preload("res://src/emergence/field_journal.gd")
@@ -492,6 +500,7 @@ var _stamina_fill: ColorRect
 var _stamina_label: Label
 var _warmth_fill: ColorRect
 var _warmth_label: Label
+var _condition_label: Label
 var _xp_fill: ColorRect
 var _xp_label: Label
 ## Naturalist "land_sense" keystone reveal (docs/concept/progression.md
@@ -705,6 +714,7 @@ func _ready() -> void:
 	_build_death_label()
 	_build_survival_bar()
 	_build_xp_bar()
+	_build_conversation_window()
 	_build_land_sense_label()
 	_build_message_stack()
 	_build_joust_view()
@@ -1549,6 +1559,16 @@ func _build_survival_bar() -> void:
 	_warmth_fill = warmth["fill"]
 	_warmth_label = warmth["label"]
 
+	# What is actively wrong with the player, under the reserve bars (see
+	# ConditionReadout). The bars say how much of something is LEFT; this says
+	# what it is doing to you -- bleeding, ill, chilled through -- none of which
+	# was on screen anywhere before, so a player could be walking toward sepsis
+	# or hypothermia with no indication at all.
+	_condition_label = Label.new()
+	_condition_label.add_theme_font_size_override("font_size", 12)
+	_condition_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.5))
+	container.add_child(_condition_label)
+
 	_wallet_label = Label.new()
 	_wallet_label.add_theme_font_size_override("font_size", 12)
 	container.add_child(_wallet_label)
@@ -1697,6 +1717,7 @@ func _update_cast_label(local_player: Player) -> void:
 ## A talk-result banner (see Player._talk_step/NpcGreeting).
 func _update_talk_label(local_player: Player) -> void:
 	_set_message_banner(_talk_banner, local_player.talk_message)
+	_open_pending_conversation(local_player)
 
 
 ## The joust arcade-cabinet overlay (see JoustMatchView's own doc comment)
@@ -2177,7 +2198,12 @@ func _update_interaction_prompt(local_player: Player) -> void:
 
 	var npc = _chunk_manager.nearest_npc_near(local_player.position, Player.TALK_RADIUS)
 	if npc != null:
-		_show_interaction_prompt("Talk (%s)" % OS.get_keycode_string(_keybindings.keycode_for("talk")), npc.position)
+		_show_interaction_prompt(
+			NpcAsk.talk_prompt(
+				OS.get_keycode_string(_keybindings.keycode_for("talk")), _owed_to(npc)
+			),
+			npc.position
+		)
 		return
 
 	# Something already in hand: E is now dedicated to charge/release (see
@@ -2480,21 +2506,125 @@ func _update_creature_panels(local_player: Player, delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not _world_ready:
 		return
-	if event.is_action_pressed(CONSOLE_TOGGLE_ACTION):
-		_dev_console.toggle()
-	elif event.is_action_pressed(INVENTORY_TOGGLE_ACTION):
-		_inventory_window.toggle()
-	elif event.is_action_pressed(CRAFTING_TOGGLE_ACTION):
-		_crafting_window.toggle()
-	elif event.is_action_pressed(SKILLS_TOGGLE_ACTION):
-		_skill_window.toggle()
-		var lp := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
-		if lp != null:
-			_refresh_skill_window(lp)
-	elif event.is_action_pressed(SETTINGS_TOGGLE_ACTION):
-		_handle_escape()
-	else:
+	# Routed through HotkeyRouting rather than decided inline, the same way
+	# Escape already goes through EscapeAction -- which is what makes the rule
+	# "nothing typed at an open console is a gameplay hotkey" testable, and
+	# what closes finding 4 of the 2026-09-02 playtest: with the console open
+	# but its LineEdit unfocused, `/give lasso 1` opened the skill tree on the
+	# `l` and `/give carrot 20` opened crafting on the `c`.
+	var console_open: bool = _dev_console.visible
+	for action_name in HotkeyRouting.ACTION_SURFACES:
+		if not event.is_action_pressed(action_name):
+			continue
+		match HotkeyRouting.surface_for(action_name, console_open):
+			HotkeyRouting.SURFACE_CONSOLE:
+				_dev_console.toggle()
+			HotkeyRouting.SURFACE_INVENTORY:
+				_inventory_window.toggle()
+			HotkeyRouting.SURFACE_CRAFTING:
+				_crafting_window.toggle()
+			HotkeyRouting.SURFACE_SKILLS:
+				_skill_window.toggle()
+				var lp := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+				if lp != null:
+					_refresh_skill_window(lp)
+			HotkeyRouting.SURFACE_SETTINGS:
+				_handle_escape()
+		return
+	if HotkeyRouting.accepts_gameplay_hotkeys(console_open):
 		_handle_hotbar_hotkeys(event)
+
+
+## The live conversation window, and the ledger of what has been said.
+##
+## The ledger lives here rather than on Player or NpcMarker because it has to
+## outlive both: every NpcMarker is freed on chunk unload, so a ledger held
+## there would forget what a villager had told you the moment their village
+## went out of range -- and "the ledger burns topics" is the mechanism that
+## makes talking twice give you the SECOND most salient thing rather than the
+## first again.
+var _conversation_window: ConversationWindow
+var _npc_seen_ledger := NpcSeenLedger.new()
+
+
+## Opens the window on whatever the talk key produced, if anything.
+func _open_pending_conversation(local_player: Player) -> void:
+	if local_player.pending_talk_request.is_empty():
+		return
+	var request: Dictionary = local_player.pending_talk_request
+	local_player.pending_talk_request = {}
+	if _conversation_window == null or _conversation_window.is_open():
+		return
+	_conversation_payer_wallet = request.get("payer_wallet")
+	_conversation_window.open_with(Conversation.open(
+		request["frame"],
+		_npc_seen_ledger,
+		String(request.get("recognition", Conversation.RECOGNITION_STRANGER)),
+		request.get("asks", {})
+	))
+
+
+## Goods and gold actually changing hands at the end of an errand (see
+## docs/concept/quests.md, and ConversationWindow.world_effect).
+##
+## The Conversation decided WHAT should change and the window carried it up;
+## this is the only layer that can reach an Inventory or a Wallet, which is
+## what keeps every layer below it testable with no engine at all. The
+## contract was already fulfilled and the matching event already recorded by
+## the time this runs -- what is left is the physical exchange.
+func _on_conversation_effect(effect: Dictionary) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		return
+	var items: Dictionary = effect.get("items", {})
+	for item_id in items:
+		local_player.inventory.remove(String(item_id), int(items[item_id]))
+	_refresh_inventory_now(local_player)
+	# ...and into the village's own stock, which is where the shortage that
+	# produced the errand was measured. Taking the goods out of the pack
+	# without this leaves the village exactly as short as it was.
+	if _chunk_manager != null:
+		_chunk_manager.deliver_to_settlement(String(effect.get("settlement_id", "")), items)
+
+	var gold := int(effect.get("gold", 0))
+	if gold <= 0:
+		return
+	local_player.wallet.add(gold)
+	# Paid out of the paying villager's OWN wallet -- the reward was derived
+	# from that balance moments earlier, so taking it from anywhere else would
+	# make the number they quoted a fiction, and would let one villager fund
+	# every errand in the valley.
+	if _conversation_payer_wallet != null:
+		_conversation_payer_wallet.spend(gold)
+
+
+## What the player still owes this villager, as the short phrase the floating
+## prompt appends (quests.md: "Tracking is the world, not a log"). Read only
+## -- `open_asks` deliberately does not default an overdue promise, because
+## this runs on the prompt throttle and reading what is owed must never change
+## the world. The lapse is recorded at conversation open, where it belongs.
+func _owed_to(npc) -> String:
+	if _chunk_manager == null or npc == null or npc.identity == null:
+		return ""
+	return NpcAsk.owed_summary(NpcAsk.open_asks(
+		_chunk_manager.contract_store(),
+		"npc:%d" % npc.identity.seed_value,
+		PlayerIdentity.PLAYER_ENTITY_ID,
+		_chunk_manager.world_age_seconds()
+	))
+
+
+## The wallet of the villager the open conversation is with, captured when the
+## window opens rather than looked up when it pays: the marker itself can be
+## freed by a chunk unload mid-conversation, and the balance the reward was
+## derived from is this one.
+var _conversation_payer_wallet = null
+
+
+func _build_conversation_window() -> void:
+	_conversation_window = ConversationWindow.new()
+	_conversation_window.world_effect.connect(_on_conversation_effect)
+	_ui.add_child(_conversation_window)
 
 
 ## Escape closes whatever is open, innermost first, and only opens the
@@ -2589,7 +2719,16 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# grass/saplings the same way the mouse's/squirrel's own scatter-hoarding
 	# does.
 	_chunk_manager.step_ants(delta)
+	# Blood marks age out of being followable (see EarthChunkManager.
+	# drop_blood_at, docs/concept/olfaction.md's blood trail) -- a trail is a
+	# window, not a permanent annotation on the map.
+	_chunk_manager.step_blood_marks(delta)
 	_chunk_manager.step_flowers(delta)
+	# The sward between the tussocks (see GroundCover,
+	# docs/concept/ground_cover.md) -- grazing memory decays and the visible
+	# rosettes are rebuilt, on the same throttle step_tall_grass uses so the
+	# two plant layers appear and disappear together.
+	_chunk_manager.step_ground_cover(delta)
 	_chunk_manager.step_desert_scrub(delta)
 	_chunk_manager.step_tundra_lichen(delta)
 	# Every founded settlement is reassessed against its own food stock (see
@@ -3572,6 +3711,11 @@ func _update_survival_bar(local_player: Player) -> void:
 	_warmth_fill.size.x = _health_bar.fill_width(s.warmth, 1.0, SURVIVAL_BAR_WIDTH)
 	var warmth_state := "Freezing" if s.is_freezing() else ("Cold" if s.is_cold() else "Warmth")
 	_warmth_label.text = meter_label_text(warmth_state, s.warmth)
+	# Empty when there is nothing worth saying: the line is for what needs
+	# attention, so an always-on line would mean nothing.
+	var condition := ConditionReadout.text_for(local_player)
+	_condition_label.text = condition
+	_condition_label.visible = not condition.is_empty()
 	_wallet_label.text = "Gold: %d" % local_player.wallet.balance
 
 
@@ -4034,6 +4178,12 @@ func _step_path_scarring(delta: float) -> void:
 			_last_scar_step_tile = tile
 			if PATH_SCAR_BIOMES.has(_chunk_manager.biome_at_global(tile.x, tile.y)):
 				_path_scarring.step_on(tile)
+		# ...and the path pays the walker back: worn ground is quicker to
+		# cross, which is what makes wearing one in worth doing (see
+		# PathScarring.speed_multiplier, Player._path_speed_multiplier). Pushed
+		# rather than queried because the wear model lives here, next to the
+		# step that feeds it -- the same data flow turned around.
+		local_player.ground_wear = _path_scarring.wear_at(tile)
 
 	_scar_refresh_accumulator += delta
 	if _scar_refresh_accumulator < PATH_SCAR_REFRESH_INTERVAL:
@@ -4664,7 +4814,14 @@ func _client_process(delta: float) -> void:
 	_chunk_manager.step_snow(snowing, warmth)
 	# Walking packs the snow down, which is what leaves a trail.
 	_chunk_manager.tread_snow_at(local_player.position)
-	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
+	var raw_wind_strength := _weather_model.wind_strength_for(raw_weather)
+	_chunk_manager.set_wind_strength(raw_wind_strength)
+	# ...and the wind now has a DIRECTION the simulation reads, not just an
+	# energy the visuals do. Every animal with a nose smells the player further
+	# off downwind than upwind (see WindScent, CreatureMarker._smells_a_player,
+	# docs/concept/olfaction.md "The wind carries it"), which is what makes
+	# which side you approach an animal from a decision.
+	_chunk_manager.refresh_wind(local_player.position, raw_wind_strength)
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).
 	_chunk_manager.set_sun_position(elevation, azimuth)
@@ -4700,7 +4857,7 @@ func _client_process(delta: float) -> void:
 	_chunk_manager.sync_tree_season(local_player.position)
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (
-		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"
+		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%   %s"
 		% [
 			Engine.get_frames_per_second(),
 			latitude,
@@ -4712,8 +4869,23 @@ func _client_process(delta: float) -> void:
 			weather,
 			local_player.current_mode,
 			local_player.current_speed_multiplier * 100,
+			status_line_wind(_chunk_manager.wind_direction()),
 		]
 	)
+
+
+## How the status line names the wind, or "" in still air.
+##
+## The wind is a real gameplay input now, not weather flavour: it decides which
+## side of an animal gives the player away (see WindScent,
+## CreatureMarker._smells_a_player, docs/concept/olfaction.md "The wind carries
+## it"). A mechanic the player cannot read is one they cannot play around, so
+## it goes where they are already looking.
+##
+## Static and pure so the naming is testable without a running world.
+static func status_line_wind(wind_direction: Vector2) -> String:
+	var name := WindScent.wind_name(wind_direction)
+	return "" if name.is_empty() else "Wind: %s" % name
 
 
 ## Searches an expanding ring around a candidate spawn tile for dry land, in

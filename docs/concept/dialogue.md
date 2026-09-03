@@ -234,13 +234,87 @@ to keep.
 
 ## Status
 
-- ⬜ Everything below is being built now; this doc is the spec, written first.
+**Corrected 2026-09-03.** This list read ⬜ for everything, and had done since
+the doc was written — while six of the pipeline's modules were built, tested
+and merged. What was actually missing was the last three stages and the wire,
+which is why none of it was reachable: the talk key showed a one-line greeting
+from `NpcGreeting`, an eight-entry lookup on personality trait whose own header
+says it is *"explicitly NOT the real Live Dialogue System."*
+
+- ✅ `DialogueContext`, `DialogueTopic`, `DialogueMove`, `NpcVoice`,
+  `NpcSeenLedger` — built and tested (~2,700 lines, ~146 tests) well before
+  this correction, with **no production caller at all**.
+- ✅ `DialogueBeat` — the beat contract, built 2026-09-03. Quantities and names
+  live in `slots` and are substituted by the core; `required_slots` is what
+  lets a phrasing that dropped a placeholder be rejected rather than rendered
+  with a hole in it. `cache_key_of` is `(voice_key, topic_id, kind,
+  fact_band)` — **not** the NPC, which is what makes baking phrasings ahead of
+  time tractable at all.
+- ✅ `OfflineRenderer` — the five-slot plan (OPENER, CORE, HEDGE, ASIDE,
+  CLOSER), built 2026-09-03. Only the CORE carries meaning. This is the
+  guaranteed floor the whole AI-seam argument rests on: it needs no model, no
+  network and no cache.
+- ✅ `Conversation` + `ConversationSources` + `ConversationWindow`, and the
+  talk key wired to them (2026-09-03). Talking now opens a real exchange:
+  the villager's most salient real fact, in their own voice, with choices
+  built from the beat's own slots, and a ledger that burns topics so asking
+  again gives you the *second* thing.
 - ⬜ Substrate: witness wiring, `production_failed` change-guard, `VillageWages`,
   `SettlementFood`, 8-occupation recipe map.
-- ⬜ `NpcVoice`, `DialogueContext`, `DialogueTopic`, `DialogueMove`,
+- ⬜ (superseded by the corrected list above) `NpcVoice`, `DialogueContext`, `DialogueTopic`, `DialogueMove`,
   `NpcSeenLedger`, `DialogueBeat`, `OfflineRenderer`.
-- ⬜ `ConversationWindow` + typewriter; opens on the existing talk key.
-- ⬜ `NpcRecognition`, player-conversation events, the rumor-vector loop.
-- ⬜ `QuestOffer`, `QuestReward`, `NpcAsk`, contract propose/accept/fulfil/lapse.
+- 🚧 `ConversationWindow` — built and wired to the talk key; the typewriter
+  reveal is not done (the line appears at once).
+- ✅ `NpcRecognition` and player-conversation events (2026-09-03) — **pillar 3
+  is real**. Talking appends a `player_spoke_with` event naming both parties,
+  which the villager *witnesses* (so it can be gossiped), and the tier is read
+  back off the two stores that cannot be argued with: an append-only event log
+  and a contract's live status. It reaches the sentence — recognition changes
+  the **opener**, never what is being said, so familiarity changes how you are
+  addressed and not the facts. Precedence is most-specific-first: saying it
+  *again* outranks knowing you, because stacking both reads as a stranger who
+  repeats themselves. The tier is read *before* the conversation is recorded,
+  or every villager would greet you as an acquaintance on the strength of the
+  meeting currently happening.
+- ⬜ The rumor-vector loop: you do not yet *hold* a degraded memory of what a
+  villager tells you, so carrying news between settlements — dialogue.md's
+  mechanism 4, and the one no template can fake — is still unbuilt.
+- ✅ `QuestOffer`, `QuestReward`, `NpcAsk`, and contract
+  propose/accept/fulfil/lapse (2026-09-03) — **a villager can now ask you for
+  what they are short of, and you can go and get it.** Four of the six sources
+  are live (production shortfall, village hunger, remembered threat,
+  hardship); sources 4 and 5 need state the frame deliberately does not carry
+  and are absent rather than stubbed. Three properties this list should be
+  read against:
+  - The **id is the storage.** `offer_id` is derived
+    (`"<kind>:<subject>:<count>"`), goes into the accepted `Contract`'s first
+    obligation, and reads back out with `parse_id` — so an errand survives
+    save and load with no schema and nothing written down twice, and an offer
+    still cannot outlive the condition it projects.
+  - **Urgency is borrowed, never recomputed.** Each errand kind names a
+    `DialogueTopic` and takes that topic's own measured salience, so no
+    authored weight enters through the back door and a villager cannot ask
+    harder than they are willing to talk.
+  - **Nothing below the window touches a wallet.** The `Conversation` decides
+    what should change and reports it; `ConversationWindow.world_effect`
+    carries it up; only `World` moves an item or a coin. The AI seam is
+    unchanged by any of this.
+- ⬜ **Only three of the four offer kinds can be promised.** A remembered
+  threat is directions, not a debt: nothing can yet observe the player
+  standing at the raid site, so accepting it would be a promise the game
+  cannot let you keep.
+- 🐛 **Four of `gather`'s source names did not exist** (found while wiring
+  errands, all fixed here). `gather` reads the world by NAME through a
+  fail-open `_call`, which makes a non-existent method indistinguishable from
+  an absent source: `npc_economy` (so `hunger`, `is_hungry` and `wallet_gold`
+  were 0/false for every villager in play), `settlement_id_for_npc` (so no
+  villager had a settlement, and the shortfall list, village status, tier,
+  specialization and food stock were all read against `""`),
+  `market_for_settlement` (so no settlement had a market), and
+  `co_present_identities_near` (so every villager stood alone, and the
+  `neighbour` and `contradiction` topics were dead). Between them they are why
+  a villager in the running game could talk about nothing but their own
+  memories. `test_gather_asks_for_nothing_the_manager_cannot_answer` now pins
+  every name `gather` calls against the real manager.
 - ⬜ **Not planned in this pass:** any LLM provider, settings tab, network code
   or baked phrasing pack. The seam above is documented, not implemented.

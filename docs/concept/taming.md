@@ -169,16 +169,30 @@ from the frame in which they have.
 Two contracts run between the docs, and both belong to husbandry:
 
 - The **flight radius is a function, not a constant** —
-  `FlightDistance.radius(species, wariness, trust, crouched)`. Husbandry
-  defines it, owns its signature and owns every test that pins it. This doc's
-  §5 only explains what the `trust` input *means* to the player.
+  `FlightDistance.radius(species, wariness, trust, crouched)`, now living at
+  `src/gameplay/flight_distance.gd`. Husbandry defines it, owns its signature
+  and owns every test that pins it. This doc's §5 only explains what the
+  `trust` input *means* to the player. (Trust multiplies the radius **down**,
+  toward `FlightDistance.TRUST_FLOOR` — never to zero: even a tame horse has a
+  personal space, and a fully tamed animal stops treating the player as a
+  threat by a different route entirely, `CreatureMarker.fears_players`.)
 - **Bait on the ground is the pre-taming feed** — an animal that has eaten
   from a spot the player left food at is calmer at that spot next time. That
   is husbandry's mechanism; taming's `feed_treat` is the *hand-fed* version of
   the same act, and §4 below is where the two meet.
 
-⬜ Unbuilt in both docs. Until it exists, taming's entry cost is luck, and on a
-wet cold afternoon it is not luck but a wall.
+✅ **Built, 2026-09-02** — in [animal_husbandry.md](animal_husbandry.md), which
+owns it; see that doc's Status section for exactly what landed, what diverged
+from its own spec, and what is still 🚧. Bait (`Olfaction.bait_mixture`, the
+new `GrazerForaging.FOOD_BAIT`, `EarthChunkManager.take_bait_at`), the stalk
+(`Player.is_crouching`, Ctrl), per-individual wariness (`Wariness`), the
+composed flight radius (`FlightDistance.radius`) and the wind
+(`WindScent`, see [olfaction.md](olfaction.md)) are all live and tested.
+
+Taming's entry cost is no longer luck: the animal comes to the food, and a
+crouched downwind approach closes the rest. The one thing still missing is the
+HUD telling a player *why* a chase is failing — the speed product is still
+printed as a bare percentage.
 
 ### 1. The lasso, and choosing what it is aimed at
 

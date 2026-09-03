@@ -322,27 +322,76 @@ two have to be built:
 
 ## Current implementation status
 
-A narrow first slice of the **Production** need source is real
-(`src/emergence/quest.gd`, `EarthChunkManager.
-production_shortfall_quests_for_settlement`, Emergence Phase 12 — see
-`docs/roadmap.md`'s "Emergence substrate" section for how this thread
-relates to the numbered phases elsewhere in this project). A quest here is
-a pure, stateless PROJECTION over real household/market/recipe state —
-"which of a settlement's households have a blocked recipe, and what are
-they specifically missing" — never a new persisted entity, matching this
-doc's own design pillar #1 and `docs/emergence/07`'s Phase 12 exit
-language verbatim ("projections... disabling quests must not remove the
-underlying problem"): delete the query function and the settlement's real
-shortage is completely unaffected, only the player-facing framing of it is
-gone.
+**Updated 2026-09-03.** The Production need source is now real *end to end* —
+projected, offered in conversation, promised, delivered, paid and broken —
+alongside three of the other five sources.
+
+- ✅ **The projection.** `src/emergence/quest.gd` +
+  `EarthChunkManager.production_shortfall_quests_for_settlement`
+  (Emergence Phase 12). A quest here is a pure, stateless PROJECTION over real
+  household/market/recipe state, never a persisted entity: delete the query
+  and the settlement's real shortage is completely unaffected.
+- ✅ **`QuestOffer`** (`src/dialogue/quest_offer.gd`) — the six-source merge,
+  with the derived `offer_id`. Four sources are live: production shortfall
+  (1), village hunger (2), remembered threat (3) and hardship (6). Urgency is
+  not recomputed: each kind names a `DialogueTopic` and takes that topic's
+  own measured salience, so a villager can never ask harder than they are
+  willing to talk about it. The threat floor is *measured* by running
+  `Rumor.transmit` twice rather than chosen — a memory is worth acting on
+  while it is still no more than one retelling from someone who was there.
+- ⬜ **Sources 4 and 5.** *Deeper need* needs `NeedResolver`'s live stock,
+  allocated nodes and nearby structures, and the frame carries no `Object` by
+  design (that flatness is what makes the AI seam safe). *Carried news* needs
+  a memory the PLAYER holds, and the rumor-vector loop is unbuilt. Both are
+  absent rather than stubbed.
+- ✅ **`QuestReward`** (`src/dialogue/quest_reward.gd`) — derived, capped at
+  what the asker genuinely holds, and **re-derived at fulfilment** against
+  their live balance. A villager who went broke while you were away pays less
+  and says so, in their own voice.
+  One honest divergence from this doc's "roughly what they'd have paid the
+  market": **there is no market price for a raw material in this simulation.**
+  `Shop.CATALOG` prices five finished goods and not one recipe input, and
+  `Market.price_for` is a scarcity multiplier pinned at its ceiling for
+  exactly the items a shortfall names. So the reward is quoted in the one
+  price this world genuinely holds — `VillageWages.subsistence_wage()`, one
+  meal — times a test-pinned `MEALS_PER_UNIT` and this doc's
+  `RELATIONSHIP_PREMIUM`. If a real materials market is ever built, that is
+  the one function that changes.
+- ✅ **`NpcAsk`** (`src/dialogue/npc_ask.gd`) — accept, deliver, settle and
+  lapse. Nothing is persisted but the acceptance, and that is a `Contract`.
+  The derived `offer_id` IS the storage: it goes into the player's own
+  obligation and reads back out with `QuestOffer.parse_id`, so an errand
+  round-trips through save and load with no schema and nothing written twice.
+  Deadlines are checked **lazily at conversation open** and lapsing is
+  idempotent, so opening the same conversation twice cannot record two broken
+  promises.
+- ✅ **The loop closes socially.** Accepting, keeping and breaking a promise
+  all go through `EarthChunkManager`'s contract transitions, which append the
+  matching event and let nearby villagers witness it — and `NpcRecognition`
+  reads exactly those events. So an outstanding errand makes a villager greet
+  you with "I've been hoping you'd come by", a kept one makes them warm, and
+  a broken one makes them cold, through the gossip network that already runs
+  rather than through a reputation number.
+- ✅ **A delivery ends the shortage.** The goods go into the same `Market` the
+  shortfall was measured from (`EarthChunkManager.deliver_to_settlement`).
+  Pillar 1 cuts both ways: a quest projects a real shortage, so a completion
+  that leaves the shortage untouched is not a completion, it is an infinite
+  errand — which is exactly what the first playtest showed.
+- ✅ **Tracking is the world.** The floating prompt reads
+  `Talk (G) · owed 3 rock` (`NpcAsk.talk_prompt`), fed from the throttle that
+  already existed. There is no quest log and no marker.
+- ⬜ **What an errand can be.** Only errands with a real completion check can
+  be promised — fetch, feed, firewood. A remembered threat is offered as
+  DIRECTIONS and never as a promise, because nothing in this simulation can
+  yet observe the player standing at the raid site. A promise the game cannot
+  let you keep is worse than no promise.
 
 Everything else in this doc remains unbuilt: Safety needs
 (`worldbosses.md`'s threat detection has no live trigger yet, and NPC
-threat-memory-crossing thresholds don't exist); Social needs (this doc's
-own "lightest touch... deferred" scope); quorum/promotion/settlement-level
-merging and representative selection (needs `factions.md`'s reputation
-score, not built); resolution/consequences, including quest acceptance,
-delivery, and any currency-to-NPC transaction (no such transaction system
-exists — Phase 4/5's own documented gap); and settlement growth/migration.
-See `docs/progress.md`'s Emergence substrate section, Phase 12 entry, for
-the mechanism-by-mechanism status breakdown.
+threat-memory-crossing thresholds don't exist); Social needs (this doc's own
+"lightest touch... deferred" scope); quorum/promotion/settlement-level
+merging and representative selection (needs `factions.md`'s reputation score,
+not built); the settlement-level Consequences above (reputation aggregate,
+softened shop prices, skill-web discounts — all needing that same score); and
+settlement growth/migration. See `docs/progress.md`'s Emergence substrate
+section, Phase 12 entry, for the mechanism-by-mechanism status breakdown.

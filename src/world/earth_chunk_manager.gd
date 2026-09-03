@@ -52,6 +52,8 @@ const StructureStockStore = preload("res://src/emergence/structure_stock_store.g
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
 ## Well under 1: a clump of grass sits ON the ground, it is not the ground.
 const TUFT_WORLD_SCALE := 0.5
+const GroundCover = preload("res://src/world/ground_cover.gd")
+const ProceduralSwardSprite = preload("res://src/rendering/procedural_sward_sprite.gd")
 const DesertScrub = preload("res://src/world/desert_scrub.gd")
 const ProceduralScrubSprite = preload("res://src/rendering/procedural_scrub_sprite.gd")
 const TundraLichen = preload("res://src/world/tundra_lichen.gd")
@@ -59,6 +61,9 @@ const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sp
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
+const AntTraffic = preload("res://src/gameplay/ant_traffic.gd")
+const BloodTrail = preload("res://src/gameplay/blood_trail.gd")
+const ProceduralAntMoundSprite = preload("res://src/rendering/procedural_ant_mound_sprite.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
@@ -146,6 +151,8 @@ const GrowingJuveniles = preload("res://src/world/growing_juveniles.gd")
 const MammalGrowth = preload("res://src/gameplay/mammal_growth.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
+const WindScent = preload("res://src/world/wind_scent.gd")
+const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const TreeMaturity = preload("res://src/gameplay/tree_maturity.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const SeedEndozoochory = preload("res://src/gameplay/seed_endozoochory.gd")
@@ -570,6 +577,29 @@ const _SAGEWERK_LOGISTICS_ITEM_IDS := ["beam", "plank"]
 ## would be a real worker that can never actually find its destination.
 const SAGEWERK_STORAGE_PAIR_RADIUS_TILES := 20
 
+## ## The sward (see GroundCover, docs/concept/ground_cover.md)
+##
+## One simulation per loaded chunk, but -- unlike every other decoration layer
+## here -- only FOUR MultiMeshInstance2D nodes in total, one per species,
+## holding every visible rosette across every chunk at once.
+##
+## Per-chunk nodes would be the obvious shape to copy, and it is the wrong one
+## here: the sward is the majority of the ground rather than a sparse scatter,
+## so it is already scoped to the tile-precise camera window (the same one
+## grass uses) rather than to whole chunks. Once the visible set is the unit of
+## work, splitting it by chunk only multiplies draw calls.
+var _ground_cover_sims: Dictionary = {}  # Vector2i chunk_coord -> GroundCover
+var _sward_layers: Dictionary = {}  # species index -> MultiMeshInstance2D
+var _sward_generator := ProceduralSwardSprite.new()
+var _sward_refresh_accumulator := 0.0
+## Something ate a rosette since the last redraw (see crop_sward_at). Coalesces
+## a whole herd's mouthfuls into one whole-window rebuild on the next step.
+var _sward_dirty := false
+## How many times the sward layer has been rebuilt. A test seam, and a real
+## one: "a bite must not redraw the whole meadow" is a performance contract
+## that is invisible from the outside otherwise.
+var _sward_rebuild_count := 0
+
 var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
 var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
 var _scrub_refresh_accumulator := 0.0
@@ -582,9 +612,24 @@ var _worm_patches: Dictionary = {}
 var _worm_sprites: Dictionary = {}
 var _worm_sprite_generator := ProceduralWormSprite.new()
 ## Vector2i chunk_coord -> AntColony (see step_ants, docs/concept/soil_fauna.md
-## "Ants"). No sprite dictionary alongside it -- ants are not rendered this
-## pass (see AntColony's own doc comment on scope).
+## "Ants").
 var _ant_colonies: Dictionary = {}
+## Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}. The drawn mounds
+## (see _sync_mound_sprites, docs/concept/soil_fauna.md's "What the player
+## sees"). Mounds never move or change -- a colony's entrances are fixed at
+## chunk construction -- so unlike the worm layer this only ever churns when a
+## chunk enters or leaves decoration range.
+var _mound_sprites: Dictionary = {}
+var _mound_sprite_generator := ProceduralAntMoundSprite.new()
+## The workers, as ONE MultiMeshInstance2D for the whole world rather than a
+## node per ant (see _sync_ant_workers). They move every frame, and ten mounds
+## a chunk times a crew each is exactly the sprite count DecorationLod exists
+## to prevent.
+var _ant_worker_layer: MultiMeshInstance2D = null
+## Seconds of ant traffic elapsed. Its own clock rather than _world_age_seconds
+## because it must advance with step_ants and nothing else, so a test can step
+## the traffic without moving the world's season on.
+var _ant_traffic_seconds := 0.0
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_ambient_flyers: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
@@ -711,7 +756,27 @@ func _sync_decoration_and_grass_tracking(player_global_tile: Vector2i, center_ch
 		# ground that is visibly bare. Sprite creation stays where it always
 		# was, in the step_* functions.
 		_grass_refresh_accumulator = GRASS_REFRESH_INTERVAL
+		# The sward rides the same trigger, for the same reason and on the same
+		# throttle (see step_ground_cover): it is drawn against the tile window
+		# below, so without this the ground at the leading edge of the screen
+		# stays bare for up to GRASS_REFRESH_INTERVAL seconds after it comes
+		# into view, and the two plant layers visibly disagree about where the
+		# meadow is.
+		_sward_refresh_accumulator = GRASS_REFRESH_INTERVAL
 		_worm_refresh_accumulator = WORM_REFRESH_INTERVAL
+		# Mounds are the one decoration layer with nothing to throttle: a
+		# colony's entrances are fixed at chunk construction and never move, so
+		# whether the chunk is drawn AT ALL is the only thing that can change
+		# -- and this is exactly the moment it changes. Re-synced here rather
+		# than on a step_* accumulator, which would otherwise have to walk
+		# every loaded chunk every few seconds to notice nothing had happened.
+		#
+		# Without it, a chunk that leaves decoration range and comes back stays
+		# permanently bare, because _load_chunk is the only other place mounds
+		# are built and the chunk is still loaded
+		# (test_mounds_come_back_when_the_player_returns).
+		for chunk_coord in _ant_colonies:
+			_sync_mound_sprites(chunk_coord)
 		_decoration_dirty = false
 
 	# Grass ALONE is also tile-precise culled (see _grass_view_synced_tile's
@@ -728,6 +793,9 @@ func _sync_decoration_and_grass_tracking(player_global_tile: Vector2i, center_ch
 	if player_global_tile != _grass_view_synced_tile:
 		_grass_view_synced_tile = player_global_tile
 		_grass_refresh_accumulator = GRASS_REFRESH_INTERVAL
+		# ...and so is the sward, which is culled against the very same tile
+		# window (see _sync_sward).
+		_sward_refresh_accumulator = GRASS_REFRESH_INTERVAL
 
 
 ## The chunks THIS update() call will load, in the order it will load them.
@@ -1815,6 +1883,49 @@ func _current_hour_of_day() -> int:
 ## event-source). Always current: called fresh, it can never go stale the
 ## way a recorded "quest offered" event could once the shortage it named
 ## resolves.
+## This settlement's own Market, or null for one that has none.
+##
+## A named accessor rather than making every caller reach through
+## market_store(): ConversationSources.gather asks for exactly this, and
+## before it existed `_call`'s fail-open handed back null -- so
+## `sources["market"]` was null for every villager in the running game, and
+## every fact SettlementFood derives from it (food stock, carrying capacity,
+## and through them the village's status, tier and specialization) was 0 or
+## "" in play. Three of a conversation's village topics were structurally
+## dead. Third of three phantom method names found this way; see
+## test_gather_asks_for_nothing_the_manager_cannot_answer, which now pins all
+## of them at once.
+func market_for_settlement(settlement_id: String) -> Market:
+	if settlement_id.is_empty():
+		return null
+	return _market_store.market_for(settlement_id)
+
+
+## Goods handed to a settlement -- today, a player completing an errand a
+## villager asked them for (see docs/concept/quests.md, NpcAsk).
+##
+## They land in the SAME `Market` production_shortfall_quests_for_settlement
+## reads its shortfall out of, which is the whole point: quests.md's first
+## pillar is that a quest projects a real shortage, so a delivery that did not
+## change that shortage would not be a delivery at all. Without this the
+## errand completed, the contract was fulfilled, the reward was paid, the item
+## left the player's pack -- and the villager asked for exactly the same thing
+## again, because nothing in the world had changed. Found by playing it.
+##
+## `items` is item_id -> count. An unknown settlement or an empty delivery
+## changes nothing, the same fail-open shape every other read here has.
+func deliver_to_settlement(settlement_id: String, items: Dictionary) -> void:
+	if settlement_id.is_empty() or items.is_empty():
+		return
+	var market := _market_store.market_for(settlement_id)
+	if market == null:
+		return
+	for item_id in items:
+		var count := int(items[item_id])
+		if count > 0:
+			market.add_stock(String(item_id), count)
+
+
 func production_shortfall_quests_for_settlement(settlement_id: String) -> Array:
 	var household_occupations := _household_occupations_for_settlement(settlement_id)
 	var market := _market_store.market_for(settlement_id)
@@ -2781,6 +2892,28 @@ func household_count_for_settlement(settlement_id: String) -> int:
 ## flag (`World._scarred_tiles`, not persisted) -- so a fresh reload, which
 ## resets that in-memory flag but not the event store, cannot record a
 ## duplicate founding for a path already known to be worn.
+## Records that the player and this villager actually spoke
+## (docs/concept/dialogue.md pillar 3: "the player is a node in the graph, not
+## a camera" -- talking is a real act that writes real state).
+##
+## One event per CONVERSATION rather than per sentence: a villager you asked
+## three questions of has met you once. Both parties are actors, because
+## NpcRecognition reads the shared history between them -- and the villager
+## witnesses it, so it can be gossiped, which is what eventually makes a
+## stranger two settlements away greet you as someone they have heard of.
+const CONVERSATION_EVENT := "player_spoke_with"
+
+
+func record_conversation_with(npc_id: String) -> void:
+	if npc_id.is_empty():
+		return
+	var event := Event.new(CONVERSATION_EVENT, _world_age_seconds)
+	event.actors.append(PlayerIdentity.PLAYER_ENTITY_ID)
+	event.actors.append(npc_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+
+
 func record_path_worn_if_new(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
 	var history := _event_store.events_for_entity(path_id)
@@ -2842,6 +2975,33 @@ func _known_settlement_ids() -> Array[String]:
 ## was witnessed settling, and without this a household that settled twice
 ## would inflate the settlement's own tier and institution thresholds.
 const SETTLING_EVENT_TYPES := ["npc_settled", "player_settled"]
+
+
+## Where `npc_id` lives, or "" for a villager who never settled anywhere --
+## the same settling events _households_in_settlement walks, read in the other
+## direction. `npc_settled` names the villager as its ACTOR and the settlement
+## as its witness (see record_settlement_founded_if_new), so the inverse
+## lookup needs no second index and no new state.
+##
+## ConversationSources.gather asked for exactly this method and it did not
+## exist, so `_call`'s fail-open handed back "" for every villager in the
+## running game -- and every settlement-derived source a conversation reads
+## (the production shortfall list, village status, tier, specialization, food
+## stock, and the market itself) was then looked up against "" and came back
+## empty. A villager could talk about nothing but their own memories, which is
+## exactly what playing it showed. Found by test_village_errand_floor.gd.
+func settlement_id_for_npc(npc_id: String) -> String:
+	if npc_id.is_empty():
+		return ""
+	for event in _event_store.events_for_entity(npc_id):
+		if not SETTLING_EVENT_TYPES.has(event.type):
+			continue
+		if not event.actors.has(npc_id):
+			continue
+		for witness in event.witnesses:
+			if EntityRef.kind_of(witness) == "settlement":
+				return witness
+	return ""
 
 
 func _households_in_settlement(settlement_id: String) -> Array[String]:
@@ -4226,6 +4386,59 @@ func step_water_disturbances(delta: float) -> void:
 	_water_shader.advance_disturbances(delta)
 
 
+## ## The wind, as a real quantity in the world
+##
+## `WeatherModel.wind_direction_for` had existed, documented and tested, since
+## the weather model was written and -- verified across every `.gd` in `src/`
+## and `scenes/` -- had **no production caller at all**. The world had a wind
+## direction that nothing in the running game ever asked for: seeds dispersed,
+## grass swayed and flowers advertised without one.
+##
+## This is where it enters. One owner of "which way is it blowing here", asked
+## by every creature that has a nose (see `CreatureMarker._smells_a_player`,
+## `WindScent`), so the answer cannot differ between two animals standing in
+## the same meadow.
+var _wind_direction := Vector2.ZERO
+var _wind_advection := 0.0
+var _wind_day := -1
+var _wind_region := 0
+
+
+## Brings the live wind up to date. Called once per weather update (see
+## World._client_process's weather block), beside the visual `set_wind_strength` it complements
+## -- `raw_wind_strength` is the same `WeatherModel.wind_strength_for(...)`
+## value that call already receives.
+##
+## The DIRECTION is cached against the day and region it was derived for.
+## `wind_direction_for` walks the whole day history to get today's heading, and
+## this feeds a per-creature, per-frame path -- recomputing it on every ask
+## would be an O(days) loop per animal per frame.
+func refresh_wind(player_pixel: Vector2, raw_wind_strength: float) -> void:
+	_wind_advection = WindScent.advection_strength(raw_wind_strength)
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(player_pixel))
+	# The same day and region-seed derivation current_weather uses, so the wind
+	# and the weather can never disagree about which day it is.
+	var day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
+	var region := hash("%d_%d" % [chunk_coord.x, chunk_coord.y])
+	if day == _wind_day and region == _wind_region:
+		return
+	_wind_day = day
+	_wind_region = region
+	_wind_direction = _weather_model.wind_direction_for(day, region)
+
+
+## Which way the wind is blowing, as a unit vector. Zero until the first
+## refresh_wind -- still air, which leaves every smell exactly where the
+## geometry puts it (see WindScent.effective_distance_tiles).
+func wind_direction() -> Vector2:
+	return _wind_direction
+
+
+## How hard it is blowing, 0..1 (see WindScent.advection_strength).
+func wind_advection_strength() -> float:
+	return _wind_advection
+
+
 func current_weather(player_pixel: Vector2) -> String:
 	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(player_pixel))
 	# Weather turns over several times a DAY, not once per day.
@@ -4614,6 +4827,129 @@ func step_tree_growth() -> void:
 ## advance every call; only the node churn is throttled.
 const GRASS_REFRESH_INTERVAL := 5.0
 
+## World size of one sward rosette, in pixels. Well under a tile: these are
+## ankle-high plants lying flat on the ground, and at anything approaching a
+## full tile they read as bushes.
+const SWARD_WORLD_SIZE := 7.0
+
+
+## Central sward step (see GroundCover, docs/concept/ground_cover.md).
+##
+## Throttled on the same GRASS_REFRESH_INTERVAL the tall-grass layer uses, and
+## for the same two reasons: the grazing memory decays linearly enough that a
+## batched step lands where per-frame steps would, and nothing between
+## refreshes could observe the difference because the rosettes are only
+## redrawn here anyway.
+func step_ground_cover(delta_seconds: float) -> void:
+	_sward_refresh_accumulator += delta_seconds
+	var due := _sward_refresh_accumulator >= GRASS_REFRESH_INTERVAL
+	if due:
+		var elapsed := _sward_refresh_accumulator
+		_sward_refresh_accumulator = 0.0
+		for sim in _ground_cover_sims.values():
+			sim.advance(elapsed)
+	# ONE rebuild per step at most, and only when something has actually
+	# changed.
+	#
+	# A bite the player just watched an animal take has to show on this frame
+	# rather than at the next throttled refresh -- the same reasoning
+	# graze_grass_at and take_worm_at give for their own immediate resyncs. But
+	# _sync_sward rebuilds EVERY visible rosette in the tile window, and a herd
+	# means several of those a second for one mouthful each. So a bite marks
+	# the layer dirty (crop_sward_at) and this redraws it once, however many
+	# animals bit in between (test_a_whole_herd_grazing_costs_one_redraw) --
+	# and a step that is both due AND dirty still rebuilds only once.
+	if due or _sward_dirty:
+		_sward_dirty = false
+		_sync_sward()
+
+
+## Rebuilds every visible rosette into the four per-species MultiMeshes.
+##
+## Walks the TILE window rather than the chunks: the sward reaches nearly every
+## grassland cell, so iterating whole chunks would build tens of thousands of
+## instances for a camera that shows a few hundred tiles. The window is the
+## same one grass uses (DecorationLod.keeps_decoration_tile with
+## GRASS_VIEW_BUFFER_TILES), so the two layers appear and disappear together
+## rather than the sward popping in a beat behind the tussocks.
+func sward_rebuild_count() -> int:
+	return _sward_rebuild_count
+
+
+func _sync_sward() -> void:
+	if _ground_decor_parent == null:
+		return
+	_sward_rebuild_count += 1
+	var half_span := _visible_half_span_tiles()
+	var transforms_by_species: Dictionary = {}
+	var centre := _disturbance_center_tile
+	var reach_x: int = half_span.x + GRASS_VIEW_BUFFER_TILES
+	var reach_y: int = half_span.y + GRASS_VIEW_BUFFER_TILES
+	for dy in range(-reach_y, reach_y + 1):
+		for dx in range(-reach_x, reach_x + 1):
+			var tile := Vector2i(centre.x + dx, centre.y + dy)
+			var chunk_coord := _chunk_coord_for_tile(tile)
+			var sward: GroundCover = _ground_cover_sims.get(chunk_coord)
+			if sward == null:
+				continue
+			var cell: Vector2i = tile - chunk_coord * CHUNK_SIZE
+			# The LIVE tall-grass growth on this very cell -- the shade half of
+			# the readout. Read here rather than pushed into GroundCover so
+			# that layer never has to be told about grass (see its own doc
+			# comment on why the ecology is one pure function).
+			var grass_sim: TallGrass = _grass_sims.get(chunk_coord)
+			var growth := grass_sim.get_growth(cell) if grass_sim != null else 0.0
+			for plant in sward.plants_at(cell, growth):
+				var offset: Vector2 = plant["offset"]
+				var world_position := Vector2(
+					(float(tile.x) + offset.x) * TerrainRenderer.TILE_SIZE,
+					(float(tile.y) + offset.y) * TerrainRenderer.TILE_SIZE
+				)
+				var transform := Transform2D(float(plant["rotation"]), world_position)
+				transform = transform.scaled_local(Vector2.ONE * float(plant["scale"]))
+				var species: int = plant["species"]
+				var list: Array = transforms_by_species.get(species, [])
+				list.append(transform)
+				transforms_by_species[species] = list
+	for species in GroundCover.SPECIES.size():
+		_fill_sward_layer(species, transforms_by_species.get(species, []))
+
+
+## Thin engine glue over the placement math above. MultiMesh per-instance
+## transform storage is backed by the dummy renderer under `--headless` and
+## silently does not round-trip there, which is why the tested part is
+## GroundCover.plants_for_cell and not this -- the same split
+## IllustratedGrassPatch.instances_for_cards / fill_band already uses.
+func _fill_sward_layer(species: int, transforms: Array) -> void:
+	var mmi: MultiMeshInstance2D = _sward_layers.get(species)
+	if transforms.is_empty():
+		if mmi != null:
+			mmi.multimesh.instance_count = 0
+		return
+	if mmi == null:
+		mmi = MultiMeshInstance2D.new()
+		var mesh := QuadMesh.new()
+		mesh.size = Vector2(SWARD_WORLD_SIZE, SWARD_WORLD_SIZE)
+		var multimesh := MultiMesh.new()
+		multimesh.mesh = mesh
+		multimesh.transform_format = MultiMesh.TRANSFORM_2D
+		mmi.multimesh = multimesh
+		# One texture per species, seeded per species so all of a species
+		# shares one silhouette. Per-plant variety comes from the transform
+		# (rotation and scale), not from a texture each -- one texture per
+		# plant would defeat the whole point of instancing them.
+		mmi.texture = _sward_generator.generate_texture(species, species)
+		# Under everything: a rosette lies ON the ground, and drawing it in
+		# the Y-sorted entity group would make it fight with the things
+		# standing on top of it for no gain (see _ground_decor_parent).
+		_ground_decor_parent.add_child(mmi)
+		_sward_layers[species] = mmi
+	var multimesh: MultiMesh = mmi.multimesh
+	multimesh.instance_count = transforms.size()
+	for index in transforms.size():
+		multimesh.set_instance_transform_2d(index, transforms[index])
+
+
 ## Central tall-grass step (see TallGrass): every loaded chunk's grass sim
 ## grows/spreads, and on a throttled interval (1) any herbivore-role creature
 ## standing on a mature patch eats it, and (2) the tuft sprites are re-synced
@@ -4802,6 +5138,56 @@ func grass_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 ## `growth` is always 1.0 here (only mature patches are ever offered by
 ## grass_near/grazed here), read live off the sim rather than hardcoded, so
 ## this stays correct if TallGrass ever grows a partial-bite mechanic.
+## What an animal standing here would get from cropping the sward, 0..1 (see
+## GroundCover). Zero anywhere the sward does not grow.
+func sward_cover_at(pixel_position: Vector2) -> float:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var sward: GroundCover = _ground_cover_sims.get(chunk_coord)
+	if sward == null:
+		return 0.0
+	var cell: Vector2i = tile - chunk_coord * CHUNK_SIZE
+	return sward.cover_at(cell, _tall_grass_growth_in(chunk_coord, cell))
+
+
+## A herbivore crops the rosettes it is standing on, and the ground loses them
+## (see docs/concept/ground_cover.md, "The grazing lawn is food"). Returns
+## whether there was actually a bite here.
+##
+## This is what closes the grazing loop. `FOOD_UNDERFOOT` used to answer "it is
+## standing in its food; there is nothing to remove" -- so an animal on
+## grassland was fed forever, the world lost nothing, and a meadow had no
+## carrying capacity at all. Now a patch can be eaten bare, which is what makes
+## a meadow something that can be overstocked.
+func crop_sward_at(pixel_position: Vector2) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var sward: GroundCover = _ground_cover_sims.get(chunk_coord)
+	if sward == null:
+		return false
+	var cell: Vector2i = tile - chunk_coord * CHUNK_SIZE
+	var growth := _tall_grass_growth_in(chunk_coord, cell)
+	if not sward.can_crop(cell, growth):
+		return false
+	sward.record_crop(cell)
+	# Cropping is a real vegetation harvest, the same way grazing a tussock is
+	# -- so an overstocked meadow shows up in the ecosystem's own land-health
+	# accounting rather than only in the sward layer.
+	_ecosystem.record_vegetation_harvest(chunk_coord, sward.cover_at(cell, growth))
+	# The rosettes just went. Marked rather than redrawn here: the redraw is a
+	# whole-window rebuild, and a herd would ask for one per mouthful -- see
+	# step_ground_cover, which does it once on this same frame.
+	_sward_dirty = true
+	return true
+
+
+## The live tall-grass growth on one cell, which is the shade half of the
+## sward's readout. Zero where no grass sim is loaded.
+func _tall_grass_growth_in(chunk_coord: Vector2i, cell: Vector2i) -> float:
+	var grass_sim: TallGrass = _grass_sims.get(chunk_coord)
+	return grass_sim.get_growth(cell) if grass_sim != null else 0.0
+
+
 func graze_grass_at(pixel_position: Vector2) -> bool:
 	var tile := _world_tile_for_pixel(pixel_position)
 	var chunk_coord := _chunk_coord_for_tile(tile)
@@ -4814,6 +5200,13 @@ func graze_grass_at(pixel_position: Vector2) -> bool:
 		return false
 	if not sim.graze(cell):
 		return false
+	# The bite that took the tussock's growing point merely trimmed the
+	# rosettes underneath it, so the sward is released here (see GroundCover:
+	# this is the whole "grazing lawn" effect, and it is the one live input
+	# that layer has).
+	var sward: GroundCover = _ground_cover_sims.get(chunk_coord)
+	if sward != null:
+		sward.record_graze(cell)
 	_ecosystem.record_vegetation_harvest(chunk_coord, growth)
 	# Refresh THIS chunk immediately rather than waiting for the next
 	# throttled step, the same reasoning as take_worm_at/take_seed_at: the
@@ -5976,10 +6369,25 @@ func fruit_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 ## a thing to avoid for a deer.
 func smells_near(pixel_position: Vector2, radius_tiles: float) -> Array:
 	var out: Array = []
+	var radius_px := radius_tiles * TerrainRenderer.TILE_SIZE
+	# A wounded animal's trail (see drop_blood_at, and
+	# docs/concept/olfaction.md's blood section). Emitted here rather than
+	# through a second lookup, so anything that already reads this field reads
+	# the trail for free -- and ABOVE the ground-items guard below, because a
+	# trail is not an item: blood on the grass exists whether or not this world
+	# has anything lying on it.
+	for mark in _blood_marks:
+		var mark_position: Vector2 = mark["position"]
+		if mark_position.distance_to(pixel_position) > radius_px:
+			continue
+		out.append({
+			"position": mark_position,
+			"mixture": BloodTrail.mixture_for(BloodTrail.freshness_after(float(mark["age"]))),
+			"species": "",
+		})
 	if _ground_items == null:
 		return out
 	var season := current_season()
-	var radius_px := radius_tiles * TerrainRenderer.TILE_SIZE
 	# A player carrying something that has gone over smells of it, which is
 	# what lets flies follow them (see Inventory.rot_freshness).
 	for carrier in _scent_carriers:
@@ -6006,11 +6414,54 @@ func smells_near(pixel_position: Vector2, radius_tiles: float) -> Array:
 		if item.has_method("spoilage"):
 			freshness = 1.0 - item.spoilage()
 		out.append({
+			# The item's OWN mixture, not a fruit-shaped stand-in. fruit_mixture
+			# ignores its item id (the parameter is literally named with a
+			# leading underscore), so every food on the ground used to emit the
+			# same smell and WHAT a player put down decided nothing -- which
+			# makes baiting a gesture rather than a choice. See
+			# Olfaction.bait_mixture and docs/concept/animal_husbandry.md.
 			"position": item.position,
-			"mixture": Olfaction.fruit_mixture(item.item_stack.item.id, freshness),
+			"mixture": Olfaction.bait_mixture(item.item_stack.item.id, freshness),
 			"species": item.item_stack.item.id,
 		})
 	return out
+
+
+## Takes the food lying at `pixel_position`, whatever it is, and returns its
+## item id ("" if there was nothing edible there).
+##
+## The mutation counterpart of `smells_near`, and the sibling `take_fruit_at`
+## could not be: that one only removes ids in `TreeSpecies.IDS`, so an animal
+## drawn across a field by a dropped CARROT arrived and stood over it forever
+## -- the bait could be smelled and walked to and never eaten. See
+## docs/concept/animal_husbandry.md "The approach", and
+## `CreatureMarker._take_forage_bite`'s FOOD_BAIT branch.
+##
+## Deliberately "any item of kind food" rather than a second hardcoded list:
+## a food added to `ItemCatalog` later is baitable without anything being told
+## about it, the same way `smells_near` already publishes it.
+## How close a bite has to be to count as "here". Not a fresh number: it is
+## `ScentForaging.EAT_DISTANCE_PX`, the constant that already answers "how
+## close must an animal be to actually take the food", so the distance an
+## animal walks to and the distance the world hands the food over at cannot
+## drift apart.
+const FORAGE_BITE_RADIUS_PX := ScentForaging.EAT_DISTANCE_PX
+
+
+func take_bait_at(pixel_position: Vector2) -> String:
+	if _ground_items == null:
+		return ""
+	for item in _ground_items.get_children():
+		if item.is_queued_for_deletion() or item.item_stack == null:
+			continue
+		if item.item_stack.item.kind != "food":
+			continue
+		if item.position.distance_to(pixel_position) > FORAGE_BITE_RADIUS_PX:
+			continue
+		var taken: String = item.item_stack.item.id
+		item.queue_free()
+		return taken
+	return ""
 
 
 ## Eats the named-species fruit item standing at `pixel_position`, if there is
@@ -6181,6 +6632,121 @@ func step_ants(delta_seconds: float) -> void:
 				_forage_seed_near_mound(colony, origin, cell)
 			else:
 				_forage_windfall_near_mound(colony, origin, cell)
+
+	# The traffic on the mounds. Unthrottled, unlike every other decoration
+	# layer here, and deliberately: a worker's whole job is to be MOVING, so
+	# there is no node churn to throttle -- the workers are instances in one
+	# MultiMesh, and a five-second refresh would draw ants that teleport.
+	_ant_traffic_seconds += delta_seconds
+	_sync_ant_workers()
+
+
+## Adds/removes mound sprites so the drawn colonies match the simulated ones.
+##
+## `AntColony` seeds its mounds once at chunk construction and never moves
+## them, so unlike the worm layer this has nothing to track over time: the only
+## thing that changes is whether the chunk is close enough to draw at all.
+func _sync_mound_sprites(chunk_coord: Vector2i) -> void:
+	if not _decorates(chunk_coord):
+		_drop_decoration(_mound_sprites, chunk_coord)
+		return
+	var colony: AntColony = _ant_colonies.get(chunk_coord)
+	if colony == null:
+		return
+	# Stored back, not just read: Dictionary.get's default is a fresh temporary,
+	# and sprites parented into it would be in the scene tree with nothing
+	# holding a reference to free them.
+	if not _mound_sprites.has(chunk_coord):
+		_mound_sprites[chunk_coord] = {}
+	var sprites: Dictionary = _mound_sprites[chunk_coord]
+
+	var origin := chunk_coord * CHUNK_SIZE
+	for cell in colony.mound_cells():
+		if sprites.has(cell):
+			continue
+		var sprite := Sprite2D.new()
+		sprite.texture = _mound_sprite_generator.generate_texture(_mound_seed(origin, cell))
+		# World scale from a world-space constant, never re-derived from the
+		# art canvas (see ProceduralAntMoundSprite.world_scale).
+		sprite.scale = Vector2.ONE * ProceduralAntMoundSprite.world_scale()
+		sprite.position = Vector2(
+			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
+			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+		)
+		# No wind material: a mound is bare soil, and soil does not sway.
+		_ground_decor_parent.add_child(sprite)
+		sprites[cell] = sprite
+
+
+## A mound's art seed, from its GLOBAL tile -- so the same mound redraws the
+## same dome after a chunk unloads and reloads, and two mounds in one chunk are
+## not the same stamp twice.
+func _mound_seed(origin: Vector2i, cell: Vector2i) -> int:
+	return hash("%d_%d_ant_mound" % [origin.x + cell.x, origin.y + cell.y])
+
+
+## Where every drawn worker is right now, in world pixels.
+##
+## Split out from the MultiMesh fill because per-instance MultiMesh transforms
+## do not round-trip under `--headless` (the dummy renderer), so this is the
+## part the tests can see -- the same split GroundCover.plants_for_cell /
+## _fill_sward_layer already uses.
+##
+## Every worker is measured from its own mound's drawn ENTRANCE rather than
+## from the tile centre: soil_fauna.md's second honesty rule is that a trip
+## starts and ends at the entrance, and the player can see where that hole is.
+func visible_ant_workers() -> Array[Vector2]:
+	var positions: Array[Vector2] = []
+	for chunk_coord in _mound_sprites:
+		var origin: Vector2i = chunk_coord * CHUNK_SIZE
+		for cell in _mound_sprites[chunk_coord]:
+			var mound_seed := _mound_seed(origin, cell)
+			var entrance: Vector2 = (
+				_mound_sprites[chunk_coord][cell].position
+				+ ProceduralAntMoundSprite.entrance_offset(mound_seed)
+				* ProceduralAntMoundSprite.world_scale()
+			)
+			for index in AntTraffic.WORKERS_PER_MOUND:
+				positions.append(
+					entrance
+					+ AntTraffic.worker_offset(
+						AntTraffic.worker_seed(mound_seed, index), _ant_traffic_seconds
+					)
+				)
+	return positions
+
+
+## Thin engine glue over the placement math above: one MultiMesh for every ant
+## in the world, refilled each frame.
+func _fill_ant_worker_layer(positions: Array[Vector2]) -> void:
+	if positions.is_empty():
+		if _ant_worker_layer != null:
+			_ant_worker_layer.multimesh.instance_count = 0
+		return
+	if _ant_worker_layer == null:
+		if _ground_decor_parent == null:
+			return
+		_ant_worker_layer = MultiMeshInstance2D.new()
+		var mesh := QuadMesh.new()
+		# Size owned by the art module, like every other world-space sprite
+		# constant here (see ProceduralAntMoundSprite.worker_world_scale).
+		mesh.size = Vector2.ONE * ProceduralAntMoundSprite.WORKER_WORLD_WIDTH_PX
+		var multimesh := MultiMesh.new()
+		multimesh.mesh = mesh
+		multimesh.transform_format = MultiMesh.TRANSFORM_2D
+		_ant_worker_layer.multimesh = multimesh
+		# One texture for every ant alive: a worker is five dark pixels, so
+		# there is nothing to vary and everything to gain from one binding.
+		_ant_worker_layer.texture = _mound_sprite_generator.worker_texture()
+		_ground_decor_parent.add_child(_ant_worker_layer)
+	var multimesh: MultiMesh = _ant_worker_layer.multimesh
+	multimesh.instance_count = positions.size()
+	for index in positions.size():
+		multimesh.set_instance_transform_2d(index, Transform2D(0.0, positions[index]))
+
+
+func _sync_ant_workers() -> void:
+	_fill_ant_worker_layer(visible_ant_workers())
 
 
 ## One mound's forager: look for the nearest fallen grass seed within its
@@ -6410,6 +6976,82 @@ func _guano_texture() -> ImageTexture:
 	image.set_pixel(2, 1, Color(0.88, 0.88, 0.84, 0.8))
 	_guano_cached = ImageTexture.create_from_image(image)
 	return _guano_cached
+
+
+## How many blood marks the world keeps at once (see drop_blood_at, and
+## docs/concept/olfaction.md's "Blood: the trail a wounded animal leaves").
+## Bounded like every other decoration, and for the same reason drop_guano_at
+## gives: scenery that accumulates forever is a leak with a sprite. Generous
+## against MAX_GUANO because a single wounded animal lays a whole line of these
+## and one trail must not be able to eat itself.
+const MAX_BLOOD_MARKS := 120
+
+## The marks themselves: {"position": Vector2, "age": float, "node": Node2D}.
+## Ordered oldest-first, so the cap drops the oldest and a fresh trail is never
+## eaten by a stale one.
+var _blood_marks: Array[Dictionary] = []
+var _blood_texture: ImageTexture = null
+
+
+## Leaves a drop of blood on the ground here.
+##
+## Visible AND smellable: the mark emits into the same `smells_near` field
+## baits and carried food already use (see BloodTrail.mixture_for), so a
+## predator's nose needs to be told nothing new about it.
+func drop_blood_at(pixel_position: Vector2) -> void:
+	while _blood_marks.size() >= MAX_BLOOD_MARKS:
+		var oldest: Dictionary = _blood_marks.pop_front()
+		var node = oldest.get("node")
+		if node != null and is_instance_valid(node):
+			node.queue_free()
+	var mark: Dictionary = {"position": pixel_position, "age": 0.0, "node": null}
+	if _ground_decor_parent != null:
+		var sprite := Sprite2D.new()
+		sprite.texture = _blood_texture_for()
+		sprite.position = pixel_position
+		# Flat on the ground, under everything standing on it -- a drop of
+		# blood is on the ground, not an object in the world.
+		_ground_decor_parent.add_child(sprite)
+		mark["node"] = sprite
+	_blood_marks.append(mark)
+
+
+## Ages every mark and drops the ones that have gone past following.
+func step_blood_marks(delta_seconds: float) -> void:
+	var kept: Array[Dictionary] = []
+	for mark in _blood_marks:
+		var aged: float = float(mark["age"]) + delta_seconds
+		if BloodTrail.freshness_after(aged) <= 0.0:
+			var node = mark.get("node")
+			if node != null and is_instance_valid(node):
+				node.queue_free()
+			continue
+		mark["age"] = aged
+		var node2 = mark.get("node")
+		if node2 != null and is_instance_valid(node2):
+			# Drying and soaking in: an old mark is fainter as well as
+			# smelling different.
+			node2.modulate.a = maxf(BloodTrail.freshness_after(aged), 0.25)
+		kept.append(mark)
+	_blood_marks = kept
+
+
+func blood_mark_count() -> int:
+	return _blood_marks.size()
+
+
+## Three dark-red pixels, the same shape and technique _guano_texture uses --
+## a drop of blood is the same scale of ground mark as a bird dropping.
+func _blood_texture_for() -> ImageTexture:
+	if _blood_texture != null:
+		return _blood_texture
+	var image := Image.create(3, 2, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0, 0, 0, 0))
+	image.set_pixel(1, 0, Color(0.42, 0.05, 0.05, 0.95))
+	image.set_pixel(0, 1, Color(0.34, 0.04, 0.04, 0.85))
+	image.set_pixel(2, 1, Color(0.30, 0.03, 0.03, 0.8))
+	_blood_texture = ImageTexture.create_from_image(image)
+	return _blood_texture
 
 
 func plant_flower_at(pixel_position: Vector2, species: String) -> bool:
@@ -7312,6 +7954,43 @@ func nearest_npc_near(pixel_position: Vector2, max_distance: float) -> NpcMarker
 	return nearest
 
 
+## Every OTHER villager standing within `max_distance` pixels of
+## `pixel_position` -- their NpcIdentity, not their marker, because that is
+## all a conversation frame is allowed to hold (DialogueContext keeps no
+## Object in the frame).
+##
+## What it feeds: the `neighbour` and `contradiction` topics, which are about
+## two villagers who are both here and disagree about something. Fourth of
+## four phantom method names ConversationSources.gather asked for and nothing
+## answered -- so every villager in the game stood alone, no matter who was
+## next to them, and both topics were structurally dead. Pinned by
+## test_gather_asks_for_nothing_the_manager_cannot_answer.
+##
+## Same iteration as nearest_npc_near, and it excludes nobody by identity:
+## the caller filters itself out by npc_id (see ConversationSources._co_present
+## and DialogueContext._neighbours), which is the only place that knows whose
+## conversation this is.
+func co_present_identities_near(
+	pixel_position: Vector2, max_distance: float = NEIGHBOUR_RADIUS_PX
+) -> Array:
+	var out: Array = []
+	for node_list in _loaded_villages.values():
+		for node in node_list:
+			if not (node is NpcMarker) or node.identity == null:
+				continue
+			if pixel_position.distance_to(node.position) <= max_distance:
+				out.append(node.identity)
+	return out
+
+
+## How close two villagers have to be to be part of the same conversation.
+## Player.TALK_RADIUS is how close YOU have to stand to talk to someone at
+## all, so twice it is "near enough that you can see them both from where you
+## are standing" -- derived from the one distance this game already uses for
+## conversational range rather than picked.
+const NEIGHBOUR_RADIUS_PX := 96.0
+
+
 ## The nearest LOOSE, LIFTABLE stone within `max_distance` of `pixel_position`
 ## -- same shape as nearest_npc_near, for the "Pick (<key>)" interaction
 ## prompt (see World._update_interaction_prompt). Duck-typed on has_method
@@ -8185,6 +8864,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_seed_sprites[chunk_coord] = {}
 	_sync_flower_sprites(chunk_coord)
 
+	_ground_cover_sims[chunk_coord] = GroundCover.new(
+		hash("%d_%d_ground_cover" % [chunk_coord.x, chunk_coord.y]),
+		chunk.width,
+		chunk.height,
+		chunk.biome
+	)
 	_scrub_sims[chunk_coord] = DesertScrub.new(
 		hash("%d_%d_desert_scrub" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
 	)
@@ -8206,11 +8891,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	)
 	_worm_sprites[chunk_coord] = {}
 
-	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants"). Not
-	# rendered this pass -- see AntColony's own doc comment on scope.
+	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants").
 	_ant_colonies[chunk_coord] = AntColony.new(
 		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
 	)
+	_mound_sprites[chunk_coord] = {}
+	_sync_mound_sprites(chunk_coord)
 
 	_ecosystem.add_region(chunk_coord, chunk)
 	# Robin/sparrow's food-density signal (worm burrows, ground seed cells)
@@ -8722,6 +9408,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	_seed_sprites.erase(chunk_coord)
 	_flower_patches.erase(chunk_coord)
 
+	# The sward's own nodes are global rather than per chunk (see
+	# _sward_layers), so unloading a chunk drops only its simulation -- the
+	# next refresh rebuilds the visible set without this chunk in it.
+	_ground_cover_sims.erase(chunk_coord)
 	for sprite in _scrub_sprites.get(chunk_coord, {}).values():
 		sprite.free()
 	_scrub_sprites.erase(chunk_coord)
@@ -8737,6 +9427,9 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	_worm_sprites.erase(chunk_coord)
 	_worm_patches.erase(chunk_coord)
 
+	for sprite in _mound_sprites.get(chunk_coord, {}).values():
+		sprite.free()
+	_mound_sprites.erase(chunk_coord)
 	_ant_colonies.erase(chunk_coord)
 
 	# Snapshot the aggregate ecology before dropping the region, so revisiting

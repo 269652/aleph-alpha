@@ -124,3 +124,159 @@ func test_every_receptor_set_covers_every_molecule():
 				Olfaction.RECEPTORS[species]["response"].has(molecule),
 				"%s has no response to %s" % [species, molecule]
 			)
+
+
+# -- bait: what a PARTICULAR food smells of ----------------------------------
+#
+# See docs/concept/animal_husbandry.md "The approach". fruit_mixture ignores
+# its item id, so every food on the ground emitted the same mixture and a
+# carrot was no better a lure for a horse than a walnut was -- which makes
+# baiting meaningless as a verb.
+
+
+## The whole point of a bait table: two different foods are two different
+## smells, so WHAT you put down decides WHO comes.
+func test_a_carrot_and_an_apple_do_not_smell_the_same():
+	var carrot := Olfaction.bait_mixture("carrot", 1.0)
+	var apple := Olfaction.bait_mixture("apple", 1.0)
+	assert_ne(carrot, apple, "a carrot and an apple must not emit the same mixture")
+
+
+## A food nobody gave a mixture is a food no animal can ever smell -- a silent
+## dead bait. Iterating the catalog means one added later cannot be scentless.
+func test_every_food_item_in_the_catalog_has_a_mixture():
+	var catalog = load("res://src/gameplay/item_catalog.gd").new()
+	for item_id in catalog.known_ids():
+		if catalog.kind_of(item_id) != "food":
+			continue
+		var mixture := Olfaction.bait_mixture(item_id, 1.0)
+		assert_false(mixture.is_empty(), "%s emits nothing at all" % item_id)
+
+
+## Bait keeps fruit's ripe-to-rotten interpolation: a food still goes over, and
+## its audience still changes as it does.
+func test_bait_still_shifts_toward_decay_as_it_spoils():
+	var fresh := Olfaction.bait_mixture("carrot", 1.0)
+	var spoiled := Olfaction.bait_mixture("carrot", 0.0)
+	assert_gt(
+		spoiled.get(Olfaction.DECAY, 0.0),
+		fresh.get(Olfaction.DECAY, 0.0),
+		"a carrot left out should smell more of decay, not less"
+	)
+
+
+## The reason a carrot is the taming treat: a grazer wants a root over a nut.
+## An ordering, not a weight -- the mixtures can be retuned as long as the
+## grazer still prefers the thing a grazer prefers.
+func test_a_grazer_prefers_a_carrot_to_a_walnut():
+	var carrot := Olfaction.bait_mixture("carrot", 1.0)
+	var walnut := Olfaction.bait_mixture("walnut", 1.0)
+	assert_gt(
+		Olfaction.attraction_to("horse", carrot, 1.0),
+		Olfaction.attraction_to("horse", walnut, 1.0)
+	)
+
+
+## And the converse, so the table is a real disagreement between animals
+## rather than one food that is simply better than another for everyone.
+func test_a_squirrel_prefers_a_walnut_to_a_carrot():
+	var carrot := Olfaction.bait_mixture("carrot", 1.0)
+	var walnut := Olfaction.bait_mixture("walnut", 1.0)
+	assert_gt(
+		Olfaction.attraction_to("squirrel", walnut, 1.0),
+		Olfaction.attraction_to("squirrel", carrot, 1.0)
+	)
+
+
+# -- the roster, widened -----------------------------------------------------
+
+
+## Sheep, goat, camel, reindeer and tapir had no receptors at all, so nothing
+## a player put on the ground existed for them. Iterating the real anatomy
+## roster means a species added later cannot be born noseless.
+func test_every_keepable_species_has_a_nose():
+	var anatomy = load("res://src/rendering/animal_anatomy.gd")
+	for species in anatomy.SPECIES:
+		assert_true(Olfaction.has_nose(species), "%s cannot smell anything" % species)
+
+
+## Same invariant as test_every_receptor_set_covers_every_molecule, but over
+## every nose the game can actually hand out (derived ones included) rather
+## than only the hand-authored table.
+func test_every_derived_nose_covers_every_molecule():
+	var anatomy = load("res://src/rendering/animal_anatomy.gd")
+	for species in anatomy.SPECIES:
+		var receptors := Olfaction.receptors_for(species)
+		for molecule in Olfaction.MOLECULES:
+			assert_true(
+				receptors["sensitivity"].has(molecule),
+				"%s has no receptor for %s" % [species, molecule]
+			)
+			assert_true(
+				receptors["response"].has(molecule), "%s has no response to %s" % [species, molecule]
+			)
+
+
+## The five hand-tuned profiles are not lost when the derived ones arrive:
+## receptors_for still hands back the authored entry for a species that has
+## one, so the boar/deer/horse/robin/fly tuning keeps its meaning.
+func test_a_hand_authored_nose_wins_over_its_diet_default():
+	assert_eq(Olfaction.receptors_for("boar"), Olfaction.RECEPTORS["boar"])
+
+
+# -- the player has a smell --------------------------------------------------
+
+
+## A human is an animal, and animals smell of musk. This is what makes wind
+## direction matter at all (see WindScent): without a player emission there is
+## nothing for the wind to carry toward the animal.
+func test_the_player_smells_of_musk():
+	var mixture := Olfaction.player_mixture()
+	assert_gt(mixture.get(Olfaction.MUSK, 0.0), 0.0)
+
+
+## And every prey animal is driven off by it rather than drawn in, which is the
+## whole reason a stalk has to be downwind.
+func test_a_grazer_is_repelled_by_the_players_smell():
+	assert_lt(Olfaction.attraction_to("sheep", Olfaction.player_mixture(), 1.0), 0.0)
+
+
+# -- blood: the trail a wounded animal leaves --------------------------------
+# See docs/concept/olfaction.md, "Blood: the trail a wounded animal leaves".
+
+
+## Blood is its OWN molecule, not a shade of decay. Real: mammalian blood
+## scent is dominated by one aldehyde (trans-4,5-epoxy-(E)-2-decenal) that
+## carnivores respond to on its own -- and a live wounded deer must not smell
+## like a week-old carcass, which is exactly what folding it into DECAY would
+## do.
+func test_blood_is_its_own_molecule():
+	assert_true(Olfaction.MOLECULES.has(Olfaction.BLOOD))
+	assert_ne(Olfaction.BLOOD, Olfaction.DECAY)
+
+
+## The whole point of separating them: something that wants fresh blood and
+## something that wants carrion are different animals, and the two smells have
+## to be able to disagree.
+func test_fresh_blood_and_carrion_are_read_differently():
+	var blood := {Olfaction.BLOOD: 1.0}
+	var carrion := {Olfaction.DECAY: 1.0}
+	var disagreement := 0
+	for species in ["deer", "fly", "wolf", "boar"]:
+		var to_blood := Olfaction.attraction_to(species, blood, 1.0)
+		var to_carrion := Olfaction.attraction_to(species, carrion, 1.0)
+		if absf(to_blood - to_carrion) > 0.1:
+			disagreement += 1
+	assert_gt(disagreement, 1, "blood and carrion read as the same smell to everything")
+
+
+## A prey animal is alarmed by blood -- it is the smell of what happens to
+## animals like it. Nothing about it should read as food.
+func test_blood_does_not_attract_a_grazer():
+	assert_lt(Olfaction.attraction_to("horse", {Olfaction.BLOOD: 1.0}, 1.0), 0.0)
+
+
+## ...and a predator is drawn to it, which is what makes the trail a shared
+## field rather than a private one for the player.
+func test_blood_draws_a_predator():
+	assert_gt(Olfaction.attraction_to("wolf", {Olfaction.BLOOD: 1.0}, 1.0), 0.0)

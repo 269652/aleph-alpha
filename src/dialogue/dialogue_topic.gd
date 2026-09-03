@@ -169,6 +169,16 @@ const MEMORY_TOPIC_EVENT_TYPES := {
 	],
 	TOPIC_BOSS: ["world_boss_promoted", "world_boss_defeated"],
 	TOPIC_PATH: ["path_worn", "path_reclaimed"],
+	# The player's own deeds a villager would witness and repeat. Only
+	# `player_claimed_property` -- `player_settled` was ALSO unclaimed and was
+	# fixed twice, independently: once here and once by adding it to
+	# `arrival`. Both landed, git merged them cleanly because they are
+	# different lines, and the arrival claim is the right one (see this
+	# module's header: actor and witness are shaped identically to
+	# npc_settled, so it is one more firsthand arrival, not a deed anyone
+	# gossips about). Caught on the merge by
+	# test_every_memory_topic_claims_its_event_types_exclusively, which is
+	# what that test is for.
 	TOPIC_PLAYER_DEED: ["player_claimed_property"],
 }
 

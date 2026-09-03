@@ -17,13 +17,19 @@ const ACTIONS := [
 	{"action": "move_right", "label": "Move Right", "default": KEY_D},
 	{"action": "attack", "label": "Attack / Use Tool", "default": KEY_SPACE},
 	{"action": "block", "label": "Block", "default": KEY_SHIFT},
+	# Hold to stalk (see docs/concept/animal_husbandry.md "The approach").
+	# Ctrl is where a player's hand already goes for "crouch", and it was the
+	# only unclaimed modifier left in this registry -- KEY_X and KEY_Z, which
+	# the husbandry doc named as free when it was written, have since been
+	# taken by secondary_action and cast.
+	{"action": "crouch", "label": "Crouch (Stalk)", "default": KEY_CTRL},
 	{"action": "pickup", "label": "Pick Up Nearby Items", "default": KEY_E},
 	{"action": "kick", "label": "Kick Nearby Stone", "default": KEY_K},
 	# The "put this down" complement to E's "pick this up into hand" (see
 	# docs/concept/stone.md's held-item concept, generalized to any real
 	# physical object in docs/concept/wild_crops.md) -- stashes whatever
 	# is currently held into the inventory.
-	{"action": "stash", "label": "Stash Held Item", "default": KEY_H},
+	{"action": "stash", "label": "Stash Held Item / Put Bait Down", "default": KEY_H},
 	{"action": "fish", "label": "Fish / Reel", "default": KEY_F},
 	# Moved off R to make room for the primary slot, which now covers what this
 	# did: Lasso/Release/Order are scored candidates (see AnimalActions), so

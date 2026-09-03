@@ -34,6 +34,12 @@ const VenomModel = preload("res://src/gameplay/venom_model.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
 const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
 const Sickness = preload("res://src/gameplay/sickness.gd")
+const ColdExposure = preload("res://src/gameplay/cold_exposure.gd")
+const WoundModel = preload("res://src/gameplay/wound_model.gd")
+const PathScarring = preload("res://src/world/path_scarring.gd")
+const ConversationSources = preload("res://src/dialogue/conversation_sources.gd")
+const DialogueContext = preload("res://src/dialogue/dialogue_context.gd")
+const MovementPenalty = preload("res://src/gameplay/movement_penalty.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
 const NpcGreeting = preload("res://src/world/npc_greeting.gd")
@@ -71,6 +77,7 @@ const InputLatch = preload("res://src/gameplay/input_latch.gd")
 const Throwable = preload("res://src/gameplay/throwable.gd")
 const ChargeMeter = preload("res://src/gameplay/charge_meter.gd")
 const HeldItemThrow = preload("res://src/gameplay/held_item_throw.gd")
+const FlightDistance = preload("res://src/gameplay/flight_distance.gd")
 const ImpactResolver = preload("res://src/gameplay/impact_resolver.gd")
 const StoneRenderer = preload("res://src/rendering/stone_renderer.gd")
 const CollapsedPassage = preload("res://src/rendering/collapsed_passage.gd")
@@ -130,6 +137,8 @@ const PROXY_MOVEMENT_EPSILON := 0.5
 ## trading" Phase 3's definition of done asks for. Damage comes from the
 ## equipped weapon (UNARMED_DAMAGE if empty-handed).
 const ATTACK_RANGE := 20.0
+## The rebindable action this player's crouch is held on (see Keybindings).
+const CROUCH_ACTION := "crouch"
 const UNARMED_DAMAGE := 5.0
 const ATTACK_COOLDOWN := 0.5
 const KNOCKBACK_FORCE := 60.0
@@ -190,6 +199,22 @@ signal inventory_changed
 
 var wetness := 0.0
 var current_mode := "walking"
+
+## Whether the player is holding the crouch key right now (see
+## docs/concept/animal_husbandry.md "The approach").
+##
+## A stance, not a toggle: it lasts exactly as long as the key is held, which
+## is what makes it a thing the player DOES during an approach rather than a
+## mode they forget they are in. Read by CreatureMarker (duck-typed, via
+## is_crouching) to shrink the animal's own flight radius, and it costs
+## movement speed so it can never be a free permanent state.
+##
+## Single-player only for now, and deliberately: it is read from the local
+## InputMap, and `_submit_input` replicates the movement VECTOR and nothing
+## else, so a remote player never reads as crouched to the server's creatures.
+## Widening the replicated input to carry a stance is real work with no
+## single-player payoff, and this game is single-player-first (see README).
+var _crouching := false
 var current_speed_multiplier := 1.0
 
 ## Aggressive/healthy predators and boars attack the player back (see
@@ -266,6 +291,17 @@ var active_venom_debuffs: Array = []
 var sickness_severity := 0.0
 var sickness_id := ""
 var sickness_diagnosed := false
+## Accumulated cold exposure in [0,1] (see ColdExposure, and
+## docs/concept/survival.md's "Prolonged cold, as a real duration clock").
+## Rises only while genuinely cold, falls more slowly while warm, and once it
+## is past ColdExposure.RISK_THRESHOLD it starts rolling for hypothermia.
+##
+## This is what gives cold a MEMORY. Warmth alone has none: warm up and the
+## afternoon in the sleet never happened.
+var cold_exposure := 0.0
+## Seconds since the last hypothermia roll -- a cadence, not a per-frame
+## probability (see ColdExposure.ROLL_INTERVAL_SECONDS).
+var _cold_roll_accumulator := 0.0
 var wallet := Wallet.new()
 ## How many number-key hotbar slots exist. World derives its HUD row's slot
 ## count from this (see World.HOTBAR_SLOT_COUNT), so the two can't drift.
@@ -860,10 +896,93 @@ func take_damage(amount: float) -> void:
 	# reduces a hit to nothing -- at least MIN_ARMORED_DAMAGE always lands.
 	if amount > 0.0:
 		amount = maxf(MIN_ARMORED_DAMAGE, amount - equipment.total_armor())
+	# A real blow -- after block, shield and armor have had their say, so what
+	# opens a wound is the damage that actually LANDS -- leaves a gash as well
+	# as taking health (see WoundModel, and docs/concept/survival.md's
+	# open-wound trigger).
+	if WoundModel.opens_a_wound(amount):
+		open_wound()
 	health = _health.take_damage(health, amount)
 	if _health.is_dead(health):
 		is_dead = true
 		modulate = DEAD_MODULATE
+
+
+# -- open wounds (docs/concept/survival.md, "The four triggers") --------------
+# The SAME model a struck deer carries (CreatureMarker.step_wounds): a gash on
+# the player and a gash on an animal are mechanically the same real thing,
+# which is the honest answer to this project's own earlier open question about
+# whether a combat gash and a butchering cut should be.
+
+## Open wounds, tracked in the generic DebuffStack the way venom already is --
+## deliberately NOT `wounds.gd`, which predates this spec, holds its own
+## severity rather than riding the stack, and heals itself five times faster
+## than it bleeds. Empty means unwounded.
+var active_wound_debuffs: Array = []
+## How long the player has been carrying an unbound wound. The sepsis clock:
+## an untreated wound is a real infection vector, and that is a DURATION rather
+## than an event (see WoundModel.infection_exposure).
+##
+## Deliberately NOT tied to whether the wound is still bleeding. A cut stops
+## bleeding in minutes and stays OPEN for days, and it is the open wound rather
+## than the bleeding one that gets infected -- so the bleed debuff expiring
+## does not stop this clock. Only binding it does, which is what makes carrying
+## a bandage worth doing (test_an_untreated_wound_eventually_goes_septic).
+var seconds_wounded := 0.0
+var _has_unbound_wound := false
+var _wound_roll_accumulator := 0.0
+
+
+func open_wound() -> void:
+	active_wound_debuffs = _debuff_stack.apply(
+		active_wound_debuffs, WoundModel.DEBUFF_ID, WoundModel.DURATION_SECONDS, WoundModel.MAX_STACKS
+	)
+	_has_unbound_wound = true
+
+
+func wound_stacks() -> int:
+	return _debuff_stack.stacks_of(active_wound_debuffs, WoundModel.DEBUFF_ID)
+
+
+## Binds every open wound and clears the sepsis clock with it -- so bandaging
+## really does take the infection risk away rather than only pausing it, which
+## is what makes it worth carrying a bandage.
+func bandage_wounds() -> void:
+	active_wound_debuffs = []
+	seconds_wounded = 0.0
+	_has_unbound_wound = false
+	_wound_roll_accumulator = 0.0
+
+
+## Authority-only: bleeds, clots, and rolls for sepsis on an unbound wound.
+##
+## Bleeding cannot kill by itself (it floors at WoundModel.BLEED_HEALTH_FLOOR),
+## the same "debuffs, not death" rule the pillar states for every other unmet
+## need -- what an untreated wound eventually does is make you ILL.
+func step_wounds(delta: float) -> void:
+	if not _has_unbound_wound:
+		return
+	var stacks := wound_stacks()
+	if stacks > 0:
+		health = maxf(
+			health - WoundModel.damage_per_second(stacks) * delta, WoundModel.BLEED_HEALTH_FLOOR
+		)
+		active_wound_debuffs = _debuff_stack.advance(active_wound_debuffs, delta)
+	# Runs whether or not it is still BLEEDING -- see seconds_wounded.
+	seconds_wounded += delta
+	var exposure := WoundModel.infection_exposure(seconds_wounded)
+	if exposure <= 0.0 or sickness_id != "":
+		return
+	_wound_roll_accumulator += delta
+	if _wound_roll_accumulator < WoundModel.ROLL_INTERVAL_SECONDS:
+		return
+	_wound_roll_accumulator = 0.0
+	_disease_roll_count += 1
+	var chance := _sickness.infection_chance(exposure, _disease_resistance())
+	if _sickness.attempt_infect(chance, hash("%d_wound_sepsis" % _disease_roll_count)):
+		sickness_id = WoundModel.SICKNESS_ID
+		sickness_severity = 0.01
+		sickness_diagnosed = false
 
 
 ## Spends `amount` mana, all-or-nothing -- mirrors Wallet.spend's own "never
@@ -894,6 +1013,26 @@ func _respawn() -> void:
 	modulate = Color.WHITE
 	_respawn_accumulator = 0.0
 	position = respawn_position
+	# The BODY resets too, not just its health bar.
+	#
+	# Found by dying to a wolf in a real session: respawn restored health,
+	# position and the input latch and nothing else, so a player came back
+	# still bleeding, still on the sepsis clock, and still carrying whatever
+	# illness had been rolled. That is not survivable content, it is a soft
+	# lock -- there is no bandage item and no cure in the game yet, so anything
+	# the body carries across death it carries forever.
+	#
+	# Death here is documented as "a straight reset" (see max_health's own doc
+	# comment: no graveyard, no corpse recovery). This is what that has to mean.
+	# Hunger and thirst are deliberately NOT reset: those are about supplies
+	# rather than about the body, and coming back fed would make starving free.
+	bandage_wounds()
+	cold_exposure = 0.0
+	_cold_roll_accumulator = 0.0
+	sickness_id = ""
+	sickness_severity = 0.0
+	sickness_diagnosed = false
+	active_venom_debuffs = []
 	# Nothing pressed while dead should replay on the first live tick: the
 	# simulation steps that would have consumed those presses never ran (see
 	# _authority_step's early-out), so the latch would otherwise be holding
@@ -1398,6 +1537,36 @@ func is_rooted() -> bool:
 ## = no effect) -- one more term in _authority_step's existing
 ## current_speed_multiplier product chain, same shape as
 ## ConditionPenalty.speed_multiplier(survival.fitness) already is.
+## How worn the ground the player is standing on is (see PathScarring).
+##
+## Pushed in by World rather than queried: the wear model lives there, next to
+## the step that feeds it, and World already reads this player's tile every
+## frame to wear the path in -- so this is the same data flow turned around
+## rather than a second one.
+var ground_wear := 0.0
+
+
+## What that worn ground does to the player's speed.
+##
+## Closes the loop the path model has always been missing half of: repeated
+## movement wears a path, the path is quicker to walk, and being quicker to
+## walk is what makes it worth using again. Until this, wearing a path in cost
+## the player time and bought them nothing but a texture change.
+func _path_speed_multiplier() -> float:
+	return PathScarring.speed_multiplier(ground_wear)
+
+
+## What an open wound costs the player in speed -- the SAME rule a struck
+## animal is slowed by (CreatureMarker.wound_speed_multiplier), not a second
+## one.
+##
+## The wound model's own claim is that a gash on the player and a gash on a
+## deer are mechanically the same real thing; until this, only the deer was
+## slowed by one and the player bled while walking at full pace.
+func _wound_speed_multiplier() -> float:
+	return WoundModel.speed_multiplier(wound_stacks())
+
+
 func _spell_speed_multiplier() -> float:
 	if _debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.SLOW) > 0:
 		return SpellStatusEffects.SLOW_SPEED_MULTIPLIER
@@ -1536,6 +1705,42 @@ func _sickness_step(delta: float) -> void:
 		return
 	sickness_severity = _sickness.progress(sickness_severity, delta, false)
 	survival.spend_stamina(SICKNESS_STAMINA_DRAIN_PER_SECOND * sickness_severity * delta)
+
+
+## Authority-only: advances the prolonged-cold exposure clock and, once it is
+## far enough along, rolls for hypothermia (docs/concept/survival.md, "The four
+## triggers").
+##
+## The warmth meter and its is_cold()/is_freezing() staging have existed since
+## the meter was written, and cold has always accelerated fitness loss -- but
+## nothing read that signal for sickness, so exposure had no memory. This is
+## the missing consumer, and it deliberately reuses the exact call the bite
+## trigger already makes (Sickness.infection_chance -> attempt_infect) rather
+## than inventing a second illness path.
+func step_cold_exposure(delta: float) -> void:
+	cold_exposure = ColdExposure.advance(
+		cold_exposure, survival.is_cold(), survival.is_freezing(), delta
+	)
+	var exposure := ColdExposure.infection_exposure(cold_exposure)
+	if exposure <= 0.0:
+		_cold_roll_accumulator = 0.0
+		return
+	# One sickness at a time, the same single-instance contract
+	# apply_disease_bite respects -- but the clock keeps running, so stepping
+	# out of the cold is still what saves you.
+	if sickness_id != "":
+		return
+	_cold_roll_accumulator += delta
+	if _cold_roll_accumulator < ColdExposure.ROLL_INTERVAL_SECONDS:
+		return
+	_cold_roll_accumulator = 0.0
+	_disease_roll_count += 1
+	var chance := _sickness.infection_chance(exposure, _disease_resistance())
+	var seed_value := hash("%d_cold_exposure" % _disease_roll_count)
+	if _sickness.attempt_infect(chance, seed_value):
+		sickness_id = ColdExposure.SICKNESS_ID
+		sickness_severity = 0.01  # just chilled through -- _sickness_step ramps it
+		sickness_diagnosed = false
 
 
 ## Melee damage multiplier from an active "combat" category food buff (see
@@ -1713,17 +1918,27 @@ func _authority_step(delta: float) -> void:
 
 	var tile := current_tile()
 	var water_result := _resolve_water_state(tile, delta)
-	current_mode = water_result.mode
+	# The stance is read once per step and cached, so every consumer this frame
+	# (speed, the HUD mode line, an animal's flight radius) agrees about it.
+	_crouching = _controlled_locally() and _crouch_held()
+	current_mode = movement_mode_for(water_result.mode, _crouching)
 	# Overall condition (SurvivalMeters.fitness, driven by starving/
 	# dehydrated/cold) is a real movement debuff, not a dead meter -- see
 	# ConditionPenalty and docs/concept/survival.md's "Debuffs, not death".
-	current_speed_multiplier = (
-		water_result.speed_multiplier
-		* _weather_speed_multiplier()
-		* _terrain_speed_multiplier(tile)
-		* ConditionPenalty.speed_multiplier(survival.fitness)
-		* _spell_speed_multiplier()
-	)
+	# Composed rather than multiplied straight (see MovementPenalty): each of
+	# these is a reasonable number alone, and their PRODUCT is not -- six
+	# ordinary conditions at once used to leave the player at 2.5% of base
+	# speed, and a crouched stalk in rain on a hill at 23%.
+	current_speed_multiplier = MovementPenalty.compose([
+		water_result.speed_multiplier,
+		_weather_speed_multiplier(),
+		_terrain_speed_multiplier(tile),
+		ConditionPenalty.speed_multiplier(survival.fitness),
+		_spell_speed_multiplier(),
+		_crouch_speed_multiplier(),
+		_wound_speed_multiplier(),
+		_path_speed_multiplier(),
+	])
 
 	var input_direction := _read_local_input() if _controlled_locally() else _pending_input_direction
 	var desired_velocity := input_direction * current_speed() * current_speed_multiplier
@@ -1761,6 +1976,8 @@ func _authority_step(delta: float) -> void:
 	_lasso_step(delta)
 	_food_buff_step(delta)
 	_venom_step(delta)
+	step_cold_exposure(delta)
+	step_wounds(delta)
 	_sickness_step(delta)
 	_shop_step(delta)
 	_action_slots_step()
@@ -2514,6 +2731,52 @@ func _spawn_thrown_stone(landing_position: Vector2, diameter_cm: float) -> void:
 ## Materializes a real DroppedItem at `landing_position` -- the generic-item
 ## counterpart of _spawn_thrown_stone, and also reused by _stash_step to
 ## drop whatever doesn't fit in a full inventory rather than losing it.
+## Puts ONE unit of the best bait carried onto the ground at the player's feet.
+##
+## One, not the stack: a bait is a considered act, not tipping out the bag --
+## and one carrot is what the hand-fed `feed_treat` costs too, so putting one
+## down and offering one by hand cost the same.
+func _put_a_bait_down() -> void:
+	var carried: Array = []
+	for stack in inventory.stacks():
+		carried.append(stack.item.id)
+	var bait_id := bait_item_id_from(carried)
+	if bait_id.is_empty():
+		return
+	var item = _item_catalog.make(bait_id)
+	if item == null or inventory.remove(bait_id, 1) < 1:
+		return
+	_spawn_thrown_item(position, ItemStack.new(item, 1))
+	inventory_changed.emit()
+
+
+## Which of the carried items goes down as bait.
+##
+## The taming treat wins when it is carried, so the common case -- a player
+## with carrots and a haunch of meat, standing at a sheep -- puts down the
+## thing the sheep actually wants. Otherwise the first food carried, which is
+## right for a player who only has one kind anyway.
+##
+## Static and pure so the rule is testable without an inventory, and so the
+## same rule can back a prompt later.
+##
+## Known limit, and the reason this is a rule rather than a choice: there is no
+## selected-item concept yet (`animal_husbandry.md` §2 specs the click-latched
+## selection this should read once it exists). A player carrying carrots and
+## apples cannot yet choose to bait with the apples.
+static func bait_item_id_from(carried_item_ids: Array) -> String:
+	var catalog := ItemCatalog.new()
+	var first_food := ""
+	for item_id in carried_item_ids:
+		if catalog.kind_of(String(item_id)) != "food":
+			continue
+		if String(item_id) == AnimalActions.TREAT_ITEM_ID:
+			return String(item_id)
+		if first_food.is_empty():
+			first_food = String(item_id)
+	return first_food
+
+
 func _spawn_thrown_item(landing_position: Vector2, item_stack) -> void:
 	var dropped := DroppedItem.new()
 	dropped.item_stack = item_stack
@@ -2656,7 +2919,20 @@ func _stash_step() -> void:
 	)
 	var just_pressed := _rising_edge("stash", stash_pressed, _last_stash_input_state)
 	_last_stash_input_state = stash_pressed
-	if not just_pressed or not is_holding_anything() or inventory == null:
+	if not just_pressed or inventory == null:
+		return
+	if not is_holding_anything():
+		# Contextual, exactly the way E is (see docs/concept/stone.md's
+		# held-item concept): with something in hand this key stashes it, and
+		# with an EMPTY hand it puts a BAIT down (see
+		# docs/concept/animal_husbandry.md "The approach").
+		#
+		# Bait needed a gesture. The simulation half was live -- ground food is
+		# published as a smell, a grazer walks up the gradient, take_bait_at
+		# lets it eat what it reached -- and a live session found there was no
+		# way for a player to put food on the ground at all: the inventory
+		# window's drag-out-to-the-world drop does nothing (verified in play).
+		_put_a_bait_down()
 		return
 
 	if is_holding_stone():
@@ -3476,6 +3752,19 @@ func sell_food_to_village(market, item_id: String, amount: int) -> bool:
 ## EarthChunkManager.nearest_npc_near) to hear that NPC's own deterministic
 ## greeting line (see NpcGreeting) -- the minimal talk-interaction stand-in,
 ## not the real Live Dialogue System. The HUD reads talk_message.
+## A talk request the world can open a conversation from, or {} when there is
+## nobody to talk to.
+##
+## The frame rather than a rendered line, which is what made the old path a
+## dead end: `NpcGreeting.greeting_for` returned a finished string, so there
+## was nowhere for the dialogue engine to attach. Static and pure so the
+## contract is testable without a world.
+static func new_talk_request(frame: Dictionary) -> Dictionary:
+	if frame.is_empty() or String(frame.get("npc_id", "")).is_empty():
+		return {}
+	return {"frame": frame}
+
+
 func _talk_step(delta: float) -> void:
 	var talk_pressed := (
 		Input.is_action_pressed("talk") if _controlled_locally() else _pending_talk_pressed
@@ -3483,14 +3772,55 @@ func _talk_step(delta: float) -> void:
 	var just_pressed := _rising_edge("talk", talk_pressed, _last_talk_input)
 	_last_talk_input = talk_pressed
 	if just_pressed:
-		var npc = _chunk_manager.nearest_npc_near(position, TALK_RADIUS) if _chunk_manager != null else null
-		_talk_result_message = (
-			_npc_greeting.greeting_for(npc.identity) if npc != null else "No one to talk to nearby."
-		)
-		_talk_result_timer = TALK_MESSAGE_DURATION
+		# Builds the frame and hands it up. World owns the window (it owns
+		# every other UI surface), and the ledger has to outlive this Player --
+		# NpcMarkers are freed on chunk unload, so a ledger held here would
+		# forget what was said the moment the village went out of range.
+		pending_talk_request = _talk_request_here()
+		if pending_talk_request.is_empty():
+			_talk_result_message = "No one to talk to nearby."
+			_talk_result_timer = TALK_MESSAGE_DURATION
 
 	_talk_result_timer = maxf(0.0, _talk_result_timer - delta)
 	talk_message = _talk_result_message if _talk_result_timer > 0.0 else ""
+
+
+## Set on the frame the talk key goes down; World consumes and clears it.
+var pending_talk_request: Dictionary = {}
+
+
+func _talk_request_here() -> Dictionary:
+	if _chunk_manager == null:
+		return {}
+	var npc = _chunk_manager.nearest_npc_near(position, TALK_RADIUS)
+	if npc == null or npc.identity == null:
+		return {}
+	var npc_id := "npc:%d" % npc.identity.seed_value
+	var sources := ConversationSources.gather(
+		_chunk_manager, npc.identity, npc_id, inventory, wallet, npc.economy
+	)
+	var frame := DialogueContext.build(npc_id, sources)
+	# Read where we stand BEFORE recording this conversation, or every villager
+	# would greet you as someone they already know on the strength of the
+	# meeting currently happening.
+	var recognition := ConversationSources.recognition_of(sources, npc_id)
+	# ...and then write it. Talking is a real act (dialogue.md pillar 3): the
+	# villager witnesses having met you, so it can be gossiped, and the NEXT
+	# conversation opens warmer than this one did.
+	if _chunk_manager.has_method("record_conversation_with"):
+		_chunk_manager.record_conversation_with(npc_id)
+	var request := new_talk_request(frame)
+	if not request.is_empty():
+		request["recognition"] = recognition
+		# What this villager can ask of you and what you already owe them
+		# (docs/concept/quests.md). Assembled from the frame and the stores
+		# that were just read, so World stays glue and never builds a second,
+		# possibly disagreeing, view of the same simulation.
+		request["asks"] = ConversationSources.asks_for(sources, frame, _item_catalog)
+		# The wallet an errand reward is actually paid out of -- carried on the
+		# REQUEST rather than in the frame, which holds no Object by design.
+		request["payer_wallet"] = npc.economy.wallet if npc.economy != null else null
+	return request
 
 
 ## Authority-only: on the rising edge of the build input, either places the
@@ -3585,6 +3915,36 @@ func _proxy_step() -> void:
 
 func _read_local_input() -> Vector2:
 	return Input.get_vector("move_left", "move_right", "move_up", "move_down")
+
+
+## Whether this player is crouched right now. Duck-typed on purpose: this is
+## the method CreatureMarker asks any player node for (see
+## CreatureMarker._is_crouching), so a test double without it simply stands.
+func is_crouching() -> bool:
+	return _crouching
+
+
+func _crouch_held() -> bool:
+	return InputMap.has_action(CROUCH_ACTION) and Input.is_action_pressed(CROUCH_ACTION)
+
+
+## What crouching costs. Held in FlightDistance rather than here because the
+## same number pins the shy threshold (a crouched pace must never read as a
+## rush), and one constant cannot live in two files.
+func _crouch_speed_multiplier() -> float:
+	return FlightDistance.CROUCH_SPEED_MULTIPLIER if _crouching else 1.0
+
+
+## What the HUD calls how the player is moving.
+##
+## Crouching is a STANCE layered on ordinary walking, so it only shows when
+## nothing more consequential is going on: you cannot stalk anything while you
+## are swimming, and drowning is not a posture. Static and pure so the
+## precedence is testable without a step.
+static func movement_mode_for(water_mode: String, crouching: bool) -> String:
+	if water_mode != "walking":
+		return water_mode
+	return "crouching" if crouching else water_mode
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
