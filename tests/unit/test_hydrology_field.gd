@@ -14,7 +14,11 @@ const HydrologyData = preload("res://src/world/hydrology_data.gd")
 const DrainageNetwork = preload("res://src/world/drainage_network.gd")
 const TerrainRelief = preload("res://src/world/terrain_relief.gd")
 
-const SEA_LEVEL := 0.5
+## Must sit BETWEEN the fixtures' sea row (0.2) and their lowest LAND
+## cell (the crater floor, 0.3). At 0.5 the crater was itself sub-sea, so
+## once the largest sea component started counting as the ocean the
+## 9-cell crater outvoted the 7-cell row and the two swapped roles.
+const SEA_LEVEL := 0.25
 const WORLD_TILES := 70
 ## Low enough that the crater's outlet (a dozen cells of unit rain) is a
 ## river; the shipped constant is calibrated for the real asset, not 7x7.
@@ -184,7 +188,11 @@ func test_channel_geometry_reports_distance_side_and_downstream_bearing():
 	var east: Dictionary = field.nearest_channel_geometry(35, 14)
 	assert_almost_eq(west["distance_tiles"], 0.5, 1e-6)
 	assert_almost_eq(east["distance_tiles"], 0.5, 1e-6)
-	assert_almost_eq(west["course_bearing_deg"], 0.0, 1e-6, "flow is due north")
+	# 1e-3, not 1e-6: the bearing is the tangent of a sampled Bezier, not
+	# an exact cell step, so due north lands 0.0004 deg off. That is four
+	# ten-thousandths of a degree -- below what the flow map can express
+	# and eight orders of magnitude below the drift a real bend produces.
+	assert_almost_eq(west["course_bearing_deg"], 0.0, 1e-3, "flow is due north")
 	# Same convention as the catalog: tangent.cross(point - closest), so the
 	# two banks have opposite signs and equal magnitude.
 	assert_almost_eq(west["signed_across_tiles"], -east["signed_across_tiles"], 1e-6)
@@ -230,10 +238,25 @@ func test_width_grows_where_discharges_add_up():
 
 
 func test_the_outlet_is_wider_than_the_reach_feeding_it():
-	# Cell (3,1) carries everything cell (3,2) does plus its own catchment.
+	# Cell (3,1) carries everything cell (3,2) does plus its own
+	# catchment: 35 cells against 34. That growth is real but NOT legible
+	# downstream of the bake. Discharge ships as an 8-bit LOG byte, and 3%
+	# is far inside one log step, so both reaches decode to the same
+	# number. Nor would it matter if they did not: width is 1 tile per
+	# DOUBLING of Q, so 3% is 0.04 of a tile.
+	#
+	# So this asserts the growth where it exists -- on the raw network --
+	# and only monotonicity on the decoded field. The width response to a
+	# real doubling is test_width_grows_where_discharges_add_up.
+	var network = DrainageNetwork.new().build(_crater(), 7, 7, SEA_LEVEL)
+	var unit := PackedFloat32Array()
+	unit.resize(49)
+	unit.fill(1.0)
+	var raw: PackedFloat32Array = network.accumulate_weighted(unit)
+	assert_gt(raw[1 * 7 + 3], raw[2 * 7 + 3], "the outlet does carry more, before encoding")
 	var outlet: Dictionary = field.nearest_channel_geometry(35, 14)
 	var feeder: Dictionary = field.nearest_channel_geometry(35, 24)
-	assert_gt(outlet["discharge"], feeder["discharge"])
+	assert_gte(outlet["discharge"], feeder["discharge"])
 	assert_gte(outlet["half_width_tiles"], feeder["half_width_tiles"])
 
 
@@ -312,6 +335,18 @@ func test_the_across_field_is_continuous_through_a_confluence():
 	# Walk a row through the junction where the tributary (along y=34.5)
 	# enters the main channel (along x=35): the blended field may bend, it
 	# may never jump -- a jump is what the shader draws as fans of arcs.
+	#
+	# The invariant is that across is a signed DISTANCE, so it is
+	# 1-Lipschitz: one tile of travel can move it by at most one tile.
+	# A seam is exactly what breaks that.
+	#
+	# This used to divide across by the half width and require steps
+	# under 0.4, which is not a continuity condition at all. Walking
+	# straight out of a channel moves across by a full tile per step by
+	# definition, so the check failed for any channel under 2.5 tiles of
+	# half width no matter how smooth the field was -- it fired on five
+	# steps in this fixture, and not one of them is a seam. Measured, the
+	# largest real step here is 0.96 tiles.
 	var confluence := _confluence_field()
 	var previous := INF
 	for x in range(26, 40):
@@ -319,20 +354,34 @@ func test_the_across_field_is_continuous_through_a_confluence():
 		if geometry.is_empty():
 			previous = INF
 			continue
-		var across: float = absf(geometry["signed_across_tiles"]) / geometry["half_width_tiles"]
+		var across: float = geometry["signed_across_tiles"]
 		if previous != INF:
-			assert_lt(absf(across - previous), 0.4, "jump at x=%d: %.2f -> %.2f" % [x, previous, across])
+			assert_lte(
+				absf(across - previous), 1.05,
+				"jump at x=%d: %.2f -> %.2f tiles in one tile of travel" % [x, previous, across]
+			)
 		previous = across
 
 
 func test_inside_the_main_river_the_main_decides_depth_and_width():
 	# A tile inside the main channel right where the tributary enters
 	# reads the main's discharge, not the tributary's.
+	#
+	# It reads the main AT THE JUNCTION. This used to compare against
+	# (35, 24), the reach one cell BELOW the junction, which carries the
+	# junction's water plus more of the column's own catchment and so is
+	# legitimately larger -- a tile does not borrow its neighbour's
+	# discharge, and asking it to was the test's error, not the field's.
 	var confluence := _confluence_field()
 	var probe: Dictionary = confluence.probe(34, 34, 0.6)
 	assert_eq(probe["kind"], "river")
-	var main: Dictionary = confluence.nearest_channel_geometry(35, 24)
+	var main: Dictionary = confluence.nearest_channel_geometry(35, 34)
+	var tributary: Dictionary = confluence.nearest_channel_geometry(25, 34)
 	assert_almost_eq(probe["discharge"], main["discharge"], 1e-6)
+	assert_gt(
+		float(probe["discharge"]), float(tributary["discharge"]) * 3.0,
+		"the main's water, not the tributary's"
+	)
 
 
 ## "Only around bends and where the water is deeper at the edge": traced

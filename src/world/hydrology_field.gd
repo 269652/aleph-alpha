@@ -458,9 +458,23 @@ func nearest_channel_geometry(global_x: int, global_y: int) -> Dictionary:
 	var direction: Vector2 = dominant["tangent"]
 	if tangent_sum.length() > 1e-6:
 		direction = tangent_sum.normalized()
+	# DISTANCE AND ACROSS MUST DESCRIBE THE SAME GEOMETRY. This used to
+	# report `nearest["distance_tiles"]` beside a blended across, and the
+	# two are not the same channel: `nearest` is whichever hit has the
+	# smallest BANK REACH, while the blend is over the hits that actually
+	# CONTAIN the tile. A narrow spring running past a wide river wins the
+	# reach comparison without contributing to the blend at all, so the
+	# pair came back describing two different watercourses -- measured at
+	# 0.45 tiles of distance beside 0.73 of across.
+	#
+	# That split the wet/dry verdict in two. probe() calls a tile river
+	# when distance <= half_width; the shader calls it wet when
+	# |across| / half < 1. Fed different numbers they disagree tile by
+	# tile, which is a ragged stepped edge rather than a waterline.
+	var signed_across := across_sum / weight_sum * half
 	return {
-		"distance_tiles": nearest["distance_tiles"],
-		"signed_across_tiles": across_sum / weight_sum * half,
+		"distance_tiles": absf(signed_across),
+		"signed_across_tiles": signed_across,
 		"course_bearing_deg": RiverCatalog.bearing_degrees(direction),
 		"discharge": dominant["discharge"],
 		"half_width_tiles": half,
