@@ -14,7 +14,6 @@ const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
-const SnowLayer = preload("res://src/rendering/snow_layer.gd")
 
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
@@ -1011,13 +1010,20 @@ static func growth_level(growth: float) -> float:
 ## ticked by a fraction of a percent -- exactly the "one image per frame"
 ## cost GROWTH_LEVELS/SeasonTransition.TURN_STEPS already exist to avoid.
 ##
-## Quantised to SnowLayer.DEPTH_BANDS rather than an invented number: that is
-## the real granularity the GROUND's own lying snow already steps through
-## (10 bands, one per row of the illustrated snow-overlay sheet -- see
-## SnowLayer). Reusing it means a canopy's snow response is exactly as coarse
-## or fine as the snow already lying at its own foot, so the two can never
-## visibly disagree about how gradually a snowfall settles in.
-const SNOW_LEVELS := SnowLayer.DEPTH_BANDS
+## Used to be quantised to SnowLayer.DEPTH_BANDS -- the real granularity the
+## GROUND's own lying snow stepped through (10 bands, one per row of the
+## illustrated snow-overlay sheet), reused here so a canopy's snow response
+## could never visibly disagree with the snow already lying at its own foot.
+## snow_layer.gd was deleted outright once the ground moved to the continuous
+## GPU-bombing shader (see docs/concept/snow_cover.md, SnowBombShader), which
+## has no discrete bands left to mirror -- coverage is now a per-pixel float,
+## not a row lookup. SNOW_LEVELS is now its own pinned constant instead, kept
+## at the same value the ground exposed right before deletion (10) so this
+## quantisation -- still needed for the "one new tree picture every time snow
+## depth ticks by a fraction of a percent" cache-cost reason above -- reads
+## exactly as before; only the reused-from-elsewhere justification is gone.
+## Pinned by test_snow_level_is_quantized_to_ten_bands.
+const SNOW_LEVELS := 10
 
 
 ## The snow coverage LEVEL a tree draws at -- used both for the texture cache

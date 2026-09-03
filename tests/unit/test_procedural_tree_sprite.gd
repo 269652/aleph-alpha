@@ -42,6 +42,24 @@ func test_generates_an_image_of_the_expected_size():
 	assert_eq(image.get_height(), ProceduralTreeSprite.SIZE.y)
 
 
+## Regression: SNOW_LEVELS used to be derived from snow_layer.gd's own
+## DEPTH_BANDS ("reusing it means a canopy's snow response is exactly as
+## coarse or fine as the snow already lying at its own foot" -- see
+## snow_level's doc comment) -- but snow_layer.gd was deleted outright when
+## the ground moved to the continuous GPU-bombing shader (fc646e2, "snow:
+## wire SnowBombShader into the game"), leaving a dangling preload that broke
+## THIS script (and everything that depends on it, including Player, via
+## CharacterView) at load time. SNOW_LEVELS is now its own pinned constant,
+## the same value the ground used to expose right before deletion (10 --
+## see the deleted file's own history: "Still the right formula at
+## DEPTH_BANDS=10"), just no longer chained to a file that no longer exists.
+func test_snow_level_is_quantized_to_ten_bands():
+	assert_eq(ProceduralTreeSprite.SNOW_LEVELS, 10)
+	assert_almost_eq(ProceduralTreeSprite.snow_level(0.0), 0.0, 0.0001)
+	assert_almost_eq(ProceduralTreeSprite.snow_level(0.05), 0.1, 0.0001)
+	assert_almost_eq(ProceduralTreeSprite.snow_level(1.0), 1.0, 0.0001)
+
+
 func test_canopy_area_is_greenish_and_opaque():
 	var image := generator.generate_image(0.5, 1)
 	# Sampled proportionally, not at a fixed row: row 2 sat mid-canopy on the
