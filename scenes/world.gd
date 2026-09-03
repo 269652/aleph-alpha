@@ -2581,6 +2581,10 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# test_world_simulation_ownership.gd's header), one call level further
 	# out. Independently found and fixed on both this branch and main.
 	_chunk_manager.step_wild_crops(delta)
+	# Player-tilled farm plots (see EarthChunkManager.step_farm_plots,
+	# docs/concept/farming.md) -- same tick this crop's wild cousin grows on
+	# just above.
+	_chunk_manager.step_farm_plots(delta)
 	# Ant mounds foraging (see AntColony, myrmecochory) -- fallen grass seed
 	# in grassland, or windfall fruit/nut in forest/rainforest where grass
 	# doesn't grow -- a background per-chunk population effect, batched here

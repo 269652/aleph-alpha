@@ -90,8 +90,25 @@ Full detail in [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md); in short:
 Tests run via the [GUT](addons/gut) addon against `.gutconfig.json`
 (`res://tests/unit`, subdirs included) — from the Godot editor's GUT
 panel, or headless via GUT's command-line runner. Run just the file(s) you
-touched per change; save a full-suite pass for natural checkpoints (end of
-a feature, before merging).
+touched per change:
+
+```bash
+godot --headless -s addons/gut/gut_cmdln.gd -gconfig= -gtest=res://tests/unit/test_foo.gd -gexit
+```
+
+The `-gconfig=` (empty value, skips loading `.gutconfig.json`) is required,
+not optional: that config sets `dirs: ["res://tests/unit"]`, and GUT adds
+that whole directory unconditionally on top of whatever `-gtest=` lists.
+Drop `-gconfig=` and `-gtest=` stops scoping anything — you silently get a
+full-suite run under what looks like a fast, single-file one.
+
+Save a full-suite pass for natural checkpoints (end of a feature, before
+merging) — this one deliberately omits `-gconfig=` so it picks up
+`.gutconfig.json` and needs no `-gtest=`:
+
+```bash
+godot --headless -s addons/gut/gut_cmdln.gd -gexit
+```
 
 ### Concept docs are the spec
 

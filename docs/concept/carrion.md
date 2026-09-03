@@ -169,6 +169,24 @@ see that doc's own mechanism spec and Status.
 - ✅ Ants + carrion bugs: ambient decomposer creatures that find and
   consume carcasses/guts — `src/gameplay/carrion_forage_behavior.gd`,
   `src/rendering/decomposer_marker.gd`/`decomposer_renderer.gd`.
+  **Follow-up (readability):** `ProceduralDecomposerSprite.ANT_COLOR` was
+  `Color(0.08, 0.06, 0.05)` — a hair from `PixelPalette.OUTLINE`
+  `(0.08, 0.06, 0.1)`, the shared near-black ring every creature generator
+  draws around its own silhouette — and this generator never actually drew
+  that ring at all (it instantiated `PixelPalette` but never called it).
+  With the fill and the never-drawn outline the same color, a whole ant or
+  bug rendered as one undifferentiated black blob rather than a small dark
+  creature (reported live, from a real screenshot: "these black blobs",
+  identified from a follow-up close-up crop as a creature silhouette, not
+  flora). Fixed by darkening `ANT_COLOR`/`BUG_COLOR` to warm dark-brown
+  chitin tones clearly apart from `OUTLINE` (real ants/carrion beetles stay
+  genuinely dark, per this doc's own Silphidae note above — this isn't a
+  move toward brightness for its own sake) and by actually ringing the
+  silhouette, reusing `ProceduralBirdSprite._outline_silhouette`'s exact
+  technique. Both halves are pinned separately in
+  `test_procedural_decomposer_sprite.gd` (a minimum RGB distance from
+  `OUTLINE`, and a direct check that an outline-colored pixel exists in the
+  generated image) rather than left an eyeballed color pair.
 - ✅ Flies find a carcass first, and decomposers measurably prefer a
   fly-blown carcass over a fresh one — `Carcass` grows a real `FlyColony`
   after a tested delay tied to its own age (`Carcass.fly_count`/
