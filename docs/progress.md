@@ -1970,6 +1970,8 @@ Every level is capped -- eggs per clutch, clutches per female, flies per source,
 
 ✅ Flies follow a player carrying rotten fruit (`EarthChunkManager._sync_carrier_flies`/`register_scent_carrier`, wired to the player in `world.gd`).
 
+✅ **Flies also colonize a killed animal's `Carcass`**, not just ground food items -- see `carrion.md`'s "corpse → flies → disease/carrion causal chain" entry above. `Carcass` owns and advances a real `FlyColony` directly (`src/rendering/carcass.gd`) rather than going through `EarthChunkManager._fly_colonies`, since a carcass is a `Node2D` entity, not a `WorldItemBus` ground item -- same breeding loop, different caller. One founder settles `FLY_ATTRACTION_DELAY_SECONDS` after death (a third of the carcass's own rot clock: real blowflies find a body within minutes, long before it is rotten enough for decomposers to feed on it), and that visible fly count then measurably changes both decomposer targeting and local disease risk.
+
 
 ### Carried food, snow, and footprints
 
@@ -7023,6 +7025,35 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   UI/presentation section's hover system): a carcass reads its species and
   "Butcher (Space)" while parts remain, "\<Species\> Remains" once
   stripped; guts show only a name, no player action.
+- **Corpse → flies → disease/carrion causal chain** (medium) — ✅ Done —
+  the three systems above (`Carcass`, `FlyColony`, `DiseaseModel`,
+  `DecomposerMarker`) existed but never called into each other; wired end
+  to end. `Carcass` now grows a real `FlyColony` directly
+  (`src/gameplay/fly_colony.gd`, the exact same breeding loop a rotting
+  windfall already uses via `EarthChunkManager.step_flies` — reached from
+  a different caller here since a carcass is a `Node2D` entity, not a
+  `WorldItemBus` ground item), starting one founder a tested delay after
+  death: `Carcass.FLY_ATTRACTION_DELAY_SECONDS`, pinned to a third of
+  `ROT_SECONDS` (real blowflies find a body within minutes, long before a
+  carcass is rotten enough for decomposers to actually feed on it).
+  `Carcass.fly_count()` (adults only, mirroring `FlyColony.adults` — only
+  the flying stage is ever visible) then feeds two other systems: (1) a
+  fly-blown carcass reads as CLOSER to a hunting `DecomposerMarker` than an
+  identically-placed fresh one — new `CarrionForageBehavior.
+  effective_distance` (pure, tested: `FLY_ATTRACTION_DISCOUNT_PX_PER_FLY`/
+  `MIN_EFFECTIVE_DISTANCE_PX`), wired into `DecomposerMarker._nearest_
+  carrion`'s target scoring in place of raw distance, proven by
+  `test_prefers_a_fly_blown_carcass_over_a_closer_fresh_one`
+  (`tests/unit/test_decomposer_marker.gd`) — a farther fly-blown carcass
+  measurably out-competes a nearer fresh one, not just an equally-likely
+  pick; and (2) it measurably raises local disease risk (see the Disease
+  section below for that half). Proven as one real causal chain end to
+  end, not three disconnected unit tests:
+  `test_corpse_age_drives_fly_count_which_measurably_raises_local_
+  disease_risk` (`tests/unit/test_carcass.gd`) advances a real carcass's
+  age, reads its real fly count off that same carcass, and feeds that real
+  count into the real `DiseaseModel.carrion_graze_transmission_chance`
+  formula — corpse age in, fly count out, disease risk out.
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to
@@ -7080,6 +7111,20 @@ via TDD.
   near a contaminated carcass (`CreatureMarker._carrion_disease_step`) —
   simplified to direct carcass proximity rather than a separately-tracked
   "contaminated patch of grass" object this project has no substrate for.
+- **Fly-blown carrion risk** (small) — ✅ Done — the graze roll above now
+  also scales with the real carcass's own visible fly swarm, not just
+  region pressure (see the Carrion section above for where that swarm
+  comes from): `DiseaseModel.carrion_graze_transmission_chance` gained a
+  `fly_count` parameter (`FLY_BLOWN_GRAZE_RISK_BONUS_PER_FLY`, defaulting
+  to 0 so every pre-existing caller/test keeps its exact prior behaviour),
+  and `CreatureMarker._carrion_disease_step` now reads the real nearby
+  `Carcass.fly_count()` into it rather than passing nothing. A first-pass,
+  saturate-for-determinism number (a single founder fly is already enough
+  to push an EASY-region graze chance to certain) — the same deliberate
+  reasoning this section's own HARD-region-saturates-to-certain precedent
+  above already uses, not a balance-tested one; see
+  `test_a_fly_blown_carcass_raises_graze_risk_even_at_easy_region_pressure`
+  (`tests/unit/test_creature_marker.gd`).
 - **Visible symptoms** (small) — ✅ Done — every infected `CreatureMarker`
   tints itself (`Sprite2D.modulate`), no new rendering system; a tamed/kept
   animal additionally gets a third sick pip beside its existing

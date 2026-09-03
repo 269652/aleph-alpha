@@ -62,6 +62,17 @@ flies forever.
 **Following.** A fly with nothing better nearby follows the strongest smell it
 can find, which is how one ends up trailing a player carrying rotten fruit.
 
+**Signaling.** A carcass is rot too (see `carrion.md`), so it grows its own
+colony the same way a windfall does -- one founder, a real tested delay after
+death rather than at the fruit's own decay threshold, because a body is found
+by real blowflies within minutes, long before it is rotten enough for
+anything else to act on. That swarm is not just decoration: real scavengers
+use circling flies as a cue that a carcass is worth investigating, and the
+same insects are anthrax's own documented spore-carry mechanism (see
+`disease.md`'s CARRION archetype) -- so a fly-blown carcass is both a more
+likely target for a hunting decomposer and a genuinely more dangerous one to
+graze near, not merely a prettier one.
+
 ## Status
 
 - ✅ The four stages, their durations, and what each one does
@@ -70,3 +81,4 @@ can find, which is how one ends up trailing a player carrying rotten fruit.
 - ✅ Adult flies as rendered entities in the world, one marker per adult in a colony (`EarthChunkManager._fly_markers`/`_sync_fly_markers`) — eggs and maggots are deliberately never nodes, since they live IN the fruit
 - ✅ Maggots hastening the decay of what they eat — `EarthChunkManager.step_ground_food` looks the item up in `_fly_colonies`, converts `FlyColony.decay_hastened_by`'s fraction-of-shelf-life into seconds against that item's own `spoil_seconds`, and adds it on top of ordinary aging, so a windfall with an active colony spoils measurably faster than the same windfall with none
 - ✅ Flies following a player's carried rot — `EarthChunkManager._sync_carrier_flies`/`register_scent_carrier`, wired to the player in `world.gd`
+- ✅ Flies also colonize a `Carcass`, not just ground food items — `Carcass` owns and advances a real `FlyColony` directly (`Carcass.fly_count`/`FLY_ATTRACTION_DELAY_SECONDS`, `src/rendering/carcass.gd`), the same breeding loop, reached from a different caller since a carcass is a `Node2D` entity rather than a `WorldItemBus` ground item. See `carrion.md`'s "Flies find it first" and `disease.md`'s fly-blown carrion risk bump for what that swarm then does to decomposer targeting and disease risk.
