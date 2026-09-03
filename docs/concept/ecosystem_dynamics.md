@@ -1162,6 +1162,21 @@ than O(all-chunks-per-frame).
   arms. An earlier version of this fix called it unconditionally every
   frame, which stripped every fish within catch radius of the dock almost
   instantly; caught during verification before merge.
+  **Follow-up (wings):** `PiscivoreBirdMarker` was built with only a static
+  resting-pose texture and never touched it again — cruising, hovering over
+  its target, diving, and carrying a catch home all played on one frozen
+  frame, including the hover this doc calls out as the signature kingfisher
+  beat, which is sustained by rapid wingbeats in life (reported: "fix the
+  kingfisher's wings"). `ProceduralBirdSprite` already painted flap/perched
+  frames for `"kingfisher"` and `FlapGlide`/`WingbeatBounce` already carried
+  its wingbeat frequency — this was a wiring gap, not a missing painter.
+  `PiscivoreBirdRenderer.spawn_piscivore_birds` now sets `flap_frames`/
+  `perched_frame` at spawn (mirroring `AmbientFlyerRenderer._build_marker`'s
+  sparrow/robin wiring exactly), and `PiscivoreBirdMarker` gained its own
+  `_animate_wings` step: `perched_frame` only during the genuinely
+  motionless `ACTIVITY_PERCH`, `flap_frames` cycling everywhere else —
+  patrol, nest trips, hunting flight, and every strike phase (hover/dive/
+  ascend/carry) all keep flapping, since none of them are actually still.
 
 ## Simulation runs at the rate the player can perceive
 
