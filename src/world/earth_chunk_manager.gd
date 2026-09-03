@@ -3891,11 +3891,34 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# |signed across|: past a course's endpoints the perpendicular
 			# component goes small while the distance does not, and cells
 			# off the end of a river must not be painted as water.
-			if nearest.distance_tiles > apron:
+			#
+			# A SECOND, wider ring past the apron is still PAINTED, not
+			# erased (RiverFlowShader.SHORE_BLEED_TILES): the apron alone
+			# is just wide enough for the bank feather itself, so a wader's
+			# wake or a boulder's halo reaching even slightly past it had
+			# no tile left to draw on and simply vanished -- reported live
+			# as a player's own splash trail cutting off mid-stride on the
+			# way out of the water. This ring stays fully transparent by
+			# construction (its baseline |across| sits well past the
+			# feather) unless something genuinely reaches it.
+			var bleed := apron + RiverFlowShader.SHORE_BLEED_TILES
+			if nearest.distance_tiles > bleed:
 				_river_flow_layer.erase_cell(global)
-				# Still write the texel: a dry cell one tile past the apron
+				# Still write the texel: a dry cell one tile past the bleed
 				# is a bilinear NEIGHBOUR of a wet one, and an unwritten
 				# texel there would bleed garbage into the waterline.
+				var far_hydraulics := generator.river_hydraulics_at_global(
+					global.x, global.y
+				)
+				_write_flow_across_texel(
+					global,
+					nearest.signed_across_tiles / half_width,
+					nearest.course_bearing_deg,
+					far_hydraulics.velocity_m_s,
+					half_width
+				)
+				continue
+			if nearest.distance_tiles > apron:
 				var apron_hydraulics := generator.river_hydraulics_at_global(
 					global.x, global.y
 				)
@@ -3905,6 +3928,14 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 					nearest.course_bearing_deg,
 					apron_hydraulics.velocity_m_s,
 					half_width
+				)
+				_river_flow_boulder_tiles.erase(global)
+				_river_flow_layer.set_cell(
+					global, 0,
+					_terrain_renderer.atlas_coords_for_river_flow(
+						nearest.course_bearing_deg,
+						RiverFlowShader.is_fast_flow(apron_hydraulics.velocity_m_s)
+					)
 				)
 				continue
 

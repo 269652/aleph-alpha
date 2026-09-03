@@ -90,6 +90,8 @@ uniform int boulder_count = 0;
 uniform vec2 boulders[24];
 uniform float boulder_reach_px = 40.0;
 uniform float boulder_radius_px = 11.0;
+uniform float boulder_halo_width_px = 6.0;
+uniform float boulder_halo_alpha = 0.6;
 
 // The waders -- the player and any creatures standing in river water,
 // fed per frame by EarthChunkManager.set_river_flow_waders. Soft moving
@@ -255,11 +257,28 @@ void fragment() {
 	// smooth radial falloff, so the current lines and the waterline part
 	// around it; eyot_dry below then cuts a ROUND dry patch under the
 	// rock itself.
+	//
+	// boulder_halo is a SEPARATE ring just outside that dry patch, purely
+	// a function of distance to the rock -- unlike eyot_dry (which only
+	// ever REMOVES wet alpha, so it can darken already-wet water but can
+	// never light up already-dry land), the halo can boost wet alpha and
+	// tint toward the shore colour on its own, independent of the
+	// channel's own across value. A boulder only ever reaches this array
+	// when EarthChunkManager.flow_boulder_at_global found it within the
+	// river or its bank apron, so lighting up a halo around it never
+	// happens for a rock genuinely out in a field -- it always sits on
+	// real bank ground ("boulders on a grass field inside the river
+	// should be surrounded by the light blue shore band as well").
 	float eyot_dry = 1.0;
+	float boulder_halo = 0.0;
 	for (int b = 0; b < boulder_count; b++) {
 		vec2 to_frag = wp - boulders[b];
 		float lateral = dot(to_frag, flow_perp);
 		float d = length(to_frag);
+		boulder_halo = max(
+			boulder_halo,
+			1.0 - smoothstep(boulder_radius_px, boulder_radius_px + boulder_halo_width_px, d)
+		);
 		if (d >= boulder_reach_px) {
 			continue;
 		}
@@ -536,6 +555,9 @@ void fragment() {
 	// illustrated mark of all.
 	float shore = 1.0 - smoothstep(shore_width * 0.5, shore_width, abs(rr - shore_pos));
 	body = mix(body, line_color, shore * mix(0.5, 0.85, night_lift));
+	// A boulder's own shore ring, same tint, same night lift -- painted
+	// whether the rock sits in open water or on the bank's dry ground.
+	body = mix(body, line_color, boulder_halo * boulder_halo_alpha * mix(0.5, 0.85, night_lift));
 
 	// The comic INK line: a dark outline hugging the real bank curve, just
 	// inside the waterline. The old stylized attempt drew its outline per
@@ -550,7 +572,14 @@ void fragment() {
 	// This is what frees the water's outline from the tile grid: the edge
 	// is |across| == 1, a smooth curve through the middle of tiles, not
 	// the rectangle of whichever cells happened to be painted.
-	float wet = (1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry;
+	// The halo also lights its own alpha, independent of the channel's own
+	// wet/dry verdict -- a boulder halo ring must show through even where
+	// the tile's baseline is dry ground past the bled shore (see
+	// EarthChunkManager._paint_river_flow_overlay's SHORE_BLEED_TILES).
+	float wet = max(
+		(1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry,
+		boulder_halo * boulder_halo_alpha
+	);
 	COLOR = vec4(body, wet);
 }
 """
@@ -667,6 +696,15 @@ const TILE_PX := 16.0
 ## and the dry-eyot radius under the rock itself.
 const BOULDER_REACH_PX := 40.0
 const BOULDER_RADIUS_PX := 11.0
+## The shore-tint ring just outside the dry eyot, and how strongly it
+## tints and lights alpha -- deliberately WIDER than the water's own bank
+## feather (BANK_FEATHER, ~1% of a channel width) so a boulder's own
+## halo, unlike the water's edge, reads clearly from a normal play
+## distance regardless of the local channel's width. Not bounded by
+## boulder_reach_px: the halo is a ring right at the rock, not part of
+## the flow-bending falloff.
+const BOULDER_HALO_WIDTH_PX := 6.0
+const BOULDER_HALO_ALPHA := 0.6
 
 ## A wader as a flow obstacle: a smaller round core than a boulder (legs,
 ## not a rock face), with the displacement stretched downstream by the
@@ -677,6 +715,23 @@ const WADER_REACH_PX := 26.0
 const WADER_RADIUS_PX := 6.0
 const WADER_WAKE_TRAIL := 0.8
 const WADER_SLOTS := 16
+
+## How far past the true bank curve EarthChunkManager keeps painting a
+## cell at all, on top of RiverCatalog's own apron -- not a visual
+## softness (BANK_FEATHER already feathers the waterline itself over a
+## fraction of a tile) but the DIFFERENCE between a tile existing to draw
+## on and a tile being erased outright. A cell beyond the plain apron used
+## to be erased, so a wader's wake or a boulder's halo had nowhere to
+## render the moment either reached past it -- a player wading out of the
+## river watched their own splash trail cut off mid-stride. Sized to
+## comfortably clear the widest of the boulder/wader reaches above (2.5
+## tiles) plus the wake's own downstream stretch, so an exiting wader's
+## trailing wake, or a boulder sitting right at the apron's edge, always
+## has ground to draw its fade on. The newly-included band is otherwise
+## fully transparent by construction (its baseline |across| sits well past
+## the feather) -- it only ever shows anything where a real wader, boulder
+## or ripple actually reaches it.
+const SHORE_BLEED_TILES := 3.0
 
 ## px of world width per unit of across-fraction -- the channel half-width,
 ## pinned against RiverCatalog.RIVER_HALF_WIDTH_TILES by test.
@@ -802,6 +857,8 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("boulder_count", 0)
 	material.set_shader_parameter("boulder_reach_px", BOULDER_REACH_PX)
 	material.set_shader_parameter("boulder_radius_px", BOULDER_RADIUS_PX)
+	material.set_shader_parameter("boulder_halo_width_px", BOULDER_HALO_WIDTH_PX)
+	material.set_shader_parameter("boulder_halo_alpha", BOULDER_HALO_ALPHA)
 	material.set_shader_parameter("wader_count", 0)
 	material.set_shader_parameter("wader_reach_px", WADER_REACH_PX)
 	material.set_shader_parameter("wader_radius_px", WADER_RADIUS_PX)
@@ -891,6 +948,15 @@ static func wader_across_push(offset_px: Vector2, flow_dir: Vector2) -> float:
 ## 0 under the rock, 1 outside its radius, soft-edged and ROUND.
 static func eyot_dry_factor(distance_px: float) -> float:
 	return smoothstep(BOULDER_RADIUS_PX * 0.6, BOULDER_RADIUS_PX, distance_px)
+
+
+## The boulder's own shore-ring strength `distance_px` from its centre: 0
+## at and inside the rock's own radius (that ground is the eyot, not the
+## ring), rising through the halo band, 0 again beyond it. Independent of
+## eyot_dry and of the channel's own wet/dry verdict -- this is what lets
+## a rock sitting on ordinary dry bank ground still show a ring.
+static func boulder_halo_factor(distance_px: float) -> float:
+	return 1.0 - smoothstep(BOULDER_RADIUS_PX, BOULDER_RADIUS_PX + BOULDER_HALO_WIDTH_PX, distance_px)
 
 
 ## The waterline: 1 inside the channel, 0 past the bank curve, feathered

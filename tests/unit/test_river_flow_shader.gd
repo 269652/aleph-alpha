@@ -1375,6 +1375,58 @@ func test_only_the_boulder_loop_carves_dry_eyots():
 	assert_gt(wader_block_start, 0, "the fragment shader must consult the waders")
 
 
+## "Boulders on a grass field inside the river should be surrounded by
+## the light blue shore band as well": every boulder gets its own ring,
+## a function of distance to the ROCK alone -- unlike eyot_dry (which can
+## only ever REMOVE wet alpha), the halo can light up alpha and tint the
+## body on its own, so a rock sitting on ordinary dry bank ground still
+## reads as part of the river.
+func test_every_boulder_gets_its_own_shore_halo():
+	assert_gt(RiverFlowShader.BOULDER_HALO_WIDTH_PX, 0.0)
+	assert_gt(RiverFlowShader.BOULDER_HALO_ALPHA, 0.0)
+	assert_lte(RiverFlowShader.BOULDER_HALO_ALPHA, 1.0)
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"boulder_halo = max(\n\t\t\tboulder_halo,\n\t\t\t1.0 - smoothstep(boulder_radius_px, boulder_radius_px + boulder_halo_width_px, d)\n\t\t);"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"body = mix(body, line_color, boulder_halo * boulder_halo_alpha * mix(0.5, 0.85, night_lift));"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("boulder_halo * boulder_halo_alpha"))
+	var material := RiverFlowShader.new().make_material()
+	assert_almost_eq(
+		float(material.get_shader_parameter("boulder_halo_width_px")), RiverFlowShader.BOULDER_HALO_WIDTH_PX, 1e-9
+	)
+	assert_almost_eq(
+		float(material.get_shader_parameter("boulder_halo_alpha")), RiverFlowShader.BOULDER_HALO_ALPHA, 1e-9
+	)
+
+
+## The halo's own CPU mirror: zero under the rock (that ground is the
+## eyot, not the ring), a full ring just outside it, gone beyond the halo
+## band -- and, crucially, defined with NO reference to the channel's own
+## wet/dry state, so a rock on dry land gets exactly the same ring a rock
+## mid-channel does.
+func test_boulder_halo_factor_rings_the_rock_and_nothing_else():
+	assert_eq(RiverFlowShader.boulder_halo_factor(0.0), 0.0, "under the rock is the eyot, not the ring")
+	assert_eq(RiverFlowShader.boulder_halo_factor(RiverFlowShader.BOULDER_RADIUS_PX), 1.0, "the ring peaks right at the rock's edge")
+	assert_eq(
+		RiverFlowShader.boulder_halo_factor(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_HALO_WIDTH_PX), 0.0
+	)
+	assert_between(
+		RiverFlowShader.boulder_halo_factor(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_HALO_WIDTH_PX * 0.5),
+		0.0, 1.0
+	)
+
+
+## The halo must be able to light alpha up even where the channel's own
+## baseline would leave the fragment fully transparent -- a boulder past
+## the true bank but still within the newly-bled paint band.
+func test_the_boulder_halo_can_light_alpha_on_otherwise_dry_ground():
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"float wet = max(\n\t\t(1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry,\n\t\tboulder_halo * boulder_halo_alpha\n\t);"
+	))
+
+
 func test_the_material_starts_with_no_waders():
 	var material := RiverFlowShader.new().make_material()
 	assert_eq(int(material.get_shader_parameter("wader_count")), 0)

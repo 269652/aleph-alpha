@@ -492,17 +492,19 @@ func test_river_flow_overlay_paints_only_channel_and_apron_cells():
 
 	var terrain_renderer := TerrainRenderer.new()
 	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
+	# Painted out past the bank line by the apron, and past THAT again by
+	# SHORE_BLEED_TILES -- a wader's wake or a boulder's halo reaching
+	# just past the apron needs a real tile to draw its fade on, or it
+	# cuts off mid-stride ("the bulge when a player walks out is not
+	# clipped"). Nothing farther than the bleed may be painted.
+	var paint_reach := apron + RiverFlowShader.SHORE_BLEED_TILES
 	for cell in painted_cells:
-		# Painted out past the bank line by the apron: the shader clips the
-		# water at the REAL bank curve, and that curve runs through cells
-		# whose centres sit beyond the half-width. Nothing farther than the
-		# apron may be painted.
 		var nearest := manager.generator.river_catalog().nearest_river_at(
 			cell.x, cell.y,
 			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 		)
 		assert_lte(
-			nearest.distance_tiles, apron,
+			nearest.distance_tiles, paint_reach,
 			"(%d, %d) painted but %f tiles from any channel" % [cell.x, cell.y, nearest.distance_tiles]
 		)
 		# Every painted tile must carry that cell's OWN real data --
@@ -525,10 +527,21 @@ func test_river_flow_overlay_paints_only_channel_and_apron_cells():
 	# somewhere near Berlin there must be a painted cell whose centre sits
 	# beyond the half-width -- that is where the smooth waterline lives.
 	var apron_cells := 0
+	var bled_cells := 0
 	for cell in painted_cells:
 		if not manager.is_river_at_global(cell.x, cell.y):
 			apron_cells += 1
+		var nearest := manager.generator.river_catalog().nearest_river_at(
+			cell.x, cell.y,
+			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+		)
+		if nearest.distance_tiles > apron:
+			bled_cells += 1
 	assert_gt(apron_cells, 0, "no apron cells painted -- the bank curve would clip at tile edges")
+	assert_gt(
+		bled_cells, 0,
+		"no cell past the plain apron was painted -- SHORE_BLEED_TILES must genuinely widen the paint"
+	)
 
 	# Moving far away unloads the original chunks -- their overlay cells go too.
 	manager.update(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))
