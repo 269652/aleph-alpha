@@ -280,9 +280,15 @@ void fragment() {
 		vec2 to_frag = wp - boulders[b];
 		float lateral = dot(to_frag, flow_perp);
 		float d = length(to_frag);
+		// A RING, not a disc: the inner factor is the same edge eyot_dry
+		// uses, so the halo starts exactly where the rock's dry patch
+		// ends. Without it the halo ran at full strength under the rock
+		// too and, since it lights alpha on its own below, painted water
+		// straight back over the dry patch it is supposed to trim.
 		boulder_halo = max(
 			boulder_halo,
-			1.0 - smoothstep(boulder_radius_px, boulder_radius_px + boulder_halo_width_px, d)
+			smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d)
+				* (1.0 - smoothstep(boulder_radius_px, boulder_radius_px + boulder_halo_width_px, d))
 		);
 		if (d >= boulder_reach_px) {
 			continue;
@@ -961,7 +967,11 @@ static func eyot_dry_factor(distance_px: float) -> float:
 ## eyot_dry and of the channel's own wet/dry verdict -- this is what lets
 ## a rock sitting on ordinary dry bank ground still show a ring.
 static func boulder_halo_factor(distance_px: float) -> float:
-	return 1.0 - smoothstep(BOULDER_RADIUS_PX, BOULDER_RADIUS_PX + BOULDER_HALO_WIDTH_PX, distance_px)
+	var inner := smoothstep(BOULDER_RADIUS_PX * 0.6, BOULDER_RADIUS_PX, distance_px)
+	var outer := 1.0 - smoothstep(
+		BOULDER_RADIUS_PX, BOULDER_RADIUS_PX + BOULDER_HALO_WIDTH_PX, distance_px
+	)
+	return inner * outer
 
 
 ## The waterline: 1 inside the channel, 0 past the bank curve, feathered

@@ -142,8 +142,8 @@ func test_the_surface_is_actually_dragged_within_a_phase():
 func test_the_shader_samples_two_advected_phases():
 	assert_true(RiverFlowShader.SHADER_CODE.contains("phase_a"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("phase_b"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_a + drift)"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_b + drift)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_a * advect_gate + drift)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_b * advect_gate + drift)"))
 
 
 ## THE seam bug the advection switch introduces if left alone. The surface
@@ -392,8 +392,14 @@ func test_the_lines_are_oriented_by_smearing_not_frame_rotation():
 func test_the_drag_is_purely_downstream():
 	# The drift rides the same flow_dir vector, so the travel stays purely
 	# downstream too.
-	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_dir * (advect_strength * phase_a + drift)"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_dir * (advect_strength * phase_b + drift)"))
+	# advect_gate stills the advection in standing water: it SCALES the
+	# downstream term, it does not add a sideways one.
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"flow_dir * (advect_strength * phase_a * advect_gate + drift)"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"flow_dir * (advect_strength * phase_b * advect_gate + drift)"
+	))
 
 
 # -- the size of a flow line -------------------------------------------------
@@ -818,8 +824,12 @@ func test_the_ink_turns_moonlight_at_night_on_every_cel():
 func test_the_shader_lifts_strokes_by_the_night_uniform():
 	assert_true(RiverFlowShader.SHADER_CODE.contains("mix(stroke_ink, moonlight_ink, night_lift)"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("mix(1.0, night_stroke_boost, night_lift)"))
+	# The trailing mix(0.35, 1.0, moving) damps strokes in still water; the
+	# night boost and the 1.0 ceiling both still apply.
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("min(wave * line_strength * mix(1.0, night_stroke_boost, night_lift), 1.0)")
+		RiverFlowShader.SHADER_CODE.contains(
+			"wave * line_strength * mix(1.0, night_stroke_boost, night_lift) * mix(0.35, 1.0, moving), 1.0);"
+		)
 	)
 
 
@@ -1235,7 +1245,11 @@ func test_the_shader_bends_and_dries_around_the_boulder_uniforms():
 		),
 		"the boulder must displace via the round-core potential-flow formula"
 	)
-	assert_true(RiverFlowShader.SHADER_CODE.contains("* eyot_dry;"))
+	# eyot_dry now trims one arm of a max(); the other arm is the halo
+	# ring, which must survive where the channel verdict alone is dry.
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"(1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry,"
+	))
 
 
 ## The flow frame and speed come from the BILINEAR map, not the atlas
@@ -1375,6 +1389,15 @@ func test_only_the_boulder_loop_carves_dry_eyots():
 	assert_gt(wader_block_start, 0, "the fragment shader must consult the waders")
 
 
+## SHADER_CODE keeps whatever newline convention its source file is
+## checked out with, and this repo's .gd files are CRLF. The multi-line
+## assertions below are written with plain \n, so they must compare
+## against a normalised copy -- otherwise they pass or fail on the
+## checkout's line-ending setting rather than on the shader code.
+func _shader_code_lf() -> String:
+	return RiverFlowShader.SHADER_CODE.replace("\r\n", "\n")
+
+
 ## "Boulders on a grass field inside the river should be surrounded by
 ## the light blue shore band as well": every boulder gets its own ring,
 ## a function of distance to the ROCK alone -- unlike eyot_dry (which can
@@ -1385,9 +1408,9 @@ func test_every_boulder_gets_its_own_shore_halo():
 	assert_gt(RiverFlowShader.BOULDER_HALO_WIDTH_PX, 0.0)
 	assert_gt(RiverFlowShader.BOULDER_HALO_ALPHA, 0.0)
 	assert_lte(RiverFlowShader.BOULDER_HALO_ALPHA, 1.0)
-	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"boulder_halo = max(\n\t\t\tboulder_halo,\n\t\t\t1.0 - smoothstep(boulder_radius_px, boulder_radius_px + boulder_halo_width_px, d)\n\t\t);"
-	))
+	assert_true(_shader_code_lf().contains(
+		"smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d)\n\t\t\t\t* (1.0 - smoothstep(boulder_radius_px, boulder_radius_px + boulder_halo_width_px, d))"
+	), "the halo must be a RING -- a disc lights alpha under the rock and undoes its own dry patch")
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
 		"body = mix(body, line_color, boulder_halo * boulder_halo_alpha * mix(0.5, 0.85, night_lift));"
 	))
@@ -1422,7 +1445,7 @@ func test_boulder_halo_factor_rings_the_rock_and_nothing_else():
 ## baseline would leave the fragment fully transparent -- a boulder past
 ## the true bank but still within the newly-bled paint band.
 func test_the_boulder_halo_can_light_alpha_on_otherwise_dry_ground():
-	assert_true(RiverFlowShader.SHADER_CODE.contains(
+	assert_true(_shader_code_lf().contains(
 		"float wet = max(\n\t\t(1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry,\n\t\tboulder_halo * boulder_halo_alpha\n\t);"
 	))
 
