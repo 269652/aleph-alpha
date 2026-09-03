@@ -44,3 +44,11 @@ func test_a_request_names_who_is_being_talked_to():
 
 func test_no_one_nearby_is_not_a_request():
 	assert_true(Player.new_talk_request({}).is_empty())
+
+
+## The request carries where the player stands with this villager, so the
+## conversation is rendered at a real tier rather than always at stranger.
+func test_a_request_carries_a_recognition_tier():
+	var request := Player.new_talk_request({"npc_id": "npc:9"})
+	request["recognition"] = "knows_you"
+	assert_eq(String(request["recognition"]), "knows_you")

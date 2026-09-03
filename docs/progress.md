@@ -1752,6 +1752,23 @@ Reported live, looking at a real grassland chunk at noon: *"the bare grass parts
 ✅ Ant mounds are no longer invisible -- see "Ant mounds, and the traffic on them" below, which closed this the same day.
 
 
+### The player is a node in the graph (2026-09-03)
+
+`dialogue.md`'s third pillar, and the last of the big unwired dialogue modules: **"the player is a node in the graph, not a camera."** `NpcRecognition` had 318 lines and 29 tests and no caller anywhere, so every beat in the game rendered at `stranger` — a villager you had spoken to nine times greeted you exactly like one you had never met — and nothing was written when you talked, so recognition could never have advanced even if something had read it.
+
+Both halves are now real.
+
+✅ **Talking writes.** `EarthChunkManager.record_conversation_with` appends a `player_spoke_with` event naming both parties, and the villager **witnesses** it — so it enters the gossip layer that already runs every 30 seconds, which is what eventually makes a stranger two settlements away greet you as someone they have heard of. One event per *conversation*, not per sentence: a villager you asked three questions of has met you once.
+
+✅ **Talking reads.** The tier comes off the two stores that cannot be argued with — an append-only `EventStore` and a `Contract`'s live status — rather than from anyone's *memory* of them, which the gossip step can talk a villager out of. That reasoning is `NpcRecognition`'s own; this pass just supplied the caller, and `ConversationSources` now hands over the contract store alongside the event store.
+
+✅ **It reaches the sentence.** Recognition changes the **opener** and nothing else: familiarity changes how you are addressed, never what is being said, so the facts and the required lexemes survive every tier. Precedence is most-specific-first — saying it *again* outranks knowing you, because stacking both reads as a stranger who repeats themselves.
+
+📝 **Ordering detail worth recording:** the tier is read *before* the conversation is recorded. Reading after would have every villager greet you as an acquaintance on the strength of the meeting currently happening.
+
+⬜ **The rumor-vector loop is still unbuilt.** You do not yet *hold* a degraded memory of what a villager tells you, so carrying news between settlements — mechanism 4, and the one the doc rightly says no template and no LLM can fake, because it comes from the player being the only actor who walks between villages — remains open.
+
+
 ### The dialogue engine was built, tested, and dark (2026-09-03)
 
 An audit for "what needs a second look" turned up the largest instance of this repo's recurring pattern — simulation without a consumer — by an order of magnitude.

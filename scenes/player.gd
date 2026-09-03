@@ -3766,7 +3766,20 @@ func _talk_request_here() -> Dictionary:
 		return {}
 	var npc_id := "npc:%d" % npc.identity.seed_value
 	var sources := ConversationSources.gather(_chunk_manager, npc.identity, npc_id, inventory, wallet)
-	return new_talk_request(DialogueContext.build(npc_id, sources))
+	var frame := DialogueContext.build(npc_id, sources)
+	# Read where we stand BEFORE recording this conversation, or every villager
+	# would greet you as someone they already know on the strength of the
+	# meeting currently happening.
+	var recognition := ConversationSources.recognition_of(sources, npc_id)
+	# ...and then write it. Talking is a real act (dialogue.md pillar 3): the
+	# villager witnesses having met you, so it can be gossiped, and the NEXT
+	# conversation opens warmer than this one did.
+	if _chunk_manager.has_method("record_conversation_with"):
+		_chunk_manager.record_conversation_with(npc_id)
+	var request := new_talk_request(frame)
+	if not request.is_empty():
+		request["recognition"] = recognition
+	return request
 
 
 ## Authority-only: on the rising edge of the build input, either places the

@@ -34,10 +34,18 @@ const NpcSeenLedger = preload("res://src/dialogue/npc_seen_ledger.gd")
 const CHOICE_MORE := "more"
 const CHOICE_LEAVE := "leave"
 
+## Where the player stands with this villager (see NpcRecognition). Carried on
+## the conversation because every beat is rendered AT a tier -- and until
+## NpcRecognition had a caller, every beat in the game was rendered at
+## stranger, so a villager you had spoken to nine times greeted you exactly
+## like one you had never met.
+const RECOGNITION_STRANGER := DialogueBeat.RECOGNITION_STRANGER
+
 var _frame: Dictionary = {}
 var _ledger: NpcSeenLedger = null
 var _bands: Dictionary = {}
 var _beat: Dictionary = {}
+var _recognition: String = RECOGNITION_STRANGER
 var _line: String = ""
 var _over := false
 ## Topics already said in THIS conversation. The ledger records them too (and
@@ -55,10 +63,13 @@ var _said: Dictionary = {}
 ## Returns `RefCounted` rather than a named type: nothing under src/dialogue/
 ## declares a `class_name` (see NpcSeenLedger.from_dict, which does the same),
 ## so the script cannot name itself.
-static func open(frame: Dictionary, ledger: NpcSeenLedger) -> RefCounted:
+static func open(
+	frame: Dictionary, ledger: NpcSeenLedger, recognition: String = RECOGNITION_STRANGER
+) -> RefCounted:
 	var talk = new()
 	talk._frame = frame
 	talk._ledger = ledger
+	talk._recognition = recognition
 	talk._bands = NpcVoice.register_for(frame.get("traits", {}))["bands"]
 	talk._advance()
 	return talk
@@ -135,15 +146,15 @@ func _advance() -> void:
 		# looped back to their loudest need forever would make the whole
 		# scored-topic layer invisible.
 		if _beat.is_empty():
-			_beat = DialogueBeat.build({}, _frame, _voice_key(), DialogueBeat.RECOGNITION_STRANGER)
+			_beat = DialogueBeat.build({}, _frame, _voice_key(), _recognition)
 			_line = OfflineRenderer.render(_beat, _bands)
 		else:
 			_line = OfflineRenderer.render(
-				DialogueBeat.build({}, _frame, _voice_key(), DialogueBeat.RECOGNITION_STRANGER), _bands
+				DialogueBeat.build({}, _frame, _voice_key(), _recognition), _bands
 			)
 		_over = true
 		return
-	_beat = DialogueBeat.build(move, _frame, _voice_key(), DialogueBeat.RECOGNITION_STRANGER)
+	_beat = DialogueBeat.build(move, _frame, _voice_key(), _recognition)
 	_line = OfflineRenderer.render(_beat, _bands)
 	_remember(String(move.get("topic_id", "")), now)
 

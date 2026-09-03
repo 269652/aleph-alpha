@@ -2535,7 +2535,11 @@ func _open_pending_conversation(local_player: Player) -> void:
 	local_player.pending_talk_request = {}
 	if _conversation_window == null or _conversation_window.is_open():
 		return
-	_conversation_window.open_with(Conversation.open(request["frame"], _npc_seen_ledger))
+	_conversation_window.open_with(Conversation.open(
+		request["frame"],
+		_npc_seen_ledger,
+		String(request.get("recognition", Conversation.RECOGNITION_STRANGER))
+	))
 
 
 func _build_conversation_window() -> void:

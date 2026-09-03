@@ -137,3 +137,37 @@ func test_the_hedge_reflects_how_they_know_it():
 ## A villager who saw it themselves does not hedge at all.
 func test_an_eyewitness_does_not_hedge():
 	assert_eq(OfflineRenderer.hedge_for("firsthand", 1.0), "")
+
+
+# -- recognition reaches the sentence ----------------------------------------
+
+
+## Someone who knows you does not open like a stranger. Recognition that never
+## reaches the words is bookkeeping -- and every beat in the game rendered at
+## `stranger` until NpcRecognition had a caller at all.
+func test_someone_who_knows_you_opens_differently():
+	var stranger := OfflineRenderer.render(_beat(), _bands())
+	var known := OfflineRenderer.render(
+		_beat({"speaker": {"name": "Bren", "recognition": "knows_you", "allowed_names": []}}), _bands()
+	)
+	assert_ne(stranger, known)
+
+
+## The core still survives it: familiarity changes the greeting, never what is
+## being said.
+func test_recognition_does_not_change_what_is_being_said():
+	for tier in ["stranger", "knows_you", "owed", "trusted", "disappointed"]:
+		var line := OfflineRenderer.render(
+			_beat({"speaker": {"name": "Bren", "recognition": tier, "allowed_names": []}}), _bands()
+		)
+		assert_string_contains(line, "rock", "the core was lost at tier %s" % tier)
+		assert_string_contains(line.to_lower(), "short")
+
+
+## Saying it AGAIN outranks knowing you: "Like I said" is the more specific
+## thing, and stacking both would read as a stranger who repeats themselves.
+func test_repeating_yourself_outranks_familiarity():
+	var known := _beat({"speaker": {"name": "Bren", "recognition": "knows_you", "allowed_names": []}})
+	var repeated := known.duplicate()
+	repeated["repeat"] = true
+	assert_ne(OfflineRenderer.render(known, _bands()), OfflineRenderer.render(repeated, _bands()))

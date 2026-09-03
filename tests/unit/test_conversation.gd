@@ -142,3 +142,26 @@ func test_two_villagers_do_not_sound_identical():
 		frame["traits"] = {"warmth": float(seed_value) / 12.0, "bluntness": 1.0 - float(seed_value) / 12.0}
 		lines[Conversation.open(frame, null).line()] = true
 	assert_gt(lines.size(), 1, "every villager in the world says it the same way")
+
+
+# -- recognition (dialogue.md pillar 3) --------------------------------------
+
+
+## A conversation is rendered AT a recognition tier, and it defaults to
+## stranger rather than silently assuming one -- which is what every beat did
+## before NpcRecognition had a caller.
+func test_a_conversation_carries_a_recognition_tier():
+	assert_eq(String(_open().beat()["speaker"]["recognition"]), Conversation.RECOGNITION_STRANGER)
+
+
+func test_a_conversation_can_be_opened_at_a_higher_tier():
+	var known = Conversation.open(_frame(), null, "knows_you")
+	assert_eq(String(known.beat()["speaker"]["recognition"]), "knows_you")
+
+
+## Someone who knows you does not greet you like a stranger. The tier has to
+## reach the sentence, or carrying it is bookkeeping.
+func test_being_known_changes_what_you_hear():
+	var stranger = Conversation.open(_frame(), null, Conversation.RECOGNITION_STRANGER)
+	var known = Conversation.open(_frame(), null, "knows_you")
+	assert_ne(stranger.line(), known.line(), "a villager who knows you sounds like one who does not")

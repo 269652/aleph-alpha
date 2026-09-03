@@ -265,11 +265,20 @@ says it is *"explicitly NOT the real Live Dialogue System."*
   `NpcSeenLedger`, `DialogueBeat`, `OfflineRenderer`.
 - 🚧 `ConversationWindow` — built and wired to the talk key; the typewriter
   reveal is not done (the line appears at once).
-- ⬜ `NpcRecognition`, player-conversation events, the rumor-vector loop.
-  `NpcRecognition` is built and has 29 tests and still no caller: every beat
-  is currently rendered at `RECOGNITION_STRANGER`, so pillar 3 ("the player is
-  a node in the graph") is the largest remaining gap. Nothing is written when
-  you talk, so recognition never advances past stranger.
+- ✅ `NpcRecognition` and player-conversation events (2026-09-03) — **pillar 3
+  is real**. Talking appends a `player_spoke_with` event naming both parties,
+  which the villager *witnesses* (so it can be gossiped), and the tier is read
+  back off the two stores that cannot be argued with: an append-only event log
+  and a contract's live status. It reaches the sentence — recognition changes
+  the **opener**, never what is being said, so familiarity changes how you are
+  addressed and not the facts. Precedence is most-specific-first: saying it
+  *again* outranks knowing you, because stacking both reads as a stranger who
+  repeats themselves. The tier is read *before* the conversation is recorded,
+  or every villager would greet you as an acquaintance on the strength of the
+  meeting currently happening.
+- ⬜ The rumor-vector loop: you do not yet *hold* a degraded memory of what a
+  villager tells you, so carrying news between settlements — dialogue.md's
+  mechanism 4, and the one no template can fake — is still unbuilt.
 - ⬜ `QuestOffer`, `QuestReward`, `NpcAsk`, contract propose/accept/fulfil/lapse.
 - ⬜ **Not planned in this pass:** any LLM provider, settings tab, network code
   or baked phrasing pack. The seam above is documented, not implemented.

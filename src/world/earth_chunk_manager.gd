@@ -2824,6 +2824,28 @@ func household_count_for_settlement(settlement_id: String) -> int:
 ## flag (`World._scarred_tiles`, not persisted) -- so a fresh reload, which
 ## resets that in-memory flag but not the event store, cannot record a
 ## duplicate founding for a path already known to be worn.
+## Records that the player and this villager actually spoke
+## (docs/concept/dialogue.md pillar 3: "the player is a node in the graph, not
+## a camera" -- talking is a real act that writes real state).
+##
+## One event per CONVERSATION rather than per sentence: a villager you asked
+## three questions of has met you once. Both parties are actors, because
+## NpcRecognition reads the shared history between them -- and the villager
+## witnesses it, so it can be gossiped, which is what eventually makes a
+## stranger two settlements away greet you as someone they have heard of.
+const CONVERSATION_EVENT := "player_spoke_with"
+
+
+func record_conversation_with(npc_id: String) -> void:
+	if npc_id.is_empty():
+		return
+	var event := Event.new(CONVERSATION_EVENT, _world_age_seconds)
+	event.actors.append(PlayerIdentity.PLAYER_ENTITY_ID)
+	event.actors.append(npc_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+
+
 func record_path_worn_if_new(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
 	var history := _event_store.events_for_entity(path_id)

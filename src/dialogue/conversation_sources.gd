@@ -12,6 +12,7 @@ extends RefCounted
 ## substituting a stand-in.
 
 const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
+const NpcRecognition = preload("res://src/dialogue/npc_recognition.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 ## Every key `DialogueContext.build` reads. Stated explicitly, and pinned by
@@ -20,7 +21,8 @@ const SeasonCycle = preload("res://src/world/season_cycle.gd")
 ## passed is a topic that silently stops being available, and an always-empty
 ## topic is exactly the substrate bug pillar 2 exists to surface.
 const SOURCE_KEYS: Array[String] = [
-	"identity", "economy", "memory_store", "event_store", "settlement_id",
+	"identity", "economy", "memory_store", "event_store", "contract_store",
+	"settlement_id",
 	"market", "village_market", "item_catalog", "household_count",
 	"active_institutions", "production_counts", "shortfalls",
 	"co_present_identities", "season", "weather", "snow_depth",
@@ -43,6 +45,11 @@ static func gather(
 		"economy": _call(chunk_manager, "npc_economy", []),
 		"memory_store": _call(chunk_manager, "memory_store", []),
 		"event_store": _call(chunk_manager, "event_store", []),
+		# Recognition's floor comes from the two stores that cannot be argued
+		# with -- an append-only event log and a contract's live status --
+		# rather than from anyone's MEMORY of them, which the gossip step can
+		# talk a villager out of. See NpcRecognition's own header.
+		"contract_store": _call(chunk_manager, "contract_store", []),
 		"settlement_id": settlement_id,
 		"market": _call(chunk_manager, "market_for_settlement", [settlement_id]),
 		"village_market": null,
@@ -98,3 +105,18 @@ static func _npc_position(identity) -> Vector2:
 static func _co_present(chunk_manager, identity) -> Array:
 	var found = _call(chunk_manager, "co_present_identities_near", [_npc_position(identity)])
 	return found if found is Array else []
+
+
+## Where the player stands with this villager (see NpcRecognition, and
+## dialogue.md pillar 3: "the player is a node in the graph, not a camera").
+##
+## Reads STRANGER for an unwired world, which is the honest answer: no history
+## recorded is exactly what a stranger is.
+static func recognition_of(sources: Dictionary, npc_id: String) -> String:
+	return String(NpcRecognition.tier_for({
+		"npc_id": npc_id,
+		"player_id": String(sources.get("player_id", PlayerIdentity.PLAYER_ENTITY_ID)),
+		"event_store": sources.get("event_store"),
+		"contract_store": sources.get("contract_store"),
+		"memories": sources.get("memories", []),
+	})["tier"])

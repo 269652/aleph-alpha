@@ -51,6 +51,19 @@ const ASIDES := {
 ## `repeat` flag is what makes a second telling read as one.
 const REPEAT_OPENERS := ["Like I said -- ", "As I told you, ", "Again: "]
 
+## How the opener changes with how well they know you (see NpcRecognition).
+##
+## Recognition that never reaches the words is bookkeeping -- and every beat in
+## the game rendered at `stranger` until NpcRecognition had a caller at all.
+## Only the GREETING moves: familiarity changes how you are addressed, never
+## what is being said, which is why these are openers rather than templates.
+const RECOGNITION_OPENERS := {
+	"knows_you": ["Oh -- you again. ", "You're back. "],
+	"owed": ["There you are. ", "I've been hoping you'd come by. "],
+	"trusted": ["Good to see you. ", "Ah, it's you. "],
+	"disappointed": ["...You. ", "Hm. You. "],
+}
+
 ## How a speaker marks what they are not sure of, by how they came to know it.
 ##
 ## Straight off the memory's real `source_type` and `confidence` -- the doc's
@@ -85,9 +98,14 @@ static func render(beat: Dictionary, bands: Dictionary) -> String:
 	var bluntness := String(bands.get("bluntness", "mid"))
 	var verbosity := String(bands.get("verbosity", "mid"))
 	var seed_value := int(beat.get("variant_seed", 0))
+	# Most specific first. Saying it AGAIN outranks knowing you -- stacking both
+	# would read as a stranger who repeats themselves.
 	var opener := ""
+	var recognition := String(beat.get("speaker", {}).get("recognition", ""))
 	if bool(beat.get("repeat", false)):
 		opener = _pick(REPEAT_OPENERS, seed_value)
+	elif RECOGNITION_OPENERS.has(recognition):
+		opener = _pick(RECOGNITION_OPENERS[recognition], seed_value)
 	else:
 		opener = _pick(OPENERS[verbosity], seed_value) if OPENERS.has(verbosity) else ""
 	# Bluntness cuts the softeners, whatever verbosity put there.
