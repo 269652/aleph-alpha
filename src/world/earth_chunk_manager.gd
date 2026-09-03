@@ -3449,12 +3449,26 @@ func _sync_flow_boulder(tile: Vector2i) -> void:
 ## One texel of the flow map, written toroidally -- see _flow_across_image.
 ## Carries the WHOLE per-tile reconstruction frame as REAL floats
 ## (FORMAT_RGBAF, no encode range): R the signed across-fraction, GB the
-## course's downstream unit vector (same sin/-cos convention the atlas
-## sprite bakes), A the real solved current speed in m/s -- so the shader
-## interpolates direction and speed bilinearly exactly like across, and no
-## per-tile quantity is left to draw the tile grid.
+## course's downstream unit vector SCALED BY half_width_tiles (same
+## sin/-cos convention the atlas sprite bakes; a unit vector's own length
+## carries no information, so its magnitude is repurposed to carry the
+## tile's real local half-width rather than spending a fifth channel on
+## it), A the real solved current speed in m/s -- so the shader
+## interpolates direction, half-width and speed bilinearly exactly like
+## across, and no per-tile quantity is left to draw the tile grid.
+##
+## The local half-width matters beyond drawing the channel: a boulder's or
+## a ripple's push is computed in real pixels and then divided by the
+## half-width to become a fraction of the channel's own width. Before this
+## the shader divided by one FIXED uniform (the curated rivers' constant
+## 2.0 tiles) regardless of the actual reach -- a hydrology channel's width
+## now runs 0.5 to 6 tiles, so a wide bend's true half-width was
+## understated by up to 3x and every ripple/boulder push landed 3x
+## stronger, relative to that reach, than intended. Reported as "artifacts
+## in curves" (wide bends are exactly where a river slows, gathers fish,
+## and gets many overlapping ripples).
 func _write_flow_across_texel(
-	global: Vector2i, across_fraction: float, bearing_deg: float, speed_mps: float
+	global: Vector2i, across_fraction: float, bearing_deg: float, speed_mps: float, half_width_tiles: float
 ) -> void:
 	if _flow_across_image == null:
 		var side := RiverFlowShader.FLOW_MAP_TILES
@@ -3463,7 +3477,9 @@ func _write_flow_across_texel(
 	var radians := deg_to_rad(bearing_deg)
 	_flow_across_image.set_pixel(
 		posmod(global.x, side), posmod(global.y, side),
-		Color(across_fraction, sin(radians), -cos(radians), speed_mps)
+		Color(
+			across_fraction, sin(radians) * half_width_tiles, -cos(radians) * half_width_tiles, speed_mps
+		)
 	)
 
 
@@ -3845,7 +3861,10 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 				# mouth's bearing and a fading speed, so the flow lines
 				# continue out of the mouth and settle into ripples.
 				var plume_speed: float = HydrologyField.PLUME_SPEED_M_S * probe["plume_factor"]
-				_write_flow_across_texel(global, still_across, probe["plume_bearing_deg"], plume_speed)
+				_write_flow_across_texel(
+					global, still_across, probe["plume_bearing_deg"], plume_speed,
+					RiverCatalog.RIVER_HALF_WIDTH_TILES
+				)
 				_river_flow_boulder_tiles.erase(global)
 				_river_flow_layer.set_cell(
 					global, 0,
@@ -3884,7 +3903,8 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 					global,
 					nearest.signed_across_tiles / half_width,
 					nearest.course_bearing_deg,
-					apron_hydraulics.velocity_m_s
+					apron_hydraulics.velocity_m_s,
+					half_width
 				)
 				continue
 
@@ -3899,7 +3919,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			var across_fraction: float = nearest.signed_across_tiles / half_width
 			_write_flow_across_texel(
 				global, across_fraction,
-				nearest.course_bearing_deg, hydraulics.velocity_m_s
+				nearest.course_bearing_deg, hydraulics.velocity_m_s, half_width
 			)
 			if flow_boulder_at_global(global.x, global.y):
 				_river_flow_boulder_tiles[global] = true

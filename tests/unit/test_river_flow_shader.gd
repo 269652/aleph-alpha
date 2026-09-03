@@ -1469,6 +1469,55 @@ func test_a_ring_bends_strokes_without_adding_any():
 	assert_lt(steepest_across_per_px, RiverFlowShader.CHANNEL_ACROSS_GRADIENT_PER_PX * 0.5)
 
 
+## A dozen fish flapping at one bend must never compound past what ONE
+## ring alone can do: found in play as dense fanned lines at a bend and
+## unexplained round bumps on the bank ("artifacts in curves",
+## "semispheres on the edge") once several rings landed on the same
+## fragments and summed straight into the across field.
+func test_many_overlapping_rings_never_exceed_one_rings_own_push():
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"ripple_push_px = clamp(ripple_push_px, -ripple_amplitude_px, ripple_amplitude_px);"
+	))
+
+
+## A ring must never itself be what pushes a fragment past the real
+## waterline -- the bank curve is drawn by frag_across crossing 1.0, and a
+## ring reaching it without this fade bulged that very line into a round
+## bump with no visible source object (the "semisphere" reported at the
+## edge). The fade reads frag_across BEFORE any ripple is added.
+func test_ripples_fade_out_before_they_reach_the_bank():
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"float bank_fade = 1.0 - smoothstep(0.7, 1.0, abs(frag_across));"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"frag_across += ripple_push_px * bank_fade / (half_width_local * tile_px);"
+	))
+
+
+## The tile's REAL local half-width, not the fixed uniform, must decide
+## how strongly a boulder/wader/ripple push bends the strokes: a fixed
+## divisor understated a wide hydrology reach's true width by up to 3x
+## (the catalog's curated constant, 2.0 tiles, against hydrology's up to
+## 6), so the same physical push landed up to 3x stronger, relative to
+## that reach, than intended -- reported in play as "artifacts in
+## curves", wide bends being exactly where a river slows and gathers
+## fish. The width now rides the direction vector's own magnitude
+## (a direction's length otherwise carries no information).
+func test_boulder_wader_and_ripple_pushes_divide_by_the_real_local_width():
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"float half_width_local = max(length(map_data.gb), 0.05);"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("vec2 flow_dir = map_data.gb / half_width_local;"))
+	assert_eq(
+		RiverFlowShader.SHADER_CODE.count("/ (half_width_local * tile_px)"), 3,
+		"boulder, wader and ripple must all divide by the LOCAL width"
+	)
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("/ (half_width_tiles * tile_px)"),
+		"none of the three may still read the fixed uniform"
+	)
+
+
 ## Fish join the player and the animals as waders, and in still water the
 ## wake must ring the wader instead of trailing "downstream".
 func test_waders_have_room_for_fish_and_ring_still_water():

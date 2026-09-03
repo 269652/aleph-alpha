@@ -75,6 +75,12 @@ uniform float eddy_swirl = 0.0;
 uniform float bank_shear = 0.25;
 uniform sampler2D flow_across_map : filter_linear, repeat_enable;
 uniform float flow_map_tiles = 256.0;
+## No longer read inside fragment(): every per-fragment normalization now
+## decodes the tile's REAL local half-width from the direction vector's own
+## magnitude (see map_data's doc comment below). Kept declared, with its
+## default still set from _apply_defaults, only so nothing external
+## resolving this material's parameters by name breaks; harmless as an
+## unused uniform.
 uniform float half_width_tiles = 2.0;
 uniform float tile_px = 16.0;
 uniform float bank_feather = 0.03;
@@ -200,14 +206,26 @@ void fragment() {
 	// loaded chunk overwrites the stale block its coordinates alias to.
 	vec2 map_uv = (wp / tile_px) / flow_map_tiles;
 	// The texel carries the WHOLE reconstruction frame -- across (R), the
-	// course's downstream unit vector (GB, raw signed floats) and the real
-	// solved current speed in m/s (A) -- so direction and speed interpolate
-	// between tiles exactly like across does. Per-tile direction bins and
-	// the binary fast flag were the last square-tile artefacts ("there are
-	// still individual square river tiles visible").
+	// course's downstream direction (GB) and the real solved current speed
+	// in m/s (A) -- so direction and speed interpolate between tiles
+	// exactly like across does. Per-tile direction bins and the binary
+	// fast flag were the last square-tile artefacts ("there are still
+	// individual square river tiles visible").
+	//
+	// GB is NOT a unit vector: a direction's own length carries no
+	// information, so its magnitude is spent carrying the tile's REAL
+	// local half-width in tiles instead of a fifth channel. Every
+	// boulder/wader/ripple push below is computed in real pixels and must
+	// divide by THIS local width, not a single fixed guess -- a fixed
+	// divisor (the curated rivers' constant 2.0 tiles) understated a wide
+	// hydrology reach's true half-width by up to 3x, so the same push
+	// landed 3x stronger, relative to that reach, than intended ("artifacts
+	// in curves": a wide bend is exactly where a river slows, gathers
+	// fish, and racks up overlapping ripples).
 	vec4 map_data = texture(flow_across_map, map_uv);
 	float frag_across = map_data.r;
-	vec2 flow_dir = normalize(map_data.gb + vec2(1e-6, 0.0));
+	float half_width_local = max(length(map_data.gb), 0.05);
+	vec2 flow_dir = map_data.gb / half_width_local;
 	vec2 flow_perp = vec2(-flow_dir.y, flow_dir.x);
 	float speed_mps = map_data.a;
 	float is_fast = step(fast_flow_m_s, speed_mps);
@@ -258,7 +276,7 @@ void fragment() {
 			0.0, 1.0);
 		envelope *= envelope;
 		float side = lateral >= 0.0 ? 1.0 : -1.0;
-		frag_across += side * displaced * envelope / (half_width_tiles * tile_px);
+		frag_across += side * displaced * envelope / (half_width_local * tile_px);
 		eyot_dry = min(eyot_dry, smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d));
 	}
 	// The waders -- player AND creatures: the same round-core displacement
@@ -284,13 +302,28 @@ void fragment() {
 			(d - wader_radius_px) / max(reach - wader_radius_px, 0.001), 0.0, 1.0);
 		envelope *= envelope;
 		float side = lateral >= 0.0 ? 1.0 : -1.0;
-		frag_across += side * displaced * envelope / (half_width_tiles * tile_px);
+		frag_across += side * displaced * envelope / (half_width_local * tile_px);
 	}
 	// RIPPLE RINGS -- the reimplementation of the old overlay's disturbance
 	// rings inside the contour system: each ring is a Gaussian band of
 	// across-displacement travelling outward at ripple_speed_px and fading
 	// over ripple_lifetime, so every stroke it crosses bulges away from the
 	// source and the same push that bends a river's lines rings a pond.
+	//
+	// A dozen fish flapping near one bend land a dozen rings on the same
+	// few fragments; summed and added straight into frag_across the way a
+	// single ring is, they blew well past the channel's own gradient and
+	// filled the bend with dense fanned contour lines, and a ring reaching
+	// the bank bulged the WATERLINE itself into a round bump with no
+	// visible cause -- reported as "artifacts in curves" and "semispheres
+	// on the edge". Fixed two ways: every ring's push is summed in its own
+	// accumulator and the SUM is clamped to one ring's own amplitude
+	// (many overlapping rings still cap at what one ring alone can do),
+	// and the whole clamped push fades to zero as the fragment nears the
+	// bank (gated on frag_across BEFORE any ripple, so a ring can perturb
+	// open water but can never itself be what pushes a fragment out past
+	// the real waterline).
+	float ripple_push_px = 0.0;
 	for (int i = 0; i < ripple_count; i++) {
 		vec2 to_frag = wp - ripples[i].xy;
 		float age = TIME - ripples[i].z;
@@ -302,8 +335,11 @@ void fragment() {
 		float band = (d - radius) / ripple_width_px;
 		float push = exp(-band * band) * (1.0 - age / ripple_lifetime) * ripple_amplitude_px;
 		float side = dot(to_frag, flow_perp) >= 0.0 ? 1.0 : -1.0;
-		frag_across += side * push / (half_width_tiles * tile_px);
+		ripple_push_px += side * push;
 	}
+	ripple_push_px = clamp(ripple_push_px, -ripple_amplitude_px, ripple_amplitude_px);
+	float bank_fade = 1.0 - smoothstep(0.7, 1.0, abs(frag_across));
+	frag_across += ripple_push_px * bank_fade / (half_width_local * tile_px);
 	float rr = abs(frag_across);
 	float depth_frac = clamp(1.0 - rr * rr, 0.0, 1.0);
 
