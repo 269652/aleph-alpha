@@ -3675,6 +3675,19 @@ describes:
   Not built: repair, tool-use wear, wear beyond the three modeled weapons, a
   tooltip line, rarity-driven wear resistance -- all named explicitly in the
   concept doc's own Status section rather than left implicit.
+- **Composite item sheet: attack/defense/condition, wooden_club pilot**
+  (small) — ✅ Spec'd (2026-09-03), ⬜ nothing generated/wired —
+  `item_illustrations.md`'s per-item swing art was flatly "Deferred, not
+  needed" until this pass; now that block.gd (defense) and item_durability.md
+  (worn/broken) both give it something real to draw, `wooden_club` is spec'd
+  as the concrete pilot: one sheet, two rows (an 8-frame attack cycle, a
+  3-cell defense/worn/broken row), item-alone art with no hand/arm (same
+  convention section 2f's held-crop item prompts already use), wired the
+  same `_SHEETS`/`has_action` shape `IllustratedAnimalSprite` already uses.
+  `ai_sprite_prompts.md` §11 adds the four ready-to-run generation prompts.
+  Deliberately one item, not the whole catalog -- iron_sword/crude_blade
+  (the only other items item_durability.md covers) are the named next step
+  once this shape is validated, not attempted here.
 - **Spell Gem Rarity Derivation** (medium) — 🚧 Partial — `rarity_tier.gd`'s
   `tier_from_complexity(complexity)` derives a tier straight from a numeric
   complexity/cost score (e.g. `spell_cost.gd`'s `derived_base()`), reusing the

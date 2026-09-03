@@ -1309,6 +1309,90 @@ art exists.
 
 ---
 
+## 11. Item combat sheets — attack, defense, condition (2026-09-03)
+
+The pilot [item_illustrations.md](../concept/item_illustrations.md#combat-sheets-attack-defense-condition--wooden_club)
+specs: `wooden_club` alone, proving the shape before `iron_sword`/
+`crude_blade` (the only other items [item_durability.md](../concept/item_durability.md)
+covers) or the rest of the catalog follow it. Every frame below is the
+**object alone — no hand, no arm, no character** — same convention as
+section 2f's held-crop prompts; the engine composes it onto whichever
+facing/pose the character is already in.
+
+### 11a. Attack cycle, 8 frames
+
+**Prefix with the shared style preamble**, plus this addendum (the same
+wind-up/release/recovery beat section 6's boss attack cycles use, scaled
+down for a hand-sized object rather than a full creature):
+
+> Lay out an 8-frame attack-swing cycle in a single horizontal row — a clear
+> wind-up (frames 1-3), a release/peak (frames 4-5), and a follow-through/
+> recovery (frames 6-8) — each frame separated by a thin 1-2px near-white
+> divider line, generous empty magenta padding around each pose so nothing
+> touches a divider or the canvas edge. Frames do not need uniform width.
+> Export at least 1600px wide by 300px tall for the row. The object reads
+> at a consistent scale and pivot point across all 8 frames — it should not
+> grow, shrink, or drift, only rotate/swing around a fixed grip point near
+> one end. [ingestion format]
+
+> A pixel-art attack-swing cycle of a WOODEN CLUB ALONE — no hand, no arm,
+> no character, just the object — a plain stout wooden haft with no blade,
+> warm brown wood, subtle grain texture. It winds up by rotating back and up
+> around a fixed grip point near its narrow end (frames 1-3), whips forward
+> through a fast arcing swing to full extension (frames 4-5, the peak of the
+> arc — a few short motion-blur-style speed lines trailing it, flat
+> posterized style, not a soft blur), then settles back toward a neutral
+> ready position (frames 6-8).
+
+### 11b. Defense pose, single frame
+
+> A single pixel-art sprite of a WOODEN CLUB ALONE — no hand, no arm, no
+> character — held up in a raised guard/blocking orientation, angled
+> diagonally across the frame as if warding off a blow rather than resting
+> or swinging. Same plain stout wooden haft, warm brown wood, subtle grain
+> texture, matching the attack cycle's own design exactly. Isolated subject,
+> generous empty magenta padding, nothing touching the canvas edge.
+
+### 11c. Worn condition, single frame
+
+> A single pixel-art sprite of a WOODEN CLUB ALONE, showing real accumulated
+> wear from hard use — same plain haft shape and warm brown wood as the
+> pristine version, but with visible surface scuffing, a few small chips and
+> dents along the striking end, and the grain roughened rather than smooth.
+> Not broken or splintered — still clearly a whole, usable club, just
+> visibly worked hard. Isolated subject, generous empty magenta padding,
+> nothing touching the canvas edge.
+
+### 11d. Broken condition, single frame
+
+> A single pixel-art sprite of a WOODEN CLUB ALONE, now broken from
+> accumulated fatigue — a real crack running most of the way through the
+> haft near its midpoint, the wood visibly splintered and separated along
+> the crack, though the two halves still hang together as one object (not
+> two separate pieces), pale raw broken wood showing at the fracture line
+> against the haft's darker worn surface. Reads unmistakably as "this no
+> longer works" without literally falling apart into pieces. Isolated
+> subject, generous empty magenta padding, nothing touching the canvas edge.
+
+### File naming + wiring, once generated
+
+```
+assets/sprites/items/wooden_club_combat.png
+```
+
+A new folder (`assets/sprites/items/`) — the first item art of any kind to
+actually exist as a file rather than be procedurally generated, so nothing
+existing fits. Wiring needs a new `IllustratedItemSprite`
+(`src/rendering/illustrated_item_sprite.gd`), mirroring
+`IllustratedAnimalSprite`'s `_SHEETS`/`has_action` shape with
+`attack_bands`/`attack_path` for row 1 and a new `condition_bands`/
+`condition_path` pair for row 2 (defense/worn/broken by fixed index) — see
+[item_illustrations.md](../concept/item_illustrations.md#combat-sheets-attack-defense-condition--wooden_club)
+for the full spec. Not attempted here: same TDD-needs-real-pixels reason
+every other pending illustrated surface in this doc gives.
+
+---
+
 ## Notes for whoever runs these
 
 - Run the flower archetype sheets (1b) at pale/neutral tone as specified —
