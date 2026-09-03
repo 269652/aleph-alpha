@@ -2044,11 +2044,11 @@ func _wander_step(delta: float) -> void:
 	# picked -- sideways or backwards, from the sprite's own point of view,
 	# whenever that direction opposed its current heading.
 	# _wander_radius() is a PER-CALL override (juvenile vs adult, see that
-	# function's own doc comment) -- direction_at itself takes no radius
-	# argument, it reads the shared _wander instance's own wander_radius
-	# property (see CreatureWander's "Per-instance override" doc comment),
-	# so the override has to land there first.
-	_wander.wander_radius = _wander_radius()
+	# function's own doc comment), passed straight through as direction_at's
+	# own radius argument (see CreatureWander.direction_at's doc comment) --
+	# unlike FishMarker.configure_wander's persistent override, this value
+	# changes every step as a juvenile grows, so it has no business being
+	# written into the shared _wander instance's wander_radius field.
 	# direction_at (not the higher-level step_position convenience) so the
 	# heading can be leaned toward an active carry direction below BEFORE it
 	# becomes a position delta -- exactly how AmbientFlyerMarker blends
@@ -2057,7 +2057,7 @@ func _wander_step(delta: float) -> void:
 	# at once (see carried_seed_direction's own doc comment), so each active
 	# one gets its own sequential lean, the same "chain multiple steers"
 	# shape AmbientFlyerMarker already uses for its carry-then-scent blend.
-	var heading := _wander.direction_at(home, position, _elapsed_time, wander_seed)
+	var heading := _wander.direction_at(home, position, _elapsed_time, wander_seed, _wander_radius())
 	heading = _leaned_toward_carry(heading, carried_seed_direction)
 	heading = _leaned_toward_carry(heading, carried_grass_seed_direction)
 	heading = _leaned_toward_carry(heading, carried_nut_direction)
