@@ -1418,6 +1418,18 @@ func test_still_water_ripples_without_flowing():
 	assert_lt(RiverFlowShader.STILL_RIPPLE, 0.5)
 
 
+## Eddies curl the smear and strengthen toward the banks ("whirly
+## turbulences in curves"); both stay bounded so the field never folds.
+func test_eddies_swirl_the_smear_and_strengthen_at_the_banks():
+	assert_gt(RiverFlowShader.EDDY_SWIRL, 0.0)
+	assert_lt(RiverFlowShader.EDDY_SWIRL, 1.0)
+	assert_gt(RiverFlowShader.BANK_SHEAR, 0.0)
+	assert_true(RiverFlowShader.SHADER_CODE.contains("vec2 swirl_dir = normalize(flow_dir + flow_perp * (bend * eddy_swirl));"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("float shear = 1.0 + bank_shear * clamp(abs(frag_across), 0.0, 1.0);"))
+	var material := flow.shared_material()
+	assert_almost_eq(float(material.get_shader_parameter("eddy_swirl")), RiverFlowShader.EDDY_SWIRL, 1e-9)
+
+
 ## Disturbance rings live in the contour system now (the old overlay's
 ## rings vanished with it): a ring travels outward, peaks on its own
 ## radius, and is gone after its lifetime.

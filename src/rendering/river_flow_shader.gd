@@ -71,6 +71,8 @@ uniform float smear_gain = 2.0;
 uniform float turbulence_strength = 1.6;
 uniform float eddy_scale = 0.16;
 uniform float eddy_detail_weight = 0.7;
+uniform float eddy_swirl = 0.35;
+uniform float bank_shear = 0.6;
 uniform sampler2D flow_across_map : filter_linear, repeat_enable;
 uniform float flow_map_tiles = 256.0;
 uniform float half_width_tiles = 2.0;
@@ -344,10 +346,21 @@ void fragment() {
 	// Two octaves: the coarse one swings whole bundles of lines, the fine
 	// one puts kinks WITHIN a line's own length.
 	vec2 eddy_p = p * eddy_scale;
+	// Shear lives at the banks: real eddies shed where the fast core
+	// meets the slow margin, so the standing turbulence grows from the
+	// centreline (|across| 0) toward the waterline (|across| 1) by
+	// bank_shear -- bends, whose outer banks are where |across| sweeps
+	// through the water, come out whirlier than straight reaches.
+	float shear = 1.0 + bank_shear * clamp(abs(frag_across), 0.0, 1.0);
 	float bend = (value_noise(eddy_p) - 0.5
 		+ (value_noise(eddy_p * 2.6 + vec2(19.7, 7.3)) - 0.5) * eddy_detail_weight)
-		* turbulence_strength;
+		* turbulence_strength * shear;
 	vec2 q = p + flow_perp * bend;
+	// The eddies also SWIRL the smear direction, not only shift the field
+	// sideways: a stroke smeared along a locally rotated direction curls
+	// through the boil instead of stepping across it ("more natural
+	// whirly turbulences in curves").
+	vec2 swirl_dir = normalize(flow_dir + flow_perp * (bend * eddy_swirl));
 
 	// The drag is purely DOWNSTREAM -- water is carried along the channel,
 	// never sideways across it. On top of the bounded two-phase morph, a
@@ -362,8 +375,8 @@ void fragment() {
 	float blend = abs(1.0 - 2.0 * phase_a);
 	float n;
 	if (moving > 0.5) {
-		float sample_a = line_field(q - flow_dir * (advect_strength * phase_a * advect_gate + drift), flow_dir);
-		float sample_b = line_field(q - flow_dir * (advect_strength * phase_b * advect_gate + drift), flow_dir);
+		float sample_a = line_field(q - flow_dir * (advect_strength * phase_a * advect_gate + drift), swirl_dir);
+		float sample_b = line_field(q - flow_dir * (advect_strength * phase_b * advect_gate + drift), swirl_dir);
 		n = mix(sample_a, sample_b, blend);
 	} else {
 		// STILL WATER'S CHEAP PATH: the sea and every lake are most of
@@ -740,6 +753,8 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("ripple_width_px", RIPPLE_WIDTH_PX)
 	material.set_shader_parameter("ripple_amplitude_px", RIPPLE_AMPLITUDE_PX)
 	material.set_shader_parameter("ripple_lifetime", RIPPLE_LIFETIME)
+	material.set_shader_parameter("eddy_swirl", EDDY_SWIRL)
+	material.set_shader_parameter("bank_shear", BANK_SHEAR)
 	material.set_shader_parameter("bank_feather", BANK_FEATHER)
 	material.set_shader_parameter("across_jitter", ACROSS_JITTER)
 	material.set_shader_parameter("jitter_scale", JITTER_SCALE)
@@ -935,6 +950,14 @@ const STILL_RIPPLE := 0.25
 ## and is gone after RIPPLE_LIFETIME seconds -- about three tiles of
 ## travel, a pond ring, not a wave. RIPPLE_SLOTS rings live at once; the
 ## oldest is dropped first.
+## Whirl (third playtest, "more natural whirly turbulences in curves"):
+## the standing eddies rotate the stroke smear by up to EDDY_SWIRL of the
+## bend, so lines curl through a boil, and turbulence grows by BANK_SHEAR
+## from the centreline to the waterline, where real shear sheds eddies --
+## and where a bend's outer bank sweeps the water.
+const EDDY_SWIRL := 0.35
+const BANK_SHEAR := 0.6
+
 const RIPPLE_SLOTS := 24
 const RIPPLE_SPEED_PX := 18.0
 const RIPPLE_WIDTH_PX := 4.0

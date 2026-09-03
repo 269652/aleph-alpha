@@ -74,9 +74,12 @@ const DEPTH_EXPONENT := 0.4
 const SPRING_HALF_WIDTH_TILES := 0.3
 
 ## How many straight pieces each cell's Bezier is sampled into for the
-## distance query. Six keeps the corner error under a tenth of a tile on a
-## right-angle turn between cells ten tiles apart.
-const CURVE_SEGMENTS := 6
+## distance query. The across field the strokes are contours of inherits
+## a kink at every joint, and six pieces per ten-tile cell drew visible
+## zig-zags along every bend (third playtest); twenty-four puts a joint
+## well under every tile, and the curve is cached per cell so the cost
+## is paid once.
+const CURVE_SEGMENTS := 24
 
 ## The valley: fine detail is fully suppressed on the channel, ramps back
 ## to full over this many tiles beyond the channel's edge, and the ground

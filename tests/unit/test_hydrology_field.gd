@@ -314,11 +314,13 @@ func test_a_right_angle_corner_is_rounded_not_cut():
 		nearest_to_corner = minf(nearest_to_corner, point.distance_to(center))
 	assert_gt(nearest_to_corner, 1.0, "the corner is cut off, not visited")
 	# And the turn is gradual: no two consecutive pieces differ by more
-	# than a quarter of the whole ninety-degree turn.
+	# than a few degrees, so the across field the strokes are contours of
+	# has no joint a tile could see (the zig-zag artefact).
+	assert_gte(HydrologyField.CURVE_SEGMENTS, 20)
 	for i in range(1, curve.size() - 1):
 		var a := (curve[i] - curve[i - 1]).normalized()
 		var b := (curve[i + 1] - curve[i]).normalized()
-		assert_lt(absf(a.angle_to(b)), PI / 8.0 + 1e-6)
+		assert_lt(absf(a.angle_to(b)), deg_to_rad(6.0))
 
 
 ## --- lakes as a shoreline field (the same across the river bank uses) ---
