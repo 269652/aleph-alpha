@@ -3738,8 +3738,11 @@ func _paint_water_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# overlay as still water, so their shoreline is the same smooth
 			# elevation contour a river bank gets (first playtest: this
 			# overlay's square tiles read as "a very different art style").
-			var is_water: bool = chunk.biome[y * chunk.width + x] == "ocean"
-			if not is_water:
+			# That includes a below-sea-level pocket the bake flagged as an
+			# inland sea: ocean by biome, lake by flag, drawn as a lake.
+			var cell_index := y * chunk.width + x
+			var is_water: bool = chunk.biome[cell_index] == "ocean"
+			if not is_water or chunk.blocks_ground_cover(cell_index):
 				continue
 			var land_directions := _land_directions_at(global.x, global.y)
 			# Only search farther rings when nothing touches land directly --

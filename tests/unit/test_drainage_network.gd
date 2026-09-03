@@ -208,6 +208,39 @@ func test_dropping_depressions_unlabels_their_cells_and_keeps_ids_dense():
 	assert_eq(network.depressions[0]["cell_count"], 6)
 
 
+func test_an_inland_sea_pocket_is_a_lake_at_sea_level_and_the_ocean_is_not():
+	# The sea row along the top is the ocean. Two below-sea-level cells
+	# enclosed by land are a pocket the flood treats as sea but the world
+	# should draw as a lake: real estuary marshes read this way in the
+	# asset, and the first playtest saw them as blocky ocean squares.
+	var heights := _grid(9, 7, 0.8)
+	for x in 9:
+		heights[x] = 0.2
+	heights[4 * 9 + 4] = 0.45
+	heights[4 * 9 + 5] = 0.45
+	var network = DrainageNetwork.new().build(heights, 9, 7, SEA_LEVEL)
+	assert_eq(network.depressions.size(), 1)
+	var pocket: Dictionary = network.depressions[0]
+	assert_true(pocket["inland_sea"])
+	assert_eq(pocket["cell_count"], 2)
+	assert_almost_eq(pocket["spill_elevation"], SEA_LEVEL, 1e-9, "its surface is sea level")
+	assert_almost_eq(pocket["floor_elevation"], 0.45, 1e-6)
+	assert_eq(network.depression_id[4 * 9 + 4], 0)
+	assert_eq(network.depression_id[3], DrainageNetwork.NO_DEPRESSION, "the ocean is never a lake")
+	assert_true(network.is_sea(4 * 9 + 4), "still sea to the routing")
+
+
+func test_an_inland_sea_pocket_respects_the_minimum_cell_count():
+	var heights := _grid(9, 7, 0.8)
+	for x in 9:
+		heights[x] = 0.2
+	heights[4 * 9 + 4] = 0.45
+	var network = DrainageNetwork.new().build(
+		heights, 9, 7, SEA_LEVEL, false, DrainageNetwork.DEFAULT_MIN_DEPRESSION_DEPTH, 2
+	)
+	assert_eq(network.depressions.size(), 0)
+
+
 func test_weighted_accumulation_with_unit_weights_matches_the_cell_count():
 	var network = DrainageNetwork.new().build(_crater_with_north_notch(), 7, 7, SEA_LEVEL)
 	var weights := _grid(7, 7, 1.0)

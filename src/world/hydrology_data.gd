@@ -134,6 +134,7 @@ func load_from(directory: String = DEFAULT_DIRECTORY) -> bool:
 			"spill_elevation": float(depression["spill_elevation"]),
 			"spill_index": int(depression["spill_index"]),
 			"floor_elevation": float(depression["floor_elevation"]),
+			"inland_sea": bool(depression.get("inland_sea", false)),
 		})
 	var count := width * height
 	flow_direction = _read(directory.path_join(FLOW_FILE), count)

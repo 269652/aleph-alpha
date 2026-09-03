@@ -32,6 +32,31 @@ func _initialize() -> void:
 		nearest.name, nearest.distance_tiles, nearest.course_bearing_deg, nearest.signed_across_tiles
 	])
 	print("hydraulics: %s" % generator.river_hydraulics_at_global(spawn.x, spawn.y))
+	# World._find_dry_land_spawn, emulated on the generator alone: the same
+	# expanding-square scan, the same three rejections.
+	var found := spawn
+	var search_done := false
+	for ring in range(World.SPAWN_SEARCH_RADIUS + 1):
+		if search_done:
+			break
+		for dy in range(-ring, ring + 1):
+			if search_done:
+				break
+			for dx in range(-ring, ring + 1):
+				var tile := spawn + Vector2i(dx, dy)
+				if (
+					generator.biome_at_global(tile.x, tile.y) != "ocean"
+					and not generator.is_river_at_global(tile.x, tile.y)
+					and not generator.is_lake_at_global(tile.x, tile.y)
+				):
+					found = tile
+					search_done = true
+					break
+	print("dry-land search: %s -> %s (river there: %s, lake there: %s, depth %.2f m)" % [
+		spawn, found, generator.is_river_at_global(found.x, found.y),
+		generator.is_lake_at_global(found.x, found.y),
+		maxf(generator.river_depth_meters_at_global(found.x, found.y), generator.lake_depth_meters_at_global(found.x, found.y))
+	])
 	for dy in range(-radius, radius + 1):
 		var line := ""
 		for dx in range(-radius, radius + 1):

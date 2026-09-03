@@ -95,6 +95,7 @@ func build(
 	_route()
 	_accumulate()
 	_label_depressions(heights, min_depression_depth, min_depression_cells, min_basin_depth)
+	_label_inland_seas(heights, min_depression_cells)
 	return self
 
 
@@ -335,6 +336,63 @@ func _label_depressions(
 			"spill_elevation": spill_elevation,
 			"spill_index": spill_index,
 			"floor_elevation": floor_elevation,
+		})
+
+
+## Below-sea-level cells that do not touch the ocean: the flood treats
+## every sub-sea cell as sea (so routing and the sea mask are unchanged),
+## but an enclosed pocket -- an estuary marsh, a below-sea-level basin --
+## is a LAKE to the world, at sea level, drawn as still water rather than
+## as blocky ocean (first playtest). 4-connected components of sea cells,
+## wrapping east-west; the largest component is the ocean and stays
+## unlabelled, every other one of at least `min_cells` becomes a
+## depression flagged "inland_sea" with its spill at sea level.
+func _label_inland_seas(heights: PackedFloat32Array, min_cells: int) -> void:
+	var count := width * height
+	var component := PackedInt32Array()
+	component.resize(count)
+	component.fill(-1)
+	var components: Array[PackedInt32Array] = []
+	for start in count:
+		if _sea[start] == 0 or component[start] != -1:
+			continue
+		var id := components.size()
+		var members := PackedInt32Array()
+		var stack := PackedInt32Array([start])
+		component[start] = id
+		while stack.size() > 0:
+			var index := stack[stack.size() - 1]
+			stack.resize(stack.size() - 1)
+			members.append(index)
+			for direction in [0, 2, 4, 6]:
+				var neighbor := neighbor_index(index, direction)
+				if neighbor < 0 or _sea[neighbor] == 0 or component[neighbor] != -1:
+					continue
+				component[neighbor] = id
+				stack.append(neighbor)
+		components.append(members)
+	if components.size() <= 1:
+		return
+	var ocean := 0
+	for id in components.size():
+		if components[id].size() > components[ocean].size():
+			ocean = id
+	for id in components.size():
+		if id == ocean or components[id].size() < min_cells:
+			continue
+		var members := components[id]
+		var depression_index := depressions.size()
+		var floor_elevation := float(heights[members[0]])
+		for member in members:
+			depression_id[member] = depression_index
+			floor_elevation = minf(floor_elevation, float(heights[member]))
+		depressions.append({
+			"id": depression_index,
+			"cell_count": members.size(),
+			"spill_elevation": sea_level,
+			"spill_index": members[0],
+			"floor_elevation": floor_elevation,
+			"inland_sea": true,
 		})
 
 

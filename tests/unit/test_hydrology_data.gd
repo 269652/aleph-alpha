@@ -103,6 +103,7 @@ func test_save_then_load_reproduces_every_field():
 	assert_eq(loaded.depressions.size(), 1)
 	assert_eq(loaded.depressions[0]["spill_index"], data.depressions[0]["spill_index"])
 	assert_almost_eq(loaded.depressions[0]["spill_elevation"], data.depressions[0]["spill_elevation"], 1e-9)
+	assert_false(loaded.depressions[0]["inland_sea"], "a crater is not an inland sea, and the key survives the round trip")
 
 
 func test_loading_a_missing_bake_returns_false_without_erroring():
