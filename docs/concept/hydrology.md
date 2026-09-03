@@ -203,7 +203,7 @@ east-west, clamped at the poles:
 2. **Priority-flood with epsilon** from every sea cell outward. Outputs a
    *filled* surface (never rendered; only routed on) and, for every cell
    that had to be raised, the **depression** it belongs to: an id, its
-   spill elevation, its spill cell, and the depression it spills into
+   spill elevation, its spill LIP, and the depression it spills into
    (sea, or a parent depression, forming a tree). Depressions below
    `MIN_DEPRESSION_AREA_CELLS` are treated as data noise and simply filled
    through; the rest are **lake candidates**. With ~10 km pixels a
@@ -572,8 +572,19 @@ mechanism, on small synthetic grids unless marked *(real data)*.
 - **`DrainageNetwork`**: a 5×5 bowl with one sea cell fills so every cell
   has a strictly descending path to the sea; a flat plateau gets a
   consistent, acyclic flow direction; a crater becomes exactly one
-  depression whose spill cell is its lowest rim cell; accumulation at the
-  sea cell equals the land cell count.
+  depression whose spill lip carries its whole outflow; accumulation at
+  the sea cell equals the land cell count.
+
+  The lip is a SET of cells, not one cell, and the spec used to say
+  otherwise. Filling raises every member of a depression to exactly the
+  spill elevation, so the rim it leaves through is flat and the outflow
+  splits across it -- three ways in the reference crater, carrying 13, 4
+  and 13 of the 30 the basin collects. A basin's throughput is therefore
+  the sum over its lip (`DrainageNetwork.outflow_of`), never the value at
+  any single cell; reading one cell understated the lake balance's inflow
+  by however many ways the lip happened to split. `spill_index` survives
+  as the principal outlet -- the member carrying the most flow -- for
+  anything that wants one point to name a depression by.
 - **Hack's law** *(real data)*: over the baked network's twenty largest
   basins, the fitted exponent of mainstem length vs. area lies in
   [0.5, 0.7].
