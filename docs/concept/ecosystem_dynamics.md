@@ -974,6 +974,16 @@ Real animals stop, then turn.
 continuous, never-resting drift reads as mechanical. Searching for a needed
 resource, seeking, and fleeing never pause.
 
+**Standing still still lives.** Idle used to hold one frozen frame forever —
+tolerable while standing still was rare, wrong once grazing pauses and a
+boxed-in animal with nowhere to go (above) made it a common state. A second
+idle frame (a small whole-body settle, read as a breath) gives a standing
+animal somewhere to go, and which of the two shows is picked the same way
+grazing pauses are: a deterministic hash of the animal's own seed
+(`ProceduralAnimalAnimation.idle_frame_index`), not wall-clock time alone —
+so a herd standing together breathes out of step with itself instead of
+reading as one frozen tableau.
+
 **Two escape hatches**, both necessary. The checks are "don't make it worse",
 never "must not be close": an animal the player has walked up to is *already*
 inside its flee radius, and one that has somehow ended up overlapping a trunk
