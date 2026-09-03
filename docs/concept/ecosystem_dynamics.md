@@ -372,6 +372,12 @@ modelled on): **see a specific thing, walk to it, put your head down, move on.**
   it now costs a full head-down bout like any other bite.
 - **A threat outranks a meal.** An animal that senses something lifts its head
   and goes; it does not finish the mouthful.
+- **A bout is slower while snow is actively falling.** See
+  [weather.md](weather.md#weather-feeds-creature-behaviour) --
+  `GrazerForaging.snowing` scales the head-down duration
+  (`GRAZE_SECONDS`) only, not the walk between bites or the give-up
+  timeout: a grazer is not just cropping a tuft any more, it is working
+  through what is landing on top of it to keep its muzzle in the grass.
 
 ## Biome-specific species composition
 
