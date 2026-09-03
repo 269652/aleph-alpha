@@ -1397,8 +1397,11 @@ func test_still_water_neither_advects_nor_drifts():
 	assert_lt(RiverFlowShader.STILL_FLOW_M_S, RiverFlowShader.FAST_FLOW_M_S)
 	assert_true(RiverFlowShader.SHADER_CODE.contains("float moving = step(still_flow_m_s, speed_mps);"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("float advect_gate = mix(still_ripple, 1.0, moving);"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("advect_strength * phase_a * advect_gate + drift * moving"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("advect_strength * phase_b * advect_gate + drift * moving"))
+	# Flowing water takes the smeared, drifting path; still water takes the
+	# cheap two-tap ripple path and never drifts.
+	assert_true(RiverFlowShader.SHADER_CODE.contains("if (moving > 0.5) {"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("advect_strength * phase_a * advect_gate + drift"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("float ripple_a = value_noise(q + flow_perp * (advect_strength * still_ripple * phase_a));"))
 	var material := flow.shared_material()
 	assert_almost_eq(
 		float(material.get_shader_parameter("still_flow_m_s")), RiverFlowShader.STILL_FLOW_M_S, 1e-9

@@ -330,11 +330,25 @@ void fragment() {
 	// field above deliberately does NOT drift: boils hold station over the
 	// bed while the surface pours through them.
 	float drift = TIME * drift_px_per_mps * speed_mps * noise_scale;
-	float sample_a = line_field(q - flow_dir * (advect_strength * phase_a * advect_gate + drift * moving), flow_dir);
-	float sample_b = line_field(q - flow_dir * (advect_strength * phase_b * advect_gate + drift * moving), flow_dir);
 	// Triangular weight: 1 at a phase's birth, 0 at its death.
 	float blend = abs(1.0 - 2.0 * phase_a);
-	float n = mix(sample_a, sample_b, blend);
+	float n;
+	if (moving > 0.5) {
+		float sample_a = line_field(q - flow_dir * (advect_strength * phase_a * advect_gate + drift), flow_dir);
+		float sample_b = line_field(q - flow_dir * (advect_strength * phase_b * advect_gate + drift), flow_dir);
+		n = mix(sample_a, sample_b, blend);
+	} else {
+		// STILL WATER'S CHEAP PATH: the sea and every lake are most of
+		// the water on screen, and the eighteen smeared taps above are
+		// what a river's flowing strokes need, not a pond's breathing
+		// ripple. Two unsmeared samples of the same world-anchored field,
+		// nudged by the two phases, give the strokes their slow ripple
+		// at a ninth of the cost (found live: a screen mostly water ran
+		// at a few frames per second).
+		float ripple_a = value_noise(q + flow_perp * (advect_strength * still_ripple * phase_a));
+		float ripple_b = value_noise(q + flow_perp * (advect_strength * still_ripple * phase_b));
+		n = clamp((mix(ripple_a, ripple_b, blend) - 0.5) * smear_gain + 0.5, 0.0, 1.0);
+	}
 
 	// Depth colour: the channel's real parabolic cross-section (see
 	// OpenChannelFlow.cross_channel_depth_fraction), light at the shallow
