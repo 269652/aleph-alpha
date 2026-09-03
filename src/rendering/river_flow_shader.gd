@@ -73,12 +73,8 @@ uniform float eddy_scale = 0.16;
 uniform float eddy_detail_weight = 0.7;
 uniform float eddy_swirl = 0.0;
 uniform float bank_shear = 0.25;
-// filter_NEAREST on purpose: sample_map_smooth below does its own C1
-// (smoothstep-weighted) 4-tap blend, which needs each tap to be the exact
-// texel. Hardware bilinear would pre-blend them and reintroduce the very
-// gradient kink at texel boundaries that the smooth blend exists to remove.
-uniform sampler2D flow_across_map : filter_nearest, repeat_enable;
-uniform sampler2D flow_scale_map : filter_nearest, repeat_enable;
+uniform sampler2D flow_across_map : filter_linear, repeat_enable;
+uniform sampler2D flow_scale_map : filter_linear, repeat_enable;
 uniform float flow_map_tiles = 256.0;
 // No longer read inside fragment(): every per-fragment normalization now
 // decodes the tile's REAL local half-width from the direction vector's own
@@ -152,41 +148,6 @@ float value_hash(vec2 p) {
 	return fract((p3.x + p3.y) * p3.z);
 }
 
-// SMOOTH (C1) map sampling -- the fix for "zigzags at almost every bend,
-// behind a few boulders, and in regular steps at the edge".
-//
-// Hardware bilinear filtering is continuous in VALUE but its GRADIENT
-// jumps at every texel boundary: within one texel the field is a bilinear
-// patch, and neighbouring patches meet with a slope discontinuity. Every
-// mark this shader draws is a CONTOUR of that field -- the waterline
-// (|across| == 1), the ink line, the shore highlight, the stroke level
-// sets -- and a contour through a field with a kinked gradient kinks with
-// it, once per texel. That is exactly a regular step, one per tile, worst
-// where a contour crosses the texel grid at a shallow angle (a bend) and
-// pushed into plain view wherever something displaces the field (behind a
-// boulder).
-//
-// Re-weighting the same four texels with the smoothstep curve makes the
-// interpolant's derivative vanish at each texel edge, so neighbouring
-// patches meet slope-to-slope and every contour through them is smooth.
-// Same trick, and the same polynomial, value_noise below already uses.
-// The samplers are filter_nearest so these four taps are the exact texels.
-vec4 sample_map_smooth(sampler2D tex, vec2 uv) {
-	vec2 texel = uv * flow_map_tiles - 0.5;
-	vec2 base = floor(texel);
-	vec2 f = texel - base;
-	f = f * f * (3.0 - 2.0 * f);
-	vec2 uv00 = (base + vec2(0.5, 0.5)) / flow_map_tiles;
-	vec2 uv10 = (base + vec2(1.5, 0.5)) / flow_map_tiles;
-	vec2 uv01 = (base + vec2(0.5, 1.5)) / flow_map_tiles;
-	vec2 uv11 = (base + vec2(1.5, 1.5)) / flow_map_tiles;
-	return mix(
-		mix(texture(tex, uv00), texture(tex, uv10), f.x),
-		mix(texture(tex, uv01), texture(tex, uv11), f.x),
-		f.y
-	);
-}
-
 float value_noise(vec2 p) {
 	vec2 i = floor(p);
 	vec2 f = fract(p);
@@ -253,7 +214,7 @@ void fragment() {
 	// exactly like across does. Per-tile direction bins and the binary
 	// fast flag were the last square-tile artefacts ("there are still
 	// individual square river tiles visible").
-	vec4 map_data = sample_map_smooth(flow_across_map, map_uv);
+	vec4 map_data = texture(flow_across_map, map_uv);
 	float frag_across = map_data.r;
 	vec2 flow_dir = normalize(map_data.gb + vec2(1e-6, 0.0));
 	vec2 flow_perp = vec2(-flow_dir.y, flow_dir.x);
@@ -273,7 +234,7 @@ void fragment() {
 	// understated a wide hydrology reach's true half-width by up to 3x, so
 	// the same push landed up to 3x stronger, relative to that reach, than
 	// intended.
-	float half_width_local = max(sample_map_smooth(flow_scale_map, map_uv).r, 0.05);
+	float half_width_local = max(texture(flow_scale_map, map_uv).r, 0.05);
 	float is_fast = step(fast_flow_m_s, speed_mps);
 	// STILL WATER: a lake is painted through this same overlay (its
 	// shoreline is the real elevation contour, written as an across field

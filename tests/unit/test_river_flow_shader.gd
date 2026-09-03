@@ -1242,7 +1242,7 @@ func test_the_shader_bends_and_dries_around_the_boulder_uniforms():
 ## texel: per-tile direction bins and a binary fast flag were the last
 ## square-tile artefacts ("there are still individual square river tiles
 ## visible"). The atlas sprite is now only the painted canvas.
-func test_the_flow_frame_and_speed_ride_the_interpolated_map():
+func test_the_flow_frame_and_speed_ride_the_bilinear_map():
 	# The atlas texel must not be sampled AT ALL any more -- direction and
 	# speed both rode it once, and a substring check on "data.gb" would trip
 	# on the map decode itself ("map_data.gb"), so the pin is the sample
@@ -1278,29 +1278,10 @@ func test_the_material_carries_the_fast_threshold_constant():
 # it with bilinear filtering, so the GPU interpolates between tiles
 # natively -- no bins, no reconstruction, no seams, by construction.
 
-## The map is sampled with a C1 (smoothstep-weighted) 4-tap blend, NOT
-## hardware bilinear. Hardware bilinear is continuous in value but its
-## GRADIENT jumps at every texel boundary, and every mark this shader
-## draws is a CONTOUR of that field -- so each contour kinked once per
-## texel: "zigzags at almost every bend, behind a few boulders, and in
-## regular steps at the edge". A contour crossing a texel boundary at a
-## SHALLOW angle turns that gradient kink into a large sideways step,
-## which is why a bend (whose crossing angle sweeps through the shallow
-## range) hit essentially every time while a straight diagonal reach,
-## crossing at one constant angle, only read as texture. The samplers
-## must therefore be filter_NEAREST, so the four taps are exact texels.
-func test_the_shader_samples_the_across_map_smoothly():
+func test_the_shader_samples_the_across_map_bilinearly():
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("uniform sampler2D flow_across_map : filter_nearest, repeat_enable;"),
-		"the four taps must be exact texels, or the blend is bilinear again"
-	)
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("vec4 map_data = sample_map_smooth(flow_across_map, map_uv);"),
-		"the across must come through the C1 blend, not a raw texture() call"
-	)
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("f = f * f * (3.0 - 2.0 * f);"),
-		"the blend weights must be the smoothstep curve -- that is what kills the gradient kink"
+		RiverFlowShader.SHADER_CODE.contains("uniform sampler2D flow_across_map : filter_linear, repeat_enable;"),
+		"the across must come from a linearly filtered map"
 	)
 	assert_true(
 		RiverFlowShader.SHADER_CODE.contains("float frag_across = map_data.r;"),
@@ -1617,11 +1598,8 @@ func test_boulder_wader_and_ripple_pushes_divide_by_the_real_local_width():
 ## interpolating two SCALARS always lands between them, never collapses.
 func test_direction_and_width_are_never_packed_into_the_same_vector():
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"uniform sampler2D flow_scale_map : filter_nearest, repeat_enable;"
+		"uniform sampler2D flow_scale_map : filter_linear, repeat_enable;"
 	))
-	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"float half_width_local = max(sample_map_smooth(flow_scale_map, map_uv).r, 0.05);"
-	), "the width map needs the same C1 blend, or it reintroduces the kink")
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
 		"vec2 flow_dir = normalize(map_data.gb + vec2(1e-6, 0.0));"
 	), "GB must be a plain unit vector again, safe to bilinearly blend")
