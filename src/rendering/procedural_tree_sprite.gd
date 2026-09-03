@@ -1027,8 +1027,9 @@ static func growth_level(growth: float) -> float:
 ## per frame -- never depended on the ground's mechanism, only on reusing a
 ## granularity instead of inventing one, so this stays a standalone constant
 ## pinned to that same real number rather than tracking a system it no
-## longer has anything in common with. See
-## test_snow_levels_is_a_real_pinned_constant.
+## longer has anything in common with. Pinned by both
+## test_snow_levels_is_a_real_pinned_constant and (this branch's
+## independently-arrived-at equivalent) test_snow_level_is_quantized_to_ten_bands.
 const SNOW_LEVELS := 10
 
 

@@ -748,6 +748,13 @@ func _process(frame_delta: float) -> void:
 	# because plenty of stub worlds in tests cannot answer.
 	if _world.has_method("ambient_warmth"):
 		_needs.regulate_temperature(_world.ambient_warmth(position), delta)
+	# Active snowfall slows grazing (see GrazerForaging.snowing and
+	# docs/concept/weather.md's "Weather feeds creature behaviour") -- reads
+	# the SAME per-frame boolean the ground's own snow accumulation reads
+	# (EarthChunkManager.is_snowing), guarded the same way ambient_warmth
+	# is just above, so a stub world that doesn't answer it changes nothing.
+	if _world.has_method("is_snowing"):
+		_forage.snowing = _world.is_snowing()
 	if not _restrained:
 		_struggle_fatigue = Taming.fatigue_after_rest(_struggle_fatigue, delta)
 	energy = AnimalReproduction.decay(energy, delta)
@@ -2044,11 +2051,11 @@ func _wander_step(delta: float) -> void:
 	# picked -- sideways or backwards, from the sprite's own point of view,
 	# whenever that direction opposed its current heading.
 	# _wander_radius() is a PER-CALL override (juvenile vs adult, see that
-	# function's own doc comment) -- direction_at itself takes no radius
-	# argument, it reads the shared _wander instance's own wander_radius
-	# property (see CreatureWander's "Per-instance override" doc comment),
-	# so the override has to land there first.
-	_wander.wander_radius = _wander_radius()
+	# function's own doc comment), passed straight through as direction_at's
+	# own radius argument (see CreatureWander.direction_at's doc comment) --
+	# unlike FishMarker.configure_wander's persistent override, this value
+	# changes every step as a juvenile grows, so it has no business being
+	# written into the shared _wander instance's wander_radius field.
 	# direction_at (not the higher-level step_position convenience) so the
 	# heading can be leaned toward an active carry direction below BEFORE it
 	# becomes a position delta -- exactly how AmbientFlyerMarker blends
@@ -2057,7 +2064,7 @@ func _wander_step(delta: float) -> void:
 	# at once (see carried_seed_direction's own doc comment), so each active
 	# one gets its own sequential lean, the same "chain multiple steers"
 	# shape AmbientFlyerMarker already uses for its carry-then-scent blend.
-	var heading := _wander.direction_at(home, position, _elapsed_time, wander_seed)
+	var heading := _wander.direction_at(home, position, _elapsed_time, wander_seed, _wander_radius())
 	heading = _leaned_toward_carry(heading, carried_seed_direction)
 	heading = _leaned_toward_carry(heading, carried_grass_seed_direction)
 	heading = _leaned_toward_carry(heading, carried_nut_direction)
@@ -2619,7 +2626,10 @@ func _carrion_disease_step() -> void:
 	if nearest == null:
 		return
 	_disease_roll_count += 1
-	var chance := _disease_model.carrion_graze_transmission_chance(region_tier)
+	# A fly-blown carcass (see Carcass.fly_count/docs/concept/flies.md) is a
+	# measurably bigger local hazard than a fly-free one, not just as big --
+	# see DiseaseModel.FLY_BLOWN_GRAZE_RISK_BONUS_PER_FLY.
+	var chance := _disease_model.carrion_graze_transmission_chance(region_tier, nearest.fly_count())
 	if _disease_model.attempt_infect(
 		chance, hash("%d_%d_carrion_graze" % [wander_seed, _disease_roll_count])
 	):

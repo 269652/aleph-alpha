@@ -12,7 +12,7 @@ func before_each():
 func test_exposes_the_expected_rebindable_actions():
 	var names := bindings.action_names()
 	for expected in ["move_up", "move_down", "move_left", "move_right",
-			"attack", "block", "build", "destroy",
+			"attack", "block", "build", "destroy", "plant",
 			"hotbar_1", "hotbar_5", "toggle_inventory", "toggle_settings", "toggle_crafting",
 			"pickup"]:
 		assert_true(names.has(expected), "missing rebindable action %s" % expected)

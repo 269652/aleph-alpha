@@ -88,6 +88,27 @@ func test_carrion_graze_transmission_chance_rises_with_region_pressure():
 	assert_between(hard, 0.0, 1.0)
 
 
+## Fly-blown carrion risk (docs/concept/disease.md, docs/concept/flies.md):
+## real blowflies/carrion beetles are anthrax's own documented carry
+## mechanism, so a carcass a swarm has already found is measurably more
+## dangerous to graze near than an identically-rotten, fly-free one.
+func test_carrion_graze_transmission_chance_rises_with_fly_count():
+	var no_flies: float = model.carrion_graze_transmission_chance(RegionDifficulty.Tier.EASY, 0)
+	var some_flies: float = model.carrion_graze_transmission_chance(RegionDifficulty.Tier.EASY, 3)
+	assert_lt(no_flies, some_flies)
+
+
+func test_carrion_graze_transmission_chance_fly_count_defaults_to_zero():
+	var default_call: float = model.carrion_graze_transmission_chance(RegionDifficulty.Tier.EASY)
+	var explicit_zero: float = model.carrion_graze_transmission_chance(RegionDifficulty.Tier.EASY, 0)
+	assert_eq(default_call, explicit_zero)
+
+
+func test_carrion_graze_transmission_chance_stays_within_0_and_1_even_with_many_flies():
+	var chance: float = model.carrion_graze_transmission_chance(RegionDifficulty.Tier.HARD, 1000)
+	assert_between(chance, 0.0, 1.0)
+
+
 # -- deterministic rolls --------------------------------------------------------
 
 func test_attempt_transmit_is_deterministic_for_the_same_seed():

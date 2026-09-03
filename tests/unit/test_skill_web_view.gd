@@ -9,6 +9,7 @@ const SkillWebView = preload("res://scenes/skill_web_view.gd")
 const SkillWeb = preload("res://src/gameplay/skill_web.gd")
 const GenomeSkillNet = preload("res://src/gameplay/genome_skill_net.gd")
 const HeroDna = preload("res://src/gameplay/hero_dna.gd")
+const KeystonePassive = preload("res://src/gameplay/keystone_passive.gd")
 
 var view: SkillWebView
 var web: SkillWeb
@@ -127,6 +128,21 @@ func test_a_reachable_node_you_cannot_pay_for_reads_as_unaffordable_not_locked()
 
 func test_state_of_an_unknown_node_is_locked():
 	assert_eq(view.state_of("not_a_node"), SkillWebView.STATE_LOCKED)
+
+
+## A keystone's own required_node_count floor (KeystonePassive --
+## docs/concept/skills.md's "a keystone is the end of a real investment") is a
+## SEPARATE gate from reachability and affordability, and state_of has to
+## enforce it too: a single allocated neighbour already makes iron_skin
+## path-reachable, and 99 points makes it affordable, well before its own
+## required_node_count (3) is met. Reading TAKEABLE here would light the
+## keystone up as clickable on the map; click_at() would then emit
+## keystone_unlocked for a click Player.unlock_keystone's own gate silently
+## refuses, which looks like a dead click with no explanation.
+func test_a_keystone_short_of_its_own_node_count_gate_reads_as_locked_not_takeable():
+	view.configure(web, "warrior", {}, 0)
+	view.set_allocation({"juggernaut": true}, 99)
+	assert_eq(view.state_of("iron_skin"), SkillWebView.STATE_LOCKED)
 
 
 # --- labelling ------------------------------------------------------------
