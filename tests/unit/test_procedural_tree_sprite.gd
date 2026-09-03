@@ -325,3 +325,27 @@ func test_the_ground_offset_follows_the_hanging_bearing():
 			signf(offset.x), signf(cos(polar.x)), 0.001,
 			"fruit %d fell to the wrong side of the trunk" % index
 		)
+
+
+## SNOW_LEVELS used to be borrowed from SnowLayer.DEPTH_BANDS (the CPU-side
+## ground snow system). SnowLayer was deleted outright when SnowBombShader
+## replaced it (see docs/concept/snow_cover.md) -- that borrow was left
+## dangling, a preload of a file that no longer exists. Canopy snow gets its
+## own tuned constant now, pinned per this repo's rule against eyeballed
+## thresholds, at the ground's old real band count (10) so quantised canopy
+## snow keeps exactly the coarseness it already had.
+func test_snow_levels_is_a_real_pinned_constant():
+	assert_eq(ProceduralTreeSprite.SNOW_LEVELS, 10, "canopy snow should keep the ground's old ten-band granularity")
+
+
+## Rounds UP to the next of SNOW_LEVELS bands, the same shape growth_level
+## uses -- test_a_fractional_snow_change_within_the_same_band_does_not_redraw
+## (test_choppable_tree.gd) relies on two nearby coverages landing in the
+## SAME band; this pins the boundary itself, both sides.
+func test_snow_level_quantises_up_to_the_next_of_ten_bands():
+	assert_almost_eq(ProceduralTreeSprite.snow_level(0.6), 0.6, 0.001, "an exact tenth should stay put")
+	assert_almost_eq(
+		ProceduralTreeSprite.snow_level(0.61), ProceduralTreeSprite.snow_level(0.615), 0.001,
+		"0.61 and 0.615 should land in the same tenth-band"
+	)
+	assert_almost_eq(ProceduralTreeSprite.snow_level(0.61), 0.7, 0.001, "just past a tenth should round up into the next one")
