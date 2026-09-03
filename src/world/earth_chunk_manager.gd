@@ -44,6 +44,7 @@ const ProceduralSeedSprite = preload("res://src/rendering/procedural_seed_sprite
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropRenderer = preload("res://src/rendering/wild_crop_renderer.gd")
+const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
 const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
@@ -516,6 +517,14 @@ var _wild_crop_refresh_accumulator := 0.0
 ## Every crop this world grows in the wild -- the one list both _load_chunk
 ## and step_wild_crops iterate, so adding a future crop is a one-line change.
 const WILD_CROP_IDS := ["carrot", "potato"]
+
+## Player-tilled farm plots (docs/concept/farming.md's "farming loop") --
+## flat and NOT chunk-scoped, unlike wild crops: a farm plot is a single,
+## independent, player-placed instance (see FarmPlotMarker's own doc
+## comment for why it owns its FarmPlot directly rather than through a
+## per-chunk sim class), so one Dictionary keyed by the plot's own global
+## tile is enough. Vector2i global tile -> FarmPlotMarker.
+var _farm_plots: Dictionary = {}
 
 ## Ants/carrion bugs (see docs/concept/carrion.md). chunk_coord -> Array of
 ## DecomposerMarker -- no per-chunk sim needed (unlike wild crops/grass),
@@ -4696,6 +4705,67 @@ func step_wild_crops(delta_seconds: float) -> void:
 				_entities_parent, sim, crop_id, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
 				markers[crop_id], _season_tint
 			)
+
+
+## Tills and plants `crop_id` at a global tile (see docs/concept/farming.md,
+## FarmPlot, FarmPlotMarker, Player._plant_step) -- lazily creates the
+## plot's marker the first time this tile is farmed. Same "chunk must be
+## loaded" gate build_at_global already uses: farming far outside the
+## streamed area isn't meaningful since nothing there is rendered or
+## simulated either. Refuses to disturb a plot that already holds a live
+## crop (growing or ready) -- see FarmPlotMarker.till_and_plant -- so a
+## stray press can never destroy an unharvested crop; only an empty or
+## withered plot is (re)planted. Returns whether planting happened.
+func till_and_plant_farm_plot_at_global(global_x: int, global_y: int, crop_id: String) -> bool:
+	var tile := Vector2i(global_x, global_y)
+	if _loaded_chunks.get(_chunk_coord_for_tile(tile)) == null:
+		return false
+	if not _farm_plots.has(tile):
+		_farm_plots[tile] = _build_farm_plot_marker(tile)
+	var seed_value := hash("%d_%d_farm_plot" % [tile.x, tile.y])
+	return _farm_plots[tile].till_and_plant(crop_id, seed_value)
+
+
+## Tends (re-waters) the growing plot at a global tile, resetting its
+## neglect clock -- see FarmPlot.water. False if there is no plot there, or
+## it isn't currently growing.
+func water_farm_plot_at_global(global_x: int, global_y: int) -> bool:
+	var marker: FarmPlotMarker = _farm_plots.get(Vector2i(global_x, global_y))
+	return marker != null and marker.water()
+
+
+## Harvests the ready plot at a global tile -- see FarmPlot.harvest.
+## Returns {"crop_id": "", "count": 0} (the same shape FarmPlot.harvest's
+## own no-op returns) if there is no plot there, or it isn't ready yet. The
+## plot's soil stays -- see FarmPlotMarker.harvest -- so the same tile can
+## be planted again without re-tilling.
+func harvest_farm_plot_at_global(global_x: int, global_y: int) -> Dictionary:
+	var marker: FarmPlotMarker = _farm_plots.get(Vector2i(global_x, global_y))
+	if marker == null:
+		return {"crop_id": "", "count": 0}
+	return marker.harvest()
+
+
+## The world-clock tick hook for the farming loop (see
+## World._step_ecology_batch, docs/concept/farming.md) -- advances every
+## farm plot's own growth simulation by `delta_seconds`. Mirrors
+## step_worms' identical "for x in _sims.values(): x.advance(delta)" shape;
+## unlike step_wild_crops/step_tall_grass, this deliberately does NOT scale
+## by SeasonCycle's growth_modifier -- farming.md frames a tilled, tended
+## plot as the player's own override of the ambient vegetation model, not a
+## wild population subject to the same seasonal modulation.
+func step_farm_plots(delta_seconds: float) -> void:
+	for marker in _farm_plots.values():
+		marker.advance(delta_seconds)
+
+
+func _build_farm_plot_marker(tile: Vector2i) -> FarmPlotMarker:
+	var marker := FarmPlotMarker.new()
+	marker.position = Vector2(
+		(tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	_entities_parent.add_child(marker)
+	return marker
 
 
 ## One shared shader-uniform write per frame makes nearby blades yield to a
