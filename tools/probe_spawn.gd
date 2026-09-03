@@ -71,6 +71,44 @@ func _initialize() -> void:
 		generator.is_lake_at_global(found.x, found.y),
 		maxf(generator.river_depth_meters_at_global(found.x, found.y), generator.lake_depth_meters_at_global(found.x, found.y))
 	])
+	# The across field the water painter writes, as digits: |across| in
+	# tenths (0 = centreline, 9 = near the bank), '.' dry, '#' beyond 1.
+	# Concentric structure here is what the shader draws as arcs.
+	print("across field (|signed across| / half-width, tenths):")
+	for dy in range(-radius, radius + 1):
+		var line := ""
+		for dx in range(-radius, radius + 1):
+			var hit := generator.nearest_river_at(spawn.x + dx, spawn.y + dy)
+			var half: float = hit.get("half_width_tiles", 2.0)
+			var across: float = absf(hit.signed_across_tiles) / maxf(half, 0.01)
+			if hit.distance_tiles > half + 0.75:
+				line += "."
+			elif across >= 1.0:
+				line += "#"
+			else:
+				line += str(int(across * 10.0))
+		print(line)
+	if args.size() >= 3:
+		# Every channel hit at one tile (dx dy from the spawn), raw.
+		var tile := spawn + Vector2i(int(args[1]), int(args[2]))
+		var field = generator._shared_hydrology_field()
+		field.river_min_discharge = generator._hydrology.river_min_discharge
+		print("hits at %s (probe %s):" % [tile, generator.hydrology_at_global(tile.x, tile.y)])
+		for hit in field._channel_hits(tile.x, tile.y):
+			print("  cell %d Q %.1f distance %.2f half %.2f tangent %s" % [
+				hit["cell"], hit["discharge"], hit["distance_tiles"], hit["half_width_tiles"], hit["tangent"]
+			])
+		print("  geometry: %s" % field.nearest_channel_geometry(tile.x, tile.y))
+	print("bearing field (tens of degrees, downstream):")
+	for dy in range(-radius, radius + 1):
+		var line := ""
+		for dx in range(-radius, radius + 1):
+			var hit := generator.nearest_river_at(spawn.x + dx, spawn.y + dy)
+			if hit.distance_tiles > hit.get("half_width_tiles", 2.0) + 0.75:
+				line += "."
+			else:
+				line += str(int(hit.course_bearing_deg / 36.0))
+		print(line)
 	for dy in range(-radius, radius + 1):
 		var line := ""
 		for dx in range(-radius, radius + 1):

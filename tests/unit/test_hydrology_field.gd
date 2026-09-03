@@ -306,6 +306,33 @@ func test_a_tributary_reaches_the_main_channels_centreline():
 	assert_almost_eq(tributary["course_bearing_deg"], 90.0, 1e-6, "the tributary flows east")
 
 
+func test_the_across_field_is_continuous_through_a_confluence():
+	# Walk a row through the junction where the tributary (along y=34.5)
+	# enters the main channel (along x=35): the blended field may bend, it
+	# may never jump -- a jump is what the shader draws as fans of arcs.
+	var confluence := _confluence_field()
+	var previous := INF
+	for x in range(26, 40):
+		var geometry: Dictionary = confluence.nearest_channel_geometry(x, 33)
+		if geometry.is_empty():
+			previous = INF
+			continue
+		var across: float = absf(geometry["signed_across_tiles"]) / geometry["half_width_tiles"]
+		if previous != INF:
+			assert_lt(absf(across - previous), 0.4, "jump at x=%d: %.2f -> %.2f" % [x, previous, across])
+		previous = across
+
+
+func test_inside_the_main_river_the_main_decides_depth_and_width():
+	# A tile inside the main channel right where the tributary enters
+	# reads the main's discharge, not the tributary's.
+	var confluence := _confluence_field()
+	var probe: Dictionary = confluence.probe(34, 34, 0.6)
+	assert_eq(probe["kind"], "river")
+	var main: Dictionary = confluence.nearest_channel_geometry(35, 24)
+	assert_almost_eq(probe["discharge"], main["discharge"], 1e-6)
+
+
 func test_the_spring_is_narrower_than_the_thinnest_river():
 	assert_lt(HydrologyField.SPRING_HALF_WIDTH_TILES, HydrologyField.MIN_LEGIBLE_WIDTH_TILES / 2.0)
 

@@ -372,26 +372,157 @@ func mouth_plume(global_x: int, global_y: int) -> Dictionary:
 ## channel is within valley reach. Sign and bearing follow the catalog's
 ## conventions (tangent.cross(point - closest); compass bearing of the
 ## downstream tangent).
+## How far past a channel's bank its field still counts toward the blend
+## (see nearest_channel_geometry): two tiles fades a tributary's field out
+## across the main river's bank instead of cutting it.
+const BLEND_BAND_TILES := 2.0
+
 func nearest_channel_geometry(global_x: int, global_y: int) -> Dictionary:
-	var channel := _nearest_channel(global_x, global_y)
-	if channel.is_empty():
+	var hits := _channel_hits(global_x, global_y)
+	if hits.is_empty():
 		return {}
-	var tangent: Vector2 = channel["tangent"]
 	var point := Vector2(float(global_x) + 0.5, float(global_y) + 0.5)
-	# The MAGNITUDE is the true distance to the curve; only the SIDE comes
-	# from the cross product. The cross product alone equals the distance
-	# only where the tile sits exactly perpendicular to a piece; near every
-	# joint it undershoots, and with joints under a tile apart that aliased
-	# into a one-tile sawtooth on every stroke (third playtest).
-	var side := tangent.cross(point - channel["closest"])
-	var distance: float = channel["distance_tiles"]
+	# WHERE CHANNELS OVERLAP, BLEND -- never switch. Each hit's normalized
+	# across (the MAGNITUDE is the true distance to its curve, the cross
+	# product only picks the side -- the cross product alone undershoots
+	# near every joint, the old one-tile sawtooth) is averaged with weight
+	# membership x discharge^2: membership is 1 inside the channel and
+	# fades to 0 BLEND_BAND_TILES past its bank, and the square makes the
+	# main river dominate a tributary wherever both reach. Picking one
+	# winner per tile stitched the field from two channels and left a
+	# jump along the seam (a tributary's centreline 0 beside the main's
+	# 0.7); the shader interpolated across the jump and drew the crowded
+	# contour fans reported as arcs (fourth playtest, read straight off
+	# the across field dump).
+	var weight_sum := 0.0
+	var across_sum := 0.0
+	var half_sum := 0.0
+	var tangent_sum := Vector2.ZERO
+	# "Nearest" is by BANK reach (distance minus half-width), never raw
+	# distance: a tile a tenth of a tile past the main river's bank is the
+	# main's apron, not the tributary's, even when the tributary's
+	# centreline happens to be closer (found as a dry hole at a junction).
+	var nearest: Dictionary = hits[0]
+	var nearest_reach := INF
+	var dominant: Dictionary = hits[0]
+	for hit in hits:
+		var reach: float = hit["distance_tiles"] - hit["half_width_tiles"]
+		if reach < nearest_reach:
+			nearest_reach = reach
+			nearest = hit
+		if hit["discharge"] > dominant["discharge"]:
+			dominant = hit
+		var across: float = hit["distance_tiles"] / hit["half_width_tiles"]
+		# Only a channel that CONTAINS the tile contributes, weighted by
+		# discharge^2 and by how far the tile is from that channel's own
+		# bank: at the main river's bank the main weighs almost nothing,
+		# so a tributary entering there hands over gradually along its
+		# mouth instead of being cut off at the main's bank line.
+		if across > 1.0:
+			continue
+		var bank_distance := 1.0 - across
+		var weight: float = hit["discharge"] * hit["discharge"] * (bank_distance * bank_distance + 0.01)
+		var tangent: Vector2 = hit["tangent"]
+		var side := tangent.cross(point - hit["closest"])
+		across_sum += weight * (across if side >= 0.0 else -across)
+		half_sum += weight * hit["half_width_tiles"]
+		tangent_sum += weight * tangent
+		weight_sum += weight
+	if weight_sum <= 0.0:
+		# Only dry apron around: the nearest channel's own frame, as before.
+		var tangent: Vector2 = nearest["tangent"]
+		var side := tangent.cross(point - nearest["closest"])
+		var distance: float = nearest["distance_tiles"]
+		return {
+			"distance_tiles": distance,
+			"signed_across_tiles": distance if side >= 0.0 else -distance,
+			"course_bearing_deg": RiverCatalog.bearing_degrees(tangent),
+			"discharge": nearest["discharge"],
+			"half_width_tiles": nearest["half_width_tiles"],
+		}
+	var half := half_sum / weight_sum
+	var direction: Vector2 = dominant["tangent"]
+	if tangent_sum.length() > 1e-6:
+		direction = tangent_sum.normalized()
 	return {
-		"distance_tiles": distance,
-		"signed_across_tiles": distance if side >= 0.0 else -distance,
-		"course_bearing_deg": RiverCatalog.bearing_degrees(tangent),
-		"discharge": channel["discharge"],
-		"half_width_tiles": channel["half_width_tiles"],
+		"distance_tiles": nearest["distance_tiles"],
+		"signed_across_tiles": across_sum / weight_sum * half,
+		"course_bearing_deg": RiverCatalog.bearing_degrees(direction),
+		"discharge": dominant["discharge"],
+		"half_width_tiles": half,
 	}
+
+
+var _hits_cache: Dictionary = {}
+
+
+## Every channel within valley reach of the tile, each as {discharge,
+## distance_tiles, half_width_tiles, closest, tangent} -- the raw material
+## nearest_channel_geometry blends and _nearest_channel picks from.
+func _channel_hits(global_x: int, global_y: int) -> Array:
+	var key := Vector2i(global_x, global_y)
+	var cached = _hits_cache.get(key)
+	if cached != null:
+		return cached
+	if _hits_cache.size() >= CURVE_CACHE_CAP:
+		_hits_cache.clear()
+	var tile_center := Vector2(float(global_x) + 0.5, float(global_y) + 0.5)
+	var pixel := pixel_of_tile(global_x, global_y)
+	var pixel_x := floori(pixel.x)
+	var pixel_y := floori(pixel.y)
+	var hits: Array = []
+	for dy in range(-1, 2):
+		var y := pixel_y + dy
+		if y < 0 or y >= _data.height:
+			continue
+		for dx in range(-1, 2):
+			var cell := cell_index_at(pixel_x + dx, y)
+			if _data.is_sea(cell):
+				continue
+			var discharge := _data.discharge_at(cell)
+			if discharge < river_min_discharge:
+				continue
+			var hit := _nearest_on_curve(tile_center, cell)
+			if hit["distance"] - hit["half_width"] > VALLEY_HALF_WIDTH_TILES:
+				continue
+			hits.append({
+				"cell": cell,
+				"discharge": discharge,
+				"distance_tiles": hit["distance"],
+				"half_width_tiles": hit["half_width"],
+				"closest": hit["closest"],
+				"tangent": hit["tangent"],
+			})
+	hits = _one_hit_per_stream(hits)
+	_hits_cache[key] = hits
+	return hits
+
+
+## Consecutive pieces of ONE river are not two channels: pieces linked by
+## mainstem continuation (b is a's downstream and a is b's mainstem
+## upstream) form a stream, and only the stream's nearest piece is kept.
+## Blending a reach's own neighbouring pieces put a periodic bump along
+## every river (their distances are to the shared endpoints, not to the
+## curve); a tributary joining the main is a different stream and does
+## get blended.
+func _one_hit_per_stream(hits: Array) -> Array:
+	var by_cell := {}
+	for hit in hits:
+		by_cell[hit["cell"]] = hit
+	var nearest_by_root := {}
+	for hit in hits:
+		var root: int = hit["cell"]
+		var steps := 0
+		while steps < 16:
+			var down := _downstream(root)
+			if down < 0 or not by_cell.has(down) or _mainstem_upstream(down, true) != root:
+				break
+			root = down
+			steps += 1
+		var current = nearest_by_root.get(root)
+		if current == null or hit["distance_tiles"] < current["distance_tiles"]:
+			nearest_by_root[root] = hit
+	return nearest_by_root.values()
 
 
 ## The channel whose bank is nearest this tile, in valley reach, as
@@ -417,35 +548,23 @@ var _channel_cache: Dictionary = {}
 
 
 func _nearest_channel_uncached(global_x: int, global_y: int) -> Dictionary:
-	var tile_center := Vector2(float(global_x) + 0.5, float(global_y) + 0.5)
-	var pixel := pixel_of_tile(global_x, global_y)
-	var pixel_x := floori(pixel.x)
-	var pixel_y := floori(pixel.y)
+	# Inside a channel, the biggest one wins (a tributary's field never
+	# decides depth or width inside the main river); outside every channel,
+	# the nearest bank does.
 	var best := {}
 	var best_reach := INF
-	for dy in range(-1, 2):
-		var y := pixel_y + dy
-		if y < 0 or y >= _data.height:
+	var best_inside_discharge := -1.0
+	for hit in _channel_hits(global_x, global_y):
+		var reach: float = hit["distance_tiles"] - hit["half_width_tiles"]
+		if reach <= 0.0:
+			if hit["discharge"] > best_inside_discharge:
+				best_inside_discharge = hit["discharge"]
+				best = hit
 			continue
-		for dx in range(-1, 2):
-			var cell := cell_index_at(pixel_x + dx, y)
-			if _data.is_sea(cell):
-				continue
-			var discharge := _data.discharge_at(cell)
-			if discharge < river_min_discharge:
-				continue
-			var hit := _nearest_on_curve(tile_center, cell)
-			var reach: float = hit["distance"] - hit["half_width"]
-			if reach > VALLEY_HALF_WIDTH_TILES or reach >= best_reach:
-				continue
-			best_reach = reach
-			best = {
-				"discharge": discharge,
-				"distance_tiles": hit["distance"],
-				"half_width_tiles": hit["half_width"],
-				"closest": hit["closest"],
-				"tangent": hit["tangent"],
-			}
+		if best_inside_discharge >= 0.0 or reach >= best_reach:
+			continue
+		best_reach = reach
+		best = hit
 	return best
 
 
