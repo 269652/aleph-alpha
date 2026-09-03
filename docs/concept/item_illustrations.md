@@ -14,25 +14,28 @@ says which states it needs to cover.
 | **Icon** | Inventory grid, hotbar, paperdoll equip slots, drag-preview, tooltip | Eventually, per item — but see `sprite_id` below; nothing blocks on this today. Full catalog scaffolded into 11 generation-ready kits in [ai_sprite_prompts.md §9](../art/ai_sprite_prompts.md#9-general-item-icons--one-kit-per-visual-archetype-2026-08-28). |
 | **Ground** | Dropped-item sprite | No — reuse the icon, scaled via `art_resolution.gd`'s `world_scale_for`. Already the convention (`dropped_item.gd`); keep it that way rather than authoring separate ground art. |
 | **In-hand** | The equipped weapon/tool riding `ToolSlot` | No — reuse the icon. The rig is front-canonical only (no side/back art yet), so a distinct held-pose asset isn't worth authoring. |
+| **Placed** | A `"placeable"`-kind item built into the world (`campfire`/`furnace`/`sagewerk`/`storage`) | **Yes — a second surface, distinct from Icon.** This table never named it until now — see "Placed structures" below. |
 | **Use/swing motion** | Melee swing, rod-cast, lasso/net throw | **Deferred** — see below. |
 | **Attack/cast effect** | What appears at the target when a hit or a spell atom resolves | Owned by [magic.md](magic.md), not this doc — see below. |
 | **Rarity/variant** | Any of the above | Not decided in this pass — see Open questions. |
 
-### Decision: items get a real `sprite_id`
+### Done: items have a real `sprite_id`
 
-Today `Item` (`item.gd`) has no icon/texture field at all — every surface
-above re-derives a picture purely from the item's own `id` string at draw
-time, via `ProceduralItemSprite`'s color+silhouette lookup table
-(`generate_texture(item_id)`/`texture_for(item_id)`). One id reliably means
-one texture, but only because identity and art have never been allowed to
+`Item` (`item.gd`) used to have no icon/texture field at all — every surface
+re-derived a picture purely from the item's own `id` string at draw time, via
+`ProceduralItemSprite`'s color+silhouette lookup table
+(`generate_texture(item_id)`/`texture_for(item_id)`). One id reliably meant
+one texture, but only because identity and art were never allowed to
 diverge.
 
-`Item` gains `sprite_id: String`. `ItemCatalog.make()` defaults it to the
-item's own `id` whenever the catalog doesn't specify one, so every existing
-entry keeps rendering exactly as it does today with zero authoring changes.
-Every caller that currently keys art off `item.id` (inventory grid, hotbar,
-paperdoll, drag-preview, dropped-item, the new armor slots below) switches to
-`item.sprite_id` instead.
+`Item` now has `sprite_id: String` (see `docs/progress.md`'s Items section).
+It defaults to the item's own `id` whenever nothing sets it explicitly, so
+every catalog entry still renders exactly as before with zero authoring
+changes — `ItemCatalog._ITEMS` doesn't set a divergent `sprite_id` for any
+entry yet, so this is real, live groundwork rather than a visible change on
+its own. Every caller that used to key art off `item.id` directly (inventory
+grid, hotbar, paperdoll, drag-preview, dropped-item, the armor slots below)
+now goes through `item.sprite_id` instead.
 
 What this buys: an item id and its art can now diverge on purpose. A crafted
 or "blessed" variant of a base item can share its art via `sprite_id` without
@@ -46,20 +49,21 @@ two items show different pictures depending on where they're rendered. A
 `sprite_id`-aware icon path could close that, but doing so isn't committed as
 part of this pass.
 
-### Decision: armor becomes visible on the rig
+### Done: armor is visible on the rig
 
-Today `Equipment.SLOTS` (`equipment.gd`) is `["head", "chest", "legs", "feet",
+`Equipment.SLOTS` (`equipment.gd`) is `["head", "chest", "legs", "feet",
 "weapon"]`, but `CharacterView` (`scenes/character_view.gd` /
-`character_view.tscn`) only has real slot nodes for `HeadSlot` and
-`ToolSlot` — `_slot_node()` returns `null` for `"chest"`/`"legs"`/`"feet"`,
-and `Player.equip_armor()`/`unequip_slot()` never call `_character_view` at
-all. Worn armor is therefore purely numeric (`Equipment.total_armor()`)
-everywhere today, in-world and in the inventory paperdoll preview alike. This
-is the equip-slot half of the open question `character_art_brief.md`'s
-"Decorations" section already flagged ("equippable cosmetic items beyond the
-existing `HeadSlot`/`ToolSlot`?") — armor is that answer.
+`character_view.tscn`) used to only have real slot nodes for `HeadSlot` and
+`ToolSlot` — `_slot_node()` returned `null` for `"chest"`/`"legs"`/`"feet"`,
+and `Player.equip_armor()`/`unequip_slot()` never called `_character_view` at
+all, so worn armor was purely numeric (`Equipment.total_armor()`) everywhere,
+in-world and in the inventory paperdoll preview alike. This was the
+equip-slot half of the open question `character_art_brief.md`'s
+"Decorations" section had flagged ("equippable cosmetic items beyond the
+existing `HeadSlot`/`ToolSlot`?") — armor is that answer, and it shipped.
 
-The fix:
+What shipped (see `docs/progress.md`'s Items section, "The equipment
+paperdoll is the real CharacterView rig"):
 
 - Three new `Sprite2D` slot nodes — `ChestSlot`, `LegsSlot`, `FeetSlot` —
   alongside the existing `HeadSlot`/`ToolSlot`, and `_slot_node()` extended to
@@ -83,6 +87,71 @@ The fix:
   `Body`). Exact offsets get measured against the real generated textures at
   implementation time, the same way every other part's scale/offset already
   is — nothing here is eyeballed.
+
+Honest scope (per `docs/progress.md`): slot positions are a reasoned
+starting placement, not yet visually confirmed against real armor art in a
+live screenshot.
+
+### Placed structures: a second surface this doc never named
+
+Every row in the states table above is about a HELD or CARRIED picture —
+icon, ground, in-hand — all deliberately converging on one texture per item.
+A placeable (`campfire`/`furnace`/`sagewerk`/`storage`, `item.kind ==
+"placeable"`) already breaks that convergence today, silently:
+`ProceduralItemSprite` draws its inventory icon (`_draw_campfire`/
+`_draw_furnace`, or the generic flat-plate fallback for `sagewerk`/`storage`
+— see [ai_sprite_prompts.md §9g](../art/ai_sprite_prompts.md#9g-placeable-structures--campfire-furnace-sagewerk-storage)),
+while `ProceduralStructureSprite` (`src/rendering/procedural_structure_sprite.gd`)
+independently draws what the SAME item looks like once built — baked
+straight into `TerrainRenderer`'s own tile atlas (`STRUCTURE_IDS`,
+`terrain_renderer.gd:184-191,522-538,925,1033-1085`) rather than drawn as a
+`Sprite2D` the way every other surface above is. Two generators, two
+unrelated pictures, one item id, and no row above ever named the second one.
+
+This matters for illustrated art specifically because `ProceduralStructureSprite`
+already takes a seeded `variant_seed` per structure
+(`_campfire_image`/`_furnace_image`/`_sagewerk_image`/`_storage_image`,
+`procedural_structure_sprite.gd:97,184,267,338`) — the same "many looks, one
+id, picked by seed" shape `boulders.png`/ore already use, not the
+`boar_walk.png` action-strip shape. A real illustrated upgrade for placed
+structures is therefore a variant GRID, not an animation cycle.
+
+### Sheet spec: placed structures get a seeded-variant grid, not a strip
+
+A third instance of a pattern this codebase already has twice, not a new
+one — mirrors `IllustratedStoneSprite`/`IllustratedTerrainSprite`'s existing
+`has_variants()`/`frame_for()` shape exactly (`illustrated_stone_sprite.gd:164`,
+`illustrated_terrain_sprite.gd:176`):
+
+- **One sheet per structure id** — `campfire.png`, `furnace.png`,
+  `sagewerk.png`, `storage.png` under a new `assets/sprites/structures/`
+  folder. No existing folder fits: `assets/sprites/` root is walk-cycle
+  species, `terrain/` is biome ground tiles, neither is a placed structure.
+- **Grid, not strip, isolated objects, not full-bleed tiles** — the ore
+  precedent's padded, cropped-to-content 5×5 grid
+  ([ai_sprite_prompts.md §5](../art/ai_sprite_prompts.md#5-ore-nodes--one-sheet-per-ore-type-boulder-scale-with-embedded-deposits)),
+  not terrain's full-bleed-square tiling convention — a placed structure has
+  real empty ground around it in-world, it does not need to tile
+  edge-to-edge against a copy of itself. Fall back to §3's 3×3 grid only if
+  5×5 genuinely doesn't hold for a boxier architectural silhouette; try 5×5
+  first rather than pre-committing to the smaller grid.
+- **Selection stays seeded, not resampled per redraw** — a new
+  `frame_for(structure_id, seed)` picks one variant deterministically per
+  placed instance, mirroring `IllustratedStoneSprite.frame_for`/
+  `IllustratedTerrainSprite.frame_for` exactly: a given campfire keeps the
+  same illustrated look for its whole lifetime.
+- **Wiring seam** — a new `IllustratedStructureSprite`
+  (`src/rendering/illustrated_structure_sprite.gd`), and `TerrainRenderer`
+  gains a `has_variants(structure_id)`-gated preference for it ahead of
+  `ProceduralStructureSprite`, the same layering `StoneRenderer`/
+  `TerrainRenderer` already apply for stone and biome tiles
+  (`stone_renderer.gd:266,326`, `terrain_renderer.gd:848`). **Not built in
+  this pass** — per this project's TDD rule, a meaningful test needs real
+  source pixels to slice and measure against, the same reason
+  `IllustratedCharacterSprite._PARTS` stays empty until hair/beard art
+  exists (`character_art_brief.md`'s own Status table). Generation prompts
+  are ready now ([ai_sprite_prompts.md §10](../art/ai_sprite_prompts.md#10-placed-structures--seeded-variant-grids-2026-09-03));
+  wiring is the follow-up once real art lands.
 
 ### Deferred: per-item use/swing art
 
