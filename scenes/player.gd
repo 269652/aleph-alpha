@@ -3765,7 +3765,9 @@ func _talk_request_here() -> Dictionary:
 	if npc == null or npc.identity == null:
 		return {}
 	var npc_id := "npc:%d" % npc.identity.seed_value
-	var sources := ConversationSources.gather(_chunk_manager, npc.identity, npc_id, inventory, wallet)
+	var sources := ConversationSources.gather(
+		_chunk_manager, npc.identity, npc_id, inventory, wallet, npc.economy
+	)
 	var frame := DialogueContext.build(npc_id, sources)
 	# Read where we stand BEFORE recording this conversation, or every villager
 	# would greet you as someone they already know on the strength of the
@@ -3779,6 +3781,14 @@ func _talk_request_here() -> Dictionary:
 	var request := new_talk_request(frame)
 	if not request.is_empty():
 		request["recognition"] = recognition
+		# What this villager can ask of you and what you already owe them
+		# (docs/concept/quests.md). Assembled from the frame and the stores
+		# that were just read, so World stays glue and never builds a second,
+		# possibly disagreeing, view of the same simulation.
+		request["asks"] = ConversationSources.asks_for(sources, frame, _item_catalog)
+		# The wallet an errand reward is actually paid out of -- carried on the
+		# REQUEST rather than in the frame, which holds no Object by design.
+		request["payer_wallet"] = npc.economy.wallet if npc.economy != null else null
 	return request
 
 

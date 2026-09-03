@@ -171,3 +171,46 @@ func test_repeating_yourself_outranks_familiarity():
 	var repeated := known.duplicate()
 	repeated["repeat"] = true
 	assert_ne(OfflineRenderer.render(known, _bands()), OfflineRenderer.render(repeated, _bands()))
+
+
+# -- what a villager says about an errand ------------------------------------
+
+
+## Agreeing to fetch something gets a real answer, in the villager's own
+## register, rather than a window closing silently.
+func test_agreeing_to_an_errand_gets_thanked():
+	assert_ne(OfflineRenderer.gratitude_for({"verbosity": "mid"}), "")
+
+
+func test_a_terse_villager_thanks_you_more_briefly_than_a_talkative_one():
+	assert_lt(
+		OfflineRenderer.gratitude_for({"verbosity": "low"}).length(),
+		OfflineRenderer.gratitude_for({"verbosity": "high"}).length()
+	)
+
+
+## quests.md's derived-reward claim reaches the SENTENCE: "a villager who
+## went broke while you were away pays less, AND SAYS SO."
+func test_a_villager_who_cannot_pay_in_full_says_so():
+	var short := OfflineRenderer.settlement_for(
+		{"verbosity": "mid"}, {"amount": 2, "full": 9, "short": 7, "is_short": true, "paid": 2}
+	)
+	assert_string_contains(short, "2")
+	assert_ne(short, OfflineRenderer.settlement_for(
+		{"verbosity": "mid"}, {"amount": 9, "full": 9, "short": 0, "is_short": false, "paid": 9}
+	))
+
+
+func test_a_villager_paying_in_full_names_the_amount():
+	var paid := OfflineRenderer.settlement_for(
+		{"verbosity": "mid"}, {"amount": 9, "full": 9, "short": 0, "is_short": false, "paid": 9}
+	)
+	assert_string_contains(paid, "9")
+
+
+## A villager with nothing at all still says something. Being unable to pay
+## is not the same as having no answer.
+func test_a_villager_who_can_pay_nothing_still_says_something():
+	assert_ne(OfflineRenderer.settlement_for(
+		{"verbosity": "low"}, {"amount": 0, "full": 9, "short": 9, "is_short": true, "paid": 0}
+	), "")

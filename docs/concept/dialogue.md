@@ -279,6 +279,42 @@ says it is *"explicitly NOT the real Live Dialogue System."*
 - ⬜ The rumor-vector loop: you do not yet *hold* a degraded memory of what a
   villager tells you, so carrying news between settlements — dialogue.md's
   mechanism 4, and the one no template can fake — is still unbuilt.
-- ⬜ `QuestOffer`, `QuestReward`, `NpcAsk`, contract propose/accept/fulfil/lapse.
+- ✅ `QuestOffer`, `QuestReward`, `NpcAsk`, and contract
+  propose/accept/fulfil/lapse (2026-09-03) — **a villager can now ask you for
+  what they are short of, and you can go and get it.** Four of the six sources
+  are live (production shortfall, village hunger, remembered threat,
+  hardship); sources 4 and 5 need state the frame deliberately does not carry
+  and are absent rather than stubbed. Three properties this list should be
+  read against:
+  - The **id is the storage.** `offer_id` is derived
+    (`"<kind>:<subject>:<count>"`), goes into the accepted `Contract`'s first
+    obligation, and reads back out with `parse_id` — so an errand survives
+    save and load with no schema and nothing written down twice, and an offer
+    still cannot outlive the condition it projects.
+  - **Urgency is borrowed, never recomputed.** Each errand kind names a
+    `DialogueTopic` and takes that topic's own measured salience, so no
+    authored weight enters through the back door and a villager cannot ask
+    harder than they are willing to talk.
+  - **Nothing below the window touches a wallet.** The `Conversation` decides
+    what should change and reports it; `ConversationWindow.world_effect`
+    carries it up; only `World` moves an item or a coin. The AI seam is
+    unchanged by any of this.
+- ⬜ **Only three of the four offer kinds can be promised.** A remembered
+  threat is directions, not a debt: nothing can yet observe the player
+  standing at the raid site, so accepting it would be a promise the game
+  cannot let you keep.
+- 🐛 **Four of `gather`'s source names did not exist** (found while wiring
+  errands, all fixed here). `gather` reads the world by NAME through a
+  fail-open `_call`, which makes a non-existent method indistinguishable from
+  an absent source: `npc_economy` (so `hunger`, `is_hungry` and `wallet_gold`
+  were 0/false for every villager in play), `settlement_id_for_npc` (so no
+  villager had a settlement, and the shortfall list, village status, tier,
+  specialization and food stock were all read against `""`),
+  `market_for_settlement` (so no settlement had a market), and
+  `co_present_identities_near` (so every villager stood alone, and the
+  `neighbour` and `contradiction` topics were dead). Between them they are why
+  a villager in the running game could talk about nothing but their own
+  memories. `test_gather_asks_for_nothing_the_manager_cannot_answer` now pins
+  every name `gather` calls against the real manager.
 - ⬜ **Not planned in this pass:** any LLM provider, settings tab, network code
   or baked phrasing pack. The seam above is documented, not implemented.

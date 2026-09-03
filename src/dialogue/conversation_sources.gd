@@ -36,13 +36,24 @@ const SOURCE_KEYS: Array[String] = [
 ## `chunk_manager` may be null -- a conversation in an unwired world must not
 ## crash, it must just have less to say.
 static func gather(
-	chunk_manager, identity, npc_id: String, player_inventory, player_wallet
+	chunk_manager, identity, npc_id: String, player_inventory, player_wallet, economy = null
 ) -> Dictionary:
 	var settlement_id := _settlement_of(chunk_manager, npc_id)
 	var at := _npc_position(identity)
 	return {
 		"identity": identity,
-		"economy": _call(chunk_manager, "npc_economy", []),
+		# Handed in by the caller, because it lives on the NpcMarker -- not on
+		# the manager and not on the identity.
+		#
+		# This was `_call(chunk_manager, "npc_economy", [])` and
+		# EarthChunkManager has no such method, so the fail-open returned null
+		# for every villager in the running game. Everything DialogueContext
+		# reads off the economy -- `hunger`, `is_hungry`, `wallet_gold` -- was
+		# therefore permanently 0/false in play: the hunger and wallet topics
+		# could never fire, and an errand reward derived from the asker's own
+		# wallet would always have been nothing. Found while wiring errands,
+		# pinned by test_the_villagers_own_economy_is_handed_over.
+		"economy": economy,
 		"memory_store": _call(chunk_manager, "memory_store", []),
 		"event_store": _call(chunk_manager, "event_store", []),
 		# Recognition's floor comes from the two stores that cannot be argued
@@ -50,6 +61,11 @@ static func gather(
 		# rather than from anyone's MEMORY of them, which the gossip step can
 		# talk a villager out of. See NpcRecognition's own header.
 		"contract_store": _call(chunk_manager, "contract_store", []),
+		# The coordinator itself, for anything that must WRITE a contract
+		# rather than read one (see asks_for, and NpcAsk's "driving the store"
+		# section). Reading a status is the store's job; changing one is the
+		# coordinator's, because only it also records the event.
+		"contract_driver": chunk_manager,
 		"settlement_id": settlement_id,
 		"market": _call(chunk_manager, "market_for_settlement", [settlement_id]),
 		"village_market": null,
@@ -120,3 +136,45 @@ static func recognition_of(sources: Dictionary, npc_id: String) -> String:
 		"contract_store": sources.get("contract_store"),
 		"memories": sources.get("memories", []),
 	})["tier"])
+
+
+## Everything a conversation needs to know about ERRANDS, assembled from what
+## the frame and the stores already hold (see QuestOffer, NpcAsk, and
+## docs/concept/quests.md's "Offered in conversation").
+##
+## Nothing new is read from the world here. The frame already knows who the
+## player is, what they are carrying and what this villager holds in their own
+## wallet -- so the errand layer needs no second read that could disagree with
+## the first, and DialogueContext stays the one place this system reads the
+## simulation.
+##
+## `item_catalog` is optional: it classifies carried ids for errands that name
+## a CATEGORY rather than an item ("bring me something to eat"). Without one
+## every item-id errand still works and only category errands go unmatched --
+## the same fail-open shape every other source here has.
+static func asks_for(sources: Dictionary, frame: Dictionary, item_catalog) -> Dictionary:
+	var carrying: Dictionary = frame.get("player_carrying", {})
+	return {
+		# The COORDINATOR where there is one, not its bare ContractStore --
+		# see NpcAsk's "driving the store" section: only the coordinator also
+		# appends the lifecycle event and lets villagers witness it, and
+		# NpcRecognition reads exactly those events to decide how you are
+		# greeted next time. A promise settled straight against the store
+		# would be one nobody ever noticed you kept.
+		"contract_store": sources.get("contract_driver", sources.get("contract_store")),
+		"player_id": String(frame.get("player_id", PlayerIdentity.PLAYER_ENTITY_ID)),
+		"carrying": carrying,
+		"item_kinds": _kinds_of(carrying, item_catalog),
+		# The villager's own live balance -- the reward is re-derived against
+		# it at delivery, never trusted from the offer (quests.md).
+		"payer_gold": int(frame.get("wallet_gold", 0)),
+	}
+
+
+static func _kinds_of(carrying: Dictionary, item_catalog) -> Dictionary:
+	var kinds: Dictionary = {}
+	if item_catalog == null or not item_catalog.has_method("kind_of"):
+		return kinds
+	for item_id in carrying:
+		kinds[item_id] = String(item_catalog.kind_of(item_id))
+	return kinds

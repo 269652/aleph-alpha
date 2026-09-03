@@ -90,3 +90,59 @@ func test_there_is_always_a_button():
 		if talk.is_over():
 			break
 		window._on_choice(Conversation.CHOICE_MORE)
+
+
+# -- errands reach the world through the owner, never from here -------------
+
+
+func _asking_talk(store, carrying: Dictionary):
+	return Conversation.open({
+		"npc_id": "npc:7",
+		"seed_value": 7,
+		"npc_name": "Bren",
+		"traits": {},
+		"occupation": "blacksmith",
+		"is_producer": true,
+		"meal_available": true,
+		"wallet_gold": 200,
+		"household_id": "household:7",
+		"household_recipe_id": "stone_pickaxe",
+		"shortfall_missing": [{"item_id": "rock", "need": 3}],
+		"world_age_seconds": 100.0,
+	}, null, Conversation.RECOGNITION_STRANGER, {
+		"contract_store": store,
+		"player_id": "player:local",
+		"carrying": carrying,
+		"item_kinds": {},
+		"payer_gold": 200,
+	})
+
+
+## The window renders and reports; it does not move an item or a coin. What
+## the delivery should change is handed UP to whoever owns the window, which
+## is the only thing here that can reach an Inventory or a Wallet.
+func test_a_delivery_hands_what_changes_hands_up_to_the_owner():
+	var ContractStore = load("res://src/emergence/contract_store.gd")
+	var NpcAsk = load("res://src/dialogue/npc_ask.gd")
+	var store = ContractStore.new()
+
+	_asking_talk(store, {}).choose(NpcAsk.CHOICE_ACCEPT)
+
+	var received: Array = []
+	window.world_effect.connect(func(effect): received.append(effect))
+	window.open_with(_asking_talk(store, {"rock": 5}))
+	window._on_choice(NpcAsk.CHOICE_DELIVER)
+
+	assert_eq(received.size(), 1)
+	assert_eq(received[0]["items"], {"rock": 3})
+	assert_gt(int(received[0]["gold"]), 0)
+
+
+## Ordinary talking emits nothing -- the signal is for real world changes, so
+## an owner may connect to it without filtering every exchange.
+func test_just_talking_changes_nothing_in_the_world():
+	var received: Array = []
+	window.world_effect.connect(func(effect): received.append(effect))
+	window.open_with(_talk())
+	window._on_choice(Conversation.CHOICE_MORE)
+	assert_eq(received.size(), 0)

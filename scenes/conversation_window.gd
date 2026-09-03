@@ -19,6 +19,13 @@ const Conversation = preload("res://src/dialogue/conversation.gd")
 ## control back to the game.
 signal closed
 
+## Emitted when a choice actually changes the world -- goods handed over, gold
+## paid. The Conversation decides WHAT should change and this window carries
+## it up; only the owner (World) can reach an Inventory or a Wallet, which is
+## what keeps every layer below here testable with no engine at all.
+## Payload: {npc_id, contract_id, items: {item_id: count}, gold: int}.
+signal world_effect(effect: Dictionary)
+
 const PANEL_WIDTH := 520.0
 const PANEL_HEIGHT := 190.0
 const PANEL_MARGIN := 16.0
@@ -140,7 +147,18 @@ func _on_choice(choice_id: String) -> void:
 		close()
 		return
 	_talk.choose(choice_id)
+	_drain_effect()
 	if _talk.is_over() and choice_id == Conversation.CHOICE_LEAVE:
 		close()
 		return
 	_refresh()
+
+
+## Hands any world change the last choice produced up to the owner. Drained
+## from the Conversation, so a window that redraws cannot pay twice.
+func _drain_effect() -> void:
+	if _talk == null or not _talk.has_method("take_effect"):
+		return
+	var effect: Dictionary = _talk.take_effect()
+	if not effect.is_empty():
+		world_effect.emit(effect)

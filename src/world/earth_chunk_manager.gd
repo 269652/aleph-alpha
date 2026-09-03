@@ -1858,6 +1858,49 @@ func _current_hour_of_day() -> int:
 ## event-source). Always current: called fresh, it can never go stale the
 ## way a recorded "quest offered" event could once the shortage it named
 ## resolves.
+## This settlement's own Market, or null for one that has none.
+##
+## A named accessor rather than making every caller reach through
+## market_store(): ConversationSources.gather asks for exactly this, and
+## before it existed `_call`'s fail-open handed back null -- so
+## `sources["market"]` was null for every villager in the running game, and
+## every fact SettlementFood derives from it (food stock, carrying capacity,
+## and through them the village's status, tier and specialization) was 0 or
+## "" in play. Three of a conversation's village topics were structurally
+## dead. Third of three phantom method names found this way; see
+## test_gather_asks_for_nothing_the_manager_cannot_answer, which now pins all
+## of them at once.
+func market_for_settlement(settlement_id: String) -> Market:
+	if settlement_id.is_empty():
+		return null
+	return _market_store.market_for(settlement_id)
+
+
+## Goods handed to a settlement -- today, a player completing an errand a
+## villager asked them for (see docs/concept/quests.md, NpcAsk).
+##
+## They land in the SAME `Market` production_shortfall_quests_for_settlement
+## reads its shortfall out of, which is the whole point: quests.md's first
+## pillar is that a quest projects a real shortage, so a delivery that did not
+## change that shortage would not be a delivery at all. Without this the
+## errand completed, the contract was fulfilled, the reward was paid, the item
+## left the player's pack -- and the villager asked for exactly the same thing
+## again, because nothing in the world had changed. Found by playing it.
+##
+## `items` is item_id -> count. An unknown settlement or an empty delivery
+## changes nothing, the same fail-open shape every other read here has.
+func deliver_to_settlement(settlement_id: String, items: Dictionary) -> void:
+	if settlement_id.is_empty() or items.is_empty():
+		return
+	var market := _market_store.market_for(settlement_id)
+	if market == null:
+		return
+	for item_id in items:
+		var count := int(items[item_id])
+		if count > 0:
+			market.add_stock(String(item_id), count)
+
+
 func production_shortfall_quests_for_settlement(settlement_id: String) -> Array:
 	var household_occupations := _household_occupations_for_settlement(settlement_id)
 	var market := _market_store.market_for(settlement_id)
@@ -2907,6 +2950,33 @@ func _known_settlement_ids() -> Array[String]:
 ## was witnessed settling, and without this a household that settled twice
 ## would inflate the settlement's own tier and institution thresholds.
 const SETTLING_EVENT_TYPES := ["npc_settled", "player_settled"]
+
+
+## Where `npc_id` lives, or "" for a villager who never settled anywhere --
+## the same settling events _households_in_settlement walks, read in the other
+## direction. `npc_settled` names the villager as its ACTOR and the settlement
+## as its witness (see record_settlement_founded_if_new), so the inverse
+## lookup needs no second index and no new state.
+##
+## ConversationSources.gather asked for exactly this method and it did not
+## exist, so `_call`'s fail-open handed back "" for every villager in the
+## running game -- and every settlement-derived source a conversation reads
+## (the production shortfall list, village status, tier, specialization, food
+## stock, and the market itself) was then looked up against "" and came back
+## empty. A villager could talk about nothing but their own memories, which is
+## exactly what playing it showed. Found by test_village_errand_floor.gd.
+func settlement_id_for_npc(npc_id: String) -> String:
+	if npc_id.is_empty():
+		return ""
+	for event in _event_store.events_for_entity(npc_id):
+		if not SETTLING_EVENT_TYPES.has(event.type):
+			continue
+		if not event.actors.has(npc_id):
+			continue
+		for witness in event.witnesses:
+			if EntityRef.kind_of(witness) == "settlement":
+				return witness
+	return ""
 
 
 func _households_in_settlement(settlement_id: String) -> Array[String]:
@@ -7239,6 +7309,43 @@ func nearest_npc_near(pixel_position: Vector2, max_distance: float) -> NpcMarker
 				nearest = node
 				nearest_distance = distance
 	return nearest
+
+
+## Every OTHER villager standing within `max_distance` pixels of
+## `pixel_position` -- their NpcIdentity, not their marker, because that is
+## all a conversation frame is allowed to hold (DialogueContext keeps no
+## Object in the frame).
+##
+## What it feeds: the `neighbour` and `contradiction` topics, which are about
+## two villagers who are both here and disagree about something. Fourth of
+## four phantom method names ConversationSources.gather asked for and nothing
+## answered -- so every villager in the game stood alone, no matter who was
+## next to them, and both topics were structurally dead. Pinned by
+## test_gather_asks_for_nothing_the_manager_cannot_answer.
+##
+## Same iteration as nearest_npc_near, and it excludes nobody by identity:
+## the caller filters itself out by npc_id (see ConversationSources._co_present
+## and DialogueContext._neighbours), which is the only place that knows whose
+## conversation this is.
+func co_present_identities_near(
+	pixel_position: Vector2, max_distance: float = NEIGHBOUR_RADIUS_PX
+) -> Array:
+	var out: Array = []
+	for node_list in _loaded_villages.values():
+		for node in node_list:
+			if not (node is NpcMarker) or node.identity == null:
+				continue
+			if pixel_position.distance_to(node.position) <= max_distance:
+				out.append(node.identity)
+	return out
+
+
+## How close two villagers have to be to be part of the same conversation.
+## Player.TALK_RADIUS is how close YOU have to stand to talk to someone at
+## all, so twice it is "near enough that you can see them both from where you
+## are standing" -- derived from the one distance this game already uses for
+## conversational range rather than picked.
+const NEIGHBOUR_RADIUS_PX := 96.0
 
 
 ## The nearest LOOSE, LIFTABLE stone within `max_distance` of `pixel_position`

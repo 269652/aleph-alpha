@@ -74,6 +74,8 @@ const HotkeyRouting = preload("res://src/ui/hotkey_routing.gd")
 const ConditionReadout = preload("res://src/ui/condition_readout.gd")
 const ConversationWindow = preload("res://scenes/conversation_window.gd")
 const Conversation = preload("res://src/dialogue/conversation.gd")
+const NpcAsk = preload("res://src/dialogue/npc_ask.gd")
+const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const NpcSeenLedger = preload("res://src/dialogue/npc_seen_ledger.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const WorldReset = preload("res://src/world/world_reset.gd")
@@ -2183,7 +2185,12 @@ func _update_interaction_prompt(local_player: Player) -> void:
 
 	var npc = _chunk_manager.nearest_npc_near(local_player.position, Player.TALK_RADIUS)
 	if npc != null:
-		_show_interaction_prompt("Talk (%s)" % OS.get_keycode_string(_keybindings.keycode_for("talk")), npc.position)
+		_show_interaction_prompt(
+			NpcAsk.talk_prompt(
+				OS.get_keycode_string(_keybindings.keycode_for("talk")), _owed_to(npc)
+			),
+			npc.position
+		)
 		return
 
 	# Something already in hand: E is now dedicated to charge/release (see
@@ -2535,15 +2542,75 @@ func _open_pending_conversation(local_player: Player) -> void:
 	local_player.pending_talk_request = {}
 	if _conversation_window == null or _conversation_window.is_open():
 		return
+	_conversation_payer_wallet = request.get("payer_wallet")
 	_conversation_window.open_with(Conversation.open(
 		request["frame"],
 		_npc_seen_ledger,
-		String(request.get("recognition", Conversation.RECOGNITION_STRANGER))
+		String(request.get("recognition", Conversation.RECOGNITION_STRANGER)),
+		request.get("asks", {})
 	))
+
+
+## Goods and gold actually changing hands at the end of an errand (see
+## docs/concept/quests.md, and ConversationWindow.world_effect).
+##
+## The Conversation decided WHAT should change and the window carried it up;
+## this is the only layer that can reach an Inventory or a Wallet, which is
+## what keeps every layer below it testable with no engine at all. The
+## contract was already fulfilled and the matching event already recorded by
+## the time this runs -- what is left is the physical exchange.
+func _on_conversation_effect(effect: Dictionary) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		return
+	var items: Dictionary = effect.get("items", {})
+	for item_id in items:
+		local_player.inventory.remove(String(item_id), int(items[item_id]))
+	_refresh_inventory_now(local_player)
+	# ...and into the village's own stock, which is where the shortage that
+	# produced the errand was measured. Taking the goods out of the pack
+	# without this leaves the village exactly as short as it was.
+	if _chunk_manager != null:
+		_chunk_manager.deliver_to_settlement(String(effect.get("settlement_id", "")), items)
+
+	var gold := int(effect.get("gold", 0))
+	if gold <= 0:
+		return
+	local_player.wallet.add(gold)
+	# Paid out of the paying villager's OWN wallet -- the reward was derived
+	# from that balance moments earlier, so taking it from anywhere else would
+	# make the number they quoted a fiction, and would let one villager fund
+	# every errand in the valley.
+	if _conversation_payer_wallet != null:
+		_conversation_payer_wallet.spend(gold)
+
+
+## What the player still owes this villager, as the short phrase the floating
+## prompt appends (quests.md: "Tracking is the world, not a log"). Read only
+## -- `open_asks` deliberately does not default an overdue promise, because
+## this runs on the prompt throttle and reading what is owed must never change
+## the world. The lapse is recorded at conversation open, where it belongs.
+func _owed_to(npc) -> String:
+	if _chunk_manager == null or npc == null or npc.identity == null:
+		return ""
+	return NpcAsk.owed_summary(NpcAsk.open_asks(
+		_chunk_manager.contract_store(),
+		"npc:%d" % npc.identity.seed_value,
+		PlayerIdentity.PLAYER_ENTITY_ID,
+		_chunk_manager.world_age_seconds()
+	))
+
+
+## The wallet of the villager the open conversation is with, captured when the
+## window opens rather than looked up when it pays: the marker itself can be
+## freed by a chunk unload mid-conversation, and the balance the reward was
+## derived from is this one.
+var _conversation_payer_wallet = null
 
 
 func _build_conversation_window() -> void:
 	_conversation_window = ConversationWindow.new()
+	_conversation_window.world_effect.connect(_on_conversation_effect)
 	_ui.add_child(_conversation_window)
 
 

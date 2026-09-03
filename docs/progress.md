@@ -1752,6 +1752,142 @@ Reported live, looking at a real grassland chunk at noon: *"the bare grass parts
 ✅ Ant mounds are no longer invisible -- see "Ant mounds, and the traffic on them" below, which closed this the same day.
 
 
+### A villager can ask you for what they are short of (2026-09-03)
+
+`docs/concept/quests.md` had been specified to the level of a field manual —
+six grounded need sources, the derived-id rule, the reward-re-derivation rule,
+the lazy deadline — and **none of it existed**. A blacksmith would tell you
+she was short three rock and then had no way to ask you for them; the six
+sources, the offer shape, `QuestReward` and `NpcAsk` were all prose.
+
+The projection layer (`src/emergence/quest.gd`) had been real since Phase 12,
+which made this the same defect as the dialogue engine one screen up: a
+correct, tested answer computed every step and consumed by nobody.
+
+| Module | Lines | Tests |
+|---|---|---|
+| `QuestReward` | 105 | 10 |
+| `QuestOffer` | 330 | 36 |
+| `NpcAsk` | 335 | 35 |
+| `Conversation` (errand layer) | +125 | 21 |
+
+✅ **Four of the six sources are live.** Production shortfall, village hunger,
+remembered threat and hardship. Sources 4 (*deeper need*) and 5 (*carried
+news*) are **absent rather than stubbed**: the first needs `NeedResolver`'s
+live stock/nodes/structures and the frame carries no `Object` by design; the
+second needs a memory the *player* holds, and the rumor-vector loop is still
+unbuilt. Both are named in the module header as unbuilt, with the reason.
+
+✅ **Urgency is borrowed, never recomputed.** Each errand kind names a
+`DialogueTopic` and takes that topic's own measured salience. `DialogueTopic`'s
+second rule is that salience is a real quantity already in the simulation and
+never an authored weight; a second scoring layer here would have been exactly
+that weight, with the extra failure that a villager could ask for something
+more urgently than they were willing to discuss it.
+
+✅ **The derived id turned out to be the whole persistence story.** `Contract`
+holds free-form Strings and nothing in the codebase interprets them, so rather
+than bolt a payload onto it, the derived `offer_id`
+(`"<kind>:<subject>:<count>"`) goes into the player's own obligation and reads
+back out with `parse_id`. An errand survives save and load with no schema and
+nothing written twice — and the one case a naive split gets wrong (a subject
+that is an entity id, with a colon of its own) is pinned.
+
+✅ **The threat floor is measured, not chosen.** A remembered raid is worth
+sending someone after while it is still no more than one retelling from
+someone who was there — obtained by actually running `Rumor.transmit` twice
+and scoring both with the same `belief_strength` every memory topic uses, so
+retuning the decay constants moves the floor with them. Same shape as
+`DialogueTopic.hop_depths`, which measures its ladder rather than reading an
+order off an enum.
+
+✅ **The loop closes socially, for free.** Accept, settle and lapse all go
+through `EarthChunkManager`'s contract transitions rather than the raw store —
+those append the matching event and let nearby villagers witness it, and
+`NpcRecognition` reads exactly those events. So an outstanding errand makes a
+villager greet you with "I've been hoping you'd come by", a kept one makes
+them warm, and a broken one makes them cold, through the gossip network that
+already runs. Settling straight against the store would have worked perfectly
+and been invisible to everyone including the person you kept the promise for;
+`NpcAsk` duck-types the coordinator's method names for that reason, with a
+bare `ContractStore` still a valid argument so every test stays engine-free.
+
+✅ **Tracking is the world.** `Talk (G) · owed 3 rock`, from the prompt
+throttle that already existed. Reading what is owed deliberately does *not*
+default an overdue promise — that would change the world from a render path —
+so the lapse is recorded at conversation open, which quests.md already argued
+is the only observer that matters.
+
+🐛 **Four phantom method names, and the instrument that ends them.**
+`ConversationSources.gather` reads the world *by name*, through a fail-open
+`_call`. The fail-open is right — an unloaded chunk really has no market — but
+it makes a method that does not exist indistinguishable from one that has
+nothing to say, silently. Four were live at once, every one of them wrong
+since the day it was written, and every unit test passed throughout:
+
+| Name asked for | What it actually cost |
+|---|---|
+| `npc_economy` | `hunger`, `is_hungry` and `wallet_gold` were 0/false for **every villager in the game** — the hunger and wallet topics could never fire, and every errand reward would have been zero |
+| `settlement_id_for_npc` | no villager had a settlement, so the shortfall list, village status, tier, specialization and food stock were all read against `""` |
+| `market_for_settlement` | no settlement had a market, so `SettlementFood` reported zero for everything above |
+| `co_present_identities_near` | every villager stood alone whoever was beside them; the `neighbour` and `contradiction` topics were structurally dead |
+
+Together these are why playing it showed a villager who could talk about
+nothing but their own memories. Three real methods now exist on
+`EarthChunkManager`, the economy is handed in by the caller that holds the
+marker, and `test_gather_asks_for_nothing_the_manager_cannot_answer` pins
+every name `gather` calls against the real manager — so the next one is a test
+failure instead of a silent hole. `NEIGHBOUR_RADIUS_PX` is derived from
+`Player.TALK_RADIUS` rather than chosen, and pinned.
+
+🐛 **A test stub that was more capable than the thing it stood for.**
+`NpcAsk` drove contracts through the coordinator so the lifecycle events would
+be recorded — and also *read* through it. The real `EarthChunkManager` has no
+`contracts_for`; the test's `RecordingCoordinator` did. Every test passed and
+the game was broken in a specific, visible way: the villager kept offering an
+errand you had already promised, because `already_promised` could never see the
+promise. Reads go through the store now and writes through the coordinator,
+which is what the design said all along; the stub was rewritten to expose
+exactly what the real manager exposes, which reproduced the bug immediately.
+
+🐛 **Two more found only by playing.**
+- The confirmation put the player's words in the villager's mouth:
+  `Rhoel: "I'll bring you meat. Right. Thank you."` The window shows one
+  speaker and it is them, so Rhoel read as agreeing to fetch himself meat.
+  The player's move is the button they just pressed; the line is the answer.
+- **The goods vanished.** The errand completed, the contract was fulfilled, the
+  reward was paid, the item left the pack — and the villager asked for exactly
+  the same thing again, because nothing put it into the settlement's stock.
+  quests.md's first pillar cuts both ways: a delivery that does not change the
+  real shortage is not a delivery, it is an infinite errand.
+  `EarthChunkManager.deliver_to_settlement` puts the goods in the same `Market`
+  the shortfall was measured from, and `test_village_errand_floor.gd` runs the
+  whole exchange — offered, promised, handed over, witnessed, shortage gone —
+  against a real manager, a real `Inventory` and a real frame.
+
+✅ **Verified in play**, not just in tests: a villager offering
+"I'll bring you meat", answering "Good." in her own terse voice, the errand
+not offered twice, `Talk (G) · owed meat` above her head, "Here's meat." on the
+way back, and — because a fresh village's villagers genuinely have no money —
+"I've nothing." as she takes it. That last line is the derived reward being
+honest, and it is the first thing in this system that reads like a person.
+
+⬜ **Only three of the four offer kinds can be promised.** A remembered threat
+is offered as directions and never as a contract: nothing in this simulation
+can yet observe the player standing at the raid site, so accepting it would be
+a promise the game cannot let you keep. Stated in `NpcAsk.PROMISABLE_KINDS`
+and pinned, rather than left as an accident.
+
+⬜ **One honest divergence from `quests.md`.** That doc says the NPC pays
+"roughly what they'd have paid the market." **There is no market price for a
+raw material in this simulation** — `Shop.CATALOG` prices five finished goods
+and not one recipe input, and `Market.price_for` is a scarcity multiplier
+pinned at its ceiling for exactly the items a shortfall names. So the reward
+is quoted in the one price this world genuinely holds (one meal at
+`VillageWages.subsistence_wage()`) times a test-pinned `MEALS_PER_UNIT`, plus
+the doc's own relationship premium. `quests.md` has been updated to say so.
+
+
 ### The player is a node in the graph (2026-09-03)
 
 `dialogue.md`'s third pillar, and the last of the big unwired dialogue modules: **"the player is a node in the graph, not a camera."** `NpcRecognition` had 318 lines and 29 tests and no caller anywhere, so every beat in the game rendered at `stranger` — a villager you had spoken to nine times greeted you exactly like one you had never met — and nothing was written when you talked, so recognition could never have advanced even if something had read it.
@@ -1798,9 +1934,9 @@ An audit for "what needs a second look" turned up the largest instance of this r
 
 🐛 **And one only the running game could have shown: the window opened and drew nothing.** A bare `Control` does not lay out its children, and `PRESET_CENTER_BOTTOM` anchors both edges to one point — so the panel came out zero-sized at the very bottom of the screen and rendered off it. Every test passed. Positioned now the way every other HUD card here is: anchored to an edge, then offset in from it.
 
-⬜ **`NpcRecognition` still has no caller.** Every beat renders at `RECOGNITION_STRANGER`, and nothing is written when you talk, so recognition never advances past stranger — pillar 3 ("the player is a node in the graph") is the largest remaining gap in this system.
+⬜ ~~**`NpcRecognition` still has no caller.**~~ — closed the same day, see *The player is a node in the graph* above.
 
-⬜ **`QuestOffer`/`QuestReward`/`NpcAsk` do not exist**, so the emergent-quest design is unbuilt: a villager can tell you they are short three rock and cannot yet ask you for them.
+⬜ ~~**`QuestOffer`/`QuestReward`/`NpcAsk` do not exist**~~ — closed the same day, see *A villager can ask you for what they are short of* above.
 
 ⬜ **No typewriter reveal**; the line appears at once.
 
@@ -2191,9 +2327,9 @@ the mechanism-by-mechanism breakdown.
 
 | Mechanism | Status | Note | Complexity |
 |---|---|---|---|
-| Need-Driven Quest Templates | ⬜ Not started | Spec'd in concept/quests.md: safety/production/social need sources resolving into fetch/protect/deliver/join-the-defense shapes. | large |
+| Need-Driven Quest Templates | 🚧 Partial | Four of concept/quests.md's six grounded sources are live and reach the player in conversation (`QuestOffer`/`QuestReward`/`NpcAsk`, 2026-09-03): fetch, feed and firewood can be promised, delivered and paid; a remembered threat is offered as directions only. Safety needs, social needs, and quorum/promotion to settlement level remain unbuilt. | large |
 | LLM Quest Flavor Text | ⬜ Not started | | medium |
-| Quest Reward/Consequence Hooks | ⬜ Not started | Spec'd in concept/quests.md's Consequences section (reputation/discounts/skill rewards; settlement destruction on failure). | small |
+| Quest Reward/Consequence Hooks | 🚧 Partial | The individual-quest half is real (2026-09-03): `QuestReward` pays from the asker's own live wallet, re-derived at fulfilment, and keeping or breaking a promise reaches `NpcRecognition` through the contract events villagers already witness. The settlement-level half of concept/quests.md's Consequences section (reputation aggregate, softened shop prices, skill-web discounts, destruction on failure) still needs factions.md's reputation score, which is not built. | small |
 
 ### Phase 5+ — Post-MVP expansion
 
@@ -5644,7 +5780,7 @@ festival wiring, no hiring/wages yet.
 - **Live Dialogue System** (large) — 🚧 In progress — now spec'd in its own `concept/dialogue.md`, and deliberately built as an **entirely offline** system: no LLM anywhere in the mechanism, per an explicit scope decision (see that doc's "The AI seam, deliberately not built"). The substrate it needs landed first (see **Conversation substrate** above); the pipeline itself — `NpcVoice`, `DialogueContext`, `DialogueTopic`, `DialogueMove`, `NpcSeenLedger`, `OfflineRenderer`, `ConversationWindow` — is not built yet. "Basic Talk Interaction" below remains the live single-line placeholder until it is.
 - **Persistent Memory Log** (medium) — ✅ Done (mechanism); 🚧 not yet auto-triggered off ordinary NPC proximity — `MemoryRecord`/`MemoryStore`/`Rumor` (`src/emergence/`) implement `npc.md`'s "Memory, beliefs, and rumor propagation" spec: fact stays authoritative in `EventStore`, a memory is a separate lossy per-holder projection, `Rumor` steps confidence/source-type down one hop at a time (tested against a ~3-hop "heard it from a guy" feel). Content mutation still deliberately deferred per the spec. Propagation isn't yet wired to fire automatically off NPCs' landmark-proximity schedule (`npc_schedule.gd`) — the mechanism is real and callable, the trigger isn't live yet.
 - **Self-Determination / Role Drift** (medium) — ⬜ Not started
-- **Dynamic Quest Generation** (large) — ⬜ Not started (each `NpcIdentity` already carries a `need`, but nothing turns it into a request yet)
+- **Dynamic Quest Generation** (large) — 🚧 Partial — a villager's real production shortfall, hunger, remembered threat or winter hardship now becomes an offer they make to you in conversation (`QuestOffer`, 2026-09-03), and three of the four can be promised and delivered on. `NpcIdentity.need` itself is still not a source: it is an authored constant per occupation rather than a measured state, which is exactly what pillar 1 forbids as a quest source.
 - **Instruction DSL** (huge) — ⬜ Not started
 - **Instruction Complexity Budget** (small) — ⬜ Not started
 - **Hiring/Wage System** (medium) — ⬜ Not started

@@ -159,6 +159,71 @@ const DEFLECTIONS := [
 ]
 
 
+## What a villager says when the player agrees to an errand, keyed by
+## verbosity like every other tone pool here -- a terse voice thanks you in
+## three words and a talkative one takes a sentence about it. The AGREEMENT
+## is the player's line (NpcAsk.accept_label); this is the answer to it.
+const GRATITUDE := {
+	"low": ["Good."],
+	"mid": ["Right. Thank you."],
+	"high": ["That'd be a weight off, truly. Thank you."],
+}
+
+## What they say when the goods are handed over and they can pay in full.
+## `{gold}` is substituted by the core, never written into the pool -- the
+## same slot discipline that keeps a quantity out of every authored string in
+## this file.
+const SETTLEMENT_PAID := {
+	"low": ["{gold} gold."],
+	"mid": ["Here -- {gold} gold, as agreed."],
+	"high": ["There you are: {gold} gold, and gladly. That's the size of it."],
+}
+
+## And when they cannot. quests.md: "a villager who went broke while you were
+## away pays less, AND SAYS SO" -- so the shortfall is spoken, not swallowed.
+const SETTLEMENT_SHORT := {
+	"low": ["{gold} is all I've got."],
+	"mid": ["It's {gold} -- I'm short of what I said. I'm sorry."],
+	"high": ["I've only {gold} to hand, and I know it's less than I promised. Things went badly while you were away."],
+}
+
+## And when there is nothing at all. Still an answer: being unable to pay is
+## not the same as having nothing to say.
+const SETTLEMENT_NOTHING := {
+	"low": ["I've nothing."],
+	"mid": ["I've nothing to give you. I'm sorry."],
+	"high": ["I've not a coin left. I'll not forget it, for whatever that's worth."],
+}
+
+
+static func gratitude_for(bands: Dictionary) -> String:
+	return _band_line(GRATITUDE, bands)
+
+
+## What the villager says as the goods change hands, from the reward
+## QuestReward re-derived a moment ago against their live balance.
+static func settlement_for(bands: Dictionary, settled: Dictionary) -> String:
+	var paid := int(settled.get("paid", settled.get("amount", 0)))
+	var pool := SETTLEMENT_PAID
+	if paid <= 0:
+		pool = SETTLEMENT_NOTHING
+	elif bool(settled.get("is_short", false)):
+		pool = SETTLEMENT_SHORT
+	return _band_line(pool, bands).replace("{gold}", str(paid))
+
+
+## First line of the verbosity band's pool. Deliberately not seeded: these
+## answer the player's own move rather than voicing a beat, so there is no
+## variant_seed to be deterministic against, and a fixed pick keeps the same
+## villager answering the same way every time.
+static func _band_line(pool: Dictionary, bands: Dictionary) -> String:
+	var band := String(bands.get("verbosity", "mid"))
+	var lines: Array = pool.get(band, pool.get("mid", []))
+	if lines.is_empty():
+		return ""
+	return String(lines[0])
+
+
 static func _deflection(beat: Dictionary) -> String:
 	return _pick(DEFLECTIONS, int(beat.get("variant_seed", 0)))
 

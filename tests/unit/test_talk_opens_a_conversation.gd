@@ -52,3 +52,26 @@ func test_a_request_carries_a_recognition_tier():
 	var request := Player.new_talk_request({"npc_id": "npc:9"})
 	request["recognition"] = "knows_you"
 	assert_eq(String(request["recognition"]), "knows_you")
+
+
+# -- the errand rides along on the request -----------------------------------
+
+
+## The talk request carries everything the conversation needs to offer an
+## errand and to take one back -- assembled where the world is already being
+## read, so World stays glue and never assembles a second view of the
+## simulation.
+func test_a_request_carries_the_ask_context():
+	var request := Player.new_talk_request({"npc_id": "npc:9"})
+	request["asks"] = {"contract_store": null, "player_id": "player:local"}
+	assert_true(request.has("asks"))
+
+
+## Every key Conversation reads out of the ask context, stated once. A key
+## that silently stops being passed is an errand that silently stops being
+## offered -- the same reason ConversationSources.SOURCE_KEYS is pinned.
+func test_the_ask_context_names_everything_a_conversation_reads():
+	var ConversationSources = load("res://src/dialogue/conversation_sources.gd")
+	var asks: Dictionary = ConversationSources.asks_for({}, {}, null)
+	for key in ["contract_store", "player_id", "carrying", "item_kinds", "payer_gold"]:
+		assert_true(asks.has(key), "the ask context is missing %s" % key)
