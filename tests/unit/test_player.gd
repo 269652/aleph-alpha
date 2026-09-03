@@ -1889,6 +1889,54 @@ func test_a_following_horse_is_told_where_its_owner_is():
 	assert_eq(horse.follow_target, player.position)
 
 
+## The test above (and _tamed_horse_at itself) reach a tamed animal by
+## calling restrain_to/feed_treat directly on the CreatureMarker, skipping
+## the player's own verbs entirely. test_an_animal_told_to_follow_closes_on_
+## its_owner (tests/unit/test_creature_marker.gd) separately proves a
+## follow-ordered animal actually closes distance over real frames. Neither
+## proves the two halves are wired together: this drives the real throw
+## (_throw_capture_tool) and the real feed gesture (offer_treat_to) until
+## trust is full, lets the rope go the same way perform_rope_verb's "nothing
+## left to tie to" branch does, and then runs real frames on both nodes to
+## show a horse tamed by hand actually walks to its owner -- not merely that
+## a field flipped.
+func test_a_horse_tamed_through_the_real_catch_and_feed_flow_follows_its_owner():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(20, 0))
+
+	player._throw_capture_tool()
+	assert_true(horse.is_restrained(), "the real throw should have caught it")
+
+	while not horse.is_tame():
+		horse._needs.hunger = 1.0
+		player.equipped_item = _item_catalog.make("carrot")
+		assert_true(player.offer_treat_to(horse), "a hungry, restrained horse should take the carrot")
+
+	# The rope has nothing left to do once trust is full (docs/concept/
+	# taming.md, section 6). This is the same release perform_rope_verb
+	# reaches when no tree is nearby to tie off to instead, done directly so
+	# the test does not depend on whether real procedural terrain happens to
+	# place one within TIE_RANGE of this fixed position.
+	horse.release()
+	player._lassoed = null
+	assert_eq(
+		horse.order, Taming.ORDER_FOLLOW,
+		"follow is the order a freshly tamed animal already carries, with no order key pressed"
+	)
+
+	horse.position = player.position + Vector2(150, 0)
+	var start_distance := horse.position.distance_to(player.position)
+	for _i in 900:
+		player._lasso_step(1.0 / 60.0)
+		horse._process(1.0 / 60.0)
+
+	assert_false(horse.is_restrained(), "it should be following, not on a rope")
+	assert_lt(
+		horse.position.distance_to(player.position), start_distance,
+		"a horse tamed by hand should come to its owner, exactly as one ordered to FOLLOW directly does"
+	)
+
+
 # -- riding -------------------------------------------------------------------
 
 func test_mounting_a_tamed_horse_makes_the_player_faster():
