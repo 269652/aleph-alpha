@@ -106,8 +106,9 @@ Real rivers ARE now distinguishable from ocean
 (`EarthChunkGenerator.is_river_at_global`, see [rivers.md](rivers.md)) — but
 this model doesn't consume that yet. v1 stays **ocean-only**, the same water
 detection `FishRenderer` already uses; freshwater lakes above sea level
-remain undistinguished from land entirely (rivers.md's own scope — a lake is
-a closed shape, not a polyline, and wasn't attempted there either). The
+are now [hydrology.md](hydrology.md)'s (`Chunk.is_lake`, phase 1 written
+but unrun as of 2026-09-03 — a lake there is a depression the drainage bake
+found, filled to its spill, not a polyline). The
 model is keyed generically by "water region," so wiring in real freshwater
 bodies later is additive (a new water-area source per chunk checking
 `is_river_at_global`), not a rewrite — see Open Questions.

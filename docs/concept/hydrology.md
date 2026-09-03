@@ -5,12 +5,46 @@ ocean: pressure, wind, currents, evaporation, advected moisture, and the
 moment that moisture falls as precipitation. It stops the instant a drop
 hits the ground. This doc is everything that happens to that drop next --
 snowpack, soil, groundwater, runoff, channel, lake, sea -- and it is the
-spec for the one thing this project's world has never had: **fresh water
-on land**. Today a tile is water only when its real elevation is below sea
-level (`biome_classifier.gd`'s `"ocean"`); every lake above sea level on the
-planet is drawn as dry ground, and there is no such thing as a river
-anywhere ([fishing.md](fishing.md) and
-[transportation.md](transportation.md) both already assume there is).
+spec for what this world's water still lacks: **lakes**, and **rivers
+everywhere a curated one does not reach**. Today a tile is water when its
+real elevation is below sea level (`biome_classifier.gd`'s `"ocean"`) or
+when it lies on one of the eleven real, named rivers
+[rivers.md](rivers.md) curates; every lake above sea level on the planet
+is drawn as dry ground, and the rest of the planet is riverless by
+rivers.md's own deliberate choice, made after its noise-contour fallback
+was reverted in play ("scattered everywhere").
+
+## Relationship to rivers.md
+
+rivers.md is authoritative for what it covers and this doc builds on it,
+not beside it:
+
+- **Curated rivers win.** Wherever a curated river reaches, it is the
+  river: its course, its real published discharge, its solved hydraulics.
+  Nothing here changes that.
+- **The drainage bake is the connectivity-aware fallback rivers.md asked
+  for.** That doc reverted its per-tile noise proxy because it had no
+  connectivity, and named "a real accumulation pass over a bounded region"
+  as the redesign it would accept. Its stated obstacle ("no point at which
+  a global drainage pass could run" on a chunk-streamed world) is answered
+  by running the pass **offline, once, over the asset's own 7.4M-cell
+  grid** and shipping the result -- Layer 0 below. The fallback is gated
+  (`EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED`, off) until the real
+  bake has been run and looked at in play, the gate the proxy should have
+  had.
+- **Overlay, never a biome.** rivers.md's rendering decision stands for
+  lakes too: a lake or river tile keeps its land biome and carries an
+  overlay flag (`Chunk.is_lake` beside `Chunk.is_river`), read through
+  one `Chunk.blocks_ground_cover` predicate. The earlier draft of this doc
+  proposed `lake`/`river` biome names; that was withdrawn.
+- **One rendering path.** A baked channel is handed to the river flow
+  overlay in exactly `RiverCatalog.nearest_river_at`'s dictionary shape
+  (`EarthChunkGenerator.nearest_river_at`, empty name), at the catalog's
+  uniform half-width, and goes through the same Manning solve with its
+  stand-in discharge scaled to m^3/s. Lakes use the ocean's shore-distance
+  water overlay, which draws a real shoreline well; rivers.md's objection
+  to that overlay was about a river's smooth bank curve, which a lake has
+  no need of.
 
 The two docs are one system read at two points: climate_dynamics.md computes
 **how much water arrives where**; this doc computes **where it goes**, and
@@ -356,19 +390,17 @@ produce; the difference is that the shape comes from the real network
 rather than from random droplets, and it is a pure function of position,
 so it stays seamless and regenerable.
 
-### Water kinds: extending the biome vocabulary, and one predicate
+### Water kinds: overlay flags, one predicate
 
-`BiomeClassifier.KNOWN_BIOMES` gains `"lake"` and `"river"`; `classify`
-takes the water-surface elevation and channel membership from the tile
-read and returns them ahead of every land check, exactly as `"ocean"` is
-already checked first and unconditionally. Every `== "ocean"` test in the
-renderer, `water_area_survey.gd`, `ecosystem_simulation.gd`, and the fish
-spawn path becomes `BiomeClassifier.is_water(biome)`; the shore-distance
-water overlay, the WaterFx shader, ripples, and the swim model all then
-work on fresh water with no second implementation. Salinity and lake id
-are per-cell side fields on `Chunk` (`water_salinity`, `water_body_id`),
-not extra biome names: salt is a property of the water, not a kind of
-ground.
+Per rivers.md's rendering decision (see "Relationship to rivers.md"), a
+water tile keeps its land biome. `Chunk.is_lake` sits beside the existing
+`Chunk.is_river`, both written by `generate_chunk` from the same probe,
+and `Chunk.blocks_ground_cover(index)` is the one predicate trees, tall
+grass, snow presence and rooting read. The shore-distance water overlay
+paints lake cells as it paints ocean; the player's water depth is the
+maximum of ocean, river and lake depth. Salinity and lake id (phase 3)
+become per-cell side fields on `Chunk`, never biome names: salt is a
+property of the water, not a kind of ground.
 
 ### Equilibrium bake and catch-up
 
@@ -521,10 +553,13 @@ Each phase merges to `main` on its own, per CLAUDE.md, and is playable
 without the next.
 
 1. **Drainage bake + tile read with a stand-in climate.** `DrainageNetwork`,
-   the bake tool, `HydrologyField`, `lake`/`river` biomes and `is_water`,
-   the valley carve, and the renderer's water overlay on fresh water.
-   Discharge comes from a placeholder `P(latitude)` curve so rivers and
-   lakes are *visible and walkable* before the atmosphere exists.
+   the bake tool, `HydrologyData`, `HydrologyField`, `Chunk.is_lake` and
+   `blocks_ground_cover`, the valley carve, lakes on the water overlay,
+   and baked channels as rivers.md's gated fallback through its own flow
+   overlay and hydraulics. Discharge comes from a placeholder
+   `P(latitude)` curve so lakes are *visible and walkable* before the
+   atmosphere exists, and rivers are one flag away once the bake has been
+   seen in play.
 2. **The climate grid** (climate_dynamics.md's fields, with the constants
    decided above), producing real precipitation and snow fraction.
 3. **Buckets, routing, lakes, equilibrium bake, climatology catch-up.**
@@ -536,10 +571,16 @@ without the next.
 
 ## Status
 
-Pure design, nothing implemented. Depends on
+Phase 1 is written, red-first, on branch `claude/hydrology-spec`
+(2026-09-03): `drainage_network.gd`, `stand_in_precipitation.gd`,
+`hydrology_data.gd`, `tools/bake_hydrology.gd`, `hydrology_field.gd`, and
+the generator/chunk-manager/player wiring above, with their tests. **None
+of the tests have been run yet** (deferred at the user's request), **the
+bake has not been run over the real asset**, and nothing is merged to
+`main`; the river fallback stays off until the bake has been seen in play.
+Phases 2-5 are design only. Depends on
 [climate_dynamics.md](climate_dynamics.md) for precipitation (also
-unimplemented) but is specified so that phase 1 stands alone.
-`hydraulic_erosion.gd` is superseded by the drainage bake for Earth and
-stays as-is for future procedural planets ([planets.md](planets.md)),
-whose heightmaps can be fed through the same bake. `docs/progress.md`
-tracks each phase.
+unimplemented). `hydraulic_erosion.gd` is superseded by the drainage bake
+for Earth and stays as-is for future procedural planets
+([planets.md](planets.md)), whose heightmaps can be fed through the same
+bake. `docs/progress.md` tracks each phase.

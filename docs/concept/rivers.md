@@ -123,6 +123,17 @@ curated river is simply riverless, the honest tradeoff for "the rivers you
 see are real, named, and shaped like a real river," which is what was
 actually asked for.
 
+**The connectivity-aware redesign exists as of 2026-09-03, gated off:**
+[hydrology.md](hydrology.md) runs a real priority-flood + flow-accumulation
+pass over the elevation asset's own grid *offline, once* (the "no point at
+which a global drainage pass could run" objection above is answered by not
+running it live), ships the result as data, and hands baked channels to
+this doc's flow overlay and Manning solve through
+`EarthChunkGenerator.nearest_river_at` in the catalog's own shape. It stays
+behind `EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED` (off) until the real
+bake has been run and looked at in play. Curated rivers remain
+authoritative wherever they reach.
+
 ## Rendering: overlay, not a new biome
 
 `TerrainRenderer` already has an extensive corner/edge blend system keyed
