@@ -265,6 +265,32 @@ static func accepts_orders(trust: float) -> bool:
 	return is_tame(trust)
 
 
+## How long, in world seconds since an animal was first caught, it must have
+## been kept before it will fight for its owner rather than merely follow
+## them -- PetLoyalty's one genuinely distinct idea (docs/concept/taming.md
+## "Retiring pet_loyalty.gd"), folded in here as an axis ORTHOGONAL to trust
+## rather than a second, stricter point on the trust scale: accepts_orders
+## already gates at TAME_TRUST, trust's own ceiling
+## (test_trust_never_climbs_past_tame), so a stricter trust gate has no
+## headroom to occupy.
+##
+## Derived from NEGLECT_SECONDS rather than eyeballed: a few full neglect
+## periods' worth of continuous keeping, so a single forgotten afternoon can
+## never retroactively make an animal guard-worthy.
+const GUARD_KEPT_SECONDS := NEGLECT_SECONDS * 3.0
+
+
+## Whether a tamed animal will fight for its owner, not just follow them.
+## `kept_seconds` is world time elapsed since the animal was first caught --
+## the caller's to supply, the same division of labour trust_after_neglect
+## already has with hungry_seconds, and exactly the `kept_since` field
+## animal_genetics.md's V2 record already reserves for other reasons. An
+## animal that has fallen back below TAME_TRUST (neglect) never qualifies
+## regardless of how long ago it was first caught.
+static func accepts_guard_order(trust: float, kept_seconds: float) -> bool:
+	return accepts_orders(trust) and kept_seconds >= GUARD_KEPT_SECONDS
+
+
 ## Species that could plausibly carry a person. A tamed boar follows and
 ## stays; it is not a horse.
 const RIDABLE_SPECIES := {"horse": true}

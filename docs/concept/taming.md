@@ -607,32 +607,76 @@ without looking at a bar:
   for an animal that would leave if it could is a lie. What changes is that the
   space *below* the gate is no longer flat.
 
-**Retiring `pet_loyalty.gd` — owned here.** `src/gameplay/pet_loyalty.gd`
-exists, is fully unit-tested (`tests/unit/test_pet_loyalty.gd`), and has **zero
-production callers** (verified: the symbol appears only in the file itself and
-that test, which is also the only thing that instantiates it — its `feed`,
-`neglect`, `will_follow` and `will_guard` are instance methods, not statics).
-It holds exactly the graded thresholds this section needs —
-`FOLLOW_THRESHOLD := 0.4`, `GUARD_THRESHOLD := 0.75`, and its own doc comment's
-"a loyal-but-not-devoted pet won't fight for you" — plus a `feed`/`neglect`
-pair that duplicates `Taming.trust_after_feeding`/`trust_after_neglect` with
-different rates (`_FEED_RATE := 0.3` against `TRUST_PER_FEED := 0.2`;
-`_NEGLECT_DECAY_RATE := 0.02` per second against a period-based decay past
-`NEGLECT_SECONDS`). Two 0..1 relationship scales on the same animal is
-precisely the parallel system CLAUDE.md forbids, and the two would drift apart
-the first time either was tuned.
+**Retiring `pet_loyalty.gd` — owned here, now resolved.**
+`src/gameplay/pet_loyalty.gd` existed, was fully unit-tested
+(`tests/unit/test_pet_loyalty.gd`), and had **zero production callers**
+(verified: the symbol appeared only in the file itself and that test, which
+was also the only thing that instantiated it — its `feed`, `neglect`,
+`will_follow` and `will_guard` were instance methods, not statics). It held
+exactly the graded thresholds this section needed — `FOLLOW_THRESHOLD := 0.4`,
+`GUARD_THRESHOLD := 0.75`, and its own doc comment's "a loyal-but-not-devoted
+pet won't fight for you" — plus a `feed`/`neglect` pair that duplicated
+`Taming.trust_after_feeding`/`trust_after_neglect` with different rates
+(`_FEED_RATE := 0.3` against `TRUST_PER_FEED := 0.2`; `_NEGLECT_DECAY_RATE :=
+0.02` per second against a period-based decay past `NEGLECT_SECONDS`). Two
+0..1 relationship scales on the same animal would have been precisely the
+parallel system CLAUDE.md forbids, and the two would have drifted apart the
+first time either was tuned. Both the file and its test are now deleted.
 
-**Recommendation: fold and delete.** `Taming.trust` is the one that is
-persisted, drawn, tested and live; move `PetLoyalty`'s one genuinely distinct
-idea — a stricter threshold for fighting for you than for walking with you —
-into `Taming` as a named threshold beside `accepts_orders`, and delete
-`pet_loyalty.gd` with its test. Pinned by
-`test_guarding_needs_more_trust_than_following`, which is an ordering between
-two thresholds and therefore survives any retune of either.
+**The blocker this hit, and why trust itself cannot carry a second
+threshold.** `Taming.accepts_orders` — which gates FOLLOW and STAY, not only a
+hypothetical guard order — is already `is_tame(trust)`, i.e. `trust >=
+TAME_TRUST`, the trust scale's own ceiling, and deliberately so ("Orders stay
+gated at full trust", above). `PetLoyalty`'s pair had headroom precisely
+because neither of its thresholds pinned the ceiling — `FOLLOW_THRESHOLD` 0.4
+and `GUARD_THRESHOLD` 0.75 both sat well under 1.0. A second, stricter
+threshold on `trust` itself has nowhere to sit once the easier of the two
+gates already **is** the scale's top — not without redefining what
+`TAME_TRUST` means everywhere it is read: the trust bar, `is_tame()`, and (out
+of this doc's hands) [animal_husbandry.md](animal_husbandry.md)'s
+`FlightDistance.radius(species, wariness, trust, crouched)`, which owns and
+tests that math independently. `test_trust_never_climbs_past_tame`
+(`tests/unit/test_taming.gd`) already pins trust flat at `TAME_TRUST` as a
+deliberate invariant, not an oversight — raising the ceiling for this one
+threshold's sake would mean un-pinning it.
+
+**Resolution: an orthogonal measure, not a second point on the trust scale.**
+Guarding requires the animal to have been kept, tame, for a real stretch of
+time — not fed harder or faster, which is the same grind that reaches
+`TAME_TRUST` in the first place, just moved. Concretely:
+
+- **`Taming.GUARD_KEPT_SECONDS`** — how long, in world seconds since the
+  animal was first caught, a tamed animal must have been kept before it will
+  fight for its owner. Derived from `NEGLECT_SECONDS` (a small multiple of one
+  full neglect period) rather than a fresh eyeballed number, so a single
+  forgotten afternoon can never retroactively qualify an animal — see the
+  constant's own doc comment for the exact multiple.
+- **`Taming.accepts_guard_order(trust, kept_seconds)`** —
+  `accepts_orders(trust) and kept_seconds >= GUARD_KEPT_SECONDS`. An animal
+  that has fallen back below `TAME_TRUST` (neglect, §7) never qualifies
+  regardless of how long ago it was first caught, which is the same
+  self-correction that already makes neglect cost something real.
+- **`kept_seconds` is the caller's to supply** — the same division of labour
+  `trust_after_neglect` already has with its own still-unwired
+  `_hungry_seconds` (§7): the pure model takes the number, it does not own the
+  clock. It is world time elapsed since first capture — exactly the
+  `kept_since` field [animal_genetics.md](animal_genetics.md)'s V2 record
+  already reserves (§6) for other reasons (identity, "how long it has been
+  kept" on the panel), not a new persisted field invented for this alone.
+  Wiring an actual accumulator into `CreatureMarker`/`KeptAnimals` is §6's V2
+  migration to do, not this section's.
+
+This keeps `TAME_TRUST` exactly what it has always been documented as — the
+trust scale's own ceiling, nothing above it — so the trust bar, `is_tame()`,
+and husbandry's flight-radius math are all untouched. Pinned by
+`test_guarding_needs_more_than_bare_taming`, which asserts the real ordering
+property (full trust alone is enough for FOLLOW/STAY the instant it is
+reached; never enough for GUARD until kept long enough besides) rather than a
+raw number, and therefore survives any retune of either constant.
 [animal_husbandry.md](animal_husbandry.md)'s "Work" section is the consumer of
-the guard threshold and references it; it does not re-specify it.
-`docs/concept/pets.md` is the older status-less sketch these thresholds came
-from, and is superseded by this cluster of docs.
+the guard gate and references it; it does not re-specify it. `docs/concept/pets.md`
+is the older status-less sketch these thresholds came from, and is superseded
+by this cluster of docs.
 
 ### 6. A tamed animal, and who it is
 
@@ -904,33 +948,27 @@ contain a space**, which is why naming an animal is an in-world input and not a
 console argument. Note that the dispatch itself currently has no test at all;
 adding one along with the first new command is the cheap moment to fix that.
 
-## The dead duplicate
+## The dead duplicate — retired
 
-`src/gameplay/taming_system.gd` has **zero callers outside its own test**
-(`tests/unit/test_taming_system.gd`) — verified. `docs/progress.md`'s
-"Pets (`concept/pets.md`)" section nonetheless calls it "the Taming System" and
-marks it 🚧 under a heading that claims "No pets/taming system is wired into
-live gameplay", which is also false: the loop in this document is live and
-playable.
+`src/gameplay/taming_system.gd` had **zero callers outside its own test**
+(`tests/unit/test_taming_system.gd`) — verified — and both have now been
+deleted. `docs/progress.md`'s "Pets (`concept/pets.md`)" section used to call
+it "the Taming System" and mark it 🚧 under a heading that claimed "No
+pets/taming system is wired into live gameplay", which was also false: the
+loop this document specifies is live and playable. That ledger entry has been
+corrected.
 
-**Recommendation: delete `taming_system.gd` and its test, and correct
-`docs/progress.md`.** `taming.gd` is the live model, it is what this doc
-specifies, and it is what every test that matters exercises. Leaving a second,
-differently-shaped taming model in the tree means every future reader has to
-work out which one is real — and the rot has already spread. Six doc comments
-in live files cite `TamingSystem.attempt_tame`/`taming_chance` as the house
-pattern for a deterministic `(chance, seed_value)` roll:
-`src/gameplay/disease_model.gd` (two), `src/gameplay/sickness.gd` (three) and
-`tests/unit/test_player.gd` (one). Two concept docs do the same
-([disease.md](disease.md), twice). That is how a dead file becomes load-bearing
-documentation.
-
-Repoint those citations at `Taming` — which uses the identical hash-roll idiom
-in `CreatureMarker._step_restraint` — **before** removing the file. And note
-that `docs/progress.md` cites `TamingSystem` in a second, unrelated place (the
-disease entry's "same deterministic hash-seeded roll pattern as
-`Sickness`/`TamingSystem`"), so a checklist that greps for the name and expects
-one hit will be wrong; both sites need repointing.
+Six doc comments in live files had cited `TamingSystem.attempt_tame`/
+`taming_chance` as the house pattern for a deterministic `(chance, seed_value)`
+roll: `src/gameplay/disease_model.gd` (two), `src/gameplay/sickness.gd`
+(three) and `tests/unit/test_player.gd` (one). Two concept docs did the same
+([disease.md](disease.md), twice), and `docs/progress.md` cited `TamingSystem`
+in a second, unrelated place (the disease entry's "same deterministic
+hash-seeded roll pattern as `Sickness`/`TamingSystem`"). All nine sites were
+repointed at `Taming`/`CreatureMarker._step_restraint`'s identical hash-roll
+idiom — the same `(chance, seed_value)` shape, just named after the model that
+is actually live — before the file was removed, so no dangling reference to
+the deleted class remains.
 
 ## Any animal, the right tool
 
@@ -1307,17 +1345,15 @@ through it.
   in the shape of the existing roof-directory test. The existing drift test is
   correct and stays as it is. Until this lands, New Game neither backs up nor
   wipes tamed animals, and a previous world's horses turn up in the new one.
-- ⬜ `src/gameplay/taming_system.gd` deleted, its test deleted, the six live-file
+- ✅ `src/gameplay/taming_system.gd` deleted, its test deleted, the six live-file
   doc comments and two [disease.md](disease.md) citations repointed at
-  `Taming`, and `docs/progress.md`'s "Pets" section corrected — it claims no
-  taming system is wired into gameplay and names the dead file as the real one.
-  A second `docs/progress.md` citation, in the disease entry, needs repointing
-  too.
-- ⬜ `src/gameplay/pet_loyalty.gd` folded into `Taming` (its guard-versus-follow
-  threshold kept as a named constant beside `accepts_orders`, pinned by
-  `test_guarding_needs_more_trust_than_following`; the file and its test
-  deleted), rather than becoming a second 0..1 relationship scale on the same
-  animal (§5).
+  `Taming`, and `docs/progress.md`'s "Pets" section corrected. The second
+  `docs/progress.md` citation, in the disease entry, was repointed too.
+- ✅ `src/gameplay/pet_loyalty.gd` folded into `Taming` — not as a second point
+  on the trust scale (`accepts_orders` already sat at `TAME_TRUST`, trust's own
+  ceiling) but as the orthogonal `GUARD_KEPT_SECONDS`/`accepts_guard_order(trust,
+  kept_seconds)` pair, pinned by `test_guarding_needs_more_than_bare_taming`;
+  the file and its test deleted (§5).
 
 ## Editor's note
 

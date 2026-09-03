@@ -14,8 +14,26 @@ const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 
 const SIZE := 12
 
-const ANT_COLOR := Color(0.08, 0.06, 0.05)
-const BUG_COLOR := Color(0.15, 0.12, 0.05)
+## Dark, warm chitin tones -- real ants and carrion beetles (Silphidae, see
+## docs/concept/carrion.md) genuinely are near-black, so these stay dark
+## rather than reaching for this game's usual "brighter, saturated Zelda/
+## Pokemon" palette (PixelPalette's own doc comment) -- but they must stay
+## CLEARLY apart from PixelPalette.OUTLINE (0.08, 0.06, 0.1), the shared
+## near-black silhouette-ring color every creature generator draws around
+## itself. These used to sit almost exactly on top of it (ANT_COLOR was
+## (0.08, 0.06, 0.05) -- a hair from the outline itself), which is why an
+## outline was never missed by eye: fill and ring were the same color, so
+## the whole creature rendered as one undifferentiated black blob (reported
+## live, from a real screenshot: "these black blobs"). Pinned apart by
+## test_ant_color_is_distinguishable_from_the_shared_outline/test_bug_
+## color_is_distinguishable_from_the_shared_outline rather than left an
+## eyeballed pair of literals.
+const ANT_COLOR := Color(0.22, 0.15, 0.09)
+## A bug is the bigger single scavenger (see the class doc comment) --
+## a shade warmer/richer than the ant so the two read as different insects
+## even before their silhouettes are compared, not just a darker/lighter
+## split of the same tone.
+const BUG_COLOR := Color(0.28, 0.16, 0.1)
 
 var _palette := PixelPalette.new()
 
@@ -49,6 +67,7 @@ func _generate_ant() -> Image:
 				image, center + Vector2(leg_x, 0.0),
 				center + Vector2(leg_x + leg_dir * 0.5, leg_dir * 3.5), ANT_COLOR
 			)
+	_outline_silhouette(image)
 	return image
 
 
@@ -59,7 +78,34 @@ func _generate_bug() -> Image:
 	# scavenger, not a swarm-reading silhouette like the ant.
 	_draw_oval(image, center, 4.2, 3.0, BUG_COLOR)
 	_draw_circle(image, center + Vector2(-3.8, 0.0), 1.3, BUG_COLOR)
+	_outline_silhouette(image)
 	return image
+
+
+## Rings the assembled silhouette in the shared outline color, so it
+## separates from the ground the same way every other creature generator's
+## silhouette does (see ProceduralBirdSprite._outline_silhouette, the same
+## technique reused here rather than reinvented). Without this, a fill
+## color -- however different from OUTLINE in the abstract -- still has no
+## drawn edge marking where the creature ends and the grass begins.
+func _outline_silhouette(image: Image) -> void:
+	var outline := _palette.outline_color()
+	var to_outline: Array[Vector2i] = []
+	var offsets := [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+	for y in SIZE:
+		for x in SIZE:
+			if image.get_pixel(x, y).a > 0.0:
+				continue
+			for offset in offsets:
+				var nx: int = x + offset.x
+				var ny: int = y + offset.y
+				if nx < 0 or nx >= SIZE or ny < 0 or ny >= SIZE:
+					continue
+				if image.get_pixel(nx, ny).a > 0.0:
+					to_outline.append(Vector2i(x, y))
+					break
+	for cell in to_outline:
+		image.set_pixel(cell.x, cell.y, outline)
 
 
 func _draw_circle(image: Image, center: Vector2, radius: float, color: Color) -> void:

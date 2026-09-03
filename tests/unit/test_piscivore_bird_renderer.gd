@@ -106,3 +106,54 @@ func test_spawns_a_kingfisher_once_population_reaches_one():
 		parent, Vector2i(0, 0), chunk, CHUNK_ORIGIN, TILE_SIZE, null, 0.6
 	)
 	assert_eq(spawned.size(), 1)
+
+
+# -- the kingfisher flaps like every other bird ------------------------------
+#
+# The marker used to be built with its resting-pose texture and nothing else
+# -- unlike AmbientFlyerRenderer._build_marker, which also wires flap_frames/
+# perched_frame for sparrow and robin (see test_ambient_flyer_renderer.gd's
+# own "same species+seed should reuse the cached flap-frame sequence"). A
+# kingfisher never got either, so it flew, hovered and carried its catch off
+# on one frozen frame (reported: "fix the kingfisher's wings").
+# ProceduralBirdSprite already generates both for "kingfisher" (see
+# test_procedural_bird_sprite.gd's test_flap_frames_are_deterministic) --
+# this was a wiring gap here, not a missing painter.
+
+func test_spawned_kingfisher_has_wing_beat_frames():
+	var chunk := _make_chunk("ocean")
+	var spawned := renderer.spawn_piscivore_birds(
+		parent, Vector2i(0, 0), chunk, CHUNK_ORIGIN, TILE_SIZE, null, 5.0
+	)
+	assert_eq(spawned.size(), 1)
+	assert_false(
+		spawned[0].flap_frames.is_empty(), "a kingfisher should flap like every other flyer"
+	)
+
+
+func test_spawned_kingfisher_has_a_perched_frame():
+	var chunk := _make_chunk("ocean")
+	var spawned := renderer.spawn_piscivore_birds(
+		parent, Vector2i(0, 0), chunk, CHUNK_ORIGIN, TILE_SIZE, null, 5.0
+	)
+	assert_not_null(spawned[0].perched_frame, "a perched kingfisher should hold a folded-wing pose")
+
+
+func test_two_kingfishers_of_the_same_seed_share_flap_frames():
+	var chunk := _make_chunk("ocean")
+	var first := renderer.spawn_piscivore_birds(
+		parent, Vector2i(0, 0), chunk, CHUNK_ORIGIN, TILE_SIZE, null, 5.0
+	)
+	var other_parent := Node2D.new()
+	var second := renderer.spawn_piscivore_birds(
+		other_parent, Vector2i(0, 0), chunk, CHUNK_ORIGIN, TILE_SIZE, null, 5.0
+	)
+	# Read before freeing `other_parent` -- the marker is its child, so
+	# freeing it frees the marker too (the array itself, once read into a
+	# local, is its own refcounted value and outlives that).
+	var second_flap_frames: Array = second[0].flap_frames
+	other_parent.free()
+	assert_same(
+		first[0].flap_frames, second_flap_frames,
+		"same chunk (same seed) should reuse the cached flap-frame sequence"
+	)

@@ -111,6 +111,25 @@ const APPROACH_TIMEOUT := 10.0
 ## comes down or the frame it lifts.
 const SWALLOW_FRACTION := 0.5
 
+## Whether snow is actively falling right now -- see docs/concept/weather.md's
+## "Weather feeds creature behaviour" and Snowfall.falls_as_snow. Deliberately
+## NOT lying snow depth: a clear day standing on knee-deep old snow is easy
+## grazing once a bite is spotted, but snow coming down right now means every
+## bite is being buried as fast as it's found, on top of whatever the ground
+## already held. Settable by the caller (CreatureMarker) once a frame;
+## defaults to false so a caller that never sets it -- every pre-existing
+## test -- keeps today's exact timing.
+var snowing := false
+
+## How much longer one graze bout takes while snow is actively falling: a
+## grazer isn't just cropping a tuft, it has to paw/crater through what's
+## landing on top of it to keep its muzzle in the grass -- a real winter-
+## foraging cost, not a cosmetic weather skin. Tuned, on the same footing
+## GRAZE_SECONDS itself already stands on -- pinned by test
+## (test_a_snowing_bout_finishes_at_exactly_the_scaled_duration), not
+## eyeballed in a comment.
+const SNOW_GRAZE_MULTIPLIER := 1.5
+
 enum Phase { SEEKING, APPROACHING, GRAZING }
 
 var phase := Phase.SEEKING
@@ -187,10 +206,14 @@ func advance(delta: float) -> bool:
 	# transition carries the remainder forward instead of zeroing it. Bounded
 	# by the phase count, so it can never spin.
 	for _i in Phase.size():
-		if phase == Phase.GRAZING and not _swallowed and _phase_elapsed >= GRAZE_SECONDS * SWALLOW_FRACTION:
+		# Read once and reused for both the swallow point and the boundary
+		# check below, so the mouthful always lands at this bout's own
+		# halfway point -- scaled the same way the whole bout is (see
+		# `snowing`) -- rather than at the old, unscaled clear-weather instant.
+		var duration := _phase_duration()
+		if phase == Phase.GRAZING and not _swallowed and _phase_elapsed >= duration * SWALLOW_FRACTION:
 			_swallowed = true
 			swallowed = true
-		var duration := _phase_duration()
 		if duration <= 0.0 or _phase_elapsed < duration:
 			break
 		_enter(_phase_after(), _phase_elapsed - duration)
@@ -208,7 +231,11 @@ func _phase_duration() -> float:
 		Phase.APPROACHING:
 			return APPROACH_TIMEOUT
 		Phase.GRAZING:
-			return GRAZE_SECONDS
+			# Snow scales the bout itself only -- see `snowing`'s own doc
+			# comment for why REGRAZE_SECONDS (the walk between bites, not
+			# handled here) and APPROACH_TIMEOUT above are deliberately left
+			# alone.
+			return GRAZE_SECONDS * (SNOW_GRAZE_MULTIPLIER if snowing else 1.0)
 		_:
 			return 0.0
 

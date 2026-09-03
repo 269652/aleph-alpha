@@ -150,18 +150,28 @@ func _step_seeking(delta: float) -> void:
 			_behavior.begin_approach()
 
 
-## Nearest live Carcass or CarcassGuts within SEARCH_RADIUS_PX, or null.
-## Both groups are checked indiscriminately -- a decomposer at a carcass
-## doesn't care whether the offal is still attached or lying beside it.
+## Nearest (by EFFECTIVE, not raw, distance) live Carcass or CarcassGuts
+## within SEARCH_RADIUS_PX, or null. Both groups are checked indiscriminately
+## -- a decomposer at a carcass doesn't care whether the offal is still
+## attached or lying beside it. A carcass already carrying flies (see
+## Carcass.fly_count) reads as closer than its real distance
+## (CarrionForageBehavior.effective_distance) -- real scavengers cue off
+## circling flies as a sign something worth investigating is there, so a
+## fly-blown carcass can out-compete a nearer, fresh one, and can even be
+## noticed a little past the ordinary search radius. CarcassGuts has no
+## fly_count (disease.md/carrion.md both scope the fly loop to carcasses,
+## not offal) and so is always scored at its real distance.
 func _nearest_carrion() -> Node2D:
 	var best: Node2D = null
-	var best_distance := SEARCH_RADIUS_PX
+	var best_effective_distance := SEARCH_RADIUS_PX
 	for group_name in [Carcass.GROUP_NAME, CarcassGuts.GROUP_NAME]:
 		for node in get_tree().get_nodes_in_group(group_name):
 			var distance: float = position.distance_to(node.position)
-			if distance <= best_distance:
+			var fly_count: int = node.fly_count() if node.has_method("fly_count") else 0
+			var effective := CarrionForageBehavior.effective_distance(distance, fly_count)
+			if effective <= best_effective_distance:
 				best = node
-				best_distance = distance
+				best_effective_distance = effective
 	return best
 
 

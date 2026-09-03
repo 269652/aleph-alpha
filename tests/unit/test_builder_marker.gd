@@ -11,6 +11,21 @@ extends GutTest
 ## `target_pieces` is injected directly (a bare, generic worker -- see
 ## builder_marker.gd's own header for why no live ConstructionProject-lookup
 ## spawner exists yet).
+##
+## This real EarthChunkManager loads/persists real disk state for the exact
+## real-world Berlin tile every test below anchors on (EarthChunkManager.
+## _load_chunk reads user://chunk_modifications/<chunk>.bin on ANY chunk
+## load, not just a reload) -- state that is NEVER cleared between separate
+## Godot process invocations, and (user:// is keyed only by the Godot
+## project name, not by checkout path) is the SAME real directory every git
+## worktree on this machine shares. test_earth_chunk_manager.gd's own
+## "moving far away unloads" tests deliberately persist real modifications
+## for this SAME coordinate. before_each/after_each below scrub exactly this
+## file's own real chunk_coord (never the whole shared directory) before
+## trusting/leaving a fresh EarthChunkManager, so a previous full-suite run
+## or a concurrent session elsewhere can never leak into these assertions --
+## see _forget_persisted_berlin_chunk and
+## test_a_stale_persisted_modification_from_an_earlier_process_does_not_leak_in.
 
 const BuilderMarker = preload("res://src/rendering/builder_marker.gd")
 const BuilderBehavior = preload("res://src/gameplay/builder_behavior.gd")
@@ -22,6 +37,7 @@ const ConstructionProject = preload("res://src/emergence/construction_project.gd
 const ConstructionProjectStore = preload("res://src/emergence/construction_project_store.gd")
 const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
 const HouseholdStore = preload("res://src/emergence/household_store.gd")
+const ChunkSerializer = preload("res://src/world/chunk_serializer.gd")
 
 var manager: EarthChunkManager
 var marker: BuilderMarker
@@ -36,6 +52,31 @@ var _entities_parent: Node2D
 var _creatures_parent: Node2D
 
 
+func before_all():
+	# Simulates exactly what a PRIOR, unrelated process can really leave
+	# behind at this file's own real-world Berlin tile -- EarthChunkManager.
+	# _unload_chunk persists modifications here the SAME way, for real (see
+	# this file's own header). Runs ONCE, before the very first before_each
+	# below, so every test in this file proves its own fixture starts clean
+	# regardless of whatever was already sitting on disk when this process
+	# launched.
+	var berlin_tile := Vector2i(
+		_geo_coordinates.tile_for_longitude(13.405, EarthChunkGenerator.WORLD_WIDTH_TILES),
+		_geo_coordinates.tile_for_latitude(52.52, EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	)
+	var chunk_coord := _berlin_chunk_coord()
+	var local_cell := berlin_tile - chunk_coord * BuilderMarker.CHUNK_SIZE
+	DirAccess.make_dir_recursive_absolute(EarthChunkManager.MODIFICATIONS_DIR)
+	ChunkSerializer.new().save_modifications(
+		{local_cell: "wood_wall"},
+		"%s/%d_%d.bin" % [EarthChunkManager.MODIFICATIONS_DIR, chunk_coord.x, chunk_coord.y]
+	)
+
+
+func after_all():
+	_forget_persisted_berlin_chunk()
+
+
 func before_each():
 	_tile_map_layer = TileMapLayer.new()
 	_entities_parent = Node2D.new()
@@ -45,16 +86,20 @@ func before_each():
 		_geo_coordinates.tile_for_longitude(13.405, EarthChunkGenerator.WORLD_WIDTH_TILES),
 		_geo_coordinates.tile_for_latitude(52.52, EarthChunkGenerator.WORLD_HEIGHT_TILES)
 	)
-	manager.update(_berlin_tile)
 
 	# local_cell Vector2i(0, 0) resolves to exactly _berlin_tile -- see
 	# _global_cell_for's own "chunk_coord * CHUNK_SIZE + origin + local_cell"
-	# contract.
+	# contract. Computed BEFORE manager.update() below (pure geometry, no
+	# dependency on it) so _forget_persisted_berlin_chunk can scrub real
+	# disk state for exactly this real-world tile first.
 	_chunk_coord = Vector2i(
 		floori(float(_berlin_tile.x) / float(BuilderMarker.CHUNK_SIZE)),
 		floori(float(_berlin_tile.y) / float(BuilderMarker.CHUNK_SIZE))
 	)
 	_origin = _berlin_tile - _chunk_coord * BuilderMarker.CHUNK_SIZE
+
+	_forget_persisted_berlin_chunk()
+	manager.update(_berlin_tile)
 
 	project_store = ConstructionProjectStore.new()
 	household_store = HouseholdStore.new()
@@ -71,6 +116,61 @@ func after_each():
 	_tile_map_layer.free()
 	_entities_parent.free()
 	_creatures_parent.free()
+	# Mirrors before_each's own scrub -- this test's own real
+	# EarthChunkManager never triggers a real unload itself today (a single
+	# update() call, never re-centered), so it never writes here, but a
+	# future test added to this file that DOES move the load center must not
+	# leak real state forward into whatever runs against this SAME
+	# real-world tile next.
+	_forget_persisted_berlin_chunk()
+
+
+## The real-world Berlin tile's own chunk_coord -- pure geometry, no
+## EarthChunkManager dependency, so before_all/before_each/after_each can all
+## reach it without needing a live manager instance first.
+func _berlin_chunk_coord() -> Vector2i:
+	var berlin_tile := Vector2i(
+		_geo_coordinates.tile_for_longitude(13.405, EarthChunkGenerator.WORLD_WIDTH_TILES),
+		_geo_coordinates.tile_for_latitude(52.52, EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	)
+	return Vector2i(
+		floori(float(berlin_tile.x) / float(BuilderMarker.CHUNK_SIZE)),
+		floori(float(berlin_tile.y) / float(BuilderMarker.CHUNK_SIZE))
+	)
+
+
+## Removes REAL persisted modifications/roof_modifications/planted_trees for
+## the real-world Berlin chunk this whole file anchors on -- narrow ON
+## PURPOSE (never the whole shared user://chunk_modifications directory) so
+## a concurrent session's own real-world tile elsewhere is never touched by
+## this file's own tests. Safe to call whether or not anything is actually
+## there (FileAccess.file_exists guards each real path). See this file's own
+## header for why this exists.
+func _forget_persisted_berlin_chunk() -> void:
+	var chunk_coord := _berlin_chunk_coord()
+	for dir in [
+		EarthChunkManager.MODIFICATIONS_DIR,
+		EarthChunkManager.ROOF_MODIFICATIONS_DIR,
+		EarthChunkManager.PLANTED_TREES_DIR,
+	]:
+		# Mirrors EarthChunkManager's own private _modifications_path/
+		# _roof_modifications_path/_planted_trees_path exactly -- all three
+		# use this SAME "%d_%d.bin" naming (see that file).
+		var path := "%s/%d_%d.bin" % [dir, chunk_coord.x, chunk_coord.y]
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
+
+
+## Regression coverage for this file's own header note: before_all above
+## persists a real, disk-backed "wood_wall" modification at this exact
+## real-world tile ONCE, before the very first before_each -- proving every
+## fresh fixture below (this test included) starts from a real clean slate
+## regardless, the same as if some OTHER process/worktree had left it there.
+func test_a_stale_persisted_modification_from_an_earlier_process_does_not_leak_in():
+	assert_eq(
+		manager.modification_at_global(_berlin_tile.x, _berlin_tile.y), "",
+		"before_each must scrub whatever a PRIOR process really persisted at this exact real-world tile before trusting a freshly loaded chunk"
+	)
 
 
 func _new_project(household_id: String, blueprint_id: String = "storage") -> ConstructionProject:

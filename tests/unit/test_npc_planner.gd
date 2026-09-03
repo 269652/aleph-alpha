@@ -110,6 +110,28 @@ func test_fake_planner_nurse_works_at_the_well():
 	assert_eq(midday["activity"], "work")
 
 
+## A guard stays on watch at the gate through the evening instead of
+## socializing at the well like every other occupation -- the one
+## occupation-specific exception in FakeNpcPlanner's own evening branch.
+## Previously asserted only indirectly (through NpcMarker's resolved
+## position in test_npc_daily_schedule_walk.gd) and never at the planner's
+## own schedule-shape level the way every other occupation branch above
+## already is.
+func test_fake_planner_guard_stays_on_watch_at_the_gate_through_the_evening():
+	var planner := NpcPlanner.FakeNpcPlanner.new()
+	var identity: NpcIdentity
+	for seed_value in range(50):
+		var candidate := NpcIdentity.new(seed_value)
+		if candidate.occupation == "guard":
+			identity = candidate
+			break
+	assert_not_null(identity, "precondition: expected a guard within 50 seeds")
+	var schedule := planner.plan_day(identity, 0)
+	var evening := NpcSchedule.entry_for_time_block(schedule, "evening")
+	assert_eq(evening["location_tag"], "gate")
+	assert_eq(evening["activity"], "work")
+
+
 ## -- NpcSchedule: resolving which entry is "current" for the time of day --
 
 func test_time_block_for_hour_covers_the_full_day():

@@ -1081,6 +1081,30 @@ func test_a_herbivore_does_not_get_exposed_by_an_uncontaminated_carcass():
 	assert_eq(marker.disease_state, DiseaseModel.State.SUSCEPTIBLE)
 
 
+## Fly-blown carrion risk (docs/concept/disease.md, docs/concept/flies.md):
+## a real founder fly on the carcass raises graze risk enough to matter even
+## at EASY region pressure, where the base 0.55 chance alone is nowhere near
+## certain -- proves _carrion_disease_step actually reads the real
+## Carcass.fly_count(), not just region pressure/contaminated.
+func test_a_fly_blown_carcass_raises_graze_risk_even_at_easy_region_pressure():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	marker.region_tier = RegionDifficulty.Tier.EASY
+
+	var blown_carcass := Carcass.new()
+	blown_carcass.species = "boar"
+	blown_carcass.position = marker.position + Vector2(5, 0)
+	add_child(blown_carcass)
+	_extra.append(blown_carcass)
+	blown_carcass._process(Carcass.FLY_ATTRACTION_DELAY_SECONDS + 1.0)  # a founder fly finds it
+	blown_carcass.contaminated = true  # isolate from the separate, already-covered contamination roll
+	assert_gt(blown_carcass.fly_count(), 0, "sanity: a fly should have found it by now")
+
+	marker._process(0.2)
+
+	assert_eq(marker.disease_state, DiseaseModel.State.INFECTED)
+	assert_eq(marker.disease_id, DiseaseModel.CARRION)
+
+
 func test_weakened_predator_flees_the_player_instead_of_attacking():
 	var predator := _make_predator(Vector2(100, 100))
 	predator.info.health = 1.0  # health_fraction well below the fight threshold
@@ -1973,6 +1997,13 @@ class ForageWorld:
 	var worms: Array = []
 	var grazed: Array = []
 	var taken_fruit: Array = []
+	## Whether snow is actively falling -- see docs/concept/weather.md's
+	## "Weather feeds creature behaviour". Settable per test; defaults to
+	## false, matching EarthChunkManager.is_snowing() before any step_snow.
+	var snowing := false
+
+	func is_snowing() -> bool:
+		return snowing
 
 	func biome_at_global(_x: int, _y: int) -> String:
 		return "grassland"
@@ -2058,6 +2089,46 @@ func test_eating_a_tuft_settles_the_hunger_that_sent_it_there():
 		if not world.grazed.is_empty():
 			break
 	assert_false(horse._needs.is_hungry(), "a fed animal is not still hunting for food")
+
+
+## The full-stack version of GrazerForaging's own snow-slows-grazing claim
+## (see test_grazer_foraging.gd and docs/concept/weather.md's "Weather feeds
+## creature behaviour"): the SAME creature logic, wired all the way through
+## CreatureMarker, run under two weather states from an identical start on an
+## identical visible tuft, produces a real behavioural difference. A world
+## that answers is_snowing() (the same duck-typed guard ambient_warmth
+## already uses) measurably slows how fast a hungry grazer actually eats.
+func test_active_snowfall_measurably_slows_a_hungry_grazer():
+	var clear_world := ForageWorld.new()
+	clear_world.grass = [{"position": Vector2(20, 0)}]
+	var clear_horse := _hungry_grazer("horse", clear_world)
+	var clear_frames := 0
+	for i in 900:
+		clear_horse._process(1.0 / 60.0)
+		if not clear_world.grazed.is_empty():
+			clear_frames = i
+			break
+	assert_false(clear_world.grazed.is_empty(), "precondition: the clear-weather horse must actually feed")
+
+	var snowy_world := ForageWorld.new()
+	snowy_world.grass = [{"position": Vector2(20, 0)}]
+	snowy_world.snowing = true
+	var snowy_horse := _hungry_grazer("horse", snowy_world)
+	for _i in (clear_frames + 1):
+		snowy_horse._process(1.0 / 60.0)
+	assert_true(
+		snowy_world.grazed.is_empty(),
+		"an otherwise-identical horse under active snowfall should not have finished its first bite yet"
+	)
+
+	# ...and it is genuinely slower, not stuck: given a generous further
+	# budget it does still feed.
+	for _i in 900:
+		snowy_horse._process(1.0 / 60.0)
+		if not snowy_world.grazed.is_empty():
+			break
+	assert_false(snowy_world.grazed.is_empty(), "a snowed-on horse still eats -- it just takes longer")
+	assert_false(snowy_horse._needs.is_hungry(), "and is fed once it does")
 
 
 ## A deer is a mixed feeder and works windfall; a horse is a strict grazer and
