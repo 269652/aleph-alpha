@@ -581,6 +581,16 @@ func test_the_coastline_is_the_bakes_sea_contour():
 	assert_gt(generator.elevation_at_global(south_china_sea.x, south_china_sea.y), EarthChunkGenerator.EARTH_SEA_LEVEL)
 
 
+func test_the_probe_memo_is_transparent_and_follows_the_hydrology():
+	generator.set_hydrology(_synthetic_field())
+	var first := generator.hydrology_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	var second := generator.hydrology_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	assert_eq(first, second)
+	assert_eq(generator.nearest_river_at(GREENWICH_TILE.x, GREENWICH_TILE.y), generator.nearest_river_at(GREENWICH_TILE.x, GREENWICH_TILE.y))
+	generator.set_hydrology(null)
+	assert_eq(generator.hydrology_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)["kind"], "", "a memo never outlives the bake it came from")
+
+
 func test_a_generator_without_a_bake_reports_no_hydrology():
 	generator.set_hydrology(null)
 	assert_false(generator.has_hydrology())

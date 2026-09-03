@@ -88,6 +88,16 @@ const _NO_HYDROLOGY := {
 var _hydrology: HydrologyField = null
 var hydrology_rivers_enabled := HYDROLOGY_RIVERS_ENABLED
 
+## Per-tile memo of the hydrology probe and of nearest_river_at. Both are
+## pure functions of the tile, and a painted chunk asks for each tile's
+## probe four or five times over (generation, the water painter, the
+## hydraulics, the boulder gate) -- measured live as the frame-rate dip
+## while chunks stream. Cleared wholesale when full and whenever the
+## hydrology changes; never persisted.
+const PROBE_CACHE_CAP := 65536
+var _probe_cache: Dictionary = {}
+var _nearest_river_cache: Dictionary = {}
+
 
 func _init() -> void:
 	_fine_detail_noise.seed = FINE_DETAIL_SEED
@@ -112,6 +122,8 @@ static func _shared_hydrology_field() -> HydrologyField:
 ## a test injects a synthetic bake this way; the game never calls it.
 func set_hydrology(field: HydrologyField) -> void:
 	_hydrology = field
+	_probe_cache.clear()
+	_nearest_river_cache.clear()
 
 
 func has_hydrology() -> bool:
@@ -127,7 +139,15 @@ func hydrology_at_global(global_x: int, global_y: int) -> Dictionary:
 func _hydrology_for(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 	if _hydrology == null:
 		return _NO_HYDROLOGY
-	return _hydrology.probe(global_x, global_y, macro_elevation)
+	var key := Vector2i(global_x, global_y)
+	var cached = _probe_cache.get(key)
+	if cached != null:
+		return cached
+	if _probe_cache.size() >= PROBE_CACHE_CAP:
+		_probe_cache.clear()
+	var probe := _hydrology.probe(global_x, global_y, macro_elevation)
+	_probe_cache[key] = probe
+	return probe
 
 
 ## A tile under the water surface of a depression the bake found, filled
@@ -400,6 +420,18 @@ func _is_river_for(global_x: int, global_y: int, probe: Dictionary) -> bool:
 ## both through one code path. Far from everything, the curated answer
 ## (a large distance) is returned as before.
 func nearest_river_at(global_x: int, global_y: int) -> Dictionary:
+	var key := Vector2i(global_x, global_y)
+	var cached = _nearest_river_cache.get(key)
+	if cached != null:
+		return cached
+	if _nearest_river_cache.size() >= PROBE_CACHE_CAP:
+		_nearest_river_cache.clear()
+	var answer := _nearest_river_uncached(global_x, global_y)
+	_nearest_river_cache[key] = answer
+	return answer
+
+
+func _nearest_river_uncached(global_x: int, global_y: int) -> Dictionary:
 	var curated := _river_catalog.nearest_river_at(
 		global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES
 	)
