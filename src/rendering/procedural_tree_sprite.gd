@@ -1027,9 +1027,13 @@ static func growth_level(growth: float) -> float:
 ## per frame -- never depended on the ground's mechanism, only on reusing a
 ## granularity instead of inventing one, so this stays a standalone constant
 ## pinned to that same real number rather than tracking a system it no
-## longer has anything in common with. Pinned by both
-## test_snow_levels_is_a_real_pinned_constant and (this branch's
-## independently-arrived-at equivalent) test_snow_level_is_quantized_to_ten_bands.
+## longer has anything in common with.
+##
+## A stale `preload` of the deleted SnowLayer script survived on another
+## branch and broke every script depending on the tree sprite at launch --
+## found live. Two branches independently hit and fixed the same break;
+## pinned by both test_snow_levels_is_a_real_pinned_constant and
+## test_snow_level_is_quantized_to_ten_bands.
 const SNOW_LEVELS := 10
 
 

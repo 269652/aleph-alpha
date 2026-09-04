@@ -28,6 +28,51 @@ class SinglePondWorld:
 		return "ocean" if Vector2i(x, y) == home_tile else "grassland"
 
 
+## Land biome everywhere, but every tile is a river flowing east at a
+## given current (docs/concept/hydrology.md: rivers are an overlay flag).
+class RiverWorld:
+	var current_speed := 0.5
+	func biome_at_global(_x: int, _y: int) -> String:
+		return "grassland"
+	func is_river_at_global(_x: int, _y: int) -> bool:
+		return true
+	func is_lake_at_global(_x: int, _y: int) -> bool:
+		return false
+	func river_current_at_global(_x: int, _y: int) -> Dictionary:
+		return {"direction": Vector2.RIGHT, "speed_m_s": current_speed}
+
+
+func test_a_fish_swims_in_a_river_whose_biome_is_land():
+	var fish := FishMarker.new()
+	fish.setup(RiverWorld.new(), TILE_SIZE)
+	fish.wander_seed = 11
+	fish.home = Vector2(80.0, 80.0)
+	fish.position = fish.home
+	var start := fish.position
+	for i in 60:
+		fish._process(0.05)
+	assert_ne(fish.position, start, "the river is water to the fish even though the biome says grassland")
+	fish.free()
+
+
+func test_swimming_against_the_current_is_slower_and_with_it_faster():
+	var upstream := FishMarker.current_speed_factor(Vector2.LEFT, Vector2.RIGHT, 0.8)
+	var downstream := FishMarker.current_speed_factor(Vector2.RIGHT, Vector2.RIGHT, 0.8)
+	var across := FishMarker.current_speed_factor(Vector2.UP, Vector2.RIGHT, 0.8)
+	assert_lt(upstream, 1.0)
+	assert_gt(downstream, 1.0)
+	assert_almost_eq(across, 1.0, 1e-9)
+	assert_almost_eq(FishMarker.current_speed_factor(Vector2.LEFT, Vector2.ZERO, 0.0), 1.0, 1e-9, "still water")
+	assert_gt(upstream, 0.0, "never stalls outright")
+
+
+func test_upstream_effort_drives_more_flapping():
+	assert_gt(FishMarker.upstream_effort(Vector2.LEFT, Vector2.RIGHT, 0.8), 0.9)
+	assert_eq(FishMarker.upstream_effort(Vector2.RIGHT, Vector2.RIGHT, 0.8), 0.0)
+	assert_eq(FishMarker.upstream_effort(Vector2.LEFT, Vector2.RIGHT, 0.0), 0.0)
+	assert_lt(FishMarker.UPSTREAM_FLAP_SHORTENING, 1.0, "a wait never collapses to zero")
+
+
 ## Water fills every tile column up to (and including) max_water_tile_x --
 ## a straight north-south shoreline, for asserting a fish slides along it
 ## rather than beaching or freezing against it.

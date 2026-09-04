@@ -102,15 +102,21 @@ as a capacity input, the water equivalent of land vegetation density) is a
 real future refinement but has no model to hook into yet — tracked as open
 below rather than invented wholesale here.
 
-Real rivers ARE now distinguishable from ocean
-(`EarthChunkGenerator.is_river_at_global`, see [rivers.md](rivers.md)) — but
-this model doesn't consume that yet. v1 stays **ocean-only**, the same water
-detection `FishRenderer` already uses; freshwater lakes above sea level
-remain undistinguished from land entirely (rivers.md's own scope — a lake is
-a closed shape, not a polyline, and wasn't attempted there either). The
-model is keyed generically by "water region," so wiring in real freshwater
-bodies later is additive (a new water-area source per chunk checking
-`is_river_at_global`), not a rewrite — see Open Questions.
+Real rivers and lakes ARE now distinguishable from ocean
+(`EarthChunkGenerator.is_river_at_global`/`is_lake_at_global`, see
+[rivers.md](rivers.md) and [hydrology.md](hydrology.md) — a lake there is a
+depression the drainage bake found, filled to its spill, not a polyline),
+and this model DOES consume them now: `WaterAreaSurvey.is_water_cell`
+counts a cell as water whenever `chunk.biome == "ocean"` **or**
+`chunk.blocks_ground_cover(index)` (river or lake), and that count feeds
+`fish_capacity_at` directly; `FishMarker`'s own water check was extended
+the same way, so river and lake tiles spawn and carry visible fish too,
+not only ocean. The model stays keyed generically by "water region" — one
+unified aquatic population, not separate river/lake/ocean stocks — so this
+was additive wiring, not a rewrite; whether they deserve separate stocks
+is still open, see Open Questions. The hydrology bake that finds lakes has
+since been run and shipped (`assets/data/hydrology`, see hydrology.md's
+own status).
 
 #### Seeding: base population when a chunk first loads
 
@@ -255,9 +261,10 @@ rod uses. Fishing pressure is no longer only ever the player's.
 - Bait/lure system depth — does bait choice meaningfully bias which species/
   quality you can hook, giving skilled fishing real strategy?
 - Saltwater/ocean vs. freshwater ecosystems as distinct populations, or one
-  unified aquatic model to start? (The implementation is water-region-generic
-  and ocean-only for v1 for exactly this reason — worth deciding once real
-  freshwater bodies exist in worldgen, not before.)
+  unified aquatic model? Real freshwater bodies (rivers, hydrology-baked
+  lakes) now exist in worldgen and already feed the one generic
+  water-region model alongside ocean — this is no longer a "not yet
+  possible" question, just an undecided one.
 - Food-density coupling (aquatic vegetation/plankton as a capacity input,
   the water equivalent of land vegetation density) — no model to hook into
   yet, tracked here rather than invented for this pass.

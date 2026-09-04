@@ -143,8 +143,8 @@ func test_the_surface_is_actually_dragged_within_a_phase():
 func test_the_shader_samples_two_advected_phases():
 	assert_true(RiverFlowShader.SHADER_CODE.contains("phase_a"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("phase_b"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_a + drift)"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_b + drift)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_a * advect_gate + drift)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_b * advect_gate + drift)"))
 
 
 ## THE seam bug the advection switch introduces if left alone. The surface
@@ -384,7 +384,15 @@ func test_the_smear_taps_overlap_into_a_continuous_stroke():
 ## never by rotating the sample frame. The perpendicular still exists for
 ## the bend and the across-reconstruction.
 func test_the_lines_are_oriented_by_smearing_not_frame_rotation():
-	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_dir * (float(k) * smear_spacing)"))
+	# The step is one smear_spacing along the tap's own heading. That
+	# heading is now interpolated along the arc rather than fixed, but it
+	# is still the FLOW's, and the frame itself is still never rotated.
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"normalize(mix(dir_start, dir_end, 0.5 + t) + vec2(1e-6, 0.0)) * smear_spacing;"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"normalize(mix(dir_start, dir_end, 0.5 - t) + vec2(1e-6, 0.0)) * smear_spacing;"
+	))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_perp = vec2(-flow_dir.y, flow_dir.x)"))
 
 
@@ -393,8 +401,14 @@ func test_the_lines_are_oriented_by_smearing_not_frame_rotation():
 func test_the_drag_is_purely_downstream():
 	# The drift rides the same flow_dir vector, so the travel stays purely
 	# downstream too.
-	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_dir * (advect_strength * phase_a + drift)"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_dir * (advect_strength * phase_b + drift)"))
+	# advect_gate stills the advection in standing water: it SCALES the
+	# downstream term, it does not add a sideways one.
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"flow_dir * (advect_strength * phase_a * advect_gate + drift)"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"flow_dir * (advect_strength * phase_b * advect_gate + drift)"
+	))
 
 
 # -- the size of a flow line -------------------------------------------------
@@ -624,19 +638,26 @@ func test_the_cel_quantizer_yields_exactly_the_palette_levels():
 	assert_eq(seen.size(), RiverFlowShader.CEL_LEVELS)
 
 
-## Classic 16-bit ordered dither: on the checkerboard's other phase the
-## quantization threshold shifts, so band boundaries interleave in a 2x2
-## weave instead of cutting hard.
-func test_band_boundaries_are_ordered_dithered():
+## Dither: the quantization threshold shifts per art pixel, so band
+## boundaries dissolve into grain instead of cutting hard. The phase is a
+## world-anchored HASH of the snapped pixel, not the 2x2 checkerboard it
+## used to be: on a diagonal depth gradient the checker's phases lined up
+## into vertical dashes across the whole dither band (playtest: "the
+## sawtooth is clearly there"), and a hash has no lattice to line up with.
+func test_band_boundaries_are_dithered_by_a_pixel_hash():
 	var moved := 0
 	for step in 400:
 		var shade := float(step) / 399.0
 		if RiverFlowShader.cel_level(shade, 0.0) != RiverFlowShader.cel_level(shade, 1.0):
 			moved += 1
-	assert_gt(moved, 20, "the checker phase moves almost no boundaries -- no dither weave")
+	assert_gt(moved, 20, "the phase extremes move almost no boundaries -- no dither")
 	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("float checker = value_hash(floor(wp / pixel_snap));"),
+		"the shader must derive the dither phase from a hash of the snapped pixel"
+	)
+	assert_false(
 		RiverFlowShader.SHADER_CODE.contains("mod(floor(wp.x / pixel_snap) + floor(wp.y / pixel_snap), 2.0)"),
-		"the shader must derive the dither phase from the snapped pixel grid"
+		"the checkerboard is gone"
 	)
 
 
@@ -812,8 +833,12 @@ func test_the_ink_turns_moonlight_at_night_on_every_cel():
 func test_the_shader_lifts_strokes_by_the_night_uniform():
 	assert_true(RiverFlowShader.SHADER_CODE.contains("mix(stroke_ink, moonlight_ink, night_lift)"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("mix(1.0, night_stroke_boost, night_lift)"))
+	# The trailing mix(0.35, 1.0, moving) damps strokes in still water; the
+	# night boost and the 1.0 ceiling both still apply.
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("min(wave * line_strength * mix(1.0, night_stroke_boost, night_lift), 1.0)")
+		RiverFlowShader.SHADER_CODE.contains(
+			"wave * line_strength * mix(1.0, night_stroke_boost, night_lift) * mix(0.35, 1.0, moving), 1.0);"
+		)
 	)
 
 
@@ -1229,7 +1254,11 @@ func test_the_shader_bends_and_dries_around_the_boulder_uniforms():
 		),
 		"the boulder must displace via the round-core potential-flow formula"
 	)
-	assert_true(RiverFlowShader.SHADER_CODE.contains("* eyot_dry;"))
+	# eyot_dry now trims one arm of a max(); the other arm is the halo
+	# ring, which must survive where the channel verdict alone is dry.
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"(1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry,"
+	))
 
 
 ## The flow frame and speed come from the BILINEAR map, not the atlas
@@ -1367,6 +1396,209 @@ func test_only_the_boulder_loop_carves_dry_eyots():
 	)
 	var wader_block_start: int = RiverFlowShader.SHADER_CODE.find("wader_count")
 	assert_gt(wader_block_start, 0, "the fragment shader must consult the waders")
+
+
+## SHADER_CODE keeps whatever newline convention its source file is
+## checked out with, and this repo's .gd files are CRLF. The multi-line
+## assertions below are written with plain \n, so they must compare
+## against a normalised copy -- otherwise they pass or fail on the
+## checkout's line-ending setting rather than on the shader code.
+func _shader_code_lf() -> String:
+	return RiverFlowShader.SHADER_CODE.replace("\r\n", "\n")
+
+
+## "Boulders on a grass field inside the river should be surrounded by
+## the light blue shore band as well": every boulder gets its own ring,
+## a function of distance to the ROCK alone -- unlike eyot_dry (which can
+## only ever REMOVE wet alpha), the band can light up alpha and tint the
+## body on its own, so a rock sitting on ordinary dry bank ground still
+## reads as part of the river.
+func test_every_boulder_gets_its_own_shore_band():
+	assert_gt(RiverFlowShader.BOULDER_BAND_WIDTH_PX, 0.0)
+	assert_gt(RiverFlowShader.BOULDER_BAND_ALPHA, 0.0)
+	assert_lte(RiverFlowShader.BOULDER_BAND_ALPHA, 1.0)
+	assert_true(
+		_shader_code_lf().contains("boulder_radius_px + boulder_band_width_px,\n\t\t\t\tboulder_radius_px + boulder_band_width_px + boulder_band_edge_feather_px, d"),
+		"the band's reach must still be a RING, and its true fade must sit PAST width_px -- inside it, the fade " +
+		"eats into whichever colour level happens to own the outer edge"
+	)
+	assert_gt(RiverFlowShader.BOULDER_BAND_EDGE_FEATHER_PX, 0.0)
+	assert_true(RiverFlowShader.SHADER_CODE.contains("boulder_band * boulder_band_alpha"))
+	var material := RiverFlowShader.new().make_material()
+	assert_almost_eq(
+		float(material.get_shader_parameter("boulder_band_width_px")), RiverFlowShader.BOULDER_BAND_WIDTH_PX, 1e-9
+	)
+	assert_almost_eq(
+		float(material.get_shader_parameter("boulder_band_alpha")), RiverFlowShader.BOULDER_BAND_ALPHA, 1e-9
+	)
+	assert_almost_eq(
+		float(material.get_shader_parameter("boulder_band_edge_feather_px")),
+		RiverFlowShader.BOULDER_BAND_EDGE_FEATHER_PX, 1e-9
+	)
+
+
+## The band's own reach, mirrored on the CPU: zero under the rock (that
+## ground is the eyot, not the band), full strength across the WHOLE band
+## width -- unlike the old boulder_halo_factor, which faded within that
+## width, this stays flat all the way to its far edge so the colour ramp
+## can do the layering at full alpha -- then a true fade to 0 across the
+## small extra edge-feather coda past it. Defined with NO reference to the
+## channel's own wet/dry state, so a rock on dry land gets exactly the
+## same ring a rock mid-channel does.
+func test_boulder_band_envelope_rings_the_rock_and_nothing_else():
+	assert_eq(RiverFlowShader.boulder_band_envelope(0.0), 0.0, "under the rock is the eyot, not the ring")
+	assert_eq(RiverFlowShader.boulder_band_envelope(RiverFlowShader.BOULDER_RADIUS_PX), 1.0, "the ring peaks right at the rock's edge")
+	assert_eq(
+		RiverFlowShader.boulder_band_envelope(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX), 1.0,
+		"alpha must still be at full strength right at the colour ramp's own far edge, not already fading"
+	)
+	assert_eq(
+		RiverFlowShader.boulder_band_envelope(
+			RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX
+			+ RiverFlowShader.BOULDER_BAND_EDGE_FEATHER_PX
+		), 0.0,
+		"the true fade completes only past the extra edge-feather coda"
+	)
+	assert_between(
+		RiverFlowShader.boulder_band_envelope(
+			RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX
+			+ RiverFlowShader.BOULDER_BAND_EDGE_FEATHER_PX * 0.5
+		),
+		0.0, 1.0
+	)
+
+
+## The band must be able to light alpha up even where the channel's own
+## baseline would leave the fragment fully transparent -- a boulder past
+## the true bank but still within the newly-bled paint band.
+func test_the_boulder_band_can_light_alpha_on_otherwise_dry_ground():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("boulder_band * boulder_band_alpha"))
+
+
+# -- the layered, wobbling band ("should not have a halo... instead a
+# layered band like the shore which also wobbles and moves") --------------
+#
+# The old halo painted one flat colour across its whole ring. The band
+# instead quantises the fragment's position inside the ring
+# (boulder_band_ring_t) into BOULDER_BAND_LEVELS cel-shaded layers, the
+# same way the channel body itself is cel-shaded -- and, before
+# quantising, nudges that position by the channel's own advected field n,
+# the same field that already drives the channel's wave strokes, so the
+# layer boundaries wander and animate instead of sitting as a static
+# circle.
+
+
+func test_boulder_band_ring_t_spans_the_ring_from_rock_edge_to_outer_edge():
+	assert_eq(RiverFlowShader.boulder_band_ring_t(RiverFlowShader.BOULDER_RADIUS_PX), 0.0, "0 right at the rock's own edge")
+	assert_eq(
+		RiverFlowShader.boulder_band_ring_t(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX),
+		1.0, "1 at the band's outer edge"
+	)
+	assert_eq(RiverFlowShader.boulder_band_ring_t(0.0), 0.0, "clamped, never negative under the rock")
+	assert_eq(
+		RiverFlowShader.boulder_band_ring_t(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX * 100.0),
+		1.0, "clamped, never past 1 far outside the band"
+	)
+
+
+## "A layered band": at least two visually distinct cel steps, not one
+## flat colour repainted under a new name.
+func test_boulder_band_has_at_least_two_visually_distinct_layers():
+	assert_gte(RiverFlowShader.BOULDER_BAND_LEVELS, 2)
+	assert_ne(
+		RiverFlowShader.boulder_band_color(0),
+		RiverFlowShader.boulder_band_color(RiverFlowShader.BOULDER_BAND_LEVELS - 1),
+		"the innermost and outermost layers must actually read as different colours"
+	)
+
+
+## Sweeping ring_t end to end at a NEUTRAL n and checker (0.5, 0.5 -- both
+## wobble and dither terms vanish) must step cleanly through every layer
+## from 0 to the top, in order: the quantiser itself, isolated from the
+## noise that later perturbs it.
+func test_boulder_band_level_steps_through_its_layers_across_the_ring():
+	var levels_seen: Dictionary = {}
+	var previous := 0
+	var steps := 200
+	for i in range(steps + 1):
+		var ring_t := float(i) / float(steps)
+		var level := RiverFlowShader.boulder_band_level(ring_t, 0.5, 0.5)
+		assert_gte(level, previous, "the layer must never step backwards as ring_t only increases")
+		levels_seen[level] = true
+		previous = level
+	assert_true(levels_seen.has(0), "the sweep must reach the innermost layer")
+	assert_true(levels_seen.has(RiverFlowShader.BOULDER_BAND_LEVELS - 1), "the sweep must reach the outermost layer")
+
+
+## The wobble: holding ring_t fixed mid-band and sweeping n (the channel's
+## own advected field, which changes every frame as it advects) must move
+## the fragment between layers -- proof the band's own boundary genuinely
+## reacts to the same moving field the channel's shore does, rather than
+## being pinned to geometry like the old halo was.
+func test_boulder_band_wobbles_with_the_advected_field():
+	var levels_seen: Dictionary = {}
+	var steps := 40
+	for i in range(steps + 1):
+		var n := float(i) / float(steps)
+		var level := RiverFlowShader.boulder_band_level(0.5, n, 0.5)
+		levels_seen[level] = true
+	assert_gt(levels_seen.size(), 1, "sweeping n alone must reach more than one layer, or nothing is wobbling")
+	assert_true(levels_seen.has(0), "a strong enough negative wobble must reach the innermost layer")
+	assert_true(levels_seen.has(RiverFlowShader.BOULDER_BAND_LEVELS - 1), "a strong enough positive wobble must reach the outermost layer")
+
+
+## However hard the field pushes, the wobbled position must stay inside
+## the band -- it must never wrap the ring back past the rock's own edge
+## or blow out past the band's outer edge, at either end of the ring and
+## either extreme of the field.
+func test_boulder_band_wobble_never_escapes_the_band():
+	for ring_t in [0.0, 1.0]:
+		for n in [0.0, 1.0]:
+			var level: int = RiverFlowShader.boulder_band_level(ring_t, n, 0.5)
+			assert_between(level, 0, RiverFlowShader.BOULDER_BAND_LEVELS - 1)
+
+
+## The old flat, static ring must be gone outright, not merely renamed
+## underneath -- and the new band must actually be wired to the channel's
+## own moving field and its own shore palette, not a colour of its own.
+func test_the_shader_no_longer_paints_a_flat_static_boulder_halo():
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("boulder_halo"),
+		"no trace of the old flat halo may remain, under any name"
+	)
+	assert_true(RiverFlowShader.SHADER_CODE.contains("boulder_band_ring_t"))
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("boulder_wobbled_t * boulder_band_levels"),
+		"the layer count must actually drive the quantisation"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("(n - 0.5) * boulder_band_wobble"),
+		"the band must be perturbed by the channel's own advected field n, the same field the wave strokes use"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("mix(line_color, band0_color, clamp(boulder_bramp, 0.0, 1.0))"),
+		"the band must blend the shore highlight tint into the channel's own shallow-water tone, not a flat colour"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("mix(boulder_band_color, band1_color, clamp(boulder_bramp - 1.0, 0.0, 1.0))"),
+		"THREE colour stops, not two -- line_color and band0_color are both pale enough that a two-stop " +
+		"ramp between them still read live as one soft glow, not a layered band"
+	)
+
+
+## Regression guard for the two-stop attempt that read as a soft glow
+## live: LINE_COLOR and BAND_COLORS[0] are both pale, so a boundary
+## between them barely registers. The outermost layer must reach a
+## colour with real value contrast against the innermost one.
+func test_boulder_band_outer_layer_has_real_contrast_against_the_inner_one():
+	var inner := RiverFlowShader.boulder_band_color(0)
+	var outer := RiverFlowShader.boulder_band_color(RiverFlowShader.BOULDER_BAND_LEVELS - 1)
+	var luminance_drop := inner.v - outer.v
+	assert_gt(
+		luminance_drop, 0.15,
+		"the outer layer must read as visibly darker than the inner one, not a near-match pale-on-pale step"
+	)
+	assert_eq(outer, RiverFlowShader.BAND_COLORS[1], "the outer layer must reach the second, more saturated water tone")
 
 
 func test_the_material_starts_with_no_waders():
@@ -1616,3 +1848,401 @@ func test_set_disturbances_pushes_the_whole_buffer():
 	assert_eq(int(material.get_shader_parameter("disturbance_count")), 1)
 	assert_eq(material.get_shader_parameter("disturbance_pos")[0], Vector2(7.0, 9.0))
 	assert_almost_eq(float(material.get_shader_parameter("disturbance_age")[0]), 0.25, 0.0001)
+
+
+## Lakes ride this overlay with zero current (docs/concept/hydrology.md,
+## first playtest: "ponds have a very different art style"): still water
+## must not advect or drift, and no real river may ever read as still.
+func test_still_water_neither_advects_nor_drifts():
+	assert_true(RiverFlowShader.is_still_water(0.0))
+	assert_false(RiverFlowShader.is_still_water(0.39), "the slowest Manning reach is not still")
+	assert_lt(RiverFlowShader.STILL_FLOW_M_S, RiverFlowShader.FAST_FLOW_M_S)
+	assert_true(RiverFlowShader.SHADER_CODE.contains("float moving = step(still_flow_m_s, speed_mps);"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("float advect_gate = mix(still_ripple, 1.0, moving);"))
+	# Flowing water takes the smeared, drifting path; still water takes the
+	# cheap two-tap ripple path and never drifts.
+	assert_true(RiverFlowShader.SHADER_CODE.contains("if (moving > 0.5) {"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("advect_strength * phase_a * advect_gate + drift"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("float ripple_a = value_noise(q + flow_perp * (advect_strength * still_ripple * phase_a));"))
+	var material := flow.shared_material()
+	assert_almost_eq(
+		float(material.get_shader_parameter("still_flow_m_s")), RiverFlowShader.STILL_FLOW_M_S, 1e-9
+	)
+	assert_almost_eq(
+		float(material.get_shader_parameter("still_ripple")), RiverFlowShader.STILL_RIPPLE, 1e-9
+	)
+
+
+## Still water ripples (the strokes breathe in place) but never flows:
+## the ripple fraction sits strictly between frozen and a river's morph.
+func test_still_water_ripples_without_flowing():
+	assert_gt(RiverFlowShader.STILL_RIPPLE, 0.0)
+	assert_lt(RiverFlowShader.STILL_RIPPLE, 0.5)
+
+
+## Eddies strengthen toward the banks, but the smear follows the FLOW and
+## never the eddies: rotating it by the eddy field sawed every stroke into
+## a regular zig-zag with the eddy noise's own period (found in play).
+func test_the_smear_follows_the_flow_and_never_the_eddies():
+	assert_eq(RiverFlowShader.EDDY_SWIRL, 0.0)
+	assert_true(RiverFlowShader.SHADER_CODE.contains("float shear = 1.0 + bank_shear * clamp(abs(frag_across), 0.0, 1.0);"))
+	var material := flow.shared_material()
+	assert_eq(float(material.get_shader_parameter("eddy_swirl")), 0.0)
+
+
+## bank_shear amplified the turbulence displacement by up to 25% near the
+## waterline, and TURBULENCE_STRENGTH alone already sits right against a
+## real, tested fold threshold (test_the_bend_never_folds_the_surface_
+## over_itself) that this CPU mirror never accounted for the shear
+## multiplier in the first place -- so that test kept passing while the
+## live GPU formula, WITH shear applied, silently crossed the threshold
+## across the wide band near a hydrology river's bank, tearing the noise
+## pattern into a sharp, chunky zigzag ("this huge zigzag still
+## persists", reported through two rounds of an unrelated fix). Zero is
+## the only value that keeps the live formula and its tested CPU mirror
+## identical -- any nonzero value here needs the fold test itself
+## extended to cover the shear-amplified case FIRST.
+func test_bank_shear_is_zero_so_the_fold_test_covers_the_live_formula():
+	assert_eq(RiverFlowShader.BANK_SHEAR, 0.0)
+	var material := flow.shared_material()
+	assert_eq(float(material.get_shader_parameter("bank_shear")), 0.0)
+
+
+## The tile's REAL local half-width, not the fixed uniform, must decide how
+## strongly a boulder or wader push bends the strokes: a fixed divisor
+## understated a wide hydrology reach's true width by up to 3x (the
+## catalog's curated constant, 2.0 tiles, against hydrology's up to 6), so
+## the same physical push landed up to 3x stronger, relative to that
+## reach, than intended -- reported in play as "artifacts in curves", wide
+## bends being exactly where a river slows and gathers fish. The width now
+## rides the direction vector's own magnitude (a direction's length
+## otherwise carries no information). Ripples no longer divide by it at
+## all: they bend the stroke field directly (see the movement-ripple tests
+## above), never the channel geometry.
+func test_boulder_and_wader_pushes_divide_by_the_real_local_width():
+	# The width still comes from its own scalar map and is still floored
+	# at 0.05; it now goes through the same cubic reconstruction the across
+	# map does, so the pushes that divide by it stop inheriting the texel
+	# lattice's sawtooth.
+	assert_true(_shader_code_lf().contains(
+		"float half_width_local = max(mix(\n\t\ttexture(flow_scale_map, map_uv),\n\t\ttexture_bicubic(flow_scale_map, map_uv, flow_map_tiles),\n\t\tmap_smoothing\n\t).r, 0.05);"
+	))
+	assert_eq(
+		RiverFlowShader.SHADER_CODE.count("/ (half_width_local * tile_px)"), 2,
+		"boulder and wader must both divide by the LOCAL width"
+	)
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("/ (half_width_tiles * tile_px)"),
+		"neither may still read the fixed uniform"
+	)
+
+
+## The structural fix for "this huge zigzag still persists": width and
+## direction must live on SEPARATE maps. Packing width into the direction
+## vector's own magnitude broke under bilinear filtering -- two texels
+## whose BEARINGS differ (exactly what neighbouring texels do on a bend)
+## partially cancel when summed as vectors, collapsing the blended
+## magnitude toward zero regardless of either texel's real width, which
+## corrupted both the decoded width and (normalizing a near-zero vector)
+## the decoded direction. GB must be restored to a genuine unit vector
+## (numerically stable under any blend) and the width sampled from its
+## own scalar texture, which blends safely by construction: bilinearly
+## interpolating two SCALARS always lands between them, never collapses.
+func test_direction_and_width_are_never_packed_into_the_same_vector():
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"uniform sampler2D flow_scale_map : filter_linear, repeat_enable;"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"vec2 flow_dir = normalize(map_data.gb + vec2(1e-6, 0.0));"
+	), "GB must be a plain unit vector again, safe to bilinearly blend")
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("map_data.gb / half_width_local"),
+		"direction may never be derived by dividing by a length riding the same vector"
+	)
+
+
+## Fish join the player and the animals as waders, and in still water the
+## wake must ring the wader instead of trailing "downstream".
+func test_waders_have_room_for_fish_and_ring_still_water():
+	assert_gte(RiverFlowShader.WADER_SLOTS, 16)
+	assert_true(RiverFlowShader.SHADER_CODE.contains("uniform vec2 waders[16];"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("wader_wake_trail * moving * clamp(along / wader_reach_px, 0.0, 1.0)"))
+
+
+# -- the smear follows the course's CURVE ------------------------------------
+#
+# "The zigzags still happen almost at every bend / curve ... that's where it
+# happens 100% of the times." Measured before any of this was written, with
+# tools/probe_smear.gd over 1,997 wet tiles around the spawn: the smear
+# spans 5.31 tiles and treats the course as STRAIGHT over all of it, while
+# the course actually turns up to 45.12 deg across that span -- 12.17 deg at
+# the 75th percentile, 19.47 at the 90th, and 30 or more on 1.6% of wet
+# tiles, which is exactly where the bends are. Two neighbouring fragments
+# then smear along diverging straight lines, and the strokes they draw tear
+# apart instead of lining up.
+#
+# The same probe measured the cure before it was built. Reading the flow at
+# the two ENDS of the smear and interpolating between them drops the 75th
+# percentile to 2.49 deg and the 90th to 5.38, for TWO extra texture samples
+# rather than the eight a per-tap resample would cost. A bend has roughly
+# constant curvature, and a tangent rotates linearly with arc length along
+# an arc, so a straight line between the endpoints is very nearly the right
+# model. These tests hold on to that ratio.
+
+
+func test_the_smear_half_span_is_the_outermost_taps_own_reach():
+	# Four steps of SMEAR_SPACING in noise units, in world pixels.
+	var expected := 4.0 * RiverFlowShader.SMEAR_SPACING / RiverFlowShader.NOISE_SCALE
+	assert_almost_eq(RiverFlowShader.smear_half_span_px(), expected, 1e-9)
+	# The probe reported 2.66 tiles either side; the shader must agree with
+	# the measurement that justified the change, or the numbers above stop
+	# describing the code.
+	assert_almost_eq(
+		RiverFlowShader.smear_half_span_px() / RiverFlowShader.TILE_PX, 2.656, 1e-3
+	)
+
+
+func test_the_tap_direction_runs_from_one_end_of_the_smear_to_the_other():
+	var from := Vector2(1.0, 0.0)
+	var to := Vector2(0.0, 1.0)
+	assert_almost_eq(
+		RiverFlowShader.smear_tap_direction(from, to, -4).angle(), from.angle(), 1e-6
+	)
+	assert_almost_eq(
+		RiverFlowShader.smear_tap_direction(from, to, 4).angle(), to.angle(), 1e-6
+	)
+	# The centre tap sits halfway between the two ends.
+	assert_almost_eq(
+		RiverFlowShader.smear_tap_direction(from, to, 0).angle(), deg_to_rad(45.0), 1e-6
+	)
+
+
+func test_every_tap_direction_is_a_unit_vector():
+	# A tap direction only ever chooses a HEADING; the step length is
+	# smear_spacing. A short interpolated vector would quietly shorten the
+	# stroke in the middle of a bend.
+	var from := Vector2(1.0, 0.0)
+	var to := Vector2(-0.7, 0.7).normalized()
+	for k in range(-4, 5):
+		assert_almost_eq(
+			RiverFlowShader.smear_tap_direction(from, to, k).length(), 1.0, 1e-6,
+			"tap %d must not scale its own step" % k
+		)
+
+
+func test_a_straight_reach_leaves_the_smear_exactly_straight():
+	# Both ends reading the same direction must reproduce the old straight
+	# smear, so this can never change how a straight reach looks -- and the
+	# probe says the median tile turns 0.15 deg, so most water IS straight.
+	var straight := Vector2(0.6, -0.8).normalized()
+	for k in range(-4, 5):
+		assert_almost_eq(
+			RiverFlowShader.smear_tap_direction(straight, straight, k).angle(),
+			straight.angle(), 1e-6
+		)
+
+
+func test_the_shader_reads_the_flow_at_both_ends_of_the_smear():
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"vec2 flow_dir_at(vec2 world_position, vec2 fallback)"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"flow_dir_at(wp - smear_end_offset, swirl_dir)"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"flow_dir_at(wp + smear_end_offset, swirl_dir)"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"float line_field(vec2 q, vec2 dir_start, vec2 dir_end)"
+	))
+
+
+func test_the_endpoint_lookup_falls_back_where_the_map_has_no_direction():
+	# Past the painted band the map's GB channels are zero, and normalizing
+	# that is a NaN that would poison every tap. The lookup must hand back
+	# the fragment's own direction there instead.
+	assert_true(RiverFlowShader.SHADER_CODE.contains("if (dot(raw, raw) < 1e-8)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("return fallback;"))
+
+
+func test_the_smear_curvature_dials_back_to_the_straight_smear():
+	var material := RiverFlowShader.new().make_material()
+	assert_almost_eq(
+		float(material.get_shader_parameter("smear_curvature")),
+		RiverFlowShader.SMEAR_CURVATURE, 1e-9
+	)
+	assert_between(RiverFlowShader.SMEAR_CURVATURE, 0.0, 1.0)
+	# At 0 both ends collapse onto the fragment's own direction, which is
+	# the straight smear this replaced -- a real comparison, in game, at
+	# one uniform.
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"swirl_dir, flow_dir_at(wp - smear_end_offset, swirl_dir), smear_curvature"
+	))
+
+
+# -- the across map's own reconstruction filter -------------------------------
+#
+# THE ZIGZAG, finally located. The flow map holds one texel per TILE, and
+# every stroke, the waterline, the ink line and the shore highlight are
+# CONTOURS of that field. Sampled with plain bilinear filtering, the field's
+# gradient is CONSTANT inside each texel cell and JUMPS at the boundary --
+# so its contours are polygons: straight segments meeting at kinks, one
+# kink per tile. That is a sawtooth by construction, and no amount of
+# smoothing the underlying data can remove it.
+#
+# Measured with tools/probe_bilinear.gd, walking the course at one of the
+# bends the user reports it at 100% of the time (tile 19913, 4742), in
+# degrees of contour-normal turn per eighth of a tile:
+#
+#   bilinear         median 0.000   peak 22.547
+#   cubic B-spline   median 0.024   peak  4.870
+#
+# The median of exactly ZERO is the signature: bilinear's gradient does not
+# turn at all inside a cell, then turns all at once. A cubic B-spline is C2,
+# so it turns a little everywhere and never all at once -- peak 4.6x lower.
+#
+# This is also why the earlier attempt failed and was reverted ("now it's
+# much worse ... the artifacts stay, just look different"). That one warped
+# the sample COORDINATE with a smoothstep and left hardware bilinear
+# underneath, so the polygon survived and gained plateaus at texel centres.
+# The filter itself has to change, not the coordinate fed to it.
+
+
+func _ramp_grid(span: int) -> PackedFloat32Array:
+	# A synthetic across-field: a signed distance to a line at 30 degrees,
+	# which is what a straight reach's own across field looks like, sampled
+	# once per tile exactly as the real map is.
+	var values := PackedFloat32Array()
+	values.resize(span * span)
+	var normal := Vector2(cos(deg_to_rad(30.0)), sin(deg_to_rad(30.0)))
+	for y in span:
+		for x in span:
+			values[y * span + x] = (
+				Vector2(float(x) + 0.5, float(y) + 0.5) - Vector2(float(span), float(span)) * 0.5
+			).dot(normal)
+	return values
+
+
+## The weights must partition unity, or the reconstruction changes the
+## field's own magnitude -- a distance field that is scaled is a waterline
+## in the wrong place.
+func test_the_bspline_weights_sum_to_one_everywhere():
+	for step in 21:
+		var t := float(step) / 20.0
+		var weights := RiverFlowShader.bspline_weights(t)
+		var total := 0.0
+		for weight in weights:
+			total += weight
+			assert_gte(weight, 0.0, "a negative weight would ring at a step edge")
+		assert_almost_eq(total, 1.0, 1e-6, "weights at t=%f" % t)
+
+
+## At a texel centre the cubic B-spline is the classic 1:4:1 stencil.
+func test_the_bspline_weights_are_the_one_four_one_stencil_at_a_texel_centre():
+	var weights := RiverFlowShader.bspline_weights(0.0)
+	assert_almost_eq(weights[0], 1.0 / 6.0, 1e-6)
+	assert_almost_eq(weights[1], 4.0 / 6.0, 1e-6)
+	assert_almost_eq(weights[2], 1.0 / 6.0, 1e-6)
+	assert_almost_eq(weights[3], 0.0, 1e-6)
+
+
+## Both filters must reproduce a LINEAR field's own slope: a straight reach
+## must not be bent by the thing that unbends the corners.
+func test_both_filters_carry_a_straight_reachs_own_gradient():
+	var span := 16
+	var values := _ramp_grid(span)
+	var expected := Vector2(cos(deg_to_rad(30.0)), sin(deg_to_rad(30.0)))
+	for at in [Vector2(7.3, 8.1), Vector2(8.0, 8.0), Vector2(9.75, 7.25)]:
+		for sampler in ["bilinear", "bspline"]:
+			var gradient := _grid_gradient(values, span, at, sampler)
+			assert_almost_eq(
+				rad_to_deg(gradient.angle()), rad_to_deg(expected.angle()), 0.5,
+				"%s bent a straight reach at %s" % [sampler, at]
+			)
+
+
+## The property the whole change exists for, on a field with real
+## curvature: bilinear's gradient direction jumps between texel cells and
+## the B-spline's does not.
+func test_the_bspline_gradient_turns_smoothly_where_bilinear_jumps():
+	var span := 24
+	# A radial distance field -- a bend, in the smallest honest form: its
+	# contours are circles, so a correct reconstruction turns steadily.
+	var values := PackedFloat32Array()
+	values.resize(span * span)
+	var centre := Vector2(float(span), float(span)) * 0.5
+	for y in span:
+		for x in span:
+			values[y * span + x] = (Vector2(float(x) + 0.5, float(y) + 0.5) - centre).length()
+
+	var worst := {"bilinear": 0.0, "bspline": 0.0}
+	for sampler in ["bilinear", "bspline"]:
+		var previous := INF
+		# Walk a circle of radius 6 around the centre, well inside the grid.
+		for step in 240:
+			var angle := TAU * float(step) / 240.0
+			var at := centre + Vector2(cos(angle), sin(angle)) * 6.0
+			var gradient := _grid_gradient(values, span, at, sampler)
+			if gradient.length() < 1e-9:
+				continue
+			var heading := rad_to_deg(gradient.angle())
+			if previous != INF:
+				var turn := absf(fposmod(heading - previous + 180.0, 360.0) - 180.0)
+				worst[sampler] = maxf(worst[sampler], turn)
+			previous = heading
+
+	# A steady walk around a circle of radius 6 turns 360/240 = 1.5 deg per
+	# step. Bilinear overshoots that badly at the cell boundaries; the
+	# B-spline stays near it.
+	assert_gt(
+		worst["bilinear"], 4.0,
+		"bilinear must show the jump this change exists to remove -- if it does not, the fixture is wrong"
+	)
+	assert_lt(
+		worst["bspline"], worst["bilinear"] * 0.5,
+		"the B-spline must at least halve the worst jump (measured 4.6x on the real map)"
+	)
+
+
+func _grid_gradient(values: PackedFloat32Array, span: int, at: Vector2, sampler: String) -> Vector2:
+	# A step small enough to stay inside one cell, so each sample reports
+	# that cell's own gradient and a lattice kink shows as a jump BETWEEN
+	# samples rather than being averaged away.
+	var h := 0.05
+	var dx := (
+		_grid_sample(values, span, at + Vector2(h, 0.0), sampler)
+		- _grid_sample(values, span, at - Vector2(h, 0.0), sampler)
+	)
+	var dy := (
+		_grid_sample(values, span, at + Vector2(0.0, h), sampler)
+		- _grid_sample(values, span, at - Vector2(0.0, h), sampler)
+	)
+	return Vector2(dx, dy) / (2.0 * h)
+
+
+func _grid_sample(values: PackedFloat32Array, span: int, at: Vector2, sampler: String) -> float:
+	if sampler == "bilinear":
+		return RiverFlowShader.sample_grid_bilinear(values, span, at)
+	return RiverFlowShader.sample_grid_bspline(values, span, at)
+
+
+func test_the_shader_reconstructs_the_maps_with_the_cubic_filter():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("vec4 cubic_weights(float v)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"vec4 texture_bicubic(sampler2D tex, vec2 uv, float texels)"
+	))
+	# Four bilinear taps, not sixteen point taps: the standard trick, and
+	# what keeps this affordable at three extra samples.
+	assert_eq(RiverFlowShader.SHADER_CODE.count("texture(tex, offset."), 4)
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"mix(texture(flow_across_map, map_uv), texture_bicubic(flow_across_map, map_uv, flow_map_tiles), map_smoothing)"
+	))
+
+
+func test_the_map_smoothing_dials_back_to_plain_bilinear():
+	var material := RiverFlowShader.new().make_material()
+	assert_almost_eq(
+		float(material.get_shader_parameter("map_smoothing")),
+		RiverFlowShader.MAP_SMOOTHING, 1e-9
+	)
+	assert_between(RiverFlowShader.MAP_SMOOTHING, 0.0, 1.0)

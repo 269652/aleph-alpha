@@ -464,6 +464,32 @@ func test_river_wader_positions_keeps_only_candidates_in_river_water():
 ## the course's downstream unit vector, and the real solved current speed
 ## -- so the shader interpolates ALL of them bilinearly between tiles and
 ## no per-tile quantity is left to draw the tile grid.
+## "Only around bends and where the water is deeper at the edge": traced
+## with a real line-probe to every chunk cell getting a texel written even
+## when it is genuinely far from any river -- EarthChunkGenerator.
+## nearest_river_at then falls back to whichever curated river is nearest
+## ANYWHERE ON THE PLANET, which can be hundreds of tiles away with a
+## totally unrelated width, so across_fraction (that distance divided by
+## an unrelated river's width) can run into the hundreds. Bilinearly
+## blended against a real neighbouring texel a few tiles away, that is an
+## unbounded cliff. The write must clamp it, regardless of how the
+## extreme value arose.
+func test_the_written_across_is_always_bounded():
+	manager._write_flow_across_texel(Vector2i(500, 500), 900.0, 45.0, 0.0, 2.0)
+	var side := RiverFlowShader.FLOW_MAP_TILES
+	var texel: Color = manager._flow_across_image.get_pixel(500 % side, 500 % side)
+	assert_almost_eq(texel.r, EarthChunkManager.CLAMP_MAGNITUDE, 1e-6)
+
+	manager._write_flow_across_texel(Vector2i(501, 501), -900.0, 45.0, 0.0, 2.0)
+	var negative_texel: Color = manager._flow_across_image.get_pixel(501 % side, 501 % side)
+	assert_almost_eq(negative_texel.r, -EarthChunkManager.CLAMP_MAGNITUDE, 1e-6)
+
+	# An ordinary in-channel value must pass through completely unclamped.
+	manager._write_flow_across_texel(Vector2i(502, 502), 0.4, 45.0, 1.0, 2.0)
+	var ordinary_texel: Color = manager._flow_across_image.get_pixel(502 % side, 502 % side)
+	assert_almost_eq(ordinary_texel.r, 0.4, 1e-6)
+
+
 func test_the_flow_texel_carries_direction_and_speed():
 	var flow_layer := TileMapLayer.new()
 	manager.set_river_flow_layer(flow_layer)
@@ -496,6 +522,18 @@ func test_the_flow_texel_carries_direction_and_speed():
 	assert_almost_eq(texel.g, sin(radians), 0.001, "G must carry the downstream x")
 	assert_almost_eq(texel.b, -cos(radians), 0.001, "B must carry the downstream y")
 	assert_gt(texel.a, 0.0, "A must carry the real current speed in m/s")
+
+	# The real local half-width lives on its OWN scalar map, never packed
+	# into GB's magnitude: bilinear filtering blends a vector by ordinary
+	# addition, and two texels whose bearings differ (exactly what
+	# neighbouring texels do on a bend) partially cancel when summed,
+	# collapsing a magnitude riding that vector toward zero regardless of
+	# either texel's real width -- reported live as "this huge zigzag
+	# still persists" once width first rode the direction vector.
+	var scale_texel: Color = manager._flow_scale_image.get_pixel(
+		posmod(cell.x, side), posmod(cell.y, side)
+	)
+	assert_almost_eq(scale_texel.r, RiverCatalog.RIVER_HALF_WIDTH_TILES, 0.001, "the scale map must carry the real local half-width")
 	flow_layer.free()
 
 
@@ -515,18 +553,33 @@ func test_river_flow_overlay_paints_only_channel_and_apron_cells():
 
 	var terrain_renderer := TerrainRenderer.new()
 	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
+	# Painted out past the bank line by the apron, and past THAT again by
+	# SHORE_BLEED_TILES -- a wader's wake or a boulder's shore band reaching
+	# just past the apron needs a real tile to draw its fade on, or it
+	# cuts off mid-stride ("the bulge when a player walks out is not
+	# clipped"). Nothing farther than the bleed may be painted.
+	#
+	# Measured against the generator's UNIFIED hit and that channel's OWN
+	# half width, not the curated catalog's fixed RIVER_HALF_WIDTH_TILES.
+	# The painter serves baked channels too, and a baked channel's width
+	# comes from its own discharge, so it is routinely wider than the
+	# curated constant: a real tile 5.80 from a baked channel of half
+	# width 2.11 (reach 5.86) was failing against a bound of 5.75 built
+	# from the curated 2.0, while the curated catalog put the nearest
+	# river 32.40 tiles away and made the message say so.
 	for cell in painted_cells:
-		# Painted out past the bank line by the apron: the shader clips the
-		# water at the REAL bank curve, and that curve runs through cells
-		# whose centres sit beyond the half-width. Nothing farther than the
-		# apron may be painted.
-		var nearest := manager.generator.river_catalog().nearest_river_at(
-			cell.x, cell.y,
-			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+		var nearest := manager.generator.nearest_river_at(cell.x, cell.y)
+		var paint_reach: float = (
+			float(nearest.get("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES))
+			+ RiverCatalog.RIVER_BANK_APRON_TILES
+			+ RiverFlowShader.SHORE_BLEED_TILES
 		)
 		assert_lte(
-			nearest.distance_tiles, apron,
-			"(%d, %d) painted but %f tiles from any channel" % [cell.x, cell.y, nearest.distance_tiles]
+			nearest.distance_tiles, paint_reach,
+			"(%d, %d) painted but %f tiles from a channel of half width %f (reach %f)" % [
+				cell.x, cell.y, nearest.distance_tiles,
+				nearest.get("half_width_tiles", -1.0), paint_reach
+			]
 		)
 		# Every painted tile must carry that cell's OWN real data --
 		# direction from the course's downstream tangent (water follows its
@@ -548,10 +601,18 @@ func test_river_flow_overlay_paints_only_channel_and_apron_cells():
 	# somewhere near Berlin there must be a painted cell whose centre sits
 	# beyond the half-width -- that is where the smooth waterline lives.
 	var apron_cells := 0
+	var bled_cells := 0
 	for cell in painted_cells:
 		if not manager.is_river_at_global(cell.x, cell.y):
 			apron_cells += 1
+		var nearest := manager.generator.nearest_river_at(cell.x, cell.y)
+		if nearest.distance_tiles > apron:
+			bled_cells += 1
 	assert_gt(apron_cells, 0, "no apron cells painted -- the bank curve would clip at tile edges")
+	assert_gt(
+		bled_cells, 0,
+		"no cell past the plain apron was painted -- SHORE_BLEED_TILES must genuinely widen the paint"
+	)
 
 	# Moving far away unloads the original chunks -- their overlay cells go too.
 	manager.update(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))
