@@ -448,3 +448,29 @@ func test_add_disturbance_drops_the_oldest_once_past_the_cap():
 	for i in WaterShader.MAX_DISTURBANCES + 3:
 		water.add_disturbance(Vector2(float(i), 0.0))
 	assert_eq(material.get_shader_parameter("disturbance_count"), WaterShader.MAX_DISTURBANCES)
+
+
+# -- a softer, slower, broader wake -------------------------------------------
+#
+# "Can you make the ripples a little less pronounced so they appear smoother
+# a bit slower and more natural." The wake's SHAPE is shared by the sea and
+# the river (RiverFlowShader imports these constants), so the shape tuning
+# lives here and both surfaces follow. Slower: the front travels under 12
+# world px/s instead of 14. Smoother: crests half a tile apart instead of
+# six pixels, so a wake is two or three broad rings rather than a tight
+# bullseye of narrow ones. The packet still spans more than one wavelength
+# (several rings, not a lone circle) but stays under one and a half, so
+# broadening the crests does not trail more of them.
+
+
+func test_a_wake_is_a_bit_slower_and_its_crests_are_broader():
+	assert_lte(WaterShader.RIPPLE_SPEED, 12.0, "a bit slower: the front should amble, not race")
+	assert_gte(
+		WaterShader.RIPPLE_WAVELENGTH, 8.0,
+		"smoother: crests at least half a tile apart read as broad swells, not fine rings"
+	)
+	var rings_in_packet: float = WaterShader.RIPPLE_PACKET_WIDTH / WaterShader.RIPPLE_WAVELENGTH
+	assert_between(
+		rings_in_packet, 1.1, 1.4,
+		"a couple of rings behind the front -- never one lonely circle, never a bullseye"
+	)

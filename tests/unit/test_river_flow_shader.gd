@@ -2997,3 +2997,53 @@ func test_the_lines_and_the_ripples_move_at_the_same_speed():
 		eddy_world_px_per_s, 8.0,
 		"the whirls in a 0.5 m/s reach migrate at only %.1f world px/s" % eddy_world_px_per_s
 	)
+
+
+# -- the ring inks softer -----------------------------------------------------
+#
+# "Can you make the ripples a little less pronounced so they appear smoother
+# a bit slower and more natural." Slower and broader is the shared packet's
+# business (test_water_shader.gd); LESS PRONOUNCED is this surface's: the
+# ring inks in its own right through smoothstep(RIPPLE_CREST_MIN,
+# RIPPLE_CREST_FULL, crest), and with FULL at half the packet's peak a ring
+# printed at full stroke strength for most of its life -- as dark as a
+# current line, a stamp rather than a disturbance. FULL now sits near the
+# peak, so only a fresh crest prints at full strength and the ring
+# graduates down through its life instead of switching off; MIN rises a
+# little so the faint tail stays clean, but stays under the crest still
+# reachable three quarters through the life (the "mini ripple" lesson).
+# ripple_ink mirrors the shader's own smoothstep so the graduation is a
+# tested curve, not an eyeballed pair of literals.
+
+
+func test_the_ring_inks_at_full_strength_only_while_fresh():
+	var peak := _peak_packet_amplitude()
+	assert_gte(
+		RiverFlowShader.RIPPLE_CREST_FULL, peak * 0.7,
+		"full ink reachable by more than a fresh crest is a stamp, not a ripple"
+	)
+	assert_almost_eq(
+		RiverFlowShader.ripple_ink(peak), 1.0, 1e-6,
+		"a fresh crest still prints at full strength"
+	)
+
+
+func test_the_ring_graduates_through_its_life_instead_of_switching_off():
+	var half_life_ink: float = RiverFlowShader.ripple_ink(_peak_amplitude_at_life_fraction(0.5))
+	assert_between(
+		half_life_ink, 0.25, 0.6,
+		"half way through its life the ring should be plainly there but plainly softer (%.2f)" % half_life_ink
+	)
+	var late_ink: float = RiverFlowShader.ripple_ink(_peak_amplitude_at_life_fraction(0.75))
+	assert_gt(late_ink, 0.0, "the ring must still draw three quarters through its life")
+	assert_lt(late_ink, half_life_ink, "and fainter than it did at half life")
+	assert_almost_eq(RiverFlowShader.ripple_ink(0.0), 0.0, 1e-9, "flat water inks nothing")
+	assert_almost_eq(RiverFlowShader.ripple_ink(-1.0), 0.0, 1e-9, "troughs ink nothing")
+
+
+func test_the_ink_curve_is_the_shader_s_own_smoothstep():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("float ripple_ink = smoothstep(ripple_crest_min, ripple_crest_full, ripple);")
+	)
+	var mid: float = (RiverFlowShader.RIPPLE_CREST_MIN + RiverFlowShader.RIPPLE_CREST_FULL) * 0.5
+	assert_almost_eq(RiverFlowShader.ripple_ink(mid), 0.5, 1e-6, "smoothstep's midpoint is a half")

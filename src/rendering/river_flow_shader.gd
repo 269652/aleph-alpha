@@ -1266,8 +1266,19 @@ const RIPPLE_LINE_GAIN := LINE_WOBBLE * 0.3
 ## visible only in its first moments ("a mini ripple appears but nothing
 ## looks natural"), so it is pinned low enough that a crest still inks
 ## three quarters of the way through the ring's life.
-const RIPPLE_CREST_MIN := 0.10
-const RIPPLE_CREST_FULL := 0.40
+##
+## FULL 0.40 -> 0.60, MIN 0.10 -> 0.12 ("a little less pronounced ...
+## smoother"): at half the packet's ~0.82 peak, FULL printed the ring at
+## full stroke strength for most of its life -- as dark as a current line,
+## a stamp. Near the peak, only a fresh crest prints full and the ring
+## GRADUATES down through its life (about 0.4 at half life, fading out
+## past three quarters) instead of switching off. Both ends pinned by
+## test_the_ring_inks_at_full_strength_only_while_fresh and
+## test_the_ring_graduates_through_its_life_instead_of_switching_off,
+## against the packet's own scanned peak, so re-tuning the packet re-tunes
+## these bounds.
+const RIPPLE_CREST_MIN := 0.12
+const RIPPLE_CREST_FULL := 0.60
 
 ## px of world width per unit of across-fraction -- the channel half-width,
 ## pinned against RiverCatalog.RIVER_HALF_WIDTH_TILES by test.
@@ -1527,6 +1538,15 @@ static func ripple_packet(distance_units: float, age_seconds: float) -> float:
 	var age_fade := 1.0 - age_seconds / RIPPLE_LIFETIME
 	var spread_fade := 1.0 / (1.0 + front * RIPPLE_SPREAD_DECAY)
 	return rings * packet * age_fade * spread_fade
+
+
+## How hard the ring inks in its own right for a crest of `amplitude` --
+## the CPU mirror of the shader's `smoothstep(ripple_crest_min,
+## ripple_crest_full, ripple)`, so the ring's graduation through its life
+## is a tested curve rather than a pair of eyeballed thresholds. 0 for
+## troughs, flat water and the spent tail; 1 for a fresh crest.
+static func ripple_ink(amplitude: float) -> float:
+	return smoothstep(RIPPLE_CREST_MIN, RIPPLE_CREST_FULL, amplitude)
 
 
 ## Where a ripple recorded at `origin` is centred `age_seconds` later --
