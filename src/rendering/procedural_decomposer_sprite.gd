@@ -82,10 +82,15 @@ func _generate_ant() -> Image:
 	# gaps, and a ring grown around them too fills every gap and fuses
 	# body + legs + ring into one solid slab (see the class doc comment).
 	_outline_silhouette(image)
+	# Each leg leaves from the thorax's EDGE (|y| >= LEG_ROOT_Y), not its
+	# centre row: a stroke run through the middle of the body repainted the
+	# red-brown thorax in ANT_COLOR column by column, leaving a 1-px sliver
+	# of the marking this generator exists to show.
+	const LEG_ROOT_Y := 1.5
 	for leg_x in [-1.5, 0.5, 2.5]:
 		for leg_dir in [-1.0, 1.0]:
 			_draw_line(
-				image, center + Vector2(leg_x, 0.0),
+				image, center + Vector2(leg_x, leg_dir * LEG_ROOT_Y),
 				center + Vector2(leg_x + leg_dir * 0.5, leg_dir * 3.5), ANT_COLOR
 			)
 	return image
