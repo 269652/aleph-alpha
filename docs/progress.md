@@ -3857,6 +3857,24 @@ describes:
   Not built: repair, tool-use wear, wear beyond the three modeled weapons, a
   tooltip line, rarity-driven wear resistance -- all named explicitly in the
   concept doc's own Status section rather than left implicit.
+- **Illustrated art addressing** (large) — ✅ Spec'd (2026-09-04), ⬜ nothing
+  built — `concept/illustrated_art_addressing.md` (new). Generalizes every
+  illustrated class's ad-hoc `_SHEETS` into one addressing scheme: the file
+  path is the address (`<subject>/<context>/<season>/<state>/<animation>.png`),
+  one file holds one single-row animation (so no hand-measured Y bands),
+  every season is DRAWN (procedural tinting/generation is the terminal
+  fallback only — "generated procedural hasn't looked good so far"), snow is
+  a drawn overlay composited at runtime and driven by snow depth (the
+  canopy's fifth column / `snow_<level>.png` precedent, generalized), and a
+  declared fallback lattice (animation → still, season → base season,
+  state → base state, context → icon, subject → procedural) lets a partly
+  authored subject render everywhere. Anchors (`baseline`/`pivot`/
+  `footprint`/`center`) are registry metadata, generalizing the club pilot's
+  cell-keeping divergence. Prompts are to be generated from the same
+  registry the loader reads. Migration plan: legacy sheets untouched, the
+  club sample split into four single-row files first, the campfire as the
+  first seasonal animated structure. Open: parts (trees, paperdoll), facing
+  (creatures), variants, memory.
 - **Composite item sheet: attack/defense/condition, wooden_club pilot**
   (small) — ✅ Spec'd (2026-09-03), 🚧 sample sheet + slicing wired
   (2026-09-04), ⬜ not rendered in play — `assets/sprites/items/

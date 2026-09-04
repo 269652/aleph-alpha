@@ -155,6 +155,13 @@ one — mirrors `IllustratedStoneSprite`/`IllustratedTerrainSprite`'s existing
 
 ### Combat sheets: attack, defense, condition — wooden_club
 
+> **Superseded for NEW art by [illustrated_art_addressing.md](illustrated_art_addressing.md)**
+> (2026-09-04): one file per animation, the path as the address, every
+> season drawn, a declared fallback lattice. The pilot below stands as
+> built — its two-row sheet is the last multi-row file this project
+> authors, and its planned migration (four single-row files) is listed in
+> that doc's Status section.
+
 A real defense mechanic (`block.gd`'s weapon-dependent damage reduction) and
 a real condition mechanic ([item_durability.md](item_durability.md)'s
 `pristine`/`worn`/`broken`) both exist now, which the "Deferred" section

@@ -65,6 +65,15 @@ model actually outputs alpha.)
 
 ## Ingestion format (apply to every multi-cell sheet)
 
+> **New art is one file per animation, single row** — see
+> [illustrated_art_addressing.md](../concept/illustrated_art_addressing.md)
+> for the directory layout (`<subject>/<context>/<season>/<state>/<animation>.png`),
+> the every-season-is-drawn rule, and the fallback order. The multi-row
+> layouts several sections below describe (sheep/wolf-style grids, the §11
+> two-row club sheet) are legacy: they still load, but do not author new
+> ones. The per-cell prompt text in this file is slated to be generated from
+> that doc's registry rather than hand-maintained here.
+
 - Lay out multiple poses/stages/frames on ONE image, left-to-right within a
   row, multiple rows stacked for different categories.
 - Separate every cell with a **thin, near-white or light-gray 1–2px divider
