@@ -9062,6 +9062,19 @@ because this ledger is where the honesty lives:
    the loot rows as a prerequisite; see the neglect entry under Animal Husbandry
    above.
 
+- **Rivers: the boulder's shore band, not a halo** (small) — ✅ Done —
+  reported against the boulder ring introduced earlier: "The rocks should
+  not have a halo around them... instead they should have a layered band
+  like the shore which also wobbles and moves." The ring's reach was
+  already right; what filled it was one flat, static colour. Now the
+  fragment's own position inside the ring is nudged by the channel's own
+  advected field and quantised by the same dither hash the channel body's
+  cel bands use, stepping through `BOULDER_BAND_LEVELS` (3) layers between
+  the shore highlight's tint and the channel's own shallowest water tone
+  — so a boulder's shore band animates and reads in the same palette as
+  the river's real shore, rather than a static ring of its own. See
+  `concept/rivers.md`'s "The boulder's shore band, not a halo".
+
 ## Reality check
 
 This design corpus — 49 concept docs plus a roadmap and, since 2026-08-23, a

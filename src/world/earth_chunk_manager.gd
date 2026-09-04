@@ -3927,8 +3927,8 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# A SECOND, wider ring past the apron is still PAINTED, not
 			# erased (RiverFlowShader.SHORE_BLEED_TILES): the apron alone
 			# is just wide enough for the bank feather itself, so a wader's
-			# wake or a boulder's halo reaching even slightly past it had
-			# no tile left to draw on and simply vanished -- reported live
+			# wake or a boulder's shore band reaching even slightly past it
+			# had no tile left to draw on and simply vanished -- reported live
 			# as a player's own splash trail cutting off mid-stride on the
 			# way out of the water. This ring stays fully transparent by
 			# construction (its baseline |across| sits well past the

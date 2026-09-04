@@ -101,8 +101,10 @@ uniform int boulder_count = 0;
 uniform vec2 boulders[24];
 uniform float boulder_reach_px = 40.0;
 uniform float boulder_radius_px = 11.0;
-uniform float boulder_halo_width_px = 6.0;
-uniform float boulder_halo_alpha = 0.6;
+uniform float boulder_band_width_px = 6.0;
+uniform float boulder_band_alpha = 0.6;
+uniform float boulder_band_levels = 3.0;
+uniform float boulder_band_wobble = 0.6;
 
 // The waders -- the player and any creatures standing in river water,
 // fed per frame by EarthChunkManager.set_river_flow_waders. Soft moving
@@ -372,33 +374,47 @@ void fragment() {
 	// around it; eyot_dry below then cuts a ROUND dry patch under the
 	// rock itself.
 	//
-	// boulder_halo is a SEPARATE ring just outside that dry patch, purely
+	// boulder_band is a SEPARATE ring just outside that dry patch, purely
 	// a function of distance to the rock -- unlike eyot_dry (which only
 	// ever REMOVES wet alpha, so it can darken already-wet water but can
-	// never light up already-dry land), the halo can boost wet alpha and
+	// never light up already-dry land), the band can boost wet alpha and
 	// tint toward the shore colour on its own, independent of the
 	// channel's own across value. A boulder only ever reaches this array
 	// when EarthChunkManager.flow_boulder_at_global found it within the
-	// river or its bank apron, so lighting up a halo around it never
+	// river or its bank apron, so lighting up a band around it never
 	// happens for a rock genuinely out in a field -- it always sits on
 	// real bank ground ("boulders on a grass field inside the river
 	// should be surrounded by the light blue shore band as well").
+	//
+	// boulder_band_ring_t is what is NEW here: the winning boulder's own
+	// raw position inside the ring, 0 at the rock's edge through 1 at the
+	// ring's outer edge, carried out of the loop so the composite below
+	// can quantise it into the same cel-banded, noise-wobbled layers the
+	// channel's own shore uses -- not one flat colour ("the rocks should
+	// not have a halo around them... instead they should have a layered
+	// band like the shore which also wobbles and moves").
 	float eyot_dry = 1.0;
-	float boulder_halo = 0.0;
+	float boulder_band = 0.0;
+	float boulder_band_ring_t = 1.0;
 	for (int b = 0; b < boulder_count; b++) {
 		vec2 to_frag = wp - boulders[b];
 		float lateral = dot(to_frag, flow_perp);
 		float d = length(to_frag);
 		// A RING, not a disc: the inner factor is the same edge eyot_dry
-		// uses, so the halo starts exactly where the rock's dry patch
-		// ends. Without it the halo ran at full strength under the rock
+		// uses, so the band starts exactly where the rock's dry patch
+		// ends. Without it the band ran at full strength under the rock
 		// too and, since it lights alpha on its own below, painted water
 		// straight back over the dry patch it is supposed to trim.
-		boulder_halo = max(
-			boulder_halo,
-			smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d)
-				* (1.0 - smoothstep(boulder_radius_px, boulder_radius_px + boulder_halo_width_px, d))
-		);
+		float band_here = smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d)
+			* (1.0 - smoothstep(boulder_radius_px, boulder_radius_px + boulder_band_width_px, d));
+		// The band's colour comes from whichever boulder dominates its
+		// strength (the max() just below) -- latched together so a
+		// fragment between two overlapping rings never mixes one
+		// boulder's alpha with a different boulder's ring position.
+		if (band_here > boulder_band) {
+			boulder_band_ring_t = clamp((d - boulder_radius_px) / boulder_band_width_px, 0.0, 1.0);
+		}
+		boulder_band = max(boulder_band, band_here);
 		if (d >= boulder_reach_px) {
 			continue;
 		}
@@ -685,9 +701,25 @@ void fragment() {
 	// illustrated mark of all.
 	float shore = 1.0 - smoothstep(shore_width * 0.5, shore_width, abs(rr - shore_pos));
 	body = mix(body, line_color, shore * mix(0.5, 0.85, night_lift));
-	// A boulder's own shore ring, same tint, same night lift -- painted
-	// whether the rock sits in open water or on the bank's dry ground.
-	body = mix(body, line_color, boulder_halo * boulder_halo_alpha * mix(0.5, 0.85, night_lift));
+
+	// A boulder's own shore BAND -- not a flat halo but the same
+	// cel-quantised, noise-wobbled layering the channel's own shore uses
+	// above, radiating from the rock's edge instead of the centreline:
+	// "the rocks should not have a halo around them... instead they
+	// should have a layered band like the shore which also wobbles and
+	// moves". Reuses the channel's own advected field n, so the band's
+	// ring boundary wanders and animates exactly like the channel's own
+	// cel/stroke boundary does, and the same world-anchored dither hash,
+	// so its steps dissolve into the same hand-drawn grain instead of a
+	// smooth gradient ring.
+	float boulder_wobbled_t = clamp(boulder_band_ring_t + (n - 0.5) * boulder_band_wobble, 0.0, 1.0);
+	float boulder_level = clamp(
+		floor(boulder_wobbled_t * boulder_band_levels + (checker - 0.5) * dither_strength),
+		0.0, boulder_band_levels - 1.0
+	);
+	float boulder_band_t = boulder_level / (boulder_band_levels - 1.0);
+	vec3 boulder_band_color = mix(line_color, band0_color, boulder_band_t);
+	body = mix(body, boulder_band_color, boulder_band * mix(0.5, 0.85, night_lift));
 
 	// The comic INK line: a dark outline hugging the real bank curve, just
 	// inside the waterline. The old stylized attempt drew its outline per
@@ -702,13 +734,13 @@ void fragment() {
 	// This is what frees the water's outline from the tile grid: the edge
 	// is |across| == 1, a smooth curve through the middle of tiles, not
 	// the rectangle of whichever cells happened to be painted.
-	// The halo also lights its own alpha, independent of the channel's own
-	// wet/dry verdict -- a boulder halo ring must show through even where
-	// the tile's baseline is dry ground past the bled shore (see
+	// The band also lights its own alpha, independent of the channel's own
+	// wet/dry verdict -- a boulder's own shore band must show through even
+	// where the tile's baseline is dry ground past the bled shore (see
 	// EarthChunkManager._paint_river_flow_overlay's SHORE_BLEED_TILES).
 	float wet = max(
 		(1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry,
-		boulder_halo * boulder_halo_alpha
+		boulder_band * boulder_band_alpha
 	);
 	COLOR = vec4(body, wet);
 }
@@ -841,12 +873,27 @@ const BOULDER_RADIUS_PX := 11.0
 ## The shore-tint ring just outside the dry eyot, and how strongly it
 ## tints and lights alpha -- deliberately WIDER than the water's own bank
 ## feather (BANK_FEATHER, ~1% of a channel width) so a boulder's own
-## halo, unlike the water's edge, reads clearly from a normal play
+## shore band, unlike the water's edge, reads clearly from a normal play
 ## distance regardless of the local channel's width. Not bounded by
-## boulder_reach_px: the halo is a ring right at the rock, not part of
+## boulder_reach_px: the band is a ring right at the rock, not part of
 ## the flow-bending falloff.
-const BOULDER_HALO_WIDTH_PX := 6.0
-const BOULDER_HALO_ALPHA := 0.6
+const BOULDER_BAND_WIDTH_PX := 6.0
+const BOULDER_BAND_ALPHA := 0.6
+## "The rocks should not have a halo around them... instead they should
+## have a layered band like the shore which also wobbles and moves": the
+## ring above no longer paints one flat colour. BOULDER_BAND_LEVELS steps
+## it through the same cel-quantised layering CEL_LEVELS gives the channel
+## body (kept smaller -- the ring is a fraction of the channel's width, so
+## six steps would be sub-pixel), and BOULDER_BAND_WOBBLE perturbs its
+## ring position by the channel's own advected field n before quantising,
+## the same way LINE_WOBBLE perturbs the channel's wave-stroke contours --
+## so the band's boundary wanders and animates instead of sitting as a
+## static circle. Both pinned by test: LEVELS must produce at least two
+## visually distinct layers, and WOBBLE must actually move the boundary
+## while the quantised level never escapes the band regardless of how the
+## field swings.
+const BOULDER_BAND_LEVELS := 3
+const BOULDER_BAND_WOBBLE := 0.6
 
 ## A wader as a flow obstacle: a smaller round core than a boulder (legs,
 ## not a rock face), with the displacement stretched downstream by the
@@ -1001,8 +1048,10 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("boulder_count", 0)
 	material.set_shader_parameter("boulder_reach_px", BOULDER_REACH_PX)
 	material.set_shader_parameter("boulder_radius_px", BOULDER_RADIUS_PX)
-	material.set_shader_parameter("boulder_halo_width_px", BOULDER_HALO_WIDTH_PX)
-	material.set_shader_parameter("boulder_halo_alpha", BOULDER_HALO_ALPHA)
+	material.set_shader_parameter("boulder_band_width_px", BOULDER_BAND_WIDTH_PX)
+	material.set_shader_parameter("boulder_band_alpha", BOULDER_BAND_ALPHA)
+	material.set_shader_parameter("boulder_band_levels", float(BOULDER_BAND_LEVELS))
+	material.set_shader_parameter("boulder_band_wobble", BOULDER_BAND_WOBBLE)
 	material.set_shader_parameter("wader_count", 0)
 	material.set_shader_parameter("wader_reach_px", WADER_REACH_PX)
 	material.set_shader_parameter("wader_radius_px", WADER_RADIUS_PX)
@@ -1094,17 +1143,50 @@ static func eyot_dry_factor(distance_px: float) -> float:
 	return smoothstep(BOULDER_RADIUS_PX * 0.6, BOULDER_RADIUS_PX, distance_px)
 
 
-## The boulder's own shore-ring strength `distance_px` from its centre: 0
+## The boulder's own shore-band strength `distance_px` from its centre: 0
 ## at and inside the rock's own radius (that ground is the eyot, not the
-## ring), rising through the halo band, 0 again beyond it. Independent of
+## band), rising through the band, 0 again beyond it. Independent of
 ## eyot_dry and of the channel's own wet/dry verdict -- this is what lets
-## a rock sitting on ordinary dry bank ground still show a ring.
-static func boulder_halo_factor(distance_px: float) -> float:
+## a rock sitting on ordinary dry bank ground still show a band. Renamed
+## from boulder_halo_factor; same shape, same values.
+static func boulder_band_envelope(distance_px: float) -> float:
 	var inner := smoothstep(BOULDER_RADIUS_PX * 0.6, BOULDER_RADIUS_PX, distance_px)
 	var outer := 1.0 - smoothstep(
-		BOULDER_RADIUS_PX, BOULDER_RADIUS_PX + BOULDER_HALO_WIDTH_PX, distance_px
+		BOULDER_RADIUS_PX, BOULDER_RADIUS_PX + BOULDER_BAND_WIDTH_PX, distance_px
 	)
 	return inner * outer
+
+
+## Where a fragment `distance_px` from a boulder's centre sits WITHIN the
+## band, normalised to [0, 1] (0 at the rock's own edge, 1 at the band's
+## outer edge) -- the CPU mirror of boulder_band_ring_t's clamp in the
+## shader loop, before the noise wobble or cel quantisation are applied.
+static func boulder_band_ring_t(distance_px: float) -> float:
+	return clampf((distance_px - BOULDER_RADIUS_PX) / BOULDER_BAND_WIDTH_PX, 0.0, 1.0)
+
+
+## The band's cel level at a fragment, mirroring the shader exactly:
+## ring_t is nudged by the advected field n (the same field the channel's
+## own wave strokes and cel dither already read) before being quantised by
+## the same world-anchored dither hash the channel body uses -- so the
+## band's own layer boundaries wander with n and dissolve into the same
+## hand-drawn grain, rather than sitting as a smooth static ring.
+static func boulder_band_level(ring_t: float, n: float, checker: float) -> int:
+	var wobbled := clampf(ring_t + (n - 0.5) * BOULDER_BAND_WOBBLE, 0.0, 1.0)
+	return clampi(
+		int(floor(wobbled * float(BOULDER_BAND_LEVELS) + (checker - 0.5) * DITHER_STRENGTH)),
+		0, BOULDER_BAND_LEVELS - 1
+	)
+
+
+## The band's colour at a given level: LINE_COLOR (the same pale tint the
+## old flat halo used, and the channel's own shore highlight) at the
+## rock's own edge, blending out to BAND_COLORS[0] (the channel's own
+## shallowest water tone) at the band's outer edge -- so a boulder's shore
+## reads in the same palette as the channel's, not a colour of its own.
+static func boulder_band_color(level: int) -> Color:
+	var t := float(level) / float(BOULDER_BAND_LEVELS - 1)
+	return LINE_COLOR.lerp(BAND_COLORS[0], t)
 
 
 ## The waterline: 1 inside the channel, 0 past the bank curve, feathered

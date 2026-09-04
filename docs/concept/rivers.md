@@ -1264,6 +1264,37 @@ accident of the asking tile's bearing -- and adjacency doubles as the
 watertightness rule: a one-tile hole breaks the chain. Pinned from every
 tile of the wall by test.
 
+## The boulder's shore band, not a halo (2026-09-04)
+
+Reported directly against the ring introduced above: *"The rocks should
+not have a halo around them... instead they should have a layered band
+like the shore which also wobbles and moves"*. The ring's REACH was
+already right -- a soft-edged annulus starting exactly where the rock's
+dry eyot ends (`boulder_band_envelope`, unchanged) -- what was wrong was
+what filled it: one flat, static `line_color` at a fixed alpha, nothing
+like the channel's own illustrated shore a few tiles away.
+
+The fix reuses the channel body's own machinery instead of inventing a
+second one. `boulder_band_ring_t`, the fragment's own position inside the
+ring (0 at the rock's edge, 1 at the outer edge), is carried out of the
+boulder loop and, in the composite, nudged by `n` -- the SAME advected
+field whose contours already draw the channel's wave strokes -- before
+being quantised by the SAME world-anchored dither hash the channel body's
+cel bands use. The result steps through `BOULDER_BAND_LEVELS` (3) flat
+layers between `line_color` (the shore highlight's own tint, at the rock's
+edge) and `band0_color` (the channel's own shallowest water tone, at the
+ring's outer edge) -- the same palette the real shore draws in, not a
+colour invented for the ring. Because `n` both varies across world
+position and advects with TIME, the layer boundaries are uneven rather
+than perfect circles and visibly animate frame to frame, exactly like the
+channel's own cel/stroke boundaries do -- "wobbles and moves" is the same
+mechanism, not a new one, reused rather than reinvented.
+
+Old halo, new band: same ring extent and alpha (`BOULDER_BAND_WIDTH_PX`,
+`BOULDER_BAND_ALPHA` -- renamed, unchanged values), same "independent of
+the channel's own wet/dry verdict" property that lets a boulder on dry
+bank ground still show a band. Only the fill inside the ring changed.
+
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
@@ -1320,7 +1351,10 @@ tile of the wall by test.
 - **Boulders shape the flow** — ✅ Done — natural and dropped boulders
   deflect the waterline and current lines (eyot + across push, shader
   untouched), and a full boulder row across the channel ponds via the
-  same weir physics. Pushing/carrying an intact boulder (rather than
+  same weir physics. Every in-river boulder also reads as shore: a
+  layered, cel-banded ring around it that wobbles with the channel's own
+  advected field, not a flat halo (see "The boulder's shore band, not a
+  halo"). Pushing/carrying an intact boulder (rather than
   building one from rock) — ⬜ Not started.
 - **The wader's wake** — ✅ Done — player AND creatures (8 slots, river
   filter memoised) displace the current with a round-core,

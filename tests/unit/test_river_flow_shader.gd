@@ -1409,53 +1409,156 @@ func _shader_code_lf() -> String:
 ## "Boulders on a grass field inside the river should be surrounded by
 ## the light blue shore band as well": every boulder gets its own ring,
 ## a function of distance to the ROCK alone -- unlike eyot_dry (which can
-## only ever REMOVE wet alpha), the halo can light up alpha and tint the
+## only ever REMOVE wet alpha), the band can light up alpha and tint the
 ## body on its own, so a rock sitting on ordinary dry bank ground still
 ## reads as part of the river.
-func test_every_boulder_gets_its_own_shore_halo():
-	assert_gt(RiverFlowShader.BOULDER_HALO_WIDTH_PX, 0.0)
-	assert_gt(RiverFlowShader.BOULDER_HALO_ALPHA, 0.0)
-	assert_lte(RiverFlowShader.BOULDER_HALO_ALPHA, 1.0)
-	assert_true(_shader_code_lf().contains(
-		"smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d)\n\t\t\t\t* (1.0 - smoothstep(boulder_radius_px, boulder_radius_px + boulder_halo_width_px, d))"
-	), "the halo must be a RING -- a disc lights alpha under the rock and undoes its own dry patch")
-	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"body = mix(body, line_color, boulder_halo * boulder_halo_alpha * mix(0.5, 0.85, night_lift));"
-	))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("boulder_halo * boulder_halo_alpha"))
+func test_every_boulder_gets_its_own_shore_band():
+	assert_gt(RiverFlowShader.BOULDER_BAND_WIDTH_PX, 0.0)
+	assert_gt(RiverFlowShader.BOULDER_BAND_ALPHA, 0.0)
+	assert_lte(RiverFlowShader.BOULDER_BAND_ALPHA, 1.0)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("boulder_radius_px, boulder_radius_px + boulder_band_width_px, d))"),
+		"the band's reach must still be a RING -- a disc lights alpha under the rock and undoes its own dry patch"
+	)
+	assert_true(RiverFlowShader.SHADER_CODE.contains("boulder_band * boulder_band_alpha"))
 	var material := RiverFlowShader.new().make_material()
 	assert_almost_eq(
-		float(material.get_shader_parameter("boulder_halo_width_px")), RiverFlowShader.BOULDER_HALO_WIDTH_PX, 1e-9
+		float(material.get_shader_parameter("boulder_band_width_px")), RiverFlowShader.BOULDER_BAND_WIDTH_PX, 1e-9
 	)
 	assert_almost_eq(
-		float(material.get_shader_parameter("boulder_halo_alpha")), RiverFlowShader.BOULDER_HALO_ALPHA, 1e-9
+		float(material.get_shader_parameter("boulder_band_alpha")), RiverFlowShader.BOULDER_BAND_ALPHA, 1e-9
 	)
 
 
-## The halo's own CPU mirror: zero under the rock (that ground is the
-## eyot, not the ring), a full ring just outside it, gone beyond the halo
-## band -- and, crucially, defined with NO reference to the channel's own
-## wet/dry state, so a rock on dry land gets exactly the same ring a rock
-## mid-channel does.
-func test_boulder_halo_factor_rings_the_rock_and_nothing_else():
-	assert_eq(RiverFlowShader.boulder_halo_factor(0.0), 0.0, "under the rock is the eyot, not the ring")
-	assert_eq(RiverFlowShader.boulder_halo_factor(RiverFlowShader.BOULDER_RADIUS_PX), 1.0, "the ring peaks right at the rock's edge")
+## The band's own reach, mirrored on the CPU: zero under the rock (that
+## ground is the eyot, not the band), a full ring just outside it, gone
+## beyond the band's width -- and, crucially, defined with NO reference to
+## the channel's own wet/dry state, so a rock on dry land gets exactly the
+## same ring a rock mid-channel does. Renamed from the old
+## boulder_halo_factor; same shape, same values.
+func test_boulder_band_envelope_rings_the_rock_and_nothing_else():
+	assert_eq(RiverFlowShader.boulder_band_envelope(0.0), 0.0, "under the rock is the eyot, not the ring")
+	assert_eq(RiverFlowShader.boulder_band_envelope(RiverFlowShader.BOULDER_RADIUS_PX), 1.0, "the ring peaks right at the rock's edge")
 	assert_eq(
-		RiverFlowShader.boulder_halo_factor(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_HALO_WIDTH_PX), 0.0
+		RiverFlowShader.boulder_band_envelope(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX), 0.0
 	)
 	assert_between(
-		RiverFlowShader.boulder_halo_factor(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_HALO_WIDTH_PX * 0.5),
+		RiverFlowShader.boulder_band_envelope(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX * 0.5),
 		0.0, 1.0
 	)
 
 
-## The halo must be able to light alpha up even where the channel's own
+## The band must be able to light alpha up even where the channel's own
 ## baseline would leave the fragment fully transparent -- a boulder past
 ## the true bank but still within the newly-bled paint band.
-func test_the_boulder_halo_can_light_alpha_on_otherwise_dry_ground():
-	assert_true(_shader_code_lf().contains(
-		"float wet = max(\n\t\t(1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry,\n\t\tboulder_halo * boulder_halo_alpha\n\t);"
-	))
+func test_the_boulder_band_can_light_alpha_on_otherwise_dry_ground():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("boulder_band * boulder_band_alpha"))
+
+
+# -- the layered, wobbling band ("should not have a halo... instead a
+# layered band like the shore which also wobbles and moves") --------------
+#
+# The old halo painted one flat colour across its whole ring. The band
+# instead quantises the fragment's position inside the ring
+# (boulder_band_ring_t) into BOULDER_BAND_LEVELS cel-shaded layers, the
+# same way the channel body itself is cel-shaded -- and, before
+# quantising, nudges that position by the channel's own advected field n,
+# the same field that already drives the channel's wave strokes, so the
+# layer boundaries wander and animate instead of sitting as a static
+# circle.
+
+
+func test_boulder_band_ring_t_spans_the_ring_from_rock_edge_to_outer_edge():
+	assert_eq(RiverFlowShader.boulder_band_ring_t(RiverFlowShader.BOULDER_RADIUS_PX), 0.0, "0 right at the rock's own edge")
+	assert_eq(
+		RiverFlowShader.boulder_band_ring_t(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX),
+		1.0, "1 at the band's outer edge"
+	)
+	assert_eq(RiverFlowShader.boulder_band_ring_t(0.0), 0.0, "clamped, never negative under the rock")
+	assert_eq(
+		RiverFlowShader.boulder_band_ring_t(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX * 100.0),
+		1.0, "clamped, never past 1 far outside the band"
+	)
+
+
+## "A layered band": at least two visually distinct cel steps, not one
+## flat colour repainted under a new name.
+func test_boulder_band_has_at_least_two_visually_distinct_layers():
+	assert_gte(RiverFlowShader.BOULDER_BAND_LEVELS, 2)
+	assert_ne(
+		RiverFlowShader.boulder_band_color(0),
+		RiverFlowShader.boulder_band_color(RiverFlowShader.BOULDER_BAND_LEVELS - 1),
+		"the innermost and outermost layers must actually read as different colours"
+	)
+
+
+## Sweeping ring_t end to end at a NEUTRAL n and checker (0.5, 0.5 -- both
+## wobble and dither terms vanish) must step cleanly through every layer
+## from 0 to the top, in order: the quantiser itself, isolated from the
+## noise that later perturbs it.
+func test_boulder_band_level_steps_through_its_layers_across_the_ring():
+	var levels_seen: Dictionary = {}
+	var previous := 0
+	var steps := 200
+	for i in range(steps + 1):
+		var ring_t := float(i) / float(steps)
+		var level := RiverFlowShader.boulder_band_level(ring_t, 0.5, 0.5)
+		assert_gte(level, previous, "the layer must never step backwards as ring_t only increases")
+		levels_seen[level] = true
+		previous = level
+	assert_true(levels_seen.has(0), "the sweep must reach the innermost layer")
+	assert_true(levels_seen.has(RiverFlowShader.BOULDER_BAND_LEVELS - 1), "the sweep must reach the outermost layer")
+
+
+## The wobble: holding ring_t fixed mid-band and sweeping n (the channel's
+## own advected field, which changes every frame as it advects) must move
+## the fragment between layers -- proof the band's own boundary genuinely
+## reacts to the same moving field the channel's shore does, rather than
+## being pinned to geometry like the old halo was.
+func test_boulder_band_wobbles_with_the_advected_field():
+	var levels_seen: Dictionary = {}
+	var steps := 40
+	for i in range(steps + 1):
+		var n := float(i) / float(steps)
+		var level := RiverFlowShader.boulder_band_level(0.5, n, 0.5)
+		levels_seen[level] = true
+	assert_gt(levels_seen.size(), 1, "sweeping n alone must reach more than one layer, or nothing is wobbling")
+	assert_true(levels_seen.has(0), "a strong enough negative wobble must reach the innermost layer")
+	assert_true(levels_seen.has(RiverFlowShader.BOULDER_BAND_LEVELS - 1), "a strong enough positive wobble must reach the outermost layer")
+
+
+## However hard the field pushes, the wobbled position must stay inside
+## the band -- it must never wrap the ring back past the rock's own edge
+## or blow out past the band's outer edge, at either end of the ring and
+## either extreme of the field.
+func test_boulder_band_wobble_never_escapes_the_band():
+	for ring_t in [0.0, 1.0]:
+		for n in [0.0, 1.0]:
+			var level: int = RiverFlowShader.boulder_band_level(ring_t, n, 0.5)
+			assert_between(level, 0, RiverFlowShader.BOULDER_BAND_LEVELS - 1)
+
+
+## The old flat, static ring must be gone outright, not merely renamed
+## underneath -- and the new band must actually be wired to the channel's
+## own moving field and its own shore palette, not a colour of its own.
+func test_the_shader_no_longer_paints_a_flat_static_boulder_halo():
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("boulder_halo"),
+		"no trace of the old flat halo may remain, under any name"
+	)
+	assert_true(RiverFlowShader.SHADER_CODE.contains("boulder_band_ring_t"))
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("boulder_wobbled_t * boulder_band_levels"),
+		"the layer count must actually drive the quantisation"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("(n - 0.5) * boulder_band_wobble"),
+		"the band must be perturbed by the channel's own advected field n, the same field the wave strokes use"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("mix(line_color, band0_color, boulder_band_t)"),
+		"the band must blend the shore highlight tint into the channel's own shallow-water tone, not a flat colour"
+	)
 
 
 func test_the_material_starts_with_no_waders():

@@ -518,7 +518,7 @@ func test_river_flow_overlay_paints_only_channel_and_apron_cells():
 	var terrain_renderer := TerrainRenderer.new()
 	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
 	# Painted out past the bank line by the apron, and past THAT again by
-	# SHORE_BLEED_TILES -- a wader's wake or a boulder's halo reaching
+	# SHORE_BLEED_TILES -- a wader's wake or a boulder's shore band reaching
 	# just past the apron needs a real tile to draw its fade on, or it
 	# cuts off mid-stride ("the bulge when a player walks out is not
 	# clipped"). Nothing farther than the bleed may be painted.
