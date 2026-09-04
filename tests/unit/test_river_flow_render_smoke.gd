@@ -73,6 +73,8 @@ func test_a_real_tile_map_layer_with_the_shared_river_flow_material_runs_several
 ## fraction. A control at the origin separates "the harness is broken"
 ## from "the far coordinates are broken".
 func test_the_strokes_survive_far_world_coordinates_on_the_real_gpu():
+	if _no_real_gpu():
+		return
 	var origin_fraction := await _stroke_pixel_fraction_at(Vector2(0.0, 0.0))
 	var basel := Vector2(20870.0 * 16.0, 4750.0 * 16.0)
 	var far_fraction := await _stroke_pixel_fraction_at(basel)
@@ -87,10 +89,92 @@ func test_the_strokes_survive_far_world_coordinates_on_the_real_gpu():
 	)
 
 
-## Renders an 8x8 block of mid-channel water cells with the real shared
-## material at a given world offset and returns the fraction of its pixels
-## that read as pale stroke ink rather than deep body colour.
-func _stroke_pixel_fraction_at(world_offset: Vector2) -> float:
+
+## THE ripple check, on the real GPU -- the only place the reported symptom
+## ("fishes don't produce interferencing ripples anymore in the new unified
+## river water") can actually be observed. Every CPU mirror in
+## test_river_flow_shader.gd can be green while the ring still never
+## reaches a pixel, which is exactly the class of failure that produced the
+## report in the first place: the wake was being recorded and aged all
+## along, into a surface that no longer existed.
+##
+## Two blocks of the SAME river, quiet and disturbed, rendered in the SAME
+## FRAME. Sharing the frame is not a convenience -- it is the whole
+## experiment. This surface advects continuously, so two renders taken a
+## few frames apart differ in every pixel no matter what the ripple does,
+## and a comparison across frames "passes" with the ripple term deleted
+## outright (measured: it did). Same frame means one shared TIME, so the
+## disturbance buffer is the only thing left that can differ.
+func test_a_recorded_disturbance_actually_changes_what_the_river_draws():
+	if _no_real_gpu():
+		return
+	# Mid-block, mid-life: the front has expanded a couple of tiles and the
+	# packet still carries most of its amplitude.
+	var quiet := _build_river_viewport(
+		Vector2.ZERO, PackedVector2Array(), PackedFloat32Array()
+	)
+	var rippled := _build_river_viewport(
+		Vector2.ZERO, PackedVector2Array([Vector2(64.0, 64.0)]), PackedFloat32Array([0.35])
+	)
+	for i in range(4):
+		await get_tree().process_frame
+
+	var quiet_image := quiet.get_texture().get_image()
+	var rippled_image := rippled.get_texture().get_image()
+	quiet.queue_free()
+	rippled.queue_free()
+	if quiet_image == null or rippled_image == null:
+		return  # no GPU readback in this environment (see _read_stroke_fraction)
+
+	var changed := 0
+	var sampled := 0
+	for py in range(0, quiet_image.get_height(), 2):
+		for px in range(0, quiet_image.get_width(), 2):
+			sampled += 1
+			if quiet_image.get_pixel(px, py) != rippled_image.get_pixel(px, py):
+				changed += 1
+	var changed_fraction := float(changed) / float(maxi(sampled, 1))
+	assert_gt(
+		changed_fraction, 0.01,
+		"a live wake left %.2f%% of the river's pixels different -- the ring never reaches the screen"
+			% (changed_fraction * 100.0)
+	)
+	# And it is a LOCAL disturbance, not a wash over the whole surface: the
+	# ring has a real radius, so a good part of the block must be untouched.
+	assert_lt(
+		changed_fraction, 0.9,
+		"a wake that repaints nearly every pixel is not a ring, it is a filter"
+	)
+
+
+## Whether this run has no GPU that can render a viewport and hand the
+## frame back. The two readback tests above are meaningless without one:
+## get_image() returns null under the headless driver, and the engine error
+## that produces is itself enough to fail a GUT test, so an early return
+## inside the harness cannot rescue them. They previously ran anyway and
+## reported "the field is dead there" on every headless run -- a failure
+## about the shader, for a reason that has nothing to do with it.
+##
+## Run them for real with:
+##   <godot> --rendering-driver opengl3 -s addons/gut/gut_cmdln.gd \
+##     -gconfig= -gtest=res://tests/unit/test_river_flow_render_smoke.gd -gexit
+## (no --headless), which is how this file's claims were last confirmed.
+func _no_real_gpu() -> bool:
+	if DisplayServer.get_name() != "headless":
+		return false
+	pending("no GPU readback under --headless; run with --rendering-driver opengl3")
+	return true
+
+
+## Builds (but does not yet render) an 8x8 block of mid-channel water cells
+## drawn with the real shared material at a given world offset, optionally
+## carrying live movement ripples. Returned unrendered so a caller can
+## stand two of them up and let both reach the GPU in the SAME frame.
+func _build_river_viewport(
+	world_offset: Vector2,
+	disturbance_positions: PackedVector2Array,
+	disturbance_ages: PackedFloat32Array
+) -> SubViewport:
 	var renderer := TerrainRenderer.new()
 	var flow_shader := RiverFlowShader.new()
 
@@ -131,15 +215,38 @@ func _stroke_pixel_fraction_at(world_offset: Vector2) -> float:
 			)
 	var map_texture := ImageTexture.create_from_image(map_image)
 	flow_shader.shared_material().set_shader_parameter("flow_across_map", map_texture)
+
+	# The disturbance buffer, padded exactly the way EarthChunkManager hands
+	# it over (WaterShader's own padding: a sentinel age for the dead tail).
+	var padded_positions := PackedVector2Array(disturbance_positions)
+	padded_positions.resize(RiverFlowShader.DISTURBANCE_SLOTS)
+	var padded_ages := PackedFloat32Array(disturbance_ages)
+	while padded_ages.size() < RiverFlowShader.DISTURBANCE_SLOTS:
+		padded_ages.append(-999.0)
+	flow_shader.set_disturbances(padded_positions, padded_ages, disturbance_positions.size())
+
 	var atlas_coords := renderer.atlas_coords_for_river_flow(180.0, true)
 	for y in range(8):
 		for x in range(8):
 			layer.set_cell(Vector2i(x, y), 0, atlas_coords)
+	return viewport
 
+
+## Renders an 8x8 block of quiet mid-channel water at a given world offset
+## and returns the fraction of its pixels that read as pale stroke ink
+## rather than deep body colour. -1.0 where this environment cannot read a
+## viewport back (headless has no real GPU target, and a null image is
+## that, not a rendering bug).
+func _stroke_pixel_fraction_at(world_offset: Vector2) -> float:
+	var viewport := _build_river_viewport(
+		world_offset, PackedVector2Array(), PackedFloat32Array()
+	)
 	for i in range(4):
 		await get_tree().process_frame
-
 	var image := viewport.get_texture().get_image()
+	viewport.queue_free()
+	if image == null:
+		return -1.0
 	var stroke_pixels := 0
 	var sampled := 0
 	for py in range(0, image.get_height(), 2):
@@ -147,7 +254,6 @@ func _stroke_pixel_fraction_at(world_offset: Vector2) -> float:
 			sampled += 1
 			if image.get_pixel(px, py).v > 0.6:
 				stroke_pixels += 1
-	viewport.queue_free()
 	if sampled == 0:
 		return -1.0
 	return float(stroke_pixels) / float(sampled)

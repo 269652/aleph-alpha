@@ -1303,29 +1303,59 @@ What is genuinely adapted, and why each part:
   thing ocean water cannot express and the river must.
 - **Drawn, not glowed.** This surface is illustrated water: a flat cel body
   plus contour strokes. A bright ring composited on top would read as an
-  overlay sticker. So the packet enters the two fields that are already
-  there. It is added to the **shade** that the cel ramp quantises, so a
-  crest steps the fragment toward a lighter band and a trough toward a
-  darker one — the old shader's "crests brighten, troughs darken from the
-  same baseline", expressed as flat cel steps, which is exactly how 16-bit
-  water drew a ring. And it is added to the **stroke field** whose level
-  sets are the current lines, so the drawn lines genuinely bow into arcs
-  around the disturbance and interfere with the flow pattern instead of
-  being drawn over it.
-- **Sized so a ring actually crosses a cel step.** `RIPPLE_SHADE_GAIN` is
-  not eyeballed: it is pinned by test to move a crest at the packet's peak
-  by at least one full `CEL_LEVELS` step (otherwise the ring quantises away
-  to nothing and the whole term is invisible), and bounded above so a
-  ripple cannot jump the full depth ramp and flatten the channel's
-  cross-section. `RIPPLE_LINE_GAIN` is pinned the same way against
-  `LINE_COUNT` — a crest must bend the stroke field by a visible fraction
-  of one contour spacing, and never by so much that the ring closes the
-  lines into cells (the failure mode the `ACROSS_LINE_SCALE`/`LINE_WOBBLE`
-  ratio exists to prevent).
+  overlay sticker. So the packet enters two fields that already exist. It
+  is added to the **stroke field** whose level sets are the current lines,
+  so the drawn lines genuinely bow into arcs around the disturbance —
+  closing into rings where the packet is steepest, which is exactly what a
+  ripple is — and interfere with the flow pattern instead of being drawn
+  over it. And its crests enter the **stroke strength**, so the ring inks
+  in its own right, inheriting the adaptive ink, the moonlight lift and the
+  alpha clamp for free (`max`, not a sum: a strong crest takes over the
+  mark, a weak one leaves the flow line alone, and neither can push a
+  stroke past full).
+- **Not into the cel body**, though an earlier draft of this section
+  specified exactly that — a crest stepping the fragment toward a lighter
+  band, a trough toward a darker one. It was dropped before implementation
+  on the strength of this doc's own history: the body cels are static
+  reconstructed depth *because* shading them with a moving field produced
+  the reported "gas animation", and `test_the_body_cels_are_static_depth_
+  only` pins that literally. The art direction here is that the body holds
+  still and the drawn strokes carry ALL the motion — and a ripple is
+  motion, so it belongs in the strokes with the rest of it.
+- **Both gains bounded from both sides, against the packet's own scanned
+  peak** rather than against a written-down amplitude, so re-tuning the
+  packet re-tunes its bounds. `RIPPLE_LINE_GAIN`: a crest must bend the
+  stroke field by more than a third of one contour spacing (below that it
+  draws nothing) and by less than half the wobble's own swing (above that
+  it stops being a local disturbance and restructures the channel-wide
+  line family into the closed "perlin noise cells" the across ramp exists
+  to prevent — rings closing around the fish itself are wanted, which is
+  why the ceiling is set against the wobble and not against zero).
+  `RIPPLE_CREST_FULL` must stay reachable by a real crest or it is ink
+  that never prints; `RIPPLE_CREST_MIN` is the threshold `WaterShader`
+  already paid for once — set against a fresh ripple it made the ring
+  visible only in its first moments ("a mini ripple appears but nothing
+  looks natural"), so it is pinned low enough that a crest still inks
+  three quarters of the way through the ring's life.
 
 The ripple deliberately does NOT displace `frag_across`, the way boulders
 and waders do. That field is the channel's geometry: pushing it moves the
 bank line and the dry eyot, and a passing fish must not narrow the river.
+
+**Verified where it is actually visible.** Every CPU mirror can be green
+while the ring still never reaches a pixel — that is precisely the failure
+that produced the report. So `test_river_flow_render_smoke.gd` renders two
+blocks of the same river, quiet and disturbed, and requires the picture to
+change. They must share a FRAME: this surface advects continuously, so two
+renders taken a few frames apart differ in every pixel regardless, and a
+first attempt at this test passed with the ripple term deleted outright
+(measured). Same frame, one shared `TIME`, and the disturbance buffer is
+the only thing left that can differ — with the ripple disabled the
+difference measures 0.00%. Both readback tests in that file now skip
+explicitly under `--headless` (no GPU target, `get_image()` returns null,
+and the engine error that raises fails the test on its own); the far-world
+one had been reporting a shader failure on every headless run for a reason
+that had nothing to do with the shader.
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
@@ -1387,10 +1417,18 @@ bank line and the dry eyot, and a passing fish must not narrow the river.
 - **The wader's wake** — ✅ Done — player AND creatures (8 slots, river
   filter memoised) displace the current with a round-core,
   downstream-trailing wake; never dries the channel.
-- **Movement ripples (fish, player, animals)** — 🚧 In progress — the
-  shared `WaterShader` disturbance buffer now feeds the river surface too;
-  the same signed wave packet, advected downstream with the current, drawn
-  into the cel shade and the stroke contours rather than composited on top.
+- **Movement ripples (player, animals)** — ✅ Done — the shared
+  `WaterShader` disturbance buffer now feeds the river surface too; the
+  same signed wave packet, its centre advected downstream with the current,
+  drawn into the stroke contours and the stroke strength rather than
+  composited on top. Confirmed on a real GPU
+  (`test_a_recorded_disturbance_actually_changes_what_the_river_draws`),
+  which is the only place the symptom was ever visible. **Fish are not yet
+  among the causes in a river**: `FishRenderer` still spawns on ocean cells
+  only (see "Freshwater fishing" below), so a river shows the player's and
+  the animals' wakes but has nothing swimming in it to make its own. The
+  ripple side of that is now ready and needs no further work — river fish
+  will ripple the moment they exist.
 - **Rivers on the minimap** — ✅ Done — water-blue over any biome, memoised
   per tile so the polyline walk never hitches the rebuild.
 - **Real hydraulics: volume, pressure, current speed** — ✅ Done —
