@@ -474,3 +474,11 @@ func test_a_wake_is_a_bit_slower_and_its_crests_are_broader():
 		rings_in_packet, 1.1, 1.4,
 		"a couple of rings behind the front -- never one lonely circle, never a bullseye"
 	)
+
+
+## "A more relaxed and calm picture": a wake that is gone in two seconds
+## reads as a flicker. It lingers three seconds or more, still expanding
+## slowly, and the reach it grows to over that life stays inside the pond
+## bound the test above already holds.
+func test_a_wake_lingers():
+	assert_gte(WaterShader.RIPPLE_LIFETIME, 3.0)
