@@ -127,7 +127,7 @@ only what the path cannot say:
         "glow":  {"fps": 4,  "loop": true},
     },
     "overlays": ["snowed"],
-    "chroma_key": Color(1, 0, 0, 1) ... (pure magenta), "chroma_key_tolerance": 0.25,
+    "chroma_key": Color(1, 0, 1), "chroma_key_tolerance": 0.25,   # pure magenta
     "prompt": {...}   # see "Prompts come from the registry"
 }
 ```
