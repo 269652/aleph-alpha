@@ -5,6 +5,7 @@ extends GutTest
 const WindDispersal = preload("res://src/world/wind_dispersal.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const FlowerEstablishment = preload("res://src/world/flower_establishment.gd")
 
 
 func _mean_offset(weight: float, direction: Vector2, strength: float, count: int) -> Vector2:
@@ -276,3 +277,60 @@ func test_an_unknown_sky_still_answers_with_a_real_wind():
 	var fallback: float = model.dispersal_strength_for("not_a_sky")
 	assert_gte(fallback, 0.0)
 	assert_lte(fallback, 1.0)
+
+
+# -- a plume drifts in still air; an acorn does not --------------------------
+#
+# Reported live: seed "should be carried a bit further by the wind and birds so
+# it leaves more space between individual flowers". The downwind term already
+# scaled with the seed's lightness; the calm scatter did not, so on a still day
+# a plumed seed and an acorn fell into the same little circle. That is the case
+# a meadow is actually generated under -- a prevailing wind is a breeze, not a
+# gale -- so it was the term deciding how far apart flowers ended up standing.
+
+func _mean_distance(weight: float, strength: float, count: int) -> float:
+	var total := 0.0
+	for seed_value in count:
+		total += WindDispersal.landing_offset(
+			seed_value, weight, Vector2.RIGHT, strength
+		).length()
+	return total / float(count) / float(TerrainRenderer.TILE_SIZE)
+
+
+## Still air is not still: a plumed seed goes somewhere on the faintest
+## movement of it, which is what the plume is FOR.
+func test_in_still_air_a_plumed_seed_drifts_further_than_an_acorn():
+	var plume := _mean_distance(WindDispersal.WEIGHT_FLOWER_SEED, 0.0, 500)
+	var acorn := _mean_distance(WindDispersal.WEIGHT_NUT, 0.0, 500)
+	assert_gt(plume, acorn * 1.5, "a dandelion seed and an acorn fell alike (%.2f vs %.2f tiles)" % [plume, acorn])
+
+
+## And the other side of it, unchanged: an acorn drops within a crown-width
+## whatever the weather. This is the behaviour the calm scatter always had for
+## a nut, pinned so making the plume drift further cannot quietly drag the nut
+## along with it.
+func test_an_acorn_still_drops_within_a_crown_width_in_still_air():
+	for seed_value in 300:
+		var drop := WindDispersal.landing_offset(
+			seed_value, WindDispersal.WEIGHT_NUT, Vector2.RIGHT, 0.0
+		).length() / float(TerrainRenderer.TILE_SIZE)
+		assert_lte(drop, 1.25, "an acorn rolled %.2f tiles in dead calm" % drop)
+
+
+## Far enough to matter: on a still day a flower seed has to clear the
+## establishment gate's own spacing reasonably often, or a lineage simply
+## piles up on its parent and one plant is all that ever grows there. Ties the
+## two constants together rather than leaving each eyeballed on its own.
+func test_still_air_carries_flower_seed_clear_of_its_parent_often_enough():
+	var cleared := 0
+	var total := 400
+	for seed_value in total:
+		var drift := WindDispersal.landing_offset(
+			seed_value, WindDispersal.WEIGHT_FLOWER_SEED, Vector2.RIGHT, 0.0
+		).length() / float(TerrainRenderer.TILE_SIZE)
+		if drift >= FlowerEstablishment.MIN_SPACING_TILES:
+			cleared += 1
+	assert_gt(
+		float(cleared) / float(total), 0.35,
+		"only %d of %d seeds cleared the parent in still air" % [cleared, total]
+	)

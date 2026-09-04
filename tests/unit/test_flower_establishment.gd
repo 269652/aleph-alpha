@@ -105,52 +105,99 @@ func test_the_spacing_is_measured_in_tiles_not_pixels():
 	assert_lt(FlowerEstablishment.MIN_SPACING_TILES, 16.0)
 
 
-# -- the indexed form --------------------------------------------------------
+# -- a whole seed rain at once -----------------------------------------------
 #
-# MeadowSpread tests thousands of landings per chunk load, so it cannot afford
-# is_clear's walk over every plant placed so far. The indexed form buckets
-# plants by spacing so only the neighbouring buckets are looked at -- but it
-# has to be the SAME RULE, not a second one that drifts.
-
-func test_an_empty_index_takes_anything():
-	assert_true(FlowerEstablishment.index_is_clear(Vector2i(7, 7), FlowerEstablishment.new_index()))
-
-
-func test_the_index_refuses_a_cell_beside_a_plant_it_holds():
-	var index := FlowerEstablishment.new_index()
-	FlowerEstablishment.index_add(Vector2i(5, 5), index)
-	assert_false(FlowerEstablishment.index_is_clear(Vector2i(6, 5), index))
-	assert_true(FlowerEstablishment.index_is_clear(Vector2i(25, 25), index))
+# is_clear answers for one seed against plants that already stand. Worldgen has
+# the other problem: a whole season's seed rain landing at once, none of it
+# standing yet, and no meaningful order to consider it in. Considering it in
+# SOME order (a sweep) would make the answer depend on where the sweep started,
+# and a chunk generator's sweep starts at its own chunk -- so two chunks would
+# disagree about a plant on their shared boundary. `survivors` is therefore
+# order-independent: within a neighbourhood, the seed with the most vigour
+# takes, and which that is does not depend on who asked.
 
 
-## The guard that keeps the fast path honest: over a crowd of plants and a
-## sweep of query cells, the bucketed answer must equal the plain one
-## everywhere. A bucketing bug shows up as a plant slipping through at a
-## bucket boundary, which is exactly the case a hand-picked example misses.
-func test_the_indexed_form_answers_exactly_what_the_plain_form_does():
-	var plants: Array = []
-	var index := FlowerEstablishment.new_index()
-	for i in 60:
-		var cell := Vector2i((i * 7) % 31 - 15, (i * 13) % 29 - 14)
-		plants.append(cell)
-		FlowerEstablishment.index_add(cell, index)
-	var disagreements := 0
-	for y in range(-18, 19):
-		for x in range(-18, 19):
-			var cell := Vector2i(x, y)
-			if (
-				FlowerEstablishment.index_is_clear(cell, index)
-				!= FlowerEstablishment.is_clear(cell, plants)
-			):
-				disagreements += 1
-	assert_eq(disagreements, 0, "the fast path is not the same rule as the slow one")
+func _rain(cells: Array, ranks: Array) -> Array:
+	var out: Array = []
+	for i in cells.size():
+		out.append({"cell": cells[i], "rank": ranks[i]})
+	return out
+
+
+func test_a_lone_seed_survives():
+	var survivors := FlowerEstablishment.survivors(_rain([Vector2i(4, 4)], [1]))
+	assert_eq(survivors.size(), 1)
+	assert_eq(survivors[0]["cell"], Vector2i(4, 4))
+
+
+func test_seed_scattered_wide_apart_all_survives():
+	var rain := _rain([Vector2i(0, 0), Vector2i(20, 0), Vector2i(0, 20)], [1, 2, 3])
+	assert_eq(FlowerEstablishment.survivors(rain).size(), 3)
+
+
+## The rule itself: crowded seed thins to one plant, and it is the one with
+## the most vigour rather than the one that happened to be listed first.
+func test_crowded_seed_thins_to_the_one_with_the_most_vigour():
+	var rain := _rain([Vector2i(5, 5), Vector2i(6, 5), Vector2i(5, 6)], [1, 9, 4])
+	var survivors := FlowerEstablishment.survivors(rain)
+	assert_eq(survivors.size(), 1)
+	assert_eq(survivors[0]["cell"], Vector2i(6, 5), "the weakest seed won")
+
+
+## The property that makes chunks agree at their seams: shuffling the rain
+## must not change which seed takes.
+func test_the_order_the_rain_is_listed_in_changes_nothing():
+	var cells := [Vector2i(0, 0), Vector2i(1, 1), Vector2i(9, 0), Vector2i(10, 1), Vector2i(4, 7)]
+	var ranks := [5, 8, 2, 7, 3]
+	var forwards: Array = []
+	for survivor in FlowerEstablishment.survivors(_rain(cells, ranks)):
+		forwards.append(survivor["cell"])
+	cells.reverse()
+	ranks.reverse()
+	var backwards: Array = []
+	for survivor in FlowerEstablishment.survivors(_rain(cells, ranks)):
+		backwards.append(survivor["cell"])
+	# As a SET: reversing the input reverses the output listing, which is
+	# fine -- what must not change is WHICH seed took.
+	forwards.sort()
+	backwards.sort()
+	assert_eq(forwards, backwards, "the sweep order decided the meadow")
+
+
+## Whatever survives must satisfy the gate the rest of this module enforces --
+## the two halves cannot disagree about how far apart plants stand.
+func test_nothing_that_survives_stands_too_close_to_anything_else():
+	var rain: Array = []
+	for i in 400:
+		rain.append({"cell": Vector2i(i % 20, i / 20), "rank": (i * 37) % 401})
+	var survivors := FlowerEstablishment.survivors(rain)
+	assert_gt(survivors.size(), 0, "a 20x20 downpour rooted nothing at all")
+	for a in survivors:
+		for b in survivors:
+			if a["cell"] == b["cell"]:
+				continue
+			assert_gte(
+				Vector2(a["cell"] - b["cell"]).length(), FlowerEstablishment.MIN_SPACING_TILES,
+				"%s and %s both survived" % [a["cell"], b["cell"]]
+			)
+
+
+## Two seeds of identical vigour in the same neighbourhood must not BOTH take
+## just because nothing separates them -- the tie has to break somewhere.
+func test_a_dead_heat_still_produces_one_plant():
+	var rain := _rain([Vector2i(5, 5), Vector2i(6, 5)], [7, 7])
+	assert_eq(FlowerEstablishment.survivors(rain).size(), 1)
 
 
 ## Negative coordinates are the ordinary case, not an edge case: the world is
-## centred on the origin and half of it has negative tiles. Integer division
-## truncating toward zero would fold -0.5 and +0.5 into the same bucket.
-func test_the_index_works_on_negative_ground_too():
-	var index := FlowerEstablishment.new_index()
-	FlowerEstablishment.index_add(Vector2i(-40, -40), index)
-	assert_false(FlowerEstablishment.index_is_clear(Vector2i(-41, -40), index))
-	assert_true(FlowerEstablishment.index_is_clear(Vector2i(-60, -60), index))
+## centred on the origin and half of it has negative tiles. Bucketing by
+## integer division (truncating toward zero) would fold the two cells either
+## side of the origin into one bucket.
+func test_it_works_on_negative_ground_too():
+	var rain := _rain([Vector2i(-40, -40), Vector2i(-41, -40), Vector2i(-60, -60)], [1, 5, 3])
+	var survivors := FlowerEstablishment.survivors(rain)
+	assert_eq(survivors.size(), 2)
+
+
+func test_no_rain_roots_nothing():
+	assert_eq(FlowerEstablishment.survivors([]).size(), 0)
