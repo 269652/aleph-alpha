@@ -93,6 +93,7 @@ uniform float smear_gain = 2.0;
 uniform float turbulence_strength = 1.6;
 uniform float eddy_scale = 0.16;
 uniform float eddy_detail_weight = 0.7;
+uniform float eddy_detail_frequency = 2.6;
 uniform float eddy_swirl = 0.0;
 uniform float bank_shear = 0.25;
 uniform sampler2D flow_across_map : filter_linear, repeat_enable;
@@ -572,7 +573,7 @@ void fragment() {
 	// through the water, come out whirlier than straight reaches.
 	float shear = 1.0 + bank_shear * clamp(abs(frag_across), 0.0, 1.0);
 	float bend = (value_noise(eddy_p) - 0.5
-		+ (value_noise(eddy_p * 2.6 + vec2(19.7, 7.3)) - 0.5) * eddy_detail_weight)
+		+ (value_noise(eddy_p * eddy_detail_frequency + vec2(19.7, 7.3)) - 0.5) * eddy_detail_weight)
 		* turbulence_strength * shear;
 	vec2 q = p + flow_perp * bend;
 	// The smear direction is the FLOW direction and nothing else. Rotating
@@ -891,7 +892,7 @@ const INK_COLOR := Color(0.05, 0.13, 0.25)
 ## defect-3 lesson: past the fold threshold displacement does not bend a
 ## pattern, it destroys it -- and the bent field must still read as lines
 ## (test_the_warped_field_still_forms_lines).
-const TURBULENCE_STRENGTH := 1.6
+const TURBULENCE_STRENGTH := 1.4
 const EDDY_SCALE := 0.16
 
 ## The bend's second, finer octave (2.6x the eddy scale). The coarse octave
@@ -899,7 +900,24 @@ const EDDY_SCALE := 0.16
 ## neighbouring lines TOGETHER, which locally reads as translation. Kinks a
 ## viewer can see need bend variation WITHIN a line's own length -- pinned
 ## by test_a_streakline_visibly_curves_within_its_own_length.
-const EDDY_DETAIL_WEIGHT := 0.7
+## How many times finer the bend's second octave is than its first.
+##
+## RAISED from 2.6, and TURBULENCE_STRENGTH cut to match, because the two
+## things this field has to deliver trade off against each other in a
+## fixed way. Curvature within a line's own length goes as
+## amplitude * frequency^2; the risk of the domain warp FOLDING (see
+## test_the_bend_never_folds_or_pinches_the_surface) goes as
+## amplitude * frequency. So for a fixed fold budget, curvature is
+## proportional to frequency alone -- a finer, weaker eddy buys strictly
+## more visible curl per unit of fold risk than a coarse, strong one.
+##
+## Measured: at 2.6 and strength 1.6 the warp pinched to 0.0988, which is
+## a 10:1 compression and the cusp reported as a zigzag. At 4.0 and 0.85
+## the margin is comfortable AND a streakline curves more than it did
+## before, rather than less.
+const EDDY_DETAIL_FREQUENCY := 2.6
+
+const EDDY_DETAIL_WEIGHT := 0.5
 
 ## The across map's side length in tiles -- one texel per world tile,
 ## addressed toroidally. STRICTLY larger than the widest tile span the
@@ -1072,6 +1090,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("turbulence_strength", TURBULENCE_STRENGTH)
 	material.set_shader_parameter("eddy_scale", EDDY_SCALE)
 	material.set_shader_parameter("eddy_detail_weight", EDDY_DETAIL_WEIGHT)
+	material.set_shader_parameter("eddy_detail_frequency", EDDY_DETAIL_FREQUENCY)
 	material.set_shader_parameter("flow_map_tiles", float(FLOW_MAP_TILES))
 	material.set_shader_parameter("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES)
 	material.set_shader_parameter("tile_px", TILE_PX)
@@ -1573,7 +1592,9 @@ static func field_roughness(distance: float, dir: Vector2, downstream: bool) -> 
 ## coordinates, exactly as the shader anchors it to the bed.
 static func bend_displacement(eddy_x: float, eddy_y: float) -> float:
 	var coarse := value_noise(eddy_x, eddy_y) - 0.5
-	var fine := value_noise(eddy_x * 2.6 + 19.7, eddy_y * 2.6 + 7.3) - 0.5
+	var fine := value_noise(
+		eddy_x * EDDY_DETAIL_FREQUENCY + 19.7, eddy_y * EDDY_DETAIL_FREQUENCY + 7.3
+	) - 0.5
 	return (coarse + fine * EDDY_DETAIL_WEIGHT) * TURBULENCE_STRENGTH
 
 

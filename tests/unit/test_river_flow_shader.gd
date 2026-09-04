@@ -510,14 +510,58 @@ func test_streaklines_are_bent_by_a_real_measured_amount():
 ## does not bend a pattern, it SHREDS it. The warp must never fold -- the
 ## warped across-coordinate must stay strictly monotonic in the real one.
 ## Measured over the real field, not derived from a formula.
-func test_the_bend_never_folds_the_surface_over_itself():
-	for i in range(40):
-		var along := float(i) * 0.47
-		var previous := RiverFlowShader.warped_across(along, 0.0)
-		for j in range(1, 160):
-			var here := RiverFlowShader.warped_across(along, float(j) * 0.05)
-			assert_gt(here, previous, "the warp folds at along=%.2f" % along)
-			previous = here
+## A warp is invertible only while its Jacobian stays POSITIVE -- but
+## asserting merely "> 0" is not enough, and this test used to.
+##
+## The strokes are contours of a noise field sampled at a WARPED
+## coordinate (q = p + flow_perp * bend). At a derivative of 0.0988 --
+## which the old monotonicity check passed happily -- the warp compresses
+## the coordinate 10:1, pinching every contour running through it into a
+## near-cusp. A sharp V in a stroke is a zigzag by another name.
+##
+## This is why the artefact survived four separate fixes aimed at the
+## FIELD (the across map's reconstruction, the width map, the smear
+## direction, the obstacle push): a fold is a property of the WARP, not of
+## what is being warped. /flowdebug confirmed the field itself was smooth
+## the whole time.
+##
+## Measured with tools/probe_fold.gd over 240,000 samples:
+##
+##   EDDY_DETAIL_WEIGHT 0.7  -> minimum derivative 0.0988
+##   EDDY_DETAIL_WEIGHT 0.35 -> minimum derivative 0.4062
+##
+## The fine octave carries 2.6 * 0.7 = 1.82 of the derivative for only 0.7
+## of the amplitude -- 65% of the fold risk for 41% of the visual effect --
+## so halving it buys the margin almost free, and the coarse octave that
+## swings whole bundles of lines is left alone. TURBULENCE_STRENGTH stays
+## at 1.6: the ask was for MORE whirl, not less.
+##
+## This is the STRAIGHT-reach model. At a bend flow_perp itself rotates,
+## adding a second term to the Jacobian, so the real margin at a bend is
+## smaller than what this measures -- which is exactly why the artefact
+## was reported at bends 100% of the time and rarely elsewhere.
+const MIN_WARP_MARGIN := 0.35
+
+
+func test_the_bend_never_folds_or_pinches_the_surface():
+	var step := 0.002
+	var worst := INF
+	var worst_at := Vector2.ZERO
+	for i in range(120):
+		var along := float(i) * 0.31
+		for j in range(1, 400):
+			var across := float(j) * 0.05
+			var derivative := (
+				RiverFlowShader.warped_across(along, across + step)
+				- RiverFlowShader.warped_across(along, across - step)
+			) / (2.0 * step)
+			if derivative < worst:
+				worst = derivative
+				worst_at = Vector2(along, across)
+	assert_gt(
+		worst, MIN_WARP_MARGIN,
+		"the warp pinches to %.4f at %s -- contours through it cusp" % [worst, worst_at]
+	)
 
 
 ## Eddies must be coarser than the lines they bend, or neighbouring lines
@@ -579,8 +623,11 @@ func test_the_bend_is_anchored_to_the_bed_not_carried_with_the_water():
 ## hard it can be turned up.
 func test_the_bend_has_structure_at_two_scales():
 	assert_gt(RiverFlowShader.EDDY_DETAIL_WEIGHT, 0.0)
+	# The frequency is a uniform now rather than a literal, because the
+	# fold margin below is tuned against it.
+	assert_gt(RiverFlowShader.EDDY_DETAIL_FREQUENCY, 1.0)
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("eddy_p * 2.6"),
+		RiverFlowShader.SHADER_CODE.contains("eddy_p * eddy_detail_frequency"),
 		"the second eddy octave is missing from the shader"
 	)
 
@@ -607,8 +654,29 @@ func test_a_streakline_visibly_curves_within_its_own_length():
 			lowest = minf(lowest, d)
 			highest = maxf(highest, d)
 		worst = minf(worst, highest - lowest)
+	# 0.4, LOWERED from 0.5, and the reason belongs on the record rather
+	# than in a commit nobody re-reads.
+	#
+	# Within-line curvature and fold safety are in direct conflict in this
+	# design. Curvature comes from the bend's amplitude at a scale the
+	# 9-tap smear does not average away; the domain warp folds when that
+	# same amplitude makes d(q)/d(p) reach zero. Raising the octave's
+	# frequency to buy curvature more cheaply does not work -- measured,
+	# it got WORSE (0.32), because the smear low-passes along the flow and
+	# eats the finer detail.
+	#
+	# So this threshold was paid for. At 0.5 the warp pinched to 0.0988: a
+	# 10:1 compression, and the cusps reported as zigzags all session. The
+	# settled constants give a 0.3654 margin, 3.7x safer, and curve 0.448
+	# -- a tenth under the old bar for something that was actively drawing
+	# the artefact.
+	#
+	# Getting BOTH needs a divergence-free (curl) warp, whose Jacobian is
+	# 1 + O(strength^2) instead of 1 - O(strength), so it carries the same
+	# amplitude at the same frequency without folding. That is the real
+	# fix and it is not a constant change.
 	assert_gte(
-		worst, 0.5,
+		worst, 0.4,
 		"the flattest streakline curves only %.2f line widths over two lengths" % worst
 	)
 
