@@ -123,6 +123,19 @@ curated river is simply riverless, the honest tradeoff for "the rivers you
 see are real, named, and shaped like a real river," which is what was
 actually asked for.
 
+**The connectivity-aware redesign exists as of 2026-09-03, gated off:**
+[hydrology.md](hydrology.md) runs a real priority-flood + flow-accumulation
+pass over the elevation asset's own grid *offline, once* (the "no point at
+which a global drainage pass could run" objection above is answered by not
+running it live), ships the result as data, and hands baked channels to
+this doc's flow overlay and Manning solve through
+`EarthChunkGenerator.nearest_river_at` in the catalog's own shape. It sat
+behind `EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED` until the real bake
+had been run; the same day the bake ranked the Loire and the Gironde as
+western France's strongest channels, the flag went on and the spawn moved
+onto the Loire at Nantes (an emergent river, no curated course near it).
+Curated rivers remain authoritative wherever they reach.
+
 ## Rendering: overlay, not a new biome
 
 `TerrainRenderer` already has an extensive corner/edge blend system keyed
@@ -1251,7 +1264,6 @@ accident of the asking tile's bearing -- and adjacency doubles as the
 watertightness rule: a one-tile hole breaks the chain. Pinned from every
 tile of the wall by test.
 
-
 ## Movement ripples in the river (2026-09-04)
 
 Reported: *"Fishes don't produce interferencing ripples anymore in the new
@@ -1400,6 +1412,38 @@ reasoned away as impossible a second time.
 spawning rules, a reason to fish a stream rather than the sea — is still
 ⬜ Not started. What exists is incidental: ocean-biome water that a curated
 course happens to run through.)
+
+## The boulder's shore band, not a halo (2026-09-04)
+
+Reported directly against the ring introduced above: *"The rocks should
+not have a halo around them... instead they should have a layered band
+like the shore which also wobbles and moves"*. The ring's REACH was
+already right -- a soft-edged annulus starting exactly where the rock's
+dry eyot ends (`boulder_band_envelope`, unchanged) -- what was wrong was
+what filled it: one flat, static `line_color` at a fixed alpha, nothing
+like the channel's own illustrated shore a few tiles away.
+
+The fix reuses the channel body's own machinery instead of inventing a
+second one. `boulder_band_ring_t`, the fragment's own position inside the
+ring (0 at the rock's edge, 1 at the outer edge), is carried out of the
+boulder loop and, in the composite, nudged by `n` -- the SAME advected
+field whose contours already draw the channel's wave strokes -- before
+being quantised by the SAME world-anchored dither hash the channel body's
+cel bands use. The result steps through `BOULDER_BAND_LEVELS` (3) flat
+layers between `line_color` (the shore highlight's own tint, at the rock's
+edge) and `band0_color` (the channel's own shallowest water tone, at the
+ring's outer edge) -- the same palette the real shore draws in, not a
+colour invented for the ring. Because `n` both varies across world
+position and advects with TIME, the layer boundaries are uneven rather
+than perfect circles and visibly animate frame to frame, exactly like the
+channel's own cel/stroke boundaries do -- "wobbles and moves" is the same
+mechanism, not a new one, reused rather than reinvented.
+
+Old halo, new band: same ring extent and alpha (`BOULDER_BAND_WIDTH_PX`,
+`BOULDER_BAND_ALPHA` -- renamed, unchanged values), same "independent of
+the channel's own wet/dry verdict" property that lets a boulder on dry
+bank ground still show a band. Only the fill inside the ring changed.
+
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
@@ -1456,7 +1500,10 @@ course happens to run through.)
 - **Boulders shape the flow** — ✅ Done — natural and dropped boulders
   deflect the waterline and current lines (eyot + across push, shader
   untouched), and a full boulder row across the channel ponds via the
-  same weir physics. Pushing/carrying an intact boulder (rather than
+  same weir physics. Every in-river boulder also reads as shore: a
+  layered, cel-banded ring around it that wobbles with the channel's own
+  advected field, not a flat halo (see "The boulder's shore band, not a
+  halo"). Pushing/carrying an intact boulder (rather than
   building one from rock) — ⬜ Not started.
 - **The wader's wake** — ✅ Done — player AND creatures (8 slots, river
   filter memoised) displace the current with a round-core,

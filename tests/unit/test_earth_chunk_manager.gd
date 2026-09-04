@@ -1,6 +1,7 @@
 extends GutTest
 
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+const AntColony = preload("res://src/world/ant_colony.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
 const TreePlacement = preload("res://src/world/tree_placement.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
@@ -20,6 +21,8 @@ const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const TallGrass = preload("res://src/world/tall_grass.gd")
+const FlowerEstablishment = preload("res://src/world/flower_establishment.gd")
+const MeadowSpread = preload("res://src/world/meadow_spread.gd")
 const SeedCaching = preload("res://src/gameplay/seed_caching.gd")
 const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
 const SquirrelNutCaching = preload("res://src/gameplay/squirrel_nut_caching.gd")
@@ -461,6 +464,32 @@ func test_river_wader_positions_keeps_only_candidates_in_river_water():
 ## the course's downstream unit vector, and the real solved current speed
 ## -- so the shader interpolates ALL of them bilinearly between tiles and
 ## no per-tile quantity is left to draw the tile grid.
+## "Only around bends and where the water is deeper at the edge": traced
+## with a real line-probe to every chunk cell getting a texel written even
+## when it is genuinely far from any river -- EarthChunkGenerator.
+## nearest_river_at then falls back to whichever curated river is nearest
+## ANYWHERE ON THE PLANET, which can be hundreds of tiles away with a
+## totally unrelated width, so across_fraction (that distance divided by
+## an unrelated river's width) can run into the hundreds. Bilinearly
+## blended against a real neighbouring texel a few tiles away, that is an
+## unbounded cliff. The write must clamp it, regardless of how the
+## extreme value arose.
+func test_the_written_across_is_always_bounded():
+	manager._write_flow_across_texel(Vector2i(500, 500), 900.0, 45.0, 0.0, 2.0)
+	var side := RiverFlowShader.FLOW_MAP_TILES
+	var texel: Color = manager._flow_across_image.get_pixel(500 % side, 500 % side)
+	assert_almost_eq(texel.r, EarthChunkManager.CLAMP_MAGNITUDE, 1e-6)
+
+	manager._write_flow_across_texel(Vector2i(501, 501), -900.0, 45.0, 0.0, 2.0)
+	var negative_texel: Color = manager._flow_across_image.get_pixel(501 % side, 501 % side)
+	assert_almost_eq(negative_texel.r, -EarthChunkManager.CLAMP_MAGNITUDE, 1e-6)
+
+	# An ordinary in-channel value must pass through completely unclamped.
+	manager._write_flow_across_texel(Vector2i(502, 502), 0.4, 45.0, 1.0, 2.0)
+	var ordinary_texel: Color = manager._flow_across_image.get_pixel(502 % side, 502 % side)
+	assert_almost_eq(ordinary_texel.r, 0.4, 1e-6)
+
+
 func test_the_flow_texel_carries_direction_and_speed():
 	var flow_layer := TileMapLayer.new()
 	manager.set_river_flow_layer(flow_layer)
@@ -493,6 +522,18 @@ func test_the_flow_texel_carries_direction_and_speed():
 	assert_almost_eq(texel.g, sin(radians), 0.001, "G must carry the downstream x")
 	assert_almost_eq(texel.b, -cos(radians), 0.001, "B must carry the downstream y")
 	assert_gt(texel.a, 0.0, "A must carry the real current speed in m/s")
+
+	# The real local half-width lives on its OWN scalar map, never packed
+	# into GB's magnitude: bilinear filtering blends a vector by ordinary
+	# addition, and two texels whose bearings differ (exactly what
+	# neighbouring texels do on a bend) partially cancel when summed,
+	# collapsing a magnitude riding that vector toward zero regardless of
+	# either texel's real width -- reported live as "this huge zigzag
+	# still persists" once width first rode the direction vector.
+	var scale_texel: Color = manager._flow_scale_image.get_pixel(
+		posmod(cell.x, side), posmod(cell.y, side)
+	)
+	assert_almost_eq(scale_texel.r, RiverCatalog.RIVER_HALF_WIDTH_TILES, 0.001, "the scale map must carry the real local half-width")
 	flow_layer.free()
 
 
@@ -512,18 +553,33 @@ func test_river_flow_overlay_paints_only_channel_and_apron_cells():
 
 	var terrain_renderer := TerrainRenderer.new()
 	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
+	# Painted out past the bank line by the apron, and past THAT again by
+	# SHORE_BLEED_TILES -- a wader's wake or a boulder's shore band reaching
+	# just past the apron needs a real tile to draw its fade on, or it
+	# cuts off mid-stride ("the bulge when a player walks out is not
+	# clipped"). Nothing farther than the bleed may be painted.
+	#
+	# Measured against the generator's UNIFIED hit and that channel's OWN
+	# half width, not the curated catalog's fixed RIVER_HALF_WIDTH_TILES.
+	# The painter serves baked channels too, and a baked channel's width
+	# comes from its own discharge, so it is routinely wider than the
+	# curated constant: a real tile 5.80 from a baked channel of half
+	# width 2.11 (reach 5.86) was failing against a bound of 5.75 built
+	# from the curated 2.0, while the curated catalog put the nearest
+	# river 32.40 tiles away and made the message say so.
 	for cell in painted_cells:
-		# Painted out past the bank line by the apron: the shader clips the
-		# water at the REAL bank curve, and that curve runs through cells
-		# whose centres sit beyond the half-width. Nothing farther than the
-		# apron may be painted.
-		var nearest := manager.generator.river_catalog().nearest_river_at(
-			cell.x, cell.y,
-			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+		var nearest := manager.generator.nearest_river_at(cell.x, cell.y)
+		var paint_reach: float = (
+			float(nearest.get("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES))
+			+ RiverCatalog.RIVER_BANK_APRON_TILES
+			+ RiverFlowShader.SHORE_BLEED_TILES
 		)
 		assert_lte(
-			nearest.distance_tiles, apron,
-			"(%d, %d) painted but %f tiles from any channel" % [cell.x, cell.y, nearest.distance_tiles]
+			nearest.distance_tiles, paint_reach,
+			"(%d, %d) painted but %f tiles from a channel of half width %f (reach %f)" % [
+				cell.x, cell.y, nearest.distance_tiles,
+				nearest.get("half_width_tiles", -1.0), paint_reach
+			]
 		)
 		# Every painted tile must carry that cell's OWN real data --
 		# direction from the course's downstream tangent (water follows its
@@ -545,10 +601,18 @@ func test_river_flow_overlay_paints_only_channel_and_apron_cells():
 	# somewhere near Berlin there must be a painted cell whose centre sits
 	# beyond the half-width -- that is where the smooth waterline lives.
 	var apron_cells := 0
+	var bled_cells := 0
 	for cell in painted_cells:
 		if not manager.is_river_at_global(cell.x, cell.y):
 			apron_cells += 1
+		var nearest := manager.generator.nearest_river_at(cell.x, cell.y)
+		if nearest.distance_tiles > apron:
+			bled_cells += 1
 	assert_gt(apron_cells, 0, "no apron cells painted -- the bank curve would clip at tile edges")
+	assert_gt(
+		bled_cells, 0,
+		"no cell past the plain apron was painted -- SHORE_BLEED_TILES must genuinely widen the paint"
+	)
 
 	# Moving far away unloads the original chunks -- their overlay cells go too.
 	manager.update(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))
@@ -5036,15 +5100,23 @@ func test_a_grazers_dispersed_flower_seed_plants_the_same_species_it_picked_up()
 			break
 	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
 	var patch: FlowerPatch = manager._flower_patches[chunk_coord]
-	# An empty grassland cell distinct from the pickup spot, so a match below
-	# proves the RESOLVED planting actually names the picked-up species,
-	# rather than trivially re-reading the original bloom, which was never
-	# disturbed.
+	# A grassland cell distinct from the pickup spot where a seed can actually
+	# take, so a match below proves the RESOLVED planting actually names the
+	# picked-up species, rather than trivially re-reading the original bloom,
+	# which was never disturbed.
+	#
+	# "Empty" is not enough any more: a seed dropped in an established plant's
+	# shade is outcompeted before it is a plant (FlowerEstablishment), so a
+	# cell that merely has no flower ON it can still refuse one. This is the
+	# same clearance FlowerPatch.plant itself applies -- the test has to pick a
+	# spot the rule allows, not assert the rule away.
 	var drop_cell := Vector2i(-1, -1)
 	for y in EarthChunkManager.CHUNK_SIZE:
 		for x in EarthChunkManager.CHUNK_SIZE:
 			var cell := Vector2i(x, y)
-			if not patch.has_flower(cell) and manager.biome_at_global(
+			if not FlowerEstablishment.is_clear(cell, patch.get_flower_cells()):
+				continue
+			if manager.biome_at_global(
 				(chunk_coord.x * EarthChunkManager.CHUNK_SIZE) + x,
 				(chunk_coord.y * EarthChunkManager.CHUNK_SIZE) + y
 			) == "grassland":
@@ -5052,7 +5124,10 @@ func test_a_grazers_dispersed_flower_seed_plants_the_same_species_it_picked_up()
 				break
 		if drop_cell != Vector2i(-1, -1):
 			break
-	assert_ne(drop_cell, Vector2i(-1, -1), "precondition: a second empty grassland cell exists to drop into")
+	assert_ne(
+		drop_cell, Vector2i(-1, -1),
+		"precondition: a second grassland cell clear of the meadow exists to drop into"
+	)
 	var horse := manager._creature_renderer.spawn_single(
 		creatures_parent, "horse", pickup_at, manager, TerrainRenderer.TILE_SIZE
 	)
@@ -5476,6 +5551,87 @@ func test_evicting_old_chunks_frees_decomposer_markers():
 	manager.update(far_away_tile)
 
 	assert_false(manager._decomposer_markers.has(old_chunk))
+
+
+# -- ant colonies: visible mounds + traveling foragers (see docs/concept/
+# soil_fauna.md "Ants: myrmecochory", AntColony) -- previously a pure
+# background population effect with zero rendered presence at all (reported
+# live: "ants should be a real gear in the ecosystem"). -----------------
+
+## Unlike decomposers (a GUARANTEED min count per land-biome chunk), mound
+## placement is genuinely probabilistic per cell (AntColony.MOUND_CHANCE) --
+## Berlin's own chunk is not guaranteed a nonzero count. The real invariant
+## worth pinning is that the rendered marker count always exactly matches
+## the real mound_cells() count, whatever that happens to be.
+func test_update_spawns_a_visible_marker_for_every_real_ant_mound_around_berlin():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var colony: AntColony = manager._ant_colonies[center_chunk]
+	assert_true(manager._ant_mound_markers.has(center_chunk))
+	assert_eq(manager._ant_mound_markers[center_chunk].size(), colony.mound_cells().size())
+
+
+func test_evicting_old_chunks_frees_ant_mound_markers():
+	manager.update(Vector2i(0, 0))
+	var old_chunk := _chunk_coord_for_tile(Vector2i(0, 0))
+	assert_true(manager._ant_mound_markers.has(old_chunk), "precondition: the old chunk had a mound-marker entry")
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+
+	assert_false(manager._ant_mound_markers.has(old_chunk))
+
+
+## The actual seed-take/replant already happened and is independently real
+## (see test_take_grass_seed_at_removes_it_and_returns_true and friends
+## above) -- this proves the SEPARATE, purely decorative visual half fires
+## alongside it. A synthetic mound cell placed directly on top of a real
+## shed seed (rather than hoping a real AntColony mound happened to roll
+## next to one) keeps this deterministic regardless of mound placement.
+func test_a_successful_grass_seed_forage_spawns_a_visible_forager():
+	manager.update(_berlin_tile)
+	for i in 40:
+		manager.step_tall_grass(EarthChunkManager.GRASS_REFRESH_INTERVAL)
+	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var seeds: Array = manager.grass_seeds_near(centre, 40)
+	assert_gt(seeds.size(), 0, "precondition: a real shed seed exists to forage")
+	var seed_position: Vector2 = seeds[0]["position"]
+
+	var seed_tile := manager._world_tile_for_pixel(seed_position)
+	var chunk_coord := manager._chunk_coord_for_tile(seed_tile)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE
+	var cell: Vector2i = seed_tile - origin
+	var colony: AntColony = manager._ant_colonies[chunk_coord]
+	var global_tile := origin + cell
+
+	var before_children := manager._entities_parent.get_child_count()
+	manager._forage_seed_near_mound(colony, origin, cell)
+
+	assert_gt(
+		manager._entities_parent.get_child_count(), before_children,
+		"a real, successful forage should spawn a visible forager sprite"
+	)
+	assert_true(manager._active_ant_foragers.has(global_tile))
+
+
+## AntColony.FORAGE_CHANCE can succeed several times a second per mound at
+## normal frame rate (see _spawn_ant_forager_visual's own doc comment) -- a
+## new visible ant for every single one would be a flicker of overlapping
+## sprites, not a colony reading as alive.
+func test_does_not_spawn_a_second_forager_for_a_mound_that_already_has_one_out():
+	manager.update(_berlin_tile)
+	var global_tile := Vector2i(123_456, 123_456)  # arbitrary -- does not need to be a real mound
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var before := manager._entities_parent.get_child_count()
+
+	manager._spawn_ant_forager_visual(global_tile, mound_pixel, [mound_pixel + Vector2(10, 0)])
+	assert_eq(manager._entities_parent.get_child_count(), before + 1, "precondition: the first spawn landed")
+
+	manager._spawn_ant_forager_visual(global_tile, mound_pixel, [mound_pixel + Vector2(-10, 0)])
+	assert_eq(
+		manager._entities_parent.get_child_count(), before + 1,
+		"a second forager for the same mound should not spawn while the first is still out"
+	)
 
 
 # -- Sägewerk: "an NPC moves in" the moment the worksite exists (see
@@ -9865,3 +10021,162 @@ func test_an_unloaded_settlement_really_declines_by_eating_through_its_stores():
 		1,
 		"leaving a real ruin behind it, offscreen, with no player anywhere near"
 	)
+
+
+# -- the meadow a chunk bakes, and the wind that shaped it -------------------
+#
+# Reported live: flowers "spread or grow way too dense", seed "should be
+# carried a bit further by the wind and birds so it leaves more space between
+# individual flowers", and the baked initial world state "should also respect
+# this and simulate spread based on wind strength and direction". These are
+# the end-to-end checks that the pure modules (MeadowSpread,
+# FlowerEstablishment) are actually WIRED -- the whole point being that
+# FlowerPatch.set_wind had been fully built, fully tested and never once
+# called by the running game, so its meadows shed in a permanent dead calm.
+
+func _meadow_cells(chunk_coord: Vector2i) -> Array:
+	var patch = manager._flower_patches.get(chunk_coord)
+	return [] if patch == null else patch.get_flower_cells()
+
+
+func test_a_loaded_meadow_is_spaced_out_rather_than_carpeted():
+	var chunk_coord := _berlin_chunk()
+	manager._load_chunk(chunk_coord)
+	var cells := _meadow_cells(chunk_coord)
+	assert_gt(cells.size(), 0, "precondition: Berlin's grassland grew a meadow")
+	for i in cells.size():
+		for j in range(i + 1, cells.size()):
+			assert_gte(
+				Vector2(cells[i] - cells[j]).length(), FlowerEstablishment.MIN_SPACING_TILES,
+				"a real loaded chunk put %s and %s on top of each other" % [cells[i], cells[j]]
+			)
+
+
+## The chunk's world origin has to actually reach MeadowSpread, or every chunk
+## would grow the meadow that belongs at the world origin and the map would be
+## one meadow stamped over and over (which two chunks with DIFFERENT biome
+## masks would still hide -- hence comparing against the origin-zero meadow
+## for this chunk's own biome, rather than against a neighbour).
+func test_a_chunks_meadow_is_grown_at_its_own_place_in_the_world():
+	var chunk_coord := _berlin_chunk()
+	manager._load_chunk(chunk_coord)
+	var chunk := manager.generator.generate_chunk(chunk_coord, EarthChunkManager.CHUNK_SIZE)
+	var at_the_origin := MeadowSpread.colonise(
+		FlowerPatch.MEADOW_WORLD_SEED,
+		Vector2i.ZERO,
+		chunk.width,
+		chunk.height,
+		chunk.biome,
+		Vector2.RIGHT,
+		0.0,
+		FlowerPatch.MAX_FLOWERS
+	)
+	assert_ne(
+		_meadow_cells(chunk_coord), at_the_origin.keys(),
+		"this chunk grew the meadow that belongs at world (0, 0) -- its origin never reached MeadowSpread"
+	)
+
+
+## Founders live in world space so a meadow crosses a chunk line. The visible
+## consequence, and the thing that would give the seams away: two flowers
+## either side of a boundary must be spaced against each other too.
+func test_neighbouring_chunks_do_not_crowd_flowers_across_their_seam():
+	var here := _berlin_chunk()
+	var there := here + Vector2i(1, 0)
+	manager._load_chunk(here)
+	manager._load_chunk(there)
+	var left: Array = []
+	for cell in _meadow_cells(here):
+		left.append(cell + here * EarthChunkManager.CHUNK_SIZE)
+	assert_gt(left.size(), 0, "precondition: the western chunk grew a meadow")
+	for cell in _meadow_cells(there):
+		var world_cell: Vector2i = cell + there * EarthChunkManager.CHUNK_SIZE
+		for other in left:
+			assert_gte(
+				Vector2(world_cell - other).length(), FlowerEstablishment.MIN_SPACING_TILES,
+				"%s and %s crowd each other across the chunk seam" % [world_cell, other]
+			)
+
+
+## The bug this exists to prevent recurring: FlowerPatch.set_wind existed,
+## worked, and was called by nothing but its own test file, so every meadow in
+## the running game shed its seed in a permanent dead calm and the downwind
+## drift the model computes was never applied at all.
+func test_the_live_weather_reaches_the_meadow_that_sheds_seed():
+	var chunk_coord := _berlin_chunk()
+	manager._load_chunk(chunk_coord)
+	var patch = manager._flower_patches[chunk_coord]
+	manager.step_flowers(0.1)
+	assert_gt(
+		patch.wind_strength(), 0.0,
+		"the meadow is still shedding in a dead calm -- set_wind has no live caller"
+	)
+	assert_almost_eq(patch.wind_direction().length(), 1.0, 0.001)
+
+
+# -- naming a flower under the cursor ----------------------------------------
+
+## Reported live: flowers "still don't [show] hover tooltips". Every other
+## hoverable entity is a Node2D that joins HoverTargetFinder's group, but
+## flowers are ground decoration -- a bare Sprite2D per cell, no script and no
+## group, precisely so a meadow costs one texture and not forty nodes. So they
+## are answered the way tall grass already is: a cheap query the World's hover
+## scan falls through to (see World._update_hover_tooltip).
+
+func test_a_flower_under_the_cursor_can_be_named():
+	var chunk_coord := _berlin_chunk()
+	manager._load_chunk(chunk_coord)
+	var cells := _meadow_cells(chunk_coord)
+	assert_gt(cells.size(), 0, "precondition: there is a meadow to point at")
+	var named := 0
+	for cell in cells:
+		var world_cell: Vector2i = cell + chunk_coord * EarthChunkManager.CHUNK_SIZE
+		var pixel := Vector2(
+			(world_cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
+			(world_cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+		)
+		if manager.flower_name_at(pixel) != "":
+			named += 1
+	assert_gt(named, 0, "not one flower in a whole meadow could be named")
+
+
+## And bare ground names nothing -- a tooltip over empty grass would be the
+## world claiming something is there that is not.
+##
+## "Bare" means clear of every bloom's DRAWN extent, not merely a cell with no
+## stem in it: a bloom is drawn above its own cell and answers within the
+## hover radius of where it is drawn, so the cell next door to a flower is
+## legitimately part of that flower.
+func test_bare_ground_names_no_flower():
+	var chunk_coord := _berlin_chunk()
+	manager._load_chunk(chunk_coord)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE
+	var flowers := _meadow_cells(chunk_coord)
+	assert_gt(flowers.size(), 0, "precondition: a meadow to stand clear of")
+	var checked := 0
+	for y in 32:
+		for x in 32:
+			var cell := Vector2i(x, y)
+			var clear := true
+			for flower in flowers:
+				if Vector2(cell - flower).length() < 6.0:
+					clear = false
+					break
+			if not clear:
+				continue
+			var pixel := Vector2(
+				(origin.x + x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(origin.y + y + 0.5) * TerrainRenderer.TILE_SIZE
+			)
+			assert_eq(
+				manager.flower_name_at(pixel), "",
+				"open ground at %d,%d named a flower" % [x, y]
+			)
+			checked += 1
+			if checked >= 20:
+				return
+	assert_gt(checked, 0, "the meadow left no open ground to check")
+
+
+func test_unloaded_ground_names_no_flower():
+	assert_eq(manager.flower_name_at(Vector2(999999.0, 999999.0)), "")

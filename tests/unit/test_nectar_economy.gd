@@ -16,20 +16,43 @@ extends GutTest
 ##
 ## Scenario, grounded in real per-chunk constants rather than invented ones:
 ## a full LOAD_RADIUS neighbourhood of chunks (EarthChunkManager.LOAD_RADIUS,
-## CHUNK_SIZE) -- 25 chunks -- each pure grassland biome (worst-case flower
-## density, so this is a busy meadow, not a sparse one), seeded by the real
-## FlowerPatch.SEED_CHANCE/MAX_FLOWERS rules, in bloom for "summer" (the
-## season with the most species flowering at once -- see
-## FlowerSpecies.SPECIES). Population is the real per-chunk pollinator
+## CHUNK_SIZE) -- 25 chunks -- each pure grassland biome (the densest ground
+## flowers grow on), seeded by the real MeadowSpread/MAX_FLOWERS rules, in
+## bloom for "summer" (the season with the most species flowering at once --
+## see FlowerSpecies.SPECIES). Population is the real per-chunk pollinator
 ## ceiling (AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK +
 ## AmbientFlyerRenderer.MAX_BEES_PER_CHUNK, times 25 chunks = 150), flying at
 ## the real AmbientFlyerRenderer.BUTTERFLY_SPEED (bees share it -- there is
-## no separate BEE_SPEED in that file). This reproduces the same order of
-## magnitude as the original measurement organically: ~640 blooming flowers
-## here against 626 there, 150 pollinators here against the ~154 the old
-## 64.24-drinks/s figure implies (64.24 * DRINK_SECONDS) -- so the two
-## scenarios are comparable even though this one is freshly built rather
-## than sampled from a live save.
+## no separate BEE_SPEED in that file).
+##
+## ## The meadow got sparser, and this measurement moved with it
+##
+## Re-measured after MeadowSpread replaced the per-cell coin flip that used
+## to bake the initial meadow (reported live: flowers "spread or grow way too
+## dense... more space between individual flowers"). The scenario is
+## unchanged; the world it runs in is a third as flowery. 640 blooming
+## flowers became 200, and the economy went from 0.86x (slightly
+## UNDER-subscribed) to 1.56x over-subscribed.
+##
+## That is a real consequence, recorded rather than tuned away: with fewer
+## blooms and the same pollinator ceiling, demand outstrips regen. Two things
+## bound how much it matters, and neither is an excuse -- both are checkable:
+##
+## - This population is a CEILING, not a live one. Live spawning scales with
+##   the peak scent concentration a chunk's blooms superpose to (see
+##   EarthChunkManager._pollinator_multiplier_for /
+##   ScentField.pollinator_spawn_multiplier), so a sparser meadow spawns
+##   fewer pollinators into itself. The 150 here is the worst case the game
+##   can reach, not the usual one.
+## - Coverage did NOT collapse, which was the risk worth checking: 184 of 200
+##   flowers were visited, 92% -- the same share as the old 592 of 640. The
+##   population still works the whole meadow; there is simply less of it.
+##
+## Kept above 1.0 knowingly. Pushing it back under by raising nectar regen
+## would be tuning a pollinator constant to hide a deliberate change in how
+## much meadow the world has, and NECTAR_REGEN_PER_SECOND's own doc comment
+## records the measurement it was set from -- if that number should move, it
+## should move on its own evidence, not on this one's.
 ##
 ## What decides who drinks from what -- PollinatorForaging.choose_target,
 ## ForageClaims, FlowerPatch.drink/advance -- is the real, unmodified
@@ -307,7 +330,12 @@ func test_current_nectar_supply_vs_demand_ratio_is_measured():
 	# points straight at what to re-measure, which a single ratio number
 	# would not. See docs/progress.md's "Nectar economy rebalance" entry and
 	# PollinatorForaging.NECTAR_REGEN_PER_SECOND's doc comment for the
-	# reasoning these numbers fed into (0.86x -- slightly under-subscribed,
-	# no regen change warranted).
-	assert_eq(reachable_flowers, 592, "reachable-flower count drifted -- re-measure the economy")
-	assert_eq(drinks_in_window, 2532, "measured drink throughput drifted -- re-measure the economy")
+	# reasoning these numbers fed into.
+	#
+	# Re-measured when MeadowSpread made the baked meadow ~3x sparser (was
+	# 592 reachable of 640 seeded, 2532 drinks, 0.86x under-subscribed; now
+	# 184 of 200, 1438 drinks, 1.56x over-subscribed) -- see this file's
+	# header for why that is recorded rather than tuned away, and for the two
+	# bounds on how much it matters.
+	assert_eq(reachable_flowers, 184, "reachable-flower count drifted -- re-measure the economy")
+	assert_eq(drinks_in_window, 1438, "measured drink throughput drifted -- re-measure the economy")

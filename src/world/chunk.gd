@@ -17,6 +17,25 @@ var temperature: PackedFloat32Array
 ## reference -- they already receive the whole Chunk.
 var is_river: PackedByteArray
 
+## 1 where EarthChunkGenerator.is_lake_at_global is true (a tile below the
+## water surface of a depression the hydrology bake found -- see
+## docs/concept/hydrology.md), 0 otherwise. Same shape and same reasoning
+## as is_river: an overlay flag on untouched land biome, never an eighth
+## biome. Empty on a Chunk built without hydrology (every pre-existing
+## fixture), which blocks_ground_cover treats as "no lakes".
+var is_lake: PackedByteArray
+
+
+## True where standing or flowing water covers the ground, so trees, tall
+## grass and stone never spawn in it -- the one check both river and lake
+## consumers read, size-checked so a fixture that never set either flag
+## reads as dry land rather than indexing off the end.
+func blocks_ground_cover(index: int) -> bool:
+	if index < is_river.size() and is_river[index] == 1:
+		return true
+	return index < is_lake.size() and is_lake[index] == 1
+
+
 ## Player edits keyed by local tile coordinate (Vector2i) to a tile/structure id.
 var modifications: Dictionary = {}
 

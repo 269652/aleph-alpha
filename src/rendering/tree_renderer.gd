@@ -101,7 +101,7 @@ func spawn_trees(
 			# grow in rivers". Size-checked so a Chunk built without ever
 			# setting is_river (every pre-existing test fixture) is treated
 			# as "no rivers" rather than an index error.
-			if index < chunk.is_river.size() and chunk.is_river[index] == 1:
+			if chunk.blocks_ground_cover(index):
 				continue
 			# A cell a real building piece already stands on is not open
 			# ground. chunk.modifications is loaded from disk BEFORE this runs

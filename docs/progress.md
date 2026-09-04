@@ -85,6 +85,19 @@ features.
 
 ✅ **Follow-up: the `SnowLayer.DEPTH_BANDS` borrow above went dangling and is now `ProceduralTreeSprite.SNOW_LEVELS := 10`, a standalone constant.** `SnowLayer` (the CPU-side ground snow system referenced throughout this entry) was deleted outright when `SnowBombShader` replaced it, but the preload borrowing its `DEPTH_BANDS` for canopy-snow quantisation was left behind -- a hard GDScript parse error (`Preload file "res://src/rendering/snow_layer.gd" does not exist`) that failed to compile `procedural_tree_sprite.gd` and, transitively, most of the project (`player.gd`, `character_view.gd`, every GUT test that touches a tree). `SnowBombShader` has no equivalent "how many discrete bands" constant to borrow instead (`level_count()` counts hand-illustrated art sheets -- 3 today -- not a rendering granularity, and is filesystem-backed rather than a compile-time constant), so `SNOW_LEVELS` is now pinned standalone at the same real value (10) canopy snow already quantised to, preserving its behaviour exactly (`test_snow_levels_is_a_real_pinned_constant`, `test_snow_level_quantises_up_to_the_next_of_ten_bands`). **Separately, unblocking `test_illustrated_tree.gd`/`test_choppable_tree.gd` for the first time in a while surfaced a real, PRE-EXISTING regression this fix does not touch**: composite canopy sheets now slice to 4 frames instead of 5, so `has_snow_frame_for` reads false for every species and canopy snow silently never renders (`test_snow_coverage_reaches_the_drawn_canopy` and 9 others in `test_illustrated_tree.gd` fail) -- traced to the concurrent composite-item-sheet work, not to this preload or to `SnowBombShader`, and left for a dedicated follow-up rather than folded into this fix.
 
+🚧 **Follow-up to the follow-up above, run to ground: the missing 5th canopy frame is a lost/never-committed ASSET, not a slicer bug or a stale cache.** Measured directly with a fresh `tools/measure_canopy_sheets.gd` pass against the real PNGs: raw `Image.load_from_file` and the imported `.godot/` resource agree region-for-region on every one of the six sheets (`canopy_cherry.png`, `composite_{walnut,acorn,hazelnut,pine,apple}.png`) -- ruling out the exact stale-`.godot/imported/`-cache trap the original "canopy_cherry.png grew a real fifth column" entry above hit once already. Every sheet slices to exactly 4 canopy regions, never 5. `git log --follow` on all six files, checked against every branch this repo has on `origin` (not just `main` -- about 30, spanning every worktree currently checked out on this machine), shows one `initial commit` and nothing else: the 5-column art the entry above describes in specific measured detail (404/415/421/423/432px widths, per-frame opacity fractions, mean colours) was never committed to any ref this repo has, anywhere. The likely explanation is exactly the failure mode this repo's branch-and-commit-before-losing-it rule (`CLAUDE.md`) exists to prevent: a session generated and verified the real 5-column sheets directly against its own worktree's disk, wrote up the measurements in good faith, and the resulting PNG changes never got `git add`/`git commit`ed before that worktree went away -- so the prose survived (merged to `main` as text) and the pixels did not.
+A second, independent signal points the same way, on a different pair of files: `composite_acorn.png` and `composite_apple.png` now both decode as `FORMAT_RGBA8` with a fully transparent corner pixel -- `CompositeSheetSlicer.needs_keying` reads false on all six sheets, not just these two, directly contradicting `test_needs_keying_sheets_have_no_alpha_channel_of_their_own`'s pinned `FORMAT_RGB8` and quietly retiring the whole aggressive-keying/erosion mechanism the "Two more bugs found keying acorn and apple" doc comment below describes: no currently-committed sheet exercises it any more. Whatever re-exported these two sheets with real alpha did so independently of, and evidently after, that fix -- another real change that reached disk but never reached a commit.
+Left alone, deliberately, and NOT folded into this entry: the shared main checkout (`C:/Users/morrossl/Documents/Private/aleph-alpha`) is currently sitting on an uncommitted WIP on `claude/item-composite-sheets` that appears to regenerate every tree sheet, including a new `composite_cherry.png` unifying cherry onto the composite layout for the first time. Spot-checked read-only, without touching that checkout: its `composite_walnut.png` and `composite_acorn.png` each measure 5 clean, evenly-spaced canopy regions where `main`'s own copies measure 4. This is not this session's work to adopt or commit -- it is unverified, may still be mid-edit, and belongs to a different, unrelated feature -- but whoever picks up the dedicated follow-up should know it exists before generating art from scratch.
+
+βœ… **Landed as its own fix: `CompositeSheetSlicer.regions_in` now correctly separates two real drawings that touch or bridge in the art above** (confirmed by the user to be ready, adopted from the WIP checkout the entry above deliberately left alone). Root cause was not a stray-detection tweak -- blob detection is seeded from THICK cores (`_is_thick`: a cell inside some fully-filled 2x2 block of coarse cells) rather than plain flood-fill alone, and a raw connected component spanning more than one core (past `MIN_CORE_CELLS`, to drop small thick noise) is split by nearest-core assignment (`_split_by_nearest_core`), with the resulting boxes clipped apart at their shared boundary (`_clip_apart`) rather than merged back or left overlapping. `_merge_touching`'s own long-standing job -- absorbing a detached stray into the real drawing its box touches -- was unconditional and could transitively fuse two separate, substantial drawings together (measured on hazelnut/apple: a canopy column and its own hanging nut cluster, joined through a chain of small falling-leaf strays); it now only merges when at most one side carries a real core. Pinned with two synthetic-image unit tests in `test_composite_sheet_slicer.gd` so the fix is verified against controlled input, not only six real sheets whose content nobody can predict in advance. **Every one of the six species now finds exactly 5 real canopy regions, zero overlaps** -- `has_snow_frame_for` and the branch-order snow blend this whole feature was built for are unblocked for real.
+
+🚧 **Left for a dedicated follow-up, found while landing the fix above: the richer new art doesn't fit the composite layout's structural assumptions for every species.**
+- **Corrected below** (originally misread on a bad crop): cherry's trunk row IS a real trunk -- five season-tinted copies with matching ground cover (bare dirt/roots, spring grass+petals, summer grass, autumn fallen leaves, winter snow), exactly the pattern every other species draws. `test_the_trunk_is_at_the_bottom_and_the_canopy_on_top`'s failure was a test-fragility issue, not a missing trunk: it samples canopy opacity at a FIXED fraction of the whole canvas height, and cherry's real (correct) canopy-box proportions at seed 7 happen to start its box exactly on that row -- catching a round crown's narrow top TIP instead of its body, where every other species' box still had a few pixels of margin above the same row. Fixed by sampling a fraction into the canopy box's own height instead of the canvas's.
+- **Cherry's fruit block genuinely does carry more than the two-row (on-tree crop / harvested form) model expects**, past the real trunk row: a row of single leaf/blossom/bud closeups (one per season), then the actual on-branch fruit clusters. `fruit_frames_for("cherry")` now returns 15 raw drawings, not 2, and `on_tree_frames_for` picks up 8 of them (`test_the_cherry_still_has_its_two`, `test_unripe_and_ripe_are_the_first_two_frames_whatever_the_count` both fail). These closeup rows may be exactly the right source for a per-season falling-leaf/litter feature rather than a mistake in the sheet -- worth checking before asking for a redraw.
+- **Pine's new bare-winter canopy frame shows literally leafless bare branches**, the same silhouette a deciduous species' winter frame uses -- but pine is an evergreen and should stay needled year-round (`test_pine_is_an_evergreen_in_its_art_and_not_only_in_its_data` fails, measured opaque fraction 0.36 against a required >0.7). Whoever regenerated the sheet appears to have used the deciduous bare/blossom/leaf/turning template for pine's frame 0 rather than a needled winter variant.
+
+`test_pine_has_more_stages_than_the_nut_trees` and `test_unripe_and_ripe_are_the_first_two_frames_whatever_the_count` (walnut half) fail too -- walnut's own fruit block grew richer alongside the trunk-per-column change (30 raw drawings on the sheet now, not 10), and its on-tree row no longer lines up with the test's hardcoded first-two-frames assumption; `fruit_for`'s own ripe/unripe selection is end-counted specifically to survive a row count changing, so this is very likely the same "test pinned against the old sheet's specific counts" shape as the acorn/apple keying tests above, not a new logic bug -- not yet independently confirmed.
+
 ✅ **`test_pine_is_an_evergreen_in_its_art_and_not_only_in_its_data`'s acorn/apple failure is resolved** at the source, in `CompositeSheetSlicer.cut_out` -- see its own doc comments ("Two more bugs found keying acorn and apple") for the full measurements. Two bugs, not one. First: acorn's and apple's composite sheets decode as FORMAT_RGB8 (no alpha channel at all), and `Image.set_pixel` cannot store a non-1 alpha without one -- the existing reachability keying ran, correctly found the background, and then every write to key it out silently did nothing (measured: 92140/92140 pixels stayed opaque after cut_out, identical to before it ran). `cut_out` now converts the cropped piece to FORMAT_RGBA8 first. Second, once alpha writes actually worked: a bare tree's real branch gaps that do not touch the crop's own edge stayed protected by design (reachability exists to protect real enclosed content, like the sheets' own snow frames), which still left the bare-winter frame denser than its own summer canopy (measured ratio 0.591/0.549, need `< 0.5`). `cut_out` takes an `aggressive` flag, used ONLY for the bare-winter frame by `IllustratedTree` (the one canopy role that never draws anything pale by design), that keys every background-coloured pixel regardless of reachability AND erodes the thin anti-aliasing halo every branch edge carries against an opaque background one ring at a time -- colour-based removal alone still left the ratio at 0.500/0.525, and the halo turned out to account for the rest. Final measured ratio: cherry 0.452, walnut 0.418, hazelnut 0.434, acorn 0.440, apple 0.467, against pine's evergreen 0.981 -- acorn and apple now sit in the same 0.42-0.47 band as every species that never needed keying at all. A second, concurrent session recalibrated the test's bound from an eyeballed inline `0.5` to a documented, tested `_WINTER_VS_SUMMER_MAX := 0.55` against the intermediate (colour-only) numbers above; it remains a real, safe bound after the halo-erosion pass, just with more headroom than it strictly needs. Regression coverage against the real danger this invites -- eroding real near-white content elsewhere on the same two sheets -- lives in `test_composite_sheet_slicer.gd`: default (non-aggressive) keying leaves each sheet's own real snow-covered canopy frame (`IllustratedTree.CANOPY_SNOW`) mostly opaque (0.55 acorn, 0.59 apple), and a test running `aggressive` on that same frame demonstrates it would erode that content hard (down to ~0.23) -- proof of why the flag is never asked for anywhere but the bare-winter frame.
 
 ✅ **Walnut and pine's on-tree/harvested rows were restored after a concurrent regeneration overwrote them.** The same pass that gave every species its fifth snow-canopy column apparently redrew `composite_walnut.png` and `composite_pine.png` in full rather than only adding that column: their below-canopy area came out as one drawing per canopy season instead of the documented fixed two-row layout -- confirmed by measuring each below-canopy blob's centre against its aligned canopy column's centre (within a few px on both sheets). Walnut ballooned to 24 detected regions, its "on-tree" row alone matching all 5 canopy columns instead of 2; pine collapsed to a single row of 4 with no second (harvested) row at all -- exactly why `on_tree_frames_for`/`harvest_frames_for`/`test_unripe_and_ripe_are_the_first_two_frames_whatever_the_count`/`test_on_tree_and_harvested_frames_are_told_apart`/`test_pine_has_more_stages_than_the_nut_trees` came out wrong. `CompositeSheetSlicer`/`IllustratedTree._composite_parts` were reading the sheets correctly throughout -- the sheets themselves no longer matched the layout the code (and the doc comment above `SEPARATE_FRUIT_FRAME_COUNT`) describes. Fixed at the asset level, not the code: each current sheet's canopy strip (which legitimately carries the new fifth frame) was grafted onto the last-known-good (pre-regeneration) trunk/fruit content below it, restoring walnut's two-on-tree/two-harvested rows and pine's three-on-tree/four-harvested rows without losing the snow frame. Combined with the acorn/apple fix above, `test_illustrated_tree.gd` is 96/96.
@@ -2198,6 +2211,133 @@ All three rules and their known remaining gaps are specified in [docs/concept/hu
 
 
 
+### Flowers: too dense, no tooltip, and a wind that never blew
+
+Three things reported together: flowers *"still don't [show] hover tooltips"*,
+they *"spread or grow way too dense"*, *"the seeds should be carried a bit
+further by the wind and birds so it leaves more space between individual
+flowers"*, and *"the baked in initial world state should also respect this and
+simulate spread based on wind strength and direction"*.
+
+✅ **The density was not a tuning number, it was a missing mechanism.** The
+obvious fix — flatten `WindDispersal`'s heavy tail so seed spreads evenly —
+would have swapped a true mechanism for a cosmetic one; real wind dispersal
+genuinely is heavy tailed, and `concept/seed_dispersal.md` is right to insist
+on it. What was missing is that **where seed lands and where a plant stands
+are two different distributions**. Seed rain is densest directly under the
+parent and survival there is close to nil — competition with an established
+root system, that plant's own pathogen load, and the seed predators already
+working it. Only seed that escapes the parent becomes a plant (Janzen–Connell).
+`FlowerEstablishment` is that second distribution and is now the only thing in
+the flower code that decides how far apart two plants may stand
+(`MIN_SPACING_TILES`, bounded on both sides by test rather than by eye: wider
+than a diagonal so no two flowers can touch, under 5 tiles so a meadow stays a
+meadow). It runs at **every** point a flower comes into being — the baked
+meadow, `FlowerPatch.plant` (animal-dropped seed) and `FlowerPatch.root_seeds`
+(rain) — because a gate some paths could route around would silently refill
+exactly the gaps it opened.
+
+✅ **The baked meadow is now what the wind already did** (`MeadowSpread`). It
+was an independent coin flip per grassland cell (`SEED_CHANCE`, 3.5%): a
+uniform speckle that made two neighbouring cells both flowering as likely as
+any other pair, so adjacent pairs and triples were constant. It also knew
+nothing about the wind, so a world whose entire dispersal model is "light seed
+goes downwind" nevertheless *started* isotropic. It is now the same kernel the
+live world sheds with, run from sparse **world-space** founders under the
+region's prevailing wind for `GENERATIONS` rounds, through the establishment
+gate. **Measured over 40 seeds on full grassland: 11.4 plants per 32x32 chunk
+(was ~36, and regularly at its own 40 cap), mean nearest-neighbour gap 4.39
+tiles where adjacency had been free.**
+
+Founders live in world tiles and lineages shed *unconditionally* (a grain sheds
+whether or not it established), which is what bounds
+`MeadowSpread.INFLUENCE_MARGIN_TILES` exactly: a lineage depends only on its
+founder and the wind, on nothing any other founder did. Paired with
+`FlowerEstablishment.survivors` being **order-independent** — within a
+neighbourhood the seed with the most vigour takes, and which that is does not
+depend on who asked or in what order — two neighbouring chunks compute the
+identical answer for ground they share. Pinned by a cross-seam spacing test in
+the pure module and again end-to-end against two real loaded chunks.
+
+✅ **`WindDispersal`'s calm scatter was weight-BLIND**, and that turned out to
+be the whole reason a lineage collapsed onto its parent. The downwind term
+already scaled with lightness; the still-air term did not, so a dandelion seed
+and an acorn fell into the same little circle. **Measured: 0 of 400 flower
+seeds cleared the establishment spacing on a still day** — so a founder's
+entire lineage piled onto one cell and exactly one plant grew there. A
+prevailing wind is a breeze rather than a gale, so that term is most of what
+decides real spacing. Scatter now scales with lightness
+(`HEAVY_SEED_SCATTER_FRACTION`), calibrated so the heaviest class keeps
+*exactly* the crown-width drop it always had (0.3 x 4.0 = the old 1.2 tiles,
+pinned by test — making the plume drift further must not drag the acorn along).
+`MAX_DRIFT_TILES` 14 → 20 so the wind stays the dominant term rather than the
+isotropic scatter drowning the lean out.
+
+✅ **`FlowerPatch.set_wind` had no live caller at all** — fully built, fully
+tested, and called by nothing but its own test file, so every meadow in the
+running game shed seed at strength 0.0, a permanent dead calm, and the downwind
+drift the model computes had never once been applied outside a test. Exactly
+the dead-mechanism class as the `Pollination` wiring recorded above.
+`EarthChunkManager.step_flowers` now pushes the day's wind and
+`WeatherModel.dispersal_strength_for` onto every loaded patch, with a
+regression test that names the bug.
+
+✅ **A per-region prevailing wind** (`WeatherModel.prevailing_wind_direction` /
+`prevailing_wind_strength`), which worldgen needs because a baked meadow is the
+product of a climate, not of one particular Tuesday. It also fixed a real
+defect in the daily walk: it started from angle 0 for *every* region, so on day
+one the wind blew due east across the entire world and only regional divergence
+over later days hid it. `dispersal_strength_for` is a second reading of the
+same sky on a 0-calm-to-1-gale scale, because `wind_strength_for` is a shader
+*pace* multiplier whose baseline is 1.0 — feeding it to a dispersal kernel
+would have put every seed at or past a gale. The two are pinned to rank the
+weather identically so they cannot drift.
+
+✅ **Flowers answer the hover tooltip** (`EarthChunkManager.flower_name_at` →
+`World._update_hover_tooltip`). Every other hoverable thing is a Node2D in
+`HoverTargetFinder.GROUP_NAME`; flowers deliberately are not, because they are
+ground decoration — a bare `Sprite2D` per cell with no script and no group,
+which is why a loaded meadow costs a handful of shared textures rather than a
+thousand scripted nodes, and that group is scanned every frame. So they are
+answered the way tall grass already is: a positional query the hover scan falls
+through to. Measured against the **blossom**, not the cell — the sprite is
+foot-anchored and drawn upward, so a player pointing at the bloom they can see
+is pointing well above the plant's cell; it reuses the exact landing point a
+pollinator settles on, so the tooltip and the bees agree about where a flower
+is. Only what is **in bloom** answers, matching what is actually drawn. A
+seedling reads as one.
+
+🚧 **The nectar economy moved with the meadow, and is recorded rather than
+tuned away.** `test_nectar_economy.gd` re-measured: 640 blooming flowers became
+200, and the ratio went from **0.86x (slightly under-subscribed) to 1.56x
+over-subscribed**. Two things bound how much that matters, and both were
+checked rather than assumed: the 150-pollinator population in that scenario is
+a *ceiling*, and live spawning scales with the peak scent concentration a
+chunk's blooms superpose to (`EarthChunkManager._pollinator_multiplier_for`),
+so a sparser meadow spawns fewer pollinators into itself; and **coverage did
+not collapse — 184 of 200 flowers were visited, 92%, the same share as the old
+592 of 640**. Left above 1.0 knowingly: pushing it back under by raising nectar
+regen would be tuning a pollinator constant to hide a deliberate change in how
+much meadow the world has. If `NECTAR_REGEN_PER_SECOND` should move, it should
+move on its own evidence. **This is the one item here worth watching in live
+play** — if bees visibly starve, that is the number to revisit.
+
+⬜ **Seed that blows out of a chunk is still discarded.** `FlowerPatch.shed_seed`
+drops any landing outside its own bounds instead of handing it to the
+neighbouring patch, so live dispersal is truncated at every chunk line — the
+long tail, which is precisely the part that colonises new ground, is the part
+being thrown away. Not touched here (it needs the chunk manager to route seed
+between patches, not a change inside `FlowerPatch`), and it does not affect the
+baked meadow, which crosses seams correctly by construction.
+
+⬜ **The baked meadow uses one prevailing wind for the whole world**
+(`EarthChunkManager.PREVAILING_WIND_REGION_SEED`), not a per-region one. That
+is deliberate — two chunks using different winds for the same founder is
+exactly the seam disagreement the design avoids, and real prevailing winds are
+consistent over far more ground than this world covers — but a smoothly varying
+wind *field* sampled at each founder's own position would give regional
+variation while staying seam-exact, and would be the honest next step.
+
 ## Status legend
 
 - ✅ **Done** — implemented and (per project convention) covered by tests.
@@ -3386,7 +3526,7 @@ chunks away from the player). See the concept doc for the full spec.
   **Left alone, deliberately: the flee onset.** `ESCAPE_SPEED_MULTIPLIER` applies instantly — 16 → 40 px/s on one frame, measured, alongside a **151°** turn away from the player. The turn *is* the behaviour rather than an artefact (it is the whole flight-initiation-distance model), and the speed step is a fifth of a second of real acceleration compressed into 17 ms, against a simultaneous 151° turn nobody could see past. Easing it would need an acceleration constant this game has no grounding for.
   **Re-measured, unchanged.** The same 600-simulated-second acceptance run against a 30-bloom meadow with nectar regenerating as `FlowerPatch.advance` does: **30 distinct blooms of 30, 135 landings** (was 30/30, 134). That measurement is now printed by the test rather than only reported on failure, since every pass that touches how a flyer moves has to re-take it.
 - **Trap-lining, a whirl a butterfly can actually fly, and a flap-glide gait** (medium) — 🚧 Partial — reported: *"Butterflies still get stuck infront of a signle flower and the dance is overly dramatic and only a circle can you add more random bounces and flaps?"* Three separate things; the second and third are fixed outright, the first is **honestly partial** and the measurement is below.
-  **(1) The single-flower lock did NOT reproduce.** Measured before changing anything, by driving real `AmbientFlyerMarker`s through real `_process` frames against a stub world that drains and regenerates nectar exactly as `FlowerPatch.advance` does. At the density `FlowerPatch.SEED_CHANCE` actually generates, one butterfly over ten simulated minutes visited **24 / 20 / 29 distinct blooms** of the 29 / 22 / 32 in range (three meadow seeds), busiest bloom 3–4 landings, longest unbroken loiter within two tiles of any one bloom **6.8 / 7.4 / 11.5 s**. With 8 and with 20 flyers sharing one meadow and real `ForageClaims`, the **worst** flyer still visited 23–25 distinct blooms and **0 of 20** were stuck on one. Sparse ring layouts (1/2/3/5 blooms at 1–8 tiles, four seeds each, ten simulated minutes) never stalled either. The lead's traced mechanism — `_origin` snapping to the last bloom making it permanently nearest — was checked directly and does not close: `choose_target` **vetoes** a bloom inside visit memory, so the flyer relocates and leaves. A coarse-step hypothesis (`SimulationLod`'s 0.5 s step is 8 px of travel against a 4 px `LANDING_DISTANCE`, which could in principle orbit a flower forever) was also measured and rejected — landings per 600 s were 54/54/54/52/52/54 across dt 0.05→0.50, i.e. flat. **What the measurement did show** is a revisit interval pinned at *exactly* `VISIT_MEMORY_SECONDS` in every sparse layout (busiest bloom = 6 landings per 600 s, in every single one), which is the trap-line rule being implicit rather than expressed. So two real rules were added, both **tie-breaks strictly inside the existing distance band** so neither can reintroduce "flies past unchecked flowers": `PollinatorForaging.moved_on_from` drops whichever tied candidate lies closest to the bloom just worked (a trap-liner does not turn back; no distance constant of its own — "closest to the one just worked" reuses the band's own ordering), and `patch_centre`/`recent_feeds` anchor the relocation leash on the **circuit** — the mean of the stops that have not yet refilled — instead of snapping `_origin` to the single last bloom, which collapsed a 24-tile search ball onto one flower on every feed. The window is `NECTAR_REFILL_SECONDS`, itself derived from the regen rate rather than restated, and `VISIT_MEMORY_SECONDS > NECTAR_REFILL_SECONDS` is now pinned with the reason (if the two clocks agreed, a bloom would become legal and full on the same second). After: distinct blooms per flyer 24→25 (8 flyers) and 23→24 (20 flyers), landings 514→534 and 1249→1301. ⬜ **Still open and named**: the reported stall was not reproduced offline, so it is not proven fixed — it may need a live measurement in the running game, or it may live somewhere these sims do not model (the `flowers_near` 3×3-chunk window, the player-reaction path, or the flyer's own `home` tether rather than the forage rule). A two-flower world 28 tiles apart still leaves a flyer on one of them, which is a **search** problem (`FORAGE_SEARCH_TILES` 18 < the gap), not a trap-line one.
+  **(1) The single-flower lock did NOT reproduce.** Measured before changing anything, by driving real `AmbientFlyerMarker`s through real `_process` frames against a stub world that drains and regenerates nectar exactly as `FlowerPatch.advance` does. At the density `FlowerPatch.SEED_CHANCE` actually generated (that per-cell coin flip has since been replaced by `MeadowSpread`, roughly a third as dense -- this measurement predates it), one butterfly over ten simulated minutes visited **24 / 20 / 29 distinct blooms** of the 29 / 22 / 32 in range (three meadow seeds), busiest bloom 3–4 landings, longest unbroken loiter within two tiles of any one bloom **6.8 / 7.4 / 11.5 s**. With 8 and with 20 flyers sharing one meadow and real `ForageClaims`, the **worst** flyer still visited 23–25 distinct blooms and **0 of 20** were stuck on one. Sparse ring layouts (1/2/3/5 blooms at 1–8 tiles, four seeds each, ten simulated minutes) never stalled either. The lead's traced mechanism — `_origin` snapping to the last bloom making it permanently nearest — was checked directly and does not close: `choose_target` **vetoes** a bloom inside visit memory, so the flyer relocates and leaves. A coarse-step hypothesis (`SimulationLod`'s 0.5 s step is 8 px of travel against a 4 px `LANDING_DISTANCE`, which could in principle orbit a flower forever) was also measured and rejected — landings per 600 s were 54/54/54/52/52/54 across dt 0.05→0.50, i.e. flat. **What the measurement did show** is a revisit interval pinned at *exactly* `VISIT_MEMORY_SECONDS` in every sparse layout (busiest bloom = 6 landings per 600 s, in every single one), which is the trap-line rule being implicit rather than expressed. So two real rules were added, both **tie-breaks strictly inside the existing distance band** so neither can reintroduce "flies past unchecked flowers": `PollinatorForaging.moved_on_from` drops whichever tied candidate lies closest to the bloom just worked (a trap-liner does not turn back; no distance constant of its own — "closest to the one just worked" reuses the band's own ordering), and `patch_centre`/`recent_feeds` anchor the relocation leash on the **circuit** — the mean of the stops that have not yet refilled — instead of snapping `_origin` to the single last bloom, which collapsed a 24-tile search ball onto one flower on every feed. The window is `NECTAR_REFILL_SECONDS`, itself derived from the regen rate rather than restated, and `VISIT_MEMORY_SECONDS > NECTAR_REFILL_SECONDS` is now pinned with the reason (if the two clocks agreed, a bloom would become legal and full on the same second). After: distinct blooms per flyer 24→25 (8 flyers) and 23→24 (20 flyers), landings 514→534 and 1249→1301. ⬜ **Still open and named**: the reported stall was not reproduced offline, so it is not proven fixed — it may need a live measurement in the running game, or it may live somewhere these sims do not model (the `flowers_near` 3×3-chunk window, the player-reaction path, or the flyer's own `home` tether rather than the forage rule). A two-flower world 28 tiles apart still leaves a flyer on one of them, which is a **search** problem (`FORAGE_SEARCH_TILES` 18 < the gap), not a trap-line one.
   **(2) "Overly dramatic" was a physics error, in both dances.** The whirl's rate came from a monarch's 5 m/s **burst** applied to the whole orbit: at `SPIRAL_RADIUS_M` 0.35 that is `v²/r` = 71 m/s², **over seven g**. The turn limits this, not the wing, and the ceiling is one this codebase had already derived — `WingbeatBounce`'s "a wing cannot pull the body down through its stroke, so `e ≤ 1`" puts peak lift at twice weight, a load factor of two. New `SpiralFlight.MAX_LOAD_FACTOR` (pinned equal to `1 + WingbeatBounce.MAX_LIFT_SWING` by test, not restated) and `ORBIT_SPEED_MPS = sqrt(2g·r_tightest)`; `TURNS_PER_SECOND` **2.27 → 1.05**. `Courtship` had the same fault in reverse: 0.85 turns/s on a 9 px (≈70 cm) radius is 3.8 m/s, three quarters of an absolute burst, for what the module itself calls a slow wide orbit — now derived from a monarch's **cruise** (2 m/s), **0.85 → 0.45**. The whirl also **covers ground**: the 1.5 m ascent is decomposed at 45° into climb and ground track (`SpiralFlight.travel`), so the excursion and the territory budget `RISE_M` was already capped against are unchanged, and orbit + climb + track now fit inside one real burst instead of the old model spending the whole burst on the orbit and adding the climb on top.
   **(3) "Only a circle" is gone from both.** New `src/gameplay/flight_irregularity.gd` holds the irregularity **once** — the two-frequency, per-individual, never-repeating swing that was already in `PollinatorForaging.tumbled_heading`, which now reads its frequency back out of it rather than keeping a copy. Both orbits breathe across their **real observed band** (`SPIRAL_SEPARATION_MIN_M`/`MAX_M` 0.5–1.0 m; `RADIUS_SWING` is *derived* from that band, not chosen), per-pair and deterministic. `Courtship`'s fixed 0.7 ellipse is **replaced** rather than kept — an ellipse is still a closed figure traced identically every round, which is what "only a circle" meant — at exactly the magnitude the ellipse asserted. The radius is written `r₀/(1 + k·w)` so the angular rate is exactly `(v/r₀)(1 + k·w)` and its integral is closed-form: the swept angle is the true integral of a varying turn rate, never accumulated per frame (which would make the figure depend on frame rate and on `SimulationLod`'s step size — the class of bug this system has produced three times). Pair seeds now go through `Courtship.pair_seed` for both interactions, so a meadow's dances no longer share a figure. **One projection compromise, stated**: the ground track is drawn over the upper half-circle only, because this world draws height as screen-up and a track pointing down cancels the climb exactly — measured at 0.07 px of total shared translation over a whole whirl when it first did.
   **(4) The flaps and bounces are a GAIT now.** New `src/rendering/flap_glide.gd`. Butterflies flap-glide and passerines flap-bound; bees hum. Who alternates is read off the wingbeat frequency against the real **asynchronous flight-muscle** boundary (~100 Hz), so there is no roster — a species added to `WingbeatBounce.FLIGHT` gets the right answer for free. The glide share is **derived from level flight**: mean lift over a gait must equal weight, the wings supply none while gliding, and the most a wing can make is the same `1 + e ≤ 2` ceiling — so `(1−f)·2W = W`, f = ½. The in-bout rate swing is derived from quasi-steady aerodynamics (`L ∝ v²`, so a lift swing of `e` is a rate swing of `√(1+e) − 1`). Both the frame index and the bob are driven off **one wing clock** that pauses through a glide, so they can never disagree; through a glide the bob stops and the body **sinks**, through the next bout it climbs back, and the two cancel exactly over a gait (a sawtooth with no net drift — level flight — with the sink needing no size of its own because the bout gains what the glide gives back). `WingbeatBounce` is **untouched** and all 12 of its tests still pass: it still owns how big the bob is, `FlapGlide` composes on top and owns only when the wings are driving. ⬜ The bout length (**two** visible beats) is the one figure here not derived — pinned by property tests (at least two visible beats of flapping; the gait repeats inside a couple of seconds) rather than by its digit. **`position` is still never touched** — `test_the_wingbeat_bounce_never_touches_the_flyers_position` is green, and a new `test_nothing_in_this_composition_can_stall_a_butterfly` drives flutter + trap-line + gait together for five simulated minutes and pins that only drinking may hold a flyer still.
@@ -6143,7 +6283,20 @@ evolution sim, both still partial. All ⬜ Not started:
   mean-interior-water-temperature -> `AquaticPopulationModel.temperature_suitability`,
   reusing `Chunk.temperature`); water quality/food-density remain open, see
   fishing.md's Open Questions.
-- **Hydraulic erosion water generation** (large) — 🚧 Partial — `hydraulic_erosion.gd` exists/tested but is part of the old procedural pipeline, unused for Earth (real elevation data already contains real rivers/oceans).
+- **Hydraulic erosion water generation** (large) — 🚧 Partial (superseded for Earth) — `hydraulic_erosion.gd` exists/tested but is part of the old procedural pipeline, unused for Earth. The parenthetical this bullet used to carry ("real elevation data already contains real rivers/oceans") was wrong: the data contains oceans only. Every lake above sea level reads as land, and no river exists anywhere, because water is decided solely by `elevation < sea level`. Superseded by the drainage bake in `docs/concept/hydrology.md`; kept for future procedural planets.
+- **Hydrology: rivers and lakes from the water cycle** (large) — 🚧 Phase 1 written and now tested, unmerged — `docs/concept/hydrology.md` (2026-09-03). Priority-flood drainage bake over the real elevation asset, live soil/snow/groundwater buckets per climate cell, coarse-graph routing, per-depression lake balance (fresh vs. salt from one equation), hydraulic-geometry tile read, valley carve. Builds on `concept/rivers.md`, not beside it: curated rivers stay authoritative, baked channels are that doc's connectivity-aware procedural fallback (`EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED`, now on), and lakes/rivers are overlay flags (`Chunk.is_lake`, `Chunk.blocks_ground_cover`), never biomes. Phase 1 code on branch `claude/hydrology-spec`: `drainage_network.gd`, `stand_in_precipitation.gd`, `hydrology_data.gd`, `tools/bake_hydrology.gd`, `hydrology_field.gd`, generator/chunk-manager/player/spawn wiring, ~60 tests written red-first. **The bake has been run** (154 s over the real asset, shipped in `assets/data/hydrology`, 30 MB) and the game launched from the branch with zero script errors; `tools/probe_hydrology.gd` found the Loire and the Gironde as the strongest emergent channels in western France, and the spawn moved from the curated Dreisam to the Loire at Nantes (`World.SPAWN_LATITUDE`). **The tests have now been run** (deferred at the user's request until then), and the first run paid for itself: 204 tests over six scripts, 29 red. Four were real shipped defects rather than stale expectations. **(1)** `boulder_halo_factor` was a DISC, not a ring -- `1.0 - smoothstep(radius, radius + width, d)` is 1.0 at the rock's centre -- and since the fragment shader lights alpha from it independently (`wet = max(channel * eyot_dry, halo * halo_alpha)`), every boulder in a river wore a translucent blue cap painted straight back over the dry eyot `eyot_dry` had just carved. Now gated by the same inner edge `eyot_dry` uses, so the ring begins exactly where the dry patch ends. **(2)** A depression's `spill_index` was whichever member the raster scan happened to reach first: the flood raises every member to exactly the spill elevation, so the "lowest `filled`" comparison the labelling loop relied on never fires past the first cell. `bake_hydrology` read a lake's inflow there, on its own stated assumption that everything the basin collects passes through the spill cell -- false, because a filled lip is FLAT and the outflow splits across it (three ways in the test crater, carrying 13, 4 and 13 of the 30 collected, and the cell the old test named "the spill" is the weakest of the three). Basins were being judged on as little as an eighth of their real inflow and dried out for it, which is the knob that decides which lakes exist at all. Depressions now record their whole lip in `outlet_indices` and `outflow_of()` sums across it; the same sum answers for a terminal inland sea, where flow stops at every cell. **(3)** `nearest_channel_geometry` returned `distance_tiles` from the channel nearest by BANK REACH beside a `signed_across_tiles` blended over the channels that CONTAIN the tile -- two different watercourses, measured at 0.45 tiles against 0.73. That split the wet/dry verdict in two, since `probe()` calls a tile river when `distance <= half_width` while the shader calls it wet when `|across| / half < 1`. Both now come from the blended field. **Measured effect on the real bake, honestly: 61 of 22,279 river-adjacent tiles around the spawn disagreed at all, and ZERO flipped their verdict (`tools/probe_verdict.gd`)** -- a genuine correctness fix that does NOT explain the reported zigzag. **(4)** `test_hydrology_data.gd` had never run at all: `var ratio := decoded / q` off an untyped loop variable failed to parse, and GUT skips an unloadable script with a warning rather than a failure, so seven tests sat silently uncollected.
+
+  The remaining reds were the tests being wrong, and each is now pinned to the invariant it meant. All three crater fixtures put their crater floor at 0.3 under a `SEA_LEVEL` of 0.5, so the crater was itself below sea level -- harmless until `_label_inland_seas` began treating the largest sea component as the ocean, at which point the 9-cell crater outvoted the 7-cell sea row and the two swapped roles (~17 failures from that one fixture; sea level now sits between the sea row and the lowest land, where the docstrings always assumed it was). The confluence continuity check divided across by the half width and demanded steps under 0.4, which is not a continuity condition at all: walking out of a channel moves across by a full tile per tile BY DEFINITION, so any channel under 2.5 tiles of half width failed it however smooth the field was. It now asserts the real invariant -- a signed distance is 1-Lipschitz, so one tile of travel moves it by at most one tile (largest real step measured: 0.96). **Worth recording plainly: that test was written to catch the zigzag and never had the power to.** Two more asked for things the data cannot express -- strict discharge growth between reaches 3% apart, through an 8-bit LOG byte, and a bearing within 1e-6 deg of north from a sampled Bezier tangent -- and one compared a junction tile against the reach below the junction, which legitimately carries more water. The far-coordinate GPU smoke check now reports `pending` under `--headless` rather than announcing "the field is dead at Basel" about a shader that was fine: there is no rendering device, its own origin control failed identically, and it needs the editor or a windowed build to mean anything.
+
+  **The bake was re-run on the corrected inflow, and the lake count moved 1,916 -> 2,478.** The inflow filter used to drop 574 of 2,490 candidate basins; it now drops 12. That is the filter no longer being fed a number that was systematically about half the truth, not the filter breaking -- and it means the filter is doing exactly what the spec asks while the spec's honest consequence is that almost every basin deep enough to clear the 1.5-step depth filter does hold water (at ~10 km cells such a basin nearly always has a catchment several times its own area). The old 1,916 was never a principled number. **So the inflow filter is the wrong knob for the reported "dozens of small ponds to the sides of rivers".** Measured distribution of the 2,478 (median 8 cells; at ~10.4 tiles per cell a median lake is roughly 85 tiles of surface): 447 at exactly 4 cells (18.0%, sitting on `MIN_DEPRESSION_AREA_CELLS`), 829 at 5-8 (33.5%), 512 at 9-16 (20.7%), 479 at 17-64 (19.3%), 211 at 65+ (8.5%). Half are 8 cells or under. The knob that reaches them is `bake_hydrology.MIN_DEPRESSION_AREA_CELLS`, currently 4; raising it to 5 / 9 / 17 would leave 2,031 / 1,202 / 690. Set to 5 on the user's call and re-baked: **2,031 lakes**, exactly what the distribution predicted, so the histogram in the constant's own comment can be trusted for the next adjustment. Only 8 basins now dry out for lack of inflow against 574 before the fix, i.e. the inflow filter has stopped being the thing that controls pond count and the area floor has become it.
+
+  **The zigzag: hypothesis measured, then fixed on the measurement.** Ruled out first, by measurement rather than argument: texture interpolation (bilinear and smoothstep both show it), medial-axis creases (max adjacent bearing jump 10.77 deg over 562 wet tiles at a real bend), `bank_shear`, `eddy_swirl`, ripple stacking, the width encoding, and the distance/across split above (61 of 22,279 tiles, zero verdict flips). What was left was the smear, and `tools/probe_smear.gd` settled it WITHOUT touching the shader: it walks each wet tile's own flow out to the shader's real tap positions and reads the bearing there. Over 1,997 wet tiles around the spawn the smear spans 5.31 tiles and treated the course as straight over all of it, while the course actually turns **median 0.15 deg, 75th 12.17, 90th 19.47, 99th 32.72, max 45.12** -- 30 deg or more on 1.6% of wet tiles, which is exactly "almost at every bend" for a river that is mostly straight. The worst spreads cluster at 45.0 deg, the D8 quantum, consistent with 10.77 deg per tile accumulating over 5.31 tiles.
+
+  The same probe measured the cure before it was built. Reading the flow at the two ENDS of the smear and interpolating between them leaves **median 0.13, 75th 2.49, 90th 5.38, 99th 17.43, max 41.88** -- the 75th percentile drops by four fifths and the >=30 deg tiles from 31 to 9 -- for TWO extra texture samples rather than the eight a per-tap resample would cost, since a bend has roughly constant curvature and a tangent rotates linearly with arc length along an arc. Implemented: `line_field` walks cumulatively along a real polyline arc (stepping from the centre along an interpolated heading would fan out, not curve), `flow_dir_at` guards the endpoint lookup because the map's GB channels are zero past the painted band and normalizing that is a NaN, and `smear_curvature` (default 1) collapses both ends onto the fragment's own direction at 0, which is the straight smear exactly -- so the two are comparable in game at one uniform, and every earlier screenshot is the 0 case. **Not claimed as visually fixed**: the measurement says the modelled error drops by roughly five sixths where the artefact lives; whether that reads as gone is for the next playtest. The residual max stays high on 9 tiles, which are genuine discontinuities no smooth model reaches.
+
+  `tools/probe_shader_compile.gd` added alongside, because none of the 109 shader tests prove the GLSL parses -- they assert on its source text -- and the render smoke test cannot answer it under `--headless` for want of a rendering device. This feature has already lost all its water once to a shader that failed to compile (a GDScript `##` comment left inside the shader string). Two launch fixes rode along: `SQRT2` is not a constant expression inside a typed const array, and main's `procedural_tree_sprite.gd` still preloaded the deleted `snow_layer.gd` (which broke every dependent script at launch on main too). Three playtest rounds the same day drove the rest: Bezier centrelines with per-cell discharge widths, springs, tributaries reaching the mainstem, boulders on the bank apron; lakes pruned to basins at least 1.5 asset steps deep with real inflow (1,916 remain, 508 of them below-sea-level pockets -- superseded: see the re-bake note below, 2,478 once the inflow was computed correctly); **one water surface** -- rivers, lakes and the sea all on the river flow overlay, shorelines as the half-coverage contour of the baked water cells (rounded, not the bilinear "folded snake"), the generator's sea classification reading the same field, fine detail never crossing sea level; river plumes fading into the sea; fish in rivers and lakes, slower and flapping more upstream, fed to the shader as waders, with disturbance rings reimplemented inside the contour system; a still-water two-tap shader path, per-tile memos and cached curves for the frame rate (one 32-tile chunk: 544 ms cold / 209 ms memoized / 252 ms without hydrology, `tools/probe_spawn.gd`); the one-tile sawtooth on every stroke traced to the across texel's magnitude coming from the cross product instead of the true distance. Measured constraints recorded in the doc: the elevation asset is 8-bit (56.5 m steps, every coastal plain a flat 75 m plateau) and `FINE_DETAIL_AMPLITUDE` is ±432 m, so routing runs on macro elevation only. Phases 2-5 (climate grid, buckets/routing/lakes live, coupling, 16-bit asset) ⬜.
+
+  **Follow-up (2026-09-04): the swim-time water check tightened to the same bar spawning already used.** Reported directly: "fish should be constrained to the full rivertiles not the shore tiles otherwise they swim on a half land tile sometimes." A river/lake tile is a discrete kind flag, not a coverage fraction -- `HydrologyField.probe()` calls a tile "river" once its *centre* is within the channel's own half-width, which for a narrow channel or a tile right at the bank can flag a tile whose footprint is mostly dry land. `FishRenderer` already spawned fish only on `WaterAreaSurvey.is_interior_water` tiles for exactly that reason, but `FishMarker._is_water` (the swim-time check) read the raw `is_river_at_global`/`is_lake_at_global` flag with no such bar, so a fish already in the water could wander from a genuinely-covered tile onto a merely-flagged one. `_is_water` now also holds a river/lake tile to "its 4 cardinal neighbours are water too" (any kind -- a river mouth's bank against the sea still counts, so a mouth stays swimmable right to the coast); the open ocean is untouched, since its own tuned `CLEARANCE_PX`/shore-deflection system already handles a coastline and this bar would be far stricter than that for no benefit. Two new red-first fixtures in `test_fish_marker.gd` (a river band with dry land on both banks; the same band ending at the river's own sea mouth) both failed before the fix and pin it now, alongside the existing fish/piscivore/water-area-survey/hydrology-field/aquatic-population suites (206 tests). Branch `claude/fish-river-shore-tiles`, based on this feature's own `claude/hydrology-spec` (itself still unmerged).
 - **Visible, catchable fish entities** (medium) — ✅ Done — ocean cells spawn actual `FishMarker` nodes (`src/rendering/fish_marker.gd`): `FishRenderer` (mirroring `TreeRenderer`/`CreatureRenderer`'s chunk-based spawn/despawn shape) places fish on a chunk's **interior** water tiles (never a shore-adjacent cell), in one of 4 colorful hand-authored species (`ProceduralFishSprite`: goldfish, bluegill, speckled trout, patched koi). Spawn *count* is now population-driven (`spawn_fish`'s `target_count` param, defaulting to -1 for the legacy independent per-cell-probability path so isolated callers/tests keep working unchanged): `EarthChunkManager._fish_target_count` scales `FishRenderer.MAX_FISH_PER_CHUNK` by the chunk's live `fish_population`/`fish_capacity` ratio, refreshed both on chunk load and on `EarthChunkManager`'s periodic ecosystem step, so a fished-down chunk visibly shows fewer swimming markers, not just after a reload. Each fish idle-swims via `CreatureWander`'s pure drift pattern (deliberately lighter than `CreatureMarker`'s full sense/perceive/act AI), keeps `CLEARANCE_PX` of open water on every side so no part of the sprite ever overlaps the beach, and deflects along the shore instead of freezing when its heading points at land. A fish turns gradually toward its target heading (`FishMarker.TURN_RATE`) and its sprite rotates to face the way it's swimming. Fish can also be **attracted toward a cast fishing line** (`FishMarker.set_attraction`/`EarthChunkManager.set_attraction_point`). `EarthChunkManager.catch_nearest_fish` removes a real nearby fish, names its species in the catch message, **and now decrements the real aggregate population it came from** (`EcosystemSimulation.record_catch`) -- the actual reward quantity/rarity still comes from the independent `FishingMinigame` roll. Its occasional water-ripple disturbance (`FishMarker._step_water_ripple`, on an unhurried per-fish-varied interval so a shoal doesn't flood the shared disturbance buffer) now fires a short `TAIL_WAG_RING_COUNT`-ring burst spaced `TAIL_WAG_RING_SPACING` apart, rather than one isolated ring, so a trigger reads as an actual tail wag pushing a short streak/wake across the surface -- the same forward interference pattern the player's own wading ripple makes -- instead of a single random poke; each burst is also gated on the fish having genuinely moved since the last check (mirroring `Player._step_water_ripples`' own movement gate), so a fish boxed into water it can't leave never ripples at all (reported: "It should produce a streak of rings but only when wagging the tail, so that the interference creates a forward pattern, just like when the player walks through water"). A follow-up widened `TAIL_WAG_RING_SPACING` (slower streak) and made a burst genuinely a fast tail flap, not just a faster ring cadence: `FLAP_SPEED_MULTIPLIER`/`_is_flapping` speed the fish itself up for exactly the burst's duration (reported: "slower bursts please also only when they flap tail fast"). The shore-avoidance deflection (`_DEFLECTION_TURNS`) used to re-derive its pick from scratch off the raw wander/attraction target every single frame, which flip-flopped between nearby valid deflections right at a shoreline and read as flickering; `_first_clear_heading` is now shared by both the smoothed-heading bias (a longer, fixed lookahead, `_SHORE_LOOKAHEAD_PX`) and the movement step, and the bias search starts from the fish's OWN current (already-safe) heading rather than the blocked raw target once that target is unreachable, so it holds a stable pick instead of re-litigating it every frame (reported: "avoid trying to turn into the border of the water so that the fish doesn't flicker when repelled from the edge"). No DNA/phenotype, no bait-driven species targeting -- species is still a per-tile deterministic color/pattern pick.
 - **Aggregate + individual-agent promotion simulation** (large) — ✅ Done — `EcosystemSimulation` now has a real aquatic sibling of its herbivore/predator population tracking (see above), and `FishRenderer`'s population-driven `target_count` is the promotion-from-aggregate-population step, the same role `CreatureRenderer` plays for land creatures. See fishing.md.
 - **Fish-eating birds (kingfisher piscivore)** (medium) — ✅ Done — see the
@@ -6618,9 +6771,54 @@ state had never once been set by anything in `src/`.
   [soil_fauna.md](concept/soil_fauna.md#ants-myrmecochory)'s "Windfall
   foraging" note for the full spec. Explicitly still out of scope, and named
   as real follow-ups rather than silently dropped: a rendered mound/ant
-  sprite, ants as bird prey (a `FlyerDiet` extension), and ants as
-  carrion/corpse-rot detritivores (`fly_colony.gd` integration, distinct
-  from the windfall foraging above) — see that doc section's own scope note.
+  sprite (**fixed 2026-09-04, see next entry**), ants as bird prey (a
+  `FlyerDiet` extension), and ants as carrion/corpse-rot detritivores
+  (`fly_colony.gd` integration, distinct from the windfall foraging above)
+  — see that doc section's own scope note.
+- **Ants: rendered mound + traveling forager visuals** (medium) — ✅ Done —
+  reported live: "make ant colonies visible and functional" (the resolution
+  itself was ALREADY functional — see the entry above, `step_ants` already
+  moves real seeds/nuts every frame — the actual gap was that none of it
+  had ever been visible). Two new marker types:
+  1. `AntMoundMarker`/`ProceduralAntMoundSprite` — a small, always-visible
+     dirt-dome mound with an offset dark entrance hole (distinguishing it
+     from a plain `ProceduralSoilSprite` tilled patch), one per real
+     `AntColony.mound_cells()` entry, spawned/freed with its chunk exactly
+     like every other per-chunk marker dictionary in `EarthChunkManager`.
+     Own `MOUND_WORLD_SCALE` (never left unscaled — the exact "gigantic"
+     failure class the ant/bug decomposer sprite and `ProceduralItemSprite`
+     both already hit once each).
+  2. `AntForagerMarker` — a purely decorative, one-shot visual spawned
+     right after a real, successful forage (`_spawn_ant_forager_visual`,
+     called from both `_forage_seed_near_mound` and
+     `_forage_windfall_near_mound`), which walks mound → pickup → cache (or
+     mound → pickup only, if a windfall nut was eaten outright) using
+     `position.move_toward(...)`, not unclamped `+= direction * speed *
+     delta` — the exact overshoot-and-orbit-forever bug
+     `DecomposerMarker._step_approaching` hit earlier this session, avoided
+     here from the start rather than re-earned. Reuses
+     `ProceduralDecomposerSprite`'s existing "ant" silhouette rather than a
+     new design. Carries no state the real resolution depends on — it is
+     spawned strictly AFTER the actual seed/nut take and replant already
+     happened, so deleting this marker entirely would change nothing about
+     correctness, only what is visible.
+  Capped at one forager in flight per mound
+  (`EarthChunkManager._active_ant_foragers`, keyed by the mound's global
+  tile): `AntColony.FORAGE_CHANCE` can succeed several times a SECOND per
+  mound at normal frame rate (`step_ants` runs once a real frame, not
+  throttled), and a new visible ant for every single success would read as
+  an overlapping-sprite flicker rather than a colony that reads as alive.
+  26/26 new tests green across three files
+  (`test_procedural_ant_mound_sprite.gd`, `test_ant_mound_marker.gd`,
+  `test_ant_forager_marker.gd`) plus 4 new integration tests in
+  `test_earth_chunk_manager.gd` (marker spawn/evict count exactly matches
+  real `mound_cells()`; a real grass-seed forage spawns a real forager; the
+  one-active-forager-per-mound cap holds). See
+  [soil_fauna.md](concept/soil_fauna.md#ants-myrmecochory)'s "Rendered
+  presence" note for the full spec. Deliberately NOT attempted here (named,
+  not silently dropped): ants as bird prey and ants as carrion detritivores
+  remain exactly as scoped in the entry above — this pass is rendering
+  only, it does not touch what a mound forages or how.
 
 ### Flora (`concept/flora.md`)
 
@@ -6886,8 +7084,11 @@ Flowering plants, scent, and pollinators (see
   code, driving 150 pollinators (`AmbientFlyerRenderer.
   MAX_BUTTERFLIES_PER_CHUNK` + `MAX_BEES_PER_CHUNK`, 25 chunks — a full
   `EarthChunkManager.LOAD_RADIUS` neighbourhood) over a real, worst-case-
-  density grassland meadow (616 flowers seeded via `FlowerPatch.
-  SEED_CHANCE`/`MAX_FLOWERS`, in bloom for summer) — run 300 simulated
+  density grassland meadow (616 flowers seeded via the then-current
+  `FlowerPatch.SEED_CHANCE`/`MAX_FLOWERS` — that per-cell coin flip has since
+  been replaced by `MeadowSpread`, and this measurement re-taken with it; see
+  "Flowers: too dense, no tooltip, and a wind that never blew" above — in
+  bloom for summer) — run 300 simulated
   seconds to steady state, then measured for a further 300. Result: **0.86x
   — demand 8.44 drinks/s against supply 9.87 nectar/s across 592 flowers
   actually reached (96% of the seeded population)**, i.e. very slightly
@@ -7368,7 +7569,7 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   identically-placed fresh one — new `CarrionForageBehavior.
   effective_distance` (pure, tested: `FLY_ATTRACTION_DISCOUNT_PX_PER_FLY`/
   `MIN_EFFECTIVE_DISTANCE_PX`), wired into `DecomposerMarker._nearest_
-  carrion`'s target scoring in place of raw distance, proven by
+  food`'s target scoring in place of raw distance, proven by
   `test_prefers_a_fly_blown_carcass_over_a_closer_fresh_one`
   (`tests/unit/test_decomposer_marker.gd`) — a farther fly-blown carcass
   measurably out-competes a nearer fresh one, not just an equally-likely
@@ -7380,6 +7581,67 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   age, reads its real fly count off that same carcass, and feeds that real
   count into the real `DiseaseModel.carrion_graze_transmission_chance`
   formula — corpse age in, fly count out, disease risk out.
+- **Ant bugfixes: gigantic sprite, frozen idle, orbit-forever approach; real
+  fallen-fruit foraging** (medium) — ✅ Done — reported live: "there are
+  still gigantic ant blobs but they don't move... ants should eat fallen
+  fruits, leaves and other stuff like seeds, they should be a real gear in
+  the ecosystem". Three real bugs, one real ecosystem-gear extension, all
+  in `src/rendering/decomposer_marker.gd`:
+  1. **Gigantic.** Every other sprite generator in this codebase authors art
+     at `ArtResolution.DETAIL_MULTIPLIER` and draws it back down at
+     `ArtResolution.SPRITE_SCALE` (see `art_resolution.md`) — `Procedural
+     DecomposerSprite`/`DecomposerMarker` was the one generator that never
+     applied that scale, rendering at its raw 12x12 art-canvas size instead
+     of its intended tiny world size (`ProceduralItemSprite`'s own doc
+     comment already records the identical failure mode once making a
+     fallen cherry "as wide as the tile it lay on"). Fixed: `sprite.scale =
+     Vector2.ONE * ArtResolution.SPRITE_SCALE` in `_ready()`. Pinned by
+     `test_sprite_is_drawn_at_its_real_tiny_world_size_not_the_raw_art_
+     canvas`.
+  2. **Frozen while idle.** `_step_seeking` only ever pulled a decomposer
+     BACK toward home past `WANDER_RADIUS_PX` — nothing ever sent it
+     wandering away from home in the first place, so an idle decomposer sat
+     on one frozen position forever (the pre-existing `test_stays_near_
+     home_while_nothing_to_eat` passed either way — a frozen ant trivially
+     "stays within" any radius, it just never proved real wandering). Fixed
+     by reusing `AmbientFlyerMovement`'s already-tested home-anchored roam
+     algorithm (the same one `AmbientFlyerMarker` uses) instead of a second,
+     near-duplicate wander implementation. Pinned by `test_wanders_when_
+     idle_instead_of_sitting_frozen`.
+  3. **Orbit forever once actually approaching (a latent bug (2) exposed).**
+     `_step_approaching`'s unclamped `position += direction * speed * delta`
+     overshot straight past a target now that SEEKING could hand APPROACHING
+     a real gap to close, then overshot back the OTHER way on the very next
+     step — forever, a decomposer that finds a real, reachable target and
+     never arrives. Invisible before (2): a frozen SEEKING phase always
+     started APPROACHING already within `ARRIVE_DISTANCE_PX`. Fixed with
+     `position.move_toward(target, WALK_SPEED * delta)`, the same
+     clamped-arrival shape `NpcMarker._process` already uses. Pinned by
+     `test_approaching_a_close_target_does_not_overshoot_and_orbit_forever`
+     (drives APPROACHING directly, bypassing SEEKING/wander, so it's
+     deterministic regardless of wander's own randomness).
+  4. **Fallen fruit/nut foraging.** This project already had a second,
+     entirely separate ant simulation — `AntColony` (see `soil_fauna.md`)
+     — that eats fallen seeds and windfall fruit/nuts, but with no on-screen
+     representation at all, so a player could never see it happen.
+     `DecomposerMarker._nearest_food` (renamed from `_nearest_carrion`) now
+     also scans the real `DroppedItem` `"dropped_item"` group, filtered to
+     `TreeSpecies.IDS` exactly the way `EarthChunkManager.fruit_near`
+     already filters (never a dropped tool/ore chunk); `_step_feeding` eats
+     a found fruit/nut outright in one visit (`queue_free()`) rather than
+     whittling down a health pool the way a carcass bite does. Pinned by
+     `test_forages_and_eats_nearby_fallen_fruit_when_theres_no_carrion`/
+     `test_ignores_a_dropped_item_that_is_not_food`.
+  **Deliberately NOT attempted** (named, not silently dropped): ground-SEED
+  foraging by these VISIBLE ants (`AntColony` already does this
+  invisibly — surfacing it means giving `AntColony`'s mounds a real
+  rendered presence, a bigger unification project of its own, not a bugfix
+  pass); and a "fallen leaves" mechanic, which does not exist anywhere in
+  this codebase yet (only cosmetic seasonal ground-tint/canopy color, no
+  real leaf-litter entity to forage) — wiring the visible ants into fallen
+  fruit, which already existed, was the real prerequisite-free win here,
+  rather than building a whole new leaf-litter system speculatively on top
+  of a bugfix request.
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to
@@ -9434,6 +9696,19 @@ because this ledger is where the honesty lives:
    `taming.md` §7 and `animal_husbandry.md` now carry the correction and name
    the loot rows as a prerequisite; see the neglect entry under Animal Husbandry
    above.
+
+- **Rivers: the boulder's shore band, not a halo** (small) — ✅ Done —
+  reported against the boulder ring introduced earlier: "The rocks should
+  not have a halo around them... instead they should have a layered band
+  like the shore which also wobbles and moves." The ring's reach was
+  already right; what filled it was one flat, static colour. Now the
+  fragment's own position inside the ring is nudged by the channel's own
+  advected field and quantised by the same dither hash the channel body's
+  cel bands use, stepping through `BOULDER_BAND_LEVELS` (3) layers between
+  the shore highlight's tint and the channel's own shallowest water tone
+  — so a boulder's shore band animates and reads in the same palette as
+  the river's real shore, rather than a static ring of its own. See
+  `concept/rivers.md`'s "The boulder's shore band, not a halo".
 
 ## Reality check
 

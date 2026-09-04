@@ -147,6 +147,33 @@ func wind_strength_for(weather: String) -> float:
 			return 1.0
 
 
+## How hard the wind blows for DISPERSAL purposes, 0 dead calm to 1 gale (see
+## WindDispersal.landing_offset's `strength`).
+##
+## A second reading of the same sky, because wind_strength_for above is a
+## shader PACE multiplier -- 1.0 is its baseline, not its calm -- and feeding
+## that straight to a dispersal kernel would put every seed at or beyond a
+## gale. Kept ordered identically to it by test (see test_wind_dispersal.gd),
+## so the two can never drift into disagreeing about which day is windier.
+##
+## Clear deliberately keeps a real breeze rather than going to zero, for the
+## same reason soil_moisture does: clear is half of all weather rolls (see
+## CLEAR_THRESHOLD), and at strength 0 the whole downwind term is multiplied
+## away, so for half the world's time a meadow would spread as a circle --
+## exactly the isotropic behaviour the wind model exists to replace.
+## Unrecognized states fall back to that breeze.
+func dispersal_strength_for(weather: String) -> float:
+	match weather:
+		"cloudy":
+			return 0.45
+		"rain":
+			return 0.7
+		"storm":
+			return 1.0
+		_:
+			return 0.25
+
+
 ## ## Which way the wind blows
 ##
 ## Varies day to day rather than being a fixed prevailing wind: one that never
@@ -165,11 +192,54 @@ func wind_strength_for(weather: String) -> float:
 const WIND_TURN_PER_DAY := 0.9
 
 
+## ## The prevailing wind
+##
+## The day's wind walks; this is the point it walks AROUND -- the long-run
+## wind a region's landscape was shaped by.
+##
+## Worldgen needs one, and the daily walk cannot supply it. A baked meadow is
+## what the wind has ALREADY done by the time the player arrives (see
+## concept/flora.md#the-meadow-you-arrive-to-is-what-the-wind-already-did),
+## and "what the wind already did" is a climate, not one particular Tuesday.
+##
+## It also fixes a real defect in the walk below, which used to start from
+## angle 0 for every region on earth: on day one the wind blew due east across
+## the entire world, and only regional divergence over subsequent days hid it.
+## The walk now starts here instead, so two regions differ from the first day.
+##
+## Sampled at PixelNoise coordinates distinct from the walk's own (83), so a
+## region's climate and its daily weather vary independently.
+func prevailing_wind_angle(region_seed: int) -> float:
+	return PixelNoise.range_value(region_seed, 61, 67, 0.0, TAU)
+
+
+func prevailing_wind_direction(region_seed: int) -> Vector2:
+	return Vector2.from_angle(prevailing_wind_angle(region_seed))
+
+
+## How hard a region's prevailing wind blows, on the same 0-calm-to-1-gale
+## scale as dispersal_strength_for.
+##
+## Banded rather than free: a region at 0 could never lean its meadows
+## anywhere (the downwind term would be multiplied away for good), and one at
+## 1 would be a permanent gale. Some ground is windier than other ground; none
+## of it is airless and none of it is a storm forever.
+const PREVAILING_STRENGTH_MIN := 0.35
+const PREVAILING_STRENGTH_MAX := 0.85
+
+
+func prevailing_wind_strength(region_seed: int) -> float:
+	return PixelNoise.range_value(
+		region_seed, 59, 71, PREVAILING_STRENGTH_MIN, PREVAILING_STRENGTH_MAX
+	)
+
+
 func wind_direction_for(day: int, region_seed: int) -> Vector2:
 	# A slow walk rather than an independent roll per day: weather turns, it
 	# does not teleport, and a seed shed on consecutive days should mostly go
-	# the same way.
-	var walk := 0.0
+	# the same way. It walks from the region's own prevailing wind rather than
+	# from a shared zero -- see prevailing_wind_angle.
+	var walk := prevailing_wind_angle(region_seed)
 	for step in maxi(day, 0) + 1:
 		var turn := float(PixelNoise.range_index(region_seed + step, 83, 0, 2001)) / 1000.0 - 1.0
 		walk += turn * WIND_TURN_PER_DAY

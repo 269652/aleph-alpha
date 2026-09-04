@@ -95,7 +95,7 @@ func test_advance_bites_repeatedly_across_multiple_intervals():
 # circling flies as a sign something worth investigating is there, so a
 # decomposer should be measurably more likely to path toward a fly-blown
 # carcass than an equally-close fresh one. Pure and static: no target
-# selection happens here, only the score DecomposerMarker._nearest_carrion
+# selection happens here, only the score DecomposerMarker._nearest_food
 # picks the smallest of.
 
 func test_effective_distance_equals_real_distance_with_no_flies():
