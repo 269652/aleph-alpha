@@ -73,6 +73,30 @@ That makes clearing a patch the way a player deliberately starts a wood, and it
 makes the trampled dirt of a path (see `PathScarring`, which already renders
 worn tiles as earth) a nursery rather than merely a scar.
 
+**Landing is not establishing.** The seed shadow and the standing plants are
+two different distributions, and conflating them is what makes a modelled
+meadow read as a mat rather than as a meadow. Seed rain is densest directly
+under the parent; *survival* there is close to nil — the seedling is
+competing with an established root system for the same water and light, it
+sits in the highest concentration of that plant's own pathogens, and it is
+precisely where that plant's seed predators are already working. Only seed
+that escapes the parent's neighbourhood becomes a plant (the **Janzen–Connell**
+effect). So the kernel above stays heavy tailed and honest, and a separate,
+explicit **establishment** gate decides which of that seed actually roots:
+nothing takes within a minimum spacing of an already-standing plant of its
+kind (`FlowerEstablishment`). That gate is what sets how far apart plants
+stand; the kernel sets where the clumps are and which way they are drawn out.
+
+**The world you arrive to has already dispersed.** Baked worldgen is not
+exempt from any of this. A newly generated meadow is produced by running this
+same kernel from sparse founder plants under the region's **prevailing wind**
+(`WeatherModel.prevailing_wind_direction`, the long-run wind rather than one
+day's), through the same establishment gate, in world space so it crosses
+chunk boundaries — see [flora.md](flora.md#the-meadow-you-arrive-to-is-what-the-wind-already-did).
+A world whose whole dispersal story is "light seed goes downwind" must not
+*start* isotropic and only become windswept for a player who stands and
+watches.
+
 **Rooting.** A seed on the ground is still a seed: it can be eaten, blown
 further, or picked up. **Rain is what roots it.** Once rooted it is a sapling,
 and a sapling is no longer food -- a bird that would have eaten the seed leaves
