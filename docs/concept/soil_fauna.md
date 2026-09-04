@@ -246,14 +246,16 @@ watched the bird peck at them.
 - ⬜ Worm population dynamics / bird carrying capacity from worm density.
 - ⬜ Persistence and catch-up integration of eaten burrows (deliberate, above).
 - ✅ Ants (mound population + myrmecochory, both grassland grass-seed AND
-  forest/rainforest windfall fruit/nut foraging) — `src/world/ant_colony.gd`
-  / `EarthChunkManager.step_ants`, see "Ants: myrmecochory" below. This
-  closes the placement half of the "other soil fauna" item above, AND the
-  "forest/rainforest mound has nothing to harvest" gap this doc used to name
-  (fixed 2026-08-26, see "Windfall foraging" in that section). The rest of
-  the original item (a rendered presence, and ants as prey or as
-  non-windfall detritivores) is still open, see that section's own scope
-  note.
+  forest/rainforest windfall fruit/nut foraging, AND a real rendered
+  presence) — `src/world/ant_colony.gd` / `EarthChunkManager.step_ants`,
+  see "Ants: myrmecochory" below. This closes the placement half of the
+  "other soil fauna" item above, the "forest/rainforest mound has nothing to
+  harvest" gap this doc used to name (fixed 2026-08-26, see "Windfall
+  foraging" in that section), and the "no rendered ant or mound sprite" gap
+  (fixed 2026-09-04 — reported live: ants "should be a real gear in the
+  ecosystem", see "Rendered presence" in that section). What's left of the
+  original item (ants as prey, or as non-windfall detritivores) is still
+  open, see that section's own scope note.
 - ⬜ Insect larvae, snails, and any other soil fauna beyond ants — the table
   and the patch-sim contract extend to them the same way ants did, nothing
   else is needed structurally, but nothing has built one yet.
@@ -361,10 +363,18 @@ itself is pinned below `SeedDispersal`/`SeedEndozoochory`:
 4. `AntColony` (this): 0.15 – 0.9 tiles — shorter than even `SeedCaching`'s
    own minimum, the shortest-range disperser of the whole family.
 
-There is no individual ant walking that distance over time the way the
-mouse's carried state does: a mound is a background population effect, not
-a pathfinding creature, so the harvest and the cache resolve in the same
-step (`EarthChunkManager._forage_seed_near_mound`).
+The RESOLUTION still has no individual ant walking that distance over time
+the way the mouse's carried state does: a mound is a background population
+effect, not a pathfinding creature, so the harvest and the cache resolve
+completely in the same step (`EarthChunkManager._forage_seed_near_mound`) --
+this has not changed, and is not something the visual below changes either.
+What changed (2026-09-04, see "Rendered presence" below): a purely
+decorative `AntForagerMarker` now spawns right after that instant
+resolution and visibly WALKS the same mound -> pickup -> cache geometry
+over real time, so a player can actually see what already happened rather
+than it resolving invisibly in the background. It carries no state the
+resolution depends on -- deleting it changes nothing about correctness,
+only what is visible.
 
 **Windfall foraging (forest/rainforest).** `EarthChunkManager.step_ants`
 branches on the MOUND's own biome (a chunk can straddle a boundary, so
@@ -393,11 +403,23 @@ not just a placement fact.
 
 ### What is explicitly NOT in this pass
 
-- **No rendered ant or mound sprite.** Mounds are a pure simulation effect
-  this pass — real, and driving the world (a seed genuinely disappears and
-  a new grass patch genuinely appears), but nothing draws them. The
-  earthworm/robin pair went through exactly this same "logic first, sprite
-  later" split; ants stop at the logic half for now.
+- **Rendered presence (2026-09-04).** Every mound now has a real,
+  always-visible `AntMoundMarker` (`ProceduralAntMoundSprite` — a small
+  dirt dome with a dark entrance hole, same offline procedural style as
+  `ProceduralSoilSprite`/`ProceduralDecomposerSprite`), spawned/freed with
+  its chunk exactly like every other per-chunk marker here. Every real,
+  successful forage (grass-seed OR windfall) additionally spawns a
+  short-lived, purely decorative `AntForagerMarker` — reusing
+  `ProceduralDecomposerSprite`'s existing "ant" silhouette rather than a
+  new design — that visibly walks mound → pickup → cache (or mound → pickup
+  only, if the windfall was eaten outright) before freeing itself. Capped
+  at one forager in flight per mound (`EarthChunkManager.
+  _active_ant_foragers`): `AntColony.FORAGE_CHANCE` can succeed several
+  times a SECOND per mound at normal frame rate, and a new visible ant for
+  every single one would read as an overlapping-sprite flicker, not a
+  colony that reads as alive. The earthworm/robin pair went through exactly
+  this same "logic first, sprite later" split when it was built; ants have
+  now completed both halves.
 - **Ants are not bird prey.** `FlyerDiet` is not extended with an insect
   food type here — a real robin or sparrow eating ants at a mound would be
   a genuine, well-grounded follow-on (the same insectivore mechanism this

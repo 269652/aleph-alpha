@@ -6745,9 +6745,54 @@ state had never once been set by anything in `src/`.
   [soil_fauna.md](concept/soil_fauna.md#ants-myrmecochory)'s "Windfall
   foraging" note for the full spec. Explicitly still out of scope, and named
   as real follow-ups rather than silently dropped: a rendered mound/ant
-  sprite, ants as bird prey (a `FlyerDiet` extension), and ants as
-  carrion/corpse-rot detritivores (`fly_colony.gd` integration, distinct
-  from the windfall foraging above) — see that doc section's own scope note.
+  sprite (**fixed 2026-09-04, see next entry**), ants as bird prey (a
+  `FlyerDiet` extension), and ants as carrion/corpse-rot detritivores
+  (`fly_colony.gd` integration, distinct from the windfall foraging above)
+  — see that doc section's own scope note.
+- **Ants: rendered mound + traveling forager visuals** (medium) — ✅ Done —
+  reported live: "make ant colonies visible and functional" (the resolution
+  itself was ALREADY functional — see the entry above, `step_ants` already
+  moves real seeds/nuts every frame — the actual gap was that none of it
+  had ever been visible). Two new marker types:
+  1. `AntMoundMarker`/`ProceduralAntMoundSprite` — a small, always-visible
+     dirt-dome mound with an offset dark entrance hole (distinguishing it
+     from a plain `ProceduralSoilSprite` tilled patch), one per real
+     `AntColony.mound_cells()` entry, spawned/freed with its chunk exactly
+     like every other per-chunk marker dictionary in `EarthChunkManager`.
+     Own `MOUND_WORLD_SCALE` (never left unscaled — the exact "gigantic"
+     failure class the ant/bug decomposer sprite and `ProceduralItemSprite`
+     both already hit once each).
+  2. `AntForagerMarker` — a purely decorative, one-shot visual spawned
+     right after a real, successful forage (`_spawn_ant_forager_visual`,
+     called from both `_forage_seed_near_mound` and
+     `_forage_windfall_near_mound`), which walks mound → pickup → cache (or
+     mound → pickup only, if a windfall nut was eaten outright) using
+     `position.move_toward(...)`, not unclamped `+= direction * speed *
+     delta` — the exact overshoot-and-orbit-forever bug
+     `DecomposerMarker._step_approaching` hit earlier this session, avoided
+     here from the start rather than re-earned. Reuses
+     `ProceduralDecomposerSprite`'s existing "ant" silhouette rather than a
+     new design. Carries no state the real resolution depends on — it is
+     spawned strictly AFTER the actual seed/nut take and replant already
+     happened, so deleting this marker entirely would change nothing about
+     correctness, only what is visible.
+  Capped at one forager in flight per mound
+  (`EarthChunkManager._active_ant_foragers`, keyed by the mound's global
+  tile): `AntColony.FORAGE_CHANCE` can succeed several times a SECOND per
+  mound at normal frame rate (`step_ants` runs once a real frame, not
+  throttled), and a new visible ant for every single success would read as
+  an overlapping-sprite flicker rather than a colony that reads as alive.
+  26/26 new tests green across three files
+  (`test_procedural_ant_mound_sprite.gd`, `test_ant_mound_marker.gd`,
+  `test_ant_forager_marker.gd`) plus 4 new integration tests in
+  `test_earth_chunk_manager.gd` (marker spawn/evict count exactly matches
+  real `mound_cells()`; a real grass-seed forage spawns a real forager; the
+  one-active-forager-per-mound cap holds). See
+  [soil_fauna.md](concept/soil_fauna.md#ants-myrmecochory)'s "Rendered
+  presence" note for the full spec. Deliberately NOT attempted here (named,
+  not silently dropped): ants as bird prey and ants as carrion detritivores
+  remain exactly as scoped in the entry above — this pass is rendering
+  only, it does not touch what a mound forages or how.
 
 ### Flora (`concept/flora.md`)
 

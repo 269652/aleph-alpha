@@ -1,6 +1,7 @@
 extends GutTest
 
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+const AntColony = preload("res://src/world/ant_colony.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
 const TreePlacement = preload("res://src/world/tree_placement.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
@@ -5489,6 +5490,87 @@ func test_evicting_old_chunks_frees_decomposer_markers():
 	manager.update(far_away_tile)
 
 	assert_false(manager._decomposer_markers.has(old_chunk))
+
+
+# -- ant colonies: visible mounds + traveling foragers (see docs/concept/
+# soil_fauna.md "Ants: myrmecochory", AntColony) -- previously a pure
+# background population effect with zero rendered presence at all (reported
+# live: "ants should be a real gear in the ecosystem"). -----------------
+
+## Unlike decomposers (a GUARANTEED min count per land-biome chunk), mound
+## placement is genuinely probabilistic per cell (AntColony.MOUND_CHANCE) --
+## Berlin's own chunk is not guaranteed a nonzero count. The real invariant
+## worth pinning is that the rendered marker count always exactly matches
+## the real mound_cells() count, whatever that happens to be.
+func test_update_spawns_a_visible_marker_for_every_real_ant_mound_around_berlin():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var colony: AntColony = manager._ant_colonies[center_chunk]
+	assert_true(manager._ant_mound_markers.has(center_chunk))
+	assert_eq(manager._ant_mound_markers[center_chunk].size(), colony.mound_cells().size())
+
+
+func test_evicting_old_chunks_frees_ant_mound_markers():
+	manager.update(Vector2i(0, 0))
+	var old_chunk := _chunk_coord_for_tile(Vector2i(0, 0))
+	assert_true(manager._ant_mound_markers.has(old_chunk), "precondition: the old chunk had a mound-marker entry")
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+
+	assert_false(manager._ant_mound_markers.has(old_chunk))
+
+
+## The actual seed-take/replant already happened and is independently real
+## (see test_take_grass_seed_at_removes_it_and_returns_true and friends
+## above) -- this proves the SEPARATE, purely decorative visual half fires
+## alongside it. A synthetic mound cell placed directly on top of a real
+## shed seed (rather than hoping a real AntColony mound happened to roll
+## next to one) keeps this deterministic regardless of mound placement.
+func test_a_successful_grass_seed_forage_spawns_a_visible_forager():
+	manager.update(_berlin_tile)
+	for i in 40:
+		manager.step_tall_grass(EarthChunkManager.GRASS_REFRESH_INTERVAL)
+	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var seeds: Array = manager.grass_seeds_near(centre, 40)
+	assert_gt(seeds.size(), 0, "precondition: a real shed seed exists to forage")
+	var seed_position: Vector2 = seeds[0]["position"]
+
+	var seed_tile := manager._world_tile_for_pixel(seed_position)
+	var chunk_coord := manager._chunk_coord_for_tile(seed_tile)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE
+	var cell: Vector2i = seed_tile - origin
+	var colony: AntColony = manager._ant_colonies[chunk_coord]
+	var global_tile := origin + cell
+
+	var before_children := manager._entities_parent.get_child_count()
+	manager._forage_seed_near_mound(colony, origin, cell)
+
+	assert_gt(
+		manager._entities_parent.get_child_count(), before_children,
+		"a real, successful forage should spawn a visible forager sprite"
+	)
+	assert_true(manager._active_ant_foragers.has(global_tile))
+
+
+## AntColony.FORAGE_CHANCE can succeed several times a second per mound at
+## normal frame rate (see _spawn_ant_forager_visual's own doc comment) -- a
+## new visible ant for every single one would be a flicker of overlapping
+## sprites, not a colony reading as alive.
+func test_does_not_spawn_a_second_forager_for_a_mound_that_already_has_one_out():
+	manager.update(_berlin_tile)
+	var global_tile := Vector2i(123_456, 123_456)  # arbitrary -- does not need to be a real mound
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var before := manager._entities_parent.get_child_count()
+
+	manager._spawn_ant_forager_visual(global_tile, mound_pixel, [mound_pixel + Vector2(10, 0)])
+	assert_eq(manager._entities_parent.get_child_count(), before + 1, "precondition: the first spawn landed")
+
+	manager._spawn_ant_forager_visual(global_tile, mound_pixel, [mound_pixel + Vector2(-10, 0)])
+	assert_eq(
+		manager._entities_parent.get_child_count(), before + 1,
+		"a second forager for the same mound should not spawn while the first is still out"
+	)
 
 
 # -- Sägewerk: "an NPC moves in" the moment the worksite exists (see

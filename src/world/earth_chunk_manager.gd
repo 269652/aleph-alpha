@@ -61,6 +61,8 @@ const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sp
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
+const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
+const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
@@ -600,9 +602,22 @@ var _worm_patches: Dictionary = {}
 var _worm_sprites: Dictionary = {}
 var _worm_sprite_generator := ProceduralWormSprite.new()
 ## Vector2i chunk_coord -> AntColony (see step_ants, docs/concept/soil_fauna.md
-## "Ants"). No sprite dictionary alongside it -- ants are not rendered this
-## pass (see AntColony's own doc comment on scope).
+## "Ants").
 var _ant_colonies: Dictionary = {}
+## Vector2i chunk_coord -> Array[AntMoundMarker] -- the visible counterpart
+## to _ant_colonies' own mound_cells(), one static marker per mound, spawned
+## alongside the colony and freed with its chunk exactly like every other
+## per-chunk marker dictionary here.
+var _ant_mound_markers: Dictionary = {}
+## Vector2i GLOBAL mound tile -> AntForagerMarker currently walking that
+## mound's harvest -> cache path, or absent/freed once it's done. Caps each
+## mound to at most one visible forager in flight at a time (see
+## _spawn_ant_forager_visual) -- AntColony.FORAGE_CHANCE can succeed several
+## times a second per mound at normal frame rate, and a visible ant for
+## every single one of those would be a swarm flicker, not a colony reading
+## as alive. Keyed globally (not per-chunk) since a mound's own identity
+## (chunk_coord*CHUNK_SIZE + cell) is already a stable global tile.
+var _active_ant_foragers: Dictionary = {}
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_ambient_flyers: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
@@ -6463,6 +6478,7 @@ func _forage_seed_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i
 	var direction: Vector2 = AntColony.carry_direction(carrier_seed)
 	var target := nearest_position + direction * carry_tiles * float(TerrainRenderer.TILE_SIZE)
 	plant_grass_at(target)
+	_spawn_ant_forager_visual(origin + cell, mound_pixel, [nearest_position, target])
 
 
 ## One mound's forager in a forest/rainforest chunk: TallGrass never grows
@@ -6509,12 +6525,42 @@ func _forage_windfall_near_mound(colony: AntColony, origin: Vector2i, cell: Vect
 	if eaten_species == "":
 		return
 	if AntColony.windfall_is_consumed(colony.windfall_carrier_seed_for(cell)):
+		# Eaten on the spot -- the forager's visible trip ends at the nut
+		# itself, never reaches a cache leg (there is none).
+		_spawn_ant_forager_visual(origin + cell, mound_pixel, [nearest_position])
 		return
 	var carrier_seed := colony.carrier_seed_for(cell)
 	var carry_tiles := AntColony.carry_distance_tiles(carrier_seed)
 	var direction: Vector2 = AntColony.carry_direction(carrier_seed)
 	var target := nearest_position + direction * carry_tiles * float(TerrainRenderer.TILE_SIZE)
 	try_plant_seed_at(target, eaten_species)
+	_spawn_ant_forager_visual(origin + cell, mound_pixel, [nearest_position, target])
+
+
+## The purely decorative visual half of a real, already-resolved forage (see
+## _forage_seed_near_mound/_forage_windfall_near_mound -- by the time this is
+## called, the actual seed/nut has already been taken and, if applicable,
+## replanted; nothing here can change that outcome). Caps each mound
+## (`global_tile`) to one forager in flight at a time via
+## _active_ant_foragers -- AntColony.FORAGE_CHANCE can succeed several times
+## a second per mound at normal frame rate, and a new visible ant for every
+## single one would be a flicker of overlapping sprites, not a colony
+## reading as alive. `rest_of_path` is everything after the mound itself:
+## [pickup] if the find was eaten on the spot, [pickup, cache] if it was
+## carried on.
+func _spawn_ant_forager_visual(global_tile: Vector2i, mound_pixel: Vector2, rest_of_path: Array) -> void:
+	if _entities_parent == null:
+		return
+	var existing = _active_ant_foragers.get(global_tile)
+	if existing != null and is_instance_valid(existing) and not existing.is_queued_for_deletion():
+		return
+	var forager := AntForagerMarker.new()
+	var path: Array = [mound_pixel]
+	path.append_array(rest_of_path)
+	forager.path = path
+	forager.position = mound_pixel
+	_entities_parent.add_child(forager)
+	_active_ant_foragers[global_tile] = forager
 
 
 ## Inches every surfaced worm along, every frame. A worm at the surface is
@@ -8461,11 +8507,28 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	)
 	_worm_sprites[chunk_coord] = {}
 
-	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants"). Not
-	# rendered this pass -- see AntColony's own doc comment on scope.
+	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants"). Placed
+	# once at chunk creation -- mound_cells() never changes for a loaded
+	# chunk's lifetime, exactly like the earthworm burrows just above.
 	_ant_colonies[chunk_coord] = AntColony.new(
 		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
 	)
+	# The visible counterpart: one static AntMoundMarker per mound cell, so a
+	# colony is actually somewhere a player can SEE rather than a pure
+	# background number (reported live: ants "should be a real gear in the
+	# ecosystem"). Placed at the mound's own tile centre, the same
+	# cell-to-pixel convention _forage_seed_near_mound uses for its own
+	# mound_pixel.
+	var mound_markers: Array = []
+	for mound_cell in _ant_colonies[chunk_coord].mound_cells():
+		var marker := AntMoundMarker.new()
+		marker.position = Vector2(
+			float(chunk_coord.x * CHUNK_SIZE + mound_cell.x) + 0.5,
+			float(chunk_coord.y * CHUNK_SIZE + mound_cell.y) + 0.5
+		) * float(TerrainRenderer.TILE_SIZE)
+		_entities_parent.add_child(marker)
+		mound_markers.append(marker)
+	_ant_mound_markers[chunk_coord] = mound_markers
 
 	_ecosystem.add_region(chunk_coord, chunk)
 	# Robin/sparrow's food-density signal (worm burrows, ground seed cells)
@@ -8994,6 +9057,9 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	_worm_patches.erase(chunk_coord)
 
 	_ant_colonies.erase(chunk_coord)
+	for marker in _ant_mound_markers.get(chunk_coord, []):
+		marker.free()
+	_ant_mound_markers.erase(chunk_coord)
 
 	# Snapshot the aggregate ecology before dropping the region, so revisiting
 	# this chunk catch-up integrates from where it left off (see
