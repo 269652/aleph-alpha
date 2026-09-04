@@ -4967,15 +4967,23 @@ func test_a_grazers_dispersed_flower_seed_plants_the_same_species_it_picked_up()
 			break
 	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
 	var patch: FlowerPatch = manager._flower_patches[chunk_coord]
-	# An empty grassland cell distinct from the pickup spot, so a match below
-	# proves the RESOLVED planting actually names the picked-up species,
-	# rather than trivially re-reading the original bloom, which was never
-	# disturbed.
+	# A grassland cell distinct from the pickup spot where a seed can actually
+	# take, so a match below proves the RESOLVED planting actually names the
+	# picked-up species, rather than trivially re-reading the original bloom,
+	# which was never disturbed.
+	#
+	# "Empty" is not enough any more: a seed dropped in an established plant's
+	# shade is outcompeted before it is a plant (FlowerEstablishment), so a
+	# cell that merely has no flower ON it can still refuse one. This is the
+	# same clearance FlowerPatch.plant itself applies -- the test has to pick a
+	# spot the rule allows, not assert the rule away.
 	var drop_cell := Vector2i(-1, -1)
 	for y in EarthChunkManager.CHUNK_SIZE:
 		for x in EarthChunkManager.CHUNK_SIZE:
 			var cell := Vector2i(x, y)
-			if not patch.has_flower(cell) and manager.biome_at_global(
+			if not FlowerEstablishment.is_clear(cell, patch.get_flower_cells()):
+				continue
+			if manager.biome_at_global(
 				(chunk_coord.x * EarthChunkManager.CHUNK_SIZE) + x,
 				(chunk_coord.y * EarthChunkManager.CHUNK_SIZE) + y
 			) == "grassland":
@@ -4983,7 +4991,10 @@ func test_a_grazers_dispersed_flower_seed_plants_the_same_species_it_picked_up()
 				break
 		if drop_cell != Vector2i(-1, -1):
 			break
-	assert_ne(drop_cell, Vector2i(-1, -1), "precondition: a second empty grassland cell exists to drop into")
+	assert_ne(
+		drop_cell, Vector2i(-1, -1),
+		"precondition: a second grassland cell clear of the meadow exists to drop into"
+	)
 	var horse := manager._creature_renderer.spawn_single(
 		creatures_parent, "horse", pickup_at, manager, TerrainRenderer.TILE_SIZE
 	)
