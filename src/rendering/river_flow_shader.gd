@@ -142,6 +142,9 @@ uniform float wader_wake_trail = 0.8;
 
 // Continuous downstream travel, px/s per m/s of real current.
 uniform float drift_px_per_mps = 9.0;
+// How fast the standing eddies migrate downstream, as a fraction of the
+// surface's own drift. 0 is the old fully bed-anchored bend.
+uniform float bend_drift_fraction = 0.4;
 // The real-speed threshold above which strokes brighten (m/s).
 uniform float fast_flow_m_s = 0.6;
 uniform float still_flow_m_s = 0.02;
@@ -569,7 +572,21 @@ void fragment() {
 	//
 	// Two octaves: the coarse one swings whole bundles of lines, the fine
 	// one puts kinks WITHIN a line's own length.
-	vec2 eddy_p = p * eddy_scale;
+	// THE EDDIES MIGRATE DOWNSTREAM, slowly. A bed-anchored bend was the
+	// right call while the whirl only reached the strokes through the
+	// noise; with the whirl now IN the guide, a fully static bend left the
+	// lines standing still and only the small wobble texture moved over
+	// them ("make the water move with the flow so it looks like a flowing
+	// stream"). Real boils shed from bedforms and migrate more slowly than
+	// the surface -- Jackson 1976 has them quasi-stationary, not fixed --
+	// so the eddy sample coordinate drifts at bend_drift_fraction of the
+	// surface's drift, in still water not at all.
+	//
+	// This is a TRANSLATION of the bend field, so it cannot change the
+	// fold Jacobian: test_the_fold_margin_survives_the_eddy_drift holds
+	// the 0.35 margin at a real drifted offset.
+	float bend_drift = TIME * drift_px_per_mps * speed_mps * noise_scale * bend_drift_fraction;
+	vec2 eddy_p = (p - flow_dir * bend_drift) * eddy_scale;
 	// Shear lives at the banks: real eddies shed where the fast core
 	// meets the slow margin, so the standing turbulence grows from the
 	// centreline (|across| 0) toward the waterline (|across| 1) by
@@ -1038,6 +1055,12 @@ const HALF_WIDTH_PX := 32.0
 ## linear in the reach's solved speed, pinned by drift tests.
 const DRIFT_PX_PER_MPS := 9.0
 
+## How fast the standing eddies migrate downstream, as a fraction of the
+## surface drift above. Boils lag the water over them; 0.4 reads as the
+## whirls being carried along without the lines simply sliding as a
+## rigid sheet. Pinned by test_the_bend_drifts_downstream_with_the_current.
+const BEND_DRIFT_FRACTION := 0.4
+
 ## The organic smoothing jitter: swing (in across-fraction units, capped
 ## near one across-bin step by test -- it masks the per-tile quantisation,
 ## never reshapes the channel) and the wavelength of the world-anchored
@@ -1077,7 +1100,7 @@ const WOBBLE_REFERENCE_CELLS := 2.56
 ## were their fragments. 0.12 puts the ratio at 0.46 (bar 0.5). The whirl
 ## that 0.6 was carrying now enters through the guide instead, where it
 ## cannot fold; see the s_field line.
-const LINE_WOBBLE := 0.13
+const LINE_WOBBLE := 0.17
 const LINE_WIDTH := 0.03
 const LINE_STRENGTH := 0.7
 const LINE_COLOR := Color(0.85, 0.97, 1.0)
@@ -1181,6 +1204,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("line_count", LINE_COUNT)
 	material.set_shader_parameter("across_line_scale", ACROSS_LINE_SCALE)
 	material.set_shader_parameter("line_wobble", LINE_WOBBLE)
+	material.set_shader_parameter("bend_drift_fraction", BEND_DRIFT_FRACTION)
 	material.set_shader_parameter("wobble_reference_cells", WOBBLE_REFERENCE_CELLS)
 	material.set_shader_parameter("line_width", LINE_WIDTH)
 	material.set_shader_parameter("line_strength", LINE_STRENGTH)
@@ -1628,7 +1652,12 @@ static func animated_field_value(
 	px: float, py: float, dir: Vector2, time_seconds: float, speed_mps := 0.0
 ) -> float:
 	var perp := Vector2(-dir.y, dir.x)
-	var b := bend_displacement(px * EDDY_SCALE, py * EDDY_SCALE)
+	# The eddies drift downstream at a fraction of the surface's drift --
+	# a translation of where the bend is read, exactly as the shader does.
+	var bend_shift := bend_drift_cells(speed_mps, time_seconds)
+	var b := bend_displacement(
+		(px - dir.x * bend_shift) * EDDY_SCALE, (py - dir.y * bend_shift) * EDDY_SCALE
+	)
 	var qx := px + perp.x * b
 	var qy := py + perp.y * b
 	var phase_a := fposmod(time_seconds * ADVECT_RATE, 1.0)
@@ -1646,6 +1675,13 @@ static func animated_field_value(
 ## water does not loop back.
 static func drift_cells(speed_mps: float, seconds: float) -> float:
 	return DRIFT_PX_PER_MPS * speed_mps * seconds * NOISE_SCALE
+
+
+## How far the standing eddies have migrated downstream, in noise cells:
+## BEND_DRIFT_FRACTION of the surface's own drift, so they lag the water
+## over them. Zero in still water.
+static func bend_drift_cells(speed_mps: float, seconds: float) -> float:
+	return drift_cells(speed_mps, seconds) * BEND_DRIFT_FRACTION
 
 
 ## Mean absolute change in the field over a step of `distance`, taken either

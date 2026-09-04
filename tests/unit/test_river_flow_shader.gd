@@ -593,14 +593,25 @@ func test_the_warped_field_still_forms_lines():
 	)
 
 
-## Structural: the bend is anchored to the bed. It must be computed from the
-## UNADVECTED coordinates (along_raw), and the warped across must feed both
-## phase samples -- that is what makes the water deform as it streams
-## through the standing eddies.
+## Structural: the bend is NOT carried with the water. It used to be read at
+## fully bed-anchored coordinates; it now drifts downstream at a FRACTION of
+## the surface drift ("make the water move with the flow"), but it must
+## never take the advect phase and must always lag the surface -- that is
+## what makes the water deform as it streams THROUGH the eddies rather than
+## the whole picture sliding as one sheet. The warped across must still
+## feed both phase samples.
 func test_the_bend_is_anchored_to_the_bed_not_carried_with_the_water():
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("p * eddy_scale"),
-		"the eddy field must be sampled at unadvected world coordinates"
+		RiverFlowShader.SHADER_CODE.contains("vec2 eddy_p = (p - flow_dir * bend_drift) * eddy_scale;"),
+		"the eddy field is sampled at a slowly drifted, never advected, coordinate"
+	)
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("eddy_p = (q"),
+		"the eddies must not ride the advected surface coordinate"
+	)
+	assert_lt(
+		RiverFlowShader.BEND_DRIFT_FRACTION, 1.0,
+		"the eddies must lag the surface, or the water slides as a rigid sheet"
 	)
 	assert_true(
 		RiverFlowShader.SHADER_CODE.contains("vec2 q = p + flow_perp * bend;"),
@@ -2324,7 +2335,14 @@ func test_the_debug_view_draws_contours_of_the_across_field_alone():
 #
 # 1.5 is the steepest slope of smoothstep-faded value noise per cell.
 const VALUE_NOISE_MAX_SLOPE := 1.5
-const MAX_WOBBLE_GRADIENT_RATIO := 0.5
+## 0.7, RAISED from 0.5 for "slightly increase wobble so it looks more
+## watery". LINE_WOBBLE 0.17 puts the ratio at 0.65. The bar was 0.5 out
+## of caution about the bend and the obstacle pushes stacking on top; with
+## the bend now in the guide (fold margin 0.35) the wobble is the only
+## term that can fold the field, and tools/probe_monotone.gd walking the
+## real field at 0.17 is the measurement that admits it -- see the commit
+## that set it for the numbers. Above about 0.8 the cells come back.
+const MAX_WOBBLE_GRADIENT_RATIO := 0.7
 
 
 ## The noise term's steepest gradient as a fraction of the across ramp's,
@@ -2351,3 +2369,101 @@ func test_the_wobble_gradient_stays_well_under_the_across_gradient_at_every_widt
 				half_tiles, ratio
 			]
 		)
+
+
+# -- the eddies migrate downstream --------------------------------------------
+#
+# "Make the water move with the flow so it looks like a flowing stream."
+# With the whirl moved into the guide, a bed-anchored bend left the lines
+# standing still: the only temporal motion was the small wobble texture
+# advecting over them. Real boils shed from bedforms and migrate downstream
+# more slowly than the surface -- Jackson 1976 has them quasi-stationary,
+# not fixed. So the eddy field now drifts at BEND_DRIFT_FRACTION of the
+# surface's own drift.
+#
+# This is a TRANSLATION of the bend field. A translation cannot change the
+# fold Jacobian, so the margin holds at every offset -- pinned below at a
+# real drifted offset rather than trusted from the algebra.
+
+
+func test_the_bend_drifts_downstream_with_the_current():
+	assert_between(RiverFlowShader.BEND_DRIFT_FRACTION, 0.1, 1.0)
+	assert_almost_eq(
+		RiverFlowShader.bend_drift_cells(0.0, 30.0), 0.0, 1e-9,
+		"still water: the eddies hold station"
+	)
+	var moved: float = RiverFlowShader.bend_drift_cells(1.0, 10.0)
+	assert_gt(moved, 0.0)
+	assert_almost_eq(
+		moved,
+		RiverFlowShader.drift_cells(1.0, 10.0) * RiverFlowShader.BEND_DRIFT_FRACTION,
+		1e-9
+	)
+	assert_lt(
+		moved, RiverFlowShader.drift_cells(1.0, 10.0),
+		"the eddies lag the surface -- boils migrate slower than the water over them"
+	)
+
+
+func test_the_eddy_field_itself_moves_in_flowing_water_and_not_in_still():
+	# The wobble's own advection is excluded here on purpose: this reads the
+	# bend at its drifted coordinate directly, so it can only pass if the
+	# EDDIES moved, not merely the texture drawn over them.
+	var dir := Vector2(1, 0)
+	var still_change := 0.0
+	var flow_change := 0.0
+	for i in 40:
+		var x := 2.0 + float(i) * 0.9
+		var y := 3.3
+		still_change += absf(_drifted_bend(x, y, dir, 6.0, 0.0) - _drifted_bend(x, y, dir, 0.0, 0.0))
+		flow_change += absf(_drifted_bend(x, y, dir, 6.0, 1.0) - _drifted_bend(x, y, dir, 0.0, 1.0))
+	assert_almost_eq(still_change, 0.0, 1e-9, "still water: eddies hold station")
+	assert_gt(flow_change, 0.5, "flowing water: the eddies must have migrated (moved %.4f)" % flow_change)
+
+
+func _drifted_bend(x: float, y: float, dir: Vector2, seconds: float, speed_mps: float) -> float:
+	var shift: float = RiverFlowShader.bend_drift_cells(speed_mps, seconds)
+	return RiverFlowShader.bend_displacement(
+		(x - dir.x * shift) * RiverFlowShader.EDDY_SCALE,
+		(y - dir.y * shift) * RiverFlowShader.EDDY_SCALE
+	)
+
+
+func test_the_fold_margin_survives_the_eddy_drift():
+	# An arbitrary later moment in flowing water. Shifting `along` by the
+	# drift IS the translation the shader applies; the derivative across
+	# must still clear the same margin as the undrifted sweep.
+	var offset: float = RiverFlowShader.bend_drift_cells(1.0, 37.0)
+	assert_gt(offset, 1.0, "the offset must be a real distance, or this tests nothing")
+	var step := 0.002
+	var worst := INF
+	for i in range(60):
+		var along := float(i) * 0.31 - offset
+		for j in range(1, 200):
+			var across := float(j) * 0.05
+			var derivative := (
+				RiverFlowShader.warped_across(along, across + step)
+				- RiverFlowShader.warped_across(along, across - step)
+			) / (2.0 * step)
+			worst = minf(worst, derivative)
+	assert_gt(worst, MIN_WARP_MARGIN, "drifted by %.2f cells the warp pinches to %.4f" % [offset, worst])
+
+
+func test_the_shader_drifts_the_eddy_sample_coordinate():
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"float bend_drift = TIME * drift_px_per_mps * speed_mps * noise_scale * bend_drift_fraction;"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"vec2 eddy_p = (p - flow_dir * bend_drift) * eddy_scale;"
+	))
+	var material := RiverFlowShader.new().make_material()
+	assert_almost_eq(
+		float(material.get_shader_parameter("bend_drift_fraction")),
+		RiverFlowShader.BEND_DRIFT_FRACTION, 1e-9
+	)
+
+
+## "Slightly increase wobble so it looks more watery." A floor, so the
+## next fold scare does not quietly tune the water flat again.
+func test_the_wobble_is_watery_enough():
+	assert_gte(RiverFlowShader.LINE_WOBBLE, 0.17)
