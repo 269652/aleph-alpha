@@ -3614,6 +3614,12 @@ func set_river_flow_layer(river_flow_layer: TileMapLayer) -> void:
 	sync_river_flow_boulders()
 
 
+## Turns the river flow overlay's raw-across diagnostic on or off (see
+## RiverFlowShader.set_debug_across) -- the /flowdebug console command.
+func set_river_flow_debug_across(enabled: bool) -> void:
+	_river_flow_shader.set_debug_across(enabled)
+
+
 ## Registers the roof overlay layer (see docs/concept/
 ## building.md#what-enterable-means-in-a-top-down-game): a roof piece shares
 ## its cell with the floor beneath it, so it paints onto its own TileMapLayer

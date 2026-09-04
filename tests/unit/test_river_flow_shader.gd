@@ -2062,3 +2062,50 @@ func test_the_shader_loops_use_the_smooth_side_not_a_sign_flip():
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
 		"float side = lateral / sqrt(lateral * lateral + wader_radius_px * wader_radius_px);"
 	))
+
+
+# -- the raw across field, on screen -----------------------------------------
+#
+# Three separate fixes for the zigzag have now been aimed at the field's
+# RECONSTRUCTION and at the obstacle push, each justified by a headless
+# measurement, and the artefact has outlived two of them. The measurements
+# were sound about what they measured; the open question is whether the
+# thing on screen is a property of frag_across at all, or of the stroke
+# layer that draws contours of it.
+#
+# That question is answerable in one screenshot instead of another probe.
+# /flowdebug draws the contours of frag_across ALONE -- no noise, no
+# advection, no cel shading, no strokes, no lighting -- at full alpha over
+# every painted tile. Polygonal bands mean the field or its filter; smooth
+# bands mean the stroke layer, and three passes have been looking at the
+# wrong half of the shader.
+#
+# Full alpha deliberately: it also shows the painted band's own outline,
+# which is where a clipped wake or halo would reveal itself.
+
+
+func test_the_debug_view_is_off_by_default():
+	assert_eq(RiverFlowShader.DEBUG_ACROSS, 0.0, "a diagnostic must never ship on")
+	var material := RiverFlowShader.new().make_material()
+	assert_almost_eq(float(material.get_shader_parameter("debug_across")), 0.0, 1e-9)
+
+
+func test_the_debug_view_toggles_on_the_shared_material():
+	var shader := RiverFlowShader.new()
+	var material := shader.shared_material()
+	shader.set_debug_across(true)
+	assert_almost_eq(float(material.get_shader_parameter("debug_across")), 1.0, 1e-9)
+	shader.set_debug_across(false)
+	assert_almost_eq(float(material.get_shader_parameter("debug_across")), 0.0, 1e-9)
+
+
+func test_the_debug_view_draws_contours_of_the_across_field_alone():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("uniform float debug_across = 0.0;"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("if (debug_across > 0.5)"))
+	# Contours of frag_across ITSELF -- if this read the body or the
+	# strokes it would answer a different question than the one asked.
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"float debug_band = fract(frag_across * debug_across_bands);"
+	))
+	# Full alpha, so the painted band's own edge shows too.
+	assert_true(RiverFlowShader.SHADER_CODE.contains("COLOR = vec4(vec3(debug_edge), 1.0);"))

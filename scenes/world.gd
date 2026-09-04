@@ -2687,8 +2687,20 @@ func _on_console_command(command: String, args: Array) -> void:
 					+ "  /craft <recipe_id>  /gold <amount>  /village  /species  /help"
 					+ "  /compass  /map  /weatherglass  /almanac  /deed"
 					+ "  /ledger propose|accept|fulfill|breach ...  /charter found <type> <counterparty_id>"
-					+ "  /journal <entity_id>"
+					+ "  /journal <entity_id>  /flowdebug [off]"
 				)
+			)
+		"flowdebug":
+			# A rendering diagnostic, not a game command: draws the river
+			# overlay's raw across field as bare contours -- no strokes, no
+			# shading -- so "is the artefact in the field or in the strokes
+			# drawn from it" can be answered by looking instead of by
+			# another headless probe. See RiverFlowShader's debug_across.
+			var flow_debug_on: bool = args.is_empty() or String(args[0]) != "off"
+			_chunk_manager.set_river_flow_debug_across(flow_debug_on)
+			_dev_console.log_line(
+				"Flow debug %s -- bare contours of the across field."
+					% ("ON" if flow_debug_on else "off")
 			)
 		"species":
 			# Discoverability: the roster is long enough now that /help

@@ -71,6 +71,12 @@ uniform float smear_spacing = 0.8;
 // than plain hardware bilinear. 1 is the cubic; 0 is exactly what shipped
 // before, for comparison in game.
 uniform float map_smoothing = 1.0;
+// DIAGNOSTIC, off by default. Draws the contours of frag_across alone --
+// no noise, no advection, no cel shading, no strokes, no lighting -- so
+// the field the whole picture is built from can be looked at directly
+// instead of inferred from what it produces. Toggled live by /flowdebug.
+uniform float debug_across = 0.0;
+uniform float debug_across_bands = 8.0;
 // How far the smear is allowed to follow the course's curve. 1 reads the
 // flow at both ends of the smear and bends the taps between them; 0
 // collapses both ends onto the fragment's own direction, which is exactly
@@ -729,7 +735,19 @@ void fragment() {
 		(1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry,
 		boulder_halo * boulder_halo_alpha
 	);
-	COLOR = vec4(body, wet);
+	if (debug_across > 0.5) {
+		// The across field's OWN level sets. Polygonal bands mean the
+		// field or its reconstruction filter; smooth bands mean the
+		// artefact lives in the stroke layer above and the field is fine.
+		// Full alpha over every painted tile, deliberately: it also shows
+		// the painted band's own outline, which is where a clipped wake
+		// or halo would show itself.
+		float debug_band = fract(frag_across * debug_across_bands);
+		float debug_edge = 1.0 - smoothstep(0.0, 0.08, abs(debug_band - 0.5));
+		COLOR = vec4(vec3(debug_edge), 1.0);
+	} else {
+		COLOR = vec4(body, wet);
+	}
 }
 """
 
@@ -778,6 +796,18 @@ const NOISE_SCALE := 0.08
 ## reports. Averaging compresses the value distribution, so SMEAR_GAIN
 ## re-stretches it -- held to the measured coverage and swing bands by the
 ## same tests that pinned the old field.
+## Turns the raw-across diagnostic on or off on the shared material, so
+## the two views are one console command apart rather than a rebuild.
+func set_debug_across(enabled: bool) -> void:
+	shared_material().set_shader_parameter("debug_across", 1.0 if enabled else 0.0)
+
+
+## The raw-across diagnostic, OFF. A tool for answering "is the artefact
+## in the field or in the strokes drawn from it" in one screenshot rather
+## than another headless probe. Toggled at runtime by /flowdebug; this is
+## only its default, and a diagnostic must never ship on.
+const DEBUG_ACROSS := 0.0
+
 ## How much of the across map's reconstruction is the cubic B-spline
 ## rather than plain hardware bilinear. 1 is the cubic. 0 is exactly what
 ## shipped before, kept reachable because this is the third attempt at this
@@ -999,6 +1029,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("smear_spacing", SMEAR_SPACING)
 	material.set_shader_parameter("smear_curvature", SMEAR_CURVATURE)
 	material.set_shader_parameter("map_smoothing", MAP_SMOOTHING)
+	material.set_shader_parameter("debug_across", DEBUG_ACROSS)
 	material.set_shader_parameter("smear_gain", SMEAR_GAIN)
 	material.set_shader_parameter("turbulence_strength", TURBULENCE_STRENGTH)
 	material.set_shader_parameter("eddy_scale", EDDY_SCALE)
