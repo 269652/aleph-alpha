@@ -1415,7 +1415,11 @@ spawning rules, a reason to fish a stream rather than the sea — is still
 ⬜ Not started. What exists is incidental: ocean-biome water that a curated
 course happens to run through.)
 
-## The boulder's shore band, not a halo (2026-09-04)
+## The boulder's shore band, not a halo (2026-09-04) — SUPERSEDED
+
+*Superseded by "Boulders are hydrology" below: the band is no longer a
+painted ring at all. The rock is a rise in the bed, and the light water
+around it is the same shallow water the banks show.*
 
 Reported directly against the ring introduced above: *"The rocks should
 not have a halo around them... instead they should have a layered band
@@ -1629,6 +1633,102 @@ at a real reach speed. The ring's carry over its life is bounded on both
 sides now (1.5 to 3 tiles) and its lifetime floored at 3 s on both
 surfaces.
 
+## Boulders are hydrology: shoal, force balance, foam and wake (2026-09-04)
+
+Reported, as a design correction rather than a bug: *"The boulders halo
+should not be computed by the boulder, but rather be part of the river's
+hydrology... the lighter color bands should come from elevation (rock is
+above waterline) and the rock should as entity have a mass and produce a
+counterforce against the hydrological water pressure which is a smaller
+force than the weight of the boulder so it should bend the guidelines and
+produce foam in front and whirls behind it."*
+
+That is four mechanisms, and they share one principle: **nothing about a
+boulder is painted; everything about it is what the water does around a
+real rock of a real size.**
+
+### Design pillars
+
+- **The rock is an entity with a size and a mass.** Every flow boulder
+  carries its own diameter (`StoneSize.diameter_for` its seed; the
+  dropped piece and ore rocks use the smashable stone's default), hence
+  its own radius on the water in world px (`boulder_radius_px_for`:
+  half its drawn height, `StoneSize.world_height_px`, floored so the
+  smallest boulder still parts the water) and its own real mass
+  (`StoneSize.mass_kg_for`). The push reach, the dry eyot, the shoal,
+  the foam and the wake all scale with that radius. The one-size-fits-
+  all `BOULDER_RADIUS_PX` is gone.
+- **Light bands come from elevation, not from a ring.** The rock stands
+  above the waterline, so the bed rises to meet it, so the water
+  shallows toward it — and shallow water is light in this renderer for
+  the same reason the banks are: the cel body is depth. The boulder
+  contributes a **shoal** to the depth field, `depth_frac *= 1 - shoal`,
+  with `shoal` 1 at the rock's edge falling to 0 over
+  `BOULDER_SHOAL_RATIO` radii. The existing cel quantisation and the
+  world-anchored dither then draw the bands, in the channel's own
+  palette, with no boulder-specific colour code at all. The body stays
+  static depth, as pinned.
+- **The force balance is real, and it is why the water bends.**
+  `BoulderHydraulics` (`src/world/boulder_hydraulics.gd`): the water
+  pushes with dynamic-pressure drag, F = ½ρv²·Cd·A on the rock's wet
+  frontal area (Cd 0.47, a sphere); the rock resists with its submerged
+  weight (granite 2.7, buoyed over its wet fraction) times bed friction
+  (0.6, the tangent of loose rock's angle of repose). `load` is their
+  ratio and `holds` is it under 1. Checked against real cases: a metre
+  boulder in a 1 m/s reach carries a load under 0.1; a thirty-centimetre
+  boulder — still a boulder on the Wentworth scale — is swept by a 3 m/s
+  flood, which is exactly what bedload transport does. Because the rock
+  holds, the water has to go around it: the potential-flow displacement
+  of the guide lines (unchanged, `sqrt(lateral² + R²) − |lateral|`) is
+  the consequence of the rock winning the balance.
+- **Foam in front.** Flow stagnates on the upstream face and, fast
+  enough, the pile-up breaks white. The foam term is confined to the
+  upstream sector (the square of the cosine from the stagnation line,
+  zero at and behind the rock's shoulders), to a radial window from the
+  rock's edge out `BOULDER_FOAM_REACH_RATIO` radii, driven by the reach's
+  speed between `FOAM_MIN_M_S` and `FOAM_FULL_M_S` (a slow reach parts
+  cleanly, a fast one foams), and broken up by the channel's own advected
+  field so it streams and flickers rather than sitting as a pale cap.
+  Composited as near-white over the body after the strokes.
+- **Whirls behind.** A rock sheds eddies: the standing-turbulence bend
+  the guide lines already whirl with is amplified in a wake lobe behind
+  each boulder — downstream only, within a couple of radii laterally,
+  rising over the first radius and dying out by `BOULDER_WAKE_LENGTH_RATIO`
+  radii — by `BOULDER_WAKE_GAIN`, gated by the current. The fold-margin
+  pin holds at the gained strength, so the wake whirls without the
+  surface ever folding over itself.
+
+### Real-world grounding
+
+Bedload stability (Shields; Costa 1983 for boulder entrainment) is a
+drag-versus-submerged-weight balance, which is what `load` computes
+with textbook constants. Flow around a cylinder or sphere: stagnation
+upstream, the parting streamline clearing the body (already the push),
+and a von Kármán wake of shed vortices downstream at any river-scale
+Reynolds number. Whitewater is deceleration, not speed — hence the foam
+lives on the upstream face where the water is brought to rest, and its
+strength follows dynamic pressure.
+
+### What this replaces, deliberately
+
+The painted band (`boulder_band*` uniforms, the ring envelope, the
+three-stop colour ramp, the wobble, and the rule that a rock on dry bank
+ground lights water around itself) is removed, not restyled. A rock on
+dry ground is dry ground with a rock on it; the water around a rock in
+the river is light because it is shallow. The old band's tests are
+replaced by shoal tests. The eyot stays: it is the part of the rise that
+breaks the surface.
+
+### Status
+
+- Force balance (`BoulderHydraulics`: drag, submerged weight, load,
+  holds) — ✅ tested against real cases. Using the verdict to actually
+  MOVE a swept rock (bedload transport in floods) — ⬜ Not started; the
+  manager exposes the verdict per flow boulder.
+- Per-boulder radius fed to the shader from the rock's real diameter — ✅.
+- Shoal replaces the band — ✅.
+- Foam in front — ✅. Wake whirls behind — ✅.
+
 ## The ring is a thin, light line (2026-09-04)
 
 Reported on the calm picture: *"Can you make the ripples stroke width
@@ -1724,13 +1824,16 @@ measure as fractions of it.
   real sliding-failure physics, derived-not-stored impoundment. Transient
   fill, multi-piece dam runs, and dam-break flooding — ⬜ Not started.
 - **Boulders shape the flow** — ✅ Done — natural and dropped boulders
-  deflect the waterline and current lines (eyot + across push, shader
-  untouched), and a full boulder row across the channel ponds via the
-  same weir physics. Every in-river boulder also reads as shore: a
-  layered, cel-banded ring around it that wobbles with the channel's own
-  advected field, not a flat halo (see "The boulder's shore band, not a
-  halo"). Pushing/carrying an intact boulder (rather than
-  building one from rock) — ⬜ Not started.
+  deflect the waterline and current lines (eyot + across push), and a
+  full boulder row across the channel ponds via the same weir physics.
+  Pushing/carrying an intact boulder (rather than building one from
+  rock) — ⬜ Not started.
+- **Boulders are hydrology** — ✅ Done — each rock has its own size and
+  mass; the light water around it is its shoal in the depth field, not a
+  painted ring; the drag-versus-weight balance is computed
+  (`BoulderHydraulics`); foam on the upstream face, amplified whirls in
+  the wake. Moving a swept rock — ⬜ Not started. See "Boulders are
+  hydrology: shoal, force balance, foam and wake".
 - **The wader's wake** — ✅ Done — player AND creatures (8 slots, river
   filter memoised) displace the current with a round-core,
   downstream-trailing wake; never dries the channel.
