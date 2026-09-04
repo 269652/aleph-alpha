@@ -761,7 +761,14 @@ void fragment() {
 		// Full alpha over every painted tile, deliberately: it also shows
 		// the painted band's own outline, which is where a clipped wake
 		// or halo would show itself.
-		float debug_band = fract(frag_across * debug_across_bands);
+		// Mode 2 shows s_field -- the field the STROKES are contours of,
+		// which is frag_across plus the smeared noise. Mode 1 shows
+		// frag_across alone. Comparing the two says whether an artefact
+		// in the strokes comes from the channel geometry or from the
+		// noise term, which is the one thing left after the field itself
+		// was shown smooth.
+		float debug_source = debug_across > 1.5 ? s_field : frag_across;
+		float debug_band = fract(debug_source * debug_across_bands);
 		float debug_edge = 1.0 - smoothstep(0.0, 0.08, abs(debug_band - 0.5));
 		COLOR = vec4(vec3(debug_edge), 1.0);
 	} else {
@@ -817,8 +824,8 @@ const NOISE_SCALE := 0.08
 ## same tests that pinned the old field.
 ## Turns the raw-across diagnostic on or off on the shared material, so
 ## the two views are one console command apart rather than a rebuild.
-func set_debug_across(enabled: bool) -> void:
-	shared_material().set_shader_parameter("debug_across", 1.0 if enabled else 0.0)
+func set_debug_across(mode: float) -> void:
+	shared_material().set_shader_parameter("debug_across", clampf(mode, 0.0, 2.0))
 
 
 ## How much of an obstacle's core is softened, as a fraction of its own
@@ -830,7 +837,9 @@ func set_debug_across(enabled: bool) -> void:
 ## test_the_obstacle_push_keeps_a_real_peak_so_the_bulge_survives.
 const OBSTACLE_SIDE_SOFTNESS := 0.35
 
-## The raw-across diagnostic, OFF. A tool for answering "is the artefact
+## The raw-field diagnostic, OFF. 1 draws frag_across (the channel
+## geometry), 2 draws s_field (that plus the smeared noise -- the field
+## the strokes actually trace). A tool for answering "is the artefact
 ## in the field or in the strokes drawn from it" in one screenshot rather
 ## than another headless probe. Toggled at runtime by /flowdebug; this is
 ## only its default, and a diagnostic must never ship on.

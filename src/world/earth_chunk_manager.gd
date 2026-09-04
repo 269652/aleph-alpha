@@ -3616,8 +3616,8 @@ func set_river_flow_layer(river_flow_layer: TileMapLayer) -> void:
 
 ## Turns the river flow overlay's raw-across diagnostic on or off (see
 ## RiverFlowShader.set_debug_across) -- the /flowdebug console command.
-func set_river_flow_debug_across(enabled: bool) -> void:
-	_river_flow_shader.set_debug_across(enabled)
+func set_river_flow_debug_across(mode: float) -> void:
+	_river_flow_shader.set_debug_across(mode)
 
 
 ## Registers the roof overlay layer (see docs/concept/

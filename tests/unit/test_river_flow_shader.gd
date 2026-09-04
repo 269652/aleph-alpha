@@ -2139,9 +2139,9 @@ func test_the_debug_view_is_off_by_default():
 func test_the_debug_view_toggles_on_the_shared_material():
 	var shader := RiverFlowShader.new()
 	var material := shader.shared_material()
-	shader.set_debug_across(true)
+	shader.set_debug_across(1.0)
 	assert_almost_eq(float(material.get_shader_parameter("debug_across")), 1.0, 1e-9)
-	shader.set_debug_across(false)
+	shader.set_debug_across(0.0)
 	assert_almost_eq(float(material.get_shader_parameter("debug_across")), 0.0, 1e-9)
 
 
@@ -2151,7 +2151,7 @@ func test_the_debug_view_draws_contours_of_the_across_field_alone():
 	# Contours of frag_across ITSELF -- if this read the body or the
 	# strokes it would answer a different question than the one asked.
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"float debug_band = fract(frag_across * debug_across_bands);"
+		"float debug_band = fract(debug_source * debug_across_bands);"
 	))
 	# Full alpha, so the painted band's own edge shows too.
 	assert_true(RiverFlowShader.SHADER_CODE.contains("COLOR = vec4(vec3(debug_edge), 1.0);"))
