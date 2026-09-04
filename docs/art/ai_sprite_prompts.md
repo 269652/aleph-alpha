@@ -1393,6 +1393,153 @@ every other pending illustrated surface in this doc gives.
 
 ---
 
+## 12. Decomposers — ant, carrion beetle, and the ant mound (2026-09-04)
+
+Illustrated replacements for the three procedural generators behind
+[carrion.md](../concept/carrion.md)'s decomposer tier and
+[soil_fauna.md](../concept/soil_fauna.md)'s visible ant colonies:
+`ProceduralDecomposerSprite` ("ant" / "bug" — the bug is a burying beetle,
+*Nicrophorus*, see carrion.md "Readable at six world pixels"),
+`ProceduralAntMoundSprite` (the colony's mound), plus `AntForagerMarker`,
+which reuses the same ant art walking a real forage path. Reported live,
+twice, as "black blobs" — the procedural fix made them readable, but they
+are still primitives; this is the same "switch to illustrated" step the
+animal roster already took (`illustrated_animal_sprite.gd`).
+
+**The one thing that makes these different from every kit above: they are
+tiny.** An ant/beetle lands at roughly **6×4 world pixels** (a 12-px art
+canvas at `ArtResolution.SPRITE_SCALE`), a mound at **7 world px wide**
+(`ProceduralAntMoundSprite.MOUND_WORLD_WIDTH`). Whatever the generator
+returns is going to be downsampled to that. So every prompt here is a
+**silhouette-first** brief: one bold species marking that survives the
+downsample, thick legs, short thick antennae, no fine texture. Prompt at
+full resolution anyway (the downsample wants clean source edges, same as
+every other kit) — just design for the thumbnail, not the poster.
+
+**Prefix every prompt below with the shared style preamble at the top of
+this doc**, plus this tiny-creature addendum:
+
+> This creature will be displayed extremely small — about six pixels long
+> — so design it to read as a SILHOUETTE with ONE bold color marking, not
+> as a detailed illustration: thick, clearly separated legs (never
+> hairline-thin, never merging into the body), short thick antennae, a
+> strongly two-tone body (near-black plus one saturated accent), a solid
+> dark outline around the whole body but NOT around individual legs, and
+> no fine surface texture, hairs, or tiny highlights that would vanish
+> when shrunk. Every frame must keep the same body length and the same
+> ground-contact line — the creature must not grow, shrink, or drift
+> vertically between frames. Facing RIGHT (head on the right side of each
+> frame). [ingestion format]
+
+Two rows per creature sheet (walk + one behaviour the engine actually
+drives — `CarrionForageBehavior`'s FEEDING phase for both; the forager's
+carry for the ant), not a full action roster: horse shipped walk-only and
+reads fine, and `has_action`'s fallback chain synthesizes idle from frame 0.
+
+### 12a. Ant — wood ant (*Formica rufa* group), walk + carry + feed
+
+> A pixel-art sprite sheet of a WOOD ANT (Formica rufa) seen from directly
+> above: three clearly separate body segments in a line — a small near-black
+> head with short thick antennae angled forward, a RED-BROWN (rust /
+> burnt-orange, the one accent color) thorax in the middle, and a larger
+> near-black oval abdomen (gaster) at the back — joined by a visible
+> narrow waist. Six thick dark legs, three per side, splayed out sideways
+> from the thorax so ground shows clearly between each leg. The red thorax
+> is the marking that identifies it at a glance.
+> Lay out THREE horizontal rows, each cell separated by a thin 1–2px
+> near-white divider line, generous magenta padding around every pose:
+> ROW 1 — a 6-frame walking cycle (alternating tripod gait: the legs move
+> in two groups of three, the body itself stays level).
+> ROW 2 — the same 6-frame walk, but CARRYING a single pale tan grass seed
+> held up in its mandibles in front of the head (the seed is the only
+> addition; body and gait identical to row 1).
+> ROW 3 — a 4-frame feeding cycle standing still: head lowered, mandibles
+> opening and closing on the ground in front of it, abdomen very slightly
+> bobbing. No food object drawn — the thing it eats is a separate sprite.
+> Export at least 2200px wide by 1200px tall. [tiny-creature addendum]
+
+### 12b. Carrion beetle — burying beetle (*Nicrophorus*), walk + feed
+
+> A pixel-art sprite sheet of a BURYING BEETLE (Nicrophorus vespilloides)
+> seen from directly above: a broad, flat-oval, near-black body with TWO
+> bold ORANGE transverse bands across the elytra (wing covers) — the bands
+> are wavy and run side to side across the back, clearly separated by black
+> — a small near-black head at the front with short clubbed antennae
+> ending in small orange tips, and six thick dark legs, three per side,
+> splayed sideways with ground visible between them. Noticeably bigger and
+> bulkier than an ant, reading as a single heavy scavenger, not a swarm
+> insect. The orange bands are the marking that identifies it at a glance.
+> Lay out TWO horizontal rows, each cell separated by a thin 1–2px
+> near-white divider line, generous magenta padding around every pose:
+> ROW 1 — a 6-frame walking cycle (alternating tripod gait, body level,
+> a slow deliberate crawl rather than a scurry).
+> ROW 2 — a 4-frame feeding cycle standing still: head lowered, mandibles
+> working at the ground in front of it, body rocking very slightly
+> forward and back. No food object drawn.
+> Export at least 2200px wide by 800px tall. [tiny-creature addendum]
+
+### 12c. Ant mound — seeded-variant grid, NO ants in it
+
+Same surface shape as section 10, not 12a/12b: `AntMoundMarker` draws one
+static mound per real `AntColony.mound_cells()` entry, and the ants that
+belong to it are separate sprites (12a's row 2 walking out of it). So the
+mound is a **variant grid**, and it must be drawn EMPTY — any ant baked
+into the mound art would sit frozen on it forever while the real ones walk
+past. Use section 3's 3×3 fallback rather than 5×5 from the start: at 7
+world px the extra 16 variants would be indistinguishable. This uses the
+shared style preamble and section 10's variant-grid addendum (reworded
+below), NOT the tiny-creature addendum.
+
+> A pixel-art sprite sheet of 9 individual WOOD-ANT MOUNDS (Formica rufa
+> nest domes), laid out as a strict 3x3 grid, each cell separated by a thin
+> 1–2px near-white divider line, generous empty magenta padding around each
+> mound so nothing touches a divider or the canvas edge. Viewed from
+> directly above / near-top-down, matching this game's ground tiles: a low
+> rounded dome of fine dry soil crumbs and short brown pine-needle thatch,
+> warm mid-brown with a lighter top highlight band and a darker shadow band
+> on the lower-right, a SINGLE dark entrance hole set slightly off-centre
+> toward the lower-right, and a thin scatter of loose soil grains around
+> the base. Every mound is recognizably the SAME kind of nest — same
+> rounded dome silhouette, same single off-centre entrance, same size —
+> but a genuinely different arrangement of its own details: thatch vs.
+> bare-soil proportion, where exactly the entrance sits, how much loose
+> soil surrounds it, one or two small pebbles or a twig embedded in some.
+> ABSOLUTELY NO ANTS drawn on or near the mounds — the mound is empty; ants
+> are added separately. No grass, no ground plane — the mound sits directly
+> on the flat magenta background. Rows progress from a fresh, neatly domed
+> mound at the top to an older, broader, more weathered one at the bottom.
+> [ingestion format]
+
+### File naming + wiring, once generated
+
+- Drop in as `assets/sprites/ant.png`, `assets/sprites/carrion_beetle.png`,
+  `assets/sprites/ant_mound.png`.
+- **Scale is the whole game here.** Both creature sheets must be drawn at
+  the SAME world footprint the procedural sprite already has (~6×4 world px
+  — measure `ProceduralDecomposerSprite.SIZE` × `ArtResolution.SPRITE_SCALE`
+  and derive the per-sheet scale from the sliced frame's width, the way
+  `IllustratedAnimalSprite.marker_scale` does), and the mound at
+  `ProceduralAntMoundSprite.MOUND_WORLD_WIDTH`. Never draw a sliced frame at
+  its raw size: that is the exact "gigantic ant blobs" failure this sprite
+  already hit once, and `ProceduralItemSprite`'s cherry hit before it (both
+  recorded in `docs/progress.md`).
+- Creatures: a new `IllustratedDecomposerSprite` mirroring
+  `illustrated_animal_sprite.gd`'s `_SHEETS`/`has_species`/`has_action`
+  shape — `DecomposerMarker._ready` and `AntForagerMarker._ready` check it
+  first and fall back to `ProceduralDecomposerSprite` exactly as
+  `CreatureMarker._animation_step` falls back to `ProceduralAnimalAnimation`.
+  Row → action: `walk` (row 1), `carry` (ant row 2, used by
+  `AntForagerMarker` from pickup to cache), `feed` (last row, used by
+  `CarrionForageBehavior.Phase.FEEDING`). Neither marker flips horizontally
+  today (the procedural art is symmetric); with directional art, flip the
+  sprite on movement direction the way `CreatureMarker` already does, or
+  the ant walks backwards half the time.
+- Mound: `frame_for(seed)` over the 3×3 grid, mirroring
+  `IllustratedStoneSprite.frame_for` exactly, seeded from the mound's global
+  tile so a given colony keeps the same mound across reloads.
+- The snow dormancy in carrion.md is unaffected — `set_snow_dormant` hides
+  the marker whatever texture it carries.
+
 ## Notes for whoever runs these
 
 - Run the flower archetype sheets (1b) at pale/neutral tone as specified —

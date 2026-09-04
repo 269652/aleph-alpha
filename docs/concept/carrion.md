@@ -358,6 +358,12 @@ see that doc's own mechanism spec and Status.
   no-snow-layer early return), and `_spawn_ant_forager_visual` stays home
   under snow. `test_decomposer_marker.gd`, `test_decomposer_renderer.gd`,
   `test_earth_chunk_manager.gd`.
+- ⬜ Illustrated art for both decomposers and the ant mound — generation
+  prompts are ready in
+  [ai_sprite_prompts.md §12](../art/ai_sprite_prompts.md#12-decomposers--ant-carrion-beetle-and-the-ant-mound-2026-09-04)
+  (silhouette-first briefs sized for the 6-px footprint, walk + carry +
+  feed rows, a 3×3 empty-mound variant grid); nothing is generated or
+  wired yet.
 - ⬜ `AntColony` itself is not winter-gated: its invisible, data-level
   seed/windfall forage still resolves under snow, only the decorative
   forager is withheld. Gating the colony on winter is a real ecology
