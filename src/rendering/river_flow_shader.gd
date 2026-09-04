@@ -245,7 +245,20 @@ vec4 texture_bicubic(sampler2D tex, vec2 uv, float texels) {
 // NaN that would poison every tap downstream, so a dead sample hands back
 // the caller's own direction instead.
 vec2 flow_dir_at(vec2 world_position, vec2 fallback) {
-	vec2 raw = texture(flow_across_map, (world_position / tile_px) / flow_map_tiles).gb;
+	// The CUBIC reconstruction, not plain bilinear. dir_start and dir_end
+	// set every stroke's ORIENTATION, so a bilinear lookup here gives the
+	// stroke tangent field a piecewise-constant gradient on the texel
+	// lattice: polygonal STROKES over a perfectly smooth across field,
+	// which is exactly what /flowdebug showed -- the field's own contours
+	// sweep cleanly through a bend while the drawn strokes do not.
+	//
+	// Sampling the direction more coarsely than the field it steers puts
+	// the lattice straight back into the picture. This regressed when the
+	// curved smear was added: before it, the taps rode swirl_dir, which
+	// comes from the map_data sample and became cubic with the across map.
+	vec2 raw = texture_bicubic(
+		flow_across_map, (world_position / tile_px) / flow_map_tiles, flow_map_tiles
+	).gb;
 	if (dot(raw, raw) < 1e-8) {
 		return fallback;
 	}

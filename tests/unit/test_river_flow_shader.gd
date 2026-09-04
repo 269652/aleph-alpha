@@ -1939,6 +1939,18 @@ func test_the_shader_reconstructs_the_maps_with_the_cubic_filter():
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
 		"mix(texture(flow_across_map, map_uv), texture_bicubic(flow_across_map, map_uv, flow_map_tiles), map_smoothing)"
 	))
+	# THREE uses: the across map, the width map, and the smear-direction
+	# lookup that steers every stroke. Sampling the direction more coarsely
+	# than the field it steers puts the lattice back into the strokes --
+	# /flowdebug showed the field sweeping cleanly through a bend while the
+	# drawn strokes still stepped.
+	# Four occurrences: the definition, plus three call sites -- the across
+	# map, the width map, and the smear-direction lookup.
+	assert_eq(RiverFlowShader.SHADER_CODE.count("texture_bicubic("), 4)
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("texture(flow_across_map, (world_position"),
+		"the smear direction must not come through plain bilinear"
+	)
 
 
 func test_the_map_smoothing_dials_back_to_plain_bilinear():
