@@ -19,6 +19,11 @@ const DAM_PIECE_ID := "stone_dam"
 ## The droppable boulder piece (see BuildingPiece "boulder" and
 ## docs/concept/rivers.md "Boulders shape the flow").
 const BOULDER_PIECE_ID := "boulder"
+const BoulderHydraulics = preload("res://src/world/boulder_hydraulics.gd")
+## The dropped boulder piece and an ore rock have no stone roll to size
+## them; they are the smashable stone's default size (SmashableStone
+## diameter_cm), the boulder the player already knows.
+const DROPPED_BOULDER_DIAMETER_CM := 60.0
 
 ## The same deterministic stone roll StoneRenderer spawns from -- so the
 ## water bends around exactly the boulders the player can see.
@@ -3465,6 +3470,18 @@ const RIVER_FLOW_BOULDER_SLOTS := 24
 
 
 func river_flow_boulder_positions() -> PackedVector2Array:
+	return _river_flow_boulder_feed()["positions"]
+
+
+## One radius per fed boulder, in world px, in the SAME order as
+## river_flow_boulder_positions -- every rock is a rock of its own size.
+func river_flow_boulder_radii() -> PackedFloat32Array:
+	return _river_flow_boulder_feed()["radii"]
+
+
+## The boulder feed, positions and radii built in one pass so the two
+## arrays can never disagree about which slot is which rock.
+func _river_flow_boulder_feed() -> Dictionary:
 	# Prune first: a chunk that unloaded takes its boulders with it, and a
 	# stale far-away rock must not hold one of the limited uniform slots.
 	var stale: Array = []
@@ -3474,6 +3491,7 @@ func river_flow_boulder_positions() -> PackedVector2Array:
 	for tile in stale:
 		_river_flow_boulder_tiles.erase(tile)
 	var positions := PackedVector2Array()
+	var radii := PackedFloat32Array()
 	for tile in _river_flow_boulder_tiles:
 		if positions.size() >= RIVER_FLOW_BOULDER_SLOTS:
 			break
@@ -3481,7 +3499,8 @@ func river_flow_boulder_positions() -> PackedVector2Array:
 			float(tile.x) * TerrainRenderer.TILE_SIZE + TerrainRenderer.TILE_SIZE * 0.5,
 			float(tile.y) * TerrainRenderer.TILE_SIZE + TerrainRenderer.TILE_SIZE * 0.5
 		))
-	return positions
+		radii.append(RiverFlowShader.boulder_radius_px_for(float(_river_flow_boulder_tiles[tile])))
+	return {"positions": positions, "radii": radii}
 
 
 ## Re-evaluates one tile against the flow-boulder predicate and pushes the
@@ -3489,8 +3508,9 @@ func river_flow_boulder_positions() -> PackedVector2Array:
 ## bends the water the moment it lands, and stops the moment it is
 ## demolished, without waiting for a chunk repaint.
 func _sync_flow_boulder(tile: Vector2i) -> void:
-	if flow_boulder_at_global(tile.x, tile.y):
-		_river_flow_boulder_tiles[tile] = true
+	var diameter_cm := flow_boulder_diameter_cm_at_global(tile.x, tile.y)
+	if diameter_cm > 0.0:
+		_river_flow_boulder_tiles[tile] = diameter_cm
 	else:
 		_river_flow_boulder_tiles.erase(tile)
 	sync_river_flow_boulders()
@@ -3565,10 +3585,14 @@ func _push_flow_across_map() -> void:
 ## after chunk paints and after building/destroying pieces so a dropped
 ## boulder bends the water the moment it lands.
 func sync_river_flow_boulders() -> void:
-	var positions := river_flow_boulder_positions()
+	var feed := _river_flow_boulder_feed()
+	var positions: PackedVector2Array = feed["positions"]
+	var radii: PackedFloat32Array = feed["radii"]
+	radii.resize(RIVER_FLOW_BOULDER_SLOTS)
 	var material := _river_flow_shader.shared_material()
 	material.set_shader_parameter("boulder_count", positions.size())
 	material.set_shader_parameter("boulders", positions)
+	material.set_shader_parameter("boulder_radius", radii)
 
 
 ## Feeds the river strokes the same sunlight that drives the day/night
@@ -7256,28 +7280,60 @@ func river_depth_meters_at_global(global_x: int, global_y: int) -> float:
 ## around exactly the rocks the player sees). Any OTHER real piece on the
 ## tile means the ground is built over -- no stone spawns there.
 func flow_boulder_at_global(global_x: int, global_y: int) -> bool:
+	return flow_boulder_diameter_cm_at_global(global_x, global_y) > 0.0
+
+
+## The flow boulder on this tile as a rock of a real SIZE: its diameter in
+## cm (the same StoneSize roll that draws it; the dropped piece and an ore
+## rock at DROPPED_BOULDER_DIAMETER_CM), or 0.0 where there is no flow
+## boulder at all. Everything the water does around the rock -- the push
+## reach, the eyot, the shoal, the foam, the wake, and the force balance
+## (river_boulder_load_at_global) -- is sized from this.
+func flow_boulder_diameter_cm_at_global(global_x: int, global_y: int) -> float:
 	var piece := modification_at_global(global_x, global_y)
 	if piece == BOULDER_PIECE_ID:
-		return true
+		return DROPPED_BOULDER_DIAMETER_CM
 	if BuildingPiece.has_piece(piece):
-		return false
+		return 0.0
 	# On the river OR on its bank apron: a rock at the water's edge must
 	# part the waterline around itself too ("wrap shorelines around edge
 	# boulders"), not only a rock standing mid-stream.
 	if not generator.is_within_river_apron(global_x, global_y):
-		return false
+		return 0.0
 	var biome := biome_at_global(global_x, global_y)
 	if not StonePlacement.STONE_BIOMES.has(biome):
-		return false
+		return 0.0
 	if not _flow_stone_placement.has_stone_at(global_x, global_y, biome):
-		return false
+		return 0.0
 	# An ore deposit rides the same stone roll (OrePlacement.is_ore_at) and
 	# spawns a chunky minable rock -- it bends the water exactly like a
 	# boulder ("ore should also bend the water").
 	if _flow_ore_placement.is_ore_at(global_x, global_y, biome):
-		return true
+		return DROPPED_BOULDER_DIAMETER_CM
 	var diameter := StoneSize.diameter_for(_flow_stone_placement.seed_at(global_x, global_y))
-	return StoneSize.class_for(diameter) == StoneSize.CLASS_BOULDER
+	if StoneSize.class_for(diameter) == StoneSize.CLASS_BOULDER:
+		return diameter
+	return 0.0
+
+
+## The force balance on the flow boulder at this tile: the water's drag
+## over the rock's friction-held submerged weight (BoulderHydraulics), from
+## the reach's own solved current and its real depth (ponding included).
+## Under 1 the rock holds and the water bends around it; 0 where there is
+## no flow boulder.
+func river_boulder_load_at_global(global_x: int, global_y: int) -> float:
+	var diameter_cm := flow_boulder_diameter_cm_at_global(global_x, global_y)
+	if diameter_cm <= 0.0:
+		return 0.0
+	var hydraulics := generator.river_hydraulics_at_global(global_x, global_y)
+	var velocity: float = hydraulics.get("velocity_m_s", 0.0)
+	var depth: float = river_depth_meters_at_global(global_x, global_y)
+	return BoulderHydraulics.current_load(velocity, diameter_cm, depth)
+
+
+## Whether the flow boulder here holds its ground against the current.
+func river_boulder_holds_at_global(global_x: int, global_y: int) -> bool:
+	return river_boulder_load_at_global(global_x, global_y) < 1.0
 
 
 ## Whether the channel is dammed at this course position, scanning the

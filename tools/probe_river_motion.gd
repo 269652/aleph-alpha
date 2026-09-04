@@ -122,6 +122,16 @@ func _build() -> SubViewport:
 	scale_image.fill(Color(2.0, 0.0, 0.0))
 	_flow_shader.shared_material().set_shader_parameter("flow_scale_map", ImageTexture.create_from_image(scale_image))
 
+	# One reference-sized rock mid-channel, a little downstream of centre,
+	# so its shoal, its foam and its wake are all in frame.
+	var boulders := PackedVector2Array([Vector2(64.0, 72.0)])
+	boulders.resize(24)
+	var radii := PackedFloat32Array([RiverFlowShader.BOULDER_RADIUS_PX])
+	radii.resize(24)
+	_flow_shader.shared_material().set_shader_parameter("boulder_count", 1)
+	_flow_shader.shared_material().set_shader_parameter("boulders", boulders)
+	_flow_shader.shared_material().set_shader_parameter("boulder_radius", radii)
+
 	var atlas_coords := renderer.atlas_coords_for_river_flow(180.0, true)
 	for y in range(8):
 		for x in range(8):

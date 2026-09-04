@@ -14,6 +14,7 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const DamImpoundment = preload("res://src/world/dam_impoundment.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
+const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -165,6 +166,40 @@ func test_a_dropped_boulder_is_fed_to_the_flow_shader():
 		positions.has(expected),
 		"the dropped boulder's world position must be in the shader feed"
 	)
+
+
+## Every rock in the feed has its own radius, from its own size -- the
+## dropped piece is a smashable-stone-sized boulder.
+func test_a_dropped_boulder_feeds_its_own_radius():
+	assert_true(manager.build_at_global(river_tile.x, river_tile.y, "boulder"))
+	manager.sync_river_flow_boulders()
+	var positions := manager.river_flow_boulder_positions()
+	var radii := manager.river_flow_boulder_radii()
+	assert_eq(radii.size(), positions.size(), "one radius per fed boulder")
+	var expected_pos := Vector2(
+		float(river_tile.x) * 16.0 + 8.0, float(river_tile.y) * 16.0 + 8.0
+	)
+	var index := positions.find(expected_pos)
+	assert_gte(index, 0)
+	assert_almost_eq(
+		radii[index],
+		RiverFlowShader.boulder_radius_px_for(EarthChunkManager.DROPPED_BOULDER_DIAMETER_CM), 1e-6
+	)
+	assert_almost_eq(
+		manager.flow_boulder_diameter_cm_at_global(river_tile.x, river_tile.y),
+		EarthChunkManager.DROPPED_BOULDER_DIAMETER_CM, 1e-6
+	)
+	assert_eq(manager.flow_boulder_diameter_cm_at_global(river_tile.x + 40, river_tile.y + 40), 0.0)
+
+
+## The force balance is computed per rock from the reach's own solved
+## current and depth: the dropped boulder at the fixture holds.
+func test_a_dropped_boulder_holds_the_fixture_s_current():
+	assert_true(manager.build_at_global(river_tile.x, river_tile.y, "boulder"))
+	assert_true(manager.river_boulder_holds_at_global(river_tile.x, river_tile.y))
+	var load: float = manager.river_boulder_load_at_global(river_tile.x, river_tile.y)
+	assert_between(load, 0.0, 1.0)
+	assert_eq(manager.river_boulder_load_at_global(river_tile.x + 40, river_tile.y + 40), 0.0, "no rock, no load")
 
 
 ## One rock never dams a river: a partial row is not a crest and raises no
