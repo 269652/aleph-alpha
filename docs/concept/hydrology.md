@@ -495,6 +495,24 @@ the flow shader as a wader so its flaps ring the current's contour lines
 (playtest: "fish should also swim in rivers, upstream just slower and
 more flapping, and produce ripples in the current contour lines").
 
+A river or lake tile is a discrete kind flag, not a coverage fraction: the
+tile read above calls a tile "river" once its *centre* is within the
+channel's own half-width, which for a narrow channel or a tile right at
+the bank can flag a tile whose footprint is mostly dry land. Fish spawning
+already accounted for this (`WaterAreaSurvey.is_interior_water` holds a
+spawn candidate to "this tile and its 4 cardinal neighbours are all
+water", never a shore-adjacent cell), but swimming did not, so a fish
+already in the water could wander from a genuinely-covered tile onto a
+merely-flagged one and visibly sit half on dry ground (reported directly:
+"fish should be constrained to the full rivertiles not the shore tiles
+otherwise they swim on a half land tile sometimes"). `FishMarker` now
+holds its own swim-time water check to the same interior bar for river and
+lake tiles -- a neighbour of any water kind counts (a river mouth's bank
+against the sea is still open water, not shore) -- while the open ocean
+stays unconstrained there, since it already has its own tuned shore-hugging
+behavior (`CLEARANCE_PX` and shore deflection) built for a coastline, not a
+one-tile-wide channel.
+
 Vegetation density feeding transpiration closes a loop with
 [flora.md](flora.md): a forest a player clears sheds more runoff, its
 river floods higher, and its soil dries faster between rains, with no
