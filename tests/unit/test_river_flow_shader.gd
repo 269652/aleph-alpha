@@ -1757,3 +1757,171 @@ func test_the_smear_curvature_dials_back_to_the_straight_smear():
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
 		"swirl_dir, flow_dir_at(wp - smear_end_offset, swirl_dir), smear_curvature"
 	))
+
+
+# -- the across map's own reconstruction filter -------------------------------
+#
+# THE ZIGZAG, finally located. The flow map holds one texel per TILE, and
+# every stroke, the waterline, the ink line and the shore highlight are
+# CONTOURS of that field. Sampled with plain bilinear filtering, the field's
+# gradient is CONSTANT inside each texel cell and JUMPS at the boundary --
+# so its contours are polygons: straight segments meeting at kinks, one
+# kink per tile. That is a sawtooth by construction, and no amount of
+# smoothing the underlying data can remove it.
+#
+# Measured with tools/probe_bilinear.gd, walking the course at one of the
+# bends the user reports it at 100% of the time (tile 19913, 4742), in
+# degrees of contour-normal turn per eighth of a tile:
+#
+#   bilinear         median 0.000   peak 22.547
+#   cubic B-spline   median 0.024   peak  4.870
+#
+# The median of exactly ZERO is the signature: bilinear's gradient does not
+# turn at all inside a cell, then turns all at once. A cubic B-spline is C2,
+# so it turns a little everywhere and never all at once -- peak 4.6x lower.
+#
+# This is also why the earlier attempt failed and was reverted ("now it's
+# much worse ... the artifacts stay, just look different"). That one warped
+# the sample COORDINATE with a smoothstep and left hardware bilinear
+# underneath, so the polygon survived and gained plateaus at texel centres.
+# The filter itself has to change, not the coordinate fed to it.
+
+
+func _ramp_grid(span: int) -> PackedFloat32Array:
+	# A synthetic across-field: a signed distance to a line at 30 degrees,
+	# which is what a straight reach's own across field looks like, sampled
+	# once per tile exactly as the real map is.
+	var values := PackedFloat32Array()
+	values.resize(span * span)
+	var normal := Vector2(cos(deg_to_rad(30.0)), sin(deg_to_rad(30.0)))
+	for y in span:
+		for x in span:
+			values[y * span + x] = (
+				Vector2(float(x) + 0.5, float(y) + 0.5) - Vector2(float(span), float(span)) * 0.5
+			).dot(normal)
+	return values
+
+
+## The weights must partition unity, or the reconstruction changes the
+## field's own magnitude -- a distance field that is scaled is a waterline
+## in the wrong place.
+func test_the_bspline_weights_sum_to_one_everywhere():
+	for step in 21:
+		var t := float(step) / 20.0
+		var weights := RiverFlowShader.bspline_weights(t)
+		var total := 0.0
+		for weight in weights:
+			total += weight
+			assert_gte(weight, 0.0, "a negative weight would ring at a step edge")
+		assert_almost_eq(total, 1.0, 1e-6, "weights at t=%f" % t)
+
+
+## At a texel centre the cubic B-spline is the classic 1:4:1 stencil.
+func test_the_bspline_weights_are_the_one_four_one_stencil_at_a_texel_centre():
+	var weights := RiverFlowShader.bspline_weights(0.0)
+	assert_almost_eq(weights[0], 1.0 / 6.0, 1e-6)
+	assert_almost_eq(weights[1], 4.0 / 6.0, 1e-6)
+	assert_almost_eq(weights[2], 1.0 / 6.0, 1e-6)
+	assert_almost_eq(weights[3], 0.0, 1e-6)
+
+
+## Both filters must reproduce a LINEAR field's own slope: a straight reach
+## must not be bent by the thing that unbends the corners.
+func test_both_filters_carry_a_straight_reachs_own_gradient():
+	var span := 16
+	var values := _ramp_grid(span)
+	var expected := Vector2(cos(deg_to_rad(30.0)), sin(deg_to_rad(30.0)))
+	for at in [Vector2(7.3, 8.1), Vector2(8.0, 8.0), Vector2(9.75, 7.25)]:
+		for sampler in ["bilinear", "bspline"]:
+			var gradient := _grid_gradient(values, span, at, sampler)
+			assert_almost_eq(
+				rad_to_deg(gradient.angle()), rad_to_deg(expected.angle()), 0.5,
+				"%s bent a straight reach at %s" % [sampler, at]
+			)
+
+
+## The property the whole change exists for, on a field with real
+## curvature: bilinear's gradient direction jumps between texel cells and
+## the B-spline's does not.
+func test_the_bspline_gradient_turns_smoothly_where_bilinear_jumps():
+	var span := 24
+	# A radial distance field -- a bend, in the smallest honest form: its
+	# contours are circles, so a correct reconstruction turns steadily.
+	var values := PackedFloat32Array()
+	values.resize(span * span)
+	var centre := Vector2(float(span), float(span)) * 0.5
+	for y in span:
+		for x in span:
+			values[y * span + x] = (Vector2(float(x) + 0.5, float(y) + 0.5) - centre).length()
+
+	var worst := {"bilinear": 0.0, "bspline": 0.0}
+	for sampler in ["bilinear", "bspline"]:
+		var previous := INF
+		# Walk a circle of radius 6 around the centre, well inside the grid.
+		for step in 240:
+			var angle := TAU * float(step) / 240.0
+			var at := centre + Vector2(cos(angle), sin(angle)) * 6.0
+			var gradient := _grid_gradient(values, span, at, sampler)
+			if gradient.length() < 1e-9:
+				continue
+			var heading := rad_to_deg(gradient.angle())
+			if previous != INF:
+				var turn := absf(fposmod(heading - previous + 180.0, 360.0) - 180.0)
+				worst[sampler] = maxf(worst[sampler], turn)
+			previous = heading
+
+	# A steady walk around a circle of radius 6 turns 360/240 = 1.5 deg per
+	# step. Bilinear overshoots that badly at the cell boundaries; the
+	# B-spline stays near it.
+	assert_gt(
+		worst["bilinear"], 4.0,
+		"bilinear must show the jump this change exists to remove -- if it does not, the fixture is wrong"
+	)
+	assert_lt(
+		worst["bspline"], worst["bilinear"] * 0.5,
+		"the B-spline must at least halve the worst jump (measured 4.6x on the real map)"
+	)
+
+
+func _grid_gradient(values: PackedFloat32Array, span: int, at: Vector2, sampler: String) -> Vector2:
+	# A step small enough to stay inside one cell, so each sample reports
+	# that cell's own gradient and a lattice kink shows as a jump BETWEEN
+	# samples rather than being averaged away.
+	var h := 0.05
+	var dx := (
+		_grid_sample(values, span, at + Vector2(h, 0.0), sampler)
+		- _grid_sample(values, span, at - Vector2(h, 0.0), sampler)
+	)
+	var dy := (
+		_grid_sample(values, span, at + Vector2(0.0, h), sampler)
+		- _grid_sample(values, span, at - Vector2(0.0, h), sampler)
+	)
+	return Vector2(dx, dy) / (2.0 * h)
+
+
+func _grid_sample(values: PackedFloat32Array, span: int, at: Vector2, sampler: String) -> float:
+	if sampler == "bilinear":
+		return RiverFlowShader.sample_grid_bilinear(values, span, at)
+	return RiverFlowShader.sample_grid_bspline(values, span, at)
+
+
+func test_the_shader_reconstructs_the_maps_with_the_cubic_filter():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("vec4 cubic_weights(float v)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"vec4 texture_bicubic(sampler2D tex, vec2 uv, float texels)"
+	))
+	# Four bilinear taps, not sixteen point taps: the standard trick, and
+	# what keeps this affordable at three extra samples.
+	assert_eq(RiverFlowShader.SHADER_CODE.count("texture(tex, offset."), 4)
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"mix(texture(flow_across_map, map_uv), texture_bicubic(flow_across_map, map_uv, flow_map_tiles), map_smoothing)"
+	))
+
+
+func test_the_map_smoothing_dials_back_to_plain_bilinear():
+	var material := RiverFlowShader.new().make_material()
+	assert_almost_eq(
+		float(material.get_shader_parameter("map_smoothing")),
+		RiverFlowShader.MAP_SMOOTHING, 1e-9
+	)
+	assert_between(RiverFlowShader.MAP_SMOOTHING, 0.0, 1.0)

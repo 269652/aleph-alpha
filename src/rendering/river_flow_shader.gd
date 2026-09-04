@@ -67,6 +67,10 @@ uniform vec3 moonlight_ink : source_color = vec3(0.92, 0.96, 1.0);
 uniform float shore_pos = 0.88;
 uniform float shore_width = 0.025;
 uniform float smear_spacing = 0.8;
+// How much of the across map's reconstruction is the CUBIC filter rather
+// than plain hardware bilinear. 1 is the cubic; 0 is exactly what shipped
+// before, for comparison in game.
+uniform float map_smoothing = 1.0;
 // How far the smear is allowed to follow the course's curve. 1 reads the
 // flow at both ends of the smear and bends the taps between them; 0
 // collapses both ends onto the fragment's own direction, which is exactly
@@ -179,6 +183,57 @@ float value_noise(vec2 p) {
 //
 // Two scales, because real water has structure at several at once; the
 // fine octave stays unsmeared -- isotropic sparkle riding on the streaks.
+// CUBIC B-SPLINE RECONSTRUCTION of a map texel grid.
+//
+// This is the zigzag. The flow map holds one texel per TILE, and every
+// stroke, the waterline, the ink line and the shore highlight is a CONTOUR
+// of that field. Hardware bilinear filtering makes the field's gradient
+// CONSTANT inside each texel cell and JUMP at the boundary, so its contours
+// are polygons -- straight segments meeting at a kink, one kink per tile.
+// A sawtooth, by construction, no matter how smooth the baked data is.
+//
+// Measured with tools/probe_bilinear.gd, walking the course at a bend the
+// artefact appears at every time, in degrees of contour-normal turn per
+// eighth of a tile: bilinear median 0.000 / peak 22.547, this filter
+// median 0.024 / peak 4.870. The median of exactly ZERO is the signature --
+// bilinear does not turn at all inside a cell, then turns all at once.
+//
+// An earlier attempt warped the sample COORDINATE with a smoothstep and
+// left hardware bilinear underneath. The polygon survived that and gained
+// plateaus at the texel centres, which is why it read as "much worse ...
+// artificial" while the artefact stayed. The FILTER has to change.
+//
+// Four bilinear taps rather than sixteen point taps (Sigg & Hadwiger): each
+// tap is placed off-centre so the hardware's own linear blend does half the
+// work. Three extra samples, not fifteen.
+vec4 cubic_weights(float v) {
+	vec4 n = vec4(1.0, 2.0, 3.0, 4.0) - v;
+	vec4 s = n * n * n;
+	float x = s.x;
+	float y = s.y - 4.0 * s.x;
+	float z = s.z - 4.0 * s.y + 6.0 * s.x;
+	float w = 6.0 - x - y - z;
+	return vec4(x, y, z, w) / 6.0;
+}
+
+vec4 texture_bicubic(sampler2D tex, vec2 uv, float texels) {
+	vec2 texel_uv = uv * texels - 0.5;
+	vec2 f = fract(texel_uv);
+	texel_uv -= f;
+	vec4 wx = cubic_weights(f.x);
+	vec4 wy = cubic_weights(f.y);
+	vec4 c = texel_uv.xxyy + vec2(-0.5, 1.5).xyxy;
+	vec4 sums = vec4(wx.xz + wx.yw, wy.xz + wy.yw);
+	vec4 offset = (c + vec4(wx.yw, wy.yw) / sums) / texels;
+	vec4 s0 = texture(tex, offset.xz);
+	vec4 s1 = texture(tex, offset.yz);
+	vec4 s2 = texture(tex, offset.xw);
+	vec4 s3 = texture(tex, offset.yw);
+	float mx = sums.x / (sums.x + sums.y);
+	float my = sums.z / (sums.z + sums.w);
+	return mix(mix(s3, s2, mx), mix(s1, s0, mx), my);
+}
+
 // The course direction the flow map carries at a world position. Past the
 // painted band the map's GB channels are zero, and normalizing that is a
 // NaN that would poison every tap downstream, so a dead sample hands back
@@ -259,7 +314,7 @@ void fragment() {
 	// exactly like across does. Per-tile direction bins and the binary
 	// fast flag were the last square-tile artefacts ("there are still
 	// individual square river tiles visible").
-	vec4 map_data = texture(flow_across_map, map_uv);
+	vec4 map_data = mix(texture(flow_across_map, map_uv), texture_bicubic(flow_across_map, map_uv, flow_map_tiles), map_smoothing);
 	float frag_across = map_data.r;
 	vec2 flow_dir = normalize(map_data.gb + vec2(1e-6, 0.0));
 	vec2 flow_perp = vec2(-flow_dir.y, flow_dir.x);
@@ -695,6 +750,12 @@ const NOISE_SCALE := 0.08
 ## reports. Averaging compresses the value distribution, so SMEAR_GAIN
 ## re-stretches it -- held to the measured coverage and swing bands by the
 ## same tests that pinned the old field.
+## How much of the across map's reconstruction is the cubic B-spline
+## rather than plain hardware bilinear. 1 is the cubic. 0 is exactly what
+## shipped before, kept reachable because this is the third attempt at this
+## artefact and the comparison should cost a keystroke, not a rebuild.
+const MAP_SMOOTHING := 1.0
+
 ## How far the smear follows the course's curve: 1 bends the taps between
 ## the flow read at each END of the smear, 0 is the straight smear this
 ## replaced. Kept as a real uniform so the two are one keystroke apart in
@@ -909,6 +970,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("ink_color", INK_COLOR)
 	material.set_shader_parameter("smear_spacing", SMEAR_SPACING)
 	material.set_shader_parameter("smear_curvature", SMEAR_CURVATURE)
+	material.set_shader_parameter("map_smoothing", MAP_SMOOTHING)
 	material.set_shader_parameter("smear_gain", SMEAR_GAIN)
 	material.set_shader_parameter("turbulence_strength", TURBULENCE_STRENGTH)
 	material.set_shader_parameter("eddy_scale", EDDY_SCALE)
@@ -1252,6 +1314,64 @@ static func value_noise(x: float, y: float) -> float:
 		lerpf(value_hash(ix, iy + 1.0), value_hash(ix + 1.0, iy + 1.0), fx),
 		fy
 	)
+
+
+## The cubic B-spline basis at a fractional position between texels: the
+## four weights applied to the texels at -1, 0, +1 and +2. Partitions
+## unity (a reconstruction that did not would move the waterline) and is
+## everywhere non-negative (a negative lobe rings at a step edge, which on
+## a distance field is a false bank).
+static func bspline_weights(t: float) -> PackedFloat32Array:
+	var t2 := t * t
+	var t3 := t2 * t
+	return PackedFloat32Array([
+		(1.0 - 3.0 * t + 3.0 * t2 - t3) / 6.0,
+		(4.0 - 6.0 * t2 + 3.0 * t3) / 6.0,
+		(1.0 + 3.0 * t + 3.0 * t2 - 3.0 * t3) / 6.0,
+		t3 / 6.0,
+	])
+
+
+## Plain bilinear over a square grid, exactly as filter_linear does it:
+## texel centres at +0.5, linear weights. The CPU mirror of what the map
+## sampling used to be, kept so the two filters can be compared in a test
+## and by tools/probe_bilinear.gd rather than only by eye.
+static func sample_grid_bilinear(values: PackedFloat32Array, span: int, at: Vector2) -> float:
+	var fx := at.x - 0.5
+	var fy := at.y - 0.5
+	var x0 := int(floor(fx))
+	var y0 := int(floor(fy))
+	var tx := fx - float(x0)
+	var ty := fy - float(y0)
+	var x1 := clampi(x0 + 1, 0, span - 1)
+	var y1 := clampi(y0 + 1, 0, span - 1)
+	x0 = clampi(x0, 0, span - 1)
+	y0 = clampi(y0, 0, span - 1)
+	var top: float = lerp(values[y0 * span + x0], values[y0 * span + x1], tx)
+	var bottom: float = lerp(values[y1 * span + x0], values[y1 * span + x1], tx)
+	return lerp(top, bottom, ty)
+
+
+## Cubic B-spline over the same grid: the CPU mirror of texture_bicubic.
+## Approximating rather than interpolating -- it smooths the samples
+## slightly, which on a distance field is a feature, and unlike warping the
+## sample coordinate it does not bunch contours toward the texel centres.
+static func sample_grid_bspline(values: PackedFloat32Array, span: int, at: Vector2) -> float:
+	var fx := at.x - 0.5
+	var fy := at.y - 0.5
+	var x0 := int(floor(fx))
+	var y0 := int(floor(fy))
+	var wx := bspline_weights(fx - float(x0))
+	var wy := bspline_weights(fy - float(y0))
+	var total := 0.0
+	for j in 4:
+		var sy := clampi(y0 - 1 + j, 0, span - 1)
+		var row := 0.0
+		for i in 4:
+			var sx := clampi(x0 - 1 + i, 0, span - 1)
+			row += values[sy * span + sx] * wx[i]
+		total += row * wy[j]
+	return total
 
 
 ## How far, in WORLD PIXELS, one end of the smear sits from its centre.
