@@ -1629,8 +1629,40 @@ at a real reach speed. The ring's carry over its life is bounded on both
 sides now (1.5 to 3 tiles) and its lifetime floored at 3 s on both
 surfaces.
 
+## The ring is a thin, light line (2026-09-04)
+
+Reported on the calm picture: *"Can you make the ripples stroke width
+smaller and a bit more transparent?"*
+
+The ring's ink was `smoothstep(RIPPLE_CREST_MIN, RIPPLE_CREST_FULL, crest
+amplitude)`, so its WIDTH was however much of the crest's sine cleared
+the thresholds — about three world px, three times a current line — and
+it swelled with a fresh wake and shrank as it faded. Width and strength
+were one knob.
+
+They are two now. `movement_ripples` also sums an **envelope** — the
+packet without its sine, i.e. how strong the wake is here, now, whether
+this pixel sits on a crest or a trough — and the ring's ink band is cut
+from the pure sine (packet over envelope) above `RIPPLE_RING_EDGE`. The
+arc of a sine above a threshold is a fixed length, so the ring is one
+width in px at every age: `RIPPLE_WAVELENGTH / TAU × (π − 2 asin EDGE)`,
+~1.4 world px at 0.85, pinned no wider than a current line's full extent
+(`ripple_ring_width_px` against `line_width_px`) and no thinner than a
+snapped pixel and a half. The envelope alone drives the strength through
+the same graduated crest curve, under `RIPPLE_INK_MAX` (0.6) so the ring
+prints lighter than the lines it sits among — "a bit more transparent".
+
+The signed packet still bends the current lines exactly as before
+(`RIPPLE_LINE_GAIN`), and two wakes still interfere in it; only the
+ring's own ink changed. `ripple_envelope` is mirrored on the CPU and
+pinned never under the packet's magnitude and equal to it at a crest;
+`ripple_ink` now carries the ceiling, and the life-graduation pins
+measure as fractions of it.
+
 ## Status
 
+- **The ring is a thin, light line** — ✅ Done — width from the sine,
+  strength from the envelope; see the section above.
 - **A calm picture (drift carries, drag deforms)** — ✅ Done — see the
   section above; the probe tool is `tools/probe_river_motion.gd`.
 - **One visible water speed (ripples, eddies, lines)** — ✅ Done — see

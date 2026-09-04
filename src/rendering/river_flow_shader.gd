@@ -156,6 +156,12 @@ uniform float ripple_spread_decay = 0.02;
 uniform float ripple_line_gain = 0.18;
 uniform float ripple_crest_min = 0.10;
 uniform float ripple_crest_full = 0.40;
+// The ring's own ink band: where on the crest's sine a pixel must sit to
+// print (its WIDTH, in px, is one number independent of age), and the
+// ceiling it prints at -- below a full stroke, so it reads lighter than a
+// current line.
+uniform float ripple_ring_edge = 0.85;
+uniform float ripple_ink_max = 0.6;
 
 // Continuous downstream travel, px/s per m/s of real current.
 uniform float drift_px_per_mps = 20.0;
@@ -233,6 +239,24 @@ float ripple_packet(float dist, float age) {
 	return rings * packet * age_fade * spread_fade;
 }
 
+// The same packet WITHOUT its sine: how strong the wake is here, now,
+// regardless of whether this pixel sits on a crest or a trough. Dividing
+// the signed packet by this leaves the pure sine, which is what the ring's
+// ink band is cut from -- so the band's width is a threshold on the sine
+// (one number in px) and the envelope alone decides how hard it prints.
+// Mirrored by RiverFlowShader.ripple_envelope.
+float ripple_envelope(float dist, float age) {
+	if (age < 0.0 || age > ripple_lifetime) {
+		return 0.0;
+	}
+	float front = age * ripple_speed;
+	float phase = front - dist;
+	float packet = exp(-abs(phase) / ripple_packet_width);
+	float age_fade = 1.0 - age / ripple_lifetime;
+	float spread_fade = 1.0 / (1.0 + front * ripple_spread_decay);
+	return packet * age_fade * spread_fade;
+}
+
 // THE WATER'S VISIBLE SPEED, in world px/s downstream. TWO things move the
 // drawn surface: the two-phase drag, which translates the field
 // advect_strength cells every 1/advect_rate seconds no matter how fast
@@ -262,15 +286,18 @@ float surface_px_per_s(float speed_mps, float moving) {
 // sentinel age, and this is the loop the rain-ripple perf lesson applies
 // to (do the cheap rejection first, never the expensive half and then a
 // discard).
-float movement_ripples(vec2 pos, vec2 surface_velocity) {
+float movement_ripples(vec2 pos, vec2 surface_velocity, out float envelope) {
 	float total = 0.0;
+	envelope = 0.0;
 	for (int i = 0; i < disturbance_count; i++) {
 		float age = disturbance_age[i];
 		if (age < 0.0 || age > ripple_lifetime) {
 			continue;
 		}
 		vec2 center = disturbance_pos[i] + surface_velocity * age;
-		total += ripple_packet(distance(pos, center), age);
+		float d = distance(pos, center);
+		total += ripple_packet(d, age);
+		envelope += ripple_envelope(d, age);
 	}
 	return total;
 }
@@ -871,7 +898,8 @@ void fragment() {
 	// channel's geometry, and a passing fish must not narrow the river or
 	// bend its eddies. Boulders and waders displace it because they are
 	// solid things standing in the current; a wake is only the surface.
-	float ripple = movement_ripples(wp, surface_velocity);
+	float ripple_envelope_sum = 0.0;
+	float ripple = movement_ripples(wp, surface_velocity, ripple_envelope_sum);
 	float s_field = guide * across_line_scale + (n - 0.5) * wobble_local
 		+ ripple * ripple_line_gain;
 	float level_frac = fract(s_field * line_count) - 0.5;
@@ -892,7 +920,15 @@ void fragment() {
 	// the adaptive ink, the moonlight lift and the alpha clamp for free.
 	// max, not sum: a strong crest takes over the mark, a weak one leaves
 	// the flow line alone, and neither can push the stroke past full.
-	float ripple_ink = smoothstep(ripple_crest_min, ripple_crest_full, ripple);
+	//
+	// The band is cut from the pure SINE (packet over envelope): a pixel
+	// prints only near the crest's peak, so the ring is a thin line of a
+	// fixed width in px -- no wider than a current line -- however strong
+	// or faded the wake is. The ENVELOPE alone decides how hard it prints,
+	// through the same graduated crest curve, under a ceiling below a full
+	// stroke ("stroke width smaller and a bit more transparent").
+	float ripple_crest = ripple / max(ripple_envelope_sum, 1e-4);
+	float ripple_ink = smoothstep(ripple_ring_edge, 1.0, ripple_crest) * smoothstep(ripple_crest_min, ripple_crest_full, ripple_envelope_sum) * ripple_ink_max;
 	wave = max(wave, ripple_ink);
 	// ADAPTIVE INK: pale strokes vanish on the bright shallow cels
 	// (reported from the Rhine straight: "no current lines at all"), so
@@ -1286,6 +1322,20 @@ const RIPPLE_LINE_GAIN := LINE_WOBBLE * 0.3
 const RIPPLE_CREST_MIN := 0.12
 const RIPPLE_CREST_FULL := 0.60
 
+## Where on the crest's sine a pixel must sit to print: the ring's ink
+## band is the arc of the sine above this, so its width in world px is
+## RIPPLE_WAVELENGTH / TAU * (PI - 2 asin EDGE) -- ~1.4 px at 0.85, no
+## wider than a current line (ripple_ring_width_px / line_width_px), and
+## the same at every age because the envelope is divided out first.
+## "Stroke width smaller": the old amplitude-threshold band was ~3 px and
+## widened and narrowed with the ring's strength.
+const RIPPLE_RING_EDGE := 0.85
+
+## The ceiling the ring prints at, as a fraction of a full stroke: "a bit
+## more transparent" than the current lines it sits among. The graduation
+## through the ring's life (RIPPLE_CREST_MIN/FULL) scales under it.
+const RIPPLE_INK_MAX := 0.6
+
 ## px of world width per unit of across-fraction -- the channel half-width,
 ## pinned against RiverCatalog.RIVER_HALF_WIDTH_TILES by test.
 const HALF_WIDTH_PX := 32.0
@@ -1491,6 +1541,8 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("ripple_line_gain", RIPPLE_LINE_GAIN)
 	material.set_shader_parameter("ripple_crest_min", RIPPLE_CREST_MIN)
 	material.set_shader_parameter("ripple_crest_full", RIPPLE_CREST_FULL)
+	material.set_shader_parameter("ripple_ring_edge", RIPPLE_RING_EDGE)
+	material.set_shader_parameter("ripple_ink_max", RIPPLE_INK_MAX)
 	for i in BAND_COLORS.size():
 		material.set_shader_parameter("band%d_color" % i, BAND_COLORS[i])
 	return material
@@ -1549,13 +1601,40 @@ static func ripple_packet(distance_units: float, age_seconds: float) -> float:
 	return rings * packet * age_fade * spread_fade
 
 
-## How hard the ring inks in its own right for a crest of `amplitude` --
-## the CPU mirror of the shader's `smoothstep(ripple_crest_min,
-## ripple_crest_full, ripple)`, so the ring's graduation through its life
-## is a tested curve rather than a pair of eyeballed thresholds. 0 for
-## troughs, flat water and the spent tail; 1 for a fresh crest.
+## How hard the ring inks at a crest whose envelope is `amplitude` -- the
+## CPU mirror of the shader's strength term, `smoothstep(ripple_crest_min,
+## ripple_crest_full, envelope) * ripple_ink_max`, so the ring's graduation
+## through its life is a tested curve rather than a pair of eyeballed
+## thresholds. 0 for flat water and the spent tail; RIPPLE_INK_MAX for a
+## fresh crest. (At a crest the signed packet equals its envelope, so the
+## packet's scanned peak is the right thing to feed this.)
 static func ripple_ink(amplitude: float) -> float:
-	return smoothstep(RIPPLE_CREST_MIN, RIPPLE_CREST_FULL, amplitude)
+	return smoothstep(RIPPLE_CREST_MIN, RIPPLE_CREST_FULL, amplitude) * RIPPLE_INK_MAX
+
+
+## The packet without its sine -- the CPU mirror of the shader's
+## ripple_envelope: never under |ripple_packet|, equal to it at a crest.
+static func ripple_envelope(distance_units: float, age_seconds: float) -> float:
+	if age_seconds < 0.0 or age_seconds > RIPPLE_LIFETIME:
+		return 0.0
+	var front := age_seconds * RIPPLE_SPEED
+	var phase := front - distance_units
+	var packet := exp(-absf(phase) / RIPPLE_PACKET_WIDTH)
+	var age_fade := 1.0 - age_seconds / RIPPLE_LIFETIME
+	var spread_fade := 1.0 / (1.0 + front * RIPPLE_SPREAD_DECAY)
+	return packet * age_fade * spread_fade
+
+
+## The ring's ink band, in world px: the arc of the crest's sine above
+## RIPPLE_RING_EDGE, one number at every age.
+static func ripple_ring_width_px() -> float:
+	return RIPPLE_WAVELENGTH / TAU * (PI - 2.0 * asin(RIPPLE_RING_EDGE))
+
+
+## A current line's full extent in world px: the stroke fades to nothing at
+## LINE_WIDTH either side of its contour, in across units of HALF_WIDTH_PX.
+static func line_width_px() -> float:
+	return 2.0 * LINE_WIDTH * HALF_WIDTH_PX
 
 
 ## Where a ripple recorded at `origin` is centred `age_seconds` later --
