@@ -210,7 +210,10 @@ watched the bird peck at them.
   chunk; worms do not reproduce, spread, or starve. Only their *availability*
   varies. A real detritivore population model (litter input → worm biomass →
   bird carrying capacity) is the natural follow-up and is deferred, the same
-  way the ambient-flyer tier defers its own population model.
+  way the ambient-flyer tier defers its own population model. The litter-
+  input half is now specified in [leaf_litter.md](leaf_litter.md) -- the
+  worm-biomass feedback this note describes is still not built; only the
+  litter accumulating (and ants/bugs eating it) is.
 - **No feedback onto bird numbers.** Songbird spawning stays decorative and
   capped; a worm-rich chunk does not yet hatch more robins the way a
   flower-rich chunk hatches more pollinators. Grounded and natural, deferred

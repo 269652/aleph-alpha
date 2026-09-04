@@ -174,6 +174,37 @@ func test_the_ripe_frame_is_the_redder_one():
 	)
 
 
+# -- leaf litter: closeup frames for falling/accumulating litter ------------
+#
+# A sheet may carry small, single leaf/blossom closeups distinct from both
+# the season-tinted trunk row and the real on-tree fruit clusters -- found on
+# cherry's sheet (see docs/concept/leaf_litter.md), the intended source art
+# for leaves that fall and pile up on the ground rather than a mistake in
+# the sheet. Optional, like CANOPY_SNOW: a species without any reads as
+# having none, no roster to maintain.
+
+func test_a_species_with_litter_art_reports_litter_frames():
+	assert_true(trees.has_litter_art_for("cherry"))
+
+
+func test_an_unregistered_species_has_no_litter_frames():
+	assert_false(trees.has_litter_art_for("not_a_real_species"))
+	assert_eq(trees.litter_frames_for("not_a_real_species").size(), 0)
+
+
+## Measured directly against the real sheet: a pink blossom closeup, a green
+## summer leaf, and two autumn-coloured leaves -- pinned as a real count so a
+## future sheet regeneration that silently drops or duplicates one of them is
+## caught here rather than discovered as a visual regression.
+func test_cherry_has_the_measured_litter_frame_count():
+	assert_eq(trees.litter_frames_for("cherry").size(), 4)
+
+
+func test_every_litter_frame_has_real_content():
+	for frame in trees.litter_frames_for("cherry"):
+		assert_gt(_opaque_share(frame.get_image()), 0.01, "a blank litter frame")
+
+
 # -- the sheets themselves ---------------------------------------------------
 
 func test_a_trunk_is_a_single_image():

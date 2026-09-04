@@ -106,6 +106,41 @@ const _FALLBACK_SEASON := "summer"
 ## fruit's later life and belong to item art.
 const SEPARATE_FRUIT_FRAME_COUNT := 2
 
+## ## Litter frames: small closeups, not fruit or trunk
+##
+## A sheet may also carry small, single-subject closeups below the trunk row
+## -- one leaf, one blossom -- distinct from both the season-tinted trunk
+## duplicates above them and the real on-tree fruit clusters elsewhere in the
+## block. Found on cherry's sheet; see docs/concept/leaf_litter.md for the
+## feature this feeds (falling leaves that accumulate, persist, decay, and
+## can be eaten). Optional, like CANOPY_SNOW -- a species without any reads
+## as having none.
+##
+## Told apart from real fruit by two measured, compound signals, neither
+## reliable alone (checked against all fifteen of cherry's own below-trunk
+## regions): a closeup's own bounding box is small (its widest, area 12032px,
+## sits with real margin below the smallest twig duplicate that would
+## otherwise also qualify, area 13542px) AND its content is not saturated
+## red the way ripe cherries are (a closeup's own share of high-saturation
+## red pixels never exceeds 0.28; the smallest real fruit cluster measures
+## 0.57, an autumn-coloured twig 0.41 -- area alone cannot tell either of
+## those apart from a real closeup, since both sit under the area line too).
+## Margins here are real but narrower than most thresholds in this codebase
+## (see CompositeSheetSlicer's own doc comments for the wide-margin norm) --
+## this is a genuinely harder classification than most, and may need
+## adjusting if a species' sheet draws something this shape and size that
+## is neither a closeup nor a twig nor fruit.
+const LITTER_MAX_AREA_FRACTION := 0.0083
+const LITTER_MAX_HIGH_SAT_RED_SHARE := 0.35
+
+## What counts as "high-saturation red" for the check above -- ripe-cherry
+## red, not the orange an autumn leaf's edges can drift into. Matches
+## test_the_ripe_frame_is_the_redder_one's own real-fruit hue/saturation
+## check in test_illustrated_tree.gd, reused here rather than redefined.
+const _RED_HUE_MAX_DEGREES := 20.0
+const _RED_HUE_MIN_DEGREES := 345.0
+const _RED_MIN_SATURATION := 0.5
+
 ## Sliced frames live here, keyed by sheet path, because a forest asks for the
 ## same canopy for every tree in it. Static so the cache is shared across every
 ## instance rather than per renderer.
@@ -233,6 +268,24 @@ func harvest_frames_for(species: String) -> Array[Texture2D]:
 	return empty
 
 
+## Whether this species' sheet carries any litter closeups -- see "Litter
+## frames" above.
+func has_litter_art_for(species: String) -> bool:
+	return litter_frames_for(species).size() > 0
+
+
+## Small, single-subject closeups (a leaf, a blossom) meant for falling/
+## accumulating leaf litter -- see "Litter frames" above and
+## docs/concept/leaf_litter.md. Empty for a species with no art, or whose
+## sheet has none, which callers read the same way as any other optional
+## frame set: nothing to draw from yet.
+func litter_frames_for(species: String) -> Array[Texture2D]:
+	var empty: Array[Texture2D] = []
+	if not has_composite(species):
+		return empty
+	return _composite_parts(species)["litter"]
+
+
 ## The fruit as it hangs on the tree: the LAST on-tree stage when ripe, the one
 ## before it when not.
 ##
@@ -280,6 +333,7 @@ func _composite_parts(species: String) -> Dictionary:
 	var fruit: Array[Texture2D] = []
 	var on_tree: Array[Texture2D] = []
 	var harvest: Array[Texture2D] = []
+	var litter: Array[Texture2D] = []
 	var sheet := _load_image(path)
 	if sheet != null:
 		var regions := CompositeSheetSlicer.regions_in(sheet)
@@ -310,6 +364,15 @@ func _composite_parts(species: String) -> Dictionary:
 				if index == trunk_row[0]:
 					trunk.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, below[index])))
 				continue
+			# A litter closeup is found alongside fruit, not instead of it --
+			# additive, not a replacement classification, so this never
+			# changes which frames fruit_frames_for/on_tree_frames_for/
+			# harvest_frames_for hand back (see "Litter frames" above for
+			# why that stays out of scope here).
+			if _is_litter_candidate(sheet, below[index]):
+				litter.append(ImageTexture.create_from_image(
+					CompositeSheetSlicer.cut_out(sheet, below[index])
+				))
 			var texture := ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, below[index]))
 			fruit.append(texture)
 			fruit_regions.append(below[index])
@@ -330,6 +393,7 @@ func _composite_parts(species: String) -> Dictionary:
 		"fruit": fruit,
 		"on_tree": on_tree,
 		"harvest": harvest,
+		"litter": litter,
 	}
 	_composite_cache[path] = parts
 	return parts
@@ -386,6 +450,39 @@ static func _trunk_row(below: Array[Rect2i]) -> Array[int]:
 		if height_ratio >= TRUNK_ROW_HEIGHT_RATIO:
 			row.append(index)
 	return row
+
+
+## Whether `region` reads as a litter closeup rather than a twig duplicate or
+## real fruit -- see the "Litter frames" doc comment above for the two
+## measured signals combined here and why neither alone is enough.
+static func _is_litter_candidate(sheet: Image, region: Rect2i) -> bool:
+	var sheet_area := float(sheet.get_width() * sheet.get_height())
+	var region_fraction := float(region.size.x * region.size.y) / sheet_area
+	if region_fraction >= LITTER_MAX_AREA_FRACTION:
+		return false
+	return _high_sat_red_share(sheet, region) < LITTER_MAX_HIGH_SAT_RED_SHARE
+
+
+## Share of a region's opaque pixels that read as ripe-cherry red: a narrow,
+## high-saturation hue band, not the wider "reddish" range a general check
+## would need (see the constants above for the exact measured band and its
+## margin against an autumn leaf's own edge colour).
+static func _high_sat_red_share(sheet: Image, region: Rect2i) -> float:
+	var red := 0
+	var total := 0
+	for y in range(region.position.y, region.position.y + region.size.y, 2):
+		for x in range(region.position.x, region.position.x + region.size.x, 2):
+			var pixel := sheet.get_pixel(x, y)
+			if pixel.a <= 0.5:
+				continue
+			total += 1
+			var degrees := pixel.h * 360.0
+			if (
+				(degrees < _RED_HUE_MAX_DEGREES or degrees > _RED_HUE_MIN_DEGREES)
+				and pixel.s > _RED_MIN_SATURATION
+			):
+				red += 1
+	return float(red) / float(maxi(total, 1))
 
 
 ## Slices a canopy sheet by FINDING its real drawings, the same blob-detection
