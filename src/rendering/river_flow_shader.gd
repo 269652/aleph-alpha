@@ -1213,7 +1213,21 @@ const DISTURBANCE_SLOTS := WaterShader.MAX_DISTURBANCES
 ## ramp exists to prevent. Rings closing around the fish ITSELF are wanted
 ## -- that is the ripple -- which is exactly why the ceiling is set against
 ## the wobble rather than against zero.
-const RIPPLE_LINE_GAIN := 0.18
+##
+## Expressed as a FRACTION of LINE_WOBBLE (0.3 -- the same ratio the
+## original 0.18 sat at against wobble's own pre-tuning value of 0.6)
+## rather than a hardcoded absolute. LINE_WOBBLE has already moved twice
+## since for independent eddy-folding reasons (0.6 -> 0.12 -> 0.17, see its
+## own doc comment) -- a gain tuned against one specific wobble value
+## silently drifts out of its own "stays under half the wobble" bound the
+## moment wobble is retuned out from under it without anyone touching this
+## constant at all. Caught merging claude/hydrology-spec's own further
+## wobble tuning against this ripple work, developed independently on a
+## separate branch: bend measured 0.136 against a 0.085 ceiling once wobble
+## reached 0.17 (test_a_ripple_cannot_restructure_the_whole_channel).
+## Deriving it here means a future wobble retune keeps this ceiling
+## satisfied automatically instead of silently drifting again.
+const RIPPLE_LINE_GAIN := LINE_WOBBLE * 0.3
 
 ## The crest amplitudes between which the ring inks in its own right: below
 ## MIN nothing draws (troughs and spent tails stay clean), at FULL the mark
