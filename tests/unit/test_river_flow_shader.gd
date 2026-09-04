@@ -948,11 +948,19 @@ func test_the_hash_is_trig_free_for_float32_world_coordinates():
 
 ## THE cells-killer, structurally: the guide must dominate the wobble, or
 ## the monotonicity that keeps every line an open curve is gone.
+##
+## Comparing the two AMPLITUDES, as this line does, is necessary and not
+## remotely sufficient -- monotonicity is about GRADIENTS. `across` runs 0
+## to 1 over the channel's half width while `n` runs 0 to 1 over ONE noise
+## cell, so the real question is how many noise cells fit across the water,
+## and that is not a constant. See
+## test_the_stroke_field_stays_monotone_at_every_real_channel_width, which
+## is the test that actually holds this together.
 func test_the_channel_guide_dominates_the_wobble():
 	assert_gte(RiverFlowShader.ACROSS_LINE_SCALE, RiverFlowShader.LINE_WOBBLE)
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("frag_across * across_line_scale + (n - 0.5) * line_wobble"),
-		"the stroke field must be the across ramp plus advected wobble"
+		RiverFlowShader.SHADER_CODE.contains("frag_across * across_line_scale + (n - 0.5) * wobble_local"),
+		"the stroke field must be the across ramp plus advected wobble, the wobble scaled by width"
 	)
 	assert_true(RiverFlowShader.SHADER_CODE.contains("fract(s_field * line_count) - 0.5"))
 
@@ -962,6 +970,44 @@ func test_the_channel_guide_dominates_the_wobble():
 ## pinches are the wanted merge-and-unmerge, a cell field would violate
 ## this everywhere.
 func test_the_stroke_field_is_monotone_across_with_rare_pinches():
+	assert_lt(
+		_folding_rate(RiverFlowShader.WOBBLE_REFERENCE_CELLS), 0.15,
+		"the tuned width folds back too often -- cells, not pinching lines"
+	)
+
+
+## The same measurement AT EVERY WIDTH THE MAP ACTUALLY HAS, which is the
+## test that was missing.
+##
+## The old one walked `across * 2.56` and nothing else -- a 2.0-tile half
+## width. Half width comes from discharge and runs to 6 tiles, and the
+## folding rate climbs with it, because a wider channel fits more noise
+## cells across itself. Measured with tools/probe_monotone.gd before the
+## wobble was scaled:
+##
+##   1.0 tiles (1.28 cells)   0.1%
+##   2.0 tiles (2.56 cells)   2.8%   <- the only width ever tested
+##   2.6 tiles (3.33 cells)   5.3%
+##   3.5 tiles (4.48 cells)  10.1%
+##   4.5 tiles (5.76 cells)  13.4%
+##   6.0 tiles (7.68 cells)  18.2%   <- past what the old test allowed
+##
+## So the guard passed while the widest water on the map drew cells --
+## "only around bends and where the water is deeper at the edge", which is
+## the report this explains.
+func test_the_stroke_field_stays_monotone_at_every_real_channel_width():
+	for half_tiles in [1.0, 1.6, 2.0, 2.6, 3.5, 4.5, 6.0]:
+		var cells: float = half_tiles * RiverFlowShader.TILE_PX * RiverFlowShader.NOISE_SCALE
+		var rate := _folding_rate(cells)
+		assert_lt(
+			rate, 0.06,
+			"a %.1f-tile half width folds back on %.1f%% of steps" % [half_tiles, rate * 100.0]
+		)
+
+
+## Fraction of bank-to-bank steps where the stroke field falls instead of
+## rising, for a channel this many noise cells wide.
+func _folding_rate(half_width_cells: float) -> float:
 	var violations := 0
 	var steps := 0
 	for column in 24:
@@ -969,18 +1015,29 @@ func test_the_stroke_field_is_monotone_across_with_rare_pinches():
 		var previous := -99.0
 		for row in 80:
 			var across := -1.0 + float(row) / 79.0 * 2.0
-			var n := RiverFlowShader.animated_field_value(x, across * 2.56, Vector2(1, 0), 0.9)
-			var s_value := RiverFlowShader.stroke_field(across, n)
+			var n: float = RiverFlowShader.animated_field_value(
+				x, across * half_width_cells, Vector2(1, 0), 0.9
+			)
+			var s_value: float = RiverFlowShader.stroke_field(across, n, half_width_cells)
 			if previous > -99.0:
 				steps += 1
 				if s_value <= previous:
 					violations += 1
 			previous = s_value
-	assert_lt(
-		float(violations) / float(steps), 0.15,
-		"%.0f%% of across-steps fold back -- cells, not pinching lines"
-			% (float(violations) / float(steps) * 100.0)
+	return float(violations) / float(steps)
+
+
+## The wobble is only ever turned DOWN, never up: a channel at or below the
+## tuned width keeps exactly the look it has.
+func test_the_wobble_scale_never_amplifies_a_narrow_channel():
+	assert_almost_eq(
+		RiverFlowShader.wobble_scale_for(RiverFlowShader.WOBBLE_REFERENCE_CELLS), 1.0, 1e-9
 	)
+	assert_almost_eq(RiverFlowShader.wobble_scale_for(1.28), 1.0, 1e-9)
+	assert_lt(RiverFlowShader.wobble_scale_for(7.68), 0.4)
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"float wobble_local = line_wobble * min(wobble_reference_cells / wobble_cells, 1.0);"
+	))
 
 
 ## The lines exist EVERYWHERE the water is -- including where the noise

@@ -57,6 +57,10 @@ uniform vec3 ink_color : source_color = vec3(0.05, 0.13, 0.25);
 uniform float line_count = 3.0;
 uniform float across_line_scale = 1.0;
 uniform float line_wobble = 0.6;
+// The half width, in NOISE CELLS, that line_wobble was tuned at. The
+// wobble is scaled down in proportion for anything wider -- see the
+// s_field line for why.
+uniform float wobble_reference_cells = 2.56;
 uniform float line_width = 0.03;
 uniform float line_strength = 0.7;
 uniform vec3 line_color : source_color = vec3(0.85, 0.97, 1.0);
@@ -692,7 +696,36 @@ void fragment() {
 	// perlin noise cells"): level sets of any healthy scalar field close
 	// around its extrema. The guide also survives a railed field -- a
 	// dead-flat n still draws the full family of lines.
-	float s_field = frag_across * across_line_scale + (n - 0.5) * line_wobble;
+	// THE WOBBLE IS SCALED BY THE CHANNEL'S OWN WIDTH.
+	//
+	// This field has to stay MONOTONE bank to bank: a monotone field's
+	// level sets are open curves running along the river, and once it
+	// folds back they close into rings -- the "perlin noise cells" this
+	// design exists to avoid.
+	//
+	// Whether it stays monotone is a question about GRADIENTS, not
+	// amplitudes, and the two terms live on different scales. `across`
+	// runs 0 to 1 over the channel's half width; `n` runs 0 to 1 over ONE
+	// noise cell. So the whole thing turns on how many noise cells fit
+	// across the water -- and that is not a constant, because the half
+	// width comes from discharge. Measured with tools/probe_monotone.gd,
+	// as the fraction of bank-to-bank steps that fold back:
+	//
+	//   1.0 tiles (1.28 cells)   0.1%
+	//   2.0 tiles (2.56 cells)   2.8%   <- where line_wobble was tuned
+	//   3.5 tiles (4.48 cells)  10.1%
+	//   6.0 tiles (7.68 cells)  18.2%   <- cells, and the map goes here
+	//
+	// Which is exactly "only around bends and where the water is deeper
+	// at the edge": wide water folds, narrow water does not.
+	//
+	// Scaling the wobble by reference/actual holds the RATIO of the two
+	// gradients constant, so every width folds as little as the tuned one
+	// did. Clamped at 1 so it only ever tames wide water -- a narrow
+	// reach keeps exactly the look it has now.
+	float wobble_cells = max(half_width_local * tile_px * noise_scale, 0.01);
+	float wobble_local = line_wobble * min(wobble_reference_cells / wobble_cells, 1.0);
+	float s_field = frag_across * across_line_scale + (n - 0.5) * wobble_local;
 	float level_frac = fract(s_field * line_count) - 0.5;
 	float dist_n = abs(level_frac) / line_count;
 	float stroke = 1.0 - smoothstep(line_width * 0.5, line_width, dist_n);
@@ -1015,6 +1048,12 @@ const BANK_FEATHER := 0.03
 ## field units.
 const LINE_COUNT := 3.0
 const ACROSS_LINE_SCALE := 1.0
+## The half width, in NOISE CELLS, that LINE_WOBBLE was tuned at -- a
+## 2.0-tile half width, which is also the only width the old monotonicity
+## test ever exercised. Wider reaches scale the wobble down in proportion
+## so they fold no more than this one does.
+const WOBBLE_REFERENCE_CELLS := 2.56
+
 const LINE_WOBBLE := 0.6
 const LINE_WIDTH := 0.03
 const LINE_STRENGTH := 0.7
@@ -1119,6 +1158,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("line_count", LINE_COUNT)
 	material.set_shader_parameter("across_line_scale", ACROSS_LINE_SCALE)
 	material.set_shader_parameter("line_wobble", LINE_WOBBLE)
+	material.set_shader_parameter("wobble_reference_cells", WOBBLE_REFERENCE_CELLS)
 	material.set_shader_parameter("line_width", LINE_WIDTH)
 	material.set_shader_parameter("line_strength", LINE_STRENGTH)
 	material.set_shader_parameter("line_color", LINE_COLOR)
@@ -1237,8 +1277,20 @@ static func bank_alpha(across_magnitude: float) -> float:
 ## fast-reach tests all measure.
 ## The guided stroke field for one fragment: signed across-fraction plus
 ## the advected wobble -- the thing whose level sets ARE the current lines.
-static func stroke_field(across_fraction: float, n: float) -> float:
-	return across_fraction * ACROSS_LINE_SCALE + (n - 0.5) * LINE_WOBBLE
+static func stroke_field(
+	across_fraction: float, n: float, half_width_cells := WOBBLE_REFERENCE_CELLS
+) -> float:
+	return (
+		across_fraction * ACROSS_LINE_SCALE
+		+ (n - 0.5) * LINE_WOBBLE * wobble_scale_for(half_width_cells)
+	)
+
+
+## How far the wobble is turned down for a channel this many noise cells
+## wide. Never above 1: this only ever tames water wider than the width
+## LINE_WOBBLE was tuned at, so narrow reaches are untouched.
+static func wobble_scale_for(half_width_cells: float) -> float:
+	return minf(WOBBLE_REFERENCE_CELLS / maxf(half_width_cells, 0.01), 1.0)
 
 
 ## Full stroke brightness at a point: the mask times the streaming pulse
