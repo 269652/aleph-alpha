@@ -10180,3 +10180,66 @@ func test_bare_ground_names_no_flower():
 
 func test_unloaded_ground_names_no_flower():
 	assert_eq(manager.flower_name_at(Vector2(999999.0, 999999.0)), "")
+
+
+# -- decomposers dormant under lying snow (see docs/concept/carrion.md) -------
+
+
+func _loaded_decomposers() -> Array:
+	var out: Array = []
+	for markers in manager._decomposer_markers.values():
+		out.append_array(markers)
+	return out
+
+
+func test_set_snow_depth_sends_every_loaded_decomposer_dormant_and_a_thaw_wakes_them():
+	manager.update(_berlin_tile)
+	var decomposers := _loaded_decomposers()
+	assert_gt(decomposers.size(), 0, "precondition: Berlin's land chunks spawn decomposers")
+	for marker in decomposers:
+		assert_false(marker.is_snow_dormant(), "precondition: bare ground, surface-active")
+
+	manager.set_snow_depth(0.5)
+	for marker in decomposers:
+		assert_true(marker.is_snow_dormant(), "lying snow: every loaded decomposer goes under")
+
+	manager.set_snow_depth(0.0)
+	for marker in decomposers:
+		assert_false(marker.is_snow_dormant(), "thaw: they wake in place")
+
+
+func test_a_chunk_loaded_under_lying_snow_spawns_its_decomposers_already_dormant():
+	manager.set_snow_depth(0.5)
+	manager.update(_berlin_tile)
+	var decomposers := _loaded_decomposers()
+	assert_gt(decomposers.size(), 0, "precondition: the chunks still spawn their decomposers")
+	for marker in decomposers:
+		assert_true(marker.is_snow_dormant())
+
+
+## step_snow is the per-frame path, and it skips every shader push when no
+## snow layer is installed (a headless server has weather too) -- the
+## dormancy sync must not hide behind that early return.
+func test_step_snow_sends_decomposers_dormant_with_no_snow_layer_installed():
+	manager.update(_berlin_tile)
+	manager.advance_world_age(1.0)
+	manager.step_snow(true, 0.0)  # cold and snowing
+	assert_gt(manager.snow_depth(), 0.0, "precondition: step_snow laid down real snow")
+	var decomposers := _loaded_decomposers()
+	assert_gt(decomposers.size(), 0, "precondition")
+	for marker in decomposers:
+		assert_true(marker.is_snow_dormant())
+
+
+## The colony's own decorative forager is the same animal -- it does not
+## walk out over a snowfield either.
+func test_no_ant_forager_visual_is_spawned_under_lying_snow():
+	manager.set_snow_depth(0.5)
+	var global_tile := Vector2i(123_456, 123_456)
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var before := entities_parent.get_child_count()
+
+	manager._spawn_ant_forager_visual(global_tile, mound_pixel, [mound_pixel + Vector2(10, 0)])
+
+	assert_eq(entities_parent.get_child_count(), before, "no forager should walk out over lying snow")
+	assert_false(manager._active_ant_foragers.has(global_tile))

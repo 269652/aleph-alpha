@@ -132,6 +132,75 @@ fast, swarms) and **bug** (a carrion beetle stand-in; slower, bigger bite).
 Both eat from `Carcass` OR `CarcassGuts` indiscriminately via the shared
 `take_bite` contract above.
 
+#### Readable at six world pixels, not a black blob
+
+Both decomposers are drawn on a 12-px art canvas and land at ~6x4 world
+pixels — the smallest creature footprint in the game. At that size a
+uniformly dark fill ringed in `PixelPalette.OUTLINE` is not "a small dark
+insect", it is one undifferentiated black blob, and on a bright ground
+(snow, sand, a boulder shore) it is the single highest-contrast thing on
+screen (reported live, twice, from real screenshots: "these black blobs",
+then "some black moving blobs"). Two rules keep the silhouette readable:
+
+- **Legs are strokes, not silhouette.** The outline ring is grown around
+  the BODY mass only; the ant's six leg strokes are laid on afterwards,
+  un-ringed, so the ground shows through between them. Ringing the legs
+  too closed every 1-px gap and fused body + legs + ring into a solid
+  slab — the ant literally had no transparent pixel anywhere inside its
+  bounding box below the head row. Pinned by
+  `test_ant_legs_are_separated_by_ground_not_fused_into_a_slab`.
+- **Each body carries a real marking, grounded in a real species.** The
+  ant is a wood ant (*Formica rufa* group): near-black head and gaster,
+  red-brown thorax (`ANT_THORAX_COLOR`). The bug is a burying beetle
+  (*Nicrophorus*, the carrion beetle this game's "bug" already stands in
+  for): black with two orange bands across the elytra (`BUG_BAND_COLOR`).
+  Both markings are pinned as a minimum luminance step above the body
+  fill (`test_ant_body_carries_a_lighter_marking_than_its_fill` /
+  `test_bug_elytra_carry_a_lighter_marking_than_its_fill`), so a future
+  palette tweak cannot quietly sink them back into the fill.
+
+#### Dormant under lying snow
+
+Neither decomposer is surface-active on snow. Real ants overwinter
+dormant in the nest, below the frost line; *Nicrophorus* overwinters as an
+adult buried in soil and litter; neither crawls across a snowfield, and a
+carcass under snow keeps (cold storage) rather than being eaten. This is
+the same cold gate [soil_fauna.md](soil_fauna.md) already applies to
+earthworms ("below a cold cutoff … no worms are up"), reached through the
+snow rather than through soil warmth, because the thing a player actually
+sees is the snowfield: a black insect crawling over drawn snow is wrong
+the instant the first flake lies, whatever the thermometer says.
+
+**Mechanism.** `DecomposerMarker.is_dormant_under(snow_depth)` is the one
+decision: dormant while the world's snow depth is above
+`SNOW_DORMANCY_DEPTH`, which is pinned at zero — the exact edge
+[snow_cover.md](snow_cover.md) starts painting presence cells at
+(`_sync_snow_presence`'s bare↔lying transition), so the insects can never
+be seen on drawn snow at any depth. A dormant marker is hidden and stops
+processing (no wander, no forage scan, no bites) and wakes in place when
+the snow is gone — it does not die, and nothing respawns it. Applied at
+three points so no path can leave a live insect on snow:
+
+1. **Spawn.** `DecomposerRenderer.spawn_decomposers` takes the current
+   snow depth, so a chunk loaded mid-winter spawns its ants already
+   dormant.
+2. **Every depth change.** Both `EarthChunkManager.set_snow_depth` (the
+   deliberate `/weather`-style set) and `step_snow` (the per-frame
+   accumulation) sync every loaded decomposer, on the bare↔lying edge
+   only — a no-op on the vast majority of frames, and independent of
+   whether a snow layer/shader exists (a headless server has weather too).
+3. **Colony foragers.** `AntForagerMarker` (the decorative ant that walks a
+   mound's real forage path, see `soil_fauna.md`) is not spawned while
+   snow lies. The underlying `AntColony` resolution is untouched — it is
+   already an abstract, invisible bookkeeping step, and gating the colony
+   itself on winter is a separate ecology change this pass does not make.
+
+Deliberately NOT keyed to `is_snowing()` (active snowfall): flakes in the
+air with bare ground under them are a grazing-cost question
+([weather.md](weather.md#weather-feeds-creature-behaviour)), not a
+where-are-the-insects one; and a snowfield under a clear sky is still a
+snowfield.
+
 #### Flies find it first
 
 A carcass is rot the same way a windfall fruit is (`docs/concept/

@@ -73,3 +73,25 @@ func test_both_ants_and_bugs_can_appear():
 			m.free()
 	assert_true(species_seen.has("ant"))
 	assert_true(species_seen.has("bug"))
+
+
+# -- dormant under lying snow (see docs/concept/carrion.md) -------------------
+
+
+func test_spawns_surface_active_on_bare_ground_by_default():
+	var markers := renderer.spawn_decomposers(parent, "grassland", CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 1)
+	assert_gt(markers.size(), 0)
+	for marker in markers:
+		assert_false(marker.is_snow_dormant())
+		assert_true(marker.visible)
+
+
+## A chunk loaded mid-winter must not spawn a live ant onto the snow for
+## even one frame -- the spawn itself takes the current snow depth.
+func test_spawns_already_dormant_under_lying_snow():
+	var markers := renderer.spawn_decomposers(parent, "grassland", CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 1, 0.5)
+	assert_gt(markers.size(), 0)
+	for marker in markers:
+		assert_true(marker.is_snow_dormant())
+		assert_false(marker.visible)
+		assert_false(marker.is_processing())

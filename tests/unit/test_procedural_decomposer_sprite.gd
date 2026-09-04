@@ -114,3 +114,73 @@ func _contains_color(image: Image, color: Color) -> bool:
 			):
 				return true
 	return false
+
+
+# -- readable at six world pixels, not a slab --------------------------------
+#
+# See docs/concept/carrion.md "Readable at six world pixels, not a black
+# blob". The outline ring above was only half the fix: with the ring grown
+# around the LEGS as well as the body, every 1-px gap between the ant's six
+# leg strokes was filled in, and body + legs + ring fused into one solid
+# slab (reported live, again, from a real screenshot: "some black moving
+# blobs"). And a near-black fill inside a near-black ring still had no
+# internal form at all. Both halves are pinned here.
+
+## Count of separate opaque runs along one image row -- two legs with
+## ground showing between them are two runs; a fused slab is one.
+func _opaque_runs_in_row(image: Image, y: int) -> int:
+	var runs := 0
+	var inside := false
+	for x in image.get_width():
+		var opaque := image.get_pixel(x, y).a > 0.0
+		if opaque and not inside:
+			runs += 1
+		inside = opaque
+	return runs
+
+
+func test_ant_legs_are_separated_by_ground_not_fused_into_a_slab():
+	var image := generator.generate_image("ant")
+	var mid := ProceduralDecomposerSprite.SIZE / 2
+	# The leg rows above and below the body: three legs a side, so each of
+	# these rows must carry at least two separate opaque runs -- a solid
+	# slab carries exactly one.
+	assert_gte(_opaque_runs_in_row(image, mid - 3), 2, "legs above the body should be separate strokes")
+	assert_gte(_opaque_runs_in_row(image, mid + 3), 2, "legs below the body should be separate strokes")
+
+
+## Minimum luminance step a body marking must sit above the body fill to
+## still read as a marking once quantized to 8 bits and drawn at ~6 world
+## pixels. Comfortably below what ANT_THORAX_COLOR / BUG_BAND_COLOR actually
+## measure, so this only catches a marking sinking back into the fill.
+const _MIN_MARKING_LUMINANCE_STEP := 0.12
+
+
+func _max_luminance(image: Image) -> float:
+	var best := 0.0
+	for y in image.get_height():
+		for x in image.get_width():
+			var pixel := image.get_pixel(x, y)
+			if pixel.a <= 0.0:
+				continue
+			best = maxf(best, pixel.get_luminance())
+	return best
+
+
+## Wood ant (Formica rufa group): near-black head and gaster, red-brown
+## thorax -- the body has a lighter region, not one flat tone.
+func test_ant_body_carries_a_lighter_marking_than_its_fill():
+	var image := generator.generate_image("ant")
+	assert_gt(
+		_max_luminance(image),
+		ProceduralDecomposerSprite.ANT_COLOR.get_luminance() + _MIN_MARKING_LUMINANCE_STEP
+	)
+
+
+## Burying beetle (Nicrophorus): black with orange bands across the elytra.
+func test_bug_elytra_carry_a_lighter_marking_than_its_fill():
+	var image := generator.generate_image("bug")
+	assert_gt(
+		_max_luminance(image),
+		ProceduralDecomposerSprite.BUG_COLOR.get_luminance() + _MIN_MARKING_LUMINANCE_STEP
+	)

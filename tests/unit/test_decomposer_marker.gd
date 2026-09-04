@@ -339,3 +339,66 @@ func test_far_from_the_player_does_not_rescan_carrion_on_every_process_call():
 		marker._behavior.phase, CarrionForageBehavior.Phase.SEEKING,
 		"far from the player, a decomposer should not re-scan for carrion on every _process call -- it should still be waiting out its LOD interval"
 	)
+
+
+# -- dormant under lying snow (see docs/concept/carrion.md) -------------------
+#
+# Real ants overwinter dormant in the nest and Nicrophorus buried in litter;
+# neither crawls a snowfield. Reported live from a real screenshot: black
+# insects wandering drawn snow ("some black moving blobs").
+
+
+func test_is_dormant_under_lying_snow_but_not_on_bare_ground():
+	assert_false(DecomposerMarker.is_dormant_under(0.0), "bare ground: surface-active")
+	assert_true(DecomposerMarker.is_dormant_under(0.01), "the first lying snow already sends it under")
+	assert_true(DecomposerMarker.is_dormant_under(1.0), "full cover: dormant")
+
+
+## The threshold is the exact bare<->lying edge the ground itself starts
+## painting snow presence at (EarthChunkManager._sync_snow_presence, see
+## docs/concept/snow_cover.md) -- pinned, so the insects can never be seen
+## on drawn snow at any depth.
+func test_snow_dormancy_depth_is_the_grounds_own_bare_to_lying_edge():
+	assert_eq(DecomposerMarker.SNOW_DORMANCY_DEPTH, 0.0)
+
+
+func test_a_dormant_decomposer_is_hidden_and_stops_processing():
+	marker.set_snow_dormant(true)
+	assert_true(marker.is_snow_dormant())
+	assert_false(marker.visible, "dormant: under the snow, not drawn on it")
+	assert_false(marker.is_processing(), "dormant: no wander, no forage scan")
+
+
+## Belt and braces on top of set_process(false): even a direct step (the
+## way every test here drives a marker) moves a dormant decomposer nowhere.
+func test_a_dormant_decomposer_does_not_move_even_if_stepped():
+	marker.set_snow_dormant(true)
+	var before := marker.position
+	for i in 20:
+		marker._process(0.5)
+	assert_eq(marker.position, before)
+
+
+func test_waking_from_snow_dormancy_restores_visibility_and_processing():
+	marker.set_snow_dormant(true)
+	marker.set_snow_dormant(false)
+	assert_false(marker.is_snow_dormant())
+	assert_true(marker.visible)
+	assert_true(marker.is_processing())
+
+
+## Set before add_child (the way DecomposerRenderer configures every marker)
+## must survive _ready -- Godot re-enables _process for any node that
+## overrides it at NOTIFICATION_READY, so a naive set_process(false) before
+## entering the tree would be silently undone.
+func test_a_decomposer_marked_dormant_before_entering_the_tree_is_dormant_once_ready():
+	var early := DecomposerMarker.new()
+	early.species = "bug"
+	early.home = Vector2(10, 10)
+	early.position = Vector2(10, 10)
+	early.wander_seed = 3
+	early.set_snow_dormant(true)
+	add_child_autofree(early)
+	assert_true(early.is_snow_dormant())
+	assert_false(early.visible)
+	assert_false(early.is_processing())
