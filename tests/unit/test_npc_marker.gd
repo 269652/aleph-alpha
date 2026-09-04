@@ -268,3 +268,144 @@ func test_a_working_hunter_gathers_real_food_through_process():
 
 	assert_gt(market.total_stock(), 0.0)
 	assert_gt(marker.economy.wallet.balance, 0)
+
+
+# -- instruction scripts (docs/concept/npc_instructions.md "Execution /
+# wiring"): NpcMarker.instruction_script, when assigned, overrides the
+# planner-produced schedule entry for this tick -- via
+# NpcInstructionEvaluator.evaluate -- falling back to the ordinary
+# NpcSchedule.current_entry path when unset, or when the evaluator finds no
+# matching rule that tick. --
+
+const NpcInstructionParser = preload("res://src/world/npc_instruction_parser.gd")
+
+
+func _instruction_ast(source: String) -> Dictionary:
+	var parser := NpcInstructionParser.new()
+	var result: Dictionary = parser.parse(source)
+	assert_true(result["ok"], "expected parse to succeed, errors: %s" % [result["errors"]])
+	return result["ast"]
+
+
+func test_default_instruction_script_is_null():
+	assert_null(marker.instruction_script)
+
+
+## Regression: an NPC with no instruction_script assigned must walk the
+## planner-produced entry exactly as before this change -- the same
+## landmark-resolution behavior test_resolves_a_landmark_tag_to_the_shared_
+## landmark_position already pins, just re-asserted here alongside the new
+## instruction-script tests as the explicit "untouched" proof.
+func test_no_instruction_script_walks_the_planner_entry_unchanged():
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
+		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
+		{"time_block": "evening", "location_tag": "stall", "activity": "work"},
+		{"time_block": "night", "location_tag": "stall", "activity": "work"},
+	]
+	marker.position = Vector2(0, 0)
+	for i in 200:
+		marker._process(1.0)
+	assert_lt(marker.position.distance_to(marker.landmarks["stall"]), 1.0)
+
+
+func test_instruction_script_overrides_the_planner_entry_when_a_rule_matches():
+	marker.instruction_script = _instruction_ast(
+		"instruct \"X\" {\n"
+		+ "    otherwise: haul(wood, well)\n"
+		+ "}"
+	)
+	# The planner would send this NPC to "stall"; the instruction script's
+	# unconditional otherwise rule must win instead, sending it to "well".
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
+		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
+		{"time_block": "evening", "location_tag": "stall", "activity": "work"},
+		{"time_block": "night", "location_tag": "stall", "activity": "work"},
+	]
+	marker.position = Vector2(0, 0)
+	for i in 200:
+		marker._process(1.0)
+	assert_lt(marker.position.distance_to(marker.landmarks["well"]), 1.0)
+	assert_gt(marker.position.distance_to(marker.landmarks["stall"]), 1.0)
+
+
+func test_instruction_script_falls_back_to_the_planner_entry_when_no_rule_matches():
+	marker.instruction_script = _instruction_ast(
+		"instruct \"X\" {\n"
+		+ "    if inventory_at_least(wood, 999): haul(wood, well)\n"
+		+ "}"
+	)
+	# No otherwise, and the lone condition never holds (this test never sets
+	# marker.inventory, so the built frame reads its default empty {}) --
+	# the evaluator returns null every tick, so the planner's own "stall"
+	# entry must still win.
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
+		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
+		{"time_block": "evening", "location_tag": "stall", "activity": "work"},
+		{"time_block": "night", "location_tag": "stall", "activity": "work"},
+	]
+	marker.position = Vector2(0, 0)
+	for i in 200:
+		marker._process(1.0)
+	assert_lt(marker.position.distance_to(marker.landmarks["stall"]), 1.0)
+
+
+# -- per-NPC inventory (docs/concept/npc_instructions.md, closing the
+# "inventory_at_least cannot yet be truthfully exercised" gap): NpcMarker
+# carries a real `inventory` Dictionary (item_id -> int count), read
+# honestly by _instruction_frame() instead of always reporting {}. --
+
+func test_default_inventory_is_an_empty_dictionary():
+	assert_eq(marker.inventory, {})
+
+
+## Proves instruction_at_least now reads a real, non-empty NpcMarker.inventory
+## -- a rule gated on real held wood fires because the NPC genuinely holds
+## enough, not because the frame was stubbed.
+func test_instruction_at_least_reads_a_real_non_empty_inventory():
+	marker.inventory = {"wood": 25}
+	marker.instruction_script = _instruction_ast(
+		"instruct \"X\" {\n"
+		+ "    if inventory_at_least(wood, 20): haul(wood, well)\n"
+		+ "    otherwise: haul(wood, gate)\n"
+		+ "}"
+	)
+	# The planner would send this NPC to "stall"; with 25 real held wood
+	# (>= 20), the first rule must win and send it to "well" instead of
+	# falling through to "gate".
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
+		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
+		{"time_block": "evening", "location_tag": "stall", "activity": "work"},
+		{"time_block": "night", "location_tag": "stall", "activity": "work"},
+	]
+	marker.position = Vector2(0, 0)
+	for i in 200:
+		marker._process(1.0)
+	assert_lt(marker.position.distance_to(marker.landmarks["well"]), 1.0)
+	assert_gt(marker.position.distance_to(marker.landmarks["gate"]), 1.0)
+
+
+## The same script, with too little real held wood, must fall through to
+## the "otherwise" rule instead -- proves the frame's inventory count is the
+## real number, not just "non-empty".
+func test_instruction_at_least_fails_when_real_inventory_is_below_the_threshold():
+	marker.inventory = {"wood": 5}
+	marker.instruction_script = _instruction_ast(
+		"instruct \"X\" {\n"
+		+ "    if inventory_at_least(wood, 20): haul(wood, well)\n"
+		+ "    otherwise: haul(wood, gate)\n"
+		+ "}"
+	)
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
+		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
+		{"time_block": "evening", "location_tag": "stall", "activity": "work"},
+		{"time_block": "night", "location_tag": "stall", "activity": "work"},
+	]
+	marker.position = Vector2(0, 0)
+	for i in 200:
+		marker._process(1.0)
+	assert_lt(marker.position.distance_to(marker.landmarks["gate"]), 1.0)
