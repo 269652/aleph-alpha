@@ -1206,14 +1206,15 @@ func test_the_obstacle_shift_matches_potential_flow_around_a_round_core():
 		Vector2(r, 0.0), perp, r, reach, 0.0
 	)
 	assert_almost_eq(on_axis, 0.0, 0.01, "the parting line parts -- it does not jump")
-	# One radius off the line, the smooth factor is 1/sqrt(2) and the
-	# midplane magnitude is (sqrt(2) - 1) * R, with the envelope still 1.
+	# One radius off the line is well outside the softened core, so the
+	# side factor is clamped to 1 and this is the untouched cylinder
+	# midplane value: (sqrt(2) - 1) * R, with the envelope still 1.
 	var at_rim := RiverFlowShader.obstacle_lateral_shift_px(
 		Vector2(0.0, r), perp, r, reach, 0.0
 	)
 	assert_almost_eq(
-		at_rim, (sqrt(2.0) - 1.0) * r / sqrt(2.0), 0.01,
-		"the rim streamline displacement is the cylinder midplane value, smoothed"
+		at_rim, (sqrt(2.0) - 1.0) * r, 0.01,
+		"the rim streamline displacement is the cylinder midplane value"
 	)
 	var near := RiverFlowShader.obstacle_lateral_shift_px(Vector2(0.0, 8.0), perp, r, reach, 0.0)
 	var far := RiverFlowShader.obstacle_lateral_shift_px(Vector2(0.0, 20.0), perp, r, reach, 0.0)
@@ -1237,10 +1238,10 @@ func test_the_obstacle_shift_matches_potential_flow_around_a_round_core():
 func test_the_boulder_and_wader_shifts_ride_the_same_round_core():
 	# Probed one radius OFF the stagnation line. On the line itself both
 	# are now zero, so the line no longer distinguishes the two models --
-	# one radius out, each shows its own radius through the same closed
-	# form: (1 - 1/sqrt(2)) * R, the midplane displacement times the
-	# smooth odd factor, with the envelope still at 1.
-	var core := 1.0 - 1.0 / sqrt(2.0)
+	# one radius out is outside the softened core, so each shows its own
+	# radius through the untouched closed form (sqrt(2) - 1) * R, with the
+	# envelope still at 1.
+	var core := sqrt(2.0) - 1.0
 	assert_almost_eq(
 		RiverFlowShader.boulder_across_push(
 			Vector2(0.0, RiverFlowShader.BOULDER_RADIUS_PX), Vector2(0, 1)
@@ -2042,10 +2043,11 @@ func test_the_obstacle_push_stays_odd_about_the_stagnation_line():
 
 
 func test_the_obstacle_push_keeps_its_far_field():
-	# Well outside the core the smooth factor is within a few percent of
-	# 1, so the "water parts around a rock of real radius" profile this
-	# replaced is preserved where it is actually visible. At 2R the factor
-	# is 2/sqrt(5) = 0.894.
+	# Outside the softness band the push is EXACTLY what it always was --
+	# not a scaled version of it. Only the core within
+	# OBSTACLE_SIDE_SOFTNESS * R of the stagnation line is touched, which
+	# is 2.1px for a wader and 3.9px for a boulder. Everything the bulge
+	# is actually made of is unchanged.
 	var perp := Vector2(0.0, 1.0)
 	var radius: float = RiverFlowShader.BOULDER_RADIUS_PX
 	var lateral := radius * 2.0
@@ -2058,9 +2060,39 @@ func test_the_obstacle_push_keeps_its_far_field():
 	envelope *= envelope
 	var magnitude := sqrt(lateral * lateral + radius * radius) - absf(lateral)
 	assert_almost_eq(
-		shift, magnitude * envelope * (2.0 / sqrt(5.0)), 1e-6,
-		"the far-field profile must be the same round-core displacement, only smoothed"
+		shift, magnitude * envelope, 1e-6,
+		"beyond the softened core the round-core displacement must be untouched"
 	)
+
+
+## THE BULGE MUST SURVIVE. Removing the tear by scaling the whole push
+## down removes the artefact and the feature together -- reported straight
+## back: "the straight line is gone, but with it the bulge walking in and
+## out of water which was what i wanted to be kept".
+##
+## The first attempt used lateral / sqrt(lateral^2 + R^2) unclamped, which
+## multiplies the push everywhere, not just at the tear: its peak falls
+## from R to 0.30R, a factor of 3.3. Clamping that factor to +-1 confines
+## the change to the core and leaves the rest of the profile alone.
+func test_the_obstacle_push_keeps_a_real_peak_so_the_bulge_survives():
+	var perp := Vector2(0.0, 1.0)
+	for obstacle in [
+		{"r": RiverFlowShader.BOULDER_RADIUS_PX, "reach": RiverFlowShader.BOULDER_REACH_PX},
+		{"r": RiverFlowShader.WADER_RADIUS_PX, "reach": RiverFlowShader.WADER_REACH_PX},
+	]:
+		var radius: float = obstacle["r"]
+		var peak := 0.0
+		for i in 400:
+			var lateral := float(i) * radius * 0.02
+			peak = maxf(peak, absf(RiverFlowShader.obstacle_lateral_shift_px(
+				Vector2(0.0, lateral), perp, radius, obstacle["reach"], 0.0
+			)))
+		# The old torn profile peaked at exactly R. Anything under about
+		# two thirds of that reads as "the bulge is gone".
+		assert_gt(
+			peak, radius * 0.65,
+			"radius %f peaks at only %f -- the bulge has been scaled away" % [radius, peak]
+		)
 
 
 func test_the_shader_loops_use_the_smooth_side_not_a_sign_flip():
@@ -2068,11 +2100,13 @@ func test_the_shader_loops_use_the_smooth_side_not_a_sign_flip():
 		RiverFlowShader.SHADER_CODE.contains("float side = lateral >= 0.0 ? 1.0 : -1.0;"),
 		"a hard sign flip tears frag_across by 2R along the stagnation line"
 	)
+	# Clamped, so only the core within OBSTACLE_SIDE_SOFTNESS * R is
+	# softened and the bulge beyond it is untouched.
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"float side = lateral / sqrt(lateral * lateral + boulder_radius_px * boulder_radius_px);"
+		"float side = clamp(lateral / (boulder_radius_px * obstacle_side_softness), -1.0, 1.0);"
 	))
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"float side = lateral / sqrt(lateral * lateral + wader_radius_px * wader_radius_px);"
+		"float side = clamp(lateral / (wader_radius_px * obstacle_side_softness), -1.0, 1.0);"
 	))
 
 

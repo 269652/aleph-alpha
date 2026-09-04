@@ -75,6 +75,12 @@ uniform float map_smoothing = 1.0;
 // no noise, no advection, no cel shading, no strokes, no lighting -- so
 // the field the whole picture is built from can be looked at directly
 // instead of inferred from what it produces. Toggled live by /flowdebug.
+// How much of an obstacle's core is softened, as a fraction of its own
+// radius. Outside this band the push is EXACTLY the untouched round-core
+// displacement; inside it the sign ramps smoothly through zero instead of
+// flipping. 0.35 confines the change to 3.9px for a boulder and 2.1px for
+// a wader, leaving the bulge itself alone.
+uniform float obstacle_side_softness = 0.35;
 uniform float debug_across = 0.0;
 uniform float debug_across_bands = 8.0;
 // How far the smear is allowed to follow the course's curve. 1 reads the
@@ -447,7 +453,7 @@ void fragment() {
 		// about it, and is within a few percent of 1 everywhere the push is
 		// actually visible -- so the round-core profile above is unchanged
 		// where it reads, and merely stops tearing where it did not.
-		float side = lateral / sqrt(lateral * lateral + boulder_radius_px * boulder_radius_px);
+		float side = clamp(lateral / (boulder_radius_px * obstacle_side_softness), -1.0, 1.0);
 		frag_across += side * displaced * envelope / (half_width_local * tile_px);
 		eyot_dry = min(eyot_dry, smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d));
 	}
@@ -478,7 +484,7 @@ void fragment() {
 		// player running with the current -- reported as "a hard edge ... a
 		// straight line which moves with him", seen only while standing in
 		// water, which is exactly when the player is fed here as a wader.
-		float side = lateral / sqrt(lateral * lateral + wader_radius_px * wader_radius_px);
+		float side = clamp(lateral / (wader_radius_px * obstacle_side_softness), -1.0, 1.0);
 		frag_across += side * displaced * envelope / (half_width_local * tile_px);
 	}
 	// RIPPLE RINGS -- the reimplementation of the old overlay's disturbance
@@ -815,6 +821,15 @@ func set_debug_across(enabled: bool) -> void:
 	shared_material().set_shader_parameter("debug_across", 1.0 if enabled else 0.0)
 
 
+## How much of an obstacle's core is softened, as a fraction of its own
+## radius -- the band inside which the push ramps through zero instead of
+## flipping sign. Outside it the round-core displacement is exactly what
+## it always was, so the bulge a player pushes walking in and out of the
+## water is unchanged; inside it, 3.9px for a boulder and 2.1px for a
+## wader, the field stops tearing. Pinned by
+## test_the_obstacle_push_keeps_a_real_peak_so_the_bulge_survives.
+const OBSTACLE_SIDE_SOFTNESS := 0.35
+
 ## The raw-across diagnostic, OFF. A tool for answering "is the artefact
 ## in the field or in the strokes drawn from it" in one screenshot rather
 ## than another headless probe. Toggled at runtime by /flowdebug; this is
@@ -1042,6 +1057,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("smear_spacing", SMEAR_SPACING)
 	material.set_shader_parameter("smear_curvature", SMEAR_CURVATURE)
 	material.set_shader_parameter("map_smoothing", MAP_SMOOTHING)
+	material.set_shader_parameter("obstacle_side_softness", OBSTACLE_SIDE_SOFTNESS)
 	material.set_shader_parameter("debug_across", DEBUG_ACROSS)
 	material.set_shader_parameter("smear_gain", SMEAR_GAIN)
 	material.set_shader_parameter("turbulence_strength", TURBULENCE_STRENGTH)
@@ -1127,10 +1143,19 @@ static func obstacle_lateral_shift_px(
 	var displaced := sqrt(lateral * lateral + radius_px * radius_px) - absf(lateral)
 	var envelope := 1.0 - clampf((d - radius_px) / maxf(reach - radius_px, 0.001), 0.0, 1.0)
 	envelope *= envelope
-	# Smooth and odd about the stagnation line. A hard sign flip left the
-	# magnitude at exactly R there while the sign jumped, tearing the field
-	# by 2R -- 21.95px for a boulder, 11.95px for a wader.
-	var side := lateral / sqrt(lateral * lateral + radius_px * radius_px)
+	# Smooth and odd about the stagnation line, and CLAMPED so only the
+	# core is affected. A hard sign flip left the magnitude at exactly R
+	# there while the sign jumped, tearing the field by 2R (21.95px for a
+	# boulder, 11.95px for a wader).
+	#
+	# The clamp is the whole point. An unclamped lateral/sqrt(lateral^2 +
+	# R^2) removes the tear but scales the push down EVERYWHERE, dropping
+	# its peak from R to 0.30R -- which took the bulge with it, reported
+	# immediately: "the straight line is gone, but with it the bulge
+	# walking in and out of water which was what i wanted to be kept".
+	# Clamped, the push is untouched beyond OBSTACLE_SIDE_SOFTNESS * R and
+	# still peaks at about 0.71R.
+	var side := clampf(lateral / (radius_px * OBSTACLE_SIDE_SOFTNESS), -1.0, 1.0)
 	return side * displaced * envelope
 
 
