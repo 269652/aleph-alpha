@@ -9,7 +9,7 @@ extends RefCounted
 ## rates. Callers own the actual state (state: State, disease_id: String,
 ## severity: float, state_seconds: float) per creature/player -- this module
 ## holds nothing itself, the same "caller owns data, pure module owns rules"
-## contract Sickness/TamingSystem/DebuffStack already use.
+## contract Sickness/Taming/DebuffStack already use.
 ##
 ## This is the WILDLIFE-side model, distinct from Sickness (survival.md's
 ## single-instance player illness). Player disease spillover (see
@@ -74,6 +74,21 @@ const CARRION_GRAZE_TRANSMISSION_CHANCE := 0.55
 const CARRION_INFECTIOUS_DURATION := 14.0
 const CARRION_IMMUNITY_DURATION := 60.0
 const CARRION_DEATH_CHANCE_PER_SECOND := 0.09
+
+## How much extra local graze risk a fly-blown carcass carries per adult fly
+## already on it (see docs/concept/flies.md's Carcass.fly_count, docs/
+## concept/carrion.md), on top of the base/region-scaled chance -- real
+## blowflies/carrion beetles are anthrax's own documented carry mechanism
+## (see the CARRION archetype's own doc comment above), so a carcass a
+## swarm has already found is measurably MORE dangerous to graze near than
+## an identically-rotten, fly-free one, not just as dangerous. Pinned large
+## enough that even a single founder fly can saturate risk to certain on
+## its own -- the same deliberate "saturate for determinism, most-dangerous
+## case IS a real hazard, no dice roll about it" precedent
+## CARRION_CONTAMINATION_CHANCE's own comment above already sets for HARD
+## region pressure, extended here to a fly-blown carcass specifically. A
+## first-pass number (see test_disease_model.gd), not a balance-tested one.
+const FLY_BLOWN_GRAZE_RISK_BONUS_PER_FLY := 0.5
 
 const INFECTIOUS_DURATION_BY_DISEASE := {
 	HERD: HERD_INFECTIOUS_DURATION,
@@ -164,13 +179,21 @@ func decomposer_carry_chance(region_tier: int) -> float:
 
 
 ## A herbivore grazing near a contaminated carcass's chance to be exposed.
-func carrion_graze_transmission_chance(region_tier: int) -> float:
-	return clampf(CARRION_GRAZE_TRANSMISSION_CHANCE * region_pressure_multiplier(region_tier), 0.0, 1.0)
+## `fly_count` is how many adult flies (see Carcass.fly_count) are currently
+## on that carcass -- a fly-blown carcass is a measurably bigger local
+## hazard than a fly-free one, not just as big (see
+## FLY_BLOWN_GRAZE_RISK_BONUS_PER_FLY). Defaults to 0 so every existing
+## caller that has no fly count to offer keeps its exact prior behaviour.
+func carrion_graze_transmission_chance(region_tier: int, fly_count: int = 0) -> float:
+	var base := CARRION_GRAZE_TRANSMISSION_CHANCE * region_pressure_multiplier(region_tier)
+	var fly_bonus := float(maxi(fly_count, 0)) * FLY_BLOWN_GRAZE_RISK_BONUS_PER_FLY
+	return clampf(base + fly_bonus, 0.0, 1.0)
 
 
 ## Deterministic hash-fraction roll against `chance`, given a seed -- same
-## pattern as Sickness.attempt_infect/TamingSystem.attempt_tame, so every
-## caller's (chance, seed_value) pair always yields the same result.
+## pattern as Sickness.attempt_infect/CreatureMarker._step_restraint's
+## struggle roll, so every caller's (chance, seed_value) pair always yields
+## the same result.
 func attempt_transmit(chance: float, seed_value: int) -> bool:
 	var roll := float(absi(hash("%d_disease_transmit" % seed_value)) % 10000) / 10000.0
 	return roll < chance

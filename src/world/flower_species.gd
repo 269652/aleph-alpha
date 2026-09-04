@@ -246,3 +246,19 @@ static func tallest_height_cm() -> float:
 static func tint_for(species_id: String, seed_value: int) -> Color:
 	var tints := tints_for(species_id)
 	return tints[absi(hash(seed_value * 31 + 17)) % tints.size()]
+
+
+## What to call this species in front of a player -- a tooltip is prose, not
+## an id (see EarthChunkManager.flower_name_at).
+##
+## capitalize() rather than a second table of names: the ids are already the
+## English words, so a table would only be a place for the two to disagree.
+## It also handles a future multi-word id ("wild_rose" -> "Wild Rose") without
+## anything being added here.
+##
+## Unknown ids get the same fail-safe treatment as every other lookup here: a
+## plain answer, not an empty tooltip.
+static func display_name(species_id: String) -> String:
+	if not SPECIES.has(species_id):
+		return "Flower"
+	return species_id.capitalize()

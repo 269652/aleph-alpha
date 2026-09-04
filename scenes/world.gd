@@ -2320,10 +2320,13 @@ func _build_hover_tooltip() -> void:
 ## The tooltip shows the entity's name and, for anything with an action
 ## (pick up, chop, mine, smash, kick...), that action's verb and its live
 ## keybinding -- ALL of them, if more than one applies (e.g. a pebble reads
-## both "Pick Up (E)" and "Kick (K)"). Grass is the one exception: it has no
-## per-tuft Node2D to join HoverTargetFinder's group (see
-## EarthChunkManager._sync_grass_sprites), so it is checked separately, only
-## once nothing else claimed the cursor.
+## both "Pick Up (E)" and "Kick (K)"). Ground decoration is the exception:
+## grass and flowers have no per-plant Node2D to join HoverTargetFinder's
+## group (see EarthChunkManager._sync_grass_sprites/_sync_flower_sprites --
+## being a bare Sprite2D per cell is why a meadow costs what it does), so each
+## is asked for by position separately, only once nothing else claimed the
+## cursor. Flowers go first of the two: a bloom stands IN grass, so whichever
+## is asked second could never answer.
 func _update_hover_tooltip() -> void:
 	# A tooltip about whatever is behind an open window is noise -- and worse,
 	# it draws ON TOP of that window (see world_hint_visible_for). Skipping
@@ -2379,6 +2382,14 @@ func _update_hover_tooltip() -> void:
 	var found_name: String = info.get("name", "")
 	var found_actions: Array = info.get("actions", [])
 	var found_detail: String = info.get("detail", "")
+	# Flowers, like grass, have no per-plant Node2D to join the group above --
+	# they are ground decoration, one bare Sprite2D per cell (see
+	# EarthChunkManager._sync_flower_sprites), which is exactly why a meadow
+	# is affordable at all. So they are asked for by position once nothing in
+	# the group claimed the cursor. Reported live: flowers "still don't
+	# [show] hover tooltips".
+	if found_name == "":
+		found_name = _chunk_manager.flower_name_at(mouse_world, scan_radius)
 	if found_name == "":
 		var grass_growth := _chunk_manager.tall_grass_growth_at(mouse_world)
 		if grass_growth >= 0.0:
@@ -2584,6 +2595,10 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# test_world_simulation_ownership.gd's header), one call level further
 	# out. Independently found and fixed on both this branch and main.
 	_chunk_manager.step_wild_crops(delta)
+	# Player-tilled farm plots (see EarthChunkManager.step_farm_plots,
+	# docs/concept/farming.md) -- same tick this crop's wild cousin grows on
+	# just above.
+	_chunk_manager.step_farm_plots(delta)
 	# Ant mounds foraging (see AntColony, myrmecochory) -- fallen grass seed
 	# in grassland, or windfall fruit/nut in forest/rainforest where grass
 	# doesn't grow -- a background per-chunk population effect, batched here
@@ -4696,6 +4711,14 @@ func _client_process(delta: float) -> void:
 	_chunk_manager.step_snow(snowing, warmth)
 	# Walking packs the snow down, which is what leaves a trail.
 	_chunk_manager.tread_snow_at(local_player.position)
+	# Individually-simulated creatures pack it down too, reusing the exact
+	# same SnowTrail data and shared GPU mask the player's own tread does
+	# (see EarthChunkManager.tread_snow_at's own doc comment) -- but never
+	# move the trail window (move_trail_window = false), which has to keep
+	# following the player rather than snapping to wherever the
+	# last-processed creature happens to be standing.
+	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		_chunk_manager.tread_snow_at(creature.position, false)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).

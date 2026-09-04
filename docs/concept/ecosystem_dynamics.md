@@ -372,6 +372,12 @@ modelled on): **see a specific thing, walk to it, put your head down, move on.**
   it now costs a full head-down bout like any other bite.
 - **A threat outranks a meal.** An animal that senses something lifts its head
   and goes; it does not finish the mouthful.
+- **A bout is slower while snow is actively falling.** See
+  [weather.md](weather.md#weather-feeds-creature-behaviour) --
+  `GrazerForaging.snowing` scales the head-down duration
+  (`GRAZE_SECONDS`) only, not the walk between bites or the give-up
+  timeout: a grazer is not just cropping a tuft any more, it is working
+  through what is landing on top of it to keep its muzzle in the grass.
 
 ## Biome-specific species composition
 
@@ -974,6 +980,16 @@ Real animals stop, then turn.
 continuous, never-resting drift reads as mechanical. Searching for a needed
 resource, seeking, and fleeing never pause.
 
+**Standing still still lives.** Idle used to hold one frozen frame forever —
+tolerable while standing still was rare, wrong once grazing pauses and a
+boxed-in animal with nowhere to go (above) made it a common state. A second
+idle frame (a small whole-body settle, read as a breath) gives a standing
+animal somewhere to go, and which of the two shows is picked the same way
+grazing pauses are: a deterministic hash of the animal's own seed
+(`ProceduralAnimalAnimation.idle_frame_index`), not wall-clock time alone —
+so a herd standing together breathes out of step with itself instead of
+reading as one frozen tableau.
+
 **Two escape hatches**, both necessary. The checks are "don't make it worse",
 never "must not be close": an animal the player has walked up to is *already*
 inside its flee radius, and one that has somehow ended up overlapping a trunk
@@ -1162,6 +1178,21 @@ than O(all-chunks-per-frame).
   arms. An earlier version of this fix called it unconditionally every
   frame, which stripped every fish within catch radius of the dock almost
   instantly; caught during verification before merge.
+  **Follow-up (wings):** `PiscivoreBirdMarker` was built with only a static
+  resting-pose texture and never touched it again — cruising, hovering over
+  its target, diving, and carrying a catch home all played on one frozen
+  frame, including the hover this doc calls out as the signature kingfisher
+  beat, which is sustained by rapid wingbeats in life (reported: "fix the
+  kingfisher's wings"). `ProceduralBirdSprite` already painted flap/perched
+  frames for `"kingfisher"` and `FlapGlide`/`WingbeatBounce` already carried
+  its wingbeat frequency — this was a wiring gap, not a missing painter.
+  `PiscivoreBirdRenderer.spawn_piscivore_birds` now sets `flap_frames`/
+  `perched_frame` at spawn (mirroring `AmbientFlyerRenderer._build_marker`'s
+  sparrow/robin wiring exactly), and `PiscivoreBirdMarker` gained its own
+  `_animate_wings` step: `perched_frame` only during the genuinely
+  motionless `ACTIVITY_PERCH`, `flap_frames` cycling everywhere else —
+  patrol, nest trips, hunting flight, and every strike phase (hover/dive/
+  ascend/carry) all keep flapping, since none of them are actually still.
 
 ## Simulation runs at the rate the player can perceive
 
@@ -1458,6 +1489,48 @@ removes one from the world), and **ambient flyers are not persisted** — a
 chunk's flyers are re-derived from their cells' seeds on load, so an evolved
 meadow reverts when that chunk unloads. Boldness drifts within a session, not
 across one.
+
+### Songbirds notice you too
+
+The boldness/FID continuum above is deliberately butterfly-only —
+`FlyerPersonality.reacts_to_player` gates on `SpiralFlight.spirals`, and that
+module's own doc comment is explicit: "a bee, a fly and a sparrow have no
+personality steering at all". A real sparrow's flight response has nothing to
+do with a corkscrewing insect's, and giving every species one shared
+personality trait would blur a distinction this project already draws
+carefully. But a real ground-foraging songbird still does the one plain thing
+every other sensed creature in this project already does when something
+looms: it notices and gets away.
+
+Real house sparrows and robins have a measured flight initiation distance in
+the low-single-digit-to-several-metres band — commonly further out than a
+shy butterfly's own 3 m endpoint (`FlyerPersonality.SHYEST_FLUSH_DISTANCE_M`),
+which fits: a bird's predator-vigilance is sharper than an insect's.
+
+Rather than a second boldness system, `AmbientFlyerMarker.
+_step_songbird_flight_response` reuses the SAME two pure modules the ground
+creature roster (`CreatureMarker`/`CreatureBehavior`) already senses/avoids
+threats through — `CreaturePerception.nearby` (is the player within notice
+range) and `ThreatAvoidantWander.away_biased_step` (bias the flight heading
+away from whatever was sensed, keeping the sideways component) — rather than
+inventing a second perception/avoidance system. Both existed, tested, and
+had no production caller anywhere in the game until this.
+
+- **One shared flush distance** (`AmbientFlyerMarker.
+  SONGBIRD_FLUSH_DISTANCE_M`), not an inherited trait — that individuality is
+  deliberately left where it already lives, on the butterflies.
+- **Gated on `FlyerDiet.forages_on_the_ground`** (currently robin and
+  sparrow) rather than a third species list, so a future ground-feeding
+  species inherits the reaction automatically instead of needing to be added
+  to yet another roster.
+- **A threat outranks a meal here too.** A bird flushed mid-peck abandons the
+  strike (`GroundForageBehavior.abort`) — the same rule "Grazing is an act,
+  not an aura" above already states for ground grazers — and a bird already
+  mid-courtship breaks it off, exactly as a fleeing butterfly does.
+- **Released further out than it was noticed at** — the same hysteresis
+  shape as the butterflies' own `FLEE_RELEASE_FACTOR` (reused directly, not a
+  second "how much further" number), so a player parked right at the flush
+  distance does not make the bird dither in and out of scattering.
 
 
 ## Butterflies do not fly in straight lines

@@ -1066,3 +1066,24 @@ func test_distant_nectar_readings_do_not_share_the_texture():
 		generator.generate_texture("tulip", 6, 0.0, false),
 		generator.generate_texture("tulip", 6, 1.0, false)
 	)
+
+
+# -- how far above its own cell a bloom can be drawn -------------------------
+
+## A hover lookup has to search UPWARD from the cursor to find the plant a
+## bloom belongs to, because the sprite is anchored at the stem's foot and
+## drawn above it (see EarthChunkManager.flower_name_at). That search needs a
+## real ceiling rather than a guessed number of rows -- pinned here against
+## every species at every size roll, fully grown.
+func test_no_blossom_is_ever_drawn_higher_than_the_stated_ceiling():
+	var ceiling := ProceduralFlowerSprite.max_blossom_height_world()
+	assert_gt(ceiling, 0.0)
+	var tallest := 0.0
+	for species_id in FlowerSpecies.IDS:
+		for seed_value in 400:
+			tallest = maxf(tallest, ProceduralFlowerSprite.blossom_height_world(
+				seed_value, ProceduralFlowerSprite.plant_scale_for(species_id, seed_value)
+			))
+	assert_lte(tallest, ceiling, "a bloom reached %.2f, above the stated %.2f" % [tallest, ceiling])
+	# And not absurdly loose, or the hover search sweeps the whole screen.
+	assert_lt(ceiling, tallest * 2.0, "the ceiling is %.2f for a real tallest of %.2f" % [ceiling, tallest])

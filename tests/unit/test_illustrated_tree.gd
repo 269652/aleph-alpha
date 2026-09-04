@@ -281,10 +281,20 @@ func test_an_illustrated_tree_fills_the_same_canvas_as_a_procedural_one():
 
 ## A tree stands on its trunk: the bottom of the canvas is trunk, the top is
 ## canopy. Getting this upside down would plant the forest in the air.
+##
+## Sampled a fraction INTO the canopy box's own height, not a fixed fraction
+## of the whole canvas: a round crown is narrowest right at its own top
+## edge, and cherry's real box (real art, real proportions) happens to
+## start exactly on the old fixed-canvas-height row at this seed -- where
+## every other species' box still had a few pixels of margin above it --
+## so the sample landed on the crown's pointed tip instead of its body,
+## undercounting it against the trunk's own wide root flare below.
 func test_the_trunk_is_at_the_bottom_and_the_canopy_on_top():
 	var sprite := ProceduralTreeSprite.new()
 	var image := sprite.generate_image_with_fruit(_cherry_bias(), 7, 0, "summer")
-	var top_opaque := _row_opaque(image, int(float(image.get_height()) * 0.2))
+	var canopy_box := sprite.illustrated_canopy_box("cherry", 7, "summer")
+	var top_row := canopy_box.position.y + int(float(canopy_box.size.y) * 0.4)
+	var top_opaque := _row_opaque(image, top_row)
 	var bottom_opaque := _row_opaque(image, image.get_height() - 3)
 	assert_gt(top_opaque, bottom_opaque, "the canopy should be wider than the trunk")
 	assert_gt(bottom_opaque, 0, "the tree should stand on something")
@@ -1498,13 +1508,13 @@ func test_pine_is_an_evergreen_in_its_art_and_not_only_in_its_data():
 ## window than it did across three months.
 func test_the_blossom_frame_is_flowers_on_a_cherry_and_new_leaf_on_the_rest():
 	assert_lt(
-		_mean_hue_degrees(trees.canopy_for("cherry", "spring").get_image()), 30.0,
+		_hue_distance_from_red(_mean_hue_degrees(trees.canopy_for("cherry", "spring").get_image())), 30.0,
 		"a cherry's blossom frame has to read pink -- it is the whole point of it"
 	)
 	for species in ["walnut", "acorn", "hazelnut", "apple"]:
 		var flush := trees.canopy_for(species, "spring").get_image()
 		assert_gt(
-			_mean_hue_degrees(flush), 40.0,
+			_hue_distance_from_red(_mean_hue_degrees(flush)), 40.0,
 			"%s draws new leaf in that slot, not flowers" % species
 		)
 		assert_gt(
@@ -1551,3 +1561,14 @@ func _mean_hue_degrees(image: Image) -> float:
 		return 0.0
 	var total := float(count)
 	return Color(red / total, green / total, blue / total).h * 360.0
+
+
+## Circular distance in degrees between a hue and pure red (0/360) -- a hue
+## just under 360 (magenta-leaning pink) is only a few degrees from red,
+## not the ~360 a plain subtraction would report, and _mean_hue_degrees can
+## land on either side of that seam depending on exactly how a specific
+## sheet's blossom blends toward pink or toward magenta (measured on the
+## real cherry sheet: 353.6, well within "reads as pink" but on the far
+## side of a raw "< 30" check from where the rest of that range sits).
+func _hue_distance_from_red(hue_degrees: float) -> float:
+	return minf(hue_degrees, 360.0 - hue_degrees)

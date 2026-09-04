@@ -2355,6 +2355,135 @@ func test_a_sparrow_ignores_the_player_entirely():
 		assert_false(bird._fleeing_from_player)
 
 
+# == ground-foraging songbirds: scattering off the ground near the player ====
+#
+# FlyerPersonality's boldness/FID continuum is deliberately butterfly-only
+# (see test_a_sparrow_ignores_the_player_entirely above -- that stays true).
+# But a real ground-foraging songbird still does the one plain thing every
+# other sensed creature in this project already does when the player looms:
+# it notices and gets away. This reuses CreaturePerception (is the player
+# close enough to notice) and ThreatAvoidantWander (bias the flight heading
+# away, keeping the sideways part) -- the same two pure modules the ground
+# creature roster already senses/avoids threats through.
+
+func test_a_ground_foraging_sparrow_scatters_when_the_player_gets_close():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var player := _player_at(Vector2(200, 200), parent)
+	var bird := _flyer_in_tree(
+		"sparrow",
+		Vector2(200, 200) + Vector2(AmbientFlyerMarker.SONGBIRD_FLUSH_DISTANCE_PX * 0.2, 0.0),
+		parent
+	)
+	var started := bird.position.distance_to(player.position)
+	for i in 30:
+		bird._process(FRAME)
+	assert_true(bird._flushed_by_player, "the player standing right on it must flush it")
+	assert_gt(
+		bird.position.distance_to(player.position), started, "and it must actually move away"
+	)
+
+
+## The same reaction, for the OTHER ground-foraging songbird -- proves the
+## gate is FlyerDiet.forages_on_the_ground, not one species hardcoded in.
+func test_a_ground_foraging_robin_scatters_too():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	_player_at(Vector2(200, 200), parent)
+	var bird := _flyer_in_tree(
+		"robin",
+		Vector2(200, 200) + Vector2(AmbientFlyerMarker.SONGBIRD_FLUSH_DISTANCE_PX * 0.2, 0.0),
+		parent
+	)
+	bird._process(FRAME)
+	assert_true(bird._flushed_by_player)
+
+
+## A bee takes nectar on the wing -- it never forages on the ground (see
+## FlyerDiet.forages_on_the_ground) and it is not a true butterfly either
+## (SpiralFlight.spirals), so this new reaction correctly leaves it exactly
+## as before: the "which ambient creatures react to the player" boundary is
+## real and tested, not silently widened to everything with wings.
+func test_a_bee_still_does_not_react_to_the_player_at_all():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	_player_at(Vector2(200, 200), parent)
+	var bee := _flyer_in_tree(
+		"bee",
+		Vector2(200, 200) + Vector2(AmbientFlyerMarker.SONGBIRD_FLUSH_DISTANCE_PX * 0.2, 0.0),
+		parent
+	)
+	for i in 30:
+		bee._process(FRAME)
+		assert_false(bee._flushed_by_player)
+		assert_false(bee._fleeing_from_player)
+
+
+## A sparrow well outside the flush distance is just going about its life --
+## the state must not latch on for a bird nowhere near the player.
+func test_a_distant_sparrow_is_not_flushed():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	_player_at(Vector2(200, 200), parent)
+	var bird := _flyer_in_tree(
+		"sparrow",
+		Vector2(200, 200) + Vector2(AmbientFlyerMarker.SONGBIRD_FLUSH_DISTANCE_PX * 4.0, 0.0),
+		parent
+	)
+	for i in 30:
+		bird._process(FRAME)
+		assert_false(bird._flushed_by_player)
+
+
+## The core ask: entering the perception radius flips the state to fleeing,
+## and leaving it flips the state back -- mirroring
+## test_a_fled_butterfly_settles_down_again's own shape for the butterfly
+## mechanism.
+func test_a_flushed_sparrow_settles_once_the_player_is_far_enough_away():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var player := _player_at(Vector2(200, 200), parent)
+	var bird := _flyer_in_tree(
+		"sparrow",
+		Vector2(200, 200) + Vector2(AmbientFlyerMarker.SONGBIRD_FLUSH_DISTANCE_PX * 0.2, 0.0),
+		parent
+	)
+	for i in 10:
+		bird._process(FRAME)
+	assert_true(bird._flushed_by_player, "must actually be flushed first")
+	player.position = Vector2(-9000, -9000)
+	var settled := false
+	for i in 120:
+		bird._process(FRAME)
+		if not bird._flushed_by_player:
+			settled = true
+			break
+	assert_true(settled, "a scattered sparrow has to settle back down eventually")
+
+
+## Pins the tuned constant itself, not just "somewhere well inside/outside
+## it": a sparrow just inside SONGBIRD_FLUSH_DISTANCE_PX reacts, one just
+## outside it does not.
+func test_the_flush_distance_boundary_is_exact():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	_player_at(Vector2(200, 200), parent)
+	var just_inside := _flyer_in_tree(
+		"sparrow",
+		Vector2(200, 200) + Vector2(AmbientFlyerMarker.SONGBIRD_FLUSH_DISTANCE_PX - 1.0, 0.0),
+		parent
+	)
+	var just_outside := _flyer_in_tree(
+		"sparrow",
+		Vector2(200, 200) + Vector2(AmbientFlyerMarker.SONGBIRD_FLUSH_DISTANCE_PX + 1.0, 0.0),
+		parent
+	)
+	just_inside._process(FRAME)
+	just_outside._process(FRAME)
+	assert_true(just_inside._flushed_by_player, "just inside the boundary must flush")
+	assert_false(just_outside._flushed_by_player, "just outside it must not")
+
+
 # -- precedence ---------------------------------------------------------------
 #
 # Five things can move a butterfly now (flee, court, dance-at-the-player,

@@ -864,3 +864,118 @@ func test_stamp_house_stamps_the_full_set_once_completion_reaches_one():
 	var call = world.stamp_calls[0]
 	assert_eq(call.ground_pieces.size(), fake_blueprint.pieces.size())
 	assert_eq(call.roof_pieces.size(), fake_blueprint.roofs.size())
+
+
+# -- night lighting: houses show a lit-window state after dark (see
+# docs/concept/housing.md#night-lighting-ambient) --------------------------
+#
+# Driven by the exact same real sun elevation day/night lighting elsewhere in
+# this codebase already reads (scenes/world.gd's own `elevation <= 0.0`), not
+# a second, one-off clock -- see is_night's own doc comment.
+
+func test_is_night_matches_the_same_zero_degree_elevation_boundary_the_rest_of_the_game_uses():
+	assert_true(renderer.is_night(-0.1), "below the horizon should read as night")
+	assert_true(renderer.is_night(0.0), "exactly at the horizon should read as night (matches world.gd's elevation <= 0.0)")
+	assert_false(renderer.is_night(0.1), "above the horizon should read as day")
+
+
+## `_stamp_house` reports the real world position of every window it actually
+## stamped, so a caller can light exactly the windows a house was built
+## with -- never one that isn't there.
+func test_stamp_house_reports_the_world_position_of_every_stamped_window():
+	var world := StubWorld.new()
+	var fake_blueprint := FakeHouseBlueprint.new()
+	fake_blueprint.pieces = {
+		Vector2i(0, 0): "wood_floor",
+		Vector2i(1, 0): "wood_wall",
+		Vector2i(0, 1): "wood_door",
+		Vector2i(1, 1): "wood_window",
+	}
+	fake_blueprint.roofs = {Vector2i(0, 0): "wood_roof"}
+	renderer._house_blueprint = fake_blueprint
+
+	var npc := NpcIdentity.new(42)
+	var result: Dictionary = renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 5)
+
+	assert_eq(world.stamp_calls.size(), 1)
+	var call = world.stamp_calls[0]
+	var expected_window_tile: Vector2i = call.origin_tile + Vector2i(1, 1)
+	var expected_position := Vector2(
+		(expected_window_tile.x + 0.5) * TILE_SIZE, (expected_window_tile.y + 0.5) * TILE_SIZE
+	)
+	assert_eq(result.windows, [expected_position])
+
+
+func test_stamp_house_reports_no_windows_for_a_blueprint_that_has_none():
+	var world := StubWorld.new()
+	var fake_blueprint := FakeHouseBlueprint.new()
+	fake_blueprint.pieces = {
+		Vector2i(0, 0): "wood_floor",
+		Vector2i(1, 0): "wood_wall",
+		Vector2i(0, 1): "wood_door",
+	}
+	fake_blueprint.roofs = {Vector2i(0, 0): "wood_roof"}
+	renderer._house_blueprint = fake_blueprint
+
+	var npc := NpcIdentity.new(42)
+	var result: Dictionary = renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 5)
+	assert_eq(result.windows, [])
+
+
+func _window_light_count(spawned: Array) -> int:
+	var count := 0
+	for node in spawned:
+		if node.has_meta("landmark_id") and node.get_meta("landmark_id") == "window_light":
+			count += 1
+	return count
+
+
+## The explicit minimum bar for this slice: the SAME house (identical
+## blueprint pieces, identical settlement/seed) renders differently between a
+## daytime tick and a nighttime tick of spawn_village -- lit windows appear
+## only at night.
+func test_spawn_village_shows_lit_windows_at_night_but_not_by_day_for_the_same_house():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var fake_blueprint := FakeHouseBlueprint.new()
+	fake_blueprint.pieces = {
+		Vector2i(0, 0): "wood_floor",
+		Vector2i(1, 0): "wood_wall",
+		Vector2i(0, 1): "wood_door",
+		Vector2i(1, 1): "wood_window",
+	}
+	fake_blueprint.roofs = {Vector2i(0, 0): "wood_roof"}
+	renderer._house_blueprint = fake_blueprint
+
+	var day_spawned := renderer.spawn_village(
+		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", StubWorld.new(), 45.0
+	)
+	assert_eq(_window_light_count(day_spawned), 0, "a daytime tick should light no windows")
+
+	var night_parent := Node2D.new()
+	var night_spawned := renderer.spawn_village(
+		night_parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", StubWorld.new(), -10.0
+	)
+	assert_eq(
+		_window_light_count(night_spawned), SettlementGenerator.POPULATION,
+		"a nighttime tick should light every villager's one fake window"
+	)
+	night_parent.free()
+
+
+## A house whose blueprint has no windows at all must stay dark even at
+## night -- never light a window that was never built.
+func test_spawn_village_lights_no_windows_at_night_for_a_windowless_blueprint():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var fake_blueprint := FakeHouseBlueprint.new()
+	fake_blueprint.pieces = {
+		Vector2i(0, 0): "wood_floor",
+		Vector2i(1, 0): "wood_wall",
+		Vector2i(0, 1): "wood_door",
+	}
+	fake_blueprint.roofs = {Vector2i(0, 0): "wood_roof"}
+	renderer._house_blueprint = fake_blueprint
+
+	var night_spawned := renderer.spawn_village(
+		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", StubWorld.new(), -10.0
+	)
+	assert_eq(_window_light_count(night_spawned), 0, "a windowless blueprint should never show a lit window")

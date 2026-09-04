@@ -83,6 +83,14 @@ func spawn_piscivore_birds(
 	var marker := PiscivoreBirdMarker.new()
 	marker.species = SPECIES
 	marker.texture = _sprite.generate_texture(SPECIES, seed_value)
+	# Wing-beat frames and a folded-wing rest pose, so the bird actually
+	# flaps rather than cruising, hovering and carrying its catch home all
+	# on one frozen frame (see PiscivoreBirdMarker._animate_wings) --
+	# ProceduralBirdSprite already paints both for "kingfisher"; this was a
+	# wiring gap, mirroring AmbientFlyerRenderer._build_marker's own
+	# flap_frames/perched_frame wiring for sparrow/robin exactly.
+	marker.flap_frames = _sprite.generate_flap_textures(SPECIES, seed_value)
+	marker.perched_frame = _sprite.generate_perched_texture(SPECIES, seed_value)
 	# Art is authored DETAIL_MULTIPLIER times oversized; scaling it back
 	# keeps the flyer the same size in the world (see
 	# docs/concept/art_resolution.md).

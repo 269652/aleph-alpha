@@ -17,6 +17,21 @@ this layers an Animal Crossing-style expressive/social dimension on top.
 - Once [multiplayer](../roadmap.md) lands, this extends naturally to other
   players visiting/rating each other's homes.
 
+### Night lighting (ambient)
+
+A small atmosphere layer, independent of the appeal/decor system above:
+settlement houses (`village_renderer.gd`) light their real stamped
+[window](building.md#pieces) pieces at night, driven by the same real sun
+elevation the rest of the world's day/night lighting already reads (see
+`solar_position.gd`'s `elevation_degrees`, and `scenes/world.gd`'s own
+day/night tint) — not a second, one-off clock. A house with no windows in
+its blueprint stays dark; a house mid-construction only lights the windows
+it has actually built so far, never ones still unbuilt. Chunk-scoped like
+every other renderer here: a village's lit/unlit state is decided once, at
+the moment its chunk streams in, and holds until the chunk unloads and
+reloads — the same "regenerates on revisit, no mid-visit re-evaluation"
+simplification trees/creatures already accept.
+
 ### Open questions
 
 - Appeal-score formula — what actually counts (variety, symmetry, theme

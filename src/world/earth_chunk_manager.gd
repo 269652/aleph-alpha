@@ -41,10 +41,12 @@ const SeedCaching = preload("res://src/gameplay/seed_caching.gd")
 const SquirrelNutCaching = preload("res://src/gameplay/squirrel_nut_caching.gd")
 const ScentField = preload("res://src/world/scent_field.gd")
 const ProceduralFlowerSprite = preload("res://src/rendering/procedural_flower_sprite.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ProceduralSeedSprite = preload("res://src/rendering/procedural_seed_sprite.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropRenderer = preload("res://src/rendering/wild_crop_renderer.gd")
+const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
 const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
@@ -60,6 +62,8 @@ const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sp
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
+const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
+const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
@@ -368,6 +372,14 @@ var _fish_renderer := FishRenderer.new()
 var _ambient_flyer_renderer := AmbientFlyerRenderer.new()
 var _piscivore_bird_renderer := PiscivoreBirdRenderer.new()
 var _village_renderer := VillageRenderer.new()
+## The most recent real sun elevation pushed in by set_sun_position below --
+## a settlement chunk streaming in later (see _load_chunk's own
+## spawn_village call) reads this to decide whether its houses' windows
+## light up for the night (VillageRenderer.is_night, docs/concept/
+## housing.md#night-lighting-ambient), rather than a second, independently
+## -computed elevation. Starts at bright daylight, the same "nothing pinned
+## yet" default spawn_village itself falls back to.
+var _current_sun_elevation_deg := VillageRenderer.DEFAULT_SUN_ELEVATION_DEG
 var _biome_classifier := BiomeClassifier.new()
 var _region_difficulty := RegionDifficulty.new()
 ## Separate from _village_renderer's own internal instance -- SettlementGenerator
@@ -518,6 +530,14 @@ var _wild_crop_refresh_accumulator := 0.0
 ## and step_wild_crops iterate, so adding a future crop is a one-line change.
 const WILD_CROP_IDS := ["carrot", "potato"]
 
+## Player-tilled farm plots (docs/concept/farming.md's "farming loop") --
+## flat and NOT chunk-scoped, unlike wild crops: a farm plot is a single,
+## independent, player-placed instance (see FarmPlotMarker's own doc
+## comment for why it owns its FarmPlot directly rather than through a
+## per-chunk sim class), so one Dictionary keyed by the plot's own global
+## tile is enough. Vector2i global tile -> FarmPlotMarker.
+var _farm_plots: Dictionary = {}
+
 ## Ants/carrion bugs (see docs/concept/carrion.md). chunk_coord -> Array of
 ## DecomposerMarker -- no per-chunk sim needed (unlike wild crops/grass),
 ## since a decomposer's whole behavior lives on the marker itself and it
@@ -583,9 +603,22 @@ var _worm_patches: Dictionary = {}
 var _worm_sprites: Dictionary = {}
 var _worm_sprite_generator := ProceduralWormSprite.new()
 ## Vector2i chunk_coord -> AntColony (see step_ants, docs/concept/soil_fauna.md
-## "Ants"). No sprite dictionary alongside it -- ants are not rendered this
-## pass (see AntColony's own doc comment on scope).
+## "Ants").
 var _ant_colonies: Dictionary = {}
+## Vector2i chunk_coord -> Array[AntMoundMarker] -- the visible counterpart
+## to _ant_colonies' own mound_cells(), one static marker per mound, spawned
+## alongside the colony and freed with its chunk exactly like every other
+## per-chunk marker dictionary here.
+var _ant_mound_markers: Dictionary = {}
+## Vector2i GLOBAL mound tile -> AntForagerMarker currently walking that
+## mound's harvest -> cache path, or absent/freed once it's done. Caps each
+## mound to at most one visible forager in flight at a time (see
+## _spawn_ant_forager_visual) -- AntColony.FORAGE_CHANCE can succeed several
+## times a second per mound at normal frame rate, and a visible ant for
+## every single one of those would be a swarm flicker, not a colony reading
+## as alive. Keyed globally (not per-chunk) since a mound's own identity
+## (chunk_coord*CHUNK_SIZE + cell) is already a stable global tile.
+var _active_ant_foragers: Dictionary = {}
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_ambient_flyers: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
@@ -3933,8 +3966,8 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# A SECOND, wider ring past the apron is still PAINTED, not
 			# erased (RiverFlowShader.SHORE_BLEED_TILES): the apron alone
 			# is just wide enough for the bank feather itself, so a wader's
-			# wake or a boulder's halo reaching even slightly past it had
-			# no tile left to draw on and simply vanished -- reported live
+			# wake or a boulder's shore band reaching even slightly past it
+			# had no tile left to draw on and simply vanished -- reported live
 			# as a player's own splash trail cutting off mid-stride on the
 			# way out of the water. This ring stays fully transparent by
 			# construction (its baseline |across| sits well past the
@@ -4078,6 +4111,12 @@ var _snow_material: ShaderMaterial = null
 ## Footprints, and how much snow is lying (see SnowTrail / Snowfall).
 var _snow_trail := SnowTrail.new()
 var _snow_depth := 0.0
+## Whether precipitation is actively falling as snow RIGHT NOW, as of the
+## last step_snow call -- distinct from _snow_depth, which is how much has
+## already piled up. Cached here (rather than recomputed by each reader) so
+## every reader agrees with what the ground is accumulating against; see
+## is_snowing.
+var _snowing := false
 ## The last tile tread_snow_at was called with -- the trail mask window (see
 ## _refresh_snow_trail_mask) is centred here, since SnowTrail's own
 ## dictionary carries no notion of "where the player is" by itself.
@@ -4135,14 +4174,38 @@ func snow_depth() -> float:
 	return _snow_depth
 
 
+## Whether it is actively snowing right now, as of the last step_snow call --
+## see docs/concept/weather.md's "Weather feeds creature behaviour". The same
+## boolean World already computes each frame to accumulate _snow_depth
+## against (see step_snow below); a second reader (CreatureMarker) reads
+## THIS rather than deriving its own answer, so an animal can never disagree
+## with the ground about whether it's snowing right now.
+func is_snowing() -> bool:
+	return _snowing
+
+
 ## Marks a tile as walked on, packing the snow down (see SnowTrail). The
 ## actual GPU-facing mask texture is rebuilt once per step_snow call, not
 ## here -- see _refresh_snow_trail_mask.
-func tread_snow_at(pixel_position: Vector2) -> void:
+##
+## move_trail_window controls whether THIS call also re-centres the trail
+## mask window (see _snow_trail_center_tile's own doc comment) -- true by
+## default, which is what the player's own per-frame call wants: the window
+## has to follow wherever the player is standing. World.gd calls this for
+## every individually-simulated CreatureMarker too (see docs/concept/
+## snow_cover.md's "Footprints" section) with move_trail_window = false, so a
+## creature packs down the exact same SnowTrail data and reaches the exact
+## same shared mask the player's own tread does, WITHOUT relocating the
+## window to wherever the last-processed creature happens to be -- which
+## would risk carrying the player's own nearby tracks right out of the
+## window the instant a creature updates after them in the same frame.
+func tread_snow_at(pixel_position: Vector2, move_trail_window: bool = true) -> void:
 	if _snow_depth <= 0.0:
 		return
-	_snow_trail_center_tile = _world_tile_for_pixel(pixel_position)
-	_snow_trail.step_on(_snow_trail_center_tile)
+	var tile := _world_tile_for_pixel(pixel_position)
+	_snow_trail.step_on(tile)
+	if move_trail_window:
+		_snow_trail_center_tile = tile
 
 
 ## The world clock as of the last snow step, so snow can advance on the same
@@ -4176,6 +4239,7 @@ var _snow_world_age := 0.0
 ## a real GPU texture upload rather than a uniform float, so it keeps its
 ## own throttle too -- see _refresh_snow_trail_mask.
 func step_snow(snowing: bool, warmth: float) -> void:
+	_snowing = snowing
 	var elapsed: float = maxf(_world_age_seconds - _snow_world_age, 0.0)
 	_snow_world_age = _world_age_seconds
 	var previous_depth := _snow_depth
@@ -4339,6 +4403,7 @@ func set_season_tint(tint: Color) -> void:
 func set_sun_position(elevation_deg: float, azimuth_deg: float) -> void:
 	_hillshade_shader.set_sun_position(elevation_deg, azimuth_deg)
 	_entity_hillshade_shader.set_sun_position(elevation_deg, azimuth_deg)
+	_current_sun_elevation_deg = elevation_deg
 
 
 ## How far from the streaming center a disturbance may be and still be worth
@@ -4363,24 +4428,13 @@ const DISTURBANCE_RADIUS_TILES := 14
 ## Disturbances too far from the streaming center are dropped (see
 ## DISTURBANCE_RADIUS_TILES). Callers are responsible for their own
 ## throttling (e.g. once per swim step, not every frame).
-## Live disturbance rings for the river flow overlay, each (x, y, birth
-## seconds on the engine clock the shader's TIME runs on); newest last.
-var _flow_ripples: Array[Vector3] = []
-
-
 func record_water_disturbance(world_pos: Vector2) -> void:
 	var tile := _world_tile_for_pixel(world_pos)
 	var offset := tile - _disturbance_center_tile
 	if maxi(absi(offset.x), absi(offset.y)) > DISTURBANCE_RADIUS_TILES:
 		return
 	_water_shader.add_disturbance(world_pos)
-	# The same event rings the flow overlay, where every water surface now
-	# lives (docs/concept/hydrology.md): the ring is a travelling bulge in
-	# the contour strokes, born now, dropped when it has faded.
-	_flow_ripples.append(Vector3(world_pos.x, world_pos.y, Time.get_ticks_msec() / 1000.0))
-	while _flow_ripples.size() > RiverFlowShader.RIPPLE_SLOTS:
-		_flow_ripples.pop_front()
-	_push_flow_ripples()
+	_mirror_disturbances_to_the_river()
 
 
 ## Ages every live water disturbance so its ring actually expands/fades on
@@ -4389,18 +4443,33 @@ func record_water_disturbance(world_pos: Vector2) -> void:
 ## age on the shader's own clock; here they are only pruned once faded.
 func step_water_disturbances(delta: float) -> void:
 	_water_shader.advance_disturbances(delta)
-	var now := Time.get_ticks_msec() / 1000.0
-	var live := _flow_ripples.size()
-	while not _flow_ripples.is_empty() and now - _flow_ripples[0].z > RiverFlowShader.RIPPLE_LIFETIME:
-		_flow_ripples.pop_front()
-	if _flow_ripples.size() != live:
-		_push_flow_ripples()
+	_mirror_disturbances_to_the_river()
 
 
-func _push_flow_ripples() -> void:
-	var material := _river_flow_shader.shared_material()
-	material.set_shader_parameter("ripple_count", _flow_ripples.size())
-	material.set_shader_parameter("ripples", PackedVector3Array(_flow_ripples))
+## Whether the river surface currently holds any live ripple -- so a river
+## with nothing moving in it costs nothing per frame, while the frame that
+## empties the buffer still gets pushed (otherwise the last wake would
+## hang there forever).
+var _river_disturbances_live := false
+
+
+## Hands the river surface the SAME buffer the sea's is drawing. Rivers are
+## no longer painted by the ocean overlay at all (see _paint_water_overlay:
+## the flow overlay is the river's entire water surface now), so without
+## this a fish's wake is recorded, aged, and drawn into a layer that river
+## tiles do not have -- reported as ripples having disappeared from the
+## river entirely. RiverFlowShader keeps no buffer of its own on purpose:
+## one lifetime, one cap, one distance cull, two surfaces.
+func _mirror_disturbances_to_the_river() -> void:
+	var count := _water_shader.disturbance_count()
+	if count == 0 and not _river_disturbances_live:
+		return
+	_river_disturbances_live = count > 0
+	_river_flow_shader.set_disturbances(
+		_water_shader.padded_disturbance_positions(),
+		_water_shader.padded_disturbance_ages(),
+		count
+	)
 
 
 func current_weather(player_pixel: Vector2) -> String:
@@ -4879,6 +4948,67 @@ func step_wild_crops(delta_seconds: float) -> void:
 			)
 
 
+## Tills and plants `crop_id` at a global tile (see docs/concept/farming.md,
+## FarmPlot, FarmPlotMarker, Player._plant_step) -- lazily creates the
+## plot's marker the first time this tile is farmed. Same "chunk must be
+## loaded" gate build_at_global already uses: farming far outside the
+## streamed area isn't meaningful since nothing there is rendered or
+## simulated either. Refuses to disturb a plot that already holds a live
+## crop (growing or ready) -- see FarmPlotMarker.till_and_plant -- so a
+## stray press can never destroy an unharvested crop; only an empty or
+## withered plot is (re)planted. Returns whether planting happened.
+func till_and_plant_farm_plot_at_global(global_x: int, global_y: int, crop_id: String) -> bool:
+	var tile := Vector2i(global_x, global_y)
+	if _loaded_chunks.get(_chunk_coord_for_tile(tile)) == null:
+		return false
+	if not _farm_plots.has(tile):
+		_farm_plots[tile] = _build_farm_plot_marker(tile)
+	var seed_value := hash("%d_%d_farm_plot" % [tile.x, tile.y])
+	return _farm_plots[tile].till_and_plant(crop_id, seed_value)
+
+
+## Tends (re-waters) the growing plot at a global tile, resetting its
+## neglect clock -- see FarmPlot.water. False if there is no plot there, or
+## it isn't currently growing.
+func water_farm_plot_at_global(global_x: int, global_y: int) -> bool:
+	var marker: FarmPlotMarker = _farm_plots.get(Vector2i(global_x, global_y))
+	return marker != null and marker.water()
+
+
+## Harvests the ready plot at a global tile -- see FarmPlot.harvest.
+## Returns {"crop_id": "", "count": 0} (the same shape FarmPlot.harvest's
+## own no-op returns) if there is no plot there, or it isn't ready yet. The
+## plot's soil stays -- see FarmPlotMarker.harvest -- so the same tile can
+## be planted again without re-tilling.
+func harvest_farm_plot_at_global(global_x: int, global_y: int) -> Dictionary:
+	var marker: FarmPlotMarker = _farm_plots.get(Vector2i(global_x, global_y))
+	if marker == null:
+		return {"crop_id": "", "count": 0}
+	return marker.harvest()
+
+
+## The world-clock tick hook for the farming loop (see
+## World._step_ecology_batch, docs/concept/farming.md) -- advances every
+## farm plot's own growth simulation by `delta_seconds`. Mirrors
+## step_worms' identical "for x in _sims.values(): x.advance(delta)" shape;
+## unlike step_wild_crops/step_tall_grass, this deliberately does NOT scale
+## by SeasonCycle's growth_modifier -- farming.md frames a tilled, tended
+## plot as the player's own override of the ambient vegetation model, not a
+## wild population subject to the same seasonal modulation.
+func step_farm_plots(delta_seconds: float) -> void:
+	for marker in _farm_plots.values():
+		marker.advance(delta_seconds)
+
+
+func _build_farm_plot_marker(tile: Vector2i) -> FarmPlotMarker:
+	var marker := FarmPlotMarker.new()
+	marker.position = Vector2(
+		(tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	_entities_parent.add_child(marker)
+	return marker
+
+
 ## One shared shader-uniform write per frame makes nearby blades yield to a
 ## walker; individual cards intentionally have no process callbacks.
 func set_grass_walker_position(world_position: Vector2) -> void:
@@ -4890,6 +5020,76 @@ func set_grass_walker_position(world_position: Vector2) -> void:
 ## Node2D of its own (see _sync_grass_sprites), so it cannot join
 ## HoverTargetFinder's group like every other hoverable entity -- World reads
 ## this directly instead to special-case the mouse-hover tooltip over grass.
+## Names the blooming flower drawn nearest `pixel_position`, or "" when none
+## is close enough -- the hover tooltip's flower lookup (see
+## World._update_hover_tooltip).
+##
+## Reported live: flowers "still don't [show] hover tooltips". Every other
+## hoverable thing in the world is a Node2D that joins
+## HoverTargetFinder.GROUP_NAME and answers get_display_name(). Flowers are
+## not, and should not be: they are ground decoration, a bare Sprite2D per
+## cell with no script and no group (see _sync_flower_sprites), precisely so a
+## loaded meadow costs a handful of shared textures instead of a thousand
+## scripted nodes -- and that group is scanned every frame, so joining it is
+## not free (see World's own note on the cost of that scan). So flowers are
+## answered the way tall grass already is: a cheap query the hover scan falls
+## through to when nothing in the group claimed the cursor.
+##
+## Measured against the BLOSSOM, not the cell: the sprite is anchored at the
+## stem's foot and drawn upward from there, so a player pointing at the bloom
+## they can actually see is pointing well above the cell the plant stands in.
+## Uses the very same landing point a pollinator settles on (see flowers_near
+## / ProceduralFlowerSprite.blossom_height_world), so the tooltip and the bees
+## agree about where a flower is.
+##
+## Only what is IN BLOOM answers, matching exactly what is drawn -- naming a
+## rose over what the player sees as bare grass is the same sim-and-picture
+## disagreement concept/flora.md forbids, with the lie on the other foot.
+func flower_name_at(
+	pixel_position: Vector2, radius_px: float = HoverTargetFinder.HOVER_RADIUS_PX
+) -> String:
+	var season := current_season()
+	var center := _world_tile_for_pixel(pixel_position)
+	# Enough rows to cover the tallest stem the art can draw plus the search
+	# radius itself, so a sunflower's head is still traced back to the foot it
+	# grows from. Bounded from the art's own numbers, not a guessed row count.
+	var reach := 1 + ceili(
+		(radius_px + ProceduralFlowerSprite.max_blossom_height_world())
+		/ float(TerrainRenderer.TILE_SIZE)
+	)
+	var best_name := ""
+	var best_distance := radius_px
+	for dy in range(-reach, reach + 1):
+		for dx in range(-reach, reach + 1):
+			var tile := center + Vector2i(dx, dy)
+			var patch: FlowerPatch = _flower_patches.get(_chunk_coord_for_tile(tile))
+			if patch == null:
+				continue
+			var cell := _local_coord(tile.x, tile.y)
+			var label := patch.label_at(cell, season)
+			if label == "":
+				continue
+			var foot := Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			)
+			var sprite_seed := hash("%d_%d_flower" % [tile.x, tile.y])
+			var blossom := foot - Vector2(
+				0.0,
+				ProceduralFlowerSprite.blossom_height_world(
+					sprite_seed,
+					_flower_scale_for(
+						patch.species_at(cell), patch.growth_at(cell), sprite_seed
+					).y
+				)
+			)
+			var distance := pixel_position.distance_to(blossom)
+			if distance <= best_distance:
+				best_distance = distance
+				best_name = label
+	return best_name
+
+
 func tall_grass_growth_at(pixel_position: Vector2) -> float:
 	var tile := _world_tile_for_pixel(pixel_position)
 	var chunk_coord := _chunk_coord_for_tile(tile)
@@ -5521,6 +5721,20 @@ func _sync_flower_sprites(chunk_coord: Vector2i) -> void:
 ## Cap on how many blooms are probed when scoring a chunk (see below).
 const _POLLINATOR_PROBE_LIMIT := 8
 
+## The one region seed the world's PREVAILING wind is drawn from (see
+## WeatherModel.prevailing_wind_direction), used only to bake meadows.
+##
+## Deliberately NOT per-chunk, the way current_weather's region seed is. A
+## founder's lineage has to be computed identically by every chunk that can
+## see it, or the meadows either side of a boundary disagree and the seam
+## shows -- and two chunks each using their own prevailing wind is exactly
+## that disagreement. One climate for the world is also the honest reading:
+## real prevailing winds are consistent over far more ground than this world
+## covers. The DAY's wind still varies by region and by day (see
+## step_flowers), so live shedding is regional even though the baked meadow
+## is not.
+const PREVAILING_WIND_REGION_SEED := 4177
+
 
 func _pollinator_multiplier_for(chunk_coord: Vector2i) -> float:
 	var patch: FlowerPatch = _flower_patches.get(chunk_coord)
@@ -5851,8 +6065,28 @@ func record_pollination_visit_at(tree_position: Vector2, visit_weight: float = 1
 func step_flowers(delta: float) -> void:
 	var season := current_season()
 	var growth_modifier := _season_cycle.growth_modifier(_world_age_seconds)
+	# Which way, and how hard, it is blowing RIGHT NOW -- the day's wind, not
+	# the prevailing one worldgen used, so live shedding varies with the
+	# weather and by region the way everything else does.
+	#
+	# This loop is the fix for a real defect: FlowerPatch.set_wind was fully
+	# built and fully tested and its only caller anywhere was its own test
+	# file, so every meadow in the running game shed seed at strength 0.0 --
+	# a permanent dead calm -- and the downwind drift the model computes was
+	# never once applied outside a test. Same bug class as the dead
+	# Pollination wiring recorded in docs/progress.md.
+	var weather_day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
 	for chunk_coord in _flower_patches:
 		var patch: FlowerPatch = _flower_patches[chunk_coord]
+		# Per-chunk region seed, exactly as current_weather derives it -- so a
+		# meadow sheds on the same wind the sky over it is showing.
+		var region_seed := hash("%d_%d" % [chunk_coord.x, chunk_coord.y])
+		patch.set_wind(
+			_weather_model.wind_direction_for(weather_day, region_seed),
+			_weather_model.dispersal_strength_for(
+				_weather_model.weather_at(weather_day, region_seed)
+			)
+		)
 		patch.advance(delta, growth_modifier)
 		# Plants past their bloom drop seed around themselves, which lies in the
 		# grass as its own entity for a granivore to find (see
@@ -6401,6 +6635,7 @@ func _forage_seed_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i
 	var direction: Vector2 = AntColony.carry_direction(carrier_seed)
 	var target := nearest_position + direction * carry_tiles * float(TerrainRenderer.TILE_SIZE)
 	plant_grass_at(target)
+	_spawn_ant_forager_visual(origin + cell, mound_pixel, [nearest_position, target])
 
 
 ## One mound's forager in a forest/rainforest chunk: TallGrass never grows
@@ -6447,12 +6682,42 @@ func _forage_windfall_near_mound(colony: AntColony, origin: Vector2i, cell: Vect
 	if eaten_species == "":
 		return
 	if AntColony.windfall_is_consumed(colony.windfall_carrier_seed_for(cell)):
+		# Eaten on the spot -- the forager's visible trip ends at the nut
+		# itself, never reaches a cache leg (there is none).
+		_spawn_ant_forager_visual(origin + cell, mound_pixel, [nearest_position])
 		return
 	var carrier_seed := colony.carrier_seed_for(cell)
 	var carry_tiles := AntColony.carry_distance_tiles(carrier_seed)
 	var direction: Vector2 = AntColony.carry_direction(carrier_seed)
 	var target := nearest_position + direction * carry_tiles * float(TerrainRenderer.TILE_SIZE)
 	try_plant_seed_at(target, eaten_species)
+	_spawn_ant_forager_visual(origin + cell, mound_pixel, [nearest_position, target])
+
+
+## The purely decorative visual half of a real, already-resolved forage (see
+## _forage_seed_near_mound/_forage_windfall_near_mound -- by the time this is
+## called, the actual seed/nut has already been taken and, if applicable,
+## replanted; nothing here can change that outcome). Caps each mound
+## (`global_tile`) to one forager in flight at a time via
+## _active_ant_foragers -- AntColony.FORAGE_CHANCE can succeed several times
+## a second per mound at normal frame rate, and a new visible ant for every
+## single one would be a flicker of overlapping sprites, not a colony
+## reading as alive. `rest_of_path` is everything after the mound itself:
+## [pickup] if the find was eaten on the spot, [pickup, cache] if it was
+## carried on.
+func _spawn_ant_forager_visual(global_tile: Vector2i, mound_pixel: Vector2, rest_of_path: Array) -> void:
+	if _entities_parent == null:
+		return
+	var existing = _active_ant_foragers.get(global_tile)
+	if existing != null and is_instance_valid(existing) and not existing.is_queued_for_deletion():
+		return
+	var forager := AntForagerMarker.new()
+	var path: Array = [mound_pixel]
+	path.append_array(rest_of_path)
+	forager.path = path
+	forager.position = mound_pixel
+	_entities_parent.add_child(forager)
+	_active_ant_foragers[global_tile] = forager
 
 
 ## Inches every surfaced worm along, every frame. A worm at the surface is
@@ -8407,8 +8672,20 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		for sagewerk_local_cell in _sagewerk_lumberjacks[sagewerk_chunk_coord]:
 			_resync_logistics_for_sagewerk(sagewerk_chunk_coord, sagewerk_local_cell)
 
+	# The meadow that was already here is what the wind already did (see
+	# MeadowSpread). Two things it needs that a chunk seed cannot give it: the
+	# chunk's WORLD origin, because founders live in world space so a meadow
+	# crosses chunk lines instead of stopping dead at every seam; and the
+	# PREVAILING wind, because a baked meadow is the product of a climate
+	# rather than of whatever the sky happens to be doing right now.
 	_flower_patches[chunk_coord] = FlowerPatch.new(
-		hash("%d_%d_flowers" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+		hash("%d_%d_flowers" % [chunk_coord.x, chunk_coord.y]),
+		chunk.width,
+		chunk.height,
+		chunk.biome,
+		chunk_coord * CHUNK_SIZE,
+		_weather_model.prevailing_wind_direction(PREVAILING_WIND_REGION_SEED),
+		_weather_model.prevailing_wind_strength(PREVAILING_WIND_REGION_SEED)
 	)
 	_flower_sprites[chunk_coord] = {}
 	_seed_sprites[chunk_coord] = {}
@@ -8435,11 +8712,28 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	)
 	_worm_sprites[chunk_coord] = {}
 
-	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants"). Not
-	# rendered this pass -- see AntColony's own doc comment on scope.
+	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants"). Placed
+	# once at chunk creation -- mound_cells() never changes for a loaded
+	# chunk's lifetime, exactly like the earthworm burrows just above.
 	_ant_colonies[chunk_coord] = AntColony.new(
 		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
 	)
+	# The visible counterpart: one static AntMoundMarker per mound cell, so a
+	# colony is actually somewhere a player can SEE rather than a pure
+	# background number (reported live: ants "should be a real gear in the
+	# ecosystem"). Placed at the mound's own tile centre, the same
+	# cell-to-pixel convention _forage_seed_near_mound uses for its own
+	# mound_pixel.
+	var mound_markers: Array = []
+	for mound_cell in _ant_colonies[chunk_coord].mound_cells():
+		var marker := AntMoundMarker.new()
+		marker.position = Vector2(
+			float(chunk_coord.x * CHUNK_SIZE + mound_cell.x) + 0.5,
+			float(chunk_coord.y * CHUNK_SIZE + mound_cell.y) + 0.5
+		) * float(TerrainRenderer.TILE_SIZE)
+		_entities_parent.add_child(marker)
+		mound_markers.append(marker)
+	_ant_mound_markers[chunk_coord] = mound_markers
 
 	_ecosystem.add_region(chunk_coord, chunk)
 	# Robin/sparrow's food-density signal (worm burrows, ground seed cells)
@@ -8494,7 +8788,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		CHUNK_SIZE,
 		TerrainRenderer.TILE_SIZE,
 		_biome_classifier.dominant_biome(chunk.biome),
-		self
+		self,
+		_current_sun_elevation_deg
 	)
 	_loaded_ambient_flyers[chunk_coord] = _ambient_flyer_renderer.spawn_ambient_flyers(
 		_creatures_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
@@ -8967,6 +9262,9 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	_worm_patches.erase(chunk_coord)
 
 	_ant_colonies.erase(chunk_coord)
+	for marker in _ant_mound_markers.get(chunk_coord, []):
+		marker.free()
+	_ant_mound_markers.erase(chunk_coord)
 
 	# Snapshot the aggregate ecology before dropping the region, so revisiting
 	# this chunk catch-up integrates from where it left off (see

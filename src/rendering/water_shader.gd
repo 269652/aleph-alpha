@@ -510,6 +510,25 @@ func advance_disturbances(delta: float) -> void:
 	_push_disturbances()
 
 
+## The exact three values last pushed to this material, so a SECOND water
+## surface can draw the very same buffer. Rivers no longer wear the ocean
+## overlay at all (see EarthChunkManager._paint_water_overlay -- the flow
+## overlay is the river's whole surface now), so their ripples are drawn by
+## RiverFlowShader instead; it deliberately keeps no buffer of its own, and
+## EarthChunkManager fans these out to it. One ring buffer, one lifetime,
+## one distance cull -- two surfaces that cannot drift apart.
+func padded_disturbance_positions() -> PackedVector2Array:
+	return _padded_positions()
+
+
+func padded_disturbance_ages() -> PackedFloat32Array:
+	return _padded_ages()
+
+
+func disturbance_count() -> int:
+	return _disturbance_positions.size()
+
+
 func _push_disturbances() -> void:
 	set_disturbances(_padded_positions(), _padded_ages(), _disturbance_positions.size())
 

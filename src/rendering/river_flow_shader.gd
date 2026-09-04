@@ -2,6 +2,7 @@ extends RefCounted
 
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
+const WaterShader = preload("res://src/rendering/water_shader.gd")
 
 ## Realistic flowing river water: a surface field advected downstream in
 ## two crossfaded phases, over the channel's real parabolic cross-section,
@@ -118,27 +119,43 @@ uniform int boulder_count = 0;
 uniform vec2 boulders[24];
 uniform float boulder_reach_px = 40.0;
 uniform float boulder_radius_px = 11.0;
-uniform float boulder_halo_width_px = 6.0;
-uniform float boulder_halo_alpha = 0.6;
+uniform float boulder_band_width_px = 6.0;
+uniform float boulder_band_edge_feather_px = 1.5;
+uniform float boulder_band_alpha = 0.6;
+uniform float boulder_band_levels = 3.0;
+uniform float boulder_band_wobble = 0.6;
 
 // The waders -- the player and any creatures standing in river water,
 // fed per frame by EarthChunkManager.set_river_flow_waders. Soft moving
 // obstacles that never dry the water.
 uniform int wader_count = 0;
 uniform vec2 waders[16];
-// Expanding rings from water disturbances (a fish's tail flap, the
-// player's stroke -- EarthChunkManager.record_water_disturbance), each
-// (x, y, birth time): a travelling bulge in the across field, so the
-// contour strokes ring outward from the source and fade.
-uniform int ripple_count = 0;
-uniform vec3 ripples[24];
-uniform float ripple_speed_px = 18.0;
-uniform float ripple_width_px = 10.0;
-uniform float ripple_amplitude_px = 1.5;
-uniform float ripple_lifetime = 2.5;
 uniform float wader_reach_px = 26.0;
 uniform float wader_radius_px = 6.0;
 uniform float wader_wake_trail = 0.8;
+
+// MOVEMENT RIPPLES -- a fish darting past, the player or an animal moving
+// through the water. Recorded and aged by the SAME buffer the sea's
+// surface draws from (WaterShader.add_disturbance/advance_disturbances,
+// fanned out by EarthChunkManager): one ring buffer, one lifetime, one
+// distance cull, two surfaces. disturbance_age is CPU-driven seconds since
+// the event, NOT TIME minus a stored stamp -- the shader clock and
+// Time.get_ticks_msec() have no shared epoch, and comparing them is what
+// once made every ripple permanently out of range and invisible.
+uniform vec2 disturbance_pos[16];
+uniform float disturbance_age[16];
+uniform int disturbance_count = 0;
+uniform float ripple_speed = 14.0;
+uniform float ripple_lifetime = 2.2;
+uniform float ripple_wavelength = 6.0;
+uniform float ripple_packet_width = 7.0;
+uniform float ripple_spread_decay = 0.02;
+// How the packet reaches the drawn surface: how far a crest bends the
+// contour field the current lines trace, and the crest amplitudes between
+// which the ring inks in its own right.
+uniform float ripple_line_gain = 0.18;
+uniform float ripple_crest_min = 0.10;
+uniform float ripple_crest_full = 0.40;
 
 // Continuous downstream travel, px/s per m/s of real current.
 uniform float drift_px_per_mps = 20.0;
@@ -191,6 +208,53 @@ float value_noise(vec2 p) {
 		mix(value_hash(i + vec2(0.0, 1.0)), value_hash(i + vec2(1.0, 1.0)), f.x),
 		f.y
 	);
+}
+
+// ONE expanding wave packet -- character for character the sea's own
+// (WaterShader's ripple_packet), because a fish's wake must read the same
+// in a river as in the ocean. Not a hard ring but a travelling packet of
+// concentric crests and troughs behind the front, decaying with age and
+// with the circumference it spreads its energy around.
+//
+// SIGNED -- crests positive, troughs negative -- which is the whole point:
+// overlapping wakes then genuinely interfere, destructively as well as
+// constructively, instead of only ever piling up. Mirrored on the CPU by
+// RiverFlowShader.ripple_packet, which is what pins it under test.
+float ripple_packet(float dist, float age) {
+	if (age < 0.0 || age > ripple_lifetime) {
+		return 0.0;
+	}
+	float front = age * ripple_speed;
+	float phase = front - dist;  // > 0 = inside the advancing front
+	float packet = exp(-abs(phase) / ripple_packet_width);
+	float rings = sin(phase * 6.28318530718 / ripple_wavelength);
+	float age_fade = 1.0 - age / ripple_lifetime;
+	float spread_fade = 1.0 / (1.0 + front * ripple_spread_decay);
+	return rings * packet * age_fade * spread_fade;
+}
+
+// THE river adaptation. In still water a ring stays concentric about a
+// fixed point; in a current it is concentric about a point that MOVES WITH
+// THE WATER -- so the centre is carried downstream at the same drift rate
+// the surface pattern itself travels at, and a wake sits in the river
+// instead of the river sliding out from under it.
+//
+// The age bound is checked BEFORE the centre and the distance, not left to
+// ripple_packet's own guard: the padded tail of the buffer carries a
+// sentinel age, and this is the loop the rain-ripple perf lesson applies
+// to (do the cheap rejection first, never the expensive half and then a
+// discard).
+float movement_ripples(vec2 pos, vec2 flow_dir, float speed_mps) {
+	float total = 0.0;
+	for (int i = 0; i < disturbance_count; i++) {
+		float age = disturbance_age[i];
+		if (age < 0.0 || age > ripple_lifetime) {
+			continue;
+		}
+		vec2 center = disturbance_pos[i] + flow_dir * (drift_px_per_mps * speed_mps * age);
+		total += ripple_packet(distance(pos, center), age);
+	}
+	return total;
 }
 
 // The surface field: an isotropic, WORLD-ANCHORED noise smeared along the
@@ -409,33 +473,62 @@ void fragment() {
 	// around it; eyot_dry below then cuts a ROUND dry patch under the
 	// rock itself.
 	//
-	// boulder_halo is a SEPARATE ring just outside that dry patch, purely
+	// boulder_band is a SEPARATE ring just outside that dry patch, purely
 	// a function of distance to the rock -- unlike eyot_dry (which only
 	// ever REMOVES wet alpha, so it can darken already-wet water but can
-	// never light up already-dry land), the halo can boost wet alpha and
+	// never light up already-dry land), the band can boost wet alpha and
 	// tint toward the shore colour on its own, independent of the
 	// channel's own across value. A boulder only ever reaches this array
 	// when EarthChunkManager.flow_boulder_at_global found it within the
-	// river or its bank apron, so lighting up a halo around it never
+	// river or its bank apron, so lighting up a band around it never
 	// happens for a rock genuinely out in a field -- it always sits on
 	// real bank ground ("boulders on a grass field inside the river
 	// should be surrounded by the light blue shore band as well").
+	//
+	// boulder_band_ring_t is what is NEW here: the winning boulder's own
+	// raw position inside the ring, 0 at the rock's edge through 1 at the
+	// ring's outer edge, carried out of the loop so the composite below
+	// can quantise it into the same cel-banded, noise-wobbled layers the
+	// channel's own shore uses -- not one flat colour ("the rocks should
+	// not have a halo around them... instead they should have a layered
+	// band like the shore which also wobbles and moves").
 	float eyot_dry = 1.0;
-	float boulder_halo = 0.0;
+	float boulder_band = 0.0;
+	float boulder_band_ring_t = 1.0;
 	for (int b = 0; b < boulder_count; b++) {
 		vec2 to_frag = wp - boulders[b];
 		float lateral = dot(to_frag, flow_perp);
 		float d = length(to_frag);
 		// A RING, not a disc: the inner factor is the same edge eyot_dry
-		// uses, so the halo starts exactly where the rock's dry patch
-		// ends. Without it the halo ran at full strength under the rock
+		// uses, so the band starts exactly where the rock's dry patch
+		// ends. Without it the band ran at full strength under the rock
 		// too and, since it lights alpha on its own below, painted water
 		// straight back over the dry patch it is supposed to trim.
-		boulder_halo = max(
-			boulder_halo,
-			smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d)
-				* (1.0 - smoothstep(boulder_radius_px, boulder_radius_px + boulder_halo_width_px, d))
-		);
+		//
+		// The OUTER feather sits ENTIRELY PAST boulder_band_width_px, not
+		// inside it: a first pass faded alpha within the ring's own last
+		// couple of pixels, but the outermost colour LEVEL also only owns
+		// its last couple of pixels (three levels sharing one width_px
+		// span), so the fade ate most of that level's own extent and it
+		// only ever appeared already half-transparent -- seen live as one
+		// soft fade, never a second visible band. Every colour level below
+		// now gets the ring's full width at essentially flat alpha; only
+		// this small extra coda past the colour ramp's own end actually
+		// fades to nothing, the same relationship bank_feather has to the
+		// whole channel width.
+		float band_here = smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d)
+			* (1.0 - smoothstep(
+				boulder_radius_px + boulder_band_width_px,
+				boulder_radius_px + boulder_band_width_px + boulder_band_edge_feather_px, d
+			));
+		// The band's colour comes from whichever boulder dominates its
+		// strength (the max() just below) -- latched together so a
+		// fragment between two overlapping rings never mixes one
+		// boulder's alpha with a different boulder's ring position.
+		if (band_here > boulder_band) {
+			boulder_band_ring_t = clamp((d - boulder_radius_px) / boulder_band_width_px, 0.0, 1.0);
+		}
+		boulder_band = max(boulder_band, band_here);
 		if (d >= boulder_reach_px) {
 			continue;
 		}
@@ -499,42 +592,12 @@ void fragment() {
 		float side = clamp(lateral / (wader_radius_px * obstacle_side_softness), -1.0, 1.0);
 		frag_across += side * displaced * envelope / (half_width_local * tile_px);
 	}
-	// RIPPLE RINGS -- the reimplementation of the old overlay's disturbance
-	// rings inside the contour system: each ring is a Gaussian band of
-	// across-displacement travelling outward at ripple_speed_px and fading
-	// over ripple_lifetime, so every stroke it crosses bulges away from the
-	// source and the same push that bends a river's lines rings a pond.
-	//
-	// A dozen fish flapping near one bend land a dozen rings on the same
-	// few fragments; summed and added straight into frag_across the way a
-	// single ring is, they blew well past the channel's own gradient and
-	// filled the bend with dense fanned contour lines, and a ring reaching
-	// the bank bulged the WATERLINE itself into a round bump with no
-	// visible cause -- reported as "artifacts in curves" and "semispheres
-	// on the edge". Fixed two ways: every ring's push is summed in its own
-	// accumulator and the SUM is clamped to one ring's own amplitude
-	// (many overlapping rings still cap at what one ring alone can do),
-	// and the whole clamped push fades to zero as the fragment nears the
-	// bank (gated on frag_across BEFORE any ripple, so a ring can perturb
-	// open water but can never itself be what pushes a fragment out past
-	// the real waterline).
-	float ripple_push_px = 0.0;
-	for (int i = 0; i < ripple_count; i++) {
-		vec2 to_frag = wp - ripples[i].xy;
-		float age = TIME - ripples[i].z;
-		if (age < 0.0 || age > ripple_lifetime) {
-			continue;
-		}
-		float radius = age * ripple_speed_px;
-		float d = length(to_frag);
-		float band = (d - radius) / ripple_width_px;
-		float push = exp(-band * band) * (1.0 - age / ripple_lifetime) * ripple_amplitude_px;
-		float side = dot(to_frag, flow_perp) >= 0.0 ? 1.0 : -1.0;
-		ripple_push_px += side * push;
-	}
-	ripple_push_px = clamp(ripple_push_px, -ripple_amplitude_px, ripple_amplitude_px);
-	float bank_fade = 1.0 - smoothstep(0.7, 1.0, abs(frag_across));
-	frag_across += ripple_push_px * bank_fade / (half_width_local * tile_px);
+	// Movement ripples (fish/player/animal wakes) deliberately do NOT
+	// perturb frag_across here -- that field is the channel's geometry,
+	// and a passing fish must not narrow the river or bulge the waterline
+	// (see "a wake must not displace the channel geometry", tested by
+	// test_a_ripple_never_moves_the_waterline). They instead bend the
+	// stroke field directly, below, via movement_ripples().
 	float rr = abs(frag_across);
 	float depth_frac = clamp(1.0 - rr * rr, 0.0, 1.0);
 
@@ -764,7 +827,24 @@ void fragment() {
 	// above 0.35. The wobble is then free to be a small texture on top
 	// instead of the thing the lines are made of.
 	float guide = frag_across + bend / wobble_cells;
-	float s_field = guide * across_line_scale + (n - 0.5) * wobble_local;
+	// MOVEMENT RIPPLES, drawn rather than glowed (merged alongside the
+	// eddy-bent guide above -- two independent, additive effects on the
+	// same field, not a choice between them). This surface is illustrated
+	// water -- a static cel body with every bit of motion carried by drawn
+	// strokes -- so a wake composited on top as a bright ring would read
+	// as a sticker. Instead the packet enters the field whose LEVEL SETS
+	// are the current lines, so the lines themselves bow into arcs around
+	// the fish, closing into rings where the disturbance is strongest and
+	// merging back into the flow at its edges. Two overlapping wakes sum
+	// HERE, before any of it is drawn, so they genuinely interfere.
+	//
+	// Deliberately NOT added to frag_across/guide: that field is the
+	// channel's geometry, and a passing fish must not narrow the river or
+	// bend its eddies. Boulders and waders displace it because they are
+	// solid things standing in the current; a wake is only the surface.
+	float ripple = movement_ripples(wp, flow_dir, speed_mps);
+	float s_field = guide * across_line_scale + (n - 0.5) * wobble_local
+		+ ripple * ripple_line_gain;
 	float level_frac = fract(s_field * line_count) - 0.5;
 	float dist_n = abs(level_frac) / line_count;
 	float stroke = 1.0 - smoothstep(line_width * 0.5, line_width, dist_n);
@@ -777,6 +857,14 @@ void fragment() {
 	float pulse = smoothstep(0.35, 0.75, n);
 	float wave = stroke * mix(0.75, 1.0, parity) * mix(0.8, 1.1, is_fast)
 		* mix(pulse_floor, 1.0, pulse);
+	// The crest also inks in its OWN right, so the ring reads as concentric
+	// arcs and not merely as wobbled current lines. Entered through `wave`
+	// -- the existing "how hard is a stroke drawn here" -- so it inherits
+	// the adaptive ink, the moonlight lift and the alpha clamp for free.
+	// max, not sum: a strong crest takes over the mark, a weak one leaves
+	// the flow line alone, and neither can push the stroke past full.
+	float ripple_ink = smoothstep(ripple_crest_min, ripple_crest_full, ripple);
+	wave = max(wave, ripple_ink);
 	// ADAPTIVE INK: pale strokes vanish on the bright shallow cels
 	// (reported from the Rhine straight: "no current lines at all"), so
 	// the ink snaps DEEP over light water and pale over dark. A hard
@@ -802,9 +890,35 @@ void fragment() {
 	// illustrated mark of all.
 	float shore = 1.0 - smoothstep(shore_width * 0.5, shore_width, abs(rr - shore_pos));
 	body = mix(body, line_color, shore * mix(0.5, 0.85, night_lift));
-	// A boulder's own shore ring, same tint, same night lift -- painted
-	// whether the rock sits in open water or on the bank's dry ground.
-	body = mix(body, line_color, boulder_halo * boulder_halo_alpha * mix(0.5, 0.85, night_lift));
+
+	// A boulder's own shore BAND -- not a flat halo but the same
+	// cel-quantised, noise-wobbled layering the channel's own shore uses
+	// above, radiating from the rock's edge instead of the centreline:
+	// "the rocks should not have a halo around them... instead they
+	// should have a layered band like the shore which also wobbles and
+	// moves". Reuses the channel's own advected field n, so the band's
+	// ring boundary wanders and animates exactly like the channel's own
+	// cel/stroke boundary does, and the same world-anchored dither hash,
+	// so its steps dissolve into the same hand-drawn grain instead of a
+	// smooth gradient ring.
+	//
+	// Three STOPS, not two: a first pass ramped line_color straight to
+	// band0_color and, live, still read as one soft glow -- both colours
+	// are pale, so even a genuine hard step between them barely registers
+	// as a "layer". Running it through band1_color as well (a visibly
+	// darker, more saturated blue) is what actually reads as banding,
+	// exactly the way the channel body needs all five BAND_COLORS, not
+	// two, to read as a cross-section rather than a gradient.
+	float boulder_wobbled_t = clamp(boulder_band_ring_t + (n - 0.5) * boulder_band_wobble, 0.0, 1.0);
+	float boulder_level = clamp(
+		floor(boulder_wobbled_t * boulder_band_levels + (checker - 0.5) * dither_strength),
+		0.0, boulder_band_levels - 1.0
+	);
+	float boulder_band_t = boulder_level / (boulder_band_levels - 1.0);
+	float boulder_bramp = boulder_band_t * 2.0;
+	vec3 boulder_band_color = mix(line_color, band0_color, clamp(boulder_bramp, 0.0, 1.0));
+	boulder_band_color = mix(boulder_band_color, band1_color, clamp(boulder_bramp - 1.0, 0.0, 1.0));
+	body = mix(body, boulder_band_color, boulder_band * mix(0.5, 0.85, night_lift));
 
 	// The comic INK line: a dark outline hugging the real bank curve, just
 	// inside the waterline. The old stylized attempt drew its outline per
@@ -819,13 +933,13 @@ void fragment() {
 	// This is what frees the water's outline from the tile grid: the edge
 	// is |across| == 1, a smooth curve through the middle of tiles, not
 	// the rectangle of whichever cells happened to be painted.
-	// The halo also lights its own alpha, independent of the channel's own
-	// wet/dry verdict -- a boulder halo ring must show through even where
-	// the tile's baseline is dry ground past the bled shore (see
+	// The band also lights its own alpha, independent of the channel's own
+	// wet/dry verdict -- a boulder's own shore band must show through even
+	// where the tile's baseline is dry ground past the bled shore (see
 	// EarthChunkManager._paint_river_flow_overlay's SHORE_BLEED_TILES).
 	float wet = max(
 		(1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry,
-		boulder_halo * boulder_halo_alpha
+		boulder_band * boulder_band_alpha
 	);
 	if (debug_across > 0.5) {
 		// The across field's OWN level sets. Polygonal bands mean the
@@ -1017,12 +1131,39 @@ const BOULDER_RADIUS_PX := 11.0
 ## The shore-tint ring just outside the dry eyot, and how strongly it
 ## tints and lights alpha -- deliberately WIDER than the water's own bank
 ## feather (BANK_FEATHER, ~1% of a channel width) so a boulder's own
-## halo, unlike the water's edge, reads clearly from a normal play
+## shore band, unlike the water's edge, reads clearly from a normal play
 ## distance regardless of the local channel's width. Not bounded by
-## boulder_reach_px: the halo is a ring right at the rock, not part of
+## boulder_reach_px: the band is a ring right at the rock, not part of
 ## the flow-bending falloff.
-const BOULDER_HALO_WIDTH_PX := 6.0
-const BOULDER_HALO_ALPHA := 0.6
+const BOULDER_BAND_WIDTH_PX := 6.0
+## A small EXTRA coda, entirely PAST the ring's own width above, where
+## alpha makes its true fade to 0 -- so the whole width_px the colour ramp
+## steps through renders at essentially flat alpha, and only this sliver
+## beyond it (still the outermost colour, just fading out) actually
+## dissolves. Two earlier attempts fed the fade a span INSIDE width_px
+## instead (the whole width, then just its last 1.5px) and both crushed
+## the outermost layer -- three levels share one width_px span, so even a
+## "narrow" fade confined to that span ate most of the last level's own
+## share of it, and it only ever appeared already half-transparent ("still
+## reads as one soft glow"). Mirrors the relationship BANK_FEATHER has to
+## the whole channel width: full opaque body, THEN a small feather past it.
+const BOULDER_BAND_EDGE_FEATHER_PX := 1.5
+const BOULDER_BAND_ALPHA := 0.6
+## "The rocks should not have a halo around them... instead they should
+## have a layered band like the shore which also wobbles and moves": the
+## ring above no longer paints one flat colour. BOULDER_BAND_LEVELS steps
+## it through the same cel-quantised layering CEL_LEVELS gives the channel
+## body (kept smaller -- the ring is a fraction of the channel's width, so
+## six steps would be sub-pixel), and BOULDER_BAND_WOBBLE perturbs its
+## ring position by the channel's own advected field n before quantising,
+## the same way LINE_WOBBLE perturbs the channel's wave-stroke contours --
+## so the band's boundary wanders and animates instead of sitting as a
+## static circle. Both pinned by test: LEVELS must produce at least two
+## visually distinct layers, and WOBBLE must actually move the boundary
+## while the quantised level never escapes the band regardless of how the
+## field swings.
+const BOULDER_BAND_LEVELS := 3
+const BOULDER_BAND_WOBBLE := 0.6
 
 ## A wader as a flow obstacle: a smaller round core than a boulder (legs,
 ## not a rock face), with the displacement stretched downstream by the
@@ -1050,6 +1191,40 @@ const WADER_SLOTS := 16
 ## the feather) -- it only ever shows anything where a real wader, boulder
 ## or ripple actually reaches it.
 const SHORE_BLEED_TILES := 3.0
+
+## Movement-ripple tuning, taken from the SEA by import rather than copied:
+## a fish's wake has to read the same in a river as in the ocean, and a
+## second set of literals is a second thing to re-tune and drift apart.
+## Same slot count too, because both surfaces draw the one shared buffer
+## (WaterShader.add_disturbance, fanned out by EarthChunkManager).
+const RIPPLE_SPEED := WaterShader.RIPPLE_SPEED
+const RIPPLE_LIFETIME := WaterShader.RIPPLE_LIFETIME
+const RIPPLE_WAVELENGTH := WaterShader.RIPPLE_WAVELENGTH
+const RIPPLE_PACKET_WIDTH := WaterShader.RIPPLE_PACKET_WIDTH
+const RIPPLE_SPREAD_DECAY := WaterShader.RIPPLE_SPREAD_DECAY
+const DISTURBANCE_SLOTS := WaterShader.MAX_DISTURBANCES
+
+## How far a crest bends the contour field the current lines trace, in
+## s_field units. Bounded from BOTH sides by test rather than eyeballed:
+## below ~a third of one contour spacing (1 / LINE_COUNT) a crest moves the
+## lines too little to draw anything, and above half the wobble's own swing
+## the ripple stops being a local disturbance and starts restructuring the
+## channel-wide line family into the closed "perlin noise cells" the across
+## ramp exists to prevent. Rings closing around the fish ITSELF are wanted
+## -- that is the ripple -- which is exactly why the ceiling is set against
+## the wobble rather than against zero.
+const RIPPLE_LINE_GAIN := 0.18
+
+## The crest amplitudes between which the ring inks in its own right: below
+## MIN nothing draws (troughs and spent tails stay clean), at FULL the mark
+## is a full-strength stroke. FULL must stay reachable by a real packet
+## crest or it is ink that never prints; MIN is the threshold WaterShader
+## already paid for once -- set against a FRESH ripple it made the ring
+## visible only in its first moments ("a mini ripple appears but nothing
+## looks natural"), so it is pinned low enough that a crest still inks
+## three quarters of the way through the ring's life.
+const RIPPLE_CREST_MIN := 0.10
+const RIPPLE_CREST_FULL := 0.40
 
 ## px of world width per unit of across-fraction -- the channel half-width,
 ## pinned against RiverCatalog.RIVER_HALF_WIDTH_TILES by test.
@@ -1201,10 +1376,6 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("tile_px", TILE_PX)
 	material.set_shader_parameter("still_flow_m_s", STILL_FLOW_M_S)
 	material.set_shader_parameter("still_ripple", STILL_RIPPLE)
-	material.set_shader_parameter("ripple_speed_px", RIPPLE_SPEED_PX)
-	material.set_shader_parameter("ripple_width_px", RIPPLE_WIDTH_PX)
-	material.set_shader_parameter("ripple_amplitude_px", RIPPLE_AMPLITUDE_PX)
-	material.set_shader_parameter("ripple_lifetime", RIPPLE_LIFETIME)
 	material.set_shader_parameter("eddy_swirl", EDDY_SWIRL)
 	material.set_shader_parameter("bank_shear", BANK_SHEAR)
 	material.set_shader_parameter("bank_feather", BANK_FEATHER)
@@ -1213,8 +1384,11 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("boulder_count", 0)
 	material.set_shader_parameter("boulder_reach_px", BOULDER_REACH_PX)
 	material.set_shader_parameter("boulder_radius_px", BOULDER_RADIUS_PX)
-	material.set_shader_parameter("boulder_halo_width_px", BOULDER_HALO_WIDTH_PX)
-	material.set_shader_parameter("boulder_halo_alpha", BOULDER_HALO_ALPHA)
+	material.set_shader_parameter("boulder_band_width_px", BOULDER_BAND_WIDTH_PX)
+	material.set_shader_parameter("boulder_band_edge_feather_px", BOULDER_BAND_EDGE_FEATHER_PX)
+	material.set_shader_parameter("boulder_band_alpha", BOULDER_BAND_ALPHA)
+	material.set_shader_parameter("boulder_band_levels", float(BOULDER_BAND_LEVELS))
+	material.set_shader_parameter("boulder_band_wobble", BOULDER_BAND_WOBBLE)
 	material.set_shader_parameter("wader_count", 0)
 	material.set_shader_parameter("wader_reach_px", WADER_REACH_PX)
 	material.set_shader_parameter("wader_radius_px", WADER_RADIUS_PX)
@@ -1236,6 +1410,15 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("moonlight_ink", MOONLIGHT_INK)
 	material.set_shader_parameter("shore_pos", SHORE_POS)
 	material.set_shader_parameter("shore_width", SHORE_WIDTH)
+	material.set_shader_parameter("disturbance_count", 0)
+	material.set_shader_parameter("ripple_speed", RIPPLE_SPEED)
+	material.set_shader_parameter("ripple_lifetime", RIPPLE_LIFETIME)
+	material.set_shader_parameter("ripple_wavelength", RIPPLE_WAVELENGTH)
+	material.set_shader_parameter("ripple_packet_width", RIPPLE_PACKET_WIDTH)
+	material.set_shader_parameter("ripple_spread_decay", RIPPLE_SPREAD_DECAY)
+	material.set_shader_parameter("ripple_line_gain", RIPPLE_LINE_GAIN)
+	material.set_shader_parameter("ripple_crest_min", RIPPLE_CREST_MIN)
+	material.set_shader_parameter("ripple_crest_full", RIPPLE_CREST_FULL)
 	for i in BAND_COLORS.size():
 		material.set_shader_parameter("band%d_color" % i, BAND_COLORS[i])
 	return material
@@ -1256,6 +1439,53 @@ static func depth_color(depth_fraction: float) -> Color:
 	body = body.lerp(BAND_COLORS[2], clampf(sramp - 1.0, 0.0, 1.0))
 	body = body.lerp(BAND_COLORS[3], clampf(sramp - 2.0, 0.0, 1.0))
 	return body.lerp(BAND_COLORS[4], clampf(sramp - 3.0, 0.0, 1.0))
+
+
+## Directly sets the movement-ripple uniforms. `positions`/`ages` come
+## padded to DISTURBANCE_SLOTS and `count` says how many slots are live --
+## this surface deliberately owns no buffer of its own: EarthChunkManager
+## hands it the very same one WaterShader ages for the sea, so a wake can
+## never expand in one surface and sit frozen in the other.
+func set_disturbances(
+	positions: PackedVector2Array, ages: PackedFloat32Array, count: int
+) -> void:
+	var material := shared_material()
+	material.set_shader_parameter("disturbance_pos", positions)
+	material.set_shader_parameter("disturbance_age", ages)
+	material.set_shader_parameter("disturbance_count", count)
+
+
+## The exact math the shader's ripple_packet runs, mirrored on the CPU for
+## the same reason every other mirror here exists -- a fragment shader
+## cannot be asserted headlessly. Written out rather than delegated to
+## WaterShader.ripple_amplitude ON PURPOSE: the GLSL above is a genuine
+## second copy, so the mirror has to be one too, and the test that asserts
+## the two agree is then a real pin on the two shaders rather than a
+## tautology.
+##
+## Returns a SIGNED displacement -- positive on a crest, negative in a
+## trough, zero once the ring has died or ahead of its advancing front.
+static func ripple_packet(distance_units: float, age_seconds: float) -> float:
+	if age_seconds < 0.0 or age_seconds > RIPPLE_LIFETIME:
+		return 0.0
+	var front := age_seconds * RIPPLE_SPEED
+	var phase := front - distance_units
+	var packet := exp(-absf(phase) / RIPPLE_PACKET_WIDTH)
+	var rings := sin(phase * TAU / RIPPLE_WAVELENGTH)
+	var age_fade := 1.0 - age_seconds / RIPPLE_LIFETIME
+	var spread_fade := 1.0 / (1.0 + front * RIPPLE_SPREAD_DECAY)
+	return rings * packet * age_fade * spread_fade
+
+
+## Where a ripple recorded at `origin` is centred `age_seconds` later --
+## the CPU mirror of the shader's own advected centre. A ring in a current
+## is concentric about a point that travels WITH the water, at the same
+## drift rate the visible surface pattern moves at; only in still water
+## (speed 0) does it stay put.
+static func ripple_center(
+	origin: Vector2, flow_dir: Vector2, speed_m_s: float, age_seconds: float
+) -> Vector2:
+	return origin + flow_dir * (DRIFT_PX_PER_MPS * speed_m_s * age_seconds)
 
 
 ## The round-core obstacle displacement, in px of lateral shift -- the CPU
@@ -1321,17 +1551,63 @@ static func eyot_dry_factor(distance_px: float) -> float:
 	return smoothstep(BOULDER_RADIUS_PX * 0.6, BOULDER_RADIUS_PX, distance_px)
 
 
-## The boulder's own shore-ring strength `distance_px` from its centre: 0
+## The boulder's own shore-band strength `distance_px` from its centre: 0
 ## at and inside the rock's own radius (that ground is the eyot, not the
-## ring), rising through the halo band, 0 again beyond it. Independent of
-## eyot_dry and of the channel's own wet/dry verdict -- this is what lets
-## a rock sitting on ordinary dry bank ground still show a ring.
-static func boulder_halo_factor(distance_px: float) -> float:
+## band), full strength across the WHOLE band width (where
+## boulder_band_color does its layering), then a true fade to 0 across the
+## small EXTRA BOULDER_BAND_EDGE_FEATHER_PX coda past it -- so every colour
+## level gets the ring's full width at flat alpha instead of the fade
+## eating into whichever level happens to sit at the outer edge.
+## Independent of eyot_dry and of the channel's own wet/dry verdict --
+## this is what lets a rock sitting on ordinary dry bank ground still show
+## a band. Renamed from boulder_halo_factor, which faded within the whole
+## width rather than past it; the inner edge is unchanged.
+static func boulder_band_envelope(distance_px: float) -> float:
 	var inner := smoothstep(BOULDER_RADIUS_PX * 0.6, BOULDER_RADIUS_PX, distance_px)
 	var outer := 1.0 - smoothstep(
-		BOULDER_RADIUS_PX, BOULDER_RADIUS_PX + BOULDER_HALO_WIDTH_PX, distance_px
+		BOULDER_RADIUS_PX + BOULDER_BAND_WIDTH_PX,
+		BOULDER_RADIUS_PX + BOULDER_BAND_WIDTH_PX + BOULDER_BAND_EDGE_FEATHER_PX, distance_px
 	)
 	return inner * outer
+
+
+## Where a fragment `distance_px` from a boulder's centre sits WITHIN the
+## band, normalised to [0, 1] (0 at the rock's own edge, 1 at the band's
+## outer edge) -- the CPU mirror of boulder_band_ring_t's clamp in the
+## shader loop, before the noise wobble or cel quantisation are applied.
+static func boulder_band_ring_t(distance_px: float) -> float:
+	return clampf((distance_px - BOULDER_RADIUS_PX) / BOULDER_BAND_WIDTH_PX, 0.0, 1.0)
+
+
+## The band's cel level at a fragment, mirroring the shader exactly:
+## ring_t is nudged by the advected field n (the same field the channel's
+## own wave strokes and cel dither already read) before being quantised by
+## the same world-anchored dither hash the channel body uses -- so the
+## band's own layer boundaries wander with n and dissolve into the same
+## hand-drawn grain, rather than sitting as a smooth static ring.
+static func boulder_band_level(ring_t: float, n: float, checker: float) -> int:
+	var wobbled := clampf(ring_t + (n - 0.5) * BOULDER_BAND_WOBBLE, 0.0, 1.0)
+	return clampi(
+		int(floor(wobbled * float(BOULDER_BAND_LEVELS) + (checker - 0.5) * DITHER_STRENGTH)),
+		0, BOULDER_BAND_LEVELS - 1
+	)
+
+
+## The band's colour at a given level: LINE_COLOR (the same pale tint the
+## old flat halo used, and the channel's own shore highlight) at the
+## rock's own edge, ramped through BAND_COLORS[0] (the channel's own
+## shallowest water tone) to BAND_COLORS[1] (visibly darker and more
+## saturated) at the band's outer edge -- so a boulder's shore reads in
+## the same palette as the channel's, not a colour of its own. THREE
+## stops, not two: a first pass ramped only to BAND_COLORS[0] and, seen
+## live, still read as one soft glow -- LINE_COLOR and BAND_COLORS[0] are
+## both pale, so even a genuine hard step between them barely registered
+## as a "layer". The mirror of the shader's own two-stage mix.
+static func boulder_band_color(level: int) -> Color:
+	var t := float(level) / float(BOULDER_BAND_LEVELS - 1)
+	var bramp := t * 2.0
+	var color := LINE_COLOR.lerp(BAND_COLORS[0], clampf(bramp, 0.0, 1.0))
+	return color.lerp(BAND_COLORS[1], clampf(bramp - 1.0, 0.0, 1.0))
 
 
 ## The waterline: 1 inside the channel, 0 past the bank curve, feathered
@@ -1443,32 +1719,6 @@ static func is_still_water(velocity_m_s: float) -> bool:
 const STILL_RIPPLE := 0.25
 
 
-## Disturbance rings (docs/concept/hydrology.md, "fish ripples reimplemented
-## with the river contour system"): a ring born at a fish's flap or a
-## swimmer's stroke travels outward at RIPPLE_SPEED_PX, is RIPPLE_WIDTH_PX
-## wide, displaces the across field by up to RIPPLE_AMPLITUDE_PX at birth
-## and is gone after RIPPLE_LIFETIME seconds -- about three tiles of
-## travel, a pond ring, not a wave. RIPPLE_SLOTS rings live at once; the
-## oldest is dropped first.
-##
-## A ring must BEND the existing strokes, never spawn new ones: the strokes
-## are contours of the across field, so a bump steeper than the channel's
-## own cross-gradient (one across unit over a half-width, ~0.03 per px on
-## a two-tile river) crowds extra contour lines into the band. The first
-## values (5 px over a 4 px band) did exactly that -- with dozens of fish
-## flapping, the channel filled with dense concentric arcs, seen in play as
-## "all zig zags and artifacts". 1.5 px over a 10 px band is a visible
-## bulge and no new lines. Pinned by
-## test_a_ring_bends_strokes_without_adding_any.
-const RIPPLE_SLOTS := 24
-const RIPPLE_SPEED_PX := 18.0
-const RIPPLE_WIDTH_PX := 10.0
-const RIPPLE_AMPLITUDE_PX := 1.5
-const RIPPLE_LIFETIME := 2.5
-## The across field's own cross-gradient on a two-tile-half-width river,
-## in across units per pixel: one unit over 32 px.
-const CHANNEL_ACROSS_GRADIENT_PER_PX := 1.0 / (2.0 * 16.0)
-
 ## Whirl (third playtest, "more natural whirly turbulences in curves"):
 ## BOTH attempts at it broke the base rendering and are reverted to
 ## zero, the same way and for the same class of reason.
@@ -1494,16 +1744,6 @@ const CHANNEL_ACROSS_GRADIENT_PER_PX := 1.0 / (2.0 * 16.0)
 ## live formula and its tested CPU mirror agree exactly again.
 const EDDY_SWIRL := 0.0
 const BANK_SHEAR := 0.0
-
-
-## CPU mirror of one ring's across-displacement (pixels) at `distance_px`
-## from its source, `age` seconds after birth -- the exact shader formula,
-## for tests and any caller reasoning about where a ring is.
-static func ripple_push_px(distance_px: float, age: float) -> float:
-	if age < 0.0 or age > RIPPLE_LIFETIME:
-		return 0.0
-	var band := (distance_px - age * RIPPLE_SPEED_PX) / RIPPLE_WIDTH_PX
-	return exp(-band * band) * (1.0 - age / RIPPLE_LIFETIME) * RIPPLE_AMPLITUDE_PX
 
 
 ## The CPU mirror of the shader's two-phase crossfade, for headless testing.
