@@ -1356,6 +1356,50 @@ explicitly under `--headless` (no GPU target, `get_image()` returns null,
 and the engine error that raises fails the test on its own); the far-world
 one had been reporting a shader failure on every headless run for a reason
 that had nothing to do with the shader.
+
+## Fish really do live under the river surface (2026-09-04)
+
+The ripple entry above first shipped with a caveat saying fish were not
+among a river's ripple causes yet — that `FishRenderer` spawns on ocean
+cells only, so a river would show the player's and the animals' wakes and
+nothing else. Reported back, flatly: *"The rivers are full of fish."*
+
+That caveat was wrong, and wrong in an instructive way: it came from
+reading the spawn gate and stopping there. `WaterAreaSurvey.
+is_interior_water` requires the ocean BIOME for a cell and all eight of its
+neighbours, and a river never changes `biome_at_global`'s elevation-derived
+result — from which it seemed to follow that no curated course could ever
+qualify. Measuring says otherwise. Sweeping the whole apron band around
+every curated course (10,743 cells): **64 qualify for fish, and 53 of those
+are also painted by the river-flow overlay.**
+
+The two decisions ask different questions, and that is the whole of it:
+
+- **Fish spawn by biome.** The world's elevation source is coarse, so real
+  reaches sit below sea level and classify as ocean — broad water, lakes a
+  course runs through, the last stretch to a mouth. Those are ordinary
+  fish water by every existing rule.
+- **The river surface paints by DISTANCE.** `_paint_river_flow_overlay`
+  gates on `nearest.distance_tiles > apron` and consults no biome at all —
+  correctly, since the shader clips the water at the real bank curve and
+  needs the cells around it painted to do so.
+
+So along those reaches a cell is ocean biome *and* under the opaque flow
+overlay at once: fish swimming in water whose surface had no term to draw
+their wake. That is not an edge case bolted onto the ripple bug — it is a
+second, independent path into the exact same symptom, and the same fix
+covers it, because the disturbance buffer now reaches the river material
+regardless of which cells the swimmers are on.
+
+Pinned by `test_a_river_reach_can_be_both_fish_water_and_under_the_flow_
+overlay` at one measured Rhine coordinate rather than by re-sweeping ten
+thousand cells per run — one real example is enough to stop the case being
+reasoned away as impossible a second time.
+
+(Freshwater fishing as a *designed* mechanic — river-specific species,
+spawning rules, a reason to fish a stream rather than the sea — is still
+⬜ Not started. What exists is incidental: ocean-biome water that a curated
+course happens to run through.)
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
@@ -1417,18 +1461,15 @@ that had nothing to do with the shader.
 - **The wader's wake** — ✅ Done — player AND creatures (8 slots, river
   filter memoised) displace the current with a round-core,
   downstream-trailing wake; never dries the channel.
-- **Movement ripples (player, animals)** — ✅ Done — the shared
+- **Movement ripples (fish, player, animals)** — ✅ Done — the shared
   `WaterShader` disturbance buffer now feeds the river surface too; the
   same signed wave packet, its centre advected downstream with the current,
   drawn into the stroke contours and the stroke strength rather than
   composited on top. Confirmed on a real GPU
   (`test_a_recorded_disturbance_actually_changes_what_the_river_draws`),
-  which is the only place the symptom was ever visible. **Fish are not yet
-  among the causes in a river**: `FishRenderer` still spawns on ocean cells
-  only (see "Freshwater fishing" below), so a river shows the player's and
-  the animals' wakes but has nothing swimming in it to make its own. The
-  ripple side of that is now ready and needs no further work — river fish
-  will ripple the moment they exist.
+  which is the only place the symptom was ever visible. Fish are among the
+  causes — see "Fish really do live under the river surface" above, which
+  corrects a wrong claim this bullet made first time round.
 - **Rivers on the minimap** — ✅ Done — water-blue over any biome, memoised
   per tile so the polyline walk never hitches the rebuild.
 - **Real hydraulics: volume, pressure, current speed** — ✅ Done —

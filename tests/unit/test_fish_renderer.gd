@@ -229,3 +229,69 @@ func test_two_fish_of_the_same_species_and_seed_share_one_texture():
 	var a := renderer.spawn_fish_at(parent, "koi", Vector2(10, 10), 5)
 	var b := renderer.spawn_fish_at(parent, "koi", Vector2(90, 40), 5)
 	assert_same(a.texture, b.texture, "same species+seed fish should share one cached texture")
+
+
+# -- fish DO live in rivers, and that is why the ripple fix matters --------
+#
+# Reported plainly, against a claim of mine that said otherwise: "the rivers
+# are full of fish". The claim came from reading the spawn gate alone --
+# is_interior_water requires the ocean BIOME -- and concluding that no
+# curated river course could satisfy it. Measuring instead of reading is
+# what corrected it: sweeping the apron band around every curated course,
+# 64 cells qualify for fish and 53 of them are also painted by the river
+# overlay.
+#
+# The reason is that the two decisions ask different questions. Fish spawn
+# where the coarse world elevation dips below sea level, which happens along
+# real reaches -- broad water, lakes a course runs through, river mouths.
+# The river overlay paints purely by DISTANCE to a curated course, with no
+# biome check at all (_paint_river_flow_overlay). So those reaches are ocean
+# biome AND under the opaque river surface at once: fish swimming in water
+# whose ripples that surface had no term to draw.
+#
+# Pinned here at one measured coordinate rather than by re-sweeping 10k
+# cells, which is far too slow for the suite -- one real example is enough
+# to keep the case from being "fixed" away as impossible again.
+
+const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
+const WaterAreaSurvey = preload("res://src/world/water_area_survey.gd")
+
+## On the Rhine, found by sweeping every curated course's apron band.
+const FISH_UNDER_THE_RIVER_SURFACE := Vector2i(20542, 4242)
+
+const _NEIGHBOR_STEPS := [
+	Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1),
+	Vector2i(-1, 0), Vector2i(1, 0),
+	Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1),
+]
+
+
+func test_a_river_reach_can_be_both_fish_water_and_under_the_flow_overlay():
+	var generator := EarthChunkGenerator.new()
+	var tile := FISH_UNDER_THE_RIVER_SURFACE
+
+	# The fish side: WaterAreaSurvey.is_interior_water's own rule, asked of
+	# the generator directly rather than through a Chunk (the same question,
+	# without building one).
+	assert_eq(
+		generator.biome_at_global(tile.x, tile.y), "ocean",
+		"precondition: this reach is ocean biome, which is what spawns fish"
+	)
+	for step in _NEIGHBOR_STEPS:
+		assert_eq(
+			generator.biome_at_global(tile.x + step.x, tile.y + step.y), "ocean",
+			"interior water needs every neighbour to be water too"
+		)
+
+	# The overlay side: _paint_river_flow_overlay's own gate -- distance to
+	# the nearest curated course, and deliberately no biome check.
+	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
+	var nearest = generator.river_catalog().nearest_river_at(
+		tile.x, tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_lte(
+		nearest.distance_tiles, apron,
+		"this reach must be inside the painted apron, or it is not river surface"
+	)
