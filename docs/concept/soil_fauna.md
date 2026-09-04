@@ -417,7 +417,11 @@ not just a placement fact.
   _active_ant_foragers`): `AntColony.FORAGE_CHANCE` can succeed several
   times a SECOND per mound at normal frame rate, and a new visible ant for
   every single one would read as an overlapping-sprite flicker, not a
-  colony that reads as alive. The earthworm/robin pair went through exactly
+  colony that reads as alive. Not spawned at all while snow lies — the
+  forager is the same animal `DecomposerMarker` draws, and it goes dormant
+  under snow with the rest (see
+  [carrion.md](carrion.md#dormant-under-lying-snow)); the colony's own
+  data-level forage is untouched. The earthworm/robin pair went through exactly
   this same "logic first, sprite later" split when it was built; ants have
   now completed both halves.
 - **Ants are not bird prey.** `FlyerDiet` is not extended with an insect

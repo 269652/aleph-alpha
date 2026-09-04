@@ -1035,4 +1035,12 @@ before foraging runs.
   same visible tuft from an identical start, has not yet taken its first
   bite at the exact frame count a clear-weather run already finished at, and
   does still feed given a further budget -- slower, not stuck.
+- ✅ **Lying snow sends the decomposers under.** The ants/carrion bugs of
+  [carrion.md](carrion.md#dormant-under-lying-snow) are hidden and stop
+  processing while `snow_depth()` is above the ground's own bare↔lying
+  edge, and wake in place on the thaw — keyed to lying snow, not to
+  `is_snowing()`, for the reasons given there. Synced from both
+  `set_snow_depth` and `step_snow` (`_sync_decomposer_dormancy`,
+  edge-triggered like `_sync_snow_presence`), and a chunk loaded
+  mid-winter spawns them already dormant.
 - ⬜ Every other hook named in the open questions above.

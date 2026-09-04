@@ -280,6 +280,12 @@ for, and why both exist.
   (`SHADER_CODE` greps clean), but there is no real-GPU readback test yet at
   far-world coordinates; add one, since that is exactly where the old river
   shader's float32 failure hid from every CPU-mirror assertion.
+- ✅ **Nothing crawls on it.** The ants/carrion bugs go dormant (hidden,
+  not processing) the instant `depth` leaves zero — the same bare↔lying
+  edge `_sync_snow_presence` paints presence at — and wake on the thaw;
+  see [carrion.md](carrion.md#dormant-under-lying-snow). Reported live: a
+  black insect wandering the drawn snowfield was the highest-contrast
+  thing on screen ("black moving blobs").
 - ⬜ **Snow on top of things, not just under them** — snow lies on the
   ground plane only. Caps on stones, logs and roofs are a separate feature
   and not attempted here.

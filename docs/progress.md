@@ -6846,6 +6846,64 @@ state had never once been set by anything in `src/`.
   not silently dropped): ants as bird prey and ants as carrion detritivores
   remain exactly as scoped in the entry above — this pass is rendering
   only, it does not touch what a mound forages or how.
+- **Decomposers: readable silhouettes, and dormant under lying snow**
+  (small) — ✅ Done — reported live, from a real screenshot of a snowfield
+  at a river shore: "there are now some black moving blobs..?" — the
+  ants/carrion bugs again, one report after the outline-ring fix above
+  (`carrion.md`'s "Follow-up (readability)"). Two real causes, both fixed
+  red-first (spec: `carrion.md` "Readable at six world pixels, not a black
+  blob" / "Dormant under lying snow"):
+  1. **The ring made a slab.** `ProceduralDecomposerSprite._outline_silhouette`
+     was grown around the ant's six 1-px leg strokes as well as its body,
+     which filled every 1-px gap between legs and fused body + legs + ring
+     into one solid 11×9 mass — rendered in ASCII from the real generator,
+     the ant had no transparent pixel anywhere below its head row. And the
+     2× oversampled `_draw_line` put a leg's two tip samples either side
+     of a pixel boundary, so every downward tip was a 2-px bar and the
+     three tips fused into one row. Fixed by ringing the body BEFORE the
+     legs go on (legs stay un-ringed strokes with ground between them),
+     sampling strokes once per pixel of length, rooting legs at the
+     thorax edge rather than the body's centre row, and giving each body
+     a species-grounded marking lighter than its fill: a wood-ant
+     (*Formica rufa*) red-brown thorax (`ANT_THORAX_COLOR`) and burying-
+     beetle (*Nicrophorus*) orange elytra bands (`BUG_BAND_COLOR`),
+     geometry-clipped to the body oval rather than colour-matched (RGBA8
+     quantization means a painted float `Color` never reads back equal —
+     the first attempt silently painted nothing). Pinned by
+     `test_ant_legs_are_separated_by_ground_not_fused_into_a_slab` (≥2
+     opaque runs on the leg rows) and the two `_carries_a_lighter_marking_
+     than_its_fill` tests (a minimum luminance step above the fill),
+     `test_procedural_decomposer_sprite.gd`, 13/13.
+  2. **Insects crawling drawn snow.** The screenshot's ground was the snow
+     shader. No ant or carrion beetle is surface-active on snow (both
+     overwinter dormant), and a black insect on white snow is the
+     highest-contrast thing on screen. `DecomposerMarker.is_dormant_under
+     (snow_depth)` is the one shared decision (dormant above
+     `SNOW_DORMANCY_DEPTH`, pinned at zero — the ground's own bare↔lying
+     edge, `_sync_snow_presence`); `set_snow_dormant` hides the marker and
+     stops `_process` (re-applied in `_ready`, since Godot re-enables
+     `_process` at `NOTIFICATION_READY` for any node that overrides it,
+     which would silently undo a pre-`add_child` `set_process(false)`), and
+     the thaw wakes it in place. Applied at every path: `DecomposerRenderer.
+     spawn_decomposers` takes the live snow depth so a mid-winter chunk
+     load spawns dormant; `EarthChunkManager.set_snow_depth` AND `step_snow`
+     both call `_sync_decomposer_dormancy` on the bare↔lying edge only
+     (`step_snow`'s call sits BEFORE its no-snow-layer early return, so a
+     headless server's weather reaches the insects too); and
+     `_spawn_ant_forager_visual` does not send a colony forager out over
+     lying snow (the colony's data-level forage is untouched). 6 new
+     marker tests, 2 renderer tests, 4 `test_earth_chunk_manager.gd`
+     integration tests (loaded decomposers go dormant on `set_snow_depth`
+     and wake on thaw; a chunk loaded under snow spawns dormant;
+     `step_snow` with no snow layer still sends them under; no forager
+     visual under snow), all green; `test_creature_marker.gd` (190),
+     `test_world_season_fanout.gd`, `test_ant_colony.gd`,
+     `test_ant_mound_marker.gd`, `test_ant_forager_marker.gd` unchanged and
+     green. Deliberately not keyed to `is_snowing()` (falling flakes over
+     bare ground are a grazing-cost question, and a snowfield under a
+     clear sky is still a snowfield), and `AntColony` itself is NOT
+     winter-gated — that is a separate ecology change, named in
+     `carrion.md`.
 
 ### Flora (`concept/flora.md`)
 

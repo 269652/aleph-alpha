@@ -339,6 +339,30 @@ see that doc's own mechanism spec and Status.
      real leaf-litter entity) — a real prerequisite-free win here was
      wiring the visible ants into fallen fruit, which already existed,
      rather than building a whole new leaf-litter system speculatively.
+- ✅ **Readable at six world pixels, not a black blob** (reported live,
+  again, from a real snowfield screenshot: "some black moving blobs") —
+  `ProceduralDecomposerSprite` rings the body before the legs go on (legs
+  are un-ringed strokes with ground between them), samples strokes once
+  per pixel so a leg tip is one pixel, roots legs at the thorax edge, and
+  carries a species-grounded marking per body (`ANT_THORAX_COLOR`, wood
+  ant; `BUG_BAND_COLOR`, burying beetle). Pinned in
+  `test_procedural_decomposer_sprite.gd`: leg rows carry ≥2 separate
+  opaque runs; each body's brightest pixel sits a minimum luminance step
+  above its fill.
+- ✅ **Dormant under lying snow** — `DecomposerMarker.is_dormant_under` /
+  `SNOW_DORMANCY_DEPTH` (pinned at the ground's own bare↔lying edge),
+  `set_snow_dormant` (hidden, not processing, woken in place; survives
+  `_ready`). Applied at spawn (`DecomposerRenderer.spawn_decomposers`'s
+  `snow_depth`), on every bare↔lying transition in both
+  `EarthChunkManager.set_snow_depth` and `step_snow` (before the
+  no-snow-layer early return), and `_spawn_ant_forager_visual` stays home
+  under snow. `test_decomposer_marker.gd`, `test_decomposer_renderer.gd`,
+  `test_earth_chunk_manager.gd`.
+- ⬜ `AntColony` itself is not winter-gated: its invisible, data-level
+  seed/windfall forage still resolves under snow, only the decorative
+  forager is withheld. Gating the colony on winter is a real ecology
+  change (`soil_fauna.md`), not a rendering one, and is deliberately not
+  folded into the dormancy pass above.
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — the `take_bite` contract is already shaped to
