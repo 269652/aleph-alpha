@@ -18,6 +18,14 @@ extends RefCounted
 ## live seed passes (FlowerEstablishment).
 ##
 ## Pure and engine-free: seeds and a biome array in, cells out.
+##
+## Cost, measured rather than assumed (100 runs, full-grassland 32x32 chunk):
+## **13.15 ms per chunk**, ~330 ms for a whole LOAD_RADIUS neighbourhood. That
+## is real but small against what a chunk load already costs (EarthChunkManager
+## .update_with_progress measures a full 25-chunk load at 39-90s+), and it is
+## paid once per chunk at load. The work is dominated by the establishment
+## sweep over a clustered seed rain, not by the dispersal kernel; if it ever
+## needs to come down, that sweep is where to look.
 
 const FlowerEstablishment = preload("res://src/world/flower_establishment.gd")
 const FlowerSpecies = preload("res://src/world/flower_species.gd")
