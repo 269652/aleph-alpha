@@ -24,7 +24,26 @@ const StandInPrecipitation = preload("res://src/world/stand_in_precipitation.gd"
 ## single 8-bit step pixel), filled through rather than kept as lake
 ## candidates. At ~10km/pixel, four cells is a few hundred km^2 -- the
 ## smallest lake the data can physically represent (hydrology.md Layer 0).
-const MIN_DEPRESSION_AREA_CELLS := 4
+##
+## Raised 4 -> 5 deliberately, and it is the pond-count knob. Once
+## outflow_of stopped understating basin inflow, the inflow filter went
+## from dropping 574 of 2,490 candidates to dropping 12 -- it had only
+## ever been pruning because it was fed a number roughly half the truth,
+## and the lake count rose to 2,478. Measured size distribution at a
+## floor of 4 (median 8 cells; ~10.4 tiles per cell, so a median lake is
+## about 85 tiles of surface):
+##
+##   exactly 4 cells   447  (18.0%)   <- everything sitting on the floor
+##   5-8 cells         829  (33.5%)
+##   9-16 cells        512  (20.7%)
+##   17-64 cells       479  (19.3%)
+##   65+ cells         211  ( 8.5%)
+##
+## Half are 8 cells or under, which is what "dozens of small ponds to the
+## sides of rivers" is made of. A floor of 5 removes exactly the 447
+## sitting on the old one, leaving 2,031; 9 would leave 1,202 and 17
+## would leave 690, measured from the same distribution.
+const MIN_DEPRESSION_AREA_CELLS := 5
 
 ## A basin shallower than this (spill minus floor) is one 8-bit step of
 ## the asset, not a lake: the first bake found 8,794 of its 10,776

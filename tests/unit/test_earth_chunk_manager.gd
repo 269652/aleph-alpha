@@ -522,15 +522,28 @@ func test_river_flow_overlay_paints_only_channel_and_apron_cells():
 	# just past the apron needs a real tile to draw its fade on, or it
 	# cuts off mid-stride ("the bulge when a player walks out is not
 	# clipped"). Nothing farther than the bleed may be painted.
-	var paint_reach := apron + RiverFlowShader.SHORE_BLEED_TILES
+	#
+	# Measured against the generator's UNIFIED hit and that channel's OWN
+	# half width, not the curated catalog's fixed RIVER_HALF_WIDTH_TILES.
+	# The painter serves baked channels too, and a baked channel's width
+	# comes from its own discharge, so it is routinely wider than the
+	# curated constant: a real tile 5.80 from a baked channel of half
+	# width 2.11 (reach 5.86) was failing against a bound of 5.75 built
+	# from the curated 2.0, while the curated catalog put the nearest
+	# river 32.40 tiles away and made the message say so.
 	for cell in painted_cells:
-		var nearest := manager.generator.river_catalog().nearest_river_at(
-			cell.x, cell.y,
-			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+		var nearest := manager.generator.nearest_river_at(cell.x, cell.y)
+		var paint_reach: float = (
+			float(nearest.get("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES))
+			+ RiverCatalog.RIVER_BANK_APRON_TILES
+			+ RiverFlowShader.SHORE_BLEED_TILES
 		)
 		assert_lte(
 			nearest.distance_tiles, paint_reach,
-			"(%d, %d) painted but %f tiles from any channel" % [cell.x, cell.y, nearest.distance_tiles]
+			"(%d, %d) painted but %f tiles from a channel of half width %f (reach %f)" % [
+				cell.x, cell.y, nearest.distance_tiles,
+				nearest.get("half_width_tiles", -1.0), paint_reach
+			]
 		)
 		# Every painted tile must carry that cell's OWN real data --
 		# direction from the course's downstream tangent (water follows its
@@ -556,10 +569,7 @@ func test_river_flow_overlay_paints_only_channel_and_apron_cells():
 	for cell in painted_cells:
 		if not manager.is_river_at_global(cell.x, cell.y):
 			apron_cells += 1
-		var nearest := manager.generator.river_catalog().nearest_river_at(
-			cell.x, cell.y,
-			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-		)
+		var nearest := manager.generator.nearest_river_at(cell.x, cell.y)
 		if nearest.distance_tiles > apron:
 			bled_cells += 1
 	assert_gt(apron_cells, 0, "no apron cells painted -- the bank curve would clip at tile edges")
