@@ -82,20 +82,53 @@ const SWIM_ALPHA_FADE := 0.25
 ## sub-pixel twitch.
 const FRAME_SHIFT := 2 * ArtResolution.DETAIL_MULTIPLIER
 
+## How far an idling creature's whole silhouette settles on its second idle
+## frame -- read as a slow breath, not a stride or a swim bob (both far more
+## energetic actions that already use the full FRAME_SHIFT for their own
+## two-frame cycles). Half of FRAME_SHIFT, same "scaled with resolution"
+## reasoning.
+const IDLE_BREATH_SHIFT := FRAME_SHIFT / 2
+
+## Frame 0 is the neutral standing pose "idle" has always used; frame 1
+## settles the whole silhouette by IDLE_BREATH_SHIFT (see _idle_frame). A
+## single frozen frame read fine back when idle was rare, but grazing pauses
+## and a boxed-in creature with nowhere to go (CreatureWander.is_pausing,
+## creature_movement_gate.gd) made standing still a common state, not a rare
+## one -- and a creature that spends real time standing still needs
+## somewhere to go beyond one photograph.
+const IDLE_FRAME_COUNT := 2
+
+## How long a full idle cycle (through all IDLE_FRAME_COUNT frames) takes to
+## play, in seconds -- much slower than ANIMATION_FRAME_DURATION
+## (creature_marker.gd)'s gait/action cadence, since a breath is a slow,
+## ambient motion, not a gait frame. Used by idle_frame_index below.
+const IDLE_FRAME_DURATION := 1.2
+
 
 func generate_frames(species: String, action: String, seed_value: int) -> Array[Image]:
 	var sprite := AnimalSpriteScript.new()
 
 	if action == "idle":
-		# A single static neutral pose (gait_phase 0.0 -- the same standing
-		# silhouette every other non-walk action's base image already uses),
-		# for a creature that isn't actually moving right now. CreatureMarker
-		# used to keep cycling "walk"'s gait frames purely off elapsed time
-		# regardless of whether the creature had actually advanced, so legs
-		# kept swinging mid-stride while it stood still (reported: "their
-		# legs are animated even when they stand still"). This is what it
-		# asks for instead.
-		return [sprite.generate_image(species, seed_value)] as Array[Image]
+		# Frame 0 is a static neutral pose (gait_phase 0.0 -- the same
+		# standing silhouette every other non-walk action's base image
+		# already uses), for a creature that isn't actually moving right
+		# now. CreatureMarker used to keep cycling "walk"'s gait frames
+		# purely off elapsed time regardless of whether the creature had
+		# actually advanced, so legs kept swinging mid-stride while it stood
+		# still (reported: "their legs are animated even when they stand
+		# still"). This is what it asks for instead.
+		#
+		# A single frame forever still read as frozen once standing still
+		# became a common state rather than a rare one (see
+		# IDLE_FRAME_COUNT's own doc comment) -- idle now cycles through
+		# IDLE_FRAME_COUNT frames (see _idle_frame). idle_frame_index below
+		# is how CreatureMarker picks between them without a whole herd
+		# breathing in lockstep.
+		var base: Image = sprite.generate_image(species, seed_value)
+		var idle_frames: Array[Image] = []
+		for frame_index in IDLE_FRAME_COUNT:
+			idle_frames.append(_idle_frame(base, frame_index))
+		return idle_frames
 
 	var key: String = action if FRAME_COUNTS.has(action) else "walk"
 
@@ -164,6 +197,35 @@ func textures_for(species: String, action: String, seed_value: int) -> Array[Ima
 	return _texture_cache[key]
 
 
+## Which of an idling creature's `frame_count` idle frames to show right now.
+##
+## Idle used to render frame 0 of a single-frame set forever: frozen, since
+## there was nothing else to show, and -- once IDLE_FRAME_COUNT grew past 1
+## -- would have stayed IDENTICAL across an entire herd too, since frame
+## selection read only elapsed_time: every creature's own clock starts at
+## 0.0 and advances by the same per-frame delta absent an LOD stagger, so a
+## herd that spawned together would breathe in perfect unison. `seed_value`
+## is hashed into a per-individual phase offset in [0, IDLE_FRAME_DURATION)
+## and folded in before the cycle position is computed -- the same
+## deterministic, per-individual, reproducible hash-of-seed shape
+## CreatureWander.is_pausing already uses for its own seeded roll -- so two
+## creatures of the same look, idling at the exact same elapsed_time, can
+## land on different frames, and the SAME creature reproduces the same frame
+## on replay (same seed, same elapsed_time -> same result, always).
+##
+## `frame_count` <= 1 (every illustrated species' idle -- see
+## IllustratedAnimalSprite, which has no per-individual variation at all)
+## always returns 0: nothing to cycle through, whatever the seed says.
+func idle_frame_index(elapsed_time: float, seed_value: int, frame_count: int) -> int:
+	if frame_count <= 1:
+		return 0
+	var phase_offset := (
+		float(absi(hash("%d_idle_phase" % seed_value)) % 1000) / 1000.0 * IDLE_FRAME_DURATION
+	)
+	var cycle_position := fmod(elapsed_time + phase_offset, IDLE_FRAME_DURATION * float(frame_count))
+	return int(cycle_position / IDLE_FRAME_DURATION) % frame_count
+
+
 ## Never called with action=="walk": generate_frames handles walk entirely
 ## itself (slither for serpents, gait for everyone else) before reaching
 ## this, since neither is "shift a static image's pixels" like these are.
@@ -210,6 +272,17 @@ func _slither_frame(base: Image, frame_index: int, frame_count: int) -> Image:
 			if ny >= 0 and ny < h:
 				image.set_pixel(x, ny, c)
 	return image
+
+
+## Frame 0 is the untouched neutral pose; frame 1 settles the whole
+## silhouette up by IDLE_BREATH_SHIFT -- the same _shifted-a-whole-image
+## shape _swim_frame's bob already uses for its own two-frame cycle, just a
+## smaller shift played back at IDLE_FRAME_DURATION's far slower cadence so
+## it reads as a breath, not a bob.
+func _idle_frame(base: Image, frame_index: int) -> Image:
+	if frame_index == 0:
+		return _copy(base)
+	return _shifted(base, 0, -IDLE_BREATH_SHIFT)
 
 
 ## Body lunges forward (toward +x) a couple of pixels on the off frame.

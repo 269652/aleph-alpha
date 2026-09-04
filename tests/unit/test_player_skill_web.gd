@@ -7,6 +7,7 @@ extends GutTest
 const PlayerScene = preload("res://scenes/player.tscn")
 const SkillWeb = preload("res://src/gameplay/skill_web.gd")
 const HeroDna = preload("res://src/gameplay/hero_dna.gd")
+const KeystonePassive = preload("res://src/gameplay/keystone_passive.gd")
 
 var player: Player
 var web := SkillWeb.new()
@@ -218,6 +219,28 @@ func test_a_keystone_with_no_path_to_it_is_refused_however_many_nodes_are_owned(
 	for node_id in ["vitality_1", "vitality_2", "juggernaut"]:
 		player.allocate_skill(node_id)
 	assert_false(player.unlock_keystone("archmage"), "a mage keystone is not next door")
+
+
+## The observable payoff, not just the flag: unlock_keystone runs through the
+## SAME allocate_skill -> _apply_web_node path an ordinary node does (see
+## Player.unlock_keystone's own doc comment), so iron_skin's own real
+## bonus_amount -- read from KeystonePassive's table, not re-typed here --
+## has to land on max_health exactly the way vitality_1's does. A passing
+## unlocked_keystones flag alone (the shape every other test in this section
+## checks) would still be true if _apply_web_node were never called at all.
+func test_unlocking_a_keystone_grants_its_own_real_bonus_to_the_live_player():
+	player.apply_class("warrior", {})
+	_with_points(999)
+	for node_id in ["vitality_1", "vitality_2", "juggernaut"]:
+		player.allocate_skill(node_id)
+	var before_health := player.max_health
+	var granted: float = KeystonePassive.new().bonus_for("iron_skin")["bonus_amount"]
+
+	assert_true(player.unlock_keystone("iron_skin"))
+
+	assert_almost_eq(player.max_health, before_health + granted, 0.001)
+	assert_almost_eq(player.health, player.max_health, 0.001,
+		"a keystone's health bonus should heal the gained amount, same as any other node")
 
 
 # --- free respec ----------------------------------------------------------

@@ -84,7 +84,8 @@ Every piece is one tile. Categories, and what each is *for*:
 - **Door** — a wall that is passable. Encloses but lets people through.
 - **Window** — a wall that is not passable but does not block sight lines
   (reserved for a later line-of-sight layer; today it is a wall variant that
-  reads differently).
+  reads differently). In a settlement house, a window also glows at night
+  (see [housing.md](housing.md#night-lighting-ambient)).
 - **Roof** — covers a room; hidden while the player is inside it.
 
 Each piece has a **material** (wood, stone) carrying cost, durability, and

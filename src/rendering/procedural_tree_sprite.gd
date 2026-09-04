@@ -14,7 +14,6 @@ const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
-const SnowLayer = preload("res://src/rendering/snow_layer.gd")
 
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
@@ -1011,13 +1010,27 @@ static func growth_level(growth: float) -> float:
 ## ticked by a fraction of a percent -- exactly the "one image per frame"
 ## cost GROWTH_LEVELS/SeasonTransition.TURN_STEPS already exist to avoid.
 ##
-## Quantised to SnowLayer.DEPTH_BANDS rather than an invented number: that is
-## the real granularity the GROUND's own lying snow already steps through
-## (10 bands, one per row of the illustrated snow-overlay sheet -- see
-## SnowLayer). Reusing it means a canopy's snow response is exactly as coarse
-## or fine as the snow already lying at its own foot, so the two can never
-## visibly disagree about how gradually a snowfall settles in.
-const SNOW_LEVELS := SnowLayer.DEPTH_BANDS
+## Quantised to 10 rather than an invented number: that was the real
+## granularity the GROUND's own lying snow stepped through under the old
+## CPU-side SnowLayer (one band per row of its illustrated snow-overlay
+## sheet), borrowed from SnowLayer.DEPTH_BANDS so a canopy's snow response
+## could never visibly disagree with the snow already lying at its own foot.
+##
+## SnowLayer was deleted outright (not deprecated) when SnowBombShader
+## replaced it with a GPU shader driven by continuous depth and a handful of
+## dithered illustrated levels (see docs/concept/snow_cover.md) -- a
+## fundamentally different shape with no equivalent "how many discrete bands"
+## constant to borrow (SnowBombShader.level_count() counts hand-illustrated
+## art sheets, 3 today, not a rendering granularity, and is filesystem-backed
+## rather than a compile-time constant besides). Canopy snow's own reason for
+## quantising at all -- caching one composited image per level instead of one
+## per frame -- never depended on the ground's mechanism, only on reusing a
+## granularity instead of inventing one, so this stays a standalone constant
+## pinned to that same real number rather than tracking a system it no
+## longer has anything in common with. Pinned by both
+## test_snow_levels_is_a_real_pinned_constant and (this branch's
+## independently-arrived-at equivalent) test_snow_level_is_quantized_to_ten_bands.
+const SNOW_LEVELS := 10
 
 
 ## The snow coverage LEVEL a tree draws at -- used both for the texture cache

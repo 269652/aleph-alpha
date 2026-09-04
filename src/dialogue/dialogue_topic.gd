@@ -143,8 +143,16 @@ const TOPIC_IDS: Array[String] = [
 ## the one memory that is always present at full strength -- folding it into
 ## village_history would let it stand in for a village's actual fortunes and
 ## hide whether those are being witnessed at all.
+##
+## `player_settled` (EarthChunkManager.record_player_settled_if_new) joins it
+## here rather than village_history for exactly the same reason: actor and
+## witness are shaped identically to npc_settled (the settler as actor, the
+## settlement as witness -- see that function's own doc comment on why it is
+## a distinct type rather than a reuse of npc_settled), so it is one more
+## firsthand, undistorted arrival, not real news about the village's
+## fortunes.
 const MEMORY_TOPIC_EVENT_TYPES := {
-	TOPIC_ARRIVAL: ["npc_settled"],
+	TOPIC_ARRIVAL: ["npc_settled", "player_settled"],
 	TOPIC_VILLAGE_HISTORY: [
 		"settlement_founded",
 		"settlement_growing", "settlement_stable", "settlement_declining",

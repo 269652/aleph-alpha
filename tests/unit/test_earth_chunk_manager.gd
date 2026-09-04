@@ -80,6 +80,27 @@ func after_each():
 	creatures_parent.free()
 
 
+# -- why this file is slow, and how to iterate on it quickly -----------------
+#
+# This is the largest test file in the project (492 tests, `grep -c '^func
+# test_'`). EarthChunkManager.update() is a genuinely expensive real
+# operation -- it synchronously generates the whole LOAD_RADIUS of chunks
+# (see update_with_progress's own doc comment, which already measures a full
+# load at "~39-90s+ per call"; measured directly at ~101s/call in a headless
+# GUT run of this file, 2026-09-03). There is no before_all/after_all in
+# this file, only before_each/after_each, so every test below that needs
+# loaded state calls manager.update(_berlin_tile) itself -- roughly 237 of
+# the 492 do, with that exact same tile. A complete pass of just this one
+# file can therefore run for hours; this is inherent to the real generation
+# algorithm, not a bug to fix before merging (see CONTRIBUTING.md's test
+# section for the same note).
+#
+# When iterating, scope to one test rather than waiting on the whole file:
+#   <godot> --headless -s addons/gut/gut_cmdln.gd -gconfig= \
+#     -gtest=res://tests/unit/test_earth_chunk_manager.gd \
+#     -gunit_test_name=<substring_of_the_test_name> -gexit
+
+
 ## Reported directly after playtesting: rivers were "still treated like
 ## normal biome... grass and trees grow in rivers" -- the exact "trees
 ## standing in a lake" bug class _can_root_at's own doc comment already
@@ -324,6 +345,18 @@ func test_set_sun_position_also_updates_the_entity_hillshade_materials_uniforms(
 	var material := manager._entity_hillshade_shader.shared_material()
 	assert_eq(material.get_shader_parameter("sun_elevation_deg"), 62.0)
 	assert_eq(material.get_shader_parameter("sun_azimuth_deg"), 210.0)
+
+
+## set_sun_position is also this manager's only live source of "what is the
+## sun doing right now" for a settlement chunk streaming in later (see
+## VillageRenderer.spawn_village's own sun_elevation_deg -- night village
+## window lighting, docs/concept/housing.md#night-lighting-ambient). Stored
+## here rather than re-derived, so a house lit at the moment its chunk loads
+## reflects the SAME real elevation this exact call already pushed into the
+## hillshade materials above, not a second, separately-computed value.
+func test_set_sun_position_stores_the_elevation_for_village_night_lighting():
+	manager.set_sun_position(-12.0, 210.0)
+	assert_eq(manager._current_sun_elevation_deg, -12.0)
 
 
 ## Same shape as test_water_overlay_marks_exactly_the_loaded_ocean_cells,
@@ -645,6 +678,77 @@ func test_step_water_disturbances_ages_the_installed_water_materials_ripple():
 	assert_almost_eq(ages[0], 0.5, 0.001)
 	water_layer.free()
 
+
+
+## ONE buffer, TWO surfaces. The ocean overlay stopped painting river tiles
+## (see _paint_water_overlay: "the flow overlay is now the river's entire
+## water surface"), so a fish's wake was being recorded and aged into a
+## layer that river tiles no longer have -- reported as "fishes don't
+## produce interferencing ripples anymore in the new unified river water".
+## The same three uniforms must reach the river surface too.
+##
+## Anchored at the world origin on purpose: _disturbance_center_tile starts
+## at Vector2i.ZERO, so this clears DISTURBANCE_RADIUS_TILES without paying
+## for an update() the assertion does not need.
+func test_a_recorded_disturbance_reaches_the_river_surface_too():
+	var river_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(river_layer)
+
+	var disturbance_pos := Vector2(6.0, 9.0)
+	manager.record_water_disturbance(disturbance_pos)
+
+	var material := river_layer.material as ShaderMaterial
+	assert_eq(material.get_shader_parameter("disturbance_count"), 1)
+	var positions: PackedVector2Array = material.get_shader_parameter("disturbance_pos")
+	assert_eq(positions[0], disturbance_pos)
+	river_layer.free()
+
+
+## And it must AGE there as well, or the river's ring sits frozen at radius
+## zero while the ocean's expands -- the same reason step_water_disturbances
+## exists for the water layer at all.
+func test_step_water_disturbances_ages_the_river_surfaces_ripple_too():
+	var river_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(river_layer)
+
+	manager.record_water_disturbance(Vector2(1.0, 1.0))
+	manager.step_water_disturbances(0.5)
+
+	var material := river_layer.material as ShaderMaterial
+	var ages: PackedFloat32Array = material.get_shader_parameter("disturbance_age")
+	assert_almost_eq(ages[0], 0.5, 0.001)
+	river_layer.free()
+
+
+## Both surfaces read the SAME buffer -- one lifetime, one cull, one cap.
+## A second buffer is a second thing to keep in step, and the two would
+## drift apart the moment either side was re-tuned.
+func test_both_surfaces_show_the_very_same_disturbance_buffer():
+	var water_layer := TileMapLayer.new()
+	var river_layer := TileMapLayer.new()
+	manager.set_water_layer(water_layer)
+	manager.set_river_flow_layer(river_layer)
+
+	manager.record_water_disturbance(Vector2(3.0, 4.0))
+	manager.record_water_disturbance(Vector2(5.0, 6.0))
+	manager.step_water_disturbances(0.25)
+
+	var water_material := water_layer.material as ShaderMaterial
+	var river_material := river_layer.material as ShaderMaterial
+	assert_eq(
+		river_material.get_shader_parameter("disturbance_count"),
+		water_material.get_shader_parameter("disturbance_count")
+	)
+	assert_eq(
+		river_material.get_shader_parameter("disturbance_pos"),
+		water_material.get_shader_parameter("disturbance_pos")
+	)
+	assert_eq(
+		river_material.get_shader_parameter("disturbance_age"),
+		water_material.get_shader_parameter("disturbance_age")
+	)
+	water_layer.free()
+	river_layer.free()
 
 # -- fish: visible, catchable entities on ocean cells (see FishRenderer) -----
 
@@ -6235,6 +6339,23 @@ func test_snow_accumulates_while_it_falls():
 	assert_almost_eq(manager.snow_depth(), 1.0, 0.02)
 
 
+## is_snowing() exposes the SAME per-frame active-precipitation boolean
+## World already computes and hands to step_snow to accumulate against (see
+## docs/concept/weather.md's "Weather feeds creature behaviour") -- a second
+## reader (CreatureMarker) has to read that one answer rather than deriving
+## its own, or an animal could disagree with the ground about whether it's
+## snowing right now.
+func test_is_snowing_reflects_the_last_step_snow_call():
+	manager.step_snow(true, 0.0)  # cold and snowing
+	assert_true(manager.is_snowing())
+	manager.step_snow(false, 1.0)  # warm and dry
+	assert_false(manager.is_snowing())
+
+
+func test_is_snowing_defaults_to_false_before_any_step():
+	assert_false(manager.is_snowing())
+
+
 ## The five tests that used to live here (a partial snowfall paints a MIX of
 ## bare/covered tiles; painted tiles carry a real per-tile variant; coverage
 ## advances within a single depth band; a realistic step_snow-driven
@@ -6385,6 +6506,62 @@ func test_treading_snow_reaches_the_shared_trail_mask():
 		"the trodden tile should show up, at its own real position, in the mask pushed to the shader"
 	)
 	snow_layer.free()
+
+
+## Individually-simulated creatures (deer, boar, wolves, ...) must leave the
+## SAME kind of trail mark the player's own footsteps do -- tread_snow_at's
+## new move_trail_window argument is exactly what lets World.gd call it for
+## every CreatureMarker too (see its own doc comment): the player anchors the
+## trail window (move_trail_window left at its true default), and a creature
+## treads a NEIGHBOURING tile with move_trail_window = false, well within
+## that same window but distinct from the player's own tile, so this proves
+## the creature's OWN mark reaches the shared mask rather than coincidentally
+## reusing the player's.
+func test_creature_treading_snow_reaches_the_shared_trail_mask_the_same_way_the_player_does():
+	var snow_layer := TileMapLayer.new()
+	manager.set_snow_layer(snow_layer)
+	manager.set_snow_depth(1.0)
+
+	var player_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	manager.tread_snow_at(player_pixel)
+
+	var creature_tile := _berlin_tile + Vector2i(5, 0)
+	var creature_pixel := Vector2(creature_tile) * TerrainRenderer.TILE_SIZE
+	manager.tread_snow_at(creature_pixel, false)
+	manager.step_snow(false, 0.0)
+
+	var material := snow_layer.material as ShaderMaterial
+	var mask: Texture2D = material.get_shader_parameter("trail_mask")
+	var origin: Vector2 = material.get_shader_parameter("trail_origin")
+	var world_size: float = material.get_shader_parameter("trail_world_size")
+	var image := mask.get_image()
+	var uv := (creature_pixel - origin) / world_size
+	var pixel := Vector2i(uv * Vector2(image.get_width(), image.get_height()))
+	assert_gt(
+		image.get_pixel(pixel.x, pixel.y).r, 0.0,
+		"a creature's own tread should show up, at its own real position, in the same shared mask the player's does"
+	)
+	snow_layer.free()
+
+
+## The trail mask WINDOW has to keep following the player, not snap to
+## wherever a creature happens to be standing -- see tread_snow_at's own
+## doc comment on move_trail_window. Several creatures updating after the
+## player in the same frame must not relocate _snow_trail_center_tile away
+## from wherever the player's own last tread put it, or the window could
+## carry the player's own nearby tracks right out of view.
+func test_creature_treading_snow_does_not_move_the_trail_window():
+	manager.set_snow_depth(1.0)
+	var player_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	manager.tread_snow_at(player_pixel)
+
+	var far_creature_pixel := Vector2(_berlin_tile + Vector2i(40, 40)) * TerrainRenderer.TILE_SIZE
+	manager.tread_snow_at(far_creature_pixel, false)
+
+	assert_eq(
+		manager._snow_trail_center_tile, _berlin_tile,
+		"a creature's own tread should not relocate the trail mask window away from the player"
+	)
 
 
 ## A fallen fruit is ONE fruit, landing under where it hung.

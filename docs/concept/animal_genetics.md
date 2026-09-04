@@ -1194,7 +1194,7 @@ Following [taming.md](taming.md)'s own section of the same name, and
 - **[taming.md](taming.md)** — the wild→held loop: lasso, struggle, trust,
   orders, mount. Owns `src/gameplay/taming.gd`, what the `trust` value *means*
   behaviourally (which is the input husbandry's flight radius takes), the
-  retirement of the zero-caller `pet_loyalty.gd`, and the neglect outcome for an
+  retirement of `pet_loyalty.gd`, and the neglect outcome for an
   animal that is **free to leave**: it walks off and goes feral rather than
   dying, because killing it is the cheaper implementation and the worse story.
   This doc only *reads* docility into `Taming.trust_after_feeding` and

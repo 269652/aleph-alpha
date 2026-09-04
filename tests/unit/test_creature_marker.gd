@@ -1072,6 +1072,30 @@ func test_a_herbivore_does_not_get_exposed_by_an_uncontaminated_carcass():
 	assert_eq(marker.disease_state, DiseaseModel.State.SUSCEPTIBLE)
 
 
+## Fly-blown carrion risk (docs/concept/disease.md, docs/concept/flies.md):
+## a real founder fly on the carcass raises graze risk enough to matter even
+## at EASY region pressure, where the base 0.55 chance alone is nowhere near
+## certain -- proves _carrion_disease_step actually reads the real
+## Carcass.fly_count(), not just region pressure/contaminated.
+func test_a_fly_blown_carcass_raises_graze_risk_even_at_easy_region_pressure():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	marker.region_tier = RegionDifficulty.Tier.EASY
+
+	var blown_carcass := Carcass.new()
+	blown_carcass.species = "boar"
+	blown_carcass.position = marker.position + Vector2(5, 0)
+	add_child(blown_carcass)
+	_extra.append(blown_carcass)
+	blown_carcass._process(Carcass.FLY_ATTRACTION_DELAY_SECONDS + 1.0)  # a founder fly finds it
+	blown_carcass.contaminated = true  # isolate from the separate, already-covered contamination roll
+	assert_gt(blown_carcass.fly_count(), 0, "sanity: a fly should have found it by now")
+
+	marker._process(0.2)
+
+	assert_eq(marker.disease_state, DiseaseModel.State.INFECTED)
+	assert_eq(marker.disease_id, DiseaseModel.CARRION)
+
+
 func test_weakened_predator_flees_the_player_instead_of_attacking():
 	var predator := _make_predator(Vector2(100, 100))
 	predator.info.health = 1.0  # health_fraction well below the fight threshold
@@ -1690,6 +1714,76 @@ func test_animation_step_uses_the_walk_gait_while_moving():
 	assert_true(marker._animation_frames.has("walk"))
 
 
+# -- idle variety: a standing creature still visibly lives, and a herd does
+# not breathe in lockstep (see ProceduralAnimalAnimation.idle_frame_index)
+
+## Wires _animation_step's idle branch to idle_frame_index rather than the
+## elapsed_time-only formula every other action still uses -- the precise,
+## non-probabilistic half of the "idle timing differs per individual" proof
+## (see test_two_idling_creatures_of_the_same_look_can_show_different_idle_frames
+## below for the cross-individual half).
+## Samples several elapsed_time values rather than one: with only
+## IDLE_FRAME_COUNT (2) possible outcomes, a single sample has a real chance
+## of matching the OLD elapsed_time-only formula by pure coincidence even
+## when the wiring is still wrong -- several independent samples all landing
+## on idle_frame_index's prediction is not something a formula that ignores
+## wander_seed entirely could keep doing by luck.
+func test_animation_step_picks_the_idle_frame_from_idle_frame_index():
+	const ProceduralAnimalAnimation = preload("res://src/rendering/procedural_animal_animation.gd")
+	marker.info = CreatureInfo.new("herbivore")
+	marker._current_action = "walk"
+	marker._is_moving = false
+	var animation := ProceduralAnimalAnimation.new()
+	for elapsed_time in [0.1, 0.9, 2.3, 5.0, 7.5, 11.75]:
+		marker._elapsed_time = elapsed_time
+		marker._animation_step()
+		var frames: Array = marker._animation_frames["idle"]
+		var expected: int = animation.idle_frame_index(elapsed_time, marker.wander_seed, frames.size())
+		assert_eq(marker.texture, frames[expected], "elapsed_time %f" % elapsed_time)
+
+
+## The actual minimum bar (idle animation/vocalization variety): two
+## creatures of the SAME species and the SAME look, idling at the exact same
+## elapsed_time, must be ABLE to show different frames purely because their
+## wander_seed differs -- proving idle timing is genuinely per-individual,
+## not shared wall-clock state a whole herd reads identically. Seeds are
+## multiples of ProceduralAnimalAnimation.LOOK_VARIANTS so every candidate
+## shares marker's own look bucket (see ProceduralAnimalAnimation.
+## textures_for) -- any texture difference found here can only be the
+## per-individual TIMING, never a different look.
+func test_two_idling_creatures_of_the_same_look_can_show_different_idle_frames():
+	const ProceduralAnimalAnimation = preload("res://src/rendering/procedural_animal_animation.gd")
+	marker.info = CreatureInfo.new("herbivore")
+	marker.wander_seed = 0
+	marker._current_action = "walk"
+	marker._is_moving = false
+	marker._elapsed_time = 5.0
+	marker._animation_step()
+	var reference_texture: Texture2D = marker.texture
+
+	var other := CreatureMarker.new()
+	add_child(other)
+	other.info = CreatureInfo.new("herbivore")
+	other._current_action = "walk"
+	other._is_moving = false
+	other._elapsed_time = 5.0
+
+	var found_a_difference := false
+	for i in 60:
+		other.wander_seed = i * ProceduralAnimalAnimation.LOOK_VARIANTS
+		other._animation_step()
+		if other.texture != reference_texture:
+			found_a_difference = true
+			break
+
+	remove_child(other)
+	other.free()
+	assert_true(
+		found_a_difference,
+		"two same-look creatures idling at the same elapsed_time should be able to show different frames"
+	)
+
+
 # -- illustrated species (real art) vs. procedural (see IllustratedAnimal
 # Sprite) -- reported: "the procedural generated sprites are too bad...
 # let's switch to illustrated ones". A species with real art (horse/deer/
@@ -1958,6 +2052,13 @@ class ForageWorld:
 	var worms: Array = []
 	var grazed: Array = []
 	var taken_fruit: Array = []
+	## Whether snow is actively falling -- see docs/concept/weather.md's
+	## "Weather feeds creature behaviour". Settable per test; defaults to
+	## false, matching EarthChunkManager.is_snowing() before any step_snow.
+	var snowing := false
+
+	func is_snowing() -> bool:
+		return snowing
 
 	func biome_at_global(_x: int, _y: int) -> String:
 		return "grassland"
@@ -2043,6 +2144,46 @@ func test_eating_a_tuft_settles_the_hunger_that_sent_it_there():
 		if not world.grazed.is_empty():
 			break
 	assert_false(horse._needs.is_hungry(), "a fed animal is not still hunting for food")
+
+
+## The full-stack version of GrazerForaging's own snow-slows-grazing claim
+## (see test_grazer_foraging.gd and docs/concept/weather.md's "Weather feeds
+## creature behaviour"): the SAME creature logic, wired all the way through
+## CreatureMarker, run under two weather states from an identical start on an
+## identical visible tuft, produces a real behavioural difference. A world
+## that answers is_snowing() (the same duck-typed guard ambient_warmth
+## already uses) measurably slows how fast a hungry grazer actually eats.
+func test_active_snowfall_measurably_slows_a_hungry_grazer():
+	var clear_world := ForageWorld.new()
+	clear_world.grass = [{"position": Vector2(20, 0)}]
+	var clear_horse := _hungry_grazer("horse", clear_world)
+	var clear_frames := 0
+	for i in 900:
+		clear_horse._process(1.0 / 60.0)
+		if not clear_world.grazed.is_empty():
+			clear_frames = i
+			break
+	assert_false(clear_world.grazed.is_empty(), "precondition: the clear-weather horse must actually feed")
+
+	var snowy_world := ForageWorld.new()
+	snowy_world.grass = [{"position": Vector2(20, 0)}]
+	snowy_world.snowing = true
+	var snowy_horse := _hungry_grazer("horse", snowy_world)
+	for _i in (clear_frames + 1):
+		snowy_horse._process(1.0 / 60.0)
+	assert_true(
+		snowy_world.grazed.is_empty(),
+		"an otherwise-identical horse under active snowfall should not have finished its first bite yet"
+	)
+
+	# ...and it is genuinely slower, not stuck: given a generous further
+	# budget it does still feed.
+	for _i in 900:
+		snowy_horse._process(1.0 / 60.0)
+		if not snowy_world.grazed.is_empty():
+			break
+	assert_false(snowy_world.grazed.is_empty(), "a snowed-on horse still eats -- it just takes longer")
+	assert_false(snowy_horse._needs.is_hungry(), "and is fed once it does")
 
 
 ## A deer is a mixed feeder and works windfall; a horse is a strict grazer and

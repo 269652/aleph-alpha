@@ -2581,6 +2581,10 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# test_world_simulation_ownership.gd's header), one call level further
 	# out. Independently found and fixed on both this branch and main.
 	_chunk_manager.step_wild_crops(delta)
+	# Player-tilled farm plots (see EarthChunkManager.step_farm_plots,
+	# docs/concept/farming.md) -- same tick this crop's wild cousin grows on
+	# just above.
+	_chunk_manager.step_farm_plots(delta)
 	# Ant mounds foraging (see AntColony, myrmecochory) -- fallen grass seed
 	# in grassland, or windfall fruit/nut in forest/rainforest where grass
 	# doesn't grow -- a background per-chunk population effect, batched here
@@ -4664,6 +4668,14 @@ func _client_process(delta: float) -> void:
 	_chunk_manager.step_snow(snowing, warmth)
 	# Walking packs the snow down, which is what leaves a trail.
 	_chunk_manager.tread_snow_at(local_player.position)
+	# Individually-simulated creatures pack it down too, reusing the exact
+	# same SnowTrail data and shared GPU mask the player's own tread does
+	# (see EarthChunkManager.tread_snow_at's own doc comment) -- but never
+	# move the trail window (move_trail_window = false), which has to keep
+	# following the player rather than snapping to wherever the
+	# last-processed creature happens to be standing.
+	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		_chunk_manager.tread_snow_at(creature.position, false)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).

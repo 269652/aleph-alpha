@@ -218,9 +218,17 @@ func test_every_frame_of_a_walk_cycle_is_a_distinct_pose():
 # neutral standing silhouette every other non-walk action's base image
 # already uses.
 
-func test_idle_action_returns_a_single_static_frame():
+## A single frozen frame read fine back when idle was rare, but it stopped
+## being rare (grazing pauses, a boxed-in creature with nowhere to go -- see
+## CreatureWander.is_pausing / creature_movement_gate.gd) -- a creature that
+## spends real time standing still needs somewhere to go BEYOND a single
+## photograph. See test_idle_frames_differ_from_each_other for the visible
+## half of that, and idle_frame_index below for how CreatureMarker picks
+## between them without a whole herd cycling through in lockstep.
+func test_idle_action_returns_more_than_one_frame():
 	var frames: Array = anim.generate_frames("horse", "idle", 5)
-	assert_eq(frames.size(), 1)
+	assert_eq(frames.size(), AnimScript.IDLE_FRAME_COUNT)
+	assert_gt(frames.size(), 1, "a single static frame reads as frozen, not a living idle pose")
 
 
 func test_idle_frame_matches_the_neutral_standing_pose():
@@ -234,6 +242,64 @@ func test_idle_is_deterministic_per_species_and_seed():
 	var a: Array = anim.generate_frames("horse", "idle", 8)
 	var b: Array = anim.generate_frames("horse", "idle", 8)
 	assert_eq(_pixel_diff(a[0], b[0]), 0)
+
+
+## The second idle frame has to be a real, visible change -- not a duplicate
+## of frame 0 -- or growing IDLE_FRAME_COUNT past 1 is a distinction with no
+## visual difference.
+func test_idle_frames_differ_from_each_other():
+	var frames: Array = anim.generate_frames("herbivore", "idle", 3)
+	for i in range(1, frames.size()):
+		assert_gt(
+			_pixel_diff(frames[0], frames[i]), 0,
+			"idle frame %d should differ from frame 0 -- a standing animal still breathes" % i
+		)
+
+
+# -- per-individual idle timing: a herd should not breathe in lockstep ------
+#
+# Frame selection during idle used to depend on elapsed_time alone (see
+# CreatureMarker._animation_step), and every creature's own elapsed_time
+# starts at 0.0 and advances by the same per-frame delta absent an LOD
+# stagger -- so even once idle grew a second frame, a whole herd that spawned
+# together would have cycled through it in perfect unison. idle_frame_index
+# folds each creature's own seed into a per-individual phase offset, the same
+# deterministic-per-seed hash shape CreatureWander.is_pausing already uses
+# for its own seeded roll.
+
+func test_idle_frame_index_is_deterministic_for_the_same_inputs():
+	var a: int = anim.idle_frame_index(12.5, 7, 2)
+	var b: int = anim.idle_frame_index(12.5, 7, 2)
+	assert_eq(a, b)
+
+
+func test_idle_frame_index_always_stays_in_bounds():
+	for seed_value in range(0, 500, 13):
+		for elapsed_time in [0.0, 0.3, 1.19, 1.2, 4.75, 100.05]:
+			var index: int = anim.idle_frame_index(elapsed_time, seed_value, AnimScript.IDLE_FRAME_COUNT)
+			assert_between(
+				index, 0, AnimScript.IDLE_FRAME_COUNT - 1, "seed %d at %f" % [seed_value, elapsed_time]
+			)
+
+
+## With only one frame to show (every illustrated species' idle -- see
+## IllustratedAnimalSprite, which has no per-seed variation at all) there is
+## nothing to cycle through, whatever the seed or the clock says.
+func test_idle_frame_index_with_a_single_frame_is_always_zero():
+	for seed_value in [0, 1, 5, 999, -3]:
+		assert_eq(anim.idle_frame_index(37.0, seed_value, 1), 0)
+
+
+## The actual minimum bar: across a spread of seeds, idling individuals must
+## be ABLE to land on different frames at the exact same elapsed_time -- not
+## guaranteed to for any one arbitrary pair (a real hash can coincide), but
+## demonstrably possible, which is what would fail if frame selection
+## silently dropped seed_value and went back to reading elapsed_time alone.
+func test_idle_frame_index_varies_across_seeds_at_the_same_elapsed_time():
+	var seen := {}
+	for seed_value in range(0, 200):
+		seen[anim.idle_frame_index(9.0, seed_value, AnimScript.IDLE_FRAME_COUNT)] = true
+	assert_gt(seen.size(), 1, "different individuals should not all breathe in perfect lockstep")
 
 
 # -- generated frames are shared, not rebuilt per animal ----------------------
