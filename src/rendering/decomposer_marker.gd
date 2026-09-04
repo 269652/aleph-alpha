@@ -237,6 +237,18 @@ func _nearest_food() -> Node2D:
 				best = node
 				best_effective_distance = effective
 	for node in get_tree().get_nodes_in_group(DroppedItem.GROUP_NAME):
+		# LiftableStone deliberately shares this same group (see its own doc
+		# comment -- "It joins the group DroppedItem uses... so the existing
+		# pickup sweep... collects it with no special case of its own") so
+		# the player's pickup sweep can find it, but it is NOT a DroppedItem
+		# and has no item_stack at all. Bug report: "game dropped from
+		# 60fps to 4-5fps" -- every stone within SEARCH_RADIUS_PX threw a
+		# real GDScript error here on every SEEKING scan, for every ant near
+		# this game's very common loose stones; repeated errors are not
+		# free (string formatting + backtrace capture + console I/O per
+		# hit). Type-checked now instead of assumed.
+		if not (node is DroppedItem):
+			continue
 		if node.item_stack == null or not TreeSpecies.IDS.has(node.item_stack.item.id):
 			continue
 		var distance: float = position.distance_to(node.position)
