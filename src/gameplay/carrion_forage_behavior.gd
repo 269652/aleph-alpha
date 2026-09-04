@@ -97,7 +97,7 @@ func _enter(next_phase: int) -> void:
 ## How far away a carcass with `fly_count` adult flies on it EFFECTIVELY
 ## reads to a decomposer scanning at `real_distance_px` -- lower reads as
 ## more attractive. Static and pure (no target selection happens here, only
-## the score DecomposerMarker._nearest_carrion picks the smallest of), so it
+## the score DecomposerMarker._nearest_food picks the smallest of), so it
 ## is unit-testable without a live scene, matching every other tuned
 ## formula in this codebase.
 static func effective_distance(real_distance_px: float, fly_count: int) -> float:
