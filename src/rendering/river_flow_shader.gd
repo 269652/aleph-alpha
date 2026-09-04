@@ -725,7 +725,25 @@ void fragment() {
 	// reach keeps exactly the look it has now.
 	float wobble_cells = max(half_width_local * tile_px * noise_scale, 0.01);
 	float wobble_local = line_wobble * min(wobble_reference_cells / wobble_cells, 1.0);
-	float s_field = frag_across * across_line_scale + (n - 0.5) * wobble_local;
+	// THE EDDIES BEND THE GUIDE, NOT JUST THE NOISE.
+	//
+	// The bend field used to reach the strokes only by displacing where
+	// the NOISE was sampled -- so every bit of whirl the water had came
+	// through the wobble term, and the wobble had to be big to show it.
+	// Big enough that its gradient was 2.3x the guide's at every width
+	// (test_the_wobble_gradient_stays_well_under_the_across_gradient...),
+	// which is the field folding into cells: the strokes were short
+	// angular fragments of closed loops, not lines along the river.
+	//
+	// Now the bend displaces the ACROSS coordinate itself, in across
+	// units (one noise cell is 1/wobble_cells of the half width). The
+	// guide lines whirl with the eddies directly, and this cannot fold:
+	// d(across + bend/cells)/d(across) is 1 + d(bend)/d(p), the exact
+	// Jacobian test_the_bend_never_folds_or_pinches_the_surface holds
+	// above 0.35. The wobble is then free to be a small texture on top
+	// instead of the thing the lines are made of.
+	float guide = frag_across + bend / wobble_cells;
+	float s_field = guide * across_line_scale + (n - 0.5) * wobble_local;
 	float level_frac = fract(s_field * line_count) - 0.5;
 	float dist_n = abs(level_frac) / line_count;
 	float stroke = 1.0 - smoothstep(line_width * 0.5, line_width, dist_n);
@@ -1054,7 +1072,12 @@ const ACROSS_LINE_SCALE := 1.0
 ## so they fold no more than this one does.
 const WOBBLE_REFERENCE_CELLS := 2.56
 
-const LINE_WOBBLE := 0.6
+## CUT from 0.6. At 0.6 the wobble's gradient was 2.3x the guide's at every
+## width from two tiles up -- the field folded into cells and the strokes
+## were their fragments. 0.12 puts the ratio at 0.46 (bar 0.5). The whirl
+## that 0.6 was carrying now enters through the guide instead, where it
+## cannot fold; see the s_field line.
+const LINE_WOBBLE := 0.13
 const LINE_WIDTH := 0.03
 const LINE_STRENGTH := 0.7
 const LINE_COLOR := Color(0.85, 0.97, 1.0)
@@ -1278,10 +1301,16 @@ static func bank_alpha(across_magnitude: float) -> float:
 ## The guided stroke field for one fragment: signed across-fraction plus
 ## the advected wobble -- the thing whose level sets ARE the current lines.
 static func stroke_field(
-	across_fraction: float, n: float, half_width_cells := WOBBLE_REFERENCE_CELLS
+	across_fraction: float, n: float, half_width_cells := WOBBLE_REFERENCE_CELLS,
+	bend_cells := 0.0
 ) -> float:
+	# `bend_cells` is the eddy displacement in NOISE cells, as
+	# bend_displacement returns it; divided by the half width in cells it
+	# becomes an across-fraction shift of the guide, exactly as the shader
+	# does it.
+	var guide := across_fraction + bend_cells / maxf(half_width_cells, 0.01)
 	return (
-		across_fraction * ACROSS_LINE_SCALE
+		guide * ACROSS_LINE_SCALE
 		+ (n - 0.5) * LINE_WOBBLE * wobble_scale_for(half_width_cells)
 	)
 

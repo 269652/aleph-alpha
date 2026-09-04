@@ -959,8 +959,12 @@ func test_the_hash_is_trig_free_for_float32_world_coordinates():
 func test_the_channel_guide_dominates_the_wobble():
 	assert_gte(RiverFlowShader.ACROSS_LINE_SCALE, RiverFlowShader.LINE_WOBBLE)
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("frag_across * across_line_scale + (n - 0.5) * wobble_local"),
-		"the stroke field must be the across ramp plus advected wobble, the wobble scaled by width"
+		RiverFlowShader.SHADER_CODE.contains("float guide = frag_across + bend / wobble_cells;"),
+		"the eddies must bend the guide itself, not only the noise sample"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("guide * across_line_scale + (n - 0.5) * wobble_local"),
+		"the stroke field must be the bent guide plus a small width-scaled wobble"
 	)
 	assert_true(RiverFlowShader.SHADER_CODE.contains("fract(s_field * line_count) - 0.5"))
 
@@ -1018,7 +1022,13 @@ func _folding_rate(half_width_cells: float) -> float:
 			var n: float = RiverFlowShader.animated_field_value(
 				x, across * half_width_cells, Vector2(1, 0), 0.9
 			)
-			var s_value: float = RiverFlowShader.stroke_field(across, n, half_width_cells)
+			# The bend enters the guide now, so the sweep must carry it too
+			# or it walks a field the shader no longer draws.
+			var bend: float = RiverFlowShader.bend_displacement(
+				x * RiverFlowShader.EDDY_SCALE,
+				across * half_width_cells * RiverFlowShader.EDDY_SCALE
+			)
+			var s_value: float = RiverFlowShader.stroke_field(across, n, half_width_cells, bend)
 			if previous > -99.0:
 				steps += 1
 				if s_value <= previous:
@@ -2280,3 +2290,55 @@ func test_the_debug_view_draws_contours_of_the_across_field_alone():
 	))
 	# Full alpha, so the painted band's own edge shows too.
 	assert_true(RiverFlowShader.SHADER_CODE.contains("COLOR = vec4(vec3(debug_edge), 1.0);"))
+
+
+# -- the guide must dominate the wobble, measured as GRADIENTS --------------
+#
+# The two screenshots that settled this: the geometry-only field sweeps
+# through the bend in long sparse curves; the stroke field over the same
+# water is packed with contours so tightly they read as speckle. Dense
+# contours mean a steep gradient. In the water, the noise term's gradient
+# dominates the channel geometry's, so the field is not monotone, its level
+# sets close into cells, and the strokes drawn from it are the cells'
+# fragments -- short angular shapes instead of lines following the river.
+#
+# The numbers, at the width LINE_WOBBLE was "tuned" for (2.56 noise cells):
+#
+#   across gradient   1 / 2.56          = 0.39 per cell
+#   noise gradient    0.6 * 1.5          = 0.90 per cell
+#   ratio                                  2.3
+#
+# The guide never dominated the wobble at ANY width. The amplitude test
+# (ACROSS_LINE_SCALE >= LINE_WOBBLE) could not see it, and the coarse
+# 80-step folding sweep undercounted it. This test states the actual
+# condition and requires a margin.
+#
+# 1.5 is the steepest slope of smoothstep-faded value noise per cell.
+const VALUE_NOISE_MAX_SLOPE := 1.5
+const MAX_WOBBLE_GRADIENT_RATIO := 0.5
+
+
+## The noise term's steepest gradient as a fraction of the across ramp's,
+## at a channel this many noise cells wide. Under 1 is monotone; the margin
+## is what keeps it monotone through the bend warp and the obstacle pushes
+## on top.
+func _wobble_gradient_ratio(half_width_cells: float) -> float:
+	var across_gradient := RiverFlowShader.ACROSS_LINE_SCALE / half_width_cells
+	var noise_gradient := (
+		RiverFlowShader.LINE_WOBBLE
+		* RiverFlowShader.wobble_scale_for(half_width_cells)
+		* VALUE_NOISE_MAX_SLOPE
+	)
+	return noise_gradient / across_gradient
+
+
+func test_the_wobble_gradient_stays_well_under_the_across_gradient_at_every_width():
+	for half_tiles in [1.0, 1.6, 2.0, 2.6, 3.5, 4.5, 6.0, 7.5]:
+		var cells: float = half_tiles * RiverFlowShader.TILE_PX * RiverFlowShader.NOISE_SCALE
+		var ratio := _wobble_gradient_ratio(cells)
+		assert_lte(
+			ratio, MAX_WOBBLE_GRADIENT_RATIO,
+			"at a %.1f-tile half width the wobble's gradient is %.2fx the guide's -- cells" % [
+				half_tiles, ratio
+			]
+		)

@@ -72,7 +72,10 @@ static func _violation_rate(half_width_cells: float) -> float:
 			var n: float = RiverFlowShader.animated_field_value(
 				x, across * half_width_cells, Vector2(1, 0), 0.9
 			)
-			var s_value: float = RiverFlowShader.stroke_field(across, n, half_width_cells)
+			var bend: float = RiverFlowShader.bend_displacement(
+				x * RiverFlowShader.EDDY_SCALE, across * half_width_cells * RiverFlowShader.EDDY_SCALE
+			)
+			var s_value: float = RiverFlowShader.stroke_field(across, n, half_width_cells, bend)
 			if previous > -99.0:
 				steps += 1
 				if s_value <= previous:
