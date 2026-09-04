@@ -16,8 +16,22 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
+const TreeSpecies = preload("res://src/world/tree_species.gd")
 
 const GROUP_NAME := "dropped_item"
+## Real fallen fruit/nut ground items ONLY -- a small, pre-filtered subset
+## of GROUP_NAME a decomposer can scan cheaply (see DecomposerMarker.
+## _nearest_food). GROUP_NAME itself is shared by every ground-pickable
+## thing this game has, LiftableStone and PickableSeed very much included
+## (both deliberately join it too, see their own doc comments) -- stones
+## in particular are extremely dense, so a decomposer scanning the WHOLE
+## group globally for every one of its own foraging checks is a real,
+## measured performance cost (bug report: "game now has only 4-5 fps"),
+## not merely a cosmetic inefficiency. Joined here, at creation, rather
+## than filtered per-scan, so the cost of "is this a fruit/nut" is paid
+## once per item instead of once per (item x every decomposer x every
+## scan).
+const FORAGEABLE_GROUP_NAME := "forageable_fruit"
 ## Un-picked-up items despawn after this many seconds so the ground doesn't
 ## fill up with forage over a long session.
 const LIFETIME := 90.0
@@ -52,6 +66,8 @@ var _age := 0.0
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
 	add_to_group(HoverTargetFinder.GROUP_NAME)
+	if item_stack != null and TreeSpecies.IDS.has(item_stack.item.id):
+		add_to_group(FORAGEABLE_GROUP_NAME)
 	if item_stack != null and texture == null:
 		# A pulled wild carrot/potato uses the real illustrated root art (see
 		# docs/concept/wild_crops.md) -- the same texture the player just

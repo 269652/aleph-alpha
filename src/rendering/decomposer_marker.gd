@@ -26,7 +26,6 @@ const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
-const TreeSpecies = preload("res://src/world/tree_species.gd")
 
 const GROUP_NAME := "decomposer"
 
@@ -220,11 +219,22 @@ func _step_seeking(delta: float) -> void:
 ## distance -- and so is fallen fruit, which has no fly-attraction mechanic
 ## of its own either.
 ##
-## Fallen fruit/nuts are real DroppedItem ground items (the same "dropped_item"
-## group HoverTargetFinder/the player's own pickup already scan), filtered to
-## TreeSpecies.IDS the same way EarthChunkManager.fruit_near does -- so a
-## decomposer forages real windfall, never wanders off after a dropped tool
-## or ore chunk.
+## Fallen fruit/nuts are real DroppedItem ground items, scanned via
+## DroppedItem.FORAGEABLE_GROUP_NAME rather than the shared, catch-all
+## DroppedItem.GROUP_NAME (see that constant's own doc comment). Bug
+## report: "game now has only 4-5 fps". GROUP_NAME is shared by every
+## ground-pickable thing this game has -- LiftableStone and PickableSeed
+## deliberately join it too, for the player's own pickup sweep, and stones
+## in particular are extremely dense -- so scanning it globally, for every
+## ant, on every SEEKING check, was a real O(decomposers x every dropped
+## thing in the loaded world) cost, not just the earlier `.item_stack`
+## crash on non-DroppedItem members (see git history: that crash was fixed
+## first and measurably helped, but did not fully explain the reported
+## collapse on its own -- this scan-scope fix is the rest of it).
+## FORAGEABLE_GROUP_NAME is joined only by a DroppedItem actually holding a
+## TreeSpecies.IDS species, at creation time, so this loop only ever visits
+## real fallen windfall, never a dropped tool, ore chunk, or the far larger
+## set of stones lying around.
 func _nearest_food() -> Node2D:
 	var best: Node2D = null
 	var best_effective_distance := SEARCH_RADIUS_PX
@@ -236,20 +246,14 @@ func _nearest_food() -> Node2D:
 			if effective <= best_effective_distance:
 				best = node
 				best_effective_distance = effective
-	for node in get_tree().get_nodes_in_group(DroppedItem.GROUP_NAME):
-		# LiftableStone deliberately shares this same group (see its own doc
-		# comment -- "It joins the group DroppedItem uses... so the existing
-		# pickup sweep... collects it with no special case of its own") so
-		# the player's pickup sweep can find it, but it is NOT a DroppedItem
-		# and has no item_stack at all. Bug report: "game dropped from
-		# 60fps to 4-5fps" -- every stone within SEARCH_RADIUS_PX threw a
-		# real GDScript error here on every SEEKING scan, for every ant near
-		# this game's very common loose stones; repeated errors are not
-		# free (string formatting + backtrace capture + console I/O per
-		# hit). Type-checked now instead of assumed.
-		if not (node is DroppedItem):
-			continue
-		if node.item_stack == null or not TreeSpecies.IDS.has(node.item_stack.item.id):
+	for node in get_tree().get_nodes_in_group(DroppedItem.FORAGEABLE_GROUP_NAME):
+		# Defensive, not load-bearing for correctness: FORAGEABLE_GROUP_NAME
+		# is only ever joined by a real DroppedItem holding a real fruit/nut
+		# (see DroppedItem._ready()), so this should never actually trip --
+		# kept anyway so a future bug in THAT join can never reintroduce the
+		# exact "invalid access to item_stack" crash this whole
+		# investigation started from.
+		if not (node is DroppedItem) or node.item_stack == null:
 			continue
 		var distance: float = position.distance_to(node.position)
 		if distance <= best_effective_distance:

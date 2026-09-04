@@ -163,6 +163,32 @@ func test_a_dropped_item_too_heavy_to_kick_does_not_offer_kick():
 	assert_eq(actions.size(), 1, "too heavy to kick, same cutoff as a stone at/above leg mass")
 
 
+# -- FORAGEABLE_GROUP_NAME: a small, pre-filtered subset of GROUP_NAME a ---
+# -- decomposer can scan cheaply (see DecomposerMarker._nearest_food) -- ---
+# -- GROUP_NAME itself is shared by every ground-pickable thing this game --
+# -- has (LiftableStone and PickableSeed included), and stones in --------
+# -- particular are extremely dense, so a decomposer scanning the whole ----
+# -- group globally on every foraging check was a real, measured -----------
+# -- performance cost (bug report: "game now has only 4-5 fps"). -----------
+
+func test_joins_the_forageable_group_when_holding_a_real_fruit():
+	var cherries := DroppedItem.new()
+	cherries.item_stack = ItemStack.new(Item.new("cherry", "Cherries", "food", 5), 2)
+	add_child_autofree(cherries)
+	assert_true(
+		cherries.is_in_group(DroppedItem.FORAGEABLE_GROUP_NAME),
+		"real windfall should be cheaply findable by a foraging decomposer"
+	)
+
+
+func test_does_not_join_the_forageable_group_for_a_non_food_item():
+	# "hide" (see before_each) is not a TreeSpecies.IDS species.
+	assert_false(
+		item.is_in_group(DroppedItem.FORAGEABLE_GROUP_NAME),
+		"a dropped tool/material is not windfall and must not draw ant foraging"
+	)
+
+
 func test_a_full_inventory_leaves_the_item_on_the_ground_with_the_remainder():
 	# 1-slot inventory already holding a different full-ish item -> no room.
 	var picker := _make_picker(Vector2(100, 100), 1)
