@@ -40,6 +40,7 @@ const SeedCaching = preload("res://src/gameplay/seed_caching.gd")
 const SquirrelNutCaching = preload("res://src/gameplay/squirrel_nut_caching.gd")
 const ScentField = preload("res://src/world/scent_field.gd")
 const ProceduralFlowerSprite = preload("res://src/rendering/procedural_flower_sprite.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ProceduralSeedSprite = preload("res://src/rendering/procedural_seed_sprite.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
@@ -4819,6 +4820,76 @@ func set_grass_walker_position(world_position: Vector2) -> void:
 ## Node2D of its own (see _sync_grass_sprites), so it cannot join
 ## HoverTargetFinder's group like every other hoverable entity -- World reads
 ## this directly instead to special-case the mouse-hover tooltip over grass.
+## Names the blooming flower drawn nearest `pixel_position`, or "" when none
+## is close enough -- the hover tooltip's flower lookup (see
+## World._update_hover_tooltip).
+##
+## Reported live: flowers "still don't [show] hover tooltips". Every other
+## hoverable thing in the world is a Node2D that joins
+## HoverTargetFinder.GROUP_NAME and answers get_display_name(). Flowers are
+## not, and should not be: they are ground decoration, a bare Sprite2D per
+## cell with no script and no group (see _sync_flower_sprites), precisely so a
+## loaded meadow costs a handful of shared textures instead of a thousand
+## scripted nodes -- and that group is scanned every frame, so joining it is
+## not free (see World's own note on the cost of that scan). So flowers are
+## answered the way tall grass already is: a cheap query the hover scan falls
+## through to when nothing in the group claimed the cursor.
+##
+## Measured against the BLOSSOM, not the cell: the sprite is anchored at the
+## stem's foot and drawn upward from there, so a player pointing at the bloom
+## they can actually see is pointing well above the cell the plant stands in.
+## Uses the very same landing point a pollinator settles on (see flowers_near
+## / ProceduralFlowerSprite.blossom_height_world), so the tooltip and the bees
+## agree about where a flower is.
+##
+## Only what is IN BLOOM answers, matching exactly what is drawn -- naming a
+## rose over what the player sees as bare grass is the same sim-and-picture
+## disagreement concept/flora.md forbids, with the lie on the other foot.
+func flower_name_at(
+	pixel_position: Vector2, radius_px: float = HoverTargetFinder.HOVER_RADIUS_PX
+) -> String:
+	var season := current_season()
+	var center := _world_tile_for_pixel(pixel_position)
+	# Enough rows to cover the tallest stem the art can draw plus the search
+	# radius itself, so a sunflower's head is still traced back to the foot it
+	# grows from. Bounded from the art's own numbers, not a guessed row count.
+	var reach := 1 + ceili(
+		(radius_px + ProceduralFlowerSprite.max_blossom_height_world())
+		/ float(TerrainRenderer.TILE_SIZE)
+	)
+	var best_name := ""
+	var best_distance := radius_px
+	for dy in range(-reach, reach + 1):
+		for dx in range(-reach, reach + 1):
+			var tile := center + Vector2i(dx, dy)
+			var patch: FlowerPatch = _flower_patches.get(_chunk_coord_for_tile(tile))
+			if patch == null:
+				continue
+			var cell := _local_coord(tile.x, tile.y)
+			var label := patch.label_at(cell, season)
+			if label == "":
+				continue
+			var foot := Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			)
+			var sprite_seed := hash("%d_%d_flower" % [tile.x, tile.y])
+			var blossom := foot - Vector2(
+				0.0,
+				ProceduralFlowerSprite.blossom_height_world(
+					sprite_seed,
+					_flower_scale_for(
+						patch.species_at(cell), patch.growth_at(cell), sprite_seed
+					).y
+				)
+			)
+			var distance := pixel_position.distance_to(blossom)
+			if distance <= best_distance:
+				best_distance = distance
+				best_name = label
+	return best_name
+
+
 func tall_grass_growth_at(pixel_position: Vector2) -> float:
 	var tile := _world_tile_for_pixel(pixel_position)
 	var chunk_coord := _chunk_coord_for_tile(tile)
@@ -5450,6 +5521,20 @@ func _sync_flower_sprites(chunk_coord: Vector2i) -> void:
 ## Cap on how many blooms are probed when scoring a chunk (see below).
 const _POLLINATOR_PROBE_LIMIT := 8
 
+## The one region seed the world's PREVAILING wind is drawn from (see
+## WeatherModel.prevailing_wind_direction), used only to bake meadows.
+##
+## Deliberately NOT per-chunk, the way current_weather's region seed is. A
+## founder's lineage has to be computed identically by every chunk that can
+## see it, or the meadows either side of a boundary disagree and the seam
+## shows -- and two chunks each using their own prevailing wind is exactly
+## that disagreement. One climate for the world is also the honest reading:
+## real prevailing winds are consistent over far more ground than this world
+## covers. The DAY's wind still varies by region and by day (see
+## step_flowers), so live shedding is regional even though the baked meadow
+## is not.
+const PREVAILING_WIND_REGION_SEED := 4177
+
 
 func _pollinator_multiplier_for(chunk_coord: Vector2i) -> float:
 	var patch: FlowerPatch = _flower_patches.get(chunk_coord)
@@ -5780,8 +5865,28 @@ func record_pollination_visit_at(tree_position: Vector2, visit_weight: float = 1
 func step_flowers(delta: float) -> void:
 	var season := current_season()
 	var growth_modifier := _season_cycle.growth_modifier(_world_age_seconds)
+	# Which way, and how hard, it is blowing RIGHT NOW -- the day's wind, not
+	# the prevailing one worldgen used, so live shedding varies with the
+	# weather and by region the way everything else does.
+	#
+	# This loop is the fix for a real defect: FlowerPatch.set_wind was fully
+	# built and fully tested and its only caller anywhere was its own test
+	# file, so every meadow in the running game shed seed at strength 0.0 --
+	# a permanent dead calm -- and the downwind drift the model computes was
+	# never once applied outside a test. Same bug class as the dead
+	# Pollination wiring recorded in docs/progress.md.
+	var weather_day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
 	for chunk_coord in _flower_patches:
 		var patch: FlowerPatch = _flower_patches[chunk_coord]
+		# Per-chunk region seed, exactly as current_weather derives it -- so a
+		# meadow sheds on the same wind the sky over it is showing.
+		var region_seed := hash("%d_%d" % [chunk_coord.x, chunk_coord.y])
+		patch.set_wind(
+			_weather_model.wind_direction_for(weather_day, region_seed),
+			_weather_model.dispersal_strength_for(
+				_weather_model.weather_at(weather_day, region_seed)
+			)
+		)
 		patch.advance(delta, growth_modifier)
 		# Plants past their bloom drop seed around themselves, which lies in the
 		# grass as its own entity for a granivore to find (see
@@ -8288,8 +8393,20 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		for sagewerk_local_cell in _sagewerk_lumberjacks[sagewerk_chunk_coord]:
 			_resync_logistics_for_sagewerk(sagewerk_chunk_coord, sagewerk_local_cell)
 
+	# The meadow that was already here is what the wind already did (see
+	# MeadowSpread). Two things it needs that a chunk seed cannot give it: the
+	# chunk's WORLD origin, because founders live in world space so a meadow
+	# crosses chunk lines instead of stopping dead at every seam; and the
+	# PREVAILING wind, because a baked meadow is the product of a climate
+	# rather than of whatever the sky happens to be doing right now.
 	_flower_patches[chunk_coord] = FlowerPatch.new(
-		hash("%d_%d_flowers" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+		hash("%d_%d_flowers" % [chunk_coord.x, chunk_coord.y]),
+		chunk.width,
+		chunk.height,
+		chunk.biome,
+		chunk_coord * CHUNK_SIZE,
+		_weather_model.prevailing_wind_direction(PREVAILING_WIND_REGION_SEED),
+		_weather_model.prevailing_wind_strength(PREVAILING_WIND_REGION_SEED)
 	)
 	_flower_sprites[chunk_coord] = {}
 	_seed_sprites[chunk_coord] = {}

@@ -105,9 +105,31 @@ the seedling alone, because it is not a seed any more.
 ## Status
 
 - ✅ Wind direction and strength per day and region
+- ✅ A per-region **prevailing** wind the daily wind walks around
+  (`WeatherModel.prevailing_wind_direction`/`prevailing_wind_strength`), plus
+  `dispersal_strength_for` — the same sky read as 0 calm to 1 gale, since
+  `wind_strength_for` is a shader pace multiplier whose baseline is 1.0.
 - ✅ Heavy-tailed, downwind, weight-dependent landing offsets
+- ✅ Still-air scatter that is weight-dependent too — a plume drifts on the
+  faintest movement of the air, an acorn falls through it. It was weight-blind,
+  which meant on a still day (i.e. under a prevailing wind, which is a breeze)
+  a whole lineage piled onto its parent.
+- ✅ Establishment separated from landing (`FlowerEstablishment`): the seed
+  shadow stays heavy tailed and honest, and a minimum spacing decides what
+  actually roots.
+- ✅ Baked worldgen running this same kernel from founders under the prevailing
+  wind (`MeadowSpread`), seam-exact across chunks.
 - ✅ Seeds as real world entities: drawn, eaten by birds, and picked up
 - ✅ Germination needing earth, with bare ground a far better seedbed than turf
 - ⬜ Rain rooting a lying seed into a sapling
 - ✅ Bird hunger, and a dropping where the seed comes out
+- ⬜ **Seed that blows out of a loaded chunk is discarded rather than handed to
+  the neighbouring one** (`FlowerPatch.shed_seed`), so LIVE dispersal is
+  truncated at every chunk line — and the truncated part is the long tail,
+  which is exactly the part that colonises new ground. Worldgen is unaffected
+  (`MeadowSpread` works in world space by construction); this is only the live
+  shed path.
+- ⬜ The baked meadow uses one prevailing wind for the whole world rather than a
+  wind field sampled per founder — see `flora.md`'s "The meadow you arrive to"
+  section for why one wind, and what the better version looks like.
 - ⬜ Wind derived from real climate models rather than from the weather state

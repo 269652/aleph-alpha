@@ -2195,6 +2195,133 @@ Three separate live complaints turned out to be the same problem: the HUD grew o
 All three rules and their known remaining gaps are specified in [docs/concept/hud.md](concept/hud.md); the pure parts are tested in `tests/unit/test_world_hud.gd`.
 
 
+### Flowers: too dense, no tooltip, and a wind that never blew
+
+Three things reported together: flowers *"still don't [show] hover tooltips"*,
+they *"spread or grow way too dense"*, *"the seeds should be carried a bit
+further by the wind and birds so it leaves more space between individual
+flowers"*, and *"the baked in initial world state should also respect this and
+simulate spread based on wind strength and direction"*.
+
+✅ **The density was not a tuning number, it was a missing mechanism.** The
+obvious fix — flatten `WindDispersal`'s heavy tail so seed spreads evenly —
+would have swapped a true mechanism for a cosmetic one; real wind dispersal
+genuinely is heavy tailed, and `concept/seed_dispersal.md` is right to insist
+on it. What was missing is that **where seed lands and where a plant stands
+are two different distributions**. Seed rain is densest directly under the
+parent and survival there is close to nil — competition with an established
+root system, that plant's own pathogen load, and the seed predators already
+working it. Only seed that escapes the parent becomes a plant (Janzen–Connell).
+`FlowerEstablishment` is that second distribution and is now the only thing in
+the flower code that decides how far apart two plants may stand
+(`MIN_SPACING_TILES`, bounded on both sides by test rather than by eye: wider
+than a diagonal so no two flowers can touch, under 5 tiles so a meadow stays a
+meadow). It runs at **every** point a flower comes into being — the baked
+meadow, `FlowerPatch.plant` (animal-dropped seed) and `FlowerPatch.root_seeds`
+(rain) — because a gate some paths could route around would silently refill
+exactly the gaps it opened.
+
+✅ **The baked meadow is now what the wind already did** (`MeadowSpread`). It
+was an independent coin flip per grassland cell (`SEED_CHANCE`, 3.5%): a
+uniform speckle that made two neighbouring cells both flowering as likely as
+any other pair, so adjacent pairs and triples were constant. It also knew
+nothing about the wind, so a world whose entire dispersal model is "light seed
+goes downwind" nevertheless *started* isotropic. It is now the same kernel the
+live world sheds with, run from sparse **world-space** founders under the
+region's prevailing wind for `GENERATIONS` rounds, through the establishment
+gate. **Measured over 40 seeds on full grassland: 11.4 plants per 32x32 chunk
+(was ~36, and regularly at its own 40 cap), mean nearest-neighbour gap 4.39
+tiles where adjacency had been free.**
+
+Founders live in world tiles and lineages shed *unconditionally* (a grain sheds
+whether or not it established), which is what bounds
+`MeadowSpread.INFLUENCE_MARGIN_TILES` exactly: a lineage depends only on its
+founder and the wind, on nothing any other founder did. Paired with
+`FlowerEstablishment.survivors` being **order-independent** — within a
+neighbourhood the seed with the most vigour takes, and which that is does not
+depend on who asked or in what order — two neighbouring chunks compute the
+identical answer for ground they share. Pinned by a cross-seam spacing test in
+the pure module and again end-to-end against two real loaded chunks.
+
+✅ **`WindDispersal`'s calm scatter was weight-BLIND**, and that turned out to
+be the whole reason a lineage collapsed onto its parent. The downwind term
+already scaled with lightness; the still-air term did not, so a dandelion seed
+and an acorn fell into the same little circle. **Measured: 0 of 400 flower
+seeds cleared the establishment spacing on a still day** — so a founder's
+entire lineage piled onto one cell and exactly one plant grew there. A
+prevailing wind is a breeze rather than a gale, so that term is most of what
+decides real spacing. Scatter now scales with lightness
+(`HEAVY_SEED_SCATTER_FRACTION`), calibrated so the heaviest class keeps
+*exactly* the crown-width drop it always had (0.3 x 4.0 = the old 1.2 tiles,
+pinned by test — making the plume drift further must not drag the acorn along).
+`MAX_DRIFT_TILES` 14 → 20 so the wind stays the dominant term rather than the
+isotropic scatter drowning the lean out.
+
+✅ **`FlowerPatch.set_wind` had no live caller at all** — fully built, fully
+tested, and called by nothing but its own test file, so every meadow in the
+running game shed seed at strength 0.0, a permanent dead calm, and the downwind
+drift the model computes had never once been applied outside a test. Exactly
+the dead-mechanism class as the `Pollination` wiring recorded above.
+`EarthChunkManager.step_flowers` now pushes the day's wind and
+`WeatherModel.dispersal_strength_for` onto every loaded patch, with a
+regression test that names the bug.
+
+✅ **A per-region prevailing wind** (`WeatherModel.prevailing_wind_direction` /
+`prevailing_wind_strength`), which worldgen needs because a baked meadow is the
+product of a climate, not of one particular Tuesday. It also fixed a real
+defect in the daily walk: it started from angle 0 for *every* region, so on day
+one the wind blew due east across the entire world and only regional divergence
+over later days hid it. `dispersal_strength_for` is a second reading of the
+same sky on a 0-calm-to-1-gale scale, because `wind_strength_for` is a shader
+*pace* multiplier whose baseline is 1.0 — feeding it to a dispersal kernel
+would have put every seed at or past a gale. The two are pinned to rank the
+weather identically so they cannot drift.
+
+✅ **Flowers answer the hover tooltip** (`EarthChunkManager.flower_name_at` →
+`World._update_hover_tooltip`). Every other hoverable thing is a Node2D in
+`HoverTargetFinder.GROUP_NAME`; flowers deliberately are not, because they are
+ground decoration — a bare `Sprite2D` per cell with no script and no group,
+which is why a loaded meadow costs a handful of shared textures rather than a
+thousand scripted nodes, and that group is scanned every frame. So they are
+answered the way tall grass already is: a positional query the hover scan falls
+through to. Measured against the **blossom**, not the cell — the sprite is
+foot-anchored and drawn upward, so a player pointing at the bloom they can see
+is pointing well above the plant's cell; it reuses the exact landing point a
+pollinator settles on, so the tooltip and the bees agree about where a flower
+is. Only what is **in bloom** answers, matching what is actually drawn. A
+seedling reads as one.
+
+🚧 **The nectar economy moved with the meadow, and is recorded rather than
+tuned away.** `test_nectar_economy.gd` re-measured: 640 blooming flowers became
+200, and the ratio went from **0.86x (slightly under-subscribed) to 1.56x
+over-subscribed**. Two things bound how much that matters, and both were
+checked rather than assumed: the 150-pollinator population in that scenario is
+a *ceiling*, and live spawning scales with the peak scent concentration a
+chunk's blooms superpose to (`EarthChunkManager._pollinator_multiplier_for`),
+so a sparser meadow spawns fewer pollinators into itself; and **coverage did
+not collapse — 184 of 200 flowers were visited, 92%, the same share as the old
+592 of 640**. Left above 1.0 knowingly: pushing it back under by raising nectar
+regen would be tuning a pollinator constant to hide a deliberate change in how
+much meadow the world has. If `NECTAR_REGEN_PER_SECOND` should move, it should
+move on its own evidence. **This is the one item here worth watching in live
+play** — if bees visibly starve, that is the number to revisit.
+
+⬜ **Seed that blows out of a chunk is still discarded.** `FlowerPatch.shed_seed`
+drops any landing outside its own bounds instead of handing it to the
+neighbouring patch, so live dispersal is truncated at every chunk line — the
+long tail, which is precisely the part that colonises new ground, is the part
+being thrown away. Not touched here (it needs the chunk manager to route seed
+between patches, not a change inside `FlowerPatch`), and it does not affect the
+baked meadow, which crosses seams correctly by construction.
+
+⬜ **The baked meadow uses one prevailing wind for the whole world**
+(`EarthChunkManager.PREVAILING_WIND_REGION_SEED`), not a per-region one. That
+is deliberate — two chunks using different winds for the same founder is
+exactly the seam disagreement the design avoids, and real prevailing winds are
+consistent over far more ground than this world covers — but a smoothly varying
+wind *field* sampled at each founder's own position would give regional
+variation while staying seam-exact, and would be the honest next step.
+
 ## Status legend
 
 - ✅ **Done** — implemented and (per project convention) covered by tests.

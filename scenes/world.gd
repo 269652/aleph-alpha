@@ -2317,10 +2317,13 @@ func _build_hover_tooltip() -> void:
 ## The tooltip shows the entity's name and, for anything with an action
 ## (pick up, chop, mine, smash, kick...), that action's verb and its live
 ## keybinding -- ALL of them, if more than one applies (e.g. a pebble reads
-## both "Pick Up (E)" and "Kick (K)"). Grass is the one exception: it has no
-## per-tuft Node2D to join HoverTargetFinder's group (see
-## EarthChunkManager._sync_grass_sprites), so it is checked separately, only
-## once nothing else claimed the cursor.
+## both "Pick Up (E)" and "Kick (K)"). Ground decoration is the exception:
+## grass and flowers have no per-plant Node2D to join HoverTargetFinder's
+## group (see EarthChunkManager._sync_grass_sprites/_sync_flower_sprites --
+## being a bare Sprite2D per cell is why a meadow costs what it does), so each
+## is asked for by position separately, only once nothing else claimed the
+## cursor. Flowers go first of the two: a bloom stands IN grass, so whichever
+## is asked second could never answer.
 func _update_hover_tooltip() -> void:
 	# A tooltip about whatever is behind an open window is noise -- and worse,
 	# it draws ON TOP of that window (see world_hint_visible_for). Skipping
@@ -2376,6 +2379,14 @@ func _update_hover_tooltip() -> void:
 	var found_name: String = info.get("name", "")
 	var found_actions: Array = info.get("actions", [])
 	var found_detail: String = info.get("detail", "")
+	# Flowers, like grass, have no per-plant Node2D to join the group above --
+	# they are ground decoration, one bare Sprite2D per cell (see
+	# EarthChunkManager._sync_flower_sprites), which is exactly why a meadow
+	# is affordable at all. So they are asked for by position once nothing in
+	# the group claimed the cursor. Reported live: flowers "still don't
+	# [show] hover tooltips".
+	if found_name == "":
+		found_name = _chunk_manager.flower_name_at(mouse_world, scan_radius)
 	if found_name == "":
 		var grass_growth := _chunk_manager.tall_grass_growth_at(mouse_world)
 		if grass_growth >= 0.0:

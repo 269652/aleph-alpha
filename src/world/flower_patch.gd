@@ -429,3 +429,41 @@ func advance(delta: float, growth_modifier: float) -> void:
 		var growth_step := delta / SECONDS_TO_MATURE * growth_modifier
 		for cell in _growth.keys():
 			_growth[cell] = minf(1.0, float(_growth[cell]) + growth_step)
+
+
+## What to call the plant in this cell in a hover tooltip, or "" for nothing
+## worth naming (see EarthChunkManager.flower_name_at / World._update_hover_
+## tooltip).
+##
+## Gated on the season for the same reason the RENDERER is (see
+## blooming_cells): a planted-but-not-blooming flower is not drawn, so naming
+## one would have the tooltip claim a rose stands on what the player can see
+## is bare grass -- exactly the sim-and-picture disagreement
+## concept/flora.md's "what is visible must be what is real" forbids, only
+## with the lie on the other foot.
+##
+## A seedling says so, the same way WildCropMarker names its own growth
+## stages: growth is otherwise invisible beyond the sprite being small.
+func label_at(cell: Vector2i, season: String) -> String:
+	if not _flowers.has(cell):
+		return ""
+	var species: String = _flowers[cell]
+	if not FlowerSpecies.is_in_bloom(species, season):
+		return ""
+	var species_name := FlowerSpecies.display_name(species)
+	if growth_at(cell) < 1.0:
+		return "%s Seedling" % species_name
+	return species_name
+
+
+## The wind this patch is currently shedding on (see set_wind). Read back so a
+## test can prove the live weather actually REACHES the meadow -- set_wind
+## spent its whole life fully built, fully tested and called by nothing but
+## its own test file, which meant every meadow in the running game shed in a
+## permanent dead calm.
+func wind_direction() -> Vector2:
+	return _wind_direction
+
+
+func wind_strength() -> float:
+	return _wind_strength

@@ -984,6 +984,42 @@ Two consequences worth naming:
   across 592 flowers actually reached. Peer-claim demotion alone closed the
   gap; `PollinatorForaging.NECTAR_REGEN_PER_SECOND` needed no change (see
   its own doc comment for the same numbers).
+- 🚧 **That economy moved when the meadow got sparser, and is watched rather
+  than tuned away.** Re-measured after `MeadowSpread` (see
+  [How far apart flowers stand](#how-far-apart-flowers-stand-escape-from-the-parent)):
+  640 blooming flowers became 200 and the ratio went 0.86x → **1.56x
+  over-subscribed**. Coverage did NOT collapse — 184 of 200 flowers visited,
+  92%, the same share as the old 592 of 640 — and the 150-pollinator
+  population there is a ceiling, while live spawning scales with the peak
+  scent a chunk's blooms superpose to, so a sparser meadow spawns fewer
+  pollinators into itself. Deliberately left above 1.0: raising nectar regen
+  to hide a change in how much meadow the world has would be tuning the wrong
+  constant. The thing to watch in live play.
+- ✅ **Flowers answer the hover tooltip** — `EarthChunkManager.flower_name_at`,
+  a positional query `World._update_hover_tooltip` falls through to, exactly
+  as tall grass is already handled. Flowers deliberately do NOT join
+  `HoverTargetFinder.GROUP_NAME`: they are ground decoration, one bare
+  `Sprite2D` per cell with no script and no group, which is what makes a
+  meadow affordable, and that group is scanned every frame. Measured against
+  the blossom rather than the cell (the sprite is foot-anchored and drawn
+  upward, so pointing at a bloom means pointing above its plant), reusing the
+  landing point a pollinator settles on, and only what is in bloom answers —
+  a tooltip naming a rose over what looks like bare grass would be the same
+  lie in reverse.
+- ✅ **The baked meadow is spaced and windswept rather than a uniform speckle**
+  — `MeadowSpread` + `FlowerEstablishment`, measured at 11.4 plants per 32x32
+  chunk (was ~36) with a mean nearest-neighbour gap of 4.39 tiles (adjacency
+  was previously free).
+- ⬜ **One prevailing wind for the whole world.** The baked meadow reads
+  `WeatherModel.prevailing_wind_direction` at a single fixed region seed
+  (`EarthChunkManager.PREVAILING_WIND_REGION_SEED`) rather than per region.
+  Deliberate — two chunks using different winds for the same founder is
+  exactly the seam disagreement `MeadowSpread` is built to avoid, and a real
+  prevailing wind is consistent over far more ground than this world covers —
+  but the better version is a smoothly varying wind FIELD sampled at each
+  founder's own world position, which would give regional variation while
+  staying exactly seam-free. The DAY's wind is already per-region, so live
+  shedding varies even though the baked meadow does not.
 
 
 ## How a pollinator flies

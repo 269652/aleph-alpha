@@ -562,3 +562,48 @@ func test_rain_never_roots_seed_on_top_of_a_standing_plant():
 				Vector2(cells[i] - cells[j]).length(), FlowerEstablishment.MIN_SPACING_TILES,
 				"rain rooted %s on top of %s" % [cells[i], cells[j]]
 			)
+
+
+# -- naming what is under the cursor -----------------------------------------
+#
+# Reported live: flowers "still don't [show] hover tooltips". The label has to
+# match what is actually DRAWN, or the tooltip becomes exactly the kind of lie
+# concept/flora.md's "what is visible must be what is real" forbids -- naming a
+# rose over what looks to the player like bare grass.
+
+func test_a_blooming_flower_names_itself():
+	var patch := FlowerPatch.new(1234, 32, 32, _all_grassland(32, 32))
+	var named := 0
+	for cell in patch.get_flower_cells():
+		var species := patch.species_at(cell)
+		for season in SEASONS:
+			var label := patch.label_at(cell, season)
+			if FlowerSpecies.is_in_bloom(species, season):
+				assert_ne(label, "", "a blooming %s named nothing" % species)
+				named += 1
+			else:
+				assert_eq(
+					label, "",
+					"a %s out of bloom in %s named itself anyway" % [species, season]
+				)
+	assert_gt(named, 0, "precondition: something was in bloom in some season")
+
+
+func test_bare_ground_names_nothing():
+	var patch := FlowerPatch.new(1234, 32, 32, _all_grassland(32, 32))
+	assert_eq(patch.label_at(Vector2i(999, 999), "summer"), "")
+
+
+## A seedling reads as a seedling. The growth mechanic is otherwise invisible
+## beyond the sprite being small -- the same thing WildCropMarker does with its
+## own growth stages.
+func test_a_seedling_says_it_is_a_seedling():
+	var patch := FlowerPatch.new(1234, 32, 32, _all_grassland(32, 32))
+	var clear := _far_from_every_flower(patch, 32, 32)
+	assert_ne(clear, Vector2i(-1, -1), "precondition: open ground to plant on")
+	assert_true(patch.plant(clear, "rose"))
+	var young := patch.label_at(clear, "summer")
+	patch.advance(FlowerPatch.SECONDS_TO_MATURE * 2.0, 1.0)
+	var grown := patch.label_at(clear, "summer")
+	assert_ne(young, grown, "a seedling and a full bloom read identically")
+	assert_true(young.contains(grown), "a seedling should still say what it is: '%s'" % young)
