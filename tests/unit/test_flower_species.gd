@@ -74,3 +74,34 @@ func test_variety_does_not_change_what_the_species_is():
 ## same fail-safe the rest of the lookups use.
 func test_an_unknown_species_still_has_a_colour():
 	assert_gt(FlowerSpecies.tints_for("nonesuch").size(), 0)
+
+
+# -- what to call one --------------------------------------------------------
+#
+# Reported live: flowers "still don't [show] hover tooltips". A tooltip needs a
+# name, and the roster is where a species' name belongs -- alongside its
+# colour, its scent and its stature.
+
+func test_every_species_has_a_name_fit_to_show_a_player():
+	for id in FlowerSpecies.IDS:
+		var name := FlowerSpecies.display_name(id)
+		assert_ne(name, "", "%s has no name" % id)
+		assert_eq(name, name.strip_edges(), "%s's name has loose whitespace" % id)
+		assert_eq(
+			name.substr(0, 1), name.substr(0, 1).to_upper(),
+			"%s reads as '%s' -- a tooltip is prose, not an id" % [id, name]
+		)
+
+
+func test_no_two_species_share_a_name():
+	var seen := {}
+	for id in FlowerSpecies.IDS:
+		var name := FlowerSpecies.display_name(id)
+		assert_false(seen.has(name), "two species both read as '%s'" % name)
+		seen[name] = true
+
+
+## Same fail-safe shape as every other lookup here: an odd id gives a plain
+## answer rather than an empty tooltip or a crash.
+func test_an_unknown_species_still_has_something_to_call_it():
+	assert_ne(FlowerSpecies.display_name("not_a_species"), "")

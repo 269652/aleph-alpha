@@ -69,9 +69,11 @@ const SPREAD_INTERVAL := 30.0
 const SPREAD_PER_TICK := 2
 
 ## How far a shed seed can land from the mature patch that dropped it, in
-## cells (see docs/concept/long_grass.md's "Reproduction" section). Mirrors
-## FlowerPatch.SEED_FALL_RADIUS: seed falls close by default, and carrying it
-## further than this is what an animal is for.
+## cells (see docs/concept/long_grass.md's "Reproduction" section): seed falls
+## close by default, and carrying it further than this is what an animal is
+## for. Deliberately NOT what FlowerPatch does -- flower seed rides the wind
+## (WindDispersal) because it is the lightest thing in the world, while grass
+## seed is heavy and drops where it is dropped.
 const SEED_FALL_RADIUS := 2
 
 ## Hard cap on ground seed per chunk, the same bounding rationale as

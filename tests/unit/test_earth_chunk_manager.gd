@@ -20,6 +20,8 @@ const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const TallGrass = preload("res://src/world/tall_grass.gd")
+const FlowerEstablishment = preload("res://src/world/flower_establishment.gd")
+const MeadowSpread = preload("res://src/world/meadow_spread.gd")
 const SeedCaching = preload("res://src/gameplay/seed_caching.gd")
 const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
 const SquirrelNutCaching = preload("res://src/gameplay/squirrel_nut_caching.gd")
@@ -9865,3 +9867,162 @@ func test_an_unloaded_settlement_really_declines_by_eating_through_its_stores():
 		1,
 		"leaving a real ruin behind it, offscreen, with no player anywhere near"
 	)
+
+
+# -- the meadow a chunk bakes, and the wind that shaped it -------------------
+#
+# Reported live: flowers "spread or grow way too dense", seed "should be
+# carried a bit further by the wind and birds so it leaves more space between
+# individual flowers", and the baked initial world state "should also respect
+# this and simulate spread based on wind strength and direction". These are
+# the end-to-end checks that the pure modules (MeadowSpread,
+# FlowerEstablishment) are actually WIRED -- the whole point being that
+# FlowerPatch.set_wind had been fully built, fully tested and never once
+# called by the running game, so its meadows shed in a permanent dead calm.
+
+func _meadow_cells(chunk_coord: Vector2i) -> Array:
+	var patch = manager._flower_patches.get(chunk_coord)
+	return [] if patch == null else patch.get_flower_cells()
+
+
+func test_a_loaded_meadow_is_spaced_out_rather_than_carpeted():
+	var chunk_coord := _berlin_chunk()
+	manager._load_chunk(chunk_coord)
+	var cells := _meadow_cells(chunk_coord)
+	assert_gt(cells.size(), 0, "precondition: Berlin's grassland grew a meadow")
+	for i in cells.size():
+		for j in range(i + 1, cells.size()):
+			assert_gte(
+				Vector2(cells[i] - cells[j]).length(), FlowerEstablishment.MIN_SPACING_TILES,
+				"a real loaded chunk put %s and %s on top of each other" % [cells[i], cells[j]]
+			)
+
+
+## The chunk's world origin has to actually reach MeadowSpread, or every chunk
+## would grow the meadow that belongs at the world origin and the map would be
+## one meadow stamped over and over (which two chunks with DIFFERENT biome
+## masks would still hide -- hence comparing against the origin-zero meadow
+## for this chunk's own biome, rather than against a neighbour).
+func test_a_chunks_meadow_is_grown_at_its_own_place_in_the_world():
+	var chunk_coord := _berlin_chunk()
+	manager._load_chunk(chunk_coord)
+	var chunk := manager.generator.generate_chunk(chunk_coord, EarthChunkManager.CHUNK_SIZE)
+	var at_the_origin := MeadowSpread.colonise(
+		FlowerPatch.MEADOW_WORLD_SEED,
+		Vector2i.ZERO,
+		chunk.width,
+		chunk.height,
+		chunk.biome,
+		Vector2.RIGHT,
+		0.0,
+		FlowerPatch.MAX_FLOWERS
+	)
+	assert_ne(
+		_meadow_cells(chunk_coord), at_the_origin.keys(),
+		"this chunk grew the meadow that belongs at world (0, 0) -- its origin never reached MeadowSpread"
+	)
+
+
+## Founders live in world space so a meadow crosses a chunk line. The visible
+## consequence, and the thing that would give the seams away: two flowers
+## either side of a boundary must be spaced against each other too.
+func test_neighbouring_chunks_do_not_crowd_flowers_across_their_seam():
+	var here := _berlin_chunk()
+	var there := here + Vector2i(1, 0)
+	manager._load_chunk(here)
+	manager._load_chunk(there)
+	var left: Array = []
+	for cell in _meadow_cells(here):
+		left.append(cell + here * EarthChunkManager.CHUNK_SIZE)
+	assert_gt(left.size(), 0, "precondition: the western chunk grew a meadow")
+	for cell in _meadow_cells(there):
+		var world_cell: Vector2i = cell + there * EarthChunkManager.CHUNK_SIZE
+		for other in left:
+			assert_gte(
+				Vector2(world_cell - other).length(), FlowerEstablishment.MIN_SPACING_TILES,
+				"%s and %s crowd each other across the chunk seam" % [world_cell, other]
+			)
+
+
+## The bug this exists to prevent recurring: FlowerPatch.set_wind existed,
+## worked, and was called by nothing but its own test file, so every meadow in
+## the running game shed its seed in a permanent dead calm and the downwind
+## drift the model computes was never applied at all.
+func test_the_live_weather_reaches_the_meadow_that_sheds_seed():
+	var chunk_coord := _berlin_chunk()
+	manager._load_chunk(chunk_coord)
+	var patch = manager._flower_patches[chunk_coord]
+	manager.step_flowers(0.1)
+	assert_gt(
+		patch.wind_strength(), 0.0,
+		"the meadow is still shedding in a dead calm -- set_wind has no live caller"
+	)
+	assert_almost_eq(patch.wind_direction().length(), 1.0, 0.001)
+
+
+# -- naming a flower under the cursor ----------------------------------------
+
+## Reported live: flowers "still don't [show] hover tooltips". Every other
+## hoverable entity is a Node2D that joins HoverTargetFinder's group, but
+## flowers are ground decoration -- a bare Sprite2D per cell, no script and no
+## group, precisely so a meadow costs one texture and not forty nodes. So they
+## are answered the way tall grass already is: a cheap query the World's hover
+## scan falls through to (see World._update_hover_tooltip).
+
+func test_a_flower_under_the_cursor_can_be_named():
+	var chunk_coord := _berlin_chunk()
+	manager._load_chunk(chunk_coord)
+	var cells := _meadow_cells(chunk_coord)
+	assert_gt(cells.size(), 0, "precondition: there is a meadow to point at")
+	var named := 0
+	for cell in cells:
+		var world_cell: Vector2i = cell + chunk_coord * EarthChunkManager.CHUNK_SIZE
+		var pixel := Vector2(
+			(world_cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
+			(world_cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+		)
+		if manager.flower_name_at(pixel) != "":
+			named += 1
+	assert_gt(named, 0, "not one flower in a whole meadow could be named")
+
+
+## And bare ground names nothing -- a tooltip over empty grass would be the
+## world claiming something is there that is not.
+##
+## "Bare" means clear of every bloom's DRAWN extent, not merely a cell with no
+## stem in it: a bloom is drawn above its own cell and answers within the
+## hover radius of where it is drawn, so the cell next door to a flower is
+## legitimately part of that flower.
+func test_bare_ground_names_no_flower():
+	var chunk_coord := _berlin_chunk()
+	manager._load_chunk(chunk_coord)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE
+	var flowers := _meadow_cells(chunk_coord)
+	assert_gt(flowers.size(), 0, "precondition: a meadow to stand clear of")
+	var checked := 0
+	for y in 32:
+		for x in 32:
+			var cell := Vector2i(x, y)
+			var clear := true
+			for flower in flowers:
+				if Vector2(cell - flower).length() < 6.0:
+					clear = false
+					break
+			if not clear:
+				continue
+			var pixel := Vector2(
+				(origin.x + x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(origin.y + y + 0.5) * TerrainRenderer.TILE_SIZE
+			)
+			assert_eq(
+				manager.flower_name_at(pixel), "",
+				"open ground at %d,%d named a flower" % [x, y]
+			)
+			checked += 1
+			if checked >= 20:
+				return
+	assert_gt(checked, 0, "the meadow left no open ground to check")
+
+
+func test_unloaded_ground_names_no_flower():
+	assert_eq(manager.flower_name_at(Vector2(999999.0, 999999.0)), "")

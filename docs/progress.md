@@ -2198,6 +2198,133 @@ All three rules and their known remaining gaps are specified in [docs/concept/hu
 
 
 
+### Flowers: too dense, no tooltip, and a wind that never blew
+
+Three things reported together: flowers *"still don't [show] hover tooltips"*,
+they *"spread or grow way too dense"*, *"the seeds should be carried a bit
+further by the wind and birds so it leaves more space between individual
+flowers"*, and *"the baked in initial world state should also respect this and
+simulate spread based on wind strength and direction"*.
+
+✅ **The density was not a tuning number, it was a missing mechanism.** The
+obvious fix — flatten `WindDispersal`'s heavy tail so seed spreads evenly —
+would have swapped a true mechanism for a cosmetic one; real wind dispersal
+genuinely is heavy tailed, and `concept/seed_dispersal.md` is right to insist
+on it. What was missing is that **where seed lands and where a plant stands
+are two different distributions**. Seed rain is densest directly under the
+parent and survival there is close to nil — competition with an established
+root system, that plant's own pathogen load, and the seed predators already
+working it. Only seed that escapes the parent becomes a plant (Janzen–Connell).
+`FlowerEstablishment` is that second distribution and is now the only thing in
+the flower code that decides how far apart two plants may stand
+(`MIN_SPACING_TILES`, bounded on both sides by test rather than by eye: wider
+than a diagonal so no two flowers can touch, under 5 tiles so a meadow stays a
+meadow). It runs at **every** point a flower comes into being — the baked
+meadow, `FlowerPatch.plant` (animal-dropped seed) and `FlowerPatch.root_seeds`
+(rain) — because a gate some paths could route around would silently refill
+exactly the gaps it opened.
+
+✅ **The baked meadow is now what the wind already did** (`MeadowSpread`). It
+was an independent coin flip per grassland cell (`SEED_CHANCE`, 3.5%): a
+uniform speckle that made two neighbouring cells both flowering as likely as
+any other pair, so adjacent pairs and triples were constant. It also knew
+nothing about the wind, so a world whose entire dispersal model is "light seed
+goes downwind" nevertheless *started* isotropic. It is now the same kernel the
+live world sheds with, run from sparse **world-space** founders under the
+region's prevailing wind for `GENERATIONS` rounds, through the establishment
+gate. **Measured over 40 seeds on full grassland: 11.4 plants per 32x32 chunk
+(was ~36, and regularly at its own 40 cap), mean nearest-neighbour gap 4.39
+tiles where adjacency had been free.**
+
+Founders live in world tiles and lineages shed *unconditionally* (a grain sheds
+whether or not it established), which is what bounds
+`MeadowSpread.INFLUENCE_MARGIN_TILES` exactly: a lineage depends only on its
+founder and the wind, on nothing any other founder did. Paired with
+`FlowerEstablishment.survivors` being **order-independent** — within a
+neighbourhood the seed with the most vigour takes, and which that is does not
+depend on who asked or in what order — two neighbouring chunks compute the
+identical answer for ground they share. Pinned by a cross-seam spacing test in
+the pure module and again end-to-end against two real loaded chunks.
+
+✅ **`WindDispersal`'s calm scatter was weight-BLIND**, and that turned out to
+be the whole reason a lineage collapsed onto its parent. The downwind term
+already scaled with lightness; the still-air term did not, so a dandelion seed
+and an acorn fell into the same little circle. **Measured: 0 of 400 flower
+seeds cleared the establishment spacing on a still day** — so a founder's
+entire lineage piled onto one cell and exactly one plant grew there. A
+prevailing wind is a breeze rather than a gale, so that term is most of what
+decides real spacing. Scatter now scales with lightness
+(`HEAVY_SEED_SCATTER_FRACTION`), calibrated so the heaviest class keeps
+*exactly* the crown-width drop it always had (0.3 x 4.0 = the old 1.2 tiles,
+pinned by test — making the plume drift further must not drag the acorn along).
+`MAX_DRIFT_TILES` 14 → 20 so the wind stays the dominant term rather than the
+isotropic scatter drowning the lean out.
+
+✅ **`FlowerPatch.set_wind` had no live caller at all** — fully built, fully
+tested, and called by nothing but its own test file, so every meadow in the
+running game shed seed at strength 0.0, a permanent dead calm, and the downwind
+drift the model computes had never once been applied outside a test. Exactly
+the dead-mechanism class as the `Pollination` wiring recorded above.
+`EarthChunkManager.step_flowers` now pushes the day's wind and
+`WeatherModel.dispersal_strength_for` onto every loaded patch, with a
+regression test that names the bug.
+
+✅ **A per-region prevailing wind** (`WeatherModel.prevailing_wind_direction` /
+`prevailing_wind_strength`), which worldgen needs because a baked meadow is the
+product of a climate, not of one particular Tuesday. It also fixed a real
+defect in the daily walk: it started from angle 0 for *every* region, so on day
+one the wind blew due east across the entire world and only regional divergence
+over later days hid it. `dispersal_strength_for` is a second reading of the
+same sky on a 0-calm-to-1-gale scale, because `wind_strength_for` is a shader
+*pace* multiplier whose baseline is 1.0 — feeding it to a dispersal kernel
+would have put every seed at or past a gale. The two are pinned to rank the
+weather identically so they cannot drift.
+
+✅ **Flowers answer the hover tooltip** (`EarthChunkManager.flower_name_at` →
+`World._update_hover_tooltip`). Every other hoverable thing is a Node2D in
+`HoverTargetFinder.GROUP_NAME`; flowers deliberately are not, because they are
+ground decoration — a bare `Sprite2D` per cell with no script and no group,
+which is why a loaded meadow costs a handful of shared textures rather than a
+thousand scripted nodes, and that group is scanned every frame. So they are
+answered the way tall grass already is: a positional query the hover scan falls
+through to. Measured against the **blossom**, not the cell — the sprite is
+foot-anchored and drawn upward, so a player pointing at the bloom they can see
+is pointing well above the plant's cell; it reuses the exact landing point a
+pollinator settles on, so the tooltip and the bees agree about where a flower
+is. Only what is **in bloom** answers, matching what is actually drawn. A
+seedling reads as one.
+
+🚧 **The nectar economy moved with the meadow, and is recorded rather than
+tuned away.** `test_nectar_economy.gd` re-measured: 640 blooming flowers became
+200, and the ratio went from **0.86x (slightly under-subscribed) to 1.56x
+over-subscribed**. Two things bound how much that matters, and both were
+checked rather than assumed: the 150-pollinator population in that scenario is
+a *ceiling*, and live spawning scales with the peak scent concentration a
+chunk's blooms superpose to (`EarthChunkManager._pollinator_multiplier_for`),
+so a sparser meadow spawns fewer pollinators into itself; and **coverage did
+not collapse — 184 of 200 flowers were visited, 92%, the same share as the old
+592 of 640**. Left above 1.0 knowingly: pushing it back under by raising nectar
+regen would be tuning a pollinator constant to hide a deliberate change in how
+much meadow the world has. If `NECTAR_REGEN_PER_SECOND` should move, it should
+move on its own evidence. **This is the one item here worth watching in live
+play** — if bees visibly starve, that is the number to revisit.
+
+⬜ **Seed that blows out of a chunk is still discarded.** `FlowerPatch.shed_seed`
+drops any landing outside its own bounds instead of handing it to the
+neighbouring patch, so live dispersal is truncated at every chunk line — the
+long tail, which is precisely the part that colonises new ground, is the part
+being thrown away. Not touched here (it needs the chunk manager to route seed
+between patches, not a change inside `FlowerPatch`), and it does not affect the
+baked meadow, which crosses seams correctly by construction.
+
+⬜ **The baked meadow uses one prevailing wind for the whole world**
+(`EarthChunkManager.PREVAILING_WIND_REGION_SEED`), not a per-region one. That
+is deliberate — two chunks using different winds for the same founder is
+exactly the seam disagreement the design avoids, and real prevailing winds are
+consistent over far more ground than this world covers — but a smoothly varying
+wind *field* sampled at each founder's own position would give regional
+variation while staying seam-exact, and would be the honest next step.
+
 ## Status legend
 
 - ✅ **Done** — implemented and (per project convention) covered by tests.
@@ -3386,7 +3513,7 @@ chunks away from the player). See the concept doc for the full spec.
   **Left alone, deliberately: the flee onset.** `ESCAPE_SPEED_MULTIPLIER` applies instantly — 16 → 40 px/s on one frame, measured, alongside a **151°** turn away from the player. The turn *is* the behaviour rather than an artefact (it is the whole flight-initiation-distance model), and the speed step is a fifth of a second of real acceleration compressed into 17 ms, against a simultaneous 151° turn nobody could see past. Easing it would need an acceleration constant this game has no grounding for.
   **Re-measured, unchanged.** The same 600-simulated-second acceptance run against a 30-bloom meadow with nectar regenerating as `FlowerPatch.advance` does: **30 distinct blooms of 30, 135 landings** (was 30/30, 134). That measurement is now printed by the test rather than only reported on failure, since every pass that touches how a flyer moves has to re-take it.
 - **Trap-lining, a whirl a butterfly can actually fly, and a flap-glide gait** (medium) — 🚧 Partial — reported: *"Butterflies still get stuck infront of a signle flower and the dance is overly dramatic and only a circle can you add more random bounces and flaps?"* Three separate things; the second and third are fixed outright, the first is **honestly partial** and the measurement is below.
-  **(1) The single-flower lock did NOT reproduce.** Measured before changing anything, by driving real `AmbientFlyerMarker`s through real `_process` frames against a stub world that drains and regenerates nectar exactly as `FlowerPatch.advance` does. At the density `FlowerPatch.SEED_CHANCE` actually generates, one butterfly over ten simulated minutes visited **24 / 20 / 29 distinct blooms** of the 29 / 22 / 32 in range (three meadow seeds), busiest bloom 3–4 landings, longest unbroken loiter within two tiles of any one bloom **6.8 / 7.4 / 11.5 s**. With 8 and with 20 flyers sharing one meadow and real `ForageClaims`, the **worst** flyer still visited 23–25 distinct blooms and **0 of 20** were stuck on one. Sparse ring layouts (1/2/3/5 blooms at 1–8 tiles, four seeds each, ten simulated minutes) never stalled either. The lead's traced mechanism — `_origin` snapping to the last bloom making it permanently nearest — was checked directly and does not close: `choose_target` **vetoes** a bloom inside visit memory, so the flyer relocates and leaves. A coarse-step hypothesis (`SimulationLod`'s 0.5 s step is 8 px of travel against a 4 px `LANDING_DISTANCE`, which could in principle orbit a flower forever) was also measured and rejected — landings per 600 s were 54/54/54/52/52/54 across dt 0.05→0.50, i.e. flat. **What the measurement did show** is a revisit interval pinned at *exactly* `VISIT_MEMORY_SECONDS` in every sparse layout (busiest bloom = 6 landings per 600 s, in every single one), which is the trap-line rule being implicit rather than expressed. So two real rules were added, both **tie-breaks strictly inside the existing distance band** so neither can reintroduce "flies past unchecked flowers": `PollinatorForaging.moved_on_from` drops whichever tied candidate lies closest to the bloom just worked (a trap-liner does not turn back; no distance constant of its own — "closest to the one just worked" reuses the band's own ordering), and `patch_centre`/`recent_feeds` anchor the relocation leash on the **circuit** — the mean of the stops that have not yet refilled — instead of snapping `_origin` to the single last bloom, which collapsed a 24-tile search ball onto one flower on every feed. The window is `NECTAR_REFILL_SECONDS`, itself derived from the regen rate rather than restated, and `VISIT_MEMORY_SECONDS > NECTAR_REFILL_SECONDS` is now pinned with the reason (if the two clocks agreed, a bloom would become legal and full on the same second). After: distinct blooms per flyer 24→25 (8 flyers) and 23→24 (20 flyers), landings 514→534 and 1249→1301. ⬜ **Still open and named**: the reported stall was not reproduced offline, so it is not proven fixed — it may need a live measurement in the running game, or it may live somewhere these sims do not model (the `flowers_near` 3×3-chunk window, the player-reaction path, or the flyer's own `home` tether rather than the forage rule). A two-flower world 28 tiles apart still leaves a flyer on one of them, which is a **search** problem (`FORAGE_SEARCH_TILES` 18 < the gap), not a trap-line one.
+  **(1) The single-flower lock did NOT reproduce.** Measured before changing anything, by driving real `AmbientFlyerMarker`s through real `_process` frames against a stub world that drains and regenerates nectar exactly as `FlowerPatch.advance` does. At the density `FlowerPatch.SEED_CHANCE` actually generated (that per-cell coin flip has since been replaced by `MeadowSpread`, roughly a third as dense -- this measurement predates it), one butterfly over ten simulated minutes visited **24 / 20 / 29 distinct blooms** of the 29 / 22 / 32 in range (three meadow seeds), busiest bloom 3–4 landings, longest unbroken loiter within two tiles of any one bloom **6.8 / 7.4 / 11.5 s**. With 8 and with 20 flyers sharing one meadow and real `ForageClaims`, the **worst** flyer still visited 23–25 distinct blooms and **0 of 20** were stuck on one. Sparse ring layouts (1/2/3/5 blooms at 1–8 tiles, four seeds each, ten simulated minutes) never stalled either. The lead's traced mechanism — `_origin` snapping to the last bloom making it permanently nearest — was checked directly and does not close: `choose_target` **vetoes** a bloom inside visit memory, so the flyer relocates and leaves. A coarse-step hypothesis (`SimulationLod`'s 0.5 s step is 8 px of travel against a 4 px `LANDING_DISTANCE`, which could in principle orbit a flower forever) was also measured and rejected — landings per 600 s were 54/54/54/52/52/54 across dt 0.05→0.50, i.e. flat. **What the measurement did show** is a revisit interval pinned at *exactly* `VISIT_MEMORY_SECONDS` in every sparse layout (busiest bloom = 6 landings per 600 s, in every single one), which is the trap-line rule being implicit rather than expressed. So two real rules were added, both **tie-breaks strictly inside the existing distance band** so neither can reintroduce "flies past unchecked flowers": `PollinatorForaging.moved_on_from` drops whichever tied candidate lies closest to the bloom just worked (a trap-liner does not turn back; no distance constant of its own — "closest to the one just worked" reuses the band's own ordering), and `patch_centre`/`recent_feeds` anchor the relocation leash on the **circuit** — the mean of the stops that have not yet refilled — instead of snapping `_origin` to the single last bloom, which collapsed a 24-tile search ball onto one flower on every feed. The window is `NECTAR_REFILL_SECONDS`, itself derived from the regen rate rather than restated, and `VISIT_MEMORY_SECONDS > NECTAR_REFILL_SECONDS` is now pinned with the reason (if the two clocks agreed, a bloom would become legal and full on the same second). After: distinct blooms per flyer 24→25 (8 flyers) and 23→24 (20 flyers), landings 514→534 and 1249→1301. ⬜ **Still open and named**: the reported stall was not reproduced offline, so it is not proven fixed — it may need a live measurement in the running game, or it may live somewhere these sims do not model (the `flowers_near` 3×3-chunk window, the player-reaction path, or the flyer's own `home` tether rather than the forage rule). A two-flower world 28 tiles apart still leaves a flyer on one of them, which is a **search** problem (`FORAGE_SEARCH_TILES` 18 < the gap), not a trap-line one.
   **(2) "Overly dramatic" was a physics error, in both dances.** The whirl's rate came from a monarch's 5 m/s **burst** applied to the whole orbit: at `SPIRAL_RADIUS_M` 0.35 that is `v²/r` = 71 m/s², **over seven g**. The turn limits this, not the wing, and the ceiling is one this codebase had already derived — `WingbeatBounce`'s "a wing cannot pull the body down through its stroke, so `e ≤ 1`" puts peak lift at twice weight, a load factor of two. New `SpiralFlight.MAX_LOAD_FACTOR` (pinned equal to `1 + WingbeatBounce.MAX_LIFT_SWING` by test, not restated) and `ORBIT_SPEED_MPS = sqrt(2g·r_tightest)`; `TURNS_PER_SECOND` **2.27 → 1.05**. `Courtship` had the same fault in reverse: 0.85 turns/s on a 9 px (≈70 cm) radius is 3.8 m/s, three quarters of an absolute burst, for what the module itself calls a slow wide orbit — now derived from a monarch's **cruise** (2 m/s), **0.85 → 0.45**. The whirl also **covers ground**: the 1.5 m ascent is decomposed at 45° into climb and ground track (`SpiralFlight.travel`), so the excursion and the territory budget `RISE_M` was already capped against are unchanged, and orbit + climb + track now fit inside one real burst instead of the old model spending the whole burst on the orbit and adding the climb on top.
   **(3) "Only a circle" is gone from both.** New `src/gameplay/flight_irregularity.gd` holds the irregularity **once** — the two-frequency, per-individual, never-repeating swing that was already in `PollinatorForaging.tumbled_heading`, which now reads its frequency back out of it rather than keeping a copy. Both orbits breathe across their **real observed band** (`SPIRAL_SEPARATION_MIN_M`/`MAX_M` 0.5–1.0 m; `RADIUS_SWING` is *derived* from that band, not chosen), per-pair and deterministic. `Courtship`'s fixed 0.7 ellipse is **replaced** rather than kept — an ellipse is still a closed figure traced identically every round, which is what "only a circle" meant — at exactly the magnitude the ellipse asserted. The radius is written `r₀/(1 + k·w)` so the angular rate is exactly `(v/r₀)(1 + k·w)` and its integral is closed-form: the swept angle is the true integral of a varying turn rate, never accumulated per frame (which would make the figure depend on frame rate and on `SimulationLod`'s step size — the class of bug this system has produced three times). Pair seeds now go through `Courtship.pair_seed` for both interactions, so a meadow's dances no longer share a figure. **One projection compromise, stated**: the ground track is drawn over the upper half-circle only, because this world draws height as screen-up and a track pointing down cancels the climb exactly — measured at 0.07 px of total shared translation over a whole whirl when it first did.
   **(4) The flaps and bounces are a GAIT now.** New `src/rendering/flap_glide.gd`. Butterflies flap-glide and passerines flap-bound; bees hum. Who alternates is read off the wingbeat frequency against the real **asynchronous flight-muscle** boundary (~100 Hz), so there is no roster — a species added to `WingbeatBounce.FLIGHT` gets the right answer for free. The glide share is **derived from level flight**: mean lift over a gait must equal weight, the wings supply none while gliding, and the most a wing can make is the same `1 + e ≤ 2` ceiling — so `(1−f)·2W = W`, f = ½. The in-bout rate swing is derived from quasi-steady aerodynamics (`L ∝ v²`, so a lift swing of `e` is a rate swing of `√(1+e) − 1`). Both the frame index and the bob are driven off **one wing clock** that pauses through a glide, so they can never disagree; through a glide the bob stops and the body **sinks**, through the next bout it climbs back, and the two cancel exactly over a gait (a sawtooth with no net drift — level flight — with the sink needing no size of its own because the bout gains what the glide gives back). `WingbeatBounce` is **untouched** and all 12 of its tests still pass: it still owns how big the bob is, `FlapGlide` composes on top and owns only when the wings are driving. ⬜ The bout length (**two** visible beats) is the one figure here not derived — pinned by property tests (at least two visible beats of flapping; the gait repeats inside a couple of seconds) rather than by its digit. **`position` is still never touched** — `test_the_wingbeat_bounce_never_touches_the_flyers_position` is green, and a new `test_nothing_in_this_composition_can_stall_a_butterfly` drives flutter + trap-line + gait together for five simulated minutes and pins that only drinking may hold a flyer still.
@@ -6886,8 +7013,11 @@ Flowering plants, scent, and pollinators (see
   code, driving 150 pollinators (`AmbientFlyerRenderer.
   MAX_BUTTERFLIES_PER_CHUNK` + `MAX_BEES_PER_CHUNK`, 25 chunks — a full
   `EarthChunkManager.LOAD_RADIUS` neighbourhood) over a real, worst-case-
-  density grassland meadow (616 flowers seeded via `FlowerPatch.
-  SEED_CHANCE`/`MAX_FLOWERS`, in bloom for summer) — run 300 simulated
+  density grassland meadow (616 flowers seeded via the then-current
+  `FlowerPatch.SEED_CHANCE`/`MAX_FLOWERS` — that per-cell coin flip has since
+  been replaced by `MeadowSpread`, and this measurement re-taken with it; see
+  "Flowers: too dense, no tooltip, and a wind that never blew" above — in
+  bloom for summer) — run 300 simulated
   seconds to steady state, then measured for a further 300. Result: **0.86x
   — demand 8.44 drinks/s against supply 9.87 nectar/s across 592 flowers
   actually reached (96% of the seeded population)**, i.e. very slightly

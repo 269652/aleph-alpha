@@ -803,3 +803,22 @@ func _paint_puff_head(image: Image, cx: int, cy: int, petal: Color, seed_value: 
 			petal.lightened(HIGHLIGHT * 0.7)
 		)
 	_fill_disc(image, cx, cy - 2, 1.5, CENTRE_COLOR.darkened(0.15))
+
+
+## The tallest a blossom can ever sit above its own cell, in world units --
+## the ceiling across every species, every size roll, fully grown.
+##
+## Exists so a lookup that has to search UPWARD from a point on screen to find
+## the plant a bloom belongs to (EarthChunkManager.flower_name_at, for the
+## hover tooltip) can bound that search from the art's own numbers rather than
+## from a guessed row count. Pinned against real blossom_height_world values
+## by test.
+static func max_blossom_height_world() -> float:
+	var tallest_species := 0.0
+	for species_id in FlowerSpecies.IDS:
+		tallest_species = maxf(tallest_species, world_scale_for(species_id))
+	# stem_height_px's own ceiling (SIZE.y / 2 + SIZE.y / 4), at the largest
+	# size roll size_variance_for can produce.
+	return (
+		float(SIZE.y) * 0.75 * tallest_species * (1.0 + PLANT_SIZE_VARIANCE)
+	)
