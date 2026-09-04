@@ -679,6 +679,77 @@ func test_step_water_disturbances_ages_the_installed_water_materials_ripple():
 	water_layer.free()
 
 
+
+## ONE buffer, TWO surfaces. The ocean overlay stopped painting river tiles
+## (see _paint_water_overlay: "the flow overlay is now the river's entire
+## water surface"), so a fish's wake was being recorded and aged into a
+## layer that river tiles no longer have -- reported as "fishes don't
+## produce interferencing ripples anymore in the new unified river water".
+## The same three uniforms must reach the river surface too.
+##
+## Anchored at the world origin on purpose: _disturbance_center_tile starts
+## at Vector2i.ZERO, so this clears DISTURBANCE_RADIUS_TILES without paying
+## for an update() the assertion does not need.
+func test_a_recorded_disturbance_reaches_the_river_surface_too():
+	var river_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(river_layer)
+
+	var disturbance_pos := Vector2(6.0, 9.0)
+	manager.record_water_disturbance(disturbance_pos)
+
+	var material := river_layer.material as ShaderMaterial
+	assert_eq(material.get_shader_parameter("disturbance_count"), 1)
+	var positions: PackedVector2Array = material.get_shader_parameter("disturbance_pos")
+	assert_eq(positions[0], disturbance_pos)
+	river_layer.free()
+
+
+## And it must AGE there as well, or the river's ring sits frozen at radius
+## zero while the ocean's expands -- the same reason step_water_disturbances
+## exists for the water layer at all.
+func test_step_water_disturbances_ages_the_river_surfaces_ripple_too():
+	var river_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(river_layer)
+
+	manager.record_water_disturbance(Vector2(1.0, 1.0))
+	manager.step_water_disturbances(0.5)
+
+	var material := river_layer.material as ShaderMaterial
+	var ages: PackedFloat32Array = material.get_shader_parameter("disturbance_age")
+	assert_almost_eq(ages[0], 0.5, 0.001)
+	river_layer.free()
+
+
+## Both surfaces read the SAME buffer -- one lifetime, one cull, one cap.
+## A second buffer is a second thing to keep in step, and the two would
+## drift apart the moment either side was re-tuned.
+func test_both_surfaces_show_the_very_same_disturbance_buffer():
+	var water_layer := TileMapLayer.new()
+	var river_layer := TileMapLayer.new()
+	manager.set_water_layer(water_layer)
+	manager.set_river_flow_layer(river_layer)
+
+	manager.record_water_disturbance(Vector2(3.0, 4.0))
+	manager.record_water_disturbance(Vector2(5.0, 6.0))
+	manager.step_water_disturbances(0.25)
+
+	var water_material := water_layer.material as ShaderMaterial
+	var river_material := river_layer.material as ShaderMaterial
+	assert_eq(
+		river_material.get_shader_parameter("disturbance_count"),
+		water_material.get_shader_parameter("disturbance_count")
+	)
+	assert_eq(
+		river_material.get_shader_parameter("disturbance_pos"),
+		water_material.get_shader_parameter("disturbance_pos")
+	)
+	assert_eq(
+		river_material.get_shader_parameter("disturbance_age"),
+		water_material.get_shader_parameter("disturbance_age")
+	)
+	water_layer.free()
+	river_layer.free()
+
 # -- fish: visible, catchable entities on ocean cells (see FishRenderer) -----
 
 const FishMarker = preload("res://src/rendering/fish_marker.gd")

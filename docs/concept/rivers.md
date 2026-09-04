@@ -1251,6 +1251,81 @@ accident of the asking tile's bearing -- and adjacency doubles as the
 watertightness rule: a one-tile hole breaks the chain. Pinned from every
 tile of the wall by test.
 
+
+## Movement ripples in the river (2026-09-04)
+
+Reported: *"Fishes don't produce interferencing ripples anymore in the new
+unified river water ... players and animals neither ... the old ripples
+looked nice so we want them back adapted to new water shader."*
+
+Not a regression in the ripple machinery — that is entirely intact. Fish
+(`FishMarker._step_water_ripple`), the player (`Player._step_water_ripples`)
+and creatures (`CreatureMarker._step_water_ripple`) all still call
+`EarthChunkManager.record_water_disturbance` on the same schedules, and
+`WaterShader` still ages and draws them. The cause is a rendering boundary:
+`_paint_water_overlay` is **ocean only** ("rivers used to be painted here
+too... the flow overlay is now the river's entire water surface"), and
+`RiverFlowShader` is **opaque** and had no disturbance term. So on a river
+there was no surface capable of showing a ripple at all — the wakes were
+being recorded and aged into a layer that river tiles no longer have.
+
+The fix is not to re-paint the ocean overlay under the river (that is
+exactly the square-tiles-under-a-smooth-bank-curve bug it was removed to
+fix). The river surface draws its own ripples, from the same buffer.
+
+**One buffer, two surfaces.** `WaterShader` keeps ownership of the
+disturbance ring buffer (`add_disturbance`/`advance_disturbances`,
+`MAX_DISTURBANCES` 16, `DISTURBANCE_LIFETIME`); it now exposes the padded
+arrays it pushes, and `EarthChunkManager` fans the same three uniforms out
+to the river-flow material as well. There is no second buffer to keep in
+sync, no second lifetime, and the distance cull
+(`DISTURBANCE_RADIUS_TILES`) applies once, to both.
+
+**The same wave packet.** `RiverFlowShader.ripple_packet` is the identical
+signed expanding-packet math as `WaterShader`'s — several concentric crests
+and troughs behind an advancing front, fading with age and with the
+circumference it spreads its energy around. Signed is the whole point:
+overlapping ripples must genuinely interfere, constructively AND
+destructively, rather than only ever adding. Keeping the shape identical is
+what makes a fish's wake read the same in a river as in the sea; the tuning
+constants are shared by import rather than re-tuned
+(`RIPPLE_SPEED`/`LIFETIME`/`WAVELENGTH`/`PACKET_WIDTH`/`SPREAD_DECAY`).
+
+What is genuinely adapted, and why each part:
+
+- **The ring is carried downstream.** In still water a ripple is concentric
+  about a fixed point; in a current it is concentric about a point that
+  moves with the water. The centre is advected by
+  `flow_dir * DRIFT_PX_PER_MPS * speed_mps * age` — the same drift constant
+  and the same solved per-reach velocity the surface field already uses, so
+  a wake and the water it sits in travel together instead of the ring
+  standing still while the river slides out from under it. This is the one
+  thing ocean water cannot express and the river must.
+- **Drawn, not glowed.** This surface is illustrated water: a flat cel body
+  plus contour strokes. A bright ring composited on top would read as an
+  overlay sticker. So the packet enters the two fields that are already
+  there. It is added to the **shade** that the cel ramp quantises, so a
+  crest steps the fragment toward a lighter band and a trough toward a
+  darker one — the old shader's "crests brighten, troughs darken from the
+  same baseline", expressed as flat cel steps, which is exactly how 16-bit
+  water drew a ring. And it is added to the **stroke field** whose level
+  sets are the current lines, so the drawn lines genuinely bow into arcs
+  around the disturbance and interfere with the flow pattern instead of
+  being drawn over it.
+- **Sized so a ring actually crosses a cel step.** `RIPPLE_SHADE_GAIN` is
+  not eyeballed: it is pinned by test to move a crest at the packet's peak
+  by at least one full `CEL_LEVELS` step (otherwise the ring quantises away
+  to nothing and the whole term is invisible), and bounded above so a
+  ripple cannot jump the full depth ramp and flatten the channel's
+  cross-section. `RIPPLE_LINE_GAIN` is pinned the same way against
+  `LINE_COUNT` — a crest must bend the stroke field by a visible fraction
+  of one contour spacing, and never by so much that the ring closes the
+  lines into cells (the failure mode the `ACROSS_LINE_SCALE`/`LINE_WOBBLE`
+  ratio exists to prevent).
+
+The ripple deliberately does NOT displace `frag_across`, the way boulders
+and waders do. That field is the channel's geometry: pushing it moves the
+bank line and the dry eyot, and a passing fish must not narrow the river.
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
@@ -1312,6 +1387,10 @@ tile of the wall by test.
 - **The wader's wake** — ✅ Done — player AND creatures (8 slots, river
   filter memoised) displace the current with a round-core,
   downstream-trailing wake; never dries the channel.
+- **Movement ripples (fish, player, animals)** — 🚧 In progress — the
+  shared `WaterShader` disturbance buffer now feeds the river surface too;
+  the same signed wave packet, advected downstream with the current, drawn
+  into the cel shade and the stroke contours rather than composited on top.
 - **Rivers on the minimap** — ✅ Done — water-blue over any biome, memoised
   per tile so the polyline walk never hitches the rebuild.
 - **Real hydraulics: volume, pressure, current speed** — ✅ Done —
