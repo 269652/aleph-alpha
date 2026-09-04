@@ -161,3 +161,118 @@ func test_the_wind_direction_is_a_direction():
 	var model := WeatherModel.new()
 	for day in 40:
 		assert_almost_eq(model.wind_direction_for(day, 99).length(), 1.0, 0.001)
+
+
+# -- the prevailing wind -----------------------------------------------------
+#
+# The day's wind walks; the PREVAILING wind is the long-run one a region's
+# landscape was shaped by. Worldgen needs it: a baked meadow has to be what the
+# wind already did (see concept/flora.md#the-meadow-you-arrive-to-is-what-the-
+# wind-already-did), and "what the wind already did" is not one particular
+# day's weather.
+
+func test_the_prevailing_wind_is_a_direction():
+	var model := WeatherModel.new()
+	for region_seed in [0, 17, 4242, -99]:
+		assert_almost_eq(model.prevailing_wind_direction(region_seed).length(), 1.0, 0.001)
+
+
+func test_the_prevailing_wind_is_the_same_every_time_you_ask():
+	var model := WeatherModel.new()
+	assert_eq(
+		model.prevailing_wind_direction(1234), model.prevailing_wind_direction(1234)
+	)
+
+
+## Every region gets its own, or every meadow in the world leans the same way
+## -- which is the thing a prevailing wind is supposed to avoid being.
+func test_each_region_has_its_own_prevailing_wind():
+	var model := WeatherModel.new()
+	var directions := {}
+	for region_seed in 40:
+		directions[snappedf(model.prevailing_wind_direction(region_seed * 977).angle(), 0.5)] = true
+	assert_gt(directions.size(), 4, "the whole world shares one wind (%d directions)" % directions.size())
+
+
+## The day's wind is a walk AROUND the region's prevailing wind, not a walk
+## from an arbitrary shared zero. Pinned at day one, before the walk has had
+## anywhere to go.
+func test_the_days_wind_starts_from_the_regions_prevailing_wind():
+	var model := WeatherModel.new()
+	for region_seed in [7, 555, 90210]:
+		var swing: float = absf(
+			model.wind_direction_for(0, region_seed).angle_to(
+				model.prevailing_wind_direction(region_seed)
+			)
+		)
+		assert_lte(
+			swing, WeatherModel.WIND_TURN_PER_DAY + 0.001,
+			"day one blew further from the prevailing wind than a day's turn allows"
+		)
+
+
+## The bug that made this necessary: the walk used to start at angle 0 for
+## EVERY region, so on day one the wind blew east across the entire world.
+func test_regions_do_not_all_share_the_same_wind_on_day_one():
+	var model := WeatherModel.new()
+	var directions := {}
+	for region_seed in 40:
+		directions[snappedf(model.wind_direction_for(0, region_seed * 977).angle(), 0.5)] = true
+	assert_gt(directions.size(), 4, "day one blew the same way everywhere (%d directions)" % directions.size())
+
+
+## Some ground is windier than other ground, but nowhere is a permanent dead
+## calm (which would mean a meadow there could never lean anywhere) and
+## nowhere is a permanent gale.
+func test_a_regions_prevailing_wind_is_a_real_wind_everywhere():
+	var model := WeatherModel.new()
+	var strengths := {}
+	for region_seed in 40:
+		var strength: float = model.prevailing_wind_strength(region_seed * 977)
+		assert_gt(strength, 0.0, "a region with no wind at all")
+		assert_lte(strength, 1.0, "a region blowing harder than a gale")
+		strengths[snappedf(strength, 0.05)] = true
+	assert_gt(strengths.size(), 3, "every region is exactly as windy as every other")
+
+
+# -- how hard it blows, for a seed -------------------------------------------
+#
+# wind_strength_for is a SHADER pace multiplier (1.0 baseline, up to 1.8) --
+# WindDispersal wants 0 calm to 1 gale. Two readings of the same sky, kept
+# ordered together so they cannot drift into disagreeing about which day is
+# windier.
+
+func test_dispersal_strength_is_calm_to_gale():
+	var model := WeatherModel.new()
+	for state in WeatherModel.STATES:
+		var strength: float = model.dispersal_strength_for(state)
+		assert_gte(strength, 0.0, "%s blew backwards" % state)
+		assert_lte(strength, 1.0, "%s blew harder than a gale" % state)
+
+
+func test_dispersal_strength_ranks_the_sky_the_same_way_the_shader_does():
+	var model := WeatherModel.new()
+	for i in WeatherModel.STATES.size() - 1:
+		var calmer: String = WeatherModel.STATES[i]
+		var rougher: String = WeatherModel.STATES[i + 1]
+		assert_eq(
+			model.dispersal_strength_for(calmer) < model.dispersal_strength_for(rougher),
+			model.wind_strength_for(calmer) < model.wind_strength_for(rougher),
+			"the two readings disagree about whether %s is windier than %s" % [rougher, calmer]
+		)
+
+
+## A clear day is half of all weather (see CLEAR_THRESHOLD). If it disperses
+## nothing, then for half the world's time the downwind term is multiplied by
+## zero and every meadow spreads as a circle -- which is the isotropic
+## behaviour the whole wind model exists to replace.
+func test_even_a_clear_day_carries_seed_somewhere():
+	var model := WeatherModel.new()
+	assert_gt(model.dispersal_strength_for("clear"), 0.0)
+
+
+func test_an_unknown_sky_still_answers_with_a_real_wind():
+	var model := WeatherModel.new()
+	var fallback: float = model.dispersal_strength_for("not_a_sky")
+	assert_gte(fallback, 0.0)
+	assert_lte(fallback, 1.0)
