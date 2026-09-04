@@ -594,25 +594,28 @@ func test_the_warped_field_still_forms_lines():
 	)
 
 
-## Structural: the bend is NOT carried with the water. It used to be read at
-## fully bed-anchored coordinates; it now drifts downstream at a FRACTION of
-## the surface drift ("make the water move with the flow"), but it must
-## never take the advect phase and must always lag the surface -- that is
-## what makes the water deform as it streams THROUGH the eddies rather than
-## the whole picture sliding as one sheet. The warped across must still
-## feed both phase samples.
+## Structural: the bend is NOT advected with the water. It used to be read
+## at fully bed-anchored coordinates; it now migrates downstream at the
+## surface's visible speed ("the lines should move at the same speed"), but
+## as a steady TRANSLATION of the eddy field -- it must never take the
+## advect phase's stretch-and-reset. That is what keeps the water deforming
+## as it streams THROUGH the eddies rather than the whole picture sliding as
+## one sheet: each phase still stretches away from the steady translation
+## and resets, so the wobble keeps moving relative to the whirls even though
+## their mean speeds agree. The warped across must still feed both phase
+## samples.
 func test_the_bend_is_anchored_to_the_bed_not_carried_with_the_water():
 	assert_true(
 		RiverFlowShader.SHADER_CODE.contains("vec2 eddy_p = (p - flow_dir * bend_drift) * eddy_scale;"),
-		"the eddy field is sampled at a slowly drifted, never advected, coordinate"
+		"the eddy field is sampled at a steadily translated, never advected, coordinate"
 	)
 	assert_false(
 		RiverFlowShader.SHADER_CODE.contains("eddy_p = (q"),
 		"the eddies must not ride the advected surface coordinate"
 	)
-	assert_lt(
+	assert_lte(
 		RiverFlowShader.BEND_DRIFT_FRACTION, 1.0,
-		"the eddies must lag the surface, or the water slides as a rigid sheet"
+		"the eddies can move with the surface, never faster than it"
 	)
 	assert_true(
 		RiverFlowShader.SHADER_CODE.contains("vec2 q = p + flow_perp * bend;"),
@@ -1895,15 +1898,19 @@ func test_the_ring_is_carried_downstream_by_the_current():
 	var carried := RiverFlowShader.ripple_center(origin, downstream, 1.5, 1.0)
 	var travel := carried - origin
 	assert_gt(travel.dot(downstream), 0.0, "the ring must move DOWNSTREAM, not up")
-	assert_almost_eq(travel.length(), RiverFlowShader.DRIFT_PX_PER_MPS * 1.5, 0.0001)
+	assert_almost_eq(travel.length(), RiverFlowShader.surface_px_per_s(1.5) * 1.0, 0.0001)
 
 
 ## It travels with the surface the player can actually SEE moving -- the
-## same drift rate the flow pattern itself uses. A wake drifting at some
-## other rate reads as sliding across the water rather than sitting in it.
+## water's whole visible streaming speed (surface_px_per_s: the phase
+## drag's translation plus the linear drift), NOT the drift alone. A wake
+## carried at some other rate reads as sliding across the water rather
+## than sitting in it -- and carried at the drift alone it sat at a third
+## of the water's speed ("make the river ripples move downstream at water
+## speed").
 func test_the_ring_travels_at_the_surface_pattern_s_own_rate():
 	var carried := RiverFlowShader.ripple_center(Vector2.ZERO, Vector2(0.0, 1.0), 2.0, 3.0)
-	assert_almost_eq(carried.y, RiverFlowShader.DRIFT_PX_PER_MPS * 2.0 * 3.0, 0.0001)
+	assert_almost_eq(carried.y, RiverFlowShader.surface_px_per_s(2.0) * 3.0, 0.0001)
 
 
 ## Drawn, not glowed: the ring bends the field whose level sets ARE the
@@ -2738,12 +2745,12 @@ func test_the_bend_drifts_downstream_with_the_current():
 	assert_gt(moved, 0.0)
 	assert_almost_eq(
 		moved,
-		RiverFlowShader.drift_cells(1.0, 10.0) * RiverFlowShader.BEND_DRIFT_FRACTION,
+		RiverFlowShader.surface_cells(1.0, 10.0) * RiverFlowShader.BEND_DRIFT_FRACTION,
 		1e-9
 	)
-	assert_lt(
-		moved, RiverFlowShader.drift_cells(1.0, 10.0),
-		"the eddies lag the surface -- boils migrate slower than the water over them"
+	assert_almost_eq(
+		moved, RiverFlowShader.surface_cells(1.0, 10.0), 1e-9,
+		"the eddies travel WITH the surface -- the lines move at the water's own speed"
 	)
 
 
@@ -2793,7 +2800,7 @@ func test_the_fold_margin_survives_the_eddy_drift():
 
 func test_the_shader_drifts_the_eddy_sample_coordinate():
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"float bend_drift = TIME * drift_px_per_mps * speed_mps * noise_scale * bend_drift_fraction;"
+		"float bend_drift = TIME * surface_px_per_s(speed_mps, moving) * noise_scale * bend_drift_fraction;"
 	))
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
 		"vec2 eddy_p = (p - flow_dir * bend_drift) * eddy_scale;"
@@ -2857,9 +2864,186 @@ func test_the_pulse_is_deep_enough_to_see_streaming():
 	)
 
 
-func test_the_whirls_travel_visibly_but_still_lag_the_surface():
+func test_the_whirls_travel_with_the_surface():
 	# With the wobble small, the eddies are most of what there is ON a line
-	# to see moving. 0.6 of the surface drift is legible travel; below 1 the
-	# surface still streams through them.
-	assert_gte(RiverFlowShader.BEND_DRIFT_FRACTION, 0.5)
-	assert_lt(RiverFlowShader.BEND_DRIFT_FRACTION, 1.0)
+	# to see moving -- they ARE the lines' shape. 0.6 of the drift alone was
+	# tried first and reported as "a wobble stays in place", then, once the
+	# ripples were carried at the water's visible speed, "the lines should
+	# move at the same speed". So they do: the whole fraction of the visible
+	# surface speed, the same speed the ring is carried at.
+	assert_almost_eq(RiverFlowShader.BEND_DRIFT_FRACTION, 1.0, 1e-9)
+
+
+# -- everything on the surface rides ONE visible water speed ------------------
+#
+# "Can you make the river ripples move downstream at water speed?", then
+# "eddy swirls also don't move downstream.. a wobble stays in place instead
+# of flowing with the river", then "the lines should move at the same
+# speed". One cause. The surface the player SEES streaming is moved by TWO
+# terms: the two-phase drag, which translates the field ADVECT_STRENGTH
+# cells every 1/ADVECT_RATE seconds no matter how fast the reach runs, plus
+# the linear drift keyed to the real current. At a typical 0.5 m/s reach the
+# drag alone is ~19.8 world px/s and the drift 10 -- and the ripple centre
+# and the eddy field were carried by the DRIFT ONLY (the eddies at 0.6 of
+# it), so a wake moved at a third of the water and the whirls at a fifth.
+# Both read as standing still while the pulses streamed past.
+#
+# So there is now ONE function, surface_px_per_s, that is the water's
+# visible downstream speed, mirrored on both sides, and every consumer that
+# has to "move with the water" rides it at the same rate.
+
+
+func test_the_visible_surface_speed_is_the_drag_plus_the_drift():
+	var drag_px_per_s: float = (
+		RiverFlowShader.ADVECT_STRENGTH * RiverFlowShader.ADVECT_RATE / RiverFlowShader.NOISE_SCALE
+	)
+	assert_almost_eq(
+		RiverFlowShader.surface_px_per_s(0.5),
+		drag_px_per_s + RiverFlowShader.DRIFT_PX_PER_MPS * 0.5, 1e-6,
+		"the visible speed is the phase drag's translation plus the drift"
+	)
+	assert_gt(
+		RiverFlowShader.surface_px_per_s(1.0), RiverFlowShader.surface_px_per_s(0.5),
+		"a faster reach still streams faster"
+	)
+	# The drift on its own was never the water's speed: at a typical reach it
+	# is well under half of it. This is the number all three reports were
+	# about.
+	assert_lt(
+		RiverFlowShader.DRIFT_PX_PER_MPS * 0.5, RiverFlowShader.surface_px_per_s(0.5) * 0.5,
+		"if the drift alone were most of the visible speed this whole section is moot"
+	)
+
+
+func test_still_water_has_no_surface_speed_at_all():
+	# The shader's still path breathes the field SIDEWAYS and never drifts
+	# (test_still_water_neither_advects_nor_drifts); a lake's wake and eddies
+	# must hold station exactly like its strokes do -- gated by the same
+	# STILL_FLOW_M_S step, not faded, so the two sides cannot disagree.
+	assert_almost_eq(RiverFlowShader.surface_px_per_s(0.0), 0.0, 1e-9)
+	assert_almost_eq(
+		RiverFlowShader.surface_px_per_s(RiverFlowShader.STILL_FLOW_M_S * 0.5), 0.0, 1e-9,
+		"below the still gate the surface holds, exactly as the shader's own gate does"
+	)
+	assert_gt(RiverFlowShader.surface_px_per_s(RiverFlowShader.STILL_FLOW_M_S), 0.0)
+	assert_almost_eq(RiverFlowShader.surface_cells(0.0, 30.0), 0.0, 1e-9)
+	assert_almost_eq(
+		RiverFlowShader.surface_cells(0.7, 3.0),
+		RiverFlowShader.surface_px_per_s(0.7) * 3.0 * RiverFlowShader.NOISE_SCALE, 1e-9,
+		"surface_cells is the same speed in the noise field's own units"
+	)
+
+
+func test_the_shader_streams_every_consumer_from_the_same_surface_speed():
+	var code: String = RiverFlowShader.SHADER_CODE
+	assert_true(
+		code.contains("float surface_px_per_s(float speed_mps, float moving) {"),
+		"the shader owns the one visible-speed function"
+	)
+	assert_true(
+		code.contains("return moving * (advect_strength * advect_rate / noise_scale + drift_px_per_mps * speed_mps);"),
+		"drag translation plus drift, gated by the same still step as the strokes"
+	)
+	assert_true(
+		code.contains("vec2 surface_velocity = flow_dir * surface_px_per_s(speed_mps, moving);"),
+		"computed once per fragment, next to the field's own drift"
+	)
+	assert_true(
+		code.contains("vec2 center = disturbance_pos[i] + surface_velocity * age;"),
+		"the ring's centre is carried by the surface velocity"
+	)
+	assert_false(
+		code.contains("flow_dir * (drift_px_per_mps * speed_mps * age)"),
+		"the ring must not be carried by the drift alone any more"
+	)
+	assert_true(
+		code.contains("float bend_drift = TIME * surface_px_per_s(speed_mps, moving) * noise_scale * bend_drift_fraction;"),
+		"the eddies migrate at the surface's VISIBLE speed"
+	)
+
+
+func test_a_wake_in_a_typical_reach_is_carried_clear_of_where_it_was_made():
+	# The ring lives RIPPLE_LIFETIME seconds. Carried at the drift alone in a
+	# 0.5 m/s reach it moved 22 world px in that time -- a tile and a half,
+	# with the water streaming three tiles past it: the ring sat there. At
+	# the water's own speed it travels several tiles before it fades, which
+	# is what "moves downstream at water speed" has to mean on screen.
+	var age: float = RiverFlowShader.RIPPLE_LIFETIME
+	var carried := RiverFlowShader.ripple_center(Vector2.ZERO, Vector2(1.0, 0.0), 0.5, age)
+	assert_almost_eq(carried.x, RiverFlowShader.surface_px_per_s(0.5) * age, 1e-3)
+	assert_gte(
+		carried.x, float(TerrainRenderer.TILE_SIZE) * 3.5,
+		"a wake in a typical reach is carried only %.1f world px in its lifetime" % carried.x
+	)
+	assert_almost_eq(carried.y, 0.0, 1e-9, "purely along the flow, never across it")
+
+
+func test_the_lines_and_the_ripples_move_at_the_same_speed():
+	# "The lines should move at the same speed." The lines' shape is the
+	# eddy-bent guide, so the eddy field's migration IS the lines' motion,
+	# and it must match the ring's carry exactly -- both are the water.
+	var eddy_world_px_per_s: float = (
+		RiverFlowShader.bend_drift_cells(0.5, 1.0) / RiverFlowShader.NOISE_SCALE
+	)
+	var ring_world_px_per_s: float = (
+		RiverFlowShader.ripple_center(Vector2.ZERO, Vector2(1.0, 0.0), 0.5, 1.0).x
+	)
+	assert_almost_eq(eddy_world_px_per_s, ring_world_px_per_s, 1e-6)
+	# And the same legibility floor the pulse has to clear
+	# (test_a_typical_reach_streams_fast_enough_to_read_as_flowing): 8 world
+	# px/s is a tile every two seconds. At 0.6 of the drift alone the whirls
+	# in a 0.5 m/s reach migrated at 6 -- "a wobble stays in place".
+	assert_gte(
+		eddy_world_px_per_s, 8.0,
+		"the whirls in a 0.5 m/s reach migrate at only %.1f world px/s" % eddy_world_px_per_s
+	)
+
+
+# -- the ring inks softer -----------------------------------------------------
+#
+# "Can you make the ripples a little less pronounced so they appear smoother
+# a bit slower and more natural." Slower and broader is the shared packet's
+# business (test_water_shader.gd); LESS PRONOUNCED is this surface's: the
+# ring inks in its own right through smoothstep(RIPPLE_CREST_MIN,
+# RIPPLE_CREST_FULL, crest), and with FULL at half the packet's peak a ring
+# printed at full stroke strength for most of its life -- as dark as a
+# current line, a stamp rather than a disturbance. FULL now sits near the
+# peak, so only a fresh crest prints at full strength and the ring
+# graduates down through its life instead of switching off; MIN rises a
+# little so the faint tail stays clean, but stays under the crest still
+# reachable three quarters through the life (the "mini ripple" lesson).
+# ripple_ink mirrors the shader's own smoothstep so the graduation is a
+# tested curve, not an eyeballed pair of literals.
+
+
+func test_the_ring_inks_at_full_strength_only_while_fresh():
+	var peak := _peak_packet_amplitude()
+	assert_gte(
+		RiverFlowShader.RIPPLE_CREST_FULL, peak * 0.7,
+		"full ink reachable by more than a fresh crest is a stamp, not a ripple"
+	)
+	assert_almost_eq(
+		RiverFlowShader.ripple_ink(peak), 1.0, 1e-6,
+		"a fresh crest still prints at full strength"
+	)
+
+
+func test_the_ring_graduates_through_its_life_instead_of_switching_off():
+	var half_life_ink: float = RiverFlowShader.ripple_ink(_peak_amplitude_at_life_fraction(0.5))
+	assert_between(
+		half_life_ink, 0.25, 0.6,
+		"half way through its life the ring should be plainly there but plainly softer (%.2f)" % half_life_ink
+	)
+	var late_ink: float = RiverFlowShader.ripple_ink(_peak_amplitude_at_life_fraction(0.75))
+	assert_gt(late_ink, 0.0, "the ring must still draw three quarters through its life")
+	assert_lt(late_ink, half_life_ink, "and fainter than it did at half life")
+	assert_almost_eq(RiverFlowShader.ripple_ink(0.0), 0.0, 1e-9, "flat water inks nothing")
+	assert_almost_eq(RiverFlowShader.ripple_ink(-1.0), 0.0, 1e-9, "troughs ink nothing")
+
+
+func test_the_ink_curve_is_the_shader_s_own_smoothstep():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("float ripple_ink = smoothstep(ripple_crest_min, ripple_crest_full, ripple);")
+	)
+	var mid: float = (RiverFlowShader.RIPPLE_CREST_MIN + RiverFlowShader.RIPPLE_CREST_FULL) * 0.5
+	assert_almost_eq(RiverFlowShader.ripple_ink(mid), 0.5, 1e-6, "smoothstep's midpoint is a half")
