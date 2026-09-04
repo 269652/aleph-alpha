@@ -17,6 +17,7 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
+const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
 
 var marker: DecomposerMarker
 var carcass: Carcass
@@ -276,6 +277,34 @@ func test_ignores_a_dropped_item_that_is_not_food():
 		stone.is_queued_for_deletion(),
 		"a decomposer should not eat non-food ground items like ore"
 	)
+
+
+## Bug report ("game dropped from 60fps to 4-5fps"): LiftableStone
+## deliberately shares DroppedItem.GROUP_NAME (see its own doc comment --
+## "It joins the group DroppedItem uses... so the existing pickup sweep...
+## collects it with no special case of its own") so the player's pickup
+## sweep can find it, but it is NOT a DroppedItem and has no `item_stack`
+## at all. _nearest_food assumed every member of that group was a real
+## DroppedItem and accessed `.item_stack` unconditionally -- a script
+## error on every single stone within SEARCH_RADIUS_PX, every SEEKING
+## scan, for every ant near any of this game's very common loose stones.
+## Repeated GDScript errors are not free (string formatting + backtrace
+## capture + console I/O per hit) -- multiplied across many ants near many
+## stones, every relevant frame, this is a real, measured-live cause of
+## the reported collapse, not a cosmetic log nuisance.
+func test_ignores_a_liftable_stone_sharing_the_dropped_item_group():
+	var stone := LiftableStone.new()
+	stone.position = Vector2(105, 100)
+	add_child_autofree(stone)
+	for i in 200:
+		marker._process(0.5)
+	# The real assertion is simply that this loop completed without the
+	# engine ever raising "Invalid access to property or key 'item_stack'
+	# on a base object of type 'Node2D (liftable_stone.gd)'" -- GUT fails
+	# a test outright on an unhandled script error during its run, so
+	# reaching this line at all is the fix. Kept as an explicit assert
+	# rather than an empty test so the intent reads without the comment.
+	assert_false(stone.is_queued_for_deletion(), "a decomposer must never treat a stone as edible")
 
 
 func test_far_from_the_player_does_not_rescan_carrion_on_every_process_call():
