@@ -316,15 +316,30 @@ func _composite_parts(species: String) -> Dictionary:
 
 		# Which of the rows below the trunk is the real on-tree fruit/nut row
 		# -- see _on_tree_row's own doc comment for why this is no longer
-		# simply "the first row".
+		# simply "the first row". Its regions may be MERGES of more than one
+		# of fruit_regions' own entries (see _merge_same_column_fragments),
+		# so they are cut fresh from the sheet rather than reusing an
+		# already-cut piece.
 		var on_tree_regions: Array = _on_tree_row(fruit_regions, canopy_x_centers, sheet)
+		for region in on_tree_regions:
+			var rect: Rect2i = region
+			on_tree.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, rect)))
 		for region in fruit_regions:
-			var texture := ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, region))
-			fruit.append(texture)
-			if on_tree_regions.has(region):
-				on_tree.append(texture)
-			else:
-				harvest.append(texture)
+			var rect: Rect2i = region
+			# Skip harvest for any fragment a merge above already folded
+			# into an on_tree region -- otherwise the same fragmented
+			# drawing's pieces would ALSO show up separately as harvested
+			# item art, on top of their own now-reassembled on-tree copy.
+			var absorbed := false
+			for on_tree_region in on_tree_regions:
+				var on_tree_rect: Rect2i = on_tree_region
+				if on_tree_rect.encloses(rect):
+					absorbed = true
+					break
+			if not absorbed:
+				harvest.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, rect)))
+		fruit.append_array(on_tree)
+		fruit.append_array(harvest)
 
 	var parts := {
 		"canopy": canopy,
@@ -399,50 +414,73 @@ func _composite_parts(species: String) -> Dictionary:
 ##
 ## Measured on the real cherry sheet: its twig row and its real fruit row
 ## are not perfectly separated by blob detection -- a leafy, cherry-bearing
-## twig gets cut into two pieces (see docs/progress.md's entry on this fix
-## for the measured detail; a real slicer-level fragmentation issue,
-## deliberately not chased further here), so BOTH of cherry's below-trunk
-## rows carry one column with two candidates and neither cleanly passes.
+## twig gets cut into two or three pieces (see _merge_same_column_fragments'
+## own doc comment for why, and for how those pieces are put back together
+## rather than picked between), so BOTH of cherry's below-trunk rows carry
+## one column with more than one candidate and neither cleanly passes.
 ## Between the two, the row closer to the real fruit (further down the
 ## sheet, past the twig/detail placeholders) is always the better guess
 ## than the one right under the trunk -- real fruit is drawn progressively
 ## further down as a sheet gets busier, never before its own placeholders.
-## _dedupe_columns_by_area then cleans up whichever row this picks, keeping
-## the larger (more likely real) candidate wherever a column still has two.
 static func _on_tree_row(fruit_regions: Array[Rect2i], canopy_x_centers: Array, sheet: Image) -> Array:
 	var rows := _group_into_rows(fruit_regions)
 	for row in rows:
 		if _looks_like_real_fruit(row, sheet, canopy_x_centers):
-			return _without_snow_column(_dedupe_columns_by_area(row, canopy_x_centers), canopy_x_centers)
+			return _without_snow_column(_merge_same_column_fragments(row, canopy_x_centers), canopy_x_centers)
 	if rows.is_empty():
 		return []
 	var chosen: Array = rows[-1]
-	return _without_snow_column(_dedupe_columns_by_area(chosen, canopy_x_centers), canopy_x_centers)
+	return _without_snow_column(_merge_same_column_fragments(chosen, canopy_x_centers), canopy_x_centers)
 
 
-## Where a column carries more than one region (see _looks_like_real_fruit's
-## own doc comment on why that happens at all -- fragmentation, not a
-## genuine second drawing), keeps only the LARGEST by area and drops the
-## rest. Measured on the real cherry sheet: a real cherry cluster fragment
-## (116x94px, 10904px^2) and a small leaf-and-bud fragment split from a
-## different drawing entirely (69x94px, 6486px^2) landed in the same
-## column; the larger one is reliably the more complete, more real drawing
-## of the two on every case measured.
-static func _dedupe_columns_by_area(row: Array, canopy_x_centers: Array) -> Array:
-	var best_by_column := {} # column index -> Rect2i
+## ## Why a column ever carries more than one region here at all
+##
+## Not a second drawing: CompositeSheetSlicer's blob/core detection
+## (_is_thick/MIN_CORE_CELLS, tuned and measured against the much larger
+## canopy strip -- crowns of several thousand cells, a real hazelnut/apple
+## nut cluster measured at 1900 cells) finds MULTIPLE separate "cores" of
+## real 2D bulk inside a single, much smaller fruit-block drawing -- a
+## leafy twig with a cherry forming on it, cut into 2-3 pieces at a
+## leaf-cluster boundary. Measured directly (SLICER_DEBUG probe against the
+## real cherry sheet): the false cores this produces top out around 600
+## cells, well short of the ~1900-cell floor a real second drawing needs to
+## clear -- so the two cases don't collide on cell count, but they also
+## don't collide on RATIO (a genuinely fused pair -- two touching canopy
+## crowns -- split close to evenly, e.g. 2988/3675 cells; the false splits
+## here range from a lopsided 84/959 up to a fairly even 380/226/256/167,
+## so no single count or ratio threshold tells every real case from every
+## false one apart without either missing some of these false splits or
+## wrongly un-splitting a real pair).
+##
+## So this is fixed at the layer that already knows the answer instead:
+## every one of these false splits was ONE connected raw component before
+## CompositeSheetSlicer split it (that is the only way it could have found
+## more than one core inside a single region in the first place), so
+## reunioning whatever pieces land in the same canopy column recovers
+## exactly the original drawing, pixels included -- no tuning, no
+## threshold, and nothing for a genuinely separate touching pair (which
+## split into DIFFERENT columns, not the same one) to be caught by.
+##
+## Deliberately not fixed in CompositeSheetSlicer itself: retuning
+## _is_thick/MIN_CORE_CELLS to stop finding these false cores would have to
+## clear the real cherry/apple/hazelnut splits' own measured floor (the
+## 1900-cell nut cluster above, and the synthetic regression tests in
+## test_composite_sheet_slicer.gd, whose small solid test blobs sit well
+## inside the same 84-600 false-core range measured here) -- there is no
+## single number that is a false core in the fruit block and a real one in
+## the canopy strip and in that test file at once. Reassembling the
+## fragments where they are already known to belong -- one canopy column --
+## sidesteps needing one.
+static func _merge_same_column_fragments(row: Array, canopy_x_centers: Array) -> Array:
+	var union_by_column := {} # column index -> Rect2i
 	for region in row:
 		var rect: Rect2i = region
 		var column := _nearest_canopy_column(rect, canopy_x_centers)
-		var area := rect.size.x * rect.size.y
-		if not best_by_column.has(column) or area > best_by_column[column].size.x * best_by_column[column].size.y:
-			best_by_column[column] = rect
-	var kept: Array = []
-	for region in row:
-		var rect: Rect2i = region
-		var column := _nearest_canopy_column(rect, canopy_x_centers)
-		if best_by_column[column] == rect:
-			kept.append(region)
-	return kept
+		union_by_column[column] = rect if not union_by_column.has(column) else union_by_column[column].merge(rect)
+	var merged: Array = []
+	for column in union_by_column:
+		merged.append(union_by_column[column])
+	return merged
 
 
 ## Groups `regions` into rows: two regions that mutually overlap in Y --

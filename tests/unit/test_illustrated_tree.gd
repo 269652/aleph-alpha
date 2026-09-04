@@ -850,6 +850,36 @@ func test_on_tree_row_excludes_a_snow_column_entry_when_present():
 		assert_lt(rect.position.x, 860, "no chosen region should be the snow column's own cluster")
 
 
+## When one column's real drawing is itself split into two touching pieces
+## (see _merge_same_column_fragments's own doc comment -- CompositeSheetSlicer
+## finding a false extra "core" inside a single small fruit-block drawing,
+## measured on the real cherry sheet), the two pieces are reunioned into one
+## region covering both, not resolved by picking the bigger one and
+## discarding the other -- discarding loses real content (on the real
+## cherry sheet, a cherry-bud detail sitting in the smaller of two pieces).
+func test_on_tree_row_reunions_a_column_split_into_two_touching_pieces():
+	var sheet := _SyntheticSheet.new()
+	# Column 2's real cluster (see _SyntheticSheet._init) is normally one
+	# Rect2i(460, 100, 80, 90). Split it into two touching halves, exactly
+	# the shape CompositeSheetSlicer's false extra-core split produces.
+	var regions := sheet.fruit_regions.duplicate()
+	regions.erase(Rect2i(460, 100, 80, 90))
+	var left_half := Rect2i(460, 100, 40, 90)
+	var right_half := Rect2i(500, 100, 40, 90)
+	regions.append(left_half)
+	regions.append(right_half)
+	var chosen: Array = IllustratedTree._on_tree_row(
+		regions, sheet.canopy_x_centers, sheet.image
+	)
+	assert_eq(chosen.size(), 3, "still 3 columns -- the split halves count as one")
+	var covers_both := false
+	for region in chosen:
+		var rect: Rect2i = region
+		if rect.encloses(left_half) and rect.encloses(right_half):
+			covers_both = true
+	assert_true(covers_both, "the split column should be reunioned, not reduced to one half")
+
+
 ## Every species with art composites into a whole tree that knows its season.
 func test_every_illustrated_species_draws_a_seasonal_tree():
 	var sprite := ProceduralTreeSprite.new()
