@@ -3,19 +3,21 @@ extends RefCounted
 ## Per-chunk flower population (see docs/concept/flora.md#flowering-plants-
 ## scent-and-pollinators).
 ##
-## Deliberately shaped like TallGrass -- deterministic hash-seeded initial
+## Deliberately shaped like TallGrass -- deterministic seeded initial
 ## placement, a bounded patch count, and mutation only through explicit calls
 ## -- so the two read the same way and a reloaded chunk reproduces the same
 ## meadow. The difference is how it SPREADS: tall grass creeps into adjacent
-## cells on a tick, whereas flowers only appear where an animal actually
-## drops carried seed (see SeedDispersal / plant()), so this class never
+## cells on a tick, whereas flowers only appear where seed actually lands and
+## takes (see MeadowSpread / SeedDispersal / plant()), so this class never
 ## spreads itself.
 ##
-## No RandomNumberGenerator: all placement is derived from the chunk seed via
+## No RandomNumberGenerator: all placement is derived from a seed via
 ## PixelNoise, which (unlike Godot's string hash) decorrelates neighbouring
 ## cells -- the clustering bug this project has hit five times.
 
+const FlowerEstablishment = preload("res://src/world/flower_establishment.gd")
 const FlowerSpecies = preload("res://src/world/flower_species.gd")
+const MeadowSpread = preload("res://src/world/meadow_spread.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const PollinatorForaging = preload("res://src/gameplay/pollinator_foraging.gd")
 const Pollination = preload("res://src/gameplay/pollination.gd")
@@ -23,15 +25,17 @@ const SeedGermination = preload("res://src/world/seed_germination.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const WindDispersal = preload("res://src/world/wind_dispersal.gd")
 
-## Chance a given grassland cell starts with a flower. Lower than TallGrass's
-## own seeding: flowers are accents in a meadow, not its ground cover, and a
-## dense wall of blooms would make the scent field uniformly saturated and
-## therefore meaningless.
-const SEED_CHANCE := 0.035
-
 ## Hard cap per chunk, so animal-dropped seed can't grow the population
 ## without bound over a long session.
 const MAX_FLOWERS := 40
+
+## The founder field a baked meadow grows from is a property of the WORLD, not
+## of a chunk: every chunk has to derive the SAME founders for the same ground
+## or meadows would stop dead at every seam (see MeadowSpread.founder_tiles).
+## So the baked meadow is seeded from this one constant rather than from
+## _seed_value, which is per-chunk by design -- it decides this chunk's plant
+## sexes and germination rolls, which are nobody else's business.
+const MEADOW_WORLD_SEED := 60659
 
 var _width: int
 var _height: int
@@ -56,12 +60,28 @@ const SEED_REGEN_PER_SECOND := 1.0 / 480.0
 var _seed: Dictionary = {}
 
 
-func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
+## `origin_tiles` is the chunk's global tile origin and
+## `prevailing_wind`/`prevailing_strength` the region's long-run wind (see
+## WeatherModel.prevailing_wind_direction) -- all three feed the baked meadow,
+## which is what the wind has ALREADY done by the time the player arrives.
+## They default to "at the origin, dead calm" so a caller that only wants a
+## patch to exercise nectar/seed/growth on (every test that predates the baked
+## meadow being wind-shaped) still gets a real meadow, just an unremarkable
+## one.
+func _init(
+	seed_value: int,
+	width: int,
+	height: int,
+	biome: PackedStringArray,
+	origin_tiles: Vector2i = Vector2i.ZERO,
+	prevailing_wind: Vector2 = Vector2.RIGHT,
+	prevailing_strength: float = 0.0
+) -> void:
 	_seed_value = seed_value
 	_width = width
 	_height = height
 	_biome = biome
-	_seed_initial_flowers()
+	_seed_initial_flowers(origin_tiles, prevailing_wind, prevailing_strength)
 
 
 ## How long a newly-seeded flower takes to reach full size.
@@ -135,11 +155,12 @@ func blooming_cells(season: String) -> Array:
 ## Vector2i cell -> species id of the seed lying there.
 var _ground_seeds: Dictionary = {}
 
-## How far from its parent plant a shed seed can land, in cells. Small: seed
-## drops around the plant, it is not carried -- carrying is what animals do
-## (SeedDispersal / bird endozoochory), and that distinction is the whole
-## reason animals matter for spread.
-const SEED_FALL_RADIUS := 2
+## How far a shed seed lands from its parent is NOT a constant here: it is
+## whatever the wind does with it (see shed_seed / WindDispersal), which is
+## mostly close by and occasionally a long way downwind. This deliberately
+## does not mirror TallGrass.SEED_FALL_RADIUS any more -- grass seed is heavy
+## and flower seed is the lightest thing in the world, and that difference is
+## the whole reason meadows colonise faster than fields.
 
 ## Hard cap per chunk, so an unattended meadow can't carpet itself in seed
 ## over a long session. Same bounding rationale as MAX_FLOWERS.
@@ -241,7 +262,11 @@ func root_seeds(soil_moisture: float, bare_earth: float) -> void:
 	if chance <= 0.0:
 		return
 	for cell in _ground_seeds.keys():
-		if _flowers.has(cell):
+		# Same gate the baked meadow and animal-dropped seed pass: a seedling
+		# in an established plant's shade is outcompeted before it is a plant
+		# (see FlowerEstablishment). Rain roots seed; it does not suspend
+		# competition for light.
+		if not FlowerEstablishment.is_clear(cell, _flowers):
 			continue
 		if _flowers.size() >= MAX_FLOWERS:
 			return
@@ -296,8 +321,9 @@ func species_at(cell: Vector2i) -> String:
 
 
 ## Plants a flower dropped here as carried seed (see SeedDispersal). Returns
-## false when the cell already has one, isn't grassland, or the chunk is at
-## its cap -- so a caller can just offer a drop and let this decide.
+## false when a plant is already standing too close, the ground isn't
+## grassland, or the chunk is at its cap -- so a caller can just offer a drop
+## and let this decide.
 func plant(cell: Vector2i, species: String) -> bool:
 	if _flowers.size() >= MAX_FLOWERS:
 		return false
@@ -305,7 +331,12 @@ func plant(cell: Vector2i, species: String) -> bool:
 		return false
 	if _biome[cell.y * _width + cell.x] != "grassland":
 		return false
-	if _flowers.has(cell):
+	# Seed dropped at a standing plant's foot does not become a second plant
+	# there (see FlowerEstablishment) -- this covers the cell already being
+	# taken, and the ring around it that a seedling could not survive in. A
+	# gate the animal-dispersal path could route around would silently refill
+	# exactly the gaps the baked meadow opens.
+	if not FlowerEstablishment.is_clear(cell, _flowers):
 		return false
 	_flowers[cell] = species
 	_seed[cell] = 1.0
@@ -332,24 +363,37 @@ func flowers_for_field(origin_tiles: Vector2i, tile_size: int) -> Array:
 	return out
 
 
-func _seed_initial_flowers() -> void:
-	for y in _height:
-		for x in _width:
-			if _flowers.size() >= MAX_FLOWERS:
-				return
-			if _biome[y * _width + x] != "grassland":
-				continue
-			if PixelNoise.unit(_seed_value, x, y) >= SEED_CHANCE:
-				continue
-			# Species picked from a second, independently salted sample so
-			# which flower grows is uncorrelated with whether one grows --
-			# otherwise every bloom in a chunk trends toward one species.
-			var index := PixelNoise.range_index(
-				_seed_value + 5209, x, y, FlowerSpecies.IDS.size()
-			)
-			_flowers[Vector2i(x, y)] = FlowerSpecies.IDS[index]
-			_nectar[Vector2i(x, y)] = 1.0
-			_seed[Vector2i(x, y)] = 1.0
+## The meadow that was already there when the player arrived.
+##
+## This used to be an independent coin flip per grassland cell: a uniform
+## speckle at a density set by one constant, which made two neighbouring cells
+## both flowering as likely as any other pair (so adjacent pairs and triples
+## were constant -- reported as flowers growing "way too dense") and which had
+## no relationship whatever to the wind, so a world whose entire dispersal
+## model is "light seed goes downwind" nevertheless STARTED isotropic.
+##
+## It is now what the wind already did: the same kernel the live world sheds
+## with, run from sparse world-space founders under the region's prevailing
+## wind, through the same establishment gate live seed passes. See
+## MeadowSpread and concept/flora.md#the-meadow-you-arrive-to-is-what-the-wind-
+## already-did.
+func _seed_initial_flowers(
+	origin_tiles: Vector2i, prevailing_wind: Vector2, prevailing_strength: float
+) -> void:
+	var meadow := MeadowSpread.colonise(
+		MEADOW_WORLD_SEED,
+		origin_tiles,
+		_width,
+		_height,
+		_biome,
+		prevailing_wind,
+		prevailing_strength,
+		MAX_FLOWERS
+	)
+	for cell in meadow:
+		_flowers[cell] = meadow[cell]
+		_nectar[cell] = 1.0
+		_seed[cell] = 1.0
 
 
 func nectar_at(cell: Vector2i) -> float:
