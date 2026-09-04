@@ -192,7 +192,7 @@ see that doc's own mechanism spec and Status.
   after a tested delay tied to its own age (`Carcass.fly_count`/
   `FLY_ATTRACTION_DELAY_SECONDS`), and the new
   `CarrionForageBehavior.effective_distance` discounts a fly-blown
-  carcass's distance so `DecomposerMarker._nearest_carrion` picks it over
+  carcass's distance so `DecomposerMarker._nearest_food` picks it over
   a nearer, fresh one (`test_prefers_a_fly_blown_carcass_over_a_closer_
   fresh_one`). The same fly presence also closes the loop into
   `disease.md`'s CARRION archetype — a fly-blown carcass carries
@@ -207,6 +207,69 @@ see that doc's own mechanism spec and Status.
 - ✅ Universal hover tooltip coverage (name + remaining parts' actions) for
   carcasses and guts, via the existing `get_display_name`/
   `get_hover_actions` contract.
+- ✅ **Two rendering/movement bugs and one real ecosystem-gear extension**
+  (reported live: "there are still gigantic ant blobs but they don't
+  move... ants should eat fallen fruits, leaves and other stuff like
+  seeds"):
+  1. **Gigantic sprite.** `ProceduralDecomposerSprite`'s art canvas is
+     authored at `ArtResolution.DETAIL_MULTIPLIER`, the same
+     oversample-then-scale-down convention every other sprite generator in
+     this codebase follows — but `DecomposerMarker` was the one generator
+     that never actually applied `ArtResolution.SPRITE_SCALE`, so it
+     rendered at its raw art-canvas size instead of its intended tiny
+     insect world size. Direct precedent for the exact same failure mode:
+     `ProceduralItemSprite`'s own doc comment records a fallen cherry once
+     being "as wide as the tile it lay on" for the identical missing-scale
+     reason. Fixed: `sprite.scale = Vector2.ONE * ArtResolution.SPRITE_
+     SCALE` in `_ready()`, pinned by
+     `test_sprite_is_drawn_at_its_real_tiny_world_size_not_the_raw_art_
+     canvas`.
+  2. **Frozen while idle.** `_step_seeking` only ever pulled a decomposer
+     BACK toward home once it had drifted past `WANDER_RADIUS_PX` — nothing
+     ever sent it wandering away from home in the first place, so an idle
+     decomposer with nothing nearby to eat sat on exactly one frozen
+     position forever (the existing `test_stays_near_home_while_nothing_
+     to_eat` passed either way, since a frozen ant trivially "stays within"
+     any radius — it just never proved actual wandering). Fixed by reusing
+     `AmbientFlyerMovement`'s already-tested home-anchored roam algorithm
+     (the same one `AmbientFlyerMarker` uses) rather than a second,
+     near-duplicate wander implementation — pinned by
+     `test_wanders_when_idle_instead_of_sitting_frozen`. This in turn
+     exposed a THIRD, latent bug: `_step_approaching`'s unclamped
+     `position += direction * speed * delta` overshot straight past a
+     target now that SEEKING could hand APPROACHING a real gap to close,
+     then overshot back on the very next step — forever, a decomposer that
+     commits to a real, reachable target and never actually arrives.
+     Latent since this marker was first built (a frozen SEEKING phase
+     always started APPROACHING already within `ARRIVE_DISTANCE_PX`).
+     Fixed with `position.move_toward(target, WALK_SPEED * delta)`, the
+     same clamped-arrival shape `NpcMarker._process` already uses; pinned
+     by `test_approaching_a_close_target_does_not_overshoot_and_orbit_
+     forever`.
+  3. **Opportunistic fallen-fruit/nut foraging.** An ant/carrion bug is a
+     real omnivorous scavenger, not a carrion specialist — and this
+     project already has an entirely separate, invisible ant simulation
+     (`AntColony`, see `soil_fauna.md`) that eats fallen seeds and windfall
+     fruit/nuts, just with no on-screen representation, so a player could
+     never actually SEE it happening. `DecomposerMarker._nearest_food`
+     (renamed from `_nearest_carrion`) now also scans the real
+     `DroppedItem` "dropped_item" group, filtered to `TreeSpecies.IDS`
+     the same way `EarthChunkManager.fruit_near` already filters (never a
+     dropped tool/ore chunk); `_step_feeding` eats a found fruit/nut
+     outright in one visit (`_target.queue_free()`) rather than whittling
+     down a health pool the way a carcass bite does — a dropped cherry is
+     not a boar carcass. Pinned by
+     `test_forages_and_eats_nearby_fallen_fruit_when_theres_no_carrion`/
+     `test_ignores_a_dropped_item_that_is_not_food`. **Deliberately NOT
+     attempted here** (named, not silently dropped): ground-SEED foraging
+     by these visible ants (`AntColony` already does this invisibly;
+     making it visible would mean giving `AntColony`'s mounds a real
+     rendered presence, a bigger unification project of its own) and a
+     "fallen leaves" mechanic, which does not exist anywhere in this
+     codebase yet (only cosmetic seasonal ground-tint/canopy color, no
+     real leaf-litter entity) — a real prerequisite-free win here was
+     wiring the visible ants into fallen fruit, which already existed,
+     rather than building a whole new leaf-litter system speculatively.
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — the `take_bite` contract is already shaped to
