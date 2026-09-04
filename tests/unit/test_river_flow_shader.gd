@@ -15,6 +15,7 @@ const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
+const StoneSize = preload("res://src/world/stone_size.gd")
 
 var flow: RiverFlowShader
 
@@ -1458,15 +1459,13 @@ func test_the_half_width_px_matches_the_catalog():
 func test_the_shader_bends_and_dries_around_the_boulder_uniforms():
 	assert_true(RiverFlowShader.SHADER_CODE.contains("for (int b = 0; b < boulder_count; b++)"))
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains(
-			"sqrt(lateral * lateral + boulder_radius_px * boulder_radius_px)"
-		),
-		"the boulder must displace via the round-core potential-flow formula"
+		RiverFlowShader.SHADER_CODE.contains("sqrt(lateral * lateral + R * R)"),
+		"the boulder must displace via the round-core potential-flow formula, at ITS radius"
 	)
-	# eyot_dry now trims one arm of a max(); the other arm is the halo
-	# ring, which must survive where the channel verdict alone is dry.
+	# The eyot trims the channel's own wet verdict, and nothing else lights
+	# alpha: the painted band that once did is gone (see the shoal tests).
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"(1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry,"
+		"float wet = (1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry;"
 	))
 
 
@@ -1616,198 +1615,75 @@ func _shader_code_lf() -> String:
 	return RiverFlowShader.SHADER_CODE.replace("\r\n", "\n")
 
 
-## "Boulders on a grass field inside the river should be surrounded by
-## the light blue shore band as well": every boulder gets its own ring,
-## a function of distance to the ROCK alone -- unlike eyot_dry (which can
-## only ever REMOVE wet alpha), the band can light up alpha and tint the
-## body on its own, so a rock sitting on ordinary dry bank ground still
-## reads as part of the river.
-func test_every_boulder_gets_its_own_shore_band():
-	assert_gt(RiverFlowShader.BOULDER_BAND_WIDTH_PX, 0.0)
-	assert_gt(RiverFlowShader.BOULDER_BAND_ALPHA, 0.0)
-	assert_lte(RiverFlowShader.BOULDER_BAND_ALPHA, 1.0)
-	assert_true(
-		_shader_code_lf().contains("boulder_radius_px + boulder_band_width_px,\n\t\t\t\tboulder_radius_px + boulder_band_width_px + boulder_band_edge_feather_px, d"),
-		"the band's reach must still be a RING, and its true fade must sit PAST width_px -- inside it, the fade " +
-		"eats into whichever colour level happens to own the outer edge"
+# -- the light water around a rock is its SHOAL, not a painted ring -------
+#
+# "The boulders halo should not be computed by the boulder, but rather be
+# part of the river's hydrology... the lighter color bands should come
+# from elevation (rock is above waterline)." The rock stands above the
+# waterline, so the bed rises to meet it, so the water shallows toward it
+# -- and shallow water is LIGHT here for the same reason the banks are:
+# the cel body is depth. So the boulder contributes a shoal to the depth
+# field and nothing to the palette: the same cel quantisation and dither
+# that band the banks band the rock. The painted ring (boulder_band*),
+# its colour ramp, its wobble and its rule that a rock on dry ground
+# lights water around itself are removed, not restyled.
+
+
+func test_the_light_water_around_a_rock_is_its_shoal_in_the_depth_field():
+	var R := 12.0
+	assert_almost_eq(RiverFlowShader.boulder_shoal(R, R), 1.0, 1e-9, "at the rock's edge the bed IS the rock")
+	assert_almost_eq(RiverFlowShader.boulder_shoal(R * 0.5, R), 1.0, 1e-9, "and under it")
+	var outer := R + R * RiverFlowShader.BOULDER_SHOAL_RATIO
+	assert_almost_eq(RiverFlowShader.boulder_shoal(outer, R), 0.0, 1e-9, "the shoal ends at its outer edge")
+	assert_almost_eq(RiverFlowShader.boulder_shoal(outer * 2.0, R), 0.0, 1e-9)
+	var previous := 1.0
+	for i in range(1, 30):
+		var d := R + (outer - R) * float(i) / 29.0
+		var here := RiverFlowShader.boulder_shoal(d, R)
+		assert_lte(here, previous + 1e-9, "the bed falls away from the rock monotonically")
+		previous = here
+	assert_between(RiverFlowShader.BOULDER_SHOAL_RATIO, 1.0, 2.5, "a shoal of one to a couple of radii")
+
+
+func test_at_the_rock_s_edge_the_water_is_as_light_as_the_bank():
+	var R := 12.0
+	assert_almost_eq(RiverFlowShader.shoaled_depth_fraction(1.0, R, R), 0.0, 1e-9, "mid-channel depth, shoaled to nothing at the rock")
+	assert_eq(
+		RiverFlowShader.depth_color(RiverFlowShader.shoaled_depth_fraction(1.0, R, R)),
+		RiverFlowShader.BAND_COLORS[0],
+		"the same lightest tone the bank shows -- no colour of its own"
 	)
-	assert_gt(RiverFlowShader.BOULDER_BAND_EDGE_FEATHER_PX, 0.0)
-	assert_true(RiverFlowShader.SHADER_CODE.contains("boulder_band * boulder_band_alpha"))
+	var far := R + R * RiverFlowShader.BOULDER_SHOAL_RATIO * 2.0
+	assert_almost_eq(RiverFlowShader.shoaled_depth_fraction(0.7, far, R), 0.7, 1e-9, "past the shoal the channel's own depth is untouched")
+	assert_lt(RiverFlowShader.shoaled_depth_fraction(0.7, R * 1.5, R), 0.7, "inside it the water is shallower")
+
+
+func test_a_bigger_rock_has_a_bigger_shoal():
+	var d := 20.0
+	assert_gt(RiverFlowShader.boulder_shoal(d, 16.0), RiverFlowShader.boulder_shoal(d, 8.0))
+	assert_almost_eq(RiverFlowShader.boulder_shoal(8.0 + 8.0 * RiverFlowShader.BOULDER_SHOAL_RATIO, 8.0), 0.0, 1e-9)
+	assert_gt(RiverFlowShader.boulder_shoal(8.0 + 8.0 * RiverFlowShader.BOULDER_SHOAL_RATIO, 16.0), 0.0)
+
+
+func test_the_shoal_enters_the_depth_field_and_no_ring_is_painted():
+	var code: String = RiverFlowShader.SHADER_CODE
+	assert_true(code.contains("float shoal = 1.0 - smoothstep(R, R + R * boulder_shoal_ratio, d);"))
+	assert_true(code.contains("boulder_shoal = max(boulder_shoal, shoal);"))
+	assert_true(code.contains("depth_frac *= 1.0 - boulder_shoal;"), "the shoal shallows the depth the cel body is cut from")
+	assert_false(code.contains("boulder_band"), "no painted band remains, in any form")
+	assert_false(code.contains("line_color, band0_color"), "no boulder colour ramp of its own")
 	var material := RiverFlowShader.new().make_material()
 	assert_almost_eq(
-		float(material.get_shader_parameter("boulder_band_width_px")), RiverFlowShader.BOULDER_BAND_WIDTH_PX, 1e-9
-	)
-	assert_almost_eq(
-		float(material.get_shader_parameter("boulder_band_alpha")), RiverFlowShader.BOULDER_BAND_ALPHA, 1e-9
-	)
-	assert_almost_eq(
-		float(material.get_shader_parameter("boulder_band_edge_feather_px")),
-		RiverFlowShader.BOULDER_BAND_EDGE_FEATHER_PX, 1e-9
+		float(material.get_shader_parameter("boulder_shoal_ratio")), RiverFlowShader.BOULDER_SHOAL_RATIO, 1e-9
 	)
 
 
-## The band's own reach, mirrored on the CPU: zero under the rock (that
-## ground is the eyot, not the band), full strength across the WHOLE band
-## width -- unlike the old boulder_halo_factor, which faded within that
-## width, this stays flat all the way to its far edge so the colour ramp
-## can do the layering at full alpha -- then a true fade to 0 across the
-## small extra edge-feather coda past it. Defined with NO reference to the
-## channel's own wet/dry state, so a rock on dry land gets exactly the
-## same ring a rock mid-channel does.
-func test_boulder_band_envelope_rings_the_rock_and_nothing_else():
-	assert_eq(RiverFlowShader.boulder_band_envelope(0.0), 0.0, "under the rock is the eyot, not the ring")
-	assert_eq(RiverFlowShader.boulder_band_envelope(RiverFlowShader.BOULDER_RADIUS_PX), 1.0, "the ring peaks right at the rock's edge")
-	assert_eq(
-		RiverFlowShader.boulder_band_envelope(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX), 1.0,
-		"alpha must still be at full strength right at the colour ramp's own far edge, not already fading"
-	)
-	assert_eq(
-		RiverFlowShader.boulder_band_envelope(
-			RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX
-			+ RiverFlowShader.BOULDER_BAND_EDGE_FEATHER_PX
-		), 0.0,
-		"the true fade completes only past the extra edge-feather coda"
-	)
-	assert_between(
-		RiverFlowShader.boulder_band_envelope(
-			RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX
-			+ RiverFlowShader.BOULDER_BAND_EDGE_FEATHER_PX * 0.5
-		),
-		0.0, 1.0
-	)
-
-
-## The band must be able to light alpha up even where the channel's own
-## baseline would leave the fragment fully transparent -- a boulder past
-## the true bank but still within the newly-bled paint band.
-func test_the_boulder_band_can_light_alpha_on_otherwise_dry_ground():
-	assert_true(RiverFlowShader.SHADER_CODE.contains("boulder_band * boulder_band_alpha"))
-
-
-# -- the layered, wobbling band ("should not have a halo... instead a
-# layered band like the shore which also wobbles and moves") --------------
-#
-# The old halo painted one flat colour across its whole ring. The band
-# instead quantises the fragment's position inside the ring
-# (boulder_band_ring_t) into BOULDER_BAND_LEVELS cel-shaded layers, the
-# same way the channel body itself is cel-shaded -- and, before
-# quantising, nudges that position by the channel's own advected field n,
-# the same field that already drives the channel's wave strokes, so the
-# layer boundaries wander and animate instead of sitting as a static
-# circle.
-
-
-func test_boulder_band_ring_t_spans_the_ring_from_rock_edge_to_outer_edge():
-	assert_eq(RiverFlowShader.boulder_band_ring_t(RiverFlowShader.BOULDER_RADIUS_PX), 0.0, "0 right at the rock's own edge")
-	assert_eq(
-		RiverFlowShader.boulder_band_ring_t(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX),
-		1.0, "1 at the band's outer edge"
-	)
-	assert_eq(RiverFlowShader.boulder_band_ring_t(0.0), 0.0, "clamped, never negative under the rock")
-	assert_eq(
-		RiverFlowShader.boulder_band_ring_t(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX * 100.0),
-		1.0, "clamped, never past 1 far outside the band"
-	)
-
-
-## "A layered band": at least two visually distinct cel steps, not one
-## flat colour repainted under a new name.
-func test_boulder_band_has_at_least_two_visually_distinct_layers():
-	assert_gte(RiverFlowShader.BOULDER_BAND_LEVELS, 2)
-	assert_ne(
-		RiverFlowShader.boulder_band_color(0),
-		RiverFlowShader.boulder_band_color(RiverFlowShader.BOULDER_BAND_LEVELS - 1),
-		"the innermost and outermost layers must actually read as different colours"
-	)
-
-
-## Sweeping ring_t end to end at a NEUTRAL n and checker (0.5, 0.5 -- both
-## wobble and dither terms vanish) must step cleanly through every layer
-## from 0 to the top, in order: the quantiser itself, isolated from the
-## noise that later perturbs it.
-func test_boulder_band_level_steps_through_its_layers_across_the_ring():
-	var levels_seen: Dictionary = {}
-	var previous := 0
-	var steps := 200
-	for i in range(steps + 1):
-		var ring_t := float(i) / float(steps)
-		var level := RiverFlowShader.boulder_band_level(ring_t, 0.5, 0.5)
-		assert_gte(level, previous, "the layer must never step backwards as ring_t only increases")
-		levels_seen[level] = true
-		previous = level
-	assert_true(levels_seen.has(0), "the sweep must reach the innermost layer")
-	assert_true(levels_seen.has(RiverFlowShader.BOULDER_BAND_LEVELS - 1), "the sweep must reach the outermost layer")
-
-
-## The wobble: holding ring_t fixed mid-band and sweeping n (the channel's
-## own advected field, which changes every frame as it advects) must move
-## the fragment between layers -- proof the band's own boundary genuinely
-## reacts to the same moving field the channel's shore does, rather than
-## being pinned to geometry like the old halo was.
-func test_boulder_band_wobbles_with_the_advected_field():
-	var levels_seen: Dictionary = {}
-	var steps := 40
-	for i in range(steps + 1):
-		var n := float(i) / float(steps)
-		var level := RiverFlowShader.boulder_band_level(0.5, n, 0.5)
-		levels_seen[level] = true
-	assert_gt(levels_seen.size(), 1, "sweeping n alone must reach more than one layer, or nothing is wobbling")
-	assert_true(levels_seen.has(0), "a strong enough negative wobble must reach the innermost layer")
-	assert_true(levels_seen.has(RiverFlowShader.BOULDER_BAND_LEVELS - 1), "a strong enough positive wobble must reach the outermost layer")
-
-
-## However hard the field pushes, the wobbled position must stay inside
-## the band -- it must never wrap the ring back past the rock's own edge
-## or blow out past the band's outer edge, at either end of the ring and
-## either extreme of the field.
-func test_boulder_band_wobble_never_escapes_the_band():
-	for ring_t in [0.0, 1.0]:
-		for n in [0.0, 1.0]:
-			var level: int = RiverFlowShader.boulder_band_level(ring_t, n, 0.5)
-			assert_between(level, 0, RiverFlowShader.BOULDER_BAND_LEVELS - 1)
-
-
-## The old flat, static ring must be gone outright, not merely renamed
-## underneath -- and the new band must actually be wired to the channel's
-## own moving field and its own shore palette, not a colour of its own.
-func test_the_shader_no_longer_paints_a_flat_static_boulder_halo():
-	assert_false(
-		RiverFlowShader.SHADER_CODE.contains("boulder_halo"),
-		"no trace of the old flat halo may remain, under any name"
-	)
-	assert_true(RiverFlowShader.SHADER_CODE.contains("boulder_band_ring_t"))
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("boulder_wobbled_t * boulder_band_levels"),
-		"the layer count must actually drive the quantisation"
-	)
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("(n - 0.5) * boulder_band_wobble"),
-		"the band must be perturbed by the channel's own advected field n, the same field the wave strokes use"
-	)
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("mix(line_color, band0_color, clamp(boulder_bramp, 0.0, 1.0))"),
-		"the band must blend the shore highlight tint into the channel's own shallow-water tone, not a flat colour"
-	)
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("mix(boulder_band_color, band1_color, clamp(boulder_bramp - 1.0, 0.0, 1.0))"),
-		"THREE colour stops, not two -- line_color and band0_color are both pale enough that a two-stop " +
-		"ramp between them still read live as one soft glow, not a layered band"
-	)
-
-
-## Regression guard for the two-stop attempt that read as a soft glow
-## live: LINE_COLOR and BAND_COLORS[0] are both pale, so a boundary
-## between them barely registers. The outermost layer must reach a
-## colour with real value contrast against the innermost one.
-func test_boulder_band_outer_layer_has_real_contrast_against_the_inner_one():
-	var inner := RiverFlowShader.boulder_band_color(0)
-	var outer := RiverFlowShader.boulder_band_color(RiverFlowShader.BOULDER_BAND_LEVELS - 1)
-	var luminance_drop := inner.v - outer.v
-	assert_gt(
-		luminance_drop, 0.15,
-		"the outer layer must read as visibly darker than the inner one, not a near-match pale-on-pale step"
-	)
-	assert_eq(outer, RiverFlowShader.BAND_COLORS[1], "the outer layer must reach the second, more saturated water tone")
+func test_the_body_stays_static_depth_with_the_shoal_in_it():
+	# The shoal is geometry, like the banks: it must not read the moving
+	# field. The cel body pin (test_the_body_cels_are_static_depth_only)
+	# still holds, and the shoal itself is a function of distance alone.
+	assert_false(RiverFlowShader.SHADER_CODE.contains("boulder_shoal + (n"))
+	assert_false(RiverFlowShader.SHADER_CODE.contains("shoal * n"))
 
 
 func test_the_material_starts_with_no_waders():
@@ -2635,7 +2511,7 @@ func test_the_shader_loops_use_the_smooth_side_not_a_sign_flip():
 	# Clamped, so only the core within OBSTACLE_SIDE_SOFTNESS * R is
 	# softened and the bulge beyond it is untouched.
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"float side = clamp(lateral / (boulder_radius_px * obstacle_side_softness), -1.0, 1.0);"
+		"float side = clamp(lateral / (R * obstacle_side_softness), -1.0, 1.0);"
 	))
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
 		"float side = clamp(lateral / (wader_radius_px * obstacle_side_softness), -1.0, 1.0);"
@@ -3146,3 +3022,185 @@ func test_the_shader_inks_the_ring_from_the_sine_and_its_strength_from_the_envel
 	var material := RiverFlowShader.new().make_material()
 	assert_almost_eq(float(material.get_shader_parameter("ripple_ring_edge")), RiverFlowShader.RIPPLE_RING_EDGE, 1e-9)
 	assert_almost_eq(float(material.get_shader_parameter("ripple_ink_max")), RiverFlowShader.RIPPLE_INK_MAX, 1e-9)
+
+
+# -- every boulder is a rock of its own size ---------------------------------
+#
+# "The rock should as entity have a mass": the first thing that means on
+# the water is that a rock has a SIZE of its own. Every flow boulder now
+# carries its own radius in world px, from its real diameter (the same
+# StoneSize roll that draws it), and the push reach, the dry eyot, the
+# shoal, the foam and the wake all scale with it. BOULDER_RADIUS_PX stays
+# as the REFERENCE radius the generic obstacle tests use; it is no longer
+# what the shader draws every rock with.
+
+
+func test_each_boulder_has_its_own_radius_in_the_shader():
+	var code: String = RiverFlowShader.SHADER_CODE
+	assert_true(code.contains("uniform float boulder_radius[24];"), "one radius per slot")
+	assert_true(code.contains("float R = boulder_radius[b];"))
+	assert_true(code.contains("float reach = R * boulder_reach_ratio;"), "the reach scales with the rock")
+	assert_false(code.contains("uniform float boulder_radius_px"), "the one-size-fits-all radius is gone")
+	var material := RiverFlowShader.new().make_material()
+	assert_almost_eq(
+		float(material.get_shader_parameter("boulder_reach_ratio")), RiverFlowShader.BOULDER_REACH_RATIO, 1e-9
+	)
+	var radii: PackedFloat32Array = material.get_shader_parameter("boulder_radius")
+	assert_eq(radii.size(), 24, "the material starts with a full, empty radius array")
+
+
+func test_a_rock_s_radius_on_the_water_comes_from_its_real_size():
+	var cobble_edge := RiverFlowShader.boulder_radius_px_for(StoneSize.COBBLE_MAX_CM)
+	var metre := RiverFlowShader.boulder_radius_px_for(100.0)
+	var largest := RiverFlowShader.boulder_radius_px_for(StoneSize.LARGEST_CM)
+	assert_lt(cobble_edge, metre)
+	assert_lt(metre, largest, "a bigger rock parts more water")
+	# Half the drawn height: the water parts around the rock the player sees.
+	assert_almost_eq(metre, StoneSize.world_height_px(100.0) * 0.5, 1e-6)
+	# But never below a floor: the smallest boulder still visibly parts the water.
+	assert_gte(cobble_edge, RiverFlowShader.MIN_BOULDER_RADIUS_PX)
+	assert_eq(RiverFlowShader.boulder_radius_px_for(1.0), RiverFlowShader.MIN_BOULDER_RADIUS_PX)
+	assert_between(RiverFlowShader.MIN_BOULDER_RADIUS_PX, 4.0, 8.0)
+
+
+func test_the_reference_reach_is_the_ratio_times_the_reference_radius():
+	assert_almost_eq(
+		RiverFlowShader.BOULDER_REACH_PX,
+		RiverFlowShader.BOULDER_RADIUS_PX * RiverFlowShader.BOULDER_REACH_RATIO, 1e-6
+	)
+	assert_almost_eq(
+		RiverFlowShader.boulder_reach_px_for(20.0), 20.0 * RiverFlowShader.BOULDER_REACH_RATIO, 1e-9
+	)
+
+
+func test_the_push_and_the_eyot_take_the_rock_s_own_radius():
+	var big := 20.0
+	var small := 8.0
+	var perp := Vector2(0, 1)
+	# At the same offset just outside the small rock, the big rock -- whose
+	# face is further out -- displaces more.
+	var offset := Vector2(0.0, small + 1.0)
+	assert_gt(
+		RiverFlowShader.boulder_across_push(offset, perp, big),
+		RiverFlowShader.boulder_across_push(offset, perp, small)
+	)
+	assert_almost_eq(
+		RiverFlowShader.boulder_across_push(offset, perp), RiverFlowShader.boulder_across_push(offset, perp, RiverFlowShader.BOULDER_RADIUS_PX), 1e-9,
+		"without a radius the mirror means the reference rock"
+	)
+	assert_almost_eq(RiverFlowShader.eyot_dry_factor(big * 0.5, big), 0.0, 1e-9, "under a big rock it is dry")
+	assert_almost_eq(RiverFlowShader.eyot_dry_factor(big * 0.5, small), 1.0, 1e-9, "beside a small one it is wet")
+
+
+# -- foam in front, whirls behind ----------------------------------------------
+#
+# "...and produce foam in front and whirls behind it." Both are what a
+# real current does to a rock it cannot move. FOAM: the flow stagnates on
+# the upstream face and, fast enough, the pile-up breaks white -- so the
+# term is confined to the upstream sector, to a window just off the rock's
+# face, driven by the reach's speed, and broken up by the channel's own
+# advected field so it streams instead of sitting as a pale cap. WAKE: a
+# rock sheds eddies, so the standing-turbulence bend the guide lines
+# already whirl with is amplified in a lobe behind the rock -- downstream
+# only, a couple of radii wide, dying out over several radii -- gated by
+# the current. Both scale with the rock's own radius.
+
+
+func test_foam_sits_on_the_upstream_face_and_nowhere_else():
+	var R := 12.0
+	var flow := Vector2(0.0, 1.0)  # south
+	var face := RiverFlowShader.boulder_foam(-flow * R, flow, R)
+	assert_gt(face, 0.9, "the stagnation point at the rock's face foams hardest (%.2f)" % face)
+	assert_almost_eq(RiverFlowShader.boulder_foam(flow * R, flow, R), 0.0, 1e-9, "nothing behind the rock")
+	assert_almost_eq(RiverFlowShader.boulder_foam(flow * R * 1.3, flow, R), 0.0, 1e-9)
+	var shoulder := RiverFlowShader.boulder_foam(Vector2(R, 0.0), flow, R)
+	assert_almost_eq(shoulder, 0.0, 1e-9, "the shoulders, where the water is fastest, do not foam")
+	var quarter := RiverFlowShader.boulder_foam(Vector2(R, -R).normalized() * R, flow, R)
+	assert_between(quarter, 0.1, 0.8, "off the stagnation line the foam thins (%.2f)" % quarter)
+	var far := -flow * (R + R * RiverFlowShader.BOULDER_FOAM_REACH_RATIO * 1.5)
+	assert_almost_eq(RiverFlowShader.boulder_foam(far, flow, R), 0.0, 1e-9, "the foam does not reach upstream forever")
+	assert_almost_eq(RiverFlowShader.boulder_foam(-flow * R * 0.3, flow, R), 0.0, 1e-9, "under the rock is rock, not foam")
+	for i in 40:
+		var offset := Vector2(float(i % 8) - 3.5, float(i / 8) - 2.5) * R * 0.6
+		assert_between(RiverFlowShader.boulder_foam(offset, flow, R), 0.0, 1.0)
+
+
+func test_foam_needs_a_real_current():
+	assert_almost_eq(RiverFlowShader.foam_drive(0.0), 0.0, 1e-9, "still water does not foam")
+	assert_almost_eq(RiverFlowShader.foam_drive(RiverFlowShader.FOAM_MIN_M_S), 0.0, 1e-9)
+	assert_gt(RiverFlowShader.foam_drive(0.6), 0.0, "an ordinary reach foams a little at a rock")
+	assert_almost_eq(RiverFlowShader.foam_drive(RiverFlowShader.FOAM_FULL_M_S), 1.0, 1e-9)
+	assert_almost_eq(RiverFlowShader.foam_drive(3.0), 1.0, 1e-9)
+	assert_lt(RiverFlowShader.FOAM_MIN_M_S, RiverFlowShader.FOAM_FULL_M_S)
+	assert_gte(RiverFlowShader.FOAM_MIN_M_S, RiverFlowShader.STILL_FLOW_M_S)
+
+
+func test_foam_scales_with_the_rock():
+	var flow := Vector2(1.0, 0.0)
+	var offset := -flow * 22.0
+	assert_gt(
+		RiverFlowShader.boulder_foam(offset, flow, 20.0), RiverFlowShader.boulder_foam(offset, flow, 8.0),
+		"a bigger rock's face is further out, and so is its foam"
+	)
+
+
+func test_the_wake_lies_behind_the_rock_and_dies_out_downstream():
+	var R := 12.0
+	var flow := Vector2(0.0, 1.0)
+	assert_almost_eq(RiverFlowShader.boulder_wake(-flow * R * 2.0, flow, R), 0.0, 1e-9, "no wake upstream")
+	var close := RiverFlowShader.boulder_wake(flow * R * 1.5, flow, R)
+	assert_gt(close, 0.9, "just behind the rock the wake is full (%.2f)" % close)
+	var mid := RiverFlowShader.boulder_wake(flow * R * RiverFlowShader.BOULDER_WAKE_LENGTH_RATIO * 0.5, flow, R)
+	assert_between(mid, 0.2, 0.95, "half way down the wake it is fading (%.2f)" % mid)
+	var end := flow * R * RiverFlowShader.BOULDER_WAKE_LENGTH_RATIO
+	assert_almost_eq(RiverFlowShader.boulder_wake(end, flow, R), 0.0, 1e-9, "and gone by its length")
+	var beside := RiverFlowShader.boulder_wake(flow * R * 2.0 + Vector2(R * RiverFlowShader.BOULDER_WAKE_WIDTH_RATIO * 1.2, 0.0), flow, R)
+	assert_almost_eq(beside, 0.0, 1e-9, "a couple of radii to the side the water runs clear")
+	assert_between(RiverFlowShader.BOULDER_WAKE_LENGTH_RATIO, 3.0, 10.0)
+	assert_between(RiverFlowShader.BOULDER_WAKE_WIDTH_RATIO, 1.0, 3.0)
+	for i in 60:
+		var offset := Vector2(float(i % 10) - 4.5, float(i / 10) - 1.5) * R
+		assert_between(RiverFlowShader.boulder_wake(offset, flow, R), 0.0, 1.0)
+
+
+func test_the_wake_whirls_harder_but_never_folds_the_surface():
+	assert_between(RiverFlowShader.BOULDER_WAKE_GAIN, 0.1, 0.5, "a real amplification, inside what the fold margin allows")
+	assert_between(RiverFlowShader.WAKE_FOAM, 0.2, 0.6, "the wake carries a thinner trail of the face's foam")
+	# The same no-fold sweep the bend itself has to pass, at the wake's
+	# gained strength: the whirls may be wilder behind a rock, the surface
+	# may never fold over itself there.
+	var step := 0.002
+	var worst := INF
+	for i in range(120):
+		var along := float(i) * 0.31
+		for j in range(1, 400):
+			var across := float(j) * 0.05
+			var derivative := (
+				RiverFlowShader.warped_across_in_wake(along, across + step)
+				- RiverFlowShader.warped_across_in_wake(along, across - step)
+			) / (2.0 * step)
+			worst = minf(worst, derivative)
+	assert_gt(worst, MIN_WARP_MARGIN, "in a wake the warp pinches to %.4f" % worst)
+
+
+func test_the_shader_foams_the_face_and_whirls_the_wake():
+	var code: String = RiverFlowShader.SHADER_CODE
+	assert_true(code.contains("float along = dot(to_frag, flow_dir);"), "the boulder loop knows up- from downstream")
+	assert_true(code.contains("boulder_foam = max(boulder_foam, nose * foam_window);"))
+	assert_true(code.contains("boulder_wake = max(boulder_wake, wake);"))
+	assert_true(code.contains("float foam_drive = smoothstep(foam_min_m_s, foam_full_m_s, speed_mps) * moving;"))
+	assert_true(code.contains("* turbulence_strength * shear * (1.0 + boulder_wake * boulder_wake_gain * moving);"), "the wake amplifies the bend")
+	assert_true(code.contains("float foam = (boulder_foam + boulder_wake * wake_foam) * foam_drive * smoothstep(0.3, 0.7, n);"), "face foam plus wake streaks, broken up by the advected field")
+	assert_true(code.contains("body = mix(body, foam_color, foam * foam_alpha);"))
+	var material := RiverFlowShader.new().make_material()
+	for pair in [
+		["foam_min_m_s", RiverFlowShader.FOAM_MIN_M_S], ["foam_full_m_s", RiverFlowShader.FOAM_FULL_M_S],
+		["boulder_foam_reach_ratio", RiverFlowShader.BOULDER_FOAM_REACH_RATIO],
+		["foam_alpha", RiverFlowShader.FOAM_ALPHA],
+		["boulder_wake_length_ratio", RiverFlowShader.BOULDER_WAKE_LENGTH_RATIO],
+		["boulder_wake_width_ratio", RiverFlowShader.BOULDER_WAKE_WIDTH_RATIO],
+		["boulder_wake_gain", RiverFlowShader.BOULDER_WAKE_GAIN],
+		["wake_foam", RiverFlowShader.WAKE_FOAM],
+	]:
+		assert_almost_eq(float(material.get_shader_parameter(pair[0])), pair[1], 1e-9, pair[0])
+	assert_eq(material.get_shader_parameter("foam_color"), RiverFlowShader.FOAM_COLOR)

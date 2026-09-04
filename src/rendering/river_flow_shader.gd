@@ -3,6 +3,7 @@ extends RefCounted
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
+const StoneSize = preload("res://src/world/stone_size.gd")
 
 ## Realistic flowing river water: a surface field advected downstream in
 ## two crossfaded phases, over the channel's real parabolic cross-section,
@@ -117,13 +118,32 @@ uniform float across_jitter = 0.045;
 uniform float jitter_scale = 2.0;
 uniform int boulder_count = 0;
 uniform vec2 boulders[24];
-uniform float boulder_reach_px = 40.0;
-uniform float boulder_radius_px = 11.0;
-uniform float boulder_band_width_px = 6.0;
-uniform float boulder_band_edge_feather_px = 1.5;
-uniform float boulder_band_alpha = 0.6;
-uniform float boulder_band_levels = 3.0;
-uniform float boulder_band_wobble = 0.6;
+// Every rock is a rock of its own size: one radius per slot, in world
+// px, from the stone's real diameter (RiverFlowShader.boulder_radius_px_
+// for); the push reach is that radius times boulder_reach_ratio.
+uniform float boulder_radius[24];
+uniform float boulder_reach_ratio = 3.6;
+// The rock is a rise in the bed: the water shallows toward it over this
+// many radii past its edge (its SHOAL), and shallow water is light here
+// for the same reason the banks are. No painted ring.
+uniform float boulder_shoal_ratio = 1.5;
+// FOAM IN FRONT: the current stagnates on the rock's upstream face and,
+// fast enough, breaks white there. Window off the face in radii, the
+// speeds between which the reach goes from parting cleanly to foaming,
+// and how the foam prints.
+uniform float boulder_foam_reach_ratio = 0.9;
+uniform float foam_min_m_s = 0.3;
+uniform float foam_full_m_s = 1.0;
+uniform float foam_alpha = 0.85;
+uniform vec3 foam_color : source_color = vec3(0.93, 0.97, 1.0);
+// WHIRLS BEHIND: the wake lobe, in radii, and how much harder the
+// standing-turbulence bend whirls inside it.
+uniform float boulder_wake_length_ratio = 6.0;
+uniform float boulder_wake_width_ratio = 1.5;
+uniform float boulder_wake_gain = 0.15;
+// ...and the foam the face sheds streams down the wake at this fraction
+// of the face's own.
+uniform float wake_foam = 0.35;
 
 // The waders -- the player and any creatures standing in river water,
 // fed per frame by EarthChunkManager.set_river_flow_waders. Soft moving
@@ -521,63 +541,53 @@ void fragment() {
 	// around it; eyot_dry below then cuts a ROUND dry patch under the
 	// rock itself.
 	//
-	// boulder_band is a SEPARATE ring just outside that dry patch, purely
-	// a function of distance to the rock -- unlike eyot_dry (which only
-	// ever REMOVES wet alpha, so it can darken already-wet water but can
-	// never light up already-dry land), the band can boost wet alpha and
-	// tint toward the shore colour on its own, independent of the
-	// channel's own across value. A boulder only ever reaches this array
-	// when EarthChunkManager.flow_boulder_at_global found it within the
-	// river or its bank apron, so lighting up a band around it never
-	// happens for a rock genuinely out in a field -- it always sits on
-	// real bank ground ("boulders on a grass field inside the river
-	// should be surrounded by the light blue shore band as well").
+	// THE ROCK IS HYDROLOGY, not a painted thing. It stands above the
+	// waterline, so the bed rises to meet it, so the water shallows toward
+	// it: boulder_shoal is that rise, 1 at the rock's edge falling to 0
+	// over boulder_shoal_ratio radii, and it SHALLOWS depth_frac below --
+	// the field the cel body is cut from. The light bands around a rock
+	// are then exactly the light bands along a bank, drawn by the same
+	// quantisation and the same dither in the same palette, with no
+	// boulder colour code at all. This replaces the painted shore band
+	// ("the boulders halo should not be computed by the boulder, but
+	// rather be part of the river's hydrology... the lighter color bands
+	// should come from elevation (rock is above waterline)"). A rock on
+	// dry bank ground is dry ground with a rock on it.
 	//
-	// boulder_band_ring_t is what is NEW here: the winning boulder's own
-	// raw position inside the ring, 0 at the rock's edge through 1 at the
-	// ring's outer edge, carried out of the loop so the composite below
-	// can quantise it into the same cel-banded, noise-wobbled layers the
-	// channel's own shore uses -- not one flat colour ("the rocks should
-	// not have a halo around them... instead they should have a layered
-	// band like the shore which also wobbles and moves").
+	// Every rock is a rock of its own size (boulder_radius[b], from its
+	// real diameter) and the reach, the eyot and the shoal scale with it.
+	//
+	// FOAM IN FRONT, WHIRLS BEHIND ("...and produce foam in front and
+	// whirls behind it"): the current stagnates on the upstream face --
+	// nose is the squared cosine from the stagnation line, zero at and
+	// behind the shoulders -- in a window just off the rock's face; and
+	// the rock sheds eddies into a lobe behind it, which amplifies the
+	// standing-turbulence bend below. Both are geometry here; the speed
+	// gates them where they are used. Computed BEFORE the reach cull: the
+	// wake is longer than the push reaches.
 	float eyot_dry = 1.0;
-	float boulder_band = 0.0;
-	float boulder_band_ring_t = 1.0;
+	float boulder_shoal = 0.0;
+	float boulder_foam = 0.0;
+	float boulder_wake = 0.0;
 	for (int b = 0; b < boulder_count; b++) {
 		vec2 to_frag = wp - boulders[b];
+		float R = boulder_radius[b];
+		float reach = R * boulder_reach_ratio;
 		float lateral = dot(to_frag, flow_perp);
+		float along = dot(to_frag, flow_dir);
 		float d = length(to_frag);
-		// A RING, not a disc: the inner factor is the same edge eyot_dry
-		// uses, so the band starts exactly where the rock's dry patch
-		// ends. Without it the band ran at full strength under the rock
-		// too and, since it lights alpha on its own below, painted water
-		// straight back over the dry patch it is supposed to trim.
-		//
-		// The OUTER feather sits ENTIRELY PAST boulder_band_width_px, not
-		// inside it: a first pass faded alpha within the ring's own last
-		// couple of pixels, but the outermost colour LEVEL also only owns
-		// its last couple of pixels (three levels sharing one width_px
-		// span), so the fade ate most of that level's own extent and it
-		// only ever appeared already half-transparent -- seen live as one
-		// soft fade, never a second visible band. Every colour level below
-		// now gets the ring's full width at essentially flat alpha; only
-		// this small extra coda past the colour ramp's own end actually
-		// fades to nothing, the same relationship bank_feather has to the
-		// whole channel width.
-		float band_here = smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d)
-			* (1.0 - smoothstep(
-				boulder_radius_px + boulder_band_width_px,
-				boulder_radius_px + boulder_band_width_px + boulder_band_edge_feather_px, d
-			));
-		// The band's colour comes from whichever boulder dominates its
-		// strength (the max() just below) -- latched together so a
-		// fragment between two overlapping rings never mixes one
-		// boulder's alpha with a different boulder's ring position.
-		if (band_here > boulder_band) {
-			boulder_band_ring_t = clamp((d - boulder_radius_px) / boulder_band_width_px, 0.0, 1.0);
-		}
-		boulder_band = max(boulder_band, band_here);
-		if (d >= boulder_reach_px) {
+		float shoal = 1.0 - smoothstep(R, R + R * boulder_shoal_ratio, d);
+		boulder_shoal = max(boulder_shoal, shoal);
+		float nose = clamp(-along / max(d, 0.001), 0.0, 1.0);
+		nose *= nose;
+		float foam_window = smoothstep(R * 0.7, R, d)
+			* (1.0 - smoothstep(R, R + R * boulder_foam_reach_ratio, d));
+		boulder_foam = max(boulder_foam, nose * foam_window);
+		float wake = smoothstep(0.0, R, along)
+			* (1.0 - smoothstep(R, R * boulder_wake_length_ratio, along))
+			* (1.0 - smoothstep(R, R * boulder_wake_width_ratio, abs(lateral)));
+		boulder_wake = max(boulder_wake, wake);
+		if (d >= reach) {
 			continue;
 		}
 		// The REAL midplane streamline displacement around a cylinder of
@@ -586,10 +596,10 @@ void fragment() {
 		// -- decaying smoothly to the sides. The old falloff-squared kick
 		// peaked at a POINT ("boulders behave like a singularity and don't
 		// have a radius around which the water flows").
-		float displaced = sqrt(lateral * lateral + boulder_radius_px * boulder_radius_px)
+		float displaced = sqrt(lateral * lateral + R * R)
 			- abs(lateral);
 		float envelope = 1.0 - clamp(
-			(d - boulder_radius_px) / max(boulder_reach_px - boulder_radius_px, 0.001),
+			(d - R) / max(reach - R, 0.001),
 			0.0, 1.0);
 		envelope *= envelope;
 		// A SMOOTH odd factor, not a sign flip.
@@ -606,9 +616,9 @@ void fragment() {
 		// about it, and is within a few percent of 1 everywhere the push is
 		// actually visible -- so the round-core profile above is unchanged
 		// where it reads, and merely stops tearing where it did not.
-		float side = clamp(lateral / (boulder_radius_px * obstacle_side_softness), -1.0, 1.0);
+		float side = clamp(lateral / (R * obstacle_side_softness), -1.0, 1.0);
 		frag_across += side * displaced * envelope / (half_width_local * tile_px);
-		eyot_dry = min(eyot_dry, smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d));
+		eyot_dry = min(eyot_dry, smoothstep(R * 0.6, R, d));
 	}
 	// The waders -- player AND creatures: the same round-core displacement
 	// as a boulder, softer and smaller (legs, not a rock face), stretched
@@ -648,6 +658,9 @@ void fragment() {
 	// stroke field directly, below, via movement_ripples().
 	float rr = abs(frag_across);
 	float depth_frac = clamp(1.0 - rr * rr, 0.0, 1.0);
+	// The rock's shoal: the bed rises to the rock, the water shallows, the
+	// cel body lightens -- the bank's own mechanism, around a rock.
+	depth_frac *= 1.0 - boulder_shoal;
 
 	// TWO-PHASE FLOW-MAP ADVECTION -- the technique that makes this read as
 	// water rather than as a pattern sliding past.
@@ -716,9 +729,12 @@ void fragment() {
 	// bank_shear -- bends, whose outer banks are where |across| sweeps
 	// through the water, come out whirlier than straight reaches.
 	float shear = 1.0 + bank_shear * clamp(abs(frag_across), 0.0, 1.0);
+	// ...and harder still in a rock's wake, where the eddies it sheds
+	// live (boulder_wake, the lobe behind each boulder above), gated by
+	// the current: a rock in a lake sheds nothing.
 	float bend = (value_noise(eddy_p) - 0.5
 		+ (value_noise(eddy_p * eddy_detail_frequency + vec2(19.7, 7.3)) - 0.5) * eddy_detail_weight)
-		* turbulence_strength * shear;
+		* turbulence_strength * shear * (1.0 + boulder_wake * boulder_wake_gain * moving);
 	vec2 q = p + flow_perp * bend;
 	// The smear direction is the FLOW direction and nothing else. Rotating
 	// it by the eddy field (an attempt at whirlier bends) sawed every
@@ -956,34 +972,17 @@ void fragment() {
 	float shore = 1.0 - smoothstep(shore_width * 0.5, shore_width, abs(rr - shore_pos));
 	body = mix(body, line_color, shore * mix(0.5, 0.85, night_lift));
 
-	// A boulder's own shore BAND -- not a flat halo but the same
-	// cel-quantised, noise-wobbled layering the channel's own shore uses
-	// above, radiating from the rock's edge instead of the centreline:
-	// "the rocks should not have a halo around them... instead they
-	// should have a layered band like the shore which also wobbles and
-	// moves". Reuses the channel's own advected field n, so the band's
-	// ring boundary wanders and animates exactly like the channel's own
-	// cel/stroke boundary does, and the same world-anchored dither hash,
-	// so its steps dissolve into the same hand-drawn grain instead of a
-	// smooth gradient ring.
-	//
-	// Three STOPS, not two: a first pass ramped line_color straight to
-	// band0_color and, live, still read as one soft glow -- both colours
-	// are pale, so even a genuine hard step between them barely registers
-	// as a "layer". Running it through band1_color as well (a visibly
-	// darker, more saturated blue) is what actually reads as banding,
-	// exactly the way the channel body needs all five BAND_COLORS, not
-	// two, to read as a cross-section rather than a gradient.
-	float boulder_wobbled_t = clamp(boulder_band_ring_t + (n - 0.5) * boulder_band_wobble, 0.0, 1.0);
-	float boulder_level = clamp(
-		floor(boulder_wobbled_t * boulder_band_levels + (checker - 0.5) * dither_strength),
-		0.0, boulder_band_levels - 1.0
-	);
-	float boulder_band_t = boulder_level / (boulder_band_levels - 1.0);
-	float boulder_bramp = boulder_band_t * 2.0;
-	vec3 boulder_band_color = mix(line_color, band0_color, clamp(boulder_bramp, 0.0, 1.0));
-	boulder_band_color = mix(boulder_band_color, band1_color, clamp(boulder_bramp - 1.0, 0.0, 1.0));
-	body = mix(body, boulder_band_color, boulder_band * mix(0.5, 0.85, night_lift));
+	// FOAM on a rock's upstream face: the geometric window from the
+	// boulder loop, driven by how fast the reach runs (a slow one parts
+	// cleanly, a fast one foams), broken up by the channel's own advected
+	// field n so it streams and flickers with the water instead of sitting
+	// as a pale cap. Near-white, over the body and the strokes.
+	float foam_drive = smoothstep(foam_min_m_s, foam_full_m_s, speed_mps) * moving;
+	// The foam the face sheds streams down the wake too, thinner: the
+	// bend's gain is bounded by the no-fold margin, so a wake reads as
+	// disturbed water mostly through these streaks.
+	float foam = (boulder_foam + boulder_wake * wake_foam) * foam_drive * smoothstep(0.3, 0.7, n);
+	body = mix(body, foam_color, foam * foam_alpha);
 
 	// The comic INK line: a dark outline hugging the real bank curve, just
 	// inside the waterline. The old stylized attempt drew its outline per
@@ -998,14 +997,10 @@ void fragment() {
 	// This is what frees the water's outline from the tile grid: the edge
 	// is |across| == 1, a smooth curve through the middle of tiles, not
 	// the rectangle of whichever cells happened to be painted.
-	// The band also lights its own alpha, independent of the channel's own
-	// wet/dry verdict -- a boulder's own shore band must show through even
-	// where the tile's baseline is dry ground past the bled shore (see
-	// EarthChunkManager._paint_river_flow_overlay's SHORE_BLEED_TILES).
-	float wet = max(
-		(1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry,
-		boulder_band * boulder_band_alpha
-	);
+	// The eyot only ever REMOVES water: a rock on dry bank ground is dry
+	// ground with a rock on it, and the light water around a rock in the
+	// river is the shoal in the depth field above, not painted alpha.
+	float wet = (1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry;
 	if (debug_across > 0.5) {
 		// The across field's OWN level sets. Polygonal bands mean the
 		// field or its reconstruction filter; smooth bands mean the
@@ -1194,47 +1189,55 @@ const FLOW_MAP_TILES := 256
 const TILE_PX := 16.0
 
 ## How boulders bend the water, all in world px so the bump hugs the
-## SPRITE rather than any tile: the push reach (2.5 tiles), the maximum
-## across-push at the rock face (falloff-squared to zero at the reach),
-## and the dry-eyot radius under the rock itself.
-const BOULDER_REACH_PX := 40.0
+## SPRITE rather than any tile. Every rock now carries ITS OWN radius
+## (boulder_radius_px_for, from its real diameter -- "the rock should as
+## entity have a mass"), and the push reach, the dry eyot, the shoal, the
+## foam and the wake all scale with it. BOULDER_RADIUS_PX is the REFERENCE
+## radius (the size the generic obstacle mirrors and tests speak of, and
+## the old one-size-fits-all value), not what the shader draws every rock
+## with; BOULDER_REACH_RATIO is how far the push reaches in radii (the old
+## 40 px reach over the old 11 px radius, kept).
 const BOULDER_RADIUS_PX := 11.0
-## The shore-tint ring just outside the dry eyot, and how strongly it
-## tints and lights alpha -- deliberately WIDER than the water's own bank
-## feather (BANK_FEATHER, ~1% of a channel width) so a boulder's own
-## shore band, unlike the water's edge, reads clearly from a normal play
-## distance regardless of the local channel's width. Not bounded by
-## boulder_reach_px: the band is a ring right at the rock, not part of
-## the flow-bending falloff.
-const BOULDER_BAND_WIDTH_PX := 6.0
-## A small EXTRA coda, entirely PAST the ring's own width above, where
-## alpha makes its true fade to 0 -- so the whole width_px the colour ramp
-## steps through renders at essentially flat alpha, and only this sliver
-## beyond it (still the outermost colour, just fading out) actually
-## dissolves. Two earlier attempts fed the fade a span INSIDE width_px
-## instead (the whole width, then just its last 1.5px) and both crushed
-## the outermost layer -- three levels share one width_px span, so even a
-## "narrow" fade confined to that span ate most of the last level's own
-## share of it, and it only ever appeared already half-transparent ("still
-## reads as one soft glow"). Mirrors the relationship BANK_FEATHER has to
-## the whole channel width: full opaque body, THEN a small feather past it.
-const BOULDER_BAND_EDGE_FEATHER_PX := 1.5
-const BOULDER_BAND_ALPHA := 0.6
-## "The rocks should not have a halo around them... instead they should
-## have a layered band like the shore which also wobbles and moves": the
-## ring above no longer paints one flat colour. BOULDER_BAND_LEVELS steps
-## it through the same cel-quantised layering CEL_LEVELS gives the channel
-## body (kept smaller -- the ring is a fraction of the channel's width, so
-## six steps would be sub-pixel), and BOULDER_BAND_WOBBLE perturbs its
-## ring position by the channel's own advected field n before quantising,
-## the same way LINE_WOBBLE perturbs the channel's wave-stroke contours --
-## so the band's boundary wanders and animates instead of sitting as a
-## static circle. Both pinned by test: LEVELS must produce at least two
-## visually distinct layers, and WOBBLE must actually move the boundary
-## while the quantised level never escapes the band regardless of how the
-## field swings.
-const BOULDER_BAND_LEVELS := 3
-const BOULDER_BAND_WOBBLE := 0.6
+const BOULDER_REACH_RATIO := 3.6
+const BOULDER_REACH_PX := BOULDER_RADIUS_PX * BOULDER_REACH_RATIO
+## No rock parts less water than this, however small: the smallest
+## Wentworth boulder still has to read as an obstacle at play distance.
+const MIN_BOULDER_RADIUS_PX := 6.0
+## The rock's SHOAL: how far past its edge, in radii, the bed rises toward
+## it and the water shallows. This is what replaced the painted shore band
+## (BOULDER_BAND_*): the light water around a rock is the same shallow
+## water the banks show, drawn by the same cel quantisation and dither in
+## the channel's own palette -- "the lighter color bands should come from
+## elevation (rock is above waterline)". One to a couple of radii by test;
+## 1.5 puts three cel steps around a reference rock.
+const BOULDER_SHOAL_RATIO := 1.5
+
+## FOAM IN FRONT: the window off the rock's upstream face where the
+## stagnating current foams, in radii past the edge; the reach speeds
+## between which a rock goes from parting the water cleanly (nothing at
+## or under FOAM_MIN_M_S -- an ordinary 0.5 m/s reach foams a little) to
+## foaming fully; how the foam prints. Real whitewater is deceleration,
+## not speed, which is why it lives on the face where the water is
+## brought to rest and follows dynamic pressure (BoulderHydraulics).
+const BOULDER_FOAM_REACH_RATIO := 0.9
+const FOAM_MIN_M_S := 0.3
+const FOAM_FULL_M_S := 1.0
+const FOAM_ALPHA := 0.85
+const FOAM_COLOR := Color(0.93, 0.97, 1.0)
+
+## WHIRLS BEHIND: the wake lobe a rock sheds eddies into -- how far
+## downstream it reaches and how wide it is, in radii -- and how much
+## harder the standing-turbulence bend whirls inside it. The gain is
+## bounded by the same no-fold sweep the bend itself passes
+## (test_the_wake_whirls_harder_but_never_folds_the_surface): wilder,
+## never folded -- and that bound is tight (0.5 pinched the warp to 0.17
+## against the 0.35 margin; 0.15 holds it), so the wake reads as
+## disturbed water mostly through WAKE_FOAM, the fraction of the face's
+## foam that streams down the lobe, which is what a real wake carries.
+const BOULDER_WAKE_LENGTH_RATIO := 6.0
+const BOULDER_WAKE_WIDTH_RATIO := 1.5
+const BOULDER_WAKE_GAIN := 0.15
+const WAKE_FOAM := 0.35
 
 ## A wader as a flow obstacle: a smaller round core than a boulder (legs,
 ## not a rock face), with the displacement stretched downstream by the
@@ -1504,13 +1507,20 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("across_jitter", ACROSS_JITTER)
 	material.set_shader_parameter("jitter_scale", JITTER_SCALE)
 	material.set_shader_parameter("boulder_count", 0)
-	material.set_shader_parameter("boulder_reach_px", BOULDER_REACH_PX)
-	material.set_shader_parameter("boulder_radius_px", BOULDER_RADIUS_PX)
-	material.set_shader_parameter("boulder_band_width_px", BOULDER_BAND_WIDTH_PX)
-	material.set_shader_parameter("boulder_band_edge_feather_px", BOULDER_BAND_EDGE_FEATHER_PX)
-	material.set_shader_parameter("boulder_band_alpha", BOULDER_BAND_ALPHA)
-	material.set_shader_parameter("boulder_band_levels", float(BOULDER_BAND_LEVELS))
-	material.set_shader_parameter("boulder_band_wobble", BOULDER_BAND_WOBBLE)
+	var empty_radii := PackedFloat32Array()
+	empty_radii.resize(24)
+	material.set_shader_parameter("boulder_radius", empty_radii)
+	material.set_shader_parameter("boulder_reach_ratio", BOULDER_REACH_RATIO)
+	material.set_shader_parameter("boulder_shoal_ratio", BOULDER_SHOAL_RATIO)
+	material.set_shader_parameter("boulder_foam_reach_ratio", BOULDER_FOAM_REACH_RATIO)
+	material.set_shader_parameter("foam_min_m_s", FOAM_MIN_M_S)
+	material.set_shader_parameter("foam_full_m_s", FOAM_FULL_M_S)
+	material.set_shader_parameter("foam_alpha", FOAM_ALPHA)
+	material.set_shader_parameter("foam_color", FOAM_COLOR)
+	material.set_shader_parameter("boulder_wake_length_ratio", BOULDER_WAKE_LENGTH_RATIO)
+	material.set_shader_parameter("boulder_wake_width_ratio", BOULDER_WAKE_WIDTH_RATIO)
+	material.set_shader_parameter("boulder_wake_gain", BOULDER_WAKE_GAIN)
+	material.set_shader_parameter("wake_foam", WAKE_FOAM)
 	material.set_shader_parameter("wader_count", 0)
 	material.set_shader_parameter("wader_reach_px", WADER_REACH_PX)
 	material.set_shader_parameter("wader_radius_px", WADER_RADIUS_PX)
@@ -1685,11 +1695,26 @@ static func obstacle_lateral_shift_px(
 	return side * displaced * envelope
 
 
+## A rock's radius on the water, in world px, from its real diameter: half
+## its drawn height (StoneSize.world_height_px -- the water parts around
+## the rock the player sees), floored at MIN_BOULDER_RADIUS_PX.
+static func boulder_radius_px_for(diameter_cm: float) -> float:
+	return maxf(StoneSize.world_height_px(diameter_cm) * 0.5, MIN_BOULDER_RADIUS_PX)
+
+
+## How far a rock of this radius pushes the water, in world px.
+static func boulder_reach_px_for(radius_px: float) -> float:
+	return radius_px * BOULDER_REACH_RATIO
+
+
 ## A boulder's across-push at a fragment `offset_px` from the rock, given
-## the flow perpendicular -- the round core in across-fraction units.
-static func boulder_across_push(offset_px: Vector2, flow_perp: Vector2) -> float:
+## the flow perpendicular -- the round core in across-fraction units, for a
+## rock of `radius_px` (the reference rock when unspecified).
+static func boulder_across_push(
+	offset_px: Vector2, flow_perp: Vector2, radius_px: float = BOULDER_RADIUS_PX
+) -> float:
 	return obstacle_lateral_shift_px(
-		offset_px, flow_perp, BOULDER_RADIUS_PX, BOULDER_REACH_PX, 0.0
+		offset_px, flow_perp, radius_px, boulder_reach_px_for(radius_px), 0.0
 	) / HALF_WIDTH_PX
 
 
@@ -1705,69 +1730,65 @@ static func wader_across_push(offset_px: Vector2, flow_dir: Vector2) -> float:
 	) / HALF_WIDTH_PX
 
 
-## How dry the eyot leaves a fragment `distance_px` from the rock centre:
-## 0 under the rock, 1 outside its radius, soft-edged and ROUND.
-static func eyot_dry_factor(distance_px: float) -> float:
-	return smoothstep(BOULDER_RADIUS_PX * 0.6, BOULDER_RADIUS_PX, distance_px)
+## How dry the eyot leaves a fragment `distance_px` from the centre of a
+## rock of `radius_px`: 0 under the rock, 1 outside its radius, soft-edged
+## and ROUND.
+static func eyot_dry_factor(distance_px: float, radius_px: float = BOULDER_RADIUS_PX) -> float:
+	return smoothstep(radius_px * 0.6, radius_px, distance_px)
 
 
-## The boulder's own shore-band strength `distance_px` from its centre: 0
-## at and inside the rock's own radius (that ground is the eyot, not the
-## band), full strength across the WHOLE band width (where
-## boulder_band_color does its layering), then a true fade to 0 across the
-## small EXTRA BOULDER_BAND_EDGE_FEATHER_PX coda past it -- so every colour
-## level gets the ring's full width at flat alpha instead of the fade
-## eating into whichever level happens to sit at the outer edge.
-## Independent of eyot_dry and of the channel's own wet/dry verdict --
-## this is what lets a rock sitting on ordinary dry bank ground still show
-## a band. Renamed from boulder_halo_factor, which faded within the whole
-## width rather than past it; the inner edge is unchanged.
-static func boulder_band_envelope(distance_px: float) -> float:
-	var inner := smoothstep(BOULDER_RADIUS_PX * 0.6, BOULDER_RADIUS_PX, distance_px)
-	var outer := 1.0 - smoothstep(
-		BOULDER_RADIUS_PX + BOULDER_BAND_WIDTH_PX,
-		BOULDER_RADIUS_PX + BOULDER_BAND_WIDTH_PX + BOULDER_BAND_EDGE_FEATHER_PX, distance_px
-	)
-	return inner * outer
+## The rock's shoal at `distance_px` from the centre of a rock of
+## `radius_px`: 1 at and under the rock's edge (the bed IS the rock),
+## falling to 0 BOULDER_SHOAL_RATIO radii past it. The CPU mirror of the
+## shader's per-boulder shoal term. A function of distance alone: the
+## shoal is geometry, like the banks, and never reads the moving field.
+static func boulder_shoal(distance_px: float, radius_px: float) -> float:
+	return 1.0 - smoothstep(radius_px, radius_px + radius_px * BOULDER_SHOAL_RATIO, distance_px)
 
 
-## Where a fragment `distance_px` from a boulder's centre sits WITHIN the
-## band, normalised to [0, 1] (0 at the rock's own edge, 1 at the band's
-## outer edge) -- the CPU mirror of boulder_band_ring_t's clamp in the
-## shader loop, before the noise wobble or cel quantisation are applied.
-static func boulder_band_ring_t(distance_px: float) -> float:
-	return clampf((distance_px - BOULDER_RADIUS_PX) / BOULDER_BAND_WIDTH_PX, 0.0, 1.0)
+## The channel's depth fraction after the rock's shoal has shallowed it --
+## what the cel body is cut from near a rock. At the rock's edge it is 0,
+## the bank's own value, so depth_color paints the same lightest tone.
+static func shoaled_depth_fraction(
+	channel_depth_fraction: float, distance_px: float, radius_px: float
+) -> float:
+	return channel_depth_fraction * (1.0 - boulder_shoal(distance_px, radius_px))
 
 
-## The band's cel level at a fragment, mirroring the shader exactly:
-## ring_t is nudged by the advected field n (the same field the channel's
-## own wave strokes and cel dither already read) before being quantised by
-## the same world-anchored dither hash the channel body uses -- so the
-## band's own layer boundaries wander with n and dissolve into the same
-## hand-drawn grain, rather than sitting as a smooth static ring.
-static func boulder_band_level(ring_t: float, n: float, checker: float) -> int:
-	var wobbled := clampf(ring_t + (n - 0.5) * BOULDER_BAND_WOBBLE, 0.0, 1.0)
-	return clampi(
-		int(floor(wobbled * float(BOULDER_BAND_LEVELS) + (checker - 0.5) * DITHER_STRENGTH)),
-		0, BOULDER_BAND_LEVELS - 1
-	)
+## The foam window on a rock's upstream face at `offset_px` from a rock of
+## `radius_px` in a current running along `flow_dir` -- the CPU mirror of
+## the shader's nose * foam_window: the squared cosine from the stagnation
+## line (zero at and behind the shoulders) inside a window just off the
+## face. Geometry only; foam_drive gates it by speed.
+static func boulder_foam(offset_px: Vector2, flow_dir: Vector2, radius_px: float) -> float:
+	var d := offset_px.length()
+	var along := offset_px.dot(flow_dir)
+	var nose := clampf(-along / maxf(d, 0.001), 0.0, 1.0)
+	nose *= nose
+	var window := smoothstep(radius_px * 0.7, radius_px, d) \
+		* (1.0 - smoothstep(radius_px, radius_px + radius_px * BOULDER_FOAM_REACH_RATIO, d))
+	return nose * window
 
 
-## The band's colour at a given level: LINE_COLOR (the same pale tint the
-## old flat halo used, and the channel's own shore highlight) at the
-## rock's own edge, ramped through BAND_COLORS[0] (the channel's own
-## shallowest water tone) to BAND_COLORS[1] (visibly darker and more
-## saturated) at the band's outer edge -- so a boulder's shore reads in
-## the same palette as the channel's, not a colour of its own. THREE
-## stops, not two: a first pass ramped only to BAND_COLORS[0] and, seen
-## live, still read as one soft glow -- LINE_COLOR and BAND_COLORS[0] are
-## both pale, so even a genuine hard step between them barely registered
-## as a "layer". The mirror of the shader's own two-stage mix.
-static func boulder_band_color(level: int) -> Color:
-	var t := float(level) / float(BOULDER_BAND_LEVELS - 1)
-	var bramp := t * 2.0
-	var color := LINE_COLOR.lerp(BAND_COLORS[0], clampf(bramp, 0.0, 1.0))
-	return color.lerp(BAND_COLORS[1], clampf(bramp - 1.0, 0.0, 1.0))
+## How hard a reach of this speed foams at a rock: nothing at or under
+## FOAM_MIN_M_S, full at FOAM_FULL_M_S, still-water gated like the shader.
+static func foam_drive(speed_m_s: float) -> float:
+	if is_still_water(speed_m_s):
+		return 0.0
+	return smoothstep(FOAM_MIN_M_S, FOAM_FULL_M_S, speed_m_s)
+
+
+## The wake lobe behind a rock at `offset_px` -- the CPU mirror of the
+## shader's per-boulder wake: rising over the first radius downstream,
+## dying out by BOULDER_WAKE_LENGTH_RATIO radii, within
+## BOULDER_WAKE_WIDTH_RATIO radii to either side. Zero upstream.
+static func boulder_wake(offset_px: Vector2, flow_dir: Vector2, radius_px: float) -> float:
+	var perp := Vector2(-flow_dir.y, flow_dir.x)
+	var along := offset_px.dot(flow_dir)
+	var lateral := offset_px.dot(perp)
+	return smoothstep(0.0, radius_px, along) \
+		* (1.0 - smoothstep(radius_px, radius_px * BOULDER_WAKE_LENGTH_RATIO, along)) \
+		* (1.0 - smoothstep(radius_px, radius_px * BOULDER_WAKE_WIDTH_RATIO, absf(lateral)))
 
 
 ## The waterline: 1 inside the channel, 0 past the bank curve, feathered
@@ -2165,6 +2186,12 @@ static func bend_displacement(eddy_x: float, eddy_y: float) -> float:
 ## increases, the warp has folded the surface over itself.
 static func warped_across(world_x: float, world_y: float) -> float:
 	return world_y + bend_displacement(world_x * EDDY_SCALE, world_y * EDDY_SCALE)
+
+
+## The same, at the bend's full strength inside a rock's wake (the gain
+## at its maximum) -- what the no-fold sweep has to hold there too.
+static func warped_across_in_wake(world_x: float, world_y: float) -> float:
+	return world_y + bend_displacement(world_x * EDDY_SCALE, world_y * EDDY_SCALE) * (1.0 + BOULDER_WAKE_GAIN)
 
 
 ## The full at-rest pipeline: bend, then the smeared line field -- what a

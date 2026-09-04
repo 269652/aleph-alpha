@@ -562,7 +562,10 @@ where names appear.
 - **Meander.** The centerline is smooth but follows cell centers; the
   seeded meander (wavelength `11 * w`) on top of the Bezier is still to
   do.
-- **Boulder push scale.** The flow shader scales a boulder's displacement
+- ~~**Boulder push scale.**~~ Resolved: the push divides by the per-texel
+  half-width from the separate scale map, and each boulder now carries
+  its own radius from its real diameter (see rivers.md "Boulders are
+  hydrology"). Original note kept below for history. The flow shader scales a boulder's displacement
   by one uniform half-width (the catalog's two tiles); a one-tile stream
   gets a push a quarter as strong as it should. The texel has no free
   channel for a per-tile half-width; packing one is a follow-up.
