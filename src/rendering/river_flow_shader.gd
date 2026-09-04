@@ -334,7 +334,16 @@ void fragment() {
 	// understated a wide hydrology reach's true half-width by up to 3x, so
 	// the same push landed up to 3x stronger, relative to that reach, than
 	// intended.
-	float half_width_local = max(texture(flow_scale_map, map_uv).r, 0.05);
+	// The SAME cubic reconstruction as the across map above. Left on plain
+	// bilinear this kinks on the texel lattice exactly as across did, and
+	// every boulder, wader and ripple push below divides by it -- so their
+	// displacement inherited the sawtooth even once across itself was
+	// smooth ("also behind a few boulders").
+	float half_width_local = max(mix(
+		texture(flow_scale_map, map_uv),
+		texture_bicubic(flow_scale_map, map_uv, flow_map_tiles),
+		map_smoothing
+	).r, 0.05);
 	float is_fast = step(fast_flow_m_s, speed_mps);
 	// STILL WATER: a lake is painted through this same overlay (its
 	// shoreline is the real elevation contour, written as an across field

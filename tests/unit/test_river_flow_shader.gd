@@ -1603,8 +1603,12 @@ func test_ripples_fade_out_before_they_reach_the_bank():
 ## fish. The width now rides the direction vector's own magnitude
 ## (a direction's length otherwise carries no information).
 func test_boulder_wader_and_ripple_pushes_divide_by_the_real_local_width():
-	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"float half_width_local = max(texture(flow_scale_map, map_uv).r, 0.05);"
+	# The width still comes from its own scalar map and is still floored
+	# at 0.05; it now goes through the same cubic reconstruction the across
+	# map does, so the pushes that divide by it stop inheriting the texel
+	# lattice's sawtooth.
+	assert_true(_shader_code_lf().contains(
+		"float half_width_local = max(mix(\n\t\ttexture(flow_scale_map, map_uv),\n\t\ttexture_bicubic(flow_scale_map, map_uv, flow_map_tiles),\n\t\tmap_smoothing\n\t).r, 0.05);"
 	))
 	assert_eq(
 		RiverFlowShader.SHADER_CODE.count("/ (half_width_local * tile_px)"), 3,
