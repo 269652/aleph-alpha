@@ -132,6 +132,29 @@ fast, swarms) and **bug** (a carrion beetle stand-in; slower, bigger bite).
 Both eat from `Carcass` OR `CarcassGuts` indiscriminately via the shared
 `take_bite` contract above.
 
+#### Flies find it first
+
+A carcass is rot the same way a windfall fruit is (`docs/concept/
+olfaction.md`'s shared `DECAY` molecule), so it grows its own real
+`FlyColony` (see `docs/concept/flies.md`) rather than a fake counter — one
+founder settles a fixed, tested delay after death (real blowflies find a
+body within minutes, well before a `Carcass` is rotten enough for
+decomposers to actually feed on it, so the delay is a real fraction of
+`ROT_SECONDS`, not equal to it), and everything after that is bred, the
+same "one founder, not a swarm" rule the ground-food fly loop already
+follows. That visible swarm is itself a real signal a decomposer acts on:
+real scavengers cue off circling flies as a sign something is worth
+investigating, so a fly-blown carcass reads as CLOSER to a hunting ant or
+carrion bug than an identically-placed fresh one
+(`CarrionForageBehavior.effective_distance`), and can be noticed a little
+past the ordinary search radius — a fly-blown carcass is measurably more
+likely to draw a decomposer than a fresh one, not merely as likely.
+`CarcassGuts` is excluded from this loop, the same scope cut `disease.md`'s
+carry-vector chain already makes for offal: real offal spoils too fast for
+a fly colony to establish itself there before it is gone. This same fly
+presence also closes a second loop, into `disease.md`'s CARRION archetype —
+see that doc's own mechanism spec and Status.
+
 ### Status
 
 - ✅ Carcass entity, real parts (hide/meat/guts), independent decay/rot
@@ -146,6 +169,41 @@ Both eat from `Carcass` OR `CarcassGuts` indiscriminately via the shared
 - ✅ Ants + carrion bugs: ambient decomposer creatures that find and
   consume carcasses/guts — `src/gameplay/carrion_forage_behavior.gd`,
   `src/rendering/decomposer_marker.gd`/`decomposer_renderer.gd`.
+  **Follow-up (readability):** `ProceduralDecomposerSprite.ANT_COLOR` was
+  `Color(0.08, 0.06, 0.05)` — a hair from `PixelPalette.OUTLINE`
+  `(0.08, 0.06, 0.1)`, the shared near-black ring every creature generator
+  draws around its own silhouette — and this generator never actually drew
+  that ring at all (it instantiated `PixelPalette` but never called it).
+  With the fill and the never-drawn outline the same color, a whole ant or
+  bug rendered as one undifferentiated black blob rather than a small dark
+  creature (reported live, from a real screenshot: "these black blobs",
+  identified from a follow-up close-up crop as a creature silhouette, not
+  flora). Fixed by darkening `ANT_COLOR`/`BUG_COLOR` to warm dark-brown
+  chitin tones clearly apart from `OUTLINE` (real ants/carrion beetles stay
+  genuinely dark, per this doc's own Silphidae note above — this isn't a
+  move toward brightness for its own sake) and by actually ringing the
+  silhouette, reusing `ProceduralBirdSprite._outline_silhouette`'s exact
+  technique. Both halves are pinned separately in
+  `test_procedural_decomposer_sprite.gd` (a minimum RGB distance from
+  `OUTLINE`, and a direct check that an outline-colored pixel exists in the
+  generated image) rather than left an eyeballed color pair.
+- ✅ Flies find a carcass first, and decomposers measurably prefer a
+  fly-blown carcass over a fresh one — `Carcass` grows a real `FlyColony`
+  after a tested delay tied to its own age (`Carcass.fly_count`/
+  `FLY_ATTRACTION_DELAY_SECONDS`), and the new
+  `CarrionForageBehavior.effective_distance` discounts a fly-blown
+  carcass's distance so `DecomposerMarker._nearest_carrion` picks it over
+  a nearer, fresh one (`test_prefers_a_fly_blown_carcass_over_a_closer_
+  fresh_one`). The same fly presence also closes the loop into
+  `disease.md`'s CARRION archetype — a fly-blown carcass carries
+  measurably higher local graze risk than an identically-rotten, fly-free
+  one (`DiseaseModel.carrion_graze_transmission_chance`'s new `fly_count`
+  term, read from the real carcass by `CreatureMarker._carrion_disease_
+  step`) — proven end to end in one test,
+  `test_corpse_age_drives_fly_count_which_measurably_raises_local_
+  disease_risk` (`tests/unit/test_carcass.gd`): corpse age in, fly count
+  out, disease risk out, all through the real production code, not three
+  disconnected unit tests. See `disease.md`'s own Status for that half.
 - ✅ Universal hover tooltip coverage (name + remaining parts' actions) for
   carcasses and guts, via the existing `get_display_name`/
   `get_hover_actions` contract.

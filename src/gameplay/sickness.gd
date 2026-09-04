@@ -5,7 +5,7 @@ extends RefCounted
 ## the doc's "contagion between players" idea is explicitly flagged as an
 ## undecided open question there, so it stays out of scope here.
 ##
-## Like TamingSystem/FishingMinigame, this holds no mutable state itself:
+## Like Taming/FishingMinigame, this holds no mutable state itself:
 ## callers own the actual sickness data (severity: float, a fixed
 ## sickness_id, and a diagnosed bool) elsewhere and pass severity through
 ## each call. Per "Sickness Diagnosis", an undiagnosed sickness should only
@@ -28,7 +28,7 @@ const TREATED_RECOVERY_MULTIPLIER := 2.0
 
 ## diagnose() weights: a base chance plus additive contributions from
 ## diagnosis_skill and severity -- a more severe/obvious case is easier to
-## read, same reasoning TamingSystem.taming_chance() uses for its factors.
+## read, same reasoning Taming.break_free_chance() uses for its factors.
 const DIAGNOSE_BASE_CHANCE := 0.1
 const DIAGNOSE_SKILL_WEIGHT := 0.6
 const DIAGNOSE_SEVERITY_WEIGHT := 0.3
@@ -45,8 +45,9 @@ func infection_chance(exposure_level: float, resistance: float) -> float:
 
 
 ## Deterministic hash-fraction roll against `chance`, given a seed -- same
-## pattern as TamingSystem.attempt_tame, so the same (chance, seed_value)
-## always yields the same result and infection rolls stay reproducible.
+## pattern as CreatureMarker._step_restraint's struggle roll, so the same
+## (chance, seed_value) always yields the same result and infection rolls
+## stay reproducible.
 func attempt_infect(chance: float, seed_value: int) -> bool:
 	var roll := float(absi(hash("%d_sickness_infect" % seed_value)) % 10000) / 10000.0
 	return roll < chance

@@ -80,6 +80,27 @@ func after_each():
 	creatures_parent.free()
 
 
+# -- why this file is slow, and how to iterate on it quickly -----------------
+#
+# This is the largest test file in the project (492 tests, `grep -c '^func
+# test_'`). EarthChunkManager.update() is a genuinely expensive real
+# operation -- it synchronously generates the whole LOAD_RADIUS of chunks
+# (see update_with_progress's own doc comment, which already measures a full
+# load at "~39-90s+ per call"; measured directly at ~101s/call in a headless
+# GUT run of this file, 2026-09-03). There is no before_all/after_all in
+# this file, only before_each/after_each, so every test below that needs
+# loaded state calls manager.update(_berlin_tile) itself -- roughly 237 of
+# the 492 do, with that exact same tile. A complete pass of just this one
+# file can therefore run for hours; this is inherent to the real generation
+# algorithm, not a bug to fix before merging (see CONTRIBUTING.md's test
+# section for the same note).
+#
+# When iterating, scope to one test rather than waiting on the whole file:
+#   <godot> --headless -s addons/gut/gut_cmdln.gd -gconfig= \
+#     -gtest=res://tests/unit/test_earth_chunk_manager.gd \
+#     -gunit_test_name=<substring_of_the_test_name> -gexit
+
+
 ## Reported directly after playtesting: rivers were "still treated like
 ## normal biome... grass and trees grow in rivers" -- the exact "trees
 ## standing in a lake" bug class _can_root_at's own doc comment already
@@ -6245,6 +6266,23 @@ func test_snow_accumulates_while_it_falls():
 	manager.advance_world_age(Snowfall.SECONDS_TO_COVER)
 	manager.step_snow(true, 0.0)
 	assert_almost_eq(manager.snow_depth(), 1.0, 0.02)
+
+
+## is_snowing() exposes the SAME per-frame active-precipitation boolean
+## World already computes and hands to step_snow to accumulate against (see
+## docs/concept/weather.md's "Weather feeds creature behaviour") -- a second
+## reader (CreatureMarker) has to read that one answer rather than deriving
+## its own, or an animal could disagree with the ground about whether it's
+## snowing right now.
+func test_is_snowing_reflects_the_last_step_snow_call():
+	manager.step_snow(true, 0.0)  # cold and snowing
+	assert_true(manager.is_snowing())
+	manager.step_snow(false, 1.0)  # warm and dry
+	assert_false(manager.is_snowing())
+
+
+func test_is_snowing_defaults_to_false_before_any_step():
+	assert_false(manager.is_snowing())
 
 
 ## The five tests that used to live here (a partial snowfall paints a MIX of

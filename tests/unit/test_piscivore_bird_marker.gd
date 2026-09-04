@@ -248,3 +248,84 @@ func test_a_bird_leaves_a_depleted_pond_alone():
 		world.recorded_catches.size(), 0,
 		"a hungry bird still leaves a worked-out pond alone"
 	)
+
+
+# -- the wings actually flap --------------------------------------------------
+#
+# The marker used to show one static resting-pose texture for its whole
+# life -- cruising, hovering, diving, carrying a fish home, all one frame.
+# Every other flyer (AmbientFlyerMarker._animate_wings) cycles flap_frames
+# and holds perched_frame while truly at rest; this marker never did
+# (reported: "fix the kingfisher's wings").
+
+func test_flying_cycles_through_the_flap_frames_over_time():
+	var world := StubWorld.new()
+	world.population = 0.0  # nothing to hunt: stays cruising/patrolling
+	marker.setup(world, AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	marker.species = "kingfisher"
+	marker.flap_frames = [
+		ImageTexture.new(), ImageTexture.new(), ImageTexture.new(), ImageTexture.new()
+	]
+	var seen := {}
+	for i in 40:
+		marker._process(0.05)
+		seen[marker.texture] = true
+	assert_gt(seen.size(), 1, "a flying kingfisher should cycle through its wing-beat frames")
+
+
+func test_a_perched_kingfisher_holds_the_perched_frame():
+	var world := StubWorld.new()
+	marker.setup(world, AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	marker.species = "kingfisher"
+	marker.flap_frames = [ImageTexture.new(), ImageTexture.new()]
+	marker.perched_frame = ImageTexture.new()
+	marker._hunger = 0.0
+	marker._activity = PiscivoreAppetite.ACTIVITY_PERCH
+	marker._process(0.1)
+	assert_eq(
+		marker.texture, marker.perched_frame,
+		"a perched kingfisher should hold still, not flap"
+	)
+
+
+func test_hunting_still_flaps_rather_than_freezing_on_one_frame():
+	var world := StubWorld.new()
+	world.population = 1000.0
+	world.capacity = 1000.0
+	world.fish = StubFish.new()
+	add_child_autofree(world.fish)
+	world.fish.position = Vector2(4, 0)
+	marker.setup(world, AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	marker.species = "kingfisher"
+	marker.flap_frames = [
+		ImageTexture.new(), ImageTexture.new(), ImageTexture.new(), ImageTexture.new()
+	]
+	var seen := {}
+	for i in 60:
+		if world.fish == null or not is_instance_valid(world.fish):
+			world.fish = StubFish.new()
+			add_child_autofree(world.fish)
+			world.fish.position = marker.position + Vector2(4, 0)
+		marker._hunger = 1.0
+		marker._activity = PiscivoreAppetite.ACTIVITY_HUNT
+		marker._process(0.05)
+		seen[marker.texture] = true
+	assert_gt(
+		seen.size(), 1,
+		"the wings should keep beating through the hunt/hover/dive/carry sequence too"
+	)
+
+
+func test_without_flap_frames_the_marker_keeps_its_original_texture():
+	var world := StubWorld.new()
+	world.population = 0.0
+	marker.setup(world, AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	marker.species = "kingfisher"
+	var original := ImageTexture.new()
+	marker.texture = original
+	for i in 10:
+		marker._process(0.05)
+	assert_eq(
+		marker.texture, original,
+		"a marker with no flap_frames (an old caller, a test double) should be a no-op, not an error"
+	)
