@@ -1696,7 +1696,14 @@ real rock of a real size.**
   rising over the first radius and dying out by `BOULDER_WAKE_LENGTH_RATIO`
   radii — by `BOULDER_WAKE_GAIN`, gated by the current. The fold-margin
   pin holds at the gained strength, so the wake whirls without the
-  surface ever folding over itself.
+  surface ever folding over itself — and that bound turned out to be
+  tight: a gain of 0.5 pinched the warp to 0.17 against the 0.35 margin,
+  0.15 holds it. So the wake reads as disturbed water mostly through
+  `WAKE_FOAM`, a thinner trail of the face's foam streaming down the
+  lobe, which is what a real wake carries. Measured on the probe: a 0.9
+  m/s reach shows the white cap on the upstream face and a pale streak
+  trailing behind the rock; the whirl amplification is subtle by
+  construction.
 
 ### Real-world grounding
 
@@ -1727,7 +1734,9 @@ breaks the surface.
   manager exposes the verdict per flow boulder.
 - Per-boulder radius fed to the shader from the rock's real diameter — ✅.
 - Shoal replaces the band — ✅.
-- Foam in front — ✅. Wake whirls behind — ✅.
+- Foam in front — ✅. Wake whirls behind — ✅ (bend gain bounded by the
+  fold margin, foam streaks carry most of the read). Wake-specific eddy
+  shedding (a real vortex street with its own period) — ⬜ Not started.
 
 ## The ring is a thin, light line (2026-09-04)
 
