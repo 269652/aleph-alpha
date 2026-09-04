@@ -451,20 +451,27 @@ func test_flow_lines_are_a_few_tiles_long():
 	)
 
 
-## The water has to visibly MOVE. The drag is what carries the surface
-## downstream, so measured in the field's own feature lengths it must cover
-## a real fraction of a line per phase -- below that the surface deforms
-## almost in place and the river looks still.
-##
-## This is the trap the first version fell into: the drag was applied before
-## the anisotropic stretch, so 1.15 "units" came out as 0.18 of a feature --
-## nearly motionless.
-func test_the_water_visibly_travels_within_each_phase():
-	assert_gte(
-		RiverFlowShader.drag_in_feature_lengths(), 0.5,
-		"the surface travels only %.2f of a line per phase -- reads as still water"
-			% RiverFlowShader.drag_in_feature_lengths()
+## The drag is DEFORMATION, not travel -- reversed from the earlier contract
+## ("the drag is what carries the surface downstream", drag >= 0.5 feature
+## lengths per phase). Looked at on the real GPU (tools/probe_river_motion.gd)
+## a 7.2-cell drag never read as travel at all: the two phases are copies
+## of the field offset by HALF the drag, and at 45 world px apart they are
+## uncorrelated, so the crossfade is a dissolve between two unrelated
+## patterns -- a kink fades out where it is and a different one fades in
+## elsewhere. "A wobble stays at place." Travel that the eye can follow is
+## the linear drift, and for a kink to survive the crossfade and ride it
+## the two copies must stay correlated: their offset, half the drag, under
+## one noise cell.
+func test_the_drag_is_a_small_deformation_so_kinks_survive_the_crossfade():
+	assert_lte(
+		RiverFlowShader.ADVECT_STRENGTH * 0.5, 1.0,
+		"phases offset by %.2f cells are uncorrelated copies -- the fade dissolves every kink"
+			% (RiverFlowShader.ADVECT_STRENGTH * 0.5)
 	)
+	assert_gt(RiverFlowShader.ADVECT_STRENGTH, 0.0, "no drag at all is the old sliding-marks failure")
+	# Within its own phase each copy still genuinely stretches downstream.
+	var period := 1.0 / RiverFlowShader.ADVECT_RATE
+	assert_gt(RiverFlowShader.advection_offset(period * 0.4), RiverFlowShader.advection_offset(period * 0.1))
 
 
 # -- standing turbulence -----------------------------------------------------
@@ -1128,11 +1135,22 @@ func test_lines_are_fine_and_evenly_spaced_across_the_channel():
 	)
 
 
-## The lines MORPH: at a fixed spot the stroke pattern must differ a
-## quarter advection cycle later -- the wobble travels, so lines wander,
-## pinch and release.
-func test_the_lines_morph_over_a_quarter_cycle():
-	var period := 1.0 / RiverFlowShader.ADVECT_RATE
+## The time a viewer needs to see the surface travel a quarter of one
+## feature length at a given reach speed -- the window the two "does it
+## actually move" sweeps below watch through. It used to be a quarter of
+## the DRAG cycle in speed-zero water, which measured the drag's dissolve
+## and nothing else; now the drift carries the water, the drag is a small
+## deformation, and the honest window is one tied to the visible speed.
+func _quarter_feature_window_s(speed_mps: float) -> float:
+	return 0.25 * RiverFlowShader.feature_length_px() / RiverFlowShader.surface_px_per_s(speed_mps)
+
+
+## The lines MORPH: at a fixed spot in a typical reach the stroke pattern
+## must differ a quarter feature length of travel later -- the wobble
+## travels, so lines wander, pinch and release.
+func test_the_lines_morph_over_a_quarter_feature_length_of_travel():
+	var speed := 0.5
+	var window := _quarter_feature_window_s(speed)
 	var changed := 0
 	var count := 0
 	for column in 40:
@@ -1140,10 +1158,10 @@ func test_the_lines_morph_over_a_quarter_cycle():
 		for row in 30:
 			var across := -0.9 + float(row) / 29.0 * 1.8
 			var early := RiverFlowShader.stroke_mask(RiverFlowShader.stroke_field(
-				across, RiverFlowShader.animated_field_value(x, across * 2.56, Vector2(1, 0), 0.2)
+				across, RiverFlowShader.animated_field_value(x, across * 2.56, Vector2(1, 0), 0.2, speed)
 			), false) > 0.5
 			var later := RiverFlowShader.stroke_mask(RiverFlowShader.stroke_field(
-				across, RiverFlowShader.animated_field_value(x, across * 2.56, Vector2(1, 0), 0.2 + period * 0.25)
+				across, RiverFlowShader.animated_field_value(x, across * 2.56, Vector2(1, 0), 0.2 + window, speed)
 			), false) > 0.5
 			if early != later:
 				changed += 1
@@ -1251,10 +1269,11 @@ func test_the_lines_carry_streaming_brightness_pulses():
 
 
 ## Measured: at fixed points sitting ON a line, the stroke intensity must
-## genuinely change over a quarter cycle -- pulses passing through -- for
-## a real fraction of the line.
+## genuinely change over a quarter feature length of travel -- pulses
+## passing through -- for a real fraction of the line.
 func test_the_pulses_actually_travel_through_the_lines():
-	var period := 1.0 / RiverFlowShader.ADVECT_RATE
+	var speed := 0.3
+	var window := _quarter_feature_window_s(speed)
 	var moved := 0
 	var on_line := 0
 	for column in 90:
@@ -1262,10 +1281,10 @@ func test_the_pulses_actually_travel_through_the_lines():
 		for row in 9:
 			var across := -0.8 + float(row) / 8.0 * 1.6
 			var n_early := RiverFlowShader.animated_field_value(
-				x, across * 2.56, Vector2(1, 0), 0.3
+				x, across * 2.56, Vector2(1, 0), 0.3, speed
 			)
 			var n_later := RiverFlowShader.animated_field_value(
-				x, across * 2.56, Vector2(1, 0), 0.3 + period * 0.25
+				x, across * 2.56, Vector2(1, 0), 0.3 + window, speed
 			)
 			var early := RiverFlowShader.stroke_intensity(
 				RiverFlowShader.stroke_field(across, n_early), n_early, false
@@ -1286,15 +1305,24 @@ func test_the_pulses_actually_travel_through_the_lines():
 	)
 
 
-## The loop lengthens so the repeat is harder to spot, without giving up
-## travel speed -- the strength rises to match. Both halves pinned: the
-## per-second travel stays real, and the drag still covers most of a
-## feature length per phase.
-func test_the_water_still_travels_at_a_real_speed():
-	var cells_per_second := RiverFlowShader.ADVECT_STRENGTH * RiverFlowShader.ADVECT_RATE
-	assert_between(
-		cells_per_second, 1.0, 2.6,
-		"the surface travels %.2f cells/s" % cells_per_second
+## The water's visible speed is CALM. "I want a more relaxed and calm
+## picture, now everything is faster": at a typical 0.5 m/s reach the
+## surface -- and everything riding it -- crosses a tile in one to two
+## seconds (8 to 16 world px/s), not in half a second. The floor is the
+## same one the pulse legibility test uses; the ceiling is the number that
+## was reported as too fast, ~30, well cleared.
+func test_the_water_travels_at_a_calm_speed():
+	var typical := RiverFlowShader.surface_px_per_s(0.5)
+	assert_between(typical, 8.0, 16.0, "a 0.5 m/s reach streams at %.1f world px/s" % typical)
+	# And the drag's translation is a MINOR share of it -- the drift is what
+	# carries the water, coherently, so kinks, whirls and rings all travel
+	# together instead of the wobble dissolving in place.
+	var drag_px_per_s: float = (
+		RiverFlowShader.ADVECT_STRENGTH * RiverFlowShader.ADVECT_RATE / RiverFlowShader.NOISE_SCALE
+	)
+	assert_lt(
+		drag_px_per_s, typical / 3.0,
+		"the drag translates %.1f px/s of a %.1f px/s surface -- travel must be the drift's" % [drag_px_per_s, typical]
 	)
 
 
@@ -2837,9 +2865,10 @@ func test_the_wobble_is_watery_enough():
 # actually sees.
 
 
-## World px per second the pattern streams downstream at `speed_mps`.
+## World px per second the pattern streams downstream at `speed_mps` --
+## the whole visible speed, drift plus the drag's (now minor) translation.
 func _stream_world_px_per_s(speed_mps: float) -> float:
-	return RiverFlowShader.drift_cells(speed_mps, 1.0) / RiverFlowShader.NOISE_SCALE
+	return RiverFlowShader.surface_px_per_s(speed_mps)
 
 
 func test_a_typical_reach_streams_fast_enough_to_read_as_flowing():
@@ -2906,12 +2935,13 @@ func test_the_visible_surface_speed_is_the_drag_plus_the_drift():
 		RiverFlowShader.surface_px_per_s(1.0), RiverFlowShader.surface_px_per_s(0.5),
 		"a faster reach still streams faster"
 	)
-	# The drift on its own was never the water's speed: at a typical reach it
-	# is well under half of it. This is the number all three reports were
-	# about.
-	assert_lt(
-		RiverFlowShader.DRIFT_PX_PER_MPS * 0.5, RiverFlowShader.surface_px_per_s(0.5) * 0.5,
-		"if the drift alone were most of the visible speed this whole section is moot"
+	# The drift is MOST of the visible speed: it is the coherent translation
+	# everything can ride together. (It was under half of it when the drag
+	# was 7.2 cells, which is why wakes and whirls first read as standing
+	# still -- and why, with the drag's dissolve, the wobble still did.)
+	assert_gte(
+		RiverFlowShader.DRIFT_PX_PER_MPS * 0.5, RiverFlowShader.surface_px_per_s(0.5) * (2.0 / 3.0),
+		"the drift must carry at least two thirds of the visible speed"
 	)
 
 
@@ -2963,18 +2993,21 @@ func test_the_shader_streams_every_consumer_from_the_same_surface_speed():
 
 
 func test_a_wake_in_a_typical_reach_is_carried_clear_of_where_it_was_made():
-	# The ring lives RIPPLE_LIFETIME seconds. Carried at the drift alone in a
-	# 0.5 m/s reach it moved 22 world px in that time -- a tile and a half,
-	# with the water streaming three tiles past it: the ring sat there. At
-	# the water's own speed it travels several tiles before it fades, which
-	# is what "moves downstream at water speed" has to mean on screen.
+	# The ring lives RIPPLE_LIFETIME seconds and is carried at the water's
+	# visible speed the whole time. Over that life in a 0.5 m/s reach it
+	# must clearly leave where it was made -- more than a tile and a half --
+	# but calmly: carried four tiles in 2.2 s it "just seemed to drift and
+	# fade faster", so the ceiling is three tiles.
 	var age: float = RiverFlowShader.RIPPLE_LIFETIME
 	var carried := RiverFlowShader.ripple_center(Vector2.ZERO, Vector2(1.0, 0.0), 0.5, age)
 	assert_almost_eq(carried.x, RiverFlowShader.surface_px_per_s(0.5) * age, 1e-3)
-	assert_gte(
-		carried.x, float(TerrainRenderer.TILE_SIZE) * 3.5,
-		"a wake in a typical reach is carried only %.1f world px in its lifetime" % carried.x
+	assert_between(
+		carried.x, float(TerrainRenderer.TILE_SIZE) * 1.5, float(TerrainRenderer.TILE_SIZE) * 3.0,
+		"a wake in a typical reach is carried %.1f world px in its lifetime" % carried.x
 	)
+	# And it lingers: a ring that is gone in two seconds reads as a flicker
+	# in a calm picture.
+	assert_gte(RiverFlowShader.RIPPLE_LIFETIME, 3.0)
 	assert_almost_eq(carried.y, 0.0, 1e-9, "purely along the flow, never across it")
 
 

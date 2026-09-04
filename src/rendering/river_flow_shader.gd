@@ -1002,20 +1002,26 @@ void fragment() {
 ## inside Nyquist at the measured fps floor.
 const ADVECT_RATE := 0.22
 
-## How far the surface travels along the flow over one phase, in noise
-## CELLS. Sized against the smear length so each line travels a real
-## fraction of its own length per phase (see drag_in_feature_lengths) --
-## that is what reads as the water speed. Also bounded above by the seam
-## budget: the drag is one of the few direction-steered offsets, so a
-## bigger drag costs more at every direction-bin change.
+## How far each phase drags the surface along the flow over its life, in
+## noise CELLS. This is DEFORMATION, not travel -- reversed from the
+## earlier reading ("that is what reads as the water speed", sized to
+## cover most of a line per phase). 7.2 -> 1.2, and the reason is what the
+## real GPU showed (tools/probe_river_motion.gd): the two phases are copies
+## of the field offset by HALF the drag, and at 3.6 cells (45 world px)
+## apart the copies are uncorrelated, so the crossfade is a dissolve
+## between two unrelated patterns -- a kink fades out where it is and a
+## different one fades in elsewhere, "a wobble stays at place" no matter
+## how far each copy is being stretched. At 0.6 cells apart the copies
+## stay correlated: a kink survives the fade and rides the linear drift,
+## which is now what carries the water and everything on it, coherently.
+## Pinned by test_the_drag_is_a_small_deformation_so_kinks_survive_the_
+## crossfade; its translation share of the visible speed is pinned minor
+## by test_the_water_travels_at_a_calm_speed.
 ##
-## NOTE the animation is an EXACT half-cycle loop: the two triangular
-## crossfade weights swap symmetrically, so n(t + T/2) == n(t) by
-## construction. Deliberate and embraced -- 16-bit water animation WAS a
-## short loop -- and within every half cycle each phase's drag grows
-## monotonically DOWNSTREAM, which is why it still reads as flow, not as
-## oscillation. Pinned by test_the_animation_loops_exactly_each_half_cycle.
-const ADVECT_STRENGTH := 7.2
+## The animation is still an exact half-cycle loop in its DEFORMATION
+## (n(t + T/2) == n(t) with the drift removed); the drift makes the whole
+## thing travel on top.
+const ADVECT_STRENGTH := 1.2
 
 ## Spatial scale of the surface field, and the second octave's multiplier.
 ##
@@ -1285,17 +1291,20 @@ const RIPPLE_CREST_FULL := 0.60
 const HALF_WIDTH_PX := 32.0
 
 ## Continuous downstream pattern travel, px/s per m/s of real current --
-## linear in the reach's solved speed, pinned by drift tests.
-## RAISED 9 -> 20, the top of its pinned range. "The lines are not flowing
-## forward" -- and they could not have read as flowing: the strokes are
-## contours of across, lines PARALLEL to the flow, so translating the field
-## along the flow leaves a line where it was. Forward motion only reads
-## through what travels ON the lines -- the brightness pulse and the kinks
-## -- and at 9 a typical 0.5 m/s reach streamed those at 4.5 world px/s, 18
-## screen px/s, three and a half seconds to cross one tile. At 20 it is 10
-## world px/s: a pulse crosses a tile in under two seconds. Pinned by
-## test_a_typical_reach_streams_fast_enough_to_read_as_flowing.
-const DRIFT_PX_PER_MPS := 20.0
+## linear in the reach's solved speed, pinned by drift tests. This is THE
+## carrier now: the ring centre, the eddy field, the kinks and the pulses
+## all ride it (see surface_px_per_s), so it is what "the water's speed"
+## means on screen.
+## RAISED 9 -> 20 once ("the lines are not flowing forward": the strokes are
+## contours of across, lines PARALLEL to the flow, so forward motion only
+## reads through what travels ON them, and at 9 that took three and a half
+## seconds to cross a tile). Then 20 -> 16 with the drag cut to a
+## deformation: with everything moving together coherently, 8 world px/s
+## at a typical 0.5 m/s reach reads as a calm, unmistakable current -- and
+## 30 read as "everything is faster". Pinned by
+## test_a_typical_reach_streams_fast_enough_to_read_as_flowing (floor) and
+## test_the_water_travels_at_a_calm_speed (ceiling).
+const DRIFT_PX_PER_MPS := 16.0
 
 ## The dim end of the pulse that streams along a stroke. 0.55 was a 45%
 ## modulation, a shimmer; 0.35 is the depth at which a bright segment
@@ -1787,8 +1796,10 @@ static func is_still_water(velocity_m_s: float) -> bool:
 ## How much of the two-phase surface morph still water keeps: enough for
 ## the contour strokes to visibly breathe (real ponds ripple under wind),
 ## far too little to read as a current. Strictly between none and a
-## river's full morph, by test.
-const STILL_RIPPLE := 0.25
+## river's full morph, by test. 0.25 -> 0.45 when ADVECT_STRENGTH dropped
+## 7.2 -> 1.2, so a lake's sideways breathing goes 1.8 -> 0.54 cells (22
+## -> 7 world px): calmer, as asked, but not frozen.
+const STILL_RIPPLE := 0.45
 
 
 ## Whirl (third playtest, "more natural whirly turbulences in curves"):
@@ -2015,9 +2026,11 @@ static func drift_cells(speed_mps: float, seconds: float) -> float:
 ## the two-phase drag translates the field ADVECT_STRENGTH cells every
 ## 1/ADVECT_RATE seconds regardless of the reach, and the linear drift adds
 ## DRIFT_PX_PER_MPS per m/s of real current. Everything that has to move
-## WITH the water (the ring centre, the eddy field) rides this sum; the
-## drift alone is well under half of it at a typical reach, which is what
-## made wakes and whirls read as standing still. Gated by the same hard
+## WITH the water (the ring centre, the eddy field) rides this sum. The
+## drift is most of it by design: it is the coherent translation kinks,
+## whirls and rings can all follow, while the drag is a small deformation
+## (when the drag was 7.2 cells it was two thirds of this number, and its
+## crossfade dissolved every kink in place). Gated by the same hard
 ## STILL_FLOW_M_S step the shader's still path uses, so a lake's surface
 ## speed is exactly zero.
 static func surface_px_per_s(speed_mps: float) -> float:

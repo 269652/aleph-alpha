@@ -314,9 +314,13 @@ const EDGE_ALPHA_FADE_END := 0.5
 ## it reaches with RIPPLE_LIFETIME is still pinned past its own tile.
 const RIPPLE_SPEED := 11.5
 ## How long a movement wake keeps expanding before it dies. Together with
-## RIPPLE_SPEED this bounds a wake at ~1.6 tiles of radius: far enough to
+## RIPPLE_SPEED this bounds a wake at ~2.2 tiles of radius: far enough to
 ## read as a wake, not so far that one fish visibly disturbs a whole pond.
-const RIPPLE_LIFETIME := 2.2
+## 2.2 -> 3.0 s ("a more relaxed and calm picture ... they just seem to
+## drift and fade faster"): the ring lingers and its linear fade is
+## slower. The fish flap schedule derives its "occasional, not constant"
+## bound from this constant, and still clears it (test_fish_marker.gd).
+const RIPPLE_LIFETIME := 3.0
 ## Distance between successive crests -- the packet holds a couple of these.
 ## 6 -> 8, half a tile: broad swells read smoother than fine rings, which
 ## is the "smoother ... more natural" half of the same report. Pinned at

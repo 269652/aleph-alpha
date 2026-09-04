@@ -1446,7 +1446,12 @@ Old halo, new band: same ring extent and alpha (`BOULDER_BAND_WIDTH_PX`,
 the channel's own wet/dry verdict" property that lets a boulder on dry
 bank ground still show a band. Only the fill inside the ring changed.
 
-## One visible water speed: ripples, eddies and lines together (2026-09-04)
+## One visible water speed: ripples, eddies and lines together (2026-09-04) — PARTLY SUPERSEDED
+
+*The shared-speed mechanism below stands; the NUMBERS and the claim that
+the drag's translation is most of the visible speed do not. See "A calm
+picture: the drift carries everything, the drag only deforms" further
+down for what the real GPU showed and what replaced them.*
 
 Reported in three steps, live, on the ripple work above: *"Can you make
 the river ripples move downstream at water speed?"*, then *"eddy swirls
@@ -1567,11 +1572,71 @@ shader's own smoothstep (`test_river_flow_shader.gd`). The fish ripple
 timing tests, which derive from `RIPPLE_LIFETIME`, are unaffected
 (lifetime unchanged); the GPU readback smoke test stays green.
 
+## A calm picture: the drift carries everything, the drag only deforms (2026-09-04)
+
+Reported on the two sections above, live: *"now they look worse and just
+seem to drift and fade faster ... i want a more relaxed and calm picture
+now everything is faster and the wobbly lines still don't move at the
+same speed (a wobble stays at place)."*
+
+This time it was LOOKED AT rather than argued from the algebra.
+`tools/probe_river_motion.gd` renders a 0.5 m/s reach with the real
+shared material on the real GPU, saves frames at successive times, and
+writes amplified difference images between them (anything static comes
+out black). Two things were plain in the frames:
+
+- The ring was carried 30 world px in one second and was already faint
+  at 1.5 s — "drift and fade faster", exactly.
+- The lines did not translate at all. The two-phase drag at
+  `ADVECT_STRENGTH` 7.2 cells crossfades two copies of the field offset
+  by HALF the drag — 45 world px — and at that distance the copies are
+  uncorrelated, so the crossfade is a dissolve between two unrelated
+  patterns: a kink fades out where it is and a different one fades in
+  somewhere else. No kink ever travels. That is the wobble that "stays at
+  place", and it was the same whether the copies were being stretched 90
+  px per cycle or not. The previous section's arithmetic — that the drag
+  "translates features at 19.8 world px/s" — was true of each copy and
+  false of the picture.
+
+**The contract is reversed.** The drag is DEFORMATION only; the linear
+drift is the carrier.
+
+| constant | before | after | why |
+| --- | --- | --- | --- |
+| `ADVECT_STRENGTH` | 7.2 cells | 1.2 | phases 0.6 cells apart stay correlated: a kink survives the fade and rides the drift |
+| `DRIFT_PX_PER_MPS` | 20 | 16 | with everything coherent, 8 px/s at 0.5 m/s reads as a calm, unmistakable current |
+| `surface_px_per_s` at 0.5 m/s | ~30 world px/s | ~11 | the one speed the ring, eddies, kinks and pulses all ride |
+| `STILL_RIPPLE` | 0.25 | 0.45 | lakes keep breathing (22 → 7 px sideways): calmer, not frozen |
+| `RIPPLE_LIFETIME` | 2.2 s | 3.0 | the ring lingers and its fade is slower; carried ~2 tiles over its life instead of 4 |
+
+Nothing structural changed: two phases, triangular crossfade, the
+world-anchored field, the eddy translation at `BEND_DRIFT_FRACTION` 1.0,
+the shared `surface_px_per_s`. The probe frames after the change show
+the line kinks translating downstream frame to frame at the ring's own
+rate, and the ring still visible half way through its life.
+
+**Pins replaced, not deleted.** Two tests encoded the drag as the
+carrier — "the drag covers at least half a feature length per phase" and
+"the surface travels 1.0 to 2.6 cells per second" — and could only be
+satisfied by the dissolve. They became: phases under one cell apart
+(`test_the_drag_is_a_small_deformation_so_kinks_survive_the_crossfade`);
+a 0.5 m/s reach between 8 and 16 world px/s with the drag's translation
+under a third of it (`test_the_water_travels_at_a_calm_speed`); the drift
+at least two thirds of the visible speed. The two motion sweeps that
+watched "a quarter drag cycle in speed-zero water" — which measured the
+dissolve and nothing else — now watch a quarter feature length of travel
+at a real reach speed. The ring's carry over its life is bounded on both
+sides now (1.5 to 3 tiles) and its lifetime floored at 3 s on both
+surfaces.
+
 ## Status
 
+- **A calm picture (drift carries, drag deforms)** — ✅ Done — see the
+  section above; the probe tool is `tools/probe_river_motion.gd`.
 - **One visible water speed (ripples, eddies, lines)** — ✅ Done — see
-  the section above; `surface_px_per_s` is the single source, both
-  consumers ride it, `BEND_DRIFT_FRACTION` 1.0.
+  its section above; `surface_px_per_s` is the single source, both
+  consumers ride it, `BEND_DRIFT_FRACTION` 1.0. Its speed numbers are
+  superseded by the calm-picture section.
 - **A softer, slower, broader wake** — ✅ Done — shared packet slowed and
   broadened in `WaterShader`, the river's ring inks graduated through its
   life; see the section above.
