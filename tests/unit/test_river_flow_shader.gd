@@ -1417,9 +1417,11 @@ func test_every_boulder_gets_its_own_shore_band():
 	assert_gt(RiverFlowShader.BOULDER_BAND_ALPHA, 0.0)
 	assert_lte(RiverFlowShader.BOULDER_BAND_ALPHA, 1.0)
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("boulder_radius_px, boulder_radius_px + boulder_band_width_px, d))"),
-		"the band's reach must still be a RING -- a disc lights alpha under the rock and undoes its own dry patch"
+		_shader_code_lf().contains("boulder_radius_px + boulder_band_width_px,\n\t\t\t\tboulder_radius_px + boulder_band_width_px + boulder_band_edge_feather_px, d"),
+		"the band's reach must still be a RING, and its true fade must sit PAST width_px -- inside it, the fade " +
+		"eats into whichever colour level happens to own the outer edge"
 	)
+	assert_gt(RiverFlowShader.BOULDER_BAND_EDGE_FEATHER_PX, 0.0)
 	assert_true(RiverFlowShader.SHADER_CODE.contains("boulder_band * boulder_band_alpha"))
 	var material := RiverFlowShader.new().make_material()
 	assert_almost_eq(
@@ -1428,22 +1430,39 @@ func test_every_boulder_gets_its_own_shore_band():
 	assert_almost_eq(
 		float(material.get_shader_parameter("boulder_band_alpha")), RiverFlowShader.BOULDER_BAND_ALPHA, 1e-9
 	)
+	assert_almost_eq(
+		float(material.get_shader_parameter("boulder_band_edge_feather_px")),
+		RiverFlowShader.BOULDER_BAND_EDGE_FEATHER_PX, 1e-9
+	)
 
 
 ## The band's own reach, mirrored on the CPU: zero under the rock (that
-## ground is the eyot, not the band), a full ring just outside it, gone
-## beyond the band's width -- and, crucially, defined with NO reference to
-## the channel's own wet/dry state, so a rock on dry land gets exactly the
-## same ring a rock mid-channel does. Renamed from the old
-## boulder_halo_factor; same shape, same values.
+## ground is the eyot, not the band), full strength across the WHOLE band
+## width -- unlike the old boulder_halo_factor, which faded within that
+## width, this stays flat all the way to its far edge so the colour ramp
+## can do the layering at full alpha -- then a true fade to 0 across the
+## small extra edge-feather coda past it. Defined with NO reference to the
+## channel's own wet/dry state, so a rock on dry land gets exactly the
+## same ring a rock mid-channel does.
 func test_boulder_band_envelope_rings_the_rock_and_nothing_else():
 	assert_eq(RiverFlowShader.boulder_band_envelope(0.0), 0.0, "under the rock is the eyot, not the ring")
 	assert_eq(RiverFlowShader.boulder_band_envelope(RiverFlowShader.BOULDER_RADIUS_PX), 1.0, "the ring peaks right at the rock's edge")
 	assert_eq(
-		RiverFlowShader.boulder_band_envelope(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX), 0.0
+		RiverFlowShader.boulder_band_envelope(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX), 1.0,
+		"alpha must still be at full strength right at the colour ramp's own far edge, not already fading"
+	)
+	assert_eq(
+		RiverFlowShader.boulder_band_envelope(
+			RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX
+			+ RiverFlowShader.BOULDER_BAND_EDGE_FEATHER_PX
+		), 0.0,
+		"the true fade completes only past the extra edge-feather coda"
 	)
 	assert_between(
-		RiverFlowShader.boulder_band_envelope(RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX * 0.5),
+		RiverFlowShader.boulder_band_envelope(
+			RiverFlowShader.BOULDER_RADIUS_PX + RiverFlowShader.BOULDER_BAND_WIDTH_PX
+			+ RiverFlowShader.BOULDER_BAND_EDGE_FEATHER_PX * 0.5
+		),
 		0.0, 1.0
 	)
 
@@ -1556,9 +1575,29 @@ func test_the_shader_no_longer_paints_a_flat_static_boulder_halo():
 		"the band must be perturbed by the channel's own advected field n, the same field the wave strokes use"
 	)
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("mix(line_color, band0_color, boulder_band_t)"),
+		RiverFlowShader.SHADER_CODE.contains("mix(line_color, band0_color, clamp(boulder_bramp, 0.0, 1.0))"),
 		"the band must blend the shore highlight tint into the channel's own shallow-water tone, not a flat colour"
 	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("mix(boulder_band_color, band1_color, clamp(boulder_bramp - 1.0, 0.0, 1.0))"),
+		"THREE colour stops, not two -- line_color and band0_color are both pale enough that a two-stop " +
+		"ramp between them still read live as one soft glow, not a layered band"
+	)
+
+
+## Regression guard for the two-stop attempt that read as a soft glow
+## live: LINE_COLOR and BAND_COLORS[0] are both pale, so a boundary
+## between them barely registers. The outermost layer must reach a
+## colour with real value contrast against the innermost one.
+func test_boulder_band_outer_layer_has_real_contrast_against_the_inner_one():
+	var inner := RiverFlowShader.boulder_band_color(0)
+	var outer := RiverFlowShader.boulder_band_color(RiverFlowShader.BOULDER_BAND_LEVELS - 1)
+	var luminance_drop := inner.v - outer.v
+	assert_gt(
+		luminance_drop, 0.15,
+		"the outer layer must read as visibly darker than the inner one, not a near-match pale-on-pale step"
+	)
+	assert_eq(outer, RiverFlowShader.BAND_COLORS[1], "the outer layer must reach the second, more saturated water tone")
 
 
 func test_the_material_starts_with_no_waders():

@@ -102,6 +102,7 @@ uniform vec2 boulders[24];
 uniform float boulder_reach_px = 40.0;
 uniform float boulder_radius_px = 11.0;
 uniform float boulder_band_width_px = 6.0;
+uniform float boulder_band_edge_feather_px = 1.5;
 uniform float boulder_band_alpha = 0.6;
 uniform float boulder_band_levels = 3.0;
 uniform float boulder_band_wobble = 0.6;
@@ -405,8 +406,23 @@ void fragment() {
 		// ends. Without it the band ran at full strength under the rock
 		// too and, since it lights alpha on its own below, painted water
 		// straight back over the dry patch it is supposed to trim.
+		//
+		// The OUTER feather sits ENTIRELY PAST boulder_band_width_px, not
+		// inside it: a first pass faded alpha within the ring's own last
+		// couple of pixels, but the outermost colour LEVEL also only owns
+		// its last couple of pixels (three levels sharing one width_px
+		// span), so the fade ate most of that level's own extent and it
+		// only ever appeared already half-transparent -- seen live as one
+		// soft fade, never a second visible band. Every colour level below
+		// now gets the ring's full width at essentially flat alpha; only
+		// this small extra coda past the colour ramp's own end actually
+		// fades to nothing, the same relationship bank_feather has to the
+		// whole channel width.
 		float band_here = smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d)
-			* (1.0 - smoothstep(boulder_radius_px, boulder_radius_px + boulder_band_width_px, d));
+			* (1.0 - smoothstep(
+				boulder_radius_px + boulder_band_width_px,
+				boulder_radius_px + boulder_band_width_px + boulder_band_edge_feather_px, d
+			));
 		// The band's colour comes from whichever boulder dominates its
 		// strength (the max() just below) -- latched together so a
 		// fragment between two overlapping rings never mixes one
@@ -712,13 +728,23 @@ void fragment() {
 	// cel/stroke boundary does, and the same world-anchored dither hash,
 	// so its steps dissolve into the same hand-drawn grain instead of a
 	// smooth gradient ring.
+	//
+	// Three STOPS, not two: a first pass ramped line_color straight to
+	// band0_color and, live, still read as one soft glow -- both colours
+	// are pale, so even a genuine hard step between them barely registers
+	// as a "layer". Running it through band1_color as well (a visibly
+	// darker, more saturated blue) is what actually reads as banding,
+	// exactly the way the channel body needs all five BAND_COLORS, not
+	// two, to read as a cross-section rather than a gradient.
 	float boulder_wobbled_t = clamp(boulder_band_ring_t + (n - 0.5) * boulder_band_wobble, 0.0, 1.0);
 	float boulder_level = clamp(
 		floor(boulder_wobbled_t * boulder_band_levels + (checker - 0.5) * dither_strength),
 		0.0, boulder_band_levels - 1.0
 	);
 	float boulder_band_t = boulder_level / (boulder_band_levels - 1.0);
-	vec3 boulder_band_color = mix(line_color, band0_color, boulder_band_t);
+	float boulder_bramp = boulder_band_t * 2.0;
+	vec3 boulder_band_color = mix(line_color, band0_color, clamp(boulder_bramp, 0.0, 1.0));
+	boulder_band_color = mix(boulder_band_color, band1_color, clamp(boulder_bramp - 1.0, 0.0, 1.0));
 	body = mix(body, boulder_band_color, boulder_band * mix(0.5, 0.85, night_lift));
 
 	// The comic INK line: a dark outline hugging the real bank curve, just
@@ -878,6 +904,18 @@ const BOULDER_RADIUS_PX := 11.0
 ## boulder_reach_px: the band is a ring right at the rock, not part of
 ## the flow-bending falloff.
 const BOULDER_BAND_WIDTH_PX := 6.0
+## A small EXTRA coda, entirely PAST the ring's own width above, where
+## alpha makes its true fade to 0 -- so the whole width_px the colour ramp
+## steps through renders at essentially flat alpha, and only this sliver
+## beyond it (still the outermost colour, just fading out) actually
+## dissolves. Two earlier attempts fed the fade a span INSIDE width_px
+## instead (the whole width, then just its last 1.5px) and both crushed
+## the outermost layer -- three levels share one width_px span, so even a
+## "narrow" fade confined to that span ate most of the last level's own
+## share of it, and it only ever appeared already half-transparent ("still
+## reads as one soft glow"). Mirrors the relationship BANK_FEATHER has to
+## the whole channel width: full opaque body, THEN a small feather past it.
+const BOULDER_BAND_EDGE_FEATHER_PX := 1.5
 const BOULDER_BAND_ALPHA := 0.6
 ## "The rocks should not have a halo around them... instead they should
 ## have a layered band like the shore which also wobbles and moves": the
@@ -1049,6 +1087,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("boulder_reach_px", BOULDER_REACH_PX)
 	material.set_shader_parameter("boulder_radius_px", BOULDER_RADIUS_PX)
 	material.set_shader_parameter("boulder_band_width_px", BOULDER_BAND_WIDTH_PX)
+	material.set_shader_parameter("boulder_band_edge_feather_px", BOULDER_BAND_EDGE_FEATHER_PX)
 	material.set_shader_parameter("boulder_band_alpha", BOULDER_BAND_ALPHA)
 	material.set_shader_parameter("boulder_band_levels", float(BOULDER_BAND_LEVELS))
 	material.set_shader_parameter("boulder_band_wobble", BOULDER_BAND_WOBBLE)
@@ -1145,14 +1184,20 @@ static func eyot_dry_factor(distance_px: float) -> float:
 
 ## The boulder's own shore-band strength `distance_px` from its centre: 0
 ## at and inside the rock's own radius (that ground is the eyot, not the
-## band), rising through the band, 0 again beyond it. Independent of
-## eyot_dry and of the channel's own wet/dry verdict -- this is what lets
-## a rock sitting on ordinary dry bank ground still show a band. Renamed
-## from boulder_halo_factor; same shape, same values.
+## band), full strength across the WHOLE band width (where
+## boulder_band_color does its layering), then a true fade to 0 across the
+## small EXTRA BOULDER_BAND_EDGE_FEATHER_PX coda past it -- so every colour
+## level gets the ring's full width at flat alpha instead of the fade
+## eating into whichever level happens to sit at the outer edge.
+## Independent of eyot_dry and of the channel's own wet/dry verdict --
+## this is what lets a rock sitting on ordinary dry bank ground still show
+## a band. Renamed from boulder_halo_factor, which faded within the whole
+## width rather than past it; the inner edge is unchanged.
 static func boulder_band_envelope(distance_px: float) -> float:
 	var inner := smoothstep(BOULDER_RADIUS_PX * 0.6, BOULDER_RADIUS_PX, distance_px)
 	var outer := 1.0 - smoothstep(
-		BOULDER_RADIUS_PX, BOULDER_RADIUS_PX + BOULDER_BAND_WIDTH_PX, distance_px
+		BOULDER_RADIUS_PX + BOULDER_BAND_WIDTH_PX,
+		BOULDER_RADIUS_PX + BOULDER_BAND_WIDTH_PX + BOULDER_BAND_EDGE_FEATHER_PX, distance_px
 	)
 	return inner * outer
 
@@ -1181,12 +1226,19 @@ static func boulder_band_level(ring_t: float, n: float, checker: float) -> int:
 
 ## The band's colour at a given level: LINE_COLOR (the same pale tint the
 ## old flat halo used, and the channel's own shore highlight) at the
-## rock's own edge, blending out to BAND_COLORS[0] (the channel's own
-## shallowest water tone) at the band's outer edge -- so a boulder's shore
-## reads in the same palette as the channel's, not a colour of its own.
+## rock's own edge, ramped through BAND_COLORS[0] (the channel's own
+## shallowest water tone) to BAND_COLORS[1] (visibly darker and more
+## saturated) at the band's outer edge -- so a boulder's shore reads in
+## the same palette as the channel's, not a colour of its own. THREE
+## stops, not two: a first pass ramped only to BAND_COLORS[0] and, seen
+## live, still read as one soft glow -- LINE_COLOR and BAND_COLORS[0] are
+## both pale, so even a genuine hard step between them barely registered
+## as a "layer". The mirror of the shader's own two-stage mix.
 static func boulder_band_color(level: int) -> Color:
 	var t := float(level) / float(BOULDER_BAND_LEVELS - 1)
-	return LINE_COLOR.lerp(BAND_COLORS[0], t)
+	var bramp := t * 2.0
+	var color := LINE_COLOR.lerp(BAND_COLORS[0], clampf(bramp, 0.0, 1.0))
+	return color.lerp(BAND_COLORS[1], clampf(bramp - 1.0, 0.0, 1.0))
 
 
 ## The waterline: 1 inside the channel, 0 past the bank curve, feathered
