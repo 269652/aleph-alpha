@@ -1380,16 +1380,40 @@ down for a hand-sized object rather than a full creature):
 assets/sprites/items/wooden_club_combat.png
 ```
 
-A new folder (`assets/sprites/items/`) — the first item art of any kind to
-actually exist as a file rather than be procedurally generated, so nothing
-existing fits. Wiring needs a new `IllustratedItemSprite`
-(`src/rendering/illustrated_item_sprite.gd`), mirroring
-`IllustratedAnimalSprite`'s `_SHEETS`/`has_action` shape with
-`attack_bands`/`attack_path` for row 1 and a new `condition_bands`/
-`condition_path` pair for row 2 (defense/worn/broken by fixed index) — see
+**This file exists as a SAMPLE (2026-09-04), not as generated art.**
+`src/rendering/wooden_club_sheet_painter.gd` paints a deterministic
+stand-in in exactly the format the four prompts above ask for — same 8+3
+cell grid, a 2px near-white rule around every cell (outer edge included,
+like `wolf.png`'s white frame), 360×300 cells (2898×606 overall, clearing
+the 1600×300-per-row floor), pure `#FF00FF` ground, the club alone around a
+fixed grip pivot, speed lines on frames 4–5, chips and dents on the worn
+cell, a raw-wood crack with a kinked upper half on the broken cell, three
+flat shading bands lit from the upper-left. Regenerate it with:
+
+```
+godot --headless -s tools/generate_wooden_club_sheet.gd
+godot --headless --import
+```
+
+Wiring is DONE for slicing: `IllustratedItemSprite`
+(`src/rendering/illustrated_item_sprite.gd`) registers the sheet with
+`attack_bands` (row 1) and `condition_bands` (row 2, defense/worn/broken by
+`CONDITION_INDEX`), keyed on the same `chroma_key`/`chroma_key_tolerance`
+the boss sheets use. Unlike the animal slicer it keeps each cell WHOLE
+(no content crop, no baseline) so the grip pivot stays put across the
+swing — see the concept doc's Status list for why. Nothing renders it in
+play yet (`Player`/`CharacterView` still swing the procedural club); that
+is the named next step.
+
+**Replacing the sample with real art**: generate the four prompts above,
+composite them into the same two-row layout, drop the file in over
+`wooden_club_combat.png`, then re-measure `attack_bands`/`condition_bands`
+in `IllustratedItemSprite._SHEETS` against the new file (row-scan for the
+horizontal rules, the same way every animal sheet's bands were measured)
+and update `test_illustrated_item_sprite.gd`'s band-pinning test, which
+currently ties the bands to the painter's layout. See
 [item_illustrations.md](../concept/item_illustrations.md#combat-sheets-attack-defense-condition--wooden_club)
-for the full spec. Not attempted here: same TDD-needs-real-pixels reason
-every other pending illustrated surface in this doc gives.
+for the full spec.
 
 ---
 

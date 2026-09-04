@@ -203,9 +203,42 @@ shape, not a reuse of it directly — an item has no gait/facing axis to
 carry). `Player` already computes both real inputs this needs:
 `equipped_item` itself (what `_wear_equipped_item` mutates) and
 `ItemWear.condition_for(equipped_item.wear, material)`; `is_blocking()` and
-`_character_view.play_attack_swing` already mark the two action states. Not
-built in this pass — the same "needs real source pixels for a meaningful
-test" reason every other pending illustrated surface in this doc gives.
+`_character_view.play_attack_swing` already mark the two action states.
+
+**Status (2026-09-04):**
+
+- ✅ **Sample sheet exists** — `assets/sprites/items/wooden_club_combat.png`
+  (2898×606), the first item art to exist as a file. It is NOT image-model
+  output: `wooden_club_sheet_painter.gd` paints a deterministic stand-in in
+  exactly the format §11 of `ai_sprite_prompts.md` asks for (the 8+3 cell
+  grid, a fixed grip pivot across the swing, speed lines on the release
+  pair, chips/dents on the worn cell, a raw-wood crack with a kinked upper
+  half on the broken cell, magenta chroma-key ground, near-white divider
+  grid, three flat shading bands lit from the upper-left), written by
+  `tools/generate_wooden_club_sheet.gd`. Its purpose is to give the wiring
+  real pixels to be built and tested against; a generated sheet replaces
+  the file in place and re-measures the bands, nothing else changes.
+- ✅ **`IllustratedItemSprite` slices it** (`illustrated_item_sprite.gd`):
+  `has_item`/`has_action`/`has_condition`, `generate_textures(id,
+  "attack")` for row 1, `condition_texture(id, "defense"|"worn"|"broken")`
+  for row 2 via the fixed `CONDITION_INDEX`. `_SHEETS` pins the bands
+  literally and `test_illustrated_item_sprite.gd` asserts they equal the
+  painter's own layout, so a regenerated sample cannot drift from them.
+- **Deliberate divergence from `IllustratedAnimalSprite`'s slicing**: an
+  animal frame is cropped to its drawing and stood on a shared baseline so
+  its feet stay planted; a club rotating around its grip needs the
+  opposite — the grip must stay at the same pixel every frame, which a
+  content crop moves. So cells are detected as the runs of columns between
+  divider lines on the still-opaque sheet, cut out whole, chroma-keyed and
+  returned at cell size with no crop or rescale. A pristine club has no
+  cell of its own: it is the attack cycle's neutral final frame.
+- ⬜ **Not drawn anywhere yet** — `Player`/`CharacterView`/`WeaponSwing`
+  still use the procedural rotation and `ProceduralItemSprite` icon for
+  the club; nothing calls `IllustratedItemSprite` outside its tests.
+  Wiring the swing, the block pose and the condition swap into the rig is
+  the next step, not this one.
+- ⬜ **No image-model art** for the club, and nothing for `iron_sword`/
+  `crude_blade`.
 
 ### Deferred: per-item use/swing art, catalog-wide
 

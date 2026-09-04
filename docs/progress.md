@@ -3858,7 +3858,22 @@ describes:
   tooltip line, rarity-driven wear resistance -- all named explicitly in the
   concept doc's own Status section rather than left implicit.
 - **Composite item sheet: attack/defense/condition, wooden_club pilot**
-  (small) — ✅ Spec'd (2026-09-03), ⬜ nothing generated/wired —
+  (small) — ✅ Spec'd (2026-09-03), 🚧 sample sheet + slicing wired
+  (2026-09-04), ⬜ not rendered in play — `assets/sprites/items/
+  wooden_club_combat.png` now exists: a deterministic SAMPLE painted by
+  `wooden_club_sheet_painter.gd` (via `tools/generate_wooden_club_sheet.gd`)
+  in exactly §11's format, not image-model output, so the wiring could be
+  built red-first against real pixels. `illustrated_item_sprite.gd` slices
+  it (`generate_textures(id, "attack")` → 8 frames; `condition_texture(id,
+  "defense"|"worn"|"broken")` by fixed index), keeping each cell whole so
+  the grip pivot stays put — a deliberate divergence from the animal
+  slicer's content-crop-and-baseline, recorded in the concept doc. Chroma-
+  keying moved to a shared `SpriteSheetSlicer.chroma_keyed` (the animal
+  sprite delegates to it). Tested: `test_wooden_club_sheet_painter.gd` (23,
+  every tuned value pinned), `test_illustrated_item_sprite.gd` (14, bands
+  pinned to the painter's layout). Not built: `Player`/`CharacterView`
+  drawing these frames for the swing/block/condition states; real
+  generated art; iron_sword/crude_blade. Original spec entry follows —
   `item_illustrations.md`'s per-item swing art was flatly "Deferred, not
   needed" until this pass; now that block.gd (defense) and item_durability.md
   (worn/broken) both give it something real to draw, `wooden_club` is spec'd
