@@ -84,6 +84,21 @@ const MIN_REGION_FRACTION := 0.004
 ## whose box falls inside a drawing's box is absorbed into it.
 const MERGE_GAP_PX := 0
 
+## How many THICK coarse cells (see _is_thick) a connected patch of them
+## needs before it counts as a drawing's own core, eligible to seed a split
+## (see _blob_boxes). Small ones are noise, not a second drawing -- a
+## cluster of petals or leaves solid enough to pass _is_thick on its own,
+## measured on the real cherry sheet at 4-22 cells, sitting in the gap
+## between two real crowns and embedded inside one crown's own box, which
+## without this filter reads as a THIRD core and (correctly, but
+## needlessly) trips the overlap safety net in _blob_boxes, undoing a split
+## that was otherwise exactly right. The real crown/trunk/fruit cores this
+## must never exclude measure at minimum several hundred cells on every
+## sheet checked -- the gap between real content and noise is wide enough
+## that this only has to clear the noise with margin, not find an exact
+## line.
+const MIN_CORE_CELLS := 50
+
 
 static func is_background(color: Color) -> bool:
 	if color.a < BACKGROUND_ALPHA:
@@ -105,7 +120,6 @@ static func regions_in(sheet: Image) -> Array[Rect2i]:
 
 	var boxes := _blob_boxes(sheet)
 	var sheet_area := float(sheet.get_width() * sheet.get_height())
-	boxes = _merge_touching(boxes, MERGE_GAP_PX)
 
 	for box in boxes:
 		if float(box.size.x * box.size.y) / sheet_area < MIN_REGION_FRACTION:
@@ -113,12 +127,65 @@ static func regions_in(sheet: Image) -> Array[Rect2i]:
 		var trimmed := _trim(sheet, box)
 		if trimmed.size.x > 0 and trimmed.size.y > 0:
 			found.append(trimmed)
+
 	found.sort_custom(_reading_order)
 	return found
 
 
-## Bounding boxes of the connected runs of content, found at DETECTION_STEP
-## resolution and scaled back up.
+## Repeatedly unions any two regions that still overlap, until none do. Not
+## currently reachable from regions_in -- _clip_apart (split boxes) and
+## _merge_touching's has_core rule (separate raw components) between them
+## account for every overlap source measured on the real sheets -- but kept
+## as a named, tested unit in case some future sheet finds a third one
+## before regions_in's own contract (test_regions_do_not_overlap) does.
+static func _merge_overlapping(regions: Array[Rect2i]) -> Array[Rect2i]:
+	var working := regions.duplicate()
+	var merged := true
+	while merged:
+		merged = false
+		var result: Array[Rect2i] = []
+		for region in working:
+			var joined := false
+			for index in result.size():
+				if result[index].intersects(region):
+					result[index] = result[index].merge(region)
+					joined = true
+					merged = true
+					break
+			if not joined:
+				result.append(region)
+		working = result
+	return working
+
+
+## ## Splitting a blob with more than one solid core
+##
+## Plain flood-fill connectivity is not enough on its own: two real drawings
+## can be joined by content that is real (not background) but never more
+## than a coarse cell thin -- measured on the current tree art, a canopy
+## crown drawn close enough to touch its neighbour (cherry blossom against
+## the leaf canopy beside it), and a canopy column fused straight into its
+## own trunk by a scatter of falling-leaf debris in the gap between them
+## (hazelnut, apple). Both are two drawings, not one, but a single flood
+## fill cannot tell that apart from a genuinely thin PART of one drawing
+## (bare winter branches, a fruit's stem) -- connectivity alone treats both
+## exactly the same.
+##
+## The two are told apart by THICKNESS instead. A real drawing is solid
+## over an area many cells across; a bridge -- a thin branch line, a
+## scattered chain of falling leaves not quite touching -- is at most one
+## cell wide in some direction, so no 2x2 block of coarse cells around it is
+## ever entirely filled. Cells that pass this test seed a drawing's CORE;
+## a plain flood fill (unchanged from before) still finds every connected
+## region, but a region containing more than one core is a false merge, and
+## its cells are re-split by nearest core instead of kept as one box.
+##
+## A region with zero or one core is left exactly as plain flood-fill found
+## it -- this is what keeps a genuinely thin drawing (bare winter branches,
+## which may have no thick cell anywhere but their own trunk) from being
+## fragmented at every thin stretch: with only one core (or none) there is
+## nothing to split by, so the safety this needs costs nothing on the
+## common case.
 static func _blob_boxes(sheet: Image) -> Array[Rect2i]:
 	var wide := sheet.get_width() / DETECTION_STEP
 	var high := sheet.get_height() / DETECTION_STEP
@@ -128,61 +195,323 @@ static func _blob_boxes(sheet: Image) -> Array[Rect2i]:
 			if not is_background(sheet.get_pixel(x * DETECTION_STEP, y * DETECTION_STEP)):
 				filled[Vector2i(x, y)] = true
 
-	var boxes: Array[Rect2i] = []
-	var visited := {}
+	# Raw connected components: today's plain flood-fill, unchanged --
+	# every filled cell reachable from every other by eight-connectivity, so
+	# a drawing joined only corner-to-corner is still one blob. Cells are
+	# tagged with which raw component they belong to, for the split step
+	# below.
+	var raw_of := {}
+	var raw_cells: Array = [] # Array[Array[Vector2i]], indexed by raw id
 	for start in filled:
-		if visited.has(start):
+		if raw_of.has(start):
 			continue
-		# Flood the blob this pixel belongs to, tracking its extent as we go.
+		var id := raw_cells.size()
+		var members: Array[Vector2i] = []
 		var queue: Array[Vector2i] = [start]
-		visited[start] = true
-		var left: int = start.x
-		var right: int = start.x
-		var top: int = start.y
-		var bottom: int = start.y
+		raw_of[start] = id
 		while not queue.is_empty():
 			var at: Vector2i = queue.pop_back()
-			left = mini(left, at.x)
-			right = maxi(right, at.x)
-			top = mini(top, at.y)
-			bottom = maxi(bottom, at.y)
-			# Eight-connected, so a drawing joined only corner-to-corner is
-			# still one blob.
+			members.append(at)
 			for dy in [-1, 0, 1]:
 				for dx in [-1, 0, 1]:
 					var next := Vector2i(at.x + dx, at.y + dy)
-					if visited.has(next) or not filled.has(next):
+					if raw_of.has(next) or not filled.has(next):
 						continue
-					visited[next] = true
+					raw_of[next] = id
 					queue.append(next)
-		boxes.append(Rect2i(
-			left * DETECTION_STEP,
-			top * DETECTION_STEP,
-			(right - left + 1) * DETECTION_STEP,
-			(bottom - top + 1) * DETECTION_STEP
-		))
+		raw_cells.append(members)
+
+	# Cores: connected components of THICK cells only (see _is_thick) -- the
+	# solid interior of each real drawing. A component smaller than
+	# MIN_CORE_CELLS is noise, not a second drawing, and is dropped back
+	# into the ordinary (non-core) pool -- its cells stay part of whatever
+	# raw component they were already in, just no longer eligible to seed
+	# or justify a split.
+	var core_of := {}
+	var core_sizes := {} # core id -> cell count
+	var next_core_id := 0
+	for start in filled:
+		if core_of.has(start) or not _is_thick(filled, start.x, start.y):
+			continue
+		var id := next_core_id
+		next_core_id += 1
+		var members: Array[Vector2i] = [start]
+		var queue: Array[Vector2i] = [start]
+		core_of[start] = id
+		while not queue.is_empty():
+			var at: Vector2i = queue.pop_back()
+			for dy in [-1, 0, 1]:
+				for dx in [-1, 0, 1]:
+					var next := Vector2i(at.x + dx, at.y + dy)
+					if (
+						core_of.has(next) or not filled.has(next)
+						or not _is_thick(filled, next.x, next.y)
+					):
+						continue
+					core_of[next] = id
+					members.append(next)
+					queue.append(next)
+		core_sizes[id] = members.size()
+		if members.size() < MIN_CORE_CELLS:
+			for cell in members:
+				core_of.erase(cell)
+
+	# Which cores fall inside each raw component -- more than one means a
+	# false merge.
+	var cores_in_raw := {} # raw id -> Dictionary[core id, true]
+	for cell in core_of:
+		var raw_id: int = raw_of[cell]
+		if not cores_in_raw.has(raw_id):
+			cores_in_raw[raw_id] = {}
+		cores_in_raw[raw_id][core_of[cell]] = true
+
+	# Each box is tagged with the raw component (family) it came from, so
+	# _merge_touching below can join boxes from DIFFERENT raw components
+	# that legitimately overlap (its original purpose -- see its own doc
+	# comment) without re-fusing two boxes deliberately split out of the
+	# SAME one, which almost always still touch along the line they were
+	# split at.
+	var boxes: Array[Rect2i] = []
+	var families: Array[int] = []
+	var box_has_core: Array[bool] = []
+	for raw_id in raw_cells.size():
+		var members: Array = raw_cells[raw_id]
+		var cores: Dictionary = cores_in_raw.get(raw_id, {})
+		var new_boxes: Array[Rect2i] = (
+			_boxes_from_cells(members) if cores.size() <= 1
+			else _split_by_nearest_core(members, core_of)
+		)
+		# Every box to come out of this raw component carries a real core of
+		# its own -- exactly one each if split (see _split_by_nearest_core),
+		# or the raw component's own single core (if it has one) when left
+		# whole. See _merge_touching's own doc comment for why this matters
+		# past this point.
+		var has_core: bool = cores.size() >= 1
+		for box in new_boxes:
+			boxes.append(box)
+			families.append(raw_id)
+			box_has_core.append(has_core)
+	return _merge_touching(boxes, families, box_has_core, MERGE_GAP_PX)
+
+
+## Whether coarse cell (x, y) sits inside some entirely-filled 2x2 block of
+## coarse cells -- real 2D bulk, in some orientation, at the coarse
+## resolution blob detection already works at. A cell that is filled but
+## never part of such a block is at most a coarse cell wide in every
+## direction: a thin branch line, a diagonal chain of scattered marks --
+## never a real drawing's own solid interior. See the doc comment on
+## _blob_boxes above for why this is the thing that tells a bridge apart
+## from a real drawing's own thin extremities.
+static func _is_thick(filled: Dictionary, x: int, y: int) -> bool:
+	for corner in [Vector2i(0, 0), Vector2i(-1, 0), Vector2i(0, -1), Vector2i(-1, -1)]:
+		var bx: int = x + corner.x
+		var by: int = y + corner.y
+		if (
+			filled.has(Vector2i(bx, by))
+			and filled.has(Vector2i(bx + 1, by))
+			and filled.has(Vector2i(bx, by + 1))
+			and filled.has(Vector2i(bx + 1, by + 1))
+		):
+			return true
+	return false
+
+
+## The bounding box of a set of coarse cells, scaled back up to sheet
+## pixels -- shared by both the ordinary (one-core) and split (multi-core)
+## paths through _blob_boxes so they produce boxes the same way.
+static func _boxes_from_cells(cells: Array) -> Array[Rect2i]:
+	if cells.is_empty():
+		return []
+	var first: Vector2i = cells[0]
+	var left: int = first.x
+	var right: int = first.x
+	var top: int = first.y
+	var bottom: int = first.y
+	for cell in cells:
+		left = mini(left, cell.x)
+		right = maxi(right, cell.x)
+		top = mini(top, cell.y)
+		bottom = maxi(bottom, cell.y)
+	return [Rect2i(
+		left * DETECTION_STEP,
+		top * DETECTION_STEP,
+		(right - left + 1) * DETECTION_STEP,
+		(bottom - top + 1) * DETECTION_STEP
+	)]
+
+
+## Splits a raw component that contains more than one core by handing every
+## one of its cells to whichever core is nearest -- a multi-source flood
+## race seeded from every core cell at once, so the boundary falls wherever
+## two cores' waves actually meet rather than at an arbitrary line. Seeds
+## are sorted before seeding only so an exact tie (a cell equidistant from
+## two cores) resolves the same way on every run, not to bias the race
+## itself.
+static func _split_by_nearest_core(members: Array, core_of: Dictionary) -> Array[Rect2i]:
+	var in_component := {}
+	for cell in members:
+		in_component[cell] = true
+
+	var seeds: Array = []
+	for cell in members:
+		if core_of.has(cell):
+			seeds.append(cell)
+	seeds.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return a.y < b.y or (a.y == b.y and a.x < b.x)
+	)
+
+	var owner := {}
+	var queue: Array[Vector2i] = []
+	for cell in seeds:
+		if owner.has(cell):
+			continue
+		owner[cell] = core_of[cell]
+		queue.append(cell)
+
+	var head := 0
+	while head < queue.size():
+		var at: Vector2i = queue[head]
+		head += 1
+		for dy in [-1, 0, 1]:
+			for dx in [-1, 0, 1]:
+				var next := Vector2i(at.x + dx, at.y + dy)
+				if owner.has(next) or not in_component.has(next):
+					continue
+				owner[next] = owner[at]
+				queue.append(next)
+
+	var groups := {} # core id -> Array[Vector2i]
+	for cell in owner:
+		var id = owner[cell]
+		if not groups.has(id):
+			groups[id] = []
+		groups[id].append(cell)
+
+	var boxes: Array[Rect2i] = []
+	for id in groups:
+		boxes.append_array(_boxes_from_cells(groups[id]))
+
+	# Nearest-core assignment partitions CELLS cleanly, but the resulting
+	# bounding RECTANGLES can still overlap where two real drawings'
+	# silhouettes interleave right at their shared boundary (measured on
+	# the real cherry sheet: two crowns split correctly by cell, 8px of
+	# rectangle overlap left at the seam). No region may overlap another
+	# (see test_regions_do_not_overlap), so any pair still touching this
+	# way is clipped apart -- the real content this costs is a handful of
+	# pixels exactly at the seam, already the boundary a person would draw
+	# by hand between two drawings this close together.
+	for i in boxes.size():
+		for j in range(i + 1, boxes.size()):
+			if boxes[i].intersects(boxes[j]):
+				var clipped := _clip_apart(boxes[i], boxes[j])
+				boxes[i] = clipped[0]
+				boxes[j] = clipped[1]
 	return boxes
+
+
+## Shrinks two overlapping boxes just enough that they no longer overlap,
+## cutting along whichever axis actually separates their CENTRES more --
+## horizontal if one sits further left/right of the other than above/below,
+## vertical otherwise -- at the midpoint of their overlap on that axis. See
+## the doc comment on _split_by_nearest_core above for why this is needed
+## at all.
+static func _clip_apart(a: Rect2i, b: Rect2i) -> Array[Rect2i]:
+	var overlap := a.intersection(b)
+	var a_center := a.position + a.size / 2
+	var b_center := b.position + b.size / 2
+	var a_clipped := a
+	var b_clipped := b
+	if absi(a_center.x - b_center.x) >= absi(a_center.y - b_center.y):
+		var line: int = (overlap.position.x + overlap.position.x + overlap.size.x) / 2
+		if a_center.x <= b_center.x:
+			a_clipped.size.x = mini(a.size.x, line - a.position.x)
+			b_clipped.position.x = line
+			b_clipped.size.x = (b.position.x + b.size.x) - line
+		else:
+			b_clipped.size.x = mini(b.size.x, line - b.position.x)
+			a_clipped.position.x = line
+			a_clipped.size.x = (a.position.x + a.size.x) - line
+	else:
+		var line: int = (overlap.position.y + overlap.position.y + overlap.size.y) / 2
+		if a_center.y <= b_center.y:
+			a_clipped.size.y = mini(a.size.y, line - a.position.y)
+			b_clipped.position.y = line
+			b_clipped.size.y = (b.position.y + b.size.y) - line
+		else:
+			b_clipped.size.y = mini(b.size.y, line - b.position.y)
+			a_clipped.position.y = line
+			a_clipped.size.y = (a.position.y + a.size.y) - line
+	return [a_clipped, b_clipped]
 
 
 ## Joins boxes that overlap or sit within `gap` of each other, repeatedly,
 ## until nothing more merges -- one merge can bring two others into range.
-static func _merge_touching(boxes: Array[Rect2i], gap: int) -> Array[Rect2i]:
+## Meant for absorbing a detached stray -- a twig, a leaf -- into the real
+## drawing its box happens to touch or fall inside; a box that carries a
+## real CORE of its own (see _is_thick/MIN_CORE_CELLS) is never a stray, so
+## two boxes that BOTH have one are never joined however much they overlap,
+## however close together `gap` allows -- that combination is always two
+## real, separate drawings (measured on the real hazelnut/apple sheets: a
+## canopy crown and a solid, 1900-cell hanging nut cluster below it,
+## belonging to two DIFFERENT raw components whose boxes merely touch,
+## fused into one by exactly this pass before the has_core check existed).
+##
+## Two boxes sharing the same FAMILY never merge with each other either,
+## however much they overlap: a family is the raw connected component (see
+## _blob_boxes) a box came from, and two boxes from the same one only exist
+## because they were deliberately split apart there -- merging them back
+## together on the strength of their own rectangles touching, which split
+## from one shape they almost always still do, would silently undo it. A
+## merged box keeps the family AND the has_core flag of whichever side
+## absorbed the other, so it still won't re-fuse with that side's own
+## sibling, or newly qualify to block a merge it couldn't have blocked
+## before.
+static func _merge_touching(
+	boxes: Array[Rect2i], families: Array[int], has_core: Array[bool], gap: int
+) -> Array[Rect2i]:
 	var merged := true
 	var working := boxes.duplicate()
+	var working_families := families.duplicate()
+	var working_has_core := has_core.duplicate()
 	while merged:
 		merged = false
 		var result: Array[Rect2i] = []
-		for box in working:
+		var result_families: Array[int] = []
+		var result_has_core: Array[bool] = []
+		for index in working.size():
+			var box: Rect2i = working[index]
+			var family: int = working_families[index]
+			var core: bool = working_has_core[index]
 			var joined := false
-			for index in result.size():
-				if result[index].grow(gap).intersects(box.grow(gap)):
-					result[index] = result[index].merge(box)
-					joined = true
-					merged = true
-					break
+			for existing_index in result.size():
+				if result_families[existing_index] == family:
+					continue
+				if not result[existing_index].grow(gap).intersects(box.grow(gap)):
+					continue
+				if result_has_core[existing_index] and core:
+					# Two real, separate drawings -- never fused into one,
+					# but their rectangles still may not overlap (see
+					# test_regions_do_not_overlap), so they are clipped
+					# apart at their shared boundary instead, the same way
+					# a split's own siblings are (see _clip_apart).
+					if result[existing_index].intersects(box):
+						var clipped := _clip_apart(result[existing_index], box)
+						result[existing_index] = clipped[0]
+						box = clipped[1]
+						merged = true
+					continue
+				result[existing_index] = result[existing_index].merge(box)
+				result_has_core[existing_index] = result_has_core[existing_index] or core
+				joined = true
+				merged = true
+				break
 			if not joined:
 				result.append(box)
+				result_families.append(family)
+				result_has_core.append(core)
 		working = result
+		working_families = result_families
+		working_has_core = result_has_core
 	var typed: Array[Rect2i] = []
 	for box in working:
 		typed.append(box)

@@ -19,7 +19,6 @@ const SHEETS := [
 	"res://assets/sprites/trees/composite_hazelnut.png",
 	"res://assets/sprites/trees/composite_pine.png",
 	"res://assets/sprites/trees/composite_apple.png",
-	"res://assets/sprites/trees/canopy_cherry.png",
 ]
 
 
