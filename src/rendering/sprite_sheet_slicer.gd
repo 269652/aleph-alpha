@@ -66,6 +66,33 @@ static func is_empty(
 	)
 
 
+## A copy of `image` with every pixel within `tolerance` of `key` (each of
+## R/G/B independently, ignoring alpha) turned fully transparent.
+##
+## Sheets cut out on a solid chroma-key colour (magenta, by this project's
+## prompts) rather than real transparency: keying them up front lets
+## detect_frames/normalize_frames treat the ground as the low-alpha
+## background they already understand, with no "or matches this colour"
+## branch anywhere downstream. Per-channel rather than one combined
+## distance, so a saturated key can use a generous tolerance for the
+## anti-aliased blend at a drawing's silhouette without also swallowing a
+## pale, low-saturation drawing colour of similar overall brightness.
+static func chroma_keyed(image: Image, key: Color, tolerance: float) -> Image:
+	var keyed := image.duplicate()
+	if keyed.get_format() != Image.FORMAT_RGBA8:
+		keyed.convert(Image.FORMAT_RGBA8)
+	for y in keyed.get_height():
+		for x in keyed.get_width():
+			var c: Color = keyed.get_pixel(x, y)
+			if (
+				absf(c.r - key.r) <= tolerance
+				and absf(c.g - key.g) <= tolerance
+				and absf(c.b - key.b) <= tolerance
+			):
+				keyed.set_pixel(x, y, Color(0, 0, 0, 0))
+	return keyed
+
+
 ## The frames in the band of rows between `top_y` and `bottom_y`.
 ##
 ## Scans column by column: a column with nothing but background in it is a

@@ -102,7 +102,7 @@ const WORN_DENTS := [[3.0, 0.80, 3.5], [-5.0, 0.62, 3.0]]
 ## points), with splinter ticks off it, drawn in pale raw wood; the upper
 ## half hangs kinked off the lower one.
 const CRACK_T := 0.5
-const CRACK_HALF_WIDTH := 1.5
+const CRACK_HALF_WIDTH := 2.0
 const CRACK_PATH := [
 	Vector2(-26.0, 0.47), Vector2(-6.0, 0.52), Vector2(2.0, 0.48), Vector2(10.0, 0.54), Vector2(26.0, 0.50)
 ]

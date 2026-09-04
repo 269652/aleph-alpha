@@ -395,26 +395,11 @@ func _slice_bands(sheet: Dictionary, bands: Array, path: String = "") -> Array[I
 	return normalized
 
 
-## A copy of `image` with every pixel within `tolerance` of `key` (each of
-## R/G/B independently, ignoring alpha) turned fully transparent -- per-
-## channel rather than a single combined distance so a saturated key color
-## (e.g. magenta) can use a generous tolerance for anti-aliased edge blending
-## without also swallowing a pale, low-saturation drawing color that happens
-## to sit at a similar overall brightness.
+## Chroma-keying lives on SpriteSheetSlicer now (IllustratedItemSprite
+## needs the same pass); kept here as a thin wrapper so this file's own
+## call site and doc comments above still read as before.
 func _apply_chroma_key(image: Image, key: Color, tolerance: float) -> Image:
-	var keyed := image.duplicate()
-	if keyed.get_format() != Image.FORMAT_RGBA8:
-		keyed.convert(Image.FORMAT_RGBA8)
-	for y in keyed.get_height():
-		for x in keyed.get_width():
-			var c: Color = keyed.get_pixel(x, y)
-			if (
-				absf(c.r - key.r) <= tolerance
-				and absf(c.g - key.g) <= tolerance
-				and absf(c.b - key.b) <= tolerance
-			):
-				keyed.set_pixel(x, y, Color(0, 0, 0, 0))
-	return keyed
+	return SpriteSheetSlicer.chroma_keyed(image, key, tolerance)
 
 
 ## Local-space Y offset (from the marker's own origin, i.e. canvas center) to
