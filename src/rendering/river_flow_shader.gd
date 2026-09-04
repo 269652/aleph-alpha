@@ -141,7 +141,11 @@ uniform float wader_radius_px = 6.0;
 uniform float wader_wake_trail = 0.8;
 
 // Continuous downstream travel, px/s per m/s of real current.
-uniform float drift_px_per_mps = 9.0;
+uniform float drift_px_per_mps = 20.0;
+// The dim end of the brightness pulse that streams along every stroke.
+// Deep enough that a bright segment travelling down a line is obvious,
+// never zero, so a dim segment is still a stroke.
+uniform float pulse_floor = 0.35;
 // How fast the standing eddies migrate downstream, as a fraction of the
 // surface's own drift. 0 is the old fully bed-anchored bend.
 uniform float bend_drift_fraction = 0.4;
@@ -772,7 +776,7 @@ void fragment() {
 	// already computed.
 	float pulse = smoothstep(0.35, 0.75, n);
 	float wave = stroke * mix(0.75, 1.0, parity) * mix(0.8, 1.1, is_fast)
-		* mix(0.55, 1.0, pulse);
+		* mix(pulse_floor, 1.0, pulse);
 	// ADAPTIVE INK: pale strokes vanish on the bright shallow cels
 	// (reported from the Rhine straight: "no current lines at all"), so
 	// the ink snaps DEEP over light water and pale over dark. A hard
@@ -1053,13 +1057,29 @@ const HALF_WIDTH_PX := 32.0
 
 ## Continuous downstream pattern travel, px/s per m/s of real current --
 ## linear in the reach's solved speed, pinned by drift tests.
-const DRIFT_PX_PER_MPS := 9.0
+## RAISED 9 -> 20, the top of its pinned range. "The lines are not flowing
+## forward" -- and they could not have read as flowing: the strokes are
+## contours of across, lines PARALLEL to the flow, so translating the field
+## along the flow leaves a line where it was. Forward motion only reads
+## through what travels ON the lines -- the brightness pulse and the kinks
+## -- and at 9 a typical 0.5 m/s reach streamed those at 4.5 world px/s, 18
+## screen px/s, three and a half seconds to cross one tile. At 20 it is 10
+## world px/s: a pulse crosses a tile in under two seconds. Pinned by
+## test_a_typical_reach_streams_fast_enough_to_read_as_flowing.
+const DRIFT_PX_PER_MPS := 20.0
+
+## The dim end of the pulse that streams along a stroke. 0.55 was a 45%
+## modulation, a shimmer; 0.35 is the depth at which a bright segment
+## visibly travels down a line. Never zero. Pinned by
+## test_the_pulse_is_deep_enough_to_see_streaming.
+const PULSE_FLOOR := 0.35
 
 ## How fast the standing eddies migrate downstream, as a fraction of the
-## surface drift above. Boils lag the water over them; 0.4 reads as the
-## whirls being carried along without the lines simply sliding as a
-## rigid sheet. Pinned by test_the_bend_drifts_downstream_with_the_current.
-const BEND_DRIFT_FRACTION := 0.4
+## surface drift above. Boils lag the water over them; 0.6 is fast enough
+## that the whirls visibly travel -- with the wobble small they are most of
+## what there is ON a line to see moving -- while the surface still streams
+## through them rather than the lines sliding as a rigid sheet. Pinned by test_the_bend_drifts_downstream_with_the_current.
+const BEND_DRIFT_FRACTION := 0.6
 
 ## The organic smoothing jitter: swing (in across-fraction units, capped
 ## near one across-bin step by test -- it masks the per-tile quantisation,
@@ -1205,6 +1225,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("across_line_scale", ACROSS_LINE_SCALE)
 	material.set_shader_parameter("line_wobble", LINE_WOBBLE)
 	material.set_shader_parameter("bend_drift_fraction", BEND_DRIFT_FRACTION)
+	material.set_shader_parameter("pulse_floor", PULSE_FLOOR)
 	material.set_shader_parameter("wobble_reference_cells", WOBBLE_REFERENCE_CELLS)
 	material.set_shader_parameter("line_width", LINE_WIDTH)
 	material.set_shader_parameter("line_strength", LINE_STRENGTH)

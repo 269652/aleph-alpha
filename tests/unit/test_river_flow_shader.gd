@@ -1237,9 +1237,12 @@ func test_the_lines_carry_streaming_brightness_pulses():
 		RiverFlowShader.SHADER_CODE.contains("float pulse = smoothstep(0.35, 0.75, n);"),
 		"the pulse must ride the advected field"
 	)
+	# The floor is a named uniform now (PULSE_FLOOR), pinned below: deep
+	# enough that a bright segment streaming along a line is obvious, and
+	# never zero, so a dim segment is still a stroke.
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("mix(0.55, 1.0, pulse)"),
-		"the pulse must modulate the stroke brightness, dim never to zero"
+		RiverFlowShader.SHADER_CODE.contains("mix(pulse_floor, 1.0, pulse)"),
+		"the pulse must modulate the stroke brightness through the named floor"
 	)
 
 
@@ -2467,3 +2470,57 @@ func test_the_shader_drifts_the_eddy_sample_coordinate():
 ## next fold scare does not quietly tune the water flat again.
 func test_the_wobble_is_watery_enough():
 	assert_gte(RiverFlowShader.LINE_WOBBLE, 0.17)
+
+
+# -- the stream must visibly FLOW FORWARD ------------------------------------
+#
+# "The lines are not flowing forward." And they could not have: the strokes
+# are contours of `across`, which are lines PARALLEL to the flow, so
+# translating the field along the flow leaves a line looking exactly where
+# it was. Forward motion can only read through things ON the lines -- the
+# brightness pulse streaming along them, and kinks travelling. So the
+# question is not whether the field moves but whether what moves is fast
+# and visible enough:
+#
+#   DRIFT_PX_PER_MPS 9, reach 0.5 m/s:   4.5 world px/s = 18 screen px/s,
+#                                         3.5 s to cross a single tile.
+#   pulse mix(0.55, 1.0):                 a 45% modulation on a thin stroke.
+#
+# Neither reads as a flowing stream. This pins a floor on the drift rate at
+# a typical reach and a ceiling on the pulse floor, in the units a player
+# actually sees.
+
+
+## World px per second the pattern streams downstream at `speed_mps`.
+func _stream_world_px_per_s(speed_mps: float) -> float:
+	return RiverFlowShader.drift_cells(speed_mps, 1.0) / RiverFlowShader.NOISE_SCALE
+
+
+func test_a_typical_reach_streams_fast_enough_to_read_as_flowing():
+	# 8 world px/s is 32 screen px/s at the game's 4x tile zoom: a pulse
+	# crosses a tile in two seconds. Below that the water reads as still
+	# with a shimmer on it.
+	assert_gte(
+		_stream_world_px_per_s(0.5), 8.0,
+		"a 0.5 m/s reach streams at only %.1f world px/s" % _stream_world_px_per_s(0.5)
+	)
+	# And the pin the drift rate already had, kept: past 20 the water is a
+	# conveyor belt.
+	assert_lte(RiverFlowShader.DRIFT_PX_PER_MPS, 20.0)
+
+
+func test_the_pulse_is_deep_enough_to_see_streaming():
+	assert_lte(RiverFlowShader.PULSE_FLOOR, 0.4, "a shallow pulse is a shimmer, not a stream")
+	assert_gt(RiverFlowShader.PULSE_FLOOR, 0.0, "a dim segment must still be a stroke")
+	var material := RiverFlowShader.new().make_material()
+	assert_almost_eq(
+		float(material.get_shader_parameter("pulse_floor")), RiverFlowShader.PULSE_FLOOR, 1e-9
+	)
+
+
+func test_the_whirls_travel_visibly_but_still_lag_the_surface():
+	# With the wobble small, the eddies are most of what there is ON a line
+	# to see moving. 0.6 of the surface drift is legible travel; below 1 the
+	# surface still streams through them.
+	assert_gte(RiverFlowShader.BEND_DRIFT_FRACTION, 0.5)
+	assert_lt(RiverFlowShader.BEND_DRIFT_FRACTION, 1.0)
