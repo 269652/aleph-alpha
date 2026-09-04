@@ -3056,18 +3056,24 @@ func test_the_ring_inks_at_full_strength_only_while_fresh():
 		"full ink reachable by more than a fresh crest is a stamp, not a ripple"
 	)
 	assert_almost_eq(
-		RiverFlowShader.ripple_ink(peak), 1.0, 1e-6,
-		"a fresh crest still prints at full strength"
+		RiverFlowShader.ripple_ink(peak), RiverFlowShader.RIPPLE_INK_MAX, 1e-6,
+		"a fresh crest prints at the ring's own ceiling"
 	)
 
 
 func test_the_ring_graduates_through_its_life_instead_of_switching_off():
-	var half_life_ink: float = RiverFlowShader.ripple_ink(_peak_amplitude_at_life_fraction(0.5))
+	# Measured as a fraction of the ring's own ceiling (RIPPLE_INK_MAX), so
+	# the graduation is pinned independently of how light the ring prints.
+	var half_life_ink: float = (
+		RiverFlowShader.ripple_ink(_peak_amplitude_at_life_fraction(0.5)) / RiverFlowShader.RIPPLE_INK_MAX
+	)
 	assert_between(
 		half_life_ink, 0.25, 0.6,
 		"half way through its life the ring should be plainly there but plainly softer (%.2f)" % half_life_ink
 	)
-	var late_ink: float = RiverFlowShader.ripple_ink(_peak_amplitude_at_life_fraction(0.75))
+	var late_ink: float = (
+		RiverFlowShader.ripple_ink(_peak_amplitude_at_life_fraction(0.75)) / RiverFlowShader.RIPPLE_INK_MAX
+	)
 	assert_gt(late_ink, 0.0, "the ring must still draw three quarters through its life")
 	assert_lt(late_ink, half_life_ink, "and fainter than it did at half life")
 	assert_almost_eq(RiverFlowShader.ripple_ink(0.0), 0.0, 1e-9, "flat water inks nothing")
@@ -3076,7 +3082,67 @@ func test_the_ring_graduates_through_its_life_instead_of_switching_off():
 
 func test_the_ink_curve_is_the_shader_s_own_smoothstep():
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("float ripple_ink = smoothstep(ripple_crest_min, ripple_crest_full, ripple);")
+		RiverFlowShader.SHADER_CODE.contains("* smoothstep(ripple_crest_min, ripple_crest_full, ripple_envelope_sum)")
 	)
 	var mid: float = (RiverFlowShader.RIPPLE_CREST_MIN + RiverFlowShader.RIPPLE_CREST_FULL) * 0.5
-	assert_almost_eq(RiverFlowShader.ripple_ink(mid), 0.5, 1e-6, "smoothstep's midpoint is a half")
+	assert_almost_eq(
+		RiverFlowShader.ripple_ink(mid), 0.5 * RiverFlowShader.RIPPLE_INK_MAX, 1e-6,
+		"smoothstep's midpoint is half the ceiling"
+	)
+
+
+# -- a thin, light ring ------------------------------------------------------
+#
+# "Can you make the ripples stroke width smaller and a bit more transparent?"
+# The ring's ink used to be smoothstep(MIN, FULL, crest amplitude), so its
+# WIDTH was however much of the crest's sine cleared the thresholds -- about
+# three world px, three times a current line -- and it changed with the
+# ring's age. Now the packet is split into the pure sine (the RING: where
+# on the crest a pixel sits) and its ENVELOPE (how strong the wake is here,
+# now): width comes from a threshold on the sine alone, so it is one number
+# in px independent of age, and the envelope drives only the strength, with
+# a ceiling (RIPPLE_INK_MAX) below a full stroke so the ring prints lighter
+# than a current line.
+
+
+func test_the_ring_is_no_wider_than_a_current_line():
+	var ring := RiverFlowShader.ripple_ring_width_px()
+	var line := RiverFlowShader.line_width_px()
+	assert_lte(ring, line, "the ring is %.2f px wide against a %.2f px line" % [ring, line])
+	# But still at least a snapped pixel and a half, or it drops out
+	# between pixel_snap cells.
+	assert_gte(ring, RiverFlowShader.PIXEL_SNAP * 1.5)
+	assert_between(RiverFlowShader.RIPPLE_RING_EDGE, 0.5, 0.97)
+
+
+func test_the_ring_prints_lighter_than_a_current_line():
+	assert_between(RiverFlowShader.RIPPLE_INK_MAX, 0.4, 0.75)
+	assert_almost_eq(RiverFlowShader.ripple_ink(_peak_packet_amplitude()), RiverFlowShader.RIPPLE_INK_MAX, 1e-6)
+
+
+func test_the_envelope_bounds_the_packet_and_meets_it_at_the_crest():
+	var best_ratio := 0.0
+	for age_step in 12:
+		var age := 0.2 + float(age_step) * 0.2
+		for dist_step in 400:
+			var dist := float(dist_step) * 0.25
+			var envelope := RiverFlowShader.ripple_envelope(dist, age)
+			var packet := RiverFlowShader.ripple_packet(dist, age)
+			assert_gte(envelope + 1e-9, absf(packet), "the envelope must never sit under the packet")
+			if envelope > 1e-6:
+				best_ratio = maxf(best_ratio, packet / envelope)
+	assert_gt(best_ratio, 0.99, "at the crest the packet IS its envelope (ratio %.3f)" % best_ratio)
+	assert_eq(RiverFlowShader.ripple_envelope(10.0, RiverFlowShader.RIPPLE_LIFETIME + 0.1), 0.0)
+
+
+func test_the_shader_inks_the_ring_from_the_sine_and_its_strength_from_the_envelope():
+	var code: String = RiverFlowShader.SHADER_CODE
+	assert_true(code.contains("float movement_ripples(vec2 pos, vec2 surface_velocity, out float envelope) {"))
+	assert_true(code.contains("float ripple = movement_ripples(wp, surface_velocity, ripple_envelope_sum);"))
+	assert_true(code.contains("float ripple_crest = ripple / max(ripple_envelope_sum, 1e-4);"))
+	assert_true(code.contains(
+		"float ripple_ink = smoothstep(ripple_ring_edge, 1.0, ripple_crest) * smoothstep(ripple_crest_min, ripple_crest_full, ripple_envelope_sum) * ripple_ink_max;"
+	))
+	var material := RiverFlowShader.new().make_material()
+	assert_almost_eq(float(material.get_shader_parameter("ripple_ring_edge")), RiverFlowShader.RIPPLE_RING_EDGE, 1e-9)
+	assert_almost_eq(float(material.get_shader_parameter("ripple_ink_max")), RiverFlowShader.RIPPLE_INK_MAX, 1e-9)
