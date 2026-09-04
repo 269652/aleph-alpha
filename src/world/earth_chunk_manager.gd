@@ -4266,6 +4266,7 @@ func record_water_disturbance(world_pos: Vector2) -> void:
 	if maxi(absi(offset.x), absi(offset.y)) > DISTURBANCE_RADIUS_TILES:
 		return
 	_water_shader.add_disturbance(world_pos)
+	_mirror_disturbances_to_the_river()
 
 
 ## Ages every live water disturbance so its ring actually expands/fades on
@@ -4273,6 +4274,33 @@ func record_water_disturbance(world_pos: Vector2) -> void:
 ## not just when a new disturbance is recorded.
 func step_water_disturbances(delta: float) -> void:
 	_water_shader.advance_disturbances(delta)
+	_mirror_disturbances_to_the_river()
+
+
+## Whether the river surface currently holds any live ripple -- so a river
+## with nothing moving in it costs nothing per frame, while the frame that
+## empties the buffer still gets pushed (otherwise the last wake would
+## hang there forever).
+var _river_disturbances_live := false
+
+
+## Hands the river surface the SAME buffer the sea's is drawing. Rivers are
+## no longer painted by the ocean overlay at all (see _paint_water_overlay:
+## the flow overlay is the river's entire water surface now), so without
+## this a fish's wake is recorded, aged, and drawn into a layer that river
+## tiles do not have -- reported as ripples having disappeared from the
+## river entirely. RiverFlowShader keeps no buffer of its own on purpose:
+## one lifetime, one cap, one distance cull, two surfaces.
+func _mirror_disturbances_to_the_river() -> void:
+	var count := _water_shader.disturbance_count()
+	if count == 0 and not _river_disturbances_live:
+		return
+	_river_disturbances_live = count > 0
+	_river_flow_shader.set_disturbances(
+		_water_shader.padded_disturbance_positions(),
+		_water_shader.padded_disturbance_ages(),
+		count
+	)
 
 
 func current_weather(player_pixel: Vector2) -> String:

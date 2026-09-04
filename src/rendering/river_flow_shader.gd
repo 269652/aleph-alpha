@@ -2,6 +2,7 @@ extends RefCounted
 
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
+const WaterShader = preload("res://src/rendering/water_shader.gd")
 
 ## Realistic flowing river water: a surface field advected downstream in
 ## two crossfaded phases, over the channel's real parabolic cross-section,
@@ -92,6 +93,29 @@ uniform float wader_reach_px = 26.0;
 uniform float wader_radius_px = 6.0;
 uniform float wader_wake_trail = 0.8;
 
+// MOVEMENT RIPPLES -- a fish darting past, the player or an animal moving
+// through the water. Recorded and aged by the SAME buffer the sea's
+// surface draws from (WaterShader.add_disturbance/advance_disturbances,
+// fanned out by EarthChunkManager): one ring buffer, one lifetime, one
+// distance cull, two surfaces. disturbance_age is CPU-driven seconds since
+// the event, NOT TIME minus a stored stamp -- the shader clock and
+// Time.get_ticks_msec() have no shared epoch, and comparing them is what
+// once made every ripple permanently out of range and invisible.
+uniform vec2 disturbance_pos[16];
+uniform float disturbance_age[16];
+uniform int disturbance_count = 0;
+uniform float ripple_speed = 14.0;
+uniform float ripple_lifetime = 2.2;
+uniform float ripple_wavelength = 6.0;
+uniform float ripple_packet_width = 7.0;
+uniform float ripple_spread_decay = 0.02;
+// How the packet reaches the drawn surface: how far a crest bends the
+// contour field the current lines trace, and the crest amplitudes between
+// which the ring inks in its own right.
+uniform float ripple_line_gain = 0.18;
+uniform float ripple_crest_min = 0.10;
+uniform float ripple_crest_full = 0.40;
+
 // Continuous downstream travel, px/s per m/s of real current.
 uniform float drift_px_per_mps = 9.0;
 // The real-speed threshold above which strokes brighten (m/s).
@@ -134,6 +158,53 @@ float value_noise(vec2 p) {
 		mix(value_hash(i + vec2(0.0, 1.0)), value_hash(i + vec2(1.0, 1.0)), f.x),
 		f.y
 	);
+}
+
+// ONE expanding wave packet -- character for character the sea's own
+// (WaterShader's ripple_packet), because a fish's wake must read the same
+// in a river as in the ocean. Not a hard ring but a travelling packet of
+// concentric crests and troughs behind the front, decaying with age and
+// with the circumference it spreads its energy around.
+//
+// SIGNED -- crests positive, troughs negative -- which is the whole point:
+// overlapping wakes then genuinely interfere, destructively as well as
+// constructively, instead of only ever piling up. Mirrored on the CPU by
+// RiverFlowShader.ripple_packet, which is what pins it under test.
+float ripple_packet(float dist, float age) {
+	if (age < 0.0 || age > ripple_lifetime) {
+		return 0.0;
+	}
+	float front = age * ripple_speed;
+	float phase = front - dist;  // > 0 = inside the advancing front
+	float packet = exp(-abs(phase) / ripple_packet_width);
+	float rings = sin(phase * 6.28318530718 / ripple_wavelength);
+	float age_fade = 1.0 - age / ripple_lifetime;
+	float spread_fade = 1.0 / (1.0 + front * ripple_spread_decay);
+	return rings * packet * age_fade * spread_fade;
+}
+
+// THE river adaptation. In still water a ring stays concentric about a
+// fixed point; in a current it is concentric about a point that MOVES WITH
+// THE WATER -- so the centre is carried downstream at the same drift rate
+// the surface pattern itself travels at, and a wake sits in the river
+// instead of the river sliding out from under it.
+//
+// The age bound is checked BEFORE the centre and the distance, not left to
+// ripple_packet's own guard: the padded tail of the buffer carries a
+// sentinel age, and this is the loop the rain-ripple perf lesson applies
+// to (do the cheap rejection first, never the expensive half and then a
+// discard).
+float movement_ripples(vec2 pos, vec2 flow_dir, float speed_mps) {
+	float total = 0.0;
+	for (int i = 0; i < disturbance_count; i++) {
+		float age = disturbance_age[i];
+		if (age < 0.0 || age > ripple_lifetime) {
+			continue;
+		}
+		vec2 center = disturbance_pos[i] + flow_dir * (drift_px_per_mps * speed_mps * age);
+		total += ripple_packet(distance(pos, center), age);
+	}
+	return total;
 }
 
 // The surface field: an isotropic, WORLD-ANCHORED noise smeared along the
@@ -389,7 +460,23 @@ void fragment() {
 	// perlin noise cells"): level sets of any healthy scalar field close
 	// around its extrema. The guide also survives a railed field -- a
 	// dead-flat n still draws the full family of lines.
-	float s_field = frag_across * across_line_scale + (n - 0.5) * line_wobble;
+	// MOVEMENT RIPPLES, drawn rather than glowed. This surface is
+	// illustrated water -- a static cel body with every bit of motion
+	// carried by drawn strokes -- so a wake composited on top as a bright
+	// ring would read as a sticker. Instead the packet enters the field
+	// whose LEVEL SETS are the current lines, so the lines themselves bow
+	// into arcs around the fish, closing into rings where the disturbance
+	// is strongest and merging back into the flow at its edges. Two
+	// overlapping wakes sum HERE, before any of it is drawn, so they
+	// genuinely interfere.
+	//
+	// Deliberately NOT added to frag_across: that field is the channel's
+	// geometry, and a passing fish must not narrow the river or dry a
+	// patch of it. Boulders and waders displace it because they are solid
+	// things standing in the current; a wake is only the surface.
+	float ripple = movement_ripples(wp, flow_dir, speed_mps);
+	float s_field = frag_across * across_line_scale + (n - 0.5) * line_wobble
+		+ ripple * ripple_line_gain;
 	float level_frac = fract(s_field * line_count) - 0.5;
 	float dist_n = abs(level_frac) / line_count;
 	float stroke = 1.0 - smoothstep(line_width * 0.5, line_width, dist_n);
@@ -402,6 +489,14 @@ void fragment() {
 	float pulse = smoothstep(0.35, 0.75, n);
 	float wave = stroke * mix(0.75, 1.0, parity) * mix(0.8, 1.1, is_fast)
 		* mix(0.55, 1.0, pulse);
+	// The crest also inks in its OWN right, so the ring reads as concentric
+	// arcs and not merely as wobbled current lines. Entered through `wave`
+	// -- the existing "how hard is a stroke drawn here" -- so it inherits
+	// the adaptive ink, the moonlight lift and the alpha clamp for free.
+	// max, not sum: a strong crest takes over the mark, a weak one leaves
+	// the flow line alone, and neither can push the stroke past full.
+	float ripple_ink = smoothstep(ripple_crest_min, ripple_crest_full, ripple);
+	wave = max(wave, ripple_ink);
 	// ADAPTIVE INK: pale strokes vanish on the bright shallow cels
 	// (reported from the Rhine straight: "no current lines at all"), so
 	// the ink snaps DEEP over light water and pale over dark. A hard
@@ -568,6 +663,40 @@ const WADER_RADIUS_PX := 6.0
 const WADER_WAKE_TRAIL := 0.8
 const WADER_SLOTS := 8
 
+## Movement-ripple tuning, taken from the SEA by import rather than copied:
+## a fish's wake has to read the same in a river as in the ocean, and a
+## second set of literals is a second thing to re-tune and drift apart.
+## Same slot count too, because both surfaces draw the one shared buffer
+## (WaterShader.add_disturbance, fanned out by EarthChunkManager).
+const RIPPLE_SPEED := WaterShader.RIPPLE_SPEED
+const RIPPLE_LIFETIME := WaterShader.RIPPLE_LIFETIME
+const RIPPLE_WAVELENGTH := WaterShader.RIPPLE_WAVELENGTH
+const RIPPLE_PACKET_WIDTH := WaterShader.RIPPLE_PACKET_WIDTH
+const RIPPLE_SPREAD_DECAY := WaterShader.RIPPLE_SPREAD_DECAY
+const DISTURBANCE_SLOTS := WaterShader.MAX_DISTURBANCES
+
+## How far a crest bends the contour field the current lines trace, in
+## s_field units. Bounded from BOTH sides by test rather than eyeballed:
+## below ~a third of one contour spacing (1 / LINE_COUNT) a crest moves the
+## lines too little to draw anything, and above half the wobble's own swing
+## the ripple stops being a local disturbance and starts restructuring the
+## channel-wide line family into the closed "perlin noise cells" the across
+## ramp exists to prevent. Rings closing around the fish ITSELF are wanted
+## -- that is the ripple -- which is exactly why the ceiling is set against
+## the wobble rather than against zero.
+const RIPPLE_LINE_GAIN := 0.18
+
+## The crest amplitudes between which the ring inks in its own right: below
+## MIN nothing draws (troughs and spent tails stay clean), at FULL the mark
+## is a full-strength stroke. FULL must stay reachable by a real packet
+## crest or it is ink that never prints; MIN is the threshold WaterShader
+## already paid for once -- set against a FRESH ripple it made the ring
+## visible only in its first moments ("a mini ripple appears but nothing
+## looks natural"), so it is pinned low enough that a crest still inks
+## three quarters of the way through the ring's life.
+const RIPPLE_CREST_MIN := 0.10
+const RIPPLE_CREST_FULL := 0.40
+
 ## px of world width per unit of across-fraction -- the channel half-width,
 ## pinned against RiverCatalog.RIVER_HALF_WIDTH_TILES by test.
 const HALF_WIDTH_PX := 32.0
@@ -702,6 +831,15 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("moonlight_ink", MOONLIGHT_INK)
 	material.set_shader_parameter("shore_pos", SHORE_POS)
 	material.set_shader_parameter("shore_width", SHORE_WIDTH)
+	material.set_shader_parameter("disturbance_count", 0)
+	material.set_shader_parameter("ripple_speed", RIPPLE_SPEED)
+	material.set_shader_parameter("ripple_lifetime", RIPPLE_LIFETIME)
+	material.set_shader_parameter("ripple_wavelength", RIPPLE_WAVELENGTH)
+	material.set_shader_parameter("ripple_packet_width", RIPPLE_PACKET_WIDTH)
+	material.set_shader_parameter("ripple_spread_decay", RIPPLE_SPREAD_DECAY)
+	material.set_shader_parameter("ripple_line_gain", RIPPLE_LINE_GAIN)
+	material.set_shader_parameter("ripple_crest_min", RIPPLE_CREST_MIN)
+	material.set_shader_parameter("ripple_crest_full", RIPPLE_CREST_FULL)
 	for i in BAND_COLORS.size():
 		material.set_shader_parameter("band%d_color" % i, BAND_COLORS[i])
 	return material
@@ -722,6 +860,53 @@ static func depth_color(depth_fraction: float) -> Color:
 	body = body.lerp(BAND_COLORS[2], clampf(sramp - 1.0, 0.0, 1.0))
 	body = body.lerp(BAND_COLORS[3], clampf(sramp - 2.0, 0.0, 1.0))
 	return body.lerp(BAND_COLORS[4], clampf(sramp - 3.0, 0.0, 1.0))
+
+
+## Directly sets the movement-ripple uniforms. `positions`/`ages` come
+## padded to DISTURBANCE_SLOTS and `count` says how many slots are live --
+## this surface deliberately owns no buffer of its own: EarthChunkManager
+## hands it the very same one WaterShader ages for the sea, so a wake can
+## never expand in one surface and sit frozen in the other.
+func set_disturbances(
+	positions: PackedVector2Array, ages: PackedFloat32Array, count: int
+) -> void:
+	var material := shared_material()
+	material.set_shader_parameter("disturbance_pos", positions)
+	material.set_shader_parameter("disturbance_age", ages)
+	material.set_shader_parameter("disturbance_count", count)
+
+
+## The exact math the shader's ripple_packet runs, mirrored on the CPU for
+## the same reason every other mirror here exists -- a fragment shader
+## cannot be asserted headlessly. Written out rather than delegated to
+## WaterShader.ripple_amplitude ON PURPOSE: the GLSL above is a genuine
+## second copy, so the mirror has to be one too, and the test that asserts
+## the two agree is then a real pin on the two shaders rather than a
+## tautology.
+##
+## Returns a SIGNED displacement -- positive on a crest, negative in a
+## trough, zero once the ring has died or ahead of its advancing front.
+static func ripple_packet(distance_units: float, age_seconds: float) -> float:
+	if age_seconds < 0.0 or age_seconds > RIPPLE_LIFETIME:
+		return 0.0
+	var front := age_seconds * RIPPLE_SPEED
+	var phase := front - distance_units
+	var packet := exp(-absf(phase) / RIPPLE_PACKET_WIDTH)
+	var rings := sin(phase * TAU / RIPPLE_WAVELENGTH)
+	var age_fade := 1.0 - age_seconds / RIPPLE_LIFETIME
+	var spread_fade := 1.0 / (1.0 + front * RIPPLE_SPREAD_DECAY)
+	return rings * packet * age_fade * spread_fade
+
+
+## Where a ripple recorded at `origin` is centred `age_seconds` later --
+## the CPU mirror of the shader's own advected centre. A ring in a current
+## is concentric about a point that travels WITH the water, at the same
+## drift rate the visible surface pattern moves at; only in still water
+## (speed 0) does it stay put.
+static func ripple_center(
+	origin: Vector2, flow_dir: Vector2, speed_m_s: float, age_seconds: float
+) -> Vector2:
+	return origin + flow_dir * (DRIFT_PX_PER_MPS * speed_m_s * age_seconds)
 
 
 ## The round-core obstacle displacement, in px of lateral shift -- the CPU
