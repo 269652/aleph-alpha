@@ -67,6 +67,12 @@ uniform vec3 moonlight_ink : source_color = vec3(0.92, 0.96, 1.0);
 uniform float shore_pos = 0.88;
 uniform float shore_width = 0.025;
 uniform float smear_spacing = 0.8;
+// How far the smear is allowed to follow the course's curve. 1 reads the
+// flow at both ends of the smear and bends the taps between them; 0
+// collapses both ends onto the fragment's own direction, which is exactly
+// the straight smear this replaced -- so the two can be compared in game
+// at one uniform rather than by rebuilding.
+uniform float smear_curvature = 1.0;
 uniform float smear_gain = 2.0;
 uniform float turbulence_strength = 1.6;
 uniform float eddy_scale = 0.16;
@@ -173,15 +179,54 @@ float value_noise(vec2 p) {
 //
 // Two scales, because real water has structure at several at once; the
 // fine octave stays unsmeared -- isotropic sparkle riding on the streaks.
-float line_field(vec2 q, vec2 flow_dir) {
-	// Triangle-weighted taps: the outer taps sit furthest along the
-	// direction vector, so they pay the most at a direction-bin change --
-	// weighting the centre keeps the stroke shape while cutting the seam
-	// budget roughly in half.
-	float total = 0.0;
-	for (int k = -4; k <= 4; k++) {
-		float w = 5.0 - abs(float(k));
-		total += value_noise(q + flow_dir * (float(k) * smear_spacing)) * w;
+// The course direction the flow map carries at a world position. Past the
+// painted band the map's GB channels are zero, and normalizing that is a
+// NaN that would poison every tap downstream, so a dead sample hands back
+// the caller's own direction instead.
+vec2 flow_dir_at(vec2 world_position, vec2 fallback) {
+	vec2 raw = texture(flow_across_map, (world_position / tile_px) / flow_map_tiles).gb;
+	if (dot(raw, raw) < 1e-8) {
+		return fallback;
+	}
+	return normalize(raw);
+}
+
+float line_field(vec2 q, vec2 dir_start, vec2 dir_end) {
+	// THE SMEAR FOLLOWS THE COURSE'S CURVE, not one straight line.
+	//
+	// Measured with tools/probe_smear.gd over 1,997 wet tiles around the
+	// spawn: this smear spans 5.31 tiles, and the course turns up to
+	// 45.12 deg across that span -- 12.17 at the 75th percentile, 19.47 at
+	// the 90th, 30 or more on 1.6% of wet tiles, which is where the bends
+	// are. Smearing all nine taps along ONE direction read at the fragment
+	// makes two neighbouring fragments smear along diverging lines, and
+	// the strokes tear apart instead of lining up. That is the zigzag.
+	//
+	// dir_start and dir_end are the flow read at the two ENDS of this
+	// smear; each tap steps along the direction interpolated between them.
+	// A bend has roughly constant curvature and a tangent rotates linearly
+	// with arc length along an arc, so the straight line between the ends
+	// is very nearly the right model: the same probe puts the residual at
+	// 2.49 deg at the 75th percentile and 5.38 at the 90th, for TWO extra
+	// texture samples instead of the eight a per-tap resample would cost.
+	//
+	// The walk is CUMULATIVE -- each step continues from the last tap's
+	// position, tracing a real polyline arc. Stepping k * spacing from the
+	// centre along an interpolated heading would fan out from q instead,
+	// which is not a curve.
+	//
+	// Triangle-weighted taps, as before: the outer taps sit furthest along
+	// the arc, so they pay the most wherever the frame still changes, and
+	// weighting the centre keeps the stroke shape.
+	float total = value_noise(q) * 5.0;
+	vec2 forward = q;
+	vec2 backward = q;
+	for (int k = 1; k <= 4; k++) {
+		float w = 5.0 - float(k);
+		float t = float(k) / 8.0;
+		forward += normalize(mix(dir_start, dir_end, 0.5 + t) + vec2(1e-6, 0.0)) * smear_spacing;
+		backward -= normalize(mix(dir_start, dir_end, 0.5 - t) + vec2(1e-6, 0.0)) * smear_spacing;
+		total += (value_noise(forward) + value_noise(backward)) * w;
 	}
 	// ONE smooth scale, deliberately: the strokes below are contours of
 	// this field, and a level set is only as smooth as the field it cuts.
@@ -443,8 +488,18 @@ void fragment() {
 	float blend = abs(1.0 - 2.0 * phase_a);
 	float n;
 	if (moving > 0.5) {
-		float sample_a = line_field(q - flow_dir * (advect_strength * phase_a * advect_gate + drift), swirl_dir);
-		float sample_b = line_field(q - flow_dir * (advect_strength * phase_b * advect_gate + drift), swirl_dir);
+		// The two ends of this smear, in world space: the outermost tap
+		// sits four steps of smear_spacing away in NOISE units, and a
+		// noise unit is noise_scale world pixels.
+		vec2 smear_end_offset = swirl_dir * (4.0 * smear_spacing / noise_scale);
+		vec2 dir_start = normalize(mix(
+			swirl_dir, flow_dir_at(wp - smear_end_offset, swirl_dir), smear_curvature
+		) + vec2(1e-6, 0.0));
+		vec2 dir_end = normalize(mix(
+			swirl_dir, flow_dir_at(wp + smear_end_offset, swirl_dir), smear_curvature
+		) + vec2(1e-6, 0.0));
+		float sample_a = line_field(q - flow_dir * (advect_strength * phase_a * advect_gate + drift), dir_start, dir_end);
+		float sample_b = line_field(q - flow_dir * (advect_strength * phase_b * advect_gate + drift), dir_start, dir_end);
 		n = mix(sample_a, sample_b, blend);
 	} else {
 		// STILL WATER'S CHEAP PATH: the sea and every lake are most of
@@ -640,6 +695,12 @@ const NOISE_SCALE := 0.08
 ## reports. Averaging compresses the value distribution, so SMEAR_GAIN
 ## re-stretches it -- held to the measured coverage and swing bands by the
 ## same tests that pinned the old field.
+## How far the smear follows the course's curve: 1 bends the taps between
+## the flow read at each END of the smear, 0 is the straight smear this
+## replaced. Kept as a real uniform so the two are one keystroke apart in
+## game, since the straight version is what every earlier screenshot shows.
+const SMEAR_CURVATURE := 1.0
+
 const SMEAR_TAPS := 9
 const SMEAR_SPACING := 0.85
 const SMEAR_GAIN := 2.0
@@ -847,6 +908,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("ink_width", INK_WIDTH)
 	material.set_shader_parameter("ink_color", INK_COLOR)
 	material.set_shader_parameter("smear_spacing", SMEAR_SPACING)
+	material.set_shader_parameter("smear_curvature", SMEAR_CURVATURE)
 	material.set_shader_parameter("smear_gain", SMEAR_GAIN)
 	material.set_shader_parameter("turbulence_strength", TURBULENCE_STRENGTH)
 	material.set_shader_parameter("eddy_scale", EDDY_SCALE)
@@ -1190,6 +1252,26 @@ static func value_noise(x: float, y: float) -> float:
 		lerpf(value_hash(ix, iy + 1.0), value_hash(ix + 1.0, iy + 1.0), fx),
 		fy
 	)
+
+
+## How far, in WORLD PIXELS, one end of the smear sits from its centre.
+## The outermost tap is (SMEAR_TAPS - 1) / 2 steps of SMEAR_SPACING away
+## in noise units, and a noise unit is NOISE_SCALE world pixels. About
+## 2.66 tiles, which is the number tools/probe_smear.gd measures against.
+static func smear_half_span_px() -> float:
+	return float((SMEAR_TAPS - 1) / 2) * SMEAR_SPACING / NOISE_SCALE
+
+
+## The heading tap `k` steps along, interpolated between the flow read at
+## each END of the smear. Always a UNIT vector: a tap chooses a heading
+## only, never a step length, and a short interpolated vector would
+## quietly shorten the stroke through the middle of a bend.
+static func smear_tap_direction(dir_start: Vector2, dir_end: Vector2, k: int) -> Vector2:
+	var half := float((SMEAR_TAPS - 1) / 2)
+	var mixed := dir_start.lerp(dir_end, (float(k) + half) / (2.0 * half))
+	if mixed.length() < 1e-6:
+		return dir_start.normalized()
+	return mixed.normalized()
 
 
 ## The CPU mirror of the shader's line_field: the LIC smear along an

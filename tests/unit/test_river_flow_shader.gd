@@ -383,7 +383,15 @@ func test_the_smear_taps_overlap_into_a_continuous_stroke():
 ## never by rotating the sample frame. The perpendicular still exists for
 ## the bend and the across-reconstruction.
 func test_the_lines_are_oriented_by_smearing_not_frame_rotation():
-	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_dir * (float(k) * smear_spacing)"))
+	# The step is one smear_spacing along the tap's own heading. That
+	# heading is now interpolated along the arc rather than fixed, but it
+	# is still the FLOW's, and the frame itself is still never rotated.
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"normalize(mix(dir_start, dir_end, 0.5 + t) + vec2(1e-6, 0.0)) * smear_spacing;"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"normalize(mix(dir_start, dir_end, 0.5 - t) + vec2(1e-6, 0.0)) * smear_spacing;"
+	))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_perp = vec2(-flow_dir.y, flow_dir.x)"))
 
 
@@ -1638,3 +1646,114 @@ func test_waders_have_room_for_fish_and_ring_still_water():
 	assert_gte(RiverFlowShader.WADER_SLOTS, 16)
 	assert_true(RiverFlowShader.SHADER_CODE.contains("uniform vec2 waders[16];"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("wader_wake_trail * moving * clamp(along / wader_reach_px, 0.0, 1.0)"))
+
+
+# -- the smear follows the course's CURVE ------------------------------------
+#
+# "The zigzags still happen almost at every bend / curve ... that's where it
+# happens 100% of the times." Measured before any of this was written, with
+# tools/probe_smear.gd over 1,997 wet tiles around the spawn: the smear
+# spans 5.31 tiles and treats the course as STRAIGHT over all of it, while
+# the course actually turns up to 45.12 deg across that span -- 12.17 deg at
+# the 75th percentile, 19.47 at the 90th, and 30 or more on 1.6% of wet
+# tiles, which is exactly where the bends are. Two neighbouring fragments
+# then smear along diverging straight lines, and the strokes they draw tear
+# apart instead of lining up.
+#
+# The same probe measured the cure before it was built. Reading the flow at
+# the two ENDS of the smear and interpolating between them drops the 75th
+# percentile to 2.49 deg and the 90th to 5.38, for TWO extra texture samples
+# rather than the eight a per-tap resample would cost. A bend has roughly
+# constant curvature, and a tangent rotates linearly with arc length along
+# an arc, so a straight line between the endpoints is very nearly the right
+# model. These tests hold on to that ratio.
+
+
+func test_the_smear_half_span_is_the_outermost_taps_own_reach():
+	# Four steps of SMEAR_SPACING in noise units, in world pixels.
+	var expected := 4.0 * RiverFlowShader.SMEAR_SPACING / RiverFlowShader.NOISE_SCALE
+	assert_almost_eq(RiverFlowShader.smear_half_span_px(), expected, 1e-9)
+	# The probe reported 2.66 tiles either side; the shader must agree with
+	# the measurement that justified the change, or the numbers above stop
+	# describing the code.
+	assert_almost_eq(
+		RiverFlowShader.smear_half_span_px() / RiverFlowShader.TILE_PX, 2.656, 1e-3
+	)
+
+
+func test_the_tap_direction_runs_from_one_end_of_the_smear_to_the_other():
+	var from := Vector2(1.0, 0.0)
+	var to := Vector2(0.0, 1.0)
+	assert_almost_eq(
+		RiverFlowShader.smear_tap_direction(from, to, -4).angle(), from.angle(), 1e-6
+	)
+	assert_almost_eq(
+		RiverFlowShader.smear_tap_direction(from, to, 4).angle(), to.angle(), 1e-6
+	)
+	# The centre tap sits halfway between the two ends.
+	assert_almost_eq(
+		RiverFlowShader.smear_tap_direction(from, to, 0).angle(), deg_to_rad(45.0), 1e-6
+	)
+
+
+func test_every_tap_direction_is_a_unit_vector():
+	# A tap direction only ever chooses a HEADING; the step length is
+	# smear_spacing. A short interpolated vector would quietly shorten the
+	# stroke in the middle of a bend.
+	var from := Vector2(1.0, 0.0)
+	var to := Vector2(-0.7, 0.7).normalized()
+	for k in range(-4, 5):
+		assert_almost_eq(
+			RiverFlowShader.smear_tap_direction(from, to, k).length(), 1.0, 1e-6,
+			"tap %d must not scale its own step" % k
+		)
+
+
+func test_a_straight_reach_leaves_the_smear_exactly_straight():
+	# Both ends reading the same direction must reproduce the old straight
+	# smear, so this can never change how a straight reach looks -- and the
+	# probe says the median tile turns 0.15 deg, so most water IS straight.
+	var straight := Vector2(0.6, -0.8).normalized()
+	for k in range(-4, 5):
+		assert_almost_eq(
+			RiverFlowShader.smear_tap_direction(straight, straight, k).angle(),
+			straight.angle(), 1e-6
+		)
+
+
+func test_the_shader_reads_the_flow_at_both_ends_of_the_smear():
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"vec2 flow_dir_at(vec2 world_position, vec2 fallback)"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"flow_dir_at(wp - smear_end_offset, swirl_dir)"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"flow_dir_at(wp + smear_end_offset, swirl_dir)"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"float line_field(vec2 q, vec2 dir_start, vec2 dir_end)"
+	))
+
+
+func test_the_endpoint_lookup_falls_back_where_the_map_has_no_direction():
+	# Past the painted band the map's GB channels are zero, and normalizing
+	# that is a NaN that would poison every tap. The lookup must hand back
+	# the fragment's own direction there instead.
+	assert_true(RiverFlowShader.SHADER_CODE.contains("if (dot(raw, raw) < 1e-8)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("return fallback;"))
+
+
+func test_the_smear_curvature_dials_back_to_the_straight_smear():
+	var material := RiverFlowShader.new().make_material()
+	assert_almost_eq(
+		float(material.get_shader_parameter("smear_curvature")),
+		RiverFlowShader.SMEAR_CURVATURE, 1e-9
+	)
+	assert_between(RiverFlowShader.SMEAR_CURVATURE, 0.0, 1.0)
+	# At 0 both ends collapse onto the fragment's own direction, which is
+	# the straight smear this replaced -- a real comparison, in game, at
+	# one uniform.
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"swirl_dir, flow_dir_at(wp - smear_end_offset, swirl_dir), smear_curvature"
+	))

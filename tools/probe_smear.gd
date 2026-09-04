@@ -61,6 +61,13 @@ func _initialize() -> void:
 	print("scan around %s, radius %d\n" % [center, radius])
 
 	var spreads: Array[float] = []
+	# The residual a CHEAP fix would leave. Instead of re-sampling the
+	# flow at all nine taps, sample it at the two ENDS and interpolate
+	# the direction linearly along the smear. Over a circular arc the
+	# tangent rotates linearly with arc length, so for a bend of roughly
+	# constant curvature that model is nearly exact -- and it costs two
+	# extra texture samples rather than eight.
+	var residuals: Array[float] = []
 	var worst: Array = []
 	for dy in range(-radius, radius + 1):
 		for dx in range(-radius, radius + 1):
@@ -78,6 +85,10 @@ func _initialize() -> void:
 			var lowest := 0.0
 			var highest := 0.0
 			var sampled := 0
+			# Each tap's own bearing relative to the centre, indexed by k,
+			# so the endpoint-interpolation residual can be computed from
+			# the same samples rather than a second walk.
+			var deltas := {}
 			for k in range(-half_taps, half_taps + 1):
 				if k == 0:
 					continue
@@ -88,6 +99,7 @@ func _initialize() -> void:
 				if tap.is_empty():
 					continue
 				var delta := _angle_delta(bearing, tap["course_bearing_deg"])
+				deltas[k] = delta
 				lowest = minf(lowest, delta)
 				highest = maxf(highest, delta)
 				sampled += 1
@@ -95,6 +107,15 @@ func _initialize() -> void:
 				continue
 			var spread := highest - lowest
 			spreads.append(spread)
+			# What linear interpolation between the two END taps leaves.
+			if deltas.has(-half_taps) and deltas.has(half_taps):
+				var start: float = deltas[-half_taps]
+				var end: float = deltas[half_taps]
+				var residual := 0.0
+				for k in deltas:
+					var t := (float(k) + float(half_taps)) / float(2 * half_taps)
+					residual = maxf(residual, absf(float(deltas[k]) - lerp(start, end, t)))
+				residuals.append(residual)
 			worst.append({"tile": Vector2i(x, y), "spread": spread, "bearing": bearing})
 
 	if spreads.is_empty():
@@ -114,6 +135,19 @@ func _initialize() -> void:
 	print("tiles turning 30 deg or more across one smear: %d (%.1f%%)" % [
 		over, 100.0 * float(over) / float(spreads.size())
 	])
+	if not residuals.is_empty():
+		residuals.sort()
+		print("\nresidual AFTER interpolating direction between the two end taps:")
+		for q in [0.5, 0.75, 0.9, 0.99, 1.0]:
+			var index := mini(residuals.size() - 1, int(float(residuals.size() - 1) * q))
+			print("   %5.0f%% of tiles at or under %7.2f deg" % [q * 100.0, residuals[index]])
+		var still_over := 0
+		for residual in residuals:
+			if residual >= 30.0:
+				still_over += 1
+		print("tiles still 30 deg or more off: %d of %d (%.1f%%)" % [
+			still_over, residuals.size(), 100.0 * float(still_over) / float(residuals.size())
+		])
 	worst.sort_custom(func(a, b): return a["spread"] > b["spread"])
 	print("\nworst tiles:")
 	for i in mini(12, worst.size()):
