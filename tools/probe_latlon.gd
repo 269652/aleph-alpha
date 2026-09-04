@@ -44,4 +44,15 @@ func _initialize() -> void:
 			else:
 				line += str(clampi(int(half * 2.0), 0, 9))
 		print(line)
+	print("bearing field (bucketed to 8 compass points: 0=N,1=NE,...,7=NW):")
+	for dy in range(-radius, radius + 1):
+		var line := ""
+		for dx in range(-radius, radius + 1):
+			var hit := generator.nearest_river_at(tile.x + dx, tile.y + dy)
+			var half: float = hit.get("half_width_tiles", 2.0)
+			if hit.distance_tiles > half + 0.75:
+				line += "."
+			else:
+				line += str(int(fmod(hit.course_bearing_deg + 22.5, 360.0) / 45.0))
+		print(line)
 	quit()
