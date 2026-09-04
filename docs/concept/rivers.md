@@ -1307,12 +1307,14 @@ What is genuinely adapted, and why each part:
 
 - **The ring is carried downstream.** In still water a ripple is concentric
   about a fixed point; in a current it is concentric about a point that
-  moves with the water. The centre is advected by
-  `flow_dir * DRIFT_PX_PER_MPS * speed_mps * age` — the same drift constant
-  and the same solved per-reach velocity the surface field already uses, so
-  a wake and the water it sits in travel together instead of the ring
-  standing still while the river slides out from under it. This is the one
-  thing ocean water cannot express and the river must.
+  moves with the water. The centre is carried by
+  `flow_dir * surface_px_per_s(speed_mps) * age` — the water's whole
+  VISIBLE speed, so a wake and the water it sits in travel together instead
+  of the ring standing still while the river slides out from under it. This
+  is the one thing ocean water cannot express and the river must. (First
+  shipped carried by the linear drift alone, `DRIFT_PX_PER_MPS * speed_mps`,
+  which at a typical reach is a third of the water's visible speed — the
+  ring visibly sat there. See "One visible water speed" below.)
 - **Drawn, not glowed.** This surface is illustrated water: a flat cel body
   plus contour strokes. A bright ring composited on top would read as an
   overlay sticker. So the packet enters two fields that already exist. It
@@ -1444,8 +1446,87 @@ Old halo, new band: same ring extent and alpha (`BOULDER_BAND_WIDTH_PX`,
 the channel's own wet/dry verdict" property that lets a boulder on dry
 bank ground still show a band. Only the fill inside the ring changed.
 
+## One visible water speed: ripples, eddies and lines together (2026-09-04)
+
+Reported in three steps, live, on the ripple work above: *"Can you make
+the river ripples move downstream at water speed?"*, then *"eddy swirls
+also don't move downstream.. a wobble stays in place instead of flowing
+with the river"*, then — the ripples having been carried by the drift in
+the meantime — *"Ripples now do move downstream, but the lines should move
+at same speed."*
+
+One cause. The drawn surface is moved by TWO terms, and only one of them
+had been treated as "the water's speed":
+
+| term | what it is | world px/s at a 0.5 m/s reach |
+| --- | --- | --- |
+| two-phase drag | `ADVECT_STRENGTH` cells every `1/ADVECT_RATE` s, regardless of the reach | ~19.8 |
+| linear drift | `DRIFT_PX_PER_MPS` per m/s of real current | 10 |
+| **visible surface** | the sum: what the pulses and kinks actually stream at | **~29.8** |
+| ring centre (before) | drift alone | 10 |
+| eddy field (before) | `BEND_DRIFT_FRACTION` (0.6) of the drift alone | 6 |
+
+The drag is not a wobble-in-place: each phase's layer is the field
+translated by a distance growing linearly with the phase's age, so
+features on the surface genuinely travel at `ADVECT_STRENGTH x
+ADVECT_RATE` cells per second, and the crossfade only decides which of
+two offset copies is showing. That translation is most of the visible
+speed at every ordinary reach, and neither the ring nor the eddies had it —
+so a wake moved at a third of the water and the whirls at a fifth, and
+both read as standing still while the pulses streamed past them.
+
+**The fix is one function.** `surface_px_per_s(speed_mps, moving)` in the
+GLSL, mirrored by `RiverFlowShader.surface_px_per_s` (and
+`surface_cells` in noise units), is the water's visible downstream speed:
+drag translation plus drift, gated by the same hard `STILL_FLOW_M_S` step
+the strokes use, so a lake — whose still path breathes sideways and never
+drifts — carries nothing either. Every consumer that has to "move with the
+water" rides it:
+
+- **The ring centre** is carried by `surface_velocity * age`
+  (`surface_velocity = flow_dir * surface_px_per_s`, computed once per
+  fragment next to the field's own drift). Over its `RIPPLE_LIFETIME` a
+  wake in a 0.5 m/s reach now travels ~65 world px — four tiles — instead
+  of 22.
+- **The eddy field** translates at `surface_px_per_s x
+  BEND_DRIFT_FRACTION`, and the fraction goes **0.6 → 1.0**: the lines'
+  shape IS the eddy-bent guide, so the eddies' migration is the lines'
+  motion, and the report was that it must match the ripples. The
+  Jackson-1976 "boils lag the surface" grounding that set the fraction
+  below one is superseded here by art direction — the lines are the water
+  — and the fraction stays as the one knob to bring the lag back. This is
+  a deliberate divergence from the earlier "eddies migrate downstream,
+  slowly" spec in "The full bilinear frame, forward drift, round
+  obstacles".
+
+Why the picture still does not slide as one rigid sheet at fraction 1.0,
+which is what that ceiling existed to prevent: the eddy coordinate is a
+STEADY translation, never the phase drag itself. Each phase still
+stretches away from that translation and resets, so the wobble keeps
+deforming relative to the whirls even though their mean speeds now agree;
+the structural pin (`eddy_p` is sampled at `p - flow_dir * bend_drift`,
+never at the advected `q`) is unchanged, and the fold-margin test still
+holds at a real drifted offset because a translation cannot change the
+Jacobian.
+
+Not changed: `DRIFT_PX_PER_MPS`, `ADVECT_STRENGTH`, `ADVECT_RATE` and
+their pins — the surface itself streams exactly as before. Only the
+things carried ON it caught up with it.
+
+Pinned in `test_river_flow_shader.gd`: the visible speed is the drag
+plus the drift and zero below the still gate; the shader's three lines of
+wiring are pinned by source; the ring's carry and the eddies' migration
+both equal the shared speed and each other; and both clear a legibility
+floor at a 0.5 m/s reach (a wake carried more than three and a half tiles
+within its lifetime, whirls crossing a tile in two seconds — the same 8
+world px/s floor the pulse has to clear). The GPU readback smoke test
+still confirms a disturbed river draws differently from a quiet one.
+
 ## Status
 
+- **One visible water speed (ripples, eddies, lines)** — ✅ Done — see
+  the section above; `surface_px_per_s` is the single source, both
+  consumers ride it, `BEND_DRIFT_FRACTION` 1.0.
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
   Dreisam (see Roster). Rest-of-world roster — ⬜ Not started, ongoing.
 - **Procedural fallback (noise-contour proxy)** — ✅ Built, tested, and
@@ -1510,9 +1591,9 @@ bank ground still show a band. Only the fill inside the ring changed.
   downstream-trailing wake; never dries the channel.
 - **Movement ripples (fish, player, animals)** — ✅ Done — the shared
   `WaterShader` disturbance buffer now feeds the river surface too; the
-  same signed wave packet, its centre advected downstream with the current,
-  drawn into the stroke contours and the stroke strength rather than
-  composited on top. Confirmed on a real GPU
+  same signed wave packet, its centre carried downstream at the water's
+  visible speed (see "One visible water speed"), drawn into the stroke
+  contours and the stroke strength rather than composited on top. Confirmed on a real GPU
   (`test_a_recorded_disturbance_actually_changes_what_the_river_draws`),
   which is the only place the symptom was ever visible. Fish are among the
   causes — see "Fish really do live under the river surface" above, which
