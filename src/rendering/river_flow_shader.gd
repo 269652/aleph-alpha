@@ -414,7 +414,21 @@ void fragment() {
 			(d - boulder_radius_px) / max(boulder_reach_px - boulder_radius_px, 0.001),
 			0.0, 1.0);
 		envelope *= envelope;
-		float side = lateral >= 0.0 ? 1.0 : -1.0;
+		// A SMOOTH odd factor, not a sign flip.
+		//
+		// sign(lateral) leaves the magnitude at exactly R on the
+		// stagnation line while the sign jumps across it, so frag_across --
+		// the field every stroke, the waterline, the ink line and the shore
+		// highlight is a CONTOUR of -- tore by 2R along a straight line
+		// running through the rock with the current. Measured: 21.95px for
+		// this radius, which against a 32px half-width is 0.69 of the whole
+		// channel, discontinuously. Every contour crossing it was cut.
+		//
+		// lateral / sqrt(lateral^2 + R^2) vanishes on the line, is odd
+		// about it, and is within a few percent of 1 everywhere the push is
+		// actually visible -- so the round-core profile above is unchanged
+		// where it reads, and merely stops tearing where it did not.
+		float side = lateral / sqrt(lateral * lateral + boulder_radius_px * boulder_radius_px);
 		frag_across += side * displaced * envelope / (half_width_local * tile_px);
 		eyot_dry = min(eyot_dry, smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d));
 	}
@@ -440,7 +454,12 @@ void fragment() {
 		float envelope = 1.0 - clamp(
 			(d - wader_radius_px) / max(reach - wader_radius_px, 0.001), 0.0, 1.0);
 		envelope *= envelope;
-		float side = lateral >= 0.0 ? 1.0 : -1.0;
+		// The same smooth odd factor the boulder loop uses. A wader tore by
+		// 11.95px, 0.37 of a channel, along a straight line through the
+		// player running with the current -- reported as "a hard edge ... a
+		// straight line which moves with him", seen only while standing in
+		// water, which is exactly when the player is fed here as a wader.
+		float side = lateral / sqrt(lateral * lateral + wader_radius_px * wader_radius_px);
 		frag_across += side * displaced * envelope / (half_width_local * tile_px);
 	}
 	// RIPPLE RINGS -- the reimplementation of the old overlay's disturbance
@@ -1064,7 +1083,10 @@ static func obstacle_lateral_shift_px(
 	var displaced := sqrt(lateral * lateral + radius_px * radius_px) - absf(lateral)
 	var envelope := 1.0 - clampf((d - radius_px) / maxf(reach - radius_px, 0.001), 0.0, 1.0)
 	envelope *= envelope
-	var side := 1.0 if lateral >= 0.0 else -1.0
+	# Smooth and odd about the stagnation line. A hard sign flip left the
+	# magnitude at exactly R there while the sign jumped, tearing the field
+	# by 2R -- 21.95px for a boulder, 11.95px for a wader.
+	var side := lateral / sqrt(lateral * lateral + radius_px * radius_px)
 	return side * displaced * envelope
 
 

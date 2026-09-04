@@ -1183,24 +1183,37 @@ func test_the_jitter_wavelength_sits_between_pixel_and_line():
 
 func test_the_obstacle_shift_matches_potential_flow_around_a_round_core():
 	# "player and boulders behave like a singularity and don't have a
-	# radius around which the water flows". The shift is now the REAL
+	# radius around which the water flows". The magnitude is the REAL
 	# midplane streamline displacement around a cylinder of radius R:
-	# sqrt(lateral^2 + R^2) - |lateral| -- R exactly on the stagnation
-	# line (the parting streamline clears the actual rock), decaying
-	# smoothly to the sides, never a point spike.
+	# sqrt(lateral^2 + R^2) - |lateral|, decaying smoothly to the sides,
+	# never a point spike.
+	#
+	# ON the stagnation line the push is now ZERO, not R. This assertion
+	# used to demand R there -- "the parting streamline clears the actual
+	# rock" -- which cannot be asked of a single-valued field: the sign
+	# flips across that line, so requiring magnitude R on it requires the
+	# field to be both +R and -R at one point, and what the code actually
+	# did was tear frag_across by 2R (21.95px, 0.69 of a channel) along a
+	# straight line through the rock. The rock's clearance comes from
+	# eyot_dry, which carves a genuinely round dry patch, and from the
+	# halo ring around it -- not from tearing the field every contour is
+	# a level set of. See
+	# test_the_obstacle_push_is_continuous_across_the_stagnation_line.
 	var perp := Vector2(0, 1)
 	var r := RiverFlowShader.BOULDER_RADIUS_PX
 	var reach := RiverFlowShader.BOULDER_REACH_PX
 	var on_axis := RiverFlowShader.obstacle_lateral_shift_px(
 		Vector2(r, 0.0), perp, r, reach, 0.0
 	)
-	assert_almost_eq(on_axis, r, 0.01, "the parting streamline must clear the full radius")
+	assert_almost_eq(on_axis, 0.0, 0.01, "the parting line parts -- it does not jump")
+	# One radius off the line, the smooth factor is 1/sqrt(2) and the
+	# midplane magnitude is (sqrt(2) - 1) * R, with the envelope still 1.
 	var at_rim := RiverFlowShader.obstacle_lateral_shift_px(
 		Vector2(0.0, r), perp, r, reach, 0.0
 	)
 	assert_almost_eq(
-		at_rim, (sqrt(2.0) - 1.0) * r, 0.01,
-		"the rim streamline displacement is the cylinder midplane value"
+		at_rim, (sqrt(2.0) - 1.0) * r / sqrt(2.0), 0.01,
+		"the rim streamline displacement is the cylinder midplane value, smoothed"
 	)
 	var near := RiverFlowShader.obstacle_lateral_shift_px(Vector2(0.0, 8.0), perp, r, reach, 0.0)
 	var far := RiverFlowShader.obstacle_lateral_shift_px(Vector2(0.0, 20.0), perp, r, reach, 0.0)
@@ -1222,17 +1235,23 @@ func test_the_obstacle_shift_matches_potential_flow_around_a_round_core():
 ## their real radii -- and both convert px to across-fraction through the
 ## channel's actual half-width, itself pinned to the catalog.
 func test_the_boulder_and_wader_shifts_ride_the_same_round_core():
+	# Probed one radius OFF the stagnation line. On the line itself both
+	# are now zero, so the line no longer distinguishes the two models --
+	# one radius out, each shows its own radius through the same closed
+	# form: (1 - 1/sqrt(2)) * R, the midplane displacement times the
+	# smooth odd factor, with the envelope still at 1.
+	var core := 1.0 - 1.0 / sqrt(2.0)
 	assert_almost_eq(
 		RiverFlowShader.boulder_across_push(
-			Vector2(RiverFlowShader.BOULDER_RADIUS_PX, 0.0), Vector2(0, 1)
+			Vector2(0.0, RiverFlowShader.BOULDER_RADIUS_PX), Vector2(0, 1)
 		),
-		RiverFlowShader.BOULDER_RADIUS_PX / RiverFlowShader.HALF_WIDTH_PX, 0.001
+		core * RiverFlowShader.BOULDER_RADIUS_PX / RiverFlowShader.HALF_WIDTH_PX, 0.001
 	)
 	assert_almost_eq(
 		RiverFlowShader.wader_across_push(
-			Vector2(RiverFlowShader.WADER_RADIUS_PX, 0.0), Vector2(1, 0)
+			Vector2(0.0, RiverFlowShader.WADER_RADIUS_PX), Vector2(1, 0)
 		),
-		RiverFlowShader.WADER_RADIUS_PX / RiverFlowShader.HALF_WIDTH_PX, 0.001
+		core * RiverFlowShader.WADER_RADIUS_PX / RiverFlowShader.HALF_WIDTH_PX, 0.001
 	)
 	assert_lt(RiverFlowShader.WADER_RADIUS_PX, RiverFlowShader.BOULDER_RADIUS_PX)
 
@@ -1929,3 +1948,117 @@ func test_the_map_smoothing_dials_back_to_plain_bilinear():
 		RiverFlowShader.MAP_SMOOTHING, 1e-9
 	)
 	assert_between(RiverFlowShader.MAP_SMOOTHING, 0.0, 1.0)
+
+
+# -- the tear along an obstacle's stagnation line -----------------------------
+#
+# "There's a hard edge visible around the player ... a straight line which
+# moves with him", seen ONLY while standing in water -- which is exactly
+# when the player is fed to the shader as a wader -- and separately "also
+# behind a few boulders".
+#
+# The push was sign(lateral) * (sqrt(lateral^2 + R^2) - |lateral|). That
+# magnitude is exactly R on the stagnation line (lateral == 0) while the
+# sign flips there, so frag_across -- the field every stroke, the
+# waterline, the ink line and the shore highlight is a CONTOUR of -- JUMPED
+# by 2R across a straight line running through the obstacle along the
+# current. In across-fraction units, against a channel that spans 2.0:
+#
+#   wader   R =  6px -> 2R / 41.6px = 0.29
+#   boulder R = 11px -> 2R / 41.6px = 0.53
+#
+# A quarter to a half of the channel, discontinuously, in a straight line.
+# Every contour crossing it is cut.
+#
+# The fix keeps the same physical profile and the same far field, and only
+# replaces the hard sign with a smooth odd factor that vanishes on the
+# line: lateral / sqrt(lateral^2 + R^2).
+
+
+func test_the_obstacle_push_is_continuous_across_the_stagnation_line():
+	# lateral == offset.y for this perpendicular, so the sweep walks
+	# straight through the stagnation line.
+	var perp := Vector2(0.0, 1.0)
+	for obstacle in [
+		{"r": RiverFlowShader.BOULDER_RADIUS_PX, "reach": RiverFlowShader.BOULDER_REACH_PX, "trail": 0.0},
+		{"r": RiverFlowShader.WADER_RADIUS_PX, "reach": RiverFlowShader.WADER_REACH_PX, "trail": RiverFlowShader.WADER_WAKE_TRAIL},
+	]:
+		var previous := INF
+		var worst := 0.0
+		for i in range(-40, 41):
+			var lateral := float(i) * 0.05
+			var shift: float = RiverFlowShader.obstacle_lateral_shift_px(
+				Vector2(0.0, lateral), perp, obstacle["r"], obstacle["reach"], obstacle["trail"]
+			)
+			if previous != INF:
+				worst = maxf(worst, absf(shift - previous))
+			previous = shift
+		# A 0.05px step may not move the push by anything like a pixel. The
+		# old sign flip moved it by 2R -- 22px for a boulder -- in one step.
+		assert_lt(
+			worst, 0.5,
+			"radius %f tears by %f px across the stagnation line" % [obstacle["r"], worst]
+		)
+
+
+func test_the_obstacle_push_vanishes_on_the_stagnation_line_itself():
+	var perp := Vector2(0.0, 1.0)
+	assert_almost_eq(
+		RiverFlowShader.obstacle_lateral_shift_px(
+			Vector2(0.0, 0.0), perp,
+			RiverFlowShader.BOULDER_RADIUS_PX, RiverFlowShader.BOULDER_REACH_PX, 0.0
+		),
+		0.0, 1e-9,
+		"the water on the parting line goes neither way -- it is the parting line"
+	)
+
+
+func test_the_obstacle_push_stays_odd_about_the_stagnation_line():
+	# Both banks must part equally; an asymmetric push would steer the
+	# whole channel sideways past every rock.
+	var perp := Vector2(0.0, 1.0)
+	for offset in [1.0, 4.0, 11.0, 22.0]:
+		var positive: float = RiverFlowShader.obstacle_lateral_shift_px(
+			Vector2(0.0, offset), perp,
+			RiverFlowShader.BOULDER_RADIUS_PX, RiverFlowShader.BOULDER_REACH_PX, 0.0
+		)
+		var negative: float = RiverFlowShader.obstacle_lateral_shift_px(
+			Vector2(0.0, -offset), perp,
+			RiverFlowShader.BOULDER_RADIUS_PX, RiverFlowShader.BOULDER_REACH_PX, 0.0
+		)
+		assert_almost_eq(positive, -negative, 1e-6, "asymmetric at %f" % offset)
+
+
+func test_the_obstacle_push_keeps_its_far_field():
+	# Well outside the core the smooth factor is within a few percent of
+	# 1, so the "water parts around a rock of real radius" profile this
+	# replaced is preserved where it is actually visible. At 2R the factor
+	# is 2/sqrt(5) = 0.894.
+	var perp := Vector2(0.0, 1.0)
+	var radius: float = RiverFlowShader.BOULDER_RADIUS_PX
+	var lateral := radius * 2.0
+	var shift: float = RiverFlowShader.obstacle_lateral_shift_px(
+		Vector2(0.0, lateral), perp, radius, RiverFlowShader.BOULDER_REACH_PX, 0.0
+	)
+	var envelope := 1.0 - clampf(
+		(lateral - radius) / maxf(RiverFlowShader.BOULDER_REACH_PX - radius, 0.001), 0.0, 1.0
+	)
+	envelope *= envelope
+	var magnitude := sqrt(lateral * lateral + radius * radius) - absf(lateral)
+	assert_almost_eq(
+		shift, magnitude * envelope * (2.0 / sqrt(5.0)), 1e-6,
+		"the far-field profile must be the same round-core displacement, only smoothed"
+	)
+
+
+func test_the_shader_loops_use_the_smooth_side_not_a_sign_flip():
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("float side = lateral >= 0.0 ? 1.0 : -1.0;"),
+		"a hard sign flip tears frag_across by 2R along the stagnation line"
+	)
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"float side = lateral / sqrt(lateral * lateral + boulder_radius_px * boulder_radius_px);"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"float side = lateral / sqrt(lateral * lateral + wader_radius_px * wader_radius_px);"
+	))
