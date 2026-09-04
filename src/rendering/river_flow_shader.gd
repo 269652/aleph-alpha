@@ -233,25 +233,43 @@ float ripple_packet(float dist, float age) {
 	return rings * packet * age_fade * spread_fade;
 }
 
+// THE WATER'S VISIBLE SPEED, in world px/s downstream. TWO things move the
+// drawn surface: the two-phase drag, which translates the field
+// advect_strength cells every 1/advect_rate seconds no matter how fast
+// the reach runs, and the linear drift keyed to the real current. So
+// anything that has to "move with the water" -- the ring centre below,
+// the eddy field the guide lines are bent by -- must ride the SUM.
+// Carried by the drift alone, at a typical 0.5 m/s reach a wake moved at
+// a third of the water and the whirls at a fifth, and both read as
+// standing still while the pulses streamed past ("make the river ripples
+// move downstream at water speed", "a wobble stays in place instead of
+// flowing with the river", "the lines should move at the same speed").
+// Gated by the same hard still step the strokes use: a lake breathes
+// sideways and never drifts, so nothing on it is carried either. Mirrored
+// on the CPU by RiverFlowShader.surface_px_per_s.
+float surface_px_per_s(float speed_mps, float moving) {
+	return moving * (advect_strength * advect_rate / noise_scale + drift_px_per_mps * speed_mps);
+}
+
 // THE river adaptation. In still water a ring stays concentric about a
 // fixed point; in a current it is concentric about a point that MOVES WITH
-// THE WATER -- so the centre is carried downstream at the same drift rate
-// the surface pattern itself travels at, and a wake sits in the river
-// instead of the river sliding out from under it.
+// THE WATER -- so the centre is carried downstream at the surface's whole
+// visible speed (surface_velocity: surface_px_per_s along the flow), and a
+// wake sits in the river instead of the river sliding out from under it.
 //
 // The age bound is checked BEFORE the centre and the distance, not left to
 // ripple_packet's own guard: the padded tail of the buffer carries a
 // sentinel age, and this is the loop the rain-ripple perf lesson applies
 // to (do the cheap rejection first, never the expensive half and then a
 // discard).
-float movement_ripples(vec2 pos, vec2 flow_dir, float speed_mps) {
+float movement_ripples(vec2 pos, vec2 surface_velocity) {
 	float total = 0.0;
 	for (int i = 0; i < disturbance_count; i++) {
 		float age = disturbance_age[i];
 		if (age < 0.0 || age > ripple_lifetime) {
 			continue;
 		}
-		vec2 center = disturbance_pos[i] + flow_dir * (drift_px_per_mps * speed_mps * age);
+		vec2 center = disturbance_pos[i] + surface_velocity * age;
 		total += ripple_packet(distance(pos, center), age);
 	}
 	return total;
@@ -454,6 +472,9 @@ void fragment() {
 	// breathe in place instead of freezing. The gate is a hard step.
 	float moving = step(still_flow_m_s, speed_mps);
 	float advect_gate = mix(still_ripple, 1.0, moving);
+	// The one speed everything carried by the water rides -- see
+	// surface_px_per_s.
+	vec2 surface_velocity = flow_dir * surface_px_per_s(speed_mps, moving);
 	// THE SMOOTHING PASS ("it's still visible that the base are square
 	// tiles"): the baked across is quantized per tile, so lines, cel
 	// boundaries and the waterline all side-step together on the same
@@ -639,20 +660,28 @@ void fragment() {
 	//
 	// Two octaves: the coarse one swings whole bundles of lines, the fine
 	// one puts kinks WITHIN a line's own length.
-	// THE EDDIES MIGRATE DOWNSTREAM, slowly. A bed-anchored bend was the
-	// right call while the whirl only reached the strokes through the
-	// noise; with the whirl now IN the guide, a fully static bend left the
+	// THE EDDIES MIGRATE DOWNSTREAM WITH THE WATER. A bed-anchored bend
+	// was the right call while the whirl only reached the strokes through
+	// the noise; with the whirl now IN the guide, a static bend left the
 	// lines standing still and only the small wobble texture moved over
 	// them ("make the water move with the flow so it looks like a flowing
-	// stream"). Real boils shed from bedforms and migrate more slowly than
-	// the surface -- Jackson 1976 has them quasi-stationary, not fixed --
-	// so the eddy sample coordinate drifts at bend_drift_fraction of the
-	// surface's drift, in still water not at all.
+	// stream"). It then migrated at a fraction of the linear drift alone,
+	// which at a typical reach is a fifth of the water's visible speed --
+	// "a wobble stays in place instead of flowing with the river". So the
+	// eddy sample coordinate now translates at bend_drift_fraction of
+	// surface_px_per_s, the SAME speed the ring centre is carried at
+	// ("the lines should move at the same speed"), in still water not at
+	// all. Real boils lag the surface (Jackson 1976) and the fraction is
+	// still the knob for that, but at 1.0 the art direction is that the
+	// lines ARE the water.
 	//
-	// This is a TRANSLATION of the bend field, so it cannot change the
-	// fold Jacobian: test_the_fold_margin_survives_the_eddy_drift holds
-	// the 0.35 margin at a real drifted offset.
-	float bend_drift = TIME * drift_px_per_mps * speed_mps * noise_scale * bend_drift_fraction;
+	// This is a steady TRANSLATION of the bend field, never the phase
+	// drag's stretch-and-reset, so it cannot change the fold Jacobian:
+	// test_the_fold_margin_survives_the_eddy_drift holds the 0.35 margin
+	// at a real drifted offset. And the wobble still deforms relative to
+	// the whirls -- each phase stretches away from this translation and
+	// resets -- so the picture does not slide as one sheet.
+	float bend_drift = TIME * surface_px_per_s(speed_mps, moving) * noise_scale * bend_drift_fraction;
 	vec2 eddy_p = (p - flow_dir * bend_drift) * eddy_scale;
 	// Shear lives at the banks: real eddies shed where the fast core
 	// meets the slow margin, so the standing turbulence grows from the
@@ -842,7 +871,7 @@ void fragment() {
 	// channel's geometry, and a passing fish must not narrow the river or
 	// bend its eddies. Boulders and waders displace it because they are
 	// solid things standing in the current; a wake is only the surface.
-	float ripple = movement_ripples(wp, flow_dir, speed_mps);
+	float ripple = movement_ripples(wp, surface_velocity);
 	float s_field = guide * across_line_scale + (n - 0.5) * wobble_local
 		+ ripple * ripple_line_gain;
 	float level_frac = fract(s_field * line_count) - 0.5;
@@ -1264,11 +1293,20 @@ const DRIFT_PX_PER_MPS := 20.0
 const PULSE_FLOOR := 0.35
 
 ## How fast the standing eddies migrate downstream, as a fraction of the
-## surface drift above. Boils lag the water over them; 0.6 is fast enough
-## that the whirls visibly travel -- with the wobble small they are most of
-## what there is ON a line to see moving -- while the surface still streams
-## through them rather than the lines sliding as a rigid sheet. Pinned by test_the_bend_drifts_downstream_with_the_current.
-const BEND_DRIFT_FRACTION := 0.6
+## water's VISIBLE speed (surface_px_per_s -- the phase drag's translation
+## plus the drift, not the drift alone). 0.4 and then 0.6 of the drift alone
+## were tried first: at a typical 0.5 m/s reach that is 4-6 world px/s
+## against a surface streaming at ~30, and it was reported as "a wobble
+## stays in place instead of flowing with the river". With the wobble small
+## the whirls are most of what there is ON a line to see moving -- they are
+## the lines' shape -- and once the ripples were carried at the water's
+## visible speed the report was "the lines should move at the same speed".
+## So 1.0: the lines move at exactly the speed the ring is carried at. The
+## surface still deforms through them because the phase drag stretches
+## away from this steady translation and resets. Pinned by
+## test_the_bend_drifts_downstream_with_the_current and
+## test_the_lines_and_the_ripples_move_at_the_same_speed.
+const BEND_DRIFT_FRACTION := 1.0
 
 ## The organic smoothing jitter: swing (in across-fraction units, capped
 ## near one across-bin step by test -- it masks the per-tile quantisation,
@@ -1492,14 +1530,14 @@ static func ripple_packet(distance_units: float, age_seconds: float) -> float:
 
 
 ## Where a ripple recorded at `origin` is centred `age_seconds` later --
-## the CPU mirror of the shader's own advected centre. A ring in a current
-## is concentric about a point that travels WITH the water, at the same
-## drift rate the visible surface pattern moves at; only in still water
-## (speed 0) does it stay put.
+## the CPU mirror of the shader's own carried centre. A ring in a current
+## is concentric about a point that travels WITH the water, at the water's
+## whole visible speed (surface_px_per_s); only in still water does it stay
+## put.
 static func ripple_center(
 	origin: Vector2, flow_dir: Vector2, speed_m_s: float, age_seconds: float
 ) -> Vector2:
-	return origin + flow_dir * (DRIFT_PX_PER_MPS * speed_m_s * age_seconds)
+	return origin + flow_dir * (surface_px_per_s(speed_m_s) * age_seconds)
 
 
 ## The round-core obstacle displacement, in px of lateral shift -- the CPU
@@ -1952,11 +1990,31 @@ static func drift_cells(speed_mps: float, seconds: float) -> float:
 	return DRIFT_PX_PER_MPS * speed_mps * seconds * NOISE_SCALE
 
 
+## The water's VISIBLE downstream speed in world px/s -- the CPU mirror of
+## the shader's surface_px_per_s. The drawn surface is moved by two terms:
+## the two-phase drag translates the field ADVECT_STRENGTH cells every
+## 1/ADVECT_RATE seconds regardless of the reach, and the linear drift adds
+## DRIFT_PX_PER_MPS per m/s of real current. Everything that has to move
+## WITH the water (the ring centre, the eddy field) rides this sum; the
+## drift alone is well under half of it at a typical reach, which is what
+## made wakes and whirls read as standing still. Gated by the same hard
+## STILL_FLOW_M_S step the shader's still path uses, so a lake's surface
+## speed is exactly zero.
+static func surface_px_per_s(speed_mps: float) -> float:
+	if speed_mps < STILL_FLOW_M_S:
+		return 0.0
+	return ADVECT_STRENGTH * ADVECT_RATE / NOISE_SCALE + DRIFT_PX_PER_MPS * speed_mps
+
+
+## The same visible speed, as a distance in noise cells over `seconds`.
+static func surface_cells(speed_mps: float, seconds: float) -> float:
+	return surface_px_per_s(speed_mps) * seconds * NOISE_SCALE
+
+
 ## How far the standing eddies have migrated downstream, in noise cells:
-## BEND_DRIFT_FRACTION of the surface's own drift, so they lag the water
-## over them. Zero in still water.
+## BEND_DRIFT_FRACTION of the water's visible travel. Zero in still water.
 static func bend_drift_cells(speed_mps: float, seconds: float) -> float:
-	return drift_cells(speed_mps, seconds) * BEND_DRIFT_FRACTION
+	return surface_cells(speed_mps, seconds) * BEND_DRIFT_FRACTION
 
 
 ## Mean absolute change in the field over a step of `distance`, taken either
