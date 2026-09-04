@@ -3090,3 +3090,117 @@ func test_the_push_and_the_eyot_take_the_rock_s_own_radius():
 	)
 	assert_almost_eq(RiverFlowShader.eyot_dry_factor(big * 0.5, big), 0.0, 1e-9, "under a big rock it is dry")
 	assert_almost_eq(RiverFlowShader.eyot_dry_factor(big * 0.5, small), 1.0, 1e-9, "beside a small one it is wet")
+
+
+# -- foam in front, whirls behind ----------------------------------------------
+#
+# "...and produce foam in front and whirls behind it." Both are what a
+# real current does to a rock it cannot move. FOAM: the flow stagnates on
+# the upstream face and, fast enough, the pile-up breaks white -- so the
+# term is confined to the upstream sector, to a window just off the rock's
+# face, driven by the reach's speed, and broken up by the channel's own
+# advected field so it streams instead of sitting as a pale cap. WAKE: a
+# rock sheds eddies, so the standing-turbulence bend the guide lines
+# already whirl with is amplified in a lobe behind the rock -- downstream
+# only, a couple of radii wide, dying out over several radii -- gated by
+# the current. Both scale with the rock's own radius.
+
+
+func test_foam_sits_on_the_upstream_face_and_nowhere_else():
+	var R := 12.0
+	var flow := Vector2(0.0, 1.0)  # south
+	var face := RiverFlowShader.boulder_foam(-flow * R, flow, R)
+	assert_gt(face, 0.9, "the stagnation point at the rock's face foams hardest (%.2f)" % face)
+	assert_almost_eq(RiverFlowShader.boulder_foam(flow * R, flow, R), 0.0, 1e-9, "nothing behind the rock")
+	assert_almost_eq(RiverFlowShader.boulder_foam(flow * R * 1.3, flow, R), 0.0, 1e-9)
+	var shoulder := RiverFlowShader.boulder_foam(Vector2(R, 0.0), flow, R)
+	assert_almost_eq(shoulder, 0.0, 1e-9, "the shoulders, where the water is fastest, do not foam")
+	var quarter := RiverFlowShader.boulder_foam(Vector2(R, -R).normalized() * R, flow, R)
+	assert_between(quarter, 0.1, 0.8, "off the stagnation line the foam thins (%.2f)" % quarter)
+	var far := -flow * (R + R * RiverFlowShader.BOULDER_FOAM_REACH_RATIO * 1.5)
+	assert_almost_eq(RiverFlowShader.boulder_foam(far, flow, R), 0.0, 1e-9, "the foam does not reach upstream forever")
+	assert_almost_eq(RiverFlowShader.boulder_foam(-flow * R * 0.3, flow, R), 0.0, 1e-9, "under the rock is rock, not foam")
+	for i in 40:
+		var offset := Vector2(float(i % 8) - 3.5, float(i / 8) - 2.5) * R * 0.6
+		assert_between(RiverFlowShader.boulder_foam(offset, flow, R), 0.0, 1.0)
+
+
+func test_foam_needs_a_real_current():
+	assert_almost_eq(RiverFlowShader.foam_drive(0.0), 0.0, 1e-9, "still water does not foam")
+	assert_almost_eq(RiverFlowShader.foam_drive(RiverFlowShader.FOAM_MIN_M_S), 0.0, 1e-9)
+	assert_gt(RiverFlowShader.foam_drive(0.6), 0.0, "an ordinary reach foams a little at a rock")
+	assert_almost_eq(RiverFlowShader.foam_drive(RiverFlowShader.FOAM_FULL_M_S), 1.0, 1e-9)
+	assert_almost_eq(RiverFlowShader.foam_drive(3.0), 1.0, 1e-9)
+	assert_lt(RiverFlowShader.FOAM_MIN_M_S, RiverFlowShader.FOAM_FULL_M_S)
+	assert_gte(RiverFlowShader.FOAM_MIN_M_S, RiverFlowShader.STILL_FLOW_M_S)
+
+
+func test_foam_scales_with_the_rock():
+	var flow := Vector2(1.0, 0.0)
+	var offset := -flow * 22.0
+	assert_gt(
+		RiverFlowShader.boulder_foam(offset, flow, 20.0), RiverFlowShader.boulder_foam(offset, flow, 8.0),
+		"a bigger rock's face is further out, and so is its foam"
+	)
+
+
+func test_the_wake_lies_behind_the_rock_and_dies_out_downstream():
+	var R := 12.0
+	var flow := Vector2(0.0, 1.0)
+	assert_almost_eq(RiverFlowShader.boulder_wake(-flow * R * 2.0, flow, R), 0.0, 1e-9, "no wake upstream")
+	var close := RiverFlowShader.boulder_wake(flow * R * 1.5, flow, R)
+	assert_gt(close, 0.9, "just behind the rock the wake is full (%.2f)" % close)
+	var mid := RiverFlowShader.boulder_wake(flow * R * RiverFlowShader.BOULDER_WAKE_LENGTH_RATIO * 0.5, flow, R)
+	assert_between(mid, 0.2, 0.95, "half way down the wake it is fading (%.2f)" % mid)
+	var end := flow * R * RiverFlowShader.BOULDER_WAKE_LENGTH_RATIO
+	assert_almost_eq(RiverFlowShader.boulder_wake(end, flow, R), 0.0, 1e-9, "and gone by its length")
+	var beside := RiverFlowShader.boulder_wake(flow * R * 2.0 + Vector2(R * RiverFlowShader.BOULDER_WAKE_WIDTH_RATIO * 1.2, 0.0), flow, R)
+	assert_almost_eq(beside, 0.0, 1e-9, "a couple of radii to the side the water runs clear")
+	assert_between(RiverFlowShader.BOULDER_WAKE_LENGTH_RATIO, 3.0, 10.0)
+	assert_between(RiverFlowShader.BOULDER_WAKE_WIDTH_RATIO, 1.0, 3.0)
+	for i in 60:
+		var offset := Vector2(float(i % 10) - 4.5, float(i / 10) - 1.5) * R
+		assert_between(RiverFlowShader.boulder_wake(offset, flow, R), 0.0, 1.0)
+
+
+func test_the_wake_whirls_harder_but_never_folds_the_surface():
+	assert_between(RiverFlowShader.BOULDER_WAKE_GAIN, 0.1, 0.5, "a real amplification, inside what the fold margin allows")
+	assert_between(RiverFlowShader.WAKE_FOAM, 0.2, 0.6, "the wake carries a thinner trail of the face's foam")
+	# The same no-fold sweep the bend itself has to pass, at the wake's
+	# gained strength: the whirls may be wilder behind a rock, the surface
+	# may never fold over itself there.
+	var step := 0.002
+	var worst := INF
+	for i in range(120):
+		var along := float(i) * 0.31
+		for j in range(1, 400):
+			var across := float(j) * 0.05
+			var derivative := (
+				RiverFlowShader.warped_across_in_wake(along, across + step)
+				- RiverFlowShader.warped_across_in_wake(along, across - step)
+			) / (2.0 * step)
+			worst = minf(worst, derivative)
+	assert_gt(worst, MIN_WARP_MARGIN, "in a wake the warp pinches to %.4f" % worst)
+
+
+func test_the_shader_foams_the_face_and_whirls_the_wake():
+	var code: String = RiverFlowShader.SHADER_CODE
+	assert_true(code.contains("float along = dot(to_frag, flow_dir);"), "the boulder loop knows up- from downstream")
+	assert_true(code.contains("boulder_foam = max(boulder_foam, nose * foam_window);"))
+	assert_true(code.contains("boulder_wake = max(boulder_wake, wake);"))
+	assert_true(code.contains("float foam_drive = smoothstep(foam_min_m_s, foam_full_m_s, speed_mps) * moving;"))
+	assert_true(code.contains("* turbulence_strength * shear * (1.0 + boulder_wake * boulder_wake_gain * moving);"), "the wake amplifies the bend")
+	assert_true(code.contains("float foam = (boulder_foam + boulder_wake * wake_foam) * foam_drive * smoothstep(0.3, 0.7, n);"), "face foam plus wake streaks, broken up by the advected field")
+	assert_true(code.contains("body = mix(body, foam_color, foam * foam_alpha);"))
+	var material := RiverFlowShader.new().make_material()
+	for pair in [
+		["foam_min_m_s", RiverFlowShader.FOAM_MIN_M_S], ["foam_full_m_s", RiverFlowShader.FOAM_FULL_M_S],
+		["boulder_foam_reach_ratio", RiverFlowShader.BOULDER_FOAM_REACH_RATIO],
+		["foam_alpha", RiverFlowShader.FOAM_ALPHA],
+		["boulder_wake_length_ratio", RiverFlowShader.BOULDER_WAKE_LENGTH_RATIO],
+		["boulder_wake_width_ratio", RiverFlowShader.BOULDER_WAKE_WIDTH_RATIO],
+		["boulder_wake_gain", RiverFlowShader.BOULDER_WAKE_GAIN],
+		["wake_foam", RiverFlowShader.WAKE_FOAM],
+	]:
+		assert_almost_eq(float(material.get_shader_parameter(pair[0])), pair[1], 1e-9, pair[0])
+	assert_eq(material.get_shader_parameter("foam_color"), RiverFlowShader.FOAM_COLOR)

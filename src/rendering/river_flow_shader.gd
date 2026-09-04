@@ -127,6 +127,23 @@ uniform float boulder_reach_ratio = 3.6;
 // many radii past its edge (its SHOAL), and shallow water is light here
 // for the same reason the banks are. No painted ring.
 uniform float boulder_shoal_ratio = 1.5;
+// FOAM IN FRONT: the current stagnates on the rock's upstream face and,
+// fast enough, breaks white there. Window off the face in radii, the
+// speeds between which the reach goes from parting cleanly to foaming,
+// and how the foam prints.
+uniform float boulder_foam_reach_ratio = 0.9;
+uniform float foam_min_m_s = 0.3;
+uniform float foam_full_m_s = 1.0;
+uniform float foam_alpha = 0.85;
+uniform vec3 foam_color : source_color = vec3(0.93, 0.97, 1.0);
+// WHIRLS BEHIND: the wake lobe, in radii, and how much harder the
+// standing-turbulence bend whirls inside it.
+uniform float boulder_wake_length_ratio = 6.0;
+uniform float boulder_wake_width_ratio = 1.5;
+uniform float boulder_wake_gain = 0.15;
+// ...and the foam the face sheds streams down the wake at this fraction
+// of the face's own.
+uniform float wake_foam = 0.35;
 
 // The waders -- the player and any creatures standing in river water,
 // fed per frame by EarthChunkManager.set_river_flow_waders. Soft moving
@@ -539,16 +556,37 @@ void fragment() {
 	//
 	// Every rock is a rock of its own size (boulder_radius[b], from its
 	// real diameter) and the reach, the eyot and the shoal scale with it.
+	//
+	// FOAM IN FRONT, WHIRLS BEHIND ("...and produce foam in front and
+	// whirls behind it"): the current stagnates on the upstream face --
+	// nose is the squared cosine from the stagnation line, zero at and
+	// behind the shoulders -- in a window just off the rock's face; and
+	// the rock sheds eddies into a lobe behind it, which amplifies the
+	// standing-turbulence bend below. Both are geometry here; the speed
+	// gates them where they are used. Computed BEFORE the reach cull: the
+	// wake is longer than the push reaches.
 	float eyot_dry = 1.0;
 	float boulder_shoal = 0.0;
+	float boulder_foam = 0.0;
+	float boulder_wake = 0.0;
 	for (int b = 0; b < boulder_count; b++) {
 		vec2 to_frag = wp - boulders[b];
 		float R = boulder_radius[b];
 		float reach = R * boulder_reach_ratio;
 		float lateral = dot(to_frag, flow_perp);
+		float along = dot(to_frag, flow_dir);
 		float d = length(to_frag);
 		float shoal = 1.0 - smoothstep(R, R + R * boulder_shoal_ratio, d);
 		boulder_shoal = max(boulder_shoal, shoal);
+		float nose = clamp(-along / max(d, 0.001), 0.0, 1.0);
+		nose *= nose;
+		float foam_window = smoothstep(R * 0.7, R, d)
+			* (1.0 - smoothstep(R, R + R * boulder_foam_reach_ratio, d));
+		boulder_foam = max(boulder_foam, nose * foam_window);
+		float wake = smoothstep(0.0, R, along)
+			* (1.0 - smoothstep(R, R * boulder_wake_length_ratio, along))
+			* (1.0 - smoothstep(R, R * boulder_wake_width_ratio, abs(lateral)));
+		boulder_wake = max(boulder_wake, wake);
 		if (d >= reach) {
 			continue;
 		}
@@ -691,9 +729,12 @@ void fragment() {
 	// bank_shear -- bends, whose outer banks are where |across| sweeps
 	// through the water, come out whirlier than straight reaches.
 	float shear = 1.0 + bank_shear * clamp(abs(frag_across), 0.0, 1.0);
+	// ...and harder still in a rock's wake, where the eddies it sheds
+	// live (boulder_wake, the lobe behind each boulder above), gated by
+	// the current: a rock in a lake sheds nothing.
 	float bend = (value_noise(eddy_p) - 0.5
 		+ (value_noise(eddy_p * eddy_detail_frequency + vec2(19.7, 7.3)) - 0.5) * eddy_detail_weight)
-		* turbulence_strength * shear;
+		* turbulence_strength * shear * (1.0 + boulder_wake * boulder_wake_gain * moving);
 	vec2 q = p + flow_perp * bend;
 	// The smear direction is the FLOW direction and nothing else. Rotating
 	// it by the eddy field (an attempt at whirlier bends) sawed every
@@ -931,6 +972,18 @@ void fragment() {
 	float shore = 1.0 - smoothstep(shore_width * 0.5, shore_width, abs(rr - shore_pos));
 	body = mix(body, line_color, shore * mix(0.5, 0.85, night_lift));
 
+	// FOAM on a rock's upstream face: the geometric window from the
+	// boulder loop, driven by how fast the reach runs (a slow one parts
+	// cleanly, a fast one foams), broken up by the channel's own advected
+	// field n so it streams and flickers with the water instead of sitting
+	// as a pale cap. Near-white, over the body and the strokes.
+	float foam_drive = smoothstep(foam_min_m_s, foam_full_m_s, speed_mps) * moving;
+	// The foam the face sheds streams down the wake too, thinner: the
+	// bend's gain is bounded by the no-fold margin, so a wake reads as
+	// disturbed water mostly through these streaks.
+	float foam = (boulder_foam + boulder_wake * wake_foam) * foam_drive * smoothstep(0.3, 0.7, n);
+	body = mix(body, foam_color, foam * foam_alpha);
+
 	// The comic INK line: a dark outline hugging the real bank curve, just
 	// inside the waterline. The old stylized attempt drew its outline per
 	// TILE and it became a black block eating half the channel; this one
@@ -1158,6 +1211,33 @@ const MIN_BOULDER_RADIUS_PX := 6.0
 ## elevation (rock is above waterline)". One to a couple of radii by test;
 ## 1.5 puts three cel steps around a reference rock.
 const BOULDER_SHOAL_RATIO := 1.5
+
+## FOAM IN FRONT: the window off the rock's upstream face where the
+## stagnating current foams, in radii past the edge; the reach speeds
+## between which a rock goes from parting the water cleanly (nothing at
+## or under FOAM_MIN_M_S -- an ordinary 0.5 m/s reach foams a little) to
+## foaming fully; how the foam prints. Real whitewater is deceleration,
+## not speed, which is why it lives on the face where the water is
+## brought to rest and follows dynamic pressure (BoulderHydraulics).
+const BOULDER_FOAM_REACH_RATIO := 0.9
+const FOAM_MIN_M_S := 0.3
+const FOAM_FULL_M_S := 1.0
+const FOAM_ALPHA := 0.85
+const FOAM_COLOR := Color(0.93, 0.97, 1.0)
+
+## WHIRLS BEHIND: the wake lobe a rock sheds eddies into -- how far
+## downstream it reaches and how wide it is, in radii -- and how much
+## harder the standing-turbulence bend whirls inside it. The gain is
+## bounded by the same no-fold sweep the bend itself passes
+## (test_the_wake_whirls_harder_but_never_folds_the_surface): wilder,
+## never folded -- and that bound is tight (0.5 pinched the warp to 0.17
+## against the 0.35 margin; 0.15 holds it), so the wake reads as
+## disturbed water mostly through WAKE_FOAM, the fraction of the face's
+## foam that streams down the lobe, which is what a real wake carries.
+const BOULDER_WAKE_LENGTH_RATIO := 6.0
+const BOULDER_WAKE_WIDTH_RATIO := 1.5
+const BOULDER_WAKE_GAIN := 0.15
+const WAKE_FOAM := 0.35
 
 ## A wader as a flow obstacle: a smaller round core than a boulder (legs,
 ## not a rock face), with the displacement stretched downstream by the
@@ -1432,6 +1512,15 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("boulder_radius", empty_radii)
 	material.set_shader_parameter("boulder_reach_ratio", BOULDER_REACH_RATIO)
 	material.set_shader_parameter("boulder_shoal_ratio", BOULDER_SHOAL_RATIO)
+	material.set_shader_parameter("boulder_foam_reach_ratio", BOULDER_FOAM_REACH_RATIO)
+	material.set_shader_parameter("foam_min_m_s", FOAM_MIN_M_S)
+	material.set_shader_parameter("foam_full_m_s", FOAM_FULL_M_S)
+	material.set_shader_parameter("foam_alpha", FOAM_ALPHA)
+	material.set_shader_parameter("foam_color", FOAM_COLOR)
+	material.set_shader_parameter("boulder_wake_length_ratio", BOULDER_WAKE_LENGTH_RATIO)
+	material.set_shader_parameter("boulder_wake_width_ratio", BOULDER_WAKE_WIDTH_RATIO)
+	material.set_shader_parameter("boulder_wake_gain", BOULDER_WAKE_GAIN)
+	material.set_shader_parameter("wake_foam", WAKE_FOAM)
 	material.set_shader_parameter("wader_count", 0)
 	material.set_shader_parameter("wader_reach_px", WADER_REACH_PX)
 	material.set_shader_parameter("wader_radius_px", WADER_RADIUS_PX)
@@ -1664,6 +1753,42 @@ static func shoaled_depth_fraction(
 	channel_depth_fraction: float, distance_px: float, radius_px: float
 ) -> float:
 	return channel_depth_fraction * (1.0 - boulder_shoal(distance_px, radius_px))
+
+
+## The foam window on a rock's upstream face at `offset_px` from a rock of
+## `radius_px` in a current running along `flow_dir` -- the CPU mirror of
+## the shader's nose * foam_window: the squared cosine from the stagnation
+## line (zero at and behind the shoulders) inside a window just off the
+## face. Geometry only; foam_drive gates it by speed.
+static func boulder_foam(offset_px: Vector2, flow_dir: Vector2, radius_px: float) -> float:
+	var d := offset_px.length()
+	var along := offset_px.dot(flow_dir)
+	var nose := clampf(-along / maxf(d, 0.001), 0.0, 1.0)
+	nose *= nose
+	var window := smoothstep(radius_px * 0.7, radius_px, d) \
+		* (1.0 - smoothstep(radius_px, radius_px + radius_px * BOULDER_FOAM_REACH_RATIO, d))
+	return nose * window
+
+
+## How hard a reach of this speed foams at a rock: nothing at or under
+## FOAM_MIN_M_S, full at FOAM_FULL_M_S, still-water gated like the shader.
+static func foam_drive(speed_m_s: float) -> float:
+	if is_still_water(speed_m_s):
+		return 0.0
+	return smoothstep(FOAM_MIN_M_S, FOAM_FULL_M_S, speed_m_s)
+
+
+## The wake lobe behind a rock at `offset_px` -- the CPU mirror of the
+## shader's per-boulder wake: rising over the first radius downstream,
+## dying out by BOULDER_WAKE_LENGTH_RATIO radii, within
+## BOULDER_WAKE_WIDTH_RATIO radii to either side. Zero upstream.
+static func boulder_wake(offset_px: Vector2, flow_dir: Vector2, radius_px: float) -> float:
+	var perp := Vector2(-flow_dir.y, flow_dir.x)
+	var along := offset_px.dot(flow_dir)
+	var lateral := offset_px.dot(perp)
+	return smoothstep(0.0, radius_px, along) \
+		* (1.0 - smoothstep(radius_px, radius_px * BOULDER_WAKE_LENGTH_RATIO, along)) \
+		* (1.0 - smoothstep(radius_px, radius_px * BOULDER_WAKE_WIDTH_RATIO, absf(lateral)))
 
 
 ## The waterline: 1 inside the channel, 0 past the bank curve, feathered
@@ -2061,6 +2186,12 @@ static func bend_displacement(eddy_x: float, eddy_y: float) -> float:
 ## increases, the warp has folded the surface over itself.
 static func warped_across(world_x: float, world_y: float) -> float:
 	return world_y + bend_displacement(world_x * EDDY_SCALE, world_y * EDDY_SCALE)
+
+
+## The same, at the bend's full strength inside a rock's wake (the gain
+## at its maximum) -- what the no-fold sweep has to hold there too.
+static func warped_across_in_wake(world_x: float, world_y: float) -> float:
+	return world_y + bend_displacement(world_x * EDDY_SCALE, world_y * EDDY_SCALE) * (1.0 + BOULDER_WAKE_GAIN)
 
 
 ## The full at-rest pipeline: bend, then the smeared line field -- what a

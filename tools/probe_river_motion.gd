@@ -12,7 +12,7 @@ extends SceneTree
 const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
-const SPEED_M_S := 0.5
+const SPEED_M_S := 0.9
 const TIMES := [0.0, 0.5, 1.0, 2.0, 3.0, 4.0]
 const VIEW := 512
 const ZOOM := 4.0
