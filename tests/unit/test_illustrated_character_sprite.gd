@@ -202,21 +202,83 @@ func test_composite_part_scale_for_falls_back_to_one_for_an_unregistered_part():
 ## hero_composite.png's second regeneration delivered a real walk-cycle
 ## strip per outfit row instead of one static fused pose (reported live,
 ## after asking for a proper walk-cycle sheet: "I replaced hero composite
-## sprite"). Not every row's own band-detection lands on exactly 5 (row 7
-## measures 4 -- two adjacent leg poses' content touches closely enough
-## after the black-background flood fill that they read as one connected
-## band there), the same kind of per-row art variance arms' own 1-or-2
-## count already tolerates -- CharacterView's own frame-cycling already
-## degrades gracefully to however many frames actually come back (see
-## _apply_leg_frame), so this is a real, accepted range, not a bug to pin
-## out of existence.
+## sprite").
+##
+## 0 is now a legitimate count too, for body/arms/legs together: see
+## test_a_row_short_of_its_full_band_split_falls_back_entirely_rather_than_
+## misassigning_parts below. **Correction of this comment's own former
+## claim**: row 7's legs measuring 4 was originally diagnosed here as "two
+## adjacent leg poses touching closely enough to read as one band" -- that
+## was never actually verified against the pixels and was wrong. Column-by-
+## column emptiness scanned directly against the real sheet (see that test's
+## own doc comment) shows the true merge sits between the RIGHT ARM and the
+## BODY (a solid, ZERO-gap run of opaque columns the row's full height, x
+## 111-345) -- row 7's right arm and torso are drawn touching in the source
+## art itself, not two legs. That single merge is what used to shift every
+## later fixed index by one: "body" (registry index 2) silently wore what
+## should have been the FIRST leg pose, and legs (indices 3-6) wore poses
+## 1-4, one short and one off from where they belong -- reached the live
+## game as a floating, disconnected torso on the character creation screen
+## (reported: "floating torsos ... the slicer is broken for one class").
 func test_every_outfit_row_produces_the_expected_frame_count():
 	for variant in range(IllustratedCharacterSprite.HERO_COMPOSITE_ROWS):
-		assert_eq(sprite.generate_composite_textures("body", variant).size(), 1, "body row %d" % variant)
+		var body_count: int = sprite.generate_composite_textures("body", variant).size()
+		assert_true(body_count == 0 or body_count == 1, "body row %d" % variant)
 		var leg_count: int = sprite.generate_composite_textures("legs", variant).size()
-		assert_between(leg_count, 1, 5, "legs row %d" % variant)
+		assert_between(leg_count, 0, 5, "legs row %d" % variant)
 		var arm_count: int = sprite.generate_composite_textures("arms", variant).size()
-		assert_between(arm_count, 1, 2, "arms row %d" % variant)
+		assert_between(arm_count, 0, 2, "arms row %d" % variant)
+
+
+## HERO_COMPOSITE_EXPECTED_BAND_COUNT is what draws the line between "this
+## row's bands mean what the registry says" and "fall back entirely" -- pin
+## it against the registry's own totals (2 arms + 1 body + 5 legs) rather
+## than trusting the literal 8 not to silently drift from what
+## HERO_COMPOSITE_BAND_INDICES actually asks for.
+func test_hero_composite_expected_band_count_matches_the_registrys_own_totals():
+	var total := 0
+	for part_name in IllustratedCharacterSprite.HERO_COMPOSITE_BAND_INDICES:
+		total += IllustratedCharacterSprite.HERO_COMPOSITE_BAND_INDICES[part_name].size()
+	assert_eq(IllustratedCharacterSprite.HERO_COMPOSITE_EXPECTED_BAND_COUNT, total)
+
+
+## The general form of the row-7 regression pinned concretely below: a row's
+## real detected bands either match the registry's own total (and every part
+## resolves to its full registered count) or NONE of body/arms/legs resolve
+## to anything at all. What this rules out is the silent third case that
+## actually shipped: a SHORT band count with the fixed HERO_COMPOSITE_
+## BAND_INDICES positions still applied verbatim, which reassigns every
+## part after the merge point to the wrong content instead of refusing it --
+## exactly how "body" ended up wearing a leg pose for row 7 while still
+## reporting a perfectly normal-looking count of 1.
+func test_a_row_short_of_its_full_band_split_falls_back_entirely_rather_than_misassigning_parts():
+	for variant in range(IllustratedCharacterSprite.HERO_COMPOSITE_ROWS):
+		var body_count: int = sprite.generate_composite_textures("body", variant).size()
+		var arm_count: int = sprite.generate_composite_textures("arms", variant).size()
+		var leg_count: int = sprite.generate_composite_textures("legs", variant).size()
+		if body_count == 0:
+			assert_eq(arm_count, 0, "row %d: body fell back but arms didn't" % variant)
+			assert_eq(leg_count, 0, "row %d: body fell back but legs didn't" % variant)
+		else:
+			assert_eq(
+				body_count, IllustratedCharacterSprite.HERO_COMPOSITE_BAND_INDICES["body"].size(),
+				"row %d" % variant
+			)
+
+
+## The concrete case the general test above catches in the abstract: row 7
+## (the row `artisan` lands on at the character creator's shared seed, see
+## HeroAppearance.outfit_variant_for) is measurably short a band today (see
+## the corrected doc comment on test_every_outfit_row_produces_the_expected_
+## frame_count) and must fall back to nothing for body/arms/legs together,
+## rather than the old silent per-index misassignment CharacterView/the
+## portrait's own has-art-then-fallback checks (`if not textures.is_empty()`)
+## were written to catch but never actually triggered on, because a
+## misassigned band still came back non-empty.
+func test_outfit_row_7_falls_back_entirely_instead_of_wearing_a_leg_pose_as_its_torso():
+	assert_eq(sprite.generate_composite_textures("body", 7), [] as Array[ImageTexture])
+	assert_eq(sprite.generate_composite_textures("arms", 7), [] as Array[ImageTexture])
+	assert_eq(sprite.generate_composite_textures("legs", 7), [] as Array[ImageTexture])
 
 
 ## detect_frames only ever splits on COLUMN gaps (see its own doc comment) --
@@ -237,12 +299,20 @@ func test_every_outfit_row_produces_the_expected_frame_count():
 func test_every_outfit_rows_legs_have_no_fragment_stacked_below_a_gap():
 	for variant in range(IllustratedCharacterSprite.HERO_COMPOSITE_ROWS):
 		var trimmed := sprite.trimmed_composite_image("legs", variant)
+		# null is now a legitimate result too -- a row short of its full band
+		# split (see test_a_row_short_of_its_full_band_split_falls_back_
+		# entirely_rather_than_misassigning_parts) has no legs art to have a
+		# fragment in at all.
+		if trimmed == null:
+			continue
 		assert_true(_has_no_disconnected_fragment(trimmed), "legs row %d" % variant)
 
 
 func test_every_outfit_rows_body_has_no_fragment_stacked_below_a_gap():
 	for variant in range(IllustratedCharacterSprite.HERO_COMPOSITE_ROWS):
 		var trimmed := sprite.trimmed_composite_image("body", variant)
+		if trimmed == null:
+			continue
 		assert_true(_has_no_disconnected_fragment(trimmed), "body row %d" % variant)
 
 

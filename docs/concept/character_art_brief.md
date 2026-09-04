@@ -97,11 +97,27 @@ format" below) for any future part that only ever needs one neutral pose.
   sprite .. pls wire") is that each row now draws **five** stride frames of
   that fused pair rather than one static pose — a real walk cycle, stepped
   through by `CharacterView._apply_leg_frame` (frame 0 is the neutral
-  standing pose, shown at rest). Row 7's band detection measures 4 rather
-  than 5, where two adjacent poses' content touches closely enough after the
-  flood fill to read as one band — the same accepted per-row art variance
-  arms' own 1-or-2 count already tolerates, since the frame cycling degrades
-  gracefully to however many frames actually come back.
+  standing pose, shown at rest). **Correction (2026-09-04): row 7 does not
+  wear a fallback 4-frame walk cycle any more, and the reason given here for
+  the shortfall was never actually checked against the pixels and was
+  wrong.** It blamed "two adjacent leg poses touching" — a column-by-column
+  scan of the real sheet instead shows row 7's RIGHT ARM touching its TORSO
+  for the row's full height (not one column between x=111 and x=345 reads as
+  background), one merge short of the registry's 8-band total. That merge
+  used to shift every later fixed index by one, so `"body"` silently wore
+  what should have been the first leg pose and reported a perfectly normal
+  count of 1 while doing it — reached the live game as a floating,
+  disconnected torso on the character creation screen (see `docs/
+  progress.md`'s "Illustrated character building blocks" entry, "Floating-
+  torso fix"). `IllustratedCharacterSprite._composite_frames` now refuses
+  the WHOLE row (body/arms/legs together, via a tested
+  `HERO_COMPOSITE_EXPECTED_BAND_COUNT`) the moment its real band count falls
+  short, rather than trusting indices a merge already shifted, so row 7
+  (`artisan`'s row at the creator's shared seed) wears the procedural
+  fallback rig entirely instead of a part-by-part misassignment. Arms' own
+  1-or-2 tolerance below is a genuinely different, still-real case: a row
+  whose full 8-band split IS found, just with its two arms drawn touching
+  each other rather than an arm touching the torso.
 - **Arms are still two independent drawings** side by side with real
   transparent space between them (unlike the fused legs) — found the same
   way `detect_frames`' column-emptiness scan already splits any other

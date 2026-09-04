@@ -14,6 +14,7 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
+const WaterShader = preload("res://src/rendering/water_shader.gd")
 
 var flow: RiverFlowShader
 
@@ -1386,3 +1387,232 @@ func test_the_shader_loops_over_a_wader_array():
 	assert_true(
 		RiverFlowShader.SHADER_CODE.contains("for (int w = 0; w < wader_count; w++)")
 	)
+
+
+# -- movement ripples: fish, the player, animals ------------------------------
+#
+# Reported: "Fishes don't produce interferencing ripples anymore in the new
+# unified river water ... players and animals neither ... the old ripples
+# looked nice so we want them back adapted to new water shader".
+#
+# The ripple machinery never broke -- FishMarker/Player/CreatureMarker all
+# still record disturbances and WaterShader still ages them. What broke is
+# that the ocean overlay stopped painting river tiles (its square tiles
+# under the smooth bank curve were the bug it was removed to fix) and this
+# opaque surface, which replaced it, had no disturbance term at all. So the
+# river had no ripple-capable surface. See docs/concept/rivers.md's
+# "Movement ripples in the river".
+#
+# The pins below split into three groups: the packet must be the OLD one
+# (that is the "looked nice" the report is asking back for), the ring must
+# be ADAPTED to a river (carried by the current, drawn in ink rather than
+# glowed), and it must never touch the channel's geometry.
+
+
+## The peak signed amplitude any real packet ever reaches, scanned from the
+## packet itself rather than written down -- every threshold below is
+## expressed against this, so re-tuning the packet re-tunes its own bounds
+## instead of silently invalidating an eyeballed literal.
+func _peak_packet_amplitude() -> float:
+	return _peak_amplitude_from_age(0.0)
+
+
+## The largest crest still reachable once a ripple is `fraction` of the way
+## through its life -- what pins that a ring does not wink out in its first
+## moments (the exact failure WaterShader's own visible-across-its-lifetime
+## test was written for).
+func _peak_amplitude_at_life_fraction(fraction: float) -> float:
+	return _peak_amplitude_from_age(RiverFlowShader.RIPPLE_LIFETIME * fraction)
+
+
+func _peak_amplitude_from_age(youngest_age: float) -> float:
+	var peak := 0.0
+	var age := youngest_age
+	while age <= RiverFlowShader.RIPPLE_LIFETIME:
+		for dist_step in 400:
+			peak = maxf(peak, RiverFlowShader.ripple_packet(float(dist_step) * 0.25, age))
+		age += 0.01
+	return peak
+
+
+## THE "we want them back" pin: the river's packet is not a new ripple that
+## merely resembles the old one, it is the same function. A fish's wake has
+## to read identically in a river and in the sea.
+func test_the_river_draws_the_very_same_wave_packet_as_the_sea():
+	for dist_step in 60:
+		var dist: float = float(dist_step) * 0.7
+		for age_step in 22:
+			var age: float = float(age_step) * 0.1
+			assert_almost_eq(
+				RiverFlowShader.ripple_packet(dist, age),
+				WaterShader.ripple_amplitude(dist, age),
+				0.000001,
+				"packet diverged from the ocean's at dist %f age %f" % [dist, age]
+			)
+
+
+## And it shares the tuning by IMPORT, not by a copied literal -- a second
+## copy is a second thing to re-tune, and the two surfaces would drift.
+func test_the_ripple_tuning_is_the_ocean_s_own_constants():
+	assert_eq(RiverFlowShader.RIPPLE_LIFETIME, WaterShader.RIPPLE_LIFETIME)
+	assert_eq(RiverFlowShader.DISTURBANCE_SLOTS, WaterShader.MAX_DISTURBANCES)
+
+
+## "interferencing" is the whole word in the report: the packet is SIGNED,
+## so two overlapping wakes cancel where a crest meets a trough instead of
+## only ever piling up. An unsigned ring can only ever add.
+func test_overlapping_wakes_genuinely_interfere():
+	var crest := 0.0
+	var trough := 0.0
+	for dist_step in 400:
+		var value := RiverFlowShader.ripple_packet(float(dist_step) * 0.25, 0.6)
+		crest = maxf(crest, value)
+		trough = minf(trough, value)
+	assert_gt(crest, 0.0, "a packet with no crest is not a wave")
+	assert_lt(trough, 0.0, "a packet with no trough cannot destructively interfere")
+
+
+## THE river adaptation. In still water a ring is concentric about a fixed
+## point; in a current it is concentric about a point that MOVES WITH THE
+## WATER. Without this the ring stands still while the river slides out
+## from under it -- the one thing ocean water never has to express.
+func test_the_ring_is_carried_downstream_by_the_current():
+	var origin := Vector2(100.0, 40.0)
+	var downstream := Vector2(1.0, 0.0)
+	var still := RiverFlowShader.ripple_center(origin, downstream, 0.0, 1.0)
+	assert_eq(still, origin, "with no current the ring must stay put")
+
+	var carried := RiverFlowShader.ripple_center(origin, downstream, 1.5, 1.0)
+	var travel := carried - origin
+	assert_gt(travel.dot(downstream), 0.0, "the ring must move DOWNSTREAM, not up")
+	assert_almost_eq(travel.length(), RiverFlowShader.DRIFT_PX_PER_MPS * 1.5, 0.0001)
+
+
+## It travels with the surface the player can actually SEE moving -- the
+## same drift rate the flow pattern itself uses. A wake drifting at some
+## other rate reads as sliding across the water rather than sitting in it.
+func test_the_ring_travels_at_the_surface_pattern_s_own_rate():
+	var carried := RiverFlowShader.ripple_center(Vector2.ZERO, Vector2(0.0, 1.0), 2.0, 3.0)
+	assert_almost_eq(carried.y, RiverFlowShader.DRIFT_PX_PER_MPS * 2.0 * 3.0, 0.0001)
+
+
+## Drawn, not glowed: the ring bends the field whose level sets ARE the
+## current lines, so it comes out as ink arcs in the same hand as the rest
+## of the water. Big enough to bow a line by a visible fraction of one
+## contour spacing...
+func test_a_crest_bends_the_current_lines_enough_to_see():
+	var bend := RiverFlowShader.RIPPLE_LINE_GAIN * _peak_packet_amplitude()
+	var contour_spacing := 1.0 / RiverFlowShader.LINE_COUNT
+	assert_gt(
+		bend, contour_spacing * 0.3,
+		"a crest that moves the field less than a third of a contour draws nothing"
+	)
+
+
+## ...and small enough that it stays a LOCAL disturbance: it may close the
+## contours into rings around the fish (that IS the ripple), but it must
+## never out-swing the wobble and restructure the channel-wide line family
+## into the "perlin noise cells" the across ramp exists to prevent.
+func test_a_ripple_cannot_restructure_the_whole_channel():
+	var bend := RiverFlowShader.RIPPLE_LINE_GAIN * _peak_packet_amplitude()
+	assert_lt(
+		bend, RiverFlowShader.LINE_WOBBLE * 0.5,
+		"a ripple out-swinging the wobble stops being a local disturbance"
+	)
+
+
+## The crest also inks in its own right, so the ring reads as concentric
+## arcs and not merely as wobbled flow lines. Full ink must be REACHABLE by
+## a real crest -- a threshold above the packet's own peak draws nothing.
+func test_a_real_crest_reaches_full_ink():
+	assert_gt(RiverFlowShader.RIPPLE_CREST_MIN, 0.0, "troughs and tails must stay clean")
+	assert_lt(RiverFlowShader.RIPPLE_CREST_MIN, RiverFlowShader.RIPPLE_CREST_FULL)
+	assert_lte(
+		RiverFlowShader.RIPPLE_CREST_FULL, _peak_packet_amplitude(),
+		"full ink beyond the packet's peak is ink that never prints"
+	)
+
+
+## The lesson WaterShader already paid for once: thresholds set against a
+## FRESH ripple make the ring visible only in its first fraction of a life
+## ("a mini ripple appears but nothing looks natural"). A crest must still
+## ink well into the ring's decay.
+func test_a_ring_still_inks_three_quarters_through_its_life():
+	assert_gt(
+		_peak_amplitude_at_life_fraction(0.75), RiverFlowShader.RIPPLE_CREST_MIN,
+		"the ring stops drawing long before the packet stops existing"
+	)
+
+
+## Both ripple terms enter fields that already exist -- the stroke field
+## and the stroke strength -- so the ring inherits the ink colour, the
+## moonlight lift and the alpha clamp for free instead of being a bright
+## ring composited over illustrated water.
+func test_the_ripple_is_drawn_into_the_strokes_not_over_them():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("+ ripple * ripple_line_gain"),
+		"the ripple must bend the contour field the current lines trace"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("ripple_crest_min, ripple_crest_full, ripple"),
+		"the crest must ink through the existing stroke strength"
+	)
+
+
+## The body cels stay STATIC (see test_the_body_cels_are_static_depth_only):
+## all the motion is carried by the drawn strokes, ripples included.
+func test_the_ripple_never_shades_the_body():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("float shade = depth_frac;"),
+		"the cel shade must remain pure reconstructed depth"
+	)
+
+
+## A passing fish must not move the BANK. frag_across is the channel's
+## geometry -- boulders and waders displace it on purpose, because they are
+## solid things standing in the water; a wake is a surface disturbance and
+## narrowing the river with one would be nonsense.
+func test_a_ripple_never_moves_the_waterline():
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("frag_across += ripple"),
+		"a wake must not displace the channel geometry"
+	)
+	assert_eq(
+		RiverFlowShader.SHADER_CODE.count("eyot_dry = min("), 1,
+		"a ripple must not dry the water either"
+	)
+
+
+func test_the_shader_loops_over_a_disturbance_array():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("uniform vec2 disturbance_pos["))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("uniform float disturbance_age["))
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("for (int i = 0; i < disturbance_count; i++)")
+	)
+
+
+func test_the_material_starts_with_no_disturbances_and_the_real_tuning():
+	var material := RiverFlowShader.new().make_material()
+	assert_eq(int(material.get_shader_parameter("disturbance_count")), 0)
+	assert_almost_eq(
+		float(material.get_shader_parameter("ripple_line_gain")),
+		RiverFlowShader.RIPPLE_LINE_GAIN, 0.0001
+	)
+	assert_almost_eq(
+		float(material.get_shader_parameter("ripple_lifetime")),
+		RiverFlowShader.RIPPLE_LIFETIME, 0.0001
+	)
+
+
+func test_set_disturbances_pushes_the_whole_buffer():
+	var river := RiverFlowShader.new()
+	var positions := PackedVector2Array([Vector2(7.0, 9.0)])
+	positions.resize(RiverFlowShader.DISTURBANCE_SLOTS)
+	var ages := PackedFloat32Array([0.25])
+	ages.resize(RiverFlowShader.DISTURBANCE_SLOTS)
+	river.set_disturbances(positions, ages, 1)
+
+	var material := river.shared_material()
+	assert_eq(int(material.get_shader_parameter("disturbance_count")), 1)
+	assert_eq(material.get_shader_parameter("disturbance_pos")[0], Vector2(7.0, 9.0))
+	assert_almost_eq(float(material.get_shader_parameter("disturbance_age")[0]), 0.25, 0.0001)

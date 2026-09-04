@@ -396,6 +396,35 @@ const HERO_COMPOSITE_BAND_INDICES := {
 	"legs": [3, 4, 5, 6, 7],
 }
 
+## How many real bands a row must produce for HERO_COMPOSITE_BAND_INDICES'
+## own fixed positions to actually address the content they name -- the
+## registry's own total (2 arms + 1 body + 5 legs), pinned against it by
+## test_hero_composite_expected_band_count_matches_the_registrys_own_totals
+## rather than trusted as a bare literal.
+##
+## A row that finds any OTHER count cannot be trusted at any fixed index:
+## when two neighbouring pieces of art touch closely enough that
+## detect_frames finds no dividing column between them (see
+## _remove_background_by_flood's own doc comment on what "closely enough"
+## means here), everything is still real, opaque, non-empty content -- there
+## is no missing band to notice, only a SHIFTED one. Applying the fixed
+## positions anyway silently hands every part after the merge point the
+## wrong piece: measured directly against row 7, the row `artisan` lands on
+## at the character creator's shared seed, the right arm and torso are drawn
+## touching for the row's FULL height (not one column between x=111 and
+## x=345 reads as background, out of a 1024px-wide sheet), so real band 1 is
+## a merged arm+torso blob, "body" (registry index 2) silently wears what
+## should have been the FIRST leg pose, and legs wears poses 1-4 instead of
+## 0-4 -- reached the live game as a floating, disconnected torso on the
+## character creation screen (reported: "floating torsos ... the slicer is
+## broken for one class"). _composite_frames refuses the whole row instead
+## (see there), the has-art-then-fallback safety net CharacterView._apply_body
+## and ProceduralCharacterSprite._portrait_torso_image were already written
+## to lean on (`if not textures.is_empty()`) but that a merely-SHORT band
+## count never actually tripped, because a misassigned band still came back
+## non-empty.
+const HERO_COMPOSITE_EXPECTED_BAND_COUNT := 8
+
 ## The narrowest a detect_frames band can be and still count as real
 ## content, not the thin anti-aliasing sliver detect_frames sometimes finds
 ## at a frame seam after the black-background flood fill -- measured
@@ -518,11 +547,22 @@ func _composite_frames(part_name: String, variant: int, facing: String) -> Array
 	for candidate in raw_bands:
 		if candidate.size.x >= HERO_COMPOSITE_MIN_BAND_WIDTH:
 			real_bands.append(candidate)
-	var selected: Array[Rect2i] = []
-	for index in HERO_COMPOSITE_BAND_INDICES[part_name]:
-		if index < real_bands.size():
-			selected.append(real_bands[index])
-	var result: Array[Image] = _slicer.normalize_frames(keyed, selected, CANVAS_SIZE, BASELINE_Y)
+	var result: Array[Image] = []
+	# See HERO_COMPOSITE_EXPECTED_BAND_COUNT's own doc comment: a row that
+	# doesn't produce exactly this many real bands has two pieces of art
+	# touching somewhere with no dividing column between them, which shifts
+	# every fixed index after the merge point onto the wrong content -- not
+	# absent content, so nothing else here would notice. Refusing the WHOLE
+	# row (body/arms/legs together), rather than only the specific index a
+	# merge happens to have landed on, is what actually engages the
+	# has-art-then-fallback check every caller already has (`if not
+	# textures.is_empty()`).
+	if real_bands.size() == HERO_COMPOSITE_EXPECTED_BAND_COUNT:
+		var selected: Array[Rect2i] = []
+		for index in HERO_COMPOSITE_BAND_INDICES[part_name]:
+			if index < real_bands.size():
+				selected.append(real_bands[index])
+		result = _slicer.normalize_frames(keyed, selected, CANVAS_SIZE, BASELINE_Y)
 	_composite_frames_cache[key] = result
 	return result
 
