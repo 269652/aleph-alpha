@@ -1522,11 +1522,59 @@ within its lifetime, whirls crossing a tile in two seconds — the same 8
 world px/s floor the pulse has to clear). The GPU readback smoke test
 still confirms a disturbed river draws differently from a quiet one.
 
+## A softer, slower, broader wake (2026-09-04)
+
+Reported on the carried ripples: *"Can you make the ripples a little less
+pronounced so they appear smoother a bit slower and more natural."* Three
+adjectives, two owners.
+
+**Slower and smoother are the packet's business, and the packet is
+shared.** The wake's shape is one set of constants in `WaterShader`,
+imported by `RiverFlowShader` so a fish's wake reads the same in a river
+as in the sea — so the shape tuning lives there and both surfaces follow.
+`RIPPLE_SPEED` 14 → 11.5 world px/s: the front ambles rather than races.
+`RIPPLE_WAVELENGTH` 6 → 8: crests half a tile apart read as broad swells
+rather than fine rings. `RIPPLE_PACKET_WIDTH` 7 → 9.5, widened with the
+wavelength so the packet keeps the same ~1.2 rings behind the front —
+still more than one (several rings, not a lone circle), still well under
+two (never a bullseye). The wake's reach shrinks from ~1.9 to ~1.6 tiles,
+still past its own tile and still nowhere near swamping a pond, both of
+which stay pinned. `RAIN_RIPPLE_SPEED` 12 → 10 alongside, so the splash
+stays pinned under half a wake's radius — and a slower splash is the same
+ask.
+
+**Less pronounced is this surface's own.** The ring inks in its own right
+through `smoothstep(RIPPLE_CREST_MIN, RIPPLE_CREST_FULL, crest)`, and with
+`FULL` at 0.40 against the packet's scanned peak of ~0.82 a ring printed
+at full stroke strength for most of its life — as dark as a current line,
+a stamp rather than a disturbance. `FULL` 0.40 → 0.60 sits near the peak,
+so only a fresh crest prints at full strength and the ring GRADUATES down
+through its life (about 0.4 at half life, fading out past three quarters)
+instead of switching off; `MIN` 0.10 → 0.12 keeps the faint tail clean
+while staying under the crest still reachable three quarters through the
+life — the "mini ripple" lesson is still pinned. `RiverFlowShader.
+ripple_ink` mirrors the shader's smoothstep so the graduation is a tested
+curve rather than a pair of eyeballed literals. The crest's bend of the
+current lines (`RIPPLE_LINE_GAIN`) is untouched: its floor and ceiling
+are pinned against the wobble and the contour spacing, and the ring's
+prominence was the ink, not the bend.
+
+Pinned: speed under 12, wavelength at least half a tile, packet-to-
+wavelength ratio in (1.1, 1.4) (`test_water_shader.gd`); `FULL` within
+70% of the scanned peak, a fresh crest at 1.0, half-life ink in (0.25,
+0.6), still drawing and fainter at three quarters, the ink curve is the
+shader's own smoothstep (`test_river_flow_shader.gd`). The fish ripple
+timing tests, which derive from `RIPPLE_LIFETIME`, are unaffected
+(lifetime unchanged); the GPU readback smoke test stays green.
+
 ## Status
 
 - **One visible water speed (ripples, eddies, lines)** — ✅ Done — see
   the section above; `surface_px_per_s` is the single source, both
   consumers ride it, `BEND_DRIFT_FRACTION` 1.0.
+- **A softer, slower, broader wake** — ✅ Done — shared packet slowed and
+  broadened in `WaterShader`, the river's ring inks graduated through its
+  life; see the section above.
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
   Dreisam (see Roster). Rest-of-world roster — ⬜ Not started, ongoing.
 - **Procedural fallback (noise-contour proxy)** — ✅ Built, tested, and
