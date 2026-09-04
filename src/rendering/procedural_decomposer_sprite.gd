@@ -9,6 +9,14 @@ extends RefCounted
 ## swarm insect) and "bug" (a carrion-beetle stand-in: a broader oval body,
 ## a distinct head, no visible legs at this scale -- reads as a single
 ## bigger scavenger rather than a swarm).
+##
+## Both land at ~6x4 WORLD pixels, the smallest creature footprint in the
+## game, so "readable" has two rules here (docs/concept/carrion.md
+## "Readable at six world pixels, not a black blob"): the outline ring is
+## grown around the BODY only and the leg strokes are laid on afterwards,
+## un-ringed, so ground shows between them instead of the ring fusing body
+## + legs into one slab; and each body carries a real, species-grounded
+## marking lighter than its fill, so there is form inside the ring at all.
 
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 
@@ -34,6 +42,15 @@ const ANT_COLOR := Color(0.22, 0.15, 0.09)
 ## even before their silhouettes are compared, not just a darker/lighter
 ## split of the same tone.
 const BUG_COLOR := Color(0.28, 0.16, 0.1)
+## Wood ant (Formica rufa group): near-black head and gaster, red-brown
+## thorax -- the one lighter region that keeps a 6-px ant from reading as a
+## flat dark bead. Pinned as a minimum luminance step above ANT_COLOR by
+## test_ant_body_carries_a_lighter_marking_than_its_fill.
+const ANT_THORAX_COLOR := Color(0.6, 0.3, 0.14)
+## Burying beetle (Nicrophorus, the real carrion beetle "bug" stands in
+## for): black with orange bands across the elytra. Pinned the same way by
+## test_bug_elytra_carry_a_lighter_marking_than_its_fill.
+const BUG_BAND_COLOR := Color(0.85, 0.45, 0.12)
 
 var _palette := PixelPalette.new()
 
@@ -55,19 +72,22 @@ func _generate_ant() -> Image:
 	# plus a few thin leg strokes -- reads as an ant at this tiny scale
 	# without needing real limb articulation.
 	var segments := [
-		{"offset": Vector2(-3.0, 0.0), "radius": 1.6},
-		{"offset": Vector2(0.0, 0.0), "radius": 1.8},
-		{"offset": Vector2(3.2, 0.0), "radius": 2.2},
+		{"offset": Vector2(-3.0, 0.0), "radius": 1.6, "color": ANT_COLOR},
+		{"offset": Vector2(0.0, 0.0), "radius": 1.8, "color": ANT_THORAX_COLOR},
+		{"offset": Vector2(3.2, 0.0), "radius": 2.2, "color": ANT_COLOR},
 	]
 	for segment in segments:
-		_draw_circle(image, center + segment.offset, segment.radius, ANT_COLOR)
+		_draw_circle(image, center + segment.offset, segment.radius, segment.color)
+	# Ring the body BEFORE the legs go on: legs are 1-px strokes with 1-px
+	# gaps, and a ring grown around them too fills every gap and fuses
+	# body + legs + ring into one solid slab (see the class doc comment).
+	_outline_silhouette(image)
 	for leg_x in [-1.5, 0.5, 2.5]:
 		for leg_dir in [-1.0, 1.0]:
 			_draw_line(
 				image, center + Vector2(leg_x, 0.0),
 				center + Vector2(leg_x + leg_dir * 0.5, leg_dir * 3.5), ANT_COLOR
 			)
-	_outline_silhouette(image)
 	return image
 
 
@@ -76,8 +96,21 @@ func _generate_bug() -> Image:
 	var center := Vector2(SIZE / 2.0, SIZE / 2.0)
 	# One broad oval body plus a small distinct head -- a single bigger
 	# scavenger, not a swarm-reading silhouette like the ant.
-	_draw_oval(image, center, 4.2, 3.0, BUG_COLOR)
+	const BODY_RX := 4.2
+	const BODY_RY := 3.0
+	_draw_oval(image, center, BODY_RX, BODY_RY, BUG_COLOR)
 	_draw_circle(image, center + Vector2(-3.8, 0.0), 1.3, BUG_COLOR)
+	# Two orange bands across the elytra (the body behind the head), each
+	# one column wide and clipped to the same oval the body was drawn with
+	# -- a Nicrophorus marking, and the only thing that gives a 6-px oval
+	# any form at all. Geometry-clipped rather than "repaint every
+	# BUG_COLOR pixel": the image is RGBA8, so a painted float Color never
+	# reads back exactly equal and a color match silently misses.
+	for band_x in [0.5, 2.5]:
+		var x := int(center.x + band_x)
+		for y in SIZE:
+			if _inside_oval(Vector2(x + 0.5, y + 0.5), center, BODY_RX, BODY_RY):
+				image.set_pixel(x, y, BUG_BAND_COLOR)
 	_outline_silhouette(image)
 	return image
 
@@ -122,14 +155,24 @@ func _draw_circle(image: Image, center: Vector2, radius: float, color: Color) ->
 func _draw_oval(image: Image, center: Vector2, radius_x: float, radius_y: float, color: Color) -> void:
 	for y in SIZE:
 		for x in SIZE:
-			var point := Vector2(x + 0.5, y + 0.5)
-			var normalized := Vector2((point.x - center.x) / radius_x, (point.y - center.y) / radius_y)
-			if normalized.length() <= 1.0:
+			if _inside_oval(Vector2(x + 0.5, y + 0.5), center, radius_x, radius_y):
 				image.set_pixel(x, y, color)
 
 
+func _inside_oval(point: Vector2, center: Vector2, radius_x: float, radius_y: float) -> bool:
+	var normalized := Vector2((point.x - center.x) / radius_x, (point.y - center.y) / radius_y)
+	return normalized.length() <= 1.0
+
+
+## One sample per pixel of length (steps >= distance, so consecutive
+## samples never skip a pixel), NOT two: a near-vertical 1-px leg stroke
+## must leave exactly one pixel per row. Oversampled 2x, the two samples
+## nearest a leg's tip straddled a pixel boundary and landed in
+## neighbouring columns, so every downward leg tip became a 2-px bar and
+## three legs fused into one solid row -- the very "slab" the ring-before-
+## legs order above exists to prevent.
 func _draw_line(image: Image, from: Vector2, to: Vector2, color: Color) -> void:
-	var steps := int(from.distance_to(to) * 2.0) + 1
+	var steps := int(from.distance_to(to)) + 1
 	for i in steps + 1:
 		var point := from.lerp(to, float(i) / float(steps))
 		var x := int(point.x)

@@ -28,25 +28,32 @@ const MAX_BUGS_PER_CHUNK := 2
 ## Spawns this chunk's decomposers into `parent`, returning the markers so
 ## the caller (EarthChunkManager) can track/despawn them per chunk, same
 ## contract as WildCropRenderer.spawn_markers.
+##
+## `snow_depth` is the world's current lying snow (EarthChunkManager.
+## snow_depth): a chunk loaded mid-winter spawns its decomposers already
+## dormant (DecomposerMarker.is_dormant_under) rather than live on the
+## snow for even one frame -- see docs/concept/carrion.md "Dormant under
+## lying snow".
 func spawn_decomposers(
 	parent: Node, biome_name: String, chunk_origin: Vector2i, chunk_size: int,
-	tile_size: float, chunk_seed: int
+	tile_size: float, chunk_seed: int, snow_depth: float = 0.0
 ) -> Array:
 	var markers: Array = []
 	if not LAND_BIOMES.has(biome_name):
 		return markers
+	var dormant := DecomposerMarker.is_dormant_under(snow_depth)
 	markers.append_array(
-		_spawn_species(parent, "ant", chunk_origin, chunk_size, tile_size, chunk_seed, MIN_ANTS_PER_CHUNK, MAX_ANTS_PER_CHUNK)
+		_spawn_species(parent, "ant", chunk_origin, chunk_size, tile_size, chunk_seed, MIN_ANTS_PER_CHUNK, MAX_ANTS_PER_CHUNK, dormant)
 	)
 	markers.append_array(
-		_spawn_species(parent, "bug", chunk_origin, chunk_size, tile_size, chunk_seed, MIN_BUGS_PER_CHUNK, MAX_BUGS_PER_CHUNK)
+		_spawn_species(parent, "bug", chunk_origin, chunk_size, tile_size, chunk_seed, MIN_BUGS_PER_CHUNK, MAX_BUGS_PER_CHUNK, dormant)
 	)
 	return markers
 
 
 func _spawn_species(
 	parent: Node, species: String, chunk_origin: Vector2i, chunk_size: int, tile_size: float,
-	chunk_seed: int, min_count: int, max_count: int
+	chunk_seed: int, min_count: int, max_count: int, dormant: bool
 ) -> Array:
 	var markers: Array = []
 	var h := absi(hash("%d_%d_%s_decomposer_count" % [chunk_origin.x, chunk_origin.y, species]))
@@ -62,6 +69,7 @@ func _spawn_species(
 		marker.home = home
 		marker.position = home
 		marker.wander_seed = wander_seed
+		marker.set_snow_dormant(dormant)
 		parent.add_child(marker)
 		markers.append(marker)
 	return markers

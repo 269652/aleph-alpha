@@ -56,6 +56,14 @@ const WANDER_DIRECTION_CHANGE_INTERVAL_SECONDS := (
 	WANDER_RADIUS_PX / (WALK_SPEED * WANDER_SPEED_FRACTION)
 )
 
+## Snow depth (EarthChunkManager.snow_depth, 0 bare .. 1 covered) above
+## which this decomposer is dormant -- see is_dormant_under. Zero: the exact
+## bare<->lying edge the ground itself starts painting snow presence at
+## (EarthChunkManager._sync_snow_presence, docs/concept/snow_cover.md), so
+## an ant can never be seen crawling drawn snow at any depth. Pinned by
+## test_snow_dormancy_depth_is_the_grounds_own_bare_to_lying_edge.
+const SNOW_DORMANCY_DEPTH := 0.0
+
 ## "ant" or "bug" -- which sprite/silhouette this decomposer draws (see
 ## ProceduralDecomposerSprite). Set before add_child, same convention as
 ## every other marker in this codebase.
@@ -88,6 +96,13 @@ var _target: Node2D = null
 var _movement: AmbientFlyerMovement
 var _elapsed_time := 0.0
 
+## Under lying snow (see set_snow_dormant / docs/concept/carrion.md
+## "Dormant under lying snow"): hidden, not processing, woken in place by
+## the thaw. Real ants overwinter dormant in the nest and Nicrophorus
+## buried in litter; neither crawls a snowfield (reported live from a real
+## screenshot: black insects wandering drawn snow, "black moving blobs").
+var _snow_dormant := false
+
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
@@ -107,6 +122,30 @@ func _ready() -> void:
 	_movement = AmbientFlyerMovement.new(
 		WALK_SPEED * WANDER_SPEED_FRACTION, WANDER_RADIUS_PX, WANDER_DIRECTION_CHANGE_INTERVAL_SECONDS
 	)
+	# Re-applied here, not only in set_snow_dormant: Godot re-enables
+	# _process for every node that overrides it at NOTIFICATION_READY, so a
+	# set_process(false) made before add_child (the way DecomposerRenderer
+	# configures a marker spawned mid-winter) would otherwise be undone.
+	set_process(not _snow_dormant)
+
+
+## Whether a decomposer is dormant at this snow depth -- the one decision
+## every caller (spawn, depth change, colony forager) shares, so none of
+## them can disagree about where the snow line is.
+static func is_dormant_under(snow_depth: float) -> bool:
+	return snow_depth > SNOW_DORMANCY_DEPTH
+
+
+## Sends this decomposer under the snow (hidden, no wander/forage/bites)
+## or wakes it in place. Idempotent; safe before or after add_child.
+func set_snow_dormant(dormant: bool) -> void:
+	_snow_dormant = dormant
+	visible = not dormant
+	set_process(not dormant)
+
+
+func is_snow_dormant() -> bool:
+	return _snow_dormant
 
 
 var _lod_accumulated := 0.0
@@ -164,6 +203,10 @@ var _cached_player: Node = null
 
 
 func _process(frame_delta: float) -> void:
+	# Belt and braces on top of set_process(false): a dormant decomposer
+	# moves nowhere even when stepped directly.
+	if _snow_dormant:
+		return
 	# Decomposers far from the player advance in fewer, larger steps (see
 	# SimulationLod) -- same time passes, fewer scans to pay for.
 	var delta := _lod_step(frame_delta)

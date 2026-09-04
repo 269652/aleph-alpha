@@ -48,6 +48,7 @@ const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropRenderer = preload("res://src/rendering/wild_crop_renderer.gd")
 const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
 const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
+const DecomposerMarker = preload("res://src/rendering/decomposer_marker.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
@@ -4160,6 +4161,7 @@ func set_snow_depth(depth: float) -> void:
 	# way by sync_tree_season instead, which is what actually reaches an
 	# ALREADY-standing tree (see its own doc comment).
 	_tree_renderer.set_snow_coverage(_snow_depth)
+	_sync_decomposer_dormancy(previous)
 	if _snow_layer != null:
 		_snow_shader.set_snow_depth(_snow_depth)
 		_sync_snow_presence(previous)
@@ -4245,6 +4247,9 @@ func step_snow(snowing: bool, warmth: float) -> void:
 	var previous_depth := _snow_depth
 	_snow_depth = Snowfall.accumulate(_snow_depth, snowing, warmth, elapsed)
 	_snow_trail.advance(elapsed, snowing)
+	# Before the snow-layer early return below: the insects go under with
+	# the snow whether or not anything draws it.
+	_sync_decomposer_dormancy(previous_depth)
 
 	# Pushing shader uniforms is optional -- a headless server has no snow
 	# layer but still has weather, so the depth/trail state above has to be
@@ -4281,6 +4286,22 @@ func _sync_snow_presence(previous_depth: float) -> void:
 		_paint_all_loaded_snow_presence()
 	elif previous_depth > 0.0 and _snow_depth <= 0.0:
 		_snow_layer.clear()
+
+
+## Sends every loaded decomposer under the snow, or wakes them, on the
+## bare<->lying edge only (DecomposerMarker.is_dormant_under) -- the same
+## rare-transition shape _sync_snow_presence uses, so this costs nothing on
+## the vast majority of step_snow calls. A chunk loaded between edges is
+## spawned already in the right state (see spawn_decomposers' snow_depth),
+## which is what lets this be edge-triggered rather than a per-frame sweep.
+## See docs/concept/carrion.md "Dormant under lying snow".
+func _sync_decomposer_dormancy(previous_depth: float) -> void:
+	var dormant := DecomposerMarker.is_dormant_under(_snow_depth)
+	if dormant == DecomposerMarker.is_dormant_under(previous_depth):
+		return
+	for markers in _decomposer_markers.values():
+		for marker in markers:
+			marker.set_snow_dormant(dormant)
 
 
 func _paint_all_loaded_snow_presence() -> void:
@@ -6708,6 +6729,12 @@ func _forage_windfall_near_mound(colony: AntColony, origin: Vector2i, cell: Vect
 func _spawn_ant_forager_visual(global_tile: Vector2i, mound_pixel: Vector2, rest_of_path: Array) -> void:
 	if _entities_parent == null:
 		return
+	# The colony's forager is the same animal DecomposerMarker draws -- it
+	# does not walk out over lying snow either (docs/concept/carrion.md
+	# "Dormant under lying snow"). The colony's own data-level resolution
+	# has already happened by now and is deliberately left untouched.
+	if DecomposerMarker.is_dormant_under(_snow_depth):
+		return
 	var existing = _active_ant_foragers.get(global_tile)
 	if existing != null and is_instance_valid(existing) and not existing.is_queued_for_deletion():
 		return
@@ -8653,7 +8680,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 
 	_decomposer_markers[chunk_coord] = _decomposer_renderer.spawn_decomposers(
 		_entities_parent, _biome_classifier.dominant_biome(chunk.biome), chunk_coord * CHUNK_SIZE,
-		CHUNK_SIZE, TerrainRenderer.TILE_SIZE, hash("%d_%d_decomposers" % [chunk_coord.x, chunk_coord.y])
+		CHUNK_SIZE, TerrainRenderer.TILE_SIZE, hash("%d_%d_decomposers" % [chunk_coord.x, chunk_coord.y]),
+		_snow_depth  # mid-winter load: already dormant, never live on the snow
 	)
 
 	# Re-staff every Sägewerk this chunk already had persisted, before this
