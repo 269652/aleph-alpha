@@ -1,6 +1,7 @@
 extends RefCounted
 
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+const HydrologyField = preload("res://src/world/hydrology_field.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const StonePlacement = preload("res://src/world/stone_placement.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
@@ -3427,6 +3428,23 @@ var _river_flow_boulder_tiles: Dictionary = {}
 var _flow_across_image: Image
 var _flow_across_texture: ImageTexture
 
+## A SEPARATE single-purpose map for each tile's real local half-width.
+## Width used to ride the direction vector's own magnitude (a direction's
+## length otherwise carrying no information) -- but bilinear filtering
+## blends GB by ordinary vector addition, and two texels whose BEARINGS
+## differ (exactly what neighbouring texels do on a bend) partially
+## CANCEL when summed, collapsing the blended magnitude toward zero
+## independent of either texel's real width. That corrupted both the
+## decoded width (dividing a push by a near-zero half-width) and the
+## decoded direction (normalizing a near-zero vector is numerically
+## unstable) -- worst exactly on curves, reported as "this huge zigzag
+## still persists" after the direction-vector encoding otherwise measurably
+## helped. A scalar has no such failure mode: bilinearly blending two
+## widths always lands between them. Pinned by
+## test_the_scale_map_is_a_real_separate_texture_not_packed_into_direction.
+var _flow_scale_image: Image
+var _flow_scale_texture: ImageTexture
+
 ## How many boulders the shader accepts -- mirrors the uniform array size.
 const RIVER_FLOW_BOULDER_SLOTS := 24
 
@@ -3466,25 +3484,52 @@ func _sync_flow_boulder(tile: Vector2i) -> void:
 ## One texel of the flow map, written toroidally -- see _flow_across_image.
 ## Carries the WHOLE per-tile reconstruction frame as REAL floats
 ## (FORMAT_RGBAF, no encode range): R the signed across-fraction, GB the
-## course's downstream unit vector (same sin/-cos convention the atlas
+## course's downstream UNIT vector (same sin/-cos convention the atlas
 ## sprite bakes), A the real solved current speed in m/s -- so the shader
 ## interpolates direction and speed bilinearly exactly like across, and no
-## per-tile quantity is left to draw the tile grid.
+## per-tile quantity is left to draw the tile grid. half_width_tiles goes
+## into the SEPARATE _flow_scale_image (see that field's own doc comment
+## for why it may never share a channel with a vector that gets bilinearly
+## filtered).
+## every chunk cell no matter how far from any river ever gets a texel
+## written here (for the far cell's bilinear neighbours), and its `nearest`
+## comes from EarthChunkGenerator.nearest_river_at -- which, once no
+## channel (curated or hydrology) is close enough to matter, falls back to
+## WHICHEVER curated river is nearest ANYWHERE ON THE PLANET. A cell deep
+## in a continent's interior can be 900+ tiles from that river, with a
+## totally unrelated width and bearing, and `across_fraction` (that
+## distance divided by that river's width) can run into the hundreds --
+## bilinearly blended against a real neighbouring texel a few tiles away
+## with a normal-sized value, that is an unbounded cliff, not a smooth
+## fade. Reported live as a torn, chunky zigzag ("only around bends and
+## where the water is deeper at the edge" -- a huge |across| clamps the
+## depth shading to its darkest band, and the true-vs-fallback boundary is
+## least stable exactly where a bend's curve departs most from a
+## straight-line extrapolation). CLAMP_MAGNITUDE is comfortably beyond the
+## largest across a channel's OWN real apron+bleed zone can ever produce
+## even at HydrologyField.SPRING_HALF_WIDTH_TILES (~12.5), so no genuine
+## reading is ever clipped -- only the unrelated-planet-away fallback is.
+## Pinned by test_the_written_across_is_always_bounded.
+const CLAMP_MAGNITUDE := 16.0
+
+
 func _write_flow_across_texel(
-	global: Vector2i, across_fraction: float, bearing_deg: float, speed_mps: float
+	global: Vector2i, across_fraction: float, bearing_deg: float, speed_mps: float, half_width_tiles: float
 ) -> void:
-	if _flow_across_image == null:
-		var side := RiverFlowShader.FLOW_MAP_TILES
-		_flow_across_image = Image.create(side, side, false, Image.FORMAT_RGBAF)
 	var side := RiverFlowShader.FLOW_MAP_TILES
+	if _flow_across_image == null:
+		_flow_across_image = Image.create(side, side, false, Image.FORMAT_RGBAF)
+	if _flow_scale_image == null:
+		_flow_scale_image = Image.create(side, side, false, Image.FORMAT_RGBAF)
+	var x := posmod(global.x, side)
+	var y := posmod(global.y, side)
 	var radians := deg_to_rad(bearing_deg)
-	_flow_across_image.set_pixel(
-		posmod(global.x, side), posmod(global.y, side),
-		Color(across_fraction, sin(radians), -cos(radians), speed_mps)
-	)
+	var clamped_across := clampf(across_fraction, -CLAMP_MAGNITUDE, CLAMP_MAGNITUDE)
+	_flow_across_image.set_pixel(x, y, Color(clamped_across, sin(radians), -cos(radians), speed_mps))
+	_flow_scale_image.set_pixel(x, y, Color(half_width_tiles, 0.0, 0.0, 0.0))
 
 
-## Pushes the filled map into the shared flow material after a paint pass.
+## Pushes the filled maps into the shared flow material after a paint pass.
 func _push_flow_across_map() -> void:
 	if _flow_across_image == null:
 		return
@@ -3492,9 +3537,13 @@ func _push_flow_across_map() -> void:
 		_flow_across_texture = ImageTexture.create_from_image(_flow_across_image)
 	else:
 		_flow_across_texture.update(_flow_across_image)
-	_river_flow_shader.shared_material().set_shader_parameter(
-		"flow_across_map", _flow_across_texture
-	)
+	if _flow_scale_texture == null:
+		_flow_scale_texture = ImageTexture.create_from_image(_flow_scale_image)
+	else:
+		_flow_scale_texture.update(_flow_scale_image)
+	var material := _river_flow_shader.shared_material()
+	material.set_shader_parameter("flow_across_map", _flow_across_texture)
+	material.set_shader_parameter("flow_scale_map", _flow_scale_texture)
 
 
 ## Pushes the current boulder set into the shared flow material -- called
@@ -3551,7 +3600,15 @@ func river_wader_positions(candidates: Array) -> PackedVector2Array:
 		var tile := Vector2i(floori(pos.x / tile_px), floori(pos.y / tile_px))
 		var in_river = _wader_river_memo.get(tile)
 		if in_river == null:
-			in_river = is_river_at_global(tile.x, tile.y)
+			# Any water, not only rivers: a fish or a swimmer in a lake or
+			# the sea rings the still water (the shader's wake stays
+			# symmetric there) -- third playtest: "pond fish ripples need
+			# to be reimplemented with the river contour system".
+			in_river = (
+				is_river_at_global(tile.x, tile.y)
+				or is_lake_at_global(tile.x, tile.y)
+				or biome_at_global(tile.x, tile.y) == "ocean"
+			)
 			if _wader_river_memo.size() > RIVER_WADER_MEMO_CAP:
 				_wader_river_memo.clear()
 			_wader_river_memo[tile] = in_river
@@ -3752,6 +3809,16 @@ func _paint_water_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# tiles under the flow layer's smooth bank curve -- the flow
 			# overlay is now the river's entire water surface, clipped at
 			# the real bank line, with the ground showing past it.
+			# NOTHING is painted here any more when the river flow overlay is
+			# wired: rivers, lakes AND the sea ride that one overlay as one
+			# water surface (docs/concept/hydrology.md "Water kinds"; first
+			# playtest: this overlay's square tiles read as "a very
+			# different art style" beside the river's contour lines). This
+			# layer stays as the fallback for a scene that never registers a
+			# flow layer, exactly as it drew before.
+			if _river_flow_layer != null:
+				_water_layer.erase_cell(origin + Vector2i(x, y))
+				continue
 			var is_water: bool = chunk.biome[y * chunk.width + x] == "ocean"
 			if not is_water:
 				continue
@@ -3809,18 +3876,63 @@ func _paint_hillshade_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 ## above (which paints every cell): only water should ever show a flowing
 ## current. Rivers previously looked exactly like still ocean water
 ## (reported: "rivers should flow").
+## A dry tile whose lake-shoreline across (HydrologyField.lake_across) is
+## below this still gets painted, so the waterline's feather has a cell to
+## draw in wherever the shore is gentle; a steep shore jumps well past it
+## and the waterline then falls inside the wet cell anyway.
+const LAKE_PAINT_ACROSS := 1.6
+
+
 func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	if _river_flow_layer == null:
 		return
 	var origin := chunk_coord * CHUNK_SIZE
-	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
 	for y in chunk.height:
 		for x in chunk.width:
 			var global := origin + Vector2i(x, y)
-			var nearest := generator.river_catalog().nearest_river_at(
-				global.x, global.y,
-				EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+			# ONE WATER SURFACE (docs/concept/hydrology.md): rivers, lakes
+			# and the sea all ride this overlay. A river tile (including a
+			# mouth reaching into sea cells, so the current visibly runs
+			# into the sea) takes the flowing branch below. Otherwise a lake
+			# tile, a sea tile, or a dry tile inside either shoreline's
+			# paint band writes the elevation-contour across -- the spill
+			# for a lake, sea level for the sea -- with ZERO current, so the
+			# shader draws the same smooth waterline, ink and feather it
+			# gives a river bank, and only ripples. First playtest: "ponds
+			# have a very different art style", "unify river and pond water".
+			var probe := generator.hydrology_at_global(global.x, global.y)
+			var still_across: float = probe["lake_across"]
+			var still_water: bool = (
+				probe["kind"] == "lake" or probe.get("sea", false) or still_across < LAKE_PAINT_ACROSS
 			)
+			if probe["kind"] != "river" and still_water:
+				# A river mouth's current runs on into the still water and
+				# fades (HydrologyField.mouth_plume): the texel carries the
+				# mouth's bearing and a fading speed, so the flow lines
+				# continue out of the mouth and settle into ripples.
+				var plume_speed: float = HydrologyField.PLUME_SPEED_M_S * probe["plume_factor"]
+				_write_flow_across_texel(
+					global, still_across, probe["plume_bearing_deg"], plume_speed,
+					RiverCatalog.RIVER_HALF_WIDTH_TILES
+				)
+				_river_flow_boulder_tiles.erase(global)
+				_river_flow_layer.set_cell(
+					global, 0,
+					_terrain_renderer.atlas_coords_for_river_flow(
+						probe["plume_bearing_deg"], RiverFlowShader.is_fast_flow(plume_speed)
+					)
+				)
+				continue
+			# The generator's own nearest_river_at: the curated answer
+			# wherever a curated river reaches, else (when enabled) the
+			# nearest baked hydrology channel in the same shape -- see
+			# docs/concept/hydrology.md's relationship to rivers.md. Each
+			# answer carries its own half-width (the catalog's uniform one,
+			# or the baked channel's discharge-derived one), and the across
+			# texel is normalized by THAT, so a confluence reads wider.
+			var nearest := generator.nearest_river_at(global.x, global.y)
+			var half_width: float = nearest.get("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES)
+			var apron := half_width + RiverCatalog.RIVER_BANK_APRON_TILES
 			# Painted out past the bank line (the apron): the shader clips
 			# the water at the REAL bank curve, |across| == 1, and that
 			# curve runs through cells whose centres sit beyond the
@@ -3829,19 +3941,51 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# |signed across|: past a course's endpoints the perpendicular
 			# component goes small while the distance does not, and cells
 			# off the end of a river must not be painted as water.
-			if nearest.distance_tiles > apron:
+			#
+			# A SECOND, wider ring past the apron is still PAINTED, not
+			# erased (RiverFlowShader.SHORE_BLEED_TILES): the apron alone
+			# is just wide enough for the bank feather itself, so a wader's
+			# wake or a boulder's shore band reaching even slightly past it
+			# had no tile left to draw on and simply vanished -- reported live
+			# as a player's own splash trail cutting off mid-stride on the
+			# way out of the water. This ring stays fully transparent by
+			# construction (its baseline |across| sits well past the
+			# feather) unless something genuinely reaches it.
+			var bleed := apron + RiverFlowShader.SHORE_BLEED_TILES
+			if nearest.distance_tiles > bleed:
 				_river_flow_layer.erase_cell(global)
-				# Still write the texel: a dry cell one tile past the apron
+				# Still write the texel: a dry cell one tile past the bleed
 				# is a bilinear NEIGHBOUR of a wet one, and an unwritten
 				# texel there would bleed garbage into the waterline.
+				var far_hydraulics := generator.river_hydraulics_at_global(
+					global.x, global.y
+				)
+				_write_flow_across_texel(
+					global,
+					nearest.signed_across_tiles / half_width,
+					nearest.course_bearing_deg,
+					far_hydraulics.velocity_m_s,
+					half_width
+				)
+				continue
+			if nearest.distance_tiles > apron:
 				var apron_hydraulics := generator.river_hydraulics_at_global(
 					global.x, global.y
 				)
 				_write_flow_across_texel(
 					global,
-					nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES,
+					nearest.signed_across_tiles / half_width,
 					nearest.course_bearing_deg,
-					apron_hydraulics.velocity_m_s
+					apron_hydraulics.velocity_m_s,
+					half_width
+				)
+				_river_flow_boulder_tiles.erase(global)
+				_river_flow_layer.set_cell(
+					global, 0,
+					_terrain_renderer.atlas_coords_for_river_flow(
+						nearest.course_bearing_deg,
+						RiverFlowShader.is_fast_flow(apron_hydraulics.velocity_m_s)
+					)
 				)
 				continue
 
@@ -3853,12 +3997,10 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# waterline, and the fast flag comes from the real solved
 			# current.
 			var hydraulics := generator.river_hydraulics_at_global(global.x, global.y)
-			var across_fraction: float = (
-				nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
-			)
+			var across_fraction: float = nearest.signed_across_tiles / half_width
 			_write_flow_across_texel(
 				global, across_fraction,
-				nearest.course_bearing_deg, hydraulics.velocity_m_s
+				nearest.course_bearing_deg, hydraulics.velocity_m_s, half_width
 			)
 			if flow_boulder_at_global(global.x, global.y):
 				_river_flow_boulder_tiles[global] = true
@@ -3903,6 +4045,8 @@ func _land_directions_at(global_x: int, global_y: int) -> Array:
 func _is_land_at(global_x: int, global_y: int) -> bool:
 	var neighbor_biome := biome_at_global(global_x, global_y)
 	if neighbor_biome == "" or neighbor_biome == "ocean":
+		return false
+	if generator.is_lake_at_global(global_x, global_y):
 		return false
 	return not generator.is_river_at_global(global_x, global_y)
 
@@ -4188,7 +4332,9 @@ func _paint_snow_presence(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# reported live: "snow falls on rivers".
 			if chunk.biome[y * chunk.width + x] == "ocean":
 				continue
-			if is_river_at_global(global.x, global.y):
+			# Rivers AND lakes (docs/concept/hydrology.md) -- both are
+			# overlay flags on land biome, both read from the one predicate.
+			if chunk.blocks_ground_cover(y * chunk.width + x):
 				continue
 			_snow_layer.set_cell(global, 0, SnowBombShader.PRESENCE_ATLAS_COORD)
 
@@ -4272,7 +4418,8 @@ func record_water_disturbance(world_pos: Vector2) -> void:
 
 ## Ages every live water disturbance so its ring actually expands/fades on
 ## screen (see WaterShader.advance_disturbances) -- must run every frame,
-## not just when a new disturbance is recorded.
+## not just when a new disturbance is recorded. The flow overlay's rings
+## age on the shader's own clock; here they are only pruned once faded.
 func step_water_disturbances(delta: float) -> void:
 	_water_shader.advance_disturbances(delta)
 	_mirror_disturbances_to_the_river()
@@ -4435,6 +4582,10 @@ func _can_root_at(chunk: Chunk, chunk_coord: Vector2i, position: Vector2) -> boo
 	# the same "trees standing in a lake" bug class this function's own
 	# doc comment already names, now recurring for rivers specifically.
 	if is_river_at_global(tile.x, tile.y):
+		return false
+	# A lake bed is the original "trees standing in a lake" case, now with
+	# real lakes (docs/concept/hydrology.md) -- same overlay flag shape.
+	if chunk.blocks_ground_cover(local.y * chunk.width + local.x):
 		return false
 	var biome_name: String = chunk.biome[local.y * chunk.width + local.x]
 	return TreeRooting.can_root_in(biome_name)
@@ -6987,6 +7138,51 @@ func is_river_at_global(global_x: int, global_y: int) -> bool:
 	return generator.is_river_at_global(global_x, global_y)
 
 
+## A tile under a baked lake's surface (docs/concept/hydrology.md) -- an
+## overlay flag on land biome exactly like is_river_at_global.
+func is_lake_at_global(global_x: int, global_y: int) -> bool:
+	return generator.is_lake_at_global(global_x, global_y)
+
+
+## The water current at a tile, as {direction: Vector2 (tile-space unit
+## vector pointing downstream), speed_m_s}: the river's solved current on
+## a river tile, a mouth's fading plume in the still water it empties
+## into, zero elsewhere. What a fish swims against (FishMarker.
+## current_speed_factor) -- the same bearing and speed the flow overlay
+## draws, so the fish and the strokes agree.
+func river_current_at_global(global_x: int, global_y: int) -> Dictionary:
+	var probe := generator.hydrology_at_global(global_x, global_y)
+	var bearing_deg := 0.0
+	var speed := 0.0
+	if generator.is_river_at_global(global_x, global_y):
+		bearing_deg = generator.nearest_river_at(global_x, global_y).course_bearing_deg
+		speed = generator.river_hydraulics_at_global(global_x, global_y).velocity_m_s
+	elif probe["plume_factor"] > 0.0:
+		bearing_deg = probe["plume_bearing_deg"]
+		speed = HydrologyField.PLUME_SPEED_M_S * probe["plume_factor"]
+	if speed <= 0.0:
+		return {"direction": Vector2.ZERO, "speed_m_s": 0.0}
+	var radians := deg_to_rad(bearing_deg)
+	return {"direction": Vector2(sin(radians), -cos(radians)), "speed_m_s": speed}
+
+
+## Real metres of lake water over a tile, 0.0 off a lake. Unlike river
+## depth this delegates directly: nothing a player builds ponds a lake.
+func lake_depth_meters_at_global(global_x: int, global_y: int) -> float:
+	return generator.lake_depth_meters_at_global(global_x, global_y)
+
+
+## One byte per cell, 1 where a river or lake covers the ground -- the
+## per-chunk form of Chunk.blocks_ground_cover, for consumers that take a
+## whole flag array (TallGrass) rather than a Chunk.
+func _ground_cover_blockers(chunk: Chunk) -> PackedByteArray:
+	var blockers := PackedByteArray()
+	blockers.resize(chunk.width * chunk.height)
+	for index in blockers.size():
+		blockers[index] = 1 if chunk.blocks_ground_cover(index) else 0
+	return blockers
+
+
 ## Real river depth at a global tile -- the natural solved depth (see
 ## EarthChunkGenerator.river_hydraulics_at_global), raised where a
 ## player-built dam downstream is ponding this cell (see
@@ -7013,7 +7209,10 @@ func flow_boulder_at_global(global_x: int, global_y: int) -> bool:
 		return true
 	if BuildingPiece.has_piece(piece):
 		return false
-	if not generator.is_river_at_global(global_x, global_y):
+	# On the river OR on its bank apron: a rock at the water's edge must
+	# part the waterline around itself too ("wrap shorelines around edge
+	# boulders"), not only a rock standing mid-stream.
+	if not generator.is_within_river_apron(global_x, global_y):
 		return false
 	var biome := biome_at_global(global_x, global_y)
 	if not StonePlacement.STONE_BIOMES.has(biome):
@@ -8377,7 +8576,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 
 	_grass_sims[chunk_coord] = TallGrass.new(
 		hash("%d_%d_tall_grass" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
-		chunk.is_river
+		_ground_cover_blockers(chunk)
 	)
 	_grass_sprites[chunk_coord] = {}
 	_sync_grass_sprites(chunk_coord)
