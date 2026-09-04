@@ -522,14 +522,52 @@ func _has_water_clearance(center: Vector2) -> bool:
 	return true
 
 
+## The 4 cardinal neighbours a river/lake tile must ALSO have water on
+## before a fish treats it as fully swimmable -- see _is_water's own doc
+## comment on why only fresh water (not ocean) needs this.
+const _CARDINAL_TILE_OFFSETS: Array[Vector2i] = [
+	Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)
+]
+
+
 func _is_water(pixel_position: Vector2) -> bool:
 	var tile_x := int(floor(pixel_position.x / _tile_size))
 	var tile_y := int(floor(pixel_position.y / _tile_size))
 	if _world.biome_at_global(tile_x, tile_y) == "ocean":
 		return true
-	# Rivers and lakes are overlay flags on land biome (docs/concept/
-	# hydrology.md), asked separately; a world that has neither (the
-	# character preview diorama's pond) simply has neither.
+	if not _is_fresh_water_tile(tile_x, tile_y):
+		return false
+	# Unlike the open ocean, a river or lake tile is a discrete kind FLAG
+	# (docs/concept/hydrology.md's tile read), not a coverage fraction --
+	# HydrologyField.probe() calls a tile "river" once its CENTRE is within
+	# the channel's own half-width, which for a narrow channel or a tile
+	# right at the bank can be a tile whose FOOTPRINT is mostly dry land.
+	# WaterAreaSurvey.is_interior_water already holds fish SPAWNING to a
+	# "this tile and all 4 neighbours are water" bar for exactly that reason
+	# (never a shore-adjacent cell); this is the same bar for swimming, so a
+	# fish already in the water cannot wander from a genuinely-covered tile
+	# onto a merely-flagged one and visibly sit half on dry ground (reported
+	# directly: "fish should be constrained to the full rivertiles not the
+	# shore tiles otherwise they swim on a half land tile sometimes").
+	for offset in _CARDINAL_TILE_OFFSETS:
+		if not _is_any_water_tile(tile_x + offset.x, tile_y + offset.y):
+			return false
+	return true
+
+
+## Ocean by biome, or a river or lake cell -- any kind of open water. Used
+## to check a fresh-water tile's NEIGHBOURS (see _is_water above): a river
+## mouth's bank against the sea is still open water on that side, not shore.
+func _is_any_water_tile(tile_x: int, tile_y: int) -> bool:
+	if _world.biome_at_global(tile_x, tile_y) == "ocean":
+		return true
+	return _is_fresh_water_tile(tile_x, tile_y)
+
+
+## Rivers and lakes are overlay flags on land biome (docs/concept/
+## hydrology.md), asked separately; a world that has neither (the character
+## preview diorama's pond) simply has neither.
+func _is_fresh_water_tile(tile_x: int, tile_y: int) -> bool:
 	if _world.has_method("is_river_at_global") and _world.is_river_at_global(tile_x, tile_y):
 		return true
 	return _world.has_method("is_lake_at_global") and _world.is_lake_at_global(tile_x, tile_y)
