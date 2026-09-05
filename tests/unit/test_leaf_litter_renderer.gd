@@ -15,6 +15,7 @@ extends GutTest
 const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const LeafLitterAtlas = preload("res://src/rendering/leaf_litter_atlas.gd")
+const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 
 
 # -- packing: every channel round-trips ---------------------------------------
@@ -308,6 +309,16 @@ func test_mesh_is_a_fixed_world_size_quad():
 	var mesh := renderer.mesh()
 	assert_almost_eq(mesh.size.x, LeafLitterRenderer.WORLD_SIZE, 0.001)
 	assert_almost_eq(mesh.size.y, LeafLitterRenderer.WORLD_SIZE, 0.001)
+
+
+## Reported directly: "leaves should be half as big" -- pins the real value
+## (not just "the mesh uses whatever WORLD_SIZE is", which the test above
+## already covers and would pass regardless of the constant's own value).
+## Half of the previous 1.5x-walnut-width sizing, so 0.75x.
+func test_world_size_is_half_its_previous_walnut_relative_size():
+	assert_almost_eq(
+		LeafLitterRenderer.WORLD_SIZE, ProceduralItemSprite.WALNUT_WORLD_WIDTH * 0.75, 0.001
+	)
 
 
 func test_material_is_a_shader_material_with_the_atlas_texture_assigned():
