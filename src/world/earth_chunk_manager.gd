@@ -4356,6 +4356,13 @@ var _snowing := false
 ## dictionary carries no notion of "where the player is" by itself.
 var _snow_trail_center_tile := Vector2i.ZERO
 
+## The last tile the PLAYER's own tread call (move_trail_window=true) landed
+## on -- see tread_snow_at's own doc comment for why only the player's call
+## is debounced by tile entry here. Sentinel far outside any reachable tile,
+## so the first real call always counts as "newly entered" (mirrors World.
+## _last_scar_step_tile's identical convention for PathScarring).
+var _last_player_snow_tile := Vector2i(-2147483648, -2147483648)
+
 ## How wide, in TILES, the trail mask window pushed to the shader is. Matches
 ## SHADER_CODE's own trail_world_size uniform DEFAULT (1024.0 world units)
 ## exactly, divided by TerrainRenderer.TILE_SIZE (16) -- not load-bearing
@@ -4433,13 +4440,30 @@ func is_snowing() -> bool:
 ## window to wherever the last-processed creature happens to be -- which
 ## would risk carrying the player's own nearby tracks right out of the
 ## window the instant a creature updates after them in the same frame.
+##
+## The PLAYER's own call (move_trail_window=true) only steps on a genuinely
+## NEW tile -- mirrors World._last_scar_step_tile's identical debounce for
+## PathScarring. Reported live: "should also remove snow gradually when
+## walking back and forth". This used to fire every single RENDERED FRAME
+## with no gate at all, so a tile saturated to SnowTrail.MAX_TREAD within
+## about three frames of first entry (TREAD_PER_STEP=0.34) regardless of
+## whether the player kept walking -- reading as an instant flat clearing,
+## not a gradual one, and making repeated visits pointless since the tile
+## was already maxed out after the very first pass. A creature's own call
+## (move_trail_window=false) is deliberately NOT debounced here -- doing so
+## would need a per-creature "last tile" (a field on every CreatureMarker,
+## or a Dictionary keyed by instance here), and the reported complaint is
+## specifically about the player's own repeated walking.
 func tread_snow_at(pixel_position: Vector2, move_trail_window: bool = true) -> void:
 	if _snow_depth <= 0.0:
 		return
 	var tile := _world_tile_for_pixel(pixel_position)
-	_snow_trail.step_on(tile)
 	if move_trail_window:
+		if tile == _last_player_snow_tile:
+			return
+		_last_player_snow_tile = tile
 		_snow_trail_center_tile = tile
+	_snow_trail.step_on(tile)
 
 
 ## The world clock as of the last snow step, so snow can advance on the same

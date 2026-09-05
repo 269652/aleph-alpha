@@ -17,6 +17,7 @@ const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const Snowfall = preload("res://src/world/snowfall.gd")
+const SnowTrail = preload("res://src/world/snow_trail.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
@@ -7246,6 +7247,64 @@ func test_creature_treading_snow_does_not_move_the_trail_window():
 	assert_eq(
 		manager._snow_trail_center_tile, _berlin_tile,
 		"a creature's own tread should not relocate the trail mask window away from the player"
+	)
+
+
+# -- gradual snow clearing (see SnowTrail.step_on/TREAD_PER_STEP) --
+#
+# Reported live: "should also remove snow gradually when walking back and
+# forth". tread_snow_at used to fire every single RENDERED FRAME with no
+# per-tile-entry gate, unlike PathScarring's own _last_scar_step_tile debounce
+# -- so a tile saturated to SnowTrail.MAX_TREAD within about three frames
+# of first entry (TREAD_PER_STEP=0.34, 1.0/0.34 = ~3), regardless of whether
+# the player kept walking. That reads as an instant flat clearing rather
+# than a gradual one, and makes "walking back and forth" pointless -- the
+# tile is already maxed out after the very first pass.
+
+
+func test_treading_the_same_tile_repeatedly_in_one_frame_does_not_stack_wear():
+	manager.set_snow_depth(1.0)
+	var pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	for i in 10:
+		manager.tread_snow_at(pixel)
+	assert_almost_eq(
+		manager._snow_trail.tread_at(_berlin_tile), SnowTrail.TREAD_PER_STEP, 0.0001,
+		"standing on/re-entering the identical tile within the same visit must not stack tread"
+	)
+
+
+## Leaving a tile and coming back is a genuinely NEW entry -- "walking back
+## and forth" must keep deepening the tread, up to SnowTrail's own
+## MAX_TREAD ceiling, not get stuck at whatever the first visit produced.
+func test_leaving_and_returning_to_a_tile_deepens_tread_further():
+	manager.set_snow_depth(1.0)
+	var here := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var elsewhere := Vector2(_berlin_tile + Vector2i(3, 0)) * TerrainRenderer.TILE_SIZE
+
+	manager.tread_snow_at(here)
+	var after_first_visit := manager._snow_trail.tread_at(_berlin_tile)
+	manager.tread_snow_at(elsewhere)
+	manager.tread_snow_at(here)
+
+	assert_almost_eq(
+		manager._snow_trail.tread_at(_berlin_tile), after_first_visit + SnowTrail.TREAD_PER_STEP, 0.0001,
+		"returning to a tile after leaving it should deepen the tread further"
+	)
+
+
+## The debounce is player-only (move_trail_window=true, the default) --
+## creatures keep their existing every-call behaviour, an explicit, narrower
+## scope decision (see tread_snow_at's own doc comment) rather than an
+## oversight.
+func test_a_creature_still_treads_every_call_unlike_the_player():
+	manager.set_snow_depth(1.0)
+	var creature_tile := _berlin_tile + Vector2i(5, 0)
+	var creature_pixel := Vector2(creature_tile) * TerrainRenderer.TILE_SIZE
+	manager.tread_snow_at(creature_pixel, false)
+	manager.tread_snow_at(creature_pixel, false)
+	assert_almost_eq(
+		manager._snow_trail.tread_at(creature_tile), 2.0 * SnowTrail.TREAD_PER_STEP, 0.0001,
+		"a creature's own repeated tread is not debounced by tile entry"
 	)
 
 
