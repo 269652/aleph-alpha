@@ -8957,6 +8957,44 @@ germany" and a 4-tile minimum width).
   in `concept/rivers.md`'s own "What this pass touches" section — none of
   these silently regressed, they were never built and still aren't).
 
+### Terrain Borders (`concept/terrain_borders.md`)
+
+Never had its own section here despite being extensively real and tested —
+tracked only as inline narrative inside this doc's "Reality check" section
+further down, and the concept doc's own Status list. **Also found during
+this cross-alignment pass: a second, independent concept doc for the
+identical system, `concept/terrain_biome_borders.md`, had existed alongside
+it, undetected by either doc, for roughly two weeks.** `TerrainRenderer`'s
+own source and its tests already cited `terrain_borders.md` by name in
+three places, so it stays canonical; `terrain_biome_borders.md` now
+redirects to it, with the one mechanism it alone had (earth-modification
+blend) and its more complete gap list merged forward. See the concept
+doc's own "Consolidated 2026-09-05" note for the full story.
+
+- **Cardinal-edge dithered blend + convex/concave ocean corners +
+  land/land corners (right-angle and diagonal-only) + corner-vs-blend
+  reconciliation** (large, cumulative) — ✅ Done — `TerrainRenderer.
+  dominant_blend_for`/`corner_direction_for`, four real bug-fix rounds
+  documented in this doc's own "Reality check" narrative further down
+  (each found by reading real baked-atlas pixels against real generated
+  chunks near Berlin, not by inspecting atlas coordinates alone — coordinate-
+  only checks passed twice against genuinely wrong pixels before that).
+- **Earth-modification (built floor / worn path) blend** (medium) — ✅
+  Done — `earth_dominant_blend_for`, the one mechanism
+  `terrain_biome_borders.md` had that this doc's own history was missing
+  (now merged in).
+- **Diagonal-only water/land corner carve** (small) — 🚧 Not addressed —
+  named as deliberately out of scope; the water-corner system already went
+  through four bug-fix rounds and extending it further wasn't asked for.
+- **Earth-modification neighbor detection across a chunk seam** (small) —
+  🚧 Not addressed — `global_biome_lookup` has no visibility into a
+  neighboring chunk's own `Chunk.modifications`, the same blind spot the
+  ordinary biome blend/corner system already has at chunk seams.
+- ⬜ A visible in-game screenshot re-confirming the land/land corner and
+  earth-modification blend read correctly at actual camera zoom — this
+  environment cannot launch the game to check; verified so far only via
+  baked-atlas-pixel tests (`tests/unit/test_terrain_renderer.gd`).
+
 ### Farming (`concept/farming.md`)
 
 The core plant/tend/harvest loop is now live and reachable in the game (see the Farming loop bullet below). The DNA/breeding/vegetation-override layers the concept doc also describes still exist only as tested pure logic with no live crops to apply them to.
