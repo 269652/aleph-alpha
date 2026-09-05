@@ -1932,11 +1932,12 @@ in the file). Re-confirmed independently on the real GPU rather than taken
 on trust, with a probe this fix's own commits never left behind
 (`tools/probe_eddy_drift_shredding.gd`): a synthetic bending reach, TIME
 pinned by literal substitution rather than the engine clock, isolated-
-bright-speck fraction fresh vs. at 2000 s. The shipped (fixed) shader held
-flat -- 0.0098 -> 0.0075 -- while a copy patched back to the exact
+bright-speck fraction fresh vs. at 2000 s, measured against the shader as
+it stands after "The reach's own speed" below. The shipped (fixed) shader
+held flat -- 0.0100 -> 0.0052 -- while a copy patched back to the exact
 pre-`830f4ba` eddy formula (proving the metric itself is sound, not just
-silent) shredded exactly as this section describes -- 0.0099 -> 0.1099, an
-11x rise concentrated at the tightest thresholds.
+silent) shredded exactly as this section describes -- 0.0100 -> 0.0972, a
+~10x rise concentrated at the tightest thresholds.
 
 
 ### The reach's own speed (2026-09-05, later the same day)
