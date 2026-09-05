@@ -8731,6 +8731,61 @@ germany" and a 4-tile minimum width).
   the Dreisam's curated centerline, and
   `test_standing_at_the_river_centerline_resolves_to_swimming_not_walking`
   confirms it.
+- **Animal ripples, rain ripples, and a gradual submersion tint (2026-09-05)**
+  (medium) — ✅ Done — reported: "animals and rain don't produce ripples in
+  the new river water", then "also animals and the players submerged tint
+  should be improved and gradual based on water depth... don't hide legs;
+  just tint." Three fixes, all in `docs/concept/rivers.md`'s own detail (the
+  "Correction" under "Movement ripples in the river", "Rain ripples on the
+  river", and the "Update" under "Player interaction" sections):
+  1. **Animals never actually reached the ripple/tint code at all in a
+     river or lake** — `CreatureMarker`'s own water-detection gate
+     (`_animation_step`) was ocean-biome-only; a new `_is_fresh_water_tile`
+     (mirroring `FishMarker`'s own) widens it, leaving the shared,
+     separately-tested `CreaturePerception.is_on(..., "water")` untouched.
+  2. **Rain never reached the river surface at all**, and — found
+     investigating — the ocean's OWN rain ripples had gone invisible too
+     once the "one water surface" change made the ocean render on the
+     unified river-flow overlay instead of its own tile layer (that old
+     layer erases every cell it owns whenever a river flow layer exists,
+     so its material's shader, `rain_intensity` or not, draws nowhere).
+     `RiverFlowShader` gained the same hash-grid raindrop technique
+     `WaterShader` already uses (a genuine second GLSL/GDScript copy,
+     matching this file's existing convention for `ripple_packet`, with
+     its own imported `RAIN_RIPPLE_*` tuning so a splash doesn't reuse a
+     wake's much longer packet); `EarthChunkManager.set_rain` now reaches
+     both materials. Confirmed on a real GPU
+     (`test_rain_actually_changes_what_the_river_draws`), matching the
+     existing movement-ripple smoke test's own same-frame-same-TIME
+     technique.
+  3. **The submersion tint was still a boolean underneath**, not gradual:
+     `Player._resolve_water_state` computed real continuous depth only to
+     discard it once collapsed into `current_mode`'s coarse string, and
+     `CharacterView` collapsed it again into a 3-value enum — wading had no
+     visual signature at all until the exact swim threshold, and legs were
+     a hard `.visible` toggle. `Player.current_water_depth` now survives
+     that collapse, threaded to a new `CharacterView.set_submersion_depth`
+     every frame; legs share the torso's existing `SubmersionShader`
+     material instead of being hidden; the waterline is a continuous lerp
+     normalized against the already-tested `WaterMovementModel.
+     WADE_DEPTH_METERS`, reproducing the old "fully swimming" look exactly
+     at and beyond that threshold; a new shared `SubmersionShader.
+     MAX_SINK_PX` settles the whole rig down together as depth increases.
+     Callers with no real depth (the character-creator diorama, village
+     NPCs) keep their old boolean-driven look exactly, now with the sink
+     too. Animals in river/lake water get the identical treatment, reusing
+     the same shared constant; ocean-swimming animals are unchanged (no
+     cheap per-tile ocean depth this class can ask for).
+
+  Each of the three shipped as its own red-first commit with its own test
+  suite (`test_creature_marker.gd` 200/200; `test_character_view.gd` 70/70
+  plus `test_player.gd` 188/188 and every other `CharacterView` consumer
+  unaffected; `test_river_flow_shader.gd` + `test_water_shader.gd` 220/220
+  and a real-GPU smoke pass). One confirmed pre-existing, unrelated
+  failure was found and flagged separately, not fixed here: `test_a_
+  genuinely_large_river_still_resolves_to_swimming` (the Rhine at Cologne
+  reports 0.0 depth) — a hydraulics/curated-course regression predating
+  this session, tracked as its own follow-up.
 - **Real hydraulics: volume, pressure, current speed** (large) — ✅ Done —
   reported directly ("implement real water flow with volume pressure current
   speed"). Before this, depth was an AUTHORED 2.5 m linear taper, current
