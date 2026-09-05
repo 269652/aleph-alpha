@@ -18,6 +18,17 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 ## Expressed as a terminal-velocity analogue -- lower is lighter and drifts
 ## further -- in the order the real seeds fall.
 const WEIGHT_FLOWER_SEED := 0.08  # plumed or dust-fine, built for wind
+## A fallen leaf (see docs/concept/leaf_litter.md's wind-driven relocation
+## section), NOT a seed at all -- reused here anyway because a settled
+## leaf being nudged along the ground by ambient wind is the same
+## lightness-vs-force question this file already answers for seeds. Placed
+## above WEIGHT_FLOWER_SEED (a leaf's flat blade is not a real wind-
+## dispersal adaptation like a dandelion's own plume) but below
+## WEIGHT_BERRY_PIP (a leaf's large surface-area-to-mass ratio still makes
+## it tumble and skitter across open ground far more readily than a small,
+## solid pip -- an ordinary autumn breeze, not a gale). Pinned by
+## test_a_leaf_sits_between_a_flower_seed_and_a_berry_pip.
+const WEIGHT_LEAF := 0.15
 const WEIGHT_BERRY_PIP := 0.3  # small, but no plume
 const WEIGHT_TREE_FRUIT := 0.7  # carried by animals, not air
 const WEIGHT_NUT := 1.0  # drops within a crown-width, always

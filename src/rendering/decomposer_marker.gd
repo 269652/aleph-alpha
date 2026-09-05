@@ -12,9 +12,32 @@ extends Node2D
 ##
 ## Scans the Carcass/CarcassGuts/DroppedItem groups directly (the same
 ## get_tree().get_nodes_in_group shape Player's own melee-sweep steps
-## already use) rather than needing an injected "world" -- there's nothing
-## chunk-specific about "is there food nearby" the way there is for e.g.
-## worms, which live in a per-chunk sim.
+## already use) for MOST of its food -- there's nothing chunk-specific about
+## "is there a carcass/dropped fruit nearby" the way there is for e.g. worms,
+## which live in a per-chunk sim. Fallen-leaf litter is the one exception
+## (see docs/concept/leaf_litter.md): it is chunk-specific data now (see
+## LeafLitterField), so this marker takes an OPTIONAL injected `_world`
+## reference just for that one case -- mirroring CreatureMarker's own
+## identical `_world` pattern (defaults null, guarded everywhere it's used)
+## -- narrowing, not breaking, this file's own "no chunk-specific
+## dependency" principle the same way it already special-cases worms (a
+## decomposer with no `_world` set simply never finds leaf litter, and keeps
+## foraging carrion/fruit exactly as before).
+
+## A never-added stand-in Node2D for "the fallen leaf currently being
+## forages" (see _nearest_food's leaf-litter branch) -- litter has no real
+## scene node of its own any more (see LeafLitterField/LeafLitterRenderer),
+## so _step_feeding needs SOMETHING with a `position` to walk toward and
+## arrive at. consume_leaf_litter() is the one action available on it,
+## checked by _step_feeding the same way `.has_method("take_bite")` already
+## distinguishes a Carcass/CarcassGuts target from a fallen-fruit DroppedItem.
+class LeafForageHandle:
+	extends Node2D
+	var _world = null
+
+	func consume_leaf_litter() -> void:
+		if _world != null and _world.has_method("consume_leaf_litter_at"):
+			_world.consume_leaf_litter_at(position)
 
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ProceduralDecomposerSprite = preload("res://src/rendering/procedural_decomposer_sprite.gd")
@@ -108,6 +131,20 @@ var _elapsed_time := 0.0
 var _sprite: Sprite2D
 static var _procedural_generator := ProceduralDecomposerSprite.new()
 static var _illustrated_generator := IllustratedDecomposerSprite.new()
+
+## The owning EarthChunkManager, for leaf-litter foraging ONLY (see
+## _nearest_food's own leaf-litter branch) -- optional and duck-typed, the
+## same `_world`/setup shape CreatureMarker already uses. A decomposer built
+## standalone (most of this file's own tests) simply never finds leaf
+## litter and keeps foraging carrion/fruit exactly as it always has.
+var _world = null
+
+
+## Gives this decomposer the world it can query for chunk-specific leaf
+## litter (see _world's own doc comment). Without it, _nearest_food falls
+## back to carrion/fruit foraging only, exactly as before this feature.
+func setup(world) -> void:
+	_world = world
 
 
 func _ready() -> void:
@@ -321,6 +358,22 @@ func _nearest_food() -> Node2D:
 		if distance <= best_effective_distance:
 			best = node
 			best_effective_distance = distance
+
+	# Fallen-leaf litter (see docs/concept/leaf_litter.md) -- the one
+	# chunk-specific case this marker needs an injected _world for at all
+	# (see that field's own doc comment). Scored at its real distance, the
+	# same as fallen fruit/nuts just above: a leaf has no fly-attraction
+	# mechanic of its own either.
+	if _world != null and _world.has_method("nearest_leaf_litter_near"):
+		var leaf_found: Dictionary = _world.nearest_leaf_litter_near(position, best_effective_distance)
+		if not leaf_found.is_empty():
+			var leaf_distance: float = position.distance_to(leaf_found.position)
+			if leaf_distance <= best_effective_distance:
+				var handle := LeafForageHandle.new()
+				handle.position = leaf_found.position
+				handle._world = _world
+				best = handle
+				best_effective_distance = leaf_distance
 	return best
 
 
@@ -358,6 +411,15 @@ func _step_feeding(delta: float) -> void:
 			# several visits, same as always.
 			_target.take_bite(BITE_AMOUNT)
 			_step_disease_carry()
+		elif _target.has_method("consume_leaf_litter"):
+			# Fallen-leaf litter (see _nearest_food's own leaf-litter
+			# branch): the handle itself has no health pool either -- one
+			# visit removes the real record from its LeafLitterField (see
+			# LeafForageHandle.consume_leaf_litter). free(), not queue_free():
+			# this handle was never added to the tree in the first place, so
+			# there is no same-frame-iteration hazard to defer around.
+			_target.consume_leaf_litter()
+			_target.free()
 		else:
 			# Fallen fruit/nut (see _nearest_food): a dropped cherry is not a
 			# boar carcass -- there is no health pool to whittle down, a

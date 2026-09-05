@@ -51,6 +51,7 @@ const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
 const BuildingStatics = preload("res://src/gameplay/building_statics.gd")
 const Chunk = preload("res://src/world/chunk.gd")
+const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -1996,9 +1997,27 @@ func _set_world_age_at_year_fraction(fraction: float) -> void:
 	manager.set_world_age_seconds(fraction * SeasonCycle.SECONDS_PER_YEAR)
 
 
-## Finds the first dropped leaf item for `species_id` across up to
-## `attempts` fruiting steps, or an empty array if none fell. Returns
-## [item_stack, world_position].
+## The chunk-local LeafLitterField a tree at `tree_position` would fall
+## into, creating it on demand -- these tests build a bare `manager` and
+## inject trees directly into `_loaded_trees` (see before_each's own doc
+## comment on why this file never calls the real, expensive update()), so
+## the normal chunk-load path that would otherwise create this field (see
+## EarthChunkManager's own leaf-fall wiring) never runs here either.
+func _leaf_litter_field_for(tree_position: Vector2) -> LeafLitterField:
+	var chunk_coord: Vector2i = manager._chunk_coord_for_tile(
+		manager._world_tile_for_pixel(tree_position)
+	)
+	if not manager._leaf_litter_fields.has(chunk_coord):
+		manager._leaf_litter_fields[chunk_coord] = LeafLitterField.new()
+	return manager._leaf_litter_fields[chunk_coord]
+
+
+## Finds the first fallen-leaf record for `species_id` across up to
+## `attempts` fruiting steps, or {} if none fell (see LeafLitterField's own
+## doc comment for the record shape). Leaves accumulate in the field across
+## attempts (nothing here ever consumes one), so this is really "has one
+## fallen at all yet", the same thing the old WorldItemBus-signal-count
+## version checked.
 ##
 ## Advances the world clock by FRUITING_INTERVAL between attempts -- the
 ## per-step roll is a deterministic hash of (tree seed, step_bucket), see
@@ -2008,35 +2027,19 @@ func _set_world_age_at_year_fraction(fraction: float) -> void:
 ## ATTEMPTS stays a tiny fraction of a season's own span, so this never
 ## risks drifting into the next season mid-loop.
 ##
-## Forces LEAF_LITTER_ENABLED on for the lookup by default (restoring
-## whatever it was after) -- the leaf-fall mechanism itself (angle/
-## distance/season/sprite_id) is still real, tested logic even while the
-## flag ships off by default (see that constant's own doc comment); pass
-## force_enabled=false for the one test that specifically wants to see the
-## flag's OFF behaviour instead.
 func _find_a_fallen_leaf(
 	species_id: String, tree_position: Vector2, player_pixel: Vector2,
-	attempts: int = _LEAF_ROLL_ATTEMPTS, force_enabled: bool = true
-) -> Array:
-	var previous_enabled := EarthChunkManager.LEAF_LITTER_ENABLED
-	if force_enabled:
-		EarthChunkManager.LEAF_LITTER_ENABLED = true
-	var leaf_id := "%s_leaf" % species_id
-	var result: Array = []
+	attempts: int = _LEAF_ROLL_ATTEMPTS
+) -> Dictionary:
+	var field := _leaf_litter_field_for(tree_position)
 	for attempt in attempts:
 		if attempt > 0:
 			manager.advance_world_age(EarthChunkManager.FRUITING_INTERVAL)
 		manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, player_pixel)
-		var drops = get_signal_emit_count(WorldItemBus, "item_dropped")
-		for i in drops:
-			var params = get_signal_parameters(WorldItemBus, "item_dropped", i)
-			if params[0].item.id == leaf_id:
-				result = params
-				break
-		if not result.is_empty():
-			break
-	EarthChunkManager.LEAF_LITTER_ENABLED = previous_enabled
-	return result
+		for leaf in field.leaves():
+			if leaf.species == species_id:
+				return leaf
+	return {}
 
 
 func test_step_fruiting_drops_a_leaf_from_a_turning_tree():
@@ -2047,16 +2050,15 @@ func test_step_fruiting_drops_a_leaf_from_a_turning_tree():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
 
-	watch_signals(WorldItemBus)
 	var found := _find_a_fallen_leaf("cherry", tree.position, tree.position)
 
 	assert_false(found.is_empty(), "a tree well into its autumn turn should shed a real leaf item")
 
 
-## The item's own sprite_id carries which season it fell in (see
-## DroppedItem, IllustratedTree.foliage_leaf_for) -- the mechanism that
-## actually gives a leaf its correct colour.
-func test_an_autumn_leaf_s_sprite_id_names_autumn():
+## The record's own `season` field carries which season it fell in (see
+## LeafLitterAtlas/LeafLitterRenderer) -- the mechanism that actually gives
+## a leaf its correct colour.
+func test_a_leaf_records_the_autumn_season_it_fell_in():
 	var tree := ChoppableTree.new()
 	tree.position = _position_for_species("cherry")
 	tree.bind_canopy(Sprite2D.new())
@@ -2064,11 +2066,10 @@ func test_an_autumn_leaf_s_sprite_id_names_autumn():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
 
-	watch_signals(WorldItemBus)
 	var found := _find_a_fallen_leaf("cherry", tree.position, tree.position)
 
 	assert_false(found.is_empty(), "precondition: a leaf should have fallen")
-	assert_eq(found[0].item.sprite_id, "cherry_leaf_autumn")
+	assert_eq(found.season, "autumn")
 
 
 ## Reported: "when they fall in summer they should be green" -- a real,
@@ -2082,13 +2083,12 @@ func test_step_fruiting_also_drops_a_light_summer_trickle():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_SETTLED_SUMMER_YEAR_FRACTION)
 
-	watch_signals(WorldItemBus)
 	var found := _find_a_fallen_leaf(
 		"cherry", tree.position, tree.position, _LEAF_TRICKLE_ROLL_ATTEMPTS
 	)
 
 	assert_false(found.is_empty(), "a settled summer tree should still shed an occasional leaf")
-	assert_eq(found[0].item.sprite_id, "cherry_leaf_summer")
+	assert_eq(found.season, "summer")
 
 
 ## Spring, before blossom even opens, is neither the autumn turn nor the
@@ -2102,22 +2102,20 @@ func test_step_fruiting_drops_no_leaf_in_early_spring():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_SETTLED_SPRING_YEAR_FRACTION)
 
-	watch_signals(WorldItemBus)
+	var field := _leaf_litter_field_for(tree.position)
 	for attempt in _LEAF_ROLL_ATTEMPTS:
 		manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, tree.position)
-	var drops = get_signal_emit_count(WorldItemBus, "item_dropped")
 	var saw_leaf := false
-	for i in drops:
-		var stack = get_signal_parameters(WorldItemBus, "item_dropped", i)[0]
-		if stack.item.id == "cherry_leaf":
+	for leaf in field.leaves():
+		if leaf.species == "cherry":
 			saw_leaf = true
 	assert_false(saw_leaf, "nothing has started shedding yet in early spring")
 
 
-## Oak's own fallen leaf reads as an oak leaf, not a literal "Acorn Leaf" --
-## and it is litter, not food, so it should not spoil like a dropped nut
-## does (see DroppedItem's own food-only spoilage branch).
-func test_a_leaf_item_is_named_and_kinded_correctly():
+## Oak's own fallen leaf records species "acorn" (TreeSpecies' own id for the
+## tree, not a literal "oak") -- LeafLitterAtlas's own art lookup keys off
+## this same species id (see that class's own cell_index).
+func test_a_leaf_records_its_own_species():
 	var tree := ChoppableTree.new()
 	tree.position = _position_for_species("acorn")
 	tree.bind_canopy(Sprite2D.new())
@@ -2125,14 +2123,10 @@ func test_a_leaf_item_is_named_and_kinded_correctly():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
 
-	watch_signals(WorldItemBus)
 	var found := _find_a_fallen_leaf("acorn", tree.position, tree.position)
 
 	assert_false(found.is_empty(), "precondition: an acorn tree should shed a leaf")
-	var leaf_stack = found[0]
-	assert_eq(leaf_stack.item.display_name, "Oak Leaf")
-	assert_eq(leaf_stack.item.kind, "material", "litter, not food -- it must not spoil like one")
-	assert_eq(leaf_stack.count, 1)
+	assert_eq(found.species, "acorn")
 
 
 func test_a_leaf_lands_near_its_own_tree():
@@ -2143,55 +2137,13 @@ func test_a_leaf_lands_near_its_own_tree():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
 
-	watch_signals(WorldItemBus)
 	var found := _find_a_fallen_leaf("cherry", tree.position, tree.position)
 
 	assert_false(found.is_empty(), "precondition: a leaf should have fallen")
-	var leaf_at: Vector2 = found[1]
+	var leaf_at: Vector2 = found.position
 	assert_lt(
 		tree.position.distance_to(leaf_at), EarthChunkManager.LEAF_SCATTER_RADIUS + 1.0,
 		"a leaf landed nowhere near its own tree"
-	)
-
-
-# -- LEAF_LITTER_ENABLED: an off-by-default kill switch -----------------------
-#
-# Reported live: one real DroppedItem node per leaf (Sprite2D + Area2D +
-# CollisionShape2D, ticking _process() every frame -- see docs/concept/
-# leaf_litter.md) crippled the game to ~1fps. A GPU-instanced rewrite is in
-# progress on a separate branch, but the CURRENT mechanism needs to stop
-# running on main right now, not once that lands -- so this is a flat kill
-# switch on step_fruiting's own leaf-fall block, same shape as
-# EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED's own instance flag.
-
-func test_leaf_litter_is_off_by_default():
-	# Off until the GPU-instanced rewrite replaces the per-node mechanism
-	# this flag gates -- see this constant's own doc comment.
-	assert_false(EarthChunkManager.LEAF_LITTER_ENABLED)
-
-
-func test_step_fruiting_drops_no_leaf_when_leaf_litter_disabled():
-	var tree := ChoppableTree.new()
-	tree.position = _position_for_species("cherry")
-	tree.bind_canopy(Sprite2D.new())
-	entities_parent.add_child(tree)
-	manager._loaded_trees[Vector2i(0, 0)] = [tree]
-	# Fully turned autumn, well past the turning point -- the exact
-	# precondition test_step_fruiting_drops_a_leaf_from_a_turning_tree
-	# already relies on to guarantee a shed leaf when the switch is on.
-	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
-
-	watch_signals(WorldItemBus)
-	# force_enabled=false -- this is the one test that wants the real,
-	# shipped OFF behaviour, not _find_a_fallen_leaf's own default of
-	# forcing the flag on to exercise the underlying mechanism.
-	var found := _find_a_fallen_leaf(
-		"cherry", tree.position, tree.position, _LEAF_ROLL_ATTEMPTS, false
-	)
-
-	assert_true(
-		found.is_empty(),
-		"no leaf should fall while LEAF_LITTER_ENABLED is off, however far into its turn the tree is"
 	)
 
 
@@ -5914,6 +5866,117 @@ func test_evicting_old_chunks_frees_ant_mound_markers():
 	manager.update(far_away_tile)
 
 	assert_false(manager._ant_mound_markers.has(old_chunk))
+
+
+# -- leaf litter rendering: one MultiMeshInstance2D per chunk (see
+# LeafLitterRenderer, docs/concept/leaf_litter.md) -- mirrors the ant-mound-
+# marker lifecycle tests just above, but _load_chunk/_unload_chunk directly
+# rather than the slow real update() -- this file's own CONTRIBUTING.md notes
+# on why a real update() call is expensive; nothing about THIS wiring needs
+# a real streaming pass, only a single chunk's own load/unload.
+
+func test_load_chunk_creates_a_leaf_litter_multimesh_parented_under_ground_decor():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	assert_true(manager._leaf_litter_mmis.has(chunk_coord))
+	var mmi: MultiMeshInstance2D = manager._leaf_litter_mmis[chunk_coord]
+	assert_eq(mmi.get_parent(), entities_parent, "ground decor falls back to entities_parent with no dedicated layer (see _ground_decor_parent's own doc comment)")
+
+
+func test_unload_chunk_frees_its_leaf_litter_multimesh():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var mmi: MultiMeshInstance2D = manager._leaf_litter_mmis[chunk_coord]
+
+	manager._unload_chunk(chunk_coord)
+
+	assert_false(manager._leaf_litter_mmis.has(chunk_coord))
+	assert_true(not is_instance_valid(mmi) or mmi.is_queued_for_deletion())
+
+
+## nearest_leaf_litter_near/consume_leaf_litter_at/disperse_leaf_litter_near
+## mirror worms_near/take_seed_at's own single-chunk-injection test style --
+## fast (no real chunk load needed), since these are mechanical 3x3-chunk-
+## neighbourhood passthroughs to LeafLitterField's own already-tested
+## methods (see test_leaf_litter_field.gd for the actual placement/roll
+## math).
+
+func _field_at(chunk_coord: Vector2i) -> LeafLitterField:
+	if not manager._leaf_litter_fields.has(chunk_coord):
+		manager._leaf_litter_fields[chunk_coord] = LeafLitterField.new()
+	return manager._leaf_litter_fields[chunk_coord]
+
+
+func test_nearest_leaf_litter_near_finds_a_leaf_in_the_center_chunk():
+	var field := _field_at(Vector2i(0, 0))
+	field.add_leaf(Vector2(10, 10), "cherry", "autumn", 0.0)
+	var found := manager.nearest_leaf_litter_near(Vector2(12, 10), 20.0)
+	assert_eq(found.get("species"), "cherry")
+
+
+func test_nearest_leaf_litter_near_reaches_into_a_neighbouring_chunk():
+	var chunk_size_px := EarthChunkManager.CHUNK_SIZE * TerrainRenderer.TILE_SIZE
+	# Just across the boundary into chunk (1, 0), close to the query point in
+	# chunk (0, 0) -- only the 3x3-neighbourhood scan can find this.
+	var neighbour_position := Vector2(chunk_size_px + 5.0, 10.0)
+	var field := _field_at(Vector2i(1, 0))
+	field.add_leaf(neighbour_position, "acorn", "autumn", 0.0)
+	var found := manager.nearest_leaf_litter_near(Vector2(chunk_size_px - 5.0, 10.0), 20.0)
+	assert_eq(found.get("species"), "acorn")
+
+
+func test_consume_leaf_litter_at_removes_a_real_leaf_and_reports_success():
+	var field := _field_at(Vector2i(0, 0))
+	field.add_leaf(Vector2(10, 10), "cherry", "autumn", 0.0)
+	assert_true(manager.consume_leaf_litter_at(Vector2(10, 10)))
+	assert_eq(field.leaves().size(), 0)
+
+
+func test_consume_leaf_litter_at_misses_an_empty_position():
+	assert_false(manager.consume_leaf_litter_at(Vector2(10, 10)))
+
+
+func test_disperse_leaf_litter_near_can_relocate_a_settled_leaf():
+	var field := _field_at(Vector2i(0, 0))
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.TRANSITION_DURATION + 0.1)  # settle first
+	var moved := false
+	for attempt in 50:
+		manager.set_world_age_seconds(10.0 + attempt)
+		if manager.disperse_leaf_litter_near(Vector2(102, 100)):
+			moved = true
+			break
+	assert_true(moved, "a leaf this light should disperse within 50 contact rolls")
+
+
+func test_disperse_leaf_litter_near_misses_with_nothing_nearby():
+	assert_false(manager.disperse_leaf_litter_near(Vector2(900, 900)))
+
+
+## step_leaf_litter is what actually fills the MultiMesh from the field's own
+## current leaves -- proven here by a leaf the test injects directly into the
+## chunk's field (mirroring this file's own "poke internal state directly"
+## convention), then checking the MultiMesh picked it up. This can only prove
+## the ENGINE-VISIBLE instance_count/transform_format wiring, not that the
+## GPU actually draws the right pixels -- see test_leaf_litter_renderer_
+## smoke.gd for that.
+func test_step_leaf_litter_fills_the_multimesh_from_the_fields_current_leaves():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	# _decorates gates the fill on decoration range (see step_leaf_litter's
+	# own doc comment) -- a bare _load_chunk (unlike a real update()) never
+	# centres decoration on the chunk it just loaded, so this pokes that
+	# internal directly, the same "reach into manager state" convention this
+	# whole file already relies on.
+	manager._decoration_center = chunk_coord
+	var field: LeafLitterField = manager._leaf_litter_fields[chunk_coord]
+	field.add_leaf(Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE, "cherry", "autumn", 0.0)
+
+	manager.step_leaf_litter(0.016)
+
+	var mmi: MultiMeshInstance2D = manager._leaf_litter_mmis[chunk_coord]
+	assert_not_null(mmi.multimesh, "step_leaf_litter must build the MultiMesh once there is a leaf to show")
+	assert_eq(mmi.multimesh.instance_count, 1)
 
 
 ## The actual seed-take/replant already happened and is independently real

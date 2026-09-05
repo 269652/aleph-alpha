@@ -5,7 +5,6 @@ const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const Inventory = preload("res://src/gameplay/inventory.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
-const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 
@@ -190,138 +189,15 @@ func test_does_not_join_the_forageable_group_for_a_non_food_item():
 	)
 
 
-# -- fallen leaves (see docs/concept/leaf_litter.md): a leaf item is real ---
-# -- forage too, exactly like a fallen fruit, even though its own item -----
-# -- kind is "material" rather than "food" (litter does not spoil). --------
-
-func test_joins_the_forageable_group_when_holding_a_fallen_leaf():
-	var leaf := DroppedItem.new()
-	leaf.item_stack = ItemStack.new(Item.new("cherry_leaf", "Cherry Leaf", "material", 20), 1)
-	add_child_autofree(leaf)
-	assert_true(
-		leaf.is_in_group(DroppedItem.FORAGEABLE_GROUP_NAME),
-		"a fallen leaf should be cheaply findable by a foraging decomposer, same as a fallen fruit"
-	)
-
-
-## A leaf item whose species has real litter art (see IllustratedTree.
-## leaf_litter_for) uses it, the same "check real illustrated art first"
-## precedent the wild-carrot root texture above already sets.
-## sprite_id carries which season the leaf fell in (see EarthChunkManager's
-## own step_fruiting doc comment) -- a summer-fallen leaf reads green, an
-## autumn-fallen one orange, using the same real illustrated art per
-## species/season IllustratedTree.foliage_leaf_for resolves.
-func _leaf_item(species: String, season: String) -> ItemStack:
-	return ItemStack.new(
-		Item.new(
-			"%s_leaf" % species, "%s Leaf" % species.capitalize(), "material", 20,
-			0.0, "", 0.0, 0.0, "%s_leaf_%s" % [species, season]
-		),
-		1
-	)
-
-
-func test_a_summer_fallen_leaf_uses_the_green_illustrated_texture():
-	var leaf := DroppedItem.new()
-	leaf.item_stack = _leaf_item("cherry", "summer")
-	add_child_autofree(leaf)
-	var expected := IllustratedTree.new().foliage_leaf_for("cherry", "summer")
-	assert_not_null(expected, "precondition: cherry has real summer foliage art")
-	assert_eq(leaf.texture.get_image().get_data(), expected.get_image().get_data())
-
-
-func test_an_autumn_fallen_leaf_uses_the_orange_illustrated_texture():
-	var leaf := DroppedItem.new()
-	leaf.item_stack = _leaf_item("cherry", "autumn")
-	add_child_autofree(leaf)
-	var expected := IllustratedTree.new().foliage_leaf_for("cherry", "autumn")
-	assert_not_null(expected, "precondition: cherry has real autumn foliage art")
-	assert_eq(leaf.texture.get_image().get_data(), expected.get_image().get_data())
-	assert_ne(
-		leaf.texture.get_image().get_data(),
-		IllustratedTree.new().foliage_leaf_for("cherry", "summer").get_image().get_data(),
-		"an autumn leaf should not look identical to a summer one"
-	)
-
-
-## An unsupported season (this mechanism only resolves summer/autumn --
-## see IllustratedTree.foliage_leaf_for's own doc comment) falls back to
-## the generic procedural sprite rather than guessing at art, the same
-## fallback path a species with no illustrated art at all already uses.
-func test_a_leaf_with_an_unsupported_season_falls_back_to_the_generic_sprite():
-	var leaf := DroppedItem.new()
-	leaf.item_stack = _leaf_item("cherry", "winter")
-	add_child_autofree(leaf)
-	assert_not_null(leaf.texture, "an unsupported season should still fall back to a real sprite")
-	var illustrated := IllustratedTree.new().foliage_leaf_for("cherry", "summer")
-	assert_ne(
-		leaf.texture.get_image().get_data(), illustrated.get_image().get_data(),
-		"should not coincidentally reuse the summer texture"
-	)
-
-
-# -- falling and swaying (see docs/concept/leaf_litter.md): a leaf drops ---
-# -- from above and settles with a gentle ongoing sway, rather than -------
-# -- simply appearing already on the ground like every other dropped item -
-
-func test_a_dropped_leaf_starts_above_its_own_landing_position():
-	var leaf := DroppedItem.new()
-	leaf.item_stack = _leaf_item("cherry", "autumn")
-	leaf.position = Vector2(100, 200)
-	add_child_autofree(leaf)
-	assert_lt(leaf.position.y, 200.0, "a falling leaf should start above where it will land")
-
-
-## A non-leaf item (the default "hide" fixture) is not falling -- it
-## simply sits where it was placed, the same as before this mechanism
-## existed.
-func test_a_non_leaf_item_does_not_start_elevated():
-	item.position = Vector2(100, 200)
-	assert_almost_eq(item.position.y, 200.0, 0.001)
-
-
-func test_a_falling_leaf_reaches_its_landing_position_after_the_fall_duration():
-	var leaf := DroppedItem.new()
-	leaf.item_stack = _leaf_item("cherry", "autumn")
-	leaf.position = Vector2(100, 200)
-	add_child_autofree(leaf)
-	for i in 200:
-		leaf._process(DroppedItem.FALL_DURATION / 200.0)
-	assert_almost_eq(leaf.position.x, 100.0, 0.5)
-	assert_almost_eq(leaf.position.y, 200.0, 0.5)
-
-
-func test_a_falling_leaf_drifts_sideways_partway_through_its_fall():
-	var leaf := DroppedItem.new()
-	leaf.item_stack = _leaf_item("cherry", "autumn")
-	leaf.position = Vector2(100, 200)
-	add_child_autofree(leaf)
-	for i in 100:
-		leaf._process(DroppedItem.FALL_DURATION / 200.0)
-	assert_ne(leaf.position.x, 100.0, "a falling leaf should drift sideways, not drop in a straight line")
-
-
-## Once landed, a leaf keeps a small ongoing sway (real wind, not a one-
-## time animation that stops) -- its rotation keeps changing over time
-## rather than settling at a fixed value.
-func test_a_landed_leaf_keeps_swaying_gently():
-	var leaf := DroppedItem.new()
-	leaf.item_stack = _leaf_item("cherry", "autumn")
-	leaf.position = Vector2(100, 200)
-	add_child_autofree(leaf)
-	for i in 200:
-		leaf._process(DroppedItem.FALL_DURATION / 200.0)
-	var rotation_after_landing := leaf.rotation
-	for i in 30:
-		leaf._process(0.1)
-	assert_ne(leaf.rotation, rotation_after_landing, "a landed leaf should keep gently swaying")
-
-
-func test_a_non_leaf_item_does_not_sway():
-	item.position = Vector2(100, 200)
-	for i in 30:
-		item._process(0.1)
-	assert_almost_eq(item.rotation, 0.0, 0.001)
+## Fallen leaves are NOT DroppedItem any more (see docs/concept/
+## leaf_litter.md) -- they are cheap plain data in a per-chunk
+## LeafLitterField, rendered by LeafLitterRenderer's own GPU-instanced
+## MultiMesh. The leaf-specific coverage that used to live here (joining
+## FORAGEABLE_GROUP_NAME, illustrated-art-by-season texture selection, the
+## fall-and-settle-sway animation) now lives in test_leaf_litter_field.gd
+## (species/season data), test_leaf_litter_atlas.gd (art resolution), and
+## test_leaf_litter_renderer.gd/test_leaf_litter_renderer_smoke.gd (the
+## ported fall/sway math and its real-GPU proof) instead.
 
 
 func test_a_full_inventory_leaves_the_item_on_the_ground_with_the_remainder():

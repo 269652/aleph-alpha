@@ -70,6 +70,9 @@ const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite
 const AntColony = preload("res://src/world/ant_colony.gd")
 const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
+const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
+const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
+const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
@@ -309,22 +312,16 @@ const _NAMED_FRUIT_ITEMS := {
 	"pine": ["Pine Nuts", "food", 20],
 }
 
-## The fallen-leaf item alongside each species' own fruit/nut -- see
-## docs/concept/leaf_litter.md. Id is "<species>_leaf" uniformly (even
-## pine, whose real display name is "Pine Needles": a conifer sheds
-## needles rather than broadleaves, but fills the same litter role here,
-## and a uniform id keeps DroppedItem's own recognition of "is this a leaf
-## item" a single suffix check rather than a species-by-species list).
-## Kind "material", not "food" -- litter does not spoil the way a dropped
-## nut does (see DroppedItem's own food-only spoilage branch).
-const _LEAF_ITEMS := {
-	"cherry": ["cherry_leaf", "Cherry Leaf", "material", 20],
-	"apple": ["apple_leaf", "Apple Leaf", "material", 20],
-	"walnut": ["walnut_leaf", "Walnut Leaf", "material", 20],
-	"acorn": ["acorn_leaf", "Oak Leaf", "material", 20],
-	"hazelnut": ["hazelnut_leaf", "Hazelnut Leaf", "material", 20],
-	"pine": ["pine_leaf", "Pine Needles", "material", 20],
-}
+## Fallen leaves are no longer a real Item/ItemStack (see
+## docs/concept/leaf_litter.md) -- step_fruiting's own leaf-fall block below
+## adds a LeafLitterField record (species id + season) directly, with no
+## display-name/kind/max_stack table needed: litter is never inventoried,
+## inspected, or hover-named, so that data (this table used to carry it --
+## "Cherry Leaf", "Oak Leaf", "Pine Needles" for pine's needles specifically,
+## kind "material" since litter does not spoil the way a dropped nut does)
+## has no consumer left to serve. See git history for the removed
+## _LEAF_ITEMS table if a future feature needs it back (e.g. a litter
+## tooltip).
 
 ## Spread cadence: every SPREAD_INTERVAL seconds, SPREAD_ATTEMPTS_PER_TICK
 ## mature trees each attempt to plant a mutated-child sapling nearby (see
@@ -629,6 +626,21 @@ var _worm_sprite_generator := ProceduralWormSprite.new()
 ## Vector2i chunk_coord -> AntColony (see step_ants, docs/concept/soil_fauna.md
 ## "Ants").
 var _ant_colonies: Dictionary = {}
+## Vector2i chunk_coord -> LeafLitterField (see step_leaf_litter,
+## docs/concept/leaf_litter.md). Same create-at-load/erase-at-unload
+## lifecycle as _ant_colonies just above.
+var _leaf_litter_fields: Dictionary = {}
+## Vector2i chunk_coord -> MultiMeshInstance2D -- the visible counterpart to
+## _leaf_litter_fields, one GPU-instanced draw call per chunk (see
+## LeafLitterRenderer), parented under _ground_decor_parent (never
+## _ground_items -- see that field's own doc comment on why). Shares ONE
+## LeafLitterRenderer instance (_leaf_litter_renderer below) across every
+## chunk, the same "one generator, many sprites" convention
+## _illustrated_grass/_wind_sway already use -- the shader material and
+## atlas texture are identical for every chunk, so building them once and
+## reusing them is what keeps this a single shared cost, not a per-chunk one.
+var _leaf_litter_mmis: Dictionary = {}
+var _leaf_litter_renderer := LeafLitterRenderer.new()
 ## Vector2i chunk_coord -> Array[AntMoundMarker] -- the visible counterpart
 ## to _ant_colonies' own mound_cells(), one static marker per mound, spawned
 ## alongside the colony and freed with its chunk exactly like every other
@@ -1020,22 +1032,6 @@ func step_forage(delta_seconds: float) -> void:
 ## still loaded only get the cheap ambient step_forage drops.
 const FRUITING_DETAIL_RADIUS := 280.0
 const FRUITING_INTERVAL := 1.0
-
-## Off-by-default kill switch on the leaf-fall block below (see docs/concept/
-## leaf_litter.md). Reported live: one real DroppedItem node per fallen leaf
-## -- a Sprite2D + Area2D + CollisionShape2D, ticking _process() every frame
-## -- crippled the game to ~1fps. A GPU-instanced rewrite (one MultiMesh per
-## chunk, no per-leaf node) is in progress to replace the mechanism this
-## flag gates; until that lands, the existing per-node fall is switched off
-## rather than left running at an unplayable cost. Same shape as
-## EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED's own instance flag, except a
-## mutable `static var` rather than a `const`: the mechanism underneath still
-## needs its own direct coverage (angle/distance/season/sprite_id all still
-## real logic, not deleted), so test_earth_chunk_manager.gd's own
-## _find_a_fallen_leaf helper flips this on for the duration of a single
-## lookup and restores whatever it was after -- see that helper's own doc
-## comment. Pinned off by test_leaf_litter_is_off_by_default.
-static var LEAF_LITTER_ENABLED := false
 
 ## How far a fallen leaf scatters from its own trunk, in world pixels -- a
 ## real fallen fruit lands under exactly where it hung
@@ -3283,58 +3279,53 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 			# tree.set_ripe_fruit -- not a second schedule computing its
 			# own answer. Independent of whether fruit fell this same
 			# step -- a tree can shed a leaf with nothing left to fruit.
-			#
-			# Gated on LEAF_LITTER_ENABLED (see that constant's own doc
-			# comment) -- switched off entirely for now, not just throttled,
-			# since the mechanism it guards is one real node per leaf and
-			# that is what crippled performance, not the rate.
-			if LEAF_LITTER_ENABLED:
-				var leaf_fall_chance := 0.0
-				var leaf_fall_season := ""
-				if (
-					canopy_season == "autumn"
-					and canopy_turning_into == "winter"
-					and canopy_turn_progress > 0.0
-				):
-					# Chance rises with how far into its own turn the canopy
-					# is: a tree just beginning to turn sheds rarely, one
-					# nearly bare sheds almost every step.
-					leaf_fall_chance = canopy_turn_progress
-					leaf_fall_season = "autumn"
-				elif canopy_season == "summer":
-					leaf_fall_chance = LEAF_SUMMER_TRICKLE_CHANCE
-					leaf_fall_season = "summer"
-				if leaf_fall_chance > 0.0:
-					# Deterministic per-(tree, step) roll, not engine randf()
-					# -- see _LEAF_FALL_ROLL_STEPS' own doc comment.
-					var step_bucket := int(now / FRUITING_INTERVAL)
-					var roll := PixelNoise.range_index(tree.sprite_seed, step_bucket, 0, _LEAF_FALL_ROLL_STEPS)
-					if roll < int(leaf_fall_chance * _LEAF_FALL_ROLL_STEPS):
-						var leaf_spec: Array = _LEAF_ITEMS[species_id]
-						# sprite_id carries the season it fell in (see Item's
-						# own "art can diverge from identity" doc comment) --
-						# DroppedItem reads it back to pick the correctly-
-						# coloured art (green in summer, orange in autumn; see
-						# IllustratedTree.foliage_leaf_for). id/display_name/
-						# kind/max_stack stay exactly the shared item identity
-						# every cherry_leaf etc. has regardless of season.
-						var leaf_stack := ItemStack.new(
-							Item.new(
-								leaf_spec[0], leaf_spec[1], leaf_spec[2], leaf_spec[3],
-								0.0, "", 0.0, 0.0, "%s_%s" % [leaf_spec[0], leaf_fall_season]
-							),
-							1
-						)
-						var angle := deg_to_rad(float(
-							PixelNoise.range_index(tree.sprite_seed, step_bucket + 1, 0, 360)
-						))
-						var distance_fraction := float(
-							PixelNoise.range_index(tree.sprite_seed, step_bucket + 2, 0, 100)
-						) / 100.0
-						WorldItemBus.item_dropped.emit(
-							leaf_stack,
-							tree.position + Vector2(cos(angle), sin(angle)) * LEAF_SCATTER_RADIUS * distance_fraction
-						)
+			var leaf_fall_chance := 0.0
+			var leaf_fall_season := ""
+			if (
+				canopy_season == "autumn"
+				and canopy_turning_into == "winter"
+				and canopy_turn_progress > 0.0
+			):
+				# Chance rises with how far into its own turn the canopy
+				# is: a tree just beginning to turn sheds rarely, one
+				# nearly bare sheds almost every step.
+				leaf_fall_chance = canopy_turn_progress
+				leaf_fall_season = "autumn"
+			elif canopy_season == "summer":
+				leaf_fall_chance = LEAF_SUMMER_TRICKLE_CHANCE
+				leaf_fall_season = "summer"
+			if leaf_fall_chance > 0.0:
+				# Deterministic per-(tree, step) roll, not engine randf()
+				# -- see _LEAF_FALL_ROLL_STEPS' own doc comment.
+				var step_bucket := int(now / FRUITING_INTERVAL)
+				var roll := PixelNoise.range_index(tree.sprite_seed, step_bucket, 0, _LEAF_FALL_ROLL_STEPS)
+				if roll < int(leaf_fall_chance * _LEAF_FALL_ROLL_STEPS):
+					var angle := deg_to_rad(float(
+						PixelNoise.range_index(tree.sprite_seed, step_bucket + 1, 0, 360)
+					))
+					var distance_fraction := float(
+						PixelNoise.range_index(tree.sprite_seed, step_bucket + 2, 0, 100)
+					) / 100.0
+					var landing_position: Vector2 = (
+						tree.position
+						+ Vector2(cos(angle), sin(angle)) * LEAF_SCATTER_RADIUS * distance_fraction
+					)
+					# Real, individually-addressable litter data (see
+					# LeafLitterField), NOT a WorldItemBus/DroppedItem ground
+					# item any more -- the whole point of this rewrite (see
+					# docs/concept/leaf_litter.md). Species/season stay
+					# exactly what they always were; only WHERE that data
+					# lives changed. Keyed by the TREE's own chunk (not
+					# necessarily whichever chunk_coord _loaded_trees happens
+					# to file it under -- see that dict's own flat-iteration
+					# doc comment), same lookup take_fruit_at's neighbours
+					# use elsewhere in this file.
+					var leaf_chunk_coord := _chunk_coord_for_tile(
+						_world_tile_for_pixel(tree.position)
+					)
+					var leaf_field: LeafLitterField = _leaf_litter_fields.get(leaf_chunk_coord)
+					if leaf_field != null:
+						leaf_field.add_leaf(landing_position, species_id, leaf_fall_season, now)
 	_last_fruiting_time = now
 
 
@@ -6617,6 +6608,76 @@ func take_fruit_at(pixel_position: Vector2) -> String:
 	return ""
 
 
+## The single nearest fallen leaf to `pixel_position` within `radius_px`
+## world pixels, as {position, species, season} (see LeafLitterField's own
+## doc comment), or {} if none -- the concrete "is there litter nearby" query
+## both DecomposerMarker's forage rewire and the player/animal dispersal
+## entrypoints use. Scans only the 3x3 CHUNK NEIGHBOURHOOD around the query
+## point, not every loaded chunk -- same bound (and the same reason) as
+## worms_near/seeds_near: a leaf's own DecomposerMarker.SEARCH_RADIUS_PX (60)
+## is far smaller than a chunk, so the neighbourhood is a strict superset of
+## what can be in range.
+func nearest_leaf_litter_near(pixel_position: Vector2, radius_px: float) -> Dictionary:
+	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	var best := {}
+	var best_distance := radius_px
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var field: LeafLitterField = _leaf_litter_fields.get(center_chunk + Vector2i(dx, dy))
+			if field == null:
+				continue
+			var found := field.nearest_leaf_near(pixel_position, best_distance)
+			if found.is_empty():
+				continue
+			var distance: float = found.position.distance_to(pixel_position)
+			if distance <= best_distance:
+				best = found
+				best_distance = distance
+	return best
+
+
+## Removes the fallen leaf standing at `pixel_position`, if there is one
+## close enough (see LeafLitterField.CONSUME_TOLERANCE_PX) -- the mutation
+## counterpart of nearest_leaf_litter_near, mirroring take_fruit_at/
+## take_seed_at's identical best-effort contract. Same 3x3 chunk-neighbourhood
+## scan as nearest_leaf_litter_near, since a leaf just reported by that query
+## can be sitting in a neighbouring chunk's own field rather than the exact
+## chunk `pixel_position` resolves to.
+func consume_leaf_litter_at(pixel_position: Vector2) -> bool:
+	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var field: LeafLitterField = _leaf_litter_fields.get(center_chunk + Vector2i(dx, dy))
+			if field == null:
+				continue
+			if field.consume_leaf_at(pixel_position):
+				return true
+	return false
+
+
+## Player/animal contact dispersion (see docs/concept/leaf_litter.md) --
+## finds the single nearest leaf within PebbleDispersion.TRIGGER_RADIUS_PX
+## of `walker_position` (across the same 3x3 chunk neighbourhood
+## nearest_leaf_litter_near scans) and gives IT a chance to be nudged (see
+## LeafLitterField.try_disperse_near). Relocation stays within the leaf's
+## own originating chunk's field -- no cross-chunk hand-off bookkeeping, the
+## same "not worth the complexity for a cosmetic scatter" reasoning
+## relocate_leaf_near's own doc comment gives. Returns whether a leaf was
+## actually found and nudged.
+func disperse_leaf_litter_near(walker_position: Vector2) -> bool:
+	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(walker_position))
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var field: LeafLitterField = _leaf_litter_fields.get(center_chunk + Vector2i(dx, dy))
+			if field == null:
+				continue
+			if field.try_disperse_near(
+				walker_position, PebbleDispersion.TRIGGER_RADIUS_PX, _world_age_seconds
+			):
+				return true
+	return false
+
+
 ## The nearest tree within `max_distance` of `pixel_position` that currently
 ## carries real hanging fruit (FruitingModel.hanging_at > 0) -- the direct-
 ## from-the-branch counterpart to fruit_near/take_fruit_at above, which only
@@ -6764,6 +6825,44 @@ func step_ants(delta_seconds: float) -> void:
 				_forage_seed_near_mound(colony, origin, cell)
 			else:
 				_forage_windfall_near_mound(colony, origin, cell)
+
+
+## Central fallen-leaf-litter step (see LeafLitterField,
+## docs/concept/leaf_litter.md): every loaded chunk's field ages/prunes past
+## its own LIFETIME, and (for chunks actually in decoration range -- see
+## _decorates) its visible MultiMesh is refilled from the field's own
+## current leaves so a freshly-fallen leaf's fall animation is never delayed
+## behind a slow periodic sprite-refresh cadence the way _sync_flower_
+## sprites' own GRASS_REFRESH_INTERVAL is (a leaf's whole fall is over in
+## under a second -- see LeafLitterField.TRANSITION_DURATION -- so unlike a
+## flower's own many-minute growth, ANY multi-second sync lag here would
+## hide the animation entirely, not just delay it). Refilling a chunk's own
+## small, LIFETIME-bounded leaf count every tick is real, deliberate,
+## bounded-by-decoration-radius work -- cheap relative to the per-NODE
+## per-frame script/collision cost this whole rewrite exists to remove (see
+## docs/concept/leaf_litter.md), not the same kind of cost at all.
+##
+## The day's live per-chunk wind (see set_wind) is read the SAME way
+## step_flowers already reads it for seed dispersal -- no new weather state.
+func step_leaf_litter(delta_seconds: float) -> void:
+	_leaf_litter_renderer.set_current_time(_world_age_seconds)
+	var weather_day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
+	for chunk_coord in _leaf_litter_fields:
+		var field: LeafLitterField = _leaf_litter_fields[chunk_coord]
+		var region_seed := hash("%d_%d" % [chunk_coord.x, chunk_coord.y])
+		field.set_wind(
+			_weather_model.wind_direction_for(weather_day, region_seed),
+			_weather_model.dispersal_strength_for(
+				_weather_model.weather_at(weather_day, region_seed)
+			)
+		)
+		field.advance(delta_seconds, _world_age_seconds)
+		var mmi: MultiMeshInstance2D = _leaf_litter_mmis.get(chunk_coord)
+		if mmi == null:
+			continue
+		mmi.visible = _decorates(chunk_coord)
+		if mmi.visible:
+			_leaf_litter_renderer.fill(mmi, field.leaves())
 
 
 ## One mound's forager: look for the nearest fallen grass seed within its
@@ -8885,6 +8984,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_entities_parent, _biome_classifier.dominant_biome(chunk.biome), chunk_coord * CHUNK_SIZE,
 		CHUNK_SIZE, TerrainRenderer.TILE_SIZE, hash("%d_%d_decomposers" % [chunk_coord.x, chunk_coord.y])
 	)
+	# Gives each freshly-spawned decomposer this manager as its optional
+	# `_world` (see DecomposerMarker.setup) -- the one thing it needs an
+	# injected world for at all: finding chunk-specific leaf litter (see
+	# docs/concept/leaf_litter.md).
+	for decomposer_marker in _decomposer_markers[chunk_coord]:
+		decomposer_marker.setup(self)
 
 	# Re-staff every Sägewerk this chunk already had persisted, before this
 	# load, with a fresh Lumberjack -- "an NPC moves in" applies just as much
@@ -8969,6 +9074,17 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_entities_parent.add_child(marker)
 		mound_markers.append(marker)
 	_ant_mound_markers[chunk_coord] = mound_markers
+
+	# Fallen-leaf litter (see docs/concept/leaf_litter.md). Empty at
+	# creation -- unlike the ant mounds/earthworm burrows above, litter is
+	# never seeded up front; step_fruiting's own leaf-fall block populates it
+	# over time as trees actually shed.
+	_leaf_litter_fields[chunk_coord] = LeafLitterField.new()
+	# Its visible counterpart: one MultiMeshInstance2D, empty until
+	# step_leaf_litter's own fill() call gives it real leaves to draw.
+	var leaf_litter_mmi := MultiMeshInstance2D.new()
+	_ground_decor_parent.add_child(leaf_litter_mmi)
+	_leaf_litter_mmis[chunk_coord] = leaf_litter_mmi
 
 	_ecosystem.add_region(chunk_coord, chunk)
 	# Robin/sparrow's food-density signal (worm burrows, ground seed cells)
@@ -9500,6 +9616,11 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for marker in _ant_mound_markers.get(chunk_coord, []):
 		marker.free()
 	_ant_mound_markers.erase(chunk_coord)
+
+	_leaf_litter_fields.erase(chunk_coord)
+	if _leaf_litter_mmis.has(chunk_coord):
+		_leaf_litter_mmis[chunk_coord].free()
+		_leaf_litter_mmis.erase(chunk_coord)
 
 	# Snapshot the aggregate ecology before dropping the region, so revisiting
 	# this chunk catch-up integrates from where it left off (see

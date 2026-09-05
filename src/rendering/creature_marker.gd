@@ -368,6 +368,8 @@ var _attack_cooldown_remaining := 0.0
 ## player.gd's WATER_RIPPLE_INTERVAL.
 const WATER_RIPPLE_INTERVAL := 0.4
 var _water_ripple_accumulator := 0.0
+## See _step_leaf_litter_dispersal's own doc comment.
+var _leaf_dispersal_accumulator := 0.0
 
 ## Flower seed this animal is currently carrying, and where it picked it up
 ## (see EarthChunkManager._step_seed_dispersal / SeedDispersal). Empty string
@@ -775,6 +777,7 @@ func _process(frame_delta: float) -> void:
 		_step_led_movement(delta)
 		_animation_step()
 		_step_water_ripple(delta)
+		_step_leaf_litter_dispersal(delta)
 		_sync_grounded_children()
 		return
 
@@ -785,12 +788,14 @@ func _process(frame_delta: float) -> void:
 		_step_order(delta)
 		_animation_step()
 		_step_water_ripple(delta)
+		_step_leaf_litter_dispersal(delta)
 		_sync_grounded_children()
 		return
 
 	if _step_foraging(delta):
 		_animation_step()
 		_step_water_ripple(delta)
+		_step_leaf_litter_dispersal(delta)
 		_sync_grounded_children()
 		return  # head down: a grazing animal is planted, it does not move
 
@@ -854,6 +859,7 @@ func _process(frame_delta: float) -> void:
 	_apply_decision(decision, _cached_threats, _cached_prey, delta)
 	_animation_step()
 	_step_water_ripple(delta)
+	_step_leaf_litter_dispersal(delta)
 	_sync_grounded_children()
 
 
@@ -1355,6 +1361,33 @@ func _step_water_ripple(delta: float) -> void:
 	_water_ripple_accumulator = 0.0
 	if _world.has_method("record_water_disturbance"):
 		_world.record_water_disturbance(position)
+
+
+## How often this creature gets a chance to disperse leaf litter it is
+## walking near (see EarthChunkManager.disperse_leaf_litter_near,
+## docs/concept/leaf_litter.md) -- self-throttled the same way
+## WATER_RIPPLE_INTERVAL is, so a whole loaded world of walking/grazing
+## creatures isn't rescanning nearby litter every single frame each.
+const LEAF_DISPERSAL_INTERVAL := 0.5
+
+
+## "Walking over" fallen leaves already means grounded contact -- unlike
+## _step_water_ripple, which only fires while actually swimming, this needs
+## no _current_action gate at all: whatever this creature is doing this
+## frame (walking, foraging, fleeing...), it can still be standing on
+## litter, so this naturally only ever applies to creatures actually
+## standing on the ground (nothing further to filter, per docs/concept/
+## leaf_litter.md). `_world` is the owning EarthChunkManager, duck-typed
+## the same as every other optional _world call this marker makes.
+func _step_leaf_litter_dispersal(delta: float) -> void:
+	if _world == null:
+		return
+	_leaf_dispersal_accumulator += delta
+	if _leaf_dispersal_accumulator < LEAF_DISPERSAL_INTERVAL:
+		return
+	_leaf_dispersal_accumulator = 0.0
+	if _world.has_method("disperse_leaf_litter_near"):
+		_world.disperse_leaf_litter_near(position)
 
 
 ## Swaps the sprite among this action's generated frames (see

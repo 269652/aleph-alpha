@@ -77,6 +77,21 @@ func test_the_weights_are_ordered_the_way_the_seeds_fall():
 	assert_lt(WindDispersal.WEIGHT_TREE_FRUIT, WindDispersal.WEIGHT_NUT)
 
 
+## A fallen leaf (see docs/concept/leaf_litter.md's wind-driven relocation
+## section) is not a true wind-dispersal seed structure -- a dandelion's own
+## plume is a real aerodynamic adaptation for travelling far on the
+## faintest breeze, which a leaf's flat blade is not -- so it sits ABOVE
+## WEIGHT_FLOWER_SEED. But its large surface-area-to-mass ratio (the reason
+## a dry leaf skitters and tumbles across open ground in an ordinary breeze,
+## a familiar autumn sight) makes it far more wind-mobile than a small,
+## solid berry pip, so it sits BELOW WEIGHT_BERRY_PIP -- lighter than every
+## true propagule this file models, heavier than the one thing specifically
+## built to ride the wind.
+func test_a_leaf_sits_between_a_flower_seed_and_a_berry_pip():
+	assert_lt(WindDispersal.WEIGHT_FLOWER_SEED, WindDispersal.WEIGHT_LEAF)
+	assert_lt(WindDispersal.WEIGHT_LEAF, WindDispersal.WEIGHT_BERRY_PIP)
+
+
 # -- most near, a little far -------------------------------------------------
 
 ## Real wind dispersal is heavy tailed: the bulk falls within a few
