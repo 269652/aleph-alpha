@@ -132,15 +132,26 @@ func test_a_seed_spread_sapling_cannot_root_in_a_real_river_cell():
 	fail_test("expected at least one real river cell near Berlin (the Spree)")
 
 
-## Reported directly after playtesting: rivers were "still treated like
-## normal biome... snow falls on rivers" -- a river's OWN biome is
-## untouched land (see docs/concept/rivers.md's Rendering section), so
-## _paint_snow_tile's existing ocean-only water check never caught it. Same
-## bug class this file already regression-tests for TREES standing in a
-## lake (_can_root_at's own doc comment), just never extended to snow, and
-## now recurring for rivers specifically. Berlin sits on the Spree's own
-## curated course, so this is a real, not hypothetical, river cell.
-func test_snow_does_not_cover_a_real_river_cell_even_at_full_depth():
+## Reported from a screenshot: near a river, the snow/water boundary showed
+## a jagged staircase instead of the river's own smoothly curved bank. Root
+## cause was THIS exclusion -- a whole tile lost its snow presence cell
+## whenever Chunk.blocks_ground_cover (river OR lake) was true, at the
+## coarse, binary, RIVER_HALF_WIDTH_TILES-distance granularity a tile is
+## flagged "river" at, while the river's own visible edge is a smooth,
+## continuous, sub-tile curve (see river_flow_shader.gd's |across|==1
+## feathered edge). Those two boundaries don't coincide except by
+## accident, and the mismatch is what reads as a staircase along any
+## curved or diagonal reach.
+##
+## Unlike grass/trees (which draw as a LATER sibling than RiverFlowFx, so
+## nothing else would hide one standing in the river -- see tall_grass.gd/
+## tree_renderer.gd's own river exclusions), SnowFx is an EARLIER sibling
+## (test_world_ground_layer_order.gd), so the river overlay already draws
+## on top of it every frame -- a river/lake tile can safely keep its snow
+## presence cell. See docs/concept/snow_cover.md#snow-under-a-river-reads-
+## as-a-staircase. Berlin sits on the Spree's own curated course, so this
+## is a real, not hypothetical, river cell.
+func test_snow_covers_a_real_river_cell_so_the_overlay_can_hide_it_seamlessly():
 	var snow_layer := TileMapLayer.new()
 	manager.set_snow_layer(snow_layer)
 	manager.update(_berlin_tile)
@@ -156,9 +167,12 @@ func test_snow_does_not_cover_a_real_river_cell_even_at_full_depth():
 				if not manager.is_river_at_global(global_x, global_y):
 					continue
 				found_a_river_cell = true
-				assert_false(
+				assert_true(
 					snow_layer.get_used_cells().has(Vector2i(global_x, global_y)),
-					"river cell (%d, %d) must not show snow" % [global_x, global_y]
+					(
+						"river cell (%d, %d) should still get a snow presence cell -- " +
+						"the river overlay hides it, an exclusion should not"
+					) % [global_x, global_y]
 				)
 	assert_true(found_a_river_cell, "expected at least one real river cell near Berlin (the Spree)")
 	snow_layer.free()

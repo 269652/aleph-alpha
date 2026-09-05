@@ -4474,6 +4474,21 @@ func _refresh_snow_trail_mask() -> void:
 ## coverage no longer depends on which cells are painted, only on the
 ## snow_depth uniform, so there is nothing here for a later depth change to
 ## invalidate.
+##
+## River and lake tiles are DELIBERATELY left painted, not excluded like
+## ocean -- see docs/concept/snow_cover.md#snow-under-a-river-reads-as-a-
+## staircase. Excluding them (as this used to) meant a whole tile lost its
+## snow at the coarse, binary, RIVER_HALF_WIDTH_TILES-distance granularity
+## Chunk.is_river/is_lake are baked at, while the river-flow overlay's own
+## visible edge is a smooth, continuous, sub-tile curve -- the two
+## boundaries don't coincide except by accident, and the mismatch reported
+## as a staircase along any curved or diagonal reach. SnowFx is an EARLIER
+## sibling than RiverFlowFx (test_world_ground_layer_order.gd), so the
+## river already draws on top of this layer every frame; a painted river
+## cell is simply hidden by it, seamlessly, at the river's own real edge --
+## unlike GroundDecor (grass/trees), which draws OVER the river and so
+## still needs its own placement exclusion (tall_grass.gd/tree_renderer.gd)
+## to avoid standing visibly in the water.
 func _paint_snow_presence(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	if _snow_layer == null:
 		return
@@ -4481,16 +4496,12 @@ func _paint_snow_presence(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	for y in chunk.height:
 		for x in chunk.width:
 			var global := origin + Vector2i(x, y)
-			# Water does not take snow -- it freezes or it does not, which is
-			# a different thing and not this one. A river's own biome is
-			# untouched land (see docs/concept/rivers.md's Rendering
-			# section), so it must be excluded separately from ocean --
-			# reported live: "snow falls on rivers".
+			# Ocean does not take snow -- it freezes or it does not, which is
+			# a different thing and not this one. Ocean has no analogous
+			# on-top overlay to hide a painted cell (WaterFx is a coarser
+			# shore-distance tile approach, not the river's continuous
+			# field), so it stays a real exclusion, not just a paint-under.
 			if chunk.biome[y * chunk.width + x] == "ocean":
-				continue
-			# Rivers AND lakes (docs/concept/hydrology.md) -- both are
-			# overlay flags on land biome, both read from the one predicate.
-			if chunk.blocks_ground_cover(y * chunk.width + x):
 				continue
 			_snow_layer.set_cell(global, 0, SnowBombShader.PRESENCE_ATLAS_COORD)
 

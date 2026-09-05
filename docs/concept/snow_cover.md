@@ -197,11 +197,13 @@ reach the ground.
 Per frame: push one float (`depth`), and the trail mask only when a
 footstep actually landed.
 
-Per chunk load: paint a plain presence cell for every non-ocean tile, once.
-Water does not take snow — freezing is a different mechanic and not this
-one — and this is the only reason the layer is a `TileMapLayer` at all
-rather than one screen-sized quad: the tile grid is what carries "this
-ground is land", which the shader cannot know.
+Per chunk load: paint a plain presence cell for every non-ocean tile, once
+— **including river and lake tiles** (see "Snow under a river reads as a
+staircase" below). Ocean does not take snow — freezing is a different
+mechanic and not this one — and this whole-tile ocean check is the only
+reason the layer is a `TileMapLayer` at all rather than one screen-sized
+quad: the tile grid is what carries "this ground is land", which the
+shader cannot know.
 
 Per depth change: **nothing.** This is the whole point. The tile-based
 implementation swept every loaded tile every 2 seconds, recomputing bands
@@ -210,6 +212,47 @@ sweep over the real ~22,700-tile loaded field, after an onset cache had
 already cut it from ~200 ms. That sweep, its three per-tile dictionaries,
 its 100-image baked atlas and its whole diff-tracking architecture are
 deleted, not optimized.
+
+### Snow under a river reads as a staircase
+
+Reported from a screenshot: near a river, the snow/water boundary was a
+visible jagged staircase instead of following the river's own smoothly
+curved bank.
+
+`_paint_snow_presence` used to also exclude every tile where
+`Chunk.blocks_ground_cover` was true (river OR lake — see
+[hydrology.md](hydrology.md)), the same exclusion tree/tall-grass/tree-
+rooting placement already use to keep themselves out of the water (see
+`tall_grass.gd`, `tree_renderer.gd`, `EarthChunkManager._can_root_at`).
+For THOSE systems that exclusion is load-bearing: their sprites are parented
+under `GroundDecor`, drawn as a *later* sibling than `RiverFlowFx` (see
+"Rendering: overlay, not a new biome" in [rivers.md](rivers.md)), so nothing
+else would hide a tree standing in the river.
+
+Snow is the opposite case, and this is the fact the bug turned on:
+`SnowFx` is an *earlier* sibling than `RiverFlowFx` at the same z_index
+(pinned by `test_world_ground_layer_order.gd`), so the river overlay
+already draws on top of it every frame. Excluding river/lake tiles from
+snow was therefore never load-bearing the way it is for grass/trees — it
+just meant a whole tile's snow vanished at the coarse, binary,
+`RIVER_HALF_WIDTH_TILES`-distance granularity `Chunk.is_river` is baked at
+(see [rivers.md](rivers.md)'s `river_catalog.gd`), while the river's own
+visible edge is a smooth, continuous, sub-tile curve (`|across| == 1`,
+feathered — see `river_flow_shader.gd`). Those two boundaries don't
+coincide except by accident, especially on a diagonal or curved reach, and
+the mismatch between a square tile-grid cutoff and a smoothly curved real
+edge is exactly what reads as a staircase.
+
+The fix removes the river/lake half of the exclusion and keeps only the
+ocean check: a river or lake tile now gets a snow presence cell like any
+other land tile, and the river-flow overlay's own already-on-top, already
+sub-tile-accurate edge is what makes the boundary read as seamless — no
+new curve for snow to compute, the same one the river already draws itself
+with. **Ocean is deliberately left excluded and not fixed here**: `WaterFx`
+(the ocean shore overlay) is a simpler shore-distance tile approach, not
+the continuous `|across|` field `RiverFlowFx` reconstructs, so this same
+fix does not extend to it — a coastline under snow may show an analogous,
+un-addressed artifact.
 
 ## The CPU mirror
 
@@ -276,6 +319,12 @@ for, and why both exist.
   creature) so a creature's own tread cannot relocate the mask window away
   from the player. See this section's own "Tracks are not player-only"
   paragraph above.
+- ✅ **Snow now covers river and lake tiles too** — see "Snow under a river
+  reads as a staircase" above. `_paint_snow_presence` no longer excludes
+  `Chunk.blocks_ground_cover` tiles, only ocean; the river-flow overlay's
+  own already-on-top, sub-tile-accurate edge is what keeps the boundary
+  looking seamless. Ocean coastlines are unchanged and may still show an
+  analogous artifact — not fixed here.
 - ⬜ **Far-world precision** — the no-`sin(` structural pin exists
   (`SHADER_CODE` greps clean), but there is no real-GPU readback test yet at
   far-world coordinates; add one, since that is exactly where the old river
