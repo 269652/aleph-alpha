@@ -162,7 +162,23 @@ correct tile positions once `TILE_SIZE` changes.
   spawn read as "the player is offset by half a tile" once tile edges got
   sharp).
 - ⬜ Phase 2 (character).
-- ⬜ Phase 3 (vegetation / resource nodes).
+- ⬜ Phase 3 (vegetation / resource nodes) -- still not a real resolution
+  pass (trees still composite onto the same shared 40x52px canvas,
+  `ProceduralTreeSprite.SIZE`, at the same `ArtResolution.DETAIL_MULTIPLIER`
+  every other entity uses -- raising that multiplier for trees alone would
+  break the same "reads as chunky pixel art, not smooth" floor `Camera2D`
+  zoom is already pinned against, see Phase 7 below and
+  test_one_art_pixel_covers_several_screen_pixels). What DID land
+  (2026-09-05, same blur report as Phase 7): `ProceduralTreeSprite.
+  scale_piece` squeezing a large illustrated sheet piece down into that
+  small canvas now area-averages instead of nearest-sampling one arbitrary
+  source pixel per destination pixel -- real detail the source art already
+  has, better represented at the SAME final resolution, not more of it.
+  Alpha stays binary (never blends an opaque colour with the transparency
+  around it) so this cannot reintroduce the winter-branch smearing bug
+  nearest-only was originally chosen to fix. A genuine resolution increase
+  -- more final pixels, not just better-chosen ones -- is still the open
+  part of this phase.
 - ⬜ Phase 4 (creatures).
 - ⬜ Phase 5 (structures).
 - ⬜ Phase 6 (items / icons).
@@ -177,10 +193,12 @@ correct tile positions once `TILE_SIZE` changes.
   neighbour alignment for every SPRITE_SCALE-path entity (see docs/
   progress.md's own entry). That round trip is itself direct, lived
   evidence for Phase 3 below: the SAME blur report also traced to trees
-  having no dedicated per-part canvas at all (unlike Phase 2's character
-  work), a cause the zoom revert alone does nothing for. Whether zoom
-  should actually come back down further given the source art detail now
-  available is still genuinely unanswered.
+  compositing onto a canvas far smaller than the character's own per-part
+  one, a cause the zoom revert alone did nothing for -- addressed
+  separately (same day) by improving how that existing small canvas gets
+  filled, not by growing it (see Phase 3's own updated status). Whether
+  zoom should actually come back down further given the source art detail
+  now available is still genuinely unanswered.
 - ✅ Illustrated ground tiles (separate track from the phases above, same
   "hand/AI-illustrated sheet replaces procedural generation where art
   exists" transition `IllustratedStoneSprite` already made for loose

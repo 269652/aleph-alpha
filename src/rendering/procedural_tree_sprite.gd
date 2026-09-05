@@ -729,22 +729,76 @@ func _scaled_piece(species_id: String, season: String, role: String, size: Vecto
 	return scaled
 
 
-## A piece of tree art scaled to `size`, NEAREST-NEIGHBOUR.
+## A piece of tree art scaled to `size`.
 ##
-## Nearest can only copy pixels, so the result's palette is a subset of the
-## source's and every pixel is opaque or absent. Lanczos, which this used, blends
-## neighbours -- inventing in-between colours and part-transparent edges. On a
-## dense summer canopy that hides; on BARE WINTER BRANCHES, thin high-contrast
-## strokes on transparency, it reads as smeared and haloed twigs (reported: the
-## winter trees look blurry).
+## UPSCALING (dest at least as big as source on both axes) stays NEAREST-
+## NEIGHBOUR, exactly as originally fixed: nearest can only copy pixels, so
+## the result's palette is a subset of the source's and every pixel is
+## opaque or absent. Lanczos, which this used before, blends neighbours --
+## inventing in-between colours and part-transparent edges. On a dense
+## summer canopy that hides; on BARE WINTER BRANCHES, thin high-contrast
+## strokes on transparency, it reads as smeared and haloed twigs (reported:
+## the winter trees look blurry). The rest of the game is nearest-neighbour
+## pixel art -- the project sets default_texture_filter to nearest -- so
+## resampling the source art smoothly contradicted the house style
+## everywhere else honours.
 ##
-## The rest of the game is nearest-neighbour pixel art -- the project sets
-## default_texture_filter to nearest -- so resampling the source art smoothly
-## was contradicting the house style everywhere else honours.
+## DOWNSCALING (the real illustrated-art case -- a large sliced sheet piece
+## squeezed into this tree's small canvas) uses genuine area-averaging
+## instead (see _downscale_area_averaged). Nearest on a big downscale picks
+## one ARBITRARY source pixel per destination pixel and throws the rest
+## away, which is why the same real source detail a much bigger character-
+## part canvas preserves reads as noisy and coarse on a tree (reported
+## live: "trees are very blurry even though sprite art is much crispier").
+## This still cannot reintroduce the winter-branch bug above: alpha stays
+## BINARY (opaque the instant a destination pixel's source region contains
+## ANY opaque pixel, never half-transparent), and colour is only ever
+## averaged AMONG the region's already-opaque pixels -- there is no
+## blending a real colour with the transparency around it, only with other
+## real colours, which is exactly what a proper downsample should do.
 static func scale_piece(source: Image, size: Vector2i) -> Image:
-	var scaled := source.duplicate()
-	scaled.resize(size.x, size.y, Image.INTERPOLATE_NEAREST)
-	return scaled
+	if size.x >= source.get_width() and size.y >= source.get_height():
+		var scaled := source.duplicate()
+		scaled.resize(size.x, size.y, Image.INTERPOLATE_NEAREST)
+		return scaled
+	return _downscale_area_averaged(source, size)
+
+
+## For each destination pixel, maps back to the region of source pixels it
+## covers and averages the RGB of just the OPAQUE ones (ignoring transparent
+## source pixels entirely, so they can never wash out a real colour). The
+## destination pixel is fully opaque the instant that region contains at
+## least one opaque source pixel, and fully transparent otherwise -- see
+## scale_piece's own doc comment for why alpha must stay binary either way.
+static func _downscale_area_averaged(source: Image, size: Vector2i) -> Image:
+	var result := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	var source_width := source.get_width()
+	var source_height := source.get_height()
+	for dy in size.y:
+		var sy0 := int(floor(float(dy) * source_height / float(size.y)))
+		var sy1 := maxi(sy0 + 1, int(ceil(float(dy + 1) * source_height / float(size.y))))
+		sy1 = mini(sy1, source_height)
+		for dx in size.x:
+			var sx0 := int(floor(float(dx) * source_width / float(size.x)))
+			var sx1 := maxi(sx0 + 1, int(ceil(float(dx + 1) * source_width / float(size.x))))
+			sx1 = mini(sx1, source_width)
+			var total := Color(0.0, 0.0, 0.0, 0.0)
+			var opaque_count := 0
+			for sy in range(sy0, sy1):
+				for sx in range(sx0, sx1):
+					var pixel := source.get_pixel(sx, sy)
+					if pixel.a > 0.5:
+						total.r += pixel.r
+						total.g += pixel.g
+						total.b += pixel.b
+						opaque_count += 1
+			if opaque_count > 0:
+				result.set_pixel(dx, dy, Color(
+					total.r / opaque_count, total.g / opaque_count, total.b / opaque_count, 1.0
+				))
+			else:
+				result.set_pixel(dx, dy, Color(0.0, 0.0, 0.0, 0.0))
+	return result
 
 
 ## A trunk reads as one solid piece of wood, not two objects with a sliver of
