@@ -10641,6 +10641,38 @@ doesn't). Item detail deliberately omits "have" status this pass (every
 other view foregrounds ownership; this one is a reference page). 84 GUT
 tests across the companion-server modules, all green.
 
+✅ **Character Sheet portrait.** Reported live: "add a Diorama to the
+Website Character Sheet tab" — this game already has a "Diorama"
+(`CharacterPreviewDiorama`, the character creator's live, continuously-
+animated swaying-grass/pond/ambient-creature `SubViewport` scene), which
+would need instantiating real rendering nodes on every page load, breaking
+Tier 1's own "reads only the save file, no live Player/scene-tree hook"
+boundary — so, asked directly, a static portrait on a small illustrated
+backdrop instead. New `CharacterSheetPortraitScene`
+(`src/rendering/character_sheet_portrait_scene.gd`): a pure `Image`
+compositor (sky/ground vignette + fixed grass-tuft/pebble accents) around
+`ProceduralCharacterSprite.generate_hero_portrait_image` — the SAME
+figure-only function the character creator's own static-portrait toggle
+already uses, so no new rendering path for the hero itself. Embedded
+directly in the Character Sheet's own HTML as a base64
+`data:image/png;base64,...` `<img>` src (one response per page, no new
+route). Saved `appearance` preferred; a save from before it existed (or
+any fixture missing it) gets a fresh one derived from the same
+`(character_class, dna_seed)` `HeroAppearance.appearance_for` would have
+rolled originally, so the portrait is never blank. Verified live against
+the real running companion server (Browser tool against
+`http://127.0.0.1:8731/`), not just headless assertions. 8 new tests in
+`test_character_sheet_portrait_scene.gd` plus 3 new in
+`test_companion_character_sheet_view.gd` (portrait present, reflects the
+saved appearance, falls back correctly with none saved) — 12/12 there, all
+green. **Named, not built**: equipped armor/weapons don't show — no
+existing function composites those onto a portable `Image` outside a live
+`CharacterView`, a real, separate follow-up. **Also found and flagged
+(not fixed here, out of scope)**: `HeroAppearance`'s "full" beard style
+renders as a solid mask over the eyes/nose/mouth for at least one real
+(class, seed) combo, confirmed pre-existing via the raw uncomposited
+portrait output.
+
 ⬜ **Settlement dashboard.** Blocked on a real design decision, not a
 missing view: the live `VillageMarket`/`NpcEconomy` purse (what a player
 actually sees) is never persisted (recreated empty on every chunk load),
