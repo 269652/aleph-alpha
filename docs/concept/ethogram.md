@@ -113,11 +113,18 @@ that is what §5's gains are. The priority ladder every game AI hand-codes
 when fear's gain is large; slice 1 keeps the ladder explicit and the roadmap
 lets it fall out of the numbers.
 
-**Boldness, docility and flight distance.** `flyer_personality.gd` already
-grounds a heritable boldness in the flight-initiation-distance literature, and
-[animal_genetics.md](animal_genetics.md) §10 grounds docility's cost in
-Belyaev's foxes: a domesticated animal notices a predator later. Both are a
-gain on the same fear channel. This doc gives them one place to live.
+**Boldness and flight-initiation distance.** `flyer_personality.gd` already
+grounds a heritable boldness in the flight-initiation-distance literature —
+how close an approaching threat gets before an animal breaks and flees, the
+standard field measure of boldness across taxa because bolder individuals
+reliably have shorter ones. §9's land-mammal boldness gene is the same real
+quantity, independently derived for a different body plan rather than reusing
+that file's butterfly-specific metre constants (see §9 for why unifying the
+two outright would have been dishonest, not simplifying).
+[animal_genetics.md](animal_genetics.md) §10 separately grounds docility's
+cost in Belyaev's foxes — a domesticated animal notices a predator later —
+which is real and still unbuilt (§9): that gene does not exist yet, and this
+doc does not invent it ahead of the one that owns it.
 
 **Needs and advertisements.** The nearest game-design precedent is *The
 Sims*' motive engine: objects *advertise* what needs they satisfy, an agent
