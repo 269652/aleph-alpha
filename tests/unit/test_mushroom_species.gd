@@ -9,6 +9,11 @@ extends GutTest
 ## own "one small dict per trait, an unlisted id falls back cleanly"
 ## convention, chosen specifically so a trait split can never silently drift
 ## out of sync with an index cutoff into IDS.
+##
+## Roster revised (see mushrooms.md's merge note) to match the real
+## illustrated art actually delivered: Fly Agaric, Psilocybe ("psylo"),
+## Black Trumpet, Champignon, Chanterelle, Parasol -- replacing the
+## originally-designed Death Cap/Porcini/Puffball, which no art exists for.
 
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 
@@ -18,7 +23,7 @@ const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 func test_ids_lists_every_named_species():
 	assert_eq(
 		MushroomSpecies.IDS,
-		["fly_agaric", "death_cap", "chanterelle", "porcini", "puffball"]
+		["fly_agaric", "psylo", "black_trumpet", "champignon", "chanterelle", "parasol"]
 	)
 
 
@@ -44,39 +49,42 @@ func test_an_unknown_species_falls_back_rather_than_crashing():
 
 # -- toxicity (see docs/concept/mushrooms.md's real-world grounding) -----
 #
-# Fly Agaric and Death Cap are the roster's two real toxic species; the
-# other three are real, commonly foraged edibles.
+# Fly Agaric and Psilocybe are the roster's two real psychoactive species
+# (neither typically lethal, unlike the original roster's Death Cap); the
+# other four are real, commonly foraged edibles.
 
-func test_fly_agaric_and_death_cap_are_toxic():
+func test_fly_agaric_and_psylo_are_toxic():
 	assert_true(MushroomSpecies.is_toxic("fly_agaric"))
-	assert_true(MushroomSpecies.is_toxic("death_cap"))
+	assert_true(MushroomSpecies.is_toxic("psylo"))
 
 
-func test_chanterelle_porcini_and_puffball_are_not_toxic():
-	for id in ["chanterelle", "porcini", "puffball"]:
+func test_the_edible_species_are_not_toxic():
+	for id in ["black_trumpet", "champignon", "chanterelle", "parasol"]:
 		assert_false(MushroomSpecies.is_toxic(id), "%s is a real edible, not toxic" % id)
 
 
 # -- host tree: mycorrhizal partnership vs. saprotroph --------------------
 #
-# Fly Agaric/Porcini real-partner with pine; Death Cap/Chanterelle with oak
-# (this project's "acorn" tree). Puffball is a real saprotroph -- it
-# decomposes litter directly and needs no living host tree at all.
+# Fly Agaric real-partners with pine; Black Trumpet and Chanterelle with
+# oak (this project's "acorn" tree) -- all three real mycorrhizal
+# relationships. Psilocybe, Champignon, and Parasol are real saprotrophs --
+# meadow/pasture/forest-edge species that decompose organic matter
+# directly and need no living host tree at all.
 
 func test_mycorrhizal_species_name_their_real_host_tree():
 	assert_eq(MushroomSpecies.host_tree_for("fly_agaric"), "pine")
-	assert_eq(MushroomSpecies.host_tree_for("porcini"), "pine")
-	assert_eq(MushroomSpecies.host_tree_for("death_cap"), "acorn")
+	assert_eq(MushroomSpecies.host_tree_for("black_trumpet"), "acorn")
 	assert_eq(MushroomSpecies.host_tree_for("chanterelle"), "acorn")
 
 
-func test_puffball_is_a_saprotroph_with_no_host_tree():
-	assert_eq(MushroomSpecies.host_tree_for("puffball"), "")
-	assert_true(MushroomSpecies.is_saprotroph("puffball"))
+func test_saprotroph_species_have_no_host_tree():
+	for id in ["psylo", "champignon", "parasol"]:
+		assert_eq(MushroomSpecies.host_tree_for(id), "", "%s should be a real saprotroph" % id)
+		assert_true(MushroomSpecies.is_saprotroph(id))
 
 
 func test_mycorrhizal_species_are_not_saprotrophs():
-	for id in ["fly_agaric", "death_cap", "chanterelle", "porcini"]:
+	for id in ["fly_agaric", "black_trumpet", "chanterelle"]:
 		assert_false(MushroomSpecies.is_saprotroph(id))
 
 

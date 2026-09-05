@@ -14,11 +14,19 @@ extends RefCounted
 ##
 ## Pure data + lookups, no RandomNumberGenerator and no node access, same
 ## as tree_species.gd/flower_species.gd.
+##
+## Roster revised (see mushrooms.md's own merge note) to match the real
+## illustrated art actually delivered -- Fly Agaric, Psilocybe, Black
+## Trumpet, Champignon, Chanterelle, Parasol -- replacing the originally
+## designed Death Cap/Porcini/Puffball, which no art exists for.
 
-## Two real toxic species (Fly Agaric, Death Cap) and three real, commonly
-## foraged edibles (Chanterelle, Porcini, Puffball) -- see
-## docs/concept/mushrooms.md's real-world grounding.
-const IDS: Array[String] = ["fly_agaric", "death_cap", "chanterelle", "porcini", "puffball"]
+## Two real psychoactive species (Fly Agaric, Psilocybe -- neither
+## typically lethal) and four real, commonly foraged edibles (Black
+## Trumpet, Champignon, Chanterelle, Parasol) -- see docs/concept/
+## mushrooms.md's real-world grounding.
+const IDS: Array[String] = [
+	"fly_agaric", "psylo", "black_trumpet", "champignon", "chanterelle", "parasol"
+]
 
 const SPECIES := {
 	"fly_agaric": {
@@ -26,26 +34,33 @@ const SPECIES := {
 		# The iconic vivid red cap.
 		"cap_color": Color(0.78, 0.14, 0.1),
 	},
-	"death_cap": {
-		"display_name": "Death Cap",
-		# Real Death Caps are understated -- a pale, dull greenish-yellow,
-		# not an obviously dangerous colour. That understatement is the
-		# real reason it kills people who mistake it for something safe.
-		"cap_color": Color(0.72, 0.76, 0.52),
+	"psylo": {
+		"display_name": "Psilocybe",
+		# A real Psilocybe cap is a plain, unremarkable tan/buff -- the
+		# understated colour is part of why it's so easily overlooked in a
+		# real pasture.
+		"cap_color": Color(0.62, 0.5, 0.34),
+	},
+	"black_trumpet": {
+		"display_name": "Black Trumpet",
+		# A real Black Trumpet reads as dark blackish-brown/grey -- among
+		# the few genuinely dark-capped species foraged for food.
+		"cap_color": Color(0.22, 0.19, 0.17),
+	},
+	"champignon": {
+		"display_name": "Champignon",
+		# The common cultivated/meadow mushroom -- a plain pale cream.
+		"cap_color": Color(0.88, 0.84, 0.74),
 	},
 	"chanterelle": {
 		"display_name": "Chanterelle",
 		# A real chanterelle is a vivid egg-yolk gold.
 		"cap_color": Color(0.92, 0.68, 0.12),
 	},
-	"porcini": {
-		"display_name": "Porcini",
-		"cap_color": Color(0.55, 0.38, 0.2),
-	},
-	"puffball": {
-		"display_name": "Puffball",
-		# A real puffball is a plain, near-white ball.
-		"cap_color": Color(0.92, 0.9, 0.82),
+	"parasol": {
+		"display_name": "Parasol",
+		# A real Parasol's cap is a warm tan scattered with darker scales.
+		"cap_color": Color(0.72, 0.58, 0.4),
 	},
 }
 
@@ -74,11 +89,13 @@ static func cap_color_for(species_id: String) -> Color:
 	return profile_for(species_id)["cap_color"]
 
 
-## Whether `species_id` is genuinely toxic (see docs/concept/mushrooms.md --
-## Fly Agaric and Death Cap are real, distinctly dangerous species; the rest
-## of the roster is real, commonly foraged edibles). An unlisted/unknown id
-## defaults to false, matching this file's existing fallback convention.
-const _TOXIC_SPECIES := {"fly_agaric": true, "death_cap": true}
+## Whether `species_id` is genuinely toxic/psychoactive (see docs/concept/
+## mushrooms.md -- Fly Agaric and Psilocybe are real, psychoactive species,
+## neither typically lethal in a modern medical context, unlike the
+## originally-designed roster's Death Cap). The rest of the roster is real,
+## commonly foraged edibles. An unlisted/unknown id defaults to false,
+## matching this file's existing fallback convention.
+const _TOXIC_SPECIES := {"fly_agaric": true, "psylo": true}
 
 static func is_toxic(species_id: String) -> bool:
 	return _TOXIC_SPECIES.has(species_id)
@@ -86,15 +103,16 @@ static func is_toxic(species_id: String) -> bool:
 
 ## The real tree species (a tree_species.gd id) this mushroom is
 ## mycorrhizal with -- it fruits only where that host actually grows. An
-## unlisted id (puffball) returns "", meaning a real saprotroph: it
-## decomposes litter directly and needs no living host tree at all.
+## unlisted id returns "", meaning a real saprotroph: it decomposes litter
+## directly and needs no living host tree at all.
 const _HOST_TREE_BY_SPECIES := {
 	"fly_agaric": "pine",
-	"death_cap": "acorn",
+	"black_trumpet": "acorn",
 	"chanterelle": "acorn",
-	"porcini": "pine",
 }
-# puffball deliberately absent -- see is_saprotroph below.
+# psylo/champignon/parasol deliberately absent -- see is_saprotroph below:
+# all three are real grassland/pasture/forest-edge saprotrophs, not
+# mycorrhizal with any tree.
 
 static func host_tree_for(species_id: String) -> String:
 	return String(_HOST_TREE_BY_SPECIES.get(species_id, ""))
@@ -112,4 +130,4 @@ static func is_saprotroph(species_id: String) -> bool:
 ## number -- pinned by test_identification_threshold_matches_the_roster_
 ## size, since GDScript's cross-script constant resolution can't fold
 ## `IDS.size()` directly into a const here.
-const MUSHROOMS_TO_LEARN_IDENTIFICATION := 5
+const MUSHROOMS_TO_LEARN_IDENTIFICATION := 6

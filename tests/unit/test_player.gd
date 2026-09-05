@@ -1495,17 +1495,17 @@ func test_eating_an_edible_mushroom_causes_no_harm():
 
 
 func test_eating_a_toxic_mushroom_applies_the_toxin_debuff():
-	player.inventory.add(_item_catalog.make("death_cap"), 1)
+	player.inventory.add(_item_catalog.make("psylo"), 1)
 
-	assert_true(player.eat_food("death_cap"))
+	assert_true(player.eat_food("psylo"))
 
 	assert_eq(player.active_mushroom_toxin_debuffs.size(), 1)
 	assert_eq(player.active_mushroom_toxin_debuffs[0]["debuff_id"], MushroomToxin.DEBUFF_ID)
 
 
 func test_mushroom_toxin_step_deals_damage_over_time_while_active():
-	player.inventory.add(_item_catalog.make("death_cap"), 1)
-	player.eat_food("death_cap")
+	player.inventory.add(_item_catalog.make("psylo"), 1)
+	player.eat_food("psylo")
 	var before := player.health
 
 	player._mushroom_toxin_step(1.0)
@@ -1520,8 +1520,8 @@ func test_mushroom_toxin_step_does_nothing_without_an_active_debuff():
 
 
 func test_mushroom_toxin_step_expires_after_its_duration():
-	player.inventory.add(_item_catalog.make("death_cap"), 1)
-	player.eat_food("death_cap")
+	player.inventory.add(_item_catalog.make("psylo"), 1)
+	player.eat_food("psylo")
 
 	player._mushroom_toxin_step(MushroomToxin.DURATION_SECONDS + 1.0)
 
@@ -1530,10 +1530,10 @@ func test_mushroom_toxin_step_expires_after_its_duration():
 
 func test_every_eaten_mushroom_counts_toward_identification_toxic_or_not():
 	player.inventory.add(_item_catalog.make("chanterelle"), 1)
-	player.inventory.add(_item_catalog.make("death_cap"), 1)
+	player.inventory.add(_item_catalog.make("psylo"), 1)
 
 	player.eat_food("chanterelle")
-	player.eat_food("death_cap")
+	player.eat_food("psylo")
 
 	assert_eq(player.mushrooms_eaten, 2)
 

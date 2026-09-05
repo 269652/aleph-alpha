@@ -8,7 +8,7 @@ extends GutTest
 ## construction, and advance() only ever rolls against that small fixed
 ## set, never the whole chunk grid.
 ##
-## One instance covers all five species together -- deliberately NOT
+## One instance covers all six species together -- deliberately NOT
 ## WildCropPatch's "one instance per crop, partitioned territory" shape,
 ## since two different real mushroom species fruiting near each other in
 ## the same patch of forest floor is completely normal.
@@ -41,13 +41,14 @@ func test_forest_can_host_any_species():
 	assert_gt(seen.size(), 1, "a real forest should host more than one species")
 
 
-func test_grassland_only_ever_hosts_the_saprotroph():
+func test_grassland_only_ever_hosts_real_saprotrophs():
 	var patch := WildMushroomPatch.new(5, 40, 40, _all_biome("grassland", 40, 40))
-	assert_gt(patch.site_count(), 0, "grassland should host the real saprotroph")
+	assert_gt(patch.site_count(), 0, "grassland should host real saprotroph species")
 	for cell in patch.get_site_cells():
-		assert_eq(
-			patch.species_at(cell), "puffball",
-			"grassland should only ever host the real saprotroph, not a mycorrhizal species"
+		var species := patch.species_at(cell)
+		assert_true(
+			MushroomSpecies.is_saprotroph(species),
+			"grassland should only ever host a real saprotroph (%s is not one)" % species
 		)
 
 

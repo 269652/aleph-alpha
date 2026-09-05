@@ -11,6 +11,7 @@ extends GutTest
 
 const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const ProceduralMushroomSprite = preload("res://src/rendering/procedural_mushroom_sprite.gd")
+const IllustratedMushroomSprite = preload("res://src/rendering/illustrated_mushroom_sprite.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const Inventory = preload("res://src/gameplay/inventory.gd")
 
@@ -80,13 +81,27 @@ func test_identified_species_look_different_from_each_other():
 	assert_ne(fly_agaric_sprite.texture.get_image().get_data(), chanterelle_sprite.texture.get_image().get_data())
 
 
+## Same "gigantic" failure class DecomposerMarker's/AntMoundMarker's own
+## sprites hit once (applying the wrong world scale to real illustrated
+## art, whose canvas proportions don't match the procedural fallback's) --
+## pinned directly rather than trusted by inspection. Real illustrated art
+## now exists for every species (see IllustratedMushroomSprite), so an
+## identified marker must use ITS OWN measured-from-the-real-art
+## marker_scale(species_id), not the procedural generator's flat
+## MUSHROOM_WORLD_SCALE.
+func test_identified_illustrated_species_use_the_illustrated_marker_scale():
+	var marker := _make_marker("chanterelle", true)
+	var sprite := marker.get_child(0) as Sprite2D
+	assert_eq(sprite.scale, Vector2.ONE * IllustratedMushroomSprite.new().marker_scale("chanterelle"))
+
+
 func test_unidentified_name_hides_the_real_species():
-	var marker := _make_marker("death_cap", false)
+	var marker := _make_marker("psylo", false)
 	assert_eq(marker.get_display_name(), "Unidentified Mushroom")
 
 
 func test_identified_name_reveals_the_real_species_and_toxicity():
-	assert_eq(_make_marker("death_cap", true).get_display_name(), "Death Cap (Toxic)")
+	assert_eq(_make_marker("psylo", true).get_display_name(), "Psilocybe (Toxic)")
 	assert_eq(_make_marker("chanterelle", true).get_display_name(), "Chanterelle (Edible)")
 
 
@@ -119,21 +134,21 @@ func test_pickup_adds_the_real_species_item_even_when_unidentified():
 
 
 func test_pickup_adds_the_real_species_item_when_identified():
-	var marker := _make_marker("porcini", true)
+	var marker := _make_marker("black_trumpet", true)
 	var picker := _make_picker()
 	assert_true(marker.pick_up(picker))
-	assert_eq(picker.inventory.count_of("porcini"), 1)
+	assert_eq(picker.inventory.count_of("black_trumpet"), 1)
 
 
 func test_pickup_frees_the_marker():
-	var marker := _make_marker("puffball", true)
+	var marker := _make_marker("parasol", true)
 	var picker := _make_picker()
 	marker.pick_up(picker)
 	assert_true(marker.is_queued_for_deletion())
 
 
 func test_pickup_tells_the_mushroom_world_its_site_was_taken():
-	var marker := _make_marker("puffball", true, Vector2i(3, 4))
+	var marker := _make_marker("parasol", true, Vector2i(3, 4))
 	marker.mushroom_world = StubMushroomWorld.new()
 	var picker := _make_picker()
 	marker.pick_up(picker)
@@ -141,7 +156,7 @@ func test_pickup_tells_the_mushroom_world_its_site_was_taken():
 
 
 func test_pickup_fails_gracefully_with_no_picker():
-	var marker := _make_marker("puffball", true)
+	var marker := _make_marker("parasol", true)
 	assert_false(marker.pick_up(null))
 	assert_false(marker.is_queued_for_deletion())
 

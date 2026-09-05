@@ -26,8 +26,8 @@ func test_generates_an_image_of_the_declared_size():
 
 
 func test_is_deterministic():
-	var a := _sprite.generate_image("porcini", true)
-	var b := _sprite.generate_image("porcini", true)
+	var a := _sprite.generate_image("black_trumpet", true)
+	var b := _sprite.generate_image("black_trumpet", true)
 	assert_eq(a.get_data(), b.get_data())
 
 
@@ -35,9 +35,9 @@ func test_is_deterministic():
 
 func test_unidentified_looks_the_same_regardless_of_true_species():
 	var fly_agaric := _sprite.generate_image("fly_agaric", false)
-	var death_cap := _sprite.generate_image("death_cap", false)
+	var psylo := _sprite.generate_image("psylo", false)
 	var chanterelle := _sprite.generate_image("chanterelle", false)
-	assert_eq(fly_agaric.get_data(), death_cap.get_data())
+	assert_eq(fly_agaric.get_data(), psylo.get_data())
 	assert_eq(fly_agaric.get_data(), chanterelle.get_data())
 
 
@@ -56,13 +56,13 @@ func test_unidentified_colour_matches_no_real_species():
 
 func test_identified_species_look_different_from_each_other():
 	var chanterelle := _sprite.generate_image("chanterelle", true)
-	var porcini := _sprite.generate_image("porcini", true)
-	assert_ne(chanterelle.get_data(), porcini.get_data())
+	var black_trumpet := _sprite.generate_image("black_trumpet", true)
+	assert_ne(chanterelle.get_data(), black_trumpet.get_data())
 
 
 func test_identified_differs_from_unidentified_for_the_same_species():
-	var identified := _sprite.generate_image("puffball", true)
-	var unidentified := _sprite.generate_image("puffball", false)
+	var identified := _sprite.generate_image("parasol", true)
+	var unidentified := _sprite.generate_image("parasol", false)
 	assert_ne(identified.get_data(), unidentified.get_data())
 
 
@@ -92,7 +92,7 @@ func _contains_color(image: Image, color: Color) -> bool:
 
 
 func test_has_an_outline_pixel():
-	var image := _sprite.generate_image("porcini", true)
+	var image := _sprite.generate_image("black_trumpet", true)
 	var outline := PixelPalette.new().outline_color()
 	assert_true(_contains_color(image, outline), "expected at least one outline-colored pixel")
 
