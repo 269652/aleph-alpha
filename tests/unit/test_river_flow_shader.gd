@@ -614,7 +614,7 @@ func test_the_warped_field_still_forms_lines():
 ## samples.
 func test_the_bend_is_anchored_to_the_bed_not_carried_with_the_water():
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("vec2 eddy_p = (p - flow_dir * bend_drift) * eddy_scale;"),
+		RiverFlowShader.SHADER_CODE.contains("vec2 eddy_p = p * eddy_scale - flow_dir * bend_drift;"),
 		"the eddy field is sampled at a steadily translated, never advected, coordinate"
 	)
 	assert_false(
@@ -1217,13 +1217,22 @@ func test_the_pattern_travels_downstream_not_just_morphs():
 	)
 
 
-## The drift is a tested function of the reach's REAL current speed --
-## linear in speed and time, and paced so a brisk river visibly travels
-## (order of a tile per second) without strobing.
-func test_the_drift_is_pinned_to_the_real_current_speed():
+## The drift is ONE shared speed for every moving reach -- linear in time
+## (below the period), the same for a brisk river and a sluggish one, and
+## zero in still water. The texel's own speed is interpolated per fragment
+## and varies along a reach; TIME times that diverged between neighbours
+## without bound and shredded every reach after twenty minutes (the second
+## half of the far-time shredding, measured on the GPU at the Loire).
+func test_the_drift_is_one_shared_speed_for_every_moving_reach():
 	assert_almost_eq(
 		RiverFlowShader.drift_cells(2.0, 1.0),
-		RiverFlowShader.drift_cells(1.0, 1.0) * 2.0, 0.0001
+		RiverFlowShader.drift_cells(1.0, 1.0), 0.0001,
+		"a brisk reach and a slow one drift their lines at the one shared speed"
+	)
+	assert_almost_eq(
+		RiverFlowShader.drift_cells(1.0, 1.0),
+		RiverFlowShader.DRIFT_PX_PER_MPS * RiverFlowShader.DRIFT_SPEED_M_S * RiverFlowShader.NOISE_SCALE,
+		0.0001
 	)
 	assert_almost_eq(
 		RiverFlowShader.drift_cells(1.0, 3.0),
@@ -2649,12 +2658,16 @@ func test_the_bend_drifts_downstream_with_the_current():
 	assert_gt(moved, 0.0)
 	assert_almost_eq(
 		moved,
-		RiverFlowShader.surface_cells(1.0, 10.0) * RiverFlowShader.BEND_DRIFT_FRACTION,
+		RiverFlowShader.surface_cells(RiverFlowShader.DRIFT_SPEED_M_S, 10.0) * RiverFlowShader.BEND_DRIFT_FRACTION,
 		1e-9
 	)
 	assert_almost_eq(
-		moved, RiverFlowShader.surface_cells(1.0, 10.0), 1e-9,
-		"the eddies travel WITH the surface -- the lines move at the water's own speed"
+		moved, RiverFlowShader.surface_cells(RiverFlowShader.DRIFT_SPEED_M_S, 10.0), 1e-9,
+		"the eddies travel WITH the lines -- both at the one shared drift speed"
+	)
+	assert_almost_eq(
+		RiverFlowShader.bend_drift_cells(2.0, 10.0), moved, 1e-9,
+		"a brisk reach migrates its eddies at the same shared speed"
 	)
 
 
@@ -2704,10 +2717,10 @@ func test_the_fold_margin_survives_the_eddy_drift():
 
 func test_the_shader_drifts_the_eddy_sample_coordinate():
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"float bend_drift = TIME * surface_px_per_s(speed_mps, moving) * noise_scale * bend_drift_fraction;"
+		"float bend_drift = mod(TIME * surface_px_per_s(drift_speed_m_s, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);"
 	))
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"vec2 eddy_p = (p - flow_dir * bend_drift) * eddy_scale;"
+		"vec2 eddy_p = p * eddy_scale - flow_dir * bend_drift;"
 	))
 	var material := RiverFlowShader.new().make_material()
 	assert_almost_eq(
@@ -2863,8 +2876,8 @@ func test_the_shader_streams_every_consumer_from_the_same_surface_speed():
 		"the ring must not be carried by the drift alone any more"
 	)
 	assert_true(
-		code.contains("float bend_drift = TIME * surface_px_per_s(speed_mps, moving) * noise_scale * bend_drift_fraction;"),
-		"the eddies migrate at the surface's VISIBLE speed"
+		code.contains("float bend_drift = mod(TIME * surface_px_per_s(drift_speed_m_s, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);"),
+		"the eddies migrate at the one shared drift speed, through the same visible-speed function -- the ring, bounded by its lifetime, keeps the local speed"
 	)
 
 
@@ -3204,3 +3217,98 @@ func test_the_shader_foams_the_face_and_whirls_the_wake():
 	]:
 		assert_almost_eq(float(material.get_shader_parameter(pair[0])), pair[1], 1e-9, pair[0])
 	assert_eq(material.get_shader_parameter("foam_color"), RiverFlowShader.FOAM_COLOR)
+
+
+# -- bounded drift: the far-time shredding ------------------------------------
+#
+# Found live at the Loire near Nantes after ~25 minutes of play: every
+# bend of a fast reach dissolved into per-pixel white speckle at night,
+# while the straight reach beside it kept its long moonlit lines. Both
+# the downstream drift and the eddy drift translate a sample coordinate by
+# flow_dir * (TIME * speed) -- and flow_dir is reconstructed CONTINUOUSLY
+# between texels, so on a bend two neighbouring fragments differ by a
+# fraction of a degree. A fraction of a degree times thousands of noise
+# cells is many cells: the same "angle times distance" trap the seam test
+# guards, re-entered through TIME. Measured on the real GPU at the Loire
+# confluence: 0.056 of the water pixels isolated specks at ~2000 s against
+# 0.003 fresh; 0.015 with the drift zeroed, 0.030 with the eddy drift
+# zeroed. Both translations now wrap modulo a period the noise TILES at.
+
+## Neither translation ever grows past the noise period, however long the
+## session runs -- the drift in smear cells, the eddy drift in eddy units.
+func test_the_drift_translations_are_bounded_by_the_noise_period():
+	assert_lt(
+		RiverFlowShader.drift_cells(2.2, 3600.0), RiverFlowShader.DRIFT_PERIOD_CELLS,
+		"an hour on a fast reach must not translate the smear further than one period"
+	)
+	assert_lt(
+		RiverFlowShader.bend_drift_cells(2.2, 3600.0) * RiverFlowShader.EDDY_SCALE,
+		RiverFlowShader.DRIFT_PERIOD_CELLS,
+		"an hour on a fast reach must not translate the eddies further than one period"
+	)
+	# ...and the wraps are invisible only because the translated noise
+	# tiles at exactly that period, in both octaves.
+	var period := RiverFlowShader.DRIFT_PERIOD_CELLS
+	for i in range(30):
+		var x := 3.7 + float(i) * 1.13
+		var y := 11.2 + float(i) * 0.71
+		assert_almost_eq(
+			RiverFlowShader.value_noise_tiled(x + period, y, period),
+			RiverFlowShader.value_noise_tiled(x, y, period), 0.000001,
+			"the drifted noise must repeat exactly at the drift period"
+		)
+	assert_almost_eq(
+		RiverFlowShader.bend_displacement(4.3 + period, 2.9),
+		RiverFlowShader.bend_displacement(4.3, 2.9), 0.000001,
+		"the eddy field must repeat exactly at the eddy period"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains(
+			"float drift = mod(TIME * drift_px_per_mps * drift_speed_m_s * moving * noise_scale, drift_period);"
+		),
+		"the shader must wrap the drift at drift_period"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains(
+			"float bend_drift = mod(TIME * surface_px_per_s(drift_speed_m_s, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);"
+		),
+		"the shader must wrap the eddy drift at drift_period, in eddy units"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("vec2 eddy_p = p * eddy_scale - flow_dir * bend_drift;"),
+		"the eddy sample must translate by the wrapped eddy drift"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("value_noise_tiled(forward, drift_period)"),
+		"the smear taps must sample the noise that tiles at drift_period"
+	)
+
+
+## Two neighbouring fragments on a bend differ in direction by a fraction of
+## a degree. After a long session that must still move the field by less
+## than a stroke width -- the same budget as a whole bin change at t=0.
+func test_a_long_session_does_not_shred_the_field_on_a_bend():
+	var angle_a := 231.0
+	var angle_b := 231.25
+	var dir_a := Vector2(sin(deg_to_rad(angle_a)), -cos(deg_to_rad(angle_a)))
+	var dir_b := Vector2(sin(deg_to_rad(angle_b)), -cos(deg_to_rad(angle_b)))
+	# The Loire's real neighbourhood, in noise cells.
+	var base_x := 19802.0 * 16.0 * RiverFlowShader.NOISE_SCALE
+	var base_y := 4751.0 * 16.0 * RiverFlowShader.NOISE_SCALE
+	var total := 0.0
+	var count := 0
+	for i in range(24):
+		for j in range(24):
+			var px := base_x + float(i) * 0.43
+			var py := base_y + float(j) * 0.39
+			total += absf(
+				RiverFlowShader.animated_field_value(px, py, dir_a, 1500.0, 2.2)
+				- RiverFlowShader.animated_field_value(px, py, dir_b, 1500.0, 2.2)
+			)
+			count += 1
+	var mean := total / float(count)
+	assert_lt(
+		mean, 0.075,
+		"a quarter-degree bend after 25 minutes moves the field by %.3f -- shredded strokes"
+			% mean
+	)

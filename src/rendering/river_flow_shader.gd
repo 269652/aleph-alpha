@@ -185,6 +185,18 @@ uniform float ripple_ink_max = 0.6;
 
 // Continuous downstream travel, px/s per m/s of real current.
 uniform float drift_px_per_mps = 20.0;
+// The period, in noise cells (and in eddy units for the eddy field), the
+// translated noise TILES at and both drifts wrap modulo -- what keeps the
+// direction-scaled translations bounded (see the drift lines in fragment()).
+uniform float drift_period = 20.0;
+// The ONE current every moving reach drifts its lines and eddies at, m/s.
+// Not the texel's own speed: that is interpolated per fragment and varies
+// along a reach, and TIME times a per-fragment speed diverges between
+// neighbours without bound -- the second half of the far-time shredding
+// (measured: 0.041 of the water pixels speckled at ~2000 s with the real
+// speeds, 0.008 with one speed). Everything bounded in TIME (the ring,
+// carried for at most a lifetime) still rides the local speed.
+uniform float drift_speed_m_s = 0.5;
 // The dim end of the brightness pulse that streams along every stroke.
 // Deep enough that a bright segment travelling down a line is obvious,
 // never zero, so a dim segment is still a stroke.
@@ -232,6 +244,24 @@ float value_noise(vec2 p) {
 	return mix(
 		mix(value_hash(i), value_hash(i + vec2(1.0, 0.0)), f.x),
 		mix(value_hash(i + vec2(0.0, 1.0)), value_hash(i + vec2(1.0, 1.0)), f.x),
+		f.y
+	);
+}
+
+// The same noise on a lattice that wraps every `period` cells, so a
+// translation by exactly one period is the identity. Every TIME-translated
+// sample reads this: the translation wraps at the same period, so the wrap
+// is invisible and the direction-scaled offset stays bounded (the far-time
+// shredding -- see the drift lines in fragment()).
+float value_noise_tiled(vec2 p, float period) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	vec2 i0 = mod(i, period);
+	vec2 i1 = mod(i + 1.0, period);
+	return mix(
+		mix(value_hash(i0), value_hash(vec2(i1.x, i0.y)), f.x),
+		mix(value_hash(vec2(i0.x, i1.y)), value_hash(i1), f.x),
 		f.y
 	);
 }
@@ -439,7 +469,7 @@ float line_field(vec2 q, vec2 dir_start, vec2 dir_end) {
 	// Triangle-weighted taps, as before: the outer taps sit furthest along
 	// the arc, so they pay the most wherever the frame still changes, and
 	// weighting the centre keeps the stroke shape.
-	float total = value_noise(q) * 5.0;
+	float total = value_noise_tiled(q, drift_period) * 5.0;
 	vec2 forward = q;
 	vec2 backward = q;
 	for (int k = 1; k <= 4; k++) {
@@ -447,7 +477,7 @@ float line_field(vec2 q, vec2 dir_start, vec2 dir_end) {
 		float t = float(k) / 8.0;
 		forward += normalize(mix(dir_start, dir_end, 0.5 + t) + vec2(1e-6, 0.0)) * smear_spacing;
 		backward -= normalize(mix(dir_start, dir_end, 0.5 - t) + vec2(1e-6, 0.0)) * smear_spacing;
-		total += (value_noise(forward) + value_noise(backward)) * w;
+		total += (value_noise_tiled(forward, drift_period) + value_noise_tiled(backward, drift_period)) * w;
 	}
 	// ONE smooth scale, deliberately: the strokes below are contours of
 	// this field, and a level set is only as smooth as the field it cuts.
@@ -721,8 +751,14 @@ void fragment() {
 	// at a real drifted offset. And the wobble still deforms relative to
 	// the whirls -- each phase stretches away from this translation and
 	// resets -- so the picture does not slide as one sheet.
-	float bend_drift = TIME * surface_px_per_s(speed_mps, moving) * noise_scale * bend_drift_fraction;
-	vec2 eddy_p = (p - flow_dir * bend_drift) * eddy_scale;
+	// WRAPPED at drift_period in EDDY units, and the eddy noise tiles at
+	// that period (its detail octave at period x frequency), so the wrap is
+	// invisible. Unbounded, this was flow_dir times a magnitude that grew
+	// for the whole session, and flow_dir differs by a fraction of a degree
+	// between neighbouring fragments on a bend: the far-time shredding (see
+	// the drift line below).
+	float bend_drift = mod(TIME * surface_px_per_s(drift_speed_m_s, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);
+	vec2 eddy_p = p * eddy_scale - flow_dir * bend_drift;
 	// Shear lives at the banks: real eddies shed where the fast core
 	// meets the slow margin, so the standing turbulence grows from the
 	// centreline (|across| 0) toward the waterline (|across| 1) by
@@ -732,8 +768,8 @@ void fragment() {
 	// ...and harder still in a rock's wake, where the eddies it sheds
 	// live (boulder_wake, the lobe behind each boulder above), gated by
 	// the current: a rock in a lake sheds nothing.
-	float bend = (value_noise(eddy_p) - 0.5
-		+ (value_noise(eddy_p * eddy_detail_frequency + vec2(19.7, 7.3)) - 0.5) * eddy_detail_weight)
+	float bend = (value_noise_tiled(eddy_p, drift_period) - 0.5
+		+ (value_noise_tiled(eddy_p * eddy_detail_frequency + vec2(19.7, 7.3), drift_period * eddy_detail_frequency) - 0.5) * eddy_detail_weight)
 		* turbulence_strength * shear * (1.0 + boulder_wake * boulder_wake_gain * moving);
 	vec2 q = p + flow_perp * bend;
 	// The smear direction is the FLOW direction and nothing else. Rotating
@@ -752,7 +788,20 @@ void fragment() {
 	// homogeneous and its hash is fract-first at any coordinate. The bend
 	// field above deliberately does NOT drift: boils hold station over the
 	// bed while the surface pours through them.
-	float drift = TIME * drift_px_per_mps * speed_mps * noise_scale;
+	// WRAPPED at drift_period, and the smear taps read the noise that tiles at
+	// that period, so the wrap is invisible. Unbounded it was NOT safe,
+	// whatever the hash: the translation is flow_dir times a magnitude, and
+	// flow_dir is reconstructed continuously between texels -- on a bend two
+	// neighbouring fragments differ by a fraction of a degree, which times
+	// thousands of cells is many cells: unrelated noise at neighbouring
+	// pixels. Found live after ~25 minutes on the Loire: every curved reach
+	// dissolved into speckle while the straight reach beside it kept its
+	// lines. The same angle-times-distance trap as the world origin,
+	// re-entered through TIME.
+	// ...and at the ONE shared drift speed (drift_speed_m_s), never the
+	// fragment's own: TIME times a speed that varies along the reach is
+	// the same unbounded divergence again, direction or no direction.
+	float drift = mod(TIME * drift_px_per_mps * drift_speed_m_s * moving * noise_scale, drift_period);
 	// Triangular weight: 1 at a phase's birth, 0 at its death.
 	float blend = abs(1.0 - 2.0 * phase_a);
 	float n;
@@ -1359,6 +1408,40 @@ const HALF_WIDTH_PX := 32.0
 ## test_the_water_travels_at_a_calm_speed (ceiling).
 const DRIFT_PX_PER_MPS := 16.0
 
+## The period, in noise cells, the smeared field tiles at and the drift wraps
+## modulo -- and, in eddy units, the period the eddy field tiles at and the
+## eddy drift wraps modulo. Bounds both direction-scaled translations for
+## ever: on a bend the reconstructed flow_dir differs by a fraction of a
+## degree between neighbouring fragments, and that angle times the
+## translation is how far apart their samples land -- at 20 cells a
+## quarter-degree is a twentieth of a cell, invisible; unbounded it reached
+## tens of cells after twenty minutes of play and shredded every curved
+## reach (found live on the Loire; GPU-measured 0.056 of the water pixels
+## as isolated specks at ~2000 s against 0.003 fresh). The drifting texture
+## repeats every period / rate seconds on a reach, out of step with the
+## half-cycle morph, so no loop reads as one. The detail octave's period is
+## EDDY_DETAIL_FREQUENCY times this and must be a whole number of cells.
+## Pinned by test_the_drift_translations_are_bounded_by_the_noise_period
+## and test_a_long_session_does_not_shred_the_field_on_a_bend.
+const DRIFT_PERIOD_CELLS := 20.0
+
+## The one current, in m/s, every moving reach drifts its lines and eddies
+## at. The texel speed is interpolated per fragment and varies along a
+## reach (Manning on the local slope), and TIME times a per-fragment speed
+## diverges between neighbours without bound -- wrapping the drift bounds
+## the DIRECTION term but not this one (GPU-measured at the Loire: 0.041 of
+## the water pixels speckled at ~2000 s with the real speeds against 0.008
+## with one speed). So the unbounded translations share this reference,
+## the typical reach of the tuning notes above; the reach's real speed
+## still shows through the fast-flow brightness, the foam, and the ring,
+## which is bounded by its own lifetime and keeps the local speed. Still
+## water stays at zero through the same gate as everything else. A
+## per-reach CONSTANT speed in the map (one value between confluences)
+## would give back "the Rhine travels, a lower course crawls" with a seam
+## only at confluences, and is the named follow-up. Pinned by
+## test_the_drift_is_one_shared_speed_for_every_moving_reach.
+const DRIFT_SPEED_M_S := 0.5
+
 ## The dim end of the pulse that streams along a stroke. 0.55 was a 45%
 ## modulation, a shimmer; 0.35 is the depth at which a bright segment
 ## visibly travels down a line. Never zero. Pinned by
@@ -1526,6 +1609,8 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("wader_radius_px", WADER_RADIUS_PX)
 	material.set_shader_parameter("wader_wake_trail", WADER_WAKE_TRAIL)
 	material.set_shader_parameter("drift_px_per_mps", DRIFT_PX_PER_MPS)
+	material.set_shader_parameter("drift_period", DRIFT_PERIOD_CELLS)
+	material.set_shader_parameter("drift_speed_m_s", DRIFT_SPEED_M_S)
 	material.set_shader_parameter("fast_flow_m_s", FAST_FLOW_M_S)
 	material.set_shader_parameter("line_count", LINE_COUNT)
 	material.set_shader_parameter("across_line_scale", ACROSS_LINE_SCALE)
@@ -2071,6 +2156,26 @@ static func smear_tap_direction(dir_start: Vector2, dir_end: Vector2, k: int) ->
 	return mixed.normalized()
 
 
+## The CPU mirror of the shader's value_noise_tiled: the same noise on a
+## lattice that wraps every `period` cells.
+static func value_noise_tiled(x: float, y: float, period: float = DRIFT_PERIOD_CELLS) -> float:
+	var ix: float = floor(x)
+	var iy: float = floor(y)
+	var fx: float = x - ix
+	var fy: float = y - iy
+	fx = fx * fx * (3.0 - 2.0 * fx)
+	fy = fy * fy * (3.0 - 2.0 * fy)
+	var x0 := fposmod(ix, period)
+	var y0 := fposmod(iy, period)
+	var x1 := fposmod(ix + 1.0, period)
+	var y1 := fposmod(iy + 1.0, period)
+	return lerpf(
+		lerpf(value_hash(x0, y0), value_hash(x1, y0), fx),
+		lerpf(value_hash(x0, y1), value_hash(x1, y1), fx),
+		fy
+	)
+
+
 ## The CPU mirror of the shader's line_field: the LIC smear along an
 ## arbitrary direction plus the unsmeared detail octave, world-anchored.
 static func line_field_value(px: float, py: float, dir: Vector2) -> float:
@@ -2078,7 +2183,7 @@ static func line_field_value(px: float, py: float, dir: Vector2) -> float:
 	for k in range(-4, 5):
 		var offset := dir * (float(k) * SMEAR_SPACING)
 		var weight := 5.0 - absf(float(k))
-		total += value_noise(px + offset.x, py + offset.y) * weight
+		total += value_noise_tiled(px + offset.x, py + offset.y) * weight
 	return clampf((total / 25.0 - 0.5) * SMEAR_GAIN + 0.5, 0.0, 1.0)
 
 
@@ -2115,10 +2220,14 @@ static func animated_field_value(
 
 
 ## How far the pattern has travelled downstream, in noise cells: linear in
-## the reach's real current speed and in time -- unbounded, because the
-## water does not loop back.
+## time at the ONE shared DRIFT_SPEED_M_S for any moving reach (zero below
+## the still gate), wrapped at DRIFT_PERIOD_CELLS -- the noise it
+## translates tiles at that period, so the wrap is invisible and the
+## direction-scaled offset stays bounded.
 static func drift_cells(speed_mps: float, seconds: float) -> float:
-	return DRIFT_PX_PER_MPS * speed_mps * seconds * NOISE_SCALE
+	if speed_mps < STILL_FLOW_M_S:
+		return 0.0
+	return fposmod(DRIFT_PX_PER_MPS * DRIFT_SPEED_M_S * seconds * NOISE_SCALE, DRIFT_PERIOD_CELLS)
 
 
 ## The water's VISIBLE downstream speed in world px/s -- the CPU mirror of
@@ -2146,8 +2255,14 @@ static func surface_cells(speed_mps: float, seconds: float) -> float:
 
 ## How far the standing eddies have migrated downstream, in noise cells:
 ## BEND_DRIFT_FRACTION of the water's visible travel. Zero in still water.
+## Wrapped at DRIFT_PERIOD_CELLS in EDDY units (the eddy field tiles at
+## that period), reported back in noise cells.
 static func bend_drift_cells(speed_mps: float, seconds: float) -> float:
-	return surface_cells(speed_mps, seconds) * BEND_DRIFT_FRACTION
+	if speed_mps < STILL_FLOW_M_S:
+		return 0.0
+	return fposmod(
+		surface_cells(DRIFT_SPEED_M_S, seconds) * BEND_DRIFT_FRACTION * EDDY_SCALE, DRIFT_PERIOD_CELLS
+	) / EDDY_SCALE
 
 
 ## Mean absolute change in the field over a step of `distance`, taken either
@@ -2174,9 +2289,10 @@ static func field_roughness(distance: float, dir: Vector2, downstream: bool) -> 
 ## the shader's `bend * turbulence_strength`. Anchored to unadvected
 ## coordinates, exactly as the shader anchors it to the bed.
 static func bend_displacement(eddy_x: float, eddy_y: float) -> float:
-	var coarse := value_noise(eddy_x, eddy_y) - 0.5
-	var fine := value_noise(
-		eddy_x * EDDY_DETAIL_FREQUENCY + 19.7, eddy_y * EDDY_DETAIL_FREQUENCY + 7.3
+	var coarse := value_noise_tiled(eddy_x, eddy_y, DRIFT_PERIOD_CELLS) - 0.5
+	var fine := value_noise_tiled(
+		eddy_x * EDDY_DETAIL_FREQUENCY + 19.7, eddy_y * EDDY_DETAIL_FREQUENCY + 7.3,
+		DRIFT_PERIOD_CELLS * EDDY_DETAIL_FREQUENCY
 	) - 0.5
 	return (coarse + fine * EDDY_DETAIL_WEIGHT) * TURBULENCE_STRENGTH
 
