@@ -1,21 +1,52 @@
 extends RefCounted
 
 ## A creature's survival needs: hunger and thirst that rise over time and
-## reset when the creature eats/drinks. Drives food/water-seeking behavior
-## (see CreatureBehavior). Kept as a plain data+logic object, no engine
-## dependency, so it's fully unit-testable.
+## reset when the creature eats/drinks, and body warmth. Drives food/water-
+## seeking behavior (see CreatureBehavior). Kept as a plain data+logic object,
+## no engine dependency, so it's fully unit-testable.
+##
+## Since docs/concept/ethogram.md slice 3 this is a FACADE: hunger and thirst
+## run on the one drive clock every animal shares (Drives) with the land
+## mammal's profile from the ethogram (Ethogram.drive_profile("", "mammal")
+## -- the same 0.02/s and 0.03/s, the same half-way threshold, the same
+## staggered start this file always had, now species data rather than
+## constants here). The API is unchanged for CreatureMarker and every test;
+## the numbers below are re-exported from the profile for callers that read
+## them. Warmth stays here: it is the player's own body-temperature model
+## (SurvivalMeters), not a drive.
 
 const SurvivalMeters = preload("res://src/gameplay/survival_meters.gd")
+const Drives = preload("res://src/gameplay/drives.gd")
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
 
-## Per-simulated-second rise rate. Chosen so a creature crosses its need
-## thresholds within a reasonable stretch of play, and verified behaviorally
+const BODY_PLAN := "mammal"
+
+## The ethogram's mammal profile, re-exported. Per-simulated-second rise
+## rates chosen so a creature crosses its need thresholds within a reasonable
+## stretch of play, and verified behaviorally
 ## (test_becomes_hungry_once_past_the_threshold), not by asserting the number.
-const HUNGER_RATE_PER_SECOND := 0.02
-const THIRST_RATE_PER_SECOND := 0.03
+static var HUNGER_RATE_PER_SECOND: float = (
+	1.0 / float(Ethogram.drive_profile("", BODY_PLAN)[Ethogram.DRIVE_HUNGER]["rise_seconds"])
+)
+static var THIRST_RATE_PER_SECOND: float = (
+	1.0 / float(Ethogram.drive_profile("", BODY_PLAN)[Ethogram.DRIVE_THIRST]["rise_seconds"])
+)
 
 ## A creature actively seeks food/water once its need passes these fractions.
-const HUNGRY_THRESHOLD := 0.5
-const THIRSTY_THRESHOLD := 0.5
+static var HUNGRY_THRESHOLD: float = float(
+	Ethogram.drive_profile("", BODY_PLAN)[Ethogram.DRIVE_HUNGER]["threshold"]
+)
+static var THIRSTY_THRESHOLD: float = float(
+	Ethogram.drive_profile("", BODY_PLAN)[Ethogram.DRIVE_THIRST]["threshold"]
+)
+
+## How far into its own need cycle a freshly-created animal starts, at most.
+## Deliberately below HUNGRY_THRESHOLD/THIRSTY_THRESHOLD so no animal spawns
+## already starving, and high enough that a herd's onsets spread right across
+## the run-up rather than bunching (see Drives' `stagger`).
+static var START_STAGGER: float = float(
+	Ethogram.drive_profile("", BODY_PLAN)[Ethogram.DRIVE_HUNGER]["stagger"]
+)
 
 ## Body warmth, 1.0 comfortable to 0.0 freezing -- the animal half of the
 ## body-temperature model the PLAYER already had (SurvivalMeters.warmth).
@@ -35,15 +66,19 @@ const THIRSTY_THRESHOLD := 0.5
 ## (concept/animal_genetics.md's hardiness gene), not to a hand-typed column.
 var warmth := 1.0
 
-var hunger := 0.0
-var thirst := 0.0
+var _drives: Drives
 
+var hunger: float:
+	get:
+		return _drives.level(Ethogram.DRIVE_HUNGER)
+	set(value):
+		_drives.levels[Ethogram.DRIVE_HUNGER] = clampf(value, 0.0, 1.0)
 
-## How far into its own need cycle a freshly-created animal starts, at most.
-## Deliberately below HUNGRY_THRESHOLD/THIRSTY_THRESHOLD so no animal spawns
-## already starving, and high enough that a herd's onsets spread right across
-## the run-up rather than bunching.
-const START_STAGGER := 0.45
+var thirst: float:
+	get:
+		return _drives.level(Ethogram.DRIVE_THIRST)
+	set(value):
+		_drives.levels[Ethogram.DRIVE_THIRST] = clampf(value, 0.0, 1.0)
 
 
 ## `seed_value` staggers where this individual begins in its own cycle.
@@ -58,23 +93,11 @@ const START_STAGGER := 0.45
 ## Defaults to 0, so a caller that doesn't care -- every existing test --
 ## keeps the old exactly-empty start.
 func _init(seed_value: int = 0) -> void:
-	if seed_value == 0:
-		return
-	hunger = _stagger(seed_value, "hunger")
-	thirst = _stagger(seed_value, "thirst")
-
-
-## Hash-derived rather than RandomNumberGenerator, matching the deterministic
-## "the same individual always rolls the same" idiom used throughout the
-## world sim (TallGrass, FlowerPatch, TreeGenome).
-func _stagger(seed_value: int, channel: String) -> float:
-	var roll := float(absi(hash("%d_%s_need" % [seed_value, channel])) % 10000) / 10000.0
-	return roll * START_STAGGER
+	_drives = Drives.new(Ethogram.drive_profile("", BODY_PLAN), seed_value)
 
 
 func advance(delta_seconds: float) -> void:
-	hunger = clampf(hunger + HUNGER_RATE_PER_SECOND * delta_seconds, 0.0, 1.0)
-	thirst = clampf(thirst + THIRST_RATE_PER_SECOND * delta_seconds, 0.0, 1.0)
+	_drives.advance(delta_seconds)
 
 
 ## Moves body warmth toward the local ambient, the same easing
@@ -98,16 +121,22 @@ func is_cold() -> bool:
 
 
 func is_hungry() -> bool:
-	return hunger >= HUNGRY_THRESHOLD
+	return _drives.is_urgent(Ethogram.DRIVE_HUNGER)
 
 
 func is_thirsty() -> bool:
-	return thirst >= THIRSTY_THRESHOLD
+	return _drives.is_urgent(Ethogram.DRIVE_THIRST)
 
 
 func feed() -> void:
-	hunger = 0.0
+	_drives.satisfy(Ethogram.DRIVE_HUNGER)
 
 
 func drink() -> void:
-	thirst = 0.0
+	_drives.satisfy(Ethogram.DRIVE_THIRST)
+
+
+## The needs as the behaviour kernel's gates (Drives.gains): what
+## CreatureMarker hands CreatureBehavior as `drives`.
+func gains() -> Dictionary:
+	return _drives.gains()

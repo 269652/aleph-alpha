@@ -134,13 +134,20 @@ func _receptors(context: Dictionary) -> Dictionary:
 	return _expressed
 
 
-## Drive levels: the needs the caller already tracks, as gains. Fear is
-## always open (the world-boss case is sensitivity, above). Levels are 0/1
-## because CreatureNeeds' own thresholds are; ramps are ethogram.md's slice 3.
+## Drive levels as gains. A caller that publishes `drives` (CreatureNeeds.
+## gains, the one drive clock -- ethogram.md §5) is taken at its word, and a
+## partial gain still opens its gate; the `hungry`/`thirsty` booleans are the
+## older shape, read only when `drives` is absent. Fear is always open (the
+## world-boss case is sensitivity, above).
 func _drives_for(context: Dictionary) -> Dictionary:
 	_drives[Ethogram.DRIVE_FEAR] = 1.0
-	_drives[Ethogram.DRIVE_THIRST] = 1.0 if context["thirsty"] else 0.0
-	_drives[Ethogram.DRIVE_HUNGER] = 1.0 if context["hungry"] else 0.0
+	if context.has("drives"):
+		var published: Dictionary = context["drives"]
+		_drives[Ethogram.DRIVE_THIRST] = float(published.get(Ethogram.DRIVE_THIRST, 0.0))
+		_drives[Ethogram.DRIVE_HUNGER] = float(published.get(Ethogram.DRIVE_HUNGER, 0.0))
+	else:
+		_drives[Ethogram.DRIVE_THIRST] = 1.0 if context.get("thirsty", false) else 0.0
+		_drives[Ethogram.DRIVE_HUNGER] = 1.0 if context.get("hungry", false) else 0.0
 	_drives[Ethogram.DRIVE_COURTSHIP] = 1.0 if context.get("is_courting", false) else 0.0
 	return _drives
 

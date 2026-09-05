@@ -23,7 +23,12 @@ extends RefCounted
 ##
 ## express() is the genotype-to-phenotype step: a species template, adjusted
 ## by an individual's receptor genes. Modulation (drives as gains) is the
-## kernel's job, per tick. Pure, static, no engine dependency, no RNG.
+## kernel's job, per tick; the DRIVE PROFILES -- how fast hunger rises for a
+## mammal, a villager, a songbird, a kingfisher -- are data here too
+## (drive_profile), run by one clock (Drives). Pure, static, no engine
+## dependency, no RNG.
+
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 # -- the basis ---------------------------------------------------------------
 
@@ -116,6 +121,19 @@ const SPECIES := {
 			"valence": {SUGAR: 0.3, DECAY: 1.0, GREEN: 0.0, MUSK: 0.2, SMOKE: -0.4},
 		},
 	},
+	# A bird with its own appetite (PiscivoreAppetite): a couple of fish
+	# across an in-game day, and a whole inter-meal interval before it is
+	# interested again -- "1 or 2 fish per in-game day based on hunger", as
+	# asked, pinned by the resulting count over a simulated day. Starts
+	# wanting a meal. No nose: it hunts by sight.
+	"kingfisher": {
+		"body_plan": "bird",
+		"drives": {
+			DRIVE_HUNGER: {
+				"rise_seconds": SeasonCycle.SECONDS_PER_DAY / 2.0, "threshold": 1.0, "meal": 1.0, "start": 1.0,
+			},
+		},
+	},
 }
 
 # -- body plans --------------------------------------------------------------
@@ -142,11 +160,28 @@ const SPECIES := {
 ## Only the mammal plan has wirings. `bird`, `insect`, `fish` and `villager`
 ## are named on the records that will need them and wirings_for() returns
 ## nothing for them rather than pretending.
+##
+## Every plan's `drives` block is its clock (see Drives for the fields). The
+## numbers are the ones the four needs modules always ran, moved here so
+## they are species data rather than module constants:
+##   mammal    CreatureNeeds' 0.02/s hunger and 0.03/s thirst, urgent from
+##             half way, a meal resets, a herd staggered up to 0.45 of the
+##             cycle so it does not cross into hunger on one tick
+##   villager  the same pace, hunger only (docs/concept/npc.md: thirst has
+##             no villager-side consumer, so it is not simulated)
+##   bird      BirdDigestion's songbird crop, as hunger: empties in an
+##             eighth of the world day, urgent below 0.35 full, a meal fills
+##             it by 0.7, starts empty -- a bird that starts fed does nothing
+##             until it is not
 const BODY_PLANS := {
 	"mammal": {
 		"receptors": {
 			"sensitivity": {PREDATOR: 1.0, PLAYER: 1.0, FLESH: 1.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0},
 			"valence": {PREDATOR: -1.0, PLAYER: -1.0, FLESH: 0.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0},
+		},
+		"drives": {
+			DRIVE_HUNGER: {"rise_seconds": 1.0 / 0.02, "threshold": 0.5, "meal": 1.0, "stagger": 0.45},
+			DRIVE_THIRST: {"rise_seconds": 1.0 / 0.03, "threshold": 0.5, "meal": 1.0, "stagger": 0.45},
 		},
 		"wirings": [
 			{"gate": DRIVE_FEAR, "channels": [PREDATOR, PLAYER], "approach": "attack", "avoid": "flee"},
@@ -159,6 +194,18 @@ const BODY_PLANS := {
 			{"gate": DRIVE_HUNGER, "channels": [FORAGE], "approach": "seek_food", "search": "search_food"},
 			{"gate": DRIVE_COURTSHIP, "channels": [MATE], "approach": "court"},
 		],
+	},
+	"villager": {
+		"drives": {
+			DRIVE_HUNGER: {"rise_seconds": 1.0 / 0.02, "threshold": 0.5, "meal": 1.0, "stagger": 0.45},
+		},
+	},
+	"bird": {
+		"drives": {
+			DRIVE_HUNGER: {
+				"rise_seconds": SeasonCycle.SECONDS_PER_DAY / 8.0, "threshold": 1.0 - 0.35, "meal": 0.7, "start": 1.0,
+			},
+		},
 	},
 }
 
@@ -217,6 +264,22 @@ static func express(species: String, genome: Dictionary = {}, body_plan: String 
 ## How a receptor gene scales the species' sensitivity for its channel.
 static func receptor_gene_factor(gene: float) -> float:
 	return clampf(gene, 0.0, 1.0) / NEUTRAL_RECEPTOR_GENE
+
+
+## This species' drive profile (the fields Drives reads): its body plan's
+## clock, with the species' own overrides on top -- a kingfisher is a bird
+## with a different appetite. `body_plan` overrides the record's plan, as in
+## express(). A deep copy; empty for a species and plan that have none.
+static func drive_profile(species: String, body_plan: String = "") -> Dictionary:
+	var record: Dictionary = SPECIES.get(species, {})
+	var plan_name := body_plan if body_plan != "" else String(record.get("body_plan", ""))
+	var plan: Dictionary = BODY_PLANS.get(plan_name, {})
+	var profile := {}
+	for drive in plan.get("drives", {}):
+		profile[drive] = (plan["drives"][drive] as Dictionary).duplicate(true)
+	for drive in record.get("drives", {}):
+		profile[drive] = (record["drives"][drive] as Dictionary).duplicate(true)
+	return profile
 
 
 ## The ordered wirings of a body plan, as a deep copy the caller may reorder
