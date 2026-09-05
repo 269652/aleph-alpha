@@ -824,6 +824,28 @@ func test_the_shadow_stretches_with_the_shared_sun_elevation():
 	)
 
 
+# -- gradual, depth-driven submersion (see CharacterView.set_submersion_depth) -
+#
+# Reported: "the players submerged tint should be improved and gradual based
+# on water depth". _resolve_water_state (see test_player_river_water_state.gd)
+# already computes real, continuous depth in meters -- it used to be
+# discarded the moment it was collapsed into the coarse walking/wading/
+# swimming/drowning mode string, which is why _update_character_view is the
+# actual place this was lost: current_water_depth is the new channel that
+# survives that collapse.
+
+func test_update_character_view_passes_the_real_water_depth_through_to_the_rig():
+	player.current_water_depth = 0.73
+	player._update_character_view(Vector2.DOWN)
+	assert_almost_eq(player._character_view._submersion_depth_meters, 0.73, 0.001)
+
+
+func test_update_character_view_passes_zero_depth_through_on_dry_ground():
+	player.current_water_depth = 0.0
+	player._update_character_view(Vector2.DOWN)
+	assert_almost_eq(player._character_view._submersion_depth_meters, 0.0, 0.001)
+
+
 # -- mana: a new resource for spellcasting, kept off stamina by design (see
 # docs/concept/survival.md's "Stamina scope: movement only, not combat" and
 # docs/concept/spell_runtime.md) --------------------------------------------

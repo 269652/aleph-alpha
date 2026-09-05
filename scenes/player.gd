@@ -193,6 +193,14 @@ signal inventory_changed
 var wetness := 0.0
 var current_mode := "walking"
 var current_speed_multiplier := 1.0
+## Real, continuous water depth in meters (maxf of ocean/river/lake --
+## see _resolve_water_state), set alongside current_mode every step. Used
+## to be computed and discarded the moment it was collapsed into current_
+## mode's coarse walking/wading/swimming/drowning string; this is the
+## channel _update_character_view feeds to CharacterView.
+## set_submersion_depth so wading has a real visual signature instead of
+## none at all until the exact swim threshold.
+var current_water_depth := 0.0
 
 ## Aggressive/healthy predators and boars attack the player back (see
 ## CreatureMarker._try_attack), so take_damage() has a live caller. Reaching
@@ -1787,6 +1795,7 @@ func _authority_step(delta: float) -> void:
 	var tile := current_tile()
 	var water_result := _resolve_water_state(tile, delta)
 	current_mode = water_result.mode
+	current_water_depth = water_result.water_depth
 	# Overall condition (SurvivalMeters.fitness, driven by starving/
 	# dehydrated/cold) is a real movement debuff, not a dead meter -- see
 	# ConditionPenalty and docs/concept/survival.md's "Debuffs, not death".
@@ -3748,6 +3757,7 @@ func _proxy_step() -> void:
 		var water_result := _resolve_water_state(current_tile(), get_physics_process_delta_time())
 		current_mode = water_result.mode
 		current_speed_multiplier = water_result.speed_multiplier
+		current_water_depth = water_result.water_depth
 
 	var facing_direction := _last_facing_direction
 	if movement.length() > PROXY_MOVEMENT_EPSILON:
@@ -3824,7 +3834,14 @@ func _resolve_water_state(tile: Vector2i, delta: float) -> Dictionary:
 	wetness = _wetness_tracker.update(wetness, worn_material, submerged, delta)
 	var total_weight := body_weight + worn_material.effective_weight(wetness)
 
-	return _water_movement_model.resolve(water_depth, total_weight, max_swimmable_weight)
+	var result := _water_movement_model.resolve(water_depth, total_weight, max_swimmable_weight)
+	# The raw depth CharacterView.set_submersion_depth needs -- resolve()'s
+	# own mode/speed_multiplier are derived FROM this, but neither carries
+	# it back out (mode collapses it to 4 strings, and speed_multiplier's
+	# own formula switches to weight-driven once swimming, so depth isn't
+	# recoverable from it at all in that regime).
+	result["water_depth"] = water_depth
+	return result
 
 
 ## Modes in which the player is standing in enough water to disturb it (see
@@ -3851,6 +3868,7 @@ func _step_water_ripples(delta: float, input_direction: Vector2) -> void:
 func _update_character_view(input_direction: Vector2) -> void:
 	_character_view.set_facing(input_direction)
 	_character_view.is_moving = input_direction.length() > 0.01
+	_character_view.set_submersion_depth(current_water_depth)
 	if current_mode == "swimming":
 		_character_view.set_movement_state(CharacterView.MovementState.SWIMMING)
 	elif input_direction.length() > 0.01 and current_mode != "drowning":

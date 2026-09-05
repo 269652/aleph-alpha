@@ -58,6 +58,18 @@ const WATER_COLOR := Color(0.2, 0.4, 0.85)
 const TINT_STRENGTH := 0.5
 const ALPHA_FADE := 0.22
 
+## How far a rig visually sinks (in local pixels, before any of its own
+## node scale) at full wade depth -- shared by the player (character_view.gd)
+## and animals (creature_marker.gd) for the same reason WATER_COLOR/
+## TINT_STRENGTH/ALPHA_FADE above already are: one shared visual language
+## for "partly underwater" rather than two independently-tuned numbers that
+## could silently drift apart. Modest -- in the same tuned register as
+## CharacterView.LEG_SWING_AMPLITUDE (3.0) -- legible without reading as
+## sinking into quicksand. Pinned by each consumer's own test (see
+## test_character_view.gd's test_full_wade_depth_sinks_the_body_by_the_
+## full_constant) rather than left as an eyeballed comment.
+const MAX_SINK_PX := 3.0
+
 var _shared_material: ShaderMaterial
 
 ## ONE compiled Shader shared by every material instance -- each
