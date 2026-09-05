@@ -1113,13 +1113,18 @@ const _LEAF_FALL_ROLL_STEPS := 1000
 
 ## The flat per-step chance a settled SUMMER tree sheds a leaf -- real
 ## wind/petal damage, not the main autumn fall (see docs/concept/
-## leaf_litter.md). Small and deliberately named rather than derived: a
-## named table beats an invented formula, the same "one real table" idiom
-## FruitingModel.RIPENING_BY_SPECIES already sets. At FRUITING_INTERVAL's
-## once-a-second cadence this sheds a leaf roughly once every half minute
-## per tree on average -- present and occasionally noticeable, nowhere
-## near autumn's own real fall.
-const LEAF_SUMMER_TRICKLE_CHANCE := 0.03
+## leaf_litter.md). Named rather than derived: a named table beats an
+## invented formula, the same "one real table" idiom FruitingModel.
+## RIPENING_BY_SPECIES already sets. Reported directly: "double leaf fall
+## rate" -- was 0.03 (roughly once every half minute per tree on average
+## at FRUITING_INTERVAL's once-a-second cadence), doubled to 0.06 (roughly
+## once every ~17 seconds per tree). LEAF_AUTUMN_BASELINE_CHANCE/LEAF_
+## SPRING_TRICKLE_CHANCE both derive from this constant, so doubling it
+## here doubles the summer trickle, the spring blossom trickle, AND
+## autumn's own baseline floor all at once -- see
+## test_leaf_summer_trickle_chance_is_pinned_to_double_its_prior_value in
+## test_earth_chunk_manager.gd.
+const LEAF_SUMMER_TRICKLE_CHANCE := 0.06
 
 ## The chance floor a settled AUTUMN tree sheds a leaf at the very START of
 ## the season -- reported directly: "leaf litter should happen constantly

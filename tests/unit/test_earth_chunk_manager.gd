@@ -2242,6 +2242,21 @@ func test_leaf_fall_chance_for_summer_is_flat_across_the_season():
 	)
 
 
+## Reported directly: "double leaf fall rate" -- was 0.03 (see this
+## constant's own doc comment for the original reasoning), doubled to
+## 0.06. Named as a direct multiple of the prior value rather than a
+## fresh independently-chosen number, the same "retune without inventing
+## a new unrelated figure" idiom this file's own leaf-size/world-size
+## follow-ups already used. LEAF_AUTUMN_BASELINE_CHANCE/LEAF_SPRING_
+## TRICKLE_CHANCE both derive FROM this constant, so doubling it alone
+## doubles the summer trickle, the spring blossom trickle, AND autumn's
+## whole baseline floor (the ramp's own ceiling stays at 1.0/certainty --
+## "all leaves should fall eventually" doesn't get MORE certain than
+## certain, only reached sooner).
+func test_leaf_summer_trickle_chance_is_pinned_to_double_its_prior_value():
+	assert_almost_eq(EarthChunkManager.LEAF_SUMMER_TRICKLE_CHANCE, 0.06, 0.0001)
+
+
 ## Same reasoning as summer's own flat trickle -- see LEAF_SPRING_TRICKLE_
 ## CHANCE's own doc comment for why blossom shares it rather than getting
 ## an autumn-style rising ramp of its own.
