@@ -6594,25 +6594,34 @@ func test_a_successful_grass_seed_forage_dispatches_a_real_forager_at_the_seed()
 
 ## AntColony.FORAGE_CHANCE can succeed several times a second per mound at
 ## normal frame rate -- a new visible ant for every single one would be a
-## flicker of overlapping sprites, not a colony reading as alive. Uses a
-## standalone AntColony (not manager.update()'s real, slow chunk load,
-## which this dispatch-only logic never actually touches) at its own
-## founding population, whose active_forager_cap_at is exactly 1.
+## flicker of overlapping sprites, not a colony reading as alive. Fills a
+## mound's own cap EXACTLY (whatever it currently is -- since population
+## now seeds across a real established range, see AntColony.
+## _seed_initial_mounds, a freshly-seeded mound's own cap is no longer
+## reliably exactly 1 the way it was before that pass), then confirms one
+## more attempt beyond that is rejected -- a more robust test of "cap
+## enforcement" in general than hardcoding a specific cap value ever was.
 func test_does_not_spawn_a_second_forager_for_a_mound_already_at_its_own_cap():
 	var colony := _ant_colony_with_one_mound()
 	var cell: Vector2i = colony.mound_cells()[0]
-	assert_eq(colony.active_forager_cap_at(cell), 1, "precondition: a founding colony's cap is exactly one")
+	var cap := colony.active_forager_cap_at(cell)
 	var global_tile := Vector2i(123_456, 123_456)  # arbitrary -- does not need to be a real mound
 	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
 	var before := manager._entities_parent.get_child_count()
 
-	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(10, 0), "seed")
-	assert_eq(manager._entities_parent.get_child_count(), before + 1, "precondition: the first spawn landed")
+	for i in cap:
+		manager._dispatch_ant_forager(
+			global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(10 + i, 0), "seed"
+		)
+	assert_eq(
+		manager._entities_parent.get_child_count(), before + cap,
+		"precondition: every slot up to the mound's own cap should fill"
+	)
 
 	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(-10, 0), "seed")
 	assert_eq(
-		manager._entities_parent.get_child_count(), before + 1,
-		"a second forager for a mound already at its own cap should not spawn while the first is still out"
+		manager._entities_parent.get_child_count(), before + cap,
+		"a forager beyond the mound's own cap should not spawn while the others are still out"
 	)
 
 

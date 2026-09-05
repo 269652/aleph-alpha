@@ -28,9 +28,20 @@ const PopulationModel = preload("res://src/world/population_model.gd")
 ## eyeballed number" reason.
 const GROWTH_RATE_PER_DAY := 0.05
 
-## A founding colony's own starting size -- an abstract colony-strength
-## number, not a literal worker headcount, the same abstraction level
-## fish_population/herbivore_population already sit at.
+## The FLOOR of the real range `AntColony` seeds a mound's initial
+## population across (see `AntColony._seed_initial_mounds`) -- an abstract
+## colony-strength number, not a literal worker headcount, the same
+## abstraction level fish_population/herbivore_population already sit at.
+##
+## Not every mound a player ever finds is freshly founded this instant --
+## most have already existed in this simulated world for real, if
+## unmodeled, time before being loaded for the first time, the same
+## "map-generated content starts already established" convention every
+## other patch-sim in this game already follows (TallGrass/WildCropPatch/
+## every tree all start mature, never as seedlings/saplings). A colony
+## seeded exactly at this floor is a real, currently-young-or-struggling
+## one, not an error -- it is the low end of the range, not the only
+## value in it.
 const STARTING_POPULATION := 1.0
 
 ## What an average mound supports with no particular feeding advantage.

@@ -8497,8 +8497,74 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   dispatch rare to catch by chance in a short session. Left unchanged
   rather than loosened without confirming that tradeoff is what's
   actually wanted.
+  **Update, that confirmation now given** — see "Thriving colonies, and
+  a real swarm" a few entries below: `FORAGE_RADIUS_TILES` doubled to
+  2.0 tiles.
   Full writeup: [soil_fauna.md](concept/soil_fauna.md#water-not-just-food-a-second-real-growth-driver)
   and [mound size grows with the colony](concept/soil_fauna.md#mound-size-grows-with-the-colony).
+- **Thriving colonies, and a real swarm** (medium) — ✅ Done — requested
+  directly, live: *"I almost see no ants but a lot of mounds ... we want
+  real swarm intelligence and thriving ant colonies."* Not a rendering
+  or LOD bug (foragers carry no decoration-culling at all, confirmed by
+  reading both marker classes in full) — three compounding, individually
+  reasonable tuning decisions meant almost no mound a player ever
+  encounters in ordinary play was ever seen above its own absolute
+  floor. Investigated with real numbers, not assumed: reaching a
+  population fraction that unlocks more than one concurrent forager
+  took, by this project's own pre-existing test timescales, on the
+  order of **200 simulated real-time minutes** of one mound's chunk
+  staying continuously loaded
+  (`test_dispatches_a_second_forager_once_the_mounds_own_cap_allows_it`),
+  and **400** to approach the visual-growth ceiling
+  (`test_growth_fraction_approaches_one_for_a_thriving_colony`) — and
+  since mounds reset to the bare founding minimum on every chunk
+  unload/reload, almost no real playthrough ever keeps one mound loaded
+  anywhere near that long. Three real fixes:
+  1. **`AntColony.FORAGE_RADIUS_TILES`: 1.0 → 2.0 tiles** — actually
+     ships the doubling `soil_fauna.md`'s own "Pheromone trails" section
+     already claimed, which (checked directly against the live constant
+     and the file's full git history) had never actually been made —
+     the constant read 1.0 in every commit since its introduction. This
+     closes the exact tradeoff the "investigated, found no bug" entry
+     above left open pending confirmation.
+  2. **`AntColony._seed_initial_mounds` now seeds population across a
+     real established range** (`AntPopulationModel.STARTING_POPULATION`
+     .. `BASE_CAPACITY`, `PixelNoise`-seeded per mound) instead of
+     uniformly at the bare founding minimum every single time — the one
+     patch-sim in this game still seeding "freshly founded" on every
+     load where `TallGrass`/`WildCropPatch`/every tree already start
+     mature. Capped at `BASE_CAPACITY` (never above it) so a freshly
+     seeded mound never reads as already over its own unobserved
+     capacity ceiling, which would read as overcrowded and immediately
+     shrink back down. Ongoing growth is untouched and stays genuinely
+     slow (real ant colonies mature over years, still this game's
+     slowest-tracked population) — only the FIRST-ever-observed value
+     changed, from always-minimum to a believable established range.
+  3. **`AntColony.MAX_CONCURRENT_FORAGERS`: 3 → 6** — the old value was
+     explicitly framed as "a special sight, not a swarm," which is
+     exactly the framing this report asks to change. This is also what
+     makes the ALREADY-correct pheromone-trail recruitment
+     (`PheromoneField.best_candidate_index`, biasing every
+     concurrently-dispatched forager toward the same known-good,
+     trail-marked source) actually read as a swarm converging on a rich
+     find rather than one ant's smarter-but-solitary pathing — "real
+     swarm intelligence" was already implemented correctly; it never had
+     enough simultaneous foragers to look like one.
+  Also corrected a real internal doc inconsistency found while
+  investigating: `soil_fauna.md`'s own "Not persisted, not catch-up
+  integrated" scope note had borrowed `EarthwormPatch`'s "short-
+  timescale, self-renewing" reasoning for skipping `ChunkEcologyCatchup`
+  — but ant colony growth is the OPPOSITE of short-timescale (deliberately
+  the slowest population this game tracks), so that reasoning never
+  actually applied; corrected to name the real, still-open limitation
+  honestly (population is seeded well now, but a specific mound's exact
+  number still is not remembered indefinitely across a reload) rather
+  than mis-justify it as unnecessary. Real persistence/catch-up remains a
+  separate, bigger, still-open lift (would need first extending
+  `ChunkEcologyCatchup` to per-MOUND granularity, since
+  `AntPopulationModel` is tracked per mound, not per chunk, unlike every
+  other species' aggregate).
+  Full writeup: [soil_fauna.md](concept/soil_fauna.md#thriving-colonies-and-a-real-swarm).
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to
