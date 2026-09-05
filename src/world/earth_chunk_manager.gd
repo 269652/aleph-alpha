@@ -3621,7 +3621,8 @@ const CLAMP_MAGNITUDE := 16.0
 
 
 func _write_flow_across_texel(
-	global: Vector2i, across_fraction: float, bearing_deg: float, speed_mps: float, half_width_tiles: float
+	global: Vector2i, across_fraction: float, bearing_deg: float, speed_mps: float, half_width_tiles: float,
+	drift_speed_m_s: float = 0.0
 ) -> void:
 	var side := RiverFlowShader.FLOW_MAP_TILES
 	if _flow_across_image == null:
@@ -3633,7 +3634,10 @@ func _write_flow_across_texel(
 	var radians := deg_to_rad(bearing_deg)
 	var clamped_across := clampf(across_fraction, -CLAMP_MAGNITUDE, CLAMP_MAGNITUDE)
 	_flow_across_image.set_pixel(x, y, Color(clamped_across, sin(radians), -cos(radians), speed_mps))
-	_flow_scale_image.set_pixel(x, y, Color(half_width_tiles, 0.0, 0.0, 0.0))
+	# G: the reach's drift speed (EarthChunkGenerator.drift_speed_m_s_for_
+	# discharge_units) -- constant along a reach, read by the shader through
+	# a NEAREST-filtered sampler so no interpolation ramp can diverge.
+	_flow_scale_image.set_pixel(x, y, Color(half_width_tiles, drift_speed_m_s, 0.0, 0.0))
 
 
 ## Pushes the filled maps into the shared flow material after a paint pass.
@@ -3651,6 +3655,9 @@ func _push_flow_across_map() -> void:
 	var material := _river_flow_shader.shared_material()
 	material.set_shader_parameter("flow_across_map", _flow_across_texture)
 	material.set_shader_parameter("flow_scale_map", _flow_scale_texture)
+	# The same texture twice: the shader reads half-width through a linear
+	# sampler and the reach's drift speed through a nearest one.
+	material.set_shader_parameter("flow_drift_map", _flow_scale_texture)
 
 
 ## Pushes the current boulder set into the shared flow material -- called
@@ -4030,7 +4037,8 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 				var plume_speed: float = HydrologyField.PLUME_SPEED_M_S * probe["plume_factor"]
 				_write_flow_across_texel(
 					global, still_across, probe["plume_bearing_deg"], plume_speed,
-					RiverCatalog.RIVER_HALF_WIDTH_TILES
+					RiverCatalog.RIVER_HALF_WIDTH_TILES,
+					generator.drift_speed_m_s_for_discharge_units(probe.get("plume_reach_discharge", 0.0))
 				)
 				_river_flow_boulder_tiles.erase(global)
 				_river_flow_layer.set_cell(
@@ -4082,7 +4090,8 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 					nearest.signed_across_tiles / half_width,
 					nearest.course_bearing_deg,
 					far_hydraulics.velocity_m_s,
-					half_width
+					half_width,
+					nearest.get("drift_speed_m_s", 0.0)
 				)
 				continue
 			if nearest.distance_tiles > apron:
@@ -4094,7 +4103,8 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 					nearest.signed_across_tiles / half_width,
 					nearest.course_bearing_deg,
 					apron_hydraulics.velocity_m_s,
-					half_width
+					half_width,
+					nearest.get("drift_speed_m_s", 0.0)
 				)
 				_river_flow_boulder_tiles.erase(global)
 				_river_flow_layer.set_cell(
@@ -4117,7 +4127,8 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			var across_fraction: float = nearest.signed_across_tiles / half_width
 			_write_flow_across_texel(
 				global, across_fraction,
-				nearest.course_bearing_deg, hydraulics.velocity_m_s, half_width
+				nearest.course_bearing_deg, hydraulics.velocity_m_s, half_width,
+				nearest.get("drift_speed_m_s", 0.0)
 			)
 			if flow_boulder_at_global(global.x, global.y):
 				_river_flow_boulder_tiles[global] = true

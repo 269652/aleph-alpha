@@ -101,6 +101,37 @@ const CURVE_SEGMENTS := 24
 ## from a straight-line extrapolation). Pinned by
 ## test_the_geometry_reach_covers_the_painters_full_bleed.
 const VALLEY_HALF_WIDTH_TILES := 4.0
+
+## How far past the last painted cell the flow map's FILTER still reads:
+## one texel for the bilinear sampler, two for the cubic reconstruction
+## (RiverFlowShader.texture_bicubic). A texel in that band that came from
+## the far curated fallback carries an arbitrary SIGN, and interpolating
+## between a real +6 and a fallback -16 crosses zero INSIDE the painted
+## cell beside it -- the shader drew a hairline of water along the whole
+## reach boundary (found live at the Loire: thin phantom channels running
+## parallel to the river several tiles out, on the world, never on the
+## minimap). Pinned by
+## test_the_geometry_reach_covers_the_map_filters_neighbours_of_the_bleed.
+const MAP_FILTER_SUPPORT_TILES := 2.0
+
+## The channel-geometry query's own reach past a bank: the valley, plus
+## the filter support above, so every texel the map filter can blend into
+## a painted cell still describes the channel's own side. The valley
+## shoulder (probe) keeps ramping over VALLEY_HALF_WIDTH_TILES alone.
+const GEOMETRY_REACH_TILES := VALLEY_HALF_WIDTH_TILES + MAP_FILTER_SUPPORT_TILES
+
+## The narrowest half-width any consumer is ever told: one tile, two texels
+## of wet band. A per-tile across map cannot reconstruct a channel narrower
+## than that -- at the formula's threshold width (MIN_LEGIBLE_WIDTH_TILES,
+## half-width 0.5) the wet band fell between tile centres, the world drew a
+## hairline and the minimap a dotted line on every diagonal (found live at
+## the Loire's tributaries). Applied where the hits are built, so the
+## painter, the probe, the minimap and the waders all see one width and
+## never disagree; the curve itself still tapers to the spring in geometry.
+## The same "gameplay-scale width, not survey accuracy" pillar rivers.md
+## applies to the curated catalog. Pinned by
+## test_every_reported_half_width_is_at_least_the_render_floor.
+const RENDER_HALF_WIDTH_FLOOR_TILES := 1.0
 const VALLEY_CARVE_METERS_PER_DOUBLING := 6.0
 
 ## The shoreline kernel: radius in asset cells of the smooth bump each
@@ -237,6 +268,66 @@ func lake_surface_at_global(global_x: int, global_y: int) -> float:
 	return water_coverage(global_x, global_y)["surface"]
 
 
+## --- the reach ---
+
+## The discharge that decides a channel cell's DRIFT speed: its reach's --
+## the run of channel cells between confluences, judged by the reach head's
+## own discharge. Constant along the reach and stepping only where a
+## tributary joins, because the flow shader multiplies this speed by TIME:
+## a speed that varied along the reach (the per-tile Manning solve does)
+## diverged between neighbouring pixels without bound and shredded every
+## reach after twenty minutes of play, and one global speed lost "the
+## Rhine travels, a lower course crawls". Memoised per cell: the walk to
+## the head is the length of the reach. Pinned by
+## test_the_reach_discharge_is_constant_between_confluences.
+func reach_discharge(cell: int) -> float:
+	var cached = _reach_cache.get(cell)
+	if cached != null:
+		return cached
+	if _reach_cache.size() >= CURVE_CACHE_CAP:
+		_reach_cache.clear()
+	var head := cell
+	var walked: Array = [cell]
+	while true:
+		if _channel_upstream_count(head) != 1:
+			break
+		var upstream := _mainstem_upstream(head, true)
+		if upstream < 0 or walked.has(upstream):
+			break
+		head = upstream
+		walked.append(head)
+	var discharge := _data.discharge_at(head)
+	for member in walked:
+		_reach_cache[member] = discharge
+	return discharge
+
+
+var _reach_cache: Dictionary = {}
+
+
+## The cell's own discharge, in the bake's stand-in units.
+func discharge_at_cell(cell: int) -> float:
+	return _data.discharge_at(cell)
+
+
+## How many CHANNEL cells drain directly into this one -- two or more is a
+## confluence, where a reach begins.
+func _channel_upstream_count(cell: int) -> int:
+	var count := 0
+	var x := cell % _data.width
+	var y := _cell_y(cell)
+	for direction in 8:
+		var ny := y + DrainageNetwork.NEIGHBOR_DY[direction]
+		if ny < 0 or ny >= _data.height:
+			continue
+		var neighbor := cell_index_at(x + DrainageNetwork.NEIGHBOR_DX[direction], ny)
+		if _data.is_sea(neighbor) or _downstream(neighbor) != cell:
+			continue
+		if _data.discharge_at(neighbor) >= river_min_discharge:
+			count += 1
+	return count
+
+
 ## --- hydraulic geometry ---
 
 
@@ -296,6 +387,7 @@ func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 			"lake_across": still_across,
 			"plume_factor": plume["factor"],
 			"plume_bearing_deg": plume["bearing_deg"],
+			"plume_reach_discharge": plume.get("reach_discharge", 0.0),
 			"fine_detail_scale": 0.0,
 			"carve": 0.0,
 		}
@@ -306,7 +398,8 @@ func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 		return {
 			"kind": "", "sea": is_sea, "depth_m": 0.0, "discharge": 0.0, "half_width_tiles": 0.0,
 			"lake_across": still_across, "plume_factor": plume["factor"],
-			"plume_bearing_deg": plume["bearing_deg"], "fine_detail_scale": 1.0, "carve": 0.0,
+			"plume_bearing_deg": plume["bearing_deg"], "plume_reach_discharge": plume.get("reach_discharge", 0.0),
+			"fine_detail_scale": 1.0, "carve": 0.0,
 		}
 
 	var discharge: float = channel["discharge"]
@@ -323,6 +416,7 @@ func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 			"lake_across": still_across,
 			"plume_factor": 0.0,
 			"plume_bearing_deg": 0.0,
+			"plume_reach_discharge": 0.0,
 			"fine_detail_scale": 0.0,
 			"carve": full_carve,
 		}
@@ -337,6 +431,7 @@ func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 		"lake_across": still_across,
 		"plume_factor": plume["factor"],
 		"plume_bearing_deg": plume["bearing_deg"],
+		"plume_reach_discharge": plume.get("reach_discharge", 0.0),
 		"fine_detail_scale": shoulder if not is_sea else 0.0,
 		"carve": full_carve * (1.0 - shoulder) if not is_sea else 0.0,
 	}
@@ -354,6 +449,7 @@ func mouth_plume(global_x: int, global_y: int) -> Dictionary:
 	var cell_y := floori(pixel.y)
 	var best_factor := 0.0
 	var best_bearing := 0.0
+	var best_reach := 0.0
 	for dy in range(-2, 3):
 		var y := cell_y + dy
 		if y < 0 or y >= _data.height:
@@ -375,7 +471,8 @@ func mouth_plume(global_x: int, global_y: int) -> Dictionary:
 				continue
 			best_factor = factor
 			best_bearing = RiverCatalog.bearing_degrees(mouth - from)
-	return {"factor": best_factor, "bearing_deg": best_bearing}
+			best_reach = reach_discharge(cell)
+	return {"factor": best_factor, "bearing_deg": best_bearing, "reach_discharge": best_reach}
 
 
 ## The nearest channel's geometry in exactly the shape
@@ -453,6 +550,7 @@ func nearest_channel_geometry(global_x: int, global_y: int) -> Dictionary:
 			"course_bearing_deg": RiverCatalog.bearing_degrees(tangent),
 			"discharge": nearest["discharge"],
 			"half_width_tiles": nearest["half_width_tiles"],
+			"reach_discharge": reach_discharge(nearest["cell"]),
 		}
 	var half := half_sum / weight_sum
 	var direction: Vector2 = dominant["tangent"]
@@ -478,6 +576,7 @@ func nearest_channel_geometry(global_x: int, global_y: int) -> Dictionary:
 		"course_bearing_deg": RiverCatalog.bearing_degrees(direction),
 		"discharge": dominant["discharge"],
 		"half_width_tiles": half,
+		"reach_discharge": reach_discharge(dominant["cell"]),
 	}
 
 
@@ -511,13 +610,16 @@ func _channel_hits(global_x: int, global_y: int) -> Array:
 			if discharge < river_min_discharge:
 				continue
 			var hit := _nearest_on_curve(tile_center, cell)
-			if hit["distance"] - hit["half_width"] > VALLEY_HALF_WIDTH_TILES:
+			# The render floor, applied here and nowhere else (see
+			# RENDER_HALF_WIDTH_FLOOR_TILES).
+			var half_width: float = maxf(hit["half_width"], RENDER_HALF_WIDTH_FLOOR_TILES)
+			if hit["distance"] - half_width > GEOMETRY_REACH_TILES:
 				continue
 			hits.append({
 				"cell": cell,
 				"discharge": discharge,
 				"distance_tiles": hit["distance"],
-				"half_width_tiles": hit["half_width"],
+				"half_width_tiles": half_width,
 				"closest": hit["closest"],
 				"tangent": hit["tangent"],
 			})

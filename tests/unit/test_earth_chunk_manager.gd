@@ -490,6 +490,24 @@ func test_the_written_across_is_always_bounded():
 	assert_almost_eq(ordinary_texel.r, 0.4, 1e-6)
 
 
+## The reach's drift speed rides the scale map's G channel, and the shader
+## gets that texture twice: once linear (half-width), once NEAREST (drift
+## speed), so no interpolation ramp between two reaches can diverge over
+## TIME.
+func test_the_scale_texel_carries_the_reach_drift_speed_and_the_drift_map_is_bound():
+	manager._write_flow_across_texel(Vector2i(503, 503), 0.1, 45.0, 1.0, 2.0, 0.8)
+	var side := RiverFlowShader.FLOW_MAP_TILES
+	var scale_texel: Color = manager._flow_scale_image.get_pixel(503 % side, 503 % side)
+	assert_almost_eq(scale_texel.r, 2.0, 1e-6, "R stays the half-width")
+	assert_almost_eq(scale_texel.g, 0.8, 1e-6, "G carries the reach's drift speed")
+	manager._push_flow_across_map()
+	var material := manager._river_flow_shader.shared_material()
+	assert_true(
+		material.get_shader_parameter("flow_drift_map") == material.get_shader_parameter("flow_scale_map"),
+		"the drift map is the scale texture bound a second time"
+	)
+
+
 func test_the_flow_texel_carries_direction_and_speed():
 	var flow_layer := TileMapLayer.new()
 	manager.set_river_flow_layer(flow_layer)

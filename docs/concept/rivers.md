@@ -1726,7 +1726,7 @@ the river is light because it is shallow. The old band's tests are
 replaced by shoal tests. The eyot stays: it is the part of the rise that
 breaks the surface.
 
-### Status
+## Status
 
 - Force balance (`BoulderHydraulics`: drag, submerged weight, load,
   holds) — ✅ tested against real cases. Using the verdict to actually
@@ -1872,3 +1872,106 @@ measure as fractions of it.
 - **Freshwater fishing, village avoidance, creature water-depth awareness,
   boats/fords/bridges, Nix water-gating, lakes, already-persisted stale
   saplings** — ⬜ Not started (see above).
+
+## Bounded drift: the far-time shredding (2026-09-05)
+
+Found live at the Loire near Nantes after roughly 25 minutes of play, at
+night: every **curved** reach of a fast river dissolved into per-pixel
+white speckle while the straight reach beside it kept its long moonlit
+lines. Reproduced on the real GPU by advancing the shader clock with
+`Engine.time_scale` on the real Loire flow map: 0.003 of the water pixels
+read as isolated bright specks fresh, 0.056 at `TIME` ~2000 s; 0.015 with
+the drift zeroed, 0.030 with the eddy drift zeroed; the curved-smear
+direction lookup and the bicubic map filter changed nothing.
+
+Two unbounded translations were at fault, and each had two halves.
+
+**Direction.** The drift and the eddy drift move a sample coordinate by
+`flow_dir x (TIME x speed)`. `flow_dir` is reconstructed continuously
+between texels, so on a bend two neighbouring fragments differ by a
+fraction of a degree, and that fraction times thousands of noise cells is
+many cells: neighbouring pixels read unrelated noise. The same "angle
+times distance" trap the world-origin seam fix guards against, re-entered
+through `TIME`. Both drifts now wrap modulo `DRIFT_PERIOD_CELLS` (20 -- in
+noise cells for the smear, in eddy units for the eddies), and the noise
+they translate is `value_noise_tiled`, whose lattice wraps at that same
+period (the eddy detail octave at period x `EDDY_DETAIL_FREQUENCY`, a
+whole 52 cells), so a translation by one period is the identity and the
+wrap is invisible.
+
+**Speed.** That alone left 0.041: the texel's speed is also interpolated
+per fragment and varies along a reach (Manning on the local slope, 2.26
+to 2.35 m/s across a few tiles of the Loire), and `TIME x speed`
+diverges between neighbours without bound whatever the direction does.
+Written with one constant speed in the map the same frame measured
+0.008. So the two unbounded translations now share one reference current,
+`DRIFT_SPEED_M_S` (0.5, the typical reach of the tuning notes), gated
+still by the same still-water step. The reach's real speed still shows
+through the fast-flow brightness, the foam, and the ring, which is
+carried at the local `surface_velocity` and is bounded by its own
+lifetime. What is given up, honestly: "the Rhine visibly travels, a lower
+course crawls" as a *stroke-speed* cue. A per-reach CONSTANT speed in the
+map (one value between confluences) would restore it with a seam only at
+confluences, and is the named follow-up.
+
+Measured after both: 0.002 fresh, 0.002 at ~2000 s. Pinned by
+`test_the_drift_translations_are_bounded_by_the_noise_period`,
+`test_a_long_session_does_not_shred_the_field_on_a_bend` and
+`test_the_drift_is_one_shared_speed_for_every_moving_reach`; the eddy
+pins (`test_the_bend_drifts_downstream_with_the_current`,
+`test_the_shader_streams_every_consumer_from_the_same_surface_speed`) now
+state the shared speed.
+
+**Both halves landed on `main` together** via this branch's own merge
+(`830f4ba`, merged in `b51d80e`) — there is no longer a separate
+direction-only state anywhere in the tree; a session dispatched afterward
+against a stale pre-merge snapshot of `main` to fix "the eddy drift
+specifically" found the CPU-mirror suite already green on arrival
+(`test_a_long_session_does_not_shred_the_field_on_a_bend` included, 172/172
+in the file). Re-confirmed independently on the real GPU rather than taken
+on trust, with a probe this fix's own commits never left behind
+(`tools/probe_eddy_drift_shredding.gd`): a synthetic bending reach, TIME
+pinned by literal substitution rather than the engine clock, isolated-
+bright-speck fraction fresh vs. at 2000 s, measured against the shader as
+it stands after "The reach's own speed" below. The shipped (fixed) shader
+held flat -- 0.0100 -> 0.0052 -- while a copy patched back to the exact
+pre-`830f4ba` eddy formula (proving the metric itself is sound, not just
+silent) shredded exactly as this section describes -- 0.0100 -> 0.0972, a
+~10x rise concentrated at the tightest thresholds.
+
+
+### The reach's own speed (2026-09-05, later the same day)
+
+The one shared drift speed above was the honest stopgap; it lost "the
+Rhine visibly travels, a lower course crawls". What actually diverges is
+a speed that varies *between neighbouring pixels*, and a speed that is
+constant along a whole reach and steps only at a confluence does not:
+the step is a fixed line across the river where the water changes
+character anyway, and the strokes there merely kink by the wobble term.
+
+So the drift speed is now a property of the **reach** -- the run of
+channel cells between confluences, `HydrologyField.reach_discharge`,
+judged by the reach head's discharge and memoised per cell -- converted
+to m/s by `EarthChunkGenerator.drift_speed_m_s_for_discharge_units`
+through the same hydraulic geometry the field already uses (Q = w x d x
+v with `RiverDischarge.derived_width_m` and the depth power law), never
+the per-tile Manning solve. A curated river drifts at one speed along
+its whole course (its mid-course discharge, `curated_drift_speed_m_s`,
+memoised per river) for the same reason; a mouth plume drifts at its
+river's reach. The painter writes it into the scale map's G channel and
+the shader reads it through a **second, nearest-filtered sampler** on
+the same texture (`flow_drift_map`): a linear ramp between two reaches'
+speeds, times `TIME`, would be the shredding again along that one-texel
+band. The ring wake still rides the local `surface_velocity`; it is
+bounded by its lifetime. `DRIFT_SPEED_M_S` is gone; `drift_cells` and
+`bend_drift_cells` take the reach speed and are linear in it again.
+
+Measured on the real Loire flow map at `TIME` ~2000 s: 0.002 of the
+water pixels isolated specks, the same as a fresh frame, with the
+tributary and the main river visibly drifting at different speeds.
+Pinned by `test_the_reach_discharge_is_constant_between_confluences`
+and siblings (field), `test_the_drift_speed_grows_with_discharge_and_is_zero_without`
+and `test_every_river_answer_carries_a_constant_drift_speed` (generator),
+`test_the_scale_texel_carries_the_reach_drift_speed_and_the_drift_map_is_bound`
+(manager) and `test_the_drift_rides_the_reachs_own_constant_speed`
+(shader).

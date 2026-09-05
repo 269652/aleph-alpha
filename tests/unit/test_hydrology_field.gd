@@ -283,13 +283,50 @@ func _slope_field() -> HydrologyField:
 func test_a_river_tapers_in_from_its_source_instead_of_starting_full_width():
 	# Column 3: cells (3,1) Q=6 and (3,2) Q=5 are the river; (3,3) Q=4 is
 	# the source. Cell centres: x = 38.5; y = 27.1 for row 2, 38.0 for row 3.
+	# The curve still tapers to the spring in GEOMETRY (the source cell is
+	# reached at all, and nothing lies upstream of it), but every REPORTED
+	# half-width is floored at the render floor -- see
+	# test_every_reported_half_width_is_at_least_the_render_floor.
 	var slope := _slope_field()
 	var at_source: Dictionary = slope.nearest_channel_geometry(38, 37)
 	var at_head: Dictionary = slope.nearest_channel_geometry(38, 27)
 	assert_false(at_source.is_empty(), "the head's curve reaches back to the source")
-	assert_almost_eq(at_source["half_width_tiles"], HydrologyField.SPRING_HALF_WIDTH_TILES, 0.1)
-	assert_gt(at_head["half_width_tiles"], at_source["half_width_tiles"])
+	assert_almost_eq(
+		at_source["half_width_tiles"], HydrologyField.RENDER_HALF_WIDTH_FLOOR_TILES, 0.001,
+		"the spring is narrower than the floor, so the floor is what the source reports"
+	)
+	assert_gte(at_head["half_width_tiles"], at_source["half_width_tiles"])
 	assert_eq(slope.probe(38, 41, 0.75)["kind"], "", "nothing upstream of the source")
+
+
+## A per-tile across map cannot reconstruct a channel narrower than two
+## texels: at the threshold width (one tile, half-width 0.5) the wet band
+## fell between tile centres, the world drew a hairline and the minimap a
+## dotted line on every diagonal (found live at the Loire tributaries).
+## So every half-width the field REPORTS -- to the painter, the probe, the
+## minimap and the waders alike, so they never disagree -- is floored at
+## one tile: the same "gameplay-scale width, not survey accuracy" pillar
+## rivers.md applies to the curated catalog.
+func test_every_reported_half_width_is_at_least_the_render_floor():
+	assert_gte(HydrologyField.RENDER_HALF_WIDTH_FLOOR_TILES, 1.0, "two texels is the least the map reconstructs")
+	assert_gt(
+		HydrologyField.RENDER_HALF_WIDTH_FLOOR_TILES, HydrologyField.MIN_LEGIBLE_WIDTH_TILES / 2.0,
+		"the floor only matters if it lies above the thinnest formula width"
+	)
+	var slope := _slope_field()
+	for y in range(24, 40):
+		var geometry: Dictionary = slope.nearest_channel_geometry(38, y)
+		if geometry.is_empty():
+			continue
+		assert_gte(
+			geometry["half_width_tiles"], HydrologyField.RENDER_HALF_WIDTH_FLOOR_TILES,
+			"the geometry at (38, %d) reports a half-width below the render floor" % y
+		)
+	# ...and the probe calls the tiles inside that floored band river, so the
+	# minimap and the waders see the same water the painter draws.
+	var on_the_line := slope.probe(38, 27, 0.75)
+	assert_eq(on_the_line["kind"], "river", "precondition: the head cell is a river")
+	assert_gte(on_the_line["half_width_tiles"], HydrologyField.RENDER_HALF_WIDTH_FLOOR_TILES)
 
 
 ## A main channel down column 3 (weight 2 per cell, so it is the mainstem)
@@ -494,3 +531,140 @@ func test_a_river_mouth_runs_on_into_the_sea_and_fades():
 func test_far_from_any_water_the_across_field_is_dry():
 	assert_eq(field.probe(65, 15, 0.8)["lake_across"], HydrologyField.LAKE_ACROSS_DRY)
 	assert_false(field.probe(65, 15, 0.8)["sea"])
+
+
+## The map FILTER reads past the last painted cell: bilinear one texel,
+## the cubic reconstruction two. A texel there that came from the far
+## curated fallback carries an arbitrary SIGN, and the interpolation
+## between a real +6 and a fallback -16 crosses zero inside the painted
+## cell beside it -- the shader draws a hairline of water along the whole
+## reach boundary (found live at the Loire: thin phantom channels running
+## parallel to the river, several tiles out, on the world but never on
+## the minimap). So the geometry reach must cover the filter's support
+## past the bleed, not just the bleed.
+func test_the_geometry_reach_covers_the_map_filters_neighbours_of_the_bleed():
+	var painter_reach := RiverCatalog.RIVER_BANK_APRON_TILES + RiverFlowShader.SHORE_BLEED_TILES
+	assert_gte(
+		HydrologyField.GEOMETRY_REACH_TILES, painter_reach + HydrologyField.MAP_FILTER_SUPPORT_TILES,
+		"the geometry query must still answer wherever the map filter reads a painted cell's neighbour"
+	)
+	assert_gte(HydrologyField.MAP_FILTER_SUPPORT_TILES, 2.0, "the cubic reconstruction reads two texels out")
+
+
+## Reproduced directly: a tile one and a half texels past the painter's
+## bleed still gets a real channel answer on the channel's own side, never
+## the empty answer that hands the texel to the far fallback.
+func test_a_tile_past_the_bleed_still_gets_real_channel_geometry_on_the_same_side():
+	var half_width := field.width_tiles_for_discharge(TEST_MIN_DISCHARGE) / 2.0
+	var bleed := half_width + RiverCatalog.RIVER_BANK_APRON_TILES + RiverFlowShader.SHORE_BLEED_TILES
+	var at_bleed: Dictionary = field.nearest_channel_geometry(35 + int(floor(bleed)), 14)
+	var past_bleed: Dictionary = field.nearest_channel_geometry(35 + int(ceil(bleed + 1.5)), 14)
+	assert_false(at_bleed.is_empty(), "precondition: the bleed itself is covered")
+	assert_false(past_bleed.is_empty(), "the filter's neighbour past the bleed must still see the channel")
+	assert_eq(
+		signf(past_bleed["signed_across_tiles"]), signf(at_bleed["signed_across_tiles"]),
+		"the neighbour must sit on the same side as the painted cell -- no zero crossing between them"
+	)
+
+
+# -- the reach: one drift speed between confluences ----------------------------
+#
+# The flow shader drifts its strokes at a speed read per texel. A speed
+# that varies ALONG a reach (the per-tile Manning solve does: 2.26 to
+# 2.35 m/s across a few Loire tiles) times TIME diverges between
+# neighbouring pixels without bound and shreds the reach after twenty
+# minutes; one global speed cured that but lost "the Rhine travels, a
+# lower course crawls". So the drift speed is a property of the REACH --
+# the run of channel cells between confluences -- decided by the reach
+# head's discharge: constant along the reach, stepping only where a
+# tributary joins, which is where the water changes character anyway.
+
+func _cell(field_under_test: HydrologyField, x: int, y: int) -> int:
+	return field_under_test.cell_index_at(x, y)
+
+
+## The slope fixture is one straight river down column 3 with no
+## confluence: every channel cell of it is ONE reach, judged by the head.
+func test_a_river_without_confluences_is_one_reach_judged_by_its_head():
+	var slope := _slope_field()
+	var head := _cell(slope, 3, 2)
+	var mouth_cell := _cell(slope, 3, 1)
+	assert_gte(slope.discharge_at_cell(head), TEST_MIN_DISCHARGE, "precondition: the head is a channel")
+	assert_almost_eq(
+		slope.reach_discharge(mouth_cell), slope.discharge_at_cell(head), 1e-6,
+		"the whole river shares its head's discharge"
+	)
+	assert_almost_eq(slope.reach_discharge(head), slope.discharge_at_cell(head), 1e-6)
+	assert_lt(
+		slope.reach_discharge(mouth_cell), slope.discharge_at_cell(mouth_cell),
+		"precondition: the mouth's OWN discharge is larger, so the reach value is genuinely the head's"
+	)
+
+
+## Where the confluence fixture's tributary joins the main channel a new
+## reach begins: the join cell is judged by its own discharge, the cell
+## just upstream of it belongs to the reach above, and the tributary's
+## last channel cell is a reach of its own.
+func test_a_confluence_starts_a_new_reach():
+	var confluence := _confluence_field()
+	var tributary := _cell(confluence, 2, 3)
+	assert_gte(
+		confluence.discharge_at_cell(tributary), confluence.river_min_discharge,
+		"precondition: the tributary's last cell is a channel"
+	)
+	var join: int = confluence._downstream(tributary)
+	var above: int = confluence._mainstem_upstream(join, true)
+	assert_true(join >= 0 and above >= 0, "precondition: the tributary joins a channel that has a mainstem above")
+	assert_almost_eq(
+		confluence.reach_discharge(join), confluence.discharge_at_cell(join), 1e-6,
+		"the join cell heads the reach below the confluence"
+	)
+	assert_lt(
+		confluence.reach_discharge(above), confluence.reach_discharge(join),
+		"the reach above the junction carries less than the one below"
+	)
+	var tributary_reach := confluence.reach_discharge(tributary)
+	assert_gt(tributary_reach, 0.0)
+	assert_lte(
+		tributary_reach, confluence.discharge_at_cell(tributary),
+		"a reach is judged by its head, never by more than the cell itself carries"
+	)
+	assert_ne(
+		snappedf(tributary_reach, 0.000001), snappedf(confluence.reach_discharge(join), 0.000001),
+		"the tributary's reach is not the main channel's"
+	)
+
+
+## The geometry query carries the reach discharge to the painter, and it
+## is the same value for every tile of the reach -- the whole point.
+func test_the_channel_geometry_reports_the_reach_discharge_for_every_tile_of_a_reach():
+	var slope := _slope_field()
+	var expected := slope.reach_discharge(_cell(slope, 3, 1))
+	var seen := 0
+	for y in range(12, 30):
+		var geometry: Dictionary = slope.nearest_channel_geometry(38, y)
+		if geometry.is_empty():
+			continue
+		seen += 1
+		assert_true(geometry.has("reach_discharge"), "the geometry must carry the reach discharge")
+		assert_almost_eq(
+			float(geometry["reach_discharge"]), expected, 1e-6,
+			"tile (38, %d) reports another reach's discharge" % y
+		)
+	assert_gt(seen, 5, "precondition: the probe walked real channel tiles")
+
+
+## A mouth plume drifts at its river's reach, not at a fading per-tile
+## speed (a fading speed times TIME is the divergence again).
+func test_the_mouth_plume_carries_the_mouths_reach_discharge():
+	# The default crater field drains north into the sea row through its
+	# outlet cell; a sea tile just past the mouth is inside the plume.
+	var found := false
+	for y in range(2, 12):
+		var plume: Dictionary = field.mouth_plume(35, y)
+		if plume["factor"] <= 0.0:
+			continue
+		found = true
+		assert_true(plume.has("reach_discharge"), "the plume must carry its mouth's reach discharge")
+		assert_gt(float(plume["reach_discharge"]), 0.0)
+	assert_true(found, "precondition: some tile near the outlet lies in the plume")

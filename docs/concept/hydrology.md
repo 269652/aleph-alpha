@@ -419,6 +419,50 @@ produce; the difference is that the shape comes from the real network
 rather than from random droplets, and it is a pure function of position,
 so it stays seamless and regenerable.
 
+**The geometry reach covers the map filter, not just the painter
+(2026-09-05).** Found live at the Loire spawn: thin phantom channels ran
+parallel to the river several tiles out on the world, never on the
+minimap. The painter writes every tile's signed across-position into the
+flow map, and past a channel's reach `nearest_river_at` falls back to the
+nearest *curated* river (the Rhine, 800 tiles away), whose sign is
+arbitrary and whose magnitude clamps to `CLAMP_MAGNITUDE`. The channel
+query's reach had been raised to cover the painter's bleed, but the map
+FILTER reads one texel further (bilinear) or two (the cubic
+reconstruction), and interpolating a real `+6` against a fallback `-16`
+crosses zero *inside* the painted cell beside it: the shader drew a
+hairline of water along the whole reach boundary. `_channel_hits` now
+answers out to `GEOMETRY_REACH_TILES` = `VALLEY_HALF_WIDTH_TILES` +
+`MAP_FILTER_SUPPORT_TILES` (2 texels), so every texel the filter can
+blend into a painted cell still describes the channel's own side; the
+valley shoulder itself is unchanged. Pinned by
+`test_the_geometry_reach_covers_the_map_filters_neighbours_of_the_bleed`
+and `test_a_tile_past_the_bleed_still_gets_real_channel_geometry_on_the_same_side`;
+verified on the GPU at the Loire window (the phantom lines are gone, the
+real channels untouched). The minimap was right all along: it reads the
+river *kind*, which never saw the fallback. What remains honest but
+narrow: a channel just over `RIVER_MIN_DISCHARGE` is one tile wide by the
+width formula, so the minimap's tile-centre test draws it one or two
+pixels wide and a diagonal at exactly the threshold can dot; a rendered
+half-width floor of one tile (two tiles total, the least a per-tile
+across map reconstructs) would make every river contiguous on both
+surfaces at the cost of the taper-to-a-point spring, and is the named
+follow-up.
+
+**A rendered half-width floor of one tile (2026-09-05).** The width
+formula's threshold width is one tile (half-width 0.5), and the spring
+tapers to 0.3. A per-tile across map cannot reconstruct a channel
+narrower than two texels: at those widths the wet band fell between tile
+centres, the world drew a hairline and the minimap's tile-centre test
+drew a dotted line on every diagonal (found live at the Loire's
+tributaries). `HydrologyField.RENDER_HALF_WIDTH_FLOOR_TILES` (1.0) is now
+applied where the channel hits are built, so the painter, the probe, the
+minimap and the waders are all told one width and never disagree; the
+curve itself still tapers to the spring in geometry, and rivers wider
+than two tiles are untouched. This is rivers.md's "gameplay-scale width,
+not survey accuracy" pillar applied to the baked channels. Pinned by
+`test_every_reported_half_width_is_at_least_the_render_floor`; the taper
+test now states what the source tile reports.
+
 ### Water kinds: overlay flags, one predicate
 
 Per rivers.md's rendering decision (see "Relationship to rivers.md"), a
