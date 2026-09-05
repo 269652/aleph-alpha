@@ -10,6 +10,16 @@ extends SceneTree
 ## the both-drifts fix (830f4ba) committed a reusable probe -- their GPU
 ## numbers were measured and thrown away. This one stays.
 ##
+## The FIXED variant below targets the shader as it stood after 8678d83
+## ("the reach's own drift speed"), which renamed the single shared
+## `drift_speed_m_s` uniform to a per-fragment `drift_speed` read from a
+## new nearest-filtered `flow_drift_map` -- but left the eddy-bounding
+## technique this probe actually exercises (`bend_drift`'s modulo wrap,
+## `eddy_p`, `value_noise_tiled`) untouched. If a future commit changes
+## those specific lines again, `_initialize()`'s own guard will refuse to
+## run rather than silently measuring the wrong shader -- update the
+## FIXED_*/LEGACY_* constants below to match.
+##
 ## Renders the REAL shared material's SHADER_CODE over a synthetic BENDING
 ## reach (flow direction rotates gently across the painted tiles, so
 ## neighbouring fragments genuinely see different flow_dir, the precondition
@@ -53,7 +63,7 @@ const SPECK_THRESHOLDS: Array[float] = [0.05, 0.10, 0.15, 0.20, 0.25]
 # (confirmed against the current file before use below) -- the "legacy"
 # variant patches FIXED -> LEGACY on a copy of SHADER_CODE, reproducing the
 # real pre-fix shader byte for byte rather than an approximation.
-const FIXED_BEND_DRIFT_LINE := "float bend_drift = mod(TIME * surface_px_per_s(drift_speed_m_s, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);"
+const FIXED_BEND_DRIFT_LINE := "float bend_drift = mod(TIME * surface_px_per_s(drift_speed, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);"
 const LEGACY_BEND_DRIFT_LINE := "float bend_drift = TIME * surface_px_per_s(speed_mps, moving) * noise_scale * bend_drift_fraction;"
 const FIXED_EDDY_P_LINE := "vec2 eddy_p = p * eddy_scale - flow_dir * bend_drift;"
 const LEGACY_EDDY_P_LINE := "vec2 eddy_p = (p - flow_dir * bend_drift) * eddy_scale;"
@@ -126,15 +136,20 @@ func _render(shader_code: String) -> Image:
 
 	var material := ShaderMaterial.new()
 	material.shader = shader
+	var painted_maps := ["flow_across_map", "flow_scale_map", "flow_drift_map"]
 	for u in uniforms:
 		var uname: String = u["name"]
-		if uname == "flow_across_map" or uname == "flow_scale_map":
+		if uname in painted_maps:
 			continue
 		var v = _real_material.get_shader_parameter(uname)
 		if v != null:
 			material.set_shader_parameter(uname, v)
 	material.set_shader_parameter("flow_across_map", _build_bend_map())
 	material.set_shader_parameter("flow_scale_map", _build_scale_map())
+	# Only meaningful post-8678d83 ("the reach's own drift speed") -- a
+	# shader without this uniform just ignores the extra parameter.
+	if uniforms.any(func(u): return u["name"] == "flow_drift_map"):
+		material.set_shader_parameter("flow_drift_map", _build_drift_map())
 
 	var renderer := TerrainRenderer.new()
 	var viewport := SubViewport.new()
@@ -195,6 +210,18 @@ func _build_scale_map() -> ImageTexture:
 	var side: int = RiverFlowShader.FLOW_MAP_TILES
 	var img := Image.create(side, side, false, Image.FORMAT_RF)
 	img.fill(Color(2.0, 0.0, 0.0))
+	return ImageTexture.create_from_image(img)
+
+
+## Post-8678d83: the reach's own constant drift speed, read by the shader
+## through a SEPARATE nearest-filtered sampler (its G channel) so no
+## interpolation ramp between reaches can diverge under TIME. One constant
+## value everywhere in this probe's single synthetic reach -- exactly the
+## "constant along a whole reach" case that commit's own fix targets.
+func _build_drift_map() -> ImageTexture:
+	var side: int = RiverFlowShader.FLOW_MAP_TILES
+	var img := Image.create(side, side, false, Image.FORMAT_RGBAF)
+	img.fill(Color(0.0, SPEED_M_S, 0.0, 0.0))
 	return ImageTexture.create_from_image(img)
 
 
