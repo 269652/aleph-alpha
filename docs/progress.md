@@ -6623,7 +6623,7 @@ evolution sim, both still partial. All ⬜ Not started:
 - **DNA/phenotype/sexual-selection system (aquatic)** (huge) — ⬜ Not started
 - **Sexual selection / mate choice reproduction** (large) — ⬜ Not started
 - **Rare-phenotype catch desirability** (small) — ⬜ Not started
-- **Fishing catching minigame** (medium) — ✅ Done — a **playable fishing loop** now exists: `src/gameplay/fishing_session.gd` (tested state machine: cast → wait → bite → react → caught/missed) drives the pre-existing `fishing_minigame.gd` timing/rarity math. A craftable **fishing rod** (stick + plant fibre; player starts with one), a `fish` action (default F) that casts when next to open water and reels on the second press, a HUD prompt ("Casting…" → "! BITE — press the fish key!" → "Caught a … fish!"), and rarity-scaled fish rewards into the inventory (cooked over a campfire, eaten for hunger). A rare/legendary catch is now its own item (`rare_fish`/`legendary_fish`) that grants a real timed buff on eating (extra stamina regen / +30% melee damage) instead of the rarity vanishing after reward-quantity math — see Cooking section's "Dish Buffs". **Casting is now visible**, closing a reported gap ("no animation of the rod being thrown into water and also doesn't attract near fish and also no animation when fish bites"): `src/gameplay/fishing_cast.gd` computes a landing point from the player's facing (`FishingCast.CAST_DISTANCE_PX`), a small procedurally-drawn bobber (`ProceduralBobberSprite`) appears there, casting reuses the melee swing animation as a rod-throw, `EarthChunkManager.set_attraction_point`/`clear_attraction_point` draws any loaded fish within `Player.ATTRACTION_RADIUS` toward the bobber (still respecting shore clearance -- an attracted fish won't follow the line onto the beach), and the bobber visibly dips while a fish is biting (`FishingSession.phase_elapsed_seconds`, a new getter, drives the bob). Bait depth, species/location availability, and the aquatic population sim are still ⬜. **Verified end-to-end through the real entry point (2026-09-03):** every fishing test up to this point deliberately drove `FishingSession` directly, bypassing the near-water/has-rod input gate (a deliberate choice, not an oversight, per that gap's own test-file comment). `test_player.gd` now also covers the real path: `test_the_real_fish_key_entry_point_lands_a_caught_fish_in_the_inventory` presses the actual `fish` input action (the live rebindable keybinding, default F — see `Keybindings.ACTIONS`, bound to the InputMap by `World._apply_keybindings` before Player spawns) next to a forced-real ocean tile, drives the whole cast → wait → bite → react → resolve cycle through `Player._fishing_step` exactly as a real playthrough would, and asserts a real fish item lands in `player.inventory_counts()`; `test_pressing_fish_away_from_water_does_not_start_a_session` pins the negative case (no water nearby, the key press is a no-op). This confirms the loop described in this whole bullet was already fully wired and reachable in the live game — a player starts carrying a `fishing_rod` from `Player._ready()`, and `World` reads `local_player.fishing_message` onto a real HUD banner every frame. The only real gap this pass found was unrelated to fishing itself: see the Snow section's regression note on the dangling `snow_layer.gd` preload that was breaking `Player` (and therefore this file's own tests) from loading at all.
+- **Fishing catching minigame** (medium) — ✅ Done — a **playable fishing loop** now exists: `src/gameplay/fishing_session.gd` (tested state machine: cast → wait → bite → react → caught/missed) drives the pre-existing `fishing_minigame.gd` timing/rarity math. A craftable **fishing rod** (stick + plant fibre; one of the Starting Kit tab's pool choices -- see docs/concept/starting_kit.md -- rather than an automatic grant now), a `fish` action (default F) that casts when next to open water and reels on the second press, a HUD prompt ("Casting…" → "! BITE — press the fish key!" → "Caught a … fish!"), and rarity-scaled fish rewards into the inventory (cooked over a campfire, eaten for hunger). A rare/legendary catch is now its own item (`rare_fish`/`legendary_fish`) that grants a real timed buff on eating (extra stamina regen / +30% melee damage) instead of the rarity vanishing after reward-quantity math — see Cooking section's "Dish Buffs". **Casting is now visible**, closing a reported gap ("no animation of the rod being thrown into water and also doesn't attract near fish and also no animation when fish bites"): `src/gameplay/fishing_cast.gd` computes a landing point from the player's facing (`FishingCast.CAST_DISTANCE_PX`), a small procedurally-drawn bobber (`ProceduralBobberSprite`) appears there, casting reuses the melee swing animation as a rod-throw, `EarthChunkManager.set_attraction_point`/`clear_attraction_point` draws any loaded fish within `Player.ATTRACTION_RADIUS` toward the bobber (still respecting shore clearance -- an attracted fish won't follow the line onto the beach), and the bobber visibly dips while a fish is biting (`FishingSession.phase_elapsed_seconds`, a new getter, drives the bob). Bait depth, species/location availability, and the aquatic population sim are still ⬜. **Verified end-to-end through the real entry point (2026-09-03):** every fishing test up to this point deliberately drove `FishingSession` directly, bypassing the near-water/has-rod input gate (a deliberate choice, not an oversight, per that gap's own test-file comment). `test_player.gd` now also covers the real path: `test_the_real_fish_key_entry_point_lands_a_caught_fish_in_the_inventory` presses the actual `fish` input action (the live rebindable keybinding, default F — see `Keybindings.ACTIONS`, bound to the InputMap by `World._apply_keybindings` before Player spawns) next to a forced-real ocean tile, drives the whole cast → wait → bite → react → resolve cycle through `Player._fishing_step` exactly as a real playthrough would, and asserts a real fish item lands in `player.inventory_counts()`; `test_pressing_fish_away_from_water_does_not_start_a_session` pins the negative case (no water nearby, the key press is a no-op). This confirms the loop described in this whole bullet was already fully wired and reachable in the live game (that test now grants its own rod explicitly, since a fresh player no longer carries one automatically — see docs/concept/starting_kit.md), and `World` reads `local_player.fishing_message` onto a real HUD banner every frame. The only real gap this pass found was unrelated to fishing itself: see the Snow section's regression note on the dangling `snow_layer.gd` preload that was breaking `Player` (and therefore this file's own tests) from loading at all.
 - **Bait/lure system** (medium) — ⬜ Not started
 - **Location-based fish availability** (medium) — ⬜ Not started
 - **Cooking ingredient integration** (small) — ⬜ Not started
@@ -12049,3 +12049,49 @@ shipped view uses today. A real follow-up, not a same-shape addition.
 Chronicle, live breeding planner, the remote instruction queue) — unbuilt,
 as originally spec'd; the instruction queue specifically has no floor
 until npc.md's instruction DSL exists.
+
+### Starting Kit (`concept/starting_kit.md`)
+
+✅ **Pick-3 starting gear, replacing the old fixed kit.** The character
+creator's new Starting Kit tab (`MainMenu`, between Character and Skills)
+lets the player pick exactly 3 items from a curated 10-item early-game pool
+(`src/gameplay/starter_kit.gd`: `wooden_club`, `crude_blade`,
+`stone_pickaxe`, `fishing_rod`, `lasso`, `rough_compass`, `iron_sword`,
+`iron_axe`, `butterfly_net`, `glass_bottle`) — replacing what used to be a
+hardcoded, identical-for-everyone grant in `Player._ready()` (Iron Sword
+equipped, Iron Axe, Leather Helm, Leather Chest, Fishing Rod, and — briefly,
+directly on `main`, before this branch merged — a Butterfly Net and Glass
+Bottle too). Always defaults to a real, coherent kit (crude_blade +
+stone_pickaxe + fishing_rod) so a player who never opens the tab still
+starts armed, not blocked or bare-handed — no Begin-button disabling exists
+anywhere in this file, matching its own existing "`_selected_class` defaults
+to warrior" convention. `Player.grant_starter_items()` mirrors the dev
+console's `/give` pattern exactly (`has()` → `make()` → `inventory.add()`),
+auto-equipping the first weapon-kind pick, or the first tool-kind pick if
+none was a weapon, bare-handed only if neither. Iron Sword and Iron Axe —
+included in the pool at the user's explicit request — previously had **no
+recipe anywhere**; both now craft from `2x iron_ingot + 1x stick`, matching
+the existing iron-armor recipes' own cost scale and every hafted tool's
+"needs a stick" shape. Fixed two pre-existing tests that depended on the old
+automatic grant (a fishing-rod precondition in `test_player.gd`, and a
+hotbar-past-capacity test that assumed 5 starting stacks) as part of the
+same change, not a follow-up. Torch and Snare/Trap were considered for the
+pool and cut — see docs/concept/starting_kit.md for why (Torch has no
+working interactive loop at all today; Snare/Trap would skew the pool
+toward one system next to Lasso's own broad coverage of the same
+restrain-and-struggle capture shape).
+
+**Update (same day): Butterfly Net reinstated, Glass Bottle added.**
+Reported: "give the player a glass bottle and butterfly net from the
+start" (first done for the OLD hardcoded grant directly on `main`, then
+asked for here too, which is the version that actually shipped once this
+branch merged). `docs/concept/starting_kit.md`'s own reasoning for why
+Butterfly Net was cut is corrected in place, not just noted here: it's a
+different capture *shape* from Snare/Trap (an instant probability roll,
+not a struggle — see `concept/capture_dsl.md`, built the same day on
+`main`), so the original "redundant weight next to Lasso" argument was
+never actually true for it the way it is for Snare/Trap, which stay cut.
+`glass_bottle` didn't exist when this pool was first written (it's part
+of the same capture-DSL pass) and is registered here as a small, isolated
+port — just the `ItemCatalog` entry + icon, not the whole DSL — since this
+branch forked before that work landed on `main`.
