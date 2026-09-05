@@ -40,6 +40,11 @@ spawns. The chosen archetype's stat lens is applied to the fresh player
 (`ClassArchetype.stats_for` → base health/attack/mana/stamina offsets). Classes
 are a starting bias; the skill tree is where a build actually diverges.
 
+The same creator's **Starting Kit** tab is where the player picks their
+starting gear — 3 items from a curated early-game pool, class-independent
+(see [starting_kit.md](starting_kit.md) for the pool and why each item is or
+isn't in it).
+
 ## Skill tree
 
 Levels grant points; the **skill tree window** spends them on

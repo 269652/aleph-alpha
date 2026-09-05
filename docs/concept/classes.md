@@ -17,9 +17,12 @@ Guild Wars 2's attribute system, than to WoW's talent-tree-per-class model.
   [magic.md](magic.md)) can be reallocated — archetype is a snapshot of your
   current build, not a permanent choice made at character creation.
 - **Archetype picked at creation is a starting lens/tutorial path**, not a
-  restriction — it determines your starting skills, gear, and which NPCs/
-  quests initially treat you as "one of theirs," per [npc.md](npc.md)'s
-  need-driven quest generation.
+  restriction — it determines your starting skills and which NPCs/quests
+  initially treat you as "one of theirs," per [npc.md](npc.md)'s need-driven
+  quest generation. Starting *gear* is a separate, class-independent choice
+  — see [starting_kit.md](starting_kit.md): the player picks 3 items from a
+  curated pool in the creator's own Starting Kit tab, regardless of which
+  archetype they picked.
 
 ### Proposed archetype spread (wider than the classic trio, so every major
 system has a class that's "about" it)

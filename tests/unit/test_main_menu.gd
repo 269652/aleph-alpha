@@ -8,6 +8,7 @@ const MainMenu = preload("res://scenes/main_menu.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
+const StarterKit = preload("res://src/gameplay/starter_kit.gd")
 
 ## Isolates the Load Game button's save-detection from the real save file
 ## (see docs/concept/persistence.md) -- MainMenu.save_path is overridable for
@@ -1040,3 +1041,62 @@ func test_the_web_is_framed_on_the_class_once_the_tab_is_laid_out():
 	)
 	assert_almost_eq(framed_pan.x, view.pan.x, 0.001)
 	assert_gt(view.zoom, SkillWebView.MIN_ZOOM, "a fully zoomed-out view is not framed on anything")
+
+
+# -- starter kit tab (docs/concept/starting_kit.md) ---------------------------
+
+func test_every_starter_item_card_shows_a_real_sprite():
+	for item_id in StarterKit.POOL:
+		var card: PanelContainer = menu._starter_item_buttons[item_id]
+		var found := card.find_children("*", "TextureRect", true, false)
+		assert_eq(found.size(), 1, "%s should have exactly one icon" % item_id)
+		var icon: TextureRect = found[0]
+		assert_not_null(icon.texture, "%s's icon should have a real texture" % item_id)
+		assert_gt(icon.texture.get_width(), 0, item_id)
+
+
+## Not just "doesn't crash" -- STARTER_ITEM_BLURBS.get(item_id, "") degrades
+## silently to an empty tooltip for any pool item nobody wrote a blurb for,
+## which a missing-blurb bug would sail straight through unnoticed.
+func test_every_pool_item_has_a_real_blurb():
+	for item_id in StarterKit.POOL:
+		assert_true(
+			MainMenu.STARTER_ITEM_BLURBS.has(item_id) and MainMenu.STARTER_ITEM_BLURBS[item_id] != "",
+			"%s is missing its Starting Kit tab blurb" % item_id
+		)
+
+
+func test_starts_with_the_default_starter_items_selected():
+	assert_eq(menu.current_starter_items(), StarterKit.DEFAULT_CHOICES)
+
+
+func test_toggling_an_unselected_item_selects_it():
+	# Starts already full (3 defaults) -- free a slot first so this is a
+	# genuine "select" rather than exercising the at-capacity no-op below.
+	menu._toggle_starter_item(StarterKit.DEFAULT_CHOICES[0])
+	menu._toggle_starter_item("iron_axe")
+	assert_true(menu.current_starter_items().has("iron_axe"))
+
+
+func test_toggling_an_already_selected_item_deselects_it():
+	var first: String = StarterKit.DEFAULT_CHOICES[0]
+	menu._toggle_starter_item(first)
+	assert_false(menu.current_starter_items().has(first))
+
+
+func test_toggling_a_fourth_item_while_three_are_selected_is_a_no_op():
+	assert_eq(menu.current_starter_items().size(), StarterKit.MAX_CHOICES, "precondition: 3 defaults")
+	menu._toggle_starter_item("iron_axe")  # not among the defaults
+	assert_false(menu.current_starter_items().has("iron_axe"))
+	assert_eq(menu.current_starter_items().size(), StarterKit.MAX_CHOICES)
+
+
+func test_starting_a_game_sends_the_current_starter_item_selection():
+	watch_signals(menu)
+	_find_button(menu._create_screen, "Begin").pressed.emit()
+	# get_signal_parameters(obj, signal, EMISSION index) returns that whole
+	# emission's own parameter list -- [0] is the first (only) emission here,
+	# then index into IT for the 5th positional arg (see test_diggable_rock.gd
+	# for the same two-step convention).
+	var params = get_signal_parameters(menu, "start_requested", 0)
+	assert_eq(params[4], StarterKit.DEFAULT_CHOICES)
