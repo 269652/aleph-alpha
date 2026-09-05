@@ -8924,10 +8924,15 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	var mound_markers: Array = []
 	for mound_cell in _ant_colonies[chunk_coord].mound_cells():
 		var marker := AntMoundMarker.new()
-		marker.position = Vector2(
-			float(chunk_coord.x * CHUNK_SIZE + mound_cell.x) + 0.5,
-			float(chunk_coord.y * CHUNK_SIZE + mound_cell.y) + 0.5
-		) * float(TerrainRenderer.TILE_SIZE)
+		var global_cell := Vector2i(
+			chunk_coord.x * CHUNK_SIZE + mound_cell.x, chunk_coord.y * CHUNK_SIZE + mound_cell.y
+		)
+		# Which illustrated variant this mound picks (see
+		# IllustratedAntMoundSprite.frame_for) -- the GLOBAL cell, not
+		# mound_cell alone, so two different chunks' own local (0,0)-ish
+		# mounds don't all pick the identical variant.
+		marker.mound_seed = hash(global_cell)
+		marker.position = (Vector2(global_cell) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
 		_entities_parent.add_child(marker)
 		mound_markers.append(marker)
 	_ant_mound_markers[chunk_coord] = mound_markers
