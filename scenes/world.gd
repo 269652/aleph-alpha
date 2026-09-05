@@ -2717,7 +2717,7 @@ func _on_console_command(command: String, args: Array) -> void:
 			_dev_console.log_line(
 				(
 					"Commands: /day [off]  /night [off]  /time <hh:mm>|off"
-					+ "  /season [name]  /weather [state|off]"
+					+ "  /season [name] [progress]  /weather [state|off]"
 					+ "  /ecotest [seconds_per_year|off]"
 					+ "  /history <entity_id>  /why <event_id>  /remember <entity_id>"
 					+ "  /household <entity_id>  /contract <entity_id>  /market <entity_id>"
@@ -3014,13 +3014,19 @@ func _handle_emergence_command() -> void:
 		_dev_console.log_line(line)
 
 
-## /season [name] -- reports the season, or skips the world FORWARD to the
-## start of the one you name.
+## /season [name] [progress] -- reports the season, or skips the world
+## FORWARD to `progress` (a 0-1 fraction, default 0.0) into the one you name.
 ##
 ## Forward only (see EarthChunkManager.jump_to_season): every other system
 ## measures itself against this clock, so winding it back would give a tree a
 ## negative age. Asking for the season you are already in therefore waits for
 ## it to come round again -- you asked to watch it start.
+##
+## `progress` is validated here rather than left to SeasonCycle's own
+## defensive clamp: a typo like `/season autumn 50` (meaning "50%" where a 0-1
+## fraction was wanted) must be refused with a reason, not silently clamped
+## to 1.0 and read back as if the far end of the season was what was asked
+## for -- see test_season_command_clarity.gd.
 func _handle_season_command(args: Array) -> void:
 	if args.size() == 0:
 		_dev_console.log_line(
@@ -3030,7 +3036,19 @@ func _handle_season_command(args: Array) -> void:
 		return
 
 	var wanted := str(args[0]).to_lower()
-	if not _chunk_manager.jump_to_season(wanted):
+	var progress := 0.0
+	if args.size() > 1:
+		if not str(args[1]).is_valid_float():
+			_dev_console.log_line(
+				"Progress must be a number between 0 and 1, got '%s'." % args[1]
+			)
+			return
+		progress = float(args[1])
+		if progress < 0.0 or progress > 1.0:
+			_dev_console.log_line("Progress must be between 0 and 1, got %s." % args[1])
+			return
+
+	if not _chunk_manager.jump_to_season(wanted, progress):
 		_dev_console.log_line(
 			"Unknown season '%s'. Try: %s" % [wanted, ", ".join(SeasonCycle.SEASONS)]
 		)

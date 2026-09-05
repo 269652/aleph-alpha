@@ -7030,6 +7030,32 @@ func test_an_unknown_season_is_refused():
 	assert_eq(manager.world_age_seconds(), before)
 
 
+## /season <name> <progress> -- reported: "make /season command so it
+## accepts a float between 0 and 1 for how far it has progressed into the
+## season" (see SeasonCycle.seconds_until_season's own tests for the pure
+## model this delegates to).
+func test_jumping_to_a_season_with_progress_lands_partway_through_it():
+	manager.jump_to_season("autumn", 0.5)
+	assert_eq(manager.current_season(), "autumn")
+	var cycle := SeasonCycle.new()
+	# Autumn is the third quarter (year_fraction 0.5-0.75); its own midpoint
+	# is 0.625.
+	assert_almost_eq(cycle.year_fraction(manager.world_age_seconds()), 0.625, 0.0001)
+
+
+func test_jumping_with_progress_still_refuses_an_unknown_season():
+	var before := manager.world_age_seconds()
+	assert_false(manager.jump_to_season("harvest", 0.5))
+	assert_eq(manager.world_age_seconds(), before)
+
+
+func test_jumping_with_progress_never_moves_the_clock_backwards():
+	for name in SeasonCycle.SEASONS:
+		var before := manager.world_age_seconds()
+		manager.jump_to_season(name, 0.5)
+		assert_gte(manager.world_age_seconds(), before)
+
+
 # -- a new world starts at a random point in the year -------------------------
 #
 # _world_age_seconds used to start at a hardcoded 0.0 for every new game, and
