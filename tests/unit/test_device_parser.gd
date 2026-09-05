@@ -1,10 +1,11 @@
 extends GutTest
 
 ## Red-first spec for the `device` DSL parser (docs/concept/standard_model.md,
-## "The DSL / Grammar"): a fourth structural sibling of spell_parser.gd /
-## capture_parser.gd / npc_instruction_parser.gd -- same tokenizer, same
-## `on EVENT(ARG) when GUARD: pipeline` rules -- with four declarative clauses
-## in front of them: part, joint, law, loop.
+## "The DSL / Grammar"): a structural sibling of spell_parser.gd /
+## npc_instruction_parser.gd (and the successor of the retired
+## capture_parser.gd) -- same tokenizer, same `on EVENT(ARG) when GUARD:
+## pipeline` rules -- with four declarative clauses in front of them: part,
+## joint, law, loop.
 ##
 ## PURELY structural, like its siblings: it does not know which materials,
 ## geometries, element kinds or atoms exist. `part x: unobtainium blob thing`

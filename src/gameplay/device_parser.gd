@@ -5,12 +5,12 @@ extends RefCounted
 ## Dictionaries/Arrays -- that device_compiler.gd, device_network.gd and
 ## device_executor.gd consume.
 ##
-## A fourth structural sibling of spell_parser.gd, capture_parser.gd and
-## npc_instruction_parser.gd: same tokenizer, same `on EVENT(ARG) when GUARD:
-## pipeline` rule shape, same recursive-descent approach, deliberately NOT a
-## subclass of any of them or a shared parser -- devices are their own domain
-## with their own clauses, exactly the way capture is its own domain with its
-## own one block kind.
+## A structural sibling of spell_parser.gd and npc_instruction_parser.gd
+## (and the successor of the retired capture_parser.gd -- the butterfly net
+## is device text now, see capture_book.gd): same tokenizer, same `on
+## EVENT(ARG) when GUARD: pipeline` rule shape, same recursive-descent
+## approach, deliberately NOT a subclass of either or a shared parser --
+## devices are their own domain with their own clauses.
 ##
 ## What is new is everything in front of the rules: four declarative clauses.
 ##
