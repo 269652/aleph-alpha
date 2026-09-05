@@ -7585,6 +7585,30 @@ carrots out of earth (visually animated)". Supersedes the old
   own "silently discard the overflow" ground-pickup shortcut, since
   stashing is a deliberate player action). See `docs/concept/stone.md`'s
   "Held-item pickup, throw, and stash" for the full mechanism.
+- **Feeding an animal actually spends the carrot the pickup above puts in
+  your hand** (medium) — ✅ Done (fixed twice) — reported live, twice, a
+  build apart. First: *"Carrots never end up in the inventory with a
+  carrot in hand"* — `Player.offer_treat_to` drained the bag while
+  `AnimalActions` offered "Feed" on whatever `equipped_item` held, so
+  fixed to spend `equipped_item` first, bag second. That fix was itself
+  incomplete: `equip_item()` explicitly refuses non-weapon/tool kinds, so
+  a food item can **never** actually reach `equipped_item` through
+  ordinary play — a pulled carrot always lands in the DIFFERENT field the
+  held-item generalization above created, `_hand_item_stack`, which
+  neither `offer_treat_to` nor the Feed-prompt scoring ever checked.
+  Reported again, live: *"carrots or potatoes... never make it into the
+  inventory to feed horse or so."* Every existing regression test for the
+  first fix had simulated "holding a carrot" by setting
+  `player.equipped_item` directly — a shortcut no real E-press can ever
+  reach — so the gap shipped invisibly through green tests. New
+  `Player._held_out_item_id()` checks `_hand_item_stack` first, falling
+  back to `equipped_item`; both `animal_actions_for` and `offer_treat_to`
+  now read it. Pinned by two new tests in `tests/unit/test_player.gd`
+  that drive the real pickup (`_try_pick_item_into_hand`) rather than
+  poking the field:
+  `test_a_carrot_picked_up_into_the_hand_feeds_a_hungry_horse`,
+  `test_animal_actions_offers_feed_for_a_carrot_picked_up_into_the_hand`.
+  See `docs/concept/taming.md`'s matching Status entry for the full story.
 - **Wild crops go dormant, they do not die back** (medium) — 🚧 Partial —
   built and tested, **not observable in a real session**.
   `WildCropPatch.advance(delta, season_growth)` now takes a season multiplier

@@ -306,7 +306,11 @@ found via `Player._pull_step`'s melee-range sweep, identical shape to
   pickup, throw, and stash"): E picks a nearby kickable-mass root into the
   HAND instead of straight to inventory; hold-and-release charges/throws
   it; a new stash key (default H) puts it into inventory instead, dropping
-  any overflow at the player's feet rather than losing it.
+  any overflow at the player's feet rather than losing it. This hand
+  (`_hand_item_stack`) is a DIFFERENT field from `equipped_item` (the
+  weapon/tool slot) -- `docs/concept/taming.md`'s Status section has the
+  story of the feeding bug that fell exactly into that gap: a picked-up
+  carrot lived here, but feeding only ever checked `equipped_item`.
 - ⬜ No animal-carried seed dispersal for root crops (no scatter-hoarding
   equivalent to `TallGrass`'s mouse-cached grass seed) — spreading is
   purely the adjacent-cell throttled tick.

@@ -31,6 +31,8 @@ const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd"
 const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+const DroppedItem = preload("res://src/rendering/dropped_item.gd")
+const ItemStack = preload("res://src/gameplay/item_stack.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -2406,3 +2408,72 @@ func test_a_refused_feed_costs_no_carrot_from_hand():
 	assert_false(player.offer_treat_to(horse))
 
 	assert_not_null(player.equipped_item, "a full animal eats nothing")
+
+
+# -- reported again, live: "When you pick up carrots or potatoes from the ---
+# -- world they never make it into the inventory to feed horse or so." -----
+#
+# Every test above simulates "a carrot in hand" by poking `equipped_item`
+# directly. That is not how a real player ever ends up holding one: a pulled
+# wild carrot/potato becomes a ground item (WildCropMarker._finish_pull),
+# and E picks a ground item with a real, kickable-grade mass -- which a
+# carrot/potato now has, see ItemCatalog._PRODUCE_MASS_KG -- into
+# `_hand_item_stack` (Player._try_pick_item_into_hand), NOT `equipped_item`.
+# `equipped_item` is a completely different field: Player.equip_item()
+# explicitly refuses anything that isn't a weapon or tool, so a food-kind
+# item can structurally never reach it through ordinary play. The tests
+# above kept passing by poking a field a real carrot pickup never touches,
+# so this gap shipped invisibly. These two drive the REAL pickup path.
+
+func _add_dropped_carrot(offset: Vector2) -> DroppedItem:
+	var dropped := DroppedItem.new()
+	dropped.item_stack = ItemStack.new(_item_catalog.make("carrot"), 1)
+	dropped.position = player.position + offset
+	# Needs real scene-tree membership, same reason test_player_kick.gd's
+	# identical helper parents under `self` -- nearest_kickable_dropped_item_near
+	# finds it via its own group, joined in _ready().
+	add_child(dropped)
+	return dropped
+
+
+func test_a_carrot_picked_up_into_the_hand_feeds_a_hungry_horse():
+	_add_dropped_carrot(Vector2(5, 0))
+	assert_true(
+		player._try_pick_item_into_hand(),
+		"a light dropped carrot should be pickable into the hand"
+	)
+	assert_true(player.is_holding_item(), "the carrot should now be the held item")
+
+	_hold_lasso()
+	var horse := _horse_at(Vector2(8, 0))
+	player._throw_capture_tool()
+	horse._needs.hunger = 1.0
+
+	assert_true(
+		player.offer_treat_to(horse),
+		"a carrot picked up off the ground into the hand should feed, exactly like one directly equipped"
+	)
+	assert_gt(horse.trust, 0.0, "and earn trust")
+	assert_false(player.is_holding_item(), "the carrot actually in hand should be the one spent")
+
+
+## The prompt has the same gap: AnimalActions.for_animal was only ever asked
+## about `equipped_item`, so a player who had just picked a carrot up off the
+## ground -- the ordinary way to have one at all -- was never even OFFERED
+## "Feed" as a primary/secondary action in the first place.
+func test_animal_actions_offers_feed_for_a_carrot_picked_up_into_the_hand():
+	_add_dropped_carrot(Vector2(5, 0))
+	player._try_pick_item_into_hand()
+
+	_hold_lasso()
+	var horse := _horse_at(Vector2(8, 0))
+	player._throw_capture_tool()
+	horse._needs.hunger = 1.0
+
+	var verbs := []
+	for action in player.animal_actions_for(horse):
+		verbs.append(action["verb"])
+	assert_true(
+		verbs.has("Feed"),
+		"holding a picked-up carrot at a hungry, restrained horse should offer Feed"
+	)
