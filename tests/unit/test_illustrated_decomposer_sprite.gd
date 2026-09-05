@@ -131,6 +131,25 @@ func test_marker_scale_falls_back_to_one_for_an_unregistered_species():
 	assert_eq(sprite.marker_scale("spider", "walk"), 1.0)
 
 
+# -- ant/bug now have their OWN world width, not one shared constant: ants
+# read as half their old size, and a carrion bug is a genuinely different,
+# larger insect that was never reported as oversized alongside them (see
+# docs/concept/soil_fauna.md "Ants at half their old size"). ----------------
+
+func test_ant_world_width_is_pinned_to_its_new_halved_value():
+	assert_eq(IllustratedDecomposerSprite.ANT_WORLD_WIDTH, 3.0)
+
+
+func test_bug_world_width_is_unchanged_from_the_old_shared_constant():
+	assert_eq(IllustratedDecomposerSprite.BUG_WORLD_WIDTH, 6.0)
+
+
+func test_ant_is_exactly_half_the_width_of_bug():
+	assert_almost_eq(
+		IllustratedDecomposerSprite.ANT_WORLD_WIDTH * 2.0, IllustratedDecomposerSprite.BUG_WORLD_WIDTH, 0.001
+	)
+
+
 ## The carry pose (body + cargo) draws a visibly wider silhouette than plain
 ## walking, so normalize_frames fits it to the canvas at a smaller internal
 ## scale -- marker_scale must compensate so the two still read as the same

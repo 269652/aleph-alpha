@@ -31,13 +31,35 @@ const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 const CANVAS_SIZE := Vector2i(340, 300)
 const BASELINE_Y := 280
 
-## How wide (world pixels) either species should read on screen -- matches
+## How wide (world pixels) an ant should read on screen -- halved from the
+## art's own old shared width (see BUG_WORLD_WIDTH's doc comment): reported
+## as oversized once ants/mounds actually had a rendered presence in play
+## (docs/concept/soil_fauna.md "Ants at half their old size"), not when
+## this was pure background population math with nothing to look at yet.
+const ANT_WORLD_WIDTH := 3.0
+
+## How wide (world pixels) a carrion bug should read on screen -- matches
 ## ProceduralDecomposerSprite.SIZE (12) drawn at ArtResolution.SPRITE_SCALE
 ## (0.5) exactly, so switching a species over to illustrated art is a pure
-## art upgrade, not a sudden size change. Both species share one value, same
-## as the procedural generator's own shared SIZE=12 canvas for "ant"/"bug"
-## -- there is no size differentiation between them today.
-const BASE_WORLD_WIDTH := 6.0
+## art upgrade, not a sudden size change. Unchanged from when this and
+## ANT_WORLD_WIDTH were one shared constant -- a carrion beetle is a
+## genuinely different, larger insect, and nothing about ants reading
+## oversized in play was ever a claim about bugs too.
+const BUG_WORLD_WIDTH := 6.0
+
+
+## `species`'s own real-world width -- see ANT_WORLD_WIDTH/BUG_WORLD_WIDTH's
+## own doc comments for why these are no longer one shared constant.
+## Anything not "ant" falls back to BUG_WORLD_WIDTH rather than failing
+## outright; has_species()/has_action() are what actually gate whether a
+## caller may ask for a species at all; this only backstops the "no frames"
+## defensive branch inside _reference_width below, which per has_action's
+## own contract should never really be reachable for a species this file
+## knows about.
+static func _world_width_for(species: String) -> float:
+	if species == "ant":
+		return ANT_WORLD_WIDTH
+	return BUG_WORLD_WIDTH
 
 ## species -> sheet metadata. "<action>_bands" are ARRAYS of Y ranges
 ## (Vector2i(top_y, bottom_y)) into the one shared sheet -- see
@@ -229,24 +251,25 @@ static func _despilled(color: Color) -> Color:
 	)
 
 
-## How much to scale a CANVAS_SIZE-normalized frame so it reads at
-## BASE_WORLD_WIDTH on screen -- mirrors IllustratedAnimalSprite.
-## marker_scale exactly, minus the AnimalAnatomy.world_scale factor
-## (decomposers have no anatomy profile; every ant/bug is the same size).
-## Measured per species/action, not one flat constant, for the same reason
-## IllustratedAnimalSprite measures per action: normalize_frames fits EACH
-## band's own widest frame to the canvas independently, so a wider drawing
-## (the ant's carry pose, body plus cargo) would otherwise read as a BIGGER
-## creature than its own walk cycle purely from being normalized separately
-## -- measuring and compensating per action is what keeps a species reading
-## as one consistent size across every action it has.
+## How much to scale a CANVAS_SIZE-normalized frame so it reads at this
+## species' own real-world width (see ANT_WORLD_WIDTH/BUG_WORLD_WIDTH) on
+## screen -- mirrors IllustratedAnimalSprite.marker_scale exactly, minus
+## the AnimalAnatomy.world_scale factor (decomposers have no anatomy
+## profile). Measured per species/action, not one flat constant, for the
+## same reason IllustratedAnimalSprite measures per action: normalize_frames
+## fits EACH band's own widest frame to the canvas independently, so a
+## wider drawing (the ant's carry pose, body plus cargo) would otherwise
+## read as a BIGGER creature than its own walk cycle purely from being
+## normalized separately -- measuring and compensating per action is what
+## keeps a species reading as one consistent size across every action it
+## has.
 func marker_scale(species: String, action: String = "walk") -> float:
 	if not _SHEETS.has(species):
 		return 1.0
 	var key := "%s/%s" % [species, action]
 	if _marker_scale_cache.has(key):
 		return _marker_scale_cache[key]
-	var scale_value := BASE_WORLD_WIDTH / _reference_width(species, action)
+	var scale_value := _world_width_for(species) / _reference_width(species, action)
 	_marker_scale_cache[key] = scale_value
 	return scale_value
 
@@ -258,7 +281,7 @@ func _reference_width(species: String, action: String) -> float:
 	if _reference_width_cache.has(key):
 		return _reference_width_cache[key]
 	var frames := generate_textures(species, action)
-	var width := BASE_WORLD_WIDTH
+	var width := _world_width_for(species)
 	if not frames.is_empty():
 		var image: Image = frames[0].get_image()
 		var min_x := image.get_width()
