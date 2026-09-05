@@ -8722,6 +8722,93 @@ entry's own correction. `leaf_litter.md` itself is updated throughout
 ("When leaves fall", "Rendering", "Lifecycle", "Deliberately not
 modeled", "Status").
 
+✅ **Follow-up (2026-09-05): "make leaf litter constant and continuous
+and increasing in autumn ... there should always be an occasional
+falling leaf or blossom".** The immediately preceding entry's own
+`maxf(LEAF_AUTUMN_BASELINE_CHANCE, canopy_turn_progress)` fix was
+continuous and never zero, but not actually *increasing* across the
+whole season — flat at the baseline for autumn's first two-thirds, then
+a late ramp only once `canopy_turn_progress` starts moving. Two parts:
+
+1. **Autumn's chance now rises smoothly across the ENTIRE season.**
+   `canopy_turn_progress` can't drive this — it is pinned at exactly 0.0
+   for a season's whole settled span by construction (see
+   `TreePhenology._settled_then_turn`), so nothing built on it can ever
+   increase before the final turn begins. Added `SeasonCycle.
+   progress_through_season` instead: the raw `[0,1)` fraction through the
+   CALENDAR season (the same fraction `season_at`'s own index is already
+   truncated from), rising from a season's very first instant. 5 new
+   tests in `test_season_cycle.gd` (starts at 0, nears 1 at the season's
+   end, resets at the boundary, strictly monotonic, periodic across
+   years) — 23/23 passing.
+
+   `leaf_fall_chance` is now a single linear interpolation from
+   `LEAF_AUTUMN_BASELINE_CHANCE` up to CERTAINTY (1.0) driven by
+   `season_progress`: constant, continuous, and increasing the whole way,
+   reaching the same near-certain shed rate by season's end the old
+   formula's `canopy_turn_progress == 1.0` case already had. Extracted
+   into a pure `leaf_fall_chance_for(canopy_season, season_progress)`,
+   directly unit tested (6 new tests: baseline start, certainty at the
+   end, strict monotonic increase, summer/spring flat regardless of
+   season progress, winter always zero) rather than only exercised
+   through noisy per-tree roll sampling — then retroactively verified
+   those tests actually catch a regression by temporarily stubbing the
+   function to return 0.0 (5 of 6 failed for the right reason, restored).
+   Dropped the now-fully-redundant `leaf_fall_season` local (always
+   exactly equal to `canopy_season` in every branch) in favour of using
+   `canopy_season` directly.
+
+2. **A settled SPRING tree now sheds an occasional BLOSSOM.** A falling
+   LEAF makes no botanical sense while a tree's canopy is still
+   bare-to-blossoming and has no leaves yet — reported directly, "there
+   should always be an occasional falling leaf or blossom" is blossom's
+   own equivalent of the summer/autumn leaf trickle, not a second,
+   unrelated mechanism. New `LEAF_SPRING_TRICKLE_CHANCE` (reuses
+   `LEAF_SUMMER_TRICKLE_CHANCE`'s own value, same "one real rate, not
+   several independently-tuned ones" reasoning the autumn baseline
+   already used), gated on `canopy_season == "spring"` — confirmed via a
+   direct probe that this window sits well before the calendar season's
+   own end (`TreePhenology`'s own canopy schedule finishes leafing out,
+   flipping `canopy_season` to `"summer"`, at roughly 40% into the
+   calendar spring quarter; the existing summer trickle already covers
+   the rest). Repurposed `test_step_fruiting_drops_no_leaf_in_early_
+   spring` (whose own premise this reverses) into `test_step_fruiting_
+   also_drops_an_occasional_spring_blossom`, and corrected its sample
+   point's own stale doc comment ("before blossom even opens" — actually
+   confirmed 83% through its OWN blossom-to-leaf-out transition already).
+
+   The falling record needs real BLOSSOM art, not a leaf recoloured —
+   `IllustratedTree.foliage_leaf_for` extended to resolve `"spring"` the
+   same way it already resolves summer/autumn, but WITHOUT a fixed hue
+   band (real blossom colour is not one universal hue across species —
+   cherry/apple show pink/white petals, oak/hazelnut/walnut show
+   inconspicuous yellow-green catkins), accepting any region with real,
+   non-neutral colour content instead (the same "-1 = no such content"
+   signal every hue-gated season already relies on). `LeafLitterAtlas
+   .SEASONS` gained a `"spring"` entry — needing no special case at all,
+   unlike `"winter"`, since real art already resolves for it via the
+   exact same has-art/generic-fallback path summer/autumn always used.
+   11 new/updated tests in `test_illustrated_tree.gd`, all green.
+
+   **Visually verified beyond the numeric tests**
+   (`tools/probe_blossom_foliage.gd`, kept as a dev tool): cherry's own
+   spring closeup is a genuinely recognisable pink blossom flower.
+   Acorn/hazelnut/walnut/apple land on a green, leaf-toned crop instead
+   of a distinct floral image — not blank or broken, just less floral
+   than hoped, their sheets' own blossom-column art reading closer to an
+   early leaf than a distinct petal at the fill/colour signals this
+   detection uses. Pine lands on the same winged-seed-pair crop its own
+   already-documented autumn imperfection uses. Named here rather than
+   hidden, the same as that existing pine/autumn gap always has been —
+   the actual feature asked for (an occasional falling blossom, distinct
+   from a leaf, for every species) is genuinely delivered; only the
+   floral FIDELITY of five of the six species falls short of cherry's.
+
+   Full re-run after all of the above: the 90-test field/atlas/renderer
+   suite, the real-GPU smoke test, and the full leaf-fall test battery in
+   `test_earth_chunk_manager.gd` — all green. `leaf_litter.md` updated
+   throughout ("When leaves fall", "What falls", "Rendering", "Status").
+
 <details>
 <summary>First pass (superseded above), kept for history</summary>
 
