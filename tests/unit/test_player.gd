@@ -2048,6 +2048,9 @@ func test_bottling_a_loaded_net_grants_a_loaded_bottle_and_consumes_an_empty_one
 
 
 func test_bottling_without_a_glass_bottle_does_nothing():
+	# Player._ready() grants one starting glass_bottle (32effc5) -- clear it
+	# so "without a glass bottle" is actually true here, not just asserted.
+	player.inventory.remove("glass_bottle", player.inventory.count_of("glass_bottle"))
 	_load_net_with("monarch")
 	player._bottle_captive()
 	assert_eq(player.equipped_item.captive_species, "monarch", "no bottle on hand -- the net stays loaded")
@@ -2056,8 +2059,12 @@ func test_bottling_without_a_glass_bottle_does_nothing():
 func test_bottling_an_empty_net_does_nothing_even_with_a_bottle():
 	_hold_tool("butterfly_net")
 	player.inventory.add(_item_catalog.make("glass_bottle"), 1)
+	# Player._ready() already grants one starting glass_bottle (32effc5), so
+	# the count here is baseline-plus-one, not a fixed "1" -- what matters is
+	# that _bottle_captive leaves it untouched.
+	var before := player.inventory.count_of("glass_bottle")
 	player._bottle_captive()
-	assert_eq(player.inventory.count_of("glass_bottle"), 1, "nothing to bottle -- the bottle is not spent")
+	assert_eq(player.inventory.count_of("glass_bottle"), before, "nothing to bottle -- the bottle is not spent")
 
 
 ## The secondary_action slot's fallback (CaptureItemActions, see its own test
@@ -2072,8 +2079,12 @@ func test_secondary_action_offers_put_into_bottle_when_loaded_and_a_bottle_is_on
 func test_secondary_action_does_nothing_for_an_empty_net():
 	_hold_tool("butterfly_net")
 	player.inventory.add(_item_catalog.make("glass_bottle"), 1)
+	# Same starting-grant baseline as
+	# test_bottling_an_empty_net_does_nothing_even_with_a_bottle above --
+	# compare before/after, not a fixed "1".
+	var before := player.inventory.count_of("glass_bottle")
 	player._perform_context_action(1, "secondary_action")
-	assert_eq(player.inventory.count_of("glass_bottle"), 1, "nothing loaded -- the bottle is not spent")
+	assert_eq(player.inventory.count_of("glass_bottle"), before, "nothing loaded -- the bottle is not spent")
 
 
 # -- menagerie bonding: unaffected in shape, just gated behind the roll now --
