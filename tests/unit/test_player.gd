@@ -2682,3 +2682,118 @@ func test_animal_actions_offers_feed_for_a_carrot_picked_up_into_the_hand():
 		verbs.has("Feed"),
 		"holding a picked-up carrot at a hungry, restrained horse should offer Feed"
 	)
+
+
+# -- the net is a device with a real mesh (docs/concept/capture_dsl.md, -------
+# -- 2026-09-05) ------------------------------------------------------------------
+#
+## What the net holds is read off the subject's body and the bag's geometry
+## (a 10 mm mesh, a 30 cm mouth), never off a species list: a bee or a fly
+## slips straight through and the message says so; a pond fish in range is a
+## target like a flyer and leaves the water through the rod's own catch path;
+## a trout or a koi is too big for the mouth.
+
+func _fish_at(species: String, offset: Vector2) -> FishMarker:
+	var fish := FishMarker.new()
+	fish.species = species
+	fish.wander_seed = 17
+	creatures_parent.add_child(fish)
+	fish.position = player.position + offset
+	var loaded: Array = chunk_manager._loaded_fish.get(Vector2i(0, 0), [])
+	loaded.append(fish)
+	chunk_manager._loaded_fish[Vector2i(0, 0)] = loaded
+	return fish
+
+
+## Like _net_until_caught, for any net target -- a fish has no flyer type.
+func _net_until_gone(target: Node, max_attempts: int = 40) -> void:
+	var attempts := 0
+	while is_instance_valid(target) and not target.is_queued_for_deletion() and attempts < max_attempts:
+		player._throw_capture_tool()
+		attempts += 1
+	assert_true(
+		not is_instance_valid(target) or target.is_queued_for_deletion(),
+		"expected a catch within %d attempts at ~65%% each" % max_attempts
+	)
+
+
+func _throw_repeatedly(times: int) -> void:
+	for i in times:
+		player._throw_capture_tool()
+
+
+func test_a_bee_slips_through_the_net_and_the_message_says_so():
+	_hold_tool("butterfly_net")
+	var bee := _flyer_at("bee", Vector2(8, 0))
+	_throw_repeatedly(8)
+	assert_true(is_instance_valid(bee) and not bee.is_queued_for_deletion(), "a 6 mm bee passes a 10 mm mesh")
+	assert_eq(player.equipped_item.captive_species, "")
+	player._lasso_step(1.0 / 60.0)
+	assert_string_contains(player.lasso_message, "bee")
+	assert_string_contains(player.lasso_message, "slips through")
+
+
+func test_a_fly_slips_through_the_net_too():
+	_hold_tool("butterfly_net")
+	var fly := _flyer_at("fly", Vector2(8, 0))
+	_throw_repeatedly(8)
+	assert_true(is_instance_valid(fly) and not fly.is_queued_for_deletion())
+	player._lasso_step(1.0 / 60.0)
+	assert_string_contains(player.lasso_message, "slips through")
+
+
+func test_a_goldfish_in_range_is_netted_out_of_the_water():
+	_hold_tool("butterfly_net")
+	var goldfish := _fish_at("goldfish", Vector2(8, 0))
+	_net_until_gone(goldfish)
+	assert_eq(player.equipped_item.captive_species, "goldfish")
+	player._lasso_step(1.0 / 60.0)
+	assert_eq(player.lasso_message, "Caught! Net is full.")
+
+
+func test_a_koi_is_too_big_for_the_net_and_the_message_says_so():
+	_hold_tool("butterfly_net")
+	var koi := _fish_at("koi", Vector2(8, 0))
+	_throw_repeatedly(8)
+	assert_true(is_instance_valid(koi) and not koi.is_queued_for_deletion(), "a 55 cm koi does not go through a 30 cm mouth")
+	assert_eq(player.equipped_item.captive_species, "")
+	player._lasso_step(1.0 / 60.0)
+	assert_string_contains(player.lasso_message, "koi")
+	assert_string_contains(player.lasso_message, "too big")
+
+
+func test_a_fish_out_of_net_range_is_left_alone():
+	_hold_tool("butterfly_net")
+	var goldfish := _fish_at("goldfish", Vector2(Player.LASSO_RANGE * 2.0, 0))
+	_throw_repeatedly(3)
+	assert_true(is_instance_valid(goldfish))
+	assert_eq(player.equipped_item.captive_species, "")
+
+
+func test_a_netted_fish_loads_the_net_and_never_bonds_even_with_menagerie():
+	player.allocated_nodes["menagerie"] = true
+	_hold_tool("butterfly_net")
+	var goldfish := _fish_at("goldfish", Vector2(8, 0))
+	_net_until_gone(goldfish)
+	assert_eq(player.equipped_item.captive_species, "goldfish")
+	assert_eq(player.bonded_companions.size(), 0, "a fish is not a companion that follows you on land")
+
+
+func test_the_nearer_of_a_flyer_and_a_fish_is_the_one_the_net_goes_for():
+	_hold_tool("butterfly_net")
+	var monarch := _flyer_at("monarch", Vector2(40, 0))
+	var goldfish := _fish_at("goldfish", Vector2(8, 0))
+	_net_until_gone(goldfish)
+	assert_true(is_instance_valid(monarch) and not monarch.is_queued_for_deletion(), "the farther flyer was never the target")
+	assert_eq(player.equipped_item.captive_species, "goldfish")
+
+
+func test_a_bottled_fish_is_bottled_like_anything_else():
+	_hold_tool("butterfly_net")
+	player.inventory.add(_item_catalog.make("glass_bottle"), 1)
+	var goldfish := _fish_at("goldfish", Vector2(8, 0))
+	_net_until_gone(goldfish)
+	player._bottle_captive()
+	assert_eq(player.equipped_item.captive_species, "")
+	player._lasso_step(1.0 / 60.0)
+	assert_eq(player.lasso_message, "Bottled the Goldfish.")
