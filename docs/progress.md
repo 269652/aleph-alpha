@@ -6979,6 +6979,25 @@ state had never once been set by anything in `src/`.
   section, `test_ambient_flyer_renderer.gd`'s new "birds are promoted from
   their aggregate population" section, `test_piscivore_bird_renderer.gd`'s
   new "promoted from the real aggregate kingfisher population" section.
+- **Real illustrated art for sparrow/robin/kingfisher (2026-09-05)** (medium)
+  — ✅ Done, Phase 1 of the bird-behavior-overhaul plan — four hand-
+  illustrated sheets (`assets/sprites/birds/{sparrow,robin,blackbird,
+  kingfisher}.png`) replace `ProceduralBirdSprite` for idle/perched/flap
+  (takeoff+glide concatenated)/pecking, via a new `IllustratedBirdSprite`
+  (sibling of `IllustratedAnimalSprite`, reusing `SpriteSheetSlicer`
+  directly), picked over the procedural generator at every bird spawn path
+  including courtship offspring. Bands hand-measured against real divider
+  lines, not an even split. Confirmed by eye that sparrow's sheet has a
+  dedicated pecking row and robin's/blackbird's do not (their equivalent
+  row is the display pose instead) — `generate_pecking_texture` falls back
+  to idle for those two rather than mis-wiring their display art as a
+  peck. 255 tests green across `test_illustrated_bird_sprite.gd` (new) and
+  the five existing bird/flyer suites. **Not done yet, by design**:
+  blackbird is not a spawnable species (no diet/range/population/pool
+  wiring — `IllustratedBirdSprite` covers its sheet, nothing else does);
+  the walk/dive/display/sing rows have real art measured or reserved but
+  no behavioral trigger. Writeup: `concept/ecosystem_dynamics.md`'s "Real
+  illustrated art for songbirds and the kingfisher".
 - **Persistence / catch-up integration of eaten burrows** (medium) — ⬜ Not
   started, deliberately — a reloaded chunk re-seeds deterministically and
   loses which burrows had been eaten, exactly like `FlowerPatch`, `TallGrass`,

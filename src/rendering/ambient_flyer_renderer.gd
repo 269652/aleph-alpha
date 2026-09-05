@@ -42,6 +42,7 @@ const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd"
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const ProceduralButterflySprite = preload("res://src/rendering/procedural_butterfly_sprite.gd")
 const ProceduralBirdSprite = preload("res://src/rendering/procedural_bird_sprite.gd")
+const IllustratedBirdSprite = preload("res://src/rendering/illustrated_bird_sprite.gd")
 const ProceduralEggSprite = preload("res://src/rendering/procedural_egg_sprite.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const FlyerSpawnLayout = preload("res://src/rendering/flyer_spawn_layout.gd")
@@ -175,12 +176,25 @@ const BIRD_SCALE := 1.0
 
 var _butterfly_sprite := ProceduralButterflySprite.new()
 var _bird_sprite := ProceduralBirdSprite.new()
+var _illustrated_bird_sprite := IllustratedBirdSprite.new()
 ## One shared generator for every species -- the egg sprite is deliberately
 ## species-agnostic (see ProceduralEggSprite's class doc comment), so this
 ## does not need a butterfly/bird split the way the two sprite generators
 ## above do.
 var _egg_sprite := ProceduralEggSprite.new()
 var _geo_coordinates := GeoCoordinates.new()
+
+
+## The real illustrated sheet for a species that has one (IllustratedBird
+## Sprite.has_species), else ProceduralBirdSprite -- the exact has-real-art-
+## else-procedural pattern CreatureMarker already uses for quadrupeds (see
+## IllustratedAnimalSprite's own class doc comment). Both generators share
+## one method surface (generate_texture/generate_flap_textures/
+## generate_perched_texture/generate_pecking_texture), so every caller below
+## can hand this straight to _spawn_species/_build_marker without knowing
+## which one it got.
+func _bird_sprite_generator_for(species: String):
+	return _illustrated_bird_sprite if _illustrated_bird_sprite.has_species(species) else _bird_sprite
 
 
 ## Drops any pool entry whose real range excludes this chunk -- the aerial
@@ -307,7 +321,7 @@ func spawn_ambient_flyers(
 				parent, chunk, chunk_origin_tiles, tile_size, "robin_spawn",
 				_in_range_pool(ROBIN_SPECIES_POOL, biome_name, abs_latitude), robin_count, robin_count,
 				AmbientFlyerMovement.new(BIRD_SPEED, BIRD_RADIUS, BIRD_INTERVAL),
-				_bird_sprite,
+				_bird_sprite_generator_for("robin"),
 				scent_world
 			)
 		)
@@ -317,7 +331,7 @@ func spawn_ambient_flyers(
 				parent, chunk, chunk_origin_tiles, tile_size, "sparrow_spawn",
 				_in_range_pool(SPARROW_SPECIES_POOL, biome_name, abs_latitude), sparrow_count, sparrow_count,
 				AmbientFlyerMovement.new(BIRD_SPEED, BIRD_RADIUS, BIRD_INTERVAL),
-				_bird_sprite,
+				_bird_sprite_generator_for("sparrow"),
 				scent_world
 			)
 		)
@@ -488,7 +502,7 @@ func spawn_offspring(
 	)
 	var offspring := _build_marker(
 		parent, species, position, seed_value, movement,
-		_bird_sprite if is_bird else _butterfly_sprite,
+		_bird_sprite_generator_for(species) if is_bird else _butterfly_sprite,
 		scent_world
 	)
 	# Born, not spawned: it starts at the beginning of its life and takes the
@@ -544,7 +558,7 @@ func build_bird(
 		position,
 		seed_value,
 		AmbientFlyerMovement.new(BIRD_SPEED, radius, BIRD_INTERVAL),
-		_bird_sprite
+		_bird_sprite_generator_for(species)
 	)
 
 
