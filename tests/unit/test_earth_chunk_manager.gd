@@ -5860,6 +5860,58 @@ func test_evicting_old_chunks_frees_ant_mound_markers():
 	assert_false(manager._ant_mound_markers.has(old_chunk))
 
 
+# -- leaf litter rendering: one MultiMeshInstance2D per chunk (see
+# LeafLitterRenderer, docs/concept/leaf_litter.md) -- mirrors the ant-mound-
+# marker lifecycle tests just above, but _load_chunk/_unload_chunk directly
+# rather than the slow real update() -- this file's own CONTRIBUTING.md notes
+# on why a real update() call is expensive; nothing about THIS wiring needs
+# a real streaming pass, only a single chunk's own load/unload.
+
+func test_load_chunk_creates_a_leaf_litter_multimesh_parented_under_ground_decor():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	assert_true(manager._leaf_litter_mmis.has(chunk_coord))
+	var mmi: MultiMeshInstance2D = manager._leaf_litter_mmis[chunk_coord]
+	assert_eq(mmi.get_parent(), entities_parent, "ground decor falls back to entities_parent with no dedicated layer (see _ground_decor_parent's own doc comment)")
+
+
+func test_unload_chunk_frees_its_leaf_litter_multimesh():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var mmi: MultiMeshInstance2D = manager._leaf_litter_mmis[chunk_coord]
+
+	manager._unload_chunk(chunk_coord)
+
+	assert_false(manager._leaf_litter_mmis.has(chunk_coord))
+	assert_true(not is_instance_valid(mmi) or mmi.is_queued_for_deletion())
+
+
+## step_leaf_litter is what actually fills the MultiMesh from the field's own
+## current leaves -- proven here by a leaf the test injects directly into the
+## chunk's field (mirroring this file's own "poke internal state directly"
+## convention), then checking the MultiMesh picked it up. This can only prove
+## the ENGINE-VISIBLE instance_count/transform_format wiring, not that the
+## GPU actually draws the right pixels -- see test_leaf_litter_renderer_
+## smoke.gd for that.
+func test_step_leaf_litter_fills_the_multimesh_from_the_fields_current_leaves():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	# _decorates gates the fill on decoration range (see step_leaf_litter's
+	# own doc comment) -- a bare _load_chunk (unlike a real update()) never
+	# centres decoration on the chunk it just loaded, so this pokes that
+	# internal directly, the same "reach into manager state" convention this
+	# whole file already relies on.
+	manager._decoration_center = chunk_coord
+	var field: LeafLitterField = manager._leaf_litter_fields[chunk_coord]
+	field.add_leaf(Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE, "cherry", "autumn", 0.0)
+
+	manager.step_leaf_litter(0.016)
+
+	var mmi: MultiMeshInstance2D = manager._leaf_litter_mmis[chunk_coord]
+	assert_not_null(mmi.multimesh, "step_leaf_litter must build the MultiMesh once there is a leaf to show")
+	assert_eq(mmi.multimesh.instance_count, 1)
+
+
 ## The actual seed-take/replant already happened and is independently real
 ## (see test_take_grass_seed_at_removes_it_and_returns_true and friends
 ## above) -- this proves the SEPARATE, purely decorative visual half fires

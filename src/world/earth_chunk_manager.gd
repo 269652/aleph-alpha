@@ -71,6 +71,7 @@ const AntColony = preload("res://src/world/ant_colony.gd")
 const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
+const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
@@ -634,6 +635,17 @@ var _ant_colonies: Dictionary = {}
 ## docs/concept/leaf_litter.md). Same create-at-load/erase-at-unload
 ## lifecycle as _ant_colonies just above.
 var _leaf_litter_fields: Dictionary = {}
+## Vector2i chunk_coord -> MultiMeshInstance2D -- the visible counterpart to
+## _leaf_litter_fields, one GPU-instanced draw call per chunk (see
+## LeafLitterRenderer), parented under _ground_decor_parent (never
+## _ground_items -- see that field's own doc comment on why). Shares ONE
+## LeafLitterRenderer instance (_leaf_litter_renderer below) across every
+## chunk, the same "one generator, many sprites" convention
+## _illustrated_grass/_wind_sway already use -- the shader material and
+## atlas texture are identical for every chunk, so building them once and
+## reusing them is what keeps this a single shared cost, not a per-chunk one.
+var _leaf_litter_mmis: Dictionary = {}
+var _leaf_litter_renderer := LeafLitterRenderer.new()
 ## Vector2i chunk_coord -> Array[AntMoundMarker] -- the visible counterpart
 ## to _ant_colonies' own mound_cells(), one static marker per mound, spawned
 ## alongside the colony and freed with its chunk exactly like every other
@@ -6788,13 +6800,32 @@ func step_ants(delta_seconds: float) -> void:
 
 ## Central fallen-leaf-litter step (see LeafLitterField,
 ## docs/concept/leaf_litter.md): every loaded chunk's field ages/prunes past
-## its own LIFETIME. (Wind-driven relocation is wired in here too -- see
-## LeafLitterField.set_wind's own call site below, added alongside
-## WindDispersal.WEIGHT_LEAF.)
+## its own LIFETIME, and (for chunks actually in decoration range -- see
+## _decorates) its visible MultiMesh is refilled from the field's own
+## current leaves so a freshly-fallen leaf's fall animation is never delayed
+## behind a slow periodic sprite-refresh cadence the way _sync_flower_
+## sprites' own GRASS_REFRESH_INTERVAL is (a leaf's whole fall is over in
+## under a second -- see LeafLitterField.TRANSITION_DURATION -- so unlike a
+## flower's own many-minute growth, ANY multi-second sync lag here would
+## hide the animation entirely, not just delay it). Refilling a chunk's own
+## small, LIFETIME-bounded leaf count every tick is real, deliberate,
+## bounded-by-decoration-radius work -- cheap relative to the per-NODE
+## per-frame script/collision cost this whole rewrite exists to remove (see
+## docs/concept/leaf_litter.md), not the same kind of cost at all.
+##
+## (Wind-driven relocation is wired in here too -- see LeafLitterField.
+## set_wind's own call site below, added alongside WindDispersal.WEIGHT_LEAF.)
 func step_leaf_litter(delta_seconds: float) -> void:
+	_leaf_litter_renderer.set_current_time(_world_age_seconds)
 	for chunk_coord in _leaf_litter_fields:
 		var field: LeafLitterField = _leaf_litter_fields[chunk_coord]
 		field.advance(delta_seconds, _world_age_seconds)
+		var mmi: MultiMeshInstance2D = _leaf_litter_mmis.get(chunk_coord)
+		if mmi == null:
+			continue
+		mmi.visible = _decorates(chunk_coord)
+		if mmi.visible:
+			_leaf_litter_renderer.fill(mmi, field.leaves())
 
 
 ## One mound's forager: look for the nearest fallen grass seed within its
@@ -9001,6 +9032,11 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# never seeded up front; step_fruiting's own leaf-fall block populates it
 	# over time as trees actually shed.
 	_leaf_litter_fields[chunk_coord] = LeafLitterField.new()
+	# Its visible counterpart: one MultiMeshInstance2D, empty until
+	# step_leaf_litter's own fill() call gives it real leaves to draw.
+	var leaf_litter_mmi := MultiMeshInstance2D.new()
+	_ground_decor_parent.add_child(leaf_litter_mmi)
+	_leaf_litter_mmis[chunk_coord] = leaf_litter_mmi
 
 	_ecosystem.add_region(chunk_coord, chunk)
 	# Robin/sparrow's food-density signal (worm burrows, ground seed cells)
@@ -9534,6 +9570,9 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	_ant_mound_markers.erase(chunk_coord)
 
 	_leaf_litter_fields.erase(chunk_coord)
+	if _leaf_litter_mmis.has(chunk_coord):
+		_leaf_litter_mmis[chunk_coord].free()
+		_leaf_litter_mmis.erase(chunk_coord)
 
 	# Snapshot the aggregate ecology before dropping the region, so revisiting
 	# this chunk catch-up integrates from where it left off (see
