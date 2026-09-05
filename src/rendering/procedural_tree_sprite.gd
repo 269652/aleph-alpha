@@ -845,19 +845,28 @@ func _composite_illustrated(
 	if canopy_image != null and growth < 1.0:
 		canopy_image = _grown_canopy(canopy_image, growth, tree_variant_for(seed_value))
 
-	# Snow: layered ON TOP of whatever season/turn/growth already drew, not
+	# Snow: SETTLED on top of whatever season/turn/growth already drew, not
 	# instead of it -- a live-weather fact, not another phenology stage (see
-	# IllustratedTree.CANOPY_SNOW's own doc comment). Reuses the SAME
-	# branch-order blend the season turn uses (_turned_canopy): this is a
-	# reuse of the existing per-tree branch-order variance, not a new blend
-	# mechanism, which is why two trees show snow on different boughs at the
-	# same coverage. Gated on has_snow_frame_for so a species without this
-	# frame renders identically whatever snow_coverage is -- the fallback
-	# contract for every species that has not gained one yet.
+	# IllustratedTree.CANOPY_SNOW's own doc comment). Reuses the season
+	# turn's own branch trace and clump rank (see _snowed_canopy for the one
+	# rule that differs from _turned_canopy, and why): this is a reuse of the
+	# existing per-tree branch-order variance, not a new mechanism, which is
+	# why two trees show snow on different boughs at the same coverage.
+	# Gated on has_snow_frame_for so a species without this frame renders
+	# identically whatever snow_coverage is -- the fallback contract for
+	# every species that has not gained one yet.
 	if canopy_image != null and snow_coverage > 0.0 and art.has_snow_frame_for(species_id):
 		var snow_image := _scaled_piece(species_id, SNOW_CANOPY_KEY, "canopy", canopy_box.size)
 		if snow_image != null:
-			canopy_image = _turned_canopy(
+			# Snow settles on the branches a tree HAS. The frame is a full
+			# crown's worth of snow-laden twigs, and settled whole on a
+			# sapling it dressed the sapling as a grown tree the moment snow
+			# lay -- so it is pruned back by the same growth rule the canopy
+			# was, a few lines up (pinned by test_snow_on_a_seedling_stays_
+			# a_seedling).
+			if growth < 1.0:
+				snow_image = _grown_canopy(snow_image, growth, tree_variant_for(seed_value))
+			canopy_image = _snowed_canopy(
 				canopy_image, snow_image, snow_level(snow_coverage), tree_variant_for(seed_value)
 			)
 	if canopy_image != null:
@@ -1124,17 +1133,63 @@ func _turned_canopy(
 	var result := Image.create(width, height, false, Image.FORMAT_RGBA8)
 	for y in height:
 		for x in width:
-			var at := Vector2i(x, y)
 			# Along the branches, plus this tree's own draw for the clump.
-			var along: float = order.get(at, 0.0)
-			var clump := float(PixelNoise.range_index(
-				(x / CLUMP_PX) * 733 + (y / CLUMP_PX), 191 + variant * 13, 0, 1000
-			)) / 1000.0
-			var rank := (
-				along * BRANCH_ORDER_WEIGHT + clump * (1.0 - BRANCH_ORDER_WEIGHT)
+			var turned: bool = (
+				_sweep_rank(x, y, order.get(Vector2i(x, y), 0.0), variant) <= progress
 			)
-			var turned: bool = rank <= progress
 			result.set_pixel(x, y, (into_image if turned else from_image).get_pixel(x, y))
+	return result
+
+
+## Where a pixel falls in the order a change sweeps a crown, 0 first to 1
+## last: its place `along` the traced branches, weighted against its clump's
+## own per-tree draw (see BRANCH_ORDER_WEIGHT and CLUMP_PX). One formula for
+## the season turn and the snow settle, so both walk a crown with the same
+## clumpy, per-tree front -- the reuse docs/concept/flora.md's "A fifth
+## frame: snow is not a season" describes.
+func _sweep_rank(x: int, y: int, along: float, variant: int) -> float:
+	var clump := float(PixelNoise.range_index(
+		(x / CLUMP_PX) * 733 + (y / CLUMP_PX), 191 + variant * 13, 0, 1000
+	)) / 1000.0
+	return along * BRANCH_ORDER_WEIGHT + clump * (1.0 - BRANCH_ORDER_WEIGHT)
+
+
+## `canopy` with `coverage` of `snow_image` SETTLED on it: the snow frame's
+## pixels composited over the canopy's own, twig by twig down from the top of
+## the crown, never removing anything the season drew (see
+## docs/concept/flora.md, "A fifth frame: snow is not a season").
+##
+## The same trace-and-clump rank as _turned_canopy, and deliberately NOT the
+## same pixel rule. A turn swaps a pixel for the next frame's own, transparent
+## ones included -- which is leaves leaving a bough, and right. Snow lands on
+## a bough that stays: swapping toward the snow frame read as a bottom-up wipe
+## that thinned the crown towards nothing (its own twigs traded for the snow
+## frame's blank pixels) before the snow frame filled back in (reported: the
+## canopy should accumulate snow twig by twig). So a settled pixel is blended
+## OVER the canopy's own, and a blank snow pixel leaves it untouched -- at any
+## coverage every pixel the canopy had is still there, and at full coverage
+## the whole snow frame lies on top of it.
+##
+## Both images are the same size, from _scaled_piece at one box, so the crown
+## cannot jump or slide as snow settles.
+func _snowed_canopy(
+	canopy: Image, snow_image: Image, coverage: float, variant: int = 0
+) -> Image:
+	var width := canopy.get_width()
+	var height := canopy.get_height()
+	if snow_image.get_width() != width or snow_image.get_height() != height:
+		return canopy
+	var order := _snow_order(snow_image, variant)
+	# Image.duplicate() returns an untyped Variant (see close_enclosed_gaps).
+	var result: Image = canopy.duplicate()
+	for y in height:
+		for x in width:
+			var flake := snow_image.get_pixel(x, y)
+			if flake.a < ALPHA_VISIBLE:
+				continue
+			if _sweep_rank(x, y, order.get(Vector2i(x, y), 0.0), variant) > coverage:
+				continue
+			result.set_pixel(x, y, canopy.get_pixel(x, y).blend(flake))
 	return result
 
 
@@ -1187,6 +1242,18 @@ func _branch_order(canopy: Image, variant: int) -> Dictionary:
 ## opposite shape: a tuft at the trunk that spreads outward, tips last.
 func growth_order(canopy: Image, variant: int) -> Dictionary:
 	return _trace_order(canopy, variant, "growth", _trunk_seeds(canopy))
+
+
+## The order snow SETTLES on a crown in: down from its whole upper surface.
+##
+## Not the turn's seeding (the bottom rim, where the boughs leave the trunk)
+## and not growth's (the single trunk join): snow lands on every upward-facing
+## twig at once and works down them, so the trace starts from the crown's own
+## skyline -- the topmost painted pixel of every column (see _skyline_seeds).
+## Seeded from the crown's peak alone, snow ran sideways along the boughs to
+## reach a wide crown's outer twigs last, which is not how it falls.
+func _snow_order(canopy: Image, variant: int) -> Dictionary:
+	return _trace_order(canopy, variant, "snow", _skyline_seeds(canopy))
 
 
 ## Painted pixels along the bottom edge of the crown.
@@ -1243,8 +1310,24 @@ func _trunk_seeds(canopy: Image) -> Array[Vector2i]:
 	return seeds
 
 
+## The topmost painted pixel of every column of the crown: its skyline, the
+## surface snow lands on.
+func _skyline_seeds(canopy: Image) -> Array[Vector2i]:
+	var seeds: Array[Vector2i] = []
+	for x in canopy.get_width():
+		for y in canopy.get_height():
+			if canopy.get_pixel(x, y).a > ALPHA_PAINTED:
+				seeds.append(Vector2i(x, y))
+				break
+	return seeds
+
+
 ## How opaque a canopy pixel has to be to count as branch rather than air.
 const ALPHA_PAINTED := 0.4
+
+## How opaque a pixel has to be to be worth compositing at all -- below this
+## it is the sheet's own transparent padding, not a faint edge of the drawing.
+const ALPHA_VISIBLE := 0.05
 
 
 ## Geodesic distance through the crown's painted pixels from `seeds`,
@@ -1366,7 +1449,7 @@ func _blend_at(image: Image, source: Image, left: int, top: int) -> void:
 			if target_x < 0 or target_x >= SIZE.x:
 				continue
 			var pixel := source.get_pixel(x, y)
-			if pixel.a < 0.05:
+			if pixel.a < ALPHA_VISIBLE:
 				continue
 			var under := image.get_pixel(target_x, target_y)
 			image.set_pixel(target_x, target_y, under.blend(pixel))
