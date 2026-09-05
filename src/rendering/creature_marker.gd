@@ -47,6 +47,7 @@ const MammalGrowth = preload("res://src/gameplay/mammal_growth.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
+const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
 const CreatureMovementGate = preload("res://src/gameplay/creature_movement_gate.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
@@ -1401,10 +1402,31 @@ func _step_leaf_litter_dispersal(delta: float) -> void:
 ## creature genuinely wasn't advancing (reported: "their legs are animated
 ## even when they stand still"). Not moving falls back to ProceduralAnimal-
 ## Animation's "idle" action -- a single static neutral pose -- instead.
+## Whether the current tile is river or lake water -- the two water bodies
+## CreaturePerception.is_on(..., "water") deliberately cannot see (it only
+## recognizes ocean biome, a separately-tested contract -- see
+## test_creature_perception.gd's test_is_on_water_true_only_on_ocean -- so
+## this widens CreatureMarker's OWN water check instead of that shared one).
+## Rivers/lakes never change biome_at_global's result (both are overlays
+## drawn on top of ordinary land biome, see docs/concept/hydrology.md), so
+## without this, standing in a river or lake never counted as water at all:
+## no swim action, no submersion tint, and no ripple (_step_water_ripple
+## below) -- reported: "animals ... don't produce ripples in the new river
+## water". Mirrors FishMarker._is_fresh_water_tile, which already closes
+## this same gap for fish. Duck-typed against _world exactly like every
+## other optional EarthChunkManager call this marker makes.
+func _is_fresh_water_tile(tile: Vector2i) -> bool:
+	if _world == null:
+		return false
+	if _world.has_method("is_river_at_global") and _world.is_river_at_global(tile.x, tile.y):
+		return true
+	return _world.has_method("is_lake_at_global") and _world.is_lake_at_global(tile.x, tile.y)
+
+
 func _animation_step() -> void:
 	if info == null:
 		return
-	if _world != null and _perception.is_on(_world, _current_tile(), "water"):
+	if _world != null and (_perception.is_on(_world, _current_tile(), "water") or _is_fresh_water_tile(_current_tile())):
 		_current_action = "swim"
 
 	var action := _current_action
@@ -1451,7 +1473,25 @@ func _animation_step() -> void:
 	else:
 		texture = frames[int(_elapsed_time / ANIMATION_FRAME_DURATION) % frames.size()]
 	_apply_action_scale(uses_illustrated, action)
-	_apply_submersion(action, uses_illustrated)
+	_apply_submersion(action, uses_illustrated, _current_tile())
+
+
+## River or lake depth (in meters, maxf of both) at `tile` -- 0.0 for ocean
+## (deliberately not asked here; see _apply_submersion's own doc comment on
+## why ocean keeps its separate, fixed waterline) or plain land. Duck-typed
+## against _world exactly like _is_fresh_water_tile above.
+func _fresh_water_depth_meters(tile: Vector2i) -> float:
+	if _world == null:
+		return 0.0
+	var river_depth: float = (
+		_world.river_depth_meters_at_global(tile.x, tile.y)
+		if _world.has_method("river_depth_meters_at_global") else 0.0
+	)
+	var lake_depth: float = (
+		_world.lake_depth_meters_at_global(tile.x, tile.y)
+		if _world.has_method("lake_depth_meters_at_global") else 0.0
+	)
+	return maxf(river_depth, lake_depth)
 
 
 ## Tints whatever part of the body is below the waterline while swimming
@@ -1473,18 +1513,37 @@ func _animation_step() -> void:
 ## not across creatures -- the waterline is a WORLD Y, and two creatures
 ## swimming at different depths on screen need different ones (the player
 ## sets its own on its own instance for exactly the same reason).
-func _apply_submersion(action: String, uses_illustrated: bool) -> void:
+##
+## River/lake get a GRADUAL waterline, the same model the player's own rig
+## uses (character_view.gd's _submersion_fraction/_apply_submersion_depth):
+## a continuous lerp from the creature's own feet up to its species' fixed
+## "fully swimming" waterline, normalized against WaterMovementModel.
+## WADE_DEPTH_METERS -- the same tested threshold the player already uses,
+## not a second hand-picked one. Ocean keeps its old fixed, all-or-nothing
+## waterline exactly as it was: not what was reported broken, and there is
+## no per-tile ocean depth this class can cheaply ask for the way river/
+## lake depth is already asked elsewhere (see _fresh_water_depth_meters).
+func _apply_submersion(action: String, uses_illustrated: bool, tile: Vector2i) -> void:
 	if action != "swim" or not uses_illustrated:
 		# Guarded: unconditionally clearing wrote a shader uniform every
 		# frame for every creature that had EVER swum, forever after.
 		if _submersion != null and _waterline_active:
 			_submersion.clear_waterline()
 			_waterline_active = false
+			offset.y = 0.0
 		return
 	if _submersion == null:
 		_submersion = SubmersionShader.new()
 		material = _submersion.shared_material()
-	_submersion.set_waterline(to_global(Vector2(0.0, _illustrated.waterline_offset_y(info.species))).y)
+
+	var full_waterline_local_y := _illustrated.waterline_offset_y(info.species)
+	var fresh_water_depth := _fresh_water_depth_meters(tile)
+	var fraction := clampf(fresh_water_depth / WaterMovementModel.WADE_DEPTH_METERS, 0.0, 1.0)
+	if fresh_water_depth > 0.0:
+		_submersion.set_waterline(to_global(Vector2(0.0, lerpf(0.0, full_waterline_local_y, fraction))).y)
+	else:
+		_submersion.set_waterline(to_global(Vector2(0.0, full_waterline_local_y)).y)
+	offset.y = lerpf(0.0, SubmersionShader.MAX_SINK_PX, fraction)
 	_waterline_active = true
 
 

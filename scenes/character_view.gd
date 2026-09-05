@@ -6,6 +6,7 @@ const ProceduralCharacterSprite = preload("res://src/rendering/procedural_charac
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
+const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const IllustratedCharacterSprite = preload("res://src/rendering/illustrated_character_sprite.gd")
 const LegGaitCycle = preload("res://src/rendering/leg_gait_cycle.gd")
@@ -318,6 +319,24 @@ var _leg_right_base_position: Vector2
 var _arm_left_base_position: Vector2
 var _arm_right_base_position: Vector2
 var _tool_slot_base_position: Vector2
+## Body/Head never move on their own (unlike the parts above, which bob/
+## swing) -- these exist purely so _apply_submersion_depth's visual sink
+## has a stable rest value to sink FROM, the same role the _base_position
+## vars above already play for legs/arms.
+var _body_base_position: Vector2
+var _head_base_position: Vector2
+## Captured at the end of _apply_neck instead of once in _ready, since
+## unlike Body/Head, Neck's own rest position is computed per-appearance
+## (see _apply_neck) rather than fixed in the .tscn.
+var _neck_base_position: Vector2
+
+## Real, continuous water depth in meters, set every frame by a caller that
+## has one (Player -- see set_submersion_depth). -1.0 is a sentinel for "no
+## caller has ever set a real depth", not "zero depth" -- see
+## _submersion_fraction's own doc comment for why that distinction matters
+## for callers (the character-creator diorama, village NPCs) that only
+## ever say "swimming or not" via movement_state.
+var _submersion_depth_meters := -1.0
 ## Which side of the body ToolSlot's grip point offsets toward -- 1.0/-1.0
 ## for RIGHT/LEFT facing, 0.0 otherwise (see set_facing). Stored rather than
 ## applied directly there: _process now recomputes ToolSlot's position every
@@ -378,15 +397,21 @@ func _ready() -> void:
 	# Torso submersion (see SubmersionShader) -- the player used to have NO
 	# visual for being partway underwater at all: legs simply vanished and
 	# the torso rendered exactly as it does on dry land (reported: "half the
-	# torso should be under water"). Only the torso, not every part: that is
-	# what "half" means here, and it is what the ask specifically named.
+	# torso should be under water"). Legs now share the SAME material
+	# instance (see set_submersion_depth's own doc comment) rather than
+	# being hidden outright -- "don't hide legs, just tint" -- so both parts
+	# always agree on one waterline instead of two independent effects.
 	_body.material = _submersion.shared_material()
+	_leg_left.material = _submersion.shared_material()
+	_leg_right.material = _submersion.shared_material()
 
 	_leg_left_base_position = _leg_left.position
 	_leg_right_base_position = _leg_right.position
 	_arm_left_base_position = _arm_left.position
 	_arm_right_base_position = _arm_right.position
 	_tool_slot_base_position = _tool_slot.position
+	_body_base_position = _body.position
+	_head_base_position = _head.position
 
 	# A look requested before this view was in the tree wins; otherwise a
 	# default identity, so an unconfigured view still reads as a person
@@ -428,10 +453,11 @@ func _process(delta: float) -> void:
 			leg_swing_offset = 0.0
 			arm_stroke_offset = 0.0
 
-	_leg_left.visible = movement_state != MovementState.SWIMMING
-	# Fused legs use LegLeft alone -- LegRight stays hidden regardless of
-	# swim state rather than being un-hidden by the line above every frame.
-	_leg_right.visible = movement_state != MovementState.SWIMMING and not _legs_are_fused
+	# Legs no longer vanish while swimming/wading -- see set_submersion_
+	# depth's own doc comment ("don't hide legs, just tint"). LegRight's
+	# fusion-hide is the one remaining reason either leg is ever invisible.
+	_leg_left.visible = true
+	_leg_right.visible = not _legs_are_fused
 	# Used to be visible ONLY while swimming -- a leftover from when the flat
 	# procedural torso rectangle was wide enough to visually stand in for a
 	# whole upper body, arms included, and separate Arm sprites existed only
@@ -478,15 +504,7 @@ func _process(delta: float) -> void:
 	# position write.
 	_tool_slot.position = _arm_right.position + Vector2(_tool_side * TOOL_SLOT_SIDE_OFFSET, GRIP_OFFSET_Y)
 
-	# The waterline sits at the torso's own vertical CENTER -- _body.position
-	# is already that centre (Sprite2D draws centred on its own position by
-	# default, and Body carries no extra offset), so "half the torso
-	# submerged" falls straight out of that existing constant rather than
-	# needing a new hand-tuned fraction.
-	if movement_state == MovementState.SWIMMING:
-		_submersion.set_waterline(global_position.y + _body.position.y)
-	else:
-		_submersion.clear_waterline()
+	_apply_submersion_depth()
 
 	if _swing_time_remaining > 0.0:
 		_swing_time_remaining = maxf(0.0, _swing_time_remaining - delta)
@@ -705,6 +723,7 @@ func _apply_neck(appearance: Dictionary) -> void:
 	_neck.texture = ImageTexture.create_from_image(image)
 	_neck.scale = Vector2.ONE
 	_neck.position = Vector2(0, (head_bottom + body_top) * 0.5)
+	_neck_base_position = _neck.position
 
 
 ## Body's actual rendered content height, in world units -- BODY_SIZE.y
@@ -924,6 +943,95 @@ func set_movement_state(state: MovementState) -> void:
 	# remembers it's equipped -- this is purely visual stowing.
 	if _tool_slot != null and _equipped_slots.get("tool", false):
 		_tool_slot.visible = state != MovementState.SWIMMING
+
+
+## Sets the real, continuous water depth (in meters) this rig is standing
+## in. Player calls this every frame with the SAME depth _resolve_water_
+## state already computes from real ocean/river/lake depth -- a value that
+## used to be computed and immediately discarded once collapsed into the
+## coarse walking/wading/swimming/drowning mode string, which is why
+## wading (anything short of the full swim threshold) had no visual
+## signature at all until this existed (reported: wading in from the
+## shore should gradually tint and sink, not snap from nothing straight to
+## "half the torso submerged" at the swim line).
+##
+## Replaces the old hard "legs vanish the instant you start swimming"
+## switch with the SAME shared SubmersionShader material the torso already
+## used ("don't hide legs, just tint" -- a swimming character's legs are
+## genuinely fully underwater, exactly where a waterline anchored at the
+## torso's own centre already puts them, so no separate leg-specific
+## waterline was needed, only the hide switch removed).
+func set_submersion_depth(depth_meters: float) -> void:
+	_submersion_depth_meters = depth_meters
+
+
+## How much of the rig is below the water, as a smooth [0, 1] fraction --
+## the one signal driving both the waterline and the visual sink below.
+## Reuses WaterMovementModel.WADE_DEPTH_METERS -- the SAME tested
+## threshold that already separates "wading" from "swimming" for movement
+## speed -- as the normalizing depth, rather than inventing a second,
+## unrelated hand-picked one: at that real depth the character is already
+## fully swimming (floating, not walking a riverbed), which is exactly
+## where this fraction should reach 1.0 too.
+##
+## _submersion_depth_meters defaults to -1.0, a sentinel for "no caller
+## has ever set a real depth" (as opposed to a real, measured zero) --
+## callers that only ever say "swimming or not" via movement_state (the
+## character-creator diorama, village NPCs; see character_preview_
+## diorama.gd/npc_marker.gd, neither of which has real river/ocean/lake
+## depth to hand) never call set_submersion_depth at all, so they fall
+## back to treating SWIMMING as "at least wade-depth deep" -- keeping
+## their existing full-torso-tint look exactly as it was before this.
+func _submersion_fraction() -> float:
+	var depth_meters := _submersion_depth_meters
+	if depth_meters < 0.0:
+		depth_meters = (
+			WaterMovementModel.WADE_DEPTH_METERS if movement_state == MovementState.SWIMMING else 0.0
+		)
+	return clampf(depth_meters / WaterMovementModel.WADE_DEPTH_METERS, 0.0, 1.0)
+
+
+## How far the whole rig visually sinks (in local pixels, before this
+## node's own SCALE) at full wade depth -- suggesting a riverbed that
+## actually slopes down toward the channel as you wade in, rather than a
+## character floating at a fixed height regardless of how deep the water
+## beneath them already is. Shared with animals (CreatureMarker) via
+## SubmersionShader.MAX_SINK_PX -- see that constant's own doc comment for
+## why this lives there rather than as a second, independently-tuned
+## value here. Pinned by test_full_wade_depth_sinks_the_body_by_the_full_
+## constant rather than left as an eyeballed comment.
+const MAX_SUBMERSION_SINK_PX := SubmersionShader.MAX_SINK_PX
+
+
+## Drives both visible consequences of _submersion_fraction: the shared
+## shader's waterline (tint) and a small downward sink applied on TOP of
+## whatever _process already computed for each part this frame (walk
+## swing, swim stroke, weapon stow/re-equip, the fused-leg walk-cycle
+## frame...) -- additive, so it never needs to know which of those set a
+## given part's position, only to nudge the result down afterward. Called
+## once, last, at the end of _process.
+func _apply_submersion_depth() -> void:
+	var fraction := _submersion_fraction()
+
+	# The waterline is a FIXED external reference (the real water surface),
+	# never the rig's own cosmetic sink below -- anchored on the stable
+	# _body_base_position constant, not on _body's live (already-sunk)
+	# position this frame, so the two effects can't compound each other.
+	if fraction > 0.0:
+		_submersion.set_waterline(global_position.y + lerpf(0.0, _body_base_position.y, fraction))
+	else:
+		_submersion.clear_waterline()
+
+	var sink := lerpf(0.0, MAX_SUBMERSION_SINK_PX, fraction)
+	_leg_left.position.y += sink
+	_leg_right.position.y += sink
+	_arm_left.position.y += sink
+	_arm_right.position.y += sink
+	_tool_slot.position.y += sink
+	_body.position = _body_base_position + Vector2(0, sink)
+	_head.position = _head_base_position + Vector2(0, sink)
+	if _neck.visible:
+		_neck.position = _neck_base_position + Vector2(0, sink)
 
 
 func legs_visible() -> bool:

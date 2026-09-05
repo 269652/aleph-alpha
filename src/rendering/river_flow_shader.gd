@@ -189,6 +189,21 @@ uniform float ripple_crest_full = 0.40;
 uniform float ripple_ring_edge = 0.85;
 uniform float ripple_ink_max = 0.6;
 
+// RAIN RIPPLES -- the other ripple source, same idea as WaterShader.
+// raindrop_ripples: while it's raining (rain_intensity, driven by
+// EarthChunkManager.set_rain), a hash-seeded grid of drop points
+// continuously spawns small, quick splashes. A genuinely different
+// (shorter, tighter) packet than a passing creature's wake above -- see
+// RiverFlowShader.RAIN_RIPPLE_LINE_GAIN's own doc comment for why reusing
+// the wake's packet for rain was already tried on the ocean and reported
+// as "every drop a multi-tile bullseye".
+uniform float rain_intensity : hint_range(0.0, 1.0) = 0.0;
+uniform float rain_ripple_speed = 10.0;
+uniform float rain_ripple_lifetime = 1.2;
+uniform float rain_ripple_wavelength = 4.0;
+uniform float rain_ripple_packet_width = 4.5;
+uniform float rain_ripple_line_gain = 0.072;
+
 // Continuous downstream travel, px/s per m/s of real current.
 uniform float drift_px_per_mps = 20.0;
 // The period, in noise cells (and in eddy units for the eddy field), the
@@ -368,6 +383,52 @@ float movement_ripples(vec2 pos, vec2 surface_velocity, out float envelope) {
 		envelope += ripple_envelope(d, age);
 	}
 	return total;
+}
+
+// A raindrop's own, genuinely smaller/quicker packet -- see rain_ripple_
+// speed/lifetime/wavelength/packet_width's own comment above for why this
+// is NOT ripple_packet reused with different numbers.
+float rain_ripple_packet(float dist, float age) {
+	if (age < 0.0 || age > rain_ripple_lifetime) {
+		return 0.0;
+	}
+	float front = age * rain_ripple_speed;
+	float phase = front - dist;
+	float packet = exp(-abs(phase) / rain_ripple_packet_width);
+	float rings = sin(phase * 6.28318530718 / rain_ripple_wavelength);
+	float age_fade = 1.0 - age / rain_ripple_lifetime;
+	float spread_fade = 1.0 / (1.0 + front * ripple_spread_decay);
+	return rings * packet * age_fade * spread_fade;
+}
+
+// Cellular raindrop ripples on the river surface -- the SAME hash-grid
+// technique as WaterShader.raindrop_ripples (each cell spawns one splash
+// per cycle at a hash-derived point and time offset; neighbouring cells
+// are sampled too, so a splash that originated next door still renders as
+// it expands across the cell boundary). Deliberately NOT anchored to the
+// river's own advecting field -- rain falls on the water from outside it,
+// the same reason WaterShader's own version is anchored to world position
+// rather than to anything that moves with the current.
+float raindrop_ripples(vec2 pos) {
+	if (rain_intensity <= 0.001) {
+		return 0.0;
+	}
+	float cell_size = 14.0;
+	float interval = 1.6;
+	float total = 0.0;
+	for (int oy = -1; oy <= 1; oy++) {
+		for (int ox = -1; ox <= 1; ox++) {
+			vec2 cell = floor(pos / cell_size) + vec2(float(ox), float(oy));
+			float seed = value_hash(cell);
+			float age = mod(TIME + seed * interval * 7.0, interval);
+			if (age > rain_ripple_lifetime) {
+				continue;
+			}
+			vec2 drop_pos = (cell + vec2(value_hash(cell + 7.3), value_hash(cell + 41.7))) * cell_size;
+			total += rain_ripple_packet(distance(pos, drop_pos), age);
+		}
+	}
+	return total * rain_intensity;
 }
 
 // The surface field: an isotropic, WORLD-ANCHORED noise smeared along the
@@ -1026,8 +1087,17 @@ void fragment() {
 	// solid things standing in the current; a wake is only the surface.
 	float ripple_envelope_sum = 0.0;
 	float ripple = movement_ripples(wp, surface_velocity, ripple_envelope_sum);
+	// Rain bends the SAME guide-line field a passing creature's wake does
+	// (see raindrop_ripples' own doc comment) -- a much smaller gain, since
+	// many overlapping small splashes should read as a gentle overall
+	// texture, not individually as clear as one creature's own ring. It
+	// does NOT also get the separate crest-ink ring treatment below
+	// (ripple_crest/ripple_ink) -- a raindrop's splash is a much smaller,
+	// subtler disturbance than a wake and doesn't need its own inked ring
+	// the way a fish's does.
+	float rain_ripple = raindrop_ripples(wp);
 	float s_field = guide * across_line_scale + (n - 0.5) * wobble_local
-		+ ripple * ripple_line_gain;
+		+ ripple * ripple_line_gain + rain_ripple * rain_ripple_line_gain;
 	float level_frac = fract(s_field * line_count) - 0.5;
 	float dist_n = abs(level_frac) / line_count;
 	float stroke = 1.0 - smoothstep(line_width * 0.5, line_width, dist_n);
@@ -1413,6 +1483,30 @@ const DISTURBANCE_SLOTS := WaterShader.MAX_DISTURBANCES
 ## satisfied automatically instead of silently drifting again.
 const RIPPLE_LINE_GAIN := LINE_WOBBLE * 0.3
 
+## Rain, the other ripple source (see WaterShader.raindrop_ripples) --
+## imported the SAME way movement ripples are just above, and for the same
+## reason: a raindrop's splash has to read as the same phenomenon on a
+## river as on the sea, not a second, independently-tuned one. Genuinely
+## DIFFERENT tuning from the movement ripple above, not a duplicate --
+## WaterShader's own history ("sharing the wake's packet made every drop a
+## multi-tile bullseye") is exactly why rain needs its own, much smaller,
+## quicker packet (short lifetime, short wavelength) rather than reusing
+## RIPPLE_SPEED/LIFETIME/WAVELENGTH/PACKET_WIDTH above.
+const RAIN_RIPPLE_SPEED := WaterShader.RAIN_RIPPLE_SPEED
+const RAIN_RIPPLE_LIFETIME := WaterShader.RAIN_RIPPLE_LIFETIME
+const RAIN_RIPPLE_WAVELENGTH := WaterShader.RAIN_RIPPLE_WAVELENGTH
+const RAIN_RIPPLE_PACKET_WIDTH := WaterShader.RAIN_RIPPLE_PACKET_WIDTH
+
+## A raindrop's bend on the guide lines, a fraction of RIPPLE_LINE_GAIN
+## above rather than a second hand-picked absolute -- many overlapping
+## raindrops should read as a gentle overall texture, not as many strong
+## individual bends the way one passing creature's wake reads as one clear
+## ring. Being strictly SMALLER than RIPPLE_LINE_GAIN, it inherits that
+## constant's own tested ceiling (test_a_ripple_cannot_restructure_the_
+## whole_channel) automatically -- it can never restructure the channel
+## line family if the larger movement gain already can't.
+const RAIN_RIPPLE_LINE_GAIN := RIPPLE_LINE_GAIN * 0.4
+
 ## The crest amplitudes between which the ring inks in its own right: below
 ## MIN nothing draws (troughs and spent tails stay clean), at FULL the mark
 ## is a full-strength stroke. FULL must stay reachable by a real packet
@@ -1682,6 +1776,12 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("ripple_crest_full", RIPPLE_CREST_FULL)
 	material.set_shader_parameter("ripple_ring_edge", RIPPLE_RING_EDGE)
 	material.set_shader_parameter("ripple_ink_max", RIPPLE_INK_MAX)
+	material.set_shader_parameter("rain_intensity", 0.0)  # off by default: no rain until told
+	material.set_shader_parameter("rain_ripple_speed", RAIN_RIPPLE_SPEED)
+	material.set_shader_parameter("rain_ripple_lifetime", RAIN_RIPPLE_LIFETIME)
+	material.set_shader_parameter("rain_ripple_wavelength", RAIN_RIPPLE_WAVELENGTH)
+	material.set_shader_parameter("rain_ripple_packet_width", RAIN_RIPPLE_PACKET_WIDTH)
+	material.set_shader_parameter("rain_ripple_line_gain", RAIN_RIPPLE_LINE_GAIN)
 	for i in BAND_COLORS.size():
 		material.set_shader_parameter("band%d_color" % i, BAND_COLORS[i])
 	return material
@@ -1718,6 +1818,15 @@ func set_disturbances(
 	material.set_shader_parameter("disturbance_count", count)
 
 
+## Mirrors WaterShader.set_rain_intensity -- see EarthChunkManager.set_rain,
+## which now pushes to BOTH surfaces (rivers/lakes/the sea all render on
+## this one flow overlay in real gameplay; see _paint_water_overlay's own
+## doc comment for why the OLD ocean-only water_layer this used to be the
+## only receiver of never actually paints a cell any more).
+func set_rain_intensity(intensity: float) -> void:
+	shared_material().set_shader_parameter("rain_intensity", intensity)
+
+
 ## The exact math the shader's ripple_packet runs, mirrored on the CPU for
 ## the same reason every other mirror here exists -- a fragment shader
 ## cannot be asserted headlessly. Written out rather than delegated to
@@ -1736,6 +1845,26 @@ static func ripple_packet(distance_units: float, age_seconds: float) -> float:
 	var packet := exp(-absf(phase) / RIPPLE_PACKET_WIDTH)
 	var rings := sin(phase * TAU / RIPPLE_WAVELENGTH)
 	var age_fade := 1.0 - age_seconds / RIPPLE_LIFETIME
+	var spread_fade := 1.0 / (1.0 + front * RIPPLE_SPREAD_DECAY)
+	return rings * packet * age_fade * spread_fade
+
+
+## The exact math the shader's OWN rain_ripple_packet runs -- a genuine
+## second copy of ripple_packet's formula shape above, on purpose, for the
+## same reason ripple_packet itself is a second copy of WaterShader's: the
+## test that pins this against the GLSL is a real agreement between two
+## independently-written implementations, not a tautology. Uses the
+## RAIN_RIPPLE_* tuning above instead of the movement one -- a genuinely
+## different (shorter, tighter) packet, not the same formula called with
+## different numbers through some shared helper.
+static func rain_ripple_packet(distance_units: float, age_seconds: float) -> float:
+	if age_seconds < 0.0 or age_seconds > RAIN_RIPPLE_LIFETIME:
+		return 0.0
+	var front := age_seconds * RAIN_RIPPLE_SPEED
+	var phase := front - distance_units
+	var packet := exp(-absf(phase) / RAIN_RIPPLE_PACKET_WIDTH)
+	var rings := sin(phase * TAU / RAIN_RIPPLE_WAVELENGTH)
+	var age_fade := 1.0 - age_seconds / RAIN_RIPPLE_LIFETIME
 	var spread_fade := 1.0 / (1.0 + front * RIPPLE_SPREAD_DECAY)
 	return rings * packet * age_fade * spread_fade
 

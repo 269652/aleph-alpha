@@ -111,3 +111,8 @@ func test_a_genuinely_large_river_still_resolves_to_swimming():
 func test_standing_at_the_river_centerline_reports_real_nonzero_depth_driven_speed():
 	var result := player._resolve_water_state(river_tile, 0.1)
 	assert_lt(result.speed_multiplier, 1.0, "swimming/wading must be slower than a dry walk")
+	# The raw depth _update_character_view feeds to CharacterView.
+	# set_submersion_depth (see character_view.gd) -- this used to be
+	# computed right here and discarded once collapsed into mode/
+	# speed_multiplier alone, leaving wading with no visual signature.
+	assert_gt(result.water_depth, 0.0, "a real river tile should report real, nonzero depth")

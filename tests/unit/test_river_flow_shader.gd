@@ -1792,6 +1792,57 @@ func test_the_ripple_tuning_is_the_ocean_s_own_constants():
 	assert_eq(RiverFlowShader.DISTURBANCE_SLOTS, WaterShader.MAX_DISTURBANCES)
 
 
+# -- rain ripples on the river, not just the ocean --------------------------
+#
+# Reported: "rain don't produce ripples in the new river water". Rain never
+# reached the river surface at all -- EarthChunkManager.set_rain only ever
+# touched WaterShader's own material (see test_earth_chunk_manager.gd's
+# test_set_rain_updates_the_river_surfaces_rain_intensity_too), and
+# RiverFlowShader's shader had no rain concept whatsoever to receive it.
+
+## Shares the RAIN tuning by import too, mirroring
+## test_the_ripple_tuning_is_the_ocean_s_own_constants above -- rain on the
+## river must look like the SAME phenomenon as rain on the sea, not a
+## second, independently-tuned splash.
+func test_the_rain_ripple_tuning_is_the_ocean_s_own_constants():
+	assert_eq(RiverFlowShader.RAIN_RIPPLE_SPEED, WaterShader.RAIN_RIPPLE_SPEED)
+	assert_eq(RiverFlowShader.RAIN_RIPPLE_LIFETIME, WaterShader.RAIN_RIPPLE_LIFETIME)
+	assert_eq(RiverFlowShader.RAIN_RIPPLE_WAVELENGTH, WaterShader.RAIN_RIPPLE_WAVELENGTH)
+	assert_eq(RiverFlowShader.RAIN_RIPPLE_PACKET_WIDTH, WaterShader.RAIN_RIPPLE_PACKET_WIDTH)
+
+
+## A raindrop's splash is a much smaller, quicker packet than a passing
+## creature's wake -- see water_shader.gd's own "sharing the wake's packet
+## made every drop a multi-tile bullseye" history (the perf/visual bug that
+## RAIN_RIPPLE_* exists to avoid repeating). Pinned here too so the river
+## doesn't quietly regress into reusing the wake's own, much longer packet.
+func test_rain_ripple_packet_decays_faster_than_the_movement_one():
+	var age := RiverFlowShader.RAIN_RIPPLE_LIFETIME * 0.9
+	var rain_amplitude := RiverFlowShader.rain_ripple_packet(0.0, age)
+	var movement_amplitude := RiverFlowShader.ripple_packet(0.0, age)
+	assert_lt(
+		absf(rain_amplitude), absf(movement_amplitude),
+		"at the same age, a rain splash (short RAIN_RIPPLE_LIFETIME) should have decayed much closer to zero than a wake (long RIPPLE_LIFETIME)"
+	)
+
+
+func test_rain_ripple_packet_is_zero_once_past_the_rain_lifetime():
+	assert_eq(RiverFlowShader.rain_ripple_packet(0.0, RiverFlowShader.RAIN_RIPPLE_LIFETIME + 0.01), 0.0)
+
+
+## Matches test_overlapping_wakes_genuinely_interfere above -- a raindrop
+## splash is still a real signed wave, not a one-sided blob.
+func test_rain_ripple_packet_has_both_a_crest_and_a_trough():
+	var crest := 0.0
+	var trough := 0.0
+	for dist_step in 40:
+		var value := RiverFlowShader.rain_ripple_packet(float(dist_step) * 0.25, 0.3)
+		crest = maxf(crest, value)
+		trough = minf(trough, value)
+	assert_gt(crest, 0.0)
+	assert_lt(trough, 0.0)
+
+
 ## "interferencing" is the whole word in the report: the packet is SIGNED,
 ## so two overlapping wakes cancel where a crest meets a trough instead of
 ## only ever piling up. An unsigned ring can only ever add.
