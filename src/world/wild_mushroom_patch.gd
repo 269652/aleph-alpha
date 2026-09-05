@@ -185,9 +185,10 @@ func _seed_initial_fruiting() -> void:
 
 
 ## Which real species (if any) could ever grow at (x, y): a mycorrhizal
-## species needs its own real host tree's biome (forest/rainforest);
-## puffball (a real saprotroph -- see MushroomSpecies.is_saprotroph) is the
-## one species that additionally allows grassland. Deterministic per cell.
+## species needs its own real host tree's biome (forest/rainforest); a real
+## saprotroph (see MushroomSpecies.is_saprotroph -- Psilocybe, Champignon,
+## Parasol) additionally allows grassland, since none of the three need a
+## living host tree. Deterministic per cell.
 func _eligible_species_at(x: int, y: int, biome: PackedStringArray) -> String:
 	var here: String = biome[y * _width + x]
 	var candidates: Array[String] = []
