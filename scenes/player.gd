@@ -123,7 +123,25 @@ const BONDED_COMPANION_TRAIL_RADIUS := TIE_RANGE
 ## attempt bumped TILE_SIZE itself -- made every tile occupy 4x the world
 ## footprint, reported as "water squares are gigantic compared to the
 ## player".
-const TARGET_TILE_SCREEN_PX := 64.0
+##
+## 83.2, not 64.0: asked directly to "zoom in 30% so trees become relatively
+## bigger", alongside shrinking the character 30% (see CharacterView.
+## TARGET_HEIGHT_FRACTION_OF_TREE) -- the two together mean everything ELSE
+## in the world (trees, terrain, other entities) reads 30% bigger on screen,
+## while the character itself ends up a net ~9% smaller (1.3 zoom * 0.7
+## character-scale), not simply back where it started. Zoom is a direct
+## magnification factor, not an inverse like a seconds-to-cover time
+## constant, so 30% more zoom is 64.0 * 1.3 = 83.2 exactly. Pinned by
+## test_camera_zoomed_in_thirty_percent_over_the_previous_tuning
+## (test_player_camera.gd), which checks the ratio rather than just the new
+## literal.
+##
+## DisplayScaling.TILE_SCREEN_PX is a SEPARATE constant that deliberately
+## stayed at 64.0 -- see its own doc comment for why (a hard pixel-perfect-
+## art-scaling constraint across resolutions, unrelated to gameplay camera
+## framing). The two happened to share one literal before this change; they
+## no longer do, and are not meant to be kept in sync by hand going forward.
+const TARGET_TILE_SCREEN_PX := 83.2
 ## Applied in _ready() rather than left as a bare number in player.tscn, so
 ## it's a tested constant (see test_player_camera.gd) rather than an
 ## eyeballed scene property.

@@ -886,6 +886,29 @@ func test_scaled_character_height_matches_its_target_fraction_of_a_trees_height(
 	assert_almost_eq(scaled_height, expected, 0.01)
 
 
+## Pins the actual tuned literal -- no test previously pinned this value
+## directly (every other test here checks the FORMULA's internal
+## consistency, which passes for any value). Asked directly: "make the
+## character 30% smaller and zoom in 30% so trees become relatively bigger"
+## (Player.CAMERA_ZOOM handles the zoom half, see test_player_camera.gd).
+## 0.595, not 0.85 * 0.7 re-eyeballed: 0.85 reduced by 30% is exactly 0.595,
+## pinned by the ratio test below rather than just re-asserting the literal.
+func test_target_height_fraction_matches_the_current_tuning():
+	assert_almost_eq(CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE, 0.595, 0.0001)
+
+
+## Same reasoning as Snowfall's own covering-speed test and CAMERA_ZOOM's own
+## ratio test above: pin the RATIO against the previous tuning, not just the
+## new literal, so the intent ("30% smaller") survives independently of the
+## exact numbers on either side.
+func test_character_shrunk_thirty_percent_over_the_previous_tuning():
+	var previous_target_height_fraction := 0.85
+	assert_almost_eq(
+		CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE / previous_target_height_fraction, 0.7, 0.0001,
+		"character should now be 30% smaller (70% of its previous height fraction)"
+	)
+
+
 ## The scale must actually be applied to the instantiated view, not just
 ## exist as an unused constant.
 func test_the_instantiated_view_is_scaled_down():

@@ -36,13 +36,31 @@ func test_camera_zoom_is_wired_from_the_tuned_constant():
 
 
 ## Pins the actual eyeballed value (TARGET_TILE_SCREEN_PX), not zoom itself --
-## zoom is a derived quantity, see the file header comment. This is the
-## original, always-correct framing (a 16-world-unit tile at 4x zoom): the
-## art-resolution pass does NOT change how much world fits on screen, only
-## how many art pixels are painted per tile (see
-## TerrainRenderer.ART_TILE_SIZE / LAYER_SCALE).
-func test_target_tile_screen_size_keeps_the_original_framing():
-	assert_almost_eq(Player.TARGET_TILE_SCREEN_PX, 64.0, 0.001)
+## zoom is a derived quantity, see the file header comment. The art-resolution
+## pass does NOT change how much world fits on screen, only how many art
+## pixels are painted per tile (see TerrainRenderer.ART_TILE_SIZE /
+## LAYER_SCALE) -- this constant is the one deliberate exception, a real
+## framing/composition tuning asked for directly.
+##
+## 83.2, not 64.0: asked directly to "zoom in 30% so trees become relatively
+## bigger" (alongside shrinking the character -- see CharacterView.
+## TARGET_HEIGHT_FRACTION_OF_TREE). Zoom is a direct magnification factor, not
+## an inverse like a seconds-to-cover time constant, so 30% more zoom is
+## simply 64.0 * 1.3 = 83.2, pinned by the ratio test below rather than just
+## re-asserting the new literal.
+func test_target_tile_screen_size_matches_the_current_tuning():
+	assert_almost_eq(Player.TARGET_TILE_SCREEN_PX, 83.2, 0.001)
+
+
+## Same reasoning as Snowfall's own covering-speed test: pin the RATIO against
+## the previous tuning, not just the new literal, so the intent ("30% more
+## zoom") survives independently of the exact numbers on either side.
+func test_camera_zoomed_in_thirty_percent_over_the_previous_tuning():
+	var previous_target_tile_screen_px := 64.0
+	assert_almost_eq(
+		Player.TARGET_TILE_SCREEN_PX / previous_target_tile_screen_px, 1.3, 0.0001,
+		"camera should now be zoomed in 30% over the previous tuning"
+	)
 
 
 ## Regression: TILE_SIZE going 16->64 (see docs/concept/art_resolution.md)

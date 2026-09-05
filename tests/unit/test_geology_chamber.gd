@@ -59,6 +59,18 @@ func test_no_duplicate_cells():
 ## fraction rather than a tile count means a future TILE_SIZE or
 ## window-size change can't silently blow this back up unnoticed the way
 ## it did once already.
+##
+## Threshold raised 0.3 -> 0.4 when the camera was asked to zoom in 30%
+## (Player.TARGET_TILE_SCREEN_PX 64.0 -> 83.2): CHAMBER_RADIUS is already at
+## its own floor (1, the largest radius this same test allowed at the OLD
+## zoom, and the smallest that still clears test_chamber_is_small_and_
+## bounded's "more than just the entrance cell" lower bound) -- it cannot
+## shrink further to absorb a camera-only change, so the fraction this
+## pocket now genuinely occupies (3 tiles * 83.2px / 720px = 34.67%) is a
+## real, correct consequence of standing closer to the ground, not a
+## regression. 0.4 keeps essentially the same RELATIVE headroom the
+## original 0.3 had over its own 26.67% (~12%) rather than eyeballing a
+## fresh number.
 func test_chamber_diameter_stays_a_small_fraction_of_the_visible_screen():
 	var diameter_tiles := 2.0 * GeologyChamber.CHAMBER_RADIUS + 1.0
 	var diameter_px := diameter_tiles * Player.TARGET_TILE_SCREEN_PX
@@ -69,7 +81,7 @@ func test_chamber_diameter_stays_a_small_fraction_of_the_visible_screen():
 	var visible_shorter_side_px: float = minf(viewport_px.x, viewport_px.y)
 	var fraction: float = diameter_px / visible_shorter_side_px
 	assert_lt(
-		fraction, 0.3,
+		fraction, 0.4,
 		(
 			"chamber diameter is %.0f%% of the visible screen's shorter side -- "
 			+ "too big to read as a small starter pocket"
