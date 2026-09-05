@@ -7866,6 +7866,23 @@ by `TreeSpecies.IDS`, the same real ground items the visible
 `DecomposerMarker` path scans, just via a different lookup shape. There is
 no abstract per-tree fruit (or leaf) stock either function reads.
 
+🚧 **Follow-up: requested directly, "deactivate leaf littering", right
+after the GPU rewrite above shipped.** `EarthChunkManager.
+LEAF_LITTER_ENABLED` (a mutable `static var`, same idiom as
+`EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED` and the pre-rewrite kill
+switch this feature already used once) is now an off-by-default
+deactivation switch on the entire leaf-fall block in `step_fruiting` --
+with it off, no leaf is ever added to a `LeafLitterField`, so the
+renderer, forage queries, and wind/player/animal dispersal all simply
+have nothing to act on; no need to gate any of those separately. The
+fall-triggering mechanism itself (angle/distance scatter, season gating,
+deterministic roll) is untouched and stays directly tested --
+`test_earth_chunk_manager.gd`'s own `_find_a_fallen_leaf` helper forces
+the flag on for the duration of a lookup and restores whatever it was
+after, so existing coverage survives the flag defaulting off
+(`test_leaf_litter_is_off_by_default`,
+`test_step_fruiting_adds_no_leaf_when_leaf_litter_disabled`).
+
 ⬜ **The invisible `AntColony` mound simulation still does not forage
 leaves** (unchanged gap from the first pass) — the VISIBLE `DecomposerMarker`
 ants/bugs above already close the "ants eat fallen leaves" gap the report

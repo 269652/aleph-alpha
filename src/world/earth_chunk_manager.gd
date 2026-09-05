@@ -1042,6 +1042,17 @@ const FRUITING_INTERVAL := 1.0
 ## rather than a per-leaf hanging position.
 const LEAF_SCATTER_RADIUS := 28.0
 
+## Off-by-default deactivation switch on the leaf-fall block below (see
+## docs/concept/leaf_litter.md). Requested directly: "deactivate leaf
+## littering". Same idiom as EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED's
+## own instance flag, except a mutable `static var` rather than a `const`:
+## the fall-triggering mechanism itself (angle/distance/season roll) stays
+## real, tested logic even switched off by default --
+## test_earth_chunk_manager.gd's own _find_a_fallen_leaf helper forces this
+## on for the duration of a single lookup and restores whatever it was
+## after. Pinned off by test_leaf_litter_is_off_by_default.
+static var LEAF_LITTER_ENABLED := false
+
 ## Roll granularity for the deterministic "does a tree shed a leaf this
 ## step" check below -- NOT engine randf(): a per-step gameplay roll uses
 ## a seeded hash instead, the same "looks random, is actually a pure
@@ -3279,53 +3290,57 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 			# tree.set_ripe_fruit -- not a second schedule computing its
 			# own answer. Independent of whether fruit fell this same
 			# step -- a tree can shed a leaf with nothing left to fruit.
-			var leaf_fall_chance := 0.0
-			var leaf_fall_season := ""
-			if (
-				canopy_season == "autumn"
-				and canopy_turning_into == "winter"
-				and canopy_turn_progress > 0.0
-			):
-				# Chance rises with how far into its own turn the canopy
-				# is: a tree just beginning to turn sheds rarely, one
-				# nearly bare sheds almost every step.
-				leaf_fall_chance = canopy_turn_progress
-				leaf_fall_season = "autumn"
-			elif canopy_season == "summer":
-				leaf_fall_chance = LEAF_SUMMER_TRICKLE_CHANCE
-				leaf_fall_season = "summer"
-			if leaf_fall_chance > 0.0:
-				# Deterministic per-(tree, step) roll, not engine randf()
-				# -- see _LEAF_FALL_ROLL_STEPS' own doc comment.
-				var step_bucket := int(now / FRUITING_INTERVAL)
-				var roll := PixelNoise.range_index(tree.sprite_seed, step_bucket, 0, _LEAF_FALL_ROLL_STEPS)
-				if roll < int(leaf_fall_chance * _LEAF_FALL_ROLL_STEPS):
-					var angle := deg_to_rad(float(
-						PixelNoise.range_index(tree.sprite_seed, step_bucket + 1, 0, 360)
-					))
-					var distance_fraction := float(
-						PixelNoise.range_index(tree.sprite_seed, step_bucket + 2, 0, 100)
-					) / 100.0
-					var landing_position: Vector2 = (
-						tree.position
-						+ Vector2(cos(angle), sin(angle)) * LEAF_SCATTER_RADIUS * distance_fraction
-					)
-					# Real, individually-addressable litter data (see
-					# LeafLitterField), NOT a WorldItemBus/DroppedItem ground
-					# item any more -- the whole point of this rewrite (see
-					# docs/concept/leaf_litter.md). Species/season stay
-					# exactly what they always were; only WHERE that data
-					# lives changed. Keyed by the TREE's own chunk (not
-					# necessarily whichever chunk_coord _loaded_trees happens
-					# to file it under -- see that dict's own flat-iteration
-					# doc comment), same lookup take_fruit_at's neighbours
-					# use elsewhere in this file.
-					var leaf_chunk_coord := _chunk_coord_for_tile(
-						_world_tile_for_pixel(tree.position)
-					)
-					var leaf_field: LeafLitterField = _leaf_litter_fields.get(leaf_chunk_coord)
-					if leaf_field != null:
-						leaf_field.add_leaf(landing_position, species_id, leaf_fall_season, now)
+			#
+			# Gated on LEAF_LITTER_ENABLED (see that constant's own doc
+			# comment) -- requested directly: "deactivate leaf littering".
+			if LEAF_LITTER_ENABLED:
+				var leaf_fall_chance := 0.0
+				var leaf_fall_season := ""
+				if (
+					canopy_season == "autumn"
+					and canopy_turning_into == "winter"
+					and canopy_turn_progress > 0.0
+				):
+					# Chance rises with how far into its own turn the canopy
+					# is: a tree just beginning to turn sheds rarely, one
+					# nearly bare sheds almost every step.
+					leaf_fall_chance = canopy_turn_progress
+					leaf_fall_season = "autumn"
+				elif canopy_season == "summer":
+					leaf_fall_chance = LEAF_SUMMER_TRICKLE_CHANCE
+					leaf_fall_season = "summer"
+				if leaf_fall_chance > 0.0:
+					# Deterministic per-(tree, step) roll, not engine randf()
+					# -- see _LEAF_FALL_ROLL_STEPS' own doc comment.
+					var step_bucket := int(now / FRUITING_INTERVAL)
+					var roll := PixelNoise.range_index(tree.sprite_seed, step_bucket, 0, _LEAF_FALL_ROLL_STEPS)
+					if roll < int(leaf_fall_chance * _LEAF_FALL_ROLL_STEPS):
+						var angle := deg_to_rad(float(
+							PixelNoise.range_index(tree.sprite_seed, step_bucket + 1, 0, 360)
+						))
+						var distance_fraction := float(
+							PixelNoise.range_index(tree.sprite_seed, step_bucket + 2, 0, 100)
+						) / 100.0
+						var landing_position: Vector2 = (
+							tree.position
+							+ Vector2(cos(angle), sin(angle)) * LEAF_SCATTER_RADIUS * distance_fraction
+						)
+						# Real, individually-addressable litter data (see
+						# LeafLitterField), NOT a WorldItemBus/DroppedItem ground
+						# item any more -- the whole point of this rewrite (see
+						# docs/concept/leaf_litter.md). Species/season stay
+						# exactly what they always were; only WHERE that data
+						# lives changed. Keyed by the TREE's own chunk (not
+						# necessarily whichever chunk_coord _loaded_trees happens
+						# to file it under -- see that dict's own flat-iteration
+						# doc comment), same lookup take_fruit_at's neighbours
+						# use elsewhere in this file.
+						var leaf_chunk_coord := _chunk_coord_for_tile(
+							_world_tile_for_pixel(tree.position)
+						)
+						var leaf_field: LeafLitterField = _leaf_litter_fields.get(leaf_chunk_coord)
+						if leaf_field != null:
+							leaf_field.add_leaf(landing_position, species_id, leaf_fall_season, now)
 	_last_fruiting_time = now
 
 
