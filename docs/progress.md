@@ -7799,6 +7799,37 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   unload — chunk-local, ephemeral state, the same explicit scope cut
   `soil_fauna.md`'s worm burrows already made for the same reason.
 
+### Flies (`concept/flies.md`)
+
+Another concept doc with real, substantial ✅ status entirely of its own
+(every entry in the doc's own Status list is ✅) but never promoted to its
+own section here — tracked only as narrative inside this doc's `/ecotest`
+and "Flies"/"Flies in the world" dated entries further up. Given a proper
+entry during this cross-alignment pass; every code reference below was
+independently re-checked against source, not just copied from the concept
+doc's own claims.
+
+- **Full lifecycle (egg → maggot → pupa → adult), population ceilings, and
+  laying rules** (medium) — ✅ Done — `src/gameplay/fly_colony.gd`
+  (`FlyColony`), reached from `EarthChunkManager.step_ground_food`.
+- **Adult flies as real per-colony entities, one marker per adult, not a
+  count** (medium) — ✅ Done — `EarthChunkManager._fly_markers`/
+  `_sync_fly_markers`; eggs/maggots deliberately never become nodes, since
+  they live IN the fruit.
+- **Maggots hasten the decay of what they eat, so a swarm ends its own
+  food supply** (small) — ✅ Done — `FlyColony.decay_hastened_by` feeds
+  `step_ground_food`'s own aging calculation directly.
+- **Flies follow a scent carrier, including a player carrying rot**
+  (small) — ✅ Done — `EarthChunkManager._sync_carrier_flies`/
+  `register_scent_carrier`, wired to the player in `world.gd`.
+- **Carcasses (not just ground-food windfalls) grow their own fly colony**
+  (small) — ✅ Done — `Carcass` (`src/rendering/carcass.gd`) owns and
+  advances a real `FlyColony` directly (`fly_count()`,
+  `FLY_ATTRACTION_DELAY_SECONDS`), reached from a different caller since a
+  carcass is a `Node2D` rather than a `WorldItemBus` ground item; see
+  `carrion.md`'s "Flies find it first" and `disease.md`'s fly-blown
+  carrion risk for what that swarm then feeds into.
+
 ### Leaf Litter (`concept/leaf_litter.md`)
 
 ✅ **Rewritten onto a GPU-instanced per-chunk data model
