@@ -38,7 +38,14 @@ const FREEZING_WARMTH := 0.15
 ## Covering takes most of a single spell: long enough to watch arrive, short
 ## enough to finish. Thawing takes longer, because snow lingers after the cold
 ## does -- but still completes in a couple of spells rather than never.
-const SECONDS_TO_COVER := WeatherModel.WEATHER_PERIOD_SECONDS * 0.6
+##
+## 0.5, not the original 0.6: asked directly for a 20% faster cover. Speed is
+## the INVERSE of this constant (depth per second, not seconds per depth), so
+## a 20% faster cover is 1/1.2 of the previous TIME -- 0.6 / 1.2 = 0.5
+## exactly, not the multiplier itself reduced by 20% (which would have been
+## 0.48). Pinned by test_covering_speed_was_increased_twenty_percent_over_
+## the_previous_tuning.
+const SECONDS_TO_COVER := WeatherModel.WEATHER_PERIOD_SECONDS * 0.5
 const SECONDS_TO_THAW := WeatherModel.WEATHER_PERIOD_SECONDS * 1.5
 
 

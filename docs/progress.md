@@ -3192,6 +3192,16 @@ complaint was specifically about the player's own repeated walking. 3 new
 tests in `test_earth_chunk_manager.gd`; the pre-existing snow-trail tests
 (each calling `tread_snow_at` only once per position) are unaffected.
 
+✅ **Snow covers the ground 20% faster (2026-09-05).** Asked directly:
+"increase the snow covering speed 20%." `Snowfall.SECONDS_TO_COVER` is a
+TIME (seconds to reach full cover), and speed is its inverse, so a 20%
+faster cover is 1/1.2 of the previous time, not the previous multiplier
+reduced by 20% — `WEATHER_PERIOD_SECONDS * 0.6` became `* 0.5` exactly
+(0.6 / 1.2 = 0.5), not `* 0.48`. Pinned by a new test computing that exact
+ratio against the previous tuning rather than just re-asserting the new
+literal. `SECONDS_TO_THAW` (melting) is untouched — the request was about
+covering only.
+
 ✅ **A settlement's town/city tier and specialization are both derived from
 real flows, never a stored tag** (`settlement_tier.gd`), the literal
 `docs/emergence/04-settlements-cities-infrastructure.md` "City threshold"/
