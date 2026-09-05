@@ -34,9 +34,28 @@ func test_direction_changes_between_distinct_seeds():
 	assert_ne(a, b)
 
 
+## Windows are now phase-shifted per seed (see _phase_offset -- fixing
+## "all birds on the screen reverse direction at the exact same time"
+## means no two seeds' windows can both start at exactly elapsed_time=0
+## any more), so this scans forward for a real boundary crossing instead
+## of assuming one sits at exactly direction_change_interval. Same claim
+## as before: stable within one window, just measured from wherever this
+## seed's own window actually starts.
 func test_direction_is_stable_within_one_change_interval():
-	var early := flyer.direction_at(Vector2.ZERO, Vector2.ZERO, 0.1, 7)
-	var late := flyer.direction_at(Vector2.ZERO, Vector2.ZERO, flyer.direction_change_interval - 0.1, 7)
+	var seed_value := 7
+	var first := flyer.direction_at(Vector2.ZERO, Vector2.ZERO, 0.0, seed_value)
+	var boundary := 0.0
+	var t := 0.0
+	while t < flyer.direction_change_interval * 2.0:
+		t += 0.01
+		if flyer.direction_at(Vector2.ZERO, Vector2.ZERO, t, seed_value) != first:
+			boundary = t
+			break
+	assert_gt(boundary, 0.0, "precondition: a boundary crossing should exist within two intervals")
+	var early := flyer.direction_at(Vector2.ZERO, Vector2.ZERO, boundary + 0.05, seed_value)
+	var late := flyer.direction_at(
+		Vector2.ZERO, Vector2.ZERO, boundary + flyer.direction_change_interval - 0.05, seed_value
+	)
 	assert_eq(early, late)
 
 
@@ -147,19 +166,39 @@ func test_a_flyer_on_its_boundary_does_not_reverse_heading_every_frame():
 ## The behavioural claim, not just the per-frame one: a flyer that starts on
 ## its boundary must actually GO somewhere over a few seconds. Path length
 ## alone is not enough -- a jittering bird still travels ~100px of path while
-## netting almost no displacement -- so this measures net displacement.
+## netting almost no displacement -- so this measures how far it gets from
+## its start.
+##
+## Measured as the FARTHEST distance from the start reached AT ANY POINT
+## during the window, not the final distance at the window's end. A
+## contained flyer now commits to one rotational direction for TURN_SIGN_
+## INTERVALS roam intervals at a time (see that constant's own doc comment
+## -- fixing "robins still cycle between two points" means a flyer can no
+## longer luck into a fresh, better-displacing turn sign every 1.4s the way
+## it used to), and a flyer travelling a genuine arc around its boundary can
+## end a fixed window back near where it started -- measured directly, one
+## seed's END-of-window displacement was 0.89px despite having swept most
+## of the way around its territory in between, which a naive "final
+## distance" check reads as indistinguishable from a true stall. "How far
+## did it get, at its farthest" is not fooled by that: a real stall never
+## gets far at any point, while genuine circular travel does, whether or
+## not it later swings back near home.
 func test_a_flyer_starting_on_its_boundary_actually_travels():
 	var movement := AmbientFlyerMovement.new(34.0, 70.0, 1.4)
 	var step := 1.0 / 60.0
+	var commitment_seconds: float = AmbientFlyerMovement.TURN_SIGN_INTERVALS * movement.direction_change_interval
+	var steps := int((commitment_seconds + 3.0) / step)
 	for seed_value in range(16):
 		var position := _JITTER_POSITION
 		var elapsed := _JITTER_TIME
-		for _i in 180:  # three simulated seconds
+		var max_distance := 0.0
+		for _i in steps:
 			position = movement.step_position(_JITTER_HOME, position, elapsed, step, seed_value)
 			elapsed += step
+			max_distance = maxf(max_distance, _JITTER_POSITION.distance_to(position))
 		assert_gt(
-			_JITTER_POSITION.distance_to(position), 20.0,
-			"seed %d barely moved in 3s of flight -- it is stalled on the boundary" % seed_value
+			max_distance, 20.0,
+			"seed %d never got far from its start -- it is stalled on the boundary" % seed_value
 		)
 
 
@@ -180,3 +219,92 @@ func test_a_contained_flyer_still_does_not_escape_its_territory():
 				position.distance_to(_JITTER_HOME), limit,
 				"seed %d escaped its territory" % seed_value
 			)
+
+
+# -- individual, not synchronized; roaming, not shuttling between two points -
+
+## Reported live, twice in one message: "robins still cycle between two
+## points and interestingly all birds on the screen reverse direction at
+## the exact same time... behaviour should be individual". Two separate,
+## confirmed-by-measurement bugs (see tools/probe_bird_wander_sync.gd):
+##
+## 1. Every AmbientFlyerMarker starts its own _elapsed_time at 0.0 on
+##    spawn, and _roam_direction/_turn_sign both derive interval_index
+##    from elapsed_time ALONE, with no per-bird phase. Two birds spawned
+##    together (an ordinary chunk load) therefore tick over
+##    direction_change_interval boundaries on the EXACT SAME FRAME for the
+##    rest of their lives, no matter how different their own seeds are --
+##    only the CHOSEN heading differs, never the moment it changes. That
+##    reads as a flock reversing in lockstep, not individuals.
+## 2. _turn_sign re-rolls independently every single roam interval -- an
+##    unbiased coin flip that on average reverses which way a CONTAINED
+##    flyer circles its territory every other interval. That is far too
+##    often for it to travel more than a short arc before turning back:
+##    measured directly, a flyer run for 90 simulated seconds from the
+##    boundary-jitter reproduction spent nearly all of it shuffling within
+##    a narrow wedge, repeatedly revisiting near-identical points -- the
+##    milder, longer-timescale sibling of the acute "stalled on the
+##    boundary" bug above, and not caught by that bug's own 3-second/20px
+##    travel test, which a shuffle this size still clears.
+
+## Same jitter reproduction the boundary-stall tests above use, just for
+## a much longer run.
+func test_differently_seeded_flyers_change_heading_on_different_frames():
+	var a := AmbientFlyerMovement.new(34.0, 70.0, 1.8)
+	var b := AmbientFlyerMovement.new(34.0, 70.0, 1.8)
+	var step := 1.0 / 60.0
+	var pos_a := Vector2.ZERO
+	var pos_b := Vector2.ZERO
+	var dir_a := a.direction_at(Vector2.ZERO, pos_a, 0.0, 3)
+	var dir_b := b.direction_at(Vector2.ZERO, pos_b, 0.0, 9)
+	var elapsed := 0.0
+	var flip_frame_a := -1
+	var flip_frame_b := -1
+	for i in 600:  # 10 simulated seconds -- several roam intervals at 1.8s
+		var new_dir_a := a.direction_at(Vector2.ZERO, pos_a, elapsed, 3)
+		var new_dir_b := b.direction_at(Vector2.ZERO, pos_b, elapsed, 9)
+		if flip_frame_a < 0 and new_dir_a.dot(dir_a) < 0.5:
+			flip_frame_a = i
+		if flip_frame_b < 0 and new_dir_b.dot(dir_b) < 0.5:
+			flip_frame_b = i
+		dir_a = new_dir_a
+		dir_b = new_dir_b
+		pos_a = a.step_position(Vector2.ZERO, pos_a, elapsed, step, 3)
+		pos_b = b.step_position(Vector2.ZERO, pos_b, elapsed, step, 9)
+		elapsed += step
+	assert_true(
+		flip_frame_a >= 0 and flip_frame_b >= 0,
+		"precondition: both flyers should change heading at least once in 10s"
+	)
+	assert_ne(
+		flip_frame_a, flip_frame_b,
+		"two differently-seeded flyers, both spawned at elapsed_time=0, changed heading on the exact same frame -- that is a synchronized flock, not individuals"
+	)
+
+
+## Wraparound-safe: tracks the UNWRAPPED cumulative angle around home frame
+## to frame (the same wrapf-a-delta technique AmbientFlyerMovement._rotated_
+## toward itself uses), so a flyer that happens to pass near the +-180
+## degree seam is not mistaken for one that swept a huge arc, or vice versa.
+func test_a_contained_flyer_ranges_over_a_wide_arc_not_just_two_points():
+	var movement := AmbientFlyerMovement.new(34.0, 70.0, 1.8)
+	var step := 1.0 / 60.0
+	for seed_value in range(8):
+		var position := _JITTER_POSITION
+		var elapsed := _JITTER_TIME
+		var previous_angle := (position - _JITTER_HOME).angle()
+		var unwrapped := 0.0
+		var min_unwrapped := 0.0
+		var max_unwrapped := 0.0
+		for _i in 5400:  # 90 simulated seconds
+			position = movement.step_position(_JITTER_HOME, position, elapsed, step, seed_value)
+			elapsed += step
+			var angle := (position - _JITTER_HOME).angle()
+			unwrapped += wrapf(angle - previous_angle, -PI, PI)
+			previous_angle = angle
+			min_unwrapped = minf(min_unwrapped, unwrapped)
+			max_unwrapped = maxf(max_unwrapped, unwrapped)
+		assert_gt(
+			max_unwrapped - min_unwrapped, deg_to_rad(150.0),
+			"seed %d only ever swept a narrow wedge around home in 90s -- reads as shuttling between two points, not roaming" % seed_value
+		)

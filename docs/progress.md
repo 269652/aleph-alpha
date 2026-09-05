@@ -7069,6 +7069,31 @@ state had never once been set by anything in `src/`.
   isn't there) rather than the accidental "and also never rests" it had
   also been asserting. 332 tests green across all seven bird/flyer
   suites. Writeup: `concept/ecosystem_dynamics.md`'s same section.
+  **Follow-up, watched live right after: "robins still cycle between two
+  points and ... all birds on the screen reverse direction at the exact
+  same time ... behaviour should be individual".** Two bugs in
+  `AmbientFlyerMovement` (the shared wander driver for every ambient
+  flyer, bird or pollinator), both confirmed by direct measurement before
+  either was touched: (1) every flyer starts its own `_elapsed_time` at
+  0.0 on spawn, and the interval clock had no per-flyer phase, so flyers
+  spawned together changed heading on the identical frame forever — only
+  the CHOSEN heading differed by seed, never the moment; fixed with a
+  per-seed `_phase_offset`. (2) `_turn_sign` re-rolled independently every
+  roam interval, an unbiased coin flip reversing a contained flyer's
+  boundary-circling direction on average every other interval — far too
+  often to travel more than a short arc, measured directly as a flyer
+  shuffling in a narrow wedge for 90 simulated seconds; fixed with
+  `TURN_SIGN_INTERVALS = 5` so the turn sign holds for several roam
+  intervals before it can flip. Widening that broke an existing
+  short-window "does it travel" test for a few seeds — not a real
+  regression (the same run's own wide angular sweep proved it was moving)
+  but a wrong metric: final straight-line distance from start can land
+  near zero after a flyer travels most of the way around its own
+  territory and back. Replaced with farthest distance from start reached
+  at any point in the window, which a real stall still never clears.
+  15 tests green in `test_ambient_flyer_movement.gd` (2 new, 2 existing
+  updated for a genuinely changed contract). Writeup:
+  `concept/ecosystem_dynamics.md`'s same section.
 - **Persistence / catch-up integration of eaten burrows** (medium) — ⬜ Not
   started, deliberately — a reloaded chunk re-seeds deterministically and
   loses which burrows had been eaten, exactly like `FlowerPatch`, `TallGrass`,

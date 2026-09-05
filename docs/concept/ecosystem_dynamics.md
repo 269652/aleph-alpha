@@ -1084,6 +1084,59 @@ flyer_renderer.gd`/`test_bird_song.gd`/`test_bird_courtship.gd`/
 `test_illustrated_bird_sprite.gd`/`test_ecosystem_simulation.gd` re-run
 as siblings with no direct relation to the fix).
 
+**Follow-up, watched live right after the idle-rest fix above shipped:
+"robins still cycle between two points and interestingly all birds on
+the screen reverse direction at the exact same time... behaviour should
+be individual".** Two separate bugs in `AmbientFlyerMovement`, the shared
+wander driver every ambient flyer (bird or pollinator) uses, both
+confirmed by direct headless measurement before either was touched:
+
+1. **Every flyer's own `_elapsed_time` starts at 0.0 on spawn**, and
+   `_roam_direction`/`_turn_sign` both derived their `interval_index`
+   from elapsed time alone, with no per-flyer phase. Two flyers spawned
+   together (an ordinary chunk load) therefore ticked over
+   `direction_change_interval` boundaries on the exact same frame for
+   the rest of their lives — measured directly, 5 differently-seeded
+   birds all changed heading at frame 109, then 217, then 325, every
+   time, forever. Only the CHOSEN heading ever differed by seed; the
+   MOMENT it changed never did, which is what read as a flock reversing
+   in lockstep rather than individuals. Fixed with `_phase_offset
+   (seed_value)`, a per-flyer offset spread across one whole interval,
+   added into elapsed time everywhere an `interval_index` is derived.
+2. **`_turn_sign` (which way a CONTAINED flyer circles its territory
+   boundary) re-rolled independently every single roam interval** — an
+   unbiased coin flip that on average reverses the circling direction
+   every OTHER interval, far too often for a flyer to travel more than a
+   short arc before turning back. Measured directly: run 90 simulated
+   seconds from the boundary, a flyer spent nearly all of it shuffling
+   within a narrow wedge, repeatedly revisiting near-identical points —
+   exactly "cycles between two points", and NOT caught by the existing
+   boundary-stall regression test, which a shuffle this size still
+   clears. Fixed with `TURN_SIGN_INTERVALS = 5`: the turn sign now holds
+   for several consecutive roam intervals before it is allowed to flip,
+   so a contained flyer commits to one rotational direction long enough
+   to actually go somewhere.
+
+Both were pinned with new tests measuring the actual reported shape of
+the bug rather than an implementation detail: same-frame heading changes
+across differently-seeded flyers, and total UNWRAPPED angular sweep
+around home over a long run (wraparound-safe, unlike a naive min/max
+angle, which a flyer passing near the +-180 degree seam would corrupt).
+Widening `TURN_SIGN_INTERVALS` meant a flyer can no longer luck into a
+fresh, better-displacing turn sign every 1.4s, which broke the existing
+short-window "does it actually travel" regression test for several seeds
+— not a real regression, since the flyer was demonstrably still
+travelling (confirmed by the same run's own wide angular sweep), just
+that "final straight-line distance from start after a fixed window" is
+the wrong metric once genuine circular travel can end a window back near
+its own start (one seed measured 0.89px of NET displacement after
+sweeping most of the way around its territory). Replaced with "farthest
+distance from start reached AT ANY POINT during the window", which a
+real stall still never clears and genuine circular travel always does.
+15 tests green in `test_ambient_flyer_movement.gd` (2 new, 2 existing
+ones updated for the same reason the idle-rest fix above updated one:
+the contract they were pinning had genuinely, deliberately changed).
+
 ## Region difficulty (gating the roster by player readiness)
 
 Rounding out the roster with real predators (bear, lion) and a real hazard

@@ -108,10 +108,25 @@ func direction_at(home: Vector2, current: Vector2, elapsed_time: float, seed_val
 
 
 func _roam_direction(elapsed_time: float, seed_value: int) -> Vector2:
-	var interval_index := int(elapsed_time / direction_change_interval)
+	var interval_index := int((elapsed_time + _phase_offset(seed_value)) / direction_change_interval)
 	var angle_seed := hash("%d_%d" % [seed_value, interval_index])
 	var angle := float(angle_seed % 360) * PI / 180.0
 	return Vector2(cos(angle), sin(angle))
+
+
+## Per-flyer offset, in seconds, spread across one whole direction_change_
+## interval. Every AmbientFlyerMarker starts its own _elapsed_time at 0.0
+## on spawn, so without this every flyer's interval_index ticked over at
+## the identical elapsed_time regardless of seed -- two birds spawned
+## together (an ordinary chunk load) recomputed a new heading on the exact
+## same frame for the rest of their lives, no matter how different their
+## chosen headings were. Reported live: "all birds on the screen reverse
+## direction at the exact same time... behaviour should be individual".
+## Derived from seed_value alone, so it is itself deterministic and holds
+## for one flyer's whole lifetime, the same contract direction_at already
+## promises.
+func _phase_offset(seed_value: int) -> float:
+	return float(hash("%d_phase" % seed_value) % 10000) / 10000.0 * direction_change_interval
 
 
 ## Advances `current` by one step of flight motion over `delta` seconds.
@@ -132,8 +147,23 @@ func step_position(
 ## degenerates when a flyer sits on its boundary, so any turn sense read out
 ## of it flips frame to frame there -- which is the jitter this whole
 ## containment path exists to avoid.
+## How many direction_change_interval windows a contained flyer commits to
+## one rotational direction before it is allowed to re-roll. Re-rolling
+## every single roam interval (the old behaviour, TURN_SIGN_INTERVALS
+## effectively 1) is an unbiased coin flip that on average reverses which
+## way a contained flyer circles its territory every OTHER interval --
+## nowhere near long enough to travel more than a short arc before turning
+## back. Reported live: "robins still cycle between two points". Pinned by
+## test_a_contained_flyer_ranges_over_a_wide_arc_not_just_two_points, not
+## eyeballed: below this the test's 150-degree sweep starts failing for
+## some seeds (an unlucky short run of alternating flips), same as the bug.
+const TURN_SIGN_INTERVALS := 5
+
+
 func _turn_sign(elapsed_time: float, seed_value: int) -> float:
-	var interval_index := int(elapsed_time / direction_change_interval)
+	var interval_index := int(
+		(elapsed_time + _phase_offset(seed_value)) / (direction_change_interval * TURN_SIGN_INTERVALS)
+	)
 	return 1.0 if hash("%d_%d_turn" % [seed_value, interval_index]) % 2 == 0 else -1.0
 
 
