@@ -1,9 +1,12 @@
 # Progress Tracker
 
 This document is a living status tracker for everything defined across the
-design docs in `docs/concept/*.md` (49 as of this writing, up from the 32
-this doc was first generated against) plus `docs/roadmap.md` and, since the
-2026-08-23 emergent-systems pass, `docs/emergence/*.md`, cross-referenced
+design docs in `docs/concept/*.md` (91 as of the 2026-09-05 merge to main
+that added `concept/mushrooms.md` right after a cross-alignment recount
+had just landed 90 — `find docs/concept -maxdepth 1 -name "*.md" | wc -l`
+— up from the 49 an earlier pass counted and the 32 this doc was first
+generated against) plus `docs/roadmap.md` and, since the 2026-08-23 emergent-systems
+pass, `docs/emergence/*.md`, cross-referenced
 against what is actually implemented in the codebase today. It was generated
 by extracting every distinct mechanism named or implied in those docs
 (catalogued below — the original count of 481 is stale now that more docs
@@ -3656,6 +3659,80 @@ chunks away from the player). See the concept doc for the full spec.
 - **Procedural Planet Generation** (huge) — 🚧 Partial — old procedural whole-map generator intact/tested but not wired to any "other planet" gameplay.
 - **Planet Rarity System** (medium) — ⬜ Not started
 - **Monetization / Platform Distribution** (small) — ⬜ Not started
+
+### Synthesis (`concept/synthesis.md`)
+
+A vision doc, explicitly not a spec ("a direction, not a spec... the vision
+bible") that connects previously-separate pillars (genetics, crafting,
+survival/combat, NPCs, eras, death) into one coherent whole and resolves a
+few `overview.md` open questions inline. Its own honest status isn't a
+fresh mechanism list — it's "was the specific connective tissue it
+proposes actually built", tracked below against where each piece already
+has (or still lacks) a real section elsewhere in this doc. Never had a
+section here before this cross-alignment pass; no new mechanism was built
+to write this entry, and none is claimed — its value is making the doc's
+cross-cutting claims checkable against the ledger rather than taken on
+faith.
+
+- **One evolutionary system governing beasts, crops, and people alike**
+  (the doc's "north star") — 🚧 Partial — trees have a real `TreeGenome`
+  (see Flora below), animals have none yet (see this doc's Overview
+  section, Animal Ecology rows), and there is no player genetics at all.
+  `concept/dna.md`/`concept/animal_genetics.md` specify the unification;
+  neither is built.
+- **The household as your first NPC roster, LLM-planned for notable kin,
+  FSM for the rest** — ⬜ Not started — depends on Phase 2's NPC daily
+  planner (see Phase 2 table above), which has no real LLM backend yet;
+  no household/kinship data model exists (see Emergence Phase 3).
+- **Governing by natural-language intent, compiled to structured policy**
+  — ⬜ Not started — no instruction-compilation layer exists; `npc.md`'s
+  own "instruction complexity budget" is unbuilt.
+- **Society as a web of intermarrying lineages, self-policed by
+  reputation rather than a hard PvP ruleset** — 🚧 Partial — aggregate
+  reputation exists (see Factions below), real institutions now exist
+  (see Emergence Phase 6 above), but no lineage/marriage/inheritance model
+  exists (see Emergence Phase 3's household gap) and PvP itself is
+  unstarted (see this doc's Overview section).
+- **The first hour: naked-and-afraid survival open, genetic depth
+  revealed slowly** — ⬜ Not started as a designed onboarding sequence —
+  the individual mechanics it would sequence (fire/shelter/food/water) are
+  real (see Survival below) but nothing paces their reveal.
+
+### Pixel Art Engine (`concept/pixel_art_engine.md`)
+
+The shared shading/noise/form toolkit every `src/rendering/procedural_*.gd`
+generator can draw from — mentioned once in passing elsewhere in this doc
+(the Per-Species Body Proportions row, Phase 1 table above) but never
+given its own section. Status below independently re-verified against
+source during this cross-alignment pass, which also found and corrected
+two stale claims in the concept doc itself (both noted inline there,
+dated 2026-09-05).
+
+- **`pixel_ramp.gd`, `pixel_noise.gd`, `pixel_form.gd`** (medium) — ✅
+  Done — hue-shifted ramps, integer-mix/fractal noise, and spheroid
+  normal/diffuse shading with ambient + bounce rim, each with its own
+  test file.
+- **Full-engine adoption (ramp + form)** (medium) — ✅ Done, broader than
+  the concept doc previously stated — confirmed by grepping every
+  `src/rendering/procedural_*.gd` file for both imports: 6 generators
+  (`ProceduralAnimalSprite`, `ProceduralFishSprite`, `ProceduralBirdSprite`,
+  `ProceduralButterflySprite`, `ProceduralCharacterSprite`,
+  `ProceduralEggSprite`) use both, not only the 4 animal-family ones the
+  concept doc previously named.
+- **Partial adoption (ramp only)** (small) — 🚧 Partial —
+  `ProceduralBuildingSprite` shades with `pixel_ramp.gd` but not
+  `PixelForm`'s volumetric shading.
+- **Everything else still on `pixel_palette.gd`'s flat `shade`/`highlight`
+  pair** (medium) — 🚧 Partial — confirmed still true for landmark,
+  stone, and item generators among the remaining ~28 `procedural_*.gd`
+  files surveyed; a handful of others (grass/scrub tufts, terrain, several
+  effect sprites) import none of the three shared modules at all and
+  compose their look a different way entirely (e.g. `ProceduralOreSprite`
+  composites onto a boulder texture rather than shading its own
+  silhouette — see Loose Stone above).
+- **`pixel_texture.gd`** (reusable material overlays: fur, bark, cloth
+  weave, stone grain, metal sheen) — ⬜ Not started — confirmed: no such
+  file exists anywhere in `src/rendering/`.
 
 ### Eras (`concept/eras.md`)
 
@@ -7509,6 +7586,30 @@ carrots out of earth (visually animated)". Supersedes the old
   own "silently discard the overflow" ground-pickup shortcut, since
   stashing is a deliberate player action). See `docs/concept/stone.md`'s
   "Held-item pickup, throw, and stash" for the full mechanism.
+- **Feeding an animal actually spends the carrot the pickup above puts in
+  your hand** (medium) — ✅ Done (fixed twice) — reported live, twice, a
+  build apart. First: *"Carrots never end up in the inventory with a
+  carrot in hand"* — `Player.offer_treat_to` drained the bag while
+  `AnimalActions` offered "Feed" on whatever `equipped_item` held, so
+  fixed to spend `equipped_item` first, bag second. That fix was itself
+  incomplete: `equip_item()` explicitly refuses non-weapon/tool kinds, so
+  a food item can **never** actually reach `equipped_item` through
+  ordinary play — a pulled carrot always lands in the DIFFERENT field the
+  held-item generalization above created, `_hand_item_stack`, which
+  neither `offer_treat_to` nor the Feed-prompt scoring ever checked.
+  Reported again, live: *"carrots or potatoes... never make it into the
+  inventory to feed horse or so."* Every existing regression test for the
+  first fix had simulated "holding a carrot" by setting
+  `player.equipped_item` directly — a shortcut no real E-press can ever
+  reach — so the gap shipped invisibly through green tests. New
+  `Player._held_out_item_id()` checks `_hand_item_stack` first, falling
+  back to `equipped_item`; both `animal_actions_for` and `offer_treat_to`
+  now read it. Pinned by two new tests in `tests/unit/test_player.gd`
+  that drive the real pickup (`_try_pick_item_into_hand`) rather than
+  poking the field:
+  `test_a_carrot_picked_up_into_the_hand_feeds_a_hungry_horse`,
+  `test_animal_actions_offers_feed_for_a_carrot_picked_up_into_the_hand`.
+  See `docs/concept/taming.md`'s matching Status entry for the full story.
 - **Wild crops go dormant, they do not die back** (medium) — 🚧 Partial —
   built and tested, **not observable in a real session**.
   `WildCropPatch.advance(delta, season_growth)` now takes a season multiplier
@@ -7885,6 +7986,37 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
 - ⬜ Persistence/catch-up integration for carcasses across a chunk
   unload — chunk-local, ephemeral state, the same explicit scope cut
   `soil_fauna.md`'s worm burrows already made for the same reason.
+
+### Flies (`concept/flies.md`)
+
+Another concept doc with real, substantial ✅ status entirely of its own
+(every entry in the doc's own Status list is ✅) but never promoted to its
+own section here — tracked only as narrative inside this doc's `/ecotest`
+and "Flies"/"Flies in the world" dated entries further up. Given a proper
+entry during this cross-alignment pass; every code reference below was
+independently re-checked against source, not just copied from the concept
+doc's own claims.
+
+- **Full lifecycle (egg → maggot → pupa → adult), population ceilings, and
+  laying rules** (medium) — ✅ Done — `src/gameplay/fly_colony.gd`
+  (`FlyColony`), reached from `EarthChunkManager.step_ground_food`.
+- **Adult flies as real per-colony entities, one marker per adult, not a
+  count** (medium) — ✅ Done — `EarthChunkManager._fly_markers`/
+  `_sync_fly_markers`; eggs/maggots deliberately never become nodes, since
+  they live IN the fruit.
+- **Maggots hasten the decay of what they eat, so a swarm ends its own
+  food supply** (small) — ✅ Done — `FlyColony.decay_hastened_by` feeds
+  `step_ground_food`'s own aging calculation directly.
+- **Flies follow a scent carrier, including a player carrying rot**
+  (small) — ✅ Done — `EarthChunkManager._sync_carrier_flies`/
+  `register_scent_carrier`, wired to the player in `world.gd`.
+- **Carcasses (not just ground-food windfalls) grow their own fly colony**
+  (small) — ✅ Done — `Carcass` (`src/rendering/carcass.gd`) owns and
+  advances a real `FlyColony` directly (`fly_count()`,
+  `FLY_ATTRACTION_DELAY_SECONDS`), reached from a different caller since a
+  carcass is a `Node2D` rather than a `WorldItemBus` ground item; see
+  `carrion.md`'s "Flies find it first" and `disease.md`'s fly-blown
+  carrion risk for what that swarm then feeds into.
 
 ### Mushrooms (`concept/mushrooms.md`)
 
@@ -9081,6 +9213,44 @@ germany" and a 4-tile minimum width).
   in `concept/rivers.md`'s own "What this pass touches" section — none of
   these silently regressed, they were never built and still aren't).
 
+### Terrain Borders (`concept/terrain_borders.md`)
+
+Never had its own section here despite being extensively real and tested —
+tracked only as inline narrative inside this doc's "Reality check" section
+further down, and the concept doc's own Status list. **Also found during
+this cross-alignment pass: a second, independent concept doc for the
+identical system, `concept/terrain_biome_borders.md`, had existed alongside
+it, undetected by either doc, for roughly two weeks.** `TerrainRenderer`'s
+own source and its tests already cited `terrain_borders.md` by name in
+three places, so it stays canonical; `terrain_biome_borders.md` now
+redirects to it, with the one mechanism it alone had (earth-modification
+blend) and its more complete gap list merged forward. See the concept
+doc's own "Consolidated 2026-09-05" note for the full story.
+
+- **Cardinal-edge dithered blend + convex/concave ocean corners +
+  land/land corners (right-angle and diagonal-only) + corner-vs-blend
+  reconciliation** (large, cumulative) — ✅ Done — `TerrainRenderer.
+  dominant_blend_for`/`corner_direction_for`, four real bug-fix rounds
+  documented in this doc's own "Reality check" narrative further down
+  (each found by reading real baked-atlas pixels against real generated
+  chunks near Berlin, not by inspecting atlas coordinates alone — coordinate-
+  only checks passed twice against genuinely wrong pixels before that).
+- **Earth-modification (built floor / worn path) blend** (medium) — ✅
+  Done — `earth_dominant_blend_for`, the one mechanism
+  `terrain_biome_borders.md` had that this doc's own history was missing
+  (now merged in).
+- **Diagonal-only water/land corner carve** (small) — 🚧 Not addressed —
+  named as deliberately out of scope; the water-corner system already went
+  through four bug-fix rounds and extending it further wasn't asked for.
+- **Earth-modification neighbor detection across a chunk seam** (small) —
+  🚧 Not addressed — `global_biome_lookup` has no visibility into a
+  neighboring chunk's own `Chunk.modifications`, the same blind spot the
+  ordinary biome blend/corner system already has at chunk seams.
+- ⬜ A visible in-game screenshot re-confirming the land/land corner and
+  earth-modification blend read correctly at actual camera zoom — this
+  environment cannot launch the game to check; verified so far only via
+  baked-atlas-pixel tests (`tests/unit/test_terrain_renderer.gd`).
+
 ### Farming (`concept/farming.md`)
 
 The core plant/tend/harvest loop is now live and reachable in the game (see the Farming loop bullet below). The DNA/breeding/vegetation-override layers the concept doc also describes still exist only as tested pure logic with no live crops to apply them to.
@@ -10203,7 +10373,8 @@ because this ledger is where the honesty lives:
 
 ## Reality check
 
-This design corpus — 49 concept docs plus a roadmap and, since 2026-08-23, a
+This design corpus — 91 concept docs (recounted 2026-09-05; this section
+long stated the now-stale 49) plus a roadmap and, since 2026-08-23, a
 10-doc `docs/emergence/*.md` substrate spec, several hundred catalogued
 mechanisms in total (the exact figure is stale, see this doc's intro) —
 describes a multi-year, full-team-scale MMORPG: procedurally simulated

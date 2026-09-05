@@ -119,16 +119,24 @@ bodies, trunks, barrels).
   string-hash clustering failures.
 - ✅ `pixel_form.gd` -- spheroid normal/diffuse shading with ambient and
   bounce rim, tested (`test_pixel_form.gd`).
-- ✅ Adoption across the creature generators. `ProceduralAnimalSprite`
-  (via `animal_anatomy.gd`), `ProceduralFishSprite`, `ProceduralBirdSprite`
-  and `ProceduralButterflySprite` all build from per-species proportions
-  through the engine, replacing hand-authored ASCII bitmaps that every
-  species of a family shared. That sharing is what made "herbivore, deer
-  and horse look exactly the same", and the same flaw applied to fish,
-  birds and butterflies.
-- 🚧 Adoption elsewhere. Terrain, houses, landmarks, stone/ore, tufts and
-  items are at the shared art resolution but still shade with
-  `pixel_palette.gd`'s flat `shade`/`highlight` pair rather than ramps.
+- ✅ Adoption across every creature generator, plus the player character
+  and egg sprites. `ProceduralAnimalSprite` (via `animal_anatomy.gd`),
+  `ProceduralFishSprite`, `ProceduralBirdSprite`, `ProceduralButterflySprite`,
+  `ProceduralCharacterSprite` and `ProceduralEggSprite` all build from
+  per-species/per-form proportions through the full engine (ramp + form),
+  replacing hand-authored ASCII bitmaps that every species of a family
+  shared. That sharing is what made "herbivore, deer and horse look
+  exactly the same", and the same flaw applied to fish, birds and
+  butterflies. (Corrected 2026-09-05, cross-alignment pass: this bullet
+  had listed only the four animal-family generators, omitting the
+  character and egg generators, which a source survey found had already
+  adopted the full engine too.)
+- 🚧 Adoption elsewhere is partial, not absent. `ProceduralBuildingSprite`
+  has adopted `pixel_ramp.gd` (not yet `PixelForm`'s volumetric shading);
+  landmarks, stone, and item generators among others still shade with
+  `pixel_palette.gd`'s flat `shade`/`highlight` pair alone. (Corrected
+  2026-09-05: this bullet previously read as though houses/buildings
+  hadn't adopted the engine at all, which a source survey found untrue.)
 - ⬜ `pixel_texture.gd` -- reusable material overlays (fur, bark, cloth
   weave, stone grain, metal sheen) so surface character isn't re-derived
   per generator.

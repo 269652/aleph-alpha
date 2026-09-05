@@ -96,7 +96,80 @@ letting one silently win outright:
   strictly-lower-priority neighbors, so it could never have expressed this
   corner in the first place.
 
+## Earth-modification blend: `earth_dominant_blend_for`
+
+A built or worn "earth" cell (`TerrainRenderer.EARTH_TILE_ID` — player-built
+floor via the Terraria-style build/destroy system, or `PathScarring`'s
+worn-ground dirt path, see `src/world/path_scarring.gd`) is not a biome at
+all: `Chunk.modifications` shadows the cell's real biome tile with this one
+instead, on the same opaque base layer pillar 3 already establishes.
+Reported live (screenshot): a grass-to-dirt-path boundary read as a hard
+edge, with the corner where they met a hard square — the same two
+complaints the corner-blend rounds above kept fixing for real biome pairs,
+but this time for a system those rounds never touched at all
+(`TerrainRenderer.paint`'s modifications branch short-circuited straight to
+one dead-flat `EARTH_COLOR` square before ever consulting neighbor biomes).
+
+`earth_dominant_blend_for` gives earth the same treatment, with one
+structural difference from `dominant_blend_for`: earth has no real biome
+identity of its own to compare priority against, so there is no "same
+biome, stay pure" skip and no priority gate — it unconditionally concedes
+to whatever real, unmodified biome cardinally borders it (ocean excluded,
+same "land never blends toward ocean" rule pillar 2 already establishes).
+Because every differing direction qualifies unconditionally, a shared
+corner between two active directions is already handled by the same
+directional-blend mask — `generate_multi_directional_blend_image_from`
+dithers a shared corner between active directions on its own (see that
+function's own doc comment) — so, unlike the land/ocean and land/land
+cases above, no separate corner-carve family exists or is reachable for
+earth; one blend family (`_earth_blend_base_linear`/`_earth_blend_linear`)
+covers both the edge and the corner shape.
+
+Two adjacent earth cells (a multi-tile worn path, or a built floor) must
+not dither a seam against each other's pre-modification biome —
+`_neighbor_biomes`'s `exclude_modified_neighbors` param omits an in-chunk
+neighbor that itself carries a modification, rather than reporting its
+shadowed original biome.
+
+## Deliberately out of scope
+
+- **Water/land diagonal-only corners** (e.g. the four corner-diagonal land
+  cells around an isolated one-tile pond) have the same underlying gap as
+  the land/land diagonal-only case above, but are not carved. The
+  water-corner logic already went through four separate bug-fix rounds
+  (see `docs/progress.md`); extending it further wasn't asked for and
+  isn't free.
+- **Symmetric diagonal-only carving.** The diagonal-only case only ever
+  carves from the lower-priority side, matching pillar 2. The
+  higher-priority side's own corner, looking back at the same point, never
+  also carves — its real texture is already what shows through the lower
+  side's carved wedge, so there is no second "hole" needing its own
+  treatment.
+- **Earth-modification neighbors across a chunk seam.** An earth cell's
+  cardinal neighbor in an already-loaded adjacent chunk is resolved through
+  `global_biome_lookup`, which has no visibility into that neighboring
+  chunk's own `Chunk.modifications` — so a modified neighbor just across a
+  chunk seam is (incorrectly) read as its original biome instead of being
+  excluded. The same pre-existing blind spot the ordinary biome-to-biome
+  blend/corner system already has at chunk seams; not attempted here, in
+  scope only for the common in-chunk case `PathScarring`/building actually
+  produce.
+
 ## Status
+
+**Consolidated 2026-09-05.** A near-duplicate doc, `terrain_biome_borders.md`,
+had independently accumulated the earth-modification-blend mechanism and a
+more careful accounting of open gaps (both merged in above and below) that
+this doc's own Status section was missing — while this doc alone had the
+most recent staircase-corner fix (last bullet below), which the other doc
+never received. Neither doc's own text ever mentioned the other. This one
+stays canonical: `src/rendering/terrain_renderer.gd` and
+`tests/unit/test_terrain_renderer.gd` already cite it by name in three
+places, and it predates the other by roughly two weeks. Found and merged
+during a cross-alignment pass over README/progress/roadmap vs. the real
+implementation state; see `docs/progress.md`'s new Terrain Borders section
+for the mechanism-by-mechanism status this doc's own history duplicated.
+`terrain_biome_borders.md` now redirects here.
 
 - ✅ Directional cardinal dithered blend, priority-ranked, water excluded —
   `dominant_blend_for`/`atlas_coords_for_directional_blend`.
@@ -153,3 +226,17 @@ letting one silently win outright:
   horizontally adjacent tiles around Berlin change biome, and the raw map
   is visibly blobby and ragged. Every "hard corner" report has been a
   RENDERING gap at an already-organic boundary, not a blocky world.
+- ✅ **Earth-modification (built floor / worn path) shared-edge AND
+  shared-corner blend toward its real land-biome neighbor, one family** —
+  `earth_dominant_blend_for`/`_earth_blend_linear` (reported live,
+  screenshot: a grass-to-dirt-path boundary read as a hard edge, with a
+  hard square corner where two worn paths met — see "Earth-modification
+  blend" above).
+- 🚧 Diagonal-only shared-corner carve, water/land — not addressed (see
+  "Deliberately out of scope" above).
+- 🚧 Earth-modification neighbor detection across a chunk seam — not
+  addressed (see "Deliberately out of scope" above).
+- ⬜ A visible in-game screenshot re-confirming the land/land corner and
+  the earth-modification blend both read correctly at actual camera zoom
+  (this environment cannot launch the game to check; verified so far only
+  via baked-atlas-pixel tests, see `tests/unit/test_terrain_renderer.gd`).
