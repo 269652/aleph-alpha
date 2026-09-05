@@ -168,3 +168,29 @@ func test_wear_can_be_mutated_after_construction():
 	var club := Item.new("wooden_club", "Wooden Club", "weapon", 1, 8.0)
 	club.wear += 1.0
 	assert_almost_eq(club.wear, 1.0, 0.0001)
+
+
+# -- captive_species: what this specific tool is currently holding (see
+# docs/concept/capture_dsl.md) -- the same deliberate exception wear already
+# is: not a constructor parameter, not part of an item's catalog definition,
+# state that starts blank and accumulates over one specific item's own
+# lifetime. A device with max_stack 1 (see item_catalog's butterfly_net
+# entry) means this mutates in place with no stacking ambiguity, exactly
+# the way wear already has.
+
+func test_captive_species_starts_empty():
+	var net := Item.new("butterfly_net", "Butterfly Net", "tool", 1)
+	assert_eq(net.captive_species, "")
+
+
+func test_captive_species_can_be_mutated_after_construction():
+	var net := Item.new("butterfly_net", "Butterfly Net", "tool", 1)
+	net.captive_species = "monarch"
+	assert_eq(net.captive_species, "monarch")
+
+
+func test_is_holding_captive_reflects_captive_species():
+	var net := Item.new("butterfly_net", "Butterfly Net", "tool", 1)
+	assert_false(net.is_holding_captive())
+	net.captive_species = "monarch"
+	assert_true(net.is_holding_captive())

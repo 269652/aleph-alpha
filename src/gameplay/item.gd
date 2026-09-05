@@ -46,6 +46,15 @@ var sprite_id: String
 ## mutates it yet outside Player's combat wiring.
 var wear: float = 0.0
 
+## Which species this specific tool is currently holding, if any (see
+## docs/concept/capture_dsl.md) -- the same deliberate exception `wear`
+## already is: not a constructor parameter, not part of an item's catalog
+## definition, state that starts blank and accumulates over one specific
+## item's own lifetime. A capture device typically has max_stack 1 (see
+## item_catalog's butterfly_net entry), so this mutates in place with no
+## stacking ambiguity, exactly the way `wear` already does.
+var captive_species: String = ""
+
 
 func _init(
 	a_id: String,
@@ -102,3 +111,7 @@ func is_pickaxe() -> bool:
 ## cannot do this.
 func is_saw() -> bool:
 	return kind == "tool" and id.contains("saw")
+
+
+func is_holding_captive() -> bool:
+	return captive_species != ""
