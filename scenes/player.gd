@@ -2953,20 +2953,31 @@ func offer_treat_to(animal) -> bool:
 	if position.distance_to(animal.position) > FEED_RANGE:
 		return false
 
-	# The HAND first, then the bag.
+	# The HAND first, then the bag -- and "the hand" itself checks BOTH hand
+	# concepts (see _held_out_item_id's own doc comment for why there are two).
 	#
-	# Reported: "Carrots never end up in the inventory with a carrot in hand".
-	# A pulled carrot becomes a ground item and E picks a ground item into the
-	# HAND (see _try_pick_item_into_hand -- pickup_nearby only runs when the
-	# hand grab found nothing), so holding one IS the ordinary way to have a
-	# carrot. This spent one out of the inventory only, while AnimalActions
-	# offered Feed on exactly the held one: the prompt appeared, the press did
-	# nothing, and the player was holding the food the game was telling them to
-	# use.
+	# Reported, twice. First: "Carrots never end up in the inventory with a
+	# carrot in hand" -- fixed by spending equipped_item first instead of only
+	# ever draining the bag. Then again, live, after that fix had shipped:
+	# "carrots or potatoes... never make it into the inventory to feed horse" --
+	# because a pulled carrot never actually reaches equipped_item at all
+	# (equip_item() refuses food-kind items outright, see its own kind gate);
+	# it reaches _hand_item_stack via _try_pick_item_into_hand, a field the
+	# first fix never checked. Every existing test simulated "a carrot in hand"
+	# by poking equipped_item directly, which is not a place a real pickup can
+	# ever put a carrot, so the gap shipped invisibly.
 	#
 	# Hand before bag because a player holding a carrot out is offering THAT
 	# carrot -- draining the bag instead would leave the held one sitting there.
-	var holding_treat: bool = equipped_item != null and equipped_item.id == TAMING_TREAT_ID
+	var holding_in_hand_stack: bool = (
+		_hand_item_stack != null and _hand_item_stack.item.id == TAMING_TREAT_ID
+	)
+	var holding_equipped: bool = (
+		not holding_in_hand_stack
+		and equipped_item != null
+		and equipped_item.id == TAMING_TREAT_ID
+	)
+	var holding_treat := holding_in_hand_stack or holding_equipped
 	if not holding_treat and inventory != null and inventory.count_of(TAMING_TREAT_ID) > 0:
 		pass
 	elif not holding_treat:
@@ -2978,12 +2989,44 @@ func offer_treat_to(animal) -> bool:
 	if not animal.feed_treat():
 		return false
 
-	if holding_treat:
+	if holding_in_hand_stack:
+		_hand_item_stack.count -= 1
+		if _hand_item_stack.count <= 0:
+			_hand_item_stack = null
+	elif holding_equipped:
 		equipped_item = null
 		inventory_changed.emit()
 	else:
 		inventory.remove(TAMING_TREAT_ID, 1)
 	return true
+
+
+## The item id the player is effectively "holding out" for an animal-facing
+## gesture like Feed -- read by both animal_actions_for and offer_treat_to,
+## which each used to ask `equipped_item` alone.
+##
+## Two different fields can each be "the hand", depending on how the item got
+## there: `equipped_item` (Player.equip_item() -- a weapon/tool activated
+## from the hotbar/inventory, drawn as the wielded item) or `_hand_item_stack`
+## (Player._try_pick_item_into_hand() -- the contextual E-pickup hand a
+## dropped object with real mass goes into, see docs/concept/wild_crops.md).
+## A carrot/potato can only ever reach the second: equip_item() explicitly
+## refuses anything that isn't a weapon/tool, so "food in equipped_item" is
+## structurally impossible through ordinary play -- yet a pulled wild carrot
+## ALWAYS goes through the hand-item path now that it has a real mass
+## (ItemCatalog._PRODUCE_MASS_KG). Reported live: "carrots or potatoes...
+## never make it into the inventory to feed horse" -- traced to exactly this:
+## the two hand concepts were never unified, so the one a real carrot pickup
+## actually populates was never checked. Hand-item wins when both happen to
+## be set, matching offer_treat_to's own "hand before bag" priority -- a
+## player who just picked something up to offer it is not also coincidentally
+## offering a drawn weapon instead.
+func _held_out_item_id() -> String:
+	if _hand_item_stack != null:
+		return _hand_item_stack.item.id
+	if equipped_item != null:
+		return equipped_item.id
+	return ""
 
 
 ## The ordered actions this player can take on `animal` right now -- index 0 is
@@ -2992,8 +3035,7 @@ func offer_treat_to(animal) -> bool:
 func animal_actions_for(animal) -> Array:
 	if animal == null or not animal.has_method("animal_state"):
 		return []
-	var held := equipped_item.id if equipped_item != null else ""
-	return AnimalActions.for_animal(animal.animal_state(), held)
+	return AnimalActions.for_animal(animal.animal_state(), _held_out_item_id())
 
 
 ## Carries out whichever slot the player pressed on `animal`.

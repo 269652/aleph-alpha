@@ -1231,6 +1231,29 @@ through it.
   way to have a carrot -- while feeding spent one out of the inventory only.
   The offer appeared and the press did nothing, with the player holding the
   exact food the game was telling them to use.
+- ✅ **Feeding actually reaches the hand a real pickup fills** (reported
+  again, live, after the fix above had already shipped: "carrots or
+  potatoes... never make it into the inventory to feed horse or so"). The
+  fix above checked `equipped_item` -- the WEAPON/TOOL slot `Player.
+  equip_item()` fills from the hotbar/inventory -- but `equip_item()`
+  explicitly refuses anything that isn't a weapon or tool, so a food-kind
+  item can **never** actually reach `equipped_item` through ordinary play.
+  A pulled root always goes through `_try_pick_item_into_hand()` into a
+  completely different field, `_hand_item_stack` (see `docs/concept/
+  wild_crops.md`'s "Held-item pickup" entry -- the same generalized
+  held-item mechanism `docs/concept/stone.md` built for stones), which
+  neither `offer_treat_to` nor `AnimalActions`' own prompt-scoring ever
+  checked. All three existing regression tests for the first fix had
+  simulated "holding a carrot" by setting `player.equipped_item` directly
+  -- a shortcut no real E-press can ever reach -- so they kept passing the
+  whole time this gap was live. `Player._held_out_item_id()` now checks
+  `_hand_item_stack` first, falling back to `equipped_item`, and both
+  `animal_actions_for` (the Feed prompt itself) and `offer_treat_to`
+  (spending the treat) read it instead of `equipped_item` alone. Pinned by
+  two new tests in `tests/unit/test_player.gd` that drive the real pickup
+  (`_try_pick_item_into_hand`) instead of poking the field:
+  `test_a_carrot_picked_up_into_the_hand_feeds_a_hungry_horse` and
+  `test_animal_actions_offers_feed_for_a_carrot_picked_up_into_the_hand`.
 
 **Corrections to this document's previous claims:**
 
