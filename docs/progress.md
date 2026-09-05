@@ -7715,29 +7715,52 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
 
 ### Leaf Litter (`concept/leaf_litter.md`)
 
-✅ **Fallen leaves are a real ground item now, closing the gap named
-above.** Reported: "ants should eat fallen fruits leaves and other stuff
-like seeds", then later "it seems that falling leaves are still not
-implemented" once fallen-fruit foraging alone had shipped. A turning tree
-now sheds a real `"<species>_leaf"` item (`EarthChunkManager.step_
-fruiting`, new `_LEAF_ITEMS` dict) whenever its canopy is actively
-turning toward winter (`canopy_season == "autumn"`, `canopy_turning_into
-== "winter"`, `canopy_turn_progress > 0` — the same values that step
-already reads once per tick for windfall fruit beside it), via a
-deterministic per-(tree, step) hash roll rather than engine `randf()` (so
-the mechanism stays testable without a retry-against-flakiness loop). It
-reuses the entire windfall pipeline end to end rather than building a
-second one: `WorldItemBus.item_dropped` → `DroppedItem` → the same
+✅ **Fallen leaves are a real ground item, closing the gap named above --
+now with the right colour and a real fall.** Reported across three
+passes: "ants should eat fallen fruits leaves and other stuff like
+seeds"; "it seems that falling leaves are still not implemented"; then,
+once the first version shipped, "they don't have the correct color...
+when they fall in summer they should be green, but when they fall in
+autumn they should be orange" and "make them actually fall down and sway
+in the wind". All three are real now. A tree sheds a real
+`"<species>_leaf"` item (`EarthChunkManager.step_fruiting`, `_LEAF_ITEMS`
+dict) either during autumn's own turning-toward-winter window (chance
+scaling with turn progress) or as a light, flat-3%-per-step summer
+trickle (`LEAF_SUMMER_TRICKLE_CHANCE`) — both via a deterministic
+per-(tree, step) hash roll rather than engine `randf()`, so the mechanism
+stays testable without a retry-against-flakiness loop. It reuses the
+entire windfall pipeline end to end rather than building a second one:
+`WorldItemBus.item_dropped` → `DroppedItem` → the same
 `FORAGEABLE_GROUP_NAME` `DecomposerMarker` already scans for fallen
 fruit, proven by a real test
 (`test_forages_and_eats_a_nearby_fallen_leaf`) rather than left as
-reasoning alone. New `IllustratedTree.litter_frames_for`/`leaf_litter_for`
-picks out the small single-leaf/blossom closeups already sitting unused
-on cherry's and apple's composite sheets (measured against the real
-sheets, not assumed); a species with none (walnut, pine) falls back to
-the ordinary generic procedural item sprite, the same as any other item
-without dedicated art. Leaf items are kind `"material"`, not `"food"`, so
-they despawn on the ordinary flat lifetime rather than spoiling.
+reasoning alone.
+
+The item's own `sprite_id` carries which season it fell in
+(`"cherry_leaf_autumn"`), and `IllustratedTree.foliage_leaf_for(species,
+season)` resolves it to the real, correctly-coloured single-leaf (or
+compound-leaflet, or needle-sprig) closeup every composite sheet turns
+out to draw per canopy column — found by column + measured hue, ruling
+out the bigger same-hued leaf+fruit cluster, the real on-tree fruit when
+it is smaller than the closeup instead of bigger, and a solid round
+nut/kernel/cone. All six species now have real litter art (the original
+pass had only found it on cherry and apple); one named gap remains
+(pine's own autumn column shows a winged seed-pair, not a needle sprig —
+its fill measures too close to a real sprig's own for the signal this
+uses to tell them apart). `DroppedItem` now animates a leaf's fall from
+`FALL_HEIGHT` above its landing spot over `FALL_DURATION`, with a
+tapering horizontal flutter, then keeps a small ongoing ground sway once
+landed — real wind, not a pop-in.
+
+An aggregate, GPU-shader-bombed density field (the same technique
+`SnowBombShader` uses for snow) was tried and deliberately reverted
+during the colour-and-fall pass: it solves performance by construction,
+the same way it does for snow, but removes the one thing a discrete
+`DroppedItem` gives for free — a real position a decomposer can walk to
+and eat from, the exact problem the ORIGINAL unmerged aggregate attempt
+(`claude/busy-feynman-8171ee`, see below) never finished either.
+Discrete items — already proven safe at this scale by windfall fruit —
+won on that basis, not a measured performance concern.
 
 ⬜ **The invisible `AntColony` mound simulation does not forage leaves.**
 Its own windfall foraging queries the fruiting model's abstract fruit/nut
@@ -7748,23 +7771,22 @@ eat fallen leaves" gap the report asked for; extending the invisible
 colony simulation too is a reasonable, separable follow-up (see
 `soil_fauna.md`'s own cross-reference).
 
-⬜ **No litter-density accumulation, decay, or soil-fertility feedback,
-and no ground-covering visual effect.** `soil_fauna.md` already names the
-real version of this ("a real detritivore population model: litter input
-→ worm biomass → bird carrying capacity") as an explicit, deferred
-follow-up — this pass gives foragers something real to find and eat, not
-a nutrient-cycling simulation. An earlier, unmerged attempt at this same
-feature (`claude/busy-feynman-8171ee`, never landed on `main`) proposed a
-persisted per-chunk aggregate scalar instead of discrete items,
-explicitly to avoid this project's own two historical per-object
-performance collapses (character compositing at 160ms/tree, the original
-tile-painted `SnowLayer`) — this pass takes the position that windfall
-fruit's own distance-gated/per-step-capped/self-despawning discrete-item
-shape is *already* proven safe at this exact scale in production, and
-reuses it rather than the aggregate model, whose own "what does a
-decomposer actually walk up to and eat" integration was never finished
-either. See `leaf_litter.md`'s own "Bounded by construction" pillar for
-the full reasoning.
+⬜ **No litter-density accumulation, decay, or soil-fertility feedback, no
+ground-covering visual effect, and no third rotten/black colour stage for
+litter that outlives `DroppedItem.LIFETIME`** (also asked for directly,
+alongside the green/orange request — declined because the 90-second flat
+lifetime already despawns an ordinary leaf long before any real season
+boundary could pass under it in normal play; only a deliberately
+accelerated clock like `/ecotest` would ever reach it). `soil_fauna.md`
+already names the real version of the fertility question ("a real
+detritivore population model: litter input → worm biomass → bird
+carrying capacity") as an explicit, deferred follow-up — this pass gives
+foragers something real to find and eat, not a nutrient-cycling
+simulation. See `leaf_litter.md`'s own "Bounded by construction" pillar
+and "Deliberately not modeled" section for the full reasoning on both,
+including why a real, unmerged prior attempt at a persisted aggregate
+model (`claude/busy-feynman-8171ee`) and this pass's own reverted
+GPU-bombing exploration both ended up pointing back at discrete items.
 
 ### Disease (`concept/disease.md`)
 

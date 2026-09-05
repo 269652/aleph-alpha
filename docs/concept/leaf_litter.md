@@ -79,21 +79,34 @@ forage fallen fruit can find and eat them too.
 
 ### When leaves fall
 
-Gated on the exact clock the canopy's own autumn colour already turns on:
-`TreePhenology`'s TURNING season, specifically while it is turning INTO
-winter and has made some real progress (`canopy_season == "autumn"`,
-`canopy_turning_into == "winter"`, `canopy_turn_progress > 0.0`), read once
-per fruiting step from `_tree_renderer.canopy_state()` -- the same values
+The real, main fall is gated on the exact clock the canopy's own autumn
+colour already turns on: `TreePhenology`'s TURNING season, specifically
+while it is turning INTO winter and has made some real progress
+(`canopy_season == "autumn"`, `canopy_turning_into == "winter"`,
+`canopy_turn_progress > 0.0`), read once per fruiting step from
+`_tree_renderer.canopy_state()` -- the same values
 `EarthChunkManager.step_fruiting` already reads once per step (not per
 tree, see that function's own doc comment on why) for the windfall block
-right beside this one. A tree that has not started turning yet, or has
-cycled back to bare, drops nothing: real leaf-fall is a real-autumn event,
-not a year-round drizzle. Pine, which never really goes bare, is judged the
-same way as every other species by the same canopy clock -- if a future
-pass gives conifers their own non-deciduous phenology, this mechanic
-follows without changes, since it never hard-codes a species list here.
+right beside this one. Chance rises with how far into its own turn the
+canopy is: a tree just beginning to turn sheds rarely, one nearly bare
+sheds almost every step.
 
-### What falls: the item
+A settled SUMMER tree also sheds an occasional leaf -- real wind and
+petal damage, not the main fall (`LEAF_SUMMER_TRICKLE_CHANCE`, a flat 3%
+per step, named rather than derived, the same "one real table beats an
+invented formula" idiom `FruitingModel.RIPENING_BY_SPECIES` already
+sets). Reported directly: "when they fall in summer they should be
+green" -- which only means anything if a summer fall is real, not merely
+implied by an autumn-only trigger.
+
+Spring and winter drop nothing: a tree that has not started turning yet,
+or has cycled back to bare, is not shedding. Pine, which never really
+goes bare, is judged the same way as every other species by the same
+canopy clock -- if a future pass gives conifers their own non-deciduous
+phenology, this mechanic follows without changes, since it never
+hard-codes a species list here.
+
+### What falls: the item, and its real colour
 
 One new item per `TreeSpecies` id, alongside its existing fruit/nut item:
 `"<species>_leaf"` uniformly (`cherry_leaf`, `apple_leaf`, `walnut_leaf`,
@@ -106,19 +119,32 @@ sheds). The id stays uniform even where the name doesn't, so recognising
 "is this a leaf item" stays a single suffix check rather than a
 species-by-species list.
 
-Art comes from the tree sheet itself wherever a species has it: every
-composite sheet may carry small, single-subject closeups below the trunk
-row (`IllustratedTree`'s existing row-detection already isolates this row
-while picking real on-tree fruit, see its own doc comments) -- confirmed
-present on cherry's sheet, picked up automatically by any other species
-sheet that carries the same row, no per-species roster required (the same
-"a species gains this the moment its art does" precedent
-`has_snow_frame_for` already sets). A species whose sheet has no such
-closeup falls back to the ordinary generic procedural item sprite --
-exactly the existing `DroppedItem` fallback pattern already used for any
-item without dedicated illustrated art.
+**The colour actually matters and is read from the real art, not
+guessed.** Reported directly: "they don't have the correct color... when
+they fall in summer they should be green, but when they fall in autumn
+they should be orange". Every composite sheet draws a real single-leaf
+(or, for walnut, compound-leaflet; for pine, needle-sprig) closeup in
+EACH canopy column, coloured to that column's own season --
+`IllustratedTree.foliage_leaf_for(species, season)` finds the right one
+by canopy column and real measured hue, ruling out the bigger same-hued
+leaf+fruit cluster sharing that column, the real on-tree fruit itself
+when it is smaller than the closeup instead of bigger, and a solid round
+nut/kernel/cone (see that function's own doc comment for the three
+measured signals combined to do it). Which season's art a specific fallen
+leaf uses is decided at the moment it falls and carried on the item's own
+`sprite_id` (`"cherry_leaf_autumn"`), not re-derived later from whatever
+the current season happens to be by the time a player looks at it. Only
+summer and autumn are resolved -- the only two seasons a leaf falls in at
+all -- so there is no guessing at art for a season nothing ever asks for.
+A species/season pair whose sheet has no matching closeup falls back to
+the ordinary generic procedural item sprite -- exactly the existing
+`DroppedItem` fallback pattern already used for any item without
+dedicated illustrated art. One real, named gap: pine's own autumn column
+currently shows a winged seed-pair rather than a needle sprig (see
+`foliage_leaf_for`'s own doc comment for why that one case cannot be told
+apart by the signals this uses).
 
-### Where it lands
+### Where it lands, and how it gets there
 
 Scattered within the canopy's own rough radius around the trunk, using a
 real random angle and distance rather than a fruit's "lands under exactly
@@ -127,17 +153,41 @@ leaf's position in the drawn canopy carries none of a fruit's per-index
 hanging position to reuse, and a real falling leaf drifts on the wind
 rather than dropping straight down from one fixed point anyway.
 
+It does not simply appear there. Reported directly: "make them actually
+fall down and sway in the wind". `DroppedItem` starts a leaf
+`FALL_HEIGHT` world pixels above its own landing spot and animates it
+down over `FALL_DURATION`, eased in and out, with a horizontal flutter
+(`FALL_SWAY_WORLD`, `FALL_SWAY_CYCLES`) that tapers to zero exactly as it
+lands -- however it wanders on the way down, it always settles at the
+position `step_fruiting` actually chose. Once landed it keeps a small
+ongoing rock (`GROUND_SWAY_RADIANS`/`GROUND_SWAY_PERIOD`, phase-offset
+per instance so several landed leaves do not rock in unison) -- real
+wind, not a one-shot animation that plays once and stops.
+
 ### Rate and cap
 
-At most one leaf item per turning tree per fruiting step, at a chance
-scaled by `canopy_turn_progress` (a tree just beginning to turn sheds
-rarely; a nearly-bare one sheds almost every step) -- gated behind the same
-`FRUITING_DETAIL_RADIUS` distance filter and a per-step cap in the same
-spirit as `MAX_SEPARATE_WINDFALLS`, so a stand of turning trees at the edge
+At most one leaf item per shedding tree per fruiting step, at the chance
+"When leaves fall" above sets for whichever of the two triggers applies
+(autumn's own progress-scaled chance, or summer's flat 3% trickle) --
+gated behind the same `FRUITING_DETAIL_RADIUS` distance filter every
+fruiting tree already pays for, so a stand of shedding trees at the edge
 of view cannot spam the ground any more than a stand of fruiting trees
 already could not. See "Bounded by construction" above for why this
-specific shape -- not a persisted density field, not a per-frame spawn --
-is the one already proven safe at this scale.
+specific shape -- discrete, capped, self-despawning items, not a
+persisted density field or a per-frame spawn -- is the one already proven
+safe at this scale.
+
+**An aggregate, shader-bombed density field (the same GPU technique
+`SnowBombShader` uses for snow) was tried and deliberately reverted
+during this same pass.** It would have solved the performance question
+by construction, the same way it does for snow -- but it also removes
+the one thing a discrete `DroppedItem` gives for free: a real position a
+decomposer can walk to and eat from (see "Consumption" below, and
+"Bounded by construction" above for why the ORIGINAL aggregate-scalar
+attempt at this feature never finished that same problem either). Given
+the choice between the two, discrete items -- already proven safe at
+this scale by windfall fruit -- won on that basis, not on a performance
+concern this pass ever actually measured.
 
 ### Consumption
 
@@ -195,15 +245,31 @@ individually-forageable leaves near the player, and one this codebase
 should design deliberately rather than back into as a side effect of a
 forage mechanic.
 
+**No third, "rotten/black" colour stage for a leaf still on the ground
+once winter arrives**, despite being asked for directly alongside the
+green/orange request. `DroppedItem.LIFETIME` (90 seconds) despawns an
+ordinary leaf long before any real season boundary could pass under it
+in normal play -- the one time it would ever matter is a deliberately
+accelerated clock (`/ecotest`), not the game this mechanic is actually
+tuned for. Tracking a specific leaf's own age against the calendar
+(rather than the flat wall-clock lifetime every other non-food dropped
+item already uses) to serve a state that ordinary play can never reach
+is real, avoidable complexity for a case this pass does not build --
+named here rather than silently dropped, in case a future pass changes
+how long litter is meant to persist.
+
 ## Status
 
-🚧 Being built this pass: `EarthChunkManager`'s leaf-drop trigger inside
-`step_fruiting`, `IllustratedTree.litter_frames_for`/`leaf_litter_for`,
-`DroppedItem` recognising and rendering leaf items.
+✅ A real leaf falls (autumn's main fall and a light summer trickle),
+lands as a real `DroppedItem`, visibly drops and settles with an ongoing
+sway, reads the correct season's colour
+(`IllustratedTree.foliage_leaf_for`), and is real forage a decomposer
+finds and eats with no changes needed to `DecomposerMarker` at all.
 
 ⬜ Invisible `AntColony` windfall foraging extended to leaves (see
 "Consumption" above).
 
-⬜ Any litter-density/soil-fertility feedback, and any ground-covering
-litter visual effect (see "Deliberately not modeled" above and
-soil_fauna.md's own deferred detritivore-population note).
+⬜ Any litter-density/soil-fertility feedback, any ground-covering
+litter visual effect, and a third rotten/black colour stage for litter
+that outlives `DroppedItem.LIFETIME` (see "Deliberately not modeled"
+above and soil_fauna.md's own deferred detritivore-population note).
