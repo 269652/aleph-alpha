@@ -7715,6 +7715,103 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
 
 ### Leaf Litter (`concept/leaf_litter.md`)
 
+✅ **Rewritten onto a GPU-instanced per-chunk data model
+(`LeafLitterField`/`LeafLitterAtlas`/`LeafLitterRenderer`), replacing the
+first pass's real-`DroppedItem`-per-leaf pipeline.** The first pass (below,
+kept for history) reused the windfall-fruit pipeline end to end —
+`WorldItemBus.item_dropped` → `DroppedItem` → the same
+`FORAGEABLE_GROUP_NAME` `DecomposerMarker` already scanned — and shipped a
+real, correctly-coloured, falling-and-swaying leaf. Reported too heavy on
+CPU/GPU once a forest actually shed (one real `Sprite2D`+`Area2D`+
+`CollisionShape2D` node ticking `_process()` every frame, per leaf), and
+asked to visibly scatter under wind/player/animal contact, which a
+one-shot fall-and-settle node has no mechanism for. Leaves are now plain
+`{position, species, season, spawned_at, transition_from, transition_
+start}` records in a per-chunk `LeafLitterField`
+(`src/world/leaf_litter_field.gd`, mirrors `AntColony`'s own shape),
+rendered by one `MultiMeshInstance2D` draw call per chunk
+(`LeafLitterRenderer`, mirrors `IllustratedGrassPatch` minus Y-sort
+banding) sampling a fixed-cell-grid art atlas (`LeafLitterAtlas`, mirrors
+`SnowStampAtlas`) — `step_fruiting`'s own fall-triggering math (deterministic
+per-(tree, step) roll, canopy-turn-scaled chance, angle/distance scatter)
+is completely untouched, only the LAST step (build an Item and emit it via
+WorldItemBus, vs. call `LeafLitterField.add_leaf` directly) changed.
+
+The fall/settle-sway animation is now computed continuously on the GPU, a
+hand-ported GDScript-mirror-plus-GLSL vertex shader (the same convention
+`SnowBombShader` already established) reproducing the first pass's own
+tested `DroppedItem._step_fall`/`_step_ground_sway` formulas exactly,
+proven against a real renderer (`test_leaf_litter_renderer_smoke.gd`,
+`--rendering-driver opengl3`) rather than only the CPU-side mirror. Every
+species/season pair's illustrated art (`IllustratedTree.foliage_leaf_for`)
+still resolves correctly — checked directly while building the atlas, all
+6 species x 2 seasons actually have real art today, correcting this doc's
+own earlier claim of a pine/autumn gap (the fallback path to the generic
+procedural sprite still exists and is tested, just against a synthetic
+species rather than a real current gap).
+
+✅ **Wind/player/animal dispersal — the reported ask this rewrite exists
+to answer** ("leaves should visibly...be dispersed by wind, animals, and
+the player walking over them"). One persisted-relocation mechanism
+(`LeafLitterField.relocate_leaf_near`, mirroring `PebbleDispersion`'s own
+"a nudge that stays" shape) reused by all three triggers: wind (`LeafLitterField
+.advance`'s own throttled roll via `WindDispersal.landing_offset`, new
+`WEIGHT_LEAF` class, reusing the SAME live per-chunk wind `step_flowers`
+already reads — no new weather state), player (`World._step_leaf_litter_
+dispersion`, same host-gated call site and mass/contact-probability-roll
+shape as `_step_pebble_dispersion`), and animal contact (`CreatureMarker.
+_step_leaf_litter_dispersal`, mirroring that marker's own existing
+`record_water_disturbance` self-throttled-entrypoint pattern for water
+ripples — no central per-creature scan).
+
+`DecomposerMarker` now takes an optional injected `_world` (mirroring
+`CreatureMarker`'s identical pattern) for the one case that is genuinely
+chunk-specific now: a new `_nearest_food()` branch queries `_world.
+nearest_leaf_litter_near(...)`, and the forage target is a tiny never-added
+`LeafForageHandle` whose `consume_leaf_litter()` delegates to `_world.
+consume_leaf_litter_at(position)` — proven end to end
+(`test_forages_and_eats_a_nearby_fallen_leaf`, rewritten to go through the
+field via a stub world rather than a raw `DroppedItem`), not merely reasoned
+about.
+
+**Corrected while verifying this rewrite: this doc previously claimed the
+invisible `AntColony` mound simulation's own windfall foraging queries "the
+fruiting model's abstract per-tree fruit stock directly."** It does not —
+`fruit_near`/`take_fruit_at` scan real `DroppedItem` ground nodes filtered
+by `TreeSpecies.IDS`, the same real ground items the visible
+`DecomposerMarker` path scans, just via a different lookup shape. There is
+no abstract per-tree fruit (or leaf) stock either function reads.
+
+⬜ **The invisible `AntColony` mound simulation still does not forage
+leaves** (unchanged gap from the first pass) — the VISIBLE `DecomposerMarker`
+ants/bugs above already close the "ants eat fallen leaves" gap the report
+asked for; extending the invisible colony simulation too is a reasonable,
+separable follow-up (see `soil_fauna.md`'s own cross-reference).
+
+⬜ **Still no litter-density accumulation, decay, or soil-fertility
+feedback, no ground-covering visual effect, and no third rotten/black
+colour stage for litter that outlives `LeafLitterField.LIFETIME`**
+(unchanged from the first pass's own scope cut — the 90-second flat
+lifetime still despawns an ordinary leaf long before any real season
+boundary could pass under it in normal play). `soil_fauna.md` already
+names the real version of the fertility question as an explicit, deferred
+follow-up. See `leaf_litter.md`'s own "History: why not the density-field
+shortcut" section for why a pure GPU density-field aggregate (the
+`SnowBombShader` technique) was tried and abandoned for this feature
+TWICE — once before the first `DroppedItem`-based pass, and again as this
+rewrite's own first instinct — both times for the identical reason: no
+discrete position left for a decomposer to forage from.
+
+⬜ **No live in-game visual re-confirmation of this specific rewrite** (fall
+animation, wind/player/animal scatter, decomposer forage, all played in the
+actual game window) — this pass's own automated coverage includes a
+real-GPU render-smoke test proving the shader compiles, samples real
+content, and moves a transitioning instance, but stops short of a played
+session.
+
+<details>
+<summary>First pass (superseded above), kept for history</summary>
+
 ✅ **Fallen leaves are a real ground item, closing the gap named above --
 now with the right colour and a real fall.** Reported across three
 passes: "ants should eat fallen fruits leaves and other stuff like
@@ -7752,6 +7849,12 @@ uses to tell them apart). `DroppedItem` now animates a leaf's fall from
 tapering horizontal flutter, then keeps a small ongoing ground sway once
 landed — real wind, not a pop-in.
 
+**(Superseded above): "pine's own autumn column" gap.** Re-checked while
+building `LeafLitterAtlas` for the GPU rewrite: all 6 species x 2 seasons
+actually have real illustrated art today. Either the art was completed
+since this note was written, or the original measurement was wrong; either
+way, no gap exists in the shipped art now.
+
 An aggregate, GPU-shader-bombed density field (the same technique
 `SnowBombShader` uses for snow) was tried and deliberately reverted
 during the colour-and-fall pass: it solves performance by construction,
@@ -7762,31 +7865,7 @@ and eat from, the exact problem the ORIGINAL unmerged aggregate attempt
 Discrete items — already proven safe at this scale by windfall fruit —
 won on that basis, not a measured performance concern.
 
-⬜ **The invisible `AntColony` mound simulation does not forage leaves.**
-Its own windfall foraging queries the fruiting model's abstract fruit/nut
-stock directly (`fruit_near`/`take_fruit_at`), not `DroppedItem` nodes, so
-there is no equivalent abstract per-tree leaf stock to query it against.
-The VISIBLE `DecomposerMarker` ants/bugs above already close the "ants
-eat fallen leaves" gap the report asked for; extending the invisible
-colony simulation too is a reasonable, separable follow-up (see
-`soil_fauna.md`'s own cross-reference).
-
-⬜ **No litter-density accumulation, decay, or soil-fertility feedback, no
-ground-covering visual effect, and no third rotten/black colour stage for
-litter that outlives `DroppedItem.LIFETIME`** (also asked for directly,
-alongside the green/orange request — declined because the 90-second flat
-lifetime already despawns an ordinary leaf long before any real season
-boundary could pass under it in normal play; only a deliberately
-accelerated clock like `/ecotest` would ever reach it). `soil_fauna.md`
-already names the real version of the fertility question ("a real
-detritivore population model: litter input → worm biomass → bird
-carrying capacity") as an explicit, deferred follow-up — this pass gives
-foragers something real to find and eat, not a nutrient-cycling
-simulation. See `leaf_litter.md`'s own "Bounded by construction" pillar
-and "Deliberately not modeled" section for the full reasoning on both,
-including why a real, unmerged prior attempt at a persisted aggregate
-model (`claude/busy-feynman-8171ee`) and this pass's own reverted
-GPU-bombing exploration both ended up pointing back at discrete items.
+</details>
 
 ### Disease (`concept/disease.md`)
 
