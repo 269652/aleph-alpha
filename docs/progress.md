@@ -8828,6 +8828,43 @@ actual transition frame by frame and inspecting the sequence directly —
 the leaf visibly rotates through several distinct orientations across one
 journey rather than only tilting a few degrees back and forth.
 
+✅ **Follow-up (2026-09-05): "the leaves and blossoms have a lot of left/
+right movements where they end up on the same place where they started
+and it doesn't look natural as it's a straight line ... move them a bit
+with a left right swirl / spiral motion or tumbles or so ... varying".**
+The tumble/spin above fixed the leaf's own BODY rotation; this is the
+separate ground-plane PATH it travels, which the same rewrite had left
+swaying along one fixed axis (`transition_flutter_world`, perpendicular to
+the transition's own straight-line direction) with an amplitude decaying
+to exactly zero by landing -- reads exactly as reported, a straight line
+with a symmetric wobble that always snaps back onto the line. New
+`instance_swirl_offset` replaces it: a real 2D curl traced as a rotating
+radius in the (direction, perpendicular) basis rather than an amplitude on
+one axis alone, so the path sweeps through both together -- a genuine loop
+around the straight line, not an oscillation confined to it. The radius is
+a bump (`sin(t * PI)`, zero at both ends, widest around the middle)
+instead of a one-sided decay, so a leaf's real starting point is respected
+exactly as its real target already was. Varies per leaf (the concrete
+"varying" asked for): a second, independent position-derived hash
+(`swirl_seed_for_position`, deliberately different constants from the
+existing flutter/tumble phase hash) drives both how many loops the path
+completes (`MIN_SWIRL_TURNS` 0.4 to `MAX_SWIRL_TURNS` 1.8 -- a more
+restrained ceiling than the body's own 0.5-3.0 turn tumble, so the path's
+loop reads as secondary to the leaf's own spin rather than competing with
+it) and how wide it swings (0.5 to 1.0 of the existing sway amplitude),
+reading a different sub-value of the same seed so the two vary
+independently rather than always moving together. Verified by plotting
+the actual path (`tools/probe_leaf_swirl_path.gd`, sampling the exact
+GDScript mirror the GLSL shares) across several different leaves: visibly
+distinct loops, from a gentle single arc to a path completing a real turn
+before straightening to its target -- and confirmed a long, real wind-
+blown relocation still reads correctly as essentially a straight line at
+that much larger scale, the swirl staying a small, proportionate
+perturbation exactly as the old flutter's own amplitude always was. All
+pre-existing leaf-litter tests (109 across the renderer/field/atlas) plus
+the real-GPU render-smoke suite stay green; two tests tied to the removed
+fixed-axis flutter are replaced with the new swirl's own contract instead.
+
 ✅ **Follow-up: "leaves should be half as big".** `LeafLitterRenderer.
 WORLD_SIZE` was `WALNUT_WORLD_WIDTH * 1.5`, ported unchanged from
 `DroppedItem.LEAF_WORLD_SIZE`'s own original derivation; reported too

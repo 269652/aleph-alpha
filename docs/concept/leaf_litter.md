@@ -370,13 +370,48 @@ against the real GPU (`test_a_farther_traveling_leaf_tumbles_more_than_a_
 nearby_one`) and by rendering an actual transition frame by frame, not
 only reasoned about from the numeric mirror.
 
-`transition_flutter_world`'s own sideways path also gained a second,
-smaller, non-harmonic wave (a non-integer frequency ratio against the
-first, so the two never realign into one simple repeating shape within a
-single transition) -- a lone clean sine reads as too mechanically regular
-for something as irregular as a leaf actually tumbling through real
-turbulent air; the added wave shares the same taper-to-zero-at-completion
-guarantee the original already had.
+**The ground-plane PATH itself swirls now, rather than sliding back and
+forth along one fixed line.** Reported directly, once the tumble/spin
+above had already shipped: "the leaves and blossoms have a lot of left/
+right movements where they end up on the same place where they started
+and it doesn't look natural as it's a straight line ... move them a bit
+with a left right swirl / spiral motion or tumbles or so ... varying." The
+original sideways path (`transition_flutter_world`, since removed) swayed
+along ONE FIXED AXIS -- perpendicular to the transition's own straight-line
+travel direction -- with an amplitude that decayed to exactly zero by
+landing: read exactly as reported, a straight line with a symmetric
+side-to-side wobble riding on top, always snapping back onto the line
+itself by construction. `instance_swirl_offset` replaces it with a genuine
+2D curl: traced as a rotating radius in the (direction, perpendicular)
+basis rather than an amplitude on `perpendicular` alone, so the offset
+sweeps THROUGH both axes together as `t` advances -- a real loop around
+the straight-line path, not an oscillation confined to one line. The
+radius itself is shaped as a BUMP (`sin(t * PI)`, zero at both `t == 0` and
+`t == 1`, widest around the middle) rather than a one-sided decay from a
+nonzero start: a leaf's real `transition_from` is its true starting point,
+so the swirl must not displace it away from there any more than it may
+leave it stranded off its real target.
+
+**Varies per leaf, the concrete shape "varying" takes here** -- a second,
+independent position-derived hash (`swirl_seed_for_position`, deliberately
+different magic constants from `phase_for_position`'s own, so a leaf's
+swirl shape does not simply track its flutter/tumble phase) drives both
+how many loops this leaf's own path completes (`swirl_turns_for_seed`,
+`MIN_SWIRL_TURNS` 0.4 to `MAX_SWIRL_TURNS` 1.8 -- a more restrained ceiling
+than `tumble_rotation`'s own 0.5-3.0 turns, since the path's loop is a
+secondary visual read behind the leaf's own body spin, not a competing
+one) and how wide it swings (`swirl_radius_fraction_for_seed`, 0.5 to 1.0
+of `FALL_SWAY_WORLD`, reading a DIFFERENT sub-value of the same seed than
+turns does, so the two vary independently rather than always moving
+together). Verified by plotting the actual path (`tools/probe_leaf_swirl_
+path.gd`, sampling the GDScript mirror -- the exact same math the GLSL
+computes -- across a full transition and rendering it as a line, not just
+reasoning about the formula): different leaves trace visibly different
+loops, from a gentle single arc to a path that completes a real turn
+before straightening out to its target, and a long, real wind-blown
+relocation still reads correctly as essentially a straight line at that
+much larger scale, the swirl a small, proportionate perturbation exactly
+as it always was.
 
 ### Dispersal: one mechanism, three triggers
 
@@ -644,6 +679,19 @@ how far each transition actually carries the leaf so a footstep settle
 barely turns where a real wind-blown journey visibly cartwheels several
 times. Verified both on the real GPU and by rendering an actual
 transition frame by frame, not only reasoned about from the mirror.
+
+✅ **The ground-plane path itself swirls, rather than sliding back and
+forth along one fixed line** (see "Rendering" above) -- reported directly
+after the tumble/spin above had already shipped: "the leaves and blossoms
+have a lot of left/right movements where they end up on the same place
+where they started ... move them a bit with a left right swirl / spiral
+motion or tumbles or so ... varying." `instance_swirl_offset` replaces the
+old fixed-perpendicular-axis flutter with a genuine 2D curl through both
+the travel direction and its perpendicular together, varying per leaf
+(loop count and width both, independently of each other and of the
+existing flutter/tumble phase). Verified by plotting the actual path a
+leaf traces (`tools/probe_leaf_swirl_path.gd`), not only reasoned about
+from the formula.
 
 ✅ Live in-game performance re-confirmation of the GPU rewrite (see
 above) -- closes the gap this section used to name. The pre-existing
