@@ -28,8 +28,12 @@ const SIZE := Vector2i(16, 16)
 
 ## How wide a mushroom should read ON THE GROUND, in world pixels -- a
 ## small forest-floor object, smaller than a whole excavated ant mound
-## (ProceduralAntMoundSprite.MOUND_WORLD_WIDTH).
-const MUSHROOM_WORLD_WIDTH := 5.0
+## (ProceduralAntMoundSprite.MOUND_WORLD_WIDTH, halved to 3.5 by a
+## concurrent ant-overhaul pass merged to main while this feature was in
+## progress -- see docs/concept/mushrooms.md's merge note). Picked
+## comfortably below THAT current value, not the original 7.0 this
+## constant was first set against.
+const MUSHROOM_WORLD_WIDTH := 2.5
 ## The scale factor a marker applies to a SIZE-authored sprite to make it
 ## actually read at MUSHROOM_WORLD_WIDTH on screen -- never left unscaled,
 ## the exact "gigantic ant blobs" failure this project has already hit more
