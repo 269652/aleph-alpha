@@ -5,6 +5,7 @@ const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const Inventory = preload("res://src/gameplay/inventory.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
+const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 
@@ -187,6 +188,42 @@ func test_does_not_join_the_forageable_group_for_a_non_food_item():
 		item.is_in_group(DroppedItem.FORAGEABLE_GROUP_NAME),
 		"a dropped tool/material is not windfall and must not draw ant foraging"
 	)
+
+
+# -- fallen leaves (see docs/concept/leaf_litter.md): a leaf item is real ---
+# -- forage too, exactly like a fallen fruit, even though its own item -----
+# -- kind is "material" rather than "food" (litter does not spoil). --------
+
+func test_joins_the_forageable_group_when_holding_a_fallen_leaf():
+	var leaf := DroppedItem.new()
+	leaf.item_stack = ItemStack.new(Item.new("cherry_leaf", "Cherry Leaf", "material", 20), 1)
+	add_child_autofree(leaf)
+	assert_true(
+		leaf.is_in_group(DroppedItem.FORAGEABLE_GROUP_NAME),
+		"a fallen leaf should be cheaply findable by a foraging decomposer, same as a fallen fruit"
+	)
+
+
+## A leaf item whose species has real litter art (see IllustratedTree.
+## leaf_litter_for) uses it, the same "check real illustrated art first"
+## precedent the wild-carrot root texture above already sets.
+func test_a_dropped_leaf_uses_the_illustrated_litter_texture_when_available():
+	var leaf := DroppedItem.new()
+	leaf.item_stack = ItemStack.new(Item.new("cherry_leaf", "Cherry Leaf", "material", 20), 1)
+	add_child_autofree(leaf)
+	var expected := IllustratedTree.new().leaf_litter_for("cherry")
+	assert_not_null(expected, "precondition: cherry has real litter art")
+	assert_eq(leaf.texture.get_image().get_data(), expected.get_image().get_data())
+
+
+## Walnut's own sheet has no litter closeup (see IllustratedTree's own
+## test_a_species_whose_row_is_all_real_items_has_no_litter_art) -- its
+## fallen leaf must still render something real, not a null/blank sprite.
+func test_a_dropped_leaf_falls_back_to_the_generic_sprite_with_no_litter_art():
+	var leaf := DroppedItem.new()
+	leaf.item_stack = ItemStack.new(Item.new("walnut_leaf", "Walnut Leaf", "material", 20), 1)
+	add_child_autofree(leaf)
+	assert_not_null(leaf.texture, "a species with no litter art should still fall back to a real sprite")
 
 
 func test_a_full_inventory_leaves_the_item_on_the_ground_with_the_remainder():

@@ -7671,12 +7671,13 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   foraging by these VISIBLE ants (`AntColony` already does this
   invisibly — surfacing it means giving `AntColony`'s mounds a real
   rendered presence, a bigger unification project of its own, not a bugfix
-  pass); and a "fallen leaves" mechanic, which does not exist anywhere in
-  this codebase yet (only cosmetic seasonal ground-tint/canopy color, no
-  real leaf-litter entity to forage) — wiring the visible ants into fallen
-  fruit, which already existed, was the real prerequisite-free win here,
-  rather than building a whole new leaf-litter system speculatively on top
-  of a bugfix request.
+  pass); and, at the time, a "fallen leaves" mechanic, which did not exist
+  anywhere in this codebase yet (only cosmetic seasonal ground-tint/canopy
+  color, no real leaf-litter entity to forage) — wiring the visible ants
+  into fallen fruit, which already existed, was the real prerequisite-free
+  win here, rather than building a whole new leaf-litter system
+  speculatively on top of a bugfix request. **Leaves have since gained
+  their own real mechanic — see "Leaf Litter" below.**
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to
@@ -7689,6 +7690,59 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
 - ⬜ Persistence/catch-up integration for carcasses across a chunk
   unload — chunk-local, ephemeral state, the same explicit scope cut
   `soil_fauna.md`'s worm burrows already made for the same reason.
+
+### Leaf Litter (`concept/leaf_litter.md`)
+
+✅ **Fallen leaves are a real ground item now, closing the gap named
+above.** Reported: "ants should eat fallen fruits leaves and other stuff
+like seeds", then later "it seems that falling leaves are still not
+implemented" once fallen-fruit foraging alone had shipped. A turning tree
+now sheds a real `"<species>_leaf"` item (`EarthChunkManager.step_
+fruiting`, new `_LEAF_ITEMS` dict) whenever its canopy is actively
+turning toward winter (`canopy_season == "autumn"`, `canopy_turning_into
+== "winter"`, `canopy_turn_progress > 0` — the same values that step
+already reads once per tick for windfall fruit beside it), via a
+deterministic per-(tree, step) hash roll rather than engine `randf()` (so
+the mechanism stays testable without a retry-against-flakiness loop). It
+reuses the entire windfall pipeline end to end rather than building a
+second one: `WorldItemBus.item_dropped` → `DroppedItem` → the same
+`FORAGEABLE_GROUP_NAME` `DecomposerMarker` already scans for fallen
+fruit, proven by a real test
+(`test_forages_and_eats_a_nearby_fallen_leaf`) rather than left as
+reasoning alone. New `IllustratedTree.litter_frames_for`/`leaf_litter_for`
+picks out the small single-leaf/blossom closeups already sitting unused
+on cherry's and apple's composite sheets (measured against the real
+sheets, not assumed); a species with none (walnut, pine) falls back to
+the ordinary generic procedural item sprite, the same as any other item
+without dedicated art. Leaf items are kind `"material"`, not `"food"`, so
+they despawn on the ordinary flat lifetime rather than spoiling.
+
+⬜ **The invisible `AntColony` mound simulation does not forage leaves.**
+Its own windfall foraging queries the fruiting model's abstract fruit/nut
+stock directly (`fruit_near`/`take_fruit_at`), not `DroppedItem` nodes, so
+there is no equivalent abstract per-tree leaf stock to query it against.
+The VISIBLE `DecomposerMarker` ants/bugs above already close the "ants
+eat fallen leaves" gap the report asked for; extending the invisible
+colony simulation too is a reasonable, separable follow-up (see
+`soil_fauna.md`'s own cross-reference).
+
+⬜ **No litter-density accumulation, decay, or soil-fertility feedback,
+and no ground-covering visual effect.** `soil_fauna.md` already names the
+real version of this ("a real detritivore population model: litter input
+→ worm biomass → bird carrying capacity") as an explicit, deferred
+follow-up — this pass gives foragers something real to find and eat, not
+a nutrient-cycling simulation. An earlier, unmerged attempt at this same
+feature (`claude/busy-feynman-8171ee`, never landed on `main`) proposed a
+persisted per-chunk aggregate scalar instead of discrete items,
+explicitly to avoid this project's own two historical per-object
+performance collapses (character compositing at 160ms/tree, the original
+tile-painted `SnowLayer`) — this pass takes the position that windfall
+fruit's own distance-gated/per-step-capped/self-despawning discrete-item
+shape is *already* proven safe at this exact scale in production, and
+reuses it rather than the aggregate model, whose own "what does a
+decomposer actually walk up to and eat" integration was never finished
+either. See `leaf_litter.md`'s own "Bounded by construction" pillar for
+the full reasoning.
 
 ### Disease (`concept/disease.md`)
 

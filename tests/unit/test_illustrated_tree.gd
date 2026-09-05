@@ -174,6 +174,66 @@ func test_the_ripe_frame_is_the_redder_one():
 	)
 
 
+# -- leaf litter: single leaf/blossom closeups for fallen-leaf ground items -
+#
+# See docs/concept/leaf_litter.md. A sheet may carry small, single-subject
+# closeups below the trunk row -- a leaf, a blossom -- distinct from both
+# the season-tinted twig duplicates and the real on-tree fruit/nut cluster
+# elsewhere in the block. Confirmed by eye against cherry's real sheet
+# (green leaf pair, blossom, another green leaf, an autumn leaf all sit
+# here), not inferred from statistics alone -- see IllustratedTree's own
+# doc comment for the two measured signals (area, fill) this uses to find
+# them, and their real, honestly narrow margins.
+
+func test_a_species_with_litter_art_reports_it():
+	assert_true(trees.has_litter_art_for("cherry"))
+
+
+func test_an_unregistered_species_has_no_litter_art():
+	assert_false(trees.has_litter_art_for("not_a_real_species"))
+	assert_eq(trees.litter_frames_for("not_a_real_species").size(), 0)
+	assert_null(trees.leaf_litter_for("not_a_real_species"))
+
+
+func test_every_litter_frame_has_real_content():
+	for species in ["cherry", "apple", "acorn", "hazelnut"]:
+		for frame in trees.litter_frames_for(species):
+			assert_gt(_opaque_share(frame.get_image()), 0.01, "%s: a blank litter frame" % species)
+
+
+## Pinned as a real count, measured against the real sheet, so a future
+## sheet regeneration that silently drops or duplicates one of these is
+## caught here rather than discovered as a visual regression.
+func test_cherry_has_its_measured_litter_candidate_count():
+	assert_eq(trees.litter_frames_for("cherry").size(), 5)
+
+
+func test_apple_has_its_measured_litter_candidate_count():
+	assert_eq(trees.litter_frames_for("apple").size(), 5)
+
+
+## The one texture DroppedItem actually draws for a fallen leaf -- the
+## FIRST real closeup found, in sheet order. Not guaranteed to be the
+## autumn-coloured one specifically (see leaf_litter.md: distinguishing
+## "autumn leaf" from "a same-hued fruit slice" by colour statistics alone
+## turned out not to be reliable enough to trust), but always a real,
+## on-species leaf/blossom drawing rather than a harvested item or a twig.
+func test_leaf_litter_for_returns_the_first_real_closeup():
+	var frames := trees.litter_frames_for("cherry")
+	assert_eq(trees.leaf_litter_for("cherry"), frames[0])
+
+
+## Walnut's own row here is a sequence of whole-nut renders -- every one
+## too densely filled (a solid round shell fills its own bounding box far
+## more completely than a lobed leaf does) to read as a leaf. A species
+## gains real litter art the moment its sheet draws some, the same
+## contract has_snow_frame_for already sets -- and loses nothing by not
+## drawing any: DroppedItem's own generic procedural sprite is the
+## fallback either way.
+func test_a_species_whose_row_is_all_real_items_has_no_litter_art():
+	assert_false(trees.has_litter_art_for("walnut"))
+
+
 # -- the sheets themselves ---------------------------------------------------
 
 func test_a_trunk_is_a_single_image():

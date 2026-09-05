@@ -233,6 +233,71 @@ func harvest_frames_for(species: String) -> Array[Texture2D]:
 	return empty
 
 
+## ## Litter frames: small closeups, not fruit or a twig
+##
+## A sheet may also carry small, single-subject closeups below the trunk row
+## -- a leaf, a blossom -- distinct from both the season-tinted twig
+## duplicates and the real on-tree fruit/nut cluster elsewhere in the block.
+## Confirmed on cherry's and apple's sheets; see docs/concept/leaf_litter.md
+## for the feature this feeds (a leaf that falls in autumn, lands as a real
+## ground item, and can be eaten). Optional, like CANOPY_SNOW -- a species
+## without any reads as having none, no roster to maintain.
+##
+## Told apart from a real harvested item or twig by two measured signals,
+## neither reliable alone (checked against every species' own sheet): a
+## closeup's own bounding box is a small fraction of the whole sheet (every
+## real harvested item or twig measured is comfortably bigger -- see
+## LITTER_AREA_FRACTION_MAX) AND its own fill (see _fill_fraction) sits in a
+## narrow middle band -- less densely drawn than a solid round nut or a cut
+## fruit's cross-section (walnut's whole shelled-nut row measures
+## 0.71-0.82, both cherry's and apple's own cut-fruit closeups 0.64-0.73),
+## but more than a bare twig or a snow-dusted one (0.16-0.48 measured
+## across every species). The margin on the low side of this band is real
+## but narrow (cherry's own blossom closeup, the highest real leaf/blossom
+## fill measured, sits only 0.004 below the cutoff against acorn's
+## snow-dusted nut, the closest real non-leaf item) -- a genuinely harder
+## classification than most in this codebase, and may need adjusting if a
+## species' sheet draws something this size and fill that is neither.
+##
+## Known imperfect: pine's own small winged-seed-pair closeups pass this
+## same band and are picked up too -- there is no pine needle-sprig art to
+## find instead, only pinecone and seed-pair renders, so pine's own litter
+## item currently shows a seed pair rather than needles. A real, named
+## limitation, not a silent one, until pine's sheet grows real needle
+## litter art of its own.
+const LITTER_AREA_FRACTION_MAX := 0.016
+const LITTER_FILL_MIN := 0.48
+const LITTER_FILL_MAX := 0.62
+
+## Whether this species' sheet carries any litter closeups -- see "Litter
+## frames" above.
+func has_litter_art_for(species: String) -> bool:
+	return litter_frames_for(species).size() > 0
+
+
+## Small, single-subject closeups (a leaf, a blossom) meant for falling/
+## accumulating leaf litter -- see "Litter frames" above and
+## docs/concept/leaf_litter.md. Empty for a species with no art, or whose
+## sheet has none, which callers read the same way as any other optional
+## frame set: nothing to draw from yet.
+func litter_frames_for(species: String) -> Array[Texture2D]:
+	var empty: Array[Texture2D] = []
+	if not has_composite(species):
+		return empty
+	return _composite_parts(species)["litter"]
+
+
+## The one texture a fallen leaf item actually draws -- the FIRST real
+## closeup found, in sheet order (not guaranteed to be the autumn-coloured
+## one specifically; see "Litter frames" above). Null for a species with no
+## litter art, which DroppedItem reads the same way it already reads any
+## other missing illustrated art: fall back to the generic procedural item
+## sprite.
+func leaf_litter_for(species: String) -> Texture2D:
+	var frames := litter_frames_for(species)
+	return null if frames.is_empty() else frames[0]
+
+
 ## The fruit as it hangs on the tree: the LAST on-tree stage when ripe, the one
 ## before it when not.
 ##
@@ -280,6 +345,7 @@ func _composite_parts(species: String) -> Dictionary:
 	var fruit: Array[Texture2D] = []
 	var on_tree: Array[Texture2D] = []
 	var harvest: Array[Texture2D] = []
+	var litter: Array[Texture2D] = []
 	var sheet := _load_image(path)
 	if sheet != null:
 		var regions := CompositeSheetSlicer.regions_in(sheet)
@@ -324,6 +390,7 @@ func _composite_parts(species: String) -> Dictionary:
 		for region in on_tree_regions:
 			var rect: Rect2i = region
 			on_tree.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, rect)))
+		var sheet_area := float(sheet.get_width() * sheet.get_height())
 		for region in fruit_regions:
 			var rect: Rect2i = region
 			# Skip harvest for any fragment a merge above already folded
@@ -336,8 +403,15 @@ func _composite_parts(species: String) -> Dictionary:
 				if on_tree_rect.encloses(rect):
 					absorbed = true
 					break
-			if not absorbed:
-				harvest.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, rect)))
+			if absorbed:
+				continue
+			# A litter closeup is found ALONGSIDE harvest, not instead of
+			# it -- additive, not a replacement classification, so this
+			# never changes what harvest_frames_for/fruit_frames_for hand
+			# back (see "Litter frames" above for why).
+			if _is_litter_candidate(sheet, rect, sheet_area):
+				litter.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, rect)))
+			harvest.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, rect)))
 		fruit.append_array(on_tree)
 		fruit.append_array(harvest)
 
@@ -347,6 +421,7 @@ func _composite_parts(species: String) -> Dictionary:
 		"fruit": fruit,
 		"on_tree": on_tree,
 		"harvest": harvest,
+		"litter": litter,
 	}
 	_composite_cache[path] = parts
 	return parts
@@ -610,6 +685,18 @@ static func _fill_fraction(sheet: Image, region: Rect2i) -> float:
 			if not CompositeSheetSlicer.is_background(sheet.get_pixel(x, y)):
 				filled += 1
 	return float(filled) / float(maxi(total, 1))
+
+
+## Whether `region` reads as a small single-subject litter closeup rather
+## than a real harvested item or a twig -- see "Litter frames" above for
+## the two measured signals combined here (area, `_fill_fraction`) and
+## their real margins.
+static func _is_litter_candidate(sheet: Image, region: Rect2i, sheet_area: float) -> bool:
+	var area_fraction := float(region.size.x * region.size.y) / sheet_area
+	if area_fraction >= LITTER_AREA_FRACTION_MAX:
+		return false
+	var fill := _fill_fraction(sheet, region)
+	return fill >= LITTER_FILL_MIN and fill <= LITTER_FILL_MAX
 
 
 ## How close two regions' heights must be to count as copies of the same

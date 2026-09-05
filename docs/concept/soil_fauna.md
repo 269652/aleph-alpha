@@ -430,6 +430,16 @@ not just a placement fact.
   flies over a carcass is real and common but out of scope here. Windfall
   foraging above is a separate, narrower thing — a fallen fruit/nut ground
   item via the existing tree-fruit API, not the corpse/rot system.
+- **Leaf litter is a separate forage source this mound simulation does not
+  see.** [leaf_litter.md](leaf_litter.md) adds a fallen-leaf ground item
+  alongside fallen fruit/nut, picked up by the VISIBLE `DecomposerMarker`
+  ants/bugs ([carrion.md](carrion.md)) via the ordinary
+  `DroppedItem.FORAGEABLE_GROUP_NAME` path with no changes needed there —
+  but this invisible colony's own `_forage_windfall_near_mound` queries the
+  fruiting model's abstract fruit/nut stock directly, never `DroppedItem`
+  nodes, so it has no way to see a leaf item without a parallel query this
+  pass does not build. Named there as a reasonable, separable follow-up,
+  not silently dropped.
 - **No ant population dynamics.** Mound count is fixed and deterministic
   per chunk, exactly like earthworm burrow count; colonies do not grow,
   split, or die out from how much they forage.

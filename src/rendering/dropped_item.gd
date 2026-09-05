@@ -15,6 +15,7 @@ const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
+const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 
@@ -35,6 +36,15 @@ const FORAGEABLE_GROUP_NAME := "forageable_fruit"
 ## Un-picked-up items despawn after this many seconds so the ground doesn't
 ## fill up with forage over a long session.
 const LIFETIME := 90.0
+
+## The suffix every fallen-leaf item id carries -- "<species>_leaf"
+## uniformly, even pine's own "pine_leaf" (displayed as "Pine Needles";
+## see EarthChunkManager's own _LEAF_ITEMS doc comment). The one place this
+## file turns a leaf item's own id back into the TreeSpecies id its
+## foraging status and art come from (see _leaf_species_id below), so
+## recognising "is this a leaf item" stays a single suffix check rather
+## than a second species-by-species list next to TreeSpecies.IDS.
+const _LEAF_ITEM_SUFFIX := "_leaf"
 
 ## How long THIS item lasts before it goes.
 ##
@@ -58,6 +68,14 @@ const CLICK_AREA_OFFSET_Y := -8.0
 
 static var _sprite_generator := ProceduralItemSprite.new()
 static var _crop_sprite_generator := IllustratedCropSprite.new()
+static var _tree_art_generator := IllustratedTree.new()
+
+## How big a fallen leaf's illustrated litter texture reads on the ground,
+## in world pixels -- bigger than a walnut (a leaf is visually broader
+## than a nut) but well short of a whole apple/carrot (IllustratedCropSprite
+## .ROOT_WORLD_SIZE): a leaf is a thin, flat thing on the ground, not a
+## round fruit.
+const LEAF_WORLD_SIZE := ProceduralItemSprite.WALNUT_WORLD_WIDTH * 1.5
 
 var item_stack
 var _age := 0.0
@@ -66,7 +84,8 @@ var _age := 0.0
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
 	add_to_group(HoverTargetFinder.GROUP_NAME)
-	if item_stack != null and TreeSpecies.IDS.has(item_stack.item.id):
+	var leaf_species := _leaf_species_id(item_stack.item.id) if item_stack != null else ""
+	if item_stack != null and (TreeSpecies.IDS.has(item_stack.item.id) or leaf_species != ""):
 		add_to_group(FORAGEABLE_GROUP_NAME)
 	if item_stack != null and texture == null:
 		# A pulled wild carrot/potato uses the real illustrated root art (see
@@ -77,6 +96,13 @@ func _ready() -> void:
 		if _crop_sprite_generator.has_crop(item_stack.item.sprite_id):
 			texture = _crop_sprite_generator.root_texture(item_stack.item.sprite_id, 0)
 			scale = Vector2.ONE * _crop_sprite_generator.root_world_scale(item_stack.item.sprite_id)
+		elif leaf_species != "" and _tree_art_generator.has_litter_art_for(leaf_species):
+			# A fallen leaf uses the real single-leaf closeup already
+			# sitting on its own species' composite tree sheet (see
+			# docs/concept/leaf_litter.md) -- same "check real illustrated
+			# art first" precedent as the wild-carrot branch above.
+			texture = _tree_art_generator.leaf_litter_for(leaf_species)
+			scale = Vector2.ONE * (LEAF_WORLD_SIZE / maxf(IllustratedCropSprite.max_content_extent(texture), 1.0))
 		else:
 			texture = _sprite_generator.texture_for(item_stack.item.sprite_id)
 			# Item art is authored DETAIL_MULTIPLIER times oversized; scaling
@@ -96,6 +122,15 @@ func _ready() -> void:
 	click_area.add_child(collision_shape)
 	click_area.input_event.connect(_on_input_event)
 	add_child(click_area)
+
+
+## "cherry_leaf" -> "cherry", or "" if `item_id` is not a leaf item -- see
+## _LEAF_ITEM_SUFFIX's own doc comment.
+static func _leaf_species_id(item_id: String) -> String:
+	if not item_id.ends_with(_LEAF_ITEM_SUFFIX):
+		return ""
+	var species_id := item_id.substr(0, item_id.length() - _LEAF_ITEM_SUFFIX.length())
+	return species_id if TreeSpecies.IDS.has(species_id) else ""
 
 
 func _process(delta: float) -> void:

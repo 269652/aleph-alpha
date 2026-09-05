@@ -263,6 +263,24 @@ func test_forages_and_eats_nearby_fallen_fruit_when_theres_no_carrion():
 	assert_true(fruit.is_queued_for_deletion())
 
 
+## Closes the loop docs/concept/leaf_litter.md promises: a fallen leaf
+## needs no changes here at all, since it joins FORAGEABLE_GROUP_NAME
+## exactly like a fallen fruit does (see DroppedItem's own doc comment).
+## Proven end to end rather than just reasoned about -- the same
+## precedent test_forages_and_eats_nearby_fallen_fruit_when_theres_no_
+## carrion above already sets for fruit.
+func test_forages_and_eats_a_nearby_fallen_leaf():
+	var leaf := DroppedItem.new()
+	leaf.item_stack = ItemStack.new(Item.new("cherry_leaf", "Cherry Leaf", "material", 20), 1)
+	leaf.position = Vector2(105, 100)
+	add_child_autofree(leaf)
+	for i in 200:
+		marker._process(0.5)
+		if leaf.is_queued_for_deletion():
+			break
+	assert_true(leaf.is_queued_for_deletion(), "a decomposer should forage and eat a fallen leaf too")
+
+
 ## The filter has to be real (TreeSpecies.IDS), not "any dropped_item" --
 ## otherwise an ant would wander off eating dropped ore/tools/weapons, which
 ## is not what "ants forage fallen fruit" means.
