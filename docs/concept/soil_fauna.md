@@ -425,6 +425,27 @@ for and isn't grounded in anything about beetles.
 derive from it, so one constant change halves both the procedural and
 illustrated mound art.
 
+**Follow-up (2026-09-05): a literal half overshot into invisible.**
+Reported live right after relaunch: "antmounds are tiny and I see no ant
+whatsoever". A literal halving of ANT_WORLD_WIDTH (6.0 → 3.0) put an ant at
+barely 3 world-pixels wide against a 16px tile (`TerrainRenderer.TILE_SIZE`)
+— measured directly (`IllustratedDecomposerSprite.new().marker_scale("ant",
+"walk")` against the real frame's own pixel size): about 3.0 × 2.6 world
+pixels of actual opaque content, for a thin, many-legged, low-contrast
+silhouette against grass. A mound's solid, higher-contrast dome shape
+survived the same halving as "tiny" but still visible; an ant's did not
+survive it as visible at all. This was a genuine tuning overshoot, not a
+functional bug — spawning, dispatch, and the scale math were all confirmed
+working correctly at the smaller number, which is exactly the problem: the
+code did precisely what a literal "half" asked for, and half was too much.
+Corrected to a smaller-than-original-but-not-illegible 25% reduction
+instead of 50%, preserving the original ant:mound proportion (6:7):
+`ANT_WORLD_WIDTH` 3.0 → **4.5**, `MOUND_WORLD_WIDTH` 3.5 → **5.25**. Both
+values remain pinned test constants (never eyeballed comments), same as
+before — only the chosen number changed, following a second real-world
+report the same way the first "oversized" report drove the original
+halving.
+
 **Tooltip**: neither an individual forager nor a mound answered
 `HoverTargetFinder`'s contract (join the `"hoverable"` group, implement
 `get_display_name()` — see [`hover_target_finder.gd`](../../src/rendering/hover_target_finder.gd)),
