@@ -2034,9 +2034,17 @@ func _load_net_with(species: String) -> void:
 	_net_until_caught(flyer)
 
 
+## The player starts with an empty glass bottle in the pack (see the
+## starting grant in Player); the tests below that need an EMPTY pack say so
+## explicitly rather than assuming one.
+func _drop_every_bottle() -> void:
+	player.inventory.remove("glass_bottle", player.inventory.count_of("glass_bottle"))
+
+
 func test_bottling_a_loaded_net_grants_a_loaded_bottle_and_consumes_an_empty_one():
 	_load_net_with("monarch")
 	player.inventory.add(_item_catalog.make("glass_bottle"), 1)
+	var empty_before := player.inventory.count_of("glass_bottle", "")
 	player._bottle_captive()
 	assert_eq(player.equipped_item.captive_species, "", "the net empties once its catch is bottled")
 
@@ -2045,10 +2053,12 @@ func test_bottling_a_loaded_net_grants_a_loaded_bottle_and_consumes_an_empty_one
 		if stack != null and stack.item.id == "glass_bottle" and stack.item.captive_species != "":
 			found_species = stack.item.captive_species
 	assert_eq(found_species, "monarch", "a loaded glass_bottle should carry the species that moved")
+	assert_eq(player.inventory.count_of("glass_bottle", ""), empty_before - 1, "exactly one EMPTY bottle was spent")
 
 
 func test_bottling_without_a_glass_bottle_does_nothing():
 	_load_net_with("monarch")
+	_drop_every_bottle()
 	player._bottle_captive()
 	assert_eq(player.equipped_item.captive_species, "monarch", "no bottle on hand -- the net stays loaded")
 
@@ -2056,8 +2066,9 @@ func test_bottling_without_a_glass_bottle_does_nothing():
 func test_bottling_an_empty_net_does_nothing_even_with_a_bottle():
 	_hold_tool("butterfly_net")
 	player.inventory.add(_item_catalog.make("glass_bottle"), 1)
+	var before := player.inventory.count_of("glass_bottle")
 	player._bottle_captive()
-	assert_eq(player.inventory.count_of("glass_bottle"), 1, "nothing to bottle -- the bottle is not spent")
+	assert_eq(player.inventory.count_of("glass_bottle"), before, "nothing to bottle -- the bottle is not spent")
 
 
 ## The secondary_action slot's fallback (CaptureItemActions, see its own test
@@ -2072,8 +2083,40 @@ func test_secondary_action_offers_put_into_bottle_when_loaded_and_a_bottle_is_on
 func test_secondary_action_does_nothing_for_an_empty_net():
 	_hold_tool("butterfly_net")
 	player.inventory.add(_item_catalog.make("glass_bottle"), 1)
+	var before := player.inventory.count_of("glass_bottle")
 	player._perform_context_action(1, "secondary_action")
-	assert_eq(player.inventory.count_of("glass_bottle"), 1, "nothing loaded -- the bottle is not spent")
+	assert_eq(player.inventory.count_of("glass_bottle"), before, "nothing loaded -- the bottle is not spent")
+
+
+# -- bottling never spends a LOADED bottle (found at the 2026-09-05 merge) ----
+#
+## main now grants an empty glass bottle from the start, which exposed two
+## real bugs in one code path: Inventory.add merged a freshly loaded bottle
+## into the empty stack by id alone (the creature vanished), and "Put into
+## bottle" counted and could spend a LOADED bottle as if it were empty. These
+## pin the player-facing half; test_inventory.gd pins the inventory half.
+
+func test_bottling_with_the_starting_bottle_keeps_the_creature():
+	_load_net_with("monarch")
+	assert_eq(player.inventory.count_of("glass_bottle", ""), 1, "the starting empty bottle")
+	player._bottle_captive()
+	assert_eq(player.equipped_item.captive_species, "")
+	assert_eq(player.inventory.count_of("glass_bottle", "monarch"), 1, "the monarch is in a bottle, not lost in a merge")
+	assert_eq(player.inventory.count_of("glass_bottle", ""), 0, "the empty bottle was the one spent")
+
+
+func test_a_loaded_bottle_is_never_spent_to_bottle_a_second_catch():
+	_load_net_with("monarch")
+	player._bottle_captive()
+	# The only bottle left holds the monarch. Net a sparrow and try again,
+	# through the secondary-action slot as a player would.
+	var sparrow := _flyer_at("sparrow", Vector2(8, 0))
+	_net_until_caught(sparrow)
+	player._perform_context_action(1, "secondary_action")
+	player._bottle_captive()
+	assert_eq(player.equipped_item.captive_species, "sparrow", "the net stays loaded: no EMPTY bottle to put it in")
+	assert_eq(player.inventory.count_of("glass_bottle", "monarch"), 1, "the monarch's bottle is untouched")
+	assert_eq(player.inventory.count_of("glass_bottle"), 1, "no bottle was conjured or consumed")
 
 
 # -- menagerie bonding: unaffected in shape, just gated behind the roll now --

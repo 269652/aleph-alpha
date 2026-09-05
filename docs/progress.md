@@ -1,10 +1,11 @@
 # Progress Tracker
 
 This document is a living status tracker for everything defined across the
-design docs in `docs/concept/*.md` (93 as of the 2026-09-05 standard-model
-pass that added `concept/standard_model.md` — a recount; the previous line
-here said 91 right after `concept/mushrooms.md` landed, and one more had
-arrived on `main` since — `find docs/concept -maxdepth 1 -name "*.md" | wc -l`
+design docs in `docs/concept/*.md` (94 as of the 2026-09-05 merge of the
+standard-model pass, which added `concept/standard_model.md` while
+`concept/ethogram.md` landed on `main` in parallel — a recount at merge
+time; the previous line here said 91 right after `concept/mushrooms.md` —
+`find docs/concept -maxdepth 1 -name "*.md" | wc -l`
 — up from the 49 an earlier pass counted and the 32 this doc was first
 generated against) plus `docs/roadmap.md` and, since the 2026-08-23 emergent-systems
 pass, `docs/emergence/*.md`, cross-referenced
@@ -10863,7 +10864,8 @@ intermediate "loaded, undecided" state at all.
   the specific species survives for rendering. That exposed a real,
   general stacking bug fixed in passing: `ItemStack.can_stack_with` only
   ever compared item id, so a freshly-loaded container could silently merge
-  into a stack of empty ones — now also requires matching `captive_species`.
+  into a stack of empty ones — now also requires matching `captive_species`. (**2026-09-05**: `Inventory.add` itself never consulted that check until
+  the standard-model merge — see the addendum's 🐛 row below.)
 - ✅ **A bottled catch renders alive** — reported mid-pass, so specified in
   `capture_dsl.md` before being built, same as everything else here. The
   real `glass_bottle.png` composite sheet (measured: 1536×1024, a fixed 3×2
@@ -11026,6 +11028,20 @@ a device with a real bag and let its mesh decide.
 - ⬜ **The kingfisher** is measured (held by the standard net) but is a
   `PiscivoreBirdMarker`, not an ambient flyer, so `_throw_net` never sees
   it.
+- 🐛 **Fixed at the merge to `main` (2026-09-05): bottling lost the
+  creature, and could spend a loaded bottle.** Merging onto a `main` that
+  had just started every player with an empty glass bottle turned four
+  older bottle tests red on `main` itself — and the root cause was real,
+  not a stale expectation: `Inventory.add` merged by item id alone and
+  never consulted `ItemStack.can_stack_with`, so the freshly loaded bottle
+  merged into the starting empty one and its species was gone; in the same
+  path, `has`/`remove` by id meant "Put into bottle" could count and spend
+  a *loaded* bottle as if it were empty. `Inventory.add` now merges only
+  where `can_stack_with` agrees, `has`/`count_of`/`remove` take an optional
+  contents filter, and Player counts and spends empty bottles only. Pinned
+  by 5 new `test_inventory.gd` tests and 2 new scoped `test_player.gd`
+  tests; the four older tests state their empty-pack premise explicitly
+  now that the pack starts with a bottle.
 
 ### Standard Model (`concept/standard_model.md`, new this pass)
 
@@ -11151,8 +11167,8 @@ seen failing before its module existed.
 
 ## Reality check
 
-This design corpus — 93 concept docs (recounted 2026-09-05 after the
-standard-model pass; this section long stated the now-stale 49) plus a roadmap and, since 2026-08-23, a
+This design corpus — 94 concept docs (recounted 2026-09-05 at the merge of
+the standard-model pass; this section long stated the now-stale 49) plus a roadmap and, since 2026-08-23, a
 10-doc `docs/emergence/*.md` substrate spec, several hundred catalogued
 mechanisms in total (the exact figure is stale, see this doc's intro) —
 describes a multi-year, full-team-scale MMORPG: procedurally simulated

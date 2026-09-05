@@ -3137,7 +3137,9 @@ func _perform_context_action(slot: int, action_name: String) -> void:
 	if slot < animal_actions_for(animal).size():
 		_perform_animal_action(animal, slot)
 		return
-	var has_bottle := inventory != null and inventory.has("glass_bottle")
+	# An EMPTY bottle: one already holding a creature is not somewhere to put
+	# a second one (see _bottle_captive).
+	var has_bottle := inventory != null and inventory.has("glass_bottle", "")
 	var tool_action := CaptureItemActions.for_tool(equipped_item, has_bottle)
 	if tool_action.get("action", "") == action_name:
 		_bottle_captive()
@@ -3322,7 +3324,7 @@ func _release_net() -> void:
 func _bottle_captive() -> void:
 	if equipped_item == null or not equipped_item.is_holding_captive():
 		return
-	if inventory == null or not inventory.has("glass_bottle"):
+	if inventory == null or not inventory.has("glass_bottle", ""):
 		return
 	var rule: Variant = _capture_executor.transfer_rule(_capture_book.ast_for(CaptureTool.NET), "glass_bottle")
 	var result := _capture_executor.resolve_transfer(rule, {})
@@ -3335,7 +3337,10 @@ func _bottle_captive() -> void:
 			species = outcome
 	if species == "":
 		return
-	inventory.remove("glass_bottle", 1)
+	# Spend an EMPTY bottle, never a loaded one -- with a loaded bottle and
+	# an empty one both in the pack, an unfiltered remove could take the
+	# loaded one and set its creature loose to make room for this one.
+	inventory.remove("glass_bottle", 1, "")
 	var loaded_bottle: Item = _item_catalog.make("glass_bottle")
 	loaded_bottle.captive_species = species
 	inventory.add(loaded_bottle, 1)

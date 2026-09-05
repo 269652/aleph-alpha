@@ -308,7 +308,16 @@ Mirrors [spell_runtime.md](spell_runtime.md)'s own resolution-order section:
   curiosity item, so a container can be rendered as the specific creature
   it holds — `ItemStack.can_stack_with` was extended to also require
   matching `captive_species`, so a freshly-loaded container can never
-  silently merge into a stack of empty ones.
+  silently merge into a stack of empty ones. **That sentence was untrue in
+  code until the 2026-09-05 merge to `main`**: `Inventory.add` merged by
+  item id alone and never asked `can_stack_with`, so the moment `main`
+  started every player with an empty bottle in the pack, bottling a catch
+  merged the loaded bottle into the empty one and the creature vanished.
+  `Inventory.add` now honours `can_stack_with`, and `has` / `count_of` /
+  `remove` take an optional contents filter so "Put into bottle" only ever
+  counts and spends an *empty* bottle — a loaded one is never consumed to
+  make room for a second catch (pinned in `test_inventory.gd` and
+  `test_player.gd`).
 - ✅ `capture_item_actions.gd` (the "Put into bottle" scorer)
 - ✅ Player wiring: probabilistic `_throw_net`/`_attempt_net_catch`,
   `_release_net`, `_bottle_captive`, `_perform_context_action` (the
