@@ -620,6 +620,50 @@ func test_robin_population_declines_toward_zero_without_worms():
 	assert_almost_eq(simulation.robin_population(Vector2i(0, 0)), 0.0, 0.01)
 
 
+## PHASE 4: a bird courtship's chick reconciles the aggregate population --
+## see AmbientFlyerMarker._finish_bird_court / EcosystemSimulation.
+## record_bird_birth's own doc comment for why this half exists at all.
+func test_record_bird_birth_raises_robin_population():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("forest", 0.7, 0.7))
+	simulation.update_worm_density(Vector2i(0, 0), 12.0)
+	simulation.seed_robin_population(Vector2i(0, 0), 1.0)
+	simulation.record_bird_birth(Vector2i(0, 0), "robin", 1.0)
+	assert_almost_eq(simulation.robin_population(Vector2i(0, 0)), 2.0, 0.001)
+
+
+func test_record_bird_birth_raises_sparrow_population():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.7, 0.7))
+	simulation.update_seed_density(Vector2i(0, 0), 20.0)
+	simulation.seed_sparrow_population(Vector2i(0, 0), 1.0)
+	simulation.record_bird_birth(Vector2i(0, 0), "sparrow", 1.0)
+	assert_almost_eq(simulation.sparrow_population(Vector2i(0, 0)), 2.0, 0.001)
+
+
+func test_record_bird_birth_never_exceeds_carrying_capacity():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("forest", 0.7, 0.7))
+	simulation.update_worm_density(Vector2i(0, 0), 12.0)
+	var capacity := simulation.robin_capacity_at(Vector2i(0, 0))
+	simulation.seed_robin_population(Vector2i(0, 0), capacity)
+	simulation.record_bird_birth(Vector2i(0, 0), "robin", 5.0)
+	assert_almost_eq(simulation.robin_population(Vector2i(0, 0)), capacity, 0.001)
+
+
+## Blackbird has no aggregate population model yet (see IllustratedBird
+## Sprite's own Phase 2 note) -- a harmless no-op, not an error, same
+## contract every other unrecognized-input path in this file already has.
+func test_record_bird_birth_for_an_unmodeled_species_is_a_harmless_no_op():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("forest", 0.7, 0.7))
+	simulation.record_bird_birth(Vector2i(0, 0), "blackbird", 1.0)
+	assert_eq(simulation.robin_population(Vector2i(0, 0)), 0.0)
+	assert_eq(simulation.sparrow_population(Vector2i(0, 0)), 0.0)
+
+
+func test_record_bird_birth_on_an_unknown_region_is_a_harmless_no_op():
+	var sim = EcosystemSimulation.new()
+	sim.record_bird_birth(Vector2i(9, 9), "robin", 1.0)
+	assert_eq(sim.robin_population(Vector2i(9, 9)), 0.0)
+
+
 func test_kingfisher_capacity_at_tracks_the_existing_fish_population():
 	simulation.add_region(Vector2i(0, 0), _make_chunk("ocean", 0.55, 0.5))
 	var low_capacity := simulation.kingfisher_capacity_at(Vector2i(0, 0))

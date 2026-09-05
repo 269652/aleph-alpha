@@ -636,6 +636,10 @@ func _build_marker(
 	# same optional-capability guard as flap_frames/perched_frame above.
 	if sprite_generator.has_method("generate_sing_textures"):
 		marker.sing_frames = sprite_generator.generate_sing_textures(species, seed_value)
+	# The display pose (see AmbientFlyerMarker.court_frames / BirdCourtship,
+	# Phase 4) -- same optional-capability guard.
+	if sprite_generator.has_method("generate_court_textures"):
+		marker.court_frames = sprite_generator.generate_court_textures(species, seed_value)
 	# What this flyer is wired to feed on comes from the DIET TABLE, not from
 	# which spawn call it came out of (see FlyerDiet /
 	# docs/concept/soil_fauna.md). Every caller now passes the same world; the

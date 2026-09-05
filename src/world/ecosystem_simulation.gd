@@ -546,6 +546,34 @@ func record_birth(chunk_coord: Vector2i, count: float) -> void:
 	)
 
 
+## A bird courtship (see BirdCourtship / AmbientFlyerMarker._finish_bird_
+## court) produced young at this chunk -- record_birth's bird sibling,
+## species-routed rather than one hardcoded population, since which
+## aggregate to reconcile depends on which species actually courted.
+## Without this, a courtship chick a player watches hatch would simply
+## vanish the next time its chunk unloads and reloads: the visible marker
+## count is drawn fresh from the aggregate (AmbientFlyerRenderer.
+## marker_count_for), and a chick that never incremented it was never
+## really there as far as that count is concerned.
+##
+## Silently a no-op for a species with no matching aggregate yet
+## (blackbird, before its own population model exists) or an unknown
+## chunk, the same "an unrecognized input does nothing" contract
+## record_birth/record_catch already use above.
+func record_bird_birth(chunk_coord: Vector2i, species: String, count: float = 1.0) -> void:
+	match species:
+		"robin":
+			if _robin_population.has(chunk_coord):
+				_robin_population[chunk_coord] = minf(
+					robin_capacity_at(chunk_coord), _robin_population[chunk_coord] + count
+				)
+		"sparrow":
+			if _sparrow_population.has(chunk_coord):
+				_sparrow_population[chunk_coord] = minf(
+					sparrow_capacity_at(chunk_coord), _sparrow_population[chunk_coord] + count
+				)
+
+
 ## An animal DIED near the player -- shot, savaged, starved or sick -- so the
 ## region's aggregate population comes down to match. record_birth's mirror,
 ## and the mortality term this model simply did not have: record_catch covered

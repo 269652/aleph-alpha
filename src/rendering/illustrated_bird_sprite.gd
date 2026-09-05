@@ -308,6 +308,12 @@ func generate_sing_textures(species: String, _seed_value: int = 0) -> Array:
 	return _frames_for(species, "sing")
 
 
+## The tail-fanned, wings-spread display pose -- every species has one
+## (see BirdCourtship, Phase 4).
+func generate_court_textures(species: String, _seed_value: int = 0) -> Array:
+	return _frames_for(species, "court")
+
+
 func _frames_for(species: String, action: String) -> Array:
 	if not _SHEETS.has(species):
 		return []
