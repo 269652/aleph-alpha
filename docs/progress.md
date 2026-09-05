@@ -8890,6 +8890,45 @@ pre-existing leaf-litter tests (109 across the renderer/field/atlas) plus
 the real-GPU render-smoke suite stay green; two tests tied to the removed
 fixed-axis flutter are replaced with the new swirl's own contract instead.
 
+✅ **Immediate follow-up (2026-09-05, same day): "now they ONLY swirl ...
+restore the behavior from before which looked much better and natural,
+just the left right jitter should be eliminated and changed into a random
+motion instead".** The 2D curl above replaced too much -- the ORIGINAL
+single-axis sway structure (no curl) was the shape that actually looked
+natural; the real, narrower problem was why it read as "jitter" in the
+first place. Root-caused precisely rather than re-guessed: the old sway
+(`transition_flutter_world`, both versions now removed) summed a primary
+sine and a secondary sine at a FIXED 2.7x ratio -- the SAME ratio for
+every leaf, only the phase varying -- so every leaf's combined waveform
+traced the identical shape, just time-shifted. A shared, describable
+shape is what reads as a clean, recognisable "jitter," independent of how
+many terms are summed, as long as they share one frequency ratio.
+
+New `transition_wander_world` restores the exact original single-axis
+structure (`raw_offset * remaining + perpendicular * wander_mag`, curl
+removed entirely) but sums 3 sine terms whose FREQUENCIES -- not just
+phases -- are drawn from a second, independent per-leaf hash
+(`wander_seed_for_position`) across a random-looking band
+(`WANDER_MIN_FREQUENCY_MULT` 0.5 to `WANDER_MAX_FREQUENCY_MULT` 2.6, a
+multiple of the existing `FALL_SWAY_CYCLES` rate) -- a DIFFERENT hash per
+term too, so even the several terms within one SAME leaf land on
+different frequencies, not just different leaves relative to each other.
+No two leaves' -- or even two terms of one leaf's own -- combined waveform
+shares a shape at all any more, which is what "random motion" means in a
+continuous, stateless vertex shader (no per-frame randomness, which would
+look like flicker -- only per-leaf variety in an otherwise perfectly
+smooth, deterministic function of progress). Weighted 1/(term+1) per term
+and normalised back to the original single-sine sway's own amplitude
+ceiling, so this reads as more irregular, not louder or wider. Verified by
+plotting the actual path (`tools/probe_leaf_wander_path.gd`, replacing the
+now-deleted swirl-path probe): several different leaves trace visibly
+distinct, irregular meanders with no repeating rhythm -- no clean sine
+shape, no loop -- and a long, real wind-blown relocation still reads
+correctly as essentially a straight line at that larger scale, same as
+always. All 42 renderer tests plus the real-GPU render-smoke suite stay
+green; the swirl-specific tests are replaced with the wander's own
+contract.
+
 ✅ **Follow-up: "leaves should be half as big".** `LeafLitterRenderer.
 WORLD_SIZE` was `WALNUT_WORLD_WIDTH * 1.5`, ported unchanged from
 `DroppedItem.LEAF_WORLD_SIZE`'s own original derivation; reported too
