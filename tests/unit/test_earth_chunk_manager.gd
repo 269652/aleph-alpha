@@ -316,6 +316,28 @@ func test_set_rain_updates_the_water_materials_rain_intensity_uniform():
 	water_layer.free()
 
 
+## Reported: "rain don't produce ripples in the new river water". Rain used
+## to reach ONLY the old ocean-only water_layer above -- and in real
+## gameplay (scenes/world.gd registers both layers together, see
+## _paint_water_overlay's own doc comment) that layer never actually paints
+## a single cell once a river flow layer exists, so rain-driven ripples
+## were invisible everywhere, not just on rivers. Mirrors
+## test_a_recorded_disturbance_reaches_the_river_surface_too's own pattern:
+## register the river layer alone, no manager.update needed since neither
+## set_rain nor set_river_flow_layer touch chunk data.
+func test_set_rain_updates_the_river_surfaces_rain_intensity_too():
+	var river_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(river_layer)
+
+	manager.set_rain(true)
+	var material := river_layer.material as ShaderMaterial
+	assert_eq(material.get_shader_parameter("rain_intensity"), 1.0)
+
+	manager.set_rain(false)
+	assert_eq(material.get_shader_parameter("rain_intensity"), 0.0)
+	river_layer.free()
+
+
 ## Water is no longer wind-driven (see WaterShader's class doc) -- kept as a
 ## harmless no-op rather than removed so world.gd's existing call site
 ## doesn't need touching.

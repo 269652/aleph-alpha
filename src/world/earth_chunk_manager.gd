@@ -4630,8 +4630,19 @@ func _paint_snow_presence(chunk_coord: Vector2i, chunk: Chunk) -> void:
 
 
 func set_rain(raining: bool) -> void:
+	var intensity := 1.0 if raining else 0.0
 	if _water_material != null:
-		_water_material.set_shader_parameter("rain_intensity", 1.0 if raining else 0.0)
+		_water_material.set_shader_parameter("rain_intensity", intensity)
+	# Rivers/lakes/the sea all render on the ONE river flow overlay in real
+	# gameplay (see _paint_water_overlay's own doc comment) -- the OLD
+	# ocean-only _water_material above never actually paints a cell once a
+	# river flow layer exists, so without this, rain-driven ripples were
+	# invisible everywhere, not just on rivers (reported: "rain don't
+	# produce ripples in the new river water"). Unconditional, matching
+	# _mirror_disturbances_to_the_river's own convention: _river_flow_shader
+	# always exists, and pushing a uniform to a material no layer is
+	# currently using yet is harmless.
+	_river_flow_shader.set_rain_intensity(intensity)
 
 
 ## Sets how energetic the live wind is (see WeatherModel.wind_strength_for --

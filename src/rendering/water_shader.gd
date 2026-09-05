@@ -430,15 +430,24 @@ func shared_material() -> ShaderMaterial:
 ## `age_seconds` is how long ago it happened. Returns a SIGNED displacement:
 ## positive on a crest, negative in a trough, zero once the ripple has died
 ## or ahead of its still-advancing front.
+##
+## `lifetime`/`speed`/`wavelength`/`packet_width` default to the shared
+## movement-ripple tuning above, matching every existing 2-arg call site
+## exactly -- but are real parameters (not hardcoded), so this same
+## formula also mirrors raindrop_ripples' OWN, much tighter tuning
+## (RAIN_RIPPLE_*) for RiverFlowShader.rain_ripple_packet, rather than a
+## second, independently-typed copy of this math existing only there.
 static func ripple_amplitude(
-	distance_units: float, age_seconds: float, lifetime: float = RIPPLE_LIFETIME
+	distance_units: float, age_seconds: float, lifetime: float = RIPPLE_LIFETIME,
+	speed: float = RIPPLE_SPEED, wavelength: float = RIPPLE_WAVELENGTH,
+	packet_width: float = RIPPLE_PACKET_WIDTH
 ) -> float:
 	if age_seconds < 0.0 or age_seconds > lifetime:
 		return 0.0
-	var front := age_seconds * RIPPLE_SPEED
+	var front := age_seconds * speed
 	var phase := front - distance_units
-	var packet := exp(-absf(phase) / RIPPLE_PACKET_WIDTH)
-	var rings := sin(phase * TAU / RIPPLE_WAVELENGTH)
+	var packet := exp(-absf(phase) / packet_width)
+	var rings := sin(phase * TAU / wavelength)
 	var age_fade := 1.0 - age_seconds / lifetime
 	var spread_fade := 1.0 / (1.0 + front * RIPPLE_SPREAD_DECAY)
 	return rings * packet * age_fade * spread_fade
