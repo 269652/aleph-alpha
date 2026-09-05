@@ -267,6 +267,55 @@ func take(cell: Vector2i) -> bool:
 	return true
 
 
+# -- crushed underfoot: weight-emergent worm mortality (see docs/concept/
+# soil_fauna.md's own section by that name) --------------------------------
+
+## The worm's own resistance, at the worm's OWN scale rather than combat
+## scale (see ImpactResolver.T_CRUSH's own doc comment on why that
+## number belongs to an unrelated scale -- thrown-rock-vs-creature
+## combat, not "anything at all stepping near a soil invertebrate").
+## Momentum here is a full body's weight settling through one foot at
+## ordinary walking pace (CreatureMass.mass_kg_for(species) *
+## PebbleDispersion.FOOTSTEP_SPEED_MPS) -- deliberately the CREATURE'S
+## OWN FULL mass, not PebbleDispersion's own foot-mass FRACTION: kicking
+## a pebble aside in passing is a glancing, foot-only contact, but
+## standing weight settling onto something underfoot transmits close to
+## the whole body's own mass through that one point of contact, a
+## genuinely different physical situation. Pinned so a mouse/squirrel's
+## own momentum falls under it and a deer/boar/horse/player's own falls
+## over it (see test_is_crushed_by_spares_small_creatures_and_kills_
+## under_large_ones) -- the real boundary this whole mechanic exists to
+## draw.
+const CRUSH_MOMENTUM_THRESHOLD_KG_M_S := 5.0
+
+
+## Whether `momentum_kg_m_s` of downward force is enough to crush a worm
+## -- mirrors ImpactResolver.resolve_impact's own `momentum >= threshold`
+## shape exactly, kept here rather than routed through ImpactResolver
+## since that resolver's own threshold constants are combat-scaled, not
+## worm-scaled (see CRUSH_MOMENTUM_THRESHOLD_KG_M_S's own doc comment).
+static func is_crushed_by(momentum_kg_m_s: float) -> bool:
+	return momentum_kg_m_s >= CRUSH_MOMENTUM_THRESHOLD_KG_M_S
+
+
+## Crushes the worm at `cell` if `momentum_kg_m_s` clears
+## CRUSH_MOMENTUM_THRESHOLD_KG_M_S. Returns false, leaving a surfaced
+## worm exactly where it was, when there is nothing at the surface there
+## (the identical is_surfaced gate take() already uses -- a burrowed worm
+## has no exposed body to step on) OR when the momentum simply is not
+## enough. Recovers on the identical RECOVERY_SECONDS clock as being
+## eaten -- the burrow itself is not destroyed, only whatever worm was in
+## it at the time.
+func crush(cell: Vector2i, momentum_kg_m_s: float) -> bool:
+	if not is_surfaced(cell):
+		return false
+	if not is_crushed_by(momentum_kg_m_s):
+		return false
+	_surfacing[cell] = 0.0
+	_recovery[cell] = RECOVERY_SECONDS
+	return true
+
+
 func _seed_initial_burrows() -> void:
 	for y in _height:
 		for x in _width:
