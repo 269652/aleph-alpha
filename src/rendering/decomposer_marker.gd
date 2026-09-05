@@ -18,6 +18,7 @@ extends Node2D
 
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ProceduralDecomposerSprite = preload("res://src/rendering/procedural_decomposer_sprite.gd")
+const IllustratedDecomposerSprite = preload("res://src/rendering/illustrated_decomposer_sprite.gd")
 const CarrionForageBehavior = preload("res://src/gameplay/carrion_forage_behavior.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
 const CarcassGuts = preload("res://src/rendering/carcass_guts.gd")
@@ -43,6 +44,22 @@ const WANDER_SPEED_FRACTION := 0.35
 ## How much decompose/consume health one bite removes -- see
 ## Carcass.DECOMPOSE_HEALTH / CarcassGuts.CONSUME_HEALTH.
 const BITE_AMOUNT := 1.0
+
+## How long the illustrated walk/idle cycle holds each frame -- a flat
+## elapsed-time cadence (mirrors CreatureMarker._animation_step's own
+## non-gait fallback), not stride-distance-based: an ant's real per-frame
+## leg travel is tiny enough that the difference is not worth a second
+## distance-tracking field on top of _elapsed_time, which this marker
+## already keeps for its wander heading. Faster than
+## CreatureMarker.ANIMATION_FRAME_DURATION (0.3) -- carrion.md's own "small,
+## fast" framing for an ant calls for snappier legs than a grazing
+## quadruped's gait.
+const WALK_FRAME_DURATION_SECONDS := 0.12
+## How much horizontal movement in one step counts as a real leftward/
+## rightward heading worth flipping the sprite for -- below this, a step
+## that is mostly vertical (or FEEDING's own zero movement) leaves facing
+## exactly as it was rather than flickering on near-zero noise.
+const FACING_DEADZONE_PX := 0.05
 
 ## How long a wandering decomposer holds one exploring heading before
 ## AmbientFlyerMovement picks a new one, in seconds. Derived from the
@@ -88,25 +105,68 @@ var _target: Node2D = null
 var _movement: AmbientFlyerMovement
 var _elapsed_time := 0.0
 
+var _sprite: Sprite2D
+static var _procedural_generator := ProceduralDecomposerSprite.new()
+static var _illustrated_generator := IllustratedDecomposerSprite.new()
+
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
-	var sprite := Sprite2D.new()
-	sprite.texture = ProceduralDecomposerSprite.new().generate_texture(species)
-	# ProceduralDecomposerSprite's art canvas is authored at
-	# ArtResolution.DETAIL_MULTIPLIER, the same oversample-then-scale-down
-	# convention every other sprite generator in this codebase follows (see
-	# art_resolution.md) -- this was the one generator that never actually
-	# applied SPRITE_SCALE, so it rendered at its raw art-canvas size instead
-	# of its intended tiny insect world size (reported: "gigantic ant
-	# blobs"; direct precedent for the same failure mode: ProceduralItemSprite's
-	# own doc comment records a fallen cherry once being "as wide as the tile
-	# it lay on" for the identical missing-scale reason).
-	sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
-	add_child(sprite)
+	_sprite = Sprite2D.new()
+	add_child(_sprite)
+	_update_sprite(Vector2.ZERO)
 	_movement = AmbientFlyerMovement.new(
 		WALK_SPEED * WANDER_SPEED_FRACTION, WANDER_RADIUS_PX, WANDER_DIRECTION_CHANGE_INTERVAL_SECONDS
 	)
+
+
+## FEEDING (biting in place) shows the idle cycle (legs gathered) -- a
+## stationary decomposer with animated walking legs would read as sliding
+## in place. Every other phase (ambient wander, committed approach) shows
+## the walk cycle.
+func _current_action() -> String:
+	if _behavior.phase == CarrionForageBehavior.Phase.FEEDING:
+		return "idle"
+	return "walk"
+
+
+## Rebuilds the sprite for however this decomposer is behaving right now:
+## real illustrated art where IllustratedDecomposerSprite has it for this
+## species/action (checked first, same has_X()-gated fallback convention
+## every other optional illustrated-art seam in this codebase uses),
+## ProceduralDecomposerSprite's single static silhouette otherwise. `moved`
+## is how far position actually changed this step (Vector2.ZERO for
+## FEEDING, which never moves) -- see FACING_DEADZONE_PX's own doc comment
+## for why only a real horizontal step flips the sprite.
+func _update_sprite(moved: Vector2) -> void:
+	var action := _current_action()
+	if _illustrated_generator.has_action(species, action):
+		var frames := _illustrated_generator.generate_textures(species, action)
+		_sprite.texture = frames[int(_elapsed_time / WALK_FRAME_DURATION_SECONDS) % frames.size()]
+		_sprite.scale = Vector2.ONE * _illustrated_generator.marker_scale(species, action)
+		# Both registered sheets face left (IllustratedDecomposerSprite.
+		# faces_left) -- mirror only for a real rightward step, matching
+		# CreatureMarker.facing_sign's own "flip_h means mirrored from the
+		# source art" convention, simplified: an ant has no commit-window/
+		# moonwalk guard, it is small and fast enough that an occasional
+		# flip on ambiguous near-vertical noise is not worth the extra
+		# state.
+		if absf(moved.x) > FACING_DEADZONE_PX:
+			_sprite.flip_h = moved.x > 0.0
+	else:
+		_sprite.texture = _procedural_generator.generate_texture(species)
+		# ProceduralDecomposerSprite's art canvas is authored at
+		# ArtResolution.DETAIL_MULTIPLIER, the same oversample-then-scale-
+		# down convention every other sprite generator in this codebase
+		# follows (see art_resolution.md) -- this was the one generator
+		# that never actually applied SPRITE_SCALE, so it rendered at its
+		# raw art-canvas size instead of its intended tiny insect world
+		# size (reported: "gigantic ant blobs"; direct precedent for the
+		# same failure mode: ProceduralItemSprite's own doc comment
+		# records a fallen cherry once being "as wide as the tile it lay
+		# on" for the identical missing-scale reason).
+		_sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+		_sprite.flip_h = false
 
 
 var _lod_accumulated := 0.0
@@ -174,6 +234,7 @@ func _process(frame_delta: float) -> void:
 	# wander-heading cadence relative to its OWN simulated time -- not real
 	# wall-clock frames it may be skipping most of.
 	_elapsed_time += delta
+	var position_before := position
 	match _behavior.phase:
 		CarrionForageBehavior.Phase.SEEKING:
 			_step_seeking(delta)
@@ -181,6 +242,7 @@ func _process(frame_delta: float) -> void:
 			_step_approaching(delta)
 		CarrionForageBehavior.Phase.FEEDING:
 			_step_feeding(delta)
+	_update_sprite(position - position_before)
 
 
 ## Bug report: "gigantic ant blobs... but they don't move". This used to only

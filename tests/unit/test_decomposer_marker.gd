@@ -14,6 +14,7 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const IllustratedDecomposerSprite = preload("res://src/rendering/illustrated_decomposer_sprite.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
@@ -66,9 +67,61 @@ func test_stays_near_home_while_nothing_to_eat():
 ## Direct precedent for this exact failure mode: ProceduralItemSprite's own
 ## doc comment records a fallen cherry once being "as wide as the tile it lay
 ## on" for the identical missing-scale reason.
+## Real illustrated ant/bug art now exists (see IllustratedDecomposerSprite)
+## -- checked first, same has_X()-gated fallback convention every other
+## optional illustrated-art seam in this codebase uses, so the scale is now
+## measured from the real art (marker_scale) rather than the procedural
+## generator's fixed ArtResolution.SPRITE_SCALE.
 func test_sprite_is_drawn_at_its_real_tiny_world_size_not_the_raw_art_canvas():
 	var sprite := marker.get_child(0) as Sprite2D
+	assert_eq(sprite.scale, Vector2.ONE * IllustratedDecomposerSprite.new().marker_scale("ant", "walk"))
+
+
+## A species with no registered illustrated art (there is none today --
+## both "ant" and "bug" have real art -- but the fallback contract must
+## keep working the moment a third species is added with none yet) still
+## gets a real, correctly-scaled sprite via ProceduralDecomposerSprite.
+func test_falls_back_to_procedural_art_for_an_unregistered_species():
+	var other := DecomposerMarker.new()
+	other.species = "spider"
+	other.home = Vector2(50, 50)
+	other.position = Vector2(50, 50)
+	add_child_autofree(other)
+	var sprite := other.get_child(0) as Sprite2D
+	assert_not_null(sprite.texture)
 	assert_eq(sprite.scale, Vector2.ONE * ArtResolution.SPRITE_SCALE)
+
+
+## SEEKING (ambient wander) and APPROACHING both show the walk cycle --
+## advancing several frame-durations' worth of elapsed time should move
+## through more than one distinct frame, not hold on a single static pose.
+func test_the_walk_cycle_actually_advances_over_time():
+	var frames_seen := {}
+	for i in 40:
+		marker._process(0.1)
+		frames_seen[(marker.get_child(0) as Sprite2D).texture] = true
+	assert_gt(frames_seen.size(), 1, "the walk cycle should visibly animate, not hold one frame")
+
+
+## FEEDING (biting in place) shows the idle cycle (legs gathered), not the
+## walk cycle -- a stationary decomposer with animated walking legs would
+## read as sliding in place.
+func test_shows_the_idle_cycle_while_feeding():
+	marker._behavior.phase = CarrionForageBehavior.Phase.FEEDING
+	marker._update_sprite(Vector2.ZERO)
+	var sprite := marker.get_child(0) as Sprite2D
+	var idle_frames := IllustratedDecomposerSprite.new().generate_textures("ant", "idle")
+	assert_true(idle_frames.has(sprite.texture))
+
+
+## Both illustrated sheets face LEFT natively -- moving right should mirror
+## the sprite, moving left should not.
+func test_faces_the_direction_it_is_actually_moving():
+	marker._update_sprite(Vector2(5, 0))
+	var sprite := marker.get_child(0) as Sprite2D
+	assert_true(sprite.flip_h, "moving right should mirror the naturally-left-facing art")
+	marker._update_sprite(Vector2(-5, 0))
+	assert_false(sprite.flip_h, "moving left should show the art unmirrored")
 
 
 ## Bug report: "gigantic ant blobs... but they don't move". _step_seeking
