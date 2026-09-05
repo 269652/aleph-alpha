@@ -315,6 +315,94 @@ func test_a_well_fed_mound_grows_larger_than_a_starved_one():
 	assert_gt(fed.population_at(cell), starved.population_at(cell))
 
 
+# -- water, not just food: a second real growth driver (see docs/concept/
+# soil_fauna.md's own section by that name) --------------------------------
+
+func test_recording_moisture_raises_capacity():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var before := colony.capacity_at(cell)
+	for i in 20:
+		colony.record_moisture(cell, 1.0)
+	assert_gt(colony.capacity_at(cell), before)
+
+
+func test_recording_dryness_does_not_raise_capacity_above_baseline():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 20:
+		colony.record_moisture(cell, 0.0)
+	assert_almost_eq(colony.capacity_at(cell), AntPopulationModel.BASE_CAPACITY, 0.001)
+
+
+## Food and water act independently -- a well-fed colony on damp ground
+## supports more than either advantage alone.
+func test_food_and_water_together_raise_capacity_more_than_either_alone():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 20:
+		colony.record_forage_result(cell, true)
+		colony.record_moisture(cell, 1.0)
+	var both := colony.capacity_at(cell)
+
+	var food_only := _colony()
+	var food_cell: Vector2i = food_only.mound_cells()[0]
+	for i in 20:
+		food_only.record_forage_result(food_cell, true)
+	assert_gt(both, food_only.capacity_at(food_cell))
+
+
+## The real feedback loop, water half: a mound on consistently damp
+## ground grows a bigger colony than an equally-old one on parched
+## ground, even with identical (absent) forage success.
+func test_a_well_watered_mound_grows_larger_than_a_dry_one():
+	var damp := _colony("grassland", 42)
+	var dry := _colony("grassland", 42)
+	var cell: Vector2i = damp.mound_cells()[0]
+	for i in 100:
+		damp.record_moisture(cell, 1.0)
+		dry.record_moisture(cell, 0.0)
+		damp.advance(1.0)
+		dry.advance(1.0)
+	assert_gt(damp.population_at(cell), dry.population_at(cell))
+
+
+# -- growth_fraction_at: what a mound's own visual size reads (see
+# ProceduralAntMoundSprite.world_width_for) -------------------------------
+
+func test_growth_fraction_starts_near_zero_for_a_founding_colony():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	assert_lt(colony.growth_fraction_at(cell), 0.1)
+
+
+## AntColony.advance is a single Euler step (PopulationModel.step), not a
+## closed-form solution -- it badly under-integrates for large single
+## deltas, so this saturates both EMAs first (20 calls each, matching
+## FORAGE_SUCCESS_EMA_RATE/MOISTURE_EMA_RATE's own 0.3 convergence rate),
+## THEN advances by many real SECONDS_PER_SIMULATED_DAY-sized steps --
+## GROWTH_RATE_PER_DAY (0.05) genuinely means the slowest-growing
+## population this game tracks, so reaching near-capacity takes real
+## simulated YEARS' worth of daily steps, not a handful of arbitrary
+## advance() calls.
+func test_growth_fraction_approaches_one_for_a_thriving_colony():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 20:
+		colony.record_forage_result(cell, true)
+		colony.record_moisture(cell, 1.0)
+	for i in 400:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_gt(colony.growth_fraction_at(cell), 0.9)
+
+
+func test_growth_fraction_is_never_negative_or_above_one():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	assert_gte(colony.growth_fraction_at(cell), 0.0)
+	assert_lte(colony.growth_fraction_at(cell), 1.0)
+
+
 func test_active_forager_cap_is_at_least_one_for_a_brand_new_mound():
 	var colony := _colony()
 	var cell: Vector2i = colony.mound_cells()[0]
