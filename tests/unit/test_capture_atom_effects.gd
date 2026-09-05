@@ -33,28 +33,31 @@ func test_release_captive_clears_the_tools_captive_species():
 	assert_eq(net.captive_species, "")
 
 
-# -- move_captive: reuses the EXISTING jarred_insect/caged_songbird split ----
-# (scenes/player.gd's own _capture_flyer already keys this exact split off
-# AmbientFlyerRenderer.BIRD_SPECIES_POOL -- a glass bottle is what you need
-# to jar the catch, not a new kind of catch, so this reuses those item ids
-# rather than inventing new ones.)
+# -- move_captive: reports WHICH species moved, not a generic item id -------
+# (a first version of this granted a flat, genericized jarred_insect/
+# caged_songbird curiosity item -- but the bottle needs to remember WHICH
+# species it holds so it can be rendered live, see docs/concept/
+# capture_dsl.md's "Rendering a bottled catch" -- so this reports the
+# species itself, and the CALLER (Player) is the one who puts it on a fresh
+# container item, the same relocation hold_captive already does the other
+# direction.)
 
-func test_move_captive_reports_jarred_insect_for_a_non_bird_species():
+func test_move_captive_reports_the_species_it_moved():
 	net.captive_species = "monarch"
-	var result_item_id = effects.apply_to_target("move_captive", {}, net, {})
-	assert_eq(result_item_id, "jarred_insect")
+	var species = effects.apply_to_target("move_captive", {}, net, {})
+	assert_eq(species, "monarch")
 	assert_eq(net.captive_species, "", "the tool empties once its catch moves into a container")
 
 
-func test_move_captive_reports_caged_songbird_for_a_bird_species():
+func test_move_captive_reports_a_bird_species_the_same_way():
 	net.captive_species = "sparrow"
-	var result_item_id = effects.apply_to_target("move_captive", {}, net, {})
-	assert_eq(result_item_id, "caged_songbird")
+	var species = effects.apply_to_target("move_captive", {}, net, {})
+	assert_eq(species, "sparrow")
 
 
 func test_move_captive_on_an_empty_tool_reports_nothing_and_stays_empty():
-	var result_item_id = effects.apply_to_target("move_captive", {}, net, {})
-	assert_eq(result_item_id, "")
+	var species = effects.apply_to_target("move_captive", {}, net, {})
+	assert_eq(species, "")
 	assert_eq(net.captive_species, "")
 
 
