@@ -2674,6 +2674,57 @@ func _flapping_butterfly(parent: Node2D) -> AmbientFlyerMarker:
 	return butterfly
 
 
+## PHASE 3: ground walk/hop and singing, the two rows Phase 1 measured but
+## left unwired -- see docs/concept/ecosystem_dynamics.md's Phase 3
+## writeup. Both are drawn only while `perched` (grounded), the same
+## contract peck_frame already has, and both are additional alternatives
+## to perched_frame, checked in the same branch, not a new state machine.
+
+func test_a_bird_walks_during_the_resume_beat_after_a_peck():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.ground_forage = GroundForageBehavior.new()
+	bird.ground_forage.phase = GroundForageBehavior.Phase.RESUMING
+	bird.perched = true
+	bird.walk_frames = [ImageTexture.new(), ImageTexture.new(), ImageTexture.new()]
+	bird.perched_frame = ImageTexture.new()
+	bird._process(FRAME)
+	assert_true(bird.walk_frames.has(bird.texture), "must show a walk frame during the resume beat")
+	assert_ne(bird.texture, bird.perched_frame)
+
+
+func test_a_bird_sings_when_its_own_song_roll_says_so():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.wander_seed = 0
+	bird._elapsed_time = 0.0  # BirdSong.should_sing(0, 0.0) is true
+	bird.ground_forage = GroundForageBehavior.new()
+	bird.ground_forage.phase = GroundForageBehavior.Phase.RESUMING
+	bird.perched = true
+	bird.sing_frames = [ImageTexture.new(), ImageTexture.new()]
+	bird.walk_frames = [ImageTexture.new()]
+	bird.perched_frame = ImageTexture.new()
+	bird._process(FRAME)
+	assert_true(bird.sing_frames.has(bird.texture), "singing must win over walking when the roll says sing")
+
+
+func test_without_walk_or_sing_frames_a_grounded_bird_still_just_perches():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.ground_forage = GroundForageBehavior.new()
+	bird.ground_forage.phase = GroundForageBehavior.Phase.RESUMING
+	bird.perched = true
+	bird.perched_frame = ImageTexture.new()
+	bird._process(FRAME)
+	assert_eq(
+		bird.texture, bird.perched_frame,
+		"no walk_frames/sing_frames (an old caller, a test double) must be a no-op, not an error"
+	)
+
+
 ## FLIGHT HEIGHT -- requested directly: "give birds a z height in their
 ## flight and scale size based on distance from ground / distance to
 ## camera". A top-down camera looking straight down makes "distance from

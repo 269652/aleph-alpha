@@ -7008,6 +7008,23 @@ state had never once been set by anything in `src/`.
   selected, mirroring `CreatureMarker._apply_action_scale`'s own
   illustrated/procedural branch. 259 tests green. Writeup:
   `concept/ecosystem_dynamics.md`'s same section, its own dated follow-up.
+  **Follow-up, same day: halved again (still too big), real flight
+  height, and Phase 3 (walk/dive/sing).** `BASE_WORLD_WIDTH` halved once
+  more (6.6 → 3.3) on a second live playtest report. New
+  `AmbientFlyerMarker._flight_height` (birds only) climbs toward
+  `FLIGHT_CRUISE_HEIGHT_PX` while airborne and back to 0 once perched,
+  lifting (`offset`) and shrinking (`scale`) the sprite with altitude —
+  264 tests green. Phase 3: `IllustratedBirdSprite` gains
+  `generate_walk_textures`/`generate_dive_textures`/
+  `generate_sing_textures` (each confirmed by eye), a `_MIN_DIVIDER_WIDTH`
+  fix for the singing row's over-split sound-lines, new pure
+  `BirdSong.should_sing` (a periodic per-bird roll, no new phase machine),
+  `PiscivoreBirdMarker.dive_frames` shown only during `Phase.DIVING`, and
+  `AmbientFlyerMarker.walk_frames`/`sing_frames` wired alongside the
+  existing `peck_frame` check. 301 tests green across eight files. Not
+  done: bird courtship/dancing and reproduction (Phase 4), kingfisher's
+  own remaining two rows. Writeup: `concept/ecosystem_dynamics.md`'s same
+  section.
 - **Persistence / catch-up integration of eaten burrows** (medium) — ⬜ Not
   started, deliberately — a reloaded chunk re-seeds deterministically and
   loses which burrows had been eaten, exactly like `FlowerPatch`, `TallGrass`,

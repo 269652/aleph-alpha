@@ -43,6 +43,12 @@ var species := "kingfisher"
 ## already follows.
 var flap_frames: Array = []
 var perched_frame: Texture2D = null
+## The plunge-dive pose (see IllustratedBirdSprite.generate_dive_textures),
+## set by PiscivoreBirdRenderer exactly like flap_frames/perched_frame.
+## Empty/null is a no-op (see _animate_wings), same optional-field contract
+## as every other art field in this file -- an old caller/test double that
+## never sets it keeps flapping through the strike instead of erroring.
+var dive_frames: Array = []
 
 ## `world` (duck-typed fish_population_near(pixel_position)/
 ## record_fish_catch_near(pixel_position, count), the same contract
@@ -152,6 +158,19 @@ func _animate_wings() -> void:
 	if is_perched:
 		if perched_frame != null:
 			texture = perched_frame
+		return
+	# The plunge itself gets its own pose rather than reusing the flap
+	# cycle through the strike -- a real kingfisher tucks its wings for
+	# the dive, it does not keep beating them. Indexed by dive_progress()
+	# (the same [0,1] clock the vertical drop offset above already reads),
+	# so the pose actually plays out across the dive rather than holding
+	# one frame. Ascending is still flying -- a real kingfisher pulls up
+	# on open wings -- so only DIVING itself uses this pose, not the whole
+	# hover/dive/ascend/carry span _step_process's own doc comment groups
+	# together for the "still flying" rule above.
+	if _behavior.phase == PiscivoreBirdBehavior.Phase.DIVING and not dive_frames.is_empty():
+		var index := int(_behavior.dive_progress() * float(dive_frames.size()))
+		texture = dive_frames[clampi(index, 0, dive_frames.size() - 1)]
 		return
 	if flap_frames.is_empty():
 		return

@@ -932,6 +932,54 @@ uses `marker_scale`, not the flat chain; `FLYER_WORLD_SCALE` and
 `IllustratedBirdSprite`'s target widths agree on which species is
 bigger) — 259 tests green across the six files.
 
+**Follow-up, same day: halved again, plus real flight height and the
+Phase 3 rows.** Live playtest after the first size fix: "the robin should
+be half as big and all others halved as well" — `BASE_WORLD_WIDTH` halved
+again (6.6 → 3.3) directly on that report, no re-derivation attempted.
+
+**Flight height**, requested directly: "give birds a z height in their
+flight and scale size based on distance from ground / distance to
+camera". On a top-down camera, distance-from-ground and distance-from-
+camera are the same quantity, so `AmbientFlyerMarker._flight_height` (one
+value, birds only — gated on `IllustratedBirdSprite.has_species`, since
+`perched` means something different for a nectaring pollinator and a
+first pass broke its own settle/alight tests) eases toward
+`FLIGHT_CRUISE_HEIGHT_PX` (derived from `BASE_WORLD_WIDTH`) while airborne
+and back to 0 once `perched`, driving both a lift (`offset`, never
+`position`) and a scale shrink. `_animate_wings` is now a thin
+`_animate_wings_body` + `_apply_flight_height` wrapper so every existing
+call site gets it for free. 264 tests green.
+
+**Phase 3**, requested the same session alongside flight height ("no
+foraging, no pecking, no dancing, no tweeting... wire this all up"): the
+ground walk/hop row (the three songbirds), the kingfisher's own dive pose,
+and singing (every species) all get real art and real triggers.
+`IllustratedBirdSprite` gains `generate_walk_textures`/
+`generate_dive_textures`/`generate_sing_textures`, each confirmed by eye
+before wiring in. The singing row's radiating sound-lines sit far enough
+from the body that the default frame-column detector over-split it (13-16
+pieces instead of 8) on all three songbird sheets — `_MIN_DIVIDER_WIDTH`
+raised from 1 to 8, verified against every other row first so it narrows
+without merging anything real. New pure `BirdSong.should_sing(seed,
+elapsed)` (a periodic duty-cycle roll, per-bird offset by seed) drives
+singing — no new phase machine, since singing has no world-state
+consequence. `PiscivoreBirdMarker` shows `dive_frames` (indexed by the
+existing `dive_progress()` clock) only while `Phase.DIVING`, ascend/hover/
+carry still flap. `AmbientFlyerMarker` shows `walk_frames` during
+`GroundForageBehavior.Phase.RESUMING` (the one grounded moment that is not
+mid-strike) and `sing_frames` whenever `BirdSong.should_sing` says so,
+both alongside the existing `peck_frame` check in the one `perched`
+branch — no new state machine there either. 301 tests green across eight
+files (the six bird/flyer suites, new `test_bird_song.gd`, and
+`test_ground_forage_behavior.gd` reconfirmed untouched).
+
+**Still not done**: real bird courtship/mating-dance and reproduction
+(the `court` bands are measured and confirmed by eye but nothing reads
+them yet), and kingfisher's own remaining two rows (a calm rest pose
+closer to `PiscivoreAppetite.ACTIVITY_PERCH` than anything wired, and one
+still-unresolved variant). Both are Phase 4/named follow-ups, not
+oversights.
+
 ## Region difficulty (gating the roster by player readiness)
 
 Rounding out the roster with real predators (bear, lion) and a real hazard

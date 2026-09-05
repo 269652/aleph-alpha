@@ -31,6 +31,7 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 ## For FLIGHT_CRUISE_HEIGHT_PX's own derivation only -- IllustratedBirdSprite
 ## does not preload this file back, so this is one-directional.
 const IllustratedBirdSprite = preload("res://src/rendering/illustrated_bird_sprite.gd")
+const BirdSong = preload("res://src/gameplay/bird_song.gd")
 const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const WingbeatBounce = preload("res://src/rendering/wingbeat_bounce.gd")
 const FlapGlide = preload("res://src/rendering/flap_glide.gd")
@@ -131,6 +132,19 @@ var ground_forage: GroundForageBehavior = null
 ## ProceduralBirdSprite.generate_pecking_texture), alternated against
 ## `perched_frame` while the bird works the worm.
 var peck_frame: Texture2D = null
+
+## Ground hop/stride cycle (see IllustratedBirdSprite.generate_walk_
+## textures) -- set by AmbientFlyerRenderer for the three ground-foraging
+## songbirds only. Empty is a no-op (see _animate_wings_body), same
+## optional-field contract as peck_frame/perched_frame.
+var walk_frames: Array = []
+const WALK_SECONDS_PER_FRAME := 0.12
+
+## Open-beak, sound-lines singing cycle (see IllustratedBirdSprite.
+## generate_sing_textures) -- every real bird species has one. Empty is a
+## no-op, same contract as walk_frames.
+var sing_frames: Array = []
+const SING_SECONDS_PER_FRAME := 0.1
 
 ## Re-scanning the soil every frame would query the worm set per bird per
 ## frame; worms surface on a weather timescale, so it is throttled the same
@@ -2678,6 +2692,15 @@ func _drawn_body_px() -> float:
 	return float(texture.get_height()) * absf(scale.y)
 
 
+## Wall-clock frame index into an N-frame cycle, at `seconds_per_frame` --
+## the same free-running-clock shape FlapGlide/NectaringPosture already use
+## for their own cycles, but plain wall time rather than a wing-beat/
+## alighting clock: walking and singing have no lift/glide physics to stay
+## locked to, they just need to visibly cycle.
+func _cycle_frame_index(frame_count: int, seconds_per_frame: float) -> int:
+	return int(_elapsed_time / seconds_per_frame) % frame_count
+
+
 ## Advances the wing-beat, then applies flight height on top -- a thin
 ## wrapper (rather than folding _apply_flight_height into every one of
 ## _animate_wings_body's own early returns below) so every existing call
@@ -2714,6 +2737,21 @@ func _animate_wings_body() -> void:
 		# while a worm silently vanishes.
 		if ground_forage != null and peck_frame != null and ground_forage.is_beak_down():
 			texture = peck_frame
+		# Singing wins over walking when the roll says sing -- both only
+		# ever apply while grounded-but-not-actively-pecking (see
+		# BirdSong's own doc comment: singing is a cosmetic embellishment,
+		# not a state machine, so it competes for the same frame walking
+		# does rather than needing its own precedence rule).
+		elif ground_forage != null and not sing_frames.is_empty() and BirdSong.should_sing(wander_seed, _elapsed_time):
+			texture = sing_frames[_cycle_frame_index(sing_frames.size(), SING_SECONDS_PER_FRAME)]
+		# The resume beat after a peck -- see GroundForageBehavior.RESUME_
+		# SECONDS -- is the one grounded moment that is not mid-strike, so
+		# it is where a hop/walk cycle actually has somewhere to play.
+		elif (
+			ground_forage != null and not walk_frames.is_empty()
+			and ground_forage.phase == GroundForageBehavior.Phase.RESUMING
+		):
+			texture = walk_frames[_cycle_frame_index(walk_frames.size(), WALK_SECONDS_PER_FRAME)]
 		elif perched_frame != null:
 			texture = perched_frame
 		return

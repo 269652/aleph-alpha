@@ -630,6 +630,12 @@ func _build_marker(
 	# species' own adult size (see AmbientFlyerMarker._step_growing).
 	marker.set_adult_scale(marker.scale)
 	marker.setup(movement)
+	# Singing (see AmbientFlyerMarker.sing_frames/BirdSong) -- every real
+	# bird species has one; a generator with no has_method for it (the
+	# procedural one, and butterflies' own generator) leaves it empty, the
+	# same optional-capability guard as flap_frames/perched_frame above.
+	if sprite_generator.has_method("generate_sing_textures"):
+		marker.sing_frames = sprite_generator.generate_sing_textures(species, seed_value)
 	# What this flyer is wired to feed on comes from the DIET TABLE, not from
 	# which spawn call it came out of (see FlyerDiet /
 	# docs/concept/soil_fauna.md). Every caller now passes the same world; the
@@ -672,5 +678,13 @@ func _build_marker(
 			marker.ground_forage = GroundForageBehavior.new()
 		if marker.peck_frame == null and sprite_generator.has_method("generate_pecking_texture"):
 			marker.peck_frame = sprite_generator.generate_pecking_texture(species, seed_value)
+	# Ground hop/stride (see AmbientFlyerMarker.walk_frames) -- ANY ground
+	# forager gets one, regardless of which food branch above actually
+	# built `ground_forage`: the walk cycle plays during the resume beat
+	# after a peck, not during any one specific food's own descent/strike,
+	# so it belongs to the marker's ground_forage capability as a whole
+	# rather than to one diet entry.
+	if marker.ground_forage != null and sprite_generator.has_method("generate_walk_textures"):
+		marker.walk_frames = sprite_generator.generate_walk_textures(species, seed_value)
 	parent.add_child(marker)
 	return marker
