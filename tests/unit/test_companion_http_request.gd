@@ -50,3 +50,68 @@ func test_method_is_read_verbatim_routing_decides_what_to_do_with_a_non_get():
 	var parsed := CompanionHttpRequest.parse(raw)
 	assert_true(parsed.ok)
 	assert_eq(parsed.method, "POST")
+
+
+# -- query string parsing (search/pagination on /items) ----------------------
+
+
+func test_query_is_an_empty_dictionary_when_there_is_no_question_mark():
+	var raw := "GET /items HTTP/1.1\r\n\r\n".to_utf8_buffer()
+	var parsed := CompanionHttpRequest.parse(raw)
+	assert_eq(parsed.query, {})
+
+
+func test_query_parses_a_single_key_value_pair():
+	var raw := "GET /items?q=sword HTTP/1.1\r\n\r\n".to_utf8_buffer()
+	var parsed := CompanionHttpRequest.parse(raw)
+	assert_eq(parsed.query, {"q": "sword"})
+
+
+func test_query_parses_multiple_pairs_separated_by_ampersand():
+	var raw := "GET /items?q=sword&page=2 HTTP/1.1\r\n\r\n".to_utf8_buffer()
+	var parsed := CompanionHttpRequest.parse(raw)
+	assert_eq(parsed.query, {"q": "sword", "page": "2"})
+
+
+func test_a_plus_in_the_query_decodes_to_a_space():
+	# Form-GET convention, not generic URI decoding -- String.uri_decode()
+	# alone does NOT turn "+" into a space (that's RFC 3986 vs.
+	# application/x-www-form-urlencoded), so this must be handled
+	# explicitly rather than assumed free from the engine.
+	var raw := "GET /items?q=iron+sword HTTP/1.1\r\n\r\n".to_utf8_buffer()
+	var parsed := CompanionHttpRequest.parse(raw)
+	assert_eq(parsed.query.q, "iron sword")
+
+
+func test_percent_encoding_in_the_query_decodes():
+	var raw := "GET /items?q=iron%20sword HTTP/1.1\r\n\r\n".to_utf8_buffer()
+	var parsed := CompanionHttpRequest.parse(raw)
+	assert_eq(parsed.query.q, "iron sword")
+
+
+func test_a_repeated_key_lets_the_last_value_win():
+	var raw := "GET /items?q=a&q=b HTTP/1.1\r\n\r\n".to_utf8_buffer()
+	var parsed := CompanionHttpRequest.parse(raw)
+	assert_eq(parsed.query.q, "b")
+
+
+func test_a_key_with_no_equals_sign_decodes_to_an_empty_value():
+	var raw := "GET /items?q HTTP/1.1\r\n\r\n".to_utf8_buffer()
+	var parsed := CompanionHttpRequest.parse(raw)
+	assert_eq(parsed.query.q, "")
+
+
+func test_a_key_with_a_trailing_equals_sign_decodes_to_an_empty_value():
+	var raw := "GET /items?q= HTTP/1.1\r\n\r\n".to_utf8_buffer()
+	var parsed := CompanionHttpRequest.parse(raw)
+	assert_eq(parsed.query.q, "")
+
+
+func test_an_empty_segment_from_a_stray_ampersand_produces_no_entry():
+	# A browser address bar can genuinely produce "a&&b" (a stray extra
+	# "&"), and a trailing "&" is just as real -- neither should mint a
+	# bogus {"": ...} entry.
+	var raw := "GET /items?q=a&&page=2 HTTP/1.1\r\n\r\n".to_utf8_buffer()
+	var parsed := CompanionHttpRequest.parse(raw)
+	assert_false(parsed.query.has(""))
+	assert_eq(parsed.query.size(), 2)
