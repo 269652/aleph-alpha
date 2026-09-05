@@ -4234,3 +4234,78 @@ func test_a_late_joined_pair_is_still_exactly_opposite_from_the_first_frame():
 		var from_b: Vector2 = b.position - b._spiral_centre - shared
 		worst_dot = maxf(worst_dot, from_a.normalized().dot(from_b.normalized()))
 	assert_lt(worst_dot, -0.999, "they must whirl opposite each other (worst dot %.5f)" % worst_dot)
+
+
+# --- the robin wired through the behavior DSL (docs/concept/behavior_dsl.md) --
+#
+# _step_songbird_flight_response, _step_pair_interactions and
+# _step_ground_forage are unchanged -- reused by calling them, not
+# reimplemented. What's new is WHICH ONE runs first this frame, expressed
+# as a real parsed behaviour script instead of the three sequential `if`s
+# every other species still uses. Only robin is wired -- sparrow and every
+# butterfly keep their original, direct dispatch, which is what the
+# species-gating tests below prove, and what the rest of this file's
+# existing flush/courtship/forage tests (unchanged, run against a real
+# robin) prove stayed correct once routed through the tree.
+
+func test_a_robin_is_given_a_parsed_behavior_tree():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	assert_not_null(bird._behavior_tree)
+	assert_eq(bird._behavior_tree["kind"], "priority")
+
+
+func test_a_sparrow_is_not_wired_yet_even_though_it_also_ground_forages():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
+	assert_null(bird._behavior_tree)
+
+
+func test_a_butterfly_is_not_wired():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("monarch", Vector2(0, 0), parent)
+	assert_null(bird._behavior_tree)
+
+
+## The parse is a one-time cost, not a per-individual one (docs/concept/
+## behavior_dsl.md's own open question) -- every robin gets the identical
+## tree, not a fresh parse each spawn.
+func test_every_robin_gets_the_identical_tree():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	var b := _flyer_in_tree("robin", Vector2(50, 50), parent)
+	assert_eq(a._behavior_tree, b._behavior_tree)
+
+
+## A robin marker built without movement (setup() never called, or built
+## bare in a test) must not crash: the original code's own
+## `if _movement == null: return` guard, preserved through the tree path.
+func test_a_robin_with_no_movement_configured_does_not_crash():
+	var bird := AmbientFlyerMarker.new()
+	bird.species = "robin"
+	add_child_autofree(bird)
+	bird.set_process(false)
+	bird._process(FRAME)
+	# A real assertion, not just "didn't throw": the frame actually ran to
+	# completion (this field advances unconditionally, near the top of
+	# _process), rather than the test merely having reached this line
+	# because GUT swallowed a script error silently.
+	assert_almost_eq(bird._elapsed_time, FRAME, 0.0001)
+
+
+## The exact scenario test_a_ground_foraging_robin_scatters_too already
+## covers end to end, restated here as the tree-specific claim: the flush
+## fires as the FIRST thing the tree tries, before courtship or foraging
+## ever get a look in this frame.
+func test_the_flush_leaf_is_tried_before_courtship_or_foraging():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	var leaves: Array = bird._behavior_tree["children"]
+	assert_eq(leaves[0]["atom"], "songbird_flush")
+	assert_eq(leaves[1]["atom"], "bird_courtship")
+	assert_eq(leaves[2]["atom"], "ground_forage")

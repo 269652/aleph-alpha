@@ -11732,15 +11732,35 @@ anywhere.
   (`test_a_hungry_villager_seeks_forage_through_the_same_gate_the_mammal_
   used`). An ant-forager tree (`round_trip()`) correctly reports its own
   phase. 79 tests total across the three modules, all green.
-- ⬜ **Nothing wired to a live marker, by design.** `CreatureMarker`,
-  `NpcMarker`, and `AntForagerMarker` all still run their existing
-  decision paths unchanged. `ethogram.md`'s own slice 5 found that
-  touching a live marker outside a dedicated, narrowly scoped pass is
-  exactly the mistake to avoid, and the same caution applies doubly to a
-  brand-new executor with zero hours of runtime behind it. An
-  `ethogram_decide` action atom — the explicit bridge letting a species
-  mix a fully genome-expressed ethogram sub-decision into an otherwise
-  DSL-composed tree — is named in the doc as a planned seam, not built.
+- ✅ **Update, same day: the robin is wired — a real species running a
+  real parsed tree.** Asked for directly: "wire the robin." Its
+  `_process` used to pick a top-level priority (flush off the player,
+  else a bird courtship, else ground-forage, else the unchanged ambient-
+  flight tail) via three sequential `if`s; it now runs the exact same
+  precedence as a parsed `behavior "robin" { priority { songbird_flush()
+  bird_courtship() ground_forage() } } }` script, gated by a new
+  `BEHAVIOR_TREE_SPECIES` constant so every other flyer — sparrow
+  included, despite ground-foraging by the identical mechanism — keeps
+  its original, untouched dispatch. The three leaves are thin, marker-
+  bound wrappers around `_step_songbird_flight_response`/
+  `_step_pair_interactions`/`_step_ground_forage`, called exactly as
+  `_process` always called them (replicating precisely which two animate
+  the wings themselves and which one doesn't, and the `_movement == null`
+  guard `_step_ground_forage`'s own internals need) — none of the three
+  step functions changed. This needed one real extension to the DSL
+  itself: `context["local_atoms"]`, a caller-registered `{name: Callable}`
+  map checked before the shared, reusable `behavior_atom_catalog.gd` and
+  entirely replacing a same-named shared atom when present — the seam a
+  live marker's own impure, side-effecting methods need, since reusing
+  them means calling them, not reimplementing them as the shared
+  catalog's pure data (5 new executor tests). The tree is parsed once
+  into a static cache and shared by every robin. 5 new marker-level tests
+  pin the wiring itself; the file's own pre-existing robin flush/
+  courtship/offspring tests are the regression bar and pass unchanged —
+  167 passing, 2 pre-existing butterfly spiral-flight numerical-tolerance
+  failures confirmed unrelated (the diff never touches that code path).
+  Sparrow is the obvious, named next candidate — identical mechanism,
+  not yet done, one species proven at a time on purpose.
 
 ### Standard Model (`concept/standard_model.md`, new this pass)
 
