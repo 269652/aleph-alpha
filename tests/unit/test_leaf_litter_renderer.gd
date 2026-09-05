@@ -101,19 +101,29 @@ func test_transition_t_is_partway_through_mid_transition():
 	assert_lt(t, 1.0)
 
 
-## A falling leaf flutters sideways partway through -- mirrors
-## test_a_falling_leaf_drifts_sideways_partway_through_its_fall.
-func test_transition_flutter_is_nonzero_partway_through():
-	var flutter := LeafLitterRenderer.transition_flutter_world(0.3, 0.7)
-	assert_ne(flutter, 0.0)
+## The swirling path (see "swirl: a curling path, not a fixed-axis wobble"
+## below) is nonzero partway through -- mirrors
+## test_a_falling_leaf_drifts_sideways_partway_through_its_fall, now for a
+## genuine 2D curl rather than a scalar sway on one fixed axis.
+func test_swirl_offset_is_nonzero_partway_through():
+	var offset := LeafLitterRenderer.instance_swirl_offset(
+		0.3, 0.7, 0.4, Vector2.RIGHT, Vector2.UP
+	)
+	assert_ne(offset, Vector2.ZERO)
 
 
-## The flutter must taper to zero by the time the transition completes (see
+## The swirl must taper to (0,0) by the time the transition completes (see
 ## DroppedItem._step_fall's own "however it wanders on the way down, it
-## always settles exactly at the position step_fruiting actually chose").
-func test_transition_flutter_reaches_zero_once_complete():
+## always settles exactly at the position step_fruiting actually chose") --
+## a leaf's swirl must never leave it stranded off its real, logical target.
+func test_swirl_offset_reaches_zero_once_complete():
 	for phase in [0.0, 1.0, 2.5, 4.0]:
-		assert_almost_eq(LeafLitterRenderer.transition_flutter_world(1.0, phase), 0.0, 0.0001)
+		for swirl_seed in [0.0, 0.3, 0.8, 1.0]:
+			var offset := LeafLitterRenderer.instance_swirl_offset(
+				1.0, phase, swirl_seed, Vector2.RIGHT, Vector2.UP
+			)
+			assert_almost_eq(offset.x, 0.0, 0.0001)
+			assert_almost_eq(offset.y, 0.0, 0.0001)
 
 
 func test_transition_rotation_reaches_zero_once_complete():
@@ -249,6 +259,126 @@ func test_phase_for_position_differs_across_nearby_leaves():
 func test_phase_for_position_is_deterministic():
 	var p := Vector2(123.0, 456.0)
 	assert_eq(LeafLitterRenderer.phase_for_position(p), LeafLitterRenderer.phase_for_position(p))
+
+
+# -- swirl: a curling path, not a fixed-axis wobble --------------------------
+#
+# Reported directly: "the leaves and blossoms have a lot of left/right
+# movements where they end up on the same place where they started and it
+# doesn't look natural as it's a straight line ... move them a bit with a
+# left right swirl / spiral motion or tumbles or so ... varying". The
+# previous transition_flutter_world/perpendicular-axis-offset shape moved
+# ALONG ONE FIXED AXIS (perpendicular to the straight-line travel direction)
+# with an amplitude that decayed to exactly zero by landing -- which reads
+# exactly as described: a straight line with a symmetric side-to-side
+# wobble riding on top, always snapping back onto the line itself. A real
+# leaf/petal spiralling down instead curls THROUGH both the direction-of-
+# travel and perpendicular axes together, tracing a shrinking loop around
+# its own straight-line path rather than oscillating along one fixed line.
+#
+# instance_swirl_offset replaces the old scalar flutter + single-axis
+# offset with a genuine 2D curl, in the SAME (direction, perpendicular)
+# basis the shader already computes -- see that function's own doc comment.
+
+## Two different positions must (almost always) get different swirl seeds,
+## independently of phase_for_position's own hash (different magic
+## constants, deliberately) -- so a leaf's swirl shape (how many loops, how
+## wide) varies independently of its flutter/tumble phase, the "varying"
+## the report asks for.
+func test_swirl_seed_for_position_differs_across_nearby_leaves():
+	var seeds := {}
+	for i in 20:
+		var seed_value := LeafLitterRenderer.swirl_seed_for_position(Vector2(100.0 + i * 5.25, 200.0))
+		seeds[snappedf(seed_value, 0.05)] = true
+	assert_gt(seeds.size(), 10, "twenty nearby leaves collapsed into %d distinct swirl seeds" % seeds.size())
+
+
+func test_swirl_seed_for_position_is_deterministic():
+	var p := Vector2(321.0, 654.0)
+	assert_eq(
+		LeafLitterRenderer.swirl_seed_for_position(p), LeafLitterRenderer.swirl_seed_for_position(p)
+	)
+
+
+func test_swirl_turns_for_seed_is_minimum_at_seed_zero():
+	assert_almost_eq(
+		LeafLitterRenderer.swirl_turns_for_seed(0.0), LeafLitterRenderer.MIN_SWIRL_TURNS, 0.0001
+	)
+
+
+func test_swirl_turns_for_seed_is_maximum_at_seed_one():
+	assert_almost_eq(
+		LeafLitterRenderer.swirl_turns_for_seed(1.0), LeafLitterRenderer.MAX_SWIRL_TURNS, 0.0001
+	)
+
+
+## Different leaves must not all trace the SAME loop -- some wider/more
+## turns than others, the concrete shape "varying" takes here.
+func test_swirl_turns_for_seed_varies_across_real_seeds():
+	var turns := {}
+	for i in 20:
+		var seed_value := LeafLitterRenderer.swirl_seed_for_position(Vector2(100.0 + i * 5.25, 200.0))
+		turns[snappedf(LeafLitterRenderer.swirl_turns_for_seed(seed_value), 0.05)] = true
+	assert_gt(turns.size(), 5, "twenty real leaves' swirl turn-counts collapsed into %d distinct values" % turns.size())
+
+
+func test_swirl_radius_fraction_for_seed_stays_within_its_own_bounds():
+	for seed_value in [0.0, 0.1, 0.37, 0.6, 0.99, 1.0]:
+		var fraction: float = LeafLitterRenderer.swirl_radius_fraction_for_seed(seed_value)
+		assert_gte(fraction, LeafLitterRenderer.MIN_SWIRL_RADIUS_FRACTION - 0.0001)
+		assert_lte(fraction, LeafLitterRenderer.MAX_SWIRL_RADIUS_FRACTION + 0.0001)
+
+
+## The radius fraction must vary independently of the turn count -- if the
+## same raw seed drove both identically, every leaf that swirls WIDE would
+## also always swirl with the SAME turn count, collapsing two supposedly
+## independent axes of "varying" back into one.
+func test_swirl_radius_fraction_is_not_simply_the_turns_fraction_restated():
+	var differs := false
+	for i in 20:
+		var seed_value := LeafLitterRenderer.swirl_seed_for_position(Vector2(100.0 + i * 5.25, 200.0))
+		var turns_fraction := (
+			(LeafLitterRenderer.swirl_turns_for_seed(seed_value) - LeafLitterRenderer.MIN_SWIRL_TURNS)
+			/ (LeafLitterRenderer.MAX_SWIRL_TURNS - LeafLitterRenderer.MIN_SWIRL_TURNS)
+		)
+		var radius_fraction := (
+			(LeafLitterRenderer.swirl_radius_fraction_for_seed(seed_value) - LeafLitterRenderer.MIN_SWIRL_RADIUS_FRACTION)
+			/ (LeafLitterRenderer.MAX_SWIRL_RADIUS_FRACTION - LeafLitterRenderer.MIN_SWIRL_RADIUS_FRACTION)
+		)
+		if absf(turns_fraction - radius_fraction) > 0.1:
+			differs = true
+	assert_true(differs, "turn-count and loop-width tracked each other in lockstep across 20 real leaves")
+
+
+## THE core fix: unlike the old fixed-axis flutter (confined to the
+## perpendicular axis alone), the swirl must actually move the leaf ALONG
+## its own straight-line direction too, partway through -- proof this is a
+## genuine 2D curl rather than the same one-axis wobble under a new name.
+func test_swirl_offset_moves_along_the_direction_axis_too_not_only_perpendicular():
+	var moved_along_direction := false
+	for t in [0.1, 0.2, 0.4, 0.6, 0.8]:
+		var offset := LeafLitterRenderer.instance_swirl_offset(t, 0.9, 0.5, Vector2.RIGHT, Vector2.UP)
+		if absf(offset.x) > 0.01:
+			moved_along_direction = true
+	assert_true(
+		moved_along_direction,
+		"the swirl never displaced along the travel direction -- still a perpendicular-only wobble"
+	)
+
+
+## The swirl's own radius is a BUMP (zero at both ends, widest in the
+## middle -- see instance_swirl_offset's own doc comment), not a one-sided
+## decay from a nonzero start: a leaf's real transition_from IS its true
+## starting point, so the swirl should not displace it away from that
+## point at t==0 any more than it should leave it stranded off its real
+## target at t==1.
+func test_swirl_offset_is_zero_at_the_very_start_of_a_transition():
+	for phase in [0.0, 1.3, 3.5]:
+		for swirl_seed in [0.0, 0.5, 1.0]:
+			var offset := LeafLitterRenderer.instance_swirl_offset(
+				0.0, phase, swirl_seed, Vector2.RIGHT, Vector2.UP
+			)
+			assert_almost_eq(offset.length(), 0.0, 0.0001)
 
 
 # -- pure data prep: position / atlas index / packed fall-start --------------
