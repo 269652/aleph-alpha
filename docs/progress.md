@@ -7700,6 +7700,57 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   win here, rather than building a whole new leaf-litter system
   speculatively on top of a bugfix request. **Leaves have since gained
   their own real mechanic — see "Leaf Litter" below.**
+- **Ants + beetles: real illustrated art, replacing every procedural
+  silhouette** (medium) — ✅ Done — reported live: "finish ants and beetles
+  / ground foraging? I added sprites for ants" (`ant.png`/`beetle.png`/
+  `ant_mound.png` added to `assets/sprites/animals/`). Three new/updated
+  pieces:
+  1. **`IllustratedDecomposerSprite`** (new) — slices `ant.png` (6 cols x 3
+     rows: walk, carry [ant + cargo], idle) and `beetle.png` (6 cols x 2
+     rows: walk, idle — no carry row, a bug doesn't cache) into cached
+     frame arrays. Same "sheet → `SpriteSheetSlicer` → cached frames" shape
+     as `IllustratedAnimalSprite`, deliberately not built on it: decomposers
+     are not on the `CreatureMarker`/`AnimalAnatomy` stack (see
+     `DecomposerMarker`'s own doc comment), so this carries none of that
+     stack's per-species anatomy or swim/drink/attack fallback chain.
+     `marker_scale(species, action)` mirrors `IllustratedAnimalSprite`'s own
+     per-action measurement so the ant's visibly-wider carry pose still
+     reads as the same real-world creature size as its walk cycle, despite
+     `normalize_frames` fitting each action's own widest frame to the
+     canvas independently. Both sheets measure fully OPAQUE magenta (alpha
+     channel present but always 1.0), so `IllustratedStoneSprite`'s
+     "already has real alpha" shortcut doesn't apply — ported that class's
+     exact despill technique instead (a binary chroma-key alone left a
+     visible pink halo around every leg, caught by a real failing test
+     before the despill pass existed).
+  2. **`IllustratedAntMoundSprite`** (new) — slices `ant_mound.png`'s 3x3
+     grid of 9 independent hand-illustrated variants (not an animation),
+     picked deterministically per mound via `PixelNoise.range_index`, same
+     shape as `IllustratedStoneSprite`'s pebble/boulder/cobble pools scoped
+     to this one sheet. `marker_scale()` targets `ProceduralAntMoundSprite.
+     MOUND_WORLD_WIDTH` exactly, measured from the real art's own opaque
+     width, so swapping the art in doesn't resize any already-placed mound.
+  3. **Wiring**, all `has_X()`-gated with the procedural generator as
+     fallback (unchanged, for the moment a third species/sheet-less asset
+     needs it again): `AntMoundMarker` picks a variant from a seed derived
+     from the mound's GLOBAL cell coordinate (not the chunk-local cell
+     alone, or two chunks' own local (0,0)-ish mounds would match).
+     `AntForagerMarker` shows a single held pose per leg (short-lived,
+     purely decorative — no animated cycle needed): empty-handed "walk"
+     before the pickup waypoint, `ant.png`'s own dedicated "carry" pose
+     after. `DecomposerMarker` gets real continuous animation for the first
+     time: the walk cycle frame-steps by elapsed time while SEEKING/
+     APPROACHING, switches to the legs-gathered idle cycle while FEEDING (a
+     stationary decomposer with animated walking legs would read as
+     sliding in place), and mirrors to face whichever way it actually just
+     moved (both sheets face left natively).
+  46/46 new tests green across the two new classes
+  (`test_illustrated_decomposer_sprite.gd`,
+  `test_illustrated_ant_mound_sprite.gd`) plus updated assertions in
+  `test_decomposer_marker.gd`/`test_ant_mound_marker.gd`/
+  `test_ant_forager_marker.gd`. Full writeup:
+  [carrion.md](concept/carrion.md)'s "Decomposers" Status entry and
+  [soil_fauna.md](concept/soil_fauna.md)'s "Rendered presence" entry.
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to

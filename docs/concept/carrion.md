@@ -277,6 +277,24 @@ see that doc's own mechanism spec and Status.
      have since become a real `FORAGEABLE_GROUP_NAME` item too, needing no
      further change to this function at all — see
      [leaf_litter.md](leaf_litter.md).
+- ✅ Real illustrated art for both species (2026-09-05), replacing
+  `ProceduralDecomposerSprite`'s drawn silhouettes: `ant.png`/`beetle.png`,
+  hand-illustrated walk cycles (`IllustratedDecomposerSprite`, same
+  "sheet → `SpriteSheetSlicer` → cached frames" shape `IllustratedAnimalSprite`
+  uses for grazing quadrupeds, deliberately not built on it — decomposers
+  are not on the `CreatureMarker`/`AnimalAnatomy` stack at all, so this
+  carries none of that stack's per-species anatomy or swim/drink/attack
+  fallback chain, just the three actions a decomposer actually has). `ant.png`
+  also draws a distinct carry pose (body + cargo) that `AntForagerMarker`
+  now uses for its own pickup→cache leg — see `soil_fauna.md`'s own
+  "Rendered presence" section. `DecomposerMarker` now actually animates: the
+  walk cycle steps by elapsed time while SEEKING/APPROACHING, and switches to
+  a legs-gathered idle cycle while FEEDING (a stationary decomposer with
+  animated walking legs would read as sliding in place); both sheets face
+  left natively, and a real horizontal step mirrors the sprite the way
+  `CreatureMarker.facing_sign`'s own convention does. `has_action()`-gated
+  throughout — a species with no registered sheet falls straight through to
+  `ProceduralDecomposerSprite`, unchanged.
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — the `take_bite` contract is already shaped to

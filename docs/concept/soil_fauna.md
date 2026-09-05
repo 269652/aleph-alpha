@@ -420,6 +420,25 @@ not just a placement fact.
   colony that reads as alive. The earthworm/robin pair went through exactly
   this same "logic first, sprite later" split when it was built; ants have
   now completed both halves.
+- **Real illustrated art (2026-09-05).** `AntMoundMarker` now draws one of
+  9 hand-illustrated mound variants (`ant_mound.png`,
+  `IllustratedAntMoundSprite`, deterministic per mound cell via a seed
+  derived from its GLOBAL coordinate — not the chunk-local mound cell
+  alone, or two different chunks' own local (0,0)-ish mounds would always
+  pick the identical variant) in place of `ProceduralAntMoundSprite`'s
+  drawn dome, at the identical real-world width
+  (`ProceduralAntMoundSprite.MOUND_WORLD_WIDTH`) so the swap changes
+  nothing about how big an already-placed mound reads. `AntForagerMarker`
+  now draws `IllustratedDecomposerSprite`'s real "ant" art instead of
+  `ProceduralDecomposerSprite`'s silhouette — a single held pose per leg
+  (not an animated cycle, since this marker is short-lived and purely
+  decorative), empty-handed while walking to the pickup and switched to
+  `ant.png`'s own dedicated carry pose (body + cargo) once it has
+  something to actually carry to the cache. See
+  [carrion.md](carrion.md)'s own Status entry for `DecomposerMarker`'s
+  matching (and more involved, since that ant animates continuously)
+  upgrade. Both fall back to the procedural generator if `has_variants()`/
+  `has_action()` ever reports no art, unchanged.
 - **Ants are not bird prey.** `FlyerDiet` is not extended with an insect
   food type here — a real robin or sparrow eating ants at a mound would be
   a genuine, well-grounded follow-on (the same insectivore mechanism this
