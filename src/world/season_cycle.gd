@@ -61,7 +61,13 @@ func growth_modifier(elapsed_seconds: float) -> float:
 	return 0.2 + 0.8 * warmth_modifier(elapsed_seconds)
 
 
-## How far the world clock must move FORWARD to land at the start of `season`.
+## How far the world clock must move FORWARD to land `progress` fraction
+## [0,1] into `season` -- 0.0 (the default) is its first instant, matching
+## the original "lands at the start" behavior exactly; 1.0 is its very last
+## instant, which by construction is the same point in time as the NEXT
+## season's own 0.0 (see test_progress_one_lands_at_the_next_seasons_own_
+## start). Out-of-range values are clamped rather than trusted, since this
+## is the pure model underneath a player-typed console command.
 ##
 ## Forward only, and that is the whole design. Season is a pure function of
 ## elapsed world time, so the obvious way to honour `/season winter` is to set
@@ -71,14 +77,15 @@ func growth_modifier(elapsed_seconds: float) -> float:
 ## hands `fallen_between` a span that runs backwards. Skipping forward is the
 ## only move that leaves every other clock consistent.
 ##
-## Asking for the season you are already in therefore waits for it to come
-## round again rather than doing nothing: you asked to watch it start.
+## Asking for the season you are already in (at the same or an earlier
+## progress than where you already are) therefore waits for it to come round
+## again rather than doing nothing: you asked to watch it reach that point.
 ## Unknown names move nothing.
-func seconds_until_season(elapsed_seconds: float, season: String) -> float:
+func seconds_until_season(elapsed_seconds: float, season: String, progress: float = 0.0) -> float:
 	var index := SEASONS.find(season)
 	if index < 0:
 		return 0.0
-	var target := float(index) / float(SEASONS.size())
+	var target := (float(index) + clampf(progress, 0.0, 1.0)) / float(SEASONS.size())
 	var now := year_fraction(elapsed_seconds)
 	var ahead := target - now
 	if ahead <= 0.0:
