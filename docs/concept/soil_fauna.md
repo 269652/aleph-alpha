@@ -608,21 +608,112 @@ constant rather than importing `EarthChunkManager` back into the class it
 is already owned by (that would be circular), and cross-checked by test
 so the two can't silently drift apart.
 
-**What the player actually sees.** Population has no rendered form of its
-own — there is still deliberately no separate queen sprite (real queens
-are sessile and essentially never seen outside the nest; a player learns
-a colony is thriving the same way they would in reality, from how much
-worker traffic it produces, not by being shown her directly) — but it
-governs how many foragers a mound may have **concurrently active**
-(`active_forager_cap_for`, `MAX_CONCURRENT_FORAGERS` = 3), replacing the
-old hardcoded "one forager in flight at a time." A young or
-food-poor colony still reads exactly as before — one ant, one trip at a
-time — while a large, well-fed one visibly has two or three workers out
-at once, the same "aggregate population promotes to visible individual
-markers" pattern `FishRenderer`'s own `target_count` already uses for
-fish. A mound's hover tooltip reports this directly (see above) — the one
-place a player can actually read a number for what is otherwise inferred
-only from traffic.
+**What the player actually sees.** There is still deliberately no
+separate queen sprite (real queens are sessile and essentially never seen
+outside the nest; a player learns a colony is thriving the same way they
+would in reality, from how much worker traffic it produces and how big
+its own works have grown, not by being shown her directly) — but
+population now drives two real, visible things, not one:
+
+1. How many foragers a mound may have **concurrently active**
+   (`active_forager_cap_for`, `MAX_CONCURRENT_FORAGERS` = 3), replacing
+   the old hardcoded "one forager in flight at a time." A young or
+   food-poor colony still reads exactly as before — one ant, one trip at
+   a time — while a large, well-fed one visibly has two or three workers
+   out at once, the same "aggregate population promotes to visible
+   individual markers" pattern `FishRenderer`'s own `target_count`
+   already uses for fish.
+2. **The mound's own size** — see "Mound size grows with the colony"
+   below, added directly in response to a real report: with the fixed
+   size the previous pass shipped, a mound read as static regardless of
+   how the colony inside it was actually doing, which undercut the whole
+   point of a visible colony-strength signal.
+
+A mound's hover tooltip reports the real population number directly (see
+above) — the one place a player can read an exact figure for what is
+otherwise inferred only from traffic and size.
+
+### Water, not just food: a second real growth driver
+
+**Real-world grounding.** Ant colony growth is not food-limited alone.
+Larval development needs humidity, and colonies measurably struggle
+through drought even with forage still available — which is exactly why
+real colonies so often site their nest near a stable moisture source
+(under a log, beneath damp leaf litter, near a water table) rather than
+on the driest available ground. Rainfall is the other half of "how well
+is this colony actually doing," alongside how much its workers bring
+home, and treating them as two independent inputs to the same capacity
+(rather than only ever reading food) is truer to the real biology, not
+just a second knob for its own sake.
+
+**The mechanism.** Mirrors `EarthwormPatch.set_conditions`'s own
+weather-derived moisture sampling exactly, on the same
+`WORM_REFRESH_INTERVAL`-scale cadence (weather turns over on a day scale,
+far slower than a frame, so there is no reason to sample it every step):
+`EarthChunkManager.step_ants` samples `WeatherModel.soil_moisture` at
+each loaded chunk's own centre tile and feeds it to every mound in that
+chunk via `AntColony.record_moisture(cell, moisture)` — a decaying
+exponential average of recent moisture, the identical shape
+`record_forage_result`'s own EMA already uses for forage outcomes, for
+the identical reason: a single rainy day should not swing a colony's
+fortunes any more than a single successful trip does; sustained
+conditions should. `AntPopulationModel.capacity` now takes both signals:
+
+```
+capacity = BASE_CAPACITY * (1 + FOOD_CAPACITY_BONUS * forage_success + WATER_CAPACITY_BONUS * moisture)
+```
+
+`WATER_CAPACITY_BONUS` is pinned equal to `FOOD_CAPACITY_BONUS` (1.0) —
+both are real, independently-acting inputs to the same real mechanism
+(how much of a colony a mound can support), and nothing in the grounding
+above argues one should structurally dominate the other. A colony that
+finds food AND sits on consistently damp ground can now reach up to
+`BASE_CAPACITY * 3` — the new `AntPopulationModel.MAX_REFERENCE_POPULATION`,
+which the mound-size mechanism below normalizes against.
+
+### Mound size grows with the colony
+
+**Reported live, right after relaunch**: mounds read as barely visible at
+their previous fixed size, with an explicit ask — "it should be half a
+human high and grow with the colony." Two real, separate corrections:
+
+**Size target.** A mound now grows from `MOUND_WORLD_WIDTH_MIN` (4.0, a
+small but real founding pile — close to the previous pass's own flat
+5.25, not a step backward at the weakest end) toward
+`MOUND_WORLD_WIDTH_MAX`, pinned to **half the player's own real-world
+height** (`CharacterView.HEAD_TOP_Y * CharacterView.SCALE * 0.5`,
+restated locally rather than importing `StoneSize` for one shared number
+— the same "read against the player" convention `StoneSize`/
+`ProceduralFlowerSprite` already establish, cross-checked by test against
+the real player height so the two can't silently drift apart the way
+`ProceduralFlowerSprite.PLAYER_WORLD_HEIGHT_PX` itself once did). A
+thriving, near-`MAX_REFERENCE_POPULATION` mound reads as a genuinely
+substantial ground feature — not the tiny bump either version before it
+was — while a brand-new one is still legibly small.
+
+**Growth curve.** `ProceduralAntMoundSprite.world_width_for(growth_fraction)`
+takes `AntColony.growth_fraction_at(cell)` (`population_at(cell) /
+AntPopulationModel.MAX_REFERENCE_POPULATION`, clamped to `[0, 1]`) and
+eases it with the identical `pow(fraction, EXPONENT)` technique
+`StoneSize.world_height_px` already uses for stones, exponent below 1 —
+growth reads fastest early (a young colony's own workforce can dig
+faster than the queen can fill the extra room, so the mound visibly
+swells right away) and flattens out approaching full size (a mature
+colony's digging capacity outstrips how fast population can still be
+rising). `IllustratedAntMoundSprite.marker_scale(growth_fraction)` and
+`ProceduralAntMoundSprite`'s own fallback both take the same fraction, so
+the illustrated art and the procedural fallback grow identically.
+
+**Live, not static.** `AntMoundMarker` was "deliberately inert... no
+per-frame behaviour of its own" (see that class's own prior doc comment)
+because population had nothing for it to react to yet. It now takes a
+real `setup(colony, cell)` (mirrors `AntForagerMarker`'s identical
+contract) and re-checks its own growth fraction on a slow
+`MOUND_RESIZE_INTERVAL_SECONDS`-scale cadence — population moves over
+simulated DAYS, so anything faster would be spending per-frame cost on a
+number that is, for all practical purposes, motionless between checks. A
+mound a player watches over a real session should visibly, if slowly,
+grow.
 
 ### What is explicitly NOT in this pass
 

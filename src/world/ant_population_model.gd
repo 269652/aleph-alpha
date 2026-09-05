@@ -44,16 +44,41 @@ const BASE_CAPACITY := 4.0
 ## invented one.
 const FOOD_CAPACITY_BONUS := 1.0
 
+## How much extra capacity a colony sitting on consistently damp ground
+## can support, at recent_moisture == 1.0 -- see docs/concept/soil_fauna.md
+## "Water, not just food: a second real growth driver". Pinned EQUAL to
+## FOOD_CAPACITY_BONUS: both are real, independently-acting inputs to the
+## same real mechanism (how much of a colony a mound can support), and
+## nothing in the grounding argues either should structurally dominate.
+## Tested directly (test_water_bonus_is_pinned_equal_to_food_bonus) rather
+## than left to coincidentally match.
+const WATER_CAPACITY_BONUS := 1.0
+
+## The ceiling capacity() can ever produce -- both bonuses simultaneously
+## maxed out. What AntColony.growth_fraction_at (and so a mound's own
+## visual size, see ProceduralAntMoundSprite.world_width_for) normalizes
+## population against, computed from the same constants capacity() itself
+## uses rather than a second, independently-chosen number that could
+## silently drift from the real ceiling (cross-checked by
+## test_max_reference_population_matches_capacity_at_full_food_and_water).
+const MAX_REFERENCE_POPULATION := BASE_CAPACITY * (1.0 + FOOD_CAPACITY_BONUS + WATER_CAPACITY_BONUS)
+
 var _population_model := PopulationModel.new(GROWTH_RATE_PER_DAY)
 
 
-## `recent_forage_success` is a [0, 1] fraction (see AntColony.
-## record_forage_result) -- 0 for a colony that keeps coming home empty, 1
-## for one that keeps finding food. Out-of-range input is clamped rather
-## than trusted, since the caller's own EMA math could in principle drift
-## a hair outside [0, 1] through floating-point accumulation.
-func capacity(recent_forage_success: float) -> float:
-	return BASE_CAPACITY * (1.0 + FOOD_CAPACITY_BONUS * clampf(recent_forage_success, 0.0, 1.0))
+## `recent_forage_success`/`recent_moisture` are each a [0, 1] fraction
+## (see AntColony.record_forage_result/record_moisture) -- 0 for a colony
+## that keeps coming home empty / sits on parched ground, 1 for one that
+## keeps finding food / stays consistently damp. Out-of-range input is
+## clamped rather than trusted, since the caller's own EMA math could in
+## principle drift a hair outside [0, 1] through floating-point
+## accumulation.
+func capacity(recent_forage_success: float, recent_moisture: float) -> float:
+	return BASE_CAPACITY * (
+		1.0
+		+ FOOD_CAPACITY_BONUS * clampf(recent_forage_success, 0.0, 1.0)
+		+ WATER_CAPACITY_BONUS * clampf(recent_moisture, 0.0, 1.0)
+	)
 
 
 func step(population: float, carrying_capacity: float, delta_days: float) -> float:
