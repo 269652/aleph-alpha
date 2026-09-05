@@ -248,8 +248,10 @@ watched the bird peck at them.
 - ✅ Crushed underfoot: weight-emergent worm mortality (`CreatureMass`,
   `EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S`/`is_crushed_by`,
   `EarthChunkManager.crush_worm_at`, wired for the player and every
-  `CreatureMarker`) — see "Crushed underfoot" below. No dedicated splat
-  visual yet, named there as a real, deliberate scope cut.
+  `CreatureMarker`) — see "Crushed underfoot" below.
+- ⬜ Illustrated worm sprite (crawl/emerge/retreat/die, real corpse
+  persistence) — spec written, see "Illustrated worm sprite" below;
+  implementation in progress.
 - ✅ Ants (mound population + myrmecochory, both grassland grass-seed AND
   forest/rainforest windfall fruit/nut foraging, a real rendered presence
   that visibly grows with its own colony, real round-trip foraging
@@ -930,8 +932,171 @@ walking, so they are deliberately excluded from this entirely — a robin
 already interacts with a worm through `take_worm_at` on its own terms
 (eating it), never by incidentally landing weight on it.
 
+**The dedicated splat visual named above as a scope cut is the direct
+follow-up this section itself pointed at — see "Illustrated worm sprite"
+below, which closes it.**
+
 **Size.** An earthworm is about ten centimetres, the same as a crocus is tall,
 and is drawn at the size that makes true. It was set by eye back when every
 flower shared one invented height; once flowers were pinned to the player's own
 scale the worm was suddenly longer than several of them and read as a snake
 lying in the grass.
+
+## Illustrated worm sprite: crawl, emerge, retreat, die
+
+A real, hand-illustrated sheet (`assets/sprites/animals/worm.png`) replaces
+`ProceduralWormSprite`'s drawn silhouette and the region-rect emergence
+"reveal" trick described above with four real, separately-drawn animations
+— the same "hand-drawn sheet, real illustrated art" upgrade this project
+has already given ants, carrion bugs, sheep, wolves, and every songbird
+(`IllustratedDecomposerSprite`/`IllustratedAnimalSprite`/
+`IllustratedBirdSprite`). This is also the direct follow-up "Crushed
+underfoot" named and deferred: the worm's fourth animation is its death,
+and closing it required inventing a genuinely new piece of state this
+codebase did not have anywhere yet (see "A corpse is new ground" below).
+
+### The sheet
+
+1536×1024px, a perfectly regular 8-column × 4-row grid (192×256px per
+cell — 1536/8 and 1024/4 both exact), chroma-keyed opaque magenta
+background like every prior illustrated-animal sheet. Four rows, each one
+full named animation, top to bottom exactly as drawn:
+
+1. **`crawl`** — ordinary ambient locomotion. A steady 8-frame loop, played
+   whenever a worm is fully surfaced and not actively transitioning —
+   replaces the old sub-tile `crawl_offset` wobble's total silence about
+   the worm's own body motion (that wobble still applies to the sprite's
+   *position*; this is what it now plays while wobbling).
+2. **`emerge`** ("crawl out of earth") — a worm surfacing, drawn as a real
+   growth: frame 0 is barely a nose above a bare patch of turned soil,
+   frame 7 is the whole body out and lying flat. Plays while surfacing is
+   *rising* (see "Direction, not just amount" below).
+3. **`retreat`** ("crawl into earth") — the mirror image, but drawn as its
+   own sequence rather than `emerge` played backward: frame 0 is a worm
+   lying flat beginning to dip its head into loosened soil, frame 7 is
+   just a small hole left in the ground. Plays while surfacing is
+   *falling* under natural (weather-driven) conditions.
+4. **`die`** ("get stepped on") — a real squash: a curled worm progressively
+   flattens, widens, and pales across 8 frames into a motionless patch.
+   Plays exactly once, on being crushed (never on being eaten — see below),
+   and then **holds its own last frame** rather than disappearing — the
+   one genuinely new animation shape in this codebase (see next section).
+
+### Slicing: a known fixed grid, not content-gap detection
+
+Every prior illustrated sheet in this codebase hand-measures its row
+bands and hands them to `SpriteSheetSlicer.detect_frames`, which finds
+individual frame boundaries by scanning for background-only columns. That
+heuristic **fails on this sheet's own `die` row**: its first few frames
+show the worm still curled into a loop, and the gap between the loop and
+the body reads as background too — `detect_frames` with its default
+divider width (1px) or a widened one (mirroring how `IllustratedBirdSprite`
+fixed an analogous false-split in its own "sing" row's radiating
+sound-lines) both fail here, because the sheet's *real* inter-cell gaps
+range from as little as 1px (a pose that fills its whole cell edge to
+edge) up to 30+px (a smaller pose with real padding around it) — there is
+no single divider-width threshold that is reliably wider than every false
+internal notch and narrower than every real inter-cell gap at once
+(measured directly with `tools/probe_worm_sheet.gd` before writing any
+slicing code, not assumed).
+
+Since the grid itself is exactly regular, the fix sidesteps the whole
+heuristic: `IllustratedWormSprite` slices the sheet directly from grid
+arithmetic (`Rect2i(col * 192, row * 256, 192, 256)` for each of the 32
+cells) and hands those rects straight to `SpriteSheetSlicer.normalize_frames`,
+which finds each frame's own tight content bounding box regardless of
+whether the outer rect it was given came from content detection or, as
+here, from known geometry. All 32 cells were confirmed to hold real,
+non-blank content this way before the slicing code shipped.
+
+### Direction, not just amount
+
+`EarthwormPatch.emergence_for(surfacing)` has always answered "how much of
+the worm is above ground" — a pure function of the instantaneous
+`surfacing` scalar, with no memory of which way it's currently moving.
+The old region-rect reveal trick never needed direction: revealing more
+of one static image as a worm rises and revealing less as it sinks are
+the same operation run forward and backward. Real, separately-drawn
+`emerge`/`retreat` art is not symmetric that way — picking the *right
+row* now requires actually knowing whether surfacing is currently rising
+or falling, which nothing in this codebase tracked before this pass.
+`EarthwormPatch.advance` already computes exactly that comparison
+internally (`target > level` decides whether a burrow's worm is being
+pulled up or let back down); this pass has it also record the outcome
+per-cell (`is_rising(cell) -> bool`) instead of throwing it away, so the
+sprite layer can ask.
+
+The full row-selection rule, per surfaced/transitioning cell:
+
+- **Corpse** (see below) → `die`, frame held/advanced by how long ago it
+  was crushed.
+- **Emergence ≥ 1.0** (fully out, steady-state) → `crawl`, cycling on its
+  own clock.
+- **Emergence between 0 and 1, rising** → `emerge`, frame index scaled
+  directly by emergence (0 → frame 0, 1 → frame 7).
+- **Emergence between 0 and 1, falling** → `retreat`, frame index scaled
+  by *how much has been lost* (`1 - emergence`) rather than by emergence
+  itself, since `retreat`'s own art is drawn in the "going in" direction —
+  frame 0 is fully out, frame 7 is nearly gone, the opposite mapping from
+  `emerge`.
+
+This only ever applies to *natural* (weather-driven) transitions.
+`take()`/`crush()` still zero a burrow's surfacing instantly — an eaten or
+crushed worm was never "gently retreating," so neither one plays the
+`retreat` row; eating shows nothing further at all (the sprite is simply
+gone, unchanged from before this pass) and crushing shows `die` instead
+(next section).
+
+### A corpse is new ground
+
+No animation in this codebase before this pass ever played once and then
+held its final frame as a **permanent** terminal state — every existing
+"index a frame array off a progress value" site (`PiscivoreBirdMarker`'s
+dive, illustrated character/tree growth stages) tracks a *live* progress
+value the state machine keeps advancing forever, and the actual "creature
+death" path (`CreatureMarker._die`) frees the marker outright and spawns
+an unrelated `Carcass` node rather than leaving a death pose on screen.
+`take()` and `crush()` both already reduce a worm to the *identical*
+model state (`surfacing = 0`, `recovery = RECOVERY_SECONDS`) — the model
+itself has never distinguished "eaten" from "crushed" once the call
+returns, only the caller (which method it invoked) knows which happened.
+
+This pass adds exactly the one bit that was missing: `EarthwormPatch`
+now separately remembers *which* recovering burrows got there by being
+crushed (`is_corpse(cell) -> bool`), set only by `crush()`, never by
+`take()`. A corpse rides the **identical `RECOVERY_SECONDS` clock** as
+ordinary recovery, deliberately reused rather than adding a second,
+near-duplicate timer: the corpse lies exactly as long as its burrow is
+empty, and clears the instant a new worm could occupy it again — a
+narratively coherent rule (nothing else could be using that exact spot
+while a squashed worm's remains are still in it), not an arbitrary
+duration. `corpse_age_seconds(cell)` is derived from the same countdown
+(`RECOVERY_SECONDS - remaining`) rather than a second counter, so the two
+can never drift apart.
+
+`EarthChunkManager._sync_worm_sprites` — which has always freed a
+sprite the instant `is_surfaced(cell)` goes false — now also checks
+`is_corpse(cell)` before freeing: a corpse's sprite survives the sync
+that would otherwise have deleted it the moment `crush_worm_at` zeroed
+its surfacing. The `die` row's 8 frames are spread across a real,
+tested duration (not the whole 45-second recovery window — the squash
+itself is quick, the *lying there afterward* is what takes the rest of
+the window), and the last frame holds via the same `clampi(index, 0,
+frames.size() - 1)` idiom this codebase already uses everywhere else a
+continuous value indexes a bounded frame array — the difference here is
+simply that nothing ever pushes `corpse_age_seconds` back down to 0
+before the corpse itself clears, so the clamp's saturated state is the
+last thing anyone ever sees of that worm.
+
+### What this pass does NOT include
+
+Named rather than silently dropped: no sway or idle-breathing animation
+independent of the four states above (a `crawl`-cycling worm's only
+motion is the existing sub-tile wobble plus its own walk frames — nothing
+new here). No corpse decomposition/fade — a corpse disappears the instant
+its burrow recovers, the same hard cutover every other worm-availability
+transition in this file already uses, not a fade. Eaten worms are
+unchanged by this entire pass: `take_worm_at` never shows `die`, and
+never shows `retreat` either (it still vanishes on the same frame it's
+taken, exactly as before) — only `crush_worm_at` reaches the new corpse
+state at all.
