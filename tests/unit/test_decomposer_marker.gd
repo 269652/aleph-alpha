@@ -18,6 +18,21 @@ const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
+const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
+
+## Minimal duck-typed `_world` (see DecomposerMarker.setup) wrapping a real
+## LeafLitterField -- mirrors test_creature_marker.gd's own ForageWorld
+## stub-around-a-real-model shape, rather than reinventing a fake in-memory
+## leaf list.
+class LeafLitterWorld:
+	extends RefCounted
+	var field := LeafLitterField.new()
+
+	func nearest_leaf_litter_near(pixel_position: Vector2, radius_px: float) -> Dictionary:
+		return field.nearest_leaf_near(pixel_position, radius_px)
+
+	func consume_leaf_litter_at(pixel_position: Vector2) -> bool:
+		return field.consume_leaf_at(pixel_position)
 
 var marker: DecomposerMarker
 var carcass: Carcass
@@ -263,22 +278,32 @@ func test_forages_and_eats_nearby_fallen_fruit_when_theres_no_carrion():
 	assert_true(fruit.is_queued_for_deletion())
 
 
-## Closes the loop docs/concept/leaf_litter.md promises: a fallen leaf
-## needs no changes here at all, since it joins FORAGEABLE_GROUP_NAME
-## exactly like a fallen fruit does (see DroppedItem's own doc comment).
-## Proven end to end rather than just reasoned about -- the same
+## Closes the loop docs/concept/leaf_litter.md promises: a fallen leaf is no
+## longer a real DroppedItem node (see LeafLitterField/LeafLitterRenderer) --
+## it is chunk-specific plain data, reached through an injected `_world` (see
+## DecomposerMarker.setup) exactly the way worms already are for other
+## markers. Proven end to end rather than just reasoned about -- the same
 ## precedent test_forages_and_eats_nearby_fallen_fruit_when_theres_no_
 ## carrion above already sets for fruit.
 func test_forages_and_eats_a_nearby_fallen_leaf():
-	var leaf := DroppedItem.new()
-	leaf.item_stack = ItemStack.new(Item.new("cherry_leaf", "Cherry Leaf", "material", 20), 1)
-	leaf.position = Vector2(105, 100)
-	add_child_autofree(leaf)
+	var world := LeafLitterWorld.new()
+	world.field.add_leaf(Vector2(105, 100), "cherry", "autumn", 0.0)
+	marker.setup(world)
 	for i in 200:
 		marker._process(0.5)
-		if leaf.is_queued_for_deletion():
+		if world.field.leaves().is_empty():
 			break
-	assert_true(leaf.is_queued_for_deletion(), "a decomposer should forage and eat a fallen leaf too")
+	assert_true(world.field.leaves().is_empty(), "a decomposer should forage and eat a fallen leaf too")
+
+
+## Without an injected _world at all (most of this file's own tests, and
+## every decomposer that predates this feature), leaf litter is simply never
+## found -- the marker keeps foraging carrion/fruit exactly as before, not a
+## crash from an assumed-present dependency.
+func test_never_looks_for_leaf_litter_without_an_injected_world():
+	assert_null(marker._world, "precondition: this marker never had setup() called")
+	var found := marker._nearest_food()
+	assert_null(found, "no carrion/fruit/leaf exists near this marker at all")
 
 
 ## The filter has to be real (TreeSpecies.IDS), not "any dropped_item" --

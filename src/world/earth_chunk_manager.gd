@@ -8941,6 +8941,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_entities_parent, _biome_classifier.dominant_biome(chunk.biome), chunk_coord * CHUNK_SIZE,
 		CHUNK_SIZE, TerrainRenderer.TILE_SIZE, hash("%d_%d_decomposers" % [chunk_coord.x, chunk_coord.y])
 	)
+	# Gives each freshly-spawned decomposer this manager as its optional
+	# `_world` (see DecomposerMarker.setup) -- the one thing it needs an
+	# injected world for at all: finding chunk-specific leaf litter (see
+	# docs/concept/leaf_litter.md).
+	for decomposer_marker in _decomposer_markers[chunk_coord]:
+		decomposer_marker.setup(self)
 
 	# Re-staff every Sägewerk this chunk already had persisted, before this
 	# load, with a fresh Lumberjack -- "an NPC moves in" applies just as much
