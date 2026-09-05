@@ -1842,6 +1842,112 @@ func test_two_monarchs_side_by_side_actually_begin_a_dance():
 	assert_true(began, "two monarchs 20px apart must actually start a dance")
 
 
+## PHASE 4: bird courtship (see BirdCourtship). The exact class of bug the
+## comment on _scan_for_partners documents (a rule can be right and still
+## produce ONE flyer orbiting nothing, because nothing drove two real
+## markers through real frames) already bit the pollinator dance once --
+## this is the same real-markers-real-frames test for the bird mechanism,
+## not just BirdCourtship's own pure-function tests.
+func test_two_robins_side_by_side_actually_begin_a_bird_court():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("robin", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("robin", Vector2(120, 100), parent)
+
+	var began := false
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._bird_courting_with != 0 and b._bird_courting_with != 0:
+			began = true
+			break
+	assert_true(began, "two robins 20px apart must actually start a display")
+	assert_eq(a._bird_courting_with, b.get_instance_id())
+	assert_eq(b._bird_courting_with, a.get_instance_id())
+
+
+func test_pollinators_and_bird_court_never_cross_species_kinds():
+	# The butterfly dance and the bird display are disjoint species sets
+	# (Courtship.DANCING_SPECIES vs BirdCourtship.DANCING_SPECIES) -- a
+	# robin must never end up dancing the butterfly orbit, or vice versa,
+	# whatever a monarch happens to be doing nearby.
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var robin := _flyer_in_tree("robin", Vector2(200, 200), parent)
+	var monarch := _flyer_in_tree("monarch", Vector2(210, 200), parent)
+	for i in 120:
+		robin._process(FRAME)
+		monarch._process(FRAME)
+	assert_eq(robin._courting_with, 0, "a robin must never enter the butterfly dance")
+	assert_eq(monarch._bird_courting_with, 0, "a monarch must never enter the bird display")
+
+
+func test_a_bird_court_holds_a_fixed_point_rather_than_orbiting():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("robin", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("robin", Vector2(120, 100), parent)
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._bird_courting_with != 0:
+			break
+	assert_ne(a._bird_courting_with, 0, "precondition: the display began")
+	# Once settled, position must stop changing -- a HOLD, not a figure
+	# that keeps moving the way the butterfly orbit deliberately does.
+	for i in 40:
+		a._process(FRAME)
+		b._process(FRAME)
+	var settled: Vector2 = a.position
+	for i in 60:
+		a._process(FRAME)
+		b._process(FRAME)
+		assert_true(
+			a.position.distance_to(settled) < 0.5,
+			"a held display must not keep drifting once it has closed the gap"
+		)
+
+
+class StubBirdBreedingWorld:
+	var offspring: Array = []
+	var bird_births: Array = []
+	func spawn_flyer_offspring(a_species: String, at: Vector2, inherited: Dictionary = {}) -> void:
+		offspring.append({"species": a_species, "position": at, "traits": inherited})
+	func record_bird_birth_at(at: Vector2, a_species: String, count: float = 1.0) -> void:
+		bird_births.append({"position": at, "species": a_species, "count": count})
+
+
+## A successful bird court must do BOTH halves of "the individual half
+## reports to the aggregate half" -- spawn the visible chick (spawn_flyer_
+## offspring, same call pollinators use) AND reconcile the population
+## number that chick's chunk will be reloaded FROM (record_bird_birth_at) --
+## see EcosystemSimulation.record_bird_birth's own doc comment for why a
+## chick that skipped the second half would simply vanish on next load.
+func test_a_successful_bird_court_spawns_a_chick_and_reconciles_the_population():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var world := StubBirdBreedingWorld.new()
+	var born := false
+	for attempt in 40:
+		var at := Vector2(1000 + attempt * 40, 1000)
+		var a := _flyer_in_tree("robin", at, parent)
+		var b := _flyer_in_tree("robin", at + Vector2(20, 0), parent)
+		a.courtship_world = world
+		b.courtship_world = world
+		for i in 900:
+			a._process(FRAME)
+			b._process(FRAME)
+			if not world.offspring.is_empty():
+				break
+		if not world.offspring.is_empty():
+			born = true
+			break
+	assert_true(born, "precondition: some pair has to actually breed")
+	assert_eq(world.offspring[0]["species"], "robin")
+	assert_eq(world.bird_births.size(), 1, "the aggregate population must be reconciled exactly once too")
+	assert_eq(world.bird_births[0]["species"], "robin")
+
+
 func test_a_dance_that_began_actually_runs_and_then_ends():
 	var parent := Node2D.new()
 	add_child_autofree(parent)
