@@ -267,16 +267,19 @@ repeating it.
   above are visually distinct from each other; the shared "Unidentified
   Mushroom" look is what creates the challenge, not any one species
   disguising itself as another.
-- **No illustrated art this pass.** The system ships on
+- **No illustrated art generated yet.** The system ships on
   `ProceduralMushroomSprite` (a plain cap+stem silhouette, species-colored
   once identified) end to end. `IllustratedMushroomSprite` exists as a real,
   tested class with an empty variant table (`has_variants(species_id)` is
   false for every species today, pinned by test) — ready to receive a real
   5×5 (25-variant) sheet per species, the same "code first, real art
   drops in later with zero further code changes" path `AntMoundMarker`/
-  `IllustratedAntMoundSprite` already proved. The `docs/art/ai_sprite_
-  prompts.md` generation prompt for these sheets is intentionally not
-  written this pass (asked, and explicitly deferred).
+  `IllustratedAntMoundSprite` already proved. The generation prompt for the
+  first species (Fly Agaric) is now written —
+  [ai_sprite_prompts.md](../art/ai_sprite_prompts.md#12-wild-mushrooms-one-5x5-sheet-per-species-2026-09-05)
+  — the other four (Death Cap, Chanterelle, Porcini, Puffball) still need
+  theirs, and no sheet for any species has actually been generated/dropped
+  into `assets/` yet.
 - **No cooking-recipe integration.** `CookingRecipeBook`'s multi-ingredient
   recipe table has zero live callers anywhere in this project today —
   wiring it in at all is a separate, larger, pre-existing gap, not something
