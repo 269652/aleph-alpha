@@ -3504,8 +3504,9 @@ func wipe_world_clock(path: String = WorldClockPersistence.SAVE_PATH) -> void:
 	WorldClockPersistence.new().wipe(path)
 
 
-## Skips the world FORWARD to the start of `season` (see /season). Returns
-## whether that was a season we have.
+## Skips the world FORWARD to `progress` fraction [0,1] into `season` (see
+## /season) -- 0.0 (the default) is its start, as before. Returns whether
+## that was a season we have.
 ##
 ## The skipped time is not replayed. The jump is up to a whole year of world
 ## time and fruiting counts what fell between the last time it ran and now, so
@@ -3517,8 +3518,8 @@ func wipe_world_clock(path: String = WorldClockPersistence.SAVE_PATH) -> void:
 ## Trees are deliberately NOT caught up the same way: a sapling really has aged
 ## by the time you skip past, and watching it be older is the point of the
 ## command.
-func jump_to_season(season: String) -> bool:
-	var skip: float = _season_cycle.seconds_until_season(_world_age_seconds, season)
+func jump_to_season(season: String, progress: float = 0.0) -> bool:
+	var skip: float = _season_cycle.seconds_until_season(_world_age_seconds, season, progress)
 	if skip <= 0.0:
 		return false
 	_world_age_seconds += skip
