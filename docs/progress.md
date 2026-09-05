@@ -10259,3 +10259,52 @@ simply means prioritization decisions (what to build next, and how much of
 this scope is realistic for one person) are needed rather than assuming the
 roadmap's phases — let alone the full concept-doc corpus — will be
 implemented linearly or in full.
+
+### Companion Server (`concept/companion_server.md`)
+
+✅ **Transport + three Tier 1 views, all reading one file.** A hand-rolled
+HTTP/1.1 GET-only server (`src/companion_server/`: `companion_http_request.gd`
+/`companion_http_response.gd` parse/format, `companion_router.gd` maps path
+→ view) over a raw `TCPServer`, since Godot has no built-in HTTP server
+class. Registered as the `CompanionServer` autoload (survives
+`scenes/world.gd`'s `_ready()` re-running on scene reload, unlike a node
+instanced there), bound to `127.0.0.1:8731`
+(`CompanionRouter.PORT`, test-pinned). Every route reads a fresh
+`PlayerSave.load_data()` — no live `Player`/scene-tree hook, no writes
+anywhere. Three views ship: **Character Sheet** (`/`, most of
+`Player.to_save_dict()`, equipment/hotbar resolved to real `ItemCatalog`
+display names), **Item Catalog** (`/items`, every authored item annotated
+"have"/not from the save's inventory/equipment/hotbar, crafted items
+included, deliberately ungated — no discovery tracking exists for items),
+and **Companions** (`/companions`, the save's `bonded_companions` species
+list — deliberately renamed from the doc's original "Bestiary", see below).
+`tools/probe_companion_server.gd` runs it standalone for manual
+curl/browser inspection, following the existing `tools/probe_*.gd`
+convention. 37 GUT tests across the six pure modules, all green; smoke-
+tested against a real `player_save.bin` (real class/level/equipment/hotbar
+rendered correctly across all three routes, unknown paths correctly 404).
+
+⬜ **Settlement dashboard.** Blocked on a real design decision, not a
+missing view: the live `VillageMarket`/`NpcEconomy` purse (what a player
+actually sees) is never persisted (recreated empty on every chunk load),
+while a *different*, unrelated system (`src/emergence/market_store.gd`) is
+persisted but not confirmed wired to what a player experiences day-to-day.
+Whichever is chosen would be Tier 1's first exception to "reads only the
+save file." See the concept doc's Open questions.
+
+⬜ **Full "every creature encountered" bestiary.** No tracking mechanism
+exists anywhere in this codebase (confirmed by whole-repo search) — this
+is why the shipped view is named "Companions," scoped to the real
+`bonded_companions` save data, rather than "Bestiary" reused for something
+thinner than the name implies.
+
+⬜ **Richer per-companion stats** (trust, tied-animal location, live
+DNA/fitness numbers) via `KeptAnimals` — real and persisted, but
+**per-chunk** (`_kept_animals_path(chunk_coord)`), so showing it means
+scanning every chunk's save file rather than the one-file read every
+shipped view uses today. A real follow-up, not a same-shape addition.
+
+⬜ **All of Tier 2** (Registry Hall, the `scrivener` occupation, Voice,
+Chronicle, live breeding planner, the remote instruction queue) — unbuilt,
+as originally spec'd; the instruction queue specifically has no floor
+until npc.md's instruction DSL exists.

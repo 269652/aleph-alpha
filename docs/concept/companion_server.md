@@ -7,9 +7,22 @@ window, and everything it can *do* (not just show) is deliberately narrow.
 
 ## Status
 
-Concept stage. Nothing below is built. Written before any code per
-[CLAUDE.md](../../CLAUDE.md)'s "concept docs are the spec" rule — no system
-this size gets built without a spec existing first.
+Tier 1 is built for three of its four originally-envisioned views: Character
+Sheet, Item Catalog, and Companions (narrower than "Bestiary" — see below),
+each a pure `RefCounted` renderer with its own GUT test file
+(`src/companion_server/`, `tests/unit/test_companion_*.gd`), served over a
+hand-rolled HTTP/1.1 GET-only transport (`companion_http_request.gd`/
+`companion_http_response.gd`/`companion_router.gd`) by a `CompanionServer`
+autoload (`src/companion_server/companion_server.gd`) bound to
+`127.0.0.1:8731`. `tools/probe_companion_server.gd` runs it standalone for
+manual inspection. Settlement Dashboard is deferred — see its own bullet
+below for why. All of Tier 2 remains unbuilt, as originally written.
+
+Every Tier 1 route reads a freshly-loaded `PlayerSave.load_data()`
+(`src/gameplay/player_save.gd`, the same `user://player_save.bin` convention
+persistence.md already established) — the "Local transport" section below's
+"reuse the save file directly" leaning is now the decided, shipped design,
+not a lean.
 
 ## Design pillars
 
@@ -61,17 +74,59 @@ two examples prove players want.
 Launches alongside the game (or via a menu toggle), bound to localhost only,
 read-only:
 
-- **Character sheet** — mirrors `Player.to_save_dict()` field-for-field
-  (wallet, XP/level, equipment, skill allocations). No new state; a window
-  onto what persistence.md already round-trips.
-- **Bestiary** — every creature encountered or tamed: name, species, and its
-  real DNA/fitness numbers (`strength`, `agility`, `coat_vibrancy`,
-  `fitness_score` — see [dna.md](dna.md), [evolution.md](evolution.md),
-  [pets.md](pets.md#fitness--in-role-performance-first-pass)). Read-only.
-- **Settlement dashboard** — for any settlement visited or founded, the same
-  needs/wage/market numbers `VillageWages` and `village_market.gd` already
-  compute (see [npc.md](npc.md#needs-and-the-local-production-economy)),
-  rendered rather than recomputed.
+- ✅ **Character sheet** — mirrors most of `Player.to_save_dict()`
+  (class, health, wallet, XP/level, equipment, skill allocations, hotbar),
+  not literally every save key: position, appearance, `dna_seed`, and the
+  raw `skill_points_paid` ledger have no legible place on a sheet and are
+  left for a future pass if ever wanted. Equipment/hotbar show real
+  `ItemCatalog` display names, never a raw item id.
+  `companion_character_sheet_view.gd`.
+- ✅ **Item Catalog** (`/items`) — every authored item
+  (`ItemCatalog.known_ids()`), *not* filtered down to only what the save
+  holds. Each row is annotated "have" when the save's
+  inventory/equipment/hotbar currently references that id; a save's own
+  crafted (content-addressed) items are looked up and shown alongside.
+  Deliberately ungated: no discovery/spoiler tracking exists for items
+  anywhere in this codebase ([item_identity.md](item_identity.md) is about
+  content-addressing crafted items, not visibility), so showing the full
+  authored reference, annotated, is the option that invents no new
+  persisted state — pillar 4 applied literally, rather than building a
+  "seen items" set nothing else needs. `companion_item_catalog_view.gd`.
+- ✅ **Companions** (`/companions`), *not* "Bestiary" — deliberately renamed
+  on implementation. A whole-repo search found no persisted
+  creature-encounter log anywhere, built or spec'd (`docs/concept/pets.md`,
+  `taming.md`, `dna.md`, `evolution.md` included) — `AnimalFitness`'s
+  strength/agility/coat_vibrancy numbers are derived live from a seed with
+  nothing about *which* creatures a player has met ever stored. What IS
+  real and persisted is `Player.to_save_dict()`'s `bonded_companions`: a
+  plain `[{"species": String}, ...]` list, nothing richer. This view shows
+  exactly that and no more, honestly scoped rather than reusing the
+  "Bestiary" name for something thinner than it implies.
+  `companion_companions_view.gd`.
+  - Two real, larger follow-ups this is NOT: (1) `KeptAnimals`
+    (`src/world/kept_animals.gd`) DOES persist trust/order/`wander_seed`
+    (→ live-rederivable fitness) for tied/tamed animals, but **per chunk**
+    (`_kept_animals_path(chunk_coord)`) — showing those means scanning
+    every chunk's save file on disk, real additional plumbing, not a
+    same-file read like the three shipped views. (2) A full
+    every-creature-ever-seen bestiary has no data source at all and would
+    mean designing and building a new persisted tracking mechanism first —
+    a concept-doc-sized decision of its own, not a view-sized addition.
+- ⬜ **Settlement dashboard** — deferred, not built. `VillageWages`
+  (`src/world/village_wages.gd`) turned out to be a stateless static
+  module; the real live numbers (a settlement's gold purse) are `Object`
+  metadata on a `VillageMarket` instance that `VillageRenderer.spawn_village`
+  recreates empty on every chunk load — **never persisted**
+  (`src/world/npc_economy.gd`'s own doc comment). A second, unrelated,
+  *persisted* economy system already exists
+  (`src/emergence/market_store.gd` + `market_store_persistence.gd`,
+  `user://emergence_markets.bin`) but it's a separate subsystem (the
+  `docs/emergence/*` simulation layer) with no confirmed link to what a
+  player sees day-to-day. Picking between "read the live, unpersisted
+  village state" and "read the persisted-but-different emergence state" is
+  its own design decision — pillar 4 ("one data source, reused") can't be
+  honored until that decision is made, so this view waits rather than
+  guessing. See Open questions.
 
 No outbound network call exists at this tier. Closing the browser tab loses
 nothing — every value here is derived, not authored on the page.
@@ -129,15 +184,33 @@ companion server holds no authority to mutate a wallet, a relationship, or
 a quest on its own. An LLM's only possible output anywhere in this system is
 a rephrased string for Voice — never a decision.
 
-### Local transport (leaning, not decided)
+### Local transport
 
-Tier 1 reads: reuse persistence.md's existing `user://`
-`FileAccess.store_var`/`get_var` save convention directly rather than
-inventing a second one — "one convention, reused" is persistence.md's own
-pillar 4, and there's no reason the companion server needs a different
-contract with the save file than a reload does. Tier 2 writes: a minimal
-local endpoint the running Godot process exposes for proposals only,
-validated by the same core the rest of the sim calls.
+**Decided and shipped, for Tier 1.** Every route reads
+`PlayerSave.new().load_data()` fresh per request — persistence.md's existing
+`user://player_save.bin` `FileAccess.store_var`/`get_var` convention, reused
+directly rather than a second one invented for this server ("one
+convention, reused," persistence.md's own pillar 4). There is no live
+`Player`/scene-tree hook anywhere in `companion_server.gd`: a request only
+ever sees what's actually been saved, the same staleness a manual reload
+would show, and the server needs no wiring into `scenes/world.gd` at all.
+
+HTTP itself is hand-rolled: Godot has no built-in HTTP server class (only
+`HTTPClient`/`HTTPRequest` for the client side), so `companion_server.gd`
+owns a raw `TCPServer` bound to `127.0.0.1:8731`
+(`CompanionRouter.PORT`, a test-pinned constant), parses just the request
+line (method + path; no route reads a header), and always responds with
+`Connection: close` — one request, one response, no keep-alive. Registered
+as an autoload, not a node `scenes/world.gd` instances, because
+`world.gd`'s `_ready()` re-runs on every scene reload (New Game, a license
+retry) and an instanced node would rebind its socket each time; an autoload
+survives that. A failed bind (port already taken by another running
+instance) is caught, logged, and never takes the game down — the companion
+server is optional by construction.
+
+Tier 2 writes (unbuilt): a minimal local endpoint the running Godot process
+exposes for proposals only, validated by the same core the rest of the sim
+calls.
 
 ## Non-goals (for now)
 
@@ -169,4 +242,20 @@ Mirrors [overview.md](overview.md)'s own Non-goals section:
   doc answers *where* that choice is made (companion server, per-hire), not
   *which* backends are supported.
 - Should Tier 1 have any gate at all, or is a totally-ungated dashboard the
-  right default even before a player has built anything?
+  right default even before a player has built anything? (Answered *for the
+  three shipped views* by implementation: totally ungated, no gate exists.)
+- **Settlement dashboard needs a real pick between two economy systems**
+  before it can be built at all: the live-only `VillageMarket`/
+  `NpcEconomy` purse (matches what a player actually sees in a loaded
+  village, but is never persisted, so a companion server reading only the
+  save file cannot show it) versus the persisted `src/emergence/
+  market_store.gd` system (already saved, but a separate subsystem with no
+  confirmed link to the village a player is standing in). Whichever is
+  chosen, showing it likely means this view is the first Tier 1 exception
+  to "reads only `PlayerSave.load_data()`" — worth deciding deliberately,
+  not by default.
+- **A full "every creature encountered" bestiary** and **richer
+  `KeptAnimals`-backed companion stats** (trust, per-chunk tied-animal
+  locations, live fitness numbers) are real, wanted follow-ups with no
+  tracking mechanism (bestiary) or same-file read (KeptAnimals is
+  per-chunk) to build them from yet — see the Companions bullet above.
