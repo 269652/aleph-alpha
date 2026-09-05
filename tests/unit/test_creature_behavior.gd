@@ -503,3 +503,24 @@ func test_an_aggressive_strong_herbivore_stands_and_fights_a_predator():
 		"temperament": "aggressive", "health_fraction": 1.0, "stimuli": [_wolf(Vector2(10, 0))],
 	}))
 	assert_eq(decision.intent, "attack")
+
+
+## What the animal NOTICES on the fear channels, fight or flee alike -- the
+## marker keeps this as its threat list (lift the head from grazing, widen
+## the flee-release radius) instead of deciding who counts while scanning.
+func test_threats_lists_what_the_animal_notices_on_the_fear_channels():
+	var wolf := _wolf(Vector2(10, 0))
+	var person := _person(Vector2(20, 0))
+	var sheep := _sheep(Vector2(30, 0))
+	var calm := behavior.threats(_context({"stimuli": [wolf, person, sheep]}))
+	assert_eq(calm.size(), 2, "a herbivore notices the wolf and the person, not the sheep")
+	var fighter := behavior.threats(_context({
+		"temperament": "aggressive", "health_fraction": 1.0, "stimuli": [wolf, person, sheep],
+	}))
+	assert_eq(fighter.size(), 2, "a fighter still notices what it would fight")
+	var hunter := behavior.threats(_context({"is_predator": true, "stimuli": [wolf, person, sheep]}))
+	assert_eq(hunter.size(), 1, "a predator notices only the person")
+	assert_eq(hunter[0]["node"], "player")
+	var tame := behavior.threats(_context({"fears_players": false, "stimuli": [wolf, person]}))
+	assert_eq(tame.size(), 1, "a tamed animal still notices the wolf, and no longer the person")
+	assert_eq(tame[0]["node"], "wolf")

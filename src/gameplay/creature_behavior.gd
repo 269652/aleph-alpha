@@ -87,6 +87,19 @@ func decide(context: Dictionary) -> Dictionary:
 	)
 
 
+## Everything this individual NOTICES on the fear channels, whether it would
+## fight or flee it -- a predator for a herbivore, a person for anything
+## that still fears people. CreatureMarker keeps the result as its threat
+## list: an animal lifts its head from grazing for a wolf it would fight
+## just as for one it would flee, and keeps the wider flee-release radius
+## either way. This is the verdict that used to live in the marker's own
+## scan ("predators are threats to herbivores; players to everyone").
+func threats(context: Dictionary) -> Array:
+	return BehaviorKernel.perceived(
+		_receptors(context), [Ethogram.PREDATOR, Ethogram.PLAYER], _stimuli(context)
+	)
+
+
 ## This individual's expressed receptors, with the overrides that are species
 ## and state facts reaching decide() only as context flags today (ethogram.md
 ## §3): who stands and fights, who eats prey, who is not threatened by other
