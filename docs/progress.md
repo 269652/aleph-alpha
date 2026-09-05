@@ -10638,7 +10638,9 @@ any flyer in range was always caught, immediately becoming a
 `jarred_insect`/`caged_songbird` curiosity item, with no probability and no
 intermediate "loaded, undecided" state at all.
 
-- ✅ **The Capture DSL itself** (large) — `capture_parser.gd` /
+- ✅ **The Capture DSL itself** (large) — ~~`capture_parser.gd`~~ (retired
+  2026-09-05 in favour of the standard model's device grammar — see the
+  addendum below) /
   `capture_atom_catalog.gd` / `capture_physics.gd` / `capture_executor.gd` /
   `capture_atom_effects.gd` / `capture_book.gd`, mirroring the magic DSL's
   own module split (parser → atom catalog → physics → executor → effects →
@@ -10705,6 +10707,63 @@ intermediate "loaded, undecided" state at all.
 - ⬜ **Release does not respawn a live creature** — it only empties the net
   with a message. Symmetrical and arguably more honest physically, but not
   asked for and not built.
+
+#### Addendum (2026-09-05): the net is a device with a real mesh
+
+Reported: "*refactor the butterfly net to express that it catches small
+animals like butterflies, fish, small birds; but not e.g. bees / flies
+because the net is not tight enough — it should also encode the capture
+action which confines the subject to the net.*"
+
+Investigation: `_throw_net` scanned the whole ambient-flyer flock with no
+species check at all, so a bee or a fly — both real `AmbientFlyerMarker`s,
+the fly spawned by the carrion loop — was netted exactly like a monarch;
+fish were never targets; and "what the net catches" lived in a
+`target.tier == "flyer"` guard, a category rather than a physical fact.
+The standard model had just landed, so the honest fix was to make the net
+a device with a real bag and let its mesh decide.
+
+- ✅ **Mesh physics** (medium) — `body_dimensions.gd` (three sourced body
+  extents per species for the flyer and fish rosters, the length pinned to
+  `wingbeat_bounce.gd`'s), `CapturePhysics.slips_through` / `fits_mouth` /
+  `mesh_verdict`: a body slips through when its middle extent is under the
+  mesh, does not fit when its largest exceeds the mouth; monotone in both
+  and pinned so. Against the standard net (10 mm mesh, 30 cm mouth): bee
+  and fly slip through, butterflies and small birds are held, goldfish and
+  bluegill are netted, trout and koi are too big.
+- ✅ **The net is device text** (medium) — `capture_book.gd` authors it in
+  `concept/standard_model.md`'s grammar: a wooden handle, an iron hoop, a
+  fibre bag with `aperture_mm: 10` (the rip saw's `tooth_pitch_mm`
+  precedent) and `width_cm: 30`, compiled to the real part graph (under
+  half a kilogram) and its part facts, validated at load. `capture_parser.
+  gd` and the `capture` block kind are retired: the device grammar is a
+  strict superset.
+- ✅ **The capture act names where** (small) — atoms `mesh_holds(mesh:
+  bag)` (a check that fails WITH a reason), `catch_roll`, `confine(in:
+  bag)`, `free(from: bag)`, `move_captive`; `hold_captive` /
+  `release_captive` retired and pinned so. `CaptureExecutor.validate` is
+  the static constraint layer — a `confine(in: X)` must follow a
+  `mesh_holds(mesh: X)` in its own pipeline, every named part must be
+  declared, every atom known and complete — so no shipped text can
+  confine what its mesh was not shown to hold.
+- ✅ **In play** (small) — the catch context carries the subject's extents
+  and the net's facts; a mesh refusal shows its reason ("The bee slips
+  through the 10 mm mesh."), a lost roll stays "Missed!"; a fish in the
+  shallows is a net target through the kingfisher's nearest-fish lookup and
+  leaves the water through the rod's own `catch_nearest_fish`, so its
+  pond's population records the harvest; a netted fish loads the net and
+  never bonds. 8 new scoped `test_player.gd` tests, the 15 existing net /
+  release / bottle tests re-run green.
+- ⬜ **No mass or tear rule** — a koi is refused for length, not weight;
+  the honest version is the subject's mass against `PartGraph.
+  part_load_capacity(bag)`, and no fish carries a mass yet.
+- ⬜ **Net variants have no recipes** — a 1 mm insect net that holds the
+  bee and a 40 cm landing net that takes the trout are each one number
+  away in text (both pinned in `test_capture_executor.gd`), but nothing
+  lets a player craft one.
+- ⬜ **The kingfisher** is measured (held by the standard net) but is a
+  `PiscivoreBirdMarker`, not an ambient flyer, so `_throw_net` never sees
+  it.
 
 ### Standard Model (`concept/standard_model.md`, new this pass)
 
@@ -10776,7 +10835,11 @@ seen failing before its module existed.
   the element chain: every one-port law names a power domain, every
   two-port its in/out, every parameter authored or derived from a named part
   or fluid and never both, consecutive ports along the loop checked for
-  domain agreement with a refusal naming both. `device_executor.gd` turns
+  domain agreement with a refusal naming both; since 2026-09-05 every
+  part is also exposed as **facts** (material, geometry, role, every
+  declared dimension, mass, span) so a rule on a loop-less device — the
+  butterfly net, `concept/capture_dsl.md` — can read `bag.aperture_mm`.
+  `device_executor.gd` turns
   a solved loop into a context keyed by element id (store levels and
   device-level `@` facts included) and fires the device's rules over it.
 - ✅ **Two worked examples, solved end to end** (`device_book.gd`, a fixed
