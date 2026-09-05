@@ -40,6 +40,16 @@ func test_a_known_items_real_stats_render():
 	assert_true(html.contains("1.2"))  # real mass_kg
 
 
+func test_the_description_uses_the_grammatically_correct_article_before_a_vowel():
+	# "armor" starts with a vowel sound -- "A armor item" reads as a typo,
+	# and iron_helm has no modeled material to fall back to a different
+	# sentence shape, so this is the one authored item that actually
+	# exercises the "a" vs "an" branch with real data.
+	var html := CompanionItemDetailView.render("iron_helm", catalog, recipe_book)
+	assert_true(html.contains("An armor"))
+	assert_false(html.contains("A armor"))
+
+
 func test_an_item_with_a_real_recipe_shows_what_it_is_crafted_from():
 	# iron_helm's own recipe: 2x iron_ingot, nothing else.
 	var html := CompanionItemDetailView.render("iron_helm", catalog, recipe_book)

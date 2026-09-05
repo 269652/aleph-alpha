@@ -55,10 +55,21 @@ static func render(item_id: String, catalog: ItemCatalog, recipe_book: CraftingR
 static func _description(item_id: String, item, catalog: ItemCatalog) -> String:
 	var material := catalog.material_of(item_id)
 	if material == "":
-		return "A %s item." % item.kind
+		return "%s %s item." % [_article(item.kind), item.kind]
 	var descriptors := MaterialProperties.new().descriptors_for(material)
 	var adjective := (", ".join(descriptors) + " ") if not descriptors.is_empty() else ""
-	return "A %s%s made of %s." % [adjective, item.kind, material]
+	return "%s %s%s made of %s." % [_article(adjective if adjective != "" else item.kind), adjective, item.kind, material]
+
+
+## "A weapon"/"an armor" -- every kind value in item_catalog.gd's _ITEMS
+## table is a plain English noun, so a vowel-sound check on the first
+## letter is the whole rule (no silent-h/eu-sounds-like-"you" exceptions
+## exist among "material"/"food"/"weapon"/"tool"/"placeable"/"armor"/
+## "crafted"). Checked against real data by
+## test_the_description_uses_the_grammatically_correct_article_before_a_vowel
+## ("armor" is the one authored kind that actually starts with a vowel).
+static func _article(word: String) -> String:
+	return "An" if "aeiouAEIOU".contains(word.substr(0, 1)) else "A"
 
 
 static func _crafted_from(item_id: String, catalog: ItemCatalog, recipe_book: CraftingRecipeBook) -> String:

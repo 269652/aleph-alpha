@@ -7,16 +7,23 @@ window, and everything it can *do* (not just show) is deliberately narrow.
 
 ## Status
 
-Tier 1 is built for three of its four originally-envisioned views: Character
-Sheet, Item Catalog, and Companions (narrower than "Bestiary" — see below),
-each a pure `RefCounted` renderer with its own GUT test file
+Tier 1 is built for three of its four originally-envisioned views (plus a
+per-item detail page beyond the original sketch): Character Sheet, Item
+Catalog (now searchable and paginated) with a linked-through Item Detail
+page per id, and Companions (narrower than "Bestiary" — see below), each a
+pure `RefCounted` renderer with its own GUT test file
 (`src/companion_server/`, `tests/unit/test_companion_*.gd`), served over a
-hand-rolled HTTP/1.1 GET-only transport (`companion_http_request.gd`/
-`companion_http_response.gd`/`companion_router.gd`) by a `CompanionServer`
-autoload (`src/companion_server/companion_server.gd`) bound to
-`127.0.0.1:8731`. `tools/probe_companion_server.gd` runs it standalone for
-manual inspection. Settlement Dashboard is deferred — see its own bullet
-below for why. All of Tier 2 remains unbuilt, as originally written.
+hand-rolled HTTP/1.1 GET-only transport (`companion_http_request.gd`, which
+now also parses the query string for search/pagination/
+`companion_http_response.gd`/`companion_router.gd`, which now also extracts
+a path parameter for `/items/<id>`) by a `CompanionServer` autoload
+(`src/companion_server/companion_server.gd`) bound to `127.0.0.1:8731`.
+`tools/probe_companion_server.gd` keeps a bare process alive for manual
+inspection — it does NOT instantiate `CompanionServer` itself; that
+autoload is instantiated by Godot's own autoload system for any process
+boot, this bare script included. Settlement Dashboard is deferred — see its
+own bullet below for why. All of Tier 2 remains unbuilt, as originally
+written.
 
 Every Tier 1 route reads a freshly-loaded `PlayerSave.load_data()`
 (`src/gameplay/player_save.gd`, the same `user://player_save.bin` convention
@@ -91,7 +98,27 @@ read-only:
   content-addressing crafted items, not visibility), so showing the full
   authored reference, annotated, is the option that invents no new
   persisted state — pillar 4 applied literally, rather than building a
-  "seen items" set nothing else needs. `companion_item_catalog_view.gd`.
+  "seen items" set nothing else needs. Searchable by name/id
+  (case-insensitive) and paginated (`ITEMS_PER_PAGE := 20`, a pinned
+  constant) — search narrows the list, it never replaces the full
+  reference. `companion_item_catalog_view.gd`,
+  `companion_pagination.gd`, `companion_html.gd`.
+- ✅ **Item detail** (`/items/<id>`, a "PDP") — every catalog row's name
+  links here. What the item is (a description synthesized from real
+  fields — kind, mass, and `MaterialProperties.descriptors_for()` where a
+  material is modeled — never a new lore-text field), how it's itself
+  crafted (`CraftingRecipeBook.recipe_for_output()` + `recipe_inputs()`,
+  each ingredient linked to its own detail page), and every recipe that
+  uses it as an ingredient (scanned across the whole book — no reverse
+  lookup exists in `crafting_recipe_book.gd` itself, deliberately not
+  added there since it's a fixed data table, not a query engine).
+  Crafted-from/Used-in only ever consult `CraftingRecipeBook`, which knows
+  nothing about a save's own `asm_`-prefixed crafted items — rendering a
+  crafted item's real part/joint assembly graph
+  (`CraftedItemRegistry.get_assembly`) is a real, larger follow-up, not a
+  same-shape addition. Does not show "have" status this pass (every other
+  view foregrounds ownership; this one is a reference page) — a deliberate
+  scope choice, not an oversight. `companion_item_detail_view.gd`.
 - ✅ **Companions** (`/companions`), *not* "Bestiary" — deliberately renamed
   on implementation. A whole-repo search found no persisted
   creature-encounter log anywhere, built or spec'd (`docs/concept/pets.md`,

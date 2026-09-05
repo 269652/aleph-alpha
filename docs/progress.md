@@ -10317,6 +10317,27 @@ convention. 37 GUT tests across the six pure modules, all green; smoke-
 tested against a real `player_save.bin` (real class/level/equipment/hotbar
 rendered correctly across all three routes, unknown paths correctly 404).
 
+✅ **Item Catalog search/pagination + per-item detail pages ("PDP").**
+`/items` is now searchable by name/id (case-insensitive, `.findn()`) and
+paginated (`ITEMS_PER_PAGE := 20`); each row links to a new `/items/<id>`
+page showing a synthesized description (weaving in
+`MaterialProperties.descriptors_for()` where a material is modeled), how
+the item is itself crafted (`CraftingRecipeBook.recipe_for_output()`), and
+every recipe that uses it as an ingredient (scanned across the whole
+book). Crafted-from/Used-in only ever consult `CraftingRecipeBook`, which
+has no idea a save's own `asm_`-prefixed crafted items exist — rendering
+one's real part/joint assembly graph (`CraftedItemRegistry.get_assembly`)
+is a real, larger follow-up, not a same-shape addition. New pure modules
+`companion_pagination.gd` (generic, floors `total_pages` at 1 for a
+zero-match search) and `companion_html.gd` (a named wrapper around
+Godot's built-in `String.xml_escape(true)`). `companion_router.gd` now
+returns `{route, item_id}` instead of a bare string;
+`companion_http_request.gd` now retains and parses the query string
+(form-GET `+`-means-space handled explicitly, since `uri_decode()` alone
+doesn't). Item detail deliberately omits "have" status this pass (every
+other view foregrounds ownership; this one is a reference page). 84 GUT
+tests across the companion-server modules, all green.
+
 ⬜ **Settlement dashboard.** Blocked on a real design decision, not a
 missing view: the live `VillageMarket`/`NpcEconomy` purse (what a player
 actually sees) is never persisted (recreated empty on every chunk load),
