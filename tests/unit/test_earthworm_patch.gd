@@ -550,3 +550,105 @@ func test_emergence_rises_with_surfacing():
 func test_a_worm_below_the_threshold_shows_nothing():
 	assert_eq(EarthwormPatch.emergence_for(0.0), 0.0)
 	assert_eq(EarthwormPatch.emergence_for(EarthwormPatch.SURFACED_THRESHOLD - 0.01), 0.0)
+
+
+# -- illustrated worm sprite: corpse state (see docs/concept/soil_fauna.md's
+# "Illustrated worm sprite: crawl, emerge, retreat, die" -> "A corpse is
+# new ground") ---------------------------------------------------------
+
+## A crushed worm becomes a corpse -- distinct from simply having been
+## eaten, so the sprite layer can tell "play the die animation and hold
+## it" apart from "just disappear", which take() still does.
+func test_crushing_a_worm_makes_it_a_corpse():
+	var patch := _patch()
+	patch.set_conditions(1.0, 1.0)
+	_settle(patch)
+	var cell: Vector2i = patch.worm_cells()[0]
+	assert_false(patch.is_corpse(cell), "nothing has died yet")
+	patch.crush(cell, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	assert_true(patch.is_corpse(cell), "a crushed worm should leave a corpse")
+
+
+## Eating a worm must NOT leave a corpse -- only crushing does. take() and
+## crush() reduce the model to the identical surfacing/recovery state;
+## this is the one bit that actually distinguishes them afterward.
+func test_eating_a_worm_leaves_no_corpse():
+	var patch := _patch()
+	patch.set_conditions(1.0, 1.0)
+	_settle(patch)
+	var cell: Vector2i = patch.worm_cells()[0]
+	patch.take(cell)
+	assert_false(patch.is_corpse(cell), "an eaten worm is not a corpse")
+
+
+## A corpse rides the identical RECOVERY_SECONDS clock as ordinary
+## recovery -- it clears the instant a new worm could occupy the burrow
+## again, not on a second, independent timer.
+func test_a_corpse_clears_when_its_burrow_recovers():
+	var patch := _patch()
+	patch.set_conditions(1.0, 1.0)
+	_settle(patch)
+	var cell: Vector2i = patch.worm_cells()[0]
+	patch.crush(cell, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	_settle(patch, EarthwormPatch.RECOVERY_SECONDS * 2.0)
+	assert_false(patch.is_corpse(cell), "the corpse should be long gone by the time a new worm surfaces")
+
+
+## corpse_age_seconds starts at zero right when a worm is crushed, and
+## rises as time passes -- the signal the sprite layer indexes the die
+## row's 8 frames by.
+func test_corpse_age_rises_from_zero():
+	var patch := _patch()
+	patch.set_conditions(1.0, 1.0)
+	_settle(patch)
+	var cell: Vector2i = patch.worm_cells()[0]
+	patch.crush(cell, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	assert_almost_eq(patch.corpse_age_seconds(cell), 0.0, 0.01)
+	patch.advance(5.0)
+	assert_almost_eq(patch.corpse_age_seconds(cell), 5.0, 0.01)
+
+
+## corpse_age_seconds is meaningless for a cell that never died -- zero
+## rather than a stale/undefined value, the same "harmless default" shape
+## surfacing_at/reluctance_at already use for a cell nobody has asked
+## about yet.
+func test_corpse_age_is_zero_for_a_cell_that_never_died():
+	var patch := _patch()
+	var cell: Vector2i = patch.worm_cells()[0]
+	assert_eq(patch.corpse_age_seconds(cell), 0.0)
+
+
+# -- illustrated worm sprite: direction (see docs/concept/soil_fauna.md's
+# "Direction, not just amount") ------------------------------------------
+
+## Before anything has ever advanced, a fresh burrow defaults to "not
+## rising" -- a harmless default, the same shape every other per-cell
+## query in this file already uses for a cell nobody has asked about yet.
+func test_is_rising_defaults_to_false_before_any_advance():
+	var patch := _patch()
+	var cell: Vector2i = patch.worm_cells()[0]
+	assert_false(patch.is_rising(cell))
+
+
+## While the environment is actively pushing a worm up, is_rising is true.
+func test_is_rising_while_surfacing_climbs():
+	var patch := _patch()
+	patch.set_conditions(1.0, 1.0)
+	var cell: Vector2i = patch.worm_cells()[0]
+	patch.advance(0.1)
+	assert_true(patch.is_rising(cell), "full drive should be pulling this worm up")
+
+
+## The same worm, once conditions reverse, is falling instead -- advance()
+## already computes exactly this comparison internally (target vs level)
+## to decide which way to move surfacing; this is that same decision,
+## recorded rather than thrown away.
+func test_is_rising_turns_false_once_conditions_reverse():
+	var patch := _patch()
+	patch.set_conditions(1.0, 1.0)
+	var cell: Vector2i = patch.worm_cells()[0]
+	patch.advance(0.1)
+	assert_true(patch.is_rising(cell), "climbing toward full drive")
+	patch.set_conditions(0.0, 1.0)
+	patch.advance(0.1)
+	assert_false(patch.is_rising(cell), "dry conditions should now be pulling it back down")

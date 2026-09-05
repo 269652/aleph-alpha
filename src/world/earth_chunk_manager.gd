@@ -69,7 +69,7 @@ const ProceduralScrubSprite = preload("res://src/rendering/procedural_scrub_spri
 const TundraLichen = preload("res://src/world/tundra_lichen.gd")
 const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sprite.gd")
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
-const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
+const IllustratedWormSprite = preload("res://src/rendering/illustrated_worm_sprite.gd")
 const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
 const ProceduralAquaticVegetationSprite = preload("res://src/rendering/procedural_aquatic_vegetation_sprite.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
@@ -644,7 +644,19 @@ var _lichen_refresh_accumulator := 0.0
 ## cell (see step_worms/_sync_worm_sprites, docs/concept/soil_fauna.md).
 var _worm_patches: Dictionary = {}
 var _worm_sprites: Dictionary = {}
-var _worm_sprite_generator := ProceduralWormSprite.new()
+var _worm_sprite_generator := IllustratedWormSprite.new()
+
+## How often the "crawl" cycle and the "die" squash advance a frame -- see
+## _worm_texture_for. Pinned separately (not reused from WORM_REFRESH_
+## INTERVAL, which throttles sprite CREATION/REMOVAL on a weather
+## timescale, an unrelated concern): a worm's own body should visibly
+## step through its walk cycle at an ordinary creature-animation pace,
+## not once every 5 real seconds.
+const WORM_CRAWL_FRAME_SECONDS := 0.2
+## Chosen so the whole 8-frame squash plays out in 1.6s -- a quick,
+## legible reaction, comfortably shorter than the RECOVERY_SECONDS (45s)
+## window the corpse then lies there afterward holding the last frame.
+const WORM_DEATH_FRAME_SECONDS := 0.2
 ## Vector2i chunk_coord -> AquaticVegetation, and the Sprite2D per real
 ## vegetation cell (see step_aquatic_vegetation/_sync_aquatic_vegetation_
 ## sprites, docs/concept/aquatic_foraging.md). Only chunks that actually
@@ -7341,56 +7353,76 @@ func _dispatch_ant_forager(
 	_active_ant_foragers[global_tile] = active
 
 
-## Inches every surfaced worm along, every frame. A worm at the surface is
-## not a decal -- it crawls, slowly, within its own cell (see
-## EarthwormPatch.crawl_offset for why the CELL never changes). Cheap by
-## construction: one sine pair and one assignment per visible worm, no
-## allocation and no queries.
+## Inches every surfaced worm along, every frame, and keeps its animation
+## current -- a worm at the surface is not a decal, it crawls slowly
+## within its own cell (see EarthwormPatch.crawl_offset for why the CELL
+## never changes) and its own BODY plays one of four real animations (see
+## _worm_texture_for, docs/concept/soil_fauna.md "Illustrated worm
+## sprite"). Cheap by construction: one sine pair, one texture lookup and
+## one assignment per visible worm, no allocation and no queries.
+##
+## A corpse (see EarthwormPatch.is_corpse) does not crawl -- it lies
+## exactly where it died, so it skips the positional wobble entirely and
+## only its texture (the die row, advancing then holding) is kept current.
 func _crawl_worm_sprites() -> void:
 	for chunk_coord in _worm_sprites:
 		var origin: Vector2i = chunk_coord * CHUNK_SIZE
 		var sprites: Dictionary = _worm_sprites[chunk_coord]
+		var patch: EarthwormPatch = _worm_patches.get(chunk_coord)
+		if patch == null:
+			continue
 		for cell in sprites:
-			var base := Vector2(
-				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
-				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
-			)
-			sprites[cell].position = base + EarthwormPatch.crawl_offset(
-				hash("%d_%d_crawl" % [origin.x + cell.x, origin.y + cell.y]),
-				_world_age_seconds
-			)
-			# ...and how much of it is above ground. A worm crawls out of the
-			# earth and back down it rather than blinking into existence (see
-			# EarthwormPatch "Crawling out, and back down").
-			var patch: EarthwormPatch = _worm_patches.get(chunk_coord)
-			if patch != null:
-				_show_worm_emerged(
-					sprites[cell], EarthwormPatch.emergence_for(patch.surfacing_at(cell))
+			if not patch.is_corpse(cell):
+				var base := Vector2(
+					(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
+					(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
 				)
+				sprites[cell].position = base + EarthwormPatch.crawl_offset(
+					hash("%d_%d_crawl" % [origin.x + cell.x, origin.y + cell.y]),
+					_world_age_seconds
+				)
+			sprites[cell].texture = _worm_texture_for(patch, cell, origin)
 
 
-## Shows `emerged` (0..1) of a worm, as if it were crawling out of its burrow.
-##
-## Revealed along the worm's own length rather than faded in: a worm coming up
-## is a nose, then a body, then a tail, and fading would just be a ghost
-## appearing. The sprite's region grows from the burrow end, and the sprite is
-## shifted by half of what is still hidden so the emerged part stays PUT --
-## without that the worm slides sideways as it comes up, which reads as it
-## being dragged rather than crawling.
-func _show_worm_emerged(sprite: Sprite2D, emerged: float) -> void:
-	var full := float(ProceduralWormSprite.SIZE.x)
-	var shown := maxf(1.0, full * clampf(emerged, 0.0, 1.0))
-	sprite.region_enabled = true
-	sprite.region_rect = Rect2(0.0, 0.0, shown, float(ProceduralWormSprite.SIZE.y))
-	sprite.offset.x = -(full - shown) * 0.5
-	sprite.offset.y = -float(ProceduralWormSprite.SIZE.y) * 0.5
+## Which of the four illustrated animations -- and which frame within it --
+## a worm's sprite should currently show. See "Illustrated worm sprite:
+## crawl, emerge, retreat, die" in docs/concept/soil_fauna.md for the full
+## state-machine spec this implements.
+func _worm_texture_for(patch: EarthwormPatch, cell: Vector2i, chunk_origin: Vector2i) -> ImageTexture:
+	if patch.is_corpse(cell):
+		var frames := _worm_sprite_generator.generate_textures("die")
+		var index := int(patch.corpse_age_seconds(cell) / WORM_DEATH_FRAME_SECONDS)
+		return frames[clampi(index, 0, frames.size() - 1)]
+
+	var emergence := EarthwormPatch.emergence_for(patch.surfacing_at(cell))
+	if emergence >= 1.0:
+		var frames := _worm_sprite_generator.generate_textures("crawl")
+		# Per-worm phase so a lawn full of worms doesn't crawl in lockstep --
+		# the identical hash seed crawl_offset's own wobble already uses for
+		# this cell, reused rather than a second one.
+		var phase: int = hash("%d_%d_crawl" % [chunk_origin.x + cell.x, chunk_origin.y + cell.y])
+		var index := int(_world_age_seconds / WORM_CRAWL_FRAME_SECONDS) + phase
+		return frames[posmod(index, frames.size())]
+
+	if patch.is_rising(cell):
+		var frames := _worm_sprite_generator.generate_textures("emerge")
+		return frames[clampi(int(emergence * frames.size()), 0, frames.size() - 1)]
+
+	# Falling: retreat's own art is drawn in the "going in" direction (frame
+	# 0 fully out, frame 7 nearly gone), the opposite mapping from emerge --
+	# see "Direction, not just amount" in docs/concept/soil_fauna.md.
+	var frames := _worm_sprite_generator.generate_textures("retreat")
+	return frames[clampi(int((1.0 - emergence) * frames.size()), 0, frames.size() - 1)]
 
 
-## Adds/removes a Sprite2D per SURFACED worm so what is rendered matches the
-## chunk's EarthwormPatch. Unlike grass there is no growth animation -- a worm
-## is either up or it isn't -- so this only adds newly-surfaced ones and frees
-## the ones that have gone back down or been eaten. Same diff-against-the-sim
-## shape as _sync_flower_sprites.
+## Adds/removes a Sprite2D per SURFACED-or-CORPSED worm so what is rendered
+## matches the chunk's EarthwormPatch. A corpse's sprite survives the diff
+## that would otherwise free it the instant is_surfaced goes false --
+## crush_worm_at zeroes surfacing on the very call that also forces this
+## sync, so without the is_corpse check a crushed worm's sprite would be
+## deleted before the die animation ever had a chance to show a single
+## frame (see "A corpse is new ground" in docs/concept/soil_fauna.md).
+## Otherwise the same diff-against-the-sim shape as _sync_flower_sprites.
 func _sync_worm_sprites(chunk_coord: Vector2i) -> void:
 	if not _decorates(chunk_coord):
 		_drop_decoration(_worm_sprites, chunk_coord)
@@ -7400,29 +7432,34 @@ func _sync_worm_sprites(chunk_coord: Vector2i) -> void:
 	if patch == null:
 		return
 
+	var origin := chunk_coord * CHUNK_SIZE
 	for cell in sprites.keys().duplicate():
-		if not patch.is_surfaced(cell):
+		if not patch.is_surfaced(cell) and not patch.is_corpse(cell):
 			sprites[cell].free()
 			sprites.erase(cell)
+		elif patch.is_corpse(cell):
+			# Refreshed HERE, not left for the next _crawl_worm_sprites
+			# frame: crush_worm_at forces this exact sync so the player
+			# never sees a stale (still-alive-looking) worm for even one
+			# frame after the step that killed it, the same reasoning
+			# take_worm_at's own immediate re-sync already established --
+			# a corpse that keeps the frame it had the instant BEFORE it
+			# died would undermine that by one frame every time.
+			sprites[cell].texture = _worm_texture_for(patch, cell, origin)
 
-	var origin := chunk_coord * CHUNK_SIZE
 	for cell in patch.worm_cells():
 		if not patch.is_surfaced(cell) or sprites.has(cell):
 			continue
 		var sprite := Sprite2D.new()
-		sprite.texture = _worm_sprite_generator.generate_texture(
-			hash("%d_%d_worm" % [origin.x + cell.x, origin.y + cell.y])
-		)
+		sprite.texture = _worm_texture_for(patch, cell, origin)
 		# World scale from a world-space constant, never re-derived from the
 		# art canvas -- raising SIZE for detail must not change how big a worm
 		# looks (a trap this project has hit twice).
-		sprite.scale = Vector2.ONE * ProceduralWormSprite.world_scale()
+		sprite.scale = Vector2.ONE * _worm_sprite_generator.world_scale()
 		# Anchored at the worm's own footprint like flowers are, rather than
 		# sorting from its middle (not for Y-sorting -- ground decor never
-		# Y-sorts, see _ground_decor_parent's own doc comment); and starting
-		# at however far out of the ground it actually is, so a worm that has
-		# just broken the surface shows a nose rather than a body.
-		_show_worm_emerged(sprite, EarthwormPatch.emergence_for(patch.surfacing_at(cell)))
+		# Y-sorts, see _ground_decor_parent's own doc comment).
+		sprite.offset.y = -float(IllustratedWormSprite.CANVAS_SIZE.y) * 0.5
 		sprite.position = Vector2(
 			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
