@@ -137,7 +137,7 @@ func test_marker_scale_keeps_every_species_a_normal_creature_size():
 		# bird while catching the reported bug's ~6-9x-too-big regime by a
 		# wide margin.
 		assert_between(
-			world_width, 3.0, 20.0,
+			world_width, 1.5, 10.0,
 			"%s renders %.1f world px wide -- gigantic (or invisible) again" % [species, world_width]
 		)
 

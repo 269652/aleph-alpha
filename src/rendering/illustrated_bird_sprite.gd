@@ -124,14 +124,19 @@ const _SHEETS := {
 }
 
 ## The on-screen world width (px) a sparrow -- the FLYER_WORLD_SCALE
-## reference species, ratio 1.0 -- read as under ProceduralBirdSprite,
-## before this class existed: measured content width (24px of its 32px
-## canvas) times the renderers' shared marker.scale chain (ArtResolution.
-## SPRITE_SCALE * FishRenderer.FISH_WORLD_SCALE * FLYER_WORLD_SCALE). Kept
-## as this class's own calibration anchor -- see marker_scale -- rather
-## than switching the game's whole existing bird-to-world size balance
-## just because the ART got better.
-const BASE_WORLD_WIDTH := 6.6
+## reference species, ratio 1.0 -- should read at. Originally calibrated to
+## exactly reproduce ProceduralBirdSprite's own pre-existing on-screen size
+## (6.6), matching this class's real content back to whatever the flat
+## procedural-tuned scale used to draw. Reported live, in the actual
+## running game, after that first calibration shipped: "the robin should
+## be half as big and all others halved as well" -- so the genuinely
+## correct in-game size is HALF what the old procedural convention drew,
+## not equal to it. Halved directly on that report rather than re-deriving
+## a theory for why 6.6 read big: the player looking at the actual game is
+## the real measurement here, the same way every other tuned constant in
+## this codebase is supposed to be checked against reality rather than
+## eyeballed.
+const BASE_WORLD_WIDTH := 3.3
 
 ## Per-species target world width (px), TARGET = BASE_WORLD_WIDTH *
 ## AmbientFlyerRenderer.FLYER_WORLD_SCALE[species] -- duplicated as literal
