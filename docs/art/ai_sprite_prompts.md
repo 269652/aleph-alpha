@@ -1454,3 +1454,78 @@ every other pending illustrated surface in this doc gives.
   section 6's own note gives for Krampus's attack sheets, since a small
   target-centered burst sits very differently on its canvas than a full
   character does.
+
+---
+
+## 12. Wild mushrooms — one 5x5 sheet per species (2026-09-05)
+
+Real-illustrated variant art for `MushroomMarker`'s IDENTIFIED look (see
+[mushrooms.md](../concept/mushrooms.md), `IllustratedMushroomSprite`) —
+section 10's exact "N interchangeable instances of the same thing, seeded
+per placement" shape, not section 6/7's animation cycles: every cell is
+the SAME species at the SAME (mature, fruiting) stage, just a different
+real individual specimen, the same way each placed-structure cell is the
+same building with different secondary detail. Unlike every species art
+elsewhere in this doc, this sheet is deliberately never shown to a player
+who hasn't earned it yet — see that concept doc's "Identification"
+section for the shared-unidentified-look gate this sits behind.
+
+**Prefix every prompt below with the shared style preamble from the top
+of this doc**, plus this variant-grid addendum (identical shape to
+section 10's own, reworded for a standing mushroom instead of a
+building):
+
+> A pixel-art sprite sheet of 25 individual [SPECIES NAME] mushrooms, laid
+> out as a strict 5x5 grid, each cell separated by a thin 1–2px near-white
+> divider line, generous empty magenta padding around each mushroom so
+> nothing touches a divider or the canvas edge. Every mushroom is a single
+> standing specimen, viewed top-down/near-top-down, recognizably the SAME
+> real species — same cap shape, same colouring, same markings — but a
+> genuinely different individual: a different cap angle, tilt, and size,
+> and a different arrangement of its own natural markings, never a
+> copy-pasted repeat of another cell in the sheet. A pale stem is visible
+> beneath each cap's overhang. Rows progress from a younger, more tightly
+> domed specimen at the top to a larger, fully flattened mature cap at the
+> bottom, so the sheet reads as a gradient of real growth variety as well
+> as 25 individual mushrooms. [SPECIES DESCRIPTION]. [ingestion format]
+
+If 5×5 doesn't hold cleanly the way it did for ore/structures, drop to
+section 3's 3×3 fallback rather than forcing it — there's no a-priori
+reason a single mushroom cap (an isolated, padded, roughly round subject,
+much like an ore boulder) would hold worse than either of those two did.
+
+### 12a. Fly Agaric (*Amanita muscaria*) — the roster's first species
+
+`[SPECIES NAME]`: "FLY AGARIC"; `[SPECIES DESCRIPTION]`:
+
+> A vivid scarlet-to-orange-red domed cap scattered with irregular
+> off-white/cream warty patches (real Fly Agaric's veil remnants — patchy
+> and unevenly spaced, never a uniform polka-dot grid, and some patches
+> may have washed away entirely on individual specimens, especially the
+> more mature ones). White gills just visible at the cap's outer edge on
+> the more open specimens. A plain white stem, slightly bulbous where it
+> meets the ground.
+
+### Still needed (not written yet)
+
+12b–12e: Death Cap, Chanterelle, Porcini, Puffball — same template above,
+a real per-species `[SPECIES DESCRIPTION]` fill-in each (see
+[mushrooms.md](../concept/mushrooms.md)'s Species roster table for each
+one's real colouring/shape as a starting point).
+
+### File naming + wiring, once generated
+
+```
+assets/sprites/mushrooms/fly_agaric.png
+```
+
+Unlike section 10's placed structures, the loader already exists and is
+tested: `IllustratedMushroomSprite`
+(`src/rendering/illustrated_mushroom_sprite.gd`) ships today with an
+empty `_SHEETS` table specifically so a real sheet drops in with ZERO
+further code changes — register `"fly_agaric": {"path":
+"res://assets/sprites/mushrooms/fly_agaric.png", "row_bands": [...]}`
+(measure the 5 row bands' Y-ranges from the real returned image, the same
+way every other `row_bands` entry in this codebase is measured — see that
+class's own doc comment), and `has_variants("fly_agaric")` flips true
+automatically.
