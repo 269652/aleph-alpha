@@ -8018,8 +8018,15 @@ germany" and a 4-tile minimum width).
   with a constant speed in the map). Pinned by `test_river_flow_shader.gd`'s
   `test_the_drift_translations_are_bounded_by_the_noise_period`,
   `test_a_long_session_does_not_shred_the_field_on_a_bend` and
-  `test_the_drift_is_one_shared_speed_for_every_moving_reach`. Writeup:
-  `concept/rivers.md`'s "Bounded drift: the far-time shredding" section.
+  `test_the_drift_is_one_shared_speed_for_every_moving_reach`. Independently
+  re-confirmed on the real GPU after this merged to `main`, since neither
+  fixing commit had left a reusable probe behind: `tools/probe_eddy_drift_
+  shredding.gd` renders the real shared material over a synthetic bend with
+  `TIME` pinned by literal substitution (fixed shader 0.0098 -> 0.0075
+  isolated-speck fraction fresh vs. 2000 s; a copy patched back to the exact
+  pre-`830f4ba` eddy formula 0.0099 -> 0.1099, proving the metric would have
+  caught it). Writeup: `concept/rivers.md`'s "Bounded drift: the far-time
+  shredding" section.
 - **Hillshade could paint ordinary ground as a near-opaque black cliff**
   (medium) — ✅ Done — reported live: "distinctly odd, near-black... roughly
   diamond/blob-shaped patches lying flat on grass near a riverbank" (Spring,
