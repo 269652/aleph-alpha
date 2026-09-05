@@ -70,6 +70,7 @@ const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite
 const AntColony = preload("res://src/world/ant_colony.gd")
 const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
+const PheromoneField = preload("res://src/world/pheromone_field.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
@@ -634,13 +635,17 @@ var _ant_colonies: Dictionary = {}
 ## alongside the colony and freed with its chunk exactly like every other
 ## per-chunk marker dictionary here.
 var _ant_mound_markers: Dictionary = {}
-## Vector2i GLOBAL mound tile -> AntForagerMarker currently walking that
-## mound's harvest -> cache path, or absent/freed once it's done. Caps each
-## mound to at most one visible forager in flight at a time (see
-## _spawn_ant_forager_visual) -- AntColony.FORAGE_CHANCE can succeed several
-## times a second per mound at normal frame rate, and a visible ant for
-## every single one of those would be a swarm flicker, not a colony reading
-## as alive. Keyed globally (not per-chunk) since a mound's own identity
+## Vector2i GLOBAL mound tile -> Array[AntForagerMarker] currently out on a
+## real trip for that mound (see _dispatch_ant_forager) -- stale (freed)
+## entries are pruned lazily on the next dispatch attempt rather than
+## eagerly, since nothing else needs this list kept tidy between dispatch
+## calls. Capped per mound at AntColony.active_forager_cap_at(cell), which
+## scales with the mound's own queen-driven population (see
+## docs/concept/soil_fauna.md "A queen, and where a colony's size comes
+## from") -- AntColony.FORAGE_CHANCE can succeed several times a second per
+## mound at normal frame rate, and a visible ant for every single one of
+## those, uncapped, would be a swarm flicker, not a colony reading as
+## alive. Keyed globally (not per-chunk) since a mound's own identity
 ## (chunk_coord*CHUNK_SIZE + cell) is already a stable global tile.
 var _active_ant_foragers: Dictionary = {}
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
@@ -6769,12 +6774,16 @@ func step_ants(delta_seconds: float) -> void:
 ## One mound's forager: look for the nearest fallen grass seed within its
 ## SHORT foraging reach (AntColony.FORAGE_RADIUS_TILES, well under a mouse's
 ## own SeedCaching.PICKUP_RADIUS_TILES -- an ant's range from its mound is
-## far smaller than a mouse's whole home range) and, if there is one, take
-## it and cache it a short carry away (AntColony.carry_distance_tiles /
-## carry_direction). Mirrors _step_grass_seed_caching's take-then-plant
-## shape, but there is no individual carrier here to walk the distance over
-## time -- a mound is a background population effect, not a pathfinding
-## creature, so the whole harvest-and-cache resolves in one step.
+## far smaller than a mouse's whole home range) and, if there's more than
+## one in reach, prefers whichever already carries this mound's own trail
+## pheromone (see PheromoneField.best_candidate_index) -- real recruitment
+## to a known-good source over an equally-convenient unknown one. Dispatches
+## a REAL forager at the chosen candidate (see _dispatch_ant_forager) rather
+## than resolving the take/cache here: the actual seed take, the cache
+## roll, and this mound's own pheromone deposit all now happen inside
+## AntForagerMarker itself, on real arrival, not instantly here (see
+## docs/concept/soil_fauna.md "Real foraging: a round trip, not an instant
+## resolve").
 func _forage_seed_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i) -> void:
 	var mound_pixel := Vector2(
 		float(origin.x + cell.x) + 0.5, float(origin.y + cell.y) + 0.5
@@ -6783,27 +6792,16 @@ func _forage_seed_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i
 	if nearby.is_empty():
 		return
 	var reach := AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
-	# The nearest seed actually within reach, not just anything in the wider
-	# query radius -- the same nearest-in-reach shape
-	# _step_grass_seed_caching uses for a mouse.
-	var nearest_position: Vector2 = nearby[0]["position"]
-	var nearest_distance: float = mound_pixel.distance_to(nearest_position)
-	for candidate in nearby:
-		var candidate_position: Vector2 = candidate["position"]
-		var distance: float = mound_pixel.distance_to(candidate_position)
-		if distance < nearest_distance:
-			nearest_distance = distance
-			nearest_position = candidate_position
-	if nearest_distance > reach:
+	var in_reach: Array = nearby.filter(
+		func(c): return mound_pixel.distance_to(c["position"]) <= reach
+	)
+	if in_reach.is_empty():
 		return
-	if not take_grass_seed_at(nearest_position):
-		return
-	var carrier_seed := colony.carrier_seed_for(cell)
-	var carry_tiles := AntColony.carry_distance_tiles(carrier_seed)
-	var direction: Vector2 = AntColony.carry_direction(carrier_seed)
-	var target := nearest_position + direction * carry_tiles * float(TerrainRenderer.TILE_SIZE)
-	plant_grass_at(target)
-	_spawn_ant_forager_visual(origin + cell, mound_pixel, [nearest_position, target])
+	var best_index := PheromoneField.best_candidate_index(
+		mound_pixel, in_reach, colony.pheromones_at(cell), float(TerrainRenderer.TILE_SIZE)
+	)
+	var target_position: Vector2 = in_reach[best_index]["position"]
+	_dispatch_ant_forager(origin + cell, colony, cell, mound_pixel, target_position, "seed")
 
 
 ## One mound's forager in a forest/rainforest chunk: TallGrass never grows
@@ -6816,14 +6814,12 @@ func _forage_seed_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i
 ## fallen cherry/apple is left for the ordinary generic fruit-eating path,
 ## the same reasoning _step_squirrel_nut_caching's own doc comment gives.
 ##
-## Mirrors _forage_seed_near_mound's find-then-carry shape exactly (same
-## FORAGE_RADIUS_TILES reach, same carrier_seed_for/carry_distance_tiles/
-## carry_direction for placing the result), but resolves through
-## AntColony.windfall_is_consumed first: most finds are consumed outright on
-## the spot (a colony scavenging soft pulp/residue, not carrying off an
-## intact propagule -- see WINDFALL_CONSUMED_CHANCE's own doc comment), and
-## only rarely does one survive to be cached as a new sapling via the SAME
-## try_plant_seed_at sink robin/squirrel dispersal already use.
+## Mirrors _forage_seed_near_mound's find-and-dispatch shape exactly (same
+## FORAGE_RADIUS_TILES reach, same pheromone-aware candidate scoring); the
+## consumed-vs-cached roll (AntColony.windfall_is_consumed) now resolves
+## inside AntForagerMarker itself, at the mound, once the forager actually
+## gets there -- not here, and not at the pickup site (see the concept
+## doc's own geometry note on why the cache leg moved).
 func _forage_windfall_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i) -> void:
 	var mound_pixel := Vector2(
 		float(origin.x + cell.x) + 0.5, float(origin.y + cell.y) + 0.5
@@ -6833,59 +6829,48 @@ func _forage_windfall_near_mound(colony: AntColony, origin: Vector2i, cell: Vect
 	if nearby.is_empty():
 		return
 	var reach := AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
-	# The nearest nut actually within reach, not just anything in the wider
-	# query radius -- the same nearest-in-reach shape _forage_seed_near_mound
-	# uses for a grass seed.
-	var nearest_position: Vector2 = nearby[0]["position"]
-	var nearest_distance: float = mound_pixel.distance_to(nearest_position)
-	for candidate in nearby:
-		var candidate_position: Vector2 = candidate["position"]
-		var distance: float = mound_pixel.distance_to(candidate_position)
-		if distance < nearest_distance:
-			nearest_distance = distance
-			nearest_position = candidate_position
-	if nearest_distance > reach:
+	var in_reach: Array = nearby.filter(
+		func(c): return mound_pixel.distance_to(c["position"]) <= reach
+	)
+	if in_reach.is_empty():
 		return
-	var eaten_species := take_fruit_at(nearest_position)
-	if eaten_species == "":
-		return
-	if AntColony.windfall_is_consumed(colony.windfall_carrier_seed_for(cell)):
-		# Eaten on the spot -- the forager's visible trip ends at the nut
-		# itself, never reaches a cache leg (there is none).
-		_spawn_ant_forager_visual(origin + cell, mound_pixel, [nearest_position])
-		return
-	var carrier_seed := colony.carrier_seed_for(cell)
-	var carry_tiles := AntColony.carry_distance_tiles(carrier_seed)
-	var direction: Vector2 = AntColony.carry_direction(carrier_seed)
-	var target := nearest_position + direction * carry_tiles * float(TerrainRenderer.TILE_SIZE)
-	try_plant_seed_at(target, eaten_species)
-	_spawn_ant_forager_visual(origin + cell, mound_pixel, [nearest_position, target])
+	var best_index := PheromoneField.best_candidate_index(
+		mound_pixel, in_reach, colony.pheromones_at(cell), float(TerrainRenderer.TILE_SIZE)
+	)
+	var target_position: Vector2 = in_reach[best_index]["position"]
+	_dispatch_ant_forager(origin + cell, colony, cell, mound_pixel, target_position, "windfall")
 
 
-## The purely decorative visual half of a real, already-resolved forage (see
-## _forage_seed_near_mound/_forage_windfall_near_mound -- by the time this is
-## called, the actual seed/nut has already been taken and, if applicable,
-## replanted; nothing here can change that outcome). Caps each mound
-## (`global_tile`) to one forager in flight at a time via
-## _active_ant_foragers -- AntColony.FORAGE_CHANCE can succeed several times
-## a second per mound at normal frame rate, and a new visible ant for every
-## single one would be a flicker of overlapping sprites, not a colony
-## reading as alive. `rest_of_path` is everything after the mound itself:
-## [pickup] if the find was eaten on the spot, [pickup, cache] if it was
-## carried on.
-func _spawn_ant_forager_visual(global_tile: Vector2i, mound_pixel: Vector2, rest_of_path: Array) -> void:
+## Real per-mound forager dispatch (see docs/concept/soil_fauna.md "Real
+## foraging: a round trip, not an instant resolve") -- replaces the old
+## instant take-then-decorate resolution: the real take/plant effects and
+## the pheromone deposit now happen inside AntForagerMarker itself, on real
+## arrival. Capped at colony.active_forager_cap_at(cell) CONCURRENT
+## foragers per mound, not the old hardcoded one -- that cap scales with
+## the mound's own queen-driven population (see AntColony/
+## AntPopulationModel), so a thriving colony visibly has more than one
+## worker out at once. Stale (freed) entries in _active_ant_foragers are
+## pruned here, lazily, rather than eagerly elsewhere.
+func _dispatch_ant_forager(
+	global_tile: Vector2i, colony: AntColony, cell: Vector2i,
+	mound_pixel: Vector2, target_position: Vector2, forage_kind: String
+) -> void:
 	if _entities_parent == null:
 		return
-	var existing = _active_ant_foragers.get(global_tile)
-	if existing != null and is_instance_valid(existing) and not existing.is_queued_for_deletion():
+	var active: Array = _active_ant_foragers.get(global_tile, [])
+	active = active.filter(func(f): return is_instance_valid(f) and not f.is_queued_for_deletion())
+	if active.size() >= colony.active_forager_cap_at(cell):
+		_active_ant_foragers[global_tile] = active
 		return
 	var forager := AntForagerMarker.new()
-	var path: Array = [mound_pixel]
-	path.append_array(rest_of_path)
-	forager.path = path
+	forager.target_position = target_position
+	forager.mound_position = mound_pixel
+	forager.forage_kind = forage_kind
 	forager.position = mound_pixel
+	forager.setup(self, colony, cell)
 	_entities_parent.add_child(forager)
-	_active_ant_foragers[global_tile] = forager
+	active.append(forager)
+	_active_ant_foragers[global_tile] = active
 
 
 ## Inches every surfaced worm along, every frame. A worm at the surface is

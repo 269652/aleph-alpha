@@ -2,6 +2,7 @@ extends GutTest
 
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
+const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
 const TreePlacement = preload("res://src/world/tree_placement.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
@@ -5905,6 +5906,22 @@ func test_update_spawns_a_visible_marker_for_every_real_ant_mound_around_berlin(
 	assert_eq(manager._ant_mound_markers[center_chunk].size(), colony.mound_cells().size())
 
 
+## A standalone colony guaranteed at least one mound -- for tests of the
+## dispatch/cap logic below, which never touches grass/fruit/chunk data at
+## all, so there is no need to pay for a real (and, per this file's own
+## documented cost, very slow) manager.update() just to get one.
+func _ant_colony_with_one_mound() -> AntColony:
+	var biome := PackedStringArray()
+	for i in 64:
+		biome.append("grassland")
+	for seed_value in range(50):
+		var colony := AntColony.new(seed_value, 8, 8, biome)
+		if not colony.mound_cells().is_empty():
+			return colony
+	fail_test("expected at least one of 50 seeds to place a mound in an all-grassland 8x8 grid")
+	return null
+
+
 func test_evicting_old_chunks_frees_ant_mound_markers():
 	manager.update(Vector2i(0, 0))
 	var old_chunk := _chunk_coord_for_tile(Vector2i(0, 0))
@@ -5916,13 +5933,17 @@ func test_evicting_old_chunks_frees_ant_mound_markers():
 	assert_false(manager._ant_mound_markers.has(old_chunk))
 
 
-## The actual seed-take/replant already happened and is independently real
-## (see test_take_grass_seed_at_removes_it_and_returns_true and friends
-## above) -- this proves the SEPARATE, purely decorative visual half fires
-## alongside it. A synthetic mound cell placed directly on top of a real
-## shed seed (rather than hoping a real AntColony mound happened to roll
-## next to one) keeps this deterministic regardless of mound placement.
-func test_a_successful_grass_seed_forage_spawns_a_visible_forager():
+## Real foraging now (see docs/concept/soil_fauna.md "Real foraging: a
+## round trip, not an instant resolve"): dispatching a forager no longer
+## takes the seed on the spot -- that only happens once the forager itself
+## has genuinely walked to it (see AntForagerMarker). This proves the
+## dispatch half: a real candidate is found and a real forager is sent
+## after it, carrying the real colony/cell/target it needs to resolve the
+## rest for itself. A synthetic mound cell placed directly on top of a
+## real shed seed (rather than hoping a real AntColony mound happened to
+## roll next to one) keeps this deterministic regardless of mound
+## placement.
+func test_a_successful_grass_seed_forage_dispatches_a_real_forager_at_the_seed():
 	manager.update(_berlin_tile)
 	for i in 40:
 		manager.step_tall_grass(EarthChunkManager.GRASS_REFRESH_INTERVAL)
@@ -5943,29 +5964,88 @@ func test_a_successful_grass_seed_forage_spawns_a_visible_forager():
 
 	assert_gt(
 		manager._entities_parent.get_child_count(), before_children,
-		"a real, successful forage should spawn a visible forager sprite"
+		"a real, successful forage should dispatch a visible forager sprite"
 	)
 	assert_true(manager._active_ant_foragers.has(global_tile))
+	var forager: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
+	assert_eq(forager.target_position, seed_position, "the forager should be sent at the REAL seed position")
+	assert_true(seeds.any(func(s): return s["position"] == seed_position))
+	# The take has NOT happened yet -- only the forager's own real arrival
+	# resolves it now (see test_ant_forager_marker.gd's own coverage of
+	# that). Confirmed here by the seed still being reachable, not taken.
+	assert_gt(manager.grass_seeds_near(centre, 40).size(), 0, "the seed must still be there until the ant arrives")
 
 
 ## AntColony.FORAGE_CHANCE can succeed several times a second per mound at
-## normal frame rate (see _spawn_ant_forager_visual's own doc comment) -- a
-## new visible ant for every single one would be a flicker of overlapping
-## sprites, not a colony reading as alive.
-func test_does_not_spawn_a_second_forager_for_a_mound_that_already_has_one_out():
-	manager.update(_berlin_tile)
+## normal frame rate -- a new visible ant for every single one would be a
+## flicker of overlapping sprites, not a colony reading as alive. Uses a
+## standalone AntColony (not manager.update()'s real, slow chunk load,
+## which this dispatch-only logic never actually touches) at its own
+## founding population, whose active_forager_cap_at is exactly 1.
+func test_does_not_spawn_a_second_forager_for_a_mound_already_at_its_own_cap():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	assert_eq(colony.active_forager_cap_at(cell), 1, "precondition: a founding colony's cap is exactly one")
 	var global_tile := Vector2i(123_456, 123_456)  # arbitrary -- does not need to be a real mound
 	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
 	var before := manager._entities_parent.get_child_count()
 
-	manager._spawn_ant_forager_visual(global_tile, mound_pixel, [mound_pixel + Vector2(10, 0)])
+	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(10, 0), "seed")
 	assert_eq(manager._entities_parent.get_child_count(), before + 1, "precondition: the first spawn landed")
 
-	manager._spawn_ant_forager_visual(global_tile, mound_pixel, [mound_pixel + Vector2(-10, 0)])
+	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(-10, 0), "seed")
 	assert_eq(
 		manager._entities_parent.get_child_count(), before + 1,
-		"a second forager for the same mound should not spawn while the first is still out"
+		"a second forager for a mound already at its own cap should not spawn while the first is still out"
 	)
+
+
+## Once a mound's population has genuinely grown, its cap allows MORE than
+## one concurrent forager -- replacing the old hardcoded single-forager
+## limit (see docs/concept/soil_fauna.md "A queen, and where a colony's
+## size comes from").
+func test_dispatches_a_second_forager_once_the_mounds_own_cap_allows_it():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 20:
+		colony.record_forage_result(cell, true)  # saturate the recent-success EMA first
+	# advance() integrates the logistic curve with real (Euler) steps, not a
+	# closed-form solution -- one giant delta_seconds jump under-integrates
+	# it badly (a single step extrapolates from the STARTING slope only),
+	# so this simulates many moderate simulated-days instead, matching how
+	# advance() is actually called many times over real elapsed play.
+	for i in 200:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)  # one simulated day per call
+	assert_gt(colony.active_forager_cap_at(cell), 1, "precondition: a long-thriving colony should allow more than one")
+	var global_tile := Vector2i(654_321, 654_321)
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var before := manager._entities_parent.get_child_count()
+
+	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(10, 0), "seed")
+	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(-10, 0), "seed")
+
+	assert_eq(
+		manager._entities_parent.get_child_count(), before + 2,
+		"a thriving colony's second forager should be allowed out alongside the first"
+	)
+
+
+## Once an out forager finishes its trip (frees itself), a new one may be
+## dispatched again even at a cap of 1 -- the slot is per ACTIVE forager,
+## not a one-time-ever limit.
+func test_a_finished_forager_frees_its_slot_for_a_new_one():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var global_tile := Vector2i(111_111, 111_111)
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+
+	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(10, 0), "seed")
+	var first: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
+	first.free()
+
+	var before := manager._entities_parent.get_child_count()
+	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(-10, 0), "seed")
+	assert_eq(manager._entities_parent.get_child_count(), before + 1, "a freed slot should accept a new forager")
 
 
 # -- Sägewerk: "an NPC moves in" the moment the worksite exists (see
