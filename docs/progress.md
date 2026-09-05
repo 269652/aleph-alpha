@@ -11657,6 +11657,83 @@ a device with a real bag and let its mesh decide.
   tests; the four older tests state their empty-pack premise explicitly
   now that the pack starts with a bottle.
 
+### Behavior DSL (`concept/behavior_dsl.md`, new this pass)
+
+Asked for directly: "make a real DSL not based on genetics which can be
+composed modular and reuse behaviors across species." A second, deliberate
+answer to the same reuse question `concept/ethogram.md` already answers —
+that doc gets reuse from biology (a genome-expressed receptor/valence
+vector, scored by one kernel), and its own slice 5 investigation had just
+found the real limit of that approach: several body plans (fish,
+villagers, ants) have no vector-scored stimulus decision to express at
+all, because they were never receptor decisions to begin with. This DSL
+gets reuse the older way instead — a named, tested behaviour referenced by
+many species' trees, the same mechanism behind every subroutine call, with
+no genome, no receptor expression, and no population statistics required
+anywhere.
+
+- ✅ **`src/gameplay/behavior_dsl_parser.gd`** — a real, parsed textual
+  language: `behavior "name" { <node> }` blocks holding `priority`/
+  `sequence`/`parallel` (ordered children), `gate(condition) { child }`
+  (a decorator), or a leaf (`atom(key: value, ...)`). Purely structural,
+  spell_parser.gd's own pillar — doesn't know atom names, only the four
+  reserved composition keywords. Named args only, so unlike
+  npc_instruction_parser.gd this needs no per-atom signature table.
+  Repeated keys accumulate into a list in written order (`on: predator,
+  on: player` → `["predator", "player"]`); a single occurrence stays a
+  scalar — what lets `flee`/`seek` take one or several channels with no
+  separate list-literal syntax. Fail-closed on an unknown top-level
+  keyword, unclosed brace/string, a malformed gate, or a bare identifier
+  where a call belongs. 30 tests.
+- ✅ **`src/gameplay/behavior_atom_catalog.gd`** — the reusable primitives
+  themselves, split into `CONDITION_ATOMS` (`above`, `sensed` — used only
+  inside `gate`, return bool) and `ACTION_ATOMS` (`wander`, `flee`, `seek`,
+  `schedule`, `round_trip` — used only as leaves, return a decision or
+  null), mirroring npc_instruction_primitives.gd's own condition/action
+  split so a name used in the wrong slot fails closed rather than silently
+  coercing. Every action atom is a thin wrapper, never a
+  reimplementation: `flee`/`seek` build a flat sensitivity/valence
+  Dictionary from the leaf's own `on` channel list and rank through
+  `BehaviorKernel.best_stimulus` — the same ranking math `ethogram.md`
+  built, reused here as a plain computational tool with no genome, no
+  species record, and no receptor expression anywhere in the call path
+  (pinned directly, `test_flee_and_seek_never_read_a_genome_or_species`);
+  `schedule` wraps `NpcSchedule.current_entry` unmodified; `round_trip`
+  reads (never drives) a live `AntForageBehavior` instance's own `phase`.
+  `above`/`sensed` read a generic `{name: level}` needs dict and a
+  stimuli list by name alone, which is what lets one `above()` call gate
+  both a mammal's and a villager's tree identically — pinned directly,
+  not merely asserted (`test_above_reads_any_needs_dict_shaped_the_same_
+  way_regardless_of_species`). 29 tests.
+- ✅ **`src/gameplay/behavior_tree_executor.gd`** — `run(node, context)`,
+  a stateless recursive walk implementing exactly Colledanchise & Ögren's
+  formal behaviour-tree semantics: `priority` (Selector) returns the first
+  non-null child; `sequence` fails fast at the first null child and
+  otherwise returns the last result; `parallel` runs every child
+  regardless and collects every result, nulls included; `gate` (Decorator)
+  evaluates one condition atom before running its one child verbatim.
+  20 tests.
+- ✅ **The reuse claim, exercised end to end rather than argued.** The
+  exact mammal and villager scripts from `concept/behavior_dsl.md` §1,
+  parsed by the real parser and run by the real executor against
+  constructed contexts: the mammal correctly flees a sensed predator over
+  thirst over hunger over wandering; the villager, sharing no code, no
+  genome, and no body plan with the mammal, correctly seeks forage through
+  the *identical* `gate(above(need: hunger, threshold: 0.5))` text once
+  hungry, and falls back to its own schedule once fed
+  (`test_a_hungry_villager_seeks_forage_through_the_same_gate_the_mammal_
+  used`). An ant-forager tree (`round_trip()`) correctly reports its own
+  phase. 79 tests total across the three modules, all green.
+- ⬜ **Nothing wired to a live marker, by design.** `CreatureMarker`,
+  `NpcMarker`, and `AntForagerMarker` all still run their existing
+  decision paths unchanged. `ethogram.md`'s own slice 5 found that
+  touching a live marker outside a dedicated, narrowly scoped pass is
+  exactly the mistake to avoid, and the same caution applies doubly to a
+  brand-new executor with zero hours of runtime behind it. An
+  `ethogram_decide` action atom — the explicit bridge letting a species
+  mix a fully genome-expressed ethogram sub-decision into an otherwise
+  DSL-composed tree — is named in the doc as a planned seam, not built.
+
 ### Standard Model (`concept/standard_model.md`, new this pass)
 
 Reported: "*design and spec a formal standard model for our in-game world

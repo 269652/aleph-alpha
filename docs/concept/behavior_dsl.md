@@ -258,22 +258,30 @@ merely claim.
 
 ## Status / mechanisms
 
-- ⬜ `behavior_dsl_parser.gd` — surface syntax in §1, `parse()`'s fail-closed
-  contract.
-- ⬜ `behavior_atom_catalog.gd` — `CONDITION_ATOMS`/`ACTION_ATOMS`,
+- ✅ `behavior_dsl_parser.gd` — surface syntax in §1, `parse()`'s fail-closed
+  contract (`test_behavior_dsl_parser.gd`, 30 tests: every node kind,
+  repeated-key list accumulation, nested composition, multiple behaviour
+  blocks per file, comments, nine distinct fail-closed error cases).
+- ✅ `behavior_atom_catalog.gd` — `CONDITION_ATOMS`/`ACTION_ATOMS`,
   `evaluate_condition`/`resolve_action` dispatchers failing closed on an
-  unknown or wrong-slot name.
-- ⬜ `behavior_tree_executor.gd` — `run()` over priority/sequence/parallel/
-  gate/leaf, matching Colledanchise & Ögren's semantics.
-- ⬜ `wander`/`flee`/`seek`/`above`/`sensed` atoms; `flee`/`seek` reusing
-  `Affinity`/`BehaviorKernel.best_stimulus` verbatim, no genome involved.
-- ⬜ `schedule`/`round_trip` atoms wrapping `NpcSchedule`/`AntForageBehavior`
+  unknown or wrong-slot name (`test_behavior_atom_catalog.gd`, 29 tests).
+- ✅ `behavior_tree_executor.gd` — `run()` over priority/sequence/parallel/
+  gate/leaf, matching Colledanchise & Ögren's semantics
+  (`test_behavior_tree_executor.gd`, 20 tests).
+- ✅ `wander`/`flee`/`seek`/`above`/`sensed` atoms; `flee`/`seek` reusing
+  `Affinity`/`BehaviorKernel.best_stimulus` verbatim, no genome involved
+  (pinned directly: `test_flee_and_seek_never_read_a_genome_or_species`).
+- ✅ `schedule`/`round_trip` atoms wrapping `NpcSchedule`/`AntForageBehavior`
   unmodified, proving a lookup and a stateful phase machine both compose
   in the same tree as the vector-scored atoms.
-- ⬜ A real mammal tree and a real villager tree, parsed from the exact text
+- ✅ A real mammal tree and a real villager tree, parsed from the exact text
   in §1, both executed against constructed contexts, both correctly
   invoking the shared `wander`/`above` atoms — the reuse claim, tested end
-  to end rather than argued.
+  to end rather than argued
+  (`test_a_hungry_villager_seeks_forage_through_the_same_gate_the_mammal_used`
+  is the one worth reading by name: same gate, same tokens, two species
+  that share no code, no genome, and no body plan). 79 tests total across
+  the three modules.
 - ⬜ Wiring any live marker (`CreatureMarker`, `NpcMarker`, `AntForagerMarker`)
   to actually run a parsed tree instead of its current hard-coded decision
   path. Deliberately not attempted here: [ethogram.md](ethogram.md)'s own
