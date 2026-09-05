@@ -11769,6 +11769,25 @@ anywhere.
   failures confirmed unrelated (the diff never touches that code path).
   Sparrow is the obvious, named next candidate — identical mechanism,
   not yet done, one species proven at a time on purpose.
+- ✅ **Update, same day: "wire the sparrow too."** Sparrow ground-forages
+  via the exact same `FlyerDiet.forages_on_the_ground` gate robin does,
+  flushes via the same `_step_songbird_flight_response`, and is in
+  `BirdCourtship.DANCING_SPECIES` exactly like robin — its decision shape
+  is identical, not merely similar, so it needed no new tree: robin turned
+  out to be the first *ground-foraging songbird* wired, not a robin-
+  specific one. `BEHAVIOR_TREE_SPECIES` changed from a per-species
+  presence flag to a species → tree-name map (`"ground_foraging_songbird"`
+  for both), so a second species sharing the same shape costs one
+  Dictionary entry rather than a second copy of the same three lines —
+  `test_a_robin_and_a_sparrow_share_the_identical_tree` pins the sharing
+  directly. Nothing about the three step functions or the `local_atoms`
+  mechanism changed. `test_a_sparrow_is_not_wired_yet_even_though_it_also_
+  ground_forages` became `test_a_sparrow_is_given_a_parsed_behavior_tree`
+  (the thing its own name predicted), plus a sparrow crash-safety test.
+  Every pre-existing sparrow flush/courtship/forage test in the file is
+  the regression bar and passes unchanged: 169 passing, the same 2
+  pre-existing butterfly spiral-flight numerical-tolerance failures,
+  confirmed unrelated.
 
 ### Standard Model (`concept/standard_model.md`, new this pass)
 
