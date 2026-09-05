@@ -268,6 +268,66 @@ func lake_surface_at_global(global_x: int, global_y: int) -> float:
 	return water_coverage(global_x, global_y)["surface"]
 
 
+## --- the reach ---
+
+## The discharge that decides a channel cell's DRIFT speed: its reach's --
+## the run of channel cells between confluences, judged by the reach head's
+## own discharge. Constant along the reach and stepping only where a
+## tributary joins, because the flow shader multiplies this speed by TIME:
+## a speed that varied along the reach (the per-tile Manning solve does)
+## diverged between neighbouring pixels without bound and shredded every
+## reach after twenty minutes of play, and one global speed lost "the
+## Rhine travels, a lower course crawls". Memoised per cell: the walk to
+## the head is the length of the reach. Pinned by
+## test_the_reach_discharge_is_constant_between_confluences.
+func reach_discharge(cell: int) -> float:
+	var cached = _reach_cache.get(cell)
+	if cached != null:
+		return cached
+	if _reach_cache.size() >= CURVE_CACHE_CAP:
+		_reach_cache.clear()
+	var head := cell
+	var walked: Array = [cell]
+	while true:
+		if _channel_upstream_count(head) != 1:
+			break
+		var upstream := _mainstem_upstream(head, true)
+		if upstream < 0 or walked.has(upstream):
+			break
+		head = upstream
+		walked.append(head)
+	var discharge := _data.discharge_at(head)
+	for member in walked:
+		_reach_cache[member] = discharge
+	return discharge
+
+
+var _reach_cache: Dictionary = {}
+
+
+## The cell's own discharge, in the bake's stand-in units.
+func discharge_at_cell(cell: int) -> float:
+	return _data.discharge_at(cell)
+
+
+## How many CHANNEL cells drain directly into this one -- two or more is a
+## confluence, where a reach begins.
+func _channel_upstream_count(cell: int) -> int:
+	var count := 0
+	var x := cell % _data.width
+	var y := _cell_y(cell)
+	for direction in 8:
+		var ny := y + DrainageNetwork.NEIGHBOR_DY[direction]
+		if ny < 0 or ny >= _data.height:
+			continue
+		var neighbor := cell_index_at(x + DrainageNetwork.NEIGHBOR_DX[direction], ny)
+		if _data.is_sea(neighbor) or _downstream(neighbor) != cell:
+			continue
+		if _data.discharge_at(neighbor) >= river_min_discharge:
+			count += 1
+	return count
+
+
 ## --- hydraulic geometry ---
 
 
@@ -327,6 +387,7 @@ func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 			"lake_across": still_across,
 			"plume_factor": plume["factor"],
 			"plume_bearing_deg": plume["bearing_deg"],
+			"plume_reach_discharge": plume.get("reach_discharge", 0.0),
 			"fine_detail_scale": 0.0,
 			"carve": 0.0,
 		}
@@ -337,7 +398,8 @@ func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 		return {
 			"kind": "", "sea": is_sea, "depth_m": 0.0, "discharge": 0.0, "half_width_tiles": 0.0,
 			"lake_across": still_across, "plume_factor": plume["factor"],
-			"plume_bearing_deg": plume["bearing_deg"], "fine_detail_scale": 1.0, "carve": 0.0,
+			"plume_bearing_deg": plume["bearing_deg"], "plume_reach_discharge": plume.get("reach_discharge", 0.0),
+			"fine_detail_scale": 1.0, "carve": 0.0,
 		}
 
 	var discharge: float = channel["discharge"]
@@ -354,6 +416,7 @@ func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 			"lake_across": still_across,
 			"plume_factor": 0.0,
 			"plume_bearing_deg": 0.0,
+			"plume_reach_discharge": 0.0,
 			"fine_detail_scale": 0.0,
 			"carve": full_carve,
 		}
@@ -368,6 +431,7 @@ func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 		"lake_across": still_across,
 		"plume_factor": plume["factor"],
 		"plume_bearing_deg": plume["bearing_deg"],
+		"plume_reach_discharge": plume.get("reach_discharge", 0.0),
 		"fine_detail_scale": shoulder if not is_sea else 0.0,
 		"carve": full_carve * (1.0 - shoulder) if not is_sea else 0.0,
 	}
@@ -385,6 +449,7 @@ func mouth_plume(global_x: int, global_y: int) -> Dictionary:
 	var cell_y := floori(pixel.y)
 	var best_factor := 0.0
 	var best_bearing := 0.0
+	var best_reach := 0.0
 	for dy in range(-2, 3):
 		var y := cell_y + dy
 		if y < 0 or y >= _data.height:
@@ -406,7 +471,8 @@ func mouth_plume(global_x: int, global_y: int) -> Dictionary:
 				continue
 			best_factor = factor
 			best_bearing = RiverCatalog.bearing_degrees(mouth - from)
-	return {"factor": best_factor, "bearing_deg": best_bearing}
+			best_reach = reach_discharge(cell)
+	return {"factor": best_factor, "bearing_deg": best_bearing, "reach_discharge": best_reach}
 
 
 ## The nearest channel's geometry in exactly the shape
@@ -484,6 +550,7 @@ func nearest_channel_geometry(global_x: int, global_y: int) -> Dictionary:
 			"course_bearing_deg": RiverCatalog.bearing_degrees(tangent),
 			"discharge": nearest["discharge"],
 			"half_width_tiles": nearest["half_width_tiles"],
+			"reach_discharge": reach_discharge(nearest["cell"]),
 		}
 	var half := half_sum / weight_sum
 	var direction: Vector2 = dominant["tangent"]
@@ -509,6 +576,7 @@ func nearest_channel_geometry(global_x: int, global_y: int) -> Dictionary:
 		"course_bearing_deg": RiverCatalog.bearing_degrees(direction),
 		"discharge": dominant["discharge"],
 		"half_width_tiles": half,
+		"reach_discharge": reach_discharge(dominant["cell"]),
 	}
 
 

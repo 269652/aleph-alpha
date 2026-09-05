@@ -763,3 +763,41 @@ func test_generate_chunk_with_a_bake_still_matches_the_per_tile_queries():
 			if chunk.is_river[index] == 1:
 				found_a_river_cell = true
 	assert_true(found_a_river_cell, "the chunk around Greenwich holds the synthetic outlet")
+
+
+
+# -- the reach's drift speed ----------------------------------------------------
+
+## The flow shader multiplies this speed by TIME, so it is derived from a
+## REACH's discharge (constant between confluences), never from the
+## per-tile Manning solve. Monotone in discharge, zero without any.
+func test_the_drift_speed_grows_with_discharge_and_is_zero_without():
+	assert_almost_eq(generator.drift_speed_m_s_for_discharge_units(0.0), 0.0, 1e-9)
+	var brook := generator.drift_speed_m_s_for_discharge_units(40.0)
+	var river := generator.drift_speed_m_s_for_discharge_units(400.0)
+	var big := generator.drift_speed_m_s_for_discharge_units(4000.0)
+	assert_gt(brook, 0.0)
+	assert_gt(river, brook, "a bigger river drifts faster")
+	assert_gt(big, river)
+	assert_lt(big, 5.0, "a plausible river current, not a torrent")
+
+
+## Every river answer carries a drift speed: a baked channel its reach's,
+## a curated river one value along its whole course.
+func test_every_river_answer_carries_a_constant_drift_speed():
+	# Two tiles on the Loire's horizontal reach east of the Nantes
+	# junction (real bake), with different per-tile Manning speeds.
+	var a := generator.nearest_river_at(19806, 4751)
+	var b := generator.nearest_river_at(19812, 4751)
+	assert_true(a.has("drift_speed_m_s") and b.has("drift_speed_m_s"))
+	assert_gt(float(a["drift_speed_m_s"]), 0.0)
+	assert_almost_eq(
+		float(a["drift_speed_m_s"]), float(b["drift_speed_m_s"]), 1e-6,
+		"two tiles of one reach must drift at exactly one speed"
+	)
+	var rhine_source := generator.curated_drift_speed_m_s("Rhine")
+	assert_gt(rhine_source, 0.0)
+	assert_almost_eq(
+		rhine_source, generator.curated_drift_speed_m_s("Rhine"), 1e-12,
+		"one speed per curated river, memoised"
+	)

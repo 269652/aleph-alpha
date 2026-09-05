@@ -104,6 +104,12 @@ uniform float eddy_swirl = 0.0;
 uniform float bank_shear = 0.25;
 uniform sampler2D flow_across_map : filter_linear, repeat_enable;
 uniform sampler2D flow_scale_map : filter_linear, repeat_enable;
+// The SAME texture as flow_scale_map, bound a second time with NEAREST
+// filtering: its G channel is the reach's drift speed (constant between
+// confluences, see EarthChunkGenerator.drift_speed_m_s_for_discharge_units),
+// and a linear ramp between two reaches' speeds, times TIME, would be the
+// far-time shredding again along that one-texel band.
+uniform sampler2D flow_drift_map : filter_nearest, repeat_enable;
 uniform float flow_map_tiles = 256.0;
 // No longer read inside fragment(): every per-fragment normalization now
 // decodes the tile's REAL local half-width from the direction vector's own
@@ -189,14 +195,6 @@ uniform float drift_px_per_mps = 20.0;
 // translated noise TILES at and both drifts wrap modulo -- what keeps the
 // direction-scaled translations bounded (see the drift lines in fragment()).
 uniform float drift_period = 20.0;
-// The ONE current every moving reach drifts its lines and eddies at, m/s.
-// Not the texel's own speed: that is interpolated per fragment and varies
-// along a reach, and TIME times a per-fragment speed diverges between
-// neighbours without bound -- the second half of the far-time shredding
-// (measured: 0.041 of the water pixels speckled at ~2000 s with the real
-// speeds, 0.008 with one speed). Everything bounded in TIME (the ring,
-// carried for at most a lifetime) still rides the local speed.
-uniform float drift_speed_m_s = 0.5;
 // The dim end of the brightness pulse that streams along every stroke.
 // Deep enough that a bright segment travelling down a line is obvious,
 // never zero, so a dim segment is still a stroke.
@@ -540,6 +538,13 @@ void fragment() {
 		texture_bicubic(flow_scale_map, map_uv, flow_map_tiles),
 		map_smoothing
 	).r, 0.05);
+	// THE REACH'S DRIFT SPEED, nearest-filtered: what the two TIME-scaled
+	// translations below multiply. Never speed_mps -- that is interpolated
+	// per fragment and varies along a reach, and TIME times a per-fragment
+	// speed diverged between neighbours without bound (the second half of
+	// the far-time shredding). One value per reach, stepping only at a
+	// confluence, so "the Rhine travels, a lower course crawls" survives.
+	float drift_speed = texture(flow_drift_map, map_uv).g;
 	float is_fast = step(fast_flow_m_s, speed_mps);
 	// STILL WATER: a lake is painted through this same overlay (its
 	// shoreline is the real elevation contour, written as an across field
@@ -757,7 +762,7 @@ void fragment() {
 	// for the whole session, and flow_dir differs by a fraction of a degree
 	// between neighbouring fragments on a bend: the far-time shredding (see
 	// the drift line below).
-	float bend_drift = mod(TIME * surface_px_per_s(drift_speed_m_s, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);
+	float bend_drift = mod(TIME * surface_px_per_s(drift_speed, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);
 	vec2 eddy_p = p * eddy_scale - flow_dir * bend_drift;
 	// Shear lives at the banks: real eddies shed where the fast core
 	// meets the slow margin, so the standing turbulence grows from the
@@ -798,10 +803,10 @@ void fragment() {
 	// dissolved into speckle while the straight reach beside it kept its
 	// lines. The same angle-times-distance trap as the world origin,
 	// re-entered through TIME.
-	// ...and at the ONE shared drift speed (drift_speed_m_s), never the
+	// ...and at the REACH'S drift speed (drift_speed above), never the
 	// fragment's own: TIME times a speed that varies along the reach is
 	// the same unbounded divergence again, direction or no direction.
-	float drift = mod(TIME * drift_px_per_mps * drift_speed_m_s * moving * noise_scale, drift_period);
+	float drift = mod(TIME * drift_px_per_mps * drift_speed * moving * noise_scale, drift_period);
 	// Triangular weight: 1 at a phase's birth, 0 at its death.
 	float blend = abs(1.0 - 2.0 * phase_a);
 	float n;
@@ -1425,23 +1430,6 @@ const DRIFT_PX_PER_MPS := 16.0
 ## and test_a_long_session_does_not_shred_the_field_on_a_bend.
 const DRIFT_PERIOD_CELLS := 20.0
 
-## The one current, in m/s, every moving reach drifts its lines and eddies
-## at. The texel speed is interpolated per fragment and varies along a
-## reach (Manning on the local slope), and TIME times a per-fragment speed
-## diverges between neighbours without bound -- wrapping the drift bounds
-## the DIRECTION term but not this one (GPU-measured at the Loire: 0.041 of
-## the water pixels speckled at ~2000 s with the real speeds against 0.008
-## with one speed). So the unbounded translations share this reference,
-## the typical reach of the tuning notes above; the reach's real speed
-## still shows through the fast-flow brightness, the foam, and the ring,
-## which is bounded by its own lifetime and keeps the local speed. Still
-## water stays at zero through the same gate as everything else. A
-## per-reach CONSTANT speed in the map (one value between confluences)
-## would give back "the Rhine travels, a lower course crawls" with a seam
-## only at confluences, and is the named follow-up. Pinned by
-## test_the_drift_is_one_shared_speed_for_every_moving_reach.
-const DRIFT_SPEED_M_S := 0.5
-
 ## The dim end of the pulse that streams along a stroke. 0.55 was a 45%
 ## modulation, a shimmer; 0.35 is the depth at which a bright segment
 ## visibly travels down a line. Never zero. Pinned by
@@ -1610,7 +1598,6 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("wader_wake_trail", WADER_WAKE_TRAIL)
 	material.set_shader_parameter("drift_px_per_mps", DRIFT_PX_PER_MPS)
 	material.set_shader_parameter("drift_period", DRIFT_PERIOD_CELLS)
-	material.set_shader_parameter("drift_speed_m_s", DRIFT_SPEED_M_S)
 	material.set_shader_parameter("fast_flow_m_s", FAST_FLOW_M_S)
 	material.set_shader_parameter("line_count", LINE_COUNT)
 	material.set_shader_parameter("across_line_scale", ACROSS_LINE_SCALE)
@@ -2220,14 +2207,15 @@ static func animated_field_value(
 
 
 ## How far the pattern has travelled downstream, in noise cells: linear in
-## time at the ONE shared DRIFT_SPEED_M_S for any moving reach (zero below
+## time at the REACH'S drift speed (one constant between confluences --
+## see EarthChunkGenerator.drift_speed_m_s_for_discharge_units; zero below
 ## the still gate), wrapped at DRIFT_PERIOD_CELLS -- the noise it
 ## translates tiles at that period, so the wrap is invisible and the
 ## direction-scaled offset stays bounded.
-static func drift_cells(speed_mps: float, seconds: float) -> float:
-	if speed_mps < STILL_FLOW_M_S:
+static func drift_cells(reach_speed_m_s: float, seconds: float) -> float:
+	if reach_speed_m_s < STILL_FLOW_M_S:
 		return 0.0
-	return fposmod(DRIFT_PX_PER_MPS * DRIFT_SPEED_M_S * seconds * NOISE_SCALE, DRIFT_PERIOD_CELLS)
+	return fposmod(DRIFT_PX_PER_MPS * reach_speed_m_s * seconds * NOISE_SCALE, DRIFT_PERIOD_CELLS)
 
 
 ## The water's VISIBLE downstream speed in world px/s -- the CPU mirror of
@@ -2257,11 +2245,9 @@ static func surface_cells(speed_mps: float, seconds: float) -> float:
 ## BEND_DRIFT_FRACTION of the water's visible travel. Zero in still water.
 ## Wrapped at DRIFT_PERIOD_CELLS in EDDY units (the eddy field tiles at
 ## that period), reported back in noise cells.
-static func bend_drift_cells(speed_mps: float, seconds: float) -> float:
-	if speed_mps < STILL_FLOW_M_S:
-		return 0.0
+static func bend_drift_cells(reach_speed_m_s: float, seconds: float) -> float:
 	return fposmod(
-		surface_cells(DRIFT_SPEED_M_S, seconds) * BEND_DRIFT_FRACTION * EDDY_SCALE, DRIFT_PERIOD_CELLS
+		surface_cells(reach_speed_m_s, seconds) * BEND_DRIFT_FRACTION * EDDY_SCALE, DRIFT_PERIOD_CELLS
 	) / EDDY_SCALE
 
 

@@ -1924,3 +1924,39 @@ state the shared speed. `main` carries the direction half of this fix
 (its drift is weaker and it has no eddy drift); the speed half applies
 there too and is noted in its ledger.
 
+
+### The reach's own speed (2026-09-05, later the same day)
+
+The one shared drift speed above was the honest stopgap; it lost "the
+Rhine visibly travels, a lower course crawls". What actually diverges is
+a speed that varies *between neighbouring pixels*, and a speed that is
+constant along a whole reach and steps only at a confluence does not:
+the step is a fixed line across the river where the water changes
+character anyway, and the strokes there merely kink by the wobble term.
+
+So the drift speed is now a property of the **reach** -- the run of
+channel cells between confluences, `HydrologyField.reach_discharge`,
+judged by the reach head's discharge and memoised per cell -- converted
+to m/s by `EarthChunkGenerator.drift_speed_m_s_for_discharge_units`
+through the same hydraulic geometry the field already uses (Q = w x d x
+v with `RiverDischarge.derived_width_m` and the depth power law), never
+the per-tile Manning solve. A curated river drifts at one speed along
+its whole course (its mid-course discharge, `curated_drift_speed_m_s`,
+memoised per river) for the same reason; a mouth plume drifts at its
+river's reach. The painter writes it into the scale map's G channel and
+the shader reads it through a **second, nearest-filtered sampler** on
+the same texture (`flow_drift_map`): a linear ramp between two reaches'
+speeds, times `TIME`, would be the shredding again along that one-texel
+band. The ring wake still rides the local `surface_velocity`; it is
+bounded by its lifetime. `DRIFT_SPEED_M_S` is gone; `drift_cells` and
+`bend_drift_cells` take the reach speed and are linear in it again.
+
+Measured on the real Loire flow map at `TIME` ~2000 s: 0.002 of the
+water pixels isolated specks, the same as a fresh frame, with the
+tributary and the main river visibly drifting at different speeds.
+Pinned by `test_the_reach_discharge_is_constant_between_confluences`
+and siblings (field), `test_the_drift_speed_grows_with_discharge_and_is_zero_without`
+and `test_every_river_answer_carries_a_constant_drift_speed` (generator),
+`test_the_scale_texel_carries_the_reach_drift_speed_and_the_drift_map_is_bound`
+(manager) and `test_the_drift_rides_the_reachs_own_constant_speed`
+(shader).

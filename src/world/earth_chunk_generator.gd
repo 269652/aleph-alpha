@@ -81,7 +81,7 @@ static var _hydrology_load_attempted := false
 ## detail, nothing carved, no sea verdict (the macro elevation decides).
 const _NO_HYDROLOGY := {
 	"kind": "", "depth_m": 0.0, "discharge": 0.0, "half_width_tiles": 0.0,
-	"lake_across": 2.0, "plume_factor": 0.0, "plume_bearing_deg": 0.0,
+	"lake_across": 2.0, "plume_factor": 0.0, "plume_bearing_deg": 0.0, "plume_reach_discharge": 0.0,
 	"fine_detail_scale": 1.0, "carve": 0.0,
 }
 
@@ -478,6 +478,7 @@ func _nearest_river_uncached(global_x: int, global_y: int) -> Dictionary:
 	# for a curated river, the discharge-derived one for a baked channel
 	# (a confluence widens where discharges add up).
 	curated["half_width_tiles"] = RiverCatalog.RIVER_HALF_WIDTH_TILES
+	curated["drift_speed_m_s"] = curated_drift_speed_m_s(curated.name)
 	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
 	if curated.distance_tiles <= apron or _hydrology == null or not hydrology_rivers_enabled:
 		return curated
@@ -491,7 +492,53 @@ func _nearest_river_uncached(global_x: int, global_y: int) -> Dictionary:
 		"course_bearing_deg": channel["course_bearing_deg"],
 		"signed_across_tiles": channel["signed_across_tiles"],
 		"half_width_tiles": channel["half_width_tiles"],
+		"drift_speed_m_s": drift_speed_m_s_for_discharge_units(channel["reach_discharge"]),
 	}
+
+
+## The speed the flow shader DRIFTS a reach's strokes at, from a discharge
+## in the bake's stand-in units: Q = w x d x v with the same hydraulic
+## geometry the field itself uses (RiverDischarge.derived_width_m for the
+## width, HydrologyField's depth power law for the depth). Deliberately
+## NOT the per-tile Manning solve: the shader multiplies this by TIME, so
+## it must be constant along a reach (see HydrologyField.reach_discharge)
+## -- a per-tile speed diverged between neighbouring pixels without bound
+## and shredded every reach after twenty minutes of play. Zero for no
+## discharge. Pinned by test_the_drift_speed_grows_with_discharge_and_is_zero_without.
+func drift_speed_m_s_for_discharge_units(units: float) -> float:
+	if units <= 0.0:
+		return 0.0
+	var discharge := units * STAND_IN_DISCHARGE_M3_S_PER_UNIT
+	var width := RiverDischarge.derived_width_m(discharge)
+	var depth := HydrologyField.DEPTH_COEFFICIENT_M * pow(units, HydrologyField.DEPTH_EXPONENT)
+	if width <= 0.0 or depth <= 0.0:
+		return 0.0
+	return discharge / (width * depth)
+
+
+## A curated river drifts at ONE speed along its whole course -- its
+## mid-course discharge through the same Q = w x d x v -- for the same
+## reason a baked reach does: the catalog's discharge and width vary
+## continuously along the course, and TIME times a varying speed diverges.
+## Memoised per river name.
+var _curated_drift_speed_cache: Dictionary = {}
+
+
+func curated_drift_speed_m_s(river_name: String) -> float:
+	var cached = _curated_drift_speed_cache.get(river_name)
+	if cached != null:
+		return cached
+	var discharge := RiverDischarge.discharge_at(river_name, 0.5)
+	var width := RiverDischarge.channel_width_m(river_name, 0.5)
+	var speed := 0.0
+	if discharge > 0.0 and width > 0.0:
+		var depth := HydrologyField.DEPTH_COEFFICIENT_M * pow(
+			discharge / STAND_IN_DISCHARGE_M3_S_PER_UNIT, HydrologyField.DEPTH_EXPONENT
+		)
+		if depth > 0.0:
+			speed = discharge / (width * depth)
+	_curated_drift_speed_cache[river_name] = speed
+	return speed
 
 
 ## Whether a tile lies on a river or on the bank apron the flow overlay

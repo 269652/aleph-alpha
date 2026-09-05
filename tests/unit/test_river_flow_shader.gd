@@ -1217,23 +1217,31 @@ func test_the_pattern_travels_downstream_not_just_morphs():
 	)
 
 
-## The drift is ONE shared speed for every moving reach -- linear in time
-## (below the period), the same for a brisk river and a sluggish one, and
-## zero in still water. The texel's own speed is interpolated per fragment
-## and varies along a reach; TIME times that diverged between neighbours
-## without bound and shredded every reach after twenty minutes (the second
-## half of the far-time shredding, measured on the GPU at the Loire).
-func test_the_drift_is_one_shared_speed_for_every_moving_reach():
+## The drift rides the REACH'S own constant speed -- linear in that speed
+## and in time (below the period), zero in still water -- read from the
+## nearest-filtered drift map, never from the per-fragment speed_mps: the
+## texel speed is interpolated and varies along a reach, and TIME times
+## that diverged between neighbours without bound (the second half of the
+## far-time shredding, measured on the GPU at the Loire). A brisk river
+## still visibly travels and a sluggish course crawls, one speed per reach.
+func test_the_drift_rides_the_reachs_own_constant_speed():
 	assert_almost_eq(
 		RiverFlowShader.drift_cells(2.0, 1.0),
-		RiverFlowShader.drift_cells(1.0, 1.0), 0.0001,
-		"a brisk reach and a slow one drift their lines at the one shared speed"
+		RiverFlowShader.drift_cells(1.0, 1.0) * 2.0, 0.0001,
+		"a brisk reach drifts its lines faster"
 	)
-	assert_almost_eq(
-		RiverFlowShader.drift_cells(1.0, 1.0),
-		RiverFlowShader.DRIFT_PX_PER_MPS * RiverFlowShader.DRIFT_SPEED_M_S * RiverFlowShader.NOISE_SCALE,
-		0.0001
+	var code: String = RiverFlowShader.SHADER_CODE
+	assert_true(
+		code.contains("uniform sampler2D flow_drift_map : filter_nearest, repeat_enable;"),
+		"the reach speed must be read NEAREST-filtered -- a ramp between reaches times TIME diverges"
 	)
+	assert_true(code.contains("float drift_speed = texture(flow_drift_map, map_uv).g;"))
+	assert_true(code.contains("float drift = mod(TIME * drift_px_per_mps * drift_speed * moving * noise_scale, drift_period);"))
+	assert_false(
+		code.contains("TIME * drift_px_per_mps * speed_mps"),
+		"the drift must never multiply the per-fragment speed by TIME"
+	)
+	assert_false(code.contains("surface_px_per_s(speed_mps, moving) * noise_scale * bend_drift_fraction"))
 	assert_almost_eq(
 		RiverFlowShader.drift_cells(1.0, 3.0),
 		RiverFlowShader.drift_cells(1.0, 1.0) * 3.0, 0.0001
@@ -2658,16 +2666,12 @@ func test_the_bend_drifts_downstream_with_the_current():
 	assert_gt(moved, 0.0)
 	assert_almost_eq(
 		moved,
-		RiverFlowShader.surface_cells(RiverFlowShader.DRIFT_SPEED_M_S, 10.0) * RiverFlowShader.BEND_DRIFT_FRACTION,
+		RiverFlowShader.surface_cells(1.0, 10.0) * RiverFlowShader.BEND_DRIFT_FRACTION,
 		1e-9
 	)
 	assert_almost_eq(
-		moved, RiverFlowShader.surface_cells(RiverFlowShader.DRIFT_SPEED_M_S, 10.0), 1e-9,
-		"the eddies travel WITH the lines -- both at the one shared drift speed"
-	)
-	assert_almost_eq(
-		RiverFlowShader.bend_drift_cells(2.0, 10.0), moved, 1e-9,
-		"a brisk reach migrates its eddies at the same shared speed"
+		moved, RiverFlowShader.surface_cells(1.0, 10.0), 1e-9,
+		"the eddies travel WITH the lines -- at the reach's own drift speed"
 	)
 
 
@@ -2717,7 +2721,7 @@ func test_the_fold_margin_survives_the_eddy_drift():
 
 func test_the_shader_drifts_the_eddy_sample_coordinate():
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"float bend_drift = mod(TIME * surface_px_per_s(drift_speed_m_s, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);"
+		"float bend_drift = mod(TIME * surface_px_per_s(drift_speed, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);"
 	))
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
 		"vec2 eddy_p = p * eddy_scale - flow_dir * bend_drift;"
@@ -2876,8 +2880,8 @@ func test_the_shader_streams_every_consumer_from_the_same_surface_speed():
 		"the ring must not be carried by the drift alone any more"
 	)
 	assert_true(
-		code.contains("float bend_drift = mod(TIME * surface_px_per_s(drift_speed_m_s, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);"),
-		"the eddies migrate at the one shared drift speed, through the same visible-speed function -- the ring, bounded by its lifetime, keeps the local speed"
+		code.contains("float bend_drift = mod(TIME * surface_px_per_s(drift_speed, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);"),
+		"the eddies migrate at the reach's drift speed, through the same visible-speed function -- the ring, bounded by its lifetime, keeps the local speed"
 	)
 
 
@@ -3264,13 +3268,13 @@ func test_the_drift_translations_are_bounded_by_the_noise_period():
 	)
 	assert_true(
 		RiverFlowShader.SHADER_CODE.contains(
-			"float drift = mod(TIME * drift_px_per_mps * drift_speed_m_s * moving * noise_scale, drift_period);"
+			"float drift = mod(TIME * drift_px_per_mps * drift_speed * moving * noise_scale, drift_period);"
 		),
 		"the shader must wrap the drift at drift_period"
 	)
 	assert_true(
 		RiverFlowShader.SHADER_CODE.contains(
-			"float bend_drift = mod(TIME * surface_px_per_s(drift_speed_m_s, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);"
+			"float bend_drift = mod(TIME * surface_px_per_s(drift_speed, moving) * noise_scale * bend_drift_fraction * eddy_scale, drift_period);"
 		),
 		"the shader must wrap the eddy drift at drift_period, in eddy units"
 	)

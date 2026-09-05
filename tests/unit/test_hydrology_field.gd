@@ -565,3 +565,106 @@ func test_a_tile_past_the_bleed_still_gets_real_channel_geometry_on_the_same_sid
 		signf(past_bleed["signed_across_tiles"]), signf(at_bleed["signed_across_tiles"]),
 		"the neighbour must sit on the same side as the painted cell -- no zero crossing between them"
 	)
+
+
+# -- the reach: one drift speed between confluences ----------------------------
+#
+# The flow shader drifts its strokes at a speed read per texel. A speed
+# that varies ALONG a reach (the per-tile Manning solve does: 2.26 to
+# 2.35 m/s across a few Loire tiles) times TIME diverges between
+# neighbouring pixels without bound and shreds the reach after twenty
+# minutes; one global speed cured that but lost "the Rhine travels, a
+# lower course crawls". So the drift speed is a property of the REACH --
+# the run of channel cells between confluences -- decided by the reach
+# head's discharge: constant along the reach, stepping only where a
+# tributary joins, which is where the water changes character anyway.
+
+func _cell(field_under_test: HydrologyField, x: int, y: int) -> int:
+	return field_under_test.cell_index_at(x, y)
+
+
+## The slope fixture is one straight river down column 3 with no
+## confluence: every channel cell of it is ONE reach, judged by the head.
+func test_a_river_without_confluences_is_one_reach_judged_by_its_head():
+	var slope := _slope_field()
+	var head := _cell(slope, 3, 2)
+	var mouth_cell := _cell(slope, 3, 1)
+	assert_gte(slope.discharge_at_cell(head), TEST_MIN_DISCHARGE, "precondition: the head is a channel")
+	assert_almost_eq(
+		slope.reach_discharge(mouth_cell), slope.discharge_at_cell(head), 1e-6,
+		"the whole river shares its head's discharge"
+	)
+	assert_almost_eq(slope.reach_discharge(head), slope.discharge_at_cell(head), 1e-6)
+	assert_lt(
+		slope.reach_discharge(mouth_cell), slope.discharge_at_cell(mouth_cell),
+		"precondition: the mouth's OWN discharge is larger, so the reach value is genuinely the head's"
+	)
+
+
+## Where the confluence fixture's tributary joins the main channel a new
+## reach begins: the join cell is judged by its own discharge, the cell
+## just upstream of it belongs to the reach above, and the tributary's
+## last channel cell is a reach of its own.
+func test_a_confluence_starts_a_new_reach():
+	var confluence := _confluence_field()
+	var tributary := _cell(confluence, 2, 3)
+	assert_gte(
+		confluence.discharge_at_cell(tributary), confluence.river_min_discharge,
+		"precondition: the tributary's last cell is a channel"
+	)
+	var join: int = confluence._downstream(tributary)
+	var above: int = confluence._mainstem_upstream(join, true)
+	assert_true(join >= 0 and above >= 0, "precondition: the tributary joins a channel that has a mainstem above")
+	assert_almost_eq(
+		confluence.reach_discharge(join), confluence.discharge_at_cell(join), 1e-6,
+		"the join cell heads the reach below the confluence"
+	)
+	assert_lt(
+		confluence.reach_discharge(above), confluence.reach_discharge(join),
+		"the reach above the junction carries less than the one below"
+	)
+	var tributary_reach := confluence.reach_discharge(tributary)
+	assert_gt(tributary_reach, 0.0)
+	assert_lte(
+		tributary_reach, confluence.discharge_at_cell(tributary),
+		"a reach is judged by its head, never by more than the cell itself carries"
+	)
+	assert_ne(
+		snappedf(tributary_reach, 0.000001), snappedf(confluence.reach_discharge(join), 0.000001),
+		"the tributary's reach is not the main channel's"
+	)
+
+
+## The geometry query carries the reach discharge to the painter, and it
+## is the same value for every tile of the reach -- the whole point.
+func test_the_channel_geometry_reports_the_reach_discharge_for_every_tile_of_a_reach():
+	var slope := _slope_field()
+	var expected := slope.reach_discharge(_cell(slope, 3, 1))
+	var seen := 0
+	for y in range(12, 30):
+		var geometry: Dictionary = slope.nearest_channel_geometry(38, y)
+		if geometry.is_empty():
+			continue
+		seen += 1
+		assert_true(geometry.has("reach_discharge"), "the geometry must carry the reach discharge")
+		assert_almost_eq(
+			float(geometry["reach_discharge"]), expected, 1e-6,
+			"tile (38, %d) reports another reach's discharge" % y
+		)
+	assert_gt(seen, 5, "precondition: the probe walked real channel tiles")
+
+
+## A mouth plume drifts at its river's reach, not at a fading per-tile
+## speed (a fading speed times TIME is the divergence again).
+func test_the_mouth_plume_carries_the_mouths_reach_discharge():
+	# The default crater field drains north into the sea row through its
+	# outlet cell; a sea tile just past the mouth is inside the plume.
+	var found := false
+	for y in range(2, 12):
+		var plume: Dictionary = field.mouth_plume(35, y)
+		if plume["factor"] <= 0.0:
+			continue
+		found = true
+		assert_true(plume.has("reach_discharge"), "the plume must carry its mouth's reach discharge")
+		assert_gt(float(plume["reach_discharge"]), 0.0)
+	assert_true(found, "precondition: some tile near the outlet lies in the plume")
