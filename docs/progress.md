@@ -7108,6 +7108,28 @@ state had never once been set by anything in `src/`.
   remaining two rows and kingfisher courtship (both named follow-ups, the
   latter structurally out of this mechanism's reach). Writeup:
   `concept/ecosystem_dynamics.md`'s same section.
+  **Follow-up, reported live a third time after Phases 3 and 4 had both
+  shipped: "robins just fly from random point to point and don't switch
+  between diverse actions / behaviour".** Peck/walk/sing/court all worked
+  and were all tested — every one of them gates on `perched`, and the only
+  thing that had ever set it true was `GroundForageBehavior` actually
+  committing to real, nearby food. A bird with nothing edible within
+  `SEARCH_TILES` (ordinary: an `EarthwormPatch` needs real soil moisture/
+  warmth to surface anything) never perches, and so never does anything
+  but fly, no matter how correct the animation wiring underneath is — a
+  pre-existing test had even pinned this as the intended contract. Fixed
+  with a second, independent way to perch: `AmbientFlyerMarker._step_idle_
+  rest`, a periodic clock (12s flying, 5s resting) with no food involved,
+  the same way a real bird spends much of its day sitting between meals,
+  not only right after one. Bird-only (same `IllustratedBirdSprite.has_
+  species` gate as flight height), and structurally unable to pre-empt an
+  actual pursuit or a pair interaction — both already claim the frame
+  before `_step_idle_rest` is ever reached, verified directly. The old
+  test that had pinned "never perches" was rewritten to check what was
+  actually meant to be true (`ground_forage` never commits to food that
+  isn't there) rather than the accidental "and also never rests" it had
+  also been asserting. 332 tests green across all seven bird/flyer
+  suites. Writeup: `concept/ecosystem_dynamics.md`'s same section.
 - **Persistence / catch-up integration of eaten burrows** (medium) — ⬜ Not
   started, deliberately — a reloaded chunk re-seeds deterministically and
   loses which burrows had been eaten, exactly like `FlowerPatch`, `TallGrass`,
