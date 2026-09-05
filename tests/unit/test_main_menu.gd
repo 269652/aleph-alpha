@@ -1055,6 +1055,17 @@ func test_every_starter_item_card_shows_a_real_sprite():
 		assert_gt(icon.texture.get_width(), 0, item_id)
 
 
+## Not just "doesn't crash" -- STARTER_ITEM_BLURBS.get(item_id, "") degrades
+## silently to an empty tooltip for any pool item nobody wrote a blurb for,
+## which a missing-blurb bug would sail straight through unnoticed.
+func test_every_pool_item_has_a_real_blurb():
+	for item_id in StarterKit.POOL:
+		assert_true(
+			MainMenu.STARTER_ITEM_BLURBS.has(item_id) and MainMenu.STARTER_ITEM_BLURBS[item_id] != "",
+			"%s is missing its Starting Kit tab blurb" % item_id
+		)
+
+
 func test_starts_with_the_default_starter_items_selected():
 	assert_eq(menu.current_starter_items(), StarterKit.DEFAULT_CHOICES)
 

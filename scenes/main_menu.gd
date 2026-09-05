@@ -69,6 +69,8 @@ const STARTER_ITEM_BLURBS := {
 	"rough_compass": "Never lose your way home.",
 	"iron_sword": "A proper blade. Costs real ingots to replace.",
 	"iron_axe": "Chops fast. Costs real ingots to replace.",
+	"butterfly_net": "Nets flyers -- a real chance, not a guarantee.",
+	"glass_bottle": "Bottle a catch to keep it, alive, and see it.",
 }
 
 ## Friendly labels for the appearance axes, in display order.

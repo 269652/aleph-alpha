@@ -40,12 +40,14 @@ Leather Chest, Fishing Rod).
 ## Pool
 
 `wooden_club`, `crude_blade`, `stone_pickaxe`, `fishing_rod`, `lasso`,
-`rough_compass`, `iron_sword`, `iron_axe` (`src/gameplay/starter_kit.gd`).
+`rough_compass`, `iron_sword`, `iron_axe`, `butterfly_net`, `glass_bottle`
+(`src/gameplay/starter_kit.gd`).
 
 Three distinct early paths are represented at least once each: combat
 (wooden_club/crude_blade/iron_sword), mining (stone_pickaxe), fishing
-(fishing_rod), taming (lasso), wayfinding (rough_compass) — plus the two
-iron-tier items as the "invest more now" option in combat/utility.
+(fishing_rod), taming (lasso), wayfinding (rough_compass), and — added in
+a later pass, see below — capture (butterfly_net + glass_bottle) — plus the
+two iron-tier items as the "invest more now" option in combat/utility.
 
 **Cut from the original candidate list, deliberately:**
 
@@ -53,13 +55,26 @@ iron-tier items as the "invest more now" option in combat/utility.
   no `"material"` entry. A torch cannot be equipped, used, or placed today
   — it would be a strictly dead pick until it has a real interactive loop
   (a light-radius mechanic, most likely — not spec'd anywhere yet).
-- **Snare / Trap / Butterfly Net** — each is mechanically necessary for its
-  own narrow capture class ([taming.md](taming.md)'s capture-class table),
-  but giving all three equal pool-weight next to Lasso (viable against
-  nearly everything) skewed an earlier 12-item pool a third of the way
-  toward one system a brand-new player hasn't even scoped out yet. Lasso
-  alone represents "taming" in the pool; the other three stay fully
+- **Snare / Trap** — each is mechanically necessary for its own narrow
+  capture class ([taming.md](taming.md)'s capture-class table), but giving
+  them equal pool-weight next to Lasso (viable against nearly everything)
+  would skew the pool a chunk of the way toward one system a brand-new
+  player hasn't even scoped out yet. Lasso alone represents the
+  restrain-and-struggle side of taming in the pool; both stay fully
   craftable once discovered.
+
+**Butterfly Net was cut for that same reason, then reported back in**
+("give the player a glass bottle and butterfly net from the start"), and on
+reflection the original argument doesn't actually reach it the way it
+reaches Snare/Trap: those three are the *same* capture shape (restrain,
+then struggle) as Lasso, so stacking all of them in the pool really was
+redundant weight on one system. The net is a structurally different shape
+— an instant probability roll, no struggle at all (see
+[capture_dsl.md](capture_dsl.md)) — so it represents a genuinely distinct
+early path, the same way fishing and mining each earned their own slot.
+`glass_bottle` (new since this pool was first written) comes with it: a
+net with nowhere to put a catch is half a loop, the same reasoning that
+already gives every other tool in this pool a working recipe below.
 
 ## Recipes
 

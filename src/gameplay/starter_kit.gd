@@ -11,6 +11,12 @@ extends RefCounted
 const POOL := [
 	"wooden_club", "crude_blade", "stone_pickaxe", "fishing_rod",
 	"lasso", "rough_compass", "iron_sword", "iron_axe",
+	# Reported: "give the player a glass bottle and butterfly net from the
+	# start" -- added here too so a player who picks their own kit can
+	# still choose the capture DSL's catch/release/bottle loop
+	# (docs/concept/capture_dsl.md) on purpose, the same discoverability
+	# reasoning fishing_rod already had.
+	"butterfly_net", "glass_bottle",
 ]
 
 const MAX_CHOICES := 3

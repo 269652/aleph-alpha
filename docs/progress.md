@@ -10816,3 +10816,18 @@ same change, not a follow-up. Torch and three of four taming tools
 docs/concept/starting_kit.md for why (Torch has no working interactive
 loop at all today; the other three would have skewed the pool toward one
 system next to Lasso's own broad coverage).
+
+**Update (same day): Butterfly Net reinstated, Glass Bottle added.**
+Reported: "give the player a glass bottle and butterfly net from the
+start" (first done for the OLD hardcoded grant directly on `main`, then
+asked for here too). Both are now in `StarterKit.POOL` — the pool is 10
+items, not 8. `docs/concept/starting_kit.md`'s own reasoning for why
+Butterfly Net was cut is corrected in place, not just noted here: it's a
+different capture *shape* from Snare/Trap (an instant probability roll,
+not a struggle — see `concept/capture_dsl.md`, built the same day on
+`main`), so the original "redundant weight next to Lasso" argument was
+never actually true for it the way it is for Snare/Trap, which stay cut.
+`glass_bottle` didn't exist when this pool was first written (it's part
+of the same capture-DSL pass) and is registered here as a small, isolated
+port — just the `ItemCatalog` entry + icon, not the whole DSL — since this
+branch forked before that work landed on `main`.

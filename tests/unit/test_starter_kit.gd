@@ -14,6 +14,7 @@ func test_the_pool_has_exactly_the_curated_items():
 	assert_eq(StarterKit.POOL, [
 		"wooden_club", "crude_blade", "stone_pickaxe", "fishing_rod",
 		"lasso", "rough_compass", "iron_sword", "iron_axe",
+		"butterfly_net", "glass_bottle",
 	])
 
 
