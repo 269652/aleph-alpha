@@ -37,18 +37,18 @@ const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 
 ## The three seasons a leaf/blossom actually FALLS in (see
-## EarthChunkManager.step_fruiting's own leaf-fall block), plus "winter":
-## not a season anything falls in at all, but the terminal DECAY stage
-## every settled leaf eventually reaches (see LeafLitterField.
-## DECAY_TO_WINTER_SECONDS). Included here as a real cell like any other so
-## the renderer can address it the same way -- see build_stamp_image's own
-## special case for how its art is produced without any actual "winter"
-## illustration existing. "spring" needs no equivalent special case:
-## IllustratedTree.foliage_leaf_for already resolves real blossom art for
-## it (see that function's own doc comment), so it flows through the exact
-## same has_illustrated_art/generic-fallback path summer/autumn always
-## have.
-const SEASONS := ["spring", "summer", "autumn", "winter"]
+## EarthChunkManager.step_fruiting's own leaf-fall block), plus "winter"
+## and "fading": neither a season anything falls in at all, but the two
+## later DECAY stages every settled leaf eventually passes through (see
+## LeafLitterField.DECAY_TO_FADING_SECONDS/DECAY_TO_WINTER_SECONDS).
+## Included here as real cells like any other so the renderer can address
+## them the same way -- see build_stamp_image's own special cases for how
+## their art is produced without any actual "fading"/"winter" illustration
+## existing. "spring" needs no equivalent special case: IllustratedTree.
+## foliage_leaf_for already resolves real blossom art for it (see that
+## function's own doc comment), so it flows through the exact same
+## has_illustrated_art/generic-fallback path summer/autumn always have.
+const SEASONS := ["spring", "summer", "autumn", "winter", "fading"]
 
 ## How many pixels of art one stamp carries. Mirrors SnowStampAtlas.STAMP_SIZE
 ## exactly, for the same reason: real headroom above the art's own native
@@ -95,6 +95,31 @@ const WINTER_SHADE_FLOOR := 0.35
 ## LUMINANCE: guards the shading division so a stamp with an unusually dark
 ## peak is not stretched into a blown-out result.
 const WINTER_PEAK_LUMINANCE_FLOOR := 0.35
+
+## -- "fading": the halfway stage between a leaf's own fall colour and -----
+## -- "winter" --------------------------------------------------------------
+##
+## Reported directly: "leaf decay should be 3 seasons" (clarified: "leafs
+## should take roughly 270 days to rot / decay / vanish", ~3 real seasons
+## -- see LeafLitterField.LIFETIME/DECAY_TO_FADING_SECONDS' own doc
+## comments). No species has real "half-decayed" litter art either (the
+## same reason "winter" has none), so "fading" is derived again -- but from
+## two stamps this atlas has already built rather than a fresh recolour
+## pass: a straight per-pixel blend between that species' own real autumn
+## stamp and its already-derived winter stamp. The winter stamp's own
+## recolour (luminance-preserving, shade-floor guarded) already did the
+## hard part of turning illustrated art into a believable decayed colour;
+## "fading" only needs to land partway there.
+
+## Exactly halfway -- not an independently-tuned number. The report's own
+## "3 seasons" framing already fixes the TIMING at an even three-way split
+## (LeafLitterField.DECAY_TO_FADING_SECONDS/DECAY_TO_WINTER_SECONDS), and
+## colour is the one thing this atlas controls to match that: a leaf
+## spends its middle third exactly as far from "just fell" as it is from
+## "fully decayed", so the colour should sit at the same midpoint the
+## timing already does, pinned by test_fading_stamp_is_the_pinned_blend_
+## of_autumn_and_winter in test_leaf_litter_atlas.gd.
+const FADING_BLEND := 0.5
 
 static var _atlas_texture: ImageTexture = null
 
@@ -192,6 +217,16 @@ func build_stamp_image(species: String, season: String) -> Image:
 		_stamp_cache[key] = winter_stamp
 		return winter_stamp
 
+	if season == "fading":
+		# Derived from two ALREADY-BUILT stamps -- see this file's own
+		# "fading" section doc comment. Building "winter" first (if not
+		# already cached) means this never duplicates its recolour work.
+		var fading_stamp := _fading_stamp(
+			build_stamp_image(species, "autumn"), build_stamp_image(species, "winter")
+		)
+		_stamp_cache[key] = fading_stamp
+		return fading_stamp
+
 	var source := _source_image(species, season)
 	if source.get_format() != Image.FORMAT_RGBA8:
 		source = source.duplicate()
@@ -255,6 +290,26 @@ func _decayed_winter_stamp(autumn_stamp: Image) -> Image:
 ## formula and reasoning as ProceduralFlowerSprite._luminance.
 func _luminance(color: Color) -> float:
 	return color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722
+
+
+## Blends `autumn_stamp` and `winter_stamp` (the same species' own stamps,
+## same silhouette by construction -- see this file's own "fading" section
+## doc comment) at FADING_BLEND, per pixel. A straight Color.lerp rather
+## than a fresh luminance-preserving recolour: both source stamps already
+## carry real, correctly-shaded content, so the midpoint of two believable
+## colours at the same brightness is itself a believable colour at that
+## brightness -- no new shading logic needed. Alpha lerps identically
+## (both sources share the same silhouette), so the shape never drifts.
+func _fading_stamp(autumn_stamp: Image, winter_stamp: Image) -> Image:
+	var fading := autumn_stamp.duplicate()
+	for y in autumn_stamp.get_height():
+		for x in autumn_stamp.get_width():
+			var autumn_pixel := autumn_stamp.get_pixel(x, y)
+			if autumn_pixel.a <= CONTENT_ALPHA_THRESHOLD:
+				continue
+			var winter_pixel := winter_stamp.get_pixel(x, y)
+			fading.set_pixel(x, y, autumn_pixel.lerp(winter_pixel, FADING_BLEND))
+	return fading
 
 
 ## The packed atlas: every (species, season) cell laid out side by side in
