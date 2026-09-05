@@ -353,13 +353,51 @@ before any real season boundary could pass under it in normal play.
 
 ## Status
 
-**Currently switched off by default.** `EarthChunkManager.
-LEAF_LITTER_ENABLED` (requested directly: "deactivate leaf littering")
-gates the leaf-fall block that everything below depends on -- with it
-off, no leaf is ever added to a field, so nothing downstream (rendering,
-forage, dispersal) has anything to act on. Everything in this doc is real
-and tested against the flag forced on; it is just not the game's current
-default. See `docs/progress.md`'s own matching follow-up entry.
+**Back on by default (2026-09-05).** Was briefly off (requested directly:
+"deactivate leaf littering", right after the GPU rewrite below shipped),
+then reported live as the real cost of that: "ants and beetles just walk
+back and forth and there's no real foraging" -- with the flag off,
+carrion and fresh windfall fruit are the only things left for a
+decomposer to find, and neither is reliably near a wandering ant/bug
+early in a game, so this was the missing, common, ambient food source.
+`EarthChunkManager.LEAF_LITTER_ENABLED` gates the leaf-fall block that
+everything below depends on; with it off, no leaf is ever added to a
+field, so nothing downstream (rendering, forage, dispersal) has anything
+to act on.
+
+**Live-verified before flipping it back on**, closing the exact gap this
+Status section used to name ("not a played session in the actual game
+window"): launched via `--solo --rendering-driver opengl3` and read
+`Engine.get_frames_per_second()` directly (this project's own established
+"instrument, launch, read the log" method for anything a unit test
+structurally cannot see), rather than assuming the GPU rewrite fixed the
+original per-node report just because the architecture changed.
+- **First attempt was a false alarm, not a real finding.** Using `/ecotest`
+  to fast-forward to autumn (needed since a real year is far longer than
+  any diagnostic window) pinned FPS at 1-3 -- but a controlled comparison
+  with `LEAF_LITTER_ENABLED` forced off, identical otherwise, measured the
+  *same* 1-3fps with zero leaves ever present. That ruled leaf litter out
+  as the cause: `/ecotest`'s own per-frame catch-up slicing (see
+  `TimeLapse.slices`) appears to carry a real, separate performance cost
+  of its own, present at ANY acceleration tested (both the default 45s/
+  year and a more aggressive 5s/year) -- a pre-existing dev-tool
+  characteristic unrelated to this feature, seemingly never measured
+  before either (no existing probe ties FPS to ecology timing). Left
+  unfixed here as clearly out of this pass's scope; worth its own
+  separate look.
+- **The real test**: normal (1x, unaccelerated) speed, which is how the
+  game is actually played almost all the time, recovers to a healthy
+  15-27fps on modest Intel integrated graphics once chunks finish loading
+  -- confirmed both with leaf litter's own systems idle (spring, nothing
+  shed yet) and, decisively, with 30 loaded chunks directly seeded ~750-
+  960 real simultaneous leaves each (`LeafLitterField.add_leaf`, well
+  above what a natural autumn would ever produce across a normal play
+  session at once) and left rendering/aging under `step_leaf_litter` for
+  30+ real seconds: FPS held steady at 14-25 throughout, no degradation
+  from the leaf-free baseline. The GPU rewrite's whole premise -- one
+  `MultiMeshInstance2D` draw call per chunk plus cheap plain-data leaf
+  records, replacing a live scene node per leaf -- holds up under real
+  measurement, not just architecturally plausible reasoning.
 
 ✅ A real leaf falls (autumn's main fall and a light summer trickle) as
 cheap per-chunk data (`LeafLitterField`), rendered by one GPU-instanced
@@ -373,6 +411,14 @@ a decomposer finds and eats via an injected `_world` reference
 triggers share one persisted-relocation mechanism and the same GPU
 transition machinery the initial fall uses.
 
+✅ Live in-game performance re-confirmation of the GPU rewrite (see
+above) -- closes the gap this section used to name. The pre-existing
+real-GPU render-smoke test (`test_leaf_litter_renderer_smoke.gd`) still
+covers shader-compiles/samples-real-content/moves-a-transitioning-
+instance correctness at 1-leaf scale; this closes the separate,
+previously-missing "does it hold up at real volume, at real speed"
+question.
+
 ⬜ Invisible `AntColony` windfall foraging extended to leaves (see
 "Consumption" above) -- unchanged gap from the first pass.
 
@@ -381,9 +427,10 @@ litter visual effect, and a third rotten/black colour stage for litter
 that outlives `LeafLitterField.LIFETIME` (see "Deliberately not modeled"
 above and soil_fauna.md's own deferred detritivore-population note).
 
-⬜ A live in-game visual re-confirmation of this rewrite specifically (fall
-animation, wind/player/animal scatter, decomposer forage) -- this pass's
-own automated coverage includes a real-GPU render-smoke test
-(`test_leaf_litter_renderer_smoke.gd`) proving the shader compiles, samples
-real content, and moves a transitioning instance, but not a played session
-in the actual game window.
+⬜ **`/ecotest`'s own accelerated-time performance cost, independent of
+leaf litter** (see the live-verification note above) -- measured as a
+real, severe FPS drop present at any tested acceleration with LEAF
+LITTER OFF and zero leaves, so it lives in the ecology time-lapse/
+catch-up-slicing mechanism itself (`scenes/world.gd`, `TimeLapse`), not
+here. Named rather than silently left for whoever next reaches for
+`/ecotest` and is confused by it.
