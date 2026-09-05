@@ -18,6 +18,13 @@ const FLYER_WORLD_SCALE := {
 	"sparrow": 1.0,
 	"robin": 1.5,
 	"kingfisher": 1.7,
+	# Not yet spawnable (see IllustratedBirdSprite's class doc comment on
+	# Phase 2) -- kept here already so IllustratedBirdSprite's own target
+	# widths have a real ratio to stay consistent with (see
+	# test_flyer_world_scale_proportions_match_illustrated_bird_sprite).
+	# One of the larger common garden birds (~24cm), alongside the
+	# kingfisher (~17cm bill included) and above a robin/sparrow (~14-15cm).
+	"blackbird": 1.7,
 	"monarch": 0.5,
 	"swallowtail": 0.55,
 	"blue_morpho": 0.6,
@@ -597,7 +604,19 @@ func _build_marker(
 	# take a `sprite_scale` argument from the caller, which is now dead --
 	# leaving it would be a third, silent input to a number that has already
 	# been hard to get right.
-	marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * FishRenderer.FISH_WORLD_SCALE * FLYER_WORLD_SCALE.get(species, 1.0)
+	#
+	# ILLUSTRATED bird art is a real photo/hand-drawn sheet, not a small
+	# fixed procedural canvas -- its actual pixel content measures several
+	# times wider than ProceduralBirdSprite's tiny 32x20 art, so applying
+	# this same flat scale to it drew a bird several times too big
+	# (reported live: "robins and sparrows are now gigantic"). Mirrors
+	# CreatureMarker._apply_action_scale's own illustrated/procedural
+	# branch exactly: IllustratedBirdSprite.marker_scale normalizes the
+	# MEASURED content back down to a real target world width instead.
+	if sprite_generator.has_method("marker_scale"):
+		marker.scale = Vector2.ONE * sprite_generator.marker_scale(species)
+	else:
+		marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * FishRenderer.FISH_WORLD_SCALE * FLYER_WORLD_SCALE.get(species, 1.0)
 	marker.position = position
 	marker.home = position
 	marker.wander_seed = seed_value

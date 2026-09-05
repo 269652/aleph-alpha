@@ -116,6 +116,60 @@ func test_frames_are_cached_not_rebuilt_per_call():
 	assert_same(a, b)
 
 
+## Reported live: "robins and sparrows are now gigantic". Root cause: the
+## renderers apply ONE flat marker.scale tuned for ProceduralBirdSprite's
+## tiny 32x20 canvas to whatever texture the chosen generator produced --
+## and IllustratedBirdSprite's real-art canvas measures roughly 6-9x wider
+## in actual content, so the same flat scale drew a bird 6-9x too big.
+## marker_scale is the fix, mirroring IllustratedAnimalSprite.marker_scale
+## exactly: a per-species multiplier that normalizes the MEASURED content
+## width back down to a real target world width, so the renderer applies
+## THIS instead of the flat procedural-tuned scale whenever this generator
+## is the one in use.
+func test_marker_scale_keeps_every_species_a_normal_creature_size():
+	for species in ["sparrow", "robin", "blackbird", "kingfisher"]:
+		var content_width := _content_width_px(sprite.generate_texture(species, 0))
+		var world_width: float = sprite.marker_scale(species) * content_width
+		# A fish is FishRenderer.FISH_WORLD_SCALE-scaled art at roughly this
+		# same order of magnitude, and birds are meant to read as roughly
+		# fish-sized (see AmbientFlyerRenderer.FLYER_WORLD_SCALE's own doc
+		# comment: "a sparrow about one fish"). Comfortably bounds a normal
+		# bird while catching the reported bug's ~6-9x-too-big regime by a
+		# wide margin.
+		assert_between(
+			world_width, 3.0, 20.0,
+			"%s renders %.1f world px wide -- gigantic (or invisible) again" % [species, world_width]
+		)
+
+
+func test_marker_scale_relative_sizes_roughly_match_intended_proportions():
+	# Sparrow is the reference (AmbientFlyerRenderer.FLYER_WORLD_SCALE
+	# ["sparrow"] == 1.0); kingfisher and blackbird are both meant to read
+	# as bigger birds than a sparrow or a robin (see FLYER_WORLD_SCALE's own
+	# table) -- not pinned to the exact ratios (real illustrated art has its
+	# own proportions a hand-authored multiplier cannot predict exactly),
+	# just the same ordering, so a future art swap can't quietly make a
+	# kingfisher read as the smallest bird on screen.
+	var widths := {}
+	for species in ["sparrow", "robin", "blackbird", "kingfisher"]:
+		widths[species] = sprite.marker_scale(species) * _content_width_px(sprite.generate_texture(species, 0))
+	assert_gt(widths["robin"], widths["sparrow"] * 0.9)
+	assert_gt(widths["kingfisher"], widths["sparrow"] * 0.9)
+	assert_gt(widths["blackbird"], widths["sparrow"] * 0.9)
+
+
+func _content_width_px(texture: Texture2D) -> float:
+	var image := texture.get_image()
+	var min_x := image.get_width()
+	var max_x := -1
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.01:
+				min_x = mini(min_x, x)
+				max_x = maxi(max_x, x)
+	return float(max_x - min_x + 1)
+
+
 func _has_opaque_pixels(texture: Texture2D) -> bool:
 	var image := texture.get_image()
 	for y in image.get_height():

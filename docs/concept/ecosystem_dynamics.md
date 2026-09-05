@@ -903,6 +903,35 @@ distinction specifically). `test_ambient_flyer_marker.gd`,
 stay green (255 tests total across the six files) — the art swap changes
 no behavioral assertion, only which pixels a bird is drawn with.
 
+**Follow-up, same day: "robins and sparrows are now gigantic".** The
+renderers apply ONE flat `marker.scale`
+(`ArtResolution.SPRITE_SCALE * FishRenderer.FISH_WORLD_SCALE *
+FLYER_WORLD_SCALE[species]`) tuned for `ProceduralBirdSprite`'s tiny 32x20
+art canvas, regardless of which generator actually produced the texture —
+and `IllustratedBirdSprite`'s real-art canvas measures roughly 6-9x wider
+in actual content, so the same flat scale drew a bird 6-9x too big
+(measured: a sparrow that should read ~6.6 world px wide rendered at
+~58). Fixed with `IllustratedBirdSprite.marker_scale(species)`, the bird
+analog of `IllustratedAnimalSprite.marker_scale`: normalizes the MEASURED
+content width back down to a real target world width
+(`BASE_WORLD_WIDTH := 6.6`, calibrated to reproduce the procedural
+sparrow's own pre-existing on-screen size, times a per-species multiplier
+matching `FLYER_WORLD_SCALE`'s intended proportions). `AmbientFlyer
+Renderer._build_marker`/`PiscivoreBirdRenderer.spawn_piscivore_birds` now
+branch on `sprite_generator.has_method("marker_scale")` and use it instead
+of the flat chain whenever the illustrated generator is the one in use —
+mirroring `CreatureMarker._apply_action_scale`'s own illustrated/
+procedural branch exactly. `FLYER_WORLD_SCALE` gained a `"blackbird"`
+entry (`1.7`, alongside kingfisher — a real blackbird is one of the larger
+common garden birds) so `IllustratedBirdSprite`'s own target widths have
+something real to stay consistent with even before blackbird is
+spawnable. Pinned by two new tests in `test_illustrated_bird_sprite.gd`
+(a bounded, sane world-width range; relative ordering across species) and
+two in `test_ambient_flyer_renderer.gd` (the real `build_bird` spawn path
+uses `marker_scale`, not the flat chain; `FLYER_WORLD_SCALE` and
+`IllustratedBirdSprite`'s target widths agree on which species is
+bigger) — 259 tests green across the six files.
+
 ## Region difficulty (gating the roster by player readiness)
 
 Rounding out the roster with real predators (bear, lion) and a real hazard

@@ -6998,6 +6998,16 @@ state had never once been set by anything in `src/`.
   the walk/dive/display/sing rows have real art measured or reserved but
   no behavioral trigger. Writeup: `concept/ecosystem_dynamics.md`'s "Real
   illustrated art for songbirds and the kingfisher".
+  **Follow-up, same day: "robins and sparrows are now gigantic".** The
+  renderers' flat `marker.scale` was tuned for `ProceduralBirdSprite`'s
+  tiny 32x20 canvas and applied unchanged to `IllustratedBirdSprite`'s
+  real art (~6-9x wider in actual content) — a sparrow that should read
+  ~6.6 world px wide rendered at ~58. Fixed with `IllustratedBirdSprite.
+  marker_scale(species)` (the bird analog of `IllustratedAnimalSprite.
+  marker_scale`), wired in wherever the illustrated generator is actually
+  selected, mirroring `CreatureMarker._apply_action_scale`'s own
+  illustrated/procedural branch. 259 tests green. Writeup:
+  `concept/ecosystem_dynamics.md`'s same section, its own dated follow-up.
 - **Persistence / catch-up integration of eaten burrows** (medium) — ⬜ Not
   started, deliberately — a reloaded chunk re-seeds deterministically and
   loses which burrows had been eaten, exactly like `FlowerPatch`, `TallGrass`,
