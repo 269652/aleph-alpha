@@ -2596,6 +2596,12 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	# Food goes off in the pack too, on the same clock (see ItemStack.age).
 	_chunk_manager.step_carried_food(delta)
 	_chunk_manager.step_tall_grass(delta)
+	# Real aquatic vegetation (see EarthChunkManager.step_aquatic_vegetation,
+	# docs/concept/aquatic_foraging.md) -- mirrors step_tall_grass's own
+	# batched, GRASS_REFRESH_INTERVAL-throttled cadence immediately above,
+	# right next to it for the same reason step_wild_crops sits next to its
+	# own land-plant-growth cousin below.
+	_chunk_manager.step_aquatic_vegetation(delta)
 	# Wild carrot/potato growth + spread (see EarthChunkManager.step_wild_crops,
 	# docs/concept/wild_crops.md) -- mirrors step_tall_grass's own throttled
 	# cadence immediately above. This line was simply missing: the step
