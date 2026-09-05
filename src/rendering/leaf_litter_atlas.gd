@@ -14,16 +14,21 @@ extends RefCounted
 ## Every species/season pair gets its own cell -- real illustrated art (see
 ## IllustratedTree.foliage_leaf_for) where the artist has drawn it, and the
 ## SAME generic procedural sprite DroppedItem always fell back to otherwise
-## for any pair that lacks it. Every one of the 6 species x 2 FALLING
-## seasons ("summer"/"autumn" -- see SEASONS' own doc comment) this project
-## ships today actually HAS real illustrated art (verified directly; an
-## earlier draft of this feature's own plan named "pine/autumn" as a gap,
-## which is no longer -- or was never actually -- true), so the fallback
-## path exists for whenever a future species/season genuinely lacks art,
-## not because one currently does. The third season, "winter" -- a settled
-## leaf's own terminal DECAY stage, not a season it can fall in -- is
-## never illustrated for any species and never falls to the generic
-## fallback either; see build_stamp_image's own special case and
+## for any pair that lacks it. Every one of the 6 species x 3 FALLING
+## seasons ("spring"/"summer"/"autumn" -- see SEASONS' own doc comment)
+## this project ships today actually HAS real illustrated art (verified
+## directly), so the fallback path exists for whenever a future species/
+## season genuinely lacks art, not because one currently does -- though
+## spring's own art quality varies by species: cherry's is a genuinely
+## recognisable blossom, while acorn/hazelnut/walnut/apple land on a
+## green, leaf-toned crop instead (not blank or broken, just less floral
+## than hoped) and pine lands on the same winged-seed-pair crop its own
+## already-known autumn imperfection uses -- named in docs/concept/
+## leaf_litter.md rather than hidden, the same as that pine/autumn gap
+## always has been. The fourth season, "winter" -- a settled leaf's own
+## terminal DECAY stage, not a season it can fall in -- is never
+## illustrated for any species and never falls to the generic fallback
+## either; see build_stamp_image's own special case and
 ## _decayed_winter_stamp.
 
 const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
@@ -31,15 +36,19 @@ const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_spri
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 
-## The two seasons a leaf actually FALLS in (see EarthChunkManager.
-## step_fruiting's own leaf_fall_season -- spring never appears on a fallen
-## leaf's own record), plus "winter": not a season a leaf falls in at all,
-## but the terminal DECAY stage every settled leaf eventually reaches (see
-## LeafLitterField.DECAY_TO_WINTER_SECONDS). Included here as a real cell
-## like any other so the renderer can address it the same way -- see
-## build_stamp_image's own special case for how its art is produced
-## without any actual "winter" illustration existing.
-const SEASONS := ["summer", "autumn", "winter"]
+## The three seasons a leaf/blossom actually FALLS in (see
+## EarthChunkManager.step_fruiting's own leaf-fall block), plus "winter":
+## not a season anything falls in at all, but the terminal DECAY stage
+## every settled leaf eventually reaches (see LeafLitterField.
+## DECAY_TO_WINTER_SECONDS). Included here as a real cell like any other so
+## the renderer can address it the same way -- see build_stamp_image's own
+## special case for how its art is produced without any actual "winter"
+## illustration existing. "spring" needs no equivalent special case:
+## IllustratedTree.foliage_leaf_for already resolves real blossom art for
+## it (see that function's own doc comment), so it flows through the exact
+## same has_illustrated_art/generic-fallback path summer/autumn always
+## have.
+const SEASONS := ["spring", "summer", "autumn", "winter"]
 
 ## How many pixels of art one stamp carries. Mirrors SnowStampAtlas.STAMP_SIZE
 ## exactly, for the same reason: real headroom above the art's own native

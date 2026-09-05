@@ -11,7 +11,7 @@ const LeafLitterAtlas = preload("res://src/rendering/leaf_litter_atlas.gd")
 const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 
-const _SEASONS := ["summer", "autumn", "winter"]
+const _SEASONS := ["spring", "summer", "autumn", "winter"]
 
 
 func _atlas() -> LeafLitterAtlas:
