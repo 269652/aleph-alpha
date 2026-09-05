@@ -1522,6 +1522,32 @@ whole tree picture to composite and cache, so growth is drawn in a fixed number
 of stages (`GROWTH_LEVELS`) exactly as the turn is. A continuous fraction would
 mean a new texture per frame per sapling in a wood full of them.
 
+**Maturity is not the end of growth.** `TreeGrowth.scale_at` used to flatline
+at exactly full size once a tree crossed `MATURITY_SECONDS` (three simulated
+years) — every tree that had ever finished its fast early growth read as
+identically sized forever after, however long it had actually stood. Real
+trees keep slowly putting on size for centuries past reproductive maturity;
+asked directly to make that visible ("make trees another 30% bigger, varying
+by age... so a 100 year old tree is bigger than a 10 year old tree"), the
+curve now continues past `MATURITY_SECONDS` toward `OLD_GROWTH_BONUS` (30%
+over the mature reference size), reaching it at `OLD_GROWTH_SECONDS` (a
+century, the exact age named in the request) with the same ease-out shape
+the seedling curve already uses — fast early gains tapering toward the
+ceiling, not a constant creep for a hundred years. `MATURITY_SECONDS` still
+means exactly what it always meant: the end of the CANOPY-pruning/stage-ladder
+growth above, and the gate `TreeMaturity`/fruiting eligibility read
+separately. Old growth is a pure size bonus layered on top, deliberately
+untethered from either of those -- felling an ancient tree is not worth more
+timber than felling a merely-mature one (`FelledTree.timber_for` clamps its
+own input back to the pre-old-growth range), only bigger to look at.
+`TreeRenderer.spawn_trees`'s original map-generated forest, which used to
+hand every tree an identical `age_seconds = INF` ("always been here", size
+locked at exactly 1.0), now seeds each tree a real, deterministic, per-tile
+FINITE age spanning the whole curve instead -- INF itself keeps meaning
+"skip aging entirely" (unaffected, still exactly 1.0), reserved for anything
+that genuinely wants a tree's size decided by something other than a real
+elapsed age.
+
 **A tree bears once a year, and the species decides WHEN, not how often.** The
 bearing cycle is one year for every species, always. It used to be scaled by the
 species' ripening character, which meant a cherry ran a cycle two thirds of a

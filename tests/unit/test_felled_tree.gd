@@ -9,6 +9,7 @@ extends GutTest
 
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const FelledTree = preload("res://src/rendering/felled_tree.gd")
+const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
 
 var _drops: Array = []
 
@@ -128,6 +129,16 @@ func test_a_worked_out_trunk_is_gone():
 ## as cutting up an oak.
 func test_a_bigger_tree_yields_more_timber():
 	assert_gt(FelledTree.timber_for(1.0), FelledTree.timber_for(0.4))
+
+
+## An old-growth tree (growth_scale up to 1.0 + TreeGrowth.OLD_GROWTH_BONUS,
+## see that constant's own doc comment) looks bigger but is not worth MORE
+## to fell -- old growth is a purely visual bonus, deliberately not a
+## timber-yield one. timber_for's own internal clampf(growth_scale, 0.0,
+## 1.0) already guarantees this; pinned explicitly here as a tested
+## decision rather than an incidental side effect nobody meant to rely on.
+func test_old_growth_does_not_increase_timber_yield():
+	assert_eq(FelledTree.timber_for(1.0 + TreeGrowth.OLD_GROWTH_BONUS), FelledTree.timber_for(1.0))
 
 
 func test_even_a_small_tree_yields_something():

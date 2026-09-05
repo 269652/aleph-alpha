@@ -289,9 +289,13 @@ func test_a_freshly_planted_tree_spawns_as_a_seedling():
 	assert_almost_eq(tree.growth_scale, TreeGrowth.SEEDLING_SCALE, 0.001)
 
 
+## Tolerance widened 0.001 -> 0.02: at 2x MATURITY_SECONDS a tree has
+## already earned a small old-growth head start (see TreeGrowth's own "old
+## growth" doc comment) rather than sitting at the exact pre-old-growth
+## literal.
 func test_a_long_established_tree_spawns_full_grown():
 	var tree := renderer.spawn_tree_at(parent, Vector2(64, 64), TreeGrowth.MATURITY_SECONDS * 2.0)
-	assert_almost_eq(tree.growth_scale, 1.0, 0.001)
+	assert_almost_eq(tree.growth_scale, 1.0, 0.02)
 
 
 ## A half-grown sapling is visibly between the two, which is the whole point
@@ -302,12 +306,48 @@ func test_a_half_grown_tree_is_between_seedling_and_full():
 	assert_lt(tree.growth_scale, 1.0)
 
 
-## Map-generated forest predates the session, so it stands mature.
+## Map-generated forest predates the session, so every tree stands at LEAST
+## mature -- never a sapling. No longer pinned to exactly 1.0: bulk-spawned
+## trees now draw a real per-tile old-growth age (see
+## test_original_forest_trees_have_a_real_age_structure below), so some are
+## bigger than simple maturity.
 func test_original_forest_trees_spawn_mature():
 	var chunk := _make_forest_chunk()
 	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
 	assert_gt(spawned.size(), 0)
-	assert_almost_eq(spawned[0].growth_scale, 1.0, 0.001)
+	for tree in spawned:
+		assert_gte(tree.growth_scale, 1.0, "an original forest tree should never be a sapling")
+
+
+## Asked directly: "keep it but make trees another 30% bigger, varying by
+## age." A real forest has an age structure -- some trees decades older
+## than others -- not one uniform stand where every original tree is
+## pixel-identically "mature". Deterministic per tile (see _seeded_age), so
+## this is a property of a forest that regenerates identically every time,
+## not randomness that would make a reloaded chunk's trees resize
+## themselves.
+func test_original_forest_trees_have_a_real_age_structure():
+	var chunk := _make_forest_chunk()
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	assert_gt(spawned.size(), 1, "fixture should spawn more than one tree to show variety")
+	var sizes := {}
+	for tree in spawned:
+		sizes[snappedf(tree.growth_scale, 0.001)] = true
+	assert_gt(sizes.size(), 1, "every original forest tree spawned at the exact same size")
+
+
+## And it has to be a real forest-scale distribution, reaching all the way
+## to the old-growth ceiling somewhere -- not just a narrow band just past
+## simple maturity.
+func test_original_forest_trees_include_some_at_the_old_growth_ceiling():
+	var chunk := _make_forest_chunk()
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	var reached_ceiling := false
+	for tree in spawned:
+		if is_equal_approx(tree.growth_scale, 1.0 + TreeGrowth.OLD_GROWTH_BONUS):
+			reached_ceiling = true
+			break
+	assert_true(reached_ceiling, "no original forest tree reached the old-growth ceiling")
 
 
 # -- draw order: a tree occludes whoever walks behind it --------------------

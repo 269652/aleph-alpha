@@ -115,12 +115,34 @@ func spawn_trees(
 				continue
 
 			var position := _stand_position(global_x, global_y, tile_size)
-			var tree := _build_tree_node(position)
+			var tree := _build_tree_node(position, _seeded_age(global_x, global_y))
 			tree.position = position
 			parent.add_child(tree)
 			spawned.append(tree)
 
 	return spawned
+
+
+## A real forest has an age structure -- some trees decades older than
+## others, a few genuinely ancient (see TreeGrowth's own "old growth" doc
+## comment; asked directly: "make trees another 30% bigger, varying by
+## age"). A bare INF default (this file's own age_seconds=INF convention
+## for "always been here") would give every original-forest tree the exact
+## same size with zero variation, which reads as a planted grove, not a
+## real stand.
+##
+## Deterministic from the tile, like _stand_position right above -- a
+## regenerated/reloaded chunk must show the identical forest, not one that
+## reshuffles its own trees' ages.
+##
+## Ranges from freshly mature up through DOUBLE OLD_GROWTH_SECONDS, so the
+## full curve is genuinely represented across a real forest: some trees
+## barely past maturity, some mid-way through their old-growth years, and
+## some -- the ones landing at or past OLD_GROWTH_SECONDS itself -- true
+## old growth at the ceiling.
+func _seeded_age(global_x: int, global_y: int) -> float:
+	var t := float(PixelNoise.range_index(global_x * 15485863 + global_y, 409, 0, 1001)) / 1000.0
+	return lerp(TreeGrowth.MATURITY_SECONDS, TreeGrowth.OLD_GROWTH_SECONDS * 2.0, t)
 
 
 ## Spawns a single collidable tree node at an explicit position -- for a

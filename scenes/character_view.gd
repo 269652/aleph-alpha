@@ -240,21 +240,23 @@ const HEAD_TOP_Y := -(ABOVE_HIP_HEIGHT + float(LEG_SIZE.y))
 ##
 ## Lowered again, 0.85 -> 0.595 (30% smaller): asked directly to "make the
 ## character 30% smaller and zoom in 30% so trees become relatively
-## bigger" (Player.CAMERA_ZOOM handles the zoom half). The two changes do
-## NOT cancel out on screen -- 0.7 (this) * 1.3 (zoom) = 0.91, so the
-## character reads a net ~9% smaller than before, while everything else in
-## the world (measured purely by the zoom) reads 30% bigger next to it,
-## which is the actual ask. Genuine tension with the leg-legibility fix
-## directly above: back-computed against that same measured ~5.1px (0.85-
-## era) leg content, this combination lands leg content back around
-## ~4.6px -- close to, though not quite at, the original ~4px that
-## triggered "legs are not wired." Checked with a real rendered frame
-## (Player + a full-grown TreeRenderer tree in a live SubViewport) rather
-## than trusting the arithmetic alone: the legs still read as distinct
-## armored plates with real shading and a clear boot silhouette, not the
-## smeared blob the original bug looked like -- the pixel estimate above
-## was a real, worth-checking risk, but it did not materialize (see
-## docs/progress.md for the actual image).
+## bigger". The zoom half (Player.CAMERA_ZOOM) was raised the same day and
+## then REVERTED the same day too, reported live as visible blur (see
+## Player.TARGET_TILE_SCREEN_PX's own doc comment) -- this constant is
+## unaffected by that and stays at 0.595, since "trees relatively bigger"
+## comes entirely from THIS ratio (zoom scales the character and every
+## tree identically, so it cancels out of their on-screen ratio).
+##
+## Genuine tension with the leg-legibility fix directly above, re-measured
+## after the zoom revert: back-computed against that same measured ~5.1px
+## (0.85-era, 4x zoom) leg content, 0.595 at the reverted 4x zoom (not the
+## briefly-5.2x tuning) lands leg content around ~3.6px -- BELOW the
+## original ~4px that triggered "legs are not wired," a real regression
+## risk this arithmetic alone would not have caught if checked only at the
+## intermediate 5.2x zoom. Checked with a real rendered frame (Player + a
+## full-grown TreeRenderer tree in a live SubViewport) at the actual final
+## combination rather than trusting either the arithmetic or the earlier
+## 5.2x-zoom screenshot -- see docs/progress.md for what that check found.
 const TARGET_HEIGHT_FRACTION_OF_TREE := 0.595
 
 ## Computed, not eyeballed (see CLAUDE.md): the character's own total

@@ -42,24 +42,39 @@ func test_camera_zoom_is_wired_from_the_tuned_constant():
 ## LAYER_SCALE) -- this constant is the one deliberate exception, a real
 ## framing/composition tuning asked for directly.
 ##
-## 83.2, not 64.0: asked directly to "zoom in 30% so trees become relatively
-## bigger" (alongside shrinking the character -- see CharacterView.
-## TARGET_HEIGHT_FRACTION_OF_TREE). Zoom is a direct magnification factor, not
-## an inverse like a seconds-to-cover time constant, so 30% more zoom is
-## simply 64.0 * 1.3 = 83.2, pinned by the ratio test below rather than just
-## re-asserting the new literal.
+## Was briefly 83.2 (2026-09-05): asked directly to "zoom in 30% so trees
+## become relatively bigger" alongside shrinking the character (see
+## CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE). Reverted the same day,
+## reported live as real, visible blur: at exactly 64.0 (CAMERA_ZOOM 4.0x),
+## ArtResolution.SPRITE_SCALE(0.5) * CAMERA_ZOOM.x lands on a whole 2.0
+## screen pixels per source texel for every SPRITE_SCALE-path entity
+## (terrain, the tree canopy, the bobber); at 83.2 (5.2x) that ratio is a
+## non-whole 2.6, which nearest-neighbour filtering shows as soft, uneven
+## edges rather than clean blocks -- the same failure mode this codebase
+## already fixed once for the character-creator portrait
+## (STANDARD_PORTRAIT_SCALE, docs/progress.md). With ArtResolution.
+## DETAIL_MULTIPLIER=2, the only zoom values that stay whole are multiples
+## of 4x, so there is no "close to 30%" alternative -- see player.gd's own
+## comment for the 4x/8x tradeoff this ruled out. "Trees relatively bigger"
+## survives the revert intact: that ratio comes entirely from
+## TARGET_HEIGHT_FRACTION_OF_TREE, never from zoom (zoom scales the
+## character and every tree by the identical factor, so it cancels out of
+## their ratio) -- confirmed by rendering a real frame at both zoom levels.
 func test_target_tile_screen_size_matches_the_current_tuning():
-	assert_almost_eq(Player.TARGET_TILE_SCREEN_PX, 83.2, 0.001)
+	assert_almost_eq(Player.TARGET_TILE_SCREEN_PX, 64.0, 0.001)
 
 
-## Same reasoning as Snowfall's own covering-speed test: pin the RATIO against
-## the previous tuning, not just the new literal, so the intent ("30% more
-## zoom") survives independently of the exact numbers on either side.
-func test_camera_zoomed_in_thirty_percent_over_the_previous_tuning():
-	var previous_target_tile_screen_px := 64.0
+## Pins the property the revert exists to restore: a whole number of screen
+## pixels per source texel for every ArtResolution.SPRITE_SCALE-path entity,
+## at the actual live zoom -- not just re-asserting the literal 64.0 above,
+## which could pass by coincidence if SPRITE_SCALE or DETAIL_MULTIPLIER ever
+## moved too.
+func test_camera_zoom_keeps_sprite_scale_path_art_pixel_aligned():
+	var art_resolution := load("res://src/rendering/art_resolution.gd")
+	var screen_px_per_texel: float = art_resolution.SPRITE_SCALE * Player.CAMERA_ZOOM.x
 	assert_almost_eq(
-		Player.TARGET_TILE_SCREEN_PX / previous_target_tile_screen_px, 1.3, 0.0001,
-		"camera should now be zoomed in 30% over the previous tuning"
+		screen_px_per_texel, roundf(screen_px_per_texel), 0.0001,
+		"screen pixels per source texel is %.4f, not a whole number -- nearest-neighbour will show soft, uneven edges" % screen_px_per_texel
 	)
 
 

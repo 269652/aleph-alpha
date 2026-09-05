@@ -110,13 +110,47 @@ func test_a_sapling_grows_as_it_ages():
 	assert_gt(tree.growth_scale, seedling, "the sapling never grew")
 
 
-func test_a_grown_tree_stops_growing():
+## Growth does not stop at simple maturity any more -- see TreeGrowth's own
+## "old growth" doc comment (asked directly: "make trees another 30%
+## bigger, varying by age"). It stops only once it actually reaches the
+## old-growth ceiling.
+func test_a_tree_keeps_slowly_growing_past_simple_maturity():
 	var tree := ChoppableTree.new()
 	add_child_autofree(tree)
 	tree.set_age(TreeGrowth.MATURITY_SECONDS)
-	var grown := tree.growth_scale
+	var just_mature := tree.growth_scale
 	tree.set_age(TreeGrowth.MATURITY_SECONDS * 10.0)
+	assert_gt(tree.growth_scale, just_mature, "an old tree should be bigger than a newly-mature one")
+
+
+func test_a_grown_tree_stops_growing_once_it_reaches_old_growth():
+	var tree := ChoppableTree.new()
+	add_child_autofree(tree)
+	tree.set_age(TreeGrowth.OLD_GROWTH_SECONDS)
+	var grown := tree.growth_scale
+	tree.set_age(TreeGrowth.OLD_GROWTH_SECONDS * 10.0)
 	assert_almost_eq(tree.growth_scale, grown, 0.001)
+
+
+## The setter's own clamp has to allow the old-growth bonus through, or
+## every ancient tree would silently render at exactly 1.0 regardless of
+## how old TreeGrowth itself says it should look.
+func test_growth_scale_setter_allows_the_old_growth_bonus_through():
+	var tree := ChoppableTree.new()
+	add_child_autofree(tree)
+	tree.growth_scale = 1.0 + TreeGrowth.OLD_GROWTH_BONUS
+	assert_almost_eq(tree.growth_scale, 1.0 + TreeGrowth.OLD_GROWTH_BONUS, 0.001)
+	assert_almost_eq(tree.scale.x, 1.0 + TreeGrowth.OLD_GROWTH_BONUS, 0.001)
+
+
+## But still bounded -- an old-growth bonus is not an excuse to accept an
+## arbitrarily large or negative value some other caller might pass by
+## mistake.
+func test_growth_scale_setter_still_clamps_beyond_the_old_growth_ceiling():
+	var tree := ChoppableTree.new()
+	add_child_autofree(tree)
+	tree.growth_scale = 1.0 + TreeGrowth.OLD_GROWTH_BONUS + 5.0
+	assert_almost_eq(tree.growth_scale, 1.0 + TreeGrowth.OLD_GROWTH_BONUS, 0.001)
 
 
 ## Growth is monotonic -- a tree never shrinks.
@@ -166,12 +200,18 @@ func test_growing_beats_the_redraw_guard():
 
 ## The node still shrinks -- a young tree really is shorter, and the trunk has
 ## to come up with it. Fewer branches is IN ADDITION to that, not instead.
+##
+## Tolerance widened 0.01 -> 0.02: at 2x MATURITY_SECONDS the tree has
+## already earned a small old-growth head start (~1.016, not exactly 1.0)
+## -- see TreeGrowth's own "old growth" doc comment -- so "roughly full
+## size" has to allow for that rather than pin the pre-old-growth exact
+## literal.
 func test_a_sapling_is_still_a_smaller_node():
 	var tree := _tree()
 	tree.set_age(0.0)
 	assert_lt(tree.scale.x, 1.0)
 	tree.set_age(TreeGrowth.MATURITY_SECONDS * 2.0)
-	assert_almost_eq(tree.scale.x, 1.0, 0.01)
+	assert_almost_eq(tree.scale.x, 1.0, 0.02)
 
 
 # -- snow, a live-weather overlay pushed alongside season/turn --------------
