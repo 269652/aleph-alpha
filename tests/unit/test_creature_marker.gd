@@ -2005,6 +2005,138 @@ func test_the_submersion_waterline_is_released_once_it_leaves_the_water():
 	assert_gt(waterline, 90000.0, "back on dry land nothing should render as submerged")
 
 
+# -- river/lake: a gradual, depth-driven waterline instead of the fixed --
+# -- ocean-style one -------------------------------------------------------
+#
+# Reported alongside the ripple bug: the same detection gap that kept
+# animals from rippling in rivers (see test_creature_enters_swim_action_on_
+# a_river_tile_even_off_ocean_biome above) also left them with no real
+# depth signal for their tint -- only ocean's fixed, all-or-nothing
+# waterline_offset_y. Ocean itself is untouched here: it's tuned,
+## working art direction, not what was reported broken.
+
+const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
+
+
+## A StubWorldWithFreshWater that also answers river/lake depth queries --
+## the same two EarthChunkManager calls Player._resolve_water_state uses.
+class StubWorldWithDepth:
+	extends StubWorldWithFreshWater
+	var depth := 0.0
+	func river_depth_meters_at_global(_x: int, _y: int) -> float:
+		return depth if is_river else 0.0
+	func lake_depth_meters_at_global(_x: int, _y: int) -> float:
+		return depth if is_lake else 0.0
+
+
+## Halfway to the wade->swim threshold should sit the waterline exactly
+## halfway between the creature's own feet (its global position -- local
+## y = 0) and its species' full, fixed waterline -- a straight, continuous
+## lerp, not a step function that's already fully there.
+func test_river_depth_drives_a_gradual_waterline_below_the_species_fixed_one():
+	var world := StubWorldWithDepth.new()
+	world.biome = "grassland"
+	world.is_river = true
+	world.depth = WaterMovementModel.WADE_DEPTH_METERS * 0.5
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("horse")
+	marker.position = Vector2(100, 100)
+	marker._current_action = "swim"
+	marker._is_moving = true
+
+	marker._animation_step()
+
+	var waterline: float = marker.material.get_shader_parameter("water_world_y")
+	var full_waterline: float = marker.to_global(
+		Vector2(0.0, marker._illustrated.waterline_offset_y("horse"))
+	).y
+	assert_almost_eq(waterline, (marker.position.y + full_waterline) * 0.5, 1.0)
+	assert_ne(
+		waterline, full_waterline,
+		"halfway to wade depth should not already sit at the full ocean-style waterline"
+	)
+
+
+## At (or beyond) the wade->swim threshold, the gradual river/lake
+## waterline must agree with the pre-existing fixed ocean-style one -- the
+## two paths describe the same "fully swimming" moment and must not
+## disagree.
+func test_river_depth_at_the_wade_threshold_matches_the_fixed_waterline():
+	var world := StubWorldWithDepth.new()
+	world.biome = "grassland"
+	world.is_lake = true
+	world.depth = WaterMovementModel.WADE_DEPTH_METERS * 2.0
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("horse")
+	marker.position = Vector2(100, 100)
+	marker._current_action = "swim"
+	marker._is_moving = true
+
+	marker._animation_step()
+
+	var waterline: float = marker.material.get_shader_parameter("water_world_y")
+	var full_waterline: float = marker.to_global(
+		Vector2(0.0, marker._illustrated.waterline_offset_y("horse"))
+	).y
+	assert_almost_eq(waterline, full_waterline, 0.5)
+
+
+## The same depth also sinks the creature a little, on top of the tint --
+## shared with the player via SubmersionShader.MAX_SINK_PX.
+func test_full_river_depth_sinks_the_creature_by_the_full_shared_constant():
+	var world := StubWorldWithDepth.new()
+	world.biome = "grassland"
+	world.is_river = true
+	world.depth = WaterMovementModel.WADE_DEPTH_METERS
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("horse")
+	marker.position = Vector2(100, 100)
+	marker._current_action = "swim"
+	marker._is_moving = true
+
+	marker._animation_step()
+
+	assert_almost_eq(marker.offset.y, SubmersionShader.MAX_SINK_PX, 0.01)
+
+
+func test_zero_river_depth_applies_no_sink():
+	var world := StubWorldWithDepth.new()
+	world.biome = "grassland"
+	world.is_river = true
+	world.depth = 0.0
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("horse")
+	marker.position = Vector2(100, 100)
+	marker._current_action = "swim"
+	marker._is_moving = true
+
+	marker._animation_step()
+
+	assert_almost_eq(marker.offset.y, 0.0, 0.01)
+
+
+## Ocean is untouched: no river/lake depth to hand (a null _world, exactly
+## the existing tests above), so the fixed, non-gradual waterline -- and no
+## sink at all -- must still be exactly what it was.
+func test_ocean_swimming_still_uses_the_fixed_waterline_with_no_sink():
+	marker.info = CreatureInfo.new("horse")
+	marker.position = Vector2(100, 100)
+	marker._current_action = "swim"
+	marker._is_moving = true
+
+	marker._animation_step()
+
+	var waterline: float = marker.material.get_shader_parameter("water_world_y")
+	var full_waterline: float = marker.to_global(
+		Vector2(0.0, marker._illustrated.waterline_offset_y("horse"))
+	).y
+	assert_almost_eq(waterline, full_waterline, 0.01)
+	assert_almost_eq(marker.offset.y, 0.0, 0.01)
+
+
+const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
+
+
 ## A procedural species' swim frames already have the water baked into the
 ## pixels, so adding the shader on top would tint them twice.
 func test_a_procedural_species_does_not_also_get_the_submersion_shader():
