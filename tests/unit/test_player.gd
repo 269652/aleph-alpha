@@ -80,23 +80,19 @@ func after_each():
 
 
 # -- a new player's starting kit (Player._ready()) --------------------------
-# Not pinned by a test until now -- the grant existed but nothing asserted
-# its actual contents, so a future edit could silently drop or duplicate an
-# item with no red test to catch it.
+# Superseded by the Starting Kit tab (docs/concept/starting_kit.md): a fresh
+# Player used to auto-grant a fixed kit from _ready() itself (this test used
+# to pin its exact contents, including a same-day report that added a glass
+# bottle and butterfly net to that grant directly on `main`). That whole
+# mechanism is gone now -- gear is the player's own choice, granted
+# explicitly by World.grant_starter_items() AFTER the node is already in the
+# tree (see the "starter kit" tests below) -- so the real contract left to
+# pin here is the opposite of the old one: _ready() alone grants nothing.
 
-func test_a_new_player_starts_with_the_expected_kit():
-	assert_eq(player.equipped_item.id, "iron_sword", "starts with the sword equipped, not bare-handed")
-	assert_eq(player.inventory.count_of("iron_sword"), 1)
-	assert_eq(player.inventory.count_of("iron_axe"), 1)
-	assert_eq(player.inventory.count_of("leather_helm"), 1)
-	assert_eq(player.inventory.count_of("leather_chest"), 1)
-	assert_eq(player.inventory.count_of("fishing_rod"), 1)
-	# Reported: "give the player a glass bottle and butterfly net from the
-	# start" -- so the capture DSL's net+bottle interaction (docs/concept/
-	# capture_dsl.md) is discoverable from the first minute, the same reason
-	# the fishing rod is already in this list.
-	assert_eq(player.inventory.count_of("glass_bottle"), 1)
-	assert_eq(player.inventory.count_of("butterfly_net"), 1)
+func test_a_new_player_starts_completely_unequipped_before_any_grant():
+	assert_null(player.equipped_item, "no automatic grant left in _ready() -- gear is the player's own choice now")
+	for item_id in ["iron_sword", "iron_axe", "leather_helm", "leather_chest", "fishing_rod", "glass_bottle", "butterfly_net"]:
+		assert_eq(player.inventory.count_of(item_id), 0, "%s: _ready() must not grant anything by itself" % item_id)
 
 
 ## The tile the player is facing (see TileTargeting.facing_tile), matching
