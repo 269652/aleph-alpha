@@ -342,9 +342,14 @@ func advance(delta: float, now: float) -> void:
 		if PixelNoise.unit(roll_seed, 0, 0) >= WIND_DISPERSAL_CHANCE:
 			continue
 		var landing_seed: int = leaf.seed + _wind_check_count * 97 + _WIND_LANDING_SALT
-		var offset := WindDispersal.landing_offset(
-			landing_seed, WindDispersal.WEIGHT_LEAF, _wind_direction, _wind_strength
-		)
+		# leaf_ground_drift, NOT landing_offset -- see that function's own
+		# doc comment: a leaf already settled on the ground and nudged by
+		# the SAME ambient wind repeatedly over time needs a directionally
+		# COHERENT drift across many nudges, or consecutive nudges read as
+		# being yanked back and forth (reported directly: "it's a hard back
+		# forth motion atm") -- landing_offset's own independent 0-360
+		# degree scatter angle is right for a seed falling once, not this.
+		var offset := WindDispersal.leaf_ground_drift(landing_seed, _wind_direction, _wind_strength)
 		leaf.transition_from = leaf.position
 		leaf.transition_start = now
 		leaf.position = leaf.position + offset

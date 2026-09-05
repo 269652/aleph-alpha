@@ -107,3 +107,72 @@ static func landing_offset(
 	var offset := (downwind + scatter) * TerrainRenderer.TILE_SIZE
 	var limit := MAX_TRAVEL_TILES * TerrainRenderer.TILE_SIZE
 	return offset.limit_length(limit)
+
+
+## ## leaf_ground_drift: repeated wind nudges to litter ALREADY on the ground
+##
+## Reported directly: "make the wind blowing through leaves make the tumble
+## and swirl more smoothly? it's a hard back forth motion atm". Measured
+## directly (tools/probe_wind_offset_spread.gd) what landing_offset itself
+## does for WEIGHT_LEAF under a strong, steady wind: of 30 samples, only 17
+## (57%) landed within 30 degrees of the wind's own heading, and 9 (30%)
+## landed more than 90 degrees off -- genuinely backwards relative to the
+## wind, several nearly exactly opposite it. That is the right design for
+## landing_offset's actual job (a seed falling ONCE really does scatter
+## near its parent on a still day regardless of which way any breeze
+## blows -- see this file's own CALM_SCATTER_TILES/HEAVY_SEED_SCATTER_
+## FRACTION reasoning), but the wrong one for a leaf ALREADY settled on
+## the ground, nudged by the SAME ambient wind repeatedly over time: real
+## windblown litter mostly skitters ALONG the wind's own heading, with
+## only mild lateral wobble, not a fresh independent random direction on
+## every single nudge -- landing_offset's own fully-independent 0-360
+## degree scatter angle reads as the leaf being yanked back and forth
+## across consecutive nudges instead. landing_offset itself is left
+## untouched (seed/flower dispersal already depends on its current
+## scatter behaviour); this is a dedicated formula for the one caller
+## (LeafLitterField's own throttled wind-dispersal roll) that needs
+## directional coherence across many repeated nudges of the SAME
+## already-settled object, not landing_offset's independent-per-call
+## contract.
+
+## How far the drift angle may wander from the wind's own heading. The one
+## property that actually matters is staying under 90 degrees (see
+## test_leaf_drift_wobble_never_reaches_a_right_angle in
+## test_wind_dispersal.gd): that guarantees a strictly positive dot product
+## with the wind direction, i.e. every nudge makes real forward progress
+## along the wind, never sideways-or-worse. 45 sits at exactly half that
+## structural ceiling -- generous enough for a real leaf's own natural
+## side-to-side wobble (a real gust does not carry litter in a perfectly
+## straight line) while leaving comfortable margin either side of the
+## actual limit, rather than tuning right up against it.
+const LEAF_DRIFT_WOBBLE_DEGREES := 45.0
+
+## Where the wind moves a leaf ALREADY settled on the ground, for one
+## throttled nudge (see LeafLitterField.advance's own wind-dispersal roll)
+## -- see this function's own section doc comment above for why this is a
+## separate formula from landing_offset rather than a call to it with
+## WEIGHT_LEAF. Reuses the exact same heavy-tailed reach roll and buoyant
+## near-field scatter magnitude landing_offset already establishes (so an
+## individual nudge's DISTANCE distribution is unchanged, and every
+## existing distance-driven consumer -- e.g. LeafLitterRenderer's own
+## tumble-turn scaling against MAX_TRANSITION_OFFSET -- still sees the
+## same range of journeys) -- only the ANGLE changes, from an independent
+## 0-360 degree roll to a bounded wobble around the wind's own heading.
+static func leaf_ground_drift(seed_value: int, direction: Vector2, strength: float) -> Vector2:
+	var lightness := clampf(1.0 - clampf(WEIGHT_LEAF, 0.0, 1.0), 0.0, 1.0)
+	var force := clampf(strength, 0.0, 1.0)
+
+	var roll := float(PixelNoise.range_index(seed_value, 71, 0, 1000)) / 999.0
+	var reach := pow(roll, TAIL_POWER)
+	var downwind_distance := reach * force * lightness * MAX_DRIFT_TILES
+
+	var spread := sqrt(float(PixelNoise.range_index(seed_value, 79, 0, 1000)) / 999.0)
+	var buoyancy := HEAVY_SEED_SCATTER_FRACTION + (1.0 - HEAVY_SEED_SCATTER_FRACTION) * lightness
+	var scatter_distance := spread * CALM_SCATTER_TILES * buoyancy
+
+	var wobble_roll := float(PixelNoise.range_index(seed_value, 83, 0, 1000)) / 999.0 * 2.0 - 1.0
+	var angle := direction.angle() + deg_to_rad(wobble_roll * LEAF_DRIFT_WOBBLE_DEGREES)
+
+	var offset := Vector2(cos(angle), sin(angle)) * (downwind_distance + scatter_distance) * TerrainRenderer.TILE_SIZE
+	var limit := MAX_TRAVEL_TILES * TerrainRenderer.TILE_SIZE
+	return offset.limit_length(limit)
