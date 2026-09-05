@@ -246,23 +246,28 @@ watched the bird peck at them.
 - ⬜ Worm population dynamics / bird carrying capacity from worm density.
 - ⬜ Persistence and catch-up integration of eaten burrows (deliberate, above).
 - ✅ Ants (mound population + myrmecochory, both grassland grass-seed AND
-  forest/rainforest windfall fruit/nut foraging, a real rendered presence,
-  real round-trip foraging behaviour, pheromone-trail recruitment, and a
-  queen-driven per-mound population) — `src/world/ant_colony.gd` /
-  `EarthChunkManager.step_ants`, see "Ants: myrmecochory" below. This
-  closes the placement half of the "other soil fauna" item above, the
-  "forest/rainforest mound has nothing to harvest" gap this doc used to
-  name (fixed 2026-08-26, see "Windfall foraging" in that section), the
-  "no rendered ant or mound sprite" gap (fixed 2026-09-04 — reported live:
-  ants "should be a real gear in the ecosystem", see "Rendered presence"
-  in that section), and — this pass — the "no ant population dynamics"
-  gap this doc used to name explicitly as out of scope (see "A queen, and
-  where a colony's size comes from"), a scripted-not-real forage
-  resolution (see "Real foraging: a round trip, not an instant resolve"),
-  and no ant-family marker answering the hover-tooltip contract (see
-  "Ants at half their old size, and finally hoverable"). What's left of
-  the original item (ants as prey, or as non-windfall detritivores) is
-  still open, see that section's own scope note.
+  forest/rainforest windfall fruit/nut foraging, a real rendered presence
+  that visibly grows with its own colony, real round-trip foraging
+  behaviour, pheromone-trail recruitment, and a queen-driven per-mound
+  population fed by BOTH food and water/rainfall) —
+  `src/world/ant_colony.gd` / `EarthChunkManager.step_ants`, see "Ants:
+  myrmecochory" below. This closes the placement half of the "other soil
+  fauna" item above, the "forest/rainforest mound has nothing to harvest"
+  gap this doc used to name (fixed 2026-08-26, see "Windfall foraging" in
+  that section), the "no rendered ant or mound sprite" gap (fixed
+  2026-09-04 — reported live: ants "should be a real gear in the
+  ecosystem", see "Rendered presence" in that section), the "no ant
+  population dynamics" gap this doc used to name explicitly as out of
+  scope (see "A queen, and where a colony's size comes from"), a
+  scripted-not-real forage resolution (see "Real foraging: a round trip,
+  not an instant resolve"), no ant-family marker answering the
+  hover-tooltip contract (see "Ants at half their old size, and finally
+  hoverable"), and — this pass (2026-09-05) — growth being food-only and
+  a mound's own size never reflecting how its colony was actually doing
+  (see "Water, not just food: a second real growth driver" and "Mound
+  size grows with the colony"). What's left of the original item (ants as
+  prey, or as non-windfall detritivores) is still open, see that
+  section's own scope note.
 - ⬜ Insect larvae, snails, and any other soil fauna beyond ants — the table
   and the patch-sim contract extend to them the same way ants did, nothing
   else is needed structurally, but nothing has built one yet.
