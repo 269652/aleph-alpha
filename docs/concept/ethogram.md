@@ -792,6 +792,16 @@ which is a real, checked conclusion and not merely an absence.
 
 ## Which doc owns what
 
+- [behavior_dsl.md](behavior_dsl.md): a second, deliberately different
+  answer to this doc's own reuse question, without the genetics
+  requirement — a real, parsed, composable tree language whose reusable
+  unit is a named *behaviour* (`wander`, `flee`, `seek`, `schedule`,
+  `round_trip`), not a genome-expressed receptor. Built precisely because
+  slice 5's investigation below found body plans (fish, villagers, ants)
+  with no vector-scored decision this doc's own kernel could express at
+  all. The two are complementary: that doc's `ethogram_decide` action atom
+  (named, not yet built) is the explicit bridge letting a species mix a
+  fully genome-expressed sub-decision into an otherwise DSL-composed tree.
 - [olfaction.md](olfaction.md): what things emit and how smell thins with
   range. Its receptor table now lives in `Ethogram.SPECIES`; its status list
   says so.
