@@ -83,11 +83,35 @@ read-only:
 
 - ✅ **Character sheet** — mirrors most of `Player.to_save_dict()`
   (class, health, wallet, XP/level, equipment, skill allocations, hotbar),
-  not literally every save key: position, appearance, `dna_seed`, and the
-  raw `skill_points_paid` ledger have no legible place on a sheet and are
-  left for a future pass if ever wanted. Equipment/hotbar show real
+  not literally every save key: position, `dna_seed`, and the raw
+  `skill_points_paid` ledger have no legible place on a sheet and are left
+  for a future pass if ever wanted. Equipment/hotbar show real
   `ItemCatalog` display names, never a raw item id.
   `companion_character_sheet_view.gd`.
+  - **A real portrait (2026-09-05)**, embedded as a base64
+    `data:image/png;base64,...` `<img>` src rather than a second route --
+    Tier 1 serves exactly one response per page, so a data URI needs no
+    new dispatch case at all. `CharacterSheetPortraitScene`
+    (`src/rendering/character_sheet_portrait_scene.gd`) composites the
+    hero (`ProceduralCharacterSprite.generate_hero_portrait_image`, the
+    SAME pure figure-only function the character creator's static portrait
+    toggle already uses) onto a small sky/ground vignette with a couple of
+    fixed grass-tuft/pebble accents -- a pure `Image` compositor, no Godot
+    `Node` of any kind, so it stays inside this tier's own "reads only the
+    save file" boundary below. Deliberately **not** a snapshot of the live
+    `CharacterPreviewDiorama` scene (the character creator's actually-
+    animated swaying-grass/pond/ambient-creatures preview, built for a
+    `SubViewport`) -- that would mean instantiating live rendering nodes on
+    every Character Sheet page load, which is exactly the "no live Player/
+    scene-tree hook" boundary this tier exists to keep. The saved
+    `appearance` dict is used when present; a save from before it was
+    persisted (or any hand-built fixture missing it) instead gets one
+    freshly derived from the same `(character_class, dna_seed)`
+    `HeroAppearance.appearance_for` would have rolled originally, so the
+    portrait is never blank/broken. Shows the hero's DNA-driven look only,
+    same as the creator's own portrait -- not equipped armor/weapons (no
+    existing function composites those onto a portable `Image` outside a
+    live `CharacterView`; a real, separate follow-up if ever wanted).
 - ✅ **Item Catalog** (`/items`) — every authored item
   (`ItemCatalog.known_ids()`), *not* filtered down to only what the save
   holds. Each row is annotated "have" when the save's

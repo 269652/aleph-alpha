@@ -12,6 +12,8 @@ extends GutTest
 
 const CompanionCharacterSheetView = preload("res://src/companion_server/companion_character_sheet_view.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+const CharacterSheetPortraitScene = preload("res://src/rendering/character_sheet_portrait_scene.gd")
+const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 
 var catalog := ItemCatalog.new()
 
@@ -19,6 +21,8 @@ var catalog := ItemCatalog.new()
 func _fixture_save_dict() -> Dictionary:
 	return {
 		"character_class": "warrior",
+		"appearance": HeroAppearance.new().appearance_for("warrior", 7),
+		"dna_seed": 7,
 		"health": 42.0,
 		"max_health": 100.0,
 		"wallet_balance": 37.5,
@@ -84,3 +88,42 @@ func test_a_missing_key_falls_back_to_a_sensible_default_rather_than_crashing():
 	# keys this view wants -- must degrade gracefully, never error.
 	var html := CompanionCharacterSheetView.render({}, catalog)
 	assert_true(html.length() > 0)
+
+
+## The portrait -- see CharacterSheetPortraitScene -- is embedded directly as
+## a data URI rather than a second HTTP request: Tier 1 serves exactly one
+## response per page, and a base64 data: src needs no extra route/dispatch
+## case at all.
+func test_shows_a_portrait_image():
+	var html := CompanionCharacterSheetView.render(_fixture_save_dict(), catalog)
+	assert_true(html.contains("<img"))
+	assert_true(html.contains("data:image/png;base64,"))
+
+
+## The embedded portrait must actually BE the hero's own saved look, not a
+## generic placeholder -- compared byte-for-byte against calling
+## CharacterSheetPortraitScene directly with the same appearance dict.
+func test_the_portrait_reflects_the_saved_appearance():
+	var save_dict := _fixture_save_dict()
+	var html := CompanionCharacterSheetView.render(save_dict, catalog)
+	var expected := Marshalls.raw_to_base64(
+		CharacterSheetPortraitScene.new().generate_png_bytes(save_dict["appearance"])
+	)
+	assert_true(html.contains(expected))
+
+
+## A save from before "appearance" was persisted (or any hand-built fixture
+## missing it) should still render a real, non-broken portrait -- derived
+## fresh from the same (class, seed) HeroAppearance would have rolled
+## originally -- rather than showing nothing or crashing.
+func test_falls_back_to_a_derived_appearance_when_none_is_saved():
+	var save_dict := _fixture_save_dict()
+	save_dict.erase("appearance")
+	save_dict["dna_seed"] = 7
+	var html := CompanionCharacterSheetView.render(save_dict, catalog)
+	var expected := Marshalls.raw_to_base64(
+		CharacterSheetPortraitScene.new().generate_png_bytes(
+			HeroAppearance.new().appearance_for("warrior", 7)
+		)
+	)
+	assert_true(html.contains(expected))

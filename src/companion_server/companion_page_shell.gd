@@ -95,6 +95,16 @@ nav a:hover {
 	padding: 1.8em 2em 2.2em;
 	box-shadow: var(--shadow);
 }
+.portrait {
+	display: block;
+	margin: 0 auto 1.2em;
+	width: 100%%;
+	max-width: 360px;
+	height: auto;
+	border-radius: 14px;
+	box-shadow: var(--shadow);
+	image-rendering: pixelated;
+}
 h1 { margin: 0 0 0.6em; font-size: 1.6em; display: flex; align-items: center; gap: 0.35em; }
 h1 .emoji { display: inline-block; animation: bounce 2.2s ease-in-out infinite; }
 @keyframes bounce {
