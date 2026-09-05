@@ -28,10 +28,12 @@ const CompanionHttpResponse = preload("res://src/companion_server/companion_http
 const CompanionRouter = preload("res://src/companion_server/companion_router.gd")
 const CompanionCharacterSheetView = preload("res://src/companion_server/companion_character_sheet_view.gd")
 const CompanionItemCatalogView = preload("res://src/companion_server/companion_item_catalog_view.gd")
+const CompanionItemDetailView = preload("res://src/companion_server/companion_item_detail_view.gd")
 const CompanionCompanionsView = preload("res://src/companion_server/companion_companions_view.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CraftedItemRegistry = preload("res://src/gameplay/crafted_item_registry.gd")
+const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 
 ## Read bytes only up to this size per request -- Tier 1 traffic is a bare
 ## GET request line plus a couple of small browser headers; 4KiB is
@@ -94,11 +96,15 @@ func _response_for(parsed: Dictionary) -> PackedByteArray:
 	var save_dict := PlayerSave.new().load_data()
 	var catalog := ItemCatalog.new()
 	catalog.use_crafted_registry(CraftedItemRegistry.from_dicts(save_dict.get("crafted_items", {})))
-	match CompanionRouter.route_for(parsed.path):
+	var routed := CompanionRouter.route_for(parsed.path)
+	match routed.route:
 		"character_sheet":
 			return CompanionHttpResponse.build(200, "text/html", CompanionCharacterSheetView.render(save_dict, catalog))
 		"item_catalog":
-			return CompanionHttpResponse.build(200, "text/html", CompanionItemCatalogView.render(save_dict, catalog))
+			return CompanionHttpResponse.build(200, "text/html", CompanionItemCatalogView.render(save_dict, catalog, parsed.get("query", {})))
+		"item_detail":
+			var recipe_book := CraftingRecipeBook.new()
+			return CompanionHttpResponse.build(200, "text/html", CompanionItemDetailView.render(routed.item_id, catalog, recipe_book))
 		"companions":
 			return CompanionHttpResponse.build(200, "text/html", CompanionCompanionsView.render(save_dict))
 		_:
