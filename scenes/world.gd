@@ -2607,6 +2607,9 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# grass/saplings the same way the mouse's/squirrel's own scatter-hoarding
 	# does.
 	_chunk_manager.step_ants(delta)
+	# Fallen-leaf litter ages/prunes on the same batched cadence ant mounds do
+	# (see EarthChunkManager.step_leaf_litter, docs/concept/leaf_litter.md).
+	_chunk_manager.step_leaf_litter(delta)
 	_chunk_manager.step_flowers(delta)
 	_chunk_manager.step_desert_scrub(delta)
 	_chunk_manager.step_tundra_lichen(delta)

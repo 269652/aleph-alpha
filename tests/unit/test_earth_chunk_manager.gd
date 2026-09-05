@@ -51,6 +51,7 @@ const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
 const BuildingStatics = preload("res://src/gameplay/building_statics.gd")
 const Chunk = preload("res://src/world/chunk.gd")
+const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -1982,9 +1983,27 @@ func _set_world_age_at_year_fraction(fraction: float) -> void:
 	manager.set_world_age_seconds(fraction * SeasonCycle.SECONDS_PER_YEAR)
 
 
-## Finds the first dropped leaf item for `species_id` across up to
-## `attempts` fruiting steps, or an empty array if none fell. Returns
-## [item_stack, world_position].
+## The chunk-local LeafLitterField a tree at `tree_position` would fall
+## into, creating it on demand -- these tests build a bare `manager` and
+## inject trees directly into `_loaded_trees` (see before_each's own doc
+## comment on why this file never calls the real, expensive update()), so
+## the normal chunk-load path that would otherwise create this field (see
+## EarthChunkManager's own leaf-fall wiring) never runs here either.
+func _leaf_litter_field_for(tree_position: Vector2) -> LeafLitterField:
+	var chunk_coord: Vector2i = manager._chunk_coord_for_tile(
+		manager._world_tile_for_pixel(tree_position)
+	)
+	if not manager._leaf_litter_fields.has(chunk_coord):
+		manager._leaf_litter_fields[chunk_coord] = LeafLitterField.new()
+	return manager._leaf_litter_fields[chunk_coord]
+
+
+## Finds the first fallen-leaf record for `species_id` across up to
+## `attempts` fruiting steps, or {} if none fell (see LeafLitterField's own
+## doc comment for the record shape). Leaves accumulate in the field across
+## attempts (nothing here ever consumes one), so this is really "has one
+## fallen at all yet", the same thing the old WorldItemBus-signal-count
+## version checked.
 ##
 ## Advances the world clock by FRUITING_INTERVAL between attempts -- the
 ## per-step roll is a deterministic hash of (tree seed, step_bucket), see
@@ -1996,18 +2015,16 @@ func _set_world_age_at_year_fraction(fraction: float) -> void:
 func _find_a_fallen_leaf(
 	species_id: String, tree_position: Vector2, player_pixel: Vector2,
 	attempts: int = _LEAF_ROLL_ATTEMPTS
-) -> Array:
-	var leaf_id := "%s_leaf" % species_id
+) -> Dictionary:
+	var field := _leaf_litter_field_for(tree_position)
 	for attempt in attempts:
 		if attempt > 0:
 			manager.advance_world_age(EarthChunkManager.FRUITING_INTERVAL)
 		manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, player_pixel)
-		var drops = get_signal_emit_count(WorldItemBus, "item_dropped")
-		for i in drops:
-			var params = get_signal_parameters(WorldItemBus, "item_dropped", i)
-			if params[0].item.id == leaf_id:
-				return params
-	return []
+		for leaf in field.leaves():
+			if leaf.species == species_id:
+				return leaf
+	return {}
 
 
 func test_step_fruiting_drops_a_leaf_from_a_turning_tree():
@@ -2018,16 +2035,15 @@ func test_step_fruiting_drops_a_leaf_from_a_turning_tree():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
 
-	watch_signals(WorldItemBus)
 	var found := _find_a_fallen_leaf("cherry", tree.position, tree.position)
 
 	assert_false(found.is_empty(), "a tree well into its autumn turn should shed a real leaf item")
 
 
-## The item's own sprite_id carries which season it fell in (see
-## DroppedItem, IllustratedTree.foliage_leaf_for) -- the mechanism that
-## actually gives a leaf its correct colour.
-func test_an_autumn_leaf_s_sprite_id_names_autumn():
+## The record's own `season` field carries which season it fell in (see
+## LeafLitterAtlas/LeafLitterRenderer) -- the mechanism that actually gives
+## a leaf its correct colour.
+func test_a_leaf_records_the_autumn_season_it_fell_in():
 	var tree := ChoppableTree.new()
 	tree.position = _position_for_species("cherry")
 	tree.bind_canopy(Sprite2D.new())
@@ -2035,11 +2051,10 @@ func test_an_autumn_leaf_s_sprite_id_names_autumn():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
 
-	watch_signals(WorldItemBus)
 	var found := _find_a_fallen_leaf("cherry", tree.position, tree.position)
 
 	assert_false(found.is_empty(), "precondition: a leaf should have fallen")
-	assert_eq(found[0].item.sprite_id, "cherry_leaf_autumn")
+	assert_eq(found.season, "autumn")
 
 
 ## Reported: "when they fall in summer they should be green" -- a real,
@@ -2053,13 +2068,12 @@ func test_step_fruiting_also_drops_a_light_summer_trickle():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_SETTLED_SUMMER_YEAR_FRACTION)
 
-	watch_signals(WorldItemBus)
 	var found := _find_a_fallen_leaf(
 		"cherry", tree.position, tree.position, _LEAF_TRICKLE_ROLL_ATTEMPTS
 	)
 
 	assert_false(found.is_empty(), "a settled summer tree should still shed an occasional leaf")
-	assert_eq(found[0].item.sprite_id, "cherry_leaf_summer")
+	assert_eq(found.season, "summer")
 
 
 ## Spring, before blossom even opens, is neither the autumn turn nor the
@@ -2073,22 +2087,22 @@ func test_step_fruiting_drops_no_leaf_in_early_spring():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_SETTLED_SPRING_YEAR_FRACTION)
 
-	watch_signals(WorldItemBus)
+	var field := _leaf_litter_field_for(tree.position)
 	for attempt in _LEAF_ROLL_ATTEMPTS:
 		manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, tree.position)
-	var drops = get_signal_emit_count(WorldItemBus, "item_dropped")
 	var saw_leaf := false
-	for i in drops:
-		var stack = get_signal_parameters(WorldItemBus, "item_dropped", i)[0]
-		if stack.item.id == "cherry_leaf":
+	for leaf in field.leaves():
+		if leaf.species == "cherry":
 			saw_leaf = true
 	assert_false(saw_leaf, "nothing has started shedding yet in early spring")
 
 
-## Oak's own fallen leaf reads as an oak leaf, not a literal "Acorn Leaf" --
-## and it is litter, not food, so it should not spoil like a dropped nut
-## does (see DroppedItem's own food-only spoilage branch).
-func test_a_leaf_item_is_named_and_kinded_correctly():
+## Oak's own fallen leaf records species "acorn" (TreeSpecies' own id for the
+## tree), not a literal "oak" -- DroppedItem's/LeafLitterAtlas's own art
+## lookup and the still-unchanged _LEAF_ITEMS table (display name "Oak
+## Leaf", kind "material" -- litter, so it must not spoil like a dropped nut
+## does) both key off this same species id.
+func test_a_leaf_records_its_own_species():
 	var tree := ChoppableTree.new()
 	tree.position = _position_for_species("acorn")
 	tree.bind_canopy(Sprite2D.new())
@@ -2096,14 +2110,15 @@ func test_a_leaf_item_is_named_and_kinded_correctly():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
 
-	watch_signals(WorldItemBus)
 	var found := _find_a_fallen_leaf("acorn", tree.position, tree.position)
 
 	assert_false(found.is_empty(), "precondition: an acorn tree should shed a leaf")
-	var leaf_stack = found[0]
-	assert_eq(leaf_stack.item.display_name, "Oak Leaf")
-	assert_eq(leaf_stack.item.kind, "material", "litter, not food -- it must not spoil like one")
-	assert_eq(leaf_stack.count, 1)
+	assert_eq(found.species, "acorn")
+	assert_eq(
+		EarthChunkManager._LEAF_ITEMS["acorn"][1], "Oak Leaf",
+		"the species -> display name table must still map acorn to Oak Leaf"
+	)
+	assert_eq(EarthChunkManager._LEAF_ITEMS["acorn"][2], "material")
 
 
 func test_a_leaf_lands_near_its_own_tree():
@@ -2114,11 +2129,10 @@ func test_a_leaf_lands_near_its_own_tree():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
 
-	watch_signals(WorldItemBus)
 	var found := _find_a_fallen_leaf("cherry", tree.position, tree.position)
 
 	assert_false(found.is_empty(), "precondition: a leaf should have fallen")
-	var leaf_at: Vector2 = found[1]
+	var leaf_at: Vector2 = found.position
 	assert_lt(
 		tree.position.distance_to(leaf_at), EarthChunkManager.LEAF_SCATTER_RADIUS + 1.0,
 		"a leaf landed nowhere near its own tree"
