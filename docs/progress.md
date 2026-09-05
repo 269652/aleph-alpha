@@ -7813,6 +7813,31 @@ and eat from, the exact problem the ORIGINAL unmerged aggregate attempt
 Discrete items — already proven safe at this scale by windfall fruit —
 won on that basis, not a measured performance concern.
 
+🚧 **Follow-up: that "not a measured performance concern" turned out to be
+wrong at real scale, reported live as the game running at ~1fps.** One
+real `DroppedItem` node per fallen leaf — `Sprite2D` + `Area2D` +
+`CollisionShape2D`, ticking `_process()` every frame, same as any other
+ground item — is cheap per instance but was never load-tested against
+enough simultaneous autumn trees shedding at once. Rather than throttle
+the existing per-node mechanism further, `EarthChunkManager.
+LEAF_LITTER_ENABLED` (a mutable `static var`, same shape as
+`EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED`) is now an off-by-default
+kill switch on the entire leaf-fall block in `step_fruiting`, gating
+leaves out at the source rather than leaving them running at an
+unplayable cost. The leaf-fall logic itself (angle/distance scatter,
+season gating, `sprite_id`/colour, deterministic roll) is untouched and
+still directly tested — `test_earth_chunk_manager.gd`'s own
+`_find_a_fallen_leaf` helper forces the flag on for the duration of a
+lookup and restores whatever it was after, so the mechanism keeps its
+existing coverage even switched off by default
+(`test_leaf_litter_is_off_by_default`,
+`test_step_fruiting_drops_no_leaf_when_leaf_litter_disabled`). A
+GPU-instanced rewrite (one `MultiMeshInstance2D` per chunk in place of a
+node per leaf, keeping a real per-leaf position a decomposer can still
+forage from — see `docs/concept/leaf_litter.md`'s "Rate and cap" section
+above) is in progress separately to replace this mechanism properly and
+flip the switch back on for good.
+
 ⬜ **The invisible `AntColony` mound simulation does not forage leaves.**
 Its own windfall foraging queries the fruiting model's abstract fruit/nut
 stock directly (`fruit_near`/`take_fruit_at`), not `DroppedItem` nodes, so

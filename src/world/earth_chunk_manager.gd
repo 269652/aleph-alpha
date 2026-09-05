@@ -1021,6 +1021,22 @@ func step_forage(delta_seconds: float) -> void:
 const FRUITING_DETAIL_RADIUS := 280.0
 const FRUITING_INTERVAL := 1.0
 
+## Off-by-default kill switch on the leaf-fall block below (see docs/concept/
+## leaf_litter.md). Reported live: one real DroppedItem node per fallen leaf
+## -- a Sprite2D + Area2D + CollisionShape2D, ticking _process() every frame
+## -- crippled the game to ~1fps. A GPU-instanced rewrite (one MultiMesh per
+## chunk, no per-leaf node) is in progress to replace the mechanism this
+## flag gates; until that lands, the existing per-node fall is switched off
+## rather than left running at an unplayable cost. Same shape as
+## EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED's own instance flag, except a
+## mutable `static var` rather than a `const`: the mechanism underneath still
+## needs its own direct coverage (angle/distance/season/sprite_id all still
+## real logic, not deleted), so test_earth_chunk_manager.gd's own
+## _find_a_fallen_leaf helper flips this on for the duration of a single
+## lookup and restores whatever it was after -- see that helper's own doc
+## comment. Pinned off by test_leaf_litter_is_off_by_default.
+static var LEAF_LITTER_ENABLED := false
+
 ## How far a fallen leaf scatters from its own trunk, in world pixels -- a
 ## real fallen fruit lands under exactly where it hung
 ## (ProceduralTreeSprite.FRUIT_GROUND_REACH); a leaf's position in the
@@ -3267,52 +3283,58 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 			# tree.set_ripe_fruit -- not a second schedule computing its
 			# own answer. Independent of whether fruit fell this same
 			# step -- a tree can shed a leaf with nothing left to fruit.
-			var leaf_fall_chance := 0.0
-			var leaf_fall_season := ""
-			if (
-				canopy_season == "autumn"
-				and canopy_turning_into == "winter"
-				and canopy_turn_progress > 0.0
-			):
-				# Chance rises with how far into its own turn the canopy
-				# is: a tree just beginning to turn sheds rarely, one
-				# nearly bare sheds almost every step.
-				leaf_fall_chance = canopy_turn_progress
-				leaf_fall_season = "autumn"
-			elif canopy_season == "summer":
-				leaf_fall_chance = LEAF_SUMMER_TRICKLE_CHANCE
-				leaf_fall_season = "summer"
-			if leaf_fall_chance > 0.0:
-				# Deterministic per-(tree, step) roll, not engine randf()
-				# -- see _LEAF_FALL_ROLL_STEPS' own doc comment.
-				var step_bucket := int(now / FRUITING_INTERVAL)
-				var roll := PixelNoise.range_index(tree.sprite_seed, step_bucket, 0, _LEAF_FALL_ROLL_STEPS)
-				if roll < int(leaf_fall_chance * _LEAF_FALL_ROLL_STEPS):
-					var leaf_spec: Array = _LEAF_ITEMS[species_id]
-					# sprite_id carries the season it fell in (see Item's
-					# own "art can diverge from identity" doc comment) --
-					# DroppedItem reads it back to pick the correctly-
-					# coloured art (green in summer, orange in autumn; see
-					# IllustratedTree.foliage_leaf_for). id/display_name/
-					# kind/max_stack stay exactly the shared item identity
-					# every cherry_leaf etc. has regardless of season.
-					var leaf_stack := ItemStack.new(
-						Item.new(
-							leaf_spec[0], leaf_spec[1], leaf_spec[2], leaf_spec[3],
-							0.0, "", 0.0, 0.0, "%s_%s" % [leaf_spec[0], leaf_fall_season]
-						),
-						1
-					)
-					var angle := deg_to_rad(float(
-						PixelNoise.range_index(tree.sprite_seed, step_bucket + 1, 0, 360)
-					))
-					var distance_fraction := float(
-						PixelNoise.range_index(tree.sprite_seed, step_bucket + 2, 0, 100)
-					) / 100.0
-					WorldItemBus.item_dropped.emit(
-						leaf_stack,
-						tree.position + Vector2(cos(angle), sin(angle)) * LEAF_SCATTER_RADIUS * distance_fraction
-					)
+			#
+			# Gated on LEAF_LITTER_ENABLED (see that constant's own doc
+			# comment) -- switched off entirely for now, not just throttled,
+			# since the mechanism it guards is one real node per leaf and
+			# that is what crippled performance, not the rate.
+			if LEAF_LITTER_ENABLED:
+				var leaf_fall_chance := 0.0
+				var leaf_fall_season := ""
+				if (
+					canopy_season == "autumn"
+					and canopy_turning_into == "winter"
+					and canopy_turn_progress > 0.0
+				):
+					# Chance rises with how far into its own turn the canopy
+					# is: a tree just beginning to turn sheds rarely, one
+					# nearly bare sheds almost every step.
+					leaf_fall_chance = canopy_turn_progress
+					leaf_fall_season = "autumn"
+				elif canopy_season == "summer":
+					leaf_fall_chance = LEAF_SUMMER_TRICKLE_CHANCE
+					leaf_fall_season = "summer"
+				if leaf_fall_chance > 0.0:
+					# Deterministic per-(tree, step) roll, not engine randf()
+					# -- see _LEAF_FALL_ROLL_STEPS' own doc comment.
+					var step_bucket := int(now / FRUITING_INTERVAL)
+					var roll := PixelNoise.range_index(tree.sprite_seed, step_bucket, 0, _LEAF_FALL_ROLL_STEPS)
+					if roll < int(leaf_fall_chance * _LEAF_FALL_ROLL_STEPS):
+						var leaf_spec: Array = _LEAF_ITEMS[species_id]
+						# sprite_id carries the season it fell in (see Item's
+						# own "art can diverge from identity" doc comment) --
+						# DroppedItem reads it back to pick the correctly-
+						# coloured art (green in summer, orange in autumn; see
+						# IllustratedTree.foliage_leaf_for). id/display_name/
+						# kind/max_stack stay exactly the shared item identity
+						# every cherry_leaf etc. has regardless of season.
+						var leaf_stack := ItemStack.new(
+							Item.new(
+								leaf_spec[0], leaf_spec[1], leaf_spec[2], leaf_spec[3],
+								0.0, "", 0.0, 0.0, "%s_%s" % [leaf_spec[0], leaf_fall_season]
+							),
+							1
+						)
+						var angle := deg_to_rad(float(
+							PixelNoise.range_index(tree.sprite_seed, step_bucket + 1, 0, 360)
+						))
+						var distance_fraction := float(
+							PixelNoise.range_index(tree.sprite_seed, step_bucket + 2, 0, 100)
+						) / 100.0
+						WorldItemBus.item_dropped.emit(
+							leaf_stack,
+							tree.position + Vector2(cos(angle), sin(angle)) * LEAF_SCATTER_RADIUS * distance_fraction
+						)
 	_last_fruiting_time = now
 
 
