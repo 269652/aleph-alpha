@@ -140,6 +140,14 @@ func test_generate_sing_textures_covers_every_species():
 			assert_true(_has_opaque_pixels(frame), species)
 
 
+func test_generate_court_textures_covers_every_species():
+	for species in ["sparrow", "robin", "blackbird", "kingfisher"]:
+		var frames := sprite.generate_court_textures(species, 0)
+		assert_eq(frames.size(), 8, species)
+		for frame in frames:
+			assert_true(_has_opaque_pixels(frame), species)
+
+
 func test_frames_are_cached_not_rebuilt_per_call():
 	# Same contract as IllustratedAnimalSprite's own _frame_cache: repeat
 	# calls for the same key must return the exact same texture instance,

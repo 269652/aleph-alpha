@@ -32,6 +32,7 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 ## does not preload this file back, so this is one-directional.
 const IllustratedBirdSprite = preload("res://src/rendering/illustrated_bird_sprite.gd")
 const BirdSong = preload("res://src/gameplay/bird_song.gd")
+const BirdCourtship = preload("res://src/gameplay/bird_courtship.gd")
 const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const WingbeatBounce = preload("res://src/rendering/wingbeat_bounce.gd")
 const FlapGlide = preload("res://src/rendering/flap_glide.gd")
@@ -145,6 +146,12 @@ const WALK_SECONDS_PER_FRAME := 0.12
 ## no-op, same contract as walk_frames.
 var sing_frames: Array = []
 const SING_SECONDS_PER_FRAME := 0.1
+
+## Tail-fanned display pose (see IllustratedBirdSprite.generate_court_
+## textures / BirdCourtship), shown for the whole held display, both
+## partners. Empty is a no-op, same contract as walk_frames.
+var court_frames: Array = []
+const COURT_SECONDS_PER_FRAME := 0.12
 
 ## Re-scanning the soil every frame would query the worm set per bird per
 ## frame; worms surface on a weather timescale, so it is throttled the same
@@ -543,6 +550,28 @@ var _courting_closing_seconds := 0.0
 const PARTNER_SEARCH_INTERVAL := 0.5
 var _partner_search_cooldown := 0.0
 var _courtship_round := 0
+
+## BIRD courtship (see BirdCourtship) -- a SEPARATE pairing from the
+## pollinator dance above, own fields rather than reusing `_courting_*`:
+## the two mechanisms have genuinely different motion (hold-and-display,
+## not an orbit) and species gates, and sharing mutable state meant for
+## two different geometries is exactly the kind of thing that produces a
+## sparrow orbiting a point meant for a butterfly. Structurally identical
+## shape otherwise -- see _begin_bird_court/_continue_bird_court/
+## _finish_bird_court/_end_bird_court, which mirror the pollinator
+## versions one-for-one.
+var _bird_courting_with := 0
+var _bird_courting_centre := Vector2.ZERO
+var _bird_courting_elapsed := 0.0
+var _bird_courting_cooldown := 0.0
+var _bird_courting_start_offset := Vector2.ZERO
+## Unlike the pollinator dance (one shared radius, opposite angles), a
+## bird's held point is this flyer's OWN fixed target -- see
+## _begin_bird_court for how the two partners' targets are derived so
+## they land on opposite sides of the centre without messaging.
+var _bird_courting_target_offset := Vector2.ZERO
+var _bird_courting_closing_seconds := 0.0
+var _bird_courtship_round := 0
 
 ## The spiral flight (see SpiralFlight): the fast, cross-species,
 ## produces-nothing whirl two butterflies do when they pass close, which is
@@ -2072,10 +2101,13 @@ func _abandon_pair_interaction() -> void:
 func _step_pair_interactions(delta: float) -> bool:
 	_courting_cooldown = maxf(0.0, _courting_cooldown - delta)
 	_spiral_cooldown = maxf(0.0, _spiral_cooldown - delta)
+	_bird_courting_cooldown = maxf(0.0, _bird_courting_cooldown - delta)
 
 	# Already in one of them: continue it, and never scan.
 	if _courting_with != 0:
 		return _continue_courtship(delta)
+	if _bird_courting_with != 0:
+		return _continue_bird_court(delta)
 	if _spiralling_with != 0:
 		return _continue_spiral_flight(delta)
 
@@ -2092,8 +2124,13 @@ func _step_pair_interactions(delta: float) -> bool:
 		and Courtship.dances(species)
 		and LifeCycle.can_court_at(age_seconds)
 	)
+	var wants_bird_court := (
+		_bird_courting_cooldown <= 0.0
+		and BirdCourtship.dances(species)
+		and LifeCycle.can_court_at(age_seconds)
+	)
 	var wants_spiral := _spiral_cooldown <= 0.0 and SpiralFlight.spirals(species)
-	if not wants_courtship and not wants_spiral:
+	if not wants_courtship and not wants_bird_court and not wants_spiral:
 		return false
 
 	# A flyer that comes up empty waits PARTNER_SEARCH_INTERVAL before scanning
@@ -2102,11 +2139,19 @@ func _step_pair_interactions(delta: float) -> bool:
 	_partner_search_cooldown = maxf(0.0, _partner_search_cooldown - delta)
 	if _partner_search_cooldown > 0.0:
 		return false
-	var found := _scan_for_partners(wants_courtship, wants_spiral)
-	# Courtship first where both are on offer: it is the rarer, more meaningful
-	# one, and the whirl will still be there in eighteen seconds.
+	var found := _scan_for_partners(wants_courtship, wants_bird_court, wants_spiral)
+	# Courtship first where more than one is on offer: it is the rarer, more
+	# meaningful one, and the others will still be there shortly. Courtship
+	# and bird-court never actually compete for the same individual --
+	# Courtship.dances/BirdCourtship.dances are disjoint species sets -- so
+	# their relative order here is a readability choice, not a precedence
+	# decision, exactly like the escape-check ordering _process's own doc
+	# comment already notes for the same reason.
 	if found["court"] != null:
 		_begin_courtship(found["court"])
+		return true
+	if found["bird_court"] != null:
+		_begin_bird_court(found["bird_court"])
 		return true
 	if found["spiral"] != null:
 		_begin_spiral_flight(found["spiral"])
@@ -2145,6 +2190,30 @@ func _continue_courtship(delta: float) -> bool:
 	# The tangent it is on, kept for when the dance ends (see
 	# _begin_exit_recovery) -- position is continuous across that frame and
 	# velocity was not.
+	_remember_figure_travel(position - before)
+	return true
+
+
+## One more frame of an already-running bird display -- see _continue_
+## courtship, which this mirrors exactly except for the motion itself:
+## BirdCourtship.hold_offset eases to a fixed held point and stays there,
+## it does not orbit.
+func _continue_bird_court(delta: float) -> bool:
+	var partner = instance_from_id(_bird_courting_with)
+	if partner == null or not is_instance_valid(partner):
+		_end_bird_court()
+		return false
+	_bird_courting_elapsed += delta
+	if _bird_courting_elapsed >= BirdCourtship.DISPLAY_SECONDS:
+		_finish_bird_court(partner)
+		return false
+	var before := position
+	position = _bird_courting_centre + BirdCourtship.hold_offset(
+		_bird_courting_elapsed,
+		_bird_courting_start_offset,
+		_bird_courting_target_offset,
+		_bird_courting_closing_seconds
+	)
 	_remember_figure_travel(position - before)
 	return true
 
@@ -2209,8 +2278,8 @@ func _continue_spiral_flight(delta: float) -> bool:
 ## Being in the OTHER interaction is always disqualifying, in both directions:
 ## stealing one of a whirling pair into a dance would leave the other orbiting
 ## nothing, which is the same one-sided failure again.
-func _scan_for_partners(wants_courtship: bool, wants_spiral: bool) -> Dictionary:
-	var found := {"court": null, "spiral": null}
+func _scan_for_partners(wants_courtship: bool, wants_bird_court: bool, wants_spiral: bool) -> Dictionary:
+	var found := {"court": null, "bird_court": null, "spiral": null}
 	# A flyer built standalone in a test is not in the tree and so has nobody
 	# to meet, the same guard the distance LOD uses.
 	if not is_inside_tree():
@@ -2219,20 +2288,32 @@ func _scan_for_partners(wants_courtship: bool, wants_spiral: bool) -> Dictionary
 	for other in get_tree().get_nodes_in_group(FLOCK_GROUP):
 		if other == self or other.get("species") == null:
 			continue
-		if other.get("_courting_with") == null or other.get("_spiralling_with") == null:
+		if (
+			other.get("_courting_with") == null
+			or other.get("_bird_courting_with") == null
+			or other.get("_spiralling_with") == null
+		):
 			continue
 		if not Courtship.can_pair(own_id, other.get_instance_id()):
 			continue
 		var other_species := String(other.species)
 		var distance := position.distance_to(other.position)
 		var other_courting := int(other._courting_with)
+		var other_bird_courting := int(other._bird_courting_with)
 		var other_spiralling := int(other._spiralling_with)
+		# Busy with ANY of the three interactions is disqualifying for the
+		# other two below -- a flyer mid-dance is not simultaneously
+		# available for a bird display or a whirl either, the same "being
+		# in the OTHER interaction is always disqualifying" rule the
+		# original court/spiral pair already established (see this
+		# function's own doc comment for the one-sided-pairing bug that
+		# rule exists to prevent).
 		if (
 			wants_courtship
 			and found["court"] == null
 			and distance <= Courtship.NOTICE_RADIUS_PX
 			and Courtship.can_court(species, other_species)
-			and other_spiralling == 0
+			and (other_bird_courting == 0 and other_spiralling == 0)
 			# Busy with SOMEONE ELSE is a no; busy with ME is the whole point.
 			and (other_courting == 0 or other_courting == own_id)
 			and float(other._courting_cooldown) <= 0.0
@@ -2241,17 +2322,31 @@ func _scan_for_partners(wants_courtship: bool, wants_spiral: bool) -> Dictionary
 		):
 			found["court"] = other
 		if (
+			wants_bird_court
+			and found["bird_court"] == null
+			and distance <= BirdCourtship.NOTICE_RADIUS_PX
+			and BirdCourtship.can_court(species, other_species)
+			and (other_courting == 0 and other_spiralling == 0)
+			and (other_bird_courting == 0 or other_bird_courting == own_id)
+			and float(other._bird_courting_cooldown) <= 0.0
+			and other.get("age_seconds") != null
+			and LifeCycle.can_court_at(float(other.age_seconds))
+		):
+			found["bird_court"] = other
+		if (
 			wants_spiral
 			and found["spiral"] == null
 			and distance <= SpiralFlight.NOTICE_RADIUS_PX
 			and SpiralFlight.can_spiral(species, other_species)
-			and other_courting == 0
+			and (other_courting == 0 and other_bird_courting == 0)
 			and (other_spiralling == 0 or other_spiralling == own_id)
 			and float(other._spiral_cooldown) <= 0.0
 		):
 			found["spiral"] = other
-		if (found["court"] != null or not wants_courtship) and (
-			found["spiral"] != null or not wants_spiral
+		if (
+			(found["court"] != null or not wants_courtship)
+			and (found["bird_court"] != null or not wants_bird_court)
+			and (found["spiral"] != null or not wants_spiral)
 		):
 			break
 	return found
@@ -2303,6 +2398,86 @@ func _begin_courtship(partner) -> void:
 		partner._courting_elapsed = 0.0
 		partner._courting_start_offset = -_courting_start_offset
 		partner._courting_closing_seconds = _courting_closing_seconds
+
+
+## Begins a bird display -- mirrors _begin_courtship exactly (the "joining
+## late" re-basing and why it's needed is identical), except the two
+## partners' offsets are FIXED held points instead of opposite angles on
+## one shared orbit radius.
+func _begin_bird_court(partner) -> void:
+	_bird_courting_with = partner.get_instance_id()
+	var joining_late := int(partner._bird_courting_with) == get_instance_id()
+	_bird_courting_elapsed = 0.0
+	if joining_late:
+		_bird_courtship_round = partner._bird_courtship_round
+	else:
+		_bird_courtship_round += 1
+	_bird_courting_centre = (position + partner.position) * 0.5
+	# Where this flyer actually is right now, so the display starts
+	# without a jump. The partner's own start_offset is `position -
+	# centre` computed from ITS position, which is exactly the negation of
+	# this one (centre is the midpoint) -- so the two land on opposite
+	# sides of the held point below with no coordination needed, the same
+	# derivation _begin_courtship's own doc comment explains for the
+	# dance.
+	_bird_courting_start_offset = position - _bird_courting_centre
+	_bird_courting_target_offset = (
+		_bird_courting_start_offset.normalized() * BirdCourtship.HOLD_RADIUS_PX
+	)
+	_bird_courting_closing_seconds = FlightTransition.crossing_seconds(
+		_bird_courting_start_offset.distance_to(_bird_courting_target_offset),
+		_cruise_px_per_second()
+	)
+	if joining_late:
+		# See _begin_courtship's own doc comment for why this re-basing is
+		# necessary rather than merely tidy: the partner may have
+		# committed up to PARTNER_SEARCH_INTERVAL ago.
+		partner._bird_courting_centre = _bird_courting_centre
+		partner._bird_courting_elapsed = 0.0
+		partner._bird_courting_start_offset = -_bird_courting_start_offset
+		partner._bird_courting_target_offset = -_bird_courting_target_offset
+		partner._bird_courting_closing_seconds = _bird_courting_closing_seconds
+
+
+## The display is over -- mirrors _finish_courtship exactly, including the
+## personality inheritance (a player IS a selection pressure on birds too,
+## not just pollinators).
+func _finish_bird_court(partner) -> void:
+	var seed_value := BirdCourtship.pair_seed(
+		get_instance_id(), _bird_courting_with, _bird_courtship_round
+	)
+	var mated := BirdCourtship.mates(seed_value)
+	var leads := Courtship.leads(get_instance_id(), _bird_courting_with)
+	var centre := _bird_courting_centre
+	var partner_traits: Dictionary = (
+		partner.personality() if partner.has_method("personality") else {}
+	)
+	_end_bird_court()
+	if mated and leads and courtship_world != null:
+		if courtship_world.has_method("spawn_flyer_offspring"):
+			courtship_world.spawn_flyer_offspring(
+				species,
+				centre,
+				FlyerPersonality.inherit(personality(), partner_traits, seed_value)
+			)
+		# Reconciles the AGGREGATE population this species' spawn count is
+		# actually drawn from (RobinPopulationModel/SparrowPopulationModel
+		# via AmbientFlyerRenderer.marker_count_for) with the individual
+		# chick just spawned above -- unlike a pollinator (no aggregate
+		# model to reconcile against, see ecosystem_dynamics.md's Open
+		# questions), a bird chick that doesn't also increment this number
+		# would simply vanish the next time its chunk reloads and re-
+		# promotes from the (unchanged) aggregate. Mirrors CreatureMarker's
+		# own mammal-courtship birth, which reconciles the same way via
+		# EarthChunkManager.record_birth_at.
+		if courtship_world.has_method("record_bird_birth_at"):
+			courtship_world.record_bird_birth_at(centre, species)
+
+
+func _end_bird_court() -> void:
+	_bird_courting_with = 0
+	_bird_courting_elapsed = 0.0
+	_bird_courting_cooldown = BirdCourtship.COOLDOWN_SECONDS
 
 
 ## The dance is over. Both partners resolve the same answer from the same
@@ -2723,6 +2898,17 @@ func _animate_wings_body() -> void:
 	if _is_pre_hatch():
 		if egg_frame != null:
 			texture = egg_frame
+		return
+	# Displaying to a courting partner (see BirdCourtship/_begin_bird_
+	# court) -- held still like a perched bird (the display IS the held
+	# pose, not a flight figure), but checked before `perched` since a
+	# bird-court hold never sets that flag: position is overridden by
+	# _continue_bird_court exactly like the pollinator dance overrides it
+	# without ever perching either.
+	if _bird_courting_with != 0:
+		offset.y = 0.0
+		if not court_frames.is_empty():
+			texture = court_frames[_cycle_frame_index(court_frames.size(), COURT_SECONDS_PER_FRAME)]
 		return
 	# A perched bird holds still. Flapping while sitting on a branch reads
 	# as a glitch, not as a bird.
