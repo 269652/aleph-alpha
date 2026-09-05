@@ -8288,6 +8288,45 @@ litter or anything else this pass touched — named here rather than
 silently left for whoever next reaches for `/ecotest` and is confused by
 the frame rate.
 
+**Investigated 2026-09-05: a reported "hang" in
+`test_step_fruiting_drops_a_leaf_from_a_turning_tree` was NOT a code bug.**
+Surfaced as a side effect of an unrelated live-performance check, with a
+specific, alarming symptom: a single run of this one test reportedly burned
+400+ seconds of actual CPU time. Traced the entire call chain this test
+exercises end to end — `_find_a_fallen_leaf`/`_position_for_species` (both
+fixed-bound loops, ≤30/300 and ≤4000 iterations, over strictly O(1) bodies),
+`step_fruiting`'s leaf-fall block, `PixelNoise.range_index`,
+`FruitingModel.state_at`/`hanging_at`/`fallen_between`/`fallen_indices`/
+`_shed_by` (all closed-form O(1) math, no loop over elapsed time or crop
+size), `ChoppableTree.set_ripe_fruit`/`_redraw_canopy`, and
+`ProceduralTreeSprite.generate_texture_with_fruit` (itself cache-guarded on
+a quantised key, and its own per-fruit loop already bounded by
+`mini(ripe_count, ILLUSTRATED_MAX_FRUIT)`) — and found no loop anywhere in
+it whose termination condition can fail, no bound derived from a value that
+can go negative/huge, and no source of run-to-run non-determinism (the
+leaf-fall roll is seeded from `tree.sprite_seed`, which a test-constructed
+tree never randomises). Reproduced the named test solo 7 times and once
+more inside the full 16-test `-gunit_test_name=leaf` batch: every single
+run resolved on the very first fruiting step (`attempt=0`, `step=1`),
+completing in ~9-10s wall clock (Godot process start-up, not this test's
+own logic) — except the very first run of the session, which alone took
+129s with otherwise identical inputs. That machine was independently
+confirmed, via `Get-Process`, to be running several concurrent, unrelated
+Godot processes already carrying 250-858 CPU-seconds each at the time —
+this repository's own tooling notes already document 10-58+ concurrent
+Claude Code/Godot processes as normal load on this shared machine (see
+CONTRIBUTING.md's test-running section). A wall-clock outlier on a
+heavily-contended shared machine, or a `Get-Process` CPU reading picked up
+from a different concurrent Godot process (the console-wrapper exe GUT is
+launched through is a different PID from the actual worker process, and
+several worker processes coexist on this machine at any time), fits every
+observation; a real busy-loop in this codebase's own deterministic,
+hash-rolled leaf-fall mechanism does not fit the 7-fast/1-slow,
+always-first-attempt pattern actually measured. No production or test code
+changed as a result — see `_find_a_fallen_leaf`'s own doc comment in
+`tests/unit/test_earth_chunk_manager.gd` for the pointer back to this note
+if a future session hits the same alarming symptom again.
+
 <details>
 <summary>First pass (superseded above), kept for history</summary>
 
