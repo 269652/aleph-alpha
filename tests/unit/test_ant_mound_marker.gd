@@ -12,6 +12,7 @@ const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const ProceduralAntMoundSprite = preload("res://src/rendering/procedural_ant_mound_sprite.gd")
 const IllustratedAntMoundSprite = preload("res://src/rendering/illustrated_ant_mound_sprite.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
 var marker: AntMoundMarker
 
@@ -25,6 +26,16 @@ func before_each():
 
 func test_joins_the_ant_mound_group():
 	assert_true(marker.is_in_group(AntMoundMarker.GROUP_NAME))
+
+
+## See docs/concept/soil_fauna.md "Ants at half their old size, and finally
+## hoverable".
+func test_joins_the_hoverable_group():
+	assert_true(marker.is_in_group(HoverTargetFinder.GROUP_NAME))
+
+
+func test_get_display_name_names_it_an_ant_mound():
+	assert_eq(marker.get_display_name(), "Ant Mound")
 
 
 ## Real illustrated mound art now exists (see IllustratedAntMoundSprite) --

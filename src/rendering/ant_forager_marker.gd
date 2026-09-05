@@ -27,6 +27,7 @@ extends Node2D
 const ProceduralDecomposerSprite = preload("res://src/rendering/procedural_decomposer_sprite.gd")
 const IllustratedDecomposerSprite = preload("res://src/rendering/illustrated_decomposer_sprite.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
 const GROUP_NAME := "ant_forager"
 
@@ -59,9 +60,19 @@ static var _illustrated_generator := IllustratedDecomposerSprite.new()
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
+	add_to_group(HoverTargetFinder.GROUP_NAME)
 	_sprite = Sprite2D.new()
 	add_child(_sprite)
 	_update_sprite()
+
+
+## For World's mouse-hover tooltip (see docs/concept/soil_fauna.md "Ants at
+## half their old size, and finally hoverable"). No get_hover_actions() --
+## an autonomous colony worker, not something a player commands, the same
+## name-only-hoverable shape LumberjackMarker/DecomposerMarker's own
+## non-interactive workers already use.
+func get_display_name() -> String:
+	return "Ant"
 
 
 ## Empty-handed (walking to the pickup) before waypoint 1 is reached,

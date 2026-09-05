@@ -12,6 +12,7 @@ extends Node2D
 
 const ProceduralAntMoundSprite = preload("res://src/rendering/procedural_ant_mound_sprite.gd")
 const IllustratedAntMoundSprite = preload("res://src/rendering/illustrated_ant_mound_sprite.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
 const GROUP_NAME := "ant_mound"
 
@@ -28,6 +29,7 @@ static var _illustrated_generator := IllustratedAntMoundSprite.new()
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
+	add_to_group(HoverTargetFinder.GROUP_NAME)
 	var sprite := Sprite2D.new()
 	if _illustrated_generator.has_variants():
 		sprite.texture = _illustrated_generator.frame_for(mound_seed)
@@ -36,3 +38,13 @@ func _ready() -> void:
 		sprite.texture = _procedural_generator.generate_texture()
 		sprite.scale = Vector2.ONE * ProceduralAntMoundSprite.MOUND_WORLD_SCALE
 	add_child(sprite)
+
+
+## For World's mouse-hover tooltip (see docs/concept/soil_fauna.md "Ants at
+## half their old size, and finally hoverable") -- there is deliberately no
+## separate queen sprite to hover (real queens are sessile and unseen
+## outside the nest), so THIS is the one place a player can actually read
+## anything about a colony living here rather than only inferring it from
+## worker traffic.
+func get_display_name() -> String:
+	return "Ant Mound"

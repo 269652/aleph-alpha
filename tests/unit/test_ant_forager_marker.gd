@@ -11,6 +11,7 @@ const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
 const ProceduralDecomposerSprite = preload("res://src/rendering/procedural_decomposer_sprite.gd")
 const IllustratedDecomposerSprite = preload("res://src/rendering/illustrated_decomposer_sprite.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
 ## add_child_autofree (see _spawned_at) fully covers cleanup -- no separate
 ## per-test var/after_each needed, unlike test_decomposer_marker.gd's own
@@ -28,6 +29,19 @@ func _spawned_at(path: Array) -> AntForagerMarker:
 func test_joins_the_ant_forager_group():
 	var f := _spawned_at([Vector2.ZERO, Vector2(10, 0)])
 	assert_true(f.is_in_group(AntForagerMarker.GROUP_NAME))
+
+
+## See docs/concept/soil_fauna.md "Ants at half their old size, and finally
+## hoverable" -- neither this marker nor AntMoundMarker used to answer
+## HoverTargetFinder's contract at all.
+func test_joins_the_hoverable_group():
+	var f := _spawned_at([Vector2.ZERO, Vector2(10, 0)])
+	assert_true(f.is_in_group(HoverTargetFinder.GROUP_NAME))
+
+
+func test_get_display_name_names_it_an_ant():
+	var f := _spawned_at([Vector2.ZERO, Vector2(10, 0)])
+	assert_eq(f.get_display_name(), "Ant")
 
 
 func test_has_a_real_ant_sprite_texture():
