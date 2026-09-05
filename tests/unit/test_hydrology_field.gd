@@ -494,3 +494,37 @@ func test_a_river_mouth_runs_on_into_the_sea_and_fades():
 func test_far_from_any_water_the_across_field_is_dry():
 	assert_eq(field.probe(65, 15, 0.8)["lake_across"], HydrologyField.LAKE_ACROSS_DRY)
 	assert_false(field.probe(65, 15, 0.8)["sea"])
+
+
+## The map FILTER reads past the last painted cell: bilinear one texel,
+## the cubic reconstruction two. A texel there that came from the far
+## curated fallback carries an arbitrary SIGN, and the interpolation
+## between a real +6 and a fallback -16 crosses zero inside the painted
+## cell beside it -- the shader draws a hairline of water along the whole
+## reach boundary (found live at the Loire: thin phantom channels running
+## parallel to the river, several tiles out, on the world but never on
+## the minimap). So the geometry reach must cover the filter's support
+## past the bleed, not just the bleed.
+func test_the_geometry_reach_covers_the_map_filters_neighbours_of_the_bleed():
+	var painter_reach := RiverCatalog.RIVER_BANK_APRON_TILES + RiverFlowShader.SHORE_BLEED_TILES
+	assert_gte(
+		HydrologyField.GEOMETRY_REACH_TILES, painter_reach + HydrologyField.MAP_FILTER_SUPPORT_TILES,
+		"the geometry query must still answer wherever the map filter reads a painted cell's neighbour"
+	)
+	assert_gte(HydrologyField.MAP_FILTER_SUPPORT_TILES, 2.0, "the cubic reconstruction reads two texels out")
+
+
+## Reproduced directly: a tile one and a half texels past the painter's
+## bleed still gets a real channel answer on the channel's own side, never
+## the empty answer that hands the texel to the far fallback.
+func test_a_tile_past_the_bleed_still_gets_real_channel_geometry_on_the_same_side():
+	var half_width := field.width_tiles_for_discharge(TEST_MIN_DISCHARGE) / 2.0
+	var bleed := half_width + RiverCatalog.RIVER_BANK_APRON_TILES + RiverFlowShader.SHORE_BLEED_TILES
+	var at_bleed: Dictionary = field.nearest_channel_geometry(35 + int(floor(bleed)), 14)
+	var past_bleed: Dictionary = field.nearest_channel_geometry(35 + int(ceil(bleed + 1.5)), 14)
+	assert_false(at_bleed.is_empty(), "precondition: the bleed itself is covered")
+	assert_false(past_bleed.is_empty(), "the filter's neighbour past the bleed must still see the channel")
+	assert_eq(
+		signf(past_bleed["signed_across_tiles"]), signf(at_bleed["signed_across_tiles"]),
+		"the neighbour must sit on the same side as the painted cell -- no zero crossing between them"
+	)

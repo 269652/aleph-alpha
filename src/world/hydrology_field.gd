@@ -101,6 +101,24 @@ const CURVE_SEGMENTS := 24
 ## from a straight-line extrapolation). Pinned by
 ## test_the_geometry_reach_covers_the_painters_full_bleed.
 const VALLEY_HALF_WIDTH_TILES := 4.0
+
+## How far past the last painted cell the flow map's FILTER still reads:
+## one texel for the bilinear sampler, two for the cubic reconstruction
+## (RiverFlowShader.texture_bicubic). A texel in that band that came from
+## the far curated fallback carries an arbitrary SIGN, and interpolating
+## between a real +6 and a fallback -16 crosses zero INSIDE the painted
+## cell beside it -- the shader drew a hairline of water along the whole
+## reach boundary (found live at the Loire: thin phantom channels running
+## parallel to the river several tiles out, on the world, never on the
+## minimap). Pinned by
+## test_the_geometry_reach_covers_the_map_filters_neighbours_of_the_bleed.
+const MAP_FILTER_SUPPORT_TILES := 2.0
+
+## The channel-geometry query's own reach past a bank: the valley, plus
+## the filter support above, so every texel the map filter can blend into
+## a painted cell still describes the channel's own side. The valley
+## shoulder (probe) keeps ramping over VALLEY_HALF_WIDTH_TILES alone.
+const GEOMETRY_REACH_TILES := VALLEY_HALF_WIDTH_TILES + MAP_FILTER_SUPPORT_TILES
 const VALLEY_CARVE_METERS_PER_DOUBLING := 6.0
 
 ## The shoreline kernel: radius in asset cells of the smooth bump each
@@ -511,7 +529,7 @@ func _channel_hits(global_x: int, global_y: int) -> Array:
 			if discharge < river_min_discharge:
 				continue
 			var hit := _nearest_on_curve(tile_center, cell)
-			if hit["distance"] - hit["half_width"] > VALLEY_HALF_WIDTH_TILES:
+			if hit["distance"] - hit["half_width"] > GEOMETRY_REACH_TILES:
 				continue
 			hits.append({
 				"cell": cell,
