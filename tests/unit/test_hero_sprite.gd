@@ -255,6 +255,43 @@ func test_head_carries_the_chosen_eye_color():
 	assert_true(found, "the head should show the chosen eye color")
 
 
+## Reported (docs/progress.md's Character Sheet portrait entry): a "full"
+## beard rendered as a solid mask across almost the entire face -- eyes,
+## nose and mouth all swallowed under one flat color -- for
+## HeroAppearance.appearance_for("warrior", 1) (hair (0.45, 0.3, 0.55)).
+## Confirmed pre-existing and independent of any compositor:
+## generate_hero_head_image's own raw output already shows it. Root cause,
+## found by dumping the actual per-pixel classification of a rendered
+## head: _paint_facial_hair's "full" coverage formula reached ABOVE eye
+## level on both the sides (dy > -0.1, at/above brow height) and in the
+## centre (dy > 0.18, at the nose bridge -- only fractionally below the
+## eyes), instead of staying confined to the jaw/chin/cheeks the "the
+## whole jaw and chin" doc comment describes. Checking only the two
+## literal eye pixels wouldn't catch this -- they're painted AFTER facial
+## hair and so already survive -- so this checks the entire row at and
+## above eye level, every x position, which is exactly the seam the old
+## side clause slipped through.
+func test_full_beard_never_reaches_above_eye_level():
+	var full := HeroAppearance.BEARD_STYLES.find("full")
+	var appearance := appearance_maker.appearance_from_choices("warrior", {"beard": full, "hair_color": 6})
+	assert_eq(appearance.beard_name, "full")  # precondition
+	var size := Vector2i(20, 20)
+	var image := sprite.generate_hero_head_image(size, appearance)
+	var beard_color: Color = (appearance.hair as Color).darkened(0.15)
+	var ry := size.y / 2.0
+	var eye_y := int(ry + ry * 0.02)  # mirrors _paint_face_features' own eye_y
+
+	for y in range(0, eye_y + 1):
+		for x in size.x:
+			assert_false(
+				_close(image.get_pixel(x, y), beard_color),
+				(
+					"pixel (%d,%d) at/above eye level (eye_y=%d) is beard-colored -- a full beard should stay below the eyes"
+					% [x, y, eye_y]
+				)
+			)
+
+
 # -- full-body portrait (character creator preview) ---------------------------
 
 func test_portrait_is_the_pinned_size():

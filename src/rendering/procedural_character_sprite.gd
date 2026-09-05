@@ -214,8 +214,17 @@ func _paint_facial_hair(
 					covered = dy > 0.28 and (x + y) % 2 == 0
 				2:  # goatee: chin column plus a moustache line
 					covered = (dy > 0.3 and absf(dx) < 0.32) or (dy > 0.28 and dy < 0.45 and absf(dx) < 0.5)
-				3:  # full: the whole jaw and chin
-					covered = dy > 0.18 or (absf(dx) > 0.55 and dy > -0.1)
+				3:  # full: cheeks, jaw and chin -- solid coverage from the
+					# same jaw line stubble/goatee already anchor at
+					# (dy > 0.28-0.3), reaching up the sides toward the
+					# sideburns, but never above eye level (see
+					# test_full_beard_never_reaches_above_eye_level: this
+					# used to start at dy > -0.1 on the sides and dy > 0.18
+					# in the centre -- both above the eyes, at/above brow
+					# height and the nose bridge respectively -- so a
+					# "full" beard swallowed the upper face instead of
+					# stopping below it).
+					covered = dy > 0.3 or (absf(dx) > 0.5 and dy > 0.12)
 			if covered:
 				image.set_pixel(x, y, beard_color)
 

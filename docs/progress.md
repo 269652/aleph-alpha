@@ -10793,11 +10793,25 @@ the real running companion server (Browser tool against
 saved appearance, falls back correctly with none saved) — 12/12 there, all
 green. **Named, not built**: equipped armor/weapons don't show — no
 existing function composites those onto a portable `Image` outside a live
-`CharacterView`, a real, separate follow-up. **Also found and flagged
-(not fixed here, out of scope)**: `HeroAppearance`'s "full" beard style
-renders as a solid mask over the eyes/nose/mouth for at least one real
-(class, seed) combo, confirmed pre-existing via the raw uncomposited
-portrait output.
+`CharacterView`, a real, separate follow-up. **Full-beard face-mask bug
+(flagged here, fixed separately): now fixed.** `HeroAppearance`'s "full"
+beard style was rendering as a solid mask over the eyes/nose/mouth for at
+least one real (class, seed) combo (confirmed pre-existing via the raw
+uncomposited portrait output) — `ProceduralCharacterSprite._paint_facial_
+hair`'s "full" coverage formula reached ABOVE eye level on both clauses
+(the sideburn clause at `dy > -0.1`, at/above brow height; the centre
+clause at `dy > 0.18`, the nose bridge), instead of staying confined to
+the jaw/chin/cheeks its own doc comment already claimed. Fixed to anchor
+"full" at the same `dy > 0.28-0.3` jaw line `stubble`/`goatee` already
+use, extended up the sides toward the sideburns at `dy > 0.12` —
+comfortably below eye level with margin. Red first:
+`test_full_beard_never_reaches_above_eye_level` (`tests/unit/
+test_hero_sprite.gd`) checks the entire row at and above eye level, all x
+positions, since checking only the two literal eye pixels stays green
+even with the bug (they're painted after facial hair and already
+survive) — confirmed red for the expected reason before the fix, green
+(58/58, `test_hero_sprite.gd` + `test_procedural_character_sprite.gd`)
+after.
 
 ⬜ **Settlement dashboard.** Blocked on a real design decision, not a
 missing view: the live `VillageMarket`/`NpcEconomy` purse (what a player
