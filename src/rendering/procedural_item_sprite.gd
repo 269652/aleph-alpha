@@ -153,6 +153,11 @@ const _ITEM_LOOKS := {
 	# bees" bullet): a kept flyer before menagerie is unlocked.
 	"jarred_insect": {"color": Color(0.75, 0.85, 0.85), "shape": "jar"},
 	"caged_songbird": {"color": Color(0.25, 0.22, 0.2), "shape": "cage"},
+	# An empty glass bottle (docs/concept/capture_dsl.md) shares jarred_insect's
+	# jar shape -- both are glass containers -- with a distinct, clearer tint
+	# so an empty bottle and an already-jarred catch never read as the same
+	# icon.
+	"glass_bottle": {"color": Color(0.6, 0.82, 0.75), "shape": "jar"},
 }
 const _FALLBACK := {"color": Color(0.6, 0.6, 0.6), "shape": "round"}
 
