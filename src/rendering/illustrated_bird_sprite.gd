@@ -216,7 +216,11 @@ static var _image_cache: Dictionary = {}
 var _slicer := SpriteSheetSlicer.new()
 
 
-func has_species(species: String) -> bool:
+## Static (this and _SHEETS are both compile-time constant, nothing here
+## touches instance state) so callers that only need this one check --
+## AmbientFlyerMarker._step_flight_height, gating flight height to birds
+## and not pollinators -- don't need an instance just to ask it.
+static func has_species(species: String) -> bool:
 	return _SHEETS.has(species)
 
 
