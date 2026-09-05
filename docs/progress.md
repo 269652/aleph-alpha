@@ -7126,6 +7126,59 @@ state had never once been set by anything in `src/`.
   not silently dropped): ants as bird prey and ants as carrion detritivores
   remain exactly as scoped in the entry above — this pass is rendering
   only, it does not touch what a mound forages or how.
+- **Crushed underfoot: weight-emergent worm mortality** (medium) — ✅ Done
+  — requested directly: stepping on a worm should splatter it, emerging
+  from real player weight, force of step, and the worm's own pressure
+  resistance, not a flat "anyone can squash a worm" rule — calibration
+  example given: a frog's step spares a worm, a horse's kills it. No
+  frog or other amphibian exists in this game at all (checked directly);
+  the real substitutes are the smallest and largest land creatures that
+  do (mouse/squirrel spared, horse unchanged as the given example). Real
+  pieces:
+  1. **`CreatureMass`** (new, `src/world/creature_mass.gd`) — real,
+     commonly-cited average adult body mass per `AnimalAnatomy` species
+     (mouse 0.02kg through horse/camel 500kg). The player's own mass
+     reuses `StoneSize.AVERAGE_BODY_MASS_KG` directly rather than a
+     second guess. Purely mythical world bosses (no real animal to cite)
+     fall back to their own `world_scale` CUBED against deer's real
+     mass/scale ratio — verified directly that `world_scale` alone badly
+     under-represents real mass at the high end (a "horse" would come
+     out under 150kg using that formula, nothing like its real ~500kg),
+     which is exactly why the tabulated real species use cited figures
+     instead, not a derived one.
+  2. **`EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S`/`is_crushed_by`/
+     `crush`** (new) — reuses this codebase's own "one damage model for
+     the whole world" (`materials.md`/`ImpactResolver`) in SHAPE
+     (momentum = mass × velocity, resolved against a threshold), not in
+     its literal numbers: `ImpactResolver.T_CRUSH` is calibrated for
+     thrown-rock-vs-creature combat, an unrelated scale from "anything
+     stepping near a soil invertebrate", so this pins its own worm-scaled
+     threshold (5.0 kg·m/s) instead. Momentum is a full body's weight
+     settling through one foot at ordinary walking pace
+     (`PebbleDispersion.FOOTSTEP_SPEED_MPS`, reused) — deliberately the
+     creature's own FULL mass, not `PebbleDispersion`'s own foot-mass
+     FRACTION (a glancing kick past a pebble vs. standing weight settling
+     onto something underfoot are genuinely different physical events).
+     `crush(cell, momentum)` mirrors `take()`'s own `is_surfaced` gate (a
+     burrowed worm has no exposed body to step on) and `RECOVERY_SECONDS`
+     clock exactly — a crushed burrow recovers exactly like an eaten one.
+  3. **`EarthChunkManager.crush_worm_at`** mirrors `take_worm_at`'s own
+     shape exactly (same tile/chunk/patch lookup, same immediate
+     `_sync_worm_sprites` re-sync). Wired in `World._client_process` for
+     the player (`CreatureMass.PLAYER_MASS_KG`) AND every `CreatureMarker`
+     (`CreatureMass.mass_kg_for(creature.info.species)`), mirroring
+     `tread_snow_at`'s own "player, then every creature in the group"
+     call shape. No debounce needed for either — `crush_worm_at`'s own
+     removal is already idempotent, unlike the continuous accumulators
+     (path wear, snow depth) that DO need per-entity "last tile"
+     tracking.
+  **Deliberately NOT included** (named, not silently dropped): no
+  dedicated splat visual effect — a crushed worm currently disappears
+  exactly the way an eaten one already does, a real but purely cosmetic
+  follow-up. Flying creatures are airborne, not walking, so deliberately
+  excluded — a robin already interacts with a worm on its own terms
+  (`take_worm_at`, eating it), never by incidentally landing weight on
+  it. Full writeup: [soil_fauna.md](concept/soil_fauna.md#crushed-underfoot-weight-emergent-worm-mortality).
 
 ### Flora (`concept/flora.md`)
 

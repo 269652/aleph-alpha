@@ -257,6 +257,84 @@ func test_an_eaten_burrow_is_repopulated_eventually():
 	assert_true(patch.is_surfaced(cell), "a new worm should occupy the burrow eventually")
 
 
+# -- crushed underfoot: weight-emergent worm mortality (see docs/concept/
+# soil_fauna.md's own section by that name) --------------------------------
+
+## The real, tested boundary this whole mechanic exists to draw: a mouse's
+## own momentum (see CreatureMass/PebbleDispersion.FOOTSTEP_SPEED_MPS)
+## must fall under the threshold, and a horse's/player's own must clear
+## it -- computed here from the SAME real numbers the live game actually
+## uses, not invented test-only figures.
+func test_is_crushed_by_spares_a_mouses_own_real_momentum():
+	const CreatureMass = preload("res://src/world/creature_mass.gd")
+	const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
+	var mouse_momentum: float = CreatureMass.mass_kg_for("mouse") * PebbleDispersion.FOOTSTEP_SPEED_MPS
+	assert_false(EarthwormPatch.is_crushed_by(mouse_momentum))
+
+
+func test_is_crushed_by_kills_under_a_horses_own_real_momentum():
+	const CreatureMass = preload("res://src/world/creature_mass.gd")
+	const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
+	var horse_momentum: float = CreatureMass.mass_kg_for("horse") * PebbleDispersion.FOOTSTEP_SPEED_MPS
+	assert_true(EarthwormPatch.is_crushed_by(horse_momentum))
+
+
+## The calibration example given directly: a light creature's step spares
+## a worm, a heavy one's kills it. No frog exists in this game (see the
+## concept doc's own note) -- mouse/squirrel stand in for it here.
+func test_is_crushed_by_spares_small_creatures_and_kills_under_large_ones():
+	const CreatureMass = preload("res://src/world/creature_mass.gd")
+	const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
+	for species in ["mouse", "squirrel"]:
+		var momentum: float = CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
+		assert_false(EarthwormPatch.is_crushed_by(momentum), "%s should spare a worm" % species)
+	for species in ["horse", "boar", "deer", "bear"]:
+		var momentum: float = CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
+		assert_true(EarthwormPatch.is_crushed_by(momentum), "%s should crush a worm" % species)
+
+
+func test_is_crushed_by_is_never_true_at_zero_momentum():
+	assert_false(EarthwormPatch.is_crushed_by(0.0))
+
+
+func test_crush_below_threshold_leaves_a_surfaced_worm_untouched():
+	var patch := _patch()
+	patch.set_conditions(1.0, 1.0)
+	_settle(patch)
+	var cell: Vector2i = patch.worm_cells()[0]
+	assert_false(patch.crush(cell, 0.01), "momentum this small should not crush anything")
+	assert_true(patch.is_surfaced(cell), "the worm should still be there")
+
+
+func test_crush_above_threshold_kills_a_surfaced_worm():
+	var patch := _patch()
+	patch.set_conditions(1.0, 1.0)
+	_settle(patch)
+	var cell: Vector2i = patch.worm_cells()[0]
+	assert_true(patch.crush(cell, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	assert_false(patch.is_surfaced(cell), "the worm should be gone once crushed")
+
+
+## A burrowed worm has no exposed body to step on -- crush honors the
+## identical is_surfaced gate take() already does.
+func test_crush_fails_on_a_worm_that_is_not_up_even_at_huge_momentum():
+	var patch := _patch()
+	var cell: Vector2i = patch.worm_cells()[0]
+	assert_false(patch.crush(cell, 1000000.0))
+
+
+## Crushing recovers on the identical clock as being eaten -- the burrow
+## itself is not destroyed, only whatever worm was in it at the time.
+func test_a_crushed_burrow_is_repopulated_on_the_same_clock_as_an_eaten_one():
+	var patch := _patch()
+	patch.set_conditions(1.0, 1.0)
+	_settle(patch)
+	var cell: Vector2i = patch.worm_cells()[0]
+	patch.crush(cell, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	_settle(patch, EarthwormPatch.RECOVERY_SECONDS * 2.0)
+	assert_true(patch.is_surfaced(cell), "a new worm should occupy the burrow eventually")
+
+
 ## Eating one worm must not empty the whole lawn -- a robin's feeding
 ## territory is a renewable resource.
 func test_taking_one_worm_leaves_the_rest_alone():
