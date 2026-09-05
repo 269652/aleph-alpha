@@ -29,8 +29,28 @@ const INTERIOR_BOUNDS := Rect2(Vector2(-40, -60), Vector2(80, 90))
 
 const FLAP_SECONDS_PER_FRAME := 0.09
 
+## The sheet's cells are authored at icon/portrait resolution (measured:
+## 512px), not ArtResolution's ordinary entity-sprite convention -- drawing
+## them at that convention's scale would size a dropped bottle bigger than
+## a whole tile. A held tool's own world footprint (lasso/climbing_rope,
+## the same scale class this bottle actually is) sits in this range; a
+## reasoned starting point, not yet visually confirmed against the real
+## art in a live screenshot -- the same honest gap item_illustrations.md
+## itself names for the armor slots.
+const TARGET_WORLD_WIDTH_PX := 16.0
+
 static var _bottle_sprite := IllustratedGlassBottleSprite.new()
 static var _butterfly_sprite := ProceduralButterflySprite.new()
+
+
+## The scale that shrinks a `source_width_px`-wide sheet cell down to
+## TARGET_WORLD_WIDTH_PX -- the same "icon pixels aren't world pixels"
+## conversion ProceduralItemSprite.world_scale_for already does for every
+## other dropped item.
+static func world_scale_for(source_width_px: float) -> float:
+	if source_width_px <= 0.0:
+		return 1.0
+	return TARGET_WORLD_WIDTH_PX / source_width_px
 
 ## Set by the caller (e.g. DroppedItem) before this enters the tree.
 var species := ""

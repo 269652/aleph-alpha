@@ -52,6 +52,21 @@ func test_the_creatures_position_stays_within_the_interior_bounds():
 		)
 
 
+## The sheet's 512px cells are authored at icon/portrait resolution, not
+## ArtResolution's ordinary entity-sprite convention (which would size a
+## dropped bottle bigger than a whole tile) -- world_scale_for derives
+## however much that needs shrinking by, the same role
+## ProceduralItemSprite.world_scale_for already plays for every other
+## dropped item's icon-to-world conversion.
+func test_world_scale_for_shrinks_a_512px_cell_to_the_target_world_width():
+	var scale: float = BottledCreatureView.world_scale_for(512.0)
+	assert_almost_eq(512.0 * scale, BottledCreatureView.TARGET_WORLD_WIDTH_PX, 0.01)
+
+
+func test_world_scale_for_is_smaller_for_a_larger_source_cell():
+	assert_lt(BottledCreatureView.world_scale_for(1024.0), BottledCreatureView.world_scale_for(512.0))
+
+
 func test_a_settled_moment_shows_a_settled_frame_not_a_flap_frame():
 	var view := _view("monarch")
 	# Find a moment BottledCreatureWander itself reports as resting, and
