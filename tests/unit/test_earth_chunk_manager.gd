@@ -1957,15 +1957,25 @@ func test_step_fruiting_also_dresses_a_nearby_tree_with_the_live_snow_depth():
 ## comfortably inside the turning slice of that ([0.665, 0.75)), not its
 ## settled first two-thirds.
 const _TURNING_INTO_WINTER_YEAR_FRACTION := 0.72
-## Well inside summer's own settled two-thirds -- nothing has started
-## turning yet.
+## Well inside summer's own settled span -- the trickle window, see
+## LEAF_SUMMER_TRICKLE_CHANCE.
 const _SETTLED_SUMMER_YEAR_FRACTION := 0.3
+## Well inside spring, before blossom even opens -- no leaf falls at all
+## here (see step_fruiting's own leaf_fall_chance/leaf_fall_season block):
+## neither the autumn turn nor the summer trickle condition is true.
+const _SETTLED_SPRING_YEAR_FRACTION := 0.05
 ## Generous bound for the deterministic per-step roll (see
 ## EarthChunkManager's own doc comment on it) to land a hit -- not a retry
 ## against flakiness, since the roll is a pure hash of (tree seed, step),
 ## not engine randf(): a real bug that stopped leaves falling entirely
 ## would still exhaust every one of these attempts and fail the same way.
 const _LEAF_ROLL_ATTEMPTS := 30
+## LEAF_SUMMER_TRICKLE_CHANCE is a real 3% per step, not autumn's own
+## progress-scaled (and often much higher) chance -- needs far more
+## attempts for the SAME "a real bug would exhaust every one of these
+## too" guarantee (at 3%, 300 attempts leaves under a 1 in 10^3 chance of
+## a false failure from the roll sequence alone).
+const _LEAF_TRICKLE_ROLL_ATTEMPTS := 300
 
 
 func _set_world_age_at_year_fraction(fraction: float) -> void:
@@ -1973,11 +1983,24 @@ func _set_world_age_at_year_fraction(fraction: float) -> void:
 
 
 ## Finds the first dropped leaf item for `species_id` across up to
-## _LEAF_ROLL_ATTEMPTS fruiting steps, or null if none fell. Returns
+## `attempts` fruiting steps, or an empty array if none fell. Returns
 ## [item_stack, world_position].
-func _find_a_fallen_leaf(species_id: String, tree_position: Vector2, player_pixel: Vector2) -> Array:
+##
+## Advances the world clock by FRUITING_INTERVAL between attempts -- the
+## per-step roll is a deterministic hash of (tree seed, step_bucket), see
+## EarthChunkManager's own doc comment, so without a real clock advance
+## every attempt would re-read the identical step_bucket and re-roll the
+## exact same result. The total advance across even _LEAF_TRICKLE_ROLL_
+## ATTEMPTS stays a tiny fraction of a season's own span, so this never
+## risks drifting into the next season mid-loop.
+func _find_a_fallen_leaf(
+	species_id: String, tree_position: Vector2, player_pixel: Vector2,
+	attempts: int = _LEAF_ROLL_ATTEMPTS
+) -> Array:
 	var leaf_id := "%s_leaf" % species_id
-	for attempt in _LEAF_ROLL_ATTEMPTS:
+	for attempt in attempts:
+		if attempt > 0:
+			manager.advance_world_age(EarthChunkManager.FRUITING_INTERVAL)
 		manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, player_pixel)
 		var drops = get_signal_emit_count(WorldItemBus, "item_dropped")
 		for i in drops:
@@ -2001,13 +2024,54 @@ func test_step_fruiting_drops_a_leaf_from_a_turning_tree():
 	assert_false(found.is_empty(), "a tree well into its autumn turn should shed a real leaf item")
 
 
-func test_step_fruiting_drops_no_leaf_before_the_canopy_turns():
+## The item's own sprite_id carries which season it fell in (see
+## DroppedItem, IllustratedTree.foliage_leaf_for) -- the mechanism that
+## actually gives a leaf its correct colour.
+func test_an_autumn_leaf_s_sprite_id_names_autumn():
+	var tree := ChoppableTree.new()
+	tree.position = _position_for_species("cherry")
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
+
+	watch_signals(WorldItemBus)
+	var found := _find_a_fallen_leaf("cherry", tree.position, tree.position)
+
+	assert_false(found.is_empty(), "precondition: a leaf should have fallen")
+	assert_eq(found[0].item.sprite_id, "cherry_leaf_autumn")
+
+
+## Reported: "when they fall in summer they should be green" -- a real,
+## if much rarer, trickle in settled summer, not only the main autumn
+## fall (see LEAF_SUMMER_TRICKLE_CHANCE).
+func test_step_fruiting_also_drops_a_light_summer_trickle():
 	var tree := ChoppableTree.new()
 	tree.position = _position_for_species("cherry")
 	tree.bind_canopy(Sprite2D.new())
 	entities_parent.add_child(tree)
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_SETTLED_SUMMER_YEAR_FRACTION)
+
+	watch_signals(WorldItemBus)
+	var found := _find_a_fallen_leaf(
+		"cherry", tree.position, tree.position, _LEAF_TRICKLE_ROLL_ATTEMPTS
+	)
+
+	assert_false(found.is_empty(), "a settled summer tree should still shed an occasional leaf")
+	assert_eq(found[0].item.sprite_id, "cherry_leaf_summer")
+
+
+## Spring, before blossom even opens, is neither the autumn turn nor the
+## summer trickle -- step_fruiting's own leaf_fall_chance stays exactly
+## zero here, not merely small.
+func test_step_fruiting_drops_no_leaf_in_early_spring():
+	var tree := ChoppableTree.new()
+	tree.position = _position_for_species("cherry")
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+	_set_world_age_at_year_fraction(_SETTLED_SPRING_YEAR_FRACTION)
 
 	watch_signals(WorldItemBus)
 	for attempt in _LEAF_ROLL_ATTEMPTS:
@@ -2018,7 +2082,7 @@ func test_step_fruiting_drops_no_leaf_before_the_canopy_turns():
 		var stack = get_signal_parameters(WorldItemBus, "item_dropped", i)[0]
 		if stack.item.id == "cherry_leaf":
 			saw_leaf = true
-	assert_false(saw_leaf, "a settled summer canopy has not started shedding yet")
+	assert_false(saw_leaf, "nothing has started shedding yet in early spring")
 
 
 ## Oak's own fallen leaf reads as an oak leaf, not a literal "Acorn Leaf" --
