@@ -123,6 +123,83 @@ const _SHEETS := {
 	},
 }
 
+## The on-screen world width (px) a sparrow -- the FLYER_WORLD_SCALE
+## reference species, ratio 1.0 -- read as under ProceduralBirdSprite,
+## before this class existed: measured content width (24px of its 32px
+## canvas) times the renderers' shared marker.scale chain (ArtResolution.
+## SPRITE_SCALE * FishRenderer.FISH_WORLD_SCALE * FLYER_WORLD_SCALE). Kept
+## as this class's own calibration anchor -- see marker_scale -- rather
+## than switching the game's whole existing bird-to-world size balance
+## just because the ART got better.
+const BASE_WORLD_WIDTH := 6.6
+
+## Per-species target world width (px), TARGET = BASE_WORLD_WIDTH *
+## AmbientFlyerRenderer.FLYER_WORLD_SCALE[species] -- duplicated as literal
+## numbers rather than preloading that file to read it live: AmbientFlyer
+## Renderer already preloads THIS class (to pick it over ProceduralBird
+## Sprite), and a preload back the other way is circular. Kept from
+## silently drifting apart by test_flyer_world_scale_proportions_match_
+## illustrated_bird_sprite in test_ambient_flyer_renderer.gd, which
+## imports both and checks the ratios agree -- not exact pixel parity
+## with FLYER_WORLD_SCALE (real illustrated art has its own proportions a
+## hand-authored multiplier cannot predict exactly), just the same
+## ordering. Blackbird has no ProceduralBirdSprite sibling to calibrate
+## against (see the class doc comment's fallback note) -- sized like
+## kingfisher's, a real blackbird being one of the larger common garden
+## birds (~24cm) alongside a kingfisher (~17cm bill included), both well
+## above a robin/sparrow (~14-15cm).
+const _TARGET_WORLD_WIDTH := {
+	"sparrow": BASE_WORLD_WIDTH,       # FLYER_WORLD_SCALE 1.0
+	"robin": BASE_WORLD_WIDTH * 1.5,   # FLYER_WORLD_SCALE 1.5
+	"kingfisher": BASE_WORLD_WIDTH * 1.7,  # FLYER_WORLD_SCALE 1.7
+	"blackbird": BASE_WORLD_WIDTH * 1.7,
+}
+
+static var _content_width_cache: Dictionary = {}
+
+
+## How much to scale this species' marker so it reads at its real target
+## world width (see _TARGET_WORLD_WIDTH) instead of the flat, procedural-
+## canvas-tuned scale AmbientFlyerRenderer/PiscivoreBirdRenderer otherwise
+## apply -- the bird analog of IllustratedAnimalSprite.marker_scale, and
+## the actual fix for "robins and sparrows are now gigantic": the flat
+## scale drew this class's ~6-9x-wider real content at ProceduralBird
+## Sprite's own tiny-canvas size, unshrunk. Callers must use THIS instead
+## of the flat chain whenever this generator (not ProceduralBirdSprite) is
+## the one actually in use -- see AmbientFlyerRenderer._build_marker /
+## PiscivoreBirdRenderer.spawn_piscivore_birds, which now branch on which
+## generator has_species(species) selected, mirroring exactly how
+## CreatureMarker._apply_action_scale branches between
+## IllustratedAnimalSprite.marker_scale and the procedural per-species
+## scale.
+func marker_scale(species: String) -> float:
+	var target: float = _TARGET_WORLD_WIDTH.get(species, BASE_WORLD_WIDTH)
+	return target / _content_width(species)
+
+
+## Frame 0's own opaque-pixel content width (art px), measured once and
+## cached -- mirrors IllustratedAnimalSprite._reference_width exactly,
+## down to the reason: this scans a full frame's pixels, and every spawn
+## call asks for it.
+func _content_width(species: String) -> float:
+	if _content_width_cache.has(species):
+		return _content_width_cache[species]
+	var texture := generate_texture(species)
+	if texture == null:
+		return BASE_WORLD_WIDTH
+	var image: Image = texture.get_image()
+	var min_x := image.get_width()
+	var max_x := -1
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.01:
+				min_x = mini(min_x, x)
+				max_x = maxi(max_x, x)
+	var width := maxf(float(max_x - min_x + 1), 1.0)
+	_content_width_cache[species] = width
+	return width
+
+
 ## "species/action" -> Array[ImageTexture]. Shared across every instance,
 ## same reasoning as IllustratedAnimalSprite._frame_cache: every bird of a
 ## species shows the identical illustrated frames, so there is nothing to
