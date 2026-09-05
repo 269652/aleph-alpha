@@ -3,14 +3,21 @@ extends Sprite2D
 ## A butterfly/songbird ambient wildlife marker -- pure decorative presence
 ## (see docs/concept/ecosystem_dynamics.md's Species roster), driven by
 ## AmbientFlyerMovement's idle-flight drift. Deliberately lighter than
-## FishMarker/CreatureMarker: no needs system and no full behavior-tree AI
-## (beyond noticing and getting away from the player -- FlyerPersonality for
-## true butterflies, _step_songbird_flight_response for ground-foraging
-## songbirds), no water confinement (flyers roam freely over both land and
-## water), and no population simulation behind it -- a fixed, capped,
-## decorative presence like the game's original static tree/grass-tuft layers.
+## FishMarker/CreatureMarker: no needs system, no water confinement (flyers
+## roam freely over both land and water), and no population simulation
+## behind it -- a fixed, capped, decorative presence like the game's
+## original static tree/grass-tuft layers. Every species but robin still
+## picks its top-level priority via the sequential `if`s in `_process`
+## (noticing and getting away from the player -- FlyerPersonality for true
+## butterflies, `_step_songbird_flight_response` for ground-foraging
+## songbirds -- then a pair interaction, then foraging); robin is wired
+## through `_behavior_tree` instead (see BEHAVIOR_TREE_SOURCE below and
+## docs/concept/behavior_dsl.md), a real parsed script composing the exact
+## same three methods by calling them, not reimplementing them.
 
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
+const BehaviorDslParser = preload("res://src/gameplay/behavior_dsl_parser.gd")
+const BehaviorTreeExecutor = preload("res://src/gameplay/behavior_tree_executor.gd")
 const ScentField = preload("res://src/world/scent_field.gd")
 const PollinatorForaging = preload("res://src/gameplay/pollinator_foraging.gd")
 const NectaringPosture = preload("res://src/rendering/nectaring_posture.gd")
@@ -400,10 +407,106 @@ var _forage_pick_index := 0
 const AIRBORNE_Z_INDEX := 1
 
 
+## Which species have been wired through the behaviour DSL (docs/concept/
+## behavior_dsl.md) instead of the sequential `if`s below -- robin only.
+## Sparrow ground-forages exactly the same way and is a real, deliberate
+## next candidate, but doing both in one pass is exactly the overreach
+## docs/concept/ethogram.md's own slice 5 investigation warned against;
+## one species wired and proven is the honest claim this pass makes.
+const BEHAVIOR_TREE_SPECIES := {"robin": true}
+
+## priority { songbird_flush() bird_courtship() ground_forage() } --
+## `_process`'s own existing precedence for robin (flush outranks a pair
+## interaction, which outranks foraging), spelled out as a real parsed
+## script instead of three sequential `if`s. All three atoms are thin,
+## marker-bound wrappers (see _local_atoms) around the exact same methods
+## `_process` already called directly for every other species -- reused by
+## calling them, not reimplemented.
+const BEHAVIOR_TREE_SOURCE := """
+behavior "robin" {
+    priority {
+        songbird_flush()
+        bird_courtship()
+        ground_forage()
+    }
+}
+"""
+
+## Parsed once, ever, and shared by every robin -- parsing is a species-
+## level cost, not a per-individual one (docs/concept/behavior_dsl.md's own
+## open question on exactly this).
+static var _behavior_tree_cache: Dictionary = {}
+
+## This individual's parsed tree, or null for every species not yet wired
+## (see BEHAVIOR_TREE_SPECIES) -- `_process` reads this to decide whether
+## to dispatch through the tree at all, so an unwired species pays no cost
+## and takes no risk from this existing at all.
+var _behavior_tree = null
+
+
+static func _parsed_behavior_tree(name: String) -> Variant:
+	if _behavior_tree_cache.is_empty():
+		var parser := BehaviorDslParser.new()
+		var result := parser.parse(BEHAVIOR_TREE_SOURCE)
+		_behavior_tree_cache = result["behaviors"]
+	return _behavior_tree_cache.get(name)
+
+
+## This individual's own marker-bound atoms (docs/concept/behavior_dsl.md):
+## thin wrappers around THIS class's existing step functions, reused by
+## calling them -- never reimplemented as pure data. Built fresh each call
+## (three cheap Callables) rather than cached, since a cached Dictionary
+## built once would still need to bind `self` per instance regardless --
+## there is nothing to share across individuals here, unlike the parsed
+## tree itself.
+func _local_atoms() -> Dictionary:
+	return {
+		"songbird_flush": Callable(self, "_atom_songbird_flush"),
+		"bird_courtship": Callable(self, "_atom_bird_courtship"),
+		"ground_forage": Callable(self, "_atom_ground_forage"),
+	}
+
+
+## _process's OLD `if _step_songbird_flight_response(delta): _animate_wings();
+## return`, as a leaf: the method is untouched, only how its result reaches
+## _process has changed.
+func _atom_songbird_flush(_args: Dictionary, context: Dictionary) -> Variant:
+	if _step_songbird_flight_response(context["delta"]):
+		_animate_wings()
+		return {"intent": "flee"}
+	return null
+
+
+## _process's OLD `if _step_pair_interactions(delta): _animate_wings();
+## return`, as a leaf.
+func _atom_bird_courtship(_args: Dictionary, context: Dictionary) -> Variant:
+	if _step_pair_interactions(context["delta"]):
+		_animate_wings()
+		return {"intent": "courtship"}
+	return null
+
+
+## _process's OLD `if _movement == null: return` immediately before
+## `if _step_ground_forage(delta): return`, folded into one leaf: without
+## this, a null _movement reaching _step_ground_forage's own internals
+## (_look_for_worms and friends read _movement.radius) would crash where
+## the original guard safely skipped it. _step_ground_forage animates its
+## own per-phase frame internally, so this leaf does not call
+## _animate_wings() itself -- exactly as the original bare `return` didn't.
+func _atom_ground_forage(_args: Dictionary, context: Dictionary) -> Variant:
+	if _movement == null:
+		return null
+	if _step_ground_forage(context["delta"]):
+		return {"intent": "forage"}
+	return null
+
+
 func _ready() -> void:
 	add_to_group(HoverTargetFinder.GROUP_NAME)
 	add_to_group(FLOCK_GROUP)
 	z_index = AIRBORNE_Z_INDEX
+	if BEHAVIOR_TREE_SPECIES.has(species):
+		_behavior_tree = _parsed_behavior_tree(species)
 
 
 ## This individual's own AnimalFitness fitness_score, derived from
@@ -743,28 +846,45 @@ func _process(frame_delta: float) -> void:
 		_animate_wings()
 		return
 
-	if _step_songbird_flight_response(delta):
-		_animate_wings()
-		return
+	if _behavior_tree != null:
+		# Robin only (see BEHAVIOR_TREE_SPECIES): the exact same three
+		# checks below, in the exact same order, expressed as a real
+		# parsed priority instead of three sequential `if`s. A non-null
+		# result means one of the three already fired -- and, for flush/
+		# courtship, already animated the wings itself (see
+		# _atom_songbird_flush/_atom_bird_courtship) exactly as the
+		# original `if`s did; ground-forage animates its own per-phase
+		# frame internally, also exactly as before.
+		var decision: Variant = BehaviorTreeExecutor.run(
+			_behavior_tree, {"marker": self, "delta": delta, "local_atoms": _local_atoms()}
+		)
+		if decision != null:
+			return
+		if _movement == null:
+			return
+	else:
+		if _step_songbird_flight_response(delta):
+			_animate_wings()
+			return
 
-	# Meeting another flyer takes precedence over foraging: a pair mid-dance or
-	# mid-whirl is doing that and nothing else, which is what makes it legible
-	# as an interaction rather than two flyers happening to overlap.
-	if _step_pair_interactions(delta):
-		_animate_wings()
-		return
-	if _movement == null:
-		return
+		# Meeting another flyer takes precedence over foraging: a pair mid-dance or
+		# mid-whirl is doing that and nothing else, which is what makes it legible
+		# as an interaction rather than two flyers happening to overlap.
+		if _step_pair_interactions(delta):
+			_animate_wings()
+			return
+		if _movement == null:
+			return
 
-	# Ground foraging runs BEFORE the perched check, and has to: this is the
-	# only thing in the game that ever sets `perched` (it was a dead flag
-	# until worms landed), and the early-return below would otherwise freeze
-	# the bird's own state machine the instant it sat down -- it would peck
-	# once and never stand up again. Returns false for every flyer that isn't
-	# a ground feeder, and while a ground feeder is merely airborne, so the
-	# ordinary wander/pollinator path below is untouched.
-	if _step_ground_forage(delta):
-		return
+		# Ground foraging runs BEFORE the perched check, and has to: this is the
+		# only thing in the game that ever sets `perched` (it was a dead flag
+		# until worms landed), and the early-return below would otherwise freeze
+		# the bird's own state machine the instant it sat down -- it would peck
+		# once and never stand up again. Returns false for every flyer that isn't
+		# a ground feeder, and while a ground feeder is merely airborne, so the
+		# ordinary wander/pollinator path below is untouched.
+		if _step_ground_forage(delta):
+			return
 
 	# A second, independent way to perch -- see _step_idle_rest's own doc
 	# comment. Only reached when ground-forage did NOT just claim the frame,
