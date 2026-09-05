@@ -7784,6 +7784,95 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   `test_ant_forager_marker.gd`. Full writeup:
   [carrion.md](concept/carrion.md)'s "Decomposers" Status entry and
   [soil_fauna.md](concept/soil_fauna.md)'s "Rendered presence" entry.
+- **Ants: half size, hover tooltips, a real foraging round trip, pheromone
+  recruitment, and a queen-driven population** (large) — ✅ Done —
+  requested directly: "make ants half their current size; give them a
+  hover tooltip (for mounds as well) and add real foraging behaviour;
+  colony behaviour a queen; pheromones and generally more realistic /
+  natural". Five real pieces, in `src/world/`, `src/gameplay/`, and
+  `src/rendering/`:
+  1. **Half size.** The shared `BASE_WORLD_WIDTH` every decomposer (ant or
+     beetle) used split into `IllustratedDecomposerSprite.ANT_WORLD_WIDTH`
+     (3.0, half the old 6.0) and `.BUG_WORLD_WIDTH` (6.0, beetles left
+     unchanged — the request was about ants specifically, not carrion
+     bugs), picked per-species by `_world_width_for`.
+     `ProceduralAntMoundSprite.MOUND_WORLD_WIDTH` halved to match (7.0 →
+     3.5) so a mound stays proportional to its own ants.
+  2. **Hoverable, mounds included.** `AntForagerMarker`, `AntMoundMarker`,
+     and `DecomposerMarker` (the ambient carrion ants/bugs) all now join
+     `HoverTargetFinder.GROUP_NAME` and answer `get_display_name()` ("Ant"
+     / "Ant Mound" / the species name) — no `get_hover_actions()` on any
+     of them, the same name-only-hoverable shape `LumberjackMarker`'s own
+     non-interactive workers already use: autonomous colony workers, not
+     something a player commands.
+  3. **Real foraging: a genuine round trip, not an instant resolve.**
+     Before this pass, `EarthChunkManager._forage_seed_near_mound`/
+     `_forage_windfall_near_mound` resolved the whole find-take-cache
+     sequence in one instant call and spawned `AntForagerMarker` as a
+     purely decorative walk along an already-decided path. Now
+     `AntForageBehavior` (new, pure, engine-free — the same
+     `CarrionForageBehavior`-style state machine every other forage system
+     here uses) drives a real two-phase trip: the marker walks to the real
+     target, takes the food only on actual arrival (re-checked THEN —
+     something else may have taken it first, so a dispatched forager is
+     never guaranteed a result), walks back, and only at the mound does
+     the cache/consume roll resolve and the marker free itself.
+     Deliberately still no SEEKING phase: the colony already found a real,
+     reachable target before dispatching (pheromone-biased, see next) —
+     this marker owns the walk and the two real world effects at each
+     end, not target discovery.
+  4. **Pheromone trails: recruitment to a known-good source.**
+     `PheromoneField` (new) is a real, stateful, decaying trail pheromone
+     per mound — `RADIUS_TILES` 4.0, `HALF_LIFE_SECONDS` 30.0 exponential
+     decay, pruned below `PRUNE_THRESHOLD` 0.02 so a field never grows
+     unbounded. A successful arrival at food deposits `DEPOSIT_AMOUNT` 1.0
+     at that tile; the next dispatch, when more than one candidate is in
+     reach, is biased toward the strongest nearby trail via
+     `best_candidate_index` (tuned and test-pinned
+     `PREFERENCE_TILE_SIZES_PER_UNIT` 3.0) rather than picked uniformly at
+     random — the same recruitment principle behind Deneubourg's
+     double-bridge experiments, at a scale this game can actually render.
+  5. **A queen, and where a colony's size comes from.** `AntColony` gains
+     a real per-mound population (`AntPopulationModel`, a thin
+     `PopulationModel` wrapper mirroring `AquaticPopulationModel`'s own
+     shape: `GROWTH_RATE_PER_DAY` 0.05, `STARTING_POPULATION` 1.0,
+     `BASE_CAPACITY` 4.0) that grows or stalls on a real
+     `SECONDS_PER_SIMULATED_DAY`-scaled clock, plus a recent-forage-success
+     EMA (`FORAGE_SUCCESS_EMA_RATE` 0.3) that raises carrying capacity by
+     up to `FOOD_CAPACITY_BONUS` 1.0 when foraging is going well.
+     Population and capacity together set `active_forager_cap_at`
+     (hard-ceilinged by `MAX_CONCURRENT_FORAGERS` 3), so a struggling
+     mound visibly sends out fewer ants and a thriving one more, instead
+     of every mound looking identical regardless of how it's actually
+     doing. The queen herself is deliberately data-only, never a separate
+     visible sprite or new `AntMoundMarker` state — real queens are
+     sessile and never seen outside the nest, so a mound's own tooltip is
+     the only place her colony's condition should ever show.
+  `EarthChunkManager` rewired to match: `_active_ant_foragers` is now an
+  `Array[AntForagerMarker]` per mound (was a single optional marker),
+  capped at `colony.active_forager_cap_at(cell)`; candidate selection
+  filters in-reach seeds/windfall with `.filter()` and picks among them
+  via `PheromoneField.best_candidate_index`. **62 new tests green** (plus
+  2 existing `test_earth_chunk_manager.gd` tests rewritten in place for
+  the new dispatch contract), across `test_ant_colony.gd` (27→40),
+  `test_ant_forager_marker.gd` (9→21, largely rewritten for the new
+  round-trip contract), `test_pheromone_field.gd` (new, 16),
+  `test_ant_population_model.gd` (new, 7), `test_ant_forage_behavior.gd`
+  (new, 4), `test_ant_mound_marker.gd` (+2), `test_decomposer_marker.gd`
+  (+2), `test_illustrated_decomposer_sprite.gd` (+3),
+  `test_procedural_ant_mound_sprite.gd` (+1), and
+  `test_earth_chunk_manager.gd` (+2). Full ant-related regression (10
+  files) measured green end to end: 160/160 passing, 183,886 asserts.
+  **Deliberately NOT attempted** (named, not silently dropped): mound
+  COUNT is still fixed per chunk — a grown colony does not split off and
+  found a new mound, nor does a starved one disappear; no worker/soldier
+  caste differentiation, every ant identical; ants still are not bird
+  prey and still are not carrion detritivores (both separately scoped,
+  untouched from before this pass). Full writeup:
+  [soil_fauna.md](concept/soil_fauna.md#ants-at-half-their-old-size-and-finally-hoverable),
+  [real foraging](concept/soil_fauna.md#real-foraging-a-round-trip-not-an-instant-resolve),
+  [pheromones](concept/soil_fauna.md#pheromone-trails-recruitment-to-a-known-good-source),
+  and [the queen](concept/soil_fauna.md#a-queen-and-where-a-colonys-size-comes-from).
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to
