@@ -110,6 +110,21 @@ var _surfacing: Dictionary = {}
 ## Vector2i cell -> seconds of post-predation recovery remaining. Only present
 ## for burrows that were recently eaten out.
 var _recovery: Dictionary = {}
+## Vector2i cell -> true for a recovering burrow whose worm was CRUSHED
+## rather than eaten (see "Crushed underfoot" / "A corpse is new ground"
+## in docs/concept/soil_fauna.md). Rides the identical _recovery clock --
+## cleared alongside it in advance(), never on a second timer -- so a
+## corpse lies exactly as long as its burrow is empty and no longer.
+var _crushed: Dictionary = {}
+## Vector2i cell -> true while the environment is actively pulling that
+## burrow's worm UP (surfacing's target currently exceeds its level).
+## False (including for a cell never yet advanced) means "not rising" --
+## either genuinely falling, or steady-state with nothing left to climb
+## toward. Recorded by advance() itself rather than derived a second time
+## by a caller, since advance() already makes exactly this comparison
+## internally to decide which way to move surfacing (see "Direction, not
+## just amount" in docs/concept/soil_fauna.md).
+var _rising: Dictionary = {}
 ## The current environmental surfacing drive (see surface_drive), refreshed by
 ## set_conditions from the live weather and season.
 var _drive := 0.0
@@ -241,6 +256,10 @@ func advance(delta: float) -> void:
 			recovering -= delta
 			if recovering <= 0.0:
 				_recovery.erase(cell)
+				# Whatever died here is gone by the time a new worm could
+				# occupy the burrow -- the identical clock, never a second
+				# one (see _crushed's own doc comment).
+				_crushed.erase(cell)
 			else:
 				_recovery[cell] = recovering
 			# An emptied burrow stays empty whatever the weather is doing.
@@ -251,8 +270,10 @@ func advance(delta: float) -> void:
 		var target := 1.0 if _drive > reluctance_at(cell) else 0.0
 		var level: float = _surfacing[cell]
 		if target > level:
+			_rising[cell] = true
 			_surfacing[cell] = minf(target, level + SURFACE_RATE * delta)
 		else:
+			_rising[cell] = false
 			_surfacing[cell] = maxf(target, level - BURROW_RATE * delta)
 
 
@@ -313,7 +334,38 @@ func crush(cell: Vector2i, momentum_kg_m_s: float) -> bool:
 		return false
 	_surfacing[cell] = 0.0
 	_recovery[cell] = RECOVERY_SECONDS
+	_crushed[cell] = true
 	return true
+
+
+## Whether `cell` currently holds a crushed worm's corpse -- distinct from
+## simply having been eaten (take() never sets this), so the sprite layer
+## can tell "play the die animation and hold it" apart from "just
+## disappear" (see "A corpse is new ground" in docs/concept/soil_fauna.md).
+func is_corpse(cell: Vector2i) -> bool:
+	return _crushed.get(cell, false)
+
+
+## How long ago `cell`'s worm was crushed, in seconds -- what the sprite
+## layer indexes the die row's 8 frames by. Derived from the SAME
+## RECOVERY_SECONDS countdown crush() already starts, rather than a
+## second, independent counter that could drift from it: 0.0 right at the
+## moment of crushing, rising as _recovery counts down, meaningless (and
+## reported as 0.0, the same harmless-default shape every other per-cell
+## query here uses) for a cell that never died at all.
+func corpse_age_seconds(cell: Vector2i) -> float:
+	if not is_corpse(cell):
+		return 0.0
+	return RECOVERY_SECONDS - _recovery.get(cell, RECOVERY_SECONDS)
+
+
+## Whether the environment is currently pulling `cell`'s worm UP -- false
+## (the harmless default) for a burrow that has never advanced, is
+## genuinely falling, or has already reached a steady state with nothing
+## left to climb toward (see advance()'s own doc comment on why "not
+## rising" covers both "falling" and "arrived").
+func is_rising(cell: Vector2i) -> bool:
+	return _rising.get(cell, false)
 
 
 func _seed_initial_burrows() -> void:
