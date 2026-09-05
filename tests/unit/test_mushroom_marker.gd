@@ -11,6 +11,7 @@ extends GutTest
 
 const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const ProceduralMushroomSprite = preload("res://src/rendering/procedural_mushroom_sprite.gd")
+const IllustratedMushroomSprite = preload("res://src/rendering/illustrated_mushroom_sprite.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const Inventory = preload("res://src/gameplay/inventory.gd")
 
@@ -78,6 +79,20 @@ func test_identified_species_look_different_from_each_other():
 	var fly_agaric_sprite := fly_agaric.get_child(0) as Sprite2D
 	var chanterelle_sprite := chanterelle.get_child(0) as Sprite2D
 	assert_ne(fly_agaric_sprite.texture.get_image().get_data(), chanterelle_sprite.texture.get_image().get_data())
+
+
+## Same "gigantic" failure class DecomposerMarker's/AntMoundMarker's own
+## sprites hit once (applying the wrong world scale to real illustrated
+## art, whose canvas proportions don't match the procedural fallback's) --
+## pinned directly rather than trusted by inspection. Real illustrated art
+## now exists for every species (see IllustratedMushroomSprite), so an
+## identified marker must use ITS OWN measured-from-the-real-art
+## marker_scale(species_id), not the procedural generator's flat
+## MUSHROOM_WORLD_SCALE.
+func test_identified_illustrated_species_use_the_illustrated_marker_scale():
+	var marker := _make_marker("chanterelle", true)
+	var sprite := marker.get_child(0) as Sprite2D
+	assert_eq(sprite.scale, Vector2.ONE * IllustratedMushroomSprite.new().marker_scale("chanterelle"))
 
 
 func test_unidentified_name_hides_the_real_species():
