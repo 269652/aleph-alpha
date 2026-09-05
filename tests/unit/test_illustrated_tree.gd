@@ -1502,6 +1502,170 @@ func test_snow_composes_on_top_of_a_season_turn_not_instead_of_it():
 ## current roster to prove it against pixel-for-pixel.
 
 
+# -- snow SETTLES on the canopy: added on top, from above, never erasing ------
+#
+# Reported: the canopy should accumulate snow twig by twig, in every season
+# snow can fall (autumn, winter, spring) and on every canopy it can land on
+# (bare, blossom, turning). The blend used to REPLACE canopy pixels with the
+# snow frame's own -- transparent ones included -- walking up from the crown's
+# foot, which read as a bottom-up wipe that thinned the crown towards nothing
+# before the snow frame filled it back in, rather than as snow settling onto
+# the tree that is there. See docs/concept/flora.md, "A fifth frame: snow is
+# not a season".
+
+## The three canopies snow can land on: bare (winter), blossom (spring) and
+## turning (autumn). Summer never gets cold enough (Snowfall.FREEZING_WARMTH).
+const SNOWABLE_CANOPIES := ["winter", "spring", "autumn"]
+
+
+## Snow is ADDED to whatever the season drew; it never removes any of it: every
+## pixel the plain canopy painted is still painted, at least as opaquely, at
+## every coverage band -- on all three canopies.
+func test_snow_never_erases_the_canopy_it_settles_on():
+	var sprite := ProceduralTreeSprite.new()
+	for canopy in SNOWABLE_CANOPIES:
+		var plain := sprite.generate_image_with_fruit(_cherry_bias(), 7, 0, canopy)
+		for step in range(1, ProceduralTreeSprite.SNOW_LEVELS + 1):
+			var coverage := float(step) / float(ProceduralTreeSprite.SNOW_LEVELS)
+			var snowed := sprite.generate_image_with_fruit(
+				_cherry_bias(), 7, 0, canopy, "", 0.0, 1.0, coverage
+			)
+			assert_eq(
+				_erased_pixels(plain, snowed), 0,
+				"%s canopy at coverage %.1f should keep every pixel it had" % [canopy, coverage]
+			)
+
+
+## Snow settles from ABOVE: at a light coverage the pixels that have taken the
+## snow frame's colour sit in the upper half of the crown, not at its foot.
+## The turn's own outward-from-the-trunk order, applied to snow, whitened the
+## lower boughs first.
+func test_light_snow_settles_on_the_top_of_the_crown_first():
+	var sprite := ProceduralTreeSprite.new()
+	for canopy in SNOWABLE_CANOPIES:
+		var plain := sprite.generate_image_with_fruit(_cherry_bias(), 7, 0, canopy)
+		var snowed := sprite.generate_image_with_fruit(
+			_cherry_bias(), 7, 0, canopy, "", 0.0, 1.0, 0.3
+		)
+		var box: Rect2i = sprite.illustrated_canopy_box("cherry", 7, canopy)
+		var rows := _snowed_rows(sprite, "cherry", box, plain, snowed)
+		assert_gt(rows.size(), 0, "%s: light snow should show somewhere" % canopy)
+		var centre := float(box.position.y) + float(box.size.y) * 0.5
+		assert_lt(
+			_mean(rows), centre,
+			"%s: light snow should sit in the upper half of the crown" % canopy
+		)
+
+
+## At full coverage the WHOLE snow frame is on the tree, whatever lies beneath
+## it: every opaque pixel of the frame is drawn exactly, on bare, blossom and
+## turning crowns alike.
+func test_full_snow_shows_the_whole_snow_frame_on_every_canopy():
+	var sprite := ProceduralTreeSprite.new()
+	for canopy in SNOWABLE_CANOPIES:
+		var snowed := sprite.generate_image_with_fruit(
+			_cherry_bias(), 7, 0, canopy, "", 0.0, 1.0, 1.0
+		)
+		var box: Rect2i = sprite.illustrated_canopy_box("cherry", 7, canopy)
+		var frame: Image = sprite._scaled_piece(
+			"cherry", ProceduralTreeSprite.SNOW_CANOPY_KEY, "canopy", box.size
+		)
+		var opaque := 0
+		var missing := 0
+		for y in frame.get_height():
+			for x in frame.get_width():
+				var pixel := frame.get_pixel(x, y)
+				if pixel.a < 0.95:
+					continue
+				var at := box.position + Vector2i(x, y)
+				if not Rect2i(Vector2i.ZERO, snowed.get_size()).has_point(at):
+					continue
+				opaque += 1
+				if not _same_colour(snowed.get_pixel(at.x, at.y), pixel):
+					missing += 1
+		assert_gt(opaque, 0, "%s: the snow frame should have opaque pixels" % canopy)
+		assert_eq(missing, 0, "%s: full snow should show the whole snow frame" % canopy)
+
+
+## Snow only ever ACCUMULATES as coverage rises: a twig that has taken snow at
+## one band still has it at the next. The same monotone rank the turn already
+## has, pinned here for snow because "twig by twig" means it must never
+## flicker back and forth between bands.
+func test_snow_accumulates_monotonically_band_by_band():
+	var sprite := ProceduralTreeSprite.new()
+	for canopy in SNOWABLE_CANOPIES:
+		var plain := sprite.generate_image_with_fruit(_cherry_bias(), 7, 0, canopy)
+		var box: Rect2i = sprite.illustrated_canopy_box("cherry", 7, canopy)
+		var previous := {}
+		for step in range(1, ProceduralTreeSprite.SNOW_LEVELS + 1):
+			var coverage := float(step) / float(ProceduralTreeSprite.SNOW_LEVELS)
+			var snowed := sprite.generate_image_with_fruit(
+				_cherry_bias(), 7, 0, canopy, "", 0.0, 1.0, coverage
+			)
+			var current := _snowed_pixels(sprite, "cherry", box, plain, snowed)
+			for at in previous:
+				assert_true(
+					current.has(at),
+					"%s: snow at %s should still be there at coverage %.1f" % [canopy, at, coverage]
+				)
+			previous = current
+
+
+## Pixels that were painted in `before` and are LESS opaque in `after`.
+func _erased_pixels(before: Image, after: Image) -> int:
+	var erased := 0
+	for y in before.get_height():
+		for x in before.get_width():
+			if after.get_pixel(x, y).a < before.get_pixel(x, y).a - 2.0 / 255.0:
+				erased += 1
+	return erased
+
+
+## The canvas pixels that have taken the snow frame's own opaque colour --
+## changed from the plain tree, and now equal to the frame drawn at that spot.
+func _snowed_pixels(sprite, species: String, box: Rect2i, plain: Image, snowed: Image) -> Dictionary:
+	var frame: Image = sprite._scaled_piece(
+		species, ProceduralTreeSprite.SNOW_CANOPY_KEY, "canopy", box.size
+	)
+	var found := {}
+	for y in frame.get_height():
+		for x in frame.get_width():
+			var pixel := frame.get_pixel(x, y)
+			if pixel.a < 0.95:
+				continue
+			var at := box.position + Vector2i(x, y)
+			if not Rect2i(Vector2i.ZERO, snowed.get_size()).has_point(at):
+				continue
+			var now := snowed.get_pixel(at.x, at.y)
+			if _same_colour(now, pixel) and not _same_colour(now, plain.get_pixel(at.x, at.y)):
+				found[at] = true
+	return found
+
+
+func _snowed_rows(sprite, species: String, box: Rect2i, plain: Image, snowed: Image) -> Array:
+	var rows := []
+	for at in _snowed_pixels(sprite, species, box, plain, snowed):
+		rows.append(float(at.y))
+	return rows
+
+
+func _mean(values: Array) -> float:
+	if values.is_empty():
+		return 0.0
+	var total := 0.0
+	for value in values:
+		total += value
+	return total / float(values.size())
+
+
+func _same_colour(a: Color, b: Color) -> bool:
+	var tolerance := 1.5 / 255.0
+	return (
+		absf(a.r - b.r) <= tolerance and absf(a.g - b.g) <= tolerance
+		and absf(a.b - b.b) <= tolerance and absf(a.a - b.a) <= tolerance
+	)
+
+
 # -- a young tree has fewer branches, not a smaller picture ------------------
 
 ## Growth used to scale the whole node down, so a sapling was a full-grown tree
