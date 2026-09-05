@@ -4256,11 +4256,26 @@ func test_a_robin_is_given_a_parsed_behavior_tree():
 	assert_eq(bird._behavior_tree["kind"], "priority")
 
 
-func test_a_sparrow_is_not_wired_yet_even_though_it_also_ground_forages():
+func test_a_sparrow_is_given_a_parsed_behavior_tree():
 	var parent := Node2D.new()
 	add_child_autofree(parent)
 	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
-	assert_null(bird._behavior_tree)
+	assert_not_null(bird._behavior_tree)
+	assert_eq(bird._behavior_tree["kind"], "priority")
+
+
+## The actual reuse payoff, proven rather than merely claimed: robin and
+## sparrow share no diet, no distinct courtship gate of their own, and no
+## code specific to either -- FlyerDiet.forages_on_the_ground and
+## BirdCourtship.dances both already read them identically -- so their
+## decision SHAPE is identical too, and this is now one tree, not two
+## copies of the same three lines.
+func test_a_robin_and_a_sparrow_share_the_identical_tree():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var robin := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	var sparrow := _flyer_in_tree("sparrow", Vector2(50, 50), parent)
+	assert_eq(robin._behavior_tree, sparrow._behavior_tree)
 
 
 func test_a_butterfly_is_not_wired():
@@ -4309,3 +4324,12 @@ func test_the_flush_leaf_is_tried_before_courtship_or_foraging():
 	assert_eq(leaves[0]["atom"], "songbird_flush")
 	assert_eq(leaves[1]["atom"], "bird_courtship")
 	assert_eq(leaves[2]["atom"], "ground_forage")
+
+
+func test_a_sparrow_with_no_movement_configured_does_not_crash():
+	var bird := AmbientFlyerMarker.new()
+	bird.species = "sparrow"
+	add_child_autofree(bird)
+	bird.set_process(false)
+	bird._process(FRAME)
+	assert_almost_eq(bird._elapsed_time, FRAME, 0.0001)
