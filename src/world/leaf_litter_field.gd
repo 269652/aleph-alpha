@@ -36,14 +36,18 @@ extends RefCounted
 ##                        long enough, and a flat zero offset is immune to
 ##                        that regardless of what the eased-time math reads).
 ##   transition_start -- world_age_seconds when the CURRENT transition began.
-
-const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
-const WindDispersal = preload("res://src/world/wind_dispersal.gd")
-const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 ##   seed             -- a unique per-leaf integer (assignment order), for any
 ##                        caller needing an independent deterministic roll
 ##                        per leaf (see docs/concept/leaf_litter.md's wind
 ##                        section) without two leaves' rolls correlating.
+##   contact_count    -- how many player/animal contact rolls this leaf has
+##                        already had (see try_disperse_near) -- its own
+##                        running counter, salted separately from `seed`
+##                        alone so consecutive contacts don't reuse one roll.
+
+const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
+const WindDispersal = preload("res://src/world/wind_dispersal.gd")
+const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 
 ## Un-eaten litter despawns after this many seconds -- same tidiness-not-
 ## spoilage reasoning DroppedItem.LIFETIME always had for a "material" kind
