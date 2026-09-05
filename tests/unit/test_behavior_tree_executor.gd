@@ -247,3 +247,56 @@ func test_an_ant_forager_tree_reports_its_own_round_trip_phase():
 	assert_eq(BehaviorTreeExecutor.run(tree, {"round_trip": behavior}), {"intent": "approaching"})
 	behavior.arrive_at_food(true)
 	assert_eq(BehaviorTreeExecutor.run(tree, {"round_trip": behavior}), {"intent": "returning"})
+
+
+# --- local_atoms: a caller's own bespoke, marker-bound actions -----------------
+#
+# AmbientFlyerMarker's own songbird-flush/bird-courtship/ground-forage are
+# real, stateful, side-effecting methods on one specific class -- reusing
+# them means calling them, not reimplementing them as pure catalog data.
+# context["local_atoms"] lets a caller register such atoms for ITS OWN
+# tree's vocabulary without teaching the shared, reusable
+# BehaviorAtomCatalog anything about a specific marker class.
+
+func test_a_local_atom_is_dispatched_when_no_context_atoms_are_given_at_all():
+	# Sanity: leaves still work with no local_atoms key present (every test
+	# above already proves this; pinned again explicitly for this section).
+	assert_eq(BehaviorTreeExecutor.run(_leaf("wander"), {}), {"intent": "wander"})
+
+
+func test_a_local_atom_is_dispatched_by_name():
+	var calls: Array = []
+	var local_atoms := {
+		"custom": func(args, context): calls.append(args); return {"intent": "custom"},
+	}
+	var result: Variant = BehaviorTreeExecutor.run(
+		_leaf("custom", {"x": 1}), {"local_atoms": local_atoms}
+	)
+	assert_eq(result, {"intent": "custom"})
+	assert_eq(calls, [{"x": 1}])
+
+
+func test_a_local_atom_takes_precedence_over_a_same_named_shared_atom():
+	# "wander" already exists in the shared catalog; a local override must win.
+	var local_atoms := {"wander": func(args, context): return {"intent": "overridden"}}
+	var result: Variant = BehaviorTreeExecutor.run(_leaf("wander"), {"local_atoms": local_atoms})
+	assert_eq(result, {"intent": "overridden"})
+
+
+func test_an_atom_not_in_local_atoms_still_falls_through_to_the_shared_catalog():
+	var local_atoms := {"custom": func(args, context): return {"intent": "custom"}}
+	var result: Variant = BehaviorTreeExecutor.run(_leaf("wander"), {"local_atoms": local_atoms})
+	assert_eq(result, {"intent": "wander"})
+
+
+func test_a_local_atom_composes_inside_priority_exactly_like_a_shared_one():
+	var local_atoms := {
+		"flush": func(args, context): return null if context["flushed"] else {"intent": "flee"},
+	}
+	var node := {"kind": "priority", "children": [_leaf("flush"), _leaf("wander")]}
+	assert_eq(
+		BehaviorTreeExecutor.run(node, {"local_atoms": local_atoms, "flushed": true}), {"intent": "wander"}
+	)
+	assert_eq(
+		BehaviorTreeExecutor.run(node, {"local_atoms": local_atoms, "flushed": false})["intent"], "flee"
+	)
