@@ -87,6 +87,7 @@ static func compile(ast: Dictionary) -> Dictionary:
 	if not errors.is_empty():
 		result["errors"] = _errors(errors)
 		return result
+	result["facts"] = _facts_of(graph, ast.get("parts", []))
 
 	# -- laws: elements with every parameter authored or derived ---------------
 	var elements := {}
@@ -291,6 +292,34 @@ static func _part_named(id: String, params: Dictionary, graph: RefCounted, error
 	return part
 
 
+# -- facts: what a rule can read about a part ----------------------------------------
+
+## Every part as a plain fact dictionary keyed by its id, in declaration
+## order: material, geometry, role, every dimension it was declared with
+## (the extra ones too -- a saw's tooth_pitch_mm, a net bag's aperture_mm),
+## and the figures the graph derives from them. This is how a rule on a
+## device with no loop at all reads `bag.aperture_mm` (see
+## docs/concept/capture_dsl.md); a device with a loop gets these alongside
+## its solved elements. Fresh copies, so a caller cannot reach the graph
+## through them.
+static func _facts_of(graph: RefCounted, parts: Array) -> Dictionary:
+	var facts := {}
+	for declared in parts:
+		var part_id := String(declared["id"])
+		var part: RefCounted = graph.part(part_id)
+		if part == null:
+			continue
+		var fact: Dictionary = declared.get("dimensions", {}).duplicate()
+		fact["material"] = part.material
+		fact["geometry"] = part.geometry
+		fact["role"] = part.role
+		fact["mass_kg"] = part.mass_kg()
+		fact["span_cm"] = part.span_cm()
+		fact["cross_section_cm2"] = part.cross_section_cm2()
+		facts[part_id] = fact
+	return facts
+
+
 # -- result -----------------------------------------------------------------------------
 
 static func _empty_result() -> Dictionary:
@@ -302,6 +331,7 @@ static func _empty_result() -> Dictionary:
 		"chain": [],
 		"elements": {},
 		"loop": [] as Array[String],
+		"facts": {},
 	}
 
 

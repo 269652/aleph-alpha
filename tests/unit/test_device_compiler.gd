@@ -67,7 +67,7 @@ const MILL_RACE_LIGHT := """
 func test_result_always_has_every_key_whether_or_not_it_compiled():
 	for source in ['device "X" { }', 'device "X" { part p: unobtainium haft grip }']:
 		var result: Dictionary = DeviceCompiler.compile(parser.parse(source)["ast"])
-		for key in ["ok", "errors", "graph", "mass_kg", "chain", "elements", "loop"]:
+		for key in ["ok", "errors", "graph", "mass_kg", "chain", "elements", "loop", "facts"]:
 			assert_true(result.has(key), "missing %s" % key)
 
 
@@ -355,3 +355,45 @@ func test_laws_outside_the_loop_compile_but_are_not_in_the_chain():
 	assert_eq(result["loop"], ["s", "r"])
 	assert_true(result["elements"].has("spare"))
 	assert_eq(result["chain"].size(), 2)
+
+
+# --- part facts: what a rule can read on a device with no loop --------------
+# (docs/concept/standard_model.md, resolution order step 6, 2026-09-05: a net
+# has no energy path, but its bag's aperture is a fact its catch rule reads.)
+
+func test_every_part_is_exposed_as_facts_with_its_dimensions_and_derived_figures():
+	var result := _compiled("""
+		device "Net" {
+		  part handle: wood haft grip (length_cm: 120, diameter_cm: 2.5)
+		  part bag: fiber face cover (width_cm: 30, height_cm: 60, thickness_cm: 0.05, aperture_mm: 10)
+		  joint hem: handle to bag rigid lashing fiber
+		}
+	""")
+	var facts: Dictionary = result["facts"]
+	assert_eq(facts.keys(), ["handle", "bag"])
+	assert_eq(facts["bag"]["material"], "fiber")
+	assert_eq(facts["bag"]["geometry"], "face")
+	assert_eq(facts["bag"]["role"], "cover")
+	assert_eq(facts["bag"]["aperture_mm"], 10)
+	assert_eq(facts["bag"]["width_cm"], 30)
+	assert_almost_eq(facts["bag"]["mass_kg"], result["graph"].part("bag").mass_kg(), 1e-12)
+	assert_almost_eq(facts["bag"]["span_cm"], 60.0, 1e-9)
+	assert_almost_eq(facts["handle"]["span_cm"], 120.0, 1e-9)
+
+
+func test_facts_are_empty_for_a_device_with_no_parts_and_absent_on_a_refusal():
+	assert_eq(_compiled('device "X" { }')["facts"], {})
+	var refused: Dictionary = DeviceCompiler.compile(parser.parse('device "X" { part p: iron blob grip }')["ast"])
+	assert_false(refused["ok"])
+	assert_eq(refused["facts"], {})
+
+
+func test_facts_are_a_copy_the_caller_cannot_use_to_reach_the_graph():
+	var ast: Dictionary = parser.parse("""
+		device "Net" {
+		  part bag: fiber face cover (width_cm: 30, height_cm: 60, thickness_cm: 0.05, aperture_mm: 10)
+		}
+	""")["ast"]
+	var first := DeviceCompiler.compile(ast)
+	first["facts"]["bag"]["aperture_mm"] = 1
+	assert_eq(DeviceCompiler.compile(ast)["facts"]["bag"]["aperture_mm"], 10)

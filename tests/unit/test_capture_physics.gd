@@ -75,3 +75,103 @@ func test_at_base_0_65_the_boldest_possible_target_gets_0_80():
 
 func test_at_base_0_65_the_shyest_possible_target_gets_0_50():
 	assert_almost_eq(physics.catch_chance(0.65, 0.0), 0.5, 0.0001)
+
+
+# --- mesh physics: what a net holds (docs/concept/capture_dsl.md, 2026-09-05) ---
+#
+# Two comparisons over a subject's sorted body extents and a bag's real
+# geometry. A body passes a square opening when its two smaller extents both
+# do, and the larger of those two -- the MIDDLE extent -- is the one that
+# binds. It has to go through the mouth before it turns, so the LARGEST
+# extent is what the mouth is compared against.
+
+const BodyDimensions = preload("res://src/gameplay/body_dimensions.gd")
+
+const STANDARD_MESH_MM := 10.0
+const STANDARD_MOUTH_MM := 300.0
+
+
+func test_a_bee_slips_through_the_standard_mesh_and_a_monarch_does_not():
+	assert_true(physics.slips_through(BodyDimensions.extents_mm("bee"), STANDARD_MESH_MM))
+	assert_true(physics.slips_through(BodyDimensions.extents_mm("fly"), STANDARD_MESH_MM))
+	assert_false(physics.slips_through(BodyDimensions.extents_mm("monarch"), STANDARD_MESH_MM))
+	assert_false(physics.slips_through(BodyDimensions.extents_mm("sparrow"), STANDARD_MESH_MM))
+	assert_false(physics.slips_through(BodyDimensions.extents_mm("goldfish"), STANDARD_MESH_MM))
+
+
+func test_a_finer_mesh_holds_the_bee_and_a_finer_one_still_the_fly():
+	# A 3 mm mesh holds the 6 mm-across bee; the 3 mm-across fly still slips a
+	# 4 mm mesh and is held by a 2 mm one. (At exactly its own size a body is
+	# HELD -- the rule is strict -- which is the boundary the concept doc's
+	# "a 2 mm mesh holds the fly" rests on.)
+	assert_false(physics.slips_through(BodyDimensions.extents_mm("bee"), 3.0))
+	assert_true(physics.slips_through(BodyDimensions.extents_mm("fly"), 4.0))
+	assert_false(physics.slips_through(BodyDimensions.extents_mm("fly"), 3.0))
+	assert_false(physics.slips_through(BodyDimensions.extents_mm("fly"), 2.0))
+
+
+func test_the_middle_extent_is_what_binds_at_a_mesh():
+	# 20 x 12 x 4: a 4 mm depth alone would slip a 10 mm mesh, but the body
+	# still has to get its 12 mm breadth through the same hole.
+	assert_false(physics.slips_through([20.0, 12.0, 4.0], STANDARD_MESH_MM))
+	assert_true(physics.slips_through([20.0, 9.0, 4.0], STANDARD_MESH_MM))
+
+
+func test_small_fish_and_birds_fit_the_standard_mouth_and_big_fish_do_not():
+	for species in ["goldfish", "bluegill", "sparrow", "robin", "monarch"]:
+		assert_true(physics.fits_mouth(BodyDimensions.extents_mm(species), STANDARD_MOUTH_MM), species)
+	for species in ["trout", "koi"]:
+		assert_false(physics.fits_mouth(BodyDimensions.extents_mm(species), STANDARD_MOUTH_MM), species)
+
+
+func test_a_forty_centimetre_landing_net_takes_the_trout():
+	assert_true(physics.fits_mouth(BodyDimensions.extents_mm("trout"), 400.0))
+	assert_false(physics.fits_mouth(BodyDimensions.extents_mm("koi"), 400.0))
+
+
+func test_the_verdict_holds_exactly_what_neither_slips_nor_overflows():
+	var held := physics.mesh_verdict(BodyDimensions.extents_mm("monarch"), STANDARD_MESH_MM, STANDARD_MOUTH_MM)
+	assert_true(held["holds"])
+	assert_eq(held["reason"], "")
+	var slipped := physics.mesh_verdict(BodyDimensions.extents_mm("bee"), STANDARD_MESH_MM, STANDARD_MOUTH_MM)
+	assert_false(slipped["holds"])
+	assert_true(slipped["reason"].contains("slips through"), slipped["reason"])
+	assert_true(slipped["reason"].contains("10"), "the reason names the mesh: %s" % slipped["reason"])
+	var too_big := physics.mesh_verdict(BodyDimensions.extents_mm("koi"), STANDARD_MESH_MM, STANDARD_MOUTH_MM)
+	assert_false(too_big["holds"])
+	assert_true(too_big["reason"].contains("too big"), too_big["reason"])
+	assert_true(too_big["reason"].contains("30"), "the reason names the mouth in cm: %s" % too_big["reason"])
+
+
+func test_an_unmeasured_subject_is_refused_with_its_own_reason_rather_than_guessed():
+	var verdict := physics.mesh_verdict([], STANDARD_MESH_MM, STANDARD_MOUTH_MM)
+	assert_false(verdict["holds"])
+	assert_true(verdict["reason"].contains("size"), verdict["reason"])
+	assert_false(physics.slips_through([], STANDARD_MESH_MM))
+	assert_false(physics.fits_mouth([], STANDARD_MOUTH_MM))
+
+
+func test_a_finer_mesh_never_releases_what_a_coarser_one_held():
+	for species in BodyDimensions.known_ids():
+		var extents: Array = BodyDimensions.extents_mm(species)
+		var previously_held := false
+		var aperture := 40.0
+		while aperture >= 0.5:
+			var held: bool = not physics.slips_through(extents, aperture)
+			if previously_held:
+				assert_true(held, "%s slipped a %.1f mm mesh after a coarser one held it" % [species, aperture])
+			previously_held = held
+			aperture -= 0.5
+
+
+func test_a_wider_mouth_never_refuses_what_a_narrower_one_took():
+	for species in BodyDimensions.known_ids():
+		var extents: Array = BodyDimensions.extents_mm(species)
+		var previously_fit := false
+		var mouth := 50.0
+		while mouth <= 800.0:
+			var fits: bool = physics.fits_mouth(extents, mouth)
+			if previously_fit:
+				assert_true(fits, "%s stopped fitting at a %.0f mm mouth" % [species, mouth])
+			previously_fit = fits
+			mouth += 25.0
