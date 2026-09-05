@@ -858,6 +858,14 @@ func _composite_illustrated(
 	if canopy_image != null and snow_coverage > 0.0 and art.has_snow_frame_for(species_id):
 		var snow_image := _scaled_piece(species_id, SNOW_CANOPY_KEY, "canopy", canopy_box.size)
 		if snow_image != null:
+			# Snow settles on the branches a tree HAS. The frame is a full
+			# crown's worth of snow-laden twigs, and settled whole on a
+			# sapling it dressed the sapling as a grown tree the moment snow
+			# lay -- so it is pruned back by the same growth rule the canopy
+			# was, a few lines up (pinned by test_snow_on_a_seedling_stays_
+			# a_seedling).
+			if growth < 1.0:
+				snow_image = _grown_canopy(snow_image, growth, tree_variant_for(seed_value))
 			canopy_image = _snowed_canopy(
 				canopy_image, snow_image, snow_level(snow_coverage), tree_variant_for(seed_value)
 			)

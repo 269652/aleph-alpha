@@ -1611,6 +1611,48 @@ func test_snow_accumulates_monotonically_band_by_band():
 			previous = current
 
 
+## Snow settles on the branches a tree HAS. A seedling has put out only the
+## innermost part of its crown (see _grown_canopy), while the snow frame is a
+## full-grown crown's worth of snow-laden twigs -- settled whole, it dressed a
+## seedling as a grown tree the moment snow lay. The frame is pruned back by
+## the same growth rule as the canopy first, so a seedling under full snow is
+## still mostly seedling.
+##
+## Measured on the real cherry sheet at seed 7, growth 0.1, coverage 1.0: a
+## bare/blossom/turning seedling paints 319/179/169 pixels; snow settled on
+## the PRUNED frame adds 37/13/17 (4-12% of its own crown), on the unpruned
+## frame 760/926/902 (2.4-5.3x its own crown). Bounded at doubling: snow may
+## thicken a seedling, never turn it into a grown tree.
+const SEEDLING_SNOW_MAX_GROWTH_FACTOR := 2.0
+
+
+func test_snow_on_a_seedling_stays_a_seedling():
+	var sprite := ProceduralTreeSprite.new()
+	for canopy in SNOWABLE_CANOPIES:
+		var plain := sprite.generate_image_with_fruit(
+			_cherry_bias(), 7, 0, canopy, "", 0.0, 0.1, 0.0
+		)
+		var snowed := sprite.generate_image_with_fruit(
+			_cherry_bias(), 7, 0, canopy, "", 0.0, 0.1, 1.0
+		)
+		var own := _painted_pixels(plain)
+		assert_gt(own, 0, "%s: a seedling should paint something" % canopy)
+		assert_lt(
+			_painted_pixels(snowed), int(float(own) * SEEDLING_SNOW_MAX_GROWTH_FACTOR),
+			"%s: a seedling under snow (%d px) should stay a seedling (%d px bare)"
+			% [canopy, _painted_pixels(snowed), own]
+		)
+
+
+func _painted_pixels(image: Image) -> int:
+	var count := 0
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.05:
+				count += 1
+	return count
+
+
 ## Pixels that were painted in `before` and are LESS opaque in `after`.
 func _erased_pixels(before: Image, after: Image) -> int:
 	var erased := 0

@@ -1321,6 +1321,14 @@ implementation of it. Two things differ from a turn, and both are what
   (`growth_order` starts at the trunk join, the turn at the whole bottom
   rim, snow at the top).
 
+**It settles on the branches a tree HAS.** A sapling has put out only the
+inner part of its crown (see "A young tree has fewer branches" above), and the
+snow frame is a full-grown crown's worth of snow-laden twigs -- settled whole,
+it dressed a seedling as a grown tree the moment snow lay. The frame is pruned
+back by the same growth rule as the canopy before it settles, so a seedling
+under full snow is still mostly seedling (measured: snow adds 4-12% to a
+seedling's own painted crown, against 2.4-5.3x unpruned).
+
 It works on every canopy snow can fall on -- bare (winter), blossom (spring),
 turning (autumn) -- and in every season it can fall (`Snowfall` snows on
 temperature, not on the calendar; summer alone never gets cold enough), because
