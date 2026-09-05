@@ -18,6 +18,16 @@ func _hide() -> Item:
 	return Item.new("hide", "Hide", "material", 40)
 
 
+func _bottle() -> Item:
+	return Item.new("glass_bottle", "Glass Bottle", "material", 20)
+
+
+func _loaded_bottle(species: String) -> Item:
+	var bottle := _bottle()
+	bottle.captive_species = species
+	return bottle
+
+
 func test_starts_empty():
 	assert_eq(inventory.count_of("meat"), 0)
 	assert_false(inventory.has("meat"))
@@ -83,6 +93,26 @@ func test_remove_more_than_present_removes_only_what_exists():
 	assert_eq(removed, 2)
 	assert_eq(inventory.count_of("meat"), 0)
 	assert_eq(inventory.used_slots(), 0)
+
+
+## ItemStack.can_stack_with (see item_stack.gd) deliberately refuses to merge
+## a loaded container into a stack of empty ones -- a stack shares ONE Item
+## plus a count, so merging would silently lose track of which unit is
+## loaded. `add` used to check `stack.item.id == item.id` directly instead of
+## going through `can_stack_with`, so this guarantee never actually reached
+## real inventories: adding a freshly-loaded glass_bottle when an empty one
+## was already on hand (the common case once Player grants a starting
+## glass_bottle) merged the two and threw the species away.
+func test_adding_a_loaded_container_does_not_merge_into_an_empty_stack():
+	inventory.add(_bottle(), 1)  # an empty bottle already on hand
+	inventory.add(_loaded_bottle("monarch"), 1)  # a freshly-loaded one comes in
+
+	assert_eq(inventory.used_slots(), 2, "the loaded bottle needs its own slot, not merged into the empty one")
+	var found_species := ""
+	for stack in inventory.stacks():
+		if stack.item.id == "glass_bottle" and stack.item.captive_species != "":
+			found_species = stack.item.captive_species
+	assert_eq(found_species, "monarch", "the loaded bottle's species must survive the add")
 
 
 func test_stacks_lists_current_contents():

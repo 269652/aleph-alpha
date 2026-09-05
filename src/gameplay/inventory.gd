@@ -19,11 +19,14 @@ func _init(a_slot_count: int) -> void:
 ## did not fit (0 if it all went in).
 func add(item: Item, amount: int) -> int:
 	var remaining := amount
+	# can_stack_with (not a raw id check) so a loaded container (see
+	# Item.captive_species) never silently merges into a stack of empty ones.
+	var incoming := ItemStack.new(item, 0)
 
 	for stack in _stacks:
 		if remaining <= 0:
 			break
-		if stack.item.id == item.id:
+		if stack.can_stack_with(incoming):
 			remaining = stack.merge(remaining)
 
 	while remaining > 0 and _stacks.size() < slot_count:
