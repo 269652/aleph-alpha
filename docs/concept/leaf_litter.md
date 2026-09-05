@@ -274,6 +274,27 @@ fallen leaf has weathered long enough to look wintry, its original fall
 colour has already faded toward the same dulled tone regardless of what it
 started as (see "Real-world grounding" above).
 
+**A `"fading"` column holds every species' own halfway-decayed stamp --
+derived from two stamps this atlas has already built, not a fresh
+recolour pass.** Reported directly: "leaf decay should be 3 seasons" (see
+"Lifecycle" below for the timing this grounds against). No species has
+real half-decayed litter art either, so `build_stamp_image` special-cases
+`season == "fading"` to blend that species' own already-built `"autumn"`
+stamp with its already-derived `"winter"` stamp -- a straight per-pixel
+`Color.lerp` at `FADING_BLEND` (pinned at exactly 0.5, the same midpoint
+the decay TIMING's own even three-way split already lands on), needing no
+new shading logic at all: both source stamps already carry real,
+correctly-shaded content, so their midpoint is itself a believable colour
+at the same brightness. Verified both by test (silhouette match,
+saturation strictly between the two endpoints -- not indistinguishable
+from either, which would collapse the report's own "3 seasons" back to 2
+apparent stages -- the exact pinned blend checked per channel against real
+sampled pixels, preserved shading variation) and by rendering every
+species' autumn/fading/winter stamp trio side by side and inspecting the
+image directly (`tools/probe_fading_stamp.gd`): every species shows a
+clear, visually distinct 3-step progression, vivid to duller to fully
+decayed.
+
 ### Rendering: one GPU-instanced draw call per chunk
 
 `LeafLitterRenderer` (`src/rendering/leaf_litter_renderer.gd`) mirrors
@@ -374,7 +395,7 @@ scatter.
 - **Wind.** `LeafLitterField.advance`'s own throttled cadence
   (`WIND_DISPERSAL_INTERVAL`) gives each SETTLED leaf a small per-check
   chance (`WIND_DISPERSAL_CHANCE`) to be nudged via `WindDispersal.
-  landing_offset`, using a new `WindDispersal.WEIGHT_LEAF` class (sitting
+  leaf_ground_drift`, using a `WindDispersal.WEIGHT_LEAF` class (sitting
   between `WEIGHT_FLOWER_SEED` and `WEIGHT_BERRY_PIP` -- a leaf's flat
   blade is not a real wind-dispersal adaptation like a dandelion's own
   plume, but its surface-area-to-mass ratio still makes it far more
@@ -385,6 +406,28 @@ scatter.
   step_flowers` already reads it) -- no new weather state. Dead calm (wind
   strength 0) never rolls at all: litter must not spontaneously scatter
   with nothing to blame it on.
+
+  **`leaf_ground_drift`, not `WindDispersal.landing_offset` -- reported
+  directly: "make the wind blowing through leaves make the tumble and
+  swirl more smoothly? it's a hard back forth motion atm."**
+  `landing_offset`'s own scatter term is a fully independent 0-360 degree
+  random angle -- right for a SEED falling once (it really does scatter
+  near its parent on a still day regardless of which way any breeze
+  blows), wrong for a leaf ALREADY on the ground being nudged by the SAME
+  ambient wind repeatedly: measured directly, of 30 samples under a
+  strong steady wind, only 57% landed within 30 degrees of the wind's own
+  heading and 30% landed more than 90 degrees off -- genuinely backwards,
+  several nearly exactly opposite the wind -- so a single leaf's own
+  consecutive nudges could easily alternate between "blown downwind" and
+  "blown upwind" purely by chance. `leaf_ground_drift` reuses the exact
+  same heavy-tailed reach/buoyant-scatter DISTANCE distribution
+  `landing_offset` already establishes (so every existing distance-driven
+  consumer, e.g. the tumble-turn scaling below, still sees the same range
+  of journeys), but bounds the ANGLE to `LEAF_DRIFT_WOBBLE_DEGREES` (45,
+  half the 90-degree structural ceiling that guarantees positive forward
+  progress along the wind) around the wind's own heading instead of an
+  independent full-circle roll. `landing_offset` itself is untouched --
+  seed/flower dispersal already depends on its current scatter shape.
 - **Player.** `World._step_leaf_litter_dispersion`, the same host-gated
   call site as `_step_pebble_dispersion` (inside
   `_owns_ecosystem_simulation()`), delegating to `EarthChunkManager.
@@ -437,9 +480,18 @@ invisible colony simulation" across passes for this exact feature area.
 
 ### Lifecycle
 
-`LeafLitterField.LIFETIME` (90 seconds, unchanged from the first pass's own
-`DroppedItem.LIFETIME`) -- ordinary flat despawn, not food-spoilage-timed,
-the same tidiness rule every other non-food dropped item already follows.
+**`LeafLitterField.LIFETIME` is a real ~270-real-world-day lifespan, not an
+arbitrary tidiness cutoff.** Reported directly: "leafs should take roughly
+270 days to rot / decay / vanish". 270 real-world days is ~3 of the 4 real
+seasons a year actually has (~91 days each) -- the genuine real-world
+timescale leaf litter actually takes to fully decompose -- expressed as
+exactly 3/4 of a real year and translated through the SAME real-year ->
+compressed-game-year ratio every other real-world-grounded timing constant
+in this codebase already uses (`SeasonCycle.SECONDS_PER_YEAR`), the same
+idiom `TreePhenology`'s own blossom timing already established for turning
+a real biological duration into game-playable time. Was a flat, arbitrary
+90-SECOND despawn (the first pass's own `DroppedItem.LIFETIME`, an ordinary
+non-food tidiness rule) with no real-world grounding at all, before this.
 A relocated (wind/player/animal-nudged) leaf does NOT get a fresh lease on
 life: only `spawned_at` (set once, at the original fall) drives pruning;
 `relocate_leaf_near`/`try_disperse_near` update the leaf's position and its
@@ -447,26 +499,26 @@ CURRENT transition timing only. No new persistence: exactly like windfall
 fruit today, a fallen leaf that nobody ate or that a chunk unload swept away
 is not remembered as a specific missing instance.
 
-**A settled leaf decays to a terminal `"winter"` stage before it despawns.**
-Reported directly: "fallen leaves should change the season from autumn to
-winter if they keep lying on the ground ... winter is last stage for a
-leaf." `LeafLitterField.DECAY_TO_WINTER_SECONDS`, pinned at exactly half of
-`LIFETIME` (45 seconds), advances a SETTLED leaf's own `season` from
-`"autumn"`/`"summer"` to `"winter"` one-way in `advance()` -- never reverts,
-never advances past `"winter"` to anything else. Gated on the leaf actually
-being settled (`transition_from == position`), the same "only a SETTLED
-leaf is eligible" rule the wind-dispersal roll right beside it already
-applies, for the identical reason: "keep LYING on the ground" implies
-actually at rest, not still easing into a relocation. A standalone,
-`LIFETIME`-relative timer rather than one tied to the real in-game
-calendar season: a real season's own turning window alone runs ~16 real
-hours in normal, non-accelerated play, and `LIFETIME`'s whole 90 seconds
-would elapse and prune the leaf long before the actual calendar ever
-reached winter -- so this is deliberately its own clock, grounded against
-the one timer that already exists (see that constant's own doc comment)
-rather than against the real calendar `LEAF_LITTER_ENABLED`'s own fall
-trigger uses. See "Rendering" above for how the terminal stage's own
-colour is produced without any new art.
+**A settled leaf decays through exactly 3 stages before it despawns, not
+2.** Reported across two rounds: first "fallen leaves should change the
+season from autumn to winter if they keep lying on the ground ... winter
+is last stage for a leaf" (shipped as a single jump straight to `"winter"`
+at half of `LIFETIME`), then "leaf decay should be 3 seasons" -- the same
+270-day/3-real-season figure `LIFETIME` itself is now grounded in.
+`LeafLitterField.DECAY_TO_FADING_SECONDS`/`DECAY_TO_WINTER_SECONDS`, pinned
+at an even three-way split of the new `LIFETIME` (one third and two
+thirds), advance a SETTLED leaf's own `season` one-way from its own fall
+colour (`"spring"`/`"summer"`/`"autumn"`) through `"fading"` to the
+terminal `"winter"` in `advance()` -- never reverts, never advances past
+`"winter"` to anything else, matching the report's own framing exactly:
+one real season fresh, one fading, one fully decayed before vanishing.
+Gated on the leaf actually being settled (`transition_from == position`),
+the same "only a SETTLED leaf is eligible" rule the wind-dispersal roll
+right beside it already applies, for the identical reason: "keep LYING on
+the ground" implies actually at rest, not still easing into a relocation.
+See "Rendering" above for how "fading"'s own colour is produced without
+any new art (a plain blend of the already-derived autumn and winter
+stamps, at exactly the same midpoint the timing split already uses).
 
 ### History: why not the density-field shortcut
 
@@ -627,16 +679,51 @@ distinct floral image, and pine reuses its own already-documented
 autumn-imperfection crop -- named, not hidden, the same as that existing
 gap always has been.
 
-✅ **A settled leaf decays to a terminal `"winter"` stage** (see
-"Lifecycle" above) -- reported directly ("fallen leaves should change the
-season from autumn to winter if they keep lying on the ground ... winter
-is last stage for a leaf"), timed against `LeafLitterField.LIFETIME`
-itself and rendered via a derived recolour of each species' own autumn
-stamp (see "Rendering" above), verified both by test and by direct visual
-inspection of the rendered stamps.
+✅ **A settled leaf decays through exactly 3 stages -- fresh, `"fading"`,
+terminal `"winter"` -- across a real ~270-real-world-day lifespan, not a
+single jump across an arbitrary 90-second one** (see "Lifecycle"/
+"Rendering" above). Reported across two rounds: first "fallen leaves
+should change the season from autumn to winter if they keep lying on the
+ground ... winter is last stage for a leaf" (shipped as a single jump),
+then "leaf decay should be 3 seasons" (clarified: "leafs should take
+roughly 270 days to rot / decay / vanish") -- `LeafLitterField.LIFETIME`
+is now that real ~270-day/3-real-season figure, translated through the
+compressed game calendar the same way every other real-world-grounded
+timing constant in this codebase already is, with the decay thresholds an
+even three-way split of it. `"fading"`'s own colour is a plain blend of
+the already-derived autumn/winter stamps at the same midpoint the timing
+split lands on -- verified both by test and by rendering every species'
+autumn/fading/winter trio side by side and inspecting the image directly.
+
+✅ **Wind-blown leaves drift smoothly instead of reversing direction**
+(see "Dispersal" above) -- reported directly ("make the wind blowing
+through leaves make the tumble and swirl more smoothly? it's a hard back
+forth motion atm"), root-caused with a direct measurement rather than
+guessed at: `WindDispersal.landing_offset`'s own independent 0-360 degree
+scatter term (correct for a seed falling once) landed more than 90 degrees
+off the wind's own heading 30% of the time for `WEIGHT_LEAF`, letting a
+single settled leaf's consecutive nudges swing wildly between downwind
+and upwind. New `WindDispersal.leaf_ground_drift` bounds the angle to a
+wobble around the wind's own heading instead, verified both by test
+(200-seed sweeps: never past the bound, never reverses) and by
+re-simulating the exact scenario that first exposed the bug.
 
 ⬜ Invisible `AntColony` windfall foraging extended to leaves (see
 "Consumption" above) -- unchanged gap from the first pass.
+
+⬜ **Standing leaf-litter population at the new, much longer `LIFETIME`
+has not been live-performance-verified.** The existing 750-960-leaves-
+per-chunk burst test above predates this change: it seeded a fixed count
+directly and watched FPS over a short (30 real second) window that never
+actually depended on `LIFETIME`'s own value, so it does not by itself
+confirm safety at whatever STANDING population a much longer real
+accumulation window (up to the new ~270-real-world-day-equivalent
+lifespan, vs. the old 90 seconds) could permit during an actual long play
+session, especially combined with autumn's own now constantly-increasing
+shed rate. Named rather than assumed safe purely because the architecture
+did not change -- the exact mistake this file's own "Back on by default"
+note above was already careful not to repeat for the original GPU
+rewrite.
 
 A reported hang in `test_step_fruiting_drops_a_leaf_from_a_turning_tree`
 (400+ CPU-seconds observed on one run) was investigated 2026-09-05 and
