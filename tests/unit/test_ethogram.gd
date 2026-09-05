@@ -208,3 +208,19 @@ func test_wirings_are_a_copy_not_the_record():
 	var wirings := Ethogram.wirings_for("mammal")
 	wirings.clear()
 	assert_gt(Ethogram.wirings_for("mammal").size(), 0)
+
+
+## The land-mammal adapter runs every CreatureMarker species, most of which
+## have no record yet, on the mammal ladder: a body-plan override expresses
+## that plan's defaults for ANY species and layers the species' own nose on
+## top when it has one.
+func test_a_body_plan_override_expresses_that_plans_defaults_for_any_species():
+	var lynx := Ethogram.express("lynx", {}, "mammal")
+	assert_almost_eq(lynx["valence"]["danger"], -1.0, 0.0001)
+	assert_false(lynx["sensitivity"].has("decay"), "no record, no nose")
+	var robin := Ethogram.express("robin", {}, "mammal")
+	assert_almost_eq(robin["valence"]["danger"], -1.0, 0.0001, "the override's defaults")
+	assert_almost_eq(
+		robin["sensitivity"]["decay"], float(Ethogram.SPECIES["robin"]["smell"]["sensitivity"]["decay"]),
+		0.0001, "...under the species' own nose"
+	)

@@ -174,15 +174,21 @@ static func has_nose(species: String) -> bool:
 ## over its body plan's defaults, with receptor genes applied to sensitivity.
 ## Valence is the species' innate wiring and no gene touches it (ethogram.md
 ## §4). Returns fresh Dictionaries so a caller may adjust what it was handed
-## (the mammal adapter flips valences) without editing the species. An
-## unknown species expresses nothing.
-static func express(species: String, genome: Dictionary = {}) -> Dictionary:
-	if not SPECIES.has(species):
+## (the mammal adapter flips valences) without editing the species.
+##
+## `body_plan` overrides the record's own plan -- the land-mammal adapter
+## runs every CreatureMarker species on the mammal ladder, most of which have
+## no record yet, so the override expresses that plan's defaults for ANY
+## species and layers the species' nose on top when it has one. Without an
+## override, an unknown species expresses nothing.
+static func express(species: String, genome: Dictionary = {}, body_plan: String = "") -> Dictionary:
+	var record: Dictionary = SPECIES.get(species, {})
+	var plan_name := body_plan if body_plan != "" else String(record.get("body_plan", ""))
+	if record.is_empty() and plan_name == "":
 		return {}
-	var record: Dictionary = SPECIES[species]
 	var sensitivity := {}
 	var valence := {}
-	var plan: Dictionary = BODY_PLANS.get(record.get("body_plan", ""), {})
+	var plan: Dictionary = BODY_PLANS.get(plan_name, {})
 	_merge_receptors(plan.get("receptors", {}), sensitivity, valence)
 	_merge_receptors(record.get("smell", {}), sensitivity, valence)
 	for channel in sensitivity:
