@@ -3921,6 +3921,7 @@ func test_find_nearest_village_is_deterministic():
 
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
+const IllustratedWormSprite = preload("res://src/rendering/illustrated_worm_sprite.gd")
 const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
 
 
@@ -3933,6 +3934,18 @@ func _surface_all_worms() -> void:
 	for i in 40:
 		for patch in manager._worm_patches.values():
 			patch.advance(0.5)
+
+
+## Brings every worm in ONE patch fully up -- the single-patch counterpart
+## of _surface_all_worms, for tests that need to drive one specific patch
+## through a scripted sequence of conditions rather than every loaded
+## chunk at once.
+func _settle_patch(patch: EarthwormPatch, seconds: float = 20.0) -> void:
+	var step := 0.5
+	var elapsed := 0.0
+	while elapsed < seconds:
+		patch.advance(step)
+		elapsed += step
 
 
 ## Sends every worm back down, the way a frost or a dry spell would.
@@ -4439,7 +4452,13 @@ func test_worm_sprites_are_removed_when_the_worms_go_back_down():
 
 
 ## The art-resolution trap this project has hit twice: a sprite world size
-## must come from a world constant, never from its canvas dimensions.
+## must come from a world constant, never from its canvas dimensions. Now
+## checked against IllustratedWormSprite's own world_scale (the manager's
+## real generator -- see "Illustrated worm sprite" in docs/concept/
+## soil_fauna.md), which is itself pinned by test to match
+## ProceduralWormSprite's own WORLD_LENGTH_TILES exactly
+## (test_illustrated_worm_sprite.gd), so switching generators was a pure
+## art upgrade, not a size change.
 func test_worm_sprites_render_at_their_intended_world_length():
 	manager.update(_berlin_tile)
 	_surface_all_worms()
@@ -4448,11 +4467,7 @@ func test_worm_sprites_render_at_their_intended_world_length():
 	for sprites in manager._worm_sprites.values():
 		for cell in sprites:
 			var sprite: Sprite2D = sprites[cell]
-			assert_almost_eq(
-				sprite.scale.x * float(ProceduralWormSprite.SIZE.x),
-				ProceduralWormSprite.WORLD_LENGTH_TILES * float(TerrainRenderer.TILE_SIZE),
-				0.01
-			)
+			assert_almost_eq(sprite.scale.x, manager._worm_sprite_generator.world_scale(), 0.001)
 			checked += 1
 	assert_gt(checked, 0, "precondition: some worms were rendered")
 
@@ -4466,8 +4481,139 @@ func test_worm_sprites_are_foot_anchored():
 	for sprites in manager._worm_sprites.values():
 		for cell in sprites:
 			assert_almost_eq(
-				sprites[cell].offset.y, -float(ProceduralWormSprite.SIZE.y) * 0.5, 0.001
+				sprites[cell].offset.y, -float(IllustratedWormSprite.CANVAS_SIZE.y) * 0.5, 0.001
 			)
+
+
+# -- illustrated worm sprite: which animation plays when (see docs/concept/
+# soil_fauna.md's "Illustrated worm sprite: crawl, emerge, retreat, die") --
+
+func test_a_settled_worm_shows_the_crawl_animation():
+	manager.update(_berlin_tile)
+	_surface_all_worms()
+	manager.step_worms(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+	var crawl_frames := manager._worm_sprite_generator.generate_textures("crawl")
+	var checked := 0
+	for sprites in manager._worm_sprites.values():
+		for cell in sprites:
+			assert_true(crawl_frames.has(sprites[cell].texture), "a fully settled worm should be crawling")
+			checked += 1
+	assert_gt(checked, 0, "precondition: some worms were rendered")
+
+
+func test_a_worm_still_climbing_out_shows_the_emerge_animation():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	if patch.worm_cells().is_empty():
+		pending("no worm burrow in this exact chunk this seed")
+		return
+	patch.set_conditions(1.0, 1.0)
+	# Crosses SURFACED_THRESHOLD (0.6 at SURFACE_RATE 0.5/s -> 1.2s), well
+	# short of fully out (needs 2.0s) -- every burrow shares this same
+	# target/rate once drive is maxed, so any cell will do.
+	patch.advance(1.5)
+	var cell: Vector2i = patch.worm_cells()[0]
+	if not patch.is_surfaced(cell):
+		pending("this burrow was not yet surfaced at this exact step")
+		return
+	manager._sync_worm_sprites(chunk_coord)
+	var emerge_frames := manager._worm_sprite_generator.generate_textures("emerge")
+	var sprite: Sprite2D = manager._worm_sprites[chunk_coord][cell]
+	assert_true(emerge_frames.has(sprite.texture), "a worm still climbing out should be emerging, not crawling")
+
+
+func test_a_naturally_retreating_worm_shows_the_retreat_animation():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	if patch.worm_cells().is_empty():
+		pending("no worm burrow in this exact chunk this seed")
+		return
+	patch.set_conditions(1.0, 1.0)
+	_settle_patch(patch)
+	patch.set_conditions(0.0, 0.0)
+	# A small step back down -- still comfortably above the threshold, so
+	# the sprite survives and reads as mid-retreat rather than gone.
+	patch.advance(0.1)
+	var cell: Vector2i = patch.worm_cells()[0]
+	if not patch.is_surfaced(cell):
+		pending("this burrow retreated faster than expected at this exact step")
+		return
+	manager._sync_worm_sprites(chunk_coord)
+	var retreat_frames := manager._worm_sprite_generator.generate_textures("retreat")
+	var sprite: Sprite2D = manager._worm_sprites[chunk_coord][cell]
+	assert_true(
+		retreat_frames.has(sprite.texture), "a worm naturally retreating should be going back in, not crawling"
+	)
+
+
+func test_crushing_a_worm_shows_the_die_animation_and_keeps_its_sprite():
+	manager.update(_berlin_tile)
+	_surface_all_worms()
+	manager.step_worms(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	if patch.worm_cells().is_empty():
+		pending("no worm burrow in this exact chunk this seed")
+		return
+	var cell: Vector2i = patch.worm_cells()[0]
+	if not patch.is_surfaced(cell):
+		pending("no surfaced worm in this exact chunk this seed")
+		return
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	assert_true(
+		manager._worm_sprites[chunk_coord].has(cell),
+		"a crushed worm's sprite should survive to show the die animation, not vanish outright"
+	)
+	var die_frames := manager._worm_sprite_generator.generate_textures("die")
+	assert_true(die_frames.has(manager._worm_sprites[chunk_coord][cell].texture))
+
+
+func test_the_die_animation_holds_its_last_frame_once_it_finishes_playing():
+	manager.update(_berlin_tile)
+	_surface_all_worms()
+	manager.step_worms(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	if patch.worm_cells().is_empty():
+		pending("no worm burrow in this exact chunk this seed")
+		return
+	var cell: Vector2i = patch.worm_cells()[0]
+	if not patch.is_surfaced(cell):
+		pending("no surfaced worm in this exact chunk this seed")
+		return
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	# Comfortably past the whole squash (8 frames * WORM_DEATH_FRAME_SECONDS),
+	# well short of the RECOVERY_SECONDS the corpse then lies there for.
+	patch.advance(10.0)
+	manager._crawl_worm_sprites()
+	var die_frames := manager._worm_sprite_generator.generate_textures("die")
+	assert_same(manager._worm_sprites[chunk_coord][cell].texture, die_frames[die_frames.size() - 1])
+
+
+func test_a_corpses_sprite_is_removed_once_its_burrow_recovers():
+	manager.update(_berlin_tile)
+	_surface_all_worms()
+	manager.step_worms(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	if patch.worm_cells().is_empty():
+		pending("no worm burrow in this exact chunk this seed")
+		return
+	var cell: Vector2i = patch.worm_cells()[0]
+	if not patch.is_surfaced(cell):
+		pending("no surfaced worm in this exact chunk this seed")
+		return
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	patch.advance(EarthwormPatch.RECOVERY_SECONDS + 1.0)
+	manager._sync_worm_sprites(chunk_coord)
+	assert_false(
+		manager._worm_sprites[chunk_coord].has(cell), "the corpse should be gone once the burrow recovers"
+	)
 
 
 func test_unloading_a_chunk_drops_its_worms_and_their_sprites():
