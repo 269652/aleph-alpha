@@ -7333,6 +7333,25 @@ germany" and a 4-tile minimum width).
   broadened sharpness (with real trig-derived bounds), and the
   brightened-not-saturated color. Full writeup: `concept/rivers.md`'s "Flow
   effect made more visible" section.
+- **Far-time shredding of curved reaches (bounded drift)** (small) — ✅
+  Done — reported live at the Loire near Nantes after ~25 minutes of play:
+  every curved fast reach dissolved into per-pixel speckle at night while
+  the straight reach beside it kept its lines. Root cause: the downstream
+  drift translated the noise sample coordinate by `flow_dir x (TIME x
+  speed)` with an unbounded magnitude, and `flow_dir` differs by a fraction
+  of a degree between neighbouring fragments on a bend — angle times
+  thousands of cells put neighbouring pixels in unrelated noise. Fixed by
+  wrapping the drift at `RiverFlowShader.DRIFT_PERIOD_CELLS` and sampling
+  the smear through a `value_noise_tiled` whose lattice wraps at the same
+  period (so the wrap is the identity). GPU-measured on a synthetic bend at
+  the Loire's coordinates: isolated-bright-pixel fraction 0.097 → 0.003 at
+  `TIME` ~2000 s. Pinned by `test_river_flow_shader.gd`'s
+  `test_the_drift_translation_is_bounded_by_the_noise_period` and
+  `test_a_long_session_does_not_shred_the_field_on_a_bend`. Writeup:
+  `concept/rivers.md`'s "Bounded drift: the far-time shredding" section,
+  which also records the two open siblings on the hydrology/river-ripples
+  branch (the same wrap needed for its drift and eddy drift; sub-tile-wide
+  tributaries rendering as dashed ink lines).
 - **Hillshade could paint ordinary ground as a near-opaque black cliff**
   (medium) — ✅ Done — reported live: "distinctly odd, near-black... roughly
   diamond/blob-shaped patches lying flat on grass near a riverbank" (Spring,

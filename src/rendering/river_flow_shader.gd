@@ -94,6 +94,10 @@ uniform float wader_wake_trail = 0.8;
 
 // Continuous downstream travel, px/s per m/s of real current.
 uniform float drift_px_per_mps = 9.0;
+// The period, in noise cells, the smeared field TILES at and the drift wraps
+// modulo -- what keeps the direction-scaled translation bounded (see the
+// drift line in fragment()).
+uniform float drift_period = 20.0;
 // The real-speed threshold above which strokes brighten (m/s).
 uniform float fast_flow_m_s = 0.6;
 uniform vec3 band0_color : source_color = vec3(0.30, 0.60, 0.66);
@@ -136,6 +140,24 @@ float value_noise(vec2 p) {
 	);
 }
 
+// The same noise on a lattice that wraps every `period` cells, so a
+// translation by exactly one period is the identity. This is what the
+// drifted samples below read: the drift wraps at the same period, so the
+// wrap is invisible, and the direction-scaled offset stays bounded (the
+// far-time shredding -- see the drift line in fragment()).
+float value_noise_tiled(vec2 p, float period) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	vec2 i0 = mod(i, period);
+	vec2 i1 = mod(i + 1.0, period);
+	return mix(
+		mix(value_hash(i0), value_hash(vec2(i1.x, i0.y)), f.x),
+		mix(value_hash(vec2(i0.x, i1.y)), value_hash(i1), f.x),
+		f.y
+	);
+}
+
 // The surface field: an isotropic, WORLD-ANCHORED noise smeared along the
 // local flow direction -- a line-integral-convolution stroke.
 //
@@ -158,7 +180,7 @@ float line_field(vec2 q, vec2 flow_dir) {
 	float total = 0.0;
 	for (int k = -4; k <= 4; k++) {
 		float w = 5.0 - abs(float(k));
-		total += value_noise(q + flow_dir * (float(k) * smear_spacing)) * w;
+		total += value_noise_tiled(q + flow_dir * (float(k) * smear_spacing), drift_period) * w;
 	}
 	// ONE smooth scale, deliberately: the strokes below are contours of
 	// this field, and a level set is only as smooth as the field it cuts.
@@ -316,7 +338,18 @@ void fragment() {
 	// homogeneous and its hash is fract-first at any coordinate. The bend
 	// field above deliberately does NOT drift: boils hold station over the
 	// bed while the surface pours through them.
-	float drift = TIME * drift_px_per_mps * speed_mps * noise_scale;
+	//
+	// WRAPPED at drift_period, and the taps read the noise that tiles at
+	// that period, so the wrap is invisible. Unbounded it was NOT safe,
+	// whatever the hash: the translation is flow_dir times a magnitude,
+	// and flow_dir is reconstructed continuously between texels -- on a
+	// bend two neighbouring fragments differ by a fraction of a degree,
+	// which times thousands of cells is many cells: unrelated noise at
+	// neighbouring pixels. Found live after ~25 minutes on the Loire: every
+	// curved reach dissolved into speckle while the straight reach beside
+	// it kept its lines. The same angle-times-distance trap as the world
+	// origin, re-entered through TIME.
+	float drift = mod(TIME * drift_px_per_mps * speed_mps * noise_scale, drift_period);
 	float sample_a = line_field(q - flow_dir * (advect_strength * phase_a + drift), flow_dir);
 	float sample_b = line_field(q - flow_dir * (advect_strength * phase_b + drift), flow_dir);
 	// Triangular weight: 1 at a phase's birth, 0 at its death.
@@ -576,6 +609,19 @@ const HALF_WIDTH_PX := 32.0
 ## linear in the reach's solved speed, pinned by drift tests.
 const DRIFT_PX_PER_MPS := 9.0
 
+## The period, in noise cells, the smeared field tiles at and the drift wraps
+## modulo. Bounds the direction-scaled translation for ever: on a bend the
+## reconstructed flow_dir differs by a fraction of a degree between
+## neighbouring fragments, and that angle times the translation is how far
+## apart their samples land -- at 20 cells a quarter-degree is a twentieth
+## of a cell, invisible; unbounded it reached tens of cells after twenty
+## minutes of play and shredded every curved reach (found live on the
+## Loire). The picture repeats every period / drift-rate seconds on a
+## reach (~28 s at 1 m/s), out of step with the half-cycle morph. Pinned by
+## test_the_drift_translation_is_bounded_by_the_noise_period and
+## test_a_long_session_does_not_shred_the_field_on_a_bend.
+const DRIFT_PERIOD_CELLS := 20.0
+
 ## The organic smoothing jitter: swing (in across-fraction units, capped
 ## near one across-bin step by test -- it masks the per-tile quantisation,
 ## never reshapes the channel) and the wavelength of the world-anchored
@@ -689,6 +735,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("wader_radius_px", WADER_RADIUS_PX)
 	material.set_shader_parameter("wader_wake_trail", WADER_WAKE_TRAIL)
 	material.set_shader_parameter("drift_px_per_mps", DRIFT_PX_PER_MPS)
+	material.set_shader_parameter("drift_period", DRIFT_PERIOD_CELLS)
 	material.set_shader_parameter("fast_flow_m_s", FAST_FLOW_M_S)
 	material.set_shader_parameter("line_count", LINE_COUNT)
 	material.set_shader_parameter("across_line_scale", ACROSS_LINE_SCALE)
@@ -909,6 +956,26 @@ static func value_noise(x: float, y: float) -> float:
 	)
 
 
+## The CPU mirror of the shader's value_noise_tiled: the same noise on a
+## lattice that wraps every `period` cells.
+static func value_noise_tiled(x: float, y: float, period: float = DRIFT_PERIOD_CELLS) -> float:
+	var ix: float = floor(x)
+	var iy: float = floor(y)
+	var fx: float = x - ix
+	var fy: float = y - iy
+	fx = fx * fx * (3.0 - 2.0 * fx)
+	fy = fy * fy * (3.0 - 2.0 * fy)
+	var x0 := fposmod(ix, period)
+	var y0 := fposmod(iy, period)
+	var x1 := fposmod(ix + 1.0, period)
+	var y1 := fposmod(iy + 1.0, period)
+	return lerpf(
+		lerpf(value_hash(x0, y0), value_hash(x1, y0), fx),
+		lerpf(value_hash(x0, y1), value_hash(x1, y1), fx),
+		fy
+	)
+
+
 ## The CPU mirror of the shader's line_field: the LIC smear along an
 ## arbitrary direction plus the unsmeared detail octave, world-anchored.
 static func line_field_value(px: float, py: float, dir: Vector2) -> float:
@@ -916,7 +983,7 @@ static func line_field_value(px: float, py: float, dir: Vector2) -> float:
 	for k in range(-4, 5):
 		var offset := dir * (float(k) * SMEAR_SPACING)
 		var weight := 5.0 - absf(float(k))
-		total += value_noise(px + offset.x, py + offset.y) * weight
+		total += value_noise_tiled(px + offset.x, py + offset.y) * weight
 	return clampf((total / 25.0 - 0.5) * SMEAR_GAIN + 0.5, 0.0, 1.0)
 
 
@@ -948,10 +1015,11 @@ static func animated_field_value(
 
 
 ## How far the pattern has travelled downstream, in noise cells: linear in
-## the reach's real current speed and in time -- unbounded, because the
-## water does not loop back.
+## the reach's real current speed and in time, wrapped at
+## DRIFT_PERIOD_CELLS -- the noise it translates tiles at that period, so
+## the wrap is invisible and the direction-scaled offset stays bounded.
 static func drift_cells(speed_mps: float, seconds: float) -> float:
-	return DRIFT_PX_PER_MPS * speed_mps * seconds * NOISE_SCALE
+	return fposmod(DRIFT_PX_PER_MPS * speed_mps * seconds * NOISE_SCALE, DRIFT_PERIOD_CELLS)
 
 
 ## Mean absolute change in the field over a step of `distance`, taken either

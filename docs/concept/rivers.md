@@ -1251,6 +1251,57 @@ accident of the asking tile's bearing -- and adjacency doubles as the
 watertightness rule: a one-tile hole breaks the chain. Pinned from every
 tile of the wall by test.
 
+## Bounded drift: the far-time shredding (2026-09-05)
+
+Found live at the Loire near Nantes after roughly 25 minutes of play, at
+night: every **curved** reach of a fast river dissolved into per-pixel
+white speckle ("catastrophic noise"), while the straight reach beside it
+kept its long moonlit lines. Reproduced on the real GPU by advancing the
+shader clock: a synthetic bend measured 0.003 of its water pixels as
+isolated bright specks at `TIME` 0 and 0.097 at `TIME` ~2000 s.
+
+The previous section's claim that "unbounded `TIME` translation is safe
+because the noise hash is fract-first at any coordinate" was true of the
+hash and false of the translation. The drift moves the sample coordinate
+by `flow_dir x (TIME x speed)`, and `flow_dir` is reconstructed
+**continuously** between texels, so on a bend two neighbouring fragments
+differ in direction by a fraction of a degree. A fraction of a degree
+times thousands of noise cells is many cells: neighbouring pixels read
+unrelated noise, and the contour strokes cut through it shatter into
+dots. On a straight reach `flow_dir` is constant, the translation is a
+pure shift, and nothing breaks -- which is why the horizontal reach
+survived. It is the same "angle times distance" trap the world-origin
+seam fix guards against, re-entered through `TIME` instead of the origin,
+and it grows for as long as the session runs.
+
+The drift is now wrapped modulo `DRIFT_PERIOD_CELLS` (20 noise cells),
+and the smear taps read a `value_noise_tiled` whose lattice wraps at that
+same period, so a translation by exactly one period is the identity and
+the wrap is invisible. The direction-scaled offset is thereby bounded for
+ever: a quarter-degree of bend moves neighbouring samples by a twentieth
+of a cell. The cost is an exact repeat of the drifting texture every
+`period / rate` seconds on a reach (~28 s at 1 m/s), out of step with the
+half-cycle morph and the bed-anchored eddies, so no loop reads as one.
+Pinned by `test_the_drift_translation_is_bounded_by_the_noise_period`
+(the bound, the tiling identity, and both shader lines) and
+`test_a_long_session_does_not_shred_the_field_on_a_bend` (a quarter-degree
+direction change at 1500 s and 2.2 m/s stays under the existing
+stroke-width seam budget). The unpinned jitter and eddy noise still use
+the untiled `value_noise`: neither is translated.
+
+Known sibling on the hydrology/river-ripples branch (not on `main`): its
+shader carries the same drift at 20 px/s per m/s plus an eddy drift
+(`bend_drift`) that multiplies `flow_dir` by `TIME x surface speed x 0.4`
+-- both need the same wrap. Measured there at the real Loire confluence:
+speckle 0.056 at ~2000 s versus 0.003 fresh, 0.015 with the drift zeroed
+and 0.030 with the eddy drift zeroed; the curved-smear direction lookup
+and the bicubic map filtering were ruled out (no change when disabled).
+That branch also renders a sub-tile-wide tributary (half-width ~0.9
+tiles) as a dashed ink line: a per-tile across map cannot reconstruct a
+channel narrower than its own texel, so channels below ~1 tile half-width
+need a rendered-width floor, the same "gameplay-scale width" pillar the
+curated catalog already applies.
+
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the

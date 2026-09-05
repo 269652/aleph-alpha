@@ -1386,3 +1386,76 @@ func test_the_shader_loops_over_a_wader_array():
 	assert_true(
 		RiverFlowShader.SHADER_CODE.contains("for (int w = 0; w < wader_count; w++)")
 	)
+
+
+# -- bounded drift: the far-time shredding ------------------------------------
+#
+# Found live at the Loire near Nantes after ~25 minutes of play: every
+# bend of a fast reach dissolved into per-pixel white speckle at night,
+# while the straight reach beside it kept its lines. The drift translates
+# the sample coordinate by flow_dir * (TIME * speed) -- and flow_dir is
+# reconstructed CONTINUOUSLY between texels, so on a bend two neighbouring
+# fragments differ by a fraction of a degree. A fraction of a degree times
+# thousands of noise cells is many cells: the same "angle times distance"
+# trap the seam test below guards, re-entered through TIME instead of the
+# world origin. The translation is now wrapped modulo a period the noise
+# TILES at, so the direction-scaled magnitude is bounded for ever.
+
+## The drift never grows past the noise period, however long the session.
+func test_the_drift_translation_is_bounded_by_the_noise_period():
+	assert_lt(
+		RiverFlowShader.drift_cells(2.2, 3600.0), RiverFlowShader.DRIFT_PERIOD_CELLS,
+		"an hour on the Rhine must not translate the field further than one period"
+	)
+	# ...and the wrap is invisible only because the smeared noise tiles at
+	# exactly that period.
+	for i in range(30):
+		var x := 3.7 + float(i) * 1.13
+		var y := 11.2 + float(i) * 0.71
+		assert_almost_eq(
+			RiverFlowShader.value_noise_tiled(x + RiverFlowShader.DRIFT_PERIOD_CELLS, y),
+			RiverFlowShader.value_noise_tiled(x, y), 0.000001,
+			"the drifted noise must repeat exactly at the drift period"
+		)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains(
+			"mod(TIME * drift_px_per_mps * speed_mps * noise_scale, drift_period)"
+		),
+		"the shader must wrap the drift at drift_period"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains(
+			"value_noise_tiled(q + flow_dir * (float(k) * smear_spacing), drift_period)"
+		),
+		"the smear taps must sample the noise that tiles at drift_period"
+	)
+
+
+## Two neighbouring fragments on a bend differ in direction by a fraction of
+## a degree. After a long session that must still move the field by less
+## than a stroke width -- the same budget as a whole bin change at t=0.
+func test_a_long_session_does_not_shred_the_field_on_a_bend():
+	var angle_a := 231.0
+	var angle_b := 231.25
+	var dir_a := Vector2(sin(deg_to_rad(angle_a)), -cos(deg_to_rad(angle_a)))
+	var dir_b := Vector2(sin(deg_to_rad(angle_b)), -cos(deg_to_rad(angle_b)))
+	# The Loire's real neighbourhood, in noise cells.
+	var base_x := 19802.0 * 16.0 * RiverFlowShader.NOISE_SCALE
+	var base_y := 4751.0 * 16.0 * RiverFlowShader.NOISE_SCALE
+	var total := 0.0
+	var count := 0
+	for i in range(24):
+		for j in range(24):
+			var px := base_x + float(i) * 0.43
+			var py := base_y + float(j) * 0.39
+			total += absf(
+				RiverFlowShader.animated_field_value(px, py, dir_a, 1500.0, 2.2)
+				- RiverFlowShader.animated_field_value(px, py, dir_b, 1500.0, 2.2)
+			)
+			count += 1
+	var mean := total / float(count)
+	assert_lt(
+		mean, 0.075,
+		"a quarter-degree bend after 25 minutes moves the field by %.3f -- shredded strokes"
+			% mean
+	)
