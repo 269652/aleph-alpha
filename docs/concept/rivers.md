@@ -1920,7 +1920,21 @@ Measured after both: 0.002 fresh, 0.002 at ~2000 s. Pinned by
 `test_the_drift_is_one_shared_speed_for_every_moving_reach`; the eddy
 pins (`test_the_bend_drifts_downstream_with_the_current`,
 `test_the_shader_streams_every_consumer_from_the_same_surface_speed`) now
-state the shared speed. `main` carries the direction half of this fix
-(its drift is weaker and it has no eddy drift); the speed half applies
-there too and is noted in its ledger.
+state the shared speed.
+
+**Both halves landed on `main` together** via this branch's own merge
+(`830f4ba`, merged in `b51d80e`) — there is no longer a separate
+direction-only state anywhere in the tree; a session dispatched afterward
+against a stale pre-merge snapshot of `main` to fix "the eddy drift
+specifically" found the CPU-mirror suite already green on arrival
+(`test_a_long_session_does_not_shred_the_field_on_a_bend` included, 172/172
+in the file). Re-confirmed independently on the real GPU rather than taken
+on trust, with a probe this fix's own commits never left behind
+(`tools/probe_eddy_drift_shredding.gd`): a synthetic bending reach, TIME
+pinned by literal substitution rather than the engine clock, isolated-
+bright-speck fraction fresh vs. at 2000 s. The shipped (fixed) shader held
+flat -- 0.0098 -> 0.0075 -- while a copy patched back to the exact
+pre-`830f4ba` eddy formula (proving the metric itself is sound, not just
+silent) shredded exactly as this section describes -- 0.0099 -> 0.1099, an
+11x rise concentrated at the tightest thresholds.
 
