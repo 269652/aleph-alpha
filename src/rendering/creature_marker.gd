@@ -1782,6 +1782,7 @@ func _decision_context(partner: Node) -> Dictionary:
 		"health_fraction": info.health / info.max_health,
 		"hungry": _needs.is_hungry(),
 		"thirsty": _needs.is_thirsty(),
+		"drives": _needs.gains(),
 		"fears_players": fears_players(),
 		"is_courting": partner != null,
 		"is_mature": MammalGrowth.is_mature(age_seconds, info.species),

@@ -524,3 +524,28 @@ func test_threats_lists_what_the_animal_notices_on_the_fear_channels():
 	var tame := behavior.threats(_context({"fears_players": false, "stimuli": [wolf, person]}))
 	assert_eq(tame.size(), 1, "a tamed animal still notices the wolf, and no longer the person")
 	assert_eq(tame[0]["node"], "wolf")
+
+
+# -- slice 3: drives as gains -------------------------------------------------
+
+## A caller that hands over its drive gains (Drives.gains) is taken at its
+## word; the hungry/thirsty booleans are the older shape.
+func test_published_drive_gains_replace_the_booleans():
+	var starving := behavior.decide(_context({
+		"hungry": false, "drives": {"hunger": 1.0}, "food_direction": Vector2(0, 1),
+	}))
+	assert_eq(starving.intent, "seek_food")
+	var sated := behavior.decide(_context({
+		"hungry": true, "drives": {"hunger": 0.0}, "food_direction": Vector2(0, 1),
+	}))
+	assert_eq(sated.intent, "wander")
+
+
+## A partial gain still opens the gate -- the kernel scales the score, the
+## ladder decides.
+func test_a_partial_gain_still_opens_the_gate():
+	var peckish := behavior.decide(_context({
+		"drives": {"hunger": 0.4}, "food_direction": Vector2(0, 1),
+	}))
+	assert_eq(peckish.intent, "seek_food")
+	assert_gt(peckish["score"], 0.0)

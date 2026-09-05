@@ -69,3 +69,18 @@ func test_no_npc_starts_out_already_hungry():
 
 func test_an_unseeded_npc_still_starts_from_nothing():
 	assert_eq(NpcNeeds.new().hunger, 0.0)
+
+
+# -- one drive vector underneath (docs/concept/ethogram.md §5, slice 3) --------
+
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+
+
+## NpcNeeds is now a facade over Drives with the villager profile -- the
+## copy of CreatureNeeds it used to be is one implementation again.
+func test_the_numbers_are_the_ethograms_villager_profile():
+	var profile := Ethogram.drive_profile("", "villager")
+	assert_almost_eq(NpcNeeds.HUNGER_RATE_PER_SECOND, 1.0 / profile["hunger"]["rise_seconds"], 0.000001)
+	assert_almost_eq(NpcNeeds.HUNGRY_THRESHOLD, profile["hunger"]["threshold"], 0.0)
+	assert_almost_eq(NpcNeeds.START_STAGGER, profile["hunger"]["stagger"], 0.0)
+	assert_eq(needs.gains().keys(), ["hunger"])
