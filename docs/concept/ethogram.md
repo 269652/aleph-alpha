@@ -229,16 +229,23 @@ Who builds them:
 
 ```gdscript
 Ethogram.SPECIES = {
-    "boar":  {"body_plan": "mammal", "smell": {"sensitivity": {...}, "valence": {...}}},
-    "deer":  {"body_plan": "mammal", ...},
-    "horse": {"body_plan": "mammal", ...},
-    "robin": {"body_plan": "bird",   ...},
-    "fly":   {"body_plan": "insect", ...},
+    "boar":       {"body_plan": "mammal", "smell": {"sensitivity": {...}, "valence": {...}}},
+    "deer":       {"body_plan": "mammal", ...},
+    "horse":      {"body_plan": "mammal", ...},
+    "robin":      {"body_plan": "bird",   ...},
+    "fly":        {"body_plan": "insect", ...},
+    "kingfisher": {"body_plan": "bird",   "drives": {"hunger": {...}}},   # a clock, no nose
 }
 Ethogram.BODY_PLANS = {
-    "mammal": {"receptors": {"sensitivity": {...}, "valence": {...}}, "wirings": [...]},
+    "mammal":   {"receptors": {...}, "drives": {"hunger": {...}, "thirst": {...}}, "wirings": [...]},
+    "villager": {"drives": {"hunger": {...}}},
+    "bird":     {"drives": {"hunger": {...}}},
 }
 ```
+
+A record may carry any of three blocks: `smell` (receptors, §4), `drives`
+(its clock, §5) and, on a body plan, `receptors` defaults and `wirings`
+(§6). A species overrides its plan block by block.
 
 The five `smell` blocks are `Olfaction.RECEPTORS` moved verbatim, with
 olfaction's `response` renamed `valence` (the affective-science term for the
@@ -336,22 +343,53 @@ V2 record.
 
 A **drive** is a named level in [0, 1]: `hunger`, `thirst`, `fear`,
 `courtship`. Every wiring names the drive that *gates* it, and the kernel
-multiplies a wiring's pull by that drive's level. A level of zero switches the
-wiring off entirely; a hungry animal at level one finds food exactly as loud
-as the receptors make it. That single multiplication is the whole of
+multiplies a wiring's pull by that drive's **gain**. A gain of zero switches
+the wiring off entirely; a hungry animal at gain one finds food exactly as
+loud as the receptors make it. That single multiplication is the whole of
 "neuromodulation" in this model, and it is enough for hunger to sharpen the
 nose (Root et al.) and for a sated animal to walk past a windfall.
 
-In slice 1 the levels are the booleans the adapter already has:
-`CreatureNeeds.is_hungry()` becomes `hunger: 1.0` or `0.0`, and likewise
-thirst; `fear` is always `1.0` (an un-aggroed world boss is handled by
-*sensitivity*, §7, because it genuinely does not perceive the player as a
-threat rather than merely not caring); `courtship` is `1.0` while paired.
-Continuous levels, drive rates per body plan, and the unification of the five
-hunger clocks into one drive vector are slice 3 (§8). Personality as a
-baseline on these gains (boldness lowering `fear`, temperament raising a
-`fight` gain), and the spell `FEAR`/`CALM` statuses as a temporary push on the
-same gain rather than today's temperament-string swap in
+**One clock (slice 3).** `src/gameplay/drives.gd` is the single
+implementation of "rises over time, crosses a threshold, a meal takes it
+back down", and the numbers are a **drive profile** in the species record or
+its body plan (`Ethogram.drive_profile(species, body_plan)`), with these
+fields per drive:
+
+| field | meaning |
+|---|---|
+| `rise_seconds` | how long the drive takes from 0 (satisfied) to 1 (desperate), in the world's own seconds |
+| `threshold` | the level from which the drive is *urgent* (the old `is_hungry`) and its gain is fully open |
+| `meal` | how much one meal takes off; 1.0 or more resets |
+| `start` | (optional) where a fresh individual begins: a bird starts empty, a mammal fed |
+| `stagger` | (optional) how far into its cycle a fresh *seeded* individual may start, so a herd is not on one clock; the same hash `CreatureNeeds` always used |
+| `onset` | (optional) the level at which the gain begins to open; below the threshold it makes the gain a **ramp**, so a slightly hungry animal is slightly interested. Defaults to the threshold: a step |
+
+The profiles are the numbers the four animal clocks always ran, moved into
+the ethogram: `mammal` (CreatureNeeds' 0.02/s hunger and 0.03/s thirst,
+urgent from half way, staggered up to 0.45), `villager` (the same pace,
+hunger only, per npc.md), `bird` (BirdDigestion's songbird crop, as hunger:
+empties in an eighth of the world day, urgent below 0.35 full, a meal fills
+0.7, starts empty), and a `kingfisher` species record overriding the bird
+appetite (PiscivoreAppetite's two meals a day, a whole inter-meal interval
+before it is interested again). `CreatureNeeds`, `NpcNeeds`,
+`PiscivoreAppetite` and `BirdDigestion` survive as **facades** over `Drives`
+with their APIs and their re-exported numbers unchanged, so their markers,
+consumers and tests did not move; the player's `SurvivalMeters` stays the
+player's (it has stamina and fitness, and a player is not a species record).
+`Drives.gains()` is what the mammal adapter now receives as `drives`, and a
+partial gain opens its gate.
+
+Every profile keeps the **step** its own tests pin -- no profile sets an
+`onset` -- because under first-match arbitration any nonzero gain fires its
+wiring, so a ramp today would only make animals forage below the threshold
+they were tuned to. A ramp becomes meaningful with cross-wiring scoring
+(slice 4), which is where the first `onset` goes in. `fear` is always `1.0`
+(an un-aggroed world boss is handled by *sensitivity*, §7, because it
+genuinely does not perceive the player as a threat rather than merely not
+caring); `courtship` is `1.0` while paired. Personality as a baseline on
+these gains (boldness lowering `fear`, temperament raising a `fight` gain),
+and the spell `FEAR`/`CALM` statuses as a temporary push on the same gain
+rather than today's temperament-string swap in
 `CreatureMarker._temperament_for_decision`, are slice 4.
 
 ### 6. Wirings and the kernel
@@ -524,11 +562,12 @@ Each is its own red-first pass with its own status entries here.
   (diet order is lexicographic), the `flesh`/fight/"ignores other hunters"
   facts stay adapter overrides sourced from `CreatureInfo`'s tables, and no
   `conspecific` feature is published until a wiring reads one.
-- ⬜ **Slice 3, one drive vector.** `CreatureNeeds`, `NpcNeeds`,
-  `PiscivoreAppetite` and `BirdDigestion` become one `Drives` module with
-  per-body-plan rates (the player's `SurvivalMeters` stays the player's);
-  levels become ramps rather than 0/1, so a slightly hungry animal is
-  slightly interested; the `START_STAGGER` idiom is kept.
+- ✅ **Slice 3, one drive vector** (2026-09-05). `Drives` is the one clock;
+  the four animal needs modules are facades over it with their numbers as
+  ethogram drive profiles (§5); the mammal adapter takes published gains.
+  Deliberately not done: no profile sets an `onset`, so every gain is still
+  the step its tests pin -- a ramp only makes sense once wirings are scored
+  against each other (slice 4).
 - ⬜ **Slice 4, gains as personality.** Baseline gains per individual from the
   genome: `boldness` on `fear` (re-deriving `FlyerPersonality`'s flight
   initiation distance and `animal_husbandry.md`'s composed flight radius from
@@ -629,9 +668,18 @@ personalities that are numbers a breeder can select on.
 - ✅ Visible now: every wild land mammal has its own nose. A boar born
   without a decay receptor walks past carrion the next boar takes
   (`test_an_individuals_nose_reaches_the_live_forage_choice`).
+- ✅ Slice 3: `drives.gd` (levels, urgency, meals, seeded stagger with the
+  old hash, gains as step-or-ramp, the stateless helpers; `test_drives.gd`,
+  21 tests); `Ethogram.drive_profile` with the `mammal`, `villager` and
+  `bird` plan clocks and the `kingfisher` record; `CreatureNeeds`,
+  `NpcNeeds`, `PiscivoreAppetite` and `BirdDigestion` as facades with their
+  numbers re-exported from the profiles and every existing test green;
+  `CreatureBehavior` taking published `drives`; `CreatureMarker` publishing
+  `CreatureNeeds.gains()`.
+- ⬜ A drive with an `onset` (a live ramp); the player's meters.
 - ⬜ Grazing bites as stimuli; the species half of the adapter overrides in
   the species record; a `conspecific` feature (§2, §3).
-- ⬜ Slices 3 to 6 above, each untouched.
+- ⬜ Slices 4 to 6 above, each untouched.
 
 *Coverage note: every mechanism in this list is a pure module with a headless
 unit test. Nothing here is exercised by an integration test against a live

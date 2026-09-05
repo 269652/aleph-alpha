@@ -10904,8 +10904,28 @@ under the smell API, and proves the DSL in tests.
   temperament) still comes from `CreatureInfo`'s tables rather than the
   five species records; no `conspecific` feature is published until a
   wiring reads one.
-- ⬜ Slices 3–6 in the doc, none started: one drive vector replacing the
-  five hunger clocks with ramped levels; gains as personality (boldness,
+- ✅ **Slice 3 (same day): one drive vector.** `src/gameplay/drives.gd` is
+  the single clock behind every "rises over time, crosses a threshold, a
+  meal takes it back down" need, and the numbers are drive profiles in the
+  ethogram (`Ethogram.drive_profile`: `mammal` = CreatureNeeds' 0.02/s and
+  0.03/s with the 0.45 herd stagger, `villager` = the same pace hunger-only,
+  `bird` = BirdDigestion's songbird crop as hunger, plus a `kingfisher`
+  species record overriding the bird appetite with PiscivoreAppetite's two
+  meals a day). `CreatureNeeds`, `NpcNeeds`, `PiscivoreAppetite` and
+  `BirdDigestion` survive as facades over it -- same APIs, their constants
+  re-exported from the profiles as `static var`s -- so `CreatureMarker`,
+  `NpcEconomy`/`NpcMarker`, `PiscivoreBirdMarker`, `AmbientFlyerMarker` and
+  all four test files are untouched and green; the stagger keeps the exact
+  hash the old modules used, so no animal or villager already in the world
+  changes its onset. Levels are the kernel's gains (`Drives.gains()`, which
+  `CreatureMarker` now publishes and `CreatureBehavior` reads ahead of the
+  hungry/thirsty booleans); a gain is a step at the threshold today and a
+  ramp one profile `onset` away -- no profile sets one yet, deliberately,
+  because under first-match arbitration a ramp would only make animals
+  forage below the thresholds they were tuned to (the doc's §5 says when it
+  becomes meaningful). The player's `SurvivalMeters` stays the player's.
+  21 new tests in `test_drives.gd`; facade, consumer and marker suites green.
+- ⬜ Slices 4–6 in the doc, none started: gains as personality (boldness,
   docility, temperament, the spell fear/calm statuses); bird/insect/fish/
   villager body plans over the existing motor programs, with the NPC
   instruction DSL as the player-facing dialect; mate choice on
