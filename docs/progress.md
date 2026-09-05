@@ -2223,6 +2223,39 @@ All three rules and their known remaining gaps are specified in [docs/concept/hu
 
 
 
+### Snow at a river's edge read as a staircase
+
+Reported from a screenshot: near a river, the boundary between snow and
+water was a visible jagged staircase instead of following the river's own
+smoothly curved bank.
+
+✅ **`_paint_snow_presence` no longer excludes river/lake tiles, only
+ocean.** Root cause: `Chunk.blocks_ground_cover` (river OR lake) excluded a
+whole tile's snow presence cell at the coarse, binary,
+`RIVER_HALF_WIDTH_TILES`-distance granularity `Chunk.is_river`/`is_lake`
+are baked at, while the river-flow overlay's own visible edge is a smooth,
+continuous, sub-tile curve (`|across| == 1`, feathered — see `rivers.md`'s
+"Rendering: overlay, not a new biome"). Those two boundaries never
+coincided except by accident, and the mismatch along any curved or
+diagonal reach is exactly what read as a staircase. The fix works for snow
+specifically because `SnowFx` is confirmed (by the pre-existing
+`test_world_ground_layer_order.gd`) to be an EARLIER scene-tree sibling
+than `RiverFlowFx` at the same z_index, so the river overlay already draws
+on top of the snow layer every frame — a painted river/lake tile is simply
+hidden by it, seamlessly, at the river's own real edge. This would NOT
+work for grass/trees: `GroundDecor` draws OVER the river, which is why
+`tall_grass.gd`/`tree_renderer.gd`'s own river/lake placement exclusions
+stay correct and were left untouched. Ocean is deliberately still
+excluded and NOT fixed by this — `WaterFx` is a coarser shore-distance
+overlay, not the river's continuous field, so a coastline under snow may
+show an analogous, un-addressed artifact. Red-first: the existing
+(inverted) river/snow test was rewritten to assert the fixed behaviour and
+confirmed failing against the old exclusion first. 20/20 snow tests in
+`test_earth_chunk_manager.gd`, 26/26 `test_snow_bomb_shader.gd`, 14/14
+`test_snow_stamp_atlas.gd`, 2/2 `test_world_ground_layer_order.gd`. See
+[snow_cover.md](concept/snow_cover.md#snow-under-a-river-reads-as-a-staircase).
+
+
 ### Flowers: too dense, no tooltip, and a wind that never blew
 
 Three things reported together: flowers *"still don't [show] hover tooltips"*,
