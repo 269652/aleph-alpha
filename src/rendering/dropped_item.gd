@@ -77,15 +77,57 @@ static var _tree_art_generator := IllustratedTree.new()
 ## round fruit.
 const LEAF_WORLD_SIZE := ProceduralItemSprite.WALNUT_WORLD_WIDTH * 1.5
 
+## ## Falling and swaying
+##
+## A leaf does not simply appear on the ground the way every other dropped
+## item does -- it visibly drops from above and settles, then keeps a
+## gentle ongoing sway once landed, real wind rather than a one-shot
+## animation that stops (see docs/concept/leaf_litter.md).
+##
+## How high above its own landing spot a falling leaf starts, in world
+## pixels -- a plain fixed height rather than the tree's own actual
+## canopy top: step_fruiting only ever hands this class a landing
+## POSITION, not which tree or how tall it is, and a leaf drifting down
+## from just off-screen above reads the same as one falling the tree's
+## own full height would.
+const FALL_HEIGHT := 40.0
+## How long the drop takes, in seconds -- unhurried enough to actually see
+## happen, short enough not to leave the ground looking like it is
+## perpetually mid-snowfall when several trees are shedding at once.
+const FALL_DURATION := 0.9
+## How far a falling leaf drifts sideways from its own straight-line path,
+## in world pixels, at the START of the fall -- real leaves flutter and
+## spiral rather than dropping straight down. Tapers to zero by the time
+## it lands (see _step_fall), so it always settles exactly at the position
+## step_fruiting actually chose.
+const FALL_SWAY_WORLD := 10.0
+## How many full side-to-side swings one fall completes.
+const FALL_SWAY_CYCLES := 2.2
+## How far a landed leaf's own gentle ongoing sway rocks it, in radians.
+const GROUND_SWAY_RADIANS := deg_to_rad(4.0)
+## How long one full ground-sway cycle takes, in seconds.
+const GROUND_SWAY_PERIOD := 3.2
+
 var item_stack
 var _age := 0.0
+var _is_leaf := false
+var _falling := false
+var _fall_origin := Vector2.ZERO
+var _fall_target := Vector2.ZERO
+var _fall_elapsed := 0.0
+## Per-instance phase offset for the ground sway, so several landed leaves
+## don't all rock in unison -- purely cosmetic, so a plain randf() (rather
+## than a seeded hash) is fine here; nothing depends on it replaying
+## identically.
+var _sway_phase := 0.0
 
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
 	add_to_group(HoverTargetFinder.GROUP_NAME)
 	var leaf_species := _leaf_species_id(item_stack.item.id) if item_stack != null else ""
-	if item_stack != null and (TreeSpecies.IDS.has(item_stack.item.id) or leaf_species != ""):
+	_is_leaf = leaf_species != ""
+	if item_stack != null and (TreeSpecies.IDS.has(item_stack.item.id) or _is_leaf):
 		add_to_group(FORAGEABLE_GROUP_NAME)
 	if item_stack != null and texture == null:
 		# A pulled wild carrot/potato uses the real illustrated root art (see
@@ -93,15 +135,18 @@ func _ready() -> void:
 		# watched rise out of the ground during the pull, not a different
 		# fallback sprite once it lands. Checked first, ahead of the generic
 		# procedural path every other item still uses.
+		var leaf_season := _leaf_fallen_season(item_stack.item) if _is_leaf else ""
 		if _crop_sprite_generator.has_crop(item_stack.item.sprite_id):
 			texture = _crop_sprite_generator.root_texture(item_stack.item.sprite_id, 0)
 			scale = Vector2.ONE * _crop_sprite_generator.root_world_scale(item_stack.item.sprite_id)
-		elif leaf_species != "" and _tree_art_generator.has_litter_art_for(leaf_species):
+		elif leaf_season != "" and _tree_art_generator.has_foliage_leaf_for(leaf_species, leaf_season):
 			# A fallen leaf uses the real single-leaf closeup already
-			# sitting on its own species' composite tree sheet (see
-			# docs/concept/leaf_litter.md) -- same "check real illustrated
-			# art first" precedent as the wild-carrot branch above.
-			texture = _tree_art_generator.leaf_litter_for(leaf_species)
+			# sitting on its own species' composite tree sheet, coloured
+			# to the season it actually fell in -- green in summer, orange
+			# in autumn (see docs/concept/leaf_litter.md) -- same "check
+			# real illustrated art first" precedent as the wild-carrot
+			# branch above.
+			texture = _tree_art_generator.foliage_leaf_for(leaf_species, leaf_season)
 			scale = Vector2.ONE * (LEAF_WORLD_SIZE / maxf(IllustratedCropSprite.max_content_extent(texture), 1.0))
 		else:
 			texture = _sprite_generator.texture_for(item_stack.item.sprite_id)
@@ -112,6 +157,13 @@ func _ready() -> void:
 			# fallen cherry was as wide as the tile it lay on -- see
 			# ProceduralItemSprite.world_scale_for.
 			scale = Vector2.ONE * _sprite_generator.world_scale_for(item_stack.item.sprite_id)
+
+	if _is_leaf:
+		_fall_target = position
+		_fall_origin = position - Vector2(0.0, FALL_HEIGHT)
+		position = _fall_origin
+		_falling = true
+		_sway_phase = randf() * TAU
 
 	var click_area := Area2D.new()
 	var collision_shape := CollisionShape2D.new()
@@ -133,11 +185,57 @@ static func _leaf_species_id(item_id: String) -> String:
 	return species_id if TreeSpecies.IDS.has(species_id) else ""
 
 
+## "cherry_leaf_autumn" -> "autumn", or "" if `item`'s own sprite_id
+## doesn't carry a season this way -- see EarthChunkManager.step_fruiting's
+## own doc comment on why sprite_id (not id) is where a fallen leaf's
+## season lives: id/display_name/kind/max_stack are the shared identity
+## every "cherry_leaf" has regardless of season, sprite_id is the one
+## field this codebase already uses for "which art this specific item
+## resolves to" (see Item's own doc comment).
+static func _leaf_fallen_season(item) -> String:
+	var prefix: String = item.id + "_"
+	if not item.sprite_id.begins_with(prefix):
+		return ""
+	return item.sprite_id.substr(prefix.length())
+
+
 func _process(delta: float) -> void:
+	if _falling:
+		_step_fall(delta)
+	elif _is_leaf:
+		_step_ground_sway(delta)
 	# World-time items are aged by the ecology step instead (see advance).
 	if ages_on_world_time:
 		return
 	advance(delta)
+
+
+## Animates the drop from _fall_origin to _fall_target: a straight vertical
+## descent eased in (real leaves catch air and start slow, not shoot off
+## at full speed instantly) with a horizontal flutter that tapers to zero
+## by the time it lands -- so however it wanders on the way down, it
+## always settles exactly at the position step_fruiting actually chose,
+## the same "the physics may drift but the destination is fixed" contract
+## SnowBombShader's own tread mechanism keeps for a different reason.
+func _step_fall(delta: float) -> void:
+	_fall_elapsed += delta
+	var t := clampf(_fall_elapsed / FALL_DURATION, 0.0, 1.0)
+	var eased := t * t * (3.0 - 2.0 * t) # smoothstep: ease in, ease out
+	var sway := sin(t * TAU * FALL_SWAY_CYCLES + _sway_phase) * FALL_SWAY_WORLD * (1.0 - t)
+	position = _fall_origin.lerp(_fall_target, eased) + Vector2(sway, 0.0)
+	rotation = sin(t * TAU * FALL_SWAY_CYCLES + _sway_phase) * deg_to_rad(20.0) * (1.0 - t)
+	if t >= 1.0:
+		position = _fall_target
+		_falling = false
+
+
+## The gentle ongoing rock a landed leaf keeps -- real wind, not a fall
+## animation that simply stops moving once it ends. Reuses `_age` (see
+## advance()) as the time input rather than a second counter: a leaf is
+## never a food item (ages_on_world_time stays false for "material" kind),
+## so _age already advances every real frame regardless.
+func _step_ground_sway(_delta: float) -> void:
+	rotation = sin(_age * TAU / GROUND_SWAY_PERIOD + _sway_phase) * GROUND_SWAY_RADIANS
 
 
 ## Ages this item by `delta` seconds and removes it once it is past keeping.
