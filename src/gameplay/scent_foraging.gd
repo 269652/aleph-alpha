@@ -12,6 +12,7 @@ extends RefCounted
 ## already use.
 
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 ## How close an animal must be to actually take the food, in pixels.
@@ -26,9 +27,10 @@ const EAT_DISTANCE_PX := 6.0
 const MIN_INTEREST := 0.02
 
 
-## Whether this species hunts for food by smell at all.
+## Whether this species hunts for food by smell at all -- that is, whether
+## its ethogram record carries a nose (docs/concept/ethogram.md §3).
 static func forages_by_smell(species: String) -> bool:
-	return Olfaction.RECEPTORS.has(species)
+	return Ethogram.has_nose(species)
 
 
 ## The most appealing smell in reach, as the source dictionary itself, or an

@@ -33,7 +33,7 @@ const SWARM_TURNS_PER_SECOND := 0.55
 ##
 ## Read through a fly's own nose, so it is the same judgement every other
 ## animal makes -- flies are not a special case, they simply have different
-## receptors (see Olfaction.RECEPTORS).
+## receptors (see Ethogram.SPECIES).
 static func swarm_size_for(mixture: Dictionary, distance_tiles: float) -> int:
 	var pull := Olfaction.attraction_to("fly", mixture, distance_tiles)
 	if pull <= SWARM_THRESHOLD:
