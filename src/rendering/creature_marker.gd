@@ -34,6 +34,8 @@ const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const RopeTether = preload("res://src/gameplay/rope_tether.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 const CreatureBehavior = preload("res://src/gameplay/creature_behavior.gd")
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+const AnimalGenome = preload("res://src/gameplay/animal_genome.gd")
 const Health = preload("res://src/gameplay/health.gd")
 const BossAggro = preload("res://src/gameplay/boss_aggro.gd")
 const LootTable = preload("res://src/gameplay/loot_table.gd")
@@ -226,6 +228,15 @@ static func coat_tint_for(coat_vibrancy: float) -> Color:
 var home := Vector2.ZERO
 var wander_seed := 0
 var info: CreatureInfo
+
+## This individual's genome (docs/concept/animal_genetics.md §1, docs/concept/
+## ethogram.md §4): a plain gene -> fraction Dictionary. Empty means "derive
+## it from wander_seed" -- see genome_or_derived, which is what every reader
+## asks. A bred or restored animal with a stored genome sets this directly.
+var genome: Dictionary = {}
+var _derived_genome: Dictionary = {}
+var _derived_genome_seed := 0
+var _derived_genome_valid := false
 
 ## Per-action generated frame textures, filled lazily on first use of each
 ## action (see _animation_step) -- a marker typically only ever plays 2-3 of
@@ -444,26 +455,28 @@ var _gait_distance := 0.0
 ## Kept separate from _cached_threats (which drives actual fleeing) so the
 ## two radii can never collapse back into the same boundary.
 var _cached_caution_threats: Array = []
-var _cached_prey: Array = []
 ## Nearby herbivore-role creatures, for herd (foot-and-mouth-like) disease
-## transmission (see _herd_disease_step) -- separate from _cached_prey,
-## which only ever populates for a predator (see _nearby_prey_creatures).
+## transmission (see _herd_disease_step) -- only ever populates for a
+## herbivore-role individual (see _nearby_herbivore_creatures).
 var _cached_nearby_herbivores: Array = []
 
-## Consolidated per-tick classification of the "creature" group (see
-## _scan_nearby_creatures): every other creature within the tick's threat
-## radius that is a predator, and every other creature within SENSE_RADIUS
-## that is not. _nearby_threat_creatures/_nearby_prey_creatures/
-## _nearby_herbivore_creatures all read these instead of independently
-## rescanning get_tree().get_nodes_in_group(GROUP_NAME).
-var _scan_threat_candidates: Array = []
+## Everything this creature sensed on its last sensing tick, as stimuli on
+## the ethogram's shared channel basis (docs/concept/ethogram.md, slice 2):
+## every other creature as what it IS ({predator: 1} or {flesh: 1}), every
+## person as {player: 1}, the nearest water and plant-food tiles -- each
+## {position, features, node?}. What any of it MEANS is the species valence,
+## read through CreatureBehavior; this scan no longer decides who counts as
+## a threat or as prey.
+var _cached_stimuli: Array = []
+## The creature-group half of that, from the one consolidated pass per tick
+## (see _scan_nearby_creatures), plus the non-predator nodes
+## _nearby_herbivore_creatures still needs for herd disease.
+var _scan_stimuli: Array = []
 var _scan_nonpredator_candidates: Array = []
 ## Increments once per real get_tree().get_nodes_in_group(GROUP_NAME) scan
 ## (see _scan_nearby_creatures) -- exists so a test can prove a whole
 ## sensing tick performs exactly one such scan, not one per bucket accessor.
 var _creature_scan_count := 0
-var _cached_food_direction := Vector2.ZERO
-var _cached_water_direction := Vector2.ZERO
 
 
 func _ready() -> void:
@@ -814,15 +827,22 @@ func _process(frame_delta: float) -> void:
 		# _scan_nearby_creatures) instead of every bucket accessor below
 		# independently rescanning it.
 		_scan_nearby_creatures(threat_radius)
-		# A tamed animal is not afraid of people any more (see fears_players):
-		# players are sensed as threats, so leaving this alone would have a
-		# horse the player just tamed spend the rest of its life fleeing them.
-		var sensed_players := _nearby_in_group(PLAYER_GROUP, threat_radius) if fears_players() else []
-		_cached_threats = sensed_players + _nearby_threat_creatures()
+		# Everything sensed, published as stimuli on the ethogram's shared
+		# basis (docs/concept/ethogram.md, slice 2). A person is a person and
+		# a wolf is a predator to every creature alike; what that MEANS is
+		# the species valence, read back through CreatureBehavior below. A
+		# tamed animal has stopped perceiving people at all (see
+		# fears_players -- sensitivity, not tolerance), a predator is not
+		# threatened by other creatures, and neither rule lives in this scan
+		# any more.
+		_cached_stimuli = _scan_stimuli.duplicate()
+		for player in _nearby_in_group(PLAYER_GROUP, threat_radius):
+			_cached_stimuli.append(_stimulus_for(player, Ethogram.PLAYER))
+		_append_tile_stimuli(_cached_stimuli)
+		_cached_threats = _nodes_of(_behavior.threats(_decision_context(null)))
 		_cached_caution_threats = (
 			_nearby_in_group(PLAYER_GROUP, CAUTION_RADIUS) if fears_players() else []
 		)
-		_cached_prey = _nearby_prey_creatures()
 		_cached_blockers = _blockers_near(BLOCKER_SCAN_RADIUS)
 		_cached_nearby_herbivores = _nearby_herbivore_creatures()
 		_herd_disease_step()
@@ -830,8 +850,6 @@ func _process(frame_delta: float) -> void:
 		# Fresh senses: a creature standing because the gate found nowhere
 		# to go re-evaluates now, not per frame (see _gate_standing).
 		_gate_standing = false
-		_cached_food_direction = _food_direction()
-		_cached_water_direction = _water_direction()
 
 	# Not throttled to the sensing interval like the group scans above: there
 	# is nothing to SCAN here, just a specific known partner (or none) whose
@@ -839,25 +857,9 @@ func _process(frame_delta: float) -> void:
 	# it fresh every frame is what makes the walk read as smooth rather than
 	# stepping toward a stale point.
 	var courting_partner := courtship_partner()
-	var decision := _behavior.decide({
-		"position": position,
-		"temperament": _temperament_for_decision(),
-		"is_predator": info.is_predator,
-		"health_fraction": info.health / info.max_health,
-		"hungry": _needs.is_hungry(),
-		"thirsty": _needs.is_thirsty(),
-		"threats": _positions_of(_cached_threats),
-		"prey": _positions_of(_cached_prey),
-		"food_direction": _cached_food_direction,
-		"water_direction": _cached_water_direction,
-		"is_courting": courting_partner != null,
-		"partner_position": courting_partner.position if courting_partner != null else Vector2.ZERO,
-		"is_mature": MammalGrowth.is_mature(age_seconds, info.species),
-		"is_world_boss": info.is_world_boss,
-		"is_aggroed": info.is_aggroed,
-	})
+	var decision := _behavior.decide(_decision_context(courting_partner))
 
-	_apply_decision(decision, _cached_threats, _cached_prey, delta)
+	_apply_decision(decision, delta)
 	_animation_step()
 	_step_water_ripple(delta)
 	_step_leaf_litter_dispersal(delta)
@@ -1821,7 +1823,77 @@ func _advance(desired: Vector2, speed: float, delta: float) -> void:
 	_gait_distance += travelled
 
 
-func _apply_decision(decision: Dictionary, threats: Array, prey: Array, delta: float) -> void:
+## The flat facts CreatureBehavior decides on (docs/concept/ethogram.md §7):
+## this individual -- species, genome, temperament, condition, needs -- and
+## what it senses: the cached stimuli, plus its courtship partner read fresh
+## every frame (see the call site for why the partner is not throttled).
+func _decision_context(partner: Node) -> Dictionary:
+	var stimuli := _cached_stimuli
+	if partner != null:
+		stimuli = _cached_stimuli.duplicate()
+		stimuli.append(_stimulus_for(partner, Ethogram.MATE))
+	return {
+		"position": position,
+		"species": info.species,
+		"genome": genome_or_derived(),
+		"temperament": _temperament_for_decision(),
+		"is_predator": info.is_predator,
+		"health_fraction": info.health / info.max_health,
+		"hungry": _needs.is_hungry(),
+		"thirsty": _needs.is_thirsty(),
+		"drives": _needs.gains(),
+		"fears_players": fears_players(),
+		"is_courting": partner != null,
+		"is_mature": MammalGrowth.is_mature(age_seconds, info.species),
+		"is_world_boss": info.is_world_boss,
+		"is_aggroed": info.is_aggroed,
+		"stimuli": stimuli,
+	}
+
+
+## This individual's genome: the stored one when it has one (a bred or
+## restored animal, docs/concept/animal_genetics.md), otherwise derived from
+## its own wander_seed (AnimalGenome.for_seed) -- so every wild animal has
+## its own nose and nothing new is persisted. Re-derived if the seed changes
+## (CreatureRenderer assigns it after construction).
+func genome_or_derived() -> Dictionary:
+	if not genome.is_empty():
+		return genome
+	if not _derived_genome_valid or _derived_genome_seed != wander_seed:
+		_derived_genome = AnimalGenome.for_seed(wander_seed)
+		_derived_genome_seed = wander_seed
+		_derived_genome_valid = true
+	return _derived_genome
+
+
+## A sensed node as a stimulus: where it is, what it IS on one channel, and
+## the node itself so the marker gets it back when the kernel picks it.
+func _stimulus_for(node: Node2D, channel: String) -> Dictionary:
+	return {"position": node.position, "features": {channel: 1.0}, "node": node}
+
+
+## The node a decision was made about, or null for a search, a wander, a
+## tile, or a node that has since gone.
+func _stimulus_node(decision: Dictionary) -> Node:
+	var stimulus = decision.get("stimulus")
+	if stimulus == null or not stimulus.has("node"):
+		return null
+	var node = stimulus["node"]
+	if node == null or not is_instance_valid(node):
+		return null
+	return node
+
+
+func _nodes_of(stimuli: Array) -> Array:
+	var nodes: Array = []
+	for stimulus in stimuli:
+		var node = stimulus.get("node")
+		if node != null and is_instance_valid(node):
+			nodes.append(node)
+	return nodes
+
+
+func _apply_decision(decision: Dictionary, delta: float) -> void:
 	_is_fleeing = decision.intent == "flee"
 	if not _is_fleeing:
 		# A flee episode's committed heading/timer must not leak into a
@@ -1856,11 +1928,11 @@ func _apply_decision(decision: Dictionary, threats: Array, prey: Array, delta: f
 			_advance_gated(_flee_direction, FLEE_SPEED, delta, false)
 		"attack":
 			_advance(decision.direction, HUNT_SPEED, delta)
-			_try_attack(_nearest_node(threats))
+			_try_attack(_stimulus_node(decision))
 			_current_action = "attack"
 		"hunt":
 			_advance(decision.direction, HUNT_SPEED, delta)
-			_try_eat(_nearest_node(prey))
+			_try_eat(_stimulus_node(decision))
 			_current_action = "attack"
 		"seek_water":
 			_advance_gated(decision.direction, SEEK_SPEED, delta, false)
@@ -2211,16 +2283,30 @@ func _current_tile() -> Vector2i:
 	return Vector2i(floori(position.x / _tile_size), floori(position.y / _tile_size))
 
 
-func _food_direction() -> Vector2:
+## The nearest water and plant-food tiles as stimuli at their real positions
+## (CreaturePerception.nearest_tile_offset), for the kernel to derive the
+## heading from. Only scanned while the need is live: the terrain scan is
+## the expensive part, and the kernel gates the wirings by drive anyway. A
+## committed forage bite outranks the biome: "walk toward greener tiles" is
+## what an animal does when it can see nothing specific to eat.
+func _append_tile_stimuli(stimuli: Array) -> void:
+	var tile := _current_tile()
+	if _needs.is_thirsty():
+		var offset := _perception.nearest_tile_offset(tile, _world, SENSE_RADIUS_TILES, "water")
+		if offset != Vector2i.ZERO:
+			stimuli.append({"position": _tile_centre(tile + offset), "features": {Ethogram.WATER: 1.0}})
 	if not _needs.is_hungry() or info.is_predator:
-		return Vector2.ZERO
-	# A committed bite outranks the biome: "walk toward greener tiles" is
-	# what an animal does when it can see nothing specific to eat.
+		return
 	if _has_forage_target:
-		var to_bite := _forage_target - position
-		if to_bite.length() > 0.001:
-			return to_bite.normalized()
-	return _perception.nearest_direction(_current_tile(), _world, SENSE_RADIUS_TILES, "food")
+		stimuli.append({"position": _forage_target, "features": {Ethogram.FORAGE: 1.0}})
+		return
+	var offset := _perception.nearest_tile_offset(tile, _world, SENSE_RADIUS_TILES, "food")
+	if offset != Vector2i.ZERO:
+		stimuli.append({"position": _tile_centre(tile + offset), "features": {Ethogram.FORAGE: 1.0}})
+
+
+func _tile_centre(tile: Vector2i) -> Vector2:
+	return Vector2((tile.x + 0.5) * _tile_size, (tile.y + 0.5) * _tile_size)
 
 
 ## Which food kinds this animal actually walks to. Empty for predators and
@@ -2326,7 +2412,9 @@ func _seek_by_smell() -> bool:
 	if not _forage_kinds().has(GrazerForaging.FOOD_FRUIT):
 		return false
 	var sources: Array = _world.smells_near(position, Olfaction.MAX_RANGE_TILES)
-	var target := ScentForaging.best_source(species, position, sources)
+	# This individual's own nose, not the species template: its receptor
+	# genes (genome_or_derived) reach the choice through the kernel.
+	var target := ScentForaging.best_source(species, position, sources, genome_or_derived())
 	if target.is_empty():
 		return false
 	_forage_target = target["position"]
@@ -2384,12 +2472,6 @@ func _drop_forage_target() -> void:
 	_forage_kind = ""
 
 
-func _water_direction() -> Vector2:
-	if not _needs.is_thirsty():
-		return Vector2.ZERO
-	return _perception.nearest_direction(_current_tile(), _world, SENSE_RADIUS_TILES, "water")
-
-
 func _nearby_in_group(group: String, radius: float = SENSE_RADIUS) -> Array:
 	var result: Array = []
 	for node in get_tree().get_nodes_in_group(group):
@@ -2401,55 +2483,40 @@ func _nearby_in_group(group: String, radius: float = SENSE_RADIUS) -> Array:
 
 
 ## Single per-tick scan of the "creature" group (see SENSE_INTERVAL),
-## classifying every other creature into the two buckets
-## _nearby_threat_creatures/_nearby_prey_creatures/_nearby_herbivore_creatures
-## need -- predators within this tick's threat_radius, and non-predators
-## within SENSE_RADIUS -- in one pass instead of each accessor independently
-## calling get_tree().get_nodes_in_group(GROUP_NAME) and re-filtering the
-## whole population (previously up to 2x per tick for a herbivore marker,
-## across however many creature markers are loaded that's O(n^2)).
+## publishing every other creature as a stimulus by what it IS -- predators
+## within this tick's threat_radius, non-predators within SENSE_RADIUS --
+## and keeping the non-predator nodes _nearby_herbivore_creatures needs, in
+## one pass instead of each consumer independently calling
+## get_tree().get_nodes_in_group(GROUP_NAME) and re-filtering the whole
+## population (previously up to 2x per tick for a herbivore marker, across
+## however many creature markers are loaded that's O(n^2)).
 func _scan_nearby_creatures(threat_radius: float) -> void:
 	_creature_scan_count += 1
-	var threats: Array = []
+	var stimuli: Array = []
 	var nonpredators: Array = []
 	for node in get_tree().get_nodes_in_group(GROUP_NAME):
 		if node == self or node.info == null:
 			continue
 		var distance := position.distance_to(node.position)
+		# What the other creature IS, by its own role -- never what it means
+		# to me. A predator within the (flee-widened) threat radius is a
+		# predator stimulus; anything else within sense range is flesh. My
+		# own species record decides which of those I flee, hunt or ignore.
 		if node.info.is_predator:
 			if distance <= threat_radius:
-				threats.append(node)
+				stimuli.append(_stimulus_for(node, Ethogram.PREDATOR))
 		elif distance <= SENSE_RADIUS:
+			stimuli.append(_stimulus_for(node, Ethogram.FLESH))
 			nonpredators.append(node)
-	_scan_threat_candidates = threats
+	_scan_stimuli = stimuli
 	_scan_nonpredator_candidates = nonpredators
 
 
-## Other creatures within sense range that are predators to me (a herbivore's
-## threats). Predators aren't threatened by other creatures, only by the player.
-## Reads the current tick's _scan_nearby_creatures classification.
-func _nearby_threat_creatures() -> Array:
-	if info.is_predator:
-		return []
-	return _scan_threat_candidates
-
-
-## Herbivores within sense range that a predator can hunt. Reads the current
-## tick's _scan_nearby_creatures classification.
-func _nearby_prey_creatures() -> Array:
-	if not info.is_predator:
-		return []
-	return _scan_nonpredator_candidates
-
-
 ## Other herbivore-role creatures within sense range -- for herd disease
-## transmission (see _herd_disease_step), NOT hunting: unlike
-## _nearby_prey_creatures (predator-only), this only ever populates for a
-## herbivore-role individual, since herd disease spreads herbivore to
-## herbivore, never through a predator. Reads the current tick's
-## _scan_nearby_creatures classification (the same bucket _nearby_prey_creatures
-## reads -- the two never populate for the same individual, since one requires
-## being a predator and the other requires not being one).
+## transmission (see _herd_disease_step), NOT hunting: this only ever
+## populates for a herbivore-role individual, since herd disease spreads
+## herbivore to herbivore, never through a predator. Reads the current
+## tick's _scan_nearby_creatures pass.
 func _nearby_herbivore_creatures() -> Array:
 	if info.is_predator:
 		return []

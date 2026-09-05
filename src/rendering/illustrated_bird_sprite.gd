@@ -95,33 +95,148 @@ const DIVIDER_GRAY_MIN := 0.7
 ## at all (see PiscivoreBirdBehavior) -- its own row 5 is a calm,
 ## beak-closed standing pose, closer to PiscivoreAppetite.ACTIVITY_PERCH
 ## than to a strike, and is not wired to anything in Phase 1.
+## PHASE 3 additions: `walk` (ground hop/stride, the three songbirds only --
+## real divider lines bound every row on the kingfisher sheet with a DIVE
+## pose where a walk row would be, and a kingfisher does not walk on the
+## ground at all), `dive` (kingfisher's own plunge pose, confirmed by eye:
+## a steep near-vertical descent with the wings tucked, matching
+## PiscivoreBirdBehavior.Phase.DIVING), `sing` (every species -- confirmed
+## by eye: an open beak with radiating sound-lines, all 8 columns). `court`
+## is reserved here (real bands, confirmed by eye: a tail-fanned display
+## pose distinct from idle) but not read by any generator yet -- Phase 4's
+## job, once real bird courtship exists to trigger it.
 const _SHEETS := {
 	"sparrow": {
 		"path": "res://assets/sprites/birds/sparrow.png",
 		"idle": Vector2i(27, 141),
 		"flap": [Vector2i(165, 317), Vector2i(356, 463)],
 		"peck": Vector2i(633, 730),
+		"walk": Vector2i(496, 602),
+		"court": Vector2i(751, 875),
+		"sing": Vector2i(896, 1012),
 	},
 	"robin": {
 		"path": "res://assets/sprites/birds/robin.png",
 		"idle": Vector2i(40, 173),
 		"flap": [Vector2i(197, 351), Vector2i(397, 522)],
+		"walk": Vector2i(557, 678),
+		"court": Vector2i(703, 846),
+		"sing": Vector2i(872, 1010),
 	},
 	"blackbird": {
 		"path": "res://assets/sprites/birds/blackbird.png",
 		"idle": Vector2i(24, 145),
 		"flap": [Vector2i(166, 320), Vector2i(375, 474)],
+		"walk": Vector2i(510, 635),
+		"court": Vector2i(664, 825),
+		"sing": Vector2i(852, 1005),
 	},
 	# Kingfisher's 8 real content rows (measured): idle, takeoff, glide,
-	# DIVE (Phase 3), an extra calm perched/resting pose, a second perched
-	# variant, display (Phase 4), sing (Phase 3/4). Only idle/flap are used
-	# in Phase 1.
+	# dive, an extra calm perched/resting pose (row 5 -- closer to
+	# PiscivoreAppetite.ACTIVITY_PERCH than anything wired here yet), a
+	# second perched variant (row 6, still unresolved -- see the class doc
+	# comment), display (court), sing.
 	"kingfisher": {
 		"path": "res://assets/sprites/birds/kingfisher.png",
 		"idle": Vector2i(23, 126),
 		"flap": [Vector2i(147, 266), Vector2i(303, 380)],
+		"dive": Vector2i(400, 510),
+		"court": Vector2i(771, 887),
+		"sing": Vector2i(914, 1015),
 	},
 }
+
+## Frames whose sheets carry small decorative marks with a real gap from
+## the bird's own silhouette (the singing row's radiating sound-lines,
+## confirmed live: the default min_divider_width=1 read those gaps as
+## real frame dividers and over-split an 8-column row into 13-16 pieces).
+## A wider minimum still cleanly separates every other row -- verified
+## against all six of sparrow's own bands before choosing it -- so this is
+## applied everywhere rather than only to "sing", which needs no per-row
+## exception list to keep in sync with _SHEETS.
+const _MIN_DIVIDER_WIDTH := 8
+
+## The on-screen world width (px) a sparrow -- the FLYER_WORLD_SCALE
+## reference species, ratio 1.0 -- should read at. Originally calibrated to
+## exactly reproduce ProceduralBirdSprite's own pre-existing on-screen size
+## (6.6), matching this class's real content back to whatever the flat
+## procedural-tuned scale used to draw. Reported live, in the actual
+## running game, after that first calibration shipped: "the robin should
+## be half as big and all others halved as well" -- so the genuinely
+## correct in-game size is HALF what the old procedural convention drew,
+## not equal to it. Halved directly on that report rather than re-deriving
+## a theory for why 6.6 read big: the player looking at the actual game is
+## the real measurement here, the same way every other tuned constant in
+## this codebase is supposed to be checked against reality rather than
+## eyeballed.
+const BASE_WORLD_WIDTH := 3.3
+
+## Per-species target world width (px), TARGET = BASE_WORLD_WIDTH *
+## AmbientFlyerRenderer.FLYER_WORLD_SCALE[species] -- duplicated as literal
+## numbers rather than preloading that file to read it live: AmbientFlyer
+## Renderer already preloads THIS class (to pick it over ProceduralBird
+## Sprite), and a preload back the other way is circular. Kept from
+## silently drifting apart by test_flyer_world_scale_proportions_match_
+## illustrated_bird_sprite in test_ambient_flyer_renderer.gd, which
+## imports both and checks the ratios agree -- not exact pixel parity
+## with FLYER_WORLD_SCALE (real illustrated art has its own proportions a
+## hand-authored multiplier cannot predict exactly), just the same
+## ordering. Blackbird has no ProceduralBirdSprite sibling to calibrate
+## against (see the class doc comment's fallback note) -- sized like
+## kingfisher's, a real blackbird being one of the larger common garden
+## birds (~24cm) alongside a kingfisher (~17cm bill included), both well
+## above a robin/sparrow (~14-15cm).
+const _TARGET_WORLD_WIDTH := {
+	"sparrow": BASE_WORLD_WIDTH,       # FLYER_WORLD_SCALE 1.0
+	"robin": BASE_WORLD_WIDTH * 1.5,   # FLYER_WORLD_SCALE 1.5
+	"kingfisher": BASE_WORLD_WIDTH * 1.7,  # FLYER_WORLD_SCALE 1.7
+	"blackbird": BASE_WORLD_WIDTH * 1.7,
+}
+
+static var _content_width_cache: Dictionary = {}
+
+
+## How much to scale this species' marker so it reads at its real target
+## world width (see _TARGET_WORLD_WIDTH) instead of the flat, procedural-
+## canvas-tuned scale AmbientFlyerRenderer/PiscivoreBirdRenderer otherwise
+## apply -- the bird analog of IllustratedAnimalSprite.marker_scale, and
+## the actual fix for "robins and sparrows are now gigantic": the flat
+## scale drew this class's ~6-9x-wider real content at ProceduralBird
+## Sprite's own tiny-canvas size, unshrunk. Callers must use THIS instead
+## of the flat chain whenever this generator (not ProceduralBirdSprite) is
+## the one actually in use -- see AmbientFlyerRenderer._build_marker /
+## PiscivoreBirdRenderer.spawn_piscivore_birds, which now branch on which
+## generator has_species(species) selected, mirroring exactly how
+## CreatureMarker._apply_action_scale branches between
+## IllustratedAnimalSprite.marker_scale and the procedural per-species
+## scale.
+func marker_scale(species: String) -> float:
+	var target: float = _TARGET_WORLD_WIDTH.get(species, BASE_WORLD_WIDTH)
+	return target / _content_width(species)
+
+
+## Frame 0's own opaque-pixel content width (art px), measured once and
+## cached -- mirrors IllustratedAnimalSprite._reference_width exactly,
+## down to the reason: this scans a full frame's pixels, and every spawn
+## call asks for it.
+func _content_width(species: String) -> float:
+	if _content_width_cache.has(species):
+		return _content_width_cache[species]
+	var texture := generate_texture(species)
+	if texture == null:
+		return BASE_WORLD_WIDTH
+	var image: Image = texture.get_image()
+	var min_x := image.get_width()
+	var max_x := -1
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.01:
+				min_x = mini(min_x, x)
+				max_x = maxi(max_x, x)
+	var width := maxf(float(max_x - min_x + 1), 1.0)
+	_content_width_cache[species] = width
+	return width
+
 
 ## "species/action" -> Array[ImageTexture]. Shared across every instance,
 ## same reasoning as IllustratedAnimalSprite._frame_cache: every bird of a
@@ -134,7 +249,11 @@ static var _image_cache: Dictionary = {}
 var _slicer := SpriteSheetSlicer.new()
 
 
-func has_species(species: String) -> bool:
+## Static (this and _SHEETS are both compile-time constant, nothing here
+## touches instance state) so callers that only need this one check --
+## AmbientFlyerMarker._step_flight_height, gating flight height to birds
+## and not pollinators -- don't need an instance just to ask it.
+static func has_species(species: String) -> bool:
 	return _SHEETS.has(species)
 
 
@@ -170,6 +289,31 @@ func generate_pecking_texture(species: String, _seed_value: int = 0) -> ImageTex
 	return generate_texture(species, _seed_value)
 
 
+## Ground hop/stride cycle -- the three songbirds only, see _SHEETS' own
+## doc comment. Empty (not a fallback) for a species with none: unlike
+## perch/peck, there is no sensible single-frame stand-in for a walk
+## cycle, and the kingfisher genuinely does not do this at all.
+func generate_walk_textures(species: String, _seed_value: int = 0) -> Array:
+	return _frames_for(species, "walk")
+
+
+## The kingfisher's plunge dive -- kingfisher only, empty for every
+## songbird (none of them dive).
+func generate_dive_textures(species: String, _seed_value: int = 0) -> Array:
+	return _frames_for(species, "dive")
+
+
+## Open-beak, sound-lines singing cycle -- every species has one.
+func generate_sing_textures(species: String, _seed_value: int = 0) -> Array:
+	return _frames_for(species, "sing")
+
+
+## The tail-fanned, wings-spread display pose -- every species has one
+## (see BirdCourtship, Phase 4).
+func generate_court_textures(species: String, _seed_value: int = 0) -> Array:
+	return _frames_for(species, "court")
+
+
 func _frames_for(species: String, action: String) -> Array:
 	if not _SHEETS.has(species):
 		return []
@@ -189,7 +333,7 @@ func _build_textures(path: String, bands: Array) -> Array:
 	for band in bands:
 		var rect: Vector2i = band
 		var frames := _slicer.detect_frames(
-			image, rect.x, rect.y, 20, 1, ALPHA_THRESHOLD, DIVIDER_GRAY_MIN
+			image, rect.x, rect.y, 20, _MIN_DIVIDER_WIDTH, ALPHA_THRESHOLD, DIVIDER_GRAY_MIN
 		)
 		normalized.append_array(
 			_slicer.normalize_frames(

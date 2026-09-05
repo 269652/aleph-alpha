@@ -1109,6 +1109,25 @@ const _LEAF_FALL_ROLL_STEPS := 1000
 ## near autumn's own real fall.
 const LEAF_SUMMER_TRICKLE_CHANCE := 0.03
 
+## The flat per-step chance a settled (pre-turn) AUTUMN tree sheds a leaf --
+## reported directly: "leaf litter should happen constantly at a low rate in
+## normal gameplay". Before this, leaf_fall_chance during autumn was driven
+## ONLY by canopy_turn_progress, which reads exactly 0.0 for the whole
+## settled first two-thirds of the season (TURN_FRACTION=0.34, see
+## TreePhenology._settled_then_turn) -- roughly two real DAYS of normal,
+## non-accelerated play (0.66 of a 172,800-real-second season) with zero
+## chance of a single leaf falling. A real deciduous tree does not wait for
+## its colour to fully turn before its first leaves come down: ordinary
+## wind and early individual-leaf senescence pull a few down all autumn
+## long, the same real phenomenon LEAF_SUMMER_TRICKLE_CHANCE already models
+## for summer's own wind/petal damage -- reused here at the same value
+## (autumn's early trickle and summer's are the same real mechanism, not
+## two independently-tuned numbers) but named separately so either can be
+## retuned later without coupling the two together. See leaf_fall_chance's
+## own computation below for how this combines with (rather than replaces)
+## the existing turn-progress ramp.
+const LEAF_AUTUMN_BASELINE_CHANCE := LEAF_SUMMER_TRICKLE_CHANCE
+
 var _fruiting_model := FruitingModel.new()
 var _ecology_catchup := ChunkEcologyCatchup.new()
 var _season_cycle := SeasonCycle.new()
@@ -3383,15 +3402,20 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 			if LEAF_LITTER_ENABLED:
 				var leaf_fall_chance := 0.0
 				var leaf_fall_season := ""
-				if (
-					canopy_season == "autumn"
-					and canopy_turning_into == "winter"
-					and canopy_turn_progress > 0.0
-				):
-					# Chance rises with how far into its own turn the canopy
-					# is: a tree just beginning to turn sheds rarely, one
-					# nearly bare sheds almost every step.
-					leaf_fall_chance = canopy_turn_progress
+				if canopy_season == "autumn":
+					# Baseline trickle for ALL of autumn (see LEAF_AUTUMN_
+					# BASELINE_CHANCE's own doc comment), with the ramp
+					# rising on top once the canopy's own final turn
+					# actually begins: a tree just beginning to turn already
+					# sheds at least the baseline rate, one nearly bare
+					# sheds almost every step. canopy_turning_into is
+					# deliberately not checked here any more -- per
+					# TreePhenology.canopy_state_at, it reads "winter" for
+					# the ENTIRETY of autumn, not merely its final turning
+					# slice, so it was never actually the gate that
+					# mattered; canopy_turn_progress alone already tells the
+					# whole story.
+					leaf_fall_chance = maxf(LEAF_AUTUMN_BASELINE_CHANCE, canopy_turn_progress)
 					leaf_fall_season = "autumn"
 				elif canopy_season == "summer":
 					leaf_fall_chance = LEAF_SUMMER_TRICKLE_CHANCE
@@ -3506,8 +3530,9 @@ func wipe_world_clock(path: String = WorldClockPersistence.SAVE_PATH) -> void:
 	WorldClockPersistence.new().wipe(path)
 
 
-## Skips the world FORWARD to the start of `season` (see /season). Returns
-## whether that was a season we have.
+## Skips the world FORWARD to `progress` fraction [0,1] into `season` (see
+## /season) -- 0.0 (the default) is its start, as before. Returns whether
+## that was a season we have.
 ##
 ## The skipped time is not replayed. The jump is up to a whole year of world
 ## time and fruiting counts what fell between the last time it ran and now, so
@@ -3519,8 +3544,8 @@ func wipe_world_clock(path: String = WorldClockPersistence.SAVE_PATH) -> void:
 ## Trees are deliberately NOT caught up the same way: a sapling really has aged
 ## by the time you skip past, and watching it be older is the point of the
 ## command.
-func jump_to_season(season: String) -> bool:
-	var skip: float = _season_cycle.seconds_until_season(_world_age_seconds, season)
+func jump_to_season(season: String, progress: float = 0.0) -> bool:
+	var skip: float = _season_cycle.seconds_until_season(_world_age_seconds, season, progress)
 	if skip <= 0.0:
 		return false
 	_world_age_seconds += skip
@@ -6209,6 +6234,15 @@ func record_birth_at(position: Vector2, count: float = 1.0) -> void:
 	_ecosystem.record_birth(_chunk_coord_for_tile(_world_tile_for_pixel(position)), count)
 
 
+## record_birth_at's bird sibling -- see EcosystemSimulation.record_bird_
+## birth for why this needs to be species-routed rather than one
+## hardcoded population. Called by AmbientFlyerMarker._finish_bird_court
+## exactly like spawn_flyer_offspring is, through the same `courtship_
+## world` reference.
+func record_bird_birth_at(position: Vector2, species: String, count: float = 1.0) -> void:
+	_ecosystem.record_bird_birth(_chunk_coord_for_tile(_world_tile_for_pixel(position)), species, count)
+
+
 ## An animal DIED at this world position -- predator kill, player weapon,
 ## disease or starvation, all of which funnel through CreatureMarker._die().
 ## record_birth_at's mirror, and the other half of a conversation that until
@@ -6692,6 +6726,26 @@ func take_worm_at(pixel_position: Vector2) -> bool:
 	# was, which undermines the whole point of the mechanic. The refresh
 	# interval is a throttle on BACKGROUND node churn; an eaten worm is a
 	# direct consequence of something the player just watched happen.
+	_sync_worm_sprites(chunk_coord)
+	return true
+
+
+## Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
+## weight-emergent worm mortality") -- mirrors take_worm_at's own shape
+## exactly (same tile/chunk/patch lookup, same immediate re-sync so a
+## crushed worm doesn't visibly linger for up to WORM_REFRESH_INTERVAL
+## more seconds after the step that killed it), but resolves through
+## EarthwormPatch.crush instead of take: an insufficient `momentum_kg_m_s`
+## leaves a surfaced worm exactly where it was, the same as never having
+## been stepped on at all.
+func crush_worm_at(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var patch: EarthwormPatch = _worm_patches.get(chunk_coord)
+	if patch == null:
+		return false
+	if not patch.crush(tile - chunk_coord * CHUNK_SIZE, momentum_kg_m_s):
+		return false
 	_sync_worm_sprites(chunk_coord)
 	return true
 

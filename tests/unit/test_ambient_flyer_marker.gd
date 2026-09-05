@@ -1842,6 +1842,112 @@ func test_two_monarchs_side_by_side_actually_begin_a_dance():
 	assert_true(began, "two monarchs 20px apart must actually start a dance")
 
 
+## PHASE 4: bird courtship (see BirdCourtship). The exact class of bug the
+## comment on _scan_for_partners documents (a rule can be right and still
+## produce ONE flyer orbiting nothing, because nothing drove two real
+## markers through real frames) already bit the pollinator dance once --
+## this is the same real-markers-real-frames test for the bird mechanism,
+## not just BirdCourtship's own pure-function tests.
+func test_two_robins_side_by_side_actually_begin_a_bird_court():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("robin", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("robin", Vector2(120, 100), parent)
+
+	var began := false
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._bird_courting_with != 0 and b._bird_courting_with != 0:
+			began = true
+			break
+	assert_true(began, "two robins 20px apart must actually start a display")
+	assert_eq(a._bird_courting_with, b.get_instance_id())
+	assert_eq(b._bird_courting_with, a.get_instance_id())
+
+
+func test_pollinators_and_bird_court_never_cross_species_kinds():
+	# The butterfly dance and the bird display are disjoint species sets
+	# (Courtship.DANCING_SPECIES vs BirdCourtship.DANCING_SPECIES) -- a
+	# robin must never end up dancing the butterfly orbit, or vice versa,
+	# whatever a monarch happens to be doing nearby.
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var robin := _flyer_in_tree("robin", Vector2(200, 200), parent)
+	var monarch := _flyer_in_tree("monarch", Vector2(210, 200), parent)
+	for i in 120:
+		robin._process(FRAME)
+		monarch._process(FRAME)
+	assert_eq(robin._courting_with, 0, "a robin must never enter the butterfly dance")
+	assert_eq(monarch._bird_courting_with, 0, "a monarch must never enter the bird display")
+
+
+func test_a_bird_court_holds_a_fixed_point_rather_than_orbiting():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("robin", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("robin", Vector2(120, 100), parent)
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._bird_courting_with != 0:
+			break
+	assert_ne(a._bird_courting_with, 0, "precondition: the display began")
+	# Once settled, position must stop changing -- a HOLD, not a figure
+	# that keeps moving the way the butterfly orbit deliberately does.
+	for i in 40:
+		a._process(FRAME)
+		b._process(FRAME)
+	var settled: Vector2 = a.position
+	for i in 60:
+		a._process(FRAME)
+		b._process(FRAME)
+		assert_true(
+			a.position.distance_to(settled) < 0.5,
+			"a held display must not keep drifting once it has closed the gap"
+		)
+
+
+class StubBirdBreedingWorld:
+	var offspring: Array = []
+	var bird_births: Array = []
+	func spawn_flyer_offspring(a_species: String, at: Vector2, inherited: Dictionary = {}) -> void:
+		offspring.append({"species": a_species, "position": at, "traits": inherited})
+	func record_bird_birth_at(at: Vector2, a_species: String, count: float = 1.0) -> void:
+		bird_births.append({"position": at, "species": a_species, "count": count})
+
+
+## A successful bird court must do BOTH halves of "the individual half
+## reports to the aggregate half" -- spawn the visible chick (spawn_flyer_
+## offspring, same call pollinators use) AND reconcile the population
+## number that chick's chunk will be reloaded FROM (record_bird_birth_at) --
+## see EcosystemSimulation.record_bird_birth's own doc comment for why a
+## chick that skipped the second half would simply vanish on next load.
+func test_a_successful_bird_court_spawns_a_chick_and_reconciles_the_population():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var world := StubBirdBreedingWorld.new()
+	var born := false
+	for attempt in 40:
+		var at := Vector2(1000 + attempt * 40, 1000)
+		var a := _flyer_in_tree("robin", at, parent)
+		var b := _flyer_in_tree("robin", at + Vector2(20, 0), parent)
+		a.courtship_world = world
+		b.courtship_world = world
+		for i in 900:
+			a._process(FRAME)
+			b._process(FRAME)
+			if not world.offspring.is_empty():
+				break
+		if not world.offspring.is_empty():
+			born = true
+			break
+	assert_true(born, "precondition: some pair has to actually breed")
+	assert_eq(world.offspring[0]["species"], "robin")
+	assert_eq(world.bird_births.size(), 1, "the aggregate population must be reconciled exactly once too")
+	assert_eq(world.bird_births[0]["species"], "robin")
+
+
 func test_a_dance_that_began_actually_runs_and_then_ends():
 	var parent := Node2D.new()
 	add_child_autofree(parent)
@@ -2672,6 +2778,142 @@ func _flapping_butterfly(parent: Node2D) -> AmbientFlyerMarker:
 	butterfly.flap_frames = [PlaceholderTexture2D.new(), PlaceholderTexture2D.new()]
 	butterfly.texture = butterfly.flap_frames[0]
 	return butterfly
+
+
+## PHASE 3: ground walk/hop and singing, the two rows Phase 1 measured but
+## left unwired -- see docs/concept/ecosystem_dynamics.md's Phase 3
+## writeup. Both are drawn only while `perched` (grounded), the same
+## contract peck_frame already has, and both are additional alternatives
+## to perched_frame, checked in the same branch, not a new state machine.
+
+func test_a_bird_walks_during_the_resume_beat_after_a_peck():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.ground_forage = GroundForageBehavior.new()
+	bird.ground_forage.phase = GroundForageBehavior.Phase.RESUMING
+	bird.perched = true
+	bird.walk_frames = [ImageTexture.new(), ImageTexture.new(), ImageTexture.new()]
+	bird.perched_frame = ImageTexture.new()
+	bird._process(FRAME)
+	assert_true(bird.walk_frames.has(bird.texture), "must show a walk frame during the resume beat")
+	assert_ne(bird.texture, bird.perched_frame)
+
+
+func test_a_bird_sings_when_its_own_song_roll_says_so():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.wander_seed = 0
+	bird._elapsed_time = 0.0  # BirdSong.should_sing(0, 0.0) is true
+	bird.ground_forage = GroundForageBehavior.new()
+	bird.ground_forage.phase = GroundForageBehavior.Phase.RESUMING
+	bird.perched = true
+	bird.sing_frames = [ImageTexture.new(), ImageTexture.new()]
+	bird.walk_frames = [ImageTexture.new()]
+	bird.perched_frame = ImageTexture.new()
+	bird._process(FRAME)
+	assert_true(bird.sing_frames.has(bird.texture), "singing must win over walking when the roll says sing")
+
+
+func test_without_walk_or_sing_frames_a_grounded_bird_still_just_perches():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.ground_forage = GroundForageBehavior.new()
+	bird.ground_forage.phase = GroundForageBehavior.Phase.RESUMING
+	bird.perched = true
+	bird.perched_frame = ImageTexture.new()
+	bird._process(FRAME)
+	assert_eq(
+		bird.texture, bird.perched_frame,
+		"no walk_frames/sing_frames (an old caller, a test double) must be a no-op, not an error"
+	)
+
+
+## FLIGHT HEIGHT -- requested directly: "give birds a z height in their
+## flight and scale size based on distance from ground / distance to
+## camera". A top-down camera looking straight down makes "distance from
+## the ground" and "distance from the camera" the SAME quantity -- there is
+## no separate perspective axis to fake here, so one height value drives
+## both the visual lift (offset.y, the same draw-only property the wingbeat
+## bounce already uses -- see the test right below this one for why it must
+## never touch `position`) and the scale shrink.
+##
+## Ground-truth for the height itself is `perched`, the same flag
+## GroundForageBehavior/nectaring/touchdown already maintain: airborne
+## rises toward FLIGHT_CRUISE_HEIGHT_PX, grounded falls back to 0 -- eased
+## over real time (FLIGHT_HEIGHT_RATE_PX_PER_SEC) rather than snapping, so
+## takeoff and landing both read as a real climb/descent instead of a pop.
+
+func test_an_airborne_bird_climbs_toward_cruise_height():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
+	bird.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	assert_eq(bird._flight_height, 0.0, "starts on the ground")
+	for i in 300:
+		bird._process(FRAME)
+	assert_almost_eq(
+		bird._flight_height, AmbientFlyerMarker.FLIGHT_CRUISE_HEIGHT_PX, 0.01,
+		"a bird airborne this long must have reached cruise height"
+	)
+
+
+func test_a_grounded_bird_settles_back_to_zero_height():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
+	bird.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	for i in 300:
+		bird._process(FRAME)
+	assert_gt(bird._flight_height, 0.0, "must actually have climbed first")
+	bird.perched = true
+	for i in 300:
+		bird._process(FRAME)
+	assert_almost_eq(bird._flight_height, 0.0, 0.01, "landed birds return to ground height")
+
+
+func test_height_changes_gradually_not_instantly():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
+	bird.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	bird._process(FRAME)
+	assert_lt(
+		bird._flight_height, AmbientFlyerMarker.FLIGHT_CRUISE_HEIGHT_PX * 0.5,
+		"one frame must not already be most of the way to cruise height"
+	)
+	assert_gt(bird._flight_height, 0.0, "...but it must have started climbing")
+
+
+func test_a_higher_flying_bird_draws_smaller_and_higher_on_screen():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
+	bird.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	# Wild-spawned adult, NOT begin_life() -- that starts a hatchling at
+	# 0.45x scale (see LifeCycle.HATCHLING_SCALE), a growth confound this
+	# test isn't about; age_seconds already defaults to LifeCycle.
+	# MATURE_SECONDS, the same "spawned flyers start as ADULTS" contract
+	# AmbientFlyerRenderer.build_bird relies on.
+	bird.set_adult_scale(Vector2.ONE * 0.05)
+	for i in 400:
+		bird._process(FRAME)
+	assert_true(bird.scale.x < 0.05, "cruise height must shrink the drawn size")
+	assert_true(bird.offset.y < 0.0, "cruise height must lift the drawn sprite upward on screen")
+
+
+func test_a_perched_bird_has_zero_height_and_its_full_ground_scale():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
+	bird.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	bird.set_adult_scale(Vector2.ONE * 0.05)
+	bird.perched = true
+	for i in 5:
+		bird._process(FRAME)
+	assert_almost_eq(bird.scale.x, 0.05, 0.0001, "grounded birds render at their real, unshrunk size")
 
 
 ## The one that must not regress. `position` feeds containment, the courtship

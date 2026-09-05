@@ -18,6 +18,13 @@ const FLYER_WORLD_SCALE := {
 	"sparrow": 1.0,
 	"robin": 1.5,
 	"kingfisher": 1.7,
+	# Not yet spawnable (see IllustratedBirdSprite's class doc comment on
+	# Phase 2) -- kept here already so IllustratedBirdSprite's own target
+	# widths have a real ratio to stay consistent with (see
+	# test_flyer_world_scale_proportions_match_illustrated_bird_sprite).
+	# One of the larger common garden birds (~24cm), alongside the
+	# kingfisher (~17cm bill included) and above a robin/sparrow (~14-15cm).
+	"blackbird": 1.7,
 	"monarch": 0.5,
 	"swallowtail": 0.55,
 	"blue_morpho": 0.6,
@@ -597,7 +604,19 @@ func _build_marker(
 	# take a `sprite_scale` argument from the caller, which is now dead --
 	# leaving it would be a third, silent input to a number that has already
 	# been hard to get right.
-	marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * FishRenderer.FISH_WORLD_SCALE * FLYER_WORLD_SCALE.get(species, 1.0)
+	#
+	# ILLUSTRATED bird art is a real photo/hand-drawn sheet, not a small
+	# fixed procedural canvas -- its actual pixel content measures several
+	# times wider than ProceduralBirdSprite's tiny 32x20 art, so applying
+	# this same flat scale to it drew a bird several times too big
+	# (reported live: "robins and sparrows are now gigantic"). Mirrors
+	# CreatureMarker._apply_action_scale's own illustrated/procedural
+	# branch exactly: IllustratedBirdSprite.marker_scale normalizes the
+	# MEASURED content back down to a real target world width instead.
+	if sprite_generator.has_method("marker_scale"):
+		marker.scale = Vector2.ONE * sprite_generator.marker_scale(species)
+	else:
+		marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * FishRenderer.FISH_WORLD_SCALE * FLYER_WORLD_SCALE.get(species, 1.0)
 	marker.position = position
 	marker.home = position
 	marker.wander_seed = seed_value
@@ -611,6 +630,16 @@ func _build_marker(
 	# species' own adult size (see AmbientFlyerMarker._step_growing).
 	marker.set_adult_scale(marker.scale)
 	marker.setup(movement)
+	# Singing (see AmbientFlyerMarker.sing_frames/BirdSong) -- every real
+	# bird species has one; a generator with no has_method for it (the
+	# procedural one, and butterflies' own generator) leaves it empty, the
+	# same optional-capability guard as flap_frames/perched_frame above.
+	if sprite_generator.has_method("generate_sing_textures"):
+		marker.sing_frames = sprite_generator.generate_sing_textures(species, seed_value)
+	# The display pose (see AmbientFlyerMarker.court_frames / BirdCourtship,
+	# Phase 4) -- same optional-capability guard.
+	if sprite_generator.has_method("generate_court_textures"):
+		marker.court_frames = sprite_generator.generate_court_textures(species, seed_value)
 	# What this flyer is wired to feed on comes from the DIET TABLE, not from
 	# which spawn call it came out of (see FlyerDiet /
 	# docs/concept/soil_fauna.md). Every caller now passes the same world; the
@@ -653,5 +682,13 @@ func _build_marker(
 			marker.ground_forage = GroundForageBehavior.new()
 		if marker.peck_frame == null and sprite_generator.has_method("generate_pecking_texture"):
 			marker.peck_frame = sprite_generator.generate_pecking_texture(species, seed_value)
+	# Ground hop/stride (see AmbientFlyerMarker.walk_frames) -- ANY ground
+	# forager gets one, regardless of which food branch above actually
+	# built `ground_forage`: the walk cycle plays during the resume beat
+	# after a peck, not during any one specific food's own descent/strike,
+	# so it belongs to the marker's ground_forage capability as a whole
+	# rather than to one diet entry.
+	if marker.ground_forage != null and sprite_generator.has_method("generate_walk_textures"):
+		marker.walk_frames = sprite_generator.generate_walk_textures(species, seed_value)
 	parent.add_child(marker)
 	return marker

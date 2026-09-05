@@ -316,6 +316,37 @@ func test_hunting_still_flaps_rather_than_freezing_on_one_frame():
 	)
 
 
+## PHASE 3: a real dive pose (IllustratedBirdSprite.generate_dive_textures)
+## instead of reusing the flap cycle through the strike -- see
+## docs/concept/ecosystem_dynamics.md's Phase 3 writeup.
+func test_a_diving_kingfisher_shows_its_own_dive_frame_not_a_flap_frame():
+	var world := StubWorld.new()
+	marker.setup(world, AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	marker.species = "kingfisher"
+	marker.flap_frames = [ImageTexture.new(), ImageTexture.new()]
+	marker.dive_frames = [ImageTexture.new(), ImageTexture.new(), ImageTexture.new()]
+	marker._behavior.phase = PiscivoreBirdBehavior.Phase.DIVING
+	marker._process(0.05)
+	assert_true(
+		marker.dive_frames.has(marker.texture),
+		"a diving kingfisher must show one of its own dive frames"
+	)
+	assert_false(marker.flap_frames.has(marker.texture))
+
+
+func test_without_dive_frames_a_diving_kingfisher_falls_back_to_flapping():
+	var world := StubWorld.new()
+	marker.setup(world, AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	marker.species = "kingfisher"
+	marker.flap_frames = [ImageTexture.new(), ImageTexture.new()]
+	marker._behavior.phase = PiscivoreBirdBehavior.Phase.DIVING
+	marker._process(0.05)
+	assert_true(
+		marker.flap_frames.has(marker.texture),
+		"no dive_frames set (an old caller, a test double) must be a no-op, not an error"
+	)
+
+
 func test_without_flap_frames_the_marker_keeps_its_original_texture():
 	var world := StubWorld.new()
 	world.population = 0.0

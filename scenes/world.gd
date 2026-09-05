@@ -44,6 +44,16 @@ const SkillTreeWindow = preload("res://scenes/skill_tree_window.gd")
 const CreaturePanel = preload("res://scenes/creature_panel.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
+
+## The player's own real momentum at ordinary walking pace (see
+## docs/concept/soil_fauna.md "Crushed underfoot: weight-emergent worm
+## mortality") -- full body mass, not PebbleDispersion's own foot-mass
+## fraction (that is for a glancing kick past a pebble; standing weight
+## settling onto something underfoot is a different, full-body-mass
+## event). Computed once rather than every _client_process call: neither
+## factor ever changes at runtime.
+const _PLAYER_STEP_MOMENTUM_KG_M_S := CreatureMass.PLAYER_MASS_KG * PebbleDispersion.FOOTSTEP_SPEED_MPS
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const Courtship = preload("res://src/gameplay/courtship.gd")
 const MammalCourtship = preload("res://src/gameplay/mammal_courtship.gd")
@@ -2707,7 +2717,7 @@ func _on_console_command(command: String, args: Array) -> void:
 			_dev_console.log_line(
 				(
 					"Commands: /day [off]  /night [off]  /time <hh:mm>|off"
-					+ "  /season [name]  /weather [state|off]"
+					+ "  /season [name] [progress]  /weather [state|off]"
 					+ "  /ecotest [seconds_per_year|off]"
 					+ "  /history <entity_id>  /why <event_id>  /remember <entity_id>"
 					+ "  /household <entity_id>  /contract <entity_id>  /market <entity_id>"
@@ -3004,13 +3014,19 @@ func _handle_emergence_command() -> void:
 		_dev_console.log_line(line)
 
 
-## /season [name] -- reports the season, or skips the world FORWARD to the
-## start of the one you name.
+## /season [name] [progress] -- reports the season, or skips the world
+## FORWARD to `progress` (a 0-1 fraction, default 0.0) into the one you name.
 ##
 ## Forward only (see EarthChunkManager.jump_to_season): every other system
 ## measures itself against this clock, so winding it back would give a tree a
 ## negative age. Asking for the season you are already in therefore waits for
 ## it to come round again -- you asked to watch it start.
+##
+## `progress` is validated here rather than left to SeasonCycle's own
+## defensive clamp: a typo like `/season autumn 50` (meaning "50%" where a 0-1
+## fraction was wanted) must be refused with a reason, not silently clamped
+## to 1.0 and read back as if the far end of the season was what was asked
+## for -- see test_season_command_clarity.gd.
 func _handle_season_command(args: Array) -> void:
 	if args.size() == 0:
 		_dev_console.log_line(
@@ -3020,7 +3036,19 @@ func _handle_season_command(args: Array) -> void:
 		return
 
 	var wanted := str(args[0]).to_lower()
-	if not _chunk_manager.jump_to_season(wanted):
+	var progress := 0.0
+	if args.size() > 1:
+		if not str(args[1]).is_valid_float():
+			_dev_console.log_line(
+				"Progress must be a number between 0 and 1, got '%s'." % args[1]
+			)
+			return
+		progress = float(args[1])
+		if progress < 0.0 or progress > 1.0:
+			_dev_console.log_line("Progress must be between 0 and 1, got %s." % args[1])
+			return
+
+	if not _chunk_manager.jump_to_season(wanted, progress):
 		_dev_console.log_line(
 			"Unknown season '%s'. Try: %s" % [wanted, ", ".join(SeasonCycle.SEASONS)]
 		)
@@ -4803,6 +4831,21 @@ func _client_process(delta: float) -> void:
 	# last-processed creature happens to be standing.
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		_chunk_manager.tread_snow_at(creature.position, false)
+	# Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
+	# weight-emergent worm mortality") -- mirrors the tread_snow_at pair just
+	# above exactly (player, then every creature), but keyed on real weight
+	# rather than snow depth, so it runs regardless of season. No debounce
+	# needed for either: crush_worm_at's own removal is already idempotent
+	# (a worm that is already gone simply reports false again next frame),
+	# the same reasoning that let this skip the per-entity "last tile"
+	# tracking PathScarring/the snow trail's own debounce needs for a
+	# CONTINUOUS accumulator.
+	_chunk_manager.crush_worm_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
+	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		var marker := creature as CreatureMarker
+		var species: String = marker.info.species if marker.info != null else ""
+		var momentum := CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
+		_chunk_manager.crush_worm_at(marker.position, momentum)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).

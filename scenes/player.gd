@@ -63,6 +63,8 @@ const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_mark
 const CaptureBook = preload("res://src/gameplay/capture_book.gd")
 const CaptureExecutor = preload("res://src/gameplay/capture_executor.gd")
 const CaptureAtomEffects = preload("res://src/gameplay/capture_atom_effects.gd")
+const BodyDimensions = preload("res://src/gameplay/body_dimensions.gd")
+const FishMarker = preload("res://src/rendering/fish_marker.gd")
 const CaptureItemActions = preload("res://src/gameplay/capture_item_actions.gd")
 const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
@@ -3153,7 +3155,9 @@ func _perform_context_action(slot: int, action_name: String) -> void:
 	if slot < animal_actions_for(animal).size():
 		_perform_animal_action(animal, slot)
 		return
-	var has_bottle := inventory != null and inventory.has("glass_bottle")
+	# An EMPTY bottle: one already holding a creature is not somewhere to put
+	# a second one (see _bottle_captive).
+	var has_bottle := inventory != null and inventory.has("glass_bottle", "")
 	var tool_action := CaptureItemActions.for_tool(equipped_item, has_bottle)
 	if tool_action.get("action", "") == action_name:
 		_bottle_captive()
@@ -3198,12 +3202,23 @@ func _throw_rope_tool(tool_id: String) -> void:
 		_lassoed = best
 
 
-## Netting a flyer is a real probability roll, not a struggle and not a
-## guarantee (docs/concept/capture_dsl.md: nothing in AmbientFlyerMarker
-## models a butterfly fighting a restraint the way a horse does, so there is
-## no multi-bout contest -- but a swing can still miss). A landed throw
-## scans the ambient-flyer flock -- a wholly separate node group from
-## CreatureMarker.GROUP_NAME -- and resolves through _attempt_net_catch.
+## How close to a netted fish's own position catch_nearest_fish looks for
+## the marker to take out of the water: the target is AT that position, so
+## this only has to be wider than floating-point noise, never wide enough to
+## take a neighbour instead.
+const NET_FISH_TAKE_RADIUS := 1.0
+
+
+## Netting is a real probability roll, not a struggle and not a guarantee
+## (docs/concept/capture_dsl.md: nothing in AmbientFlyerMarker models a
+## butterfly fighting a restraint the way a horse does, so there is no
+## multi-bout contest -- but a swing can still miss). A landed throw goes for
+## the NEAREST net target: an ambient flyer (a wholly separate node group
+## from CreatureMarker.GROUP_NAME) or, since 2026-09-05, a fish in the
+## shallows -- found through the same nearest-fish lookup a hunting
+## kingfisher uses -- and resolves through _attempt_net_catch. Which of them
+## the net can actually HOLD is the net's own mesh physics, not this
+## function's business.
 func _throw_net() -> void:
 	var best: Node = null
 	var best_distance := LASSO_RANGE
@@ -3214,52 +3229,92 @@ func _throw_net() -> void:
 		if distance <= best_distance:
 			best = flyer
 			best_distance = distance
+	if _chunk_manager != null:
+		var fish = _chunk_manager.nearest_fish_position(position, best_distance)
+		if fish != null and is_instance_valid(fish) and not fish.is_queued_for_deletion():
+			best = fish
 	if best == null:
 		return
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
 	_attempt_net_catch(best)
 
 
-## Rolls whether a landed net throw actually catches `flyer` (docs/concept/
-## capture_dsl.md's butterfly_net device: base 0.65, nudged by the
-## individual's own real, DNA-inherited FlyerPersonality.boldness_of -- a
-## bolder flyer is easier to net). The roll is salted with
-## _capture_attempt_count, not just flyer.wander_seed alone -- a bare-seed
-## roll would make every retry against the same still-alive flyer land on
-## the identical outcome forever, silently making one miss unwinnable.
+## Resolves a landed net throw against `target` -- a flyer or a fish --
+## through the net's own device text (docs/concept/capture_dsl.md):
+## `mesh_holds(mesh: bag)` first, which reads the bag's real 10 mm mesh and
+## 30 cm mouth off the net's part facts and the subject's measured body
+## extents (BodyDimensions) and refuses WITH A REASON a bee that slips
+## through or a koi that does not fit; then `catch_roll` (base 0.65, nudged
+## by a flyer's own real, DNA-inherited FlyerPersonality.boldness_of -- a
+## bolder flyer is easier to net; a fish has no personality and rolls at
+## the middling default); then `confine(in: bag)`.
 ##
-## On a miss, nothing changes -- the flyer's own existing flee/dance
-## reaction (FlyerPersonality.player_response) keeps running untouched. On a
-## catch: see docs/concept/taming.md's "A bond, not an order: the Kinship
-## path" -- with `menagerie` unlocked (and room under the cap) it becomes a
-## real bonded companion instantly, exactly as before; otherwise the net
-## itself goes LOADED (Item.captive_species) instead of instantly becoming a
-## curiosity item -- the player now chooses Release or (with a glass bottle)
-## Put into bottle. Either way the flyer itself is removed from the world.
-func _attempt_net_catch(flyer: Node) -> void:
-	var species: String = flyer.species
-	var boldness := FlyerPersonality.boldness_of(flyer.traits)
+## The roll is salted with _capture_attempt_count, not just the target's
+## wander_seed alone -- a bare-seed roll would make every retry against the
+## same still-alive target land on the identical outcome forever, silently
+## making one miss unwinnable.
+##
+## A mesh refusal shows its reason ("The bee slips through the 10 mm
+## mesh."); a lost roll shows "Missed!"; either way nothing changes -- a
+## flyer's own existing flee/dance reaction (FlyerPersonality.player_
+## response) keeps running untouched. On a catch: see docs/concept/
+## taming.md's "A bond, not an order: the Kinship path" -- an ambient flyer
+## with `menagerie` unlocked (and room under the cap) becomes a real bonded
+## companion instantly, exactly as before; a fish never bonds (nothing that
+## lives in water follows you across a meadow); otherwise the net itself
+## goes LOADED (Item.captive_species) and the player chooses Release or
+## (with a glass bottle) Put into bottle. The subject leaves the world
+## either way: a flyer is freed, a fish is taken through the rod's own
+## catch_nearest_fish so its pond's real population records the harvest.
+func _attempt_net_catch(target: Node) -> void:
+	var species: String = target.species
+	# By class, not by group: a marker joins its group in _ready, which a
+	# node outside the tree never runs, and "is this a fish" must not depend
+	# on where the node happens to sit.
+	var is_fish: bool = target is FishMarker
+	var traits = target.get("traits")
+	var boldness: float = FlyerPersonality.MIDDLING_BOLDNESS
+	if traits is Dictionary:
+		boldness = FlyerPersonality.boldness_of(traits)
 	var rule: Variant = _capture_executor.capture_rule(_capture_book.ast_for(CaptureTool.NET))
 	_capture_attempt_count += 1
-	var roll := float(absi(hash("%d_%d_catch" % [flyer.wander_seed, _capture_attempt_count])) % 10000) / 10000.0
-	var context := {"target": {"tier": "flyer", "species": species, "boldness": boldness}}
+	var roll := float(absi(hash("%d_%d_catch" % [target.wander_seed, _capture_attempt_count])) % 10000) / 10000.0
+	var context := {"target": {
+		"species": species,
+		"boldness": boldness,
+		"extents_mm": BodyDimensions.extents_mm(species),
+	}}
+	context.merge(_capture_book.facts_for(CaptureTool.NET))
 	var result := _capture_executor.resolve_catch(rule, context, roll)
 	if not result["caught"]:
-		_capture_result_message = "Missed!"
+		var reason: String = result["reason"]
+		_capture_result_message = "Missed!" if reason == "" else _as_sentence(reason)
 		_capture_result_timer = CAPTURE_RESULT_MESSAGE_DURATION
 		return
-	if _has_menagerie() and _bond_companion(species):
+	if not is_fish and _has_menagerie() and _bond_companion(species):
 		_capture_result_message = "Bonded with the %s." % species.capitalize()
 	else:
 		for effect in result["effects"]:
 			_capture_atom_effects.apply_to_target(effect["atom"], effect["params"], equipped_item, context)
 		_capture_result_message = "Caught! Net is full."
 	_capture_result_timer = CAPTURE_RESULT_MESSAGE_DURATION
-	flyer.queue_free()
+	if is_fish:
+		_chunk_manager.catch_nearest_fish(target.position, NET_FISH_TAKE_RADIUS)
+	else:
+		target.queue_free()
+
+
+## "the bee slips through the 10 mm mesh" -> "The bee slips through the 10 mm
+## mesh." -- a reason is prose the executor phrased around its subject; the
+## HUD just capitalises and closes it.
+func _as_sentence(reason: String) -> String:
+	if reason == "":
+		return ""
+	return reason[0].to_upper() + reason.substr(1) + "."
 
 
 ## Empties a loaded net, letting its catch go (docs/concept/capture_dsl.md's
-## "on release" -- release_captive). Deliberately does not respawn a live
+## "on release" -- free(from: bag)). Deliberately does not respawn a live
 ## creature back into the world -- a documented, honest gap, not attempted
 ## here (see capture_dsl.md's Open questions).
 func _release_net() -> void:
@@ -3279,7 +3334,7 @@ func _release_net() -> void:
 ## "Put into bottle" (docs/concept/capture_dsl.md's "on transfer(glass_bottle)"
 ## -- move_captive): consumes one EMPTY glass_bottle and relocates a loaded
 ## net's catch onto a freshly-loaded one (Item.captive_species), the same
-## way _attempt_net_catch's hold_captive loads the net in the first place --
+## way _attempt_net_catch's confine loads the net in the first place --
 ## not a generic curiosity item, because the species has to survive the move
 ## for the bottle to be rendered as the specific creature it holds. See
 ## CaptureItemActions for when this is even offered -- it never fires unless
@@ -3287,7 +3342,7 @@ func _release_net() -> void:
 func _bottle_captive() -> void:
 	if equipped_item == null or not equipped_item.is_holding_captive():
 		return
-	if inventory == null or not inventory.has("glass_bottle"):
+	if inventory == null or not inventory.has("glass_bottle", ""):
 		return
 	var rule: Variant = _capture_executor.transfer_rule(_capture_book.ast_for(CaptureTool.NET), "glass_bottle")
 	var result := _capture_executor.resolve_transfer(rule, {})
@@ -3300,7 +3355,10 @@ func _bottle_captive() -> void:
 			species = outcome
 	if species == "":
 		return
-	inventory.remove("glass_bottle", 1)
+	# Spend an EMPTY bottle, never a loaded one -- with a loaded bottle and
+	# an empty one both in the pack, an unfiltered remove could take the
+	# loaded one and set its creature loose to make room for this one.
+	inventory.remove("glass_bottle", 1, "")
 	var loaded_bottle: Item = _item_catalog.make("glass_bottle")
 	loaded_bottle.captive_species = species
 	inventory.add(loaded_bottle, 1)

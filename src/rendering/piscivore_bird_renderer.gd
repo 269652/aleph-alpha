@@ -102,12 +102,27 @@ func spawn_piscivore_birds(
 	# flap_frames/perched_frame wiring for sparrow/robin exactly.
 	marker.flap_frames = sprite.generate_flap_textures(SPECIES, seed_value)
 	marker.perched_frame = sprite.generate_perched_texture(SPECIES, seed_value)
+	# The plunge dive's own pose (see PiscivoreBirdMarker._animate_wings) --
+	# only IllustratedBirdSprite has one; ProceduralBirdSprite has no
+	# has_method("generate_dive_textures") at all, so this is a no-op for
+	# it, same optional-capability guard the rest of this file already
+	# uses.
+	if sprite.has_method("generate_dive_textures"):
+		marker.dive_frames = sprite.generate_dive_textures(SPECIES, seed_value)
 	# Art is authored DETAIL_MULTIPLIER times oversized; scaling it back
 	# keeps the flyer the same size in the world (see
 	# docs/concept/art_resolution.md).
 	# A kingfisher is a small bird, not a gull (see
 	# AmbientFlyerRenderer.FLYER_WORLD_SCALE for the same reasoning).
-	marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * FishRenderer.FISH_WORLD_SCALE * BIRD_WORLD_SCALE
+	#
+	# ILLUSTRATED art needs its own scale, not this flat procedural-canvas-
+	# tuned one -- see AmbientFlyerRenderer._build_marker's identical branch
+	# and its doc comment for why (reported live: "robins and sparrows are
+	# now gigantic" -- the same bug applies here unless guarded against).
+	if sprite.has_method("marker_scale"):
+		marker.scale = Vector2.ONE * sprite.marker_scale(SPECIES)
+	else:
+		marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * FishRenderer.FISH_WORLD_SCALE * BIRD_WORLD_SCALE
 	marker.position = position
 	marker.home = position
 	marker.wander_seed = seed_value

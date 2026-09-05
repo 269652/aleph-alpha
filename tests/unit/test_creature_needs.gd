@@ -171,3 +171,27 @@ func test_cold_is_the_same_threshold_the_player_uses():
 	assert_true(needs.is_cold())
 	needs.warmth = SurvivalMeters.COLD_THRESHOLD + 0.01
 	assert_false(needs.is_cold())
+
+
+# -- one drive vector underneath (docs/concept/ethogram.md §5, slice 3) --------
+
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+
+
+## CreatureNeeds is now a facade over Drives with the mammal profile: its
+## numbers are the ethogram record, not a second copy.
+func test_the_numbers_are_the_ethograms_mammal_profile():
+	var profile := Ethogram.drive_profile("", "mammal")
+	assert_almost_eq(CreatureNeeds.HUNGER_RATE_PER_SECOND, 1.0 / profile["hunger"]["rise_seconds"], 0.000001)
+	assert_almost_eq(CreatureNeeds.THIRST_RATE_PER_SECOND, 1.0 / profile["thirst"]["rise_seconds"], 0.000001)
+	assert_almost_eq(CreatureNeeds.HUNGRY_THRESHOLD, profile["hunger"]["threshold"], 0.0)
+	assert_almost_eq(CreatureNeeds.START_STAGGER, profile["hunger"]["stagger"], 0.0)
+
+
+## The drives are the gains the behaviour kernel gates on.
+func test_gains_are_the_needs_as_gates():
+	assert_eq(needs.gains(), {"hunger": 0.0, "thirst": 0.0})
+	needs.advance(100000.0)
+	assert_eq(needs.gains(), {"hunger": 1.0, "thirst": 1.0})
+	needs.drink()
+	assert_eq(needs.gains()["thirst"], 0.0)

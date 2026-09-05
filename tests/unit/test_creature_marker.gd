@@ -3278,3 +3278,92 @@ func test_animal_state_reports_how_badly_a_need_is_felt_not_just_whether():
 		"a starving animal should report more hunger urgency than a peckish one"
 	)
 	assert_between(float(horse.animal_state()["thirst_urgency"]), 0.0, 1.0)
+
+
+# -- the ethogram underneath (docs/concept/ethogram.md, slice 2) ---------------
+#
+# The marker publishes what it senses as stimuli on the shared channel basis
+# and the species valence decides what each one means; its own genome,
+# derived from its wander_seed, reaches every decision and every sniff.
+
+const AnimalGenomeForMarker = preload("res://src/gameplay/animal_genome.gd")
+const EthogramForMarker = preload("res://src/gameplay/ethogram.gd")
+
+
+## Predators are not threatened by other creatures, only by the player --
+## which used to be a rule inside the scan and is now the predator valence.
+func test_a_predator_neither_flees_nor_attacks_another_predator():
+	var predator := _make_predator(Vector2(100, 100))
+	var other := _add_stub_creature("predator", Vector2(120, 100))
+	var health_before: float = other.info.health
+	predator._process(0.2)
+	assert_lt(predator.position.distance_to(predator.home), CreatureWander.WANDER_RADIUS)
+	assert_almost_eq(other.info.health, health_before, 0.001, "no attack either")
+
+
+func test_the_marker_publishes_what_it_senses_as_stimuli():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	var player := _add_stub_player(Vector2(120, 100))
+	var wolf := _add_stub_creature("predator", Vector2(80, 100))
+	marker._process(0.2)
+	var people := 0
+	var predators := 0
+	for stimulus in marker._cached_stimuli:
+		if stimulus["features"].has(EthogramForMarker.PLAYER):
+			people += 1
+			assert_eq(stimulus["node"], player)
+		if stimulus["features"].has(EthogramForMarker.PREDATOR):
+			predators += 1
+			assert_eq(stimulus["node"], wolf)
+	assert_eq(people, 1)
+	assert_eq(predators, 1)
+
+
+func test_a_marker_derives_its_genome_from_its_wander_seed():
+	marker.wander_seed = 77
+	assert_eq(marker.genome_or_derived(), AnimalGenomeForMarker.for_seed(77))
+	marker.genome = {"receptor_decay": 0.0}
+	assert_eq(marker.genome_or_derived(), {"receptor_decay": 0.0}, "a stored genome wins over the derived one")
+
+
+## A world that offers smells, and nothing else to eat.
+class SmellyStubWorld:
+	extends StubWorld
+	var sources: Array = []
+	func smells_near(_position: Vector2, _range_tiles: float) -> Array:
+		return sources
+
+
+## The live forage choice runs on the individual nose: a boar born without a
+## decay receptor is not led to carrion the species would go to.
+func test_an_individuals_nose_reaches_the_live_forage_choice():
+	var world := SmellyStubWorld.new()
+	world.sources = [{"position": Vector2(140, 100), "mixture": {"decay": 1.0}}]
+	marker.info = CreatureInfo.new("boar")
+	marker.setup(world, TILE_SIZE)
+	marker._needs.hunger = 1.0
+	assert_true(marker._seek_by_smell(), "the species takes carrion")
+	assert_true(marker._has_forage_target)
+	marker._drop_forage_target()
+	marker.genome = {"receptor_decay": 0.0}
+	assert_false(marker._seek_by_smell(), "this individual cannot smell it")
+	assert_false(marker._has_forage_target)
+
+
+# -- slice 4: boldness reaches a live marker's flee decision -----------------
+# docs/concept/ethogram.md §9.
+
+func test_a_bold_marker_tolerates_a_predator_the_shyest_would_flee():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	_add_stub_creature("predator", Vector2(160, 100))  # 60px east, in sense range
+	marker.genome = {"boldness": 1.0}
+	marker._process(0.2)
+	assert_false(marker._is_fleeing, "the boldest individual barely reacts to a threat this far off")
+
+
+func test_a_population_median_marker_still_flees_the_same_predator():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	_add_stub_creature("predator", Vector2(160, 100))
+	marker.genome = {"boldness": EthogramForMarker.NEUTRAL_BOLDNESS_GENE}
+	marker._process(0.2)
+	assert_true(marker._is_fleeing, "an ordinary individual still flees a sensed predator")

@@ -107,3 +107,16 @@ func test_every_activity_is_one_of_the_known_ones():
 		assert_true(
 			PiscivoreAppetite.ACTIVITIES.has(PiscivoreAppetite.activity_for(0.0, seed_value))
 		)
+
+
+# -- one drive vector underneath (docs/concept/ethogram.md §5, slice 3) --------
+
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+
+
+## The appetite numbers are the kingfisher record in the ethogram.
+func test_the_numbers_are_the_ethograms_kingfisher_profile():
+	var profile := Ethogram.drive_profile("kingfisher")
+	assert_almost_eq(PiscivoreAppetite.SECONDS_PER_MEAL, profile["hunger"]["rise_seconds"], 0.0001)
+	assert_almost_eq(PiscivoreAppetite.HUNGRY_THRESHOLD, profile["hunger"]["threshold"], 0.0)
+	assert_almost_eq(PiscivoreAppetite.STARTING_HUNGER, profile["hunger"]["start"], 0.0)

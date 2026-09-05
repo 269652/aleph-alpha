@@ -903,6 +903,151 @@ distinction specifically). `test_ambient_flyer_marker.gd`,
 stay green (255 tests total across the six files) — the art swap changes
 no behavioral assertion, only which pixels a bird is drawn with.
 
+**Follow-up, same day: "robins and sparrows are now gigantic".** The
+renderers apply ONE flat `marker.scale`
+(`ArtResolution.SPRITE_SCALE * FishRenderer.FISH_WORLD_SCALE *
+FLYER_WORLD_SCALE[species]`) tuned for `ProceduralBirdSprite`'s tiny 32x20
+art canvas, regardless of which generator actually produced the texture —
+and `IllustratedBirdSprite`'s real-art canvas measures roughly 6-9x wider
+in actual content, so the same flat scale drew a bird 6-9x too big
+(measured: a sparrow that should read ~6.6 world px wide rendered at
+~58). Fixed with `IllustratedBirdSprite.marker_scale(species)`, the bird
+analog of `IllustratedAnimalSprite.marker_scale`: normalizes the MEASURED
+content width back down to a real target world width
+(`BASE_WORLD_WIDTH := 6.6`, calibrated to reproduce the procedural
+sparrow's own pre-existing on-screen size, times a per-species multiplier
+matching `FLYER_WORLD_SCALE`'s intended proportions). `AmbientFlyer
+Renderer._build_marker`/`PiscivoreBirdRenderer.spawn_piscivore_birds` now
+branch on `sprite_generator.has_method("marker_scale")` and use it instead
+of the flat chain whenever the illustrated generator is the one in use —
+mirroring `CreatureMarker._apply_action_scale`'s own illustrated/
+procedural branch exactly. `FLYER_WORLD_SCALE` gained a `"blackbird"`
+entry (`1.7`, alongside kingfisher — a real blackbird is one of the larger
+common garden birds) so `IllustratedBirdSprite`'s own target widths have
+something real to stay consistent with even before blackbird is
+spawnable. Pinned by two new tests in `test_illustrated_bird_sprite.gd`
+(a bounded, sane world-width range; relative ordering across species) and
+two in `test_ambient_flyer_renderer.gd` (the real `build_bird` spawn path
+uses `marker_scale`, not the flat chain; `FLYER_WORLD_SCALE` and
+`IllustratedBirdSprite`'s target widths agree on which species is
+bigger) — 259 tests green across the six files.
+
+**Follow-up, same day: halved again, plus real flight height and the
+Phase 3 rows.** Live playtest after the first size fix: "the robin should
+be half as big and all others halved as well" — `BASE_WORLD_WIDTH` halved
+again (6.6 → 3.3) directly on that report, no re-derivation attempted.
+
+**Flight height**, requested directly: "give birds a z height in their
+flight and scale size based on distance from ground / distance to
+camera". On a top-down camera, distance-from-ground and distance-from-
+camera are the same quantity, so `AmbientFlyerMarker._flight_height` (one
+value, birds only — gated on `IllustratedBirdSprite.has_species`, since
+`perched` means something different for a nectaring pollinator and a
+first pass broke its own settle/alight tests) eases toward
+`FLIGHT_CRUISE_HEIGHT_PX` (derived from `BASE_WORLD_WIDTH`) while airborne
+and back to 0 once `perched`, driving both a lift (`offset`, never
+`position`) and a scale shrink. `_animate_wings` is now a thin
+`_animate_wings_body` + `_apply_flight_height` wrapper so every existing
+call site gets it for free. 264 tests green.
+
+**Phase 3**, requested the same session alongside flight height ("no
+foraging, no pecking, no dancing, no tweeting... wire this all up"): the
+ground walk/hop row (the three songbirds), the kingfisher's own dive pose,
+and singing (every species) all get real art and real triggers.
+`IllustratedBirdSprite` gains `generate_walk_textures`/
+`generate_dive_textures`/`generate_sing_textures`, each confirmed by eye
+before wiring in. The singing row's radiating sound-lines sit far enough
+from the body that the default frame-column detector over-split it (13-16
+pieces instead of 8) on all three songbird sheets — `_MIN_DIVIDER_WIDTH`
+raised from 1 to 8, verified against every other row first so it narrows
+without merging anything real. New pure `BirdSong.should_sing(seed,
+elapsed)` (a periodic duty-cycle roll, per-bird offset by seed) drives
+singing — no new phase machine, since singing has no world-state
+consequence. `PiscivoreBirdMarker` shows `dive_frames` (indexed by the
+existing `dive_progress()` clock) only while `Phase.DIVING`, ascend/hover/
+carry still flap. `AmbientFlyerMarker` shows `walk_frames` during
+`GroundForageBehavior.Phase.RESUMING` (the one grounded moment that is not
+mid-strike) and `sing_frames` whenever `BirdSong.should_sing` says so,
+both alongside the existing `peck_frame` check in the one `perched`
+branch — no new state machine there either. 301 tests green across eight
+files (the six bird/flyer suites, new `test_bird_song.gd`, and
+`test_ground_forage_behavior.gd` reconfirmed untouched).
+
+**Phase 4, same session: real bird courtship, display, and visible
+reproduction.** New `src/gameplay/bird_courtship.gd` (`BirdCourtship`)
+reuses `Courtship`'s species-agnostic pairing primitives (`can_pair`/
+`pair_seed`/`mates`/`leads`) exactly as `MammalCourtship` already does for
+land mammals — only the motion and the species gate are bird-specific, per
+the explicit design note in `animal_genetics.md`'s "do not widen
+DANCING_SPECIES" section (quoted above): a bird pairing does not
+spiral-orbit the way a butterfly's courtship flight does, because the
+display itself is a HELD pose (the tail-fanned `court` art), not a flight
+figure — so `BirdCourtship.hold_offset` is simpler than either existing
+courtship: a straight LINEAR close (deliberately not eased —
+`FlightTransition.crossing_seconds`, not `settling_seconds`, so the
+bird's speed during the approach is always exactly its own airspeed, never
+over it) to a fixed point opposite the partner's own, then a genuine hold
+with no further motion at all.
+
+`BirdCourtship.DANCING_SPECIES` is the three `AmbientFlyerMarker`
+songbirds (sparrow/robin/blackbird) — deliberately **not** kingfisher,
+even though it has the same real `court` art: a kingfisher is a
+`PiscivoreBirdMarker`, an entirely separate class that never runs
+`AmbientFlyerMarker._step_pair_interactions`, so this mechanism cannot
+structurally reach it (kingfisher courtship, if ever built, is that
+class's own follow-up).
+
+Wired into `AmbientFlyerMarker._step_pair_interactions` as a genuine THIRD
+interaction path alongside the existing pollinator courtship and the
+spiral whirl — own fields (`_bird_courting_*`, not reusing `_courting_*`:
+two different motions/geometries sharing mutable state is exactly the
+kind of thing that produces a sparrow orbiting a point meant for a
+butterfly), `_scan_for_partners` extended to answer a third question
+("who would bird-court me") in the same one group-walk, and `_begin_bird_
+court`/`_continue_bird_court`/`_finish_bird_court`/`_end_bird_court`
+mirroring the pollinator four one-for-one. `_animate_wings_body` shows
+`court_frames` for the whole held display (checked before the `perched`
+branch, since a bird-court hold overrides `position` directly and never
+sets that flag, exactly like the pollinator dance).
+
+**Reproduction is now genuinely visible for birds**, not just an
+aggregate number climbing: on a successful pairing (`BirdCourtship.
+mates`, personality crossed via the same shipped `FlyerPersonality.
+inherit` pollinators use — a player is a selection pressure on birds too,
+not just butterflies), `courtship_world.spawn_flyer_offspring` spawns the
+visible chick exactly like a pollinator's, AND a new `record_bird_birth_
+at` → `EcosystemSimulation.record_bird_birth` (species-routed, unlike the
+single hardcoded `record_birth` mammals use) reconciles the AGGREGATE
+population — `RobinPopulationModel`/`SparrowPopulationModel`, the number
+`AmbientFlyerRenderer.marker_count_for` actually promotes markers from on
+chunk reload — with the individual chick just spawned. Without this
+second half a courtship-born chick would simply vanish the next time its
+chunk unloaded and reloaded, since the aggregate never knew it existed;
+this is the same "individual half reports to the aggregate half" role
+`CreatureMarker`'s own mammal-courtship birth already plays via
+`EarthChunkManager.record_birth_at`. A no-op for blackbird (no aggregate
+population model yet — see above) and for an unknown region, the same
+"unrecognized input does nothing" contract this file already uses
+throughout.
+
+Verified with the SAME class of test that once caught the pollinator
+dance's own one-sided-pairing bug: two real robin markers, real frames,
+confirmed to actually pair (`_bird_courting_with` pointing at each other
+on both sides, not one orbiting nothing), hold a genuinely fixed point
+(position stops changing once closed, unlike the butterfly orbit), and
+— walking positions until a pair's own seed happens to mate, the same
+technique `test_a_courting_pairs_child_inherits_from_both_parents` already
+uses — spawn a chick AND reconcile the population exactly once. Confirmed
+`test_birds_do_not_perform_the_butterfly_dance` still passes unchanged:
+this is a separate mechanism, not a widened gate. 399 tests green across
+eleven files.
+
+**Still not done**: kingfisher's own remaining two unmapped rows (a calm
+rest pose closer to `PiscivoreAppetite.ACTIVITY_PERCH` than anything
+wired, and one still-unresolved variant), and kingfisher courtship
+itself (a `PiscivoreBirdMarker`-side follow-up, structurally out of
+this mechanism's reach — see above). Named follow-ups, not oversights.
+
 ## Region difficulty (gating the roster by player readiness)
 
 Rounding out the roster with real predators (bear, lion) and a real hazard

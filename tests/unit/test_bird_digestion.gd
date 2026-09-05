@@ -73,3 +73,18 @@ func test_digestion_does_not_own_a_second_passage_clock():
 			name in BirdDigestion,
 			"%s is a second clock for something SeedEndozoochory already owns" % name
 		)
+
+
+# -- one drive vector underneath (docs/concept/ethogram.md §5, slice 3) --------
+
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+
+
+## Fullness is one minus the bird body plan's hunger drive; the numbers are
+## the ethogram record.
+func test_the_numbers_are_the_ethograms_bird_profile():
+	var profile := Ethogram.drive_profile("", "bird")
+	assert_almost_eq(BirdDigestion.DIGEST_SECONDS, profile["hunger"]["rise_seconds"], 0.0001)
+	assert_almost_eq(BirdDigestion.HUNGRY_BELOW, 1.0 - profile["hunger"]["threshold"], 0.0001)
+	assert_almost_eq(BirdDigestion.MEAL_FULLNESS, profile["hunger"]["meal"], 0.0001)
+	assert_almost_eq(BirdDigestion.STARTING_FULLNESS, 1.0 - profile["hunger"]["start"], 0.0001)

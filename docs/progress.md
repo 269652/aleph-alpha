@@ -1,9 +1,11 @@
 # Progress Tracker
 
 This document is a living status tracker for everything defined across the
-design docs in `docs/concept/*.md` (91 as of the 2026-09-05 merge to main
-that added `concept/mushrooms.md` right after a cross-alignment recount
-had just landed 90 — `find docs/concept -maxdepth 1 -name "*.md" | wc -l`
+design docs in `docs/concept/*.md` (94 as of the 2026-09-05 merge of the
+standard-model pass, which added `concept/standard_model.md` while
+`concept/ethogram.md` landed on `main` in parallel — a recount at merge
+time; the previous line here said 91 right after `concept/mushrooms.md` —
+`find docs/concept -maxdepth 1 -name "*.md" | wc -l`
 — up from the 49 an earlier pass counted and the 32 this doc was first
 generated against) plus `docs/roadmap.md` and, since the 2026-08-23 emergent-systems
 pass, `docs/emergence/*.md`, cross-referenced
@@ -106,6 +108,8 @@ Left alone, deliberately, and NOT folded into this entry: the shared main checko
 ✅ **`test_pine_is_an_evergreen_in_its_art_and_not_only_in_its_data`'s acorn/apple failure is resolved** at the source, in `CompositeSheetSlicer.cut_out` -- see its own doc comments ("Two more bugs found keying acorn and apple") for the full measurements. Two bugs, not one. First: acorn's and apple's composite sheets decode as FORMAT_RGB8 (no alpha channel at all), and `Image.set_pixel` cannot store a non-1 alpha without one -- the existing reachability keying ran, correctly found the background, and then every write to key it out silently did nothing (measured: 92140/92140 pixels stayed opaque after cut_out, identical to before it ran). `cut_out` now converts the cropped piece to FORMAT_RGBA8 first. Second, once alpha writes actually worked: a bare tree's real branch gaps that do not touch the crop's own edge stayed protected by design (reachability exists to protect real enclosed content, like the sheets' own snow frames), which still left the bare-winter frame denser than its own summer canopy (measured ratio 0.591/0.549, need `< 0.5`). `cut_out` takes an `aggressive` flag, used ONLY for the bare-winter frame by `IllustratedTree` (the one canopy role that never draws anything pale by design), that keys every background-coloured pixel regardless of reachability AND erodes the thin anti-aliasing halo every branch edge carries against an opaque background one ring at a time -- colour-based removal alone still left the ratio at 0.500/0.525, and the halo turned out to account for the rest. Final measured ratio: cherry 0.452, walnut 0.418, hazelnut 0.434, acorn 0.440, apple 0.467, against pine's evergreen 0.981 -- acorn and apple now sit in the same 0.42-0.47 band as every species that never needed keying at all. A second, concurrent session recalibrated the test's bound from an eyeballed inline `0.5` to a documented, tested `_WINTER_VS_SUMMER_MAX := 0.55` against the intermediate (colour-only) numbers above; it remains a real, safe bound after the halo-erosion pass, just with more headroom than it strictly needs. Regression coverage against the real danger this invites -- eroding real near-white content elsewhere on the same two sheets -- lives in `test_composite_sheet_slicer.gd`: default (non-aggressive) keying leaves each sheet's own real snow-covered canopy frame (`IllustratedTree.CANOPY_SNOW`) mostly opaque (0.55 acorn, 0.59 apple), and a test running `aggressive` on that same frame demonstrates it would erode that content hard (down to ~0.23) -- proof of why the flag is never asked for anywhere but the bare-winter frame.
 
 ✅ **Walnut and pine's on-tree/harvested rows were restored after a concurrent regeneration overwrote them.** The same pass that gave every species its fifth snow-canopy column apparently redrew `composite_walnut.png` and `composite_pine.png` in full rather than only adding that column: their below-canopy area came out as one drawing per canopy season instead of the documented fixed two-row layout -- confirmed by measuring each below-canopy blob's centre against its aligned canopy column's centre (within a few px on both sheets). Walnut ballooned to 24 detected regions, its "on-tree" row alone matching all 5 canopy columns instead of 2; pine collapsed to a single row of 4 with no second (harvested) row at all -- exactly why `on_tree_frames_for`/`harvest_frames_for`/`test_unripe_and_ripe_are_the_first_two_frames_whatever_the_count`/`test_on_tree_and_harvested_frames_are_told_apart`/`test_pine_has_more_stages_than_the_nut_trees` came out wrong. `CompositeSheetSlicer`/`IllustratedTree._composite_parts` were reading the sheets correctly throughout -- the sheets themselves no longer matched the layout the code (and the doc comment above `SEPARATE_FRUIT_FRAME_COUNT`) describes. Fixed at the asset level, not the code: each current sheet's canopy strip (which legitimately carries the new fifth frame) was grafted onto the last-known-good (pre-regeneration) trunk/fruit content below it, restoring walnut's two-on-tree/two-harvested rows and pine's three-on-tree/four-harvested rows without losing the snow frame. Combined with the acorn/apple fix above, `test_illustrated_tree.gd` is 96/96.
+
+✅ **Canopy snow now SETTLES on the crown instead of turning it into the snow frame -- from the top, twig by twig, on every canopy snow can land on** (`ProceduralTreeSprite._snowed_canopy`/`_snow_order`/`_skyline_seeds`/`_sweep_rank`; specified in `docs/concept/flora.md`'s "A fifth frame: snow is not a season", which now records the divergence from its earlier text). Reported: when snow falls the canopy should accumulate snow twig by twig, using the existing transition mechanism and the fifth sprite, in autumn, winter and spring alike, for the bare, blossom and turning canopies. The plumbing was already complete end to end (`step_snow` -> `sync_tree_season`/`step_fruiting` -> `ChoppableTree.set_ripe_fruit` -> the `snow_coverage` blend) and already ran in every season; what was wrong was the picture. Rendered across all ten coverage bands rather than reasoned about: the blend reused `_turned_canopy` verbatim, which REPLACES canopy pixels with the into-frame's own, transparent ones included, walking up from the crown's bottom rim -- right for leaves leaving a bough, wrong for snow landing on one. It read as a bottom-up wipe: the crown thinned towards nothing (measured: 2-91 painted pixels of a 40x52 cherry erased per band, on all three canopies) as its own twigs were traded for the snow frame's blank pixels, then the snow frame filled back in. Same trace and clump rank as the turn (`_sweep_rank` is now the one shared formula), two rules changed: settled pixels are composited OVER the canopy and a blank snow pixel leaves it untouched, so at any coverage every pixel the canopy had is still there and at full coverage the whole snow frame lies on top of whichever canopy is showing (blossom/autumn colour visible around the snow-laden boughs); and the trace is seeded from the crown's skyline (the topmost painted pixel of every column) rather than its foot, so snow lands on the upper twigs first and works down them -- seeded from the peak alone it ran sideways along the boughs to reach a wide crown's outer twigs last. Also found by rendering and fixed in the same pass: the frame is a full-grown crown's worth of snow-laden twigs, and settled whole on a SEEDLING it dressed the seedling as a grown tree the moment snow lay (measured at growth 0.1: a 319/179/169-pixel bare/blossom/turning cherry seedling became 1079/1105/1071 pixels under full snow); the frame is now pruned by the same `_grown_canopy` rule the canopy went through first (adds 37/13/17 instead). Pinned in `test_illustrated_tree.gd`'s "snow settles" section against all three canopies: `test_snow_never_erases_the_canopy_it_settles_on`, `test_light_snow_settles_on_the_top_of_the_crown_first`, `test_full_snow_shows_the_whole_snow_frame_on_every_canopy`, `test_snow_accumulates_monotonically_band_by_band`, `test_snow_on_a_seedling_stays_a_seedling` (bounded at doubling against measured 1.04-1.12x pruned vs 2.4-5.3x unpruned); the first two and the seedling one were red against the old blend, the two pins were already green and stay so. `test_illustrated_tree.gd` 113/114 (the one pending is pine's known bare-winter art gap, unchanged), `test_procedural_tree_sprite.gd` 30/30, `test_choppable_tree.gd` 24/24. Verified visually on before/after contact sheets rendered through the production `generate_image_with_fruit` path for walnut, cherry, apple and pine across all bands -- not in the running game (no command-line hook exists to drive `/season`/`/weather` unattended); the plumbing between the two is unchanged and covered by `test_earth_chunk_manager.gd`'s existing snow-to-tree tests. Not touched, both pre-existing and both art/layout questions rather than blend ones: the season trunks (the sheets draw a snow-covered trunk column too, but `trunk_for` still picks one trunk for all seasons) and pine's leafless bare-winter frame.
 
 ✅ **The trunk's own selection is now defended against the exact failure mode above, not just patched at the asset level.** `IllustratedTree._composite_parts` picked the trunk as the BIGGEST drawing below the canopy strip; against the regenerated walnut sheet that picked a blob merged out of an on-branch fruit drawing and its harvested forms (a few percent bigger by area than any of the five real, season-tinted trunk copies sitting in a row beside it), leaving four leftover trunk copies to be misread as fruit. `_trunk_row` replaces "biggest" with the first ROW below the canopy -- position, not size -- keeping only its first member as the trunk and dropping every other region that row: one drawing when the sheet has one, all five when an artist draws it once per season column instead of sharing it. Naive vertical-overlap alone over-swept: a real, well-structured sheet's single trunk is tall enough to overlap a much shorter fruit row sitting BESIDE it (acorn, apple, hazelnut all draw it this way), which pulled that fruit row into the trunk role entirely on first attempt. A region only joins the row when it also stands close to the first region's own HEIGHT (`TRUNK_ROW_HEIGHT_RATIO := 0.85`) -- measured on the real sheets, a genuine duplicated trunk row's members are always within 3% of each other's height while a real trunk is never less than ~1.65x taller than the closest fruit row it overlaps, a wide gap 0.85 sits safely inside. Pinned with five synthetic-region unit tests in `test_illustrated_tree.gd` (`_trunk_row` takes a plain `Array[Rect2i]`, no image or disk I/O needed) rather than only against the current sheets, so a future regeneration that reintroduces a duplicated trunk row fails loud in this file's own tests instead of silently corrupting `fruit_frames_for` again.
 
@@ -1967,6 +1971,8 @@ Two bugs surfaced writing it: warmth could pull ripening back into SPRING, i.e. 
 ✅ **Fruit actually falls** (`FruitingModel.fallen_between` + `_cycle_length`). Two bugs, both of which hid behind tests that asked for a whole year in a single call. (1) `_cycle_length` multiplied the year by the species' `ripening_multiplier`, so a cherry ran a 0.65-year bearing cycle and a pine a 1.8-year one, while the ripening phases are fractions OF A YEAR -- so bearing drifted against the calendar: measured, a cherry shed 24 fruit a year in two windows with the second in mid-winter, and a pine shed 0 in a year. That is the same conflation `BEARING_CYCLE_SECONDS` was introduced to kill, back through another door. (2) `fallen_between` rounded each call's own increment to a whole fruit, and fruiting steps once a SECOND -- one second of a crop of twelve over a tenth-of-a-year window is ~0.0002 of a fruit, which rounds to zero every step forever. Flooring the CUMULATIVE count and differencing makes any partition of a span sum alike. Measured after: every species sheds exactly its crop, once a year, nuts and apples in autumn, cherries summer->autumn, nothing in winter. The `test_earth_chunk_manager` drop test was also stale -- its 3000-second span was five years when a year was ten minutes, and is 0.43% of a year now that a day is four real hours.
 
 ✅ **`/season [name]` and `/weather [state|off]`** (`SeasonCycle.seconds_until_season`, `WeatherModel.force_weather`, wired through `EarthChunkManager.jump_to_season`/`force_weather`). With no argument each reports the current state and lists what it accepts. Two design decisions worth keeping: the season jump moves the clock FORWARD only -- every other system measures itself against that clock, so winding it back would give a tree a negative age -- and it moves the fruiting mark with it, since a jump is up to a year and fruiting counts what fell since it last ran, which would otherwise tip a year of windfall onto the ground in one step. Weather is pinned on the MODEL rather than at the call sites so overlay, soil moisture, wind and snowfall all agree; snow has no state of its own because it is what rain is when it falls cold (`/weather rain` + `/season winter`).
+
+✅ **`/season [name] [progress]`** (2026-09-05, reported: "make /season command so it accepts a float between 0 and 1 for how far it has progressed into the season"). A second, optional argument lands `progress` -- a 0-1 fraction, default `0.0` -- partway into the named season instead of always at its very start; `1.0` lands at exactly the same instant as the NEXT season's own `0.0`, by construction (`SeasonCycle.seconds_until_season`'s `target` calculation). The console layer validates rather than trusts the typed value: a non-numeric second argument, or one outside `[0, 1]` (someone typing `50` meaning "50%"), is refused with a reason (`test_season_command_clarity.gd`) rather than silently defaulted or clamped and read back as if that was what was asked for -- the same "a no-op must not read like an effect" concern `/weather off`'s own message fix guarded. `SeasonCycle` itself still clamps any out-of-range float defensively underneath, for any caller other than the console.
 
 ✅ **Trees grow branch by branch** (`ProceduralTreeSprite.growth_order` + `_grown_canopy`, wired through `ChoppableTree.set_age`). Growth was a single node scale, which drew a sapling as a full-grown tree in miniature -- crown, boughs and every twig, only small. The canopy is now pruned back to the branches the tree has actually put out: traced outward from the point where the trunk meets the crown, so a sapling is a short trunk with a few leaves, then a small crown, then boughs spreading, with the far tips last. Randomised per tree, so a nursery is not one sapling drawn many times. Two things had to differ from the season turn to make it read right, both found by rendering it and looking: the turn seeds from the crown's whole bottom edge (which on a spreading crown is the drooping outer RIM, and drew a young cherry as an arch floating clear of its trunk), and the turn mixes trace and clump noise half and half (which drew a sapling as confetti scattered over the whole mature crown box). Growth seeds from the trunk join alone and weights the trace at `GROWTH_BRANCH_WEIGHT`. Node scaling stays -- a young tree really is shorter -- fewer branches is in addition to it, not instead.
 
@@ -4001,7 +4007,7 @@ A first crafting loop is now real and wired into live gameplay, though shallow:
   Woodcutting/Mining/... mastery track, separate from the PoE-style
   `concept/skills.md` web); no `Skill` resource or per-action XP hook exists
   in code yet.
-- **Blueprint DSL** (large) — ⬜ Not started, but its *compilation target* now exists: `concept/emergent_crafting.md`'s part graph (parts as `(material, geometry, role)` nodes, typed joints as edges — see the Materials section's "Shape & Assembly" and "Typed joints" rows). Whether the player manipulates that graph directly or authors intent that compiles to it is still the open question this doc asks.
+- **Blueprint DSL** (large) — ⬜ Not started, but its *compilation target* now exists: `concept/emergent_crafting.md`'s part graph (parts as `(material, geometry, role)` nodes, typed joints as edges — see the Materials section's "Shape & Assembly" and "Typed joints" rows). Whether the player manipulates that graph directly or authors intent that compiles to it is still the open question this doc asks. **A text form that compiles to that graph now exists from the machine side** (2026-09-05): `concept/standard_model.md`'s `device` grammar's `part`/`joint` clauses compile through `DeviceCompiler` into the real `PartGraph`; whether *item* blueprints reuse those clauses is the remaining half of the question.
 - **Base Item Templates** (trivial) — ✅ Done — `item.gd`/`item_catalog.gd` (now also includes torch/campfire/cooked_meat).
 - **Material Inputs** (small) — ✅ Done — `crafting_recipe_book.gd` recipes consume a dictionary of item-id→count inputs.
 - **Modifier Slots** (medium)
@@ -5346,31 +5352,53 @@ at this land the wrong 39 files — since corrected).
 New concept doc (2026-08-24), extending `materials.md`'s existing (already
 implemented, but so far unused) `conductivity` scalar into a real
 water-wheel/windmill → generator → wire/circuit → battery/light-bulb
-mechanism. Nothing implemented — all ⬜ Not started:
+mechanism. **Revised 2026-09-05**: the circuit *algebra* this doc describes
+was generalised into `concept/standard_model.md` (see that entry) and its
+kernel solves this doc's own river-powered light end to end as an
+*authored* device (`tests/unit/test_device_book.gd`). What is real is
+generic — a law, not a placed component — so each row below is 🚧 where
+the physics exists and ⬜ where the placed, in-world half still does not:
 
-- **Circuit Topology (Adjacency Flood-Fill)** (medium) — the algorithm
+- **Circuit Topology (Adjacency Flood-Fill)** (medium) — ⬜ the algorithm
   shape already exists and is real, tested code
   (`src/gameplay/room_detector.gd`'s room-enclosure flood-fill), just not
-  yet generalized past room enclosure to conductivity.
-- **Torque from Flow (Water Wheel / Windmill)** (medium) — windmill has no
-  new world-sim dependency (`weather.md`'s `wind_strength_for` already
-  real); water wheel's flow-from-elevation-gradient proxy is proposed, not
-  validated.
-- **Generator (Torque + Magnet + Coil → EMF)** (medium)
-- **Wire / Circuit Resistance & Current (Ohm's Law)** (medium)
-- **Battery (Charge Storage)** (small)
-- **Light Bulb (Load, Brightness from Power)** (small)
-- **Magnetic Permeability Material Scalar** (small) — proposed addition to
+  yet generalized past room enclosure to conductivity. The kernel solves a
+  loop an author *wrote*, never one discovered from placed pieces.
+- **Torque from Flow (Water Wheel / Windmill)** (medium) — 🚧 the law is
+  real: a paddle `source` from the flat-plate drag law (water or air, one
+  function) into a `transform` whose ratio is the wheel's radius
+  (`device_physics.gd`); the worked light's loaded wheel measurably
+  labours under load. ⬜ binding a placed wheel to a real river's current
+  (`OpenChannelFlow.velocity`) or a windmill to `weather.md`'s real wind.
+- **Generator (Torque + Magnet + Coil → EMF)** (medium) — 🚧 a `gyrate`
+  law with Faraday's `k = B A N`, lossless, torque per ampere equal to
+  volts per rad/s (the same machine is a motor — a charged store behind it
+  motors the shaft, pinned). ⬜ the magnet as a sourced part (see the
+  permeability row).
+- **Wire / Circuit Resistance & Current (Ohm's Law)** (medium) — 🚧 a
+  wire's ohms come from its material's conductivity scalar inverted to S/m
+  over its own length and section (copper beats iron by the published
+  6.4×; wood cannot complete a circuit); the loop solve is Ohm's law
+  generalised through transformers and gyrators. ⬜ a placed wire run.
+- **Battery (Charge Storage)** (small) — 🚧 a `store` (tank-stepped level,
+  refuses charge when full, sheds overcharge, drains backwards through a
+  dead source). ⬜ the parallel placement across a bulb (`fork`).
+- **Light Bulb (Load, Brightness from Power)** (small) — 🚧 a filament is
+  a `resist` whose ohms are derived from 2 cm of 0.1 mm graphite, and the
+  worked light puts 62 W into it, firing a `shine` rule. ⬜ any light
+  rendered from that.
+- **Magnetic Permeability Material Scalar** (small) — ⬜ proposed addition to
   `material_properties.gd`'s existing vector (density/hardness/toughness/
   elasticity/sharpness_capacity/flammability/conductivity/decay_rate);
-  not yet added.
-- **Magnetite Ore / Magnetized-Iron Crafting** (small) — proposed fourth
+  not yet added — a generator's field is an authored `magnet_tesla`.
+- **Magnetite Ore / Magnetized-Iron Crafting** (small) — ⬜ proposed fourth
   `OrePlacement.ORE_TYPES` entry (today iron/copper/coal) plus a craft-a-
   magnet-from-iron recipe; neither exists.
-- **Wire Overload Burnout** (small) — proposed reuse of the existing
-  melting/damage-threshold mechanism (`impact_resolver.gd`'s
-  `T_BRITTLE_TOUGHNESS`-style thresholds), not yet extended to current
-  load.
+- **Wire Overload Burnout** (small) — ⬜ the rule grammar can fire on a
+  wire's dissipated power today, but only against an authored threshold;
+  the derived rating (watts → conductor temperature →
+  `MaterialProperties.thermal_failure_c`) is the standard model's own ⬜
+  row.
 
 ### Housing (`concept/housing.md`)
 
@@ -7023,6 +7051,55 @@ state had never once been set by anything in `src/`.
   the walk/dive/display/sing rows have real art measured or reserved but
   no behavioral trigger. Writeup: `concept/ecosystem_dynamics.md`'s "Real
   illustrated art for songbirds and the kingfisher".
+  **Follow-up, same day: "robins and sparrows are now gigantic".** The
+  renderers' flat `marker.scale` was tuned for `ProceduralBirdSprite`'s
+  tiny 32x20 canvas and applied unchanged to `IllustratedBirdSprite`'s
+  real art (~6-9x wider in actual content) — a sparrow that should read
+  ~6.6 world px wide rendered at ~58. Fixed with `IllustratedBirdSprite.
+  marker_scale(species)` (the bird analog of `IllustratedAnimalSprite.
+  marker_scale`), wired in wherever the illustrated generator is actually
+  selected, mirroring `CreatureMarker._apply_action_scale`'s own
+  illustrated/procedural branch. 259 tests green. Writeup:
+  `concept/ecosystem_dynamics.md`'s same section, its own dated follow-up.
+  **Follow-up, same day: halved again (still too big), real flight
+  height, and Phase 3 (walk/dive/sing).** `BASE_WORLD_WIDTH` halved once
+  more (6.6 → 3.3) on a second live playtest report. New
+  `AmbientFlyerMarker._flight_height` (birds only) climbs toward
+  `FLIGHT_CRUISE_HEIGHT_PX` while airborne and back to 0 once perched,
+  lifting (`offset`) and shrinking (`scale`) the sprite with altitude —
+  264 tests green. Phase 3: `IllustratedBirdSprite` gains
+  `generate_walk_textures`/`generate_dive_textures`/
+  `generate_sing_textures` (each confirmed by eye), a `_MIN_DIVIDER_WIDTH`
+  fix for the singing row's over-split sound-lines, new pure
+  `BirdSong.should_sing` (a periodic per-bird roll, no new phase machine),
+  `PiscivoreBirdMarker.dive_frames` shown only during `Phase.DIVING`, and
+  `AmbientFlyerMarker.walk_frames`/`sing_frames` wired alongside the
+  existing `peck_frame` check. 301 tests green across eight files. Not
+  done: bird courtship/dancing and reproduction (Phase 4), kingfisher's
+  own remaining two rows. Writeup: `concept/ecosystem_dynamics.md`'s same
+  section.
+  **Follow-up, same day: Phase 4, real bird courtship + visible
+  reproduction.** New `src/gameplay/bird_courtship.gd` (`BirdCourtship`)
+  reuses `Courtship`'s pairing primitives exactly as `MammalCourtship`
+  already does, with a bird-appropriate motion (linear close to a fixed
+  held point, no orbit) and its own species gate — the three
+  `AmbientFlyerMarker` songbirds, deliberately NOT kingfisher (a
+  `PiscivoreBirdMarker`, structurally unreachable from this mechanism).
+  Wired into `AmbientFlyerMarker._step_pair_interactions` as a genuine
+  third interaction path (own `_bird_courting_*` fields, not shared with
+  the pollinator dance's `_courting_*`). On a successful pairing,
+  `spawn_flyer_offspring` spawns the visible chick and a new `record_
+  bird_birth_at` → `EcosystemSimulation.record_bird_birth` (species-
+  routed) reconciles the aggregate population it will be reloaded from —
+  without this a courtship chick would just vanish on next chunk load.
+  Verified with two real markers actually pairing, holding a genuinely
+  fixed point, and — walking positions until a pair's seed mates —
+  spawning a chick and reconciling the population exactly once; confirmed
+  `test_birds_do_not_perform_the_butterfly_dance` still passes unchanged.
+  399 tests green across eleven files. Not done: kingfisher's own
+  remaining two rows and kingfisher courtship (both named follow-ups, the
+  latter structurally out of this mechanism's reach). Writeup:
+  `concept/ecosystem_dynamics.md`'s same section.
 - **Persistence / catch-up integration of eaten burrows** (medium) — ⬜ Not
   started, deliberately — a reloaded chunk re-seeds deterministically and
   loses which burrows had been eaten, exactly like `FlowerPatch`, `TallGrass`,
@@ -7151,6 +7228,59 @@ state had never once been set by anything in `src/`.
   not silently dropped): ants as bird prey and ants as carrion detritivores
   remain exactly as scoped in the entry above — this pass is rendering
   only, it does not touch what a mound forages or how.
+- **Crushed underfoot: weight-emergent worm mortality** (medium) — ✅ Done
+  — requested directly: stepping on a worm should splatter it, emerging
+  from real player weight, force of step, and the worm's own pressure
+  resistance, not a flat "anyone can squash a worm" rule — calibration
+  example given: a frog's step spares a worm, a horse's kills it. No
+  frog or other amphibian exists in this game at all (checked directly);
+  the real substitutes are the smallest and largest land creatures that
+  do (mouse/squirrel spared, horse unchanged as the given example). Real
+  pieces:
+  1. **`CreatureMass`** (new, `src/world/creature_mass.gd`) — real,
+     commonly-cited average adult body mass per `AnimalAnatomy` species
+     (mouse 0.02kg through horse/camel 500kg). The player's own mass
+     reuses `StoneSize.AVERAGE_BODY_MASS_KG` directly rather than a
+     second guess. Purely mythical world bosses (no real animal to cite)
+     fall back to their own `world_scale` CUBED against deer's real
+     mass/scale ratio — verified directly that `world_scale` alone badly
+     under-represents real mass at the high end (a "horse" would come
+     out under 150kg using that formula, nothing like its real ~500kg),
+     which is exactly why the tabulated real species use cited figures
+     instead, not a derived one.
+  2. **`EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S`/`is_crushed_by`/
+     `crush`** (new) — reuses this codebase's own "one damage model for
+     the whole world" (`materials.md`/`ImpactResolver`) in SHAPE
+     (momentum = mass × velocity, resolved against a threshold), not in
+     its literal numbers: `ImpactResolver.T_CRUSH` is calibrated for
+     thrown-rock-vs-creature combat, an unrelated scale from "anything
+     stepping near a soil invertebrate", so this pins its own worm-scaled
+     threshold (5.0 kg·m/s) instead. Momentum is a full body's weight
+     settling through one foot at ordinary walking pace
+     (`PebbleDispersion.FOOTSTEP_SPEED_MPS`, reused) — deliberately the
+     creature's own FULL mass, not `PebbleDispersion`'s own foot-mass
+     FRACTION (a glancing kick past a pebble vs. standing weight settling
+     onto something underfoot are genuinely different physical events).
+     `crush(cell, momentum)` mirrors `take()`'s own `is_surfaced` gate (a
+     burrowed worm has no exposed body to step on) and `RECOVERY_SECONDS`
+     clock exactly — a crushed burrow recovers exactly like an eaten one.
+  3. **`EarthChunkManager.crush_worm_at`** mirrors `take_worm_at`'s own
+     shape exactly (same tile/chunk/patch lookup, same immediate
+     `_sync_worm_sprites` re-sync). Wired in `World._client_process` for
+     the player (`CreatureMass.PLAYER_MASS_KG`) AND every `CreatureMarker`
+     (`CreatureMass.mass_kg_for(creature.info.species)`), mirroring
+     `tread_snow_at`'s own "player, then every creature in the group"
+     call shape. No debounce needed for either — `crush_worm_at`'s own
+     removal is already idempotent, unlike the continuous accumulators
+     (path wear, snow depth) that DO need per-entity "last tile"
+     tracking.
+  **Deliberately NOT included** (named, not silently dropped): no
+  dedicated splat visual effect — a crushed worm currently disappears
+  exactly the way an eaten one already does, a real but purely cosmetic
+  follow-up. Flying creatures are airborne, not walking, so deliberately
+  excluded — a robin already interacts with a worm on its own terms
+  (`take_worm_at`, eating it), never by incidentally landing weight on
+  it. Full writeup: [soil_fauna.md](concept/soil_fauna.md#crushed-underfoot-weight-emergent-worm-mortality).
 
 ### Flora (`concept/flora.md`)
 
@@ -8437,19 +8567,21 @@ ants/bugs above already close the "ants eat fallen leaves" gap the report
 asked for; extending the invisible colony simulation too is a reasonable,
 separable follow-up (see `soil_fauna.md`'s own cross-reference).
 
-⬜ **Still no litter-density accumulation, decay, or soil-fertility
-feedback, no ground-covering visual effect, and no third rotten/black
-colour stage for litter that outlives `LeafLitterField.LIFETIME`**
-(unchanged from the first pass's own scope cut — the 90-second flat
-lifetime still despawns an ordinary leaf long before any real season
-boundary could pass under it in normal play). `soil_fauna.md` already
-names the real version of the fertility question as an explicit, deferred
-follow-up. See `leaf_litter.md`'s own "History: why not the density-field
-shortcut" section for why a pure GPU density-field aggregate (the
-`SnowBombShader` technique) was tried and abandoned for this feature
-TWICE — once before the first `DroppedItem`-based pass, and again as this
-rewrite's own first instinct — both times for the identical reason: no
-discrete position left for a decomposer to forage from.
+⬜ **Still no litter-density accumulation or soil-fertility feedback, and
+no ground-covering visual effect** (unchanged scope cut — see
+`leaf_litter.md`'s own "Deliberately not modeled" section).
+`soil_fauna.md` already names the real version of the fertility question
+as an explicit, deferred follow-up. See `leaf_litter.md`'s own "History:
+why not the density-field shortcut" section for why a pure GPU
+density-field aggregate (the `SnowBombShader` technique) was tried and
+abandoned for this feature TWICE — once before the first
+`DroppedItem`-based pass, and again as this rewrite's own first instinct
+— both times for the identical reason: no discrete position left for a
+decomposer to forage from. (A third, "winter" decay stage for litter that
+outlives long enough — previously listed here as out of scope — shipped
+2026-09-05, below; the reasoning above about the flat lifetime turned out
+to only rule out timing it against the CALENDAR season, not against
+`LIFETIME` itself.)
 
 ✅ **Live in-game performance re-confirmation of this specific rewrite** —
 was the one named gap here; closed by the 2026-09-05 follow-up above
@@ -8542,6 +8674,78 @@ renderer, not only the numeric mirror" convention) and by rendering an
 actual transition frame by frame and inspecting the sequence directly —
 the leaf visibly rotates through several distinct orientations across one
 journey rather than only tilting a few degrees back and forth.
+
+✅ **Follow-up: "leaves should be half as big".** `LeafLitterRenderer.
+WORLD_SIZE` was `WALNUT_WORLD_WIDTH * 1.5`, ported unchanged from
+`DroppedItem.LEAF_WORLD_SIZE`'s own original derivation; reported too
+large once actually seen rendered at real scale. Halved to `* 0.75`,
+pinned by `test_world_size_is_half_its_previous_walnut_relative_size`
+rather than left as a bare constant a future edit could silently drift
+off of.
+
+✅ **Follow-up (2026-09-05), three parts in one report: "leaf litter
+should happen constantly at a low rate in normal gameplay ... in autumn
+all leaves should fall eventually ... fallen leaves should change the
+season from autumn to winter if they keep lying on the ground ... winter
+is last stage for a leaf".**
+
+1. **A low, constant autumn baseline shed rate.** Before this,
+   `leaf_fall_chance` was gated on `canopy_turning_into == "winter"` —
+   but per `TreePhenology.canopy_state_at`, that reads `"winter"` for the
+   ENTIRETY of autumn (not merely its final visible-turn slice), so the
+   gate never actually did anything; `canopy_turn_progress` alone reads
+   exactly 0.0 for roughly the first two-thirds of autumn
+   (`TreePhenology.TURN_FRACTION` is 0.34 of a season), meaning a real
+   autumn tree shed nothing at all for ~32 real hours of ordinary,
+   non-accelerated play before its final turn began. `leaf_fall_chance`
+   is now `maxf(LEAF_AUTUMN_BASELINE_CHANCE, canopy_turn_progress)` —
+   `LEAF_AUTUMN_BASELINE_CHANCE` reuses `LEAF_SUMMER_TRICKLE_CHANCE`'s own
+   value directly (the same real wind/senescence phenomenon, just in the
+   season leaves actually matter most) rather than inventing a second,
+   separately-tuned number. The existing turn-progress ramp still rises
+   on top once the final turn begins, unchanged at `canopy_turn_progress
+   == 1.0`. New test (`test_step_fruiting_sheds_a_baseline_trickle_in_
+   settled_autumn_before_the_turn`); all pre-existing autumn/summer/
+   spring leaf-fall tests still pass unchanged.
+2. **A settled leaf decays to a terminal `"winter"` season.**
+   `LeafLitterField.DECAY_TO_WINTER_SECONDS`, pinned at exactly half of
+   `LIFETIME` (45 seconds — see that constant's own doc comment for why a
+   fraction of the one existing timer, not an independent number, is the
+   right way to ground this) advances a SETTLED leaf's own `season` field
+   from `"autumn"`/`"summer"` to `"winter"` one-way in `advance()` — never
+   reverts, never advances past `"winter"`. Gated on the leaf actually
+   being settled, the same rule the wind-dispersal roll right beside it
+   already applies, for the identical "still easing into a relocation"
+   reason. 7 new tests in `test_leaf_litter_field.gd` (38/38 passing).
+3. **The terminal stage's own colour, without any new art.**
+   `LeafLitterAtlas.SEASONS` gained a third entry, `"winter"` — not a
+   season a leaf falls in, but the fixed-grid atlas cell the decayed
+   stage renders from. No species has real illustrated "winter" litter
+   art, so `build_stamp_image` special-cases `season == "winter"` to
+   derive it from that species' own already-built `"autumn"` stamp via a
+   new `_decayed_winter_stamp`, recolouring with the exact
+   luminance-preserving technique `ProceduralFlowerSprite._paint_
+   illustrated_head` already established (read the source's own Rec. 709
+   luminance as `shade`, paint a dulled low-saturation brown-grey
+   `WINTER_TINT` at that brightness) rather than falling through to the
+   generic procedural fallback a genuinely-missing pair would use. 4 new
+   tests confirm the derived stamp is non-blank, matches the autumn
+   stamp's exact silhouette, reads less saturated, and keeps real shading
+   variation rather than flattening to one tone. Also visually verified
+   by rendering every species' autumn/winter stamp pair side by side and
+   inspecting the image directly (`tools/probe_leaf_winter_stamp.gd`,
+   kept as a dev tool for next time this kind of recolour needs eyeballing)
+   — a numeric saturation check alone cannot confirm the result reads as
+   a believable decayed leaf rather than a flat smear.
+
+Corrected two stale claims this exposed: this doc's own "no third
+rotten/black colour stage" scope-cut note (above) had conflated "no real
+calendar-season boundary reaches a leaf before `LIFETIME` prunes it"
+(still true) with "no stage keyed to the leaf's OWN elapsed time could
+work either" (never actually followed from the first claim) — see that
+entry's own correction. `leaf_litter.md` itself is updated throughout
+("When leaves fall", "Rendering", "Lifecycle", "Deliberately not
+modeled", "Status").
 
 <details>
 <summary>First pass (superseded above), kept for history</summary>
@@ -10820,7 +11024,9 @@ any flyer in range was always caught, immediately becoming a
 `jarred_insect`/`caged_songbird` curiosity item, with no probability and no
 intermediate "loaded, undecided" state at all.
 
-- ✅ **The Capture DSL itself** (large) — `capture_parser.gd` /
+- ✅ **The Capture DSL itself** (large) — ~~`capture_parser.gd`~~ (retired
+  2026-09-05 in favour of the standard model's device grammar — see the
+  addendum below) /
   `capture_atom_catalog.gd` / `capture_physics.gd` / `capture_executor.gd` /
   `capture_atom_effects.gd` / `capture_book.gd`, mirroring the magic DSL's
   own module split (parser → atom catalog → physics → executor → effects →
@@ -10853,7 +11059,8 @@ intermediate "loaded, undecided" state at all.
   the specific species survives for rendering. That exposed a real,
   general stacking bug fixed in passing: `ItemStack.can_stack_with` only
   ever compared item id, so a freshly-loaded container could silently merge
-  into a stack of empty ones — now also requires matching `captive_species`.
+  into a stack of empty ones — now also requires matching `captive_species`. (**2026-09-05**: `Inventory.add` itself never consulted that check until
+  the standard-model merge — see the addendum's 🐛 row below.)
 - ✅ **A bottled catch renders alive** — reported mid-pass, so specified in
   `capture_dsl.md` before being built, same as everything else here. The
   real `glass_bottle.png` composite sheet (measured: 1536×1024, a fixed 3×2
@@ -10947,23 +11154,293 @@ under the smell API, and proves the DSL in tests.
   after the rewire: olfaction, scent-foraging, flies, fly-life-cycle,
   creature-marker, creature-info, ambient-flyer-marker and
   piscivore-bird-marker suites all green.
-- ⬜ **Nothing visible changed, by design.** Every animal decides what it
-  decided before. The mammal ladder's new smell wiring and the context's
-  `smells`/`species`/`genome` keys are real in the model and fed by nothing
-  live until the marker publishes its senses as stimuli (the doc's slice 2);
-  no live animal carries a receptor gene (`AnimalGenome`, see the Animal
-  Genetics section above, still does not exist).
-- ⬜ Slices 2–6 in the doc, none started: real stimuli from the marker (and
-  `danger` stops being a verdict); one drive vector replacing the five hunger
-  clocks with ramped levels; gains as personality (boldness, docility,
-  temperament, the spell fear/calm statuses); bird/insect/fish/villager body
+- ✅ **Slice 1 changed nothing visible, by design.** Every animal decided
+  what it decided before; the slice was a behaviour-preserving re-expression
+  pinned by the tests that already existed.
+- ✅ **Slice 2 (same day): danger stopped being a verdict, and every land
+  mammal got its own nose.** The basis now carries `predator`/`player`/
+  `flesh` instead of `danger`; `CreatureMarker`'s sensing tick publishes
+  every nearby creature as what it IS, every person as a person, and the
+  nearest water/food tile at a real position (`_cached_stimuli`), and reads
+  its threat list back from the species valence (`CreatureBehavior.threats()`
+  over `BehaviorKernel.perceived`) -- "predators are threats to herbivores,
+  people to everyone, a predator ignores other predators, a tamed animal no
+  longer perceives people" are all valences and sensitivities now, not scan
+  rules. Attack and hunt act on the node the winning stimulus carries (the
+  kernel returns it whole); the prey cache and both direction caches are
+  gone. The kernel ranks by a sense-supplied `strength` when the sense knows
+  one (smell hands over its dilution via `ScentForaging.stimuli_from`) and
+  honours a wiring `floor` (the smell wiring carries
+  `Ethogram.SMELL_INTEREST_FLOOR`, which `ScentForaging.MIN_INTEREST` now
+  aliases); `ScentForaging.best_source` ranks through the kernel with an
+  optional genome. `src/gameplay/animal_genome.gd` exists in
+  `concept/animal_genetics.md`'s exact shape (static namespace, ordered
+  `GENE_NAMES`, `GENE_READERS`, both anti-dead-weight tests) holding only the
+  five receptor genes; `AnimalGenome.for_seed` derives them bell-shaped
+  around the species template from the marker's own `wander_seed`, and
+  `CreatureMarker.genome_or_derived()` feeds them to every decision and
+  every sniff -- so a boar born without a decay receptor walks past carrion
+  the next boar takes (`test_an_individuals_nose_reaches_the_live_forage_choice`),
+  with nothing new persisted. Suites green after the change: adapter,
+  marker, creature-info, ambient-flyer, piscivore, olfaction, flies,
+  fly-life-cycle, taming, animal-reproduction, mammal-courtship (578 tests).
+- 🚧 **Deliberately not in slice 2**, recorded in the doc's §2/§3: grazing
+  bites stay `GrazerForaging`'s lexicographic diet-order choice (a weighted
+  sum cannot say "mast over grass at any distance"); the species half of the
+  adapter overrides (`flesh` valence, "ignores other hunters", the fight
+  temperament) still comes from `CreatureInfo`'s tables rather than the
+  five species records; no `conspecific` feature is published until a
+  wiring reads one.
+- ✅ **Slice 3 (same day): one drive vector.** `src/gameplay/drives.gd` is
+  the single clock behind every "rises over time, crosses a threshold, a
+  meal takes it back down" need, and the numbers are drive profiles in the
+  ethogram (`Ethogram.drive_profile`: `mammal` = CreatureNeeds' 0.02/s and
+  0.03/s with the 0.45 herd stagger, `villager` = the same pace hunger-only,
+  `bird` = BirdDigestion's songbird crop as hunger, plus a `kingfisher`
+  species record overriding the bird appetite with PiscivoreAppetite's two
+  meals a day). `CreatureNeeds`, `NpcNeeds`, `PiscivoreAppetite` and
+  `BirdDigestion` survive as facades over it -- same APIs, their constants
+  re-exported from the profiles as `static var`s -- so `CreatureMarker`,
+  `NpcEconomy`/`NpcMarker`, `PiscivoreBirdMarker`, `AmbientFlyerMarker` and
+  all four test files are untouched and green; the stagger keeps the exact
+  hash the old modules used, so no animal or villager already in the world
+  changes its onset. Levels are the kernel's gains (`Drives.gains()`, which
+  `CreatureMarker` now publishes and `CreatureBehavior` reads ahead of the
+  hungry/thirsty booleans); a gain is a step at the threshold today and a
+  ramp one profile `onset` away -- no profile sets one yet, deliberately,
+  because under first-match arbitration a ramp would only make animals
+  forage below the thresholds they were tuned to (the doc's §5 says when it
+  becomes meaningful). The player's `SurvivalMeters` stays the player's.
+  21 new tests in `test_drives.gd`; facade, consumer and marker suites green.
+- ✅ **Slice 4 (same day): a boldness gene, narrower than first planned.**
+  Building "gains as personality" found that two of its three original
+  pieces don't hold up: `docility` has no gene yet (animal_genetics.md's own
+  seven genes are still unimplemented, and that doc owns introducing it,
+  not this one), and the spell `FEAR`/`CALM` mechanism turned out to already
+  be correct and tested (`_temperament_for_decision`, three passing tests)
+  — nothing failing motivated touching it. What shipped instead: a
+  land-mammal `boldness` gene that raises the fear wiring's *floor* rather
+  than scaling its gain (a gain alone is dead weight under first-match
+  arbitration — any nonzero score still wins outright), zero at or below
+  the population median (every individual at or below typical behaves
+  exactly as before), rising to a ceiling derived from
+  `Affinity.proximity(one tile)` — not literal touching distance, which
+  would make the boldest individual's own wiring unreachable rather than
+  merely hard to reach. Deliberately not the same numbers as
+  `FlyerPersonality`'s butterfly-specific flight-initiation-distance
+  constants (no shared infrastructure with butterflies yet — that's slice
+  5), only the same bell-shaped-population shape. Wiring it up surfaced a
+  real, independent ordering bug: `CreatureMarker` calls
+  `CreatureBehavior.threats()` every sensing tick before its first
+  `decide()`, and `threats()` shared `decide()`'s genome-change cache
+  without ensuring the wirings array existed first — so the floor patched
+  an empty array on the very first call and never got a second chance
+  (the cache considered the genome already "seen"). Fixed with a shared
+  `_ensure_wirings()` guard, pinned directly. 8 new/changed tests; full
+  affected regression (534 tests) green.
+- ⬜ Slices 5–6 in the doc, none started: bird/insect/fish/villager body
   plans over the existing motor programs, with the NPC instruction DSL as
   the player-facing dialect; mate choice on display/preference vectors.
+  Also still open from slice 4: docility on a fight gain, and cross-wiring
+  scoring (a floor sufficed this time; may still be needed later).
+
+#### Addendum (2026-09-05): the net is a device with a real mesh
+
+Reported: "*refactor the butterfly net to express that it catches small
+animals like butterflies, fish, small birds; but not e.g. bees / flies
+because the net is not tight enough — it should also encode the capture
+action which confines the subject to the net.*"
+
+Investigation: `_throw_net` scanned the whole ambient-flyer flock with no
+species check at all, so a bee or a fly — both real `AmbientFlyerMarker`s,
+the fly spawned by the carrion loop — was netted exactly like a monarch;
+fish were never targets; and "what the net catches" lived in a
+`target.tier == "flyer"` guard, a category rather than a physical fact.
+The standard model had just landed, so the honest fix was to make the net
+a device with a real bag and let its mesh decide.
+
+- ✅ **Mesh physics** (medium) — `body_dimensions.gd` (three sourced body
+  extents per species for the flyer and fish rosters, the length pinned to
+  `wingbeat_bounce.gd`'s), `CapturePhysics.slips_through` / `fits_mouth` /
+  `mesh_verdict`: a body slips through when its middle extent is under the
+  mesh, does not fit when its largest exceeds the mouth; monotone in both
+  and pinned so. Against the standard net (10 mm mesh, 30 cm mouth): bee
+  and fly slip through, butterflies and small birds are held, goldfish and
+  bluegill are netted, trout and koi are too big.
+- ✅ **The net is device text** (medium) — `capture_book.gd` authors it in
+  `concept/standard_model.md`'s grammar: a wooden handle, an iron hoop, a
+  fibre bag with `aperture_mm: 10` (the rip saw's `tooth_pitch_mm`
+  precedent) and `width_cm: 30`, compiled to the real part graph (under
+  half a kilogram) and its part facts, validated at load. `capture_parser.
+  gd` and the `capture` block kind are retired: the device grammar is a
+  strict superset.
+- ✅ **The capture act names where** (small) — atoms `mesh_holds(mesh:
+  bag)` (a check that fails WITH a reason), `catch_roll`, `confine(in:
+  bag)`, `free(from: bag)`, `move_captive`; `hold_captive` /
+  `release_captive` retired and pinned so. `CaptureExecutor.validate` is
+  the static constraint layer — a `confine(in: X)` must follow a
+  `mesh_holds(mesh: X)` in its own pipeline, every named part must be
+  declared, every atom known and complete — so no shipped text can
+  confine what its mesh was not shown to hold.
+- ✅ **In play** (small) — the catch context carries the subject's extents
+  and the net's facts; a mesh refusal shows its reason ("The bee slips
+  through the 10 mm mesh."), a lost roll stays "Missed!"; a fish in the
+  shallows is a net target through the kingfisher's nearest-fish lookup and
+  leaves the water through the rod's own `catch_nearest_fish`, so its
+  pond's population records the harvest; a netted fish loads the net and
+  never bonds. 8 new scoped `test_player.gd` tests, the 15 existing net /
+  release / bottle tests re-run green.
+- ⬜ **No mass or tear rule** — a koi is refused for length, not weight;
+  the honest version is the subject's mass against `PartGraph.
+  part_load_capacity(bag)`, and no fish carries a mass yet.
+- ⬜ **Net variants have no recipes** — a 1 mm insect net that holds the
+  bee and a 40 cm landing net that takes the trout are each one number
+  away in text (both pinned in `test_capture_executor.gd`), but nothing
+  lets a player craft one.
+- ⬜ **The kingfisher** is measured (held by the standard net) but is a
+  `PiscivoreBirdMarker`, not an ambient flyer, so `_throw_net` never sees
+  it.
+- 🐛 **Fixed at the merge to `main` (2026-09-05): bottling lost the
+  creature, and could spend a loaded bottle.** Merging onto a `main` that
+  had just started every player with an empty glass bottle turned four
+  older bottle tests red on `main` itself — and the root cause was real,
+  not a stale expectation: `Inventory.add` merged by item id alone and
+  never consulted `ItemStack.can_stack_with`, so the freshly loaded bottle
+  merged into the starting empty one and its species was gone; in the same
+  path, `has`/`remove` by id meant "Put into bottle" could count and spend
+  a *loaded* bottle as if it were empty. `Inventory.add` now merges only
+  where `can_stack_with` agrees, `has`/`count_of`/`remove` take an optional
+  contents filter, and Player counts and spends empty bottles only. Pinned
+  by 5 new `test_inventory.gd` tests and 2 new scoped `test_player.gd`
+  tests; the four older tests state their empty-pack premise explicitly
+  now that the pack starts with a bottle.
+
+### Standard Model (`concept/standard_model.md`, new this pass)
+
+Reported: "*design and spec a formal standard model for our in-game world
+physics and mechanics — a DSL flexible enough that engineers can invent
+entirely new devices / structures / things.*"
+
+Investigation found the pieces of such a model already scattered across
+four docs and never joined: `materials.md`'s property vector and its one
+impact equation, `emergent_crafting.md`'s parts / typed joints / part graph
+and its "an item is a program" rule AST, `electromagnetism.md`'s
+torque → EMF → Ohm circuit (pure design, nothing built), and three DSLs
+already sharing one `on EVENT(ARG) when GUARD: pipeline` grammar. What none
+of them had was a single *algebra* in which a water wheel, a lever, a
+generator, a battery and a millstone are the same few kinds of thing —
+which is what "invent new devices" actually requires, because without it
+every new device is a new special case. Spec first (per `CLAUDE.md`), then
+a red-first kernel: 173 tests across eight files, every one written and
+seen failing before its module existed.
+
+- ✅ **The formal model** (large) — a bond graph (Paynter, 1959–61) cut
+  down to "8-bit": five energy domains as (effort, flow) pairs whose
+  product is power — rotation, translation, electrical, hydraulic, and
+  thermal honestly catalogued as a pseudo-bond and kept out of power
+  accounting (`physics_domains.gd`); five element laws — `source` (a
+  Thévenin pair with a real free-running flow and matched-load ceiling),
+  `resist`, `transform`, `gyrate`, `store` (`device_elements.gd`), with
+  transformer/gyrator losslessness asserted as a property over a sweep,
+  and the two affine-load reflection rules (`R/r²` through a transformer,
+  `k²/R` with a flipped offset through a gyrator) pinned by consistency
+  checks against the laws themselves. A lever, a gear, a wheel's radius, a
+  piston and a pump are all one law; a generator and a motor are one law;
+  a battery, a reservoir and a drawn bow are one law.
+- ✅ **Derived, not authored** (medium) — `device_physics.gd`: a material's
+  conductivity in S/m recovered by inverting the shipped IACS map (copper
+  lands on the 5.80e7 definition; wood is twenty orders below, so a wooden
+  wire cannot complete a circuit — `electromagnetism.md`'s sentence, now
+  arithmetic); a wire's ohms by Pouillet's law over a haft part's own span
+  and section; a wheel's ratio as its radius; a paddle in a stream as the
+  flat-plate drag law flattened to a Thévenin pair (water's density reused
+  from `open_channel_flow.gd`, sea-level air's beside it — one function is
+  both a water wheel's and a windmill's source); Faraday's `k = B A N`.
+- ✅ **The solver** (large) — `device_network.gd`: one source driving a
+  series chain, solved in closed form by folding everything downstream
+  into one affine load, solving the one flow, and propagating forward with
+  per-element power accounting and tank-stepped stores. Pinned: efforts
+  around a closed loop sum to zero; source power equals dissipated plus
+  stored power to the watt; the **maximum power transfer theorem emerges**
+  (delivered power rises then falls with load and peaks at the matched
+  load, through a lever and a generator — this model's twin of
+  `part_mechanics.gd`'s optimum-head-mass anchor); more grinding or
+  electrical load slows the wheel; an open-ended transformer carries no
+  flow; an unloaded generator runs free with open-circuit EMF and no
+  current; stores charge by power × dt, refuse charge when full, shed
+  overcharge as overflow, never drain below empty; a charged store drives
+  the loop backwards when the source dies and, behind a gyrator, **motors
+  the shaft** — the battery that keeps the mill turning, which no rule
+  wrote. Refusals name their reason (no source first, a second source,
+  duplicate ids, an ideal source into a short, an ideal effort behind a
+  gyrator).
+- ✅ **The `device` DSL** (large) — `device_parser.gd`, a fourth structural
+  sibling of the spell / capture / npc-instruction parsers (same tokenizer,
+  same rules) with four declarative clauses in front: `part ID: MATERIAL
+  GEOMETRY ROLE (dims)`, `joint ID: A to B TYPE FASTENING MATERIAL (axis:
+  z)`, `law ID: ELEMENT(params)`, `loop A |> B |> C`. Purely structural,
+  `line N:` errors. `device_compiler.gd` turns the AST into the *shipped*
+  `PartGraph` (validated by its own rules — an unmodeled material, a missing
+  dimension, an axis-less pivot come back with the graph's own reasons) plus
+  the element chain: every one-port law names a power domain, every
+  two-port its in/out, every parameter authored or derived from a named part
+  or fluid and never both, consecutive ports along the loop checked for
+  domain agreement with a refusal naming both; since 2026-09-05 every
+  part is also exposed as **facts** (material, geometry, role, every
+  declared dimension, mass, span) so a rule on a loop-less device — the
+  butterfly net, `concept/capture_dsl.md` — can read `bag.aperture_mm`.
+  `device_executor.gd` turns
+  a solved loop into a context keyed by element id (store levels and
+  device-level `@` facts included) and fires the device's rules over it.
+- ✅ **Two worked examples, solved end to end** (`device_book.gd`, a fixed
+  authored table like `capture_book.gd`): the **mill race light** — river
+  paddle → 2 m wheel → 1:10 gears → dynamo → 10 m of 3 mm copper → 2 cm of
+  0.1 mm graphite, every parameter derived — runs its loaded wheel at
+  1.408 m/s in a 1.5 m/s river, its dynamo at 134.5 rpm and 28.2 V, and
+  puts **62.1 W** into the filament (a real bulb's worth; the wire takes
+  0.12 W), firing `shine`; the **post mill** — 10 m² of sail in an 8 m/s
+  wind → 4 m sails → 1:5 gears → millstone — puts **891 W** into a stone
+  turning at **63.7 rpm**, inside the band real millstones ran at, firing
+  `grind`. Both conserve energy to the watt. **The headline pin**: the same
+  light *without* its gear train puts **0.70 W** into the filament and does
+  not shine, because a water wheel turns far too slowly to generate from
+  directly — the reason real mills geared up by ten or more, reported by
+  the solver rather than written as a rule.
+- 🚧 **Known simplifications, each stated in the concept doc**: the paddle
+  source is a Thévenin secant of a quadratic drag law (stall and free-running
+  exact, the line between them straight); Faraday's `k` is a sinusoid's
+  peak in a DC model; a wheel's ratio is half its span (right for a disc,
+  generous for a paddle); stores are linear capacitors; a joint carries no
+  law of its own (a bearing's friction is an explicit `resist` if wanted);
+  a source's internal loss is reported (`source_internal_loss`) but not
+  routed anywhere.
+- ⬜ **Parallel junctions** (`fork`, Millman closed form specified) and the
+  general `port`/`bond` topology — the compiler refuses a second loop
+  rather than mis-solving it.
+- ⬜ **Inertial storage** (`inertia`, the bond-graph `I`): flywheels, a
+  trip-hammer's falling head.
+- ⬜ **The thermal loop** — and with it the bellows furnace, the device
+  that would turn `STATION_TEMPERATURE_C`'s three fixed numbers into "how
+  hard are you pumping".
+- ⬜ **Derived failure ratings** (`@rating`: dissipated watts → conductor
+  temperature → `thermal_failure_c`; torque → `weakest_link`). Rules fire
+  today against authored thresholds.
+- ⬜ **World binding** — a placed device's `source` reading the real river
+  (`RiverDischarge` / `OpenChannelFlow.velocity`) or wind
+  (`WeatherModel.wind_strength_for`) at its tile; bonds between separately
+  placed devices discovered by adjacency. **Nothing in live gameplay calls
+  any of this kernel** — the same honest position `ItemCompiler` is in.
+- ⬜ **Effect atoms** (`shine`, `grind`, `burn_out`, …): reported by the
+  executor, dispatched by nothing.
+- ⬜ **Magnetic permeability** as a material scalar; a generator's field is
+  an authored `magnet_tesla` until it exists.
+- ⬜ **Player-facing authoring**, skill gating of laws, and `magic.md`'s
+  gold-for-complexity compile gate applied to device text.
 
 ## Reality check
 
-This design corpus — 91 concept docs (recounted 2026-09-05; this section
-long stated the now-stale 49) plus a roadmap and, since 2026-08-23, a
+This design corpus — 94 concept docs (recounted 2026-09-05 at the merge of
+the standard-model pass; this section long stated the now-stale 49) plus a roadmap and, since 2026-08-23, a
 10-doc `docs/emergence/*.md` substrate spec, several hundred catalogued
 mechanisms in total (the exact figure is stale, see this doc's intro) —
 describes a multi-year, full-team-scale MMORPG: procedurally simulated

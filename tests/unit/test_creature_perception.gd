@@ -89,3 +89,26 @@ func test_is_on_food_true_on_a_vegetated_biome_false_on_a_barren_one():
 	assert_true(perception.is_on(StubWorld.new("grassland"), Vector2i(0, 0), "food"))
 	assert_false(perception.is_on(StubWorld.new("desert"), Vector2i(0, 0), "food"))
 	assert_false(perception.is_on(StubWorld.new("ocean"), Vector2i(0, 0), "food"))
+
+
+# -- the nearest tile itself (docs/concept/ethogram.md, slice 2) --------------
+#
+# A stimulus needs a real position, not a heading: the marker publishes the
+# nearest water/food tile as a stimulus and the kernel derives the heading.
+
+func test_nearest_tile_offset_points_at_the_nearest_ocean_tile():
+	var world := StubWorld.new("grassland", {Vector2i(2, 0): "ocean", Vector2i(-3, 0): "ocean"})
+	assert_eq(perception.nearest_tile_offset(Vector2i(0, 0), world, 3, "water"), Vector2i(2, 0))
+
+
+func test_nearest_tile_offset_is_zero_on_the_tile_itself_or_with_nothing_in_range():
+	assert_eq(perception.nearest_tile_offset(Vector2i(0, 0), StubWorld.new("ocean"), 3, "water"), Vector2i.ZERO)
+	assert_eq(perception.nearest_tile_offset(Vector2i(0, 0), StubWorld.new("grassland"), 3, "water"), Vector2i.ZERO)
+
+
+func test_the_direction_is_the_normalised_tile_offset():
+	var world := StubWorld.new("grassland", {Vector2i(3, 4): "ocean"})
+	assert_eq(perception.nearest_tile_offset(Vector2i(0, 0), world, 6, "water"), Vector2i(3, 4))
+	var direction := perception.nearest_direction(Vector2i(0, 0), world, 6, "water")
+	assert_almost_eq(direction.x, 0.6, 0.001)
+	assert_almost_eq(direction.y, 0.8, 0.001)
