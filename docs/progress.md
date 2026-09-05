@@ -11238,11 +11238,39 @@ under the smell API, and proves the DSL in tests.
   (the cache considered the genome already "seen"). Fixed with a shared
   `_ensure_wirings()` guard, pinned directly. 8 new/changed tests; full
   affected regression (534 tests) green.
-- ⬜ Slices 5–6 in the doc, none started: bird/insect/fish/villager body
-  plans over the existing motor programs, with the NPC instruction DSL as
-  the player-facing dialect; mate choice on display/preference vectors.
-  Also still open from slice 4: docility on a fight gain, and cross-wiring
-  scoring (a floor sufficed this time; may still be needed later).
+- 🚧 **Slice 5 (same day): investigated in full, nothing shipped, and the
+  doc says exactly why for each of its five original pieces** — see
+  `concept/ethogram.md`'s "Slice 5 investigation" for the full account.
+  Short version: `FishMarker` never decides to flee on its own
+  (`bolt_from` is called BY something else that already decided, not
+  chosen from a sensed threat); `NpcMarker`'s only decision is which
+  schedule/instruction location tag to resolve to, and hunger resolves as
+  a transaction (`NpcEconomy.step`) wherever the NPC already is, never a
+  walk toward a sensed source of food; `DecomposerMarker._nearest_food`
+  (ants, carrion bugs) is a real `Affinity.proximity`-shaped ranking
+  candidate but has no SECOND drive to arbitrate against, and its own file
+  header states outright that it is deliberately NOT built on
+  `CreatureMarker`'s flee/fight stack — "the wrong shape for a tiny
+  insect" — so adding a fear wiring would reverse a stated design
+  decision, not fill a gap. Ambient flyers (`AmbientFlyerMarker`) DO have
+  a real, named, eight-tier precedence ladder shaped exactly like the
+  mammal one, but its `_step_player_reaction` turned out to be a dense,
+  bug-scarred STATE MACHINE (escape-release hysteresis, a flee/dance
+  mutual-exclusion invariant, pair-interaction abandonment, a
+  fixed-three-times degenerate case) rather than a stateless scoring
+  decision -- correctly re-scoped as its own future slice rather than a
+  quarter of this one. The instruction-DSL-as-kernel-dialect idea does not
+  survive either: `BehaviorKernel.decide` and `NpcInstructionEvaluator.
+  evaluate` share a first-match SILHOUETTE but not a shape (vector-scored
+  ranking across stimuli vs. one boolean primitive against a flat frame),
+  so unifying them would strip one system's real capability for no gain
+  to the other. No code changed; CLAUDE.md's own TDD rule (refactor only
+  behind a failing test) is why -- none of these five had one.
+- ⬜ Slice 6, untouched: mate choice on display/preference vectors. Also
+  still open from slice 4: docility on a fight gain, and cross-wiring
+  scoring (a floor sufficed this time; may still be needed later). Ambient
+  flyers' player-reaction ladder is now a named, scoped candidate for its
+  own future slice, not folded into slice 5's leftover scope.
 
 #### Addendum (2026-09-05): the net is a device with a real mesh
 
