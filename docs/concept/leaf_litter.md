@@ -96,22 +96,46 @@ rejected both times.
   ground in an ordinary breeze -- a familiar autumn scene, and the direct
   grounding for this pass's own wind/player/animal dispersal (see
   "Dispersal" below).
+- **Litter left lying darkens and dulls as it weathers.** A freshly fallen
+  leaf's vivid fall colour fades toward a duller brown-grey within days as
+  it dries out and starts to break down -- the direct grounding for the
+  terminal "winter" decay stage (see "Lifecycle" below), and for deriving
+  that stage's colour from the leaf's own fallen art rather than drawing
+  new, separately-coloured decayed art per species: real decayed litter of
+  any species converges toward roughly the same dulled tone, not a
+  species-distinct one.
 
 ## Mechanism spec
 
 ### When leaves fall
 
-Unchanged from the first pass. The real, main fall is gated on the exact
-clock the canopy's own autumn colour already turns on: `TreePhenology`'s
-TURNING season, specifically while it is turning INTO winter and has made
-some real progress (`canopy_season == "autumn"`, `canopy_turning_into ==
-"winter"`, `canopy_turn_progress > 0.0`), read once per fruiting step from
-`_tree_renderer.canopy_state()` -- the same values
-`EarthChunkManager.step_fruiting` already reads once per step (not per
-tree, see that function's own doc comment on why) for the windfall block
-right beside this one. Chance rises with how far into its own turn the
-canopy is: a tree just beginning to turn sheds rarely, one nearly bare
-sheds almost every step.
+**A low, constant baseline runs for the whole of autumn, with the
+turn-driven ramp rising on top of it.** Reported directly: "leaf litter
+should happen constantly at a low rate in normal gameplay ... in autumn
+all leaves should fall eventually." Before this, the chance was driven
+only by `canopy_turn_progress`, gated on `canopy_turning_into ==
+"winter"` -- but per `TreePhenology.canopy_state_at`, that reads "winter"
+for the entirety of autumn, not merely its final visible-turn slice, so
+the gate was never actually doing anything; `canopy_turn_progress` alone
+reads exactly 0.0 for roughly the first two-thirds of autumn (`TreePhenology
+.TURN_FRACTION` is 0.34 of a full season), which meant a real autumn tree
+shed nothing at all for ~32 real hours of ordinary, non-accelerated play
+before its final visible turn began. A real deciduous tree does not wait
+for its colour to fully turn before its first leaves come down -- ordinary
+wind and early individual-leaf senescence pull a few down all autumn long
+(see "Real-world grounding" above), the same real phenomenon the summer
+trickle below already models for wind/petal damage. `leaf_fall_chance` is
+now `maxf(LEAF_AUTUMN_BASELINE_CHANCE, canopy_turn_progress)` for the whole
+of autumn: the existing turn-progress ramp still rises on top of the
+baseline once the canopy's own final turn actually begins (a tree at
+`canopy_turn_progress == 1.0` still sheds essentially every step, exactly
+as before), and "in autumn all leaves should fall eventually" now actually
+holds well before that final turn, not only once it starts.
+
+Read once per fruiting step from `_tree_renderer.canopy_state()` -- the
+same values `EarthChunkManager.step_fruiting` already reads once per step
+(not per tree, see that function's own doc comment on why) for the
+windfall block right beside this one.
 
 A settled SUMMER tree also sheds an occasional leaf -- real wind and
 petal damage, not the main fall (`LEAF_SUMMER_TRICKLE_CHANCE`, a flat 3%
@@ -137,8 +161,11 @@ transition_from, transition_start}` record in that chunk's own
 `"material"` kind, and per-species display name table are gone; litter is
 never inventoried, hover-named, or picked up by hand, so that data had no
 remaining consumer). `species` is the plain `TreeSpecies` id (`"cherry"`,
-`"acorn"`, ...); `season` is `"summer"` or `"autumn"`, whichever the leaf
-actually fell in -- the only two seasons a leaf ever falls in at all.
+`"acorn"`, ...); `season` starts as `"summer"` or `"autumn"`, whichever the
+leaf actually fell in -- the only two seasons a leaf ever falls in at all
+-- and later decays one-way to the terminal `"winter"` stage once it has
+sat undisturbed long enough (see "Lifecycle" below); never any other
+value, and never reverts once `"winter"`.
 
 `step_fruiting`'s own leaf-fall block is otherwise untouched: the same
 per-(tree, step) deterministic `PixelNoise` roll, the same canopy-turn-
@@ -157,11 +184,37 @@ packs every species/season pair's own real illustrated closeup
 (`IllustratedTree.foliage_leaf_for`) into a fixed-cell-grid runtime atlas at
 process start, falling back to the same generic procedural sprite
 `DroppedItem` always used for any pair lacking dedicated art. Checked
-directly while building this atlas: every one of the 6 species x 2 seasons
-this project ships today actually HAS real illustrated art -- the first
-pass's own doc comment named pine's autumn column as a gap; that is not
-(or is no longer) true. The fallback path still exists, tested against a
-synthetic species, for whenever a real gap does show up.
+directly while building this atlas: every one of the 6 species x 2 FALLING
+seasons this project ships today actually HAS real illustrated art -- the
+first pass's own doc comment named pine's autumn column as a gap; that is
+not (or is no longer) true. The fallback path still exists, tested against
+a synthetic species, for whenever a real gap does show up.
+
+**A third atlas column, `"winter"`, holds every species' own terminal-decay
+stamp -- derived, not illustrated.** No species has real illustrated
+"winter" litter art (there is no such thing as a freshly-fallen leaf that
+already looks decayed), so `build_stamp_image` special-cases `season ==
+"winter"` to recolour that species' own already-built `"autumn"` stamp
+rather than falling through to the generic procedural fallback the way a
+genuinely-missing pair would. The recolour is the same luminance-preserving
+technique `ProceduralFlowerSprite._paint_illustrated_head` already
+established for repainting illustrated art a different colour without
+losing its own shading (`docs/concept/flora.md`'s "Recolouring illustrated
+blooms"): read each opaque pixel's own Rec. 709 luminance as `shade`
+(relative to the stamp's own peak), and paint a dulled, deliberately
+low-saturation brown-grey (`WINTER_TINT`) at that same brightness. The
+result keeps the exact same silhouette and real shading/vein variation as
+the autumn art it derives from, just duller -- verified both by test
+(silhouette match, reduced saturation, preserved shading variation, all in
+`test_leaf_litter_atlas.gd`) and by rendering every species' autumn/winter
+stamp pair side by side and inspecting the image directly (`tools/probe_
+leaf_winter_stamp.gd`), since a numeric saturation check alone cannot
+confirm the result reads as a believable decayed leaf rather than a flat
+smear. Deriving from autumn specifically (rather than needing a second
+derivation from summer) mirrors a real simplification: by the time any
+fallen leaf has weathered long enough to look wintry, its original fall
+colour has already faded toward the same dulled tone regardless of what it
+started as (see "Real-world grounding" above).
 
 ### Rendering: one GPU-instanced draw call per chunk
 
@@ -336,6 +389,27 @@ CURRENT transition timing only. No new persistence: exactly like windfall
 fruit today, a fallen leaf that nobody ate or that a chunk unload swept away
 is not remembered as a specific missing instance.
 
+**A settled leaf decays to a terminal `"winter"` stage before it despawns.**
+Reported directly: "fallen leaves should change the season from autumn to
+winter if they keep lying on the ground ... winter is last stage for a
+leaf." `LeafLitterField.DECAY_TO_WINTER_SECONDS`, pinned at exactly half of
+`LIFETIME` (45 seconds), advances a SETTLED leaf's own `season` from
+`"autumn"`/`"summer"` to `"winter"` one-way in `advance()` -- never reverts,
+never advances past `"winter"` to anything else. Gated on the leaf actually
+being settled (`transition_from == position`), the same "only a SETTLED
+leaf is eligible" rule the wind-dispersal roll right beside it already
+applies, for the identical reason: "keep LYING on the ground" implies
+actually at rest, not still easing into a relocation. A standalone,
+`LIFETIME`-relative timer rather than one tied to the real in-game
+calendar season: a real season's own turning window alone runs ~16 real
+hours in normal, non-accelerated play, and `LIFETIME`'s whole 90 seconds
+would elapse and prune the leaf long before the actual calendar ever
+reached winter -- so this is deliberately its own clock, grounded against
+the one timer that already exists (see that constant's own doc comment)
+rather than against the real calendar `LEAF_LITTER_ENABLED`'s own fall
+trigger uses. See "Rendering" above for how the terminal stage's own
+colour is produced without any new art.
+
 ### History: why not the density-field shortcut
 
 **A pure GPU density-field aggregate (the same technique `SnowBombShader`
@@ -383,11 +457,14 @@ GPU-instanced their rendering is -- are not that: each one is still a real,
 addressable, lifetime-bounded record, not an aggregate coverage value with
 no leaf-shaped thing behind it.
 
-**No third, "rotten/black" colour stage for a leaf still on the ground
-once winter arrives**, despite being asked for directly alongside the
-green/orange request -- unchanged from the first pass's own reasoning:
-`LeafLitterField.LIFETIME` (90 seconds) despawns an ordinary leaf long
-before any real season boundary could pass under it in normal play.
+~~No third, "rotten/black" colour stage for a leaf still on the ground~~
+-- **reversed 2026-09-05.** The first pass's reasoning above (`LIFETIME`
+despawns a leaf long before any real season boundary could reach it) is
+still true of the CALENDAR season, but the follow-up report asked for a
+stage keyed to how long the leaf itself has been lying there, not to the
+calendar -- see "Lifecycle" above for the terminal `"winter"` decay stage
+this became, timed against `LIFETIME` itself rather than against the
+calendar for exactly that reason.
 
 ## Status
 
@@ -465,6 +542,20 @@ instance correctness at 1-leaf scale; this closes the separate,
 previously-missing "does it hold up at real volume, at real speed"
 question.
 
+✅ **A low, constant autumn baseline shed rate, on top of the existing
+turn-driven ramp** (see "When leaves fall" above) -- reported directly
+("leaf litter should happen constantly at a low rate in normal gameplay
+... in autumn all leaves should fall eventually"), closing a real ~32-real-
+hour zero-chance gap across the first two-thirds of every autumn.
+
+✅ **A settled leaf decays to a terminal `"winter"` stage** (see
+"Lifecycle" above) -- reported directly ("fallen leaves should change the
+season from autumn to winter if they keep lying on the ground ... winter
+is last stage for a leaf"), timed against `LeafLitterField.LIFETIME`
+itself and rendered via a derived recolour of each species' own autumn
+stamp (see "Rendering" above), verified both by test and by direct visual
+inspection of the rendered stamps.
+
 ⬜ Invisible `AntColony` windfall foraging extended to leaves (see
 "Consumption" above) -- unchanged gap from the first pass.
 
@@ -474,10 +565,9 @@ traced to shared-machine contention, not a bug in the fall-triggering
 mechanism above -- see `docs/progress.md`'s own matching entry for the
 full call-chain trace and reproduction data.
 
-⬜ Any litter-density/soil-fertility feedback, any ground-covering
-litter visual effect, and a third rotten/black colour stage for litter
-that outlives `LeafLitterField.LIFETIME` (see "Deliberately not modeled"
-above and soil_fauna.md's own deferred detritivore-population note).
+⬜ Any litter-density/soil-fertility feedback and any ground-covering
+litter visual effect (see "Deliberately not modeled" above and
+soil_fauna.md's own deferred detritivore-population note).
 
 ⬜ **`/ecotest`'s own accelerated-time performance cost, independent of
 leaf litter** (see the live-verification note above) -- measured as a

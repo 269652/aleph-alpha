@@ -13,9 +13,13 @@ extends RefCounted
 ## Each leaf is a plain Dictionary:
 ##   position         -- current/target ground position (the GPU's "to").
 ##   species          -- TreeSpecies id ("cherry", "acorn", ...).
-##   season           -- "summer" or "autumn" -- which fall it dropped in,
-##                        for the renderer's own colour choice (see
-##                        LeafLitterAtlas).
+##   season           -- "summer" or "autumn" at first -- which fall it
+##                        dropped in, for the renderer's own colour choice
+##                        (see LeafLitterAtlas) -- decaying one-way to the
+##                        terminal "winter" stage once DECAY_TO_WINTER_
+##                        SECONDS elapses while settled (see advance).
+##                        Never any other value, and never reverts once
+##                        "winter".
 ##   spawned_at       -- world_age_seconds when this leaf first fell. Drives
 ##                        LIFETIME pruning ONLY -- never touched by a later
 ##                        relocation, so a wind-nudged leaf does not get a
@@ -53,6 +57,23 @@ const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 ## spoilage reasoning DroppedItem.LIFETIME always had for a "material" kind
 ## item (litter does not rot the way a dropped nut does).
 const LIFETIME := 90.0
+
+## How long a settled leaf keeps the season it fell in (see the `season`
+## field's own doc comment) before its own doc comment's terminal "winter"
+## stage kicks in (see advance) -- reported directly: "fallen leaves should
+## change the season from autumn to winter if they keep lying on the
+## ground ... winter is last stage for a leaf." Pinned at exactly half of
+## LIFETIME (see test_decay_threshold_is_pinned_to_half_of_lifetime in
+## test_leaf_litter_field.gd) rather than an independent real-world decay
+## rate: LIFETIME itself is already an arbitrary gameplay "tidiness" cutoff,
+## not a real decay measurement, so there is no real-world number to ground
+## THIS against either -- a fixed fraction of the one timer that already
+## exists means a settled leaf spends an equal, deliberately chosen share
+## of its whole time on the ground looking freshly fallen and looking
+## decayed, rather than either extreme swallowing almost all of it. Kept
+## as its own named constant (not written inline as LIFETIME * 0.5 at the
+## call site) so the intent reads independently of LIFETIME's own.
+const DECAY_TO_WINTER_SECONDS := LIFETIME * 0.5
 
 ## How high above its own landing spot a falling leaf starts, in world
 ## pixels -- ported unchanged from DroppedItem.FALL_HEIGHT (see
@@ -260,8 +281,12 @@ func set_wind(direction: Vector2, strength: float) -> void:
 
 ## Ages every leaf, prunes anything past LIFETIME, settles any transition
 ## whose TRANSITION_DURATION has elapsed (see transition_from's own doc
-## comment), and -- at its own throttled cadence -- gives the ambient wind a
-## chance to nudge a SETTLED leaf out of place (see WIND_DISPERSAL_INTERVAL/
+## comment), decays a SETTLED leaf's own `season` to the terminal "winter"
+## once DECAY_TO_WINTER_SECONDS has passed since it fell (see that
+## constant's own doc comment -- one-way, never reverts, never applies to
+## anything already "winter" or still mid-transition), and -- at its own
+## throttled cadence -- gives the ambient wind a chance to nudge a SETTLED
+## leaf out of place (see WIND_DISPERSAL_INTERVAL/
 ## WIND_DISPERSAL_CHANCE/set_wind). `now` is the authoritative
 ## world_age_seconds this step is happening at (see EarthChunkManager.
 ## step_leaf_litter) -- an explicit absolute clock, not a locally-
@@ -277,6 +302,12 @@ func advance(delta: float, now: float) -> void:
 			continue
 		if leaf.transition_from != leaf.position and now - leaf.transition_start >= TRANSITION_DURATION:
 			leaf.transition_from = leaf.position
+		if (
+			leaf.season != "winter"
+			and leaf.transition_from == leaf.position
+			and now - leaf.spawned_at >= DECAY_TO_WINTER_SECONDS
+		):
+			leaf.season = "winter"
 
 	_wind_accumulator += delta
 	if _wind_accumulator < WIND_DISPERSAL_INTERVAL:

@@ -1109,6 +1109,25 @@ const _LEAF_FALL_ROLL_STEPS := 1000
 ## near autumn's own real fall.
 const LEAF_SUMMER_TRICKLE_CHANCE := 0.03
 
+## The flat per-step chance a settled (pre-turn) AUTUMN tree sheds a leaf --
+## reported directly: "leaf litter should happen constantly at a low rate in
+## normal gameplay". Before this, leaf_fall_chance during autumn was driven
+## ONLY by canopy_turn_progress, which reads exactly 0.0 for the whole
+## settled first two-thirds of the season (TURN_FRACTION=0.34, see
+## TreePhenology._settled_then_turn) -- roughly two real DAYS of normal,
+## non-accelerated play (0.66 of a 172,800-real-second season) with zero
+## chance of a single leaf falling. A real deciduous tree does not wait for
+## its colour to fully turn before its first leaves come down: ordinary
+## wind and early individual-leaf senescence pull a few down all autumn
+## long, the same real phenomenon LEAF_SUMMER_TRICKLE_CHANCE already models
+## for summer's own wind/petal damage -- reused here at the same value
+## (autumn's early trickle and summer's are the same real mechanism, not
+## two independently-tuned numbers) but named separately so either can be
+## retuned later without coupling the two together. See leaf_fall_chance's
+## own computation below for how this combines with (rather than replaces)
+## the existing turn-progress ramp.
+const LEAF_AUTUMN_BASELINE_CHANCE := LEAF_SUMMER_TRICKLE_CHANCE
+
 var _fruiting_model := FruitingModel.new()
 var _ecology_catchup := ChunkEcologyCatchup.new()
 var _season_cycle := SeasonCycle.new()
@@ -3381,15 +3400,20 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 			if LEAF_LITTER_ENABLED:
 				var leaf_fall_chance := 0.0
 				var leaf_fall_season := ""
-				if (
-					canopy_season == "autumn"
-					and canopy_turning_into == "winter"
-					and canopy_turn_progress > 0.0
-				):
-					# Chance rises with how far into its own turn the canopy
-					# is: a tree just beginning to turn sheds rarely, one
-					# nearly bare sheds almost every step.
-					leaf_fall_chance = canopy_turn_progress
+				if canopy_season == "autumn":
+					# Baseline trickle for ALL of autumn (see LEAF_AUTUMN_
+					# BASELINE_CHANCE's own doc comment), with the ramp
+					# rising on top once the canopy's own final turn
+					# actually begins: a tree just beginning to turn already
+					# sheds at least the baseline rate, one nearly bare
+					# sheds almost every step. canopy_turning_into is
+					# deliberately not checked here any more -- per
+					# TreePhenology.canopy_state_at, it reads "winter" for
+					# the ENTIRETY of autumn, not merely its final turning
+					# slice, so it was never actually the gate that
+					# mattered; canopy_turn_progress alone already tells the
+					# whole story.
+					leaf_fall_chance = maxf(LEAF_AUTUMN_BASELINE_CHANCE, canopy_turn_progress)
 					leaf_fall_season = "autumn"
 				elif canopy_season == "summer":
 					leaf_fall_chance = LEAF_SUMMER_TRICKLE_CHANCE
