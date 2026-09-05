@@ -278,19 +278,31 @@ repeating it.
   incl. the shared unidentified look.
 - ✅ `IllustratedMushroomSprite` (`src/rendering/illustrated_mushroom_sprite.gd`),
   empty variant table (pinned by test), ready for real art.
-- ⬜ `WildMushroomPatch` (`src/world/wild_mushroom_patch.gd`)
-- ⬜ `MushroomMarker` (`src/rendering/mushroom_marker.gd`)
+- ✅ `WildMushroomPatch` (`src/world/wild_mushroom_patch.gd`) — fixed
+  per-chunk sites, PixelNoise-seeded, flush/recovery/pick.
+- ✅ Item catalog entries for all 5 species (`item_catalog.gd`) — a
+  hard prerequisite for the marker below, since `ItemCatalog.make()`
+  fails loudly on an unregistered id.
+- ✅ `MushroomMarker` (`src/rendering/mushroom_marker.gd`) — the visible,
+  pickable ground object: identification-gated sprite/name, joins
+  `DroppedItem.GROUP_NAME`/`FORAGEABLE_GROUP_NAME`, `pick_up(picker)`
+  always resolves to the real species item.
 - ⬜ `mycology` skill node (`skill_tree.gd`/`skill_web.gd`) +
-  `Player.knows_mushrooms()`
-- ⬜ Item catalog entries for all 5 species
+  `Player.knows_mushrooms()` — nothing yet actually SETS
+  `MushroomMarker.identified`; every marker defaults to `false`
+  (unidentified) until this lands.
+- ⬜ `Player.apply_mushroom_toxin`/`_mushroom_toxin_step` + the eat-food
+  hookup (`MushroomToxin` exists and is tested, but nothing calls it in
+  the live game yet — eating a mushroom today would need the ordinary
+  `eat_food` raw-food path to even reach it, which isn't wired either).
 - ⬜ `EarthChunkManager.step_wild_mushrooms` + chunk load/unload lifecycle
 - ⬜ Wired into `scenes/world.gd`'s live ecology batch, proven by
   `test_world_ecology_batch_wild_mushrooms.gd`
 
-The five pieces above are pure logic/headless-tested (39 tests, all green)
-with no scene-tree or live-game wiring yet — nothing is visible or playable
-in a running game from this alone. The remaining items are where this
-connects to the actual world (patch-sim placement, the marker a player
-sees and picks up, the skill node, the eat-food/toxin hookup, and the
-world/chunk-manager wiring) — see progress.md for session-by-session
-status as those land.
+Eight pieces are real and tested (115 tests, all green) but nothing is
+wired into a running game yet — no chunk anywhere actually creates a
+`WildMushroomPatch` or spawns a `MushroomMarker`, so a live session shows
+no mushrooms at all today. The remaining items are exactly that wiring
+(skill node, toxin/eat-food hookup, chunk-manager lifecycle, and the
+live per-frame world loop) — see progress.md for session-by-session status
+as those land.
