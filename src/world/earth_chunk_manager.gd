@@ -3284,9 +3284,11 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 			# handful of loaded forests).
 			#
 			# FRUITING_DETAIL_RADIUS already covers the full visible
-			# viewport (1280x720 screen / Player.CAMERA_ZOOM's 4x zoom =
-			# 320x180 world px, half-diagonal ~183.6px, comfortably inside
-			# 280px), so nothing actually on screen is skipped -- and
+			# viewport (1280x720 screen / Player.CAMERA_ZOOM's 5.2x zoom,
+			# raised from 4x on 2026-09-05 =~ 246x138 world px, half-diagonal
+			# ~141px, comfortably inside 280px -- more margin than before, a
+			# bigger zoom only shrinks the real visible world further), so
+			# nothing actually on screen is skipped -- and
 			# because FruitingModel.state_at is a PURE function of elapsed
 			# world time rather than a running simulation, a skipped tree is
 			# not frozen: it simply shows the correct catch-up ripeness the
@@ -4733,10 +4735,12 @@ func set_sun_position(elevation_deg: float, azimuth_deg: float) -> void:
 ## rain rendered fine while movement wakes stayed invisible.
 ##
 ## Sized to just past the visible screen: at TARGET_TILE_SCREEN_PX the view
-## spans roughly 20x11 tiles, so this covers it with margin while excluding
-## the ~25 loaded chunks' worth of fish that would otherwise crowd it out. A
-## first attempt at 40 was still far too generous -- it admitted several
-## hundred off-screen fish and the wakes stayed invisible.
+## spanned roughly 20x11 tiles when this was measured (since narrowed to
+## ~15.4x8.65 by a later camera zoom-in, only widening this constant's own
+## margin), so this covers it with margin while excluding the ~25 loaded
+## chunks' worth of fish that would otherwise crowd it out. A first attempt
+## at 40 was still far too generous -- it admitted several hundred
+## off-screen fish and the wakes stayed invisible.
 const DISTURBANCE_RADIUS_TILES := 14
 
 
