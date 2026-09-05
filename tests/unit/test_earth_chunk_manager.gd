@@ -4,6 +4,7 @@ const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
 const AntPopulationModel = preload("res://src/world/ant_population_model.gd")
+const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
 const TreePlacement = preload("res://src/world/tree_placement.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
@@ -5931,6 +5932,24 @@ func test_update_spawns_a_visible_marker_for_every_real_ant_mound_around_berlin(
 	var colony: AntColony = manager._ant_colonies[center_chunk]
 	assert_true(manager._ant_mound_markers.has(center_chunk))
 	assert_eq(manager._ant_mound_markers[center_chunk].size(), colony.mound_cells().size())
+
+
+## Mound size grows with the colony (see docs/concept/soil_fauna.md's own
+## section by that name) -- but only if each spawned marker actually got
+## its own real colony wired up via setup(); a marker with no colony set
+## reads its display name without a population figure, so that is the
+## real, end-to-end proof this is wired all the way through, not just
+## that a marker of some kind exists. _load_chunk, not the slow real
+## update() (see this file's own CONTRIBUTING.md note).
+func test_a_real_spawned_mound_marker_is_wired_to_its_own_colony():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var markers: Array = manager._ant_mound_markers.get(chunk_coord, [])
+	if markers.is_empty():
+		pending("no real ant mound landed in this chunk this seed -- placement is probabilistic")
+		return
+	var marker: AntMoundMarker = markers[0]
+	assert_string_contains(marker.get_display_name(), "population")
 
 
 ## A standalone colony guaranteed at least one mound -- for tests of the

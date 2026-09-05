@@ -9259,6 +9259,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		# mounds don't all pick the identical variant.
 		marker.mound_seed = hash(global_cell)
 		marker.position = (Vector2(global_cell) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+		# Gives this mound its own real colony (LOCAL mound_cell, the same
+		# key every other AntColony accessor uses -- see
+		# _dispatch_ant_forager's identical convention) so its own visible
+		# size actually grows with the real population living there (see
+		# docs/concept/soil_fauna.md "Mound size grows with the colony").
+		marker.setup(_ant_colonies[chunk_coord], mound_cell)
 		_entities_parent.add_child(marker)
 		mound_markers.append(marker)
 	_ant_mound_markers[chunk_coord] = mound_markers
