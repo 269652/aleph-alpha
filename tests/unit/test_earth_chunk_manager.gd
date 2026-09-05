@@ -2027,19 +2027,33 @@ func _leaf_litter_field_for(tree_position: Vector2) -> LeafLitterField:
 ## ATTEMPTS stays a tiny fraction of a season's own span, so this never
 ## risks drifting into the next season mid-loop.
 ##
+## Forces LEAF_LITTER_ENABLED on for the lookup by default (restoring
+## whatever it was after) -- the fall-triggering mechanism itself (angle/
+## distance/season roll) is still real, tested logic even while the flag
+## ships off by default (see that constant's own doc comment); pass
+## force_enabled=false for the one test that specifically wants to see the
+## flag's OFF behaviour instead.
 func _find_a_fallen_leaf(
 	species_id: String, tree_position: Vector2, player_pixel: Vector2,
-	attempts: int = _LEAF_ROLL_ATTEMPTS
+	attempts: int = _LEAF_ROLL_ATTEMPTS, force_enabled: bool = true
 ) -> Dictionary:
+	var previous_enabled := EarthChunkManager.LEAF_LITTER_ENABLED
+	if force_enabled:
+		EarthChunkManager.LEAF_LITTER_ENABLED = true
 	var field := _leaf_litter_field_for(tree_position)
+	var result := {}
 	for attempt in attempts:
 		if attempt > 0:
 			manager.advance_world_age(EarthChunkManager.FRUITING_INTERVAL)
 		manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, player_pixel)
 		for leaf in field.leaves():
 			if leaf.species == species_id:
-				return leaf
-	return {}
+				result = leaf
+				break
+		if not result.is_empty():
+			break
+	EarthChunkManager.LEAF_LITTER_ENABLED = previous_enabled
+	return result
 
 
 func test_step_fruiting_drops_a_leaf_from_a_turning_tree():
@@ -2144,6 +2158,44 @@ func test_a_leaf_lands_near_its_own_tree():
 	assert_lt(
 		tree.position.distance_to(leaf_at), EarthChunkManager.LEAF_SCATTER_RADIUS + 1.0,
 		"a leaf landed nowhere near its own tree"
+	)
+
+
+# -- LEAF_LITTER_ENABLED: an off-by-default deactivation switch ---------------
+#
+# Requested directly: "deactivate leaf littering". Same shape as the
+# pre-GPU-rewrite kill switch this project already used once (see git
+# history / docs/progress.md) -- a flat off switch on step_fruiting's own
+# leaf-fall block, same idiom as EarthChunkGenerator.HYDROLOGY_RIVERS_
+# ENABLED, except a mutable static var (not a const) so the fall-triggering
+# mechanism itself stays directly tested even while it ships off by default
+# (see _find_a_fallen_leaf's own doc comment).
+
+func test_leaf_litter_is_off_by_default():
+	assert_false(EarthChunkManager.LEAF_LITTER_ENABLED)
+
+
+func test_step_fruiting_adds_no_leaf_when_leaf_litter_disabled():
+	var tree := ChoppableTree.new()
+	tree.position = _position_for_species("cherry")
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+	# Fully turned autumn, well past the turning point -- the exact
+	# precondition test_step_fruiting_drops_a_leaf_from_a_turning_tree
+	# already relies on to guarantee a shed leaf when the switch is on.
+	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
+
+	# force_enabled=false -- this is the one test that wants the real,
+	# shipped OFF behaviour, not _find_a_fallen_leaf's own default of
+	# forcing the flag on to exercise the underlying mechanism.
+	var found := _find_a_fallen_leaf(
+		"cherry", tree.position, tree.position, _LEAF_ROLL_ATTEMPTS, false
+	)
+
+	assert_true(
+		found.is_empty(),
+		"no leaf should be added while LEAF_LITTER_ENABLED is off, however far into its turn the tree is"
 	)
 
 

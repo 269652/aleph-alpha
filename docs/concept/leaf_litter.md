@@ -353,6 +353,14 @@ before any real season boundary could pass under it in normal play.
 
 ## Status
 
+**Currently switched off by default.** `EarthChunkManager.
+LEAF_LITTER_ENABLED` (requested directly: "deactivate leaf littering")
+gates the leaf-fall block that everything below depends on -- with it
+off, no leaf is ever added to a field, so nothing downstream (rendering,
+forage, dispersal) has anything to act on. Everything in this doc is real
+and tested against the flag forced on; it is just not the game's current
+default. See `docs/progress.md`'s own matching follow-up entry.
+
 ✅ A real leaf falls (autumn's main fall and a light summer trickle) as
 cheap per-chunk data (`LeafLitterField`), rendered by one GPU-instanced
 draw call per chunk (`LeafLitterRenderer`) that visibly drops and settles
