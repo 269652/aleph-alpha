@@ -5,6 +5,7 @@ const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const TerrainRelief = preload("res://src/world/terrain_relief.gd")
 const EarthElevationSource = preload("res://src/world/earth_elevation_source.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
 
 var generator: EarthChunkGenerator
 
@@ -640,6 +641,41 @@ func test_with_hydrology_rivers_disabled_a_channel_tile_is_not_a_river():
 	assert_eq(generator.river_depth_meters_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y), 0.0)
 	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
 	assert_gt(generator.nearest_river_at(GREENWICH_TILE.x, GREENWICH_TILE.y).distance_tiles, apron)
+
+
+## Reported: the game dropped to single-digit fps with fish in the water --
+## FishMarker's own water-clearance probing calls is_river_at_global many
+## times per fish per frame, completely unthrottled, and this used to pay
+## RiverCatalog's raw ~44-segment-test lookup fresh every single time. Pinned
+## directly against this function's own dedicated cache (not
+## nearest_river_at's shared one -- see is_river_at_global's own doc comment
+## on why the two must not be merged).
+func test_is_river_at_global_is_memoized():
+	generator._is_river_cache.clear()
+	generator.is_river_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	assert_true(
+		generator._is_river_cache.has(Vector2i(GREENWICH_TILE.x, GREENWICH_TILE.y)),
+		"is_river_at_global must cache its answer, not recompute it from scratch every call"
+	)
+	var warm_size: int = generator._is_river_cache.size()
+	generator.is_river_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	assert_eq(
+		generator._is_river_cache.size(), warm_size,
+		"a repeated query for the same tile should hit the warm cache, not grow it further"
+	)
+
+
+## The cache must never outlive the hydrology bake it was computed against --
+## the same rule set_hydrology already enforces for _nearest_river_cache.
+func test_is_river_at_global_cache_is_cleared_when_hydrology_changes():
+	generator.set_hydrology(_synthetic_field())
+	generator.hydrology_rivers_enabled = true
+	generator.is_river_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	generator.set_hydrology(null)
+	assert_eq(
+		generator._is_river_cache.size(), 0,
+		"a memo must never outlive the bake it came from"
+	)
 
 
 func test_with_hydrology_rivers_enabled_a_channel_tile_is_a_river_with_solved_hydraulics():

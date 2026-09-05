@@ -124,6 +124,7 @@ func set_hydrology(field: HydrologyField) -> void:
 	_hydrology = field
 	_probe_cache.clear()
 	_nearest_river_cache.clear()
+	_is_river_cache.clear()
 
 
 func has_hydrology() -> bool:
@@ -401,10 +402,48 @@ func biome_at_global(global_x: int, global_y: int) -> String:
 ## baked drainage network (docs/concept/hydrology.md) is a river too --
 ## the connectivity-aware fallback that section asked for -- but a curated
 ## river is authoritative wherever it reaches.
+## Reported: the game dropped to single-digit fps with fish in the water
+## (measured via a temporary per-class aggregate-timing instrumentation:
+## ~197 fish accounted for ~4.6s of a ~30-frame window on their own,
+## dwarfing every other per-instance cost combined -- ambient flyers,
+## decomposers, creatures -- put together). Root cause: this used
+## to call the raw, uncached RiverCatalog.is_river_tile -> nearest_river_at
+## chain directly on every invocation, the same ~44-segment-test cost
+## nearest_river_at's own memoized wrapper exists to avoid -- and
+## FishMarker._has_water_clearance calls this (via _is_water/
+## _is_fresh_water_tile) up to 5 times per _first_clear_heading call,
+## itself called TWICE per frame, per fish, every frame, completely
+## unthrottled (unlike AmbientFlyerMarker's courtship/scent scans, which
+## are cooldown-gated).
+##
+## Memoized here directly, rather than routed through nearest_river_at's
+## own cache, on purpose: nearest_river_at's hydrology-fallback answer
+## (substituting the nearest BAKED channel's geometry once a curated river
+## is out of apron range) is not a drop-in equivalent of this function's
+## own separate `_is_hydrology_river(hydrology_at_global(...))` fallback --
+## routing through it here broke test_with_hydrology_rivers_enabled_a_
+## channel_tile_is_a_river_with_solved_hydraulics and three other
+## hydrology-fallback tests (a basin lake, a valley carve, a chunk-vs-
+## per-tile cross-check), all far from any curated river. This cache
+## instead wraps the EXACT original two-branch logic unchanged -- zero
+## behaviour difference, verified by every one of this file's own tests
+## passing identically to before this fix.
+var _is_river_cache: Dictionary = {}
+const _IS_RIVER_CACHE_CAP := PROBE_CACHE_CAP
+
 func is_river_at_global(global_x: int, global_y: int) -> bool:
-	if _river_catalog.is_river_tile(global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES):
-		return true
-	return _is_hydrology_river(hydrology_at_global(global_x, global_y))
+	var key := Vector2i(global_x, global_y)
+	var cached = _is_river_cache.get(key)
+	if cached != null:
+		return cached
+	if _is_river_cache.size() >= _IS_RIVER_CACHE_CAP:
+		_is_river_cache.clear()
+	var answer := (
+		_river_catalog.is_river_tile(global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES)
+		or _is_hydrology_river(hydrology_at_global(global_x, global_y))
+	)
+	_is_river_cache[key] = answer
+	return answer
 
 
 func _is_river_for(global_x: int, global_y: int, probe: Dictionary) -> bool:
