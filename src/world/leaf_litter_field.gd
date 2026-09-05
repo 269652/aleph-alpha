@@ -13,13 +13,15 @@ extends RefCounted
 ## Each leaf is a plain Dictionary:
 ##   position         -- current/target ground position (the GPU's "to").
 ##   species          -- TreeSpecies id ("cherry", "acorn", ...).
-##   season           -- "summer" or "autumn" at first -- which fall it
-##                        dropped in, for the renderer's own colour choice
-##                        (see LeafLitterAtlas) -- decaying one-way to the
-##                        terminal "winter" stage once DECAY_TO_WINTER_
-##                        SECONDS elapses while settled (see advance).
-##                        Never any other value, and never reverts once
-##                        "winter".
+##   season           -- "spring"/"summer"/"autumn" at first -- which fall
+##                        it dropped in, for the renderer's own colour
+##                        choice (see LeafLitterAtlas) -- decaying one-way
+##                        through exactly 3 stages while settled (see
+##                        advance): its own fall colour, then "fading" once
+##                        DECAY_TO_FADING_SECONDS elapses, then the
+##                        terminal "winter" once DECAY_TO_WINTER_SECONDS
+##                        does. Never any other value, and never reverts
+##                        once "winter".
 ##   spawned_at       -- world_age_seconds when this leaf first fell. Drives
 ##                        LIFETIME pruning ONLY -- never touched by a later
 ##                        relocation, so a wind-nudged leaf does not get a
@@ -52,28 +54,41 @@ extends RefCounted
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const WindDispersal = preload("res://src/world/wind_dispersal.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
-## Un-eaten litter despawns after this many seconds -- same tidiness-not-
-## spoilage reasoning DroppedItem.LIFETIME always had for a "material" kind
-## item (litter does not rot the way a dropped nut does).
-const LIFETIME := 90.0
+## How long un-eaten litter lingers before it despawns -- reported directly:
+## "leafs should take roughly 270 days to rot / decay / vanish". 270
+## real-world days is ~3 of the 4 real seasons a year actually has (~91
+## days each, matching real leaf litter's genuine decomposition timescale),
+## expressed here as exactly 3/4 of a real year and translated through the
+## SAME real-year -> compressed-game-year ratio every other real-world-
+## grounded timing constant in this codebase already uses
+## (SeasonCycle.SECONDS_PER_YEAR) -- the same idiom TreePhenology's own
+## blossom timing already established for turning a real biological
+## duration into game-playable time, applied here for the first time to
+## litter rather than to a tree. Was a flat, arbitrary 90-SECOND "tidiness"
+## cutoff with no real-world grounding at all before this; see
+## test_lifetime_is_pinned_to_three_quarters_of_a_compressed_game_year in
+## test_leaf_litter_field.gd.
+const LIFETIME := 0.75 * SeasonCycle.SECONDS_PER_YEAR
 
 ## How long a settled leaf keeps the season it fell in (see the `season`
-## field's own doc comment) before its own doc comment's terminal "winter"
-## stage kicks in (see advance) -- reported directly: "fallen leaves should
-## change the season from autumn to winter if they keep lying on the
-## ground ... winter is last stage for a leaf." Pinned at exactly half of
-## LIFETIME (see test_decay_threshold_is_pinned_to_half_of_lifetime in
-## test_leaf_litter_field.gd) rather than an independent real-world decay
-## rate: LIFETIME itself is already an arbitrary gameplay "tidiness" cutoff,
-## not a real decay measurement, so there is no real-world number to ground
-## THIS against either -- a fixed fraction of the one timer that already
-## exists means a settled leaf spends an equal, deliberately chosen share
-## of its whole time on the ground looking freshly fallen and looking
-## decayed, rather than either extreme swallowing almost all of it. Kept
-## as its own named constant (not written inline as LIFETIME * 0.5 at the
-## call site) so the intent reads independently of LIFETIME's own.
-const DECAY_TO_WINTER_SECONDS := LIFETIME * 0.5
+## field's own doc comment) before it fades partway to decay -- see
+## advance. An even three-way split of LIFETIME (see
+## test_decay_thresholds_are_pinned_to_an_even_three_way_split_of_lifetime),
+## itself now grounded in the same real-world "3 seasons to fully decay"
+## figure LIFETIME's own doc comment explains -- so "fading" genuinely
+## lands at the one-real-season mark, and "winter" (below) at the two-
+## real-season mark, matching the report's own "3 seasons" framing exactly:
+## fresh for a season, fading for a season, winter for the final season
+## before vanishing.
+const DECAY_TO_FADING_SECONDS := LIFETIME / 3.0
+
+## How long a settled leaf keeps its season at all -- see
+## DECAY_TO_FADING_SECONDS' own doc comment for why this is pinned at
+## exactly two-thirds of LIFETIME (the second of the "3 seasons" the
+## report asked for) rather than an independently-chosen number.
+const DECAY_TO_WINTER_SECONDS := LIFETIME * 2.0 / 3.0
 
 ## How high above its own landing spot a falling leaf starts, in world
 ## pixels -- ported unchanged from DroppedItem.FALL_HEIGHT (see
@@ -281,10 +296,11 @@ func set_wind(direction: Vector2, strength: float) -> void:
 
 ## Ages every leaf, prunes anything past LIFETIME, settles any transition
 ## whose TRANSITION_DURATION has elapsed (see transition_from's own doc
-## comment), decays a SETTLED leaf's own `season` to the terminal "winter"
-## once DECAY_TO_WINTER_SECONDS has passed since it fell (see that
-## constant's own doc comment -- one-way, never reverts, never applies to
-## anything already "winter" or still mid-transition), and -- at its own
+## comment), decays a SETTLED leaf's own `season` through exactly 3 stages
+## -- its own fall colour, then "fading" once DECAY_TO_FADING_SECONDS has
+## passed, then the terminal "winter" once DECAY_TO_WINTER_SECONDS has
+## (see those constants' own doc comments -- one-way, never reverts, never
+## applies to a leaf still mid-transition), and -- at its own
 ## throttled cadence -- gives the ambient wind a chance to nudge a SETTLED
 ## leaf out of place (see WIND_DISPERSAL_INTERVAL/
 ## WIND_DISPERSAL_CHANCE/set_wind). `now` is the authoritative
@@ -302,12 +318,12 @@ func advance(delta: float, now: float) -> void:
 			continue
 		if leaf.transition_from != leaf.position and now - leaf.transition_start >= TRANSITION_DURATION:
 			leaf.transition_from = leaf.position
-		if (
-			leaf.season != "winter"
-			and leaf.transition_from == leaf.position
-			and now - leaf.spawned_at >= DECAY_TO_WINTER_SECONDS
-		):
-			leaf.season = "winter"
+		if leaf.transition_from == leaf.position:
+			var age: float = now - leaf.spawned_at
+			if age >= DECAY_TO_WINTER_SECONDS:
+				leaf.season = "winter"
+			elif age >= DECAY_TO_FADING_SECONDS:
+				leaf.season = "fading"
 
 	_wind_accumulator += delta
 	if _wind_accumulator < WIND_DISPERSAL_INTERVAL:

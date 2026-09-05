@@ -154,59 +154,111 @@ func test_advance_does_not_snap_a_transition_still_in_progress():
 	assert_ne(leaf.transition_from, leaf.position, "a leaf mid-fall must still carry a real offset")
 
 
-# -- advance: decaying to "winter", a leaf's terminal stage ------------------
+# -- advance: decaying through "fading" to "winter", a leaf's terminal ------
+# -- stage --------------------------------------------------------------------
 #
-# Reported directly: "fallen leaves should change the season from autumn to
-# winter if they keep lying on the ground ... winter is last stage for a
-# leaf." A settled leaf's own `season` field was fixed forever at fall time
-# until this -- see DECAY_TO_WINTER_SECONDS' own doc comment for why this is
-# a standalone, LIFETIME-relative timer rather than tied to the real
-# in-game calendar season (a real season's own turning window alone runs
-# ~16 real hours in normal, non-accelerated play -- LIFETIME's whole 90
-# seconds would elapse and prune the leaf long before the actual calendar
-# ever reached winter).
+# Reported directly, across two rounds: first "fallen leaves should change
+# the season from autumn to winter if they keep lying on the ground ...
+# winter is last stage for a leaf", then, once that shipped as a single
+# jump straight to "winter", "leaf decay should be 3 seasons" -- clarified
+# as "leafs should take roughly 270 days to rot / decay / vanish". 270
+# real-world days is ~3 of the 4 real seasons a year has (~91 days each),
+# the genuine real-world timescale leaf litter actually takes to fully
+# decompose -- so a settled leaf's own `season` field now passes through
+# exactly 3 distinct values over its life (its own fall colour, then
+## "fading", then "winter"), evenly spaced across LIFETIME, itself now
+# grounded in that same ~270-day/3-season real-world figure (see
+# LIFETIME's own doc comment) rather than an arbitrary "tidiness" cutoff.
 
-## Not an eyeballed number -- half of LIFETIME (see that constant's own doc
-## comment: itself an arbitrary "tidiness" gameplay timeout, not a
-## real-world decay rate, so there is no independent real-world decay-rate
-## figure to ground this against either). Pinning it at exactly half means
-## a settled leaf spends an equal, deliberately chosen share of its whole
-## time on the ground looking freshly fallen and looking decayed, rather
-## than either extreme swallowing almost all of it.
-func test_decay_threshold_is_pinned_to_half_of_lifetime():
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
+
+## Not an eyeballed number -- 270 real-world days (reported directly:
+## "leafs should take roughly 270 days to rot / decay / vanish") is ~3 of
+## the 4 real seasons a year actually has (~91 days each) -- expressed as
+## exactly 3/4 of a real year, translated through the SAME real-year ->
+## compressed-game-year ratio every other real-world-grounded timing
+## constant in this codebase already uses (SeasonCycle.SECONDS_PER_YEAR).
+func test_lifetime_is_pinned_to_three_quarters_of_a_compressed_game_year():
+	assert_almost_eq(LeafLitterField.LIFETIME, 0.75 * SeasonCycle.SECONDS_PER_YEAR, 0.01)
+
+
+## Not eyeballed either -- an even three-way split of LIFETIME (see that
+## constant's own doc comment), so a settled leaf spends an equal,
+## deliberately chosen third of its whole time on the ground looking
+## freshly fallen, halfway faded, and fully decayed, rather than any one
+## stage swallowing most of it.
+func test_decay_thresholds_are_pinned_to_an_even_three_way_split_of_lifetime():
 	assert_almost_eq(
-		LeafLitterField.DECAY_TO_WINTER_SECONDS, LeafLitterField.LIFETIME * 0.5, 0.01
+		LeafLitterField.DECAY_TO_FADING_SECONDS, LeafLitterField.LIFETIME / 3.0, 0.01
+	)
+	assert_almost_eq(
+		LeafLitterField.DECAY_TO_WINTER_SECONDS, LeafLitterField.LIFETIME * 2.0 / 3.0, 0.01
 	)
 
 
-func test_advance_keeps_the_fallen_season_before_the_decay_threshold():
+func test_advance_keeps_the_fallen_season_before_the_fading_threshold():
 	var field := _field()
 	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
-	field.advance(1.0, LeafLitterField.DECAY_TO_WINTER_SECONDS - 1.0)
+	field.advance(1.0, LeafLitterField.DECAY_TO_FADING_SECONDS - 1.0)
 	assert_eq(field.leaves()[0].season, "autumn")
 
 
-func test_decay_never_happens_early():
+func test_fading_never_happens_early():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.DECAY_TO_FADING_SECONDS - 0.01)
+	assert_eq(
+		field.leaves()[0].season, "autumn", "must not fade a fraction of a second early"
+	)
+
+
+func test_advance_fades_once_the_first_threshold_passes():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.DECAY_TO_FADING_SECONDS + 1.0)
+	assert_eq(field.leaves()[0].season, "fading")
+
+
+func test_advance_stays_fading_between_the_two_thresholds():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.DECAY_TO_WINTER_SECONDS - 1.0)
+	assert_eq(field.leaves()[0].season, "fading")
+
+
+func test_winter_never_happens_early():
 	var field := _field()
 	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
 	field.advance(1.0, LeafLitterField.DECAY_TO_WINTER_SECONDS - 0.01)
 	assert_eq(
-		field.leaves()[0].season, "autumn", "must not decay to winter a fraction of a second early"
+		field.leaves()[0].season, "fading", "must not decay to winter a fraction of a second early"
 	)
 
 
-func test_advance_decays_to_winter_once_the_threshold_passes():
+func test_advance_decays_to_winter_once_the_second_threshold_passes():
 	var field := _field()
 	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
 	field.advance(1.0, LeafLitterField.DECAY_TO_WINTER_SECONDS + 1.0)
 	assert_eq(field.leaves()[0].season, "winter")
 
 
-## Both seasons a leaf can actually fall in reach the same terminal stage --
-## "winter" is not autumn-exclusive.
-func test_a_summer_fallen_leaf_also_decays_to_winter():
+## Every season a leaf can actually fall in reaches the same terminal stage
+## through the same middle stage -- "fading"/"winter" are not autumn-
+## exclusive.
+func test_a_summer_fallen_leaf_also_progresses_through_fading_to_winter():
 	var field := _field()
 	field.add_leaf(Vector2(100, 100), "cherry", "summer", 0.0)
+	field.advance(1.0, LeafLitterField.DECAY_TO_FADING_SECONDS + 1.0)
+	assert_eq(field.leaves()[0].season, "fading")
+	field.advance(1.0, LeafLitterField.DECAY_TO_WINTER_SECONDS + 1.0)
+	assert_eq(field.leaves()[0].season, "winter")
+
+
+func test_a_spring_fallen_leaf_also_progresses_through_fading_to_winter():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "spring", 0.0)
+	field.advance(1.0, LeafLitterField.DECAY_TO_FADING_SECONDS + 1.0)
+	assert_eq(field.leaves()[0].season, "fading")
 	field.advance(1.0, LeafLitterField.DECAY_TO_WINTER_SECONDS + 1.0)
 	assert_eq(field.leaves()[0].season, "winter")
 
@@ -231,13 +283,13 @@ func test_winter_is_a_terminal_stage_not_a_cycle():
 func test_decay_does_not_apply_to_a_leaf_still_mid_transition():
 	var field := _field()
 	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
-	# Relocate it right at the moment it would otherwise decay, restarting
+	# Relocate it right at the moment it would otherwise fade, restarting
 	# its own transition -- it must not decay while still easing into the
 	# new spot, even though `now - spawned_at` already clears the threshold.
 	field.relocate_leaf_near(
-		Vector2(100, 100), 10.0, Vector2(120, 100), LeafLitterField.DECAY_TO_WINTER_SECONDS
+		Vector2(100, 100), 10.0, Vector2(120, 100), LeafLitterField.DECAY_TO_FADING_SECONDS
 	)
-	field.advance(1.0, LeafLitterField.DECAY_TO_WINTER_SECONDS + 0.1)
+	field.advance(1.0, LeafLitterField.DECAY_TO_FADING_SECONDS + 0.1)
 	assert_eq(
 		field.leaves()[0].season, "autumn", "a leaf still mid-transition must not decay yet"
 	)
