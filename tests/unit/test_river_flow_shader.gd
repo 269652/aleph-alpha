@@ -3316,3 +3316,79 @@ func test_a_long_session_does_not_shred_the_field_on_a_bend():
 		"a quarter-degree bend after 25 minutes moves the field by %.3f -- shredded strokes"
 			% mean
 	)
+
+
+# -- the wrap instant itself: a pop distinct from far-time shredding ----------
+#
+# The tests above prove the noise TILES exactly at drift_period (so a long
+# session never drifts into speckle) -- they never sample straddling the
+# EXACT moment a translation wraps. Reported live: "the river lines change
+# abruptly every 30s or so". Shifting a coordinate by exactly one period
+# only leaves value_noise_tiled unchanged when that shift is an integer
+# MULTIPLE of the period on EACH axis independently (its lattice wraps x
+# and y separately) -- true for dir.x*period and dir.y*period only when
+# dir itself is exactly axis-aligned (0 or +-1 on both components), which
+# almost no real river bearing is. At any other bearing -- including a
+# "nice" one like (0.6, 0.8), whose components are integers TIMES the
+# period's own ratio but not multiples of the period itself -- the wrapped
+# translation lands on an unrelated point in the tile and the field pops.
+
+
+## At a generic bearing, the frame straddling the drift's own wrap must
+## look like ordinary flow evolution, not a jump -- the same one-frame
+## step taken half a cycle away sets the ordinary scale.
+func test_the_drift_wrap_does_not_pop_the_field_at_a_generic_bearing():
+	var speed := 2.2
+	var period_seconds: float = RiverFlowShader.DRIFT_PERIOD_CELLS / (
+		RiverFlowShader.DRIFT_PX_PER_MPS * speed * RiverFlowShader.NOISE_SCALE
+	)
+	var angle := 135.0  # generic: neither axis-aligned nor a 3-4-5-style ratio
+	var dir := Vector2(sin(deg_to_rad(angle)), -cos(deg_to_rad(angle)))
+	var eps := 1.0 / 60.0
+	var px := 40.7
+	var py := -12.3
+	var baseline_t := period_seconds * 0.5
+	var baseline_step := absf(
+		RiverFlowShader.animated_field_value(px, py, dir, baseline_t + eps, speed)
+		- RiverFlowShader.animated_field_value(px, py, dir, baseline_t - eps, speed)
+	)
+	var wrap_step := absf(
+		RiverFlowShader.animated_field_value(px, py, dir, period_seconds + eps, speed)
+		- RiverFlowShader.animated_field_value(px, py, dir, period_seconds - eps, speed)
+	)
+	assert_lt(
+		wrap_step, maxf(baseline_step * 4.0, 0.05),
+		"the drift wrap must not pop the field: baseline step %.4f, wrap step %.4f"
+			% [baseline_step, wrap_step]
+	)
+
+
+## The eddy/bend drift wraps on its own, much longer period (surface speed
+## includes the constant advect contribution) -- same bug, same fix, so it
+## gets the same straddling check at ITS OWN wrap instant.
+func test_the_eddy_drift_wrap_does_not_pop_the_field_at_a_generic_bearing():
+	var speed := 2.2
+	var surface_speed: float = RiverFlowShader.surface_px_per_s(speed)
+	var bend_period_seconds: float = (
+		(RiverFlowShader.DRIFT_PERIOD_CELLS / RiverFlowShader.EDDY_SCALE)
+		/ (surface_speed * RiverFlowShader.BEND_DRIFT_FRACTION * RiverFlowShader.NOISE_SCALE)
+	)
+	var angle := 135.0
+	var dir := Vector2(sin(deg_to_rad(angle)), -cos(deg_to_rad(angle)))
+	var eps := 1.0 / 60.0
+	var px := 40.7
+	var py := -12.3
+	var baseline_t := bend_period_seconds * 0.5
+	var baseline_step := absf(
+		RiverFlowShader.animated_field_value(px, py, dir, baseline_t + eps, speed)
+		- RiverFlowShader.animated_field_value(px, py, dir, baseline_t - eps, speed)
+	)
+	var wrap_step := absf(
+		RiverFlowShader.animated_field_value(px, py, dir, bend_period_seconds + eps, speed)
+		- RiverFlowShader.animated_field_value(px, py, dir, bend_period_seconds - eps, speed)
+	)
+	assert_lt(
+		wrap_step, maxf(baseline_step * 4.0, 0.05),
+		"the eddy drift wrap must not pop the field: baseline step %.4f, wrap step %.4f"
+			% [baseline_step, wrap_step]
+	)
