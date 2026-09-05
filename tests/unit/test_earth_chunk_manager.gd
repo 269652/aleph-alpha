@@ -2035,6 +2035,20 @@ func _leaf_litter_field_for(tree_position: Vector2) -> LeafLitterField:
 ## ships off by default (see that constant's own doc comment); pass
 ## force_enabled=false for the one test that specifically wants to see the
 ## flag's OFF behaviour instead.
+##
+## If a test calling this (test_step_fruiting_drops_a_leaf_from_a_turning_
+## tree in particular) ever shows up taking 100+ seconds or looking hung:
+## this was investigated 2026-09-05 (see docs/progress.md's "Leaf Litter"
+## section) after being reported burning 400+ CPU-seconds. Every function
+## on this call path -- this loop, step_fruiting's leaf-fall block,
+## PixelNoise.range_index, FruitingModel's state/hanging/fallen math,
+## ChoppableTree's canopy redraw -- is a fixed-bound loop over strictly
+## O(1) work or closed-form math, with no RNG anywhere upstream of the
+## deterministic sprite_seed/step_bucket hash. 8 solo+batch reproductions
+## all resolved on the very first fruiting step; only one (the session's
+## first Godot launch, on a machine independently confirmed to be running
+## several other unrelated, CPU-heavy Godot processes at the time) was
+## slow. Suspect shared-machine contention before suspecting this function.
 func _find_a_fallen_leaf(
 	species_id: String, tree_position: Vector2, player_pixel: Vector2,
 	attempts: int = _LEAF_ROLL_ATTEMPTS, force_enabled: bool = true

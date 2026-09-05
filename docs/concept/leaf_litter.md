@@ -376,6 +376,12 @@ transition machinery the initial fall uses.
 ⬜ Invisible `AntColony` windfall foraging extended to leaves (see
 "Consumption" above) -- unchanged gap from the first pass.
 
+A reported hang in `test_step_fruiting_drops_a_leaf_from_a_turning_tree`
+(400+ CPU-seconds observed on one run) was investigated 2026-09-05 and
+traced to shared-machine contention, not a bug in the fall-triggering
+mechanism above -- see `docs/progress.md`'s own matching entry for the
+full call-chain trace and reproduction data.
+
 ⬜ Any litter-density/soil-fertility feedback, any ground-covering
 litter visual effect, and a third rotten/black colour stage for litter
 that outlives `LeafLitterField.LIFETIME` (see "Deliberately not modeled"
