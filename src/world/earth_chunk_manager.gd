@@ -646,6 +646,12 @@ var _worm_sprite_generator := ProceduralWormSprite.new()
 ## Vector2i chunk_coord -> AntColony (see step_ants, docs/concept/soil_fauna.md
 ## "Ants").
 var _ant_colonies: Dictionary = {}
+## How often each loaded colony's own mounds resample live soil moisture
+## (see step_ants) -- reuses WORM_REFRESH_INTERVAL's own cadence exactly:
+## weather turns over on a day scale for ants same as it does for worms,
+## so there is no reason for a second, independently-tuned interval for
+## the identical kind of lookup.
+var _ant_moisture_refresh_accumulator := 0.0
 ## Vector2i chunk_coord -> LeafLitterField (see step_leaf_litter,
 ## docs/concept/leaf_litter.md). Same create-at-load/erase-at-unload
 ## lifecycle as _ant_colonies just above.
@@ -6987,6 +6993,31 @@ func step_ants(delta_seconds: float) -> void:
 				_forage_seed_near_mound(colony, origin, cell)
 			else:
 				_forage_windfall_near_mound(colony, origin, cell)
+
+	_ant_moisture_refresh_accumulator += delta_seconds
+	if _ant_moisture_refresh_accumulator < WORM_REFRESH_INTERVAL:
+		return
+	_ant_moisture_refresh_accumulator = 0.0
+	_refresh_ant_moisture()
+
+
+## Water, not just food (see docs/concept/soil_fauna.md's own section by
+## that name): pushes each loaded chunk's own live weather-derived soil
+## moisture into every mound it holds. Sampled per CHUNK's own centre
+## tile, the identical "weather is already a per-region roll, sample the
+## centre rather than the player's own tile" reasoning step_worms already
+## uses for EarthwormPatch -- moisture is a slow, day-timescale condition,
+## not something worth a per-mound lookup.
+func _refresh_ant_moisture() -> void:
+	for chunk_coord in _ant_colonies:
+		var colony: AntColony = _ant_colonies[chunk_coord]
+		var centre_tile: Vector2i = chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
+		var centre_pixel := Vector2(
+			float(centre_tile.x) + 0.5, float(centre_tile.y) + 0.5
+		) * float(TerrainRenderer.TILE_SIZE)
+		var moisture := _weather_model.soil_moisture(current_weather(centre_pixel))
+		for cell in colony.mound_cells():
+			colony.record_moisture(cell, moisture)
 
 
 ## Central fallen-leaf-litter step (see LeafLitterField,

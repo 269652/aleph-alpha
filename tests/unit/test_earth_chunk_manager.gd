@@ -3,6 +3,7 @@ extends GutTest
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
+const AntPopulationModel = preload("res://src/world/ant_population_model.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
 const TreePlacement = preload("res://src/world/tree_placement.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
@@ -6183,6 +6184,38 @@ func test_a_finished_forager_frees_its_slot_for_a_new_one():
 	var before := manager._entities_parent.get_child_count()
 	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(-10, 0), "seed")
 	assert_eq(manager._entities_parent.get_child_count(), before + 1, "a freed slot should accept a new forager")
+
+
+## Water, not just food (see docs/concept/soil_fauna.md's own section by
+## that name): step_ants must actually push the real weather-derived soil
+## moisture into every loaded mound, the identical WORM_REFRESH_INTERVAL-
+## scale cadence step_worms already samples weather on for
+## EarthwormPatch -- mirrors
+## test_stepping_worms_drives_them_from_the_live_weather_and_season's own
+## shape exactly. _load_chunk, not the slow real update() (see this
+## file's own CONTRIBUTING.md note).
+func test_stepping_ants_drives_capacity_from_the_live_weather():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var colony: AntColony = manager._ant_colonies.get(chunk_coord)
+	if colony == null or colony.mound_cells().is_empty():
+		pending("no real ant mound landed in this chunk this seed -- placement is probabilistic")
+		return
+	var cell: Vector2i = colony.mound_cells()[0]
+
+	# Several refresh-interval-sized steps, not one -- record_moisture is an
+	# EMA (see AntColony.MOISTURE_EMA_RATE), so a single sample only moves
+	# capacity_at PART of the way toward the real weather value, same as
+	# any other EMA-fed signal in this file's own test conventions.
+	for i in 20:
+		manager.step_ants(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+
+	var centre := _pixel_for(chunk_coord, Vector2i(EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2))
+	var expected_moisture := manager._weather_model.soil_moisture(manager.current_weather(centre))
+	var expected_capacity := AntPopulationModel.BASE_CAPACITY * (
+		1.0 + AntPopulationModel.WATER_CAPACITY_BONUS * expected_moisture
+	)
+	assert_almost_eq(colony.capacity_at(cell), expected_capacity, 0.5)
 
 
 # -- Sägewerk: "an NPC moves in" the moment the worksite exists (see
