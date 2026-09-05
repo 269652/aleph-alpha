@@ -115,7 +115,11 @@ func test_world_width_and_scale_are_positive():
 
 
 func test_is_smaller_on_the_ground_than_an_ant_mound():
-	# A mushroom is a small forest-floor object, smaller than a whole
-	# excavated ant mound.
+	# A mushroom is a small forest-floor object, smaller than even the
+	# smallest (founding-colony) excavated ant mound -- a mound now grows
+	# with its colony (see ProceduralAntMoundSprite.world_width_for), so
+	# MOUND_WORLD_WIDTH_MIN is the real, still-standing floor of that
+	# comparison, not a stale reference to a flat constant that no longer
+	# exists.
 	var ant_mound = load("res://src/rendering/procedural_ant_mound_sprite.gd")
-	assert_lt(ProceduralMushroomSprite.MUSHROOM_WORLD_WIDTH, ant_mound.MOUND_WORLD_WIDTH)
+	assert_lt(ProceduralMushroomSprite.MUSHROOM_WORLD_WIDTH, ant_mound.MOUND_WORLD_WIDTH_MIN)

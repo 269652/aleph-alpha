@@ -8095,6 +8095,83 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   [real foraging](concept/soil_fauna.md#real-foraging-a-round-trip-not-an-instant-resolve),
   [pheromones](concept/soil_fauna.md#pheromone-trails-recruitment-to-a-known-good-source),
   and [the queen](concept/soil_fauna.md#a-queen-and-where-a-colonys-size-comes-from).
+- **Ant/mound size overshoot corrected** (small) — ✅ Done — reported live
+  right after relaunch: "antmounds are tiny and I see no ant whatsoever".
+  A literal halving of the pass above (ant 6.0→3.0, mound 7.0→3.5) put an
+  ant at ~3 world-pixels of actual opaque content against a 16px tile --
+  genuinely sub-perceptual, not merely small; confirmed the underlying
+  spawning/scale math was working correctly at the smaller number, so
+  this was a pure tuning overshoot, not a functional bug. Corrected to a
+  25% reduction from the original instead of 50% (ant 4.5, mound 5.25),
+  preserving the original 6:7 proportion. Also turned
+  `EarthChunkManager.LEAF_LITTER_ENABLED` back on (it had been switched
+  off by a separate direct request right after its own GPU rewrite
+  shipped): reported live as "ants and beetles just walk back and forth
+  and there's no real foraging" — with it off, carrion and fresh windfall
+  fruit were the only things left for a wandering decomposer to find, and
+  neither is reliably nearby early in a game. Live-verified with a real
+  `--solo` launch and `Engine.get_frames_per_second()` before re-enabling
+  it (30 loaded chunks seeded with ~750-960 simultaneous leaves held a
+  steady 14-25fps at normal speed) rather than assumed safe from the
+  rewrite's architecture alone — full writeup in `leaf_litter.md`'s own
+  Status entry.
+- **Colony growth now depends on water/rainfall too, and a mound's own
+  size grows with its colony** (medium) — ✅ Done — requested directly:
+  mounds "should be half a human high and grow with the colony", and
+  colony growth "depend[ing] on the amount of food resources and water
+  they have / rainfall". Two real pieces:
+  1. **Water, not just food.** `AntPopulationModel.capacity` now takes a
+     second input, `recent_moisture` (`WATER_CAPACITY_BONUS` pinned equal
+     to `FOOD_CAPACITY_BONUS`, both 1.0 — real, independently-acting
+     inputs to the same mechanism, real-world-grounded: larval
+     development needs humidity, and colonies measurably struggle
+     through drought even with forage still available). `AntColony.
+     record_moisture(cell, moisture)` mirrors `record_forage_result`'s
+     own EMA exactly; `EarthChunkManager.step_ants` now samples
+     `WeatherModel.soil_moisture` per loaded chunk and feeds it to every
+     mound, mirroring `step_worms`' identical `EarthwormPatch.
+     set_conditions` wiring on the same `WORM_REFRESH_INTERVAL` cadence
+     (weather turns over on a day scale, reused rather than a second,
+     redundant constant). A colony with both food and water abundant can
+     now reach `AntPopulationModel.MAX_REFERENCE_POPULATION`
+     (`BASE_CAPACITY * 3`), up from `BASE_CAPACITY * 2` food-only.
+  2. **Mound size grows with the colony.** `ProceduralAntMoundSprite`'s
+     old flat `MOUND_WORLD_WIDTH` is now `world_width_for(growth_fraction)`
+     — `AntColony.growth_fraction_at(cell)` (population /
+     `MAX_REFERENCE_POPULATION`, clamped `[0,1]`) eased with the same
+     `pow`-exponent-below-1 technique `StoneSize.world_height_px` already
+     uses for stones, growing from `MOUND_WORLD_WIDTH_MIN` (4.0, close to
+     the previous pass's own flat 5.25 — not a step backward at the
+     weakest end) toward `MOUND_WORLD_WIDTH_MAX`, pinned to **half the
+     player's own real-world height** (`CharacterView.HEAD_TOP_Y * SCALE`,
+     the same "read against the player" convention `StoneSize`/
+     `ProceduralFlowerSprite` already establish, restated locally rather
+     than importing `StoneSize` for one shared number). `Illustrated
+     AntMoundSprite.marker_scale` takes the same fraction so the real art
+     and the procedural fallback grow identically. `AntMoundMarker` gains
+     a real `setup(colony, cell)` (mirrors `AntForagerMarker`'s own
+     contract) and re-checks its own growth fraction on a slow
+     `RESIZE_INTERVAL_SECONDS` (5s) cadence — population moves over
+     simulated days, so anything faster would spend per-frame cost on a
+     number that has not meaningfully moved. Its hover tooltip now also
+     reports the real population number directly (`"Ant Mound (population
+     N)"`), closing a real gap between what the concept doc already
+     claimed and what the code actually did before this pass.
+  **Investigated, found no bug**: "ants don't carry seeds/nuts to the
+  mound" — the ambient `DecomposerMarker` ants/bugs (now busy since the
+  leaf-litter fix above) structurally cannot carry anything anywhere,
+  by design: they eat carrion/fruit/leaf-litter in place, with no home
+  mound at all. The system that DOES carry to a mound
+  (`AntForagerMarker`, dispatched by a real `AntColony`) re-ran its full
+  21-test suite clean with no changes needed here — carrying itself is
+  not broken, but `AntColony.FORAGE_RADIUS_TILES` (1.0 tile, a
+  deliberate "shortest-range disperser in the game" biological choice —
+  see soil_fauna.md's own real-world grounding) genuinely makes a real
+  dispatch rare to catch by chance in a short session. Left unchanged
+  rather than loosened without confirming that tradeoff is what's
+  actually wanted.
+  Full writeup: [soil_fauna.md](concept/soil_fauna.md#water-not-just-food-a-second-real-growth-driver)
+  and [mound size grows with the colony](concept/soil_fauna.md#mound-size-grows-with-the-colony).
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to

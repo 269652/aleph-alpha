@@ -27,17 +27,19 @@ const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 const SIZE := Vector2i(16, 16)
 
 ## How wide a mushroom should read ON THE GROUND, in world pixels -- a
-## small forest-floor object, smaller than a whole excavated ant mound
-## (ProceduralAntMoundSprite.MOUND_WORLD_WIDTH, halved to 3.5 by a
-## concurrent ant-overhaul pass merged to main while this feature was in
-## progress -- see docs/concept/mushrooms.md's merge note). Picked
-## comfortably below THAT current value, not the original 7.0 this
-## constant was first set against.
+## small forest-floor object, smaller than even the smallest excavated
+## ant mound (ProceduralAntMoundSprite.MOUND_WORLD_WIDTH_MIN -- a mound
+## now GROWS with its colony rather than sitting at one flat width, see
+## that class's own "Mound size grows with the colony" doc reference, but
+## even a founding colony's own smallest mound stays comfortably above
+## this). Picked comfortably below the flat value this constant was
+## originally set against (3.5, see docs/concept/mushrooms.md's merge
+## note), not the very first 7.0 either.
 const MUSHROOM_WORLD_WIDTH := 2.5
 ## The scale factor a marker applies to a SIZE-authored sprite to make it
 ## actually read at MUSHROOM_WORLD_WIDTH on screen -- never left unscaled,
 ## the exact "gigantic ant blobs" failure this project has already hit more
-## than once (see ProceduralAntMoundSprite.MOUND_WORLD_SCALE).
+## than once (see ProceduralAntMoundSprite.world_scale_for).
 const MUSHROOM_WORLD_SCALE := MUSHROOM_WORLD_WIDTH / float(SIZE.x)
 
 ## One shared, plain, nondescript colour for every species while

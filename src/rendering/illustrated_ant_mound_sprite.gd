@@ -44,7 +44,7 @@ var _slicer := SpriteSheetSlicer.new()
 
 static var _frames: Array[ImageTexture] = []
 static var _loaded := false
-static var _marker_scale_cache := -1.0
+static var _reference_width_cache := -1.0
 
 
 ## Whether there is real illustrated art for the mound. Always true today
@@ -96,18 +96,28 @@ func _load_frames() -> Array[ImageTexture]:
 
 
 ## How much to scale a CANVAS_SIZE-normalized frame so it reads at
-## ProceduralAntMoundSprite.MOUND_WORLD_WIDTH on screen -- the same real-
-## world width the procedural fallback already uses, measured from the
-## real art's own opaque width rather than assumed to match the canvas
-## proportions (mirrors IllustratedAnimalSprite/IllustratedDecomposerSprite
-## marker_scale). Cached: every mound shares one sheet, so this never
-## changes once computed.
-func marker_scale() -> float:
-	if _marker_scale_cache > 0.0:
-		return _marker_scale_cache
+## ProceduralAntMoundSprite.world_width_for(growth_fraction) on screen --
+## the same real-world width the procedural fallback already uses at that
+## growth stage, measured from the real art's own opaque width rather
+## than assumed to match the canvas proportions (mirrors
+## IllustratedAnimalSprite/IllustratedDecomposerSprite marker_scale). Only
+## the expensive per-pixel opaque-width scan is cached (every mound
+## shares one sheet, so that never changes once computed) -- the scale
+## itself is cheap arithmetic recomputed per call, since it now varies
+## with growth_fraction.
+func marker_scale(growth_fraction: float) -> float:
+	var reference_width := _reference_width()
+	if reference_width <= 0.0:
+		return 1.0
+	return ProceduralAntMoundSprite.world_width_for(growth_fraction) / reference_width
+
+
+func _reference_width() -> float:
+	if _reference_width_cache > 0.0:
+		return _reference_width_cache
 	var frames := _all_frames()
 	if frames.is_empty():
-		return 1.0
+		return 0.0
 	var image: Image = frames[0].get_image()
 	var min_x := image.get_width()
 	var max_x := -1
@@ -116,9 +126,8 @@ func marker_scale() -> float:
 			if image.get_pixel(x, y).a > 0.0:
 				min_x = mini(min_x, x)
 				max_x = maxi(max_x, x)
-	var reference_width := float(max_x - min_x + 1) if max_x >= min_x else float(CANVAS_SIZE.x)
-	_marker_scale_cache = ProceduralAntMoundSprite.MOUND_WORLD_WIDTH / reference_width
-	return _marker_scale_cache
+	_reference_width_cache = float(max_x - min_x + 1) if max_x >= min_x else float(CANVAS_SIZE.x)
+	return _reference_width_cache
 
 
 func _prepared_for_slicing(image: Image) -> Image:
