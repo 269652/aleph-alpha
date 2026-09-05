@@ -382,9 +382,17 @@ rather than assuming the brief's plan still matched reality:
   the actual ask. Back-computed against this same entry's own measured
   ~5.4px (0.85-era) leg content, the combination lands leg content back
   around ~4.6px — close to, though not quite at, the original ~4px that
-  triggered "legs are not wired" above. Checked live via `--solo` rather
-  than trusting the arithmetic alone; see the camera-zoom entry below for
-  what that check found. Pinned by
+  triggered "legs are not wired" above. **Checked against a real rendered
+  frame rather than trusting the arithmetic alone** (Player + a
+  full-grown `TreeRenderer` tree, captured off a live `SubViewport` under
+  GUT with a real rendering driver, the same shape `test_river_flow_
+  render_smoke.gd` uses): the legs still read as distinct armored plates
+  with real shading and a clear boot silhouette at the new combined scale,
+  not the smeared blob the original bug looked like — the estimate above
+  was a real, worth-checking risk, but it did not materialize. The same
+  frame also confirms the actual ask: the near tree renders roughly 1.8x
+  the character's own height, where the two were nearly EQUAL height at
+  the previous 0.85/4x tuning. Pinned by
   `test_target_height_fraction_matches_the_current_tuning` and
   `test_character_shrunk_thirty_percent_over_the_previous_tuning`
   (`test_character_view.gd`) — the first direct pin this constant has ever

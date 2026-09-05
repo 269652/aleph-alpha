@@ -248,9 +248,13 @@ const HEAD_TOP_Y := -(ABOVE_HIP_HEIGHT + float(LEG_SIZE.y))
 ## directly above: back-computed against that same measured ~5.1px (0.85-
 ## era) leg content, this combination lands leg content back around
 ## ~4.6px -- close to, though not quite at, the original ~4px that
-## triggered "legs are not wired." Verified live via a --solo session
-## rather than trusting the arithmetic alone (see docs/progress.md) before
-## calling this shipped.
+## triggered "legs are not wired." Checked with a real rendered frame
+## (Player + a full-grown TreeRenderer tree in a live SubViewport) rather
+## than trusting the arithmetic alone: the legs still read as distinct
+## armored plates with real shading and a clear boot silhouette, not the
+## smeared blob the original bug looked like -- the pixel estimate above
+## was a real, worth-checking risk, but it did not materialize (see
+## docs/progress.md for the actual image).
 const TARGET_HEIGHT_FRACTION_OF_TREE := 0.595
 
 ## Computed, not eyeballed (see CLAUDE.md): the character's own total
