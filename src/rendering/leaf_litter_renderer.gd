@@ -95,6 +95,36 @@ const WRAP_PERIOD := GROUND_SWAY_PERIOD
 ## sizes this bound.
 const MAX_TRANSITION_OFFSET := WindDispersal.MAX_TRAVEL_TILES * TerrainRenderer.TILE_SIZE
 
+## Turns a real tumbling leaf completes over one full transition, at the
+## short end (a settle back into place after a footstep/animal nudge, or the
+## short canopy-height fall-in -- see LeafLitterField.FALL_HEIGHT) and the
+## long end (a leaf actually carried MAX_TRANSITION_OFFSET by real wind --
+## see tumble_turns_for_distance). A dry leaf visibly cartwheeling a few
+## metres across open pavement in an ordinary gust is a familiar autumn
+## sight completing several full rotations, not a fraction of one -- 3.0
+## turns over the longest real journey this game models sits centrally in
+## that everyday range; 0.5 turns for a journey too short to expose much of
+## the leaf to moving air keeps a footstep-settle from spinning wildly in
+## place. Pinned by test_tumble_turns_for_distance_is_minimum_at_zero_
+## distance/test_tumble_turns_for_distance_is_maximum_at_the_reference_
+## distance, not eyeballed.
+const MIN_TUMBLE_TURNS := 0.5
+const MAX_TUMBLE_TURNS := 3.0
+
+## A second, smaller flutter harmonic layered onto transition_flutter_world's
+## existing single sine wave -- reported: the motion path should look more
+## "realistic/natural", and a lone clean sine reads as too mechanically
+## periodic for something as irregular as a leaf actually tumbling through
+## real turbulent air. A non-integer frequency ratio (rather than a clean
+## 2x/3x overtone) means the two waves never realign into a simple repeating
+## shape within one transition -- the same "avoid a period a viewer's eye
+## can lock onto" reasoning this project's own PixelNoise favours over a
+## naive hash for exactly this kind of visible-banding risk. Kept a minority
+## of the primary wave's own amplitude (not equal or larger) so it reads as
+## irregularity riding on the real motion, not a second, competing motion.
+const FLUTTER_SECONDARY_FREQUENCY_MULT := 2.7
+const FLUTTER_SECONDARY_AMPLITUDE_FRACTION := 0.35
+
 static var SHADER_CODE: String = _build_shader_code()
 
 
@@ -180,12 +210,26 @@ static func phase_for_position(position: Vector2) -> float:
 
 ## The sideways flutter magnitude (perpendicular to the transition's own
 ## direction -- see instance_offset_and_rotation) at progress `t`, tapering
-## to zero by the time the transition completes. Mirrors DroppedItem.
-## _step_fall's own `sway` line exactly:
+## to zero by the time the transition completes. The primary term mirrors
+## DroppedItem._step_fall's own `sway` line exactly:
 ##   sin(t * TAU * FALL_SWAY_CYCLES + _sway_phase) * FALL_SWAY_WORLD * (1.0 - t)
-## GLSL: `float flutter_mag = sin(t * TAU * fall_sway_cycles + phase) * fall_sway_world * (1.0 - t);`
+## A second, smaller, non-harmonic wave is summed on top (see
+## FLUTTER_SECONDARY_FREQUENCY_MULT's own doc comment for why) so the path
+## reads as irregular real turbulence rather than one clean sine -- it
+## shares the SAME (1.0 - t) taper, so the existing "reaches zero once
+## complete" guarantee (test_transition_flutter_reaches_zero_once_complete)
+## still holds with both terms summed. GLSL:
+##   float flutter_mag =
+##       (sin(t * TAU * fall_sway_cycles + phase) * fall_sway_world
+##       + sin(t * TAU * fall_sway_cycles * flutter_secondary_frequency_mult + phase * 1.7)
+##           * fall_sway_world * flutter_secondary_amplitude_fraction) * (1.0 - t);
 static func transition_flutter_world(t: float, phase: float) -> float:
-	return sin(t * TAU * FALL_SWAY_CYCLES + phase) * FALL_SWAY_WORLD * (1.0 - t)
+	var primary := sin(t * TAU * FALL_SWAY_CYCLES + phase) * FALL_SWAY_WORLD
+	var secondary := (
+		sin(t * TAU * FALL_SWAY_CYCLES * FLUTTER_SECONDARY_FREQUENCY_MULT + phase * 1.7)
+		* FALL_SWAY_WORLD * FLUTTER_SECONDARY_AMPLITUDE_FRACTION
+	)
+	return (primary + secondary) * (1.0 - t)
 
 
 ## The wobble a leaf carries WHILE actively transitioning, tapering to zero
@@ -195,6 +239,51 @@ static func transition_flutter_world(t: float, phase: float) -> float:
 ## GLSL: `float transition_rotation = sin(t * TAU * fall_sway_cycles + phase) * fall_rotation_max * (1.0 - t);`
 static func transition_rotation(t: float, phase: float) -> float:
 	return sin(t * TAU * FALL_SWAY_CYCLES + phase) * FALL_ROTATION_MAX_RADIANS * (1.0 - t)
+
+
+## How many full turns a transition covering `distance` world pixels
+## completes -- linearly scaled between MIN_TUMBLE_TURNS (near-zero
+## distance: a footstep settle, or the short canopy fall-in) and
+## MAX_TUMBLE_TURNS (at or past MAX_TRANSITION_OFFSET, the longest real
+## wind-blown journey this game models), clamped past that reference
+## distance rather than spinning ever faster. TRANSITION_DURATION is the
+## SAME fixed 0.9s for every transition regardless of distance (see that
+## constant's own doc comment), so a longer journey is also a FASTER one --
+## scaling turns by distance is equivalently scaling them by how hard the
+## wind is actually moving this leaf, which is the real thing that makes a
+## tumbling leaf spin harder. GLSL:
+##   float tumble_turns = mix(min_tumble_turns, max_tumble_turns,
+##       clamp(length(raw_offset) / max_transition_offset, 0.0, 1.0));
+static func tumble_turns_for_distance(distance: float) -> float:
+	var fraction := clampf(distance / MAX_TRANSITION_OFFSET, 0.0, 1.0)
+	return lerpf(MIN_TUMBLE_TURNS, MAX_TUMBLE_TURNS, fraction)
+
+
+## Which way THIS leaf spins -- a real tumbling leaf's rotation direction is
+## effectively arbitrary per event (whichever edge the wind catches first),
+## so two leaves tumbling side by side should not all spin the same way any
+## more than they should all flutter in lockstep (see phase_for_position's
+## own doc comment on that identical banding concern) -- reuses the SAME
+## position-derived phase already computed for flutter/wobble rather than
+## spending a channel on a dedicated spin-direction bit. GLSL:
+##   float spin_direction = mod(phase, TAU) < PI ? 1.0 : -1.0;
+static func spin_direction_for_phase(phase: float) -> float:
+	return 1.0 if fposmod(phase, TAU) < PI else -1.0
+
+
+## The accumulating tumble -- UNLIKE transition_rotation's own wobble (which
+## oscillates back toward zero, see that function's own "reaches zero once
+## complete" test), a real tumbling leaf does not un-spin itself: this grows
+## monotonically with progress and reaches its own full turn count exactly
+## once the transition completes, continuing in the ONE direction
+## spin_direction_for_phase picked for this leaf. Summed with
+## transition_rotation (not replacing it) in vertex() below, so a short,
+## near-zero-distance settle still keeps transition_rotation's own gentle
+## settling wobble riding on top of a small real spin, while a long
+## wind-blown journey's spin dominates. GLSL:
+##   float tumble_rotation = t * tumble_turns * TAU * spin_direction;
+static func tumble_rotation(t: float, distance: float, phase: float) -> float:
+	return t * tumble_turns_for_distance(distance) * TAU * spin_direction_for_phase(phase)
 
 
 ## The gentle ongoing rock a SETTLED leaf keeps -- mirrors DroppedItem.
@@ -266,6 +355,10 @@ uniform float fall_sway_world = %s;
 uniform float fall_sway_cycles = %s;
 uniform float fall_rotation_max = %s;
 uniform float ground_sway_radians = %s;
+uniform float min_tumble_turns = %s;
+uniform float max_tumble_turns = %s;
+uniform float flutter_secondary_frequency_mult = %s;
+uniform float flutter_secondary_amplitude_fraction = %s;
 
 // Pushed once per relevant tick (see set_current_time) -- NOT per instance,
 // the same "the CPU's whole per-frame job becomes pushing one float" cost
@@ -301,12 +394,32 @@ void vertex() {
 	vec2 root = (MODEL_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xy;
 	float phase = fract(sin(root.x * 0.0973 + root.y * 0.1187) * 43758.5453) * TAU;
 
-	float flutter_mag = sin(t * TAU * fall_sway_cycles + phase) * fall_sway_world * (1.0 - t);
+	// Primary flutter wave plus a smaller, non-harmonic secondary one (see
+	// FLUTTER_SECONDARY_FREQUENCY_MULT's own doc comment for why a lone
+	// clean sine reads as too mechanically periodic) -- both share the same
+	// (1.0 - t) taper so the combined flutter still reaches exactly zero
+	// once the transition completes.
+	float flutter_primary = sin(t * TAU * fall_sway_cycles + phase) * fall_sway_world;
+	float flutter_secondary = sin(t * TAU * fall_sway_cycles * flutter_secondary_frequency_mult + phase * 1.7)
+		* fall_sway_world * flutter_secondary_amplitude_fraction;
+	float flutter_mag = (flutter_primary + flutter_secondary) * (1.0 - t);
 	vec2 offset = raw_offset * remaining + perpendicular * flutter_mag;
+
+	// Real litter tumbling in wind visibly spins THROUGH, not merely
+	// wobbles (see tumble_rotation's own doc comment) -- scaled by how far
+	// this transition actually carries the leaf, so a footstep settle
+	// barely turns where a real wind-blown journey cartwheels several
+	// times.
+	float tumble_turns = mix(
+		min_tumble_turns, max_tumble_turns,
+		clamp(length(raw_offset) / max_transition_offset, 0.0, 1.0)
+	);
+	float spin_direction = mod(phase, TAU) < PI ? 1.0 : -1.0;
+	float tumble_rot = t * tumble_turns * TAU * spin_direction;
 
 	float transition_rot = sin(t * TAU * fall_sway_cycles + phase) * fall_rotation_max * (1.0 - t);
 	float settled_rot = sin(current_time_fraction * TAU + phase) * ground_sway_radians;
-	float total_rotation = transition_rot + settled_rot;
+	float total_rotation = transition_rot + tumble_rot + settled_rot;
 
 	float cos_r = cos(total_rotation);
 	float sin_r = sin(total_rotation);
@@ -324,6 +437,8 @@ void fragment() {
 """ % [
 		MAX_TRANSITION_OFFSET, WRAP_PERIOD, LeafLitterField.TRANSITION_DURATION,
 		FALL_SWAY_WORLD, FALL_SWAY_CYCLES, FALL_ROTATION_MAX_RADIANS, GROUND_SWAY_RADIANS,
+		MIN_TUMBLE_TURNS, MAX_TUMBLE_TURNS,
+		FLUTTER_SECONDARY_FREQUENCY_MULT, FLUTTER_SECONDARY_AMPLITUDE_FRACTION,
 	]
 
 

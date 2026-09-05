@@ -207,6 +207,44 @@ transition's own duration has elapsed, `LeafLitterField.advance` snaps its
 offset reads as a real, CPU-confirmed zero from then on regardless of
 anything the wrapped time math computes afterward.
 
+**Tumbling: a real spin, not just a wobble.** Reported directly: "the
+leaves blowing in the wind animation... they should twirl more and have
+more realistic / natural motion paths" -- this doc's own "Real-world
+grounding" section above already named the target ("visibly tumbles and
+skitters across open ground"), but the first cut of this rewrite only
+carried over `DroppedItem`'s original vertical-fall wobble
+(`transition_rotation`: oscillates within a small fixed arc, always
+decaying back toward zero) unchanged onto every kind of transition,
+including a leaf genuinely carried across open ground by real wind --
+which never actually spins through, just rocks in place. `tumble_rotation`
+adds a second, ACCUMULATING rotation on top (summed with the existing
+wobble, not replacing it) that grows monotonically with progress and
+reaches its own full turn count exactly once the transition completes,
+continuing in one consistent direction for that leaf
+(`spin_direction_for_phase`, reusing the same position-derived phase hash
+`transition_flutter_world`'s own per-leaf variety already relies on, so
+two leaves tumbling side by side do not all spin the same way). How many
+turns scales with how FAR this transition actually carries the leaf
+(`tumble_turns_for_distance`, 0.5 turns near zero distance up to 3.0 turns
+at `MAX_TRANSITION_OFFSET`, the longest real wind-blown journey this game
+models) -- since `TRANSITION_DURATION` is the same fixed span regardless
+of distance, a longer journey is also a faster one, so scaling turns by
+distance is equivalently scaling them by how hard the wind is actually
+moving this particular leaf, the same real thing that makes a tumbling
+leaf spin harder. A footstep settle-back-into-place barely turns; a real
+wind-blown journey visibly cartwheels several times -- verified directly
+against the real GPU (`test_a_farther_traveling_leaf_tumbles_more_than_a_
+nearby_one`) and by rendering an actual transition frame by frame, not
+only reasoned about from the numeric mirror.
+
+`transition_flutter_world`'s own sideways path also gained a second,
+smaller, non-harmonic wave (a non-integer frequency ratio against the
+first, so the two never realign into one simple repeating shape within a
+single transition) -- a lone clean sine reads as too mechanically regular
+for something as irregular as a leaf actually tumbling through real
+turbulent air; the added wave shares the same taper-to-zero-at-completion
+guarantee the original already had.
+
 ### Dispersal: one mechanism, three triggers
 
 The request this rewrite exists to answer: "leaves should visibly fall from
@@ -410,6 +448,14 @@ a decomposer finds and eats via an injected `_world` reference
 ✅ Wind, player, and animal dispersal (see "Dispersal" above) -- all three
 triggers share one persisted-relocation mechanism and the same GPU
 transition machinery the initial fall uses.
+
+✅ **A real accumulating tumble, not just a wobble** (see "Tumbling: a
+real spin, not just a wobble" above) -- reported directly ("they should
+twirl more and have more realistic / natural motion paths"), scaled by
+how far each transition actually carries the leaf so a footstep settle
+barely turns where a real wind-blown journey visibly cartwheels several
+times. Verified both on the real GPU and by rendering an actual
+transition frame by frame, not only reasoned about from the mirror.
 
 ✅ Live in-game performance re-confirmation of the GPU rewrite (see
 above) -- closes the gap this section used to name. The pre-existing
