@@ -3659,6 +3659,80 @@ chunks away from the player). See the concept doc for the full spec.
 - **Planet Rarity System** (medium) — ⬜ Not started
 - **Monetization / Platform Distribution** (small) — ⬜ Not started
 
+### Synthesis (`concept/synthesis.md`)
+
+A vision doc, explicitly not a spec ("a direction, not a spec... the vision
+bible") that connects previously-separate pillars (genetics, crafting,
+survival/combat, NPCs, eras, death) into one coherent whole and resolves a
+few `overview.md` open questions inline. Its own honest status isn't a
+fresh mechanism list — it's "was the specific connective tissue it
+proposes actually built", tracked below against where each piece already
+has (or still lacks) a real section elsewhere in this doc. Never had a
+section here before this cross-alignment pass; no new mechanism was built
+to write this entry, and none is claimed — its value is making the doc's
+cross-cutting claims checkable against the ledger rather than taken on
+faith.
+
+- **One evolutionary system governing beasts, crops, and people alike**
+  (the doc's "north star") — 🚧 Partial — trees have a real `TreeGenome`
+  (see Flora below), animals have none yet (see this doc's Overview
+  section, Animal Ecology rows), and there is no player genetics at all.
+  `concept/dna.md`/`concept/animal_genetics.md` specify the unification;
+  neither is built.
+- **The household as your first NPC roster, LLM-planned for notable kin,
+  FSM for the rest** — ⬜ Not started — depends on Phase 2's NPC daily
+  planner (see Phase 2 table above), which has no real LLM backend yet;
+  no household/kinship data model exists (see Emergence Phase 3).
+- **Governing by natural-language intent, compiled to structured policy**
+  — ⬜ Not started — no instruction-compilation layer exists; `npc.md`'s
+  own "instruction complexity budget" is unbuilt.
+- **Society as a web of intermarrying lineages, self-policed by
+  reputation rather than a hard PvP ruleset** — 🚧 Partial — aggregate
+  reputation exists (see Factions below), real institutions now exist
+  (see Emergence Phase 6 above), but no lineage/marriage/inheritance model
+  exists (see Emergence Phase 3's household gap) and PvP itself is
+  unstarted (see this doc's Overview section).
+- **The first hour: naked-and-afraid survival open, genetic depth
+  revealed slowly** — ⬜ Not started as a designed onboarding sequence —
+  the individual mechanics it would sequence (fire/shelter/food/water) are
+  real (see Survival below) but nothing paces their reveal.
+
+### Pixel Art Engine (`concept/pixel_art_engine.md`)
+
+The shared shading/noise/form toolkit every `src/rendering/procedural_*.gd`
+generator can draw from — mentioned once in passing elsewhere in this doc
+(the Per-Species Body Proportions row, Phase 1 table above) but never
+given its own section. Status below independently re-verified against
+source during this cross-alignment pass, which also found and corrected
+two stale claims in the concept doc itself (both noted inline there,
+dated 2026-09-05).
+
+- **`pixel_ramp.gd`, `pixel_noise.gd`, `pixel_form.gd`** (medium) — ✅
+  Done — hue-shifted ramps, integer-mix/fractal noise, and spheroid
+  normal/diffuse shading with ambient + bounce rim, each with its own
+  test file.
+- **Full-engine adoption (ramp + form)** (medium) — ✅ Done, broader than
+  the concept doc previously stated — confirmed by grepping every
+  `src/rendering/procedural_*.gd` file for both imports: 6 generators
+  (`ProceduralAnimalSprite`, `ProceduralFishSprite`, `ProceduralBirdSprite`,
+  `ProceduralButterflySprite`, `ProceduralCharacterSprite`,
+  `ProceduralEggSprite`) use both, not only the 4 animal-family ones the
+  concept doc previously named.
+- **Partial adoption (ramp only)** (small) — 🚧 Partial —
+  `ProceduralBuildingSprite` shades with `pixel_ramp.gd` but not
+  `PixelForm`'s volumetric shading.
+- **Everything else still on `pixel_palette.gd`'s flat `shade`/`highlight`
+  pair** (medium) — 🚧 Partial — confirmed still true for landmark,
+  stone, and item generators among the remaining ~28 `procedural_*.gd`
+  files surveyed; a handful of others (grass/scrub tufts, terrain, several
+  effect sprites) import none of the three shared modules at all and
+  compose their look a different way entirely (e.g. `ProceduralOreSprite`
+  composites onto a boulder texture rather than shading its own
+  silhouette — see Loose Stone above).
+- **`pixel_texture.gd`** (reusable material overlays: fur, bark, cloth
+  weave, stone grain, metal sheen) — ⬜ Not started — confirmed: no such
+  file exists anywhere in `src/rendering/`.
+
 ### Eras (`concept/eras.md`)
 
 - **Technological Era Progression (World Eras)** (huge) — 🚧 Partial — `src/gameplay/era_progression.gd`: a linear 4-era progress-threshold state machine (`current_era`/`era_index`/`progress_to_next_era`), tested; scoped down from the doc's full multi-planet system per its own header comment. `current_era_with_boss_defeat` adds a defeated-world-boss trigger that advances one era beyond progress alone (see World Bosses' "Emergent World-Boss Promotion" row). Nothing in live gameplay tracks progress or calls either function yet.
