@@ -7348,6 +7348,76 @@ state had never once been set by anything in `src/`.
   excluded — a robin already interacts with a worm on its own terms
   (`take_worm_at`, eating it), never by incidentally landing weight on
   it. Full writeup: [soil_fauna.md](concept/soil_fauna.md#crushed-underfoot-weight-emergent-worm-mortality).
+  **The "no dedicated splat visual" cut named just above is now closed** —
+  see the next entry.
+- **Illustrated worm sprite: crawl, emerge, retreat, die** (medium) —
+  ✅ Done — a real hand-illustrated sheet (`assets/sprites/animals/
+  worm.png`, 1536×1024, chroma-keyed magenta, 8×4 grid) replaces
+  `ProceduralWormSprite`'s drawn silhouette and the region-rect
+  emergence-reveal trick with four real animations, the same
+  "hand-drawn sheet, real illustrated art" upgrade already given to
+  ants, carrion bugs, sheep, wolves and every songbird. Real pieces:
+  1. **`IllustratedWormSprite`** (new, `src/rendering/
+     illustrated_worm_sprite.gd`) — slices the sheet by direct grid
+     arithmetic (`Rect2i(col*192, row*256, 192, 256)`) rather than
+     `SpriteSheetSlicer.detect_frames`'s content-gap heuristic, which
+     fails on this specific sheet: the `die` row's early coiled-worm
+     poses have an internal notch (the loop against the body, ~8–13px)
+     that reads as a false frame boundary, and no single divider-width
+     threshold both bridges that notch and still separates real cells
+     — this sheet's own real inter-cell gaps range from ~1px (a pose
+     filling its whole cell) to 30+px (a smaller pose with real
+     padding), narrower in places than the false notch is wide.
+     Measured directly with `tools/probe_worm_sheet.gd` before writing
+     any slicing code, not assumed — same "render contact strips
+     before trusting a code trace" convention this project's other
+     sprite-sheet passes already use. One shared `world_scale()` across
+     all four actions (not a per-action scale the way ants/sheep/wolf
+     use): the `die` row's own progressive widening as the worm
+     flattens must not be scaled away by a fresh per-row calibration.
+  2. **`EarthwormPatch.is_rising(cell)`** (new) — real (not symmetric)
+     `emerge`/`retreat` art needs to know DIRECTION, not just amount,
+     to pick the right row; `advance()` already computes exactly this
+     comparison internally to decide which way to move `surfacing`,
+     now recorded instead of thrown away.
+  3. **`EarthwormPatch.is_corpse(cell)`/`corpse_age_seconds(cell)`**
+     (new) — the first "play once, then hold the last frame
+     permanently" animation state this codebase has needed anywhere
+     (checked directly: every existing "index a frame array off a
+     progress value" site — kingfisher dive, character/tree growth
+     stages — tracks a LIVE value the state machine keeps advancing
+     forever; `CreatureMarker._die` frees the marker outright and
+     spawns an unrelated `Carcass` node rather than leaving a death
+     pose on screen). `take()` and `crush()` already reduced the model
+     to the identical state; this is the one bit that actually
+     distinguishes them, set only by `crush()`. Rides the identical
+     `RECOVERY_SECONDS` clock as ordinary recovery — a corpse lies
+     exactly as long as its burrow is empty and clears the instant a
+     new worm could occupy it again — rather than a second,
+     independent timer that could drift from it.
+  4. **`EarthChunkManager._worm_texture_for`** wires the full
+     state-machine together: corpse → `die` (indexed by
+     `corpse_age_seconds`, held on its last frame via the same
+     `clampi(index, 0, size-1)` idiom the kingfisher's own dive
+     progress already uses); fully emerged → `crawl` (looping on a
+     per-worm-phased clock so a lawn doesn't crawl in lockstep); rising
+     → `emerge`; falling → `retreat` (indexed by `1 - emergence`, since
+     that row's own art is drawn in the "going in" direction — the
+     opposite mapping from `emerge`). `_sync_worm_sprites` no longer
+     frees a sprite the instant `is_surfaced` goes false if it's a
+     corpse, and — caught by a real test failing first
+     (`test_crushing_a_worm_shows_the_die_animation_and_keeps_its_
+     sprite`, 2 of 3 asserts passing: the sprite survived but kept its
+     pre-crush texture) — also refreshes a fresh corpse's texture
+     immediately rather than waiting for the next per-frame
+     `_crawl_worm_sprites` call, the identical "the player must never
+     see stale state for even one frame" reasoning `take_worm_at`'s own
+     immediate re-sync already established.
+  `ProceduralWormSprite` itself is untouched and still used by
+  `CharacterPreviewDiorama` — this pass only swapped
+  `EarthChunkManager`'s own real-gameplay worm generator, since that
+  sheet was never the only consumer. Full writeup:
+  [soil_fauna.md](concept/soil_fauna.md#illustrated-worm-sprite-crawl-emerge-retreat-die).
 
 ### Flora (`concept/flora.md`)
 
