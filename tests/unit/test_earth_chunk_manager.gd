@@ -2098,10 +2098,8 @@ func test_step_fruiting_drops_no_leaf_in_early_spring():
 
 
 ## Oak's own fallen leaf records species "acorn" (TreeSpecies' own id for the
-## tree), not a literal "oak" -- DroppedItem's/LeafLitterAtlas's own art
-## lookup and the still-unchanged _LEAF_ITEMS table (display name "Oak
-## Leaf", kind "material" -- litter, so it must not spoil like a dropped nut
-## does) both key off this same species id.
+## tree, not a literal "oak") -- LeafLitterAtlas's own art lookup keys off
+## this same species id (see that class's own cell_index).
 func test_a_leaf_records_its_own_species():
 	var tree := ChoppableTree.new()
 	tree.position = _position_for_species("acorn")
@@ -2114,11 +2112,6 @@ func test_a_leaf_records_its_own_species():
 
 	assert_false(found.is_empty(), "precondition: an acorn tree should shed a leaf")
 	assert_eq(found.species, "acorn")
-	assert_eq(
-		EarthChunkManager._LEAF_ITEMS["acorn"][1], "Oak Leaf",
-		"the species -> display name table must still map acorn to Oak Leaf"
-	)
-	assert_eq(EarthChunkManager._LEAF_ITEMS["acorn"][2], "material")
 
 
 func test_a_leaf_lands_near_its_own_tree():

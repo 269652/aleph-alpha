@@ -311,22 +311,16 @@ const _NAMED_FRUIT_ITEMS := {
 	"pine": ["Pine Nuts", "food", 20],
 }
 
-## The fallen-leaf item alongside each species' own fruit/nut -- see
-## docs/concept/leaf_litter.md. Id is "<species>_leaf" uniformly (even
-## pine, whose real display name is "Pine Needles": a conifer sheds
-## needles rather than broadleaves, but fills the same litter role here,
-## and a uniform id keeps DroppedItem's own recognition of "is this a leaf
-## item" a single suffix check rather than a species-by-species list).
-## Kind "material", not "food" -- litter does not spoil the way a dropped
-## nut does (see DroppedItem's own food-only spoilage branch).
-const _LEAF_ITEMS := {
-	"cherry": ["cherry_leaf", "Cherry Leaf", "material", 20],
-	"apple": ["apple_leaf", "Apple Leaf", "material", 20],
-	"walnut": ["walnut_leaf", "Walnut Leaf", "material", 20],
-	"acorn": ["acorn_leaf", "Oak Leaf", "material", 20],
-	"hazelnut": ["hazelnut_leaf", "Hazelnut Leaf", "material", 20],
-	"pine": ["pine_leaf", "Pine Needles", "material", 20],
-}
+## Fallen leaves are no longer a real Item/ItemStack (see
+## docs/concept/leaf_litter.md) -- step_fruiting's own leaf-fall block below
+## adds a LeafLitterField record (species id + season) directly, with no
+## display-name/kind/max_stack table needed: litter is never inventoried,
+## inspected, or hover-named, so that data (this table used to carry it --
+## "Cherry Leaf", "Oak Leaf", "Pine Needles" for pine's needles specifically,
+## kind "material" since litter does not spoil the way a dropped nut does)
+## has no consumer left to serve. See git history for the removed
+## _LEAF_ITEMS table if a future feature needs it back (e.g. a litter
+## tooltip).
 
 ## Spread cadence: every SPREAD_INTERVAL seconds, SPREAD_ATTEMPTS_PER_TICK
 ## mature trees each attempt to plant a mutated-child sapling nearby (see
