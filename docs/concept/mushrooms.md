@@ -172,18 +172,37 @@ entirely: two `fly_agaric` items always correctly stack, whether or not the
 player has unlocked identification. See Deliberately not modeled for the
 one consequence of this scope cut (inventory display is not re-gated).
 
-### Identification (`mycology` skill node)
+### Identification: learned by real encounters, not a purchased skill point
 
-A new, permanent, non-scaling `SkillTree` node —
-`stat_name = ""`, `bonus_amount = 0.0` — the exact sentinel shape
-`KeystonePassive.land_sense` already establishes for "this node is a
-boolean unlock, not a stat," pinned the same way
-(`test_mycology_keystone_carries_no_stat_bonus`, mirroring
-`test_land_sense_keystone_carries_no_stat_bonus`). Lives in the herbalist
-wedge of `skill_web.gd`, alongside `naturalist_1`/`naturalist_2` — foraging
-knowledge is exactly that wedge's theme. `Player.knows_mushrooms() -> bool`
-reads `allocated_nodes`/`unlocked_keystones`, mirroring `_has_menagerie()`'s
-existing shape exactly.
+**Revised while implementing.** The original plan here was a new
+`skill_web.gd` node in the herbalist wedge, alongside
+`naturalist_1`/`naturalist_2`. Reading that file's actual structure first
+(per CLAUDE.md) showed every ring in every wedge, herbalist included,
+already sits exactly at its `RING_SLOT_COUNT` capacity: `1/1, 3/3, 3/3,
+2/2, 2/2`. There is no free slot to add one to without either growing
+`RING_SLOT_COUNT` globally (a structural change touching all seven
+wedges' layouts and tests, for one small unlock) or displacing an
+existing, already-shipped node — neither is a reasonable price for this.
+
+The replacement is arguably a better fit anyway: **real foraging
+identification comes from direct field experience, not a certificate.**
+`Player.mushrooms_eaten: int` (persisted) counts every real mushroom
+eaten, edible or toxic — risk included, the same way a real forager's
+first few encounters with a dangerous species are what teaches them to
+recognize it. `Player.knows_mushrooms() -> bool` is `mushrooms_eaten >=
+MushroomSpecies.MUSHROOMS_TO_LEARN_IDENTIFICATION` (5 — one real
+encounter per roster species, not an arbitrary grind number). This
+sidesteps `skill_web.gd` entirely rather than forcing a fit it has no
+room for.
+
+One named simplification: `_mushroom_toxin_step`'s damage-over-time reads
+a single `_mushroom_toxin_species` field, so eating a second toxic
+species while still poisoned from a first overwrites which severity the
+WHOLE active stack ticks at, rather than tracking each bite's species
+independently. The same simplification `DebuffStack` already accepts for
+venom (one flat model, no per-bite distinction) — acceptable here since
+back-to-back toxic mushrooms from two different species in one dose
+window is an edge case, not the common path.
 
 ### Eating one (`MushroomToxin`)
 
@@ -287,10 +306,12 @@ repeating it.
   pickable ground object: identification-gated sprite/name, joins
   `DroppedItem.GROUP_NAME`/`FORAGEABLE_GROUP_NAME`, `pick_up(picker)`
   always resolves to the real species item.
-- ⬜ `mycology` skill node (`skill_tree.gd`/`skill_web.gd`) +
-  `Player.knows_mushrooms()` — nothing yet actually SETS
+- ⬜ `MushroomSpecies.MUSHROOMS_TO_LEARN_IDENTIFICATION` exists (✅), but
+  `Player.mushrooms_eaten`/`knows_mushrooms()`/the `eat_food` hookup that
+  actually increments it do not yet — nothing yet actually SETS
   `MushroomMarker.identified`; every marker defaults to `false`
-  (unidentified) until this lands.
+  (unidentified) until this lands. See "Identification" above for why this
+  is no longer a `skill_web.gd` node.
 - ⬜ `Player.apply_mushroom_toxin`/`_mushroom_toxin_step` + the eat-food
   hookup (`MushroomToxin` exists and is tested, but nothing calls it in
   the live game yet — eating a mushroom today would need the ordinary
