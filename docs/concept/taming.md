@@ -1035,6 +1035,14 @@ species:
 Using the wrong tool on a creature simply does nothing — the same "nothing
 in range" read the lasso already gives today, not a new failure state.
 
+**What a device actually *does* once it's the right one in hand is its own
+spec now**, not more of this doc: [capture_dsl.md](capture_dsl.md) is the
+generic mechanics DSL a landed net's catch odds, its loaded/empty state, and
+"put the catch in a container" are authored through, the same way
+[magic.md](magic.md) is where a spell's own effect pipeline is specified
+rather than here. This doc keeps owning *which* tool a body plan needs; that
+one owns what using it actually resolves to.
+
 **Predators join the Roped class rather than getting a tool of their own**:
 a wolf has a neck exactly like a horse does, so a lasso is the correct
 tool. What changes is how hard it fights the rope — predator species carry
@@ -1199,9 +1207,11 @@ through it.
   `AnimalAnatomy` body-plan data (legs/neck, `SERPENT_SPECIES`, ambient-flyer
   roster, mouse-scale `world_scale`), 4 new craftable tools (snare, butterfly
   net, trap, reinforced rope), predators moved into the Roped class with a
-  real derived break-free harshness instead of a blanket exclusion, instant
-  (no-struggle) netting for flyers, `taming_affinity` wired live for the
-  first time, `menagerie` keystone gains a capability grant (bonding a netted
+  real derived break-free harshness instead of a blanket exclusion, no-struggle
+  netting for flyers (🚧 now a real probability roll rather than an instant
+  success — see [capture_dsl.md](capture_dsl.md)), `taming_affinity` wired
+  live for the first time, `menagerie` keystone gains a capability grant
+  (bonding a netted
   creature into a real decorative companion) alongside its existing stat, the
   same `stat_name`-plus-`description` shape `land_sense` uses. ⬜ Boss-scale
   creatures (`WORLD_BOSS_SPECIES`) get the reinforced-rope tool and stay
