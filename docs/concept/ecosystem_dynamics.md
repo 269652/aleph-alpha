@@ -1137,6 +1137,63 @@ real stall still never clears and genuine circular travel always does.
 ones updated for the same reason the idle-rest fix above updated one:
 the contract they were pinning had genuinely, deliberately changed).
 
+**Follow-up, watched live right after the desynchronized-flight fix
+above shipped: "the birds don't forage".** Investigated live rather than
+assumed — instrumented `_step_ground_forage`'s full lifecycle (found →
+commit → descend → peck → strike → resume) with temporary prints and
+watched a real `--solo` session for several minutes. Result: the
+mechanism is not broken. A single run measured 88 successful commits,
+296 PECKING frames, **26 real strikes** (a worm actually taken) and 16
+full RESUMING transitions (a complete seek→descend→peck→resume cycle,
+start to finish) for robin alone. The report is real but the cause is
+almost certainly visibility, not logic: a strike is a ~2.2-second event
+on the ground, easy to miss while watching birds fly overhead, and
+nothing in this pass changes tuning that was already deliberately
+chosen and tested (`GroundForageBehavior.REHUNT_SECONDS`/`PECK_SECONDS`
+etc.) without a stronger signal than one live observation that it is
+actually too rare. Temporary debug instrumentation was reverted, not
+committed — no code change resulted from this half of the investigation.
+
+A genuinely new, separate finding surfaced along the way: the same
+census showed 48 robin spawns, 28 bee, 29 monarch, 25 swallowtail, and
+**zero sparrow spawns**, across two independent multi-minute sessions in
+the same area. Sparrow's own `FLYER_RANGE` entry is wider than robin's
+(includes rainforest, `abs_latitude (0.0, 70.0)` vs robin's
+`(20.0, 70.0)`), so this isn't a range/biome gate — it points at
+`sparrow_population` sitting at/near zero for these chunks (seed-density
+-linked) while `robin_population` (worm-density-linked) is clearly
+healthy, which may be a correct fact about this save's local seed
+supply or may be a real bug in the seed-density → population pipeline.
+Flagged as a separate follow-up task rather than chased down as part of
+this one — out of scope for "does foraging work", which it does.
+
+**Same message, second half: "also birds should sit down on trees to
+tweet / dance".** Idle rest (see above) deliberately never touched
+`position` at all — the bird held its rest exactly where the clock
+happened to fire, which usually meant mid-air. New
+`EarthChunkManager.trees_near(pixel_position, radius_tiles)` (modeled
+directly on the existing `blossoms_near`'s own scan shape over
+`_loaded_trees`, species/season gate dropped, a felled-tree filter added
+— a stump is not a perch) gives `AmbientFlyerMarker` a real "is there
+somewhere to land nearby" query, duck-typed as a new `tree_world` field
+wired alongside every other world port, bird-only like flight height and
+idle rest themselves. `_step_idle_rest` now flies to a scattered nearby
+tree first (same fly-then-land shape `_fly_at_worm` already uses for a
+worm, chosen via the same `GroundForageBehavior.choose_worm`/`PixelNoise`
+scatter idiom every other forage target uses, so a flock doesn't all
+land on the identical nearest tree) and only starts the actual hold once
+it arrives — landing at the trunk-foot position, the same ground level
+every other perch already uses, since no canopy-height offset exists
+anywhere in this codebase yet (a real future enhancement, not invented
+here). Missing `tree_world` entirely, or one with nothing in range, both
+fall back to the original in-place perch unchanged — a tree is an
+enhancement to idle rest, never a precondition for it firing at all. 7
+new tests (4 for `trees_near` in `test_earth_chunk_manager.gd`, run via
+`-gunit_test_name=` rather than the full slow file; 3 for the tree-perch
+behaviour in `test_ambient_flyer_marker.gd`), 222/224 green across the
+renderer and marker suites (the same 2 pre-existing, already-flagged
+`SpiralFlight` failures aside).
+
 ## Region difficulty (gating the roster by player readiness)
 
 Rounding out the roster with real predators (bear, lion) and a real hazard

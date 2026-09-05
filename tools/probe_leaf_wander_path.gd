@@ -3,17 +3,22 @@ extends SceneTree
 ## Dev tool: plots the ACTUAL ground-plane path a falling/relocating leaf
 ## traces, sampling LeafLitterRenderer's own GDScript mirror (byte-for-byte
 ## the same math the GLSL vertex shader computes) at many points across one
-## full transition -- reported directly: "the leaves and blossoms have a
-## lot of left/right movements where they end up on the same place where
-## they started and it doesn't look natural as it's a straight line ...
-## move them a bit with a left right swirl / spiral motion or tumbles or
-## so ... varying". Renders several different leaves' own paths side by
-## side (each a different position, hence a different phase/swirl_seed) so
-## the actual SHAPE -- and how much it VARIES between leaves -- can be
-## judged by eye rather than assumed from the formula alone.
+## full transition. Two rounds of report on this same motion: first "the
+## leaves and blossoms have a lot of left/right movements where they end up
+## on the same place where they started ... move them a bit with a left
+## right swirl / spiral motion or tumbles or so ... varying" (answered with
+## a 2D curl, see git history), then immediately "now they ONLY swirl ...
+## restore the behavior from before which looked much better and natural,
+## just the left right jitter should be eliminated and changed into a
+## random motion instead". This renders several different leaves' own
+## paths side by side (each a different position, hence a different
+## phase/wander_seed) so the actual SHAPE -- back to the original straight-
+## line-plus-perpendicular-sway structure, but no longer sharing one fixed
+## frequency ratio across every leaf -- can be judged by eye, not assumed
+## from the formula alone.
 ##
 ## Headless-safe: pure math against the GDScript mirror, no GPU/viewport.
-## Usage: godot --headless --path . -s tools/probe_leaf_swirl_path.gd
+## Usage: godot --headless --path . -s tools/probe_leaf_wander_path.gd
 
 const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
@@ -42,15 +47,14 @@ func _path_for(target: Vector2, fall_origin: Vector2) -> PackedVector2Array:
 	var raw_offset := fall_origin - target
 	var direction := raw_offset.normalized() if raw_offset.length() > 0.001 else Vector2.UP
 	var perpendicular := Vector2(-direction.y, direction.x)
-	var phase := LeafLitterRenderer.phase_for_position(target)
-	var swirl_seed := LeafLitterRenderer.swirl_seed_for_position(target)
+	var wander_seed := LeafLitterRenderer.wander_seed_for_position(target)
 	var path := PackedVector2Array()
 	for i in SAMPLES + 1:
 		var t := float(i) / float(SAMPLES)
 		var eased := LeafLitterRenderer.eased_progress(t)
 		var remaining := 1.0 - eased
-		var swirl := LeafLitterRenderer.instance_swirl_offset(t, phase, swirl_seed, direction, perpendicular)
-		var offset := raw_offset * remaining + swirl
+		var wander_mag := LeafLitterRenderer.transition_wander_world(t, wander_seed)
+		var offset := raw_offset * remaining + perpendicular * wander_mag
 		path.append(target + offset)
 	return path
 
@@ -72,30 +76,28 @@ func _render_one(target: Vector2, fall_origin: Vector2, out_name: String) -> voi
 	_plot_dot(image, origin_canvas, Color(1.0, 1.0, 0.2))
 	_plot_dot(image, origin_canvas, Color(1.0, 1.0, 0.2))
 	var err: Error = image.save_png(OUT_DIR + out_name)
-	print("%s: saved err=%s (swirl_seed=%.3f turns=%.2f radius_frac=%.2f)" % [
-		out_name, err,
-		LeafLitterRenderer.swirl_seed_for_position(target),
-		LeafLitterRenderer.swirl_turns_for_seed(LeafLitterRenderer.swirl_seed_for_position(target)),
-		LeafLitterRenderer.swirl_radius_fraction_for_seed(LeafLitterRenderer.swirl_seed_for_position(target)),
-	])
+	var wander_seed := LeafLitterRenderer.wander_seed_for_position(target)
+	var freqs := []
+	for term_index in LeafLitterRenderer.WANDER_TERM_COUNT:
+		freqs.append(LeafLitterRenderer.wander_frequency_for_seed(wander_seed, term_index))
+	print("%s: saved err=%s (wander_seed=%.3f freqs=%s)" % [out_name, err, wander_seed, freqs])
 
 
 func _initialize() -> void:
 	# Several different leaves (different settled positions -> different
-	# phase/swirl_seed), all falling the same real distance
+	# phase/wander_seed), all falling the same real distance
 	# (LeafLitterField.FALL_HEIGHT, straight down) -- isolates how much the
 	# PATH SHAPE varies between leaves under an otherwise-identical journey.
 	for i in 6:
 		var target := Vector2(1000.0 + i * 137.0, 2000.0 + i * 53.0)
 		var fall_origin := target - Vector2(0.0, LeafLitterField.FALL_HEIGHT)
-		_render_one(target, fall_origin, "swirl_path_fall_%d.png" % i)
+		_render_one(target, fall_origin, "wander_path_fall_%d.png" % i)
 
 	# A long, real wind-blown relocation journey (near MAX_TRANSITION_OFFSET)
-	# -- the case tumble_rotation already spins hardest for; checks the
-	# swirl still reads sensibly (not lost in a much bigger straight-line
-	# displacement) at that scale too.
+	# -- checks the wander still reads sensibly (a small perturbation, not
+	# lost or exaggerated) at that much larger scale too.
 	var far_target := Vector2(3000.0, 3000.0)
 	var far_origin := far_target + Vector2(LeafLitterRenderer.MAX_TRANSITION_OFFSET * 0.8, 0.0)
-	_render_one(far_target, far_origin, "swirl_path_long_journey.png")
+	_render_one(far_target, far_origin, "wander_path_long_journey.png")
 
 	quit()

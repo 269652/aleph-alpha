@@ -6488,6 +6488,43 @@ func blossoms_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 	return out
 
 
+## Any real, standing tree near `pixel_position` -- unlike blossoms_near
+## (spring-only, insect-pollinated species only) or harvest_peak_fruit_near
+## (one specific tree's own ripeness), this asks nothing about species or
+## season: it is "is there somewhere to land nearby" for AmbientFlyerMarker's
+## idle-rest perch (requested live: "birds should sit down on trees to
+## tweet / dance" -- until now idle rest just froze the bird in mid-air
+## wherever the rest happened to begin). Same scan shape and Euclidean
+## radius_px convention as blossoms_near (same _loaded_trees bucket walk),
+## with the species/season gate dropped and a felled-tree filter added -- a
+## stump is not a perch, and is_felled() is the same check
+## solid_obstacles_near already trusts for exactly this reason.
+func trees_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
+	var out: Array = []
+	var radius_px := float(radius_tiles) * TerrainRenderer.TILE_SIZE
+	var chunk_px := float(CHUNK_SIZE) * TerrainRenderer.TILE_SIZE
+	var min_chunk := Vector2i(
+		floori((pixel_position.x - radius_px) / chunk_px),
+		floori((pixel_position.y - radius_px) / chunk_px)
+	)
+	var max_chunk := Vector2i(
+		floori((pixel_position.x + radius_px) / chunk_px),
+		floori((pixel_position.y + radius_px) / chunk_px)
+	)
+	for chunk_y in range(min_chunk.y, max_chunk.y + 1):
+		for chunk_x in range(min_chunk.x, max_chunk.x + 1):
+			for tree in _loaded_trees.get(Vector2i(chunk_x, chunk_y), []):
+				if not is_instance_valid(tree) or tree.is_felled():
+					continue
+				if tree.position.distance_to(pixel_position) > radius_px:
+					continue
+				out.append({
+					"position": tree.position,
+					"species": TreeSpecies.species_for_bias(tree.species_bias),
+				})
+	return out
+
+
 ## Records a bee's visit to the blossoming tree at `tree_position` (see
 ## ChoppableTree.record_pollination_visit / FruitingModel.pollination_factor)
 ## -- the tree-side counterpart of drink_nectar_at. Returns whether a tree was

@@ -4387,6 +4387,54 @@ func test_harvest_peak_fruit_near_reports_the_real_peak_state():
 	assert_false(off_peak.get("is_peak", true), "expected mid-abscission to no longer read as peak")
 
 
+## A generic "any real tree nearby" query -- unlike blossoms_near (species/
+## season-gated, spring blossom only) or harvest_peak_fruit_near (a specific
+## tree's own ripeness), this is the one AmbientFlyerMarker's idle-rest needs
+## to fly a bird to a real tree to perch on and sing/dance (requested live:
+## "birds should sit down on trees to tweet / dance") instead of freezing in
+## mid-air wherever the rest happened to begin. Modeled directly on
+## blossoms_near's own scan shape (same _loaded_trees bucket walk, same
+## Euclidean radius_px convention), with the species/season gate dropped and
+## a felled-tree filter added -- a stump is not a perch.
+func test_trees_near_finds_a_loaded_tree():
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(100, 100)
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	var found := manager.trees_near(tree.position, 5)
+	assert_eq(found.size(), 1)
+	assert_eq(found[0]["position"], tree.position)
+
+
+func test_trees_near_respects_its_radius():
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(100, 100)
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	assert_true(manager.trees_near(tree.position + Vector2(99999, 0), 5).is_empty())
+
+
+## A stump is not a perch -- a bird landing on a felled trunk to "sit in the
+## tree" would be sitting on the ground next to a log.
+func test_trees_near_excludes_a_felled_tree():
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(100, 100)
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	tree._felled = true
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	assert_true(manager.trees_near(tree.position, 5).is_empty())
+
+
+func test_trees_near_finds_nothing_with_no_trees_loaded():
+	assert_true(manager.trees_near(Vector2.ZERO, 5).is_empty())
+
+
 func test_try_plant_seed_at_fails_when_the_chunk_is_not_loaded():
 	var far_away_pixel := Vector2(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE) * TerrainRenderer.TILE_SIZE
 	assert_false(manager.try_plant_seed_at(far_away_pixel, "cherry"))

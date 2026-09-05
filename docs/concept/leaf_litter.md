@@ -370,8 +370,9 @@ against the real GPU (`test_a_farther_traveling_leaf_tumbles_more_than_a_
 nearby_one`) and by rendering an actual transition frame by frame, not
 only reasoned about from the numeric mirror.
 
-**The ground-plane PATH itself swirls now, rather than sliding back and
-forth along one fixed line.** Reported directly, once the tumble/spin
+**The ground-plane PATH's own sideways sway now wanders randomly, rather
+than sliding back and forth along one fixed line -- corrected once from a
+first attempt that overshot.** Reported directly, once the tumble/spin
 above had already shipped: "the leaves and blossoms have a lot of left/
 right movements where they end up on the same place where they started
 and it doesn't look natural as it's a straight line ... move them a bit
@@ -381,37 +382,49 @@ along ONE FIXED AXIS -- perpendicular to the transition's own straight-line
 travel direction -- with an amplitude that decayed to exactly zero by
 landing: read exactly as reported, a straight line with a symmetric
 side-to-side wobble riding on top, always snapping back onto the line
-itself by construction. `instance_swirl_offset` replaces it with a genuine
-2D curl: traced as a rotating radius in the (direction, perpendicular)
-basis rather than an amplitude on `perpendicular` alone, so the offset
-sweeps THROUGH both axes together as `t` advances -- a real loop around
-the straight-line path, not an oscillation confined to one line. The
-radius itself is shaped as a BUMP (`sin(t * PI)`, zero at both `t == 0` and
-`t == 1`, widest around the middle) rather than a one-sided decay from a
-nonzero start: a leaf's real `transition_from` is its true starting point,
-so the swirl must not displace it away from there any more than it may
-leave it stranded off its real target.
+itself by construction.
 
-**Varies per leaf, the concrete shape "varying" takes here** -- a second,
-independent position-derived hash (`swirl_seed_for_position`, deliberately
-different magic constants from `phase_for_position`'s own, so a leaf's
-swirl shape does not simply track its flutter/tumble phase) drives both
-how many loops this leaf's own path completes (`swirl_turns_for_seed`,
-`MIN_SWIRL_TURNS` 0.4 to `MAX_SWIRL_TURNS` 1.8 -- a more restrained ceiling
-than `tumble_rotation`'s own 0.5-3.0 turns, since the path's loop is a
-secondary visual read behind the leaf's own body spin, not a competing
-one) and how wide it swings (`swirl_radius_fraction_for_seed`, 0.5 to 1.0
-of `FALL_SWAY_WORLD`, reading a DIFFERENT sub-value of the same seed than
-turns does, so the two vary independently rather than always moving
-together). Verified by plotting the actual path (`tools/probe_leaf_swirl_
-path.gd`, sampling the GDScript mirror -- the exact same math the GLSL
-computes -- across a full transition and rendering it as a line, not just
-reasoning about the formula): different leaves trace visibly different
-loops, from a gentle single arc to a path that completes a real turn
-before straightening out to its target, and a long, real wind-blown
-relocation still reads correctly as essentially a straight line at that
-much larger scale, the swirl a small, proportionate perturbation exactly
-as it always was.
+The first fix (`instance_swirl_offset`, ALSO since removed) replaced it
+with a genuine 2D curl -- a rotating radius in the (direction,
+perpendicular) basis rather than an amplitude on `perpendicular` alone, so
+the offset swept through both axes together, tracing a real loop around
+the straight-line path. Reported immediately: "now they ONLY swirl ...
+restore the behavior from before which looked much better and natural,
+just the left right jitter should be eliminated and changed into a random
+motion instead" -- the curl replaced too much of what actually looked
+right; the ORIGINAL single-axis structure was the correct shape all along,
+and the real, narrower problem was WHY it read as "jitter": the old sway
+summed a primary sine at one frequency and a secondary sine at a FIXED
+2.7x ratio -- the SAME ratio for every leaf, only the phase varying -- so
+every leaf's combined waveform traced the identical shape, just time-
+shifted. A shared, describable shape is what reads as jitter, not the
+single-axis structure itself.
+
+`transition_wander_world` restores the original single-axis structure
+exactly (`raw_offset * remaining + perpendicular * wander_mag`, no curl)
+but sums 3 sine terms whose FREQUENCIES (not just phases) are drawn from a
+second, independent per-leaf hash (`wander_seed_for_position`, different
+magic constants from `phase_for_position`'s own, so wander shape does not
+simply track flutter/tumble phase) across a random-looking band
+(`WANDER_MIN_FREQUENCY_MULT` 0.5 to `WANDER_MAX_FREQUENCY_MULT` 2.6, as a
+multiple of the existing `FALL_SWAY_CYCLES` rate) -- a DIFFERENT hash per
+term too, so the several terms within one SAME leaf land on different
+frequencies as well, not just different leaves relative to each other. No
+two leaves' combined waveform shares a shape at all any more, which is
+what "random motion" means in a continuous, stateless vertex shader (no
+per-frame randomness, which would look like flicker -- only per-LEAF
+variety in an otherwise perfectly smooth, deterministic function of
+progress). Weighted 1/(term+1) per term and normalised back to the same
+`FALL_SWAY_WORLD` ceiling the original single-sine sway had, so this reads
+as more IRREGULAR, not simply louder or wider. Verified by plotting the
+actual path (`tools/probe_leaf_wander_path.gd`, sampling the GDScript
+mirror -- the exact same math the GLSL computes -- across a full
+transition and rendering it as a line, not just reasoning about the
+formula): different leaves trace visibly distinct, irregular meanders with
+no repeating rhythm, and a long, real wind-blown relocation still reads
+correctly as essentially a straight line at that much larger scale, the
+wander a small, proportionate perturbation exactly as the original flutter
+always was.
 
 ### Dispersal: one mechanism, three triggers
 
@@ -680,18 +693,25 @@ barely turns where a real wind-blown journey visibly cartwheels several
 times. Verified both on the real GPU and by rendering an actual
 transition frame by frame, not only reasoned about from the mirror.
 
-✅ **The ground-plane path itself swirls, rather than sliding back and
-forth along one fixed line** (see "Rendering" above) -- reported directly
-after the tumble/spin above had already shipped: "the leaves and blossoms
-have a lot of left/right movements where they end up on the same place
-where they started ... move them a bit with a left right swirl / spiral
-motion or tumbles or so ... varying." `instance_swirl_offset` replaces the
-old fixed-perpendicular-axis flutter with a genuine 2D curl through both
-the travel direction and its perpendicular together, varying per leaf
-(loop count and width both, independently of each other and of the
-existing flutter/tumble phase). Verified by plotting the actual path a
-leaf traces (`tools/probe_leaf_swirl_path.gd`), not only reasoned about
-from the formula.
+✅ **The ground-plane path's own sideways sway wanders randomly, rather
+than sliding back and forth along one shared, describable shape** (see
+"Rendering" above) -- reported directly after the tumble/spin above had
+already shipped: "the leaves and blossoms have a lot of left/right
+movements where they end up on the same place where they started ... move
+them a bit with a left right swirl / spiral motion or tumbles or so ...
+varying." A first fix (a 2D curl through both the travel direction and its
+perpendicular) was reported to overshoot immediately: "now they ONLY
+swirl ... restore the behavior from before which looked much better and
+natural, just the left right jitter should be eliminated and changed into
+a random motion instead." `transition_wander_world` restores the original
+single-axis structure exactly, replacing only the old fixed 2.7x-ratio
+dual sine (the SAME ratio for every leaf, which is what actually read as
+"jitter") with 3 sine terms whose frequencies are drawn per-leaf (and per
+term within one leaf) from a random-looking band, so no two leaves' -- or
+even two terms of the same leaf's -- combined waveform shares a shape any
+more. Verified by plotting the actual path a leaf traces
+(`tools/probe_leaf_wander_path.gd`), not only reasoned about from the
+formula.
 
 ✅ Live in-game performance re-confirmation of the GPU rewrite (see
 above) -- closes the gap this section used to name. The pre-existing
