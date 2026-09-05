@@ -2674,6 +2674,142 @@ func _flapping_butterfly(parent: Node2D) -> AmbientFlyerMarker:
 	return butterfly
 
 
+## PHASE 3: ground walk/hop and singing, the two rows Phase 1 measured but
+## left unwired -- see docs/concept/ecosystem_dynamics.md's Phase 3
+## writeup. Both are drawn only while `perched` (grounded), the same
+## contract peck_frame already has, and both are additional alternatives
+## to perched_frame, checked in the same branch, not a new state machine.
+
+func test_a_bird_walks_during_the_resume_beat_after_a_peck():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.ground_forage = GroundForageBehavior.new()
+	bird.ground_forage.phase = GroundForageBehavior.Phase.RESUMING
+	bird.perched = true
+	bird.walk_frames = [ImageTexture.new(), ImageTexture.new(), ImageTexture.new()]
+	bird.perched_frame = ImageTexture.new()
+	bird._process(FRAME)
+	assert_true(bird.walk_frames.has(bird.texture), "must show a walk frame during the resume beat")
+	assert_ne(bird.texture, bird.perched_frame)
+
+
+func test_a_bird_sings_when_its_own_song_roll_says_so():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.wander_seed = 0
+	bird._elapsed_time = 0.0  # BirdSong.should_sing(0, 0.0) is true
+	bird.ground_forage = GroundForageBehavior.new()
+	bird.ground_forage.phase = GroundForageBehavior.Phase.RESUMING
+	bird.perched = true
+	bird.sing_frames = [ImageTexture.new(), ImageTexture.new()]
+	bird.walk_frames = [ImageTexture.new()]
+	bird.perched_frame = ImageTexture.new()
+	bird._process(FRAME)
+	assert_true(bird.sing_frames.has(bird.texture), "singing must win over walking when the roll says sing")
+
+
+func test_without_walk_or_sing_frames_a_grounded_bird_still_just_perches():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.ground_forage = GroundForageBehavior.new()
+	bird.ground_forage.phase = GroundForageBehavior.Phase.RESUMING
+	bird.perched = true
+	bird.perched_frame = ImageTexture.new()
+	bird._process(FRAME)
+	assert_eq(
+		bird.texture, bird.perched_frame,
+		"no walk_frames/sing_frames (an old caller, a test double) must be a no-op, not an error"
+	)
+
+
+## FLIGHT HEIGHT -- requested directly: "give birds a z height in their
+## flight and scale size based on distance from ground / distance to
+## camera". A top-down camera looking straight down makes "distance from
+## the ground" and "distance from the camera" the SAME quantity -- there is
+## no separate perspective axis to fake here, so one height value drives
+## both the visual lift (offset.y, the same draw-only property the wingbeat
+## bounce already uses -- see the test right below this one for why it must
+## never touch `position`) and the scale shrink.
+##
+## Ground-truth for the height itself is `perched`, the same flag
+## GroundForageBehavior/nectaring/touchdown already maintain: airborne
+## rises toward FLIGHT_CRUISE_HEIGHT_PX, grounded falls back to 0 -- eased
+## over real time (FLIGHT_HEIGHT_RATE_PX_PER_SEC) rather than snapping, so
+## takeoff and landing both read as a real climb/descent instead of a pop.
+
+func test_an_airborne_bird_climbs_toward_cruise_height():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
+	bird.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	assert_eq(bird._flight_height, 0.0, "starts on the ground")
+	for i in 300:
+		bird._process(FRAME)
+	assert_almost_eq(
+		bird._flight_height, AmbientFlyerMarker.FLIGHT_CRUISE_HEIGHT_PX, 0.01,
+		"a bird airborne this long must have reached cruise height"
+	)
+
+
+func test_a_grounded_bird_settles_back_to_zero_height():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
+	bird.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	for i in 300:
+		bird._process(FRAME)
+	assert_gt(bird._flight_height, 0.0, "must actually have climbed first")
+	bird.perched = true
+	for i in 300:
+		bird._process(FRAME)
+	assert_almost_eq(bird._flight_height, 0.0, 0.01, "landed birds return to ground height")
+
+
+func test_height_changes_gradually_not_instantly():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
+	bird.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	bird._process(FRAME)
+	assert_lt(
+		bird._flight_height, AmbientFlyerMarker.FLIGHT_CRUISE_HEIGHT_PX * 0.5,
+		"one frame must not already be most of the way to cruise height"
+	)
+	assert_gt(bird._flight_height, 0.0, "...but it must have started climbing")
+
+
+func test_a_higher_flying_bird_draws_smaller_and_higher_on_screen():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
+	bird.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	# Wild-spawned adult, NOT begin_life() -- that starts a hatchling at
+	# 0.45x scale (see LifeCycle.HATCHLING_SCALE), a growth confound this
+	# test isn't about; age_seconds already defaults to LifeCycle.
+	# MATURE_SECONDS, the same "spawned flyers start as ADULTS" contract
+	# AmbientFlyerRenderer.build_bird relies on.
+	bird.set_adult_scale(Vector2.ONE * 0.05)
+	for i in 400:
+		bird._process(FRAME)
+	assert_true(bird.scale.x < 0.05, "cruise height must shrink the drawn size")
+	assert_true(bird.offset.y < 0.0, "cruise height must lift the drawn sprite upward on screen")
+
+
+func test_a_perched_bird_has_zero_height_and_its_full_ground_scale():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
+	bird.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	bird.set_adult_scale(Vector2.ONE * 0.05)
+	bird.perched = true
+	for i in 5:
+		bird._process(FRAME)
+	assert_almost_eq(bird.scale.x, 0.05, 0.0001, "grounded birds render at their real, unshrunk size")
+
+
 ## The one that must not regress. `position` feeds containment, the courtship
 ## orbit, the spiral flight, partner-distance checks and Y-sorting; a per-frame
 ## bob folded into it would put a wobble through all five at once. The bounce

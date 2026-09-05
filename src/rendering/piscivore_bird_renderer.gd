@@ -102,6 +102,13 @@ func spawn_piscivore_birds(
 	# flap_frames/perched_frame wiring for sparrow/robin exactly.
 	marker.flap_frames = sprite.generate_flap_textures(SPECIES, seed_value)
 	marker.perched_frame = sprite.generate_perched_texture(SPECIES, seed_value)
+	# The plunge dive's own pose (see PiscivoreBirdMarker._animate_wings) --
+	# only IllustratedBirdSprite has one; ProceduralBirdSprite has no
+	# has_method("generate_dive_textures") at all, so this is a no-op for
+	# it, same optional-capability guard the rest of this file already
+	# uses.
+	if sprite.has_method("generate_dive_textures"):
+		marker.dive_frames = sprite.generate_dive_textures(SPECIES, seed_value)
 	# Art is authored DETAIL_MULTIPLIER times oversized; scaling it back
 	# keeps the flyer the same size in the world (see
 	# docs/concept/art_resolution.md).

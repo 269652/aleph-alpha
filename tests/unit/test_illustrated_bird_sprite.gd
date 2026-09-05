@@ -106,6 +106,40 @@ func test_every_generated_frame_shares_one_canvas_size():
 			assert_eq(frame.get_size(), reference, species)
 
 
+## PHASE 3: the rows Phase 1 measured but left unwired (see the class doc
+## comment) -- ground walk/hop for the three songbirds, the kingfisher's
+## own dive pose, and singing for all four. Confirmed by eye (not assumed
+## from position alone): each row's frame 0 was cropped and looked at
+## directly before being wired in.
+func test_generate_walk_textures_covers_the_three_ground_foragers():
+	for species in ["sparrow", "robin", "blackbird"]:
+		var frames := sprite.generate_walk_textures(species, 0)
+		assert_eq(frames.size(), 8, species)
+		for frame in frames:
+			assert_true(_has_opaque_pixels(frame), species)
+
+
+func test_kingfisher_has_no_walk_row_it_dives_instead():
+	assert_eq(sprite.generate_walk_textures("kingfisher", 0).size(), 0)
+
+
+func test_generate_dive_textures_covers_only_the_kingfisher():
+	var frames := sprite.generate_dive_textures("kingfisher", 0)
+	assert_eq(frames.size(), 8)
+	for frame in frames:
+		assert_true(_has_opaque_pixels(frame))
+	for species in ["sparrow", "robin", "blackbird"]:
+		assert_eq(sprite.generate_dive_textures(species, 0).size(), 0, "%s does not dive" % species)
+
+
+func test_generate_sing_textures_covers_every_species():
+	for species in ["sparrow", "robin", "blackbird", "kingfisher"]:
+		var frames := sprite.generate_sing_textures(species, 0)
+		assert_eq(frames.size(), 8, species)
+		for frame in frames:
+			assert_true(_has_opaque_pixels(frame), species)
+
+
 func test_frames_are_cached_not_rebuilt_per_call():
 	# Same contract as IllustratedAnimalSprite's own _frame_cache: repeat
 	# calls for the same key must return the exact same texture instance,
@@ -137,7 +171,7 @@ func test_marker_scale_keeps_every_species_a_normal_creature_size():
 		# bird while catching the reported bug's ~6-9x-too-big regime by a
 		# wide margin.
 		assert_between(
-			world_width, 3.0, 20.0,
+			world_width, 1.5, 10.0,
 			"%s renders %.1f world px wide -- gigantic (or invisible) again" % [species, world_width]
 		)
 

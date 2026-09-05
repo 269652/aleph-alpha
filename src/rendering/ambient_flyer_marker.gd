@@ -28,6 +28,10 @@ const Courtship = preload("res://src/gameplay/courtship.gd")
 const SpiralFlight = preload("res://src/gameplay/spiral_flight.gd")
 const LifeCycle = preload("res://src/gameplay/life_cycle.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
+## For FLIGHT_CRUISE_HEIGHT_PX's own derivation only -- IllustratedBirdSprite
+## does not preload this file back, so this is one-directional.
+const IllustratedBirdSprite = preload("res://src/rendering/illustrated_bird_sprite.gd")
+const BirdSong = preload("res://src/gameplay/bird_song.gd")
 const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const WingbeatBounce = preload("res://src/rendering/wingbeat_bounce.gd")
 const FlapGlide = preload("res://src/rendering/flap_glide.gd")
@@ -128,6 +132,19 @@ var ground_forage: GroundForageBehavior = null
 ## ProceduralBirdSprite.generate_pecking_texture), alternated against
 ## `perched_frame` while the bird works the worm.
 var peck_frame: Texture2D = null
+
+## Ground hop/stride cycle (see IllustratedBirdSprite.generate_walk_
+## textures) -- set by AmbientFlyerRenderer for the three ground-foraging
+## songbirds only. Empty is a no-op (see _animate_wings_body), same
+## optional-field contract as peck_frame/perched_frame.
+var walk_frames: Array = []
+const WALK_SECONDS_PER_FRAME := 0.12
+
+## Open-beak, sound-lines singing cycle (see IllustratedBirdSprite.
+## generate_sing_textures) -- every real bird species has one. Empty is a
+## no-op, same contract as walk_frames.
+var sing_frames: Array = []
+const SING_SECONDS_PER_FRAME := 0.1
 
 ## Re-scanning the soil every frame would query the worm set per bird per
 ## frame; worms surface on a weather timescale, so it is throttled the same
@@ -631,6 +648,7 @@ func _process(frame_delta: float) -> void:
 	_step_seed_carrying(delta)
 
 	_step_growing(delta)
+	_step_flight_height(delta)
 
 	# THE PRECEDENCE ORDER, highest first. Six things can move a flyer now,
 	# and they must not fight:
@@ -1598,6 +1616,98 @@ var egg_frame: Texture2D = null
 ## own species' adult size rather than a shared assumption.
 func set_adult_scale(full_size: Vector2) -> void:
 	_adult_scale = full_size
+
+
+## FLIGHT HEIGHT -- requested directly: "give birds a z height in their
+## flight and scale size based on distance from ground / distance to
+## camera". On a top-down camera looking straight down, "how far above the
+## ground" and "how far from the camera" are the SAME quantity -- there is
+## no independent perspective axis to fake, so one height value drives
+## both: it lifts the drawn sprite (via `offset`, the same draw-only
+## property WingbeatBounce already uses -- see _apply_flight_height's own
+## doc comment for why it must never touch `position`) and shrinks its
+## scale, together reading as "further away" the higher a bird climbs.
+##
+## How high a cruising bird floats above the ground, in world px. No real
+## "correct" answer exists for a stylised top-down game -- picked as a
+## multiple of a sparrow's own on-screen width (IllustratedBirdSprite.
+## BASE_WORLD_WIDTH) so the lift reads as a real number of body-lengths
+## rather than an arbitrary pixel count, and scales itself if that width is
+## ever retuned again (see the "gigantic" and "still too big" reports this
+## same session).
+const FLIGHT_CRUISE_HEIGHT_PX := IllustratedBirdSprite.BASE_WORLD_WIDTH * 3.0
+
+## How fast height eases toward its target, world px/sec -- fast enough that
+## a full climb/descent (FLIGHT_CRUISE_HEIGHT_PX) reads as a deliberate
+## takeoff/landing beat inside roughly a second and a half, slow enough it
+## is never a pop.
+const FLIGHT_HEIGHT_RATE_PX_PER_SEC := FLIGHT_CRUISE_HEIGHT_PX / 1.5
+
+## How much smaller a bird at full cruise height draws, as a fraction of its
+## ground scale -- a visible but modest distance cue, not a vanishing act.
+const FLIGHT_HEIGHT_SCALE_SHRINK := 0.25
+
+## Current height above the ground, world px. 0 while perched; eases toward
+## FLIGHT_CRUISE_HEIGHT_PX while airborne. Read by _apply_flight_height
+## (offset/scale) and by tests; nothing behavioural ever reads it --
+## `position` stays the ground-truth location for every distance check,
+## exactly like WingbeatBounce's own offset.
+var _flight_height := 0.0
+
+
+## Advances _flight_height toward its target for this frame -- called
+## unconditionally, once per _process, ahead of every behaviour branch
+## (mirrors _step_growing's own placement) so height keeps easing even on
+## frames the bird is mid-courtship, mid-forage or otherwise not running
+## its ordinary wander step.
+##
+## BIRDS ONLY (IllustratedBirdSprite.has_species) -- `perched` means
+## something different for a pollinator, which settles onto a bloom via
+## `_drink_remaining` rather than this flag and is never actually
+## "perched" while nectaring. Height climbing during that settle lifted a
+## drinking butterfly off its flower (broke test_a_settled_butterfly's_
+## body_sits_where_it_is_drawn and the alighting-speed guard) -- a
+## pollinator staying at 0 is not a missing feature, "give birds a z
+## height" was scoped to birds by name.
+func _step_flight_height(delta: float) -> void:
+	if not IllustratedBirdSprite.has_species(species):
+		return
+	var target := 0.0 if perched else FLIGHT_CRUISE_HEIGHT_PX
+	_flight_height = move_toward(_flight_height, target, FLIGHT_HEIGHT_RATE_PX_PER_SEC * delta)
+
+
+## The visual half of flight height: lifts the drawn sprite and shrinks it
+## by _flight_height's current fraction of FLIGHT_CRUISE_HEIGHT_PX.
+##
+## Added to `offset`, NEVER `position` -- position feeds
+## AmbientFlyerMovement's containment, the courtship orbit, the spiral
+## flight, every partner-distance check in _scan_for_partners and the
+## whole tree's Y-sorting (see _bounce_on_the_wingbeat's own doc comment,
+## which this mirrors exactly for the same reason: a per-frame vertical
+## shift folded into `position` would put a false wobble through all five
+## at once). Composed with whatever offset.y _animate_wings_body already
+## set (the wingbeat bounce, or 0 while perched/nectaring) rather than
+## overwriting it, so a climbing bird still bobs on the beat WHILE it
+## rises.
+##
+## BIRDS ONLY (see _step_flight_height) -- and for the SAME reason gates
+## the scale rewrite too, not just the height climb: recomputing scale
+## from _adult_scale/age_seconds every frame is only safe for a marker
+## that actually went through set_adult_scale/begin_life the way
+## AmbientFlyerRenderer._build_marker sets one up. A non-bird (or a bare
+## test fixture) that set `.scale` directly, never touching either of
+## those, had that value silently stomped back to a stale default the one
+## frame this ran unconditionally (broke a nectaring butterfly's own
+## position/speed guards, which read `.scale` via _drawn_body_px) --
+## `_flight_height` is already permanently 0 for anything this gate
+## excludes, so skipping the rewrite entirely for them is a true no-op,
+## not a behaviour change.
+func _apply_flight_height() -> void:
+	if not IllustratedBirdSprite.has_species(species):
+		return
+	var height_fraction := _flight_height / FLIGHT_CRUISE_HEIGHT_PX
+	offset.y -= _flight_height
+	scale = _adult_scale * LifeCycle.size_scale_at(age_seconds) * (1.0 - height_fraction * FLIGHT_HEIGHT_SCALE_SHRINK)
 
 
 ## Starts this flyer part-way through its spiral-flight cooldown, so a chunk's
@@ -2582,9 +2692,30 @@ func _drawn_body_px() -> float:
 	return float(texture.get_height()) * absf(scale.y)
 
 
+## Wall-clock frame index into an N-frame cycle, at `seconds_per_frame` --
+## the same free-running-clock shape FlapGlide/NectaringPosture already use
+## for their own cycles, but plain wall time rather than a wing-beat/
+## alighting clock: walking and singing have no lift/glide physics to stay
+## locked to, they just need to visibly cycle.
+func _cycle_frame_index(frame_count: int, seconds_per_frame: float) -> int:
+	return int(_elapsed_time / seconds_per_frame) % frame_count
+
+
+## Advances the wing-beat, then applies flight height on top -- a thin
+## wrapper (rather than folding _apply_flight_height into every one of
+## _animate_wings_body's own early returns below) so every existing call
+## site, of which there are many scattered through _process's precedence
+## chain, gets the height lift/shrink for free with no change to any of
+## them: whichever branch fires, it still ends by calling `_animate_wings`,
+## which is now this function.
+func _animate_wings() -> void:
+	_animate_wings_body()
+	_apply_flight_height()
+
+
 ## Advances the wing-beat. Separate from the movement step so a flyer
 ## animates even while hovering.
-func _animate_wings() -> void:
+func _animate_wings_body() -> void:
 	# Pre-hatch: an egg, not a flapping insect (see ProceduralEggSprite /
 	# _is_pre_hatch). No egg_frame set (an older caller, a test double) is a
 	# no-op rather than an error -- the texture is simply left whatever it
@@ -2606,6 +2737,21 @@ func _animate_wings() -> void:
 		# while a worm silently vanishes.
 		if ground_forage != null and peck_frame != null and ground_forage.is_beak_down():
 			texture = peck_frame
+		# Singing wins over walking when the roll says sing -- both only
+		# ever apply while grounded-but-not-actively-pecking (see
+		# BirdSong's own doc comment: singing is a cosmetic embellishment,
+		# not a state machine, so it competes for the same frame walking
+		# does rather than needing its own precedence rule).
+		elif ground_forage != null and not sing_frames.is_empty() and BirdSong.should_sing(wander_seed, _elapsed_time):
+			texture = sing_frames[_cycle_frame_index(sing_frames.size(), SING_SECONDS_PER_FRAME)]
+		# The resume beat after a peck -- see GroundForageBehavior.RESUME_
+		# SECONDS -- is the one grounded moment that is not mid-strike, so
+		# it is where a hop/walk cycle actually has somewhere to play.
+		elif (
+			ground_forage != null and not walk_frames.is_empty()
+			and ground_forage.phase == GroundForageBehavior.Phase.RESUMING
+		):
+			texture = walk_frames[_cycle_frame_index(walk_frames.size(), WALK_SECONDS_PER_FRAME)]
 		elif perched_frame != null:
 			texture = perched_frame
 		return
