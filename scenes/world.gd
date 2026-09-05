@@ -320,6 +320,7 @@ var _ground_tint := GroundTint.new()
 var _chunk_manager: EarthChunkManager
 var _path_scarring := PathScarring.new()
 var _scarred_tiles: Dictionary = {}  # Vector2i global tile -> true, tiles we've painted as trampled earth
+var _trailed_tiles: Dictionary = {}  # Vector2i global tile -> true, tiles currently painted as the deeper Trail tier
 ## Sentinel far outside any reachable tile, so the first real tile always
 ## counts as "newly stepped on".
 var _last_scar_step_tile := Vector2i(-2147483648, -2147483648)
@@ -4078,10 +4079,26 @@ const PATH_SCAR_BIOMES := ["grassland", "forest"]
 
 ## Path scarring (see PathScarring): each new grass/forest tile the player
 ## walks onto accumulates wear; heavily-walked tiles render as trampled earth
-## (reusing the build system's EARTH_TILE_ID modification), and unwalked ones
-## slowly recover and revert. Modifications made here are indistinguishable
-## from player-built earth once persisted -- an accepted overlap, both are
-## "the ground got turned to dirt".
+## (reusing the build system's EARTH_TILE_ID modification), sustained heavier
+## use deepens further into the Trail tier (TerrainRenderer.TRAIL_TILE_ID,
+## docs/concept/infrastructure.md's "path -> trail -> road"), and unwalked
+## ones slowly recover and revert. Modifications made here are
+## indistinguishable from player-built earth once persisted -- an accepted
+## overlap, both are "the ground got turned to dirt".
+##
+## NEW wear does not accumulate while snow is lying on the ground (see
+## EarthChunkManager.snow_depth) -- reported live: "snow scarring should not
+## be brown tint but rather transparent without tint". SnowBombShader's own
+## footprint/tread rendering is a transparent GPU overlay with no tint of
+## its own; the brown was always this system's own permanent EARTH_TILE_ID
+## dirt showing through wherever the snow overlay above it wasn't fully
+## opaque. Walking on snow-covered grass packs the snow down (see SnowTrail)
+## -- it should not also instantly grow a patch of bare dirt underneath,
+## which is what a snow-blind wear check produced. Gated at the STEP-ON
+## call only: an already-scarred path still recovers/repaints normally in
+## winter (decay above and the render/reclaim diff below are both
+## unaffected), only fresh scarring is what snow prevents -- consistent with
+## PATH_SCAR_BIOMES already gating which ground can scar at all.
 func _step_path_scarring(delta: float) -> void:
 	_path_scarring.advance(delta)
 
@@ -4090,7 +4107,7 @@ func _step_path_scarring(delta: float) -> void:
 		var tile: Vector2i = local_player.current_tile()
 		if tile != _last_scar_step_tile:
 			_last_scar_step_tile = tile
-			if PATH_SCAR_BIOMES.has(_chunk_manager.biome_at_global(tile.x, tile.y)):
+			if _chunk_manager.snow_depth() <= 0.0 and PATH_SCAR_BIOMES.has(_chunk_manager.biome_at_global(tile.x, tile.y)):
 				_path_scarring.step_on(tile)
 
 	_scar_refresh_accumulator += delta
@@ -4109,6 +4126,33 @@ func _step_path_scarring(delta: float) -> void:
 				# creates infrastructure" made concrete, not just a texture
 				# change.
 				_chunk_manager.record_path_worn_if_new(tile)
+
+	# The trail tier (docs/concept/infrastructure.md's "path -> trail ->
+	# road", PathScarring.is_trail): a strictly deeper escalation of the
+	# same worn tile, painted over it once use reaches the ceiling. Runs
+	# after the loop above so a tile can never show as Trail before it has
+	# already been recorded and painted as an ordinary worn Path -- see
+	# PathScarring.trail_tiles being a subset of worn_tiles.
+	for tile in _path_scarring.trail_tiles():
+		if not _trailed_tiles.has(tile):
+			if _chunk_manager.build_at_global(tile.x, tile.y, TerrainRenderer.TRAIL_TILE_ID):
+				_trailed_tiles[tile] = true
+				_chunk_manager.record_trail_formed_if_new(tile)
+
+	# Tapering back down from Trail to an ordinary worn Path -- distinct
+	# from full reclamation below: the ground is still a path, just no
+	# longer compacted to the ceiling, so it repaints as EARTH_TILE_ID
+	# rather than being destroyed. A tile that decays straight past Path to
+	# bare ground in one gap is left alone here (still worn is false) and
+	# falls through to the ordinary reclaim loop instead, whose widened
+	# _CURRENTLY_WORN_EVENTS guard already recognizes a last-seen
+	# trail_formed as a valid reclaim precedent.
+	for tile in _trailed_tiles.keys().duplicate():
+		if not _path_scarring.is_trail(tile):
+			_trailed_tiles.erase(tile)
+			if _path_scarring.is_worn(tile):
+				_chunk_manager.build_at_global(tile.x, tile.y, TerrainRenderer.EARTH_TILE_ID)
+				_chunk_manager.record_trail_reclaimed(tile)
 
 	for tile in _scarred_tiles.keys().duplicate():
 		if not _path_scarring.is_worn(tile):
