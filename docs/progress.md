@@ -1,9 +1,11 @@
 # Progress Tracker
 
 This document is a living status tracker for everything defined across the
-design docs in `docs/concept/*.md` (91 as of the 2026-09-05 merge to main
-that added `concept/mushrooms.md` right after a cross-alignment recount
-had just landed 90 — `find docs/concept -maxdepth 1 -name "*.md" | wc -l`
+design docs in `docs/concept/*.md` (94 as of the 2026-09-05 merge of the
+standard-model pass, which added `concept/standard_model.md` while
+`concept/ethogram.md` landed on `main` in parallel — a recount at merge
+time; the previous line here said 91 right after `concept/mushrooms.md` —
+`find docs/concept -maxdepth 1 -name "*.md" | wc -l`
 — up from the 49 an earlier pass counted and the 32 this doc was first
 generated against) plus `docs/roadmap.md` and, since the 2026-08-23 emergent-systems
 pass, `docs/emergence/*.md`, cross-referenced
@@ -1942,6 +1944,8 @@ Two bugs surfaced writing it: warmth could pull ripening back into SPRING, i.e. 
 ✅ **Fruit actually falls** (`FruitingModel.fallen_between` + `_cycle_length`). Two bugs, both of which hid behind tests that asked for a whole year in a single call. (1) `_cycle_length` multiplied the year by the species' `ripening_multiplier`, so a cherry ran a 0.65-year bearing cycle and a pine a 1.8-year one, while the ripening phases are fractions OF A YEAR -- so bearing drifted against the calendar: measured, a cherry shed 24 fruit a year in two windows with the second in mid-winter, and a pine shed 0 in a year. That is the same conflation `BEARING_CYCLE_SECONDS` was introduced to kill, back through another door. (2) `fallen_between` rounded each call's own increment to a whole fruit, and fruiting steps once a SECOND -- one second of a crop of twelve over a tenth-of-a-year window is ~0.0002 of a fruit, which rounds to zero every step forever. Flooring the CUMULATIVE count and differencing makes any partition of a span sum alike. Measured after: every species sheds exactly its crop, once a year, nuts and apples in autumn, cherries summer->autumn, nothing in winter. The `test_earth_chunk_manager` drop test was also stale -- its 3000-second span was five years when a year was ten minutes, and is 0.43% of a year now that a day is four real hours.
 
 ✅ **`/season [name]` and `/weather [state|off]`** (`SeasonCycle.seconds_until_season`, `WeatherModel.force_weather`, wired through `EarthChunkManager.jump_to_season`/`force_weather`). With no argument each reports the current state and lists what it accepts. Two design decisions worth keeping: the season jump moves the clock FORWARD only -- every other system measures itself against that clock, so winding it back would give a tree a negative age -- and it moves the fruiting mark with it, since a jump is up to a year and fruiting counts what fell since it last ran, which would otherwise tip a year of windfall onto the ground in one step. Weather is pinned on the MODEL rather than at the call sites so overlay, soil moisture, wind and snowfall all agree; snow has no state of its own because it is what rain is when it falls cold (`/weather rain` + `/season winter`).
+
+✅ **`/season [name] [progress]`** (2026-09-05, reported: "make /season command so it accepts a float between 0 and 1 for how far it has progressed into the season"). A second, optional argument lands `progress` -- a 0-1 fraction, default `0.0` -- partway into the named season instead of always at its very start; `1.0` lands at exactly the same instant as the NEXT season's own `0.0`, by construction (`SeasonCycle.seconds_until_season`'s `target` calculation). The console layer validates rather than trusts the typed value: a non-numeric second argument, or one outside `[0, 1]` (someone typing `50` meaning "50%"), is refused with a reason (`test_season_command_clarity.gd`) rather than silently defaulted or clamped and read back as if that was what was asked for -- the same "a no-op must not read like an effect" concern `/weather off`'s own message fix guarded. `SeasonCycle` itself still clamps any out-of-range float defensively underneath, for any caller other than the console.
 
 ✅ **Trees grow branch by branch** (`ProceduralTreeSprite.growth_order` + `_grown_canopy`, wired through `ChoppableTree.set_age`). Growth was a single node scale, which drew a sapling as a full-grown tree in miniature -- crown, boughs and every twig, only small. The canopy is now pruned back to the branches the tree has actually put out: traced outward from the point where the trunk meets the crown, so a sapling is a short trunk with a few leaves, then a small crown, then boughs spreading, with the far tips last. Randomised per tree, so a nursery is not one sapling drawn many times. Two things had to differ from the season turn to make it read right, both found by rendering it and looking: the turn seeds from the crown's whole bottom edge (which on a spreading crown is the drooping outer RIM, and drew a young cherry as an arch floating clear of its trunk), and the turn mixes trace and clump noise half and half (which drew a sapling as confetti scattered over the whole mature crown box). Growth seeds from the trunk join alone and weights the trace at `GROWTH_BRANCH_WEIGHT`. Node scaling stays -- a young tree really is shorter -- fewer branches is in addition to it, not instead.
 
@@ -3976,7 +3980,7 @@ A first crafting loop is now real and wired into live gameplay, though shallow:
   Woodcutting/Mining/... mastery track, separate from the PoE-style
   `concept/skills.md` web); no `Skill` resource or per-action XP hook exists
   in code yet.
-- **Blueprint DSL** (large) — ⬜ Not started, but its *compilation target* now exists: `concept/emergent_crafting.md`'s part graph (parts as `(material, geometry, role)` nodes, typed joints as edges — see the Materials section's "Shape & Assembly" and "Typed joints" rows). Whether the player manipulates that graph directly or authors intent that compiles to it is still the open question this doc asks.
+- **Blueprint DSL** (large) — ⬜ Not started, but its *compilation target* now exists: `concept/emergent_crafting.md`'s part graph (parts as `(material, geometry, role)` nodes, typed joints as edges — see the Materials section's "Shape & Assembly" and "Typed joints" rows). Whether the player manipulates that graph directly or authors intent that compiles to it is still the open question this doc asks. **A text form that compiles to that graph now exists from the machine side** (2026-09-05): `concept/standard_model.md`'s `device` grammar's `part`/`joint` clauses compile through `DeviceCompiler` into the real `PartGraph`; whether *item* blueprints reuse those clauses is the remaining half of the question.
 - **Base Item Templates** (trivial) — ✅ Done — `item.gd`/`item_catalog.gd` (now also includes torch/campfire/cooked_meat).
 - **Material Inputs** (small) — ✅ Done — `crafting_recipe_book.gd` recipes consume a dictionary of item-id→count inputs.
 - **Modifier Slots** (medium)
@@ -5321,31 +5325,53 @@ at this land the wrong 39 files — since corrected).
 New concept doc (2026-08-24), extending `materials.md`'s existing (already
 implemented, but so far unused) `conductivity` scalar into a real
 water-wheel/windmill → generator → wire/circuit → battery/light-bulb
-mechanism. Nothing implemented — all ⬜ Not started:
+mechanism. **Revised 2026-09-05**: the circuit *algebra* this doc describes
+was generalised into `concept/standard_model.md` (see that entry) and its
+kernel solves this doc's own river-powered light end to end as an
+*authored* device (`tests/unit/test_device_book.gd`). What is real is
+generic — a law, not a placed component — so each row below is 🚧 where
+the physics exists and ⬜ where the placed, in-world half still does not:
 
-- **Circuit Topology (Adjacency Flood-Fill)** (medium) — the algorithm
+- **Circuit Topology (Adjacency Flood-Fill)** (medium) — ⬜ the algorithm
   shape already exists and is real, tested code
   (`src/gameplay/room_detector.gd`'s room-enclosure flood-fill), just not
-  yet generalized past room enclosure to conductivity.
-- **Torque from Flow (Water Wheel / Windmill)** (medium) — windmill has no
-  new world-sim dependency (`weather.md`'s `wind_strength_for` already
-  real); water wheel's flow-from-elevation-gradient proxy is proposed, not
-  validated.
-- **Generator (Torque + Magnet + Coil → EMF)** (medium)
-- **Wire / Circuit Resistance & Current (Ohm's Law)** (medium)
-- **Battery (Charge Storage)** (small)
-- **Light Bulb (Load, Brightness from Power)** (small)
-- **Magnetic Permeability Material Scalar** (small) — proposed addition to
+  yet generalized past room enclosure to conductivity. The kernel solves a
+  loop an author *wrote*, never one discovered from placed pieces.
+- **Torque from Flow (Water Wheel / Windmill)** (medium) — 🚧 the law is
+  real: a paddle `source` from the flat-plate drag law (water or air, one
+  function) into a `transform` whose ratio is the wheel's radius
+  (`device_physics.gd`); the worked light's loaded wheel measurably
+  labours under load. ⬜ binding a placed wheel to a real river's current
+  (`OpenChannelFlow.velocity`) or a windmill to `weather.md`'s real wind.
+- **Generator (Torque + Magnet + Coil → EMF)** (medium) — 🚧 a `gyrate`
+  law with Faraday's `k = B A N`, lossless, torque per ampere equal to
+  volts per rad/s (the same machine is a motor — a charged store behind it
+  motors the shaft, pinned). ⬜ the magnet as a sourced part (see the
+  permeability row).
+- **Wire / Circuit Resistance & Current (Ohm's Law)** (medium) — 🚧 a
+  wire's ohms come from its material's conductivity scalar inverted to S/m
+  over its own length and section (copper beats iron by the published
+  6.4×; wood cannot complete a circuit); the loop solve is Ohm's law
+  generalised through transformers and gyrators. ⬜ a placed wire run.
+- **Battery (Charge Storage)** (small) — 🚧 a `store` (tank-stepped level,
+  refuses charge when full, sheds overcharge, drains backwards through a
+  dead source). ⬜ the parallel placement across a bulb (`fork`).
+- **Light Bulb (Load, Brightness from Power)** (small) — 🚧 a filament is
+  a `resist` whose ohms are derived from 2 cm of 0.1 mm graphite, and the
+  worked light puts 62 W into it, firing a `shine` rule. ⬜ any light
+  rendered from that.
+- **Magnetic Permeability Material Scalar** (small) — ⬜ proposed addition to
   `material_properties.gd`'s existing vector (density/hardness/toughness/
   elasticity/sharpness_capacity/flammability/conductivity/decay_rate);
-  not yet added.
-- **Magnetite Ore / Magnetized-Iron Crafting** (small) — proposed fourth
+  not yet added — a generator's field is an authored `magnet_tesla`.
+- **Magnetite Ore / Magnetized-Iron Crafting** (small) — ⬜ proposed fourth
   `OrePlacement.ORE_TYPES` entry (today iron/copper/coal) plus a craft-a-
   magnet-from-iron recipe; neither exists.
-- **Wire Overload Burnout** (small) — proposed reuse of the existing
-  melting/damage-threshold mechanism (`impact_resolver.gd`'s
-  `T_BRITTLE_TOUGHNESS`-style thresholds), not yet extended to current
-  load.
+- **Wire Overload Burnout** (small) — ⬜ the rule grammar can fire on a
+  wire's dissipated power today, but only against an authored threshold;
+  the derived rating (watts → conductor temperature →
+  `MaterialProperties.thermal_failure_c`) is the standard model's own ⬜
+  row.
 
 ### Housing (`concept/housing.md`)
 
@@ -7136,6 +7162,59 @@ state had never once been set by anything in `src/`.
   not silently dropped): ants as bird prey and ants as carrion detritivores
   remain exactly as scoped in the entry above — this pass is rendering
   only, it does not touch what a mound forages or how.
+- **Crushed underfoot: weight-emergent worm mortality** (medium) — ✅ Done
+  — requested directly: stepping on a worm should splatter it, emerging
+  from real player weight, force of step, and the worm's own pressure
+  resistance, not a flat "anyone can squash a worm" rule — calibration
+  example given: a frog's step spares a worm, a horse's kills it. No
+  frog or other amphibian exists in this game at all (checked directly);
+  the real substitutes are the smallest and largest land creatures that
+  do (mouse/squirrel spared, horse unchanged as the given example). Real
+  pieces:
+  1. **`CreatureMass`** (new, `src/world/creature_mass.gd`) — real,
+     commonly-cited average adult body mass per `AnimalAnatomy` species
+     (mouse 0.02kg through horse/camel 500kg). The player's own mass
+     reuses `StoneSize.AVERAGE_BODY_MASS_KG` directly rather than a
+     second guess. Purely mythical world bosses (no real animal to cite)
+     fall back to their own `world_scale` CUBED against deer's real
+     mass/scale ratio — verified directly that `world_scale` alone badly
+     under-represents real mass at the high end (a "horse" would come
+     out under 150kg using that formula, nothing like its real ~500kg),
+     which is exactly why the tabulated real species use cited figures
+     instead, not a derived one.
+  2. **`EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S`/`is_crushed_by`/
+     `crush`** (new) — reuses this codebase's own "one damage model for
+     the whole world" (`materials.md`/`ImpactResolver`) in SHAPE
+     (momentum = mass × velocity, resolved against a threshold), not in
+     its literal numbers: `ImpactResolver.T_CRUSH` is calibrated for
+     thrown-rock-vs-creature combat, an unrelated scale from "anything
+     stepping near a soil invertebrate", so this pins its own worm-scaled
+     threshold (5.0 kg·m/s) instead. Momentum is a full body's weight
+     settling through one foot at ordinary walking pace
+     (`PebbleDispersion.FOOTSTEP_SPEED_MPS`, reused) — deliberately the
+     creature's own FULL mass, not `PebbleDispersion`'s own foot-mass
+     FRACTION (a glancing kick past a pebble vs. standing weight settling
+     onto something underfoot are genuinely different physical events).
+     `crush(cell, momentum)` mirrors `take()`'s own `is_surfaced` gate (a
+     burrowed worm has no exposed body to step on) and `RECOVERY_SECONDS`
+     clock exactly — a crushed burrow recovers exactly like an eaten one.
+  3. **`EarthChunkManager.crush_worm_at`** mirrors `take_worm_at`'s own
+     shape exactly (same tile/chunk/patch lookup, same immediate
+     `_sync_worm_sprites` re-sync). Wired in `World._client_process` for
+     the player (`CreatureMass.PLAYER_MASS_KG`) AND every `CreatureMarker`
+     (`CreatureMass.mass_kg_for(creature.info.species)`), mirroring
+     `tread_snow_at`'s own "player, then every creature in the group"
+     call shape. No debounce needed for either — `crush_worm_at`'s own
+     removal is already idempotent, unlike the continuous accumulators
+     (path wear, snow depth) that DO need per-entity "last tile"
+     tracking.
+  **Deliberately NOT included** (named, not silently dropped): no
+  dedicated splat visual effect — a crushed worm currently disappears
+  exactly the way an eaten one already does, a real but purely cosmetic
+  follow-up. Flying creatures are airborne, not walking, so deliberately
+  excluded — a robin already interacts with a worm on its own terms
+  (`take_worm_at`, eating it), never by incidentally landing weight on
+  it. Full writeup: [soil_fauna.md](concept/soil_fauna.md#crushed-underfoot-weight-emergent-worm-mortality).
 
 ### Flora (`concept/flora.md`)
 
@@ -10879,7 +10958,9 @@ any flyer in range was always caught, immediately becoming a
 `jarred_insect`/`caged_songbird` curiosity item, with no probability and no
 intermediate "loaded, undecided" state at all.
 
-- ✅ **The Capture DSL itself** (large) — `capture_parser.gd` /
+- ✅ **The Capture DSL itself** (large) — ~~`capture_parser.gd`~~ (retired
+  2026-09-05 in favour of the standard model's device grammar — see the
+  addendum below) /
   `capture_atom_catalog.gd` / `capture_physics.gd` / `capture_executor.gd` /
   `capture_atom_effects.gd` / `capture_book.gd`, mirroring the magic DSL's
   own module split (parser → atom catalog → physics → executor → effects →
@@ -10912,7 +10993,8 @@ intermediate "loaded, undecided" state at all.
   the specific species survives for rendering. That exposed a real,
   general stacking bug fixed in passing: `ItemStack.can_stack_with` only
   ever compared item id, so a freshly-loaded container could silently merge
-  into a stack of empty ones — now also requires matching `captive_species`.
+  into a stack of empty ones — now also requires matching `captive_species`. (**2026-09-05**: `Inventory.add` itself never consulted that check until
+  the standard-model merge — see the addendum's 🐛 row below.)
 - ✅ **A bottled catch renders alive** — reported mid-pass, so specified in
   `capture_dsl.md` before being built, same as everything else here. The
   real `glass_bottle.png` composite sheet (measured: 1536×1024, a fixed 3×2
@@ -11006,23 +11088,267 @@ under the smell API, and proves the DSL in tests.
   after the rewire: olfaction, scent-foraging, flies, fly-life-cycle,
   creature-marker, creature-info, ambient-flyer-marker and
   piscivore-bird-marker suites all green.
-- ⬜ **Nothing visible changed, by design.** Every animal decides what it
-  decided before. The mammal ladder's new smell wiring and the context's
-  `smells`/`species`/`genome` keys are real in the model and fed by nothing
-  live until the marker publishes its senses as stimuli (the doc's slice 2);
-  no live animal carries a receptor gene (`AnimalGenome`, see the Animal
-  Genetics section above, still does not exist).
-- ⬜ Slices 2–6 in the doc, none started: real stimuli from the marker (and
-  `danger` stops being a verdict); one drive vector replacing the five hunger
-  clocks with ramped levels; gains as personality (boldness, docility,
-  temperament, the spell fear/calm statuses); bird/insect/fish/villager body
-  plans over the existing motor programs, with the NPC instruction DSL as
-  the player-facing dialect; mate choice on display/preference vectors.
+- ✅ **Slice 1 changed nothing visible, by design.** Every animal decided
+  what it decided before; the slice was a behaviour-preserving re-expression
+  pinned by the tests that already existed.
+- ✅ **Slice 2 (same day): danger stopped being a verdict, and every land
+  mammal got its own nose.** The basis now carries `predator`/`player`/
+  `flesh` instead of `danger`; `CreatureMarker`'s sensing tick publishes
+  every nearby creature as what it IS, every person as a person, and the
+  nearest water/food tile at a real position (`_cached_stimuli`), and reads
+  its threat list back from the species valence (`CreatureBehavior.threats()`
+  over `BehaviorKernel.perceived`) -- "predators are threats to herbivores,
+  people to everyone, a predator ignores other predators, a tamed animal no
+  longer perceives people" are all valences and sensitivities now, not scan
+  rules. Attack and hunt act on the node the winning stimulus carries (the
+  kernel returns it whole); the prey cache and both direction caches are
+  gone. The kernel ranks by a sense-supplied `strength` when the sense knows
+  one (smell hands over its dilution via `ScentForaging.stimuli_from`) and
+  honours a wiring `floor` (the smell wiring carries
+  `Ethogram.SMELL_INTEREST_FLOOR`, which `ScentForaging.MIN_INTEREST` now
+  aliases); `ScentForaging.best_source` ranks through the kernel with an
+  optional genome. `src/gameplay/animal_genome.gd` exists in
+  `concept/animal_genetics.md`'s exact shape (static namespace, ordered
+  `GENE_NAMES`, `GENE_READERS`, both anti-dead-weight tests) holding only the
+  five receptor genes; `AnimalGenome.for_seed` derives them bell-shaped
+  around the species template from the marker's own `wander_seed`, and
+  `CreatureMarker.genome_or_derived()` feeds them to every decision and
+  every sniff -- so a boar born without a decay receptor walks past carrion
+  the next boar takes (`test_an_individuals_nose_reaches_the_live_forage_choice`),
+  with nothing new persisted. Suites green after the change: adapter,
+  marker, creature-info, ambient-flyer, piscivore, olfaction, flies,
+  fly-life-cycle, taming, animal-reproduction, mammal-courtship (578 tests).
+- 🚧 **Deliberately not in slice 2**, recorded in the doc's §2/§3: grazing
+  bites stay `GrazerForaging`'s lexicographic diet-order choice (a weighted
+  sum cannot say "mast over grass at any distance"); the species half of the
+  adapter overrides (`flesh` valence, "ignores other hunters", the fight
+  temperament) still comes from `CreatureInfo`'s tables rather than the
+  five species records; no `conspecific` feature is published until a
+  wiring reads one.
+- ✅ **Slice 3 (same day): one drive vector.** `src/gameplay/drives.gd` is
+  the single clock behind every "rises over time, crosses a threshold, a
+  meal takes it back down" need, and the numbers are drive profiles in the
+  ethogram (`Ethogram.drive_profile`: `mammal` = CreatureNeeds' 0.02/s and
+  0.03/s with the 0.45 herd stagger, `villager` = the same pace hunger-only,
+  `bird` = BirdDigestion's songbird crop as hunger, plus a `kingfisher`
+  species record overriding the bird appetite with PiscivoreAppetite's two
+  meals a day). `CreatureNeeds`, `NpcNeeds`, `PiscivoreAppetite` and
+  `BirdDigestion` survive as facades over it -- same APIs, their constants
+  re-exported from the profiles as `static var`s -- so `CreatureMarker`,
+  `NpcEconomy`/`NpcMarker`, `PiscivoreBirdMarker`, `AmbientFlyerMarker` and
+  all four test files are untouched and green; the stagger keeps the exact
+  hash the old modules used, so no animal or villager already in the world
+  changes its onset. Levels are the kernel's gains (`Drives.gains()`, which
+  `CreatureMarker` now publishes and `CreatureBehavior` reads ahead of the
+  hungry/thirsty booleans); a gain is a step at the threshold today and a
+  ramp one profile `onset` away -- no profile sets one yet, deliberately,
+  because under first-match arbitration a ramp would only make animals
+  forage below the thresholds they were tuned to (the doc's §5 says when it
+  becomes meaningful). The player's `SurvivalMeters` stays the player's.
+  21 new tests in `test_drives.gd`; facade, consumer and marker suites green.
+- ⬜ Slices 4–6 in the doc, none started: gains as personality (boldness,
+  docility, temperament, the spell fear/calm statuses); bird/insect/fish/
+  villager body plans over the existing motor programs, with the NPC
+  instruction DSL as the player-facing dialect; mate choice on
+  display/preference vectors.
+
+#### Addendum (2026-09-05): the net is a device with a real mesh
+
+Reported: "*refactor the butterfly net to express that it catches small
+animals like butterflies, fish, small birds; but not e.g. bees / flies
+because the net is not tight enough — it should also encode the capture
+action which confines the subject to the net.*"
+
+Investigation: `_throw_net` scanned the whole ambient-flyer flock with no
+species check at all, so a bee or a fly — both real `AmbientFlyerMarker`s,
+the fly spawned by the carrion loop — was netted exactly like a monarch;
+fish were never targets; and "what the net catches" lived in a
+`target.tier == "flyer"` guard, a category rather than a physical fact.
+The standard model had just landed, so the honest fix was to make the net
+a device with a real bag and let its mesh decide.
+
+- ✅ **Mesh physics** (medium) — `body_dimensions.gd` (three sourced body
+  extents per species for the flyer and fish rosters, the length pinned to
+  `wingbeat_bounce.gd`'s), `CapturePhysics.slips_through` / `fits_mouth` /
+  `mesh_verdict`: a body slips through when its middle extent is under the
+  mesh, does not fit when its largest exceeds the mouth; monotone in both
+  and pinned so. Against the standard net (10 mm mesh, 30 cm mouth): bee
+  and fly slip through, butterflies and small birds are held, goldfish and
+  bluegill are netted, trout and koi are too big.
+- ✅ **The net is device text** (medium) — `capture_book.gd` authors it in
+  `concept/standard_model.md`'s grammar: a wooden handle, an iron hoop, a
+  fibre bag with `aperture_mm: 10` (the rip saw's `tooth_pitch_mm`
+  precedent) and `width_cm: 30`, compiled to the real part graph (under
+  half a kilogram) and its part facts, validated at load. `capture_parser.
+  gd` and the `capture` block kind are retired: the device grammar is a
+  strict superset.
+- ✅ **The capture act names where** (small) — atoms `mesh_holds(mesh:
+  bag)` (a check that fails WITH a reason), `catch_roll`, `confine(in:
+  bag)`, `free(from: bag)`, `move_captive`; `hold_captive` /
+  `release_captive` retired and pinned so. `CaptureExecutor.validate` is
+  the static constraint layer — a `confine(in: X)` must follow a
+  `mesh_holds(mesh: X)` in its own pipeline, every named part must be
+  declared, every atom known and complete — so no shipped text can
+  confine what its mesh was not shown to hold.
+- ✅ **In play** (small) — the catch context carries the subject's extents
+  and the net's facts; a mesh refusal shows its reason ("The bee slips
+  through the 10 mm mesh."), a lost roll stays "Missed!"; a fish in the
+  shallows is a net target through the kingfisher's nearest-fish lookup and
+  leaves the water through the rod's own `catch_nearest_fish`, so its
+  pond's population records the harvest; a netted fish loads the net and
+  never bonds. 8 new scoped `test_player.gd` tests, the 15 existing net /
+  release / bottle tests re-run green.
+- ⬜ **No mass or tear rule** — a koi is refused for length, not weight;
+  the honest version is the subject's mass against `PartGraph.
+  part_load_capacity(bag)`, and no fish carries a mass yet.
+- ⬜ **Net variants have no recipes** — a 1 mm insect net that holds the
+  bee and a 40 cm landing net that takes the trout are each one number
+  away in text (both pinned in `test_capture_executor.gd`), but nothing
+  lets a player craft one.
+- ⬜ **The kingfisher** is measured (held by the standard net) but is a
+  `PiscivoreBirdMarker`, not an ambient flyer, so `_throw_net` never sees
+  it.
+- 🐛 **Fixed at the merge to `main` (2026-09-05): bottling lost the
+  creature, and could spend a loaded bottle.** Merging onto a `main` that
+  had just started every player with an empty glass bottle turned four
+  older bottle tests red on `main` itself — and the root cause was real,
+  not a stale expectation: `Inventory.add` merged by item id alone and
+  never consulted `ItemStack.can_stack_with`, so the freshly loaded bottle
+  merged into the starting empty one and its species was gone; in the same
+  path, `has`/`remove` by id meant "Put into bottle" could count and spend
+  a *loaded* bottle as if it were empty. `Inventory.add` now merges only
+  where `can_stack_with` agrees, `has`/`count_of`/`remove` take an optional
+  contents filter, and Player counts and spends empty bottles only. Pinned
+  by 5 new `test_inventory.gd` tests and 2 new scoped `test_player.gd`
+  tests; the four older tests state their empty-pack premise explicitly
+  now that the pack starts with a bottle.
+
+### Standard Model (`concept/standard_model.md`, new this pass)
+
+Reported: "*design and spec a formal standard model for our in-game world
+physics and mechanics — a DSL flexible enough that engineers can invent
+entirely new devices / structures / things.*"
+
+Investigation found the pieces of such a model already scattered across
+four docs and never joined: `materials.md`'s property vector and its one
+impact equation, `emergent_crafting.md`'s parts / typed joints / part graph
+and its "an item is a program" rule AST, `electromagnetism.md`'s
+torque → EMF → Ohm circuit (pure design, nothing built), and three DSLs
+already sharing one `on EVENT(ARG) when GUARD: pipeline` grammar. What none
+of them had was a single *algebra* in which a water wheel, a lever, a
+generator, a battery and a millstone are the same few kinds of thing —
+which is what "invent new devices" actually requires, because without it
+every new device is a new special case. Spec first (per `CLAUDE.md`), then
+a red-first kernel: 173 tests across eight files, every one written and
+seen failing before its module existed.
+
+- ✅ **The formal model** (large) — a bond graph (Paynter, 1959–61) cut
+  down to "8-bit": five energy domains as (effort, flow) pairs whose
+  product is power — rotation, translation, electrical, hydraulic, and
+  thermal honestly catalogued as a pseudo-bond and kept out of power
+  accounting (`physics_domains.gd`); five element laws — `source` (a
+  Thévenin pair with a real free-running flow and matched-load ceiling),
+  `resist`, `transform`, `gyrate`, `store` (`device_elements.gd`), with
+  transformer/gyrator losslessness asserted as a property over a sweep,
+  and the two affine-load reflection rules (`R/r²` through a transformer,
+  `k²/R` with a flipped offset through a gyrator) pinned by consistency
+  checks against the laws themselves. A lever, a gear, a wheel's radius, a
+  piston and a pump are all one law; a generator and a motor are one law;
+  a battery, a reservoir and a drawn bow are one law.
+- ✅ **Derived, not authored** (medium) — `device_physics.gd`: a material's
+  conductivity in S/m recovered by inverting the shipped IACS map (copper
+  lands on the 5.80e7 definition; wood is twenty orders below, so a wooden
+  wire cannot complete a circuit — `electromagnetism.md`'s sentence, now
+  arithmetic); a wire's ohms by Pouillet's law over a haft part's own span
+  and section; a wheel's ratio as its radius; a paddle in a stream as the
+  flat-plate drag law flattened to a Thévenin pair (water's density reused
+  from `open_channel_flow.gd`, sea-level air's beside it — one function is
+  both a water wheel's and a windmill's source); Faraday's `k = B A N`.
+- ✅ **The solver** (large) — `device_network.gd`: one source driving a
+  series chain, solved in closed form by folding everything downstream
+  into one affine load, solving the one flow, and propagating forward with
+  per-element power accounting and tank-stepped stores. Pinned: efforts
+  around a closed loop sum to zero; source power equals dissipated plus
+  stored power to the watt; the **maximum power transfer theorem emerges**
+  (delivered power rises then falls with load and peaks at the matched
+  load, through a lever and a generator — this model's twin of
+  `part_mechanics.gd`'s optimum-head-mass anchor); more grinding or
+  electrical load slows the wheel; an open-ended transformer carries no
+  flow; an unloaded generator runs free with open-circuit EMF and no
+  current; stores charge by power × dt, refuse charge when full, shed
+  overcharge as overflow, never drain below empty; a charged store drives
+  the loop backwards when the source dies and, behind a gyrator, **motors
+  the shaft** — the battery that keeps the mill turning, which no rule
+  wrote. Refusals name their reason (no source first, a second source,
+  duplicate ids, an ideal source into a short, an ideal effort behind a
+  gyrator).
+- ✅ **The `device` DSL** (large) — `device_parser.gd`, a fourth structural
+  sibling of the spell / capture / npc-instruction parsers (same tokenizer,
+  same rules) with four declarative clauses in front: `part ID: MATERIAL
+  GEOMETRY ROLE (dims)`, `joint ID: A to B TYPE FASTENING MATERIAL (axis:
+  z)`, `law ID: ELEMENT(params)`, `loop A |> B |> C`. Purely structural,
+  `line N:` errors. `device_compiler.gd` turns the AST into the *shipped*
+  `PartGraph` (validated by its own rules — an unmodeled material, a missing
+  dimension, an axis-less pivot come back with the graph's own reasons) plus
+  the element chain: every one-port law names a power domain, every
+  two-port its in/out, every parameter authored or derived from a named part
+  or fluid and never both, consecutive ports along the loop checked for
+  domain agreement with a refusal naming both; since 2026-09-05 every
+  part is also exposed as **facts** (material, geometry, role, every
+  declared dimension, mass, span) so a rule on a loop-less device — the
+  butterfly net, `concept/capture_dsl.md` — can read `bag.aperture_mm`.
+  `device_executor.gd` turns
+  a solved loop into a context keyed by element id (store levels and
+  device-level `@` facts included) and fires the device's rules over it.
+- ✅ **Two worked examples, solved end to end** (`device_book.gd`, a fixed
+  authored table like `capture_book.gd`): the **mill race light** — river
+  paddle → 2 m wheel → 1:10 gears → dynamo → 10 m of 3 mm copper → 2 cm of
+  0.1 mm graphite, every parameter derived — runs its loaded wheel at
+  1.408 m/s in a 1.5 m/s river, its dynamo at 134.5 rpm and 28.2 V, and
+  puts **62.1 W** into the filament (a real bulb's worth; the wire takes
+  0.12 W), firing `shine`; the **post mill** — 10 m² of sail in an 8 m/s
+  wind → 4 m sails → 1:5 gears → millstone — puts **891 W** into a stone
+  turning at **63.7 rpm**, inside the band real millstones ran at, firing
+  `grind`. Both conserve energy to the watt. **The headline pin**: the same
+  light *without* its gear train puts **0.70 W** into the filament and does
+  not shine, because a water wheel turns far too slowly to generate from
+  directly — the reason real mills geared up by ten or more, reported by
+  the solver rather than written as a rule.
+- 🚧 **Known simplifications, each stated in the concept doc**: the paddle
+  source is a Thévenin secant of a quadratic drag law (stall and free-running
+  exact, the line between them straight); Faraday's `k` is a sinusoid's
+  peak in a DC model; a wheel's ratio is half its span (right for a disc,
+  generous for a paddle); stores are linear capacitors; a joint carries no
+  law of its own (a bearing's friction is an explicit `resist` if wanted);
+  a source's internal loss is reported (`source_internal_loss`) but not
+  routed anywhere.
+- ⬜ **Parallel junctions** (`fork`, Millman closed form specified) and the
+  general `port`/`bond` topology — the compiler refuses a second loop
+  rather than mis-solving it.
+- ⬜ **Inertial storage** (`inertia`, the bond-graph `I`): flywheels, a
+  trip-hammer's falling head.
+- ⬜ **The thermal loop** — and with it the bellows furnace, the device
+  that would turn `STATION_TEMPERATURE_C`'s three fixed numbers into "how
+  hard are you pumping".
+- ⬜ **Derived failure ratings** (`@rating`: dissipated watts → conductor
+  temperature → `thermal_failure_c`; torque → `weakest_link`). Rules fire
+  today against authored thresholds.
+- ⬜ **World binding** — a placed device's `source` reading the real river
+  (`RiverDischarge` / `OpenChannelFlow.velocity`) or wind
+  (`WeatherModel.wind_strength_for`) at its tile; bonds between separately
+  placed devices discovered by adjacency. **Nothing in live gameplay calls
+  any of this kernel** — the same honest position `ItemCompiler` is in.
+- ⬜ **Effect atoms** (`shine`, `grind`, `burn_out`, …): reported by the
+  executor, dispatched by nothing.
+- ⬜ **Magnetic permeability** as a material scalar; a generator's field is
+  an authored `magnet_tesla` until it exists.
+- ⬜ **Player-facing authoring**, skill gating of laws, and `magic.md`'s
+  gold-for-complexity compile gate applied to device text.
 
 ## Reality check
 
-This design corpus — 91 concept docs (recounted 2026-09-05; this section
-long stated the now-stale 49) plus a roadmap and, since 2026-08-23, a
+This design corpus — 94 concept docs (recounted 2026-09-05 at the merge of
+the standard-model pass; this section long stated the now-stale 49) plus a roadmap and, since 2026-08-23, a
 10-doc `docs/emergence/*.md` substrate spec, several hundred catalogued
 mechanisms in total (the exact figure is stale, see this doc's intro) —
 describes a multi-year, full-team-scale MMORPG: procedurally simulated

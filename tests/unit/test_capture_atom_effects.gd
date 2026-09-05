@@ -20,17 +20,32 @@ func before_each():
 	net = Item.new("butterfly_net", "Butterfly Net", "tool", 1)
 
 
-func test_hold_captive_sets_the_tools_captive_species():
-	var applied = effects.apply_to_target("hold_captive", {}, net, {"target": {"species": "monarch"}})
+func test_confine_sets_the_tools_captive_species():
+	var applied = effects.apply_to_target("confine", {"in": "bag"}, net, {"target": {"species": "monarch"}})
 	assert_true(applied)
 	assert_eq(net.captive_species, "monarch")
 
 
-func test_release_captive_clears_the_tools_captive_species():
+func test_confine_works_for_a_fish_the_same_way():
+	var applied = effects.apply_to_target("confine", {"in": "bag"}, net, {"target": {"species": "goldfish"}})
+	assert_true(applied)
+	assert_eq(net.captive_species, "goldfish")
+
+
+func test_free_clears_the_tools_captive_species():
 	net.captive_species = "monarch"
-	var applied = effects.apply_to_target("release_captive", {}, net, {})
+	var applied = effects.apply_to_target("free", {"from": "bag"}, net, {})
 	assert_true(applied)
 	assert_eq(net.captive_species, "")
+
+
+func test_hold_captive_and_release_captive_are_retired_and_do_nothing():
+	var applied = effects.apply_to_target("hold_captive", {}, net, {"target": {"species": "monarch"}})
+	assert_false(applied)
+	assert_eq(net.captive_species, "")
+	net.captive_species = "monarch"
+	assert_false(effects.apply_to_target("release_captive", {}, net, {}))
+	assert_eq(net.captive_species, "monarch")
 
 
 # -- move_captive: reports WHICH species moved, not a generic item id -------

@@ -21,24 +21,41 @@ extends RefCounted
 ##    stopped paying. Appetite alone only slows the stripping down; this is
 ##    what actually stops a pond being emptied, because it takes the pressure
 ##    off exactly when the population can least afford it.
+##
+## Since docs/concept/ethogram.md slice 3 the appetite clock is the one drive
+## clock every animal shares (Drives) and its numbers are the kingfisher's
+## record in the ethogram (Ethogram.drive_profile("kingfisher")); this file
+## keeps its stateless API for PiscivoreBirdMarker, re-exports the numbers,
+## and owns what is genuinely the kingfisher's: giving up on a poor patch,
+## and what a sated bird does instead of hunting.
 
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const Drives = preload("res://src/gameplay/drives.gd")
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+
+const SPECIES := "kingfisher"
 
 ## The world's own day, not an invented one (see SeasonCycle.SECONDS_PER_DAY --
 ## four real hours), so a bird's appetite keeps the same calendar as the
 ## seasons and the trees.
 const SECONDS_PER_IN_GAME_DAY := SeasonCycle.SECONDS_PER_DAY
 
-## "1 or 2 fish per in-game day based on hunger", as asked. Pinned by the
+## "1 or 2 fish per in-game day based on hunger", as asked. The ethogram's
+## kingfisher record encodes it as a rise over half a day; pinned by the
 ## resulting COUNT over a simulated day rather than by this number alone.
 const MEALS_PER_DAY := 2.0
-const SECONDS_PER_MEAL := SECONDS_PER_IN_GAME_DAY / MEALS_PER_DAY
+static var SECONDS_PER_MEAL: float = float(
+	Ethogram.drive_profile(SPECIES)[Ethogram.DRIVE_HUNGER]["rise_seconds"]
+)
 
 ## Hunger runs 0 (full) to 1 (starving), the same unit scale every other
 ## condition value in this project uses.
-const STARTING_HUNGER := 1.0
-const HUNGRY_THRESHOLD := 1.0
-const HUNGER_PER_SECOND := 1.0 / SECONDS_PER_MEAL
+static var STARTING_HUNGER: float = float(Ethogram.drive_profile(SPECIES)[Ethogram.DRIVE_HUNGER]["start"])
+static var HUNGRY_THRESHOLD: float = float(
+	Ethogram.drive_profile(SPECIES)[Ethogram.DRIVE_HUNGER]["threshold"]
+)
+static var MEAL: float = float(Ethogram.drive_profile(SPECIES)[Ethogram.DRIVE_HUNGER]["meal"])
+static var HUNGER_PER_SECOND: float = 1.0 / SECONDS_PER_MEAL
 
 ## Below this share of what the water can support, a bird stops working it.
 ## Not a hard "empty" check: the point is to lift the pressure while a
@@ -51,13 +68,13 @@ static func is_hungry(hunger: float) -> bool:
 
 
 static func hunger_after(hunger: float, delta_seconds: float) -> float:
-	return clampf(hunger + HUNGER_PER_SECOND * maxf(0.0, delta_seconds), 0.0, 1.0)
+	return Drives.advanced(hunger, SECONDS_PER_MEAL, delta_seconds)
 
 
 ## One fish's worth of satisfaction. Takes a full meal off, so a fed bird has
 ## a whole inter-meal interval before it is interested again.
 static func hunger_after_meal(hunger: float) -> float:
-	return maxf(0.0, hunger - 1.0)
+	return Drives.after_meal(hunger, MEAL)
 
 
 ## Whether this bird will work this water right now: hungry, and the water

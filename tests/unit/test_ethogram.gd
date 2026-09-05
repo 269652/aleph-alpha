@@ -19,8 +19,9 @@ func test_the_smell_channels_are_the_first_five_channels_of_the_basis():
 
 
 func test_the_basis_also_carries_the_non_smell_channels_the_mammal_ladder_needs():
-	for channel in ["danger", "flesh", "forage", "water", "mate"]:
+	for channel in ["predator", "player", "flesh", "forage", "water", "mate"]:
 		assert_true(Ethogram.CHANNELS.has(channel), channel)
+	assert_false(Ethogram.CHANNELS.has("danger"), "danger is a verdict, not a feature")
 
 
 func test_every_channel_is_named_exactly_once():
@@ -46,6 +47,8 @@ func test_an_unknown_species_has_no_nose_and_expresses_nothing():
 ## A new molecule cannot silently be invisible to half the roster.
 func test_every_nose_covers_every_smell_channel():
 	for species in Ethogram.SPECIES:
+		if not Ethogram.has_nose(species):
+			continue  # a record that is only a clock (the kingfisher) has nothing to cover
 		var expressed := Ethogram.express(species)
 		for channel in Ethogram.SMELL_CHANNELS:
 			assert_true(expressed["sensitivity"].has(channel), "%s cannot detect %s" % [species, channel])
@@ -71,8 +74,10 @@ func test_expression_with_no_genome_is_the_species_template():
 ## non-smell channels the ladder listens on are always present.
 func test_a_mammal_expresses_its_body_plan_defaults_too():
 	var expressed := Ethogram.express("deer")
-	assert_almost_eq(expressed["sensitivity"]["danger"], 1.0, 0.0001)
-	assert_almost_eq(expressed["valence"]["danger"], -1.0, 0.0001, "the default answer to danger is to leave")
+	assert_almost_eq(expressed["sensitivity"]["predator"], 1.0, 0.0001)
+	assert_almost_eq(expressed["valence"]["predator"], -1.0, 0.0001, "the default answer to a predator is to leave")
+	assert_almost_eq(expressed["sensitivity"]["player"], 1.0, 0.0001)
+	assert_almost_eq(expressed["valence"]["player"], -1.0, 0.0001, "...and to a person")
 	assert_almost_eq(expressed["valence"]["flesh"], 0.0, 0.0001, "a herbivore wants nothing from prey")
 	assert_almost_eq(expressed["valence"]["forage"], 1.0, 0.0001)
 	assert_almost_eq(expressed["valence"]["water"], 1.0, 0.0001)
@@ -216,11 +221,98 @@ func test_wirings_are_a_copy_not_the_record():
 ## top when it has one.
 func test_a_body_plan_override_expresses_that_plans_defaults_for_any_species():
 	var lynx := Ethogram.express("lynx", {}, "mammal")
-	assert_almost_eq(lynx["valence"]["danger"], -1.0, 0.0001)
+	assert_almost_eq(lynx["valence"]["predator"], -1.0, 0.0001)
 	assert_false(lynx["sensitivity"].has("decay"), "no record, no nose")
 	var robin := Ethogram.express("robin", {}, "mammal")
-	assert_almost_eq(robin["valence"]["danger"], -1.0, 0.0001, "the override's defaults")
+	assert_almost_eq(robin["valence"]["predator"], -1.0, 0.0001, "the override's defaults")
 	assert_almost_eq(
 		robin["sensitivity"]["decay"], float(Ethogram.SPECIES["robin"]["smell"]["sensitivity"]["decay"]),
 		0.0001, "...under the species' own nose"
 	)
+
+
+# -- slice 2: danger is no longer a verdict ------------------------------------
+
+## The fear wiring listens on what the OTHER thing is; the species valence
+## says whether that is something to flee, fight or ignore.
+func test_the_fear_wiring_listens_on_predator_and_player():
+	var fear := []
+	for wiring in Ethogram.wirings_for("mammal"):
+		if wiring["gate"] == "fear":
+			fear.append(wiring)
+	assert_eq(fear.size(), 1)
+	assert_eq(fear[0]["channels"], ["predator", "player"])
+	assert_eq(fear[0]["approach"], "attack")
+	assert_eq(fear[0]["avoid"], "flee")
+
+
+## The smell wiring carries the interest floor ScentForaging used to keep
+## for itself: below it an animal will not cross a field.
+func test_the_smell_wiring_carries_the_interest_floor():
+	assert_gt(Ethogram.SMELL_INTEREST_FLOOR, 0.0)
+	for wiring in Ethogram.wirings_for("mammal"):
+		if wiring["channels"] == Ethogram.SMELL_CHANNELS:
+			assert_almost_eq(wiring["floor"], Ethogram.SMELL_INTEREST_FLOOR, 0.0)
+
+
+# -- slice 3: drive profiles are species data ----------------------------------
+
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
+
+
+## The land-mammal clock is what CreatureNeeds always ran: hunger over 50 s,
+## thirst over 33 s, urgent from half way, a meal resets, a herd staggers.
+func test_the_mammal_profile_is_the_creature_needs_clock():
+	var profile := Ethogram.drive_profile("", "mammal")
+	assert_almost_eq(profile["hunger"]["rise_seconds"], 1.0 / 0.02, 0.0001)
+	assert_almost_eq(profile["thirst"]["rise_seconds"], 1.0 / 0.03, 0.0001)
+	assert_almost_eq(profile["hunger"]["threshold"], 0.5, 0.0)
+	assert_almost_eq(profile["thirst"]["threshold"], 0.5, 0.0)
+	assert_almost_eq(profile["hunger"]["stagger"], 0.45, 0.0)
+	assert_gte(profile["hunger"]["meal"], 1.0, "a meal resets a mammal")
+
+
+## A villager runs on the same lived-experience pace as any other creature
+## and has no thirst to simulate (docs/concept/npc.md).
+func test_the_villager_profile_is_hunger_only_at_the_mammal_pace():
+	var profile := Ethogram.drive_profile("", "villager")
+	assert_true(profile.has("hunger"))
+	assert_false(profile.has("thirst"))
+	assert_almost_eq(profile["hunger"]["rise_seconds"], 1.0 / 0.02, 0.0001)
+	assert_almost_eq(profile["hunger"]["stagger"], 0.45, 0.0)
+
+
+## A songbird eats through the day (BirdDigestion): an empty crop fills by
+## about 0.7 per meal and empties in an eighth of the world day.
+func test_the_bird_profile_is_the_songbird_crop():
+	var profile := Ethogram.drive_profile("", "bird")
+	assert_almost_eq(profile["hunger"]["rise_seconds"], SeasonCycle.SECONDS_PER_DAY / 8.0, 0.0001)
+	assert_almost_eq(profile["hunger"]["threshold"], 1.0 - 0.35, 0.0001)
+	assert_almost_eq(profile["hunger"]["meal"], 0.7, 0.0001)
+	assert_almost_eq(profile["hunger"]["start"], 1.0, 0.0, "a bird starts empty")
+
+
+## The kingfisher is a bird with its own appetite: a couple of fish a day,
+## a whole inter-meal interval before it is interested again.
+func test_the_kingfisher_overrides_the_bird_appetite():
+	var profile := Ethogram.drive_profile("kingfisher")
+	assert_almost_eq(profile["hunger"]["rise_seconds"], SeasonCycle.SECONDS_PER_DAY / 2.0, 0.0001)
+	assert_almost_eq(profile["hunger"]["threshold"], 1.0, 0.0)
+	assert_almost_eq(profile["hunger"]["meal"], 1.0, 0.0)
+	assert_almost_eq(profile["hunger"]["start"], 1.0, 0.0)
+	assert_eq(Ethogram.SPECIES["kingfisher"]["body_plan"], "bird")
+
+
+func test_a_drive_profile_is_a_copy_not_the_record():
+	var profile := Ethogram.drive_profile("", "mammal")
+	profile["hunger"]["rise_seconds"] = 1.0
+	assert_ne(Ethogram.drive_profile("", "mammal")["hunger"]["rise_seconds"], 1.0)
+
+
+## Every profile keeps the step its own tests pin: no drive opens its gate
+## before its threshold today. A ramp is one `onset` away (ethogram.md §5).
+func test_no_profile_opens_a_gate_before_its_threshold_yet():
+	for plan in ["mammal", "villager", "bird"]:
+		for drive in Ethogram.drive_profile("", plan):
+			var entry: Dictionary = Ethogram.drive_profile("", plan)[drive]
+			assert_false(entry.has("onset"), "%s.%s" % [plan, drive])

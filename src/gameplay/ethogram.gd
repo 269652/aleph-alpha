@@ -22,8 +22,13 @@ extends RefCounted
 ## ladder is CreatureBehavior's priority ladder written down.
 ##
 ## express() is the genotype-to-phenotype step: a species template, adjusted
-## by an individual's receptor genes. modulation (drives as gains) is the
-## kernel's job, per tick. Pure, static, no engine dependency, no RNG.
+## by an individual's receptor genes. Modulation (drives as gains) is the
+## kernel's job, per tick; the DRIVE PROFILES -- how fast hunger rises for a
+## mammal, a villager, a songbird, a kingfisher -- are data here too
+## (drive_profile), run by one clock (Drives). Pure, static, no engine
+## dependency, no RNG.
+
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 # -- the basis ---------------------------------------------------------------
 
@@ -35,19 +40,21 @@ const GREEN := "green"  # leaves, cut grass, foliage
 const MUSK := "musk"  # animals themselves
 const SMOKE := "smoke"  # fire
 
-## The non-smell channels the land-mammal ladder listens on. `danger` is,
-## for now, the marker's own threat classification handed over as a feature
-## (ethogram.md §1 says so plainly); the roadmap replaces it with predator/
-## player/conspecific features and lets valence decide.
-const DANGER := "danger"  # something that can hurt me
-const FLESH := "flesh"  # an animal I could eat
-const FORAGE := "forage"  # plant food in that direction
-const WATER := "water"  # drinkable water in that direction
+## What another creature IS, as the marker's scan reports it. Not what it
+## means: a sheep and a wolf are handed the same `predator` feature for the
+## same lynx, and their own valence decides that one flees it and the other
+## ignores it (ethogram.md §1, "danger stops being a verdict").
+const PREDATOR := "predator"  # a hunting species, by CreatureInfo
+const PLAYER := "player"  # a person
+const FLESH := "flesh"  # an animal that is not a hunter: something a hunter eats
+## The two directions CreaturePerception senses, as the tile it found.
+const FORAGE := "forage"  # plant food there
+const WATER := "water"  # drinkable water there
 const MATE := "mate"  # my courtship partner
 
 const SMELL_CHANNELS: Array[String] = [SUGAR, DECAY, GREEN, MUSK, SMOKE]
 const CHANNELS: Array[String] = [
-	SUGAR, DECAY, GREEN, MUSK, SMOKE, DANGER, FLESH, FORAGE, WATER, MATE
+	SUGAR, DECAY, GREEN, MUSK, SMOKE, PREDATOR, PLAYER, FLESH, FORAGE, WATER, MATE
 ]
 
 # -- drives ------------------------------------------------------------------
@@ -58,6 +65,12 @@ const DRIVE_FEAR := "fear"
 const DRIVE_THIRST := "thirst"
 const DRIVE_HUNGER := "hunger"
 const DRIVE_COURTSHIP := "courtship"
+
+## Below this score an animal is not interested enough in a smell to cross a
+## field for it (ScentForaging's MIN_INTEREST, now the smell wiring's floor).
+## Without a floor, a creature would trail after the faintest trace of
+## something it barely likes instead of getting on with its life.
+const SMELL_INTEREST_FLOOR := 0.02
 
 # -- species records ---------------------------------------------------------
 
@@ -108,6 +121,19 @@ const SPECIES := {
 			"valence": {SUGAR: 0.3, DECAY: 1.0, GREEN: 0.0, MUSK: 0.2, SMOKE: -0.4},
 		},
 	},
+	# A bird with its own appetite (PiscivoreAppetite): a couple of fish
+	# across an in-game day, and a whole inter-meal interval before it is
+	# interested again -- "1 or 2 fish per in-game day based on hunger", as
+	# asked, pinned by the resulting count over a simulated day. Starts
+	# wanting a meal. No nose: it hunts by sight.
+	"kingfisher": {
+		"body_plan": "bird",
+		"drives": {
+			DRIVE_HUNGER: {
+				"rise_seconds": SeasonCycle.SECONDS_PER_DAY / 2.0, "threshold": 1.0, "meal": 1.0, "start": 1.0,
+			},
+		},
+	},
 }
 
 # -- body plans --------------------------------------------------------------
@@ -117,33 +143,69 @@ const SPECIES := {
 ##
 ## The mammal ladder is CreatureBehavior's priority order, for the reasons
 ## its own doc comment gives: an animal does not court while hunted, dying of
-## thirst, starving or mid-hunt. `danger` defaults to "leave" (valence -1);
-## the mammal adapter flips it to +1 for an animal that will stand and fight,
-## and sets `flesh` to +1 for a predator -- both are species facts that today
-## only reach decide() as context flags (ethogram.md §3, §7).
+## thirst, starving or mid-hunt. A predator and a person both default to
+## "leave" (valence -1); the mammal adapter flips both to +1 for an animal
+## that will stand and fight, zeroes `predator` for a hunter (a predator is
+## not threatened by other creatures, only by people), and sets `flesh` to +1
+## for a hunter -- diet and temperament facts that today reach decide() only
+## as context flags (ethogram.md §3, §7).
 ##
-## The smell wiring is new and inert for the live game until CreatureMarker
-## publishes smells as stimuli (slice 2): ScentForaging keeps doing that job
-## in the marker meanwhile. It sits between hunting and biome forage so a
+## The smell wiring is the same ranking CreatureMarker's forage program runs
+## through ScentForaging when it chooses what to smell its way to; in the
+## ladder it is reached by the adapter's `smells` context key (ethogram.md
+## §7) and, once the other body plans exist, by anything that hunts by nose
+## without a grazing bout. It sits between hunting and biome forage so a
 ## nose finds a windfall before an animal treks toward greener tiles.
 ##
 ## Only the mammal plan has wirings. `bird`, `insect`, `fish` and `villager`
 ## are named on the records that will need them and wirings_for() returns
 ## nothing for them rather than pretending.
+##
+## Every plan's `drives` block is its clock (see Drives for the fields). The
+## numbers are the ones the four needs modules always ran, moved here so
+## they are species data rather than module constants:
+##   mammal    CreatureNeeds' 0.02/s hunger and 0.03/s thirst, urgent from
+##             half way, a meal resets, a herd staggered up to 0.45 of the
+##             cycle so it does not cross into hunger on one tick
+##   villager  the same pace, hunger only (docs/concept/npc.md: thirst has
+##             no villager-side consumer, so it is not simulated)
+##   bird      BirdDigestion's songbird crop, as hunger: empties in an
+##             eighth of the world day, urgent below 0.35 full, a meal fills
+##             it by 0.7, starts empty -- a bird that starts fed does nothing
+##             until it is not
 const BODY_PLANS := {
 	"mammal": {
 		"receptors": {
-			"sensitivity": {DANGER: 1.0, FLESH: 1.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0},
-			"valence": {DANGER: -1.0, FLESH: 0.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0},
+			"sensitivity": {PREDATOR: 1.0, PLAYER: 1.0, FLESH: 1.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0},
+			"valence": {PREDATOR: -1.0, PLAYER: -1.0, FLESH: 0.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0},
+		},
+		"drives": {
+			DRIVE_HUNGER: {"rise_seconds": 1.0 / 0.02, "threshold": 0.5, "meal": 1.0, "stagger": 0.45},
+			DRIVE_THIRST: {"rise_seconds": 1.0 / 0.03, "threshold": 0.5, "meal": 1.0, "stagger": 0.45},
 		},
 		"wirings": [
-			{"gate": DRIVE_FEAR, "channels": [DANGER], "approach": "attack", "avoid": "flee"},
+			{"gate": DRIVE_FEAR, "channels": [PREDATOR, PLAYER], "approach": "attack", "avoid": "flee"},
 			{"gate": DRIVE_THIRST, "channels": [WATER], "approach": "seek_water", "search": "search_water"},
 			{"gate": DRIVE_HUNGER, "channels": [FLESH], "approach": "hunt"},
-			{"gate": DRIVE_HUNGER, "channels": SMELL_CHANNELS, "approach": "seek_food"},
+			{
+				"gate": DRIVE_HUNGER, "channels": SMELL_CHANNELS, "approach": "seek_food",
+				"floor": SMELL_INTEREST_FLOOR,
+			},
 			{"gate": DRIVE_HUNGER, "channels": [FORAGE], "approach": "seek_food", "search": "search_food"},
 			{"gate": DRIVE_COURTSHIP, "channels": [MATE], "approach": "court"},
 		],
+	},
+	"villager": {
+		"drives": {
+			DRIVE_HUNGER: {"rise_seconds": 1.0 / 0.02, "threshold": 0.5, "meal": 1.0, "stagger": 0.45},
+		},
+	},
+	"bird": {
+		"drives": {
+			DRIVE_HUNGER: {
+				"rise_seconds": SeasonCycle.SECONDS_PER_DAY / 8.0, "threshold": 1.0 - 0.35, "meal": 0.7, "start": 1.0,
+			},
+		},
 	},
 }
 
@@ -151,7 +213,8 @@ const BODY_PLANS := {
 
 ## A genome entry `receptor_<channel>` in [0, 1] scales that channel's
 ## sensitivity. The same String -> float shape NpcGenome and FlyerPersonality
-## use, so DnaCrossover.crossover inherits it unchanged.
+## use, so DnaCrossover.crossover inherits it unchanged. AnimalGenome.for_seed
+## derives a set for every land mammal from its wander_seed.
 const RECEPTOR_GENE_PREFIX := "receptor_"
 
 ## 0.5 is the species template BY DEFINITION: a gene is a deviation from the
@@ -201,6 +264,22 @@ static func express(species: String, genome: Dictionary = {}, body_plan: String 
 ## How a receptor gene scales the species' sensitivity for its channel.
 static func receptor_gene_factor(gene: float) -> float:
 	return clampf(gene, 0.0, 1.0) / NEUTRAL_RECEPTOR_GENE
+
+
+## This species' drive profile (the fields Drives reads): its body plan's
+## clock, with the species' own overrides on top -- a kingfisher is a bird
+## with a different appetite. `body_plan` overrides the record's plan, as in
+## express(). A deep copy; empty for a species and plan that have none.
+static func drive_profile(species: String, body_plan: String = "") -> Dictionary:
+	var record: Dictionary = SPECIES.get(species, {})
+	var plan_name := body_plan if body_plan != "" else String(record.get("body_plan", ""))
+	var plan: Dictionary = BODY_PLANS.get(plan_name, {})
+	var profile := {}
+	for drive in plan.get("drives", {}):
+		profile[drive] = (plan["drives"][drive] as Dictionary).duplicate(true)
+	for drive in record.get("drives", {}):
+		profile[drive] = (record["drives"][drive] as Dictionary).duplicate(true)
+	return profile
 
 
 ## The ordered wirings of a body plan, as a deep copy the caller may reorder

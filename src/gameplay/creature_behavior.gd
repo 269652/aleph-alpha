@@ -25,28 +25,35 @@ extends RefCounted
 ## eligible same-species neighbour was actually found nearby -- this adapter
 ## does not re-check either, it only says where courtship ranks.
 ##
-## Context keys, all as before, plus three optional ones:
+## Context keys:
 ##   position, temperament, is_predator, health_fraction, hungry, thirsty,
-##   threats, prey, food_direction, water_direction, is_courting,
-##   partner_position; is_mature (defaults to true) and is_world_boss /
-##   is_aggroed (default to false) so contexts built before those keys
-##   existed keep behaving exactly as they did
+##   is_courting; is_mature (defaults to true), is_world_boss / is_aggroed
+##   (default to false) and fears_players (defaults to true) so contexts
+##   built before those keys existed keep behaving exactly as they did
 ##   species  (optional) the ethogram record to express; a species with no
 ##            record runs the ladder on the body plan's defaults
 ##   genome   (optional) this individual's receptor genes (Ethogram.express)
-##   smells   (optional) a {position, mixture} list in EarthChunkManager.
-##            smells_near's own shape. Nothing live passes this yet:
-##            ScentForaging does the job inside CreatureMarker until the
-##            marker publishes its senses as stimuli (ethogram.md §8).
+##   stimuli  (optional) what the caller senses, already on the shared basis:
+##            {"position", "features", ...anything else it wants back}. This
+##            is what CreatureMarker publishes (ethogram.md slice 2): every
+##            nearby creature as {predator: 1} or {flesh: 1} by what IT is,
+##            every player as {player: 1}, the nearest water/food tile, the
+##            courtship partner. The verdict is the valence, below.
+##   threats, prey, food_direction, water_direction, partner_position, smells
+##            the older shape -- position lists and headings -- read ONLY
+##            when `stimuli` is absent, and turned into stimuli here. Kept
+##            for callers and tests that still speak it.
 ##
 ## "seek_*" heads toward a sensed resource; "search_*" means the need exists
 ## but nothing's in range, so the creature should roam to look (the caller
 ## supplies the roaming heading, same as it does for "wander"). The decision
-## also names its `target` and `score` (see BehaviorKernel.decide) for a
-## caller that wants them; CreatureMarker reads only intent and direction.
+## also names its `target`, `score` and winning `stimulus` (see
+## BehaviorKernel.decide), which is how the marker gets its prey or attack
+## target back as the node it tagged the stimulus with.
 
 const Ethogram = preload("res://src/gameplay/ethogram.gd")
 const BehaviorKernel = preload("res://src/gameplay/behavior_kernel.gd")
+const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 ## The body plan every CreatureMarker species runs on.
@@ -56,66 +63,116 @@ const BODY_PLAN := "mammal"
 ## below it, even an aggressive creature flees ("weak monsters should flee").
 const STRONG_HEALTH_FRACTION := 0.5
 
-## A sensed DIRECTION (food, water) becomes a stimulus one tile ahead. Any
-## positive distance hands the same normalised heading back; one tile keeps
-## it in scale with the positions the kernel ranks it against.
+## A sensed DIRECTION (food, water; the older context shape) becomes a
+## stimulus one tile ahead. Any positive distance hands the same normalised
+## heading back; one tile keeps it in scale with the positions the kernel
+## ranks it against.
 const DIRECTION_STIMULUS_DISTANCE := float(TerrainRenderer.TILE_SIZE)
+
+## The wirings and the individual's base expression are cached on this
+## instance: decide() runs every frame for every creature, and
+## Ethogram.express/wirings_for hand back fresh copies by contract.
+var _wirings: Array = []
+var _expressed := {}
+var _expressed_species := ""
+var _expressed_genome := {}
+var _drives := {}
 
 
 func decide(context: Dictionary) -> Dictionary:
+	if _wirings.is_empty():
+		_wirings = Ethogram.wirings_for(BODY_PLAN)
 	return BehaviorKernel.decide(
-		Ethogram.wirings_for(BODY_PLAN),
-		_receptors(context),
-		_drives(context),
-		context["position"],
-		_stimuli(context),
+		_wirings, _receptors(context), _drives_for(context), context["position"], _stimuli(context)
 	)
 
 
-## This individual's expressed receptors, with the two overrides that are
-## species and state facts reaching decide() only as context flags today
-## (ethogram.md §3): who stands and fights, and who eats prey. An un-aggroed
-## world boss gets zero danger SENSITIVITY -- it genuinely does not perceive
-## the player as a threat, so it neither attacks nor flees and still drinks
-## and eats -- rather than zero valence.
+## Everything this individual NOTICES on the fear channels, whether it would
+## fight or flee it -- a predator for a herbivore, a person for anything
+## that still fears people. CreatureMarker keeps the result as its threat
+## list: an animal lifts its head from grazing for a wolf it would fight
+## just as for one it would flee, and keeps the wider flee-release radius
+## either way. This is the verdict that used to live in the marker's own
+## scan ("predators are threats to herbivores; players to everyone").
+func threats(context: Dictionary) -> Array:
+	return BehaviorKernel.perceived(
+		_receptors(context), [Ethogram.PREDATOR, Ethogram.PLAYER], _stimuli(context)
+	)
+
+
+## This individual's expressed receptors, with the overrides that are species
+## and state facts reaching decide() only as context flags today (ethogram.md
+## §3): who stands and fights, who eats prey, who is not threatened by other
+## creatures. Applied IN PLACE on the cached base expression -- every
+## affected channel is rewritten on every call, so nothing stale survives.
+##
+## An un-aggroed world boss gets zero danger SENSITIVITY -- it genuinely does
+## not perceive the player as a threat, so it neither attacks nor flees and
+## still drinks and eats -- rather than zero valence. So does a tamed animal
+## for people (fears_players false): it is not that it tolerates them, it is
+## that they are not a thing it reacts to at all any more.
 func _receptors(context: Dictionary) -> Dictionary:
-	var receptors := Ethogram.express(
-		String(context.get("species", "")), context.get("genome", {}), BODY_PLAN
-	)
-	receptors["sensitivity"][Ethogram.DANGER] = 1.0 if _perceives_threats(context) else 0.0
-	receptors["valence"][Ethogram.DANGER] = 1.0 if _will_fight(context) else -1.0
-	receptors["valence"][Ethogram.FLESH] = 1.0 if context["is_predator"] else 0.0
-	return receptors
+	var species := String(context.get("species", ""))
+	var genome: Dictionary = context.get("genome", {})
+	if _expressed.is_empty() or species != _expressed_species or genome != _expressed_genome:
+		_expressed = Ethogram.express(species, genome, BODY_PLAN)
+		_expressed_species = species
+		_expressed_genome = genome.duplicate()
+	var sensitivity: Dictionary = _expressed["sensitivity"]
+	var valence: Dictionary = _expressed["valence"]
+	var perceives := _perceives_threats(context)
+	var is_predator: bool = context["is_predator"]
+	var fight := _will_fight(context)
+	sensitivity[Ethogram.PREDATOR] = 1.0 if perceives else 0.0
+	sensitivity[Ethogram.PLAYER] = 1.0 if perceives and context.get("fears_players", true) else 0.0
+	valence[Ethogram.PLAYER] = 1.0 if fight else -1.0
+	if is_predator:
+		valence[Ethogram.PREDATOR] = 0.0  # not threatened by other creatures, only by people
+	else:
+		valence[Ethogram.PREDATOR] = 1.0 if fight else -1.0
+	valence[Ethogram.FLESH] = 1.0 if is_predator else 0.0
+	return _expressed
 
 
-## Drive levels: the needs the caller already tracks, as gains. Fear is
-## always open (the world-boss case is sensitivity, above). Levels are 0/1
-## because CreatureNeeds' own thresholds are; ramps are ethogram.md's slice 3.
-func _drives(context: Dictionary) -> Dictionary:
-	return {
-		Ethogram.DRIVE_FEAR: 1.0,
-		Ethogram.DRIVE_THIRST: 1.0 if context["thirsty"] else 0.0,
-		Ethogram.DRIVE_HUNGER: 1.0 if context["hungry"] else 0.0,
-		Ethogram.DRIVE_COURTSHIP: 1.0 if context.get("is_courting", false) else 0.0,
-	}
+## Drive levels as gains. A caller that publishes `drives` (CreatureNeeds.
+## gains, the one drive clock -- ethogram.md §5) is taken at its word, and a
+## partial gain still opens its gate; the `hungry`/`thirsty` booleans are the
+## older shape, read only when `drives` is absent. Fear is always open (the
+## world-boss case is sensitivity, above).
+func _drives_for(context: Dictionary) -> Dictionary:
+	_drives[Ethogram.DRIVE_FEAR] = 1.0
+	if context.has("drives"):
+		var published: Dictionary = context["drives"]
+		_drives[Ethogram.DRIVE_THIRST] = float(published.get(Ethogram.DRIVE_THIRST, 0.0))
+		_drives[Ethogram.DRIVE_HUNGER] = float(published.get(Ethogram.DRIVE_HUNGER, 0.0))
+	else:
+		_drives[Ethogram.DRIVE_THIRST] = 1.0 if context.get("thirsty", false) else 0.0
+		_drives[Ethogram.DRIVE_HUNGER] = 1.0 if context.get("hungry", false) else 0.0
+	_drives[Ethogram.DRIVE_COURTSHIP] = 1.0 if context.get("is_courting", false) else 0.0
+	return _drives
 
 
-## Everything sensed, as stimuli on the shared basis. `danger` and `flesh`
-## are the marker's own classifications handed over as features (ethogram.md
-## §1 names this for what it is); smells are already feature vectors.
+## What the caller senses, on the shared basis. A caller that publishes
+## `stimuli` is taken at its word; otherwise the older position lists and
+## headings are turned into stimuli here. A legacy "threat" is handed over
+## as a person: the one feature every species answers, and what the old
+## scan's threat list was made of for a predator.
 func _stimuli(context: Dictionary) -> Array:
+	if context.has("stimuli"):
+		return context["stimuli"]
 	var position: Vector2 = context["position"]
 	var stimuli: Array = []
-	for at in context["threats"]:
-		stimuli.append({"position": at, "features": {Ethogram.DANGER: 1.0}})
-	for at in context["prey"]:
+	for at in context.get("threats", []):
+		stimuli.append({"position": at, "features": {Ethogram.PLAYER: 1.0}})
+	for at in context.get("prey", []):
 		stimuli.append({"position": at, "features": {Ethogram.FLESH: 1.0}})
-	_append_direction(stimuli, position, context["water_direction"], Ethogram.WATER)
-	_append_direction(stimuli, position, context["food_direction"], Ethogram.FORAGE)
+	_append_direction(stimuli, position, context.get("water_direction", Vector2.ZERO), Ethogram.WATER)
+	_append_direction(stimuli, position, context.get("food_direction", Vector2.ZERO), Ethogram.FORAGE)
 	if context.get("is_courting", false):
 		stimuli.append({"position": context["partner_position"], "features": {Ethogram.MATE: 1.0}})
-	for smell in context.get("smells", []):
-		stimuli.append(smell)
+	# Smells go through the smell sense, which attaches how loud each one is
+	# at this range: the smell wiring's floor is stated in those units.
+	stimuli.append_array(ScentForaging.stimuli_from(position, context.get("smells", [])))
 	return stimuli
 
 
@@ -145,7 +202,7 @@ func _will_fight(context: Dictionary) -> bool:
 	return context["temperament"] == "aggressive" and context["health_fraction"] >= STRONG_HEALTH_FRACTION
 
 
-## Whether this creature reacts to `threats` at all this tick (docs/concept/
+## Whether this creature reacts to threats at all this tick (docs/concept/
 ## worldbosses.md: "bosses should not attack low-level players on their
 ## own, even if they attack -- only if they deal actual damage do they pull
 ## aggro"). An ordinary creature always perceives threats, unchanged. A

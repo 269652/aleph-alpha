@@ -425,3 +425,127 @@ func test_an_individuals_receptor_genes_reach_its_decision():
 	}))
 	assert_eq(typical.intent, "seek_food")
 	assert_eq(anosmic.intent, "search_food")
+
+
+# -- slice 2: the marker publishes stimuli; the verdict is the valence -------
+
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+
+
+func _wolf(at: Vector2) -> Dictionary:
+	return {"position": at, "features": {Ethogram.PREDATOR: 1.0}, "node": "wolf"}
+
+
+func _person(at: Vector2) -> Dictionary:
+	return {"position": at, "features": {Ethogram.PLAYER: 1.0}, "node": "player"}
+
+
+func _sheep(at: Vector2) -> Dictionary:
+	return {"position": at, "features": {Ethogram.FLESH: 1.0}, "node": "sheep"}
+
+
+## The scan reports what the other creature IS; the species decides what
+## that means. A calm herbivore flees a predator it is handed as a stimulus.
+func test_a_calm_creature_flees_a_predator_stimulus():
+	var decision := behavior.decide(_context({"stimuli": [_wolf(Vector2(10, 0))]}))
+	assert_eq(decision.intent, "flee")
+	assert_lt(decision.direction.x, 0.0)
+	assert_eq(decision["stimulus"]["node"], "wolf")
+
+
+## Predators are not threatened by other creatures, only by the player --
+## the rule the marker used to apply while scanning, now a valence.
+func test_a_predator_ignores_another_predator_but_answers_a_player():
+	var ignores := behavior.decide(_context({
+		"temperament": "aggressive", "is_predator": true, "stimuli": [_wolf(Vector2(10, 0))],
+	}))
+	assert_eq(ignores.intent, "wander")
+	var attack := behavior.decide(_context({
+		"temperament": "aggressive", "is_predator": true, "stimuli": [_person(Vector2(10, 0))],
+	}))
+	assert_eq(attack.intent, "attack")
+	assert_eq(attack["stimulus"]["node"], "player")
+
+
+func test_a_hungry_predator_hunts_a_flesh_stimulus_and_names_the_node():
+	var decision := behavior.decide(_context({
+		"temperament": "aggressive", "is_predator": true, "hungry": true,
+		"stimuli": [_sheep(Vector2(50, 0)), _sheep(Vector2(10, 0))],
+	}))
+	assert_eq(decision.intent, "hunt")
+	assert_eq(decision["target"], Vector2(10, 0))
+	assert_eq(decision["stimulus"]["node"], "sheep")
+
+
+## A herbivore handed the same flesh stimulus wants nothing from it.
+func test_a_herbivore_ignores_a_flesh_stimulus():
+	var decision := behavior.decide(_context({"hungry": true, "stimuli": [_sheep(Vector2(10, 0))]}))
+	assert_eq(decision.intent, "search_food")
+
+
+## A tamed animal does not perceive people as anything: sensitivity, not valence.
+func test_an_animal_that_no_longer_fears_players_does_not_perceive_them():
+	var decision := behavior.decide(_context({
+		"fears_players": false, "stimuli": [_person(Vector2(10, 0))],
+	}))
+	assert_eq(decision.intent, "wander")
+
+
+## When the caller publishes stimuli, the legacy position lists are not read
+## on top of them -- one source of truth per call.
+func test_published_stimuli_replace_the_legacy_lists():
+	var decision := behavior.decide(_context({"threats": [Vector2(10, 0)], "stimuli": []}))
+	assert_eq(decision.intent, "wander")
+
+
+func test_an_aggressive_strong_herbivore_stands_and_fights_a_predator():
+	var decision := behavior.decide(_context({
+		"temperament": "aggressive", "health_fraction": 1.0, "stimuli": [_wolf(Vector2(10, 0))],
+	}))
+	assert_eq(decision.intent, "attack")
+
+
+## What the animal NOTICES on the fear channels, fight or flee alike -- the
+## marker keeps this as its threat list (lift the head from grazing, widen
+## the flee-release radius) instead of deciding who counts while scanning.
+func test_threats_lists_what_the_animal_notices_on_the_fear_channels():
+	var wolf := _wolf(Vector2(10, 0))
+	var person := _person(Vector2(20, 0))
+	var sheep := _sheep(Vector2(30, 0))
+	var calm := behavior.threats(_context({"stimuli": [wolf, person, sheep]}))
+	assert_eq(calm.size(), 2, "a herbivore notices the wolf and the person, not the sheep")
+	var fighter := behavior.threats(_context({
+		"temperament": "aggressive", "health_fraction": 1.0, "stimuli": [wolf, person, sheep],
+	}))
+	assert_eq(fighter.size(), 2, "a fighter still notices what it would fight")
+	var hunter := behavior.threats(_context({"is_predator": true, "stimuli": [wolf, person, sheep]}))
+	assert_eq(hunter.size(), 1, "a predator notices only the person")
+	assert_eq(hunter[0]["node"], "player")
+	var tame := behavior.threats(_context({"fears_players": false, "stimuli": [wolf, person]}))
+	assert_eq(tame.size(), 1, "a tamed animal still notices the wolf, and no longer the person")
+	assert_eq(tame[0]["node"], "wolf")
+
+
+# -- slice 3: drives as gains -------------------------------------------------
+
+## A caller that hands over its drive gains (Drives.gains) is taken at its
+## word; the hungry/thirsty booleans are the older shape.
+func test_published_drive_gains_replace_the_booleans():
+	var starving := behavior.decide(_context({
+		"hungry": false, "drives": {"hunger": 1.0}, "food_direction": Vector2(0, 1),
+	}))
+	assert_eq(starving.intent, "seek_food")
+	var sated := behavior.decide(_context({
+		"hungry": true, "drives": {"hunger": 0.0}, "food_direction": Vector2(0, 1),
+	}))
+	assert_eq(sated.intent, "wander")
+
+
+## A partial gain still opens the gate -- the kernel scales the score, the
+## ladder decides.
+func test_a_partial_gain_still_opens_the_gate():
+	var peckish := behavior.decide(_context({
+		"drives": {"hunger": 0.4}, "food_direction": Vector2(0, 1),
+	}))
+	assert_eq(peckish.intent, "seek_food")
+	assert_gt(peckish["score"], 0.0)

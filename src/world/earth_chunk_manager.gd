@@ -3528,8 +3528,9 @@ func wipe_world_clock(path: String = WorldClockPersistence.SAVE_PATH) -> void:
 	WorldClockPersistence.new().wipe(path)
 
 
-## Skips the world FORWARD to the start of `season` (see /season). Returns
-## whether that was a season we have.
+## Skips the world FORWARD to `progress` fraction [0,1] into `season` (see
+## /season) -- 0.0 (the default) is its start, as before. Returns whether
+## that was a season we have.
 ##
 ## The skipped time is not replayed. The jump is up to a whole year of world
 ## time and fruiting counts what fell between the last time it ran and now, so
@@ -3541,8 +3542,8 @@ func wipe_world_clock(path: String = WorldClockPersistence.SAVE_PATH) -> void:
 ## Trees are deliberately NOT caught up the same way: a sapling really has aged
 ## by the time you skip past, and watching it be older is the point of the
 ## command.
-func jump_to_season(season: String) -> bool:
-	var skip: float = _season_cycle.seconds_until_season(_world_age_seconds, season)
+func jump_to_season(season: String, progress: float = 0.0) -> bool:
+	var skip: float = _season_cycle.seconds_until_season(_world_age_seconds, season, progress)
 	if skip <= 0.0:
 		return false
 	_world_age_seconds += skip
@@ -6712,6 +6713,26 @@ func take_worm_at(pixel_position: Vector2) -> bool:
 	# was, which undermines the whole point of the mechanic. The refresh
 	# interval is a throttle on BACKGROUND node churn; an eaten worm is a
 	# direct consequence of something the player just watched happen.
+	_sync_worm_sprites(chunk_coord)
+	return true
+
+
+## Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
+## weight-emergent worm mortality") -- mirrors take_worm_at's own shape
+## exactly (same tile/chunk/patch lookup, same immediate re-sync so a
+## crushed worm doesn't visibly linger for up to WORM_REFRESH_INTERVAL
+## more seconds after the step that killed it), but resolves through
+## EarthwormPatch.crush instead of take: an insufficient `momentum_kg_m_s`
+## leaves a surfaced worm exactly where it was, the same as never having
+## been stepped on at all.
+func crush_worm_at(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var patch: EarthwormPatch = _worm_patches.get(chunk_coord)
+	if patch == null:
+		return false
+	if not patch.crush(tile - chunk_coord * CHUNK_SIZE, momentum_kg_m_s):
+		return false
 	_sync_worm_sprites(chunk_coord)
 	return true
 

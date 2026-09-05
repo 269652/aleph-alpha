@@ -143,3 +143,61 @@ func test_move_to_end_out_of_range_is_a_no_op():
 	inventory.add(_meat(), 3)
 	inventory.move_to_end(99)
 	assert_eq(inventory.stacks()[0].item.id, "meat")
+
+
+# --- containers: a loaded bottle is not an empty one ------------------------
+# (docs/concept/capture_dsl.md. Found at the 2026-09-05 merge: main started
+# granting an empty glass bottle from the start, and `add` merged a freshly
+# loaded bottle into that stack by id alone -- the creature vanished.
+# ItemStack.can_stack_with already knew better; `add` never asked it.)
+
+func _bottle(species: String = "") -> Item:
+	var bottle := Item.new("glass_bottle", "Glass Bottle", "material", 20)
+	bottle.captive_species = species
+	return bottle
+
+
+func test_a_loaded_container_does_not_merge_into_a_stack_of_empty_ones():
+	inventory.add(_bottle(), 1)
+	inventory.add(_bottle("monarch"), 1)
+	assert_eq(inventory.used_slots(), 2, "same id, different contents -- two stacks")
+	var loaded := 0
+	for stack in inventory.stacks():
+		if stack.item.captive_species == "monarch":
+			loaded += stack.count
+	assert_eq(loaded, 1, "the creature survives being put in the pack")
+	assert_eq(inventory.count_of("glass_bottle"), 2)
+
+
+func test_two_loaded_containers_of_the_same_creature_still_stack():
+	inventory.add(_bottle("monarch"), 1)
+	inventory.add(_bottle("monarch"), 1)
+	assert_eq(inventory.used_slots(), 1)
+
+
+func test_count_of_and_has_can_ask_for_one_kind_of_contents_only():
+	inventory.add(_bottle("monarch"), 1)
+	assert_eq(inventory.count_of("glass_bottle"), 1)
+	assert_eq(inventory.count_of("glass_bottle", ""), 0)
+	assert_false(inventory.has("glass_bottle", ""))
+	inventory.add(_bottle(), 2)
+	assert_eq(inventory.count_of("glass_bottle", ""), 2)
+	assert_eq(inventory.count_of("glass_bottle", "monarch"), 1)
+	assert_true(inventory.has("glass_bottle", ""))
+	assert_eq(inventory.count_of("glass_bottle"), 3, "no filter still counts everything")
+
+
+func test_remove_with_a_contents_filter_never_spends_a_loaded_container():
+	inventory.add(_bottle("monarch"), 1)
+	inventory.add(_bottle(), 1)
+	assert_eq(inventory.remove("glass_bottle", 1, ""), 1)
+	assert_eq(inventory.count_of("glass_bottle", ""), 0)
+	assert_eq(inventory.count_of("glass_bottle", "monarch"), 1, "the loaded bottle is untouched")
+	assert_eq(inventory.remove("glass_bottle", 1, ""), 0, "nothing empty left to remove")
+	assert_eq(inventory.count_of("glass_bottle", "monarch"), 1)
+
+
+func test_remove_without_a_filter_keeps_its_old_meaning():
+	inventory.add(_bottle("monarch"), 1)
+	assert_eq(inventory.remove("glass_bottle", 1), 1)
+	assert_eq(inventory.count_of("glass_bottle"), 0)

@@ -39,8 +39,20 @@ func is_on(world, tile: Vector2i, kind: String) -> bool:
 ## origin tile already is that kind (nowhere to travel -- feed/drink in place)
 ## or if none is found in range.
 func nearest_direction(origin_tile: Vector2i, world, radius_tiles: int, kind: String) -> Vector2:
-	if _matches(world, origin_tile, kind):
+	var offset := nearest_tile_offset(origin_tile, world, radius_tiles, kind)
+	if offset == Vector2i.ZERO:
 		return Vector2.ZERO
+	return Vector2(offset).normalized()
+
+
+## The nearest tile of `kind` itself, as an offset from origin_tile -- so a
+## caller can publish it as a stimulus at a real position (docs/concept/
+## ethogram.md, slice 2) and let the kernel derive the heading. ZERO when the
+## origin tile already is that kind, or nothing is in range: the same two
+## "nowhere to travel" cases nearest_direction reports as a zero heading.
+func nearest_tile_offset(origin_tile: Vector2i, world, radius_tiles: int, kind: String) -> Vector2i:
+	if _matches(world, origin_tile, kind):
+		return Vector2i.ZERO
 
 	var best_offset := Vector2i.ZERO
 	var best_distance := -1
@@ -56,9 +68,7 @@ func nearest_direction(origin_tile: Vector2i, world, radius_tiles: int, kind: St
 				best_distance = distance
 				best_offset = Vector2i(dx, dy)
 
-	if best_distance < 0:
-		return Vector2.ZERO
-	return Vector2(best_offset).normalized()
+	return best_offset
 
 
 func _matches(world, tile: Vector2i, kind: String) -> bool:
