@@ -85,6 +85,25 @@ func test_identified_name_reveals_the_real_species_and_toxicity():
 	assert_eq(_make_marker("chanterelle", true).get_display_name(), "Chanterelle (Edible)")
 
 
+## Player.knows_mushrooms() can flip from false to true mid-play (see
+## docs/concept/mushrooms.md's "Identification") -- an already-spawned,
+## still-standing marker has to actually show that, not wait for a respawn.
+func test_becoming_identified_after_spawn_updates_the_sprite():
+	var marker := _make_marker("chanterelle", false)
+	var before: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
+
+	marker.identified = true
+
+	var after: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
+	assert_ne(after, before)
+
+
+func test_becoming_identified_after_spawn_updates_the_name():
+	var marker := _make_marker("chanterelle", false)
+	marker.identified = true
+	assert_eq(marker.get_display_name(), "Chanterelle (Edible)")
+
+
 # -- picking up: always the real species, whether or not identified -------
 
 func test_pickup_adds_the_real_species_item_even_when_unidentified():

@@ -44,15 +44,26 @@ var species_id := ""
 var mushroom_seed := 0
 
 ## Whether the player has learned to identify mushrooms (see
-## Player.knows_mushrooms) -- set before add_child. Gates BOTH the sprite
+## Player.knows_mushrooms) -- may be set before add_child, or changed later
+## (this flips true mid-play the moment the player crosses the learning
+## threshold, and an already-standing marker has to show that immediately,
+## not wait for a respawn -- see the setter below). Gates BOTH the sprite
 ## AND the display name, never independently.
-var identified := false
+var identified := false:
+	set(value):
+		if identified == value:
+			return
+		identified = value
+		if _sprite != null:
+			_rebuild_sprite()
 
 ## The site cell this marker represents, and the sim it belongs to --
 ## duck-typed the same way PickableSeed.seed_world/cell are, so pick_up can
 ## tell the real WildMushroomPatch its mushroom was taken.
 var cell := Vector2i.ZERO
 var mushroom_world = null
+
+var _sprite: Sprite2D
 
 static var _procedural_generator := ProceduralMushroomSprite.new()
 static var _illustrated_generator := IllustratedMushroomSprite.new()
@@ -62,18 +73,26 @@ static var _item_catalog := ItemCatalog.new()
 func _ready() -> void:
 	add_to_group(DroppedItem.GROUP_NAME)
 	add_to_group(DroppedItem.FORAGEABLE_GROUP_NAME)
-	var sprite := Sprite2D.new()
+	_sprite = Sprite2D.new()
+	add_child(_sprite)
+	_rebuild_sprite()
+
+
+## Identification gates FIRST, ahead of the has-art-or-doesn't fallback
+## chain (see class doc comment) -- an unidentified mushroom must read as
+## unidentified even once real illustrated art exists for its true
+## species. Called once at spawn and again whenever `identified` changes.
+func _rebuild_sprite() -> void:
 	if identified and _illustrated_generator.has_variants(species_id):
-		sprite.texture = _illustrated_generator.frame_for(species_id, mushroom_seed)
+		_sprite.texture = _illustrated_generator.frame_for(species_id, mushroom_seed)
 		# TODO once real art lands: replace with a real MEASURED
 		# IllustratedMushroomSprite.marker_scale(), the way
 		# IllustratedAntMoundSprite.marker_scale() measures its own art's
 		# actual opaque-pixel width instead of assuming it matches the
 		# procedural canvas.
 	else:
-		sprite.texture = _procedural_generator.generate_texture(species_id, identified)
-	sprite.scale = Vector2.ONE * ProceduralMushroomSprite.MUSHROOM_WORLD_SCALE
-	add_child(sprite)
+		_sprite.texture = _procedural_generator.generate_texture(species_id, identified)
+	_sprite.scale = Vector2.ONE * ProceduralMushroomSprite.MUSHROOM_WORLD_SCALE
 
 
 ## "Unidentified Mushroom" until the player knows better, then the real
