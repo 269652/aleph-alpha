@@ -67,13 +67,22 @@ func test_frame_for_spreads_across_variants():
 
 
 func test_marker_scale_is_positive():
-	assert_gt(sprite.marker_scale(), 0.0)
+	assert_gt(sprite.marker_scale(0.0), 0.0)
+	assert_gt(sprite.marker_scale(1.0), 0.0)
+
+
+## A mound now grows with its colony (see ProceduralAntMoundSprite.
+## world_width_for) -- the illustrated art must grow right along with the
+## procedural fallback, not sit at one flat size while the fallback moves.
+func test_marker_scale_grows_with_growth_fraction():
+	assert_gt(sprite.marker_scale(1.0), sprite.marker_scale(0.0))
 
 
 ## Illustrated art must land at the SAME real-world size the procedural
-## mound already uses, so swapping the art in doesn't suddenly grow/shrink
-## every mound already placed in the world (see MOUND_WORLD_WIDTH's own
-## doc comment).
+## mound already uses at any given growth_fraction, so swapping the art
+## in doesn't suddenly grow/shrink every mound already placed in the
+## world (see ProceduralAntMoundSprite.world_width_for's own doc
+## comment).
 func test_marker_scale_produces_the_procedural_mounds_own_world_width():
 	const ProceduralAntMoundSprite = preload("res://src/rendering/procedural_ant_mound_sprite.gd")
 	var image: Image = sprite.frame_for(0).get_image()
@@ -85,6 +94,8 @@ func test_marker_scale_produces_the_procedural_mounds_own_world_width():
 				min_x = mini(min_x, x)
 				max_x = maxi(max_x, x)
 	var opaque_width := float(max_x - min_x + 1)
-	assert_almost_eq(
-		opaque_width * sprite.marker_scale(), ProceduralAntMoundSprite.MOUND_WORLD_WIDTH, 1.0
-	)
+	for growth_fraction in [0.0, 0.5, 1.0]:
+		assert_almost_eq(
+			opaque_width * sprite.marker_scale(growth_fraction),
+			ProceduralAntMoundSprite.world_width_for(growth_fraction), 1.0
+		)
