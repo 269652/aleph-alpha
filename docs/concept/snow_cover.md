@@ -127,13 +127,30 @@ would refine the middle of it, not unlock it.
 
 `lying = clamp(depth + onset(world_pos), 0, 1)`, where `depth` is the one
 number `Snowfall` maintains for the whole field and `onset` is the
-two-octave smooth drift field carried over unchanged from the tile-based
+two-octave smooth drift field carried over from the tile-based
 implementation: a **broad** layer at `ONSET_DRIFT_TILES` tiles per lift
 deciding which general area catches first, plus a **fine** layer at
 `ONSET_FINE_DRIFT_TILES` adding texture within it. That two-layer design
-was measured and tuned across three separate reported bugs; it is correct
-and it is kept. What changes is only that it is now evaluated per *pixel*
-on the GPU rather than per *tile* on the CPU.
+was measured and tuned across three separate reported bugs; the mechanism
+is correct and it is kept. What changes going from the tile version is only
+that it is now evaluated per *pixel* on the GPU rather than per *tile* on
+the CPU.
+
+A **fourth** reported bug ("snow grows by some sort of line scan... it
+should crossfade random and uniformly") was about a property none of the
+first three ever measured: how much of the broad layer's own swing fits
+inside a single screen. The visible view is a fixed ~20x11 tiles regardless
+of window size (`DisplayScaling`'s own design), and at the original
+12-tile period a full swing from the field's local low to its local high
+fit inside *less* than that — so a real, smooth gradient, perfectly
+correct on its own terms, could still visibly lead one half of the
+player's own screen ahead of the other as depth climbed. `ONSET_DRIFT_TILES` was raised
+4x, to 48, so the swing spans several screens instead of a fraction of one:
+`test_no_single_screen_sees_more_than_one_octaves_worth_of_onset_spread`
+pins a single screen to at most one octave's own advertised amplitude
+(measured 0.3067 at the old period against a 0.18 ceiling, 0.1678 at the
+new one), while `test_the_drift_field_still_covers_the_ground_unevenly`
+keeps the field from being flattened to fix it that way instead.
 
 Two guards survive from `band_for` and matter for the same reasons: a
 genuinely bare field (`depth <= 0`) stays bare for even the most-leading
@@ -360,6 +377,21 @@ for, and why both exist.
   same shape `PathScarring`'s own `_last_scar_step_tile` uses), so leaving
   a tile and returning genuinely deepens it further. See this section's
   own new paragraph above for the full diagnosis.
+- ✅ **Covering speed raised 20%** (2026-09-05) — reported live: "increase
+  the snow covering speed 20%". `Snowfall.SECONDS_TO_COVER`'s spell-fraction
+  multiplier moved from 0.6 to 0.5 (0.6/1.2, the inverse relationship
+  between a time constant and the speed it produces), not to 0.48 (which
+  would have been the multiplier itself reduced by 20%). See
+  `test_covering_speed_was_increased_twenty_percent_over_the_previous_tuning`.
+- ✅ **A single screen no longer sees a visible onset gradient** (2026-09-05)
+  — reported live: "snow grows by some sort of line scan... it should
+  crossfade random and uniformly... snowflakes fall; drop and accumulate
+  1:1". `ONSET_DRIFT_TILES` raised 4x (12 to 48 tiles): the broad octave's
+  full swing used to fit inside less than one screen's own ~20x11-tile
+  view, so the field's own correct smoothness still read as one half of the
+  screen visibly catching up to the other as depth climbed. See "The drift
+  field" above and
+  `test_no_single_screen_sees_more_than_one_octaves_worth_of_onset_spread`.
 - ✅ **Trodden snow is confirmed tint-free at the shader** (2026-09-05) —
   reported live: "snow scarring should not be brown tint but rather
   transparent without tint". `fragment()`'s own `vec4(0.0)` fallback was

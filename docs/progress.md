@@ -3202,6 +3202,53 @@ ratio against the previous tuning rather than just re-asserting the new
 literal. `SECONDS_TO_THAW` (melting) is untouched — the request was about
 covering only.
 
+✅ **A single screen no longer sees snow catch on visibly at different rates
+across itself (2026-09-05).** Reported live: "snow grows by some sort of
+line scan... it should crossfade random and uniformly... snowflakes fall;
+drop and accumulate 1:1." `SnowBombShader`'s two-octave onset field is the
+tile-based implementation's own field, "measured and tuned across three
+separate reported bugs" and explicitly noted as correct and kept when the
+GPU rewrite carried it over unchanged — so the investigation started from a
+real prior: was this a genuinely new bug, or the same deliberate design
+read as a defect from a new angle? A first hypothesis (newly-"caught"
+lattice sites cluster together at a single instant, i.e. a visible
+popping-in front) was checked with a headless nearest-neighbour-distance
+probe (`tools/probe_snow_onset_pattern.gd`) across ten depth steps and did
+NOT hold up — ratios against a uniform-random expectation mostly sat at or
+above 1.0, meaning individual sites do not pop in more clustered than
+chance. The right statistic turned out to be a different one: not whether
+new sites cluster with EACH OTHER, but how much the field's own local
+COVERAGE FRACTION varies across the area a player can see AT ONCE.
+`DisplayScaling` fixes that view at ~20x11 tiles regardless of window size
+by design (a bigger monitor renders the same view at higher fidelity, not
+a wider one) — and the broad octave's period (`ONSET_DRIFT_TILES`, 12
+tiles) was SMALLER than that view, so more than a full swing from the
+field's local low to its local high could fit inside a single screen.
+`tools/probe_onset_drift_scale.gd` measured this directly across candidate
+periods and confirmed it: at 12 tiles, a real 20x11-tile window's own
+onset spread reached 0.31 (worst case), 86% of the field's full possible
+range, comfortably enough to read as a gradient sweeping the screen as
+depth climbed, even though the field itself was smooth and correct by the
+letter of the three earlier fixes. In hindsight this exact mechanism is
+visible in this file's own record: the second follow-up to "snow fills in
+tile by tile" (below) already noted that "a compact box sampled
+mostly-correlated onset... which is expected spatial clustering, not a
+mechanism failure" — true for the repaint-timing bug it was checked
+against, but exactly the visual-uniformity property this report is about.
+Fixed by raising `ONSET_DRIFT_TILES` 4x, from 12 to 48: the same probe
+measures a 20x11-tile window's worst-case spread at 0.17 afterward, under
+the field's own `ONSET_VARIANCE` (0.18) ceiling — pinned by
+`test_no_single_screen_sees_more_than_one_octaves_worth_of_onset_spread`,
+which the old value fails and the new one clears with real margin. The
+80-tile-square minimum-variance test and the adjacent-tile smoothness test
+both still pass unmodified (a larger period only makes neighbours more
+alike, and the field's own range is unchanged — only its spatial SCALE
+moved). `ONSET_FINE_VARIANCE`/`ONSET_FINE_DRIFT_TILES` and
+`SITE_ONSET_SPREAD` (the per-site independent hashed threshold that
+already gives individual flakes their "drop and accumulate 1:1" texture)
+are untouched — this was a single-knob fix once the right statistic was
+found.
+
 ✅ **A settlement's town/city tier and specialization are both derived from
 real flows, never a stored tag** (`settlement_tier.gd`), the literal
 `docs/emergence/04-settlements-cities-infrastructure.md` "City threshold"/
@@ -8306,6 +8353,45 @@ scale`/`_step_ecology_batch`, `src/gameplay/time_lapse.gd`), not in leaf
 litter or anything else this pass touched — named here rather than
 silently left for whoever next reaches for `/ecotest` and is confused by
 the frame rate.
+
+**Investigated 2026-09-05: a reported "hang" in
+`test_step_fruiting_drops_a_leaf_from_a_turning_tree` was NOT a code bug.**
+Surfaced as a side effect of an unrelated live-performance check, with a
+specific, alarming symptom: a single run of this one test reportedly burned
+400+ seconds of actual CPU time. Traced the entire call chain this test
+exercises end to end — `_find_a_fallen_leaf`/`_position_for_species` (both
+fixed-bound loops, ≤30/300 and ≤4000 iterations, over strictly O(1) bodies),
+`step_fruiting`'s leaf-fall block, `PixelNoise.range_index`,
+`FruitingModel.state_at`/`hanging_at`/`fallen_between`/`fallen_indices`/
+`_shed_by` (all closed-form O(1) math, no loop over elapsed time or crop
+size), `ChoppableTree.set_ripe_fruit`/`_redraw_canopy`, and
+`ProceduralTreeSprite.generate_texture_with_fruit` (itself cache-guarded on
+a quantised key, and its own per-fruit loop already bounded by
+`mini(ripe_count, ILLUSTRATED_MAX_FRUIT)`) — and found no loop anywhere in
+it whose termination condition can fail, no bound derived from a value that
+can go negative/huge, and no source of run-to-run non-determinism (the
+leaf-fall roll is seeded from `tree.sprite_seed`, which a test-constructed
+tree never randomises). Reproduced the named test solo 7 times and once
+more inside the full 16-test `-gunit_test_name=leaf` batch: every single
+run resolved on the very first fruiting step (`attempt=0`, `step=1`),
+completing in ~9-10s wall clock (Godot process start-up, not this test's
+own logic) — except the very first run of the session, which alone took
+129s with otherwise identical inputs. That machine was independently
+confirmed, via `Get-Process`, to be running several concurrent, unrelated
+Godot processes already carrying 250-858 CPU-seconds each at the time —
+this repository's own tooling notes already document 10-58+ concurrent
+Claude Code/Godot processes as normal load on this shared machine (see
+CONTRIBUTING.md's test-running section). A wall-clock outlier on a
+heavily-contended shared machine, or a `Get-Process` CPU reading picked up
+from a different concurrent Godot process (the console-wrapper exe GUT is
+launched through is a different PID from the actual worker process, and
+several worker processes coexist on this machine at any time), fits every
+observation; a real busy-loop in this codebase's own deterministic,
+hash-rolled leaf-fall mechanism does not fit the 7-fast/1-slow,
+always-first-attempt pattern actually measured. No production or test code
+changed as a result — see `_find_a_fallen_leaf`'s own doc comment in
+`tests/unit/test_earth_chunk_manager.gd` for the pointer back to this note
+if a future session hits the same alarming symptom again.
 
 <details>
 <summary>First pass (superseded above), kept for history</summary>
