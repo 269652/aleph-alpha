@@ -143,6 +143,15 @@ const BONDED_COMPANION_TRAIL_RADIUS := TIE_RANGE
 ## art-scaling constraint across resolutions, unrelated to gameplay camera
 ## framing). The two happened to share one literal before this change; they
 ## no longer do, and are not meant to be kept in sync by hand going forward.
+##
+## Asked directly afterward whether 83.2 could become a "whole multiplier"
+## for pixel-perfectness too: with ArtResolution.DETAIL_MULTIPLIER=2, the
+## ONLY zoom values that land every canonical resolution (720p/1080p/1440p/
+## 4K) on a whole number of screen pixels per art pixel are multiples of
+## 4.0x -- 4.0x (revert) or 8.0x (double, not 30%), nothing in between.
+## Both alternatives and the current 5.2x (2.6 screen px per art pixel,
+## non-whole but still clears test_one_art_pixel_covers_several_screen_
+## pixels's real floor) were laid out explicitly; kept 5.2x as-is.
 const TARGET_TILE_SCREEN_PX := 83.2
 ## Applied in _ready() rather than left as a bare number in player.tscn, so
 ## it's a tested constant (see test_player_camera.gd) rather than an
