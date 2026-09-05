@@ -362,15 +362,59 @@ var _school_scan_accumulator := 0.0
 var _school_neighbor: Node = null
 
 
+## >0 while this fish is mid-play-chase (see FishSchooling.PLAY_CHANCE/
+## PLAY_CHASE_SECONDS) -- a rare, one-sided direct pursuit of _play_chase_
+## target, ranked above ordinary zoned schooling but below fleeing/an active
+## lure (see the precedence comment in _process).
+var _play_chase_remaining := 0.0
+var _play_chase_target: Node = null
+## The last SCAN_INTERVAL-sized interval this fish rolled for play -- each
+## interval is only rolled once, the same "one check per window, not one per
+## frame" shape _step_schooling's own scan cadence already has.
+var _play_interval_index := -1
+
+
 ## Re-scans for a schoolmate on FishSchooling.SCAN_INTERVAL's own cadence.
 ## Cheap between scans (just an accumulator add); the group walk itself only
 ## runs on the throttled cadence.
 func _step_schooling(delta: float) -> void:
+	if _play_chase_remaining > 0.0:
+		_play_chase_remaining -= delta
+		if not is_instance_valid(_play_chase_target):
+			_play_chase_remaining = 0.0  # the target despawned mid-chase
 	_school_scan_accumulator += delta
 	if _school_scan_accumulator < FishSchooling.SCAN_INTERVAL:
 		return
 	_school_scan_accumulator = 0.0
 	_school_neighbor = _nearest_other_fish()
+	_maybe_start_play_chase()
+
+
+## Rolls, once per SCAN_INTERVAL window, whether this fish bursts into a
+## playful chase of its current nearest schoolmate (see FishSchooling.
+## rolls_for_play). A no-op while a chase is already under way, or with
+## nobody nearby to chase.
+func _maybe_start_play_chase() -> void:
+	var interval_index := int(_elapsed_time / FishSchooling.SCAN_INTERVAL)
+	if interval_index == _play_interval_index:
+		return
+	_play_interval_index = interval_index
+	if _play_chase_remaining > 0.0 or _school_neighbor == null:
+		return
+	if FishSchooling.rolls_for_play(wander_seed, interval_index):
+		_play_chase_target = _school_neighbor
+		_play_chase_remaining = FishSchooling.PLAY_CHASE_SECONDS
+
+
+## A direct heading at _play_chase_target -- deliberately NOT the zoned
+## avoid/follow/approach steering (see FishSchooling.steering_for_neighbor):
+## the whole point of a play chase is to visibly close on a chosen
+## schoolmate, not settle into formation with it.
+func _play_chase_heading() -> Vector2:
+	var offset: Vector2 = _play_chase_target.position - position
+	if offset.length() < 0.001:
+		return _current_heading
+	return offset.normalized()
 
 
 ## The closest OTHER fish in the "fish" group within FishSchooling.
@@ -495,6 +539,8 @@ func _process(frame_delta: float) -> void:
 		target = _bolt_direction
 	elif attract_target != null and position.distance_to(attract_target) > _ATTRACTION_STOP_DISTANCE:
 		target = (attract_target - position).normalized()
+	elif _play_chase_remaining > 0.0 and is_instance_valid(_play_chase_target):
+		target = _play_chase_heading()
 	elif _school_neighbor != null and is_instance_valid(_school_neighbor) and _school_leash_allows():
 		target = FishSchooling.steering_for_neighbor(
 			position, _school_neighbor.position, _school_neighbor.current_heading()
@@ -547,6 +593,12 @@ func _process(frame_delta: float) -> void:
 	var current := _current_at(position)
 	speed *= current_speed_factor(_current_heading, current["direction"], current["speed_m_s"])
 	_upstream_effort = upstream_effort(_current_heading, current["direction"], current["speed_m_s"])
+	if _play_chase_remaining > 0.0:
+		# A playful chase is a real burst of effort, same excited-tail-flap
+		# speed as an ordinary ripple-triggering flap (see
+		# FLAP_SPEED_MULTIPLIER) -- not a new speed, the existing one aimed
+		# at a schoolmate instead of a ripple timer.
+		speed = _wander.wander_speed * FLAP_SPEED_MULTIPLIER
 	if _bolt_remaining > 0.0:
 		speed = BOLT_SPEED  # the dash that makes an escape read as an escape
 
