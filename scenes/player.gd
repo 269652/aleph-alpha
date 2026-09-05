@@ -32,6 +32,8 @@ const CampfireCooking = preload("res://src/gameplay/campfire_cooking.gd")
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const VenomModel = preload("res://src/gameplay/venom_model.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
+const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
+const MushroomToxin = preload("res://src/gameplay/mushroom_toxin.gd")
 const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
 const Sickness = preload("res://src/gameplay/sickness.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
@@ -990,6 +992,10 @@ func to_save_dict() -> Dictionary:
 		# storing both would be two copies of one fact that could disagree.
 		"dna_seed": dna_seed,
 		"skill_points_paid": _skill_points_paid.duplicate(),
+		# Real foraging knowledge earned through direct field experience (see
+		# docs/concept/mushrooms.md's "Identification") -- must not evaporate
+		# on reload, the same as any other permanent progression fact.
+		"mushrooms_eaten": mushrooms_eaten,
 		"inventory": inventory_data,
 		"equipment": equipment_data,
 		# Alongside the inventory rather than inside it: an inventory entry is
@@ -1027,6 +1033,7 @@ func apply_save_dict(data: Dictionary) -> void:
 	allocated_nodes = (data.get("allocated_nodes", allocated_nodes) as Dictionary).duplicate()
 	unlocked_keystones = (data.get("unlocked_keystones", unlocked_keystones) as Dictionary).duplicate()
 	_skill_points_paid = (data.get("skill_points_paid", _skill_points_paid) as Dictionary).duplicate()
+	mushrooms_eaten = data.get("mushrooms_eaten", mushrooms_eaten)
 	# Rebuilds the genome net from the seed BEFORE anything reads the web, so a
 	# reloaded character's own unique nodes are grafted again rather than
 	# silently missing from a save that still lists them as allocated. A save
@@ -1369,6 +1376,63 @@ func _venom_step(delta: float) -> void:
 	active_venom_debuffs = _debuff_stack.advance(active_venom_debuffs, delta)
 
 
+# -- wild mushrooms: real poisoning, per-species severity, and
+# identification learned by real experience (see docs/concept/mushrooms.md's
+# "Eating one" and "Identification") -- mirrors venom's own DebuffStack
+# shape, plus a permanent, persisted encounter counter venom needed no
+# equivalent of.
+
+var mushrooms_eaten := 0
+var active_mushroom_toxin_debuffs: Array = []
+
+var _mushroom_toxin := MushroomToxin.new()
+## Which species is currently poisoning the player -- read by
+## _mushroom_toxin_step to look up the right severity. Named simplification
+## (see docs/concept/mushrooms.md): eating a second toxic species while
+## still poisoned from a first overwrites this, so the whole active stack
+## ticks at whichever species was eaten last, not a per-bite blend.
+var _mushroom_toxin_species := ""
+
+
+## Called from eat_food whenever ANY mushroom (edible or toxic) is eaten --
+## every real encounter counts toward identification (see
+## knows_mushrooms), and a toxic species additionally applies a real
+## poisoning debuff.
+func _eat_mushroom(species_id: String) -> void:
+	mushrooms_eaten += 1
+	if MushroomSpecies.is_toxic(species_id):
+		apply_mushroom_toxin(species_id)
+
+
+## Refreshes the mushroom-toxin debuff's duration and adds a stack (capped
+## at MushroomToxin.MAX_STACKS), mirroring apply_venom exactly.
+func apply_mushroom_toxin(species_id: String) -> void:
+	_mushroom_toxin_species = species_id
+	active_mushroom_toxin_debuffs = _debuff_stack.apply(
+		active_mushroom_toxin_debuffs, MushroomToxin.DEBUFF_ID,
+		MushroomToxin.DURATION_SECONDS, MushroomToxin.MAX_STACKS
+	)
+
+
+## Authority-only: mirrors _venom_step exactly, reading MushroomToxin's real
+## PER-SPECIES damage-over-time (see MushroomToxin.severity_for) for
+## however many stacks are active.
+func _mushroom_toxin_step(delta: float) -> void:
+	var stacks := _debuff_stack.stacks_of(active_mushroom_toxin_debuffs, MushroomToxin.DEBUFF_ID)
+	if stacks > 0:
+		take_damage(_mushroom_toxin.damage_per_second(stacks, _mushroom_toxin_species) * delta)
+	active_mushroom_toxin_debuffs = _debuff_stack.advance(active_mushroom_toxin_debuffs, delta)
+
+
+## Whether the player has learned to identify mushrooms on sight (see
+## MushroomMarker's identification gate) -- real foraging knowledge earned
+## through direct field experience (mushrooms_eaten), not a purchased skill
+## point (see docs/concept/mushrooms.md's "Identification" for why this
+## isn't a skill_web.gd node).
+func knows_mushrooms() -> bool:
+	return mushrooms_eaten >= MushroomSpecies.MUSHROOMS_TO_LEARN_IDENTIFICATION
+
+
 # -- spell-cast status effects: ignite/blight/freeze/root/slow (see
 # docs/concept/spell_runtime.md) -- the same DebuffStack-tracked, once-per-
 # authority-frame shape as venom above, generalized via SpellStatusEffects
@@ -1623,6 +1687,11 @@ func eat_food(item_id: String) -> bool:
 				active_food_buffs = FoodConsumption.apply_food_buff(
 					active_food_buffs, FoodConsumption.FISH_BUFFS[item_id]
 				)
+			# Wild mushrooms (see docs/concept/mushrooms.md's "Eating one" +
+			# "Identification") -- a real hazard for a toxic species, and real
+			# field experience toward identifying the whole roster either way.
+			if MushroomSpecies.IDS.has(item_id):
+				_eat_mushroom(item_id)
 			return true
 	return false
 
@@ -1766,6 +1835,7 @@ func _authority_step(delta: float) -> void:
 	_lasso_step(delta)
 	_food_buff_step(delta)
 	_venom_step(delta)
+	_mushroom_toxin_step(delta)
 	_sickness_step(delta)
 	_shop_step(delta)
 	_action_slots_step()

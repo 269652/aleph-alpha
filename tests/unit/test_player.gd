@@ -1472,6 +1472,81 @@ func test_repeated_bites_stack_venom_up_to_the_cap():
 	assert_eq(player.active_venom_debuffs[0]["stacks"], VenomModel.MAX_STACKS)
 
 
+# -- toxic mushrooms: real poisoning, per-species severity (see
+# docs/concept/mushrooms.md's "Eating one") -- mirrors apply_venom/
+# _venom_step's own shape (DebuffStack-tracked, once-per-authority-frame),
+# plus identification by real experience rather than a purchased skill
+# point (see that doc's "Identification" section for why).
+
+const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
+const MushroomToxin = preload("res://src/gameplay/mushroom_toxin.gd")
+
+
+func test_eating_an_edible_mushroom_causes_no_harm():
+	player.inventory.add(_item_catalog.make("chanterelle"), 1)
+	var health_before := player.health
+
+	assert_true(player.eat_food("chanterelle"))
+
+	assert_eq(player.health, health_before)
+	assert_eq(player.active_mushroom_toxin_debuffs.size(), 0)
+
+
+func test_eating_a_toxic_mushroom_applies_the_toxin_debuff():
+	player.inventory.add(_item_catalog.make("death_cap"), 1)
+
+	assert_true(player.eat_food("death_cap"))
+
+	assert_eq(player.active_mushroom_toxin_debuffs.size(), 1)
+	assert_eq(player.active_mushroom_toxin_debuffs[0]["debuff_id"], MushroomToxin.DEBUFF_ID)
+
+
+func test_mushroom_toxin_step_deals_damage_over_time_while_active():
+	player.inventory.add(_item_catalog.make("death_cap"), 1)
+	player.eat_food("death_cap")
+	var before := player.health
+
+	player._mushroom_toxin_step(1.0)
+
+	assert_lt(player.health, before)
+
+
+func test_mushroom_toxin_step_does_nothing_without_an_active_debuff():
+	var before := player.health
+	player._mushroom_toxin_step(1.0)
+	assert_eq(player.health, before)
+
+
+func test_mushroom_toxin_step_expires_after_its_duration():
+	player.inventory.add(_item_catalog.make("death_cap"), 1)
+	player.eat_food("death_cap")
+
+	player._mushroom_toxin_step(MushroomToxin.DURATION_SECONDS + 1.0)
+
+	assert_eq(player.active_mushroom_toxin_debuffs.size(), 0)
+
+
+func test_every_eaten_mushroom_counts_toward_identification_toxic_or_not():
+	player.inventory.add(_item_catalog.make("chanterelle"), 1)
+	player.inventory.add(_item_catalog.make("death_cap"), 1)
+
+	player.eat_food("chanterelle")
+	player.eat_food("death_cap")
+
+	assert_eq(player.mushrooms_eaten, 2)
+
+
+func test_knows_mushrooms_is_false_before_enough_real_encounters():
+	assert_false(player.knows_mushrooms())
+
+
+func test_knows_mushrooms_becomes_true_after_enough_real_encounters():
+	for id in MushroomSpecies.IDS:
+		player.inventory.add(_item_catalog.make(id), 1)
+		player.eat_food(id)
+	assert_true(player.knows_mushrooms())
+
+
 # -- disease spillover: routed through Sickness, NOT a new debuff module
 # (see docs/concept/disease.md "Player spillover") ---------------------------
 
