@@ -1,38 +1,48 @@
 extends RefCounted
 
-## The capture DSL parser (docs/concept/capture_dsl.md): turns a capture
-## device's authored text into the canonical AST -- plain Godot Dictionaries/
-## Arrays -- that capture_atom_catalog, capture_physics, and capture_executor
-## all consume.
+## The `device` DSL parser (docs/concept/standard_model.md, "The DSL"): turns
+## a device's authored text into the canonical AST -- plain Godot
+## Dictionaries/Arrays -- that device_compiler.gd, device_network.gd and
+## device_executor.gd consume.
 ##
-## A structural sibling of spell_parser.gd (same tokenizer, same
-## `on EVENT(ARG) when GUARD: pipeline` rule shape, same recursive-descent
-## approach), deliberately NOT a subclass of it or a shared parser -- capture
-## is its own domain with its own one block kind, the same way
-## npc_instruction_parser.gd is already a separate sibling of the magic
-## parser rather than reusing it.
+## A structural sibling of spell_parser.gd and npc_instruction_parser.gd
+## (and the successor of the retired capture_parser.gd -- the butterfly net
+## is device text now, see capture_book.gd): same tokenizer, same `on
+## EVENT(ARG) when GUARD: pipeline` rule shape, same recursive-descent
+## approach, deliberately NOT a subclass of either or a shared parser --
+## devices are their own domain with their own clauses.
 ##
-## Deliberately PURELY structural, exactly like the magic parser: it knows
-## the grammar, not which atoms exist or whether their params are legal --
-## that is capture_atom_catalog/capture_executor's job. An unknown atom
-## parses fine and is rejected (or simply never dispatched) one layer up.
+## What is new is everything in front of the rules: four declarative clauses.
 ##
-## Surface syntax (pipeline + one block kind):
-##   capture "Butterfly Net" {
-##     on catch when target.tier == "flyer":
-##       catch_roll(base: 0.65) |> hold_captive()
-##     on release:
-##       release_captive()
-##     on transfer(glass_bottle):
-##       move_captive()
+##   part ID: MATERIAL GEOMETRY ROLE (dims...)        -> an ItemPart
+##   joint ID: A to B TYPE FASTENING MATERIAL (axis: z) -> a PartJoint
+##   law ID: ELEMENT(params...)                        -> a physics element
+##   loop A |> B |> C                                  -> the energy path
+##
+## Deliberately PURELY structural, exactly like its siblings: it knows the
+## grammar, not the game. It does not check whether a material, geometry,
+## role, element kind or atom exists, whether a dimension is missing, or
+## whether the loop's domains agree -- that is device_compiler.gd's job. An
+## unknown anything parses fine and is rejected, with a reason, one layer up.
+##
+## Surface syntax:
+##   device "Mill Race Light" {
+##     part wheel: wood face working (width_cm: 200, height_cm: 200, thickness_cm: 4)
+##     part axle: iron haft structure (length_cm: 60, diameter_cm: 4)
+##     joint hub: wheel to axle rigid fit iron
+##     law river: source(domain: translation, fluid: water, area_m2: 0.5, velocity: 1.5)
+##     law wheel: transform(in: translation, out: rotation, part: wheel)
+##     loop river |> wheel
+##     on step when wheel.power >= 1: turn(target: wheel)
 ##   }
 ##
 ## parse() returns {ok: bool, ast: Dictionary, errors: Array[String]}. Device
-## text is authored (and, per capture_dsl.md's "crafter" pitch, may one day be
-## player-authored) and therefore fallible, so malformed text yields
-## ok:false with human-readable "line N: ..." errors rather than crashing.
+## text is authored (and, per the concept doc, may one day be player-authored)
+## and therefore fallible, so malformed text yields ok:false with
+## human-readable "line N: ..." errors rather than crashing.
 
-const _BLOCK_KINDS := ["capture"]
+const _BLOCK_KINDS := ["device"]
+const _CLAUSE_KEYWORDS := ["part", "joint", "law", "loop", "on"]
 const _COMPARISONS := [">=", "<=", ">", "<", "==", "!="]
 
 var _tokens: Array = []
@@ -205,16 +215,117 @@ func _fail(message: String) -> void:
 func _parse_block() -> Dictionary:
 	var kind_token := _peek()
 	if not (_check("ident") and _BLOCK_KINDS.has(kind_token["value"])):
-		_fail("expected 'capture'")
+		_fail("expected 'device'")
 		return {}
 	_advance()
 	var name_token := _expect("string", null, "expected a quoted name after '%s'" % kind_token["value"])
 	_expect("punct", "{", "expected '{' to open the block")
-	var rules: Array = []
+	var ast := {
+		"kind": kind_token["value"],
+		"name": name_token["value"],
+		"parts": [],
+		"joints": [],
+		"laws": [],
+		"loops": [],
+		"rules": [],
+	}
 	while not _failed and not _check("punct", "}") and not _check("eof"):
-		rules.append(_parse_rule())
+		_parse_clause(ast)
 	_expect("punct", "}", "expected '}' to close the block")
-	return {"kind": kind_token["value"], "name": name_token["value"], "rules": rules}
+	return ast
+
+
+## One clause, dispatched on its keyword, appended to the list it belongs to
+## so every list keeps source order within itself.
+func _parse_clause(ast: Dictionary) -> void:
+	var keyword := _peek()
+	if keyword["type"] != "ident" or not _CLAUSE_KEYWORDS.has(keyword["value"]):
+		_fail("expected a clause (part, joint, law, loop, or on), got '%s'" % keyword["value"])
+		return
+	match keyword["value"]:
+		"part":
+			ast["parts"].append(_parse_part())
+		"joint":
+			ast["joints"].append(_parse_joint())
+		"law":
+			ast["laws"].append(_parse_law())
+		"loop":
+			ast["loops"].append(_parse_loop())
+		"on":
+			ast["rules"].append(_parse_rule())
+
+
+## part ID: MATERIAL GEOMETRY ROLE [(dims)]
+func _parse_part() -> Dictionary:
+	_expect("ident", "part", "expected 'part'")
+	var id := _expect("ident", null, "expected a part id after 'part'")
+	_expect("punct", ":", "expected ':' after the part id")
+	var material := _expect("ident", null, "expected a material after ':'")
+	var geometry := _expect("ident", null, "expected a geometry after the material")
+	var role := _expect("ident", null, "expected a role after the geometry")
+	var dimensions := {}
+	if _match("punct", "("):
+		dimensions = _parse_params()
+		_expect("punct", ")", "expected ')' to close the part's dimensions")
+	return {
+		"id": String(id["value"]),
+		"material": String(material["value"]),
+		"geometry": String(geometry["value"]),
+		"role": String(role["value"]),
+		"dimensions": dimensions,
+	}
+
+
+## joint ID: A to B TYPE FASTENING MATERIAL [(params)]
+func _parse_joint() -> Dictionary:
+	_expect("ident", "joint", "expected 'joint'")
+	var id := _expect("ident", null, "expected a joint id after 'joint'")
+	_expect("punct", ":", "expected ':' after the joint id")
+	var part_a := _expect("ident", null, "expected the first member after ':'")
+	_expect("ident", "to", "expected 'to' between the joint's two members")
+	var part_b := _expect("ident", null, "expected the second member after 'to'")
+	var type := _expect("ident", null, "expected a joint type after the members")
+	var fastening := _expect("ident", null, "expected a fastening after the joint type")
+	var material := _expect("ident", null, "expected the joint's material after the fastening")
+	var params := {}
+	if _match("punct", "("):
+		params = _parse_params()
+		_expect("punct", ")", "expected ')' to close the joint's parameters")
+	return {
+		"id": String(id["value"]),
+		"part_a": String(part_a["value"]),
+		"part_b": String(part_b["value"]),
+		"type": String(type["value"]),
+		"fastening": String(fastening["value"]),
+		"material": String(material["value"]),
+		"params": params,
+	}
+
+
+## law ID: ELEMENT [(params)]
+func _parse_law() -> Dictionary:
+	_expect("ident", "law", "expected 'law'")
+	var id := _expect("ident", null, "expected an element id after 'law'")
+	_expect("punct", ":", "expected ':' after the law's id")
+	var element := _expect("ident", null, "expected an element kind after ':'")
+	var params := {}
+	if _match("punct", "("):
+		params = _parse_params()
+		_expect("punct", ")", "expected ')' to close the law's parameters")
+	return {"id": String(id["value"]), "element": String(element["value"]), "params": params}
+
+
+## loop A |> B |> C -- bare element ids only; a loop step carries no
+## parameters, because the physics is on the law, not on the path.
+func _parse_loop() -> Array:
+	_expect("ident", "loop", "expected 'loop'")
+	var chain: Array = []
+	chain.append(String(_expect("ident", null, "expected an element id after 'loop'")["value"]))
+	while not _failed and _match("op", "|>"):
+		chain.append(String(_expect("ident", null, "expected an element id after '|>'")["value"]))
+	if not _failed and _check("punct", "("):
+		_fail("a loop step names an element and carries no parameters (put them on its law)")
+	return chain
 
 
 func _parse_rule() -> Dictionary:
@@ -250,7 +361,7 @@ func _parse_guard() -> Dictionary:
 
 
 ## An operand is a number literal, a string literal, an @-reference (e.g.
-## @chance), or a dotted path (e.g. target.tier). Strings/paths/@-refs are
+## @mass_kg), or a dotted path (e.g. wire.power). Strings/paths/@-refs are
 ## returned as plain strings; numbers as their numeric value.
 func _parse_operand() -> Variant:
 	var token := _peek()

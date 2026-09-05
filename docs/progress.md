@@ -1,9 +1,10 @@
 # Progress Tracker
 
 This document is a living status tracker for everything defined across the
-design docs in `docs/concept/*.md` (91 as of the 2026-09-05 merge to main
-that added `concept/mushrooms.md` right after a cross-alignment recount
-had just landed 90 — `find docs/concept -maxdepth 1 -name "*.md" | wc -l`
+design docs in `docs/concept/*.md` (93 as of the 2026-09-05 standard-model
+pass that added `concept/standard_model.md` — a recount; the previous line
+here said 91 right after `concept/mushrooms.md` landed, and one more had
+arrived on `main` since — `find docs/concept -maxdepth 1 -name "*.md" | wc -l`
 — up from the 49 an earlier pass counted and the 32 this doc was first
 generated against) plus `docs/roadmap.md` and, since the 2026-08-23 emergent-systems
 pass, `docs/emergence/*.md`, cross-referenced
@@ -3976,7 +3977,7 @@ A first crafting loop is now real and wired into live gameplay, though shallow:
   Woodcutting/Mining/... mastery track, separate from the PoE-style
   `concept/skills.md` web); no `Skill` resource or per-action XP hook exists
   in code yet.
-- **Blueprint DSL** (large) — ⬜ Not started, but its *compilation target* now exists: `concept/emergent_crafting.md`'s part graph (parts as `(material, geometry, role)` nodes, typed joints as edges — see the Materials section's "Shape & Assembly" and "Typed joints" rows). Whether the player manipulates that graph directly or authors intent that compiles to it is still the open question this doc asks.
+- **Blueprint DSL** (large) — ⬜ Not started, but its *compilation target* now exists: `concept/emergent_crafting.md`'s part graph (parts as `(material, geometry, role)` nodes, typed joints as edges — see the Materials section's "Shape & Assembly" and "Typed joints" rows). Whether the player manipulates that graph directly or authors intent that compiles to it is still the open question this doc asks. **A text form that compiles to that graph now exists from the machine side** (2026-09-05): `concept/standard_model.md`'s `device` grammar's `part`/`joint` clauses compile through `DeviceCompiler` into the real `PartGraph`; whether *item* blueprints reuse those clauses is the remaining half of the question.
 - **Base Item Templates** (trivial) — ✅ Done — `item.gd`/`item_catalog.gd` (now also includes torch/campfire/cooked_meat).
 - **Material Inputs** (small) — ✅ Done — `crafting_recipe_book.gd` recipes consume a dictionary of item-id→count inputs.
 - **Modifier Slots** (medium)
@@ -5321,31 +5322,53 @@ at this land the wrong 39 files — since corrected).
 New concept doc (2026-08-24), extending `materials.md`'s existing (already
 implemented, but so far unused) `conductivity` scalar into a real
 water-wheel/windmill → generator → wire/circuit → battery/light-bulb
-mechanism. Nothing implemented — all ⬜ Not started:
+mechanism. **Revised 2026-09-05**: the circuit *algebra* this doc describes
+was generalised into `concept/standard_model.md` (see that entry) and its
+kernel solves this doc's own river-powered light end to end as an
+*authored* device (`tests/unit/test_device_book.gd`). What is real is
+generic — a law, not a placed component — so each row below is 🚧 where
+the physics exists and ⬜ where the placed, in-world half still does not:
 
-- **Circuit Topology (Adjacency Flood-Fill)** (medium) — the algorithm
+- **Circuit Topology (Adjacency Flood-Fill)** (medium) — ⬜ the algorithm
   shape already exists and is real, tested code
   (`src/gameplay/room_detector.gd`'s room-enclosure flood-fill), just not
-  yet generalized past room enclosure to conductivity.
-- **Torque from Flow (Water Wheel / Windmill)** (medium) — windmill has no
-  new world-sim dependency (`weather.md`'s `wind_strength_for` already
-  real); water wheel's flow-from-elevation-gradient proxy is proposed, not
-  validated.
-- **Generator (Torque + Magnet + Coil → EMF)** (medium)
-- **Wire / Circuit Resistance & Current (Ohm's Law)** (medium)
-- **Battery (Charge Storage)** (small)
-- **Light Bulb (Load, Brightness from Power)** (small)
-- **Magnetic Permeability Material Scalar** (small) — proposed addition to
+  yet generalized past room enclosure to conductivity. The kernel solves a
+  loop an author *wrote*, never one discovered from placed pieces.
+- **Torque from Flow (Water Wheel / Windmill)** (medium) — 🚧 the law is
+  real: a paddle `source` from the flat-plate drag law (water or air, one
+  function) into a `transform` whose ratio is the wheel's radius
+  (`device_physics.gd`); the worked light's loaded wheel measurably
+  labours under load. ⬜ binding a placed wheel to a real river's current
+  (`OpenChannelFlow.velocity`) or a windmill to `weather.md`'s real wind.
+- **Generator (Torque + Magnet + Coil → EMF)** (medium) — 🚧 a `gyrate`
+  law with Faraday's `k = B A N`, lossless, torque per ampere equal to
+  volts per rad/s (the same machine is a motor — a charged store behind it
+  motors the shaft, pinned). ⬜ the magnet as a sourced part (see the
+  permeability row).
+- **Wire / Circuit Resistance & Current (Ohm's Law)** (medium) — 🚧 a
+  wire's ohms come from its material's conductivity scalar inverted to S/m
+  over its own length and section (copper beats iron by the published
+  6.4×; wood cannot complete a circuit); the loop solve is Ohm's law
+  generalised through transformers and gyrators. ⬜ a placed wire run.
+- **Battery (Charge Storage)** (small) — 🚧 a `store` (tank-stepped level,
+  refuses charge when full, sheds overcharge, drains backwards through a
+  dead source). ⬜ the parallel placement across a bulb (`fork`).
+- **Light Bulb (Load, Brightness from Power)** (small) — 🚧 a filament is
+  a `resist` whose ohms are derived from 2 cm of 0.1 mm graphite, and the
+  worked light puts 62 W into it, firing a `shine` rule. ⬜ any light
+  rendered from that.
+- **Magnetic Permeability Material Scalar** (small) — ⬜ proposed addition to
   `material_properties.gd`'s existing vector (density/hardness/toughness/
   elasticity/sharpness_capacity/flammability/conductivity/decay_rate);
-  not yet added.
-- **Magnetite Ore / Magnetized-Iron Crafting** (small) — proposed fourth
+  not yet added — a generator's field is an authored `magnet_tesla`.
+- **Magnetite Ore / Magnetized-Iron Crafting** (small) — ⬜ proposed fourth
   `OrePlacement.ORE_TYPES` entry (today iron/copper/coal) plus a craft-a-
   magnet-from-iron recipe; neither exists.
-- **Wire Overload Burnout** (small) — proposed reuse of the existing
-  melting/damage-threshold mechanism (`impact_resolver.gd`'s
-  `T_BRITTLE_TOUGHNESS`-style thresholds), not yet extended to current
-  load.
+- **Wire Overload Burnout** (small) — ⬜ the rule grammar can fire on a
+  wire's dissipated power today, but only against an authored threshold;
+  the derived rating (watts → conductor temperature →
+  `MaterialProperties.thermal_failure_c`) is the standard model's own ⬜
+  row.
 
 ### Housing (`concept/housing.md`)
 
@@ -10805,7 +10828,9 @@ any flyer in range was always caught, immediately becoming a
 `jarred_insect`/`caged_songbird` curiosity item, with no probability and no
 intermediate "loaded, undecided" state at all.
 
-- ✅ **The Capture DSL itself** (large) — `capture_parser.gd` /
+- ✅ **The Capture DSL itself** (large) — ~~`capture_parser.gd`~~ (retired
+  2026-09-05 in favour of the standard model's device grammar — see the
+  addendum below) /
   `capture_atom_catalog.gd` / `capture_physics.gd` / `capture_executor.gd` /
   `capture_atom_effects.gd` / `capture_book.gd`, mirroring the magic DSL's
   own module split (parser → atom catalog → physics → executor → effects →
@@ -10945,10 +10970,189 @@ under the smell API, and proves the DSL in tests.
   plans over the existing motor programs, with the NPC instruction DSL as
   the player-facing dialect; mate choice on display/preference vectors.
 
+#### Addendum (2026-09-05): the net is a device with a real mesh
+
+Reported: "*refactor the butterfly net to express that it catches small
+animals like butterflies, fish, small birds; but not e.g. bees / flies
+because the net is not tight enough — it should also encode the capture
+action which confines the subject to the net.*"
+
+Investigation: `_throw_net` scanned the whole ambient-flyer flock with no
+species check at all, so a bee or a fly — both real `AmbientFlyerMarker`s,
+the fly spawned by the carrion loop — was netted exactly like a monarch;
+fish were never targets; and "what the net catches" lived in a
+`target.tier == "flyer"` guard, a category rather than a physical fact.
+The standard model had just landed, so the honest fix was to make the net
+a device with a real bag and let its mesh decide.
+
+- ✅ **Mesh physics** (medium) — `body_dimensions.gd` (three sourced body
+  extents per species for the flyer and fish rosters, the length pinned to
+  `wingbeat_bounce.gd`'s), `CapturePhysics.slips_through` / `fits_mouth` /
+  `mesh_verdict`: a body slips through when its middle extent is under the
+  mesh, does not fit when its largest exceeds the mouth; monotone in both
+  and pinned so. Against the standard net (10 mm mesh, 30 cm mouth): bee
+  and fly slip through, butterflies and small birds are held, goldfish and
+  bluegill are netted, trout and koi are too big.
+- ✅ **The net is device text** (medium) — `capture_book.gd` authors it in
+  `concept/standard_model.md`'s grammar: a wooden handle, an iron hoop, a
+  fibre bag with `aperture_mm: 10` (the rip saw's `tooth_pitch_mm`
+  precedent) and `width_cm: 30`, compiled to the real part graph (under
+  half a kilogram) and its part facts, validated at load. `capture_parser.
+  gd` and the `capture` block kind are retired: the device grammar is a
+  strict superset.
+- ✅ **The capture act names where** (small) — atoms `mesh_holds(mesh:
+  bag)` (a check that fails WITH a reason), `catch_roll`, `confine(in:
+  bag)`, `free(from: bag)`, `move_captive`; `hold_captive` /
+  `release_captive` retired and pinned so. `CaptureExecutor.validate` is
+  the static constraint layer — a `confine(in: X)` must follow a
+  `mesh_holds(mesh: X)` in its own pipeline, every named part must be
+  declared, every atom known and complete — so no shipped text can
+  confine what its mesh was not shown to hold.
+- ✅ **In play** (small) — the catch context carries the subject's extents
+  and the net's facts; a mesh refusal shows its reason ("The bee slips
+  through the 10 mm mesh."), a lost roll stays "Missed!"; a fish in the
+  shallows is a net target through the kingfisher's nearest-fish lookup and
+  leaves the water through the rod's own `catch_nearest_fish`, so its
+  pond's population records the harvest; a netted fish loads the net and
+  never bonds. 8 new scoped `test_player.gd` tests, the 15 existing net /
+  release / bottle tests re-run green.
+- ⬜ **No mass or tear rule** — a koi is refused for length, not weight;
+  the honest version is the subject's mass against `PartGraph.
+  part_load_capacity(bag)`, and no fish carries a mass yet.
+- ⬜ **Net variants have no recipes** — a 1 mm insect net that holds the
+  bee and a 40 cm landing net that takes the trout are each one number
+  away in text (both pinned in `test_capture_executor.gd`), but nothing
+  lets a player craft one.
+- ⬜ **The kingfisher** is measured (held by the standard net) but is a
+  `PiscivoreBirdMarker`, not an ambient flyer, so `_throw_net` never sees
+  it.
+
+### Standard Model (`concept/standard_model.md`, new this pass)
+
+Reported: "*design and spec a formal standard model for our in-game world
+physics and mechanics — a DSL flexible enough that engineers can invent
+entirely new devices / structures / things.*"
+
+Investigation found the pieces of such a model already scattered across
+four docs and never joined: `materials.md`'s property vector and its one
+impact equation, `emergent_crafting.md`'s parts / typed joints / part graph
+and its "an item is a program" rule AST, `electromagnetism.md`'s
+torque → EMF → Ohm circuit (pure design, nothing built), and three DSLs
+already sharing one `on EVENT(ARG) when GUARD: pipeline` grammar. What none
+of them had was a single *algebra* in which a water wheel, a lever, a
+generator, a battery and a millstone are the same few kinds of thing —
+which is what "invent new devices" actually requires, because without it
+every new device is a new special case. Spec first (per `CLAUDE.md`), then
+a red-first kernel: 173 tests across eight files, every one written and
+seen failing before its module existed.
+
+- ✅ **The formal model** (large) — a bond graph (Paynter, 1959–61) cut
+  down to "8-bit": five energy domains as (effort, flow) pairs whose
+  product is power — rotation, translation, electrical, hydraulic, and
+  thermal honestly catalogued as a pseudo-bond and kept out of power
+  accounting (`physics_domains.gd`); five element laws — `source` (a
+  Thévenin pair with a real free-running flow and matched-load ceiling),
+  `resist`, `transform`, `gyrate`, `store` (`device_elements.gd`), with
+  transformer/gyrator losslessness asserted as a property over a sweep,
+  and the two affine-load reflection rules (`R/r²` through a transformer,
+  `k²/R` with a flipped offset through a gyrator) pinned by consistency
+  checks against the laws themselves. A lever, a gear, a wheel's radius, a
+  piston and a pump are all one law; a generator and a motor are one law;
+  a battery, a reservoir and a drawn bow are one law.
+- ✅ **Derived, not authored** (medium) — `device_physics.gd`: a material's
+  conductivity in S/m recovered by inverting the shipped IACS map (copper
+  lands on the 5.80e7 definition; wood is twenty orders below, so a wooden
+  wire cannot complete a circuit — `electromagnetism.md`'s sentence, now
+  arithmetic); a wire's ohms by Pouillet's law over a haft part's own span
+  and section; a wheel's ratio as its radius; a paddle in a stream as the
+  flat-plate drag law flattened to a Thévenin pair (water's density reused
+  from `open_channel_flow.gd`, sea-level air's beside it — one function is
+  both a water wheel's and a windmill's source); Faraday's `k = B A N`.
+- ✅ **The solver** (large) — `device_network.gd`: one source driving a
+  series chain, solved in closed form by folding everything downstream
+  into one affine load, solving the one flow, and propagating forward with
+  per-element power accounting and tank-stepped stores. Pinned: efforts
+  around a closed loop sum to zero; source power equals dissipated plus
+  stored power to the watt; the **maximum power transfer theorem emerges**
+  (delivered power rises then falls with load and peaks at the matched
+  load, through a lever and a generator — this model's twin of
+  `part_mechanics.gd`'s optimum-head-mass anchor); more grinding or
+  electrical load slows the wheel; an open-ended transformer carries no
+  flow; an unloaded generator runs free with open-circuit EMF and no
+  current; stores charge by power × dt, refuse charge when full, shed
+  overcharge as overflow, never drain below empty; a charged store drives
+  the loop backwards when the source dies and, behind a gyrator, **motors
+  the shaft** — the battery that keeps the mill turning, which no rule
+  wrote. Refusals name their reason (no source first, a second source,
+  duplicate ids, an ideal source into a short, an ideal effort behind a
+  gyrator).
+- ✅ **The `device` DSL** (large) — `device_parser.gd`, a fourth structural
+  sibling of the spell / capture / npc-instruction parsers (same tokenizer,
+  same rules) with four declarative clauses in front: `part ID: MATERIAL
+  GEOMETRY ROLE (dims)`, `joint ID: A to B TYPE FASTENING MATERIAL (axis:
+  z)`, `law ID: ELEMENT(params)`, `loop A |> B |> C`. Purely structural,
+  `line N:` errors. `device_compiler.gd` turns the AST into the *shipped*
+  `PartGraph` (validated by its own rules — an unmodeled material, a missing
+  dimension, an axis-less pivot come back with the graph's own reasons) plus
+  the element chain: every one-port law names a power domain, every
+  two-port its in/out, every parameter authored or derived from a named part
+  or fluid and never both, consecutive ports along the loop checked for
+  domain agreement with a refusal naming both; since 2026-09-05 every
+  part is also exposed as **facts** (material, geometry, role, every
+  declared dimension, mass, span) so a rule on a loop-less device — the
+  butterfly net, `concept/capture_dsl.md` — can read `bag.aperture_mm`.
+  `device_executor.gd` turns
+  a solved loop into a context keyed by element id (store levels and
+  device-level `@` facts included) and fires the device's rules over it.
+- ✅ **Two worked examples, solved end to end** (`device_book.gd`, a fixed
+  authored table like `capture_book.gd`): the **mill race light** — river
+  paddle → 2 m wheel → 1:10 gears → dynamo → 10 m of 3 mm copper → 2 cm of
+  0.1 mm graphite, every parameter derived — runs its loaded wheel at
+  1.408 m/s in a 1.5 m/s river, its dynamo at 134.5 rpm and 28.2 V, and
+  puts **62.1 W** into the filament (a real bulb's worth; the wire takes
+  0.12 W), firing `shine`; the **post mill** — 10 m² of sail in an 8 m/s
+  wind → 4 m sails → 1:5 gears → millstone — puts **891 W** into a stone
+  turning at **63.7 rpm**, inside the band real millstones ran at, firing
+  `grind`. Both conserve energy to the watt. **The headline pin**: the same
+  light *without* its gear train puts **0.70 W** into the filament and does
+  not shine, because a water wheel turns far too slowly to generate from
+  directly — the reason real mills geared up by ten or more, reported by
+  the solver rather than written as a rule.
+- 🚧 **Known simplifications, each stated in the concept doc**: the paddle
+  source is a Thévenin secant of a quadratic drag law (stall and free-running
+  exact, the line between them straight); Faraday's `k` is a sinusoid's
+  peak in a DC model; a wheel's ratio is half its span (right for a disc,
+  generous for a paddle); stores are linear capacitors; a joint carries no
+  law of its own (a bearing's friction is an explicit `resist` if wanted);
+  a source's internal loss is reported (`source_internal_loss`) but not
+  routed anywhere.
+- ⬜ **Parallel junctions** (`fork`, Millman closed form specified) and the
+  general `port`/`bond` topology — the compiler refuses a second loop
+  rather than mis-solving it.
+- ⬜ **Inertial storage** (`inertia`, the bond-graph `I`): flywheels, a
+  trip-hammer's falling head.
+- ⬜ **The thermal loop** — and with it the bellows furnace, the device
+  that would turn `STATION_TEMPERATURE_C`'s three fixed numbers into "how
+  hard are you pumping".
+- ⬜ **Derived failure ratings** (`@rating`: dissipated watts → conductor
+  temperature → `thermal_failure_c`; torque → `weakest_link`). Rules fire
+  today against authored thresholds.
+- ⬜ **World binding** — a placed device's `source` reading the real river
+  (`RiverDischarge` / `OpenChannelFlow.velocity`) or wind
+  (`WeatherModel.wind_strength_for`) at its tile; bonds between separately
+  placed devices discovered by adjacency. **Nothing in live gameplay calls
+  any of this kernel** — the same honest position `ItemCompiler` is in.
+- ⬜ **Effect atoms** (`shine`, `grind`, `burn_out`, …): reported by the
+  executor, dispatched by nothing.
+- ⬜ **Magnetic permeability** as a material scalar; a generator's field is
+  an authored `magnet_tesla` until it exists.
+- ⬜ **Player-facing authoring**, skill gating of laws, and `magic.md`'s
+  gold-for-complexity compile gate applied to device text.
+
 ## Reality check
 
-This design corpus — 91 concept docs (recounted 2026-09-05; this section
-long stated the now-stale 49) plus a roadmap and, since 2026-08-23, a
+This design corpus — 93 concept docs (recounted 2026-09-05 after the
+standard-model pass; this section long stated the now-stale 49) plus a roadmap and, since 2026-08-23, a
 10-doc `docs/emergence/*.md` substrate spec, several hundred catalogued
 mechanisms in total (the exact figure is stale, see this doc's intro) —
 describes a multi-year, full-team-scale MMORPG: procedurally simulated
