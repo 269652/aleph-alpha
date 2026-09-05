@@ -3904,6 +3904,59 @@ func test_taking_a_worm_where_there_is_none_fails_rather_than_erroring():
 	assert_false(manager.take_worm_at(Vector2(-9000000, -9000000)))
 
 
+# -- crushed underfoot: weight-emergent worm mortality (see docs/concept/
+# soil_fauna.md's own section by that name). _load_chunk, not the slow
+# real update() (see this file's own CONTRIBUTING.md note) -- these
+# helpers only ever iterate whatever manager._worm_patches already holds,
+# regardless of how many chunks that came from. ---------------------------
+
+func _a_surfaced_worm_in(chunk_coord: Vector2i) -> Vector2i:
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	for cell in patch.worm_cells():
+		if patch.is_surfaced(cell):
+			return cell
+	return Vector2i(-1, -1)
+
+
+func test_crushing_a_worm_with_enough_momentum_removes_it_from_the_world():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	_surface_all_worms()
+	var cell := _a_surfaced_worm_in(chunk_coord)
+	if cell == Vector2i(-1, -1):
+		pending("no surfaced worm landed in this chunk this seed")
+		return
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(
+		manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"a horse-scale step on a worm should crush it"
+	)
+	assert_false(patch.is_surfaced(cell), "and the worm is gone")
+
+
+func test_crushing_with_too_little_momentum_leaves_the_worm_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	_surface_all_worms()
+	var cell := _a_surfaced_worm_in(chunk_coord)
+	if cell == Vector2i(-1, -1):
+		pending("no surfaced worm landed in this chunk this seed")
+		return
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_false(
+		manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 0.01),
+		"a mouse-scale step should not crush a worm"
+	)
+	assert_true(patch.is_surfaced(cell), "the worm should still be there")
+
+
+func test_crushing_a_worm_where_there_is_none_fails_rather_than_erroring():
+	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
+	assert_false(manager.crush_worm_at(Vector2(-9000000, -9000000), 1000000.0))
+
+
 # -- fruit_near / take_fruit_at / try_plant_seed_at (bird endozoochory) -------
 #
 # The bird-fruit-eating half of docs/concept/flora.md#bird-endozoochory: a

@@ -6681,6 +6681,26 @@ func take_worm_at(pixel_position: Vector2) -> bool:
 	return true
 
 
+## Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
+## weight-emergent worm mortality") -- mirrors take_worm_at's own shape
+## exactly (same tile/chunk/patch lookup, same immediate re-sync so a
+## crushed worm doesn't visibly linger for up to WORM_REFRESH_INTERVAL
+## more seconds after the step that killed it), but resolves through
+## EarthwormPatch.crush instead of take: an insufficient `momentum_kg_m_s`
+## leaves a surfaced worm exactly where it was, the same as never having
+## been stepped on at all.
+func crush_worm_at(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var patch: EarthwormPatch = _worm_patches.get(chunk_coord)
+	if patch == null:
+		return false
+	if not patch.crush(tile - chunk_coord * CHUNK_SIZE, momentum_kg_m_s):
+		return false
+	_sync_worm_sprites(chunk_coord)
+	return true
+
+
 ## Every fallen, NAMED-SPECIES tree-fruit item lying within `radius_tiles` of
 ## `pixel_position` (see TreeSpecies -- cherry/apple/walnut, dropped via
 ## step_fruiting), in the shape a fruit-eating bird expects (see
