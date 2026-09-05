@@ -2184,6 +2184,20 @@ static func surface_value(px: float, py: float) -> float:
 ## The whole animated pipeline at one world point (in noise cells): the
 ## standing bend, both advected phases, the crossfade. What the seam test
 ## compares across a direction-bin change.
+##
+## Both drift_cells and bend_drift_cells wrap at DRIFT_PERIOD_CELLS so a
+## long session never shreds (see "bounded drift" below) -- but a wrap is
+## only invisible to value_noise_tiled when the shift it produces lands on
+## an exact integer MULTIPLE of the period on both axes, which for a
+## direction-scaled shift (dir * period) only happens at an exactly
+## axis-aligned dir. At any other bearing the wrapped translation lands on
+## an unrelated point in the tile and the field pops (see "the wrap
+## instant itself" in test_river_flow_shader.gd). Both wraps are therefore
+## crossfaded here against their own half-period-offset twin, exactly the
+## way the two ADVECT phases already hide EACH OTHER's reset -- but only
+## within WRAP_CROSSFADE_CELLS of the actual wrap (see that constant),
+## since the twin sits a HALF PERIOD away and is otherwise nothing like a
+## continuation of the trajectory being crossfaded away from.
 static func animated_field_value(
 	px: float, py: float, dir: Vector2, time_seconds: float, speed_mps := 0.0
 ) -> float:
@@ -2194,6 +2208,13 @@ static func animated_field_value(
 	var b := bend_displacement(
 		(px - dir.x * bend_shift) * EDDY_SCALE, (py - dir.y * bend_shift) * EDDY_SCALE
 	)
+	var bend_weight := bend_drift_crossfade_weight(speed_mps, time_seconds)
+	if bend_weight > 0.0:
+		var bend_shift_alt := bend_drift_cells_alternate(speed_mps, time_seconds)
+		var b_alt := bend_displacement(
+			(px - dir.x * bend_shift_alt) * EDDY_SCALE, (py - dir.y * bend_shift_alt) * EDDY_SCALE
+		)
+		b = lerpf(b, b_alt, bend_weight)
 	var qx := px + perp.x * b
 	var qy := py + perp.y * b
 	var phase_a := fposmod(time_seconds * ADVECT_RATE, 1.0)
@@ -2203,19 +2224,75 @@ static func animated_field_value(
 	var shift_b := ADVECT_STRENGTH * phase_b + drift
 	var sample_a := line_field_value(qx - dir.x * shift_a, qy - dir.y * shift_a, dir)
 	var sample_b := line_field_value(qx - dir.x * shift_b, qy - dir.y * shift_b, dir)
+	var drift_weight := drift_crossfade_weight(speed_mps, time_seconds)
+	if drift_weight > 0.0:
+		var drift_alt := drift_cells_alternate(speed_mps, time_seconds)
+		var shift_a_alt := ADVECT_STRENGTH * phase_a + drift_alt
+		var shift_b_alt := ADVECT_STRENGTH * phase_b + drift_alt
+		var sample_a_alt := line_field_value(qx - dir.x * shift_a_alt, qy - dir.y * shift_a_alt, dir)
+		var sample_b_alt := line_field_value(qx - dir.x * shift_b_alt, qy - dir.y * shift_b_alt, dir)
+		sample_a = lerpf(sample_a, sample_a_alt, drift_weight)
+		sample_b = lerpf(sample_b, sample_b_alt, drift_weight)
 	return lerpf(sample_a, sample_b, absf(1.0 - 2.0 * phase_a))
+
+
+## How wide a window either drift's crossfade blends across, either side of
+## its own wrap, in noise cells. Small enough that the everyday, mid-cycle
+## trajectory is untouched (the crossfade weight is exactly 0 outside it,
+## so the field matches the plain wrapped value bit for bit); wide enough
+## that no single frame's step is still much bigger than an ordinary
+## frame of flow evolution, even at a fast reach's short period. Pinned
+## empirically (tools/probe_river_drift_wrap.gd): at 0.6 cells the worst
+## frame at a fast reach (2.2 m/s, ~7s smear period) still popped several
+## times the ordinary step; at 1.0 cells it does not.
+const WRAP_CROSSFADE_CELLS := 1.0
+
+
+## Fades from 1 (fully blend toward the crossfade twin) to 0 as `distance`
+## (cells to the nearest wrap point) grows past WRAP_CROSSFADE_CELLS. The
+## shared shape both drift_crossfade_weight and bend_drift_crossfade_weight
+## use.
+static func wrap_crossfade_weight(distance_to_wrap_cells: float) -> float:
+	var t := clampf(distance_to_wrap_cells / WRAP_CROSSFADE_CELLS, 0.0, 1.0)
+	return 1.0 - t * t * (3.0 - 2.0 * t)
 
 
 ## How far the pattern has travelled downstream, in noise cells: linear in
 ## time at the REACH'S drift speed (one constant between confluences --
 ## see EarthChunkGenerator.drift_speed_m_s_for_discharge_units; zero below
 ## the still gate), wrapped at DRIFT_PERIOD_CELLS -- the noise it
-## translates tiles at that period, so the wrap is invisible and the
-## direction-scaled offset stays bounded.
+## translates tiles at that period, so a LONG SESSION never drifts into
+## speckle and the direction-scaled offset stays bounded. This alone does
+## NOT make the wrap instant itself invisible for a non-axis-aligned dir
+## (see animated_field_value) -- that is what drift_cells_alternate and
+## drift_crossfade_weight are for.
 static func drift_cells(reach_speed_m_s: float, seconds: float) -> float:
 	if reach_speed_m_s < STILL_FLOW_M_S:
 		return 0.0
 	return fposmod(DRIFT_PX_PER_MPS * reach_speed_m_s * seconds * NOISE_SCALE, DRIFT_PERIOD_CELLS)
+
+
+## drift_cells's own half-period-offset twin: wraps exactly when drift_cells
+## is at ITS safest (mid-cycle), and vice versa -- crossfading toward this
+## exactly when drift_cells nears its own wrap is what hides the pop,
+## mirroring how the two ADVECT phases already hide each other's reset.
+static func drift_cells_alternate(reach_speed_m_s: float, seconds: float) -> float:
+	if reach_speed_m_s < STILL_FLOW_M_S:
+		return 0.0
+	return fposmod(
+		DRIFT_PX_PER_MPS * reach_speed_m_s * seconds * NOISE_SCALE + DRIFT_PERIOD_CELLS * 0.5,
+		DRIFT_PERIOD_CELLS
+	)
+
+
+## How much of drift_cells_alternate to blend into drift_cells right now:
+## 0 (today's plain behaviour, bit for bit) away from any wrap, ramping to
+## 1 exactly at the wrap so the raw discontinuity is never actually shown.
+static func drift_crossfade_weight(reach_speed_m_s: float, seconds: float) -> float:
+	if reach_speed_m_s < STILL_FLOW_M_S:
+		return 0.0
+	var wrapped := drift_cells(reach_speed_m_s, seconds)
+	return wrap_crossfade_weight(minf(wrapped, DRIFT_PERIOD_CELLS - wrapped))
 
 
 ## The water's VISIBLE downstream speed in world px/s -- the CPU mirror of
@@ -2244,11 +2321,30 @@ static func surface_cells(speed_mps: float, seconds: float) -> float:
 ## How far the standing eddies have migrated downstream, in noise cells:
 ## BEND_DRIFT_FRACTION of the water's visible travel. Zero in still water.
 ## Wrapped at DRIFT_PERIOD_CELLS in EDDY units (the eddy field tiles at
-## that period), reported back in noise cells.
+## that period), reported back in noise cells. Same wrap-instant caveat as
+## drift_cells -- see bend_drift_cells_alternate/bend_drift_crossfade_weight.
 static func bend_drift_cells(reach_speed_m_s: float, seconds: float) -> float:
 	return fposmod(
 		surface_cells(reach_speed_m_s, seconds) * BEND_DRIFT_FRACTION * EDDY_SCALE, DRIFT_PERIOD_CELLS
 	) / EDDY_SCALE
+
+
+## bend_drift_cells's own half-period-offset twin, in EDDY units -- the
+## crossfade partner for bend_drift_crossfade_weight, exactly as
+## drift_cells_alternate is for drift_cells.
+static func bend_drift_cells_alternate(reach_speed_m_s: float, seconds: float) -> float:
+	return fposmod(
+		surface_cells(reach_speed_m_s, seconds) * BEND_DRIFT_FRACTION * EDDY_SCALE
+			+ DRIFT_PERIOD_CELLS * 0.5,
+		DRIFT_PERIOD_CELLS
+	) / EDDY_SCALE
+
+
+## How much of bend_drift_cells_alternate to blend into bend_drift_cells
+## right now -- the eddy-drift counterpart of drift_crossfade_weight.
+static func bend_drift_crossfade_weight(reach_speed_m_s: float, seconds: float) -> float:
+	var wrapped := bend_drift_cells(reach_speed_m_s, seconds) * EDDY_SCALE
+	return wrap_crossfade_weight(minf(wrapped, DRIFT_PERIOD_CELLS - wrapped))
 
 
 ## Mean absolute change in the field over a step of `distance`, taken either
