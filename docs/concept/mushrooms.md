@@ -114,13 +114,15 @@ checking proximity to a specific live tree instance is real and grounded,
 but is a genuine new cross-system query this pass does not build — see
 Deliberately not modeled.)
 
-`MushroomFlush.flush_drive(moisture: float, warmth: float, autumn_fraction: float) -> float`
+`MushroomFlush.flush_drive(moisture: float, season: String) -> float`
 is a pure, tested function, same shape as `EarthwormPatch.surface_drive`:
 a moisture term (real rain trigger, identical curve to the earthworm case)
-multiplied by a real autumn-weighted season term (peaks in autumn, falls
-away toward zero in spring/summer — the inverse emphasis of
-`EarthwormPatch`'s own cold-gate, which suppresses winter specifically
-rather than favoring one season). `WildMushroomPatch.advance(delta,
+multiplied by a real season term keyed off `SeasonCycle.season_at`'s own
+string — full in autumn, a small named trickle in spring/summer, exactly
+zero in winter (the inverse emphasis of `EarthwormPatch`'s own cold-gate,
+which suppresses winter specifically rather than favoring one season; the
+discrete season-string gate itself matches [leaf_litter.md](leaf_litter.md)'s
+autumn leaf-fall trigger). `WildMushroomPatch.advance(delta,
 flush_drive)` rolls each non-fruiting cell against it; a successful roll
 starts fruiting immediately (no growth animation to run first). A fruiting
 cell reverts to available-to-reroll after a real, tested "spent" duration
