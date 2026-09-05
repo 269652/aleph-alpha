@@ -8,7 +8,6 @@ const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite
 const TreeGenome = preload("res://src/gameplay/tree_genome.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
-const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
@@ -16,10 +15,11 @@ const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const TreePhenology = preload("res://src/world/tree_phenology.gd")
 
 ## A tree's WORLD footprint (see ProceduralTreeSprite.WORLD_SIZE) -- derived
-## from the art size through ArtResolution rather than equal to it, since
-## the art is authored DETAIL_MULTIPLIER times oversized and drawn scaled
-## back down (see docs/concept/art_resolution.md). Shadow and collision size
-## off this, so they stay matched to the tree's actual world presence.
+## from the art size through ProceduralTreeSprite's own (not ArtResolution's
+## shared) DETAIL_MULTIPLIER/SPRITE_SCALE rather than equal to it, since the
+## art is authored DETAIL_MULTIPLIER times oversized and drawn scaled back
+## down (see docs/concept/art_resolution.md). Shadow and collision size off
+## this, so they stay matched to the tree's actual world presence.
 const TREE_SIZE := Vector2(ProceduralTreeSprite.WORLD_SIZE)
 ## The trunk's solid box, in world units: a little wider than the drawn
 ## trunk so brushing past feels forgiving, and shallow so it blocks only
@@ -213,10 +213,12 @@ func _build_tree_node(position: Vector2, age_seconds: float = INF) -> ChoppableT
 	# structure instead of every trunk arriving full-grown. Original forest
 	# trees are already mature -- they predate the session.
 	body.growth_scale = TreeGrowth.new().scale_at(age_seconds)
-	# The canopy art is authored DETAIL_MULTIPLIER times oversized for pixel
-	# detail; scaling it back down is what keeps the tree's world footprint
-	# unchanged (see docs/concept/art_resolution.md).
-	sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	# The canopy art is authored ProceduralTreeSprite.DETAIL_MULTIPLIER times
+	# oversized for pixel detail; scaling it back down is what keeps the
+	# tree's world footprint unchanged (see docs/concept/art_resolution.md).
+	# NOT ArtResolution.SPRITE_SCALE -- trees use their own, larger,
+	# tree-specific multiplier now (see that constant's own doc comment).
+	sprite.scale = Vector2.ONE * ProceduralTreeSprite.SPRITE_SCALE
 	# Anchor the tree at the FOOT of its trunk rather than its middle, by
 	# drawing the canopy above the node's origin. Y-sorting compares node
 	# origins, so a centre-anchored tree sorts as though it stood where its

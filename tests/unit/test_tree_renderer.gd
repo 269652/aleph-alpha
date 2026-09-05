@@ -5,7 +5,6 @@ const TreePlacement = preload("res://src/world/tree_placement.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
-const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const ForageScheduler = preload("res://src/gameplay/forage_scheduler.gd")
 
@@ -240,12 +239,20 @@ func test_texture_cache_still_stays_bounded_with_snow_coverage_set():
 	)
 
 
-# -- art resolution (docs/concept/art_resolution.md phase 2) -----------------
+# -- art resolution (docs/concept/art_resolution.md phase 2/3) ---------------
 #
-# Trees are authored at ArtResolution.DETAIL_MULTIPLIER times their world
-# size and drawn scaled back down, so a tree gains real pixel detail without
-# growing in the world. Phase 1's mistake on the ground plane -- raising art
-# size and world footprint together -- is exactly what these pin against.
+# Trees are authored at a DETAIL_MULTIPLIER times their world size and drawn
+# scaled back down, so a tree gains real pixel detail without growing in the
+# world. Phase 1's mistake on the ground plane -- raising art size and world
+# footprint together -- is exactly what these pin against.
+#
+# Trees used to share ArtResolution.DETAIL_MULTIPLIER (2) with every other
+# entity. Reported directly ("please render the sprites at native
+## resolution", against real source-art evidence showing trees still visibly
+# softer than the illustrated sheets they're cropped from -- see
+# ProceduralTreeSprite.DETAIL_MULTIPLIER's own doc comment), trees now use
+# their OWN, larger multiplier (4) instead -- these two tests pin that
+# tree-local relationship rather than the shared one.
 
 ## The world size follows the sprite's declared footprint rather than a
 ## literal, so growing the tree (see WORLD_SIZE) does not need this edited.
@@ -253,12 +260,15 @@ func test_tree_world_size_follows_the_sprites_declared_footprint():
 	assert_eq(TreeRenderer.TREE_SIZE, Vector2(ProceduralTreeSprite.WORLD_SIZE))
 
 
-func test_tree_art_is_authored_at_the_shared_detail_multiplier():
-	assert_eq(ProceduralTreeSprite.SIZE, ArtResolution.art_size(ProceduralTreeSprite.WORLD_SIZE))
+func test_tree_art_is_authored_at_its_own_tree_specific_detail_multiplier():
+	assert_eq(
+		ProceduralTreeSprite.SIZE,
+		ProceduralTreeSprite.WORLD_SIZE * ProceduralTreeSprite.DETAIL_MULTIPLIER
+	)
 
 
 ## The sprite must be scaled back down, or the oversized art would render a
-## tree 4x its world footprint.
+## tree DETAIL_MULTIPLIER times its world footprint.
 func test_tree_sprite_is_scaled_back_to_its_world_footprint():
 	var chunk := _make_forest_chunk()
 	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
@@ -267,8 +277,8 @@ func test_tree_sprite_is_scaled_back_to_its_world_footprint():
 	# is also a Sprite2D, so take the one TreeRenderer bound as the canopy.
 	var sprite: Sprite2D = spawned[0]._canopy_sprite
 	assert_not_null(sprite, "a tree should have a bound canopy sprite")
-	assert_almost_eq(sprite.scale.x, ArtResolution.SPRITE_SCALE, 0.0001)
-	assert_almost_eq(sprite.scale.y, ArtResolution.SPRITE_SCALE, 0.0001)
+	assert_almost_eq(sprite.scale.x, ProceduralTreeSprite.SPRITE_SCALE, 0.0001)
+	assert_almost_eq(sprite.scale.y, ProceduralTreeSprite.SPRITE_SCALE, 0.0001)
 	# The drawn size is the art size times the scale -- i.e. the world size.
 	var drawn := Vector2(sprite.texture.get_size()) * sprite.scale
 	assert_almost_eq(drawn.x, TreeRenderer.TREE_SIZE.x, 0.01)

@@ -15,8 +15,6 @@ const TreeSpecies = preload("res://src/world/tree_species.gd")
 const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 
-const ArtResolution = preload("res://src/rendering/art_resolution.gd")
-
 ## The tree's WORLD footprint, in world units. Bumped from 16x20 (before the
 ## resolution pass) so canopies overlap between adjacent forest tiles and a
 ## forest reads as a connected leafy mass instead of spaced lollipops.
@@ -40,26 +38,64 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 ## read clearly) -- 25% bigger, a deliberately modest step versus the
 ## already-rejected 2x (40x56) above, roughly a quarter of the way there
 ## rather than back at it.
+##
+## Follow-up, same report, once "bigger on screen at the same native
+## resolution" turned out not to be enough: measured directly (see
+## tools/probe_source_resolution.gd) that the real illustrated source crop
+## for one canopy is ~300x265px, squeezed almost 24x by AREA into the old
+## 50x66 native canvas -- an aggressive reduction that a dense, similarly-
+## toned canopy (spring blossom) survives far worse than a sparse one
+## (bare winter branches), even under the same correct area-averaging.
+## Asked directly to render at native resolution regardless of the chunky-
+## pixel-art floor -- see DETAIL_MULTIPLIER below for the resulting
+## trade-off, now made for trees specifically rather than assumed off the
+## table.
 const WORLD_SIZE := Vector2i(25, 33)
+
+## Tree-specific -- NOT ArtResolution.DETAIL_MULTIPLIER, which every other
+## entity still uses unchanged. Reported directly: "please render the
+## sprites at native resolution" -- doubled again, from 2 to 4, so the
+## final native canvas (100x132) sits much closer to the real source
+## crop's own ~300x265px, cutting the forced downscale from ~24x area to
+## ~6x. Chosen specifically so screen_pixels_per_art_pixel (SPRITE_SCALE *
+## CAMERA_ZOOM.x) never drops below 1.0 at any of the four target
+## resolutions (1.0/1.5/2.0/3.0 at 720p/1080p/1440p/4K) -- unlike a
+## smaller bump, this never needs the GPU to MINIFY the texture live
+## (nearest-filtered live minification is exactly the "arbitrary pixel,
+## discard the rest" problem the CPU-side area-average fix exists to
+## avoid; a ratio under 1.0 anywhere would quietly reintroduce it one
+## layer up). The real, accepted trade-off: at 720p specifically the
+## ratio lands at exactly 1.0, so trees there read as smooth/detailed art
+## rather than deliberately chunky pixel art like the rest of the game --
+## a REVERSAL of ArtResolution.DETAIL_MULTIPLIER's own "must stay chunky"
+## floor, scoped to trees alone and made on direct request, not
+## rediscovered by accident.
+const DETAIL_MULTIPLIER := 4
+
+## What a tree's own SIZE-authored art must be scaled by to occupy its
+## WORLD_SIZE footprint -- the tree-specific mirror of ArtResolution.
+## SPRITE_SCALE, since trees no longer share that class's multiplier.
+const SPRITE_SCALE := 1.0 / float(DETAIL_MULTIPLIER)
 
 ## The ART canvas, DETAIL_MULTIPLIER times the world footprint (see
 ## docs/concept/art_resolution.md) -- TreeRenderer draws it at
-## ArtResolution.SPRITE_SCALE so the tree gains real pixel detail without
-## growing in the world. Actually DERIVED now (was a hardcoded Vector2i(40,
-## 52) that merely happened to equal the old WORLD_SIZE * DETAIL_MULTIPLIER
-## -- a silent staleness risk this WORLD_SIZE change would otherwise have
-## walked straight into).
-const SIZE := WORLD_SIZE * ArtResolution.DETAIL_MULTIPLIER
+## SPRITE_SCALE (this file's own, not ArtResolution's) so the tree gains
+## real pixel detail without growing in the world. Derived (was a
+## hardcoded Vector2i(40, 52) that merely happened to equal the old
+## WORLD_SIZE * ArtResolution.DETAIL_MULTIPLIER -- a silent staleness risk
+## a WORLD_SIZE change would otherwise have walked straight into).
+const SIZE := WORLD_SIZE * DETAIL_MULTIPLIER
 const OUTLINE_DARKEN := 0.5
 const SHADE_DARKEN := 0.2
 const HIGHLIGHT_LIGHTEN := 0.2
 ## Scaled with the canvas area so leaf speckle density per drawn area is
 ## unchanged -- a fixed count would read as a nearly-bare canopy at 16x the
-## pixels. Was 80 at the previous 40x52 canvas; the 25%-bigger WORLD_SIZE
-## above grows the canvas area by (50*66)/(40*52) =~ 1.587x, so the count
-## scales by the same factor (80 * 1.587 =~ 127) rather than staying fixed
-## while the canopy area it must speckle grows around it.
-const SPECKLE_COUNT := 127
+## pixels. Was 127 at the previous 50x66 canvas (DETAIL_MULTIPLIER 2); the
+## tree-specific DETAIL_MULTIPLIER doubling to 4 above quadruples the
+## canvas AREA (100x132 vs 50x66), so the count scales by the same 4x
+## factor (127 * 4 = 508) rather than staying fixed while the canopy area
+## it must speckle grows around it.
+const SPECKLE_COUNT := 508
 
 ## Push canopy toward a saturated Zelda-canopy green before shading.
 const CANOPY_SATURATE := 0.16
@@ -510,8 +546,17 @@ func _paint_speckles(
 
 ## The trunk's width in WORLD units -- what a collision box or a "can I walk
 ## past this" question actually cares about.
+##
+## Uses THIS file's own SPRITE_SCALE, not ArtResolution's -- a bug this line
+## briefly carried when DETAIL_MULTIPLIER first went tree-specific: SIZE is
+## now authored at this file's OWN multiplier (4), so undoing it with
+## ArtResolution's shared one (SPRITE_SCALE 0.5, for multiplier 2) silently
+## computed a trunk world width DOUBLE the real one -- caught by
+## test_collision_is_a_trunk_sized_box_not_a_canopy_sized_one going red
+## (12.65 world units of collision box, wider than half the tree's own
+## canopy) rather than by inspection.
 static func trunk_world_width() -> float:
-	return float(SIZE.x) * TRUNK_WIDTH_FRACTION * ArtResolution.SPRITE_SCALE
+	return float(SIZE.x) * TRUNK_WIDTH_FRACTION * SPRITE_SCALE
 
 
 ## ## Compositing an illustrated tree
