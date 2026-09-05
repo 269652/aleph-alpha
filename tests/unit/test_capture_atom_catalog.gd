@@ -11,7 +11,7 @@ extends GutTest
 const CaptureAtomCatalog = preload("res://src/gameplay/capture_atom_catalog.gd")
 
 const _SPEC_KEYS := ["category", "can_fail"]
-const _CATEGORIES := ["roll", "effect"]
+const _CATEGORIES := ["check", "roll", "effect"]
 
 var catalog: CaptureAtomCatalog
 
@@ -60,10 +60,18 @@ func test_ids_in_category_returns_only_that_category():
 		assert_eq(catalog.category(atom_id), "effect")
 
 
-# --- the roll/effect split: capture's own constraint layer ------------------
+# --- the check/roll/effect split: capture's own constraint layer ------------
 # (docs/concept/capture_dsl.md: unlike magic's unconditional pipeline, a
-# capture pipeline can fail partway -- catch_roll is the only atom that can,
-# and it is what stands between "attempted" and "happened".)
+# capture pipeline can fail partway. Two atoms can: mesh_holds, the physics
+# gate that fails WITH a reason, and catch_roll, the swing that fails
+# without one. Together they are what stands between "attempted" and
+# "happened".)
+
+func test_mesh_holds_is_the_check_category_and_can_fail():
+	assert_true(catalog.has("mesh_holds"))
+	assert_eq(catalog.category("mesh_holds"), "check")
+	assert_true(catalog.can_fail("mesh_holds"))
+
 
 func test_catch_roll_is_the_roll_category_and_can_fail():
 	assert_true(catalog.has("catch_roll"))
@@ -71,16 +79,16 @@ func test_catch_roll_is_the_roll_category_and_can_fail():
 	assert_true(catalog.can_fail("catch_roll"))
 
 
-func test_hold_captive_is_an_effect_that_cannot_fail():
-	assert_true(catalog.has("hold_captive"))
-	assert_eq(catalog.category("hold_captive"), "effect")
-	assert_false(catalog.can_fail("hold_captive"))
+func test_confine_is_an_effect_that_cannot_fail():
+	assert_true(catalog.has("confine"))
+	assert_eq(catalog.category("confine"), "effect")
+	assert_false(catalog.can_fail("confine"))
 
 
-func test_release_captive_is_an_effect_that_cannot_fail():
-	assert_true(catalog.has("release_captive"))
-	assert_eq(catalog.category("release_captive"), "effect")
-	assert_false(catalog.can_fail("release_captive"))
+func test_free_is_an_effect_that_cannot_fail():
+	assert_true(catalog.has("free"))
+	assert_eq(catalog.category("free"), "effect")
+	assert_false(catalog.can_fail("free"))
 
 
 func test_move_captive_is_an_effect_that_cannot_fail():
@@ -89,12 +97,27 @@ func test_move_captive_is_an_effect_that_cannot_fail():
 	assert_false(catalog.can_fail("move_captive"))
 
 
-func test_exactly_one_atom_can_fail():
-	# If a second roll-shaped atom is ever added (docs/concept/capture_dsl.md's
-	# "Open questions" -- a future struggle_roll), this pins the count so
-	# adding it is a deliberate edit here, not a silent catalog drift.
+func test_hold_captive_and_release_captive_are_retired():
+	# Replaced 2026-09-05 by confine(in: PART) / free(from: PART), which say
+	# WHERE the subject goes. Pinned so they cannot quietly come back.
+	assert_false(catalog.has("hold_captive"))
+	assert_false(catalog.has("release_captive"))
+
+
+func test_exactly_the_check_and_the_roll_can_fail():
+	# If a third failing atom is ever added (a future struggle_roll), this
+	# pins the set so adding it is a deliberate edit here, not a silent drift.
 	var failing: Array = []
 	for atom_id in catalog.known_ids():
 		if catalog.can_fail(atom_id):
 			failing.append(atom_id)
-	assert_eq(failing, ["catch_roll"])
+	assert_eq(failing, ["mesh_holds", "catch_roll"])
+
+
+func test_every_atom_names_the_parameters_it_needs():
+	assert_eq(catalog.required_params("mesh_holds"), ["mesh"])
+	assert_eq(catalog.required_params("catch_roll"), ["base"])
+	assert_eq(catalog.required_params("confine"), ["in"])
+	assert_eq(catalog.required_params("free"), ["from"])
+	assert_eq(catalog.required_params("move_captive"), [])
+	assert_eq(catalog.required_params("bogus"), [])

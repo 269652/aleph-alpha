@@ -42,6 +42,13 @@ func catch_chance(base: float, boldness: float = FlyerPersonality.MIDDLING_BOLDN
 # coarser one held, a wider mouth never refuses what a narrower one took --
 # and test_capture_physics.gd pins that over every measured species.
 
+## The three ways a verdict can refuse, for a caller that phrases the reason
+## around its subject (the executor says "the bee slips through ...").
+const CODE_UNMEASURED := "unmeasured"
+const CODE_SLIPS_THROUGH := "slips_through"
+const CODE_TOO_BIG := "too_big"
+
+
 ## Does a body with these extents pass through a mesh of `aperture_mm`?
 ## False for an unmeasured body ([]): the physics cannot claim a thing slips
 ## through when it does not know how big it is.
@@ -67,12 +74,12 @@ func fits_mouth(extents_mm: Array, mouth_mm: float) -> bool:
 ## is refused with its own reason rather than guessed at.
 func mesh_verdict(extents_mm: Array, aperture_mm: float, mouth_mm: float) -> Dictionary:
 	if _sorted(extents_mm).size() < 3:
-		return {"holds": false, "reason": "the net has no measure of its size"}
+		return {"holds": false, "code": CODE_UNMEASURED, "reason": "the net has no measure of its size"}
 	if slips_through(extents_mm, aperture_mm):
-		return {"holds": false, "reason": "slips through the %s mm mesh" % _plain(aperture_mm)}
+		return {"holds": false, "code": CODE_SLIPS_THROUGH, "reason": "slips through the %s mm mesh" % _plain(aperture_mm)}
 	if not fits_mouth(extents_mm, mouth_mm):
-		return {"holds": false, "reason": "too big for the %s cm mouth" % _plain(mouth_mm / 10.0)}
-	return {"holds": true, "reason": ""}
+		return {"holds": false, "code": CODE_TOO_BIG, "reason": "too big for the %s cm mouth" % _plain(mouth_mm / 10.0)}
+	return {"holds": true, "code": "", "reason": ""}
 
 
 func _sorted(extents_mm: Array) -> Array:
