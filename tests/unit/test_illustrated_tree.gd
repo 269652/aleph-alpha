@@ -174,64 +174,123 @@ func test_the_ripe_frame_is_the_redder_one():
 	)
 
 
-# -- leaf litter: single leaf/blossom closeups for fallen-leaf ground items -
+# -- leaf litter: a real, correctly-coloured single foliage closeup for -----
+# -- each season a leaf can fall in (see docs/concept/leaf_litter.md) -------
 #
-# See docs/concept/leaf_litter.md. A sheet may carry small, single-subject
-# closeups below the trunk row -- a leaf, a blossom -- distinct from both
-# the season-tinted twig duplicates and the real on-tree fruit/nut cluster
-# elsewhere in the block. Confirmed by eye against cherry's real sheet
-# (green leaf pair, blossom, another green leaf, an autumn leaf all sit
-# here), not inferred from statistics alone -- see IllustratedTree's own
-# doc comment for the two measured signals (area, fill) this uses to find
-# them, and their real, honestly narrow margins.
+# Every composite sheet draws a small foliage closeup in EACH canopy column
+# -- confirmed by eye against every one of the six real sheets, not just
+# cherry's: a single leaf (or, for walnut, a compound leaflet cluster; for
+# pine, a needle sprig), coloured to match that column's own season. The
+# same column ALSO carries a bigger, similarly-coloured leaf+fruit cluster
+# a few rows away, so colour alone cannot tell them apart -- but the real
+# closeup is reliably the SMALLER of the two same-hued candidates in its
+# column (see foliage_leaf_for's own doc comment for the real measurements
+# behind that rule).
 
-func test_a_species_with_litter_art_reports_it():
-	assert_true(trees.has_litter_art_for("cherry"))
-
-
-func test_an_unregistered_species_has_no_litter_art():
-	assert_false(trees.has_litter_art_for("not_a_real_species"))
-	assert_eq(trees.litter_frames_for("not_a_real_species").size(), 0)
-	assert_null(trees.leaf_litter_for("not_a_real_species"))
-
-
-func test_every_litter_frame_has_real_content():
-	for species in ["cherry", "apple", "acorn", "hazelnut"]:
-		for frame in trees.litter_frames_for(species):
-			assert_gt(_opaque_share(frame.get_image()), 0.01, "%s: a blank litter frame" % species)
-
-
-## Pinned as a real count, measured against the real sheet, so a future
-## sheet regeneration that silently drops or duplicates one of these is
-## caught here rather than discovered as a visual regression.
-func test_cherry_has_its_measured_litter_candidate_count():
-	assert_eq(trees.litter_frames_for("cherry").size(), 5)
+func _orange_share(image: Image) -> float:
+	var orange := 0
+	var total := 0
+	for y in range(0, image.get_height(), 4):
+		for x in range(0, image.get_width(), 4):
+			var pixel := image.get_pixel(x, y)
+			if pixel.a <= 0.5:
+				continue
+			total += 1
+			var degrees := pixel.h * 360.0
+			if degrees > 10.0 and degrees < 55.0 and pixel.s > 0.4:
+				orange += 1
+	return float(orange) / float(maxi(total, 1))
 
 
-func test_apple_has_its_measured_litter_candidate_count():
-	assert_eq(trees.litter_frames_for("apple").size(), 5)
+func test_a_species_with_foliage_art_reports_it():
+	assert_true(trees.has_foliage_leaf_for("cherry", "summer"))
+	assert_true(trees.has_foliage_leaf_for("cherry", "autumn"))
 
 
-## The one texture DroppedItem actually draws for a fallen leaf -- the
-## FIRST real closeup found, in sheet order. Not guaranteed to be the
-## autumn-coloured one specifically (see leaf_litter.md: distinguishing
-## "autumn leaf" from "a same-hued fruit slice" by colour statistics alone
-## turned out not to be reliable enough to trust), but always a real,
-## on-species leaf/blossom drawing rather than a harvested item or a twig.
-func test_leaf_litter_for_returns_the_first_real_closeup():
-	var frames := trees.litter_frames_for("cherry")
-	assert_eq(trees.leaf_litter_for("cherry"), frames[0])
+func test_an_unregistered_species_has_no_foliage_leaf():
+	assert_false(trees.has_foliage_leaf_for("not_a_real_species", "summer"))
+	assert_null(trees.foliage_leaf_for("not_a_real_species", "summer"))
 
 
-## Walnut's own row here is a sequence of whole-nut renders -- every one
-## too densely filled (a solid round shell fills its own bounding box far
-## more completely than a lobed leaf does) to read as a leaf. A species
-## gains real litter art the moment its sheet draws some, the same
-## contract has_snow_frame_for already sets -- and loses nothing by not
-## drawing any: DroppedItem's own generic procedural sprite is the
-## fallback either way.
-func test_a_species_whose_row_is_all_real_items_has_no_litter_art():
-	assert_false(trees.has_litter_art_for("walnut"))
+## An unsupported season (this file only resolves the two seasons leaves
+## actually fall in today, see docs/concept/leaf_litter.md) reports no art
+## rather than guessing -- the caller's own generic fallback applies
+## instead, the same as a species with no art at all.
+func test_an_unsupported_season_has_no_foliage_leaf():
+	assert_false(trees.has_foliage_leaf_for("cherry", "winter"))
+	assert_null(trees.foliage_leaf_for("cherry", "winter"))
+
+
+func test_every_foliage_leaf_has_real_content():
+	for species in ["cherry", "apple", "walnut", "acorn", "hazelnut", "pine"]:
+		for season in ["summer", "autumn"]:
+			var frame := trees.foliage_leaf_for(species, season)
+			if frame != null:
+				assert_gt(
+					_opaque_share(frame.get_image()), 0.01,
+					"%s/%s: a blank foliage frame" % [species, season]
+				)
+
+
+## The actual point of this mechanism: a leaf that fell in summer reads
+## green, one that fell in autumn reads orange -- for every species that
+## has the art, not just cherry.
+func test_the_summer_foliage_leaf_is_green_for_every_species_that_has_one():
+	for species in ["cherry", "apple", "walnut", "acorn", "hazelnut", "pine"]:
+		var frame := trees.foliage_leaf_for(species, "summer")
+		if frame == null:
+			continue
+		assert_gt(
+			_green_share(frame.get_image()), 0.2,
+			"%s's summer-fallen leaf should read green" % species
+		)
+
+
+func test_the_autumn_foliage_leaf_is_orange_for_every_species_that_has_one():
+	for species in ["cherry", "apple", "walnut", "acorn", "hazelnut", "pine"]:
+		var frame := trees.foliage_leaf_for(species, "autumn")
+		if frame == null:
+			continue
+		assert_gt(
+			_orange_share(frame.get_image()), 0.2,
+			"%s's autumn-fallen leaf should read orange, not still green" % species
+		)
+
+
+## Every species measured has both -- pinned so a future sheet regeneration
+## that silently drops one is caught here rather than discovered as a
+## colour regression in play.
+func test_every_species_has_both_summer_and_autumn_foliage_art():
+	for species in ["cherry", "apple", "walnut", "acorn", "hazelnut", "pine"]:
+		assert_true(trees.has_foliage_leaf_for(species, "summer"), "%s: no summer leaf" % species)
+		assert_true(trees.has_foliage_leaf_for(species, "autumn"), "%s: no autumn leaf" % species)
+
+
+## The real closeup is genuinely smaller than the leaf+fruit cluster
+## sharing its column and colour -- measured against every real sheet, not
+## assumed; this is the signal foliage_leaf_for actually picks by.
+## Against the LARGEST on-tree frame, not the smallest: a species' real
+## on-tree fruit can itself be smaller than its own leaf closeup in the
+## same column (measured on apple: real fruit 127x101, leaf closeup
+## 143x123) -- fill, not size, is what actually tells the two apart there
+## (see _FOLIAGE_MAX_FILL). What must always hold, on every species
+## measured, is that the leaf closeup is smaller than the big compound
+## leaf+fruit CLUSTER sharing its column.
+func test_the_foliage_leaf_is_smaller_than_the_biggest_on_tree_cluster():
+	for species in ["cherry", "apple", "acorn", "hazelnut", "pine"]:
+		var leaf := trees.foliage_leaf_for(species, "autumn")
+		if leaf == null:
+			continue
+		var on_tree := trees.on_tree_frames_for(species)
+		assert_gt(on_tree.size(), 0, "precondition: %s has real on-tree fruit" % species)
+		var leaf_area := leaf.get_width() * leaf.get_height()
+		var biggest_cluster_area := 0
+		for frame in on_tree:
+			biggest_cluster_area = maxi(biggest_cluster_area, frame.get_width() * frame.get_height())
+		assert_lt(
+			leaf_area, biggest_cluster_area,
+			"%s's foliage leaf should be smaller than its biggest on-tree cluster" % species
+		)
 
 
 # -- the sheets themselves ---------------------------------------------------

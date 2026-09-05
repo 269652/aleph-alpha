@@ -1030,13 +1030,23 @@ const FRUITING_INTERVAL := 1.0
 ## rather than a per-leaf hanging position.
 const LEAF_SCATTER_RADIUS := 28.0
 
-## Roll granularity for the deterministic "does a turning tree shed a leaf
-## this step" check below -- NOT engine randf(): a per-step gameplay roll
-## uses a seeded hash instead, the same "looks random, is actually a pure
+## Roll granularity for the deterministic "does a tree shed a leaf this
+## step" check below -- NOT engine randf(): a per-step gameplay roll uses
+## a seeded hash instead, the same "looks random, is actually a pure
 ## function of its inputs" idiom PixelNoise/ProceduralTreeSprite.fruit_polar
 ## already use elsewhere in this file, rather than non-reproducible engine
 ## randomness.
 const _LEAF_FALL_ROLL_STEPS := 1000
+
+## The flat per-step chance a settled SUMMER tree sheds a leaf -- real
+## wind/petal damage, not the main autumn fall (see docs/concept/
+## leaf_litter.md). Small and deliberately named rather than derived: a
+## named table beats an invented formula, the same "one real table" idiom
+## FruitingModel.RIPENING_BY_SPECIES already sets. At FRUITING_INTERVAL's
+## once-a-second cadence this sheds a leaf roughly once every half minute
+## per tree on average -- present and occasionally noticeable, nowhere
+## near autumn's own real fall.
+const LEAF_SUMMER_TRICKLE_CHANCE := 0.03
 
 var _fruiting_model := FruitingModel.new()
 var _ecology_catchup := ChunkEcologyCatchup.new()
@@ -3250,31 +3260,48 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 						)
 					)
 
-			# Falling leaves (see docs/concept/leaf_litter.md): gated on the
-			# canopy ACTIVELY turning toward winter, the same season/
-			# turning_into/turn_progress this step already read once above
-			# for tree.set_ripe_fruit -- not a second schedule computing
-			# its own answer. A tree that has not started turning yet, or
-			# has cycled back to bare, sheds nothing: real leaf-fall is a
-			# real-autumn event, not a year-round drizzle. Independent of
-			# whether fruit fell this same step -- a tree can shed a leaf
-			# with nothing left to fruit at all.
+			# Falling leaves (see docs/concept/leaf_litter.md): a real leaf
+			# falls either as the main autumn fall or a light summer
+			# trickle, both driven by the SAME canopy season/turning_into/
+			# turn_progress this step already read once above for
+			# tree.set_ripe_fruit -- not a second schedule computing its
+			# own answer. Independent of whether fruit fell this same
+			# step -- a tree can shed a leaf with nothing left to fruit.
+			var leaf_fall_chance := 0.0
+			var leaf_fall_season := ""
 			if (
 				canopy_season == "autumn"
 				and canopy_turning_into == "winter"
 				and canopy_turn_progress > 0.0
 			):
+				# Chance rises with how far into its own turn the canopy
+				# is: a tree just beginning to turn sheds rarely, one
+				# nearly bare sheds almost every step.
+				leaf_fall_chance = canopy_turn_progress
+				leaf_fall_season = "autumn"
+			elif canopy_season == "summer":
+				leaf_fall_chance = LEAF_SUMMER_TRICKLE_CHANCE
+				leaf_fall_season = "summer"
+			if leaf_fall_chance > 0.0:
 				# Deterministic per-(tree, step) roll, not engine randf()
-				# -- see _LEAF_FALL_ROLL_STEPS' own doc comment. Chance
-				# rises with how far into its own turn the canopy is: a
-				# tree just beginning to turn sheds rarely, one nearly
-				# bare sheds almost every step.
+				# -- see _LEAF_FALL_ROLL_STEPS' own doc comment.
 				var step_bucket := int(now / FRUITING_INTERVAL)
 				var roll := PixelNoise.range_index(tree.sprite_seed, step_bucket, 0, _LEAF_FALL_ROLL_STEPS)
-				if roll < int(canopy_turn_progress * _LEAF_FALL_ROLL_STEPS):
+				if roll < int(leaf_fall_chance * _LEAF_FALL_ROLL_STEPS):
 					var leaf_spec: Array = _LEAF_ITEMS[species_id]
+					# sprite_id carries the season it fell in (see Item's
+					# own "art can diverge from identity" doc comment) --
+					# DroppedItem reads it back to pick the correctly-
+					# coloured art (green in summer, orange in autumn; see
+					# IllustratedTree.foliage_leaf_for). id/display_name/
+					# kind/max_stack stay exactly the shared item identity
+					# every cherry_leaf etc. has regardless of season.
 					var leaf_stack := ItemStack.new(
-						Item.new(leaf_spec[0], leaf_spec[1], leaf_spec[2], leaf_spec[3]), 1
+						Item.new(
+							leaf_spec[0], leaf_spec[1], leaf_spec[2], leaf_spec[3],
+							0.0, "", 0.0, 0.0, "%s_%s" % [leaf_spec[0], leaf_fall_season]
+						),
+						1
 					)
 					var angle := deg_to_rad(float(
 						PixelNoise.range_index(tree.sprite_seed, step_bucket + 1, 0, 360)

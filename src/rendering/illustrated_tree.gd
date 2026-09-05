@@ -233,69 +233,61 @@ func harvest_frames_for(species: String) -> Array[Texture2D]:
 	return empty
 
 
-## ## Litter frames: small closeups, not fruit or a twig
+## ## Foliage closeups: a real leaf, coloured to its own season
 ##
-## A sheet may also carry small, single-subject closeups below the trunk row
-## -- a leaf, a blossom -- distinct from both the season-tinted twig
-## duplicates and the real on-tree fruit/nut cluster elsewhere in the block.
-## Confirmed on cherry's and apple's sheets; see docs/concept/leaf_litter.md
-## for the feature this feeds (a leaf that falls in autumn, lands as a real
-## ground item, and can be eaten). Optional, like CANOPY_SNOW -- a species
-## without any reads as having none, no roster to maintain.
+## Every composite sheet draws a small single-subject foliage closeup in
+## EACH canopy column -- a single leaf (walnut draws a compound leaflet
+## cluster instead, since that is what a real walnut leaf is; pine draws a
+## needle sprig) -- confirmed by eye against all six real sheets. See
+## docs/concept/leaf_litter.md for the feature this feeds: a leaf that
+## falls reads the colour of the season it fell in, green in summer and
+## orange in autumn, because that is genuinely the art already sitting on
+## the sheet for those two columns.
 ##
-## Told apart from a real harvested item or twig by two measured signals,
-## neither reliable alone (checked against every species' own sheet): a
-## closeup's own bounding box is a small fraction of the whole sheet (every
-## real harvested item or twig measured is comfortably bigger -- see
-## LITTER_AREA_FRACTION_MAX) AND its own fill (see _fill_fraction) sits in a
-## narrow middle band -- less densely drawn than a solid round nut or a cut
-## fruit's cross-section (walnut's whole shelled-nut row measures
-## 0.71-0.82, both cherry's and apple's own cut-fruit closeups 0.64-0.73),
-## but more than a bare twig or a snow-dusted one (0.16-0.48 measured
-## across every species). The margin on the low side of this band is real
-## but narrow (cherry's own blossom closeup, the highest real leaf/blossom
-## fill measured, sits only 0.004 below the cutoff against acorn's
-## snow-dusted nut, the closest real non-leaf item) -- a genuinely harder
-## classification than most in this codebase, and may need adjusting if a
-## species' sheet draws something this size and fill that is neither.
+## Only summer and autumn are resolved here -- the only two seasons
+## step_fruiting actually drops a leaf in (see its own doc comment): a
+## trickle in summer, the real fall in autumn. Winter and spring return
+## null the same way a species with no art at all does, which
+## DroppedItem's caller reads as "fall back to the generic sprite" -- there
+## is no fallen-leaf case that needs one today, so this does not guess at
+## art for seasons nothing ever asks for.
 ##
-## Known imperfect: pine's own small winged-seed-pair closeups pass this
-## same band and are picked up too -- there is no pine needle-sprig art to
-## find instead, only pinecone and seed-pair renders, so pine's own litter
-## item currently shows a seed pair rather than needles. A real, named
-## limitation, not a silent one, until pine's sheet grows real needle
-## litter art of its own.
-const LITTER_AREA_FRACTION_MAX := 0.016
-const LITTER_FILL_MIN := 0.48
-const LITTER_FILL_MAX := 0.62
+## Told apart from three other things that can share the same column and
+## the same rough colour -- see each constant's own doc comment for the
+## real measurements behind it: the bigger leaf+fruit CLUSTER a few rows
+## away (smallest-area wins between same-hued candidates once the other
+## two are ruled out), the real on-TREE fruit itself when it happens to be
+## smaller than the closeup instead of bigger (_FOLIAGE_TRUSTED_ON_TREE_*),
+## and a solid round nut/kernel/cone (_FOLIAGE_MAX_FILL). No single one of
+## these three signals is enough alone; combined, they get every species
+## measured right except pine's own autumn column (see
+## _foliage_closeups' own doc comment for that one named exception).
+const _FOLIAGE_GREEN_HUE_MIN_DEGREES := 60.0
+const _FOLIAGE_GREEN_HUE_MAX_DEGREES := 170.0
+const _FOLIAGE_ORANGE_HUE_MIN_DEGREES := 10.0
+const _FOLIAGE_ORANGE_HUE_MAX_DEGREES := 55.0
+const _FOLIAGE_MIN_SATURATION := 0.15
 
-## Whether this species' sheet carries any litter closeups -- see "Litter
-## frames" above.
-func has_litter_art_for(species: String) -> bool:
-	return litter_frames_for(species).size() > 0
+const _FOLIAGE_SEASON_TO_HUE_BAND := {
+	"summer": Vector2(_FOLIAGE_GREEN_HUE_MIN_DEGREES, _FOLIAGE_GREEN_HUE_MAX_DEGREES),
+	"autumn": Vector2(_FOLIAGE_ORANGE_HUE_MIN_DEGREES, _FOLIAGE_ORANGE_HUE_MAX_DEGREES),
+}
+
+## Whether this species has a real foliage closeup for `season` -- see
+## "Foliage closeups" above.
+func has_foliage_leaf_for(species: String, season: String) -> bool:
+	return foliage_leaf_for(species, season) != null
 
 
-## Small, single-subject closeups (a leaf, a blossom) meant for falling/
-## accumulating leaf litter -- see "Litter frames" above and
-## docs/concept/leaf_litter.md. Empty for a species with no art, or whose
-## sheet has none, which callers read the same way as any other optional
-## frame set: nothing to draw from yet.
-func litter_frames_for(species: String) -> Array[Texture2D]:
-	var empty: Array[Texture2D] = []
-	if not has_composite(species):
-		return empty
-	return _composite_parts(species)["litter"]
-
-
-## The one texture a fallen leaf item actually draws -- the FIRST real
-## closeup found, in sheet order (not guaranteed to be the autumn-coloured
-## one specifically; see "Litter frames" above). Null for a species with no
-## litter art, which DroppedItem reads the same way it already reads any
-## other missing illustrated art: fall back to the generic procedural item
-## sprite.
-func leaf_litter_for(species: String) -> Texture2D:
-	var frames := litter_frames_for(species)
-	return null if frames.is_empty() else frames[0]
+## The one texture a leaf that fell in `season` actually draws -- see
+## "Foliage closeups" above. Null for an unsupported season, a species with
+## no composite art, or a species whose sheet has nothing matching that
+## season's own colour in the right column -- DroppedItem reads all three
+## the same way: fall back to the generic procedural sprite.
+func foliage_leaf_for(species: String, season: String) -> Texture2D:
+	if not has_composite(species) or not _FOLIAGE_SEASON_TO_HUE_BAND.has(season):
+		return null
+	return _composite_parts(species)["foliage"].get(season)
 
 
 ## The fruit as it hangs on the tree: the LAST on-tree stage when ripe, the one
@@ -345,7 +337,7 @@ func _composite_parts(species: String) -> Dictionary:
 	var fruit: Array[Texture2D] = []
 	var on_tree: Array[Texture2D] = []
 	var harvest: Array[Texture2D] = []
-	var litter: Array[Texture2D] = []
+	var foliage: Dictionary = {}
 	var sheet := _load_image(path)
 	if sheet != null:
 		var regions := CompositeSheetSlicer.regions_in(sheet)
@@ -390,7 +382,6 @@ func _composite_parts(species: String) -> Dictionary:
 		for region in on_tree_regions:
 			var rect: Rect2i = region
 			on_tree.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, rect)))
-		var sheet_area := float(sheet.get_width() * sheet.get_height())
 		for region in fruit_regions:
 			var rect: Rect2i = region
 			# Skip harvest for any fragment a merge above already folded
@@ -405,15 +396,10 @@ func _composite_parts(species: String) -> Dictionary:
 					break
 			if absorbed:
 				continue
-			# A litter closeup is found ALONGSIDE harvest, not instead of
-			# it -- additive, not a replacement classification, so this
-			# never changes what harvest_frames_for/fruit_frames_for hand
-			# back (see "Litter frames" above for why).
-			if _is_litter_candidate(sheet, rect, sheet_area):
-				litter.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, rect)))
 			harvest.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, rect)))
 		fruit.append_array(on_tree)
 		fruit.append_array(harvest)
+		foliage = _foliage_closeups(sheet, fruit_regions, on_tree_regions, canopy_x_centers)
 
 	var parts := {
 		"canopy": canopy,
@@ -421,7 +407,7 @@ func _composite_parts(species: String) -> Dictionary:
 		"fruit": fruit,
 		"on_tree": on_tree,
 		"harvest": harvest,
-		"litter": litter,
+		"foliage": foliage,
 	}
 	_composite_cache[path] = parts
 	return parts
@@ -687,16 +673,123 @@ static func _fill_fraction(sheet: Image, region: Rect2i) -> float:
 	return float(filled) / float(maxi(total, 1))
 
 
-## Whether `region` reads as a small single-subject litter closeup rather
-## than a real harvested item or a twig -- see "Litter frames" above for
-## the two measured signals combined here (area, `_fill_fraction`) and
-## their real margins.
-static func _is_litter_candidate(sheet: Image, region: Rect2i, sheet_area: float) -> bool:
-	var area_fraction := float(region.size.x * region.size.y) / sheet_area
-	if area_fraction >= LITTER_AREA_FRACTION_MAX:
-		return false
-	var fill := _fill_fraction(sheet, region)
-	return fill >= LITTER_FILL_MIN and fill <= LITTER_FILL_MAX
+## The real on-tree fruit/nut row (see _on_tree_row) is the more reliable
+## answer to "which region is genuinely fruit" than a second guess by size
+## or fill ever could be -- EXCEPT when `_merge_same_column_fragments`
+## folds several unrelated regions from a whole column into one wildly
+## oversized box, a real failure mode measured on acorn/hazelnut (a
+## legitimate cluster measures under 55000px^2 on every species checked;
+## the corrupted merges measured there reach 68688-166725px^2). Trusting
+## an on-tree claim only below this ceiling gets the real exclusion
+## (apple's own real autumn fruit, 127x101 = 12827px^2, smaller than its
+## own leaf closeup) without the corruption swallowing every real
+## candidate in the same column along with it.
+const _FOLIAGE_TRUSTED_ON_TREE_MAX_AREA := 60000
+
+## A solid, round nut/kernel/cone fills its own bounding box far more
+## completely than a lobed leaf or a needle sprig does -- measured across
+## every species' real nut/kernel/cone closeup (walnut 0.741-0.762, acorn
+## kernel 0.709, hazelnut kernel 0.733, pine cone 0.683) against every
+## real leaf/needle closeup measured (0.52-0.65, pine's own needle sprig
+## included at 0.545) -- 0.68 sits with real margin on both sides of that
+## gap.
+const _FOLIAGE_MAX_FILL := 0.68
+
+## The real per-season foliage closeup for each of the two seasons a leaf
+## can fall in -- see "Foliage closeups" above for the whole story. Builds
+## a season -> Texture2D dict directly from `fruit_regions` (before the
+## harvest split even happens, so it never depends on which bucket the
+## bigger cluster ends up filed under): for each season, among every
+## region whose own column matches that season, whose own mean hue matches
+## that season's real colour, which is not itself the real on-tree fruit
+## for that column (see _FOLIAGE_TRUSTED_ON_TREE_MAX_AREA), and which
+## isn't dense enough to read as a solid nut/kernel/cone instead of a leaf
+## (see _FOLIAGE_MAX_FILL), the smallest region wins.
+##
+## Known imperfect: pine's own small winged-seed-pair closeup (fill 0.575,
+## close enough to a real needle sprig's own 0.545 that this filter cannot
+## tell them apart) is smaller than pine's real needle sprig and passes
+## every other check, so pine's own autumn litter currently shows a seed
+## pair rather than needles. A real, named limitation, not a silent one.
+static func _foliage_closeups(
+	sheet: Image, fruit_regions: Array[Rect2i], on_tree_regions: Array, canopy_x_centers: Array
+) -> Dictionary:
+	var result: Dictionary = {}
+	for season in _FOLIAGE_SEASON_TO_HUE_BAND.keys():
+		var column: int = _CANOPY_FRAME_BY_SEASON.get(season, -1)
+		if column < 0 or canopy_x_centers.is_empty():
+			continue
+		var band: Vector2 = _FOLIAGE_SEASON_TO_HUE_BAND[season]
+		var best_rect := Rect2i()
+		var best_area := -1
+		for region in fruit_regions:
+			var rect: Rect2i = region
+			if _nearest_canopy_column(rect, canopy_x_centers) != column:
+				continue
+			if _is_trusted_real_fruit(sheet, rect, on_tree_regions):
+				continue
+			if _fill_fraction(sheet, rect) > _FOLIAGE_MAX_FILL:
+				continue
+			var hue_sat := _mean_hue_saturation(sheet, rect)
+			if hue_sat.x < 0.0 or hue_sat.x < band.x or hue_sat.x > band.y:
+				continue
+			var area := rect.size.x * rect.size.y
+			if best_area < 0 or area < best_area:
+				best_area = area
+				best_rect = rect
+		if best_area >= 0:
+			result[season] = ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, best_rect))
+	return result
+
+
+## An on-tree claim this file trusts enough to exclude from foliage
+## consideration must ALSO look fruit-like on its own terms, not merely be
+## reasonably sized: `_on_tree_row`'s own fallback can pick the WRONG row
+## outright on a species whose real fruit row fails its column-discipline
+## check (measured on pine: it settles on the needle-sprig row instead of
+## the cone/seed row, fill 0.52-0.55 -- leaf-like, not fruit-like -- yet
+## comfortably under the size cap above). Requiring the on-tree region's
+## OWN fill to clear this floor keeps the one exclusion this file actually
+## needs (apple's real autumn fruit, 0.647) while refusing pine's
+## mistaken one.
+const _FOLIAGE_TRUSTED_ON_TREE_MIN_FILL := 0.60
+
+## Whether `rect` is (or sits inside) an on-tree fruit claim trustworthy
+## enough to exclude from foliage consideration -- see
+## _FOLIAGE_TRUSTED_ON_TREE_MAX_AREA and _FOLIAGE_TRUSTED_ON_TREE_MIN_FILL's
+## own doc comments for the two real failure modes this guards against.
+static func _is_trusted_real_fruit(sheet: Image, rect: Rect2i, on_tree_regions: Array) -> bool:
+	for on_tree_region in on_tree_regions:
+		var on_tree_rect: Rect2i = on_tree_region
+		if on_tree_rect.size.x * on_tree_rect.size.y > _FOLIAGE_TRUSTED_ON_TREE_MAX_AREA:
+			continue
+		if not (on_tree_rect == rect or on_tree_rect.encloses(rect)):
+			continue
+		if _fill_fraction(sheet, on_tree_rect) < _FOLIAGE_TRUSTED_ON_TREE_MIN_FILL:
+			continue
+		return true
+	return false
+
+
+## A region's own mean hue (degrees) and saturation, sampled over its
+## opaque, reasonably-saturated pixels only -- low-saturation near-white/
+## near-black content has meaningless hue and would drag the mean toward
+## nothing. Returns (-1, -1) for a region with no such content at all.
+static func _mean_hue_saturation(sheet: Image, region: Rect2i) -> Vector2:
+	var sum_hue := 0.0
+	var sum_saturation := 0.0
+	var sampled := 0
+	for y in range(region.position.y, region.position.y + region.size.y, 2):
+		for x in range(region.position.x, region.position.x + region.size.x, 2):
+			var pixel := sheet.get_pixel(x, y)
+			if pixel.a <= 0.5 or pixel.s < _FOLIAGE_MIN_SATURATION:
+				continue
+			sum_hue += pixel.h * 360.0
+			sum_saturation += pixel.s
+			sampled += 1
+	if sampled == 0:
+		return Vector2(-1.0, -1.0)
+	return Vector2(sum_hue / float(sampled), sum_saturation / float(sampled))
 
 
 ## How close two regions' heights must be to count as copies of the same
