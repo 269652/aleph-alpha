@@ -1975,3 +1975,67 @@ and `test_every_river_answer_carries_a_constant_drift_speed` (generator),
 `test_the_scale_texel_carries_the_reach_drift_speed_and_the_drift_map_is_bound`
 (manager) and `test_the_drift_rides_the_reachs_own_constant_speed`
 (shader).
+
+
+### The wrap instant itself (2026-09-05, later still)
+
+Reported live: "the river lines change abruptly every 30s or so".
+Distinct from the far-time shredding above, and not fixed by it: that
+fix bounds the drift's magnitude over a long SESSION (does it decay
+into speckle by 2000 s?) and proves `value_noise_tiled` tiles exactly
+at `drift_period` -- neither one checks continuity at the precise
+INSTANT a wrap happens.
+
+The bug was in the "a translation by one period is the identity"
+reasoning itself. `value_noise_tiled` wraps its lattice on x and y
+*separately* (`mod(floor(x), period)`, `mod(floor(y), period)`,
+independently) -- so a shift is only invisible to it when the shift is
+an integer *multiple* of the period on **both** axes at once. The
+drift shifts the sample coordinate by `dir * period` at the wrap
+instant, and that is a multiple of the period on both axes only when
+`dir` is exactly axis-aligned (0 or ±1 on both components) -- true for
+almost no real river bearing, and false even for a deceptively "nice"
+one like `(0.6, 0.8)`: `0.6 * 20 = 12` and `0.8 * 20 = 16` are
+integers, but neither is a *multiple of 20*, so the wrapped
+translation lands on an unrelated point in the tile and the field
+visibly pops. Confirmed on the CPU mirror at a generic 135° bearing: a
+single frame straddling the smear drift's own wrap (a fast reach's
+~7.1 s period at 2.2 m/s) moved the field by 0.558 against an ordinary
+one-frame step of 0.014 there -- a pop, not noise. The eddy/bend drift
+has the identical bug on its own, longer period.
+
+There is no re-parametrization of a single wrapping scalar that fixes
+this: any function that climbs linearly within a cycle and resets by
+exactly one period must, somewhere in that cycle, jump by a full
+period -- moving *where* the jump falls doesn't remove it, and for a
+non-axis-aligned `dir` any such jump pops. The fix instead borrows the
+technique the two ADVECT phases already use to hide *their own*
+reset: crossfade toward an independent, half-period-offset twin
+(`drift_cells_alternate`, `bend_drift_cells_alternate`) exactly when
+the primary value is near its own wrap
+(`wrap_crossfade_weight`/`WRAP_CROSSFADE_CELLS`, 1.0 noise cells,
+picked empirically -- narrower left a visible pop at a fast reach's
+short period). Unlike the ADVECT phases, the twin sits a full half
+period away in noise-space, which is far enough that the two
+candidates are themselves decorrelated -- so the crossfade only runs
+within a narrow window of the actual wrap (weight 0, and bit-for-bit
+today's plain value, everywhere else), trading the original hard pop
+for a brief sub-quarter-second cross-fade at each wrap instead of
+leaving it constantly blended. `wrap_crossfade_weight` and the
+`_alternate` functions are purely additive next to `drift_cells`/
+`bend_drift_cells`, which are unchanged.
+
+Cost: the extra sampling (a second `line_field_value` pass for the
+smear, a second coarse+fine `bend_displacement` pass for the eddy)
+only runs inside that narrow window, gated by `if (weight > 0.0)` in
+the shader -- a few frames per cycle per reach, not every frame.
+
+Pinned by `test_the_drift_wrap_does_not_pop_the_field_at_a_generic_
+bearing` and `test_the_eddy_drift_wrap_does_not_pop_the_field_at_a_
+generic_bearing` (CPU mirror, both wraps, straddling the exact
+instant); the existing far-time-shredding tests above still hold
+unchanged (a genuinely different property). Confirmed on the real
+compiled shader on a real GPU (`tools/probe_river_drift_wrap.gd`, new):
+the one-frame step straddling a fast reach's wrap now measures 0.91x
+the field's own ordinary one-frame step (indistinguishable from normal
+flow evolution) against 11.87x with the crossfade patched back out.

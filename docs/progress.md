@@ -8126,6 +8126,31 @@ germany" and a 4-tile minimum width).
   pre-`830f4ba` eddy formula 0.0100 -> 0.0972, proving the metric would have
   caught it). Writeup: `concept/rivers.md`'s "Bounded drift: the far-time
   shredding" section.
+- **The drift wrap instant itself popped, at any non-axis-aligned bearing**
+  (small) — ✅ Done — reported live: "the river lines change abruptly every
+  30s or so", distinct from the far-time shredding above (that fix bounds
+  the drift's magnitude over a long session and proves the noise tiles
+  exactly at the wrap period; neither checks continuity at the precise
+  instant a wrap happens). Root cause: `value_noise_tiled` wraps x and y
+  *separately*, so a shift is only invisible to it when it lands on an
+  integer *multiple* of the period on both axes — true for a
+  direction-scaled shift (`dir * period`) only when `dir` is exactly
+  axis-aligned, false even for a "nice" bearing like `(0.6, 0.8)`. Fixed by
+  crossfading each drift toward an independent half-period-offset twin
+  (`drift_cells_alternate`, `bend_drift_cells_alternate`) only within
+  `WRAP_CROSSFADE_CELLS` (1.0 noise cells, picked empirically) of its own
+  wrap — the same technique the two ADVECT phases already use to hide each
+  other's reset, purely additive next to the unchanged `drift_cells`/
+  `bend_drift_cells`. Confirmed on the CPU mirror at a generic 135° bearing
+  (a fast reach's ~7.1s wrap period: the pop was 0.558 against an ordinary
+  step of 0.014, now within the fix's own tested tolerance) and on the real
+  compiled shader on a real GPU (new `tools/probe_river_drift_wrap.gd`:
+  wrap-instant step 0.91x the ordinary step, fixed, against 11.87x with the
+  crossfade patched back out). Pinned by
+  `test_the_drift_wrap_does_not_pop_the_field_at_a_generic_bearing` and
+  `test_the_eddy_drift_wrap_does_not_pop_the_field_at_a_generic_bearing`;
+  every existing far-time-shredding test still holds unchanged. Writeup:
+  `concept/rivers.md`'s "The wrap instant itself" section.
 - **Hillshade could paint ordinary ground as a near-opaque black cliff**
   (medium) — ✅ Done — reported live: "distinctly odd, near-black... roughly
   diamond/blob-shaped patches lying flat on grass near a riverbank" (Spring,
