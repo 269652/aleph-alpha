@@ -295,3 +295,137 @@ func test_aggressive_keying_would_wrongly_erode_the_snow_frame_if_ever_used_ther
 		eroded_fraction, protected_fraction - 0.2,
 		"aggressive keying should visibly eat into real snow content -- proof it must stay scoped"
 	)
+
+
+# -- white speckles scattered through a drawing's own interior ---------------
+#
+# Reported: "the new tree sprites have white speckles around outline" (pine's
+# turning/autumn frame named specifically). NOT a keying/background problem --
+# confirmed directly against the real art: `aggressive` keying (which erodes
+# background and its anti-aliased halo to convergence) left these pixels
+# completely untouched, and their raw colour is fully OPAQUE, sitting among
+# richly-saturated foliage colour with no gradient leading to them -- ruling
+# out both anti-aliasing (a blend has neighbours BETWEEN the two colours it
+# blends) and unreached background (a real gap between foliage clusters is
+# many pixels across, not a single fleck; and this reproduces identically on
+# frames that never needed keying at all). What is left is noise baked into
+# the source art itself.
+#
+# What tells a speckle apart from a genuine pale FEATURE (a snow-covered
+# bough) is not colour -- both read identically pale/low-saturation -- but
+# SIZE: grouped into connected components, pine's turning and leaf frames
+# (neither of which has any business drawing real pale content) top out at
+# 40 and 61 pixels for their single largest pale component, where pine's own
+# snow frame's real patches run 446 to 1123 pixels each -- a wide, clean,
+# measured gap, not a guess.
+
+func _fill_rect_with_color(image: Image, rect: Rect2i, color: Color) -> void:
+	for y in range(rect.position.y, rect.position.y + rect.size.y):
+		for x in range(rect.position.x, rect.position.x + rect.size.x):
+			image.set_pixel(x, y, color)
+
+
+## A small (well under SPECKLE_MAX_COMPONENT_PIXELS), isolated pale blob
+## surrounded by saturated drawing colour -- the measured shape of the real
+## speckle artifact -- must be replaced by its surroundings.
+func test_despeckle_removes_a_small_isolated_pale_blob():
+	var image := Image.create(60, 60, false, Image.FORMAT_RGBA8)
+	_fill_rect_with_color(image, Rect2i(0, 0, 60, 60), Color(0.2, 0.5, 0.15, 1.0)) # saturated leaf green
+	var pale := Color(0.85, 0.82, 0.78, 1.0)
+	var blob := Rect2i(28, 28, 4, 4) # 16px, far under the threshold
+	_fill_rect_with_color(image, blob, pale)
+	var result := CompositeSheetSlicer.despeckle(image)
+	for y in range(blob.position.y, blob.position.y + blob.size.y):
+		for x in range(blob.position.x, blob.position.x + blob.size.x):
+			var c := result.get_pixel(x, y)
+			var luminance := (c.r + c.g + c.b) / 3.0
+			assert_true(
+				luminance < CompositeSheetSlicer.HALO_LUMINANCE or c.s > CompositeSheetSlicer.HALO_MAX_SATURATION,
+				"a small isolated pale blob at (%d,%d) should be replaced by its saturated surroundings" % [x, y]
+			)
+
+
+## The safety this must not cost: a large pale patch -- standing in for real
+## content like a snow-covered bough -- must survive completely untouched,
+## unlike `aggressive`'s own iterate-to-convergence erosion (see the doc
+## comments on that mechanism above, and its own safety test).
+func test_despeckle_leaves_a_large_pale_patch_alone():
+	var image := Image.create(60, 60, false, Image.FORMAT_RGBA8)
+	_fill_rect_with_color(image, Rect2i(0, 0, 60, 60), Color(0.2, 0.5, 0.15, 1.0))
+	var pale := Color(0.85, 0.82, 0.78, 1.0)
+	# 400px -- well past SPECKLE_MAX_COMPONENT_PIXELS, standing in for a real
+	# large pale feature.
+	_fill_rect_with_color(image, Rect2i(20, 20, 20, 20), pale)
+	var result := CompositeSheetSlicer.despeckle(image)
+	var c := result.get_pixel(30, 30) # dead centre of the patch
+	var luminance := (c.r + c.g + c.b) / 3.0
+	assert_true(
+		luminance >= CompositeSheetSlicer.HALO_LUMINANCE and c.s <= CompositeSheetSlicer.HALO_MAX_SATURATION,
+		"a real pale feature this large must survive despeckling untouched"
+	)
+
+
+## The real regression this whole section exists for: pine's leaf and
+## turning/autumn frames (turning named specifically in the report) measured
+## real pale speckle blobs up to 61px before this fix, clearly visible
+## in-game as white speckles between foliage clusters. After despeckling, no
+## pale connected component at or under SPECKLE_MAX_COMPONENT_PIXELS may
+## survive -- every one of them should have been replaced.
+func test_real_pine_frames_no_longer_carry_a_speckle_blob():
+	var sheet := SpriteSheetLoader.load_image("res://assets/sprites/trees/composite_pine.png")
+	var regions := CompositeSheetSlicer.regions_in(sheet)
+	var band_bottom: int = regions[0].position.y + regions[0].size.y
+	var canopy: Array = []
+	for region in regions:
+		if region.position.y < band_bottom:
+			canopy.append(region)
+	assert_gte(canopy.size(), 4, "expected at least the four season canopy frames")
+	for index in [2, 3]: # leaf, turning/autumn -- the two frames the speckle was measured on
+		var cut: Image = CompositeSheetSlicer.cut_out(sheet, canopy[index], false)
+		assert_eq(
+			_largest_pale_component(cut), 0,
+			"canopy frame %d should carry no surviving small pale speckle blob" % index
+		)
+
+
+## The size (in pixels) of the largest pale connected component in `piece`
+## that is still at or under SPECKLE_MAX_COMPONENT_PIXELS -- 0 if none survive
+## (the expected post-despeckle state; see despeckle's own doc comment for why
+## anything larger is real content, not a speckle, and is left alone on
+## purpose).
+func _largest_pale_component(piece: Image) -> int:
+	var wide := piece.get_width()
+	var high := piece.get_height()
+	var is_pale := {}
+	for y in high:
+		for x in wide:
+			var c := piece.get_pixel(x, y)
+			if c.a <= 0.0:
+				continue
+			var luminance := (c.r + c.g + c.b) / 3.0
+			if luminance >= CompositeSheetSlicer.HALO_LUMINANCE and c.s <= CompositeSheetSlicer.HALO_MAX_SATURATION:
+				is_pale[Vector2i(x, y)] = true
+
+	var visited := {}
+	var largest := 0
+	for start in is_pale:
+		if visited.has(start):
+			continue
+		var size := 0
+		var queue: Array[Vector2i] = [start]
+		visited[start] = true
+		while not queue.is_empty():
+			var at: Vector2i = queue.pop_back()
+			size += 1
+			for dy in [-1, 0, 1]:
+				for dx in [-1, 0, 1]:
+					if dx == 0 and dy == 0:
+						continue
+					var next := Vector2i(at.x + dx, at.y + dy)
+					if visited.has(next) or not is_pale.has(next):
+						continue
+					visited[next] = true
+					queue.append(next)
+		if size <= CompositeSheetSlicer.SPECKLE_MAX_COMPONENT_PIXELS:
+			largest = maxi(largest, size)
+	return largest
