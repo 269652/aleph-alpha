@@ -93,6 +93,22 @@ const _RECIPES := {
 		"inputs": [{"item_id": "iron_ingot", "count": 1}],
 		"output": {"item_id": "iron_boots", "count": 1},
 	},
+	# Starting kit (see docs/concept/starting_kit.md): both previously had NO
+	# recipe anywhere in this book -- reachable only via /give, the shop, or
+	# the old hardcoded starting-kit grant. Costed like the armor pieces just
+	# above (2 ingots sits at iron_helm's own scale) plus a stick for the
+	# hilt/haft, the same "hafted tool needs a stick" shape stone_pickaxe/
+	# crude_blade/fishing_rod/rough_compass already use. No requires_structure,
+	# matching every other iron-tier recipe here -- shaping an already-smelted
+	# ingot needs no further gate in this game.
+	"iron_sword": {
+		"inputs": [{"item_id": "iron_ingot", "count": 2}, {"item_id": "stick", "count": 1}],
+		"output": {"item_id": "iron_sword", "count": 1},
+	},
+	"iron_axe": {
+		"inputs": [{"item_id": "iron_ingot", "count": 2}, {"item_id": "stick", "count": 1}],
+		"output": {"item_id": "iron_axe", "count": 1},
+	},
 	"fishing_rod": {
 		"inputs": [{"item_id": "stick", "count": 2}, {"item_id": "plant_fibre", "count": 2}],
 		"output": {"item_id": "fishing_rod", "count": 1},

@@ -316,3 +316,46 @@ func test_no_profile_opens_a_gate_before_its_threshold_yet():
 		for drive in Ethogram.drive_profile("", plan):
 			var entry: Dictionary = Ethogram.drive_profile("", plan)[drive]
 			assert_false(entry.has("onset"), "%s.%s" % [plan, drive])
+
+
+# -- slice 4: a boldness gene raises the fear wiring's floor -----------------
+#
+# docs/concept/ethogram.md §9. Fear's wiring has always had a floor of zero
+# (any sensed predator/player registers), which is already the most-fearful
+# state possible -- there is nowhere to go MORE shy. Boldness only moves the
+# floor UP, and only past the population median: a gene at or below 0.5
+# leaves an individual reacting exactly as every land mammal always has.
+
+const Affinity = preload("res://src/gameplay/affinity.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+
+
+func test_boldness_at_or_below_the_population_median_leaves_the_fear_floor_at_zero():
+	for gene in [0.0, 0.25, Ethogram.NEUTRAL_BOLDNESS_GENE]:
+		assert_eq(Ethogram.fear_floor(gene), 0.0, "gene %.2f" % gene)
+
+
+func test_fear_floor_rises_monotonically_past_the_median():
+	var previous := 0.0
+	for step in range(1, 11):
+		var gene: float = Ethogram.NEUTRAL_BOLDNESS_GENE + step * (1.0 - Ethogram.NEUTRAL_BOLDNESS_GENE) / 10.0
+		var floor_now := Ethogram.fear_floor(gene)
+		assert_gt(floor_now, previous, "gene %.2f" % gene)
+		previous = floor_now
+
+
+## Not Affinity.proximity(0.0) (literally touching): that would put the
+## ceiling beyond any distance a running simulation actually produces,
+## making the boldest individual's fear wiring unreachable rather than
+## merely hard to reach. One tile is the reference instead -- the same
+## "right here" scale CreatureBehavior already uses to place a sensed
+## direction as a stimulus (DIRECTION_STIMULUS_DISTANCE).
+func test_the_boldest_gene_caps_the_floor_at_one_tile_away():
+	assert_almost_eq(
+		Ethogram.fear_floor(1.0), Affinity.proximity(float(TerrainRenderer.TILE_SIZE)), 0.000001
+	)
+
+
+func test_fear_floor_is_clamped_outside_the_unit_gene_range():
+	assert_eq(Ethogram.fear_floor(1.5), Ethogram.fear_floor(1.0))
+	assert_eq(Ethogram.fear_floor(-1.0), 0.0)

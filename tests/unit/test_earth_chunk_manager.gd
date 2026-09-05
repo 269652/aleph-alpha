@@ -3921,6 +3921,7 @@ func test_find_nearest_village_is_deterministic():
 
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
+const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
 
 
 ## Brings every worm in every loaded chunk to the surface, so the queries
@@ -4086,6 +4087,105 @@ func test_crushing_with_too_little_momentum_leaves_the_worm_alone():
 func test_crushing_a_worm_where_there_is_none_fails_rather_than_erroring():
 	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
 	assert_false(manager.crush_worm_at(Vector2(-9000000, -9000000), 1000000.0))
+
+
+# -- aquatic vegetation: a real food source for fish (see docs/concept/
+# aquatic_foraging.md). _load_chunk, not the slow real update() (see this
+# file's own CONTRIBUTING.md note) -- Berlin sits on the Spree's own
+# curated course (see test_a_seed_spread_sapling_cannot_root_in_a_real_
+# river_cell's own precedent), so the single chunk containing it usually
+# already has a real water cell without needing the full radius update().
+
+func _a_real_water_cell_in(chunk_coord: Vector2i) -> Vector2i:
+	for y in EarthChunkManager.CHUNK_SIZE:
+		for x in EarthChunkManager.CHUNK_SIZE:
+			var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
+			var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
+			if manager.is_river_at_global(global_x, global_y) or manager.is_lake_at_global(global_x, global_y):
+				return Vector2i(x, y)
+	return Vector2i(-1, -1)
+
+
+func test_loading_a_chunk_with_real_water_creates_a_vegetation_sim():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	if _a_real_water_cell_in(chunk_coord) == Vector2i(-1, -1):
+		pending("no real water cell in this exact chunk this seed")
+		return
+	assert_true(manager._aquatic_vegetation.has(chunk_coord), "a chunk with real water should get a vegetation sim")
+
+
+func test_loading_a_landlocked_chunk_creates_no_vegetation_sim():
+	# Far from any curated river/lake -- an arbitrary distant chunk.
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile) + Vector2i(500, 500)
+	manager._load_chunk(chunk_coord)
+	if _a_real_water_cell_in(chunk_coord) != Vector2i(-1, -1):
+		pending("this arbitrary chunk turned out to have real water -- not the landlocked case this test wants")
+		return
+	assert_false(manager._aquatic_vegetation.has(chunk_coord), "a chunk with no water should not pay for an empty sim")
+
+
+func test_vegetation_seeds_only_on_real_water_cells():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var veg: AquaticVegetation = manager._aquatic_vegetation.get(chunk_coord)
+	if veg == null:
+		pending("no water in this exact chunk this seed")
+		return
+	for cell: Vector2i in veg.get_patch_cells():
+		var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + cell.x
+		var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + cell.y
+		assert_true(
+			manager.is_river_at_global(global_x, global_y) or manager.is_lake_at_global(global_x, global_y),
+			"a vegetation patch must sit on real water"
+		)
+
+
+func test_aquatic_vegetation_near_finds_a_real_patch():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var veg: AquaticVegetation = manager._aquatic_vegetation.get(chunk_coord)
+	if veg == null or veg.get_patch_cells().is_empty():
+		pending("no real vegetation patch landed in this chunk this seed")
+		return
+	var cell: Vector2i = veg.get_patch_cells()[0]
+	var pixel := _pixel_for(chunk_coord, cell)
+	var found := manager.aquatic_vegetation_near(pixel, 2)
+	assert_gt(found.size(), 0, "a real patch underfoot should be findable")
+	var positions := []
+	for patch in found:
+		positions.append(patch["position"])
+	assert_true(positions.has(pixel))
+
+
+func test_grazing_a_real_patch_removes_it_from_the_world():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var veg: AquaticVegetation = manager._aquatic_vegetation.get(chunk_coord)
+	if veg == null or veg.get_patch_cells().is_empty():
+		pending("no real vegetation patch landed in this chunk this seed")
+		return
+	var cell: Vector2i = veg.get_patch_cells()[0]
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(manager.graze_aquatic_vegetation_at(pixel), "a fish grazing a real patch should succeed")
+	assert_false(veg.has_vegetation(cell), "and the patch is gone")
+	assert_false(manager.graze_aquatic_vegetation_at(pixel), "it cannot be grazed twice")
+
+
+func test_grazing_where_there_is_no_vegetation_fails_rather_than_erroring():
+	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
+	assert_false(manager.graze_aquatic_vegetation_at(Vector2(-9000000, -9000000)))
+
+
+func test_unloading_a_chunk_frees_its_vegetation_sim_and_sprites():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	if not manager._aquatic_vegetation.has(chunk_coord):
+		pending("no water in this exact chunk this seed")
+		return
+	manager._unload_chunk(chunk_coord)
+	assert_false(manager._aquatic_vegetation.has(chunk_coord))
+	assert_false(manager._aquatic_vegetation_sprites.has(chunk_coord))
 
 
 # -- fruit_near / take_fruit_at / try_plant_seed_at (bird endozoochory) -------

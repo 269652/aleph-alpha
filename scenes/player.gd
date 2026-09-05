@@ -125,7 +125,34 @@ const BONDED_COMPANION_TRAIL_RADIUS := TIE_RANGE
 ## attempt bumped TILE_SIZE itself -- made every tile occupy 4x the world
 ## footprint, reported as "water squares are gigantic compared to the
 ## player".
-const TARGET_TILE_SCREEN_PX := 64.0
+##
+## 83.2, not 64.0: asked directly to "zoom in 30% so trees become relatively
+## bigger", alongside shrinking the character 30% (see CharacterView.
+## TARGET_HEIGHT_FRACTION_OF_TREE) -- the two together mean everything ELSE
+## in the world (trees, terrain, other entities) reads 30% bigger on screen,
+## while the character itself ends up a net ~9% smaller (1.3 zoom * 0.7
+## character-scale), not simply back where it started. Zoom is a direct
+## magnification factor, not an inverse like a seconds-to-cover time
+## constant, so 30% more zoom is 64.0 * 1.3 = 83.2 exactly. Pinned by
+## test_camera_zoomed_in_thirty_percent_over_the_previous_tuning
+## (test_player_camera.gd), which checks the ratio rather than just the new
+## literal.
+##
+## DisplayScaling.TILE_SCREEN_PX is a SEPARATE constant that deliberately
+## stayed at 64.0 -- see its own doc comment for why (a hard pixel-perfect-
+## art-scaling constraint across resolutions, unrelated to gameplay camera
+## framing). The two happened to share one literal before this change; they
+## no longer do, and are not meant to be kept in sync by hand going forward.
+##
+## Asked directly afterward whether 83.2 could become a "whole multiplier"
+## for pixel-perfectness too: with ArtResolution.DETAIL_MULTIPLIER=2, the
+## ONLY zoom values that land every canonical resolution (720p/1080p/1440p/
+## 4K) on a whole number of screen pixels per art pixel are multiples of
+## 4.0x -- 4.0x (revert) or 8.0x (double, not 30%), nothing in between.
+## Both alternatives and the current 5.2x (2.6 screen px per art pixel,
+## non-whole but still clears test_one_art_pixel_covers_several_screen_
+## pixels's real floor) were laid out explicitly; kept 5.2x as-is.
+const TARGET_TILE_SCREEN_PX := 83.2
 ## Applied in _ready() rather than left as a bare number in player.tscn, so
 ## it's a tested constant (see test_player_camera.gd) rather than an
 ## eyeballed scene property.
@@ -688,30 +715,15 @@ func _ready() -> void:
 	# sync_hotbar) from one place, rather than at every inventory mutation.
 	inventory_changed.connect(sync_hotbar)
 
-	# Start carrying a sword AND an axe; the sword is what's held at first (so
-	# attacks land harder than fists and it looks like a weapon). The axe sits
-	# in the inventory -- equip it from the hotbar/inventory to swap what's in
-	# hand (see equip_item), which is what makes it chop trees fast (the held
-	# item alone decides attack/chop/mine effectiveness).
-	var sword := Item.new("iron_sword", "Iron Sword", "weapon", 1, 15.0)
-	inventory.add(sword, 1)
-	inventory.add(Item.new("iron_axe", "Iron Axe", "tool", 1), 1)
-	# A couple of leather pieces so the equipment paperdoll (inventory screen)
-	# is discoverable from the first minute -- click them to wear them.
-	inventory.add(_item_catalog.make("leather_helm"), 1)
-	inventory.add(_item_catalog.make("leather_chest"), 1)
-	# A fishing rod so the fishing loop is discoverable -- stand by water and
-	# press the fish key (default F).
-	inventory.add(_item_catalog.make("fishing_rod"), 1)
-	# A butterfly net and a glass bottle so the capture DSL's catch/release/
-	# bottle loop (docs/concept/capture_dsl.md) is discoverable from the
-	# first minute too -- equip the net near a flyer and press the capture
-	# key, same discoverability reasoning as the fishing rod above.
-	inventory.add(_item_catalog.make("butterfly_net"), 1)
-	inventory.add(_item_catalog.make("glass_bottle"), 1)
-	equip_item(sword)
-
-	inventory_changed.emit()
+	# No starting grant here any more -- a NEW game's kit is now the
+	# player's own choice (see grant_starter_items/docs/concept/
+	# starting_kit.md), called explicitly by World AFTER this node is in
+	# the tree (so inventory_changed above is already wired). A LOADED
+	# game's inventory comes from apply_save_dict instead, same as before.
+	# (The butterfly-net/glass-bottle capture-DSL discoverability that
+	# briefly lived in this unconditional grant is still covered: both are
+	# real StarterKit.POOL members now, so a player picks them on purpose
+	# instead of receiving them regardless of choice.)
 
 
 ## Server-authoritative movement: this node's authority is always the server
@@ -1703,6 +1715,45 @@ func equip_item(item) -> bool:
 	_character_view.equip_weapon(_item_sprite_generator.generate_texture(item.sprite_id))
 	inventory_changed.emit()
 	return true
+
+
+## Populates a brand-new character's inventory from the player's chosen
+## starter items (see docs/concept/starting_kit.md), replacing what used to
+## be a hardcoded, identical-for-everyone grant in _ready(). Called by World
+## AFTER this node is already in the tree (see World._spawn_local_singleplayer)
+## so inventory_changed's sync_hotbar connection (wired in _ready()) is
+## already live when the emit below fires. Uses this node's own
+## _item_catalog, like every other item-granting method here (cooking,
+## foraging, trading, crafting) -- no reason for this one to take a second,
+## separately-supplied catalog when the rest of the file never does.
+##
+## Mirrors the established /give pattern (World._handle_give_command)
+## exactly: has() -> make() -> inventory.add() -- an unknown id is skipped
+## rather than crashing, since a stale/hand-edited selection is a normal
+## condition to degrade from, not an error worth taking the game down over.
+##
+## Auto-equips the first WEAPON-kind choice; if none was chosen, the first
+## TOOL-kind choice instead (equip_item already accepts either kind) -- so a
+## {pickaxe, compass, lasso} pick starts holding the pickaxe, not bare-handed
+## just because nothing is literally a weapon. Bare-handed only when neither
+## kind was chosen at all: a real, intended consequence of replacing the old
+## fixed kit outright rather than adding to it.
+func grant_starter_items(item_ids: Array) -> void:
+	var first_weapon: Item = null
+	var first_tool: Item = null
+	for item_id in item_ids:
+		if not _item_catalog.has(item_id):
+			continue
+		var item := _item_catalog.make(item_id)
+		inventory.add(item, 1)
+		if first_weapon == null and item.is_weapon():
+			first_weapon = item
+		elif first_tool == null and item.kind == "tool":
+			first_tool = item
+	var to_equip := first_weapon if first_weapon != null else first_tool
+	if to_equip != null:
+		equip_item(to_equip)
+	inventory_changed.emit()
 
 
 ## Consumes one unit of a "food"-kind item from the inventory to relieve

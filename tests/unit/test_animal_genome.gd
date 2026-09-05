@@ -26,10 +26,14 @@ func test_every_named_reader_module_exists():
 		assert_true(ResourceLoader.exists(path), path)
 
 
-func test_there_is_a_receptor_gene_for_every_smell_channel_and_nothing_else_yet():
+## Slice 4 adds one non-receptor gene, boldness (a personality gene, not a
+## receptor -- see ethogram.md §9); the receptor genes are still exactly one
+## per smell channel and nothing else besides those two kinds.
+func test_the_receptor_genes_and_boldness_are_the_only_genes_so_far():
 	for channel in Ethogram.SMELL_CHANNELS:
 		assert_true(AnimalGenome.GENE_NAMES.has(Ethogram.RECEPTOR_GENE_PREFIX + channel), channel)
-	assert_eq(AnimalGenome.GENE_NAMES.size(), Ethogram.SMELL_CHANNELS.size())
+	assert_true(AnimalGenome.GENE_NAMES.has(Ethogram.BOLDNESS))
+	assert_eq(AnimalGenome.GENE_NAMES.size(), Ethogram.SMELL_CHANNELS.size() + 1)
 
 
 # -- derivation from the seed -------------------------------------------------
@@ -87,3 +91,23 @@ func test_a_seeded_genome_expresses_through_the_ethogram():
 		if absf(expressed - typical) > 0.001:
 			differs += 1
 	assert_gt(differs, 40, "almost every individual has its own nose")
+
+
+# -- slice 4: boldness, a personality gene, bell-shaped like the rest -------
+
+## Most individuals are close to the population median, and the extremes are
+## rare -- the same shape every other gene here uses (the mean of two
+## independent halves), now pinned for the one gene that isn't a receptor.
+func test_boldness_is_bell_shaped_around_the_neutral_gene():
+	var total := 0.0
+	var extreme := 0
+	var count := 0
+	for seed_value in range(1, 400):
+		var gene: float = AnimalGenome.for_seed(seed_value)[Ethogram.BOLDNESS]
+		total += gene
+		count += 1
+		if gene < 0.1 or gene > 0.9:
+			extreme += 1
+	assert_almost_eq(total / float(count), Ethogram.NEUTRAL_BOLDNESS_GENE, 0.05)
+	assert_lt(float(extreme) / float(count), 0.1, "extremes are rare")
+	assert_gt(extreme, 0, "...but they exist")

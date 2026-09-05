@@ -549,3 +549,41 @@ func test_a_partial_gain_still_opens_the_gate():
 	}))
 	assert_eq(peckish.intent, "seek_food")
 	assert_gt(peckish["score"], 0.0)
+
+
+# -- slice 4: a boldness gene raises the fear floor (docs/concept/ethogram.md §9) --
+
+## A far-off predator that a population-median individual still flees does
+## not register at all for the boldest possible individual: its fear wiring
+## requires the threat within about a tile, per Ethogram.fear_floor.
+func test_a_bold_individuals_fear_wiring_ignores_a_faint_threat_a_typical_one_flees():
+	var far_threat := [_wolf(Vector2(500, 0))]
+	var typical := behavior.decide(_context({
+		"genome": {"boldness": Ethogram.NEUTRAL_BOLDNESS_GENE}, "stimuli": far_threat,
+	}))
+	assert_eq(typical.intent, "flee", "a population-median individual still flees a distant threat")
+	var bold := behavior.decide(_context({"genome": {"boldness": 1.0}, "stimuli": far_threat}))
+	assert_ne(bold.intent, "flee", "the boldest individual does not register so faint a threat")
+
+
+## An absent genome (every pre-existing test above, and any context built
+## before this gene existed) behaves exactly as it always has: the neutral
+## gene IS the old, only, zero floor.
+func test_no_genome_at_all_behaves_exactly_like_the_neutral_gene():
+	var far_threat := [_wolf(Vector2(500, 0))]
+	assert_eq(behavior.decide(_context({"stimuli": far_threat})).intent, "flee")
+
+
+## Calling threats() before decide() has ever run must not leave the fear
+## wiring's per-individual floor stuck at its default: threats() also caches
+## the genome (it calls _receptors() too), and if the wirings array isn't
+## populated by the time that cache first warms, the floor patch lands on
+## an empty array and never gets a second chance -- a real bug this pinned,
+## not a hypothetical one (CreatureMarker calls threats() before its first
+## decide() every time).
+func test_threats_called_before_the_first_decide_still_lets_the_floor_apply():
+	var far_threat := [_wolf(Vector2(500, 0))]
+	var bold_genome := {"boldness": 1.0}
+	behavior.threats(_context({"genome": bold_genome, "stimuli": far_threat}))
+	var decision := behavior.decide(_context({"genome": bold_genome, "stimuli": far_threat}))
+	assert_ne(decision.intent, "flee", "the boldest individual still shouldn't register so faint a threat")

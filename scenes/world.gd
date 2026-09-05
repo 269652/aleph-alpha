@@ -69,6 +69,7 @@ const GithubTokenStore = preload("res://src/licensing/github_token_store.gd")
 const MainMenu = preload("res://scenes/main_menu.gd")
 const LoadingOverlay = preload("res://scenes/loading_overlay.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
+const StarterKit = preload("res://src/gameplay/starter_kit.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
@@ -464,6 +465,14 @@ var _pending_dna_stat_modifiers: Dictionary = {}
 ## docs/concept/skills.md); 0 means no creator ran, which the web reads as a
 ## neutral genome rather than as a penalty.
 var _pending_dna_seed := 0
+## The 3 items chosen in the creator's Starting Kit tab (see MainMenu,
+## docs/concept/starting_kit.md), granted to the local player on spawn --
+## replaces what used to be a hardcoded, identical-for-everyone kit. Defaults
+## to StarterKit's own always-valid default, same reasoning as _pending_class
+## defaulting to "warrior": a non-interactive launch (dedicated server,
+## --connect) that never ran the creator still spawns a coherent kit rather
+## than bare-handed.
+var _pending_starter_items: Array = StarterKit.DEFAULT_CHOICES.duplicate()
 ## Player-state persistence (see docs/concept/persistence.md) -- PlayerSave
 ## is pure I/O, WorldReset wipes EarthChunkManager's own persistence dirs.
 var _player_save := PlayerSave.new()
@@ -801,11 +810,13 @@ func _show_main_menu() -> void:
 ## spawn), so every chunk simply finds nothing left to layer on top of its
 ## deterministic base.
 func _on_menu_start_requested(
-	mode: String, chosen_class: String, appearance: Dictionary, dna_stat_modifiers: Dictionary
+	mode: String, chosen_class: String, appearance: Dictionary, dna_stat_modifiers: Dictionary,
+	starter_items: Array
 ) -> void:
 	_pending_class = chosen_class
 	_pending_appearance = appearance
 	_pending_dna_stat_modifiers = dna_stat_modifiers
+	_pending_starter_items = starter_items
 	# Read straight off the menu rather than carried on start_requested: the
 	# signal already carries this genome's stat modifiers, and the seed is the
 	# same roll's other half (see MainMenu.current_dna).
@@ -2596,6 +2607,12 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	# Food goes off in the pack too, on the same clock (see ItemStack.age).
 	_chunk_manager.step_carried_food(delta)
 	_chunk_manager.step_tall_grass(delta)
+	# Real aquatic vegetation (see EarthChunkManager.step_aquatic_vegetation,
+	# docs/concept/aquatic_foraging.md) -- mirrors step_tall_grass's own
+	# batched, GRASS_REFRESH_INTERVAL-throttled cadence immediately above,
+	# right next to it for the same reason step_wild_crops sits next to its
+	# own land-plant-growth cousin below.
+	_chunk_manager.step_aquatic_vegetation(delta)
 	# Wild carrot/potato growth + spread (see EarthChunkManager.step_wild_crops,
 	# docs/concept/wild_crops.md) -- mirrors step_tall_grass's own throttled
 	# cadence immediately above. This line was simply missing: the step
@@ -3878,6 +3895,13 @@ func _spawn_local_singleplayer() -> void:
 		_pending_appearance
 	)
 	_players.add_child(player)
+	# AFTER add_child: _ready() has just wired inventory_changed ->
+	# sync_hotbar, so the grant's own emit actually reaches something (see
+	# Player.grant_starter_items's own doc comment). Only this NEW-game path
+	# grants anything -- _spawn_local_singleplayer_from_save (the load path)
+	# is a fully separate function and gets inventory from apply_save_dict
+	# instead, untouched by this.
+	player.grant_starter_items(_pending_starter_items)
 	# So its pack ages and, once something in it turns, smells (see
 	# EarthChunkManager.register_scent_carrier).
 	_chunk_manager.register_scent_carrier(player)

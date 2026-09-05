@@ -230,14 +230,32 @@ const HEAD_TOP_Y := -(ABOVE_HIP_HEIGHT + float(LEG_SIZE.y))
 ## smears into a muddy blob that blends with the ground). Asked directly
 ## how to fix it (raise the whole character's size vs. legs specifically):
 ## raising the whole character keeps every part's proportions -- and every
-## part's own legibility, not just legs' -- consistent. 0.85 is a real
-## compromise, not a full fix: it stays deliberately short of 1.0 (as tall
+## part's own legibility, not just legs' -- consistent. 0.85 was a real
+## compromise, not a full fix: it stayed deliberately short of 1.0 (as tall
 ## as a tree) to preserve the ORIGINAL ask this constant exists for
 ## (character visibly smaller than the trees around it), which caps how far
 ## this lever alone can go -- the art itself was drawn assuming a larger
 ## viewing size than this project's tile-scale budget affords, and closing
 ## that gap the rest of the way is a real follow-up, not solved here.
-const TARGET_HEIGHT_FRACTION_OF_TREE := 0.85
+##
+## Lowered again, 0.85 -> 0.595 (30% smaller): asked directly to "make the
+## character 30% smaller and zoom in 30% so trees become relatively
+## bigger" (Player.CAMERA_ZOOM handles the zoom half). The two changes do
+## NOT cancel out on screen -- 0.7 (this) * 1.3 (zoom) = 0.91, so the
+## character reads a net ~9% smaller than before, while everything else in
+## the world (measured purely by the zoom) reads 30% bigger next to it,
+## which is the actual ask. Genuine tension with the leg-legibility fix
+## directly above: back-computed against that same measured ~5.1px (0.85-
+## era) leg content, this combination lands leg content back around
+## ~4.6px -- close to, though not quite at, the original ~4px that
+## triggered "legs are not wired." Checked with a real rendered frame
+## (Player + a full-grown TreeRenderer tree in a live SubViewport) rather
+## than trusting the arithmetic alone: the legs still read as distinct
+## armored plates with real shading and a clear boot silhouette, not the
+## smeared blob the original bug looked like -- the pixel estimate above
+## was a real, worth-checking risk, but it did not materialize (see
+## docs/progress.md for the actual image).
+const TARGET_HEIGHT_FRACTION_OF_TREE := 0.595
 
 ## Computed, not eyeballed (see CLAUDE.md): the character's own total
 ## on-screen height (feet to head-top, -HEAD_TOP_Y) times this scale must

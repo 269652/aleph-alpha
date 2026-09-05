@@ -40,8 +40,24 @@ const DESIGN_WIDTH := 1280.0
 const DESIGN_HEIGHT := 720.0
 
 ## World units per tile, and how many of those units a tile occupies on screen
-## at the design height (Player.CAMERA_ZOOM is derived from the same intent --
-## "a tile should read this big").
+## at the design height. Shared the exact same value as Player.
+## TARGET_TILE_SCREEN_PX for a long time, since both trace back to the same
+## "a tile should read this big" intent -- but they answer genuinely
+## different questions and are no longer meant to be kept in sync by hand.
+##
+## This one is load-bearing for PIXEL-PERFECT ART SCALING: is_pixel_perfect
+## needs (TILE_SCREEN_PX / (ArtResolution.DETAIL_MULTIPLIER * WORLD_TILE_SIZE))
+## to land on a whole number at every canvas scale the game actually hits
+## (1.0/1.5/2.0/3.0 for 720p/1080p/1440p/4K) -- 64.0 is the smallest value
+## that works, and the next one up is 128.0, not some 64 * 1.1-shaped
+## number. Player.TARGET_TILE_SCREEN_PX is a live GAMEPLAY framing knob with
+## no such constraint (see its own doc comment for the 2026-09-05 zoom-in-
+## 30% tuning that first pulled the two apart) -- changing it changes how
+## zoomed in the camera feels, not whether art lands on whole screen
+## pixels. Consumers of visible_tiles_across (decoration LOD, this session's
+## own snow-onset-viewport-scale fix) key off THIS constant, so they now
+## measure a slightly larger view than the real camera actually frames --
+## confirmed safe-direction (they over-provision a little, never under).
 const WORLD_TILE_SIZE := 16
 const TILE_SCREEN_PX := 64.0
 

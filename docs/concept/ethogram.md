@@ -113,11 +113,18 @@ that is what §5's gains are. The priority ladder every game AI hand-codes
 when fear's gain is large; slice 1 keeps the ladder explicit and the roadmap
 lets it fall out of the numbers.
 
-**Boldness, docility and flight distance.** `flyer_personality.gd` already
-grounds a heritable boldness in the flight-initiation-distance literature, and
-[animal_genetics.md](animal_genetics.md) §10 grounds docility's cost in
-Belyaev's foxes: a domesticated animal notices a predator later. Both are a
-gain on the same fear channel. This doc gives them one place to live.
+**Boldness and flight-initiation distance.** `flyer_personality.gd` already
+grounds a heritable boldness in the flight-initiation-distance literature —
+how close an approaching threat gets before an animal breaks and flees, the
+standard field measure of boldness across taxa because bolder individuals
+reliably have shorter ones. §8's land-mammal boldness gene is the same real
+quantity, independently derived for a different body plan rather than reusing
+that file's butterfly-specific metre constants (see §8 for why unifying the
+two outright would have been dishonest, not simplifying).
+[animal_genetics.md](animal_genetics.md) §10 separately grounds docility's
+cost in Belyaev's foxes — a domesticated animal notices a predator later —
+which is real and still unbuilt (§8): that gene does not exist yet, and this
+doc does not invent it ahead of the one that owns it.
 
 **Needs and advertisements.** The nearest game-design precedent is *The
 Sims*' motive engine: objects *advertise* what needs they satisfy, an agent
@@ -279,7 +286,7 @@ species half belongs (`flesh` valence and "ignores other hunters" are diet
 facts; the fight valence is temperament) and `CreatureInfo`'s
 `PREDATOR_SPECIES`/`TEMPERAMENT_BY_SPECIES` tables are their source today for
 all thirty species, five of which have an ethogram record. Moving them
-means moving those tables, which is the body-plan slice's job (§8); the
+means moving those tables, which is the body-plan slice's job (§9); the
 state half (health, maturity, taming, aggro) stays an override by nature.
 
 ### 4. Expression: genotype to receptors
@@ -485,9 +492,9 @@ commitment to a bite, so it ranks smells with the same kernel
 (`ScentForaging.best_source`, with the individual's genome) *inside* that
 motor program and hands the winner to `GrazerForaging` -- pillar 4, the
 caller commits. The wiring's live readers are the body plans that hunt by
-nose without a grazing bout (§8, slice 5).
+nose without a grazing bout (§9, slice 5).
 
-Order is priority in slice 1. The roadmap's version (§8, slice 4) scores
+Order is priority in slice 1. The roadmap's version (§9, slice 4) scores
 across wirings with fear's gain large enough that the ladder falls out of the
 numbers, and that ordering test is what will keep it honest when it does.
 
@@ -546,7 +553,93 @@ the flee Schmitt trigger are untouched: they are commitment, not verdict.
 The genome reaches both `decide()` and the grazing bout's smell step through
 `genome_or_derived()` (§4).
 
-### 8. Roadmap: the slices after this one
+### 8. Personality: a boldness gene
+
+A first, deliberately narrow slice of "gains as personality." The original
+plan for this slice named three things: boldness on `fear`, `docility` on a
+new `fight` gain, and the spell `FEAR`/`CALM` statuses pushing on a gain
+instead of overriding the temperament string. Building it turned up that two
+of those three don't hold up on inspection, and this doc says so rather than
+building past what the inspection found:
+
+- **`docility` does not exist.** It is one of animal_genetics.md's seven
+  specified genes, none of which are in `AnimalGenome` yet, and that doc — not
+  this one — owns when a gene is introduced (§1's own reader rule). Inventing
+  it here, ahead of that doc's own domestication mechanism (§10, the thing
+  that would actually make docility *move* over generations), would be this
+  doc reaching into a neighbour's job for a gene with nothing to select it.
+- **The spell mechanism was never broken.** `CreatureMarker._temperament_for_decision`
+  already overrides `context["temperament"]` correctly for the duration of a
+  `FEAR`/`CALM` debuff, and three passing tests already prove it. "Push a
+  gain instead of swapping a string" was a cleanliness preference, not a
+  fix for wrong behaviour, and TDD only licenses touching working, tested code
+  when a failing test demands it — there wasn't one.
+
+What remains, and what actually shipped: a **boldness gene**, land-mammal
+specific, that raises the *floor* the fear wiring's score must clear before
+it fires at all. Boldness is not a `fear` gate multiplier — a multiplier
+scales the *score*, and under first-match arbitration any nonzero score still
+wins outright regardless of magnitude, so a multiplier alone would be exactly
+the dead-weight gene animal_genetics.md's pillar 2 forbids. A *floor*, the
+same mechanism the smell wiring already uses for its interest threshold (§6),
+genuinely gates whether the wiring fires:
+
+```gdscript
+Ethogram.NEUTRAL_BOLDNESS_GENE := 0.5
+Ethogram.BOLDEST_FEAR_FLOOR := 1.0 / (1.0 + TerrainRenderer.TILE_SIZE)  # = Affinity.proximity(one tile)
+
+static func fear_floor(gene: float) -> float:
+    if gene <= NEUTRAL_BOLDNESS_GENE: return 0.0
+    return (gene - NEUTRAL_BOLDNESS_GENE) / (1.0 - NEUTRAL_BOLDNESS_GENE) * BOLDEST_FEAR_FLOOR
+```
+
+Two things about this are load-bearing, not incidental. **Zero at or below
+the median.** The mammal ladder's fear wiring has always had a floor of zero
+— every sensed predator or player registers, which is already the *most*
+fearful state a floor can express; there is nowhere to go more shy. So the
+gene only ever raises the floor, and only past 0.5, which means every
+individual at or below the population median behaves *exactly* as every land
+mammal always has — the regression bar (all pre-existing `CreatureBehavior`
+and `CreatureMarker` tests) holds by construction, not by exemption.
+**The ceiling is one tile, not zero distance.** `Affinity.proximity(0.0) =
+1.0` looks like the natural cap — the kernel's own theoretical maximum score
+for a stimulus of this pull magnitude — but capping there makes the boldest
+individual's floor *unreachable at any distance a running simulation actually
+produces* (a marker's own position is never exactly zero pixels from
+another's), which is a difference between "rare" and "impossible" that
+matters. `TerrainRenderer.TILE_SIZE` — the same "right here" reference
+`CreatureBehavior.DIRECTION_STIMULUS_DISTANCE` already uses to place a sensed
+direction as a stimulus — gives a real, reachable, still-demanding ceiling:
+the boldest individual's own fear wiring requires a predator within about a
+tile before it fires at all.
+
+This is deliberately **not** a re-derivation of `FlyerPersonality`'s flight
+initiation distance, despite that earlier being the plan. Butterflies and
+land mammals are different body plans with no shared infrastructure yet
+(slice 5's job), and `FlyerPersonality`'s metre constants (3.0m shyest, 0m
+boldest) are butterfly-specific measurements with no grounding for a boar or
+a deer — reusing them verbatim would have been dishonest, not unifying.
+What *is* shared is the shape: most individuals near the population median,
+rare bold outliers, the same "mean of two independent halves" distribution
+`AnimalGenome` already gives every gene — a real analogy to
+`FlyerPersonality`'s own reasoning, named as an analogy rather than claimed
+as the same number.
+
+**The reader.** `CreatureBehavior._apply_boldness_floor` patches the cached
+fear wiring's `floor` field on genome change, the same per-instance mutation
+`Ethogram.wirings_for`'s deep copy makes safe (§6). Wiring it up surfaced a
+real, independent bug worth recording here because it will bite the next
+gain-based gate too: `CreatureMarker` calls `CreatureBehavior.threats()`
+every sensing tick *before* `decide()` ever runs for a fresh instance, and
+`threats()` shares `decide()`'s genome-change cache without itself ensuring
+the wirings array exists — so the floor patched an empty array on that first
+call, and with the genome now marked "seen," the cache never gave it a
+second chance. Fixed by having both entry points share one
+`_ensure_wirings()` guard; pinned directly
+(`test_threats_called_before_the_first_decide_still_lets_the_floor_apply`),
+not just by the boldness tests that happened to expose it.
+
+### 9. Roadmap: the slices after this one
 
 Each is its own red-first pass with its own status entries here.
 
@@ -568,20 +661,35 @@ Each is its own red-first pass with its own status entries here.
   Deliberately not done: no profile sets an `onset`, so every gain is still
   the step its tests pin -- a ramp only makes sense once wirings are scored
   against each other (slice 4).
-- ⬜ **Slice 4, gains as personality.** Baseline gains per individual from the
-  genome: `boldness` on `fear` (re-deriving `FlyerPersonality`'s flight
-  initiation distance and `animal_husbandry.md`'s composed flight radius from
-  the same number), temperament and `docility` on a `fight` gain, the spell
-  `FEAR`/`CALM` statuses as a temporary push. With fear's gain large the
-  ladder falls out of cross-wiring scoring, and the ordering test keeps it
-  honest.
-- ⬜ **Slice 5, the other body plans.** `bird`, `insect`, `fish`, `villager`
-  ethograms whose wirings select the existing motor programs
-  (`GroundForageBehavior`, `PiscivoreBirdBehavior`, `PollinatorForaging`,
-  `CarrionForageBehavior`, `AntForageBehavior`, `NpcEconomy`) by body plan.
-  The NPC instruction DSL becomes the player-facing dialect: a rule such as
-  `if need_above(hunger, 0.7): gather(berries)` is a wiring override on the
-  villager ethogram, evaluated by the same first-match kernel.
+- ✅ **Slice 4, a boldness gene** (2026-09-05), narrower than originally
+  planned — see §8 for the full account and why. A land-mammal `boldness`
+  gene raises the fear wiring's *floor* (not its gain — a gain alone is
+  dead weight under first-match arbitration), zero at or below the
+  population median, capped at one tile away for the boldest possible
+  individual. Deliberately not done, and why: `docility` on a fight gain
+  (no docility gene exists; that gene is animal_genetics.md's to introduce);
+  the spell `FEAR`/`CALM` mechanism (already correct, no failing test
+  motivated touching it); cross-wiring scoring (turned out unnecessary — a
+  floor works entirely within first-match ordering). A real ordering bug
+  surfaced and got fixed along the way: `threats()` must ensure the cached
+  wirings exist before touching the genome-change cache, same as `decide()`.
+- 🚧 **Slice 5, the other body plans — investigated (2026-09-05), none of
+  the five original pieces shipped, each for a specific, checked reason.**
+  Written up in full in §10 below; the short version: `fish`, `villager`,
+  and the ant/carrion-bug "insect" role have no *multi-drive* decision
+  surface a wiring ladder would consolidate (each has exactly one
+  behaviour, or none at all), the ant/carrion-bug case is a **deliberate**
+  design decision this doc nearly contradicted, and `bird`/true-insect
+  (ambient flyers) *does* have a real, rich, wiring-shaped ladder but sits
+  inside a single 3000+-line, already-correct, bug-history-laden function
+  that converting safely would need as its own dedicated pass, not a
+  sub-task here. The instruction-DSL-as-wiring-dialect idea does not
+  survive either, for a different reason: it and the kernel solve genuinely
+  different problems (boolean rule authoring vs. vector-scored perception)
+  that share only a family resemblance, not an implementation worth
+  merging. Nothing shipped that this doc's own pillar 7 wouldn't back up —
+  no code was written without a red test to drive it, and none of these
+  had one.
 - ⬜ **Slice 6, mate choice.** An individual's displayed phenotype
   (`AnimalFitness.phenotype_for`) is a stimulus on display channels; a
   species' preference vector is [evolution.md](evolution.md)'s drifting
@@ -593,6 +701,94 @@ Each is its own red-first pass with its own status entries here.
   against immune memory; a drug's binding vector against a pathogen). That is
   a separate doc extending [disease.md](disease.md), and the only reason
   `affinity.gd` is its own file rather than a corner of the kernel.
+
+### Slice 5 investigation: why the other body plans didn't convert
+
+Slice 5's original wording promised four body-plan ethograms plus the
+instruction DSL as a kernel dialect, in one pass. Checking each against the
+actual code found that none of the five survive, for five *different*
+reasons — worth recording in that much detail, because "it didn't work out"
+would hide that these are real, checked findings, not a shrug.
+
+**Fish, villagers, and ants/carrion bugs have no *multi-drive* decision to
+consolidate.** The wiring ladder's whole value is arbitrating between
+several needs that can each win, which is what makes "a species is data"
+actually mean something (§1's own test is three species sharing *one*
+wiring). None of these three has that:
+
+- `FishMarker` never decides to flee on its own. `bolt_from(threat)` exists,
+  but it is called *by something else that already decided* — the
+  kingfisher's strike, the player's catch — not by a fish sensing a threat
+  and choosing. There is nothing here for a wiring to arbitrate.
+- `NpcMarker`'s only "decision" is which `location_tag` a schedule entry (or
+  an instruction override) resolves to — a lookup, not an approach/avoid
+  choice. Hunger does not drive *navigation* at all: `NpcEconomy.step`
+  resolves it as a transaction (self-feed while working, or buy from the
+  market) wherever the NPC's schedule already has it standing, not by
+  walking toward a sensed source of food. There is no stimulus for a
+  wiring to rank.
+- `DecomposerMarker._nearest_food` picks among Carcass/CarcassGuts/fallen
+  fruit/leaf-litter by effective distance (`CarrionForageBehavior.
+  effective_distance`, fly-count discounted) — genuinely `Affinity.
+  proximity`-shaped, and a real candidate for reusing
+  `BehaviorKernel.best_stimulus` as a plain ranking-code dedup. But there is
+  no second drive competing with it (no flee, no thirst, no courtship
+  modelled at this tier at all), so converting it would be pure refactor —
+  and CLAUDE.md's own rule is explicit that refactoring is licensed by a
+  passing test needing to stay green, not by architectural symmetry alone.
+  There was no failing test asking for this.
+
+**Ants and carrion bugs are the sharper case: their marker's own header
+already explains why they have no threat response, on purpose.**
+`decomposer_marker.gd`'s doc comment states it directly — deliberately
+*not* built on `CreatureMarker`/`CreatureInfo`, because that stack is "a
+full roaming-wildlife AI (flee/fight/hunt/graze/mate/ecosystem population
+tracking), the wrong shape for a tiny insect whose entire behaviour is
+'find food, eat it, wander otherwise'." Giving decomposers a fear wiring
+would not fill a gap; it would reverse a considered, stated, load-bearing
+design decision, for a creature this project runs by the hundred. That is
+worth refusing on its own, independent of the "no second drive" finding
+above.
+
+**Ambient flyers (bird and true insect) *do* have a real, rich,
+wiring-shaped ladder — and that is exactly why converting it is a bigger
+job than this slice, not a smaller one.** `AmbientFlyerMarker._process` has
+an explicit, named, eight-tier precedence order (flee the player outranks
+everything, down through pair interactions, foraging, and wander) that is
+genuinely the mammal ladder's shape for a different body plan. But reading
+`_step_player_reaction` — the ~90-line function that would have to become
+the fear wiring's floor computation — found it is not a stateless
+scoring decision at all: it is a hand-tuned state machine carrying escape
+release hysteresis, a flee/dance mutual-exclusion invariant with its own
+regression test, pair-interaction abandonment side effects, and a
+"standing exactly on the target" degenerate case the file's own comment
+says has been fixed three times already. Pillar 4 draws the line
+deliberately: the kernel ranks, the caller commits, and commitment logic
+this dense and this bug-scarred belongs to the caller. Converting it
+without breaking any of that would be its own careful, dedicated pass —
+not a quarter of a slice alongside three other body plans that turned out
+to need nothing at all.
+
+**The instruction DSL and the kernel are not the same shape, and forcing
+them together would not be a simplification.** Both `BehaviorKernel.decide`
+and `NpcInstructionEvaluator.evaluate` are first-match ordered-rule
+evaluators — that resemblance is real. But a wiring's condition is a
+*vector score* (features · sensitivity · valence, ranked across several
+candidate stimuli) and an instruction's condition is a *boolean primitive*
+(`inventory_at_least`, `need_above`) evaluated once against a flat frame;
+a wiring's outcome is a fixed intent vocabulary with a heading, and an
+instruction's is an arbitrary action descriptor (`haul(item,
+destination_tag)`, `gather(resource_tag)`). Routing one through the other
+would mean either stripping the kernel's scoring for a system that never
+needed it, or forcing the instruction DSL's simple booleans through vector
+machinery that buys it nothing. The two sharing an algorithmic *silhouette*
+without sharing an implementation is the honest state of things, not a gap.
+
+None of this changes the roadmap's shape going forward: ambient flyers are
+still the real next body plan, now correctly sized as its own slice rather
+than a quarter of this one; fish, villagers, and ants/carrion bugs are
+reclassified from "not yet built" to "correctly has no wiring to build,"
+which is a real, checked conclusion and not merely an absence.
 
 ## Which doc owns what
 
@@ -679,7 +875,30 @@ personalities that are numbers a breeder can select on.
 - ⬜ A drive with an `onset` (a live ramp); the player's meters.
 - ⬜ Grazing bites as stimuli; the species half of the adapter overrides in
   the species record; a `conspecific` feature (§2, §3).
-- ⬜ Slices 4 to 6 above, each untouched.
+- ✅ Slice 4 (§8): `Ethogram.BOLDNESS`/`NEUTRAL_BOLDNESS_GENE`/
+  `BOLDEST_FEAR_FLOOR`/`fear_floor`; `AnimalGenome.GENE_NAMES` gains
+  `boldness`, bell-shaped like every other gene; `CreatureBehavior.
+  _apply_boldness_floor` patching the cached fear wiring per individual;
+  `_ensure_wirings()` shared by `decide()` and `threats()`, fixing a real
+  ordering bug threats-before-first-decide exposed. 8 new/changed tests
+  (`test_ethogram.gd` +4, `test_animal_genome.gd` +1 changed +1 new,
+  `test_creature_behavior.gd` +3, `test_creature_marker.gd` +2); full
+  affected regression (534 tests across every touched suite) green.
+- ⬜ Docility on a fight gain (no gene yet — animal_genetics.md's to
+  introduce); the spell `FEAR`/`CALM` mechanism as a gain push (reconsidered
+  — already correct, no failing test); cross-wiring scoring (turned out
+  unnecessary for slice 4 — a floor works entirely within first-match
+  ordering; still open for slice 5+ if a later gain genuinely needs it).
+- 🚧 Slice 5 investigated, nothing shipped, five specific findings recorded
+  (see "Slice 5 investigation" under the roadmap): no wiring built for
+  fish/villager/ant-carrion-bug (each has no multi-drive decision to
+  arbitrate, and ants/carrion bugs are a deliberate no-flee design, not a
+  gap); ambient flyers correctly re-scoped as their own future slice
+  (a real ladder, inside a state machine too dense to convert alongside
+  three other body plans that turned out to need nothing); the
+  instruction-DSL-as-wiring-dialect idea not built, for a shape mismatch
+  (vector-scored ranking vs. boolean rule authoring) rather than time.
+- ⬜ Slice 6 above, untouched.
 
 *Coverage note: every mechanism in this list is a pure module with a headless
 unit test. Nothing here is exercised by an integration test against a live
@@ -698,10 +917,14 @@ thing to one.*
   kernel ranks by a unit-free proximity. When vision and hearing get ranges,
   are those the sense's (as now) or does the kernel take a per-channel
   falloff?
-- **Where does commitment live once scoring is continuous?** Today the caller
-  commits (grazing approach, flee hysteresis). If slice 4's cross-wiring
-  scoring can flip intents tick to tick, the kernel may need a small
-  hysteresis of its own, which pillar 4 currently forbids it.
+- **Where does commitment live if cross-wiring scoring is ever built?** Still
+  open, and now genuinely deferred rather than merely unscheduled: slice 4
+  found a floor sufficient for boldness and never needed to replace
+  first-match ordering. If a later gain genuinely can't be expressed as a
+  floor and cross-wiring scoring is finally built, the caller still commits
+  today (grazing approach, flee hysteresis) — continuous scoring flipping
+  intents tick to tick would need a small hysteresis of its own, which
+  pillar 4 currently forbids the kernel.
 - **Receptor genes: one per channel, or fewer loci with pleiotropy?** One per
   channel is honest to receptor biology and cheap; it also means ten genes
   before any of them is visible in a panel. animal_genetics.md's reader rule

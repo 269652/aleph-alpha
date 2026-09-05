@@ -70,6 +70,8 @@ const TundraLichen = preload("res://src/world/tundra_lichen.gd")
 const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sprite.gd")
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
+const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
+const ProceduralAquaticVegetationSprite = preload("res://src/rendering/procedural_aquatic_vegetation_sprite.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
 const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
@@ -643,6 +645,16 @@ var _lichen_refresh_accumulator := 0.0
 var _worm_patches: Dictionary = {}
 var _worm_sprites: Dictionary = {}
 var _worm_sprite_generator := ProceduralWormSprite.new()
+## Vector2i chunk_coord -> AquaticVegetation, and the Sprite2D per real
+## vegetation cell (see step_aquatic_vegetation/_sync_aquatic_vegetation_
+## sprites, docs/concept/aquatic_foraging.md). Only chunks that actually
+## contain water get an entry -- the same "don't allocate a sim for a
+## chunk with nothing for it to do" discipline EarthwormPatch's own
+## soil-biome gate already uses.
+var _aquatic_vegetation: Dictionary = {}
+var _aquatic_vegetation_sprites: Dictionary = {}
+var _aquatic_vegetation_sprite_generator := ProceduralAquaticVegetationSprite.new()
+var _aquatic_vegetation_refresh_accumulator := 0.0
 ## Vector2i chunk_coord -> AntColony (see step_ants, docs/concept/soil_fauna.md
 ## "Ants").
 var _ant_colonies: Dictionary = {}
@@ -3333,9 +3345,11 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 			# handful of loaded forests).
 			#
 			# FRUITING_DETAIL_RADIUS already covers the full visible
-			# viewport (1280x720 screen / Player.CAMERA_ZOOM's 4x zoom =
-			# 320x180 world px, half-diagonal ~183.6px, comfortably inside
-			# 280px), so nothing actually on screen is skipped -- and
+			# viewport (1280x720 screen / Player.CAMERA_ZOOM's 5.2x zoom,
+			# raised from 4x on 2026-09-05 =~ 246x138 world px, half-diagonal
+			# ~141px, comfortably inside 280px -- more margin than before, a
+			# bigger zoom only shrinks the real visible world further), so
+			# nothing actually on screen is skipped -- and
 			# because FruitingModel.state_at is a PURE function of elapsed
 			# world time rather than a running simulation, a skipped tree is
 			# not frozen: it simply shows the correct catch-up ripeness the
@@ -4765,10 +4779,12 @@ func set_sun_position(elevation_deg: float, azimuth_deg: float) -> void:
 ## rain rendered fine while movement wakes stayed invisible.
 ##
 ## Sized to just past the visible screen: at TARGET_TILE_SCREEN_PX the view
-## spans roughly 20x11 tiles, so this covers it with margin while excluding
-## the ~25 loaded chunks' worth of fish that would otherwise crowd it out. A
-## first attempt at 40 was still far too generous -- it admitted several
-## hundred off-screen fish and the wakes stayed invisible.
+## spanned roughly 20x11 tiles when this was measured (since narrowed to
+## ~15.4x8.65 by a later camera zoom-in, only widening this constant's own
+## margin), so this covers it with margin while excluding the ~25 loaded
+## chunks' worth of fish that would otherwise crowd it out. A first attempt
+## at 40 was still far too generous -- it admitted several hundred
+## off-screen fish and the wakes stayed invisible.
 const DISTURBANCE_RADIUS_TILES := 14
 
 
@@ -5248,6 +5264,28 @@ func step_tall_grass(delta_seconds: float) -> void:
 	_graze_by_herbivores()
 	for chunk_coord in _grass_sims.keys():
 		_sync_grass_sprites(chunk_coord)
+
+
+## Mirrors step_tall_grass's own batched-refresh shape exactly (real growth
+## every call is unnecessary work at 60fps to resolve 0.01/second of
+## change -- see that function's own doc comment) -- reuses the identical
+## GRASS_REFRESH_INTERVAL throttle rather than a redundant third constant
+## for the identical "plant growth/sprite refresh" concept
+## step_worms/step_ants already reuse WORM_REFRESH_INTERVAL for in their
+## own turn.
+func step_aquatic_vegetation(delta_seconds: float) -> void:
+	_aquatic_vegetation_refresh_accumulator += delta_seconds
+	if _aquatic_vegetation_refresh_accumulator < GRASS_REFRESH_INTERVAL:
+		return
+	var elapsed := _aquatic_vegetation_refresh_accumulator
+	_aquatic_vegetation_refresh_accumulator = 0.0
+
+	var growth_modifier := _season_cycle.growth_modifier(_world_age_seconds)
+	for veg in _aquatic_vegetation.values():
+		veg.advance(elapsed, growth_modifier)
+
+	for chunk_coord in _aquatic_vegetation.keys():
+		_sync_aquatic_vegetation_sprites(chunk_coord)
 
 
 ## The `accelerate_growth` spell atom's real hook (see docs/concept/
@@ -6758,6 +6796,51 @@ func take_worm_at(pixel_position: Vector2) -> bool:
 	return true
 
 
+## Every real aquatic vegetation patch within `radius_tiles` of
+## `pixel_position` -- mirrors worms_near's own exact shape (a 3x3
+## chunk-neighbourhood scan, the same margin every other per-chunk
+## near-query in this file already uses so a query near a chunk boundary
+## still sees patches just across it).
+func aquatic_vegetation_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
+	var out: Array = []
+	var center := _world_tile_for_pixel(pixel_position)
+	var center_chunk := _chunk_coord_for_tile(center)
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var chunk_coord := center_chunk + Vector2i(dx, dy)
+			var veg: AquaticVegetation = _aquatic_vegetation.get(chunk_coord)
+			if veg == null:
+				continue
+			var origin := chunk_coord * CHUNK_SIZE
+			for cell in veg.get_patch_cells():
+				var tile: Vector2i = origin + cell
+				if maxi(absi(tile.x - center.x), absi(tile.y - center.y)) > radius_tiles:
+					continue
+				out.append({
+					"position": Vector2(
+						float(tile.x) + 0.5, float(tile.y) + 0.5
+					) * float(TerrainRenderer.TILE_SIZE),
+				})
+	return out
+
+
+## Grazes the vegetation patch at `pixel_position`, if there is one --
+## mirrors take_worm_at's own exact shape (same tile/chunk/sim lookup,
+## same immediate _sync re-sync so a grazed patch doesn't visibly linger
+## for up to GRASS_REFRESH_INTERVAL more seconds after the fish that ate
+## it already moved on).
+func graze_aquatic_vegetation_at(pixel_position: Vector2) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var veg: AquaticVegetation = _aquatic_vegetation.get(chunk_coord)
+	if veg == null:
+		return false
+	if not veg.graze(tile - chunk_coord * CHUNK_SIZE):
+		return false
+	_sync_aquatic_vegetation_sprites(chunk_coord)
+	return true
+
+
 ## Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
 ## weight-emergent worm mortality") -- mirrors take_worm_at's own shape
 ## exactly (same tile/chunk/patch lookup, same immediate re-sync so a
@@ -7345,6 +7428,46 @@ func _sync_worm_sprites(chunk_coord: Vector2i) -> void:
 		)
 		_ground_decor_parent.add_child(sprite)
 		sprites[cell] = sprite
+
+
+## Mirrors _sync_worm_sprites' own exact shape -- a real vegetation patch
+## has no "surfacing" state to gate on (see AquaticVegetation's own doc
+## comment: initial seeding starts every patch already mature), so the
+## only diff here is has_vegetation itself, not a threshold.
+func _sync_aquatic_vegetation_sprites(chunk_coord: Vector2i) -> void:
+	if not _decorates(chunk_coord):
+		_drop_decoration(_aquatic_vegetation_sprites, chunk_coord)
+		return
+	var veg: AquaticVegetation = _aquatic_vegetation.get(chunk_coord)
+	var sprites: Dictionary = _aquatic_vegetation_sprites.get(chunk_coord, {})
+	if veg == null:
+		return
+
+	for cell in sprites.keys().duplicate():
+		if not veg.has_vegetation(cell):
+			sprites[cell].free()
+			sprites.erase(cell)
+
+	var origin := chunk_coord * CHUNK_SIZE
+	for cell in veg.get_patch_cells():
+		if sprites.has(cell):
+			continue
+		var sprite := Sprite2D.new()
+		sprite.texture = _aquatic_vegetation_sprite_generator.generate_texture(
+			hash("%d_%d_aquatic_vegetation" % [origin.x + cell.x, origin.y + cell.y])
+		)
+		# World scale from a world-space constant, never re-derived from
+		# the art canvas -- the same "raising SIZE for detail must not
+		# change how big it looks" trap this project has already hit
+		# twice (see ProceduralWormSprite's own identical doc comment).
+		sprite.scale = Vector2.ONE * ProceduralAquaticVegetationSprite.world_scale()
+		sprite.position = Vector2(
+			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
+			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+		)
+		_ground_decor_parent.add_child(sprite)
+		sprites[cell] = sprite
+	_aquatic_vegetation_sprites[chunk_coord] = sprites
 
 
 ## Plants carried seed at a world position, if anything can grow there (see
@@ -9232,6 +9355,21 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_grass_sprites[chunk_coord] = {}
 	_sync_grass_sprites(chunk_coord)
 
+	# Aquatic vegetation (see AquaticVegetation, docs/concept/
+	# aquatic_foraging.md "Aquatic Foraging") -- only chunks that actually
+	# contain water get a real sim, the same "don't allocate a sim for a
+	# chunk with nothing for it to do" discipline EarthwormPatch's own
+	# soil-biome gate already uses. Reuses the IDENTICAL is_river-OR-is_lake
+	# mask TallGrass reads just above to keep grass OUT of the water, as an
+	# INCLUSION filter instead.
+	var water_mask := _ground_cover_blockers(chunk)
+	if water_mask.has(1):
+		_aquatic_vegetation[chunk_coord] = AquaticVegetation.new(
+			hash("%d_%d_aquatic_vegetation" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, water_mask
+		)
+		_aquatic_vegetation_sprites[chunk_coord] = {}
+		_sync_aquatic_vegetation_sprites(chunk_coord)
+
 	var crop_sims := {}
 	var crop_markers := {}
 	for crop_id in WILD_CROP_IDS:
@@ -9907,6 +10045,11 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		sprite.free()
 	_worm_sprites.erase(chunk_coord)
 	_worm_patches.erase(chunk_coord)
+
+	for sprite in _aquatic_vegetation_sprites.get(chunk_coord, {}).values():
+		sprite.free()
+	_aquatic_vegetation_sprites.erase(chunk_coord)
+	_aquatic_vegetation.erase(chunk_coord)
 
 	_ant_colonies.erase(chunk_coord)
 	for marker in _ant_mound_markers.get(chunk_coord, []):

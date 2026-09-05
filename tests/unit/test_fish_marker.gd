@@ -9,6 +9,7 @@ const FishMarker = preload("res://src/rendering/fish_marker.gd")
 const CreatureWander = preload("res://src/rendering/creature_wander.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
 const FishSchooling = preload("res://src/gameplay/fish_schooling.gd")
+const FishForaging = preload("res://src/gameplay/fish_foraging.gd")
 
 const TILE_SIZE := 16
 
@@ -41,6 +42,23 @@ class RiverWorld:
 		return false
 	func river_current_at_global(_x: int, _y: int) -> Dictionary:
 		return {"direction": Vector2.RIGHT, "speed_m_s": current_speed}
+
+
+## Ocean everywhere (see StubWorld), plus a fixed, test-controlled set of
+## aquatic-vegetation candidates -- lets a test steer a fish toward a known
+## target and confirm arrival grazes it, mirroring EarthChunkManager's own
+## aquatic_vegetation_near/graze_aquatic_vegetation_at shape exactly without
+## needing a real chunk/patch-sim underneath.
+class VegetationWorld:
+	extends StubWorld
+	var patches: Array = []
+	var grazed: Array = []
+	var graze_result := true
+	func aquatic_vegetation_near(_pixel_position: Vector2, _radius_tiles) -> Array:
+		return patches
+	func graze_aquatic_vegetation_at(pixel_position: Vector2) -> bool:
+		grazed.append(pixel_position)
+		return graze_result
 
 
 func test_a_fish_swims_in_a_river_whose_biome_is_land():
@@ -975,4 +993,124 @@ func test_bolting_ignores_an_active_play_chase():
 	marker._process(0.5)  # stays inside BOLT_SECONDS (0.9), still snaps the heading
 
 	assert_almost_eq(marker._current_heading.x, 0.0, 1e-3, "bolting should override an in-progress play chase too")
+	assert_almost_eq(marker._current_heading.y, -1.0, 1e-3)
+
+
+# -- foraging: the new bottom tier, above wander but below everything else --
+#
+# See docs/concept/aquatic_foraging.md's "FishMarker wiring": a real nearby
+# vegetation patch (EarthChunkManager.aquatic_vegetation_near) is sought and
+# steered toward exactly where the priority chain used to fall straight
+# through to plain wander -- every state above it (bolt, attraction, play,
+# schooling) must stay completely untouched.
+
+func test_forages_toward_a_nearby_vegetation_patch_when_otherwise_idle():
+	var world := VegetationWorld.new()
+	world.patches = [{"position": marker.position + Vector2(50, 0)}]
+	marker.setup(world, TILE_SIZE)
+
+	marker._process(FishForaging.SCAN_INTERVAL)
+
+	assert_almost_eq(marker._current_heading.x, 1.0, 1e-3, "should head toward the only nearby vegetation patch")
+	assert_almost_eq(marker._current_heading.y, 0.0, 1e-3)
+
+
+func test_arriving_at_a_forage_target_grazes_it_and_clears_the_target():
+	var world := VegetationWorld.new()
+	# Within GRAZE_ARRIVE_DISTANCE_PX of the fish's own starting position --
+	# "arrived" on the very first scan, no travel needed.
+	var patch_position: Vector2 = marker.position + Vector2(3, 0)
+	world.patches = [{"position": patch_position}]
+	marker.setup(world, TILE_SIZE)
+
+	marker._process(FishForaging.SCAN_INTERVAL)
+
+	assert_eq(world.grazed, [patch_position], "arriving at a patch should graze it")
+	assert_null(marker._forage_target, "a grazed target should be cleared, not retried forever")
+
+
+func test_forage_target_stays_null_with_nothing_nearby():
+	var world := VegetationWorld.new()
+	world.patches = []
+	marker.setup(world, TILE_SIZE)
+
+	marker._process(FishForaging.SCAN_INTERVAL)
+
+	assert_null(marker._forage_target)
+
+
+func test_attraction_overrides_foraging():
+	var world := VegetationWorld.new()
+	world.patches = [{"position": marker.position + Vector2(50, 0)}]  # would pull +X
+	marker.setup(world, TILE_SIZE)
+	marker.set_attraction(marker.position + Vector2(0, -50))  # -Y, easy to tell apart
+
+	marker._process(FishForaging.SCAN_INTERVAL)
+
+	assert_almost_eq(marker._current_heading.x, 0.0, 1e-3, "an active attraction should override foraging entirely")
+	assert_almost_eq(marker._current_heading.y, -1.0, 1e-3)
+
+
+func test_bolting_overrides_foraging():
+	var world := VegetationWorld.new()
+	world.patches = [{"position": marker.position + Vector2(50, 0)}]  # would pull +X if consulted
+	marker.setup(world, TILE_SIZE)
+	# Threat directly below -> bolt heading is straight up (-Y).
+	marker.bolt_from(marker.position + Vector2(0, 40))
+
+	marker._process(0.5)  # == SCAN_INTERVAL, still inside BOLT_SECONDS (0.9)
+
+	assert_almost_eq(marker._current_heading.x, 0.0, 1e-3, "bolting should override foraging entirely")
+	assert_almost_eq(marker._current_heading.y, -1.0, 1e-3)
+
+
+func test_play_chase_overrides_foraging():
+	var world := VegetationWorld.new()
+	world.patches = [{"position": marker.position + Vector2(0, 50)}]  # would pull +Y if consulted
+	marker.setup(world, TILE_SIZE)
+	var other := _add_school_fish(marker.position + Vector2(80, 0))
+	marker._play_chase_target = other
+	marker._play_chase_remaining = FishSchooling.PLAY_CHASE_SECONDS
+
+	marker._process(FishForaging.SCAN_INTERVAL)
+
+	assert_almost_eq(marker._current_heading.x, 1.0, 1e-3, "an active play chase should override foraging")
+	assert_almost_eq(marker._current_heading.y, 0.0, 1e-3)
+
+
+func test_schooling_overrides_foraging():
+	var world := VegetationWorld.new()
+	world.patches = [{"position": marker.position + Vector2(0, 50)}]  # would pull +Y if consulted
+	marker.setup(world, TILE_SIZE)
+	var other := _add_school_fish(marker.position + Vector2(3, 0))  # too-close -> avoid heading -X
+	marker._school_neighbor = other
+	_suppress_play_roll_for(marker, FishForaging.SCAN_INTERVAL)
+
+	marker._process(FishForaging.SCAN_INTERVAL)
+
+	assert_almost_eq(marker._current_heading.x, -1.0, 1e-3, "active schooling should override foraging")
+	assert_almost_eq(marker._current_heading.y, 0.0, 1e-3)
+
+
+## Directly mirrors test_a_fish_does_not_chase_a_schoolmate_when_already_
+## far_from_home, but with food available -- proves foraging (not wander)
+## wins the fallback once schooling's own leash rules it out, i.e. that
+## foraging genuinely sits BETWEEN schooling and wander in the chain, not
+## merely below schooling in name only.
+func test_a_fish_forages_instead_of_plain_wander_once_past_its_schooling_leash():
+	var world := VegetationWorld.new()
+	marker.home = Vector2(100, 100)
+	marker.position = marker.home + Vector2(500, 0)  # well past the schooling leash
+	world.patches = [{"position": marker.position + Vector2(0, -50)}]  # -Y, opposite of "head home" (-X)
+	marker.setup(world, TILE_SIZE)
+	var other := _add_school_fish(marker.position + Vector2(50, 0))  # within attraction range of CURRENT position
+	marker._school_neighbor = other
+	_suppress_play_roll_for(marker, FishForaging.SCAN_INTERVAL)
+
+	marker._process(FishForaging.SCAN_INTERVAL)
+
+	assert_almost_eq(
+		marker._current_heading.x, 0.0, 1e-3,
+		"past its schooling leash, a fish with food nearby should forage, not head home"
+	)
 	assert_almost_eq(marker._current_heading.y, -1.0, 1e-3)

@@ -29,6 +29,7 @@ extends RefCounted
 ## dependency, no RNG.
 
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 # -- the basis ---------------------------------------------------------------
 
@@ -264,6 +265,46 @@ static func express(species: String, genome: Dictionary = {}, body_plan: String 
 ## How a receptor gene scales the species' sensitivity for its channel.
 static func receptor_gene_factor(gene: float) -> float:
 	return clampf(gene, 0.0, 1.0) / NEUTRAL_RECEPTOR_GENE
+
+# -- personality: boldness (docs/concept/ethogram.md §9) --------------------
+
+## A personality gene, not a receptor: how readily an individual's OWN fear
+## wiring fires at all, independent of what it can smell or see. Same
+## String -> float shape as the receptor genes, so DnaCrossover inherits it
+## unchanged; a different namespace because it isn't one.
+const BOLDNESS := "boldness"
+
+## 0.5 is the population median BY DEFINITION, same convention as
+## NEUTRAL_RECEPTOR_GENE: a gene absent from a genome (every context built
+## before this existed) reads as exactly this, which is why fear_floor(this)
+## is zero -- the only floor the mammal ladder's fear wiring has ever had.
+const NEUTRAL_BOLDNESS_GENE := 0.5
+
+## The boldest individual's fear wiring only fires once a threat is within
+## about one tile (TerrainRenderer.TILE_SIZE) -- the same "right here" scale
+## CreatureBehavior already uses to place a sensed direction as a stimulus
+## (DIRECTION_STIMULUS_DISTANCE). Deliberately NOT Affinity.proximity(0.0)
+## (literally touching): that ceiling sits beyond any distance a running
+## simulation actually produces, making the boldest individual's fear wiring
+## unreachable rather than merely hard to reach.
+##
+## Inlined rather than calling Affinity.proximity (a const initializer must
+## be constant-foldable); test_the_boldest_gene_caps_the_floor_at_one_tile_away
+## pins the two formulas identical.
+const BOLDEST_FEAR_FLOOR := 1.0 / (1.0 + float(TerrainRenderer.TILE_SIZE))
+
+
+## The fear wiring's floor for an individual with this boldness gene: zero
+## at or below the population median (today's only floor, unchanged for
+## every animal at or below typical), rising linearly past it to
+## BOLDEST_FEAR_FLOOR at gene 1.0. There is nowhere to go MORE fearful than
+## zero, so only boldness ever moves this, and only upward.
+static func fear_floor(boldness_gene: float) -> float:
+	var gene := clampf(boldness_gene, 0.0, 1.0)
+	if gene <= NEUTRAL_BOLDNESS_GENE:
+		return 0.0
+	var t := (gene - NEUTRAL_BOLDNESS_GENE) / (1.0 - NEUTRAL_BOLDNESS_GENE)
+	return t * BOLDEST_FEAR_FLOOR
 
 
 ## This species' drive profile (the fields Drives reads): its body plan's
