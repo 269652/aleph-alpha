@@ -132,12 +132,12 @@ record, so they can differ between individuals and be inherited.
 ### 0. Files
 
 ```
-src/gameplay/affinity.gd          ⬜ pure vector arithmetic: pull, loudness, proximity, toward/away
-src/gameplay/ethogram.gd          ⬜ channels, species records, body plans, expression
-src/gameplay/behavior_kernel.gd   ⬜ ordered wirings + receptors + drives + stimuli -> {intent, direction}
-src/gameplay/olfaction.gd         ✅ exists; becomes a view over the ethogram's smell channels
-src/gameplay/scent_foraging.gd    ✅ exists; asks the ethogram who has a nose
-src/gameplay/creature_behavior.gd ✅ exists; becomes the land-mammal adapter onto the kernel
+src/gameplay/affinity.gd          ✅ pure vector arithmetic: pull, loudness, proximity, toward/away
+src/gameplay/ethogram.gd          ✅ channels, species records, body plans, expression
+src/gameplay/behavior_kernel.gd   ✅ ordered wirings + receptors + drives + stimuli -> {intent, direction}
+src/gameplay/olfaction.gd         ✅ now a view over the ethogram's smell channels
+src/gameplay/scent_foraging.gd    ✅ asks the ethogram who has a nose
+src/gameplay/creature_behavior.gd ✅ now the land-mammal adapter onto the kernel
 ```
 
 All three new modules are pure `static func` namespaces over plain
@@ -514,23 +514,33 @@ are numbers a breeder can select on.
 
 ## Status / mechanisms
 
-- ⬜ `affinity.gd`: `pull`, `loudness`, `proximity`, `toward`, `away_from`,
-  `OVERLAP_FALLBACK`.
-- ⬜ `ethogram.gd`: `CHANNELS`, `SMELL_CHANNELS`, `SPECIES` (the five smell
+- ✅ `affinity.gd`: `pull`, `loudness`, `proximity`, `toward`, `away_from`,
+  `OVERLAP_FALLBACK` (`test_affinity.gd`, 9 tests).
+- ✅ `ethogram.gd`: `CHANNELS`, `SMELL_CHANNELS`, `SPECIES` (the five smell
   records moved from `Olfaction.RECEPTORS`), `BODY_PLANS["mammal"]`,
-  `has_nose`, `express` with `receptor_<channel>` genes and
-  `NEUTRAL_RECEPTOR_GENE`, `wirings_for`.
-- ⬜ `behavior_kernel.gd`: `decide` over ordered wirings; gate skip; approach
+  `has_nose`, `express` with `receptor_<channel>` genes,
+  `NEUTRAL_RECEPTOR_GENE` and the body-plan override, `wirings_for`
+  (`test_ethogram.gd`, 23 tests).
+- ✅ `behavior_kernel.gd`: `decide` over ordered wirings; gate skip; approach
   by positive pull, avoid by negative, search on an open gate with nothing
-  sensed; proximity ranking; overlap fallback; wander default.
-- ⬜ `Olfaction` reading `Ethogram.express`; `RECEPTORS` deleted; optional
-  `genome` on `perceived_strength`/`attraction_to`; roster test moved to the
-  ethogram.
-- ⬜ `ScentForaging.forages_by_smell` reading `Ethogram.has_nose`.
-- ⬜ `CreatureBehavior.decide` as the mammal adapter; all 33 existing tests
-  green unchanged.
-- ⬜ Receptor genes inherited through the unmodified `DnaCrossover.crossover`
+  sensed; proximity ranking; the drive level scaling the score; overlap
+  fallback; wander default; a stimulus under Olfaction's `mixture` key
+  (`test_behavior_kernel.gd`, 20 tests).
+- ✅ `Olfaction` reading `Ethogram.express`; `RECEPTORS` deleted; optional
+  `genome` on `perceived_strength`/`attraction_to`; the species template
+  cached per sniff; roster test moved to the ethogram.
+- ✅ `ScentForaging.forages_by_smell` reading `Ethogram.has_nose`.
+- ✅ `CreatureBehavior.decide` as the mammal adapter; all 33 existing tests
+  green unchanged, plus six pinning the target and score in a decision, the
+  optional `species`/`genome`/`smells` context keys, a record-less species
+  on the ladder, and an individual's receptor genes reaching its decision.
+- ✅ Receptor genes inherited through the unmodified `DnaCrossover.crossover`
   (`test_a_child_expresses_a_nose_between_its_parents`).
+- ✅ Regression after the rewire: the olfaction, scent-foraging, flies,
+  fly-life-cycle, creature-marker, creature-info, ambient-flyer-marker and
+  piscivore-bird-marker suites all green.
+- ⬜ Anything visible. The smell wiring and the `smells`/`species`/`genome`
+  context keys are fed by nothing live; no animal carries a receptor gene.
 - ⬜ Slices 2 to 6 above, each untouched.
 
 *Coverage note: every mechanism in this list is a pure module with a headless
