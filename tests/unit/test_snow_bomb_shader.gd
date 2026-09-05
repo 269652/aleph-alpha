@@ -13,6 +13,7 @@ extends GutTest
 const SnowBombShader = preload("res://src/rendering/snow_bomb_shader.gd")
 const SnowStampAtlas = preload("res://src/rendering/snow_stamp_atlas.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 
 var snow: SnowBombShader
 
@@ -155,6 +156,56 @@ func test_the_drift_field_still_covers_the_ground_unevenly():
 	assert_gt(
 		high - low, SnowBombShader.ONSET_VARIANCE,
 		"the drift field only spans %.4f -- it has been flattened" % (high - low)
+	)
+
+
+## Reported live: "snow grows by some sort of line scan... it should
+## crossfade random and uniformly... snowflakes fall; drop and accumulate
+## 1:1". The two tests above pin ADJACENT tiles and an 80-tile square, but
+## neither asks the question that actually predicts what a player sees: how
+## much of the field's own range fits inside a SINGLE SCREEN.
+##
+## The visible view is a fixed number of tiles regardless of window size, by
+## DisplayScaling's own design (a bigger monitor renders the same view at
+## higher fidelity, not a wider one) -- about 20x11 tiles at all times. The
+## old 12-tile drift period let more than a full swing from the field's local
+## low to its local high fit inside that view at once, so as depth climbed
+## uniformly the player could watch one part of their own screen visibly lag
+## another: a real gradient sweeping across the view, not an illusion.
+##
+## Bounded against ONSET_VARIANCE itself -- an existing tuned constant, not a
+## fresh number -- because that is the field's own advertised half-amplitude:
+## a single screen should never show more spread than one octave's worth of
+## it, which is what tells the eye "random texture" instead of "a wave
+## passing through".
+func test_no_single_screen_sees_more_than_one_octaves_worth_of_onset_spread():
+	var tile := float(TerrainRenderer.TILE_SIZE)
+	var viewport_tiles_w := ceili(
+		DisplayScaling.visible_tiles_across(DisplayScaling.DESIGN_WIDTH, DisplayScaling.DESIGN_HEIGHT)
+	)
+	var viewport_tiles_h := ceili(
+		DisplayScaling.visible_tiles_across(DisplayScaling.DESIGN_HEIGHT, DisplayScaling.DESIGN_HEIGHT)
+	)
+	var worst := 0.0
+	var worst_at := Vector2i.ZERO
+	for origin_y in range(-80, 81, 8):
+		for origin_x in range(-80, 81, 8):
+			var low := 1.0
+			var high := -1.0
+			for ty in range(origin_y, origin_y + viewport_tiles_h):
+				for tx in range(origin_x, origin_x + viewport_tiles_w):
+					var onset := SnowBombShader.onset_at(float(tx) * tile, float(ty) * tile)
+					low = minf(low, onset)
+					high = maxf(high, onset)
+			if high - low > worst:
+				worst = high - low
+				worst_at = Vector2i(origin_x, origin_y)
+	assert_lt(
+		worst, SnowBombShader.ONSET_VARIANCE,
+		(
+			"a %dx%d-tile screen at (%d, %d) sees an onset spread of %.4f -- enough to "
+			+ "read as a gradient sweeping across the view rather than random texture"
+		) % [viewport_tiles_w, viewport_tiles_h, worst_at.x, worst_at.y, worst]
 	)
 
 
