@@ -17,6 +17,7 @@ const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const Snowfall = preload("res://src/world/snowfall.gd")
+const SnowTrail = preload("res://src/world/snow_trail.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
@@ -7270,6 +7271,64 @@ func test_creature_treading_snow_does_not_move_the_trail_window():
 	)
 
 
+# -- gradual snow clearing (see SnowTrail.step_on/TREAD_PER_STEP) --
+#
+# Reported live: "should also remove snow gradually when walking back and
+# forth". tread_snow_at used to fire every single RENDERED FRAME with no
+# per-tile-entry gate, unlike PathScarring's own _last_scar_step_tile debounce
+# -- so a tile saturated to SnowTrail.MAX_TREAD within about three frames
+# of first entry (TREAD_PER_STEP=0.34, 1.0/0.34 = ~3), regardless of whether
+# the player kept walking. That reads as an instant flat clearing rather
+# than a gradual one, and makes "walking back and forth" pointless -- the
+# tile is already maxed out after the very first pass.
+
+
+func test_treading_the_same_tile_repeatedly_in_one_frame_does_not_stack_wear():
+	manager.set_snow_depth(1.0)
+	var pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	for i in 10:
+		manager.tread_snow_at(pixel)
+	assert_almost_eq(
+		manager._snow_trail.tread_at(_berlin_tile), SnowTrail.TREAD_PER_STEP, 0.0001,
+		"standing on/re-entering the identical tile within the same visit must not stack tread"
+	)
+
+
+## Leaving a tile and coming back is a genuinely NEW entry -- "walking back
+## and forth" must keep deepening the tread, up to SnowTrail's own
+## MAX_TREAD ceiling, not get stuck at whatever the first visit produced.
+func test_leaving_and_returning_to_a_tile_deepens_tread_further():
+	manager.set_snow_depth(1.0)
+	var here := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var elsewhere := Vector2(_berlin_tile + Vector2i(3, 0)) * TerrainRenderer.TILE_SIZE
+
+	manager.tread_snow_at(here)
+	var after_first_visit := manager._snow_trail.tread_at(_berlin_tile)
+	manager.tread_snow_at(elsewhere)
+	manager.tread_snow_at(here)
+
+	assert_almost_eq(
+		manager._snow_trail.tread_at(_berlin_tile), after_first_visit + SnowTrail.TREAD_PER_STEP, 0.0001,
+		"returning to a tile after leaving it should deepen the tread further"
+	)
+
+
+## The debounce is player-only (move_trail_window=true, the default) --
+## creatures keep their existing every-call behaviour, an explicit, narrower
+## scope decision (see tread_snow_at's own doc comment) rather than an
+## oversight.
+func test_a_creature_still_treads_every_call_unlike_the_player():
+	manager.set_snow_depth(1.0)
+	var creature_tile := _berlin_tile + Vector2i(5, 0)
+	var creature_pixel := Vector2(creature_tile) * TerrainRenderer.TILE_SIZE
+	manager.tread_snow_at(creature_pixel, false)
+	manager.tread_snow_at(creature_pixel, false)
+	assert_almost_eq(
+		manager._snow_trail.tread_at(creature_tile), 2.0 * SnowTrail.TREAD_PER_STEP, 0.0001,
+		"a creature's own repeated tread is not debounced by tile entry"
+	)
+
+
 ## A fallen fruit is ONE fruit, landing under where it hung.
 ##
 ## Windfall used to be spawned as up to five arbitrary stacks scattered by a
@@ -8236,6 +8295,57 @@ func test_a_worn_path_is_remembered():
 	var memories: Array = manager.memory_store().memories_for("path:10_10")
 	assert_eq(memories.size(), 1)
 	assert_eq(memories[0].source_type, MemoryRecord.FIRSTHAND)
+
+
+# -- the trail tier (docs/concept/infrastructure.md's "path -> trail -> road",
+# PathScarring.TRAIL_THRESHOLD/is_trail) -- the SAME real path entity
+# deepening, not a new kind of thing.
+
+## Sustained, heavier use of an already-worn path is just as real and
+## `/why`-inspectable an event as the path forming in the first place.
+func test_recording_a_formed_trail_records_a_real_event():
+	manager.record_trail_formed_if_new(Vector2i(11, 11))
+	var formed: Array = manager.event_store().events_of_type("trail_formed")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["path:11_11"])
+
+
+func test_recording_the_same_formed_trail_twice_does_not_duplicate_it():
+	manager.record_trail_formed_if_new(Vector2i(12, 12))
+	manager.record_trail_formed_if_new(Vector2i(12, 12))
+	assert_eq(manager.event_store().events_for_entity("path:12_12").size(), 1)
+
+
+## Tapering from Trail back down to an ordinary worn Path is a real, DISTINCT
+## transition from a full path_reclaimed -- the ground is still a path, just
+## no longer compacted to the ceiling.
+func test_reclaiming_a_trail_records_a_real_event_distinct_from_a_full_reclaim():
+	manager.record_trail_formed_if_new(Vector2i(13, 13))
+	manager.record_trail_reclaimed(Vector2i(13, 13))
+	var reclaimed: Array = manager.event_store().events_of_type("trail_reclaimed")
+	assert_eq(reclaimed.size(), 1)
+	assert_eq(reclaimed[0].actors, ["path:13_13"])
+	assert_eq(manager.event_store().events_of_type("path_reclaimed").size(), 0)
+
+
+func test_reclaiming_a_trail_that_was_never_formed_records_nothing():
+	manager.record_trail_reclaimed(Vector2i(14, 14))
+	assert_eq(manager.event_store().events_for_entity("path:14_14").size(), 0)
+
+
+## A tile can decay straight from Trail past Path to bare ground within one
+## real gap (a long absence, a big delta) without an intermediate refresh
+## ever observing the plain "worn but not a trail" state in between --
+## record_path_reclaimed still has to recognize that as a real reclaim
+## rather than silently refusing it because the last-seen tier was the
+## deeper one.
+func test_a_path_can_be_fully_reclaimed_straight_from_its_trail_tier():
+	manager.record_path_worn_if_new(Vector2i(15, 15))
+	manager.record_trail_formed_if_new(Vector2i(15, 15))
+	manager.record_path_reclaimed(Vector2i(15, 15))
+	var reclaimed: Array = manager.event_store().events_of_type("path_reclaimed")
+	assert_eq(reclaimed.size(), 1)
+	assert_eq(reclaimed[0].actors, ["path:15_15"])
 
 
 # -- emergence: Phase 9 -- town/city tier and specialization, from real flows

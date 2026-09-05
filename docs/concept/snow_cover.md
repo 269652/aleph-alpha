@@ -192,6 +192,39 @@ Tread reduces both the coverage and the level a site draws — packed snow
 is thinner snow, and only where cover was thin to begin with does a boot
 reach the ground.
 
+**Tread accumulates per tile ENTRY, for the player, not per rendered
+frame (2026-09-05).** Reported live: "should also remove snow gradually
+when walking back and forth". `EarthChunkManager.tread_snow_at`'s player
+call (`move_trail_window=true`) used to fire every single rendered frame
+with no gate at all, so a tile saturated to `SnowTrail.MAX_TREAD` within
+about three frames of first entry (`TREAD_PER_STEP=0.34`) regardless of
+whether the player kept walking — reading as one instant flat clearing
+rather than a gradual one, and making a return visit pointless since the
+tile was already maxed out after the very first pass. Now debounced by
+tile entry, the same shape `World._last_scar_step_tile` already uses for
+`PathScarring` — leaving a tile and coming back is a genuinely new entry
+and keeps deepening the tread further, up to `MAX_TREAD`, the same way
+walking back and forth over a real snowy path keeps compacting it. A
+creature's own call (`move_trail_window=false`) is deliberately NOT
+debounced this way — a real, narrower scope decision (would need a
+per-creature "last tile"), not an oversight.
+
+**Trodden snow shows no tint of its own — it is a transparent GPU overlay
+(2026-09-05).** Reported live: "snow scarring should not be brown tint but
+rather transparent without tint". `fragment()` already writes `vec4(0.0)`
+wherever it has nothing to draw (no lying snow, or a site not yet caught)
+— confirmed directly from the shader source, not assumed. The brown was
+never this system's own rendering: `PathScarring` (see
+[infrastructure.md](infrastructure.md)) wore grass/forest tiles into
+permanent `EARTH_TILE_ID` dirt regardless of season, and THAT tile showed
+through wherever the snow overlay above it wasn't fully opaque. Fixed at
+the source — `PathScarring` no longer accumulates new wear while
+`EarthChunkManager.snow_depth()` is above zero, so walking on snow-covered
+grass packs the snow down without also instantly growing a patch of bare
+dirt underneath it. An already-scarred path from before the snow fell is
+unaffected (it decays/recovers and repaints normally in winter) — only
+FRESH scarring is what snow prevents.
+
 ### What the CPU still does
 
 Per frame: push one float (`depth`), and the trail mask only when a
@@ -319,6 +352,22 @@ for, and why both exist.
   creature) so a creature's own tread cannot relocate the mask window away
   from the player. See this section's own "Tracks are not player-only"
   paragraph above.
+- ✅ **Tread now accumulates per tile entry, for the player** (2026-09-05) —
+  reported live: "should also remove snow gradually when walking back and
+  forth". `tread_snow_at`'s player call used to fire every rendered frame
+  unguarded, saturating a tile to `MAX_TREAD` within ~3 frames of first
+  entry regardless of further walking; now debounced by tile entry (the
+  same shape `PathScarring`'s own `_last_scar_step_tile` uses), so leaving
+  a tile and returning genuinely deepens it further. See this section's
+  own new paragraph above for the full diagnosis.
+- ✅ **Trodden snow is confirmed tint-free at the shader** (2026-09-05) —
+  reported live: "snow scarring should not be brown tint but rather
+  transparent without tint". `fragment()`'s own `vec4(0.0)` fallback was
+  already correct; the brown was `PathScarring`'s permanent earth tile
+  showing through, fixed at that source instead (see
+  [infrastructure.md](infrastructure.md) and this section's own new
+  paragraph above) — new wear no longer accumulates while snow is lying on
+  the ground.
 - ✅ **Snow now covers river and lake tiles too** — see "Snow under a river
   reads as a staircase" above. `_paint_snow_presence` no longer excludes
   `Chunk.blocks_ground_cover` tiles, only ocean; the river-flow overlay's

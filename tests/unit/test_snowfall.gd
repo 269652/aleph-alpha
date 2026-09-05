@@ -166,6 +166,19 @@ func test_a_thaw_outlasts_the_snowfall():
 	assert_gt(Snowfall.SECONDS_TO_THAW, Snowfall.SECONDS_TO_COVER)
 
 
+## Reported live: "increase the snow covering speed 20%". Speed is the
+## INVERSE of SECONDS_TO_COVER (depth per second, not seconds per depth), so
+## a 20% FASTER cover is 1/1.2 of the previous TIME, not the previous
+## multiplier reduced by 20% -- 0.6 / 1.2 = 0.5 exactly, which is why the
+## spell-fraction multiplier moved from 0.6 to 0.5 rather than to 0.48.
+func test_covering_speed_was_increased_twenty_percent_over_the_previous_tuning():
+	var previous_seconds_to_cover := WeatherModel.WEATHER_PERIOD_SECONDS * 0.6
+	assert_almost_eq(
+		previous_seconds_to_cover / Snowfall.SECONDS_TO_COVER, 1.2, 0.0001,
+		"covering should now finish 20% faster (in 1/1.2 of the time) than the previous tuning"
+	)
+
+
 ## A whole snowfall really does cover the ground.
 func test_one_spell_of_snow_covers_bare_ground():
 	var depth := 0.0
