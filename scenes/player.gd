@@ -126,33 +126,45 @@ const BONDED_COMPANION_TRAIL_RADIUS := TIE_RANGE
 ## footprint, reported as "water squares are gigantic compared to the
 ## player".
 ##
-## 83.2, not 64.0: asked directly to "zoom in 30% so trees become relatively
-## bigger", alongside shrinking the character 30% (see CharacterView.
-## TARGET_HEIGHT_FRACTION_OF_TREE) -- the two together mean everything ELSE
-## in the world (trees, terrain, other entities) reads 30% bigger on screen,
-## while the character itself ends up a net ~9% smaller (1.3 zoom * 0.7
-## character-scale), not simply back where it started. Zoom is a direct
-## magnification factor, not an inverse like a seconds-to-cover time
-## constant, so 30% more zoom is 64.0 * 1.3 = 83.2 exactly. Pinned by
-## test_camera_zoomed_in_thirty_percent_over_the_previous_tuning
-## (test_player_camera.gd), which checks the ratio rather than just the new
-## literal.
+## Was briefly 83.2 (2026-09-05), a 30% zoom-in asked directly to "zoom in
+## 30% so trees become relatively bigger", alongside shrinking the
+## character 30% (see CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE). Zoom
+## is a direct magnification factor, not an inverse like a seconds-to-cover
+## time constant, so 30% more zoom is 64.0 * 1.3 = 83.2 exactly.
 ##
-## DisplayScaling.TILE_SCREEN_PX is a SEPARATE constant that deliberately
-## stayed at 64.0 -- see its own doc comment for why (a hard pixel-perfect-
-## art-scaling constraint across resolutions, unrelated to gameplay camera
-## framing). The two happened to share one literal before this change; they
-## no longer do, and are not meant to be kept in sync by hand going forward.
+## Reverted the same day, reported live: "trees are very blurry even though
+## sprite art is much crispier." Root cause: `ArtResolution.SPRITE_SCALE
+## (0.5) * CAMERA_ZOOM.x` -- screen pixels per source texel for every
+## SPRITE_SCALE-path entity (terrain, the tree canopy, the bobber) -- is a
+## whole 2.0 at 64.0/4.0x, but a non-whole 2.6 at 83.2/5.2x; nearest-
+## neighbour filtering shows that as soft, uneven edges rather than clean
+## blocks, the same failure mode this codebase already diagnosed and fixed
+## once for the character-creator portrait's own fractional scale
+## (STANDARD_PORTRAIT_SCALE, see docs/progress.md). Asked immediately
+## beforehand whether 83.2 could become a "whole multiplier" instead of a
+## straight revert: with ArtResolution.DETAIL_MULTIPLIER=2, the only zoom
+## values that land every canonical resolution (720p/1080p/1440p/4K) on a
+## whole screen-pixels-per-texel count are multiples of 4.0x -- 4.0x
+## (revert) or 8.0x (double, not 30%, and the wrong direction for the tree-
+## blur report too: more zoom only stretches the SAME low-resolution tree
+## art further, making the OTHER contributing cause -- trees compositing
+## onto a native canvas far smaller than the character's own, a separate,
+## still-open gap -- read worse, not better). Reverting all the way back to
+## 64.0 was the only option that fixes the alignment half of the blur
+## report with no new risk.
 ##
-## Asked directly afterward whether 83.2 could become a "whole multiplier"
-## for pixel-perfectness too: with ArtResolution.DETAIL_MULTIPLIER=2, the
-## ONLY zoom values that land every canonical resolution (720p/1080p/1440p/
-## 4K) on a whole number of screen pixels per art pixel are multiples of
-## 4.0x -- 4.0x (revert) or 8.0x (double, not 30%), nothing in between.
-## Both alternatives and the current 5.2x (2.6 screen px per art pixel,
-## non-whole but still clears test_one_art_pixel_covers_several_screen_
-## pixels's real floor) were laid out explicitly; kept 5.2x as-is.
-const TARGET_TILE_SCREEN_PX := 83.2
+## "Trees relatively bigger" survives the revert completely intact: that
+## ratio comes entirely from CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE
+## (still 0.595, unchanged) -- zoom scales the character and every tree by
+## the identical factor, so it cancels out of their ratio and was never
+## actually load-bearing for that specific ask. Confirmed by rendering a
+## real frame at both zoom levels: the near tree measured roughly 1.8x the
+## character's own height either way.
+##
+## Pinned by test_camera_zoom_keeps_sprite_scale_path_art_pixel_aligned
+## (test_player_camera.gd), which checks the real screen-px-per-texel
+## property directly rather than just re-asserting the literal 64.0.
+const TARGET_TILE_SCREEN_PX := 64.0
 ## Applied in _ready() rather than left as a bare number in player.tscn, so
 ## it's a tested constant (see test_player_camera.gd) rather than an
 ## eyeballed scene property.

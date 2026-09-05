@@ -40,10 +40,11 @@ const DESIGN_WIDTH := 1280.0
 const DESIGN_HEIGHT := 720.0
 
 ## World units per tile, and how many of those units a tile occupies on screen
-## at the design height. Shared the exact same value as Player.
-## TARGET_TILE_SCREEN_PX for a long time, since both trace back to the same
-## "a tile should read this big" intent -- but they answer genuinely
-## different questions and are no longer meant to be kept in sync by hand.
+## at the design height. Shares its value with Player.TARGET_TILE_SCREEN_PX
+## because both trace back to the same "a tile should read this big" intent
+## -- but they answer genuinely different questions and are NOT meant to be
+## kept in sync by hand if a future change pulls them apart again (as one
+## briefly did on 2026-09-05 -- see below).
 ##
 ## This one is load-bearing for PIXEL-PERFECT ART SCALING: is_pixel_perfect
 ## needs (TILE_SCREEN_PX / (ArtResolution.DETAIL_MULTIPLIER * WORLD_TILE_SIZE))
@@ -51,13 +52,16 @@ const DESIGN_HEIGHT := 720.0
 ## (1.0/1.5/2.0/3.0 for 720p/1080p/1440p/4K) -- 64.0 is the smallest value
 ## that works, and the next one up is 128.0, not some 64 * 1.1-shaped
 ## number. Player.TARGET_TILE_SCREEN_PX is a live GAMEPLAY framing knob with
-## no such constraint (see its own doc comment for the 2026-09-05 zoom-in-
-## 30% tuning that first pulled the two apart) -- changing it changes how
-## zoomed in the camera feels, not whether art lands on whole screen
-## pixels. Consumers of visible_tiles_across (decoration LOD, this session's
-## own snow-onset-viewport-scale fix) key off THIS constant, so they now
-## measure a slightly larger view than the real camera actually frames --
-## confirmed safe-direction (they over-provision a little, never under).
+## no such constraint -- changing it changes how zoomed in the camera
+## feels, not whether art lands on whole screen pixels. It briefly moved to
+## 83.2 (a 30% zoom-in, asked directly) while this constant deliberately
+## stayed at 64.0, which would have left every consumer of
+## visible_tiles_across (decoration LOD, the snow-onset-viewport-scale fix)
+## measuring a stale, slightly-larger view than the real camera actually
+## framed -- confirmed safe-direction at the time (over-provisions a
+## little, never under) but moot now: that zoom was reverted the same day,
+## reported live as visible blur (see Player.TARGET_TILE_SCREEN_PX's own
+## doc comment), so the two constants coincide again.
 const WORLD_TILE_SIZE := 16
 const TILE_SCREEN_PX := 64.0
 
