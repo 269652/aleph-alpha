@@ -8518,6 +8518,14 @@ actual transition frame by frame and inspecting the sequence directly —
 the leaf visibly rotates through several distinct orientations across one
 journey rather than only tilting a few degrees back and forth.
 
+✅ **Follow-up: "leaves should be half as big".** `LeafLitterRenderer.
+WORLD_SIZE` was `WALNUT_WORLD_WIDTH * 1.5`, ported unchanged from
+`DroppedItem.LEAF_WORLD_SIZE`'s own original derivation; reported too
+large once actually seen rendered at real scale. Halved to `* 0.75`,
+pinned by `test_world_size_is_half_its_previous_walnut_relative_size`
+rather than left as a bare constant a future edit could silently drift
+off of.
+
 <details>
 <summary>First pass (superseded above), kept for history</summary>
 
