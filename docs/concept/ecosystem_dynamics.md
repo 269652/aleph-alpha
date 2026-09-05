@@ -848,6 +848,61 @@ Two consequences worth stating plainly rather than discovering later:
   real geographic raster shipped today. That is feature-scale work, not a
   filter tweak, which is why the range tables stop at biome + latitude.
 
+### Real illustrated art for songbirds and the kingfisher (2026-09-05)
+
+Four hand-illustrated sheets (`assets/sprites/birds/{sparrow,robin,
+blackbird,kingfisher}.png`) replace `ProceduralBirdSprite`'s primitive-shape
+generation, the same "real art where it exists, procedural everywhere else"
+move `IllustratedAnimalSprite` already made for horse/deer/boar/sheep/wolf.
+`IllustratedBirdSprite` is a sibling of that class rather than an extension
+of it — birds run through `AmbientFlyerMarker`/`PiscivoreBirdMarker`, not
+`CreatureMarker`, so there is nothing to share beyond `SpriteSheetSlicer`
+itself (already generic). `AmbientFlyerRenderer._bird_sprite_generator_for`/
+`PiscivoreBirdRenderer._sprite_generator` pick it over the procedural
+generator whenever `has_species` says yes, at every spawn path (chunk spawn,
+courtship offspring, the diorama's `build_bird`) — a chick born in front of
+the player gets the exact same real art as every other bird of its species.
+
+**Phase 1 scope only** (see the bird-behavior-overhaul plan): idle,
+perched (the same pose as idle in this art — there is no separate
+folded-wing rest row the way the procedural generator draws one), flap
+(the sheets' takeoff and glide rows concatenate into one 16-frame cycle,
+a drop-in match for `generate_flap_textures`' existing contract), and
+pecking. Still procedural/unwired: a ground walk/hop row, the kingfisher's
+own dive pose (its `PiscivoreBirdBehavior.Phase.DIVING` already exists
+behaviorally, just with no dedicated art yet), a display/mating-dance row,
+and a singing/tweeting row — none of the sheets' seven-or-eight rows are
+wasted, they just don't have a real trigger to attach to until later
+phases (walk/dive land with new animation states, court/sing with real
+bird courtship). **Blackbird is not yet a spawnable species** — it has a
+real `IllustratedBirdSprite` entry (so the slicer is proven against all
+four sheets together) but no diet/range/population/pool wiring; that is
+its own follow-up.
+
+**The four sheets are not row-for-row identical** — confirmed by looking
+at the actual pixels, not assumed from a shared template. Sparrow's sheet
+has a dedicated head-down, seed-crumb pecking row. Robin's and
+blackbird's sheets do not: the row a shared template would put "peck" at
+is their tail-fanned DISPLAY pose instead, and real divider lines bound
+every row on both sheets with no gap left over for a missing one.
+`generate_pecking_texture` falls back to idle for a species with no
+dedicated peck band, the same never-return-nothing shape
+`IllustratedAnimalSprite.has_action`'s own fallback chain already uses.
+Bands were hand-measured (a throwaway tool: chroma-key the magenta ground
+transparent, then scan for real horizontal divider lines — not an even
+height/N split, which does not hold on any of the four sheets) and stored
+as data in `IllustratedBirdSprite._SHEETS`, never auto-detected at
+runtime, matching every existing illustrated sheet's own house rule.
+
+Pinned by `test_illustrated_bird_sprite.gd` (9 tests: species coverage,
+real non-blank content, the flap concatenation, the canvas/baseline
+invariant, frame caching, and the sparrow-vs-robin/blackbird peck
+distinction specifically). `test_ambient_flyer_marker.gd`,
+`test_ambient_flyer_renderer.gd`, `test_piscivore_bird_marker.gd`,
+`test_piscivore_bird_renderer.gd` and `test_procedural_bird_sprite.gd` all
+stay green (255 tests total across the six files) — the art swap changes
+no behavioral assertion, only which pixels a bird is drawn with.
+
 ## Region difficulty (gating the roster by player readiness)
 
 Rounding out the roster with real predators (bear, lion) and a real hazard
