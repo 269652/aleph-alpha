@@ -87,6 +87,7 @@ const ForageScheduler = preload("res://src/gameplay/forage_scheduler.gd")
 const TreeSpread = preload("res://src/gameplay/tree_spread.gd")
 const FruitFall = preload("res://src/world/fruit_fall.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
+const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const Event = preload("res://src/emergence/event.gd")
 const EventStore = preload("res://src/emergence/event_store.gd")
@@ -305,6 +306,23 @@ const _NAMED_FRUIT_ITEMS := {
 	"acorn": ["Acorn", "food", 20],
 	"hazelnut": ["Hazelnut", "food", 20],
 	"pine": ["Pine Nuts", "food", 20],
+}
+
+## The fallen-leaf item alongside each species' own fruit/nut -- see
+## docs/concept/leaf_litter.md. Id is "<species>_leaf" uniformly (even
+## pine, whose real display name is "Pine Needles": a conifer sheds
+## needles rather than broadleaves, but fills the same litter role here,
+## and a uniform id keeps DroppedItem's own recognition of "is this a leaf
+## item" a single suffix check rather than a species-by-species list).
+## Kind "material", not "food" -- litter does not spoil the way a dropped
+## nut does (see DroppedItem's own food-only spoilage branch).
+const _LEAF_ITEMS := {
+	"cherry": ["cherry_leaf", "Cherry Leaf", "material", 20],
+	"apple": ["apple_leaf", "Apple Leaf", "material", 20],
+	"walnut": ["walnut_leaf", "Walnut Leaf", "material", 20],
+	"acorn": ["acorn_leaf", "Oak Leaf", "material", 20],
+	"hazelnut": ["hazelnut_leaf", "Hazelnut Leaf", "material", 20],
+	"pine": ["pine_leaf", "Pine Needles", "material", 20],
 }
 
 ## Spread cadence: every SPREAD_INTERVAL seconds, SPREAD_ATTEMPTS_PER_TICK
@@ -1001,6 +1019,23 @@ func step_forage(delta_seconds: float) -> void:
 ## still loaded only get the cheap ambient step_forage drops.
 const FRUITING_DETAIL_RADIUS := 280.0
 const FRUITING_INTERVAL := 1.0
+
+## How far a fallen leaf scatters from its own trunk, in world pixels -- a
+## real fallen fruit lands under exactly where it hung
+## (ProceduralTreeSprite.FRUIT_GROUND_REACH); a leaf's position in the
+## drawn canopy carries none of that per-index precision to reuse, and a
+## real leaf drifts on the wind rather than dropping straight down from
+## one fixed point anyway, so this is deliberately a plain scatter radius
+## rather than a per-leaf hanging position.
+const LEAF_SCATTER_RADIUS := 28.0
+
+## Roll granularity for the deterministic "does a turning tree shed a leaf
+## this step" check below -- NOT engine randf(): a per-step gameplay roll
+## uses a seeded hash instead, the same "looks random, is actually a pure
+## function of its inputs" idiom PixelNoise/ProceduralTreeSprite.fruit_polar
+## already use elsewhere in this file, rather than non-reproducible engine
+## randomness.
+const _LEAF_FALL_ROLL_STEPS := 1000
 
 var _fruiting_model := FruitingModel.new()
 var _ecology_catchup := ChunkEcologyCatchup.new()
@@ -3212,6 +3247,43 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 						tree.position + ProceduralTreeSprite.fruit_ground_offset(
 							variant, fruit_index
 						)
+					)
+
+			# Falling leaves (see docs/concept/leaf_litter.md): gated on the
+			# canopy ACTIVELY turning toward winter, the same season/
+			# turning_into/turn_progress this step already read once above
+			# for tree.set_ripe_fruit -- not a second schedule computing
+			# its own answer. A tree that has not started turning yet, or
+			# has cycled back to bare, sheds nothing: real leaf-fall is a
+			# real-autumn event, not a year-round drizzle. Independent of
+			# whether fruit fell this same step -- a tree can shed a leaf
+			# with nothing left to fruit at all.
+			if (
+				canopy_season == "autumn"
+				and canopy_turning_into == "winter"
+				and canopy_turn_progress > 0.0
+			):
+				# Deterministic per-(tree, step) roll, not engine randf()
+				# -- see _LEAF_FALL_ROLL_STEPS' own doc comment. Chance
+				# rises with how far into its own turn the canopy is: a
+				# tree just beginning to turn sheds rarely, one nearly
+				# bare sheds almost every step.
+				var step_bucket := int(now / FRUITING_INTERVAL)
+				var roll := PixelNoise.range_index(tree.sprite_seed, step_bucket, 0, _LEAF_FALL_ROLL_STEPS)
+				if roll < int(canopy_turn_progress * _LEAF_FALL_ROLL_STEPS):
+					var leaf_spec: Array = _LEAF_ITEMS[species_id]
+					var leaf_stack := ItemStack.new(
+						Item.new(leaf_spec[0], leaf_spec[1], leaf_spec[2], leaf_spec[3]), 1
+					)
+					var angle := deg_to_rad(float(
+						PixelNoise.range_index(tree.sprite_seed, step_bucket + 1, 0, 360)
+					))
+					var distance_fraction := float(
+						PixelNoise.range_index(tree.sprite_seed, step_bucket + 2, 0, 100)
+					) / 100.0
+					WorldItemBus.item_dropped.emit(
+						leaf_stack,
+						tree.position + Vector2(cos(angle), sin(angle)) * LEAF_SCATTER_RADIUS * distance_fraction
 					)
 	_last_fruiting_time = now
 

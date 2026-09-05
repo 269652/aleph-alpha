@@ -1924,6 +1924,125 @@ func test_step_fruiting_also_dresses_a_nearby_tree_with_the_live_snow_depth():
 	assert_almost_eq(tree._snow_coverage, 0.5, 0.0001)
 
 
+# -- fallen leaves: the same fruiting step also sheds real ground litter ----
+#
+# See docs/concept/leaf_litter.md. Reported: "ants should eat fallen fruits
+# leaves and other stuff like seeds", then later "it seems that falling
+# leaves are still not implemented" once fallen-fruit foraging alone had
+# shipped. Gated on the canopy's own TURNING-INTO-WINTER window -- the same
+# season/turning_into/turn_progress values already read once per step for
+# the windfall block above, not a second schedule computing its own answer.
+
+## A year_fraction inside autumn's own TURN_FRACTION window (the last 34% of
+## autumn -- see TreePhenology._settled_then_turn). Autumn is
+## SeasonCycle.SEASONS[2], so its own span is [0.5, 0.75); 0.72 sits
+## comfortably inside the turning slice of that ([0.665, 0.75)), not its
+## settled first two-thirds.
+const _TURNING_INTO_WINTER_YEAR_FRACTION := 0.72
+## Well inside summer's own settled two-thirds -- nothing has started
+## turning yet.
+const _SETTLED_SUMMER_YEAR_FRACTION := 0.3
+## Generous bound for the deterministic per-step roll (see
+## EarthChunkManager's own doc comment on it) to land a hit -- not a retry
+## against flakiness, since the roll is a pure hash of (tree seed, step),
+## not engine randf(): a real bug that stopped leaves falling entirely
+## would still exhaust every one of these attempts and fail the same way.
+const _LEAF_ROLL_ATTEMPTS := 30
+
+
+func _set_world_age_at_year_fraction(fraction: float) -> void:
+	manager.set_world_age_seconds(fraction * SeasonCycle.SECONDS_PER_YEAR)
+
+
+## Finds the first dropped leaf item for `species_id` across up to
+## _LEAF_ROLL_ATTEMPTS fruiting steps, or null if none fell. Returns
+## [item_stack, world_position].
+func _find_a_fallen_leaf(species_id: String, tree_position: Vector2, player_pixel: Vector2) -> Array:
+	var leaf_id := "%s_leaf" % species_id
+	for attempt in _LEAF_ROLL_ATTEMPTS:
+		manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, player_pixel)
+		var drops = get_signal_emit_count(WorldItemBus, "item_dropped")
+		for i in drops:
+			var params = get_signal_parameters(WorldItemBus, "item_dropped", i)
+			if params[0].item.id == leaf_id:
+				return params
+	return []
+
+
+func test_step_fruiting_drops_a_leaf_from_a_turning_tree():
+	var tree := ChoppableTree.new()
+	tree.position = _position_for_species("cherry")
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
+
+	watch_signals(WorldItemBus)
+	var found := _find_a_fallen_leaf("cherry", tree.position, tree.position)
+
+	assert_false(found.is_empty(), "a tree well into its autumn turn should shed a real leaf item")
+
+
+func test_step_fruiting_drops_no_leaf_before_the_canopy_turns():
+	var tree := ChoppableTree.new()
+	tree.position = _position_for_species("cherry")
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+	_set_world_age_at_year_fraction(_SETTLED_SUMMER_YEAR_FRACTION)
+
+	watch_signals(WorldItemBus)
+	for attempt in _LEAF_ROLL_ATTEMPTS:
+		manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, tree.position)
+	var drops = get_signal_emit_count(WorldItemBus, "item_dropped")
+	var saw_leaf := false
+	for i in drops:
+		var stack = get_signal_parameters(WorldItemBus, "item_dropped", i)[0]
+		if stack.item.id == "cherry_leaf":
+			saw_leaf = true
+	assert_false(saw_leaf, "a settled summer canopy has not started shedding yet")
+
+
+## Oak's own fallen leaf reads as an oak leaf, not a literal "Acorn Leaf" --
+## and it is litter, not food, so it should not spoil like a dropped nut
+## does (see DroppedItem's own food-only spoilage branch).
+func test_a_leaf_item_is_named_and_kinded_correctly():
+	var tree := ChoppableTree.new()
+	tree.position = _position_for_species("acorn")
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
+
+	watch_signals(WorldItemBus)
+	var found := _find_a_fallen_leaf("acorn", tree.position, tree.position)
+
+	assert_false(found.is_empty(), "precondition: an acorn tree should shed a leaf")
+	var leaf_stack = found[0]
+	assert_eq(leaf_stack.item.display_name, "Oak Leaf")
+	assert_eq(leaf_stack.item.kind, "material", "litter, not food -- it must not spoil like one")
+	assert_eq(leaf_stack.count, 1)
+
+
+func test_a_leaf_lands_near_its_own_tree():
+	var tree := ChoppableTree.new()
+	tree.position = _position_for_species("cherry")
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
+
+	watch_signals(WorldItemBus)
+	var found := _find_a_fallen_leaf("cherry", tree.position, tree.position)
+
+	assert_false(found.is_empty(), "precondition: a leaf should have fallen")
+	var leaf_at: Vector2 = found[1]
+	assert_lt(
+		tree.position.distance_to(leaf_at), EarthChunkManager.LEAF_SCATTER_RADIUS + 1.0,
+		"a leaf landed nowhere near its own tree"
+	)
+
+
 # -- sync_tree_season: the second path that redraws every loaded tree's ------
 # canopy, independent of step_fruiting (see World._client_process and
 # set_world_age_seconds/jump_to_season). Must respect the same
