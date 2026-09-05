@@ -2874,6 +2874,81 @@ func test_idle_rest_never_fires_while_actively_pursuing_food():
 		)
 
 
+## Requested live, right after idle rest itself shipped: "also birds should
+## sit down on trees to tweet / dance". Idle rest used to freeze the bird
+## exactly where the rest happened to begin -- usually mid-air -- since it
+## deliberately never touched `position` at all. It now looks for a real,
+## standing tree nearby (EarthChunkManager.trees_near, duck-typed as
+## tree_world) and flies to it first, landing there before the actual rest
+## timer starts -- same fly-then-land shape _fly_at_worm already uses, just
+## with no food state machine involved. Missing tree_world entirely (most
+## existing tests, and any bird whose species/setup never wired one) must
+## still fall back to the original in-place perch -- backward compatible,
+## never a hard requirement.
+class StubTreeWorld:
+	var trees: Array = []
+	func trees_near(_position: Vector2, _radius_tiles: int) -> Array:
+		return trees
+
+
+func test_idle_rest_flies_to_a_real_tree_before_perching():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.ground_forage = GroundForageBehavior.new()
+	var world := StubTreeWorld.new()
+	var tree_position := Vector2(40, 0)
+	world.trees = [{"position": tree_position, "species": "apple"}]
+	bird.tree_world = world
+	var reached_tree := false
+	for i in int((AmbientFlyerMarker.IDLE_REST_INTERVAL_SECONDS + 6.0) / FRAME):
+		bird._process(FRAME)
+		if bird.perched and bird.position.distance_to(tree_position) <= GroundForageBehavior.LANDING_DISTANCE + 1.0:
+			reached_tree = true
+			break
+	assert_true(
+		reached_tree,
+		"a bird with a real tree nearby should fly to and perch AT it, not freeze wherever it happened to be"
+	)
+
+
+## Graceful degradation: no tree_world at all (the common case -- most
+## species/setups never wire one) must still perch in place exactly as
+## before, not silently stop resting altogether.
+func test_idle_rest_still_perches_in_place_with_no_tree_world():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.ground_forage = GroundForageBehavior.new()
+	var rested := false
+	for i in int((AmbientFlyerMarker.IDLE_REST_INTERVAL_SECONDS + 2.0) / FRAME):
+		bird._process(FRAME)
+		if bird.perched:
+			rested = true
+			break
+	assert_true(rested, "no tree nearby (or no tree_world at all) must still fall back to perching in place")
+
+
+## A tree_world that simply has nothing nearby (an empty return, the same
+## shape a real EarthChunkManager.trees_near gives in a treeless meadow)
+## is the same graceful-degradation case, not a special one -- covered
+## separately since "wired but empty" and "never wired" are different
+## code paths (has_method/null checks) that could each break alone.
+func test_idle_rest_perches_in_place_when_tree_world_has_nothing_nearby():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.ground_forage = GroundForageBehavior.new()
+	bird.tree_world = StubTreeWorld.new()  # .trees left empty
+	var rested := false
+	for i in int((AmbientFlyerMarker.IDLE_REST_INTERVAL_SECONDS + 2.0) / FRAME):
+		bird._process(FRAME)
+		if bird.perched:
+			rested = true
+			break
+	assert_true(rested, "an empty trees_near result must still fall back to perching in place")
+
+
 ## PHASE 3: ground walk/hop and singing, the two rows Phase 1 measured but
 ## left unwired -- see docs/concept/ecosystem_dynamics.md's Phase 3
 ## writeup. Both are drawn only while `perched` (grounded), the same

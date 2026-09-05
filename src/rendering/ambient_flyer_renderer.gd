@@ -640,6 +640,17 @@ func _build_marker(
 	# Phase 4) -- same optional-capability guard.
 	if sprite_generator.has_method("generate_court_textures"):
 		marker.court_frames = sprite_generator.generate_court_textures(species, seed_value)
+	# Real trees to perch on while idle-resting (see AmbientFlyerMarker.
+	# tree_world/_step_idle_rest -- requested live: "birds should sit down
+	# on trees to tweet / dance"). Same chunk manager every other world
+	# port already gets, bird-only like flight height/idle-rest themselves
+	# -- a pollinator has its own separate nectaring-perch behaviour and
+	# never reads this field at all. Unconditional on the sprite
+	# generator's own capabilities (unlike sing/court_frames just above):
+	# a procedural-sprite bird still deserves a real tree to land on even
+	# without real-art display animation.
+	if IllustratedBirdSprite.has_species(species):
+		marker.tree_world = scent_world
 	# What this flyer is wired to feed on comes from the DIET TABLE, not from
 	# which spawn call it came out of (see FlyerDiet /
 	# docs/concept/soil_fauna.md). Every caller now passes the same world; the

@@ -136,6 +136,14 @@ var fruit_world = null
 var seed_world = null
 var ground_forage: GroundForageBehavior = null
 
+## Real, standing trees nearby -- duck-typed for trees_near(position,
+## radius_tiles) (see EarthChunkManager.trees_near). Bird-only, wired
+## alongside the other world ports, but load-bearing for nothing but
+## _step_idle_rest's own perch-on-a-tree behaviour: null is always a valid,
+## fully-supported value (falls back to perching in place), never a
+## precondition for foraging or anything else.
+var tree_world = null
+
 ## The head-dipped sprite shown at the bottom of each peck (see
 ## ProceduralBirdSprite.generate_pecking_texture), alternated against
 ## `perched_frame` while the bird works the worm.
@@ -185,6 +193,21 @@ const IDLE_REST_DURATION_SECONDS := 5.0
 var _idle_resting := false
 var _idle_rest_remaining := 0.0
 var _idle_rest_cooldown := IDLE_REST_INTERVAL_SECONDS
+
+## Requested live, right after idle rest itself shipped: "birds should sit
+## down on trees to tweet / dance" -- until this, the rest froze the bird
+## exactly where it happened to begin (deliberately never touching
+## `position` at all, see the old doc comment above), which usually meant
+## mid-air. When a real tree is found nearby (tree_world, above), the rest
+## flies there FIRST -- same fly-then-land shape _fly_at_worm already uses
+## for a worm, just with no food state machine backing it -- and only
+## starts the actual rest timer once it arrives. Missing tree_world, or one
+## with nothing nearby, falls back to the original in-place perch: a tree
+## is an enhancement to where idle rest happens, never a precondition for
+## it happening at all.
+const IDLE_PERCH_SEARCH_TILES := 8.0
+var _idle_perch_target = null  # Vector2, or null while not flying to one
+var _idle_perch_pick_index := 0
 
 ## Re-scanning the soil every frame would query the worm set per bird per
 ## frame; worms surface on a weather timescale, so it is throttled the same
@@ -1392,11 +1415,15 @@ func _step_ground_forage(delta: float) -> bool:
 ## takes off again -- same true/false-means-frame-handled contract as
 ## _step_ground_forage, so _process can treat the two identically.
 ##
-## Deliberately does not touch `position` at all -- the bird rests exactly
-## where it already was, the same way GroundForageBehavior's own PECKING/
-## RESUMING phases hold position while `perched` is true. Nor does it read
-## or write anything on `ground_forage`: the two perch sources are
-## independent by design (see the field comment), which is also why the
+## When a real tree is nearby (see _find_tree_perch/tree_world), the rest
+## flies there FIRST and only starts the actual hold once it arrives --
+## requested live: "birds should sit down on trees to tweet / dance".
+## Without one (tree_world null, or nothing in range -- both ordinary,
+## fully-supported outcomes) it falls back to holding still exactly where
+## it already was, its original behaviour, the same way GroundForageBehavior's
+## own PECKING/RESUMING phases hold position while `perched` is true. Nor
+## does it read or write anything on `ground_forage`: the two perch sources
+## are independent by design (see the field comment), which is also why the
 ## clock keeps ticking through a real forage cycle -- _step_idle_rest is
 ## simply never CALLED during one (ground-forage already returned true and
 ## claimed the frame), so no double-counting is possible either way.
@@ -1413,14 +1440,55 @@ func _step_idle_rest(delta: float) -> bool:
 		perched = true
 		_animate_wings()
 		return true
+	if _idle_perch_target != null:
+		var before := position
+		var to_target: Vector2 = _idle_perch_target - position
+		if to_target.length() <= GroundForageBehavior.LANDING_DISTANCE:
+			_idle_perch_target = null
+			_idle_resting = true
+			_idle_rest_remaining = IDLE_REST_DURATION_SECONDS
+			perched = true
+			_animate_wings()
+			return true
+		position += to_target.normalized() * _movement.speed * delta
+		face_travel(position - before, delta)
+		_animate_wings()
+		return true
 	_idle_rest_cooldown -= delta
 	if _idle_rest_cooldown <= 0.0:
+		var perch_target: Variant = _find_tree_perch()
+		if perch_target != null:
+			_idle_perch_target = perch_target
+			_animate_wings()
+			return true
 		_idle_resting = true
 		_idle_rest_remaining = IDLE_REST_DURATION_SECONDS
 		perched = true
 		_animate_wings()
 		return true
 	return false
+
+
+## Picks a nearby real tree for _step_idle_rest to fly to, or null when
+## tree_world isn't wired (most species/setups today) or has nothing in
+## range -- both ordinary, fully-supported outcomes, never an error.
+## Scattered via the exact same GroundForageBehavior.choose_worm/PixelNoise
+## pick-index idiom every other forage target already uses (see
+## _look_for_worms and siblings), so a flock in the same clearing doesn't
+## all fly to the identical nearest tree.
+func _find_tree_perch() -> Variant:
+	if tree_world == null or not tree_world.has_method("trees_near"):
+		return null
+	var trees: Array = tree_world.trees_near(position, int(IDLE_PERCH_SEARCH_TILES))
+	if trees.is_empty():
+		return null
+	_idle_perch_pick_index += 1
+	var target := GroundForageBehavior.choose_worm(
+		position, trees, PixelNoise.value(wander_seed, _idle_perch_pick_index, 3)
+	)
+	if target.is_empty():
+		return null
+	return target["position"]
 
 
 ## Where the bird was when the forage rule declared it had arrived, where it is

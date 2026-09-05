@@ -7183,6 +7183,31 @@ state had never once been set by anything in `src/`.
   15 tests green in `test_ambient_flyer_movement.gd` (2 new, 2 existing
   updated for a genuinely changed contract). Writeup:
   `concept/ecosystem_dynamics.md`'s same section.
+  **Follow-up, watched live right after: "the birds don't forage".**
+  Investigated live instead of assumed: instrumented the full
+  found-to-strike lifecycle with temporary prints (reverted, not
+  committed) and watched a real `--solo` session. The mechanism works --
+  88 successful commits, 296 PECKING frames, 26 real strikes, 16 complete
+  cycles for robin alone in one run. The report is real but almost
+  certainly about visibility (a strike is a brief ground-level event),
+  not logic; no code changed here as a result. Separate finding along the
+  way: zero sparrow spawns across two sessions while robin/bee/monarch/
+  swallowtail all spawned normally -- flagged as its own follow-up task,
+  since it looks like a population/food-density question rather than
+  anything wrong with foraging itself.
+  **Same message, second half: "also birds should sit down on trees to
+  tweet / dance".** New `EarthChunkManager.trees_near` (modeled on the
+  existing `blossoms_near`, season/species gate dropped, felled trees
+  excluded) gives `AmbientFlyerMarker` a real tree query, wired as a new
+  `tree_world` field alongside the other world ports. `_step_idle_rest`
+  now flies to a scattered nearby tree (same fly-then-land shape/scatter
+  idiom every other forage target already uses) before starting its
+  hold, landing at trunk-foot ground level (no canopy-height model exists
+  yet anywhere in this codebase). No tree nearby, or no `tree_world` at
+  all, still falls back to the original in-place perch unchanged. 7 new
+  tests (4 chunk-manager, 3 marker), 222/224 green across the renderer
+  and marker suites (same 2 pre-existing `SpiralFlight` failures aside).
+  Writeup: `concept/ecosystem_dynamics.md`'s same section.
 - **Persistence / catch-up integration of eaten burrows** (medium) — ⬜ Not
   started, deliberately — a reloaded chunk re-seeds deterministically and
   loses which burrows had been eaten, exactly like `FlowerPatch`, `TallGrass`,
