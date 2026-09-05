@@ -85,6 +85,17 @@ const _ITEMS := {
 	"acorn": ["Acorn", "food", 20, 0.0],
 	"hazelnut": ["Hazelnut", "food", 20, 0.0],
 	"pine": ["Pine Nut", "food", 20, 0.0],
+	# Wild mushroom species (see docs/concept/mushrooms.md and
+	# MushroomSpecies -- a mushroom's species id IS the id of the item it
+	# drops, the same convention TreeSpecies uses). Picking one up always
+	# resolves to its real species id regardless of whether the player has
+	# identified it yet -- the ambiguity is about what the world-standing
+	# marker LOOKS like, not what ends up in inventory.
+	"fly_agaric": ["Fly Agaric", "food", 20, 0.0],
+	"death_cap": ["Death Cap", "food", 20, 0.0],
+	"chanterelle": ["Chanterelle", "food", 20, 0.0],
+	"porcini": ["Porcini", "food", 20, 0.0],
+	"puffball": ["Puffball", "food", 20, 0.0],
 	"wood": ["Wood", "material", 40, 0.0],
 	"wooden_club": ["Wooden Club", "weapon", 1, 8.0],
 	"iron_sword": ["Iron Sword", "weapon", 1, 15.0],

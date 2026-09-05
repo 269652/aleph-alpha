@@ -87,3 +87,23 @@ func test_every_host_tree_is_a_real_tree_species():
 		if host.is_empty():
 			continue
 		assert_true(tree_species.IDS.has(host), "%s names an unknown host tree %s" % [id, host])
+
+
+# -- item catalog (see docs/concept/mushrooms.md: picking one up always ---
+# resolves to its real species id, which must survive save/load per
+# item_identity.md -- an id ItemCatalog doesn't know evaporates on reload)
+
+## Every species drops an item the game actually knows about -- a
+## mushroom's species id IS the id of the item it drops, the same
+## convention test_tree_species.gd's own test_every_species_drops_a_real_
+## item already pins for TreeSpecies.
+func test_every_species_drops_a_real_item():
+	var catalog = load("res://src/gameplay/item_catalog.gd").new()
+	for id in MushroomSpecies.IDS:
+		assert_true(catalog.has(id), "%s has no item to drop" % id)
+
+
+func test_every_species_item_is_food():
+	var catalog = load("res://src/gameplay/item_catalog.gd").new()
+	for id in MushroomSpecies.IDS:
+		assert_eq(catalog.kind_of(id), "food", "%s should be a food item" % id)
