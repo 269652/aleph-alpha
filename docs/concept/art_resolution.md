@@ -163,7 +163,7 @@ correct tile positions once `TILE_SIZE` changes.
   sharp).
 - ⬜ Phase 2 (character).
 - ⬜ Phase 3 (vegetation / resource nodes) -- still not a real resolution
-  pass (trees still composite onto the same shared 40x52px canvas,
+  pass (trees still composite onto the same shared canvas,
   `ProceduralTreeSprite.SIZE`, at the same `ArtResolution.DETAIL_MULTIPLIER`
   every other entity uses -- raising that multiplier for trees alone would
   break the same "reads as chunky pixel art, not smooth" floor `Camera2D`
@@ -179,6 +179,42 @@ correct tile positions once `TILE_SIZE` changes.
   nearest-only was originally chosen to fix. A genuine resolution increase
   -- more final pixels, not just better-chosen ones -- is still the open
   part of this phase.
+
+  **Follow-up (2026-09-05), same day: "trees always looked crispy how are
+  they now blurry ... make trees bigger".** Live-verified the two fixes
+  above WERE genuinely helping (relaunched, still reported blurry), so
+  investigated raising resolution properly this time -- and proved,
+  precisely rather than assumed, that it is mathematically impossible
+  without a real regression: `screen_pixels_per_art_pixel = SPRITE_SCALE *
+  CAMERA_ZOOM.x = (1/N) * 4.0`, which needs `N <= 2` to clear the
+  `test_one_art_pixel_covers_several_screen_pixels` floor (>= 2.0) AT ALL
+  at the design resolution (720p) -- a TREE-SPECIFIC multiplier is exactly
+  as constrained as the shared one, since both share the one `Camera2D`.
+  There is no N > 2 for ANY entity, tree-specific or otherwise, that keeps
+  the game's own chunky-pixel-art floor at 720p, let alone whole-number
+  alignment across every target resolution too.
+
+  So this pass instead made the tree bigger ON SCREEN at the SAME native
+  resolution: `ProceduralTreeSprite.WORLD_SIZE` 20x26 -> 25x33 (25%
+  bigger, `SIZE`/`SPECKLE_COUNT` follow proportionally), carrying NONE of
+  the resolution trade-off above -- every resolution stays exactly as
+  pixel-perfect as it already was; the existing detail just gets more
+  screen area to read clearly. Deliberately more modest than the
+  previously-tried-and-reverted 2x (40x56, "forests crowded and read
+  worse") -- reverified directly this time (`tools/probe_forest_density
+  .gd`) that a small forest cluster at the new size still shows
+  individually distinguishable canopies, not an undifferentiated green
+  mass. Also checked and ruled out as the dominant cause here (though not
+  fully excluded for a whole scattered forest): sub-pixel sprite-position
+  misalignment (`tools/probe_pixel_snap.gd`) -- trees are placed with a
+  continuous per-tile jitter (`TreeRenderer._stand_position`), not on a
+  clean pixel grid, but a direct snap-2d-transforms-to-pixel A/B render
+  showed no visible difference for one tree at normal viewing scale.
+
+  **A genuine native-resolution increase for trees remains impossible
+  within this game's current shared camera zoom**, not merely undone --
+  any future attempt needs to change the zoom/design-resolution
+  relationship itself (Phase 7), not retry a tree-specific carve-out.
 - ⬜ Phase 4 (creatures).
 - ⬜ Phase 5 (structures).
 - ⬜ Phase 6 (items / icons).

@@ -29,6 +29,41 @@ func _procedural_generator() -> ProceduralTreeSprite:
 	return procedural
 
 
+## -- Bigger trees, same native resolution (reported directly) --------------
+#
+# "trees always looked crispy... revert the zoom and just make trees
+# bigger" -- investigated first whether MORE native pixels (a higher
+# DETAIL_MULTIPLIER, tree-specific or shared) could fix the reported blur:
+# it cannot, without regression -- this game's shared camera zoom (4.0)
+# means ANY multiplier above 2 drops below 2 screen-pixels-per-art-pixel
+# at the design resolution (720p), which is the exact "stops reading as
+# pixel art" failure DETAIL_MULTIPLIER was originally capped at 2 to avoid
+# (see test_art_resolution.gd's own "chunky pixels" section). So this
+# instead makes the tree bigger ON SCREEN at the SAME native resolution
+# (same DETAIL_MULTIPLIER, same ArtResolution.SIZE derivation) -- the
+# existing detail gets more screen real estate to read clearly, with none
+## of the resolution-multiplier trade-offs: every resolution stays exactly
+# as pixel-perfect and chunky as it already is today.
+#
+# 25% bigger -- a deliberately modest step, not the full previously-tried-
+# and-reverted 2x (WORLD_SIZE briefly grew to 40x56 "to tower over the
+# hero", reverted because "forests crowded and read worse"); this sits
+# roughly a quarter of the way from the current size toward that already-
+# rejected ceiling, not back at it.
+
+func test_world_size_is_pinned_25_percent_bigger():
+	assert_eq(ProceduralTreeSprite.WORLD_SIZE, Vector2i(25, 33))
+
+
+## SPECKLE_COUNT's own doc comment already commits to scaling with canvas
+## area so leaf-speckle density per drawn area stays unchanged -- pinned
+## here so a future WORLD_SIZE change cannot silently leave it stale (as
+## this one would have, left alone): new area (50x66) / old area (40x52)
+## is ~1.587x, so the count scales by the same factor.
+func test_speckle_count_is_pinned_to_the_new_canvas_area():
+	assert_eq(ProceduralTreeSprite.SPECKLE_COUNT, 127)
+
+
 ## Art-direction pass: the tree silhouette is ringed with the shared near-black
 ## cool outline so it pops against the ground.
 func test_tree_uses_the_shared_dark_outline():

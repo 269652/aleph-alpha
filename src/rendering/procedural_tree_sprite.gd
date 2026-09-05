@@ -25,20 +25,41 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 ## then reverted: at that size forests crowded and read worse than they had
 ## at this one. Height relative to the hero is better solved by draw order
 ## (a tree now occludes someone walking behind it) than by sheer bulk.
-const WORLD_SIZE := Vector2i(20, 26)
+##
+## Reported directly: "trees always looked crispy how are they now blurry
+## ... make trees bigger". Raising DETAIL_MULTIPLIER instead (more native
+## pixels) was investigated and rejected: this game's shared camera zoom
+## means ANY multiplier above 2 drops below 2 screen-pixels-per-art-pixel
+## at the design resolution (720p) -- the exact "stops reading as pixel
+## art" regression DETAIL_MULTIPLIER was capped at 2 to prevent in the
+## first place (see test_art_resolution.gd's "chunky pixels" section) --
+## so there is no resolution-side fix available without reopening that.
+## Making the tree bigger ON SCREEN at the SAME native resolution carries
+## none of that trade-off (every resolution stays exactly as pixel-perfect
+## as it already is; the existing detail just gets more screen area to
+## read clearly) -- 25% bigger, a deliberately modest step versus the
+## already-rejected 2x (40x56) above, roughly a quarter of the way there
+## rather than back at it.
+const WORLD_SIZE := Vector2i(25, 33)
 
 ## The ART canvas, DETAIL_MULTIPLIER times the world footprint (see
 ## docs/concept/art_resolution.md) -- TreeRenderer draws it at
 ## ArtResolution.SPRITE_SCALE so the tree gains real pixel detail without
-## growing in the world.
-const SIZE := Vector2i(40, 52)
+## growing in the world. Actually DERIVED now (was a hardcoded Vector2i(40,
+## 52) that merely happened to equal the old WORLD_SIZE * DETAIL_MULTIPLIER
+## -- a silent staleness risk this WORLD_SIZE change would otherwise have
+## walked straight into).
+const SIZE := WORLD_SIZE * ArtResolution.DETAIL_MULTIPLIER
 const OUTLINE_DARKEN := 0.5
 const SHADE_DARKEN := 0.2
 const HIGHLIGHT_LIGHTEN := 0.2
 ## Scaled with the canvas area so leaf speckle density per drawn area is
 ## unchanged -- a fixed count would read as a nearly-bare canopy at 16x the
-## pixels.
-const SPECKLE_COUNT := 80
+## pixels. Was 80 at the previous 40x52 canvas; the 25%-bigger WORLD_SIZE
+## above grows the canvas area by (50*66)/(40*52) =~ 1.587x, so the count
+## scales by the same factor (80 * 1.587 =~ 127) rather than staying fixed
+## while the canopy area it must speckle grows around it.
+const SPECKLE_COUNT := 127
 
 ## Push canopy toward a saturated Zelda-canopy green before shading.
 const CANOPY_SATURATE := 0.16
