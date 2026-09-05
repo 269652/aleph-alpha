@@ -249,9 +249,11 @@ watched the bird peck at them.
   `EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S`/`is_crushed_by`,
   `EarthChunkManager.crush_worm_at`, wired for the player and every
   `CreatureMarker`) — see "Crushed underfoot" below.
-- ⬜ Illustrated worm sprite (crawl/emerge/retreat/die, real corpse
-  persistence) — spec written, see "Illustrated worm sprite" below;
-  implementation in progress.
+- ✅ Illustrated worm sprite (crawl/emerge/retreat/die, real corpse
+  persistence) — `src/rendering/illustrated_worm_sprite.gd`,
+  `EarthwormPatch.is_corpse`/`corpse_age_seconds`/`is_rising`,
+  `EarthChunkManager._worm_texture_for` — see "Illustrated worm
+  sprite" below.
 - ✅ Ants (mound population + myrmecochory, both grassland grass-seed AND
   forest/rainforest windfall fruit/nut foraging, a real rendered presence
   that visibly grows with its own colony, real round-trip foraging
