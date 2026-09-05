@@ -219,6 +219,21 @@ func _add_stub_player(at: Vector2) -> StubPlayer:
 	return player
 
 
+## A second real FishMarker, placed directly (never manually _process'd, so
+## it stays put as a fixed schoolmate to react to) and left with an optional
+## known heading for the orientation-zone/"follow" tests. Joins the "fish"
+## group on its own via _ready(), same as `marker` itself.
+func _add_school_fish(at: Vector2, heading: Vector2 = Vector2.ZERO) -> FishMarker:
+	var other := FishMarker.new()
+	other.position = at
+	other.wander_seed = 4242
+	add_child(other)
+	if heading != Vector2.ZERO:
+		other._current_heading = heading
+	_extra.append(other)
+	return other
+
+
 ## See World's mouse-hover animal-name tooltip (docs feature request).
 func test_get_display_name_capitalizes_the_species():
 	marker.species = "goldfish"
@@ -735,4 +750,110 @@ func test_a_fish_far_from_the_player_does_not_take_a_full_step_every_frame():
 	assert_ne(
 		before, marker.position,
 		"once enough time has accumulated, the throttled fish should finally take its full step"
+	)
+
+
+# -- fish-to-fish social behavior (see FishSchooling, docs/concept/
+# ecosystem_dynamics.md#a-shoal-finds-its-shape) -----------------------------
+
+func test_current_heading_returns_the_fishs_own_heading():
+	marker._current_heading = Vector2.UP
+	assert_eq(marker.current_heading(), Vector2.UP)
+
+
+func test_a_lone_fish_with_no_schoolmates_is_unaffected_by_schooling():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	for i in 10:
+		marker._process(0.1)
+	assert_null(marker._school_neighbor, "no other fish exists to school with")
+
+
+## These four all use ONE large-delta _process call rather than many small
+## steps: FishMarker's turn-toward-target lerp weight is
+## clampf(TURN_RATE * delta, 0.0, 1.0) (see fish_marker.gd's own _process),
+## so any delta >= 1.0/TURN_RATE snaps _current_heading to EXACTLY the
+## computed target angle in one call. That makes the wiring itself
+## precisely, deterministically checkable -- no convergence timing, no
+## risk of a later zone transition muddying the read -- rather than
+## inferring it from many-step position drift, which plain undirected
+## wander can also produce by chance over a long enough run.
+
+func test_a_fish_avoids_a_schoolmate_that_is_too_close():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var other := _add_school_fish(marker.position + Vector2(3, 0))
+	marker._school_neighbor = other
+
+	marker._process(1.0)
+
+	assert_almost_eq(marker._current_heading.x, -1.0, 1e-3, "should face directly away from a too-close schoolmate")
+	assert_almost_eq(marker._current_heading.y, 0.0, 1e-3)
+
+
+func test_a_fish_approaches_a_distant_schoolmate_within_perception_range():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var other := _add_school_fish(marker.position + Vector2(80, 0))
+	marker._school_neighbor = other
+
+	marker._process(1.0)
+
+	assert_almost_eq(marker._current_heading.x, 1.0, 1e-3, "should face directly toward a distant-but-noticed schoolmate")
+	assert_almost_eq(marker._current_heading.y, 0.0, 1e-3)
+
+
+func test_a_fish_matches_heading_with_a_schoolmate_in_the_orientation_zone():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var other := _add_school_fish(marker.position + Vector2(20, 0), Vector2.UP)
+	marker._school_neighbor = other
+
+	marker._process(1.0)
+
+	assert_almost_eq(
+		marker._current_heading.x, 0.0, 1e-3,
+		"should match the schoolmate's heading, not approach its position"
+	)
+	assert_almost_eq(marker._current_heading.y, -1.0, 1e-3)
+
+
+func test_bolting_ignores_a_nearby_schoolmate():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	# Would pull the heading toward -X (avoid) if schooling were consulted
+	# at all while bolting.
+	var other := _add_school_fish(marker.position + Vector2(5, 0))
+	marker._school_neighbor = other
+	# Threat directly below -> bolt heading is straight up (-Y), orthogonal
+	# to the schoolmate's pull, so the two are easy to tell apart.
+	marker.bolt_from(marker.position + Vector2(0, 40))
+
+	# 0.5s, not 1.0: _bolt_remaining (BOLT_SECONDS, 0.9) is decremented by
+	# delta BEFORE target-selection runs each frame, so a full 1.0s call
+	# would let the bolt expire mid-call and fall through to schooling --
+	# 0.5s stays inside the bolt window while still exceeding the (boosted,
+	# BOLT_TURN_MULTIPLIER'd) turn-rate snap threshold.
+	marker._process(0.5)
+
+	assert_almost_eq(marker._current_heading.x, 0.0, 1e-3, "bolting should override schooling entirely, not blend with it")
+	assert_almost_eq(marker._current_heading.y, -1.0, 1e-3, "should be dashing away from the threat")
+
+
+func test_a_fish_does_not_chase_a_schoolmate_when_already_far_from_home():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.home = Vector2(100, 100)
+	marker.position = marker.home + Vector2(500, 0)  # well past the schooling leash
+	var other := _add_school_fish(marker.position + Vector2(50, 0))  # within attraction range of marker's CURRENT position
+	marker._school_neighbor = other
+
+	marker._process(1.0)
+
+	# Approaching `other` would mean heading +X; past its leash a fish
+	# should fall through to plain wander instead, which this far past
+	# WANDER_RADIUS pulls it home -- i.e. heading -X, since home is there.
+	assert_lt(
+		marker._current_heading.x, 0.0,
+		"past its schooling leash, a fish should head home, not chase a nearby schoolmate"
 	)

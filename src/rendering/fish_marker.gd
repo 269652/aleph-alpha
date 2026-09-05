@@ -12,6 +12,7 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const CreatureWander = preload("res://src/rendering/creature_wander.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const FishSchooling = preload("res://src/gameplay/fish_schooling.gd")
 
 ## How much open water the fish keeps around its center on every side --
 ## roughly the sprite's half-extent, so no part of the fish visually overlaps
@@ -336,6 +337,71 @@ func is_bolting() -> bool:
 	return _bolt_remaining > 0.0
 
 
+## -- fish-to-fish social behavior (see FishSchooling, docs/concept/
+## ecosystem_dynamics.md#a-shoal-finds-its-shape) ----------------------------
+
+## This fish's own current swim heading -- read by OTHER fish scanning for a
+## schoolmate to react to (see FishSchooling.steering_for_neighbor's
+## `neighbor_heading` parameter). Mirrors AmbientFlyerMarker._scan_for_
+## partners' own precedent of one flyer reading another's fields directly
+## across a group scan; this is the one field that needed a real accessor
+## rather than direct access, since _current_heading is otherwise treated as
+## this instance's own private turn-smoothing state.
+func current_heading() -> Vector2:
+	return _current_heading
+
+
+var _school_scan_accumulator := 0.0
+## The nearest OTHER fish within FishSchooling.ATTRACTION_RADIUS_PX as of the
+## last scan (null if none) -- re-scanned only every FishSchooling.
+## SCAN_INTERVAL (see _step_schooling), not every frame, for the same
+## performance reason SimulationLod throttles everything else about a fish
+## far from the player: a full "fish" group walk every frame for every fish
+## is exactly the shape of cost that caused this project's own is_river_at_
+## global performance regression (see project history).
+var _school_neighbor: Node = null
+
+
+## Re-scans for a schoolmate on FishSchooling.SCAN_INTERVAL's own cadence.
+## Cheap between scans (just an accumulator add); the group walk itself only
+## runs on the throttled cadence.
+func _step_schooling(delta: float) -> void:
+	_school_scan_accumulator += delta
+	if _school_scan_accumulator < FishSchooling.SCAN_INTERVAL:
+		return
+	_school_scan_accumulator = 0.0
+	_school_neighbor = _nearest_other_fish()
+
+
+## The closest OTHER fish in the "fish" group within FishSchooling.
+## ATTRACTION_RADIUS_PX, or null if none is that close -- the same "react to
+## only your single nearest neighbour" simplification AmbientFlyerMarker's
+## own partner scan and CreatureBehavior._nearest both already make.
+func _nearest_other_fish() -> Node:
+	if not is_inside_tree():
+		return null
+	var nearest: Node = null
+	var nearest_distance := FishSchooling.ATTRACTION_RADIUS_PX
+	for other in get_tree().get_nodes_in_group("fish"):
+		if other == self or not is_instance_valid(other):
+			continue
+		var distance: float = position.distance_to(other.position)
+		if distance <= nearest_distance:
+			nearest = other
+			nearest_distance = distance
+	return nearest
+
+
+## Whether this fish is close enough to home to still let a schoolmate steer
+## it at all -- see FishSchooling.SCHOOL_LEASH_RADIUS_FACTOR's own doc
+## comment. Checked against THIS fish's own current distance from home (not
+## a hypothetical post-step distance): once already past the leash,
+## schooling is ignored in favour of plain wander, which already pulls a
+## fish home on its own (see CreatureWander.direction_at).
+func _school_leash_allows() -> bool:
+	return position.distance_to(home) <= _wander.wander_radius * FishSchooling.SCHOOL_LEASH_RADIUS_FACTOR
+
+
 ## Distance-based update rate (see SimulationLod; mirrors CreatureMarker's and
 ## AmbientFlyerMarker's own _lod_step). Returns the time to advance by, or
 ## NEGATIVE when this frame should be skipped entirely.
@@ -406,22 +472,33 @@ func _process(frame_delta: float) -> void:
 	if _world == null:
 		_step_unconfined_wander(delta)
 		return
+	_step_schooling(delta)
 
 	# Turn the swim heading gradually toward the target rather than snapping
-	# straight to it (see TURN_RATE) -- either an active attraction (a cast
-	# line nearby) once far enough from it to matter, or ordinary wandering.
+	# straight to it (see TURN_RATE) -- one of, in priority order: fleeing a
+	# threat, an active attraction (a cast line nearby) once far enough from
+	# it to matter, ordinary fish-to-fish schooling (see FishSchooling), or
+	# ordinary wandering. See docs/concept/ecosystem_dynamics.md's "The
+	# precedence order" for why: fear always wins, a player's deliberate lure
+	# predates schooling and stays above it, and schooling only ever displaces
+	# plain wander, never either of the two above it.
 	var target: Vector2
 	if _bolt_remaining > 0.0:
-		# Fleeing a kingfisher: a hard heading away from the threat, but
-		# still just a HEADING. The first version moved the fish directly and
-		# returned early, skipping the shore-clearance machinery below --
-		# so a startled fish shot straight out of the water and flopped
-		# across the grass, with the bird then calmly following it onto land
-		# to eat it (reported exactly that way). A panicking fish still
-		# cannot leave the water.
+		# Fleeing a threat -- a kingfisher's strike or a wading player/animal
+		# (see EarthChunkManager.startle_fish_near_waders) -- a hard heading
+		# away from it, but still just a HEADING. The first version moved the
+		# fish directly and returned early, skipping the shore-clearance
+		# machinery below -- so a startled fish shot straight out of the
+		# water and flopped across the grass, with the bird then calmly
+		# following it onto land to eat it (reported exactly that way). A
+		# panicking fish still cannot leave the water.
 		target = _bolt_direction
 	elif attract_target != null and position.distance_to(attract_target) > _ATTRACTION_STOP_DISTANCE:
 		target = (attract_target - position).normalized()
+	elif _school_neighbor != null and is_instance_valid(_school_neighbor) and _school_leash_allows():
+		target = FishSchooling.steering_for_neighbor(
+			position, _school_neighbor.position, _school_neighbor.current_heading()
+		)
 	else:
 		target = _wander.direction_at(home, position, _elapsed_time, wander_seed)
 
