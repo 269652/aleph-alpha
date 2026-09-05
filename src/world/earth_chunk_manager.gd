@@ -1066,16 +1066,24 @@ const FRUITING_INTERVAL := 1.0
 ## rather than a per-leaf hanging position.
 const LEAF_SCATTER_RADIUS := 28.0
 
-## Off-by-default deactivation switch on the leaf-fall block below (see
-## docs/concept/leaf_litter.md). Requested directly: "deactivate leaf
-## littering". Same idiom as EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED's
-## own instance flag, except a mutable `static var` rather than a `const`:
-## the fall-triggering mechanism itself (angle/distance/season roll) stays
-## real, tested logic even switched off by default --
-## test_earth_chunk_manager.gd's own _find_a_fallen_leaf helper forces this
-## on for the duration of a single lookup and restores whatever it was
-## after. Pinned off by test_leaf_litter_is_off_by_default.
-static var LEAF_LITTER_ENABLED := false
+## On/off switch on the leaf-fall block below (see docs/concept/
+## leaf_litter.md). Was off by default for a stretch (requested directly:
+## "deactivate leaf littering", right after the GPU rewrite shipped) --
+## turned back on after ants/bugs were reported foraging nothing at all in
+## practice ("just walk back and forth"): carrion and fresh windfall fruit
+## alone are not reliably near a wandering decomposer, and this was the
+## missing, common, ambient food source. Live-verified before re-enabling
+## that the GPU rewrite (LeafLitterField/LeafLitterRenderer) actually fixed
+## the original per-node performance report rather than assumed to from
+## the architecture change alone -- see leaf_litter.md's own Status entry
+## for the real measurement. Same idiom as EarthChunkGenerator.HYDROLOGY_
+## RIVERS_ENABLED's own instance flag, except a mutable `static var` rather
+## than a `const`: the fall-triggering mechanism itself (angle/distance/
+## season roll) stays real, tested logic regardless of which way the
+## default sits -- test_earth_chunk_manager.gd's own _find_a_fallen_leaf
+## helper forces this on for the duration of a single lookup and restores
+## whatever it was after. Pinned on by test_leaf_litter_is_on_by_default.
+static var LEAF_LITTER_ENABLED := true
 
 ## Roll granularity for the deterministic "does a tree shed a leaf this
 ## step" check below -- NOT engine randf(): a per-step gameplay roll uses
