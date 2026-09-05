@@ -154,6 +154,82 @@ func test_advance_does_not_snap_a_transition_still_in_progress():
 	assert_ne(leaf.transition_from, leaf.position, "a leaf mid-fall must still carry a real offset")
 
 
+# -- advance: decaying to "winter", a leaf's terminal stage ------------------
+#
+# Reported directly: "fallen leaves should change the season from autumn to
+# winter if they keep lying on the ground ... winter is last stage for a
+# leaf." A settled leaf's own `season` field was fixed forever at fall time
+# until this -- see DECAY_TO_WINTER_SECONDS' own doc comment for why this is
+# a standalone, LIFETIME-relative timer rather than tied to the real
+# in-game calendar season (a real season's own turning window alone runs
+# ~16 real hours in normal, non-accelerated play -- LIFETIME's whole 90
+# seconds would elapse and prune the leaf long before the actual calendar
+# ever reached winter).
+
+func test_advance_keeps_the_fallen_season_before_the_decay_threshold():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.DECAY_TO_WINTER_SECONDS - 1.0)
+	assert_eq(field.leaves()[0].season, "autumn")
+
+
+func test_decay_never_happens_early():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.DECAY_TO_WINTER_SECONDS - 0.01)
+	assert_eq(
+		field.leaves()[0].season, "autumn", "must not decay to winter a fraction of a second early"
+	)
+
+
+func test_advance_decays_to_winter_once_the_threshold_passes():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.DECAY_TO_WINTER_SECONDS + 1.0)
+	assert_eq(field.leaves()[0].season, "winter")
+
+
+## Both seasons a leaf can actually fall in reach the same terminal stage --
+## "winter" is not autumn-exclusive.
+func test_a_summer_fallen_leaf_also_decays_to_winter():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "summer", 0.0)
+	field.advance(1.0, LeafLitterField.DECAY_TO_WINTER_SECONDS + 1.0)
+	assert_eq(field.leaves()[0].season, "winter")
+
+
+## Winter is the LAST stage -- once decayed, further real time passing (short
+## of the leaf being pruned outright at LIFETIME) must never move it on to
+## anything else.
+func test_winter_is_a_terminal_stage_not_a_cycle():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.DECAY_TO_WINTER_SECONDS + 1.0)
+	assert_eq(field.leaves()[0].season, "winter")
+	field.advance(1.0, LeafLitterField.LIFETIME - 1.0)
+	assert_eq(field.leaves()[0].season, "winter", "winter must not advance to any further stage")
+
+
+## A leaf still mid-transition (just fallen, or just relocated) is left
+## alone even if it is already old enough by the clock -- "keep LYING on the
+## ground" implies actually at rest, the same "only a SETTLED leaf is
+## eligible" gate the wind-dispersal roll right below in this same function
+## already applies for the identical reason.
+func test_decay_does_not_apply_to_a_leaf_still_mid_transition():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	# Relocate it right at the moment it would otherwise decay, restarting
+	# its own transition -- it must not decay while still easing into the
+	# new spot, even though `now - spawned_at` already clears the threshold.
+	field.relocate_leaf_near(
+		Vector2(100, 100), 10.0, Vector2(120, 100), LeafLitterField.DECAY_TO_WINTER_SECONDS
+	)
+	field.advance(1.0, LeafLitterField.DECAY_TO_WINTER_SECONDS + 0.1)
+	assert_eq(
+		field.leaves()[0].season, "autumn", "a leaf still mid-transition must not decay yet"
+	)
+
+
 # -- relocate_leaf_near: the one persisted-relocation mechanism --------------
 #
 # Mirrors PebbleDispersion's shape: a nudge that STAYS (unlike a wake that

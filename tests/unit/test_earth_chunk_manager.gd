@@ -2001,6 +2001,10 @@ const _TURNING_INTO_WINTER_YEAR_FRACTION := 0.72
 ## Well inside summer's own settled span -- the trickle window, see
 ## LEAF_SUMMER_TRICKLE_CHANCE.
 const _SETTLED_SUMMER_YEAR_FRACTION := 0.3
+## Well inside autumn's own SETTLED (pre-turn) span -- [0.5, 0.665), well
+## clear of the turning slice _TURNING_INTO_WINTER_YEAR_FRACTION samples --
+## the baseline-trickle window, see LEAF_AUTUMN_BASELINE_CHANCE.
+const _SETTLED_AUTUMN_YEAR_FRACTION := 0.55
 ## Well inside spring, before blossom even opens -- no leaf falls at all
 ## here (see step_fruiting's own leaf_fall_chance/leaf_fall_season block):
 ## neither the autumn turn nor the summer trickle condition is true.
@@ -2153,6 +2157,40 @@ func test_step_fruiting_also_drops_a_light_summer_trickle():
 
 	assert_false(found.is_empty(), "a settled summer tree should still shed an occasional leaf")
 	assert_eq(found.season, "summer")
+
+
+## Reported directly: "leaf litter should happen constantly at a low rate
+## in normal gameplay ... in autumn all leaves should fall eventually".
+## Before this, leaf_fall_chance was driven ONLY by canopy_turn_progress,
+## which reads exactly 0.0 for autumn's own settled first two-thirds (see
+## _SETTLED_AUTUMN_YEAR_FRACTION's own doc comment) -- a real autumn tree,
+## well before its final visible turn, shed nothing at all for roughly two
+## real DAYS of normal, non-accelerated play (TURN_FRACTION=0.34 of a
+## 172,800-real-second season). A real deciduous tree does not wait for its
+## colour to fully turn before its first leaves come down -- ordinary wind
+## and early individual-leaf senescence pull a few down all autumn long,
+## the same real phenomenon LEAF_SUMMER_TRICKLE_CHANCE already models for
+## summer's own wind/petal damage. LEAF_AUTUMN_BASELINE_CHANCE gives autumn
+## that same baseline for its whole span, with the existing turn-progress
+## ramp rising on top of it (not replacing it) once the canopy's own final
+## turn actually begins.
+func test_step_fruiting_sheds_a_baseline_trickle_in_settled_autumn_before_the_turn():
+	var tree := ChoppableTree.new()
+	tree.position = _position_for_species("cherry")
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+	_set_world_age_at_year_fraction(_SETTLED_AUTUMN_YEAR_FRACTION)
+
+	var found := _find_a_fallen_leaf(
+		"cherry", tree.position, tree.position, _LEAF_TRICKLE_ROLL_ATTEMPTS
+	)
+
+	assert_false(
+		found.is_empty(),
+		"a settled (pre-turn) autumn tree should still shed an occasional baseline leaf"
+	)
+	assert_eq(found.season, "autumn")
 
 
 ## Spring, before blossom even opens, is neither the autumn turn nor the
