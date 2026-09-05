@@ -7886,6 +7886,43 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   unload — chunk-local, ephemeral state, the same explicit scope cut
   `soil_fauna.md`'s worm burrows already made for the same reason.
 
+### Mushrooms (`concept/mushrooms.md`)
+
+Reported: "brainstorm and implement mushrooms next, 5x5 illustrated
+variant sheets per species." Full new system: fungal fruiting bodies as a
+per-chunk event-driven patch-sim (not continuous growth — a fruiting body
+appears fully formed), a real rain+autumn flush trigger, one shared
+"Unidentified Mushroom" look/name until the player has learned to
+identify them (`ProceduralEggSprite`'s pre-hatch idiom, gated on
+experience instead of a life stage), and real per-species toxicity on
+eating one. Five species: Fly Agaric/Death Cap (toxic), Chanterelle/
+Porcini/Puffball (edible).
+
+✅ Species catalog, fruiting-trigger model, per-species toxin model, both
+sprite generators (procedural + an empty-but-ready illustrated slot),
+the per-chunk patch-sim, item catalog entries, the visible/pickable
+marker, its renderer, `Player` toxin+identification-by-encounter wiring,
+`EarthChunkManager` chunk lifecycle, and `scenes/world.gd`'s live
+per-frame loop — every piece reachable from a real running game, built
+red-first end to end (~155 tests, all green; see `feature/mushrooms`).
+
+**Identification was originally planned as a `skill_web.gd` node** (see
+`docs/concept/mushrooms.md`'s own "Revised while implementing" note) —
+reading that file's actual structure first (per this doc's own
+Development-process rule) found every ring in every wedge already at its
+`RING_SLOT_COUNT` capacity, with no free slot to add one without a
+structural change touching all seven wedges. Replaced with
+`Player.mushrooms_eaten`/`knows_mushrooms()`: real foraging identification
+earned through direct field experience (eating mushrooms, risk included),
+not a purchased skill point — arguably the more honest mechanic anyway.
+
+⬜ No illustrated art this pass (the AI-generation prompt for a real 5x5
+sheet per species is intentionally not written yet — asked, and
+explicitly deferred). No literal host-tree proximity check (mycorrhizal
+species are biome-gated only). No cooking-recipe integration. See the
+concept doc's own "Deliberately not modeled" section for the full list
+and reasoning.
+
 ### Leaf Litter (`concept/leaf_litter.md`)
 
 ✅ **Rewritten onto a GPU-instanced per-chunk data model

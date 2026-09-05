@@ -66,6 +66,16 @@ func test_a_restored_player_keeps_the_saved_health_not_a_full_heal():
 	assert_eq(restored.max_health, source.max_health)
 
 
+## Real foraging knowledge, once earned, should not evaporate on reload --
+## see docs/concept/mushrooms.md's "Identification".
+func test_a_restored_player_remembers_mushrooms_eaten():
+	source.mushrooms_eaten = 3
+
+	restored.apply_save_dict(source.to_save_dict())
+
+	assert_eq(restored.mushrooms_eaten, 3)
+
+
 func test_a_restored_player_carries_the_same_inventory_contents():
 	# Start from a clean slate so the assertion isn't fighting _ready()'s
 	# starter grants (sword/axe/leather set/fishing rod).
