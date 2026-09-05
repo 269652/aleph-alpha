@@ -14,15 +14,28 @@ extends RefCounted
 ## makes an ecosystem out of a set of props -- the same object meaning
 ## different things to different creatures is what a niche actually is.
 ##
+## Since docs/concept/ethogram.md the receptors live in the species record
+## (Ethogram.SPECIES) rather than here, so a species is data in one place;
+## what this file used to call `response` is the ethogram's `valence`. This
+## file keeps the PHYSICS of smell -- what things emit, and how a smell thins
+## with range -- and reads an animal's expressed receptors through
+## Ethogram.express, which is also how an individual's receptor genes reach
+## the verdict: pass a genome and the answer is that individual's. The
+## molecule names are the ethogram's smell channels, re-exported so no caller
+## of this API changes.
+##
 ## Pure and engine-free: this says what a thing emits and what an animal makes
 ## of it. Walking toward it is the caller's job.
 
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+const Affinity = preload("res://src/gameplay/affinity.gd")
+
 ## The molecules worth modelling: the ones that decide foraging.
-const SUGAR := "sugar"  # ripe fruit, nectar
-const DECAY := "decay"  # rotting fruit, carrion
-const GREEN := "green"  # leaves, cut grass, foliage
-const MUSK := "musk"  # animals themselves
-const SMOKE := "smoke"  # fire
+const SUGAR := Ethogram.SUGAR  # ripe fruit, nectar
+const DECAY := Ethogram.DECAY  # rotting fruit, carrion
+const GREEN := Ethogram.GREEN  # leaves, cut grass, foliage
+const MUSK := Ethogram.MUSK  # animals themselves
+const SMOKE := Ethogram.SMOKE  # fire
 
 const MOLECULES: Array[String] = [SUGAR, DECAY, GREEN, MUSK, SMOKE]
 
@@ -60,39 +73,17 @@ static func fruit_mixture(_item_id: String, freshness: float) -> Dictionary:
 
 ## ## Who carries which receptors
 ##
-## `sensitivity` is how well the animal DETECTS a molecule at all; `response`
-## is what it makes of detecting it, negative being driven off. They are
-## separate on purpose: an animal can be keenly aware of something it wants
-## nothing to do with, which is what makes a repellent work rather than merely
-## being invisible.
-const RECEPTORS := {
-	# Rooting omnivore: excellent nose, eats fruit and is untroubled by a
-	# little rot -- which is most of what a boar's nose is for.
-	"boar": {
-		"sensitivity": {SUGAR: 1.0, DECAY: 0.9, GREEN: 0.5, MUSK: 0.6, SMOKE: 0.8},
-		"response": {SUGAR: 1.0, DECAY: 0.3, GREEN: 0.2, MUSK: -0.1, SMOKE: -1.0},
-	},
-	# Browser: wants fruit and foliage, avoids anything dead.
-	"deer": {
-		"sensitivity": {SUGAR: 0.8, DECAY: 0.7, GREEN: 1.0, MUSK: 0.9, SMOKE: 0.9},
-		"response": {SUGAR: 0.8, DECAY: -0.6, GREEN: 0.9, MUSK: -0.5, SMOKE: -1.0},
-	},
-	# Grazer: it is the grass it is after.
-	"horse": {
-		"sensitivity": {SUGAR: 0.7, DECAY: 0.6, GREEN: 1.0, MUSK: 0.7, SMOKE: 0.9},
-		"response": {SUGAR: 0.6, DECAY: -0.5, GREEN: 1.0, MUSK: -0.2, SMOKE: -1.0},
-	},
-	# Fruit-eating bird: takes ripe fruit, ignores what has gone over.
-	"robin": {
-		"sensitivity": {SUGAR: 0.9, DECAY: 0.4, GREEN: 0.3, MUSK: 0.5, SMOKE: 0.7},
-		"response": {SUGAR: 1.0, DECAY: -0.2, GREEN: 0.1, MUSK: -0.3, SMOKE: -0.8},
-	},
-	# The one that wants what everything else avoids.
-	"fly": {
-		"sensitivity": {SUGAR: 0.5, DECAY: 1.0, GREEN: 0.1, MUSK: 0.6, SMOKE: 0.2},
-		"response": {SUGAR: 0.3, DECAY: 1.0, GREEN: 0.0, MUSK: 0.2, SMOKE: -0.4},
-	},
-}
+## Ethogram.SPECIES, expressed per individual by Ethogram.express: a species'
+## `sensitivity` is how well it DETECTS a molecule at all, its `valence` what
+## it makes of detecting it, negative being driven off. They are separate on
+## purpose: an animal can be keenly aware of something it wants nothing to do
+## with, which is what makes a repellent work rather than merely being
+## invisible. A receptor gene (`receptor_<molecule>` in the genome) scales
+## that individual's sensitivity; valence is the species' innate wiring.
+##
+## The species template is expressed once and cached, since every sniff of
+## every source asks for it; an individual genome is expressed on demand.
+static var _template_cache: Dictionary = {}
 
 
 ## How faint a smell is at this range, 1 at the source and 0 beyond reach.
@@ -106,34 +97,34 @@ static func dilution(distance_tiles: float) -> float:
 ## How LOUD this mixture is to this animal -- how much it notices, regardless
 ## of whether it likes it.
 static func perceived_strength(
-	species: String, mixture: Dictionary, distance_tiles: float
+	species: String, mixture: Dictionary, distance_tiles: float, genome: Dictionary = {}
 ) -> float:
-	if not RECEPTORS.has(species):
+	var expressed := _expressed(species, genome)
+	if expressed.is_empty():
 		return 0.0
-	var sensitivity: Dictionary = RECEPTORS[species]["sensitivity"]
-	var total := 0.0
-	for molecule in mixture:
-		total += float(mixture[molecule]) * float(sensitivity.get(molecule, 0.0))
-	return total * dilution(distance_tiles)
+	return Affinity.loudness(mixture, expressed["sensitivity"]) * dilution(distance_tiles)
 
 
 ## What this animal makes of the mixture: positive draws it in, negative drives
 ## it off, near zero is noise.
 ##
-## The same sum as perceived_strength but weighted by RESPONSE, so a rotting
-## fruit can be extremely loud to a deer and still repel it.
+## The same sum as perceived_strength but weighted by VALENCE too, so a
+## rotting fruit can be extremely loud to a deer and still repel it.
 static func attraction_to(
-	species: String, mixture: Dictionary, distance_tiles: float
+	species: String, mixture: Dictionary, distance_tiles: float, genome: Dictionary = {}
 ) -> float:
-	if not RECEPTORS.has(species):
+	var expressed := _expressed(species, genome)
+	if expressed.is_empty():
 		return 0.0
-	var sensitivity: Dictionary = RECEPTORS[species]["sensitivity"]
-	var response: Dictionary = RECEPTORS[species]["response"]
-	var total := 0.0
-	for molecule in mixture:
-		total += (
-			float(mixture[molecule])
-			* float(sensitivity.get(molecule, 0.0))
-			* float(response.get(molecule, 0.0))
-		)
-	return total * dilution(distance_tiles)
+	return (
+		Affinity.pull(mixture, expressed["sensitivity"], expressed["valence"])
+		* dilution(distance_tiles)
+	)
+
+
+static func _expressed(species: String, genome: Dictionary) -> Dictionary:
+	if not genome.is_empty():
+		return Ethogram.express(species, genome)
+	if not _template_cache.has(species):
+		_template_cache[species] = Ethogram.express(species)
+	return _template_cache[species]
