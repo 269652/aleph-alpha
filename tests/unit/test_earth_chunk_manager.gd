@@ -2005,9 +2005,16 @@ const _SETTLED_SUMMER_YEAR_FRACTION := 0.3
 ## clear of the turning slice _TURNING_INTO_WINTER_YEAR_FRACTION samples --
 ## the baseline-trickle window, see LEAF_AUTUMN_BASELINE_CHANCE.
 const _SETTLED_AUTUMN_YEAR_FRACTION := 0.55
-## Well inside spring, before blossom even opens -- no leaf falls at all
-## here (see step_fruiting's own leaf_fall_chance/leaf_fall_season block):
-## neither the autumn turn nor the summer trickle condition is true.
+## Well inside spring's own canopy BLOSSOM stage -- confirmed directly
+## (TreePhenology.canopy_state_at(0.05) reads {from:"spring", to:"summer",
+## progress:0.833}): NOT "before blossom even opens" as an earlier draft
+## of this comment claimed -- the canopy is already most of the way
+## through its own blossom-to-leaf-out transition by this point, but the
+## SEASON label a tree wears is still "spring" until that transition
+## actually completes (canopy_season flips to "summer" by year_fraction
+## 0.1, confirmed the same way) -- which is the real reason this point
+## sits in the spring-blossom trickle window, see LEAF_SPRING_TRICKLE_
+## CHANCE, not because blossom is freshly opening here.
 const _SETTLED_SPRING_YEAR_FRACTION := 0.05
 ## Generous bound for the deterministic per-step roll (see
 ## EarthChunkManager's own doc comment on it) to land a hit -- not a retry
@@ -2193,10 +2200,76 @@ func test_step_fruiting_sheds_a_baseline_trickle_in_settled_autumn_before_the_tu
 	assert_eq(found.season, "autumn")
 
 
-## Spring, before blossom even opens, is neither the autumn turn nor the
-## summer trickle -- step_fruiting's own leaf_fall_chance stays exactly
-## zero here, not merely small.
-func test_step_fruiting_drops_no_leaf_in_early_spring():
+## -- leaf_fall_chance_for: pure, directly testable -----------------------
+#
+# Reported directly: "leaf litter should happen constantly at a low rate in
+# normal gameplay ... in autumn all leaves should fall eventually" --
+# constant (never zero), continuous (no jump), and increasing (strictly
+# rises) across the WHOLE of autumn, not flat for its first two-thirds and
+# then a late ramp (see leaf_fall_chance_for's own doc comment for why
+# season_progress, not canopy_turn_progress, drives this).
+
+func test_leaf_fall_chance_for_autumn_starts_at_the_baseline():
+	assert_almost_eq(
+		EarthChunkManager.leaf_fall_chance_for("autumn", 0.0),
+		EarthChunkManager.LEAF_AUTUMN_BASELINE_CHANCE, 0.0001
+	)
+
+
+func test_leaf_fall_chance_for_autumn_reaches_certainty_at_the_seasons_end():
+	assert_almost_eq(EarthChunkManager.leaf_fall_chance_for("autumn", 1.0), 1.0, 0.0001)
+
+
+func test_leaf_fall_chance_for_autumn_increases_monotonically_across_the_season():
+	var previous := -1.0
+	for i in 11:
+		var current := EarthChunkManager.leaf_fall_chance_for("autumn", float(i) / 10.0)
+		assert_gt(current, previous, "autumn's own leaf-fall chance must rise monotonically")
+		previous = current
+
+
+## Real wind/petal damage does not build across a season the way autumn's
+## colour change does -- summer's own trickle stays flat regardless of how
+## far into summer this is.
+func test_leaf_fall_chance_for_summer_is_flat_across_the_season():
+	assert_almost_eq(
+		EarthChunkManager.leaf_fall_chance_for("summer", 0.0),
+		EarthChunkManager.leaf_fall_chance_for("summer", 0.9), 0.0001
+	)
+	assert_almost_eq(
+		EarthChunkManager.leaf_fall_chance_for("summer", 0.0),
+		EarthChunkManager.LEAF_SUMMER_TRICKLE_CHANCE, 0.0001
+	)
+
+
+## Same reasoning as summer's own flat trickle -- see LEAF_SPRING_TRICKLE_
+## CHANCE's own doc comment for why blossom shares it rather than getting
+## an autumn-style rising ramp of its own.
+func test_leaf_fall_chance_for_spring_is_flat_across_the_season():
+	assert_almost_eq(
+		EarthChunkManager.leaf_fall_chance_for("spring", 0.0),
+		EarthChunkManager.leaf_fall_chance_for("spring", 0.9), 0.0001
+	)
+	assert_almost_eq(
+		EarthChunkManager.leaf_fall_chance_for("spring", 0.0),
+		EarthChunkManager.LEAF_SPRING_TRICKLE_CHANCE, 0.0001
+	)
+
+
+## A bare winter canopy has nothing left to shed, whatever season_progress
+## reads.
+func test_leaf_fall_chance_for_winter_is_always_zero():
+	assert_eq(EarthChunkManager.leaf_fall_chance_for("winter", 0.0), 0.0)
+	assert_eq(EarthChunkManager.leaf_fall_chance_for("winter", 0.9), 0.0)
+
+
+## Reported directly: "there should always be an occasional falling leaf
+## or blossom" -- a falling LEAF makes no botanical sense while a tree's
+## canopy is still bare-to-blossoming and has no leaves yet, so a settled
+## spring tree sheds an occasional BLOSSOM instead (see LEAF_SPRING_
+## TRICKLE_CHANCE), the exact equivalent of the summer/autumn leaf
+## trickle. Before this, spring shed nothing at all.
+func test_step_fruiting_also_drops_an_occasional_spring_blossom():
 	var tree := ChoppableTree.new()
 	tree.position = _position_for_species("cherry")
 	tree.bind_canopy(Sprite2D.new())
@@ -2204,14 +2277,12 @@ func test_step_fruiting_drops_no_leaf_in_early_spring():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_SETTLED_SPRING_YEAR_FRACTION)
 
-	var field := _leaf_litter_field_for(tree.position)
-	for attempt in _LEAF_ROLL_ATTEMPTS:
-		manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, tree.position)
-	var saw_leaf := false
-	for leaf in field.leaves():
-		if leaf.species == "cherry":
-			saw_leaf = true
-	assert_false(saw_leaf, "nothing has started shedding yet in early spring")
+	var found := _find_a_fallen_leaf(
+		"cherry", tree.position, tree.position, _LEAF_TRICKLE_ROLL_ATTEMPTS
+	)
+
+	assert_false(found.is_empty(), "a settled spring tree should still shed an occasional blossom")
+	assert_eq(found.season, "spring")
 
 
 ## Oak's own fallen leaf records species "acorn" (TreeSpecies' own id for the

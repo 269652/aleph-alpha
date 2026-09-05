@@ -1109,24 +1109,67 @@ const _LEAF_FALL_ROLL_STEPS := 1000
 ## near autumn's own real fall.
 const LEAF_SUMMER_TRICKLE_CHANCE := 0.03
 
-## The flat per-step chance a settled (pre-turn) AUTUMN tree sheds a leaf --
-## reported directly: "leaf litter should happen constantly at a low rate in
-## normal gameplay". Before this, leaf_fall_chance during autumn was driven
-## ONLY by canopy_turn_progress, which reads exactly 0.0 for the whole
-## settled first two-thirds of the season (TURN_FRACTION=0.34, see
-## TreePhenology._settled_then_turn) -- roughly two real DAYS of normal,
-## non-accelerated play (0.66 of a 172,800-real-second season) with zero
-## chance of a single leaf falling. A real deciduous tree does not wait for
-## its colour to fully turn before its first leaves come down: ordinary
-## wind and early individual-leaf senescence pull a few down all autumn
-## long, the same real phenomenon LEAF_SUMMER_TRICKLE_CHANCE already models
-## for summer's own wind/petal damage -- reused here at the same value
-## (autumn's early trickle and summer's are the same real mechanism, not
-## two independently-tuned numbers) but named separately so either can be
-## retuned later without coupling the two together. See leaf_fall_chance's
-## own computation below for how this combines with (rather than replaces)
-## the existing turn-progress ramp.
+## The chance floor a settled AUTUMN tree sheds a leaf at the very START of
+## the season -- reported directly: "leaf litter should happen constantly
+## at a low rate in normal gameplay ... in autumn all leaves should fall
+## eventually". A real deciduous tree does not wait for its colour to
+## fully turn before its first leaves come down: ordinary wind and early
+## individual-leaf senescence pull a few down all autumn long, the same
+## real phenomenon LEAF_SUMMER_TRICKLE_CHANCE already models for summer's
+## own wind/petal damage -- reused here at the same value (autumn's early
+## trickle and summer's are the same real mechanism, not two
+## independently-tuned numbers) but named separately so either can be
+## retuned later without coupling the two together. See
+## leaf_fall_chance_for's own doc comment for how this rises across the
+## rest of the season rather than staying flat at this floor.
 const LEAF_AUTUMN_BASELINE_CHANCE := LEAF_SUMMER_TRICKLE_CHANCE
+
+## The flat per-step chance a settled SPRING tree -- specifically while its
+## canopy still visibly carries blossom (canopy_season == "spring"; see
+## TreePhenology, whose own canopy schedule finishes leafing out well
+## before the calendar season does, at which point the EXISTING summer
+## trickle above already takes over) -- sheds a petal. Reported directly:
+## "there should always be an occasional falling leaf or blossom": a
+## falling LEAF makes no botanical sense while a tree is still bare-to-
+## blossoming and has no leaves yet, so this is blossom's own equivalent
+## of the summer/autumn leaf trickle, not a second unrelated mechanism --
+## reused at the same value for the same "one real background-shedding
+## rate, not several independently-tuned ones" reason LEAF_AUTUMN_
+## BASELINE_CHANCE already gives for reusing it.
+const LEAF_SPRING_TRICKLE_CHANCE := LEAF_SUMMER_TRICKLE_CHANCE
+
+## The per-step chance a tree wearing `canopy_season`'s own canopy sheds a
+## leaf (summer/autumn) or blossom (spring) this step, given how far [0,1)
+## into that CALENDAR season this moment sits (SeasonCycle.
+## progress_through_season -- NOT canopy_turn_progress, which reads 0.0 for
+## a season's entire settled span; see that function's own doc comment for
+## why). Pure: no per-tree state, so directly testable without a real tree
+## or roll (see test_earth_chunk_manager.gd).
+##
+## Autumn rises smoothly from LEAF_AUTUMN_BASELINE_CHANCE at the season's
+## first instant up to CERTAINTY (1.0) at its last -- reported directly:
+## "leaf litter should happen constantly at a low rate in normal gameplay
+## ... in autumn all leaves should fall eventually", i.e. constant (never
+## zero), continuous (no jump at the old turn-progress boundary), and
+## increasing (strictly rises) across the WHOLE season, not flat for its
+## first two-thirds and then a late ramp. Linear: the simplest curve that
+## is all three of those things, and nothing in the report asks for a
+## particular shape beyond them.
+##
+## Summer and spring stay flat at their own named trickle rate (real wind/
+## petal damage is not something that builds across a season the way
+## autumn colour change does). Any other season (winter: bare, nothing
+## left to shed) returns 0.0.
+static func leaf_fall_chance_for(canopy_season: String, season_progress: float) -> float:
+	match canopy_season:
+		"autumn":
+			return lerpf(LEAF_AUTUMN_BASELINE_CHANCE, 1.0, clampf(season_progress, 0.0, 1.0))
+		"summer":
+			return LEAF_SUMMER_TRICKLE_CHANCE
+		"spring":
+			return LEAF_SPRING_TRICKLE_CHANCE
+		_:
+			return 0.0
 
 var _fruiting_model := FruitingModel.new()
 var _ecology_catchup := ChunkEcologyCatchup.new()
@@ -3270,6 +3313,12 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 	var canopy_season: String = canopy["season"]
 	var canopy_turning_into: String = canopy["turning_into"]
 	var canopy_turn_progress: float = canopy["turn_progress"]
+	# How far into the CALENDAR season (not the canopy's own turn) this
+	# moment sits -- read once, same "one answer, not per tree" discipline
+	# as the three canopy locals just above (see leaf_fall_chance_for's own
+	# doc comment for why this, not canopy_turn_progress, drives the leaf-
+	# fall chance below).
+	var season_progress := _season_cycle.progress_through_season(now)
 	for trees in _loaded_trees.values():
 		for tree in trees:
 			if not tree.has_method("set_ripe_fruit"):
@@ -3387,37 +3436,20 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 						)
 					)
 
-			# Falling leaves (see docs/concept/leaf_litter.md): a real leaf
-			# falls either as the main autumn fall or a light summer
-			# trickle, both driven by the SAME canopy season/turning_into/
-			# turn_progress this step already read once above for
-			# tree.set_ripe_fruit -- not a second schedule computing its
-			# own answer. Independent of whether fruit fell this same
-			# step -- a tree can shed a leaf with nothing left to fruit.
+			# Falling leaves/blossom (see docs/concept/leaf_litter.md): a
+			# real leaf (summer/autumn) or blossom petal (spring) falls,
+			# driven by the SAME canopy_season this step already read once
+			# above for tree.set_ripe_fruit -- not a second schedule
+			# computing its own answer -- plus season_progress (see
+			# leaf_fall_chance_for's own doc comment for why THAT, not
+			# canopy_turn_progress, drives the chance). Independent of
+			# whether fruit fell this same step -- a tree can shed a leaf
+			# with nothing left to fruit.
 			#
 			# Gated on LEAF_LITTER_ENABLED (see that constant's own doc
 			# comment) -- requested directly: "deactivate leaf littering".
 			if LEAF_LITTER_ENABLED:
-				var leaf_fall_chance := 0.0
-				var leaf_fall_season := ""
-				if canopy_season == "autumn":
-					# Baseline trickle for ALL of autumn (see LEAF_AUTUMN_
-					# BASELINE_CHANCE's own doc comment), with the ramp
-					# rising on top once the canopy's own final turn
-					# actually begins: a tree just beginning to turn already
-					# sheds at least the baseline rate, one nearly bare
-					# sheds almost every step. canopy_turning_into is
-					# deliberately not checked here any more -- per
-					# TreePhenology.canopy_state_at, it reads "winter" for
-					# the ENTIRETY of autumn, not merely its final turning
-					# slice, so it was never actually the gate that
-					# mattered; canopy_turn_progress alone already tells the
-					# whole story.
-					leaf_fall_chance = maxf(LEAF_AUTUMN_BASELINE_CHANCE, canopy_turn_progress)
-					leaf_fall_season = "autumn"
-				elif canopy_season == "summer":
-					leaf_fall_chance = LEAF_SUMMER_TRICKLE_CHANCE
-					leaf_fall_season = "summer"
+				var leaf_fall_chance := leaf_fall_chance_for(canopy_season, season_progress)
 				if leaf_fall_chance > 0.0:
 					# Deterministic per-(tree, step) roll, not engine randf()
 					# -- see _LEAF_FALL_ROLL_STEPS' own doc comment.
@@ -3449,7 +3481,7 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 						)
 						var leaf_field: LeafLitterField = _leaf_litter_fields.get(leaf_chunk_coord)
 						if leaf_field != null:
-							leaf_field.add_leaf(landing_position, species_id, leaf_fall_season, now)
+							leaf_field.add_leaf(landing_position, species_id, canopy_season, now)
 	_last_fruiting_time = now
 
 
