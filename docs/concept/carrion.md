@@ -252,10 +252,14 @@ see that doc's own mechanism spec and Status.
      (`AntColony`, see `soil_fauna.md`) that eats fallen seeds and windfall
      fruit/nuts, just with no on-screen representation, so a player could
      never actually SEE it happening. `DecomposerMarker._nearest_food`
-     (renamed from `_nearest_carrion`) now also scans the real
-     `DroppedItem` "dropped_item" group, filtered to `TreeSpecies.IDS`
-     the same way `EarthChunkManager.fruit_near` already filters (never a
-     dropped tool/ore chunk); `_step_feeding` eats a found fruit/nut
+     (renamed from `_nearest_carrion`) now also scans
+     `DroppedItem.FORAGEABLE_GROUP_NAME` — a small, pre-filtered group any
+     `TreeSpecies`-identified item joins at creation rather than the whole
+     "dropped_item" group filtered per scan (see `DroppedItem`'s own doc
+     comment: scanning the WHOLE group — `LiftableStone`/`PickableSeed`
+     very much included — for every one of a decomposer's own foraging
+     checks was a real, measured fps cost, "game now has only 4-5 fps", not
+     a cosmetic inefficiency); `_step_feeding` eats a found fruit/nut
      outright in one visit (`_target.queue_free()`) rather than whittling
      down a health pool the way a carcass bite does — a dropped cherry is
      not a boar carcass. Pinned by
@@ -264,12 +268,15 @@ see that doc's own mechanism spec and Status.
      attempted here** (named, not silently dropped): ground-SEED foraging
      by these visible ants (`AntColony` already does this invisibly;
      making it visible would mean giving `AntColony`'s mounds a real
-     rendered presence, a bigger unification project of its own) and a
-     "fallen leaves" mechanic, which does not exist anywhere in this
-     codebase yet (only cosmetic seasonal ground-tint/canopy color, no
-     real leaf-litter entity) — a real prerequisite-free win here was
-     wiring the visible ants into fallen fruit, which already existed,
-     rather than building a whole new leaf-litter system speculatively.
+     rendered presence, a bigger unification project of its own). A
+     "fallen leaves" mechanic did not exist anywhere in this codebase at
+     the time (only cosmetic seasonal ground-tint/canopy color, no real
+     leaf-litter entity) — a real prerequisite-free win here was wiring
+     the visible ants into fallen fruit, which already existed, rather
+     than building a whole new leaf-litter system speculatively. Leaves
+     have since become a real `FORAGEABLE_GROUP_NAME` item too, needing no
+     further change to this function at all — see
+     [leaf_litter.md](leaf_litter.md).
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — the `take_bite` contract is already shaped to

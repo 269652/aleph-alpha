@@ -240,6 +240,19 @@ seed merely rides on a grazer's coat.
   follow-up; making bird dispersal alone force-inherit species would have
   made the two mechanisms behave inconsistently instead.
 
+### Falling leaves: autumn litter as ground forage
+
+Reported: "ants should eat fallen fruits leaves and other stuff like
+seeds... they should be a real gear in the ecosystem", followed later by
+"it seems that falling leaves are still not implemented" once fallen-fruit
+foraging alone had shipped. Leaves were the one named food source that
+genuinely didn't exist as a real ground object — only as art baked into
+the canopy sprite itself. Full design in
+[leaf_litter.md](leaf_litter.md): what falls, when, where it lands, and
+how it closes the same forage loop windfall fruit already does; cross-
+referenced from [soil_fauna.md](soil_fauna.md) for the decomposer/ant
+consumption side.
+
 ### Open questions
 
 - Exact trait list and per-species preference/predator-vs-disperser
