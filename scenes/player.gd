@@ -693,6 +693,12 @@ func _ready() -> void:
 	# A fishing rod so the fishing loop is discoverable -- stand by water and
 	# press the fish key (default F).
 	inventory.add(_item_catalog.make("fishing_rod"), 1)
+	# A butterfly net and a glass bottle so the capture DSL's catch/release/
+	# bottle loop (docs/concept/capture_dsl.md) is discoverable from the
+	# first minute too -- equip the net near a flyer and press the capture
+	# key, same discoverability reasoning as the fishing rod above.
+	inventory.add(_item_catalog.make("butterfly_net"), 1)
+	inventory.add(_item_catalog.make("glass_bottle"), 1)
 	equip_item(sword)
 
 	inventory_changed.emit()

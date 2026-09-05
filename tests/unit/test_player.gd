@@ -79,6 +79,26 @@ func after_each():
 	Input.action_release("block")
 
 
+# -- a new player's starting kit (Player._ready()) --------------------------
+# Not pinned by a test until now -- the grant existed but nothing asserted
+# its actual contents, so a future edit could silently drop or duplicate an
+# item with no red test to catch it.
+
+func test_a_new_player_starts_with_the_expected_kit():
+	assert_eq(player.equipped_item.id, "iron_sword", "starts with the sword equipped, not bare-handed")
+	assert_eq(player.inventory.count_of("iron_sword"), 1)
+	assert_eq(player.inventory.count_of("iron_axe"), 1)
+	assert_eq(player.inventory.count_of("leather_helm"), 1)
+	assert_eq(player.inventory.count_of("leather_chest"), 1)
+	assert_eq(player.inventory.count_of("fishing_rod"), 1)
+	# Reported: "give the player a glass bottle and butterfly net from the
+	# start" -- so the capture DSL's net+bottle interaction (docs/concept/
+	# capture_dsl.md) is discoverable from the first minute, the same reason
+	# the fishing rod is already in this list.
+	assert_eq(player.inventory.count_of("glass_bottle"), 1)
+	assert_eq(player.inventory.count_of("butterfly_net"), 1)
+
+
 ## The tile the player is facing (see TileTargeting.facing_tile), matching
 ## the DOWN facing set in before_each.
 func _facing_tile() -> Vector2i:
