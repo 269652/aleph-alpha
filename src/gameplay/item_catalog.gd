@@ -208,6 +208,12 @@ const _ITEMS := {
 	# materials, not craftable at a bench.
 	"jarred_insect": ["Jarred Insect", "material", 20, 0.0],
 	"caged_songbird": ["Caged Songbird", "material", 20, 0.0],
+	# The container "Put into bottle" consumes to jar whatever a capture
+	# device is holding (docs/concept/capture_dsl.md's "on transfer" atom).
+	# A material, not a wielded tool -- never equipped, only carried and
+	# spent, so it stacks like the curiosity items above rather than sitting
+	# alone like the net.
+	"glass_bottle": ["Glass Bottle", "material", 20, 0.0],
 	# Climbing rope (docs/concept/transportation.md's "Traversal tools"
 	# section; docs/concept/terrain_relief.md's "Passability: ask before
 	# you step"): the high-tensile traversal tool that raises the

@@ -450,6 +450,20 @@ func test_catalog_knows_the_netting_curiosity_items():
 		assert_eq(catalog.make(item_id).kind, "material", item_id)
 
 
+# -- glass bottle (see docs/concept/capture_dsl.md's "on transfer" atom) -----
+#
+## The container "Put into bottle" consumes to jar whatever a capture device
+## is holding. A material, not a wielded tool -- it's never equipped, only
+## carried and spent -- so it stacks like the curiosity items above rather
+## than sitting alone like the lasso/net.
+
+func test_catalog_knows_the_glass_bottle():
+	assert_true(catalog.has("glass_bottle"))
+	var bottle := catalog.make("glass_bottle")
+	assert_eq(bottle.kind, "material")
+	assert_gt(bottle.max_stack, 1, "a bottle should stack, unlike the tools that hold a live catch")
+
+
 # -- climbing rope (docs/concept/transportation.md's "Traversal tools" -----
 # -- section, docs/concept/terrain_relief.md's "Passability: ask before ----
 # -- you step") --------------------------------------------------------------
