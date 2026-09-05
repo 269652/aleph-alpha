@@ -289,4 +289,9 @@ shove-momentum are each independent general systems. The "combo" is emergent.
 - How the blueprint DSL in [crafting.md](crafting.md) *surfaces* this: does the
   player manipulate parts/geometry directly, or author intent that compiles to
   a part-graph? (Cross-refs the natural-language-to-structured-policy pattern
-  used for NPC instruction.)
+  used for NPC instruction.) Partly answered from the machine side:
+  [standard_model.md](standard_model.md)'s `device` text declares parts and
+  joints directly and compiles them to the real part graph, and attaches
+  physical *laws* to them — so the property vector this doc specifies now
+  also feeds a wire's ohms, a wheel's torque and a paddle's push, not only a
+  blade's cut.

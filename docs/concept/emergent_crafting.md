@@ -565,6 +565,14 @@ else, which is a fair description of a glass knife.
   back off a save **cannot be rehydrated into a graph** to compile. The next
   slice is that serializer, not the `player.gd` edit; doing the edit first would
   produce an `Item.affords()` with nothing behind it.
+
+  **One half of that bridge now exists, from an unexpected direction (2026-09-05):**
+  [standard_model.md](standard_model.md)'s `device` DSL declares parts and
+  joints as text (`part blade: iron edge working (length_cm: 80, …)`,
+  `joint pivot: a to b pivot pin iron (axis: z)`) and `DeviceCompiler`
+  compiles them into *this* `PartGraph`, validated by its own rules. That is
+  text → graph. Graph → text, and the `CraftedItemRegistry` round-trip, are
+  still the missing halves.
 - ⬜ **Edge-and-backing.** materials.md names it and nothing implements it: an
   edge's support against its own backing material is not modelled, so an obsidian
   blade bonded to a tough spine behaves exactly like a bare one.

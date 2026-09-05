@@ -31,6 +31,11 @@ sources feeding the same rarity/affix vocabulary, not competing systems.
   role)` nodes, typed joints as edges), so the target of the compilation exists
   even though the DSL that targets it does not. Whether the player manipulates
   that graph directly or authors intent that compiles to it is still open.
+  **A text form that compiles to that graph now exists** —
+  [standard_model.md](standard_model.md)'s `device` grammar's `part` and
+  `joint` clauses — built for machines rather than for item blueprints;
+  whether item blueprints reuse the same clauses is the remaining half of
+  this question.
 - Exact blueprint slot taxonomy (how many modifier slots per item category,
   what governs which modifiers are compatible with which base templates).
 - ~~How station tiers gate blueprint complexity~~ — answered by

@@ -252,12 +252,29 @@ this doc. The lit bulb is emergent, not authored.
 
 ## Status
 
-Pure design — nothing in this doc is implemented. Depends on
-[materials.md](materials.md)'s property vector gaining the magnetic-
-permeability scalar proposed above, and on `building.md`'s existing
-placement system for component siting; the room-enclosure flood-fill this
-doc proposes reusing for circuit topology
-(`src/gameplay/room_detector.gd`) already exists and is real, tested code,
-just not yet generalized past room enclosure specifically. See
-`docs/progress.md`'s Unscheduled section once a status entry is added
-there.
+**Revised 2026-09-05.** The circuit *algebra* this doc describes is no
+longer a special case waiting to be built: [standard_model.md](standard_model.md)
+generalises it into one physics for every device, and its shipped kernel
+implements exactly this doc's chain as its first worked example. Torque
+from flow is a `transform` (the wheel's radius) fed by a paddle `source`
+whose stall force is the flat-plate drag law; the generator is a `gyrate`
+whose ratio is Faraday's `k = B A N`; a wire is a `resist` whose ohms come
+from its material's conductivity scalar and its real length and section
+(so copper beats iron by the published 6.4× and wood cannot complete a
+circuit at all); a battery is a `store`; Ohm's law is the loop solve; and
+"an open circuit simply does nothing" is what the algebra evaluates to.
+The river-powered light of this doc's worked example is solved end to end
+in `tests/unit/test_device_book.gd` — with one lesson this doc did not
+anticipate: the wheel needs a 1:10 gear train to light anything, because
+a water wheel turns far too slowly to generate from directly.
+
+What remains specific to this doc, all still ⬜: circuit topology
+discovered by adjacency over placed pieces (the `room_detector.gd`
+flood-fill generalised to conductivity — the kernel solves an *authored*
+loop, not a placed one); the magnetic-permeability scalar and magnetite
+ore (a generator's field strength is an authored `magnet_tesla` until it
+exists); wire burnout as a *derived* rating (the rule grammar fires today
+against an authored threshold); a lit bulb as a real light source; and the
+world binding that reads a real river's current or the real wind at a
+placed device's tile. See `docs/progress.md`'s Electromagnetism and
+Standard Model entries.

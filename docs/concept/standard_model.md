@@ -78,7 +78,7 @@
 6. **A device is a small program, and this is its second half.**
    [emergent_crafting.md](emergent_crafting.md)'s `ItemCompiler` turns an
    assembly into `event → guard → pipeline` rules. A device carries the same
-   rules — `on step when filament.power >= 40: shine(filament)` — and adds the
+   rules — `on step when filament.power >= 40: shine(target: filament)` — and adds the
    continuous half: the solved efforts and flows the guards are evaluated
    against. Discrete events and continuous physics live in one text, in one
    AST shape, because the rule grammar is unchanged.
@@ -315,8 +315,8 @@ Deterministic and closed-form, per tick:
    an ordered chain whose first element must be a `source` and whose
    consecutive ports must agree on domain (a domain mismatch is a compile
    error naming both ports: *"wheel's output is rotation but wire's input is
-   electrical"*). Compile errors are reported in the same `line N: …`
-   spirit as parse errors; nothing partially solves.
+   electrical"*). Compile errors name the law, part or joint they concern;
+   nothing partially solves.
 2. **Reduce** (`DeviceNetwork.solve`): walk the chain from its far end to
    the source, folding every element into one affine load by the rules in
    §3.
@@ -431,13 +431,14 @@ device "Mill Race Light" {
 
   law river: source(domain: translation, fluid: water, area_m2: 0.5, velocity: 1.5)
   law wheel: transform(in: translation, out: rotation, part: wheel)
+  law gears: transform(in: rotation, out: rotation, ratio: 0.1)
   law dynamo: gyrate(in: rotation, out: electrical, magnet_tesla: 0.5, turns: 200, area_m2: 0.02)
   law wire: resist(domain: electrical, part: wire)
   law filament: resist(domain: electrical, part: filament)
 
-  loop river |> wheel |> dynamo |> wire |> filament
+  loop river |> wheel |> gears |> dynamo |> wire |> filament
 
-  on step when filament.power >= 1: shine(filament)
+  on step when filament.power >= 1: shine(target: filament)
 }
 ```
 
@@ -447,7 +448,9 @@ metre of paddle in a 1.5 m/s current; the wheel's ratio is its own metre of
 radius; the wire's resistance is copper's published conductivity over ten
 metres of 3 mm wire; the filament's is graphite's over two centimetres of a
 tenth of a millimetre. What the filament receives is what the algebra says
-it receives.
+it receives. The one number the author *does* write that matters is the
+gear ratio — and it is the model that tells them they need it (worked
+example A below).
 
 ### What an author can and cannot write
 
@@ -483,44 +486,69 @@ prose is a reading of them, not the other way round.)*
 
 ### A — the mill race light
 
-`test_device_book.gd::test_the_mill_race_light_lights_its_filament`. The
-paddle source, wheel, dynamo, wire and filament above, solved once:
+`test_device_book.gd`, worked end to end: the paddle source, wheel, gear
+train, dynamo, wire and filament above, solved once.
 
 - The river's stall push on 0.5 m² at 1.5 m/s is `½ · 1000 · 1.28 · 0.5 ·
   1.5² = 720 N`, internal resistance `480 N·s/m`, so it can deliver at most
   `720² / (4 · 480) = 270 W` to a perfectly matched wheel.
 - The dynamo's `k = 0.5 · 0.02 · 200 = 2.0 V·s/rad`.
-- The wire's resistance is `10 m / (5.80·10⁷ S/m · 7.07·10⁻⁶ m²) = 0.024 Ω`;
-  the filament's `0.02 / (2.0·10⁵ · 7.85·10⁻⁹) = 12.7 Ω`. The wire is
-  negligible next to the filament, as a wire should be.
-- The filament lights (`shine` fires) and the source, the dissipation in the
-  wire and filament, and nothing else, balance to the watt
-  (`test_source_power_equals_dissipated_plus_stored_power`).
+- The wire's resistance is `10 m / (5.80·10⁷ S/m · 7.07·10⁻⁶ m²) = 0.0244 Ω`;
+  the filament's `0.02 / (2.00·10⁵ · 7.85·10⁻⁹) = 12.73 Ω`.
+- **Solved.** The loaded wheel rim runs at **1.408 m/s** in a 1.5 m/s river —
+  it labours by six percent — taking **44.2 N** from the water: **62.2 W**
+  into the wheel. The 1:10 gears turn its 13.4 rpm into **134.5 rpm** at
+  4.42 N·m; the dynamo makes **28.2 V** and pushes **2.21 A** round the
+  loop; the wire drops 0.05 V (0.12 W — negligible, as a wire should be);
+  the filament takes **62.1 W** — a real light bulb's worth. `shine` fires.
+  Source power, wire and filament balance to the watt.
+- **Take the gears out** and the same wheel runs at 1.499 m/s — almost free
+  — taking 0.47 N: the dynamo makes 3.0 V, pushes 0.24 A, and the filament
+  gets **0.70 W**. It does not shine. A water wheel turns at about a radian
+  and a half a second, far too slow to generate from directly; real mills
+  geared up by ten or more for exactly this reason, and here it is a
+  consequence the solver reports
+  (`test_without_a_gear_train_the_same_wheel_lights_nothing`), not a rule
+  anyone wrote.
+- The river's own loss — the 952 W the water spends getting past a paddle
+  it cannot stall — is reported separately (`source_internal_loss`) and is
+  not counted as dissipated by the device: it is the water, not the
+  machine.
 
 ### B — the windmill grain mill
 
-`test_device_book.gd::test_the_windmill_turns_its_millstone`. The same
-`paddle_source` with air's density and a sail area, a `transform` for the
-sail radius, a `transform` gear pair stepping speed up, and a millstone as
-a rotational `resist`. No new law, no new module — a mill is a light with
-the gyrator left out and a different fluid.
+`test_device_book.gd`, the post mill: the same `paddle_source` with air's
+density and ten square metres of sail in an 8 m/s wind (`501.8 N` stall,
+`62.7 N·s/m`), a `transform` for the four-metre sail radius, a 1:5
+`transform` gear pair stepping speed up, and a millstone as a 20 N·m·s/rad
+rotational `resist`. No new law, no new module — a mill is a light with the
+gyrator left out and a different fluid. Solved: the sail tips run at
+**5.34 m/s** (12.7 rpm), taking **166.9 N** from the wind: **891 W**, all
+of it into the stone, which turns at **63.7 rpm** under **133.5 N·m** —
+inside the 60–125 rpm band real millstones ran at. `grind` fires.
 
 ### C — maximum power transfer, and why a bigger wheel is not always better
 
 `test_device_network.gd::test_there_is_an_optimum_load_for_delivered_power`.
-Sweep the millstone's load on a fixed source and the power delivered to it
-rises and then falls, peaking where the reflected load equals the source's
-internal resistance. Below the optimum the stone is too free to take power
-off the wheel; above it the wheel stalls. Nobody wrote that in.
+Sweep the load on a fixed source and the power delivered to it rises and
+then falls, peaking where the reflected load equals the source's internal
+resistance. Below the optimum the load is too free to take power off the
+wheel; above it the wheel stalls. With a 100 V / 10 Ω source through a 1:2
+lever and a `k = 3` dynamo the optimum bulb sits at `9 / (4 · 10) = 0.225 Ω`
+and takes the source's entire 250 W ceiling — through two domain crossings
+that cost nothing. Nobody wrote that in.
 
-### D — the battery that motors the mill (⬜ needs `fork`)
+### D — the battery that motors the mill (series ✅; across the bulb ⬜)
 
-Put a `store` across the millstone. When the river runs, the generator
-charges it; when the river drops, the store's opposing effort reflected
-through the gyrator is *negative* on the shaft side — it drives the
-generator as a motor and the stone keeps turning until the level hits zero.
-Series stores already do this in the kernel; the parallel placement needs
-the ⬜ junction.
+Put a `store` in the loop behind the dynamo. When the river runs, the
+generator charges it; when the river stops, the store's opposing effort
+reflected through the gyrator is *negative* on the shaft side — it drives
+the generator as a motor and the shaft keeps turning until the level hits
+zero. The series form is real and pinned
+(`test_a_charged_store_behind_a_generator_motors_the_shaft_when_the_river_stops`,
+`test_a_charged_store_drives_the_loop_backwards_when_the_source_dies`);
+putting the store *across* a bulb, so the bulb stays lit from it, is the
+parallel placement that needs the ⬜ `fork` junction.
 
 ### E — the bellows furnace (⬜ needs the thermal loop)
 
@@ -562,8 +590,9 @@ between ticks, and a discrete `release` event — both ⬜.
 
 ### Built and tested (✅)
 
-*(Reconciled against the test files after the code landed — see
-`docs/progress.md` for the dated narrative.)*
+*(Reconciled against the test files after the code landed — 173 tests
+across eight files, `tests/unit/test_physics_domains.gd` through
+`test_device_book.gd`; see `docs/progress.md` for the dated narrative.)*
 
 - ✅ **`physics_domains.gd`** — the closed domain catalog with effort/flow
   names and units, and the power/pseudo distinction.
@@ -633,6 +662,12 @@ between ticks, and a discrete `release` event — both ⬜.
 - 🚧 **A joint in a device carries no law.** A pivot's bearing friction would
   be a rotational `resist` derived from the fastening; today an author adds
   one explicitly if they want it.
+- 🚧 **A source's internal loss is reported, not modelled as a thing.** The
+  water a paddle cannot stall carries most of the river's power straight
+  past it (952 W against the light's 62 W); the solver reports it as
+  `source_internal_loss` and keeps it out of the device's own dissipation.
+  Where that energy goes — downstream, as it should — is the ⬜ world
+  binding's concern.
 
 ## Open questions
 
