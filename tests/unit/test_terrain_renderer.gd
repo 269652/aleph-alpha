@@ -108,7 +108,7 @@ func _wipe_cache_behavior_files():
 ## "room_for_tile" errors for every grid cell beyond the fake image's
 ## bounds. Mirrors build_tile_set()'s own size math exactly.
 func _full_atlas_size() -> Vector2i:
-	var total_cells: int = renderer._roof_variant_base_linear() + renderer._roof_variant_family_size()
+	var total_cells: int = renderer._trail_linear() + 1
 	var rows := int(ceil(float(total_cells) / TerrainRenderer.ATLAS_COLUMNS))
 	var art := TerrainRenderer.ART_TILE_SIZE
 	return Vector2i(TerrainRenderer.ATLAS_COLUMNS * art, rows * art)
@@ -347,6 +347,9 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 		# context within its building at paint time, so a house reads as a
 		# pitched roof rather than one flat tile repeated across a rectangle.
 		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
+		# The trail tier's own single flat tile (see TRAIL_TILE_ID),
+		# appended last so it shifts no other family's index.
+		+ 1
 	)
 	assert_eq(source.get_tiles_count(), expected)
 
@@ -374,6 +377,9 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 		# context within its building at paint time, so a house reads as a
 		# pitched roof rather than one flat tile repeated across a rectangle.
 		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
+		# The trail tier's own single flat tile (see TRAIL_TILE_ID),
+		# appended last so it shifts no other family's index.
+		+ 1
 	)
 	assert_eq(
 		source.get_tiles_count() - tile_count_without_structures_or_pieces - BuildingPiece.PIECE_IDS.size(),
@@ -405,6 +411,26 @@ func test_atlas_coords_for_furnace_is_distinct_from_earth_and_every_biome_varian
 	for biome_name in BiomeClassifier.KNOWN_BIOMES:
 		for variant in TerrainRenderer.VARIANTS_PER_BIOME:
 			assert_ne(furnace_coords, renderer.atlas_coords_for_biome(biome_name, variant))
+
+
+## The trail tier (docs/concept/infrastructure.md's "path -> trail -> road",
+## PathScarring.is_trail) needs its own atlas slot, distinct from the
+## plain-earth "path" tile it escalates from -- otherwise a heavily-
+## trafficked tile would look identical to a lightly-crossed one, the exact
+## "doesn't deepen" complaint this tier exists to fix.
+func test_atlas_coords_for_trail_is_distinct_from_earth_and_every_biome_variant():
+	var trail_coords := renderer.atlas_coords_for_modification(TerrainRenderer.TRAIL_TILE_ID)
+	assert_ne(trail_coords, renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID))
+	for biome_name in BiomeClassifier.KNOWN_BIOMES:
+		for variant in TerrainRenderer.VARIANTS_PER_BIOME:
+			assert_ne(trail_coords, renderer.atlas_coords_for_biome(biome_name, variant))
+
+
+func test_atlas_coords_for_trail_is_stable_across_calls():
+	assert_eq(
+		renderer.atlas_coords_for_modification(TerrainRenderer.TRAIL_TILE_ID),
+		renderer.atlas_coords_for_modification(TerrainRenderer.TRAIL_TILE_ID)
+	)
 
 
 func test_atlas_coords_for_campfire_and_furnace_are_distinct_from_each_other():
@@ -451,6 +477,14 @@ func test_earth_and_structure_tiles_stay_static_single_frame():
 	var source := tile_set.get_source(0) as TileSetAtlasSource
 	assert_eq(source.get_tile_animation_frames_count(renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID)), 1)
 	assert_eq(source.get_tile_animation_frames_count(renderer.atlas_coords_for_modification("campfire")), 1)
+
+
+func test_trail_tile_is_a_real_static_single_frame_tile_in_the_atlas():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var trail_coords := renderer.atlas_coords_for_modification(TerrainRenderer.TRAIL_TILE_ID)
+	assert_true(source.has_tile(trail_coords))
+	assert_eq(source.get_tile_animation_frames_count(trail_coords), 1)
 
 
 ## Frame blocks must never wrap an atlas row (frames lay out horizontally), so
@@ -505,6 +539,9 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_building
 		# context within its building at paint time, so a house reads as a
 		# pitched roof rather than one flat tile repeated across a rectangle.
 		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
+		# The trail tier's own single flat tile (see TRAIL_TILE_ID),
+		# appended last so it shifts no other family's index.
+		+ 1
 	)
 	assert_eq(source.get_tiles_count() - tile_count_without_pieces, BuildingPiece.PIECE_IDS.size())
 
@@ -1058,6 +1095,30 @@ func test_paint_uses_the_flat_earth_tile_when_no_real_neighbor_is_available_to_b
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
 		renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID)
+	)
+
+
+## The trail tier paints flat and hard-edged like every other modification
+## tile except EARTH_TILE_ID -- "man-made, flat-edged, never organically
+## blended into the ground" is this file's own existing rule for structures/
+## building pieces, and a trail walked to the ground reads as MORE
+## deliberately worn than the softer path tier beneath it, not less, so it
+## never consults a neighbor to blend toward the way EARTH_TILE_ID does.
+func test_paint_uses_the_flat_trail_tile_when_painted():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 1
+	chunk.height = 1
+	chunk.elevation = PackedFloat32Array([0.4])
+	chunk.biome = PackedStringArray(["grassland"])
+	chunk.modifications[Vector2i(0, 0)] = TerrainRenderer.TRAIL_TILE_ID
+
+	renderer.paint(tile_map_layer, chunk)
+
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
+		renderer.atlas_coords_for_modification(TerrainRenderer.TRAIL_TILE_ID)
 	)
 
 
