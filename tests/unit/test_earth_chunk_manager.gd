@@ -8217,6 +8217,57 @@ func test_a_worn_path_is_remembered():
 	assert_eq(memories[0].source_type, MemoryRecord.FIRSTHAND)
 
 
+# -- the trail tier (docs/concept/infrastructure.md's "path -> trail -> road",
+# PathScarring.TRAIL_THRESHOLD/is_trail) -- the SAME real path entity
+# deepening, not a new kind of thing.
+
+## Sustained, heavier use of an already-worn path is just as real and
+## `/why`-inspectable an event as the path forming in the first place.
+func test_recording_a_formed_trail_records_a_real_event():
+	manager.record_trail_formed_if_new(Vector2i(11, 11))
+	var formed: Array = manager.event_store().events_of_type("trail_formed")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["path:11_11"])
+
+
+func test_recording_the_same_formed_trail_twice_does_not_duplicate_it():
+	manager.record_trail_formed_if_new(Vector2i(12, 12))
+	manager.record_trail_formed_if_new(Vector2i(12, 12))
+	assert_eq(manager.event_store().events_for_entity("path:12_12").size(), 1)
+
+
+## Tapering from Trail back down to an ordinary worn Path is a real, DISTINCT
+## transition from a full path_reclaimed -- the ground is still a path, just
+## no longer compacted to the ceiling.
+func test_reclaiming_a_trail_records_a_real_event_distinct_from_a_full_reclaim():
+	manager.record_trail_formed_if_new(Vector2i(13, 13))
+	manager.record_trail_reclaimed(Vector2i(13, 13))
+	var reclaimed: Array = manager.event_store().events_of_type("trail_reclaimed")
+	assert_eq(reclaimed.size(), 1)
+	assert_eq(reclaimed[0].actors, ["path:13_13"])
+	assert_eq(manager.event_store().events_of_type("path_reclaimed").size(), 0)
+
+
+func test_reclaiming_a_trail_that_was_never_formed_records_nothing():
+	manager.record_trail_reclaimed(Vector2i(14, 14))
+	assert_eq(manager.event_store().events_for_entity("path:14_14").size(), 0)
+
+
+## A tile can decay straight from Trail past Path to bare ground within one
+## real gap (a long absence, a big delta) without an intermediate refresh
+## ever observing the plain "worn but not a trail" state in between --
+## record_path_reclaimed still has to recognize that as a real reclaim
+## rather than silently refusing it because the last-seen tier was the
+## deeper one.
+func test_a_path_can_be_fully_reclaimed_straight_from_its_trail_tier():
+	manager.record_path_worn_if_new(Vector2i(15, 15))
+	manager.record_trail_formed_if_new(Vector2i(15, 15))
+	manager.record_path_reclaimed(Vector2i(15, 15))
+	var reclaimed: Array = manager.event_store().events_of_type("path_reclaimed")
+	assert_eq(reclaimed.size(), 1)
+	assert_eq(reclaimed[0].actors, ["path:15_15"])
+
+
 # -- emergence: Phase 9 -- town/city tier and specialization, from real flows
 
 ## Crossing ALL THREE real dimensions (3 households, 1 active institution

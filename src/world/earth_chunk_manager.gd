@@ -2929,12 +2929,20 @@ func record_path_worn_if_new(tile: Vector2i) -> void:
 ## one forming. NOT once-only the way founding is: a path can be worn,
 ## reclaimed, and worn again over a real session, and each cycle is real,
 ## distinct history. Only fires while the path's most recent event actually
-## IS a formation -- reclaiming a path that was never worn (or is already
-## reclaimed) would not be a real transition, so nothing is recorded.
+## IS a currently-worn state -- reclaiming a path that was never worn (or is
+## already reclaimed) would not be a real transition, so nothing is
+## recorded.
+##
+## Accepts "trail_formed" alongside "path_worn" as a valid predecessor: a
+## tile can decay straight from Trail past Path to bare ground within one
+## real gap (a long absence, a big delta) without an intermediate refresh
+## ever observing the plain "worn but not a trail" state in between --
+## this still has to recognize that as a real reclaim rather than silently
+## refusing it because the last-seen tier was the deeper one.
 func record_path_reclaimed(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
 	var history := _event_store.events_for_entity(path_id)
-	if history.is_empty() or history.back().type != "path_worn":
+	if history.is_empty() or not _CURRENTLY_WORN_EVENTS.has(history.back().type):
 		return
 	var event := Event.new("path_reclaimed", _world_age_seconds)
 	event.actors.append(path_id)
@@ -2945,6 +2953,45 @@ func record_path_reclaimed(tile: Vector2i) -> void:
 	# transformation... overgrown ruins"): nature reclaiming a path IS this
 	# dungeon source, verbatim.
 	record_ruin_from_reclaimed_path(path_id, event.id)
+
+
+## Which event types mean "this path entity is, as of its last recorded
+## event, in some currently-worn state" -- read by record_path_reclaimed so
+## a full reclaim is recognized whether the tile's last-seen tier was the
+## base Path or the deeper Trail (see that function's own doc comment).
+const _CURRENTLY_WORN_EVENTS := ["path_worn", "trail_formed"]
+
+
+## Sustained, heavier use of an already-worn path (docs/concept/
+## infrastructure.md's "path -> trail -> road", PathScarring.
+## TRAIL_THRESHOLD/is_trail) -- the SAME real path entity deepening, not a
+## new kind of thing. Same idempotency shape as record_path_worn_if_new:
+## only fires on the actual formation transition.
+func record_trail_formed_if_new(tile: Vector2i) -> void:
+	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
+	var history := _event_store.events_for_entity(path_id)
+	if not history.is_empty() and history.back().type == "trail_formed":
+		return
+	var event := Event.new("trail_formed", _world_age_seconds)
+	event.actors.append(path_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+
+
+## Tapering from Trail back down to an ordinary worn Path -- a real,
+## distinct transition from record_path_reclaimed's "reclaimed by nature
+## entirely": the ground is still a path, just less intensely used, so this
+## does NOT chain into ruin formation the way a full path reclaim does. Only
+## fires while the path's most recent event actually IS a trail formation.
+func record_trail_reclaimed(tile: Vector2i) -> void:
+	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
+	var history := _event_store.events_for_entity(path_id)
+	if history.is_empty() or history.back().type != "trail_formed":
+		return
+	var event := Event.new("trail_reclaimed", _world_age_seconds)
+	event.actors.append(path_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
 
 
 ## Every settlement that has ever recorded a founding -- read back out of the
