@@ -119,8 +119,10 @@ func pick_up(picker) -> bool:
 		return false
 	# Taken from the sim as well as from the screen: a picked mushroom must
 	# not still be there for a decomposer to eat or for the player to find
-	# again (mirrors PickableSeed's seed_world.take_seed_at_cell).
-	if mushroom_world != null and mushroom_world.has_method("take_mushroom_at"):
-		mushroom_world.take_mushroom_at(cell)
+	# again (mirrors PickableSeed's seed_world.take_seed_at_cell). Calls
+	# WildMushroomPatch.pick directly -- a live MushroomRenderer injects
+	# the exact right per-chunk sim instance here, not a wrapper.
+	if mushroom_world != null and mushroom_world.has_method("pick"):
+		mushroom_world.pick(cell)
 	queue_free()
 	return true

@@ -24,9 +24,14 @@ class StubMushroomWorld:
 	var taken: Array = []
 
 	# No need to override has_method() -- Godot's own reflection already
-	# reports true for this real, defined method.
-	func take_mushroom_at(cell: Vector2i) -> void:
+	# reports true for this real, defined method. Named `pick` to match
+	# WildMushroomPatch's own real method -- the actual mushroom_world a
+	# live MushroomRenderer injects is that sim directly (spawn_markers/
+	# sync_markers already hold the exact right per-chunk instance), not a
+	# wrapper with a different name.
+	func pick(cell: Vector2i) -> bool:
 		taken.append(cell)
+		return true
 
 
 func _make_marker(species_id: String, identified: bool, cell: Vector2i = Vector2i.ZERO) -> MushroomMarker:
