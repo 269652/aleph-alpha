@@ -166,6 +166,19 @@ func test_advance_does_not_snap_a_transition_still_in_progress():
 # seconds would elapse and prune the leaf long before the actual calendar
 # ever reached winter).
 
+## Not an eyeballed number -- half of LIFETIME (see that constant's own doc
+## comment: itself an arbitrary "tidiness" gameplay timeout, not a
+## real-world decay rate, so there is no independent real-world decay-rate
+## figure to ground this against either). Pinning it at exactly half means
+## a settled leaf spends an equal, deliberately chosen share of its whole
+## time on the ground looking freshly fallen and looking decayed, rather
+## than either extreme swallowing almost all of it.
+func test_decay_threshold_is_pinned_to_half_of_lifetime():
+	assert_almost_eq(
+		LeafLitterField.DECAY_TO_WINTER_SECONDS, LeafLitterField.LIFETIME * 0.5, 0.01
+	)
+
+
 func test_advance_keeps_the_fallen_season_before_the_decay_threshold():
 	var field := _field()
 	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
