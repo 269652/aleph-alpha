@@ -111,16 +111,50 @@ func test_distance_never_turns_repulsion_into_attraction():
 
 # -- the roster --------------------------------------------------------------
 
-## Every animal with receptors has a sensitivity for every molecule, so a new
-## molecule cannot silently be invisible to half the roster.
+## Every animal with a nose has a sensitivity for every molecule, so a new
+## molecule cannot silently be invisible to half the roster. The noses live
+## in the ethogram's species records now (docs/concept/ethogram.md §3).
 func test_every_receptor_set_covers_every_molecule():
-	for species in Olfaction.RECEPTORS:
+	var noses := 0
+	for species in Ethogram.SPECIES:
+		if not Ethogram.has_nose(species):
+			continue
+		noses += 1
+		var expressed := Ethogram.express(species)
 		for molecule in Olfaction.MOLECULES:
 			assert_true(
-				Olfaction.RECEPTORS[species]["sensitivity"].has(molecule),
+				expressed["sensitivity"].has(molecule),
 				"%s has no receptor for %s" % [species, molecule]
 			)
 			assert_true(
-				Olfaction.RECEPTORS[species]["response"].has(molecule),
+				expressed["valence"].has(molecule),
 				"%s has no response to %s" % [species, molecule]
 			)
+	assert_gt(noses, 0, "the roster should not be empty")
+
+
+# -- the ethogram underneath (docs/concept/ethogram.md §7) --------------------
+
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+
+
+## Receptors now live in the species record, and the smell API reads them
+## from there -- a species is data in exactly one place.
+func test_the_smell_api_reads_the_species_record():
+	var rotten := Olfaction.fruit_mixture("apple", 0.0)
+	var expressed := Ethogram.express("fly")
+	var by_hand := 0.0
+	for molecule in rotten:
+		by_hand += float(rotten[molecule]) * expressed["sensitivity"][molecule] * expressed["valence"][molecule]
+	assert_almost_eq(Olfaction.attraction_to("fly", rotten, 0.0), by_hand, 0.0001)
+
+
+## An individual reaches the smell API through its genome: a boar born
+## without a decay receptor is not drawn by rot the species would go to.
+func test_an_individuals_receptor_genes_reach_the_smell_api():
+	var rot := {Olfaction.DECAY: 1.0}
+	var species := Olfaction.attraction_to("boar", rot, 0.0)
+	var anosmic := Olfaction.attraction_to("boar", rot, 0.0, {"receptor_decay": 0.0})
+	assert_gt(species, 0.0)
+	assert_almost_eq(anosmic, 0.0, 0.0001)
+	assert_almost_eq(Olfaction.perceived_strength("boar", rot, 0.0, {"receptor_decay": 0.0}), 0.0, 0.0001)

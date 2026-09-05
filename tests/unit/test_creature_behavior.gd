@@ -339,3 +339,89 @@ func test_unaggroed_world_boss_still_seeks_food_and_water_normally():
 		"thirsty": true, "water_direction": Vector2(1, 0),
 	}))
 	assert_eq(decision.intent, "seek_water")
+
+
+# -- the ethogram underneath (docs/concept/ethogram.md §7) --------------------
+#
+# decide() is now the land-mammal adapter onto BehaviorKernel: the ladder
+# above is Ethogram.BODY_PLANS["mammal"]["wirings"], and everything the tests
+# above pin is the regression bar for that. What follows is what the adapter
+# can do that the old ladder could not: name what it chose, take a species
+# and its genome, and hunt by nose through the same entry point.
+
+const Olfaction = preload("res://src/gameplay/olfaction.gd")
+
+
+func test_a_decision_names_its_target_and_score():
+	var hunt := behavior.decide(_context({
+		"temperament": "aggressive", "is_predator": true, "hungry": true,
+		"prey": [Vector2(10, 0), Vector2(50, 0)],
+	}))
+	assert_eq(hunt["target"], Vector2(10, 0))
+	assert_gt(hunt["score"], 0.0)
+	var idle := behavior.decide(_context({}))
+	assert_eq(idle["target"], null)
+	assert_eq(idle["score"], 0.0)
+
+
+## Smells reach the ladder through the context as `smells`, the same
+## {position, mixture} list EarthChunkManager.smells_near already returns.
+## Nothing live passes them yet (ScentForaging does this job in the marker
+## until slice 2); this pins that the seam exists and ranks like a nose.
+func test_a_hungry_boar_with_smells_in_its_context_heads_for_the_ripe_apple():
+	var decision := behavior.decide(_context({
+		"species": "boar", "hungry": true,
+		"smells": [
+			{"position": Vector2(60, 0), "mixture": Olfaction.fruit_mixture("apple", 1.0)},
+			{"position": Vector2(-60, 0), "mixture": Olfaction.fruit_mixture("apple", 0.0)},
+		],
+	}))
+	assert_eq(decision.intent, "seek_food")
+	assert_gt(decision.direction.x, 0.0)
+
+
+func test_a_hungry_deer_walks_past_a_rotten_apple_and_keeps_searching():
+	var decision := behavior.decide(_context({
+		"species": "deer", "hungry": true,
+		"smells": [{"position": Vector2(-60, 0), "mixture": Olfaction.fruit_mixture("apple", 0.0)}],
+	}))
+	assert_eq(decision.intent, "search_food", "repelled, and with nothing else sensed, it roams")
+
+
+func test_smells_never_outrank_thirst_or_a_threat():
+	var smells := [{"position": Vector2(60, 0), "mixture": Olfaction.fruit_mixture("apple", 1.0)}]
+	var thirsty := behavior.decide(_context({
+		"species": "boar", "hungry": true, "smells": smells,
+		"thirsty": true, "water_direction": Vector2(0, 1),
+	}))
+	assert_eq(thirsty.intent, "seek_water")
+	var hunted := behavior.decide(_context({
+		"species": "boar", "hungry": true, "smells": smells, "threats": [Vector2(0, 10)],
+	}))
+	assert_eq(hunted.intent, "flee")
+
+
+## A species with no ethogram record (most of the roster today) still runs
+## the whole mammal ladder on the body plan's defaults.
+func test_a_species_without_a_record_still_runs_the_mammal_ladder():
+	var decision := behavior.decide(_context({
+		"species": "lynx", "temperament": "calm", "threats": [Vector2(10, 0)],
+	}))
+	assert_eq(decision.intent, "flee")
+	assert_eq(behavior.decide(_context({"species": "lynx", "hungry": true})).intent, "search_food")
+
+
+## An individual's receptor genes reach its decision: a boar born without a
+## decay receptor cannot be drawn by carrion the species would take. (A
+## rotten APPLE would still draw it a little -- the fruit keeps a trace of
+## sugar as it goes over, and a boar likes sugar -- which is olfaction.md's
+## point that a smell is a mixture, not a label; so this uses a pure decay
+## source.)
+func test_an_individuals_receptor_genes_reach_its_decision():
+	var carrion := [{"position": Vector2(-60, 0), "mixture": {Olfaction.DECAY: 1.0}}]
+	var typical := behavior.decide(_context({"species": "boar", "hungry": true, "smells": carrion}))
+	var anosmic := behavior.decide(_context({
+		"species": "boar", "hungry": true, "smells": carrion, "genome": {"receptor_decay": 0.0},
+	}))
+	assert_eq(typical.intent, "seek_food")
+	assert_eq(anosmic.intent, "search_food")

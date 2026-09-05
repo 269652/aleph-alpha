@@ -17,6 +17,7 @@ const BIRD_WORLD_SCALE := 1.25
 const PiscivoreBirdMarker = preload("res://src/rendering/piscivore_bird_marker.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const ProceduralBirdSprite = preload("res://src/rendering/procedural_bird_sprite.gd")
+const IllustratedBirdSprite = preload("res://src/rendering/illustrated_bird_sprite.gd")
 const WaterAreaSurvey = preload("res://src/world/water_area_survey.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 
@@ -39,8 +40,17 @@ const CRUISE_INTERVAL := 1.8
 ## 15% of the time regardless of whether there was anything to hunt.
 const MAX_PER_CHUNK := 1
 
-var _sprite := ProceduralBirdSprite.new()
+var _procedural_sprite := ProceduralBirdSprite.new()
+var _illustrated_sprite := IllustratedBirdSprite.new()
 var _water_survey := WaterAreaSurvey.new()
+
+
+## Same has-real-art-else-procedural pattern as AmbientFlyerRenderer.
+## _bird_sprite_generator_for -- kept as a real choice here too rather than
+## assuming SPECIES always has illustrated art, so a future species change
+## here degrades gracefully instead of erroring.
+func _sprite_generator():
+	return _illustrated_sprite if _illustrated_sprite.has_species(SPECIES) else _procedural_sprite
 
 
 ## `world` is passed straight through to the spawned marker (duck-typed
@@ -82,15 +92,16 @@ func spawn_piscivore_birds(
 
 	var marker := PiscivoreBirdMarker.new()
 	marker.species = SPECIES
-	marker.texture = _sprite.generate_texture(SPECIES, seed_value)
+	var sprite = _sprite_generator()
+	marker.texture = sprite.generate_texture(SPECIES, seed_value)
 	# Wing-beat frames and a folded-wing rest pose, so the bird actually
 	# flaps rather than cruising, hovering and carrying its catch home all
 	# on one frozen frame (see PiscivoreBirdMarker._animate_wings) --
 	# ProceduralBirdSprite already paints both for "kingfisher"; this was a
 	# wiring gap, mirroring AmbientFlyerRenderer._build_marker's own
 	# flap_frames/perched_frame wiring for sparrow/robin exactly.
-	marker.flap_frames = _sprite.generate_flap_textures(SPECIES, seed_value)
-	marker.perched_frame = _sprite.generate_perched_texture(SPECIES, seed_value)
+	marker.flap_frames = sprite.generate_flap_textures(SPECIES, seed_value)
+	marker.perched_frame = sprite.generate_perched_texture(SPECIES, seed_value)
 	# Art is authored DETAIL_MULTIPLIER times oversized; scaling it back
 	# keeps the flyer the same size in the world (see
 	# docs/concept/art_resolution.md).

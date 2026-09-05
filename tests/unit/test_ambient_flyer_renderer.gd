@@ -21,6 +21,7 @@ const CHUNK_SIZE := 32
 const CHUNK_ORIGIN := Vector2i(64, GERMANY_ROW)
 
 const ProceduralBirdSprite = preload("res://src/rendering/procedural_bird_sprite.gd")
+const IllustratedBirdSprite = preload("res://src/rendering/illustrated_bird_sprite.gd")
 const ProceduralButterflySprite = preload("res://src/rendering/procedural_butterfly_sprite.gd")
 const ProceduralEggSprite = preload("res://src/rendering/procedural_egg_sprite.gd")
 
@@ -409,10 +410,14 @@ func test_a_bird_chick_is_a_bird_not_a_butterfly():
 	add_child_autofree(parent)
 	var chick := renderer.spawn_offspring(parent, "sparrow", Vector2.ZERO, 7)
 	assert_eq(chick.species, "sparrow")
+	# Sparrow now has real illustrated art (see IllustratedBirdSprite),
+	# which AmbientFlyerRenderer._bird_sprite_generator_for prefers over
+	# ProceduralBirdSprite -- a chick goes through the exact same
+	# generator choice as every other spawned sparrow.
 	assert_eq(
 		chick.texture.get_image().get_data(),
-		ProceduralBirdSprite.new().generate_texture("sparrow", 7).get_image().get_data(),
-		"a sparrow must be drawn as a sparrow"
+		IllustratedBirdSprite.new().generate_texture("sparrow", 7).get_image().get_data(),
+		"a sparrow must be drawn as a sparrow, with its real art"
 	)
 
 
