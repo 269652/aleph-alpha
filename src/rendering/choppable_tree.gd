@@ -267,9 +267,6 @@ func saw_up() -> bool:
 	return true
 
 
-## How far grown this tree is, 0..1 (see TreeGrowth). Applied to the whole
-## node so canopy, trunk, shadow and collision shrink together -- a seedling
-## is a small tree, not a full tree drawn small.
 ## When this tree was planted, on the world clock. Trees that predate the
 ## session are already grown and leave this at zero.
 var planted_at := 0.0
@@ -337,7 +334,17 @@ func pollination_visits_in_cycle(bearing_cycle_seconds: float, now: float) -> fl
 
 static var _tree_growth := TreeGrowth.new()
 
+## How far grown this tree is -- 0.05..(1.0 + TreeGrowth.OLD_GROWTH_BONUS)
+## (see TreeGrowth). Applied to the whole node so canopy, trunk, shadow and
+## collision shrink or grow together -- a seedling is a small tree, not a
+## full tree drawn small, and an old-growth tree is a genuinely bigger
+## tree, not the same tree drawn oversized.
+##
+## Upper bound raised past 1.0 to let TreeGrowth's own old-growth ceiling
+## through -- still a real clamp, not removed outright, so a caller passing
+## a wildly out-of-range value by mistake cannot render an arbitrarily
+## huge tree.
 var growth_scale: float = 1.0:
 	set(value):
-		growth_scale = clampf(value, 0.05, 1.0)
+		growth_scale = clampf(value, 0.05, 1.0 + TreeGrowth.OLD_GROWTH_BONUS)
 		scale = Vector2.ONE * growth_scale

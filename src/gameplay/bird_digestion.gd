@@ -12,17 +12,31 @@ extends RefCounted
 ## appears somewhere a bird happened to be, and the player never sees the
 ## connection between the bird that ate the berry and the flower that came up.
 ##
+## Since docs/concept/ethogram.md slice 3 the crop is the one drive clock
+## every animal shares (Drives), upside down: fullness is one minus the bird
+## body plan's hunger drive, and the numbers are the ethogram's bird profile
+## (Ethogram.drive_profile("", "bird")). This file keeps its fullness-facing
+## API for AmbientFlyerMarker and re-exports the numbers.
+##
 ## Pure and engine-free, like the rest of the behaviour modules.
 
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const Drives = preload("res://src/gameplay/drives.gd")
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+
+const BODY_PLAN := "bird"
 
 ## Fullness runs 0 (empty) to 1 (fed), the same unit scale every other
 ## condition value in this project uses. A bird starts empty, because a bird
 ## that starts fed does nothing until it is not.
-const STARTING_FULLNESS := 0.0
+static var STARTING_FULLNESS: float = (
+	1.0 - float(Ethogram.drive_profile("", BODY_PLAN)[Ethogram.DRIVE_HUNGER]["start"])
+)
 
 ## Below this a bird goes looking for food.
-const HUNGRY_BELOW := 0.35
+static var HUNGRY_BELOW: float = (
+	1.0 - float(Ethogram.drive_profile("", BODY_PLAN)[Ethogram.DRIVE_HUNGER]["threshold"])
+)
 
 ## How long a full crop takes to empty.
 ##
@@ -31,10 +45,14 @@ const HUNGRY_BELOW := 0.35
 ## not a day. Pinned by test_a_bird_eats_several_times_a_day, which brackets
 ## it from both sides: too fast and it never stops eating, too slow and it
 ## feeds once and is done.
-const DIGEST_SECONDS := SeasonCycle.SECONDS_PER_DAY / 8.0
+static var DIGEST_SECONDS: float = float(
+	Ethogram.drive_profile("", BODY_PLAN)[Ethogram.DRIVE_HUNGER]["rise_seconds"]
+)
 
 ## How much one meal fills a bird.
-const MEAL_FULLNESS := 0.7
+static var MEAL_FULLNESS: float = float(
+	Ethogram.drive_profile("", BODY_PLAN)[Ethogram.DRIVE_HUNGER]["meal"]
+)
 
 
 static func is_hungry(fullness: float) -> bool:
@@ -43,12 +61,11 @@ static func is_hungry(fullness: float) -> bool:
 
 ## Fullness after `delta_seconds` of digesting.
 static func fullness_after(fullness: float, delta_seconds: float) -> float:
-	var emptied := maxf(delta_seconds, 0.0) / DIGEST_SECONDS
-	return clampf(fullness - emptied, 0.0, 1.0)
+	return 1.0 - Drives.advanced(1.0 - fullness, DIGEST_SECONDS, delta_seconds)
 
 
 static func fullness_after_meal(fullness: float) -> float:
-	return clampf(fullness + MEAL_FULLNESS, 0.0, 1.0)
+	return 1.0 - Drives.after_meal(1.0 - fullness, MEAL_FULLNESS)
 
 
 ## ## On gut passage

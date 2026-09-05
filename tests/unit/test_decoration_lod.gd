@@ -17,6 +17,12 @@ const Player = preload("res://scenes/player.gd")
 ## The whole point: what the camera can actually show, derived from the real
 ## framing rather than guessed, so a zoom change can't silently leave the
 ## radius too small and start showing bare ground.
+##
+## Briefly 7.69/4.33 (2026-09-05): Player.TARGET_TILE_SCREEN_PX moved
+## 64.0 -> 83.2 for a zoom-in, then back to 64.0 the same day (reported
+## live as visible blur -- see player.gd's own TARGET_TILE_SCREEN_PX
+## comment). This test reads the real constant rather than a hardcoded
+## framing, so it moved with it both times.
 func test_the_visible_span_matches_what_the_camera_actually_frames():
 	var span := DecorationLod.visible_half_span_tiles(Vector2(1280, 720), Player.TARGET_TILE_SCREEN_PX)
 	assert_almost_eq(span.x, 10.0, 0.01, "half the screen in tiles across")

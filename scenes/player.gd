@@ -63,6 +63,8 @@ const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_mark
 const CaptureBook = preload("res://src/gameplay/capture_book.gd")
 const CaptureExecutor = preload("res://src/gameplay/capture_executor.gd")
 const CaptureAtomEffects = preload("res://src/gameplay/capture_atom_effects.gd")
+const BodyDimensions = preload("res://src/gameplay/body_dimensions.gd")
+const FishMarker = preload("res://src/rendering/fish_marker.gd")
 const CaptureItemActions = preload("res://src/gameplay/capture_item_actions.gd")
 const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
@@ -123,6 +125,45 @@ const BONDED_COMPANION_TRAIL_RADIUS := TIE_RANGE
 ## attempt bumped TILE_SIZE itself -- made every tile occupy 4x the world
 ## footprint, reported as "water squares are gigantic compared to the
 ## player".
+##
+## Was briefly 83.2 (2026-09-05), a 30% zoom-in asked directly to "zoom in
+## 30% so trees become relatively bigger", alongside shrinking the
+## character 30% (see CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE). Zoom
+## is a direct magnification factor, not an inverse like a seconds-to-cover
+## time constant, so 30% more zoom is 64.0 * 1.3 = 83.2 exactly.
+##
+## Reverted the same day, reported live: "trees are very blurry even though
+## sprite art is much crispier." Root cause: `ArtResolution.SPRITE_SCALE
+## (0.5) * CAMERA_ZOOM.x` -- screen pixels per source texel for every
+## SPRITE_SCALE-path entity (terrain, the tree canopy, the bobber) -- is a
+## whole 2.0 at 64.0/4.0x, but a non-whole 2.6 at 83.2/5.2x; nearest-
+## neighbour filtering shows that as soft, uneven edges rather than clean
+## blocks, the same failure mode this codebase already diagnosed and fixed
+## once for the character-creator portrait's own fractional scale
+## (STANDARD_PORTRAIT_SCALE, see docs/progress.md). Asked immediately
+## beforehand whether 83.2 could become a "whole multiplier" instead of a
+## straight revert: with ArtResolution.DETAIL_MULTIPLIER=2, the only zoom
+## values that land every canonical resolution (720p/1080p/1440p/4K) on a
+## whole screen-pixels-per-texel count are multiples of 4.0x -- 4.0x
+## (revert) or 8.0x (double, not 30%, and the wrong direction for the tree-
+## blur report too: more zoom only stretches the SAME low-resolution tree
+## art further, making the OTHER contributing cause -- trees compositing
+## onto a native canvas far smaller than the character's own, a separate,
+## still-open gap -- read worse, not better). Reverting all the way back to
+## 64.0 was the only option that fixes the alignment half of the blur
+## report with no new risk.
+##
+## "Trees relatively bigger" survives the revert completely intact: that
+## ratio comes entirely from CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE
+## (still 0.595, unchanged) -- zoom scales the character and every tree by
+## the identical factor, so it cancels out of their ratio and was never
+## actually load-bearing for that specific ask. Confirmed by rendering a
+## real frame at both zoom levels: the near tree measured roughly 1.8x the
+## character's own height either way.
+##
+## Pinned by test_camera_zoom_keeps_sprite_scale_path_art_pixel_aligned
+## (test_player_camera.gd), which checks the real screen-px-per-texel
+## property directly rather than just re-asserting the literal 64.0.
 const TARGET_TILE_SCREEN_PX := 64.0
 ## Applied in _ready() rather than left as a bare number in player.tscn, so
 ## it's a tested constant (see test_player_camera.gd) rather than an
@@ -198,6 +239,14 @@ signal inventory_changed
 var wetness := 0.0
 var current_mode := "walking"
 var current_speed_multiplier := 1.0
+## Real, continuous water depth in meters (maxf of ocean/river/lake --
+## see _resolve_water_state), set alongside current_mode every step. Used
+## to be computed and discarded the moment it was collapsed into current_
+## mode's coarse walking/wading/swimming/drowning string; this is the
+## channel _update_character_view feeds to CharacterView.
+## set_submersion_depth so wading has a real visual signature instead of
+## none at all until the exact swim threshold.
+var current_water_depth := 0.0
 
 ## Aggressive/healthy predators and boars attack the player back (see
 ## CreatureMarker._try_attack), so take_damage() has a live caller. Reaching
@@ -678,24 +727,15 @@ func _ready() -> void:
 	# sync_hotbar) from one place, rather than at every inventory mutation.
 	inventory_changed.connect(sync_hotbar)
 
-	# Start carrying a sword AND an axe; the sword is what's held at first (so
-	# attacks land harder than fists and it looks like a weapon). The axe sits
-	# in the inventory -- equip it from the hotbar/inventory to swap what's in
-	# hand (see equip_item), which is what makes it chop trees fast (the held
-	# item alone decides attack/chop/mine effectiveness).
-	var sword := Item.new("iron_sword", "Iron Sword", "weapon", 1, 15.0)
-	inventory.add(sword, 1)
-	inventory.add(Item.new("iron_axe", "Iron Axe", "tool", 1), 1)
-	# A couple of leather pieces so the equipment paperdoll (inventory screen)
-	# is discoverable from the first minute -- click them to wear them.
-	inventory.add(_item_catalog.make("leather_helm"), 1)
-	inventory.add(_item_catalog.make("leather_chest"), 1)
-	# A fishing rod so the fishing loop is discoverable -- stand by water and
-	# press the fish key (default F).
-	inventory.add(_item_catalog.make("fishing_rod"), 1)
-	equip_item(sword)
-
-	inventory_changed.emit()
+	# No starting grant here any more -- a NEW game's kit is now the
+	# player's own choice (see grant_starter_items/docs/concept/
+	# starting_kit.md), called explicitly by World AFTER this node is in
+	# the tree (so inventory_changed above is already wired). A LOADED
+	# game's inventory comes from apply_save_dict instead, same as before.
+	# (The butterfly-net/glass-bottle capture-DSL discoverability that
+	# briefly lived in this unconditional grant is still covered: both are
+	# real StarterKit.POOL members now, so a player picks them on purpose
+	# instead of receiving them regardless of choice.)
 
 
 ## Server-authoritative movement: this node's authority is always the server
@@ -1689,6 +1729,45 @@ func equip_item(item) -> bool:
 	return true
 
 
+## Populates a brand-new character's inventory from the player's chosen
+## starter items (see docs/concept/starting_kit.md), replacing what used to
+## be a hardcoded, identical-for-everyone grant in _ready(). Called by World
+## AFTER this node is already in the tree (see World._spawn_local_singleplayer)
+## so inventory_changed's sync_hotbar connection (wired in _ready()) is
+## already live when the emit below fires. Uses this node's own
+## _item_catalog, like every other item-granting method here (cooking,
+## foraging, trading, crafting) -- no reason for this one to take a second,
+## separately-supplied catalog when the rest of the file never does.
+##
+## Mirrors the established /give pattern (World._handle_give_command)
+## exactly: has() -> make() -> inventory.add() -- an unknown id is skipped
+## rather than crashing, since a stale/hand-edited selection is a normal
+## condition to degrade from, not an error worth taking the game down over.
+##
+## Auto-equips the first WEAPON-kind choice; if none was chosen, the first
+## TOOL-kind choice instead (equip_item already accepts either kind) -- so a
+## {pickaxe, compass, lasso} pick starts holding the pickaxe, not bare-handed
+## just because nothing is literally a weapon. Bare-handed only when neither
+## kind was chosen at all: a real, intended consequence of replacing the old
+## fixed kit outright rather than adding to it.
+func grant_starter_items(item_ids: Array) -> void:
+	var first_weapon: Item = null
+	var first_tool: Item = null
+	for item_id in item_ids:
+		if not _item_catalog.has(item_id):
+			continue
+		var item := _item_catalog.make(item_id)
+		inventory.add(item, 1)
+		if first_weapon == null and item.is_weapon():
+			first_weapon = item
+		elif first_tool == null and item.kind == "tool":
+			first_tool = item
+	var to_equip := first_weapon if first_weapon != null else first_tool
+	if to_equip != null:
+		equip_item(to_equip)
+	inventory_changed.emit()
+
+
 ## Consumes one unit of a "food"-kind item from the inventory to relieve
 ## hunger (see SurvivalMeters.eat) -- called from World when the player
 ## clicks a food row in the inventory window. Returns false (no-op) if the
@@ -1804,6 +1883,7 @@ func _authority_step(delta: float) -> void:
 	var tile := current_tile()
 	var water_result := _resolve_water_state(tile, delta)
 	current_mode = water_result.mode
+	current_water_depth = water_result.water_depth
 	# Overall condition (SurvivalMeters.fitness, driven by starving/
 	# dehydrated/cold) is a real movement debuff, not a dead meter -- see
 	# ConditionPenalty and docs/concept/survival.md's "Debuffs, not death".
@@ -3120,7 +3200,9 @@ func _perform_context_action(slot: int, action_name: String) -> void:
 	if slot < animal_actions_for(animal).size():
 		_perform_animal_action(animal, slot)
 		return
-	var has_bottle := inventory != null and inventory.has("glass_bottle")
+	# An EMPTY bottle: one already holding a creature is not somewhere to put
+	# a second one (see _bottle_captive).
+	var has_bottle := inventory != null and inventory.has("glass_bottle", "")
 	var tool_action := CaptureItemActions.for_tool(equipped_item, has_bottle)
 	if tool_action.get("action", "") == action_name:
 		_bottle_captive()
@@ -3165,12 +3247,23 @@ func _throw_rope_tool(tool_id: String) -> void:
 		_lassoed = best
 
 
-## Netting a flyer is a real probability roll, not a struggle and not a
-## guarantee (docs/concept/capture_dsl.md: nothing in AmbientFlyerMarker
-## models a butterfly fighting a restraint the way a horse does, so there is
-## no multi-bout contest -- but a swing can still miss). A landed throw
-## scans the ambient-flyer flock -- a wholly separate node group from
-## CreatureMarker.GROUP_NAME -- and resolves through _attempt_net_catch.
+## How close to a netted fish's own position catch_nearest_fish looks for
+## the marker to take out of the water: the target is AT that position, so
+## this only has to be wider than floating-point noise, never wide enough to
+## take a neighbour instead.
+const NET_FISH_TAKE_RADIUS := 1.0
+
+
+## Netting is a real probability roll, not a struggle and not a guarantee
+## (docs/concept/capture_dsl.md: nothing in AmbientFlyerMarker models a
+## butterfly fighting a restraint the way a horse does, so there is no
+## multi-bout contest -- but a swing can still miss). A landed throw goes for
+## the NEAREST net target: an ambient flyer (a wholly separate node group
+## from CreatureMarker.GROUP_NAME) or, since 2026-09-05, a fish in the
+## shallows -- found through the same nearest-fish lookup a hunting
+## kingfisher uses -- and resolves through _attempt_net_catch. Which of them
+## the net can actually HOLD is the net's own mesh physics, not this
+## function's business.
 func _throw_net() -> void:
 	var best: Node = null
 	var best_distance := LASSO_RANGE
@@ -3181,52 +3274,92 @@ func _throw_net() -> void:
 		if distance <= best_distance:
 			best = flyer
 			best_distance = distance
+	if _chunk_manager != null:
+		var fish = _chunk_manager.nearest_fish_position(position, best_distance)
+		if fish != null and is_instance_valid(fish) and not fish.is_queued_for_deletion():
+			best = fish
 	if best == null:
 		return
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
 	_attempt_net_catch(best)
 
 
-## Rolls whether a landed net throw actually catches `flyer` (docs/concept/
-## capture_dsl.md's butterfly_net device: base 0.65, nudged by the
-## individual's own real, DNA-inherited FlyerPersonality.boldness_of -- a
-## bolder flyer is easier to net). The roll is salted with
-## _capture_attempt_count, not just flyer.wander_seed alone -- a bare-seed
-## roll would make every retry against the same still-alive flyer land on
-## the identical outcome forever, silently making one miss unwinnable.
+## Resolves a landed net throw against `target` -- a flyer or a fish --
+## through the net's own device text (docs/concept/capture_dsl.md):
+## `mesh_holds(mesh: bag)` first, which reads the bag's real 10 mm mesh and
+## 30 cm mouth off the net's part facts and the subject's measured body
+## extents (BodyDimensions) and refuses WITH A REASON a bee that slips
+## through or a koi that does not fit; then `catch_roll` (base 0.65, nudged
+## by a flyer's own real, DNA-inherited FlyerPersonality.boldness_of -- a
+## bolder flyer is easier to net; a fish has no personality and rolls at
+## the middling default); then `confine(in: bag)`.
 ##
-## On a miss, nothing changes -- the flyer's own existing flee/dance
-## reaction (FlyerPersonality.player_response) keeps running untouched. On a
-## catch: see docs/concept/taming.md's "A bond, not an order: the Kinship
-## path" -- with `menagerie` unlocked (and room under the cap) it becomes a
-## real bonded companion instantly, exactly as before; otherwise the net
-## itself goes LOADED (Item.captive_species) instead of instantly becoming a
-## curiosity item -- the player now chooses Release or (with a glass bottle)
-## Put into bottle. Either way the flyer itself is removed from the world.
-func _attempt_net_catch(flyer: Node) -> void:
-	var species: String = flyer.species
-	var boldness := FlyerPersonality.boldness_of(flyer.traits)
+## The roll is salted with _capture_attempt_count, not just the target's
+## wander_seed alone -- a bare-seed roll would make every retry against the
+## same still-alive target land on the identical outcome forever, silently
+## making one miss unwinnable.
+##
+## A mesh refusal shows its reason ("The bee slips through the 10 mm
+## mesh."); a lost roll shows "Missed!"; either way nothing changes -- a
+## flyer's own existing flee/dance reaction (FlyerPersonality.player_
+## response) keeps running untouched. On a catch: see docs/concept/
+## taming.md's "A bond, not an order: the Kinship path" -- an ambient flyer
+## with `menagerie` unlocked (and room under the cap) becomes a real bonded
+## companion instantly, exactly as before; a fish never bonds (nothing that
+## lives in water follows you across a meadow); otherwise the net itself
+## goes LOADED (Item.captive_species) and the player chooses Release or
+## (with a glass bottle) Put into bottle. The subject leaves the world
+## either way: a flyer is freed, a fish is taken through the rod's own
+## catch_nearest_fish so its pond's real population records the harvest.
+func _attempt_net_catch(target: Node) -> void:
+	var species: String = target.species
+	# By class, not by group: a marker joins its group in _ready, which a
+	# node outside the tree never runs, and "is this a fish" must not depend
+	# on where the node happens to sit.
+	var is_fish: bool = target is FishMarker
+	var traits = target.get("traits")
+	var boldness: float = FlyerPersonality.MIDDLING_BOLDNESS
+	if traits is Dictionary:
+		boldness = FlyerPersonality.boldness_of(traits)
 	var rule: Variant = _capture_executor.capture_rule(_capture_book.ast_for(CaptureTool.NET))
 	_capture_attempt_count += 1
-	var roll := float(absi(hash("%d_%d_catch" % [flyer.wander_seed, _capture_attempt_count])) % 10000) / 10000.0
-	var context := {"target": {"tier": "flyer", "species": species, "boldness": boldness}}
+	var roll := float(absi(hash("%d_%d_catch" % [target.wander_seed, _capture_attempt_count])) % 10000) / 10000.0
+	var context := {"target": {
+		"species": species,
+		"boldness": boldness,
+		"extents_mm": BodyDimensions.extents_mm(species),
+	}}
+	context.merge(_capture_book.facts_for(CaptureTool.NET))
 	var result := _capture_executor.resolve_catch(rule, context, roll)
 	if not result["caught"]:
-		_capture_result_message = "Missed!"
+		var reason: String = result["reason"]
+		_capture_result_message = "Missed!" if reason == "" else _as_sentence(reason)
 		_capture_result_timer = CAPTURE_RESULT_MESSAGE_DURATION
 		return
-	if _has_menagerie() and _bond_companion(species):
+	if not is_fish and _has_menagerie() and _bond_companion(species):
 		_capture_result_message = "Bonded with the %s." % species.capitalize()
 	else:
 		for effect in result["effects"]:
 			_capture_atom_effects.apply_to_target(effect["atom"], effect["params"], equipped_item, context)
 		_capture_result_message = "Caught! Net is full."
 	_capture_result_timer = CAPTURE_RESULT_MESSAGE_DURATION
-	flyer.queue_free()
+	if is_fish:
+		_chunk_manager.catch_nearest_fish(target.position, NET_FISH_TAKE_RADIUS)
+	else:
+		target.queue_free()
+
+
+## "the bee slips through the 10 mm mesh" -> "The bee slips through the 10 mm
+## mesh." -- a reason is prose the executor phrased around its subject; the
+## HUD just capitalises and closes it.
+func _as_sentence(reason: String) -> String:
+	if reason == "":
+		return ""
+	return reason[0].to_upper() + reason.substr(1) + "."
 
 
 ## Empties a loaded net, letting its catch go (docs/concept/capture_dsl.md's
-## "on release" -- release_captive). Deliberately does not respawn a live
+## "on release" -- free(from: bag)). Deliberately does not respawn a live
 ## creature back into the world -- a documented, honest gap, not attempted
 ## here (see capture_dsl.md's Open questions).
 func _release_net() -> void:
@@ -3246,7 +3379,7 @@ func _release_net() -> void:
 ## "Put into bottle" (docs/concept/capture_dsl.md's "on transfer(glass_bottle)"
 ## -- move_captive): consumes one EMPTY glass_bottle and relocates a loaded
 ## net's catch onto a freshly-loaded one (Item.captive_species), the same
-## way _attempt_net_catch's hold_captive loads the net in the first place --
+## way _attempt_net_catch's confine loads the net in the first place --
 ## not a generic curiosity item, because the species has to survive the move
 ## for the bottle to be rendered as the specific creature it holds. See
 ## CaptureItemActions for when this is even offered -- it never fires unless
@@ -3254,7 +3387,7 @@ func _release_net() -> void:
 func _bottle_captive() -> void:
 	if equipped_item == null or not equipped_item.is_holding_captive():
 		return
-	if inventory == null or not inventory.has("glass_bottle"):
+	if inventory == null or not inventory.has("glass_bottle", ""):
 		return
 	var rule: Variant = _capture_executor.transfer_rule(_capture_book.ast_for(CaptureTool.NET), "glass_bottle")
 	var result := _capture_executor.resolve_transfer(rule, {})
@@ -3267,7 +3400,10 @@ func _bottle_captive() -> void:
 			species = outcome
 	if species == "":
 		return
-	inventory.remove("glass_bottle", 1)
+	# Spend an EMPTY bottle, never a loaded one -- with a loaded bottle and
+	# an empty one both in the pack, an unfiltered remove could take the
+	# loaded one and set its creature loose to make room for this one.
+	inventory.remove("glass_bottle", 1, "")
 	var loaded_bottle: Item = _item_catalog.make("glass_bottle")
 	loaded_bottle.captive_species = species
 	inventory.add(loaded_bottle, 1)
@@ -3855,6 +3991,7 @@ func _proxy_step() -> void:
 		var water_result := _resolve_water_state(current_tile(), get_physics_process_delta_time())
 		current_mode = water_result.mode
 		current_speed_multiplier = water_result.speed_multiplier
+		current_water_depth = water_result.water_depth
 
 	var facing_direction := _last_facing_direction
 	if movement.length() > PROXY_MOVEMENT_EPSILON:
@@ -3931,7 +4068,14 @@ func _resolve_water_state(tile: Vector2i, delta: float) -> Dictionary:
 	wetness = _wetness_tracker.update(wetness, worn_material, submerged, delta)
 	var total_weight := body_weight + worn_material.effective_weight(wetness)
 
-	return _water_movement_model.resolve(water_depth, total_weight, max_swimmable_weight)
+	var result := _water_movement_model.resolve(water_depth, total_weight, max_swimmable_weight)
+	# The raw depth CharacterView.set_submersion_depth needs -- resolve()'s
+	# own mode/speed_multiplier are derived FROM this, but neither carries
+	# it back out (mode collapses it to 4 strings, and speed_multiplier's
+	# own formula switches to weight-driven once swimming, so depth isn't
+	# recoverable from it at all in that regime).
+	result["water_depth"] = water_depth
+	return result
 
 
 ## Modes in which the player is standing in enough water to disturb it (see
@@ -3958,6 +4102,7 @@ func _step_water_ripples(delta: float, input_direction: Vector2) -> void:
 func _update_character_view(input_direction: Vector2) -> void:
 	_character_view.set_facing(input_direction)
 	_character_view.is_moving = input_direction.length() > 0.01
+	_character_view.set_submersion_depth(current_water_depth)
 	if current_mode == "swimming":
 		_character_view.set_movement_state(CharacterView.MovementState.SWIMMING)
 	elif input_direction.length() > 0.01 and current_mode != "drowning":

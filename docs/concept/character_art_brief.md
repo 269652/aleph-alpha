@@ -505,6 +505,21 @@ viewing size than this project's tile-scale budget affords; closing that gap
 the rest of the way (bigger source canvases, or a coarser/bolder art style
 that survives downscaling better) is a real follow-up, not solved here.
 
+**Lowered again, 2026-09-05: 0.85 → 0.595** (asked directly: "make the
+character 30% smaller and zoom in 30% so trees become relatively bigger").
+`Player.CAMERA_ZOOM` was raised 30% the same day and then reverted the
+same day too, reported live as visible blur (see `docs/progress.md`) —
+this constant is unaffected by that round trip and stays at 0.595, since
+the character-to-tree ratio was never actually load-bearing on zoom (it
+cancels out algebraically). At the FINAL combination (0.595 at the
+reverted 4x zoom, not the intermediate 5.2x this section originally
+checked against), leg content computes to ~3.6px by the same arithmetic
+above — below, not just close to, the original ~4px this whole compromise
+exists to stay clear of. Re-checked against a fresh real rendered frame
+at the actual final combination rather than trusting either the
+arithmetic or the earlier 5.2x screenshot: the legs still read as
+distinct armored plates, not a smeared blob — see `docs/progress.md`.
+
 ## Sheet format (for any NEW single-pose part — hair, beard overlays, etc.)
 
 The `_PARTS`/`has_part`/`generate_textures` mechanism above is still real

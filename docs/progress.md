@@ -1,9 +1,11 @@
 # Progress Tracker
 
 This document is a living status tracker for everything defined across the
-design docs in `docs/concept/*.md` (91 as of the 2026-09-05 merge to main
-that added `concept/mushrooms.md` right after a cross-alignment recount
-had just landed 90 — `find docs/concept -maxdepth 1 -name "*.md" | wc -l`
+design docs in `docs/concept/*.md` (94 as of the 2026-09-05 merge of the
+standard-model pass, which added `concept/standard_model.md` while
+`concept/ethogram.md` landed on `main` in parallel — a recount at merge
+time; the previous line here said 91 right after `concept/mushrooms.md` —
+`find docs/concept -maxdepth 1 -name "*.md" | wc -l`
 — up from the 49 an earlier pass counted and the 32 this doc was first
 generated against) plus `docs/roadmap.md` and, since the 2026-08-23 emergent-systems
 pass, `docs/emergence/*.md`, cross-referenced
@@ -106,6 +108,8 @@ Left alone, deliberately, and NOT folded into this entry: the shared main checko
 ✅ **`test_pine_is_an_evergreen_in_its_art_and_not_only_in_its_data`'s acorn/apple failure is resolved** at the source, in `CompositeSheetSlicer.cut_out` -- see its own doc comments ("Two more bugs found keying acorn and apple") for the full measurements. Two bugs, not one. First: acorn's and apple's composite sheets decode as FORMAT_RGB8 (no alpha channel at all), and `Image.set_pixel` cannot store a non-1 alpha without one -- the existing reachability keying ran, correctly found the background, and then every write to key it out silently did nothing (measured: 92140/92140 pixels stayed opaque after cut_out, identical to before it ran). `cut_out` now converts the cropped piece to FORMAT_RGBA8 first. Second, once alpha writes actually worked: a bare tree's real branch gaps that do not touch the crop's own edge stayed protected by design (reachability exists to protect real enclosed content, like the sheets' own snow frames), which still left the bare-winter frame denser than its own summer canopy (measured ratio 0.591/0.549, need `< 0.5`). `cut_out` takes an `aggressive` flag, used ONLY for the bare-winter frame by `IllustratedTree` (the one canopy role that never draws anything pale by design), that keys every background-coloured pixel regardless of reachability AND erodes the thin anti-aliasing halo every branch edge carries against an opaque background one ring at a time -- colour-based removal alone still left the ratio at 0.500/0.525, and the halo turned out to account for the rest. Final measured ratio: cherry 0.452, walnut 0.418, hazelnut 0.434, acorn 0.440, apple 0.467, against pine's evergreen 0.981 -- acorn and apple now sit in the same 0.42-0.47 band as every species that never needed keying at all. A second, concurrent session recalibrated the test's bound from an eyeballed inline `0.5` to a documented, tested `_WINTER_VS_SUMMER_MAX := 0.55` against the intermediate (colour-only) numbers above; it remains a real, safe bound after the halo-erosion pass, just with more headroom than it strictly needs. Regression coverage against the real danger this invites -- eroding real near-white content elsewhere on the same two sheets -- lives in `test_composite_sheet_slicer.gd`: default (non-aggressive) keying leaves each sheet's own real snow-covered canopy frame (`IllustratedTree.CANOPY_SNOW`) mostly opaque (0.55 acorn, 0.59 apple), and a test running `aggressive` on that same frame demonstrates it would erode that content hard (down to ~0.23) -- proof of why the flag is never asked for anywhere but the bare-winter frame.
 
 ✅ **Walnut and pine's on-tree/harvested rows were restored after a concurrent regeneration overwrote them.** The same pass that gave every species its fifth snow-canopy column apparently redrew `composite_walnut.png` and `composite_pine.png` in full rather than only adding that column: their below-canopy area came out as one drawing per canopy season instead of the documented fixed two-row layout -- confirmed by measuring each below-canopy blob's centre against its aligned canopy column's centre (within a few px on both sheets). Walnut ballooned to 24 detected regions, its "on-tree" row alone matching all 5 canopy columns instead of 2; pine collapsed to a single row of 4 with no second (harvested) row at all -- exactly why `on_tree_frames_for`/`harvest_frames_for`/`test_unripe_and_ripe_are_the_first_two_frames_whatever_the_count`/`test_on_tree_and_harvested_frames_are_told_apart`/`test_pine_has_more_stages_than_the_nut_trees` came out wrong. `CompositeSheetSlicer`/`IllustratedTree._composite_parts` were reading the sheets correctly throughout -- the sheets themselves no longer matched the layout the code (and the doc comment above `SEPARATE_FRUIT_FRAME_COUNT`) describes. Fixed at the asset level, not the code: each current sheet's canopy strip (which legitimately carries the new fifth frame) was grafted onto the last-known-good (pre-regeneration) trunk/fruit content below it, restoring walnut's two-on-tree/two-harvested rows and pine's three-on-tree/four-harvested rows without losing the snow frame. Combined with the acorn/apple fix above, `test_illustrated_tree.gd` is 96/96.
+
+✅ **Canopy snow now SETTLES on the crown instead of turning it into the snow frame -- from the top, twig by twig, on every canopy snow can land on** (`ProceduralTreeSprite._snowed_canopy`/`_snow_order`/`_skyline_seeds`/`_sweep_rank`; specified in `docs/concept/flora.md`'s "A fifth frame: snow is not a season", which now records the divergence from its earlier text). Reported: when snow falls the canopy should accumulate snow twig by twig, using the existing transition mechanism and the fifth sprite, in autumn, winter and spring alike, for the bare, blossom and turning canopies. The plumbing was already complete end to end (`step_snow` -> `sync_tree_season`/`step_fruiting` -> `ChoppableTree.set_ripe_fruit` -> the `snow_coverage` blend) and already ran in every season; what was wrong was the picture. Rendered across all ten coverage bands rather than reasoned about: the blend reused `_turned_canopy` verbatim, which REPLACES canopy pixels with the into-frame's own, transparent ones included, walking up from the crown's bottom rim -- right for leaves leaving a bough, wrong for snow landing on one. It read as a bottom-up wipe: the crown thinned towards nothing (measured: 2-91 painted pixels of a 40x52 cherry erased per band, on all three canopies) as its own twigs were traded for the snow frame's blank pixels, then the snow frame filled back in. Same trace and clump rank as the turn (`_sweep_rank` is now the one shared formula), two rules changed: settled pixels are composited OVER the canopy and a blank snow pixel leaves it untouched, so at any coverage every pixel the canopy had is still there and at full coverage the whole snow frame lies on top of whichever canopy is showing (blossom/autumn colour visible around the snow-laden boughs); and the trace is seeded from the crown's skyline (the topmost painted pixel of every column) rather than its foot, so snow lands on the upper twigs first and works down them -- seeded from the peak alone it ran sideways along the boughs to reach a wide crown's outer twigs last. Also found by rendering and fixed in the same pass: the frame is a full-grown crown's worth of snow-laden twigs, and settled whole on a SEEDLING it dressed the seedling as a grown tree the moment snow lay (measured at growth 0.1: a 319/179/169-pixel bare/blossom/turning cherry seedling became 1079/1105/1071 pixels under full snow); the frame is now pruned by the same `_grown_canopy` rule the canopy went through first (adds 37/13/17 instead). Pinned in `test_illustrated_tree.gd`'s "snow settles" section against all three canopies: `test_snow_never_erases_the_canopy_it_settles_on`, `test_light_snow_settles_on_the_top_of_the_crown_first`, `test_full_snow_shows_the_whole_snow_frame_on_every_canopy`, `test_snow_accumulates_monotonically_band_by_band`, `test_snow_on_a_seedling_stays_a_seedling` (bounded at doubling against measured 1.04-1.12x pruned vs 2.4-5.3x unpruned); the first two and the seedling one were red against the old blend, the two pins were already green and stay so. `test_illustrated_tree.gd` 113/114 (the one pending is pine's known bare-winter art gap, unchanged), `test_procedural_tree_sprite.gd` 30/30, `test_choppable_tree.gd` 24/24. Verified visually on before/after contact sheets rendered through the production `generate_image_with_fruit` path for walnut, cherry, apple and pine across all bands -- not in the running game (no command-line hook exists to drive `/season`/`/weather` unattended); the plumbing between the two is unchanged and covered by `test_earth_chunk_manager.gd`'s existing snow-to-tree tests. Not touched, both pre-existing and both art/layout questions rather than blend ones: the season trunks (the sheets draw a snow-covered trunk column too, but `trunk_for` still picks one trunk for all seasons) and pine's leafless bare-winter frame.
 
 ✅ **The trunk's own selection is now defended against the exact failure mode above, not just patched at the asset level.** `IllustratedTree._composite_parts` picked the trunk as the BIGGEST drawing below the canopy strip; against the regenerated walnut sheet that picked a blob merged out of an on-branch fruit drawing and its harvested forms (a few percent bigger by area than any of the five real, season-tinted trunk copies sitting in a row beside it), leaving four leftover trunk copies to be misread as fruit. `_trunk_row` replaces "biggest" with the first ROW below the canopy -- position, not size -- keeping only its first member as the trunk and dropping every other region that row: one drawing when the sheet has one, all five when an artist draws it once per season column instead of sharing it. Naive vertical-overlap alone over-swept: a real, well-structured sheet's single trunk is tall enough to overlap a much shorter fruit row sitting BESIDE it (acorn, apple, hazelnut all draw it this way), which pulled that fruit row into the trunk role entirely on first attempt. A region only joins the row when it also stands close to the first region's own HEIGHT (`TRUNK_ROW_HEIGHT_RATIO := 0.85`) -- measured on the real sheets, a genuine duplicated trunk row's members are always within 3% of each other's height while a real trunk is never less than ~1.65x taller than the closest fruit row it overlaps, a wide gap 0.85 sits safely inside. Pinned with five synthetic-region unit tests in `test_illustrated_tree.gd` (`_trunk_row` takes a plain `Array[Rect2i]`, no image or disk I/O needed) rather than only against the current sheets, so a future regeneration that reintroduces a duplicated trunk row fails loud in this file's own tests instead of silently corrupting `fruit_frames_for` again.
 
@@ -373,6 +377,31 @@ rather than assuming the brief's plan still matched reality:
     back to procedural** between both bounds — real, visible, and still not
     root-caused (that needs either a smarter per-cell flood or fixing the
     source art's own margins), just no longer broken-looking.
+  **Later (2026-09-05): lowered again, 0.85 → 0.595.** Asked directly to
+  "make the character 30% smaller and zoom in 30% so trees become
+  relatively bigger" — the zoom half is `Player.CAMERA_ZOOM`, see its own
+  entry below. The two do not cancel out on screen: 0.7 (this) × 1.3
+  (zoom) = 0.91, so the character reads a net ~9% smaller than before,
+  while everything else in the world reads 30% bigger next to it, which is
+  the actual ask. Back-computed against this same entry's own measured
+  ~5.4px (0.85-era) leg content, the combination lands leg content back
+  around ~4.6px — close to, though not quite at, the original ~4px that
+  triggered "legs are not wired" above. **Checked against a real rendered
+  frame rather than trusting the arithmetic alone** (Player + a
+  full-grown `TreeRenderer` tree, captured off a live `SubViewport` under
+  GUT with a real rendering driver, the same shape `test_river_flow_
+  render_smoke.gd` uses): the legs still read as distinct armored plates
+  with real shading and a clear boot silhouette at the new combined scale,
+  not the smeared blob the original bug looked like — the estimate above
+  was a real, worth-checking risk, but it did not materialize. The same
+  frame also confirms the actual ask: the near tree renders roughly 1.8x
+  the character's own height, where the two were nearly EQUAL height at
+  the previous 0.85/4x tuning. Pinned by
+  `test_target_height_fraction_matches_the_current_tuning` and
+  `test_character_shrunk_thirty_percent_over_the_previous_tuning`
+  (`test_character_view.gd`) — the first direct pin this constant has ever
+  had; every previous test here only checked the formula's own internal
+  consistency, which passes for any value.
 - ✅ **Body was rendering roughly 2x too wide** (reported live: "proportions
   are awfully wrong"). `composite_part_scale_for` only ever matched CONTENT
   HEIGHT to `BODY_SIZE.y`, then applied that one scale to width too — fine
@@ -1930,6 +1959,8 @@ Two bugs surfaced writing it: warmth could pull ripening back into SPRING, i.e. 
 
 ✅ **The second maturation clock is aligned.** `TreeGenome.maturity_time` (20-60 SECONDS) gated bearing and seeding on a clock disagreeing with TreeGrowth's by four orders of magnitude -- a sapling could seed the instant it was planted. Both measure against the season cycle now, with a spread so an early variety is a real thing.
 
+✅ **Old growth: trees keep slowly growing for a century past simple maturity (2026-09-05).** Asked directly: "make trees another 30% bigger, varying by age... so a 100 year old tree is bigger than a 10 year old tree." `TreeGrowth.scale_at` used to flatline at exactly 1.0 the instant a tree crossed `MATURITY_SECONDS` (three simulated years) -- every tree that had finished its fast early growth read as permanently, identically sized, however long it actually stood. Now it keeps climbing, with the same ease-out shape the seedling curve already uses, toward a new `OLD_GROWTH_BONUS` (0.3, the exact figure asked for) reached at `OLD_GROWTH_SECONDS` (a century, the exact age named in the request). `stage_at`/`is_productive`/fruiting-and-spread eligibility (a wholly separate clock, `TreeGenome.maturity_time` via `TreeMaturity`) and timber/log/stick/beam/plank yield (`FelledTree`, which already re-clamps its own `growth_scale` input back to `[0, 1]` internally) are all deliberately untouched -- old growth changes how a tree LOOKS, never what felling it is worth or when it can bear/spread. `ChoppableTree.growth_scale`'s own setter clamp raised from `[0.05, 1.0]` to `[0.05, 1.0 + TreeGrowth.OLD_GROWTH_BONUS]` to let the bonus actually reach the rendered node -- it was silently discarding anything past 1.0 before. `INF` keeps its existing, separate meaning ("this predates the session, skip aging entirely") rather than being redefined as "ancient": guarded explicitly in `scale_at` before the new old-growth range check, so `test_an_infinite_age_is_fully_mature` needed no change at all. The map-generated forest (`TreeRenderer.spawn_trees`) used to hand every original tree the identical `age_seconds=INF`, which would otherwise have meant zero age variation across a real forest -- it now seeds each tree a real, deterministic, per-tile FINITE age (the same `PixelNoise.range_index`-keyed-off-tile-coordinates idiom `_stand_position` already uses for placement jitter) spanning from freshly mature to double `OLD_GROWTH_SECONDS`, so a generated forest genuinely shows the age structure asked for -- confirmed live: the same fixture forest chunk spawns trees of visibly different sizes, some reaching the old-growth ceiling, none ever a sapling. 6 new tests across `test_tree_growth.gd`, `test_choppable_tree.gd`, `test_tree_renderer.gd`, and `test_felled_tree.gd`; 3 pre-existing tests that sampled ages just past `MATURITY_SECONDS` and expected an exact `1.0` had their tolerance widened (not their intent changed) to allow for the small old-growth head start a tree that age has now genuinely earned.
+
 
 ### Seasons turn gradually; smell becomes a real sense
 
@@ -1942,6 +1973,8 @@ Two bugs surfaced writing it: warmth could pull ripening back into SPRING, i.e. 
 ✅ **Fruit actually falls** (`FruitingModel.fallen_between` + `_cycle_length`). Two bugs, both of which hid behind tests that asked for a whole year in a single call. (1) `_cycle_length` multiplied the year by the species' `ripening_multiplier`, so a cherry ran a 0.65-year bearing cycle and a pine a 1.8-year one, while the ripening phases are fractions OF A YEAR -- so bearing drifted against the calendar: measured, a cherry shed 24 fruit a year in two windows with the second in mid-winter, and a pine shed 0 in a year. That is the same conflation `BEARING_CYCLE_SECONDS` was introduced to kill, back through another door. (2) `fallen_between` rounded each call's own increment to a whole fruit, and fruiting steps once a SECOND -- one second of a crop of twelve over a tenth-of-a-year window is ~0.0002 of a fruit, which rounds to zero every step forever. Flooring the CUMULATIVE count and differencing makes any partition of a span sum alike. Measured after: every species sheds exactly its crop, once a year, nuts and apples in autumn, cherries summer->autumn, nothing in winter. The `test_earth_chunk_manager` drop test was also stale -- its 3000-second span was five years when a year was ten minutes, and is 0.43% of a year now that a day is four real hours.
 
 ✅ **`/season [name]` and `/weather [state|off]`** (`SeasonCycle.seconds_until_season`, `WeatherModel.force_weather`, wired through `EarthChunkManager.jump_to_season`/`force_weather`). With no argument each reports the current state and lists what it accepts. Two design decisions worth keeping: the season jump moves the clock FORWARD only -- every other system measures itself against that clock, so winding it back would give a tree a negative age -- and it moves the fruiting mark with it, since a jump is up to a year and fruiting counts what fell since it last ran, which would otherwise tip a year of windfall onto the ground in one step. Weather is pinned on the MODEL rather than at the call sites so overlay, soil moisture, wind and snowfall all agree; snow has no state of its own because it is what rain is when it falls cold (`/weather rain` + `/season winter`).
+
+✅ **`/season [name] [progress]`** (2026-09-05, reported: "make /season command so it accepts a float between 0 and 1 for how far it has progressed into the season"). A second, optional argument lands `progress` -- a 0-1 fraction, default `0.0` -- partway into the named season instead of always at its very start; `1.0` lands at exactly the same instant as the NEXT season's own `0.0`, by construction (`SeasonCycle.seconds_until_season`'s `target` calculation). The console layer validates rather than trusts the typed value: a non-numeric second argument, or one outside `[0, 1]` (someone typing `50` meaning "50%"), is refused with a reason (`test_season_command_clarity.gd`) rather than silently defaulted or clamped and read back as if that was what was asked for -- the same "a no-op must not read like an effect" concern `/weather off`'s own message fix guarded. `SeasonCycle` itself still clamps any out-of-range float defensively underneath, for any caller other than the console.
 
 ✅ **Trees grow branch by branch** (`ProceduralTreeSprite.growth_order` + `_grown_canopy`, wired through `ChoppableTree.set_age`). Growth was a single node scale, which drew a sapling as a full-grown tree in miniature -- crown, boughs and every twig, only small. The canopy is now pruned back to the branches the tree has actually put out: traced outward from the point where the trunk meets the crown, so a sapling is a short trunk with a few leaves, then a small crown, then boughs spreading, with the far tips last. Randomised per tree, so a nursery is not one sapling drawn many times. Two things had to differ from the season turn to make it read right, both found by rendering it and looking: the turn seeds from the crown's whole bottom edge (which on a spreading crown is the drooping outer RIM, and drew a young cherry as an arch floating clear of its trunk), and the turn mixes trace and clump noise half and half (which drew a sapling as confetti scattered over the whole mature crown box). Growth seeds from the trunk join alone and weights the trace at `GROWTH_BRANCH_WEIGHT`. Node scaling stays -- a young tree really is shorter -- fewer branches is in addition to it, not instead.
 
@@ -2440,7 +2473,7 @@ gaps noted per mechanism below.
 | Herbivore Population Model | ✅ Done | `src/world/herbivore_population_model.gd` (+ generic `population_model.gd`): regional/aggregate logistic growth toward a vegetation+water-access-derived capacity, with migration toward neighboring spare-capacity regions. Tested incl. drought decline/recovery (`test_ecosystem_time_lapse.gd`). | large |
 | Predator Population Model | ✅ Done | `src/world/predator_population_model.gd`: same shape, capacity derived from local herbivore population (trophic-pyramid ratio). | large |
 | Aggregate/Individual Promotion System | ✅ Done | `src/rendering/creature_renderer.gd` + `EarthChunkManager`: loading a chunk (i.e. player proximity, reusing the existing chunk-streaming radius) spawns individual creature nodes sized to that region's current aggregate population; unloading frees them. Each promoted creature has procedurally-generated pixel-art (`procedural_animal_sprite.gd`) and real per-individual AI (see Individual Creature AI below). Species is now **biome-gated**, realizing the "boars live where boars thrive" pillar for real: `EarthChunkManager` computes each chunk's dominant biome (`BiomeClassifier.dominant_biome`) and passes it into `spawn_creatures`, which picks from `HERBIVORE_SPECIES_POOL_BY_BIOME`/`PREDATOR_SPECIES_POOL_BY_BIOME` (grassland/forest/desert/tundra/rainforest/mountain each get their own herbivore+predator pair, e.g. desert -> camel/jackal, rainforest -> tapir/jaguar) instead of one global 4-species pool; unmapped biomes (currently just ocean) fall back to the original generic pool. Not replicated to multiplayer clients yet -- a connected client sees its own locally-seeded population, not the server's evolving one (see Multiplayer's known gaps). | large |
-| Individual Creature AI (flee/hunt/graze/drink) | ✅ Done | `CreatureMarker` runs a per-frame sense→decide→act loop from four tested pure modules: `creature_needs.gd` (hunger/thirst rising over time), `creature_perception.gd` (senses nearby creatures/player + scans terrain for nearest food/water), `creature_behavior.gd` (priority decision: flee/attack/hunt/seek-water/seek-food/wander), and temperament/role on `creature_info.gd`. Herbivores are calm — they flee predators and the player, graze food biomes, and drink at water; predators are aggressive — they hunt and eat herbivores when hungry, attack the player when healthy (dealing real `Player.take_damage`), and flee when weakened below half health ("weak monsters flee, strong monsters attack"). **Movement (`_advance`) now has two deliberately different treatments by body plan**, after two failed attempts at unifying them (both left in code comments as a warning against retrying): a SERPENT turns its heading toward the desired direction at `SERPENT_TURN_RATE` and only ever moves along the heading actually reached, then rotates its whole sprite to match — a long thin body reads fine at any angle. A LEGGED animal (horse, deer, etc.) moves directly toward the requested direction with no turn smoothing and NEVER rotates — its art is a strict left/right side-view silhouette with legs baked pointing at the ground; turning it toward headings it can't draw, or rotating the whole sprite to face them, both read as visibly wrong (rotating in particular tips the legs away from the ground the instant the heading isn't near-horizontal — reported directly: "that literally rotates the horse so that it's legs are upside down"). It only ever flips left/right to match its current horizontal direction, IMMEDIATELY, on the very same frame the direction's sign disagrees with the current facing — gated only by a small deadzone on the direction's x component (`FACING_DEADZONE`, so a near-vertical request doesn't flip at all either way). This used to ALSO be gated behind a **distance-based commit** (`FACING_COMMIT_DISTANCE_TILES`, 3 tiles: once flipped, must actually travel that far before flipping again), added because flipping off the raw per-frame direction with no hysteresis flickered every single frame near the player back when `ThreatAvoidantWander` recomputed its avoidance direction fresh every frame from the live relative angle (reported then: "changing direction so often that the horse shows doubled in both direction"). Removed after it overcorrected: a creature given a genuinely SUSTAINED new direction (not noise) still held its stale old facing until it had physically covered 3 tiles, which IS real backward/sideways-backward translation the whole time it hadn't caught up (reported: "the horse walks backwards or diagonally backwards sometimes... looks like it's moonwalking" — and the same root cause behind repeated "flee hystery" reports below, since a fleeing/avoiding legged animal reverses direction often and a serpent, whose travel direction and visual heading can never disagree by construction, never exhibited it). Removing it exposed that the direction feeding `_advance` was itself chattering — measured 800 facing flips per 1800 frames, reported as "now it constantly flips back and forth". The source was `CreatureWander.direction_at`'s home-anchoring, which **blended** an outward roam heading against an inward pull toward home; opposing vectors cancel, and normalizing a near-zero blend amplifies sub-pixel position noise into a full-speed reversal. Instrumenting it showed a creature parked at distance 49.7↔50.1 from home reversing every single frame. (The first attempted fix — easing the blend rather than switching hard at the radius — only moved the cancellation point, 800→774 flips; the measurement is what caught that, not inspection.) Home-anchoring is now **containment** rather than a tug of war: approaching `WANDER_RADIUS`, the heading's outward radial component is progressively projected away — the same "strip the component pointing where you shouldn't go" shape as `ThreatAvoidantWander.away_biased_step` — so at the radius the creature can only travel tangentially or inward, and a genuine inward pull eases in beyond it (reaching fully homeward by `HOME_PULL_FULL_RADIUS_FACTOR`) so a creature knocked far out still comes home. Nothing opposes anything, so there is no cancellation to be ill-conditioned about. That brought the flips to **2**. `FishMarker` shares `CreatureWander` and had the same latent chatter. Two more instances of the identical pattern were then measured and fixed near a stationary player, after the report "16-23 flips IS exactly the problem... it should not constantly flip when at the border": (1) **flee acquisition** used one threshold for both entering and leaving, so a player parked on `SENSE_RADIUS` made the creature dither in and out of fleeing — now a Schmitt trigger, entered at `SENSE_RADIUS` and only released at `FLEE_RELEASE_RADIUS` (120px, comfortably inside `CAUTION_RADIUS` so a creature that just stopped fleeing is still avoiding); (2) **caution avoidance** applied at full strength anywhere inside `CAUTION_RADIUS` and not at all outside it, so avoidance shoved the creature just past 160px, vanished, the home anchor pulled it straight back in, and avoidance shoved it out again (measured oscillating 155.0↔160.6px on a 16-frame period) — the strength now ramps 0 at `CAUTION_RADIUS` to full at `SENSE_RADIUS`. Alongside that, `_advance_avoided` stopped **renormalizing** the avoided step: a creature whose only way home is straight through the player has its step almost entirely cancelled, and scaling that residual back up to full speed produced a full-speed lurch in an ill-conditioned direction reversing every frame (measured pinned 127px from the player with distance-to-home flickering 54.0↔54.2). Keeping the surviving magnitude means a cornered creature simply slows to a stop facing away — stable, and what a real animal does. Net: **800 → 3** facing changes per 1800 frames, and two of those three are genuine direction changes. An intermediate attempt at (2) — dropping the home anchor outright whenever a threat was within `CAUTION_RADIUS` — is recorded here as a warning: it just moved the hard switch, making things *worse* (31 → 49 flips). Every hard distance threshold in this system has produced this same shape of bug; ramps and hysteresis do not. Finally, all of the above are still *reactive* — they reshape a heading that already points somewhere bad, or notice after the fact that the creature didn't advance — and reactive mechanisms degrade into thrashing precisely when there is nowhere open at all: a creature wedged between the player and a tree picks a new direction every single frame and reads as vibrating (reported: "when it's stuck between player and blocked by a tree it still flips erratically... same when blocked by a stone"). On the explicit direction "make it so that all animals first check if moving is going to be blocked by a tree or by entering flee radius and only actually execute the move if it's clear. If it doesn't have anywhere to go, it should just stay in idle mode without walk animation or flips", movement is now **gated before it happens**: `src/gameplay/creature_movement_gate.gd` (pure, 8 tests) takes the desired heading plus nearby blockers and threats and returns either a heading that is genuinely clear — trying progressively wider turns, smallest first, so an animal walks *around* a trunk rather than veering wildly — or `Vector2.ZERO` meaning stand still, which `CreatureMarker` renders as the idle pose with no movement and no facing change at all. Obstacles come from the `tree`/`stone` groups and are sized from their **own** `CollisionShape2D` (a tree's solid part is just its trunk — you walk under canopies), gathered on the throttled sensing tick. Every movement intent routes through `_advance_gated`; flee is obstacle-gated but deliberately **not** threat-gated, since a fleeing animal must not be talked out of running by the thing it is running from. Both checks are "don't make it worse" rather than "must not be close", so an animal the player has walked right up to (already inside its flee radius) or one overlapping a trunk can still move clear instead of being pinned. See [ecosystem_dynamics.md](concept/ecosystem_dynamics.md#locomotion-look-before-you-step) for the design rule this encodes. Three follow-ups landed immediately after: (1) **the gate's obstacle scan lagged the whole game** ("since the last change the game is laggy") — it walked the ENTIRE `tree`/`stone` node groups per creature per sensing tick; `EarthChunkManager.solid_obstacles_near` now answers the same question O(nearby) from its per-chunk tree/stone bookkeeping, and `CreatureMarker._blockers_near` duck-types onto it (group scan kept only as the worldless/stub fallback). `IllustratedAnimalSprite.waterline_offset_y` is also memoized — it rescanned a full frame's pixels per animation step per swimmer. (2) **The gate was memoryless**, so its detour side could alternate as position wobbled sub-pixel — still read as flipping at the obstacle ("walks into a tree and starts flipping erratically... walks into a stone and gets stuck"); `clear_direction` now takes the previously-travelled heading and keeps a committed detour while it stays clear and the desired heading stays blocked, dropping it the moment the desired heading clears. (3) **Birds had the same latent limit cycle** land creatures did ("Boars and Birds now also get stuck, flicker and flip erratically") — `AmbientFlyerMovement.direction_at` still hard-switched to "head straight home" at its radius, the exact bug `CreatureWander` was cured of; it now uses the identical containment shape. Separately, the walk/swim gait is now paced by **distance actually covered** rather than wall-clock time (`GAIT_STRIDE_PER_FRAME`, derived so ambling cadence is unchanged and faster movement cycles proportionally faster — "adapt the horse animation to be faster when it moves faster"): stride frequency ∝ speed, and a blocked creature's legs freeze automatically since no ground is covered. The horse sheet was replaced a 4th time (walk-only: one 8-frame walking row, still left-facing); idle now synthesizes from the walk cycle's frame 0 — the last link in the idle fallback chain (idle_bands → eat frame 0 → walk frame 0) — rather than regressing a standing horse to procedural art. The next pass, on the explicit directive "prevent the erratic flipping entirely... if it gets blocked by a tree and changes direction it should not be allowed to instantly flip again... if it can't move in any direction it should just stand still and idle", added the last three pieces: (1) a **facing commit** (`FACING_COMMIT_SECONDS`, 0.8s) — a reversal request inside the window is refused outright and the creature *stands* that frame; refusing to MOVE is what makes a time-based commit safe where the old distance-based one moonwalked (it kept moving while wrongly faced) — real animals stop, then turn; (2) the movement gate's detour **prefers the side that keeps the current facing** (`facing_sign` param; flip-requiring candidates are only accepted once every facing-preserving one has failed, never refused outright — a creature whose only way out is behind it still takes it); (3) **grazing pauses** (`CreatureWander.is_pausing`, `PAUSE_FRACTION` 0.3 test-pinned, deterministic per seed+interval) — ordinary wander now stands idle for a share of its intervals, since continuous never-resting drift read as mechanical ("it doesn't look like natural wandering or foraging"); searching/seeking/fleeing never pause. A second, larger perf pass followed ("it's still lagging a lot ever since your fixes for the erratic horse flipping"), this time **profiled rather than guessed** — a headless benchmark of 40 creatures x 600 frames, which measured **4.31 ms/frame** (a quarter of the 60fps budget, with nothing rendering). Two causes, both mine: (1) `_apply_action_scale` called `IllustratedAnimalSprite.marker_scale` EVERY frame for EVERY creature, and that reached `AnimalAnatomy.profile_for`, which returns `.duplicate()` — a fresh ~25-key Dictionary allocated per creature per frame. It had been a spawn-time-only call before per-action scaling. Now cached per species/action (static) AND skipped entirely unless the action actually changed (`_scaled_action`); the call itself went 191ms→20ms per 20k. (2) The movement gate ran its full candidate search, plus allocating a threat-position array, for every creature every frame — including the overwhelmingly common case of a creature in open ground with no tree, stone or threat in reach. Short-circuited to a plain `_advance` when there is nothing to avoid. Net: **4.31 → 0.88 ms/frame** with obstacles nearby, 0.76 in open ground — about 5x. Earlier in the same session, from "the lag is... sth that recently changed with horse movement. Rain just puts enough load that it becomes noticable": a creature the gate had already declared stuck was re-scanning **all candidate turns × every nearby blocker every frame** — `_gate_standing` now holds it idle until the next sensing tick (blockers only refresh then anyway, so nothing is lost); `SubmersionShader` now compiles ONE static shared `Shader` instead of a fresh identical compile per creature's first wade; the ever-swum-creature per-frame `clear_waterline()` uniform write is guarded; `solid_obstacles_near` stops allocating concatenated temp arrays. A separate residual remained even then: `FACING_DEADZONE` correctly refuses to flip on a near-vertical direction, but the small backward x was still being APPLIED (measured 266 backward frames per 1800). Inside the deadzone that backward component is now dropped so the creature travels purely sideways instead — never flipping on ambiguous noise, never sliding backward either ("quadrupeds should only be allowed to move forward and sideways"). **None of that was the actual "walking backwards" bug, though.** `assets/sprites/horse.png` is drawn facing **LEFT** (deer.png/boar.png and every procedural sprite face right), and `flip_h = desired.x < 0` is only correct for right-facing art — so the horse rendered mirrored and walked backwards in *every* direction, the whole time. The facing tests missed it for the same reason the production code did: they asserted on `flip_h`, encoding the identical right-facing assumption, and so passed green against a fully mirrored horse. Fixed by declaring `faces_left` per sheet (`IllustratedAnimalSprite.faces_left` — a property of the supplied ASSET, not the species) and adding `CreatureMarker.facing_sign()`, which reports which way the creature is actually SEEN to face; `flip_h` alone can't, since it only means "mirrored from whatever the source art happens to be" and that source is **not** consistent — an illustrated species falls back to procedural art for eat/attack, so one creature's art convention genuinely changes with its action (`_art_faces_left`, refreshed in `_animation_step`, which also flips `flip_h` to preserve visual facing across such a swap). Every facing test now asserts on `facing_sign()`, and the end-to-end guarantee runs for **both** art conventions so the suite cannot pass again by accidentally agreeing with one of them: `test_a_wandering_creature_never_translates_against_its_own_facing` (horse, left-facing) and `test_a_right_facing_species_also_never_translates_against_its_own_facing` (deer), each asserting zero backward frames over a simulated run. The walk-cycle leg animation is gated on actually having moved (`_is_moving`, set inside `_advance`) — it used to cycle purely off elapsed time, so legs kept swinging through a stride even while genuinely stationary (reported "their legs are animated even when they stand still"); not moving now shows `ProceduralAnimalAnimation`'s single static "idle" pose instead. The health bar and ground shadow are both `top_level` and manually re-synced to the marker's position (translation only) every frame — plain children otherwise inherit a rotating serpent's rotation too, tilting them along with the body (reported: "the health bar and shadow of creatures should NOT rotate together with the animal"). The ground shadow itself is a silhouette (`DropShadow.make_silhouette_shadow`) — a live, upside-down copy of the creature's own current texture/facing anchored at its feet, not a fixed oval — and its length reacts to the real sun's elevation (`DropShadow.stretch_for_elevation`, the true `1/tan(elevation)` projection ratio, clamped): a low sun (dawn/dusk) drags it out long, an overhead sun collapses it short, updated world-wide via `CreatureMarker.sun_elevation_deg` from World's existing `SolarPosition` calculation (reported: "instead maybe copy the animals shape, flip it upside down, anchor it to the feet and stretch it based on the suns elevation"). Trees/stones/village buildings still use the older fixed-ellipse `DropShadow.make_shadow`, untouched by this change. The shadow's anchor point is derived per-species from `AnimalAnatomy`'s own `body_y`/`body_height`/`leg_length` (mirroring `ProceduralAnimalSprite`'s own ground calculation), not a fixed half-height guess — the guess put the shadow visibly below a boar's actual hooves (reported: "the shadow is a few pixel below sprite so it looks like it's floating"). That anchor offset is also now scaled by the marker's own `scale` before being applied (species size x the shared art-resolution downscale, see art_resolution.md) — it was being applied as a raw, unscaled pixel count, which still overshot past the actual on-screen feet for any species whose scale wasn't exactly 1.0 (same floating-shadow report, still visible after the first fix for exactly this reason). The shadow's rotation is now also kept in sync with the marker's own rotation (both the anchor offset and the sprite itself) — a serpent's whole sprite rotates to face its heading (see `_advance`'s doc comment), so its shadow has to swing around with it to stay a physically accurate silhouette instead of a flattened blob that stopped turning with the body (reported: "The shadow for snakes is not rotating properly. Its shadow should render physically accurate when the snake is rotated"); the health bar, and any non-`Sprite2D` shadow, deliberately still never rotate. A no-op for legged animals, whose own sprite rotation is always 0. Two attempts at also rotating the shadow's ANCHOR OFFSET to match a turning serpent's body each put the shadow in the wrong place at some rotation (one swung it above the body past 90 degrees, the follow-up "mirror around the X axis" fix still didn't hold up at every angle) — the offset now deliberately stays fixed straight down instead, the same as every other creature's shadow, regardless of the body's own rotation/flip_v (reported, across all three passes: "the shadow is not rotating properly", "When the snake is upside down the shadow renders above it", "the shadow should always render on the bottom of a creature regardless if it's rotated by 180deg"). Only the shadow SPRITE's own rotation/flip_v still track the body (`sprite.rotation = rotation`, `sprite.flip_v = not flip_v`), so the flattened silhouette SHAPE still visibly matches the body's current orientation even though its anchor point does not. `ThreatAvoidantWander`'s CAUTION_RADIUS avoidance used to only cover ordinary idle wander — "search_water"/"search_food" (ranging outward to LOOK for a resource nothing's currently sensed) advanced straight off the raw roam heading instead, so a thirsty/hungry creature near a stationary player would range straight toward them regardless, cross into flee range, resume searching the instant it was safely back outside it (still thirsty/hungry), and range right back — the exact "back and forth" the caution radius was built to prevent for wander (reported again: "the horse and other animals... same flee hysteria the snake had at the beginning"). Both roaming paths now share one `_caution_biased_step` helper. A SEPARATE, more direct cause of the same symptom was found and fixed next: `_flee_commit_remaining`/`_flee_direction` (the "hold a flee heading for a beat instead of re-deriving every tick" fix) only ever decremented WHILE actively fleeing — an episode that ended early (escaping SENSE_RADIUS before its own commit window expired) left both frozen at their stale values instead of resetting, and the NEXT flee episode reused that stale heading verbatim even if the new threat was somewhere else entirely, which could point the creature TOWARD it instead of away (reported again, still, after the wander/search fixes above: "the horse still has flee hystery and tries to walk into the players flee radius"). `_apply_decision` now resets both whenever a frame ISN'T fleeing, so only a genuine gap between two separate episodes clears them — one continuous flee streak still holds its heading across its own frames exactly as before. Separately, `_is_moving` (gating the walk-cycle animation, see above) used to be derived purely from the requested direction's own length rather than whether the creature's position actually changed — anything that left position unchanged despite a nonzero requested direction (e.g. blocked by an obstacle) would keep playing the walk gait forever (reported: "should only render walk animation when moving, not when stuck against a tree or standing still"); `_advance` now compares position before/after every step instead. A third, unrelated bug reported in the same pass ("when the horse enters the water it becomes tiny"): `scale` was set ONCE at spawn time (`CreatureRenderer._build_marker`), calibrated for whichever canvas that species' INITIAL texture used — for an illustrated species, its own tiny illustrated-canvas multiplier (see `IllustratedAnimalSprite.marker_scale`). Switching to an action illustrated art doesn't cover swaps `texture` to a MUCH smaller procedural canvas (48x32 vs the illustrated canvas' 340x330) without ever revisiting `scale`, rendering the creature far too small. `_animation_step` now recomputes `scale` (and the shadow's own base scale, kept in lockstep) every step, mirroring `_build_marker`'s own two formulas exactly. A follow-up report on the SAME symptom's other half ("when swimming the procedural generated horse shape is rendered instead of the illustrated one") wasn't a bug so much as a real, then-still-open gap: no illustrated species had ANY swim art. `IllustratedAnimalSprite.has_action` now gives "swim" and "drink" their own illustrated fallback chain instead of dropping straight to procedural — swim reuses the walk cycle (moving legs/body reads far closer to swimming than a full art-style swap), drink reuses whatever "idle" itself resolves to (a creature drinking is standing still). Only "eat" and "attack" still fall all the way through to `ProceduralAnimalAnimation` — their own poses (head-down grazing, a lunge) aren't well approximated by either walk or idle. Reusing the walk cycle for swimming on its own just walks the horse across the surface fully dry, though (reported: "it doesn't have a swim animation instead it walks on the water... sprite should be submerged and tinted like the others") — so a swimming illustrated creature now also gets `SubmersionShader`, the *same* world-space waterline tint the player already uses, rather than a creature-specific invention. The waterline sits at the drawn body's own vertical centre (`IllustratedAnimalSprite.waterline_offset_y`, measured from the art's real content bbox), so "half submerged" falls out of the art itself rather than a hand-tuned fraction — the same reasoning `CharacterView` uses for the player's torso. Measured per species, since the shared canvas is baseline-aligned and a tall horse sits very differently on it than a low boar. Each creature owns its own `SubmersionShader` instance (the waterline is a world Y, so two creatures swimming at different screen depths need different ones), created lazily on first entry to water since most creatures never swim. Procedural species deliberately do NOT get the shader — their swim frames already have the water painted into the pixels (`ProceduralAnimalAnimation._swim_frame`), so shading them again would tint them twice. **Known gaps**: food-seeking is biome-granularity (walks toward vegetated *biomes*, not toward the Phase-1 per-cell vegetation *density* field — the two aren't wired together yet); killing/being-killed now DOES decrement the region's aggregate `EcosystemSimulation` population — `CreatureMarker.take_damage`'s death branch calls `EarthChunkManager.record_death_at`/`EcosystemSimulation.record_death`, the same individual-half-reports-to-aggregate-half shape `record_catch`/`record_birth` already used, covering both a predator's kill and the player's own weapon (this closes the gap this sentence used to describe — it used to reseed on next chunk reload instead); sensing is O(nearby creatures) per frame with no spatial index; no flocking/territory/reproduction-at-individual-scale; `seek_water`/`seek_food` (heading toward an actually-sensed resource) still bypass caution-radius avoidance entirely, on the theory that a real, urgent need should be allowed to override caution the way it already overrides wander in the decision priority order — untested against a live player, and worth revisiting if it turns out to read the same way the search-roam gap did. Idling stayed genuinely inert even after the pause-vs-wander split above: `ProceduralAnimalAnimation`'s "idle" action rendered exactly one static frame forever, and because frame selection read only wall-clock `_elapsed_time` (every creature's own clock starts at 0.0 and advances by the same per-frame delta absent an LOD stagger), a whole herd that spawned together would have shown the identical frame even once more than one existed — frozen AND in lockstep. `IDLE_FRAME_COUNT` (2: the existing neutral standing pose plus a small whole-silhouette settle, `IDLE_BREATH_SHIFT`, half of the existing `FRAME_SHIFT`) gives a procedural species something to actually cycle through, and the new `idle_frame_index(elapsed_time, seed_value, frame_count)` folds each creature's own `wander_seed` into a per-individual phase offset (`hash("<seed>_idle_phase") % 1000`, the same deterministic-per-seed hash shape `CreatureWander.is_pausing` already uses) before picking a frame, so two same-look creatures idling at the same instant can land on different frames instead of breathing in unison (`test_two_idling_creatures_of_the_same_look_can_show_different_idle_frames`). Illustrated species (horse/deer/boar/wolf/sheep/the Germany world bosses) are unaffected — their art has no seed parameter to vary at all, a separate, larger gap left open here. | large |
+| Individual Creature AI (flee/hunt/graze/drink) | ✅ Done | `CreatureMarker` runs a per-frame sense→decide→act loop from four tested pure modules: `creature_needs.gd` (hunger/thirst rising over time), `creature_perception.gd` (senses nearby creatures/player + scans terrain for nearest food/water), `creature_behavior.gd` (priority decision: flee/attack/hunt/seek-water/seek-food/wander — since 2026-09-05 the land-mammal adapter onto the ethogram kernel, see the Ethogram section under Unscheduled: the ladder is `Ethogram.BODY_PLANS["mammal"]["wirings"]`, evaluated by `behavior_kernel.gd`, behaviour unchanged and pinned by the same 33 tests), and temperament/role on `creature_info.gd`. Herbivores are calm — they flee predators and the player, graze food biomes, and drink at water; predators are aggressive — they hunt and eat herbivores when hungry, attack the player when healthy (dealing real `Player.take_damage`), and flee when weakened below half health ("weak monsters flee, strong monsters attack"). **Movement (`_advance`) now has two deliberately different treatments by body plan**, after two failed attempts at unifying them (both left in code comments as a warning against retrying): a SERPENT turns its heading toward the desired direction at `SERPENT_TURN_RATE` and only ever moves along the heading actually reached, then rotates its whole sprite to match — a long thin body reads fine at any angle. A LEGGED animal (horse, deer, etc.) moves directly toward the requested direction with no turn smoothing and NEVER rotates — its art is a strict left/right side-view silhouette with legs baked pointing at the ground; turning it toward headings it can't draw, or rotating the whole sprite to face them, both read as visibly wrong (rotating in particular tips the legs away from the ground the instant the heading isn't near-horizontal — reported directly: "that literally rotates the horse so that it's legs are upside down"). It only ever flips left/right to match its current horizontal direction, IMMEDIATELY, on the very same frame the direction's sign disagrees with the current facing — gated only by a small deadzone on the direction's x component (`FACING_DEADZONE`, so a near-vertical request doesn't flip at all either way). This used to ALSO be gated behind a **distance-based commit** (`FACING_COMMIT_DISTANCE_TILES`, 3 tiles: once flipped, must actually travel that far before flipping again), added because flipping off the raw per-frame direction with no hysteresis flickered every single frame near the player back when `ThreatAvoidantWander` recomputed its avoidance direction fresh every frame from the live relative angle (reported then: "changing direction so often that the horse shows doubled in both direction"). Removed after it overcorrected: a creature given a genuinely SUSTAINED new direction (not noise) still held its stale old facing until it had physically covered 3 tiles, which IS real backward/sideways-backward translation the whole time it hadn't caught up (reported: "the horse walks backwards or diagonally backwards sometimes... looks like it's moonwalking" — and the same root cause behind repeated "flee hystery" reports below, since a fleeing/avoiding legged animal reverses direction often and a serpent, whose travel direction and visual heading can never disagree by construction, never exhibited it). Removing it exposed that the direction feeding `_advance` was itself chattering — measured 800 facing flips per 1800 frames, reported as "now it constantly flips back and forth". The source was `CreatureWander.direction_at`'s home-anchoring, which **blended** an outward roam heading against an inward pull toward home; opposing vectors cancel, and normalizing a near-zero blend amplifies sub-pixel position noise into a full-speed reversal. Instrumenting it showed a creature parked at distance 49.7↔50.1 from home reversing every single frame. (The first attempted fix — easing the blend rather than switching hard at the radius — only moved the cancellation point, 800→774 flips; the measurement is what caught that, not inspection.) Home-anchoring is now **containment** rather than a tug of war: approaching `WANDER_RADIUS`, the heading's outward radial component is progressively projected away — the same "strip the component pointing where you shouldn't go" shape as `ThreatAvoidantWander.away_biased_step` — so at the radius the creature can only travel tangentially or inward, and a genuine inward pull eases in beyond it (reaching fully homeward by `HOME_PULL_FULL_RADIUS_FACTOR`) so a creature knocked far out still comes home. Nothing opposes anything, so there is no cancellation to be ill-conditioned about. That brought the flips to **2**. `FishMarker` shares `CreatureWander` and had the same latent chatter. Two more instances of the identical pattern were then measured and fixed near a stationary player, after the report "16-23 flips IS exactly the problem... it should not constantly flip when at the border": (1) **flee acquisition** used one threshold for both entering and leaving, so a player parked on `SENSE_RADIUS` made the creature dither in and out of fleeing — now a Schmitt trigger, entered at `SENSE_RADIUS` and only released at `FLEE_RELEASE_RADIUS` (120px, comfortably inside `CAUTION_RADIUS` so a creature that just stopped fleeing is still avoiding); (2) **caution avoidance** applied at full strength anywhere inside `CAUTION_RADIUS` and not at all outside it, so avoidance shoved the creature just past 160px, vanished, the home anchor pulled it straight back in, and avoidance shoved it out again (measured oscillating 155.0↔160.6px on a 16-frame period) — the strength now ramps 0 at `CAUTION_RADIUS` to full at `SENSE_RADIUS`. Alongside that, `_advance_avoided` stopped **renormalizing** the avoided step: a creature whose only way home is straight through the player has its step almost entirely cancelled, and scaling that residual back up to full speed produced a full-speed lurch in an ill-conditioned direction reversing every frame (measured pinned 127px from the player with distance-to-home flickering 54.0↔54.2). Keeping the surviving magnitude means a cornered creature simply slows to a stop facing away — stable, and what a real animal does. Net: **800 → 3** facing changes per 1800 frames, and two of those three are genuine direction changes. An intermediate attempt at (2) — dropping the home anchor outright whenever a threat was within `CAUTION_RADIUS` — is recorded here as a warning: it just moved the hard switch, making things *worse* (31 → 49 flips). Every hard distance threshold in this system has produced this same shape of bug; ramps and hysteresis do not. Finally, all of the above are still *reactive* — they reshape a heading that already points somewhere bad, or notice after the fact that the creature didn't advance — and reactive mechanisms degrade into thrashing precisely when there is nowhere open at all: a creature wedged between the player and a tree picks a new direction every single frame and reads as vibrating (reported: "when it's stuck between player and blocked by a tree it still flips erratically... same when blocked by a stone"). On the explicit direction "make it so that all animals first check if moving is going to be blocked by a tree or by entering flee radius and only actually execute the move if it's clear. If it doesn't have anywhere to go, it should just stay in idle mode without walk animation or flips", movement is now **gated before it happens**: `src/gameplay/creature_movement_gate.gd` (pure, 8 tests) takes the desired heading plus nearby blockers and threats and returns either a heading that is genuinely clear — trying progressively wider turns, smallest first, so an animal walks *around* a trunk rather than veering wildly — or `Vector2.ZERO` meaning stand still, which `CreatureMarker` renders as the idle pose with no movement and no facing change at all. Obstacles come from the `tree`/`stone` groups and are sized from their **own** `CollisionShape2D` (a tree's solid part is just its trunk — you walk under canopies), gathered on the throttled sensing tick. Every movement intent routes through `_advance_gated`; flee is obstacle-gated but deliberately **not** threat-gated, since a fleeing animal must not be talked out of running by the thing it is running from. Both checks are "don't make it worse" rather than "must not be close", so an animal the player has walked right up to (already inside its flee radius) or one overlapping a trunk can still move clear instead of being pinned. See [ecosystem_dynamics.md](concept/ecosystem_dynamics.md#locomotion-look-before-you-step) for the design rule this encodes. Three follow-ups landed immediately after: (1) **the gate's obstacle scan lagged the whole game** ("since the last change the game is laggy") — it walked the ENTIRE `tree`/`stone` node groups per creature per sensing tick; `EarthChunkManager.solid_obstacles_near` now answers the same question O(nearby) from its per-chunk tree/stone bookkeeping, and `CreatureMarker._blockers_near` duck-types onto it (group scan kept only as the worldless/stub fallback). `IllustratedAnimalSprite.waterline_offset_y` is also memoized — it rescanned a full frame's pixels per animation step per swimmer. (2) **The gate was memoryless**, so its detour side could alternate as position wobbled sub-pixel — still read as flipping at the obstacle ("walks into a tree and starts flipping erratically... walks into a stone and gets stuck"); `clear_direction` now takes the previously-travelled heading and keeps a committed detour while it stays clear and the desired heading stays blocked, dropping it the moment the desired heading clears. (3) **Birds had the same latent limit cycle** land creatures did ("Boars and Birds now also get stuck, flicker and flip erratically") — `AmbientFlyerMovement.direction_at` still hard-switched to "head straight home" at its radius, the exact bug `CreatureWander` was cured of; it now uses the identical containment shape. Separately, the walk/swim gait is now paced by **distance actually covered** rather than wall-clock time (`GAIT_STRIDE_PER_FRAME`, derived so ambling cadence is unchanged and faster movement cycles proportionally faster — "adapt the horse animation to be faster when it moves faster"): stride frequency ∝ speed, and a blocked creature's legs freeze automatically since no ground is covered. The horse sheet was replaced a 4th time (walk-only: one 8-frame walking row, still left-facing); idle now synthesizes from the walk cycle's frame 0 — the last link in the idle fallback chain (idle_bands → eat frame 0 → walk frame 0) — rather than regressing a standing horse to procedural art. The next pass, on the explicit directive "prevent the erratic flipping entirely... if it gets blocked by a tree and changes direction it should not be allowed to instantly flip again... if it can't move in any direction it should just stand still and idle", added the last three pieces: (1) a **facing commit** (`FACING_COMMIT_SECONDS`, 0.8s) — a reversal request inside the window is refused outright and the creature *stands* that frame; refusing to MOVE is what makes a time-based commit safe where the old distance-based one moonwalked (it kept moving while wrongly faced) — real animals stop, then turn; (2) the movement gate's detour **prefers the side that keeps the current facing** (`facing_sign` param; flip-requiring candidates are only accepted once every facing-preserving one has failed, never refused outright — a creature whose only way out is behind it still takes it); (3) **grazing pauses** (`CreatureWander.is_pausing`, `PAUSE_FRACTION` 0.3 test-pinned, deterministic per seed+interval) — ordinary wander now stands idle for a share of its intervals, since continuous never-resting drift read as mechanical ("it doesn't look like natural wandering or foraging"); searching/seeking/fleeing never pause. A second, larger perf pass followed ("it's still lagging a lot ever since your fixes for the erratic horse flipping"), this time **profiled rather than guessed** — a headless benchmark of 40 creatures x 600 frames, which measured **4.31 ms/frame** (a quarter of the 60fps budget, with nothing rendering). Two causes, both mine: (1) `_apply_action_scale` called `IllustratedAnimalSprite.marker_scale` EVERY frame for EVERY creature, and that reached `AnimalAnatomy.profile_for`, which returns `.duplicate()` — a fresh ~25-key Dictionary allocated per creature per frame. It had been a spawn-time-only call before per-action scaling. Now cached per species/action (static) AND skipped entirely unless the action actually changed (`_scaled_action`); the call itself went 191ms→20ms per 20k. (2) The movement gate ran its full candidate search, plus allocating a threat-position array, for every creature every frame — including the overwhelmingly common case of a creature in open ground with no tree, stone or threat in reach. Short-circuited to a plain `_advance` when there is nothing to avoid. Net: **4.31 → 0.88 ms/frame** with obstacles nearby, 0.76 in open ground — about 5x. Earlier in the same session, from "the lag is... sth that recently changed with horse movement. Rain just puts enough load that it becomes noticable": a creature the gate had already declared stuck was re-scanning **all candidate turns × every nearby blocker every frame** — `_gate_standing` now holds it idle until the next sensing tick (blockers only refresh then anyway, so nothing is lost); `SubmersionShader` now compiles ONE static shared `Shader` instead of a fresh identical compile per creature's first wade; the ever-swum-creature per-frame `clear_waterline()` uniform write is guarded; `solid_obstacles_near` stops allocating concatenated temp arrays. A separate residual remained even then: `FACING_DEADZONE` correctly refuses to flip on a near-vertical direction, but the small backward x was still being APPLIED (measured 266 backward frames per 1800). Inside the deadzone that backward component is now dropped so the creature travels purely sideways instead — never flipping on ambiguous noise, never sliding backward either ("quadrupeds should only be allowed to move forward and sideways"). **None of that was the actual "walking backwards" bug, though.** `assets/sprites/horse.png` is drawn facing **LEFT** (deer.png/boar.png and every procedural sprite face right), and `flip_h = desired.x < 0` is only correct for right-facing art — so the horse rendered mirrored and walked backwards in *every* direction, the whole time. The facing tests missed it for the same reason the production code did: they asserted on `flip_h`, encoding the identical right-facing assumption, and so passed green against a fully mirrored horse. Fixed by declaring `faces_left` per sheet (`IllustratedAnimalSprite.faces_left` — a property of the supplied ASSET, not the species) and adding `CreatureMarker.facing_sign()`, which reports which way the creature is actually SEEN to face; `flip_h` alone can't, since it only means "mirrored from whatever the source art happens to be" and that source is **not** consistent — an illustrated species falls back to procedural art for eat/attack, so one creature's art convention genuinely changes with its action (`_art_faces_left`, refreshed in `_animation_step`, which also flips `flip_h` to preserve visual facing across such a swap). Every facing test now asserts on `facing_sign()`, and the end-to-end guarantee runs for **both** art conventions so the suite cannot pass again by accidentally agreeing with one of them: `test_a_wandering_creature_never_translates_against_its_own_facing` (horse, left-facing) and `test_a_right_facing_species_also_never_translates_against_its_own_facing` (deer), each asserting zero backward frames over a simulated run. The walk-cycle leg animation is gated on actually having moved (`_is_moving`, set inside `_advance`) — it used to cycle purely off elapsed time, so legs kept swinging through a stride even while genuinely stationary (reported "their legs are animated even when they stand still"); not moving now shows `ProceduralAnimalAnimation`'s single static "idle" pose instead. The health bar and ground shadow are both `top_level` and manually re-synced to the marker's position (translation only) every frame — plain children otherwise inherit a rotating serpent's rotation too, tilting them along with the body (reported: "the health bar and shadow of creatures should NOT rotate together with the animal"). The ground shadow itself is a silhouette (`DropShadow.make_silhouette_shadow`) — a live, upside-down copy of the creature's own current texture/facing anchored at its feet, not a fixed oval — and its length reacts to the real sun's elevation (`DropShadow.stretch_for_elevation`, the true `1/tan(elevation)` projection ratio, clamped): a low sun (dawn/dusk) drags it out long, an overhead sun collapses it short, updated world-wide via `CreatureMarker.sun_elevation_deg` from World's existing `SolarPosition` calculation (reported: "instead maybe copy the animals shape, flip it upside down, anchor it to the feet and stretch it based on the suns elevation"). Trees/stones/village buildings still use the older fixed-ellipse `DropShadow.make_shadow`, untouched by this change. The shadow's anchor point is derived per-species from `AnimalAnatomy`'s own `body_y`/`body_height`/`leg_length` (mirroring `ProceduralAnimalSprite`'s own ground calculation), not a fixed half-height guess — the guess put the shadow visibly below a boar's actual hooves (reported: "the shadow is a few pixel below sprite so it looks like it's floating"). That anchor offset is also now scaled by the marker's own `scale` before being applied (species size x the shared art-resolution downscale, see art_resolution.md) — it was being applied as a raw, unscaled pixel count, which still overshot past the actual on-screen feet for any species whose scale wasn't exactly 1.0 (same floating-shadow report, still visible after the first fix for exactly this reason). The shadow's rotation is now also kept in sync with the marker's own rotation (both the anchor offset and the sprite itself) — a serpent's whole sprite rotates to face its heading (see `_advance`'s doc comment), so its shadow has to swing around with it to stay a physically accurate silhouette instead of a flattened blob that stopped turning with the body (reported: "The shadow for snakes is not rotating properly. Its shadow should render physically accurate when the snake is rotated"); the health bar, and any non-`Sprite2D` shadow, deliberately still never rotate. A no-op for legged animals, whose own sprite rotation is always 0. Two attempts at also rotating the shadow's ANCHOR OFFSET to match a turning serpent's body each put the shadow in the wrong place at some rotation (one swung it above the body past 90 degrees, the follow-up "mirror around the X axis" fix still didn't hold up at every angle) — the offset now deliberately stays fixed straight down instead, the same as every other creature's shadow, regardless of the body's own rotation/flip_v (reported, across all three passes: "the shadow is not rotating properly", "When the snake is upside down the shadow renders above it", "the shadow should always render on the bottom of a creature regardless if it's rotated by 180deg"). Only the shadow SPRITE's own rotation/flip_v still track the body (`sprite.rotation = rotation`, `sprite.flip_v = not flip_v`), so the flattened silhouette SHAPE still visibly matches the body's current orientation even though its anchor point does not. `ThreatAvoidantWander`'s CAUTION_RADIUS avoidance used to only cover ordinary idle wander — "search_water"/"search_food" (ranging outward to LOOK for a resource nothing's currently sensed) advanced straight off the raw roam heading instead, so a thirsty/hungry creature near a stationary player would range straight toward them regardless, cross into flee range, resume searching the instant it was safely back outside it (still thirsty/hungry), and range right back — the exact "back and forth" the caution radius was built to prevent for wander (reported again: "the horse and other animals... same flee hysteria the snake had at the beginning"). Both roaming paths now share one `_caution_biased_step` helper. A SEPARATE, more direct cause of the same symptom was found and fixed next: `_flee_commit_remaining`/`_flee_direction` (the "hold a flee heading for a beat instead of re-deriving every tick" fix) only ever decremented WHILE actively fleeing — an episode that ended early (escaping SENSE_RADIUS before its own commit window expired) left both frozen at their stale values instead of resetting, and the NEXT flee episode reused that stale heading verbatim even if the new threat was somewhere else entirely, which could point the creature TOWARD it instead of away (reported again, still, after the wander/search fixes above: "the horse still has flee hystery and tries to walk into the players flee radius"). `_apply_decision` now resets both whenever a frame ISN'T fleeing, so only a genuine gap between two separate episodes clears them — one continuous flee streak still holds its heading across its own frames exactly as before. Separately, `_is_moving` (gating the walk-cycle animation, see above) used to be derived purely from the requested direction's own length rather than whether the creature's position actually changed — anything that left position unchanged despite a nonzero requested direction (e.g. blocked by an obstacle) would keep playing the walk gait forever (reported: "should only render walk animation when moving, not when stuck against a tree or standing still"); `_advance` now compares position before/after every step instead. A third, unrelated bug reported in the same pass ("when the horse enters the water it becomes tiny"): `scale` was set ONCE at spawn time (`CreatureRenderer._build_marker`), calibrated for whichever canvas that species' INITIAL texture used — for an illustrated species, its own tiny illustrated-canvas multiplier (see `IllustratedAnimalSprite.marker_scale`). Switching to an action illustrated art doesn't cover swaps `texture` to a MUCH smaller procedural canvas (48x32 vs the illustrated canvas' 340x330) without ever revisiting `scale`, rendering the creature far too small. `_animation_step` now recomputes `scale` (and the shadow's own base scale, kept in lockstep) every step, mirroring `_build_marker`'s own two formulas exactly. A follow-up report on the SAME symptom's other half ("when swimming the procedural generated horse shape is rendered instead of the illustrated one") wasn't a bug so much as a real, then-still-open gap: no illustrated species had ANY swim art. `IllustratedAnimalSprite.has_action` now gives "swim" and "drink" their own illustrated fallback chain instead of dropping straight to procedural — swim reuses the walk cycle (moving legs/body reads far closer to swimming than a full art-style swap), drink reuses whatever "idle" itself resolves to (a creature drinking is standing still). Only "eat" and "attack" still fall all the way through to `ProceduralAnimalAnimation` — their own poses (head-down grazing, a lunge) aren't well approximated by either walk or idle. Reusing the walk cycle for swimming on its own just walks the horse across the surface fully dry, though (reported: "it doesn't have a swim animation instead it walks on the water... sprite should be submerged and tinted like the others") — so a swimming illustrated creature now also gets `SubmersionShader`, the *same* world-space waterline tint the player already uses, rather than a creature-specific invention. The waterline sits at the drawn body's own vertical centre (`IllustratedAnimalSprite.waterline_offset_y`, measured from the art's real content bbox), so "half submerged" falls out of the art itself rather than a hand-tuned fraction — the same reasoning `CharacterView` uses for the player's torso. Measured per species, since the shared canvas is baseline-aligned and a tall horse sits very differently on it than a low boar. Each creature owns its own `SubmersionShader` instance (the waterline is a world Y, so two creatures swimming at different screen depths need different ones), created lazily on first entry to water since most creatures never swim. Procedural species deliberately do NOT get the shader — their swim frames already have the water painted into the pixels (`ProceduralAnimalAnimation._swim_frame`), so shading them again would tint them twice. **Known gaps**: food-seeking is biome-granularity (walks toward vegetated *biomes*, not toward the Phase-1 per-cell vegetation *density* field — the two aren't wired together yet); killing/being-killed now DOES decrement the region's aggregate `EcosystemSimulation` population — `CreatureMarker.take_damage`'s death branch calls `EarthChunkManager.record_death_at`/`EcosystemSimulation.record_death`, the same individual-half-reports-to-aggregate-half shape `record_catch`/`record_birth` already used, covering both a predator's kill and the player's own weapon (this closes the gap this sentence used to describe — it used to reseed on next chunk reload instead); sensing is O(nearby creatures) per frame with no spatial index; no flocking/territory/reproduction-at-individual-scale; `seek_water`/`seek_food` (heading toward an actually-sensed resource) still bypass caution-radius avoidance entirely, on the theory that a real, urgent need should be allowed to override caution the way it already overrides wander in the decision priority order — untested against a live player, and worth revisiting if it turns out to read the same way the search-roam gap did. Idling stayed genuinely inert even after the pause-vs-wander split above: `ProceduralAnimalAnimation`'s "idle" action rendered exactly one static frame forever, and because frame selection read only wall-clock `_elapsed_time` (every creature's own clock starts at 0.0 and advances by the same per-frame delta absent an LOD stagger), a whole herd that spawned together would have shown the identical frame even once more than one existed — frozen AND in lockstep. `IDLE_FRAME_COUNT` (2: the existing neutral standing pose plus a small whole-silhouette settle, `IDLE_BREATH_SHIFT`, half of the existing `FRAME_SHIFT`) gives a procedural species something to actually cycle through, and the new `idle_frame_index(elapsed_time, seed_value, frame_count)` folds each creature's own `wander_seed` into a per-individual phase offset (`hash("<seed>_idle_phase") % 1000`, the same deterministic-per-seed hash shape `CreatureWander.is_pausing` already uses) before picking a frame, so two same-look creatures idling at the same instant can land on different frames instead of breathing in unison (`test_two_idling_creatures_of_the_same_look_can_show_different_idle_frames`). Illustrated species (horse/deer/boar/wolf/sheep/the Germany world bosses) are unaffected — their art has no seed parameter to vary at all, a separate, larger gap left open here. | large |
 | Ecosystem Time-Lapse Test | ✅ Done | `tests/unit/test_ecosystem_time_lapse.gd`: proves natural biome clustering (rainforest sustains more herbivores/predators than desert with no hand-placed spawners) and a scripted drought visibly declining then recovering a region's population -- both halves of the roadmap's explicit definition of done. | medium |
 | Aquatic Population Model (fish) | ✅ Done | The aquatic sibling of this whole table -- see the Fishing section's own entries (`concept/fishing.md`) for the full breakdown: `aquatic_population_model.gd`, `water_area_survey.gd`, wired into `EcosystemSimulation`/`ChunkEcologyCatchup`/`EarthChunkManager`, with an explicit `record_catch` harvest term (land herbivores/predators have their own symmetric `record_death` mortality term now too, see the Animal Ecology / Population Simulation and Ecosystem Dynamics entries); land ecology now has its own real cross-session disk persistence too (`ChunkSerializer.save_ecology`/`load_ecology`, see the Ecosystem Dynamics section's "Land ecology persists across sessions" entry). | large |
 | Species Roster Expansion (mice, horses, ambient flyers, kingfisher) | ✅ Done | See `concept/ecosystem_dynamics.md`'s "Species roster" section. **Mice/horses**: pure roster variety within the existing herbivore role/AI -- new `mouse_shape` silhouette (`procedural_animal_sprite.gd`, deliberately the smallest of the five families) and horse's reuse of `deer_shape`; stats/diet in `creature_info.gd`; wired into `creature_renderer.gd`'s `HERBIVORE_SPECIES_POOL_BY_BIOME` (mouse in every non-ocean biome, horse in grassland/desert). No new mechanism -- both run the exact same aggregate `HerbivorePopulationModel`/`CreatureBehavior` AI as every other herbivore. **Ambient flyers (butterflies, songbirds)**: a new, deliberately lighter tier -- `ambient_flyer_movement.gd` (per-instance-configurable flutter/glide, shared by both; interval slowed from an initial 0.4s to 0.7s for butterflies so flutter reads as motion, not jitter; butterflies additionally render at `BUTTERFLY_SCALE` 0.5x, half a songbird's size, after in-game feedback that the full 14x10 source art read too large against grass/trees), `procedural_butterfly_sprite.gd` (monarch/swallowtail/blue_morpho, vividly saturated -- real butterflies are)/`procedural_bird_sprite.gd` (sparrow/robin, deliberately muted -- real songbirds mostly are; bird silhouette redrawn after the first attempt read as unrecognizable, verified this time by rendering to PNG and inspecting before committing), `ambient_flyer_renderer.gd` (capped, decorative-only -- explicitly NOT population-simulated, same tier as the original static tree-placement layer/grass tufts -- and, as of this pass, **range-gated per species** rather than only tier-wide. `FLYER_RANGE` gives each of the six species its own biome list plus an absolute-latitude band (monarch 15-50° grassland/forest, *Papilio machaon* 25-70° grassland/forest, blue morpho 0-25° rainforest, bee/sparrow 0-70° everywhere, robin 20-70° grassland/forest), filtered by `_in_range_pool`, the aerial mirror of `CreatureRenderer._allowed_pool`. The chunk's real latitude comes from the global tile row the renderer already receives, via the same `GeoCoordinates.latitude_for_tile`/`EarthChunkGenerator.WORLD_HEIGHT_TILES` pair the generator uses for temperature and biome -- no signature or call-site change. This is what stops a Blue Morpho, a Neotropical rainforest butterfly, flying over a German meadow at 52.5°N. **Known remaining gap, stated honestly:** there is no biogeographic-realm axis anywhere in the project, so a latitude band cannot separate Nearctic from Palearctic and a temperate-band species can still appear on the wrong continent -- the same omission already puts camels in American deserts and jaguars in African rainforest. See `concept/ecosystem_dynamics.md`'s "Where a flyer actually lives" and its Open questions. Side effect worth knowing: a German meadow now shows one butterfly species plus bees where it showed three, because the butterfly roster is Americas-heavy; the fix for that is a roster addition (a Palearctic species), not wider bands.). Spawn count is now a **guaranteed MIN..MAX range per qualifying chunk** (deterministic ranked selection, same technique as `FishRenderer.spawn_fish`'s `target_count`), not an independent low per-cell probability roll -- the original probability design could plausibly (if astronomically unlikely per-chunk) land on zero butterflies for some real-world coordinate ranges, which is exactly what got reported ("can't see butterflies"); the guarantee removes that failure mode entirely regardless of what the actual root cause was. Wired into `EarthChunkManager`'s load/unload lifecycle. Robin/sparrow are additionally promoted from a real per-chunk aggregate population (not a flat min/max roll -- see the Ecosystem Dynamics section's Species roster entry), combined with (not replacing) this same range gate: a chunk outside a bird's band spawns none regardless of its population number. **Fish-eating birds (kingfisher)**: the one genuinely new mechanism -- `piscivore_bird_behavior.gd` (pure, tested cruise → dive → grab-or-miss (`CATCH_CHANCE` 0.35, real birds miss most strikes) → ascend → cooldown state machine), `piscivore_bird_marker.gd` (drives real movement + the dive's vertical animation), `piscivore_bird_renderer.gd` (spawn gated by water presence, not a land biome pool -- at most one per water chunk, a deliberately rare sight). A successful grab calls the exact same `EcosystemSimulation.record_catch` the player's own rod uses (via new `EarthChunkManager.fish_population_near`/`record_fish_catch_near` hooks) -- fishing pressure is no longer only ever the player's. **Placeholder retirement:** the anonymous `"herbivore"`/`"predator"` ids no longer spawn anywhere. They were this project's own unnamed stand-ins (`ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY` maps them to `deer_shape`/`wolf_shape`) from before deer and wolf existed as real named species, and they had survived in every biome pool long after -- so a promoted individual could still reach the creature panel as a nameless "Herbivore Lv.5" beside a "Boar Lv.1". Removed from `HERBIVORE_SPECIES_POOL`/`PREDATOR_SPECIES_POOL` and all six per-biome pools in `creature_renderer.gd`: deer takes grassland's dominant grazer slot (what `"herbivore"` was always drawn as), jackal takes its dominant predator slot (a real Eurasian/African open-steppe canid -- wolves stay forest-exclusive by design), and the other biomes simply drop their single placeholder entry. Every promoted creature the player can hover now has a real species name and, where art exists, illustrated art. The two ids deliberately **remain as data keys** in `creature_info.gd`, `animal_anatomy.gd`, `procedural_animal_sprite.gd`, `loot_table.gd` and `world_boss_fitness.gd` -- `AnimalAnatomy.profile_for` falls back to `_PROFILES["herbivore"]` for any unknown id -- pinned by `test_the_placeholder_ids_survive_as_data_fallbacks_for_an_unknown_species`. The dev console's `/spawn` still defaults to `"herbivore"`, deliberately: it is an explicit debug path. Squirrel (a genuine 22nd species) also joined forest's herbivore pool -- see the Ecosystem Dynamics section's Species roster entry for its own mechanism (nut scatter-hoarding). | large |
@@ -3747,6 +3780,14 @@ chunks away from the player). See the concept doc for the full spec.
 - **Sunflower head was clipped, and its blossom read as sitting on the stem** (small) — ✅ Fixed — reported with a screenshot: "the sunflower sprite is clipped at the top" and "butterflies drink from their stem... I'm not sure if butterflies should even visit sunflowers?" The second question needed no code change: real sunflowers are a genuine nectar/pollen source for both bees and butterflies, so a pollinator visiting one is correctly grounded — the two visible symptoms shared one structural cause instead. `IllustratedFlowerHead.HEAD_CANVAS_SIZE` (18px) is taller than the headroom ANY stem roll leaves above its own attachment point (`ProceduralFlowerSprite.stem_height_px`, at most 16px of the 32px art canvas) — composited at full size the crown was sliced off flat by the canvas edge, invisible on the small species this shipped with and glaring on the sunflower once its much larger world scale (see "Illustrated blooms..." above) turned a few always-clipped art pixels into an obvious flat top. `_paint_illustrated_head` now shrinks the whole head to fit the real headroom (`ProceduralFlowerSprite.head_fit_scale`, the same "scale a drawing down to fit its canvas" trick `SpriteSheetSlicer.normalize_frames` already uses one layer up) instead of clipping it. Separately, `blossom_height_world` — where a pollinator actually lands — scaled by the species' own nominal size alone, while the sprite itself is drawn at a smaller PER-PLANT size for a below-average individual (`PLANT_SIZE_VARIANCE`) or one still growing in (`FlowerPatch.growth_at`); the landing point did not shrink with it, which on a species as large as the sunflower reads as landing near the stem rather than on the bloom. It now takes the exact per-plant scale `EarthChunkManager._flower_scale_for` draws the sprite at, so sprite and landing point can never drift apart. Tests: `head_fit_scale` never exceeds the real headroom across 200 stem rolls, a tight-headroom sunflower head measurably narrows rather than clipping flat at the same width, the blossom offset scales linearly with the actual plant scale and shrinks in lockstep with growth, and a freshly-planted seedling's `EarthChunkManager.flowers_near` landing point sits well below the mature blossom height.
 - **Wolves and sheep — forest's own named predator, and its prey** (medium) — ✅ Done — see `concept/ecosystem_dynamics.md`'s "Forest gets its own named predator" section. Forest's dominant predator slot had drawn from the anonymous `"predator"` placeholder (wolf-shaped, gray) rather than a real named species — the one gap left in the per-biome pattern desert/tundra/rainforest/mountain each already had (jackal/arctic_fox/jaguar/mountain_lion). Wolf is now a real `CreatureInfo` predator-role entry (own stats, `AnimalAnatomy` profile already existed unused), added to forest's `PREDATOR_SPECIES_POOL_BY_BIOME` alongside — not replacing — its existing lynx/predator/bear entries, and forest-exclusive (pinned by test: absent from every other biome's predator pool). Sheep — already grazing grassland and mountain — now joins forest too, as its (and deer's) real forest prey. No new predation mechanism was needed — `is_predator` already means "hunts herbivore-role creatures generically" (see `CreatureInfo`'s own doc comment), so a wolf sharing forest with sheep and deer already hunts both by construction. Wolf gets real illustrated art (`assets/sprites/animals/wolf.png`) rather than falling back to a procedural silhouette, reusing sheep's own already-shipped **chroma-keyed magenta** sheet handling (`IllustratedAnimalSprite`'s per-sheet `chroma_key`/`chroma_key_tolerance` fields — see the Germany-region world bosses below, which established the same convention) rather than introducing a second parallel mechanism. The sheet is a 2-row (walk, then eat) × 8-column grid with no dedicated idle row (idle synthesizes from eat's own frame 0, same as deer/boar); bands measured directly from the real PNG, not eyeballed.
 - **Ground-foraging songbirds now flee/scatter from the player, closing the one ambient-tier gap left after the ground roster and true butterflies already reacted** (small) — ✅ Done — audited whether every non-predator, non-threatening ambient creature already reacted to the player closing in: the ground roster does (`CreatureMarker._cached_threats` senses the player via `fears_players`), true butterflies do (`FlyerPersonality`'s boldness/FID continuum), but a robin or sparrow did not react at all — `FlyerPersonality.reacts_to_player` gates on `SpiralFlight.spirals`, structurally excluding them (that module's own comment: "a bee, a fly and a sparrow have no personality steering at all"), and `test_a_sparrow_ignores_the_player_entirely` confirmed it live before this pass (kept green, now scoped honestly to "doesn't use the butterfly system" rather than "does nothing"). Rather than a second boldness system, new `AmbientFlyerMarker._step_songbird_flight_response` gives `CreaturePerception.nearby` and `ThreatAvoidantWander.away_biased_step` their first real production callers anywhere in the game — both existed, tested, and unused outside their own test files until now (grep-confirmed: no other `src/` file called either, `_caution_biased_step`/`CreatureMarker` reimplements equivalent-but-not-identical math by hand instead). Gated on `FlyerDiet.forages_on_the_ground` (currently robin/sparrow) rather than a third species list, so a future ground-feeding species inherits the reaction automatically; a flushed bird abandons an in-progress peck (`GroundForageBehavior.abort` — "a threat outranks a meal", the same rule ground grazers already follow) and breaks off a courtship exactly as a fleeing butterfly does. One shared `SONGBIRD_FLUSH_DISTANCE_M` (6 m, real small-passerine flight-initiation-distance literature, further out than the butterflies' own shyest 3 m endpoint) rather than an inherited trait — individuality stays where it already lived, on the butterflies. See `concept/ecosystem_dynamics.md`'s new "Songbirds notice you too". Tests in `test_ambient_flyer_marker.gd` (148/148 passing in the file): a sparrow/robin within the flush distance flips `_flushed_by_player` true and moves away; it settles back down once the player is far enough off; a distant sparrow, and a bee (never a ground forager), are both left alone unchanged; the exact flush-distance boundary is pinned by test, not just exercised well inside/outside it.
+- **Aquatic foraging: a real underwater food source, and fish that actually eat it** (medium) — ✅ Done — requested directly, right after the worm-crush mechanic shipped: "fish should have full fledged foraging and also add food into the water somehow... plankton or whatever or water plants." Closes a real, named gap `concept/ecosystem_dynamics.md`'s own "A shoal finds its shape" left open: that section gives fish a full social-behaviour precedence order (flee > lure > play > schooling > wander), but none of those five states was ever about *why* a fish needs to be somewhere — a fish in this game had never once eaten anything. New `concept/aquatic_foraging.md` specs it; water plants were chosen over plankton specifically because plankton is microscopic — nothing to render, nowhere for a fish to visibly arrive, no discrete thing to remove — while a pondweed patch meets the same "real, addressable, world-state, not an invisible number" bar every other patch sim here already holds to (`TallGrass`, `EarthwormPatch`, `FlowerPatch`). Real pieces:
+  1. **`AquaticVegetation`** (new, `src/world/aquatic_vegetation.gd`) — mirrors `TallGrass`'s own patch-sim contract almost exactly (`PixelNoise`-seeded smooth-noise clustering, `advance(delta, growth_modifier)`, a pure `graze(cell) -> bool`), seeded onto real water cells instead of grassland (`Chunk.blocks_ground_cover`, the identical mask `TallGrass` already reads to keep grass OUT of the water, read here as an inclusion filter instead) with no separate carried-seed layer — real aquatic plants spread by rhizome/fragmentation into adjacent water, which the existing throttled spread step already models. `MAX_PATCHES` (205) was derived, not eyeballed, the same way as `TallGrass.MAX_PATCHES` — an initial draft copied its density onto an all-water fixture and immediately overflowed a smaller, eyeballed cap, the identical failure class `TallGrass` itself once hit, reproduced and fixed here before it shipped.
+  2. **`ProceduralAquaticVegetationSprite`** (new, `src/rendering/procedural_aquatic_vegetation_sprite.gd`) — a small offline-drawn blade cluster, the same "hand-drawn procedural style, real illustrated art later" convention `ProceduralWormSprite`/`ProceduralAntMoundSprite` already follow; one static sprite per real vegetation cell, no sway animation yet (named as a deliberate scope cut below, not a silent gap).
+  3. **`FishForaging`** (new, `src/gameplay/fish_foraging.gd`) — pure static functions (`nearest_target`, `DETECTION_RADIUS_TILES`, `GRAZE_ARRIVE_DISTANCE_PX`, `SCAN_INTERVAL`), mirroring `FishSchooling`'s own shape exactly rather than importing the land-animal `XForageBehavior` state-machine convention into a file that has never used it. `SCAN_INTERVAL` is pinned independently of `FishSchooling.SCAN_INTERVAL` even though the value matches — the two throttle unrelated mechanisms that happen to share a cadence, not one shared concept.
+  4. **`EarthChunkManager` wiring** — `aquatic_vegetation_near`/`graze_aquatic_vegetation_at` mirror `worms_near`/`take_worm_at`'s exact shape; `step_aquatic_vegetation` mirrors `step_tall_grass`, reusing its `GRASS_REFRESH_INTERVAL` throttle rather than a redundant third constant; a per-chunk sim is only ever allocated for a chunk that actually contains water (`_ground_cover_blockers(chunk).has(1)` at `_load_chunk` time), the same "don't pay for a sim with nothing to do" discipline `EarthwormPatch`'s own soil-biome gate already uses.
+  5. **`FishMarker` wiring** — a new bottom tier slotted into the existing precedence chain in the ONE place it was still a bare fallback to plain wander: nothing more urgent queries `aquatic_vegetation_near`, steers toward the nearest result via the identical heading-toward-a-point math `attract_target` already uses, and grazes on arrival before falling back to wander. Every state above it — bolt, attraction, play, schooling — is untouched by construction; six of eight new `test_fish_marker.gd` tests exist specifically to prove each keeps overriding foraging exactly as it already overrode plain wander, including a direct mirror of the pre-existing "does not chase a schoolmate past its leash" test that shows foraging (not wander) now wins that same fallback once food is available.
+  6. **Real per-frame wiring, not just a tested function.** `step_aquatic_vegetation` existed and passed its own unit tests before `World._step_ecology_batch` ever actually called it — precisely the trap `step_wild_crops` fell into earlier (see that fix's own entry above): a real session would have rendered vegetation at whatever growth `_load_chunk` seeded and left it there forever. Caught the same way pre-emptively this time, with a real, live `World._step_ecology_batch`-driving regression test (`test_world_ecology_batch_aquatic_vegetation.gd`, mirroring `test_world_ecology_batch_wild_crops.gd`'s own technique) confirmed red before the wiring line was added and green after, rather than shipping unverified.
+  **Named, not silently dropped, per `aquatic_foraging.md`'s own scope section**: worms are not yet a food source for fish at all — a worm thrown into water or fished with becoming an especially attractive bait is the direct, explicit follow-up this pass exists to make meaningful (requested in the same conversation, deliberately sequenced after this one so it has real foraging to hook into). No per-species fish diet (fish are not yet species-differentiated at the individual-marker level at all). No plankton, no ocean vegetation — freshwater river/lake only. No swaying/current-driven animation on the vegetation sprite itself.
 
 ### Overview (`concept/overview.md`)
 
@@ -3976,7 +4017,7 @@ A first crafting loop is now real and wired into live gameplay, though shallow:
   Woodcutting/Mining/... mastery track, separate from the PoE-style
   `concept/skills.md` web); no `Skill` resource or per-action XP hook exists
   in code yet.
-- **Blueprint DSL** (large) — ⬜ Not started, but its *compilation target* now exists: `concept/emergent_crafting.md`'s part graph (parts as `(material, geometry, role)` nodes, typed joints as edges — see the Materials section's "Shape & Assembly" and "Typed joints" rows). Whether the player manipulates that graph directly or authors intent that compiles to it is still the open question this doc asks.
+- **Blueprint DSL** (large) — ⬜ Not started, but its *compilation target* now exists: `concept/emergent_crafting.md`'s part graph (parts as `(material, geometry, role)` nodes, typed joints as edges — see the Materials section's "Shape & Assembly" and "Typed joints" rows). Whether the player manipulates that graph directly or authors intent that compiles to it is still the open question this doc asks. **A text form that compiles to that graph now exists from the machine side** (2026-09-05): `concept/standard_model.md`'s `device` grammar's `part`/`joint` clauses compile through `DeviceCompiler` into the real `PartGraph`; whether *item* blueprints reuse those clauses is the remaining half of the question.
 - **Base Item Templates** (trivial) — ✅ Done — `item.gd`/`item_catalog.gd` (now also includes torch/campfire/cooked_meat).
 - **Material Inputs** (small) — ✅ Done — `crafting_recipe_book.gd` recipes consume a dictionary of item-id→count inputs.
 - **Modifier Slots** (medium)
@@ -5321,31 +5362,53 @@ at this land the wrong 39 files — since corrected).
 New concept doc (2026-08-24), extending `materials.md`'s existing (already
 implemented, but so far unused) `conductivity` scalar into a real
 water-wheel/windmill → generator → wire/circuit → battery/light-bulb
-mechanism. Nothing implemented — all ⬜ Not started:
+mechanism. **Revised 2026-09-05**: the circuit *algebra* this doc describes
+was generalised into `concept/standard_model.md` (see that entry) and its
+kernel solves this doc's own river-powered light end to end as an
+*authored* device (`tests/unit/test_device_book.gd`). What is real is
+generic — a law, not a placed component — so each row below is 🚧 where
+the physics exists and ⬜ where the placed, in-world half still does not:
 
-- **Circuit Topology (Adjacency Flood-Fill)** (medium) — the algorithm
+- **Circuit Topology (Adjacency Flood-Fill)** (medium) — ⬜ the algorithm
   shape already exists and is real, tested code
   (`src/gameplay/room_detector.gd`'s room-enclosure flood-fill), just not
-  yet generalized past room enclosure to conductivity.
-- **Torque from Flow (Water Wheel / Windmill)** (medium) — windmill has no
-  new world-sim dependency (`weather.md`'s `wind_strength_for` already
-  real); water wheel's flow-from-elevation-gradient proxy is proposed, not
-  validated.
-- **Generator (Torque + Magnet + Coil → EMF)** (medium)
-- **Wire / Circuit Resistance & Current (Ohm's Law)** (medium)
-- **Battery (Charge Storage)** (small)
-- **Light Bulb (Load, Brightness from Power)** (small)
-- **Magnetic Permeability Material Scalar** (small) — proposed addition to
+  yet generalized past room enclosure to conductivity. The kernel solves a
+  loop an author *wrote*, never one discovered from placed pieces.
+- **Torque from Flow (Water Wheel / Windmill)** (medium) — 🚧 the law is
+  real: a paddle `source` from the flat-plate drag law (water or air, one
+  function) into a `transform` whose ratio is the wheel's radius
+  (`device_physics.gd`); the worked light's loaded wheel measurably
+  labours under load. ⬜ binding a placed wheel to a real river's current
+  (`OpenChannelFlow.velocity`) or a windmill to `weather.md`'s real wind.
+- **Generator (Torque + Magnet + Coil → EMF)** (medium) — 🚧 a `gyrate`
+  law with Faraday's `k = B A N`, lossless, torque per ampere equal to
+  volts per rad/s (the same machine is a motor — a charged store behind it
+  motors the shaft, pinned). ⬜ the magnet as a sourced part (see the
+  permeability row).
+- **Wire / Circuit Resistance & Current (Ohm's Law)** (medium) — 🚧 a
+  wire's ohms come from its material's conductivity scalar inverted to S/m
+  over its own length and section (copper beats iron by the published
+  6.4×; wood cannot complete a circuit); the loop solve is Ohm's law
+  generalised through transformers and gyrators. ⬜ a placed wire run.
+- **Battery (Charge Storage)** (small) — 🚧 a `store` (tank-stepped level,
+  refuses charge when full, sheds overcharge, drains backwards through a
+  dead source). ⬜ the parallel placement across a bulb (`fork`).
+- **Light Bulb (Load, Brightness from Power)** (small) — 🚧 a filament is
+  a `resist` whose ohms are derived from 2 cm of 0.1 mm graphite, and the
+  worked light puts 62 W into it, firing a `shine` rule. ⬜ any light
+  rendered from that.
+- **Magnetic Permeability Material Scalar** (small) — ⬜ proposed addition to
   `material_properties.gd`'s existing vector (density/hardness/toughness/
   elasticity/sharpness_capacity/flammability/conductivity/decay_rate);
-  not yet added.
-- **Magnetite Ore / Magnetized-Iron Crafting** (small) — proposed fourth
+  not yet added — a generator's field is an authored `magnet_tesla`.
+- **Magnetite Ore / Magnetized-Iron Crafting** (small) — ⬜ proposed fourth
   `OrePlacement.ORE_TYPES` entry (today iron/copper/coal) plus a craft-a-
   magnet-from-iron recipe; neither exists.
-- **Wire Overload Burnout** (small) — proposed reuse of the existing
-  melting/damage-threshold mechanism (`impact_resolver.gd`'s
-  `T_BRITTLE_TOUGHNESS`-style thresholds), not yet extended to current
-  load.
+- **Wire Overload Burnout** (small) — ⬜ the rule grammar can fire on a
+  wire's dissipated power today, but only against an authored threshold;
+  the derived rating (watts → conductor temperature →
+  `MaterialProperties.thermal_failure_c`) is the standard model's own ⬜
+  row.
 
 ### Housing (`concept/housing.md`)
 
@@ -6595,7 +6658,7 @@ evolution sim, both still partial. All ⬜ Not started:
 - **DNA/phenotype/sexual-selection system (aquatic)** (huge) — ⬜ Not started
 - **Sexual selection / mate choice reproduction** (large) — ⬜ Not started
 - **Rare-phenotype catch desirability** (small) — ⬜ Not started
-- **Fishing catching minigame** (medium) — ✅ Done — a **playable fishing loop** now exists: `src/gameplay/fishing_session.gd` (tested state machine: cast → wait → bite → react → caught/missed) drives the pre-existing `fishing_minigame.gd` timing/rarity math. A craftable **fishing rod** (stick + plant fibre; player starts with one), a `fish` action (default F) that casts when next to open water and reels on the second press, a HUD prompt ("Casting…" → "! BITE — press the fish key!" → "Caught a … fish!"), and rarity-scaled fish rewards into the inventory (cooked over a campfire, eaten for hunger). A rare/legendary catch is now its own item (`rare_fish`/`legendary_fish`) that grants a real timed buff on eating (extra stamina regen / +30% melee damage) instead of the rarity vanishing after reward-quantity math — see Cooking section's "Dish Buffs". **Casting is now visible**, closing a reported gap ("no animation of the rod being thrown into water and also doesn't attract near fish and also no animation when fish bites"): `src/gameplay/fishing_cast.gd` computes a landing point from the player's facing (`FishingCast.CAST_DISTANCE_PX`), a small procedurally-drawn bobber (`ProceduralBobberSprite`) appears there, casting reuses the melee swing animation as a rod-throw, `EarthChunkManager.set_attraction_point`/`clear_attraction_point` draws any loaded fish within `Player.ATTRACTION_RADIUS` toward the bobber (still respecting shore clearance -- an attracted fish won't follow the line onto the beach), and the bobber visibly dips while a fish is biting (`FishingSession.phase_elapsed_seconds`, a new getter, drives the bob). Bait depth, species/location availability, and the aquatic population sim are still ⬜. **Verified end-to-end through the real entry point (2026-09-03):** every fishing test up to this point deliberately drove `FishingSession` directly, bypassing the near-water/has-rod input gate (a deliberate choice, not an oversight, per that gap's own test-file comment). `test_player.gd` now also covers the real path: `test_the_real_fish_key_entry_point_lands_a_caught_fish_in_the_inventory` presses the actual `fish` input action (the live rebindable keybinding, default F — see `Keybindings.ACTIONS`, bound to the InputMap by `World._apply_keybindings` before Player spawns) next to a forced-real ocean tile, drives the whole cast → wait → bite → react → resolve cycle through `Player._fishing_step` exactly as a real playthrough would, and asserts a real fish item lands in `player.inventory_counts()`; `test_pressing_fish_away_from_water_does_not_start_a_session` pins the negative case (no water nearby, the key press is a no-op). This confirms the loop described in this whole bullet was already fully wired and reachable in the live game — a player starts carrying a `fishing_rod` from `Player._ready()`, and `World` reads `local_player.fishing_message` onto a real HUD banner every frame. The only real gap this pass found was unrelated to fishing itself: see the Snow section's regression note on the dangling `snow_layer.gd` preload that was breaking `Player` (and therefore this file's own tests) from loading at all.
+- **Fishing catching minigame** (medium) — ✅ Done — a **playable fishing loop** now exists: `src/gameplay/fishing_session.gd` (tested state machine: cast → wait → bite → react → caught/missed) drives the pre-existing `fishing_minigame.gd` timing/rarity math. A craftable **fishing rod** (stick + plant fibre; one of the Starting Kit tab's pool choices -- see docs/concept/starting_kit.md -- rather than an automatic grant now), a `fish` action (default F) that casts when next to open water and reels on the second press, a HUD prompt ("Casting…" → "! BITE — press the fish key!" → "Caught a … fish!"), and rarity-scaled fish rewards into the inventory (cooked over a campfire, eaten for hunger). A rare/legendary catch is now its own item (`rare_fish`/`legendary_fish`) that grants a real timed buff on eating (extra stamina regen / +30% melee damage) instead of the rarity vanishing after reward-quantity math — see Cooking section's "Dish Buffs". **Casting is now visible**, closing a reported gap ("no animation of the rod being thrown into water and also doesn't attract near fish and also no animation when fish bites"): `src/gameplay/fishing_cast.gd` computes a landing point from the player's facing (`FishingCast.CAST_DISTANCE_PX`), a small procedurally-drawn bobber (`ProceduralBobberSprite`) appears there, casting reuses the melee swing animation as a rod-throw, `EarthChunkManager.set_attraction_point`/`clear_attraction_point` draws any loaded fish within `Player.ATTRACTION_RADIUS` toward the bobber (still respecting shore clearance -- an attracted fish won't follow the line onto the beach), and the bobber visibly dips while a fish is biting (`FishingSession.phase_elapsed_seconds`, a new getter, drives the bob). Bait depth, species/location availability, and the aquatic population sim are still ⬜. **Verified end-to-end through the real entry point (2026-09-03):** every fishing test up to this point deliberately drove `FishingSession` directly, bypassing the near-water/has-rod input gate (a deliberate choice, not an oversight, per that gap's own test-file comment). `test_player.gd` now also covers the real path: `test_the_real_fish_key_entry_point_lands_a_caught_fish_in_the_inventory` presses the actual `fish` input action (the live rebindable keybinding, default F — see `Keybindings.ACTIONS`, bound to the InputMap by `World._apply_keybindings` before Player spawns) next to a forced-real ocean tile, drives the whole cast → wait → bite → react → resolve cycle through `Player._fishing_step` exactly as a real playthrough would, and asserts a real fish item lands in `player.inventory_counts()`; `test_pressing_fish_away_from_water_does_not_start_a_session` pins the negative case (no water nearby, the key press is a no-op). This confirms the loop described in this whole bullet was already fully wired and reachable in the live game (that test now grants its own rod explicitly, since a fresh player no longer carries one automatically — see docs/concept/starting_kit.md), and `World` reads `local_player.fishing_message` onto a real HUD banner every frame. The only real gap this pass found was unrelated to fishing itself: see the Snow section's regression note on the dangling `snow_layer.gd` preload that was breaking `Player` (and therefore this file's own tests) from loading at all.
 - **Bait/lure system** (medium) — ⬜ Not started
 - **Location-based fish availability** (medium) — ⬜ Not started
 - **Cooking ingredient integration** (small) — ⬜ Not started
@@ -7222,6 +7285,59 @@ state had never once been set by anything in `src/`.
   not silently dropped): ants as bird prey and ants as carrion detritivores
   remain exactly as scoped in the entry above — this pass is rendering
   only, it does not touch what a mound forages or how.
+- **Crushed underfoot: weight-emergent worm mortality** (medium) — ✅ Done
+  — requested directly: stepping on a worm should splatter it, emerging
+  from real player weight, force of step, and the worm's own pressure
+  resistance, not a flat "anyone can squash a worm" rule — calibration
+  example given: a frog's step spares a worm, a horse's kills it. No
+  frog or other amphibian exists in this game at all (checked directly);
+  the real substitutes are the smallest and largest land creatures that
+  do (mouse/squirrel spared, horse unchanged as the given example). Real
+  pieces:
+  1. **`CreatureMass`** (new, `src/world/creature_mass.gd`) — real,
+     commonly-cited average adult body mass per `AnimalAnatomy` species
+     (mouse 0.02kg through horse/camel 500kg). The player's own mass
+     reuses `StoneSize.AVERAGE_BODY_MASS_KG` directly rather than a
+     second guess. Purely mythical world bosses (no real animal to cite)
+     fall back to their own `world_scale` CUBED against deer's real
+     mass/scale ratio — verified directly that `world_scale` alone badly
+     under-represents real mass at the high end (a "horse" would come
+     out under 150kg using that formula, nothing like its real ~500kg),
+     which is exactly why the tabulated real species use cited figures
+     instead, not a derived one.
+  2. **`EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S`/`is_crushed_by`/
+     `crush`** (new) — reuses this codebase's own "one damage model for
+     the whole world" (`materials.md`/`ImpactResolver`) in SHAPE
+     (momentum = mass × velocity, resolved against a threshold), not in
+     its literal numbers: `ImpactResolver.T_CRUSH` is calibrated for
+     thrown-rock-vs-creature combat, an unrelated scale from "anything
+     stepping near a soil invertebrate", so this pins its own worm-scaled
+     threshold (5.0 kg·m/s) instead. Momentum is a full body's weight
+     settling through one foot at ordinary walking pace
+     (`PebbleDispersion.FOOTSTEP_SPEED_MPS`, reused) — deliberately the
+     creature's own FULL mass, not `PebbleDispersion`'s own foot-mass
+     FRACTION (a glancing kick past a pebble vs. standing weight settling
+     onto something underfoot are genuinely different physical events).
+     `crush(cell, momentum)` mirrors `take()`'s own `is_surfaced` gate (a
+     burrowed worm has no exposed body to step on) and `RECOVERY_SECONDS`
+     clock exactly — a crushed burrow recovers exactly like an eaten one.
+  3. **`EarthChunkManager.crush_worm_at`** mirrors `take_worm_at`'s own
+     shape exactly (same tile/chunk/patch lookup, same immediate
+     `_sync_worm_sprites` re-sync). Wired in `World._client_process` for
+     the player (`CreatureMass.PLAYER_MASS_KG`) AND every `CreatureMarker`
+     (`CreatureMass.mass_kg_for(creature.info.species)`), mirroring
+     `tread_snow_at`'s own "player, then every creature in the group"
+     call shape. No debounce needed for either — `crush_worm_at`'s own
+     removal is already idempotent, unlike the continuous accumulators
+     (path wear, snow depth) that DO need per-entity "last tile"
+     tracking.
+  **Deliberately NOT included** (named, not silently dropped): no
+  dedicated splat visual effect — a crushed worm currently disappears
+  exactly the way an eaten one already does, a real but purely cosmetic
+  follow-up. Flying creatures are airborne, not walking, so deliberately
+  excluded — a robin already interacts with a worm on its own terms
+  (`take_worm_at`, eating it), never by incidentally landing weight on
+  it. Full writeup: [soil_fauna.md](concept/soil_fauna.md#crushed-underfoot-weight-emergent-worm-mortality).
 
 ### Flora (`concept/flora.md`)
 
@@ -8210,6 +8326,83 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   [real foraging](concept/soil_fauna.md#real-foraging-a-round-trip-not-an-instant-resolve),
   [pheromones](concept/soil_fauna.md#pheromone-trails-recruitment-to-a-known-good-source),
   and [the queen](concept/soil_fauna.md#a-queen-and-where-a-colonys-size-comes-from).
+- **Ant/mound size overshoot corrected** (small) — ✅ Done — reported live
+  right after relaunch: "antmounds are tiny and I see no ant whatsoever".
+  A literal halving of the pass above (ant 6.0→3.0, mound 7.0→3.5) put an
+  ant at ~3 world-pixels of actual opaque content against a 16px tile --
+  genuinely sub-perceptual, not merely small; confirmed the underlying
+  spawning/scale math was working correctly at the smaller number, so
+  this was a pure tuning overshoot, not a functional bug. Corrected to a
+  25% reduction from the original instead of 50% (ant 4.5, mound 5.25),
+  preserving the original 6:7 proportion. Also turned
+  `EarthChunkManager.LEAF_LITTER_ENABLED` back on (it had been switched
+  off by a separate direct request right after its own GPU rewrite
+  shipped): reported live as "ants and beetles just walk back and forth
+  and there's no real foraging" — with it off, carrion and fresh windfall
+  fruit were the only things left for a wandering decomposer to find, and
+  neither is reliably nearby early in a game. Live-verified with a real
+  `--solo` launch and `Engine.get_frames_per_second()` before re-enabling
+  it (30 loaded chunks seeded with ~750-960 simultaneous leaves held a
+  steady 14-25fps at normal speed) rather than assumed safe from the
+  rewrite's architecture alone — full writeup in `leaf_litter.md`'s own
+  Status entry.
+- **Colony growth now depends on water/rainfall too, and a mound's own
+  size grows with its colony** (medium) — ✅ Done — requested directly:
+  mounds "should be half a human high and grow with the colony", and
+  colony growth "depend[ing] on the amount of food resources and water
+  they have / rainfall". Two real pieces:
+  1. **Water, not just food.** `AntPopulationModel.capacity` now takes a
+     second input, `recent_moisture` (`WATER_CAPACITY_BONUS` pinned equal
+     to `FOOD_CAPACITY_BONUS`, both 1.0 — real, independently-acting
+     inputs to the same mechanism, real-world-grounded: larval
+     development needs humidity, and colonies measurably struggle
+     through drought even with forage still available). `AntColony.
+     record_moisture(cell, moisture)` mirrors `record_forage_result`'s
+     own EMA exactly; `EarthChunkManager.step_ants` now samples
+     `WeatherModel.soil_moisture` per loaded chunk and feeds it to every
+     mound, mirroring `step_worms`' identical `EarthwormPatch.
+     set_conditions` wiring on the same `WORM_REFRESH_INTERVAL` cadence
+     (weather turns over on a day scale, reused rather than a second,
+     redundant constant). A colony with both food and water abundant can
+     now reach `AntPopulationModel.MAX_REFERENCE_POPULATION`
+     (`BASE_CAPACITY * 3`), up from `BASE_CAPACITY * 2` food-only.
+  2. **Mound size grows with the colony.** `ProceduralAntMoundSprite`'s
+     old flat `MOUND_WORLD_WIDTH` is now `world_width_for(growth_fraction)`
+     — `AntColony.growth_fraction_at(cell)` (population /
+     `MAX_REFERENCE_POPULATION`, clamped `[0,1]`) eased with the same
+     `pow`-exponent-below-1 technique `StoneSize.world_height_px` already
+     uses for stones, growing from `MOUND_WORLD_WIDTH_MIN` (4.0, close to
+     the previous pass's own flat 5.25 — not a step backward at the
+     weakest end) toward `MOUND_WORLD_WIDTH_MAX`, pinned to **half the
+     player's own real-world height** (`CharacterView.HEAD_TOP_Y * SCALE`,
+     the same "read against the player" convention `StoneSize`/
+     `ProceduralFlowerSprite` already establish, restated locally rather
+     than importing `StoneSize` for one shared number). `Illustrated
+     AntMoundSprite.marker_scale` takes the same fraction so the real art
+     and the procedural fallback grow identically. `AntMoundMarker` gains
+     a real `setup(colony, cell)` (mirrors `AntForagerMarker`'s own
+     contract) and re-checks its own growth fraction on a slow
+     `RESIZE_INTERVAL_SECONDS` (5s) cadence — population moves over
+     simulated days, so anything faster would spend per-frame cost on a
+     number that has not meaningfully moved. Its hover tooltip now also
+     reports the real population number directly (`"Ant Mound (population
+     N)"`), closing a real gap between what the concept doc already
+     claimed and what the code actually did before this pass.
+  **Investigated, found no bug**: "ants don't carry seeds/nuts to the
+  mound" — the ambient `DecomposerMarker` ants/bugs (now busy since the
+  leaf-litter fix above) structurally cannot carry anything anywhere,
+  by design: they eat carrion/fruit/leaf-litter in place, with no home
+  mound at all. The system that DOES carry to a mound
+  (`AntForagerMarker`, dispatched by a real `AntColony`) re-ran its full
+  21-test suite clean with no changes needed here — carrying itself is
+  not broken, but `AntColony.FORAGE_RADIUS_TILES` (1.0 tile, a
+  deliberate "shortest-range disperser in the game" biological choice —
+  see soil_fauna.md's own real-world grounding) genuinely makes a real
+  dispatch rare to catch by chance in a short session. Left unchanged
+  rather than loosened without confirming that tradeoff is what's
+  actually wanted.
+  Full writeup: [soil_fauna.md](concept/soil_fauna.md#water-not-just-food-a-second-real-growth-driver)
+  and [mound size grows with the colony](concept/soil_fauna.md#mound-size-grows-with-the-colony).
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to
@@ -8431,19 +8624,21 @@ ants/bugs above already close the "ants eat fallen leaves" gap the report
 asked for; extending the invisible colony simulation too is a reasonable,
 separable follow-up (see `soil_fauna.md`'s own cross-reference).
 
-⬜ **Still no litter-density accumulation, decay, or soil-fertility
-feedback, no ground-covering visual effect, and no third rotten/black
-colour stage for litter that outlives `LeafLitterField.LIFETIME`**
-(unchanged from the first pass's own scope cut — the 90-second flat
-lifetime still despawns an ordinary leaf long before any real season
-boundary could pass under it in normal play). `soil_fauna.md` already
-names the real version of the fertility question as an explicit, deferred
-follow-up. See `leaf_litter.md`'s own "History: why not the density-field
-shortcut" section for why a pure GPU density-field aggregate (the
-`SnowBombShader` technique) was tried and abandoned for this feature
-TWICE — once before the first `DroppedItem`-based pass, and again as this
-rewrite's own first instinct — both times for the identical reason: no
-discrete position left for a decomposer to forage from.
+⬜ **Still no litter-density accumulation or soil-fertility feedback, and
+no ground-covering visual effect** (unchanged scope cut — see
+`leaf_litter.md`'s own "Deliberately not modeled" section).
+`soil_fauna.md` already names the real version of the fertility question
+as an explicit, deferred follow-up. See `leaf_litter.md`'s own "History:
+why not the density-field shortcut" section for why a pure GPU
+density-field aggregate (the `SnowBombShader` technique) was tried and
+abandoned for this feature TWICE — once before the first
+`DroppedItem`-based pass, and again as this rewrite's own first instinct
+— both times for the identical reason: no discrete position left for a
+decomposer to forage from. (A third, "winter" decay stage for litter that
+outlives long enough — previously listed here as out of scope — shipped
+2026-09-05, below; the reasoning above about the flat lifetime turned out
+to only rule out timing it against the CALENDAR season, not against
+`LIFETIME` itself.)
 
 ✅ **Live in-game performance re-confirmation of this specific rewrite** —
 was the one named gap here; closed by the 2026-09-05 follow-up above
@@ -8507,6 +8702,194 @@ always-first-attempt pattern actually measured. No production or test code
 changed as a result — see `_find_a_fallen_leaf`'s own doc comment in
 `tests/unit/test_earth_chunk_manager.gd` for the pointer back to this note
 if a future session hits the same alarming symptom again.
+
+✅ **Follow-up: "the leaves blowing in the wind animation... they should
+twirl more and have more realistic / natural motion paths".**
+`LeafLitterRenderer.transition_rotation` (the ported-from-`DroppedItem`
+wobble) only ever oscillates within a small fixed arc and decays back
+toward zero — a real leaf tumbling across open ground in wind visibly
+spins THROUGH instead, which this doc's own "Real-world grounding"
+section already named as the target but the first cut of the GPU rewrite
+never actually delivered for anything but the vertical canopy fall-in. A
+new `tumble_rotation` sums an ACCUMULATING spin on top (not replacing the
+existing wobble) that reaches its own full turn count exactly once a
+transition completes, in one consistent direction per leaf
+(`spin_direction_for_phase`, reusing the same position-derived phase hash
+the flutter already relies on for variety) — scaled by how FAR the
+transition actually travels (`tumble_turns_for_distance`: 0.5 turns near
+zero distance, 3.0 turns at `MAX_TRANSITION_OFFSET`), since
+`TRANSITION_DURATION` is fixed regardless of distance, so a longer
+journey is also a faster one and scaling turns by distance is
+equivalently scaling by how hard the wind is actually moving this leaf.
+`transition_flutter_world`'s sideways path also gained a second, smaller,
+non-harmonic wave (a non-integer frequency ratio so the two never realign
+within one transition) for a less mechanically-regular path, sharing the
+same taper-to-zero-at-completion guarantee the original had. Verified on
+the real GPU (`test_a_farther_traveling_leaf_tumbles_more_than_a_nearby_
+one`, mirroring this file's own established "prove it on the real
+renderer, not only the numeric mirror" convention) and by rendering an
+actual transition frame by frame and inspecting the sequence directly —
+the leaf visibly rotates through several distinct orientations across one
+journey rather than only tilting a few degrees back and forth.
+
+✅ **Follow-up: "leaves should be half as big".** `LeafLitterRenderer.
+WORLD_SIZE` was `WALNUT_WORLD_WIDTH * 1.5`, ported unchanged from
+`DroppedItem.LEAF_WORLD_SIZE`'s own original derivation; reported too
+large once actually seen rendered at real scale. Halved to `* 0.75`,
+pinned by `test_world_size_is_half_its_previous_walnut_relative_size`
+rather than left as a bare constant a future edit could silently drift
+off of.
+
+✅ **Follow-up (2026-09-05), three parts in one report: "leaf litter
+should happen constantly at a low rate in normal gameplay ... in autumn
+all leaves should fall eventually ... fallen leaves should change the
+season from autumn to winter if they keep lying on the ground ... winter
+is last stage for a leaf".**
+
+1. **A low, constant autumn baseline shed rate.** Before this,
+   `leaf_fall_chance` was gated on `canopy_turning_into == "winter"` —
+   but per `TreePhenology.canopy_state_at`, that reads `"winter"` for the
+   ENTIRETY of autumn (not merely its final visible-turn slice), so the
+   gate never actually did anything; `canopy_turn_progress` alone reads
+   exactly 0.0 for roughly the first two-thirds of autumn
+   (`TreePhenology.TURN_FRACTION` is 0.34 of a season), meaning a real
+   autumn tree shed nothing at all for ~32 real hours of ordinary,
+   non-accelerated play before its final turn began. `leaf_fall_chance`
+   is now `maxf(LEAF_AUTUMN_BASELINE_CHANCE, canopy_turn_progress)` —
+   `LEAF_AUTUMN_BASELINE_CHANCE` reuses `LEAF_SUMMER_TRICKLE_CHANCE`'s own
+   value directly (the same real wind/senescence phenomenon, just in the
+   season leaves actually matter most) rather than inventing a second,
+   separately-tuned number. The existing turn-progress ramp still rises
+   on top once the final turn begins, unchanged at `canopy_turn_progress
+   == 1.0`. New test (`test_step_fruiting_sheds_a_baseline_trickle_in_
+   settled_autumn_before_the_turn`); all pre-existing autumn/summer/
+   spring leaf-fall tests still pass unchanged.
+2. **A settled leaf decays to a terminal `"winter"` season.**
+   `LeafLitterField.DECAY_TO_WINTER_SECONDS`, pinned at exactly half of
+   `LIFETIME` (45 seconds — see that constant's own doc comment for why a
+   fraction of the one existing timer, not an independent number, is the
+   right way to ground this) advances a SETTLED leaf's own `season` field
+   from `"autumn"`/`"summer"` to `"winter"` one-way in `advance()` — never
+   reverts, never advances past `"winter"`. Gated on the leaf actually
+   being settled, the same rule the wind-dispersal roll right beside it
+   already applies, for the identical "still easing into a relocation"
+   reason. 7 new tests in `test_leaf_litter_field.gd` (38/38 passing).
+3. **The terminal stage's own colour, without any new art.**
+   `LeafLitterAtlas.SEASONS` gained a third entry, `"winter"` — not a
+   season a leaf falls in, but the fixed-grid atlas cell the decayed
+   stage renders from. No species has real illustrated "winter" litter
+   art, so `build_stamp_image` special-cases `season == "winter"` to
+   derive it from that species' own already-built `"autumn"` stamp via a
+   new `_decayed_winter_stamp`, recolouring with the exact
+   luminance-preserving technique `ProceduralFlowerSprite._paint_
+   illustrated_head` already established (read the source's own Rec. 709
+   luminance as `shade`, paint a dulled low-saturation brown-grey
+   `WINTER_TINT` at that brightness) rather than falling through to the
+   generic procedural fallback a genuinely-missing pair would use. 4 new
+   tests confirm the derived stamp is non-blank, matches the autumn
+   stamp's exact silhouette, reads less saturated, and keeps real shading
+   variation rather than flattening to one tone. Also visually verified
+   by rendering every species' autumn/winter stamp pair side by side and
+   inspecting the image directly (`tools/probe_leaf_winter_stamp.gd`,
+   kept as a dev tool for next time this kind of recolour needs eyeballing)
+   — a numeric saturation check alone cannot confirm the result reads as
+   a believable decayed leaf rather than a flat smear.
+
+Corrected two stale claims this exposed: this doc's own "no third
+rotten/black colour stage" scope-cut note (above) had conflated "no real
+calendar-season boundary reaches a leaf before `LIFETIME` prunes it"
+(still true) with "no stage keyed to the leaf's OWN elapsed time could
+work either" (never actually followed from the first claim) — see that
+entry's own correction. `leaf_litter.md` itself is updated throughout
+("When leaves fall", "Rendering", "Lifecycle", "Deliberately not
+modeled", "Status").
+
+✅ **Follow-up (2026-09-05): "make leaf litter constant and continuous
+and increasing in autumn ... there should always be an occasional
+falling leaf or blossom".** The immediately preceding entry's own
+`maxf(LEAF_AUTUMN_BASELINE_CHANCE, canopy_turn_progress)` fix was
+continuous and never zero, but not actually *increasing* across the
+whole season — flat at the baseline for autumn's first two-thirds, then
+a late ramp only once `canopy_turn_progress` starts moving. Two parts:
+
+1. **Autumn's chance now rises smoothly across the ENTIRE season.**
+   `canopy_turn_progress` can't drive this — it is pinned at exactly 0.0
+   for a season's whole settled span by construction (see
+   `TreePhenology._settled_then_turn`), so nothing built on it can ever
+   increase before the final turn begins. Added `SeasonCycle.
+   progress_through_season` instead: the raw `[0,1)` fraction through the
+   CALENDAR season (the same fraction `season_at`'s own index is already
+   truncated from), rising from a season's very first instant. 5 new
+   tests in `test_season_cycle.gd` (starts at 0, nears 1 at the season's
+   end, resets at the boundary, strictly monotonic, periodic across
+   years) — 23/23 passing.
+
+   `leaf_fall_chance` is now a single linear interpolation from
+   `LEAF_AUTUMN_BASELINE_CHANCE` up to CERTAINTY (1.0) driven by
+   `season_progress`: constant, continuous, and increasing the whole way,
+   reaching the same near-certain shed rate by season's end the old
+   formula's `canopy_turn_progress == 1.0` case already had. Extracted
+   into a pure `leaf_fall_chance_for(canopy_season, season_progress)`,
+   directly unit tested (6 new tests: baseline start, certainty at the
+   end, strict monotonic increase, summer/spring flat regardless of
+   season progress, winter always zero) rather than only exercised
+   through noisy per-tree roll sampling — then retroactively verified
+   those tests actually catch a regression by temporarily stubbing the
+   function to return 0.0 (5 of 6 failed for the right reason, restored).
+   Dropped the now-fully-redundant `leaf_fall_season` local (always
+   exactly equal to `canopy_season` in every branch) in favour of using
+   `canopy_season` directly.
+
+2. **A settled SPRING tree now sheds an occasional BLOSSOM.** A falling
+   LEAF makes no botanical sense while a tree's canopy is still
+   bare-to-blossoming and has no leaves yet — reported directly, "there
+   should always be an occasional falling leaf or blossom" is blossom's
+   own equivalent of the summer/autumn leaf trickle, not a second,
+   unrelated mechanism. New `LEAF_SPRING_TRICKLE_CHANCE` (reuses
+   `LEAF_SUMMER_TRICKLE_CHANCE`'s own value, same "one real rate, not
+   several independently-tuned ones" reasoning the autumn baseline
+   already used), gated on `canopy_season == "spring"` — confirmed via a
+   direct probe that this window sits well before the calendar season's
+   own end (`TreePhenology`'s own canopy schedule finishes leafing out,
+   flipping `canopy_season` to `"summer"`, at roughly 40% into the
+   calendar spring quarter; the existing summer trickle already covers
+   the rest). Repurposed `test_step_fruiting_drops_no_leaf_in_early_
+   spring` (whose own premise this reverses) into `test_step_fruiting_
+   also_drops_an_occasional_spring_blossom`, and corrected its sample
+   point's own stale doc comment ("before blossom even opens" — actually
+   confirmed 83% through its OWN blossom-to-leaf-out transition already).
+
+   The falling record needs real BLOSSOM art, not a leaf recoloured —
+   `IllustratedTree.foliage_leaf_for` extended to resolve `"spring"` the
+   same way it already resolves summer/autumn, but WITHOUT a fixed hue
+   band (real blossom colour is not one universal hue across species —
+   cherry/apple show pink/white petals, oak/hazelnut/walnut show
+   inconspicuous yellow-green catkins), accepting any region with real,
+   non-neutral colour content instead (the same "-1 = no such content"
+   signal every hue-gated season already relies on). `LeafLitterAtlas
+   .SEASONS` gained a `"spring"` entry — needing no special case at all,
+   unlike `"winter"`, since real art already resolves for it via the
+   exact same has-art/generic-fallback path summer/autumn always used.
+   11 new/updated tests in `test_illustrated_tree.gd`, all green.
+
+   **Visually verified beyond the numeric tests**
+   (`tools/probe_blossom_foliage.gd`, kept as a dev tool): cherry's own
+   spring closeup is a genuinely recognisable pink blossom flower.
+   Acorn/hazelnut/walnut/apple land on a green, leaf-toned crop instead
+   of a distinct floral image — not blank or broken, just less floral
+   than hoped, their sheets' own blossom-column art reading closer to an
+   early leaf than a distinct petal at the fill/colour signals this
+   detection uses. Pine lands on the same winged-seed-pair crop its own
+   already-documented autumn imperfection uses. Named here rather than
+   hidden, the same as that existing pine/autumn gap always has been —
+   the actual feature asked for (an occasional falling blossom, distinct
+   from a leaf, for every species) is genuinely delivered; only the
+   floral FIDELITY of five of the six species falls short of cherry's.
+
+   Full re-run after all of the above: the 90-test field/atlas/renderer
+   suite, the real-GPU smoke test, and the full leaf-fall test battery in
+   `test_earth_chunk_manager.gd` — all green. `leaf_litter.md` updated
+   throughout ("When leaves fall", "What falls", "Rendering", "Status").
 
 <details>
 <summary>First pass (superseded above), kept for history</summary>
@@ -8997,6 +9380,61 @@ germany" and a 4-tile minimum width).
   the Dreisam's curated centerline, and
   `test_standing_at_the_river_centerline_resolves_to_swimming_not_walking`
   confirms it.
+- **Animal ripples, rain ripples, and a gradual submersion tint (2026-09-05)**
+  (medium) — ✅ Done — reported: "animals and rain don't produce ripples in
+  the new river water", then "also animals and the players submerged tint
+  should be improved and gradual based on water depth... don't hide legs;
+  just tint." Three fixes, all in `docs/concept/rivers.md`'s own detail (the
+  "Correction" under "Movement ripples in the river", "Rain ripples on the
+  river", and the "Update" under "Player interaction" sections):
+  1. **Animals never actually reached the ripple/tint code at all in a
+     river or lake** — `CreatureMarker`'s own water-detection gate
+     (`_animation_step`) was ocean-biome-only; a new `_is_fresh_water_tile`
+     (mirroring `FishMarker`'s own) widens it, leaving the shared,
+     separately-tested `CreaturePerception.is_on(..., "water")` untouched.
+  2. **Rain never reached the river surface at all**, and — found
+     investigating — the ocean's OWN rain ripples had gone invisible too
+     once the "one water surface" change made the ocean render on the
+     unified river-flow overlay instead of its own tile layer (that old
+     layer erases every cell it owns whenever a river flow layer exists,
+     so its material's shader, `rain_intensity` or not, draws nowhere).
+     `RiverFlowShader` gained the same hash-grid raindrop technique
+     `WaterShader` already uses (a genuine second GLSL/GDScript copy,
+     matching this file's existing convention for `ripple_packet`, with
+     its own imported `RAIN_RIPPLE_*` tuning so a splash doesn't reuse a
+     wake's much longer packet); `EarthChunkManager.set_rain` now reaches
+     both materials. Confirmed on a real GPU
+     (`test_rain_actually_changes_what_the_river_draws`), matching the
+     existing movement-ripple smoke test's own same-frame-same-TIME
+     technique.
+  3. **The submersion tint was still a boolean underneath**, not gradual:
+     `Player._resolve_water_state` computed real continuous depth only to
+     discard it once collapsed into `current_mode`'s coarse string, and
+     `CharacterView` collapsed it again into a 3-value enum — wading had no
+     visual signature at all until the exact swim threshold, and legs were
+     a hard `.visible` toggle. `Player.current_water_depth` now survives
+     that collapse, threaded to a new `CharacterView.set_submersion_depth`
+     every frame; legs share the torso's existing `SubmersionShader`
+     material instead of being hidden; the waterline is a continuous lerp
+     normalized against the already-tested `WaterMovementModel.
+     WADE_DEPTH_METERS`, reproducing the old "fully swimming" look exactly
+     at and beyond that threshold; a new shared `SubmersionShader.
+     MAX_SINK_PX` settles the whole rig down together as depth increases.
+     Callers with no real depth (the character-creator diorama, village
+     NPCs) keep their old boolean-driven look exactly, now with the sink
+     too. Animals in river/lake water get the identical treatment, reusing
+     the same shared constant; ocean-swimming animals are unchanged (no
+     cheap per-tile ocean depth this class can ask for).
+
+  Each of the three shipped as its own red-first commit with its own test
+  suite (`test_creature_marker.gd` 200/200; `test_character_view.gd` 70/70
+  plus `test_player.gd` 188/188 and every other `CharacterView` consumer
+  unaffected; `test_river_flow_shader.gd` + `test_water_shader.gd` 220/220
+  and a real-GPU smoke pass). One confirmed pre-existing, unrelated
+  failure was found and flagged separately, not fixed here: `test_a_
+  genuinely_large_river_still_resolves_to_swimming` (the Rhine at Cologne
+  reports 0.0 depth) — a hydraulics/curated-course regression predating
+  this session, tracked as its own follow-up.
 - **Real hydraulics: volume, pressure, current speed** (large) — ✅ Done —
   reported directly ("implement real water flow with volume pressure current
   speed"). Before this, depth was an AUTHORED 2.5 m linear taper, current
@@ -9640,7 +10078,7 @@ New concept doc (2026-08-25), written for the one mechanism below:
 - **Illustrated character building blocks (scaffolding)** — 🚧 Partial — `src/rendering/illustrated_character_sprite.gd` (`IllustratedCharacterSprite`) is the character-rig counterpart to `IllustratedAnimalSprite` (same registry/chroma-key/`SpriteSheetSlicer` shape that already replaced the animal roster's procedural sprites with real horse/deer/boar/sheep art), wired into `CharacterView.apply_appearance` for the three single-tint paperdoll parts (body/legs/arms — each falls back to its existing procedural texture automatically via `_apply_paperdoll_part` until real art is registered, so this is a no-op today, not a visual change). No part art is registered yet (`_PARTS` is empty) — `docs/concept/character_art_brief.md` is a practical brief for generating it with AI: draw parts NEUTRAL (grey/white, no baked-in color) so `modulate` can tint them per class/skin-tone at runtime, the same magenta chroma-key convention `sheep.png` already established, and exactly how to register a finished sheet once it exists. The HEAD is deliberately excluded from this registry (see the brief) — a head mixes skin/hair/eye color in one drawing, which a single flat tint can't separate; doing that properly needs layered art (a base head + separate recolorable hair/beard overlays), scoped but not built. **Loader fix:** `hero_composite.png` and `head.png` are now read through `SpriteSheetLoader.load_image` rather than a raw `Image.load_from_file`, so they go through their `.png.import` and no longer log the "Loaded resource as image file, this will not work on export" warning that GUT counted as an Unexpected Error (that warning alone was failing 8 tests in `test_illustrated_character_sprite.gd`, 1 in `test_hero_sprite.gd`, and 1 in `test_character_preview_diorama.gd`). Two preconditions this exposed, now spec'd in `docs/concept/character_art_brief.md`: the generated `assets/.../<sheet>.png.import` must be **committed alongside the PNG** (`assets/sprites/player/hero_composite.png.import` is still UNTRACKED — until it is committed, `load_image` silently falls back to the raw read on any fresh clone or CI checkout, i.e. the fix degrades to a no-op rather than breaking loudly), and a sheet whose pixels are replaced must be re-imported, since the gitignored `.godot/imported/*.ctex` cache otherwise keeps serving the previous art with no error at all — observed for real on `hero_composite.png` (a 1024×1535 PNG against a 1024×1536 cache still holding the superseded single-pose legs). That stale-cache hazard is a live property of **every** `SpriteSheetLoader` consumer, not just this one. Note that `src/rendering/illustrated_tree.gd`'s own `_load_image` is **not** a redundant duplicate and was deliberately left alone: it already delegates to `SpriteSheetLoader.load_image` and adds a per-path image cache plus `FORMAT_RGBA8` normalisation on top. ✅ That last red test is fixed. `test_illustrated_character_sprite.gd` is 48/48. The diagnosis recorded here was right: the ART and the source contract were correct (5 leg frames, a real walk-cycle strip) and the TEST had drifted — `test_generate_composite_textures_returns_the_right_frame_count_per_part` was left asserting a flat 1 for legs when the second `hero_composite.png` regeneration landed, even though its own sibling `test_every_outfit_row_produces_the_expected_frame_count`, `HERO_COMPOSITE_BAND_INDICES`, and `CharacterView._apply_leg_frame` had all already moved to the walk strip. The assertion now expects `HERO_COMPOSITE_BAND_INDICES["legs"].size()` rather than a bare literal, so it still proves `detect_frames` actually FINDS every registered band rather than merely restating the registry. A new `test_the_legs_walk_strip_is_five_genuinely_different_poses` closes the gap that let this sit unnoticed: nothing pinned the five frames being five DIFFERENT drawings, so a registry pointing all five entries at one band would have kept every count assertion green while the walk animation silently played a static leg (verified by mutating the registry to exactly that and watching only the new test fail). Stale doc comments claiming one leg frame were corrected in `illustrated_character_sprite.gd`, the test file's own header, and this file — along with several dangling references to `HERO_COMPOSITE_COLUMN_X`, a constant the same regeneration deleted. Still open and unrelated: `assets/sprites/player/hero_composite.png.import` remains UNTRACKED, per this entry above. **Update: that `.import` is tracked now.** **Floating-torso fix (2026-09-04):** reported live on the character creation screen ("floating torsos ... the slicer is broken for one class") — row 7 of `hero_composite.png`, the row `artisan` lands on at the creator's shared seed (`HeroAppearance.outfit_variant_for`), draws its right arm touching the torso for the row's FULL height: measured directly, not one column between x=111 and x=345 (out of a 1024px-wide sheet) reads as background after the flood fill, so `detect_frames` found 7 real bands where the registry needs 8. `HERO_COMPOSITE_BAND_INDICES`'s fixed positions were still applied verbatim to that short list: `"body"` (registry index 2) silently wore what should have been the FIRST leg pose, and `"arms"`' second slot wore the merged arm+torso blob squeezed into the tiny arm box — both came back non-empty, so the has-art-then-fallback checks `CharacterView._apply_body`/`_portrait_torso_image` already had (`if not textures.is_empty()`) never actually engaged; a short-but-nonzero band count was never the "future gap" that safety net was checked against. `_composite_frames` now compares the real band count to a new, tested `HERO_COMPOSITE_EXPECTED_BAND_COUNT` (pinned against the registry's own 2+1+5 total, not a bare literal) and returns nothing for body/arms/legs TOGETHER the moment a row falls short of it, rather than trusting fixed indices a merge has already shifted — which is what finally lets that existing fallback reach the procedural rig for the one affected row. Also corrected in the same pass: `test_every_outfit_row_produces_the_expected_frame_count`'s own doc comment had attributed row 7's short leg count to "two adjacent leg poses touching closely" — a diagnosis never actually checked against the pixels, and wrong; the real merge is the right arm touching the body, not one leg pose touching another. 3 new tests (`test_illustrated_character_sprite.gd` now 51/51); `test_hero_sprite.gd` (45/45), `test_character_view.gd` (60/60) unaffected — no player class other than `artisan` lands on row 7 at any seed a passing test actually exercises, and every other row still measures its full 8 real bands.
 - **Character sprite engine** — ✅ Done (basic) — `HeroAppearance` grew from 3 axes to 5 with real pools, an explicit-choice constructor (`appearance_from_choices`, index-wrapping in both directions so a creator can cycle freely) and a `choices_from_appearance` inverse so a rolled hero is resumable in the creator. `ProceduralCharacterSprite`'s hero head went from "a circle with two dots" to a real face: 6 hair silhouettes (short/swept/long/ponytail/topknot/bald), 4 beard styles (none/stubble/goatee/full), brows, colored irises with pupil + catchlight, and a mouth; the tunic gained chamfered shoulders, a collar, and a belt with a buckle. Outfit palettes cover all 7 player classes plus the 6 villager occupations. Still a paper-doll rig of separate part sprites in-world (`CharacterView`) with no per-facing or walk-frame art — the parts are just much better drawn now.
 - **Main-menu centering fix** — ✅ Done — `MainMenu._ready()` centered itself with `set_anchors_preset(PRESET_CENTER)` alone, which (per Godot 4's actual anchor semantics — it recomputes offsets to *preserve* the control's current on-screen rect under the new anchor fraction, not to center a rect of its size) left the panel pinned to the CanvasLayer's top-left corner. Fixed by explicitly setting the four `offset_*` to a symmetric half-`PANEL_SIZE` box after the preset call, matching the pattern every other centered popup in this codebase already used (`SettingsOverlay`/`InventoryWindow`/`DevConsole`, wired in `world.gd`). Pinned by `test_panel_is_actually_centered_not_pinned_to_a_corner`.
-- **4x camera zoom** — ✅ Done — `Camera2D.zoom` bumped from the original `3x` to `4x` (`Player.CAMERA_ZOOM`, applied in `_ready()` rather than left as a bare `.tscn` number) so pixel art reads clearly across the full 1280x720 window. HUD is unaffected (built screen-space under the `_ui` `CanvasLayer`, independent of world-camera zoom). Nearest-neighbour texture filtering was already project-wide correct, so no filtering change was needed.
+- **4x camera zoom** — ✅ Done — `Camera2D.zoom` bumped from the original `3x` to `4x` (`Player.CAMERA_ZOOM`, applied in `_ready()` rather than left as a bare `.tscn` number) so pixel art reads clearly across the full 1280x720 window. HUD is unaffected (built screen-space under the `_ui` `CanvasLayer`, independent of world-camera zoom). Nearest-neighbour texture filtering was already project-wide correct, so no filtering change was needed. **Zoomed in another 30% (2026-09-05), to 5.2x.** Asked directly: "make the character 30% smaller and zoom in 30% so trees become relatively bigger" — `Player.TARGET_TILE_SCREEN_PX` (the tuned intent CAMERA_ZOOM derives from) moved 64.0 → 83.2, pinned by `test_camera_zoomed_in_thirty_percent_over_the_previous_tuning` (`test_player_camera.gd`). Two real, checked consequences of standing visually closer to the ground: (1) `GeologyChamber`'s starter chamber — already at its own floor radius (1 tile) — now genuinely occupies 34.67% of the screen's shorter side rather than 26.67%; `test_chamber_diameter_stays_a_small_fraction_of_the_visible_screen`'s threshold moved 0.3 → 0.4 to keep roughly the same relative headroom, since the chamber itself cannot shrink further. (2) `ArtResolution.SPRITE_SCALE * CAMERA_ZOOM.x` (screen pixels per art pixel) moves from 2.0 to 2.6, no longer a whole number at the 720p reference resolution — `test_one_art_pixel_covers_several_screen_pixels`'s own `>= 2.0` floor still clears comfortably, but the stricter whole-number pixel-perfectness `DisplayScaling` enforces elsewhere was deliberately NOT chased here: `DisplayScaling.TILE_SCREEN_PX` stays at 64.0 on purpose (see its own doc comment) since it answers a different, harder-constrained question (art stays crisp across 720p/1080p/1440p/4K) that a one-off gameplay zoom tuning has no business perturbing. `EarthChunkManager._visible_half_span_tiles` (decoration LOD radius) and this session's own snow-onset-viewport fix both key off `DisplayScaling`'s unchanged ~20x11-tile assumption rather than the real, now-smaller ~15.4x8.65 one — confirmed safe-direction (both over-provision slightly, at a small perf cost, never under) rather than silently made to match. **Asked directly afterward: "make it a whole multiplier so every resolution is pixel perfect."** With `ArtResolution.DETAIL_MULTIPLIER=2`, the only zoom values that land every canonical resolution on a whole screen-pixels-per-art-pixel count are multiples of 4x — 4x (revert) or 8x (double, not the 30% originally asked for; the geology chamber alone would need a real redesign at that zoom, not a threshold tweak). Laid out both alternatives plus the current 5.2x's real tradeoff (2.6, non-whole, but still clears the actual legibility floor); kept 5.2x as-is. **Reverted the same day: "trees are very blurry even though sprite art is much crispier."** Two separate, compounding causes, only one of which this constant can fix: (1) the exact non-whole 2.6 screen-px-per-texel ratio the previous entry accepted as "likely-imperceptible" turned out to read as real, visible soft/uneven edges once actually played rather than viewed in one still screenshot; (2) independently, trees composite trunk+canopy+fruit into one shared 40x52px native canvas (see the Vegetation/resource-node art-resolution entry below) — a real, pre-existing resolution ceiling this constant has no bearing on at all. Asked which to fix: both. `TARGET_TILE_SCREEN_PX` reverted 83.2 → 64.0 (`CAMERA_ZOOM` 5.2x → 4.0x, whole-multiple-of-4 again), taking `GeologyChamber`'s screen-fraction threshold back to 0.3 and `DecorationLod`'s visible-span numbers back to 10.0/5.625 with it — both were only ever compensating for the 5.2x tuning. `CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE` (0.595) is untouched: "trees relatively bigger" was never actually load-bearing on zoom (the ratio cancels zoom out algebraically — confirmed live at both 5.2x and the reverted 4.0x, the near tree measured ~1.8x the character's own height either way). Re-checked the leg-legibility risk against the ACTUAL final combination (0.595 character at the reverted 4.0x, not the intermediate 5.2x already screenshotted) since the two don't extrapolate linearly: back-computed leg content drops to ~3.6px, technically below the original ~4px that triggered "legs are not wired" — checked with a fresh real rendered frame anyway, and it still reads as distinct armored plates with a clear boot silhouette, not a smeared blob. New test: `test_camera_zoom_keeps_sprite_scale_path_art_pixel_aligned` (`test_player_camera.gd`), which pins the real screen-px-per-texel property directly rather than a bare literal, so this can't silently drift non-whole again.
 - **Universal hover name/action tooltip** — ✅ Done — reported: "fruits on the ground should only show labels on hover .. and also EVERY entity (worm, fly, fruit, stone, boulder, pebble, grass blade, carrot, potato, tree, fruit on tree) should show its name on hover ... also all entities with interactions should show the action name and the hotkey ... if multiple available show all". `HoverTargetFinder` (`src/rendering/hover_target_finder.gd`, group `GROUP_NAME := "hoverable"`) is a pure nearest-candidate-within-radius picker; `World._update_hover_tooltip` scans the group every frame, building each candidate's name/actions from two duck-typed methods, `get_display_name()` and `get_hover_actions() -> Array[{verb, action}]`, and renders the winner as a multi-line floating label (name, then one `"Verb (Key)"` line per action, key read live via `OS.get_keycode_string(Keybindings.keycode_for(...))` so a rebind is reflected immediately — the same pattern the pre-existing proximity `_interaction_prompt` already used for NPCs/liftable stones). Wired into every hoverable node: `CreatureMarker`/`FishMarker`/`PiscivoreBirdMarker`/`AmbientFlyerMarker` (name-only, pre-existing), `DroppedItem` (name + Pick Up — this is also what makes ground items name-on-hover-only: the old always-on floating label over every dropped item, Path-of-Exile style, is gone), `LiftableStone` (Wentworth-class name + Pick Up, plus Kick when `Kick.is_kickable` says the stone is light enough), `SmashableStone` ("Boulder" + Smash), `MinableOre` (the actual yielded item's own name via `ItemCatalog`, e.g. "Iron Ore"/"Coal", not a naive "<type> Ore" guess + Mine), `ChoppableTree` ("Tree"/"Fallen Tree" + Chop). Grass is the one exception, tile- rather than Node-based (see Long Grass below): `EarthChunkManager.tall_grass_growth_at(pixel_position)` is a new read-only accessor `World` falls back to only when nothing in the group claimed the cursor, showing "Tall Grass" name-only for an immature patch and adding Harvest once mature (`growth >= 1.0`). Explicitly out of scope for this pass: worms (`earthworm_patch.gd` has no player interaction yet), carrot/potato as world entities (only AI-art prompts exist so far, see `docs/art/ai_sprite_prompts.md`), and fruit still on a tree (passive-only — only the fallen `DroppedItem` version is a real, separately-hoverable object). `World._update_hover_tooltip`/`_hover_tooltip_text` are untested UI glue, matching this file's pre-existing boundary for `world.gd` (see Persistence section below) — every piece of actual logic underneath (the finder's nearest-candidate pick, each entity's name/action list, the grass growth accessor) is unit-tested.
 
 ---
@@ -10730,7 +11168,9 @@ any flyer in range was always caught, immediately becoming a
 `jarred_insect`/`caged_songbird` curiosity item, with no probability and no
 intermediate "loaded, undecided" state at all.
 
-- ✅ **The Capture DSL itself** (large) — `capture_parser.gd` /
+- ✅ **The Capture DSL itself** (large) — ~~`capture_parser.gd`~~ (retired
+  2026-09-05 in favour of the standard model's device grammar — see the
+  addendum below) /
   `capture_atom_catalog.gd` / `capture_physics.gd` / `capture_executor.gd` /
   `capture_atom_effects.gd` / `capture_book.gd`, mirroring the magic DSL's
   own module split (parser → atom catalog → physics → executor → effects →
@@ -10763,7 +11203,8 @@ intermediate "loaded, undecided" state at all.
   the specific species survives for rendering. That exposed a real,
   general stacking bug fixed in passing: `ItemStack.can_stack_with` only
   ever compared item id, so a freshly-loaded container could silently merge
-  into a stack of empty ones — now also requires matching `captive_species`.
+  into a stack of empty ones — now also requires matching `captive_species`. (**2026-09-05**: `Inventory.add` itself never consulted that check until
+  the standard-model merge — see the addendum's 🐛 row below.)
 - ✅ **A bottled catch renders alive** — reported mid-pass, so specified in
   `capture_dsl.md` before being built, same as everything else here. The
   real `glass_bottle.png` composite sheet (measured: 1536×1024, a fixed 3×2
@@ -10797,11 +11238,381 @@ intermediate "loaded, undecided" state at all.
 - ⬜ **Release does not respawn a live creature** — it only empties the net
   with a message. Symmetrical and arguably more honest physically, but not
   asked for and not built.
+- ✅ **Update (same day):** reported "give the player a glass bottle and
+  butterfly net from the start" — `Player._ready()`'s existing hardcoded
+  starting-kit grant (sword equipped, axe, two leather pieces, fishing
+  rod) now also adds one `butterfly_net` and one `glass_bottle`, same
+  "discoverable from the first minute" reasoning the fishing rod already
+  had. Pinned by a new test (`test_a_new_player_starts_with_the_expected_
+  kit`) that also closes a real pre-existing gap: nothing had asserted
+  this grant's actual contents before now. Note for whoever eventually
+  merges the separate, not-yet-merged `claude/starter-kit` branch (a
+  player-chosen pick-3-from-8 kit replacing this whole hardcoded block):
+  that branch's `StarterKit.POOL` does not include either item, and
+  merging it as-is would silently drop this grant along with the rest of
+  the old kit — worth reconciling at that point, not addressed here.
+
+### Ethogram (`concept/ethogram.md`)
+
+New doc this pass (2026-09-05), and its first slice built. The doc is the
+behaviour DSL: every stimulus is a feature vector on one shared channel
+basis, every species carries receptor sensitivity and valence vectors, drives
+are gains, and an ordered list of wirings per body plan replaces per-species
+behaviour loops — the generalisation of the receptor model `olfaction.gd`
+already ran for smell. The observation that prompted it: hunger is
+implemented separately for land mammals, villagers, the kingfisher, songbirds
+and the player; finding food has eight brains; fear has four; mate choice
+three. Slice 1 is deliberately behaviour-preserving: it puts the kernel under
+the one decision seam that already had a pure module (`CreatureBehavior`) and
+under the smell API, and proves the DSL in tests.
+
+- ✅ **`src/gameplay/affinity.gd`** — pull, loudness, proximity ranking and
+  the overlap-safe headings; the vector sums every decision is made of and
+  the module the pathogen/immunity/pharmacology follow-up is meant to reuse
+  (9 tests).
+- ✅ **`src/gameplay/ethogram.gd`** — the channel basis (the five smell
+  channels plus `danger`/`flesh`/`forage`/`water`/`mate`), the five smell
+  records moved verbatim from `Olfaction.RECEPTORS`, the land-mammal body
+  plan with its receptor defaults and its ordered wirings, and `express()`
+  applying `receptor_<channel>` genes to sensitivity with 0.5 as the species
+  template (23 tests, including receptor genes crossed by the unmodified
+  `DnaCrossover` and a body-plan override for record-less species).
+- ✅ **`src/gameplay/behavior_kernel.gd`** — ordered wirings gated by drives
+  and ranked by affinity: approach on a positive pull, avoid on a negative
+  one, search on an open gate with nothing sensed, wander otherwise;
+  stateless, the caller commits (20 tests: three species share one hunger
+  wiring, a fly and a boar choose different fruit through the same ladder,
+  a sated boar walks past a windfall, a boar born without a decay receptor
+  roams instead of following carrion).
+- ✅ **`CreatureBehavior.decide` is the land-mammal adapter** — same
+  signature, same context keys, same intents; the hard-coded priority
+  ladder is now `Ethogram.BODY_PLANS["mammal"]["wirings"]`. All 33
+  pre-existing tests pass unchanged; six new ones pin the target and score
+  a decision now names, the optional `species`/`genome`/`smells` context
+  keys, and an individual's receptor genes reaching its decision.
+  `CreatureMarker` is untouched.
+- ✅ **`Olfaction` reads the species record** — `RECEPTORS` deleted;
+  `perceived_strength`/`attraction_to` take an optional genome and read
+  `Ethogram.express` (species template cached per sniff);
+  `ScentForaging.forages_by_smell` asks `Ethogram.has_nose`. Regression
+  after the rewire: olfaction, scent-foraging, flies, fly-life-cycle,
+  creature-marker, creature-info, ambient-flyer-marker and
+  piscivore-bird-marker suites all green.
+- ✅ **Slice 1 changed nothing visible, by design.** Every animal decided
+  what it decided before; the slice was a behaviour-preserving re-expression
+  pinned by the tests that already existed.
+- ✅ **Slice 2 (same day): danger stopped being a verdict, and every land
+  mammal got its own nose.** The basis now carries `predator`/`player`/
+  `flesh` instead of `danger`; `CreatureMarker`'s sensing tick publishes
+  every nearby creature as what it IS, every person as a person, and the
+  nearest water/food tile at a real position (`_cached_stimuli`), and reads
+  its threat list back from the species valence (`CreatureBehavior.threats()`
+  over `BehaviorKernel.perceived`) -- "predators are threats to herbivores,
+  people to everyone, a predator ignores other predators, a tamed animal no
+  longer perceives people" are all valences and sensitivities now, not scan
+  rules. Attack and hunt act on the node the winning stimulus carries (the
+  kernel returns it whole); the prey cache and both direction caches are
+  gone. The kernel ranks by a sense-supplied `strength` when the sense knows
+  one (smell hands over its dilution via `ScentForaging.stimuli_from`) and
+  honours a wiring `floor` (the smell wiring carries
+  `Ethogram.SMELL_INTEREST_FLOOR`, which `ScentForaging.MIN_INTEREST` now
+  aliases); `ScentForaging.best_source` ranks through the kernel with an
+  optional genome. `src/gameplay/animal_genome.gd` exists in
+  `concept/animal_genetics.md`'s exact shape (static namespace, ordered
+  `GENE_NAMES`, `GENE_READERS`, both anti-dead-weight tests) holding only the
+  five receptor genes; `AnimalGenome.for_seed` derives them bell-shaped
+  around the species template from the marker's own `wander_seed`, and
+  `CreatureMarker.genome_or_derived()` feeds them to every decision and
+  every sniff -- so a boar born without a decay receptor walks past carrion
+  the next boar takes (`test_an_individuals_nose_reaches_the_live_forage_choice`),
+  with nothing new persisted. Suites green after the change: adapter,
+  marker, creature-info, ambient-flyer, piscivore, olfaction, flies,
+  fly-life-cycle, taming, animal-reproduction, mammal-courtship (578 tests).
+- 🚧 **Deliberately not in slice 2**, recorded in the doc's §2/§3: grazing
+  bites stay `GrazerForaging`'s lexicographic diet-order choice (a weighted
+  sum cannot say "mast over grass at any distance"); the species half of the
+  adapter overrides (`flesh` valence, "ignores other hunters", the fight
+  temperament) still comes from `CreatureInfo`'s tables rather than the
+  five species records; no `conspecific` feature is published until a
+  wiring reads one.
+- ✅ **Slice 3 (same day): one drive vector.** `src/gameplay/drives.gd` is
+  the single clock behind every "rises over time, crosses a threshold, a
+  meal takes it back down" need, and the numbers are drive profiles in the
+  ethogram (`Ethogram.drive_profile`: `mammal` = CreatureNeeds' 0.02/s and
+  0.03/s with the 0.45 herd stagger, `villager` = the same pace hunger-only,
+  `bird` = BirdDigestion's songbird crop as hunger, plus a `kingfisher`
+  species record overriding the bird appetite with PiscivoreAppetite's two
+  meals a day). `CreatureNeeds`, `NpcNeeds`, `PiscivoreAppetite` and
+  `BirdDigestion` survive as facades over it -- same APIs, their constants
+  re-exported from the profiles as `static var`s -- so `CreatureMarker`,
+  `NpcEconomy`/`NpcMarker`, `PiscivoreBirdMarker`, `AmbientFlyerMarker` and
+  all four test files are untouched and green; the stagger keeps the exact
+  hash the old modules used, so no animal or villager already in the world
+  changes its onset. Levels are the kernel's gains (`Drives.gains()`, which
+  `CreatureMarker` now publishes and `CreatureBehavior` reads ahead of the
+  hungry/thirsty booleans); a gain is a step at the threshold today and a
+  ramp one profile `onset` away -- no profile sets one yet, deliberately,
+  because under first-match arbitration a ramp would only make animals
+  forage below the thresholds they were tuned to (the doc's §5 says when it
+  becomes meaningful). The player's `SurvivalMeters` stays the player's.
+  21 new tests in `test_drives.gd`; facade, consumer and marker suites green.
+- ✅ **Slice 4 (same day): a boldness gene, narrower than first planned.**
+  Building "gains as personality" found that two of its three original
+  pieces don't hold up: `docility` has no gene yet (animal_genetics.md's own
+  seven genes are still unimplemented, and that doc owns introducing it,
+  not this one), and the spell `FEAR`/`CALM` mechanism turned out to already
+  be correct and tested (`_temperament_for_decision`, three passing tests)
+  — nothing failing motivated touching it. What shipped instead: a
+  land-mammal `boldness` gene that raises the fear wiring's *floor* rather
+  than scaling its gain (a gain alone is dead weight under first-match
+  arbitration — any nonzero score still wins outright), zero at or below
+  the population median (every individual at or below typical behaves
+  exactly as before), rising to a ceiling derived from
+  `Affinity.proximity(one tile)` — not literal touching distance, which
+  would make the boldest individual's own wiring unreachable rather than
+  merely hard to reach. Deliberately not the same numbers as
+  `FlyerPersonality`'s butterfly-specific flight-initiation-distance
+  constants (no shared infrastructure with butterflies yet — that's slice
+  5), only the same bell-shaped-population shape. Wiring it up surfaced a
+  real, independent ordering bug: `CreatureMarker` calls
+  `CreatureBehavior.threats()` every sensing tick before its first
+  `decide()`, and `threats()` shared `decide()`'s genome-change cache
+  without ensuring the wirings array existed first — so the floor patched
+  an empty array on the very first call and never got a second chance
+  (the cache considered the genome already "seen"). Fixed with a shared
+  `_ensure_wirings()` guard, pinned directly. 8 new/changed tests; full
+  affected regression (534 tests) green.
+- 🚧 **Slice 5 (same day): investigated in full, nothing shipped, and the
+  doc says exactly why for each of its five original pieces** — see
+  `concept/ethogram.md`'s "Slice 5 investigation" for the full account.
+  Short version: `FishMarker` never decides to flee on its own
+  (`bolt_from` is called BY something else that already decided, not
+  chosen from a sensed threat); `NpcMarker`'s only decision is which
+  schedule/instruction location tag to resolve to, and hunger resolves as
+  a transaction (`NpcEconomy.step`) wherever the NPC already is, never a
+  walk toward a sensed source of food; `DecomposerMarker._nearest_food`
+  (ants, carrion bugs) is a real `Affinity.proximity`-shaped ranking
+  candidate but has no SECOND drive to arbitrate against, and its own file
+  header states outright that it is deliberately NOT built on
+  `CreatureMarker`'s flee/fight stack — "the wrong shape for a tiny
+  insect" — so adding a fear wiring would reverse a stated design
+  decision, not fill a gap. Ambient flyers (`AmbientFlyerMarker`) DO have
+  a real, named, eight-tier precedence ladder shaped exactly like the
+  mammal one, but its `_step_player_reaction` turned out to be a dense,
+  bug-scarred STATE MACHINE (escape-release hysteresis, a flee/dance
+  mutual-exclusion invariant, pair-interaction abandonment, a
+  fixed-three-times degenerate case) rather than a stateless scoring
+  decision -- correctly re-scoped as its own future slice rather than a
+  quarter of this one. The instruction-DSL-as-kernel-dialect idea does not
+  survive either: `BehaviorKernel.decide` and `NpcInstructionEvaluator.
+  evaluate` share a first-match SILHOUETTE but not a shape (vector-scored
+  ranking across stimuli vs. one boolean primitive against a flat frame),
+  so unifying them would strip one system's real capability for no gain
+  to the other. No code changed; CLAUDE.md's own TDD rule (refactor only
+  behind a failing test) is why -- none of these five had one.
+- ⬜ Slice 6, untouched: mate choice on display/preference vectors. Also
+  still open from slice 4: docility on a fight gain, and cross-wiring
+  scoring (a floor sufficed this time; may still be needed later). Ambient
+  flyers' player-reaction ladder is now a named, scoped candidate for its
+  own future slice, not folded into slice 5's leftover scope.
+
+#### Addendum (2026-09-05): the net is a device with a real mesh
+
+Reported: "*refactor the butterfly net to express that it catches small
+animals like butterflies, fish, small birds; but not e.g. bees / flies
+because the net is not tight enough — it should also encode the capture
+action which confines the subject to the net.*"
+
+Investigation: `_throw_net` scanned the whole ambient-flyer flock with no
+species check at all, so a bee or a fly — both real `AmbientFlyerMarker`s,
+the fly spawned by the carrion loop — was netted exactly like a monarch;
+fish were never targets; and "what the net catches" lived in a
+`target.tier == "flyer"` guard, a category rather than a physical fact.
+The standard model had just landed, so the honest fix was to make the net
+a device with a real bag and let its mesh decide.
+
+- ✅ **Mesh physics** (medium) — `body_dimensions.gd` (three sourced body
+  extents per species for the flyer and fish rosters, the length pinned to
+  `wingbeat_bounce.gd`'s), `CapturePhysics.slips_through` / `fits_mouth` /
+  `mesh_verdict`: a body slips through when its middle extent is under the
+  mesh, does not fit when its largest exceeds the mouth; monotone in both
+  and pinned so. Against the standard net (10 mm mesh, 30 cm mouth): bee
+  and fly slip through, butterflies and small birds are held, goldfish and
+  bluegill are netted, trout and koi are too big.
+- ✅ **The net is device text** (medium) — `capture_book.gd` authors it in
+  `concept/standard_model.md`'s grammar: a wooden handle, an iron hoop, a
+  fibre bag with `aperture_mm: 10` (the rip saw's `tooth_pitch_mm`
+  precedent) and `width_cm: 30`, compiled to the real part graph (under
+  half a kilogram) and its part facts, validated at load. `capture_parser.
+  gd` and the `capture` block kind are retired: the device grammar is a
+  strict superset.
+- ✅ **The capture act names where** (small) — atoms `mesh_holds(mesh:
+  bag)` (a check that fails WITH a reason), `catch_roll`, `confine(in:
+  bag)`, `free(from: bag)`, `move_captive`; `hold_captive` /
+  `release_captive` retired and pinned so. `CaptureExecutor.validate` is
+  the static constraint layer — a `confine(in: X)` must follow a
+  `mesh_holds(mesh: X)` in its own pipeline, every named part must be
+  declared, every atom known and complete — so no shipped text can
+  confine what its mesh was not shown to hold.
+- ✅ **In play** (small) — the catch context carries the subject's extents
+  and the net's facts; a mesh refusal shows its reason ("The bee slips
+  through the 10 mm mesh."), a lost roll stays "Missed!"; a fish in the
+  shallows is a net target through the kingfisher's nearest-fish lookup and
+  leaves the water through the rod's own `catch_nearest_fish`, so its
+  pond's population records the harvest; a netted fish loads the net and
+  never bonds. 8 new scoped `test_player.gd` tests, the 15 existing net /
+  release / bottle tests re-run green.
+- ⬜ **No mass or tear rule** — a koi is refused for length, not weight;
+  the honest version is the subject's mass against `PartGraph.
+  part_load_capacity(bag)`, and no fish carries a mass yet.
+- ⬜ **Net variants have no recipes** — a 1 mm insect net that holds the
+  bee and a 40 cm landing net that takes the trout are each one number
+  away in text (both pinned in `test_capture_executor.gd`), but nothing
+  lets a player craft one.
+- ⬜ **The kingfisher** is measured (held by the standard net) but is a
+  `PiscivoreBirdMarker`, not an ambient flyer, so `_throw_net` never sees
+  it.
+- 🐛 **Fixed at the merge to `main` (2026-09-05): bottling lost the
+  creature, and could spend a loaded bottle.** Merging onto a `main` that
+  had just started every player with an empty glass bottle turned four
+  older bottle tests red on `main` itself — and the root cause was real,
+  not a stale expectation: `Inventory.add` merged by item id alone and
+  never consulted `ItemStack.can_stack_with`, so the freshly loaded bottle
+  merged into the starting empty one and its species was gone; in the same
+  path, `has`/`remove` by id meant "Put into bottle" could count and spend
+  a *loaded* bottle as if it were empty. `Inventory.add` now merges only
+  where `can_stack_with` agrees, `has`/`count_of`/`remove` take an optional
+  contents filter, and Player counts and spends empty bottles only. Pinned
+  by 5 new `test_inventory.gd` tests and 2 new scoped `test_player.gd`
+  tests; the four older tests state their empty-pack premise explicitly
+  now that the pack starts with a bottle.
+
+### Standard Model (`concept/standard_model.md`, new this pass)
+
+Reported: "*design and spec a formal standard model for our in-game world
+physics and mechanics — a DSL flexible enough that engineers can invent
+entirely new devices / structures / things.*"
+
+Investigation found the pieces of such a model already scattered across
+four docs and never joined: `materials.md`'s property vector and its one
+impact equation, `emergent_crafting.md`'s parts / typed joints / part graph
+and its "an item is a program" rule AST, `electromagnetism.md`'s
+torque → EMF → Ohm circuit (pure design, nothing built), and three DSLs
+already sharing one `on EVENT(ARG) when GUARD: pipeline` grammar. What none
+of them had was a single *algebra* in which a water wheel, a lever, a
+generator, a battery and a millstone are the same few kinds of thing —
+which is what "invent new devices" actually requires, because without it
+every new device is a new special case. Spec first (per `CLAUDE.md`), then
+a red-first kernel: 173 tests across eight files, every one written and
+seen failing before its module existed.
+
+- ✅ **The formal model** (large) — a bond graph (Paynter, 1959–61) cut
+  down to "8-bit": five energy domains as (effort, flow) pairs whose
+  product is power — rotation, translation, electrical, hydraulic, and
+  thermal honestly catalogued as a pseudo-bond and kept out of power
+  accounting (`physics_domains.gd`); five element laws — `source` (a
+  Thévenin pair with a real free-running flow and matched-load ceiling),
+  `resist`, `transform`, `gyrate`, `store` (`device_elements.gd`), with
+  transformer/gyrator losslessness asserted as a property over a sweep,
+  and the two affine-load reflection rules (`R/r²` through a transformer,
+  `k²/R` with a flipped offset through a gyrator) pinned by consistency
+  checks against the laws themselves. A lever, a gear, a wheel's radius, a
+  piston and a pump are all one law; a generator and a motor are one law;
+  a battery, a reservoir and a drawn bow are one law.
+- ✅ **Derived, not authored** (medium) — `device_physics.gd`: a material's
+  conductivity in S/m recovered by inverting the shipped IACS map (copper
+  lands on the 5.80e7 definition; wood is twenty orders below, so a wooden
+  wire cannot complete a circuit — `electromagnetism.md`'s sentence, now
+  arithmetic); a wire's ohms by Pouillet's law over a haft part's own span
+  and section; a wheel's ratio as its radius; a paddle in a stream as the
+  flat-plate drag law flattened to a Thévenin pair (water's density reused
+  from `open_channel_flow.gd`, sea-level air's beside it — one function is
+  both a water wheel's and a windmill's source); Faraday's `k = B A N`.
+- ✅ **The solver** (large) — `device_network.gd`: one source driving a
+  series chain, solved in closed form by folding everything downstream
+  into one affine load, solving the one flow, and propagating forward with
+  per-element power accounting and tank-stepped stores. Pinned: efforts
+  around a closed loop sum to zero; source power equals dissipated plus
+  stored power to the watt; the **maximum power transfer theorem emerges**
+  (delivered power rises then falls with load and peaks at the matched
+  load, through a lever and a generator — this model's twin of
+  `part_mechanics.gd`'s optimum-head-mass anchor); more grinding or
+  electrical load slows the wheel; an open-ended transformer carries no
+  flow; an unloaded generator runs free with open-circuit EMF and no
+  current; stores charge by power × dt, refuse charge when full, shed
+  overcharge as overflow, never drain below empty; a charged store drives
+  the loop backwards when the source dies and, behind a gyrator, **motors
+  the shaft** — the battery that keeps the mill turning, which no rule
+  wrote. Refusals name their reason (no source first, a second source,
+  duplicate ids, an ideal source into a short, an ideal effort behind a
+  gyrator).
+- ✅ **The `device` DSL** (large) — `device_parser.gd`, a fourth structural
+  sibling of the spell / capture / npc-instruction parsers (same tokenizer,
+  same rules) with four declarative clauses in front: `part ID: MATERIAL
+  GEOMETRY ROLE (dims)`, `joint ID: A to B TYPE FASTENING MATERIAL (axis:
+  z)`, `law ID: ELEMENT(params)`, `loop A |> B |> C`. Purely structural,
+  `line N:` errors. `device_compiler.gd` turns the AST into the *shipped*
+  `PartGraph` (validated by its own rules — an unmodeled material, a missing
+  dimension, an axis-less pivot come back with the graph's own reasons) plus
+  the element chain: every one-port law names a power domain, every
+  two-port its in/out, every parameter authored or derived from a named part
+  or fluid and never both, consecutive ports along the loop checked for
+  domain agreement with a refusal naming both; since 2026-09-05 every
+  part is also exposed as **facts** (material, geometry, role, every
+  declared dimension, mass, span) so a rule on a loop-less device — the
+  butterfly net, `concept/capture_dsl.md` — can read `bag.aperture_mm`.
+  `device_executor.gd` turns
+  a solved loop into a context keyed by element id (store levels and
+  device-level `@` facts included) and fires the device's rules over it.
+- ✅ **Two worked examples, solved end to end** (`device_book.gd`, a fixed
+  authored table like `capture_book.gd`): the **mill race light** — river
+  paddle → 2 m wheel → 1:10 gears → dynamo → 10 m of 3 mm copper → 2 cm of
+  0.1 mm graphite, every parameter derived — runs its loaded wheel at
+  1.408 m/s in a 1.5 m/s river, its dynamo at 134.5 rpm and 28.2 V, and
+  puts **62.1 W** into the filament (a real bulb's worth; the wire takes
+  0.12 W), firing `shine`; the **post mill** — 10 m² of sail in an 8 m/s
+  wind → 4 m sails → 1:5 gears → millstone — puts **891 W** into a stone
+  turning at **63.7 rpm**, inside the band real millstones ran at, firing
+  `grind`. Both conserve energy to the watt. **The headline pin**: the same
+  light *without* its gear train puts **0.70 W** into the filament and does
+  not shine, because a water wheel turns far too slowly to generate from
+  directly — the reason real mills geared up by ten or more, reported by
+  the solver rather than written as a rule.
+- 🚧 **Known simplifications, each stated in the concept doc**: the paddle
+  source is a Thévenin secant of a quadratic drag law (stall and free-running
+  exact, the line between them straight); Faraday's `k` is a sinusoid's
+  peak in a DC model; a wheel's ratio is half its span (right for a disc,
+  generous for a paddle); stores are linear capacitors; a joint carries no
+  law of its own (a bearing's friction is an explicit `resist` if wanted);
+  a source's internal loss is reported (`source_internal_loss`) but not
+  routed anywhere.
+- ⬜ **Parallel junctions** (`fork`, Millman closed form specified) and the
+  general `port`/`bond` topology — the compiler refuses a second loop
+  rather than mis-solving it.
+- ⬜ **Inertial storage** (`inertia`, the bond-graph `I`): flywheels, a
+  trip-hammer's falling head.
+- ⬜ **The thermal loop** — and with it the bellows furnace, the device
+  that would turn `STATION_TEMPERATURE_C`'s three fixed numbers into "how
+  hard are you pumping".
+- ⬜ **Derived failure ratings** (`@rating`: dissipated watts → conductor
+  temperature → `thermal_failure_c`; torque → `weakest_link`). Rules fire
+  today against authored thresholds.
+- ⬜ **World binding** — a placed device's `source` reading the real river
+  (`RiverDischarge` / `OpenChannelFlow.velocity`) or wind
+  (`WeatherModel.wind_strength_for`) at its tile; bonds between separately
+  placed devices discovered by adjacency. **Nothing in live gameplay calls
+  any of this kernel** — the same honest position `ItemCompiler` is in.
+- ⬜ **Effect atoms** (`shine`, `grind`, `burn_out`, …): reported by the
+  executor, dispatched by nothing.
+- ⬜ **Magnetic permeability** as a material scalar; a generator's field is
+  an authored `magnet_tesla` until it exists.
+- ⬜ **Player-facing authoring**, skill gating of laws, and `magic.md`'s
+  gold-for-complexity compile gate applied to device text.
 
 ## Reality check
 
-This design corpus — 91 concept docs (recounted 2026-09-05; this section
-long stated the now-stale 49) plus a roadmap and, since 2026-08-23, a
+This design corpus — 94 concept docs (recounted 2026-09-05 at the merge of
+the standard-model pass; this section long stated the now-stale 49) plus a roadmap and, since 2026-08-23, a
 10-doc `docs/emergence/*.md` substrate spec, several hundred catalogued
 mechanisms in total (the exact figure is stale, see this doc's intro) —
 describes a multi-year, full-team-scale MMORPG: procedurally simulated
@@ -11435,3 +12246,49 @@ shipped view uses today. A real follow-up, not a same-shape addition.
 Chronicle, live breeding planner, the remote instruction queue) — unbuilt,
 as originally spec'd; the instruction queue specifically has no floor
 until npc.md's instruction DSL exists.
+
+### Starting Kit (`concept/starting_kit.md`)
+
+✅ **Pick-3 starting gear, replacing the old fixed kit.** The character
+creator's new Starting Kit tab (`MainMenu`, between Character and Skills)
+lets the player pick exactly 3 items from a curated 10-item early-game pool
+(`src/gameplay/starter_kit.gd`: `wooden_club`, `crude_blade`,
+`stone_pickaxe`, `fishing_rod`, `lasso`, `rough_compass`, `iron_sword`,
+`iron_axe`, `butterfly_net`, `glass_bottle`) — replacing what used to be a
+hardcoded, identical-for-everyone grant in `Player._ready()` (Iron Sword
+equipped, Iron Axe, Leather Helm, Leather Chest, Fishing Rod, and — briefly,
+directly on `main`, before this branch merged — a Butterfly Net and Glass
+Bottle too). Always defaults to a real, coherent kit (crude_blade +
+stone_pickaxe + fishing_rod) so a player who never opens the tab still
+starts armed, not blocked or bare-handed — no Begin-button disabling exists
+anywhere in this file, matching its own existing "`_selected_class` defaults
+to warrior" convention. `Player.grant_starter_items()` mirrors the dev
+console's `/give` pattern exactly (`has()` → `make()` → `inventory.add()`),
+auto-equipping the first weapon-kind pick, or the first tool-kind pick if
+none was a weapon, bare-handed only if neither. Iron Sword and Iron Axe —
+included in the pool at the user's explicit request — previously had **no
+recipe anywhere**; both now craft from `2x iron_ingot + 1x stick`, matching
+the existing iron-armor recipes' own cost scale and every hafted tool's
+"needs a stick" shape. Fixed two pre-existing tests that depended on the old
+automatic grant (a fishing-rod precondition in `test_player.gd`, and a
+hotbar-past-capacity test that assumed 5 starting stacks) as part of the
+same change, not a follow-up. Torch and Snare/Trap were considered for the
+pool and cut — see docs/concept/starting_kit.md for why (Torch has no
+working interactive loop at all today; Snare/Trap would skew the pool
+toward one system next to Lasso's own broad coverage of the same
+restrain-and-struggle capture shape).
+
+**Update (same day): Butterfly Net reinstated, Glass Bottle added.**
+Reported: "give the player a glass bottle and butterfly net from the
+start" (first done for the OLD hardcoded grant directly on `main`, then
+asked for here too, which is the version that actually shipped once this
+branch merged). `docs/concept/starting_kit.md`'s own reasoning for why
+Butterfly Net was cut is corrected in place, not just noted here: it's a
+different capture *shape* from Snare/Trap (an instant probability roll,
+not a struggle — see `concept/capture_dsl.md`, built the same day on
+`main`), so the original "redundant weight next to Lasso" argument was
+never actually true for it the way it is for Snare/Trap, which stay cut.
+`glass_bottle` didn't exist when this pool was first written (it's part
+of the same capture-DSL pass) and is registered here as a small, isolated
+port — just the `ItemCatalog` entry + icon, not the whole DSL — since this
+branch forked before that work landed on `main`.

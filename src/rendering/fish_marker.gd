@@ -13,6 +13,7 @@ const CreatureWander = preload("res://src/rendering/creature_wander.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const FishSchooling = preload("res://src/gameplay/fish_schooling.gd")
+const FishForaging = preload("res://src/gameplay/fish_foraging.gd")
 
 ## How much open water the fish keeps around its center on every side --
 ## roughly the sprite's half-extent, so no part of the fish visually overlaps
@@ -374,6 +375,47 @@ var _play_chase_target: Node = null
 var _play_interval_index := -1
 
 
+## -- aquatic foraging (see FishForaging, docs/concept/aquatic_foraging.md) --
+## The bottom tier of the precedence chain: a real nearby vegetation patch
+## (EarthChunkManager.aquatic_vegetation_near, queried through `_world`'s own
+## duck-typed contract -- see setup/_current_at's identical has_method
+## guards) sought and steered toward wherever the chain used to fall
+## straight through to plain wander. Every state above this one (bolt,
+## attraction, play, schooling) is untouched -- this is only ever consulted
+## once none of them apply.
+
+## A world position this fish is currently swimming toward to graze, or null
+## -- "no target, forage normally wanders" the same "null means inactive"
+## convention attract_target itself already uses. Kept (not re-picked every
+## frame) until reached, so a fish commits to one patch instead of flickering
+## between two similarly-near candidates as it moves.
+var _forage_target: Variant = null
+var _forage_scan_accumulator := 0.0
+
+
+## Re-queries for a nearby patch on FishForaging.SCAN_INTERVAL's own cadence
+## (only while this fish has no current target -- the same "one search, then
+## commit" reasoning _forage_target's own doc comment gives), and checks
+## arrival every call regardless (cheap: one distance compare against
+## whatever target already exists, unlike the query itself). A `_world` with
+## no aquatic_vegetation_near at all (an isolated test's bare StubWorld, or
+## the character preview diorama) simply never forages -- the same graceful
+## has_method absence _is_fresh_water_tile already tolerates.
+func _step_foraging(delta: float) -> void:
+	if _world == null or not _world.has_method("aquatic_vegetation_near"):
+		return
+	_forage_scan_accumulator += delta
+	if _forage_scan_accumulator >= FishForaging.SCAN_INTERVAL:
+		_forage_scan_accumulator = 0.0
+		if _forage_target == null:
+			var candidates: Array = _world.aquatic_vegetation_near(position, FishForaging.DETECTION_RADIUS_TILES)
+			_forage_target = FishForaging.nearest_target(position, candidates)
+	if _forage_target != null and position.distance_to(_forage_target) <= FishForaging.GRAZE_ARRIVE_DISTANCE_PX:
+		if _world.has_method("graze_aquatic_vegetation_at"):
+			_world.graze_aquatic_vegetation_at(_forage_target)
+		_forage_target = null
+
+
 ## Re-scans for a schoolmate on FishSchooling.SCAN_INTERVAL's own cadence.
 ## Cheap between scans (just an accumulator add); the group walk itself only
 ## runs on the throttled cadence.
@@ -517,15 +559,20 @@ func _process(frame_delta: float) -> void:
 		_step_unconfined_wander(delta)
 		return
 	_step_schooling(delta)
+	_step_foraging(delta)
 
 	# Turn the swim heading gradually toward the target rather than snapping
 	# straight to it (see TURN_RATE) -- one of, in priority order: fleeing a
 	# threat, an active attraction (a cast line nearby) once far enough from
-	# it to matter, ordinary fish-to-fish schooling (see FishSchooling), or
+	# it to matter, ordinary fish-to-fish schooling (see FishSchooling),
+	# foraging a real nearby vegetation patch (see FishForaging,
+	# docs/concept/aquatic_foraging.md) once nothing above it applies, or
 	# ordinary wandering. See docs/concept/ecosystem_dynamics.md's "The
 	# precedence order" for why: fear always wins, a player's deliberate lure
 	# predates schooling and stays above it, and schooling only ever displaces
-	# plain wander, never either of the two above it.
+	# plain wander, never either of the two above it -- foraging slots in at
+	# exactly that same displaces-wander-only level, per aquatic_foraging.md's
+	# own third design pillar.
 	var target: Vector2
 	if _bolt_remaining > 0.0:
 		# Fleeing a threat -- a kingfisher's strike or a wading player/animal
@@ -545,6 +592,13 @@ func _process(frame_delta: float) -> void:
 		target = FishSchooling.steering_for_neighbor(
 			position, _school_neighbor.position, _school_neighbor.current_heading()
 		)
+	elif _forage_target != null:
+		# Already known to be farther than GRAZE_ARRIVE_DISTANCE_PX away --
+		# _step_foraging above clears any target close enough to graze
+		# before this selection ever runs, so this offset is never near-zero
+		# (the same safety argument the attraction branch above makes for
+		# its own un-guarded normalize).
+		target = (_forage_target - position).normalized()
 	else:
 		target = _wander.direction_at(home, position, _elapsed_time, wander_seed)
 

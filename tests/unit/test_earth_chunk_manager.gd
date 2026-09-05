@@ -3,6 +3,8 @@ extends GutTest
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
+const AntPopulationModel = preload("res://src/world/ant_population_model.gd")
+const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
 const TreePlacement = preload("res://src/world/tree_placement.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
@@ -314,6 +316,28 @@ func test_set_rain_updates_the_water_materials_rain_intensity_uniform():
 	manager.set_rain(false)
 	assert_eq((water_layer.material as ShaderMaterial).get_shader_parameter("rain_intensity"), 0.0)
 	water_layer.free()
+
+
+## Reported: "rain don't produce ripples in the new river water". Rain used
+## to reach ONLY the old ocean-only water_layer above -- and in real
+## gameplay (scenes/world.gd registers both layers together, see
+## _paint_water_overlay's own doc comment) that layer never actually paints
+## a single cell once a river flow layer exists, so rain-driven ripples
+## were invisible everywhere, not just on rivers. Mirrors
+## test_a_recorded_disturbance_reaches_the_river_surface_too's own pattern:
+## register the river layer alone, no manager.update needed since neither
+## set_rain nor set_river_flow_layer touch chunk data.
+func test_set_rain_updates_the_river_surfaces_rain_intensity_too():
+	var river_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(river_layer)
+
+	manager.set_rain(true)
+	var material := river_layer.material as ShaderMaterial
+	assert_eq(material.get_shader_parameter("rain_intensity"), 1.0)
+
+	manager.set_rain(false)
+	assert_eq(material.get_shader_parameter("rain_intensity"), 0.0)
+	river_layer.free()
 
 
 ## Water is no longer wind-driven (see WaterShader's class doc) -- kept as a
@@ -1977,9 +2001,20 @@ const _TURNING_INTO_WINTER_YEAR_FRACTION := 0.72
 ## Well inside summer's own settled span -- the trickle window, see
 ## LEAF_SUMMER_TRICKLE_CHANCE.
 const _SETTLED_SUMMER_YEAR_FRACTION := 0.3
-## Well inside spring, before blossom even opens -- no leaf falls at all
-## here (see step_fruiting's own leaf_fall_chance/leaf_fall_season block):
-## neither the autumn turn nor the summer trickle condition is true.
+## Well inside autumn's own SETTLED (pre-turn) span -- [0.5, 0.665), well
+## clear of the turning slice _TURNING_INTO_WINTER_YEAR_FRACTION samples --
+## the baseline-trickle window, see LEAF_AUTUMN_BASELINE_CHANCE.
+const _SETTLED_AUTUMN_YEAR_FRACTION := 0.55
+## Well inside spring's own canopy BLOSSOM stage -- confirmed directly
+## (TreePhenology.canopy_state_at(0.05) reads {from:"spring", to:"summer",
+## progress:0.833}): NOT "before blossom even opens" as an earlier draft
+## of this comment claimed -- the canopy is already most of the way
+## through its own blossom-to-leaf-out transition by this point, but the
+## SEASON label a tree wears is still "spring" until that transition
+## actually completes (canopy_season flips to "summer" by year_fraction
+## 0.1, confirmed the same way) -- which is the real reason this point
+## sits in the spring-blossom trickle window, see LEAF_SPRING_TRICKLE_
+## CHANCE, not because blossom is freshly opening here.
 const _SETTLED_SPRING_YEAR_FRACTION := 0.05
 ## Generous bound for the deterministic per-step roll (see
 ## EarthChunkManager's own doc comment on it) to land a hit -- not a retry
@@ -2131,10 +2166,110 @@ func test_step_fruiting_also_drops_a_light_summer_trickle():
 	assert_eq(found.season, "summer")
 
 
-## Spring, before blossom even opens, is neither the autumn turn nor the
-## summer trickle -- step_fruiting's own leaf_fall_chance stays exactly
-## zero here, not merely small.
-func test_step_fruiting_drops_no_leaf_in_early_spring():
+## Reported directly: "leaf litter should happen constantly at a low rate
+## in normal gameplay ... in autumn all leaves should fall eventually".
+## Before this, leaf_fall_chance was driven ONLY by canopy_turn_progress,
+## which reads exactly 0.0 for autumn's own settled first two-thirds (see
+## _SETTLED_AUTUMN_YEAR_FRACTION's own doc comment) -- a real autumn tree,
+## well before its final visible turn, shed nothing at all for roughly two
+## real DAYS of normal, non-accelerated play (TURN_FRACTION=0.34 of a
+## 172,800-real-second season). A real deciduous tree does not wait for its
+## colour to fully turn before its first leaves come down -- ordinary wind
+## and early individual-leaf senescence pull a few down all autumn long,
+## the same real phenomenon LEAF_SUMMER_TRICKLE_CHANCE already models for
+## summer's own wind/petal damage. LEAF_AUTUMN_BASELINE_CHANCE gives autumn
+## that same baseline for its whole span, with the existing turn-progress
+## ramp rising on top of it (not replacing it) once the canopy's own final
+## turn actually begins.
+func test_step_fruiting_sheds_a_baseline_trickle_in_settled_autumn_before_the_turn():
+	var tree := ChoppableTree.new()
+	tree.position = _position_for_species("cherry")
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+	_set_world_age_at_year_fraction(_SETTLED_AUTUMN_YEAR_FRACTION)
+
+	var found := _find_a_fallen_leaf(
+		"cherry", tree.position, tree.position, _LEAF_TRICKLE_ROLL_ATTEMPTS
+	)
+
+	assert_false(
+		found.is_empty(),
+		"a settled (pre-turn) autumn tree should still shed an occasional baseline leaf"
+	)
+	assert_eq(found.season, "autumn")
+
+
+## -- leaf_fall_chance_for: pure, directly testable -----------------------
+#
+# Reported directly: "leaf litter should happen constantly at a low rate in
+# normal gameplay ... in autumn all leaves should fall eventually" --
+# constant (never zero), continuous (no jump), and increasing (strictly
+# rises) across the WHOLE of autumn, not flat for its first two-thirds and
+# then a late ramp (see leaf_fall_chance_for's own doc comment for why
+# season_progress, not canopy_turn_progress, drives this).
+
+func test_leaf_fall_chance_for_autumn_starts_at_the_baseline():
+	assert_almost_eq(
+		EarthChunkManager.leaf_fall_chance_for("autumn", 0.0),
+		EarthChunkManager.LEAF_AUTUMN_BASELINE_CHANCE, 0.0001
+	)
+
+
+func test_leaf_fall_chance_for_autumn_reaches_certainty_at_the_seasons_end():
+	assert_almost_eq(EarthChunkManager.leaf_fall_chance_for("autumn", 1.0), 1.0, 0.0001)
+
+
+func test_leaf_fall_chance_for_autumn_increases_monotonically_across_the_season():
+	var previous := -1.0
+	for i in 11:
+		var current := EarthChunkManager.leaf_fall_chance_for("autumn", float(i) / 10.0)
+		assert_gt(current, previous, "autumn's own leaf-fall chance must rise monotonically")
+		previous = current
+
+
+## Real wind/petal damage does not build across a season the way autumn's
+## colour change does -- summer's own trickle stays flat regardless of how
+## far into summer this is.
+func test_leaf_fall_chance_for_summer_is_flat_across_the_season():
+	assert_almost_eq(
+		EarthChunkManager.leaf_fall_chance_for("summer", 0.0),
+		EarthChunkManager.leaf_fall_chance_for("summer", 0.9), 0.0001
+	)
+	assert_almost_eq(
+		EarthChunkManager.leaf_fall_chance_for("summer", 0.0),
+		EarthChunkManager.LEAF_SUMMER_TRICKLE_CHANCE, 0.0001
+	)
+
+
+## Same reasoning as summer's own flat trickle -- see LEAF_SPRING_TRICKLE_
+## CHANCE's own doc comment for why blossom shares it rather than getting
+## an autumn-style rising ramp of its own.
+func test_leaf_fall_chance_for_spring_is_flat_across_the_season():
+	assert_almost_eq(
+		EarthChunkManager.leaf_fall_chance_for("spring", 0.0),
+		EarthChunkManager.leaf_fall_chance_for("spring", 0.9), 0.0001
+	)
+	assert_almost_eq(
+		EarthChunkManager.leaf_fall_chance_for("spring", 0.0),
+		EarthChunkManager.LEAF_SPRING_TRICKLE_CHANCE, 0.0001
+	)
+
+
+## A bare winter canopy has nothing left to shed, whatever season_progress
+## reads.
+func test_leaf_fall_chance_for_winter_is_always_zero():
+	assert_eq(EarthChunkManager.leaf_fall_chance_for("winter", 0.0), 0.0)
+	assert_eq(EarthChunkManager.leaf_fall_chance_for("winter", 0.9), 0.0)
+
+
+## Reported directly: "there should always be an occasional falling leaf
+## or blossom" -- a falling LEAF makes no botanical sense while a tree's
+## canopy is still bare-to-blossoming and has no leaves yet, so a settled
+## spring tree sheds an occasional BLOSSOM instead (see LEAF_SPRING_
+## TRICKLE_CHANCE), the exact equivalent of the summer/autumn leaf
+## trickle. Before this, spring shed nothing at all.
+func test_step_fruiting_also_drops_an_occasional_spring_blossom():
 	var tree := ChoppableTree.new()
 	tree.position = _position_for_species("cherry")
 	tree.bind_canopy(Sprite2D.new())
@@ -2142,14 +2277,12 @@ func test_step_fruiting_drops_no_leaf_in_early_spring():
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	_set_world_age_at_year_fraction(_SETTLED_SPRING_YEAR_FRACTION)
 
-	var field := _leaf_litter_field_for(tree.position)
-	for attempt in _LEAF_ROLL_ATTEMPTS:
-		manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, tree.position)
-	var saw_leaf := false
-	for leaf in field.leaves():
-		if leaf.species == "cherry":
-			saw_leaf = true
-	assert_false(saw_leaf, "nothing has started shedding yet in early spring")
+	var found := _find_a_fallen_leaf(
+		"cherry", tree.position, tree.position, _LEAF_TRICKLE_ROLL_ATTEMPTS
+	)
+
+	assert_false(found.is_empty(), "a settled spring tree should still shed an occasional blossom")
+	assert_eq(found.season, "spring")
 
 
 ## Oak's own fallen leaf records species "acorn" (TreeSpecies' own id for the
@@ -3788,6 +3921,7 @@ func test_find_nearest_village_is_deterministic():
 
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
+const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
 
 
 ## Brings every worm in every loaded chunk to the surface, so the queries
@@ -3900,6 +4034,158 @@ func test_taking_a_worm_removes_it_from_the_world():
 func test_taking_a_worm_where_there_is_none_fails_rather_than_erroring():
 	manager.update(_berlin_tile)
 	assert_false(manager.take_worm_at(Vector2(-9000000, -9000000)))
+
+
+# -- crushed underfoot: weight-emergent worm mortality (see docs/concept/
+# soil_fauna.md's own section by that name). _load_chunk, not the slow
+# real update() (see this file's own CONTRIBUTING.md note) -- these
+# helpers only ever iterate whatever manager._worm_patches already holds,
+# regardless of how many chunks that came from. ---------------------------
+
+func _a_surfaced_worm_in(chunk_coord: Vector2i) -> Vector2i:
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	for cell in patch.worm_cells():
+		if patch.is_surfaced(cell):
+			return cell
+	return Vector2i(-1, -1)
+
+
+func test_crushing_a_worm_with_enough_momentum_removes_it_from_the_world():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	_surface_all_worms()
+	var cell := _a_surfaced_worm_in(chunk_coord)
+	if cell == Vector2i(-1, -1):
+		pending("no surfaced worm landed in this chunk this seed")
+		return
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(
+		manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"a horse-scale step on a worm should crush it"
+	)
+	assert_false(patch.is_surfaced(cell), "and the worm is gone")
+
+
+func test_crushing_with_too_little_momentum_leaves_the_worm_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	_surface_all_worms()
+	var cell := _a_surfaced_worm_in(chunk_coord)
+	if cell == Vector2i(-1, -1):
+		pending("no surfaced worm landed in this chunk this seed")
+		return
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_false(
+		manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 0.01),
+		"a mouse-scale step should not crush a worm"
+	)
+	assert_true(patch.is_surfaced(cell), "the worm should still be there")
+
+
+func test_crushing_a_worm_where_there_is_none_fails_rather_than_erroring():
+	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
+	assert_false(manager.crush_worm_at(Vector2(-9000000, -9000000), 1000000.0))
+
+
+# -- aquatic vegetation: a real food source for fish (see docs/concept/
+# aquatic_foraging.md). _load_chunk, not the slow real update() (see this
+# file's own CONTRIBUTING.md note) -- Berlin sits on the Spree's own
+# curated course (see test_a_seed_spread_sapling_cannot_root_in_a_real_
+# river_cell's own precedent), so the single chunk containing it usually
+# already has a real water cell without needing the full radius update().
+
+func _a_real_water_cell_in(chunk_coord: Vector2i) -> Vector2i:
+	for y in EarthChunkManager.CHUNK_SIZE:
+		for x in EarthChunkManager.CHUNK_SIZE:
+			var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
+			var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
+			if manager.is_river_at_global(global_x, global_y) or manager.is_lake_at_global(global_x, global_y):
+				return Vector2i(x, y)
+	return Vector2i(-1, -1)
+
+
+func test_loading_a_chunk_with_real_water_creates_a_vegetation_sim():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	if _a_real_water_cell_in(chunk_coord) == Vector2i(-1, -1):
+		pending("no real water cell in this exact chunk this seed")
+		return
+	assert_true(manager._aquatic_vegetation.has(chunk_coord), "a chunk with real water should get a vegetation sim")
+
+
+func test_loading_a_landlocked_chunk_creates_no_vegetation_sim():
+	# Far from any curated river/lake -- an arbitrary distant chunk.
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile) + Vector2i(500, 500)
+	manager._load_chunk(chunk_coord)
+	if _a_real_water_cell_in(chunk_coord) != Vector2i(-1, -1):
+		pending("this arbitrary chunk turned out to have real water -- not the landlocked case this test wants")
+		return
+	assert_false(manager._aquatic_vegetation.has(chunk_coord), "a chunk with no water should not pay for an empty sim")
+
+
+func test_vegetation_seeds_only_on_real_water_cells():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var veg: AquaticVegetation = manager._aquatic_vegetation.get(chunk_coord)
+	if veg == null:
+		pending("no water in this exact chunk this seed")
+		return
+	for cell: Vector2i in veg.get_patch_cells():
+		var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + cell.x
+		var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + cell.y
+		assert_true(
+			manager.is_river_at_global(global_x, global_y) or manager.is_lake_at_global(global_x, global_y),
+			"a vegetation patch must sit on real water"
+		)
+
+
+func test_aquatic_vegetation_near_finds_a_real_patch():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var veg: AquaticVegetation = manager._aquatic_vegetation.get(chunk_coord)
+	if veg == null or veg.get_patch_cells().is_empty():
+		pending("no real vegetation patch landed in this chunk this seed")
+		return
+	var cell: Vector2i = veg.get_patch_cells()[0]
+	var pixel := _pixel_for(chunk_coord, cell)
+	var found := manager.aquatic_vegetation_near(pixel, 2)
+	assert_gt(found.size(), 0, "a real patch underfoot should be findable")
+	var positions := []
+	for patch in found:
+		positions.append(patch["position"])
+	assert_true(positions.has(pixel))
+
+
+func test_grazing_a_real_patch_removes_it_from_the_world():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var veg: AquaticVegetation = manager._aquatic_vegetation.get(chunk_coord)
+	if veg == null or veg.get_patch_cells().is_empty():
+		pending("no real vegetation patch landed in this chunk this seed")
+		return
+	var cell: Vector2i = veg.get_patch_cells()[0]
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(manager.graze_aquatic_vegetation_at(pixel), "a fish grazing a real patch should succeed")
+	assert_false(veg.has_vegetation(cell), "and the patch is gone")
+	assert_false(manager.graze_aquatic_vegetation_at(pixel), "it cannot be grazed twice")
+
+
+func test_grazing_where_there_is_no_vegetation_fails_rather_than_erroring():
+	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
+	assert_false(manager.graze_aquatic_vegetation_at(Vector2(-9000000, -9000000)))
+
+
+func test_unloading_a_chunk_frees_its_vegetation_sim_and_sprites():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	if not manager._aquatic_vegetation.has(chunk_coord):
+		pending("no water in this exact chunk this seed")
+		return
+	manager._unload_chunk(chunk_coord)
+	assert_false(manager._aquatic_vegetation.has(chunk_coord))
+	assert_false(manager._aquatic_vegetation_sprites.has(chunk_coord))
 
 
 # -- fruit_near / take_fruit_at / try_plant_seed_at (bird endozoochory) -------
@@ -5946,6 +6232,24 @@ func test_update_spawns_a_visible_marker_for_every_real_ant_mound_around_berlin(
 	assert_eq(manager._ant_mound_markers[center_chunk].size(), colony.mound_cells().size())
 
 
+## Mound size grows with the colony (see docs/concept/soil_fauna.md's own
+## section by that name) -- but only if each spawned marker actually got
+## its own real colony wired up via setup(); a marker with no colony set
+## reads its display name without a population figure, so that is the
+## real, end-to-end proof this is wired all the way through, not just
+## that a marker of some kind exists. _load_chunk, not the slow real
+## update() (see this file's own CONTRIBUTING.md note).
+func test_a_real_spawned_mound_marker_is_wired_to_its_own_colony():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var markers: Array = manager._ant_mound_markers.get(chunk_coord, [])
+	if markers.is_empty():
+		pending("no real ant mound landed in this chunk this seed -- placement is probabilistic")
+		return
+	var marker: AntMoundMarker = markers[0]
+	assert_string_contains(marker.get_display_name(), "population")
+
+
 ## A standalone colony guaranteed at least one mound -- for tests of the
 ## dispatch/cap logic below, which never touches grass/fruit/chunk data at
 ## all, so there is no need to pay for a real (and, per this file's own
@@ -6197,6 +6501,38 @@ func test_a_finished_forager_frees_its_slot_for_a_new_one():
 	var before := manager._entities_parent.get_child_count()
 	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(-10, 0), "seed")
 	assert_eq(manager._entities_parent.get_child_count(), before + 1, "a freed slot should accept a new forager")
+
+
+## Water, not just food (see docs/concept/soil_fauna.md's own section by
+## that name): step_ants must actually push the real weather-derived soil
+## moisture into every loaded mound, the identical WORM_REFRESH_INTERVAL-
+## scale cadence step_worms already samples weather on for
+## EarthwormPatch -- mirrors
+## test_stepping_worms_drives_them_from_the_live_weather_and_season's own
+## shape exactly. _load_chunk, not the slow real update() (see this
+## file's own CONTRIBUTING.md note).
+func test_stepping_ants_drives_capacity_from_the_live_weather():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var colony: AntColony = manager._ant_colonies.get(chunk_coord)
+	if colony == null or colony.mound_cells().is_empty():
+		pending("no real ant mound landed in this chunk this seed -- placement is probabilistic")
+		return
+	var cell: Vector2i = colony.mound_cells()[0]
+
+	# Several refresh-interval-sized steps, not one -- record_moisture is an
+	# EMA (see AntColony.MOISTURE_EMA_RATE), so a single sample only moves
+	# capacity_at PART of the way toward the real weather value, same as
+	# any other EMA-fed signal in this file's own test conventions.
+	for i in 20:
+		manager.step_ants(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+
+	var centre := _pixel_for(chunk_coord, Vector2i(EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2))
+	var expected_moisture := manager._weather_model.soil_moisture(manager.current_weather(centre))
+	var expected_capacity := AntPopulationModel.BASE_CAPACITY * (
+		1.0 + AntPopulationModel.WATER_CAPACITY_BONUS * expected_moisture
+	)
+	assert_almost_eq(colony.capacity_at(cell), expected_capacity, 0.5)
 
 
 # -- Sägewerk: "an NPC moves in" the moment the worksite exists (see
@@ -6901,6 +7237,32 @@ func test_an_unknown_season_is_refused():
 	var before := manager.world_age_seconds()
 	assert_false(manager.jump_to_season("harvest"))
 	assert_eq(manager.world_age_seconds(), before)
+
+
+## /season <name> <progress> -- reported: "make /season command so it
+## accepts a float between 0 and 1 for how far it has progressed into the
+## season" (see SeasonCycle.seconds_until_season's own tests for the pure
+## model this delegates to).
+func test_jumping_to_a_season_with_progress_lands_partway_through_it():
+	manager.jump_to_season("autumn", 0.5)
+	assert_eq(manager.current_season(), "autumn")
+	var cycle := SeasonCycle.new()
+	# Autumn is the third quarter (year_fraction 0.5-0.75); its own midpoint
+	# is 0.625.
+	assert_almost_eq(cycle.year_fraction(manager.world_age_seconds()), 0.625, 0.0001)
+
+
+func test_jumping_with_progress_still_refuses_an_unknown_season():
+	var before := manager.world_age_seconds()
+	assert_false(manager.jump_to_season("harvest", 0.5))
+	assert_eq(manager.world_age_seconds(), before)
+
+
+func test_jumping_with_progress_never_moves_the_clock_backwards():
+	for name in SeasonCycle.SEASONS:
+		var before := manager.world_age_seconds()
+		manager.jump_to_season(name, 0.5)
+		assert_gte(manager.world_age_seconds(), before)
 
 
 # -- a new world starts at a random point in the year -------------------------

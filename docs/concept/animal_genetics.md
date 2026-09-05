@@ -9,9 +9,12 @@ system in prose and says outright that an animal birth today "produces an
 offspring with **no genome at all**". That is still true. This doc is the data
 model that section calls for and never wrote.
 
-**Nothing in this doc is implemented.** Every mechanism below is ⬜ in the
-status list at the bottom, including the ones specified here down to the
-function signature. Three of the modules it composes (`dna_crossover.gd`,
+**Almost nothing in this doc is implemented.** Every mechanism below is ⬜ in
+the status list at the bottom, including the ones specified here down to the
+function signature, with one exception recorded there: since
+[ethogram.md](ethogram.md) slice 2 the `AnimalGenome` container, `for_seed`
+and `genome_or_derived()` exist and are live, holding only the ethogram's
+receptor genes; none of this doc's seven genes is in it yet. Three of the modules it composes (`dna_crossover.gd`,
 `animal_fitness.gd`, `crop_breeding.gd`) are real, complete and unit-tested —
 and have **zero production callers**, verified by grep across `src/` and
 `scenes/` (the only hit outside their own files and tests is a doc comment in
@@ -1266,10 +1269,19 @@ Following [taming.md](taming.md)'s own section of the same name, and
   and the 24-real-hour `REPRO_COOLDOWN` against a never-persisted, never-scaled
   `_seconds_since_birth` means the gate essentially never opens. Matches
   [ecosystem_dynamics.md](ecosystem_dynamics.md)'s own 🚧 on the same entry.
-- ⬜ `AnimalGenome` itself — no such file exists. (`hero_dna.gd`,
-  `tree_genome.gd` and `npc_genome.gd` do; there is no animal equivalent.)
-- ⬜ Genome derived from `wander_seed` (`for_seed`), the stored-override field
-  on `CreatureMarker`, and `genome_or_derived()`.
+- 🚧 `AnimalGenome` exists (`src/gameplay/animal_genome.gd`, since
+  [ethogram.md](ethogram.md) slice 2, 2026-09-05) in exactly the shape this
+  doc specifies — a static-func namespace over a `String -> float`
+  Dictionary, ordered `GENE_NAMES`, `GENE_READERS`, and both anti-dead-weight
+  tests from §1 — but holding only the five `receptor_<channel>` genes the
+  ethogram reads. None of this doc's seven genes is in it yet: each joins
+  when its reader is built, per §1's own rule.
+- ✅ Genome derived from `wander_seed` (`for_seed`, bell-shaped around the
+  species template like `FlyerPersonality`'s boldness), the stored-override
+  field `genome` on `CreatureMarker`, and `genome_or_derived()` — live for
+  every land mammal, feeding its decisions and its nose. The clamp-to-[0,1]
+  contract holds for derived genomes by construction; `from_parents` below
+  still owns it for crossed ones.
 - ⬜ `AnimalGenome.from_parents` — the one pipeline that crosses, correlates,
   penalises and **clamps to [0,1]**, which `DnaCrossover._nudge` does not do.
 - ⬜ `CreatureInfo.level` from `strength` instead of `absi(seed) % LEVEL_RANGE`.
@@ -1375,6 +1387,19 @@ technique.*
   restocks itself. Breeding makes individual animals valuable for the first
   time, which makes the absence of a mortality term more visible, not less.
   Named here as out of scope rather than left unmentioned.
+- **Resolved: receptor genes (and now boldness) did join `GENE_NAMES`.**
+  [ethogram.md](ethogram.md) §4 and §9 express `receptor_<channel>` genes
+  and `boldness` through the unmodified `DnaCrossover`, and
+  `src/gameplay/animal_genome.gd` now exists and carries exactly those six
+  — every wild land mammal has one, live, since `CreatureMarker.
+  genome_or_derived()` reaches every decision and every sniff. What remains
+  open is only this doc's own half: none of the seven genes it specifies
+  above is in `AnimalGenome` yet (no `from_parents`, no two-parent
+  inheritance, no V2 record), so the byte-cost question this bullet used to
+  raise is real but not yet urgent — six genes, all with readers, none
+  visible on a panel a player reads. That doc (`ethogram.md`) owns the
+  expression law for its own genes; this one still owns whether and when
+  its seven join the same container.
 
 ## Editor's note
 

@@ -249,6 +249,49 @@ instead of gesturing at someone else's — a tiny game about this game's
 own wildlife, nested one level deeper, playable on a prop you find
 inside the world it's depicting.
 
+**A wandering stranger who'll play you for something — a real, complete
+chess game, not a prop (this collection's third "real minigame," after
+Joust and the retro handheld).** The oldest version of this trope there
+is — a mysterious figure who tests travelers over a game of pure skill —
+evoked rather than reproduced: nothing here names or quotes any specific
+work, but the image is unmistakably in conversation with the most famous
+one, a hooded figure playing chess against Death itself in a 1957 Swedish
+film. Public-domain enough as a *premise* (a stranger, a board, a wager)
+that no homage-safety concern applies the way it does for a named
+character or design — the same register as the cryptid cameos above, not
+the Squallmaw-style disguised-homage register.
+- **A small, hand-placed roster, not palette-swapped difficulty
+  sliders.** Three fixed, findable NPCs, each a genuinely distinct
+  personality and a genuinely distinct opponent:
+  - **Old Torvald**, a retired woodcarver at a quiet village hearth —
+    happy to teach the rules to anyone who asks, plays an honest,
+    unhurried game, easiest opponent of the three.
+  - **Sister Mirelle**, a scholar keeping a small mountain waystation
+    library — methodical, quietly merciless, a real mid-tier test.
+  - **The Ashen Wanderer**, a silent hooded traveler encountered only
+    at a remote, fog-bound crossroads (the one entry of the three worth
+    a real-world coordinate in the Nordic register the whole idea nods
+    to) — says nothing at all, gestures to the board, and plays the
+    hardest, cleanest game in the roster. Win or lose, they rise and
+    leave without a word once the match ends.
+- **A real chess implementation, not a simplified variant.** Full legal
+  rules — castling, en passant, promotion, check/checkmate/stalemate,
+  the fifty-move and threefold-repetition draws — behind a clean, legible
+  board UI worth the "chess.com-quality" comparison that phrase is
+  reaching for, without this game ever using that name or reproducing
+  any specific site's or app's actual look (the trademark sits on the
+  brand, not on chess itself, which is centuries past public domain).
+  A deterministic, skill-scaled AI per NPC — never a dice roll, the same
+  "derived, not rolled" discipline `JoustMatch.ai_should_flap`/
+  `HandheldBattle`'s own AI already established for this doc's real-
+  minigame family, so the three opponents are genuinely different
+  *players*, not one engine wearing three difficulty labels.
+- **Genuinely bigger than most of this doc, and worth saying so plainly**
+  — a real, complete rules engine is a bigger lift than Joust's abstracted
+  arcade physics or Handheld Battle's four original moves, closer to a
+  real system than a prop. Worth scoping as honestly as those two were
+  before this gets built — see Open questions.
+
 **"Three Fragments" — a hunt about the hunt (RP1's actual biggest
 structural idea, done originally).** RP1's whole plot is a three-key,
 three-gate hunt. The honest way to honor that structure without copying
@@ -489,3 +532,25 @@ the open world's own `/spawn wolf`) now render correctly.
   cluster the way Ready Player One got one here — Stranger Things, The
   Matrix, and Wreck-It Ralph are the obvious next candidates if this
   category proves fun to build out.
+- **Chess's real scope, before any of it gets built:** full FIDE rules
+  (as written above) vs. a deliberately trimmed variant (e.g. no
+  threefold-repetition tracking) if a full rules engine turns out to be
+  too big a first slice — Joust and Handheld Battle both started from an
+  honestly-scoped-down core, not the whole idea at once, and chess should
+  probably get the same treatment rather than trying to land all three
+  NPCs and every rule at once.
+- **AI strength, concretely:** what actually makes Old Torvald "easy" and
+  the Ashen Wanderer "hardest" — a real search depth (minimax/alpha-beta)
+  per NPC, or simpler heuristics tuned by hand? Needs a real, tested,
+  pinned answer per CLAUDE.md's own "no eyeballed constants" rule once
+  this is more than an idea; deterministic either way.
+- **Is winning worth anything?** Matching pillar 2's spirit as closely as
+  a real minigame can: leaning toward a small, harmless flavor reward for
+  beating the Ashen Wanderer specifically (a title, a line of dialogue, a
+  cosmetic-only keepsake) rather than anything with real mechanical
+  weight — the same "delight, not a wiki page" line Joust and Handheld
+  Battle both held.
+- Does a match need to be save/resumable mid-game, or is each game a
+  single uninterrupted sitting like a Joust best-of-three? Leaning toward
+  the latter for a first pass — simpler, and chess games this game's own
+  NPCs would offer are not tournament-length.

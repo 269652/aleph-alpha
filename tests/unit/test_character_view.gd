@@ -116,13 +116,14 @@ func test_arm_stroke_stays_zero_while_swimming_but_not_moving():
 	assert_eq(view.arm_stroke_offset, 0.0)
 
 
-## Treading water is still submerged -- legs stay hidden even though the
-## stroke has stopped. Only the ANIMATION should differ, not the pose.
-func test_treading_water_keeps_legs_hidden():
+## Treading water is still submerged -- legs stay visible (tinted, not
+## hidden -- see test_legs_stay_visible_while_swimming) even though the
+## stroke has stopped. Only the ANIMATION should differ, not visibility.
+func test_treading_water_keeps_legs_visible():
 	view.set_movement_state(view.MovementState.SWIMMING)
 	view.is_moving = false
 	view._process(0.1)
-	assert_false(view.legs_visible())
+	assert_true(view.legs_visible())
 
 
 func test_arm_stroke_resets_once_swimming_stops():
@@ -134,10 +135,15 @@ func test_arm_stroke_resets_once_swimming_stops():
 	assert_eq(view.arm_stroke_offset, 0.0)
 
 
-func test_legs_are_hidden_while_swimming():
+## Reported: "don't hide legs, just tint" -- an abrupt on/off switch the
+## instant movement_state flipped to SWIMMING read as legs teleporting
+## away rather than sinking underwater. Legs now share the SAME
+## SubmersionShader material the torso already uses (see set_submersion_
+## depth's own doc comment) instead of a visibility toggle.
+func test_legs_stay_visible_while_swimming():
 	view.set_movement_state(view.MovementState.SWIMMING)
 	view._process(0.1)
-	assert_false(view.legs_visible())
+	assert_true(view.legs_visible())
 
 
 func test_legs_are_visible_while_walking_or_idle():
@@ -197,10 +203,10 @@ func test_fused_legs_hide_the_right_leg_node_regardless_of_movement():
 		assert_false(leg_right.visible, str(state))
 
 
-func test_fused_legs_still_hide_entirely_for_swimming():
+func test_fused_legs_still_visible_while_swimming():
 	view.set_movement_state(view.MovementState.SWIMMING)
 	view._process(0.1)
-	assert_false(view.legs_visible())
+	assert_true(view.legs_visible())
 
 
 ## A real hip+knee ROTATION gait (LegGaitCycle.hip_angle/knee_angle) was
@@ -658,16 +664,23 @@ func test_the_torso_carries_the_shared_submersion_material():
 
 
 func test_swimming_sets_the_waterline_at_the_torsos_own_centre():
+	var body: Sprite2D = view.get_node("Body")
+	# Captured BEFORE _process ever runs: body.position.y itself now also
+	# carries the visual sink (see _apply_submersion_depth) once swimming,
+	# so it's no longer the fixed reference the waterline is anchored to --
+	# the STABLE base position (this value, pre-sink) is.
+	var base_body_y := body.position.y
+
 	view.set_movement_state(view.MovementState.SWIMMING)
 	view._process(0.1)
-	var body: Sprite2D = view.get_node("Body")
+
 	var material := body.material as ShaderMaterial
-	# _body.position.y IS the torso's own vertical centre (Sprite2D draws
-	# centred on its own position, and Body carries no extra offset) -- so
-	# "half the torso submerged" falls out of that existing constant.
+	# The torso's own vertical centre (Sprite2D draws centred on its own
+	# position, and Body carries no extra offset) -- so "half the torso
+	# submerged" falls out of that existing constant.
 	assert_almost_eq(
 		float(material.get_shader_parameter("water_world_y")),
-		view.position.y + body.position.y,
+		view.position.y + base_body_y,
 		0.01
 	)
 
@@ -682,6 +695,161 @@ func test_not_swimming_clears_the_waterline():
 	var body: Sprite2D = view.get_node("Body")
 	var material := body.material as ShaderMaterial
 	assert_gt(float(material.get_shader_parameter("water_world_y")), 100000.0)
+
+
+# -- set_submersion_depth: a gradual, continuous tint + sink from real ----
+# -- water depth, not a boolean swim/no-swim switch -----------------------
+#
+# Reported: "the players submerged tint should be improved and gradual
+# based on water depth so when walking in from the river shore the player
+# ... gradually moves downwards and the part underwater gets tinted".
+# Player._resolve_water_state already computed real, continuous depth in
+# meters (maxf of ocean/river/lake) -- it was just discarded once collapsed
+# into the coarse walking/wading/swimming/drowning mode string, so wading
+# in from the shore had NO visual signature at all until the exact swim
+# threshold. set_submersion_depth is the new channel that carries the real
+# value through.
+
+const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
+
+
+func test_zero_depth_produces_no_tint():
+	view.set_submersion_depth(0.0)
+	view._process(0.1)
+	var body: Sprite2D = view.get_node("Body")
+	var material := body.material as ShaderMaterial
+	assert_gt(float(material.get_shader_parameter("water_world_y")), 100000.0)
+
+
+## Halfway to the wade->swim threshold should sit the waterline exactly
+## halfway between the feet (local y = 0, where CharacterView's own origin
+## sits) and the torso's own centre -- a straight, continuous lerp, not a
+## step function.
+func test_a_partial_depth_produces_a_waterline_between_the_feet_and_the_torso_centre():
+	var body: Sprite2D = view.get_node("Body")
+	var base_body_y := body.position.y
+
+	view.set_submersion_depth(WaterMovementModel.WADE_DEPTH_METERS * 0.5)
+	view._process(0.1)
+
+	var material := body.material as ShaderMaterial
+	assert_almost_eq(
+		float(material.get_shader_parameter("water_world_y")),
+		view.position.y + base_body_y * 0.5,
+		0.01
+	)
+
+
+## At exactly the wade->swim threshold, the gradual waterline must agree
+## with the pre-existing "half the torso submerged while swimming" value --
+## the two paths describe the same real depth and must not disagree.
+func test_depth_at_the_wade_threshold_matches_the_swimming_waterline():
+	var body: Sprite2D = view.get_node("Body")
+	var base_body_y := body.position.y
+
+	view.set_submersion_depth(WaterMovementModel.WADE_DEPTH_METERS)
+	view._process(0.1)
+
+	var material := body.material as ShaderMaterial
+	assert_almost_eq(
+		float(material.get_shader_parameter("water_world_y")),
+		view.position.y + base_body_y,
+		0.01
+	)
+
+
+## A swimmer floats at roughly the same submerged fraction regardless of
+## how much water is beneath them -- depth past the wade threshold must
+## clamp, not keep pushing the waterline up past the torso's own centre.
+func test_depth_beyond_the_wade_threshold_clamps_at_the_torso_centre():
+	var body: Sprite2D = view.get_node("Body")
+	var base_body_y := body.position.y
+
+	view.set_submersion_depth(WaterMovementModel.WADE_DEPTH_METERS * 3.0)
+	view._process(0.1)
+
+	var material := body.material as ShaderMaterial
+	assert_almost_eq(
+		float(material.get_shader_parameter("water_world_y")),
+		view.position.y + base_body_y,
+		0.01
+	)
+
+
+func test_legs_stay_visible_at_a_partial_wade_depth():
+	view.set_submersion_depth(WaterMovementModel.WADE_DEPTH_METERS * 0.3)
+	view._process(0.1)
+	assert_true(view.legs_visible())
+
+
+# -- the same depth also sinks the whole rig a little, on top of the tint --
+
+func test_zero_depth_applies_no_sink():
+	var body: Sprite2D = view.get_node("Body")
+	var base_body_y := body.position.y
+
+	view.set_submersion_depth(0.0)
+	view._process(0.1)
+
+	assert_almost_eq(body.position.y, base_body_y, 0.01)
+
+
+## Pins MAX_SUBMERSION_SINK_PX as a real, tested constant rather than an
+## eyeballed comment (see its own doc comment in character_view.gd).
+func test_full_wade_depth_sinks_the_body_by_the_full_constant():
+	var body: Sprite2D = view.get_node("Body")
+	var base_body_y := body.position.y
+
+	view.set_submersion_depth(WaterMovementModel.WADE_DEPTH_METERS)
+	view._process(0.1)
+
+	assert_almost_eq(body.position.y, base_body_y + view.MAX_SUBMERSION_SINK_PX, 0.01)
+
+
+func test_sink_is_continuous_between_zero_and_full_depth():
+	var body: Sprite2D = view.get_node("Body")
+	var base_body_y := body.position.y
+
+	view.set_submersion_depth(WaterMovementModel.WADE_DEPTH_METERS * 0.5)
+	view._process(0.1)
+
+	var sink := body.position.y - base_body_y
+	assert_gt(sink, 0.0)
+	assert_lt(sink, view.MAX_SUBMERSION_SINK_PX)
+
+
+## The head and legs must sink together with the body -- a rig that sinks
+## unevenly would visibly tear apart at the neck/waist while wading.
+func test_head_and_legs_sink_together_with_the_body():
+	var body: Sprite2D = view.get_node("Body")
+	var head: Sprite2D = view.get_node("Head")
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	var base_body_y := body.position.y
+	var base_head_y := head.position.y
+	var base_leg_y := leg_left.position.y
+
+	view.set_submersion_depth(WaterMovementModel.WADE_DEPTH_METERS)
+	view._process(0.1)
+
+	var sink := body.position.y - base_body_y
+	assert_gt(sink, 0.0, "precondition: full wade depth should actually sink the rig")
+	assert_almost_eq(head.position.y, base_head_y + sink, 0.01)
+	assert_almost_eq(leg_left.position.y, base_leg_y + sink, 0.01)
+
+
+## A caller that never calls set_submersion_depth at all (the character-
+## creator diorama, village NPCs -- see character_preview_diorama.gd/
+## npc_marker.gd, neither of which has real river/ocean/lake depth to
+## hand) must keep exactly its old look: full torso-centre tint, and now
+## also the full sink, whenever movement_state alone says SWIMMING.
+func test_swimming_via_movement_state_alone_still_sinks_the_full_amount():
+	var body: Sprite2D = view.get_node("Body")
+	var base_body_y := body.position.y
+
+	view.set_movement_state(view.MovementState.SWIMMING)
+	view._process(0.1)
+
+	assert_almost_eq(body.position.y, base_body_y + view.MAX_SUBMERSION_SINK_PX, 0.01)
 
 
 # -- sized relative to a tree (reported: "shrink the character and npcs so --
@@ -716,6 +884,29 @@ func test_scaled_character_height_matches_its_target_fraction_of_a_trees_height(
 	var scaled_height := character_height * CharacterView.SCALE
 	var expected := CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE * ProceduralTreeSprite.WORLD_SIZE.y
 	assert_almost_eq(scaled_height, expected, 0.01)
+
+
+## Pins the actual tuned literal -- no test previously pinned this value
+## directly (every other test here checks the FORMULA's internal
+## consistency, which passes for any value). Asked directly: "make the
+## character 30% smaller and zoom in 30% so trees become relatively bigger"
+## (Player.CAMERA_ZOOM handles the zoom half, see test_player_camera.gd).
+## 0.595, not 0.85 * 0.7 re-eyeballed: 0.85 reduced by 30% is exactly 0.595,
+## pinned by the ratio test below rather than just re-asserting the literal.
+func test_target_height_fraction_matches_the_current_tuning():
+	assert_almost_eq(CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE, 0.595, 0.0001)
+
+
+## Same reasoning as Snowfall's own covering-speed test and CAMERA_ZOOM's own
+## ratio test above: pin the RATIO against the previous tuning, not just the
+## new literal, so the intent ("30% smaller") survives independently of the
+## exact numbers on either side.
+func test_character_shrunk_thirty_percent_over_the_previous_tuning():
+	var previous_target_height_fraction := 0.85
+	assert_almost_eq(
+		CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE / previous_target_height_fraction, 0.7, 0.0001,
+		"character should now be 30% smaller (70% of its previous height fraction)"
+	)
 
 
 ## The scale must actually be applied to the instantiated view, not just

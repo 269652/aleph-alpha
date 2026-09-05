@@ -207,6 +207,13 @@ func test_a_species_with_foliage_art_reports_it():
 	assert_true(trees.has_foliage_leaf_for("cherry", "autumn"))
 
 
+## Reported directly: "there should always be an occasional falling leaf or
+## blossom" -- spring is now a real, resolved season too (see foliage_leaf_
+## for's own doc comment), not merely summer/autumn.
+func test_a_species_with_blossom_art_reports_it():
+	assert_true(trees.has_foliage_leaf_for("cherry", "spring"))
+
+
 func test_an_unregistered_species_has_no_foliage_leaf():
 	assert_false(trees.has_foliage_leaf_for("not_a_real_species", "summer"))
 	assert_null(trees.foliage_leaf_for("not_a_real_species", "summer"))
@@ -223,7 +230,7 @@ func test_an_unsupported_season_has_no_foliage_leaf():
 
 func test_every_foliage_leaf_has_real_content():
 	for species in ["cherry", "apple", "walnut", "acorn", "hazelnut", "pine"]:
-		for season in ["summer", "autumn"]:
+		for season in ["summer", "autumn", "spring"]:
 			var frame := trees.foliage_leaf_for(species, season)
 			if frame != null:
 				assert_gt(
@@ -264,6 +271,47 @@ func test_every_species_has_both_summer_and_autumn_foliage_art():
 	for species in ["cherry", "apple", "walnut", "acorn", "hazelnut", "pine"]:
 		assert_true(trees.has_foliage_leaf_for(species, "summer"), "%s: no summer leaf" % species)
 		assert_true(trees.has_foliage_leaf_for(species, "autumn"), "%s: no autumn leaf" % species)
+
+
+## ## Spring: a blossom/catkin closeup, not hue-gated
+##
+## Unlike leaf colour (green in summer, orange in autumn -- genuinely
+## universal across species), real blossom colour is NOT one hue across
+## species: a real cherry or apple bears showy pink/white petals, while a
+## real oak/hazelnut/walnut bears small, inconspicuous, wind-pollinated
+## yellow-green catkins -- both are real "blossom" in the botanical sense,
+## but no single hue band could accept both. So spring is resolved WITHOUT
+## a hue band (see _FOLIAGE_SEASON_TO_HUE_BAND's own entry for it) -- the
+## same fill/on-tree-exclusion/smallest-region-wins selection, gated only
+## on the region having SOME real, non-neutral colour content at all (the
+## same -1 "no such content" sentinel _mean_hue_saturation already returns
+## for a near-white/near-black region, which every hue-gated season already
+## relies on too).
+func test_every_species_has_spring_blossom_foliage_art():
+	for species in ["cherry", "apple", "walnut", "acorn", "hazelnut", "pine"]:
+		assert_true(trees.has_foliage_leaf_for(species, "spring"), "%s: no spring blossom" % species)
+
+
+## Each season's closeup must be its OWN distinct region, not the hue-band
+## relaxation for spring accidentally re-selecting the exact same crop
+## summer or autumn already resolved to.
+func test_the_spring_foliage_leaf_differs_from_summer_and_autumn():
+	for species in ["cherry", "apple", "walnut", "acorn", "hazelnut", "pine"]:
+		var spring := trees.foliage_leaf_for(species, "spring")
+		var summer := trees.foliage_leaf_for(species, "summer")
+		var autumn := trees.foliage_leaf_for(species, "autumn")
+		if spring == null:
+			continue
+		if summer != null:
+			assert_ne(
+				spring.get_image().get_data(), summer.get_image().get_data(),
+				"%s's spring blossom should not be the exact same crop as its summer leaf" % species
+			)
+		if autumn != null:
+			assert_ne(
+				spring.get_image().get_data(), autumn.get_image().get_data(),
+				"%s's spring blossom should not be the exact same crop as its autumn leaf" % species
+			)
 
 
 ## The real closeup is genuinely smaller than the leaf+fruit cluster
@@ -1500,6 +1548,212 @@ func test_snow_composes_on_top_of_a_season_turn_not_instead_of_it():
 ## them can stand in for "art without snow" either. The guarantee is real
 ## and holds by construction; there is simply no species left in the
 ## current roster to prove it against pixel-for-pixel.
+
+
+# -- snow SETTLES on the canopy: added on top, from above, never erasing ------
+#
+# Reported: the canopy should accumulate snow twig by twig, in every season
+# snow can fall (autumn, winter, spring) and on every canopy it can land on
+# (bare, blossom, turning). The blend used to REPLACE canopy pixels with the
+# snow frame's own -- transparent ones included -- walking up from the crown's
+# foot, which read as a bottom-up wipe that thinned the crown towards nothing
+# before the snow frame filled it back in, rather than as snow settling onto
+# the tree that is there. See docs/concept/flora.md, "A fifth frame: snow is
+# not a season".
+
+## The three canopies snow can land on: bare (winter), blossom (spring) and
+## turning (autumn). Summer never gets cold enough (Snowfall.FREEZING_WARMTH).
+const SNOWABLE_CANOPIES := ["winter", "spring", "autumn"]
+
+
+## Snow is ADDED to whatever the season drew; it never removes any of it: every
+## pixel the plain canopy painted is still painted, at least as opaquely, at
+## every coverage band -- on all three canopies.
+func test_snow_never_erases_the_canopy_it_settles_on():
+	var sprite := ProceduralTreeSprite.new()
+	for canopy in SNOWABLE_CANOPIES:
+		var plain := sprite.generate_image_with_fruit(_cherry_bias(), 7, 0, canopy)
+		for step in range(1, ProceduralTreeSprite.SNOW_LEVELS + 1):
+			var coverage := float(step) / float(ProceduralTreeSprite.SNOW_LEVELS)
+			var snowed := sprite.generate_image_with_fruit(
+				_cherry_bias(), 7, 0, canopy, "", 0.0, 1.0, coverage
+			)
+			assert_eq(
+				_erased_pixels(plain, snowed), 0,
+				"%s canopy at coverage %.1f should keep every pixel it had" % [canopy, coverage]
+			)
+
+
+## Snow settles from ABOVE: at a light coverage the pixels that have taken the
+## snow frame's colour sit in the upper half of the crown, not at its foot.
+## The turn's own outward-from-the-trunk order, applied to snow, whitened the
+## lower boughs first.
+func test_light_snow_settles_on_the_top_of_the_crown_first():
+	var sprite := ProceduralTreeSprite.new()
+	for canopy in SNOWABLE_CANOPIES:
+		var plain := sprite.generate_image_with_fruit(_cherry_bias(), 7, 0, canopy)
+		var snowed := sprite.generate_image_with_fruit(
+			_cherry_bias(), 7, 0, canopy, "", 0.0, 1.0, 0.3
+		)
+		var box: Rect2i = sprite.illustrated_canopy_box("cherry", 7, canopy)
+		var rows := _snowed_rows(sprite, "cherry", box, plain, snowed)
+		assert_gt(rows.size(), 0, "%s: light snow should show somewhere" % canopy)
+		var centre := float(box.position.y) + float(box.size.y) * 0.5
+		assert_lt(
+			_mean(rows), centre,
+			"%s: light snow should sit in the upper half of the crown" % canopy
+		)
+
+
+## At full coverage the WHOLE snow frame is on the tree, whatever lies beneath
+## it: every opaque pixel of the frame is drawn exactly, on bare, blossom and
+## turning crowns alike.
+func test_full_snow_shows_the_whole_snow_frame_on_every_canopy():
+	var sprite := ProceduralTreeSprite.new()
+	for canopy in SNOWABLE_CANOPIES:
+		var snowed := sprite.generate_image_with_fruit(
+			_cherry_bias(), 7, 0, canopy, "", 0.0, 1.0, 1.0
+		)
+		var box: Rect2i = sprite.illustrated_canopy_box("cherry", 7, canopy)
+		var frame: Image = sprite._scaled_piece(
+			"cherry", ProceduralTreeSprite.SNOW_CANOPY_KEY, "canopy", box.size
+		)
+		var opaque := 0
+		var missing := 0
+		for y in frame.get_height():
+			for x in frame.get_width():
+				var pixel := frame.get_pixel(x, y)
+				if pixel.a < 0.95:
+					continue
+				var at := box.position + Vector2i(x, y)
+				if not Rect2i(Vector2i.ZERO, snowed.get_size()).has_point(at):
+					continue
+				opaque += 1
+				if not _same_colour(snowed.get_pixel(at.x, at.y), pixel):
+					missing += 1
+		assert_gt(opaque, 0, "%s: the snow frame should have opaque pixels" % canopy)
+		assert_eq(missing, 0, "%s: full snow should show the whole snow frame" % canopy)
+
+
+## Snow only ever ACCUMULATES as coverage rises: a twig that has taken snow at
+## one band still has it at the next. The same monotone rank the turn already
+## has, pinned here for snow because "twig by twig" means it must never
+## flicker back and forth between bands.
+func test_snow_accumulates_monotonically_band_by_band():
+	var sprite := ProceduralTreeSprite.new()
+	for canopy in SNOWABLE_CANOPIES:
+		var plain := sprite.generate_image_with_fruit(_cherry_bias(), 7, 0, canopy)
+		var box: Rect2i = sprite.illustrated_canopy_box("cherry", 7, canopy)
+		var previous := {}
+		for step in range(1, ProceduralTreeSprite.SNOW_LEVELS + 1):
+			var coverage := float(step) / float(ProceduralTreeSprite.SNOW_LEVELS)
+			var snowed := sprite.generate_image_with_fruit(
+				_cherry_bias(), 7, 0, canopy, "", 0.0, 1.0, coverage
+			)
+			var current := _snowed_pixels(sprite, "cherry", box, plain, snowed)
+			for at in previous:
+				assert_true(
+					current.has(at),
+					"%s: snow at %s should still be there at coverage %.1f" % [canopy, at, coverage]
+				)
+			previous = current
+
+
+## Snow settles on the branches a tree HAS. A seedling has put out only the
+## innermost part of its crown (see _grown_canopy), while the snow frame is a
+## full-grown crown's worth of snow-laden twigs -- settled whole, it dressed a
+## seedling as a grown tree the moment snow lay. The frame is pruned back by
+## the same growth rule as the canopy first, so a seedling under full snow is
+## still mostly seedling.
+##
+## Measured on the real cherry sheet at seed 7, growth 0.1, coverage 1.0: a
+## bare/blossom/turning seedling paints 319/179/169 pixels; snow settled on
+## the PRUNED frame adds 37/13/17 (4-12% of its own crown), on the unpruned
+## frame 760/926/902 (2.4-5.3x its own crown). Bounded at doubling: snow may
+## thicken a seedling, never turn it into a grown tree.
+const SEEDLING_SNOW_MAX_GROWTH_FACTOR := 2.0
+
+
+func test_snow_on_a_seedling_stays_a_seedling():
+	var sprite := ProceduralTreeSprite.new()
+	for canopy in SNOWABLE_CANOPIES:
+		var plain := sprite.generate_image_with_fruit(
+			_cherry_bias(), 7, 0, canopy, "", 0.0, 0.1, 0.0
+		)
+		var snowed := sprite.generate_image_with_fruit(
+			_cherry_bias(), 7, 0, canopy, "", 0.0, 0.1, 1.0
+		)
+		var own := _painted_pixels(plain)
+		assert_gt(own, 0, "%s: a seedling should paint something" % canopy)
+		assert_lt(
+			_painted_pixels(snowed), int(float(own) * SEEDLING_SNOW_MAX_GROWTH_FACTOR),
+			"%s: a seedling under snow (%d px) should stay a seedling (%d px bare)"
+			% [canopy, _painted_pixels(snowed), own]
+		)
+
+
+func _painted_pixels(image: Image) -> int:
+	var count := 0
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.05:
+				count += 1
+	return count
+
+
+## Pixels that were painted in `before` and are LESS opaque in `after`.
+func _erased_pixels(before: Image, after: Image) -> int:
+	var erased := 0
+	for y in before.get_height():
+		for x in before.get_width():
+			if after.get_pixel(x, y).a < before.get_pixel(x, y).a - 2.0 / 255.0:
+				erased += 1
+	return erased
+
+
+## The canvas pixels that have taken the snow frame's own opaque colour --
+## changed from the plain tree, and now equal to the frame drawn at that spot.
+func _snowed_pixels(sprite, species: String, box: Rect2i, plain: Image, snowed: Image) -> Dictionary:
+	var frame: Image = sprite._scaled_piece(
+		species, ProceduralTreeSprite.SNOW_CANOPY_KEY, "canopy", box.size
+	)
+	var found := {}
+	for y in frame.get_height():
+		for x in frame.get_width():
+			var pixel := frame.get_pixel(x, y)
+			if pixel.a < 0.95:
+				continue
+			var at := box.position + Vector2i(x, y)
+			if not Rect2i(Vector2i.ZERO, snowed.get_size()).has_point(at):
+				continue
+			var now := snowed.get_pixel(at.x, at.y)
+			if _same_colour(now, pixel) and not _same_colour(now, plain.get_pixel(at.x, at.y)):
+				found[at] = true
+	return found
+
+
+func _snowed_rows(sprite, species: String, box: Rect2i, plain: Image, snowed: Image) -> Array:
+	var rows := []
+	for at in _snowed_pixels(sprite, species, box, plain, snowed):
+		rows.append(float(at.y))
+	return rows
+
+
+func _mean(values: Array) -> float:
+	if values.is_empty():
+		return 0.0
+	var total := 0.0
+	for value in values:
+		total += value
+	return total / float(values.size())
+
+
+func _same_colour(a: Color, b: Color) -> bool:
+	var tolerance := 1.5 / 255.0
+	return (
+		absf(a.r - b.r) <= tolerance and absf(a.g - b.g) <= tolerance
+		and absf(a.b - b.b) <= tolerance and absf(a.a - b.a) <= tolerance
+	)
 
 
 # -- a young tree has fewer branches, not a smaller picture ------------------

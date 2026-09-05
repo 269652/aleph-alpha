@@ -3,63 +3,72 @@ extends RefCounted
 ## An NPC's hunger need (docs/concept/npc.md "Needs and the local production
 ## economy": "NPCs get real hunger, not just villagers-as-scenery. Same
 ## shape as creature_needs.gd (hunger rises per second, is_hungry(),
-## feed())") -- a genuinely new wiring for NpcMarker, which carries no needs
-## state today, but the identical pattern already proven for wild/tamed
-## animals, not a new design.
+## feed())").
 ##
-## Deliberately hunger-only: the spec's own scope is hunger, not thirst, so
-## this mirrors CreatureNeeds' SHAPE (hash-seeded stagger via seed_value,
-## per-second rise, is_hungry()/feed()) as a standalone module rather than
-## reusing/extending CreatureNeeds itself -- bolting an unused thirst field
-## onto an NPC would misrepresent what this pass actually simulates.
+## This used to be a standalone copy of CreatureNeeds' shape. Since
+## docs/concept/ethogram.md slice 3 it is a FACADE over the one drive clock
+## every animal shares (Drives) with the villager profile from the ethogram
+## (Ethogram.drive_profile("", "villager")): the same pace as any other
+## creature in this world -- a villager runs on the same lived-experience
+## clock rather than a separately-tuned NPC one -- and hunger only, because
+## the spec's own scope is hunger and thirst has no villager-side consumer;
+## simulating an unused thirst would misrepresent what this pass does. The
+## API is unchanged for NpcEconomy/NpcMarker and every test; the numbers
+## below are re-exported from the profile for callers that read them.
 
-## Per-simulated-second rise rate -- same magnitude as
-## CreatureNeeds.HUNGER_RATE_PER_SECOND (0.02), so a villager runs on the
-## same lived-experience pace as any other creature in this world rather
-## than a separately-tuned NPC clock. Verified behaviorally
-## (test_becomes_hungry_once_past_the_threshold), not by asserting the
-## number -- same convention as CreatureNeeds' own doc comment.
-const HUNGER_RATE_PER_SECOND := 0.02
+const Drives = preload("res://src/gameplay/drives.gd")
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+
+const BODY_PLAN := "villager"
+
+## Per-simulated-second rise rate -- verified behaviorally
+## (test_becomes_hungry_once_past_the_threshold), not by asserting the number.
+static var HUNGER_RATE_PER_SECOND: float = (
+	1.0 / float(Ethogram.drive_profile("", BODY_PLAN)[Ethogram.DRIVE_HUNGER]["rise_seconds"])
+)
 
 ## An NPC actively seeks food (buys from the village market, or self-feeds
-## if a producer -- see NpcEconomy) once hunger passes this fraction. Same
-## value as CreatureNeeds.HUNGRY_THRESHOLD.
-const HUNGRY_THRESHOLD := 0.5
+## if a producer -- see NpcEconomy) once hunger passes this fraction.
+static var HUNGRY_THRESHOLD: float = float(
+	Ethogram.drive_profile("", BODY_PLAN)[Ethogram.DRIVE_HUNGER]["threshold"]
+)
 
-var hunger := 0.0
-
-## How far into its own hunger cycle a freshly-created NPC starts, at most.
-## Same value and reasoning as CreatureNeeds.START_STAGGER: deliberately
+## How far into its own hunger cycle a freshly-created NPC starts, at most:
 ## below HUNGRY_THRESHOLD (no NPC spawns already starving), high enough that
 ## a village's onsets spread across the run-up instead of every villager
 ## queuing at the market on the same tick.
-const START_STAGGER := 0.45
+static var START_STAGGER: float = float(
+	Ethogram.drive_profile("", BODY_PLAN)[Ethogram.DRIVE_HUNGER]["stagger"]
+)
+
+var _drives: Drives
+
+var hunger: float:
+	get:
+		return _drives.level(Ethogram.DRIVE_HUNGER)
+	set(value):
+		_drives.levels[Ethogram.DRIVE_HUNGER] = clampf(value, 0.0, 1.0)
 
 
 ## `seed_value` staggers where this individual starts in its own hunger
-## cycle -- see START_STAGGER's doc comment. Defaults to 0 (exactly empty
-## start) so a caller that doesn't care keeps the simplest behavior.
+## cycle -- see START_STAGGER. Defaults to 0 (exactly empty start) so a
+## caller that doesn't care keeps the simplest behavior.
 func _init(seed_value: int = 0) -> void:
-	if seed_value == 0:
-		return
-	hunger = _stagger(seed_value)
-
-
-## Hash-derived rather than RandomNumberGenerator, matching the deterministic
-## "the same individual always rolls the same" idiom used throughout the
-## world sim (CreatureNeeds, TallGrass, FlowerPatch, TreeGenome).
-func _stagger(seed_value: int) -> float:
-	var roll := float(absi(hash("%d_hunger_need" % seed_value)) % 10000) / 10000.0
-	return roll * START_STAGGER
+	_drives = Drives.new(Ethogram.drive_profile("", BODY_PLAN), seed_value)
 
 
 func advance(delta_seconds: float) -> void:
-	hunger = clampf(hunger + HUNGER_RATE_PER_SECOND * delta_seconds, 0.0, 1.0)
+	_drives.advance(delta_seconds)
 
 
 func is_hungry() -> bool:
-	return hunger >= HUNGRY_THRESHOLD
+	return _drives.is_urgent(Ethogram.DRIVE_HUNGER)
 
 
 func feed() -> void:
-	hunger = 0.0
+	_drives.satisfy(Ethogram.DRIVE_HUNGER)
+
+
+## The need as the behaviour kernel's gate (Drives.gains).
+func gains() -> Dictionary:
+	return _drives.gains()

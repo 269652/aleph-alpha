@@ -70,6 +70,8 @@ const TundraLichen = preload("res://src/world/tundra_lichen.gd")
 const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sprite.gd")
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
+const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
+const ProceduralAquaticVegetationSprite = preload("res://src/rendering/procedural_aquatic_vegetation_sprite.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
 const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
@@ -643,9 +645,25 @@ var _lichen_refresh_accumulator := 0.0
 var _worm_patches: Dictionary = {}
 var _worm_sprites: Dictionary = {}
 var _worm_sprite_generator := ProceduralWormSprite.new()
+## Vector2i chunk_coord -> AquaticVegetation, and the Sprite2D per real
+## vegetation cell (see step_aquatic_vegetation/_sync_aquatic_vegetation_
+## sprites, docs/concept/aquatic_foraging.md). Only chunks that actually
+## contain water get an entry -- the same "don't allocate a sim for a
+## chunk with nothing for it to do" discipline EarthwormPatch's own
+## soil-biome gate already uses.
+var _aquatic_vegetation: Dictionary = {}
+var _aquatic_vegetation_sprites: Dictionary = {}
+var _aquatic_vegetation_sprite_generator := ProceduralAquaticVegetationSprite.new()
+var _aquatic_vegetation_refresh_accumulator := 0.0
 ## Vector2i chunk_coord -> AntColony (see step_ants, docs/concept/soil_fauna.md
 ## "Ants").
 var _ant_colonies: Dictionary = {}
+## How often each loaded colony's own mounds resample live soil moisture
+## (see step_ants) -- reuses WORM_REFRESH_INTERVAL's own cadence exactly:
+## weather turns over on a day scale for ants same as it does for worms,
+## so there is no reason for a second, independently-tuned interval for
+## the identical kind of lookup.
+var _ant_moisture_refresh_accumulator := 0.0
 ## Vector2i chunk_coord -> LeafLitterField (see step_leaf_litter,
 ## docs/concept/leaf_litter.md). Same create-at-load/erase-at-unload
 ## lifecycle as _ant_colonies just above.
@@ -1102,6 +1120,68 @@ const _LEAF_FALL_ROLL_STEPS := 1000
 ## per tree on average -- present and occasionally noticeable, nowhere
 ## near autumn's own real fall.
 const LEAF_SUMMER_TRICKLE_CHANCE := 0.03
+
+## The chance floor a settled AUTUMN tree sheds a leaf at the very START of
+## the season -- reported directly: "leaf litter should happen constantly
+## at a low rate in normal gameplay ... in autumn all leaves should fall
+## eventually". A real deciduous tree does not wait for its colour to
+## fully turn before its first leaves come down: ordinary wind and early
+## individual-leaf senescence pull a few down all autumn long, the same
+## real phenomenon LEAF_SUMMER_TRICKLE_CHANCE already models for summer's
+## own wind/petal damage -- reused here at the same value (autumn's early
+## trickle and summer's are the same real mechanism, not two
+## independently-tuned numbers) but named separately so either can be
+## retuned later without coupling the two together. See
+## leaf_fall_chance_for's own doc comment for how this rises across the
+## rest of the season rather than staying flat at this floor.
+const LEAF_AUTUMN_BASELINE_CHANCE := LEAF_SUMMER_TRICKLE_CHANCE
+
+## The flat per-step chance a settled SPRING tree -- specifically while its
+## canopy still visibly carries blossom (canopy_season == "spring"; see
+## TreePhenology, whose own canopy schedule finishes leafing out well
+## before the calendar season does, at which point the EXISTING summer
+## trickle above already takes over) -- sheds a petal. Reported directly:
+## "there should always be an occasional falling leaf or blossom": a
+## falling LEAF makes no botanical sense while a tree is still bare-to-
+## blossoming and has no leaves yet, so this is blossom's own equivalent
+## of the summer/autumn leaf trickle, not a second unrelated mechanism --
+## reused at the same value for the same "one real background-shedding
+## rate, not several independently-tuned ones" reason LEAF_AUTUMN_
+## BASELINE_CHANCE already gives for reusing it.
+const LEAF_SPRING_TRICKLE_CHANCE := LEAF_SUMMER_TRICKLE_CHANCE
+
+## The per-step chance a tree wearing `canopy_season`'s own canopy sheds a
+## leaf (summer/autumn) or blossom (spring) this step, given how far [0,1)
+## into that CALENDAR season this moment sits (SeasonCycle.
+## progress_through_season -- NOT canopy_turn_progress, which reads 0.0 for
+## a season's entire settled span; see that function's own doc comment for
+## why). Pure: no per-tree state, so directly testable without a real tree
+## or roll (see test_earth_chunk_manager.gd).
+##
+## Autumn rises smoothly from LEAF_AUTUMN_BASELINE_CHANCE at the season's
+## first instant up to CERTAINTY (1.0) at its last -- reported directly:
+## "leaf litter should happen constantly at a low rate in normal gameplay
+## ... in autumn all leaves should fall eventually", i.e. constant (never
+## zero), continuous (no jump at the old turn-progress boundary), and
+## increasing (strictly rises) across the WHOLE season, not flat for its
+## first two-thirds and then a late ramp. Linear: the simplest curve that
+## is all three of those things, and nothing in the report asks for a
+## particular shape beyond them.
+##
+## Summer and spring stay flat at their own named trickle rate (real wind/
+## petal damage is not something that builds across a season the way
+## autumn colour change does). Any other season (winter: bare, nothing
+## left to shed) returns 0.0.
+static func leaf_fall_chance_for(canopy_season: String, season_progress: float) -> float:
+	match canopy_season:
+		"autumn":
+			return lerpf(LEAF_AUTUMN_BASELINE_CHANCE, 1.0, clampf(season_progress, 0.0, 1.0))
+		"summer":
+			return LEAF_SUMMER_TRICKLE_CHANCE
+		"spring":
+			return LEAF_SPRING_TRICKLE_CHANCE
+		_:
+			return 0.0
 
 var _fruiting_model := FruitingModel.new()
 var _ecology_catchup := ChunkEcologyCatchup.new()
@@ -3245,6 +3325,12 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 	var canopy_season: String = canopy["season"]
 	var canopy_turning_into: String = canopy["turning_into"]
 	var canopy_turn_progress: float = canopy["turn_progress"]
+	# How far into the CALENDAR season (not the canopy's own turn) this
+	# moment sits -- read once, same "one answer, not per tree" discipline
+	# as the three canopy locals just above (see leaf_fall_chance_for's own
+	# doc comment for why this, not canopy_turn_progress, drives the leaf-
+	# fall chance below).
+	var season_progress := _season_cycle.progress_through_season(now)
 	for trees in _loaded_trees.values():
 		for tree in trees:
 			if not tree.has_method("set_ripe_fruit"):
@@ -3362,32 +3448,20 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 						)
 					)
 
-			# Falling leaves (see docs/concept/leaf_litter.md): a real leaf
-			# falls either as the main autumn fall or a light summer
-			# trickle, both driven by the SAME canopy season/turning_into/
-			# turn_progress this step already read once above for
-			# tree.set_ripe_fruit -- not a second schedule computing its
-			# own answer. Independent of whether fruit fell this same
-			# step -- a tree can shed a leaf with nothing left to fruit.
+			# Falling leaves/blossom (see docs/concept/leaf_litter.md): a
+			# real leaf (summer/autumn) or blossom petal (spring) falls,
+			# driven by the SAME canopy_season this step already read once
+			# above for tree.set_ripe_fruit -- not a second schedule
+			# computing its own answer -- plus season_progress (see
+			# leaf_fall_chance_for's own doc comment for why THAT, not
+			# canopy_turn_progress, drives the chance). Independent of
+			# whether fruit fell this same step -- a tree can shed a leaf
+			# with nothing left to fruit.
 			#
 			# Gated on LEAF_LITTER_ENABLED (see that constant's own doc
 			# comment) -- requested directly: "deactivate leaf littering".
 			if LEAF_LITTER_ENABLED:
-				var leaf_fall_chance := 0.0
-				var leaf_fall_season := ""
-				if (
-					canopy_season == "autumn"
-					and canopy_turning_into == "winter"
-					and canopy_turn_progress > 0.0
-				):
-					# Chance rises with how far into its own turn the canopy
-					# is: a tree just beginning to turn sheds rarely, one
-					# nearly bare sheds almost every step.
-					leaf_fall_chance = canopy_turn_progress
-					leaf_fall_season = "autumn"
-				elif canopy_season == "summer":
-					leaf_fall_chance = LEAF_SUMMER_TRICKLE_CHANCE
-					leaf_fall_season = "summer"
+				var leaf_fall_chance := leaf_fall_chance_for(canopy_season, season_progress)
 				if leaf_fall_chance > 0.0:
 					# Deterministic per-(tree, step) roll, not engine randf()
 					# -- see _LEAF_FALL_ROLL_STEPS' own doc comment.
@@ -3419,7 +3493,7 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 						)
 						var leaf_field: LeafLitterField = _leaf_litter_fields.get(leaf_chunk_coord)
 						if leaf_field != null:
-							leaf_field.add_leaf(landing_position, species_id, leaf_fall_season, now)
+							leaf_field.add_leaf(landing_position, species_id, canopy_season, now)
 	_last_fruiting_time = now
 
 
@@ -3498,8 +3572,9 @@ func wipe_world_clock(path: String = WorldClockPersistence.SAVE_PATH) -> void:
 	WorldClockPersistence.new().wipe(path)
 
 
-## Skips the world FORWARD to the start of `season` (see /season). Returns
-## whether that was a season we have.
+## Skips the world FORWARD to `progress` fraction [0,1] into `season` (see
+## /season) -- 0.0 (the default) is its start, as before. Returns whether
+## that was a season we have.
 ##
 ## The skipped time is not replayed. The jump is up to a whole year of world
 ## time and fruiting counts what fell between the last time it ran and now, so
@@ -3511,8 +3586,8 @@ func wipe_world_clock(path: String = WorldClockPersistence.SAVE_PATH) -> void:
 ## Trees are deliberately NOT caught up the same way: a sapling really has aged
 ## by the time you skip past, and watching it be older is the point of the
 ## command.
-func jump_to_season(season: String) -> bool:
-	var skip: float = _season_cycle.seconds_until_season(_world_age_seconds, season)
+func jump_to_season(season: String, progress: float = 0.0) -> bool:
+	var skip: float = _season_cycle.seconds_until_season(_world_age_seconds, season, progress)
 	if skip <= 0.0:
 		return false
 	_world_age_seconds += skip
@@ -4638,8 +4713,19 @@ func _paint_snow_presence(chunk_coord: Vector2i, chunk: Chunk) -> void:
 
 
 func set_rain(raining: bool) -> void:
+	var intensity := 1.0 if raining else 0.0
 	if _water_material != null:
-		_water_material.set_shader_parameter("rain_intensity", 1.0 if raining else 0.0)
+		_water_material.set_shader_parameter("rain_intensity", intensity)
+	# Rivers/lakes/the sea all render on the ONE river flow overlay in real
+	# gameplay (see _paint_water_overlay's own doc comment) -- the OLD
+	# ocean-only _water_material above never actually paints a cell once a
+	# river flow layer exists, so without this, rain-driven ripples were
+	# invisible everywhere, not just on rivers (reported: "rain don't
+	# produce ripples in the new river water"). Unconditional, matching
+	# _mirror_disturbances_to_the_river's own convention: _river_flow_shader
+	# always exists, and pushing a uniform to a material no layer is
+	# currently using yet is harmless.
+	_river_flow_shader.set_rain_intensity(intensity)
 
 
 ## Sets how energetic the live wind is (see WeatherModel.wind_strength_for --
@@ -5174,6 +5260,28 @@ func step_tall_grass(delta_seconds: float) -> void:
 	_graze_by_herbivores()
 	for chunk_coord in _grass_sims.keys():
 		_sync_grass_sprites(chunk_coord)
+
+
+## Mirrors step_tall_grass's own batched-refresh shape exactly (real growth
+## every call is unnecessary work at 60fps to resolve 0.01/second of
+## change -- see that function's own doc comment) -- reuses the identical
+## GRASS_REFRESH_INTERVAL throttle rather than a redundant third constant
+## for the identical "plant growth/sprite refresh" concept
+## step_worms/step_ants already reuse WORM_REFRESH_INTERVAL for in their
+## own turn.
+func step_aquatic_vegetation(delta_seconds: float) -> void:
+	_aquatic_vegetation_refresh_accumulator += delta_seconds
+	if _aquatic_vegetation_refresh_accumulator < GRASS_REFRESH_INTERVAL:
+		return
+	var elapsed := _aquatic_vegetation_refresh_accumulator
+	_aquatic_vegetation_refresh_accumulator = 0.0
+
+	var growth_modifier := _season_cycle.growth_modifier(_world_age_seconds)
+	for veg in _aquatic_vegetation.values():
+		veg.advance(elapsed, growth_modifier)
+
+	for chunk_coord in _aquatic_vegetation.keys():
+		_sync_aquatic_vegetation_sprites(chunk_coord)
 
 
 ## The `accelerate_growth` spell atom's real hook (see docs/concept/
@@ -6684,6 +6792,71 @@ func take_worm_at(pixel_position: Vector2) -> bool:
 	return true
 
 
+## Every real aquatic vegetation patch within `radius_tiles` of
+## `pixel_position` -- mirrors worms_near's own exact shape (a 3x3
+## chunk-neighbourhood scan, the same margin every other per-chunk
+## near-query in this file already uses so a query near a chunk boundary
+## still sees patches just across it).
+func aquatic_vegetation_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
+	var out: Array = []
+	var center := _world_tile_for_pixel(pixel_position)
+	var center_chunk := _chunk_coord_for_tile(center)
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var chunk_coord := center_chunk + Vector2i(dx, dy)
+			var veg: AquaticVegetation = _aquatic_vegetation.get(chunk_coord)
+			if veg == null:
+				continue
+			var origin := chunk_coord * CHUNK_SIZE
+			for cell in veg.get_patch_cells():
+				var tile: Vector2i = origin + cell
+				if maxi(absi(tile.x - center.x), absi(tile.y - center.y)) > radius_tiles:
+					continue
+				out.append({
+					"position": Vector2(
+						float(tile.x) + 0.5, float(tile.y) + 0.5
+					) * float(TerrainRenderer.TILE_SIZE),
+				})
+	return out
+
+
+## Grazes the vegetation patch at `pixel_position`, if there is one --
+## mirrors take_worm_at's own exact shape (same tile/chunk/sim lookup,
+## same immediate _sync re-sync so a grazed patch doesn't visibly linger
+## for up to GRASS_REFRESH_INTERVAL more seconds after the fish that ate
+## it already moved on).
+func graze_aquatic_vegetation_at(pixel_position: Vector2) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var veg: AquaticVegetation = _aquatic_vegetation.get(chunk_coord)
+	if veg == null:
+		return false
+	if not veg.graze(tile - chunk_coord * CHUNK_SIZE):
+		return false
+	_sync_aquatic_vegetation_sprites(chunk_coord)
+	return true
+
+
+## Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
+## weight-emergent worm mortality") -- mirrors take_worm_at's own shape
+## exactly (same tile/chunk/patch lookup, same immediate re-sync so a
+## crushed worm doesn't visibly linger for up to WORM_REFRESH_INTERVAL
+## more seconds after the step that killed it), but resolves through
+## EarthwormPatch.crush instead of take: an insufficient `momentum_kg_m_s`
+## leaves a surfaced worm exactly where it was, the same as never having
+## been stepped on at all.
+func crush_worm_at(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var patch: EarthwormPatch = _worm_patches.get(chunk_coord)
+	if patch == null:
+		return false
+	if not patch.crush(tile - chunk_coord * CHUNK_SIZE, momentum_kg_m_s):
+		return false
+	_sync_worm_sprites(chunk_coord)
+	return true
+
+
 ## Every fallen, NAMED-SPECIES tree-fruit item lying within `radius_tiles` of
 ## `pixel_position` (see TreeSpecies -- cherry/apple/walnut, dropped via
 ## step_fruiting), in the shape a fruit-eating bird expects (see
@@ -6997,6 +7170,31 @@ func step_ants(delta_seconds: float) -> void:
 			else:
 				_forage_windfall_near_mound(colony, origin, cell)
 
+	_ant_moisture_refresh_accumulator += delta_seconds
+	if _ant_moisture_refresh_accumulator < WORM_REFRESH_INTERVAL:
+		return
+	_ant_moisture_refresh_accumulator = 0.0
+	_refresh_ant_moisture()
+
+
+## Water, not just food (see docs/concept/soil_fauna.md's own section by
+## that name): pushes each loaded chunk's own live weather-derived soil
+## moisture into every mound it holds. Sampled per CHUNK's own centre
+## tile, the identical "weather is already a per-region roll, sample the
+## centre rather than the player's own tile" reasoning step_worms already
+## uses for EarthwormPatch -- moisture is a slow, day-timescale condition,
+## not something worth a per-mound lookup.
+func _refresh_ant_moisture() -> void:
+	for chunk_coord in _ant_colonies:
+		var colony: AntColony = _ant_colonies[chunk_coord]
+		var centre_tile: Vector2i = chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
+		var centre_pixel := Vector2(
+			float(centre_tile.x) + 0.5, float(centre_tile.y) + 0.5
+		) * float(TerrainRenderer.TILE_SIZE)
+		var moisture := _weather_model.soil_moisture(current_weather(centre_pixel))
+		for cell in colony.mound_cells():
+			colony.record_moisture(cell, moisture)
+
 
 ## Central fallen-leaf-litter step (see LeafLitterField,
 ## docs/concept/leaf_litter.md): every loaded chunk's field ages/prunes past
@@ -7226,6 +7424,46 @@ func _sync_worm_sprites(chunk_coord: Vector2i) -> void:
 		)
 		_ground_decor_parent.add_child(sprite)
 		sprites[cell] = sprite
+
+
+## Mirrors _sync_worm_sprites' own exact shape -- a real vegetation patch
+## has no "surfacing" state to gate on (see AquaticVegetation's own doc
+## comment: initial seeding starts every patch already mature), so the
+## only diff here is has_vegetation itself, not a threshold.
+func _sync_aquatic_vegetation_sprites(chunk_coord: Vector2i) -> void:
+	if not _decorates(chunk_coord):
+		_drop_decoration(_aquatic_vegetation_sprites, chunk_coord)
+		return
+	var veg: AquaticVegetation = _aquatic_vegetation.get(chunk_coord)
+	var sprites: Dictionary = _aquatic_vegetation_sprites.get(chunk_coord, {})
+	if veg == null:
+		return
+
+	for cell in sprites.keys().duplicate():
+		if not veg.has_vegetation(cell):
+			sprites[cell].free()
+			sprites.erase(cell)
+
+	var origin := chunk_coord * CHUNK_SIZE
+	for cell in veg.get_patch_cells():
+		if sprites.has(cell):
+			continue
+		var sprite := Sprite2D.new()
+		sprite.texture = _aquatic_vegetation_sprite_generator.generate_texture(
+			hash("%d_%d_aquatic_vegetation" % [origin.x + cell.x, origin.y + cell.y])
+		)
+		# World scale from a world-space constant, never re-derived from
+		# the art canvas -- the same "raising SIZE for detail must not
+		# change how big it looks" trap this project has already hit
+		# twice (see ProceduralWormSprite's own identical doc comment).
+		sprite.scale = Vector2.ONE * ProceduralAquaticVegetationSprite.world_scale()
+		sprite.position = Vector2(
+			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
+			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+		)
+		_ground_decor_parent.add_child(sprite)
+		sprites[cell] = sprite
+	_aquatic_vegetation_sprites[chunk_coord] = sprites
 
 
 ## Plants carried seed at a world position, if anything can grow there (see
@@ -9113,6 +9351,21 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_grass_sprites[chunk_coord] = {}
 	_sync_grass_sprites(chunk_coord)
 
+	# Aquatic vegetation (see AquaticVegetation, docs/concept/
+	# aquatic_foraging.md "Aquatic Foraging") -- only chunks that actually
+	# contain water get a real sim, the same "don't allocate a sim for a
+	# chunk with nothing for it to do" discipline EarthwormPatch's own
+	# soil-biome gate already uses. Reuses the IDENTICAL is_river-OR-is_lake
+	# mask TallGrass reads just above to keep grass OUT of the water, as an
+	# INCLUSION filter instead.
+	var water_mask := _ground_cover_blockers(chunk)
+	if water_mask.has(1):
+		_aquatic_vegetation[chunk_coord] = AquaticVegetation.new(
+			hash("%d_%d_aquatic_vegetation" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, water_mask
+		)
+		_aquatic_vegetation_sprites[chunk_coord] = {}
+		_sync_aquatic_vegetation_sprites(chunk_coord)
+
 	var crop_sims := {}
 	var crop_markers := {}
 	for crop_id in WILD_CROP_IDS:
@@ -9237,6 +9490,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		# mounds don't all pick the identical variant.
 		marker.mound_seed = hash(global_cell)
 		marker.position = (Vector2(global_cell) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+		# Gives this mound its own real colony (LOCAL mound_cell, the same
+		# key every other AntColony accessor uses -- see
+		# _dispatch_ant_forager's identical convention) so its own visible
+		# size actually grows with the real population living there (see
+		# docs/concept/soil_fauna.md "Mound size grows with the colony").
+		marker.setup(_ant_colonies[chunk_coord], mound_cell)
 		_entities_parent.add_child(marker)
 		mound_markers.append(marker)
 	_ant_mound_markers[chunk_coord] = mound_markers
@@ -9782,6 +10041,11 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		sprite.free()
 	_worm_sprites.erase(chunk_coord)
 	_worm_patches.erase(chunk_coord)
+
+	for sprite in _aquatic_vegetation_sprites.get(chunk_coord, {}).values():
+		sprite.free()
+	_aquatic_vegetation_sprites.erase(chunk_coord)
+	_aquatic_vegetation.erase(chunk_coord)
 
 	_ant_colonies.erase(chunk_coord)
 	for marker in _ant_mound_markers.get(chunk_coord, []):

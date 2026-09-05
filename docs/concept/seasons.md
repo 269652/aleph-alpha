@@ -472,3 +472,17 @@ in a single step — a year's windfall at once. The fruiting mark moves with the
 clock. Trees are deliberately *not* caught up the same way: a sapling really
 has aged while you skipped past, and seeing it older is the point of the
 command.
+
+**An optional second argument, `/season <name> <progress>`, lands partway
+through the named season instead of always at its very start.** `progress` is
+a fraction from `0.0` (the default — identical to omitting it) to `1.0`,
+which by construction lands at exactly the same instant as `<next season>`'s
+own `0.0` — the two boundaries share a point. `/season autumn 0.5`, for
+example, lands at autumn's midpoint. Console input is validated rather than
+silently reinterpreted: a non-numeric second argument, or a number outside
+`[0, 1]` (someone typing `50` meaning "50%" where a `0-1` fraction was
+wanted), is refused with a reason instead of quietly landing somewhere other
+than what was asked for. `SeasonCycle.seconds_until_season` itself clamps any
+out-of-range float defensively underneath — a second, pure-model line of
+defense for any caller other than the console — but the command layer's own
+refusal is what a player actually sees.

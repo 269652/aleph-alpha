@@ -45,6 +45,21 @@ func season_at(elapsed_seconds: float) -> String:
 	return SEASONS[clampi(index, 0, SEASONS.size() - 1)]
 
 
+## How far [0,1) through the CURRENT season this moment sits -- the same
+## raw fraction season_at's own index is truncated from, exposed directly.
+##
+## Deliberately NOT TreePhenology/SeasonTransition's own "turn progress":
+## that reads exactly 0.0 for a season's entire settled span and only ramps
+## across its final TURN_FRACTION, which cannot drive anything that needs
+## to rise across the WHOLE season (reported directly: leaf litter should
+## be "constant and continuous and increasing in autumn", not flat for
+## most of it and then a late ramp). This rises smoothly from a season's
+## very first instant instead, resetting to 0 at every season boundary.
+func progress_through_season(elapsed_seconds: float) -> float:
+	var scaled := year_fraction(elapsed_seconds) * SEASONS.size()
+	return scaled - floorf(scaled)
+
+
 ## Seasonal warmth [0,1]: a smooth cosine peaking mid-summer (~3/8 of the year,
 ## the middle of the summer quarter) and troughing mid-winter (~7/8). Stands in
 ## for the seasonal temperature/photoperiod swing driving fruit ripening.
@@ -61,7 +76,13 @@ func growth_modifier(elapsed_seconds: float) -> float:
 	return 0.2 + 0.8 * warmth_modifier(elapsed_seconds)
 
 
-## How far the world clock must move FORWARD to land at the start of `season`.
+## How far the world clock must move FORWARD to land `progress` fraction
+## [0,1] into `season` -- 0.0 (the default) is its first instant, matching
+## the original "lands at the start" behavior exactly; 1.0 is its very last
+## instant, which by construction is the same point in time as the NEXT
+## season's own 0.0 (see test_progress_one_lands_at_the_next_seasons_own_
+## start). Out-of-range values are clamped rather than trusted, since this
+## is the pure model underneath a player-typed console command.
 ##
 ## Forward only, and that is the whole design. Season is a pure function of
 ## elapsed world time, so the obvious way to honour `/season winter` is to set
@@ -71,14 +92,15 @@ func growth_modifier(elapsed_seconds: float) -> float:
 ## hands `fallen_between` a span that runs backwards. Skipping forward is the
 ## only move that leaves every other clock consistent.
 ##
-## Asking for the season you are already in therefore waits for it to come
-## round again rather than doing nothing: you asked to watch it start.
+## Asking for the season you are already in (at the same or an earlier
+## progress than where you already are) therefore waits for it to come round
+## again rather than doing nothing: you asked to watch it reach that point.
 ## Unknown names move nothing.
-func seconds_until_season(elapsed_seconds: float, season: String) -> float:
+func seconds_until_season(elapsed_seconds: float, season: String, progress: float = 0.0) -> float:
 	var index := SEASONS.find(season)
 	if index < 0:
 		return 0.0
-	var target := float(index) / float(SEASONS.size())
+	var target := (float(index) + clampf(progress, 0.0, 1.0)) / float(SEASONS.size())
 	var now := year_fraction(elapsed_seconds)
 	var ahead := target - now
 	if ahead <= 0.0:

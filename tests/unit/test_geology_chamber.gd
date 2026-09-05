@@ -59,6 +59,13 @@ func test_no_duplicate_cells():
 ## fraction rather than a tile count means a future TILE_SIZE or
 ## window-size change can't silently blow this back up unnoticed the way
 ## it did once already.
+##
+## Threshold briefly raised 0.3 -> 0.4 (2026-09-05) when the camera was
+## asked to zoom in 30% (Player.TARGET_TILE_SCREEN_PX 64.0 -> 83.2), then
+## back to 0.3 the same day when that zoom was reverted (reported live as
+## visible blur -- see player.gd's own TARGET_TILE_SCREEN_PX comment). At
+## the reverted 64.0, the chamber's real fraction returns to its original
+## 26.67%, comfortably back under 0.3.
 func test_chamber_diameter_stays_a_small_fraction_of_the_visible_screen():
 	var diameter_tiles := 2.0 * GeologyChamber.CHAMBER_RADIUS + 1.0
 	var diameter_px := diameter_tiles * Player.TARGET_TILE_SCREEN_PX

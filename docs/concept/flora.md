@@ -1291,14 +1291,53 @@ ON TOP of whichever season is showing, not a new phenology stage a tree walks
 through in order. A forest can be dusted with snow while in full autumn colour,
 the same way real snow does not wait for the calendar.
 
-**It reuses the season turn's own branch-by-branch blend, rather than a new
-mechanism.** The exact same geodesic branch trace and per-tile clump jitter
-that spreads a season turn outward from the trunk (see "The canopy carries the
-season" above) blends a canopy toward its snow frame too -- seeded by the
-tree's own variant, so neighbouring trees of a species are snowed on different
-boughs rather than all wearing an identical white stamp. This is deliberately
-a reuse: the "each tree looks differently covered" property falls out of
-variance the season turn already has, not a second implementation of it.
+**It reuses the season turn's own branch-by-branch mechanism -- the geodesic
+branch trace and the per-tuft clump jitter -- but it SETTLES rather than
+replaces.** The exact same trace and jitter that carry a season turn along the
+boughs (see "The canopy carries the season" above) carry snow onto the crown
+too, seeded by the tree's own variant, so neighbouring trees of a species are
+snowed on different boughs rather than all wearing an identical white stamp.
+This is deliberately a reuse: the "each tree looks differently covered"
+property falls out of variance the season turn already has, not a second
+implementation of it. Two things differ from a turn, and both are what
+"accumulating snow" means as opposed to "turning into the snow frame":
+
+- **Snow is added on top, never swapped in.** A turn REPLACES canopy pixels
+  with the next frame's own, transparent ones included -- right for leaves
+  falling off a bough, wrong for snow landing on one. Applied to the snow
+  frame it read as a bottom-up wipe: the crown thinned towards nothing as its
+  own twigs were traded for the snow frame's blank pixels, then the snow
+  frame filled back in (reported: the canopy should accumulate snow twig by
+  twig, on the canopy that is there). Snow pixels are composited OVER the
+  season canopy instead, so nothing the season drew is ever removed -- at any
+  coverage every pixel the plain canopy painted is still painted -- and at
+  full coverage the whole snow frame lies on top of whichever canopy is
+  showing, blossom or autumn colour still visible around the snow-laden
+  boughs.
+- **It settles from above.** A turn walks outward from where the boughs leave
+  the trunk; snow lands on the top of the crown first and works down the
+  twigs. So the trace is seeded from the crown's top edge rather than its
+  foot -- the same "different start, same trace" shape growth already uses
+  (`growth_order` starts at the trunk join, the turn at the whole bottom
+  rim, snow at the top).
+
+**It settles on the branches a tree HAS.** A sapling has put out only the
+inner part of its crown (see "A young tree has fewer branches" above), and the
+snow frame is a full-grown crown's worth of snow-laden twigs -- settled whole,
+it dressed a seedling as a grown tree the moment snow lay. The frame is pruned
+back by the same growth rule as the canopy before it settles, so a seedling
+under full snow is still mostly seedling (measured: snow adds 4-12% to a
+seedling's own painted crown, against 2.4-5.3x unpruned).
+
+It works on every canopy snow can fall on -- bare (winter), blossom (spring),
+turning (autumn) -- and in every season it can fall (`Snowfall` snows on
+temperature, not on the calendar; summer alone never gets cold enough), because
+it is layered on whatever the season/turn/growth pipeline drew, not tied to
+any one frame. Pinned in `test_illustrated_tree.gd`'s "snow settles" section
+against all three canopies: never-erases, settles-from-the-top, and
+whole-frame-at-full-coverage. (Deliberate divergence from this section's
+earlier text, which specified the turn's own replace-and-spread-from-the-trunk
+blend for snow; that is what shipped first and what read as a wipe.)
 
 **A species without this frame renders exactly as it did before, whatever the
 snow value is.** Measured off the real cherry sheet at the time this was
@@ -1482,6 +1521,32 @@ break the crown apart.
 whole tree picture to composite and cache, so growth is drawn in a fixed number
 of stages (`GROWTH_LEVELS`) exactly as the turn is. A continuous fraction would
 mean a new texture per frame per sapling in a wood full of them.
+
+**Maturity is not the end of growth.** `TreeGrowth.scale_at` used to flatline
+at exactly full size once a tree crossed `MATURITY_SECONDS` (three simulated
+years) — every tree that had ever finished its fast early growth read as
+identically sized forever after, however long it had actually stood. Real
+trees keep slowly putting on size for centuries past reproductive maturity;
+asked directly to make that visible ("make trees another 30% bigger, varying
+by age... so a 100 year old tree is bigger than a 10 year old tree"), the
+curve now continues past `MATURITY_SECONDS` toward `OLD_GROWTH_BONUS` (30%
+over the mature reference size), reaching it at `OLD_GROWTH_SECONDS` (a
+century, the exact age named in the request) with the same ease-out shape
+the seedling curve already uses — fast early gains tapering toward the
+ceiling, not a constant creep for a hundred years. `MATURITY_SECONDS` still
+means exactly what it always meant: the end of the CANOPY-pruning/stage-ladder
+growth above, and the gate `TreeMaturity`/fruiting eligibility read
+separately. Old growth is a pure size bonus layered on top, deliberately
+untethered from either of those -- felling an ancient tree is not worth more
+timber than felling a merely-mature one (`FelledTree.timber_for` clamps its
+own input back to the pre-old-growth range), only bigger to look at.
+`TreeRenderer.spawn_trees`'s original map-generated forest, which used to
+hand every tree an identical `age_seconds = INF` ("always been here", size
+locked at exactly 1.0), now seeds each tree a real, deterministic, per-tile
+FINITE age spanning the whole curve instead -- INF itself keeps meaning
+"skip aging entirely" (unaffected, still exactly 1.0), reserved for anything
+that genuinely wants a tree's size decided by something other than a real
+elapsed age.
 
 **A tree bears once a year, and the species decides WHEN, not how often.** The
 bearing cycle is one year for every species, always. It used to be scaled by the

@@ -147,6 +147,49 @@ func test_a_recorded_disturbance_actually_changes_what_the_river_draws():
 	)
 
 
+## THE rain check, on the real GPU -- mirrors test_a_recorded_disturbance_
+## actually_changes_what_the_river_draws exactly, and for the same reason:
+## every CPU mirror in test_river_flow_shader.gd can be green while rain
+## never reaches an actual pixel, which is exactly what was happening
+## (EarthChunkManager.set_rain only ever touched the ocean-only water_
+## layer's material, and that layer paints no cells at all once a river
+## flow layer exists -- see _paint_water_overlay's own doc comment). Same
+## frame, same TIME, quiet vs rained-on -- the rain_intensity uniform is
+## the only thing left that can differ.
+func test_rain_actually_changes_what_the_river_draws():
+	if _no_real_gpu():
+		return
+	var quiet := _build_river_viewport(
+		Vector2.ZERO, PackedVector2Array(), PackedFloat32Array(), 0.0
+	)
+	var rained_on := _build_river_viewport(
+		Vector2.ZERO, PackedVector2Array(), PackedFloat32Array(), 1.0
+	)
+	for i in range(4):
+		await get_tree().process_frame
+
+	var quiet_image := quiet.get_texture().get_image()
+	var rained_on_image := rained_on.get_texture().get_image()
+	quiet.queue_free()
+	rained_on.queue_free()
+	if quiet_image == null or rained_on_image == null:
+		return  # no GPU readback in this environment (see _no_real_gpu)
+
+	var changed := 0
+	var sampled := 0
+	for py in range(0, quiet_image.get_height(), 2):
+		for px in range(0, quiet_image.get_width(), 2):
+			sampled += 1
+			if quiet_image.get_pixel(px, py) != rained_on_image.get_pixel(px, py):
+				changed += 1
+	var changed_fraction := float(changed) / float(maxi(sampled, 1))
+	assert_gt(
+		changed_fraction, 0.001,
+		"full rain left %.2f%% of the river's pixels different -- rain never reaches the screen"
+			% (changed_fraction * 100.0)
+	)
+
+
 ## Whether this run has no GPU that can render a viewport and hand the
 ## frame back. The two readback tests above are meaningless without one:
 ## get_image() returns null under the headless driver, and the engine error
@@ -173,7 +216,8 @@ func _no_real_gpu() -> bool:
 func _build_river_viewport(
 	world_offset: Vector2,
 	disturbance_positions: PackedVector2Array,
-	disturbance_ages: PackedFloat32Array
+	disturbance_ages: PackedFloat32Array,
+	rain_intensity: float = 0.0
 ) -> SubViewport:
 	var renderer := TerrainRenderer.new()
 	var flow_shader := RiverFlowShader.new()
@@ -224,6 +268,7 @@ func _build_river_viewport(
 	while padded_ages.size() < RiverFlowShader.DISTURBANCE_SLOTS:
 		padded_ages.append(-999.0)
 	flow_shader.set_disturbances(padded_positions, padded_ages, disturbance_positions.size())
+	flow_shader.set_rain_intensity(rain_intensity)
 
 	var atlas_coords := renderer.atlas_coords_for_river_flow(180.0, true)
 	for y in range(8):

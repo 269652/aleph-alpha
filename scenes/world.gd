@@ -44,6 +44,16 @@ const SkillTreeWindow = preload("res://scenes/skill_tree_window.gd")
 const CreaturePanel = preload("res://scenes/creature_panel.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
+
+## The player's own real momentum at ordinary walking pace (see
+## docs/concept/soil_fauna.md "Crushed underfoot: weight-emergent worm
+## mortality") -- full body mass, not PebbleDispersion's own foot-mass
+## fraction (that is for a glancing kick past a pebble; standing weight
+## settling onto something underfoot is a different, full-body-mass
+## event). Computed once rather than every _client_process call: neither
+## factor ever changes at runtime.
+const _PLAYER_STEP_MOMENTUM_KG_M_S := CreatureMass.PLAYER_MASS_KG * PebbleDispersion.FOOTSTEP_SPEED_MPS
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const Courtship = preload("res://src/gameplay/courtship.gd")
 const MammalCourtship = preload("res://src/gameplay/mammal_courtship.gd")
@@ -59,6 +69,7 @@ const GithubTokenStore = preload("res://src/licensing/github_token_store.gd")
 const MainMenu = preload("res://scenes/main_menu.gd")
 const LoadingOverlay = preload("res://scenes/loading_overlay.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
+const StarterKit = preload("res://src/gameplay/starter_kit.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
@@ -454,6 +465,14 @@ var _pending_dna_stat_modifiers: Dictionary = {}
 ## docs/concept/skills.md); 0 means no creator ran, which the web reads as a
 ## neutral genome rather than as a penalty.
 var _pending_dna_seed := 0
+## The 3 items chosen in the creator's Starting Kit tab (see MainMenu,
+## docs/concept/starting_kit.md), granted to the local player on spawn --
+## replaces what used to be a hardcoded, identical-for-everyone kit. Defaults
+## to StarterKit's own always-valid default, same reasoning as _pending_class
+## defaulting to "warrior": a non-interactive launch (dedicated server,
+## --connect) that never ran the creator still spawns a coherent kit rather
+## than bare-handed.
+var _pending_starter_items: Array = StarterKit.DEFAULT_CHOICES.duplicate()
 ## Player-state persistence (see docs/concept/persistence.md) -- PlayerSave
 ## is pure I/O, WorldReset wipes EarthChunkManager's own persistence dirs.
 var _player_save := PlayerSave.new()
@@ -791,11 +810,13 @@ func _show_main_menu() -> void:
 ## spawn), so every chunk simply finds nothing left to layer on top of its
 ## deterministic base.
 func _on_menu_start_requested(
-	mode: String, chosen_class: String, appearance: Dictionary, dna_stat_modifiers: Dictionary
+	mode: String, chosen_class: String, appearance: Dictionary, dna_stat_modifiers: Dictionary,
+	starter_items: Array
 ) -> void:
 	_pending_class = chosen_class
 	_pending_appearance = appearance
 	_pending_dna_stat_modifiers = dna_stat_modifiers
+	_pending_starter_items = starter_items
 	# Read straight off the menu rather than carried on start_requested: the
 	# signal already carries this genome's stat modifiers, and the seed is the
 	# same roll's other half (see MainMenu.current_dna).
@@ -2586,6 +2607,12 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	# Food goes off in the pack too, on the same clock (see ItemStack.age).
 	_chunk_manager.step_carried_food(delta)
 	_chunk_manager.step_tall_grass(delta)
+	# Real aquatic vegetation (see EarthChunkManager.step_aquatic_vegetation,
+	# docs/concept/aquatic_foraging.md) -- mirrors step_tall_grass's own
+	# batched, GRASS_REFRESH_INTERVAL-throttled cadence immediately above,
+	# right next to it for the same reason step_wild_crops sits next to its
+	# own land-plant-growth cousin below.
+	_chunk_manager.step_aquatic_vegetation(delta)
 	# Wild carrot/potato growth + spread (see EarthChunkManager.step_wild_crops,
 	# docs/concept/wild_crops.md) -- mirrors step_tall_grass's own throttled
 	# cadence immediately above. This line was simply missing: the step
@@ -2707,7 +2734,7 @@ func _on_console_command(command: String, args: Array) -> void:
 			_dev_console.log_line(
 				(
 					"Commands: /day [off]  /night [off]  /time <hh:mm>|off"
-					+ "  /season [name]  /weather [state|off]"
+					+ "  /season [name] [progress]  /weather [state|off]"
 					+ "  /ecotest [seconds_per_year|off]"
 					+ "  /history <entity_id>  /why <event_id>  /remember <entity_id>"
 					+ "  /household <entity_id>  /contract <entity_id>  /market <entity_id>"
@@ -3004,13 +3031,19 @@ func _handle_emergence_command() -> void:
 		_dev_console.log_line(line)
 
 
-## /season [name] -- reports the season, or skips the world FORWARD to the
-## start of the one you name.
+## /season [name] [progress] -- reports the season, or skips the world
+## FORWARD to `progress` (a 0-1 fraction, default 0.0) into the one you name.
 ##
 ## Forward only (see EarthChunkManager.jump_to_season): every other system
 ## measures itself against this clock, so winding it back would give a tree a
 ## negative age. Asking for the season you are already in therefore waits for
 ## it to come round again -- you asked to watch it start.
+##
+## `progress` is validated here rather than left to SeasonCycle's own
+## defensive clamp: a typo like `/season autumn 50` (meaning "50%" where a 0-1
+## fraction was wanted) must be refused with a reason, not silently clamped
+## to 1.0 and read back as if the far end of the season was what was asked
+## for -- see test_season_command_clarity.gd.
 func _handle_season_command(args: Array) -> void:
 	if args.size() == 0:
 		_dev_console.log_line(
@@ -3020,7 +3053,19 @@ func _handle_season_command(args: Array) -> void:
 		return
 
 	var wanted := str(args[0]).to_lower()
-	if not _chunk_manager.jump_to_season(wanted):
+	var progress := 0.0
+	if args.size() > 1:
+		if not str(args[1]).is_valid_float():
+			_dev_console.log_line(
+				"Progress must be a number between 0 and 1, got '%s'." % args[1]
+			)
+			return
+		progress = float(args[1])
+		if progress < 0.0 or progress > 1.0:
+			_dev_console.log_line("Progress must be between 0 and 1, got %s." % args[1])
+			return
+
+	if not _chunk_manager.jump_to_season(wanted, progress):
 		_dev_console.log_line(
 			"Unknown season '%s'. Try: %s" % [wanted, ", ".join(SeasonCycle.SEASONS)]
 		)
@@ -3850,6 +3895,13 @@ func _spawn_local_singleplayer() -> void:
 		_pending_appearance
 	)
 	_players.add_child(player)
+	# AFTER add_child: _ready() has just wired inventory_changed ->
+	# sync_hotbar, so the grant's own emit actually reaches something (see
+	# Player.grant_starter_items's own doc comment). Only this NEW-game path
+	# grants anything -- _spawn_local_singleplayer_from_save (the load path)
+	# is a fully separate function and gets inventory from apply_save_dict
+	# instead, untouched by this.
+	player.grant_starter_items(_pending_starter_items)
 	# So its pack ages and, once something in it turns, smells (see
 	# EarthChunkManager.register_scent_carrier).
 	_chunk_manager.register_scent_carrier(player)
@@ -4803,6 +4855,21 @@ func _client_process(delta: float) -> void:
 	# last-processed creature happens to be standing.
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		_chunk_manager.tread_snow_at(creature.position, false)
+	# Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
+	# weight-emergent worm mortality") -- mirrors the tread_snow_at pair just
+	# above exactly (player, then every creature), but keyed on real weight
+	# rather than snow depth, so it runs regardless of season. No debounce
+	# needed for either: crush_worm_at's own removal is already idempotent
+	# (a worm that is already gone simply reports false again next frame),
+	# the same reasoning that let this skip the per-entity "last tile"
+	# tracking PathScarring/the snow trail's own debounce needs for a
+	# CONTINUOUS accumulator.
+	_chunk_manager.crush_worm_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
+	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		var marker := creature as CreatureMarker
+		var species: String = marker.info.species if marker.info != null else ""
+		var momentum := CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
+		_chunk_manager.crush_worm_at(marker.position, momentum)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).

@@ -159,3 +159,65 @@ func test_a_tree_does_not_bear_in_its_first_year():
 		growth.is_productive(growth.stage_at(SeasonCycle.SECONDS_PER_YEAR * 0.9)),
 		"a tree under a year old should not be bearing"
 	)
+
+
+# -- old growth: a tree keeps slowly growing long after simple maturity ------
+#
+# Asked directly: "keep it but make trees another 30% bigger, varying by
+# age... so a 100 year old tree is bigger than a 10 year old tree." Real
+# trees keep slowly growing for centuries after reaching reproductive
+# maturity -- MATURITY_SECONDS (3 simulated years) gates the visual stage
+# ladder and fruiting eligibility elsewhere, but was never meant to be the
+# END of a tree's size, only the end of its FAST early growth.
+
+func test_growth_continues_past_simple_maturity():
+	assert_gt(
+		growth.scale_at(TreeGrowth.MATURITY_SECONDS * 2.0), 1.0,
+		"a tree well past simple maturity should still be slowly growing"
+	)
+
+
+func test_old_growth_reaches_its_full_bonus_at_the_named_age():
+	assert_almost_eq(
+		growth.scale_at(TreeGrowth.OLD_GROWTH_SECONDS), 1.0 + TreeGrowth.OLD_GROWTH_BONUS, 0.001
+	)
+
+
+func test_old_growth_never_exceeds_its_own_ceiling():
+	assert_almost_eq(
+		growth.scale_at(TreeGrowth.OLD_GROWTH_SECONDS * 5.0), 1.0 + TreeGrowth.OLD_GROWTH_BONUS, 0.001
+	)
+
+
+## INF stays the existing sentinel for "always been here, no aging drama" --
+## test_an_infinite_age_is_fully_mature above already pins scale_at(INF) to
+## exactly 1.0, distinct from a genuinely ancient FINITE age. Restated here
+## explicitly so the two constants (a tree that predates the session vs. a
+## tree old enough to earn the old-growth bonus) can never be conflated.
+func test_infinite_age_does_not_receive_the_old_growth_bonus():
+	assert_almost_eq(growth.scale_at(INF), 1.0, 0.001)
+
+
+## The literal example asked for.
+func test_a_hundred_year_old_tree_is_bigger_than_a_ten_year_old_tree():
+	var ten_years := SeasonCycle.SECONDS_PER_YEAR * 10.0
+	var hundred_years := SeasonCycle.SECONDS_PER_YEAR * 100.0
+	assert_gt(growth.scale_at(hundred_years), growth.scale_at(ten_years))
+
+
+## The old-growth curve is exactly as smooth and monotonic as the seedling
+## curve -- extends test_a_tree_never_shrinks_as_it_ages/test_a_tree_grows_
+## smoothly_rather_than_in_jumps past MATURITY_SECONDS rather than leaving
+## the new range unchecked.
+func test_old_growth_advances_monotonically_and_smoothly():
+	var previous := 1.0
+	var sizes := {}
+	for step in 100:
+		var age := TreeGrowth.MATURITY_SECONDS + (
+			float(step) / 99.0 * (TreeGrowth.OLD_GROWTH_SECONDS - TreeGrowth.MATURITY_SECONDS)
+		)
+		var scale := growth.scale_at(age)
+		assert_gte(scale, previous, "old growth must never shrink a tree back down")
+		previous = scale
+		sizes[snappedf(scale, 0.001)] = true
+	assert_gt(sizes.size(), 10, "old growth reads as %d jumps, not a curve" % sizes.size())

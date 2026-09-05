@@ -166,7 +166,21 @@ correct tile positions once `TILE_SIZE` changes.
 - ⬜ Phase 4 (creatures).
 - ⬜ Phase 5 (structures).
 - ⬜ Phase 6 (items / icons).
-- ⬜ Phase 7 (camera/viewport/HUD re-tune).
+- ⬜ Phase 7 (camera/viewport/HUD re-tune) -- not this phase, but `Camera2D.
+  zoom` HAS since moved anyway, three times, for reasons unrelated to this
+  phase's own stated goal ("bring it back down"): 4x on the original
+  resolution bump (see "4x camera zoom" in docs/progress.md), then briefly
+  5.2x (2026-09-05, `Player.TARGET_TILE_SCREEN_PX` 64.0 -> 83.2) for a
+  direct gameplay-framing ask ("zoom in 30% so trees become relatively
+  bigger"), then back to 4.0x the same day once that move was reported
+  live as visible blur -- a non-whole-multiple zoom breaks nearest-
+  neighbour alignment for every SPRITE_SCALE-path entity (see docs/
+  progress.md's own entry). That round trip is itself direct, lived
+  evidence for Phase 3 below: the SAME blur report also traced to trees
+  having no dedicated per-part canvas at all (unlike Phase 2's character
+  work), a cause the zoom revert alone does nothing for. Whether zoom
+  should actually come back down further given the source art detail now
+  available is still genuinely unanswered.
 - ✅ Illustrated ground tiles (separate track from the phases above, same
   "hand/AI-illustrated sheet replaces procedural generation where art
   exists" transition `IllustratedStoneSprite` already made for loose

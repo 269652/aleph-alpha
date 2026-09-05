@@ -244,13 +244,13 @@ func harvest_frames_for(species: String) -> Array[Texture2D]:
 ## orange in autumn, because that is genuinely the art already sitting on
 ## the sheet for those two columns.
 ##
-## Only summer and autumn are resolved here -- the only two seasons
-## step_fruiting actually drops a leaf in (see its own doc comment): a
-## trickle in summer, the real fall in autumn. Winter and spring return
-## null the same way a species with no art at all does, which
-## DroppedItem's caller reads as "fall back to the generic sprite" -- there
-## is no fallen-leaf case that needs one today, so this does not guess at
-## art for seasons nothing ever asks for.
+## Summer, autumn AND spring are resolved here -- every season step_
+## fruiting actually drops a leaf or blossom in (see its own doc comment):
+## a trickle in summer, the real fall in autumn, a blossom trickle in
+## spring. Winter returns null the same way a species with no art at all
+## does, which the caller reads as "fall back to the generic sprite" --
+## a bare winter canopy has nothing left to shed, so this does not guess
+## at art for a season nothing ever asks for.
 ##
 ## Told apart from three other things that can share the same column and
 ## the same rough colour -- see each constant's own doc comment for the
@@ -268,9 +268,23 @@ const _FOLIAGE_ORANGE_HUE_MIN_DEGREES := 10.0
 const _FOLIAGE_ORANGE_HUE_MAX_DEGREES := 55.0
 const _FOLIAGE_MIN_SATURATION := 0.15
 
+## Spring gets NO hue band, unlike summer/autumn -- real blossom colour is
+## not one universal hue across species the way leaf colour is: a real
+## cherry/apple bears showy pink/white petals, a real oak/hazelnut/walnut
+## bears small, inconspicuous, wind-pollinated yellow-green catkins, and
+## both are real "blossom" in the botanical sense. Accepting the full hue
+## range still keeps the one signal that DOES generalise -- a region needs
+## SOME real, non-neutral colour content at all, the same -1 "no such
+## content" sentinel _mean_hue_saturation already returns for a near-
+## white/near-black region (see that function's own doc comment) -- so a
+## genuinely blank/neutral candidate (a bare-twig placeholder, say) is
+## still correctly rejected; only the hue RESTRICTION is dropped.
+const _FOLIAGE_ANY_HUE_DEGREES := Vector2(0.0, 360.0)
+
 const _FOLIAGE_SEASON_TO_HUE_BAND := {
 	"summer": Vector2(_FOLIAGE_GREEN_HUE_MIN_DEGREES, _FOLIAGE_GREEN_HUE_MAX_DEGREES),
 	"autumn": Vector2(_FOLIAGE_ORANGE_HUE_MIN_DEGREES, _FOLIAGE_ORANGE_HUE_MAX_DEGREES),
+	"spring": _FOLIAGE_ANY_HUE_DEGREES,
 }
 
 ## Whether this species has a real foliage closeup for `season` -- see
@@ -279,11 +293,11 @@ func has_foliage_leaf_for(species: String, season: String) -> bool:
 	return foliage_leaf_for(species, season) != null
 
 
-## The one texture a leaf that fell in `season` actually draws -- see
-## "Foliage closeups" above. Null for an unsupported season, a species with
-## no composite art, or a species whose sheet has nothing matching that
-## season's own colour in the right column -- DroppedItem reads all three
-## the same way: fall back to the generic procedural sprite.
+## The one texture a leaf/blossom that fell in `season` actually draws --
+## see "Foliage closeups" above. Null for an unsupported season, a species
+## with no composite art, or a species whose sheet has nothing matching
+## that season's own colour in the right column -- LeafLitterAtlas reads
+## all three the same way: fall back to the generic procedural sprite.
 func foliage_leaf_for(species: String, season: String) -> Texture2D:
 	if not has_composite(species) or not _FOLIAGE_SEASON_TO_HUE_BAND.has(season):
 		return null
@@ -695,16 +709,19 @@ const _FOLIAGE_TRUSTED_ON_TREE_MAX_AREA := 60000
 ## gap.
 const _FOLIAGE_MAX_FILL := 0.68
 
-## The real per-season foliage closeup for each of the two seasons a leaf
+## The real per-season foliage closeup for each season a leaf or blossom
 ## can fall in -- see "Foliage closeups" above for the whole story. Builds
 ## a season -> Texture2D dict directly from `fruit_regions` (before the
 ## harvest split even happens, so it never depends on which bucket the
 ## bigger cluster ends up filed under): for each season, among every
 ## region whose own column matches that season, whose own mean hue matches
-## that season's real colour, which is not itself the real on-tree fruit
-## for that column (see _FOLIAGE_TRUSTED_ON_TREE_MAX_AREA), and which
-## isn't dense enough to read as a solid nut/kernel/cone instead of a leaf
-## (see _FOLIAGE_MAX_FILL), the smallest region wins.
+## that season's real colour (spring accepts any real, non-neutral hue --
+## see _FOLIAGE_ANY_HUE_DEGREES' own doc comment for why blossom colour
+## can't be one universal band the way leaf colour is), which is not
+## itself the real on-tree fruit for that column (see _FOLIAGE_TRUSTED_
+## ON_TREE_MAX_AREA), and which isn't dense enough to read as a solid nut/
+## kernel/cone instead of a leaf (see _FOLIAGE_MAX_FILL), the smallest
+## region wins.
 ##
 ## Known imperfect: pine's own small winged-seed-pair closeup (fill 0.575,
 ## close enough to a real needle sprig's own 0.545 that this filter cannot

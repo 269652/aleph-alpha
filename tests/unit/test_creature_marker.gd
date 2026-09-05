@@ -40,6 +40,22 @@ class StubWorldWithSlope:
 		return slope
 
 
+## A StubWorld that also answers is_river_at_global/is_lake_at_global -- the
+## two checks FishMarker._is_fresh_water_tile already uses and CreatureMarker
+## needs too (see _is_fresh_water_tile): plain biome_at_global never reports
+## "ocean" for a river or lake tile, since both are overlays drawn on top of
+## ordinary land biome (see docs/concept/hydrology.md), not a biome of their
+## own.
+class StubWorldWithFreshWater:
+	extends StubWorld
+	var is_river := false
+	var is_lake := false
+	func is_river_at_global(_x: int, _y: int) -> bool:
+		return is_river
+	func is_lake_at_global(_x: int, _y: int) -> bool:
+		return is_lake
+
+
 ## A StubWorld that also answers the herd (foot-and-mouth-like) disease
 ## transmission queries CreatureMarker asks EarthChunkManager for (see
 ## _herd_disease_step) -- population comfortably over capacity so
@@ -1989,6 +2005,138 @@ func test_the_submersion_waterline_is_released_once_it_leaves_the_water():
 	assert_gt(waterline, 90000.0, "back on dry land nothing should render as submerged")
 
 
+# -- river/lake: a gradual, depth-driven waterline instead of the fixed --
+# -- ocean-style one -------------------------------------------------------
+#
+# Reported alongside the ripple bug: the same detection gap that kept
+# animals from rippling in rivers (see test_creature_enters_swim_action_on_
+# a_river_tile_even_off_ocean_biome above) also left them with no real
+# depth signal for their tint -- only ocean's fixed, all-or-nothing
+# waterline_offset_y. Ocean itself is untouched here: it's tuned,
+## working art direction, not what was reported broken.
+
+const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
+
+
+## A StubWorldWithFreshWater that also answers river/lake depth queries --
+## the same two EarthChunkManager calls Player._resolve_water_state uses.
+class StubWorldWithDepth:
+	extends StubWorldWithFreshWater
+	var depth := 0.0
+	func river_depth_meters_at_global(_x: int, _y: int) -> float:
+		return depth if is_river else 0.0
+	func lake_depth_meters_at_global(_x: int, _y: int) -> float:
+		return depth if is_lake else 0.0
+
+
+## Halfway to the wade->swim threshold should sit the waterline exactly
+## halfway between the creature's own feet (its global position -- local
+## y = 0) and its species' full, fixed waterline -- a straight, continuous
+## lerp, not a step function that's already fully there.
+func test_river_depth_drives_a_gradual_waterline_below_the_species_fixed_one():
+	var world := StubWorldWithDepth.new()
+	world.biome = "grassland"
+	world.is_river = true
+	world.depth = WaterMovementModel.WADE_DEPTH_METERS * 0.5
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("horse")
+	marker.position = Vector2(100, 100)
+	marker._current_action = "swim"
+	marker._is_moving = true
+
+	marker._animation_step()
+
+	var waterline: float = marker.material.get_shader_parameter("water_world_y")
+	var full_waterline: float = marker.to_global(
+		Vector2(0.0, marker._illustrated.waterline_offset_y("horse"))
+	).y
+	assert_almost_eq(waterline, (marker.position.y + full_waterline) * 0.5, 1.0)
+	assert_ne(
+		waterline, full_waterline,
+		"halfway to wade depth should not already sit at the full ocean-style waterline"
+	)
+
+
+## At (or beyond) the wade->swim threshold, the gradual river/lake
+## waterline must agree with the pre-existing fixed ocean-style one -- the
+## two paths describe the same "fully swimming" moment and must not
+## disagree.
+func test_river_depth_at_the_wade_threshold_matches_the_fixed_waterline():
+	var world := StubWorldWithDepth.new()
+	world.biome = "grassland"
+	world.is_lake = true
+	world.depth = WaterMovementModel.WADE_DEPTH_METERS * 2.0
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("horse")
+	marker.position = Vector2(100, 100)
+	marker._current_action = "swim"
+	marker._is_moving = true
+
+	marker._animation_step()
+
+	var waterline: float = marker.material.get_shader_parameter("water_world_y")
+	var full_waterline: float = marker.to_global(
+		Vector2(0.0, marker._illustrated.waterline_offset_y("horse"))
+	).y
+	assert_almost_eq(waterline, full_waterline, 0.5)
+
+
+## The same depth also sinks the creature a little, on top of the tint --
+## shared with the player via SubmersionShader.MAX_SINK_PX.
+func test_full_river_depth_sinks_the_creature_by_the_full_shared_constant():
+	var world := StubWorldWithDepth.new()
+	world.biome = "grassland"
+	world.is_river = true
+	world.depth = WaterMovementModel.WADE_DEPTH_METERS
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("horse")
+	marker.position = Vector2(100, 100)
+	marker._current_action = "swim"
+	marker._is_moving = true
+
+	marker._animation_step()
+
+	assert_almost_eq(marker.offset.y, SubmersionShader.MAX_SINK_PX, 0.01)
+
+
+func test_zero_river_depth_applies_no_sink():
+	var world := StubWorldWithDepth.new()
+	world.biome = "grassland"
+	world.is_river = true
+	world.depth = 0.0
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("horse")
+	marker.position = Vector2(100, 100)
+	marker._current_action = "swim"
+	marker._is_moving = true
+
+	marker._animation_step()
+
+	assert_almost_eq(marker.offset.y, 0.0, 0.01)
+
+
+## Ocean is untouched: no river/lake depth to hand (a null _world, exactly
+## the existing tests above), so the fixed, non-gradual waterline -- and no
+## sink at all -- must still be exactly what it was.
+func test_ocean_swimming_still_uses_the_fixed_waterline_with_no_sink():
+	marker.info = CreatureInfo.new("horse")
+	marker.position = Vector2(100, 100)
+	marker._current_action = "swim"
+	marker._is_moving = true
+
+	marker._animation_step()
+
+	var waterline: float = marker.material.get_shader_parameter("water_world_y")
+	var full_waterline: float = marker.to_global(
+		Vector2(0.0, marker._illustrated.waterline_offset_y("horse"))
+	).y
+	assert_almost_eq(waterline, full_waterline, 0.01)
+	assert_almost_eq(marker.offset.y, 0.0, 0.01)
+
+
+const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
+
+
 ## A procedural species' swim frames already have the water baked into the
 ## pixels, so adding the shader on top would tint them twice.
 func test_a_procedural_species_does_not_also_get_the_submersion_shader():
@@ -1999,6 +2147,88 @@ func test_a_procedural_species_does_not_also_get_the_submersion_shader():
 	marker._animation_step()
 
 	assert_null(marker.material, "procedural swim art is already tinted; it must not be shaded again")
+
+
+# -- animals in rivers and lakes, not just the ocean -------------------------
+#
+# Reported: "animals ... don't produce ripples in the new river water".
+# _animation_step only ever set _current_action = "swim" through
+# CreaturePerception.is_on(world, tile, "water"), which is hard-coded to
+# biome == "ocean" (a deliberate, separately-tested contract -- see
+# test_creature_perception.gd's test_is_on_water_true_only_on_ocean -- so
+# this widens CreatureMarker's OWN water check instead of that shared one).
+# Rivers/lakes never change biome_at_global's result (they're overlays on
+# ordinary land biome, see docs/concept/hydrology.md), so a creature
+# standing in a river or lake never satisfied that check and therefore
+# never swam, never rippled (_step_water_ripple below), and never got the
+# submersion tint (_apply_submersion above) -- despite the already-correct,
+# separate "wader" current-bending push (EarthChunkManager.
+# river_wader_positions) already including animals on rivers/lakes/ocean
+# alike. FishMarker._is_fresh_water_tile already closes exactly this gap
+# for fish; _is_fresh_water_tile here mirrors it.
+func test_creature_enters_swim_action_on_a_river_tile_even_off_ocean_biome():
+	var world := StubWorldWithFreshWater.new()
+	world.biome = "grassland"  # precondition: NOT ocean
+	world.is_river = true
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("herbivore")
+
+	marker._animation_step()
+
+	assert_eq(marker._current_action, "swim", "a river tile should count as water even off ocean biome")
+
+
+func test_creature_enters_swim_action_on_a_lake_tile_even_off_ocean_biome():
+	var world := StubWorldWithFreshWater.new()
+	world.biome = "grassland"
+	world.is_lake = true
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("herbivore")
+
+	marker._animation_step()
+
+	assert_eq(marker._current_action, "swim", "a lake tile should count as water even off ocean biome")
+
+
+## Precondition guard: without a river/lake tile, plain land must NOT swim --
+## otherwise the two tests above would pass even if _is_fresh_water_tile
+## always returned true regardless of the stub's flags.
+func test_creature_does_not_enter_swim_action_on_plain_land():
+	var world := StubWorldWithFreshWater.new()
+	world.biome = "grassland"
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("herbivore")
+
+	marker._animation_step()
+
+	assert_ne(marker._current_action, "swim")
+
+
+## The consequence that actually fixes the reported bug: once a creature is
+## standing in real river water, its existing (already-correct, already-
+## throttled) _step_water_ripple must actually fire -- record_water_
+## disturbance itself is tile-type-agnostic (see EarthChunkManager), so
+## reaching "swim" at all on a river tile is the whole fix.
+class RippleSpyWorld:
+	extends StubWorldWithFreshWater
+	var disturbances: Array = []
+	func record_water_disturbance(world_pos: Vector2) -> void:
+		disturbances.append(world_pos)
+
+
+func test_creature_swimming_in_a_river_records_a_water_disturbance():
+	var world := RippleSpyWorld.new()
+	world.biome = "grassland"
+	world.is_river = true
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("herbivore")
+	marker.position = Vector2(100, 100)
+
+	marker._animation_step()  # picks up "swim" from the river tile
+	marker._step_water_ripple(CreatureMarker.WATER_RIPPLE_INTERVAL)
+
+	assert_eq(world.disturbances.size(), 1)
+	assert_eq(world.disturbances[0], Vector2(100, 100))
 
 
 ## The shadow's own scale (see set_shadow/_sync_grounded_children) must
@@ -3048,3 +3278,92 @@ func test_animal_state_reports_how_badly_a_need_is_felt_not_just_whether():
 		"a starving animal should report more hunger urgency than a peckish one"
 	)
 	assert_between(float(horse.animal_state()["thirst_urgency"]), 0.0, 1.0)
+
+
+# -- the ethogram underneath (docs/concept/ethogram.md, slice 2) ---------------
+#
+# The marker publishes what it senses as stimuli on the shared channel basis
+# and the species valence decides what each one means; its own genome,
+# derived from its wander_seed, reaches every decision and every sniff.
+
+const AnimalGenomeForMarker = preload("res://src/gameplay/animal_genome.gd")
+const EthogramForMarker = preload("res://src/gameplay/ethogram.gd")
+
+
+## Predators are not threatened by other creatures, only by the player --
+## which used to be a rule inside the scan and is now the predator valence.
+func test_a_predator_neither_flees_nor_attacks_another_predator():
+	var predator := _make_predator(Vector2(100, 100))
+	var other := _add_stub_creature("predator", Vector2(120, 100))
+	var health_before: float = other.info.health
+	predator._process(0.2)
+	assert_lt(predator.position.distance_to(predator.home), CreatureWander.WANDER_RADIUS)
+	assert_almost_eq(other.info.health, health_before, 0.001, "no attack either")
+
+
+func test_the_marker_publishes_what_it_senses_as_stimuli():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	var player := _add_stub_player(Vector2(120, 100))
+	var wolf := _add_stub_creature("predator", Vector2(80, 100))
+	marker._process(0.2)
+	var people := 0
+	var predators := 0
+	for stimulus in marker._cached_stimuli:
+		if stimulus["features"].has(EthogramForMarker.PLAYER):
+			people += 1
+			assert_eq(stimulus["node"], player)
+		if stimulus["features"].has(EthogramForMarker.PREDATOR):
+			predators += 1
+			assert_eq(stimulus["node"], wolf)
+	assert_eq(people, 1)
+	assert_eq(predators, 1)
+
+
+func test_a_marker_derives_its_genome_from_its_wander_seed():
+	marker.wander_seed = 77
+	assert_eq(marker.genome_or_derived(), AnimalGenomeForMarker.for_seed(77))
+	marker.genome = {"receptor_decay": 0.0}
+	assert_eq(marker.genome_or_derived(), {"receptor_decay": 0.0}, "a stored genome wins over the derived one")
+
+
+## A world that offers smells, and nothing else to eat.
+class SmellyStubWorld:
+	extends StubWorld
+	var sources: Array = []
+	func smells_near(_position: Vector2, _range_tiles: float) -> Array:
+		return sources
+
+
+## The live forage choice runs on the individual nose: a boar born without a
+## decay receptor is not led to carrion the species would go to.
+func test_an_individuals_nose_reaches_the_live_forage_choice():
+	var world := SmellyStubWorld.new()
+	world.sources = [{"position": Vector2(140, 100), "mixture": {"decay": 1.0}}]
+	marker.info = CreatureInfo.new("boar")
+	marker.setup(world, TILE_SIZE)
+	marker._needs.hunger = 1.0
+	assert_true(marker._seek_by_smell(), "the species takes carrion")
+	assert_true(marker._has_forage_target)
+	marker._drop_forage_target()
+	marker.genome = {"receptor_decay": 0.0}
+	assert_false(marker._seek_by_smell(), "this individual cannot smell it")
+	assert_false(marker._has_forage_target)
+
+
+# -- slice 4: boldness reaches a live marker's flee decision -----------------
+# docs/concept/ethogram.md §9.
+
+func test_a_bold_marker_tolerates_a_predator_the_shyest_would_flee():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	_add_stub_creature("predator", Vector2(160, 100))  # 60px east, in sense range
+	marker.genome = {"boldness": 1.0}
+	marker._process(0.2)
+	assert_false(marker._is_fleeing, "the boldest individual barely reacts to a threat this far off")
+
+
+func test_a_population_median_marker_still_flees_the_same_predator():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	_add_stub_creature("predator", Vector2(160, 100))
+	marker.genome = {"boldness": EthogramForMarker.NEUTRAL_BOLDNESS_GENE}
+	marker._process(0.2)
+	assert_true(marker._is_fleeing, "an ordinary individual still flees a sensed predator")

@@ -187,7 +187,10 @@ once the production systems it depends on are built").
 
 - **NPCs get real hunger**, not just villagers-as-scenery. Same shape as
   [creature_needs.gd](../../src/gameplay/creature_needs.gd) (hunger rises
-  per second, `is_hungry()`, `feed()`) — a genuinely new wiring, since
+  per second, `is_hungry()`, `feed()`) — and, since
+  [ethogram.md](ethogram.md) slice 3, literally the same clock: both are
+  facades over `Drives` with their numbers as ethogram drive profiles
+  (`villager` is the mammal pace, hunger only) — a genuinely new wiring, since
   `NpcMarker` carries no needs state today, but the identical pattern
   already proven for wild/tamed animals, not a new design.
 - **Occupation decides how a need gets met, not just where an NPC stands

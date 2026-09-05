@@ -69,10 +69,21 @@ distance. Perception is a magnitude: how loud, not how good.
 instead of sensitivity: positive draws, negative drives off, near-zero is
 noise. So a rotting fruit can be extremely loud to a deer and still repel it.
 
+**Where the receptors live.** Since [ethogram.md](ethogram.md) the receptor
+tables are the species records in `Ethogram.SPECIES` (response is the
+ethogram's `valence`), and this model's perception and judgement read them
+through `Ethogram.express` — the same expression step that applies an
+individual's receptor genes, so a boar born without a decay receptor is drawn
+less by rot than its species is. This doc keeps what smell *is*: the
+molecules, what emits them, and how a smell thins with range.
+
 ## Status
 
 - ✅ Molecules, mixtures, and fruit's ripe-to-rotten shift
-- ✅ Per-species receptors: sensitivity and response, separately
+- ✅ Per-species receptors: sensitivity and response, separately — held in
+  `Ethogram.SPECIES` and read through `Ethogram.express` since
+  [ethogram.md](ethogram.md); an optional genome on `perceived_strength`/
+  `attraction_to` expresses an individual's receptor genes
 - ✅ Perceived strength and attraction, diluted by distance
 - ✅ Animals following the gradient: boars and deer by smell rather than sight,
   birds preferring ripe fruit and leaving the rot

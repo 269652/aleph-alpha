@@ -41,6 +41,28 @@ const SEEDLING_SCALE := 0.22
 ## a sapling is not a harvest.
 const PRODUCTIVE_STAGE := 4
 
+## ## Old growth
+##
+## Real trees keep slowly growing for centuries after reaching reproductive
+## maturity -- MATURITY_SECONDS ends a tree's FAST early growth and gates
+## the visual stage ladder and fruiting eligibility, but was never meant to
+## be the end of a tree's size. Asked directly: "keep it but make trees
+## another 30% bigger, varying by age... so a 100 year old tree is bigger
+## than a 10 year old tree."
+##
+## 0.3, not eyeballed: the exact figure asked for. Timber/log/stick/beam/
+## plank yield (FelledTree) and fruiting/spread eligibility (TreeMaturity,
+## a wholly separate clock keyed off TreeGenome.maturity_time) are both
+## deliberately UNAFFECTED -- FelledTree's own yield functions re-clamp
+## their growth_scale input to [0, 1] internally, so an old-growth bonus
+## changes how a tree LOOKS, never what felling it is worth.
+const OLD_GROWTH_BONUS := 0.3
+
+## The age at which a tree reaches the full OLD_GROWTH_BONUS -- effectively
+## "ancient". 100 years, the exact age named in the request, measured
+## against the same season-cycle clock MATURITY_SECONDS already uses.
+const OLD_GROWTH_SECONDS := SeasonCycle.SECONDS_PER_YEAR * 100.0
+
 
 ## Which stage a tree of `age_seconds` is in, 0 (seedling) through
 ## STAGE_COUNT - 1 (mature). Growth is even across the stages: the drama
@@ -80,16 +102,37 @@ func scale_for_stage(stage: int) -> float:
 ##
 ## The STAGES still exist and still mean what they meant -- they gate bearing
 ## and timber -- but size is a curve through them.
+##
+## Past MATURITY_SECONDS this keeps climbing toward OLD_GROWTH_BONUS instead
+## of flatlining -- see the old-growth doc comment above.
+##
+## INF is guarded explicitly, BEFORE the old-growth range check: callers
+## pass INF to mean "this has always been here" (map-generated forest), a
+## sentinel for "skip aging entirely", not a genuinely large finite age --
+## conflating the two would make every original-forest tree silently jump
+## straight to the old-growth ceiling with zero age variation, the same
+## class of mistake stage_at's own INF guard already exists to prevent
+## (see its doc comment). A tree meant to actually EARN the bonus must pass
+## a real, finite pseudo-age (see TreeRenderer.spawn_trees).
 func scale_at(age_seconds: float) -> float:
 	if age_seconds <= 0.0:
 		return SEEDLING_SCALE
-	if age_seconds >= MATURITY_SECONDS:
+	if is_inf(age_seconds):
 		return 1.0
-	var t := age_seconds / MATURITY_SECONDS
-	# The same ease-out the stage curve uses: quick early gains, tapering
-	# toward full size, which is how a real stem puts on height.
-	var eased := 1.0 - pow(1.0 - t, 1.8)
-	return lerp(SEEDLING_SCALE, 1.0, eased)
+	if age_seconds < MATURITY_SECONDS:
+		var t := age_seconds / MATURITY_SECONDS
+		# The same ease-out the stage curve uses: quick early gains, tapering
+		# toward full size, which is how a real stem puts on height.
+		var eased := 1.0 - pow(1.0 - t, 1.8)
+		return lerp(SEEDLING_SCALE, 1.0, eased)
+	if age_seconds >= OLD_GROWTH_SECONDS:
+		return 1.0 + OLD_GROWTH_BONUS
+	var old_t := (age_seconds - MATURITY_SECONDS) / (OLD_GROWTH_SECONDS - MATURITY_SECONDS)
+	# Same ease-out shape as the seedling curve, for the same reason: fast
+	# early gains (a newly-mature tree visibly thickening) tapering toward
+	# the old-growth ceiling, rather than a constant creep for a century.
+	var old_eased := 1.0 - pow(1.0 - old_t, 1.8)
+	return lerp(1.0, 1.0 + OLD_GROWTH_BONUS, old_eased)
 
 
 ## Does a tree at this stage bear fruit and yield real wood?

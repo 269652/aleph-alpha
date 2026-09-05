@@ -339,3 +339,251 @@ func test_unaggroed_world_boss_still_seeks_food_and_water_normally():
 		"thirsty": true, "water_direction": Vector2(1, 0),
 	}))
 	assert_eq(decision.intent, "seek_water")
+
+
+# -- the ethogram underneath (docs/concept/ethogram.md §7) --------------------
+#
+# decide() is now the land-mammal adapter onto BehaviorKernel: the ladder
+# above is Ethogram.BODY_PLANS["mammal"]["wirings"], and everything the tests
+# above pin is the regression bar for that. What follows is what the adapter
+# can do that the old ladder could not: name what it chose, take a species
+# and its genome, and hunt by nose through the same entry point.
+
+const Olfaction = preload("res://src/gameplay/olfaction.gd")
+
+
+func test_a_decision_names_its_target_and_score():
+	var hunt := behavior.decide(_context({
+		"temperament": "aggressive", "is_predator": true, "hungry": true,
+		"prey": [Vector2(10, 0), Vector2(50, 0)],
+	}))
+	assert_eq(hunt["target"], Vector2(10, 0))
+	assert_gt(hunt["score"], 0.0)
+	var idle := behavior.decide(_context({}))
+	assert_eq(idle["target"], null)
+	assert_eq(idle["score"], 0.0)
+
+
+## Smells reach the ladder through the context as `smells`, the same
+## {position, mixture} list EarthChunkManager.smells_near already returns.
+## Nothing live passes them yet (ScentForaging does this job in the marker
+## until slice 2); this pins that the seam exists and ranks like a nose.
+func test_a_hungry_boar_with_smells_in_its_context_heads_for_the_ripe_apple():
+	var decision := behavior.decide(_context({
+		"species": "boar", "hungry": true,
+		"smells": [
+			{"position": Vector2(60, 0), "mixture": Olfaction.fruit_mixture("apple", 1.0)},
+			{"position": Vector2(-60, 0), "mixture": Olfaction.fruit_mixture("apple", 0.0)},
+		],
+	}))
+	assert_eq(decision.intent, "seek_food")
+	assert_gt(decision.direction.x, 0.0)
+
+
+func test_a_hungry_deer_walks_past_a_rotten_apple_and_keeps_searching():
+	var decision := behavior.decide(_context({
+		"species": "deer", "hungry": true,
+		"smells": [{"position": Vector2(-60, 0), "mixture": Olfaction.fruit_mixture("apple", 0.0)}],
+	}))
+	assert_eq(decision.intent, "search_food", "repelled, and with nothing else sensed, it roams")
+
+
+func test_smells_never_outrank_thirst_or_a_threat():
+	var smells := [{"position": Vector2(60, 0), "mixture": Olfaction.fruit_mixture("apple", 1.0)}]
+	var thirsty := behavior.decide(_context({
+		"species": "boar", "hungry": true, "smells": smells,
+		"thirsty": true, "water_direction": Vector2(0, 1),
+	}))
+	assert_eq(thirsty.intent, "seek_water")
+	var hunted := behavior.decide(_context({
+		"species": "boar", "hungry": true, "smells": smells, "threats": [Vector2(0, 10)],
+	}))
+	assert_eq(hunted.intent, "flee")
+
+
+## A species with no ethogram record (most of the roster today) still runs
+## the whole mammal ladder on the body plan's defaults.
+func test_a_species_without_a_record_still_runs_the_mammal_ladder():
+	var decision := behavior.decide(_context({
+		"species": "lynx", "temperament": "calm", "threats": [Vector2(10, 0)],
+	}))
+	assert_eq(decision.intent, "flee")
+	assert_eq(behavior.decide(_context({"species": "lynx", "hungry": true})).intent, "search_food")
+
+
+## An individual's receptor genes reach its decision: a boar born without a
+## decay receptor cannot be drawn by carrion the species would take. (A
+## rotten APPLE would still draw it a little -- the fruit keeps a trace of
+## sugar as it goes over, and a boar likes sugar -- which is olfaction.md's
+## point that a smell is a mixture, not a label; so this uses a pure decay
+## source.)
+func test_an_individuals_receptor_genes_reach_its_decision():
+	var carrion := [{"position": Vector2(-60, 0), "mixture": {Olfaction.DECAY: 1.0}}]
+	var typical := behavior.decide(_context({"species": "boar", "hungry": true, "smells": carrion}))
+	var anosmic := behavior.decide(_context({
+		"species": "boar", "hungry": true, "smells": carrion, "genome": {"receptor_decay": 0.0},
+	}))
+	assert_eq(typical.intent, "seek_food")
+	assert_eq(anosmic.intent, "search_food")
+
+
+# -- slice 2: the marker publishes stimuli; the verdict is the valence -------
+
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+
+
+func _wolf(at: Vector2) -> Dictionary:
+	return {"position": at, "features": {Ethogram.PREDATOR: 1.0}, "node": "wolf"}
+
+
+func _person(at: Vector2) -> Dictionary:
+	return {"position": at, "features": {Ethogram.PLAYER: 1.0}, "node": "player"}
+
+
+func _sheep(at: Vector2) -> Dictionary:
+	return {"position": at, "features": {Ethogram.FLESH: 1.0}, "node": "sheep"}
+
+
+## The scan reports what the other creature IS; the species decides what
+## that means. A calm herbivore flees a predator it is handed as a stimulus.
+func test_a_calm_creature_flees_a_predator_stimulus():
+	var decision := behavior.decide(_context({"stimuli": [_wolf(Vector2(10, 0))]}))
+	assert_eq(decision.intent, "flee")
+	assert_lt(decision.direction.x, 0.0)
+	assert_eq(decision["stimulus"]["node"], "wolf")
+
+
+## Predators are not threatened by other creatures, only by the player --
+## the rule the marker used to apply while scanning, now a valence.
+func test_a_predator_ignores_another_predator_but_answers_a_player():
+	var ignores := behavior.decide(_context({
+		"temperament": "aggressive", "is_predator": true, "stimuli": [_wolf(Vector2(10, 0))],
+	}))
+	assert_eq(ignores.intent, "wander")
+	var attack := behavior.decide(_context({
+		"temperament": "aggressive", "is_predator": true, "stimuli": [_person(Vector2(10, 0))],
+	}))
+	assert_eq(attack.intent, "attack")
+	assert_eq(attack["stimulus"]["node"], "player")
+
+
+func test_a_hungry_predator_hunts_a_flesh_stimulus_and_names_the_node():
+	var decision := behavior.decide(_context({
+		"temperament": "aggressive", "is_predator": true, "hungry": true,
+		"stimuli": [_sheep(Vector2(50, 0)), _sheep(Vector2(10, 0))],
+	}))
+	assert_eq(decision.intent, "hunt")
+	assert_eq(decision["target"], Vector2(10, 0))
+	assert_eq(decision["stimulus"]["node"], "sheep")
+
+
+## A herbivore handed the same flesh stimulus wants nothing from it.
+func test_a_herbivore_ignores_a_flesh_stimulus():
+	var decision := behavior.decide(_context({"hungry": true, "stimuli": [_sheep(Vector2(10, 0))]}))
+	assert_eq(decision.intent, "search_food")
+
+
+## A tamed animal does not perceive people as anything: sensitivity, not valence.
+func test_an_animal_that_no_longer_fears_players_does_not_perceive_them():
+	var decision := behavior.decide(_context({
+		"fears_players": false, "stimuli": [_person(Vector2(10, 0))],
+	}))
+	assert_eq(decision.intent, "wander")
+
+
+## When the caller publishes stimuli, the legacy position lists are not read
+## on top of them -- one source of truth per call.
+func test_published_stimuli_replace_the_legacy_lists():
+	var decision := behavior.decide(_context({"threats": [Vector2(10, 0)], "stimuli": []}))
+	assert_eq(decision.intent, "wander")
+
+
+func test_an_aggressive_strong_herbivore_stands_and_fights_a_predator():
+	var decision := behavior.decide(_context({
+		"temperament": "aggressive", "health_fraction": 1.0, "stimuli": [_wolf(Vector2(10, 0))],
+	}))
+	assert_eq(decision.intent, "attack")
+
+
+## What the animal NOTICES on the fear channels, fight or flee alike -- the
+## marker keeps this as its threat list (lift the head from grazing, widen
+## the flee-release radius) instead of deciding who counts while scanning.
+func test_threats_lists_what_the_animal_notices_on_the_fear_channels():
+	var wolf := _wolf(Vector2(10, 0))
+	var person := _person(Vector2(20, 0))
+	var sheep := _sheep(Vector2(30, 0))
+	var calm := behavior.threats(_context({"stimuli": [wolf, person, sheep]}))
+	assert_eq(calm.size(), 2, "a herbivore notices the wolf and the person, not the sheep")
+	var fighter := behavior.threats(_context({
+		"temperament": "aggressive", "health_fraction": 1.0, "stimuli": [wolf, person, sheep],
+	}))
+	assert_eq(fighter.size(), 2, "a fighter still notices what it would fight")
+	var hunter := behavior.threats(_context({"is_predator": true, "stimuli": [wolf, person, sheep]}))
+	assert_eq(hunter.size(), 1, "a predator notices only the person")
+	assert_eq(hunter[0]["node"], "player")
+	var tame := behavior.threats(_context({"fears_players": false, "stimuli": [wolf, person]}))
+	assert_eq(tame.size(), 1, "a tamed animal still notices the wolf, and no longer the person")
+	assert_eq(tame[0]["node"], "wolf")
+
+
+# -- slice 3: drives as gains -------------------------------------------------
+
+## A caller that hands over its drive gains (Drives.gains) is taken at its
+## word; the hungry/thirsty booleans are the older shape.
+func test_published_drive_gains_replace_the_booleans():
+	var starving := behavior.decide(_context({
+		"hungry": false, "drives": {"hunger": 1.0}, "food_direction": Vector2(0, 1),
+	}))
+	assert_eq(starving.intent, "seek_food")
+	var sated := behavior.decide(_context({
+		"hungry": true, "drives": {"hunger": 0.0}, "food_direction": Vector2(0, 1),
+	}))
+	assert_eq(sated.intent, "wander")
+
+
+## A partial gain still opens the gate -- the kernel scales the score, the
+## ladder decides.
+func test_a_partial_gain_still_opens_the_gate():
+	var peckish := behavior.decide(_context({
+		"drives": {"hunger": 0.4}, "food_direction": Vector2(0, 1),
+	}))
+	assert_eq(peckish.intent, "seek_food")
+	assert_gt(peckish["score"], 0.0)
+
+
+# -- slice 4: a boldness gene raises the fear floor (docs/concept/ethogram.md §9) --
+
+## A far-off predator that a population-median individual still flees does
+## not register at all for the boldest possible individual: its fear wiring
+## requires the threat within about a tile, per Ethogram.fear_floor.
+func test_a_bold_individuals_fear_wiring_ignores_a_faint_threat_a_typical_one_flees():
+	var far_threat := [_wolf(Vector2(500, 0))]
+	var typical := behavior.decide(_context({
+		"genome": {"boldness": Ethogram.NEUTRAL_BOLDNESS_GENE}, "stimuli": far_threat,
+	}))
+	assert_eq(typical.intent, "flee", "a population-median individual still flees a distant threat")
+	var bold := behavior.decide(_context({"genome": {"boldness": 1.0}, "stimuli": far_threat}))
+	assert_ne(bold.intent, "flee", "the boldest individual does not register so faint a threat")
+
+
+## An absent genome (every pre-existing test above, and any context built
+## before this gene existed) behaves exactly as it always has: the neutral
+## gene IS the old, only, zero floor.
+func test_no_genome_at_all_behaves_exactly_like_the_neutral_gene():
+	var far_threat := [_wolf(Vector2(500, 0))]
+	assert_eq(behavior.decide(_context({"stimuli": far_threat})).intent, "flee")
+
+
+## Calling threats() before decide() has ever run must not leave the fear
+## wiring's per-individual floor stuck at its default: threats() also caches
+## the genome (it calls _receptors() too), and if the wirings array isn't
+## populated by the time that cache first warms, the floor patch lands on
+## an empty array and never gets a second chance -- a real bug this pinned,
+## not a hypothetical one (CreatureMarker calls threats() before its first
+## decide() every time).
+func test_threats_called_before_the_first_decide_still_lets_the_floor_apply():
+	var far_threat := [_wolf(Vector2(500, 0))]
+	var bold_genome := {"boldness": 1.0}
+	behavior.threats(_context({"genome": bold_genome, "stimuli": far_threat}))
+	var decision := behavior.decide(_context({"genome": bold_genome, "stimuli": far_threat}))
+	assert_ne(decision.intent, "flee", "the boldest individual still shouldn't register so faint a threat")

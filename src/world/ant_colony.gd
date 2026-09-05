@@ -192,6 +192,23 @@ var _forage_success: Dictionary = {}
 ## attempts to register at all.
 const FORAGE_SUCCESS_EMA_RATE := 0.3
 
+## Per-mound exponential moving average of recent soil moisture, in
+## [0, 1] -- see docs/concept/soil_fauna.md "Water, not just food: a
+## second real growth driver". Fed by EarthChunkManager.step_ants via
+## record_moisture, sampled from WeatherModel.soil_moisture the identical
+## way EarthwormPatch.set_conditions already reads it. Not present at all
+## for a mound record_moisture has never been called on, which
+## capacity_at reads as 0.0 (parched), same fallback shape
+## _forage_success already uses.
+var _moisture: Dictionary = {}
+
+## Same weight as FORAGE_SUCCESS_EMA_RATE -- a single moisture sample is
+## exactly as consequential as a single forage outcome, matching
+## AntPopulationModel.WATER_CAPACITY_BONUS being pinned equal to
+## FOOD_CAPACITY_BONUS: neither signal is structurally twitchier or
+## sluggisher than the other.
+const MOISTURE_EMA_RATE := FORAGE_SUCCESS_EMA_RATE
+
 var _population_model := AntPopulationModel.new()
 
 ## Per-mound trail pheromone (see PheromoneField) -- Vector2i cell ->
@@ -281,11 +298,13 @@ func population_at(cell: Vector2i) -> float:
 
 
 ## How large a colony this mound can currently support -- rises with its
-## own recent forage success (see record_forage_result), the real feedback
-## loop named in docs/concept/soil_fauna.md's "A queen, and where a
-## colony's size comes from".
+## own recent forage success (see record_forage_result) AND its own
+## recent soil moisture (see record_moisture), the real feedback loop
+## named in docs/concept/soil_fauna.md's "A queen, and where a colony's
+## size comes from" / "Water, not just food: a second real growth
+## driver".
 func capacity_at(cell: Vector2i) -> float:
-	return _population_model.capacity(_forage_success.get(cell, 0.0))
+	return _population_model.capacity(_forage_success.get(cell, 0.0), _moisture.get(cell, 0.0))
 
 
 ## Records whether one dispatched forager's real round trip actually found
@@ -297,6 +316,26 @@ func record_forage_result(cell: Vector2i, succeeded: bool) -> void:
 	var current: float = _forage_success.get(cell, 0.0)
 	var target := 1.0 if succeeded else 0.0
 	_forage_success[cell] = lerpf(current, target, FORAGE_SUCCESS_EMA_RATE)
+
+
+## Records this mound's own current soil moisture -- called by
+## EarthChunkManager.step_ants on the same weather-day-scale cadence
+## EarthwormPatch.set_conditions already samples on, not every step (see
+## docs/concept/soil_fauna.md "Water, not just food"). Feeds the
+## recent-moisture signal capacity_at reads.
+func record_moisture(cell: Vector2i, moisture: float) -> void:
+	var current: float = _moisture.get(cell, 0.0)
+	_moisture[cell] = lerpf(current, clampf(moisture, 0.0, 1.0), MOISTURE_EMA_RATE)
+
+
+## How far this mound's own colony is toward AntPopulationModel.
+## MAX_REFERENCE_POPULATION, [0, 1] -- what a mound's own visual size
+## reads (see ProceduralAntMoundSprite.world_width_for). A founding
+## colony reads near 0; a colony that has actually reached the real
+## ceiling capacity() can produce (both food and water abundant, given
+## time to grow into it) reads at 1.
+func growth_fraction_at(cell: Vector2i) -> float:
+	return clampf(population_at(cell) / AntPopulationModel.MAX_REFERENCE_POPULATION, 0.0, 1.0)
 
 
 ## How many foragers this mound may have concurrently active -- always at

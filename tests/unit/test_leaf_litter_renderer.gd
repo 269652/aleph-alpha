@@ -15,6 +15,7 @@ extends GutTest
 const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const LeafLitterAtlas = preload("res://src/rendering/leaf_litter_atlas.gd")
+const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 
 
 # -- packing: every channel round-trips ---------------------------------------
@@ -120,6 +121,103 @@ func test_transition_rotation_reaches_zero_once_complete():
 		assert_almost_eq(LeafLitterRenderer.transition_rotation(1.0, phase), 0.0, 0.0001)
 
 
+# -- tumble: a real leaf visibly SPINS while blowing across open ground ------
+#
+# Reported: "the leaves blowing in the wind animation... they should twirl
+# more and have more realistic / natural motion paths". transition_rotation
+# above only ever WOBBLES (oscillates back toward zero, see the test just
+# above) -- real litter tumbling in wind visibly spins THROUGH, completing
+# real turns rather than rocking in place (see docs/concept/leaf_litter.md's
+# own "Real-world grounding": "a dry leaf's large surface-area-to-mass ratio
+# is why it visibly tumbles and skitters across open ground in an ordinary
+# breeze"). tumble_rotation adds an ACCUMULATING spin on top of the existing
+# wobble -- scaled by how FAR this transition travels (raw_offset's own
+# length), so a leaf merely settling back into place after a footstep nudge
+# barely turns, where one genuinely carried across a real wind-blown journey
+# visibly cartwheels several times, same real-world distinction the report
+# itself draws between "walking over" and "a gust blows".
+
+func test_tumble_turns_for_distance_is_minimum_at_zero_distance():
+	assert_almost_eq(
+		LeafLitterRenderer.tumble_turns_for_distance(0.0), LeafLitterRenderer.MIN_TUMBLE_TURNS, 0.0001
+	)
+
+
+func test_tumble_turns_for_distance_is_maximum_at_the_reference_distance():
+	assert_almost_eq(
+		LeafLitterRenderer.tumble_turns_for_distance(LeafLitterRenderer.MAX_TRANSITION_OFFSET),
+		LeafLitterRenderer.MAX_TUMBLE_TURNS, 0.0001
+	)
+
+
+## A journey longer than the largest real transition can ever be (see
+## MAX_TRANSITION_OFFSET's own doc comment: it is already sized to the
+## largest possible single hop) must still clamp, not extrapolate past
+## MAX_TUMBLE_TURNS into an ever-faster spin.
+func test_tumble_turns_for_distance_clamps_past_the_reference_distance():
+	var huge := LeafLitterRenderer.MAX_TRANSITION_OFFSET * 100.0
+	assert_almost_eq(
+		LeafLitterRenderer.tumble_turns_for_distance(huge), LeafLitterRenderer.MAX_TUMBLE_TURNS, 0.0001
+	)
+
+
+func test_tumble_turns_for_distance_is_between_min_and_max_partway():
+	var turns := LeafLitterRenderer.tumble_turns_for_distance(LeafLitterRenderer.MAX_TRANSITION_OFFSET * 0.5)
+	assert_gt(turns, LeafLitterRenderer.MIN_TUMBLE_TURNS)
+	assert_lt(turns, LeafLitterRenderer.MAX_TUMBLE_TURNS)
+
+
+## Two leaves landing centimetres apart must not all spin the same way --
+## the same "banding" concern phase_for_position's own doc comment already
+## raises for flutter/sway, now for spin direction too.
+func test_spin_direction_for_phase_is_only_ever_plus_or_minus_one():
+	for phase in [0.0, 0.5, 1.0, PI, PI * 1.5, TAU - 0.001]:
+		var direction := LeafLitterRenderer.spin_direction_for_phase(phase)
+		assert_true(direction == 1.0 or direction == -1.0, "got %f" % direction)
+
+
+func test_spin_direction_for_phase_is_deterministic():
+	assert_eq(
+		LeafLitterRenderer.spin_direction_for_phase(1.23), LeafLitterRenderer.spin_direction_for_phase(1.23)
+	)
+
+
+func test_spin_direction_for_phase_takes_both_values_across_real_phases():
+	var directions := {}
+	for i in 20:
+		var phase := LeafLitterRenderer.phase_for_position(Vector2(100.0 + i * 5.25, 200.0))
+		directions[LeafLitterRenderer.spin_direction_for_phase(phase)] = true
+	assert_eq(directions.size(), 2, "twenty real leaf phases should not all spin the same direction")
+
+
+func test_tumble_rotation_is_zero_at_the_start_of_any_transition():
+	for distance in [0.0, 50.0, LeafLitterRenderer.MAX_TRANSITION_OFFSET]:
+		assert_almost_eq(LeafLitterRenderer.tumble_rotation(0.0, distance, 0.7), 0.0, 0.0001)
+
+
+## UNLIKE transition_rotation (which decays back to zero, see the wobble test
+## above), a real tumble does not un-spin itself -- it must reach its own
+## full turn count by the time the transition completes, in the direction
+## spin_direction_for_phase says this leaf spins.
+func test_tumble_rotation_reaches_its_full_spin_once_the_transition_completes():
+	var phase := 2.1
+	var distance := LeafLitterRenderer.MAX_TRANSITION_OFFSET * 0.5
+	var expected := (
+		LeafLitterRenderer.tumble_turns_for_distance(distance) * TAU
+		* LeafLitterRenderer.spin_direction_for_phase(phase)
+	)
+	assert_almost_eq(LeafLitterRenderer.tumble_rotation(1.0, distance, phase), expected, 0.0001)
+
+
+func test_a_longer_journey_tumbles_more_than_a_shorter_one_at_the_same_progress():
+	var phase := 0.9
+	var short_spin := absf(LeafLitterRenderer.tumble_rotation(0.6, 20.0, phase))
+	var long_spin := absf(
+		LeafLitterRenderer.tumble_rotation(0.6, LeafLitterRenderer.MAX_TRANSITION_OFFSET, phase)
+	)
+	assert_gt(long_spin, short_spin)
+
+
 ## The ongoing ground sway once settled -- mirrors
 ## test_a_landed_leaf_keeps_swaying_gently: different moments must give
 ## different rotations, so a settled leaf visibly keeps rocking rather than
@@ -211,6 +309,16 @@ func test_mesh_is_a_fixed_world_size_quad():
 	var mesh := renderer.mesh()
 	assert_almost_eq(mesh.size.x, LeafLitterRenderer.WORLD_SIZE, 0.001)
 	assert_almost_eq(mesh.size.y, LeafLitterRenderer.WORLD_SIZE, 0.001)
+
+
+## Reported directly: "leaves should be half as big" -- pins the real value
+## (not just "the mesh uses whatever WORLD_SIZE is", which the test above
+## already covers and would pass regardless of the constant's own value).
+## Half of the previous 1.5x-walnut-width sizing, so 0.75x.
+func test_world_size_is_half_its_previous_walnut_relative_size():
+	assert_almost_eq(
+		LeafLitterRenderer.WORLD_SIZE, ProceduralItemSprite.WALNUT_WORLD_WIDTH * 0.75, 0.001
+	)
 
 
 func test_material_is_a_shader_material_with_the_atlas_texture_assigned():

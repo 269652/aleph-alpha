@@ -806,9 +806,43 @@ fallback it was paired with was reverted, see above.)
 `_resolve_water_state` now takes `maxf(ocean_depth, river_depth)`, so nothing
 about ocean's existing behavior changes. Once depth is real, the entire
 pre-existing chain (`current_mode` → `CharacterView.MovementState.SWIMMING`
-→ `SubmersionShader.set_waterline`) fires exactly as it already does for
+→ `SubmersionShader.set_waterline`) fired exactly as it already did for
 ocean — no new tinting code was needed, only real river depth for the
 existing mechanism to actually see.
+
+**Update (2026-09-05): the tint (and now a sink) are gradual, not a
+boolean.** Reported: "the players submerged tint should be improved and
+gradual based on water depth so when walking in from the river shore the
+player / animal gradually moves downwards and the part underwater gets
+tinted... don't hide legs; just tint." The mechanism above was still a hard
+switch underneath: `_resolve_water_state` computed continuous depth only to
+immediately collapse it into `current_mode`'s coarse walking/wading/
+swimming/drowning string, and `CharacterView` collapsed it AGAIN into a
+3-value `MovementState` enum — so wading had no visual signature at all
+until the exact swim threshold, and legs were a `.visible` toggle rather
+than tinted. `Player.current_water_depth` now survives that collapse
+(`_resolve_water_state`'s returned dict carries `water_depth` alongside
+`mode`/`speed_multiplier`), threaded to `CharacterView.set_submersion_depth`
+every frame. Legs now share the torso's own `SubmersionShader` material
+instead of being hidden. The waterline is a continuous lerp from the feet
+to the torso's existing "half submerged" centre, normalized against
+`WaterMovementModel.WADE_DEPTH_METERS` — the same tested wade/swim
+threshold, not a second hand-picked number — so depth at or beyond it
+reproduces the old "fully swimming" look exactly. A small shared sink
+(`SubmersionShader.MAX_SINK_PX`) settles the whole rig down together as
+depth increases, suggesting a riverbed that actually slopes toward the
+channel. Callers with no real depth to hand (the character-creator diorama,
+village NPCs) never call `set_submersion_depth`, so their existing boolean-
+driven look — full tint, now also the full sink — is unchanged.
+
+Animals get the same treatment in fresh water: `CreatureMarker.
+_apply_submersion` used to tint a swimming illustrated species at a FIXED
+per-species waterline regardless of depth (reasonable for the ocean, which
+has no cheap per-tile depth this class can ask for) — now, when standing in
+real river/lake water, the waterline is the same continuous lerp (toward
+the species' own existing fixed value at full wade depth) and the same
+shared sink applies. See Creature water-depth awareness below for the
+detection gap this depended on closing first.
 
 ## Decoration exclusion: trees, grass, and snow (2026-08-29)
 
@@ -864,10 +898,23 @@ than it is, matching this project's usual practice):
 - **Village water-avoidance** — `village_renderer.gd`'s dry-origin search
   doesn't yet know about the new `is_river_at_global` query; a village
   could still be placed straddling a river. Follow-up, not attempted here.
-- **Creature water-depth awareness** — only `Player._resolve_water_state`
-  was wired to real river depth; whatever the equivalent creature-side
-  swim/depth logic is (fish population/kingfisher wading, animal swimming)
-  was not audited or touched here.
+- **Creature water-depth awareness — partially closed (2026-09-05).**
+  `CreatureMarker`'s own "am I in water" check (`_animation_step`) was
+  ocean-biome-only (`CreaturePerception.is_on(..., "water")`, hard-coded to
+  `biome == "ocean"`) — a river or lake tile never satisfied it, so a
+  creature standing in real river/lake water never entered `"swim"` at all:
+  no ripple (the disturbance-recording call was already correct and
+  tile-agnostic; it just never fired), no submersion tint, nothing.
+  `CreatureMarker._is_fresh_water_tile` (mirroring `FishMarker`'s own helper
+  of the same name) now widens THIS class's own gate to also check
+  `is_river_at_global`/`is_lake_at_global`, without touching
+  `CreaturePerception`'s shared, separately-tested ocean-only contract
+  (other callers of `is_on(..., "water")` — food/water-seeking — are
+  unaffected). Ocean itself is still untouched beyond this: there is no
+  cheap per-tile ocean depth this class can ask for the way river/lake
+  depth is already asked elsewhere, so ocean keeps its original fixed,
+  non-gradual waterline. Still open: fish population/kingfisher wading
+  depth-awareness specifically was not audited here.
 - **The water wheel mechanic itself** (`docs/concept/electromagnetism.md`)
   — flow DIRECTION and real gradient-driven SPEED are both now real and
   visualized (see Flow above), but no torque/power-generation mechanic
@@ -1274,7 +1321,24 @@ Not a regression in the ripple machinery — that is entirely intact. Fish
 (`FishMarker._step_water_ripple`), the player (`Player._step_water_ripples`)
 and creatures (`CreatureMarker._step_water_ripple`) all still call
 `EarthChunkManager.record_water_disturbance` on the same schedules, and
-`WaterShader` still ages and draws them. The cause is a rendering boundary:
+`WaterShader` still ages and draws them.
+
+**Correction (2026-09-05): that "creatures... call it" claim was true of
+the code path, but the path was never actually REACHED on a river or
+lake.** `CreatureMarker._step_water_ripple` only fires when `_current_
+action == "swim"`, and the only place that was ever set was
+`CreaturePerception.is_on(world, tile, "water")` — hard-coded to
+`biome == "ocean"`. Rivers and lakes never change a tile's biome (they're
+overlays on ordinary land, see Rendering above), so a creature standing in
+real river/lake water never entered `"swim"` and this whole section's fix
+never had anything to reach for it. This audit gap was even named
+explicitly, just never revisited: see Creature water-depth awareness under
+"What this pass touches" above, closed the same day this correction was
+written. The player and fish were genuinely unaffected by this — fish
+spawn by ocean biome (see below) and the player's own depth check was
+already real-river-aware.
+
+The cause is a rendering boundary:
 `_paint_water_overlay` is **ocean only** ("rivers used to be painted here
 too... the flow overlay is now the river's entire water surface"), and
 `RiverFlowShader` is **opaque** and had no disturbance term. So on a river
@@ -1370,6 +1434,65 @@ explicitly under `--headless` (no GPU target, `get_image()` returns null,
 and the engine error that raises fails the test on its own); the far-world
 one had been reporting a shader failure on every headless run for a reason
 that had nothing to do with the shader.
+
+## Rain ripples on the river (2026-09-05)
+
+Reported alongside the animal-ripple gap above: "rain don't produce
+ripples in the new river water." A DIFFERENT, sibling gap to the
+disturbance-buffer one this whole section is about — rain was never wired
+to the river surface AT ALL, not merely blocked from reaching it.
+`RainOverlay` is purely a screen-space visual with no world-position
+concept to anchor a ripple to; the real rain→ripple wiring is
+`EarthChunkManager.set_rain`, which touched only `WaterShader`'s (ocean)
+material. `RiverFlowShader` had no rain uniform and no raindrop function of
+any kind.
+
+**Worse than the reported symptom.** Since `_paint_water_overlay`'s "one
+water surface" change (see Rendering above), the OLD ocean-only
+`water_layer` `TileMapLayer` erases every one of its own cells whenever a
+river flow layer is registered — which `scenes/world.gd` always does in
+real gameplay. A `TileMapLayer` with zero painted cells never renders its
+material's shader anywhere on screen, `rain_intensity` uniform or not. So
+rain-driven ripples were actually invisible on **every** water body, ocean
+included, not only rivers — a genuinely broader regression than what was
+named, caught only by tracing where `_water_material` actually still
+draws.
+
+**The fix mirrors the movement-ripple one exactly, at the GLSL level
+instead of the buffer level.** `WaterShader.raindrop_ripples` is a
+self-contained, `TIME`-driven hash-grid (no CPU-side buffer or aging to
+mirror, unlike the disturbance buffer) — each 14px cell spawns one splash
+per 1.6s cycle at a hash-derived point, sampling the 3×3 neighbourhood so a
+splash spawned next door still renders as it crosses the cell boundary.
+`RiverFlowShader` gained the identical technique (`raindrop_ripples`), and
+its own `rain_ripple_packet` — a GENUINE second copy of the packet formula
+(matching this file's own convention that `ripple_packet` is written out
+rather than delegated to `WaterShader`, so the cross-shader agreement test
+is real, not a tautology), using the SAME `RAIN_RIPPLE_SPEED/LIFETIME/
+WAVELENGTH/PACKET_WIDTH` `WaterShader` already tunes — not the movement
+wake's own, much longer packet. That distinction matters: `WaterShader`'s
+own history records that sharing the wake's packet for rain "made every
+drop a multi-tile bullseye," so the river doesn't repeat it. Feeds into the
+same stroke field the movement ripple bends (`s_field`), at a much smaller
+gain (`RAIN_RIPPLE_LINE_GAIN`, a fraction of the movement gain, so it
+inherits that constant's own tested "cannot restructure the channel"
+ceiling for free) — many overlapping small splashes read as a gentle
+texture, not each as clearly as one creature's own ring. Deliberately does
+NOT also get the separate crest-ink treatment the movement ripple's own
+`ripple_crest`/`ripple_ink` give it: a raindrop's splash is a smaller,
+subtler disturbance than a wake and doesn't need its own printed ring.
+
+`EarthChunkManager.set_rain` now pushes to both materials unconditionally
+— matching `_mirror_disturbances_to_the_river`'s own existing convention —
+which fixes rain on rivers/lakes and, as a side effect of the sea now
+rendering on the same unified overlay, on the ocean too.
+
+**Verified the same way the movement fix was**, for the same reason:
+`test_river_flow_render_smoke.gd` renders two blocks of the same river in
+one shared frame, one quiet and one at full `rain_intensity`, and requires
+the picture to actually differ — a CPU-mirror-only proof would stay green
+even if the term never reached a pixel, exactly the failure class that
+produced this report in the first place.
 
 ## Fish really do live under the river surface (2026-09-04)
 
@@ -1854,7 +1977,22 @@ measure as fractions of it.
   (`test_a_recorded_disturbance_actually_changes_what_the_river_draws`),
   which is the only place the symptom was ever visible. Fish are among the
   causes — see "Fish really do live under the river surface" above, which
-  corrects a wrong claim this bullet made first time round.
+  corrects a wrong claim this bullet made first time round. **Second
+  correction (2026-09-05): "animals" was ALSO wrong** — the buffer-sharing
+  fix above was real, but `CreatureMarker` never actually reached
+  `record_water_disturbance` on a river or lake at all (ocean-only water
+  detection; see the Correction under "Movement ripples in the river" and
+  Creature water-depth awareness above). Actually closed now, not merely
+  claimed.
+- **Rain ripples on the river** — ✅ Done — see "Rain ripples on the river"
+  above. A different, sibling gap from the movement-ripple one: rain was
+  never wired to the river surface at all (no uniform, no GLSL function),
+  and — found investigating this — the ocean's OWN rain ripples had also
+  gone invisible in real gameplay once the ocean started rendering on the
+  unified river-flow overlay instead of its own tile layer. Both fixed by
+  the same change (`EarthChunkManager.set_rain` now reaches both
+  materials); confirmed on a real GPU
+  (`test_rain_actually_changes_what_the_river_draws`).
 - **Rivers on the minimap** — ✅ Done — water-blue over any biome, memoised
   per tile so the polyline walk never hitches the rebuild.
 - **Real hydraulics: volume, pressure, current speed** — ✅ Done —
@@ -1866,12 +2004,22 @@ measure as fractions of it.
   question — there is now a real per-cell discharge and velocity for a water
   wheel to consume. Rainfall/flood coupling and the water wheel mechanic
   itself — ⬜ Not started.
-- **Player wading/swimming/submersion-tint/ripples in rivers** — ✅ Done.
+- **Player/animal wading/swimming/submersion-tint/ripples in rivers** —
+  ✅ Done. Tint (and now a sink) are gradual with real depth, not a boolean
+  — see "Player interaction" above. Animals get the same treatment in
+  fresh water, once their own water-detection gap (see Creature water-
+  depth awareness above) was closed.
+- **Rain ripples on the river (and, incidentally, the ocean)** — ✅ Done —
+  see "Rain ripples on the river" above.
 - **Decoration exclusion (trees, grass, snow)** — ✅ Done.
 - **Dry-land spawn exclusion** — ✅ Done.
-- **Freshwater fishing, village avoidance, creature water-depth awareness,
-  boats/fords/bridges, Nix water-gating, lakes, already-persisted stale
-  saplings** — ⬜ Not started (see above).
+- **Creature water-depth awareness** — 🚧 Partial — river/lake now closed
+  for the ripple/tint gate (see above); ocean itself still has no cheap
+  per-tile depth this class can ask for, and fish population/kingfisher
+  wading depth-awareness specifically was not audited.
+- **Freshwater fishing, village avoidance, boats/fords/bridges, Nix
+  water-gating, lakes, already-persisted stale saplings** — ⬜ Not started
+  (see above).
 
 ## Bounded drift: the far-time shredding (2026-09-05)
 

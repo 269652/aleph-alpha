@@ -90,6 +90,22 @@ func _visible_fraction(image: Image) -> float:
 ## fragment shader's atlas UV math (see LeafLitterRenderer's own vertex()
 ## cell_x0/x1/y0/y1 derivation) actually lands on real content rather than
 ## the atlas's own transparent gutter or an unrelated neighbouring cell.
+##
+## "Settled" here means the transition has actually COMPLETED (t == 1, the
+## real steady state LeafLitterField.advance's own transition_from-snap
+## exists for -- see that field's doc comment), not merely that this leaf's
+## raw_offset happens to be zero. At t == 0 (an active transition with
+## nothing to travel) the shader's own oscillating flutter/tumble terms are
+## still live regardless of raw_offset -- real motion this same rewrite
+## deliberately widened (twirl/flutter, reported directly) can land a
+## still-mid-transition leaf's WORST-CASE swing outside this test's own
+## tightly-zoomed viewport for an unlucky hash-derived phase, which is a
+## real risk of THIS SYNTHETIC SETUP (an isolated, position-agnostic zoom),
+## not of the motion itself -- a real leaf's transitional flutter is a few
+## world pixels against an on-screen tile many times larger. Pushing the
+## clock a beat past TRANSITION_DURATION keeps this test doing what it says
+## ("settled"), sidesteps that synthetic risk, and is the state a real
+## leaf actually spends the overwhelming majority of its life in anyway.
 func test_a_settled_leaf_actually_renders_visible_pixels_at_its_position():
 	if _no_real_gpu():
 		return
@@ -99,6 +115,11 @@ func test_a_settled_leaf_actually_renders_visible_pixels_at_its_position():
 		"species": "cherry", "season": "autumn", "transition_start": 0.0,
 	}]
 	var viewport := _build_leaf_viewport(leaves, target)
+	var mmi := viewport.get_child(0) as MultiMeshInstance2D
+	mmi.material.set_shader_parameter(
+		"current_time_fraction",
+		LeafLitterRenderer.pack_time_fraction(LeafLitterField.TRANSITION_DURATION + 0.1)
+	)
 	for i in range(4):
 		await get_tree().process_frame
 	var image := viewport.get_texture().get_image()
@@ -159,4 +180,64 @@ func test_a_freshly_started_transition_renders_away_from_its_settled_position():
 	assert_gt(
 		float(changed) / float(maxi(sampled, 1)), 0.01,
 		"a still-falling leaf rendered identically to a settled one -- the GPU offset never applied"
+	)
+
+
+## THE tumble-reaches-the-GPU check -- the only place the reported "leaves
+## should twirl more" symptom can actually be observed rather than reasoned
+## about from the GDScript mirror alone (see tumble_rotation's own doc
+## comment). Two leaves share the exact same position (so the exact same
+## position-derived phase/spin_direction -- see phase_for_position), and
+## both are sampled at t == 1 (transition_start pushed a beat into the
+## past, same technique as the settled-leaf test just above), where the
+## LINEAR offset (raw_offset * remaining) is exactly zero for both
+## regardless of how far apart their own transition_from points are --
+## isolating rotation as the only possible difference between them. One
+## travelled a negligible distance (tumble_turns_for_distance's own MIN);
+## the other travelled the full MAX_TRANSITION_OFFSET reference journey
+## (tumble_turns_for_distance's own MAX) -- a real difference of several
+## full turns, which must render as visibly different pixels if the
+## distance-scaled spin actually reached the shader.
+func test_a_farther_traveling_leaf_tumbles_more_than_a_nearby_one():
+	if _no_real_gpu():
+		return
+	var target := Vector2(600, 600)
+	var short_journey: Array[Dictionary] = [{
+		"position": target, "transition_from": target + Vector2(1.0, 0.0),
+		"species": "cherry", "season": "autumn", "transition_start": 0.0,
+	}]
+	var long_journey: Array[Dictionary] = [{
+		"position": target,
+		"transition_from": target + Vector2(LeafLitterRenderer.MAX_TRANSITION_OFFSET, 0.0),
+		"species": "cherry", "season": "autumn", "transition_start": 0.0,
+	}]
+	var settled_time := LeafLitterRenderer.pack_time_fraction(LeafLitterField.TRANSITION_DURATION + 0.1)
+	var short_viewport := _build_leaf_viewport(short_journey, target)
+	var long_viewport := _build_leaf_viewport(long_journey, target)
+	(short_viewport.get_child(0) as MultiMeshInstance2D).material.set_shader_parameter(
+		"current_time_fraction", settled_time
+	)
+	(long_viewport.get_child(0) as MultiMeshInstance2D).material.set_shader_parameter(
+		"current_time_fraction", settled_time
+	)
+	for i in range(4):
+		await get_tree().process_frame
+	var short_image := short_viewport.get_texture().get_image()
+	var long_image := long_viewport.get_texture().get_image()
+	short_viewport.queue_free()
+	long_viewport.queue_free()
+	if short_image == null or long_image == null:
+		return  # no GPU readback in this environment
+
+	var changed := 0
+	var sampled := 0
+	for py in range(0, short_image.get_height(), 2):
+		for px in range(0, short_image.get_width(), 2):
+			sampled += 1
+			if short_image.get_pixel(px, py) != long_image.get_pixel(px, py):
+				changed += 1
+	assert_gt(
+		float(changed) / float(maxi(sampled, 1)), 0.01,
+		"a leaf that travelled the full reference distance rendered identically to one that barely " +
+		"moved -- the GPU never scaled tumble by distance"
 	)

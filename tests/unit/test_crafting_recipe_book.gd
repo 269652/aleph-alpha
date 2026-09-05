@@ -32,7 +32,29 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# butterfly_net, trap, reinforced_rope (4 more).
 	# + transportation (docs/concept/transportation.md): climbing_rope (1 more).
 	# + rivers (docs/concept/rivers.md): stone_dam (1 more).
-	assert_eq(ids.size(), 38)
+	# + starting kit (docs/concept/starting_kit.md): iron_sword, iron_axe
+	# (2 more) -- both previously had NO recipe at all, reachable only via
+	# /give, the shop, or the old hardcoded starting-kit grant.
+	assert_eq(ids.size(), 40)
+
+
+func test_iron_sword_is_craftable_from_ingots_and_a_stick():
+	var inputs := book.recipe_inputs("iron_sword")
+	assert_eq(inputs, [{"item_id": "iron_ingot", "count": 2}, {"item_id": "stick", "count": 1}])
+	assert_eq(book.recipe_output("iron_sword"), {"item_id": "iron_sword", "count": 1})
+
+
+func test_iron_axe_is_craftable_from_ingots_and_a_stick():
+	var inputs := book.recipe_inputs("iron_axe")
+	assert_eq(inputs, [{"item_id": "iron_ingot", "count": 2}, {"item_id": "stick", "count": 1}])
+	assert_eq(book.recipe_output("iron_axe"), {"item_id": "iron_axe", "count": 1})
+
+
+func test_neither_new_iron_recipe_requires_a_structure():
+	# Matches every other iron-tier recipe's own precedent (iron_helm/chest/
+	# legs/boots): shaping an already-smelted ingot needs no further gate.
+	assert_eq(book.recipe_requires_structure("iron_sword"), "")
+	assert_eq(book.recipe_requires_structure("iron_axe"), "")
 
 
 func test_can_craft_true_when_inventory_has_enough_inputs():

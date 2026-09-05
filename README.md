@@ -1,14 +1,16 @@
 # Aleph Alpha
 
+![New Game Screen](./screenshots/new-game.png)
+
 > A proprietary, non-commercial alpha game.
 
-A single-player-first survival RPG set on a **real, simulated Earth** — actual
-elevation and climate data, a real day/night and season cycle, and an
-ecosystem where animals live where conditions genuinely support them rather
-than where a designer placed a spawner. Everything from a fruit tree's
-ripening to a village blacksmith's growing skill runs on the same underlying
-idea: **let simulation produce content, don't author it.**
+A single-player-first survival RPG set on a real, simulated Earth — actual elevation and climate data, a real day/night and season cycle, and a planet that keeps turning whether or not you're watching.
 
+Walk these woods in autumn and every birch is going gold at its own pace, leaves catching the wind on the way down in a way nobody keyframed by hand. The path underfoot is there because feet wore it in, one crossing at a time. A kingfisher holds its perch over the river because the water holds fish and the bank gives it a ledge to dive from — not because a designer decided a kingfisher belonged there. Snow comes and goes with the season it belongs to, not a switch somebody flips.
+
+![In Game Spring](./screenshots/ingame.png)
+![In Game Autumn](./screenshots/ingame-2.png)
+![In Game Winter](./screenshots/ingame-3.png)
 Built solo/part-time in Godot 4 (GDScript), strict test-driven development
 throughout.
 

@@ -17,6 +17,18 @@ specs the DSL that closes that second gap, in the same spirit
 [spell_runtime.md](spell_runtime.md) closes it for magic: a small text
 language, parsed into a plain AST, executed by a small set of pure modules.
 
+> **Revised 2026-09-05 — the net is a device.** Reported: *"refactor the
+> butterfly net to express that it catches small animals like butterflies,
+> fish, small birds; but not e.g. bees / flies because the net is not tight
+> enough — it should also encode the capture action which confines the
+> subject to the net."* The net is now authored in
+> [standard_model.md](standard_model.md)'s `device` grammar: a real bag part
+> whose mesh has an `aperture_mm`, so what it holds is read off the subject's
+> body and the bag's geometry rather than off a `tier` guard, and its catch
+> pipeline names the part the subject ends up confined in. The old `capture`
+> block kind and its parser are retired. Sections below marked *(2026-09-05)*
+> are the revision; the rest stands.
+
 ## Design pillars
 
 - **The tool-fit layer stays exactly as it is.** `CaptureTool.required_tool_for`
@@ -40,6 +52,20 @@ language, parsed into a plain AST, executed by a small set of pure modules.
   fate the way it does today — the net becomes loaded, and the player
   decides what happens to what's inside it. A loaded tool cannot catch again
   until it's empty, the same real constraint a one-net-in-hand trapper has.
+- **What a net holds is geometry, not a species list** *(2026-09-05)*. A
+  bag's mesh has a real aperture and a real mouth; a subject has three real
+  body extents. Whether it is held is one comparison per fact: it slips
+  through if it is narrower than the mesh, it does not fit if it is longer
+  than the mouth. No species is named anywhere. That is what makes a finer
+  net, a bigger landing net or a coarse fish trap something an engineer
+  *writes* rather than something a designer adds — the derive-don't-enumerate
+  rule [emergent_crafting.md](emergent_crafting.md) already holds items to.
+- **The capture act is a confinement, and the text says where**
+  *(2026-09-05)*. `confine(in: bag)` is the atom, and it may only follow a
+  `mesh_holds` on the same part: a rule cannot confine a subject in a bag
+  whose mesh has not been shown to hold it. That check is static, the same
+  way `ItemCompiler` resolves an affordance's conjunctions at compile time
+  — an author cannot write a net that ignores its own mesh.
 
 ## Real-world grounding
 
@@ -55,50 +81,81 @@ language, parsed into a plain AST, executed by a small set of pure modules.
   with it first. "The net is full, decide what happens to what's in it
   before it can catch again" is not a game rule bolted on for balance, it's
   what a net physically is.
+- **A net's mesh is a real gauge** *(2026-09-05)*. A honeybee worker is
+  12–15 mm long and about 6 mm across; a housefly 6–7 mm by 3; a monarch's
+  body is 25 mm and its folded wings stand nearly 50 mm tall; a house
+  sparrow is 140 mm by 45; a pond goldfish 150 mm by 50. The standard net
+  here is a coarse bag net with a **10 mm** mesh and a **30 cm** mouth: it
+  holds everything in that list except the bee and the fly, which pass a
+  10 mm opening the way they pass a garden fence. An entomologist's aerial
+  net is roughly a 1 mm mesh and holds both — and in this game that is
+  simply a *different net*, written with `aperture_mm: 1`. A 35 cm trout
+  does not go through a 30 cm mouth before it turns, which is why anglers
+  carry a landing net larger than the fish they expect; `width_cm: 40` is
+  that net.
 
-## Grammar
+## The net is a device *(2026-09-05)*
 
-One block kind, `capture`, structurally identical to
-[magic.md](magic.md)'s `on EVENT(ARG) when GUARD: pipeline` shape (same
-tokenizer, same `|>` pipeline operator, same `>= <= > < == !=` guard
-operators, same number / `@ref` / dotted-path operand grammar) — parsed by
-its own small recursive-descent parser (`capture_parser.gd`), not a shared
-one, the same way `npc_instruction_parser.gd` is already a structural sibling
-of `spell_parser.gd` rather than a subclass of it. Purely structural, like
-the magic parser: an unknown atom parses fine, and is rejected (or simply
-never dispatched) one layer up.
+The net is authored in the `device` grammar of
+[standard_model.md](standard_model.md) — the same tokenizer and the same
+`on EVENT(ARG) when GUARD: pipeline` rules the first version of this doc
+used, plus the `part` / `joint` clauses that give the net a real body. The
+`capture` block kind and `capture_parser.gd` are retired: the device grammar
+is a strict superset, and two grammars for one rule shape is exactly the
+drift this project's docs keep warning about. The executor
+(`capture_executor.gd`) never knew which parser produced its AST, and still
+does not.
 
 ```
-capture "Butterfly Net" {
-  on catch when target.tier == "flyer":
-    catch_roll(base: 0.65) |> hold_captive()
+device "Butterfly Net" {
+  part handle: wood haft grip (length_cm: 120, diameter_cm: 2.5)
+  part hoop: iron haft structure (length_cm: 94, diameter_cm: 0.4)
+  part bag: fiber face cover (width_cm: 30, height_cm: 60, thickness_cm: 0.05, aperture_mm: 10)
+  joint ferrule: handle to hoop rigid fit iron
+  joint hem: hoop to bag rigid lashing fiber
+
+  on catch:
+    mesh_holds(mesh: bag) |> catch_roll(base: 0.65) |> confine(in: bag)
   on release:
-    release_captive()
+    free(from: bag)
   on transfer(glass_bottle):
     move_captive()
 }
 ```
 
-`on catch`'s guard is what lets multiple devices for different tiers coexist
-safely under one grammar as more get authored — a snare's block would guard
-`target.tier == "legless"`, and the wrong device against the wrong tier
-guards itself out rather than needing a lookup table anywhere else.
-`on transfer(glass_bottle)` reuses the event-argument slot to name *which*
-container a rule handles, the same reuse trick `on cast(touch)` already
+Three things to read off it. The bag's `aperture_mm` is an **extra
+dimension** on a `face` part — the exact precedent `emergent_crafting.md`'s
+rip saw set with `tooth_pitch_mm` and `tooth_set_mm` on an edge: a dimension
+the geometry does not need for volume but the physics reads. The mouth is
+the bag's `width_cm`. And there is no `when target.tier == "flyer"` guard
+any more: the pipeline's first atom *is* the physics that decides who can be
+caught, and it says why when it refuses.
+
+A net has no `loop` — nothing flows through it — so `DeviceCompiler` builds
+its part graph (a 94 cm iron hoop, a 1.2 m wooden handle, a fibre bag; under
+half a kilogram) and exposes every part's dimensions and derived figures as
+**facts** the rules can read (`bag.aperture_mm`, `bag.width_cm`,
+`bag.mass_kg`). That is the one thing the standard model had to grow for
+this: rules over a device's *parts*, not only over its solved loop.
+
+`on transfer(glass_bottle)` still reuses the event-argument slot to name
+*which* container a rule handles, the same reuse trick `on cast(touch)`
 makes of that slot for delivery method.
 
-## Atom catalog (v1)
+## Atom catalog (v2, 2026-09-05)
 
-A small, fully-wired set — unlike magic's catalog, every atom below has a
-real dispatcher and a real caller; nothing is catalogued ahead of having
-somewhere to run.
+Still a small, fully-wired set — every atom has a real dispatcher and a real
+caller; nothing is catalogued ahead of having somewhere to run.
+`hold_captive` and `release_captive` are retired in favour of the two atoms
+that say *where*.
 
 | Atom | Category | What it does |
 |---|---|---|
-| `catch_roll(base)` | roll | The only atom that can fail. Resolves pass/fail from `CapturePhysics.catch_chance(base, boldness)` against a caller-supplied roll; failure stops the rest of the pipeline. |
-| `hold_captive()` | effect | Sets the tool `Item`'s `captive_species` to whatever was being caught. |
-| `release_captive()` | effect | Clears `captive_species` back to empty. |
-| `move_captive()` | effect | Reads `captive_species` off the tool and reports which existing curiosity item results (reusing the current `jarred_insect`/`caged_songbird` split), for the caller to actually grant and to clear the tool. |
+| `mesh_holds(mesh: PART)` | check | The physics gate, and the first thing that can fail. Reads the named bag's `aperture_mm` and `width_cm` off the device facts and the subject's extents off the context (`CapturePhysics.mesh_verdict`); fails, **with a reason**, if the subject slips through the mesh, does not fit the mouth, or has no measured size. Failure stops the rest of the pipeline. |
+| `catch_roll(base)` | roll | Unchanged: pass/fail from `CapturePhysics.catch_chance(base, boldness)` against a caller-supplied roll; failure stops the pipeline, without a reason — a miss is a miss. |
+| `confine(in: PART)` | effect | Sets the tool `Item`'s `captive_species` to the subject. **Statically** required to follow a `mesh_holds(mesh: PART)` on the same part in the same pipeline (`CaptureExecutor.validate`), so no text can confine a subject in a bag its mesh was not shown to hold. |
+| `free(from: PART)` | effect | Clears `captive_species`. Names the part the subject leaves, for the same reason `confine` names the one it enters. |
+| `move_captive()` | effect | Unchanged: reports the species that moved so the container can be rendered as it, and empties the tool. |
 
 ## Physics: how a chance is derived
 
@@ -117,34 +174,90 @@ boldest real individual (1.0) gets `base + 0.15`; the shyest (0.0) gets
 `[0.5, 0.8]` — nudged by the individual, never turned into a coin flip or a
 certainty by it alone.
 
+## Mesh physics: what a net holds *(2026-09-05)*
+
+`capture_physics.gd`, pure like `catch_chance`, over the three principal
+body extents `body_dimensions.gd` carries per species — length, breadth and
+depth in millimetres, each a published figure, with the length pinned equal
+to the one `wingbeat_bounce.gd` already flies on so the two tables cannot
+disagree about how long a monarch is. The extents are sorted and two
+comparisons are made:
+
+- **Slips through** if the subject's *middle* extent is under the mesh
+  aperture. A body passes a square opening when its two smaller extents
+  both do, and the larger of those two is the one that binds — a bee's 6 mm
+  across against a 10 mm hole goes; a monarch's 25 mm body against the same
+  hole does not.
+- **Does not fit** if the subject's *largest* extent exceeds the mouth. It
+  has to go through the mouth before it turns. (The bag's depth does not
+  enter: a bag deeper than its mouth always has room for what fit the
+  mouth — a stated simplification.)
+- **Held** otherwise. `mesh_verdict` returns which, with a reason a player
+  can act on: "slips through the 10 mm mesh" tells them to weave a finer
+  bag; "too big for the 30 cm mouth" tells them to build a bigger one.
+
+Against the standard net (10 mm mesh, 30 cm mouth):
+
+| Subject | Extents, mm (largest · middle · smallest) | Verdict |
+|---|---|---|
+| fly | 7 · 3 · 3 | slips through |
+| bee | 13 · 6 · 5 | slips through |
+| monarch | 48 · 25 · 8 | held |
+| swallowtail | 40 · 30 · 9 | held |
+| blue_morpho | 65 · 35 · 10 | held |
+| goldfish | 150 · 50 · 30 | held |
+| sparrow, robin | 140 · 45 · 45 | held |
+| kingfisher | 170 · 55 · 50 | held (not a net target today — see Open questions) |
+| bluegill | 190 · 75 · 35 | held |
+| trout | 350 · 80 · 45 | too big for the mouth |
+| koi | 550 · 160 · 90 | too big for the mouth |
+
+Monotone by construction, and pinned: a finer mesh never releases what a
+coarser one held, a wider mouth never refuses what a narrower one took. A
+3 mm mesh holds the bee; a 2 mm mesh holds the fly; a 40 cm mouth takes the
+trout. A species with no measured extents refuses with its own reason
+rather than guessing — a named gap, not a crash.
+
 ## Resolution order
 
 Mirrors [spell_runtime.md](spell_runtime.md)'s own resolution-order section:
 
+0. *(2026-09-05)* At load, `CaptureBook` parses the net's device text,
+   compiles it (`DeviceCompiler` — the part graph and its facts) and
+   **validates** its rules (`CaptureExecutor.validate`): every `confine(in:
+   X)` must follow a `mesh_holds(mesh: X)` in its pipeline, and every part a
+   `mesh_holds` / `confine` / `free` names must exist. A text that fails is
+   refused loudly, not shipped as a net that ignores its own mesh.
 1. `CaptureExecutor.capture_rule(ast)` finds the device's `on catch` rule.
-2. Its guard is evaluated against a small context Player builds at the
-   throw site (today: `{"target": {"tier": "flyer"}}`). A tier mismatch
-   means nothing happens — the same "wrong tool, no new failure state, just
-   nothing" precedent `taming.md` already set for the lasso.
-3. `resolve_catch(rule, context, roll)` walks the pipeline. The roll itself
-   is supplied by the caller, not generated inside the executor — the same
-   split `CreatureMarker._step_restraint`'s own
+2. Player builds the context at the throw site: `target` (species; boldness
+   for a flyer with a personality, middling otherwise; `extents_mm` from
+   `BodyDimensions`) merged with the net's part facts from
+   `CaptureBook.facts_for`, so `bag.aperture_mm` is a dotted path away. The
+   rule has no guard now; the pipeline's first atom is the gate.
+3. `resolve_catch(rule, context, roll)` walks the pipeline: `mesh_holds`
+   fails with a reason (slips through / too big / unmeasured), `catch_roll`
+   fails silently (a miss), `confine` is collected as the effect to apply.
+   The roll itself is supplied by the caller, not generated inside the
+   executor — the same split `CreatureMarker._step_restraint`'s own
    `hash("%d_%d_struggle" % [wander_seed, count])` roll already keeps
    between "pure decision given a roll" and "where the roll comes from."
    Player salts its roll with an incrementing attempt counter, not the
-   flyer's bare `wander_seed` alone — a bare-seed roll would make every
-   retry against the same still-alive flyer land on the identical outcome
+   target's bare `wander_seed` alone — a bare-seed roll would make every
+   retry against the same still-alive target land on the identical outcome
    forever, silently making one miss unwinnable.
-4. On success, `hold_captive` sets the tool's `captive_species`; Player
-   removes the target from the world. On failure, nothing changes — the
-   flyer's own existing `FlyerPersonality` flee/dance reaction keeps running
-   exactly as it already does, untouched by any of this.
-5. `on release`: no guard, no roll — clears `captive_species`. Does **not**
-   respawn a live creature back into the world (⬜, an honest, named gap —
-   see Open questions).
+4. On success, `confine` sets the tool's `captive_species`, and the subject
+   leaves the world: a flyer via `queue_free`, a fish through the same
+   `catch_nearest_fish` the rod uses, so the harvest is recorded against its
+   pond's real population. On a mesh failure the reason is shown ("The bee
+   slips through the net's mesh.") and nothing changes; on a missed roll,
+   "Missed!" — the flyer's own existing `FlyerPersonality` flee/dance
+   reaction keeps running exactly as it already does, untouched.
+5. `on release`: no guard, no roll — `free(from: bag)` clears
+   `captive_species`. Does **not** respawn a live creature back into the
+   world (⬜, an honest, named gap — see Open questions).
 6. `on transfer(CONTAINER)`: matched by `event_arg == CONTAINER`.
-   `move_captive` reports the resulting curiosity item id; Player consumes
-   one `CONTAINER` from inventory and grants it.
+   `move_captive` reports the species that moved; Player consumes one
+   `CONTAINER` from inventory and grants it loaded.
 
 ## Integration with input & items
 
@@ -156,6 +269,13 @@ Mirrors [spell_runtime.md](spell_runtime.md)'s own resolution-order section:
   already-lassoed animal, and has never been able to see an ambient flyer at
   all. `_throw_capture_tool` already branches net-vs-rope-tool by tool id;
   it grows one more branch: a loaded net releases instead of throwing.
+- *(2026-09-05)* **Fish are net targets.** `_throw_net` considers the
+  nearest fish (`EarthChunkManager.nearest_fish_position`, the same lookup a
+  hunting kingfisher uses) alongside the nearest flyer, and a netted fish
+  leaves the water through `catch_nearest_fish`, the rod's own path, so the
+  pond's aggregate population is depleted exactly as by angling. A fish has
+  no personality, so it rolls at middling boldness. Only an ambient flyer can
+  be bonded through `menagerie`; a netted fish always loads the net.
 - "Put into bottle" has no hover target at all — it depends only on what's
   in the player's hand and their bag. Rather than bending `AnimalActions`
   (built entirely around a live animal's `animal_state()`), it's a small new
@@ -169,14 +289,35 @@ Mirrors [spell_runtime.md](spell_runtime.md)'s own resolution-order section:
 
 ## Status / mechanisms
 
-- ✅ `capture_parser.gd` / `capture_atom_catalog.gd` / `capture_physics.gd` /
-  `capture_executor.gd` / `capture_atom_effects.gd` / `capture_book.gd`
+- ✅ ~~`capture_parser.gd`~~ (retired 2026-09-05 — the net is device text
+  parsed by `device_parser.gd`) / `capture_atom_catalog.gd` /
+  `capture_physics.gd` / `capture_executor.gd` / `capture_atom_effects.gd` /
+  `capture_book.gd`
+- ✅ *(2026-09-05)* **Mesh physics.** `body_dimensions.gd` (sourced extents
+  for the flyer and fish rosters, length pinned to `wingbeat_bounce.gd`),
+  `CapturePhysics.slips_through` / `fits_mouth` / `mesh_verdict` with
+  reasons, monotone in aperture and mouth and pinned so; the net authored as
+  a device with a real 10 mm-mesh, 30 cm-mouth bag; `mesh_holds`, `confine`
+  and `free` atoms; `CaptureExecutor.validate`'s static confine-after-mesh
+  rule; `DeviceCompiler` part facts in the catch context. In play: bees and
+  flies slip through and say so, butterflies and small birds are held as
+  before, goldfish and bluegill are netted from the shallows, trout and koi
+  are too big for the mouth.
 - ✅ `Item.captive_species`; `glass_bottle` catalog + icon entry. The
   `move_captive` effect reports the species that moved, not a generic
   curiosity item, so a container can be rendered as the specific creature
   it holds — `ItemStack.can_stack_with` was extended to also require
   matching `captive_species`, so a freshly-loaded container can never
-  silently merge into a stack of empty ones.
+  silently merge into a stack of empty ones. **That sentence was untrue in
+  code until the 2026-09-05 merge to `main`**: `Inventory.add` merged by
+  item id alone and never asked `can_stack_with`, so the moment `main`
+  started every player with an empty bottle in the pack, bottling a catch
+  merged the loaded bottle into the empty one and the creature vanished.
+  `Inventory.add` now honours `can_stack_with`, and `has` / `count_of` /
+  `remove` take an optional contents filter so "Put into bottle" only ever
+  counts and spends an *empty* bottle — a loaded one is never consumed to
+  make room for a second catch (pinned in `test_inventory.gd` and
+  `test_player.gd`).
 - ✅ `capture_item_actions.gd` (the "Put into bottle" scorer)
 - ✅ Player wiring: probabilistic `_throw_net`/`_attempt_net_catch`,
   `_release_net`, `_bottle_captive`, `_perform_context_action` (the
@@ -270,5 +411,17 @@ instead of `DroppedItem`'s ordinary single flat texture.
 - A second instant-roll device for a different tier (a hand trap for a
   mouse-scale animal? a hook-and-line for a fish?) should already fit this
   same grammar and catalog unmodified, needing only a new `capture_book.gd`
-  entry with the right guard — untried in practice, since only one device
-  exists so far.
+  entry — untried in practice, since only one device exists so far. Since
+  2026-09-05 the obvious next entries are *variants of the same net*: a
+  1 mm-mesh insect net that holds bees, a 40 cm landing net that takes a
+  trout — each one text away, but neither has a craft recipe yet, so a
+  player cannot make one.
+- *(2026-09-05)* **No mass or tear rule.** A koi is refused for being too
+  long for the mouth, not for weighing more than a fibre bag on a wooden
+  handle can carry. The honest version is the subject's mass against
+  `PartGraph.part_load_capacity(bag)` — the same toughness-times-section the
+  part graph already computes — but no fish species carries a mass yet, so
+  it is designed and not built.
+- *(2026-09-05)* The kingfisher is measured (170 mm, held by the standard
+  net) but is a `PiscivoreBirdMarker`, not an ambient flyer, so `_throw_net`
+  never sees it. Making it a target is a wiring question, not a physics one.

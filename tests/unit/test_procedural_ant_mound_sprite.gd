@@ -68,26 +68,67 @@ func test_entrance_color_is_distinguishable_from_the_outline():
 
 # -- final on-screen size: the exact "gigantic" failure class already hit
 # once for ProceduralSoilSprite and once for DecomposerMarker's own ant/bug
-# sprite -- never left to a marker to forget to scale down. ---------------
+# sprite -- never left to a marker to forget to scale down. A mound's own
+# size is no longer one flat constant -- it grows with the colony (see
+# docs/concept/soil_fauna.md "Mound size grows with the colony"),
+# world_width_for(growth_fraction) taking AntColony.growth_fraction_at's
+# own [0,1] output. -----------------------------------------------------
 
-func test_mound_world_width_is_smaller_than_a_full_tile():
-	assert_lt(ProceduralAntMoundSprite.MOUND_WORLD_WIDTH, TerrainRenderer.TILE_SIZE)
+func test_mound_world_width_is_smaller_than_a_full_tile_even_at_max_growth():
+	assert_lt(ProceduralAntMoundSprite.world_width_for(1.0), TerrainRenderer.TILE_SIZE)
 
 
 func test_mound_world_scale_actually_produces_the_declared_world_width():
+	var fraction := 0.6
 	assert_almost_eq(
-		ProceduralAntMoundSprite.MOUND_WORLD_SCALE * float(ProceduralAntMoundSprite.SIZE),
-		ProceduralAntMoundSprite.MOUND_WORLD_WIDTH, 0.001
+		ProceduralAntMoundSprite.world_scale_for(fraction) * float(ProceduralAntMoundSprite.SIZE),
+		ProceduralAntMoundSprite.world_width_for(fraction), 0.001
 	)
 
 
-## Shrunk from its old value (7.0) -- reported oversized once mounds were
-## actually visible in play (see docs/concept/soil_fauna.md "Ants at half
-## their old size"). A literal halving to 3.5 overshot the OTHER way for
-## the ant sprite it sits beside (reported live: "tiny... no ant
-## whatsoever") -- the mound itself read as merely "tiny" rather than
-## invisible at 3.5, but the corrected, less aggressive 25% reduction
-## (not 50%) applies here too, preserving the original 6:7 ant:mound
-## proportion (see that doc's own 2026-09-05 follow-up).
-func test_mound_world_width_is_pinned_to_its_corrected_value():
-	assert_eq(ProceduralAntMoundSprite.MOUND_WORLD_WIDTH, 5.25)
+## A founding colony (growth_fraction 0) still reads as a real, visible
+## dirt pile -- close to the previous pass's own flat 5.25, not a step
+## backward at the weakest end (see that pass's own 2026-09-05 follow-up:
+## a literal halving of the ORIGINAL size overshot into invisible).
+func test_mound_world_width_at_zero_growth_is_pinned_to_the_founding_size():
+	assert_eq(ProceduralAntMoundSprite.world_width_for(0.0), ProceduralAntMoundSprite.MOUND_WORLD_WIDTH_MIN)
+	assert_almost_eq(ProceduralAntMoundSprite.MOUND_WORLD_WIDTH_MIN, 4.0, 0.001)
+
+
+## Requested directly: mounds should "grow with the colony" -- clamped to
+## [0,1], so a growth_fraction beyond 1.0 (should never happen, but not
+## trusted blindly) never draws a mound bigger than the real maximum.
+func test_mound_world_width_grows_with_growth_fraction():
+	assert_gt(
+		ProceduralAntMoundSprite.world_width_for(1.0),
+		ProceduralAntMoundSprite.world_width_for(0.0),
+		"a thriving colony's mound should read bigger than a founding one's"
+	)
+	assert_almost_eq(
+		ProceduralAntMoundSprite.world_width_for(1.0), ProceduralAntMoundSprite.world_width_for(2.0), 0.001
+	)
+
+
+## Requested directly: "it should be half a human high" -- pinned to
+## CharacterView's own real player height (the same "read against the
+## player" convention StoneSize/ProceduralFlowerSprite already establish),
+## not an independently-eyeballed number, and cross-checked here so the
+## two can't silently drift apart.
+func test_mound_world_width_at_max_growth_is_half_the_player_height():
+	assert_almost_eq(
+		ProceduralAntMoundSprite.world_width_for(1.0),
+		ProceduralAntMoundSprite.PLAYER_WORLD_HEIGHT_PX * 0.5, 0.001
+	)
+
+
+## Growth reads fastest early and flattens out approaching full size --
+## the exact same `pow` exaggeration technique and reasoning
+## StoneSize.world_height_px already uses (below 1.0 front-loads the
+## visual range onto the early part of growth). Pinned as a real
+## inequality (not GROWTH_EXAGGERATION's own literal value, which is a
+## tuned constant, not a load-bearing one) so the CURVE SHAPE stays
+## correct even if that constant is re-tuned later.
+func test_growth_reads_faster_early_than_late():
+	var early_gain := ProceduralAntMoundSprite.world_width_for(0.5) - ProceduralAntMoundSprite.world_width_for(0.0)
+	var late_gain := ProceduralAntMoundSprite.world_width_for(1.0) - ProceduralAntMoundSprite.world_width_for(0.5)
+	assert_gt(early_gain, late_gain, "the first half of growth should read as a bigger visual jump than the second half")

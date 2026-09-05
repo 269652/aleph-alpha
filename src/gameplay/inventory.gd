@@ -17,13 +17,20 @@ func _init(a_slot_count: int) -> void:
 
 ## Adds `amount` of `item`, stacking where possible. Returns the amount that
 ## did not fit (0 if it all went in).
+##
+## "Where possible" is ItemStack.can_stack_with's call, not a bare id match:
+## a loaded glass bottle and an empty one share an id and must NOT share a
+## stack, or the creature inside vanishes into the merge (docs/concept/
+## capture_dsl.md). Found at the 2026-09-05 merge, the first time a new
+## player started with an empty bottle already in the pack.
 func add(item: Item, amount: int) -> int:
 	var remaining := amount
+	var probe := ItemStack.new(item, 0)
 
 	for stack in _stacks:
 		if remaining <= 0:
 			break
-		if stack.item.id == item.id:
+		if stack.can_stack_with(probe):
 			remaining = stack.merge(remaining)
 
 	while remaining > 0 and _stacks.size() < slot_count:
@@ -34,13 +41,17 @@ func add(item: Item, amount: int) -> int:
 	return remaining
 
 
-## Removes up to `amount` of an item id; returns how much was actually removed.
-func remove(item_id: String, amount: int) -> int:
+## Removes up to `amount` of an item id; returns how much was actually
+## removed. With `captive_species` given (e.g. "" for an EMPTY container),
+## only stacks holding exactly that are touched -- so "Put into bottle" can
+## spend an empty bottle without ever consuming one that has a creature in
+## it. Without it, every stack of the id counts, as before.
+func remove(item_id: String, amount: int, captive_species: Variant = null) -> int:
 	var to_remove := amount
 	for stack in _stacks:
 		if to_remove <= 0:
 			break
-		if stack.item.id == item_id:
+		if _matches(stack, item_id, captive_species):
 			var taken: int = mini(stack.count, to_remove)
 			stack.count -= taken
 			to_remove -= taken
@@ -48,16 +59,24 @@ func remove(item_id: String, amount: int) -> int:
 	return amount - to_remove
 
 
-func count_of(item_id: String) -> int:
+## How many of `item_id` are carried -- optionally only those whose
+## captive_species is exactly `captive_species` ("" for empty containers).
+func count_of(item_id: String, captive_species: Variant = null) -> int:
 	var total := 0
 	for stack in _stacks:
-		if stack.item.id == item_id:
+		if _matches(stack, item_id, captive_species):
 			total += stack.count
 	return total
 
 
-func has(item_id: String) -> bool:
-	return count_of(item_id) > 0
+func has(item_id: String, captive_species: Variant = null) -> bool:
+	return count_of(item_id, captive_species) > 0
+
+
+func _matches(stack, item_id: String, captive_species: Variant) -> bool:
+	if stack.item.id != item_id:
+		return false
+	return captive_species == null or stack.item.captive_species == String(captive_species)
 
 
 func used_slots() -> int:

@@ -11,7 +11,7 @@ const LeafLitterAtlas = preload("res://src/rendering/leaf_litter_atlas.gd")
 const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 
-const _SEASONS := ["summer", "autumn"]
+const _SEASONS := ["spring", "summer", "autumn", "winter"]
 
 
 func _atlas() -> LeafLitterAtlas:
@@ -90,6 +90,95 @@ func _is_blank(image: Image) -> bool:
 			if image.get_pixel(x, y).a > 0.05:
 				return false
 	return true
+
+
+# -- "winter": a leaf's terminal decay stage, derived not illustrated --------
+#
+# Reported directly: "fallen leaves should change the season from autumn to
+# winter if they keep lying on the ground ... winter is last stage for a
+# leaf." No species has real illustrated "winter" litter art (there is no
+# such thing as a real leaf freshly falling already looking decayed), so
+# every species' winter stamp is DERIVED from its own already-built autumn
+# stamp -- same "keep the shading, discard the hue" idiom
+# ProceduralFlowerSprite._paint_illustrated_head already established for
+# recolouring illustrated art without new assets (docs/concept/flora.md's
+# "Recolouring illustrated blooms"). Deriving from autumn specifically
+# (rather than needing a second derivation from summer too) mirrors a real
+# simplification: by the time any fallen leaf has weathered long enough to
+# look "wintry", its original fall colour has already faded toward the same
+# dulled brown-grey regardless of what it started as.
+
+## A winter stamp must still be a REAL, non-blank image derived from real
+## content -- not a missing-pair fallback landing the generic procedural
+## sprite (which test_a_pair_with_no_illustrated_art_still_gets_a_real_
+## stamp already covers separately; this is instead confirming "winter"
+## takes its own dedicated derivation path).
+func test_winter_stamp_is_not_blank():
+	var atlas := _atlas()
+	for species in TreeSpecies.IDS:
+		var stamp := atlas.build_stamp_image(species, "winter")
+		assert_false(_is_blank(stamp), "%s/winter produced a blank stamp" % species)
+
+
+## The winter stamp's silhouette must match the autumn stamp's exactly (same
+## alpha at every pixel) -- proof it is a recoloured COPY of the real autumn
+## art, not an independently re-cropped/re-fitted image that could drift in
+## shape, and not the unrelated generic fallback silhouette.
+func test_winter_stamp_matches_the_autumn_silhouette():
+	var atlas := _atlas()
+	for species in TreeSpecies.IDS:
+		var autumn_stamp := atlas.build_stamp_image(species, "autumn")
+		var winter_stamp := atlas.build_stamp_image(species, "winter")
+		for y in range(0, LeafLitterAtlas.STAMP_SIZE, 4):
+			for x in range(0, LeafLitterAtlas.STAMP_SIZE, 4):
+				assert_almost_eq(
+					winter_stamp.get_pixel(x, y).a, autumn_stamp.get_pixel(x, y).a, 0.01,
+					"%s winter/autumn silhouettes differ at (%d,%d)" % [species, x, y]
+				)
+
+
+## The winter stamp must actually read as duller/less colourful than the
+## autumn art it derives from -- a real decayed leaf does not stay as
+## vividly orange/red as the moment it fell.
+func test_winter_stamp_is_less_saturated_than_autumn():
+	var atlas := _atlas()
+	for species in TreeSpecies.IDS:
+		var autumn_stamp := atlas.build_stamp_image(species, "autumn")
+		var winter_stamp := atlas.build_stamp_image(species, "winter")
+		var autumn_saturation_sum := 0.0
+		var winter_saturation_sum := 0.0
+		var sampled := 0
+		for y in range(0, LeafLitterAtlas.STAMP_SIZE, 2):
+			for x in range(0, LeafLitterAtlas.STAMP_SIZE, 2):
+				var autumn_pixel := autumn_stamp.get_pixel(x, y)
+				if autumn_pixel.a <= 0.05:
+					continue
+				sampled += 1
+				autumn_saturation_sum += autumn_pixel.s
+				winter_saturation_sum += winter_stamp.get_pixel(x, y).s
+		assert_gt(sampled, 0, "precondition: %s's autumn stamp must have real content to sample" % species)
+		assert_lt(
+			winter_saturation_sum / sampled, autumn_saturation_sum / sampled,
+			"%s's winter stamp should read less saturated than its autumn stamp" % species
+		)
+
+
+## The recolour must preserve the source's own light/shade variation (a real
+## illustrated leaf's veins/highlights), not flatten everything to one
+## uniform tint -- otherwise every species' winter stamp would look like the
+## same flat brown blob rather than a recognisably shaded leaf shape.
+func test_winter_stamp_keeps_real_shading_variation():
+	var atlas := _atlas()
+	var stamp := atlas.build_stamp_image(TreeSpecies.IDS[0], "winter")
+	var luminances := {}
+	for y in range(0, LeafLitterAtlas.STAMP_SIZE, 2):
+		for x in range(0, LeafLitterAtlas.STAMP_SIZE, 2):
+			var pixel := stamp.get_pixel(x, y)
+			if pixel.a <= 0.05:
+				continue
+			var luminance := pixel.r * 0.2126 + pixel.g * 0.7152 + pixel.b * 0.0722
+			luminances[snappedf(luminance, 0.02)] = true
+	assert_gt(luminances.size(), 5, "the winter stamp reads as a single flat tone, not real shading")
 
 
 # -- stamps: correctly sized, not stretched -----------------------------------
