@@ -37,10 +37,9 @@ const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 ## AntMoundMarker.mound_seed, DecomposerMarker.wander_seed).
 var species_id := ""
 
-## Which of the illustrated sheet's variants this marker would pick once
+## Which of the illustrated sheet's 25 variants this marker picks once
 ## identified (see IllustratedMushroomSprite.frame_for) -- set before
-## add_child, same convention as AntMoundMarker.mound_seed. Moot today: no
-## species has illustrated art yet.
+## add_child, same convention as AntMoundMarker.mound_seed.
 var mushroom_seed := 0
 
 ## Whether the player has learned to identify mushrooms (see
@@ -85,14 +84,14 @@ func _ready() -> void:
 func _rebuild_sprite() -> void:
 	if identified and _illustrated_generator.has_variants(species_id):
 		_sprite.texture = _illustrated_generator.frame_for(species_id, mushroom_seed)
-		# TODO once real art lands: replace with a real MEASURED
-		# IllustratedMushroomSprite.marker_scale(), the way
-		# IllustratedAntMoundSprite.marker_scale() measures its own art's
-		# actual opaque-pixel width instead of assuming it matches the
-		# procedural canvas.
+		# Illustrated art's own canvas proportions don't match the
+		# procedural generator's -- use its own measured-from-the-real-art
+		# scale (IllustratedAntMoundSprite.marker_scale's same reasoning),
+		# not the flat procedural MUSHROOM_WORLD_SCALE below.
+		_sprite.scale = Vector2.ONE * _illustrated_generator.marker_scale(species_id)
 	else:
 		_sprite.texture = _procedural_generator.generate_texture(species_id, identified)
-	_sprite.scale = Vector2.ONE * ProceduralMushroomSprite.MUSHROOM_WORLD_SCALE
+		_sprite.scale = Vector2.ONE * ProceduralMushroomSprite.MUSHROOM_WORLD_SCALE
 
 
 ## "Unidentified Mushroom" until the player knows better, then the real

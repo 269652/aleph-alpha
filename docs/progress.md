@@ -8101,16 +8101,15 @@ appears fully formed), a real rain+autumn flush trigger, one shared
 "Unidentified Mushroom" look/name until the player has learned to
 identify them (`ProceduralEggSprite`'s pre-hatch idiom, gated on
 experience instead of a life stage), and real per-species toxicity on
-eating one. Five species: Fly Agaric/Death Cap (toxic), Chanterelle/
-Porcini/Puffball (edible).
+eating one.
 
 ✅ Species catalog, fruiting-trigger model, per-species toxin model, both
-sprite generators (procedural + an empty-but-ready illustrated slot),
-the per-chunk patch-sim, item catalog entries, the visible/pickable
-marker, its renderer, `Player` toxin+identification-by-encounter wiring,
-`EarthChunkManager` chunk lifecycle, and `scenes/world.gd`'s live
-per-frame loop — every piece reachable from a real running game, built
-red-first end to end (~155 tests, all green; see `feature/mushrooms`).
+sprite generators, the per-chunk patch-sim, item catalog entries, the
+visible/pickable marker, its renderer, `Player`
+toxin+identification-by-encounter wiring, `EarthChunkManager` chunk
+lifecycle, and `scenes/world.gd`'s live per-frame loop — every piece
+reachable from a real running game, built red-first end to end (see
+`feature/mushrooms`).
 
 **Identification was originally planned as a `skill_web.gd` node** (see
 `docs/concept/mushrooms.md`'s own "Revised while implementing" note) —
@@ -8122,12 +8121,32 @@ structural change touching all seven wedges. Replaced with
 earned through direct field experience (eating mushrooms, risk included),
 not a purchased skill point — arguably the more honest mechanic anyway.
 
-⬜ No illustrated art this pass (the AI-generation prompt for a real 5x5
-sheet per species is intentionally not written yet — asked, and
-explicitly deferred). No literal host-tree proximity check (mycorrhizal
-species are biome-gated only). No cooking-recipe integration. See the
-concept doc's own "Deliberately not modeled" section for the full list
-and reasoning.
+**Roster redesigned, then real illustrated art wired end to end
+(`feature/mushroom-real-art`).** The originally-designed roster (Fly
+Agaric/Death Cap/Chanterelle/Porcini/Puffball) was never actually
+generated as art. The user instead hand-generated six real 5×5 illustrated
+sheets directly (`assets/sprites/mushrooms/*.png`) for a different, real
+six-species lineup: Fly Agaric, Psilocybe, Black Trumpet, Champignon,
+Chanterelle, Parasol. Rather than keep the code/tests naming species with
+no art, `MushroomSpecies`/`MushroomToxin`/`ItemCatalog` and every
+referencing test were redesigned onto the real roster (Fly Agaric/
+Psilocybe toxic — real ibotenic-acid/muscimol vs. psilocybin poisoning,
+genuinely asymmetric severity but neither "certainly lethal" the way the
+original Death Cap concept was; Black Trumpet/Chanterelle mycorrhizal on
+oak; Psilocybe/Champignon/Parasol real saprotrophs, grassland-eligible).
+`IllustratedMushroomSprite` then loads all six real sheets (one shared
+row-band layout; `IllustratedAnimalSprite`'s single-pass chroma-key
+despill for the five magenta-background sheets, since `fly_agaric.png`'s
+own background is already transparent) and gained a real
+`marker_scale(species_id)`, measured per species the same way
+`IllustratedAntMoundSprite.marker_scale()` measures the mound's — resolving
+`MushroomMarker`'s long-standing TODO so an identified mushroom's real art
+lands at the same on-screen size the procedural fallback always used,
+not the raw art canvas.
+
+⬜ No literal host-tree proximity check (mycorrhizal species are
+biome-gated only). No cooking-recipe integration. See the concept doc's
+own "Deliberately not modeled" section for the full list and reasoning.
 
 ### Leaf Litter (`concept/leaf_litter.md`)
 

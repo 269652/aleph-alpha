@@ -1506,26 +1506,51 @@ much like an ore boulder) would hold worse than either of those two did.
 > the more open specimens. A plain white stem, slightly bulbous where it
 > meets the ground.
 
-### Still needed (not written yet)
+### 12b–12f. The other five species — generated directly, no prompt recorded
 
-12b–12e: Death Cap, Chanterelle, Porcini, Puffball — same template above,
-a real per-species `[SPECIES DESCRIPTION]` fill-in each (see
-[mushrooms.md](../concept/mushrooms.md)'s Species roster table for each
-one's real colouring/shape as a starting point).
+**Roster note.** The five sheets below (Psilocybe, Black Trumpet,
+Champignon, Chanterelle, Parasol) replace this section's original
+Death Cap/Chanterelle/Porcini/Puffball plan — see
+[mushrooms.md](../concept/mushrooms.md)'s "Revised once real art arrived."
+The user hand-generated all five directly rather than through a prompt
+written and recorded here first, so — unlike every other entry in this
+doc — there is no per-species `[SPECIES DESCRIPTION]` fill-in on file for
+them. If any of the five ever needs regenerating, write its prompt then,
+grounded in a fresh look at the real delivered sheet (`assets/sprites/
+mushrooms/<file>.png` below) and its real-world species facts (see
+mushrooms.md's Species roster table), rather than reconstructing one from
+memory.
 
-### File naming + wiring, once generated
+### File naming + wiring (as actually shipped)
 
 ```
 assets/sprites/mushrooms/fly_agaric.png
+assets/sprites/mushrooms/psylo.png
+assets/sprites/mushrooms/black_trumpet.png
+assets/sprites/mushrooms/champignon.png
+assets/sprites/mushrooms/chantarelle.png   # note: misspelled relative to
+                                            # the "chanterelle" species id
+assets/sprites/mushrooms/parasol.png
 ```
 
-Unlike section 10's placed structures, the loader already exists and is
-tested: `IllustratedMushroomSprite`
-(`src/rendering/illustrated_mushroom_sprite.gd`) ships today with an
-empty `_SHEETS` table specifically so a real sheet drops in with ZERO
-further code changes — register `"fly_agaric": {"path":
-"res://assets/sprites/mushrooms/fly_agaric.png", "row_bands": [...]}`
-(measure the 5 row bands' Y-ranges from the real returned image, the same
-way every other `row_bands` entry in this codebase is measured — see that
-class's own doc comment), and `has_variants("fly_agaric")` flips true
-automatically.
+All six are real, committed 1254×1254 sheets, each split into 5 equal
+row bands of 5 specimens. Two real background conventions, discovered by
+pixel-sampling each sheet directly (an early visual read of `fly_agaric.png`
+as "on a black background" was wrong — a wide low-alpha antialiasing
+fringe composited against a dark preview canvas, not real content):
+`fly_agaric.png`'s own background is already genuinely transparent;
+the other five are a solid magenta (~`Color(0.98, 0.01, 0.98)`).
+
+`IllustratedMushroomSprite` (`src/rendering/illustrated_mushroom_sprite.gd`)
+loads all six: one shared `_ROW_BANDS` constant (identical across every
+sheet), a per-species `_SHEETS` entry naming its `path` and, for the five
+magenta sheets, a `chroma_key`/`chroma_key_tolerance` pair — despilled via
+`IllustratedAnimalSprite`'s single-pass `_apply_chroma_key` (a per-channel
+tolerance key-out to full transparency, applied once before slicing), not
+`IllustratedAntMoundSprite`'s cast-removal despill quartet: these are
+fresh single-pass renders with no resize-induced magenta-cast bleed to
+clean up afterward, so the simpler technique was enough. `has_variants(id)`
+is true for every roster species today, and `marker_scale(id)` measures
+each sheet's own opaque-pixel width so it lands at
+`ProceduralMushroomSprite.MUSHROOM_WORLD_WIDTH` on screen, the same real
+size the procedural fallback already used.
