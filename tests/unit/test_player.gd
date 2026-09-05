@@ -1879,23 +1879,44 @@ func test_a_snare_does_not_catch_a_horse():
 	assert_false(horse.is_restrained())
 
 
-# -- capture tools: the net (instant, no struggle) ----------------------------
+# -- capture tools: the net (a real probability roll, docs/concept/ ---------
+# -- capture_dsl.md) ----------------------------------------------------------
+#
+## Netting used to be instant and deterministic; it now rolls
+## CaptureExecutor.resolve_catch, and a success LOADS the net
+## (Item.captive_species) instead of instantly granting a curiosity item --
+## the player then chooses Release or, with a glass bottle, Put into bottle.
 
-## Netting resolves instantly and removes the flyer from the world.
-func test_netting_a_butterfly_without_menagerie_removes_it_and_grants_a_curiosity():
+## Presses the capture key against `flyer` until it is either caught or a
+## generous attempt budget runs out -- the real per-attempt odds (base 0.65
+## at middling boldness) make 40 consecutive misses astronomically unlikely
+## ((0.35)^40 ~= 1e-18), so this is the correct way to test a real
+## probability without forcing a fake deterministic short-circuit -- the
+## same idea test_the_measured_catch_rate_matches_the_model in
+## test_creature_marker.gd already uses for the lasso.
+func _net_until_caught(flyer: AmbientFlyerMarker, max_attempts: int = 40) -> void:
+	var attempts := 0
+	while is_instance_valid(flyer) and not flyer.is_queued_for_deletion() and attempts < max_attempts:
+		player._throw_capture_tool()
+		attempts += 1
+	assert_true(
+		not is_instance_valid(flyer) or flyer.is_queued_for_deletion(),
+		"expected a catch within %d attempts at ~65%% each" % max_attempts
+	)
+
+
+func test_netting_a_butterfly_without_menagerie_eventually_loads_the_net():
 	_hold_tool("butterfly_net")
 	var monarch := _flyer_at("monarch", Vector2(8, 0))
-	player._throw_capture_tool()
-	assert_true(monarch.is_queued_for_deletion(), "a landed net throw removes the flyer")
-	assert_eq(player.inventory.count_of("jarred_insect"), 1)
+	_net_until_caught(monarch)
+	assert_eq(player.equipped_item.captive_species, "monarch")
 
 
-func test_netting_a_bird_without_menagerie_grants_a_caged_songbird_instead():
+func test_netting_a_bird_without_menagerie_also_loads_the_net():
 	_hold_tool("butterfly_net")
 	var sparrow := _flyer_at("sparrow", Vector2(8, 0))
-	player._throw_capture_tool()
-	assert_eq(player.inventory.count_of("caged_songbird"), 1)
-	assert_eq(player.inventory.count_of("jarred_insect"), 0)
+	_net_until_caught(sparrow)
+	assert_eq(player.equipped_item.captive_species, "sparrow")
 
 
 func test_a_flyer_out_of_net_range_is_left_alone():
@@ -1903,19 +1924,127 @@ func test_a_flyer_out_of_net_range_is_left_alone():
 	var monarch := _flyer_at("monarch", Vector2(Player.LASSO_RANGE * 2.0, 0))
 	player._throw_capture_tool()
 	assert_true(is_instance_valid(monarch))
-	assert_eq(player.inventory.count_of("jarred_insect"), 0)
+	assert_eq(player.equipped_item.captive_species, "")
 
 
-## Beastmaster's `menagerie` keystone turns a netted flyer into a real
-## bonded companion instead of a curiosity item (see taming.md's Kinship
-## path). Allocated directly on the web -- see this lane's own HANDOFF note
-## on why menagerie is not (yet) read through unlocked_keystones alone.
-func test_netting_a_flyer_with_menagerie_bonds_a_companion_instead_of_a_curiosity():
+func test_the_measured_net_catch_rate_matches_the_model():
+	var trials := 60
+	var caught := 0
+	for i in trials:
+		_hold_tool("butterfly_net")  # fresh, empty net each trial
+		var flyer := _flyer_at("monarch", Vector2(8, 0))
+		player._throw_capture_tool()
+		if not is_instance_valid(flyer) or flyer.is_queued_for_deletion():
+			caught += 1
+	var observed := float(caught) / float(trials)
+	# Model: CapturePhysics.catch_chance(0.65, middling boldness) == 0.65.
+	assert_between(observed, 0.45, 0.85, "observed catch rate %f, expected near 0.65" % observed)
+
+
+func test_a_bolder_flyer_is_measurably_easier_to_catch_than_a_shy_one():
+	var trials := 40
+	var bold_catches := 0
+	var shy_catches := 0
+	for i in trials:
+		_hold_tool("butterfly_net")
+		var bold := _flyer_at("monarch", Vector2(8, 0))
+		bold.traits = {"boldness": 1.0}
+		player._throw_capture_tool()
+		if not is_instance_valid(bold) or bold.is_queued_for_deletion():
+			bold_catches += 1
+
+		_hold_tool("butterfly_net")
+		var shy := _flyer_at("monarch", Vector2(8, 0))
+		shy.traits = {"boldness": 0.0}
+		player._throw_capture_tool()
+		if not is_instance_valid(shy) or shy.is_queued_for_deletion():
+			shy_catches += 1
+	assert_gt(
+		bold_catches, shy_catches,
+		"a bold flyer (0.80 chance) should be caught more often than a shy one (0.50 chance)"
+	)
+
+
+# -- releasing a loaded net ---------------------------------------------------
+
+func test_the_capture_key_catches_when_empty_and_releases_when_loaded():
+	_hold_tool("butterfly_net")
+	var monarch := _flyer_at("monarch", Vector2(8, 0))
+	_net_until_caught(monarch)
+	assert_ne(player.equipped_item.captive_species, "")
+	player._throw_capture_tool()  # the SAME key, now loaded -> releases instead of throwing
+	assert_eq(player.equipped_item.captive_species, "", "the same key released the loaded net")
+
+
+func test_releasing_an_empty_net_does_nothing():
+	_hold_tool("butterfly_net")
+	player._release_net()
+	assert_eq(player.equipped_item.captive_species, "")
+
+
+# -- put into bottle (docs/concept/capture_dsl.md's "on transfer") -----------
+
+func _load_net_with(species: String) -> void:
+	_hold_tool("butterfly_net")
+	var flyer := _flyer_at(species, Vector2(8, 0))
+	_net_until_caught(flyer)
+
+
+func test_bottling_a_loaded_net_grants_a_loaded_bottle_and_consumes_an_empty_one():
+	_load_net_with("monarch")
+	player.inventory.add(_item_catalog.make("glass_bottle"), 1)
+	player._bottle_captive()
+	assert_eq(player.equipped_item.captive_species, "", "the net empties once its catch is bottled")
+
+	var found_species := ""
+	for stack in player.inventory.stacks():
+		if stack != null and stack.item.id == "glass_bottle" and stack.item.captive_species != "":
+			found_species = stack.item.captive_species
+	assert_eq(found_species, "monarch", "a loaded glass_bottle should carry the species that moved")
+
+
+func test_bottling_without_a_glass_bottle_does_nothing():
+	_load_net_with("monarch")
+	player._bottle_captive()
+	assert_eq(player.equipped_item.captive_species, "monarch", "no bottle on hand -- the net stays loaded")
+
+
+func test_bottling_an_empty_net_does_nothing_even_with_a_bottle():
+	_hold_tool("butterfly_net")
+	player.inventory.add(_item_catalog.make("glass_bottle"), 1)
+	player._bottle_captive()
+	assert_eq(player.inventory.count_of("glass_bottle"), 1, "nothing to bottle -- the bottle is not spent")
+
+
+## The secondary_action slot's fallback (CaptureItemActions, see its own test
+## file for the pure scoring logic) -- this is the Player-level wiring.
+func test_secondary_action_offers_put_into_bottle_when_loaded_and_a_bottle_is_on_hand():
+	_load_net_with("monarch")
+	player.inventory.add(_item_catalog.make("glass_bottle"), 1)
+	player._perform_context_action(1, "secondary_action")
+	assert_eq(player.equipped_item.captive_species, "", "the secondary action slot actually bottled it")
+
+
+func test_secondary_action_does_nothing_for_an_empty_net():
+	_hold_tool("butterfly_net")
+	player.inventory.add(_item_catalog.make("glass_bottle"), 1)
+	player._perform_context_action(1, "secondary_action")
+	assert_eq(player.inventory.count_of("glass_bottle"), 1, "nothing loaded -- the bottle is not spent")
+
+
+# -- menagerie bonding: unaffected in shape, just gated behind the roll now --
+# (docs/concept/taming.md's Kinship path -- Beastmaster's `menagerie`
+# keystone turns a netted flyer into a real bonded companion instead of
+# loading the net. Allocated directly on the web -- see this lane's own
+# HANDOFF note on why menagerie is not (yet) read through unlocked_
+# keystones alone.)
+
+func test_netting_a_flyer_with_menagerie_bonds_a_companion_instead_of_loading_the_net():
 	player.allocated_nodes["menagerie"] = true
 	_hold_tool("butterfly_net")
 	var monarch := _flyer_at("monarch", Vector2(8, 0))
-	player._throw_capture_tool()
-	assert_eq(player.inventory.count_of("jarred_insect"), 0, "no curiosity item once bonded")
+	_net_until_caught(monarch)
+	assert_eq(player.equipped_item.captive_species, "", "bonded instantly -- never loaded into the net")
 	assert_eq(player.bonded_companions.size(), 1)
 	assert_eq(player.bonded_companions[0].get("species"), "monarch")
 
@@ -1925,32 +2054,33 @@ func test_netting_a_flyer_with_menagerie_bonds_a_companion_instead_of_a_curiosit
 func test_netting_a_flyer_with_menagerie_via_unlocked_keystones_also_bonds():
 	player.unlocked_keystones["menagerie"] = true
 	_hold_tool("butterfly_net")
-	_flyer_at("robin", Vector2(8, 0))
-	player._throw_capture_tool()
+	var robin := _flyer_at("robin", Vector2(8, 0))
+	_net_until_caught(robin)
 	assert_eq(player.bonded_companions.size(), 1)
 
 
 func test_bonded_companions_are_capped():
 	player.allocated_nodes["menagerie"] = true
 	for i in Player.BONDED_COMPANION_CAP:
-		_hold_tool("butterfly_net")
-		_flyer_at("bee", Vector2(8, 0))
-		player._throw_capture_tool()
+		_hold_tool("butterfly_net")  # a fresh, empty net for each attempt
+		var bee := _flyer_at("bee", Vector2(8, 0))
+		_net_until_caught(bee)
 	assert_eq(player.bonded_companions.size(), Player.BONDED_COMPANION_CAP)
 
-	# One more, past the cap: falls back to the ordinary curiosity outcome
-	# instead of silently discarding the catch.
-	_flyer_at("bee", Vector2(8, 0))
-	player._throw_capture_tool()
+	# One more, past the cap: falls back to loading the net instead of
+	# silently discarding the catch.
+	_hold_tool("butterfly_net")
+	var bee := _flyer_at("bee", Vector2(8, 0))
+	_net_until_caught(bee)
 	assert_eq(player.bonded_companions.size(), Player.BONDED_COMPANION_CAP)
-	assert_eq(player.inventory.count_of("jarred_insect"), 1)
+	assert_eq(player.equipped_item.captive_species, "bee")
 
 
 func test_bonding_a_companion_spawns_its_live_marker():
 	player.allocated_nodes["menagerie"] = true
 	_hold_tool("butterfly_net")
-	_flyer_at("monarch", Vector2(8, 0))
-	player._throw_capture_tool()
+	var monarch := _flyer_at("monarch", Vector2(8, 0))
+	_net_until_caught(monarch)
 	assert_eq(player._bonded_markers.size(), 1)
 	assert_true(player._bonded_markers[0] is BondedCompanionMarker)
 	assert_eq(player._bonded_markers[0].species, "monarch")
@@ -1974,12 +2104,12 @@ func test_bonded_companions_persist_across_a_save_and_load_round_trip():
 
 # -- HUD: the capture-result message (see docs/concept/taming.md) ------------
 
-func test_lasso_message_reads_a_curiosity_result_after_netting():
+func test_lasso_message_reads_a_loaded_result_after_netting():
 	_hold_tool("butterfly_net")
-	_flyer_at("monarch", Vector2(8, 0))
-	player._throw_capture_tool()
+	var monarch := _flyer_at("monarch", Vector2(8, 0))
+	_net_until_caught(monarch)
 	player._lasso_step(1.0 / 60.0)
-	assert_eq(player.lasso_message, "Caught! Kept as a curiosity.")
+	assert_eq(player.lasso_message, "Caught! Net is full.")
 
 
 ## These two assert the message names the TOOL in hand, which is still the
