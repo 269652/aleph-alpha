@@ -27,6 +27,8 @@ extends RefCounted
 ## neighbouring steps -- the clustering bug this project has hit five times.
 
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
+const AntPopulationModel = preload("res://src/world/ant_population_model.gd")
+const PheromoneField = preload("res://src/world/pheromone_field.gd")
 
 ## Biomes with real organic soil an ant can excavate -- the same set
 ## EarthwormPatch uses, and for the same reasons (ocean has no soil, desert
@@ -152,11 +154,59 @@ var _seed_value: int
 var _mounds: Dictionary = {}
 
 ## How many times advance() has been called. The only per-tick state a
-## mound needs this pass -- there is no surfacing value to animate and
+## mound needs THIS ROLL -- there is no surfacing value to animate and
 ## nothing here changes over real seconds, so a discrete step counter (not
 ## elapsed_seconds) is genuinely all that drives the per-step foraging roll
-## and the carrier-seed sample below.
+## and the carrier-seed sample below. (advance()'s `delta` now DOES have a
+## real use elsewhere -- see SECONDS_PER_SIMULATED_DAY below -- just not
+## for this particular roll.)
 var _step_count: int = 0
+
+## Real seconds of elapsed play time per simulated ecosystem day --
+## mirrors EarthChunkManager.SECONDS_PER_SIMULATED_DAY's own VALUE (60),
+## restated here rather than imported: EarthChunkManager already preloads
+## AntColony, so the reverse import would be circular. Cross-checked by
+## test_seconds_per_simulated_day_matches_earth_chunk_managers_own_constant
+## so the two cannot silently drift apart. See "A queen, and where a
+## colony's size comes from" in docs/concept/soil_fauna.md.
+const SECONDS_PER_SIMULATED_DAY := 60.0
+
+## Per-mound colony population (see AntPopulationModel) -- Vector2i cell ->
+## float, defaulting to AntPopulationModel.STARTING_POPULATION for a mound
+## never yet advanced.
+var _population: Dictionary = {}
+
+## Per-mound exponential moving average of recent forage outcomes, in
+## [0, 1] -- 0 a colony that keeps coming home empty, 1 one that keeps
+## finding food. Feeds capacity_at (see AntPopulationModel.capacity). Not
+## present at all for a mound record_forage_result has never been called
+## on, which capacity_at reads as 0.0 (the unfed baseline), same as a
+## freshly-seeded colony with no track record yet.
+var _forage_success: Dictionary = {}
+
+## How much weight a single forage outcome carries in the EMA above --
+## e.g. 0.3 means one result moves the average 30% of the way toward 1.0
+## (success) or 0.0 (failure). Neither so twitchy that one lucky/unlucky
+## roll swings capacity wildly, nor so sluggish that a colony's fortunes
+## genuinely changing (a local food patch exhausted) takes dozens of
+## attempts to register at all.
+const FORAGE_SUCCESS_EMA_RATE := 0.3
+
+var _population_model := AntPopulationModel.new()
+
+## Per-mound trail pheromone (see PheromoneField) -- Vector2i cell ->
+## PheromoneField, created lazily on first deposit so a mound that never
+## successfully forages never allocates one. Different mounds are
+## different colonies; each owns its own field so one colony's trail can
+## never bleed into another's.
+var _pheromones: Dictionary = {}
+
+## How many foragers a mound may have concurrently active -- scales with
+## its own population, the same "aggregate population promotes to visible
+## individual markers" shape FishRenderer.target_count already uses for
+## fish (see active_forager_cap_at). A special sight, not a swarm -- kept
+## small on purpose, mirroring MAX_FISH_PER_CHUNK-style caps elsewhere.
+const MAX_CONCURRENT_FORAGERS := 3
 
 
 func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
@@ -175,13 +225,21 @@ func has_mound(cell: Vector2i) -> bool:
 	return _mounds.has(cell)
 
 
-## Advances the colony's own step count. Accepts `delta` to match the shared
+## Advances the colony's own step count (see _step_count), decays every
+## mound's pheromone trail by real elapsed time, and grows/stalls every
+## mound's own population toward its current capacity (see AntPopulationModel).
+## `delta_seconds` FINALLY has a real use here beyond matching the shared
 ## patch-sim advance(delta) shape every other per-chunk sim in this project
-## uses, but does not need it: ants have no EarthwormPatch-style surfacing
-## value to animate over real seconds, only a discrete "which step is this"
-## counter that the foraging roll and carrier seed are sampled against.
-func advance(_delta: float) -> void:
+## follows -- it used to be ignored outright ("ants have no ...
+## value to animate over real seconds"), true only of the step counter,
+## not of the two real-time mechanisms this pass adds.
+func advance(delta_seconds: float) -> void:
 	_step_count += 1
+	for field in _pheromones.values():
+		field.decay(delta_seconds)
+	var delta_days := delta_seconds / SECONDS_PER_SIMULATED_DAY
+	for cell in _mounds:
+		_population[cell] = _population_model.step(population_at(cell), capacity_at(cell), delta_days)
 
 
 ## Whether this mound's colony sends a forager out to check for a nearby
@@ -212,6 +270,65 @@ func carrier_seed_for(cell: Vector2i) -> int:
 ## other. Feed this into windfall_is_consumed.
 func windfall_carrier_seed_for(cell: Vector2i) -> int:
 	return PixelNoise.value(_seed_value + _step_count + _WINDFALL_SALT, cell.x, cell.y)
+
+
+## This mound's own current colony strength -- an abstract number, not a
+## literal worker headcount (see AntPopulationModel.STARTING_POPULATION's
+## own doc comment), defaulting to the founding size for a mound advance()
+## has never grown yet.
+func population_at(cell: Vector2i) -> float:
+	return _population.get(cell, AntPopulationModel.STARTING_POPULATION)
+
+
+## How large a colony this mound can currently support -- rises with its
+## own recent forage success (see record_forage_result), the real feedback
+## loop named in docs/concept/soil_fauna.md's "A queen, and where a
+## colony's size comes from".
+func capacity_at(cell: Vector2i) -> float:
+	return _population_model.capacity(_forage_success.get(cell, 0.0))
+
+
+## Records whether one dispatched forager's real round trip actually found
+## food -- called once per trip, on real resolution (arrival), never at
+## dispatch time, since dispatch itself does not yet know the outcome (see
+## docs/concept/soil_fauna.md "Real foraging: a round trip, not an instant
+## resolve"). Feeds the recent-success signal capacity_at reads.
+func record_forage_result(cell: Vector2i, succeeded: bool) -> void:
+	var current: float = _forage_success.get(cell, 0.0)
+	var target := 1.0 if succeeded else 0.0
+	_forage_success[cell] = lerpf(current, target, FORAGE_SUCCESS_EMA_RATE)
+
+
+## How many foragers this mound may have concurrently active -- always at
+## least 1 (even a brand-new, unfed colony still sends its first scout
+## out), rising toward MAX_CONCURRENT_FORAGERS as population fills the
+## mound's own capacity. Mirrors FishRenderer's own population-to-visible-
+## count promotion shape.
+func active_forager_cap_at(cell: Vector2i) -> int:
+	var capacity := capacity_at(cell)
+	if capacity <= 0.0:
+		return 1
+	var fraction := population_at(cell) / capacity
+	return clampi(roundi(fraction * MAX_CONCURRENT_FORAGERS), 1, MAX_CONCURRENT_FORAGERS)
+
+
+## This mound's own trail pheromone field, or null if it has never laid
+## one down -- a pure read, so a caller scoring forage candidates (see
+## PheromoneField.best_candidate_index, which already accepts null) never
+## forces an allocation just to find a mound has no trail yet.
+func pheromones_at(cell: Vector2i) -> PheromoneField:
+	return _pheromones.get(cell)
+
+
+## Deposits into this mound's own trail field, creating it on first use.
+## `tile` is a GLOBAL tile coordinate (see PheromoneField.deposit) --
+## AntColony itself stays in cell/biome space throughout, same as every
+## other method here; converting a real pixel position to a tile is the
+## caller's job (EarthChunkManager already does this everywhere else).
+func deposit_pheromone(cell: Vector2i, tile: Vector2i) -> void:
+	if not _pheromones.has(cell):
+		_pheromones[cell] = PheromoneField.new()
+	_pheromones[cell].deposit(tile)
 
 
 ## How far this carry travels before the seed counts as cached, in tiles.
