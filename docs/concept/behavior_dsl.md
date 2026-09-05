@@ -259,14 +259,14 @@ side-effecting motor program (`AmbientFlyerMarker._step_ground_forage`,
 say) has no business there, and reusing it means calling it, not
 reimplementing it as catalog data.
 
-### 4. Wiring a live marker: the robin
+### 4. Wiring a live marker: the ground-foraging songbirds
 
 The first proof that a parsed tree can actually replace a marker's
 decision path, not just be executed in a test. `AmbientFlyerMarker`'s
-robin runs a real script:
+robin and sparrow both run one real script:
 
 ```
-behavior "robin" {
+behavior "ground_foraging_songbird" {
     priority {
         songbird_flush()
         bird_courtship()
@@ -275,9 +275,9 @@ behavior "robin" {
 }
 ```
 
-— the exact precedence its `_process` already gave robin (flush off the
-player outranks a pair interaction, which outranks foraging), now data
-instead of three sequential `if`s. `songbird_flush`/`bird_courtship`/
+— the exact precedence `_process` already gave both species (flush off
+the player outranks a pair interaction, which outranks foraging), now
+data instead of three sequential `if`s. `songbird_flush`/`bird_courtship`/
 `ground_forage` are `local_atoms` (§3): thin, marker-bound wrappers around
 `_step_songbird_flight_response`/`_step_pair_interactions`/
 `_step_ground_forage`, reused by calling them exactly as `_process`
@@ -286,30 +286,40 @@ and which one doesn't, and the `_movement == null` guard
 `_step_ground_forage`'s own internals need, precisely rather than
 approximately. None of the three step functions changed at all.
 
-Only robin. `BEHAVIOR_TREE_SPECIES` gates this per species, and every
-other flyer — sparrow included, despite ground-foraging by the identical
-mechanism — keeps its original, direct dispatch untouched. Wiring one
-species at a time, proven correct against its own existing tests before
-the next, is the same discipline [ethogram.md](ethogram.md)'s own slices
-used; sparrow is a real, named next candidate, not a gap.
+**One tree, not one tree per species.** Robin shipped first (proven
+against its own tests before sparrow was even attempted, the same
+discipline [ethogram.md](ethogram.md)'s own slices used); sparrow followed
+once robin held up, and turned out to need no new tree at all —
+`FlyerDiet.forages_on_the_ground` and `BirdCourtship.dances` already read
+both species identically, so their decision *shape* is identical too.
+`BEHAVIOR_TREE_SPECIES` maps a species to a named tree rather than gating
+one species on a presence flag, precisely so a second species sharing the
+same shape costs one Dictionary entry, not a second copy of the same three
+lines — `test_a_robin_and_a_sparrow_share_the_identical_tree` pins the
+sharing directly, not just the outcome. Every other flyer keeps its
+original, direct dispatch untouched; whichever ground-foraging songbird is
+added to the roster next reads this same tree by construction.
 
-The tree is parsed once, into a static cache, and shared by every robin —
-parsing is a species-level cost, never a per-individual one, closing the
-open question §1 raised about exactly this.
+The tree is parsed once, into a static cache, and shared by every wired
+individual regardless of species — parsing is a per-tree cost, never a
+per-individual or even a per-species one, closing the open question §1
+raised about exactly this.
 
 ## What the player can see
 
-Nothing different for a robin, by design: §4 is a behaviour-preserving
-migration, pinned by the same flush/courtship/forage tests that already
-existed before it, exactly as every ethogram.md slice held itself to the
-same bar. The payoff is structural rather than visible: a robin's own
-top-level priority is now a few lines of text referencing existing atoms
-instead of three sequential `if`s baked into a 3000-line file, and a new
-species' tree is a smaller, more honest unit of work than a new species'
-code. The mammal/villager reuse claim (§1's worked examples, `wander` and
-the `above`-gated pattern shared verbatim by two species with no code, no
-genome, and no body plan in common) remains proven only in tests, not yet
-wired to either's live marker.
+Nothing different for a robin or a sparrow, by design: §4 is a
+behaviour-preserving migration, pinned by the same flush/courtship/forage
+tests that already existed before it, exactly as every ethogram.md slice
+held itself to the same bar. The payoff is structural rather than
+visible: a ground-foraging songbird's own top-level priority is now a few
+lines of text referencing existing atoms instead of three sequential
+`if`s baked into a 3000-line file, adding a second species that shares the
+same shape cost a Dictionary entry rather than a second copy of that text,
+and a genuinely new decision shape is a smaller, more honest unit of work
+than a new species' code. The mammal/villager reuse claim (§1's worked
+examples, `wander` and the `above`-gated pattern shared verbatim by two
+species with no code, no genome, and no body plan in common) remains
+proven only in tests, not yet wired to either's live marker.
 
 ## Status / mechanisms
 
@@ -340,21 +350,25 @@ wired to either's live marker.
 - ✅ `context["local_atoms"]` — a caller-registered `{name: Callable}` map,
   checked before the shared catalog and entirely replacing a same-named
   shared atom when present (`test_behavior_tree_executor.gd`, 5 tests).
-- ✅ **The first live marker, wired**: `AmbientFlyerMarker`'s robin runs a
-  real parsed tree (`songbird_flush` → `bird_courtship` → `ground_forage`,
-  §4) via three `local_atoms`, each a thin wrapper around the exact
-  existing step function it replaces at the call site. Species-gated
-  (`BEHAVIOR_TREE_SPECIES`) so sparrow and every butterfly keep their
-  original direct dispatch, untouched. 5 new tests pin the wiring itself;
-  the file's own pre-existing flush/courtship/forage tests for robin are
-  the regression bar and pass unchanged (167 passing, 2 pre-existing
-  butterfly spiral-flight numerical-tolerance failures confirmed unrelated
-  — the diff never touches that code path).
-- ⬜ Wiring `CreatureMarker`/`NpcMarker`/`AntForagerMarker`/sparrow to
-  actually run a parsed tree. One species proven at a time, per
+- ✅ **The first live markers, wired, sharing one tree**:
+  `AmbientFlyerMarker`'s robin and sparrow both run the identical real
+  parsed tree (`songbird_flush` → `bird_courtship` → `ground_forage`, §4)
+  via three `local_atoms`, each a thin wrapper around the exact existing
+  step function it replaces at the call site. `BEHAVIOR_TREE_SPECIES` maps
+  a species to a named tree rather than gating a presence flag, so a
+  second species with the identical decision shape cost one map entry —
+  every other flyer (every butterfly, and every ground-foraging songbird
+  not yet added to the roster) keeps its original direct dispatch,
+  untouched. Robin's 5 tests plus 3 more for sparrow (the flipped
+  not-wired test, the cross-species tree-sharing proof, and a crash-safety
+  check) pin the wiring; the file's own pre-existing flush/courtship/
+  forage tests for both species are the regression bar and pass unchanged
+  (169 passing, 2 pre-existing butterfly spiral-flight numerical-tolerance
+  failures confirmed unrelated — the diff never touches that code path).
+- ⬜ Wiring `CreatureMarker`/`NpcMarker`/`AntForagerMarker` to actually run
+  a parsed tree. One body plan proven at a time, per
   [ethogram.md](ethogram.md)'s own slice-5 lesson about the cost of
-  touching a live marker outside a dedicated, narrowly scoped pass —
-  sparrow (identical mechanism to robin) is the obvious next one.
+  touching a live marker outside a dedicated, narrowly scoped pass.
 - ⬜ An `ethogram_decide` action atom that runs a full
   `Ethogram.wirings_for(body_plan)` list through `BehaviorKernel.decide` as
   a single tree leaf — the explicit bridge letting a species mix a fully

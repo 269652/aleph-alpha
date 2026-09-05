@@ -408,22 +408,30 @@ const AIRBORNE_Z_INDEX := 1
 
 
 ## Which species have been wired through the behaviour DSL (docs/concept/
-## behavior_dsl.md) instead of the sequential `if`s below -- robin only.
-## Sparrow ground-forages exactly the same way and is a real, deliberate
-## next candidate, but doing both in one pass is exactly the overreach
-## docs/concept/ethogram.md's own slice 5 investigation warned against;
-## one species wired and proven is the honest claim this pass makes.
-const BEHAVIOR_TREE_SPECIES := {"robin": true}
+## behavior_dsl.md) instead of the sequential `if`s below, and which named
+## tree in BEHAVIOR_TREE_SOURCE each one runs. Robin and sparrow map to the
+## SAME tree, not two copies of identical text: FlyerDiet.
+## forages_on_the_ground and BirdCourtship.dances already read both
+## species identically, so their decision SHAPE is identical too -- the
+## reuse claim proven, not merely restated per species (see
+## test_a_robin_and_a_sparrow_share_the_identical_tree). A true butterfly
+## keeps FlyerPersonality's own mechanism and is never a candidate here;
+## whichever ground-foraging songbird joins next reads this same tree by
+## construction, not a new block.
+const BEHAVIOR_TREE_SPECIES := {
+	"robin": "ground_foraging_songbird",
+	"sparrow": "ground_foraging_songbird",
+}
 
 ## priority { songbird_flush() bird_courtship() ground_forage() } --
-## `_process`'s own existing precedence for robin (flush outranks a pair
-## interaction, which outranks foraging), spelled out as a real parsed
-## script instead of three sequential `if`s. All three atoms are thin,
-## marker-bound wrappers (see _local_atoms) around the exact same methods
-## `_process` already called directly for every other species -- reused by
-## calling them, not reimplemented.
+## `_process`'s own existing precedence for a ground-foraging songbird
+## (flush outranks a pair interaction, which outranks foraging), spelled
+## out as a real parsed script instead of three sequential `if`s. All
+## three atoms are thin, marker-bound wrappers (see _local_atoms) around
+## the exact same methods `_process` already called directly for every
+## other species -- reused by calling them, not reimplemented.
 const BEHAVIOR_TREE_SOURCE := """
-behavior "robin" {
+behavior "ground_foraging_songbird" {
     priority {
         songbird_flush()
         bird_courtship()
@@ -432,9 +440,9 @@ behavior "robin" {
 }
 """
 
-## Parsed once, ever, and shared by every robin -- parsing is a species-
-## level cost, not a per-individual one (docs/concept/behavior_dsl.md's own
-## open question on exactly this).
+## Parsed once, ever, and shared by every wired individual regardless of
+## species -- parsing is a per-TREE cost, not a per-individual one
+## (docs/concept/behavior_dsl.md's own open question on exactly this).
 static var _behavior_tree_cache: Dictionary = {}
 
 ## This individual's parsed tree, or null for every species not yet wired
@@ -444,12 +452,12 @@ static var _behavior_tree_cache: Dictionary = {}
 var _behavior_tree = null
 
 
-static func _parsed_behavior_tree(name: String) -> Variant:
+static func _parsed_behavior_tree(tree_name: String) -> Variant:
 	if _behavior_tree_cache.is_empty():
 		var parser := BehaviorDslParser.new()
 		var result := parser.parse(BEHAVIOR_TREE_SOURCE)
 		_behavior_tree_cache = result["behaviors"]
-	return _behavior_tree_cache.get(name)
+	return _behavior_tree_cache.get(tree_name)
 
 
 ## This individual's own marker-bound atoms (docs/concept/behavior_dsl.md):
@@ -506,7 +514,7 @@ func _ready() -> void:
 	add_to_group(FLOCK_GROUP)
 	z_index = AIRBORNE_Z_INDEX
 	if BEHAVIOR_TREE_SPECIES.has(species):
-		_behavior_tree = _parsed_behavior_tree(species)
+		_behavior_tree = _parsed_behavior_tree(BEHAVIOR_TREE_SPECIES[species])
 
 
 ## This individual's own AnimalFitness fitness_score, derived from
