@@ -8489,6 +8489,35 @@ changed as a result — see `_find_a_fallen_leaf`'s own doc comment in
 `tests/unit/test_earth_chunk_manager.gd` for the pointer back to this note
 if a future session hits the same alarming symptom again.
 
+✅ **Follow-up: "the leaves blowing in the wind animation... they should
+twirl more and have more realistic / natural motion paths".**
+`LeafLitterRenderer.transition_rotation` (the ported-from-`DroppedItem`
+wobble) only ever oscillates within a small fixed arc and decays back
+toward zero — a real leaf tumbling across open ground in wind visibly
+spins THROUGH instead, which this doc's own "Real-world grounding"
+section already named as the target but the first cut of the GPU rewrite
+never actually delivered for anything but the vertical canopy fall-in. A
+new `tumble_rotation` sums an ACCUMULATING spin on top (not replacing the
+existing wobble) that reaches its own full turn count exactly once a
+transition completes, in one consistent direction per leaf
+(`spin_direction_for_phase`, reusing the same position-derived phase hash
+the flutter already relies on for variety) — scaled by how FAR the
+transition actually travels (`tumble_turns_for_distance`: 0.5 turns near
+zero distance, 3.0 turns at `MAX_TRANSITION_OFFSET`), since
+`TRANSITION_DURATION` is fixed regardless of distance, so a longer
+journey is also a faster one and scaling turns by distance is
+equivalently scaling by how hard the wind is actually moving this leaf.
+`transition_flutter_world`'s sideways path also gained a second, smaller,
+non-harmonic wave (a non-integer frequency ratio so the two never realign
+within one transition) for a less mechanically-regular path, sharing the
+same taper-to-zero-at-completion guarantee the original had. Verified on
+the real GPU (`test_a_farther_traveling_leaf_tumbles_more_than_a_nearby_
+one`, mirroring this file's own established "prove it on the real
+renderer, not only the numeric mirror" convention) and by rendering an
+actual transition frame by frame and inspecting the sequence directly —
+the leaf visibly rotates through several distinct orientations across one
+journey rather than only tilting a few degrees back and forth.
+
 <details>
 <summary>First pass (superseded above), kept for history</summary>
 
