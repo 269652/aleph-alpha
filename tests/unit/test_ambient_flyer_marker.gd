@@ -771,12 +771,26 @@ func test_a_bird_without_a_ground_forage_brain_never_takes_worms():
 	assert_eq(world.worms.size(), 1)
 
 
-func test_a_robin_with_nothing_to_hunt_just_keeps_flying():
+## Renamed from "...just_keeps_flying": that used to be the literal
+## contract here ("nothing to land on, so it stays airborne" -- for the
+## WHOLE 20-second run) -- which is exactly the bug reported live, twice
+## ("robins just fly from random point to point and don't switch between
+## diverse actions"). See the IDLE REST section far below: a bird with
+## nothing to hunt now still perches periodically (idle rest), so
+## "stays airborne forever" is no longer part of this contract. What
+## genuinely must still hold -- and is the actual point of this test --
+## is that it never COMMITS to food that was never there: ground_forage
+## must stay SEEKING for the entire run regardless of how long it goes
+## without a meal.
+func test_a_robin_with_nothing_to_hunt_never_commits_to_food_that_isnt_there():
 	var world := StubWormWorld.new()
 	_make_robin(world)
 	for i in 400:
 		marker._process(0.05)
-		assert_false(marker.perched, "nothing to land on, so it stays airborne")
+		assert_eq(
+			marker.ground_forage.phase, GroundForageBehavior.Phase.SEEKING,
+			"nothing to hunt -- it must never commit to a worm that isn't there"
+		)
 	assert_ne(marker.position, Vector2.ZERO, "and it still wanders")
 
 
@@ -2778,6 +2792,86 @@ func _flapping_butterfly(parent: Node2D) -> AmbientFlyerMarker:
 	butterfly.flap_frames = [PlaceholderTexture2D.new(), PlaceholderTexture2D.new()]
 	butterfly.texture = butterfly.flap_frames[0]
 	return butterfly
+
+
+## IDLE REST -- reported live, after Phase 3/4 had already landed: "robins
+## just fly from random point to point and don't switch between diverse
+## actions / behaviour". Root cause: peck/walk/sing are all gated behind
+## `perched`, and until now the ONLY thing that ever set `perched` was
+## GroundForageBehavior actually committing to real food -- so a bird with
+## nothing to eat nearby (a genuinely common condition: EarthwormPatch
+## needs real soil moisture/warmth to surface anything at all) showed
+## nothing but flight, forever, exactly as reported. Real birds spend much
+## of their day perched whether or not they are actively eating.
+
+func test_a_bird_with_no_food_anywhere_still_eventually_rests():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	# No worm_world/seed_world/fruit_world at all -- ground_forage exists
+	# (set directly, the same way AmbientFlyerRenderer._build_marker does
+	# for any species with a matching diet entry) but can never find
+	# anything, the worst case this fix has to cover.
+	bird.ground_forage = GroundForageBehavior.new()
+	var rested := false
+	for i in int((AmbientFlyerMarker.IDLE_REST_INTERVAL_SECONDS + 2.0) / FRAME):
+		bird._process(FRAME)
+		if bird.perched:
+			rested = true
+			break
+	assert_true(rested, "a bird that can never find food must still occasionally rest")
+	assert_eq(
+		bird.ground_forage.phase, GroundForageBehavior.Phase.SEEKING,
+		"idle rest must not touch ground_forage's own state -- it is a separate mechanism"
+	)
+
+
+func test_idle_rest_ends_and_the_bird_resumes_wander():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.ground_forage = GroundForageBehavior.new()
+	var steps := int((AmbientFlyerMarker.IDLE_REST_INTERVAL_SECONDS + AmbientFlyerMarker.IDLE_REST_DURATION_SECONDS + 3.0) / FRAME)
+	var was_perched := false
+	var resumed := false
+	for i in steps:
+		bird._process(FRAME)
+		if bird.perched:
+			was_perched = true
+		elif was_perched:
+			resumed = true
+			break
+	assert_true(was_perched, "precondition: it actually rested")
+	assert_true(resumed, "a rest must actually end, not perch forever")
+
+
+## Real food-seeking always outranks an idle rest -- a bird closing in on
+## an actual worm must never be interrupted to go stand somewhere for no
+## reason. Guaranteed by call order in _process (ground_forage.advance
+## already claims the frame -- return true -- for anything but SEEKING,
+## so _step_idle_rest is never even reached), confirmed directly here.
+func test_idle_rest_never_fires_while_actively_pursuing_food():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("robin", Vector2(0, 0), parent)
+	bird.ground_forage = GroundForageBehavior.new()
+	bird._worm_target = Vector2(500, 500)  # far away -- never arrives within a frame
+	for i in int((AmbientFlyerMarker.IDLE_REST_INTERVAL_SECONDS + 2.0) / FRAME):
+		# Re-armed every frame: GroundForageBehavior's own DESCENT_TIMEOUT
+		# (8s) would otherwise legitimately give up on an unreachable target
+		# and return to SEEKING regardless of distance -- correct behaviour,
+		# but not what this test isolates. Forcing DESCENDING back each
+		# frame holds the bird in an active pursuit for the WHOLE window
+		# (well past IDLE_REST_INTERVAL_SECONDS), purely to prove
+		# _step_idle_rest is structurally unreachable while ground-forage
+		# owns the frame -- not to model one real, continuous 14-second dive.
+		bird.ground_forage.phase = GroundForageBehavior.Phase.DESCENDING
+		bird.ground_forage._phase_elapsed = 0.0
+		bird._process(FRAME)
+		assert_false(
+			bird.perched,
+			"ground-forage owns this frame (DESCENDING) -- idle rest must never override perched"
+		)
 
 
 ## PHASE 3: ground walk/hop and singing, the two rows Phase 1 measured but
