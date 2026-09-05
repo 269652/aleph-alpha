@@ -10875,6 +10875,24 @@ intermediate "loaded, undecided" state at all.
   that branch's `StarterKit.POOL` does not include either item, and
   merging it as-is would silently drop this grant along with the rest of
   the old kit — worth reconciling at that point, not addressed here.
+- ✅ **Update (later same week):** the starting `glass_bottle` grant above
+  exposed a gap in the "general stacking bug fixed in passing" line a few
+  bullets up — `ItemStack.can_stack_with` was correctly extended, but
+  `Inventory.add`/`remove` never actually called it, inlining their own
+  `stack.item.id == item.id` check instead. The guarantee never reached a
+  real inventory: once a player has ANY existing empty `glass_bottle`
+  (now everyone, from the start), bottling a catch merged the
+  freshly-loaded bottle into the empty stack and threw the species away.
+  Caught by 4 newly-red `test_player.gd` tests whose baseline changed
+  from 0 to 1 starting bottles. Fixed in `Inventory.add` (now checks
+  `can_stack_with`, pinned by a new `test_inventory.gd` case); `remove`
+  is unchanged and still id-only, which is fine for today's only caller
+  (`_bottle_captive` removes an amount before the species differs) but
+  would need the same treatment if something ever needs to remove a
+  *specific* loaded stack over an empty one. The other 3 red tests were
+  genuinely stale expectations (a hardcoded "0 bottles" or "count == 1"
+  baseline), not production bugs — updated to account for the starting
+  grant explicitly rather than assume it away.
 
 ### Ethogram (`concept/ethogram.md`)
 
