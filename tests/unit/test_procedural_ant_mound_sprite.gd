@@ -79,3 +79,10 @@ func test_mound_world_scale_actually_produces_the_declared_world_width():
 		ProceduralAntMoundSprite.MOUND_WORLD_SCALE * float(ProceduralAntMoundSprite.SIZE),
 		ProceduralAntMoundSprite.MOUND_WORLD_WIDTH, 0.001
 	)
+
+
+## Halved from its old value (7.0 -> 3.5) -- reported oversized once mounds
+## were actually visible in play (see docs/concept/soil_fauna.md "Ants at
+## half their old size").
+func test_mound_world_width_is_pinned_to_its_new_halved_value():
+	assert_eq(ProceduralAntMoundSprite.MOUND_WORLD_WIDTH, 3.5)

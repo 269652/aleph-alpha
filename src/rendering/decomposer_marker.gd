@@ -149,12 +149,23 @@ func setup(world) -> void:
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
+	add_to_group(HoverTargetFinder.GROUP_NAME)
 	_sprite = Sprite2D.new()
 	add_child(_sprite)
 	_update_sprite(Vector2.ZERO)
 	_movement = AmbientFlyerMovement.new(
 		WALK_SPEED * WANDER_SPEED_FRACTION, WANDER_RADIUS_PX, WANDER_DIRECTION_CHANGE_INTERVAL_SECONDS
 	)
+
+
+## For World's mouse-hover tooltip. HoverTargetFinder was already preloaded
+## here (see the const above) but never actually wired up -- see
+## docs/concept/soil_fauna.md "Ants at half their old size, and finally
+## hoverable". No get_hover_actions() -- an autonomous forager, not
+## something a player commands, mirroring LumberjackMarker's own
+## name-only-hoverable shape for the identical reason.
+func get_display_name() -> String:
+	return species.capitalize()
 
 
 ## FEEDING (biting in place) shows the idle cycle (legs gathered) -- a

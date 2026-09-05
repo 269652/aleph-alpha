@@ -66,6 +66,18 @@ func test_joins_the_decomposer_group():
 	assert_true(marker.is_in_group(DecomposerMarker.GROUP_NAME))
 
 
+## HoverTargetFinder was already preloaded here but never actually wired up
+## -- see docs/concept/soil_fauna.md "Ants at half their old size, and
+## finally hoverable".
+func test_joins_the_hoverable_group():
+	assert_true(marker.is_in_group(HoverTargetFinder.GROUP_NAME))
+
+
+func test_get_display_name_capitalizes_the_species():
+	marker.species = "bug"
+	assert_eq(marker.get_display_name(), "Bug")
+
+
 func test_stays_near_home_while_nothing_to_eat():
 	for i in 30:
 		marker._process(0.5)

@@ -23,8 +23,11 @@ const SIZE := 20
 ## How wide the mound should read ON THE GROUND, in world pixels. Smaller
 ## than ProceduralSoilSprite's own SOIL_WORLD_WIDTH (10.0): a wild-crop soil
 ## patch is worked, tilled ground; an ant mound is a modest excavated pile a
-## single small colony pushes up, not a patch of prepared earth.
-const MOUND_WORLD_WIDTH := 7.0
+## single small colony pushes up, not a patch of prepared earth. Halved
+## from its own old value (7.0) -- reported oversized once mounds actually
+## had a rendered presence to look at (docs/concept/soil_fauna.md "Ants at
+## half their old size").
+const MOUND_WORLD_WIDTH := 3.5
 ## The scale factor AntMoundMarker applies to a SIZE-authored mound sprite
 ## to make it actually read at MOUND_WORLD_WIDTH on screen -- never left
 ## unscaled the way DecomposerMarker's own ant/bug sprite once was

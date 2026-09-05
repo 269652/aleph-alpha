@@ -14,6 +14,9 @@ const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const SeedCaching = preload("res://src/gameplay/seed_caching.gd")
 const SquirrelNutCaching = preload("res://src/gameplay/squirrel_nut_caching.gd")
 const SeedEndozoochory = preload("res://src/gameplay/seed_endozoochory.gd")
+const AntPopulationModel = preload("res://src/world/ant_population_model.gd")
+const PheromoneField = preload("res://src/world/pheromone_field.gd")
+const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 
 const SIZE := 32
 
@@ -264,3 +267,123 @@ func test_windfall_carrier_seed_differs_from_the_grass_carrier_seed():
 			differed = true
 			break
 	assert_true(differed, "an independent salt should not collide with the grass-seed carrier roll")
+
+
+# -- a queen, and where a colony's size comes from (see docs/concept/
+# soil_fauna.md#a-queen-and-where-a-colonys-size-comes-from) ---------------
+
+func test_population_starts_at_the_founding_size():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	assert_eq(colony.population_at(cell), AntPopulationModel.STARTING_POPULATION)
+
+
+func test_capacity_starts_at_the_unfed_baseline():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	assert_almost_eq(colony.capacity_at(cell), AntPopulationModel.BASE_CAPACITY, 0.001)
+
+
+func test_recording_forage_success_raises_capacity():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var before := colony.capacity_at(cell)
+	for i in 20:
+		colony.record_forage_result(cell, true)
+	assert_gt(colony.capacity_at(cell), before)
+
+
+func test_recording_forage_failure_does_not_raise_capacity_above_baseline():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 20:
+		colony.record_forage_result(cell, false)
+	assert_almost_eq(colony.capacity_at(cell), AntPopulationModel.BASE_CAPACITY, 0.001)
+
+
+## The real feedback loop: a mound that keeps finding food grows a bigger
+## colony than an equally-old one that keeps coming home empty.
+func test_a_well_fed_mound_grows_larger_than_a_starved_one():
+	var fed := _colony("grassland", 42)
+	var starved := _colony("grassland", 42)
+	var cell: Vector2i = fed.mound_cells()[0]
+	for i in 100:
+		fed.record_forage_result(cell, true)
+		starved.record_forage_result(cell, false)
+		fed.advance(1.0)
+		starved.advance(1.0)
+	assert_gt(fed.population_at(cell), starved.population_at(cell))
+
+
+func test_active_forager_cap_is_at_least_one_for_a_brand_new_mound():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	assert_gte(colony.active_forager_cap_at(cell), 1)
+
+
+func test_active_forager_cap_never_exceeds_its_own_maximum():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 100:
+		colony.record_forage_result(cell, true)
+		colony.advance(1.0)
+	assert_lte(colony.active_forager_cap_at(cell), AntColony.MAX_CONCURRENT_FORAGERS)
+
+
+func test_active_forager_cap_grows_with_a_thriving_colony():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	var before := colony.active_forager_cap_at(cell)
+	for i in 100:
+		colony.record_forage_result(cell, true)
+		colony.advance(1.0)
+	assert_gte(colony.active_forager_cap_at(cell), before)
+
+
+# -- pheromone trails: recruitment to a known-good source -------------------
+
+func test_pheromones_at_returns_null_before_any_deposit():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	assert_null(colony.pheromones_at(cell))
+
+
+func test_deposit_pheromone_creates_the_field_lazily_and_records_the_deposit():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var tile := Vector2i(9, 9)
+	colony.deposit_pheromone(cell, tile)
+	var field = colony.pheromones_at(cell)
+	assert_not_null(field)
+	assert_false(field.is_empty())
+
+
+func test_advance_decays_a_mounds_pheromone_field_over_real_elapsed_time():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var tile := Vector2i(4, 4)
+	colony.deposit_pheromone(cell, tile)
+	var tile_center := (Vector2(tile) + Vector2(0.5, 0.5)) * 16.0
+	var before: float = colony.pheromones_at(cell).concentration_at(tile_center, 16.0)
+	colony.advance(PheromoneField.HALF_LIFE_SECONDS)
+	var after: float = colony.pheromones_at(cell).concentration_at(tile_center, 16.0)
+	assert_almost_eq(after, before * 0.5, 0.01)
+
+
+## Different mounds are different colonies -- one's trail must not bleed
+## into another's.
+func test_each_mound_owns_its_own_independent_pheromone_field():
+	var colony := _colony()
+	var cells: Array = colony.mound_cells()
+	assert_gt(cells.size(), 1, "need at least two mounds to prove independence")
+	colony.deposit_pheromone(cells[0], Vector2i(1, 1))
+	assert_null(colony.pheromones_at(cells[1]), "a deposit at one mound must not appear at another")
+
+
+# -- SECONDS_PER_SIMULATED_DAY must stay in sync with EarthChunkManager's
+# own constant of the same name (see AntColony's doc comment on why it is
+# restated here rather than imported -- EarthChunkManager already preloads
+# AntColony, so the reverse import would be circular). ----------------------
+
+func test_seconds_per_simulated_day_matches_earth_chunk_managers_own_constant():
+	assert_eq(AntColony.SECONDS_PER_SIMULATED_DAY, EarthChunkManager.SECONDS_PER_SIMULATED_DAY)

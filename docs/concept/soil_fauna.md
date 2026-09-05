@@ -246,16 +246,23 @@ watched the bird peck at them.
 - ⬜ Worm population dynamics / bird carrying capacity from worm density.
 - ⬜ Persistence and catch-up integration of eaten burrows (deliberate, above).
 - ✅ Ants (mound population + myrmecochory, both grassland grass-seed AND
-  forest/rainforest windfall fruit/nut foraging, AND a real rendered
-  presence) — `src/world/ant_colony.gd` / `EarthChunkManager.step_ants`,
-  see "Ants: myrmecochory" below. This closes the placement half of the
-  "other soil fauna" item above, the "forest/rainforest mound has nothing to
-  harvest" gap this doc used to name (fixed 2026-08-26, see "Windfall
-  foraging" in that section), and the "no rendered ant or mound sprite" gap
-  (fixed 2026-09-04 — reported live: ants "should be a real gear in the
-  ecosystem", see "Rendered presence" in that section). What's left of the
-  original item (ants as prey, or as non-windfall detritivores) is still
-  open, see that section's own scope note.
+  forest/rainforest windfall fruit/nut foraging, a real rendered presence,
+  real round-trip foraging behaviour, pheromone-trail recruitment, and a
+  queen-driven per-mound population) — `src/world/ant_colony.gd` /
+  `EarthChunkManager.step_ants`, see "Ants: myrmecochory" below. This
+  closes the placement half of the "other soil fauna" item above, the
+  "forest/rainforest mound has nothing to harvest" gap this doc used to
+  name (fixed 2026-08-26, see "Windfall foraging" in that section), the
+  "no rendered ant or mound sprite" gap (fixed 2026-09-04 — reported live:
+  ants "should be a real gear in the ecosystem", see "Rendered presence"
+  in that section), and — this pass — the "no ant population dynamics"
+  gap this doc used to name explicitly as out of scope (see "A queen, and
+  where a colony's size comes from"), a scripted-not-real forage
+  resolution (see "Real foraging: a round trip, not an instant resolve"),
+  and no ant-family marker answering the hover-tooltip contract (see
+  "Ants at half their old size, and finally hoverable"). What's left of
+  the original item (ants as prey, or as non-windfall detritivores) is
+  still open, see that section's own scope note.
 - ⬜ Insect larvae, snails, and any other soil fauna beyond ants — the table
   and the patch-sim contract extend to them the same way ants did, nothing
   else is needed structurally, but nothing has built one yet.
@@ -401,6 +408,201 @@ already use. This is what actually closes the "forest/rainforest mound has
 nothing to harvest" gap named above — a real, tested, live-wired mechanism,
 not just a placement fact.
 
+### Ants at half their old size, and finally hoverable
+
+Two reported gaps, both small on their own. **Size**: an ant/mound was
+scaled for legibility when this was pure background population math with
+no rendered presence at all — now that a player can actually stand next to
+one, both read as oversized. `IllustratedDecomposerSprite.BASE_WORLD_WIDTH`
+(6.0, shared by ant and carrion bug alike — "there is no size
+differentiation between them today") is now two separate constants,
+`ANT_WORLD_WIDTH` (3.0, halved) and `BUG_WORLD_WIDTH` (6.0, unchanged) —
+splitting them, not just halving the shared one, since a carrion beetle is
+a genuinely different, larger insect and halving it too was never asked
+for and isn't grounded in anything about beetles.
+`ProceduralAntMoundSprite.MOUND_WORLD_WIDTH` (7.0 → 3.5) halves similarly;
+`MOUND_WORLD_SCALE` and `IllustratedAntMoundSprite.marker_scale()` both
+derive from it, so one constant change halves both the procedural and
+illustrated mound art.
+
+**Tooltip**: neither an individual forager nor a mound answered
+`HoverTargetFinder`'s contract (join the `"hoverable"` group, implement
+`get_display_name()` — see [`hover_target_finder.gd`](../../src/rendering/hover_target_finder.gd)),
+despite `DecomposerMarker` already preloading `HoverTargetFinder` and never
+finishing the wiring. All three ant-family markers (`AntForagerMarker`,
+`AntMoundMarker`, and `DecomposerMarker` itself, closing that dangling
+gap too) now join and answer a name — a mound's name includes its current
+colony strength (see the queen section below), so hovering one is how a
+player actually learns anything about the colony living there without
+ever seeing inside it.
+
+### Real foraging: a round trip, not an instant resolve
+
+Every forage used to resolve **completely in one step**: the mound found a
+seed, took it, and cached it, all before the purely decorative
+`AntForagerMarker` was even spawned to walk the geometry after the fact —
+"the resolution still has no individual ant walking that distance over
+time," this doc's own words for it above. That was an honest, named scope
+choice at the time (a mound is a background population effect, not a
+pathfinding creature), but it means the visible ant was cosmetic in the
+strongest sense: freezing it, deleting it, or teleporting it changed
+nothing about whether the seed was really taken.
+
+That is no longer true. A forage attempt now dispatches a **real** forager
+that:
+
+1. Is given a genuine target position (still found the same way —
+   `grass_seeds_near`/`fruit_near` within `FORAGE_RADIUS_TILES`, see
+   "Pheromone trails" below for how it's chosen when more than one
+   candidate exists) and **walks there for real**, at the same
+   `WALK_SPEED` it always animated at.
+2. **Takes the seed/nut only on real arrival** (`take_grass_seed_at`/
+   `take_fruit_at`), re-checked at that moment — something else (a mouse,
+   a bird, simple bad luck) may have taken it first in the time the ant
+   spent walking, in which case the trip comes back empty. This is the
+   actual, meaningful sense in which foraging is now real rather than
+   scripted: the walk has a causal effect that can fail, not a guaranteed
+   one animated after the fact.
+3. **Walks back to the mound**, not onward to a cache point out in the
+   field — a genuine change from the old geometry, and a more accurate
+   one: real ants carry a harvested seed *toward the nest*, discarding the
+   processed remnant in a midden near the entrance, not out where they
+   found it. The cache/consume roll (`AntColony.windfall_is_consumed` for
+   windfall; grass seed always survives to be planted, exactly as before)
+   and the resulting `plant_grass_at`/`try_plant_seed_at` call now happen
+   at the mound, using `carry_distance_tiles`/`carry_direction` from the
+   *mound's* position rather than the pickup's.
+4. Frees itself once home, the same one-shot-per-trip lifetime as before.
+
+`AntForageBehavior` (new, pure, no engine dependency, mirroring
+`CarrionForageBehavior`'s shape) owns the two phases this needs —
+`APPROACHING` (walking to the target, arrival resolves found-or-not) and
+`RETURNING` (walking home, arrival resolves cache-or-consumed) — simpler
+than its siblings because there is no `SEEKING` phase: the mound already
+found a real, reachable candidate before dispatching anyone, exactly as
+before. `AntForagerMarker` now takes a duck-typed `_world` reference (the
+same contract shape `FishMarker`/`PiscivoreBirdMarker` already use) so it
+can make these calls itself, plus the owning `AntColony` and mound `cell`
+so the cache roll at arrival reads the colony's own deterministic
+per-(cell, step) carrier seed, sampled live at the moment it's actually
+needed rather than captured stale at dispatch time.
+
+### Pheromone trails: recruitment to a known-good source
+
+Real ants recruit nestmates to a food source with a **trail pheromone**: a
+successful forager lays it down as it returns to the nest, it evaporates
+over real time, and other foragers read it as a bias toward a *known*
+source rather than an equally-convenient unknown one — the mechanism
+behind Deneubourg et al.'s classic double-bridge experiments, where a
+colony collectively converges on the shorter of two paths to a food source
+purely through this reinforce-and-evaporate loop, with no individual ant
+ever comparing the two.
+
+`PheromoneField` (new, `src/world/pheromone_field.gd`) is the mechanism.
+Deliberately **not** a reuse of `ScentField` despite the similar-sounding
+job: `ScentField.concentration_at` recomputes its answer fresh, every
+call, from whichever flowers are *currently* alive and blooming — there is
+nothing to persist because a flower's own presence already is the state.
+A pheromone trail is the opposite: it has to outlive the ant that laid it,
+which is the entire point of another ant finding it later. So
+`PheromoneField` is a real stateful, decaying store —
+`deposit(tile, amount)`, `decay(delta_seconds)` (exponential falloff,
+`HALF_LIFE_SECONDS`, pruning anything below a floor so the backing
+dictionary doesn't grow forever) — while still borrowing `ScentField`'s
+**math**, not its statelessness: the same squared-taper `falloff` and
+finite-difference `gradient_direction` sampling, because a concentration
+field is a concentration field regardless of what maintains it.
+
+**Where it plugs into foraging, concretely.** `FORAGE_RADIUS_TILES`
+doubles (1.0 → 2.0 tiles — still comfortably under `SeedCaching.
+PICKUP_RADIUS_TILES`, the ordering `test_ant_forage_radius_is_shorter_
+than_rodent_pickup_radius` already pins, just not AT the old value), which
+matters here specifically because it is what makes more than one candidate
+food item plausible within reach at once. When there is more than one,
+`PheromoneField.best_candidate_index` scores each by distance **and** the
+trail concentration already sitting at it, and the mound sends its forager
+to whichever scores highest — a location the colony has recently foraged
+successfully (and therefore already marked) can beat a marginally closer
+but never-visited one, exactly the real recruitment effect. A successful
+forager deposits at the food's own position the moment it picks its find
+up (marking "there was food here, worth checking again"), read by the
+*next* dispatched forager's own candidate scoring, not by anything this
+one does for the rest of its own trip.
+
+**Per mound, not per chunk.** Each mound owns its own `PheromoneField`
+(lazily created on first deposit) — different colonies don't smell each
+other's trails, matching how real colony odour is colony-specific.
+`AntColony.advance(delta_seconds)` now genuinely uses the `delta` it
+receives (previously ignored — "ants have no ... value to animate over
+real seconds") to decay every mound's field by real elapsed time, the
+first real use of that parameter this class has ever had.
+
+### A queen, and where a colony's size comes from
+
+"No ant population dynamics. Mound count is fixed and deterministic per
+chunk... colonies do not grow, split, or die out from how much they
+forage" — named explicitly above as out of scope. This closes that gap,
+in the same real-mechanism, two-fidelity shape every other population in
+this game already uses (`PopulationModel`, wrapped per-domain by
+`HerbivorePopulationModel`/`PredatorPopulationModel`/
+`AquaticPopulationModel`/`RobinPopulationModel`/`SparrowPopulationModel`/
+`KingfisherPopulationModel` — see [ecosystem_dynamics.md](ecosystem_dynamics.md)'s
+"The two fidelities are one population").
+
+**Real-world grounding.** A real ant colony's size is driven almost
+entirely by one animal: the queen, whose egg-laying rate — and therefore
+the colony's growth — is itself bounded by how much food her workers
+actually bring back. A well-fed colony with abundant nearby forage grows;
+a colony working barren ground stalls near its founding size. Colony
+growth genuinely does follow a real, roughly logistic curve over its
+life — fast while young and under capacity, levelling off as the colony
+fills whatever the local area can support — which is exactly the shape
+`PopulationModel.step` already gives every other species in this game, no
+new growth law needed.
+
+**The mechanism.** `AntColony` gains, per mound cell: a population
+(`STARTING_POPULATION`, an abstract colony-strength number, not a literal
+worker headcount — the same abstraction level `fish_population`/
+`herbivore_population` already sit at) and a real feedback signal, a
+decaying exponential average of recent forage outcomes
+(`record_forage_result(cell, succeeded)`, updated by
+`EarthChunkManager` every time a dispatched forager's trip actually
+resolves — success or failure, arrival is what tells the colony whether
+this attempt fed anyone). Carrying capacity
+(`capacity_at(cell)`) is `BASE_CAPACITY` scaled up by that recent-success
+signal (`FOOD_CAPACITY_BONUS`) — a colony that keeps finding food supports
+a bigger population than one that keeps coming home empty, the real
+mechanism the grounding above names, not an invented one. `AntPopulationModel`
+(new, `src/world/ant_population_model.gd`) is the thin per-domain wrapper
+this shape always gets; `GROWTH_RATE_PER_DAY` is pinned **slower** than
+`HerbivorePopulationModel`'s own (an ordering, not an eyeballed number,
+mirroring how `AntColony.MOUND_CHANCE` is already pinned faster than
+`EarthwormPatch.SEED_CHANCE` above) — a real ant colony matures over
+years, the slowest-growing population this game tracks, against
+land mammals' comparatively fast seasonal reproduction. `advance`
+converts its `delta_seconds` to simulated days against the same
+`SECONDS_PER_SIMULATED_DAY` (60s) `EarthChunkManager` already calibrates
+every other species' growth rate against — restated as `AntColony`'s own
+constant rather than importing `EarthChunkManager` back into the class it
+is already owned by (that would be circular), and cross-checked by test
+so the two can't silently drift apart.
+
+**What the player actually sees.** Population has no rendered form of its
+own — there is still deliberately no separate queen sprite (real queens
+are sessile and essentially never seen outside the nest; a player learns
+a colony is thriving the same way they would in reality, from how much
+worker traffic it produces, not by being shown her directly) — but it
+governs how many foragers a mound may have **concurrently active**
+(`active_forager_cap_for`, `MAX_CONCURRENT_FORAGERS` = 3), replacing the
+old hardcoded "one forager in flight at a time." A young or
+food-poor colony still reads exactly as before — one ant, one trip at a
+time — while a large, well-fed one visibly has two or three workers out
+at once, the same "aggregate population promotes to visible individual
+markers" pattern `FishRenderer`'s own `target_count` already uses for
+fish. A mound's hover tooltip reports this directly (see above) — the one
+place a player can actually read a number for what is otherwise inferred
+only from traffic.
+
 ### What is explicitly NOT in this pass
 
 - **Rendered presence (2026-09-04).** Every mound now has a real,
@@ -459,9 +661,18 @@ not just a placement fact.
   nodes, so it has no way to see a leaf item without a parallel query this
   pass does not build. Named there as a reasonable, separable follow-up,
   not silently dropped.
-- **No ant population dynamics.** Mound count is fixed and deterministic
-  per chunk, exactly like earthworm burrow count; colonies do not grow,
-  split, or die out from how much they forage.
+- **Mound COUNT is still fixed and deterministic per chunk** (see "A queen,
+  and where a colony's size comes from" above for what is no longer fixed
+  — each mound's own population now genuinely grows or stalls with real
+  forage success). A grown colony does not split off and found a NEW
+  mound elsewhere, and a starved one does not disappear outright — both
+  are real, grounded follow-ons (colony fission/budding is a genuine
+  phenomenon in several ant subfamilies) deliberately left for later
+  rather than attempted alongside everything else in this pass.
+- **No worker/soldier caste differentiation.** Every ant this pass renders
+  is visually and behaviourally identical; real polymorphic castes (major/
+  minor workers, soldiers) are a separate, later refinement, not attempted
+  here.
 - **Not persisted, not catch-up integrated**, for the identical reason
   `EarthwormPatch`'s own burrows are not (see that section's Scope choices
   above): a reloaded chunk re-seeds its mounds deterministically, and a
