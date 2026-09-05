@@ -8842,6 +8842,95 @@ a late ramp only once `canopy_turn_progress` starts moving. Two parts:
    `test_earth_chunk_manager.gd` — all green. `leaf_litter.md` updated
    throughout ("When leaves fall", "What falls", "Rendering", "Status").
 
+✅ **Follow-up (2026-09-05): "leaf decay should be 3 seasons"** —
+clarified when asked which of three readings was meant: "leafs should
+take roughly 270 days to rot / decay / vanish". Two parts:
+
+1. **`LeafLitterField.LIFETIME` is now a real ~270-real-world-day
+   lifespan, not an arbitrary 90-second tidiness cutoff.** 270 real-world
+   days is ~3 of the 4 real seasons a year has (~91 days each) — the
+   genuine real-world leaf-litter decomposition timescale — expressed as
+   exactly 3/4 of a real year and translated through the same real-year
+   → compressed-game-year ratio (`SeasonCycle.SECONDS_PER_YEAR`) every
+   other real-world-grounded timing constant in this codebase already
+   uses, the same idiom `TreePhenology`'s own blossom timing already
+   established for turning a real biological duration into game-playable
+   time — applied to litter for the first time.
+2. **A settled leaf now decays through exactly 3 stages, not 2.**
+   `DECAY_TO_FADING_SECONDS`/`DECAY_TO_WINTER_SECONDS`, pinned at an even
+   three-way split of the new `LIFETIME` (one third, two thirds), advance
+   a leaf's own `season` one-way from its fall colour through `"fading"`
+   to the terminal `"winter"` — matching the report's own framing exactly:
+   one real season fresh, one fading, one fully decayed before vanishing.
+   `LeafLitterAtlas` gained a matching `"fading"` cell: no species has
+   real half-decayed litter art, so it derives from a straight per-pixel
+   blend of that species' own already-built autumn stamp and its
+   already-derived winter stamp, at `FADING_BLEND` (pinned at exactly
+   0.5 — the same midpoint the timing split already lands on), needing no
+   new shading logic since both source stamps already carry real,
+   correctly-shaded content.
+
+12 new/rewritten tests in `test_leaf_litter_field.gd` (43/43 in the file)
+and 5 new tests in `test_leaf_litter_atlas.gd` (21/21 in the file), all
+green — thresholds and the blend pinned by test rather than eyeballed,
+the fresh/fading/winter progression checked at each boundary for every
+origin season. Visually verified beyond the numeric tests
+(`tools/probe_fading_stamp.gd`): every species shows a clear, distinct
+autumn → fading → winter progression, not two of the three stages
+reading as indistinguishable. Full field/atlas/renderer suite and the
+real-GPU smoke test re-confirmed green after both changes.
+
+**Named, not silently assumed safe: standing leaf-litter population at
+the new, much longer `LIFETIME` has not been live-performance-verified.**
+The existing 750–960-leaves-per-chunk burst test (previous entry) seeded
+a fixed count directly and watched FPS over a 30-real-second window that
+never actually depended on `LIFETIME`'s own value, so it does not by
+itself confirm safety at whatever standing population a much longer real
+accumulation window (up to ~270 real-world-day-equivalent, vs. the old 90
+seconds) could permit during an actual long play session, especially
+combined with autumn's own now constantly-increasing shed rate. See
+`leaf_litter.md`'s own Status entry for the same flagged gap.
+
+✅ **Follow-up (2026-09-05): "make the wind blowing through leaves make
+the tumble and swirl more smoothly? it's a hard back forth motion atm".**
+Root-caused with a direct measurement (`tools/probe_wind_offset_spread
+.gd`), not guessed at: `WindDispersal.landing_offset`'s own scatter term
+is a fully independent 0-360 degree random angle — right for a SEED
+falling once (it really does scatter near its parent on a still day
+regardless of which way any breeze blows), wrong for a leaf ALREADY
+settled on the ground being nudged by the SAME ambient wind repeatedly.
+Measured: of 30 samples under a strong, steady wind, only 57% landed
+within 30° of the wind's own heading and 30% landed more than 90° off —
+genuinely backwards, several nearly exactly opposite the wind — so a
+single leaf's consecutive wind nudges could easily alternate between
+"blown downwind" and "blown upwind" purely by chance.
+
+New `WindDispersal.leaf_ground_drift`: reuses the exact same heavy-tailed
+reach roll and buoyant near-field scatter MAGNITUDE `landing_offset`
+already establishes (so the distance distribution every existing
+consumer — e.g. `LeafLitterRenderer`'s own tumble-turn scaling — already
+expects is unchanged), but bounds the ANGLE to `LEAF_DRIFT_WOBBLE_DEGREES`
+(45°, half the 90° structural ceiling that guarantees a positive dot
+product with the wind — i.e. real forward progress along the wind, never
+sideways-or-worse) around the wind's own heading, instead of an
+independent full-circle roll. `landing_offset` itself is untouched — seed/
+flower dispersal already depends on its current scatter shape; this is a
+dedicated formula for the one caller (`LeafLitterField`'s own throttled
+wind roll) that needs directional coherence across many repeated nudges
+of the same already-settled object.
+
+6 new tests in `test_wind_dispersal.gd` (34/34 in the file): never strays
+past the wobble bound across 200 seeds, never reverses the wind direction
+across 200 seeds, the wobble bound itself never reaches a right angle,
+still drifts whichever way the wind blows, deterministic, never leaves
+the world. Retroactively verified these catch a real regression
+(temporarily reverted to an independent angle roll, confirmed 2 of 4
+targeted tests failed for the right reason, restored). Re-simulated the
+exact scenario that first exposed the bug: every hop now lands within the
+wobble bound of the wind's own heading instead of swinging across ~170°
+between consecutive hops. Full renderer suite and the real-GPU smoke test
+re-confirmed green.
+
 <details>
 <summary>First pass (superseded above), kept for history</summary>
 
