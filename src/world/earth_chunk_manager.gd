@@ -6188,6 +6188,15 @@ func record_birth_at(position: Vector2, count: float = 1.0) -> void:
 	_ecosystem.record_birth(_chunk_coord_for_tile(_world_tile_for_pixel(position)), count)
 
 
+## record_birth_at's bird sibling -- see EcosystemSimulation.record_bird_
+## birth for why this needs to be species-routed rather than one
+## hardcoded population. Called by AmbientFlyerMarker._finish_bird_court
+## exactly like spawn_flyer_offspring is, through the same `courtship_
+## world` reference.
+func record_bird_birth_at(position: Vector2, species: String, count: float = 1.0) -> void:
+	_ecosystem.record_bird_birth(_chunk_coord_for_tile(_world_tile_for_pixel(position)), species, count)
+
+
 ## An animal DIED at this world position -- predator kill, player weapon,
 ## disease or starvation, all of which funnel through CreatureMarker._die().
 ## record_birth_at's mirror, and the other half of a conversation that until

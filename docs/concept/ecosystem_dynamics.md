@@ -973,12 +973,80 @@ branch — no new state machine there either. 301 tests green across eight
 files (the six bird/flyer suites, new `test_bird_song.gd`, and
 `test_ground_forage_behavior.gd` reconfirmed untouched).
 
-**Still not done**: real bird courtship/mating-dance and reproduction
-(the `court` bands are measured and confirmed by eye but nothing reads
-them yet), and kingfisher's own remaining two rows (a calm rest pose
-closer to `PiscivoreAppetite.ACTIVITY_PERCH` than anything wired, and one
-still-unresolved variant). Both are Phase 4/named follow-ups, not
-oversights.
+**Phase 4, same session: real bird courtship, display, and visible
+reproduction.** New `src/gameplay/bird_courtship.gd` (`BirdCourtship`)
+reuses `Courtship`'s species-agnostic pairing primitives (`can_pair`/
+`pair_seed`/`mates`/`leads`) exactly as `MammalCourtship` already does for
+land mammals — only the motion and the species gate are bird-specific, per
+the explicit design note in `animal_genetics.md`'s "do not widen
+DANCING_SPECIES" section (quoted above): a bird pairing does not
+spiral-orbit the way a butterfly's courtship flight does, because the
+display itself is a HELD pose (the tail-fanned `court` art), not a flight
+figure — so `BirdCourtship.hold_offset` is simpler than either existing
+courtship: a straight LINEAR close (deliberately not eased —
+`FlightTransition.crossing_seconds`, not `settling_seconds`, so the
+bird's speed during the approach is always exactly its own airspeed, never
+over it) to a fixed point opposite the partner's own, then a genuine hold
+with no further motion at all.
+
+`BirdCourtship.DANCING_SPECIES` is the three `AmbientFlyerMarker`
+songbirds (sparrow/robin/blackbird) — deliberately **not** kingfisher,
+even though it has the same real `court` art: a kingfisher is a
+`PiscivoreBirdMarker`, an entirely separate class that never runs
+`AmbientFlyerMarker._step_pair_interactions`, so this mechanism cannot
+structurally reach it (kingfisher courtship, if ever built, is that
+class's own follow-up).
+
+Wired into `AmbientFlyerMarker._step_pair_interactions` as a genuine THIRD
+interaction path alongside the existing pollinator courtship and the
+spiral whirl — own fields (`_bird_courting_*`, not reusing `_courting_*`:
+two different motions/geometries sharing mutable state is exactly the
+kind of thing that produces a sparrow orbiting a point meant for a
+butterfly), `_scan_for_partners` extended to answer a third question
+("who would bird-court me") in the same one group-walk, and `_begin_bird_
+court`/`_continue_bird_court`/`_finish_bird_court`/`_end_bird_court`
+mirroring the pollinator four one-for-one. `_animate_wings_body` shows
+`court_frames` for the whole held display (checked before the `perched`
+branch, since a bird-court hold overrides `position` directly and never
+sets that flag, exactly like the pollinator dance).
+
+**Reproduction is now genuinely visible for birds**, not just an
+aggregate number climbing: on a successful pairing (`BirdCourtship.
+mates`, personality crossed via the same shipped `FlyerPersonality.
+inherit` pollinators use — a player is a selection pressure on birds too,
+not just butterflies), `courtship_world.spawn_flyer_offspring` spawns the
+visible chick exactly like a pollinator's, AND a new `record_bird_birth_
+at` → `EcosystemSimulation.record_bird_birth` (species-routed, unlike the
+single hardcoded `record_birth` mammals use) reconciles the AGGREGATE
+population — `RobinPopulationModel`/`SparrowPopulationModel`, the number
+`AmbientFlyerRenderer.marker_count_for` actually promotes markers from on
+chunk reload — with the individual chick just spawned. Without this
+second half a courtship-born chick would simply vanish the next time its
+chunk unloaded and reloaded, since the aggregate never knew it existed;
+this is the same "individual half reports to the aggregate half" role
+`CreatureMarker`'s own mammal-courtship birth already plays via
+`EarthChunkManager.record_birth_at`. A no-op for blackbird (no aggregate
+population model yet — see above) and for an unknown region, the same
+"unrecognized input does nothing" contract this file already uses
+throughout.
+
+Verified with the SAME class of test that once caught the pollinator
+dance's own one-sided-pairing bug: two real robin markers, real frames,
+confirmed to actually pair (`_bird_courting_with` pointing at each other
+on both sides, not one orbiting nothing), hold a genuinely fixed point
+(position stops changing once closed, unlike the butterfly orbit), and
+— walking positions until a pair's own seed happens to mate, the same
+technique `test_a_courting_pairs_child_inherits_from_both_parents` already
+uses — spawn a chick AND reconcile the population exactly once. Confirmed
+`test_birds_do_not_perform_the_butterfly_dance` still passes unchanged:
+this is a separate mechanism, not a widened gate. 399 tests green across
+eleven files.
+
+**Still not done**: kingfisher's own remaining two unmapped rows (a calm
+rest pose closer to `PiscivoreAppetite.ACTIVITY_PERCH` than anything
+wired, and one still-unresolved variant), and kingfisher courtship
+itself (a `PiscivoreBirdMarker`-side follow-up, structurally out of
+this mechanism's reach — see above). Named follow-ups, not oversights.
 
 ## Region difficulty (gating the roster by player readiness)
 

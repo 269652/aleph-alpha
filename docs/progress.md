@@ -7025,6 +7025,28 @@ state had never once been set by anything in `src/`.
   done: bird courtship/dancing and reproduction (Phase 4), kingfisher's
   own remaining two rows. Writeup: `concept/ecosystem_dynamics.md`'s same
   section.
+  **Follow-up, same day: Phase 4, real bird courtship + visible
+  reproduction.** New `src/gameplay/bird_courtship.gd` (`BirdCourtship`)
+  reuses `Courtship`'s pairing primitives exactly as `MammalCourtship`
+  already does, with a bird-appropriate motion (linear close to a fixed
+  held point, no orbit) and its own species gate — the three
+  `AmbientFlyerMarker` songbirds, deliberately NOT kingfisher (a
+  `PiscivoreBirdMarker`, structurally unreachable from this mechanism).
+  Wired into `AmbientFlyerMarker._step_pair_interactions` as a genuine
+  third interaction path (own `_bird_courting_*` fields, not shared with
+  the pollinator dance's `_courting_*`). On a successful pairing,
+  `spawn_flyer_offspring` spawns the visible chick and a new `record_
+  bird_birth_at` → `EcosystemSimulation.record_bird_birth` (species-
+  routed) reconciles the aggregate population it will be reloaded from —
+  without this a courtship chick would just vanish on next chunk load.
+  Verified with two real markers actually pairing, holding a genuinely
+  fixed point, and — walking positions until a pair's seed mates —
+  spawning a chick and reconciling the population exactly once; confirmed
+  `test_birds_do_not_perform_the_butterfly_dance` still passes unchanged.
+  399 tests green across eleven files. Not done: kingfisher's own
+  remaining two rows and kingfisher courtship (both named follow-ups, the
+  latter structurally out of this mechanism's reach). Writeup:
+  `concept/ecosystem_dynamics.md`'s same section.
 - **Persistence / catch-up integration of eaten burrows** (medium) — ⬜ Not
   started, deliberately — a reloaded chunk re-seeds deterministically and
   loses which burrows had been eaten, exactly like `FlowerPatch`, `TallGrass`,
