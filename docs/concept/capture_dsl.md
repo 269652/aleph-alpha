@@ -175,6 +175,9 @@ Mirrors [spell_runtime.md](spell_runtime.md)'s own resolution-order section:
 - ⬜ `capture_item_actions.gd` (the "Put into bottle" scorer)
 - ⬜ Player wiring: probabilistic `_throw_net`, `_release_net`,
   bottle-transfer, updated tests
+- ⬜ `bottled_creature_wander.gd` (confined fly/rest state)
+- ⬜ `illustrated_glass_bottle_sprite.gd` (the fixed 3×2 sheet reader)
+- ⬜ `bottled_creature_view.gd` and its `DroppedItem` wiring
 - ⬜ **The restrain-and-struggle tier (lasso/snare/trap/reinforced rope) is
   not expressed in this DSL.** It stays on `taming.gd`'s existing
   `break_free_chance`/`hold_chance` model, which is live, tested, and
@@ -186,6 +189,61 @@ Mirrors [spell_runtime.md](spell_runtime.md)'s own resolution-order section:
 *(This section gets a pass once the corresponding code lands — see
 `docs/progress.md` for the dated, narrative account of what actually
 shipped.)*
+
+## Rendering a bottled catch
+
+A loaded `glass_bottle` is not a flat trophy — reported directly: the
+bottle's own composite sheet has two rows, a background layer and a
+foreground layer, and a bottled creature should render sandwiched between
+them, alive: flying around, settling, flapping its wings.
+
+`assets/sprites/items/glass_bottle.png` is a fixed 3×2 grid (measured:
+1536×1024, six 512×512 cells) — three condition columns (pristine/worn/
+broken, reusing [item_durability.md](item_durability.md)'s existing
+`ItemWear.condition_for` vocabulary rather than inventing a second one) by
+two rows: row 0 uncorked (the back layer — what sits behind whatever the
+bottle holds), row 1 corked (the front layer — the near glass and its seal).
+Both rows carry real, continuously-varying alpha through the glass body
+(measured, not just at the silhouette edge) — this is a deliberately
+painted "see-through" material, not a flat icon, which is exactly what
+makes the sandwich read as looking *through* glass at something inside it
+rather than a sticker glued on top of one. `composite_sheet_slicer.gd`'s
+blob-detection is the wrong tool here — this grid is fixed and regular, not
+irregularly laid out — so it's read the same "fixed-position, measured Y/X
+bands" way `item_illustrations.md`'s wooden_club sheet already is.
+
+**The creature layer reuses existing generators wholesale, not a new art
+pipeline**: `ProceduralButterflySprite.generate_flap_textures`/
+`generate_settled_textures` already produce exactly "flying" and "settled,
+wings folded" frame sets, per species, and `WingbeatBounce.bounce_offset`
+already derives the per-beat vertical bob from real wingbeat physics. None
+of that is rebuilt. What a bottled creature needs that
+`AmbientFlyerMarker`'s own animation state machine doesn't offer is far
+simpler than what that machine models (no courtship, no nectaring, no
+perched-bird logic — nothing in a sealed bottle forages or courts), so it
+gets its own small state: `bottled_creature_wander.gd` alternates
+deterministically between a short FLYING leg (drifting to a fresh point
+inside the bottle's interior bounds) and a longer RESTING leg (settled at
+that point), continuous across the transition, the same hash-seeded-not-RNG
+discipline every other per-individual timing in this codebase already
+holds to.
+
+Only species `ProceduralButterflySprite` actually covers get a live
+creature layer; a bottled bird (caught the same way, see taming.md's
+"Netted" class covering both) falls back to the bottle alone rather than
+inventing bird-in-a-bottle art nobody asked for — an honest, named
+simplification, not an oversight.
+
+**Where it renders**: the world-DROPPED item, not the inventory icon or
+hand-held view. Every other surface in `item_illustrations.md`'s own states
+table converges on one static texture per item on purpose (icon/ground/
+in-hand all "reuse the icon") — animating an inventory slot would be a
+first, unplanned departure from that. A dropped item is already a live
+`Sprite2D`-based scene node (`dropped_item.gd`), the same kind of place this
+codebase already puts a live diorama (`CharacterPreviewDiorama`), so a
+loaded bottle set down in the world gets a small child view
+(`bottled_creature_view.gd`: back sprite → creature sprite → front sprite)
+instead of `DroppedItem`'s ordinary single flat texture.
 
 ## Open questions
 
