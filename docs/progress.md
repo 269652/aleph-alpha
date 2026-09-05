@@ -10682,6 +10682,19 @@ intermediate "loaded, undecided" state at all.
 - ⬜ **Release does not respawn a live creature** — it only empties the net
   with a message. Symmetrical and arguably more honest physically, but not
   asked for and not built.
+- ✅ **Update (same day):** reported "give the player a glass bottle and
+  butterfly net from the start" — `Player._ready()`'s existing hardcoded
+  starting-kit grant (sword equipped, axe, two leather pieces, fishing
+  rod) now also adds one `butterfly_net` and one `glass_bottle`, same
+  "discoverable from the first minute" reasoning the fishing rod already
+  had. Pinned by a new test (`test_a_new_player_starts_with_the_expected_
+  kit`) that also closes a real pre-existing gap: nothing had asserted
+  this grant's actual contents before now. Note for whoever eventually
+  merges the separate, not-yet-merged `claude/starter-kit` branch (a
+  player-chosen pick-3-from-8 kit replacing this whole hardcoded block):
+  that branch's `StarterKit.POOL` does not include either item, and
+  merging it as-is would silently drop this grant along with the rest of
+  the old kit — worth reconciling at that point, not addressed here.
 
 ## Reality check
 
