@@ -265,19 +265,32 @@ repeating it.
 
 ## Status
 
-- ⬜ `MushroomSpecies` (`src/world/mushroom_species.gd`)
-- ⬜ `ProceduralMushroomSprite` (`src/rendering/procedural_mushroom_sprite.gd`),
-  incl. the shared unidentified look
-- ⬜ `IllustratedMushroomSprite` (`src/rendering/illustrated_mushroom_sprite.gd`),
-  empty variant table, ready for real art
-- ⬜ `MushroomFlush` (`src/world/mushroom_flush.gd`)
+- ✅ `MushroomSpecies` (`src/world/mushroom_species.gd`) — IDS, display
+  names, cap colours, `is_toxic`, `host_tree_for`/`is_saprotroph`.
+- ✅ `MushroomFlush` (`src/world/mushroom_flush.gd`) — `flush_drive(moisture,
+  season)`, autumn-weighted, zero in winter.
+- ✅ `MushroomToxin` (`src/gameplay/mushroom_toxin.gd`) — per-species
+  `severity_for`, `damage_per_second(stacks, species_id)`. **Not yet
+  wired** to `Player.apply_mushroom_toxin`/`_mushroom_toxin_step` or to the
+  eat-food path — the pure model exists, nothing calls it in the live game
+  yet.
+- ✅ `ProceduralMushroomSprite` (`src/rendering/procedural_mushroom_sprite.gd`),
+  incl. the shared unidentified look.
+- ✅ `IllustratedMushroomSprite` (`src/rendering/illustrated_mushroom_sprite.gd`),
+  empty variant table (pinned by test), ready for real art.
 - ⬜ `WildMushroomPatch` (`src/world/wild_mushroom_patch.gd`)
 - ⬜ `MushroomMarker` (`src/rendering/mushroom_marker.gd`)
-- ⬜ `MushroomToxin` (`src/gameplay/mushroom_toxin.gd`) + `Player.
-  apply_mushroom_toxin`/`_mushroom_toxin_step`
 - ⬜ `mycology` skill node (`skill_tree.gd`/`skill_web.gd`) +
   `Player.knows_mushrooms()`
 - ⬜ Item catalog entries for all 5 species
 - ⬜ `EarthChunkManager.step_wild_mushrooms` + chunk load/unload lifecycle
 - ⬜ Wired into `scenes/world.gd`'s live ecology batch, proven by
   `test_world_ecology_batch_wild_mushrooms.gd`
+
+The five pieces above are pure logic/headless-tested (39 tests, all green)
+with no scene-tree or live-game wiring yet — nothing is visible or playable
+in a running game from this alone. The remaining items are where this
+connects to the actual world (patch-sim placement, the marker a player
+sees and picks up, the skill node, the eat-food/toxin hookup, and the
+world/chunk-manager wiring) — see progress.md for session-by-session
+status as those land.
