@@ -425,3 +425,81 @@ func test_an_individuals_receptor_genes_reach_its_decision():
 	}))
 	assert_eq(typical.intent, "seek_food")
 	assert_eq(anosmic.intent, "search_food")
+
+
+# -- slice 2: the marker publishes stimuli; the verdict is the valence -------
+
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+
+
+func _wolf(at: Vector2) -> Dictionary:
+	return {"position": at, "features": {Ethogram.PREDATOR: 1.0}, "node": "wolf"}
+
+
+func _person(at: Vector2) -> Dictionary:
+	return {"position": at, "features": {Ethogram.PLAYER: 1.0}, "node": "player"}
+
+
+func _sheep(at: Vector2) -> Dictionary:
+	return {"position": at, "features": {Ethogram.FLESH: 1.0}, "node": "sheep"}
+
+
+## The scan reports what the other creature IS; the species decides what
+## that means. A calm herbivore flees a predator it is handed as a stimulus.
+func test_a_calm_creature_flees_a_predator_stimulus():
+	var decision := behavior.decide(_context({"stimuli": [_wolf(Vector2(10, 0))]}))
+	assert_eq(decision.intent, "flee")
+	assert_lt(decision.direction.x, 0.0)
+	assert_eq(decision["stimulus"]["node"], "wolf")
+
+
+## Predators are not threatened by other creatures, only by the player --
+## the rule the marker used to apply while scanning, now a valence.
+func test_a_predator_ignores_another_predator_but_answers_a_player():
+	var ignores := behavior.decide(_context({
+		"temperament": "aggressive", "is_predator": true, "stimuli": [_wolf(Vector2(10, 0))],
+	}))
+	assert_eq(ignores.intent, "wander")
+	var attack := behavior.decide(_context({
+		"temperament": "aggressive", "is_predator": true, "stimuli": [_person(Vector2(10, 0))],
+	}))
+	assert_eq(attack.intent, "attack")
+	assert_eq(attack["stimulus"]["node"], "player")
+
+
+func test_a_hungry_predator_hunts_a_flesh_stimulus_and_names_the_node():
+	var decision := behavior.decide(_context({
+		"temperament": "aggressive", "is_predator": true, "hungry": true,
+		"stimuli": [_sheep(Vector2(50, 0)), _sheep(Vector2(10, 0))],
+	}))
+	assert_eq(decision.intent, "hunt")
+	assert_eq(decision["target"], Vector2(10, 0))
+	assert_eq(decision["stimulus"]["node"], "sheep")
+
+
+## A herbivore handed the same flesh stimulus wants nothing from it.
+func test_a_herbivore_ignores_a_flesh_stimulus():
+	var decision := behavior.decide(_context({"hungry": true, "stimuli": [_sheep(Vector2(10, 0))]}))
+	assert_eq(decision.intent, "search_food")
+
+
+## A tamed animal does not perceive people as anything: sensitivity, not valence.
+func test_an_animal_that_no_longer_fears_players_does_not_perceive_them():
+	var decision := behavior.decide(_context({
+		"fears_players": false, "stimuli": [_person(Vector2(10, 0))],
+	}))
+	assert_eq(decision.intent, "wander")
+
+
+## When the caller publishes stimuli, the legacy position lists are not read
+## on top of them -- one source of truth per call.
+func test_published_stimuli_replace_the_legacy_lists():
+	var decision := behavior.decide(_context({"threats": [Vector2(10, 0)], "stimuli": []}))
+	assert_eq(decision.intent, "wander")
+
+
+func test_an_aggressive_strong_herbivore_stands_and_fights_a_predator():
+	var decision := behavior.decide(_context({
+		"temperament": "aggressive", "health_fraction": 1.0, "stimuli": [_wolf(Vector2(10, 0))],
+	}))
+	assert_eq(decision.intent, "attack")

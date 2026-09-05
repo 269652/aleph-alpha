@@ -92,3 +92,40 @@ func test_the_foragers_are_the_ones_with_receptors():
 
 func test_something_with_no_receptors_does_not_forage_by_smell():
 	assert_false(ScentForaging.forages_by_smell("nonesuch"))
+
+
+# -- slice 2: the ranking lives in the kernel ---------------------------------
+
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
+
+
+## A smelled source becomes a stimulus that carries its own loudness at this
+## range (Olfaction.dilution), so the kernel ranks it by the physics of smell
+## rather than by its unit-free distance ranking.
+func test_smelled_sources_become_stimuli_with_their_dilution_as_strength():
+	var here := Vector2.ZERO
+	var near := _source(Vector2(TerrainRenderer.TILE_SIZE * 2.0, 0), 1.0)
+	var far := _source(Vector2(TerrainRenderer.TILE_SIZE * 10.0, 0), 1.0)
+	var stimuli := ScentForaging.stimuli_from(here, [near, far])
+	assert_eq(stimuli.size(), 2)
+	assert_almost_eq(stimuli[0]["strength"], Olfaction.dilution(2.0), 0.0001)
+	assert_almost_eq(stimuli[1]["strength"], Olfaction.dilution(10.0), 0.0001)
+	assert_eq(stimuli[0]["mixture"], near["mixture"])
+	assert_eq(stimuli[0]["position"], near["position"])
+
+
+## The interest floor is the smell wiring floor in the ethogram, not a second number.
+func test_the_interest_floor_is_the_ethograms():
+	assert_almost_eq(ScentForaging.MIN_INTEREST, Ethogram.SMELL_INTEREST_FLOOR, 0.0)
+
+
+## An individual reaches the choice through its genome: a boar born without a
+## decay receptor is not led to carrion the species would go to.
+func test_an_individuals_receptor_genes_reach_the_choice_of_source():
+	var here := Vector2.ZERO
+	var carrion := {"position": Vector2(40, 0), "mixture": {Olfaction.DECAY: 1.0}}
+	assert_false(ScentForaging.best_source("boar", here, [carrion]).is_empty(), "the species takes carrion")
+	assert_true(
+		ScentForaging.best_source("boar", here, [carrion], {"receptor_decay": 0.0}).is_empty(),
+		"this individual cannot smell it"
+	)
