@@ -9,6 +9,7 @@ extends GutTest
 
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
 const ProceduralDecomposerSprite = preload("res://src/rendering/procedural_decomposer_sprite.gd")
+const IllustratedDecomposerSprite = preload("res://src/rendering/illustrated_decomposer_sprite.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
 ## add_child_autofree (see _spawned_at) fully covers cleanup -- no separate
@@ -35,10 +36,39 @@ func test_has_a_real_ant_sprite_texture():
 	assert_not_null(sprite.texture)
 
 
+## Real illustrated ant art now exists (see IllustratedDecomposerSprite) --
+## checked first, same has_X()-gated fallback convention every other
+## optional illustrated-art seam in this codebase uses. Scale is measured
+## from the real art (marker_scale), not the procedural generator's fixed
+## ArtResolution.SPRITE_SCALE.
 func test_sprite_is_scaled_down_like_every_other_decomposer_ant():
 	var f := _spawned_at([Vector2.ZERO, Vector2(10, 0)])
 	var sprite := f.get_child(0) as Sprite2D
-	assert_eq(sprite.scale, Vector2.ONE * ArtResolution.SPRITE_SCALE)
+	assert_eq(sprite.scale, Vector2.ONE * IllustratedDecomposerSprite.new().marker_scale("ant", "walk"))
+
+
+## Before reaching the pickup waypoint, a forager has nothing to carry yet
+## -- it should show the plain walk cycle.
+func test_shows_the_walk_pose_before_reaching_the_pickup_waypoint():
+	var f := _spawned_at([Vector2(0, 0), Vector2(20, 0), Vector2(20, 50)])
+	var sprite := f.get_child(0) as Sprite2D
+	var walk_frames := IllustratedDecomposerSprite.new().generate_textures("ant", "walk")
+	assert_true(walk_frames.has(sprite.texture))
+
+
+## After picking the item up (reaching waypoint 1, the SECOND path entry),
+## the forager is carrying it to the cache -- ant.png's carry row exists
+## exactly for this leg (see IllustratedDecomposerSprite's own doc
+## comment), so it should switch to those frames instead of continuing to
+## show an empty-handed walk cycle.
+func test_switches_to_the_carry_pose_after_reaching_the_pickup_waypoint():
+	var f := _spawned_at([Vector2(0, 0), Vector2(20, 0), Vector2(20, 50)])
+	for i in 20:  # comfortably more than enough real walking to close 20px
+		f._process(0.1)
+	assert_eq(f._waypoint_index, 2, "should have advanced onto the cache leg")
+	var sprite := f.get_child(0) as Sprite2D
+	var carry_frames := IllustratedDecomposerSprite.new().generate_textures("ant", "carry")
+	assert_true(carry_frames.has(sprite.texture))
 
 
 func test_walks_toward_the_first_waypoint():
