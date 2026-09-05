@@ -6339,6 +6339,28 @@ evolution sim, both still partial. All ⬜ Not started:
   (`concept/ecosystem_dynamics.md`); listed here too since it's the one
   mechanism that reaches directly into this section's `record_catch` harvest
   term.
+- **Fish-to-fish social behavior (approach/follow/avoid/play) and flee from
+  a wading player/animal** (medium) — ✅ Done — see
+  [ecosystem_dynamics.md](concept/ecosystem_dynamics.md#a-shoal-finds-its-shape).
+  `src/gameplay/fish_schooling.gd` (new, pure/tested): the classic zonal
+  model of fish schooling (Aoki 1982; Huth & Wissel 1992) drives
+  avoid/follow/approach off each fish's own single nearest schoolmate
+  (`FishMarker._nearest_other_fish`/`_step_schooling`), zone radii stated in
+  body lengths and cross-checked against `FishMarker.CLEARANCE_PX` by test.
+  A rare, one-sided "play chase" (`FishSchooling.rolls_for_play`) reuses the
+  existing tail-flap speed burst (`FLAP_SPEED_MULTIPLIER`) rather than a new
+  mechanic. `EarthChunkManager.startle_fish_near_waders` (new) reuses the
+  pre-existing `river_wader_positions` water-filter and
+  `FishMarker.bolt_from`/`is_bolting` (both already built for the
+  kingfisher-strike case above) to make fish flee a player or animal that
+  wades in nearby, wired from `scenes/world.gd`'s existing per-frame
+  wader-candidate gathering. Movement-layer only, like the kingfisher-bolt
+  mechanism: no population/catch effect. Precedence, in order: flee > an
+  active lure (pre-existing) > an in-progress play chase > ordinary
+  schooling > wander; schooling is leashed to
+  `SCHOOL_LEASH_RADIUS_FACTOR * wander_radius` from home. 27 new tests: 11 in
+  the new `test_fish_schooling.gd`, 12 added to `test_fish_marker.gd`, 4
+  added to `test_earth_chunk_manager.gd`.
 - **DNA/phenotype/sexual-selection system (aquatic)** (huge) — ⬜ Not started
 - **Sexual selection / mate choice reproduction** (large) — ⬜ Not started
 - **Rare-phenotype catch desirability** (small) — ⬜ Not started

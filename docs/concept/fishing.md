@@ -65,11 +65,17 @@ pillar 1. Concretely:
 - Only chunks currently loaded (or freshly reloaded via catch-up, below)
   run this step; distant water isn't ticked at all — same LOD boundary as
   land.
-- Individual `FishMarker` nodes near the player stay exactly what they are
-  today for rendering/AI purposes (lightweight wander, no needs/perception)
-  — the aggregate model doesn't add per-fish simulation, it just becomes
-  the thing that decides *how many* markers exist and feeds their
-  depletion back into that number (see Harvest, below).
+- Individual `FishMarker` nodes near the player stay lightweight for
+  *population* purposes — no needs, no hunger, no courtship; the aggregate
+  model doesn't add per-fish ecological simulation, it just becomes the
+  thing that decides *how many* markers exist and feeds their depletion
+  back into that number (see Harvest, below). Their *movement* did later
+  gain two real reactions — fish-to-fish social behavior (approach/follow/
+  avoid/play) and fleeing a wading player or animal — see
+  [ecosystem_dynamics.md](ecosystem_dynamics.md#a-shoal-finds-its-shape).
+  Neither adds population-level state; both are movement-layer reactions to
+  nearby positions, the same fidelity the kingfisher-flee mechanism below
+  already has.
 
 #### Water area → carrying capacity
 
@@ -255,6 +261,15 @@ state machine), and on a successful grab (a probability roll, real
 herons/kingfishers miss most strikes) calls the exact same
 `record_fish_catch_near` -> `EcosystemSimulation.record_catch` the player's
 rod uses. Fishing pressure is no longer only ever the player's.
+
+**Also new since this doc was first written**: fish react to each other and
+to wading disturbance — see
+[ecosystem_dynamics.md](ecosystem_dynamics.md#a-shoal-finds-its-shape) for
+the full mechanism (`src/gameplay/fish_schooling.gd`; `FishMarker`'s
+existing `bolt_from` is now also triggered by `EarthChunkManager.
+startle_fish_near_waders`, not only by a kingfisher strike). Still
+population-invisible, exactly like the kingfisher-bolt mechanism above — no
+catch/death term, purely a movement reaction.
 
 ### Open questions
 

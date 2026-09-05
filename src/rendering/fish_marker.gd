@@ -12,6 +12,7 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const CreatureWander = preload("res://src/rendering/creature_wander.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const FishSchooling = preload("res://src/gameplay/fish_schooling.gd")
 
 ## How much open water the fish keeps around its center on every side --
 ## roughly the sprite's half-extent, so no part of the fish visually overlaps
@@ -336,6 +337,115 @@ func is_bolting() -> bool:
 	return _bolt_remaining > 0.0
 
 
+## -- fish-to-fish social behavior (see FishSchooling, docs/concept/
+## ecosystem_dynamics.md#a-shoal-finds-its-shape) ----------------------------
+
+## This fish's own current swim heading -- read by OTHER fish scanning for a
+## schoolmate to react to (see FishSchooling.steering_for_neighbor's
+## `neighbor_heading` parameter). Mirrors AmbientFlyerMarker._scan_for_
+## partners' own precedent of one flyer reading another's fields directly
+## across a group scan; this is the one field that needed a real accessor
+## rather than direct access, since _current_heading is otherwise treated as
+## this instance's own private turn-smoothing state.
+func current_heading() -> Vector2:
+	return _current_heading
+
+
+var _school_scan_accumulator := 0.0
+## The nearest OTHER fish within FishSchooling.ATTRACTION_RADIUS_PX as of the
+## last scan (null if none) -- re-scanned only every FishSchooling.
+## SCAN_INTERVAL (see _step_schooling), not every frame, for the same
+## performance reason SimulationLod throttles everything else about a fish
+## far from the player: a full "fish" group walk every frame for every fish
+## is exactly the shape of cost that caused this project's own is_river_at_
+## global performance regression (see project history).
+var _school_neighbor: Node = null
+
+
+## >0 while this fish is mid-play-chase (see FishSchooling.PLAY_CHANCE/
+## PLAY_CHASE_SECONDS) -- a rare, one-sided direct pursuit of _play_chase_
+## target, ranked above ordinary zoned schooling but below fleeing/an active
+## lure (see the precedence comment in _process).
+var _play_chase_remaining := 0.0
+var _play_chase_target: Node = null
+## The last SCAN_INTERVAL-sized interval this fish rolled for play -- each
+## interval is only rolled once, the same "one check per window, not one per
+## frame" shape _step_schooling's own scan cadence already has.
+var _play_interval_index := -1
+
+
+## Re-scans for a schoolmate on FishSchooling.SCAN_INTERVAL's own cadence.
+## Cheap between scans (just an accumulator add); the group walk itself only
+## runs on the throttled cadence.
+func _step_schooling(delta: float) -> void:
+	if _play_chase_remaining > 0.0:
+		_play_chase_remaining -= delta
+		if not is_instance_valid(_play_chase_target):
+			_play_chase_remaining = 0.0  # the target despawned mid-chase
+	_school_scan_accumulator += delta
+	if _school_scan_accumulator < FishSchooling.SCAN_INTERVAL:
+		return
+	_school_scan_accumulator = 0.0
+	_school_neighbor = _nearest_other_fish()
+	_maybe_start_play_chase()
+
+
+## Rolls, once per SCAN_INTERVAL window, whether this fish bursts into a
+## playful chase of its current nearest schoolmate (see FishSchooling.
+## rolls_for_play). A no-op while a chase is already under way, or with
+## nobody nearby to chase.
+func _maybe_start_play_chase() -> void:
+	var interval_index := int(_elapsed_time / FishSchooling.SCAN_INTERVAL)
+	if interval_index == _play_interval_index:
+		return
+	_play_interval_index = interval_index
+	if _play_chase_remaining > 0.0 or _school_neighbor == null:
+		return
+	if FishSchooling.rolls_for_play(wander_seed, interval_index):
+		_play_chase_target = _school_neighbor
+		_play_chase_remaining = FishSchooling.PLAY_CHASE_SECONDS
+
+
+## A direct heading at _play_chase_target -- deliberately NOT the zoned
+## avoid/follow/approach steering (see FishSchooling.steering_for_neighbor):
+## the whole point of a play chase is to visibly close on a chosen
+## schoolmate, not settle into formation with it.
+func _play_chase_heading() -> Vector2:
+	var offset: Vector2 = _play_chase_target.position - position
+	if offset.length() < 0.001:
+		return _current_heading
+	return offset.normalized()
+
+
+## The closest OTHER fish in the "fish" group within FishSchooling.
+## ATTRACTION_RADIUS_PX, or null if none is that close -- the same "react to
+## only your single nearest neighbour" simplification AmbientFlyerMarker's
+## own partner scan and CreatureBehavior._nearest both already make.
+func _nearest_other_fish() -> Node:
+	if not is_inside_tree():
+		return null
+	var nearest: Node = null
+	var nearest_distance := FishSchooling.ATTRACTION_RADIUS_PX
+	for other in get_tree().get_nodes_in_group("fish"):
+		if other == self or not is_instance_valid(other):
+			continue
+		var distance: float = position.distance_to(other.position)
+		if distance <= nearest_distance:
+			nearest = other
+			nearest_distance = distance
+	return nearest
+
+
+## Whether this fish is close enough to home to still let a schoolmate steer
+## it at all -- see FishSchooling.SCHOOL_LEASH_RADIUS_FACTOR's own doc
+## comment. Checked against THIS fish's own current distance from home (not
+## a hypothetical post-step distance): once already past the leash,
+## schooling is ignored in favour of plain wander, which already pulls a
+## fish home on its own (see CreatureWander.direction_at).
+func _school_leash_allows() -> bool:
+	return position.distance_to(home) <= _wander.wander_radius * FishSchooling.SCHOOL_LEASH_RADIUS_FACTOR
+
+
 ## Distance-based update rate (see SimulationLod; mirrors CreatureMarker's and
 ## AmbientFlyerMarker's own _lod_step). Returns the time to advance by, or
 ## NEGATIVE when this frame should be skipped entirely.
@@ -406,22 +516,35 @@ func _process(frame_delta: float) -> void:
 	if _world == null:
 		_step_unconfined_wander(delta)
 		return
+	_step_schooling(delta)
 
 	# Turn the swim heading gradually toward the target rather than snapping
-	# straight to it (see TURN_RATE) -- either an active attraction (a cast
-	# line nearby) once far enough from it to matter, or ordinary wandering.
+	# straight to it (see TURN_RATE) -- one of, in priority order: fleeing a
+	# threat, an active attraction (a cast line nearby) once far enough from
+	# it to matter, ordinary fish-to-fish schooling (see FishSchooling), or
+	# ordinary wandering. See docs/concept/ecosystem_dynamics.md's "The
+	# precedence order" for why: fear always wins, a player's deliberate lure
+	# predates schooling and stays above it, and schooling only ever displaces
+	# plain wander, never either of the two above it.
 	var target: Vector2
 	if _bolt_remaining > 0.0:
-		# Fleeing a kingfisher: a hard heading away from the threat, but
-		# still just a HEADING. The first version moved the fish directly and
-		# returned early, skipping the shore-clearance machinery below --
-		# so a startled fish shot straight out of the water and flopped
-		# across the grass, with the bird then calmly following it onto land
-		# to eat it (reported exactly that way). A panicking fish still
-		# cannot leave the water.
+		# Fleeing a threat -- a kingfisher's strike or a wading player/animal
+		# (see EarthChunkManager.startle_fish_near_waders) -- a hard heading
+		# away from it, but still just a HEADING. The first version moved the
+		# fish directly and returned early, skipping the shore-clearance
+		# machinery below -- so a startled fish shot straight out of the
+		# water and flopped across the grass, with the bird then calmly
+		# following it onto land to eat it (reported exactly that way). A
+		# panicking fish still cannot leave the water.
 		target = _bolt_direction
 	elif attract_target != null and position.distance_to(attract_target) > _ATTRACTION_STOP_DISTANCE:
 		target = (attract_target - position).normalized()
+	elif _play_chase_remaining > 0.0 and is_instance_valid(_play_chase_target):
+		target = _play_chase_heading()
+	elif _school_neighbor != null and is_instance_valid(_school_neighbor) and _school_leash_allows():
+		target = FishSchooling.steering_for_neighbor(
+			position, _school_neighbor.position, _school_neighbor.current_heading()
+		)
 	else:
 		target = _wander.direction_at(home, position, _elapsed_time, wander_seed)
 
@@ -470,6 +593,12 @@ func _process(frame_delta: float) -> void:
 	var current := _current_at(position)
 	speed *= current_speed_factor(_current_heading, current["direction"], current["speed_m_s"])
 	_upstream_effort = upstream_effort(_current_heading, current["direction"], current["speed_m_s"])
+	if _play_chase_remaining > 0.0:
+		# A playful chase is a real burst of effort, same excited-tail-flap
+		# speed as an ordinary ripple-triggering flap (see
+		# FLAP_SPEED_MULTIPLIER) -- not a new speed, the existing one aimed
+		# at a schoolmate instead of a ripple timer.
+		speed = _wander.wander_speed * FLAP_SPEED_MULTIPLIER
 	if _bolt_remaining > 0.0:
 		speed = BOLT_SPEED  # the dash that makes an escape read as an escape
 

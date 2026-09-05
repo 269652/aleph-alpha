@@ -5,6 +5,7 @@ const HydrologyField = preload("res://src/world/hydrology_field.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const StonePlacement = preload("res://src/world/stone_placement.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
+const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 const OrePlacement = preload("res://src/world/ore_placement.gd")
 const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
@@ -7753,6 +7754,42 @@ func startle_fish_near(pixel_position: Vector2, threat: Vector2, max_distance: f
 		return false
 	fish.bolt_from(threat)
 	return true
+
+
+## How close a wading player or animal has to come before nearby fish bolt
+## away from it -- what "the water's edge just got scary" looks like from a
+## fish's side, the same kind of alarm/flush response every other sensed
+## creature in this project already has to an approaching threat (see
+## FlyerPersonality.SHYEST_FLUSH_DISTANCE_M, AmbientFlyerMarker.
+## SONGBIRD_FLUSH_DISTANCE_M). Real shallow-water fish (minnows, trout fry)
+## show a measurable alarm response to a wading disturbance in roughly this
+## same few-metre band -- one shared threshold, not an inherited trait,
+## deliberately following the songbird's own precedent rather than building
+## fish their own boldness system (see docs/concept/
+## ecosystem_dynamics.md#a-shoal-finds-its-shape).
+const FISH_WADER_FLUSH_DISTANCE_M := 2.0
+const FISH_WADER_FLUSH_DISTANCE_PX := FISH_WADER_FLUSH_DISTANCE_M * GroundSlide.PX_PER_METER
+
+
+## Startles every fish within FISH_WADER_FLUSH_DISTANCE_PX of any position in
+## `waders` -- what a player or animal wading into the shallows looks like
+## from the water's side. `waders` is expected to already be filtered to
+## positions genuinely standing in water (see river_wader_positions above) --
+## this method does no water-checking of its own, only distance + bolt_from,
+## the same single-threat shape startle_fish_near above already has,
+## generalized to several candidate threats at once (docs/concept/
+## ecosystem_dynamics.md#a-shoal-finds-its-shape).
+func startle_fish_near_waders(waders: PackedVector2Array) -> void:
+	if waders.is_empty():
+		return
+	for fish_list in _loaded_fish.values():
+		for fish in fish_list:
+			if not is_instance_valid(fish) or not fish.has_method("bolt_from"):
+				continue
+			for wader in waders:
+				if fish.position.distance_to(wader) <= FISH_WADER_FLUSH_DISTANCE_PX:
+					fish.bolt_from(wader)
+					break
 
 
 func catch_nearest_fish(pixel_position: Vector2, max_distance: float) -> String:

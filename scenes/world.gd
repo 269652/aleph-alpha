@@ -4670,12 +4670,24 @@ func _client_process(delta: float) -> void:
 	var wader_candidates: Array = [local_player.position]
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		wader_candidates.append(creature.position)
+	# The player/animal half of wader_candidates, captured before fish are
+	# appended below -- a fish is always "in water" by definition, so
+	# including fish here would make every fish its own nearest threat (see
+	# EarthChunkManager.startle_fish_near_waders just below).
+	var fish_threat_candidates := wader_candidates.duplicate()
 	# Fish ring the water they swim in, through the same displacement the
 	# player and the animals get (see EarthChunkManager.river_wader_positions).
 	for fish in get_tree().get_nodes_in_group("fish"):
 		wader_candidates.append(fish.position)
 	_chunk_manager.set_river_flow_waders(
 		_chunk_manager.river_wader_positions(wader_candidates)
+	)
+	# "make them swim away from player and animals who wade near them" --
+	# the same river_wader_positions water-filter, reused to find which
+	# players/animals are actually standing in water near a fish (see
+	# docs/concept/ecosystem_dynamics.md#a-shoal-finds-its-shape).
+	_chunk_manager.startle_fish_near_waders(
+		_chunk_manager.river_wader_positions(fish_threat_candidates)
 	)
 	# Drives every creature's silhouette shadow length (see DropShadow.
 	# stretch_for_elevation / CreatureMarker.sun_elevation_deg) with the same

@@ -3215,6 +3215,69 @@ func test_a_bird_catch_with_no_fish_in_reach_takes_nothing():
 	assert_false(manager.record_fish_catch_near(Vector2(40, 40), 1.0))
 
 
+# -- fish flee from a wading player/animal -----------------------------------
+#
+# "make them swim away from player and animals who wade near them" --
+# startle_fish_near_waders reuses the existing FishMarker.bolt_from (already
+# built for the kingfisher-miss case above) and takes an already
+# water-filtered wader list (see river_wader_positions, tested elsewhere in
+# this file) -- it does no water-checking of its own, only distance +
+# bolt_from, the same single-threat shape startle_fish_near already has,
+# generalized to several candidate threats at once. See docs/concept/
+# ecosystem_dynamics.md#a-shoal-finds-its-shape.
+
+func test_startle_fish_near_waders_bolts_a_fish_within_radius():
+	var fish_scene := preload("res://src/rendering/fish_marker.gd")
+	var fish = fish_scene.new()
+	fish.position = Vector2(100, 100)
+	creatures_parent.add_child(fish)
+	manager._loaded_fish[Vector2i(0, 0)] = [fish]
+
+	manager.startle_fish_near_waders(PackedVector2Array([Vector2(105, 100)]))
+
+	assert_true(fish.is_bolting(), "a fish near a wading threat should bolt")
+
+
+func test_startle_fish_near_waders_ignores_a_fish_out_of_radius():
+	var fish_scene := preload("res://src/rendering/fish_marker.gd")
+	var fish = fish_scene.new()
+	fish.position = Vector2(100, 100)
+	creatures_parent.add_child(fish)
+	manager._loaded_fish[Vector2i(0, 0)] = [fish]
+
+	manager.startle_fish_near_waders(PackedVector2Array([Vector2(1000, 1000)]))
+
+	assert_false(fish.is_bolting(), "a fish far from every wader should not bolt")
+
+
+func test_startle_fish_near_waders_with_no_waders_does_nothing():
+	var fish_scene := preload("res://src/rendering/fish_marker.gd")
+	var fish = fish_scene.new()
+	fish.position = Vector2(100, 100)
+	creatures_parent.add_child(fish)
+	manager._loaded_fish[Vector2i(0, 0)] = [fish]
+
+	manager.startle_fish_near_waders(PackedVector2Array())
+
+	assert_false(fish.is_bolting())
+
+
+func test_startle_fish_near_waders_treats_each_fish_independently():
+	var fish_scene := preload("res://src/rendering/fish_marker.gd")
+	var near_fish = fish_scene.new()
+	near_fish.position = Vector2(100, 100)
+	creatures_parent.add_child(near_fish)
+	var far_fish = fish_scene.new()
+	far_fish.position = Vector2(5000, 5000)
+	creatures_parent.add_child(far_fish)
+	manager._loaded_fish[Vector2i(0, 0)] = [near_fish, far_fish]
+
+	manager.startle_fish_near_waders(PackedVector2Array([Vector2(105, 100)]))
+
+	assert_true(near_fish.is_bolting(), "the fish near the wader should bolt")
+	assert_false(far_fish.is_bolting(), "an unrelated fish elsewhere should not")
+
+
 # -- tuft sprites must stay at their intended world size ---------------------
 #
 # _sync_grass_sprites set a tuft's scale once at creation (SPRITE_SCALE *

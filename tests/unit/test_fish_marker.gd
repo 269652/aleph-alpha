@@ -8,6 +8,7 @@ extends GutTest
 const FishMarker = preload("res://src/rendering/fish_marker.gd")
 const CreatureWander = preload("res://src/rendering/creature_wander.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
+const FishSchooling = preload("res://src/gameplay/fish_schooling.gd")
 
 const TILE_SIZE := 16
 
@@ -217,6 +218,32 @@ func _add_stub_player(at: Vector2) -> StubPlayer:
 	player.add_to_group("player")
 	_extra.append(player)
 	return player
+
+
+## A second real FishMarker, placed directly (never manually _process'd, so
+## it stays put as a fixed schoolmate to react to) and left with an optional
+## known heading for the orientation-zone/"follow" tests. Joins the "fish"
+## group on its own via _ready(), same as `marker` itself.
+func _add_school_fish(at: Vector2, heading: Vector2 = Vector2.ZERO) -> FishMarker:
+	var other := FishMarker.new()
+	other.position = at
+	other.wander_seed = 4242
+	add_child(other)
+	if heading != Vector2.ZERO:
+		other._current_heading = heading
+	_extra.append(other)
+	return other
+
+
+## Marks the interval a following _process(delta) call (from a freshly
+## created fish, _elapsed_time == 0) would check as already handled, so
+## FishSchooling.rolls_for_play's own per-fish hash roll can never
+## contaminate a test that isn't testing play at all -- a real, observed
+## failure mode: the default seed happened to roll true at the interval a
+## 1.0s test delta lands on, silently starting a real play chase that then
+## overrode the zoned/leashed steering those tests actually meant to check.
+func _suppress_play_roll_for(fish: FishMarker, delta: float) -> void:
+	fish._play_interval_index = int(delta / FishSchooling.SCAN_INTERVAL)
 
 
 ## See World's mouse-hover animal-name tooltip (docs feature request).
@@ -736,3 +763,216 @@ func test_a_fish_far_from_the_player_does_not_take_a_full_step_every_frame():
 		before, marker.position,
 		"once enough time has accumulated, the throttled fish should finally take its full step"
 	)
+
+
+# -- fish-to-fish social behavior (see FishSchooling, docs/concept/
+# ecosystem_dynamics.md#a-shoal-finds-its-shape) -----------------------------
+
+func test_current_heading_returns_the_fishs_own_heading():
+	marker._current_heading = Vector2.UP
+	assert_eq(marker.current_heading(), Vector2.UP)
+
+
+func test_a_lone_fish_with_no_schoolmates_is_unaffected_by_schooling():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	for i in 10:
+		marker._process(0.1)
+	assert_null(marker._school_neighbor, "no other fish exists to school with")
+
+
+## These four all use ONE large-delta _process call rather than many small
+## steps: FishMarker's turn-toward-target lerp weight is
+## clampf(TURN_RATE * delta, 0.0, 1.0) (see fish_marker.gd's own _process),
+## so any delta >= 1.0/TURN_RATE snaps _current_heading to EXACTLY the
+## computed target angle in one call. That makes the wiring itself
+## precisely, deterministically checkable -- no convergence timing, no
+## risk of a later zone transition muddying the read -- rather than
+## inferring it from many-step position drift, which plain undirected
+## wander can also produce by chance over a long enough run.
+
+func test_a_fish_avoids_a_schoolmate_that_is_too_close():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var other := _add_school_fish(marker.position + Vector2(3, 0))
+	marker._school_neighbor = other
+	_suppress_play_roll_for(marker, 1.0)
+
+	marker._process(1.0)
+
+	assert_almost_eq(marker._current_heading.x, -1.0, 1e-3, "should face directly away from a too-close schoolmate")
+	assert_almost_eq(marker._current_heading.y, 0.0, 1e-3)
+
+
+func test_a_fish_approaches_a_distant_schoolmate_within_perception_range():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var other := _add_school_fish(marker.position + Vector2(80, 0))
+	marker._school_neighbor = other
+	_suppress_play_roll_for(marker, 1.0)
+
+	marker._process(1.0)
+
+	assert_almost_eq(marker._current_heading.x, 1.0, 1e-3, "should face directly toward a distant-but-noticed schoolmate")
+	assert_almost_eq(marker._current_heading.y, 0.0, 1e-3)
+
+
+func test_a_fish_matches_heading_with_a_schoolmate_in_the_orientation_zone():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var other := _add_school_fish(marker.position + Vector2(20, 0), Vector2.UP)
+	marker._school_neighbor = other
+	_suppress_play_roll_for(marker, 1.0)
+
+	marker._process(1.0)
+
+	assert_almost_eq(
+		marker._current_heading.x, 0.0, 1e-3,
+		"should match the schoolmate's heading, not approach its position"
+	)
+	assert_almost_eq(marker._current_heading.y, -1.0, 1e-3)
+
+
+func test_bolting_ignores_a_nearby_schoolmate():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	# Would pull the heading toward -X (avoid) if schooling were consulted
+	# at all while bolting.
+	var other := _add_school_fish(marker.position + Vector2(5, 0))
+	marker._school_neighbor = other
+	# Threat directly below -> bolt heading is straight up (-Y), orthogonal
+	# to the schoolmate's pull, so the two are easy to tell apart.
+	marker.bolt_from(marker.position + Vector2(0, 40))
+
+	# 0.5s, not 1.0: _bolt_remaining (BOLT_SECONDS, 0.9) is decremented by
+	# delta BEFORE target-selection runs each frame, so a full 1.0s call
+	# would let the bolt expire mid-call and fall through to schooling --
+	# 0.5s stays inside the bolt window while still exceeding the (boosted,
+	# BOLT_TURN_MULTIPLIER'd) turn-rate snap threshold.
+	marker._process(0.5)
+
+	assert_almost_eq(marker._current_heading.x, 0.0, 1e-3, "bolting should override schooling entirely, not blend with it")
+	assert_almost_eq(marker._current_heading.y, -1.0, 1e-3, "should be dashing away from the threat")
+
+
+func test_a_fish_does_not_chase_a_schoolmate_when_already_far_from_home():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.home = Vector2(100, 100)
+	marker.position = marker.home + Vector2(500, 0)  # well past the schooling leash
+	var other := _add_school_fish(marker.position + Vector2(50, 0))  # within attraction range of marker's CURRENT position
+	marker._school_neighbor = other
+	_suppress_play_roll_for(marker, 1.0)
+
+	marker._process(1.0)
+
+	# Approaching `other` would mean heading +X; past its leash a fish
+	# should fall through to plain wander instead, which this far past
+	# WANDER_RADIUS pulls it home -- i.e. heading -X, since home is there.
+	assert_lt(
+		marker._current_heading.x, 0.0,
+		"past its schooling leash, a fish should head home, not chase a nearby schoolmate"
+	)
+
+
+# -- play: an occasional, one-sided chase burst ------------------------------
+
+## Finds a wander_seed FishSchooling.rolls_for_play() confirms rolls true at
+## `interval_index` -- deterministic like every other seeded roll in this
+## codebase, so the test drives the real roll rather than a test-only
+## override hook (mirrors how this project's other hash-roll mechanisms,
+## e.g. CreatureWander.is_pausing, are tested against real seeds).
+func _seed_that_rolls_for_play(interval_index: int) -> int:
+	for seed_value in range(10000):
+		if FishSchooling.rolls_for_play(seed_value, interval_index):
+			return seed_value
+	assert_true(false, "no seed rolls for play within 10000 tries -- has FishSchooling.PLAY_CHANCE changed?")
+	return -1
+
+
+func test_a_fish_with_a_rolled_play_chance_starts_a_play_chase_at_its_schoolmate():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	# A single _process(0.5) call below advances _elapsed_time to exactly
+	# one FishSchooling.SCAN_INTERVAL, so the roll checked is interval 1.
+	marker.wander_seed = _seed_that_rolls_for_play(1)
+	var other := _add_school_fish(marker.position + Vector2(80, 0))
+
+	marker._process(FishSchooling.SCAN_INTERVAL)
+
+	assert_gt(marker._play_chase_remaining, 0.0, "a fish whose roll succeeds should start a play chase")
+	assert_eq(marker._play_chase_target, other)
+
+
+func test_play_chase_heading_points_directly_at_the_target_not_the_zoned_steering():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	# Placed well inside the REPULSION zone, where ordinary schooling would
+	# point AWAY (-X) -- a play chase should point TOWARD it instead (+X),
+	# so the two are easy to tell apart.
+	var other := _add_school_fish(marker.position + Vector2(5, 0))
+	marker._school_neighbor = other
+	marker._play_chase_target = other
+	marker._play_chase_remaining = FishSchooling.PLAY_CHASE_SECONDS
+
+	marker._process(1.0)
+
+	assert_almost_eq(
+		marker._current_heading.x, 1.0, 1e-3,
+		"a play chase should head straight at its target, not apply ordinary avoid/follow/approach steering"
+	)
+	assert_almost_eq(marker._current_heading.y, 0.0, 1e-3)
+
+
+func test_play_chase_speeds_up_the_fish_like_a_flap_burst():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var other := _add_school_fish(marker.position + Vector2(80, 0))
+	marker._current_heading = Vector2.RIGHT
+
+	marker._process(0.02)  # ordinary glide, no play chase yet
+	var before_glide := marker.position
+	marker._process(0.02)
+	var glide_distance := before_glide.distance_to(marker.position)
+
+	marker._school_neighbor = other
+	marker._play_chase_target = other
+	marker._play_chase_remaining = FishSchooling.PLAY_CHASE_SECONDS
+	var before_chase := marker.position
+	marker._process(0.02)
+	var chase_distance := before_chase.distance_to(marker.position)
+
+	assert_gt(chase_distance, glide_distance, "a fish mid-play-chase should swim faster than an ordinary glide")
+
+
+func test_play_chase_wears_off():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var other := _add_school_fish(marker.position + Vector2(80, 0))
+	marker._play_chase_target = other
+	marker._play_chase_remaining = FishSchooling.PLAY_CHASE_SECONDS
+	# Without this, the chase wearing off and the periodic re-scan finding
+	# `other` again land in the SAME _process call, so a lucky re-roll could
+	# immediately start a fresh chase and the "wore off" assertion below
+	# would depend on the seed's luck rather than the wear-off logic itself.
+	_suppress_play_roll_for(marker, FishSchooling.PLAY_CHASE_SECONDS + 0.1)
+
+	marker._process(FishSchooling.PLAY_CHASE_SECONDS + 0.1)
+
+	assert_lte(marker._play_chase_remaining, 0.0, "a play chase should wear off like a bolt does")
+
+
+func test_bolting_ignores_an_active_play_chase():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	# Would pull the heading toward +X during a play chase.
+	var other := _add_school_fish(marker.position + Vector2(80, 0))
+	marker._play_chase_target = other
+	marker._play_chase_remaining = FishSchooling.PLAY_CHASE_SECONDS
+	# Threat directly below -> bolt heading is straight up (-Y).
+	marker.bolt_from(marker.position + Vector2(0, 40))
+
+	marker._process(0.5)  # stays inside BOLT_SECONDS (0.9), still snaps the heading
+
+	assert_almost_eq(marker._current_heading.x, 0.0, 1e-3, "bolting should override an in-progress play chase too")
+	assert_almost_eq(marker._current_heading.y, -1.0, 1e-3)
