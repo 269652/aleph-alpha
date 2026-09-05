@@ -553,6 +553,92 @@ the flee Schmitt trigger are untouched: they are commitment, not verdict.
 The genome reaches both `decide()` and the grazing bout's smell step through
 `genome_or_derived()` (§4).
 
+### 9. Personality: a boldness gene
+
+A first, deliberately narrow slice of "gains as personality." The original
+plan for this slice named three things: boldness on `fear`, `docility` on a
+new `fight` gain, and the spell `FEAR`/`CALM` statuses pushing on a gain
+instead of overriding the temperament string. Building it turned up that two
+of those three don't hold up on inspection, and this doc says so rather than
+building past what the inspection found:
+
+- **`docility` does not exist.** It is one of animal_genetics.md's seven
+  specified genes, none of which are in `AnimalGenome` yet, and that doc — not
+  this one — owns when a gene is introduced (§1's own reader rule). Inventing
+  it here, ahead of that doc's own domestication mechanism (§10, the thing
+  that would actually make docility *move* over generations), would be this
+  doc reaching into a neighbour's job for a gene with nothing to select it.
+- **The spell mechanism was never broken.** `CreatureMarker._temperament_for_decision`
+  already overrides `context["temperament"]` correctly for the duration of a
+  `FEAR`/`CALM` debuff, and three passing tests already prove it. "Push a
+  gain instead of swapping a string" was a cleanliness preference, not a
+  fix for wrong behaviour, and TDD only licenses touching working, tested code
+  when a failing test demands it — there wasn't one.
+
+What remains, and what actually shipped: a **boldness gene**, land-mammal
+specific, that raises the *floor* the fear wiring's score must clear before
+it fires at all. Boldness is not a `fear` gate multiplier — a multiplier
+scales the *score*, and under first-match arbitration any nonzero score still
+wins outright regardless of magnitude, so a multiplier alone would be exactly
+the dead-weight gene animal_genetics.md's pillar 2 forbids. A *floor*, the
+same mechanism the smell wiring already uses for its interest threshold (§6),
+genuinely gates whether the wiring fires:
+
+```gdscript
+Ethogram.NEUTRAL_BOLDNESS_GENE := 0.5
+Ethogram.BOLDEST_FEAR_FLOOR := 1.0 / (1.0 + TerrainRenderer.TILE_SIZE)  # = Affinity.proximity(one tile)
+
+static func fear_floor(gene: float) -> float:
+    if gene <= NEUTRAL_BOLDNESS_GENE: return 0.0
+    return (gene - NEUTRAL_BOLDNESS_GENE) / (1.0 - NEUTRAL_BOLDNESS_GENE) * BOLDEST_FEAR_FLOOR
+```
+
+Two things about this are load-bearing, not incidental. **Zero at or below
+the median.** The mammal ladder's fear wiring has always had a floor of zero
+— every sensed predator or player registers, which is already the *most*
+fearful state a floor can express; there is nowhere to go more shy. So the
+gene only ever raises the floor, and only past 0.5, which means every
+individual at or below the population median behaves *exactly* as every land
+mammal always has — the regression bar (all pre-existing `CreatureBehavior`
+and `CreatureMarker` tests) holds by construction, not by exemption.
+**The ceiling is one tile, not zero distance.** `Affinity.proximity(0.0) =
+1.0` looks like the natural cap — the kernel's own theoretical maximum score
+for a stimulus of this pull magnitude — but capping there makes the boldest
+individual's floor *unreachable at any distance a running simulation actually
+produces* (a marker's own position is never exactly zero pixels from
+another's), which is a difference between "rare" and "impossible" that
+matters. `TerrainRenderer.TILE_SIZE` — the same "right here" reference
+`CreatureBehavior.DIRECTION_STIMULUS_DISTANCE` already uses to place a sensed
+direction as a stimulus — gives a real, reachable, still-demanding ceiling:
+the boldest individual's own fear wiring requires a predator within about a
+tile before it fires at all.
+
+This is deliberately **not** a re-derivation of `FlyerPersonality`'s flight
+initiation distance, despite that earlier being the plan. Butterflies and
+land mammals are different body plans with no shared infrastructure yet
+(slice 5's job), and `FlyerPersonality`'s metre constants (3.0m shyest, 0m
+boldest) are butterfly-specific measurements with no grounding for a boar or
+a deer — reusing them verbatim would have been dishonest, not unifying.
+What *is* shared is the shape: most individuals near the population median,
+rare bold outliers, the same "mean of two independent halves" distribution
+`AnimalGenome` already gives every gene — a real analogy to
+`FlyerPersonality`'s own reasoning, named as an analogy rather than claimed
+as the same number.
+
+**The reader.** `CreatureBehavior._apply_boldness_floor` patches the cached
+fear wiring's `floor` field on genome change, the same per-instance mutation
+`Ethogram.wirings_for`'s deep copy makes safe (§6). Wiring it up surfaced a
+real, independent bug worth recording here because it will bite the next
+gain-based gate too: `CreatureMarker` calls `CreatureBehavior.threats()`
+every sensing tick *before* `decide()` ever runs for a fresh instance, and
+`threats()` shares `decide()`'s genome-change cache without itself ensuring
+the wirings array exists — so the floor patched an empty array on that first
+call, and with the genome now marked "seen," the cache never gave it a
+second chance. Fixed by having both entry points share one
+`_ensure_wirings()` guard; pinned directly
+(`test_threats_called_before_the_first_decide_still_lets_the_floor_apply`),
+not just by the boldness tests that happened to expose it.
+
 ### 8. Roadmap: the slices after this one
 
 Each is its own red-first pass with its own status entries here.
@@ -575,13 +661,18 @@ Each is its own red-first pass with its own status entries here.
   Deliberately not done: no profile sets an `onset`, so every gain is still
   the step its tests pin -- a ramp only makes sense once wirings are scored
   against each other (slice 4).
-- ⬜ **Slice 4, gains as personality.** Baseline gains per individual from the
-  genome: `boldness` on `fear` (re-deriving `FlyerPersonality`'s flight
-  initiation distance and `animal_husbandry.md`'s composed flight radius from
-  the same number), temperament and `docility` on a `fight` gain, the spell
-  `FEAR`/`CALM` statuses as a temporary push. With fear's gain large the
-  ladder falls out of cross-wiring scoring, and the ordering test keeps it
-  honest.
+- ✅ **Slice 4, a boldness gene** (2026-09-05), narrower than originally
+  planned — see §9 for the full account and why. A land-mammal `boldness`
+  gene raises the fear wiring's *floor* (not its gain — a gain alone is
+  dead weight under first-match arbitration), zero at or below the
+  population median, capped at one tile away for the boldest possible
+  individual. Deliberately not done, and why: `docility` on a fight gain
+  (no docility gene exists; that gene is animal_genetics.md's to introduce);
+  the spell `FEAR`/`CALM` mechanism (already correct, no failing test
+  motivated touching it); cross-wiring scoring (turned out unnecessary — a
+  floor works entirely within first-match ordering). A real ordering bug
+  surfaced and got fixed along the way: `threats()` must ensure the cached
+  wirings exist before touching the genome-change cache, same as `decide()`.
 - ⬜ **Slice 5, the other body plans.** `bird`, `insect`, `fish`, `villager`
   ethograms whose wirings select the existing motor programs
   (`GroundForageBehavior`, `PiscivoreBirdBehavior`, `PollinatorForaging`,
@@ -686,7 +777,21 @@ personalities that are numbers a breeder can select on.
 - ⬜ A drive with an `onset` (a live ramp); the player's meters.
 - ⬜ Grazing bites as stimuli; the species half of the adapter overrides in
   the species record; a `conspecific` feature (§2, §3).
-- ⬜ Slices 4 to 6 above, each untouched.
+- ✅ Slice 4 (§9): `Ethogram.BOLDNESS`/`NEUTRAL_BOLDNESS_GENE`/
+  `BOLDEST_FEAR_FLOOR`/`fear_floor`; `AnimalGenome.GENE_NAMES` gains
+  `boldness`, bell-shaped like every other gene; `CreatureBehavior.
+  _apply_boldness_floor` patching the cached fear wiring per individual;
+  `_ensure_wirings()` shared by `decide()` and `threats()`, fixing a real
+  ordering bug threats-before-first-decide exposed. 8 new/changed tests
+  (`test_ethogram.gd` +4, `test_animal_genome.gd` +1 changed +1 new,
+  `test_creature_behavior.gd` +3, `test_creature_marker.gd` +2); full
+  affected regression (534 tests across every touched suite) green.
+- ⬜ Docility on a fight gain (no gene yet — animal_genetics.md's to
+  introduce); the spell `FEAR`/`CALM` mechanism as a gain push (reconsidered
+  — already correct, no failing test); cross-wiring scoring (turned out
+  unnecessary for slice 4 — a floor works entirely within first-match
+  ordering; still open for slice 5+ if a later gain genuinely needs it).
+- ⬜ Slices 5 and 6 above, each untouched.
 
 *Coverage note: every mechanism in this list is a pure module with a headless
 unit test. Nothing here is exercised by an integration test against a live
@@ -705,10 +810,14 @@ thing to one.*
   kernel ranks by a unit-free proximity. When vision and hearing get ranges,
   are those the sense's (as now) or does the kernel take a per-channel
   falloff?
-- **Where does commitment live once scoring is continuous?** Today the caller
-  commits (grazing approach, flee hysteresis). If slice 4's cross-wiring
-  scoring can flip intents tick to tick, the kernel may need a small
-  hysteresis of its own, which pillar 4 currently forbids it.
+- **Where does commitment live if cross-wiring scoring is ever built?** Still
+  open, and now genuinely deferred rather than merely unscheduled: slice 4
+  found a floor sufficient for boldness and never needed to replace
+  first-match ordering. If a later gain genuinely can't be expressed as a
+  floor and cross-wiring scoring is finally built, the caller still commits
+  today (grazing approach, flee hysteresis) — continuous scoring flipping
+  intents tick to tick would need a small hysteresis of its own, which
+  pillar 4 currently forbids the kernel.
 - **Receptor genes: one per channel, or fewer loci with pleiotropy?** One per
   channel is honest to receptor biology and cheap; it also means ten genes
   before any of them is visible in a panel. animal_genetics.md's reader rule

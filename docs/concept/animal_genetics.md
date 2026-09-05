@@ -1387,15 +1387,19 @@ technique.*
   restocks itself. Breeding makes individual animals valuable for the first
   time, which makes the absence of a mortality term more visible, not less.
   Named here as out of scope rather than left unmentioned.
-- **Do receptor genes join `GENE_NAMES`?** [ethogram.md](ethogram.md) §4
-  expresses `receptor_<channel>` genes (0.5 is the species template, 0 a
-  specific anosmia) through the unmodified `DnaCrossover`, with
-  `src/gameplay/ethogram.gd` as their reader and a test crossing them — but
-  no live animal carries one, because the `AnimalGenome` this doc specifies
-  does not exist yet. When it does they are candidates, subject to this doc's
-  reader rule and to a question it raises: ten receptor loci cost bytes in
-  the V2 record before any of them is visible on a panel. That doc owns the
-  expression law; this one owns whether the genes are worth carrying.
+- **Resolved: receptor genes (and now boldness) did join `GENE_NAMES`.**
+  [ethogram.md](ethogram.md) §4 and §9 express `receptor_<channel>` genes
+  and `boldness` through the unmodified `DnaCrossover`, and
+  `src/gameplay/animal_genome.gd` now exists and carries exactly those six
+  — every wild land mammal has one, live, since `CreatureMarker.
+  genome_or_derived()` reaches every decision and every sniff. What remains
+  open is only this doc's own half: none of the seven genes it specifies
+  above is in `AnimalGenome` yet (no `from_parents`, no two-parent
+  inheritance, no V2 record), so the byte-cost question this bullet used to
+  raise is real but not yet urgent — six genes, all with readers, none
+  visible on a panel a player reads. That doc (`ethogram.md`) owns the
+  expression law for its own genes; this one still owns whether and when
+  its seven join the same container.
 
 ## Editor's note
 

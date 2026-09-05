@@ -3348,3 +3348,22 @@ func test_an_individuals_nose_reaches_the_live_forage_choice():
 	marker.genome = {"receptor_decay": 0.0}
 	assert_false(marker._seek_by_smell(), "this individual cannot smell it")
 	assert_false(marker._has_forage_target)
+
+
+# -- slice 4: boldness reaches a live marker's flee decision -----------------
+# docs/concept/ethogram.md §9.
+
+func test_a_bold_marker_tolerates_a_predator_the_shyest_would_flee():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	_add_stub_creature("predator", Vector2(160, 100))  # 60px east, in sense range
+	marker.genome = {"boldness": 1.0}
+	marker._process(0.2)
+	assert_false(marker._is_fleeing, "the boldest individual barely reacts to a threat this far off")
+
+
+func test_a_population_median_marker_still_flees_the_same_predator():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	_add_stub_creature("predator", Vector2(160, 100))
+	marker.genome = {"boldness": EthogramForMarker.NEUTRAL_BOLDNESS_GENE}
+	marker._process(0.2)
+	assert_true(marker._is_fleeing, "an ordinary individual still flees a sensed predator")

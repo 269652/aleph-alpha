@@ -11165,11 +11165,37 @@ under the smell API, and proves the DSL in tests.
   forage below the thresholds they were tuned to (the doc's §5 says when it
   becomes meaningful). The player's `SurvivalMeters` stays the player's.
   21 new tests in `test_drives.gd`; facade, consumer and marker suites green.
-- ⬜ Slices 4–6 in the doc, none started: gains as personality (boldness,
-  docility, temperament, the spell fear/calm statuses); bird/insect/fish/
-  villager body plans over the existing motor programs, with the NPC
-  instruction DSL as the player-facing dialect; mate choice on
-  display/preference vectors.
+- ✅ **Slice 4 (same day): a boldness gene, narrower than first planned.**
+  Building "gains as personality" found that two of its three original
+  pieces don't hold up: `docility` has no gene yet (animal_genetics.md's own
+  seven genes are still unimplemented, and that doc owns introducing it,
+  not this one), and the spell `FEAR`/`CALM` mechanism turned out to already
+  be correct and tested (`_temperament_for_decision`, three passing tests)
+  — nothing failing motivated touching it. What shipped instead: a
+  land-mammal `boldness` gene that raises the fear wiring's *floor* rather
+  than scaling its gain (a gain alone is dead weight under first-match
+  arbitration — any nonzero score still wins outright), zero at or below
+  the population median (every individual at or below typical behaves
+  exactly as before), rising to a ceiling derived from
+  `Affinity.proximity(one tile)` — not literal touching distance, which
+  would make the boldest individual's own wiring unreachable rather than
+  merely hard to reach. Deliberately not the same numbers as
+  `FlyerPersonality`'s butterfly-specific flight-initiation-distance
+  constants (no shared infrastructure with butterflies yet — that's slice
+  5), only the same bell-shaped-population shape. Wiring it up surfaced a
+  real, independent ordering bug: `CreatureMarker` calls
+  `CreatureBehavior.threats()` every sensing tick before its first
+  `decide()`, and `threats()` shared `decide()`'s genome-change cache
+  without ensuring the wirings array existed first — so the floor patched
+  an empty array on the very first call and never got a second chance
+  (the cache considered the genome already "seen"). Fixed with a shared
+  `_ensure_wirings()` guard, pinned directly. 8 new/changed tests; full
+  affected regression (534 tests) green.
+- ⬜ Slices 5–6 in the doc, none started: bird/insect/fish/villager body
+  plans over the existing motor programs, with the NPC instruction DSL as
+  the player-facing dialect; mate choice on display/preference vectors.
+  Also still open from slice 4: docility on a fight gain, and cross-wiring
+  scoring (a floor sufficed this time; may still be needed later).
 
 #### Addendum (2026-09-05): the net is a device with a real mesh
 
