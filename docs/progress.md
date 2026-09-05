@@ -1,9 +1,11 @@
 # Progress Tracker
 
 This document is a living status tracker for everything defined across the
-design docs in `docs/concept/*.md` (49 as of this writing, up from the 32
-this doc was first generated against) plus `docs/roadmap.md` and, since the
-2026-08-23 emergent-systems pass, `docs/emergence/*.md`, cross-referenced
+design docs in `docs/concept/*.md` (90 as of a 2026-09-05 cross-alignment
+recount — `find docs/concept -maxdepth 1 -name "*.md" | wc -l` — up from
+the 49 an earlier pass counted and the 32 this doc was first generated
+against) plus `docs/roadmap.md` and, since the 2026-08-23 emergent-systems
+pass, `docs/emergence/*.md`, cross-referenced
 against what is actually implemented in the codebase today. It was generated
 by extracting every distinct mechanism named or implied in those docs
 (catalogued below — the original count of 481 is stale now that more docs
@@ -10077,7 +10079,8 @@ because this ledger is where the honesty lives:
 
 ## Reality check
 
-This design corpus — 49 concept docs plus a roadmap and, since 2026-08-23, a
+This design corpus — 90 concept docs (recounted 2026-09-05; this section
+long stated the now-stale 49) plus a roadmap and, since 2026-08-23, a
 10-doc `docs/emergence/*.md` substrate spec, several hundred catalogued
 mechanisms in total (the exact figure is stale, see this doc's intro) —
 describes a multi-year, full-team-scale MMORPG: procedurally simulated
