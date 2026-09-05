@@ -448,6 +448,21 @@ across map reconstructs) would make every river contiguous on both
 surfaces at the cost of the taper-to-a-point spring, and is the named
 follow-up.
 
+**A rendered half-width floor of one tile (2026-09-05).** The width
+formula's threshold width is one tile (half-width 0.5), and the spring
+tapers to 0.3. A per-tile across map cannot reconstruct a channel
+narrower than two texels: at those widths the wet band fell between tile
+centres, the world drew a hairline and the minimap's tile-centre test
+drew a dotted line on every diagonal (found live at the Loire's
+tributaries). `HydrologyField.RENDER_HALF_WIDTH_FLOOR_TILES` (1.0) is now
+applied where the channel hits are built, so the painter, the probe, the
+minimap and the waders are all told one width and never disagree; the
+curve itself still tapers to the spring in geometry, and rivers wider
+than two tiles are untouched. This is rivers.md's "gameplay-scale width,
+not survey accuracy" pillar applied to the baked channels. Pinned by
+`test_every_reported_half_width_is_at_least_the_render_floor`; the taper
+test now states what the source tile reports.
+
 ### Water kinds: overlay flags, one predicate
 
 Per rivers.md's rendering decision (see "Relationship to rivers.md"), a

@@ -283,13 +283,50 @@ func _slope_field() -> HydrologyField:
 func test_a_river_tapers_in_from_its_source_instead_of_starting_full_width():
 	# Column 3: cells (3,1) Q=6 and (3,2) Q=5 are the river; (3,3) Q=4 is
 	# the source. Cell centres: x = 38.5; y = 27.1 for row 2, 38.0 for row 3.
+	# The curve still tapers to the spring in GEOMETRY (the source cell is
+	# reached at all, and nothing lies upstream of it), but every REPORTED
+	# half-width is floored at the render floor -- see
+	# test_every_reported_half_width_is_at_least_the_render_floor.
 	var slope := _slope_field()
 	var at_source: Dictionary = slope.nearest_channel_geometry(38, 37)
 	var at_head: Dictionary = slope.nearest_channel_geometry(38, 27)
 	assert_false(at_source.is_empty(), "the head's curve reaches back to the source")
-	assert_almost_eq(at_source["half_width_tiles"], HydrologyField.SPRING_HALF_WIDTH_TILES, 0.1)
-	assert_gt(at_head["half_width_tiles"], at_source["half_width_tiles"])
+	assert_almost_eq(
+		at_source["half_width_tiles"], HydrologyField.RENDER_HALF_WIDTH_FLOOR_TILES, 0.001,
+		"the spring is narrower than the floor, so the floor is what the source reports"
+	)
+	assert_gte(at_head["half_width_tiles"], at_source["half_width_tiles"])
 	assert_eq(slope.probe(38, 41, 0.75)["kind"], "", "nothing upstream of the source")
+
+
+## A per-tile across map cannot reconstruct a channel narrower than two
+## texels: at the threshold width (one tile, half-width 0.5) the wet band
+## fell between tile centres, the world drew a hairline and the minimap a
+## dotted line on every diagonal (found live at the Loire tributaries).
+## So every half-width the field REPORTS -- to the painter, the probe, the
+## minimap and the waders alike, so they never disagree -- is floored at
+## one tile: the same "gameplay-scale width, not survey accuracy" pillar
+## rivers.md applies to the curated catalog.
+func test_every_reported_half_width_is_at_least_the_render_floor():
+	assert_gte(HydrologyField.RENDER_HALF_WIDTH_FLOOR_TILES, 1.0, "two texels is the least the map reconstructs")
+	assert_gt(
+		HydrologyField.RENDER_HALF_WIDTH_FLOOR_TILES, HydrologyField.MIN_LEGIBLE_WIDTH_TILES / 2.0,
+		"the floor only matters if it lies above the thinnest formula width"
+	)
+	var slope := _slope_field()
+	for y in range(24, 40):
+		var geometry: Dictionary = slope.nearest_channel_geometry(38, y)
+		if geometry.is_empty():
+			continue
+		assert_gte(
+			geometry["half_width_tiles"], HydrologyField.RENDER_HALF_WIDTH_FLOOR_TILES,
+			"the geometry at (38, %d) reports a half-width below the render floor" % y
+		)
+	# ...and the probe calls the tiles inside that floored band river, so the
+	# minimap and the waders see the same water the painter draws.
+	var on_the_line := slope.probe(38, 27, 0.75)
+	assert_eq(on_the_line["kind"], "river", "precondition: the head cell is a river")
+	assert_gte(on_the_line["half_width_tiles"], HydrologyField.RENDER_HALF_WIDTH_FLOOR_TILES)
 
 
 ## A main channel down column 3 (weight 2 per cell, so it is the mainstem)

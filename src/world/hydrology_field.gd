@@ -119,6 +119,19 @@ const MAP_FILTER_SUPPORT_TILES := 2.0
 ## a painted cell still describes the channel's own side. The valley
 ## shoulder (probe) keeps ramping over VALLEY_HALF_WIDTH_TILES alone.
 const GEOMETRY_REACH_TILES := VALLEY_HALF_WIDTH_TILES + MAP_FILTER_SUPPORT_TILES
+
+## The narrowest half-width any consumer is ever told: one tile, two texels
+## of wet band. A per-tile across map cannot reconstruct a channel narrower
+## than that -- at the formula's threshold width (MIN_LEGIBLE_WIDTH_TILES,
+## half-width 0.5) the wet band fell between tile centres, the world drew a
+## hairline and the minimap a dotted line on every diagonal (found live at
+## the Loire's tributaries). Applied where the hits are built, so the
+## painter, the probe, the minimap and the waders all see one width and
+## never disagree; the curve itself still tapers to the spring in geometry.
+## The same "gameplay-scale width, not survey accuracy" pillar rivers.md
+## applies to the curated catalog. Pinned by
+## test_every_reported_half_width_is_at_least_the_render_floor.
+const RENDER_HALF_WIDTH_FLOOR_TILES := 1.0
 const VALLEY_CARVE_METERS_PER_DOUBLING := 6.0
 
 ## The shoreline kernel: radius in asset cells of the smooth bump each
@@ -529,13 +542,16 @@ func _channel_hits(global_x: int, global_y: int) -> Array:
 			if discharge < river_min_discharge:
 				continue
 			var hit := _nearest_on_curve(tile_center, cell)
-			if hit["distance"] - hit["half_width"] > GEOMETRY_REACH_TILES:
+			# The render floor, applied here and nowhere else (see
+			# RENDER_HALF_WIDTH_FLOOR_TILES).
+			var half_width: float = maxf(hit["half_width"], RENDER_HALF_WIDTH_FLOOR_TILES)
+			if hit["distance"] - half_width > GEOMETRY_REACH_TILES:
 				continue
 			hits.append({
 				"cell": cell,
 				"discharge": discharge,
 				"distance_tiles": hit["distance"],
-				"half_width_tiles": hit["half_width"],
+				"half_width_tiles": half_width,
 				"closest": hit["closest"],
 				"tangent": hit["tangent"],
 			})
