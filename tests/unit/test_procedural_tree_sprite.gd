@@ -17,6 +17,23 @@ func _has_pixel(image: Image, target: Color) -> bool:
 	return false
 
 
+## A genuinely green-DOMINANT pixel (real canopy foliage), not merely one
+## whose green channel edges out red/blue by a single 8-bit step. A bare
+## strict ">" comparison worked fine while trees were downscaled hard
+## enough that every pixel landed either clearly green (canopy) or clearly
+## not (trunk/background) -- but DETAIL_MULTIPLIER 12 preserves real
+## illustrated-art highlight/anti-aliasing pixels that sit right at
+## FORMAT_RGBA8's own quantisation noise floor (e.g. r=0.9294,g=0.9333,
+## b=0.9294 -- a near-white highlight fleck, not foliage, that a bare ">"
+## flags anyway). Epsilon chosen well above that 1/255 noise floor and
+## well below any real canopy colour's actual margin over red/blue.
+const _GREEN_DOMINANCE_EPSILON := 0.03
+
+
+func _is_green_dominant(p: Color) -> bool:
+	return p.a > 0.0 and p.g > p.r + _GREEN_DOMINANCE_EPSILON and p.g > p.b + _GREEN_DOMINANCE_EPSILON
+
+
 ## A generator forced onto the plain PROCEDURAL painter (see
 ## ProceduralTreeSprite.force_procedural). Every real species_bias now
 ## resolves to one of TreeSpecies.IDS' six named species, and every one of
@@ -60,12 +77,11 @@ func test_world_size_is_pinned_25_percent_bigger():
 ## SPECKLE_COUNT's own doc comment already commits to scaling with canvas
 ## area so leaf-speckle density per drawn area stays unchanged -- pinned
 ## here so a future canvas-size change cannot silently leave it stale. Was
-## 127 at the previous 50x66 canvas (tree DETAIL_MULTIPLIER 2); the
-## tree-specific multiplier doubling 2 -> 4 (see DETAIL_MULTIPLIER's own
-## doc comment) quadruples the canvas AREA (100x132 vs 50x66), so the count
-## scales by that same 4x factor (127 * 4 = 508).
+## 508 at the prior 100x132 canvas (tree DETAIL_MULTIPLIER 4); the jump to
+## 12 (see DETAIL_MULTIPLIER's own doc comment) is 3x linear / 9x area from
+## that canvas, so the count scales by that same factor (508 * 9 = 4572).
 func test_speckle_count_is_pinned_to_the_new_canvas_area():
-	assert_eq(ProceduralTreeSprite.SPECKLE_COUNT, 508)
+	assert_eq(ProceduralTreeSprite.SPECKLE_COUNT, 4572)
 
 
 # -- trees' own, larger detail multiplier (docs/concept/art_resolution.md) ---
@@ -73,15 +89,28 @@ func test_speckle_count_is_pinned_to_the_new_canvas_area():
 # Reported directly against real evidence (two gameplay screenshots showing
 # a season-dependent crispness gap, and a screenshot of the real illustrated
 # source sheet at its own native resolution): "please render the sprites at
-# native resolution???". Trees now use their OWN DETAIL_MULTIPLIER/
-# SPRITE_SCALE rather than the shared ArtResolution ones every other entity
-# still uses (see that constant's own doc comment for the full reasoning) --
-# pinned here per CLAUDE.md's "tuned values must be tested, never eyeballed"
-# rule, the same way ArtResolution's own multiplier is pinned in
-# test_art_resolution.gd.
+# native resolution???". A first pass (4, double the shared ArtResolution
+# multiplier) was not enough -- follow-up narrowed the remaining complaint
+# to spring specifically ("summer is crisp... autumn is fine as well...
+# winter also... please fix spring"), traced to spring's inherently finer,
+# more numerous blossom-cluster detail versus the other seasons' much
+# larger leaf/branch shapes (see DETAIL_MULTIPLIER's own doc comment).
+# Trees use their OWN DETAIL_MULTIPLIER/SPRITE_SCALE rather than the shared
+# ArtResolution ones every other entity still uses -- pinned here per
+# CLAUDE.md's "tuned values must be tested, never eyeballed" rule, the same
+# way ArtResolution's own multiplier is pinned in test_art_resolution.gd.
 
-func test_detail_multiplier_is_pinned_to_double_the_shared_one():
-	assert_eq(ProceduralTreeSprite.DETAIL_MULTIPLIER, 4)
+func test_detail_multiplier_is_pinned_to_match_springs_native_source_width():
+	# WORLD_SIZE.x(25) * 12 = 300, matching spring's measured raw source
+	# crop width (~300px, see tools/probe_source_resolution.gd) almost
+	# exactly -- chosen so spring's canopy needs essentially no further
+	# downscale, not picked blind.
+	assert_eq(ProceduralTreeSprite.DETAIL_MULTIPLIER, 12)
+	assert_almost_eq(
+		float(ProceduralTreeSprite.WORLD_SIZE.x * ProceduralTreeSprite.DETAIL_MULTIPLIER),
+		300.0, 1.0,
+		"DETAIL_MULTIPLIER should land the canopy box width within a pixel of spring's own measured source width"
+	)
 
 
 func test_sprite_scale_exactly_undoes_the_tree_specific_detail_multiplier():
@@ -90,36 +119,53 @@ func test_sprite_scale_exactly_undoes_the_tree_specific_detail_multiplier():
 	)
 
 
-## The reasoning behind picking 4 rather than some other tree-specific
-## multiplier, made checkable rather than left as prose: however many screen
-## pixels one drawn ART pixel covers (SPRITE_SCALE * CAMERA_ZOOM.x, further
-## scaled by the window's own canvas_scale -- see DisplayScaling), it must
-## never drop below 1.0 at any of the four resolutions this game targets.
-## Below 1.0 the GPU would have to MINIFY the texture live to fit it on
-## screen, and nearest-filtered live minification is exactly the "keep one
-## arbitrary source pixel, discard the rest" problem the CPU-side
-## area-average downscale (ProceduralTreeSprite.scale_piece) exists to fix --
-## a ratio under 1.0 anywhere would quietly reintroduce that same failure one
-## layer up, on every player's screen instead of just at art-authoring time.
-## This is strictly a lower floor, not the "stay chunky" floor of >= 2.0
-## ArtResolution.test_one_art_pixel_covers_several_screen_pixels pins for
-## every OTHER entity -- trees deliberately trade that away at 720p
-## specifically (landing at exactly 1.0 there; see DETAIL_MULTIPLIER's own
-## doc comment for why that trade was made on direct request).
-## Mirrors test_display_scaling.gd's own COMMON_HEIGHTS -- the four
-## resolutions this game actually targets (canvas_scale 1.0/1.5/2.0/3.0).
+## At this multiplier, screen_pixels_per_art_pixel (SPRITE_SCALE *
+## CAMERA_ZOOM.x, further scaled by the window's own canvas_scale -- see
+## DisplayScaling) is deliberately and permanently BELOW 1.0 at every
+## target resolution -- the opposite of the floor an earlier pass pinned
+## (>= 1.0, to avoid the GPU ever needing to minify the texture live).
+## That floor assumed live nearest-neighbour minification would reintroduce
+## the "arbitrary pixel, discard the rest" problem the CPU-side area-
+## average downscale exists to fix. Checked directly rather than assumed,
+## once spring's own fix required going well below it anyway
+## (tools/probe_mipmap_filter_check.gd, real GPU, real minified scale):
+## mipmapped LINEAR filtering -- the theoretically "correct" way to handle
+## live minification -- actually came out VISIBLY SOFTER than plain
+## NEAREST for both spring and summer, because this is smoothly shaded
+## illustrated art with soft internal gradients rather than a hard-edged
+## synthetic texture. Nearest-neighbour minification of already-smooth
+## content picks a representative sample that still reads coherently; this
+## is the empirical reason filtering stays plain NEAREST rather than
+## switching to mipmapped-linear, and why the old >= 1.0 floor is retired
+## rather than chased further. Mirrors test_display_scaling.gd's own
+## COMMON_HEIGHTS -- the four resolutions this game actually targets
+## (canvas_scale 1.0/1.5/2.0/3.0).
 const _TARGET_WINDOW_HEIGHTS := [720, 1080, 1440, 2160]
 
 
-func test_screen_pixels_per_art_pixel_never_drops_below_one_at_any_target_resolution():
+func test_screen_pixels_per_art_pixel_is_now_below_one_at_720p_by_design():
+	var ratio_720p: float = (
+		ProceduralTreeSprite.SPRITE_SCALE * Player.CAMERA_ZOOM.x
+		* DisplayScaling.canvas_scale(720.0)
+	)
+	assert_almost_eq(
+		ratio_720p, 1.0 / 3.0, 0.001,
+		"spring's fix trades the old >= 1.0 floor away on purpose -- see this test's own doc comment"
+	)
+
+
+func test_screen_pixels_per_art_pixel_never_exceeds_one_at_any_target_resolution():
+	# Never ABOVE 1.0 either (up through 4K, where it lands at exactly 1.0)
+	# -- trees are now always at least neutrally sampled, never magnified,
+	# at any resolution this game targets.
 	for window_height in _TARGET_WINDOW_HEIGHTS:
 		var screen_px_per_art_pixel: float = (
 			ProceduralTreeSprite.SPRITE_SCALE * Player.CAMERA_ZOOM.x
 			* DisplayScaling.canvas_scale(float(window_height))
 		)
-		assert_gte(
-			screen_px_per_art_pixel, 1.0,
-			"tree art must never need to be minified live at height %d" % window_height
+		assert_lte(
+			screen_px_per_art_pixel, 1.0001,
+			"tree art should never be magnified at height %d" % window_height
 		)
 
 
@@ -167,11 +213,28 @@ func test_canopy_area_is_greenish_and_opaque():
 	assert_gt(canopy_pixel.g, canopy_pixel.b)
 
 
+## Scans a small band near the trunk's bottom-centre rather than trusting
+## one exact fixed pixel: at DETAIL_MULTIPLIER 12 the real illustrated
+## root flare shows genuine, correctly-rendered gaps between individual
+## root "toes" (see docs/concept/art_resolution.md's DETAIL_MULTIPLIER
+## entry) -- one specific column can legitimately land in such a gap at
+## the very last row or two, which a heavier downscale used to blur away
+## by accident rather than render correctly. The intent this test actually
+## cares about ("the trunk area is brownish and opaque somewhere down
+## there") survives; the single-fixed-coordinate assumption doesn't.
 func test_trunk_area_is_brownish_and_opaque():
 	var image := generator.generate_image(0.5, 1)
-	var trunk_pixel := image.get_pixel(ProceduralTreeSprite.SIZE.x / 2, ProceduralTreeSprite.SIZE.y - 2)
-	assert_gt(trunk_pixel.a, 0.0)
-	assert_gt(trunk_pixel.r, trunk_pixel.b)
+	var trunk_box := generator.illustrated_trunk_box(1)
+	var found_opaque_brown := false
+	for x in range(trunk_box.position.x, trunk_box.position.x + trunk_box.size.x):
+		for dy in range(-15, 0):
+			var p := image.get_pixel(x, ProceduralTreeSprite.SIZE.y + dy)
+			if p.a > 0.0 and p.r > p.b:
+				found_opaque_brown = true
+	assert_true(
+		found_opaque_brown,
+		"expected an opaque, brownish trunk pixel somewhere across the trunk's own width near the bottom"
+	)
 
 
 # -- bare trunk (see docs/concept/woodworking.md's "canopy off first") ------
@@ -208,11 +271,9 @@ func test_bare_trunk_has_no_canopy_foliage():
 	var bare_trunk_green_pixels := 0
 	for y in ProceduralTreeSprite.SIZE.y:
 		for x in ProceduralTreeSprite.SIZE.x:
-			var full_pixel := full_tree.get_pixel(x, y)
-			if full_pixel.a > 0.0 and full_pixel.g > full_pixel.r and full_pixel.g > full_pixel.b:
+			if _is_green_dominant(full_tree.get_pixel(x, y)):
 				full_tree_green_pixels += 1
-			var bare_pixel := bare_trunk.get_pixel(x, y)
-			if bare_pixel.a > 0.0 and bare_pixel.g > bare_pixel.r and bare_pixel.g > bare_pixel.b:
+			if _is_green_dominant(bare_trunk.get_pixel(x, y)):
 				bare_trunk_green_pixels += 1
 	assert_gt(full_tree_green_pixels, 0, "precondition: a full tree actually has canopy foliage")
 	assert_eq(bare_trunk_green_pixels, 0, "a bare trunk should have no canopy foliage left")

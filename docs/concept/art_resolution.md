@@ -163,8 +163,9 @@ correct tile positions once `TILE_SIZE` changes.
   sharp).
 - ⬜ Phase 2 (character).
 - 🚧 Phase 3 (vegetation / resource nodes) -- trees now DO have a real
-  resolution increase (see the second follow-up below); the rest of this
-  phase's scope (flowers, mushrooms, other resource nodes) does not yet.
+  resolution increase, refined once more to actually match spring's own
+  source detail (see the third follow-up below); the rest of this phase's
+  scope (flowers, mushrooms, other resource nodes) does not yet.
   Earlier history: this started as not a real resolution pass at all (trees
   still composited onto the same shared canvas,
   `ProceduralTreeSprite.SIZE`, at the same `ArtResolution.DETAIL_MULTIPLIER`
@@ -284,6 +285,80 @@ correct tile positions once `TILE_SIZE` changes.
   correct for the constraint it was checking (the shared floor, held for
   every OTHER entity) -- it was never a claim that no one could choose to
   spend that floor deliberately for one entity, which is what happened here.
+
+  **Third follow-up, same day: the user narrowed the remaining complaint
+  precisely.** After the DETAIL_MULTIPLIER=4 fix above, relaunched and
+  reported: "It's only spring... summer is crisp", "autumn is fine as
+  well", "winter also", "please fix spring". This is NOT a uniform
+  resolution shortfall -- every season shares the exact same canopy-box
+  downscale ratio (confirmed directly, `tools/probe_spring_vs_summer_
+  composited.gd`: all four seasons' canopy boxes measured within 2px of
+  each other at the same DETAIL_MULTIPLIER). The difference is CONTENT:
+  spring's raw source art is inherently much higher spatial frequency than
+  the other three -- confirmed directly on the untouched, unscaled source
+  crops (`tools/probe_spring_vs_summer_source.gd`) -- many small
+  overlapping blossom clusters with fine internal petal/stamen detail, vs.
+  summer/autumn/winter's fewer, much LARGER leaf or bare-branch shapes. The
+  same fixed-size area-average downscale that leaves big leaf shapes crisp
+  crushes small blossom clusters into a homogenised mid-tone blur, since
+  far more of each destination pixel's source footprint straddles multiple
+  differently-coloured features at once -- an information-theoretic
+  content-density effect, not a bug in the averaging itself.
+
+  Considered and rejected: a season-dependent canvas size (bigger for
+  spring alone). `ProceduralTreeSprite.SIZE` is read from roughly 30 call
+  sites across this file, several of them `static func`s used by trunk/
+  fruit compositing that have nothing to do with the seasonal complaint --
+  threading a per-season size through all of them was assessed as a much
+  larger, riskier refactor than the problem calls for, for a benefit
+  (trunk/fruit staying at today's resolution) nobody asked to keep fixed
+  either way.
+
+  Instead, raised the ONE shared tree multiplier again, from 4 to 12:
+  `WORLD_SIZE.x(25) * 12 = 300`, matching spring's own measured raw source
+  crop WIDTH (~300px) almost exactly, so its canopy needs essentially no
+  further downscale at all. Confirmed by direct candidate renders
+  (`tools/probe_spring_box_size_candidates.gd`) that a box this close to
+  native reproduces individual blossom clusters and petals clearly;
+  summer/autumn/winter -- whose much coarser detail was already legible at
+  the smaller canvas -- read at least as well, not worse, confirmed by a
+  final real-GPU pass across all four seasons (`tools/probe_final_verify_
+  all_seasons.gd`), both a clean native-canvas upscale and a render at the
+  true real in-game camera scale.
+
+  This permanently drops `screen_pixels_per_art_pixel` well BELOW 1.0 at
+  every target resolution (0.33/0.5/0.67/1.0 at 720p/1080p/1440p/4K) --
+  retiring the immediately-prior follow-up's own ">= 1.0" floor rather than
+  chasing it further. That floor assumed live NEAREST minification would
+  reintroduce the "arbitrary pixel, discard the rest" problem the CPU-side
+  area-average downscale exists to fix, and that mipmapped LINEAR filtering
+  would be the correct mitigation if minification became unavoidable.
+  Checked directly rather than assumed (`tools/probe_mipmap_filter_check
+  .gd`, real GPU, real minified scale, both spring and summer): mipmapped
+  LINEAR came out VISIBLY SOFTER than plain NEAREST for both -- the
+  opposite of the theoretical expectation. This is smoothly shaded
+  illustrated art with soft internal gradients rather than a hard-edged
+  synthetic texture; nearest-neighbour minification of already-smooth
+  content picks a representative sample that still reads coherently, while
+  linear filtering (and especially mip-level pre-averaging) adds a second,
+  unwanted layer of blur on top. So tree filtering stays plain NEAREST,
+  unchanged -- the fix is the higher native resolution alone, not a
+  filtering-mode change.
+
+  `SPECKLE_COUNT` scaled with the new canvas area (508 -> 4572, the same 9x
+  the 3x-linear jump implies). Two existing tests broke as a direct,
+  correctly-diagnosed consequence of preserving more real source detail
+  rather than a rendering regression: a fixed single-pixel trunk sample
+  could legitimately land in a genuine (and rather nicely rendered) gap
+  between two individual root "toes" once the root flare stopped being
+  blurred into one solid mass; and a same-single-8-bit-step-of-green
+  quantisation-noise pixel (a near-white highlight fleck at r=0.9294,
+  g=0.9333, b=0.9294) tripped a bare `>` green-dominance check that used to
+  never see values this close together. Both fixed at the TEST level (a
+  wider, trunk-box-width scan; a green-dominance epsilon above the 1/255
+  noise floor, below any real canopy colour's actual margin) rather than
+  the rendering, since direct visual inspection confirmed the rendering
+  itself is correct, not regressed.
 - ⬜ Phase 4 (creatures).
 - ⬜ Phase 5 (structures).
 - ⬜ Phase 6 (items / icons).

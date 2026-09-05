@@ -43,34 +43,66 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 ## resolution" turned out not to be enough: measured directly (see
 ## tools/probe_source_resolution.gd) that the real illustrated source crop
 ## for one canopy is ~300x265px, squeezed almost 24x by AREA into the old
-## 50x66 native canvas -- an aggressive reduction that a dense, similarly-
-## toned canopy (spring blossom) survives far worse than a sparse one
-## (bare winter branches), even under the same correct area-averaging.
-## Asked directly to render at native resolution regardless of the chunky-
-## pixel-art floor -- see DETAIL_MULTIPLIER below for the resulting
-## trade-off, now made for trees specifically rather than assumed off the
-## table.
+## 50x66 native canvas. Asked directly to render at native resolution
+## regardless of the chunky-pixel-art floor; then narrowed further once
+## THAT still wasn't enough for spring specifically (bare winter branches
+## and big summer/autumn leaf shapes read fine at a moderate downscale --
+## spring's much finer, more numerous blossom clusters do not) -- see
+## DETAIL_MULTIPLIER below for the full story and the resulting trade-off,
+## made for trees specifically rather than assumed off the table.
 const WORLD_SIZE := Vector2i(25, 33)
 
 ## Tree-specific -- NOT ArtResolution.DETAIL_MULTIPLIER, which every other
 ## entity still uses unchanged. Reported directly: "please render the
-## sprites at native resolution" -- doubled again, from 2 to 4, so the
-## final native canvas (100x132) sits much closer to the real source
-## crop's own ~300x265px, cutting the forced downscale from ~24x area to
-## ~6x. Chosen specifically so screen_pixels_per_art_pixel (SPRITE_SCALE *
-## CAMERA_ZOOM.x) never drops below 1.0 at any of the four target
-## resolutions (1.0/1.5/2.0/3.0 at 720p/1080p/1440p/4K) -- unlike a
-## smaller bump, this never needs the GPU to MINIFY the texture live
-## (nearest-filtered live minification is exactly the "arbitrary pixel,
-## discard the rest" problem the CPU-side area-average fix exists to
-## avoid; a ratio under 1.0 anywhere would quietly reintroduce it one
-## layer up). The real, accepted trade-off: at 720p specifically the
-## ratio lands at exactly 1.0, so trees there read as smooth/detailed art
-## rather than deliberately chunky pixel art like the rest of the game --
-## a REVERSAL of ArtResolution.DETAIL_MULTIPLIER's own "must stay chunky"
-## floor, scoped to trees alone and made on direct request, not
-## rediscovered by accident.
-const DETAIL_MULTIPLIER := 4
+## sprites at native resolution" -- first doubled 2 -> 4 (final canvas
+## 100x132, cutting the forced downscale from ~24x area to ~6x). Live-
+## verified against real gameplay screenshots, that was NOT enough: user
+## follow-up narrowed it precisely -- "It's only spring... summer is
+## crisp", "autumn is fine as well", "winter also", "please fix spring".
+## So this is not a uniform resolution shortfall (every season shares the
+## same canopy-box downscale ratio, confirmed directly -- see
+## tools/probe_spring_vs_summer_composited.gd): it is that spring's raw
+## source art is inherently much higher spatial frequency than the other
+## three (many small overlapping blossom clusters with fine internal
+## petal/stamen detail, vs. summer/autumn/winter's fewer, much LARGER leaf
+## or bare-branch shapes -- confirmed directly on the untouched, unscaled
+## source crops, see tools/probe_spring_vs_summer_source.gd). The same
+## fixed-size area-average downscale that leaves big leaf shapes crisp
+## crushes small blossom clusters into a homogenized mid-tone blur, since
+## far more of the destination pixel's source footprint straddles
+## multiple different-coloured features at once -- an information-
+## theoretic content-density effect, not a bug in the averaging.
+##
+## Rather than special-case a season-dependent canvas size (a much larger,
+## riskier refactor -- SIZE is read from ~30 call sites, several of them
+## `static func`s used by trunk/fruit compositing that have nothing to do
+## with the seasonal canopy complaint), this raises the ONE shared
+## multiplier again, from 4 to 12 -- WORLD_SIZE.x(25) * 12 = 300, matching
+## spring's own measured raw crop WIDTH (300px) almost exactly, so its
+## canopy needs essentially no further downscale at all. Confirmed by
+## direct candidate renders (tools/probe_spring_box_size_candidates.gd)
+## that a box already this close to native reproduces individual blossom
+## clusters and petals clearly; summer/autumn/winter -- whose much
+## coarser source detail was already legible at the smaller 4x canvas --
+## can only benefit further from more retained source pixels, not regress.
+##
+## This deliberately drops screen_pixels_per_art_pixel (SPRITE_SCALE *
+## CAMERA_ZOOM.x, further scaled by canvas_scale) well BELOW 1.0 at every
+## target resolution (0.33/0.5/0.67/1.0 at 720p/1080p/1440p/4K) -- the
+## texture is now always at least somewhat minified live by the GPU, never
+## magnified. Checked empirically, not assumed, whether that reintroduces
+## the "arbitrary pixel, discard the rest" problem one layer up: rendered
+## the SAME minified scale with plain NEAREST vs. mipmapped LINEAR
+## (tools/probe_mipmap_filter_check.gd, real GPU) for both spring and
+## summer. Mipmapped LINEAR came out VISIBLY SOFTER for both -- the
+## opposite of the theoretical expectation -- because this is smoothly
+## shaded illustrated art with soft internal gradients, not a hard-edged
+## synthetic texture; nearest-neighbour minification of already-smooth
+## content just picks a representative sample that still reads coherently,
+## while linear (and especially mip-level pre-averaging) adds a second,
+## unwanted layer of blur on top. So filtering stays plain NEAREST,
+## unchanged, exactly as every other tree render already uses.
+const DETAIL_MULTIPLIER := 12
 
 ## What a tree's own SIZE-authored art must be scaled by to occupy its
 ## WORLD_SIZE footprint -- the tree-specific mirror of ArtResolution.
@@ -89,13 +121,16 @@ const OUTLINE_DARKEN := 0.5
 const SHADE_DARKEN := 0.2
 const HIGHLIGHT_LIGHTEN := 0.2
 ## Scaled with the canvas area so leaf speckle density per drawn area is
-## unchanged -- a fixed count would read as a nearly-bare canopy at 16x the
-## pixels. Was 127 at the previous 50x66 canvas (DETAIL_MULTIPLIER 2); the
-## tree-specific DETAIL_MULTIPLIER doubling to 4 above quadruples the
-## canvas AREA (100x132 vs 50x66), so the count scales by the same 4x
-## factor (127 * 4 = 508) rather than staying fixed while the canopy area
-## it must speckle grows around it.
-const SPECKLE_COUNT := 508
+## unchanged -- a fixed count would read as a nearly-bare canopy at many
+## times the pixels. Was 508 at the prior 100x132 canvas (DETAIL_MULTIPLIER
+## 4); DETAIL_MULTIPLIER's jump to 12 above is 3x linear / 9x area from
+## that canvas, so the count scales by the same factor (508 * 9 = 4572)
+## rather than staying fixed while the canopy area it must speckle grows
+## around it. (Only reachable via the procedural fallback painter now --
+## every real species has illustrated art -- but kept mathematically
+## consistent regardless, per this file's own force_procedural doc
+## comment.)
+const SPECKLE_COUNT := 4572
 
 ## Push canopy toward a saturated Zelda-canopy green before shading.
 const CANOPY_SATURATE := 0.16
