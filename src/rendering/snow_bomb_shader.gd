@@ -56,13 +56,14 @@ uniform float stamp_edge_fade_uv = 0.05;
 uniform float tread_depth = 0.5;
 uniform float tread_alpha_factor = 0.55;
 
-// The two-octave drift field, carried over unchanged from the tile
-// implementation where it was measured and tuned across three separate
-// reported bugs. Periods are in TILES; the shader converts using
-// world_units_per_tile.
+// The two-octave drift field. Periods are in TILES; the shader converts
+// using world_units_per_tile. These defaults are cosmetic -- make_material()
+// always sets them explicitly from the GDScript mirror's own constants (see
+// test_every_mirrored_constant_reaches_the_shader) -- but are kept equal to
+// that mirror anyway so a reader of just the GLSL is not misled.
 uniform float onset_broad_variance = 0.13;
 uniform float onset_fine_variance = 0.05;
-uniform float onset_drift_tiles = 12.0;
+uniform float onset_drift_tiles = 48.0;
 uniform float onset_fine_drift_tiles = 2.0;
 uniform float world_units_per_tile = 16.0;
 
@@ -467,12 +468,12 @@ const TREAD_DEPTH := 0.5
 ## thin cover was already mostly zero before this factor even applies.
 const TREAD_ALPHA_FACTOR := 0.55
 
-## The two-octave drift field, carried over UNCHANGED from snow_layer.gd,
-## where these were measured and re-measured across three separately reported
-## bugs (a per-tile white-noise checkerboard, a flat plateau over a realistic
-## on-screen view, and the neighbour-step re-derivation each asset change
-## forced). The field itself was never the problem -- only that it was
-## evaluated per tile. It is now evaluated per pixel.
+## The two-octave drift field, carried over from snow_layer.gd, where the
+## VARIANCE numbers were measured and re-measured across three separately
+## reported bugs (a per-tile white-noise checkerboard, a flat plateau over a
+## realistic on-screen view, and the neighbour-step re-derivation each asset
+## change forced). The field itself was never the problem there -- only that
+## it was evaluated per tile. It is now evaluated per pixel.
 ##
 ## ONSET_BROAD_VARIANCE is derived from the total and the fine share, so the
 ## two can never drift out of sync and silently blow the overall bound the
@@ -480,7 +481,28 @@ const TREAD_ALPHA_FACTOR := 0.55
 const ONSET_VARIANCE := 0.18
 const ONSET_FINE_VARIANCE := 0.05
 const ONSET_BROAD_VARIANCE := ONSET_VARIANCE - ONSET_FINE_VARIANCE
-const ONSET_DRIFT_TILES := 12.0
+
+## A FOURTH reported bug, against this shader rather than the tile
+## predecessor: "snow grows by some sort of line scan... it should crossfade
+## random and uniformly". The three bugs above tuned the field's AMPLITUDE
+## and its ADJACENT-TILE smoothness; nobody had asked how much of that
+## amplitude fits inside a single screen, which is the actual view a player
+## judges "random" or "a sweep" against.
+##
+## DisplayScaling's own design keeps the visible view a fixed ~20x11 tiles
+## regardless of window size. At the old 12.0, a full swing from the broad
+## octave's local low to its local high fit inside FEWER than 12 tiles --
+## smaller than that view -- so a real, smooth gradient (never a hard edge,
+## never wrong on its own terms) could still visibly lead one half of the
+## screen ahead of the other as depth rose. Raised 4x, to 48.0: comfortably
+## bigger than the view, so at most a gentle, largely-imperceptible slope of
+## the broad field's own range shows inside any one screen at a time, while
+## still spanning enough of the map that ONSET_VARIANCE's own 80-tile-square
+## floor (test_the_drift_field_still_covers_the_ground_unevenly) stays well
+## clear. Pinned by test_no_single_screen_sees_more_than_one_octaves_worth_
+## of_onset_spread, measured worst case 0.3067 at the old value against a
+## 0.18 ceiling, 0.1678 at this one.
+const ONSET_DRIFT_TILES := 48.0
 const ONSET_FINE_DRIFT_TILES := 2.0
 
 ## The most two edge-adjacent tiles' onsets may differ.

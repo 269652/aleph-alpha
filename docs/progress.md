@@ -3202,6 +3202,53 @@ ratio against the previous tuning rather than just re-asserting the new
 literal. `SECONDS_TO_THAW` (melting) is untouched — the request was about
 covering only.
 
+✅ **A single screen no longer sees snow catch on visibly at different rates
+across itself (2026-09-05).** Reported live: "snow grows by some sort of
+line scan... it should crossfade random and uniformly... snowflakes fall;
+drop and accumulate 1:1." `SnowBombShader`'s two-octave onset field is the
+tile-based implementation's own field, "measured and tuned across three
+separate reported bugs" and explicitly noted as correct and kept when the
+GPU rewrite carried it over unchanged — so the investigation started from a
+real prior: was this a genuinely new bug, or the same deliberate design
+read as a defect from a new angle? A first hypothesis (newly-"caught"
+lattice sites cluster together at a single instant, i.e. a visible
+popping-in front) was checked with a headless nearest-neighbour-distance
+probe (`tools/probe_snow_onset_pattern.gd`) across ten depth steps and did
+NOT hold up — ratios against a uniform-random expectation mostly sat at or
+above 1.0, meaning individual sites do not pop in more clustered than
+chance. The right statistic turned out to be a different one: not whether
+new sites cluster with EACH OTHER, but how much the field's own local
+COVERAGE FRACTION varies across the area a player can see AT ONCE.
+`DisplayScaling` fixes that view at ~20x11 tiles regardless of window size
+by design (a bigger monitor renders the same view at higher fidelity, not
+a wider one) — and the broad octave's period (`ONSET_DRIFT_TILES`, 12
+tiles) was SMALLER than that view, so more than a full swing from the
+field's local low to its local high could fit inside a single screen.
+`tools/probe_onset_drift_scale.gd` measured this directly across candidate
+periods and confirmed it: at 12 tiles, a real 20x11-tile window's own
+onset spread reached 0.31 (worst case), 86% of the field's full possible
+range, comfortably enough to read as a gradient sweeping the screen as
+depth climbed, even though the field itself was smooth and correct by the
+letter of the three earlier fixes. In hindsight this exact mechanism is
+visible in this file's own record: the second follow-up to "snow fills in
+tile by tile" (below) already noted that "a compact box sampled
+mostly-correlated onset... which is expected spatial clustering, not a
+mechanism failure" — true for the repaint-timing bug it was checked
+against, but exactly the visual-uniformity property this report is about.
+Fixed by raising `ONSET_DRIFT_TILES` 4x, from 12 to 48: the same probe
+measures a 20x11-tile window's worst-case spread at 0.17 afterward, under
+the field's own `ONSET_VARIANCE` (0.18) ceiling — pinned by
+`test_no_single_screen_sees_more_than_one_octaves_worth_of_onset_spread`,
+which the old value fails and the new one clears with real margin. The
+80-tile-square minimum-variance test and the adjacent-tile smoothness test
+both still pass unmodified (a larger period only makes neighbours more
+alike, and the field's own range is unchanged — only its spatial SCALE
+moved). `ONSET_FINE_VARIANCE`/`ONSET_FINE_DRIFT_TILES` and
+`SITE_ONSET_SPREAD` (the per-site independent hashed threshold that
+already gives individual flakes their "drop and accumulate 1:1" texture)
+are untouched — this was a single-knob fix once the right statistic was
+found.
+
 ✅ **A settlement's town/city tier and specialization are both derived from
 real flows, never a stored tag** (`settlement_tier.gd`), the literal
 `docs/emergence/04-settlements-cities-infrastructure.md` "City threshold"/
