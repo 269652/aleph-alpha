@@ -618,10 +618,17 @@ func test_assigning_an_item_to_a_hotbar_slot_makes_that_slot_activate_it():
 	assert_eq(player.equipment.equipped_in("weapon").id, "fishing_rod")
 
 
-## The whole point of the fix: the player starts with 5 stacks, which used to
-## fill every hotbar slot -- so a 6th item could never reach a key at all.
-## It must still be assignable.
+## The whole point of the fix: 5 filled stacks (every hotbar slot) must not
+## stop a 6th item from reaching a key. A fresh player no longer starts with
+## any inventory automatically (see grant_starter_items/docs/concept/
+## starting_kit.md), so this test manufactures its own "hotbar already full"
+## precondition with 5 other real, distinct items rather than depending on
+## a global default that no longer exists.
 func test_an_item_past_the_hotbars_capacity_can_still_be_assigned_and_equipped():
+	var fillers := ["wood", "hide", "stick", "rock", "plant_fibre"]
+	assert_eq(fillers.size(), player.hotbar.slot_count, "precondition: one filler per slot")
+	for filler_id in fillers:
+		player.inventory.add(_item_catalog.make(filler_id), 1)
 	player.inventory.add(_item_catalog.make("stone_pickaxe"), 1)
 	assert_gt(
 		_stack_index_of("stone_pickaxe"), player.hotbar.slot_count - 1,
@@ -1132,7 +1139,12 @@ func test_pressing_fish_away_from_water_does_not_start_a_session():
 func test_the_real_fish_key_entry_point_lands_a_caught_fish_in_the_inventory():
 	_set_biome_at(player.current_tile() + Vector2i(1, 0), "ocean")
 	assert_true(player._near_water(), "precondition: a forced ocean neighbor should satisfy _near_water")
-	assert_true(player._has_fishing_rod(), "precondition: a fresh player already carries a fishing rod")
+	# A fresh player no longer carries one automatically (see
+	# grant_starter_items/docs/concept/starting_kit.md) -- this test is
+	# about the fish-key entry point, not about starter-kit selection, so
+	# it grants its own rod rather than depending on a global default.
+	player.inventory.add(_item_catalog.make("fishing_rod"), 1)
+	assert_true(player._has_fishing_rod(), "precondition: a forced grant should satisfy _has_fishing_rod")
 	var before := _fish_item_count(player.inventory_counts())
 
 	# Cast: a real key press, gated by the real near-water/has-rod checks,
@@ -2406,3 +2418,55 @@ func test_a_refused_feed_costs_no_carrot_from_hand():
 	assert_false(player.offer_treat_to(horse))
 
 	assert_not_null(player.equipped_item, "a full animal eats nothing")
+
+
+# -- starter kit (docs/concept/starting_kit.md) -------------------------------
+#
+# Replaces the old hardcoded, identical-for-everyone _ready() grant -- see
+# StarterKit for the curated pool a player actually picks 3 of.
+
+func test_grant_starter_items_adds_each_chosen_item_to_inventory():
+	player.grant_starter_items(["stone_pickaxe", "rough_compass", "lasso"])
+	var counts := player.inventory_counts()
+	assert_eq(counts.get("stone_pickaxe", 0), 1)
+	assert_eq(counts.get("rough_compass", 0), 1)
+	assert_eq(counts.get("lasso", 0), 1)
+
+
+func test_grant_starter_items_skips_an_unknown_id_gracefully():
+	player.grant_starter_items(["not_a_real_item_zzz", "lasso"])
+	assert_eq(player.inventory_counts().get("lasso", 0), 1)
+	assert_false(player.inventory_counts().has("not_a_real_item_zzz"))
+
+
+func test_grant_starter_items_equips_the_first_weapon_choice():
+	player.grant_starter_items(["stone_pickaxe", "crude_blade", "lasso"])
+	assert_eq(player.equipped_item.id, "crude_blade")
+
+
+func test_grant_starter_items_equips_the_first_tool_when_no_weapon_was_chosen():
+	# equip_item() already accepts weapon- OR tool-kind (player.gd's own
+	# equip_item) -- a {pickaxe, compass, lasso} pick shouldn't leave the
+	# player bare-handed just because nothing is literally a weapon.
+	player.grant_starter_items(["stone_pickaxe", "rough_compass", "lasso"])
+	assert_eq(player.equipped_item.id, "stone_pickaxe")
+
+
+func test_grant_starter_items_leaves_the_player_bare_handed_when_neither_kind_was_chosen():
+	# Every pool item today is weapon- or tool-kind, so this can't actually
+	# happen from StarterKit.POOL -- exercised directly (an empty list, the
+	# simplest case with neither kind present) to pin the documented
+	# fallback regardless.
+	assert_null(player.equipped_item, "precondition: nothing equipped yet")
+	player.grant_starter_items([])
+	assert_null(player.equipped_item)
+
+
+func test_a_granted_weapons_mass_matches_the_catalogs_real_mass():
+	# Locks in a fix that falls out of using catalog.make() uniformly: the
+	# OLD hardcoded grant built its sword via bare Item.new(...), which
+	# never set mass_kg (always 0.0) unlike every other real source of an
+	# iron_sword.
+	player.grant_starter_items(["iron_sword"])
+	assert_eq(player.equipped_item.mass_kg, _item_catalog.make("iron_sword").mass_kg)
+	assert_gt(player.equipped_item.mass_kg, 0.0, "a real iron sword must not be massless")

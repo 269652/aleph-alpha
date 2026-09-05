@@ -23,6 +23,8 @@ const SkillTree = preload("res://src/gameplay/skill_tree.gd")
 const SkillWeb = preload("res://src/gameplay/skill_web.gd")
 const SkillWebView = preload("res://scenes/skill_web_view.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
+const StarterKit = preload("res://src/gameplay/starter_kit.gd")
+const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 
 ## Shared look, reusing UiTheme's palette (the same dark/rounded/gold-accent
 ## theme World assigns to every other menu/window -- see World._ui_theme) so
@@ -52,6 +54,20 @@ const CLASS_BLURBS := {
 	"artisan": "Crafter. Sturdy, with deep stamina.",
 	"herbalist": "Medic and caster. Mana over might.",
 	"overseer": "Organizer. Modest mana, steady all round.",
+}
+
+## Human-readable blurbs for the Starting Kit pool (StarterKit has the ids;
+## ItemCatalog has the display names -- this is only the "why pick this"
+## line, the same split CLASS_BLURBS already uses for classes).
+const STARTER_ITEM_BLURBS := {
+	"wooden_club": "Simple and cheap. Just needs wood.",
+	"crude_blade": "The first real weapon. Sharper than a club.",
+	"stone_pickaxe": "The mining on-ramp -- ore and stone.",
+	"fishing_rod": "Stand by water, press to fish.",
+	"lasso": "Tames almost anything roped.",
+	"rough_compass": "Never lose your way home.",
+	"iron_sword": "A proper blade. Costs real ingots to replace.",
+	"iron_axe": "Chops fast. Costs real ingots to replace.",
 }
 
 ## Friendly labels for the appearance axes, in display order.
@@ -170,9 +186,13 @@ const SKILL_WEB_HEIGHT := 300.0
 ## mode is "single" or "host"; chosen_class is a ClassArchetype name.
 ## `appearance` is the authored look (see HeroAppearance). `dna_stat_
 ## modifiers` is the rolled genome's stat swing (see HeroDna) -- World adds
-## it on top of the class's own base stats before spawning.
+## it on top of the class's own base stats before spawning. `starter_items`
+## is the Starting Kit tab's current selection (see StarterKit,
+## docs/concept/starting_kit.md) -- up to StarterKit.MAX_CHOICES real item
+## ids, granted to the fresh player in place of the old fixed kit.
 signal start_requested(
-	mode: String, chosen_class: String, appearance: Dictionary, dna_stat_modifiers: Dictionary
+	mode: String, chosen_class: String, appearance: Dictionary, dna_stat_modifiers: Dictionary,
+	starter_items: Array
 )
 ## Emitted to join a remote host at `address`.
 signal join_requested(address: String)
@@ -191,6 +211,7 @@ var save_path := PlayerSave.SAVE_PATH
 var reroll_save_path := "user://hero_dna_rerolls.bin"
 
 var _archetypes := ClassArchetype.new()
+var _item_catalog := ItemCatalog.new()
 var _appearance_maker := HeroAppearance.new()
 var _char_sprite := ProceduralCharacterSprite.new()
 var _player_save := PlayerSave.new()
@@ -210,6 +231,13 @@ var _overwrite_confirm_screen: Control
 
 var _pending_mode := "single"
 var _selected_class := "warrior"
+## The Starting Kit tab's current picks (see StarterKit, current_starter_items).
+## Defaults to StarterKit's own always-valid default, mirroring _selected_class
+## defaulting to "warrior" -- a player who never opens the tab still starts a
+## real, coherent kit.
+var _selected_starter_items: Array = StarterKit.DEFAULT_CHOICES.duplicate()
+## archetype -> PanelContainer, mirrors _class_buttons (see _build_class_card).
+var _starter_item_buttons: Dictionary = {}
 ## axis name -> chosen option index (see HeroAppearance.appearance_from_choices).
 var _choices: Dictionary = {}
 
@@ -400,6 +428,11 @@ func _build_create_screen() -> Control:
 	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_tabs(tabs)
 	tabs.add_child(_build_character_tab())
+	# Between Character and Skills: Skills is an explicit no-commitment
+	# preview (see its own comment above), but a starting kit is a real
+	# committed choice like the class itself, so it sits with Character
+	# rather than after the preview tab.
+	tabs.add_child(_build_starter_kit_tab())
 	tabs.add_child(_build_skills_tab())
 
 	# Wrapped in a ScrollContainer, NOT given straight to `box`: MainMenu is
@@ -460,7 +493,8 @@ func _begin_pressed() -> void:
 
 func _emit_start_requested() -> void:
 	start_requested.emit(
-		_pending_mode, _selected_class, current_appearance(), current_dna().stat_modifiers
+		_pending_mode, _selected_class, current_appearance(), current_dna().stat_modifiers,
+		current_starter_items()
 	)
 
 
@@ -977,6 +1011,11 @@ func current_appearance() -> Dictionary:
 	return _appearance_maker.appearance_from_choices(_selected_class, _choices, _dna_seed)
 
 
+## The Starting Kit tab's current picks -- handed to World on Begin.
+func current_starter_items() -> Array:
+	return _selected_starter_items.duplicate()
+
+
 ## The rolled genome for the creator's current DNA seed (see HeroDna.roll) --
 ## handed to World on Begin alongside the appearance it was also derived
 ## from.
@@ -1191,6 +1230,88 @@ func _select_class(archetype: String) -> void:
 		card.modulate = Color(1, 1, 1) if class_id == archetype else Color(1, 1, 1, 0.7)
 	_refresh_appearance()
 	_refresh_skills_tab()
+
+
+# -- starting kit (docs/concept/starting_kit.md) ------------------------------
+
+## A tab of small selectable cards -- one per StarterKit.POOL item -- mirroring
+## the class picker's own icon-row shape (_build_class_icon_row), just
+## multi-select up to StarterKit.MAX_CHOICES instead of single-select.
+func _build_starter_kit_tab() -> Control:
+	var box := VBoxContainer.new()
+	box.name = "Starting Kit"
+	box.add_theme_constant_override("separation", 10)
+
+	box.add_child(_muted_label(
+		"Pick %d to start with -- your only kit, so choose what suits how you want to play."
+			% StarterKit.MAX_CHOICES
+	))
+
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 10)
+	grid.add_theme_constant_override("v_separation", 10)
+	for item_id in StarterKit.POOL:
+		var card := _build_starter_item_card(item_id)
+		_starter_item_buttons[item_id] = card
+		grid.add_child(card)
+	box.add_child(grid)
+
+	_refresh_starter_item_cards()
+	return box
+
+
+## One pool item as a small square card -- mirrors _build_class_card's exact
+## shape (a PanelContainer, a transparent full-rect Button hitbox), just
+## toggling this item in/out of _selected_starter_items instead of replacing
+## a single selection.
+func _build_starter_item_card(item_id: String) -> PanelContainer:
+	var card := _card_panel(Vector2(_CLASS_ICON_SIZE, _CLASS_ICON_SIZE))
+	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var display_name := item_id
+	if _item_catalog.has(item_id):
+		display_name = _item_catalog.make(item_id).display_name
+	card.tooltip_text = "%s\n%s" % [display_name, STARTER_ITEM_BLURBS.get(item_id, "")]
+
+	var label := Label.new()
+	label.text = display_name
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	card.add_child(label)
+
+	var hitbox := Button.new()
+	hitbox.flat = true
+	hitbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	hitbox.pressed.connect(func(): _toggle_starter_item(item_id))
+	card.add_child(hitbox)
+	return card
+
+
+## Already selected -> deselect. Not selected and under MAX_CHOICES -> select.
+## Not selected and already at MAX_CHOICES -> no-op (simplest predictable
+## rule: a full kit just doesn't take a 4th pick until one is freed).
+func _toggle_starter_item(item_id: String) -> void:
+	if _selected_starter_items.has(item_id):
+		_selected_starter_items.erase(item_id)
+	elif _selected_starter_items.size() < StarterKit.MAX_CHOICES:
+		_selected_starter_items.append(item_id)
+	_refresh_starter_item_cards()
+
+
+## Repaints every card's selected/unselected style, mirroring _select_class's
+## own repaint loop over _class_buttons.
+func _refresh_starter_item_cards() -> void:
+	for item_id in _starter_item_buttons:
+		var card: PanelContainer = _starter_item_buttons[item_id]
+		var selected: bool = _selected_starter_items.has(item_id)
+		var style: StyleBoxFlat = card.get_theme_stylebox("panel")
+		style.bg_color = CARD_BG_SELECTED if selected else CARD_BG
+		style.border_color = ACCENT if selected else PANEL_BORDER
+		card.modulate = Color(1, 1, 1) if selected else Color(1, 1, 1, 0.7)
 
 
 # -- join ---------------------------------------------------------------------

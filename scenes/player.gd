@@ -659,24 +659,11 @@ func _ready() -> void:
 	# sync_hotbar) from one place, rather than at every inventory mutation.
 	inventory_changed.connect(sync_hotbar)
 
-	# Start carrying a sword AND an axe; the sword is what's held at first (so
-	# attacks land harder than fists and it looks like a weapon). The axe sits
-	# in the inventory -- equip it from the hotbar/inventory to swap what's in
-	# hand (see equip_item), which is what makes it chop trees fast (the held
-	# item alone decides attack/chop/mine effectiveness).
-	var sword := Item.new("iron_sword", "Iron Sword", "weapon", 1, 15.0)
-	inventory.add(sword, 1)
-	inventory.add(Item.new("iron_axe", "Iron Axe", "tool", 1), 1)
-	# A couple of leather pieces so the equipment paperdoll (inventory screen)
-	# is discoverable from the first minute -- click them to wear them.
-	inventory.add(_item_catalog.make("leather_helm"), 1)
-	inventory.add(_item_catalog.make("leather_chest"), 1)
-	# A fishing rod so the fishing loop is discoverable -- stand by water and
-	# press the fish key (default F).
-	inventory.add(_item_catalog.make("fishing_rod"), 1)
-	equip_item(sword)
-
-	inventory_changed.emit()
+	# No starting grant here any more -- a NEW game's kit is now the
+	# player's own choice (see grant_starter_items/docs/concept/
+	# starting_kit.md), called explicitly by World AFTER this node is in
+	# the tree (so inventory_changed above is already wired). A LOADED
+	# game's inventory comes from apply_save_dict instead, same as before.
 
 
 ## Server-authoritative movement: this node's authority is always the server
@@ -1606,6 +1593,45 @@ func equip_item(item) -> bool:
 	_character_view.equip_weapon(_item_sprite_generator.generate_texture(item.sprite_id))
 	inventory_changed.emit()
 	return true
+
+
+## Populates a brand-new character's inventory from the player's chosen
+## starter items (see docs/concept/starting_kit.md), replacing what used to
+## be a hardcoded, identical-for-everyone grant in _ready(). Called by World
+## AFTER this node is already in the tree (see World._spawn_local_singleplayer)
+## so inventory_changed's sync_hotbar connection (wired in _ready()) is
+## already live when the emit below fires. Uses this node's own
+## _item_catalog, like every other item-granting method here (cooking,
+## foraging, trading, crafting) -- no reason for this one to take a second,
+## separately-supplied catalog when the rest of the file never does.
+##
+## Mirrors the established /give pattern (World._handle_give_command)
+## exactly: has() -> make() -> inventory.add() -- an unknown id is skipped
+## rather than crashing, since a stale/hand-edited selection is a normal
+## condition to degrade from, not an error worth taking the game down over.
+##
+## Auto-equips the first WEAPON-kind choice; if none was chosen, the first
+## TOOL-kind choice instead (equip_item already accepts either kind) -- so a
+## {pickaxe, compass, lasso} pick starts holding the pickaxe, not bare-handed
+## just because nothing is literally a weapon. Bare-handed only when neither
+## kind was chosen at all: a real, intended consequence of replacing the old
+## fixed kit outright rather than adding to it.
+func grant_starter_items(item_ids: Array) -> void:
+	var first_weapon: Item = null
+	var first_tool: Item = null
+	for item_id in item_ids:
+		if not _item_catalog.has(item_id):
+			continue
+		var item := _item_catalog.make(item_id)
+		inventory.add(item, 1)
+		if first_weapon == null and item.is_weapon():
+			first_weapon = item
+		elif first_tool == null and item.kind == "tool":
+			first_tool = item
+	var to_equip := first_weapon if first_weapon != null else first_tool
+	if to_equip != null:
+		equip_item(to_equip)
+	inventory_changed.emit()
 
 
 ## Consumes one unit of a "food"-kind item from the inventory to relieve
