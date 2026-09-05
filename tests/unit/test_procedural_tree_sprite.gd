@@ -2,6 +2,8 @@ extends GutTest
 
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
+const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
+const Player = preload("res://scenes/player.gd")
 
 var generator := ProceduralTreeSprite.new()
 
@@ -57,11 +59,68 @@ func test_world_size_is_pinned_25_percent_bigger():
 
 ## SPECKLE_COUNT's own doc comment already commits to scaling with canvas
 ## area so leaf-speckle density per drawn area stays unchanged -- pinned
-## here so a future WORLD_SIZE change cannot silently leave it stale (as
-## this one would have, left alone): new area (50x66) / old area (40x52)
-## is ~1.587x, so the count scales by the same factor.
+## here so a future canvas-size change cannot silently leave it stale. Was
+## 127 at the previous 50x66 canvas (tree DETAIL_MULTIPLIER 2); the
+## tree-specific multiplier doubling 2 -> 4 (see DETAIL_MULTIPLIER's own
+## doc comment) quadruples the canvas AREA (100x132 vs 50x66), so the count
+## scales by that same 4x factor (127 * 4 = 508).
 func test_speckle_count_is_pinned_to_the_new_canvas_area():
-	assert_eq(ProceduralTreeSprite.SPECKLE_COUNT, 127)
+	assert_eq(ProceduralTreeSprite.SPECKLE_COUNT, 508)
+
+
+# -- trees' own, larger detail multiplier (docs/concept/art_resolution.md) ---
+#
+# Reported directly against real evidence (two gameplay screenshots showing
+# a season-dependent crispness gap, and a screenshot of the real illustrated
+# source sheet at its own native resolution): "please render the sprites at
+# native resolution???". Trees now use their OWN DETAIL_MULTIPLIER/
+# SPRITE_SCALE rather than the shared ArtResolution ones every other entity
+# still uses (see that constant's own doc comment for the full reasoning) --
+# pinned here per CLAUDE.md's "tuned values must be tested, never eyeballed"
+# rule, the same way ArtResolution's own multiplier is pinned in
+# test_art_resolution.gd.
+
+func test_detail_multiplier_is_pinned_to_double_the_shared_one():
+	assert_eq(ProceduralTreeSprite.DETAIL_MULTIPLIER, 4)
+
+
+func test_sprite_scale_exactly_undoes_the_tree_specific_detail_multiplier():
+	assert_almost_eq(
+		ProceduralTreeSprite.SPRITE_SCALE * ProceduralTreeSprite.DETAIL_MULTIPLIER, 1.0, 0.0001
+	)
+
+
+## The reasoning behind picking 4 rather than some other tree-specific
+## multiplier, made checkable rather than left as prose: however many screen
+## pixels one drawn ART pixel covers (SPRITE_SCALE * CAMERA_ZOOM.x, further
+## scaled by the window's own canvas_scale -- see DisplayScaling), it must
+## never drop below 1.0 at any of the four resolutions this game targets.
+## Below 1.0 the GPU would have to MINIFY the texture live to fit it on
+## screen, and nearest-filtered live minification is exactly the "keep one
+## arbitrary source pixel, discard the rest" problem the CPU-side
+## area-average downscale (ProceduralTreeSprite.scale_piece) exists to fix --
+## a ratio under 1.0 anywhere would quietly reintroduce that same failure one
+## layer up, on every player's screen instead of just at art-authoring time.
+## This is strictly a lower floor, not the "stay chunky" floor of >= 2.0
+## ArtResolution.test_one_art_pixel_covers_several_screen_pixels pins for
+## every OTHER entity -- trees deliberately trade that away at 720p
+## specifically (landing at exactly 1.0 there; see DETAIL_MULTIPLIER's own
+## doc comment for why that trade was made on direct request).
+## Mirrors test_display_scaling.gd's own COMMON_HEIGHTS -- the four
+## resolutions this game actually targets (canvas_scale 1.0/1.5/2.0/3.0).
+const _TARGET_WINDOW_HEIGHTS := [720, 1080, 1440, 2160]
+
+
+func test_screen_pixels_per_art_pixel_never_drops_below_one_at_any_target_resolution():
+	for window_height in _TARGET_WINDOW_HEIGHTS:
+		var screen_px_per_art_pixel: float = (
+			ProceduralTreeSprite.SPRITE_SCALE * Player.CAMERA_ZOOM.x
+			* DisplayScaling.canvas_scale(float(window_height))
+		)
+		assert_gte(
+			screen_px_per_art_pixel, 1.0,
+			"tree art must never need to be minified live at height %d" % window_height
+		)
 
 
 ## Art-direction pass: the tree silhouette is ringed with the shared near-black

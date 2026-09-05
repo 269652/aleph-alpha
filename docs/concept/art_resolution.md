@@ -162,8 +162,11 @@ correct tile positions once `TILE_SIZE` changes.
   spawn read as "the player is offset by half a tile" once tile edges got
   sharp).
 - ⬜ Phase 2 (character).
-- ⬜ Phase 3 (vegetation / resource nodes) -- still not a real resolution
-  pass (trees still composite onto the same shared canvas,
+- 🚧 Phase 3 (vegetation / resource nodes) -- trees now DO have a real
+  resolution increase (see the second follow-up below); the rest of this
+  phase's scope (flowers, mushrooms, other resource nodes) does not yet.
+  Earlier history: this started as not a real resolution pass at all (trees
+  still composited onto the same shared canvas,
   `ProceduralTreeSprite.SIZE`, at the same `ArtResolution.DETAIL_MULTIPLIER`
   every other entity uses -- raising that multiplier for trees alone would
   break the same "reads as chunky pixel art, not smooth" floor `Camera2D`
@@ -211,10 +214,76 @@ correct tile positions once `TILE_SIZE` changes.
   clean pixel grid, but a direct snap-2d-transforms-to-pixel A/B render
   showed no visible difference for one tree at normal viewing scale.
 
-  **A genuine native-resolution increase for trees remains impossible
-  within this game's current shared camera zoom**, not merely undone --
-  any future attempt needs to change the zoom/design-resolution
-  relationship itself (Phase 7), not retry a tree-specific carve-out.
+  **This conclusion held for the SHARED multiplier, but was overridden by
+  direct request minutes later** -- see the next follow-up. It remains true
+  that no multiplier increase keeps trees inside the chunky-pixel-art floor
+  every OTHER entity is held to; what changed is that the user explicitly
+  chose to give up that floor for trees specifically, evidence in hand.
+
+  **Second follow-up, same day: still reported "super blurry," backed by
+  direct visual evidence** -- two real gameplay screenshots (winter/rain vs.
+  spring/blossom) showing a season-dependent crispness gap the isolated
+  renders above hadn't caught, then a screenshot of the actual illustrated
+  source sheet (`composite_cherry.png`) at its own native resolution,
+  captioned "compare to real art it should have same resolution," followed
+  by a direct, unambiguous instruction: **"Just please render the sprites at
+  native resolution???"**
+
+  Measured first (`tools/probe_source_resolution.gd`, headless): the real
+  source crop `IllustratedTree.canopy_for` hands to `scale_piece` is roughly
+  300x265px per season, squeezed by the THEN-current 50x66 native canvas --
+  a ~6x linear / ~24x area reduction, applied identically across seasons.
+  Confirmed live (`tools/probe_wind_sway_shear.gd`, real GPU, real camera
+  zoom) that this reduction hits a dense, similarly-toned canopy (spring
+  blossom) far harder than a sparse one (bare winter branches) even under
+  the already-correct area-averaging fix above -- an information-theoretic
+  effect of the downscale ratio itself, not a bug in how it averages. Also
+  ruled out, same probe: the wind-sway shader's vertex-only shear as a blur
+  cause (still/swaying frames of the same canopy looked visually identical).
+
+  Given the direct instruction, `ProceduralTreeSprite` now has its OWN
+  `DETAIL_MULTIPLIER := 4` and `SPRITE_SCALE := 1.0 / 4.0`, independent of
+  `ArtResolution`'s shared ones (still 2, unchanged for every other entity)
+  -- `SIZE` (100x132) and `SPECKLE_COUNT` (508, 4x) follow from it. Doubling
+  again from the 25%-bigger-WORLD_SIZE follow-up above cuts the downscale
+  from ~24x area to ~6x, roughly halving the linear reduction and letting
+  much more of the source's real distinct colour/shape survive the CPU-side
+  area-average into the native canvas -- confirmed directly
+  (`tools/probe_native_resolution_verify.gd`, real GPU): the spring canopy
+  gained clearly legible individual blossom clusters and branch structure
+  where it previously read as a near-flat pink mass, and the fruit cluster
+  at its centre went from an illegible blur to individually distinguishable
+  cherries and leaves; winter gained visibly finer twig-level branching.
+  Chosen specifically so `screen_pixels_per_art_pixel` (`SPRITE_SCALE *
+  Player.CAMERA_ZOOM.x`, further scaled by `DisplayScaling.canvas_scale`)
+  never drops BELOW 1.0 at any of the four target resolutions
+  (1.0/1.5/2.0/3.0 at 720p/1080p/1440p/4K) -- unlike a smaller bump, this
+  never needs the GPU to minify the tree texture live, which would
+  reintroduce the exact "arbitrary pixel, discard the rest" problem the
+  CPU-side area-average fix exists to prevent, one layer up.
+
+  **The accepted trade-off, made deliberately rather than rediscovered by
+  accident:** at 720p specifically the ratio lands at exactly 1.0, so trees
+  there read as smooth/detailed art rather than deliberately chunky pixel
+  art like the rest of the game -- a narrow, tree-scoped reversal of
+  `ArtResolution.DETAIL_MULTIPLIER`'s own "must stay >= 2.0, chunky" floor
+  (`test_one_art_pixel_covers_several_screen_pixels`), which still holds
+  unchanged for every other entity.
+
+  A real bug surfaced and was fixed in the same pass:
+  `ProceduralTreeSprite.trunk_world_width()` still divided out
+  `ArtResolution.SPRITE_SCALE` (the shared, now-wrong constant) rather than
+  this file's own -- silently doubling the tree's collision-box width.
+  Caught by `test_collision_is_a_trunk_sized_box_not_a_canopy_sized_one`
+  going red (a 12.65-world-unit collision box, wider than half the tree's
+  own canopy) rather than by inspection; both this and the missing
+  test-pins for the new constants are now covered (`tests/unit/
+  test_procedural_tree_sprite.gd`, `tests/unit/test_tree_renderer.gd`).
+
+  So Phase 3's earlier "impossible without regression" conclusion was
+  correct for the constraint it was checking (the shared floor, held for
+  every OTHER entity) -- it was never a claim that no one could choose to
+  spend that floor deliberately for one entity, which is what happened here.
 - ⬜ Phase 4 (creatures).
 - ⬜ Phase 5 (structures).
 - ⬜ Phase 6 (items / icons).

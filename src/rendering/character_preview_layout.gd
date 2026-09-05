@@ -291,7 +291,8 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 ## from it in main_menu's diorama view). A tree sprite is anchored at the
 ## trunk foot and drawn upward from there (TreeRenderer._build_tree_node sets
 ## sprite.offset.y = -ProceduralTreeSprite.SIZE.y * 0.5 at
-## ArtResolution.SPRITE_SCALE), so it occupies [x - w/2, x + w/2] x
+## ProceduralTreeSprite.SPRITE_SCALE -- trees' own multiplier, not
+## ArtResolution's shared one), so it occupies [x - w/2, x + w/2] x
 ## [y - h, y]. Derived from the tree art's OWN world size, never an eyeballed
 ## margin -- if the art ever changes size, this follows it. Previously
 ## unconstrained, which cut canopies off the top of the frame and trunks off
