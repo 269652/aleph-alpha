@@ -10867,18 +10867,49 @@ under the smell API, and proves the DSL in tests.
   after the rewire: olfaction, scent-foraging, flies, fly-life-cycle,
   creature-marker, creature-info, ambient-flyer-marker and
   piscivore-bird-marker suites all green.
-- ⬜ **Nothing visible changed, by design.** Every animal decides what it
-  decided before. The mammal ladder's new smell wiring and the context's
-  `smells`/`species`/`genome` keys are real in the model and fed by nothing
-  live until the marker publishes its senses as stimuli (the doc's slice 2);
-  no live animal carries a receptor gene (`AnimalGenome`, see the Animal
-  Genetics section above, still does not exist).
-- ⬜ Slices 2–6 in the doc, none started: real stimuli from the marker (and
-  `danger` stops being a verdict); one drive vector replacing the five hunger
-  clocks with ramped levels; gains as personality (boldness, docility,
-  temperament, the spell fear/calm statuses); bird/insect/fish/villager body
-  plans over the existing motor programs, with the NPC instruction DSL as
-  the player-facing dialect; mate choice on display/preference vectors.
+- ✅ **Slice 1 changed nothing visible, by design.** Every animal decided
+  what it decided before; the slice was a behaviour-preserving re-expression
+  pinned by the tests that already existed.
+- ✅ **Slice 2 (same day): danger stopped being a verdict, and every land
+  mammal got its own nose.** The basis now carries `predator`/`player`/
+  `flesh` instead of `danger`; `CreatureMarker`'s sensing tick publishes
+  every nearby creature as what it IS, every person as a person, and the
+  nearest water/food tile at a real position (`_cached_stimuli`), and reads
+  its threat list back from the species valence (`CreatureBehavior.threats()`
+  over `BehaviorKernel.perceived`) -- "predators are threats to herbivores,
+  people to everyone, a predator ignores other predators, a tamed animal no
+  longer perceives people" are all valences and sensitivities now, not scan
+  rules. Attack and hunt act on the node the winning stimulus carries (the
+  kernel returns it whole); the prey cache and both direction caches are
+  gone. The kernel ranks by a sense-supplied `strength` when the sense knows
+  one (smell hands over its dilution via `ScentForaging.stimuli_from`) and
+  honours a wiring `floor` (the smell wiring carries
+  `Ethogram.SMELL_INTEREST_FLOOR`, which `ScentForaging.MIN_INTEREST` now
+  aliases); `ScentForaging.best_source` ranks through the kernel with an
+  optional genome. `src/gameplay/animal_genome.gd` exists in
+  `concept/animal_genetics.md`'s exact shape (static namespace, ordered
+  `GENE_NAMES`, `GENE_READERS`, both anti-dead-weight tests) holding only the
+  five receptor genes; `AnimalGenome.for_seed` derives them bell-shaped
+  around the species template from the marker's own `wander_seed`, and
+  `CreatureMarker.genome_or_derived()` feeds them to every decision and
+  every sniff -- so a boar born without a decay receptor walks past carrion
+  the next boar takes (`test_an_individuals_nose_reaches_the_live_forage_choice`),
+  with nothing new persisted. Suites green after the change: adapter,
+  marker, creature-info, ambient-flyer, piscivore, olfaction, flies,
+  fly-life-cycle, taming, animal-reproduction, mammal-courtship (578 tests).
+- 🚧 **Deliberately not in slice 2**, recorded in the doc's §2/§3: grazing
+  bites stay `GrazerForaging`'s lexicographic diet-order choice (a weighted
+  sum cannot say "mast over grass at any distance"); the species half of the
+  adapter overrides (`flesh` valence, "ignores other hunters", the fight
+  temperament) still comes from `CreatureInfo`'s tables rather than the
+  five species records; no `conspecific` feature is published until a
+  wiring reads one.
+- ⬜ Slices 3–6 in the doc, none started: one drive vector replacing the
+  five hunger clocks with ramped levels; gains as personality (boldness,
+  docility, temperament, the spell fear/calm statuses); bird/insect/fish/
+  villager body plans over the existing motor programs, with the NPC
+  instruction DSL as the player-facing dialect; mate choice on
+  display/preference vectors.
 
 ## Reality check
 

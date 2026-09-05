@@ -2423,13 +2423,13 @@ func _nearby_in_group(group: String, radius: float = SENSE_RADIUS) -> Array:
 
 
 ## Single per-tick scan of the "creature" group (see SENSE_INTERVAL),
-## classifying every other creature into the two buckets
-## _nearby_threat_creatures/_nearby_prey_creatures/_nearby_herbivore_creatures
-## need -- predators within this tick's threat_radius, and non-predators
-## within SENSE_RADIUS -- in one pass instead of each accessor independently
-## calling get_tree().get_nodes_in_group(GROUP_NAME) and re-filtering the
-## whole population (previously up to 2x per tick for a herbivore marker,
-## across however many creature markers are loaded that's O(n^2)).
+## publishing every other creature as a stimulus by what it IS -- predators
+## within this tick's threat_radius, non-predators within SENSE_RADIUS --
+## and keeping the non-predator nodes _nearby_herbivore_creatures needs, in
+## one pass instead of each consumer independently calling
+## get_tree().get_nodes_in_group(GROUP_NAME) and re-filtering the whole
+## population (previously up to 2x per tick for a herbivore marker, across
+## however many creature markers are loaded that's O(n^2)).
 func _scan_nearby_creatures(threat_radius: float) -> void:
 	_creature_scan_count += 1
 	var stimuli: Array = []
