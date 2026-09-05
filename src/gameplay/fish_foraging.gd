@@ -20,6 +20,17 @@ const DETECTION_RADIUS_TILES := 6.0
 ## tiny-creature arrival tolerance.
 const GRAZE_ARRIVE_DISTANCE_PX := 6.0
 
+## How often a foraging fish re-queries for a nearby patch, rather than
+## every frame -- the same "don't repeat a nontrivial per-chunk scan every
+## single frame for every fish" performance discipline FishSchooling.
+## SCAN_INTERVAL already applies to its own (unrelated) neighbour scan.
+## Pinned independently rather than reusing that constant directly: the two
+## are separate mechanisms that happen to share a cadence, not one concept,
+## the same "independently define, even when the reasoning is shared"
+## precedent DETECTION_RADIUS_TILES's own doc comment already sets against
+## AntColony.FORAGE_RADIUS_TILES above.
+const SCAN_INTERVAL := 0.5
+
 
 ## The nearest position in `candidates` (an Array of {"position": Vector2}
 ## dictionaries, the same shape EarthChunkManager.worms_near/

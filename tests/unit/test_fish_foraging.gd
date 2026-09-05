@@ -51,3 +51,7 @@ func test_graze_arrive_distance_is_positive_and_small():
 	# "arrived" should mean genuinely at the patch, not merely nearby.
 	const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 	assert_lt(FishForaging.GRAZE_ARRIVE_DISTANCE_PX, float(TerrainRenderer.TILE_SIZE))
+
+
+func test_scan_interval_is_positive():
+	assert_gt(FishForaging.SCAN_INTERVAL, 0.0)
