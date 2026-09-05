@@ -6998,6 +6998,16 @@ state had never once been set by anything in `src/`.
   the walk/dive/display/sing rows have real art measured or reserved but
   no behavioral trigger. Writeup: `concept/ecosystem_dynamics.md`'s "Real
   illustrated art for songbirds and the kingfisher".
+  **Follow-up, same day: "robins and sparrows are now gigantic".** The
+  renderers' flat `marker.scale` was tuned for `ProceduralBirdSprite`'s
+  tiny 32x20 canvas and applied unchanged to `IllustratedBirdSprite`'s
+  real art (~6-9x wider in actual content) — a sparrow that should read
+  ~6.6 world px wide rendered at ~58. Fixed with `IllustratedBirdSprite.
+  marker_scale(species)` (the bird analog of `IllustratedAnimalSprite.
+  marker_scale`), wired in wherever the illustrated generator is actually
+  selected, mirroring `CreatureMarker._apply_action_scale`'s own
+  illustrated/procedural branch. 259 tests green. Writeup:
+  `concept/ecosystem_dynamics.md`'s same section, its own dated follow-up.
 - **Persistence / catch-up integration of eaten burrows** (medium) — ⬜ Not
   started, deliberately — a reloaded chunk re-seeds deterministically and
   loses which burrows had been eaten, exactly like `FlowerPatch`, `TallGrass`,
@@ -8570,6 +8580,14 @@ renderer, not only the numeric mirror" convention) and by rendering an
 actual transition frame by frame and inspecting the sequence directly —
 the leaf visibly rotates through several distinct orientations across one
 journey rather than only tilting a few degrees back and forth.
+
+✅ **Follow-up: "leaves should be half as big".** `LeafLitterRenderer.
+WORLD_SIZE` was `WALNUT_WORLD_WIDTH * 1.5`, ported unchanged from
+`DroppedItem.LEAF_WORLD_SIZE`'s own original derivation; reported too
+large once actually seen rendered at real scale. Halved to `* 0.75`,
+pinned by `test_world_size_is_half_its_previous_walnut_relative_size`
+rather than left as a bare constant a future edit could silently drift
+off of.
 
 <details>
 <summary>First pass (superseded above), kept for history</summary>

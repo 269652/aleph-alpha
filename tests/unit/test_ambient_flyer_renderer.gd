@@ -421,6 +421,59 @@ func test_a_bird_chick_is_a_bird_not_a_butterfly():
 	)
 
 
+## Reported live: "robins and sparrows are now gigantic". A spawned bird's
+## final `.scale` must use IllustratedBirdSprite.marker_scale, not the flat
+## procedural-canvas-tuned chain -- see _build_marker's own doc comment.
+## Exercises the REAL spawn path (build_bird, which -- unlike
+## spawn_offspring -- places an adult directly with no begin_life()
+## hatchling shrink to account for), since the bug was in how the renderer
+## WIRED the scale, not in the formula itself.
+func test_a_spawned_bird_uses_the_real_arts_own_marker_scale():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var illustrated := IllustratedBirdSprite.new()
+	for species in ["sparrow", "robin"]:
+		var bird := renderer.build_bird(parent, species, Vector2.ZERO, 7)
+		assert_almost_eq(
+			bird.scale.x, illustrated.marker_scale(species), 0.0001,
+			"%s must be scaled by IllustratedBirdSprite.marker_scale, not the flat chain tuned for ProceduralBirdSprite's tiny canvas" % species
+		)
+
+
+## Duplicated as literal target widths in IllustratedBirdSprite rather than
+## a live preload back to this file (which already preloads
+## IllustratedBirdSprite -- a preload the other way round is circular) --
+## see IllustratedBirdSprite._TARGET_WORLD_WIDTH's own doc comment. Pinned
+## here, which imports both, so the two cannot silently drift apart: not
+## exact pixel parity (real illustrated art has its own proportions a
+## hand-authored multiplier cannot predict exactly), just the same
+## ordering -- a species FLYER_WORLD_SCALE calls bigger must still render
+## bigger.
+func test_flyer_world_scale_proportions_match_illustrated_bird_sprite():
+	var illustrated := IllustratedBirdSprite.new()
+	var sparrow_ratio: float = AmbientFlyerRenderer.FLYER_WORLD_SCALE["sparrow"]
+	for species in ["robin", "kingfisher", "blackbird"]:
+		var flyer_bigger: bool = AmbientFlyerRenderer.FLYER_WORLD_SCALE[species] > sparrow_ratio
+		var illustrated_bigger: bool = illustrated.marker_scale(species) * _content_width(illustrated.generate_texture(species, 0)) \
+			> illustrated.marker_scale("sparrow") * _content_width(illustrated.generate_texture("sparrow", 0))
+		assert_eq(
+			flyer_bigger, illustrated_bigger,
+			"%s vs sparrow: FLYER_WORLD_SCALE and IllustratedBirdSprite disagree on which is bigger" % species
+		)
+
+
+func _content_width(texture: Texture2D) -> float:
+	var image := texture.get_image()
+	var min_x := image.get_width()
+	var max_x := -1
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.01:
+				min_x = mini(min_x, x)
+				max_x = maxi(max_x, x)
+	return float(max_x - min_x + 1)
+
+
 func test_a_butterfly_chick_is_still_a_butterfly():
 	var parent := Node2D.new()
 	add_child_autofree(parent)
