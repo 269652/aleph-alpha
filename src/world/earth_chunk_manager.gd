@@ -7367,10 +7367,7 @@ func boulder_row_blocks_at_global(global_x: int, global_y: int) -> bool:
 ## live: a dam one tile off the walked diagonal was invisible to the
 ## crest check).
 func wet_row_tiles_at_global(global_x: int, global_y: int) -> Array:
-	var nearest := generator.river_catalog().nearest_river_at(
-		global_x, global_y,
-		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-	)
+	var nearest := generator.nearest_river_at(global_x, global_y)
 	var row: Array = []
 	if nearest.distance_tiles > RiverCatalog.RIVER_HALF_WIDTH_TILES:
 		return row
@@ -7382,10 +7379,7 @@ func wet_row_tiles_at_global(global_x: int, global_y: int) -> Array:
 			if absf(along_dir.dot(Vector2(dx, dy))) > 0.75:
 				continue
 			var tile := Vector2i(global_x + dx, global_y + dy)
-			var tile_nearest := generator.river_catalog().nearest_river_at(
-				tile.x, tile.y,
-				EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-			)
+			var tile_nearest := generator.nearest_river_at(tile.x, tile.y)
 			var across: float = absf(
 				tile_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
 			)
@@ -7396,10 +7390,7 @@ func wet_row_tiles_at_global(global_x: int, global_y: int) -> Array:
 
 func _row_crest_verdict(global_x: int, global_y: int) -> Dictionary:
 	var verdict := {"dam_piece": false, "boulders_closed": false}
-	var nearest := generator.river_catalog().nearest_river_at(
-		global_x, global_y,
-		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-	)
+	var nearest := generator.nearest_river_at(global_x, global_y)
 	if nearest.distance_tiles > RiverCatalog.RIVER_HALF_WIDTH_TILES:
 		return verdict
 	# Closure is judged by LATERAL POSITION, not by tile membership: on a
@@ -7440,11 +7431,7 @@ func _row_crest_verdict(global_x: int, global_y: int) -> Dictionary:
 				continue
 			var tile := Vector2i(global_x + dx, global_y + dy)
 			if modification_at_global(tile.x, tile.y) == DAM_PIECE_ID:
-				var dam_nearest := generator.river_catalog().nearest_river_at(
-					tile.x, tile.y,
-					EarthChunkGenerator.WORLD_WIDTH_TILES,
-					EarthChunkGenerator.WORLD_HEIGHT_TILES
-				)
+				var dam_nearest := generator.nearest_river_at(tile.x, tile.y)
 				var dam_across: float = (
 					dam_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
 				)
@@ -7491,10 +7478,7 @@ func _row_crest_verdict(global_x: int, global_y: int) -> Dictionary:
 func _blocked_wet_across_at(tile: Vector2i):
 	if not flow_boulder_at_global(tile.x, tile.y):
 		return null
-	var tile_nearest := generator.river_catalog().nearest_river_at(
-		tile.x, tile.y,
-		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-	)
+	var tile_nearest := generator.nearest_river_at(tile.x, tile.y)
 	var across: float = (
 		tile_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
 	)
@@ -7528,31 +7512,41 @@ func upstream_river_tile(from: Vector2i, tiles_back: int) -> Vector2i:
 ## tiles, so stepping a whole tile at a time can skip straight past the cell
 ## a dam actually stands on.
 func _course_tile_offset(from: Vector2i, tiles_upstream: float) -> Vector2i:
-	var here := generator.river_catalog().nearest_river_at(
-		from.x, from.y, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-	)
+	var here := generator.nearest_river_at(from.x, from.y)
 	if here.name == "":
 		return from
 	var polylines := RiverCatalog.tile_polylines(
 		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 	)
 	var points: Array = polylines[here.name]
-	var total := 0.0
-	for i in range(points.size() - 1):
-		total += points[i].distance_to(points[i + 1])
+	var total := _course_length(points)
 	if total <= 0.0:
 		return from
 	# A real tile distance along the course, expressed as the fraction of
 	# the whole river that distance represents.
 	var target_fraction := clampf(here.course_fraction - tiles_upstream / total, 0.0, 1.0)
-	return _tile_at_course_fraction(points, target_fraction)
+	return _tile_at_course_fraction(points, target_fraction, total)
 
 
-## The tile sitting `fraction` of the way along a course polyline.
-func _tile_at_course_fraction(points: Array, fraction: float) -> Vector2i:
+## Total length of a course polyline, in tiles -- shared by
+## _course_tile_offset and _tile_at_course_fraction so the same walk is
+## never paid twice for one call (measured: this ran twice per
+## _course_tile_offset call, itself called up to
+## DamImpoundment.MAX_BACKWATER_TILES * 2 + 1 times per _impounded_depth_at
+## walk -- see that function's own doc comment on why fps at any river tile
+## depended on it).
+static func _course_length(points: Array) -> float:
 	var total := 0.0
 	for i in range(points.size() - 1):
 		total += points[i].distance_to(points[i + 1])
+	return total
+
+
+## The tile sitting `fraction` of the way along a course polyline.
+## `total_length`, when the caller already has it (see _course_tile_offset),
+## skips re-walking the same polyline to re-derive it.
+func _tile_at_course_fraction(points: Array, fraction: float, total_length: float = -1.0) -> Vector2i:
+	var total := total_length if total_length >= 0.0 else _course_length(points)
 	var want := total * clampf(fraction, 0.0, 1.0)
 	var travelled := 0.0
 	for i in range(points.size() - 1):
