@@ -92,6 +92,90 @@ func test_a_leaf_sits_between_a_flower_seed_and_a_berry_pip():
 	assert_lt(WindDispersal.WEIGHT_LEAF, WindDispersal.WEIGHT_BERRY_PIP)
 
 
+# -- leaf_ground_drift: repeated wind nudges to litter ALREADY on the ground -
+#
+# Reported directly: "make the wind blowing through leaves make the tumble
+# and swirl more smoothly? it's a hard back forth motion atm". Measured
+# directly (tools/probe_wind_offset_spread.gd) what landing_offset itself
+# actually does for WEIGHT_LEAF under a strong, steady wind: of 30 samples,
+# only 17 (57%) landed within 30 degrees of the wind's own heading, and 9
+# (30%) landed more than 90 degrees off -- genuinely BACKWARDS relative to
+# the wind, some nearly exactly opposite it. That is not a smooth swirl,
+# it is a coin flip -- and it is the right design for landing_offset's
+# actual job (a seed falling ONCE really does scatter near its parent on a
+# still day regardless of which way any breeze blows), just the wrong one
+# for a leaf ALREADY settled on the ground being nudged by the SAME ambient
+# wind repeatedly over time: real windblown litter mostly skitters ALONG
+# the wind's own heading, with only mild lateral wobble, not a fresh
+# independent random direction on every single nudge. landing_offset
+# itself is intentionally left untouched (seed/flower dispersal already
+# depends on its current scatter behaviour); this is a dedicated,
+# separate formula for the one caller that needs directional coherence
+# across MANY repeated nudges of the SAME already-settled object.
+
+func _leaf_drift_angle_from_wind_degrees(seed_value: int, direction: Vector2, strength: float) -> float:
+	var offset := WindDispersal.leaf_ground_drift(seed_value, direction, strength)
+	return rad_to_deg(absf(offset.angle_to(direction)))
+
+
+## The core fix: NEVER more than LEAF_DRIFT_WOBBLE_DEGREES off the wind's
+## own heading, across many different seeds -- unlike landing_offset,
+## whose scatter term is a full independent 0-360 degree roll.
+func test_leaf_ground_drift_never_strays_far_from_the_wind_direction():
+	for seed_value in 200:
+		var angle := _leaf_drift_angle_from_wind_degrees(seed_value, Vector2.RIGHT, 1.0)
+		assert_lte(
+			angle, WindDispersal.LEAF_DRIFT_WOBBLE_DEGREES + 0.01,
+			"seed %d strayed %.1f degrees from the wind" % [seed_value, angle]
+		)
+
+
+## Not an eyeballed number -- strictly under 90 degrees is the one
+## structural property that actually matters (see this section's own doc
+## comment): it guarantees a positive dot product with the wind direction,
+## i.e. every nudge makes real forward progress along the wind, never
+## sideways-or-worse. Whatever the exact wobble bound is tuned to later,
+## it must keep this property.
+func test_leaf_drift_wobble_never_reaches_a_right_angle():
+	assert_lt(WindDispersal.LEAF_DRIFT_WOBBLE_DEGREES, 90.0)
+
+
+## The direct behavioural consequence of the wobble bound: every single
+## drift offset makes real forward progress along the wind, never
+## reverses it -- the exact property landing_offset's own scatter term
+## does NOT have for a leaf (see this section's own measured 30% figure).
+func test_leaf_ground_drift_never_reverses_the_wind_direction():
+	for seed_value in 200:
+		var offset := WindDispersal.leaf_ground_drift(seed_value, Vector2.RIGHT, 1.0)
+		assert_gt(
+			offset.dot(Vector2.RIGHT), 0.0,
+			"seed %d drifted backwards relative to the wind" % seed_value
+		)
+
+
+func test_leaf_ground_drift_still_drifts_whichever_way_the_wind_blows():
+	var east := WindDispersal.leaf_ground_drift(7, Vector2.RIGHT, 1.0)
+	var north := WindDispersal.leaf_ground_drift(7, Vector2.UP, 1.0)
+	assert_gt(east.x, 0.0)
+	assert_lt(north.y, 0.0)
+
+
+func test_a_given_leaf_drift_lands_in_one_place():
+	for seed_value in [0, 11, 512, 9001]:
+		assert_eq(
+			WindDispersal.leaf_ground_drift(seed_value, Vector2.RIGHT, 0.5),
+			WindDispersal.leaf_ground_drift(seed_value, Vector2.RIGHT, 0.5)
+		)
+
+
+func test_leaf_ground_drift_never_leaves_the_world():
+	var limit := WindDispersal.MAX_TRAVEL_TILES * TerrainRenderer.TILE_SIZE
+	for seed_value in 400:
+		assert_lte(
+			WindDispersal.leaf_ground_drift(seed_value, Vector2.RIGHT, 1.0).length(), limit + 0.001
+		)
+
+
 # -- most near, a little far -------------------------------------------------
 
 ## Real wind dispersal is heavy tailed: the bulk falls within a few

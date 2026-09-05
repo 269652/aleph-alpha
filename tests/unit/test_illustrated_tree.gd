@@ -2020,6 +2020,93 @@ func test_a_scaled_piece_has_no_part_transparent_edges():
 			)
 
 
+# -- DOWNSCALING keeps the pixels too, but averages what nearest throws away -
+#
+# Reported live: "trees are very blurry even though sprite art is much
+# crispier". A large illustrated sheet piece is squeezed down into this
+# tree's small canvas -- the opposite direction from the two tests above,
+# which only ever exercise the UPSCALE path (an 8x8 synthetic source scaled
+# UP). Nearest-neighbour on a big DOWNSCALE picks one arbitrary source pixel
+# per destination pixel and discards the rest, which is why real detail a
+# much bigger character-part canvas preserves reads as noisy/coarse on a
+# tree. Genuine area-averaging fixes that -- but naively averaging every
+# source pixel in a region (opaque AND transparent together) is exactly
+# what caused the ORIGINAL winter-branch bug the tests above guard
+# (blending a colour with the transparency around it). The fix keeps alpha
+# BINARY (opaque the instant a region contains ANY opaque source pixel) and
+# averages ONLY among the already-opaque pixels a region actually holds --
+# real averaging for a dense canopy, no smeared halo for a sparse branch.
+
+func test_downscaling_a_dense_two_colour_image_blends_at_the_boundary():
+	var source := Image.create(90, 10, false, Image.FORMAT_RGBA8)
+	var color_a := Color(1.0, 0.0, 0.0, 1.0)
+	var color_b := Color(0.0, 0.0, 1.0, 1.0)
+	for y in 10:
+		for x in 90:
+			source.set_pixel(x, y, color_a if x < 45 else color_b)
+	# Dest column 1 spans source x=[30,60) -- straddles the x=45 boundary.
+	var scaled: Image = ProceduralTreeSprite.scale_piece(source, Vector2i(3, 1))
+	var middle: Color = scaled.get_pixel(1, 0)
+	assert_false(
+		middle.is_equal_approx(color_a) or middle.is_equal_approx(color_b),
+		(
+			"downscaling straight across a colour boundary should blend the two, "
+			+ "not arbitrarily pick one source colour -- got %s"
+		) % middle
+	)
+
+
+func test_downscaling_produces_no_half_transparent_edges():
+	var source := Image.create(90, 90, false, Image.FORMAT_RGBA8)
+	source.fill(Color(0.0, 0.0, 0.0, 0.0))
+	for i in 90:
+		source.set_pixel(i, i, Color(1.0, 1.0, 1.0, 1.0))
+	var scaled: Image = ProceduralTreeSprite.scale_piece(source, Vector2i(9, 9))
+	for y in scaled.get_height():
+		for x in scaled.get_width():
+			var alpha: float = scaled.get_pixel(x, y).a
+			assert_true(
+				alpha == 0.0 or alpha == 1.0,
+				"a downscaled pixel came out half-transparent (%f)" % alpha
+			)
+
+
+## The regression guard: a thin, sparse stroke on a large transparent
+## source, downscaled hard -- the exact shape of the original bare-winter-
+## branch bug, at real downscale magnitude rather than the small upscale
+## the two tests above use. Must invent no blended-with-transparency
+## colour, the same property test_scaling_a_piece_invents_no_new_colours
+## already pins for upscaling.
+## 0.01 tolerance, not is_equal_approx's own tight default: every diagonal
+## destination pixel here averages several source samples that are all
+## bit-identical after RGBA8 quantisation, and summing the same float
+## repeatedly then dividing back down does not always reconstruct the
+## exact original bit pattern -- a real, expected floating-point artifact
+## of averaging, not a sign the colour actually drifted toward anything
+## else. 0.01 is comfortably above that noise and comfortably below a
+## single RGBA8 quantisation step blending toward a genuinely different
+## colour (transparent black, in particular).
+func test_downscaling_a_sparse_stroke_does_not_smear_into_a_translucent_halo():
+	var source := Image.create(90, 90, false, Image.FORMAT_RGBA8)
+	source.fill(Color(0.0, 0.0, 0.0, 0.0))
+	for i in 90:
+		source.set_pixel(i, i, Color(0.6, 0.3, 0.1, 1.0))
+	var branch: Color = source.get_pixel(0, 0)
+	var scaled: Image = ProceduralTreeSprite.scale_piece(source, Vector2i(9, 9))
+	for y in scaled.get_height():
+		for x in scaled.get_width():
+			var colour: Color = scaled.get_pixel(x, y)
+			var known: bool = (
+				(
+					absf(colour.r - branch.r) < 0.01
+					and absf(colour.g - branch.g) < 0.01
+					and absf(colour.b - branch.b) < 0.01
+				)
+				or colour.a == 0.0
+			)
+			assert_true(known, "downscaling invented %s at %d,%d" % [colour, x, y])
+
+
 # -- what the four frames actually DRAW --------------------------------------
 #
 # TreePhenology (src/world/tree_phenology.gd) now decides WHEN a tree wears

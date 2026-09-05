@@ -1961,6 +1961,8 @@ Two bugs surfaced writing it: warmth could pull ripening back into SPRING, i.e. 
 
 ✅ **Old growth: trees keep slowly growing for a century past simple maturity (2026-09-05).** Asked directly: "make trees another 30% bigger, varying by age... so a 100 year old tree is bigger than a 10 year old tree." `TreeGrowth.scale_at` used to flatline at exactly 1.0 the instant a tree crossed `MATURITY_SECONDS` (three simulated years) -- every tree that had finished its fast early growth read as permanently, identically sized, however long it actually stood. Now it keeps climbing, with the same ease-out shape the seedling curve already uses, toward a new `OLD_GROWTH_BONUS` (0.3, the exact figure asked for) reached at `OLD_GROWTH_SECONDS` (a century, the exact age named in the request). `stage_at`/`is_productive`/fruiting-and-spread eligibility (a wholly separate clock, `TreeGenome.maturity_time` via `TreeMaturity`) and timber/log/stick/beam/plank yield (`FelledTree`, which already re-clamps its own `growth_scale` input back to `[0, 1]` internally) are all deliberately untouched -- old growth changes how a tree LOOKS, never what felling it is worth or when it can bear/spread. `ChoppableTree.growth_scale`'s own setter clamp raised from `[0.05, 1.0]` to `[0.05, 1.0 + TreeGrowth.OLD_GROWTH_BONUS]` to let the bonus actually reach the rendered node -- it was silently discarding anything past 1.0 before. `INF` keeps its existing, separate meaning ("this predates the session, skip aging entirely") rather than being redefined as "ancient": guarded explicitly in `scale_at` before the new old-growth range check, so `test_an_infinite_age_is_fully_mature` needed no change at all. The map-generated forest (`TreeRenderer.spawn_trees`) used to hand every original tree the identical `age_seconds=INF`, which would otherwise have meant zero age variation across a real forest -- it now seeds each tree a real, deterministic, per-tile FINITE age (the same `PixelNoise.range_index`-keyed-off-tile-coordinates idiom `_stand_position` already uses for placement jitter) spanning from freshly mature to double `OLD_GROWTH_SECONDS`, so a generated forest genuinely shows the age structure asked for -- confirmed live: the same fixture forest chunk spawns trees of visibly different sizes, some reaching the old-growth ceiling, none ever a sapling. 6 new tests across `test_tree_growth.gd`, `test_choppable_tree.gd`, `test_tree_renderer.gd`, and `test_felled_tree.gd`; 3 pre-existing tests that sampled ages just past `MATURITY_SECONDS` and expected an exact `1.0` had their tolerance widened (not their intent changed) to allow for the small old-growth head start a tree that age has now genuinely earned.
 
+✅ **Tree art downscaling now averages instead of nearest-sampling one arbitrary pixel (2026-09-05).** Second half of the same live blur report the camera-zoom revert above only partly fixed: "trees are very blurry even though sprite art is much crispier." Root cause investigated and laid out for the user before touching anything, since the obvious fix (more native resolution) directly conflicts with an already-tested floor -- `ArtResolution.DETAIL_MULTIPLIER` is deliberately capped at 2 specifically because a bigger multiplier makes art stop reading as chunky pixel art at all (a real, previously-rejected regression, see `ArtResolution.DETAIL_MULTIPLIER`'s own doc comment), and 2 is already the largest value that clears that floor at the current (reverted) 4x zoom. `ProceduralTreeSprite.scale_piece` squeezes a large illustrated sheet piece down into the tree's small, UNCHANGED 40x52px canvas (`SIZE`) -- previously NEAREST-neighbour end to end, which on a big downscale amounts to picking one arbitrary source pixel per destination pixel and discarding the rest (confirmed live: a rendered close-up showed flat, blocky colour regions, not the character's own much more textured look). Fixed with genuine area-averaging for the DOWNSCALE direction specifically (UPSCALING -- a small synthetic source scaled up, what the two pre-existing tests exercise -- stays exactly NEAREST, unchanged): each destination pixel now averages the RGB of every OPAQUE source pixel its region actually contains, ignoring transparent ones so they can never wash out a real colour, and is itself opaque the instant that region holds at least one opaque source pixel, never half-transparent. That binary-alpha rule is what keeps this from reintroducing the winter-branch smearing bug NEAREST-only was originally chosen to fix (`test_scaling_a_piece_invents_no_new_colours`/`test_a_scaled_piece_has_no_part_transparent_edges`, both still green, both upscale cases untouched by this change) -- there is no blending an opaque colour with the transparency around it any more, only with other real, already-opaque colours, which is what a proper downsample should do. 3 new tests confirm the new property directly: a genuine two-colour blend at a boundary (nearest could never produce a third colour), binary alpha holds for a real downscale too, and a sparse diagonal stroke downscaled hard invents no colour beyond the branch's own (the direct regression guard, at real downscale magnitude rather than the pre-existing tests' small upscale). Confirmed live with a rendered close-up: visibly more textured/detailed canopy shading at the exact same final resolution, not just a numeric pass. Native resolution itself (more final pixels, not just better-chosen ones) is still open -- see art_resolution.md's Phase 3.
+
 
 ### Seasons turn gradually; smell becomes a real sense
 
@@ -8890,6 +8892,95 @@ a late ramp only once `canopy_turn_progress` starts moving. Two parts:
    suite, the real-GPU smoke test, and the full leaf-fall test battery in
    `test_earth_chunk_manager.gd` — all green. `leaf_litter.md` updated
    throughout ("When leaves fall", "What falls", "Rendering", "Status").
+
+✅ **Follow-up (2026-09-05): "leaf decay should be 3 seasons"** —
+clarified when asked which of three readings was meant: "leafs should
+take roughly 270 days to rot / decay / vanish". Two parts:
+
+1. **`LeafLitterField.LIFETIME` is now a real ~270-real-world-day
+   lifespan, not an arbitrary 90-second tidiness cutoff.** 270 real-world
+   days is ~3 of the 4 real seasons a year has (~91 days each) — the
+   genuine real-world leaf-litter decomposition timescale — expressed as
+   exactly 3/4 of a real year and translated through the same real-year
+   → compressed-game-year ratio (`SeasonCycle.SECONDS_PER_YEAR`) every
+   other real-world-grounded timing constant in this codebase already
+   uses, the same idiom `TreePhenology`'s own blossom timing already
+   established for turning a real biological duration into game-playable
+   time — applied to litter for the first time.
+2. **A settled leaf now decays through exactly 3 stages, not 2.**
+   `DECAY_TO_FADING_SECONDS`/`DECAY_TO_WINTER_SECONDS`, pinned at an even
+   three-way split of the new `LIFETIME` (one third, two thirds), advance
+   a leaf's own `season` one-way from its fall colour through `"fading"`
+   to the terminal `"winter"` — matching the report's own framing exactly:
+   one real season fresh, one fading, one fully decayed before vanishing.
+   `LeafLitterAtlas` gained a matching `"fading"` cell: no species has
+   real half-decayed litter art, so it derives from a straight per-pixel
+   blend of that species' own already-built autumn stamp and its
+   already-derived winter stamp, at `FADING_BLEND` (pinned at exactly
+   0.5 — the same midpoint the timing split already lands on), needing no
+   new shading logic since both source stamps already carry real,
+   correctly-shaded content.
+
+12 new/rewritten tests in `test_leaf_litter_field.gd` (43/43 in the file)
+and 5 new tests in `test_leaf_litter_atlas.gd` (21/21 in the file), all
+green — thresholds and the blend pinned by test rather than eyeballed,
+the fresh/fading/winter progression checked at each boundary for every
+origin season. Visually verified beyond the numeric tests
+(`tools/probe_fading_stamp.gd`): every species shows a clear, distinct
+autumn → fading → winter progression, not two of the three stages
+reading as indistinguishable. Full field/atlas/renderer suite and the
+real-GPU smoke test re-confirmed green after both changes.
+
+**Named, not silently assumed safe: standing leaf-litter population at
+the new, much longer `LIFETIME` has not been live-performance-verified.**
+The existing 750–960-leaves-per-chunk burst test (previous entry) seeded
+a fixed count directly and watched FPS over a 30-real-second window that
+never actually depended on `LIFETIME`'s own value, so it does not by
+itself confirm safety at whatever standing population a much longer real
+accumulation window (up to ~270 real-world-day-equivalent, vs. the old 90
+seconds) could permit during an actual long play session, especially
+combined with autumn's own now constantly-increasing shed rate. See
+`leaf_litter.md`'s own Status entry for the same flagged gap.
+
+✅ **Follow-up (2026-09-05): "make the wind blowing through leaves make
+the tumble and swirl more smoothly? it's a hard back forth motion atm".**
+Root-caused with a direct measurement (`tools/probe_wind_offset_spread
+.gd`), not guessed at: `WindDispersal.landing_offset`'s own scatter term
+is a fully independent 0-360 degree random angle — right for a SEED
+falling once (it really does scatter near its parent on a still day
+regardless of which way any breeze blows), wrong for a leaf ALREADY
+settled on the ground being nudged by the SAME ambient wind repeatedly.
+Measured: of 30 samples under a strong, steady wind, only 57% landed
+within 30° of the wind's own heading and 30% landed more than 90° off —
+genuinely backwards, several nearly exactly opposite the wind — so a
+single leaf's consecutive wind nudges could easily alternate between
+"blown downwind" and "blown upwind" purely by chance.
+
+New `WindDispersal.leaf_ground_drift`: reuses the exact same heavy-tailed
+reach roll and buoyant near-field scatter MAGNITUDE `landing_offset`
+already establishes (so the distance distribution every existing
+consumer — e.g. `LeafLitterRenderer`'s own tumble-turn scaling — already
+expects is unchanged), but bounds the ANGLE to `LEAF_DRIFT_WOBBLE_DEGREES`
+(45°, half the 90° structural ceiling that guarantees a positive dot
+product with the wind — i.e. real forward progress along the wind, never
+sideways-or-worse) around the wind's own heading, instead of an
+independent full-circle roll. `landing_offset` itself is untouched — seed/
+flower dispersal already depends on its current scatter shape; this is a
+dedicated formula for the one caller (`LeafLitterField`'s own throttled
+wind roll) that needs directional coherence across many repeated nudges
+of the same already-settled object.
+
+6 new tests in `test_wind_dispersal.gd` (34/34 in the file): never strays
+past the wobble bound across 200 seeds, never reverses the wind direction
+across 200 seeds, the wobble bound itself never reaches a right angle,
+still drifts whichever way the wind blows, deterministic, never leaves
+the world. Retroactively verified these catch a real regression
+(temporarily reverted to an independent angle roll, confirmed 2 of 4
+targeted tests failed for the right reason, restored). Re-simulated the
+exact scenario that first exposed the bug: every hop now lands within the
+wobble bound of the wind's own heading instead of swinging across ~170°
+between consecutive hops. Full renderer suite and the real-GPU smoke test
+re-confirmed green.
 
 <details>
 <summary>First pass (superseded above), kept for history</summary>
