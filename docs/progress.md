@@ -3125,6 +3125,70 @@ Creature-driven wear is out of scope for the same documented reason
 `PebbleDispersion` already is (an O(creatures × nearby tiles) scan nothing
 yet needs enough to justify).
 
+✅ **The Trail tier (2026-09-05).** Reported live: "path scarring only is
+computed once and walking back and forth doesn't deepen it." The wear
+number was never the bug — `PathScarring.wear_at` already climbed all the
+way to `MAX_WEAR` on repeated crossings. What was missing was legibility: a
+path re-textured once at `WORN_THRESHOLD` and nothing further was ever
+rendered or named, however much more it was walked, so a tile crossed once
+looked identical to one walked to the ground. `docs/concept/
+infrastructure.md` already specified this exact missing tier, deliberately
+deferred above — this builds it rather than inventing a new design.
+`PathScarring.TRAIL_THRESHOLD` is deliberately NOT a new number: it IS
+`MAX_WEAR`, the ceiling this module already enforced, seen as a tier
+rather than picked again above or below it. Rendered as its own flat,
+hard-edged, darker atlas tile (`TerrainRenderer.TRAIL_TILE_ID`, appended
+after every other tile family so no existing index shifts) and just as
+causally real as Path: `EarthChunkManager.record_trail_formed_if_new`/
+`record_trail_reclaimed` fire on the SAME `path:<x>_<y>` entity Path
+already uses, and tapering from Trail back to Path is a distinct
+transition from a full reclaim — it does not chain into ruin formation the
+way disappearing does. `record_path_reclaimed`'s own guard widens
+(`_CURRENTLY_WORN_EVENTS`) to recognize a last-seen `trail_formed` as a
+valid reclaim precedent too, so a tile that decays straight through Trail
+to bare ground in one gap is still handled correctly. `World.
+_step_path_scarring` resolves multiplayer internally rather than taking an
+already-resolved player the way its siblings do, so it is covered by a
+source-contract test on the function body
+(`test_world_path_scarring_trail_wiring.gd`, 8 tests) rather than a live
+one — the same shape `test_world_simulation_ownership.gd` already uses for
+`_step_ecology_batch`'s own wiring. `PathScarring` 18/18 (8 new),
+`TerrainRenderer` 161/161 (4 new plus 3 pre-existing tile-count tests
+updated for the new tile), `EarthChunkManager`'s trail-tagged subset 8/8.
+
+✅ **Snow no longer scars grass into permanent dirt (2026-09-05).**
+Reported live: "snow scarring should not be brown tint but rather
+transparent without tint." `SnowBombShader`'s own `fragment()` already had
+no tint of its own — it writes `vec4(0.0)` wherever it has nothing to draw
+(confirmed by reading the shader source directly, not assumed). The brown
+was `PathScarring`'s own permanent `EARTH_TILE_ID` dirt, painted onto
+grass/forest tiles regardless of season, showing through wherever the snow
+overlay above it wasn't fully opaque. Fixed at the source: new wear no
+longer accumulates while `EarthChunkManager.snow_depth()` is above zero —
+gated at the `step_on` call only, so an already-scarred path from before
+the snow fell still decays/recovers and repaints normally in winter; only
+FRESH scarring is what snow now prevents. Same source-contract test file
+as the Trail tier above (`test_world_path_scarring_trail_wiring.gd`).
+
+✅ **Snow footprints deepen gradually again, for the player (2026-09-05).**
+Reported live: "should also remove snow gradually when walking back and
+forth." `EarthChunkManager.tread_snow_at`'s player call used to fire every
+single rendered frame with no gate at all — a tile saturated to
+`SnowTrail.MAX_TREAD` within about three frames of first entry
+(`TREAD_PER_STEP=0.34`) regardless of whether the player kept walking,
+reading as one instant flat clearing rather than a gradual one, and making
+a return visit pointless since the tile was already maxed out after the
+very first pass. Now debounced by tile entry (`_last_player_snow_tile`),
+the same shape `World._last_scar_step_tile` already uses for
+`PathScarring` — leaving a tile and returning to it is a genuinely new
+entry and keeps deepening the tread further, up to `MAX_TREAD`. A
+creature's own call (`move_trail_window=false`) is deliberately NOT
+debounced this way, a real, narrower scope decision (would need a
+per-creature "last tile") rather than an oversight — the reported
+complaint was specifically about the player's own repeated walking. 3 new
+tests in `test_earth_chunk_manager.gd`; the pre-existing snow-trail tests
+(each calling `tread_snow_at` only once per position) are unaffected.
+
 ✅ **A settlement's town/city tier and specialization are both derived from
 real flows, never a stored tag** (`settlement_tier.gd`), the literal
 `docs/emergence/04-settlements-cities-infrastructure.md` "City threshold"/
