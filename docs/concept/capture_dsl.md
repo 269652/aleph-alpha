@@ -169,15 +169,28 @@ Mirrors [spell_runtime.md](spell_runtime.md)'s own resolution-order section:
 
 ## Status / mechanisms
 
-- ⬜ `capture_parser.gd` / `capture_atom_catalog.gd` / `capture_physics.gd` /
+- ✅ `capture_parser.gd` / `capture_atom_catalog.gd` / `capture_physics.gd` /
   `capture_executor.gd` / `capture_atom_effects.gd` / `capture_book.gd`
-- ⬜ `Item.captive_species`; `glass_bottle` catalog + icon entry
-- ⬜ `capture_item_actions.gd` (the "Put into bottle" scorer)
-- ⬜ Player wiring: probabilistic `_throw_net`, `_release_net`,
-  bottle-transfer, updated tests
-- ⬜ `bottled_creature_wander.gd` (confined fly/rest state)
-- ⬜ `illustrated_glass_bottle_sprite.gd` (the fixed 3×2 sheet reader)
-- ⬜ `bottled_creature_view.gd` and its `DroppedItem` wiring
+- ✅ `Item.captive_species`; `glass_bottle` catalog + icon entry. The
+  `move_captive` effect reports the species that moved, not a generic
+  curiosity item, so a container can be rendered as the specific creature
+  it holds — `ItemStack.can_stack_with` was extended to also require
+  matching `captive_species`, so a freshly-loaded container can never
+  silently merge into a stack of empty ones.
+- ✅ `capture_item_actions.gd` (the "Put into bottle" scorer)
+- ✅ Player wiring: probabilistic `_throw_net`/`_attempt_net_catch`,
+  `_release_net`, `_bottle_captive`, `_perform_context_action` (the
+  hover-verb-then-tool-self-action fallback). Menagerie bonding keeps its
+  exact shape — the roll only gates whether the catch happens at all.
+- ✅ `bottled_creature_wander.gd` (confined fly/rest state)
+- ✅ `illustrated_glass_bottle_sprite.gd` (the fixed 3×2 sheet reader)
+- ✅ `bottled_creature_view.gd` and its `DroppedItem` wiring — a dropped,
+  loaded `glass_bottle` shows a live creature; a species
+  `ProceduralButterflySprite` doesn't cover (birds) gets the bottle alone.
+  `BottledCreatureView.TARGET_WORLD_WIDTH_PX` is a reasoned starting
+  point, not yet visually confirmed against the real art in a live
+  screenshot — the same honest gap `item_illustrations.md` names for the
+  armor slots.
 - ⬜ **The restrain-and-struggle tier (lasso/snare/trap/reinforced rope) is
   not expressed in this DSL.** It stays on `taming.gd`'s existing
   `break_free_chance`/`hold_chance` model, which is live, tested, and

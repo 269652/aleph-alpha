@@ -38,13 +38,12 @@ const DnaCrossover = preload("res://src/gameplay/dna_crossover.gd")
 ## inherit (at the end of a courtship that produced young, which is the path
 ## that carries a parent's boldness into its child).
 ##
-## Two honest gaps, named here rather than left to be discovered:
+## One honest gap, named here rather than left to be discovered (a second
+## used to be listed here -- netting was once unwired; docs/concept/
+## capture_dsl.md's Capture DSL closed that gap, and Player._attempt_net_
+## catch now reads THIS trait directly at catch time, not just at flee/dance
+## time, so the selection pressure this file exists for is live, not dormant):
 ##
-## - NOTHING NETS A BUTTERFLY IN THE LIVE GAME YET. `butterfly_net` is
-##   craftable and CaptureTool.is_ambient_flyer_species knows what it is for,
-##   but no interaction removes an ambient flyer from the world. The selection
-##   pressure is therefore real in the model and in the test, and dormant in
-##   the running game until something swings that net.
 ## - Ambient flyers are not persisted. A chunk's flyers are re-derived from
 ##   their cells' seeds on load, so a meadow the player has been selecting on
 ##   reverts to its founding personalities when that chunk unloads. Boldness
