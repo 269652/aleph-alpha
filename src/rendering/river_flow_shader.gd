@@ -195,6 +195,12 @@ uniform float drift_px_per_mps = 20.0;
 // translated noise TILES at and both drifts wrap modulo -- what keeps the
 // direction-scaled translations bounded (see the drift lines in fragment()).
 uniform float drift_period = 20.0;
+// How wide a window either drift's crossfade blends across, either side
+// of its own wrap, in noise cells -- see the crossfade lines in
+// fragment() and RiverFlowShader.WRAP_CROSSFADE_CELLS for why a wrap
+// needs one at all (the noise tiling only hides a wrap at an exactly
+// axis-aligned flow direction).
+uniform float wrap_crossfade_cells = 1.0;
 // The dim end of the brightness pulse that streams along every stroke.
 // Deep enough that a bright segment travelling down a line is obvious,
 // never zero, so a dim segment is still a stroke.
@@ -247,10 +253,14 @@ float value_noise(vec2 p) {
 }
 
 // The same noise on a lattice that wraps every `period` cells, so a
-// translation by exactly one period is the identity. Every TIME-translated
-// sample reads this: the translation wraps at the same period, so the wrap
-// is invisible and the direction-scaled offset stays bounded (the far-time
-// shredding -- see the drift lines in fragment()).
+// translation by exactly one period ALONG X OR Y ALONE is the identity --
+// x and y wrap separately. Every TIME-translated sample reads this: the
+// translation wraps at the same period, so the wrap stays bounded (the
+// far-time shredding -- see the drift lines in fragment()). That bound
+// alone does not make the wrap INSTANT invisible for a direction-scaled
+// shift (dir * period): that shift is only a multiple of the period on
+// BOTH axes when dir itself is exactly axis-aligned. See
+// wrap_crossfade_weight for what actually hides the instant.
 float value_noise_tiled(vec2 p, float period) {
 	vec2 i = floor(p);
 	vec2 f = fract(p);
@@ -262,6 +272,16 @@ float value_noise_tiled(vec2 p, float period) {
 		mix(value_hash(vec2(i0.x, i1.y)), value_hash(i1), f.x),
 		f.y
 	);
+}
+
+// Fades from 1 (fully blend toward a drift's crossfade twin) to 0 as
+// `distance` (cells to the nearest wrap point) grows past
+// wrap_crossfade_cells. Mirrored on the CPU by
+// RiverFlowShader.wrap_crossfade_weight -- see the drift and bend_drift
+// lines in fragment() for what this actually hides.
+float wrap_crossfade_weight(float distance_to_wrap) {
+	float t = clamp(distance_to_wrap / wrap_crossfade_cells, 0.0, 1.0);
+	return 1.0 - t * t * (3.0 - 2.0 * t);
 }
 
 // ONE expanding wave packet -- character for character the sea's own
@@ -776,6 +796,28 @@ void fragment() {
 	float bend = (value_noise_tiled(eddy_p, drift_period) - 0.5
 		+ (value_noise_tiled(eddy_p * eddy_detail_frequency + vec2(19.7, 7.3), drift_period * eddy_detail_frequency) - 0.5) * eddy_detail_weight)
 		* turbulence_strength * shear * (1.0 + boulder_wake * boulder_wake_gain * moving);
+	// THE WRAP INSTANT ITSELF -- distinct from the far-time shredding above:
+	// bend_drift's wrap is a genuine jump of one whole drift_period, and
+	// multiplying it by flow_dir only leaves value_noise_tiled unchanged
+	// when flow_dir is exactly axis-aligned (see value_noise_tiled's own
+	// comment) -- every other bearing pops eddy_p onto an unrelated point
+	// in the tile. Crossfaded toward a half-period-offset twin, exactly the
+	// way the two ADVECT phases already hide each other's own reset, but
+	// only within wrap_crossfade_cells of the actual wrap: the weight is 0
+	// everywhere else, so the everyday bend is untouched.
+	float bend_drift_weight = wrap_crossfade_weight(min(bend_drift, drift_period - bend_drift));
+	if (bend_drift_weight > 0.0) {
+		float bend_drift_alt = mod(
+			TIME * surface_px_per_s(drift_speed, moving) * noise_scale * bend_drift_fraction * eddy_scale
+				+ drift_period * 0.5,
+			drift_period
+		);
+		vec2 eddy_p_alt = p * eddy_scale - flow_dir * bend_drift_alt;
+		float bend_alt = (value_noise_tiled(eddy_p_alt, drift_period) - 0.5
+			+ (value_noise_tiled(eddy_p_alt * eddy_detail_frequency + vec2(19.7, 7.3), drift_period * eddy_detail_frequency) - 0.5) * eddy_detail_weight)
+			* turbulence_strength * shear * (1.0 + boulder_wake * boulder_wake_gain * moving);
+		bend = mix(bend, bend_alt, bend_drift_weight);
+	}
 	vec2 q = p + flow_perp * bend;
 	// The smear direction is the FLOW direction and nothing else. Rotating
 	// it by the eddy field (an attempt at whirlier bends) sawed every
@@ -807,6 +849,14 @@ void fragment() {
 	// fragment's own: TIME times a speed that varies along the reach is
 	// the same unbounded divergence again, direction or no direction.
 	float drift = mod(TIME * drift_px_per_mps * drift_speed * moving * noise_scale, drift_period);
+	// THE WRAP INSTANT ITSELF -- same caveat as bend_drift above (see
+	// value_noise_tiled's own comment): crossfaded toward a half-period-
+	// offset twin within wrap_crossfade_cells of the actual wrap, weight 0
+	// (today's plain drift, untouched) everywhere else.
+	float drift_weight = wrap_crossfade_weight(min(drift, drift_period - drift));
+	float drift_alt = mod(
+		TIME * drift_px_per_mps * drift_speed * moving * noise_scale + drift_period * 0.5, drift_period
+	);
 	// Triangular weight: 1 at a phase's birth, 0 at its death.
 	float blend = abs(1.0 - 2.0 * phase_a);
 	float n;
@@ -823,6 +873,12 @@ void fragment() {
 		) + vec2(1e-6, 0.0));
 		float sample_a = line_field(q - flow_dir * (advect_strength * phase_a * advect_gate + drift), dir_start, dir_end);
 		float sample_b = line_field(q - flow_dir * (advect_strength * phase_b * advect_gate + drift), dir_start, dir_end);
+		if (drift_weight > 0.0) {
+			float sample_a_alt = line_field(q - flow_dir * (advect_strength * phase_a * advect_gate + drift_alt), dir_start, dir_end);
+			float sample_b_alt = line_field(q - flow_dir * (advect_strength * phase_b * advect_gate + drift_alt), dir_start, dir_end);
+			sample_a = mix(sample_a, sample_a_alt, drift_weight);
+			sample_b = mix(sample_b, sample_b_alt, drift_weight);
+		}
 		n = mix(sample_a, sample_b, blend);
 	} else {
 		// STILL WATER'S CHEAP PATH: the sea and every lake are most of
@@ -1598,6 +1654,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("wader_wake_trail", WADER_WAKE_TRAIL)
 	material.set_shader_parameter("drift_px_per_mps", DRIFT_PX_PER_MPS)
 	material.set_shader_parameter("drift_period", DRIFT_PERIOD_CELLS)
+	material.set_shader_parameter("wrap_crossfade_cells", WRAP_CROSSFADE_CELLS)
 	material.set_shader_parameter("fast_flow_m_s", FAST_FLOW_M_S)
 	material.set_shader_parameter("line_count", LINE_COUNT)
 	material.set_shader_parameter("across_line_scale", ACROSS_LINE_SCALE)
