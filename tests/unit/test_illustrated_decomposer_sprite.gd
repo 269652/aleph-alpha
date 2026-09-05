@@ -132,22 +132,23 @@ func test_marker_scale_falls_back_to_one_for_an_unregistered_species():
 
 
 # -- ant/bug now have their OWN world width, not one shared constant: ants
-# read as half their old size, and a carrion bug is a genuinely different,
-# larger insect that was never reported as oversized alongside them (see
-# docs/concept/soil_fauna.md "Ants at half their old size"). ----------------
+# read smaller than their old size, and a carrion bug is a genuinely
+# different, larger insect that was never reported as oversized alongside
+# them (see docs/concept/soil_fauna.md "Ants at half their old size"). A
+# literal halving (6.0 -> 3.0) overshot into genuinely invisible -- reported
+# live as "I see no ant whatsoever" -- so the real pinned value is a 25%
+# reduction, not 50% (see that doc's own 2026-09-05 follow-up). -------------
 
-func test_ant_world_width_is_pinned_to_its_new_halved_value():
-	assert_eq(IllustratedDecomposerSprite.ANT_WORLD_WIDTH, 3.0)
+func test_ant_world_width_is_pinned_to_its_corrected_value():
+	assert_eq(IllustratedDecomposerSprite.ANT_WORLD_WIDTH, 4.5)
 
 
 func test_bug_world_width_is_unchanged_from_the_old_shared_constant():
 	assert_eq(IllustratedDecomposerSprite.BUG_WORLD_WIDTH, 6.0)
 
 
-func test_ant_is_exactly_half_the_width_of_bug():
-	assert_almost_eq(
-		IllustratedDecomposerSprite.ANT_WORLD_WIDTH * 2.0, IllustratedDecomposerSprite.BUG_WORLD_WIDTH, 0.001
-	)
+func test_ant_is_smaller_than_bug_but_not_by_half():
+	assert_lt(IllustratedDecomposerSprite.ANT_WORLD_WIDTH, IllustratedDecomposerSprite.BUG_WORLD_WIDTH)
 
 
 ## The carry pose (body + cargo) draws a visibly wider silhouette than plain

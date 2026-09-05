@@ -81,8 +81,13 @@ func test_mound_world_scale_actually_produces_the_declared_world_width():
 	)
 
 
-## Halved from its old value (7.0 -> 3.5) -- reported oversized once mounds
-## were actually visible in play (see docs/concept/soil_fauna.md "Ants at
-## half their old size").
-func test_mound_world_width_is_pinned_to_its_new_halved_value():
-	assert_eq(ProceduralAntMoundSprite.MOUND_WORLD_WIDTH, 3.5)
+## Shrunk from its old value (7.0) -- reported oversized once mounds were
+## actually visible in play (see docs/concept/soil_fauna.md "Ants at half
+## their old size"). A literal halving to 3.5 overshot the OTHER way for
+## the ant sprite it sits beside (reported live: "tiny... no ant
+## whatsoever") -- the mound itself read as merely "tiny" rather than
+## invisible at 3.5, but the corrected, less aggressive 25% reduction
+## (not 50%) applies here too, preserving the original 6:7 ant:mound
+## proportion (see that doc's own 2026-09-05 follow-up).
+func test_mound_world_width_is_pinned_to_its_corrected_value():
+	assert_eq(ProceduralAntMoundSprite.MOUND_WORLD_WIDTH, 5.25)

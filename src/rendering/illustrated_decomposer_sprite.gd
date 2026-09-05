@@ -31,12 +31,18 @@ const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 const CANVAS_SIZE := Vector2i(340, 300)
 const BASELINE_Y := 280
 
-## How wide (world pixels) an ant should read on screen -- halved from the
+## How wide (world pixels) an ant should read on screen -- shrunk from the
 ## art's own old shared width (see BUG_WORLD_WIDTH's doc comment): reported
 ## as oversized once ants/mounds actually had a rendered presence in play
 ## (docs/concept/soil_fauna.md "Ants at half their old size"), not when
 ## this was pure background population math with nothing to look at yet.
-const ANT_WORLD_WIDTH := 3.0
+## A literal halving (6.0 -> 3.0) overshot the other way -- reported live
+## right after relaunch as "I see no ant whatsoever": a thin, many-legged,
+## low-contrast silhouette at ~3 world pixels wide against a 16px tile is
+## genuinely sub-perceptual, not merely small. Corrected to a 25% reduction
+## from the original instead of 50% (see that doc's own 2026-09-05
+## follow-up) -- smaller than before, but not invisible.
+const ANT_WORLD_WIDTH := 4.5
 
 ## How wide (world pixels) a carrion bug should read on screen -- matches
 ## ProceduralDecomposerSprite.SIZE (12) drawn at ArtResolution.SPRITE_SCALE

@@ -2034,13 +2034,23 @@ func _leaf_litter_field_for(tree_position: Vector2) -> LeafLitterField:
 ## ships off by default (see that constant's own doc comment); pass
 ## force_enabled=false for the one test that specifically wants to see the
 ## flag's OFF behaviour instead.
+## `force_enabled` sets LEAF_LITTER_ENABLED to EXACTLY this value for the
+## duration of the lookup, in both directions -- not just "true, or else
+## leave it at whatever the ambient default currently is". That distinction
+## used to be invisible (this helper's own `if force_enabled: ... = true`,
+## with no else, happened to coincide with the real default being false),
+## until flipping the real default to true silently broke
+## test_step_fruiting_adds_no_leaf_when_leaf_litter_disabled's own
+## `force_enabled=false` call, which had never actually been forcing
+## anything off at all -- it was only ever coasting on an ambient default
+## that happened to already be false. Fixed here rather than left as a
+## trap for the next default flip.
 func _find_a_fallen_leaf(
 	species_id: String, tree_position: Vector2, player_pixel: Vector2,
 	attempts: int = _LEAF_ROLL_ATTEMPTS, force_enabled: bool = true
 ) -> Dictionary:
 	var previous_enabled := EarthChunkManager.LEAF_LITTER_ENABLED
-	if force_enabled:
-		EarthChunkManager.LEAF_LITTER_ENABLED = true
+	EarthChunkManager.LEAF_LITTER_ENABLED = force_enabled
 	var field := _leaf_litter_field_for(tree_position)
 	var result := {}
 	for attempt in attempts:
@@ -2162,18 +2172,28 @@ func test_a_leaf_lands_near_its_own_tree():
 	)
 
 
-# -- LEAF_LITTER_ENABLED: an off-by-default deactivation switch ---------------
+# -- LEAF_LITTER_ENABLED: on by default again -------------------------------
 #
-# Requested directly: "deactivate leaf littering". Same shape as the
-# pre-GPU-rewrite kill switch this project already used once (see git
-# history / docs/progress.md) -- a flat off switch on step_fruiting's own
-# leaf-fall block, same idiom as EarthChunkGenerator.HYDROLOGY_RIVERS_
-# ENABLED, except a mutable static var (not a const) so the fall-triggering
-# mechanism itself stays directly tested even while it ships off by default
-# (see _find_a_fallen_leaf's own doc comment).
+# Was briefly an off-by-default deactivation switch (requested directly:
+# "deactivate leaf littering", right after the GPU rewrite shipped). Turned
+# back on: reported live that ants/bugs "just walk back and forth" with
+# real foraging never actually happening -- with this off, carrion and
+# fresh windfall fruit are the only things left for a decomposer to find,
+# and neither is reliably nearby early in a game, so an ambient decomposer
+# had nothing to forage in practice. Live-verified before flipping this
+# back on (see docs/concept/leaf_litter.md's own Status entry for the real
+# measurement) that the GPU rewrite actually fixed the original per-node
+# performance report, not just assumed to have from the architecture
+# change alone. Same idiom as EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED,
+# a mutable static var (not a const) so the fall-triggering mechanism
+# itself stays directly tested regardless of which way the default sits
+# (see _find_a_fallen_leaf's own doc comment) -- this file's own coverage
+# of the OFF behaviour (test_step_fruiting_adds_no_leaf_when_leaf_litter_
+# disabled, just below) is unaffected either way, since it forces the flag
+# explicitly rather than relying on the default.
 
-func test_leaf_litter_is_off_by_default():
-	assert_false(EarthChunkManager.LEAF_LITTER_ENABLED)
+func test_leaf_litter_is_on_by_default():
+	assert_true(EarthChunkManager.LEAF_LITTER_ENABLED)
 
 
 func test_step_fruiting_adds_no_leaf_when_leaf_litter_disabled():
@@ -2187,9 +2207,10 @@ func test_step_fruiting_adds_no_leaf_when_leaf_litter_disabled():
 	# already relies on to guarantee a shed leaf when the switch is on.
 	_set_world_age_at_year_fraction(_TURNING_INTO_WINTER_YEAR_FRACTION)
 
-	# force_enabled=false -- this is the one test that wants the real,
-	# shipped OFF behaviour, not _find_a_fallen_leaf's own default of
-	# forcing the flag on to exercise the underlying mechanism.
+	# force_enabled=false -- this is the one test that wants the flag
+	# actually forced OFF, not _find_a_fallen_leaf's own default of forcing
+	# it on to exercise the underlying mechanism regardless of the real
+	# shipped default.
 	var found := _find_a_fallen_leaf(
 		"cherry", tree.position, tree.position, _LEAF_ROLL_ATTEMPTS, false
 	)

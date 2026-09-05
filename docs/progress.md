@@ -8141,6 +8141,35 @@ after, so existing coverage survives the flag defaulting off
 (`test_leaf_litter_is_off_by_default`,
 `test_step_fruiting_adds_no_leaf_when_leaf_litter_disabled`).
 
+✅ **Follow-up (2026-09-05): turned back on, live-performance-verified
+first.** Reported live: "ants and beetles just walk back and forth and
+there's no real foraging" -- with leaf litter off, carrion and fresh
+windfall fruit were the only things left for a decomposer to forage, and
+neither is reliably near a wandering ant/bug early in a game, so this was
+the actual missing, common food source (see "Ants" above -- the wiring
+itself was already correct). Before flipping `LEAF_LITTER_ENABLED` back
+to `true`, live-verified with a real `--solo` launch and
+`Engine.get_frames_per_second()` (this project's own established
+instrument-launch-read-the-log method) that the GPU rewrite genuinely
+fixed the original per-node performance report rather than assumed to
+from the architecture alone: 30 loaded chunks directly seeded with
+~750-960 simultaneous real leaves (well past a natural autumn's own
+volume) held a steady 14-25fps at normal game speed, statistically
+indistinguishable from the same scene with zero leaves. One real false
+alarm along the way, corrected before it went anywhere: using `/ecotest`
+to reach autumn faster pinned FPS at 1-3, but a controlled comparison
+with the flag forced off (and so zero leaves) measured the identical
+1-3fps -- ruling leaf litter out and pointing instead at `/ecotest`'s own
+accelerated-time slicing mechanism as a real, separate, pre-existing
+performance cost (see the new gap named below). Also fixed a real latent
+test bug this exposed: `_find_a_fallen_leaf(force_enabled=false)` had
+never actually forced the flag off (its `if force_enabled: ... = true`
+had no `else`), so it had only ever been coasting on the flag's own
+ambient default being `false` -- invisible until this flip made it not
+be, at which point `test_step_fruiting_adds_no_leaf_when_leaf_litter_
+disabled` correctly went red. Fixed to set the flag explicitly in both
+directions. Full writeup: `leaf_litter.md`'s own Status entry.
+
 ⬜ **The invisible `AntColony` mound simulation still does not forage
 leaves** (unchanged gap from the first pass) — the VISIBLE `DecomposerMarker`
 ants/bugs above already close the "ants eat fallen leaves" gap the report
@@ -8161,12 +8190,29 @@ TWICE — once before the first `DroppedItem`-based pass, and again as this
 rewrite's own first instinct — both times for the identical reason: no
 discrete position left for a decomposer to forage from.
 
-⬜ **No live in-game visual re-confirmation of this specific rewrite** (fall
-animation, wind/player/animal scatter, decomposer forage, all played in the
-actual game window) — this pass's own automated coverage includes a
-real-GPU render-smoke test proving the shader compiles, samples real
-content, and moves a transitioning instance, but stops short of a played
-session.
+✅ **Live in-game performance re-confirmation of this specific rewrite** —
+was the one named gap here; closed by the 2026-09-05 follow-up above
+(steady 14-25fps at ~750-960 simultaneous real leaves, normal game
+speed). The pre-existing real-GPU render-smoke test still covers
+shader-compiles/samples-real-content/moves-a-transitioning-instance
+correctness at 1-leaf scale — a different, narrower question than "does
+it hold up at real volume, at real speed," which this closes.
+
+⬜ **`/ecotest`'s own accelerated-time performance cost, independent of
+leaf litter entirely** — discovered as a byproduct of the live perf
+verification above: at ANY tested acceleration (`/ecotest`'s own default
+45s/year, and a more aggressive 5s/year), FPS pinned at 1-3 even with
+`LEAF_LITTER_ENABLED` forced off and zero leaves present, versus a
+healthy 15-27fps at normal (1x) speed. No existing tool in this codebase
+ties FPS measurement to ecology-step timing (confirmed: no probe wraps
+`step_leaf_litter`/`step_fruiting`/`step_ecosystem` in a timer, and the
+companion server exposes no performance route), so this had apparently
+never been measured before either. Lives in the ecology time-lapse/
+catch-up-slicing mechanism itself (`scenes/world.gd`'s `_ecology_time_
+scale`/`_step_ecology_batch`, `src/gameplay/time_lapse.gd`), not in leaf
+litter or anything else this pass touched — named here rather than
+silently left for whoever next reaches for `/ecotest` and is confused by
+the frame rate.
 
 <details>
 <summary>First pass (superseded above), kept for history</summary>
