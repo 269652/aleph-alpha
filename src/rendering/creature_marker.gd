@@ -1401,10 +1401,31 @@ func _step_leaf_litter_dispersal(delta: float) -> void:
 ## creature genuinely wasn't advancing (reported: "their legs are animated
 ## even when they stand still"). Not moving falls back to ProceduralAnimal-
 ## Animation's "idle" action -- a single static neutral pose -- instead.
+## Whether the current tile is river or lake water -- the two water bodies
+## CreaturePerception.is_on(..., "water") deliberately cannot see (it only
+## recognizes ocean biome, a separately-tested contract -- see
+## test_creature_perception.gd's test_is_on_water_true_only_on_ocean -- so
+## this widens CreatureMarker's OWN water check instead of that shared one).
+## Rivers/lakes never change biome_at_global's result (both are overlays
+## drawn on top of ordinary land biome, see docs/concept/hydrology.md), so
+## without this, standing in a river or lake never counted as water at all:
+## no swim action, no submersion tint, and no ripple (_step_water_ripple
+## below) -- reported: "animals ... don't produce ripples in the new river
+## water". Mirrors FishMarker._is_fresh_water_tile, which already closes
+## this same gap for fish. Duck-typed against _world exactly like every
+## other optional EarthChunkManager call this marker makes.
+func _is_fresh_water_tile(tile: Vector2i) -> bool:
+	if _world == null:
+		return false
+	if _world.has_method("is_river_at_global") and _world.is_river_at_global(tile.x, tile.y):
+		return true
+	return _world.has_method("is_lake_at_global") and _world.is_lake_at_global(tile.x, tile.y)
+
+
 func _animation_step() -> void:
 	if info == null:
 		return
-	if _world != null and _perception.is_on(_world, _current_tile(), "water"):
+	if _world != null and (_perception.is_on(_world, _current_tile(), "water") or _is_fresh_water_tile(_current_tile())):
 		_current_action = "swim"
 
 	var action := _current_action

@@ -40,6 +40,22 @@ class StubWorldWithSlope:
 		return slope
 
 
+## A StubWorld that also answers is_river_at_global/is_lake_at_global -- the
+## two checks FishMarker._is_fresh_water_tile already uses and CreatureMarker
+## needs too (see _is_fresh_water_tile): plain biome_at_global never reports
+## "ocean" for a river or lake tile, since both are overlays drawn on top of
+## ordinary land biome (see docs/concept/hydrology.md), not a biome of their
+## own.
+class StubWorldWithFreshWater:
+	extends StubWorld
+	var is_river := false
+	var is_lake := false
+	func is_river_at_global(_x: int, _y: int) -> bool:
+		return is_river
+	func is_lake_at_global(_x: int, _y: int) -> bool:
+		return is_lake
+
+
 ## A StubWorld that also answers the herd (foot-and-mouth-like) disease
 ## transmission queries CreatureMarker asks EarthChunkManager for (see
 ## _herd_disease_step) -- population comfortably over capacity so
@@ -1999,6 +2015,88 @@ func test_a_procedural_species_does_not_also_get_the_submersion_shader():
 	marker._animation_step()
 
 	assert_null(marker.material, "procedural swim art is already tinted; it must not be shaded again")
+
+
+# -- animals in rivers and lakes, not just the ocean -------------------------
+#
+# Reported: "animals ... don't produce ripples in the new river water".
+# _animation_step only ever set _current_action = "swim" through
+# CreaturePerception.is_on(world, tile, "water"), which is hard-coded to
+# biome == "ocean" (a deliberate, separately-tested contract -- see
+# test_creature_perception.gd's test_is_on_water_true_only_on_ocean -- so
+# this widens CreatureMarker's OWN water check instead of that shared one).
+# Rivers/lakes never change biome_at_global's result (they're overlays on
+# ordinary land biome, see docs/concept/hydrology.md), so a creature
+# standing in a river or lake never satisfied that check and therefore
+# never swam, never rippled (_step_water_ripple below), and never got the
+# submersion tint (_apply_submersion above) -- despite the already-correct,
+# separate "wader" current-bending push (EarthChunkManager.
+# river_wader_positions) already including animals on rivers/lakes/ocean
+# alike. FishMarker._is_fresh_water_tile already closes exactly this gap
+# for fish; _is_fresh_water_tile here mirrors it.
+func test_creature_enters_swim_action_on_a_river_tile_even_off_ocean_biome():
+	var world := StubWorldWithFreshWater.new()
+	world.biome = "grassland"  # precondition: NOT ocean
+	world.is_river = true
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("herbivore")
+
+	marker._animation_step()
+
+	assert_eq(marker._current_action, "swim", "a river tile should count as water even off ocean biome")
+
+
+func test_creature_enters_swim_action_on_a_lake_tile_even_off_ocean_biome():
+	var world := StubWorldWithFreshWater.new()
+	world.biome = "grassland"
+	world.is_lake = true
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("herbivore")
+
+	marker._animation_step()
+
+	assert_eq(marker._current_action, "swim", "a lake tile should count as water even off ocean biome")
+
+
+## Precondition guard: without a river/lake tile, plain land must NOT swim --
+## otherwise the two tests above would pass even if _is_fresh_water_tile
+## always returned true regardless of the stub's flags.
+func test_creature_does_not_enter_swim_action_on_plain_land():
+	var world := StubWorldWithFreshWater.new()
+	world.biome = "grassland"
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("herbivore")
+
+	marker._animation_step()
+
+	assert_ne(marker._current_action, "swim")
+
+
+## The consequence that actually fixes the reported bug: once a creature is
+## standing in real river water, its existing (already-correct, already-
+## throttled) _step_water_ripple must actually fire -- record_water_
+## disturbance itself is tile-type-agnostic (see EarthChunkManager), so
+## reaching "swim" at all on a river tile is the whole fix.
+class RippleSpyWorld:
+	extends StubWorldWithFreshWater
+	var disturbances: Array = []
+	func record_water_disturbance(world_pos: Vector2) -> void:
+		disturbances.append(world_pos)
+
+
+func test_creature_swimming_in_a_river_records_a_water_disturbance():
+	var world := RippleSpyWorld.new()
+	world.biome = "grassland"
+	world.is_river = true
+	marker.setup(world, TILE_SIZE)
+	marker.info = CreatureInfo.new("herbivore")
+	marker.position = Vector2(100, 100)
+
+	marker._animation_step()  # picks up "swim" from the river tile
+	marker._step_water_ripple(CreatureMarker.WATER_RIPPLE_INTERVAL)
+
+	assert_eq(world.disturbances.size(), 1)
+	assert_eq(world.disturbances[0], Vector2(100, 100))
 
 
 ## The shadow's own scale (see set_shadow/_sync_grounded_children) must
