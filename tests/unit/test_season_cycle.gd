@@ -165,3 +165,46 @@ func test_out_of_range_progress_is_clamped_into_the_season_itself():
 	var under: float = seasons.seconds_until_season(now, "spring", -0.5)
 	var zero: float = seasons.seconds_until_season(now, "spring", 0.0)
 	assert_almost_eq(under, zero, 0.0001, "progress below 0 should clamp to 0")
+
+
+# -- progress_through_season: a raw, unquantised 0..1 signal ------------------
+#
+# Reported directly: leaf litter should be "constant and continuous and
+# increasing in autumn" -- TreePhenology/SeasonTransition's own "turn
+# progress" reads exactly 0.0 for a season's whole settled span (see
+# TreePhenology.canopy_state_at, TURN_FRACTION) and only ramps in its final
+# 34%, which cannot drive a signal that rises across the WHOLE season. This
+# exposes the raw fraction `season_at` itself already resolves an index
+# from, directly, so a caller can rise smoothly from a season's first
+# instant instead of waiting for its turn to begin.
+
+func test_progress_through_season_starts_at_zero_at_the_seasons_own_start():
+	assert_almost_eq(seasons.progress_through_season(0.0), 0.0, 0.0001)
+
+
+func test_progress_through_season_approaches_one_near_the_seasons_own_end():
+	var quarter := SeasonCycle.SECONDS_PER_YEAR / 4.0
+	assert_almost_eq(seasons.progress_through_season(quarter - 1.0), 1.0, 0.001)
+
+
+func test_progress_through_season_resets_at_a_season_boundary():
+	var quarter := SeasonCycle.SECONDS_PER_YEAR / 4.0
+	assert_almost_eq(seasons.progress_through_season(quarter), 0.0, 0.0001)
+
+
+func test_progress_through_season_increases_monotonically_within_a_season():
+	var quarter := SeasonCycle.SECONDS_PER_YEAR / 4.0
+	var previous := -1.0
+	for i in 10:
+		var current: float = seasons.progress_through_season(quarter * 2.0 + quarter * i / 10.0)
+		assert_gt(current, previous, "progress must rise monotonically across the season")
+		previous = current
+
+
+func test_progress_through_season_is_periodic_across_years():
+	var year := SeasonCycle.SECONDS_PER_YEAR
+	assert_almost_eq(
+		seasons.progress_through_season(456.0),
+		seasons.progress_through_season(456.0 + year),
+		0.0001
+	)

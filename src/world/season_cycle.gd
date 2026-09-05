@@ -45,6 +45,21 @@ func season_at(elapsed_seconds: float) -> String:
 	return SEASONS[clampi(index, 0, SEASONS.size() - 1)]
 
 
+## How far [0,1) through the CURRENT season this moment sits -- the same
+## raw fraction season_at's own index is truncated from, exposed directly.
+##
+## Deliberately NOT TreePhenology/SeasonTransition's own "turn progress":
+## that reads exactly 0.0 for a season's entire settled span and only ramps
+## across its final TURN_FRACTION, which cannot drive anything that needs
+## to rise across the WHOLE season (reported directly: leaf litter should
+## be "constant and continuous and increasing in autumn", not flat for
+## most of it and then a late ramp). This rises smoothly from a season's
+## very first instant instead, resetting to 0 at every season boundary.
+func progress_through_season(elapsed_seconds: float) -> float:
+	var scaled := year_fraction(elapsed_seconds) * SEASONS.size()
+	return scaled - floorf(scaled)
+
+
 ## Seasonal warmth [0,1]: a smooth cosine peaking mid-summer (~3/8 of the year,
 ## the middle of the summer quarter) and troughing mid-winter (~7/8). Stands in
 ## for the seasonal temperature/photoperiod swing driving fruit ripening.
