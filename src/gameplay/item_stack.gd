@@ -41,8 +41,12 @@ func is_edible(season: String) -> bool:
 	return item.kind != "food" or FruitSpoilage.is_edible(item.id, age_seconds, season)
 
 
+## Same item id AND the same captive_species (see Item.captive_species's own
+## doc comment): a stack shares ONE Item plus a count, so merging a loaded
+## container into a stack of empty ones (or two loaded ones holding
+## different catches) would silently lose track of which unit is which.
 func can_stack_with(other) -> bool:
-	return item.id == other.item.id
+	return item.id == other.item.id and item.captive_species == other.item.captive_species
 
 
 func remaining_capacity() -> int:

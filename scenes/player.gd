@@ -60,6 +60,11 @@ const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
 const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
+const CaptureBook = preload("res://src/gameplay/capture_book.gd")
+const CaptureExecutor = preload("res://src/gameplay/capture_executor.gd")
+const CaptureAtomEffects = preload("res://src/gameplay/capture_atom_effects.gd")
+const CaptureItemActions = preload("res://src/gameplay/capture_item_actions.gd")
+const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
@@ -363,10 +368,10 @@ var _pending_mount_pressed := false
 var _last_lasso_input := false
 var _pending_lasso_pressed := false
 var lasso_message := ""
-## A net's catch resolves instantly (see _capture_flyer), so its result --
-## "Bonded with the sparrow." / "Caught! Kept as a curiosity." -- has to
-## OUTLIVE the same-frame call to _update_lasso_message that would otherwise
-## immediately overwrite it back to "Net ready...". Same
+## A net's catch attempt resolves in one frame (see _attempt_net_catch), so
+## its result -- "Bonded with the sparrow." / "Caught! Net is full." /
+## "Missed!" -- has to OUTLIVE the same-frame call to _update_lasso_message
+## that would otherwise immediately overwrite it back to "Net ready...". Same
 ## result-message-plus-timer shape _fishing_result_message/
 ## _fishing_result_timer already use for exactly this reason.
 var _capture_result_message := ""
@@ -382,6 +387,18 @@ var bonded_companions: Array[Dictionary] = []
 ## from it after a load. Never itself persisted -- position/wander_seed are
 ## runtime-only, the same split _lassoed/_tie_anchor keep from `trust`.
 var _bonded_markers: Array = []
+
+## The capture DSL (docs/concept/capture_dsl.md): pure modules, instantiated
+## once and reused across every catch attempt, the same shape _spell_book/
+## _spell_executor already use for magic.
+var _capture_book := CaptureBook.new()
+var _capture_executor := CaptureExecutor.new()
+var _capture_atom_effects := CaptureAtomEffects.new()
+## Salts the hash-derived catch roll so repeated attempts against the SAME
+## still-alive flyer don't collide on the identical outcome forever (a bare
+## flyer.wander_seed roll would make a first miss permanently unwinnable) --
+## the same role _struggle_count plays for CreatureMarker's own hash roll.
+var _capture_attempt_count := 0
 
 var _last_fish_input := false
 var _pending_fish_pressed := false
@@ -3087,8 +3104,26 @@ func _action_slots_step() -> void:
 		)
 		var was_pressed: bool = _last_slot_input[slot]
 		if _rising_edge(action_name, pressed, was_pressed):
-			_perform_animal_action(_action_target(), slot)
+			_perform_context_action(slot, action_name)
 		_last_slot_input[slot] = pressed
+
+
+## Whichever action `slot` currently offers: the hover-verb path
+## (AnimalActions, on whatever is under the player -- Feed/Ride/Order/
+## Release) if it has something to say for this slot, else the held tool's
+## own self-action (CaptureItemActions -- e.g. "Put into bottle", which
+## needs no hover target at all) as a fallback (docs/concept/capture_dsl.md).
+## The hover path always wins when it offers anything, so this never changes
+## Feed/Ride/Order/Release's existing behavior.
+func _perform_context_action(slot: int, action_name: String) -> void:
+	var animal = _action_target()
+	if slot < animal_actions_for(animal).size():
+		_perform_animal_action(animal, slot)
+		return
+	var has_bottle := inventory != null and inventory.has("glass_bottle")
+	var tool_action := CaptureItemActions.for_tool(equipped_item, has_bottle)
+	if tool_action.get("action", "") == action_name:
+		_bottle_captive()
 
 
 ## Throws whichever capture tool is held (see docs/concept/taming.md's "Any
@@ -3100,7 +3135,10 @@ func _throw_capture_tool() -> void:
 	if tool_id == "":
 		return
 	if tool_id == CaptureTool.NET:
-		_throw_net()
+		if equipped_item != null and equipped_item.is_holding_captive():
+			_release_net()
+		else:
+			_throw_net()
 	else:
 		_throw_rope_tool(tool_id)
 
@@ -3127,11 +3165,12 @@ func _throw_rope_tool(tool_id: String) -> void:
 		_lassoed = best
 
 
-## Netting a flyer is instant, not a struggle (see taming.md: nothing in
-## AmbientFlyerMarker models a butterfly fighting a restraint the way a
-## horse does). A landed throw scans the ambient-flyer flock -- a wholly
-## separate node group from CreatureMarker.GROUP_NAME -- and resolves
-## immediately through _capture_flyer.
+## Netting a flyer is a real probability roll, not a struggle and not a
+## guarantee (docs/concept/capture_dsl.md: nothing in AmbientFlyerMarker
+## models a butterfly fighting a restraint the way a horse does, so there is
+## no multi-bout contest -- but a swing can still miss). A landed throw
+## scans the ambient-flyer flock -- a wholly separate node group from
+## CreatureMarker.GROUP_NAME -- and resolves through _attempt_net_catch.
 func _throw_net() -> void:
 	var best: Node = null
 	var best_distance := LASSO_RANGE
@@ -3145,27 +3184,95 @@ func _throw_net() -> void:
 	if best == null:
 		return
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
-	_capture_flyer(best)
+	_attempt_net_catch(best)
 
 
-## What a landed net throw does with `flyer` -- see docs/concept/taming.md's
-## "A bond, not an order: the Kinship path". Without `menagerie` unlocked (or
-## once the bonded-companion cap is full) it becomes a one-off curiosity
-## item; with it, a real bonded companion. Either way the flyer itself is
-## removed from the world -- there is no intermediate "netted but not yet
-## decided" state.
-func _capture_flyer(flyer: Node) -> void:
+## Rolls whether a landed net throw actually catches `flyer` (docs/concept/
+## capture_dsl.md's butterfly_net device: base 0.65, nudged by the
+## individual's own real, DNA-inherited FlyerPersonality.boldness_of -- a
+## bolder flyer is easier to net). The roll is salted with
+## _capture_attempt_count, not just flyer.wander_seed alone -- a bare-seed
+## roll would make every retry against the same still-alive flyer land on
+## the identical outcome forever, silently making one miss unwinnable.
+##
+## On a miss, nothing changes -- the flyer's own existing flee/dance
+## reaction (FlyerPersonality.player_response) keeps running untouched. On a
+## catch: see docs/concept/taming.md's "A bond, not an order: the Kinship
+## path" -- with `menagerie` unlocked (and room under the cap) it becomes a
+## real bonded companion instantly, exactly as before; otherwise the net
+## itself goes LOADED (Item.captive_species) instead of instantly becoming a
+## curiosity item -- the player now chooses Release or (with a glass bottle)
+## Put into bottle. Either way the flyer itself is removed from the world.
+func _attempt_net_catch(flyer: Node) -> void:
 	var species: String = flyer.species
+	var boldness := FlyerPersonality.boldness_of(flyer.traits)
+	var rule: Variant = _capture_executor.capture_rule(_capture_book.ast_for(CaptureTool.NET))
+	_capture_attempt_count += 1
+	var roll := float(absi(hash("%d_%d_catch" % [flyer.wander_seed, _capture_attempt_count])) % 10000) / 10000.0
+	var context := {"target": {"tier": "flyer", "species": species, "boldness": boldness}}
+	var result := _capture_executor.resolve_catch(rule, context, roll)
+	if not result["caught"]:
+		_capture_result_message = "Missed!"
+		_capture_result_timer = CAPTURE_RESULT_MESSAGE_DURATION
+		return
 	if _has_menagerie() and _bond_companion(species):
 		_capture_result_message = "Bonded with the %s." % species.capitalize()
 	else:
-		var is_bird := AmbientFlyerRenderer.BIRD_SPECIES_POOL.has(species)
-		var item_id := "caged_songbird" if is_bird else "jarred_insect"
-		if inventory != null:
-			inventory.add(_item_catalog.make(item_id), 1)
-		_capture_result_message = "Caught! Kept as a curiosity."
+		for effect in result["effects"]:
+			_capture_atom_effects.apply_to_target(effect["atom"], effect["params"], equipped_item, context)
+		_capture_result_message = "Caught! Net is full."
 	_capture_result_timer = CAPTURE_RESULT_MESSAGE_DURATION
 	flyer.queue_free()
+
+
+## Empties a loaded net, letting its catch go (docs/concept/capture_dsl.md's
+## "on release" -- release_captive). Deliberately does not respawn a live
+## creature back into the world -- a documented, honest gap, not attempted
+## here (see capture_dsl.md's Open questions).
+func _release_net() -> void:
+	if equipped_item == null or not equipped_item.is_holding_captive():
+		return
+	var species := equipped_item.captive_species
+	var rule: Variant = _capture_executor.release_rule(_capture_book.ast_for(CaptureTool.NET))
+	var result := _capture_executor.resolve_release(rule, {})
+	if not result["released"]:
+		return
+	for effect in result["effects"]:
+		_capture_atom_effects.apply_to_target(effect["atom"], effect["params"], equipped_item, {})
+	_capture_result_message = "Released the %s." % species.capitalize()
+	_capture_result_timer = CAPTURE_RESULT_MESSAGE_DURATION
+
+
+## "Put into bottle" (docs/concept/capture_dsl.md's "on transfer(glass_bottle)"
+## -- move_captive): consumes one EMPTY glass_bottle and relocates a loaded
+## net's catch onto a freshly-loaded one (Item.captive_species), the same
+## way _attempt_net_catch's hold_captive loads the net in the first place --
+## not a generic curiosity item, because the species has to survive the move
+## for the bottle to be rendered as the specific creature it holds. See
+## CaptureItemActions for when this is even offered -- it never fires unless
+## a loaded net AND a glass_bottle are both on hand.
+func _bottle_captive() -> void:
+	if equipped_item == null or not equipped_item.is_holding_captive():
+		return
+	if inventory == null or not inventory.has("glass_bottle"):
+		return
+	var rule: Variant = _capture_executor.transfer_rule(_capture_book.ast_for(CaptureTool.NET), "glass_bottle")
+	var result := _capture_executor.resolve_transfer(rule, {})
+	if not result["transferred"]:
+		return
+	var species := ""
+	for effect in result["effects"]:
+		var outcome = _capture_atom_effects.apply_to_target(effect["atom"], effect["params"], equipped_item, {})
+		if outcome is String and outcome != "":
+			species = outcome
+	if species == "":
+		return
+	inventory.remove("glass_bottle", 1)
+	var loaded_bottle: Item = _item_catalog.make("glass_bottle")
+	loaded_bottle.captive_species = species
+	inventory.add(loaded_bottle, 1)
+	_capture_result_message = "Bottled the %s." % species.capitalize()
+	_capture_result_timer = CAPTURE_RESULT_MESSAGE_DURATION
 
 
 ## Beastmaster's `menagerie` keystone (docs/concept/taming.md's Kinship path
@@ -3184,9 +3291,8 @@ func _has_menagerie() -> bool:
 
 ## Adds a new bonded companion for `species` if there is room (see
 ## BONDED_COMPANION_CAP), spawning its live marker immediately. Returns
-## false, doing nothing, once the cap is reached -- _capture_flyer then
-## falls back to the ordinary curiosity-item outcome rather than silently
-## discarding the catch.
+## false, doing nothing, once the cap is reached -- _attempt_net_catch then
+## falls back to loading the net instead of silently discarding the catch.
 func _bond_companion(species: String) -> bool:
 	if bonded_companions.size() >= BONDED_COMPANION_CAP:
 		return false
@@ -3264,8 +3370,9 @@ func _update_lasso_message() -> void:
 		return
 	var lasso_key := Keybindings.display_key_for("lasso")
 	if tool_id == CaptureTool.NET:
-		# A net has nothing to hold or lead -- the catch resolves instantly
-		# (see _capture_flyer), so the result banner it set outlives this
+		# A net has nothing to hold or lead -- a catch/release/bottle attempt
+		# resolves in one frame (see _attempt_net_catch/_release_net/
+		# _bottle_captive), so the result banner it set outlives this
 		# same-frame call via _capture_result_timer rather than being
 		# stomped straight back to the ready prompt.
 		if _capture_result_timer > 0.0:

@@ -7,6 +7,8 @@ const Inventory = preload("res://src/gameplay/inventory.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
+const BottledCreatureView = preload("res://src/rendering/bottled_creature_view.gd")
+const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 
 
 class StubPicker:
@@ -16,6 +18,7 @@ class StubPicker:
 
 var item: DroppedItem
 var _extra: Array = []
+var _item_catalog := ItemCatalog.new()
 
 
 func before_each():
@@ -211,3 +214,39 @@ func test_a_full_inventory_leaves_the_item_on_the_ground_with_the_remainder():
 	assert_eq(picker.inventory.count_of("hide"), 0)
 	assert_eq(item.item_stack.count, 3, "the stack stays on the ground")
 	assert_false(item.is_queued_for_deletion())
+
+
+# -- a loaded glass_bottle renders as a live view, not the flat icon --------
+# (docs/concept/capture_dsl.md's "Rendering a bottled catch" -- "the world-
+# DROPPED item, not the inventory icon or hand-held view".)
+
+func _dropped(dropped_item: Item, count: int = 1) -> DroppedItem:
+	var node := DroppedItem.new()
+	node.item_stack = ItemStack.new(dropped_item, count)
+	add_child_autofree(node)
+	return node
+
+
+func test_a_loaded_glass_bottle_gets_a_bottled_creature_view():
+	var bottle := _item_catalog.make("glass_bottle")
+	bottle.captive_species = "monarch"
+	var node := _dropped(bottle)
+
+	var view = _find_bottled_view(node)
+	assert_not_null(view, "a loaded glass_bottle should show a live BottledCreatureView")
+	assert_eq(view.species, "monarch")
+
+
+func test_an_empty_glass_bottle_uses_the_ordinary_flat_icon():
+	var bottle := _item_catalog.make("glass_bottle")
+	var node := _dropped(bottle)
+
+	assert_null(_find_bottled_view(node), "an empty bottle is an ordinary dropped item, not a live view")
+	assert_not_null(node.texture)
+
+
+func _find_bottled_view(node: DroppedItem) -> Variant:
+	for child in node.get_children():
+		if child is BottledCreatureView:
+			return child
+	return null

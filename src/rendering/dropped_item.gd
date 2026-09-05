@@ -29,6 +29,10 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
+const BottledCreatureView = preload("res://src/rendering/bottled_creature_view.gd")
+const IllustratedGlassBottleSprite = preload("res://src/rendering/illustrated_glass_bottle_sprite.gd")
+
+static var _glass_bottle_sprite := IllustratedGlassBottleSprite.new()
 
 const GROUP_NAME := "dropped_item"
 ## Real fallen fruit/nut ground items ONLY -- a small, pre-filtered subset
@@ -80,6 +84,20 @@ func _ready() -> void:
 	add_to_group(HoverTargetFinder.GROUP_NAME)
 	if item_stack != null and TreeSpecies.IDS.has(item_stack.item.id):
 		add_to_group(FORAGEABLE_GROUP_NAME)
+	# A loaded glass_bottle (docs/concept/capture_dsl.md's "Rendering a
+	# bottled catch") renders as a live back/creature/front composite
+	# instead of the ordinary flat icon -- the world-dropped item is where
+	# this lives, not the inventory icon (every other surface converges on
+	# one static texture per item on purpose; this is the one exception).
+	if item_stack != null and item_stack.item.id == "glass_bottle" and item_stack.item.captive_species != "":
+		var view := BottledCreatureView.new()
+		view.species = item_stack.item.captive_species
+		view.wander_seed = hash(item_stack.item.captive_species + str(get_instance_id()))
+		var back_texture := _glass_bottle_sprite.back_texture_for(view.condition)
+		if back_texture != null:
+			view.scale = Vector2.ONE * BottledCreatureView.world_scale_for(float(back_texture.get_width()))
+		add_child(view)
+		return
 	if item_stack != null and texture == null:
 		# A pulled wild carrot/potato uses the real illustrated root art (see
 		# docs/concept/wild_crops.md) -- the same texture the player just

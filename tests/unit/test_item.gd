@@ -76,6 +76,33 @@ func test_stacks_of_different_items_cannot_combine():
 	assert_false(a.can_stack_with(b))
 
 
+## A stack holds ONE shared Item plus a count -- merging a loaded container
+## into a stack of empty ones would silently lose track of which unit is
+## which (or worse, make the whole merged stack read as loaded). See
+## Item.captive_species's own doc comment; this is the general fix that
+## protects any such item, not a bottle-specific special case.
+func test_a_loaded_container_does_not_stack_with_an_empty_one():
+	var empty := ItemStack.new(Item.new("glass_bottle", "Glass Bottle", "material", 20), 5)
+	var loaded_item := Item.new("glass_bottle", "Glass Bottle", "material", 20)
+	loaded_item.captive_species = "monarch"
+	var loaded := ItemStack.new(loaded_item, 1)
+	assert_false(empty.can_stack_with(loaded))
+
+
+func test_two_loaded_containers_holding_different_species_do_not_stack():
+	var a_item := Item.new("glass_bottle", "Glass Bottle", "material", 20)
+	a_item.captive_species = "monarch"
+	var b_item := Item.new("glass_bottle", "Glass Bottle", "material", 20)
+	b_item.captive_species = "sparrow"
+	assert_false(ItemStack.new(a_item, 1).can_stack_with(ItemStack.new(b_item, 1)))
+
+
+func test_two_empty_containers_of_the_same_item_still_stack():
+	var a := ItemStack.new(Item.new("glass_bottle", "Glass Bottle", "material", 20), 3)
+	var b := ItemStack.new(Item.new("glass_bottle", "Glass Bottle", "material", 20), 2)
+	assert_true(a.can_stack_with(b))
+
+
 func test_merge_moves_as_much_as_fits_and_returns_the_overflow():
 	var a := ItemStack.new(Item.new("meat", "Meat", "food", 20), 18)
 	var overflow := a.merge(5)  # 18 + 5 = 23, capped at 20 -> 3 overflow
@@ -168,3 +195,29 @@ func test_wear_can_be_mutated_after_construction():
 	var club := Item.new("wooden_club", "Wooden Club", "weapon", 1, 8.0)
 	club.wear += 1.0
 	assert_almost_eq(club.wear, 1.0, 0.0001)
+
+
+# -- captive_species: what this specific tool is currently holding (see
+# docs/concept/capture_dsl.md) -- the same deliberate exception wear already
+# is: not a constructor parameter, not part of an item's catalog definition,
+# state that starts blank and accumulates over one specific item's own
+# lifetime. A device with max_stack 1 (see item_catalog's butterfly_net
+# entry) means this mutates in place with no stacking ambiguity, exactly
+# the way wear already has.
+
+func test_captive_species_starts_empty():
+	var net := Item.new("butterfly_net", "Butterfly Net", "tool", 1)
+	assert_eq(net.captive_species, "")
+
+
+func test_captive_species_can_be_mutated_after_construction():
+	var net := Item.new("butterfly_net", "Butterfly Net", "tool", 1)
+	net.captive_species = "monarch"
+	assert_eq(net.captive_species, "monarch")
+
+
+func test_is_holding_captive_reflects_captive_species():
+	var net := Item.new("butterfly_net", "Butterfly Net", "tool", 1)
+	assert_false(net.is_holding_captive())
+	net.captive_species = "monarch"
+	assert_true(net.is_holding_captive())

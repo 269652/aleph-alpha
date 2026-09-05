@@ -3717,7 +3717,7 @@ chunks away from the player). See the concept doc for the full spec.
   **Precedence, explicit and tested:** flee > finish a pair interaction already running > start a courtship > dance at the player > start a spiral flight > forage > wander. Escape is first because escape is first in every animal; a flush ends a courtship or whirl mid-way and charges **no** cooldown (charging the real-day courtship cooldown would mean a player walking through a meadow sterilised it for a day), and tells the partner directly — the one place one flyer reaches into another, and necessary, because "my partner bolted" is not derivable and leaving it underived is the *one butterfly orbiting an empty midpoint* bug again. The dance is leashed to `SpiralFlight.NOTICE_RADIUS_PX` from the flyer's home (as far as it spotted the intruder from), checked against the **orbit's centre** so a player who moves a long way in one step never drags the butterfly there even for a frame. The player is found through the existing `_lod_step` lookup, now cached, not a second walk of the player group per flyer per frame.
   **(3) Erratic flutter on ordinary flight.** `PollinatorForaging.tumbled_heading` already existed, grounded and tested, but was reached ONLY on the approach to a bloom; ordinary wander picked one heading and held it for `BUTTERFLY_INTERVAL` (0.7 s) — a straight line at a time, which is exactly what the player was watching. It now applies to ordinary wander at full strength (protean anti-predator flight is *why* butterflies fly that way). Butterflies only — a sparrow tumbling like a monarch reads as a glitching bird. The known *"flyers stall and jitter on a fixed spot"* trap is not reintroduced: the tumble keeps a full-length forward component and adds a strictly perpendicular veer of at most 0.8, and `test_the_flutter_never_stalls_a_butterfly` measures **every** step as a whole step over ten simulated seconds.
   **(4) The wingbeat bounce.** New `src/rendering/wingbeat_bounce.gd` (tested). Lift arrives in pulses, so the body rises and falls once per beat; modelling lift as swinging sinusoidally about body weight gives an amplitude of `e·g/ω²`, and `e` is not a knob — a wing cannot pull the body down through its stroke, so `e ≤ 1` and `e = 1` is the physical **ceiling**. For a monarch (~10 Hz, ~25 mm body) that is ~2.5 mm, about a fifth of its own body top to bottom. Expressed as a fraction of the BODY, not a distance, because this world draws small flyers well above life size and the literal bob would be 0.03 world pixels. **No species gate and none needed**: the bob goes as `1/(f²·L)`, so a bee at ~230 Hz and a 14 cm sparrow fall out of it structurally. **`position` is never touched** — it feeds containment, the courtship orbit, the spiral flight, partner-distance checks and Y-sorting — the bob lives on the sprite's `offset`, pinned by `test_the_wingbeat_bounce_never_touches_the_flyers_position`.
-  ⬜ **Not done, stated plainly:** nothing nets an ambient flyer in the live game yet (`butterfly_net` is craftable and `CaptureTool.is_ambient_flyer_species` knows what it is for, but no interaction removes one from the world), so the selection pressure is real in the model and **dormant in the running game**; ambient flyers are still not persisted, so an evolved meadow reverts to its founding personalities when the chunk unloads (the same gap the courtship life cycle already has); boldness is the only trait — no others earned their place; bees, flies and songbirds have no personality at all; the flyer does not turn to face the player mid-dance; and the flower-approach branch still does not animate its wings (pre-existing), so a butterfly does not bounce while flying at a bloom.
+  ⬜ **Not done, stated plainly:** ~~nothing nets an ambient flyer in the live game yet~~ — **stale as of the Capture DSL pass** (`concept/capture_dsl.md`): netting is now live, a real probability roll reading this exact `boldness` trait, so the selection pressure this section describes is no longer dormant. Left in place rather than deleted so the history of "this was the honest state, then it changed" survives; ambient flyers are still not persisted, so an evolved meadow reverts to its founding personalities when the chunk unloads (the same gap the courtship life cycle already has); boldness is the only trait — no others earned their place; bees, flies and songbirds have no personality at all; the flyer does not turn to face the player mid-dance; and the flower-approach branch still does not animate its wings (pre-existing), so a butterfly does not bounce while flying at a bloom.
 - **Flower art detail** (small) — ✅ Done — blooms were `petal_count` single-pixel RAYS from a 3×3 centre — about 58 painted pixels, which reads as an asterisk and left **all five species sharing an identical silhouette** with only hue to tell them apart (measured: one alpha mask across the lot). Each species now has its own head SHAPE built from filled lobes: a low tight crocus cup, a taller tulip cup with petal tips, a layered rose, a lavender spike of florets, a textured clover puff — plus a pollen-warm focal centre and top-left shading. Pinned by tests for painted area, petal thickness, per-species silhouette, shading tones and a distinct centre, all of which the old art failed.
 - **Land ecology persists across sessions** (medium) — ✅ Done — `ChunkSerializer.save_ecology`/`load_ecology` (tested) plus `EarthChunkManager._apply_persisted_ecology`. Only *fish* survived a restart before; herbivores, predators and vegetation lived in the in-memory `_unloaded_ecology` record, so quitting reset every region to a freshly-seeded population at full carrying capacity — a valley the player hunted out was full again next launch. On a life cycle measured in real days (see courtship above) that made the whole timescale meaningless. State is stamped in **wall-clock** time and, on a revisit with no in-session record, advanced through the *same* `ChunkEcologyCatchup` model the in-session path uses (a real hour away ≈ an ecological day, capped at 120 days since logistic growth converges anyway). "Never saved" and "saved as empty" stay distinguishable, so a hunted-out region is a fact the world keeps rather than something quietly re-seeded.
 - **Land herbivore/predator mortality term** (small) — ✅ Done — closes a gap `record_catch`'s own doc comment used to name explicitly: fish had `record_catch` and herbivores had `record_birth`, but killing a land animal — predator eating herbivore, or the player's own weapon — never touched `EcosystemSimulation` at all, so a hunted valley refilled purely from the next chunk reload's fresh equilibrium seeding rather than staying down. `EcosystemSimulation.record_death(chunk_coord, is_predator, count = 1.0)` (tested) subtracts from `_predator_population` or `_herbivore_population` (floored at 0.0, silent no-op on an unknown region — same shape as `record_catch`/`record_birth`); `EarthChunkManager.record_death_at(position, is_predator, count = 1.0)` is its position-based wrapper, mirroring `record_birth_at`. Wired at the one place a kill is actually finalized: `CreatureMarker.take_damage`'s death branch now also calls `_world.record_death_at(position, info.is_predator)` (duck-typed `_world.has_method` guard, matching every other `_world` use in that file), which covers BOTH a predator's kill and the player's own weapon hit, since both route through `take_damage`. The region key is `EarthChunkManager._chunk_coord_for_tile(_world_tile_for_pixel(position))` — the SAME private helper the promotion system (`_reconcile_chunk_creatures`) already reads `herbivore_population`/`predator_population` through, so there is no second region-keying scheme for the two to drift apart on. **Update (2026-09-03): the disturbance→suppression→recovery shape this entry only proved arithmetically (one `record_death` call moves the number by the expected amount) is now proven as a real time-lapse causal claim.** `tests/unit/test_ecosystem_time_lapse.gd` — the same file the Phase 1 roadmap's drought-and-recovery tests already live in — gained `test_repeated_kills_measurably_suppress_a_regions_population_versus_an_unhunted_control`, `test_a_hunted_regions_population_recovers_once_the_killing_stops`, and `test_repeated_predator_kills_suppress_and_then_recover_the_predator_population`: repeated `record_death` calls interleaved with `step()`, checked against an identical unhunted control region and against the same region's own pre-hunting level, for both `herbivore_population_model.gd` and `predator_population_model.gd`. All three pass against the wiring above **unchanged** — the mechanism already worked end to end before this update; what was missing was the proof at the fidelity this doc's own "Basic time-lapse test" precedent uses, not the wiring itself. This also retires a stale claim that had drifted from this entry: the Phase 1 status paragraph elsewhere in this file still said "individual predation not yet linked to aggregate ecosystem counts" after this entry had already closed exactly that gap — removed rather than left to contradict this one.
@@ -10576,6 +10576,93 @@ because this ledger is where the honesty lives:
   — so a boulder's shore band animates and reads in the same palette as
   the river's real shore, rather than a static ring of its own. See
   `concept/rivers.md`'s "The boulder's shore band, not a halo".
+
+### Capture DSL (`concept/capture_dsl.md`, new this pass)
+
+Reported: "*every* animal needs to be catchable with the right device... in
+order to keep things generic and emergent, I want you to craft a 'mechanics
+DSL' which encodes the physics that e.g. a butterfly gets caught with a
+probability upon performing its catch action... similar to the magic DSL" —
+then, mid-implementation: the glass bottle's composite sheet has a
+background-layer row and a foreground-layer row, and a bottled catch should
+render sandwiched between them, alive.
+
+Investigation found "every animal, the right device" was already generic as
+a *tool-selection* rule (`CaptureTool.required_tool_for`, reading body-plan
+data) — what was missing was a generic way to author *what happens* once
+the right device is in hand. The butterfly net itself was already fully
+wired (`Player._throw_net`/`_capture_flyer`) but instant and deterministic:
+any flyer in range was always caught, immediately becoming a
+`jarred_insect`/`caged_songbird` curiosity item, with no probability and no
+intermediate "loaded, undecided" state at all.
+
+- ✅ **The Capture DSL itself** (large) — `capture_parser.gd` /
+  `capture_atom_catalog.gd` / `capture_physics.gd` / `capture_executor.gd` /
+  `capture_atom_effects.gd` / `capture_book.gd`, mirroring the magic DSL's
+  own module split (parser → atom catalog → physics → executor → effects →
+  a fixed content table). `catch_roll` is the one atom that can fail and
+  short-circuits the rest of a pipeline — capture's own constraint layer,
+  the one significant divergence from magic's unconditional-sequence
+  pipeline. Scoped deliberately to the **instant-roll capture tier** (today:
+  the butterfly net catching flyers) — see the explicit non-goal below.
+- ✅ **Netting is now a real probability roll, not a guarantee** — base 0.65
+  at middling boldness, nudged by `FlyerPersonality.boldness_of` (a real,
+  already-tested, DNA-inherited trait whose own doc comment already framed
+  it as *the* netting-difficulty knob, never previously read at catch time)
+  so a bolder individual is measurably easier to net. A miss leaves the
+  flyer and the net alone; the flyer's own existing flee/dance reaction
+  keeps running untouched.
+- ✅ **The net has a real loaded state** — `Item.captive_species`, the same
+  deliberate mutable-per-instance exception `Item.wear` already is. A
+  successful catch (without `menagerie`) no longer instantly grants a
+  curiosity item; the net goes LOADED and the same capture key now
+  *releases* it instead of throwing again. Menagerie bonding is unchanged
+  in shape — the roll only gates whether the catch happens at all.
+- ✅ **"Put into bottle"** — a new `glass_bottle` catalog item (no craftable
+  recipe yet: raw glass isn't a real material in this codebase either, see
+  `smelting.md`'s own gap — `/give`-able for now) and a new secondary-action
+  scorer, `capture_item_actions.gd`, consulted by `Player._perform_context_
+  action` only when the existing hover-verb path (`AnimalActions`, which
+  cannot see an ambient flyer at all) offers nothing — Feed/Ride/Order/
+  Release are provably unchanged. Bottling relocates `captive_species` onto
+  a freshly-loaded bottle rather than granting a generic curiosity item, so
+  the specific species survives for rendering. That exposed a real,
+  general stacking bug fixed in passing: `ItemStack.can_stack_with` only
+  ever compared item id, so a freshly-loaded container could silently merge
+  into a stack of empty ones — now also requires matching `captive_species`.
+- ✅ **A bottled catch renders alive** — reported mid-pass, so specified in
+  `capture_dsl.md` before being built, same as everything else here. The
+  real `glass_bottle.png` composite sheet (measured: 1536×1024, a fixed 3×2
+  grid — pristine/worn/broken columns × back/front row) is read by
+  `illustrated_glass_bottle_sprite.gd` (a fixed-position cut, not
+  `composite_sheet_slicer.gd`'s blob detection, since this grid is regular
+  and known in advance). `bottled_creature_view.gd` composites back sprite
+  → live creature → front sprite, reusing `ProceduralButterflySprite`'s
+  existing flap/settled frame generators and `WingbeatBounce`'s real-physics
+  bob wholesale; only the confined fly/rest state (`bottled_creature_
+  wander.gd`, deliberately far simpler than `AmbientFlyerMarker`'s
+  open-world machine — no courtship, no nectaring, nothing a sealed bottle
+  would do) is new. Renders on the world-DROPPED item (`DroppedItem`), not
+  the inventory icon — every other item surface converges on one static
+  texture on purpose; this is the one deliberate exception. A species
+  `ProceduralButterflySprite` doesn't cover (birds, caught the same way)
+  gets the bottle alone, an honest fallback rather than invented
+  bird-in-a-bottle art. 🚧 `BottledCreatureView.TARGET_WORLD_WIDTH_PX` is a
+  reasoned starting point, not yet visually confirmed against the real art
+  in a live screenshot — the same honest gap this doc's Items section
+  already names for the armor slots.
+- ⬜ **The restrain-and-struggle tier is not expressed in this DSL** —
+  lasso/snare/trap/reinforced rope stay exactly on `taming.gd`'s existing,
+  live, tested `break_free_chance`/`hold_chance` model. Porting it into
+  `capture` text (a `struggle_roll` atom delegating to those same
+  functions, changing none of their tuning) is real follow-up work, not
+  attempted here — deliberately mirroring how `magic.md` itself leaves
+  `enchant`/`instruct` unwired against its own executor in its first pass,
+  rather than risk regressing a system with 20+ existing tests for a
+  rewrite nobody asked for this pass.
+- ⬜ **Release does not respawn a live creature** — it only empties the net
+  with a message. Symmetrical and arguably more honest physically, but not
+  asked for and not built.
 
 ## Reality check
 

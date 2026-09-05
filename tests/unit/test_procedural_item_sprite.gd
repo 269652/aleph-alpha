@@ -111,6 +111,32 @@ func test_axe_looks_different_from_a_sword():
 	assert_true(any_differs, "an axe should not render identically to a sword")
 
 
+# -- glass bottle (see docs/concept/capture_dsl.md) --------------------------
+
+func test_glass_bottle_has_its_own_look_rather_than_falling_back_to_the_generic_pebble():
+	var bottle := generator.generate_image("glass_bottle")
+	var fallback := generator.generate_image("some_totally_unknown_item")
+	var any_differs := false
+	for y in ProceduralItemSprite.SIZE:
+		for x in ProceduralItemSprite.SIZE:
+			if bottle.get_pixel(x, y) != fallback.get_pixel(x, y):
+				any_differs = true
+	assert_true(any_differs, "glass_bottle should have a dedicated look, not the unknown-item fallback")
+
+
+## Shares the jar shape with jarred_insect (both are glass containers) but
+## must still be tellable apart in the inventory -- a different tint.
+func test_glass_bottle_looks_different_from_a_jarred_insect():
+	var bottle := generator.generate_image("glass_bottle")
+	var jarred := generator.generate_image("jarred_insect")
+	var any_differs := false
+	for y in ProceduralItemSprite.SIZE:
+		for x in ProceduralItemSprite.SIZE:
+			if bottle.get_pixel(x, y) != jarred.get_pixel(x, y):
+				any_differs = true
+	assert_true(any_differs, "an empty bottle should not render identically to a jarred insect")
+
+
 func test_crafted_items_have_their_own_look_rather_than_the_generic_fallback():
 	var fallback := generator.generate_image("some_totally_unknown_item")
 	for item_id in ["torch", "campfire", "cooked_meat"]:
