@@ -70,9 +70,13 @@ const WindDispersal = preload("res://src/world/wind_dispersal.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 
-## How big a leaf reads on the ground, in world pixels -- ported unchanged
-## from DroppedItem.LEAF_WORLD_SIZE's own derivation.
-const WORLD_SIZE := ProceduralItemSprite.WALNUT_WORLD_WIDTH * 1.5
+## How big a leaf reads on the ground, in world pixels. Originally ported
+## unchanged from DroppedItem.LEAF_WORLD_SIZE's own derivation
+## (WALNUT_WORLD_WIDTH * 1.5); reported directly as too large once seen
+## rendered at real scale ("leaves should be half as big") -- halved to
+## 0.75x walnut width. Pinned by test_world_size_is_half_its_previous_
+## walnut_relative_size, not eyeballed.
+const WORLD_SIZE := ProceduralItemSprite.WALNUT_WORLD_WIDTH * 0.75
 
 ## Ported unchanged from DroppedItem's own identically-named/valued
 ## constants (see that file's "Falling and swaying" section).

@@ -7,6 +7,7 @@ extends GutTest
 const BehaviorKernel = preload("res://src/gameplay/behavior_kernel.gd")
 const Ethogram = preload("res://src/gameplay/ethogram.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
+const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 
 ## Every gate open, so a test about ranking is not accidentally about gating.
 const ALL_OPEN := {"fear": 1.0, "thirst": 1.0, "hunger": 1.0, "courtship": 1.0}
@@ -195,16 +196,20 @@ func test_three_species_share_one_hunger_wiring():
 
 
 ## The same ladder, fed the real fruit mixtures, sends a fly and a boar to
-## different fruit -- olfaction's pillar, reached through the kernel.
+## different fruit -- olfaction's pillar, reached through the kernel. Smells
+## arrive through the smell sense (ScentForaging.stimuli_from), which is what
+## gives each one its loudness at this range; the smell wiring's floor is
+## stated in those units.
 func test_a_fly_and_a_boar_choose_different_fruit_through_the_kernel():
 	var hungry := {"fear": 1.0, "thirst": 0.0, "hunger": 1.0, "courtship": 0.0}
 	var ripe := {"position": Vector2(60, 0), "mixture": Olfaction.fruit_mixture("apple", 1.0)}
 	var rotten := {"position": Vector2(-60, 0), "mixture": Olfaction.fruit_mixture("apple", 0.0)}
+	var smelled := ScentForaging.stimuli_from(Vector2.ZERO, [ripe, rotten])
 	var boar := BehaviorKernel.decide(
-		Ethogram.wirings_for("mammal"), Ethogram.express("boar"), hungry, Vector2.ZERO, [ripe, rotten]
+		Ethogram.wirings_for("mammal"), Ethogram.express("boar"), hungry, Vector2.ZERO, smelled
 	)
 	var fly := BehaviorKernel.decide(
-		Ethogram.wirings_for("mammal"), Ethogram.express("fly"), hungry, Vector2.ZERO, [ripe, rotten]
+		Ethogram.wirings_for("mammal"), Ethogram.express("fly"), hungry, Vector2.ZERO, smelled
 	)
 	assert_eq(boar["intent"], "seek_food")
 	assert_gt(boar["direction"].x, 0.0, "the boar heads for the ripe apple")
@@ -225,7 +230,9 @@ func test_a_sated_animal_walks_past_a_windfall():
 ## decay receptor cannot be drawn by a windfall it would otherwise take.
 func test_an_expressed_receptor_gene_changes_what_an_individual_does():
 	var hungry := {"fear": 1.0, "thirst": 0.0, "hunger": 1.0, "courtship": 0.0}
-	var rotten := {"position": Vector2(-60, 0), "mixture": {"decay": 1.0}}
+	var rotten: Dictionary = ScentForaging.stimuli_from(
+		Vector2.ZERO, [{"position": Vector2(-60, 0), "mixture": {"decay": 1.0}}]
+	)[0]
 	var typical := BehaviorKernel.decide(
 		Ethogram.wirings_for("mammal"), Ethogram.express("boar"), hungry, Vector2.ZERO, [rotten]
 	)
@@ -235,3 +242,82 @@ func test_an_expressed_receptor_gene_changes_what_an_individual_does():
 	)
 	assert_eq(typical["intent"], "seek_food")
 	assert_eq(anosmic["intent"], "search_food", "it smells nothing, so it roams for food instead")
+
+
+# -- slice 2: payloads, sense-supplied strength, floors, helpers -------------
+
+## The winning stimulus comes back whole, so a caller that tagged it with its
+## own payload (a node reference, say) gets that payload back.
+func test_a_decision_carries_the_winning_stimulus_payload():
+	var tagged := {"position": Vector2(10, 0), "features": {"flesh": 1.0}, "node": "wolf-7"}
+	var decision := BehaviorKernel.decide(_ladder(), _omnivore(), ALL_OPEN, Vector2.ZERO, [tagged])
+	assert_eq(decision["stimulus"]["node"], "wolf-7")
+	assert_eq(BehaviorKernel.decide([], _omnivore(), ALL_OPEN, Vector2.ZERO, [])["stimulus"], null)
+
+
+## A sense that knows how loud a thing is at this range (smell, with its own
+## dilution law) says so on the stimulus, and that replaces the distance
+## ranking: a strong far smell beats a faint near one.
+func test_a_stimulus_may_carry_its_own_strength_instead_of_distance_ranking():
+	var wirings := [{"gate": "hunger", "channels": ["sugar"], "approach": "seek_food"}]
+	var sweet_tooth := _receptors({"sugar": 1.0}, {"sugar": 1.0})
+	var faint_near := {"position": Vector2(10, 0), "features": {"sugar": 1.0}, "strength": 0.1}
+	var strong_far := {"position": Vector2(200, 0), "features": {"sugar": 1.0}, "strength": 0.9}
+	var decision := BehaviorKernel.decide(
+		wirings, sweet_tooth, ALL_OPEN, Vector2.ZERO, [faint_near, strong_far]
+	)
+	assert_eq(decision["target"], Vector2(200, 0))
+
+
+func test_a_stimulus_with_zero_strength_is_out_of_range_and_never_chosen():
+	var wirings := [
+		{"gate": "hunger", "channels": ["sugar"], "approach": "seek_food", "search": "search_food"}
+	]
+	var sweet_tooth := _receptors({"sugar": 1.0}, {"sugar": 1.0})
+	var gone := {"position": Vector2(10, 0), "features": {"sugar": 1.0}, "strength": 0.0}
+	assert_eq(
+		BehaviorKernel.decide(wirings, sweet_tooth, ALL_OPEN, Vector2.ZERO, [gone])["intent"],
+		"search_food"
+	)
+
+
+## Below a wiring floor an animal is not interested enough to cross a field:
+## ScentForaging.MIN_INTEREST, now a property of the wiring.
+func test_a_wiring_floor_ignores_a_stimulus_too_faint_to_cross_a_field():
+	var wirings := [{"gate": "hunger", "channels": ["sugar"], "approach": "seek_food", "floor": 0.5}]
+	var sweet_tooth := _receptors({"sugar": 1.0}, {"sugar": 1.0})
+	var faint := {"position": Vector2(10, 0), "features": {"sugar": 0.1}, "strength": 1.0}
+	var strong := {"position": Vector2(10, 0), "features": {"sugar": 1.0}, "strength": 1.0}
+	assert_eq(BehaviorKernel.decide(wirings, sweet_tooth, ALL_OPEN, Vector2.ZERO, [faint])["intent"], "wander")
+	assert_eq(BehaviorKernel.decide(wirings, sweet_tooth, ALL_OPEN, Vector2.ZERO, [strong])["intent"], "seek_food")
+
+
+## The ranking on its own, for a motor program that wants to pick a target
+## and commit to it itself (the grazer choosing what to smell its way to).
+func test_best_stimulus_ranks_like_decide_and_reports_pull_and_score():
+	var sweet_tooth := _receptors({"sugar": 1.0, "decay": 1.0}, {"sugar": 1.0, "decay": -1.0})
+	var ripe := {"position": Vector2(30, 0), "features": {"sugar": 1.0}}
+	var rotten := {"position": Vector2(10, 0), "features": {"decay": 1.0}}
+	var best := BehaviorKernel.best_stimulus(sweet_tooth, ["sugar", "decay"], Vector2.ZERO, [ripe, rotten])
+	assert_eq(
+		best["stimulus"]["position"], Vector2(10, 0),
+		"the rotten one is nearer and pulls as hard, only the other way"
+	)
+	assert_lt(best["pull"], 0.0)
+	assert_gt(best["score"], 0.0)
+	assert_true(BehaviorKernel.best_stimulus(sweet_tooth, ["sugar"], Vector2.ZERO, []).is_empty())
+
+
+## What an animal NOTICES on some channels, whatever it makes of it: the
+## marker uses this for "is anything dangerous around" (lift the head from
+## grazing, widen the flee radius) whether it would fight or flee.
+func test_perceived_lists_the_stimuli_with_any_pull_on_the_channels():
+	var boar := _receptors(
+		{"predator": 1.0, "player": 0.0, "flesh": 1.0}, {"predator": 1.0, "player": -1.0, "flesh": 0.0}
+	)
+	var wolf := {"position": Vector2(10, 0), "features": {"predator": 1.0}}
+	var person := {"position": Vector2(20, 0), "features": {"player": 1.0}}
+	var sheep := {"position": Vector2(30, 0), "features": {"flesh": 1.0}}
+	var noticed := BehaviorKernel.perceived(boar, ["predator", "player"], [wolf, person, sheep])
+	assert_eq(noticed.size(), 1, "the wolf is noticed (to fight); the player is unsensed; the sheep is off-channel")
+	assert_eq(noticed[0]["position"], Vector2(10, 0))

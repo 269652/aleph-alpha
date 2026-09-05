@@ -19,8 +19,9 @@ func test_the_smell_channels_are_the_first_five_channels_of_the_basis():
 
 
 func test_the_basis_also_carries_the_non_smell_channels_the_mammal_ladder_needs():
-	for channel in ["danger", "flesh", "forage", "water", "mate"]:
+	for channel in ["predator", "player", "flesh", "forage", "water", "mate"]:
 		assert_true(Ethogram.CHANNELS.has(channel), channel)
+	assert_false(Ethogram.CHANNELS.has("danger"), "danger is a verdict, not a feature")
 
 
 func test_every_channel_is_named_exactly_once():
@@ -71,8 +72,10 @@ func test_expression_with_no_genome_is_the_species_template():
 ## non-smell channels the ladder listens on are always present.
 func test_a_mammal_expresses_its_body_plan_defaults_too():
 	var expressed := Ethogram.express("deer")
-	assert_almost_eq(expressed["sensitivity"]["danger"], 1.0, 0.0001)
-	assert_almost_eq(expressed["valence"]["danger"], -1.0, 0.0001, "the default answer to danger is to leave")
+	assert_almost_eq(expressed["sensitivity"]["predator"], 1.0, 0.0001)
+	assert_almost_eq(expressed["valence"]["predator"], -1.0, 0.0001, "the default answer to a predator is to leave")
+	assert_almost_eq(expressed["sensitivity"]["player"], 1.0, 0.0001)
+	assert_almost_eq(expressed["valence"]["player"], -1.0, 0.0001, "...and to a person")
 	assert_almost_eq(expressed["valence"]["flesh"], 0.0, 0.0001, "a herbivore wants nothing from prey")
 	assert_almost_eq(expressed["valence"]["forage"], 1.0, 0.0001)
 	assert_almost_eq(expressed["valence"]["water"], 1.0, 0.0001)
@@ -216,11 +219,35 @@ func test_wirings_are_a_copy_not_the_record():
 ## top when it has one.
 func test_a_body_plan_override_expresses_that_plans_defaults_for_any_species():
 	var lynx := Ethogram.express("lynx", {}, "mammal")
-	assert_almost_eq(lynx["valence"]["danger"], -1.0, 0.0001)
+	assert_almost_eq(lynx["valence"]["predator"], -1.0, 0.0001)
 	assert_false(lynx["sensitivity"].has("decay"), "no record, no nose")
 	var robin := Ethogram.express("robin", {}, "mammal")
-	assert_almost_eq(robin["valence"]["danger"], -1.0, 0.0001, "the override's defaults")
+	assert_almost_eq(robin["valence"]["predator"], -1.0, 0.0001, "the override's defaults")
 	assert_almost_eq(
 		robin["sensitivity"]["decay"], float(Ethogram.SPECIES["robin"]["smell"]["sensitivity"]["decay"]),
 		0.0001, "...under the species' own nose"
 	)
+
+
+# -- slice 2: danger is no longer a verdict ------------------------------------
+
+## The fear wiring listens on what the OTHER thing is; the species valence
+## says whether that is something to flee, fight or ignore.
+func test_the_fear_wiring_listens_on_predator_and_player():
+	var fear := []
+	for wiring in Ethogram.wirings_for("mammal"):
+		if wiring["gate"] == "fear":
+			fear.append(wiring)
+	assert_eq(fear.size(), 1)
+	assert_eq(fear[0]["channels"], ["predator", "player"])
+	assert_eq(fear[0]["approach"], "attack")
+	assert_eq(fear[0]["avoid"], "flee")
+
+
+## The smell wiring carries the interest floor ScentForaging used to keep
+## for itself: below it an animal will not cross a field.
+func test_the_smell_wiring_carries_the_interest_floor():
+	assert_gt(Ethogram.SMELL_INTEREST_FLOOR, 0.0)
+	for wiring in Ethogram.wirings_for("mammal"):
+		if wiring["channels"] == Ethogram.SMELL_CHANNELS:
+			assert_almost_eq(wiring["floor"], Ethogram.SMELL_INTEREST_FLOOR, 0.0)

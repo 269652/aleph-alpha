@@ -44,6 +44,16 @@ const SkillTreeWindow = preload("res://scenes/skill_tree_window.gd")
 const CreaturePanel = preload("res://scenes/creature_panel.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
+
+## The player's own real momentum at ordinary walking pace (see
+## docs/concept/soil_fauna.md "Crushed underfoot: weight-emergent worm
+## mortality") -- full body mass, not PebbleDispersion's own foot-mass
+## fraction (that is for a glancing kick past a pebble; standing weight
+## settling onto something underfoot is a different, full-body-mass
+## event). Computed once rather than every _client_process call: neither
+## factor ever changes at runtime.
+const _PLAYER_STEP_MOMENTUM_KG_M_S := CreatureMass.PLAYER_MASS_KG * PebbleDispersion.FOOTSTEP_SPEED_MPS
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const Courtship = preload("res://src/gameplay/courtship.gd")
 const MammalCourtship = preload("res://src/gameplay/mammal_courtship.gd")
@@ -4803,6 +4813,21 @@ func _client_process(delta: float) -> void:
 	# last-processed creature happens to be standing.
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		_chunk_manager.tread_snow_at(creature.position, false)
+	# Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
+	# weight-emergent worm mortality") -- mirrors the tread_snow_at pair just
+	# above exactly (player, then every creature), but keyed on real weight
+	# rather than snow depth, so it runs regardless of season. No debounce
+	# needed for either: crush_worm_at's own removal is already idempotent
+	# (a worm that is already gone simply reports false again next frame),
+	# the same reasoning that let this skip the per-entity "last tile"
+	# tracking PathScarring/the snow trail's own debounce needs for a
+	# CONTINUOUS accumulator.
+	_chunk_manager.crush_worm_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
+	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		var marker := creature as CreatureMarker
+		var species: String = marker.info.species if marker.info != null else ""
+		var momentum := CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
+		_chunk_manager.crush_worm_at(marker.position, momentum)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).

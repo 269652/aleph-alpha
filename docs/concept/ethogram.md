@@ -154,18 +154,19 @@ receptor is expressed in. The basis is deliberately small and deliberately
 shared: a fruit, a carcass, a wolf and a puddle are all points in the same
 space, which is what lets one kernel compare them.
 
-| channel | what emits it | slice 1 source |
+| channel | what emits it | who publishes it |
 |---|---|---|
 | `sugar` | ripe fruit, nectar | `Olfaction.fruit_mixture` (✅) |
 | `decay` | rotting fruit, carrion | `Olfaction.fruit_mixture` (✅) |
 | `green` | leaves, cut grass, foliage | `Olfaction.fruit_mixture` (✅) |
 | `musk` | animals themselves | reserved, nothing emits it yet |
 | `smoke` | fire | reserved, nothing emits it yet |
-| `danger` | something that can hurt me | `CreatureMarker`'s existing threat scan, via the adapter |
-| `flesh` | something I could eat that is an animal | the existing prey scan, via the adapter |
-| `forage` | plant food in that direction | `CreaturePerception`'s biome food direction, via the adapter |
-| `water` | drinkable water in that direction | `CreaturePerception`'s water direction, via the adapter |
-| `mate` | my courtship partner | `MammalCourtship` pairing, via the adapter |
+| `predator` | a creature of a hunting species, by `CreatureInfo` | `CreatureMarker`'s creature scan (✅ slice 2) |
+| `player` | a person | `CreatureMarker`'s player scan (✅ slice 2) |
+| `flesh` | a creature that is not a hunter | `CreatureMarker`'s creature scan (✅ slice 2) |
+| `forage` | plant food at that tile, or the bite the grazer has committed to | `CreaturePerception.nearest_tile_offset` / `GrazerForaging` (✅ slice 2) |
+| `water` | drinkable water at that tile | `CreaturePerception.nearest_tile_offset` (✅ slice 2) |
+| `mate` | my courtship partner | `MammalCourtship` pairing (✅ slice 2) |
 
 `Ethogram.CHANNELS` is the ordered list; `Ethogram.SMELL_CHANNELS` is the
 first five and is what `Olfaction.MOLECULES` now aliases. The molecule
@@ -173,33 +174,56 @@ constants (`Olfaction.SUGAR` and friends) keep their names and their values;
 they are re-exported from the ethogram so that no caller of the smell API
 changes.
 
-**`danger` is a verdict wearing a feature's clothes, and this doc says so.**
-Today `CreatureMarker` decides who counts as a threat (players and predator
-creatures within `SENSE_RADIUS`) before `CreatureBehavior.decide` ever runs,
-so slice 1 can only hand the kernel that classification as a feature. The
-honest version, on the roadmap (§8, slice 2), has the scan publish
-`predator`, `player` and `conspecific` features and lets the *species'
-valence* decide that a sheep flees a wolf and a wolf does not flee a sheep.
-Until then the adapter is where that verdict lives, exactly as it does today.
+**Danger is not a feature, and there is no `danger` channel.** Slice 1 had
+one, because `CreatureMarker` then decided who counted as a threat (players
+and predator creatures within `SENSE_RADIUS`) before `CreatureBehavior.decide`
+ever ran, and the kernel could only be handed that classification. Slice 2
+made the scan report what the other thing *is* -- `predator`, `player`,
+`flesh` -- and left the verdict to the species valence: a sheep flees a wolf,
+a wolf ignores a wolf and eats a sheep, a tamed horse no longer perceives a
+person at all. `test_the_basis_also_carries_the_non_smell_channels_the_mammal_ladder_needs`
+pins that `danger` never comes back. A `conspecific` feature waits for a
+wiring that reads it (herd alarm, evolution.md); under pillar 7 a channel
+nothing reads is not published.
 
 ### 2. Stimuli
 
-A stimulus is `{"position": Vector2, "features": {channel: float}}`. It is
-what a sense hands the kernel. There is no stimulus *type*: a rotten apple is
-`{decay: 1.0, sugar: 0.15, green: 0.05}` and a wolf is `{danger: 1.0}`, and
-the only thing that distinguishes them is where they sit in the basis.
+A stimulus is `{"position": Vector2, "features": {channel: float}}` plus
+whatever the sense wants back: `CreatureMarker` tags each creature stimulus
+with its `node`, and the kernel returns the winning stimulus whole, which is
+how the marker gets its prey or attack target back. It is what a sense hands
+the kernel. There is no stimulus *type*: a rotten apple is `{decay: 1.0,
+sugar: 0.15, green: 0.05}` and a wolf is `{predator: 1.0}`, and the only
+thing that distinguishes them is where they sit in the basis.
 
-Who builds them, by slice:
+A stimulus may also carry a `strength`: how loud it is at this range, when
+the sense that reported it knows (smell, with `Olfaction.dilution`). The
+kernel then ranks by that instead of by its unit-free distance ranking
+(§6), and a wiring's `floor` is stated in those units. Anything on the smell
+channels therefore arrives through `ScentForaging.stimuli_from`, which is
+what attaches it.
 
-- ✅ `Olfaction.fruit_mixture(item_id, freshness)` already is a feature
-  vector over the smell channels; `EarthChunkManager.smells_near` already
-  returns `{position, mixture}` lists. `mixture` and `features` are the same
-  thing under two names, and the kernel accepts either key.
-- slice 1: `CreatureBehavior.decide` synthesises stimuli from the context it
-  already receives (§7). Nothing above it changes.
-- ⬜ slice 2: `CreatureMarker` publishes real stimuli (its threat/prey scans,
-  `smells_near`, `GrazerForaging`'s bite candidates) and the adapter's
-  synthesis retires.
+Who builds them:
+
+- ✅ `Olfaction.fruit_mixture(item_id, freshness)` is a feature vector over
+  the smell channels; `EarthChunkManager.smells_near` returns `{position,
+  mixture}` lists; `ScentForaging.stimuli_from` turns those into stimuli with
+  their dilution as `strength`. `mixture` and `features` are the same thing
+  under two names, and the kernel accepts either key.
+- ✅ slice 2: `CreatureMarker` publishes its senses on every sensing tick
+  (`_cached_stimuli`): every other creature as `{predator: 1}` or
+  `{flesh: 1}` by *its* role, every person as `{player: 1}`, the nearest
+  water and plant-food tiles at their real positions, and, per frame, its
+  courtship partner as `{mate: 1}`. The adapter's own synthesis from position
+  lists and headings survives only for callers that still speak the older
+  context shape (§7).
+- 🚧 Grazing bites are *not* stimuli. `GrazerForaging` still picks a visible
+  grass/fruit/seed/worm bite in diet order (`choose_bite`) and commits to it;
+  what slice 2 changed is that its smell step ranks through the kernel with
+  the individual's genome (`ScentForaging.best_source`). Diet order is
+  lexicographic (a boar prefers mast over grass at any distance), which a
+  weighted sum does not express; publishing bites as stimuli needs per-kind
+  wirings per species and is left for the body-plan slice.
 
 ### 3. Species records and body plans
 
@@ -234,18 +258,22 @@ The mammal defaults, and why each is what it is:
 
 | channel | sensitivity | valence | why |
 |---|---|---|---|
-| `danger` | 1.0 | −1.0 | every mammal notices a threat, and the default answer is to leave; the adapter flips valence to +1.0 for an animal that will stand and fight (§7) |
+| `predator` | 1.0 | −1.0 | every mammal notices a hunter, and the default answer is to leave; the adapter flips valence to +1.0 for an animal that will stand and fight, and to 0.0 for a hunter, which is not threatened by other creatures (§7) |
+| `player` | 1.0 | −1.0 | likewise for a person; the adapter zeroes *sensitivity* for a tamed animal, which has stopped perceiving people as anything at all |
 | `flesh` | 1.0 | 0.0 | a herbivore sees prey and wants nothing from it; the adapter sets +1.0 for a predator |
 | `forage` | 1.0 | +1.0 | plant food is food |
 | `water` | 1.0 | +1.0 | |
 | `mate` | 1.0 | +1.0 | |
 
-The two adapter overrides are state and species facts that today reach
-`decide()` only as context flags (`temperament`, `health_fraction`,
-`is_mature`, `is_predator`). The species record is where they belong
-(`flesh` valence is a diet fact; fight valence is temperament) and the
-roadmap moves them there when `decide()` learns which species it is deciding
-for (§8). Slice 1 does not pretend otherwise.
+The adapter overrides are species and state facts that reach `decide()` as
+context flags (`temperament`, `health_fraction`, `is_mature`, `is_predator`,
+`fears_players`, the world-boss aggro pair). The species record is where the
+species half belongs (`flesh` valence and "ignores other hunters" are diet
+facts; the fight valence is temperament) and `CreatureInfo`'s
+`PREDATOR_SPECIES`/`TEMPERAMENT_BY_SPECIES` tables are their source today for
+all thirty species, five of which have an ethogram record. Moving them
+means moving those tables, which is the body-plan slice's job (§8); the
+state half (health, maturity, taming, aggro) stays an override by nature.
 
 ### 4. Expression: genotype to receptors
 
@@ -285,16 +313,24 @@ circuit-level and species-typical, and this project has no reader that would
 make an individual valence visible. Under animal_genetics.md's rule that a
 gene with no reader is dead weight, valence genes wait for one.
 
-**Reader, and honest status.** `Olfaction.perceived_strength` and
-`Olfaction.attraction_to` gain an optional trailing `genome` argument and read
-`Ethogram.express(species, genome)`. That is the production reader; it makes
-"a boar with a poor decay receptor is drawn less by rot" a real, tested fact
-of the model. No live animal carries a receptor gene yet: `AnimalGenome`
-(animal_genetics.md §1) does not exist, `CreatureMarker` derives nothing from
-`wander_seed` but a stagger, and the markers call the species-keyed API. When
-`AnimalGenome` lands, `receptor_*` are candidates for its `GENE_NAMES` with
-`res://src/gameplay/ethogram.gd` as their `GENE_READERS` entry, which is
-exactly the guard that doc specifies.
+**Reader, and where the genes come from.** `Olfaction.perceived_strength`
+and `Olfaction.attraction_to` take an optional trailing `genome` argument and
+read `Ethogram.express(species, genome)`; `ScentForaging.best_source` takes
+the same and ranks through the kernel. Those are the production readers.
+Since slice 2 every live land mammal has a genome to hand them:
+`src/gameplay/animal_genome.gd` exists with exactly the receptor genes
+(`GENE_NAMES`, one per smell channel) and `GENE_READERS` naming
+`ethogram.gd` for each, under animal_genetics.md's own anti-dead-weight
+guard (`test_every_gene_has_a_named_production_reader`,
+`test_every_named_reader_module_exists`). `AnimalGenome.for_seed` derives it
+from the marker's `wander_seed` -- bell-shaped around the species template,
+the same shape `FlyerPersonality` gives boldness, so most individuals are
+close to their species and a freak nose is rare -- and
+`CreatureMarker.genome_or_derived()` hands it to every decision and every
+sniff, preferring a stored `genome` when a bred or restored animal has one.
+Nothing new is persisted: the seed already is. What is still that doc's:
+the seven genes it specifies, two-parent births (`from_parents`), and the
+V2 record.
 
 ### 5. Modulation: drives as gains
 
@@ -325,7 +361,7 @@ A **wiring** is one line of the ethogram:
 ```gdscript
 {"gate": "hunger", "channels": ["flesh"], "approach": "hunt"}
 {"gate": "thirst", "channels": ["water"], "approach": "seek_water", "search": "search_water"}
-{"gate": "fear",   "channels": ["danger"], "approach": "attack", "avoid": "flee"}
+{"gate": "fear",   "channels": ["predator", "player"], "approach": "attack", "avoid": "flee"}
 ```
 
 - `gate`: the drive whose level scales this wiring; level zero skips it.
@@ -333,42 +369,56 @@ A **wiring** is one line of the ethogram:
 - `approach`: the intent when the best stimulus *draws* (pull > 0), heading
   toward it.
 - `avoid` (optional): the intent when the best stimulus *repels* (pull < 0),
-  heading away. A wiring with no `avoid` ignores a repellent stimulus rather
-  than fleeing it; a deer that smells a carcass walks on, it does not bolt.
+  heading away. A wiring with no `avoid` listens only for what draws it: a
+  deer that smells a carcass neither bolts from it nor lets it shadow the
+  ripe apple beyond.
 - `search` (optional): the intent when the gate is open but nothing on these
   channels is sensed at all, with a zero direction for the caller to fill in,
   exactly today's `search_food`/`search_water` contract.
+- `floor` (optional): the score a stimulus must exceed to fire the wiring at
+  all. The smell wiring carries `Ethogram.SMELL_INTEREST_FLOOR`, which is
+  what `ScentForaging.MIN_INTEREST` now aliases.
 
 The kernel:
 
 ```gdscript
 static func decide(wirings: Array, receptors: Dictionary, drives: Dictionary,
                    position: Vector2, stimuli: Array) -> Dictionary
-    # -> {"intent": String, "direction": Vector2}
+    # -> {"intent", "direction", "score", "target", "stimulus"}
+static func best_stimulus(receptors, channels, position, stimuli,
+                          level := 1.0, floor := 0.0, attract_only := false) -> Dictionary
+    # -> {"stimulus", "pull", "score"} or {}
+static func perceived(receptors, channels, stimuli) -> Array
+    # every stimulus with a nonzero pull on those channels, fight or flee alike
 ```
 
-evaluates wirings top to bottom, the same first-match discipline
+`decide` evaluates wirings top to bottom, the same first-match discipline
 `npc_instruction_evaluator.gd` uses for the player's instruction rules. For
 each wiring with an open gate it scores every stimulus:
 
 ```
 pull  = Σ_{c ∈ channels} features[c] · sensitivity[c] · valence[c]
-score = |pull| · level · Affinity.proximity(distance)
+score = |pull| · level · weight
+weight = stimulus.strength if the sense supplied one, else Affinity.proximity(distance)
 ```
 
 and takes the highest score. `Affinity.proximity(d) = 1 / (1 + d)` is a
 *ranking* function, not physics: strictly decreasing and never zero, so that
 between two stimuli with equal pull the nearer one wins, which is precisely
-today's `_nearest` behaviour and is pinned by the existing
+the old `_nearest` behaviour and is pinned by
 `test_flees_from_the_nearest_of_several_threats`. Range is the sense's job,
-not the kernel's: `Olfaction.dilution` still says how far a smell carries and
-`SENSE_RADIUS` still says how far a threat is noticed, and the kernel never
-drops a stimulus a sense chose to report. The sign of the winning pull picks
+not the kernel's: `Olfaction.dilution` says how far a smell carries and hands
+it over as `strength`, `SENSE_RADIUS` says how far a threat is noticed, and
+the kernel never drops a stimulus a sense chose to report (a strength of zero
+is how a sense says "out of range"). The sign of the winning pull picks
 `approach` or `avoid`; an open gate with no scoring stimulus yields `search`
 when the wiring has one; and when every wiring has passed, the answer is
 `wander` with a zero direction. `Affinity.toward`/`away_from` carry
-`CreatureBehavior`'s existing `OVERLAP_FALLBACK` so a creature standing on its
-threat still flees somewhere.
+`CreatureBehavior`'s old `OVERLAP_FALLBACK` so a creature standing on its
+threat still flees somewhere. `best_stimulus` is the same ranking on its own,
+for a motor program that picks a target and commits to it itself (the grazer
+choosing what to smell its way to); `perceived` is what the marker keeps as
+its threat list (§7).
 
 **The land-mammal ethogram**, `Ethogram.BODY_PLANS["mammal"]["wirings"]`, is
 today's `CreatureBehavior` priority ladder written as data, in the same order
@@ -377,31 +427,33 @@ hunted, dying of thirst, starving or mid-hunt):
 
 ```gdscript
 [
-    {"gate": "fear",      "channels": ["danger"],     "approach": "attack",    "avoid": "flee"},
+    {"gate": "fear",      "channels": ["predator", "player"], "approach": "attack", "avoid": "flee"},
     {"gate": "thirst",    "channels": ["water"],      "approach": "seek_water", "search": "search_water"},
     {"gate": "hunger",    "channels": ["flesh"],      "approach": "hunt"},
-    {"gate": "hunger",    "channels": SMELL_CHANNELS, "approach": "seek_food"},
+    {"gate": "hunger",    "channels": SMELL_CHANNELS, "approach": "seek_food", "floor": SMELL_INTEREST_FLOOR},
     {"gate": "hunger",    "channels": ["forage"],     "approach": "seek_food", "search": "search_food"},
     {"gate": "courtship", "channels": ["mate"],       "approach": "court"},
 ]
 ```
 
-Two things in that list are new, and both are inert for the live game until
-slice 2. The smell wiring lets the kernel choose a windfall by nose through
-the same ladder (`test_a_fly_and_a_boar_choose_different_fruit_through_the_kernel`
-proves it against the real fruit mixtures), but `CreatureBehavior`'s context
-carries no smells today, so the wiring never sees a stimulus from a live
-marker; `ScentForaging.best_source` keeps doing that job in `CreatureMarker`
-until the marker publishes smells as stimuli. And the ladder being *data*
-means its order is a property a test can read
+The ladder being *data* means its order is a property a test can read
 (`test_the_mammal_ladder_puts_fear_before_thirst_before_hunger_before_courtship`)
-rather than an accident of `if` nesting.
+rather than an accident of `if` nesting. The smell wiring lets the kernel
+choose a windfall by nose through the same ladder
+(`test_a_fly_and_a_boar_choose_different_fruit_through_the_kernel` proves it
+against the real fruit mixtures); the adapter reaches it through its `smells`
+context key. The live mammal marker does not: its grazing bout owns the
+commitment to a bite, so it ranks smells with the same kernel
+(`ScentForaging.best_source`, with the individual's genome) *inside* that
+motor program and hands the winner to `GrazerForaging` -- pillar 4, the
+caller commits. The wiring's live readers are the body plans that hunt by
+nose without a grazing bout (§8, slice 5).
 
 Order is priority in slice 1. The roadmap's version (§8, slice 4) scores
 across wirings with fear's gain large enough that the ladder falls out of the
 numbers, and that ordering test is what will keep it honest when it does.
 
-### 7. What sits on the kernel in slice 1
+### 7. What sits on the kernel
 
 **`Olfaction` becomes a view.** `perceived_strength(species, mixture,
 distance_tiles, genome := {})` is
@@ -415,45 +467,63 @@ test moves from iterating `Olfaction.RECEPTORS` to iterating
 `Ethogram.SPECIES` and asserting every nose covers every smell channel, which
 is the same guarantee against a silently invisible molecule.
 
-**`CreatureBehavior.decide` becomes the mammal adapter.** Same signature,
-same context keys, same return shape. It maps:
+**`CreatureBehavior.decide` is the mammal adapter.** Same signature, same
+intents. A caller that publishes `stimuli` is taken at its word; the older
+position-list shape is turned into stimuli for callers that still speak it.
+The overrides on the individual's expressed receptors:
 
 | context | becomes |
 |---|---|
-| `threats: [Vector2]` | one stimulus each, `{danger: 1.0}` |
-| `prey: [Vector2]` | one stimulus each, `{flesh: 1.0}` |
-| `water_direction != ZERO` | one stimulus at `position + direction`, `{water: 1.0}` |
-| `food_direction != ZERO` | one stimulus at `position + direction`, `{forage: 1.0}` |
-| `is_courting` + `partner_position` | one stimulus, `{mate: 1.0}` |
+| `stimuli` | used as published (`{predator}`, `{player}`, `{flesh}`, `{forage}`, `{water}`, `{mate}`, smells) |
+| `threats: [Vector2]` (older shape) | one stimulus each, `{player: 1.0}` -- the one feature every species answers |
+| `prey: [Vector2]`, `water_direction`, `food_direction`, `partner_position`, `smells` (older shape) | stimuli as before; smells through `ScentForaging.stimuli_from` |
 | `hungry`, `thirsty`, `is_courting` | drives `hunger`, `thirst`, `courtship` at 1.0 or 0.0; `fear` at 1.0 |
-| `is_world_boss and not is_aggroed` | `danger` *sensitivity* 0.0: an un-aggroed boss perceives no threat, so it neither attacks nor flees, and still drinks and eats (worldbosses.md) |
-| `temperament == "aggressive" and health_fraction >= STRONG_HEALTH_FRACTION and is_mature` | `danger` *valence* +1.0 (stand and fight); otherwise −1.0 (flee) |
-| `is_predator` | `flesh` valence +1.0; otherwise 0.0 |
+| `is_world_boss and not is_aggroed` | `predator` and `player` *sensitivity* 0.0: an un-aggroed boss perceives no threat, so it neither attacks nor flees, and still drinks and eats (worldbosses.md) |
+| `fears_players == false` (tamed) | `player` *sensitivity* 0.0: people are not a thing it reacts to any more |
+| `temperament == "aggressive" and health_fraction >= STRONG_HEALTH_FRACTION and is_mature` | `player` *valence* +1.0 (stand and fight), and `predator` valence likewise for a non-hunter; otherwise −1.0 (flee) |
+| `is_predator` | `predator` valence 0.0 (a hunter is not threatened by other creatures, only by people); `flesh` valence +1.0; otherwise 0.0 |
 
-Everything the existing 33 tests pin (the ladder order, nearest-threat flight,
+Everything the original 33 tests pin (the ladder order, nearest-threat flight,
 the overlap fallback, the world-boss gate, the juvenile rule, the skittish
-temperament, the search fallbacks) is preserved by that mapping and is
-re-run unchanged as the regression bar. `_will_fight`, `_perceives_threats`,
-`_nearest`, `_toward` and `_away_from` cease to exist as separate logic: the
-first two are the two receptor overrides, the last three are the kernel.
+temperament, the search fallbacks) is preserved and re-run unchanged as the
+regression bar; the slice-2 tests add the stimulus path, the predator and
+tamed verdicts, and `threats()`. `_will_fight` and `_perceives_threats`
+survive as the receptor overrides; `_nearest`, `_toward` and `_away_from`
+are the kernel. The adapter caches its expression and the wirings per
+instance, since it runs every frame for every creature.
 
-**`CreatureMarker` does not change.** It builds the same context and consumes
-the same intents. That is the point of doing slice 1 behind the decision
-seam: a 2,700-line marker with behaviour tangled into rendering is not
-rewritten, it is strangled.
+**`CreatureBehavior.threats(context)`** is `BehaviorKernel.perceived` on the
+fear channels: everything this individual *notices* as dangerous, whether it
+would fight or flee it. That is what the marker keeps as its threat list.
+
+**`CreatureMarker` (slice 2).** On each sensing tick it publishes
+`_cached_stimuli` (§2) and asks `threats()` for what it notices; that list
+feeds the grazing abort ("a threat outranks a meal"), and the flee-release
+widening of the scan radius runs off `_is_fleeing` as before. `decide()`
+gets the stimuli plus the frame-fresh courtship partner; `attack` and `hunt`
+act on the node the winning stimulus carries instead of re-scanning for the
+nearest. The old prey cache and the two direction caches are gone. The
+caution radius for wander avoidance (players within `CAUTION_RADIUS`) and
+the flee Schmitt trigger are untouched: they are commitment, not verdict.
+The genome reaches both `decide()` and the grazing bout's smell step through
+`genome_or_derived()` (§4).
 
 ### 8. Roadmap: the slices after this one
 
-Each is its own red-first pass with its own status entries here; none is
-started by slice 1.
+Each is its own red-first pass with its own status entries here.
 
-- ⬜ **Slice 2, real stimuli.** `CreatureMarker` publishes its threat scan
-  as `predator`/`player`/`conspecific` features, its `smells_near` results
-  and `GrazerForaging`'s bite candidates as stimuli, and passes its species
-  and genome. `ScentForaging.best_source` and `CreaturePerception`'s food
-  direction retire into the kernel; `danger` stops being a verdict; the
-  `flesh` and fight overrides move into the species record. Also the natural
-  point to give a horse or a mouse its own smell block.
+- ✅ **Slice 2, real stimuli** (2026-09-05). `CreatureMarker` publishes its
+  creature and player scans as `predator`/`player`/`flesh` features and the
+  nearest water/food tiles at real positions, passes its species and genome,
+  and reads its threat list back from the valence (`threats()`); `danger`
+  is gone from the basis. `ScentForaging.best_source` ranks through the
+  kernel with the individual genome; `CreaturePerception` reports the tile
+  itself. `AnimalGenome.for_seed` gives every land mammal receptor genes
+  from its `wander_seed`, so individual noses are live. Deliberately not
+  done, and recorded in §2 and §3: grazing bites stay `GrazerForaging`'s
+  (diet order is lexicographic), the `flesh`/fight/"ignores other hunters"
+  facts stay adapter overrides sourced from `CreatureInfo`'s tables, and no
+  `conspecific` feature is published until a wiring reads one.
 - ⬜ **Slice 3, one drive vector.** `CreatureNeeds`, `NpcNeeds`,
   `PiscivoreAppetite` and `BirdDigestion` become one `Drives` module with
   per-body-plan rates (the player's `SurvivalMeters` stays the player's);
@@ -504,13 +574,19 @@ started by slice 1.
 
 ## What the player can see
 
-After slice 1: nothing different, by design. Every animal decides exactly
-what it decided yesterday, because the slice is a behaviour-preserving
+After slice 1: nothing different, by design. Every animal decided exactly
+what it decided the day before, because the slice was a behaviour-preserving
 re-expression of the decision it already made, pinned by the tests that
-already existed. What the player gets is indirect and arrives with the later
-slices: a species added as a record rather than a marker branch, individuals
-whose noses differ and whose children inherit that, and personalities that
-are numbers a breeder can select on.
+already existed.
+
+After slice 2: individuals. Every wild land mammal derives receptor genes
+from its own seed, so two boars at the same windfall can disagree about it,
+and one born without a decay receptor walks past carrion the other takes.
+Nothing else looks different, because the verdicts moved without changing:
+a sheep still flees a wolf, a wolf still ignores a wolf, a tamed horse still
+ignores its owner. What is still to come: a species added as a record rather
+than a marker branch, children who inherit their parents' noses, and
+personalities that are numbers a breeder can select on.
 
 ## Status / mechanisms
 
@@ -539,9 +615,23 @@ are numbers a breeder can select on.
 - ✅ Regression after the rewire: the olfaction, scent-foraging, flies,
   fly-life-cycle, creature-marker, creature-info, ambient-flyer-marker and
   piscivore-bird-marker suites all green.
-- ⬜ Anything visible. The smell wiring and the `smells`/`species`/`genome`
-  context keys are fed by nothing live; no animal carries a receptor gene.
-- ⬜ Slices 2 to 6 above, each untouched.
+- ✅ Slice 2: `predator`/`player`/`flesh` replace `danger` in the basis; the
+  kernel returns the winning stimulus whole, ranks by a sense-supplied
+  `strength`, honours a wiring `floor`, and exposes `best_stimulus` and
+  `perceived`; `ScentForaging.stimuli_from`/`best_source` rank through the
+  kernel with a genome; `CreaturePerception.nearest_tile_offset`;
+  `AnimalGenome.for_seed` with `GENE_NAMES`/`GENE_READERS` and the two guard
+  tests; `CreatureBehavior` takes published `stimuli` and `fears_players`,
+  exposes `threats()`, caches its expression; `CreatureMarker` publishes
+  `_cached_stimuli`, derives `genome_or_derived()` from `wander_seed`, and
+  acts on the winning stimulus's node. Marker, adapter, creature-info,
+  ambient-flyer, piscivore, taming, reproduction and courtship suites green.
+- ✅ Visible now: every wild land mammal has its own nose. A boar born
+  without a decay receptor walks past carrion the next boar takes
+  (`test_an_individuals_nose_reaches_the_live_forage_choice`).
+- ⬜ Grazing bites as stimuli; the species half of the adapter overrides in
+  the species record; a `conspecific` feature (§2, §3).
+- ⬜ Slices 3 to 6 above, each untouched.
 
 *Coverage note: every mechanism in this list is a pure module with a headless
 unit test. Nothing here is exercised by an integration test against a live
@@ -551,10 +641,11 @@ thing to one.*
 
 ## Open questions
 
-- **When does `danger` stop being a verdict?** Slice 2 as planned, but the
-  split between "the sense classifies" and "the valence decides" has a real
-  cost question attached: a per-tick valence check over every nearby creature
-  is more work than the marker's current group scan under `SimulationLod`.
+- **Resolved: `danger` stopped being a verdict in slice 2.** The cost
+  question it carried turned out small: the scan still classifies each
+  creature by its own role in the same one pass, and the valence check is
+  one dot product per stimulus per sensing tick (`threats()`), not per
+  frame. What is still open is the *species* half of the overrides (§3).
 - **One proximity law or one per sense?** Smell has its own dilution and the
   kernel ranks by a unit-free proximity. When vision and hearing get ranges,
   are those the sense's (as now) or does the kernel take a per-channel
