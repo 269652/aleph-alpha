@@ -2,6 +2,8 @@ extends RefCounted
 
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
+const WaterShader = preload("res://src/rendering/water_shader.gd")
+const StoneSize = preload("res://src/world/stone_size.gd")
 
 ## Realistic flowing river water: a surface field advected downstream in
 ## two crossfaded phases, over the channel's real parabolic cross-section,
@@ -57,6 +59,10 @@ uniform vec3 ink_color : source_color = vec3(0.05, 0.13, 0.25);
 uniform float line_count = 3.0;
 uniform float across_line_scale = 1.0;
 uniform float line_wobble = 0.6;
+// The half width, in NOISE CELLS, that line_wobble was tuned at. The
+// wobble is scaled down in proportion for anything wider -- see the
+// s_field line for why.
+uniform float wobble_reference_cells = 2.56;
 uniform float line_width = 0.03;
 uniform float line_strength = 0.7;
 uniform vec3 line_color : source_color = vec3(0.85, 0.97, 1.0);
@@ -67,12 +73,44 @@ uniform vec3 moonlight_ink : source_color = vec3(0.92, 0.96, 1.0);
 uniform float shore_pos = 0.88;
 uniform float shore_width = 0.025;
 uniform float smear_spacing = 0.8;
+// How much of the across map's reconstruction is the CUBIC filter rather
+// than plain hardware bilinear. 1 is the cubic; 0 is exactly what shipped
+// before, for comparison in game.
+uniform float map_smoothing = 1.0;
+// DIAGNOSTIC, off by default. Draws the contours of frag_across alone --
+// no noise, no advection, no cel shading, no strokes, no lighting -- so
+// the field the whole picture is built from can be looked at directly
+// instead of inferred from what it produces. Toggled live by /flowdebug.
+// How much of an obstacle's core is softened, as a fraction of its own
+// radius. Outside this band the push is EXACTLY the untouched round-core
+// displacement; inside it the sign ramps smoothly through zero instead of
+// flipping. 0.35 confines the change to 3.9px for a boulder and 2.1px for
+// a wader, leaving the bulge itself alone.
+uniform float obstacle_side_softness = 0.35;
+uniform float debug_across = 0.0;
+uniform float debug_across_bands = 8.0;
+// How far the smear is allowed to follow the course's curve. 1 reads the
+// flow at both ends of the smear and bends the taps between them; 0
+// collapses both ends onto the fragment's own direction, which is exactly
+// the straight smear this replaced -- so the two can be compared in game
+// at one uniform rather than by rebuilding.
+uniform float smear_curvature = 1.0;
 uniform float smear_gain = 2.0;
 uniform float turbulence_strength = 1.6;
 uniform float eddy_scale = 0.16;
 uniform float eddy_detail_weight = 0.7;
+uniform float eddy_detail_frequency = 2.6;
+uniform float eddy_swirl = 0.0;
+uniform float bank_shear = 0.25;
 uniform sampler2D flow_across_map : filter_linear, repeat_enable;
+uniform sampler2D flow_scale_map : filter_linear, repeat_enable;
 uniform float flow_map_tiles = 256.0;
+// No longer read inside fragment(): every per-fragment normalization now
+// decodes the tile's REAL local half-width from the direction vector's own
+// magnitude (see map_data's own comment below). Kept declared, with its
+// default still set from _apply_defaults, only so nothing external
+// resolving this material's parameters by name breaks; harmless as an
+// unused uniform.
 uniform float half_width_tiles = 2.0;
 uniform float tile_px = 16.0;
 uniform float bank_feather = 0.03;
@@ -80,26 +118,88 @@ uniform float across_jitter = 0.045;
 uniform float jitter_scale = 2.0;
 uniform int boulder_count = 0;
 uniform vec2 boulders[24];
-uniform float boulder_reach_px = 40.0;
-uniform float boulder_radius_px = 11.0;
+// Every rock is a rock of its own size: one radius per slot, in world
+// px, from the stone's real diameter (RiverFlowShader.boulder_radius_px_
+// for); the push reach is that radius times boulder_reach_ratio.
+uniform float boulder_radius[24];
+uniform float boulder_reach_ratio = 3.6;
+// The rock is a rise in the bed: the water shallows toward it over this
+// many radii past its edge (its SHOAL), and shallow water is light here
+// for the same reason the banks are. No painted ring.
+uniform float boulder_shoal_ratio = 1.5;
+// FOAM IN FRONT: the current stagnates on the rock's upstream face and,
+// fast enough, breaks white there. Window off the face in radii, the
+// speeds between which the reach goes from parting cleanly to foaming,
+// and how the foam prints.
+uniform float boulder_foam_reach_ratio = 0.9;
+uniform float foam_min_m_s = 0.3;
+uniform float foam_full_m_s = 1.0;
+uniform float foam_alpha = 0.85;
+uniform vec3 foam_color : source_color = vec3(0.93, 0.97, 1.0);
+// WHIRLS BEHIND: the wake lobe, in radii, and how much harder the
+// standing-turbulence bend whirls inside it.
+uniform float boulder_wake_length_ratio = 6.0;
+uniform float boulder_wake_width_ratio = 1.5;
+uniform float boulder_wake_gain = 0.15;
+// ...and the foam the face sheds streams down the wake at this fraction
+// of the face's own.
+uniform float wake_foam = 0.35;
 
 // The waders -- the player and any creatures standing in river water,
 // fed per frame by EarthChunkManager.set_river_flow_waders. Soft moving
 // obstacles that never dry the water.
 uniform int wader_count = 0;
-uniform vec2 waders[8];
+uniform vec2 waders[16];
 uniform float wader_reach_px = 26.0;
 uniform float wader_radius_px = 6.0;
 uniform float wader_wake_trail = 0.8;
 
+// MOVEMENT RIPPLES -- a fish darting past, the player or an animal moving
+// through the water. Recorded and aged by the SAME buffer the sea's
+// surface draws from (WaterShader.add_disturbance/advance_disturbances,
+// fanned out by EarthChunkManager): one ring buffer, one lifetime, one
+// distance cull, two surfaces. disturbance_age is CPU-driven seconds since
+// the event, NOT TIME minus a stored stamp -- the shader clock and
+// Time.get_ticks_msec() have no shared epoch, and comparing them is what
+// once made every ripple permanently out of range and invisible.
+uniform vec2 disturbance_pos[16];
+uniform float disturbance_age[16];
+uniform int disturbance_count = 0;
+uniform float ripple_speed = 14.0;
+uniform float ripple_lifetime = 2.2;
+uniform float ripple_wavelength = 6.0;
+uniform float ripple_packet_width = 7.0;
+uniform float ripple_spread_decay = 0.02;
+// How the packet reaches the drawn surface: how far a crest bends the
+// contour field the current lines trace, and the crest amplitudes between
+// which the ring inks in its own right.
+uniform float ripple_line_gain = 0.18;
+uniform float ripple_crest_min = 0.10;
+uniform float ripple_crest_full = 0.40;
+// The ring's own ink band: where on the crest's sine a pixel must sit to
+// print (its WIDTH, in px, is one number independent of age), and the
+// ceiling it prints at -- below a full stroke, so it reads lighter than a
+// current line.
+uniform float ripple_ring_edge = 0.85;
+uniform float ripple_ink_max = 0.6;
+
 // Continuous downstream travel, px/s per m/s of real current.
-uniform float drift_px_per_mps = 9.0;
+uniform float drift_px_per_mps = 20.0;
 // The period, in noise cells, the smeared field TILES at and the drift wraps
 // modulo -- what keeps the direction-scaled translation bounded (see the
 // drift line in fragment()).
 uniform float drift_period = 20.0;
+// The dim end of the brightness pulse that streams along every stroke.
+// Deep enough that a bright segment travelling down a line is obvious,
+// never zero, so a dim segment is still a stroke.
+uniform float pulse_floor = 0.35;
+// How fast the standing eddies migrate downstream, as a fraction of the
+// surface's own drift. 0 is the old fully bed-anchored bend.
+uniform float bend_drift_fraction = 0.4;
 // The real-speed threshold above which strokes brighten (m/s).
 uniform float fast_flow_m_s = 0.6;
+uniform float still_flow_m_s = 0.02;
+uniform float still_ripple = 0.25;
 uniform vec3 band0_color : source_color = vec3(0.30, 0.60, 0.66);
 uniform vec3 band1_color : source_color = vec3(0.22, 0.50, 0.62);
 uniform vec3 band2_color : source_color = vec3(0.16, 0.40, 0.56);
@@ -158,6 +258,92 @@ float value_noise_tiled(vec2 p, float period) {
 	);
 }
 
+// ONE expanding wave packet -- character for character the sea's own
+// (WaterShader's ripple_packet), because a fish's wake must read the same
+// in a river as in the ocean. Not a hard ring but a travelling packet of
+// concentric crests and troughs behind the front, decaying with age and
+// with the circumference it spreads its energy around.
+//
+// SIGNED -- crests positive, troughs negative -- which is the whole point:
+// overlapping wakes then genuinely interfere, destructively as well as
+// constructively, instead of only ever piling up. Mirrored on the CPU by
+// RiverFlowShader.ripple_packet, which is what pins it under test.
+float ripple_packet(float dist, float age) {
+	if (age < 0.0 || age > ripple_lifetime) {
+		return 0.0;
+	}
+	float front = age * ripple_speed;
+	float phase = front - dist;  // > 0 = inside the advancing front
+	float packet = exp(-abs(phase) / ripple_packet_width);
+	float rings = sin(phase * 6.28318530718 / ripple_wavelength);
+	float age_fade = 1.0 - age / ripple_lifetime;
+	float spread_fade = 1.0 / (1.0 + front * ripple_spread_decay);
+	return rings * packet * age_fade * spread_fade;
+}
+
+// The same packet WITHOUT its sine: how strong the wake is here, now,
+// regardless of whether this pixel sits on a crest or a trough. Dividing
+// the signed packet by this leaves the pure sine, which is what the ring's
+// ink band is cut from -- so the band's width is a threshold on the sine
+// (one number in px) and the envelope alone decides how hard it prints.
+// Mirrored by RiverFlowShader.ripple_envelope.
+float ripple_envelope(float dist, float age) {
+	if (age < 0.0 || age > ripple_lifetime) {
+		return 0.0;
+	}
+	float front = age * ripple_speed;
+	float phase = front - dist;
+	float packet = exp(-abs(phase) / ripple_packet_width);
+	float age_fade = 1.0 - age / ripple_lifetime;
+	float spread_fade = 1.0 / (1.0 + front * ripple_spread_decay);
+	return packet * age_fade * spread_fade;
+}
+
+// THE WATER'S VISIBLE SPEED, in world px/s downstream. TWO things move the
+// drawn surface: the two-phase drag, which translates the field
+// advect_strength cells every 1/advect_rate seconds no matter how fast
+// the reach runs, and the linear drift keyed to the real current. So
+// anything that has to "move with the water" -- the ring centre below,
+// the eddy field the guide lines are bent by -- must ride the SUM.
+// Carried by the drift alone, at a typical 0.5 m/s reach a wake moved at
+// a third of the water and the whirls at a fifth, and both read as
+// standing still while the pulses streamed past ("make the river ripples
+// move downstream at water speed", "a wobble stays in place instead of
+// flowing with the river", "the lines should move at the same speed").
+// Gated by the same hard still step the strokes use: a lake breathes
+// sideways and never drifts, so nothing on it is carried either. Mirrored
+// on the CPU by RiverFlowShader.surface_px_per_s.
+float surface_px_per_s(float speed_mps, float moving) {
+	return moving * (advect_strength * advect_rate / noise_scale + drift_px_per_mps * speed_mps);
+}
+
+// THE river adaptation. In still water a ring stays concentric about a
+// fixed point; in a current it is concentric about a point that MOVES WITH
+// THE WATER -- so the centre is carried downstream at the surface's whole
+// visible speed (surface_velocity: surface_px_per_s along the flow), and a
+// wake sits in the river instead of the river sliding out from under it.
+//
+// The age bound is checked BEFORE the centre and the distance, not left to
+// ripple_packet's own guard: the padded tail of the buffer carries a
+// sentinel age, and this is the loop the rain-ripple perf lesson applies
+// to (do the cheap rejection first, never the expensive half and then a
+// discard).
+float movement_ripples(vec2 pos, vec2 surface_velocity, out float envelope) {
+	float total = 0.0;
+	envelope = 0.0;
+	for (int i = 0; i < disturbance_count; i++) {
+		float age = disturbance_age[i];
+		if (age < 0.0 || age > ripple_lifetime) {
+			continue;
+		}
+		vec2 center = disturbance_pos[i] + surface_velocity * age;
+		float d = distance(pos, center);
+		total += ripple_packet(d, age);
+		envelope += ripple_envelope(d, age);
+	}
+	return total;
+}
+
 // The surface field: an isotropic, WORLD-ANCHORED noise smeared along the
 // local flow direction -- a line-integral-convolution stroke.
 //
@@ -172,15 +358,124 @@ float value_noise_tiled(vec2 p, float period) {
 //
 // Two scales, because real water has structure at several at once; the
 // fine octave stays unsmeared -- isotropic sparkle riding on the streaks.
-float line_field(vec2 q, vec2 flow_dir) {
-	// Triangle-weighted taps: the outer taps sit furthest along the
-	// direction vector, so they pay the most at a direction-bin change --
-	// weighting the centre keeps the stroke shape while cutting the seam
-	// budget roughly in half.
-	float total = 0.0;
-	for (int k = -4; k <= 4; k++) {
-		float w = 5.0 - abs(float(k));
-		total += value_noise_tiled(q + flow_dir * (float(k) * smear_spacing), drift_period) * w;
+// CUBIC B-SPLINE RECONSTRUCTION of a map texel grid.
+//
+// This is the zigzag. The flow map holds one texel per TILE, and every
+// stroke, the waterline, the ink line and the shore highlight is a CONTOUR
+// of that field. Hardware bilinear filtering makes the field's gradient
+// CONSTANT inside each texel cell and JUMP at the boundary, so its contours
+// are polygons -- straight segments meeting at a kink, one kink per tile.
+// A sawtooth, by construction, no matter how smooth the baked data is.
+//
+// Measured with tools/probe_bilinear.gd, walking the course at a bend the
+// artefact appears at every time, in degrees of contour-normal turn per
+// eighth of a tile: bilinear median 0.000 / peak 22.547, this filter
+// median 0.024 / peak 4.870. The median of exactly ZERO is the signature --
+// bilinear does not turn at all inside a cell, then turns all at once.
+//
+// An earlier attempt warped the sample COORDINATE with a smoothstep and
+// left hardware bilinear underneath. The polygon survived that and gained
+// plateaus at the texel centres, which is why it read as "much worse ...
+// artificial" while the artefact stayed. The FILTER has to change.
+//
+// Four bilinear taps rather than sixteen point taps (Sigg & Hadwiger): each
+// tap is placed off-centre so the hardware's own linear blend does half the
+// work. Three extra samples, not fifteen.
+vec4 cubic_weights(float v) {
+	vec4 n = vec4(1.0, 2.0, 3.0, 4.0) - v;
+	vec4 s = n * n * n;
+	float x = s.x;
+	float y = s.y - 4.0 * s.x;
+	float z = s.z - 4.0 * s.y + 6.0 * s.x;
+	float w = 6.0 - x - y - z;
+	return vec4(x, y, z, w) / 6.0;
+}
+
+vec4 texture_bicubic(sampler2D tex, vec2 uv, float texels) {
+	vec2 texel_uv = uv * texels - 0.5;
+	vec2 f = fract(texel_uv);
+	texel_uv -= f;
+	vec4 wx = cubic_weights(f.x);
+	vec4 wy = cubic_weights(f.y);
+	vec4 c = texel_uv.xxyy + vec2(-0.5, 1.5).xyxy;
+	vec4 sums = vec4(wx.xz + wx.yw, wy.xz + wy.yw);
+	vec4 offset = (c + vec4(wx.yw, wy.yw) / sums) / texels;
+	vec4 s0 = texture(tex, offset.xz);
+	vec4 s1 = texture(tex, offset.yz);
+	vec4 s2 = texture(tex, offset.xw);
+	vec4 s3 = texture(tex, offset.yw);
+	float mx = sums.x / (sums.x + sums.y);
+	float my = sums.z / (sums.z + sums.w);
+	return mix(mix(s3, s2, mx), mix(s1, s0, mx), my);
+}
+
+// The course direction the flow map carries at a world position. Past the
+// painted band the map's GB channels are zero, and normalizing that is a
+// NaN that would poison every tap downstream, so a dead sample hands back
+// the caller's own direction instead.
+vec2 flow_dir_at(vec2 world_position, vec2 fallback) {
+	// The CUBIC reconstruction, not plain bilinear. dir_start and dir_end
+	// set every stroke's ORIENTATION, so a bilinear lookup here gives the
+	// stroke tangent field a piecewise-constant gradient on the texel
+	// lattice: polygonal STROKES over a perfectly smooth across field,
+	// which is exactly what /flowdebug showed -- the field's own contours
+	// sweep cleanly through a bend while the drawn strokes do not.
+	//
+	// Sampling the direction more coarsely than the field it steers puts
+	// the lattice straight back into the picture. This regressed when the
+	// curved smear was added: before it, the taps rode swirl_dir, which
+	// comes from the map_data sample and became cubic with the across map.
+	vec2 raw = texture_bicubic(
+		flow_across_map, (world_position / tile_px) / flow_map_tiles, flow_map_tiles
+	).gb;
+	if (dot(raw, raw) < 1e-8) {
+		return fallback;
+	}
+	return normalize(raw);
+}
+
+float line_field(vec2 q, vec2 dir_start, vec2 dir_end) {
+	// THE SMEAR FOLLOWS THE COURSE'S CURVE, not one straight line.
+	//
+	// Measured with tools/probe_smear.gd over 1,997 wet tiles around the
+	// spawn: this smear spans 5.31 tiles, and the course turns up to
+	// 45.12 deg across that span -- 12.17 at the 75th percentile, 19.47 at
+	// the 90th, 30 or more on 1.6% of wet tiles, which is where the bends
+	// are. Smearing all nine taps along ONE direction read at the fragment
+	// makes two neighbouring fragments smear along diverging lines, and
+	// the strokes tear apart instead of lining up. That is the zigzag.
+	//
+	// dir_start and dir_end are the flow read at the two ENDS of this
+	// smear; each tap steps along the direction interpolated between them.
+	// A bend has roughly constant curvature and a tangent rotates linearly
+	// with arc length along an arc, so the straight line between the ends
+	// is very nearly the right model: the same probe puts the residual at
+	// 2.49 deg at the 75th percentile and 5.38 at the 90th, for TWO extra
+	// texture samples instead of the eight a per-tap resample would cost.
+	//
+	// The walk is CUMULATIVE -- each step continues from the last tap's
+	// position, tracing a real polyline arc. Stepping k * spacing from the
+	// centre along an interpolated heading would fan out from q instead,
+	// which is not a curve.
+	//
+	// Triangle-weighted taps, as before: the outer taps sit furthest along
+	// the arc, so they pay the most wherever the frame still changes, and
+	// weighting the centre keeps the stroke shape.
+	//
+	// TILED at drift_period, not plain value_noise: this is what the
+	// wrapped drift below reads (see the drift line in fragment()) -- the
+	// far-time shredding fix. Unrelated to the arc walk above; the wrap
+	// only bounds how far the drift can translate this field over a long
+	// session, never the curve the taps follow.
+	float total = value_noise_tiled(q, drift_period) * 5.0;
+	vec2 forward = q;
+	vec2 backward = q;
+	for (int k = 1; k <= 4; k++) {
+		float w = 5.0 - float(k);
+		float t = float(k) / 8.0;
+		forward += normalize(mix(dir_start, dir_end, 0.5 + t) + vec2(1e-6, 0.0)) * smear_spacing;
+		backward -= normalize(mix(dir_start, dir_end, 0.5 - t) + vec2(1e-6, 0.0)) * smear_spacing;
+		total += (value_noise_tiled(forward, drift_period) + value_noise_tiled(backward, drift_period)) * w;
 	}
 	// ONE smooth scale, deliberately: the strokes below are contours of
 	// this field, and a level set is only as smooth as the field it cuts.
@@ -208,17 +503,53 @@ void fragment() {
 	// loaded chunk overwrites the stale block its coordinates alias to.
 	vec2 map_uv = (wp / tile_px) / flow_map_tiles;
 	// The texel carries the WHOLE reconstruction frame -- across (R), the
-	// course's downstream unit vector (GB, raw signed floats) and the real
-	// solved current speed in m/s (A) -- so direction and speed interpolate
-	// between tiles exactly like across does. Per-tile direction bins and
-	// the binary fast flag were the last square-tile artefacts ("there are
-	// still individual square river tiles visible").
-	vec4 map_data = texture(flow_across_map, map_uv);
+	// course's downstream UNIT direction (GB) and the real solved current
+	// speed in m/s (A) -- so direction and speed interpolate between tiles
+	// exactly like across does. Per-tile direction bins and the binary
+	// fast flag were the last square-tile artefacts ("there are still
+	// individual square river tiles visible").
+	vec4 map_data = mix(texture(flow_across_map, map_uv), texture_bicubic(flow_across_map, map_uv, flow_map_tiles), map_smoothing);
 	float frag_across = map_data.r;
 	vec2 flow_dir = normalize(map_data.gb + vec2(1e-6, 0.0));
 	vec2 flow_perp = vec2(-flow_dir.y, flow_dir.x);
 	float speed_mps = map_data.a;
+	// The tile's REAL local half-width, from its OWN scalar map -- never
+	// packed into the direction vector above. Bilinear filtering blends a
+	// vector by ordinary addition, and two texels whose BEARINGS differ
+	// (exactly what neighbouring texels do on a bend) partially CANCEL
+	// when summed, so a magnitude riding that vector collapses toward
+	// zero independent of either texel's real width -- corrupting both
+	// the decoded width and (dividing a near-zero vector to normalize it)
+	// the decoded direction, worst exactly on curves ("this huge zigzag
+	// still persists"). A lone scalar has no such failure: bilinearly
+	// blending two widths always lands between them. Every
+	// boulder/wader/ripple push below divides by THIS, not a single fixed
+	// guess -- a fixed divisor (the curated rivers' constant 2.0 tiles)
+	// understated a wide hydrology reach's true half-width by up to 3x, so
+	// the same push landed up to 3x stronger, relative to that reach, than
+	// intended.
+	// The SAME cubic reconstruction as the across map above. Left on plain
+	// bilinear this kinks on the texel lattice exactly as across did, and
+	// every boulder, wader and ripple push below divides by it -- so their
+	// displacement inherited the sawtooth even once across itself was
+	// smooth ("also behind a few boulders").
+	float half_width_local = max(mix(
+		texture(flow_scale_map, map_uv),
+		texture_bicubic(flow_scale_map, map_uv, flow_map_tiles),
+		map_smoothing
+	).r, 0.05);
 	float is_fast = step(fast_flow_m_s, speed_mps);
+	// STILL WATER: a lake is painted through this same overlay (its
+	// shoreline is the real elevation contour, written as an across field
+	// exactly like a river bank) with zero current. It must not DRIFT --
+	// a lake never creeps -- but it still RIPPLES: the two-phase morph
+	// keeps running at a fraction of its strength, so the contour strokes
+	// breathe in place instead of freezing. The gate is a hard step.
+	float moving = step(still_flow_m_s, speed_mps);
+	float advect_gate = mix(still_ripple, 1.0, moving);
+	// The one speed everything carried by the water rides -- see
+	// surface_px_per_s.
+	vec2 surface_velocity = flow_dir * surface_px_per_s(speed_mps, moving);
 	// THE SMOOTHING PASS ("it's still visible that the base are square
 	// tiles"): the baked across is quantized per tile, so lines, cel
 	// boundaries and the waterline all side-step together on the same
@@ -237,12 +568,54 @@ void fragment() {
 	// smooth radial falloff, so the current lines and the waterline part
 	// around it; eyot_dry below then cuts a ROUND dry patch under the
 	// rock itself.
+	//
+	// THE ROCK IS HYDROLOGY, not a painted thing. It stands above the
+	// waterline, so the bed rises to meet it, so the water shallows toward
+	// it: boulder_shoal is that rise, 1 at the rock's edge falling to 0
+	// over boulder_shoal_ratio radii, and it SHALLOWS depth_frac below --
+	// the field the cel body is cut from. The light bands around a rock
+	// are then exactly the light bands along a bank, drawn by the same
+	// quantisation and the same dither in the same palette, with no
+	// boulder colour code at all. This replaces the painted shore band
+	// ("the boulders halo should not be computed by the boulder, but
+	// rather be part of the river's hydrology... the lighter color bands
+	// should come from elevation (rock is above waterline)"). A rock on
+	// dry bank ground is dry ground with a rock on it.
+	//
+	// Every rock is a rock of its own size (boulder_radius[b], from its
+	// real diameter) and the reach, the eyot and the shoal scale with it.
+	//
+	// FOAM IN FRONT, WHIRLS BEHIND ("...and produce foam in front and
+	// whirls behind it"): the current stagnates on the upstream face --
+	// nose is the squared cosine from the stagnation line, zero at and
+	// behind the shoulders -- in a window just off the rock's face; and
+	// the rock sheds eddies into a lobe behind it, which amplifies the
+	// standing-turbulence bend below. Both are geometry here; the speed
+	// gates them where they are used. Computed BEFORE the reach cull: the
+	// wake is longer than the push reaches.
 	float eyot_dry = 1.0;
+	float boulder_shoal = 0.0;
+	float boulder_foam = 0.0;
+	float boulder_wake = 0.0;
 	for (int b = 0; b < boulder_count; b++) {
 		vec2 to_frag = wp - boulders[b];
+		float R = boulder_radius[b];
+		float reach = R * boulder_reach_ratio;
 		float lateral = dot(to_frag, flow_perp);
+		float along = dot(to_frag, flow_dir);
 		float d = length(to_frag);
-		if (d >= boulder_reach_px) {
+		float shoal = 1.0 - smoothstep(R, R + R * boulder_shoal_ratio, d);
+		boulder_shoal = max(boulder_shoal, shoal);
+		float nose = clamp(-along / max(d, 0.001), 0.0, 1.0);
+		nose *= nose;
+		float foam_window = smoothstep(R * 0.7, R, d)
+			* (1.0 - smoothstep(R, R + R * boulder_foam_reach_ratio, d));
+		boulder_foam = max(boulder_foam, nose * foam_window);
+		float wake = smoothstep(0.0, R, along)
+			* (1.0 - smoothstep(R, R * boulder_wake_length_ratio, along))
+			* (1.0 - smoothstep(R, R * boulder_wake_width_ratio, abs(lateral)));
+		boulder_wake = max(boulder_wake, wake);
+		if (d >= reach) {
 			continue;
 		}
 		// The REAL midplane streamline displacement around a cylinder of
@@ -251,15 +624,29 @@ void fragment() {
 		// -- decaying smoothly to the sides. The old falloff-squared kick
 		// peaked at a POINT ("boulders behave like a singularity and don't
 		// have a radius around which the water flows").
-		float displaced = sqrt(lateral * lateral + boulder_radius_px * boulder_radius_px)
+		float displaced = sqrt(lateral * lateral + R * R)
 			- abs(lateral);
 		float envelope = 1.0 - clamp(
-			(d - boulder_radius_px) / max(boulder_reach_px - boulder_radius_px, 0.001),
+			(d - R) / max(reach - R, 0.001),
 			0.0, 1.0);
 		envelope *= envelope;
-		float side = lateral >= 0.0 ? 1.0 : -1.0;
-		frag_across += side * displaced * envelope / (half_width_tiles * tile_px);
-		eyot_dry = min(eyot_dry, smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d));
+		// A SMOOTH odd factor, not a sign flip.
+		//
+		// sign(lateral) leaves the magnitude at exactly R on the
+		// stagnation line while the sign jumps across it, so frag_across --
+		// the field every stroke, the waterline, the ink line and the shore
+		// highlight is a CONTOUR of -- tore by 2R along a straight line
+		// running through the rock with the current. Measured: 21.95px for
+		// this radius, which against a 32px half-width is 0.69 of the whole
+		// channel, discontinuously. Every contour crossing it was cut.
+		//
+		// lateral / sqrt(lateral^2 + R^2) vanishes on the line, is odd
+		// about it, and is within a few percent of 1 everywhere the push is
+		// actually visible -- so the round-core profile above is unchanged
+		// where it reads, and merely stops tearing where it did not.
+		float side = clamp(lateral / (R * obstacle_side_softness), -1.0, 1.0);
+		frag_across += side * displaced * envelope / (half_width_local * tile_px);
+		eyot_dry = min(eyot_dry, smoothstep(R * 0.6, R, d));
 	}
 	// The waders -- player AND creatures: the same round-core displacement
 	// as a boulder, softer and smaller (legs, not a rock face), stretched
@@ -269,8 +656,11 @@ void fragment() {
 		vec2 to_frag = wp - waders[w];
 		float lateral = dot(to_frag, flow_perp);
 		float along = dot(to_frag, flow_dir);
+		// In STILL water there is no current to carry the wake, so the
+		// push rings the wader symmetrically -- a fish or a swimmer in a
+		// lake makes a ripple, not a trail.
 		float reach = wader_reach_px
-			* (1.0 + wader_wake_trail * clamp(along / wader_reach_px, 0.0, 1.0));
+			* (1.0 + wader_wake_trail * moving * clamp(along / wader_reach_px, 0.0, 1.0));
 		float d = length(to_frag);
 		if (d >= reach) {
 			continue;
@@ -280,11 +670,25 @@ void fragment() {
 		float envelope = 1.0 - clamp(
 			(d - wader_radius_px) / max(reach - wader_radius_px, 0.001), 0.0, 1.0);
 		envelope *= envelope;
-		float side = lateral >= 0.0 ? 1.0 : -1.0;
-		frag_across += side * displaced * envelope / (half_width_tiles * tile_px);
+		// The same smooth odd factor the boulder loop uses. A wader tore by
+		// 11.95px, 0.37 of a channel, along a straight line through the
+		// player running with the current -- reported as "a hard edge ... a
+		// straight line which moves with him", seen only while standing in
+		// water, which is exactly when the player is fed here as a wader.
+		float side = clamp(lateral / (wader_radius_px * obstacle_side_softness), -1.0, 1.0);
+		frag_across += side * displaced * envelope / (half_width_local * tile_px);
 	}
+	// Movement ripples (fish/player/animal wakes) deliberately do NOT
+	// perturb frag_across here -- that field is the channel's geometry,
+	// and a passing fish must not narrow the river or bulge the waterline
+	// (see "a wake must not displace the channel geometry", tested by
+	// test_a_ripple_never_moves_the_waterline). They instead bend the
+	// stroke field directly, below, via movement_ripples().
 	float rr = abs(frag_across);
 	float depth_frac = clamp(1.0 - rr * rr, 0.0, 1.0);
+	// The rock's shoal: the bed rises to the rock, the water shallows, the
+	// cel body lightens -- the bank's own mechanism, around a rock.
+	depth_frac *= 1.0 - boulder_shoal;
 
 	// TWO-PHASE FLOW-MAP ADVECTION -- the technique that makes this read as
 	// water rather than as a pattern sliding past.
@@ -324,11 +728,49 @@ void fragment() {
 	//
 	// Two octaves: the coarse one swings whole bundles of lines, the fine
 	// one puts kinks WITHIN a line's own length.
-	vec2 eddy_p = p * eddy_scale;
+	// THE EDDIES MIGRATE DOWNSTREAM WITH THE WATER. A bed-anchored bend
+	// was the right call while the whirl only reached the strokes through
+	// the noise; with the whirl now IN the guide, a static bend left the
+	// lines standing still and only the small wobble texture moved over
+	// them ("make the water move with the flow so it looks like a flowing
+	// stream"). It then migrated at a fraction of the linear drift alone,
+	// which at a typical reach is a fifth of the water's visible speed --
+	// "a wobble stays in place instead of flowing with the river". So the
+	// eddy sample coordinate now translates at bend_drift_fraction of
+	// surface_px_per_s, the SAME speed the ring centre is carried at
+	// ("the lines should move at the same speed"), in still water not at
+	// all. Real boils lag the surface (Jackson 1976) and the fraction is
+	// still the knob for that, but at 1.0 the art direction is that the
+	// lines ARE the water.
+	//
+	// This is a steady TRANSLATION of the bend field, never the phase
+	// drag's stretch-and-reset, so it cannot change the fold Jacobian:
+	// test_the_fold_margin_survives_the_eddy_drift holds the 0.35 margin
+	// at a real drifted offset. And the wobble still deforms relative to
+	// the whirls -- each phase stretches away from this translation and
+	// resets -- so the picture does not slide as one sheet.
+	float bend_drift = TIME * surface_px_per_s(speed_mps, moving) * noise_scale * bend_drift_fraction;
+	vec2 eddy_p = (p - flow_dir * bend_drift) * eddy_scale;
+	// Shear lives at the banks: real eddies shed where the fast core
+	// meets the slow margin, so the standing turbulence grows from the
+	// centreline (|across| 0) toward the waterline (|across| 1) by
+	// bank_shear -- bends, whose outer banks are where |across| sweeps
+	// through the water, come out whirlier than straight reaches.
+	float shear = 1.0 + bank_shear * clamp(abs(frag_across), 0.0, 1.0);
+	// ...and harder still in a rock's wake, where the eddies it sheds
+	// live (boulder_wake, the lobe behind each boulder above), gated by
+	// the current: a rock in a lake sheds nothing.
 	float bend = (value_noise(eddy_p) - 0.5
-		+ (value_noise(eddy_p * 2.6 + vec2(19.7, 7.3)) - 0.5) * eddy_detail_weight)
-		* turbulence_strength;
+		+ (value_noise(eddy_p * eddy_detail_frequency + vec2(19.7, 7.3)) - 0.5) * eddy_detail_weight)
+		* turbulence_strength * shear * (1.0 + boulder_wake * boulder_wake_gain * moving);
 	vec2 q = p + flow_perp * bend;
+	// The smear direction is the FLOW direction and nothing else. Rotating
+	// it by the eddy field (an attempt at whirlier bends) sawed every
+	// stroke into a regular zig-zag with the eddy noise's own period,
+	// because a smear along a direction that oscillates every few tiles
+	// folds the level sets; eddy_swirl is kept at zero and the taps below
+	// follow flow_dir.
+	vec2 swirl_dir = normalize(flow_dir + flow_perp * (bend * eddy_swirl));
 
 	// The drag is purely DOWNSTREAM -- water is carried along the channel,
 	// never sideways across it. On top of the bounded two-phase morph, a
@@ -350,11 +792,35 @@ void fragment() {
 	// it kept its lines. The same angle-times-distance trap as the world
 	// origin, re-entered through TIME.
 	float drift = mod(TIME * drift_px_per_mps * speed_mps * noise_scale, drift_period);
-	float sample_a = line_field(q - flow_dir * (advect_strength * phase_a + drift), flow_dir);
-	float sample_b = line_field(q - flow_dir * (advect_strength * phase_b + drift), flow_dir);
 	// Triangular weight: 1 at a phase's birth, 0 at its death.
 	float blend = abs(1.0 - 2.0 * phase_a);
-	float n = mix(sample_a, sample_b, blend);
+	float n;
+	if (moving > 0.5) {
+		// The two ends of this smear, in world space: the outermost tap
+		// sits four steps of smear_spacing away in NOISE units, and a
+		// noise unit is noise_scale world pixels.
+		vec2 smear_end_offset = swirl_dir * (4.0 * smear_spacing / noise_scale);
+		vec2 dir_start = normalize(mix(
+			swirl_dir, flow_dir_at(wp - smear_end_offset, swirl_dir), smear_curvature
+		) + vec2(1e-6, 0.0));
+		vec2 dir_end = normalize(mix(
+			swirl_dir, flow_dir_at(wp + smear_end_offset, swirl_dir), smear_curvature
+		) + vec2(1e-6, 0.0));
+		float sample_a = line_field(q - flow_dir * (advect_strength * phase_a * advect_gate + drift), dir_start, dir_end);
+		float sample_b = line_field(q - flow_dir * (advect_strength * phase_b * advect_gate + drift), dir_start, dir_end);
+		n = mix(sample_a, sample_b, blend);
+	} else {
+		// STILL WATER'S CHEAP PATH: the sea and every lake are most of
+		// the water on screen, and the eighteen smeared taps above are
+		// what a river's flowing strokes need, not a pond's breathing
+		// ripple. Two unsmeared samples of the same world-anchored field,
+		// nudged by the two phases, give the strokes their slow ripple
+		// at a ninth of the cost (found live: a screen mostly water ran
+		// at a few frames per second).
+		float ripple_a = value_noise(q + flow_perp * (advect_strength * still_ripple * phase_a));
+		float ripple_b = value_noise(q + flow_perp * (advect_strength * still_ripple * phase_b));
+		n = clamp((mix(ripple_a, ripple_b, blend) - 0.5) * smear_gain + 0.5, 0.0, 1.0);
+	}
 
 	// Depth colour: the channel's real parabolic cross-section (see
 	// OpenChannelFlow.cross_channel_depth_fraction), light at the shallow
@@ -374,10 +840,13 @@ void fragment() {
 	// motion.
 	float shade = depth_frac;
 
-	// Classic ordered dither: the checkerboard's other phase shifts the
-	// quantization threshold half a step, so band boundaries interleave in
-	// a 2x2 weave -- the 16-bit way to suggest a gradient with flat inks.
-	float checker = mod(floor(wp.x / pixel_snap) + floor(wp.y / pixel_snap), 2.0);
+	// Dither: a WORLD-ANCHORED per-art-pixel hash shifts the quantization
+	// threshold, so band boundaries dissolve into grain. This replaced the
+	// classic 2x2 checkerboard: on a DIAGONAL depth gradient (every bend
+	// of an emergent river) the checker's phases lined up into vertical
+	// dashes across the whole dither band, read in play as a sawtooth on
+	// every stroke. A hash has no lattice to line up with.
+	float checker = value_hash(floor(wp / pixel_snap));
 	float level = clamp(
 		floor(shade * cel_levels + (checker - 0.5) * dither_strength),
 		0.0, cel_levels - 1.0
@@ -422,7 +891,72 @@ void fragment() {
 	// perlin noise cells"): level sets of any healthy scalar field close
 	// around its extrema. The guide also survives a railed field -- a
 	// dead-flat n still draws the full family of lines.
-	float s_field = frag_across * across_line_scale + (n - 0.5) * line_wobble;
+	// THE WOBBLE IS SCALED BY THE CHANNEL'S OWN WIDTH.
+	//
+	// This field has to stay MONOTONE bank to bank: a monotone field's
+	// level sets are open curves running along the river, and once it
+	// folds back they close into rings -- the "perlin noise cells" this
+	// design exists to avoid.
+	//
+	// Whether it stays monotone is a question about GRADIENTS, not
+	// amplitudes, and the two terms live on different scales. `across`
+	// runs 0 to 1 over the channel's half width; `n` runs 0 to 1 over ONE
+	// noise cell. So the whole thing turns on how many noise cells fit
+	// across the water -- and that is not a constant, because the half
+	// width comes from discharge. Measured with tools/probe_monotone.gd,
+	// as the fraction of bank-to-bank steps that fold back:
+	//
+	//   1.0 tiles (1.28 cells)   0.1%
+	//   2.0 tiles (2.56 cells)   2.8%   <- where line_wobble was tuned
+	//   3.5 tiles (4.48 cells)  10.1%
+	//   6.0 tiles (7.68 cells)  18.2%   <- cells, and the map goes here
+	//
+	// Which is exactly "only around bends and where the water is deeper
+	// at the edge": wide water folds, narrow water does not.
+	//
+	// Scaling the wobble by reference/actual holds the RATIO of the two
+	// gradients constant, so every width folds as little as the tuned one
+	// did. Clamped at 1 so it only ever tames wide water -- a narrow
+	// reach keeps exactly the look it has now.
+	float wobble_cells = max(half_width_local * tile_px * noise_scale, 0.01);
+	float wobble_local = line_wobble * min(wobble_reference_cells / wobble_cells, 1.0);
+	// THE EDDIES BEND THE GUIDE, NOT JUST THE NOISE.
+	//
+	// The bend field used to reach the strokes only by displacing where
+	// the NOISE was sampled -- so every bit of whirl the water had came
+	// through the wobble term, and the wobble had to be big to show it.
+	// Big enough that its gradient was 2.3x the guide's at every width
+	// (test_the_wobble_gradient_stays_well_under_the_across_gradient...),
+	// which is the field folding into cells: the strokes were short
+	// angular fragments of closed loops, not lines along the river.
+	//
+	// Now the bend displaces the ACROSS coordinate itself, in across
+	// units (one noise cell is 1/wobble_cells of the half width). The
+	// guide lines whirl with the eddies directly, and this cannot fold:
+	// d(across + bend/cells)/d(across) is 1 + d(bend)/d(p), the exact
+	// Jacobian test_the_bend_never_folds_or_pinches_the_surface holds
+	// above 0.35. The wobble is then free to be a small texture on top
+	// instead of the thing the lines are made of.
+	float guide = frag_across + bend / wobble_cells;
+	// MOVEMENT RIPPLES, drawn rather than glowed (merged alongside the
+	// eddy-bent guide above -- two independent, additive effects on the
+	// same field, not a choice between them). This surface is illustrated
+	// water -- a static cel body with every bit of motion carried by drawn
+	// strokes -- so a wake composited on top as a bright ring would read
+	// as a sticker. Instead the packet enters the field whose LEVEL SETS
+	// are the current lines, so the lines themselves bow into arcs around
+	// the fish, closing into rings where the disturbance is strongest and
+	// merging back into the flow at its edges. Two overlapping wakes sum
+	// HERE, before any of it is drawn, so they genuinely interfere.
+	//
+	// Deliberately NOT added to frag_across/guide: that field is the
+	// channel's geometry, and a passing fish must not narrow the river or
+	// bend its eddies. Boulders and waders displace it because they are
+	// solid things standing in the current; a wake is only the surface.
+	float ripple_envelope_sum = 0.0;
+	float ripple = movement_ripples(wp, surface_velocity, ripple_envelope_sum);
+	float s_field = guide * across_line_scale + (n - 0.5) * wobble_local
+		+ ripple * ripple_line_gain;
 	float level_frac = fract(s_field * line_count) - 0.5;
 	float dist_n = abs(level_frac) / line_count;
 	float stroke = 1.0 - smoothstep(line_width * 0.5, line_width, dist_n);
@@ -434,7 +968,23 @@ void fragment() {
 	// already computed.
 	float pulse = smoothstep(0.35, 0.75, n);
 	float wave = stroke * mix(0.75, 1.0, parity) * mix(0.8, 1.1, is_fast)
-		* mix(0.55, 1.0, pulse);
+		* mix(pulse_floor, 1.0, pulse);
+	// The crest also inks in its OWN right, so the ring reads as concentric
+	// arcs and not merely as wobbled current lines. Entered through `wave`
+	// -- the existing "how hard is a stroke drawn here" -- so it inherits
+	// the adaptive ink, the moonlight lift and the alpha clamp for free.
+	// max, not sum: a strong crest takes over the mark, a weak one leaves
+	// the flow line alone, and neither can push the stroke past full.
+	//
+	// The band is cut from the pure SINE (packet over envelope): a pixel
+	// prints only near the crest's peak, so the ring is a thin line of a
+	// fixed width in px -- no wider than a current line -- however strong
+	// or faded the wake is. The ENVELOPE alone decides how hard it prints,
+	// through the same graduated crest curve, under a ceiling below a full
+	// stroke ("stroke width smaller and a bit more transparent").
+	float ripple_crest = ripple / max(ripple_envelope_sum, 1e-4);
+	float ripple_ink = smoothstep(ripple_ring_edge, 1.0, ripple_crest) * smoothstep(ripple_crest_min, ripple_crest_full, ripple_envelope_sum) * ripple_ink_max;
+	wave = max(wave, ripple_ink);
 	// ADAPTIVE INK: pale strokes vanish on the bright shallow cels
 	// (reported from the Rhine straight: "no current lines at all"), so
 	// the ink snaps DEEP over light water and pale over dark. A hard
@@ -450,7 +1000,8 @@ void fragment() {
 	// the modulate ceiling: the gleam of a real river reflecting skylight,
 	// the brightest thing the night allows.
 	stroke_ink = mix(stroke_ink, moonlight_ink, night_lift);
-	float wave_alpha = min(wave * line_strength * mix(1.0, night_stroke_boost, night_lift), 1.0);
+	float wave_alpha = min(
+		wave * line_strength * mix(1.0, night_stroke_boost, night_lift) * mix(0.35, 1.0, moving), 1.0);
 	body = mix(body, stroke_ink, wave_alpha);
 
 	// The SHORE HIGHLIGHT: one constant pale line tracing the bank just
@@ -459,6 +1010,18 @@ void fragment() {
 	// illustrated mark of all.
 	float shore = 1.0 - smoothstep(shore_width * 0.5, shore_width, abs(rr - shore_pos));
 	body = mix(body, line_color, shore * mix(0.5, 0.85, night_lift));
+
+	// FOAM on a rock's upstream face: the geometric window from the
+	// boulder loop, driven by how fast the reach runs (a slow one parts
+	// cleanly, a fast one foams), broken up by the channel's own advected
+	// field n so it streams and flickers with the water instead of sitting
+	// as a pale cap. Near-white, over the body and the strokes.
+	float foam_drive = smoothstep(foam_min_m_s, foam_full_m_s, speed_mps) * moving;
+	// The foam the face sheds streams down the wake too, thinner: the
+	// bend's gain is bounded by the no-fold margin, so a wake reads as
+	// disturbed water mostly through these streaks.
+	float foam = (boulder_foam + boulder_wake * wake_foam) * foam_drive * smoothstep(0.3, 0.7, n);
+	body = mix(body, foam_color, foam * foam_alpha);
 
 	// The comic INK line: a dark outline hugging the real bank curve, just
 	// inside the waterline. The old stylized attempt drew its outline per
@@ -473,8 +1036,30 @@ void fragment() {
 	// This is what frees the water's outline from the tile grid: the edge
 	// is |across| == 1, a smooth curve through the middle of tiles, not
 	// the rectangle of whichever cells happened to be painted.
+	// The eyot only ever REMOVES water: a rock on dry bank ground is dry
+	// ground with a rock on it, and the light water around a rock in the
+	// river is the shoal in the depth field above, not painted alpha.
 	float wet = (1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry;
-	COLOR = vec4(body, wet);
+	if (debug_across > 0.5) {
+		// The across field's OWN level sets. Polygonal bands mean the
+		// field or its reconstruction filter; smooth bands mean the
+		// artefact lives in the stroke layer above and the field is fine.
+		// Full alpha over every painted tile, deliberately: it also shows
+		// the painted band's own outline, which is where a clipped wake
+		// or halo would show itself.
+		// Mode 2 shows s_field -- the field the STROKES are contours of,
+		// which is frag_across plus the smeared noise. Mode 1 shows
+		// frag_across alone. Comparing the two says whether an artefact
+		// in the strokes comes from the channel geometry or from the
+		// noise term, which is the one thing left after the field itself
+		// was shown smooth.
+		float debug_source = debug_across > 1.5 ? s_field : frag_across;
+		float debug_band = fract(debug_source * debug_across_bands);
+		float debug_edge = 1.0 - smoothstep(0.0, 0.08, abs(debug_band - 0.5));
+		COLOR = vec4(vec3(debug_edge), 1.0);
+	} else {
+		COLOR = vec4(body, wet);
+	}
 }
 """
 
@@ -487,20 +1072,26 @@ void fragment() {
 ## inside Nyquist at the measured fps floor.
 const ADVECT_RATE := 0.22
 
-## How far the surface travels along the flow over one phase, in noise
-## CELLS. Sized against the smear length so each line travels a real
-## fraction of its own length per phase (see drag_in_feature_lengths) --
-## that is what reads as the water speed. Also bounded above by the seam
-## budget: the drag is one of the few direction-steered offsets, so a
-## bigger drag costs more at every direction-bin change.
+## How far each phase drags the surface along the flow over its life, in
+## noise CELLS. This is DEFORMATION, not travel -- reversed from the
+## earlier reading ("that is what reads as the water speed", sized to
+## cover most of a line per phase). 7.2 -> 1.2, and the reason is what the
+## real GPU showed (tools/probe_river_motion.gd): the two phases are copies
+## of the field offset by HALF the drag, and at 3.6 cells (45 world px)
+## apart the copies are uncorrelated, so the crossfade is a dissolve
+## between two unrelated patterns -- a kink fades out where it is and a
+## different one fades in elsewhere, "a wobble stays at place" no matter
+## how far each copy is being stretched. At 0.6 cells apart the copies
+## stay correlated: a kink survives the fade and rides the linear drift,
+## which is now what carries the water and everything on it, coherently.
+## Pinned by test_the_drag_is_a_small_deformation_so_kinks_survive_the_
+## crossfade; its translation share of the visible speed is pinned minor
+## by test_the_water_travels_at_a_calm_speed.
 ##
-## NOTE the animation is an EXACT half-cycle loop: the two triangular
-## crossfade weights swap symmetrically, so n(t + T/2) == n(t) by
-## construction. Deliberate and embraced -- 16-bit water animation WAS a
-## short loop -- and within every half cycle each phase's drag grows
-## monotonically DOWNSTREAM, which is why it still reads as flow, not as
-## oscillation. Pinned by test_the_animation_loops_exactly_each_half_cycle.
-const ADVECT_STRENGTH := 7.2
+## The animation is still an exact half-cycle loop in its DEFORMATION
+## (n(t + T/2) == n(t) with the drift removed); the drift makes the whole
+## thing travel on top.
+const ADVECT_STRENGTH := 1.2
 
 ## Spatial scale of the surface field, and the second octave's multiplier.
 ##
@@ -523,6 +1114,41 @@ const NOISE_SCALE := 0.08
 ## reports. Averaging compresses the value distribution, so SMEAR_GAIN
 ## re-stretches it -- held to the measured coverage and swing bands by the
 ## same tests that pinned the old field.
+## Turns the raw-across diagnostic on or off on the shared material, so
+## the two views are one console command apart rather than a rebuild.
+func set_debug_across(mode: float) -> void:
+	shared_material().set_shader_parameter("debug_across", clampf(mode, 0.0, 2.0))
+
+
+## How much of an obstacle's core is softened, as a fraction of its own
+## radius -- the band inside which the push ramps through zero instead of
+## flipping sign. Outside it the round-core displacement is exactly what
+## it always was, so the bulge a player pushes walking in and out of the
+## water is unchanged; inside it, 3.9px for a boulder and 2.1px for a
+## wader, the field stops tearing. Pinned by
+## test_the_obstacle_push_keeps_a_real_peak_so_the_bulge_survives.
+const OBSTACLE_SIDE_SOFTNESS := 0.35
+
+## The raw-field diagnostic, OFF. 1 draws frag_across (the channel
+## geometry), 2 draws s_field (that plus the smeared noise -- the field
+## the strokes actually trace). A tool for answering "is the artefact
+## in the field or in the strokes drawn from it" in one screenshot rather
+## than another headless probe. Toggled at runtime by /flowdebug; this is
+## only its default, and a diagnostic must never ship on.
+const DEBUG_ACROSS := 0.0
+
+## How much of the across map's reconstruction is the cubic B-spline
+## rather than plain hardware bilinear. 1 is the cubic. 0 is exactly what
+## shipped before, kept reachable because this is the third attempt at this
+## artefact and the comparison should cost a keystroke, not a rebuild.
+const MAP_SMOOTHING := 1.0
+
+## How far the smear follows the course's curve: 1 bends the taps between
+## the flow read at each END of the smear, 0 is the straight smear this
+## replaced. Kept as a real uniform so the two are one keystroke apart in
+## game, since the straight version is what every earlier screenshot shows.
+const SMEAR_CURVATURE := 1.0
+
 const SMEAR_TAPS := 9
 const SMEAR_SPACING := 0.85
 const SMEAR_GAIN := 2.0
@@ -557,7 +1183,7 @@ const INK_COLOR := Color(0.05, 0.13, 0.25)
 ## defect-3 lesson: past the fold threshold displacement does not bend a
 ## pattern, it destroys it -- and the bent field must still read as lines
 ## (test_the_warped_field_still_forms_lines).
-const TURBULENCE_STRENGTH := 1.6
+const TURBULENCE_STRENGTH := 1.4
 const EDDY_SCALE := 0.16
 
 ## The bend's second, finer octave (2.6x the eddy scale). The coarse octave
@@ -565,7 +1191,24 @@ const EDDY_SCALE := 0.16
 ## neighbouring lines TOGETHER, which locally reads as translation. Kinks a
 ## viewer can see need bend variation WITHIN a line's own length -- pinned
 ## by test_a_streakline_visibly_curves_within_its_own_length.
-const EDDY_DETAIL_WEIGHT := 0.7
+## How many times finer the bend's second octave is than its first.
+##
+## RAISED from 2.6, and TURBULENCE_STRENGTH cut to match, because the two
+## things this field has to deliver trade off against each other in a
+## fixed way. Curvature within a line's own length goes as
+## amplitude * frequency^2; the risk of the domain warp FOLDING (see
+## test_the_bend_never_folds_or_pinches_the_surface) goes as
+## amplitude * frequency. So for a fixed fold budget, curvature is
+## proportional to frequency alone -- a finer, weaker eddy buys strictly
+## more visible curl per unit of fold risk than a coarse, strong one.
+##
+## Measured: at 2.6 and strength 1.6 the warp pinched to 0.0988, which is
+## a 10:1 compression and the cusp reported as a zigzag. At 4.0 and 0.85
+## the margin is comfortable AND a streakline curves more than it did
+## before, rather than less.
+const EDDY_DETAIL_FREQUENCY := 2.6
+
+const EDDY_DETAIL_WEIGHT := 0.5
 
 ## The across map's side length in tiles -- one texel per world tile,
 ## addressed toroidally. STRICTLY larger than the widest tile span the
@@ -585,11 +1228,55 @@ const FLOW_MAP_TILES := 256
 const TILE_PX := 16.0
 
 ## How boulders bend the water, all in world px so the bump hugs the
-## SPRITE rather than any tile: the push reach (2.5 tiles), the maximum
-## across-push at the rock face (falloff-squared to zero at the reach),
-## and the dry-eyot radius under the rock itself.
-const BOULDER_REACH_PX := 40.0
+## SPRITE rather than any tile. Every rock now carries ITS OWN radius
+## (boulder_radius_px_for, from its real diameter -- "the rock should as
+## entity have a mass"), and the push reach, the dry eyot, the shoal, the
+## foam and the wake all scale with it. BOULDER_RADIUS_PX is the REFERENCE
+## radius (the size the generic obstacle mirrors and tests speak of, and
+## the old one-size-fits-all value), not what the shader draws every rock
+## with; BOULDER_REACH_RATIO is how far the push reaches in radii (the old
+## 40 px reach over the old 11 px radius, kept).
 const BOULDER_RADIUS_PX := 11.0
+const BOULDER_REACH_RATIO := 3.6
+const BOULDER_REACH_PX := BOULDER_RADIUS_PX * BOULDER_REACH_RATIO
+## No rock parts less water than this, however small: the smallest
+## Wentworth boulder still has to read as an obstacle at play distance.
+const MIN_BOULDER_RADIUS_PX := 6.0
+## The rock's SHOAL: how far past its edge, in radii, the bed rises toward
+## it and the water shallows. This is what replaced the painted shore band
+## (BOULDER_BAND_*): the light water around a rock is the same shallow
+## water the banks show, drawn by the same cel quantisation and dither in
+## the channel's own palette -- "the lighter color bands should come from
+## elevation (rock is above waterline)". One to a couple of radii by test;
+## 1.5 puts three cel steps around a reference rock.
+const BOULDER_SHOAL_RATIO := 1.5
+
+## FOAM IN FRONT: the window off the rock's upstream face where the
+## stagnating current foams, in radii past the edge; the reach speeds
+## between which a rock goes from parting the water cleanly (nothing at
+## or under FOAM_MIN_M_S -- an ordinary 0.5 m/s reach foams a little) to
+## foaming fully; how the foam prints. Real whitewater is deceleration,
+## not speed, which is why it lives on the face where the water is
+## brought to rest and follows dynamic pressure (BoulderHydraulics).
+const BOULDER_FOAM_REACH_RATIO := 0.9
+const FOAM_MIN_M_S := 0.3
+const FOAM_FULL_M_S := 1.0
+const FOAM_ALPHA := 0.85
+const FOAM_COLOR := Color(0.93, 0.97, 1.0)
+
+## WHIRLS BEHIND: the wake lobe a rock sheds eddies into -- how far
+## downstream it reaches and how wide it is, in radii -- and how much
+## harder the standing-turbulence bend whirls inside it. The gain is
+## bounded by the same no-fold sweep the bend itself passes
+## (test_the_wake_whirls_harder_but_never_folds_the_surface): wilder,
+## never folded -- and that bound is tight (0.5 pinched the warp to 0.17
+## against the 0.35 margin; 0.15 holds it), so the wake reads as
+## disturbed water mostly through WAKE_FOAM, the fraction of the face's
+## foam that streams down the lobe, which is what a real wake carries.
+const BOULDER_WAKE_LENGTH_RATIO := 6.0
+const BOULDER_WAKE_WIDTH_RATIO := 1.5
+const BOULDER_WAKE_GAIN := 0.15
+const WAKE_FOAM := 0.35
 
 ## A wader as a flow obstacle: a smaller round core than a boulder (legs,
 ## not a rock face), with the displacement stretched downstream by the
@@ -599,15 +1286,139 @@ const BOULDER_RADIUS_PX := 11.0
 const WADER_REACH_PX := 26.0
 const WADER_RADIUS_PX := 6.0
 const WADER_WAKE_TRAIL := 0.8
-const WADER_SLOTS := 8
+const WADER_SLOTS := 16
+
+## How far past the true bank curve EarthChunkManager keeps painting a
+## cell at all, on top of RiverCatalog's own apron -- not a visual
+## softness (BANK_FEATHER already feathers the waterline itself over a
+## fraction of a tile) but the DIFFERENCE between a tile existing to draw
+## on and a tile being erased outright. A cell beyond the plain apron used
+## to be erased, so a wader's wake or a boulder's halo had nowhere to
+## render the moment either reached past it -- a player wading out of the
+## river watched their own splash trail cut off mid-stride. Sized to
+## comfortably clear the widest of the boulder/wader reaches above (2.5
+## tiles) plus the wake's own downstream stretch, so an exiting wader's
+## trailing wake, or a boulder sitting right at the apron's edge, always
+## has ground to draw its fade on. The newly-included band is otherwise
+## fully transparent by construction (its baseline |across| sits well past
+## the feather) -- it only ever shows anything where a real wader, boulder
+## or ripple actually reaches it.
+const SHORE_BLEED_TILES := 3.0
+
+## Movement-ripple tuning, taken from the SEA by import rather than copied:
+## a fish's wake has to read the same in a river as in the ocean, and a
+## second set of literals is a second thing to re-tune and drift apart.
+## Same slot count too, because both surfaces draw the one shared buffer
+## (WaterShader.add_disturbance, fanned out by EarthChunkManager).
+const RIPPLE_SPEED := WaterShader.RIPPLE_SPEED
+const RIPPLE_LIFETIME := WaterShader.RIPPLE_LIFETIME
+const RIPPLE_WAVELENGTH := WaterShader.RIPPLE_WAVELENGTH
+const RIPPLE_PACKET_WIDTH := WaterShader.RIPPLE_PACKET_WIDTH
+const RIPPLE_SPREAD_DECAY := WaterShader.RIPPLE_SPREAD_DECAY
+const DISTURBANCE_SLOTS := WaterShader.MAX_DISTURBANCES
+
+## How far a crest bends the contour field the current lines trace, in
+## s_field units. Bounded from BOTH sides by test rather than eyeballed:
+## below ~a third of one contour spacing (1 / LINE_COUNT) a crest moves the
+## lines too little to draw anything, and above half the wobble's own swing
+## the ripple stops being a local disturbance and starts restructuring the
+## channel-wide line family into the closed "perlin noise cells" the across
+## ramp exists to prevent. Rings closing around the fish ITSELF are wanted
+## -- that is the ripple -- which is exactly why the ceiling is set against
+## the wobble rather than against zero.
+##
+## Expressed as a FRACTION of LINE_WOBBLE (0.3 -- the same ratio the
+## original 0.18 sat at against wobble's own pre-tuning value of 0.6)
+## rather than a hardcoded absolute. LINE_WOBBLE has already moved twice
+## since for independent eddy-folding reasons (0.6 -> 0.12 -> 0.17, see its
+## own doc comment) -- a gain tuned against one specific wobble value
+## silently drifts out of its own "stays under half the wobble" bound the
+## moment wobble is retuned out from under it without anyone touching this
+## constant at all. Caught merging claude/hydrology-spec's own further
+## wobble tuning against this ripple work, developed independently on a
+## separate branch: bend measured 0.136 against a 0.085 ceiling once wobble
+## reached 0.17 (test_a_ripple_cannot_restructure_the_whole_channel).
+## Deriving it here means a future wobble retune keeps this ceiling
+## satisfied automatically instead of silently drifting again.
+const RIPPLE_LINE_GAIN := LINE_WOBBLE * 0.3
+
+## The crest amplitudes between which the ring inks in its own right: below
+## MIN nothing draws (troughs and spent tails stay clean), at FULL the mark
+## is a full-strength stroke. FULL must stay reachable by a real packet
+## crest or it is ink that never prints; MIN is the threshold WaterShader
+## already paid for once -- set against a FRESH ripple it made the ring
+## visible only in its first moments ("a mini ripple appears but nothing
+## looks natural"), so it is pinned low enough that a crest still inks
+## three quarters of the way through the ring's life.
+##
+## FULL 0.40 -> 0.60, MIN 0.10 -> 0.12 ("a little less pronounced ...
+## smoother"): at half the packet's ~0.82 peak, FULL printed the ring at
+## full stroke strength for most of its life -- as dark as a current line,
+## a stamp. Near the peak, only a fresh crest prints full and the ring
+## GRADUATES down through its life (about 0.4 at half life, fading out
+## past three quarters) instead of switching off. Both ends pinned by
+## test_the_ring_inks_at_full_strength_only_while_fresh and
+## test_the_ring_graduates_through_its_life_instead_of_switching_off,
+## against the packet's own scanned peak, so re-tuning the packet re-tunes
+## these bounds.
+const RIPPLE_CREST_MIN := 0.12
+const RIPPLE_CREST_FULL := 0.60
+
+## Where on the crest's sine a pixel must sit to print: the ring's ink
+## band is the arc of the sine above this, so its width in world px is
+## RIPPLE_WAVELENGTH / TAU * (PI - 2 asin EDGE) -- ~1.4 px at 0.85, no
+## wider than a current line (ripple_ring_width_px / line_width_px), and
+## the same at every age because the envelope is divided out first.
+## "Stroke width smaller": the old amplitude-threshold band was ~3 px and
+## widened and narrowed with the ring's strength.
+const RIPPLE_RING_EDGE := 0.85
+
+## The ceiling the ring prints at, as a fraction of a full stroke: "a bit
+## more transparent" than the current lines it sits among. The graduation
+## through the ring's life (RIPPLE_CREST_MIN/FULL) scales under it.
+const RIPPLE_INK_MAX := 0.6
 
 ## px of world width per unit of across-fraction -- the channel half-width,
 ## pinned against RiverCatalog.RIVER_HALF_WIDTH_TILES by test.
 const HALF_WIDTH_PX := 32.0
 
 ## Continuous downstream pattern travel, px/s per m/s of real current --
-## linear in the reach's solved speed, pinned by drift tests.
-const DRIFT_PX_PER_MPS := 9.0
+## linear in the reach's solved speed, pinned by drift tests. This is THE
+## carrier now: the ring centre, the eddy field, the kinks and the pulses
+## all ride it (see surface_px_per_s), so it is what "the water's speed"
+## means on screen.
+## RAISED 9 -> 20 once ("the lines are not flowing forward": the strokes are
+## contours of across, lines PARALLEL to the flow, so forward motion only
+## reads through what travels ON them, and at 9 that took three and a half
+## seconds to cross a tile). Then 20 -> 16 with the drag cut to a
+## deformation: with everything moving together coherently, 8 world px/s
+## at a typical 0.5 m/s reach reads as a calm, unmistakable current -- and
+## 30 read as "everything is faster". Pinned by
+## test_a_typical_reach_streams_fast_enough_to_read_as_flowing (floor) and
+## test_the_water_travels_at_a_calm_speed (ceiling).
+const DRIFT_PX_PER_MPS := 16.0
+
+## The dim end of the pulse that streams along a stroke. 0.55 was a 45%
+## modulation, a shimmer; 0.35 is the depth at which a bright segment
+## visibly travels down a line. Never zero. Pinned by
+## test_the_pulse_is_deep_enough_to_see_streaming.
+const PULSE_FLOOR := 0.35
+
+## How fast the standing eddies migrate downstream, as a fraction of the
+## water's VISIBLE speed (surface_px_per_s -- the phase drag's translation
+## plus the drift, not the drift alone). 0.4 and then 0.6 of the drift alone
+## were tried first: at a typical 0.5 m/s reach that is 4-6 world px/s
+## against a surface streaming at ~30, and it was reported as "a wobble
+## stays in place instead of flowing with the river". With the wobble small
+## the whirls are most of what there is ON a line to see moving -- they are
+## the lines' shape -- and once the ripples were carried at the water's
+## visible speed the report was "the lines should move at the same speed".
+## So 1.0: the lines move at exactly the speed the ring is carried at. The
+## surface still deforms through them because the phase drag stretches
+## away from this steady translation and resets. Pinned by
+## test_the_bend_drifts_downstream_with_the_current and
+## test_the_lines_and_the_ripples_move_at_the_same_speed.
+const BEND_DRIFT_FRACTION := 1.0
 
 ## The period, in noise cells, the smeared field tiles at and the drift wraps
 ## modulo. Bounds the direction-scaled translation for ever: on a bend the
@@ -650,7 +1461,18 @@ const BANK_FEATHER := 0.03
 ## field units.
 const LINE_COUNT := 3.0
 const ACROSS_LINE_SCALE := 1.0
-const LINE_WOBBLE := 0.6
+## The half width, in NOISE CELLS, that LINE_WOBBLE was tuned at -- a
+## 2.0-tile half width, which is also the only width the old monotonicity
+## test ever exercised. Wider reaches scale the wobble down in proportion
+## so they fold no more than this one does.
+const WOBBLE_REFERENCE_CELLS := 2.56
+
+## CUT from 0.6. At 0.6 the wobble's gradient was 2.3x the guide's at every
+## width from two tiles up -- the field folded into cells and the strokes
+## were their fragments. 0.12 puts the ratio at 0.46 (bar 0.5). The whirl
+## that 0.6 was carrying now enters through the guide instead, where it
+## cannot fold; see the s_field line.
+const LINE_WOBBLE := 0.17
 const LINE_WIDTH := 0.03
 const LINE_STRENGTH := 0.7
 const LINE_COLOR := Color(0.85, 0.97, 1.0)
@@ -717,19 +1539,40 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("ink_width", INK_WIDTH)
 	material.set_shader_parameter("ink_color", INK_COLOR)
 	material.set_shader_parameter("smear_spacing", SMEAR_SPACING)
+	material.set_shader_parameter("smear_curvature", SMEAR_CURVATURE)
+	material.set_shader_parameter("map_smoothing", MAP_SMOOTHING)
+	material.set_shader_parameter("obstacle_side_softness", OBSTACLE_SIDE_SOFTNESS)
+	material.set_shader_parameter("debug_across", DEBUG_ACROSS)
 	material.set_shader_parameter("smear_gain", SMEAR_GAIN)
 	material.set_shader_parameter("turbulence_strength", TURBULENCE_STRENGTH)
 	material.set_shader_parameter("eddy_scale", EDDY_SCALE)
 	material.set_shader_parameter("eddy_detail_weight", EDDY_DETAIL_WEIGHT)
+	material.set_shader_parameter("eddy_detail_frequency", EDDY_DETAIL_FREQUENCY)
 	material.set_shader_parameter("flow_map_tiles", float(FLOW_MAP_TILES))
 	material.set_shader_parameter("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES)
 	material.set_shader_parameter("tile_px", TILE_PX)
+	material.set_shader_parameter("still_flow_m_s", STILL_FLOW_M_S)
+	material.set_shader_parameter("still_ripple", STILL_RIPPLE)
+	material.set_shader_parameter("eddy_swirl", EDDY_SWIRL)
+	material.set_shader_parameter("bank_shear", BANK_SHEAR)
 	material.set_shader_parameter("bank_feather", BANK_FEATHER)
 	material.set_shader_parameter("across_jitter", ACROSS_JITTER)
 	material.set_shader_parameter("jitter_scale", JITTER_SCALE)
 	material.set_shader_parameter("boulder_count", 0)
-	material.set_shader_parameter("boulder_reach_px", BOULDER_REACH_PX)
-	material.set_shader_parameter("boulder_radius_px", BOULDER_RADIUS_PX)
+	var empty_radii := PackedFloat32Array()
+	empty_radii.resize(24)
+	material.set_shader_parameter("boulder_radius", empty_radii)
+	material.set_shader_parameter("boulder_reach_ratio", BOULDER_REACH_RATIO)
+	material.set_shader_parameter("boulder_shoal_ratio", BOULDER_SHOAL_RATIO)
+	material.set_shader_parameter("boulder_foam_reach_ratio", BOULDER_FOAM_REACH_RATIO)
+	material.set_shader_parameter("foam_min_m_s", FOAM_MIN_M_S)
+	material.set_shader_parameter("foam_full_m_s", FOAM_FULL_M_S)
+	material.set_shader_parameter("foam_alpha", FOAM_ALPHA)
+	material.set_shader_parameter("foam_color", FOAM_COLOR)
+	material.set_shader_parameter("boulder_wake_length_ratio", BOULDER_WAKE_LENGTH_RATIO)
+	material.set_shader_parameter("boulder_wake_width_ratio", BOULDER_WAKE_WIDTH_RATIO)
+	material.set_shader_parameter("boulder_wake_gain", BOULDER_WAKE_GAIN)
+	material.set_shader_parameter("wake_foam", WAKE_FOAM)
 	material.set_shader_parameter("wader_count", 0)
 	material.set_shader_parameter("wader_reach_px", WADER_REACH_PX)
 	material.set_shader_parameter("wader_radius_px", WADER_RADIUS_PX)
@@ -740,6 +1583,9 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("line_count", LINE_COUNT)
 	material.set_shader_parameter("across_line_scale", ACROSS_LINE_SCALE)
 	material.set_shader_parameter("line_wobble", LINE_WOBBLE)
+	material.set_shader_parameter("bend_drift_fraction", BEND_DRIFT_FRACTION)
+	material.set_shader_parameter("pulse_floor", PULSE_FLOOR)
+	material.set_shader_parameter("wobble_reference_cells", WOBBLE_REFERENCE_CELLS)
 	material.set_shader_parameter("line_width", LINE_WIDTH)
 	material.set_shader_parameter("line_strength", LINE_STRENGTH)
 	material.set_shader_parameter("line_color", LINE_COLOR)
@@ -749,6 +1595,17 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("moonlight_ink", MOONLIGHT_INK)
 	material.set_shader_parameter("shore_pos", SHORE_POS)
 	material.set_shader_parameter("shore_width", SHORE_WIDTH)
+	material.set_shader_parameter("disturbance_count", 0)
+	material.set_shader_parameter("ripple_speed", RIPPLE_SPEED)
+	material.set_shader_parameter("ripple_lifetime", RIPPLE_LIFETIME)
+	material.set_shader_parameter("ripple_wavelength", RIPPLE_WAVELENGTH)
+	material.set_shader_parameter("ripple_packet_width", RIPPLE_PACKET_WIDTH)
+	material.set_shader_parameter("ripple_spread_decay", RIPPLE_SPREAD_DECAY)
+	material.set_shader_parameter("ripple_line_gain", RIPPLE_LINE_GAIN)
+	material.set_shader_parameter("ripple_crest_min", RIPPLE_CREST_MIN)
+	material.set_shader_parameter("ripple_crest_full", RIPPLE_CREST_FULL)
+	material.set_shader_parameter("ripple_ring_edge", RIPPLE_RING_EDGE)
+	material.set_shader_parameter("ripple_ink_max", RIPPLE_INK_MAX)
 	for i in BAND_COLORS.size():
 		material.set_shader_parameter("band%d_color" % i, BAND_COLORS[i])
 	return material
@@ -769,6 +1626,89 @@ static func depth_color(depth_fraction: float) -> Color:
 	body = body.lerp(BAND_COLORS[2], clampf(sramp - 1.0, 0.0, 1.0))
 	body = body.lerp(BAND_COLORS[3], clampf(sramp - 2.0, 0.0, 1.0))
 	return body.lerp(BAND_COLORS[4], clampf(sramp - 3.0, 0.0, 1.0))
+
+
+## Directly sets the movement-ripple uniforms. `positions`/`ages` come
+## padded to DISTURBANCE_SLOTS and `count` says how many slots are live --
+## this surface deliberately owns no buffer of its own: EarthChunkManager
+## hands it the very same one WaterShader ages for the sea, so a wake can
+## never expand in one surface and sit frozen in the other.
+func set_disturbances(
+	positions: PackedVector2Array, ages: PackedFloat32Array, count: int
+) -> void:
+	var material := shared_material()
+	material.set_shader_parameter("disturbance_pos", positions)
+	material.set_shader_parameter("disturbance_age", ages)
+	material.set_shader_parameter("disturbance_count", count)
+
+
+## The exact math the shader's ripple_packet runs, mirrored on the CPU for
+## the same reason every other mirror here exists -- a fragment shader
+## cannot be asserted headlessly. Written out rather than delegated to
+## WaterShader.ripple_amplitude ON PURPOSE: the GLSL above is a genuine
+## second copy, so the mirror has to be one too, and the test that asserts
+## the two agree is then a real pin on the two shaders rather than a
+## tautology.
+##
+## Returns a SIGNED displacement -- positive on a crest, negative in a
+## trough, zero once the ring has died or ahead of its advancing front.
+static func ripple_packet(distance_units: float, age_seconds: float) -> float:
+	if age_seconds < 0.0 or age_seconds > RIPPLE_LIFETIME:
+		return 0.0
+	var front := age_seconds * RIPPLE_SPEED
+	var phase := front - distance_units
+	var packet := exp(-absf(phase) / RIPPLE_PACKET_WIDTH)
+	var rings := sin(phase * TAU / RIPPLE_WAVELENGTH)
+	var age_fade := 1.0 - age_seconds / RIPPLE_LIFETIME
+	var spread_fade := 1.0 / (1.0 + front * RIPPLE_SPREAD_DECAY)
+	return rings * packet * age_fade * spread_fade
+
+
+## How hard the ring inks at a crest whose envelope is `amplitude` -- the
+## CPU mirror of the shader's strength term, `smoothstep(ripple_crest_min,
+## ripple_crest_full, envelope) * ripple_ink_max`, so the ring's graduation
+## through its life is a tested curve rather than a pair of eyeballed
+## thresholds. 0 for flat water and the spent tail; RIPPLE_INK_MAX for a
+## fresh crest. (At a crest the signed packet equals its envelope, so the
+## packet's scanned peak is the right thing to feed this.)
+static func ripple_ink(amplitude: float) -> float:
+	return smoothstep(RIPPLE_CREST_MIN, RIPPLE_CREST_FULL, amplitude) * RIPPLE_INK_MAX
+
+
+## The packet without its sine -- the CPU mirror of the shader's
+## ripple_envelope: never under |ripple_packet|, equal to it at a crest.
+static func ripple_envelope(distance_units: float, age_seconds: float) -> float:
+	if age_seconds < 0.0 or age_seconds > RIPPLE_LIFETIME:
+		return 0.0
+	var front := age_seconds * RIPPLE_SPEED
+	var phase := front - distance_units
+	var packet := exp(-absf(phase) / RIPPLE_PACKET_WIDTH)
+	var age_fade := 1.0 - age_seconds / RIPPLE_LIFETIME
+	var spread_fade := 1.0 / (1.0 + front * RIPPLE_SPREAD_DECAY)
+	return packet * age_fade * spread_fade
+
+
+## The ring's ink band, in world px: the arc of the crest's sine above
+## RIPPLE_RING_EDGE, one number at every age.
+static func ripple_ring_width_px() -> float:
+	return RIPPLE_WAVELENGTH / TAU * (PI - 2.0 * asin(RIPPLE_RING_EDGE))
+
+
+## A current line's full extent in world px: the stroke fades to nothing at
+## LINE_WIDTH either side of its contour, in across units of HALF_WIDTH_PX.
+static func line_width_px() -> float:
+	return 2.0 * LINE_WIDTH * HALF_WIDTH_PX
+
+
+## Where a ripple recorded at `origin` is centred `age_seconds` later --
+## the CPU mirror of the shader's own carried centre. A ring in a current
+## is concentric about a point that travels WITH the water, at the water's
+## whole visible speed (surface_px_per_s); only in still water does it stay
+## put.
+static func ripple_center(
+	origin: Vector2, flow_dir: Vector2, speed_m_s: float, age_seconds: float
+) -> Vector2:
+	return origin + flow_dir * (surface_px_per_s(speed_m_s) * age_seconds)
 
 
 ## The round-core obstacle displacement, in px of lateral shift -- the CPU
@@ -792,15 +1732,42 @@ static func obstacle_lateral_shift_px(
 	var displaced := sqrt(lateral * lateral + radius_px * radius_px) - absf(lateral)
 	var envelope := 1.0 - clampf((d - radius_px) / maxf(reach - radius_px, 0.001), 0.0, 1.0)
 	envelope *= envelope
-	var side := 1.0 if lateral >= 0.0 else -1.0
+	# Smooth and odd about the stagnation line, and CLAMPED so only the
+	# core is affected. A hard sign flip left the magnitude at exactly R
+	# there while the sign jumped, tearing the field by 2R (21.95px for a
+	# boulder, 11.95px for a wader).
+	#
+	# The clamp is the whole point. An unclamped lateral/sqrt(lateral^2 +
+	# R^2) removes the tear but scales the push down EVERYWHERE, dropping
+	# its peak from R to 0.30R -- which took the bulge with it, reported
+	# immediately: "the straight line is gone, but with it the bulge
+	# walking in and out of water which was what i wanted to be kept".
+	# Clamped, the push is untouched beyond OBSTACLE_SIDE_SOFTNESS * R and
+	# still peaks at about 0.71R.
+	var side := clampf(lateral / (radius_px * OBSTACLE_SIDE_SOFTNESS), -1.0, 1.0)
 	return side * displaced * envelope
 
 
+## A rock's radius on the water, in world px, from its real diameter: half
+## its drawn height (StoneSize.world_height_px -- the water parts around
+## the rock the player sees), floored at MIN_BOULDER_RADIUS_PX.
+static func boulder_radius_px_for(diameter_cm: float) -> float:
+	return maxf(StoneSize.world_height_px(diameter_cm) * 0.5, MIN_BOULDER_RADIUS_PX)
+
+
+## How far a rock of this radius pushes the water, in world px.
+static func boulder_reach_px_for(radius_px: float) -> float:
+	return radius_px * BOULDER_REACH_RATIO
+
+
 ## A boulder's across-push at a fragment `offset_px` from the rock, given
-## the flow perpendicular -- the round core in across-fraction units.
-static func boulder_across_push(offset_px: Vector2, flow_perp: Vector2) -> float:
+## the flow perpendicular -- the round core in across-fraction units, for a
+## rock of `radius_px` (the reference rock when unspecified).
+static func boulder_across_push(
+	offset_px: Vector2, flow_perp: Vector2, radius_px: float = BOULDER_RADIUS_PX
+) -> float:
 	return obstacle_lateral_shift_px(
-		offset_px, flow_perp, BOULDER_RADIUS_PX, BOULDER_REACH_PX, 0.0
+		offset_px, flow_perp, radius_px, boulder_reach_px_for(radius_px), 0.0
 	) / HALF_WIDTH_PX
 
 
@@ -816,10 +1783,65 @@ static func wader_across_push(offset_px: Vector2, flow_dir: Vector2) -> float:
 	) / HALF_WIDTH_PX
 
 
-## How dry the eyot leaves a fragment `distance_px` from the rock centre:
-## 0 under the rock, 1 outside its radius, soft-edged and ROUND.
-static func eyot_dry_factor(distance_px: float) -> float:
-	return smoothstep(BOULDER_RADIUS_PX * 0.6, BOULDER_RADIUS_PX, distance_px)
+## How dry the eyot leaves a fragment `distance_px` from the centre of a
+## rock of `radius_px`: 0 under the rock, 1 outside its radius, soft-edged
+## and ROUND.
+static func eyot_dry_factor(distance_px: float, radius_px: float = BOULDER_RADIUS_PX) -> float:
+	return smoothstep(radius_px * 0.6, radius_px, distance_px)
+
+
+## The rock's shoal at `distance_px` from the centre of a rock of
+## `radius_px`: 1 at and under the rock's edge (the bed IS the rock),
+## falling to 0 BOULDER_SHOAL_RATIO radii past it. The CPU mirror of the
+## shader's per-boulder shoal term. A function of distance alone: the
+## shoal is geometry, like the banks, and never reads the moving field.
+static func boulder_shoal(distance_px: float, radius_px: float) -> float:
+	return 1.0 - smoothstep(radius_px, radius_px + radius_px * BOULDER_SHOAL_RATIO, distance_px)
+
+
+## The channel's depth fraction after the rock's shoal has shallowed it --
+## what the cel body is cut from near a rock. At the rock's edge it is 0,
+## the bank's own value, so depth_color paints the same lightest tone.
+static func shoaled_depth_fraction(
+	channel_depth_fraction: float, distance_px: float, radius_px: float
+) -> float:
+	return channel_depth_fraction * (1.0 - boulder_shoal(distance_px, radius_px))
+
+
+## The foam window on a rock's upstream face at `offset_px` from a rock of
+## `radius_px` in a current running along `flow_dir` -- the CPU mirror of
+## the shader's nose * foam_window: the squared cosine from the stagnation
+## line (zero at and behind the shoulders) inside a window just off the
+## face. Geometry only; foam_drive gates it by speed.
+static func boulder_foam(offset_px: Vector2, flow_dir: Vector2, radius_px: float) -> float:
+	var d := offset_px.length()
+	var along := offset_px.dot(flow_dir)
+	var nose := clampf(-along / maxf(d, 0.001), 0.0, 1.0)
+	nose *= nose
+	var window := smoothstep(radius_px * 0.7, radius_px, d) \
+		* (1.0 - smoothstep(radius_px, radius_px + radius_px * BOULDER_FOAM_REACH_RATIO, d))
+	return nose * window
+
+
+## How hard a reach of this speed foams at a rock: nothing at or under
+## FOAM_MIN_M_S, full at FOAM_FULL_M_S, still-water gated like the shader.
+static func foam_drive(speed_m_s: float) -> float:
+	if is_still_water(speed_m_s):
+		return 0.0
+	return smoothstep(FOAM_MIN_M_S, FOAM_FULL_M_S, speed_m_s)
+
+
+## The wake lobe behind a rock at `offset_px` -- the CPU mirror of the
+## shader's per-boulder wake: rising over the first radius downstream,
+## dying out by BOULDER_WAKE_LENGTH_RATIO radii, within
+## BOULDER_WAKE_WIDTH_RATIO radii to either side. Zero upstream.
+static func boulder_wake(offset_px: Vector2, flow_dir: Vector2, radius_px: float) -> float:
+	var perp := Vector2(-flow_dir.y, flow_dir.x)
+	var along := offset_px.dot(flow_dir)
+	var lateral := offset_px.dot(perp)
+	return smoothstep(0.0, radius_px, along) \
+		* (1.0 - smoothstep(radius_px, radius_px * BOULDER_WAKE_LENGTH_RATIO, along)) \
+		* (1.0 - smoothstep(radius_px, radius_px * BOULDER_WAKE_WIDTH_RATIO, absf(lateral)))
 
 
 ## The waterline: 1 inside the channel, 0 past the bank curve, feathered
@@ -833,8 +1855,26 @@ static func bank_alpha(across_magnitude: float) -> float:
 ## fast-reach tests all measure.
 ## The guided stroke field for one fragment: signed across-fraction plus
 ## the advected wobble -- the thing whose level sets ARE the current lines.
-static func stroke_field(across_fraction: float, n: float) -> float:
-	return across_fraction * ACROSS_LINE_SCALE + (n - 0.5) * LINE_WOBBLE
+static func stroke_field(
+	across_fraction: float, n: float, half_width_cells := WOBBLE_REFERENCE_CELLS,
+	bend_cells := 0.0
+) -> float:
+	# `bend_cells` is the eddy displacement in NOISE cells, as
+	# bend_displacement returns it; divided by the half width in cells it
+	# becomes an across-fraction shift of the guide, exactly as the shader
+	# does it.
+	var guide := across_fraction + bend_cells / maxf(half_width_cells, 0.01)
+	return (
+		guide * ACROSS_LINE_SCALE
+		+ (n - 0.5) * LINE_WOBBLE * wobble_scale_for(half_width_cells)
+	)
+
+
+## How far the wobble is turned down for a channel this many noise cells
+## wide. Never above 1: this only ever tames water wider than the width
+## LINE_WOBBLE was tuned at, so narrow reaches are untouched.
+static func wobble_scale_for(half_width_cells: float) -> float:
+	return minf(WOBBLE_REFERENCE_CELLS / maxf(half_width_cells, 0.01), 1.0)
 
 
 ## Full stroke brightness at a point: the mask times the streaming pulse
@@ -890,6 +1930,56 @@ static func cel_level(shade: float, checker: float) -> int:
 ## nothing translates across the screen.
 static func is_fast_flow(velocity_m_s: float) -> bool:
 	return velocity_m_s >= FAST_FLOW_M_S
+
+
+## Below this current the overlay draws STILL water: no advection, no
+## drift, quiet strokes -- a lake (docs/concept/hydrology.md), painted
+## through this shader with zero velocity so its shoreline gets the same
+## smooth contour, ink and feather a river bank does. Two centimetres a
+## second is below any current the Manning solve returns for a real
+## channel (the slowest reach the model admits is ~0.4 m/s), so no river
+## ever reads as still. Pinned by test_still_water_neither_advects_nor_drifts.
+const STILL_FLOW_M_S := 0.02
+
+
+static func is_still_water(velocity_m_s: float) -> bool:
+	return velocity_m_s < STILL_FLOW_M_S
+
+
+## How much of the two-phase surface morph still water keeps: enough for
+## the contour strokes to visibly breathe (real ponds ripple under wind),
+## far too little to read as a current. Strictly between none and a
+## river's full morph, by test. 0.25 -> 0.45 when ADVECT_STRENGTH dropped
+## 7.2 -> 1.2, so a lake's sideways breathing goes 1.8 -> 0.54 cells (22
+## -> 7 world px): calmer, as asked, but not frozen.
+const STILL_RIPPLE := 0.45
+
+
+## Whirl (third playtest, "more natural whirly turbulences in curves"):
+## BOTH attempts at it broke the base rendering and are reverted to
+## zero, the same way and for the same class of reason.
+##
+## EDDY_SWIRL rotated the stroke smear by the eddy field: it sawed every
+## stroke into a regular zig-zag with the eddy noise's own period
+## (smearing along a direction that oscillates every few tiles folds the
+## level sets). Pinned at zero by
+## test_the_smear_follows_the_flow_and_never_the_eddies.
+##
+## BANK_SHEAR grew the turbulence displacement itself by up to 25% near
+## the waterline. TURBULENCE_STRENGTH alone is calibrated right up against
+## a real, TESTED fold threshold (test_the_bend_never_folds_the_surface_
+## over_itself: past it, displacement does not bend the noise pattern, it
+## tears it) -- but that test's CPU mirror (bend_displacement/
+## warped_across) never multiplied by any shear factor, so it kept passing
+## while the LIVE shader, with shear applied, silently crossed the real
+## threshold across the wide band near a hydrology river's bank (a
+## channel several tiles wide has a lot of "near the bank"). The result
+## was a sharp, chunky, torn-looking zigzag -- reported as "this huge
+## zigzag still persists" through two rounds of an unrelated fix, because
+## it was never the width-texture bug at all. Reverted to zero so the
+## live formula and its tested CPU mirror agree exactly again.
+const EDDY_SWIRL := 0.0
+const BANK_SHEAR := 0.0
 
 
 ## The CPU mirror of the shader's two-phase crossfade, for headless testing.
@@ -976,6 +2066,84 @@ static func value_noise_tiled(x: float, y: float, period: float = DRIFT_PERIOD_C
 	)
 
 
+## The cubic B-spline basis at a fractional position between texels: the
+## four weights applied to the texels at -1, 0, +1 and +2. Partitions
+## unity (a reconstruction that did not would move the waterline) and is
+## everywhere non-negative (a negative lobe rings at a step edge, which on
+## a distance field is a false bank).
+static func bspline_weights(t: float) -> PackedFloat32Array:
+	var t2 := t * t
+	var t3 := t2 * t
+	return PackedFloat32Array([
+		(1.0 - 3.0 * t + 3.0 * t2 - t3) / 6.0,
+		(4.0 - 6.0 * t2 + 3.0 * t3) / 6.0,
+		(1.0 + 3.0 * t + 3.0 * t2 - 3.0 * t3) / 6.0,
+		t3 / 6.0,
+	])
+
+
+## Plain bilinear over a square grid, exactly as filter_linear does it:
+## texel centres at +0.5, linear weights. The CPU mirror of what the map
+## sampling used to be, kept so the two filters can be compared in a test
+## and by tools/probe_bilinear.gd rather than only by eye.
+static func sample_grid_bilinear(values: PackedFloat32Array, span: int, at: Vector2) -> float:
+	var fx := at.x - 0.5
+	var fy := at.y - 0.5
+	var x0 := int(floor(fx))
+	var y0 := int(floor(fy))
+	var tx := fx - float(x0)
+	var ty := fy - float(y0)
+	var x1 := clampi(x0 + 1, 0, span - 1)
+	var y1 := clampi(y0 + 1, 0, span - 1)
+	x0 = clampi(x0, 0, span - 1)
+	y0 = clampi(y0, 0, span - 1)
+	var top: float = lerp(values[y0 * span + x0], values[y0 * span + x1], tx)
+	var bottom: float = lerp(values[y1 * span + x0], values[y1 * span + x1], tx)
+	return lerp(top, bottom, ty)
+
+
+## Cubic B-spline over the same grid: the CPU mirror of texture_bicubic.
+## Approximating rather than interpolating -- it smooths the samples
+## slightly, which on a distance field is a feature, and unlike warping the
+## sample coordinate it does not bunch contours toward the texel centres.
+static func sample_grid_bspline(values: PackedFloat32Array, span: int, at: Vector2) -> float:
+	var fx := at.x - 0.5
+	var fy := at.y - 0.5
+	var x0 := int(floor(fx))
+	var y0 := int(floor(fy))
+	var wx := bspline_weights(fx - float(x0))
+	var wy := bspline_weights(fy - float(y0))
+	var total := 0.0
+	for j in 4:
+		var sy := clampi(y0 - 1 + j, 0, span - 1)
+		var row := 0.0
+		for i in 4:
+			var sx := clampi(x0 - 1 + i, 0, span - 1)
+			row += values[sy * span + sx] * wx[i]
+		total += row * wy[j]
+	return total
+
+
+## How far, in WORLD PIXELS, one end of the smear sits from its centre.
+## The outermost tap is (SMEAR_TAPS - 1) / 2 steps of SMEAR_SPACING away
+## in noise units, and a noise unit is NOISE_SCALE world pixels. About
+## 2.66 tiles, which is the number tools/probe_smear.gd measures against.
+static func smear_half_span_px() -> float:
+	return float((SMEAR_TAPS - 1) / 2) * SMEAR_SPACING / NOISE_SCALE
+
+
+## The heading tap `k` steps along, interpolated between the flow read at
+## each END of the smear. Always a UNIT vector: a tap chooses a heading
+## only, never a step length, and a short interpolated vector would
+## quietly shorten the stroke through the middle of a bend.
+static func smear_tap_direction(dir_start: Vector2, dir_end: Vector2, k: int) -> Vector2:
+	var half := float((SMEAR_TAPS - 1) / 2)
+	var mixed := dir_start.lerp(dir_end, (float(k) + half) / (2.0 * half))
+	if mixed.length() < 1e-6:
+		return dir_start.normalized()
+	return mixed.normalized()
+
+
 ## The CPU mirror of the shader's line_field: the LIC smear along an
 ## arbitrary direction plus the unsmeared detail octave, world-anchored.
 static func line_field_value(px: float, py: float, dir: Vector2) -> float:
@@ -1001,7 +2169,12 @@ static func animated_field_value(
 	px: float, py: float, dir: Vector2, time_seconds: float, speed_mps := 0.0
 ) -> float:
 	var perp := Vector2(-dir.y, dir.x)
-	var b := bend_displacement(px * EDDY_SCALE, py * EDDY_SCALE)
+	# The eddies drift downstream at a fraction of the surface's drift --
+	# a translation of where the bend is read, exactly as the shader does.
+	var bend_shift := bend_drift_cells(speed_mps, time_seconds)
+	var b := bend_displacement(
+		(px - dir.x * bend_shift) * EDDY_SCALE, (py - dir.y * bend_shift) * EDDY_SCALE
+	)
 	var qx := px + perp.x * b
 	var qy := py + perp.y * b
 	var phase_a := fposmod(time_seconds * ADVECT_RATE, 1.0)
@@ -1020,6 +2193,35 @@ static func animated_field_value(
 ## the wrap is invisible and the direction-scaled offset stays bounded.
 static func drift_cells(speed_mps: float, seconds: float) -> float:
 	return fposmod(DRIFT_PX_PER_MPS * speed_mps * seconds * NOISE_SCALE, DRIFT_PERIOD_CELLS)
+
+
+## The water's VISIBLE downstream speed in world px/s -- the CPU mirror of
+## the shader's surface_px_per_s. The drawn surface is moved by two terms:
+## the two-phase drag translates the field ADVECT_STRENGTH cells every
+## 1/ADVECT_RATE seconds regardless of the reach, and the linear drift adds
+## DRIFT_PX_PER_MPS per m/s of real current. Everything that has to move
+## WITH the water (the ring centre, the eddy field) rides this sum. The
+## drift is most of it by design: it is the coherent translation kinks,
+## whirls and rings can all follow, while the drag is a small deformation
+## (when the drag was 7.2 cells it was two thirds of this number, and its
+## crossfade dissolved every kink in place). Gated by the same hard
+## STILL_FLOW_M_S step the shader's still path uses, so a lake's surface
+## speed is exactly zero.
+static func surface_px_per_s(speed_mps: float) -> float:
+	if speed_mps < STILL_FLOW_M_S:
+		return 0.0
+	return ADVECT_STRENGTH * ADVECT_RATE / NOISE_SCALE + DRIFT_PX_PER_MPS * speed_mps
+
+
+## The same visible speed, as a distance in noise cells over `seconds`.
+static func surface_cells(speed_mps: float, seconds: float) -> float:
+	return surface_px_per_s(speed_mps) * seconds * NOISE_SCALE
+
+
+## How far the standing eddies have migrated downstream, in noise cells:
+## BEND_DRIFT_FRACTION of the water's visible travel. Zero in still water.
+static func bend_drift_cells(speed_mps: float, seconds: float) -> float:
+	return surface_cells(speed_mps, seconds) * BEND_DRIFT_FRACTION
 
 
 ## Mean absolute change in the field over a step of `distance`, taken either
@@ -1047,7 +2249,9 @@ static func field_roughness(distance: float, dir: Vector2, downstream: bool) -> 
 ## coordinates, exactly as the shader anchors it to the bed.
 static func bend_displacement(eddy_x: float, eddy_y: float) -> float:
 	var coarse := value_noise(eddy_x, eddy_y) - 0.5
-	var fine := value_noise(eddy_x * 2.6 + 19.7, eddy_y * 2.6 + 7.3) - 0.5
+	var fine := value_noise(
+		eddy_x * EDDY_DETAIL_FREQUENCY + 19.7, eddy_y * EDDY_DETAIL_FREQUENCY + 7.3
+	) - 0.5
 	return (coarse + fine * EDDY_DETAIL_WEIGHT) * TURBULENCE_STRENGTH
 
 
@@ -1056,6 +2260,12 @@ static func bend_displacement(eddy_x: float, eddy_y: float) -> float:
 ## increases, the warp has folded the surface over itself.
 static func warped_across(world_x: float, world_y: float) -> float:
 	return world_y + bend_displacement(world_x * EDDY_SCALE, world_y * EDDY_SCALE)
+
+
+## The same, at the bend's full strength inside a rock's wake (the gain
+## at its maximum) -- what the no-fold sweep has to hold there too.
+static func warped_across_in_wake(world_x: float, world_y: float) -> float:
+	return world_y + bend_displacement(world_x * EDDY_SCALE, world_y * EDDY_SCALE) * (1.0 + BOULDER_WAKE_GAIN)
 
 
 ## The full at-rest pipeline: bend, then the smeared line field -- what a

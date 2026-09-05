@@ -26,6 +26,7 @@ const Equipment = preload("res://src/gameplay/equipment.gd")
 const FishingSession = preload("res://src/gameplay/fishing_session.gd")
 const MaterialDamage = preload("res://src/gameplay/material_damage.gd")
 const Block = preload("res://src/gameplay/block.gd")
+const ItemWear = preload("res://src/gameplay/item_wear.gd")
 const HotbarAction = preload("res://src/gameplay/hotbar_action.gd")
 const CampfireCooking = preload("res://src/gameplay/campfire_cooking.gd")
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
@@ -551,6 +552,7 @@ var _hand_charge_elapsed := 0.0
 var _charging := false
 var _material_damage := MaterialDamage.new()
 var _block := Block.new()
+var _item_wear := ItemWear.new()
 var _hotbar_action := HotbarAction.new()
 var _campfire_cooking := CampfireCooking.new()
 var _item_sprite_generator := ProceduralItemSprite.new()
@@ -563,6 +565,7 @@ var _last_destroy_input_state := false
 var _last_pickup_input_state := false
 var _last_kick_input_state := false
 var _last_stash_input_state := false
+var _last_plant_input_state := false
 
 ## The rising-edge ("tap") actions: one discrete thing per press, so losing
 ## the press loses the whole action. These are the ones latched on the input
@@ -575,7 +578,7 @@ var _last_stash_input_state := false
 ## reel, the rope -- and latching a level would turn a hold into one tap.
 const MOMENTARY_ACTIONS := [
 	"attack", "build", "destroy", "kick", "stash", "talk", "trade", "cast", "sell",
-	"primary_action", "secondary_action"
+	"primary_action", "secondary_action", "plant"
 ]
 
 ## Rising edges seen by the input event but not yet acted on by the physics
@@ -595,6 +598,7 @@ var _pending_destroy_pressed := false
 var _pending_pickup_pressed := false
 var _pending_kick_pressed := false
 var _pending_stash_pressed := false
+var _pending_plant_pressed := false
 ## Non-authority proxy side: for inferring facing/animation from replicated
 ## position deltas, since only position itself is replicated.
 var _last_position := Vector2.ZERO
@@ -814,6 +818,7 @@ func _bind_wasd_movement() -> void:
 	_bind_key_action("talk", KEY_G)
 	_bind_key_action("build", KEY_B)
 	_bind_key_action("destroy", KEY_Q)
+	_bind_key_action("plant", KEY_P)
 
 
 func _bind_key_action(action_name: String, keycode: Key) -> void:
@@ -843,6 +848,8 @@ func take_damage(amount: float) -> void:
 	if is_dead:
 		return
 	if is_blocking():
+		if amount > 0.0:
+			_wear_equipped_item()  # a real hit was actually absorbed, see docs/concept/item_durability.md
 		amount = _block.blocked_damage(amount, _held_kind())
 	# The `shield` spell atom (see docs/concept/spell_runtime.md): a flat
 	# absorb pool consumed before armor, on top of whatever block already
@@ -1693,6 +1700,7 @@ func _physics_process(delta: float) -> void:
 		_submit_cast.rpc_id(1, _local_momentary_input("cast"))
 		_submit_build.rpc_id(1, _local_momentary_input("build"))
 		_submit_destroy.rpc_id(1, _local_momentary_input("destroy"))
+		_submit_plant.rpc_id(1, _local_momentary_input("plant"))
 
 
 ## Runs only on the authority (the server, or this same instance in the
@@ -1753,6 +1761,7 @@ func _authority_step(delta: float) -> void:
 	_stash_step()
 	_build_step()
 	_destroy_step()
+	_plant_step()
 	_fishing_step(delta)
 	_lasso_step(delta)
 	_food_buff_step(delta)
@@ -1881,6 +1890,7 @@ func _perform_attack() -> void:
 		)
 		creature.apply_knockback(knockback)
 		creature.take_damage(damage)
+		_wear_equipped_item()  # a real connecting hit, see docs/concept/item_durability.md
 		# A hit that kills the creature awards XP scaled by its level (see
 		# ExperienceTrack / concept/progression.md).
 		if creature.is_queued_for_deletion() and creature.info != null:
@@ -1892,6 +1902,7 @@ func _perform_attack() -> void:
 	_pull_wild_crop_step()
 	_butcher_step()
 	_collect_step()
+	_harvest_farm_plot_step()
 
 
 ## Resolves a cast of `spell_id` from the fixed SpellBook (see
@@ -2151,13 +2162,37 @@ func _collect_step() -> void:
 		inventory.add(_item_catalog.make(item_id), available)
 
 
+## Harvesting: on an attack swing, if the tile the player is FACING carries
+## a ready farm plot (see EarthChunkManager.harvest_farm_plot_at_global,
+## docs/concept/farming.md), grants its real crop yield straight to
+## inventory -- the same direct-grant shape _collect_step just above
+## already uses (no ground-drop/pull animation for this slice, a
+## documented simplification -- see docs/progress.md's Farming entry).
+## Tile-targeted rather than a group-scan like the harvest steps above: a
+## farm plot isn't a free-floating Node2D the player walks up to, it's
+## anchored to a specific tile, the same way build/destroy target a tile
+## instead of scanning nearby nodes.
+func _harvest_farm_plot_step() -> void:
+	if _chunk_manager == null:
+		return
+	var target := _tile_targeting.facing_tile(current_tile(), _last_facing_direction)
+	var result: Dictionary = _chunk_manager.harvest_farm_plot_at_global(target.x, target.y)
+	var count: int = result.get("count", 0)
+	if count <= 0:
+		return
+	inventory.add(_item_catalog.make(result["crop_id"]), count)
+
+
 ## The held item's material-model kind (see MaterialDamage/Block), used for
 ## attacks, blocking, AND chopping -- so what's in hand is the single thing
 ## that matters: an axe chops wood fast (and blocks/cuts like an axe), a sword
 ## chops slowly but blocks best, bare hands (or a non-weapon tool like a
 ## pickaxe) are weakest at both.
+## "unarmed" for bare hands AND for an item broken from accumulated combat
+## fatigue (see docs/concept/item_durability.md) -- a broken sword blocks/
+## attacks exactly like empty hands, not like a still-functional sword.
 func _held_kind() -> String:
-	if equipped_item == null:
+	if equipped_item == null or _equipped_item_is_broken():
 		return "unarmed"
 	if equipped_item.is_axe():
 		return "axe"
@@ -2165,9 +2200,32 @@ func _held_kind() -> String:
 
 
 ## The held item as an attack weapon, or null if it isn't one (bare-hands /
-## holding a tool) -- feeds MeleeAttack.attack_damage.
+## holding a tool) OR it's broken from fatigue (see docs/concept/
+## item_durability.md) -- feeds MeleeAttack.attack_damage, which already
+## falls back to UNARMED_DAMAGE for null, so a broken weapon needs no
+## separate damage path of its own.
 func _held_weapon():
-	return equipped_item if equipped_item != null and equipped_item.is_weapon() else null
+	if equipped_item == null or not equipped_item.is_weapon():
+		return null
+	return null if _equipped_item_is_broken() else equipped_item
+
+
+func _equipped_item_is_broken() -> bool:
+	return _item_wear.is_broken(equipped_item.wear, _item_catalog.material_of(equipped_item.id))
+
+
+## Adds one use's worth of combat wear to the currently equipped item, if it
+## has a real modeled material (see docs/concept/item_durability.md) --
+## items with none (item_catalog.gd's own "not guessed at here" convention,
+## the same one mass_kg already follows) never accrue wear and so can never
+## break from it. Called once per connecting attack target and once per
+## block that actually absorbs a real hit.
+func _wear_equipped_item() -> void:
+	if equipped_item == null:
+		return
+	if _item_catalog.material_of(equipped_item.id) == "":
+		return
+	equipped_item.wear += ItemWear.WEAR_PER_USE
 
 
 ## A swing's knockback force, fed by the held weapon's REAL mass through the
@@ -3528,6 +3586,42 @@ func _destroy_step() -> void:
 			inventory_changed.emit()
 
 
+## The farming loop's own crop for this slice (docs/concept/farming.md) --
+## no seed item/selection UI exists yet (the concept doc's own open
+## questions are about cross-breeding UI, not basic seed choice), so
+## _plant_step always plants this one crop. Matches an existing catalog
+## food item (see item_catalog.gd's "carrot", also grown wild -- farmed and
+## wild share one art/DNA model per the concept doc's "Resolved" section).
+const FARM_CROP_ID := "carrot"
+
+
+## Authority-only: the farming loop's contextual till/plant/tend key
+## (docs/concept/farming.md's "farming loop") -- same
+## one-key-does-the-obvious-thing shape _build_step already uses for its
+## own two behaviors. On the rising edge of the plant input: tends (waters)
+## the faced tile's plot if a crop is already growing there, otherwise
+## tills and plants a fresh one (a no-op if a crop there is already
+## "ready" -- see EarthChunkManager.till_and_plant_farm_plot_at_global --
+## an unharvested crop is never silently replaced). Harvesting a READY plot
+## is deliberately NOT this key -- see _harvest_farm_plot_step, which
+## reuses the attack key instead, the same way every other harvest-shaped
+## verb (chop/smash/pull/butcher/collect) already does.
+func _plant_step() -> void:
+	var plant_pressed := (
+		Input.is_action_pressed("plant") if _controlled_locally() else _pending_plant_pressed
+	)
+	var just_pressed := _rising_edge("plant", plant_pressed, _last_plant_input_state)
+	_last_plant_input_state = plant_pressed
+
+	if not just_pressed or _chunk_manager == null:
+		return
+
+	var target := _tile_targeting.facing_tile(current_tile(), _last_facing_direction)
+	if _chunk_manager.water_farm_plot_at_global(target.x, target.y):
+		return  # a live crop was already growing there -- tended, not replanted
+	_chunk_manager.till_and_plant_farm_plot_at_global(target.x, target.y, FARM_CROP_ID)
+
+
 ## Runs on every non-authority peer's copy of a player (including a client's
 ## copy of its own avatar): position comes from replication, not local
 ## simulation. Facing/animation are inferred from how the replicated position
@@ -3591,6 +3685,13 @@ func _submit_destroy(pressed: bool) -> void:
 	_pending_destroy_pressed = pressed
 
 
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func _submit_plant(pressed: bool) -> void:
+	if not is_multiplayer_authority():
+		return
+	_pending_plant_pressed = pressed
+
+
 func _resolve_water_state(tile: Vector2i, delta: float) -> Dictionary:
 	var elevation := _chunk_manager.elevation_at_global(tile.x, tile.y)
 	var ocean_depth := _biome_classifier.depth_meters_at(
@@ -3602,7 +3703,10 @@ func _resolve_water_state(tile: Vector2i, delta: float) -> Dictionary:
 	# the same way is_river_at_global already is for the dry-land spawn
 	# search (World._find_dry_land_spawn).
 	var river_depth := _chunk_manager.river_depth_meters_at_global(tile.x, tile.y)
-	var water_depth := maxf(ocean_depth, river_depth)
+	# Lakes are the third kind of water, asked the same way (see
+	# docs/concept/hydrology.md): standing water over untouched land biome.
+	var lake_depth := _chunk_manager.lake_depth_meters_at_global(tile.x, tile.y)
+	var water_depth := maxf(maxf(ocean_depth, river_depth), lake_depth)
 
 	var submerged := water_depth > 0.0
 	wetness = _wetness_tracker.update(wetness, worn_material, submerged, delta)

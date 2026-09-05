@@ -16,8 +16,10 @@ extends GutTest
 
 const FlowerPatch = preload("res://src/world/flower_patch.gd")
 const FlowerSpecies = preload("res://src/world/flower_species.gd")
+const FlowerEstablishment = preload("res://src/world/flower_establishment.gd")
 const PollinatorForaging = preload("res://src/gameplay/pollinator_foraging.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const WindDispersal = preload("res://src/world/wind_dispersal.gd")
 
 const SEASONS := ["winter", "spring", "summer", "autumn"]
 
@@ -49,12 +51,27 @@ func test_blooming_cells_only_returns_species_in_bloom_this_season():
 
 ## The filter must not simply empty the world: every season has bloomers, so
 ## hiding everything would be as wrong as hiding nothing.
-func test_every_season_still_has_some_flowers_in_bloom():
-	var patch := _patch()
+##
+## Asserted across a stretch of WORLD rather than one small patch, which is
+## the scale the claim is actually about. A single chunk holds a handful of
+## plants and (since MeadowSpread gives a whole lineage its founder's species)
+## only a few species, so one chunk with nothing in bloom in winter is a
+## correct meadow, not a broken filter -- what would be wrong is a whole
+## region with nothing.
+func test_every_season_still_has_some_flowers_in_bloom_somewhere():
+	var found := {}
+	for season in SEASONS:
+		found[season] = 0
+	for chunk in 12:
+		var patch := FlowerPatch.new(
+			1234, 32, 32, _all_grassland(32, 32), Vector2i(chunk * 32, 0)
+		)
+		for season in SEASONS:
+			found[season] += patch.blooming_cells(season).size()
 	for season in SEASONS:
 		assert_gt(
-			patch.blooming_cells(season).size(), 0,
-			"%s should still show some blooms, not an empty meadow" % season
+			found[season], 0,
+			"%s showed no blooms at all across twelve chunks of grassland" % season
 		)
 
 
@@ -102,20 +119,33 @@ func test_pollinated_flowers_shed_seed_onto_the_ground_over_time():
 	assert_gt(patch.ground_seed_cells().size(), 0, "a standing meadow should drop seed around itself")
 
 
-## Seed lands NEAR the plant it fell from, not anywhere in the chunk --
-## that is what makes a meadow read as a seed source.
-func test_shed_seed_lands_next_to_a_flower():
+## Seed lands where the WIND put it, not anywhere in the chunk -- that is what
+## makes a meadow read as a seed source rather than as scenery scattered at
+## random.
+##
+## This used to assert a flat two-cell radius (the old FlowerPatch.
+## SEED_FALL_RADIUS), which stopped being true when shedding moved onto
+## WindDispersal: flower seed is the lightest class in the world and a gust
+## takes it much further than that. The bound that is actually true is the
+## kernel's own -- and it is still a real claim, because the kernel's reach is
+## a small fraction of a chunk.
+func test_shed_seed_lands_within_the_winds_reach_of_a_flower():
 	var patch := _patch()
 	for cell in patch.get_flower_cells():
 		patch.pollinate(cell, patch.species_at(cell))
+	patch.set_wind(Vector2.RIGHT, 0.7)
 	for i in 200:
 		patch.shed_seed(1.0, "summer")
+	assert_gt(patch.ground_seed_cells().size(), 0, "precondition: something shed")
 	var flowers := patch.get_flower_cells()
 	for cell in patch.ground_seed_cells():
-		var nearest := 9999
+		var nearest := 9999.0
 		for flower in flowers:
-			nearest = mini(nearest, maxi(absi(cell.x - flower.x), absi(cell.y - flower.y)))
-		assert_lte(nearest, FlowerPatch.SEED_FALL_RADIUS, "seed should lie around the plant that dropped it")
+			nearest = minf(nearest, Vector2(cell - flower).length())
+		assert_lte(
+			nearest, WindDispersal.MAX_TRAVEL_TILES,
+			"seed lay %.1f tiles from any plant -- further than any wind could take it" % nearest
+		)
 
 
 ## Seed carries the species that dropped it, so a bird planting it later
@@ -194,7 +224,10 @@ func test_a_newly_planted_flower_starts_as_a_seedling():
 ## Map-seeded flowers are the meadow that was already there, so they start
 ## grown -- the same rule TallGrass uses for its initial patches.
 func test_the_meadow_that_was_always_there_starts_grown():
-	var patch := FlowerPatch.new(2, 12, 12, _grassland(12, 12))
+	# A full chunk's worth of ground, not a 12x12 corner of one: a baked
+	# meadow is now sparse enough (see MeadowSpread) that a small patch can
+	# honestly hold nothing at all.
+	var patch := FlowerPatch.new(2, 32, 32, _grassland(32, 32))
 	var cells := patch.get_flower_cells()
 	assert_gt(cells.size(), 0, "precondition: some flowers seeded")
 	for cell in cells:
@@ -433,3 +466,144 @@ func _sown_patch() -> FlowerPatch:
 	for i in 300:
 		patch.shed_seed(1.0, "winter")
 	return patch
+
+
+# -- the meadow that was already there ---------------------------------------
+#
+# Reported live: flowers "spread or grow way too dense", and the baked initial
+# world state "should also respect this and simulate spread based on wind
+# strength and direction". The initial meadow used to be an independent coin
+# flip per grassland cell -- a uniform speckle that produced adjacent pairs and
+# triples constantly and knew nothing about the wind. It is now run through
+# MeadowSpread (see concept/flora.md#the-meadow-you-arrive-to-is-what-the-wind-
+# already-did).
+
+func _far_from_every_flower(patch: FlowerPatch, width: int, height: int) -> Vector2i:
+	for y in height:
+		for x in width:
+			var cell := Vector2i(x, y)
+			if FlowerEstablishment.is_clear(cell, patch.get_flower_cells()):
+				return cell
+	return Vector2i(-1, -1)
+
+
+func test_the_meadow_it_starts_with_is_spaced_out():
+	for seed_value in [1234, 77, 9, -4]:
+		var patch := FlowerPatch.new(seed_value, 48, 48, _grassland(48, 48))
+		var cells := patch.get_flower_cells()
+		for i in cells.size():
+			for j in range(i + 1, cells.size()):
+				assert_gte(
+					Vector2(cells[i] - cells[j]).length(), FlowerEstablishment.MIN_SPACING_TILES,
+					"seed %d started with %s and %s on top of each other"
+					% [seed_value, cells[i], cells[j]]
+				)
+
+
+## The baked state answers to the wind like everything else does.
+func test_the_prevailing_wind_shapes_the_meadow_it_starts_with():
+	var east := FlowerPatch.new(
+		7, 48, 48, _grassland(48, 48), Vector2i.ZERO, Vector2.RIGHT, 0.9
+	)
+	var west := FlowerPatch.new(
+		7, 48, 48, _grassland(48, 48), Vector2i.ZERO, Vector2.LEFT, 0.9
+	)
+	assert_ne(
+		east.get_flower_cells(), west.get_flower_cells(),
+		"the wind's direction made no difference to the meadow"
+	)
+
+
+## A meadow near the origin and the same meadow far away are different ground,
+## not the same chunk repeated -- founders live in world tiles.
+func test_where_in_the_world_the_chunk_is_decides_what_grows_on_it():
+	var here := FlowerPatch.new(7, 32, 32, _grassland(32, 32), Vector2i.ZERO)
+	var there := FlowerPatch.new(7, 32, 32, _grassland(32, 32), Vector2i(4096, -2048))
+	assert_ne(here.get_flower_cells(), there.get_flower_cells())
+
+
+# -- the gate applies to every way a flower comes into being -----------------
+
+## An animal dropping carried seed at a standing plant's foot does not grow a
+## second plant there. A gate the animal-dispersal path could route around
+## would silently refill exactly the gaps the baked meadow opened.
+func test_seed_dropped_at_a_standing_plants_foot_does_not_take():
+	var patch := FlowerPatch.new(1234, 32, 32, _grassland(32, 32))
+	var standing: Vector2i = patch.get_flower_cells()[0]
+	assert_false(
+		patch.plant(standing + Vector2i(1, 0), "rose"),
+		"a seed rooted right beside a standing plant"
+	)
+
+
+func test_seed_dropped_clear_of_the_meadow_still_takes():
+	var patch := FlowerPatch.new(1234, 32, 32, _grassland(32, 32))
+	var clear := _far_from_every_flower(patch, 32, 32)
+	assert_ne(clear, Vector2i(-1, -1), "precondition: the meadow left some open ground")
+	assert_true(patch.plant(clear, "rose"), "open ground refused a seed")
+
+
+## And rain rooting lying seed obeys it too -- the third and last way a flower
+## can appear.
+func test_rain_never_roots_seed_on_top_of_a_standing_plant():
+	var patch := FlowerPatch.new(1234, 32, 32, _grassland(32, 32))
+	for cell in patch.get_flower_cells():
+		patch.pollinate(cell, patch.species_at(cell))
+	patch.set_wind(Vector2.RIGHT, 0.5)
+	for i in 300:
+		patch.shed_seed(1.0, "winter")
+	for step in 10:
+		patch.root_seeds(1.0, 1.0)
+	var cells := patch.get_flower_cells()
+	assert_gt(cells.size(), 0, "precondition: there is a meadow to crowd")
+	for i in cells.size():
+		for j in range(i + 1, cells.size()):
+			assert_gte(
+				Vector2(cells[i] - cells[j]).length(), FlowerEstablishment.MIN_SPACING_TILES,
+				"rain rooted %s on top of %s" % [cells[i], cells[j]]
+			)
+
+
+# -- naming what is under the cursor -----------------------------------------
+#
+# Reported live: flowers "still don't [show] hover tooltips". The label has to
+# match what is actually DRAWN, or the tooltip becomes exactly the kind of lie
+# concept/flora.md's "what is visible must be what is real" forbids -- naming a
+# rose over what looks to the player like bare grass.
+
+func test_a_blooming_flower_names_itself():
+	var patch := FlowerPatch.new(1234, 32, 32, _all_grassland(32, 32))
+	var named := 0
+	for cell in patch.get_flower_cells():
+		var species := patch.species_at(cell)
+		for season in SEASONS:
+			var label := patch.label_at(cell, season)
+			if FlowerSpecies.is_in_bloom(species, season):
+				assert_ne(label, "", "a blooming %s named nothing" % species)
+				named += 1
+			else:
+				assert_eq(
+					label, "",
+					"a %s out of bloom in %s named itself anyway" % [species, season]
+				)
+	assert_gt(named, 0, "precondition: something was in bloom in some season")
+
+
+func test_bare_ground_names_nothing():
+	var patch := FlowerPatch.new(1234, 32, 32, _all_grassland(32, 32))
+	assert_eq(patch.label_at(Vector2i(999, 999), "summer"), "")
+
+
+## A seedling reads as a seedling. The growth mechanic is otherwise invisible
+## beyond the sprite being small -- the same thing WildCropMarker does with its
+## own growth stages.
+func test_a_seedling_says_it_is_a_seedling():
+	var patch := FlowerPatch.new(1234, 32, 32, _all_grassland(32, 32))
+	var clear := _far_from_every_flower(patch, 32, 32)
+	assert_ne(clear, Vector2i(-1, -1), "precondition: open ground to plant on")
+	assert_true(patch.plant(clear, "rose"))
+	var young := patch.label_at(clear, "summer")
+	patch.advance(FlowerPatch.SECONDS_TO_MATURE * 2.0, 1.0)
+	var grown := patch.label_at(clear, "summer")
+	assert_ne(young, grown, "a seedling and a full bloom read identically")
+	assert_true(young.contains(grown), "a seedling should still say what it is: '%s'" % young)

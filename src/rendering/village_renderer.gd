@@ -62,6 +62,45 @@ const _WATER_AVOIDANCE_SEARCH_RADIUS_TILES := 6
 ## own stand", clear of the door cell and the house's wall thickness.
 const _STAND_OFFSET_TILES := 2
 
+## Bright daylight -- spawn_village's own default for `sun_elevation_deg`
+## when a caller doesn't pass one (every existing caller/test, plus tools
+## that don't care about night lighting). Same "nothing pinned, sun high"
+## convention CreatureMarker.DEFAULT_SUN_ELEVATION_DEG/HillshadeShader.
+## DEFAULT_SUN_ELEVATION_DEG already use elsewhere in this codebase for the
+## identical purpose, kept as its own constant here rather than importing
+## either of those (this file has no other reason to depend on them).
+const DEFAULT_SUN_ELEVATION_DEG := 45.0
+
+## The sun elevation at/below which a house's windows light up for the
+## night -- the EXACT same day/night boundary scenes/world.gd already uses
+## for its own sky tint and Easter-egg sightings (its own `elevation <= 0.0`
+## -- see is_night's own doc comment), not a second, independently-tuned
+## threshold.
+const _NIGHT_ELEVATION_THRESHOLD_DEG := 0.0
+
+## Warm lamplight for a window at night -- deliberately warmer than
+## ProceduralHouseSprite.WINDOW_GLASS_COLOR's cool daylight glass tint, so a
+## village genuinely reads as "windows glowing after dark", not the same
+## daytime glass merely recoloured.
+const _WINDOW_LIGHT_COLOR := Color(1.0, 0.82, 0.42, 0.9)
+
+## A lit window's glow is drawn at this fraction of a tile -- small enough to
+## read as light spilling from the window pane, not a solid tile-sized block
+## stamped over the whole wall cell.
+const _WINDOW_LIGHT_SIZE_FRACTION := 0.5
+
+var _window_light_texture_cache: Dictionary = {}  # tile_size (int) -> ImageTexture
+
+
+## Whether it's dark enough for a house's windows to glow (see
+## docs/concept/housing.md#night-lighting-ambient) -- the EXACT same
+## elevation-at-or-below-zero boundary scenes/world.gd already uses to decide
+## day/night for its own sky tint and Easter-egg sightings, not a second,
+## re-tuned threshold, so a village's windows go dark/lit at the same real
+## moment the sky itself does.
+func is_night(sun_elevation_deg: float) -> bool:
+	return sun_elevation_deg <= _NIGHT_ELEVATION_THRESHOLD_DEG
+
 
 ## Spawns this chunk's village (real stamped houses, landmark props, and NPC
 ## markers, the last two as children of `parent`) if SettlementGenerator
@@ -82,6 +121,16 @@ const _STAND_OFFSET_TILES := 2
 ## skips stamping entirely rather than crashing -- same fail-open shape as
 ## _water_layer/_roof_layer elsewhere in this codebase -- and falls back to
 ## the raw anchor position so callers still get a sensible home_position.
+##
+## `sun_elevation_deg` is the real, live sun elevation (see solar_position.gd,
+## scenes/world.gd's own day/night lighting) at the moment this chunk streams
+## in -- when is_night(sun_elevation_deg) is true, every real window this
+## call actually stamps gets a warm lit-window glow sprite alongside it (see
+## docs/concept/housing.md#night-lighting-ambient). Defaults to bright
+## daylight so every existing caller/test that doesn't care about night
+## lighting keeps behaving exactly as before this parameter existed. Chunk-
+## scoped like the rest of this function: a village's lit/unlit state is
+## decided once here, not re-evaluated while the chunk stays loaded.
 func spawn_village(
 	parent: Node2D,
 	chunk_coord: Vector2i,
@@ -89,7 +138,8 @@ func spawn_village(
 	chunk_size: int,
 	tile_size: int,
 	dominant_biome: String,
-	world = null
+	world = null,
+	sun_elevation_deg: float = DEFAULT_SUN_ELEVATION_DEG
 ) -> Array[Node2D]:
 	if not _settlement_generator.has_settlement_at(chunk_coord, dominant_biome):
 		return []
@@ -120,10 +170,14 @@ func spawn_village(
 	var npcs: Array = settlement.npcs
 	var door_positions: Array[Vector2] = []
 	var stand_positions: Array[Vector2] = []
+	var night := is_night(sun_elevation_deg)
 	for i in house_positions.size():
 		var house := _stamp_house(chunk_coord, i, house_positions[i], npcs[i], tile_size, world, npcs.size())
 		door_positions.append(house.door)
 		stand_positions.append(house.stand)
+		if night:
+			for window_position in house.windows:
+				spawned.append(_build_window_light(window_position, tile_size, parent))
 	for landmark_id in settlement.landmarks:
 		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
 	for i in npcs.size():
@@ -187,7 +241,7 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 	var raw_origin := anchor_tile - footprint / 2
 
 	if world == null or not world.has_method("stamp_structure_at_global"):
-		return {"door": anchor, "stand": anchor}
+		return {"door": anchor, "stand": anchor, "windows": []}
 
 	var material := (
 		BuildingPiece.MATERIAL_STONE
@@ -196,11 +250,11 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 	)
 	var pieces := _house_blueprint.build(blueprint_id, seed_value, material)
 	if pieces.is_empty():
-		return {"door": anchor, "stand": anchor}
+		return {"door": anchor, "stand": anchor, "windows": []}
 
 	var origin_tile = _find_dry_origin(raw_origin, footprint, world)
 	if origin_tile == null:
-		return {"door": anchor, "stand": anchor}  # no dry ground nearby -- skip rather than build in water
+		return {"door": anchor, "stand": anchor, "windows": []}  # no dry ground nearby -- skip rather than build in water
 
 	var roofs := _house_blueprint.build_roofs(blueprint_id, seed_value, material)
 
@@ -228,7 +282,11 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 			stamped_roofs = {}
 	world.stamp_structure_at_global(chunk_coord, origin_tile, stamped_pieces, stamped_roofs)
 
-	return {"door": door_position, "stand": stand_position}
+	# Windows are read off `stamped_pieces`, never the full `pieces` -- a
+	# still-under-construction house (fraction < 1.0 above) only lights the
+	# windows it has actually built so far, never one that isn't there yet.
+	var window_positions := _window_positions(stamped_pieces, origin_tile, tile_size)
+	return {"door": door_position, "stand": stand_position, "windows": window_positions}
 
 
 ## How structurally complete a settlement house should be by the time a
@@ -396,6 +454,23 @@ func _door_cell(pieces: Dictionary) -> Vector2i:
 	return Vector2i.ZERO
 
 
+## World-space centre of every CATEGORY_WINDOW cell in `pieces` (a stamped
+## house's own LOCAL cell -> piece_id map -- see _stamp_house's own
+## `stamped_pieces`), translated by `origin_tile` into global tile space
+## then into pixels -- the same local-cell -> global-tile -> pixel
+## conversion _stamp_house's own door_position already uses. Pure and
+## deterministic: the same house (same pieces/origin) always yields the
+## same window positions, so a caller can light every real window a house
+## was actually built with, and never one that isn't there.
+func _window_positions(pieces: Dictionary, origin_tile: Vector2i, tile_size: int) -> Array[Vector2]:
+	var positions: Array[Vector2] = []
+	for cell in pieces:
+		if BuildingPiece.category_of(pieces[cell]) == BuildingPiece.CATEGORY_WINDOW:
+			var global_cell: Vector2i = origin_tile + cell
+			positions.append(Vector2((global_cell.x + 0.5) * tile_size, (global_cell.y + 0.5) * tile_size))
+	return positions
+
+
 ## The settlement's shared well/stall/gate, a merchant's personal trading
 ## stand, and a farmer/blacksmith/fisher/herbalist's own workspot prop --
 ## previously all invisible positions NPC schedules walked to, now real,
@@ -416,6 +491,37 @@ func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D) -> 
 	landmark.add_child(_drop_shadow.make_shadow(int(size.x * 0.8), size.y * 0.5 - 1.0))
 	parent.add_child(landmark)
 	return landmark
+
+
+## A small warm glow over one real stamped window, built only when
+## is_night(sun_elevation_deg) is true for the current spawn_village call
+## (see that loop) -- tagged "window_light" the same landmark_id-metadata
+## way _build_landmark tags its own sprites, so a caller (chiefly tests) can
+## tell a night light apart from every other spawned prop.
+func _build_window_light(position: Vector2, tile_size: int, parent: Node2D) -> Sprite2D:
+	var light := Sprite2D.new()
+	light.texture = _window_light_texture(tile_size)
+	light.set_meta("landmark_id", "window_light")
+	light.position = position
+	parent.add_child(light)
+	return light
+
+
+## A small solid square of warm lamplight, sized off the real world tile
+## size (not ProceduralHouseSprite's own unrelated authored-pixel-art scale
+## -- this overlay has to line up with a REAL stamped window tile, not a
+## whole decorative house sprite). Cached per tile_size, the same "generate
+## once, reuse the ImageTexture" shape DropShadow._texture_for already uses
+## for its own per-width shadow cache.
+func _window_light_texture(tile_size: int) -> ImageTexture:
+	if _window_light_texture_cache.has(tile_size):
+		return _window_light_texture_cache[tile_size]
+	var size := maxi(1, int(tile_size * _WINDOW_LIGHT_SIZE_FRACTION))
+	var image := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	image.fill(_WINDOW_LIGHT_COLOR)
+	var texture := ImageTexture.create_from_image(image)
+	_window_light_texture_cache[tile_size] = texture
+	return texture
 
 
 ## Each villager gets a personal workspot south of their own house, for

@@ -200,16 +200,19 @@ const CREATURE_PANELS_REFRESH_INTERVAL := 0.5
 ## doesn't fill the whole screen with panels.
 const MAX_CREATURE_PANELS := 6
 
-## Freiburg im Breisgau -- the Gaskugel landmark on the Dreisam, in the
-## Betzenhausen district (48.007669N, 7.805657E per Wikimedia Commons' geo
-## tag and OpenStreetMap/Nominatim, which agree to within a few metres).
-## Previously Berlin (52.52N, 13.405E); moved 2026-08-29. See
+## The Loire at Nantes (47.2031N, 1.5469W) -- an EMERGENT river: a channel
+## of the baked drainage network (docs/concept/hydrology.md), not a curated
+## RiverCatalog course. Picked from tools/probe_hydrology.gd on 2026-09-03
+## as the strongest baked channel in western France clear of every curated
+## river, at the asset cell whose centre the channel runs through.
+## Previously the Freiburg Gaskugel on the curated Dreisam (48.007669N,
+## 7.805657E, 2026-08-29) and before that Berlin (52.52N, 13.405E). See
 ## test_world_spawn_location.gd, including its real-elevation-data check
-## that the new point is dry, non-mountain land at least as climate-warm as
+## that the point is dry, non-mountain land at least as climate-warm as
 ## the old Berlin spawn (so mechanics tuned against Berlin's real measured
 ## climate, e.g. EarthwormPatch.MILD_WARMTH, are not silently re-broken).
-const SPAWN_LATITUDE := 48.007669
-const SPAWN_LONGITUDE := 7.805657
+const SPAWN_LATITUDE := 47.2031
+const SPAWN_LONGITUDE := -1.5469
 const SPAWN_SEARCH_RADIUS := 5
 
 const PORT := 8910
@@ -278,7 +281,8 @@ var _ground_tint := GroundTint.new()
 @onready var _river_flow_fx: TileMapLayer = $RiverFlowFx
 @onready var _hillshade_fx: TileMapLayer = $HillshadeFx
 ## Snow lies here rather than as a tint on the ground, so footprints can be
-## carved out of it (see SnowLayer).
+## carved out of it (see SnowBombShader) -- the cells carry only land
+## presence now, the actual coverage is read per pixel by the shader.
 @onready var _snow_fx: TileMapLayer = $SnowFx
 @onready var _entities: Node2D = $Entities
 ## Ground-flush decoration (flowers, worms, desert scrub, tundra lichen) --
@@ -2316,10 +2320,13 @@ func _build_hover_tooltip() -> void:
 ## The tooltip shows the entity's name and, for anything with an action
 ## (pick up, chop, mine, smash, kick...), that action's verb and its live
 ## keybinding -- ALL of them, if more than one applies (e.g. a pebble reads
-## both "Pick Up (E)" and "Kick (K)"). Grass is the one exception: it has no
-## per-tuft Node2D to join HoverTargetFinder's group (see
-## EarthChunkManager._sync_grass_sprites), so it is checked separately, only
-## once nothing else claimed the cursor.
+## both "Pick Up (E)" and "Kick (K)"). Ground decoration is the exception:
+## grass and flowers have no per-plant Node2D to join HoverTargetFinder's
+## group (see EarthChunkManager._sync_grass_sprites/_sync_flower_sprites --
+## being a bare Sprite2D per cell is why a meadow costs what it does), so each
+## is asked for by position separately, only once nothing else claimed the
+## cursor. Flowers go first of the two: a bloom stands IN grass, so whichever
+## is asked second could never answer.
 func _update_hover_tooltip() -> void:
 	# A tooltip about whatever is behind an open window is noise -- and worse,
 	# it draws ON TOP of that window (see world_hint_visible_for). Skipping
@@ -2375,6 +2382,14 @@ func _update_hover_tooltip() -> void:
 	var found_name: String = info.get("name", "")
 	var found_actions: Array = info.get("actions", [])
 	var found_detail: String = info.get("detail", "")
+	# Flowers, like grass, have no per-plant Node2D to join the group above --
+	# they are ground decoration, one bare Sprite2D per cell (see
+	# EarthChunkManager._sync_flower_sprites), which is exactly why a meadow
+	# is affordable at all. So they are asked for by position once nothing in
+	# the group claimed the cursor. Reported live: flowers "still don't
+	# [show] hover tooltips".
+	if found_name == "":
+		found_name = _chunk_manager.flower_name_at(mouse_world, scan_radius)
 	if found_name == "":
 		var grass_growth := _chunk_manager.tall_grass_growth_at(mouse_world)
 		if grass_growth >= 0.0:
@@ -2580,6 +2595,10 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# test_world_simulation_ownership.gd's header), one call level further
 	# out. Independently found and fixed on both this branch and main.
 	_chunk_manager.step_wild_crops(delta)
+	# Player-tilled farm plots (see EarthChunkManager.step_farm_plots,
+	# docs/concept/farming.md) -- same tick this crop's wild cousin grows on
+	# just above.
+	_chunk_manager.step_farm_plots(delta)
 	# Ant mounds foraging (see AntColony, myrmecochory) -- fallen grass seed
 	# in grassland, or windfall fruit/nut in forest/rainforest where grass
 	# doesn't grow -- a background per-chunk population effect, batched here
@@ -2683,8 +2702,33 @@ func _on_console_command(command: String, args: Array) -> void:
 					+ "  /craft <recipe_id>  /gold <amount>  /village  /species  /help"
 					+ "  /compass  /map  /weatherglass  /almanac  /deed"
 					+ "  /ledger propose|accept|fulfill|breach ...  /charter found <type> <counterparty_id>"
-					+ "  /journal <entity_id>"
+					+ "  /journal <entity_id>  /flowdebug [strokes|off]"
 				)
+			)
+		"flowdebug":
+			# A rendering diagnostic, not a game command: draws the river
+			# overlay's raw across field as bare contours -- no strokes, no
+			# shading -- so "is the artefact in the field or in the strokes
+			# drawn from it" can be answered by looking instead of by
+			# another headless probe. See RiverFlowShader's debug_across.
+			# No argument draws the channel geometry; "strokes" draws the
+			# field the strokes actually trace (that plus the smeared
+			# noise). Comparing the two localises an artefact to one or
+			# the other without another headless probe.
+			var flow_mode := String(args[0]) if not args.is_empty() else ""
+			var flow_debug := 1.0
+			if flow_mode == "off":
+				flow_debug = 0.0
+			elif flow_mode == "strokes":
+				flow_debug = 2.0
+			_chunk_manager.set_river_flow_debug_across(flow_debug)
+			_dev_console.log_line(
+				"Flow debug: %s"
+					% [
+						"off" if flow_debug == 0.0
+						else ("stroke field (geometry + noise)" if flow_debug == 2.0
+						else "across field (channel geometry alone)")
+					]
 			)
 		"species":
 			# Discoverability: the roster is long enough now that /help
@@ -4626,6 +4670,10 @@ func _client_process(delta: float) -> void:
 	var wader_candidates: Array = [local_player.position]
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		wader_candidates.append(creature.position)
+	# Fish ring the water they swim in, through the same displacement the
+	# player and the animals get (see EarthChunkManager.river_wader_positions).
+	for fish in get_tree().get_nodes_in_group("fish"):
+		wader_candidates.append(fish.position)
 	_chunk_manager.set_river_flow_waders(
 		_chunk_manager.river_wader_positions(wader_candidates)
 	)
@@ -4663,6 +4711,14 @@ func _client_process(delta: float) -> void:
 	_chunk_manager.step_snow(snowing, warmth)
 	# Walking packs the snow down, which is what leaves a trail.
 	_chunk_manager.tread_snow_at(local_player.position)
+	# Individually-simulated creatures pack it down too, reusing the exact
+	# same SnowTrail data and shared GPU mask the player's own tread does
+	# (see EarthChunkManager.tread_snow_at's own doc comment) -- but never
+	# move the trail window (move_trail_window = false), which has to keep
+	# following the player rather than snapping to wherever the
+	# last-processed creature happens to be standing.
+	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		_chunk_manager.tread_snow_at(creature.position, false)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).
@@ -4730,6 +4786,7 @@ func _find_dry_land_spawn(candidate: Vector2i) -> Vector2i:
 				if (
 					_chunk_manager.biome_at_global(tile.x, tile.y) != "ocean"
 					and not _chunk_manager.is_river_at_global(tile.x, tile.y)
+					and not _chunk_manager.is_lake_at_global(tile.x, tile.y)
 				):
 					return tile
 	return candidate

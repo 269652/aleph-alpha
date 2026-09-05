@@ -1,6 +1,7 @@
 extends RefCounted
 
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+const HydrologyField = preload("res://src/world/hydrology_field.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const StonePlacement = preload("res://src/world/stone_placement.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
@@ -18,6 +19,11 @@ const DAM_PIECE_ID := "stone_dam"
 ## The droppable boulder piece (see BuildingPiece "boulder" and
 ## docs/concept/rivers.md "Boulders shape the flow").
 const BOULDER_PIECE_ID := "boulder"
+const BoulderHydraulics = preload("res://src/world/boulder_hydraulics.gd")
+## The dropped boulder piece and an ore rock have no stone roll to size
+## them; they are the smashable stone's default size (SmashableStone
+## diameter_cm), the boulder the player already knows.
+const DROPPED_BOULDER_DIAMETER_CM := 60.0
 
 ## The same deterministic stone roll StoneRenderer spawns from -- so the
 ## water bends around exactly the boulders the player can see.
@@ -40,10 +46,12 @@ const SeedCaching = preload("res://src/gameplay/seed_caching.gd")
 const SquirrelNutCaching = preload("res://src/gameplay/squirrel_nut_caching.gd")
 const ScentField = preload("res://src/world/scent_field.gd")
 const ProceduralFlowerSprite = preload("res://src/rendering/procedural_flower_sprite.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ProceduralSeedSprite = preload("res://src/rendering/procedural_seed_sprite.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropRenderer = preload("res://src/rendering/wild_crop_renderer.gd")
+const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
 const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
@@ -59,6 +67,8 @@ const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sp
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
+const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
+const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
@@ -123,7 +133,7 @@ const CaravanMarker = preload("res://src/rendering/caravan_marker.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const WorldClockPersistence = preload("res://src/world/world_clock_persistence.gd")
-const SnowLayer = preload("res://src/rendering/snow_layer.gd")
+const SnowBombShader = preload("res://src/rendering/snow_bomb_shader.gd")
 const RoofShape = preload("res://src/rendering/roof_shape.gd")
 const PickableSeed = preload("res://src/rendering/pickable_seed.gd")
 const SnowTrail = preload("res://src/world/snow_trail.gd")
@@ -367,6 +377,14 @@ var _fish_renderer := FishRenderer.new()
 var _ambient_flyer_renderer := AmbientFlyerRenderer.new()
 var _piscivore_bird_renderer := PiscivoreBirdRenderer.new()
 var _village_renderer := VillageRenderer.new()
+## The most recent real sun elevation pushed in by set_sun_position below --
+## a settlement chunk streaming in later (see _load_chunk's own
+## spawn_village call) reads this to decide whether its houses' windows
+## light up for the night (VillageRenderer.is_night, docs/concept/
+## housing.md#night-lighting-ambient), rather than a second, independently
+## -computed elevation. Starts at bright daylight, the same "nothing pinned
+## yet" default spawn_village itself falls back to.
+var _current_sun_elevation_deg := VillageRenderer.DEFAULT_SUN_ELEVATION_DEG
 var _biome_classifier := BiomeClassifier.new()
 var _region_difficulty := RegionDifficulty.new()
 ## Separate from _village_renderer's own internal instance -- SettlementGenerator
@@ -517,6 +535,14 @@ var _wild_crop_refresh_accumulator := 0.0
 ## and step_wild_crops iterate, so adding a future crop is a one-line change.
 const WILD_CROP_IDS := ["carrot", "potato"]
 
+## Player-tilled farm plots (docs/concept/farming.md's "farming loop") --
+## flat and NOT chunk-scoped, unlike wild crops: a farm plot is a single,
+## independent, player-placed instance (see FarmPlotMarker's own doc
+## comment for why it owns its FarmPlot directly rather than through a
+## per-chunk sim class), so one Dictionary keyed by the plot's own global
+## tile is enough. Vector2i global tile -> FarmPlotMarker.
+var _farm_plots: Dictionary = {}
+
 ## Ants/carrion bugs (see docs/concept/carrion.md). chunk_coord -> Array of
 ## DecomposerMarker -- no per-chunk sim needed (unlike wild crops/grass),
 ## since a decomposer's whole behavior lives on the marker itself and it
@@ -582,9 +608,22 @@ var _worm_patches: Dictionary = {}
 var _worm_sprites: Dictionary = {}
 var _worm_sprite_generator := ProceduralWormSprite.new()
 ## Vector2i chunk_coord -> AntColony (see step_ants, docs/concept/soil_fauna.md
-## "Ants"). No sprite dictionary alongside it -- ants are not rendered this
-## pass (see AntColony's own doc comment on scope).
+## "Ants").
 var _ant_colonies: Dictionary = {}
+## Vector2i chunk_coord -> Array[AntMoundMarker] -- the visible counterpart
+## to _ant_colonies' own mound_cells(), one static marker per mound, spawned
+## alongside the colony and freed with its chunk exactly like every other
+## per-chunk marker dictionary here.
+var _ant_mound_markers: Dictionary = {}
+## Vector2i GLOBAL mound tile -> AntForagerMarker currently walking that
+## mound's harvest -> cache path, or absent/freed once it's done. Caps each
+## mound to at most one visible forager in flight at a time (see
+## _spawn_ant_forager_visual) -- AntColony.FORAGE_CHANCE can succeed several
+## times a second per mound at normal frame rate, and a visible ant for
+## every single one of those would be a swarm flicker, not a colony reading
+## as alive. Keyed globally (not per-chunk) since a mound's own identity
+## (chunk_coord*CHUNK_SIZE + cell) is already a stable global tile.
+var _active_ant_foragers: Dictionary = {}
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_ambient_flyers: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
@@ -3409,11 +3448,40 @@ var _river_flow_boulder_tiles: Dictionary = {}
 var _flow_across_image: Image
 var _flow_across_texture: ImageTexture
 
+## A SEPARATE single-purpose map for each tile's real local half-width.
+## Width used to ride the direction vector's own magnitude (a direction's
+## length otherwise carrying no information) -- but bilinear filtering
+## blends GB by ordinary vector addition, and two texels whose BEARINGS
+## differ (exactly what neighbouring texels do on a bend) partially
+## CANCEL when summed, collapsing the blended magnitude toward zero
+## independent of either texel's real width. That corrupted both the
+## decoded width (dividing a push by a near-zero half-width) and the
+## decoded direction (normalizing a near-zero vector is numerically
+## unstable) -- worst exactly on curves, reported as "this huge zigzag
+## still persists" after the direction-vector encoding otherwise measurably
+## helped. A scalar has no such failure mode: bilinearly blending two
+## widths always lands between them. Pinned by
+## test_the_scale_map_is_a_real_separate_texture_not_packed_into_direction.
+var _flow_scale_image: Image
+var _flow_scale_texture: ImageTexture
+
 ## How many boulders the shader accepts -- mirrors the uniform array size.
 const RIVER_FLOW_BOULDER_SLOTS := 24
 
 
 func river_flow_boulder_positions() -> PackedVector2Array:
+	return _river_flow_boulder_feed()["positions"]
+
+
+## One radius per fed boulder, in world px, in the SAME order as
+## river_flow_boulder_positions -- every rock is a rock of its own size.
+func river_flow_boulder_radii() -> PackedFloat32Array:
+	return _river_flow_boulder_feed()["radii"]
+
+
+## The boulder feed, positions and radii built in one pass so the two
+## arrays can never disagree about which slot is which rock.
+func _river_flow_boulder_feed() -> Dictionary:
 	# Prune first: a chunk that unloaded takes its boulders with it, and a
 	# stale far-away rock must not hold one of the limited uniform slots.
 	var stale: Array = []
@@ -3423,6 +3491,7 @@ func river_flow_boulder_positions() -> PackedVector2Array:
 	for tile in stale:
 		_river_flow_boulder_tiles.erase(tile)
 	var positions := PackedVector2Array()
+	var radii := PackedFloat32Array()
 	for tile in _river_flow_boulder_tiles:
 		if positions.size() >= RIVER_FLOW_BOULDER_SLOTS:
 			break
@@ -3430,7 +3499,8 @@ func river_flow_boulder_positions() -> PackedVector2Array:
 			float(tile.x) * TerrainRenderer.TILE_SIZE + TerrainRenderer.TILE_SIZE * 0.5,
 			float(tile.y) * TerrainRenderer.TILE_SIZE + TerrainRenderer.TILE_SIZE * 0.5
 		))
-	return positions
+		radii.append(RiverFlowShader.boulder_radius_px_for(float(_river_flow_boulder_tiles[tile])))
+	return {"positions": positions, "radii": radii}
 
 
 ## Re-evaluates one tile against the flow-boulder predicate and pushes the
@@ -3438,8 +3508,9 @@ func river_flow_boulder_positions() -> PackedVector2Array:
 ## bends the water the moment it lands, and stops the moment it is
 ## demolished, without waiting for a chunk repaint.
 func _sync_flow_boulder(tile: Vector2i) -> void:
-	if flow_boulder_at_global(tile.x, tile.y):
-		_river_flow_boulder_tiles[tile] = true
+	var diameter_cm := flow_boulder_diameter_cm_at_global(tile.x, tile.y)
+	if diameter_cm > 0.0:
+		_river_flow_boulder_tiles[tile] = diameter_cm
 	else:
 		_river_flow_boulder_tiles.erase(tile)
 	sync_river_flow_boulders()
@@ -3448,25 +3519,52 @@ func _sync_flow_boulder(tile: Vector2i) -> void:
 ## One texel of the flow map, written toroidally -- see _flow_across_image.
 ## Carries the WHOLE per-tile reconstruction frame as REAL floats
 ## (FORMAT_RGBAF, no encode range): R the signed across-fraction, GB the
-## course's downstream unit vector (same sin/-cos convention the atlas
+## course's downstream UNIT vector (same sin/-cos convention the atlas
 ## sprite bakes), A the real solved current speed in m/s -- so the shader
 ## interpolates direction and speed bilinearly exactly like across, and no
-## per-tile quantity is left to draw the tile grid.
+## per-tile quantity is left to draw the tile grid. half_width_tiles goes
+## into the SEPARATE _flow_scale_image (see that field's own doc comment
+## for why it may never share a channel with a vector that gets bilinearly
+## filtered).
+## every chunk cell no matter how far from any river ever gets a texel
+## written here (for the far cell's bilinear neighbours), and its `nearest`
+## comes from EarthChunkGenerator.nearest_river_at -- which, once no
+## channel (curated or hydrology) is close enough to matter, falls back to
+## WHICHEVER curated river is nearest ANYWHERE ON THE PLANET. A cell deep
+## in a continent's interior can be 900+ tiles from that river, with a
+## totally unrelated width and bearing, and `across_fraction` (that
+## distance divided by that river's width) can run into the hundreds --
+## bilinearly blended against a real neighbouring texel a few tiles away
+## with a normal-sized value, that is an unbounded cliff, not a smooth
+## fade. Reported live as a torn, chunky zigzag ("only around bends and
+## where the water is deeper at the edge" -- a huge |across| clamps the
+## depth shading to its darkest band, and the true-vs-fallback boundary is
+## least stable exactly where a bend's curve departs most from a
+## straight-line extrapolation). CLAMP_MAGNITUDE is comfortably beyond the
+## largest across a channel's OWN real apron+bleed zone can ever produce
+## even at HydrologyField.SPRING_HALF_WIDTH_TILES (~12.5), so no genuine
+## reading is ever clipped -- only the unrelated-planet-away fallback is.
+## Pinned by test_the_written_across_is_always_bounded.
+const CLAMP_MAGNITUDE := 16.0
+
+
 func _write_flow_across_texel(
-	global: Vector2i, across_fraction: float, bearing_deg: float, speed_mps: float
+	global: Vector2i, across_fraction: float, bearing_deg: float, speed_mps: float, half_width_tiles: float
 ) -> void:
-	if _flow_across_image == null:
-		var side := RiverFlowShader.FLOW_MAP_TILES
-		_flow_across_image = Image.create(side, side, false, Image.FORMAT_RGBAF)
 	var side := RiverFlowShader.FLOW_MAP_TILES
+	if _flow_across_image == null:
+		_flow_across_image = Image.create(side, side, false, Image.FORMAT_RGBAF)
+	if _flow_scale_image == null:
+		_flow_scale_image = Image.create(side, side, false, Image.FORMAT_RGBAF)
+	var x := posmod(global.x, side)
+	var y := posmod(global.y, side)
 	var radians := deg_to_rad(bearing_deg)
-	_flow_across_image.set_pixel(
-		posmod(global.x, side), posmod(global.y, side),
-		Color(across_fraction, sin(radians), -cos(radians), speed_mps)
-	)
+	var clamped_across := clampf(across_fraction, -CLAMP_MAGNITUDE, CLAMP_MAGNITUDE)
+	_flow_across_image.set_pixel(x, y, Color(clamped_across, sin(radians), -cos(radians), speed_mps))
+	_flow_scale_image.set_pixel(x, y, Color(half_width_tiles, 0.0, 0.0, 0.0))
 
 
-## Pushes the filled map into the shared flow material after a paint pass.
+## Pushes the filled maps into the shared flow material after a paint pass.
 func _push_flow_across_map() -> void:
 	if _flow_across_image == null:
 		return
@@ -3474,19 +3572,27 @@ func _push_flow_across_map() -> void:
 		_flow_across_texture = ImageTexture.create_from_image(_flow_across_image)
 	else:
 		_flow_across_texture.update(_flow_across_image)
-	_river_flow_shader.shared_material().set_shader_parameter(
-		"flow_across_map", _flow_across_texture
-	)
+	if _flow_scale_texture == null:
+		_flow_scale_texture = ImageTexture.create_from_image(_flow_scale_image)
+	else:
+		_flow_scale_texture.update(_flow_scale_image)
+	var material := _river_flow_shader.shared_material()
+	material.set_shader_parameter("flow_across_map", _flow_across_texture)
+	material.set_shader_parameter("flow_scale_map", _flow_scale_texture)
 
 
 ## Pushes the current boulder set into the shared flow material -- called
 ## after chunk paints and after building/destroying pieces so a dropped
 ## boulder bends the water the moment it lands.
 func sync_river_flow_boulders() -> void:
-	var positions := river_flow_boulder_positions()
+	var feed := _river_flow_boulder_feed()
+	var positions: PackedVector2Array = feed["positions"]
+	var radii: PackedFloat32Array = feed["radii"]
+	radii.resize(RIVER_FLOW_BOULDER_SLOTS)
 	var material := _river_flow_shader.shared_material()
 	material.set_shader_parameter("boulder_count", positions.size())
 	material.set_shader_parameter("boulders", positions)
+	material.set_shader_parameter("boulder_radius", radii)
 
 
 ## Feeds the river strokes the same sunlight that drives the day/night
@@ -3533,7 +3639,15 @@ func river_wader_positions(candidates: Array) -> PackedVector2Array:
 		var tile := Vector2i(floori(pos.x / tile_px), floori(pos.y / tile_px))
 		var in_river = _wader_river_memo.get(tile)
 		if in_river == null:
-			in_river = is_river_at_global(tile.x, tile.y)
+			# Any water, not only rivers: a fish or a swimmer in a lake or
+			# the sea rings the still water (the shader's wake stays
+			# symmetric there) -- third playtest: "pond fish ripples need
+			# to be reimplemented with the river contour system".
+			in_river = (
+				is_river_at_global(tile.x, tile.y)
+				or is_lake_at_global(tile.x, tile.y)
+				or biome_at_global(tile.x, tile.y) == "ocean"
+			)
 			if _wader_river_memo.size() > RIVER_WADER_MEMO_CAP:
 				_wader_river_memo.clear()
 			_wader_river_memo[tile] = in_river
@@ -3555,6 +3669,12 @@ func set_river_flow_layer(river_flow_layer: TileMapLayer) -> void:
 	for chunk_coord in _loaded_chunks:
 		_paint_river_flow_overlay(chunk_coord, _loaded_chunks[chunk_coord])
 	sync_river_flow_boulders()
+
+
+## Turns the river flow overlay's raw-across diagnostic on or off (see
+## RiverFlowShader.set_debug_across) -- the /flowdebug console command.
+func set_river_flow_debug_across(mode: float) -> void:
+	_river_flow_shader.set_debug_across(mode)
 
 
 ## Registers the roof overlay layer (see docs/concept/
@@ -3734,6 +3854,16 @@ func _paint_water_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# tiles under the flow layer's smooth bank curve -- the flow
 			# overlay is now the river's entire water surface, clipped at
 			# the real bank line, with the ground showing past it.
+			# NOTHING is painted here any more when the river flow overlay is
+			# wired: rivers, lakes AND the sea ride that one overlay as one
+			# water surface (docs/concept/hydrology.md "Water kinds"; first
+			# playtest: this overlay's square tiles read as "a very
+			# different art style" beside the river's contour lines). This
+			# layer stays as the fallback for a scene that never registers a
+			# flow layer, exactly as it drew before.
+			if _river_flow_layer != null:
+				_water_layer.erase_cell(origin + Vector2i(x, y))
+				continue
 			var is_water: bool = chunk.biome[y * chunk.width + x] == "ocean"
 			if not is_water:
 				continue
@@ -3791,18 +3921,63 @@ func _paint_hillshade_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 ## above (which paints every cell): only water should ever show a flowing
 ## current. Rivers previously looked exactly like still ocean water
 ## (reported: "rivers should flow").
+## A dry tile whose lake-shoreline across (HydrologyField.lake_across) is
+## below this still gets painted, so the waterline's feather has a cell to
+## draw in wherever the shore is gentle; a steep shore jumps well past it
+## and the waterline then falls inside the wet cell anyway.
+const LAKE_PAINT_ACROSS := 1.6
+
+
 func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	if _river_flow_layer == null:
 		return
 	var origin := chunk_coord * CHUNK_SIZE
-	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
 	for y in chunk.height:
 		for x in chunk.width:
 			var global := origin + Vector2i(x, y)
-			var nearest := generator.river_catalog().nearest_river_at(
-				global.x, global.y,
-				EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+			# ONE WATER SURFACE (docs/concept/hydrology.md): rivers, lakes
+			# and the sea all ride this overlay. A river tile (including a
+			# mouth reaching into sea cells, so the current visibly runs
+			# into the sea) takes the flowing branch below. Otherwise a lake
+			# tile, a sea tile, or a dry tile inside either shoreline's
+			# paint band writes the elevation-contour across -- the spill
+			# for a lake, sea level for the sea -- with ZERO current, so the
+			# shader draws the same smooth waterline, ink and feather it
+			# gives a river bank, and only ripples. First playtest: "ponds
+			# have a very different art style", "unify river and pond water".
+			var probe := generator.hydrology_at_global(global.x, global.y)
+			var still_across: float = probe["lake_across"]
+			var still_water: bool = (
+				probe["kind"] == "lake" or probe.get("sea", false) or still_across < LAKE_PAINT_ACROSS
 			)
+			if probe["kind"] != "river" and still_water:
+				# A river mouth's current runs on into the still water and
+				# fades (HydrologyField.mouth_plume): the texel carries the
+				# mouth's bearing and a fading speed, so the flow lines
+				# continue out of the mouth and settle into ripples.
+				var plume_speed: float = HydrologyField.PLUME_SPEED_M_S * probe["plume_factor"]
+				_write_flow_across_texel(
+					global, still_across, probe["plume_bearing_deg"], plume_speed,
+					RiverCatalog.RIVER_HALF_WIDTH_TILES
+				)
+				_river_flow_boulder_tiles.erase(global)
+				_river_flow_layer.set_cell(
+					global, 0,
+					_terrain_renderer.atlas_coords_for_river_flow(
+						probe["plume_bearing_deg"], RiverFlowShader.is_fast_flow(plume_speed)
+					)
+				)
+				continue
+			# The generator's own nearest_river_at: the curated answer
+			# wherever a curated river reaches, else (when enabled) the
+			# nearest baked hydrology channel in the same shape -- see
+			# docs/concept/hydrology.md's relationship to rivers.md. Each
+			# answer carries its own half-width (the catalog's uniform one,
+			# or the baked channel's discharge-derived one), and the across
+			# texel is normalized by THAT, so a confluence reads wider.
+			var nearest := generator.nearest_river_at(global.x, global.y)
+			var half_width: float = nearest.get("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES)
+			var apron := half_width + RiverCatalog.RIVER_BANK_APRON_TILES
 			# Painted out past the bank line (the apron): the shader clips
 			# the water at the REAL bank curve, |across| == 1, and that
 			# curve runs through cells whose centres sit beyond the
@@ -3811,19 +3986,51 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# |signed across|: past a course's endpoints the perpendicular
 			# component goes small while the distance does not, and cells
 			# off the end of a river must not be painted as water.
-			if nearest.distance_tiles > apron:
+			#
+			# A SECOND, wider ring past the apron is still PAINTED, not
+			# erased (RiverFlowShader.SHORE_BLEED_TILES): the apron alone
+			# is just wide enough for the bank feather itself, so a wader's
+			# wake or a boulder's shore band reaching even slightly past it
+			# had no tile left to draw on and simply vanished -- reported live
+			# as a player's own splash trail cutting off mid-stride on the
+			# way out of the water. This ring stays fully transparent by
+			# construction (its baseline |across| sits well past the
+			# feather) unless something genuinely reaches it.
+			var bleed := apron + RiverFlowShader.SHORE_BLEED_TILES
+			if nearest.distance_tiles > bleed:
 				_river_flow_layer.erase_cell(global)
-				# Still write the texel: a dry cell one tile past the apron
+				# Still write the texel: a dry cell one tile past the bleed
 				# is a bilinear NEIGHBOUR of a wet one, and an unwritten
 				# texel there would bleed garbage into the waterline.
+				var far_hydraulics := generator.river_hydraulics_at_global(
+					global.x, global.y
+				)
+				_write_flow_across_texel(
+					global,
+					nearest.signed_across_tiles / half_width,
+					nearest.course_bearing_deg,
+					far_hydraulics.velocity_m_s,
+					half_width
+				)
+				continue
+			if nearest.distance_tiles > apron:
 				var apron_hydraulics := generator.river_hydraulics_at_global(
 					global.x, global.y
 				)
 				_write_flow_across_texel(
 					global,
-					nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES,
+					nearest.signed_across_tiles / half_width,
 					nearest.course_bearing_deg,
-					apron_hydraulics.velocity_m_s
+					apron_hydraulics.velocity_m_s,
+					half_width
+				)
+				_river_flow_boulder_tiles.erase(global)
+				_river_flow_layer.set_cell(
+					global, 0,
+					_terrain_renderer.atlas_coords_for_river_flow(
+						nearest.course_bearing_deg,
+						RiverFlowShader.is_fast_flow(apron_hydraulics.velocity_m_s)
+					)
 				)
 				continue
 
@@ -3835,12 +4042,10 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# waterline, and the fast flag comes from the real solved
 			# current.
 			var hydraulics := generator.river_hydraulics_at_global(global.x, global.y)
-			var across_fraction: float = (
-				nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
-			)
+			var across_fraction: float = nearest.signed_across_tiles / half_width
 			_write_flow_across_texel(
 				global, across_fraction,
-				nearest.course_bearing_deg, hydraulics.velocity_m_s
+				nearest.course_bearing_deg, hydraulics.velocity_m_s, half_width
 			)
 			if flow_boulder_at_global(global.x, global.y):
 				_river_flow_boulder_tiles[global] = true
@@ -3886,6 +4091,8 @@ func _is_land_at(global_x: int, global_y: int) -> bool:
 	var neighbor_biome := biome_at_global(global_x, global_y)
 	if neighbor_biome == "" or neighbor_biome == "ocean":
 		return false
+	if generator.is_lake_at_global(global_x, global_y):
+		return false
 	return not generator.is_river_at_global(global_x, global_y)
 
 
@@ -3916,33 +4123,58 @@ func current_warmth() -> float:
 	return _warmth_at_pixel(_disturbance_center_tile * TerrainRenderer.TILE_SIZE)
 
 
-## The overlay snow is painted onto (see SnowLayer). Registered like the water
-## overlay, and optional: a caller that never sets one simply gets no snow.
+## The overlay snow is painted onto (see SnowBombShader). Registered like the
+## water overlay, and optional: a caller that never sets one simply gets no
+## snow. Its cells now carry only PRESENCE (see set_snow_layer) -- the actual
+## coverage/variant/level art is read per pixel by the shader itself, off
+## world position and the two uniforms this class pushes (snow_depth, the
+## trail mask), not painted per tile any more.
 var _snow_layer: TileMapLayer = null
-var _snow_renderer := SnowLayer.new()
+var _snow_shader := SnowBombShader.new()
+var _snow_material: ShaderMaterial = null
 ## Footprints, and how much snow is lying (see SnowTrail / Snowfall).
 var _snow_trail := SnowTrail.new()
 var _snow_depth := 0.0
+## Whether precipitation is actively falling as snow RIGHT NOW, as of the
+## last step_snow call -- distinct from _snow_depth, which is how much has
+## already piled up. Cached here (rather than recomputed by each reader) so
+## every reader agrees with what the ground is accumulating against; see
+## is_snowing.
+var _snowing := false
+## The last tile tread_snow_at was called with -- the trail mask window (see
+## _refresh_snow_trail_mask) is centred here, since SnowTrail's own
+## dictionary carries no notion of "where the player is" by itself.
+var _snow_trail_center_tile := Vector2i.ZERO
+
+## How wide, in TILES, the trail mask window pushed to the shader is. Matches
+## SHADER_CODE's own trail_world_size uniform DEFAULT (1024.0 world units)
+## exactly, divided by TerrainRenderer.TILE_SIZE (16) -- not load-bearing
+## (set_trail_mask always pushes the real world_size alongside the texture,
+## so a mismatch could not silently misalign anything), just keeping the two
+## numbers honestly in sync rather than picking an unrelated one.
+const SNOW_TRAIL_WINDOW_TILES := 64
 
 
 func set_snow_layer(snow_layer: TileMapLayer) -> void:
 	_snow_layer = snow_layer
-	snow_layer.tile_set = _snow_renderer.build_tile_set()
+	snow_layer.tile_set = SnowBombShader.build_presence_tile_set()
 	# Must match the terrain layer's scale exactly, or the cover drifts out of
 	# alignment with the ground it lies on.
 	snow_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
+	_snow_material = _snow_shader.shared_material()
+	snow_layer.material = _snow_material
+	_snow_shader.set_snow_depth(_snow_depth)
+	if _snow_depth > 0.0:
+		_paint_all_loaded_snow_presence()
 
 
-## How much snow is lying, 0 bare to 1 covered (see Snowfall).
-##
-## Painted as TILES rather than as a tint on the ground layer. A tint is one
-## number for the whole world and cannot express "this tile is trodden and that
-## one is not", so footprints could not exist at all -- which is exactly what
-## this was before.
-##
-## Only the ground is covered: the grass, stones and trees keep their shape on
-## top of it. The ground is covered, not replaced.
+## How much snow is lying, 0 bare to 1 covered (see Snowfall). Pushed to the
+## shader as one float uniform -- see step_snow's own doc comment for why
+## this no longer means touching the TileMapLayer per DEPTH change. Presence
+## itself still needs syncing on the rarer bare<->lying transition -- see
+## _sync_snow_presence.
 func set_snow_depth(depth: float) -> void:
+	var previous := _snow_depth
 	_snow_depth = clampf(depth, 0.0, 1.0)
 	# Forwards to the canopy the same way set_wind_strength forwards to
 	# _tree_renderer -- so a tree spawned right after a deliberate depth set
@@ -3952,7 +4184,9 @@ func set_snow_depth(depth: float) -> void:
 	# way by sync_tree_season instead, which is what actually reaches an
 	# ALREADY-standing tree (see its own doc comment).
 	_tree_renderer.set_snow_coverage(_snow_depth)
-	_repaint_snow()
+	if _snow_layer != null:
+		_snow_shader.set_snow_depth(_snow_depth)
+		_sync_snow_presence(previous)
 
 
 ## How much snow is lying, 0 bare to 1 covered.
@@ -3964,13 +4198,38 @@ func snow_depth() -> float:
 	return _snow_depth
 
 
-## Marks a tile as walked on, packing the snow down (see SnowTrail).
-func tread_snow_at(pixel_position: Vector2) -> void:
+## Whether it is actively snowing right now, as of the last step_snow call --
+## see docs/concept/weather.md's "Weather feeds creature behaviour". The same
+## boolean World already computes each frame to accumulate _snow_depth
+## against (see step_snow below); a second reader (CreatureMarker) reads
+## THIS rather than deriving its own answer, so an animal can never disagree
+## with the ground about whether it's snowing right now.
+func is_snowing() -> bool:
+	return _snowing
+
+
+## Marks a tile as walked on, packing the snow down (see SnowTrail). The
+## actual GPU-facing mask texture is rebuilt once per step_snow call, not
+## here -- see _refresh_snow_trail_mask.
+##
+## move_trail_window controls whether THIS call also re-centres the trail
+## mask window (see _snow_trail_center_tile's own doc comment) -- true by
+## default, which is what the player's own per-frame call wants: the window
+## has to follow wherever the player is standing. World.gd calls this for
+## every individually-simulated CreatureMarker too (see docs/concept/
+## snow_cover.md's "Footprints" section) with move_trail_window = false, so a
+## creature packs down the exact same SnowTrail data and reaches the exact
+## same shared mask the player's own tread does, WITHOUT relocating the
+## window to wherever the last-processed creature happens to be -- which
+## would risk carrying the player's own nearby tracks right out of the
+## window the instant a creature updates after them in the same frame.
+func tread_snow_at(pixel_position: Vector2, move_trail_window: bool = true) -> void:
 	if _snow_depth <= 0.0:
 		return
 	var tile := _world_tile_for_pixel(pixel_position)
 	_snow_trail.step_on(tile)
-	_snow_dirty[tile] = true
+	if move_trail_window:
+		_snow_trail_center_tile = tile
 
 
 ## The world clock as of the last snow step, so snow can advance on the same
@@ -3979,7 +4238,7 @@ var _snow_world_age := 0.0
 
 
 ## Accumulates or melts the lying snow, fills tracks back in while it is
-## snowing, and repaints.
+## snowing, and pushes both to the shader.
 ##
 ## Takes NO delta: it reads the world clock itself. Snow used to be advanced by
 ## the real frame delta while the season ran on the world clock, which is two
@@ -3991,254 +4250,138 @@ var _snow_world_age := 0.0
 ##
 ## Reading the clock here rather than being handed a delta is what makes that
 ## impossible to reintroduce: there is one clock, not two kept in step by hand.
+##
+## Used to end with a diff-aware sweep over every loaded tile, throttled to
+## once every 2 real seconds so an unconditional per-tile scan would not cost
+## the ~40-50ms/pass it was measured at (see git history). SnowBombShader
+## deletes that PER-TILE cost outright by moving coverage/level/variant into
+## the fragment shader, read per PIXEL off world position and the one
+## `snow_depth` uniform below -- so the DEPTH push itself is now continuous
+## and unthrottled, the same shape `set_rain`'s own `rain_intensity` push
+## already is a few lines down. Presence still needs syncing on the rarer
+## bare<->lying transition (see _sync_snow_presence), and the TRAIL mask is
+## a real GPU texture upload rather than a uniform float, so it keeps its
+## own throttle too -- see _refresh_snow_trail_mask.
 func step_snow(snowing: bool, warmth: float) -> void:
+	_snowing = snowing
 	var elapsed: float = maxf(_world_age_seconds - _snow_world_age, 0.0)
 	_snow_world_age = _world_age_seconds
+	var previous_depth := _snow_depth
 	_snow_depth = Snowfall.accumulate(_snow_depth, snowing, warmth, elapsed)
-
-	# The painting is optional -- a headless server has no snow layer but still
-	# has weather, so the depth above has to be kept either way.
-	if _snow_layer == null:
-		return
-	if snowing:
-		# Filling in changes every track at once, so they all need repainting.
-		for tile in _snow_trail.trodden_tiles(0.0):
-			_snow_dirty[tile] = true
 	_snow_trail.advance(elapsed, snowing)
 
-	if _snow_depth <= 0.0:
-		_repaint_snow()  # cheap fast-clear path, see below -- no sweep needed.
-		return
-
-	# Footprints repaint immediately every call regardless of the sweep
-	# cadence below -- a footstep should show up the instant it happens, not
-	# wait for the next scheduled sweep.
-	for tile in _snow_dirty:
-		_paint_snow_tile(tile)
-	_snow_dirty.clear()
-
-	if _world_age_seconds - _snow_swept_world_age >= SNOW_SWEEP_INTERVAL_SECONDS:
-		_sweep_snow_field()
-		_snow_swept_world_age = _world_age_seconds
-
-
-## Every tile's own last-painted band (Vector2i tile -> int band, -1 for
-## bare/ocean), and the tiles whose tread has changed since the last sweep.
-##
-## This is what makes repainting cheap: `_paint_snow_tile` below only ever
-## touches the actual TileMapLayer (a real `set_cell`/`erase_cell` call) for a
-## tile whose computed band differs from what is tracked here -- so calling it
-## for every loaded tile costs a scan plus a dictionary lookup per tile, not
-## thousands of set_cell calls, for the (typical) case where most of the field
-## hasn't changed. A tile absent from this dict is treated as already bare
-## (`.get(tile, -1)`), so a genuinely untouched tile whose computed band is
-## also -1 costs nothing -- there is nothing to erase that was never set.
-var _snow_painted_band_by_tile: Dictionary = {}
-var _snow_dirty: Dictionary = {}
-
-## Each tile's own onset lead/lag (see SnowLayer.onset_offset_for), cached the
-## first time that tile is painted.
-##
-## Onset is a PURE function of the tile's global coordinates -- it never
-## changes for a tile's whole loaded lifetime -- but recomputing it (a
-## PixelNoise.smooth call, several hashed lookups) for every tile on every
-## sweep dominates the sweep's cost far more than the cheap band_for
-## arithmetic that actually varies with depth. Measured live against the real
-## ~22,700-tile field a LOAD_RADIUS=2 chunk radius loads: recomputing onset
-## fresh every sweep cost ~200ms/pass; reading it from this cache instead cost
-## ~42ms/pass for the exact same sweep -- roughly 5x, and the difference
-## between a cadence tight enough to trickle being affordable at all or not.
-## Cleared per-tile on chunk unload (`_forget_snow_paint_for_chunk`) so this
-## does not grow without bound as a player roams.
-var _snow_onset_by_tile: Dictionary = {}
-
-## Each tile's own illustrated shape VARIANT (see SnowLayer.variant_for),
-## cached the same way and for the same reason as `_snow_onset_by_tile`
-## above: a pure function of the tile's global coordinates that never
-## changes for its whole loaded lifetime, so recomputing it on every sweep
-## would be paying the same avoidable cost onset's own doc comment already
-## measured. Cleared per-tile on chunk unload alongside the onset cache.
-##
-## CHECKED, not just designed, against the user complaint "when snow
-## accumulates keep the initial variant so the progression stays coherent":
-## by this design a loaded tile's variant is looked up via has()-then-
-## compute-once against this exact dict, erased only on chunk unload
-## (`_forget_snow_paint_for_chunk`), and recomputed to the IDENTICAL value on
-## the next load since `SnowLayer.variant_for` reads only the tile's own
-## global coordinates -- so mechanically this already keeps one tile's
-## variant fixed across its whole loaded lifetime regardless of how many
-## times its band changes as depth grows.
-## `test_a_tiles_snow_variant_never_changes_as_depth_climbs_through_several_
-## bands` drives one real manager through several depths spanning multiple
-## bands and confirms this directly (68,113 real per-cell assertions,
-## GREEN on the first run, no production change needed) rather than trusting
-## the reasoning alone. The user-visible "doesn't look coherent" complaint
-## was therefore very likely caused entirely by the SEPARATE slicer/bleed bug
-## in `SnowLayer.build_band_image` (a contaminated crop at one depth band
-## reading as a different SHAPE from the crop at the next band, even though
-## the underlying variant index here never moved) -- see that function's own
-## doc comment for the fix, and re-render the same tile across a few bands
-## after that fix lands if this is ever doubted again.
-var _snow_variant_by_tile: Dictionary = {}
-
-## Each tile's own flip transform (see SnowLayer.transform_for), cached the
-## same way and for the same reason as `_snow_variant_by_tile` above: a pure
-## function of the tile's own global coordinates, so it never needs
-## recomputing while a tile stays loaded. Reported live, with screenshots:
-## deep/near-full snow renders as an obviously artificial, grid-aligned
-## repeating pattern -- the same rounded blob, tile after tile, in the same
-## on-screen position and orientation, because neither `band` nor `variant`
-## alone (both independently confirmed to spread genuinely, see
-## SnowLayer.transform_for's own doc comment for the full investigation) can
-## fix two similar-looking illustrated variants converging at the highest
-## coverage band. This is what makes two such tiles actually READ as
-## different once painted -- see that function's own doc comment for why the
-## fix is orientation, not more variant/band work.
-var _snow_transform_by_tile: Dictionary = {}
-
-## How often the coverage SWEEP below actually runs, independent of how often
-## step_snow itself is called (every frame, from World._client_process).
-##
-## The sweep is a real O(loaded tiles) scan -- cheap per tile thanks to the
-## onset cache above, but not free, so running it unconditionally every frame
-## would reintroduce the same shape of cost SNOW_REPAINT_DEPTH_STEP originally
-## existed to avoid (see git history: a ~200ms/frame stall the first time
-## fast-forward repainted everything every frame). This throttle is what
-## bounds that.
-##
-## MEASURED, not guessed: a full diff-aware sweep over the real ~22,700-tile
-## LOAD_RADIUS=2 field costs ~38-52ms once the onset cache is warm (see
-## `_snow_onset_by_tile`'s own doc comment and the probe this was measured
-## with). The OLD whole-field-repaint gate (SNOW_REPAINT_DEPTH_STEP=0.05
-## against SECONDS_TO_COVER=360s) fired an unconditional, non-diffed repaint
-## -- ~426ms measured, because it called set_cell/erase_cell for every one of
-## ~22,700 tiles regardless of whether that tile had actually changed -- about
-## once every 18 real seconds, so nothing changed at all in between and then a
-## whole batch changed together in one frame the instant it fired. 2.0 seconds
-## keeps this new mechanism's average CPU cost roughly the SAME order as the
-## old one's (~45ms every 2s vs ~426ms every 18s is ~2.1% vs ~2.4% of
-## wall-clock time) while being 9x more frequent, so a real crossing shows up
-## within ~2s of happening rather than sitting invisible for up to 18s and
-## then jumping. Pinned functionally, not by timing (timing varies by
-## hardware): see
-## test_step_snow_driven_coverage_changes_trickle_in_rather_than_batching_every_18_seconds
-## in test_earth_chunk_manager.gd, which asserts the real worst-case gap
-## between two visible changes stays well under the old ~18s cadence when
-## driven through this exact constant.
-const SNOW_SWEEP_INTERVAL_SECONDS := 2.0
-var _snow_swept_world_age := -INF
-
-
-## Paints the tiles that need it. Used directly by `set_snow_depth` (a rare,
-## deliberate call -- e.g. `/weather`, or a test setting depth outright) for
-## an immediate, unthrottled sweep; `step_snow`'s own per-frame path uses the
-## throttled call site above instead, for exactly the reason described on
-## SNOW_SWEEP_INTERVAL_SECONDS.
-func _repaint_snow() -> void:
+	# Pushing shader uniforms is optional -- a headless server has no snow
+	# layer but still has weather, so the depth/trail state above has to be
+	# kept either way.
 	if _snow_layer == null:
 		return
-	if _snow_depth <= 0.0:
-		# A single clear() beats diff-erasing every previously-painted tile
-		# one at a time, and resets the per-tile paint tracking to match --
-		# the onset cache is left alone, since it is still correct for
-		# whenever it next snows.
-		if not _snow_painted_band_by_tile.is_empty():
-			_snow_layer.clear()
-			_snow_painted_band_by_tile.clear()
-			_snow_dirty.clear()
-		return
-	_sweep_snow_field()
-	_snow_swept_world_age = _world_age_seconds
+	_snow_shader.set_snow_depth(_snow_depth)
+	_sync_snow_presence(previous_depth)
+	_refresh_snow_trail_mask()
 
 
-## Diff-aware pass over every loaded tile: `_paint_snow_tile` below only
-## actually touches the TileMapLayer for a tile whose band changed, so this is
-## the sweep SNOW_SWEEP_INTERVAL_SECONDS gates -- see both constants' own doc
-## comments for the measured cost that makes running this often affordable.
-func _sweep_snow_field() -> void:
+## Presence cells are what make the SnowFx TileMapLayer have anything to
+## draw at all -- see build_presence_tile_set's own doc comment: an erased
+## cell submits no quad and never runs fragment(), so a layer with NOTHING
+## painted costs exactly what it did before this shader existed, which
+## matters every bit as much as the per-pixel cost does. Painting every
+## land tile unconditionally, at every chunk load, regardless of season,
+## was the actual cause of a real, measured slowdown even in full summer
+## with snow_depth at a flat 0.0 -- the old per-tile mechanism this
+## replaces painted NOTHING while it wasn't snowing (a genuinely empty
+## layer), where presence-always-painted instead has the entire visible
+## ground submitting real quads to a custom-shader material, always, whether
+## or not there is any snow to show.
+##
+## Fixed at a coarser grain than the deleted per-tile sweep: presence is
+## painted for every currently loaded chunk on the RARE 0 -> nonzero
+## transition (a real snowfall beginning) and the whole layer is cleared on
+## the equally rare nonzero -> 0 one (a full thaw) -- not diffed per tile,
+## not re-touched for any depth change strictly between those two, so this
+## costs nothing on the vast majority of step_snow calls, which report no
+## transition at all.
+func _sync_snow_presence(previous_depth: float) -> void:
+	if previous_depth <= 0.0 and _snow_depth > 0.0:
+		_paint_all_loaded_snow_presence()
+	elif previous_depth > 0.0 and _snow_depth <= 0.0:
+		_snow_layer.clear()
+
+
+func _paint_all_loaded_snow_presence() -> void:
 	for chunk_coord in _loaded_chunks:
-		_paint_snow_chunk(chunk_coord)
+		_paint_snow_presence(chunk_coord, _loaded_chunks[chunk_coord])
 
 
-## Paints every tile of one chunk. Shared by _sweep_snow_field (every loaded
-## chunk, whenever the sweep above runs) and _load_chunk (this one chunk
-## alone, immediately -- see _load_chunk's own comment: without this, a chunk
-## streamed in mid-snowfall stayed bare until the next sweep happened to reach
-## it).
-func _paint_snow_chunk(chunk_coord: Vector2i) -> void:
-	var origin: Vector2i = chunk_coord * CHUNK_SIZE
-	var chunk: Chunk = _loaded_chunks[chunk_coord]
-	for local_y in chunk.height:
-		for local_x in chunk.width:
-			_paint_snow_tile(origin + Vector2i(local_x, local_y))
+## The tile the currently-pushed trail mask texture is centred on, and when
+## it was last rebuilt -- see _refresh_snow_trail_mask.
+var _snow_trail_mask_center_tile := Vector2i.ZERO
+var _snow_trail_refreshed_age := -INF
+
+## How often the trail mask is allowed to rebuild, at minimum -- also rebuilt
+## immediately whenever the player crosses into a new tile, so the window
+## never visibly lags behind them.
+##
+## ImageTexture.create_from_image is a real GPU upload, discarding whatever
+## texture was there before -- unlike set_snow_depth's plain uniform push,
+## this is NOT free to do unconditionally every frame. Measured live: doing
+## it every step_snow call (i.e. every frame, same as the depth push) was
+## the actual cause of a 60fps -> single-digit-fps collapse the instant snow
+## started actually lying (fragment()'s own early-out means nothing pays for
+## the shader at all before then, which is why it only showed up once snow
+## was on screen). SnowTrail.build_mask_texture's own cost is bounded by
+## tracked footprints and stays cheap; the upload itself is what needed
+## bounding, the same lesson SNOW_SWEEP_INTERVAL_SECONDS already encoded for
+## the deleted per-tile sweep.
+const SNOW_TRAIL_REFRESH_INTERVAL_SECONDS := 0.25
 
 
-## Computes this tile's current band and touches the TileMapLayer only if that
-## differs from what is already tracked as painted -- see
-## `_snow_painted_band_by_tile`'s own doc comment for why that is what keeps
-## calling this for every loaded tile affordable.
-func _paint_snow_tile(tile: Vector2i) -> void:
-	var band := -1
-	# Water does not take snow -- it freezes or it does not, which is a
-	# different thing and not this one. A river's own biome is untouched
-	# land (see docs/concept/rivers.md's Rendering section), so it must be
-	# asked separately -- reported live: "snow falls on rivers".
-	if biome_at_global(tile.x, tile.y) != "ocean" and not is_river_at_global(tile.x, tile.y):
-		# Every tile used to read the exact same _snow_depth, so a whole
-		# loaded chunk snapped to whatever band the clock said the instant it
-		# was evaluated (reported: "snow covers a whole chunk instantly
-		# instead of spreading progressively"). This tile's own onset offset
-		# (seeded from its GLOBAL coordinates, see SnowLayer.onset_offset_for)
-		# makes it lead or lag the shared depth by a bounded amount, so a
-		# partial snowfall paints a genuine mix of bare and covered land
-		# rather than one uniform state. Cached rather than recomputed every
-		# call -- see _snow_onset_by_tile's own doc comment.
-		if not _snow_onset_by_tile.has(tile):
-			_snow_onset_by_tile[tile] = _snow_renderer.onset_offset_for(tile.x, tile.y)
-		var onset: float = _snow_onset_by_tile[tile]
-		band = _snow_renderer.band_for(_snow_depth, _snow_trail.tread_at(tile), onset)
-
-	if _snow_painted_band_by_tile.get(tile, -1) == band:
+## Rebuilds and pushes the GPU-facing trail mask, centred on wherever
+## tread_snow_at was last called (the player's own tile) -- but only when the
+## window actually needs to move or enough time has passed to catch newly
+## packed/refilled tread, not unconditionally every call (see this
+## constant's own doc comment).
+func _refresh_snow_trail_mask() -> void:
+	var due := _world_age_seconds - _snow_trail_refreshed_age >= SNOW_TRAIL_REFRESH_INTERVAL_SECONDS
+	if not due and _snow_trail_center_tile == _snow_trail_mask_center_tile:
 		return
-	_snow_painted_band_by_tile[tile] = band
-	if band < 0:
-		_snow_layer.erase_cell(tile)
-	else:
-		# Which of SnowLayer.OVERLAY_COLUMNS illustrated shapes this tile
-		# draws -- a separate axis from `band` (see SnowLayer.variant_for's
-		# own doc comment), cached lazily here rather than computed
-		# unconditionally above alongside onset: onset feeds band_for's math
-		# even for a tile that stays bare, but variant only matters once a
-		# tile is actually about to be painted.
-		if not _snow_variant_by_tile.has(tile):
-			_snow_variant_by_tile[tile] = _snow_renderer.variant_for(tile.x, tile.y)
-		var variant: int = _snow_variant_by_tile[tile]
-		# This tile's own flip transform -- a THIRD axis independent of band
-		# and variant (see SnowLayer.transform_for's own doc comment), cached
-		# lazily here for the same reason variant is: it only matters once a
-		# tile is actually about to be painted. Passed as `set_cell`'s
-		# `alternative_tile` argument directly -- confirmed against a real
-		# TileSetAtlasSource/TileMapLayer that a raw flip-bit value works
-		# there with no separate registration needed (see transform_for's own
-		# doc comment).
-		if not _snow_transform_by_tile.has(tile):
-			_snow_transform_by_tile[tile] = _snow_renderer.transform_for(tile.x, tile.y)
-		var transform: int = _snow_transform_by_tile[tile]
-		_snow_layer.set_cell(tile, 0, Vector2i(band, variant), transform)
+	var window := SNOW_TRAIL_WINDOW_TILES
+	var half := window / 2
+	var origin := Vector2(_snow_trail_center_tile - Vector2i(half, half)) * TerrainRenderer.TILE_SIZE
+	_snow_shader.set_trail_mask(
+		_snow_trail.build_mask_texture(_snow_trail_center_tile, window),
+		origin, float(window) * TerrainRenderer.TILE_SIZE
+	)
+	_snow_trail_mask_center_tile = _snow_trail_center_tile
+	_snow_trail_refreshed_age = _world_age_seconds
 
 
-## Drops one chunk's tiles from the per-tile snow tracking dictionaries above,
-## so a player roaming far and wide does not grow them without bound -- called
-## from _unload_chunk alongside the matching TileMapLayer erase.
-func _forget_snow_paint_for_chunk(chunk_coord: Vector2i) -> void:
+## Marks every non-ocean cell of a loaded chunk with the single presence tile
+## SnowBombShader.build_presence_tile_set provides -- see set_snow_layer for
+## why a painted cell means nothing but "snow may render here" now. Painted
+## ONCE, at chunk load (mirrors _paint_water_overlay's own shape), and never
+## revisited: unlike the deleted per-tile band mechanism this replaces,
+## coverage no longer depends on which cells are painted, only on the
+## snow_depth uniform, so there is nothing here for a later depth change to
+## invalidate.
+func _paint_snow_presence(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	if _snow_layer == null:
+		return
 	var origin: Vector2i = chunk_coord * CHUNK_SIZE
-	for local_y in CHUNK_SIZE:
-		for local_x in CHUNK_SIZE:
-			var tile := origin + Vector2i(local_x, local_y)
-			_snow_onset_by_tile.erase(tile)
-			_snow_variant_by_tile.erase(tile)
-			_snow_transform_by_tile.erase(tile)
-			_snow_painted_band_by_tile.erase(tile)
+	for y in chunk.height:
+		for x in chunk.width:
+			var global := origin + Vector2i(x, y)
+			# Water does not take snow -- it freezes or it does not, which is
+			# a different thing and not this one. A river's own biome is
+			# untouched land (see docs/concept/rivers.md's Rendering
+			# section), so it must be excluded separately from ocean --
+			# reported live: "snow falls on rivers".
+			if chunk.biome[y * chunk.width + x] == "ocean":
+				continue
+			# Rivers AND lakes (docs/concept/hydrology.md) -- both are
+			# overlay flags on land biome, both read from the one predicate.
+			if chunk.blocks_ground_cover(y * chunk.width + x):
+				continue
+			_snow_layer.set_cell(global, 0, SnowBombShader.PRESENCE_ATLAS_COORD)
 
 
 func set_rain(raining: bool) -> void:
@@ -4284,6 +4427,7 @@ func set_season_tint(tint: Color) -> void:
 func set_sun_position(elevation_deg: float, azimuth_deg: float) -> void:
 	_hillshade_shader.set_sun_position(elevation_deg, azimuth_deg)
 	_entity_hillshade_shader.set_sun_position(elevation_deg, azimuth_deg)
+	_current_sun_elevation_deg = elevation_deg
 
 
 ## How far from the streaming center a disturbance may be and still be worth
@@ -4314,13 +4458,42 @@ func record_water_disturbance(world_pos: Vector2) -> void:
 	if maxi(absi(offset.x), absi(offset.y)) > DISTURBANCE_RADIUS_TILES:
 		return
 	_water_shader.add_disturbance(world_pos)
+	_mirror_disturbances_to_the_river()
 
 
 ## Ages every live water disturbance so its ring actually expands/fades on
 ## screen (see WaterShader.advance_disturbances) -- must run every frame,
-## not just when a new disturbance is recorded.
+## not just when a new disturbance is recorded. The flow overlay's rings
+## age on the shader's own clock; here they are only pruned once faded.
 func step_water_disturbances(delta: float) -> void:
 	_water_shader.advance_disturbances(delta)
+	_mirror_disturbances_to_the_river()
+
+
+## Whether the river surface currently holds any live ripple -- so a river
+## with nothing moving in it costs nothing per frame, while the frame that
+## empties the buffer still gets pushed (otherwise the last wake would
+## hang there forever).
+var _river_disturbances_live := false
+
+
+## Hands the river surface the SAME buffer the sea's is drawing. Rivers are
+## no longer painted by the ocean overlay at all (see _paint_water_overlay:
+## the flow overlay is the river's entire water surface now), so without
+## this a fish's wake is recorded, aged, and drawn into a layer that river
+## tiles do not have -- reported as ripples having disappeared from the
+## river entirely. RiverFlowShader keeps no buffer of its own on purpose:
+## one lifetime, one cap, one distance cull, two surfaces.
+func _mirror_disturbances_to_the_river() -> void:
+	var count := _water_shader.disturbance_count()
+	if count == 0 and not _river_disturbances_live:
+		return
+	_river_disturbances_live = count > 0
+	_river_flow_shader.set_disturbances(
+		_water_shader.padded_disturbance_positions(),
+		_water_shader.padded_disturbance_ages(),
+		count
+	)
 
 
 func current_weather(player_pixel: Vector2) -> String:
@@ -4454,6 +4627,10 @@ func _can_root_at(chunk: Chunk, chunk_coord: Vector2i, position: Vector2) -> boo
 	# the same "trees standing in a lake" bug class this function's own
 	# doc comment already names, now recurring for rivers specifically.
 	if is_river_at_global(tile.x, tile.y):
+		return false
+	# A lake bed is the original "trees standing in a lake" case, now with
+	# real lakes (docs/concept/hydrology.md) -- same overlay flag shape.
+	if chunk.blocks_ground_cover(local.y * chunk.width + local.x):
 		return false
 	var biome_name: String = chunk.biome[local.y * chunk.width + local.x]
 	return TreeRooting.can_root_in(biome_name)
@@ -4795,6 +4972,67 @@ func step_wild_crops(delta_seconds: float) -> void:
 			)
 
 
+## Tills and plants `crop_id` at a global tile (see docs/concept/farming.md,
+## FarmPlot, FarmPlotMarker, Player._plant_step) -- lazily creates the
+## plot's marker the first time this tile is farmed. Same "chunk must be
+## loaded" gate build_at_global already uses: farming far outside the
+## streamed area isn't meaningful since nothing there is rendered or
+## simulated either. Refuses to disturb a plot that already holds a live
+## crop (growing or ready) -- see FarmPlotMarker.till_and_plant -- so a
+## stray press can never destroy an unharvested crop; only an empty or
+## withered plot is (re)planted. Returns whether planting happened.
+func till_and_plant_farm_plot_at_global(global_x: int, global_y: int, crop_id: String) -> bool:
+	var tile := Vector2i(global_x, global_y)
+	if _loaded_chunks.get(_chunk_coord_for_tile(tile)) == null:
+		return false
+	if not _farm_plots.has(tile):
+		_farm_plots[tile] = _build_farm_plot_marker(tile)
+	var seed_value := hash("%d_%d_farm_plot" % [tile.x, tile.y])
+	return _farm_plots[tile].till_and_plant(crop_id, seed_value)
+
+
+## Tends (re-waters) the growing plot at a global tile, resetting its
+## neglect clock -- see FarmPlot.water. False if there is no plot there, or
+## it isn't currently growing.
+func water_farm_plot_at_global(global_x: int, global_y: int) -> bool:
+	var marker: FarmPlotMarker = _farm_plots.get(Vector2i(global_x, global_y))
+	return marker != null and marker.water()
+
+
+## Harvests the ready plot at a global tile -- see FarmPlot.harvest.
+## Returns {"crop_id": "", "count": 0} (the same shape FarmPlot.harvest's
+## own no-op returns) if there is no plot there, or it isn't ready yet. The
+## plot's soil stays -- see FarmPlotMarker.harvest -- so the same tile can
+## be planted again without re-tilling.
+func harvest_farm_plot_at_global(global_x: int, global_y: int) -> Dictionary:
+	var marker: FarmPlotMarker = _farm_plots.get(Vector2i(global_x, global_y))
+	if marker == null:
+		return {"crop_id": "", "count": 0}
+	return marker.harvest()
+
+
+## The world-clock tick hook for the farming loop (see
+## World._step_ecology_batch, docs/concept/farming.md) -- advances every
+## farm plot's own growth simulation by `delta_seconds`. Mirrors
+## step_worms' identical "for x in _sims.values(): x.advance(delta)" shape;
+## unlike step_wild_crops/step_tall_grass, this deliberately does NOT scale
+## by SeasonCycle's growth_modifier -- farming.md frames a tilled, tended
+## plot as the player's own override of the ambient vegetation model, not a
+## wild population subject to the same seasonal modulation.
+func step_farm_plots(delta_seconds: float) -> void:
+	for marker in _farm_plots.values():
+		marker.advance(delta_seconds)
+
+
+func _build_farm_plot_marker(tile: Vector2i) -> FarmPlotMarker:
+	var marker := FarmPlotMarker.new()
+	marker.position = Vector2(
+		(tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	_entities_parent.add_child(marker)
+	return marker
+
+
 ## One shared shader-uniform write per frame makes nearby blades yield to a
 ## walker; individual cards intentionally have no process callbacks.
 func set_grass_walker_position(world_position: Vector2) -> void:
@@ -4806,6 +5044,76 @@ func set_grass_walker_position(world_position: Vector2) -> void:
 ## Node2D of its own (see _sync_grass_sprites), so it cannot join
 ## HoverTargetFinder's group like every other hoverable entity -- World reads
 ## this directly instead to special-case the mouse-hover tooltip over grass.
+## Names the blooming flower drawn nearest `pixel_position`, or "" when none
+## is close enough -- the hover tooltip's flower lookup (see
+## World._update_hover_tooltip).
+##
+## Reported live: flowers "still don't [show] hover tooltips". Every other
+## hoverable thing in the world is a Node2D that joins
+## HoverTargetFinder.GROUP_NAME and answers get_display_name(). Flowers are
+## not, and should not be: they are ground decoration, a bare Sprite2D per
+## cell with no script and no group (see _sync_flower_sprites), precisely so a
+## loaded meadow costs a handful of shared textures instead of a thousand
+## scripted nodes -- and that group is scanned every frame, so joining it is
+## not free (see World's own note on the cost of that scan). So flowers are
+## answered the way tall grass already is: a cheap query the hover scan falls
+## through to when nothing in the group claimed the cursor.
+##
+## Measured against the BLOSSOM, not the cell: the sprite is anchored at the
+## stem's foot and drawn upward from there, so a player pointing at the bloom
+## they can actually see is pointing well above the cell the plant stands in.
+## Uses the very same landing point a pollinator settles on (see flowers_near
+## / ProceduralFlowerSprite.blossom_height_world), so the tooltip and the bees
+## agree about where a flower is.
+##
+## Only what is IN BLOOM answers, matching exactly what is drawn -- naming a
+## rose over what the player sees as bare grass is the same sim-and-picture
+## disagreement concept/flora.md forbids, with the lie on the other foot.
+func flower_name_at(
+	pixel_position: Vector2, radius_px: float = HoverTargetFinder.HOVER_RADIUS_PX
+) -> String:
+	var season := current_season()
+	var center := _world_tile_for_pixel(pixel_position)
+	# Enough rows to cover the tallest stem the art can draw plus the search
+	# radius itself, so a sunflower's head is still traced back to the foot it
+	# grows from. Bounded from the art's own numbers, not a guessed row count.
+	var reach := 1 + ceili(
+		(radius_px + ProceduralFlowerSprite.max_blossom_height_world())
+		/ float(TerrainRenderer.TILE_SIZE)
+	)
+	var best_name := ""
+	var best_distance := radius_px
+	for dy in range(-reach, reach + 1):
+		for dx in range(-reach, reach + 1):
+			var tile := center + Vector2i(dx, dy)
+			var patch: FlowerPatch = _flower_patches.get(_chunk_coord_for_tile(tile))
+			if patch == null:
+				continue
+			var cell := _local_coord(tile.x, tile.y)
+			var label := patch.label_at(cell, season)
+			if label == "":
+				continue
+			var foot := Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			)
+			var sprite_seed := hash("%d_%d_flower" % [tile.x, tile.y])
+			var blossom := foot - Vector2(
+				0.0,
+				ProceduralFlowerSprite.blossom_height_world(
+					sprite_seed,
+					_flower_scale_for(
+						patch.species_at(cell), patch.growth_at(cell), sprite_seed
+					).y
+				)
+			)
+			var distance := pixel_position.distance_to(blossom)
+			if distance <= best_distance:
+				best_distance = distance
+				best_name = label
+	return best_name
+
+
 func tall_grass_growth_at(pixel_position: Vector2) -> float:
 	var tile := _world_tile_for_pixel(pixel_position)
 	var chunk_coord := _chunk_coord_for_tile(tile)
@@ -5437,6 +5745,20 @@ func _sync_flower_sprites(chunk_coord: Vector2i) -> void:
 ## Cap on how many blooms are probed when scoring a chunk (see below).
 const _POLLINATOR_PROBE_LIMIT := 8
 
+## The one region seed the world's PREVAILING wind is drawn from (see
+## WeatherModel.prevailing_wind_direction), used only to bake meadows.
+##
+## Deliberately NOT per-chunk, the way current_weather's region seed is. A
+## founder's lineage has to be computed identically by every chunk that can
+## see it, or the meadows either side of a boundary disagree and the seam
+## shows -- and two chunks each using their own prevailing wind is exactly
+## that disagreement. One climate for the world is also the honest reading:
+## real prevailing winds are consistent over far more ground than this world
+## covers. The DAY's wind still varies by region and by day (see
+## step_flowers), so live shedding is regional even though the baked meadow
+## is not.
+const PREVAILING_WIND_REGION_SEED := 4177
+
 
 func _pollinator_multiplier_for(chunk_coord: Vector2i) -> float:
 	var patch: FlowerPatch = _flower_patches.get(chunk_coord)
@@ -5767,8 +6089,28 @@ func record_pollination_visit_at(tree_position: Vector2, visit_weight: float = 1
 func step_flowers(delta: float) -> void:
 	var season := current_season()
 	var growth_modifier := _season_cycle.growth_modifier(_world_age_seconds)
+	# Which way, and how hard, it is blowing RIGHT NOW -- the day's wind, not
+	# the prevailing one worldgen used, so live shedding varies with the
+	# weather and by region the way everything else does.
+	#
+	# This loop is the fix for a real defect: FlowerPatch.set_wind was fully
+	# built and fully tested and its only caller anywhere was its own test
+	# file, so every meadow in the running game shed seed at strength 0.0 --
+	# a permanent dead calm -- and the downwind drift the model computes was
+	# never once applied outside a test. Same bug class as the dead
+	# Pollination wiring recorded in docs/progress.md.
+	var weather_day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
 	for chunk_coord in _flower_patches:
 		var patch: FlowerPatch = _flower_patches[chunk_coord]
+		# Per-chunk region seed, exactly as current_weather derives it -- so a
+		# meadow sheds on the same wind the sky over it is showing.
+		var region_seed := hash("%d_%d" % [chunk_coord.x, chunk_coord.y])
+		patch.set_wind(
+			_weather_model.wind_direction_for(weather_day, region_seed),
+			_weather_model.dispersal_strength_for(
+				_weather_model.weather_at(weather_day, region_seed)
+			)
+		)
 		patch.advance(delta, growth_modifier)
 		# Plants past their bloom drop seed around themselves, which lies in the
 		# grass as its own entity for a granivore to find (see
@@ -6317,6 +6659,7 @@ func _forage_seed_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i
 	var direction: Vector2 = AntColony.carry_direction(carrier_seed)
 	var target := nearest_position + direction * carry_tiles * float(TerrainRenderer.TILE_SIZE)
 	plant_grass_at(target)
+	_spawn_ant_forager_visual(origin + cell, mound_pixel, [nearest_position, target])
 
 
 ## One mound's forager in a forest/rainforest chunk: TallGrass never grows
@@ -6363,12 +6706,42 @@ func _forage_windfall_near_mound(colony: AntColony, origin: Vector2i, cell: Vect
 	if eaten_species == "":
 		return
 	if AntColony.windfall_is_consumed(colony.windfall_carrier_seed_for(cell)):
+		# Eaten on the spot -- the forager's visible trip ends at the nut
+		# itself, never reaches a cache leg (there is none).
+		_spawn_ant_forager_visual(origin + cell, mound_pixel, [nearest_position])
 		return
 	var carrier_seed := colony.carrier_seed_for(cell)
 	var carry_tiles := AntColony.carry_distance_tiles(carrier_seed)
 	var direction: Vector2 = AntColony.carry_direction(carrier_seed)
 	var target := nearest_position + direction * carry_tiles * float(TerrainRenderer.TILE_SIZE)
 	try_plant_seed_at(target, eaten_species)
+	_spawn_ant_forager_visual(origin + cell, mound_pixel, [nearest_position, target])
+
+
+## The purely decorative visual half of a real, already-resolved forage (see
+## _forage_seed_near_mound/_forage_windfall_near_mound -- by the time this is
+## called, the actual seed/nut has already been taken and, if applicable,
+## replanted; nothing here can change that outcome). Caps each mound
+## (`global_tile`) to one forager in flight at a time via
+## _active_ant_foragers -- AntColony.FORAGE_CHANCE can succeed several times
+## a second per mound at normal frame rate, and a new visible ant for every
+## single one would be a flicker of overlapping sprites, not a colony
+## reading as alive. `rest_of_path` is everything after the mound itself:
+## [pickup] if the find was eaten on the spot, [pickup, cache] if it was
+## carried on.
+func _spawn_ant_forager_visual(global_tile: Vector2i, mound_pixel: Vector2, rest_of_path: Array) -> void:
+	if _entities_parent == null:
+		return
+	var existing = _active_ant_foragers.get(global_tile)
+	if existing != null and is_instance_valid(existing) and not existing.is_queued_for_deletion():
+		return
+	var forager := AntForagerMarker.new()
+	var path: Array = [mound_pixel]
+	path.append_array(rest_of_path)
+	forager.path = path
+	forager.position = mound_pixel
+	_entities_parent.add_child(forager)
+	_active_ant_foragers[global_tile] = forager
 
 
 ## Inches every surfaced worm along, every frame. A worm at the surface is
@@ -6841,6 +7214,51 @@ func is_river_at_global(global_x: int, global_y: int) -> bool:
 	return generator.is_river_at_global(global_x, global_y)
 
 
+## A tile under a baked lake's surface (docs/concept/hydrology.md) -- an
+## overlay flag on land biome exactly like is_river_at_global.
+func is_lake_at_global(global_x: int, global_y: int) -> bool:
+	return generator.is_lake_at_global(global_x, global_y)
+
+
+## The water current at a tile, as {direction: Vector2 (tile-space unit
+## vector pointing downstream), speed_m_s}: the river's solved current on
+## a river tile, a mouth's fading plume in the still water it empties
+## into, zero elsewhere. What a fish swims against (FishMarker.
+## current_speed_factor) -- the same bearing and speed the flow overlay
+## draws, so the fish and the strokes agree.
+func river_current_at_global(global_x: int, global_y: int) -> Dictionary:
+	var probe := generator.hydrology_at_global(global_x, global_y)
+	var bearing_deg := 0.0
+	var speed := 0.0
+	if generator.is_river_at_global(global_x, global_y):
+		bearing_deg = generator.nearest_river_at(global_x, global_y).course_bearing_deg
+		speed = generator.river_hydraulics_at_global(global_x, global_y).velocity_m_s
+	elif probe["plume_factor"] > 0.0:
+		bearing_deg = probe["plume_bearing_deg"]
+		speed = HydrologyField.PLUME_SPEED_M_S * probe["plume_factor"]
+	if speed <= 0.0:
+		return {"direction": Vector2.ZERO, "speed_m_s": 0.0}
+	var radians := deg_to_rad(bearing_deg)
+	return {"direction": Vector2(sin(radians), -cos(radians)), "speed_m_s": speed}
+
+
+## Real metres of lake water over a tile, 0.0 off a lake. Unlike river
+## depth this delegates directly: nothing a player builds ponds a lake.
+func lake_depth_meters_at_global(global_x: int, global_y: int) -> float:
+	return generator.lake_depth_meters_at_global(global_x, global_y)
+
+
+## One byte per cell, 1 where a river or lake covers the ground -- the
+## per-chunk form of Chunk.blocks_ground_cover, for consumers that take a
+## whole flag array (TallGrass) rather than a Chunk.
+func _ground_cover_blockers(chunk: Chunk) -> PackedByteArray:
+	var blockers := PackedByteArray()
+	blockers.resize(chunk.width * chunk.height)
+	for index in blockers.size():
+		blockers[index] = 1 if chunk.blocks_ground_cover(index) else 0
+	return blockers
+
+
 ## Real river depth at a global tile -- the natural solved depth (see
 ## EarthChunkGenerator.river_hydraulics_at_global), raised where a
 ## player-built dam downstream is ponding this cell (see
@@ -6862,25 +7280,60 @@ func river_depth_meters_at_global(global_x: int, global_y: int) -> float:
 ## around exactly the rocks the player sees). Any OTHER real piece on the
 ## tile means the ground is built over -- no stone spawns there.
 func flow_boulder_at_global(global_x: int, global_y: int) -> bool:
+	return flow_boulder_diameter_cm_at_global(global_x, global_y) > 0.0
+
+
+## The flow boulder on this tile as a rock of a real SIZE: its diameter in
+## cm (the same StoneSize roll that draws it; the dropped piece and an ore
+## rock at DROPPED_BOULDER_DIAMETER_CM), or 0.0 where there is no flow
+## boulder at all. Everything the water does around the rock -- the push
+## reach, the eyot, the shoal, the foam, the wake, and the force balance
+## (river_boulder_load_at_global) -- is sized from this.
+func flow_boulder_diameter_cm_at_global(global_x: int, global_y: int) -> float:
 	var piece := modification_at_global(global_x, global_y)
 	if piece == BOULDER_PIECE_ID:
-		return true
+		return DROPPED_BOULDER_DIAMETER_CM
 	if BuildingPiece.has_piece(piece):
-		return false
-	if not generator.is_river_at_global(global_x, global_y):
-		return false
+		return 0.0
+	# On the river OR on its bank apron: a rock at the water's edge must
+	# part the waterline around itself too ("wrap shorelines around edge
+	# boulders"), not only a rock standing mid-stream.
+	if not generator.is_within_river_apron(global_x, global_y):
+		return 0.0
 	var biome := biome_at_global(global_x, global_y)
 	if not StonePlacement.STONE_BIOMES.has(biome):
-		return false
+		return 0.0
 	if not _flow_stone_placement.has_stone_at(global_x, global_y, biome):
-		return false
+		return 0.0
 	# An ore deposit rides the same stone roll (OrePlacement.is_ore_at) and
 	# spawns a chunky minable rock -- it bends the water exactly like a
 	# boulder ("ore should also bend the water").
 	if _flow_ore_placement.is_ore_at(global_x, global_y, biome):
-		return true
+		return DROPPED_BOULDER_DIAMETER_CM
 	var diameter := StoneSize.diameter_for(_flow_stone_placement.seed_at(global_x, global_y))
-	return StoneSize.class_for(diameter) == StoneSize.CLASS_BOULDER
+	if StoneSize.class_for(diameter) == StoneSize.CLASS_BOULDER:
+		return diameter
+	return 0.0
+
+
+## The force balance on the flow boulder at this tile: the water's drag
+## over the rock's friction-held submerged weight (BoulderHydraulics), from
+## the reach's own solved current and its real depth (ponding included).
+## Under 1 the rock holds and the water bends around it; 0 where there is
+## no flow boulder.
+func river_boulder_load_at_global(global_x: int, global_y: int) -> float:
+	var diameter_cm := flow_boulder_diameter_cm_at_global(global_x, global_y)
+	if diameter_cm <= 0.0:
+		return 0.0
+	var hydraulics := generator.river_hydraulics_at_global(global_x, global_y)
+	var velocity: float = hydraulics.get("velocity_m_s", 0.0)
+	var depth: float = river_depth_meters_at_global(global_x, global_y)
+	return BoulderHydraulics.current_load(velocity, diameter_cm, depth)
+
+
+## Whether the flow boulder here holds its ground against the current.
+func river_boulder_holds_at_global(global_x: int, global_y: int) -> bool:
+	return river_boulder_load_at_global(global_x, global_y) < 1.0
 
 
 ## Whether the channel is dammed at this course position, scanning the
@@ -6914,10 +7367,7 @@ func boulder_row_blocks_at_global(global_x: int, global_y: int) -> bool:
 ## live: a dam one tile off the walked diagonal was invisible to the
 ## crest check).
 func wet_row_tiles_at_global(global_x: int, global_y: int) -> Array:
-	var nearest := generator.river_catalog().nearest_river_at(
-		global_x, global_y,
-		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-	)
+	var nearest := generator.nearest_river_at(global_x, global_y)
 	var row: Array = []
 	if nearest.distance_tiles > RiverCatalog.RIVER_HALF_WIDTH_TILES:
 		return row
@@ -6929,10 +7379,7 @@ func wet_row_tiles_at_global(global_x: int, global_y: int) -> Array:
 			if absf(along_dir.dot(Vector2(dx, dy))) > 0.75:
 				continue
 			var tile := Vector2i(global_x + dx, global_y + dy)
-			var tile_nearest := generator.river_catalog().nearest_river_at(
-				tile.x, tile.y,
-				EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-			)
+			var tile_nearest := generator.nearest_river_at(tile.x, tile.y)
 			var across: float = absf(
 				tile_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
 			)
@@ -6943,10 +7390,7 @@ func wet_row_tiles_at_global(global_x: int, global_y: int) -> Array:
 
 func _row_crest_verdict(global_x: int, global_y: int) -> Dictionary:
 	var verdict := {"dam_piece": false, "boulders_closed": false}
-	var nearest := generator.river_catalog().nearest_river_at(
-		global_x, global_y,
-		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-	)
+	var nearest := generator.nearest_river_at(global_x, global_y)
 	if nearest.distance_tiles > RiverCatalog.RIVER_HALF_WIDTH_TILES:
 		return verdict
 	# Closure is judged by LATERAL POSITION, not by tile membership: on a
@@ -6987,11 +7431,7 @@ func _row_crest_verdict(global_x: int, global_y: int) -> Dictionary:
 				continue
 			var tile := Vector2i(global_x + dx, global_y + dy)
 			if modification_at_global(tile.x, tile.y) == DAM_PIECE_ID:
-				var dam_nearest := generator.river_catalog().nearest_river_at(
-					tile.x, tile.y,
-					EarthChunkGenerator.WORLD_WIDTH_TILES,
-					EarthChunkGenerator.WORLD_HEIGHT_TILES
-				)
+				var dam_nearest := generator.nearest_river_at(tile.x, tile.y)
 				var dam_across: float = (
 					dam_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
 				)
@@ -7038,10 +7478,7 @@ func _row_crest_verdict(global_x: int, global_y: int) -> Dictionary:
 func _blocked_wet_across_at(tile: Vector2i):
 	if not flow_boulder_at_global(tile.x, tile.y):
 		return null
-	var tile_nearest := generator.river_catalog().nearest_river_at(
-		tile.x, tile.y,
-		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-	)
+	var tile_nearest := generator.nearest_river_at(tile.x, tile.y)
 	var across: float = (
 		tile_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
 	)
@@ -7075,31 +7512,41 @@ func upstream_river_tile(from: Vector2i, tiles_back: int) -> Vector2i:
 ## tiles, so stepping a whole tile at a time can skip straight past the cell
 ## a dam actually stands on.
 func _course_tile_offset(from: Vector2i, tiles_upstream: float) -> Vector2i:
-	var here := generator.river_catalog().nearest_river_at(
-		from.x, from.y, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-	)
+	var here := generator.nearest_river_at(from.x, from.y)
 	if here.name == "":
 		return from
 	var polylines := RiverCatalog.tile_polylines(
 		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 	)
 	var points: Array = polylines[here.name]
-	var total := 0.0
-	for i in range(points.size() - 1):
-		total += points[i].distance_to(points[i + 1])
+	var total := _course_length(points)
 	if total <= 0.0:
 		return from
 	# A real tile distance along the course, expressed as the fraction of
 	# the whole river that distance represents.
 	var target_fraction := clampf(here.course_fraction - tiles_upstream / total, 0.0, 1.0)
-	return _tile_at_course_fraction(points, target_fraction)
+	return _tile_at_course_fraction(points, target_fraction, total)
 
 
-## The tile sitting `fraction` of the way along a course polyline.
-func _tile_at_course_fraction(points: Array, fraction: float) -> Vector2i:
+## Total length of a course polyline, in tiles -- shared by
+## _course_tile_offset and _tile_at_course_fraction so the same walk is
+## never paid twice for one call (measured: this ran twice per
+## _course_tile_offset call, itself called up to
+## DamImpoundment.MAX_BACKWATER_TILES * 2 + 1 times per _impounded_depth_at
+## walk -- see that function's own doc comment on why fps at any river tile
+## depended on it).
+static func _course_length(points: Array) -> float:
 	var total := 0.0
 	for i in range(points.size() - 1):
 		total += points[i].distance_to(points[i + 1])
+	return total
+
+
+## The tile sitting `fraction` of the way along a course polyline.
+## `total_length`, when the caller already has it (see _course_tile_offset),
+## skips re-walking the same polyline to re-derive it.
+func _tile_at_course_fraction(points: Array, fraction: float, total_length: float = -1.0) -> Vector2i:
+	var total := total_length if total_length >= 0.0 else _course_length(points)
 	var want := total * clampf(fraction, 0.0, 1.0)
 	var travelled := 0.0
 	for i in range(points.size() - 1):
@@ -8182,10 +8629,14 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_paint_hillshade_overlay(chunk_coord, chunk)
 	_paint_river_flow_overlay(chunk_coord, chunk)
 	# So a chunk streamed in mid-snowfall shows the snow already lying,
-	# instead of staying bare until the next field-wide depth change happens
-	# to repaint it (see _paint_snow_chunk's own doc comment).
-	if _snow_layer != null and _snow_depth > 0.0:
-		_paint_snow_chunk(chunk_coord)
+	# instead of staying bare until the next 0->nonzero transition happens
+	# to paint it (see _sync_snow_presence). Gated on _snow_depth, unlike
+	# the old _paint_snow_tile this replaces once painted a real per-tile
+	# band regardless -- an empty layer while it is not snowing is the whole
+	# point (see _sync_snow_presence's own doc comment), and a freshly
+	# loaded chunk must not undo that by painting presence nobody asked for.
+	if _snow_depth > 0.0:
+		_paint_snow_presence(chunk_coord, chunk)
 	# Restores collision for every wall/window piece PERSISTED from a
 	# previous session -- fresh village-stamped pieces get their collision
 	# immediately inside stamp_structure_at_global instead, further below in
@@ -8227,7 +8678,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 
 	_grass_sims[chunk_coord] = TallGrass.new(
 		hash("%d_%d_tall_grass" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
-		chunk.is_river
+		_ground_cover_blockers(chunk)
 	)
 	_grass_sprites[chunk_coord] = {}
 	_sync_grass_sprites(chunk_coord)
@@ -8271,8 +8722,20 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		for sagewerk_local_cell in _sagewerk_lumberjacks[sagewerk_chunk_coord]:
 			_resync_logistics_for_sagewerk(sagewerk_chunk_coord, sagewerk_local_cell)
 
+	# The meadow that was already here is what the wind already did (see
+	# MeadowSpread). Two things it needs that a chunk seed cannot give it: the
+	# chunk's WORLD origin, because founders live in world space so a meadow
+	# crosses chunk lines instead of stopping dead at every seam; and the
+	# PREVAILING wind, because a baked meadow is the product of a climate
+	# rather than of whatever the sky happens to be doing right now.
 	_flower_patches[chunk_coord] = FlowerPatch.new(
-		hash("%d_%d_flowers" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+		hash("%d_%d_flowers" % [chunk_coord.x, chunk_coord.y]),
+		chunk.width,
+		chunk.height,
+		chunk.biome,
+		chunk_coord * CHUNK_SIZE,
+		_weather_model.prevailing_wind_direction(PREVAILING_WIND_REGION_SEED),
+		_weather_model.prevailing_wind_strength(PREVAILING_WIND_REGION_SEED)
 	)
 	_flower_sprites[chunk_coord] = {}
 	_seed_sprites[chunk_coord] = {}
@@ -8299,11 +8762,28 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	)
 	_worm_sprites[chunk_coord] = {}
 
-	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants"). Not
-	# rendered this pass -- see AntColony's own doc comment on scope.
+	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants"). Placed
+	# once at chunk creation -- mound_cells() never changes for a loaded
+	# chunk's lifetime, exactly like the earthworm burrows just above.
 	_ant_colonies[chunk_coord] = AntColony.new(
 		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
 	)
+	# The visible counterpart: one static AntMoundMarker per mound cell, so a
+	# colony is actually somewhere a player can SEE rather than a pure
+	# background number (reported live: ants "should be a real gear in the
+	# ecosystem"). Placed at the mound's own tile centre, the same
+	# cell-to-pixel convention _forage_seed_near_mound uses for its own
+	# mound_pixel.
+	var mound_markers: Array = []
+	for mound_cell in _ant_colonies[chunk_coord].mound_cells():
+		var marker := AntMoundMarker.new()
+		marker.position = Vector2(
+			float(chunk_coord.x * CHUNK_SIZE + mound_cell.x) + 0.5,
+			float(chunk_coord.y * CHUNK_SIZE + mound_cell.y) + 0.5
+		) * float(TerrainRenderer.TILE_SIZE)
+		_entities_parent.add_child(marker)
+		mound_markers.append(marker)
+	_ant_mound_markers[chunk_coord] = mound_markers
 
 	_ecosystem.add_region(chunk_coord, chunk)
 	# Robin/sparrow's food-density signal (worm burrows, ground seed cells)
@@ -8358,7 +8838,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		CHUNK_SIZE,
 		TerrainRenderer.TILE_SIZE,
 		_biome_classifier.dominant_biome(chunk.biome),
-		self
+		self,
+		_current_sun_elevation_deg
 	)
 	_loaded_ambient_flyers[chunk_coord] = _ambient_flyer_renderer.spawn_ambient_flyers(
 		_creatures_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
@@ -8741,7 +9222,6 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_terrain_renderer.erase(_roof_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _snow_layer != null:
 		_terrain_renderer.erase(_snow_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
-		_forget_snow_paint_for_chunk(chunk_coord)
 	if _hidden_roof_chunk_coord == chunk_coord:
 		_hidden_roof_chunk_coord = null
 		_hidden_roof_room_cells = []
@@ -8832,6 +9312,9 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	_worm_patches.erase(chunk_coord)
 
 	_ant_colonies.erase(chunk_coord)
+	for marker in _ant_mound_markers.get(chunk_coord, []):
+		marker.free()
+	_ant_mound_markers.erase(chunk_coord)
 
 	# Snapshot the aggregate ecology before dropping the region, so revisiting
 	# this chunk catch-up integrates from where it left off (see

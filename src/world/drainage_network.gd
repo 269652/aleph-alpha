@@ -1,0 +1,529 @@
+extends RefCounted
+
+## The static half of docs/concept/hydrology.md ("Layer 0: the drainage
+## bake"): priority-flood depression filling, D8 flow direction, and flow
+## accumulation over a height grid. Pure and engine-free -- packed arrays
+## in, packed arrays out -- so the bake tool and the tests drive the same
+## code over the real elevation asset and over a 5x5 synthetic bowl.
+##
+## Why priority-flood and not hydraulic_erosion.gd's droplet walk: the
+## elevation asset is 8-bit, so every coastal plain reads as one flat
+## plateau with no gradient at all, and a droplet stops dead on the first
+## flat cell. Priority-flood (Barnes, Lehman & Mulla 2014) floods outward
+## from the sea, raising each cell to at least its popper plus an epsilon,
+## which gives every land cell a strictly descending path to the sea by
+## construction -- across flats, and out of real closed basins, which it
+## identifies (with their spill height) as a side effect.
+
+## flow_direction value for a sea cell: it has no downstream.
+const DIRECTION_SEA := 8
+## depression_id value for a cell that is not in any depression.
+const NO_DEPRESSION := -1
+
+## The strictly-positive step the fill adds over a cell's popper. Small
+## enough that a chain of thousands of plateau cells (one full asset row
+## is 3840) accumulates far less than one 8-bit asset step (1/255), so an
+## epsilon ramp can never be mistaken for a real depression; large enough
+## to be exact in the float64 `filled` surface.
+const FILL_EPSILON := 1e-7
+
+## How far below its filled surface a cell must sit to count as being in a
+## depression rather than on an epsilon-ramped flat. ~14m of the asset's
+## 14,400m range: a quarter of one 8-bit step, so any real one-step basin
+## qualifies and no epsilon chain can.
+const DEFAULT_MIN_DEPRESSION_DEPTH := 0.001
+
+## D8 neighbours, clockwise from north. Index is the direction code.
+const NEIGHBOR_DX: Array[int] = [0, 1, 1, 1, 0, -1, -1, -1]
+const NEIGHBOR_DY: Array[int] = [-1, -1, 0, 1, 1, 1, 0, -1]
+## Diagonal steps are sqrt(2) long. Spelled out: a typed const array must
+## be a constant expression, and the engine's SQRT2 is not one to the
+## parser (found live on the first launch).
+const DIAGONAL_STEP := 1.4142135623730951
+const NEIGHBOR_DISTANCE: Array[float] = [
+	1.0, DIAGONAL_STEP, 1.0, DIAGONAL_STEP, 1.0, DIAGONAL_STEP, 1.0, DIAGONAL_STEP
+]
+
+var width: int
+var height: int
+var wrap_x: bool
+var sea_level: float
+
+## The priority-flood surface: never below the input, raised inside
+## depressions and by epsilon across flats. float64 so FILL_EPSILON is exact.
+var filled: PackedFloat64Array
+## Per cell: 0-7 (see NEIGHBOR_DX/DY), or DIRECTION_SEA.
+var flow_direction: PackedByteArray
+## Per cell: land cells draining through it, itself included; a sea cell
+## counts only the land draining into it.
+var accumulation: PackedInt32Array
+## Per cell: index into `depressions`, or NO_DEPRESSION.
+var depression_id: PackedInt32Array
+## Each {id, cell_count, spill_elevation, spill_index, floor_elevation}.
+var depressions: Array[Dictionary] = []
+
+var _sea: PackedByteArray
+
+# Binary min-heap keyed by (elevation, insertion sequence): the sequence
+# tiebreak is what makes a flat flood out in a deterministic order.
+var _heap_keys: PackedFloat64Array
+var _heap_seq: PackedInt64Array
+var _heap_items: PackedInt32Array
+var _heap_size := 0
+var _next_seq := 0
+
+
+## Builds every field from `heights` (row-major, `a_width` x `a_height`,
+## any scale as long as `a_sea_level` is on it). Cells below sea level are
+## the sea; there must be at least one. `a_wrap_x` joins the east and west
+## edges, as the real equirectangular asset requires. Returns self.
+func build(
+	heights: PackedFloat32Array,
+	a_width: int,
+	a_height: int,
+	a_sea_level: float,
+	a_wrap_x: bool = false,
+	min_depression_depth: float = DEFAULT_MIN_DEPRESSION_DEPTH,
+	min_depression_cells: int = 1,
+	min_basin_depth: float = 0.0
+) -> RefCounted:
+	width = a_width
+	height = a_height
+	wrap_x = a_wrap_x
+	sea_level = a_sea_level
+	_fill(heights)
+	_route()
+	_accumulate()
+	_label_depressions(heights, min_depression_depth, min_depression_cells, min_basin_depth)
+	_label_inland_seas(heights, min_depression_cells)
+	return self
+
+
+## Removes the given depressions (by id): their cells go back to
+## NO_DEPRESSION -- still filled and routed exactly as before, they are
+## just not lake candidates -- and the survivors are renumbered densely so
+## ids stay valid indices into `depressions`. The bake drops basins whose
+## catchment delivers too little rain to hold water (see
+## StandInPrecipitation.lake_holds_water).
+func drop_depressions(ids: PackedInt32Array) -> void:
+	if ids.is_empty():
+		return
+	var new_id := PackedInt32Array()
+	new_id.resize(depressions.size())
+	var survivors: Array[Dictionary] = []
+	for old_id in depressions.size():
+		if ids.has(old_id):
+			new_id[old_id] = NO_DEPRESSION
+			continue
+		new_id[old_id] = survivors.size()
+		var depression := depressions[old_id].duplicate()
+		depression["id"] = survivors.size()
+		survivors.append(depression)
+	for index in depression_id.size():
+		var old_id := depression_id[index]
+		if old_id != NO_DEPRESSION:
+			depression_id[index] = new_id[old_id]
+	depressions = survivors
+
+
+func is_sea(index: int) -> bool:
+	return _sea[index] == 1
+
+
+## The cell `index` drains into, or -1 for a sea cell.
+func downstream_index(index: int) -> int:
+	var direction := flow_direction[index]
+	if direction == DIRECTION_SEA:
+		return -1
+	return neighbor_index(index, direction)
+
+
+## The cell one step in `direction` (0-7) from `index`, or -1 off the grid.
+## Wraps east-west when wrap_x; never wraps north-south.
+func neighbor_index(index: int, direction: int) -> int:
+	var x := index % width
+	@warning_ignore("integer_division")
+	var y := index / width
+	var nx := x + NEIGHBOR_DX[direction]
+	var ny := y + NEIGHBOR_DY[direction]
+	if ny < 0 or ny >= height:
+		return -1
+	if nx < 0 or nx >= width:
+		if not wrap_x:
+			return -1
+		nx = posmod(nx, width)
+	return ny * width + nx
+
+
+func _fill(heights: PackedFloat32Array) -> void:
+	var count := width * height
+	filled.resize(count)
+	_sea.resize(count)
+	_sea.fill(0)
+	var visited := PackedByteArray()
+	visited.resize(count)
+	visited.fill(0)
+	_heap_size = 0
+	_next_seq = 0
+
+	for index in count:
+		filled[index] = heights[index]
+		if heights[index] < sea_level:
+			_sea[index] = 1
+			visited[index] = 1
+			_heap_push(filled[index], index)
+	if _heap_size == 0:
+		push_error("DrainageNetwork.build: no sea cell to flood from")
+
+	while _heap_size > 0:
+		var current := _heap_pop()
+		for direction in 8:
+			var neighbor := neighbor_index(current, direction)
+			if neighbor < 0 or visited[neighbor] == 1:
+				continue
+			visited[neighbor] = 1
+			filled[neighbor] = maxf(float(heights[neighbor]), filled[current] + FILL_EPSILON)
+			_heap_push(filled[neighbor], neighbor)
+
+
+## D8 steepest descent on the filled surface. Every land cell has a
+## strictly lower neighbour there (the cell that flooded it), so the
+## result is acyclic and always terminates at the sea.
+func _route() -> void:
+	var count := width * height
+	flow_direction.resize(count)
+	for index in count:
+		if _sea[index] == 1:
+			flow_direction[index] = DIRECTION_SEA
+			continue
+		var best_direction := DIRECTION_SEA
+		var best_slope := 0.0
+		for direction in 8:
+			var neighbor := neighbor_index(index, direction)
+			if neighbor < 0:
+				continue
+			var slope := (filled[index] - filled[neighbor]) / NEIGHBOR_DISTANCE[direction]
+			if slope > best_slope:
+				best_slope = slope
+				best_direction = direction
+		flow_direction[index] = best_direction
+
+
+## Upstream-count accumulation in topological order (Kahn's algorithm over
+## the flow graph): headwaters first, each cell handing its count to its
+## downstream once every contributor has handed over. Linear, no sort.
+func _accumulate() -> void:
+	var count := width * height
+	accumulation.resize(count)
+	var indegree := PackedInt32Array()
+	indegree.resize(count)
+	indegree.fill(0)
+	for index in count:
+		accumulation[index] = 0 if _sea[index] == 1 else 1
+		var downstream := downstream_index(index)
+		if downstream >= 0:
+			indegree[downstream] += 1
+
+	var queue := PackedInt32Array()
+	for index in count:
+		if _sea[index] == 0 and indegree[index] == 0:
+			queue.append(index)
+	var head := 0
+	while head < queue.size():
+		var index := queue[head]
+		head += 1
+		var downstream := downstream_index(index)
+		if downstream < 0:
+			continue
+		accumulation[downstream] += accumulation[index]
+		if _sea[downstream] == 0:
+			indegree[downstream] -= 1
+			if indegree[downstream] == 0:
+				queue.append(downstream)
+
+
+## `accumulation` with a per-cell weight instead of a count of 1: the
+## total of `weights` over every land cell draining through each cell
+## (itself included), a sea cell again collecting only what arrives.
+## With runoff as the weight this is a stand-in discharge (hydrology.md
+## phase 1); with unit weights it reproduces `accumulation` exactly.
+## Same headwaters-first order as _accumulate.
+func accumulate_weighted(weights: PackedFloat32Array) -> PackedFloat32Array:
+	var count := width * height
+	var totals := PackedFloat32Array()
+	totals.resize(count)
+	var indegree := PackedInt32Array()
+	indegree.resize(count)
+	indegree.fill(0)
+	for index in count:
+		totals[index] = 0.0 if _sea[index] == 1 else weights[index]
+		var downstream := downstream_index(index)
+		if downstream >= 0:
+			indegree[downstream] += 1
+
+	var queue := PackedInt32Array()
+	for index in count:
+		if _sea[index] == 0 and indegree[index] == 0:
+			queue.append(index)
+	var head := 0
+	while head < queue.size():
+		var index := queue[head]
+		head += 1
+		var downstream := downstream_index(index)
+		if downstream < 0:
+			continue
+		totals[downstream] += totals[index]
+		if _sea[downstream] == 0:
+			indegree[downstream] -= 1
+			if indegree[downstream] == 0:
+				queue.append(downstream)
+	return totals
+
+
+## A depression is an 8-connected component of cells the fill raised by
+## more than `min_depth`. Its spill is the component's lowest filled cell
+## (the whole component sits at spill + a few epsilon), its floor the
+## lowest original cell. Nested basins merge into one component here --
+## the depression TREE hydrology.md describes is not built yet.
+##
+## Components smaller than `min_cells`, or shallower (spill minus floor)
+## than `min_basin_depth`, are data noise (one stray 8-bit step in the
+## asset): their cells stay filled and routed exactly as before, they
+## just are not lake candidates.
+func _label_depressions(
+	heights: PackedFloat32Array, min_depth: float, min_cells: int, min_basin_depth: float
+) -> void:
+	var count := width * height
+	depression_id.resize(count)
+	depression_id.fill(NO_DEPRESSION)
+	depressions.clear()
+
+	for start in count:
+		if depression_id[start] != NO_DEPRESSION or not _is_raised(heights, start, min_depth):
+			continue
+		var id := depressions.size()
+		var members := PackedInt32Array()
+		var spill_elevation := filled[start]
+		var spill_index := start
+		var floor_elevation := float(heights[start])
+		var stack := PackedInt32Array([start])
+		depression_id[start] = id
+		while stack.size() > 0:
+			var index := stack[stack.size() - 1]
+			stack.resize(stack.size() - 1)
+			members.append(index)
+			if filled[index] < spill_elevation:
+				spill_elevation = filled[index]
+				spill_index = index
+			floor_elevation = minf(floor_elevation, float(heights[index]))
+			for direction in 8:
+				var neighbor := neighbor_index(index, direction)
+				if neighbor < 0 or depression_id[neighbor] != NO_DEPRESSION:
+					continue
+				if not _is_raised(heights, neighbor, min_depth):
+					continue
+				depression_id[neighbor] = id
+				stack.append(neighbor)
+		if members.size() < min_cells or spill_elevation - floor_elevation < min_basin_depth:
+			# Too small or too shallow to be a lake: unlabel, and the id is
+			# reused by the next component so ids stay dense.
+			for member in members:
+				depression_id[member] = NO_DEPRESSION
+			continue
+		var outlets := _outlets_of(members, id)
+		depressions.append({
+			"id": id,
+			"cell_count": members.size(),
+			"spill_elevation": spill_elevation,
+			"spill_index": _principal_outlet(outlets, spill_index),
+			"outlet_indices": outlets,
+			"floor_elevation": floor_elevation,
+		})
+
+
+## Every member cell water LEAVES the depression through: those whose D8
+## downstream steps outside it, or stops (the sea, or a terminal lake).
+##
+## There is usually more than one, because a filled depression's lip is
+## FLAT -- the flood raises every member to exactly the spill elevation,
+## so the outflow can split across it. The test crater splits three ways.
+##
+## That flatness is also why the labelling loop cannot find the outlet on
+## its own: it tracks the member with the lowest `filled`, a comparison
+## that never fires past the first cell once they are all equal, so
+## `spill_index` used to come out as whichever member the raster scan
+## happened to reach first -- an arbitrary interior cell.
+func _outlets_of(members: PackedInt32Array, id: int) -> PackedInt32Array:
+	var outlets := PackedInt32Array()
+	for member in members:
+		var down := downstream_index(member)
+		if down >= 0 and depression_id[down] == id:
+			continue
+		outlets.append(member)
+	return outlets
+
+
+## The one outlet carrying the most accumulated flow: the basin's main
+## mouth, and a stable single point to name a depression by. Ties keep
+## the earliest, so a bake is reproducible. `fallback` is returned only
+## if nothing drains out, which a routed depression should never manage.
+func _principal_outlet(outlets: PackedInt32Array, fallback: int) -> int:
+	var best := -1
+	var best_flow := -1
+	for outlet in outlets:
+		var flow := accumulation[outlet]
+		if flow > best_flow:
+			best_flow = flow
+			best = outlet
+	return best if best >= 0 else fallback
+
+
+## How much of `values` -- an accumulate_weighted result -- passes through
+## depression `id`, summed across its whole spill lip.
+##
+## This, and not the value at any single cell, is a basin's throughput.
+## bake_hydrology decides whether a basin holds water from it; reading one
+## outlet instead understated the answer by however many ways the lip
+## splits (13 of 30 in the test crater) and dried out lakes that should
+## have filled.
+##
+## The same sum answers for a terminal inland sea, where every member is
+## an outlet because flow simply stops there: summing them is summing
+## everything the lake receives.
+func outflow_of(id: int, values: PackedFloat32Array) -> float:
+	for depression in depressions:
+		if int(depression["id"]) != id:
+			continue
+		var total := 0.0
+		for outlet in depression["outlet_indices"] as PackedInt32Array:
+			total += values[outlet]
+		return total
+	return 0.0
+
+
+## Below-sea-level cells that do not touch the ocean: the flood treats
+## every sub-sea cell as sea (so routing and the sea mask are unchanged),
+## but an enclosed pocket -- an estuary marsh, a below-sea-level basin --
+## is a LAKE to the world, at sea level, drawn as still water rather than
+## as blocky ocean (first playtest). 4-connected components of sea cells,
+## wrapping east-west; the largest component is the ocean and stays
+## unlabelled, every other one of at least `min_cells` becomes a
+## depression flagged "inland_sea" with its spill at sea level.
+func _label_inland_seas(heights: PackedFloat32Array, min_cells: int) -> void:
+	var count := width * height
+	var component := PackedInt32Array()
+	component.resize(count)
+	component.fill(-1)
+	var components: Array[PackedInt32Array] = []
+	for start in count:
+		if _sea[start] == 0 or component[start] != -1:
+			continue
+		var id := components.size()
+		var members := PackedInt32Array()
+		var stack := PackedInt32Array([start])
+		component[start] = id
+		while stack.size() > 0:
+			var index := stack[stack.size() - 1]
+			stack.resize(stack.size() - 1)
+			members.append(index)
+			for direction in [0, 2, 4, 6]:
+				var neighbor := neighbor_index(index, direction)
+				if neighbor < 0 or _sea[neighbor] == 0 or component[neighbor] != -1:
+					continue
+				component[neighbor] = id
+				stack.append(neighbor)
+		components.append(members)
+	if components.size() <= 1:
+		return
+	var ocean := 0
+	for id in components.size():
+		if components[id].size() > components[ocean].size():
+			ocean = id
+	for id in components.size():
+		if id == ocean or components[id].size() < min_cells:
+			continue
+		var members := components[id]
+		var depression_index := depressions.size()
+		var floor_elevation := float(heights[members[0]])
+		for member in members:
+			depression_id[member] = depression_index
+			floor_elevation = minf(floor_elevation, float(heights[member]))
+		depressions.append({
+			"id": depression_index,
+			"cell_count": members.size(),
+			"spill_elevation": sea_level,
+			"spill_index": _principal_outlet(members, members[0]),
+			# A terminal lake has no way out, so flow stops at every one
+			# of its cells: the whole lake is its own spill lip, and
+			# outflow_of sums what it receives rather than what leaves.
+			"outlet_indices": members,
+			"floor_elevation": floor_elevation,
+			"inland_sea": true,
+		})
+
+
+func _is_raised(heights: PackedFloat32Array, index: int, min_depth: float) -> bool:
+	return _sea[index] == 0 and filled[index] - float(heights[index]) > min_depth
+
+
+# --- heap ---
+
+func _heap_less(a: int, b: int) -> bool:
+	if _heap_keys[a] != _heap_keys[b]:
+		return _heap_keys[a] < _heap_keys[b]
+	return _heap_seq[a] < _heap_seq[b]
+
+
+func _heap_swap(a: int, b: int) -> void:
+	var key := _heap_keys[a]
+	_heap_keys[a] = _heap_keys[b]
+	_heap_keys[b] = key
+	var seq := _heap_seq[a]
+	_heap_seq[a] = _heap_seq[b]
+	_heap_seq[b] = seq
+	var item := _heap_items[a]
+	_heap_items[a] = _heap_items[b]
+	_heap_items[b] = item
+
+
+func _heap_push(key: float, item: int) -> void:
+	if _heap_size == _heap_keys.size():
+		_heap_keys.append(key)
+		_heap_seq.append(_next_seq)
+		_heap_items.append(item)
+	else:
+		_heap_keys[_heap_size] = key
+		_heap_seq[_heap_size] = _next_seq
+		_heap_items[_heap_size] = item
+	_next_seq += 1
+	var position := _heap_size
+	_heap_size += 1
+	while position > 0:
+		@warning_ignore("integer_division")
+		var parent := (position - 1) / 2
+		if not _heap_less(position, parent):
+			break
+		_heap_swap(position, parent)
+		position = parent
+
+
+func _heap_pop() -> int:
+	var top := _heap_items[0]
+	_heap_size -= 1
+	if _heap_size == 0:
+		return top
+	_heap_swap(0, _heap_size)
+	var position := 0
+	while true:
+		var left := 2 * position + 1
+		var right := left + 1
+		var smallest := position
+		if left < _heap_size and _heap_less(left, smallest):
+			smallest = left
+		if right < _heap_size and _heap_less(right, smallest):
+			smallest = right
+		if smallest == position:
+			break
+		_heap_swap(position, smallest)
+		position = smallest
+	return top

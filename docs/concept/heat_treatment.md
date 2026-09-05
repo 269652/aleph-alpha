@@ -349,8 +349,12 @@ model to exactly that.
   and quantizes it, so the id side is ready and the item side is not.
 - ⬜ **Edge wear.** Sharpening exists; blunting does not. A softer draw should
   lose its edge faster than a harder one, which is the other half of why the
-  ladder matters — and it needs the durability/wear state
-  [`materials.md`](materials.md) lists as unstarted.
+  ladder matters. [`item_durability.md`](item_durability.md) closes the
+  *durability/wear state* [`materials.md`](materials.md) used to list as
+  entirely unstarted, but only the binary "does the item still work at all"
+  half (toughness-driven, fatigue failure) — `sharpness_capacity` dulling
+  gradually and affecting per-swing cut damage is still this exact gap,
+  untouched.
 - ⬜ **Case hardening / carburising**, differential hardening (a clay-backed
   blade hard at the edge and tough at the spine), and normalising/annealing as
   distinct operations. All real, all natural extensions of one slide along one

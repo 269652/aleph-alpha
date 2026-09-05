@@ -32,10 +32,11 @@ and sharpen slide one material along a single hardness/toughness curve that no
 draw is allowed to cheat.
 
 What an item actually *looks like* — in the inventory, on the ground, in
-hand, worn as armor — is specified separately in
-[item_illustrations.md](item_illustrations.md): a real `sprite_id` on
-`Item`, and real worn-armor visuals on the character rig, both reusing the
-same composite-spritemap engine the hero and named creatures already use.
+hand, worn as armor, or built into the world as a placeable — is specified
+separately in [item_illustrations.md](item_illustrations.md): a real
+`sprite_id` on `Item`, real worn-armor visuals on the character rig, and a
+second seeded-variant sheet for placed structures, all reusing the same
+composite-spritemap engine the hero and named creatures already use.
 Spell/atom attack effects are that doc's sibling concern, specified in
 [magic.md](magic.md#atom-effects-render-as-composite-spritemaps-one-per-atom-2026-08-28).
 

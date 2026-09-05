@@ -14,6 +14,7 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const DamImpoundment = preload("res://src/world/dam_impoundment.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
+const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -167,6 +168,40 @@ func test_a_dropped_boulder_is_fed_to_the_flow_shader():
 	)
 
 
+## Every rock in the feed has its own radius, from its own size -- the
+## dropped piece is a smashable-stone-sized boulder.
+func test_a_dropped_boulder_feeds_its_own_radius():
+	assert_true(manager.build_at_global(river_tile.x, river_tile.y, "boulder"))
+	manager.sync_river_flow_boulders()
+	var positions := manager.river_flow_boulder_positions()
+	var radii := manager.river_flow_boulder_radii()
+	assert_eq(radii.size(), positions.size(), "one radius per fed boulder")
+	var expected_pos := Vector2(
+		float(river_tile.x) * 16.0 + 8.0, float(river_tile.y) * 16.0 + 8.0
+	)
+	var index := positions.find(expected_pos)
+	assert_gte(index, 0)
+	assert_almost_eq(
+		radii[index],
+		RiverFlowShader.boulder_radius_px_for(EarthChunkManager.DROPPED_BOULDER_DIAMETER_CM), 1e-6
+	)
+	assert_almost_eq(
+		manager.flow_boulder_diameter_cm_at_global(river_tile.x, river_tile.y),
+		EarthChunkManager.DROPPED_BOULDER_DIAMETER_CM, 1e-6
+	)
+	assert_eq(manager.flow_boulder_diameter_cm_at_global(river_tile.x + 40, river_tile.y + 40), 0.0)
+
+
+## The force balance is computed per rock from the reach's own solved
+## current and depth: the dropped boulder at the fixture holds.
+func test_a_dropped_boulder_holds_the_fixture_s_current():
+	assert_true(manager.build_at_global(river_tile.x, river_tile.y, "boulder"))
+	assert_true(manager.river_boulder_holds_at_global(river_tile.x, river_tile.y))
+	var load: float = manager.river_boulder_load_at_global(river_tile.x, river_tile.y)
+	assert_between(load, 0.0, 1.0)
+	assert_eq(manager.river_boulder_load_at_global(river_tile.x + 40, river_tile.y + 40), 0.0, "no rock, no load")
+
+
 ## One rock never dams a river: a partial row is not a crest and raises no
 ## pool.
 func test_a_partial_boulder_row_does_not_pond():
@@ -277,3 +312,64 @@ func test_the_across_map_outsizes_any_transient_loaded_span():
 	var RiverFlowShader = load("res://src/rendering/river_flow_shader.gd")
 	var widest_transient := (2 * EarthChunkManager.LOAD_RADIUS + 2) * EarthChunkManager.CHUNK_SIZE
 	assert_gt(RiverFlowShader.FLOW_MAP_TILES, widest_transient)
+
+
+# -- the crest/impoundment walk must use the MEMOIZED river lookup ----------
+#
+# Reported live: the game dropped to ~6fps standing at/near the spawn point
+# (this fixture's own river_tile) -- every player physics tick calls
+# river_depth_meters_at_global, which (once a boulder or dam is anywhere
+# nearby) walks _impounded_depth_at's crest check up to
+# DamImpoundment.MAX_BACKWATER_TILES * 2 + 1 times, and EACH of those calls
+# used to reach straight into generator.river_catalog().nearest_river_at
+# directly -- the raw, ~44-segment-test lookup RiverCatalog's OWN doc
+# comment says is exactly why generator.nearest_river_at's memoized wrapper
+# (see EarthChunkGenerator) exists in the first place. Every OTHER hot path
+# in earth_chunk_manager.gd already goes through that wrapper; the crest
+# walk was the one place that didn't, so it paid the ~44-segment cost fresh
+# on every physics tick, 60 times a second, for as long as a player stood
+# in or near water -- which the spawn point always does.
+#
+# Pinned by the one signal that actually tells the two paths apart: only
+# the memoized wrapper ever writes into generator's own
+# _nearest_river_cache, so a crest/impoundment query that never touches it
+# is provably still on the slow path, whatever answer it returns.
+
+func test_crest_check_populates_the_memoized_river_cache():
+	manager.generator._nearest_river_cache.clear()
+	manager.crest_blocks_at_global(river_tile.x, river_tile.y)
+	assert_gt(
+		manager.generator._nearest_river_cache.size(), 0,
+		"crest_blocks_at_global must resolve rivers through the memoized wrapper, not the raw catalog"
+	)
+
+
+func test_boulder_row_check_populates_the_memoized_river_cache():
+	manager.generator._nearest_river_cache.clear()
+	manager.boulder_row_blocks_at_global(river_tile.x, river_tile.y)
+	assert_gt(
+		manager.generator._nearest_river_cache.size(), 0,
+		"boulder_row_blocks_at_global must resolve rivers through the memoized wrapper, not the raw catalog"
+	)
+
+
+func test_river_depth_at_a_water_tile_populates_the_memoized_river_cache():
+	manager.generator._nearest_river_cache.clear()
+	manager.river_depth_meters_at_global(river_tile.x, river_tile.y)
+	assert_gt(
+		manager.generator._nearest_river_cache.size(), 0,
+		"the depth/impoundment walk must resolve rivers through the memoized wrapper, not the raw catalog"
+	)
+
+
+## A second query for the SAME tile must not grow the cache further -- if it
+## did, the "memoized" lookup would just be relocating the same uncached
+## cost one call downstream rather than actually avoiding it.
+func test_a_repeated_crest_check_hits_the_warm_cache():
+	manager.crest_blocks_at_global(river_tile.x, river_tile.y)
+	var warm_size: int = manager.generator._nearest_river_cache.size()
+	manager.crest_blocks_at_global(river_tile.x, river_tile.y)
+	assert_eq(
+		manager.generator._nearest_river_cache.size(), warm_size,
+		"a repeated crest check at the same tile should hit the warm cache, not grow it further"
+	)

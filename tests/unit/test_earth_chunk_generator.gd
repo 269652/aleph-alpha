@@ -5,6 +5,7 @@ const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const TerrainRelief = preload("res://src/world/terrain_relief.gd")
 const EarthElevationSource = preload("res://src/world/earth_elevation_source.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
 
 var generator: EarthChunkGenerator
 
@@ -374,6 +375,11 @@ func test_river_depth_at_a_curated_waypoint_is_the_real_solved_depth():
 ## procedural module itself (procedural_river.gd) stays real and tested,
 ## just no longer consulted live -- curated-only is what's live now.
 func test_procedural_fallback_is_not_live_wired_far_from_any_curated_river():
+	# The NOISE-CONTOUR proxy (procedural_river.gd) is what must stay
+	# unwired. The hydrology bake is a different, connectivity-aware
+	# fallback (docs/concept/hydrology.md); it is switched off here so this
+	# test keeps asking only its original question.
+	generator.hydrology_rivers_enabled = false
 	for x in range(20000, 20400, 37):
 		for y in range(7000, 7400, 41):
 			assert_false(generator.is_river_at_global(x, y), "(%d, %d) should not be a river with procedural fallback disabled" % [x, y])
@@ -493,3 +499,267 @@ func test_river_tiles_still_report_their_ordinary_land_biome():
 	assert_true(generator.is_river_at_global(tile.x, tile.y))
 	assert_ne(generator.biome_at_global(tile.x, tile.y), "river")
 	assert_true(BiomeClassifier.KNOWN_BIOMES.has(generator.biome_at_global(tile.x, tile.y)))
+
+
+# -- hydrology (docs/concept/hydrology.md, phase 1) ---------------------------
+#
+# A synthetic 7x7 bake read over the REAL world grid: a 0.8 plateau under a
+# sea row, a 3x3 crater at 0.3, and the crater's outlet channel (column 3,
+# rows 1-2) at 0.7. Asset cell (3,1) is the outlet: its centreline runs
+# along longitude 0 from ~26N to ~77N, so Greenwich sits on it. Crater cell
+# (2,4) spans 51W-0 x 39S-13S: the Parana plateau (~1,100 m, below the
+# crater's 0.7 = 2,080 m spill) sits inside it.
+
+const HydrologyData = preload("res://src/world/hydrology_data.gd")
+const HydrologyField = preload("res://src/world/hydrology_field.gd")
+const DrainageNetwork = preload("res://src/world/drainage_network.gd")
+
+## Longitude 0, latitude 51.4N: on the synthetic outlet's centreline.
+const GREENWICH_TILE := Vector2i(19980, 4284)
+## Longitude 51.4W, latitude 25.7S: inside the synthetic crater, on real land.
+const PARANA_TILE := Vector2i(14271, 12842)
+
+
+func _synthetic_field() -> HydrologyField:
+	var heights := PackedFloat32Array()
+	heights.resize(49)
+	heights.fill(0.8)
+	for x in 7:
+		heights[x] = 0.2
+	for y in range(3, 6):
+		for x in range(2, 5):
+			heights[y * 7 + x] = 0.3
+	heights[1 * 7 + 3] = 0.7
+	heights[2 * 7 + 3] = 0.7
+	var network = DrainageNetwork.new().build(heights, 7, 7, 0.5)
+	var weights := PackedFloat32Array()
+	weights.resize(49)
+	weights.fill(1.0)
+	var data := HydrologyData.new()
+	data.build_from_network(network, network.accumulate_weighted(weights))
+	var field := HydrologyField.new(
+		data, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	field.river_min_discharge = 5.0
+	return field
+
+
+func test_fine_detail_never_flips_land_to_sea_or_sea_to_land():
+	# The procedural fine detail is +-432 m of texture; near a coast it used
+	# to scatter below-sea-level tiles across every plain within reach of
+	# sea level -- "dozens of small ponds to the sides of rivers", each an
+	# ocean-biome speckle. Land stays land, sea stays sea; only the macro
+	# data decides the coastline.
+	generator.set_hydrology(null)
+	var sea_level := EarthChunkGenerator.EARTH_SEA_LEVEL
+	var flips := 0
+	var checked := 0
+	# A band across the Loire estuary and the Vendee coast, where the
+	# macro elevation hugs sea level.
+	for y in range(4700, 4900, 7):
+		for x in range(19600, 19900, 11):
+			var macro := generator.macro_elevation_at_global(x, y)
+			var blended := generator.elevation_at_global(x, y)
+			checked += 1
+			if (macro < sea_level) != (blended < sea_level):
+				flips += 1
+	assert_gt(checked, 500)
+	assert_eq(flips, 0)
+
+
+func test_the_coastline_is_the_bakes_sea_contour():
+	# With a bake, sea is where the smoothed baked sea mask passes half,
+	# not where the bilinear elevation dips: the synthetic bake's sea row
+	# covers the far north, so a tile over Greenland's ice (real macro
+	# elevation far above sea level) is sea, and a tile in the synthetic
+	# plateau over the real South China Sea is land.
+	generator.set_hydrology(_synthetic_field())
+	var greenland := Vector2i(19980, 1110)
+	assert_eq(generator.biome_at_global(greenland.x, greenland.y), "ocean")
+	assert_lt(generator.elevation_at_global(greenland.x, greenland.y), EarthChunkGenerator.EARTH_SEA_LEVEL)
+	var south_china_sea := Vector2i(32745, 8325)
+	assert_ne(generator.biome_at_global(south_china_sea.x, south_china_sea.y), "ocean")
+	assert_gt(generator.elevation_at_global(south_china_sea.x, south_china_sea.y), EarthChunkGenerator.EARTH_SEA_LEVEL)
+
+
+func test_the_probe_memo_is_transparent_and_follows_the_hydrology():
+	generator.set_hydrology(_synthetic_field())
+	var first := generator.hydrology_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	var second := generator.hydrology_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	assert_eq(first, second)
+	assert_eq(generator.nearest_river_at(GREENWICH_TILE.x, GREENWICH_TILE.y), generator.nearest_river_at(GREENWICH_TILE.x, GREENWICH_TILE.y))
+	generator.set_hydrology(null)
+	assert_eq(generator.hydrology_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)["kind"], "", "a memo never outlives the bake it came from")
+
+
+func test_a_generator_without_a_bake_reports_no_hydrology():
+	generator.set_hydrology(null)
+	assert_false(generator.has_hydrology())
+	assert_eq(generator.hydrology_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)["kind"], "")
+	assert_false(generator.is_lake_at_global(PARANA_TILE.x, PARANA_TILE.y))
+	assert_eq(generator.lake_depth_meters_at_global(PARANA_TILE.x, PARANA_TILE.y), 0.0)
+
+
+func test_an_injected_bake_makes_a_basin_tile_a_lake_with_real_depth():
+	generator.set_hydrology(_synthetic_field())
+	assert_true(generator.is_lake_at_global(PARANA_TILE.x, PARANA_TILE.y))
+	assert_gt(generator.lake_depth_meters_at_global(PARANA_TILE.x, PARANA_TILE.y), 0.0)
+	# An overlay on untouched land, never a biome (rivers.md's model).
+	var biome := generator.biome_at_global(PARANA_TILE.x, PARANA_TILE.y)
+	assert_true(BiomeClassifier.KNOWN_BIOMES.has(biome))
+	assert_ne(biome, "ocean")
+
+
+func test_generated_chunk_is_lake_matches_is_lake_at_global():
+	generator.set_hydrology(_synthetic_field())
+	var chunk_size := 8
+	var chunk_coord := Vector2i(
+		floori(float(PARANA_TILE.x) / chunk_size), floori(float(PARANA_TILE.y) / chunk_size)
+	)
+	var chunk := generator.generate_chunk(chunk_coord, chunk_size)
+	var local := PARANA_TILE - chunk_coord * chunk_size
+	var index := local.y * chunk_size + local.x
+	assert_eq(chunk.is_lake[index], 1)
+	assert_true(chunk.blocks_ground_cover(index))
+	for y in chunk_size:
+		for x in chunk_size:
+			var expected := 1 if generator.is_lake_at_global(chunk_coord.x * chunk_size + x, chunk_coord.y * chunk_size + y) else 0
+			assert_eq(chunk.is_lake[y * chunk_size + x], expected)
+
+
+func test_hydrology_rivers_are_on_by_default():
+	# Switched on the day the spawn moved onto an emergent river; the
+	# instance flag still lets a test (or a rollback) turn them off.
+	assert_true(EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED)
+	assert_true(generator.hydrology_rivers_enabled)
+
+
+func test_with_hydrology_rivers_disabled_a_channel_tile_is_not_a_river():
+	generator.set_hydrology(_synthetic_field())
+	generator.hydrology_rivers_enabled = false
+	assert_false(generator.is_river_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y))
+	assert_eq(generator.river_depth_meters_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y), 0.0)
+	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
+	assert_gt(generator.nearest_river_at(GREENWICH_TILE.x, GREENWICH_TILE.y).distance_tiles, apron)
+
+
+## Reported: the game dropped to single-digit fps with fish in the water --
+## FishMarker's own water-clearance probing calls is_river_at_global many
+## times per fish per frame, completely unthrottled, and this used to pay
+## RiverCatalog's raw ~44-segment-test lookup fresh every single time. Pinned
+## directly against this function's own dedicated cache (not
+## nearest_river_at's shared one -- see is_river_at_global's own doc comment
+## on why the two must not be merged).
+func test_is_river_at_global_is_memoized():
+	generator._is_river_cache.clear()
+	generator.is_river_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	assert_true(
+		generator._is_river_cache.has(Vector2i(GREENWICH_TILE.x, GREENWICH_TILE.y)),
+		"is_river_at_global must cache its answer, not recompute it from scratch every call"
+	)
+	var warm_size: int = generator._is_river_cache.size()
+	generator.is_river_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	assert_eq(
+		generator._is_river_cache.size(), warm_size,
+		"a repeated query for the same tile should hit the warm cache, not grow it further"
+	)
+
+
+## The cache must never outlive the hydrology bake it was computed against --
+## the same rule set_hydrology already enforces for _nearest_river_cache.
+func test_is_river_at_global_cache_is_cleared_when_hydrology_changes():
+	generator.set_hydrology(_synthetic_field())
+	generator.hydrology_rivers_enabled = true
+	generator.is_river_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	generator.set_hydrology(null)
+	assert_eq(
+		generator._is_river_cache.size(), 0,
+		"a memo must never outlive the bake it came from"
+	)
+
+
+func test_with_hydrology_rivers_enabled_a_channel_tile_is_a_river_with_solved_hydraulics():
+	generator.set_hydrology(_synthetic_field())
+	generator.hydrology_rivers_enabled = true
+	assert_true(generator.is_river_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y))
+
+	var hydraulics := generator.river_hydraulics_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	assert_eq(hydraulics.river_name, "", "an unnamed baked channel, not a curated river")
+	assert_gt(hydraulics.discharge_m3_s, 0.0)
+	assert_gt(hydraulics.width_m, 0.0)
+	assert_gt(hydraulics.depth_m, 0.0)
+	# The same continuity the curated solve guarantees: Q = w * d * v.
+	assert_almost_eq(
+		hydraulics.width_m * hydraulics.depth_m * hydraulics.velocity_m_s,
+		hydraulics.discharge_m3_s, hydraulics.discharge_m3_s * 1e-6
+	)
+	assert_almost_eq(
+		generator.river_depth_meters_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y), hydraulics.depth_m, 1e-9
+	)
+
+	# The flow overlay's geometry, in the catalog's own shape, plus the
+	# channel's own half-width.
+	var nearest := generator.nearest_river_at(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	assert_eq(nearest.name, "")
+	assert_lte(nearest.distance_tiles, nearest.half_width_tiles)
+	assert_gt(nearest.half_width_tiles, 0.0)
+	assert_almost_eq(nearest.course_bearing_deg, 0.0, 1e-6, "the outlet flows due north to the sea row")
+
+	# A bank tile just past the waterline is in the apron (a boulder there
+	# bends the water); a tile well beyond it is not.
+	var bank_x := GREENWICH_TILE.x + int(ceil(nearest.half_width_tiles))
+	assert_false(generator.is_river_at_global(bank_x, GREENWICH_TILE.y))
+	assert_true(generator.is_within_river_apron(bank_x, GREENWICH_TILE.y))
+	assert_false(generator.is_within_river_apron(GREENWICH_TILE.x + 12, GREENWICH_TILE.y))
+
+	# Still an overlay: the tile's biome is ordinary land.
+	assert_true(BiomeClassifier.KNOWN_BIOMES.has(generator.biome_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)))
+
+
+func test_a_curated_river_is_authoritative_over_the_hydrology_fallback():
+	generator.set_hydrology(_synthetic_field())
+	generator.hydrology_rivers_enabled = true
+	var geo := GeoCoordinates.new()
+	var dreisam := geo.tile_for_coordinate(
+		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_true(generator.is_river_at_global(dreisam.x, dreisam.y))
+	var nearest := generator.nearest_river_at(dreisam.x, dreisam.y)
+	assert_eq(nearest.name, "Dreisam")
+	assert_almost_eq(nearest.half_width_tiles, RiverCatalog.RIVER_HALF_WIDTH_TILES, 1e-9, "curated rivers keep the catalog's width")
+	assert_eq(generator.river_hydraulics_at_global(dreisam.x, dreisam.y).river_name, "Dreisam")
+
+
+func test_the_valley_carves_a_channel_tile_below_its_macro_elevation():
+	# The carve does not wait on the river flag: a valley is terrain.
+	generator.set_hydrology(_synthetic_field())
+	var probe := generator.hydrology_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	assert_gt(probe["carve"], 0.0)
+	assert_eq(probe["fine_detail_scale"], 0.0)
+	var macro := generator.macro_elevation_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y)
+	assert_almost_eq(
+		generator.elevation_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y), macro - probe["carve"], 1e-6
+	)
+
+
+func test_generate_chunk_with_a_bake_still_matches_the_per_tile_queries():
+	generator.set_hydrology(_synthetic_field())
+	generator.hydrology_rivers_enabled = true
+	var chunk_size := 8
+	var chunk_coord := Vector2i(
+		floori(float(GREENWICH_TILE.x) / chunk_size), floori(float(GREENWICH_TILE.y) / chunk_size)
+	)
+	var chunk := generator.generate_chunk(chunk_coord, chunk_size)
+	var found_a_river_cell := false
+	for y in chunk_size:
+		for x in chunk_size:
+			var global_x := chunk_coord.x * chunk_size + x
+			var global_y := chunk_coord.y * chunk_size + y
+			var index := y * chunk_size + x
+			assert_eq(chunk.elevation[index], generator.elevation_at_global(global_x, global_y))
+			assert_eq(chunk.biome[index], generator.biome_at_global(global_x, global_y))
+			assert_eq(chunk.is_river[index], 1 if generator.is_river_at_global(global_x, global_y) else 0)
+			assert_eq(chunk.is_lake[index], 1 if generator.is_lake_at_global(global_x, global_y) else 0)
+			if chunk.is_river[index] == 1:
+				found_a_river_cell = true
+	assert_true(found_a_river_cell, "the chunk around Greenwich holds the synthetic outlet")

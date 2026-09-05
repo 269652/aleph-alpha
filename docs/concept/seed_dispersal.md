@@ -73,6 +73,30 @@ That makes clearing a patch the way a player deliberately starts a wood, and it
 makes the trampled dirt of a path (see `PathScarring`, which already renders
 worn tiles as earth) a nursery rather than merely a scar.
 
+**Landing is not establishing.** The seed shadow and the standing plants are
+two different distributions, and conflating them is what makes a modelled
+meadow read as a mat rather than as a meadow. Seed rain is densest directly
+under the parent; *survival* there is close to nil — the seedling is
+competing with an established root system for the same water and light, it
+sits in the highest concentration of that plant's own pathogens, and it is
+precisely where that plant's seed predators are already working. Only seed
+that escapes the parent's neighbourhood becomes a plant (the **Janzen–Connell**
+effect). So the kernel above stays heavy tailed and honest, and a separate,
+explicit **establishment** gate decides which of that seed actually roots:
+nothing takes within a minimum spacing of an already-standing plant of its
+kind (`FlowerEstablishment`). That gate is what sets how far apart plants
+stand; the kernel sets where the clumps are and which way they are drawn out.
+
+**The world you arrive to has already dispersed.** Baked worldgen is not
+exempt from any of this. A newly generated meadow is produced by running this
+same kernel from sparse founder plants under the region's **prevailing wind**
+(`WeatherModel.prevailing_wind_direction`, the long-run wind rather than one
+day's), through the same establishment gate, in world space so it crosses
+chunk boundaries — see [flora.md](flora.md#the-meadow-you-arrive-to-is-what-the-wind-already-did).
+A world whose whole dispersal story is "light seed goes downwind" must not
+*start* isotropic and only become windswept for a player who stands and
+watches.
+
 **Rooting.** A seed on the ground is still a seed: it can be eaten, blown
 further, or picked up. **Rain is what roots it.** Once rooted it is a sapling,
 and a sapling is no longer food -- a bird that would have eaten the seed leaves
@@ -81,9 +105,31 @@ the seedling alone, because it is not a seed any more.
 ## Status
 
 - ✅ Wind direction and strength per day and region
+- ✅ A per-region **prevailing** wind the daily wind walks around
+  (`WeatherModel.prevailing_wind_direction`/`prevailing_wind_strength`), plus
+  `dispersal_strength_for` — the same sky read as 0 calm to 1 gale, since
+  `wind_strength_for` is a shader pace multiplier whose baseline is 1.0.
 - ✅ Heavy-tailed, downwind, weight-dependent landing offsets
+- ✅ Still-air scatter that is weight-dependent too — a plume drifts on the
+  faintest movement of the air, an acorn falls through it. It was weight-blind,
+  which meant on a still day (i.e. under a prevailing wind, which is a breeze)
+  a whole lineage piled onto its parent.
+- ✅ Establishment separated from landing (`FlowerEstablishment`): the seed
+  shadow stays heavy tailed and honest, and a minimum spacing decides what
+  actually roots.
+- ✅ Baked worldgen running this same kernel from founders under the prevailing
+  wind (`MeadowSpread`), seam-exact across chunks.
 - ✅ Seeds as real world entities: drawn, eaten by birds, and picked up
 - ✅ Germination needing earth, with bare ground a far better seedbed than turf
 - ⬜ Rain rooting a lying seed into a sapling
 - ✅ Bird hunger, and a dropping where the seed comes out
+- ⬜ **Seed that blows out of a loaded chunk is discarded rather than handed to
+  the neighbouring one** (`FlowerPatch.shed_seed`), so LIVE dispersal is
+  truncated at every chunk line — and the truncated part is the long tail,
+  which is exactly the part that colonises new ground. Worldgen is unaffected
+  (`MeadowSpread` works in world space by construction); this is only the live
+  shed path.
+- ⬜ The baked meadow uses one prevailing wind for the whole world rather than a
+  wind field sampled per founder — see `flora.md`'s "The meadow you arrive to"
+  section for why one wind, and what the better version looks like.
 - ⬜ Wind derived from real climate models rather than from the weather state

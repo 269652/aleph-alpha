@@ -123,6 +123,19 @@ curated river is simply riverless, the honest tradeoff for "the rivers you
 see are real, named, and shaped like a real river," which is what was
 actually asked for.
 
+**The connectivity-aware redesign exists as of 2026-09-03, gated off:**
+[hydrology.md](hydrology.md) runs a real priority-flood + flow-accumulation
+pass over the elevation asset's own grid *offline, once* (the "no point at
+which a global drainage pass could run" objection above is answered by not
+running it live), ships the result as data, and hands baked channels to
+this doc's flow overlay and Manning solve through
+`EarthChunkGenerator.nearest_river_at` in the catalog's own shape. It sat
+behind `EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED` until the real bake
+had been run; the same day the bake ranked the Loire and the Gironde as
+western France's strongest channels, the flag went on and the spawn moved
+onto the Loire at Nantes (an emergent river, no curated course near it).
+Curated rivers remain authoritative wherever they reach.
+
 ## Rendering: overlay, not a new biome
 
 `TerrainRenderer` already has an extensive corner/edge blend system keyed
@@ -1251,6 +1264,510 @@ accident of the asking tile's bearing -- and adjacency doubles as the
 watertightness rule: a one-tile hole breaks the chain. Pinned from every
 tile of the wall by test.
 
+## Movement ripples in the river (2026-09-04)
+
+Reported: *"Fishes don't produce interferencing ripples anymore in the new
+unified river water ... players and animals neither ... the old ripples
+looked nice so we want them back adapted to new water shader."*
+
+Not a regression in the ripple machinery — that is entirely intact. Fish
+(`FishMarker._step_water_ripple`), the player (`Player._step_water_ripples`)
+and creatures (`CreatureMarker._step_water_ripple`) all still call
+`EarthChunkManager.record_water_disturbance` on the same schedules, and
+`WaterShader` still ages and draws them. The cause is a rendering boundary:
+`_paint_water_overlay` is **ocean only** ("rivers used to be painted here
+too... the flow overlay is now the river's entire water surface"), and
+`RiverFlowShader` is **opaque** and had no disturbance term. So on a river
+there was no surface capable of showing a ripple at all — the wakes were
+being recorded and aged into a layer that river tiles no longer have.
+
+The fix is not to re-paint the ocean overlay under the river (that is
+exactly the square-tiles-under-a-smooth-bank-curve bug it was removed to
+fix). The river surface draws its own ripples, from the same buffer.
+
+**One buffer, two surfaces.** `WaterShader` keeps ownership of the
+disturbance ring buffer (`add_disturbance`/`advance_disturbances`,
+`MAX_DISTURBANCES` 16, `DISTURBANCE_LIFETIME`); it now exposes the padded
+arrays it pushes, and `EarthChunkManager` fans the same three uniforms out
+to the river-flow material as well. There is no second buffer to keep in
+sync, no second lifetime, and the distance cull
+(`DISTURBANCE_RADIUS_TILES`) applies once, to both.
+
+**The same wave packet.** `RiverFlowShader.ripple_packet` is the identical
+signed expanding-packet math as `WaterShader`'s — several concentric crests
+and troughs behind an advancing front, fading with age and with the
+circumference it spreads its energy around. Signed is the whole point:
+overlapping ripples must genuinely interfere, constructively AND
+destructively, rather than only ever adding. Keeping the shape identical is
+what makes a fish's wake read the same in a river as in the sea; the tuning
+constants are shared by import rather than re-tuned
+(`RIPPLE_SPEED`/`LIFETIME`/`WAVELENGTH`/`PACKET_WIDTH`/`SPREAD_DECAY`).
+
+What is genuinely adapted, and why each part:
+
+- **The ring is carried downstream.** In still water a ripple is concentric
+  about a fixed point; in a current it is concentric about a point that
+  moves with the water. The centre is carried by
+  `flow_dir * surface_px_per_s(speed_mps) * age` — the water's whole
+  VISIBLE speed, so a wake and the water it sits in travel together instead
+  of the ring standing still while the river slides out from under it. This
+  is the one thing ocean water cannot express and the river must. (First
+  shipped carried by the linear drift alone, `DRIFT_PX_PER_MPS * speed_mps`,
+  which at a typical reach is a third of the water's visible speed — the
+  ring visibly sat there. See "One visible water speed" below.)
+- **Drawn, not glowed.** This surface is illustrated water: a flat cel body
+  plus contour strokes. A bright ring composited on top would read as an
+  overlay sticker. So the packet enters two fields that already exist. It
+  is added to the **stroke field** whose level sets are the current lines,
+  so the drawn lines genuinely bow into arcs around the disturbance —
+  closing into rings where the packet is steepest, which is exactly what a
+  ripple is — and interfere with the flow pattern instead of being drawn
+  over it. And its crests enter the **stroke strength**, so the ring inks
+  in its own right, inheriting the adaptive ink, the moonlight lift and the
+  alpha clamp for free (`max`, not a sum: a strong crest takes over the
+  mark, a weak one leaves the flow line alone, and neither can push a
+  stroke past full).
+- **Not into the cel body**, though an earlier draft of this section
+  specified exactly that — a crest stepping the fragment toward a lighter
+  band, a trough toward a darker one. It was dropped before implementation
+  on the strength of this doc's own history: the body cels are static
+  reconstructed depth *because* shading them with a moving field produced
+  the reported "gas animation", and `test_the_body_cels_are_static_depth_
+  only` pins that literally. The art direction here is that the body holds
+  still and the drawn strokes carry ALL the motion — and a ripple is
+  motion, so it belongs in the strokes with the rest of it.
+- **Both gains bounded from both sides, against the packet's own scanned
+  peak** rather than against a written-down amplitude, so re-tuning the
+  packet re-tunes its bounds. `RIPPLE_LINE_GAIN`: a crest must bend the
+  stroke field by more than a third of one contour spacing (below that it
+  draws nothing) and by less than half the wobble's own swing (above that
+  it stops being a local disturbance and restructures the channel-wide
+  line family into the closed "perlin noise cells" the across ramp exists
+  to prevent — rings closing around the fish itself are wanted, which is
+  why the ceiling is set against the wobble and not against zero).
+  `RIPPLE_CREST_FULL` must stay reachable by a real crest or it is ink
+  that never prints; `RIPPLE_CREST_MIN` is the threshold `WaterShader`
+  already paid for once — set against a fresh ripple it made the ring
+  visible only in its first moments ("a mini ripple appears but nothing
+  looks natural"), so it is pinned low enough that a crest still inks
+  three quarters of the way through the ring's life.
+
+The ripple deliberately does NOT displace `frag_across`, the way boulders
+and waders do. That field is the channel's geometry: pushing it moves the
+bank line and the dry eyot, and a passing fish must not narrow the river.
+
+**Verified where it is actually visible.** Every CPU mirror can be green
+while the ring still never reaches a pixel — that is precisely the failure
+that produced the report. So `test_river_flow_render_smoke.gd` renders two
+blocks of the same river, quiet and disturbed, and requires the picture to
+change. They must share a FRAME: this surface advects continuously, so two
+renders taken a few frames apart differ in every pixel regardless, and a
+first attempt at this test passed with the ripple term deleted outright
+(measured). Same frame, one shared `TIME`, and the disturbance buffer is
+the only thing left that can differ — with the ripple disabled the
+difference measures 0.00%. Both readback tests in that file now skip
+explicitly under `--headless` (no GPU target, `get_image()` returns null,
+and the engine error that raises fails the test on its own); the far-world
+one had been reporting a shader failure on every headless run for a reason
+that had nothing to do with the shader.
+
+## Fish really do live under the river surface (2026-09-04)
+
+The ripple entry above first shipped with a caveat saying fish were not
+among a river's ripple causes yet — that `FishRenderer` spawns on ocean
+cells only, so a river would show the player's and the animals' wakes and
+nothing else. Reported back, flatly: *"The rivers are full of fish."*
+
+That caveat was wrong, and wrong in an instructive way: it came from
+reading the spawn gate and stopping there. `WaterAreaSurvey.
+is_interior_water` requires the ocean BIOME for a cell and all eight of its
+neighbours, and a river never changes `biome_at_global`'s elevation-derived
+result — from which it seemed to follow that no curated course could ever
+qualify. Measuring says otherwise. Sweeping the whole apron band around
+every curated course (10,743 cells): **64 qualify for fish, and 53 of those
+are also painted by the river-flow overlay.**
+
+The two decisions ask different questions, and that is the whole of it:
+
+- **Fish spawn by biome.** The world's elevation source is coarse, so real
+  reaches sit below sea level and classify as ocean — broad water, lakes a
+  course runs through, the last stretch to a mouth. Those are ordinary
+  fish water by every existing rule.
+- **The river surface paints by DISTANCE.** `_paint_river_flow_overlay`
+  gates on `nearest.distance_tiles > apron` and consults no biome at all —
+  correctly, since the shader clips the water at the real bank curve and
+  needs the cells around it painted to do so.
+
+So along those reaches a cell is ocean biome *and* under the opaque flow
+overlay at once: fish swimming in water whose surface had no term to draw
+their wake. That is not an edge case bolted onto the ripple bug — it is a
+second, independent path into the exact same symptom, and the same fix
+covers it, because the disturbance buffer now reaches the river material
+regardless of which cells the swimmers are on.
+
+Pinned by `test_a_river_reach_can_be_both_fish_water_and_under_the_flow_
+overlay` at one measured Rhine coordinate rather than by re-sweeping ten
+thousand cells per run — one real example is enough to stop the case being
+reasoned away as impossible a second time.
+
+(Freshwater fishing as a *designed* mechanic — river-specific species,
+spawning rules, a reason to fish a stream rather than the sea — is still
+⬜ Not started. What exists is incidental: ocean-biome water that a curated
+course happens to run through.)
+
+## The boulder's shore band, not a halo (2026-09-04) — SUPERSEDED
+
+*Superseded by "Boulders are hydrology" below: the band is no longer a
+painted ring at all. The rock is a rise in the bed, and the light water
+around it is the same shallow water the banks show.*
+
+Reported directly against the ring introduced above: *"The rocks should
+not have a halo around them... instead they should have a layered band
+like the shore which also wobbles and moves"*. The ring's REACH was
+already right -- a soft-edged annulus starting exactly where the rock's
+dry eyot ends (`boulder_band_envelope`, unchanged) -- what was wrong was
+what filled it: one flat, static `line_color` at a fixed alpha, nothing
+like the channel's own illustrated shore a few tiles away.
+
+The fix reuses the channel body's own machinery instead of inventing a
+second one. `boulder_band_ring_t`, the fragment's own position inside the
+ring (0 at the rock's edge, 1 at the outer edge), is carried out of the
+boulder loop and, in the composite, nudged by `n` -- the SAME advected
+field whose contours already draw the channel's wave strokes -- before
+being quantised by the SAME world-anchored dither hash the channel body's
+cel bands use. The result steps through `BOULDER_BAND_LEVELS` (3) flat
+layers between `line_color` (the shore highlight's own tint, at the rock's
+edge) and `band0_color` (the channel's own shallowest water tone, at the
+ring's outer edge) -- the same palette the real shore draws in, not a
+colour invented for the ring. Because `n` both varies across world
+position and advects with TIME, the layer boundaries are uneven rather
+than perfect circles and visibly animate frame to frame, exactly like the
+channel's own cel/stroke boundaries do -- "wobbles and moves" is the same
+mechanism, not a new one, reused rather than reinvented.
+
+Old halo, new band: same ring extent and alpha (`BOULDER_BAND_WIDTH_PX`,
+`BOULDER_BAND_ALPHA` -- renamed, unchanged values), same "independent of
+the channel's own wet/dry verdict" property that lets a boulder on dry
+bank ground still show a band. Only the fill inside the ring changed.
+
+## One visible water speed: ripples, eddies and lines together (2026-09-04) — PARTLY SUPERSEDED
+
+*The shared-speed mechanism below stands; the NUMBERS and the claim that
+the drag's translation is most of the visible speed do not. See "A calm
+picture: the drift carries everything, the drag only deforms" further
+down for what the real GPU showed and what replaced them.*
+
+Reported in three steps, live, on the ripple work above: *"Can you make
+the river ripples move downstream at water speed?"*, then *"eddy swirls
+also don't move downstream.. a wobble stays in place instead of flowing
+with the river"*, then — the ripples having been carried by the drift in
+the meantime — *"Ripples now do move downstream, but the lines should move
+at same speed."*
+
+One cause. The drawn surface is moved by TWO terms, and only one of them
+had been treated as "the water's speed":
+
+| term | what it is | world px/s at a 0.5 m/s reach |
+| --- | --- | --- |
+| two-phase drag | `ADVECT_STRENGTH` cells every `1/ADVECT_RATE` s, regardless of the reach | ~19.8 |
+| linear drift | `DRIFT_PX_PER_MPS` per m/s of real current | 10 |
+| **visible surface** | the sum: what the pulses and kinks actually stream at | **~29.8** |
+| ring centre (before) | drift alone | 10 |
+| eddy field (before) | `BEND_DRIFT_FRACTION` (0.6) of the drift alone | 6 |
+
+The drag is not a wobble-in-place: each phase's layer is the field
+translated by a distance growing linearly with the phase's age, so
+features on the surface genuinely travel at `ADVECT_STRENGTH x
+ADVECT_RATE` cells per second, and the crossfade only decides which of
+two offset copies is showing. That translation is most of the visible
+speed at every ordinary reach, and neither the ring nor the eddies had it —
+so a wake moved at a third of the water and the whirls at a fifth, and
+both read as standing still while the pulses streamed past them.
+
+**The fix is one function.** `surface_px_per_s(speed_mps, moving)` in the
+GLSL, mirrored by `RiverFlowShader.surface_px_per_s` (and
+`surface_cells` in noise units), is the water's visible downstream speed:
+drag translation plus drift, gated by the same hard `STILL_FLOW_M_S` step
+the strokes use, so a lake — whose still path breathes sideways and never
+drifts — carries nothing either. Every consumer that has to "move with the
+water" rides it:
+
+- **The ring centre** is carried by `surface_velocity * age`
+  (`surface_velocity = flow_dir * surface_px_per_s`, computed once per
+  fragment next to the field's own drift). Over its `RIPPLE_LIFETIME` a
+  wake in a 0.5 m/s reach now travels ~65 world px — four tiles — instead
+  of 22.
+- **The eddy field** translates at `surface_px_per_s x
+  BEND_DRIFT_FRACTION`, and the fraction goes **0.6 → 1.0**: the lines'
+  shape IS the eddy-bent guide, so the eddies' migration is the lines'
+  motion, and the report was that it must match the ripples. The
+  Jackson-1976 "boils lag the surface" grounding that set the fraction
+  below one is superseded here by art direction — the lines are the water
+  — and the fraction stays as the one knob to bring the lag back. This is
+  a deliberate divergence from the earlier "eddies migrate downstream,
+  slowly" spec in "The full bilinear frame, forward drift, round
+  obstacles".
+
+Why the picture still does not slide as one rigid sheet at fraction 1.0,
+which is what that ceiling existed to prevent: the eddy coordinate is a
+STEADY translation, never the phase drag itself. Each phase still
+stretches away from that translation and resets, so the wobble keeps
+deforming relative to the whirls even though their mean speeds now agree;
+the structural pin (`eddy_p` is sampled at `p - flow_dir * bend_drift`,
+never at the advected `q`) is unchanged, and the fold-margin test still
+holds at a real drifted offset because a translation cannot change the
+Jacobian.
+
+Not changed: `DRIFT_PX_PER_MPS`, `ADVECT_STRENGTH`, `ADVECT_RATE` and
+their pins — the surface itself streams exactly as before. Only the
+things carried ON it caught up with it.
+
+Pinned in `test_river_flow_shader.gd`: the visible speed is the drag
+plus the drift and zero below the still gate; the shader's three lines of
+wiring are pinned by source; the ring's carry and the eddies' migration
+both equal the shared speed and each other; and both clear a legibility
+floor at a 0.5 m/s reach (a wake carried more than three and a half tiles
+within its lifetime, whirls crossing a tile in two seconds — the same 8
+world px/s floor the pulse has to clear). The GPU readback smoke test
+still confirms a disturbed river draws differently from a quiet one.
+
+## A softer, slower, broader wake (2026-09-04)
+
+Reported on the carried ripples: *"Can you make the ripples a little less
+pronounced so they appear smoother a bit slower and more natural."* Three
+adjectives, two owners.
+
+**Slower and smoother are the packet's business, and the packet is
+shared.** The wake's shape is one set of constants in `WaterShader`,
+imported by `RiverFlowShader` so a fish's wake reads the same in a river
+as in the sea — so the shape tuning lives there and both surfaces follow.
+`RIPPLE_SPEED` 14 → 11.5 world px/s: the front ambles rather than races.
+`RIPPLE_WAVELENGTH` 6 → 8: crests half a tile apart read as broad swells
+rather than fine rings. `RIPPLE_PACKET_WIDTH` 7 → 9.5, widened with the
+wavelength so the packet keeps the same ~1.2 rings behind the front —
+still more than one (several rings, not a lone circle), still well under
+two (never a bullseye). The wake's reach shrinks from ~1.9 to ~1.6 tiles,
+still past its own tile and still nowhere near swamping a pond, both of
+which stay pinned. `RAIN_RIPPLE_SPEED` 12 → 10 alongside, so the splash
+stays pinned under half a wake's radius — and a slower splash is the same
+ask.
+
+**Less pronounced is this surface's own.** The ring inks in its own right
+through `smoothstep(RIPPLE_CREST_MIN, RIPPLE_CREST_FULL, crest)`, and with
+`FULL` at 0.40 against the packet's scanned peak of ~0.82 a ring printed
+at full stroke strength for most of its life — as dark as a current line,
+a stamp rather than a disturbance. `FULL` 0.40 → 0.60 sits near the peak,
+so only a fresh crest prints at full strength and the ring GRADUATES down
+through its life (about 0.4 at half life, fading out past three quarters)
+instead of switching off; `MIN` 0.10 → 0.12 keeps the faint tail clean
+while staying under the crest still reachable three quarters through the
+life — the "mini ripple" lesson is still pinned. `RiverFlowShader.
+ripple_ink` mirrors the shader's smoothstep so the graduation is a tested
+curve rather than a pair of eyeballed literals. The crest's bend of the
+current lines (`RIPPLE_LINE_GAIN`) is untouched: its floor and ceiling
+are pinned against the wobble and the contour spacing, and the ring's
+prominence was the ink, not the bend.
+
+Pinned: speed under 12, wavelength at least half a tile, packet-to-
+wavelength ratio in (1.1, 1.4) (`test_water_shader.gd`); `FULL` within
+70% of the scanned peak, a fresh crest at 1.0, half-life ink in (0.25,
+0.6), still drawing and fainter at three quarters, the ink curve is the
+shader's own smoothstep (`test_river_flow_shader.gd`). The fish ripple
+timing tests, which derive from `RIPPLE_LIFETIME`, are unaffected
+(lifetime unchanged); the GPU readback smoke test stays green.
+
+## A calm picture: the drift carries everything, the drag only deforms (2026-09-04)
+
+Reported on the two sections above, live: *"now they look worse and just
+seem to drift and fade faster ... i want a more relaxed and calm picture
+now everything is faster and the wobbly lines still don't move at the
+same speed (a wobble stays at place)."*
+
+This time it was LOOKED AT rather than argued from the algebra.
+`tools/probe_river_motion.gd` renders a 0.5 m/s reach with the real
+shared material on the real GPU, saves frames at successive times, and
+writes amplified difference images between them (anything static comes
+out black). Two things were plain in the frames:
+
+- The ring was carried 30 world px in one second and was already faint
+  at 1.5 s — "drift and fade faster", exactly.
+- The lines did not translate at all. The two-phase drag at
+  `ADVECT_STRENGTH` 7.2 cells crossfades two copies of the field offset
+  by HALF the drag — 45 world px — and at that distance the copies are
+  uncorrelated, so the crossfade is a dissolve between two unrelated
+  patterns: a kink fades out where it is and a different one fades in
+  somewhere else. No kink ever travels. That is the wobble that "stays at
+  place", and it was the same whether the copies were being stretched 90
+  px per cycle or not. The previous section's arithmetic — that the drag
+  "translates features at 19.8 world px/s" — was true of each copy and
+  false of the picture.
+
+**The contract is reversed.** The drag is DEFORMATION only; the linear
+drift is the carrier.
+
+| constant | before | after | why |
+| --- | --- | --- | --- |
+| `ADVECT_STRENGTH` | 7.2 cells | 1.2 | phases 0.6 cells apart stay correlated: a kink survives the fade and rides the drift |
+| `DRIFT_PX_PER_MPS` | 20 | 16 | with everything coherent, 8 px/s at 0.5 m/s reads as a calm, unmistakable current |
+| `surface_px_per_s` at 0.5 m/s | ~30 world px/s | ~11 | the one speed the ring, eddies, kinks and pulses all ride |
+| `STILL_RIPPLE` | 0.25 | 0.45 | lakes keep breathing (22 → 7 px sideways): calmer, not frozen |
+| `RIPPLE_LIFETIME` | 2.2 s | 3.0 | the ring lingers and its fade is slower; carried ~2 tiles over its life instead of 4 |
+
+Nothing structural changed: two phases, triangular crossfade, the
+world-anchored field, the eddy translation at `BEND_DRIFT_FRACTION` 1.0,
+the shared `surface_px_per_s`. The probe frames after the change show
+the line kinks translating downstream frame to frame at the ring's own
+rate, and the ring still visible half way through its life.
+
+**Pins replaced, not deleted.** Two tests encoded the drag as the
+carrier — "the drag covers at least half a feature length per phase" and
+"the surface travels 1.0 to 2.6 cells per second" — and could only be
+satisfied by the dissolve. They became: phases under one cell apart
+(`test_the_drag_is_a_small_deformation_so_kinks_survive_the_crossfade`);
+a 0.5 m/s reach between 8 and 16 world px/s with the drag's translation
+under a third of it (`test_the_water_travels_at_a_calm_speed`); the drift
+at least two thirds of the visible speed. The two motion sweeps that
+watched "a quarter drag cycle in speed-zero water" — which measured the
+dissolve and nothing else — now watch a quarter feature length of travel
+at a real reach speed. The ring's carry over its life is bounded on both
+sides now (1.5 to 3 tiles) and its lifetime floored at 3 s on both
+surfaces.
+
+## Boulders are hydrology: shoal, force balance, foam and wake (2026-09-04)
+
+Reported, as a design correction rather than a bug: *"The boulders halo
+should not be computed by the boulder, but rather be part of the river's
+hydrology... the lighter color bands should come from elevation (rock is
+above waterline) and the rock should as entity have a mass and produce a
+counterforce against the hydrological water pressure which is a smaller
+force than the weight of the boulder so it should bend the guidelines and
+produce foam in front and whirls behind it."*
+
+That is four mechanisms, and they share one principle: **nothing about a
+boulder is painted; everything about it is what the water does around a
+real rock of a real size.**
+
+### Design pillars
+
+- **The rock is an entity with a size and a mass.** Every flow boulder
+  carries its own diameter (`StoneSize.diameter_for` its seed; the
+  dropped piece and ore rocks use the smashable stone's default), hence
+  its own radius on the water in world px (`boulder_radius_px_for`:
+  half its drawn height, `StoneSize.world_height_px`, floored so the
+  smallest boulder still parts the water) and its own real mass
+  (`StoneSize.mass_kg_for`). The push reach, the dry eyot, the shoal,
+  the foam and the wake all scale with that radius. The one-size-fits-
+  all `BOULDER_RADIUS_PX` is gone.
+- **Light bands come from elevation, not from a ring.** The rock stands
+  above the waterline, so the bed rises to meet it, so the water
+  shallows toward it — and shallow water is light in this renderer for
+  the same reason the banks are: the cel body is depth. The boulder
+  contributes a **shoal** to the depth field, `depth_frac *= 1 - shoal`,
+  with `shoal` 1 at the rock's edge falling to 0 over
+  `BOULDER_SHOAL_RATIO` radii. The existing cel quantisation and the
+  world-anchored dither then draw the bands, in the channel's own
+  palette, with no boulder-specific colour code at all. The body stays
+  static depth, as pinned.
+- **The force balance is real, and it is why the water bends.**
+  `BoulderHydraulics` (`src/world/boulder_hydraulics.gd`): the water
+  pushes with dynamic-pressure drag, F = ½ρv²·Cd·A on the rock's wet
+  frontal area (Cd 0.47, a sphere); the rock resists with its submerged
+  weight (granite 2.7, buoyed over its wet fraction) times bed friction
+  (0.6, the tangent of loose rock's angle of repose). `load` is their
+  ratio and `holds` is it under 1. Checked against real cases: a metre
+  boulder in a 1 m/s reach carries a load under 0.1; a thirty-centimetre
+  boulder — still a boulder on the Wentworth scale — is swept by a 3 m/s
+  flood, which is exactly what bedload transport does. Because the rock
+  holds, the water has to go around it: the potential-flow displacement
+  of the guide lines (unchanged, `sqrt(lateral² + R²) − |lateral|`) is
+  the consequence of the rock winning the balance.
+- **Foam in front.** Flow stagnates on the upstream face and, fast
+  enough, the pile-up breaks white. The foam term is confined to the
+  upstream sector (the square of the cosine from the stagnation line,
+  zero at and behind the rock's shoulders), to a radial window from the
+  rock's edge out `BOULDER_FOAM_REACH_RATIO` radii, driven by the reach's
+  speed between `FOAM_MIN_M_S` and `FOAM_FULL_M_S` (a slow reach parts
+  cleanly, a fast one foams), and broken up by the channel's own advected
+  field so it streams and flickers rather than sitting as a pale cap.
+  Composited as near-white over the body after the strokes.
+- **Whirls behind.** A rock sheds eddies: the standing-turbulence bend
+  the guide lines already whirl with is amplified in a wake lobe behind
+  each boulder — downstream only, within a couple of radii laterally,
+  rising over the first radius and dying out by `BOULDER_WAKE_LENGTH_RATIO`
+  radii — by `BOULDER_WAKE_GAIN`, gated by the current. The fold-margin
+  pin holds at the gained strength, so the wake whirls without the
+  surface ever folding over itself — and that bound turned out to be
+  tight: a gain of 0.5 pinched the warp to 0.17 against the 0.35 margin,
+  0.15 holds it. So the wake reads as disturbed water mostly through
+  `WAKE_FOAM`, a thinner trail of the face's foam streaming down the
+  lobe, which is what a real wake carries. Measured on the probe: a 0.9
+  m/s reach shows the white cap on the upstream face and a pale streak
+  trailing behind the rock; the whirl amplification is subtle by
+  construction.
+
+### Real-world grounding
+
+Bedload stability (Shields; Costa 1983 for boulder entrainment) is a
+drag-versus-submerged-weight balance, which is what `load` computes
+with textbook constants. Flow around a cylinder or sphere: stagnation
+upstream, the parting streamline clearing the body (already the push),
+and a von Kármán wake of shed vortices downstream at any river-scale
+Reynolds number. Whitewater is deceleration, not speed — hence the foam
+lives on the upstream face where the water is brought to rest, and its
+strength follows dynamic pressure.
+
+### What this replaces, deliberately
+
+The painted band (`boulder_band*` uniforms, the ring envelope, the
+three-stop colour ramp, the wobble, and the rule that a rock on dry bank
+ground lights water around itself) is removed, not restyled. A rock on
+dry ground is dry ground with a rock on it; the water around a rock in
+the river is light because it is shallow. The old band's tests are
+replaced by shoal tests. The eyot stays: it is the part of the rise that
+breaks the surface.
+
+### Status
+
+- Force balance (`BoulderHydraulics`: drag, submerged weight, load,
+  holds) — ✅ tested against real cases. Using the verdict to actually
+  MOVE a swept rock (bedload transport in floods) — ⬜ Not started; the
+  manager exposes the verdict per flow boulder.
+- Per-boulder radius fed to the shader from the rock's real diameter — ✅.
+- Shoal replaces the band — ✅.
+- Foam in front — ✅. Wake whirls behind — ✅ (bend gain bounded by the
+  fold margin, foam streaks carry most of the read). Wake-specific eddy
+  shedding (a real vortex street with its own period) — ⬜ Not started.
+
+## The ring is a thin, light line (2026-09-04)
+
+Reported on the calm picture: *"Can you make the ripples stroke width
+smaller and a bit more transparent?"*
+
+The ring's ink was `smoothstep(RIPPLE_CREST_MIN, RIPPLE_CREST_FULL, crest
+amplitude)`, so its WIDTH was however much of the crest's sine cleared
+the thresholds — about three world px, three times a current line — and
+it swelled with a fresh wake and shrank as it faded. Width and strength
+were one knob.
+
+They are two now. `movement_ripples` also sums an **envelope** — the
+packet without its sine, i.e. how strong the wake is here, now, whether
+this pixel sits on a crest or a trough — and the ring's ink band is cut
+from the pure sine (packet over envelope) above `RIPPLE_RING_EDGE`. The
+arc of a sine above a threshold is a fixed length, so the ring is one
+width in px at every age: `RIPPLE_WAVELENGTH / TAU × (π − 2 asin EDGE)`,
+~1.4 world px at 0.85, pinned no wider than a current line's full extent
+(`ripple_ring_width_px` against `line_width_px`) and no thinner than a
+snapped pixel and a half. The envelope alone drives the strength through
+the same graduated crest curve, under `RIPPLE_INK_MAX` (0.6) so the ring
+prints lighter than the lines it sits among — "a bit more transparent".
+
+The signed packet still bends the current lines exactly as before
+(`RIPPLE_LINE_GAIN`), and two wakes still interfere in it; only the
+ring's own ink changed. `ripple_envelope` is mirrored on the CPU and
+pinned never under the packet's magnitude and equal to it at a crest;
+`ripple_ink` now carries the ceiling, and the life-graduation pins
+measure as fractions of it.
+
 ## Bounded drift: the far-time shredding (2026-09-05)
 
 Found live at the Loire near Nantes after roughly 25 minutes of play, at
@@ -1304,6 +1821,17 @@ curated catalog already applies.
 
 ## Status
 
+- **The ring is a thin, light line** — ✅ Done — width from the sine,
+  strength from the envelope; see the section above.
+- **A calm picture (drift carries, drag deforms)** — ✅ Done — see the
+  section above; the probe tool is `tools/probe_river_motion.gd`.
+- **One visible water speed (ripples, eddies, lines)** — ✅ Done — see
+  its section above; `surface_px_per_s` is the single source, both
+  consumers ride it, `BEND_DRIFT_FRACTION` 1.0. Its speed numbers are
+  superseded by the calm-picture section.
+- **A softer, slower, broader wake** — ✅ Done — shared packet slowed and
+  broadened in `WaterShader`, the river's ring inks graduated through its
+  life; see the section above.
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
   Dreisam (see Roster). Rest-of-world roster — ⬜ Not started, ongoing.
 - **Procedural fallback (noise-contour proxy)** — ✅ Built, tested, and
@@ -1356,13 +1884,28 @@ curated catalog already applies.
   real sliding-failure physics, derived-not-stored impoundment. Transient
   fill, multi-piece dam runs, and dam-break flooding — ⬜ Not started.
 - **Boulders shape the flow** — ✅ Done — natural and dropped boulders
-  deflect the waterline and current lines (eyot + across push, shader
-  untouched), and a full boulder row across the channel ponds via the
-  same weir physics. Pushing/carrying an intact boulder (rather than
-  building one from rock) — ⬜ Not started.
+  deflect the waterline and current lines (eyot + across push), and a
+  full boulder row across the channel ponds via the same weir physics.
+  Pushing/carrying an intact boulder (rather than building one from
+  rock) — ⬜ Not started.
+- **Boulders are hydrology** — ✅ Done — each rock has its own size and
+  mass; the light water around it is its shoal in the depth field, not a
+  painted ring; the drag-versus-weight balance is computed
+  (`BoulderHydraulics`); foam on the upstream face, amplified whirls in
+  the wake. Moving a swept rock — ⬜ Not started. See "Boulders are
+  hydrology: shoal, force balance, foam and wake".
 - **The wader's wake** — ✅ Done — player AND creatures (8 slots, river
   filter memoised) displace the current with a round-core,
   downstream-trailing wake; never dries the channel.
+- **Movement ripples (fish, player, animals)** — ✅ Done — the shared
+  `WaterShader` disturbance buffer now feeds the river surface too; the
+  same signed wave packet, its centre carried downstream at the water's
+  visible speed (see "One visible water speed"), drawn into the stroke
+  contours and the stroke strength rather than composited on top. Confirmed on a real GPU
+  (`test_a_recorded_disturbance_actually_changes_what_the_river_draws`),
+  which is the only place the symptom was ever visible. Fish are among the
+  causes — see "Fish really do live under the river surface" above, which
+  corrects a wrong claim this bullet made first time round.
 - **Rivers on the minimap** — ✅ Done — water-blue over any biome, memoised
   per tile so the polyline walk never hitches the rebuild.
 - **Real hydraulics: volume, pressure, current speed** — ✅ Done —

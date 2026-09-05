@@ -951,3 +951,88 @@ and reads the world clock itself, so there is one clock rather than two kept in
 step by hand. The thaw and cover durations are unchanged — measured in weather
 spells, they were already right for ordinary play, where a season is long
 enough to watch a thaw happen properly.
+
+
+## Weather feeds creature behaviour
+
+Weather already had gameplay teeth for the PLAYER (movement slowed by rain/
+storm, warmth chilled by cloud/rain/storm -- `WeatherModel.movement_speed_
+modifier`/`warmth_factor`) and for the SOIL (`soil_moisture` driving
+earthworms driving robins -- see [soil_fauna.md](soil_fauna.md)) well before
+it touched anything an animal actively *does*. This closes one such gap,
+deliberately narrow: `Snowfall.falls_as_snow`'s existing active-precipitation
+boolean now measurably slows how fast a grazing herbivore actually eats, not
+just how the world around it looks.
+
+**Real-world grounding.** A grazer is not just cropping a tuft when snow is
+actively coming down -- every bite is being buried as fast as it is found,
+on top of whatever the ground already held, and the animal has to work
+through that to keep its muzzle in the grass. Ungulates wintering under real
+snow cover measurably spend longer per feeding station once they have to dig
+or paw through snow to reach forage rather than crop bare ground -- a real
+winter-foraging cost, not a player-facing weather skin.
+
+**Deliberately ONE hook, not every timing constant in the phase machine.**
+[ecosystem_dynamics.md](ecosystem_dynamics.md#grazing-is-an-act-not-an-aura)'s
+`GrazerForaging` phase machine already had exactly the right shape to carry
+this: `snowing` (settable per instance, defaulting `false` so nothing that
+never sets it changes at all) scales `GRAZE_SECONDS` -- the head-down bout
+itself -- by `SNOW_GRAZE_MULTIPLIER` while true. `REGRAZE_SECONDS` (the walk
+between bites) and `APPROACH_TIMEOUT` (giving up on a stale target) are left
+alone: snow makes eating what has already been found slower, it does not
+make an animal step faster between bites or abandon a target sooner, and
+scaling either of those too would be inventing a claim this doc does not
+make. The mouthful is still taken at the bout's own halfway point
+(`SWALLOW_FRACTION`), scaled along with the rest of the bout rather than
+left at the old fixed clear-weather instant -- so a snowy bout is uniformly
+slower throughout (working in, then eating), not fast to reach the food and
+then idling with nothing left to do.
+
+Other plausible hooks -- `ThreatAvoidantWander`'s effective sensing distance
+shrinking in falling snow (real reduced visibility, the same family as
+[combat.md](combat.md)'s fog line-of-sight reduction), or a genuine
+shelter-seeking drive on `CreatureNeeds` -- are deliberately **not** built
+here; both are named in the open questions below and neither is this pass's
+scope.
+
+**Wiring.** `World` already computes the authoritative "is it snowing right
+now" boolean once a frame (from the player-region weather and local warmth)
+to feed `EarthChunkManager.step_snow`'s own accumulation (see "Snow" above);
+`step_snow` now also caches that same value, exposed as `is_snowing()`,
+rather than a second reader deriving a second answer that could disagree
+with the one the ground itself is accumulating against. `CreatureMarker`
+reads it the same defensively duck-typed way it already reads
+`ambient_warmth` (a `has_method` guard, so every stub world in every
+pre-existing test that doesn't answer it keeps behaving exactly as it always
+did) and pushes it onto its own `GrazerForaging` instance once a frame,
+before foraging runs.
+
+### Open questions
+
+- Should `ThreatAvoidantWander`'s effective sensing distance also shrink in
+  falling snow (reduced visibility)? Plausible, not built -- see above.
+- Should `CreatureNeeds` grow a genuine shelter-seeking drive once the world
+  has a concept of shelter to seek (it does not today -- no building or den
+  location is queryable by an animal)? Also plausible, also not built.
+- Does the multiplier belong on `GrazerForaging` alone, or should the
+  rooting-diet path (`FOOD_WORM`/`FOOD_SEED` foragers digging through
+  ground litter) carry its own, separately-grounded number? Left as one
+  shared multiplier for now -- nothing has measured that the two should
+  differ.
+
+### Status
+
+- ✅ **Active snowfall slows grazing.** `GrazerForaging.snowing`/
+  `SNOW_GRAZE_MULTIPLIER`, tested (`test_grazer_foraging.gd`): a bout
+  started identically under clear and under active snowfall finishes on
+  schedule in the clear case and is measurably still going in the snowing
+  one, pinned to the exact scaled threshold (both sides) rather than merely
+  "longer". `EarthChunkManager.is_snowing()` exposes the same per-frame
+  boolean `step_snow` already computes accumulation against
+  (`test_earth_chunk_manager.gd`); wired into `CreatureMarker._process`
+  beside the existing `ambient_warmth` read. Confirmed at the fully-wired
+  level too (`test_creature_marker.gd`): the same hungry grazer, given the
+  same visible tuft from an identical start, has not yet taken its first
+  bite at the exact frame count a clear-weather run already finished at, and
+  does still feed given a further budget -- slower, not stuck.
+- ⬜ Every other hook named in the open questions above.

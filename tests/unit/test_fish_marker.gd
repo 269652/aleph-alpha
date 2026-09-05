@@ -28,6 +28,128 @@ class SinglePondWorld:
 		return "ocean" if Vector2i(x, y) == home_tile else "grassland"
 
 
+## Land biome everywhere, but every tile is a river flowing east at a
+## given current (docs/concept/hydrology.md: rivers are an overlay flag).
+class RiverWorld:
+	var current_speed := 0.5
+	func biome_at_global(_x: int, _y: int) -> String:
+		return "grassland"
+	func is_river_at_global(_x: int, _y: int) -> bool:
+		return true
+	func is_lake_at_global(_x: int, _y: int) -> bool:
+		return false
+	func river_current_at_global(_x: int, _y: int) -> Dictionary:
+		return {"direction": Vector2.RIGHT, "speed_m_s": current_speed}
+
+
+func test_a_fish_swims_in_a_river_whose_biome_is_land():
+	var fish := FishMarker.new()
+	fish.setup(RiverWorld.new(), TILE_SIZE)
+	fish.wander_seed = 11
+	fish.home = Vector2(80.0, 80.0)
+	fish.position = fish.home
+	var start := fish.position
+	for i in 60:
+		fish._process(0.05)
+	assert_ne(fish.position, start, "the river is water to the fish even though the biome says grassland")
+	fish.free()
+
+
+# -- constrained to FULL river tiles, not bank/shore tiles --------------------
+##
+## HydrologyField.probe() calls a tile "river" once its CENTRE is within the
+## channel's own half-width -- correct for rendering/depth/valley-carve, and
+## already exercised by test_hydrology_field.gd's straddling-tile cases, but
+## for a narrow channel that can flag a tile whose FOOTPRINT is mostly bank,
+## not water (the same quantization every discrete tile-kind flag has).
+## WaterAreaSurvey.is_interior_water already holds fish SPAWNING to a
+## stricter "this tile and all 4 neighbours are water" bar for exactly this
+## reason (never a shore-adjacent cell); FishMarker's own swim-time water
+## check did not, so a fish already in the water could wander from a
+## genuinely-covered tile onto a merely-flagged one and visibly sit half on
+## dry ground. Reported directly: "fish should be constrained to the full
+## rivertiles not the shore tiles otherwise they swim on a half land tile
+## sometimes."
+
+## A river only three tiles wide with ordinary dry land on both banks: tile
+## 11 is the only column with river on every side (including along the
+## bank), 10 and 12 each border land on their outer side.
+class RiverBankWorld:
+	func biome_at_global(_x: int, _y: int) -> String:
+		return "grassland"
+	func is_river_at_global(x: int, _y: int) -> bool:
+		return x >= 10 and x <= 12
+	func is_lake_at_global(_x: int, _y: int) -> bool:
+		return false
+
+
+## The same band, but its EAST bank is the river's own mouth into the sea
+## rather than dry land: tile 12 borders open ocean, not land, so it is
+## still fully water on every side even though it sits at the edge of the
+## river flag -- "lakes, rivers and the sea are one water surface"
+## (docs/concept/hydrology.md). Only tile 10 (west bank, against grassland)
+## is the true shore tile here.
+class RiverMouthWorld:
+	func biome_at_global(x: int, _y: int) -> String:
+		return "ocean" if x >= 13 else "grassland"
+	func is_river_at_global(x: int, _y: int) -> bool:
+		return x >= 10 and x <= 12
+	func is_lake_at_global(_x: int, _y: int) -> bool:
+		return false
+
+
+func test_fish_stays_off_a_river_tile_that_borders_dry_land():
+	var world := RiverBankWorld.new()
+	marker.home = Vector2(11.5 * TILE_SIZE, 6.5 * TILE_SIZE)  # the band's one fully-covered column
+	marker.position = marker.home
+	marker.setup(world, TILE_SIZE)
+
+	for i in 300:
+		marker._process(0.25)
+		var tile_x := int(floor(marker.position.x / TILE_SIZE))
+		assert_eq(
+			tile_x, 11,
+			"a fish must stay off a river tile that borders dry land, not just off dry land itself (step %d, tile_x %d)" % [i, tile_x]
+		)
+
+
+func test_a_river_tile_against_its_own_mouth_still_counts_as_full_water():
+	var world := RiverMouthWorld.new()
+	marker.home = Vector2(11.5 * TILE_SIZE, 6.5 * TILE_SIZE)  # a plain interior column, valid either way
+	marker.position = marker.home
+	marker.setup(world, TILE_SIZE)
+
+	var visited_the_mouth_tile := false
+	for i in 300:
+		marker._process(0.25)
+		var tile_x := int(floor(marker.position.x / TILE_SIZE))
+		assert_ne(tile_x, 10, "must still avoid the land-adjacent bank (step %d)" % i)
+		if tile_x == 12:
+			visited_the_mouth_tile = true
+	assert_true(
+		visited_the_mouth_tile,
+		"a river tile bordered by the sea, not land, is still fully water and must stay reachable"
+	)
+
+
+func test_swimming_against_the_current_is_slower_and_with_it_faster():
+	var upstream := FishMarker.current_speed_factor(Vector2.LEFT, Vector2.RIGHT, 0.8)
+	var downstream := FishMarker.current_speed_factor(Vector2.RIGHT, Vector2.RIGHT, 0.8)
+	var across := FishMarker.current_speed_factor(Vector2.UP, Vector2.RIGHT, 0.8)
+	assert_lt(upstream, 1.0)
+	assert_gt(downstream, 1.0)
+	assert_almost_eq(across, 1.0, 1e-9)
+	assert_almost_eq(FishMarker.current_speed_factor(Vector2.LEFT, Vector2.ZERO, 0.0), 1.0, 1e-9, "still water")
+	assert_gt(upstream, 0.0, "never stalls outright")
+
+
+func test_upstream_effort_drives_more_flapping():
+	assert_gt(FishMarker.upstream_effort(Vector2.LEFT, Vector2.RIGHT, 0.8), 0.9)
+	assert_eq(FishMarker.upstream_effort(Vector2.RIGHT, Vector2.RIGHT, 0.8), 0.0)
+	assert_eq(FishMarker.upstream_effort(Vector2.LEFT, Vector2.RIGHT, 0.0), 0.0)
+	assert_lt(FishMarker.UPSTREAM_FLAP_SHORTENING, 1.0, "a wait never collapses to zero")
+
+
 ## Water fills every tile column up to (and including) max_water_tile_x --
 ## a straight north-south shoreline, for asserting a fish slides along it
 ## rather than beaching or freezing against it.

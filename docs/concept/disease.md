@@ -126,6 +126,21 @@ function, per this project's no-eyeballed-constants rule, not a comment.
   next time that same decomposer feeds elsewhere or a herbivore grazes a
   contaminated patch.
 
+#### Fly-blown risk
+
+A carcass's own visible fly swarm is a second, independent scaling factor on
+top of region pressure for the graze roll specifically. `Carcass` grows a
+real `FlyColony` directly (`docs/concept/flies.md`), starting one founder a
+tested delay after death, tied to the carcass's own age; real blowflies/
+carrion beetles are anthrax's own documented spore-carry mechanism, so a
+carcass a swarm has already found is measurably MORE dangerous to graze near
+than an identically-rotten, fly-free one, not just as dangerous.
+`DiseaseModel.carrion_graze_transmission_chance` takes the carcass's own
+`fly_count` alongside region tier for exactly this reason, and
+`CreatureMarker._carrion_disease_step` reads it from the real nearby
+`Carcass` rather than a constant. The same fly presence also feeds
+`carrion.md`'s decomposer targeting — see that doc's "Flies find it first".
+
 #### Region pressure (`RegionDifficulty`)
 
 Base transmission/contamination chance is scaled by
@@ -154,7 +169,7 @@ sickness triggers, and `src/gameplay/sickness.gd` already exists as the
 real, tested, pure model for it — `infection_chance`/`attempt_infect`
 (exposure vs. resistance), `progress`/`is_recovered` (worsens untreated,
 recovers under treatment), and `diagnose` (skill- and severity-weighted,
-matching `TamingSystem.taming_chance`'s own shape). That doc explicitly
+matching `Taming.break_free_chance`'s own shape). That doc explicitly
 scoped OUT wildlife-to-wildlife contagion as "an undecided open
 question" — this spec is exactly that missing piece, not a competing
 system: the SIRS wildlife model above is the real exposure SOURCE, and an
@@ -192,7 +207,7 @@ loop rather than the two systems merely coexisting.
   (`is_lethal_capable`/`death_chance_per_second` — herd never kills
   directly, predator/carrion do). Deterministic hash-seeded rolls
   (`attempt_transmit`/`attempt_infect`), same pattern as `Sickness`/
-  `TamingSystem`.
+  `Taming`.
 - ✅ **Herd (foot-and-mouth-like)** (medium) — Done —
   `CreatureMarker._herd_disease_step`: runs on the existing throttled
   sensing tick, checks the nearest susceptible herbivore-role creature
@@ -223,6 +238,23 @@ loop rather than the two systems merely coexisting.
   "contaminated patch of grass" object, which this project has no
   substrate for today (a documented simplification of the doc's literal
   insect→grass→herbivore chain, not the full three-hop version).
+- ✅ **Fly-blown risk** (small) — Done — the graze roll above now also
+  scales with the real carcass's own visible fly swarm, not just region
+  pressure: `DiseaseModel.carrion_graze_transmission_chance(region_tier,
+  fly_count)` (`FLY_BLOWN_GRAZE_RISK_BONUS_PER_FLY`), fed the real
+  `Carcass.fly_count()` by `CreatureMarker._carrion_disease_step`. `Carcass`
+  grows that count itself, via a real `FlyColony` it owns and advances
+  directly (`FLY_ATTRACTION_DELAY_SECONDS`, a tested fraction of
+  `ROT_SECONDS` — see `docs/concept/flies.md`, `docs/concept/carrion.md`'s
+  "Flies find it first"). Proven as one real causal chain, not three
+  disconnected unit tests, by
+  `test_corpse_age_drives_fly_count_which_measurably_raises_local_
+  disease_risk` (`tests/unit/test_carcass.gd`): advancing a real carcass's
+  age changes its real fly count, which changes the real disease-risk
+  formula's output. The same fly presence also makes a fly-blown carcass a
+  measurably more attractive target for `DecomposerMarker`'s own scavenging
+  (`CarrionForageBehavior.effective_distance`) — see `carrion.md`'s Status
+  for that half.
 - ✅ **Visible symptoms** (small) — Done — `CreatureMarker` tints itself
   (`Sprite2D.modulate`) while `INFECTED`, on every creature, wild or tame,
   reusing the engine's own built-in property rather than a new rendering

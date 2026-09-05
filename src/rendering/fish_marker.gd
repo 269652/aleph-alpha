@@ -185,6 +185,9 @@ func get_display_name() -> String:
 
 func _ready() -> void:
 	add_to_group(HoverTargetFinder.GROUP_NAME)
+	# World gathers every fish each frame as a flow-overlay wader, so a
+	# fish ripples the still water it swims in (docs/concept/hydrology.md).
+	add_to_group("fish")
 
 
 func set_attraction(target: Vector2) -> void:
@@ -278,7 +281,10 @@ func _step_water_ripple(delta: float) -> void:
 		_water_ripple_accumulator = ripple_phase_offset(wander_seed)
 		_water_ripple_interval = ripple_interval(wander_seed, 0)
 	_water_ripple_accumulator += delta
-	if _water_ripple_accumulator < _water_ripple_interval:
+	# Swimming upstream shortens the wait between flap bursts (see
+	# UPSTREAM_FLAP_SHORTENING): more flapping, more rings in the current.
+	var interval := _water_ripple_interval * (1.0 - UPSTREAM_FLAP_SHORTENING * _upstream_effort)
+	if _water_ripple_accumulator < interval:
 		_is_flapping = false
 		return
 	_water_ripple_accumulator = 0.0
@@ -458,6 +464,12 @@ func _process(frame_delta: float) -> void:
 	# fish onto its real _process for the first time: "fish still don't
 	# move natural like ingame").
 	var speed := _wander.wander_speed * (FLAP_SPEED_MULTIPLIER if _is_flapping else 1.0)
+	# Against the current a fish is slower and works harder (see
+	# current_speed_factor / upstream_effort); the effort is read by the
+	# next frame's flap cadence.
+	var current := _current_at(position)
+	speed *= current_speed_factor(_current_heading, current["direction"], current["speed_m_s"])
+	_upstream_effort = upstream_effort(_current_heading, current["direction"], current["speed_m_s"])
 	if _bolt_remaining > 0.0:
 		speed = BOLT_SPEED  # the dash that makes an escape read as an escape
 
@@ -510,7 +522,111 @@ func _has_water_clearance(center: Vector2) -> bool:
 	return true
 
 
+## The 4 cardinal neighbours a river/lake tile must ALSO have water on
+## before a fish treats it as fully swimmable -- see _is_water's own doc
+## comment on why only fresh water (not ocean) needs this.
+const _CARDINAL_TILE_OFFSETS: Array[Vector2i] = [
+	Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)
+]
+
+
 func _is_water(pixel_position: Vector2) -> bool:
 	var tile_x := int(floor(pixel_position.x / _tile_size))
 	var tile_y := int(floor(pixel_position.y / _tile_size))
-	return _world.biome_at_global(tile_x, tile_y) == "ocean"
+	if _world.biome_at_global(tile_x, tile_y) == "ocean":
+		return true
+	if not _is_fresh_water_tile(tile_x, tile_y):
+		return false
+	# Unlike the open ocean, a river or lake tile is a discrete kind FLAG
+	# (docs/concept/hydrology.md's tile read), not a coverage fraction --
+	# HydrologyField.probe() calls a tile "river" once its CENTRE is within
+	# the channel's own half-width, which for a narrow channel or a tile
+	# right at the bank can be a tile whose FOOTPRINT is mostly dry land.
+	# WaterAreaSurvey.is_interior_water already holds fish SPAWNING to a
+	# "this tile and all 4 neighbours are water" bar for exactly that reason
+	# (never a shore-adjacent cell); this is the same bar for swimming, so a
+	# fish already in the water cannot wander from a genuinely-covered tile
+	# onto a merely-flagged one and visibly sit half on dry ground (reported
+	# directly: "fish should be constrained to the full rivertiles not the
+	# shore tiles otherwise they swim on a half land tile sometimes").
+	for offset in _CARDINAL_TILE_OFFSETS:
+		if not _is_any_water_tile(tile_x + offset.x, tile_y + offset.y):
+			return false
+	return true
+
+
+## Ocean by biome, or a river or lake cell -- any kind of open water. Used
+## to check a fresh-water tile's NEIGHBOURS (see _is_water above): a river
+## mouth's bank against the sea is still open water on that side, not shore.
+func _is_any_water_tile(tile_x: int, tile_y: int) -> bool:
+	if _world.biome_at_global(tile_x, tile_y) == "ocean":
+		return true
+	return _is_fresh_water_tile(tile_x, tile_y)
+
+
+## Rivers and lakes are overlay flags on land biome (docs/concept/
+## hydrology.md), asked separately; a world that has neither (the character
+## preview diorama's pond) simply has neither.
+func _is_fresh_water_tile(tile_x: int, tile_y: int) -> bool:
+	if _world.has_method("is_river_at_global") and _world.is_river_at_global(tile_x, tile_y):
+		return true
+	return _world.has_method("is_lake_at_global") and _world.is_lake_at_global(tile_x, tile_y)
+
+
+## --- swimming against the current (docs/concept/hydrology.md) ---
+## "fish should also swim in rivers, also upstream just slower and more
+## flapping": the current's push along the fish's own heading slows an
+## upstream swim and speeds a downstream one, and an upstream swim flaps
+## more often (see _step_water_ripple), which is also what rings the
+## current's contour lines around it (World feeds every fish to the flow
+## overlay as a wader).
+
+## Fraction of speed lost swimming straight into a full-strength current,
+## and gained swimming straight with it.
+const UPSTREAM_SLOWDOWN := 0.6
+const DOWNSTREAM_BOOST := 0.4
+## The current speed (m/s) that counts as full strength -- a fast reach
+## (RiverFlowShader.FAST_FLOW_M_S is 0.6); still water is 0.
+const CURRENT_FULL_M_S := 0.8
+## How much shorter the wait between flap bursts gets at full upstream
+## effort: a fish holding station against a current flaps continuously.
+const UPSTREAM_FLAP_SHORTENING := 0.7
+
+var _upstream_effort := 0.0
+## The current is a property of the TILE, so it is asked once per tile the
+## fish crosses, not once per frame per fish -- found live as a collapse
+## to a few frames per second with a few dozen fish in view.
+var _current_tile := Vector2i(2147483647, 2147483647)
+var _current_cached := {"direction": Vector2.ZERO, "speed_m_s": 0.0}
+
+
+## The current at a pixel position, as {direction: Vector2 (tile-space
+## unit vector, downstream), speed_m_s}, zero where the world has no
+## current query or no current there.
+func _current_at(pixel_position: Vector2) -> Dictionary:
+	if _world == null or not _world.has_method("river_current_at_global"):
+		return {"direction": Vector2.ZERO, "speed_m_s": 0.0}
+	var tile := Vector2i(int(floor(pixel_position.x / _tile_size)), int(floor(pixel_position.y / _tile_size)))
+	if tile != _current_tile:
+		_current_tile = tile
+		_current_cached = _world.river_current_at_global(tile.x, tile.y)
+	return _current_cached
+
+
+## Multiplier on swim speed for a heading against/with a current.
+static func current_speed_factor(heading: Vector2, current_direction: Vector2, current_speed_m_s: float) -> float:
+	var along := _along_current(heading, current_direction)
+	var strength := clampf(current_speed_m_s / CURRENT_FULL_M_S, 0.0, 1.0)
+	return 1.0 + strength * (DOWNSTREAM_BOOST * maxf(along, 0.0) - UPSTREAM_SLOWDOWN * maxf(-along, 0.0))
+
+
+## 0 with or across the current, rising to 1 straight into a full one.
+static func upstream_effort(heading: Vector2, current_direction: Vector2, current_speed_m_s: float) -> float:
+	var strength := clampf(current_speed_m_s / CURRENT_FULL_M_S, 0.0, 1.0)
+	return strength * maxf(-_along_current(heading, current_direction), 0.0)
+
+
+static func _along_current(heading: Vector2, current_direction: Vector2) -> float:
+	if heading.is_zero_approx() or current_direction.is_zero_approx():
+		return 0.0
+	return heading.normalized().dot(current_direction.normalized())

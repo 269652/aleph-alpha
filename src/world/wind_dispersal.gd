@@ -23,12 +23,31 @@ const WEIGHT_TREE_FRUIT := 0.7  # carried by animals, not air
 const WEIGHT_NUT := 1.0  # drops within a crown-width, always
 
 ## How far the wind can carry the lightest seed at full strength, in tiles.
-const MAX_DRIFT_TILES := 14.0
+const MAX_DRIFT_TILES := 20.0
 
-## How far a seed scatters with NO wind at all -- it still has to land
-## somewhere, it just does not go far. Independent of the wind so a dead calm
-## does not stack every seed on the parent.
-const CALM_SCATTER_TILES := 1.2
+## How far the LIGHTEST seed scatters with no wind at all -- it still has to
+## land somewhere, it just does not go far. Independent of the wind's
+## direction and strength, so a dead calm does not stack every seed on the
+## parent.
+const CALM_SCATTER_TILES := 4.0
+
+## How much of that still-air scatter the HEAVIEST seed gets.
+##
+## Still air is not still, and the difference matters: a plume goes somewhere
+## on the faintest movement of the air -- that is what a plume is FOR -- while
+## an acorn drops through it and lands under the tree. The calm scatter used
+## to be weight-blind, so on a still day a dandelion seed and an acorn fell
+## into the same little circle. That was not a cosmetic error: a prevailing
+## wind is a breeze rather than a gale, so this term is most of what decides
+## how far apart plants end up standing (see FlowerEstablishment), and with it
+## weight-blind and small, a flower's whole lineage piled onto its parent and
+## exactly one plant grew there. Reported as flowers "growing way too dense"
+## with too little "space between individual flowers".
+##
+## Calibrated so the heaviest class keeps EXACTLY the drop it always had
+## (0.3 x 4.0 = the old 1.2 tiles, a crown-width, pinned by test) -- making
+## the plume drift further must not quietly drag the acorn along with it.
+const HEAVY_SEED_SCATTER_FRACTION := 0.3
 
 ## Nothing travels further than this, whatever the wind. A bound rather than a
 ## behaviour: the tail of a heavy-tailed distribution has no natural end, and a
@@ -65,11 +84,14 @@ static func landing_offset(
 	# the same gale crosses the meadow.
 	var downwind := direction.normalized() * reach * force * lightness * MAX_DRIFT_TILES
 
-	# Scatter: where it would have gone with no wind at all. Independent of
-	# the wind, so a dead calm still spreads seed around the parent.
+	# Scatter: where it would have gone with no wind at all. Independent of the
+	# wind, so a dead calm still spreads seed around the parent -- but NOT
+	# independent of the seed, because still air is not still and a plume rides
+	# it while an acorn falls through it (see HEAVY_SEED_SCATTER_FRACTION).
 	var angle := float(PixelNoise.range_index(seed_value, 73, 0, 360)) * PI / 180.0
 	var spread := sqrt(float(PixelNoise.range_index(seed_value, 79, 0, 1000)) / 999.0)
-	var scatter := Vector2(cos(angle), sin(angle)) * spread * CALM_SCATTER_TILES
+	var buoyancy := HEAVY_SEED_SCATTER_FRACTION + (1.0 - HEAVY_SEED_SCATTER_FRACTION) * lightness
+	var scatter := Vector2(cos(angle), sin(angle)) * spread * CALM_SCATTER_TILES * buoyancy
 
 	var offset := (downwind + scatter) * TerrainRenderer.TILE_SIZE
 	var limit := MAX_TRAVEL_TILES * TerrainRenderer.TILE_SIZE

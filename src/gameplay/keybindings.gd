@@ -52,6 +52,16 @@ const ACTIONS := [
 	{"action": "talk", "label": "Talk to Villager", "default": KEY_G},
 	{"action": "build", "label": "Place Earth", "default": KEY_B},
 	{"action": "destroy", "label": "Remove Tile", "default": KEY_Q},
+	# The farming loop's own till/plant/tend verb (docs/concept/
+	# farming.md) -- one contextual key, the same "do the obvious thing"
+	# shape build already has for its own place-or-terraform split: no
+	# plot yet tills and plants, an already-growing plot gets tended
+	# (watered) instead (see Player._plant_step). Harvesting reuses the
+	# existing attack key instead of a key of its own (see
+	# Player._harvest_farm_plot_step), the same way every other
+	# harvest-shaped verb (chop/smash/pull/butcher/collect) already
+	# piggybacks on attack.
+	{"action": "plant", "label": "Till / Plant / Tend", "default": KEY_P},
 	# Casting is a wholly new trigger, not routed through the hotbar/item
 	# system (see docs/concept/spell_runtime.md) -- it needs its own real
 	# key, not a repurposed one.

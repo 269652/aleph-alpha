@@ -308,18 +308,30 @@ const EDGE_ALPHA_FADE_END := 0.5
 ## duplicated as shader literals, so ripple_amplitude() below mirrors exactly
 ## what the GPU draws and the tuning can be tested rather than eyeballed.
 ## How fast a wake's front travels outward, in world units per second.
-const RIPPLE_SPEED := 14.0
+## 14 -> 11.5 ("a little less pronounced ... smoother, a bit slower and more
+## natural"): the front ambles rather than races. Pinned under 12 by
+## test_a_wake_is_a_bit_slower_and_its_crests_are_broader, and the radius
+## it reaches with RIPPLE_LIFETIME is still pinned past its own tile.
+const RIPPLE_SPEED := 11.5
 ## How long a movement wake keeps expanding before it dies. Together with
-## RIPPLE_SPEED this bounds a wake at ~1.9 tiles of radius: far enough to
+## RIPPLE_SPEED this bounds a wake at ~2.2 tiles of radius: far enough to
 ## read as a wake, not so far that one fish visibly disturbs a whole pond.
-const RIPPLE_LIFETIME := 2.2
+## 2.2 -> 3.0 s ("a more relaxed and calm picture ... they just seem to
+## drift and fade faster"): the ring lingers and its linear fade is
+## slower. The fish flap schedule derives its "occasional, not constant"
+## bound from this constant, and still clears it (test_fish_marker.gd).
+const RIPPLE_LIFETIME := 3.0
 ## Distance between successive crests -- the packet holds a couple of these.
-const RIPPLE_WAVELENGTH := 6.0
+## 6 -> 8, half a tile: broad swells read smoother than fine rings, which
+## is the "smoother ... more natural" half of the same report. Pinned at
+## or above half a tile by the same test as the speed.
+const RIPPLE_WAVELENGTH := 8.0
 ## How far behind the front the ring packet extends. Must exceed
 ## RIPPLE_WAVELENGTH or a ripple is a single lonely circle rather than the
 ## few concentric rings real water makes -- but only just, or it trails a
-## bullseye of half a dozen rings.
-const RIPPLE_PACKET_WIDTH := 7.0
+## bullseye of half a dozen rings. Widened with the wavelength (7 -> 9.5)
+## so it keeps the same ~1.2 rings behind the front; the ratio is pinned.
+const RIPPLE_PACKET_WIDTH := 9.5
 ## How quickly amplitude drops as the ring's circumference grows (energy
 ## spreading around a widening circle).
 const RIPPLE_SPREAD_DECAY := 0.02
@@ -329,7 +341,10 @@ const RIPPLE_SPREAD_DECAY := 0.02
 ## multi-tile bullseye (reported: "the ripples don't look as natural as
 ## before"). Pinned by
 ## test_a_raindrop_splash_is_much_smaller_than_a_movement_wake.
-const RAIN_RIPPLE_SPEED := 12.0
+## 12 -> 10 alongside the wake slowing 14 -> 11.5: the splash stays pinned
+## under half a wake's radius, and a slower splash is the same "a bit
+## slower ... more natural" ask.
+const RAIN_RIPPLE_SPEED := 10.0
 const RAIN_RIPPLE_LIFETIME := 1.2
 const RAIN_RIPPLE_WAVELENGTH := 4.0
 const RAIN_RIPPLE_PACKET_WIDTH := 4.5
@@ -508,6 +523,25 @@ func advance_disturbances(delta: float) -> void:
 	_disturbance_positions = kept_positions
 	_disturbance_ages = kept_ages
 	_push_disturbances()
+
+
+## The exact three values last pushed to this material, so a SECOND water
+## surface can draw the very same buffer. Rivers no longer wear the ocean
+## overlay at all (see EarthChunkManager._paint_water_overlay -- the flow
+## overlay is the river's whole surface now), so their ripples are drawn by
+## RiverFlowShader instead; it deliberately keeps no buffer of its own, and
+## EarthChunkManager fans these out to it. One ring buffer, one lifetime,
+## one distance cull -- two surfaces that cannot drift apart.
+func padded_disturbance_positions() -> PackedVector2Array:
+	return _padded_positions()
+
+
+func padded_disturbance_ages() -> PackedFloat32Array:
+	return _padded_ages()
+
+
+func disturbance_count() -> int:
+	return _disturbance_positions.size()
 
 
 func _push_disturbances() -> void:

@@ -17,6 +17,14 @@ const ProceduralFishSprite = preload("res://src/rendering/procedural_fish_sprite
 const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
+## For FLAP_SECONDS_PER_FRAME below and FlapGlide's wing-clock math -- the
+## same cadence AmbientFlyerMarker._animate_wings drives sparrow/robin with,
+## preloaded rather than restated so the two can't silently drift apart (see
+## AmbientFlyerRenderer's own EarthChunkGenerator preload for this project's
+## precedent on "preload the other script for one constant instead of
+## copying it").
+const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
+const FlapGlide = preload("res://src/rendering/flap_glide.gd")
 
 ## How far below cruise altitude the sprite visibly drops at the bottom of a
 ## dive -- a simple vertical offset "descent" (a kingfisher dives essentially
@@ -26,6 +34,15 @@ const DIVE_DEPTH_PX := 10.0
 var home := Vector2.ZERO
 var wander_seed := 0
 var species := "kingfisher"
+
+## Wing-beat cycle and folded-wing rest pose (see ProceduralBirdSprite.
+## generate_flap_textures/generate_perched_texture) -- set by the renderer
+## exactly like AmbientFlyerMarker's own flap_frames/perched_frame. Left
+## empty/null is a no-op (see _animate_wings), the same "an old caller, a
+## test double, keeps working" contract every optional field in this file
+## already follows.
+var flap_frames: Array = []
+var perched_frame: Texture2D = null
 
 ## `world` (duck-typed fish_population_near(pixel_position)/
 ## record_fish_catch_near(pixel_position, count), the same contract
@@ -115,6 +132,33 @@ func _process(delta: float) -> void:
 			_resolve_strike()
 		if was_carrying and _behavior.phase != PiscivoreBirdBehavior.Phase.CARRYING:
 			_swallow_catch()
+	_animate_wings()
+
+
+## Picks this frame's texture off the wing-beat cycle -- mirrors
+## AmbientFlyerMarker._animate_wings' perched/flapping split (a simpler one:
+## this bird has no egg/nectaring poses to fall through first).
+##
+## PERCH is the only truly motionless activity (see _step_idle_life) -- a
+## bird patrolling, nesting, or committed to a strike (hover/dive/ascend/
+## carry) is all still flying, wings and all; the signature kingfisher
+## HOVER especially is sustained by rapid wingbeats, not stillness, so it
+## keeps flapping rather than freezing.
+func _animate_wings() -> void:
+	var is_perched := (
+		_behavior.phase == PiscivoreBirdBehavior.Phase.CRUISE
+		and _activity == PiscivoreAppetite.ACTIVITY_PERCH
+	)
+	if is_perched:
+		if perched_frame != null:
+			texture = perched_frame
+		return
+	if flap_frames.is_empty():
+		return
+	var cycle_seconds := AmbientFlyerMarker.FLAP_SECONDS_PER_FRAME * float(flap_frames.size())
+	var beats := FlapGlide.wing_cycles(species, _elapsed_time, cycle_seconds, wander_seed)
+	var index := int(beats * float(flap_frames.size())) % flap_frames.size()
+	texture = flap_frames[absi(index)]
 
 
 ## How far above its cruise line the bird rises while carrying a fish off, and

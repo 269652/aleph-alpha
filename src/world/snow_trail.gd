@@ -76,3 +76,27 @@ func trodden_tiles(threshold: float = VISIBLE_TREAD) -> Array:
 
 func tracked_tile_count() -> int:
 	return _tread.size()
+
+
+## A small R8 window of real tread values, in TILE coordinates, centred on
+## `center_tile` -- the bridge from this class's own tile->float dictionary
+## to what `SnowBombShader.set_trail_mask` actually wants (see
+## docs/concept/snow_cover.md's "Footprints" section). Only ever touches the
+## tiles this dictionary actually tracks, not every tile in the window, so
+## the cost is per FOOTPRINT the same way `_tread` itself already is, not per
+## window pixel.
+##
+## R8 rather than a float format: an 8-bit displacement step is already
+## finer than SnowTrail's own visible-tread threshold, and it is what the
+## illustrated stamp alpha this composites against is stored in too (see
+## SnowStampAtlas).
+func build_mask_texture(center_tile: Vector2i, window_tiles: int) -> ImageTexture:
+	var image := Image.create(window_tiles, window_tiles, false, Image.FORMAT_R8)
+	var half := window_tiles / 2
+	for tile in _tread:
+		var local: Vector2i = tile - center_tile + Vector2i(half, half)
+		if local.x < 0 or local.x >= window_tiles or local.y < 0 or local.y >= window_tiles:
+			continue
+		var value: float = _tread[tile]
+		image.set_pixel(local.x, local.y, Color(value, value, value, value))
+	return ImageTexture.create_from_image(image)
