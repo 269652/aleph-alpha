@@ -207,6 +207,13 @@ func test_a_species_with_foliage_art_reports_it():
 	assert_true(trees.has_foliage_leaf_for("cherry", "autumn"))
 
 
+## Reported directly: "there should always be an occasional falling leaf or
+## blossom" -- spring is now a real, resolved season too (see foliage_leaf_
+## for's own doc comment), not merely summer/autumn.
+func test_a_species_with_blossom_art_reports_it():
+	assert_true(trees.has_foliage_leaf_for("cherry", "spring"))
+
+
 func test_an_unregistered_species_has_no_foliage_leaf():
 	assert_false(trees.has_foliage_leaf_for("not_a_real_species", "summer"))
 	assert_null(trees.foliage_leaf_for("not_a_real_species", "summer"))
@@ -223,7 +230,7 @@ func test_an_unsupported_season_has_no_foliage_leaf():
 
 func test_every_foliage_leaf_has_real_content():
 	for species in ["cherry", "apple", "walnut", "acorn", "hazelnut", "pine"]:
-		for season in ["summer", "autumn"]:
+		for season in ["summer", "autumn", "spring"]:
 			var frame := trees.foliage_leaf_for(species, season)
 			if frame != null:
 				assert_gt(
@@ -264,6 +271,47 @@ func test_every_species_has_both_summer_and_autumn_foliage_art():
 	for species in ["cherry", "apple", "walnut", "acorn", "hazelnut", "pine"]:
 		assert_true(trees.has_foliage_leaf_for(species, "summer"), "%s: no summer leaf" % species)
 		assert_true(trees.has_foliage_leaf_for(species, "autumn"), "%s: no autumn leaf" % species)
+
+
+## ## Spring: a blossom/catkin closeup, not hue-gated
+##
+## Unlike leaf colour (green in summer, orange in autumn -- genuinely
+## universal across species), real blossom colour is NOT one hue across
+## species: a real cherry or apple bears showy pink/white petals, while a
+## real oak/hazelnut/walnut bears small, inconspicuous, wind-pollinated
+## yellow-green catkins -- both are real "blossom" in the botanical sense,
+## but no single hue band could accept both. So spring is resolved WITHOUT
+## a hue band (see _FOLIAGE_SEASON_TO_HUE_BAND's own entry for it) -- the
+## same fill/on-tree-exclusion/smallest-region-wins selection, gated only
+## on the region having SOME real, non-neutral colour content at all (the
+## same -1 "no such content" sentinel _mean_hue_saturation already returns
+## for a near-white/near-black region, which every hue-gated season already
+## relies on too).
+func test_every_species_has_spring_blossom_foliage_art():
+	for species in ["cherry", "apple", "walnut", "acorn", "hazelnut", "pine"]:
+		assert_true(trees.has_foliage_leaf_for(species, "spring"), "%s: no spring blossom" % species)
+
+
+## Each season's closeup must be its OWN distinct region, not the hue-band
+## relaxation for spring accidentally re-selecting the exact same crop
+## summer or autumn already resolved to.
+func test_the_spring_foliage_leaf_differs_from_summer_and_autumn():
+	for species in ["cherry", "apple", "walnut", "acorn", "hazelnut", "pine"]:
+		var spring := trees.foliage_leaf_for(species, "spring")
+		var summer := trees.foliage_leaf_for(species, "summer")
+		var autumn := trees.foliage_leaf_for(species, "autumn")
+		if spring == null:
+			continue
+		if summer != null:
+			assert_ne(
+				spring.get_image().get_data(), summer.get_image().get_data(),
+				"%s's spring blossom should not be the exact same crop as its summer leaf" % species
+			)
+		if autumn != null:
+			assert_ne(
+				spring.get_image().get_data(), autumn.get_image().get_data(),
+				"%s's spring blossom should not be the exact same crop as its autumn leaf" % species
+			)
 
 
 ## The real closeup is genuinely smaller than the leaf+fruit cluster
