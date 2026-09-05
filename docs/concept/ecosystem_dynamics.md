@@ -1533,6 +1533,124 @@ had no production caller anywhere in the game until this.
   distance does not make the bird dither in and out of scattering.
 
 
+## A shoal finds its shape
+
+*"Make fish interact with each other (approach, follow, avoid, play) and
+also make them swim away from player and animals who wade near them."*
+
+Fish were deliberately the lightest tier in this project —
+[fishing.md](fishing.md#aquatic-population-model) scopes them out of
+`CreatureMarker`'s full sense/perceive/act stack on purpose, since an
+aggregate population model, not individual cognition, is what makes a
+fishery feel real. That scoping still holds for *population* — a fish's
+movement gains no needs, no hunger, no courtship. What it gains is the one
+thing every real shoaling fish actually does with its neighbours: react to
+how far away they are.
+
+### The three zones
+
+Real shoaling fish don't coordinate — no fish in a shoal has ever seen the
+whole shoal's shape from outside it, and none needs to. The classic account
+of how a shoal nonetheless holds together is the **zonal model** (Aoki 1982;
+Huth & Wissel 1992): each fish reacts to its nearest neighbour through three
+concentric zones, purely by distance.
+
+| Zone | Distance (body lengths) | Response |
+|---|---|---|
+| Repulsion | < 1 | swim directly away — **avoid** |
+| Orientation | 1 – 4 | match the neighbour's heading — **follow** |
+| Attraction | 4 – 10 | swim toward it — **approach** |
+| (beyond) | > 10 | not noticed at all |
+
+`FishSchooling.steering_for_neighbor` (`src/gameplay/fish_schooling.gd`,
+pure and engine-free like `CreatureBehavior`/`ThreatAvoidantWander`) is
+exactly this table as a function of one neighbour's position and heading.
+Every distance is stated as a **multiple of body length**, the same unit
+the real literature itself uses, rather than an independently chosen pixel
+count — `FishMarker.CLEARANCE_PX` (already documented there as "roughly the
+sprite's half-extent") doubled gives the body length the zones are measured
+in (cross-checked directly by test, not just by comment, since the two
+scripts deliberately don't import each other — see below).
+
+No flocking/steering system was built to make a shoal look like a shoal.
+Each fish independently finds its own single nearest schoolmate (mirroring
+`AmbientFlyerMarker._scan_for_partners`'s own "both sides compute the same
+answer, no messaging" shape) and reacts to *only* that one — the same "give
+every individual the same independent reaction and the group behaviour
+emerges for free" principle [animal_husbandry.md](animal_husbandry.md)
+already states for herding. A crowded pool full of fish all avoiding their
+nearest neighbour and drifting toward the next-nearest one, with nobody
+coordinating anything, is what a shoal actually is.
+
+### Play: an occasional, harmless chase
+
+Real shoaling fish are also observed bursting into a brief chase of a
+schoolmate that is neither feeding, fleeing, nor courting — investigatory or
+purely social behaviour, distinct from all three. Modeled as a low, per-fish,
+per-interval chance (`FishSchooling.rolls_for_play`, the same deterministic
+hash-roll shape as `CreatureWander.is_pausing`) that a fish with a nearby
+schoolmate briefly abandons the zoned steering above for a direct pursuit —
+reusing the *existing* fast-tail-flap speed boost
+(`FishMarker.FLAP_SPEED_MULTIPLIER`) rather than inventing a second burst
+mechanic, the same "not a new dance, the existing one aimed at a different
+object" economy this doc's own butterfly-dance section already practices.
+Deliberately **one-sided**: the chased fish does not itself react specially,
+it just carries on schooling/wandering as normal, and a real "catch and peel
+off" look falls naturally out of the chaser eventually entering the target's
+own repulsion zone. A fully mutual, alternating-roles chase would read a
+little richer but was judged not worth a second fish reaching into another's
+state for it — the population-model precedent for staying lightweight here
+(fishing.md's original scoping) still applies to how elaborate this gets,
+not just to whether it exists at all.
+
+### Fish scatter when the water gets crowded
+
+The other half of the ask — fish fleeing a wading player or animal — turns
+out to need no new fear mechanism at all. `FishMarker.bolt_from`/
+`is_bolting` already exist, built for a kingfisher's missed strike (see "A
+kingfisher hunts" below): a hard, fast, shore-respecting dash directly away
+from a threat point, for a fixed duration. The only new question was ever
+*what else should be allowed to call it*.
+
+The answer was already sitting in `EarthChunkManager.river_wader_positions`
+— the exact "is this position genuinely standing in water" filter the
+world's own river-flow-ripple shader already runs, every frame, on the
+player plus every creature (`scenes/world.gd`'s wader-candidate gathering),
+tile-memoized since rivers never move. A player wading in, or an animal that
+has waded in near them, *is* a wader by that same definition.
+`EarthChunkManager.startle_fish_near_waders` reacts to whichever of those
+positions are within `FISH_WADER_FLUSH_DISTANCE_PX` of a given fish, the
+same way `startle_fish_near` already reacts to one kingfisher's position —
+a real alarm/flush response, the same kind every other sensed creature in
+this project already has to an approaching threat
+(`FlyerPersonality.SHYEST_FLUSH_DISTANCE_M`, `AmbientFlyerMarker.
+SONGBIRD_FLUSH_DISTANCE_M`), at roughly the same few-metre order of
+magnitude real shallow-water fish show toward a wading disturbance. One
+shared threshold, not an inherited trait — deliberately following the
+songbird's own precedent ("that individuality is deliberately left where it
+already lives, on the butterflies") rather than building fish their own
+boldness system.
+
+### The precedence order
+
+Bolting (fear, whether from a kingfisher or a wader) always wins — the same
+"escape outranks everything" rule stated for butterflies, songbirds and
+every land creature in this project. Below that:
+
+1. **flee** (`bolt_from` — kingfisher strike or a nearby wader)
+2. **an active lure** (a player's cast fishing line, pre-existing — unchanged)
+3. **a rolled play chase already under way**
+4. **ordinary zoned schooling** (avoid / follow / approach the nearest schoolmate)
+5. **wander**
+
+Schooling is also **leashed to home**, the same shape as the butterfly
+dance's own leash: past `SCHOOL_LEASH_RADIUS_FACTOR` times this fish's own
+wander radius from home, schooling is ignored in favour of wander (which
+already pulls a fish home) — so a fish cannot in principle keep closing on a
+schoolmate that itself keeps drifting, indefinitely, away from where either
+of them actually lives.
+
+
 ## Butterflies do not fly in straight lines
 
 *"butterflies generaly should have more random / dancy motions rather then fly
