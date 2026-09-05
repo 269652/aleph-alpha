@@ -36,6 +36,9 @@ extends RefCounted
 ##                        long enough, and a flat zero offset is immune to
 ##                        that regardless of what the eased-time math reads).
 ##   transition_start -- world_age_seconds when the CURRENT transition began.
+
+const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
+const WindDispersal = preload("res://src/world/wind_dispersal.gd")
 ##   seed             -- a unique per-leaf integer (assignment order), for any
 ##                        caller needing an independent deterministic roll
 ##                        per leaf (see docs/concept/leaf_litter.md's wind
@@ -64,7 +67,39 @@ const TRANSITION_DURATION := 0.9
 ## reason.
 const CONSUME_TOLERANCE_PX := 1.0
 
+## How often a SETTLED leaf gets a chance to be nudged by the ambient wind
+## (see advance/set_wind) -- throttled the same way every other periodic,
+## content-adding step in EarthChunkManager is (c.f. GRASS_REFRESH_INTERVAL,
+## WORM_REFRESH_INTERVAL): litter blowing around is background scenery, not
+## something that needs re-rolling every single frame.
+const WIND_DISPERSAL_INTERVAL := 2.0
+
+## The chance a given settled leaf is nudged by the wind at each throttled
+## check -- kept small, the same "reads as ongoing background activity, not
+## everything moving at once" reasoning AntColony.FORAGE_CHANCE's own doc
+## comment gives for why ITS number is small. Its actual spread-not-instant
+## effect (some settled leaves move over many checks, not all of them on the
+## first one, and none at all in a dead calm) is pinned by
+## test_wind_eventually_relocates_at_least_one_settled_leaf/
+## test_wind_does_not_relocate_every_leaf_on_the_very_first_check/
+## test_wind_does_not_relocate_anything_in_dead_calm in
+## test_leaf_litter_field.gd.
+const WIND_DISPERSAL_CHANCE := 0.12
+
+## Salts keeping the per-leaf "does the wind take it this check" roll and its
+## own landing-offset seed independent of each other and of the leaf's own
+## spawn-order counter -- the same independent-second-sample technique
+## AntColony's _FORAGE_SALT/_CARRY_SALT already use for the identical reason.
+const _WIND_ROLL_SALT := 8501
+const _WIND_LANDING_SALT := 30011
+
 var _leaves: Array[Dictionary] = []
+var _wind_direction := Vector2.RIGHT
+var _wind_strength := 0.0
+var _wind_accumulator := 0.0
+## Which throttled wind check this is -- salted into the per-leaf roll (see
+## _WIND_ROLL_SALT) so consecutive checks don't all reuse the same sample.
+var _wind_check_count := 0
 
 ## Assigns each leaf a unique, deterministic-enough seed for any later
 ## per-leaf roll (see the "seed" field's own doc comment above) -- a plain
@@ -157,19 +192,28 @@ func relocate_leaf_near(pos: Vector2, radius: float, new_position: Vector2, now:
 	return true
 
 
-## Ages every leaf, prunes anything past LIFETIME, and settles any transition
+## Pushes today's live per-chunk wind (see EarthChunkManager.step_flowers's
+## identical wiring for flower/seed dispersal) -- read by advance's own
+## throttled wind-dispersal roll below. No new weather state: this is the
+## SAME continuous per-chunk wind already computed every frame for flower/
+## seed dispersal, just handed to one more consumer.
+func set_wind(direction: Vector2, strength: float) -> void:
+	_wind_direction = direction
+	_wind_strength = strength
+
+
+## Ages every leaf, prunes anything past LIFETIME, settles any transition
 ## whose TRANSITION_DURATION has elapsed (see transition_from's own doc
-## comment). `now` is the authoritative world_age_seconds this step is
-## happening at (see EarthChunkManager.step_leaf_litter) -- an explicit
-## absolute clock, not a locally-accumulated one, the same convention
-## _fruiting_model.state_at/TreeMaturity's planted_at already use, so a
-## leaf's fall/relocation timing tracks the SAME clock /ecotest fast-forwards
-## along with the rest of the ecosystem. `delta` is accepted (or not
-## strictly needed by pruning/settling themselves, both of which compare
-## `now` directly) to match the shared patch-sim advance(delta) shape every
-## other per-chunk sim in this project uses, and IS needed by the throttled
-## wind-dispersal roll (see docs/concept/leaf_litter.md).
-func advance(_delta: float, now: float) -> void:
+## comment), and -- at its own throttled cadence -- gives the ambient wind a
+## chance to nudge a SETTLED leaf out of place (see WIND_DISPERSAL_INTERVAL/
+## WIND_DISPERSAL_CHANCE/set_wind). `now` is the authoritative
+## world_age_seconds this step is happening at (see EarthChunkManager.
+## step_leaf_litter) -- an explicit absolute clock, not a locally-
+## accumulated one, the same convention _fruiting_model.state_at/
+## TreeMaturity's planted_at already use, so a leaf's fall/relocation timing
+## tracks the SAME clock /ecotest fast-forwards along with the rest of the
+## ecosystem.
+func advance(delta: float, now: float) -> void:
 	for i in range(_leaves.size() - 1, -1, -1):
 		var leaf: Dictionary = _leaves[i]
 		if now - leaf.spawned_at >= LIFETIME:
@@ -177,3 +221,27 @@ func advance(_delta: float, now: float) -> void:
 			continue
 		if leaf.transition_from != leaf.position and now - leaf.transition_start >= TRANSITION_DURATION:
 			leaf.transition_from = leaf.position
+
+	_wind_accumulator += delta
+	if _wind_accumulator < WIND_DISPERSAL_INTERVAL:
+		return
+	_wind_accumulator = 0.0
+	_wind_check_count += 1
+	if _wind_strength <= 0.0:
+		return  # dead calm: litter must not spontaneously scatter
+	for leaf in _leaves:
+		# Only a SETTLED leaf is eligible -- one still mid-transition (just
+		# fallen, or already nudged earlier this very check) is left alone
+		# rather than re-rolled on top of its own unfinished motion.
+		if leaf.transition_from != leaf.position:
+			continue
+		var roll_seed: int = leaf.seed + _wind_check_count * 97 + _WIND_ROLL_SALT
+		if PixelNoise.unit(roll_seed, 0, 0) >= WIND_DISPERSAL_CHANCE:
+			continue
+		var landing_seed: int = leaf.seed + _wind_check_count * 97 + _WIND_LANDING_SALT
+		var offset := WindDispersal.landing_offset(
+			landing_seed, WindDispersal.WEIGHT_LEAF, _wind_direction, _wind_strength
+		)
+		leaf.transition_from = leaf.position
+		leaf.transition_start = now
+		leaf.position = leaf.position + offset

@@ -6807,12 +6807,20 @@ func step_ants(delta_seconds: float) -> void:
 ## per-frame script/collision cost this whole rewrite exists to remove (see
 ## docs/concept/leaf_litter.md), not the same kind of cost at all.
 ##
-## (Wind-driven relocation is wired in here too -- see LeafLitterField.
-## set_wind's own call site below, added alongside WindDispersal.WEIGHT_LEAF.)
+## The day's live per-chunk wind (see set_wind) is read the SAME way
+## step_flowers already reads it for seed dispersal -- no new weather state.
 func step_leaf_litter(delta_seconds: float) -> void:
 	_leaf_litter_renderer.set_current_time(_world_age_seconds)
+	var weather_day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
 	for chunk_coord in _leaf_litter_fields:
 		var field: LeafLitterField = _leaf_litter_fields[chunk_coord]
+		var region_seed := hash("%d_%d" % [chunk_coord.x, chunk_coord.y])
+		field.set_wind(
+			_weather_model.wind_direction_for(weather_day, region_seed),
+			_weather_model.dispersal_strength_for(
+				_weather_model.weather_at(weather_day, region_seed)
+			)
+		)
 		field.advance(delta_seconds, _world_age_seconds)
 		var mmi: MultiMeshInstance2D = _leaf_litter_mmis.get(chunk_coord)
 		if mmi == null:

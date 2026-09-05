@@ -193,3 +193,115 @@ func test_relocate_leaf_near_misses_when_nothing_is_within_radius():
 	assert_false(field.relocate_leaf_near(Vector2(900, 900), 20.0, Vector2(940, 900), 12.0))
 	var leaf: Dictionary = field.leaves()[0]
 	assert_eq(leaf.position, Vector2(100, 100), "a miss must leave the unrelated leaf exactly where it was")
+
+
+# -- wind-driven relocation: one of the three dispersal triggers -------------
+#
+# Reuses WindDispersal.landing_offset (WEIGHT_LEAF) at this field's own
+# throttled cadence -- see docs/concept/leaf_litter.md. No new weather
+# state: set_wind just stores whatever EarthChunkManager.step_leaf_litter
+# already reads off the live per-chunk WeatherModel, the same wiring
+## step_flowers already has for seed dispersal.
+
+func _settled_field(count: int, wind_direction := Vector2.RIGHT, wind_strength := 1.0) -> LeafLitterField:
+	var field := _field()
+	for i in count:
+		field.add_leaf(Vector2(i * 40.0, 0.0), "cherry", "autumn", 0.0)
+	# Let every leaf's own fall-in transition finish before wind gets a
+	# chance to touch it -- advance() never relocates a leaf still mid-
+	# transition (see the "still mid transition" test below).
+	field.advance(LeafLitterField.TRANSITION_DURATION + 0.1, LeafLitterField.TRANSITION_DURATION + 0.1)
+	field.set_wind(wind_direction, wind_strength)
+	return field
+
+
+func _positions(field: LeafLitterField) -> Array:
+	var out: Array = []
+	for leaf in field.leaves():
+		out.append(leaf.position)
+	return out
+
+
+## Bounded well under LIFETIME (90s): at WIND_DISPERSAL_INTERVAL (2s) a side
+## that ran long enough to start pruning leaves would silently "pass" this
+## test for the wrong reason (an empty field trivially matches nothing) --
+## see LeafLitterField.LIFETIME.
+const _WIND_TEST_CHECKS := 30
+
+
+func test_wind_does_not_relocate_anything_in_dead_calm():
+	var field := _settled_field(40, Vector2.RIGHT, 0.0)
+	var before := _positions(field)
+	var now := LeafLitterField.TRANSITION_DURATION + 0.1
+	for i in _WIND_TEST_CHECKS:
+		now += LeafLitterField.WIND_DISPERSAL_INTERVAL
+		field.advance(LeafLitterField.WIND_DISPERSAL_INTERVAL, now)
+	assert_eq(_positions(field), before, "dead calm must not spontaneously scatter settled litter")
+
+
+func test_wind_eventually_relocates_at_least_one_settled_leaf():
+	var field := _settled_field(40)
+	var before := _positions(field)
+	var now := LeafLitterField.TRANSITION_DURATION + 0.1
+	var moved := false
+	for i in _WIND_TEST_CHECKS:
+		now += LeafLitterField.WIND_DISPERSAL_INTERVAL
+		field.advance(LeafLitterField.WIND_DISPERSAL_INTERVAL, now)
+		if _positions(field) != before:
+			moved = true
+			break
+	assert_true(moved, "a real wind should eventually nudge at least one settled leaf")
+
+
+## Proves this is a per-leaf PROBABILITY, not "windy == every leaf jumps at
+## once" -- the same "occasional, not universal" shape AntColony.
+## FORAGE_CHANCE's own doc comment describes for a background effect.
+func test_wind_does_not_relocate_every_leaf_on_the_very_first_check():
+	var field := _settled_field(40)
+	var before := _positions(field)
+	field.advance(LeafLitterField.WIND_DISPERSAL_INTERVAL, LeafLitterField.TRANSITION_DURATION + 0.1 + LeafLitterField.WIND_DISPERSAL_INTERVAL)
+	var after := _positions(field)
+	var unchanged := 0
+	for i in before.size():
+		if before[i] == after[i]:
+			unchanged += 1
+	assert_gt(unchanged, 0, "at least one of 40 leaves should still be untouched after a single check")
+
+
+func test_wind_relocation_starts_a_fresh_transition():
+	var field := _settled_field(40)
+	var now := LeafLitterField.TRANSITION_DURATION + 0.1
+	for i in _WIND_TEST_CHECKS:
+		now += LeafLitterField.WIND_DISPERSAL_INTERVAL
+		field.advance(LeafLitterField.WIND_DISPERSAL_INTERVAL, now)
+		for leaf in field.leaves():
+			if leaf.transition_from != leaf.position:
+				assert_almost_eq(leaf.transition_start, now, 0.001)
+				return
+	fail_test("no leaf was ever relocated across %d windy checks" % _WIND_TEST_CHECKS)
+
+
+## A leaf still visibly falling must not ALSO get wind-relocated on top of
+## its own unfinished fall-in transition.
+func test_wind_never_touches_a_leaf_still_mid_transition():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.set_wind(Vector2.RIGHT, 1.0)
+	# Advance past several throttle intervals, but never past
+	# TRANSITION_DURATION -- the leaf never gets the chance to settle.
+	field.advance(0.01, 0.01)
+	var leaf: Dictionary = field.leaves()[0]
+	assert_eq(leaf.transition_from, Vector2(100, 100 - LeafLitterField.FALL_HEIGHT), "still mid-fall, untouched by wind")
+
+
+func test_wind_does_not_roll_before_its_own_throttle_interval_elapses():
+	var field := _settled_field(40)
+	var before := _positions(field)
+	# _settled_field's own settling advance() call already contributed
+	# TRANSITION_DURATION + 0.1 (~1.0) toward the wind accumulator (advance
+	# always accumulates delta, whether or not this tick's roll actually
+	# fires) -- a small delta here, safely under the remaining headroom to
+	# WIND_DISPERSAL_INTERVAL (2.0), proves the interval genuinely gates the
+	# roll rather than happening to land past it by coincidence.
+	field.advance(0.1, LeafLitterField.TRANSITION_DURATION + 0.2)
+	assert_eq(_positions(field), before, "an unelapsed throttle interval must never roll early")
