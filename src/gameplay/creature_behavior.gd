@@ -80,11 +80,37 @@ var _drives := {}
 
 
 func decide(context: Dictionary) -> Dictionary:
-	if _wirings.is_empty():
-		_wirings = Ethogram.wirings_for(BODY_PLAN)
+	_ensure_wirings()
 	return BehaviorKernel.decide(
 		_wirings, _receptors(context), _drives_for(context), context["position"], _stimuli(context)
 	)
+
+
+## Populates the cached wirings on whichever of decide()/threats() is called
+## FIRST for this instance. Both call _receptors(), whose genome-change
+## detection (below) patches the fear wiring's boldness floor (ethogram.md
+## §9) into _wirings -- so _wirings must already exist before _receptors
+## ever runs, or the floor patches an empty array and the (now genome-
+## marked-seen) cache never gets another chance to apply it. CreatureMarker
+## calls threats() once per sensing tick, before it ever calls decide() for
+## a fresh instance, which is exactly the ordering that exposed this.
+func _ensure_wirings() -> void:
+	if _wirings.is_empty():
+		_wirings = Ethogram.wirings_for(BODY_PLAN)
+
+
+## Patches the cached fear wiring's floor for this individual's boldness gene
+## (docs/concept/ethogram.md §9). `_wirings` is this instance's own private
+## copy (Ethogram.wirings_for hands back a deep copy per adapter, and each
+## CreatureMarker owns one adapter), so mutating it in place touches nobody
+## else. Runs alongside _receptors' own genome-change detection, below,
+## which already knows when this individual's genome has actually changed.
+func _apply_boldness_floor(genome: Dictionary) -> void:
+	var gene := float(genome.get(Ethogram.BOLDNESS, Ethogram.NEUTRAL_BOLDNESS_GENE))
+	var floor_value := Ethogram.fear_floor(gene)
+	for wiring in _wirings:
+		if wiring["gate"] == Ethogram.DRIVE_FEAR:
+			wiring["floor"] = floor_value
 
 
 ## Everything this individual NOTICES on the fear channels, whether it would
@@ -95,6 +121,7 @@ func decide(context: Dictionary) -> Dictionary:
 ## either way. This is the verdict that used to live in the marker's own
 ## scan ("predators are threats to herbivores; players to everyone").
 func threats(context: Dictionary) -> Array:
+	_ensure_wirings()
 	return BehaviorKernel.perceived(
 		_receptors(context), [Ethogram.PREDATOR, Ethogram.PLAYER], _stimuli(context)
 	)
@@ -118,6 +145,7 @@ func _receptors(context: Dictionary) -> Dictionary:
 		_expressed = Ethogram.express(species, genome, BODY_PLAN)
 		_expressed_species = species
 		_expressed_genome = genome.duplicate()
+		_apply_boldness_floor(genome)
 	var sensitivity: Dictionary = _expressed["sensitivity"]
 	var valence: Dictionary = _expressed["valence"]
 	var perceives := _perceives_threats(context)

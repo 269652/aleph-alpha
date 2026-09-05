@@ -29,9 +29,13 @@ const Ethogram = preload("res://src/gameplay/ethogram.gd")
 const ETHOGRAM_PATH := "res://src/gameplay/ethogram.gd"
 
 ## Ordered, because animal_genetics.md's V2 save record writes the floats
-## positionally. One receptor gene per smell channel, in channel order.
+## positionally. One receptor gene per smell channel, in channel order, plus
+## boldness (docs/concept/ethogram.md §9) -- a personality gene, not a
+## receptor, but read by the same module and so no less "as many as have
+## readers, and not one more".
 const GENE_NAMES: Array[String] = [
 	"receptor_sugar", "receptor_decay", "receptor_green", "receptor_musk", "receptor_smoke",
+	"boldness",
 ]
 
 ## Each gene's production reader, by res:// path -- the registry
@@ -43,6 +47,7 @@ const GENE_READERS := {
 	"receptor_green": ETHOGRAM_PATH,
 	"receptor_musk": ETHOGRAM_PATH,
 	"receptor_smoke": ETHOGRAM_PATH,
+	"boldness": ETHOGRAM_PATH,
 }
 
 ## A gene is the mean of this many independent hash-derived fractions, which
