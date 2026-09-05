@@ -11008,3 +11008,48 @@ shipped view uses today. A real follow-up, not a same-shape addition.
 Chronicle, live breeding planner, the remote instruction queue) — unbuilt,
 as originally spec'd; the instruction queue specifically has no floor
 until npc.md's instruction DSL exists.
+
+✅ **In-game overlay browser (2026-09-05).** Requested directly: "when I
+press tab it opens an ingame browser loading the companion webapp." Godot
+has no HTML/CSS rendering surface, so this is a real HTTP client of the
+same already-running local server (`scenes/companion_browser_overlay.gd`,
+an `HTTPRequest` + `RichTextLabel`) plus a scoped, pure HTML→BBCode
+converter (`src/companion_server/companion_browser.gd`,
+`tests/unit/test_companion_browser.gd`) — not a general HTML parser, only
+the tag surface `companion_page_shell.gd` and the four Tier 1 views
+actually emit (verified by grepping `src/companion_server/*.gd` before
+writing a single test, not guessed at): `h1/h2`, `p`, `ul/li`,
+`strong/em`, `a href` (including the Item Catalog's own Prev/Next
+pagination links — any plain href still works), `br`, and a real
+`table/tr/th/td` → `[table=N]`/`[cell]` conversion that counts the header
+row's own `<th>`s for the real column count rather than a hardcoded
+number. A literal `[`/`]` already present in game content (an item name,
+say) is escaped to Godot's own `[lb]`/`[rb]` BEFORE any real BBCode
+bracket is inserted, so game text can never be misread as markup —
+regression-tested directly, not just asserted safe in a comment.
+**Deliberately not attempted this pass, and degrades gracefully rather
+than rendering broken**: the Character Sheet portrait `<img>` (Godot's
+`[img]` tag wants a resource path, not an arbitrary data URI) and the
+Item Catalog's free-text search `<input>`/`<button>` (a static conversion
+has no path for a form submission) are simply dropped, tested directly
+(`test_an_img_tag_is_dropped_entirely_not_shown_broken`,
+`test_a_search_form_is_dropped_entirely_not_shown_broken`) rather than
+left as an unstated gap. Toggled with a new rebindable `Keybindings`
+action (`toggle_companion_browser`, default **Tab** — unbound before this,
+so nothing had to move to make room), wired into `World.
+_any_gameplay_window_open`/`_close_gameplay_windows` exactly like
+Inventory/Crafting/Skills already are (own red-first regression coverage:
+`tests/unit/test_world_companion_browser_wiring.gd`, since neither
+function had a direct test of its own before this — only indirect
+coverage via `test_world_interaction_prompt_throttle.gd`'s throttle-timing
+tests), so Escape closes it too. The real `HTTPRequest`/`RichTextLabel`/
+`Node` glue itself (`companion_browser_overlay.gd`) has no GUT test file,
+deliberately — the same "real socket I/O isn't something a headless test
+suite should exercise" boundary `companion_server.gd`'s own doc comment
+already draws for the server side of this identical transport; everything
+that CAN be pure already is. `godot` is not installed in this sandboxed
+environment (no binary on PATH, no CI workflow that runs GUT) — every
+test above was written red-first and its red/green transition confirmed
+by tracing the literal GDScript/RegEx semantics by hand rather than by
+executing the suite; needs a real GUT run (and a real playtest of the
+Tab key against a live `CompanionServer`) before this is fully trusted.

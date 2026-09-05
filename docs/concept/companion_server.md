@@ -31,6 +31,14 @@ persistence.md already established) — the "Local transport" section below's
 "reuse the save file directly" leaning is now the decided, shipped design,
 not a lean.
 
+**The in-game overlay (2026-09-05)** — see its own "In-game overlay"
+section below — makes Tier 1 reachable with Tab, no real browser tab
+required: `scenes/companion_browser_overlay.gd` is a real HTTP client of
+this same server, and `src/companion_server/companion_browser.gd`
+(pure, tested) converts the real HTML response into Godot BBCode. A real
+browser tab on `127.0.0.1:8731` still works exactly as before — this adds
+a second way to reach the same pages, not a replacement for the first.
+
 ## Design pillars
 
 1. **Tier 1 needs zero LLM and zero network.** The base companion view — a
@@ -181,6 +189,64 @@ read-only:
 
 No outbound network call exists at this tier. Closing the browser tab loses
 nothing — every value here is derived, not authored on the page.
+
+### In-game overlay: the browser you never have to alt-tab for
+
+Requested directly: "when I press tab it opens an ingame browser loading the
+companion webapp." Tier 1 already assumed a player would view it "via a menu
+toggle" (see this doc's own opening line) without ever specifying what that
+toggle did — this is that mechanism, made concrete.
+
+- **It is a real HTTP client of the SAME already-running local server** —
+  not a second render pipeline that re-derives the save data. The overlay
+  makes an ordinary loopback `GET` to `127.0.0.1:{CompanionRouter.PORT}`,
+  the identical request a real browser tab would make, and gets back the
+  identical HTML `companion_page_shell.wrap()` already produces. Nothing
+  about the server, the routes, or the views changes; this is purely a new
+  way to look at the same page. **This is not new "network access"
+  against the Non-goals section's "Tier 1 requires no network access under
+  any circumstance"** — that pillar is about reaching the *internet*; a
+  loopback request to a server this same game process already binds to
+  `127.0.0.1` is the transport Tier 1 was built on from the start, not an
+  exception to it.
+- **Godot has no HTML/CSS rendering surface**, so the real response body is
+  converted to Godot's own BBCode and shown in a `RichTextLabel` — a
+  deliberately scoped conversion (`CompanionHtmlToBbcode`), not a general
+  HTML engine. It only has to understand the tag surface
+  `companion_page_shell.gd` and the four view renderers actually emit
+  (verified against real source, not guessed): `h1/h2`, `p`, `ul/li`,
+  `strong/b`, `em/i`, `a href`, `br`, `table/tr/th/td`, plus the
+  structural wrappers (`html/body/div/span/nav`) that get unwrapped rather
+  than rendered. `<style>`/`<head>` is stripped outright (Godot needs none
+  of the page's CSS). A stray literal `[` or `]` already present in game
+  content (an item name, say) is escaped to Godot's own `[lb]`/`[rb]`
+  BEFORE any real BBCode tags are inserted, so game text can never be
+  misread as markup.
+- **Deliberately not rendered this pass**: the Character Sheet's portrait
+  `<img>` (Godot's `[img]` BBCode tag expects a resource path, not an
+  arbitrary embedded data URI, and validating that is separate scope) and
+  the Item Catalog's search `<input>`/`<button>` (a real HTML form needs a
+  submission the static conversion has no path for). Both degrade
+  gracefully — the tag is simply dropped rather than shown broken. Every
+  plain `<a href="...">` link still works, INCLUDING the catalog's
+  Prev/Next pagination links, since those are ordinary hrefs the overlay
+  can click through like any other — only the free-text search box itself
+  doesn't function in-overlay.
+- **Toggled like every other gameplay window** — a new rebindable
+  `Keybindings` action (`toggle_companion_browser`, default **Tab**),
+  wired into `World._unhandled_input`/`_any_gameplay_window_open`/
+  `_close_gameplay_windows` exactly like Inventory/Crafting/Skills already
+  are, so Escape closes it too and it shares their "hide world hints while
+  open" behavior for free.
+- **Testing boundary matches `companion_server.gd`'s own, deliberately**:
+  the real `HTTPRequest`/`RichTextLabel`/`Node` glue
+  (`scenes/companion_browser_overlay.gd`) has no GUT test file — "real
+  socket I/O isn't something a headless test suite should exercise," the
+  same boundary this doc's own Local transport section already draws for
+  the server side. Everything that CAN be pure already is:
+  `CompanionHtmlToBbcode.convert` (HTML → BBCode, tested against real
+  fixture HTML from the actual view generators) and the href → absolute
+  URL resolution the overlay uses to follow a clicked link.
 
 ### Tier 2 — the Hall and the Scrivener
 

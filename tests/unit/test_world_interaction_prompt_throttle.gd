@@ -51,6 +51,7 @@ var creatures_parent: Node2D
 var player: Player
 var interaction_prompt: Label
 var inventory_window: PanelContainer
+var companion_browser_overlay: PanelContainer
 var crafting_window: CraftingWindow
 var skill_window: SkillTreeWindow
 
@@ -67,6 +68,9 @@ func before_each():
 	inventory_window = PanelContainer.new()
 	inventory_window.visible = false
 	world._inventory_window = inventory_window
+	companion_browser_overlay = PanelContainer.new()
+	companion_browser_overlay.visible = false
+	world._companion_browser_overlay = companion_browser_overlay
 	crafting_window = CraftingWindow.new()
 	crafting_window.visible = false
 	world._crafting_window = crafting_window
@@ -96,6 +100,7 @@ func after_each():
 	world.free()
 	interaction_prompt.free()
 	inventory_window.free()
+	companion_browser_overlay.free()
 	crafting_window.free()
 	skill_window.free()
 	tile_map_layer.free()

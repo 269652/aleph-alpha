@@ -78,6 +78,14 @@ const ACTIONS := [
 	{"action": "toggle_skills", "label": "Toggle Skill Tree", "default": KEY_L},
 	{"action": "toggle_settings", "label": "Toggle Settings", "default": KEY_ESCAPE},
 	{"action": "toggle_console", "label": "Toggle Console", "default": KEY_QUOTELEFT},
+	# Opens the in-game companion-browser overlay (docs/concept/
+	# companion_server.md's "In-game overlay" section) -- a real HTTP client
+	# of the already-running local CompanionServer, so the character sheet/
+	# item catalog/companions pages never require alt-tabbing to a real
+	# browser. Tab was unbound by this project (only Godot's own built-in
+	# ui_focus_next uses it, and this is not a focus-heavy UI), so no
+	# existing binding needed to move to make room.
+	{"action": "toggle_companion_browser", "label": "Toggle Companion Browser", "default": KEY_TAB},
 ]
 
 ## action -> keycode, only for actions the player has changed from default.

@@ -39,6 +39,7 @@ const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 const DevConsole = preload("res://scenes/dev_console.gd")
 const InventoryWindow = preload("res://scenes/inventory_window.gd")
+const CompanionBrowserOverlay = preload("res://scenes/companion_browser_overlay.gd")
 const CraftingWindow = preload("res://scenes/crafting_window.gd")
 const SkillTreeWindow = preload("res://scenes/skill_tree_window.gd")
 const CreaturePanel = preload("res://scenes/creature_panel.gd")
@@ -239,6 +240,7 @@ const NO_FORCED_HOUR := -1.0
 
 const CONSOLE_TOGGLE_ACTION := "toggle_console"
 const INVENTORY_TOGGLE_ACTION := "toggle_inventory"
+const COMPANION_BROWSER_TOGGLE_ACTION := "toggle_companion_browser"
 const CRAFTING_TOGGLE_ACTION := "toggle_crafting"
 const SKILLS_TOGGLE_ACTION := "toggle_skills"
 const SETTINGS_TOGGLE_ACTION := "toggle_settings"
@@ -411,6 +413,7 @@ var _item_catalog := ItemCatalog.new()
 var _crafting_recipe_book := CraftingRecipeBook.new()
 var _dev_console: PanelContainer
 var _inventory_window: PanelContainer
+var _companion_browser_overlay: PanelContainer
 var _crafting_window: CraftingWindow
 var _skill_window: SkillTreeWindow
 var _settings_overlay: SettingsOverlay
@@ -699,6 +702,7 @@ func _ready() -> void:
 	_build_spell_bar()
 	_build_dev_console()
 	_build_inventory_window()
+	_build_companion_browser_overlay()
 	_build_crafting_window()
 	_build_skill_window()
 	_build_settings_overlay()
@@ -1073,6 +1077,24 @@ func _build_inventory_window() -> void:
 	_inventory_window.item_clicked.connect(_on_inventory_item_clicked)
 	_inventory_window.unequip_requested.connect(_on_inventory_unequip_requested)
 	_inventory_window.items_reordered.connect(_on_inventory_items_reordered)
+
+
+## Builds the in-game companion-browser overlay (see CompanionBrowserOverlay,
+## docs/concept/companion_server.md's "In-game overlay" section), hidden
+## until toggled with the toggle_companion_browser action (default Tab).
+## Centered the same way _build_inventory_window is, sized to match
+## CompanionBrowserOverlay's own custom_minimum_size (560x420) -- keep this
+## in sync with that if it ever changes, same off-screen risk that window's
+## own doc comment already warns about.
+func _build_companion_browser_overlay() -> void:
+	_companion_browser_overlay = CompanionBrowserOverlay.new()
+	_companion_browser_overlay.theme = _ui_theme
+	_companion_browser_overlay.set_anchors_preset(Control.PRESET_CENTER)
+	_companion_browser_overlay.offset_left = -280.0
+	_companion_browser_overlay.offset_top = -210.0
+	_companion_browser_overlay.offset_right = 280.0
+	_companion_browser_overlay.offset_bottom = 210.0
+	_ui.add_child(_companion_browser_overlay)
 
 
 ## Clicking an inventory row activates that item (see Player.activate_item_id):
@@ -2498,6 +2520,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_dev_console.toggle()
 	elif event.is_action_pressed(INVENTORY_TOGGLE_ACTION):
 		_inventory_window.toggle()
+	elif event.is_action_pressed(COMPANION_BROWSER_TOGGLE_ACTION):
+		_companion_browser_overlay.toggle()
 	elif event.is_action_pressed(CRAFTING_TOGGLE_ACTION):
 		_crafting_window.toggle()
 	elif event.is_action_pressed(SKILLS_TOGGLE_ACTION):
@@ -2651,7 +2675,12 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 
 
 func _any_gameplay_window_open() -> bool:
-	return _inventory_window.visible or _crafting_window.is_open() or _skill_window.is_open()
+	return (
+		_inventory_window.visible
+		or _companion_browser_overlay.visible
+		or _crafting_window.is_open()
+		or _skill_window.is_open()
+	)
 
 
 ## Whether a WORLD-SPACE floating hint -- the "Talk (G)"/"Pick (E)" prompt,
@@ -2679,6 +2708,7 @@ static func world_hint_visible_for(can_show: bool, window_open: bool) -> bool:
 ## rather than needing one press per open window.
 func _close_gameplay_windows() -> void:
 	_inventory_window.visible = false
+	_companion_browser_overlay.visible = false
 	_crafting_window.visible = false
 	_skill_window.visible = false
 
