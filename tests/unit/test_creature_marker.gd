@@ -2093,6 +2093,14 @@ class ForageWorld:
 	func solid_obstacles_near(_p: Vector2, _r: float) -> Array:
 		return []
 
+	## Records every call (see docs/concept/leaf_litter.md's animal-dispersal
+	## trigger) -- CreatureMarker._step_leaf_litter_dispersal's own
+	## self-throttled entrypoint.
+	var leaf_dispersal_calls: Array = []
+	func disperse_leaf_litter_near(p: Vector2) -> bool:
+		leaf_dispersal_calls.append(p)
+		return true
+
 
 func _hungry_grazer(species: String, world) -> CreatureMarker:
 	var marker := CreatureMarker.new()
@@ -2144,6 +2152,19 @@ func test_eating_a_tuft_settles_the_hunger_that_sent_it_there():
 		if not world.grazed.is_empty():
 			break
 	assert_false(horse._needs.is_hungry(), "a fed animal is not still hunting for food")
+
+
+## Leaf-litter dispersal (see docs/concept/leaf_litter.md): "walking over"
+## litter needs no _current_action gate the way swimming's own water-ripple
+## does -- an ordinary grazing/wandering creature (no grass to eat here, so
+## it falls through to the general wander/decision path) still counts as
+## grounded contact every frame.
+func test_a_creature_disperses_nearby_leaf_litter_as_it_moves():
+	var world := ForageWorld.new()
+	var horse := _hungry_grazer("horse", world)
+	for _i in 60:
+		horse._process(1.0 / 60.0)
+	assert_gt(world.leaf_dispersal_calls.size(), 0, "a moving creature should eventually check for nearby litter")
 
 
 ## The full-stack version of GrazerForaging's own snow-slows-grazing claim

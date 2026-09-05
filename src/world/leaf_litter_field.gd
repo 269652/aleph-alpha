@@ -39,6 +39,7 @@ extends RefCounted
 
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const WindDispersal = preload("res://src/world/wind_dispersal.gd")
+const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 ##   seed             -- a unique per-leaf integer (assignment order), for any
 ##                        caller needing an independent deterministic roll
 ##                        per leaf (see docs/concept/leaf_litter.md's wind
@@ -93,6 +94,24 @@ const WIND_DISPERSAL_CHANCE := 0.12
 const _WIND_ROLL_SALT := 8501
 const _WIND_LANDING_SALT := 30011
 
+## A dry fallen leaf's real mass -- commonly cited at well under a gram for
+## a single leaf; kept generous (2g, roughly a small handful of litter) so
+## this never depends on getting any one species' exact leaf mass right.
+## Fed into PebbleDispersion.dispersion_chance (see try_disperse_near) the
+## same "footstep momentum vs. the target's own mass" model
+## LiftableStone.try_disperse already uses for pebbles -- at this mass the
+## ratio is so lopsided that it clamps to PebbleDispersion.MAX_DISPERSION_
+## CHANCE_PER_CONTACT regardless (pinned by
+## test_a_leaf_is_light_enough_to_hit_the_max_dispersion_chance in
+## test_leaf_litter_field.gd), which is exactly right: real dry litter is
+## light enough that almost any footstep disturbs it.
+const LEAF_EFFECTIVE_MASS_KG := 0.002
+
+## Salt for the per-contact dispersion roll (see try_disperse_near),
+## independent of the wind salts above -- the same independent-second-
+## sample technique this file already uses between its own rolls.
+const _CONTACT_ROLL_SALT := 51193
+
 var _leaves: Array[Dictionary] = []
 var _wind_direction := Vector2.RIGHT
 var _wind_strength := 0.0
@@ -129,6 +148,7 @@ func add_leaf(position: Vector2, species: String, season: String, now: float) ->
 		"transition_from": position - Vector2(0.0, FALL_HEIGHT),
 		"transition_start": now,
 		"seed": _next_leaf_seed,
+		"contact_count": 0,
 	})
 	_next_leaf_seed += 1
 
@@ -186,6 +206,38 @@ func relocate_leaf_near(pos: Vector2, radius: float, new_position: Vector2, now:
 	if best_index < 0:
 		return false
 	var leaf: Dictionary = _leaves[best_index]
+	leaf.transition_from = leaf.position
+	leaf.transition_start = now
+	leaf.position = new_position
+	return true
+
+
+## Player/animal contact dispersion -- mirrors PebbleDispersion's own mass-
+## weighted per-contact roll shape (LiftableStone.try_disperse), applied to
+## the nearest leaf within `radius` of `walker_position`. Rolled fresh on
+## every contact off the leaf's own seed + its own running contact_count
+## (never engine randf() -- see PixelNoise's own doc comment on why), so a
+## leaf that survives one brush might still be nudged by the next. Reuses
+## relocate_leaf_near's own transition machinery once the roll succeeds, so
+## a player-scattered leaf eases into its new spot exactly like a wind- or
+## animal-scattered one does. Returns whether a leaf was actually found and
+## nudged.
+func try_disperse_near(walker_position: Vector2, radius: float, now: float) -> bool:
+	var best_index := -1
+	var best_distance := radius
+	for i in _leaves.size():
+		var distance: float = _leaves[i].position.distance_to(walker_position)
+		if distance <= best_distance:
+			best_index = i
+			best_distance = distance
+	if best_index < 0:
+		return false
+	var leaf: Dictionary = _leaves[best_index]
+	var roll := PixelNoise.unit(leaf.seed, leaf.contact_count, _CONTACT_ROLL_SALT)
+	leaf.contact_count += 1
+	if roll >= PebbleDispersion.dispersion_chance(LEAF_EFFECTIVE_MASS_KG):
+		return false
+	var new_position := PebbleDispersion.nudge(walker_position, leaf.position)
 	leaf.transition_from = leaf.position
 	leaf.transition_start = now
 	leaf.position = new_position

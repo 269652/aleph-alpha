@@ -5879,6 +5879,65 @@ func test_unload_chunk_frees_its_leaf_litter_multimesh():
 	assert_true(not is_instance_valid(mmi) or mmi.is_queued_for_deletion())
 
 
+## nearest_leaf_litter_near/consume_leaf_litter_at/disperse_leaf_litter_near
+## mirror worms_near/take_seed_at's own single-chunk-injection test style --
+## fast (no real chunk load needed), since these are mechanical 3x3-chunk-
+## neighbourhood passthroughs to LeafLitterField's own already-tested
+## methods (see test_leaf_litter_field.gd for the actual placement/roll
+## math).
+
+func _field_at(chunk_coord: Vector2i) -> LeafLitterField:
+	if not manager._leaf_litter_fields.has(chunk_coord):
+		manager._leaf_litter_fields[chunk_coord] = LeafLitterField.new()
+	return manager._leaf_litter_fields[chunk_coord]
+
+
+func test_nearest_leaf_litter_near_finds_a_leaf_in_the_center_chunk():
+	var field := _field_at(Vector2i(0, 0))
+	field.add_leaf(Vector2(10, 10), "cherry", "autumn", 0.0)
+	var found := manager.nearest_leaf_litter_near(Vector2(12, 10), 20.0)
+	assert_eq(found.get("species"), "cherry")
+
+
+func test_nearest_leaf_litter_near_reaches_into_a_neighbouring_chunk():
+	var chunk_size_px := EarthChunkManager.CHUNK_SIZE * TerrainRenderer.TILE_SIZE
+	# Just across the boundary into chunk (1, 0), close to the query point in
+	# chunk (0, 0) -- only the 3x3-neighbourhood scan can find this.
+	var neighbour_position := Vector2(chunk_size_px + 5.0, 10.0)
+	var field := _field_at(Vector2i(1, 0))
+	field.add_leaf(neighbour_position, "acorn", "autumn", 0.0)
+	var found := manager.nearest_leaf_litter_near(Vector2(chunk_size_px - 5.0, 10.0), 20.0)
+	assert_eq(found.get("species"), "acorn")
+
+
+func test_consume_leaf_litter_at_removes_a_real_leaf_and_reports_success():
+	var field := _field_at(Vector2i(0, 0))
+	field.add_leaf(Vector2(10, 10), "cherry", "autumn", 0.0)
+	assert_true(manager.consume_leaf_litter_at(Vector2(10, 10)))
+	assert_eq(field.leaves().size(), 0)
+
+
+func test_consume_leaf_litter_at_misses_an_empty_position():
+	assert_false(manager.consume_leaf_litter_at(Vector2(10, 10)))
+
+
+func test_disperse_leaf_litter_near_can_relocate_a_settled_leaf():
+	var field := _field_at(Vector2i(0, 0))
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.TRANSITION_DURATION + 0.1)  # settle first
+	var moved := false
+	for attempt in 50:
+		manager.set_world_age_seconds(10.0 + attempt)
+		if manager.disperse_leaf_litter_near(Vector2(102, 100)):
+			moved = true
+			break
+	assert_true(moved, "a leaf this light should disperse within 50 contact rolls")
+
+
+func test_disperse_leaf_litter_near_misses_with_nothing_nearby():
+	assert_false(manager.disperse_leaf_litter_near(Vector2(900, 900)))
+
+
 ## step_leaf_litter is what actually fills the MultiMesh from the field's own
 ## current leaves -- proven here by a leaf the test injects directly into the
 ## chunk's field (mirroring this file's own "poke internal state directly"

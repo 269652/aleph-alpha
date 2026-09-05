@@ -72,6 +72,7 @@ const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
+const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
@@ -6639,6 +6640,29 @@ func consume_leaf_litter_at(pixel_position: Vector2) -> bool:
 			if field == null:
 				continue
 			if field.consume_leaf_at(pixel_position):
+				return true
+	return false
+
+
+## Player/animal contact dispersion (see docs/concept/leaf_litter.md) --
+## finds the single nearest leaf within PebbleDispersion.TRIGGER_RADIUS_PX
+## of `walker_position` (across the same 3x3 chunk neighbourhood
+## nearest_leaf_litter_near scans) and gives IT a chance to be nudged (see
+## LeafLitterField.try_disperse_near). Relocation stays within the leaf's
+## own originating chunk's field -- no cross-chunk hand-off bookkeeping, the
+## same "not worth the complexity for a cosmetic scatter" reasoning
+## relocate_leaf_near's own doc comment gives. Returns whether a leaf was
+## actually found and nudged.
+func disperse_leaf_litter_near(walker_position: Vector2) -> bool:
+	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(walker_position))
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var field: LeafLitterField = _leaf_litter_fields.get(center_chunk + Vector2i(dx, dy))
+			if field == null:
+				continue
+			if field.try_disperse_near(
+				walker_position, PebbleDispersion.TRIGGER_RADIUS_PX, _world_age_seconds
+			):
 				return true
 	return false
 

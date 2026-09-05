@@ -4048,6 +4048,7 @@ func _process(delta: float) -> void:
 		_step_path_scarring(delta)
 		if focus_player != null:
 			_step_pebble_dispersion(focus_player)
+			_step_leaf_litter_dispersion(focus_player)
 
 	if _is_dedicated_server:
 		_server_process()
@@ -4118,6 +4119,19 @@ func _step_pebble_dispersion(local_player: Player) -> void:
 	for stone in _chunk_manager.liftable_stones_near(local_player.position, PebbleDispersion.TRIGGER_RADIUS_PX):
 		if stone.has_method("try_disperse"):
 			stone.try_disperse(local_player.position)
+
+
+## Player leaf-litter dispersion (see LeafLitterField.try_disperse_near,
+## docs/concept/leaf_litter.md) -- same host-gated call site and the same
+## mass/contact-probability-roll shape as _step_pebble_dispersion just
+## above, applied to the single nearest settled leaf instead of every
+## nearby pebble (a leaf's own dispersal roll is already a single-nearest
+## lookup, not a list to iterate -- see EarthChunkManager.
+## disperse_leaf_litter_near).
+func _step_leaf_litter_dispersion(local_player: Player) -> void:
+	if _chunk_manager == null or local_player.is_dead:
+		return
+	_chunk_manager.disperse_leaf_litter_near(local_player.position)
 
 
 ## How often herbivores get a chance to eat dropped tree food -- cheap

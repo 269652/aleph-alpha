@@ -294,6 +294,62 @@ func test_wind_never_touches_a_leaf_still_mid_transition():
 	assert_eq(leaf.transition_from, Vector2(100, 100 - LeafLitterField.FALL_HEIGHT), "still mid-fall, untouched by wind")
 
 
+# -- contact dispersion: the player/animal trigger shape --------------------
+#
+# Mirrors PebbleDispersion's own mass-weighted per-contact roll
+# (LiftableStone.try_disperse) -- a footstep/creature brushing a settled
+# leaf has a real chance of nudging it, rolled fresh every contact, deter-
+# ministic off the leaf's own seed (never engine randf() -- see PixelNoise's
+# own doc comment on why). LEAF_EFFECTIVE_MASS_KG is small enough that this
+# lands at PebbleDispersion.MAX_DISPERSION_CHANCE_PER_CONTACT in practice
+# (see test_a_leaf_is_light_enough_to_hit_the_max_dispersion_chance) --
+# real dry litter is light enough that almost any footstep disturbs it.
+
+const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
+
+
+func test_a_leaf_is_light_enough_to_hit_the_max_dispersion_chance():
+	assert_almost_eq(
+		PebbleDispersion.dispersion_chance(LeafLitterField.LEAF_EFFECTIVE_MASS_KG),
+		PebbleDispersion.MAX_DISPERSION_CHANCE_PER_CONTACT, 0.001
+	)
+
+
+func test_try_disperse_near_moves_the_nearest_leaf_within_radius():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.TRANSITION_DURATION + 0.1)  # let it settle first
+	var moved := false
+	for attempt in 50:
+		if field.try_disperse_near(Vector2(102, 100), PebbleDispersion.TRIGGER_RADIUS_PX, 10.0 + attempt):
+			moved = true
+			break
+	assert_true(moved, "a leaf this light should disperse within 50 contact rolls")
+	assert_ne(field.leaves()[0].position, Vector2(100, 100), "a dispersed leaf must actually move")
+
+
+func test_try_disperse_near_misses_when_nothing_is_within_radius():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	assert_false(field.try_disperse_near(Vector2(900, 900), PebbleDispersion.TRIGGER_RADIUS_PX, 10.0))
+	assert_eq(field.leaves()[0].position, Vector2(100, 100))
+
+
+func test_try_disperse_near_pushes_the_leaf_away_from_the_walker():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.TRANSITION_DURATION + 0.1)
+	for attempt in 50:
+		if field.try_disperse_near(Vector2(102, 100), PebbleDispersion.TRIGGER_RADIUS_PX, 10.0 + attempt):
+			# The walker stands to the LEFT (x=102 -> leaf at x=100 is to
+			# its own left); a push AWAY must move the leaf further left
+			# still, mirroring PebbleDispersion.nudge's own "shoved out from
+			# underfoot" contract.
+			assert_lt(field.leaves()[0].position.x, 100.0)
+			return
+	fail_test("a leaf this light never dispersed across 50 contact rolls")
+
+
 func test_wind_does_not_roll_before_its_own_throttle_interval_elapses():
 	var field := _settled_field(40)
 	var before := _positions(field)
