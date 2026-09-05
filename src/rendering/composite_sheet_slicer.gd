@@ -738,15 +738,129 @@ static func _reachable_background(sheet: Image, piece: Image) -> Dictionary:
 	return outside
 
 
+## ## White speckles scattered through a drawing's own interior
+##
+## Reported: "the new tree sprites have white speckles around outline" (pine's
+## turning/autumn frame named specifically). NOT a keying/background problem
+## -- confirmed directly: `aggressive` keying (which erodes background and its
+## anti-aliased halo to convergence) leaves these pixels completely untouched,
+## and sampling their raw colour shows them fully OPAQUE, sitting among
+## normal richly-saturated foliage colour with no gradient leading to them.
+## That rules out anti-aliasing (a blend always has neighbours between the
+## two colours it blends) and unreached background (background here reads
+## near-white AND low-saturation, exactly like these pixels, but a real gap
+## between foliage clusters is many pixels across, not a single fleck) --
+## what is left is noise baked into the source art itself, most likely an
+## artifact of however these sheets were generated.
+##
+## The real, measured signal that tells a speckle apart from a genuine pale
+## FEATURE (a snow-covered bough, a blossom petal) is not colour -- both read
+## identically pale/low-saturation -- but SIZE: grouping pale pixels into
+## connected components (8-connectivity, same style as the blob detection
+## above), a speckle is a small fleck and a real feature is a large patch,
+## with a wide, clean gap between the two on every real sheet measured. Pine's
+## turning and leaf frames -- neither of which has any business drawing real
+## pale content -- top out at 40 and 61 pixels for their single LARGEST pale
+## component. Pine's snow frame -- real, legitimate pale content throughout --
+## has plenty of small pale fragments too (its own edges), but its real snow
+## patches run 446 to 1123 pixels each: an order of magnitude past anything
+## either non-snow frame ever reaches. A single fixed size threshold
+## comfortably inside that gap catches every measured speckle without ever
+## reaching a real patch's own size, on any of the three frames checked.
+const SPECKLE_MAX_COMPONENT_PIXELS := 150
+
+## Replaces every pixel of a small, isolated pale speckle with a single
+## average colour drawn from the non-pale opaque pixels bordering that WHOLE
+## speckle -- one colour per component, not per pixel, so a speckle more than
+## one pixel deep still gets a real colour for its own interior (which may
+## have no non-pale pixel touching it directly). Applies everywhere, since
+## the artifact this fixes has nothing to do with whether the sheet needed
+## background-keying at all. A large pale connected component (see
+## SPECKLE_MAX_COMPONENT_PIXELS' own doc comment) is a real feature and is
+## left completely alone. Replacements are computed from the ORIGINAL pixels
+## and applied only after every component has been found and sized, so
+## fixing one speckle never feeds a wrong "normal" reading into sizing or
+## fixing the speckle next to it.
+static func despeckle(piece: Image) -> Image:
+	var wide := piece.get_width()
+	var high := piece.get_height()
+	var is_pale := {}
+	for y in high:
+		for x in wide:
+			var c := piece.get_pixel(x, y)
+			if c.a <= 0.0:
+				continue
+			var luminance := (c.r + c.g + c.b) / 3.0
+			if luminance >= HALO_LUMINANCE and c.s <= HALO_MAX_SATURATION:
+				is_pale[Vector2i(x, y)] = true
+
+	var visited := {}
+	var speckle_components: Array = [] # Array[Array[Vector2i]]
+	for start in is_pale:
+		if visited.has(start):
+			continue
+		var members: Array[Vector2i] = []
+		var queue: Array[Vector2i] = [start]
+		visited[start] = true
+		while not queue.is_empty():
+			var at: Vector2i = queue.pop_back()
+			members.append(at)
+			for dy in [-1, 0, 1]:
+				for dx in [-1, 0, 1]:
+					if dx == 0 and dy == 0:
+						continue
+					var next := Vector2i(at.x + dx, at.y + dy)
+					if visited.has(next) or not is_pale.has(next):
+						continue
+					visited[next] = true
+					queue.append(next)
+		if members.size() <= SPECKLE_MAX_COMPONENT_PIXELS:
+			speckle_components.append(members)
+
+	var replacements := {} # Vector2i -> Color
+	for members in speckle_components:
+		var sum := Color(0, 0, 0)
+		var count := 0
+		for pos in members:
+			for dy in [-1, 0, 1]:
+				for dx in [-1, 0, 1]:
+					if dx == 0 and dy == 0:
+						continue
+					var nx: int = pos.x + dx
+					var ny: int = pos.y + dy
+					if nx < 0 or ny < 0 or nx >= wide or ny >= high:
+						continue
+					if is_pale.has(Vector2i(nx, ny)):
+						continue
+					var nc := piece.get_pixel(nx, ny)
+					if nc.a <= 0.0:
+						continue
+					sum += nc
+					count += 1
+		if count == 0:
+			continue # no real content borders this speckle at all -- leave it
+		var average := Color(sum.r / count, sum.g / count, sum.b / count)
+		for pos in members:
+			var alpha := piece.get_pixel(pos.x, pos.y).a
+			replacements[pos] = Color(average.r, average.g, average.b, alpha)
+
+	for pos in replacements:
+		var color: Color = replacements[pos]
+		piece.set_pixel(pos.x, pos.y, color)
+	return piece
+
+
 ## A region cut from `sheet` with its background made transparent: reachable
 ## from the edge only by default, or -- when `aggressive` is true -- every
 ## background-coloured pixel and its anti-aliased halo, reachable or not.
 ## See the two doc comments above for why the aggressive form is only ever
-## safe to ask for on the bare-winter canopy frame.
+## safe to ask for on the bare-winter canopy frame. Despeckled either way --
+## see despeckle's own doc comment for why that is a separate problem from
+## keying and applies whether or not the sheet needed keying at all.
 static func cut_out(sheet: Image, region: Rect2i, aggressive: bool = false) -> Image:
 	var piece := sheet.get_region(region)
 	if not needs_keying(sheet):
-		return piece
+		return despeckle(piece)
 	# get_region() returns a piece in the SHEET's own format. Both known
 	# needs_keying sheets (acorn, apple) decode with no alpha channel at
 	# all, and set_pixel cannot store a non-1 alpha without one -- convert
@@ -756,4 +870,4 @@ static func cut_out(sheet: Image, region: Rect2i, aggressive: bool = false) -> I
 	var outside := _aggressive_background(piece) if aggressive else _reachable_background(sheet, piece)
 	for at in outside:
 		piece.set_pixel(at.x, at.y, Color(0, 0, 0, 0))
-	return piece
+	return despeckle(piece)

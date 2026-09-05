@@ -1207,15 +1207,16 @@ enclosed pockets.
 
 **Some sheets arrive with an opaque background rather than real
 transparency**, and that background has to be found and keyed out rather
-than assumed away. Acorn's and apple's composite sheets are the two left in
-the roster with this problem -- pine, hazelnut, walnut and cherry have all
-since been re-exported with real alpha. Colour alone cannot tell a real
-opaque sheet's white background from real near-white content on it (a
-snow-covered bough, the same near-white a species' fifth canopy frame
-carries -- see "A fifth frame: snow is not a season" below), so the
-background is found by REACHABILITY instead: flooded inward from the crop's
-own edges, so anything truly enclosed by the drawing survives whatever
-colour it is.
+than assumed away. WHICH of the six species sheets currently have this
+problem has flipped more than once as the art gets regenerated -- see
+`docs/progress.md`'s "Illustrated trees" entries for the blow-by-blow -- so
+this doc deliberately does not name a roster; `CompositeSheetSlicer.
+needs_keying` is the live check. Colour alone cannot tell a real opaque
+sheet's white background from real near-white content on it (a snow-covered
+bough, the same near-white a species' fifth canopy frame carries -- see "A
+fifth frame: snow is not a season" below), so the background is found by
+REACHABILITY instead: flooded inward from the crop's own edges, so anything
+truly enclosed by the drawing survives whatever colour it is.
 
 Reachability alone is not enough on the one frame that is allowed to be
 aggressive about it: the bare-winter canopy, which never draws anything
@@ -1230,6 +1231,25 @@ the conservative, reachability-only behaviour, so a real pale drawing
 anywhere else is exactly as protected as it always was. See
 `CompositeSheetSlicer.cut_out`'s own doc comments for the measurements
 behind this.
+
+**Every cut drawing is also despeckled, independent of the keying above.**
+Reported directly: "the new tree sprites have white speckles around
+outline". Not a keying problem -- confirmed against the real art that
+`aggressive` keying (which already erodes background and its anti-aliasing
+halo to convergence) left these pixels completely untouched, and their raw
+colour is fully opaque, sitting in the middle of richly-saturated foliage
+colour with no gradient leading to them. What is left is noise baked into
+the source art itself. Colour cannot tell a speckle apart from a real pale
+feature (a snow-covered bough) either -- both read pale and low-saturation
+-- but SIZE can: grouped into connected components, a speckle is a small
+fleck (measured on pine's own leaf and turning frames: 61px and 40px for
+the single largest) where a real feature is a large patch (measured on
+pine's own snow frame: 446 to 1123px for its ten largest) -- a wide, clean
+gap on every frame checked. `CompositeSheetSlicer.despeckle` replaces every
+pixel of a small pale component with one average colour drawn from the
+real content bordering it, and leaves anything past that size completely
+alone; `cut_out` runs it on every piece it returns, whether or not that
+sheet needed background-keying at all.
 
 **Art is per species, and optional.** A species with sheets is drawn from them;
 one without falls back to the procedural painter unchanged. This is the same
