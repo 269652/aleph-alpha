@@ -115,44 +115,50 @@ const MAX_TRANSITION_OFFSET := WindDispersal.MAX_TRAVEL_TILES * TerrainRenderer.
 const MIN_TUMBLE_TURNS := 0.5
 const MAX_TUMBLE_TURNS := 3.0
 
-## How many loops a leaf's PATH completes as it swirls toward its settled
-## target -- reported directly: "the leaves and blossoms have a lot of
-## left/right movements where they end up on the same place where they
-## started and it doesn't look natural as it's a straight line ... move
-## them a bit with a left right swirl / spiral motion or tumbles or so ...
-## varying". The previous shape (transition_flutter_world, now removed)
-## swayed along ONE FIXED AXIS -- perpendicular to the straight-line travel
-## direction -- with an amplitude that decayed to exactly zero by landing,
-## which reads exactly as reported: a straight line with a symmetric
-## side-to-side wobble riding on top, always snapping back onto the line.
-## instance_swirl_offset instead curls through BOTH the direction-of-travel
-## and perpendicular axes together (see that function's own doc comment),
-## tracing a real loop around the straight-line path rather than
-## oscillating along one fixed line.
+## How many superposed sine terms build up a leaf's own random-looking
+## sideways wander -- two rounds of report on the same underlying motion.
+## First: "the leaves and blossoms have a lot of left/right movements
+## where they end up on the same place where they started and it doesn't
+## look natural as it's a straight line ... move them a bit with a left
+## right swirl / spiral motion or tumbles or so ... varying" -- answered
+## with a 2D curl through both the travel direction and its perpendicular
+## (`instance_swirl_offset`, since removed). Immediately followed by:
+## "now they ONLY swirl ... restore the behavior from before which looked
+## much better and natural, just the left right jitter should be
+## eliminated and changed into a random motion instead." The curl replaced
+## too much: the ORIGINAL single-axis sway (perpendicular to the straight-
+## line direction only, no curl) was the shape that looked natural: what
+## needed fixing was narrower than "it's a straight line" alone suggested.
 ##
-## The range mirrors MIN_TUMBLE_TURNS/MAX_TUMBLE_TURNS's own real-world
-## grounding at a more restrained ceiling: the PATH's own loop is a
-## secondary visual read behind the leaf's own body spin (tumble_rotation),
-## so a busier loop than the body's own rotation would compete with it
-## rather than read as one coherent tumbling-and-curling fall. Varies PER
-## LEAF (see swirl_turns_for_seed/swirl_seed_for_position) rather than one
-## fixed value for every leaf, which is the concrete "varying" the report
-## asks for -- verified by direct render, not assumed from the numbers
-## alone (see tools/probe_leaf_swirl_path.gd).
-const MIN_SWIRL_TURNS := 0.4
-const MAX_SWIRL_TURNS := 1.8
+## The old sway (`transition_flutter_world`, both versions since removed)
+## summed a primary sine at one frequency and a secondary sine at a FIXED
+## 2.7x ratio -- the SAME ratio for every leaf, only the PHASE varying --
+## so every leaf's combined waveform traced the identical shape, just
+## time-shifted. A shared, describable shape is exactly what reads as
+## "jitter" (a clean, recognisable oscillation) rather than genuine
+## randomness, no matter how many terms are summed, as long as their
+## frequencies are the same for every leaf.
+##
+## `transition_wander_world` restores the original single-axis structure
+## exactly (see that function's own doc comment) but draws each term's own
+## FREQUENCY (not just phase) from a per-leaf random-looking hash
+## (`wander_frequency_for_seed`/`wander_seed_for_position`) -- no two
+## leaves' combined waveform shares a shape at all any more, which is what
+## "random motion" means here in a continuous, stateless vertex shader (no
+## per-frame randomness, which would look like flicker -- only per-LEAF
+## variety in an otherwise perfectly smooth, deterministic function of
+## progress). 3 terms is enough superposition to read as irregular without
+## so many the shader pays for detail nobody can actually perceive.
+const WANDER_TERM_COUNT := 3
 
-## How wide a leaf's own loop swings, as a fraction of FALL_SWAY_WORLD --
-## varies per leaf ALONGSIDE swirl_turns, but independently of it (see
-## test_swirl_radius_fraction_is_not_simply_the_turns_fraction_restated),
-## so some leaves trace a wide, lazy loop, others a tight, fast one, rather
-## than every leaf's spiral being sized the same way its turn count is.
-## Never below half of FALL_SWAY_WORLD (the loop should still read as a
-## real swirl at its narrowest, not shrink away to an imperceptible wiggle)
-## and never above the full amount (the same ceiling the old flutter's own
-## amplitude was already tuned against).
-const MIN_SWIRL_RADIUS_FRACTION := 0.5
-const MAX_SWIRL_RADIUS_FRACTION := 1.0
+## The frequency band each wander term's own per-leaf-random rate is drawn
+## from, expressed as a multiple of FALL_SWAY_CYCLES (the same "how fast
+## does a leaf visibly sway" rate this file already established, rather
+## than inventing an unrelated new scale) -- wide enough that different
+## terms within one leaf, and the same term across different leaves, land
+## at genuinely different rates rather than near-duplicates of each other.
+const WANDER_MIN_FREQUENCY_MULT := 0.5
+const WANDER_MAX_FREQUENCY_MULT := 2.6
 
 static var SHADER_CODE: String = _build_shader_code()
 
@@ -238,79 +244,83 @@ static func phase_for_position(position: Vector2) -> float:
 
 
 ## A second, independent per-leaf hash -- DELIBERATELY different magic
-## constants from phase_for_position's own, so a leaf's swirl shape (how
-## many loops, how wide) varies independently of its flutter/tumble phase
-## rather than the two always moving together because they share one
-## number. Same fract(sin(x)*big_constant) idiom this file already
-## establishes for position-derived variety with no stored channel needed.
-## GLSL:
-##   float swirl_seed = fract(sin(root.x * 0.1361 + root.y * 0.0827) * 12945.017);
-static func swirl_seed_for_position(position: Vector2) -> float:
+## constants from phase_for_position's own, so a leaf's wander shape
+## varies independently of its flutter/tumble phase rather than the two
+## always moving together because they share one number. Same
+## fract(sin(x)*big_constant) idiom this file already establishes for
+## position-derived variety with no stored channel needed. GLSL:
+##   float wander_seed = fract(sin(root.x * 0.1361 + root.y * 0.0827) * 12945.017);
+static func wander_seed_for_position(position: Vector2) -> float:
 	var h := sin(position.x * 0.1361 + position.y * 0.0827) * 12945.017
 	return fposmod(h, 1.0)
 
 
-## How many loops THIS leaf's own swirl completes (see MIN_SWIRL_TURNS's own
-## doc comment for the real-world reasoning behind the range). GLSL:
-##   float swirl_turns = mix(min_swirl_turns, max_swirl_turns, swirl_seed);
-static func swirl_turns_for_seed(seed_value: float) -> float:
-	return lerpf(MIN_SWIRL_TURNS, MAX_SWIRL_TURNS, clampf(seed_value, 0.0, 1.0))
+## Wander term `term_index`'s (0..WANDER_TERM_COUNT-1) own per-leaf-random
+## frequency, as a multiple of FALL_SWAY_CYCLES (see WANDER_TERM_COUNT's own
+## doc comment for why the FREQUENCY -- not just the phase -- must vary per
+## leaf and per term for this to read as random rather than jitter). Mixes
+## `term_index` into the hash (not just `seed_value`) so the several terms
+## within one SAME leaf land on different frequencies too, not just
+## different leaves relative to each other. GLSL:
+##   float wander_frequency = mix(wander_min_frequency_mult, wander_max_frequency_mult,
+##       fract(sin(wander_seed * 91.7 + float(term_index) * 37.21) * 5871.3)) * fall_sway_cycles;
+static func wander_frequency_for_seed(seed_value: float, term_index: int) -> float:
+	var h := sin(seed_value * 91.7 + float(term_index) * 37.21) * 5871.3
+	var fraction := fposmod(h, 1.0)
+	return lerpf(WANDER_MIN_FREQUENCY_MULT, WANDER_MAX_FREQUENCY_MULT, fraction) * FALL_SWAY_CYCLES
 
 
-## How wide THIS leaf's own loop swings, as a fraction of FALL_SWAY_WORLD.
-## Reads a DIFFERENT sub-value than swirl_turns_for_seed's own raw seed
-## (see MIN_SWIRL_RADIUS_FRACTION's own doc comment for why), so turn-count
-## and loop-width vary independently rather than always moving together.
-## GLSL:
-##   float swirl_radius_fraction = mix(
-##       min_swirl_radius_fraction, max_swirl_radius_fraction, fract(swirl_seed * 7.0));
-static func swirl_radius_fraction_for_seed(seed_value: float) -> float:
-	return lerpf(
-		MIN_SWIRL_RADIUS_FRACTION, MAX_SWIRL_RADIUS_FRACTION, fposmod(seed_value * 7.0, 1.0)
-	)
+## Wander term `term_index`'s own per-leaf-random phase -- a DIFFERENT hash
+## than wander_frequency_for_seed's own (different magic constants), so
+## frequency and phase vary independently rather than always moving
+## together. GLSL:
+##   float wander_phase = fract(sin(wander_seed * 53.13 + float(term_index) * 71.93) * 3217.7) * TAU;
+static func wander_phase_for_seed(seed_value: float, term_index: int) -> float:
+	var h := sin(seed_value * 53.13 + float(term_index) * 71.93) * 3217.7
+	return fposmod(h, 1.0) * TAU
 
 
-## The swirling offset (world pixels) at progress `t`: a real loop curling
-## through BOTH `direction` (the transition's own straight-line travel
-## axis) and `perpendicular` together, rather than a wobble confined to
-## `perpendicular` alone (see MIN_SWIRL_TURNS's own doc comment for why
-## that read as "a straight line with a symmetric side-to-side wobble" --
-## the reported bug this replaces). Traced as a rotating radius in the
-## (direction, perpendicular) basis -- `angle` sweeps around as `t`
-## advances, so the offset genuinely curls rather than sliding back and
-## forth along one fixed line -- with `radius` shaped as a BUMP (zero at
-## t==0, widest around the middle of the journey, zero again at t==1, via
-## sin(t*PI)) rather than a one-sided decay: a leaf's real transition_from
-## IS its true starting point, so the swirl should not displace it away
-## from there any more than it should leave it stranded off its real
-## target. `phase` reuses the SAME position-derived phase flutter/tumble
-## already read (so a leaf's spiral begins at the same "moment" its own
-## tumble does -- no jarring seam between the two), `swirl_seed` is the
-## second, independent per-leaf hash (see swirl_seed_for_position) driving
-## how many loops and how wide THIS leaf's own spiral is. GLSL:
-##   float swirl_turns = mix(min_swirl_turns, max_swirl_turns, swirl_seed);
-##   float swirl_radius_fraction = mix(
-##       min_swirl_radius_fraction, max_swirl_radius_fraction, fract(swirl_seed * 7.0));
-##   float swirl_angle = t * TAU * swirl_turns + phase;
-##   float swirl_radius = fall_sway_world * swirl_radius_fraction * sin(t * PI);
-##   vec2 swirl_offset = (direction * cos(swirl_angle) + perpendicular * sin(swirl_angle)) * swirl_radius;
-static func instance_swirl_offset(
-	t: float, phase: float, swirl_seed: float, direction: Vector2, perpendicular: Vector2
-) -> Vector2:
-	var turns := swirl_turns_for_seed(swirl_seed)
-	var radius_fraction := swirl_radius_fraction_for_seed(swirl_seed)
-	var angle := t * TAU * turns + phase
-	var radius := FALL_SWAY_WORLD * radius_fraction * sin(t * PI)
-	return (direction * cos(angle) + perpendicular * sin(angle)) * radius
+## The sideways wander magnitude (perpendicular to the transition's own
+## direction -- the ORIGINAL single-axis structure, restored exactly, see
+## WANDER_TERM_COUNT's own doc comment for why this replaces the 2D curl)
+## at progress `t`, tapering to zero by the time the transition completes
+## -- mirrors DroppedItem._step_fall's own `sway` line's overall SHAPE
+## (`sin(...) * FALL_SWAY_WORLD * (1.0 - t)`), but sums WANDER_TERM_COUNT
+## sine terms at PER-LEAF-RANDOM frequencies (see wander_frequency_for_seed)
+## instead of one fixed frequency (or two at a fixed shared ratio, the
+## previous version) -- decreasing weight per term (1/(term_index+1), the
+## same "later octaves matter less" shape simple noise-by-summed-sines
+## techniques already use), normalised back to the SAME FALL_SWAY_WORLD
+## ceiling the single-sine original had so this reads as more IRREGULAR,
+## not simply LOUDER. GLSL:
+##   float wander_total = 0.0;
+##   float wander_weight_total = 0.0;
+##   for (int term_index = 0; term_index < wander_term_count; term_index++) {
+##       float freq = mix(wander_min_frequency_mult, wander_max_frequency_mult,
+##           fract(sin(wander_seed * 91.7 + float(term_index) * 37.21) * 5871.3)) * fall_sway_cycles;
+##       float ph = fract(sin(wander_seed * 53.13 + float(term_index) * 71.93) * 3217.7) * TAU;
+##       float weight = 1.0 / float(term_index + 1);
+##       wander_total += sin(t * TAU * freq + ph) * weight;
+##       wander_weight_total += weight;
+##   }
+##   float wander_mag = (wander_total / wander_weight_total) * fall_sway_world * (1.0 - t);
+static func transition_wander_world(t: float, wander_seed: float) -> float:
+	var total := 0.0
+	var weight_total := 0.0
+	for term_index in WANDER_TERM_COUNT:
+		var freq := wander_frequency_for_seed(wander_seed, term_index)
+		var ph := wander_phase_for_seed(wander_seed, term_index)
+		var weight := 1.0 / float(term_index + 1)
+		total += sin(t * TAU * freq + ph) * weight
+		weight_total += weight
+	return (total / weight_total) * FALL_SWAY_WORLD * (1.0 - t)
 
 
 ## The wobble a leaf carries WHILE actively transitioning, tapering to zero
-## by the time the transition completes (the same (1.0 - t) taper shape
-## instance_swirl_offset's own radius uses, just as a one-sided decay here
-## rather than a bump -- this is the sprite's own body rotation, not the
-## ground-plane path, so it has no equivalent "must not displace the real
-## t==0 starting point" concern to guard against). Mirrors DroppedItem._step_
-## fall's own rotation line exactly:
+## by the time the transition completes -- the same (1.0 - t) taper shape
+## transition_wander_world's own magnitude uses, just as its own separate
+## effect: this is the sprite's own BODY rotation, not the ground-plane
+## path. Mirrors DroppedItem._step_fall's own rotation line exactly:
 ##   sin(t * TAU * FALL_SWAY_CYCLES + _sway_phase) * deg_to_rad(20.0) * (1.0 - t)
 ## GLSL: `float transition_rotation = sin(t * TAU * fall_sway_cycles + phase) * fall_rotation_max * (1.0 - t);`
 static func transition_rotation(t: float, phase: float) -> float:
@@ -433,10 +443,8 @@ uniform float fall_rotation_max = %s;
 uniform float ground_sway_radians = %s;
 uniform float min_tumble_turns = %s;
 uniform float max_tumble_turns = %s;
-uniform float min_swirl_turns = %s;
-uniform float max_swirl_turns = %s;
-uniform float min_swirl_radius_fraction = %s;
-uniform float max_swirl_radius_fraction = %s;
+uniform float wander_min_frequency_mult = %s;
+uniform float wander_max_frequency_mult = %s;
 
 // Pushed once per relevant tick (see set_current_time) -- NOT per instance,
 // the same "the CPU's whole per-frame job becomes pushing one float" cost
@@ -473,22 +481,29 @@ void vertex() {
 	float phase = fract(sin(root.x * 0.0973 + root.y * 0.1187) * 43758.5453) * TAU;
 
 	// A SECOND, independent per-leaf hash driving how this leaf's own
-	// swirl is shaped (see swirl_seed_for_position's own doc comment for
+	// wander is shaped (see wander_seed_for_position's own doc comment for
 	// why this is deliberately NOT the same hash as phase above).
-	float swirl_seed = fract(sin(root.x * 0.1361 + root.y * 0.0827) * 12945.017);
+	float wander_seed = fract(sin(root.x * 0.1361 + root.y * 0.0827) * 12945.017);
 
-	// The swirl: a real loop curling through BOTH direction and
-	// perpendicular together (see instance_swirl_offset's own doc comment
-	// for why this replaces a wobble confined to perpendicular alone).
-	// swirl_radius is a BUMP -- zero at t==0 and t==1, widest around the
-	// middle -- so the leaf still starts and lands exactly where its own
-	// straight-line offset says it should.
-	float swirl_turns = mix(min_swirl_turns, max_swirl_turns, swirl_seed);
-	float swirl_radius_fraction = mix(min_swirl_radius_fraction, max_swirl_radius_fraction, fract(swirl_seed * 7.0));
-	float swirl_angle = t * TAU * swirl_turns + phase;
-	float swirl_radius = fall_sway_world * swirl_radius_fraction * sin(t * PI);
-	vec2 swirl_offset = (direction * cos(swirl_angle) + perpendicular * sin(swirl_angle)) * swirl_radius;
-	vec2 offset = raw_offset * remaining + swirl_offset;
+	// The wander: the ORIGINAL single-axis (perpendicular only) sway,
+	// restored -- but summing 3 sine terms at PER-LEAF-RANDOM frequencies
+	// (see transition_wander_world's own doc comment for why the old
+	// fixed-ratio dual sine read as mechanical "jitter" rather than
+	// genuine randomness) instead of one fixed frequency. Unrolled rather
+	// than a uniform-bounded loop -- WANDER_TERM_COUNT is a compile-time
+	// constant (3); keep this block in sync if that ever changes.
+	float wander_total = 0.0;
+	float wander_weight_total = 0.0;
+	for (int wander_term = 0; wander_term < 3; wander_term++) {
+		float wander_freq = mix(wander_min_frequency_mult, wander_max_frequency_mult,
+			fract(sin(wander_seed * 91.7 + float(wander_term) * 37.21) * 5871.3)) * fall_sway_cycles;
+		float wander_phase = fract(sin(wander_seed * 53.13 + float(wander_term) * 71.93) * 3217.7) * TAU;
+		float wander_weight = 1.0 / float(wander_term + 1);
+		wander_total += sin(t * TAU * wander_freq + wander_phase) * wander_weight;
+		wander_weight_total += wander_weight;
+	}
+	float wander_mag = (wander_total / wander_weight_total) * fall_sway_world * (1.0 - t);
+	vec2 offset = raw_offset * remaining + perpendicular * wander_mag;
 
 	// Real litter tumbling in wind visibly spins THROUGH, not merely
 	// wobbles (see tumble_rotation's own doc comment) -- scaled by how far
@@ -523,7 +538,7 @@ void fragment() {
 		MAX_TRANSITION_OFFSET, WRAP_PERIOD, LeafLitterField.TRANSITION_DURATION,
 		FALL_SWAY_WORLD, FALL_SWAY_CYCLES, FALL_ROTATION_MAX_RADIANS, GROUND_SWAY_RADIANS,
 		MIN_TUMBLE_TURNS, MAX_TUMBLE_TURNS,
-		MIN_SWIRL_TURNS, MAX_SWIRL_TURNS, MIN_SWIRL_RADIUS_FRACTION, MAX_SWIRL_RADIUS_FRACTION,
+		WANDER_MIN_FREQUENCY_MULT, WANDER_MAX_FREQUENCY_MULT,
 	]
 
 
