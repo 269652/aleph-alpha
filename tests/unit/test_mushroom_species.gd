@@ -107,3 +107,13 @@ func test_every_species_item_is_food():
 	var catalog = load("res://src/gameplay/item_catalog.gd").new()
 	for id in MushroomSpecies.IDS:
 		assert_eq(catalog.kind_of(id), "food", "%s should be a food item" % id)
+
+
+# -- identification threshold (see docs/concept/mushrooms.md's -------------
+# "Identification"): real foraging knowledge comes from direct field
+# experience, not a purchased skill point -- derived from the roster's own
+# size rather than a separately eyeballed literal, so a species added or
+# removed later can't silently drift the threshold out of sync with it.
+
+func test_identification_threshold_matches_the_roster_size():
+	assert_eq(MushroomSpecies.MUSHROOMS_TO_LEARN_IDENTIFICATION, MushroomSpecies.IDS.size())

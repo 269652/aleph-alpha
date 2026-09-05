@@ -102,3 +102,14 @@ static func host_tree_for(species_id: String) -> String:
 
 static func is_saprotroph(species_id: String) -> bool:
 	return host_tree_for(species_id).is_empty()
+
+
+## How many real mushrooms (any species, edible or toxic) a player must eat
+## before they've learned to identify them on sight (see Player.
+## knows_mushrooms) -- real foraging knowledge comes from direct field
+## experience, not a purchased skill point. Equal to the roster's own size
+## (one real encounter per species) rather than an unrelated eyeballed
+## number -- pinned by test_identification_threshold_matches_the_roster_
+## size, since GDScript's cross-script constant resolution can't fold
+## `IDS.size()` directly into a const here.
+const MUSHROOMS_TO_LEARN_IDENTIFICATION := 5
