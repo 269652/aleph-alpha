@@ -1028,7 +1028,7 @@ species:
 |---|---|---|---|
 | Roped | has legs, not tiny, not world-boss scale | **Lasso** (existing) | every current herbivore *and*, newly, every non-boss predator — wolf, lynx, jaguar, bear, boar |
 | Snared | `SERPENT_SPECIES` (legless) | **Snare** (new) | venomous_snake, nonvenomous_snake, and any other legless non-boss species |
-| Netted | ambient-flyer roster (butterflies, bee, small birds) | **Butterfly net** (new) | monarch, swallowtail, blue_morpho, bee, sparrow, robin |
+| Netted | whatever the net's own mesh and mouth hold — read off the subject's body extents and the bag's geometry, see [capture_dsl.md](capture_dsl.md)'s "Mesh physics" (2026-09-05) | **Butterfly net** (new) | monarch, swallowtail, blue_morpho, sparrow, robin, goldfish, bluegill; **bee and fly slip through** the standard 10 mm mesh, trout and koi are too big for its 30 cm mouth |
 | Trapped | legged, at-or-below mouse's own `world_scale` | **Trap** (new) | mouse, and anything else authored that small later |
 | Boss-scale | `WORLD_BOSS_SPECIES` | **Reinforced rope** (new item, craftable) | lindwurm, krampus, nyx, kraken, rubezahl |
 

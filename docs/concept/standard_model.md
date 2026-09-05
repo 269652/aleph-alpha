@@ -335,6 +335,12 @@ Deterministic and closed-form, per tick:
    requested event is evaluated against it with the same single-comparison
    guard the other DSLs use. Effects are reported as the atoms to apply;
    dispatching them into the world is the ⬜ effects layer.
+   *(2026-09-05)* The compiler also exposes every **part** as facts — its
+   material, geometry, role, every dimension it was declared with, its
+   derived mass and span — under its part id, so a rule can read
+   `bag.aperture_mm` on a device that has no loop at all. That is what lets
+   the butterfly net ([capture_dsl.md](capture_dsl.md)) be a device: parts
+   and rules, no energy path.
 
 Every step is a pure function of its inputs; steps 2–5 never touch the AST
 and step 6 never touches the physics.
@@ -386,10 +392,11 @@ are single passes in fixed order; no dictionary is iterated for an answer.
 
 ### Grammar
 
-A fourth structural sibling of `spell_parser.gd`, `capture_parser.gd` and
-`npc_instruction_parser.gd` — same tokenizer, same `on EVENT(ARG) when
-GUARD: pipeline` rule, same `|>`, same guard operators and operand grammar —
-with four declarative clauses in front of the rules. Purely structural, like
+A structural sibling of `spell_parser.gd` and `npc_instruction_parser.gd`
+(and of `capture_parser.gd`, which it has since replaced — the net is device
+text now) — same tokenizer, same `on EVENT(ARG) when GUARD: pipeline` rule,
+same `|>`, same guard operators and operand grammar — with four declarative
+clauses in front of the rules. Purely structural, like
 its siblings: an unknown law or atom parses fine and is rejected one layer
 up, in the compiler.
 
@@ -468,6 +475,9 @@ example A below).
   from an animal's strength) → gear (`transform`) → pump (`transform`
   rotation→hydraulic) → pipe (`resist`) → cistern (`store`) is an irrigation
   works nobody has to add to the game.
+- **Can** write a device with no loop at all — a net, a cage, a frame. Its
+  parts compile, their dimensions become facts, and its rules read them
+  (worked example G).
 
 ## Element catalog (v1)
 
@@ -571,6 +581,20 @@ translation) and drops it; the falling head's momentum resolves through
 anvil's material. Needs the `I` element to carry the head's kinetic energy
 between ticks, and a discrete `release` event — both ⬜.
 
+### G — the butterfly net: a device with no loop *(2026-09-05)*
+
+[capture_dsl.md](capture_dsl.md)'s net, authored in this grammar: a wooden
+handle, an iron hoop and a fibre bag whose `face` carries an extra
+`aperture_mm: 10` dimension, the way a saw's edge carries `tooth_pitch_mm`.
+No `law`, no `loop` — nothing flows through a net — so the solver never
+runs; the compiler builds the part graph and exposes the bag's `aperture_mm`
+and `width_cm` as facts, and the net's `on catch` pipeline reads them:
+`mesh_holds(mesh: bag) |> catch_roll(base: 0.65) |> confine(in: bag)`. A bee
+at 6 mm across slips a 10 mm mesh, a monarch's 25 mm body does not, a 55 cm
+koi does not fit a 30 cm mouth. No species is named anywhere in the text,
+which is why a 1 mm-mesh insect net or a 40 cm landing net is one number
+away. Solved end to end in `tests/unit/test_capture_book.gd`.
+
 ## Interaction with existing systems
 
 | Existing module | Role in the standard model |
@@ -579,8 +603,8 @@ between ticks, and a discrete `release` event — both ⬜.
 | `item_part.gd` / `part_joint.gd` / `part_graph.gd` | parts and joints, reused unchanged; `cross_section_cm2` and `span_cm` are the two geometric inputs the derivations need |
 | `part_mechanics.gd` / `item_compiler.gd` | the swung-tool half of "an item is a program"; a device's rules are the same AST shape |
 | `impact_resolver.gd` | where a device's delivered momentum lands (⬜ trip hammer) |
-| `capture_parser.gd` / `spell_parser.gd` | the tokenizer and rule grammar the `device` parser is a sibling of |
-| `capture_executor.gd` | the guard evaluator the device executor mirrors |
+| `spell_parser.gd` / `npc_instruction_parser.gd` | the tokenizer and rule grammar the `device` parser is a sibling of (the former `capture_parser.gd` is retired in its favour) |
+| `capture_executor.gd` | the guard evaluator the device executor mirrors; since 2026-09-05 it resolves the net's own device rules over the compiler's part facts |
 | `open_channel_flow.gd` / `river_discharge.gd` | the real current velocity a placed water wheel's `source` will bind to (⬜ world binding) |
 | `weather_model.gd` | the real wind a placed windmill's `source` will bind to (⬜ world binding) |
 | `room_detector.gd` | the adjacency flood-fill that will discover bonds between placed devices (⬜) |
@@ -611,7 +635,8 @@ across eight files, `tests/unit/test_physics_domains.gd` through
   errors.
 - ✅ **`device_compiler.gd`** — AST → `PartGraph` + element chain; domain
   continuity checked; derived-vs-authored conflict refused; every missing
-  parameter named.
+  parameter named. *(2026-09-05)* Every part exposed as facts (material,
+  geometry, role, dimensions, mass, span) for rules on loop-less devices.
 - ✅ **`device_executor.gd`** — solved state → context; rules evaluated with
   the shared single-comparison guard; fired effects reported.
 - ✅ **`device_book.gd`** — the fixed authored examples (mill race light,
