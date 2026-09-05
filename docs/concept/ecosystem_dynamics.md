@@ -1048,6 +1048,42 @@ wired, and one still-unresolved variant), and kingfisher courtship
 itself (a `PiscivoreBirdMarker`-side follow-up, structurally out of
 this mechanism's reach — see above). Named follow-ups, not oversights.
 
+**Follow-up, reported live a third time after Phases 3 and 4 had both
+already shipped: "robins just fly from random point to point and don't
+switch between diverse actions / behaviour".** Peck/walk/sing all worked
+and were all tested — the bug was one level up. Every one of them is
+gated on `perched`, and the ONLY thing that had ever set `perched` true
+was `GroundForageBehavior` actually committing to real, nearby food (see
+`_step_ground_forage`). A bird with nothing edible within
+`GroundForageBehavior.SEARCH_TILES` — an ordinary condition, since an
+`EarthwormPatch` needs real soil moisture/warmth to surface anything at
+all — simply never perches, and so never does anything but fly, exactly
+as reported, regardless of how correct the animation wiring underneath
+is. A pre-existing test had actually pinned this as the intended
+contract (`test_a_robin_with_nothing_to_hunt_just_keeps_flying`,
+asserting `perched` stays false for a full 20-second run with nothing to
+hunt) — i.e. the bug had a regression test guarding it.
+
+The fix is a second, independent way to perch: `AmbientFlyerMarker._step_
+idle_rest`, a periodic clock (`IDLE_REST_INTERVAL_SECONDS` = 12s of
+flight, `IDLE_REST_DURATION_SECONDS` = 5s resting) with no food involved
+at all — the same way a real bird spends much of its day sitting on a
+branch or the ground between meals, not only right after one. Bird-only
+(`IllustratedBirdSprite.has_species`, the same gate flight height uses),
+and structurally unable to pre-empt an actual pursuit or a pair
+interaction: both already claim the frame with their own `return` in
+`_process` before `_step_idle_rest` is ever reached, so there is nothing
+for it to interrupt — verified directly (a bird held in `DESCENDING` all
+the way through a full idle-rest interval never perches). The old test
+above was rewritten to check what was actually always meant to be true —
+`ground_forage.phase` never commits to food that isn't there — rather
+than the accidental "never perches either" it had also been asserting.
+332 tests green across all seven bird/flyer suites (`test_ambient_flyer_
+marker.gd` itself, plus `test_piscivore_bird_marker.gd`/`test_ambient_
+flyer_renderer.gd`/`test_bird_song.gd`/`test_bird_courtship.gd`/
+`test_illustrated_bird_sprite.gd`/`test_ecosystem_simulation.gd` re-run
+as siblings with no direct relation to the fix).
+
 ## Region difficulty (gating the roster by player readiness)
 
 Rounding out the roster with real predators (bear, lion) and a real hazard

@@ -153,6 +153,32 @@ const SING_SECONDS_PER_FRAME := 0.1
 var court_frames: Array = []
 const COURT_SECONDS_PER_FRAME := 0.12
 
+## IDLE REST -- reported live, twice, even after peck/walk/sing/court all
+## existed and worked: "robins just fly from random point to point and
+## don't switch between diverse actions / behaviour". Root cause: every
+## one of those needs `perched`, and the only thing that ever set it was
+## GroundForageBehavior actually committing to REAL food (see
+## _step_ground_forage) -- a bird with nothing edible within
+## GroundForageBehavior.SEARCH_TILES (a genuinely common case: an
+## EarthwormPatch needs real soil moisture/warmth to surface anything at
+## all) never perches, and does nothing but fly, forever, exactly as
+## reported.
+##
+## This is a second, independent way to perch: on a periodic clock, no
+## food involved, the same way a real bird spends much of its day sitting
+## on a branch or the ground between meals rather than only when it has
+## just eaten. BIRDS ONLY (IllustratedBirdSprite.has_species), same gate
+## as flight height -- pollinators keep their own separate nectaring-perch
+## behaviour untouched. Never fires mid-forage or mid-pair-interaction:
+## both already claim the frame with their own `return` in _process
+## before _step_idle_rest is ever reached (see the precedence comment
+## there), so there is nothing for this to interrupt.
+const IDLE_REST_INTERVAL_SECONDS := 12.0
+const IDLE_REST_DURATION_SECONDS := 5.0
+var _idle_resting := false
+var _idle_rest_remaining := 0.0
+var _idle_rest_cooldown := IDLE_REST_INTERVAL_SECONDS
+
 ## Re-scanning the soil every frame would query the worm set per bird per
 ## frame; worms surface on a weather timescale, so it is throttled the same
 ## way the pollinator's scent sniff is.
@@ -740,6 +766,13 @@ func _process(frame_delta: float) -> void:
 	if _step_ground_forage(delta):
 		return
 
+	# A second, independent way to perch -- see _step_idle_rest's own doc
+	# comment. Only reached when ground-forage did NOT just claim the frame,
+	# i.e. only while genuinely SEEKING (or not a ground-forager at all), so
+	# it can never pre-empt an actual pursuit.
+	if _step_idle_rest(delta):
+		return
+
 	if perched:
 		_animate_wings()
 		return  # sitting still: no drift, no beat
@@ -1221,6 +1254,44 @@ func _step_ground_forage(delta: float) -> bool:
 	_look_for_fruit(delta)
 	_look_for_seeds(delta)
 	_look_for_grass_seeds(delta)
+	return false
+
+
+## See the field doc comment on _idle_resting/IDLE_REST_INTERVAL_SECONDS
+## above for why this exists. A periodic, food-independent perch: every
+## IDLE_REST_INTERVAL_SECONDS of active flight, the bird lands wherever it
+## happens to be and holds still for IDLE_REST_DURATION_SECONDS, then
+## takes off again -- same true/false-means-frame-handled contract as
+## _step_ground_forage, so _process can treat the two identically.
+##
+## Deliberately does not touch `position` at all -- the bird rests exactly
+## where it already was, the same way GroundForageBehavior's own PECKING/
+## RESUMING phases hold position while `perched` is true. Nor does it read
+## or write anything on `ground_forage`: the two perch sources are
+## independent by design (see the field comment), which is also why the
+## clock keeps ticking through a real forage cycle -- _step_idle_rest is
+## simply never CALLED during one (ground-forage already returned true and
+## claimed the frame), so no double-counting is possible either way.
+func _step_idle_rest(delta: float) -> bool:
+	if not IllustratedBirdSprite.has_species(species):
+		return false
+	if _idle_resting:
+		_idle_rest_remaining -= delta
+		if _idle_rest_remaining <= 0.0:
+			_idle_resting = false
+			perched = false
+			_idle_rest_cooldown = IDLE_REST_INTERVAL_SECONDS
+			return false
+		perched = true
+		_animate_wings()
+		return true
+	_idle_rest_cooldown -= delta
+	if _idle_rest_cooldown <= 0.0:
+		_idle_resting = true
+		_idle_rest_remaining = IDLE_REST_DURATION_SECONDS
+		perched = true
+		_animate_wings()
+		return true
 	return false
 
 
