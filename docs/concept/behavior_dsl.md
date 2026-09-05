@@ -246,15 +246,70 @@ returns the same result: a real, pinned property
 (`test_running_the_same_tree_twice_gives_the_same_answer`), not merely
 assumed of a function with no internal RNG.
 
+**`context["local_atoms"]`** (optional, `{name: Callable(args, context)}`),
+added when wiring the first live marker (§4), is how a caller registers its
+own bespoke, stateful atoms without teaching the shared, reusable
+`behavior_atom_catalog.gd` anything about that caller's class. A local
+atom is checked first and, if present, entirely replaces a same-named
+shared atom for that call rather than running both — a real, deliberate
+override, not a merge. This is the seam pillar 5 always implied but §2
+didn't yet need: `flee`/`seek`/`schedule`/`round_trip` are pure enough to
+live in the shared catalog forever, but a specific marker's own private,
+side-effecting motor program (`AmbientFlyerMarker._step_ground_forage`,
+say) has no business there, and reusing it means calling it, not
+reimplementing it as catalog data.
+
+### 4. Wiring a live marker: the robin
+
+The first proof that a parsed tree can actually replace a marker's
+decision path, not just be executed in a test. `AmbientFlyerMarker`'s
+robin runs a real script:
+
+```
+behavior "robin" {
+    priority {
+        songbird_flush()
+        bird_courtship()
+        ground_forage()
+    }
+}
+```
+
+— the exact precedence its `_process` already gave robin (flush off the
+player outranks a pair interaction, which outranks foraging), now data
+instead of three sequential `if`s. `songbird_flush`/`bird_courtship`/
+`ground_forage` are `local_atoms` (§3): thin, marker-bound wrappers around
+`_step_songbird_flight_response`/`_step_pair_interactions`/
+`_step_ground_forage`, reused by calling them exactly as `_process`
+already did — replicating which two calls animate the wings themselves
+and which one doesn't, and the `_movement == null` guard
+`_step_ground_forage`'s own internals need, precisely rather than
+approximately. None of the three step functions changed at all.
+
+Only robin. `BEHAVIOR_TREE_SPECIES` gates this per species, and every
+other flyer — sparrow included, despite ground-foraging by the identical
+mechanism — keeps its original, direct dispatch untouched. Wiring one
+species at a time, proven correct against its own existing tests before
+the next, is the same discipline [ethogram.md](ethogram.md)'s own slices
+used; sparrow is a real, named next candidate, not a gap.
+
+The tree is parsed once, into a static cache, and shared by every robin —
+parsing is a species-level cost, never a per-individual one, closing the
+open question §1 raised about exactly this.
+
 ## What the player can see
 
-Nothing, by design, in this slice: no marker is wired to this executor yet.
-The payoff is that a new species' *tree* — a few lines of text referencing
-existing atoms — is now a smaller, more honest unit of work than a new
-species' *code*, and that two structurally unrelated body plans (a land
-mammal and a villager) already share two real nodes (`wander`, and the
-`above`-gated pattern) verbatim, which the tests below prove rather than
-merely claim.
+Nothing different for a robin, by design: §4 is a behaviour-preserving
+migration, pinned by the same flush/courtship/forage tests that already
+existed before it, exactly as every ethogram.md slice held itself to the
+same bar. The payoff is structural rather than visible: a robin's own
+top-level priority is now a few lines of text referencing existing atoms
+instead of three sequential `if`s baked into a 3000-line file, and a new
+species' tree is a smaller, more honest unit of work than a new species'
+code. The mammal/villager reuse claim (§1's worked examples, `wander` and
+the `above`-gated pattern shared verbatim by two species with no code, no
+genome, and no body plan in common) remains proven only in tests, not yet
+wired to either's live marker.
 
 ## Status / mechanisms
 
@@ -282,12 +337,24 @@ merely claim.
   is the one worth reading by name: same gate, same tokens, two species
   that share no code, no genome, and no body plan). 79 tests total across
   the three modules.
-- ⬜ Wiring any live marker (`CreatureMarker`, `NpcMarker`, `AntForagerMarker`)
-  to actually run a parsed tree instead of its current hard-coded decision
-  path. Deliberately not attempted here: [ethogram.md](ethogram.md)'s own
-  slice 5 found that touching a live marker without a dedicated, narrowly
-  scoped pass is exactly the mistake to avoid, and the same caution applies
-  to a brand-new executor with zero hours of runtime behind it yet.
+- ✅ `context["local_atoms"]` — a caller-registered `{name: Callable}` map,
+  checked before the shared catalog and entirely replacing a same-named
+  shared atom when present (`test_behavior_tree_executor.gd`, 5 tests).
+- ✅ **The first live marker, wired**: `AmbientFlyerMarker`'s robin runs a
+  real parsed tree (`songbird_flush` → `bird_courtship` → `ground_forage`,
+  §4) via three `local_atoms`, each a thin wrapper around the exact
+  existing step function it replaces at the call site. Species-gated
+  (`BEHAVIOR_TREE_SPECIES`) so sparrow and every butterfly keep their
+  original direct dispatch, untouched. 5 new tests pin the wiring itself;
+  the file's own pre-existing flush/courtship/forage tests for robin are
+  the regression bar and pass unchanged (167 passing, 2 pre-existing
+  butterfly spiral-flight numerical-tolerance failures confirmed unrelated
+  — the diff never touches that code path).
+- ⬜ Wiring `CreatureMarker`/`NpcMarker`/`AntForagerMarker`/sparrow to
+  actually run a parsed tree. One species proven at a time, per
+  [ethogram.md](ethogram.md)'s own slice-5 lesson about the cost of
+  touching a live marker outside a dedicated, narrowly scoped pass —
+  sparrow (identical mechanism to robin) is the obvious next one.
 - ⬜ An `ethogram_decide` action atom that runs a full
   `Ethogram.wirings_for(body_plan)` list through `BehaviorKernel.decide` as
   a single tree leaf — the explicit bridge letting a species mix a fully
@@ -303,13 +370,15 @@ merely claim.
   plausible but unproven by a concrete species yet — kept because the
   literature's four-node set is what makes the vocabulary recognisable,
   not because a caller needs the other two today.
-- **Where does per-node state live once a tree is shared across many
-  individuals?** Every mammal *shares one parsed tree* (parsing is a
-  one-time cost per species, not per individual), but `flee`/`seek`'s
-  underlying `BehaviorKernel` calls are already stateless per pillar 4 of
-  [ethogram.md](ethogram.md) — the open question is only for a future
-  stateful atom (a cooldown, a commitment) needing genuinely
-  per-individual memory the shared AST cannot hold.
+- **Resolved by §4: per-node state lives on the marker, reached through
+  `context["marker"]`, never on the shared tree.** Every robin shares one
+  parsed AST; `local_atoms` are Callables bound to `self` at the point
+  they're built (`_local_atoms()`, called fresh each `_process`), so
+  `_flushed_by_player`, `perched`, and every other genuinely
+  per-individual field a wrapped step function reads or writes stays
+  exactly where it always lived. Confirms what this question only
+  speculated before: a stateful atom needing per-individual memory is not
+  a gap in the design, it is a `local_atoms` entry.
 - **Should the parser accept the ethogram's own wiring shape as sugar?**
   `gate(above(need: X, threshold: Y)) { seek(on: Z) }` is exactly one
   ethogram wiring `{"gate": X, "channels": [Z], "approach": "seek_food"}`
