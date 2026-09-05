@@ -8982,6 +8982,15 @@ wobble bound of the wind's own heading instead of swinging across ~170°
 between consecutive hops. Full renderer suite and the real-GPU smoke test
 re-confirmed green.
 
+✅ **Follow-up (2026-09-05): "double leaf fall rate".**
+`LEAF_SUMMER_TRICKLE_CHANCE` 0.03 → 0.06, pinned by test rather than left
+a bare retuned literal. `LEAF_AUTUMN_BASELINE_CHANCE`/`LEAF_SPRING_
+TRICKLE_CHANCE` both derive from this constant, so doubling it doubles
+the summer trickle, the spring blossom trickle, and autumn's own
+baseline floor all at once; autumn's own ramp ceiling stays at 1.0
+(certainty) — reached sooner, not made "more certain". Full leaf/trickle
+test battery in `test_earth_chunk_manager.gd` green.
+
 <details>
 <summary>First pass (superseded above), kept for history</summary>
 

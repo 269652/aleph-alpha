@@ -146,8 +146,9 @@ tree, see that function's own doc comment on why) for the windfall block
 right beside this one.
 
 A settled SUMMER tree also sheds an occasional leaf -- real wind and
-petal damage, not the main fall (`LEAF_SUMMER_TRICKLE_CHANCE`, a flat 3%
-per step, named rather than derived, the same "one real table beats an
+petal damage, not the main fall (`LEAF_SUMMER_TRICKLE_CHANCE`, a flat 6%
+per step -- doubled from its original 3% on direct request ("double leaf
+fall rate"), named rather than derived, the same "one real table beats an
 invented formula" idiom `FruitingModel.RIPENING_BY_SPECIES` already
 sets). Reported directly: "when they fall in summer they should be
 green" -- which only means anything if a summer fall is real, not merely
