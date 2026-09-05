@@ -12,7 +12,7 @@ extends RefCounted
 ## construction" idiom leaf_litter.md's own pillar 3 names, avoiding a real
 ## per-step full-grid scan.
 ##
-## One instance per chunk covers ALL five species together, deliberately
+## One instance per chunk covers ALL six species together, deliberately
 ## NOT WildCropPatch's "one instance per crop, partitioned territory"
 ## shape: two different real mushroom species fruiting near each other in
 ## the same patch of forest floor is completely normal (unlike two root

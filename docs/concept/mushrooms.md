@@ -36,8 +36,8 @@ food, a toxic one genuinely poisons the player.
 3. **Eating one is real, not flavor text.** [carrion.md](carrion.md)/the
    venomous-snake pass already prove this project is willing to let a real
    hazard hurt the player (`VenomModel`/`DebuffStack`). A toxic mushroom is
-   the plant-kingdom equivalent: eating a Death Cap should be able to
-   genuinely hurt, at a real, differentiated severity from a Fly Agaric —
+   the plant-kingdom equivalent: eating a Fly Agaric should be able to
+   genuinely hurt, at a real, differentiated severity from a Psilocybe —
    the same way this project already differentiates predator danger by
    species rather than by one flat number.
 4. **Reuse before invention.** Every piece of this has a direct precedent
@@ -62,35 +62,50 @@ food, a toxic one genuinely poisons the player.
   building a per-species calendar it doesn't yet need.
 - **Two real nutritional strategies, and they place differently.**
   Ectomycorrhizal fungi live in a real symbiosis with a living tree's roots
-  and cannot fruit without one nearby — Fly Agaric partners with birch/pine,
-  Porcini and Chanterelle with pine/oak. Saprotrophic fungi instead decompose
-  dead organic matter directly and need no living host — Puffball is this
-  roster's saprotroph, which is why it alone can also appear in grassland.
-- **Toxicity is real, specific, and asymmetric.** Death Cap
-  (*Amanita phalloides*) is the textbook deadliest mushroom in the world —
-  amatoxin poisoning, delayed onset, real organ failure, and critically: no
-  folk test reliably distinguishes it from a safe lookalike, which is why
-  real foraging guides treat "learn it or don't eat anything you're not
-  certain of" as the only real rule. Fly Agaric (*Amanita muscaria*) is also
-  toxic (ibotenic acid/muscimol — GI distress and neurological effects) but
-  is rarely fatal in a modern medical context — a real, meaningfully smaller
-  danger than Death Cap, not just a second copy of the same number.
-- **Chanterelle, Porcini, and Puffball are real, prized, commonly foraged
-  edibles** — the payoff side of the same real activity the toxic species
-  make risky.
+  and cannot fruit without one nearby — Fly Agaric partners with pine,
+  Black Trumpet and Chanterelle with oak. Saprotrophic fungi instead
+  decompose dead organic matter directly and need no living host — Psilocybe,
+  Champignon, and Parasol are this roster's saprotrophs, which is why they
+  alone can also appear in grassland.
+- **Toxicity is real, specific, and asymmetric.** Fly Agaric
+  (*Amanita muscaria*) is toxic — ibotenic acid/muscimol poisoning, real GI
+  distress and neurological effects — but rarely fatal in a modern medical
+  context. Psilocybe (psilocybin) poisoning is primarily perceptual/
+  psychoactive and rarely physically dangerous on its own, a real, genuinely
+  smaller physical danger than Fly Agaric, not a second copy of the same
+  number. Neither is anywhere near the originally-considered Death Cap
+  (*Amanita phalloides*, real amatoxin poisoning, often fatal) — this
+  roster deliberately has no "certainly lethal" tier (see "Revised once
+  real art arrived" below).
+- **Black Trumpet, Champignon, Chanterelle, and Parasol are real, prized,
+  commonly foraged edibles** — the payoff side of the same real activity
+  the toxic species make risky.
 
 ## Species roster (`MushroomSpecies`)
 
-Five species, mirroring `TreeSpecies`'s exact shape (`IDS` + a `SPECIES`
-profile dict + small boolean lookups):
+**Revised once real art arrived.** The roster below was originally designed
+as Fly Agaric/Death Cap/Chanterelle/Porcini/Puffball. The user then
+hand-generated six real illustrated sprite sheets directly
+(`assets/sprites/mushrooms/*.png`) covering a different, real six-species
+lineup instead. Rather than keep code/tests referencing species with no art
+and discard art generated for species the code never named, the roster was
+redesigned to match what actually exists — the same "reality over the
+original plan" principle this doc's own skill_web pivot below already
+follows, applied to art instead of a skill slot. Every replacement species
+below is real, grounded, and re-verified against real mycology rather than
+just renamed in place.
+
+Six species, mirroring `TreeSpecies`'s exact shape (`IDS` + a `SPECIES`
+profile dict + small per-trait lookups):
 
 | id | display name | toxic | host tree | why |
 |---|---|---|---|---|
 | `fly_agaric` | Fly Agaric | ✅ | `pine` | iconic red-cap toadstool; real, rarely-fatal toxin |
-| `death_cap` | Death Cap | ✅ | `acorn` (oak) | the real deadliest mushroom; understated pale-green cap |
+| `psylo` | Psilocybe | ✅ | *(none — saprotroph)* | real psychoactive genus; toxic but meaningfully milder than Fly Agaric |
+| `black_trumpet` | Black Trumpet | — | `acorn` (oak) | real prized edible, dark trumpet-shaped cap |
+| `champignon` | Champignon | — | *(none — saprotroph)* | the common cultivated table mushroom; real edible |
 | `chanterelle` | Chanterelle | — | `acorn` (oak) | real prized edible, golden |
-| `porcini` | Porcini | — | `pine` | real prized edible, brown cap |
-| `puffball` | Puffball | — | *(none — saprotroph)* | edible when young; the one species that also grows in grassland |
+| `parasol` | Parasol | — | *(none — saprotroph)* | real edible, large flat cap on a tall stem |
 
 `host_tree` reuses `TreeSpecies.IDS` values directly (`"pine"`/`"acorn"`) —
 not a new tree taxonomy — since these are the same real species this
@@ -106,10 +121,11 @@ One `WildMushroomPatch` per chunk, same per-chunk-instance contract as
 crop's continuous `0..1` growth, a cell here is binary: **fruiting** or not,
 because pillar 1 above means there is no visible growth stage to track.
 
-Mycorrhizal species (`fly_agaric`, `death_cap`, `chanterelle`, `porcini`)
-seed only on forest/rainforest soil — the same biome their real host tree
-already grows in, per `TreeSpecies`. `puffball` additionally seeds on
-grassland, being the roster's one non-tree-tied saprotroph. (Literally
+Mycorrhizal species (`fly_agaric`, `black_trumpet`, `chanterelle`) seed
+only on forest/rainforest soil — the same biome their real host tree
+already grows in, per `TreeSpecies`. `psylo`, `champignon`, and `parasol`
+additionally seed on grassland, being the roster's real saprotrophs, not
+tied to any host tree. (Literally
 checking proximity to a specific live tree instance is real and grounded,
 but is a genuine new cross-system query this pass does not build — see
 Deliberately not modeled.)
@@ -190,7 +206,7 @@ identification comes from direct field experience, not a certificate.**
 eaten, edible or toxic — risk included, the same way a real forager's
 first few encounters with a dangerous species are what teaches them to
 recognize it. `Player.knows_mushrooms() -> bool` is `mushrooms_eaten >=
-MushroomSpecies.MUSHROOMS_TO_LEARN_IDENTIFICATION` (5 — one real
+MushroomSpecies.MUSHROOMS_TO_LEARN_IDENTIFICATION` (6 — one real
 encounter per roster species, not an arbitrary grind number). This
 sidesteps `skill_web.gd` entirely rather than forcing a fit it has no
 room for.
@@ -219,10 +235,12 @@ MushroomToxin.damage_per_second(stacks: int, species_id: String) -> float
 
 Severity is **per real species, not one flat number** —
 `MushroomToxin.severity_for(species_id)` is pinned by test to put
-`death_cap` genuinely above `fly_agaric` (real: amatoxin poisoning is far
-more dangerous than muscimol/ibotenic-acid poisoning), an ordering test in
-the same style as `AntColony.WINDFALL_CONSUMED_CHANCE` being pinned above/
-below its siblings rather than an eyeballed absolute value. `Player.
+`fly_agaric` genuinely above `psylo` (real: ibotenic-acid/muscimol
+poisoning carries genuinely more physical risk than psilocybin poisoning,
+which is primarily perceptual and rarely physically dangerous), an
+ordering test in the same style as `AntColony.WINDFALL_CONSUMED_CHANCE`
+being pinned above/below its siblings rather than an eyeballed absolute
+value. `Player.
 apply_mushroom_toxin(species_id)` / `_mushroom_toxin_step(delta)` mirror
 `apply_venom`/`_venom_step` line for line, against their own
 `active_mushroom_toxin_debuffs` array.
@@ -263,23 +281,10 @@ repeating it.
   Re-gating the inventory/hover UI too is a real, separable follow-up, not
   required for the core "you can't tell from across the clearing" mechanic
   to be real.
-- **No visual lookalike confusion between species.** All five real species
+- **No visual lookalike confusion between species.** All six real species
   above are visually distinct from each other; the shared "Unidentified
   Mushroom" look is what creates the challenge, not any one species
   disguising itself as another.
-- **No illustrated art generated yet.** The system ships on
-  `ProceduralMushroomSprite` (a plain cap+stem silhouette, species-colored
-  once identified) end to end. `IllustratedMushroomSprite` exists as a real,
-  tested class with an empty variant table (`has_variants(species_id)` is
-  false for every species today, pinned by test) — ready to receive a real
-  5×5 (25-variant) sheet per species, the same "code first, real art
-  drops in later with zero further code changes" path `AntMoundMarker`/
-  `IllustratedAntMoundSprite` already proved. The generation prompt for the
-  first species (Fly Agaric) is now written —
-  [ai_sprite_prompts.md](../art/ai_sprite_prompts.md#12-wild-mushrooms-one-5x5-sheet-per-species-2026-09-05)
-  — the other four (Death Cap, Chanterelle, Porcini, Puffball) still need
-  theirs, and no sheet for any species has actually been generated/dropped
-  into `assets/` yet.
 - **No cooking-recipe integration.** `CookingRecipeBook`'s multi-ingredient
   recipe table has zero live callers anywhere in this project today —
   wiring it in at all is a separate, larger, pre-existing gap, not something
@@ -296,17 +301,23 @@ repeating it.
   way to a real eat action (see below).
 - ✅ `ProceduralMushroomSprite` (`src/rendering/procedural_mushroom_sprite.gd`),
   incl. the shared unidentified look.
-- ✅ `IllustratedMushroomSprite` (`src/rendering/illustrated_mushroom_sprite.gd`),
-  empty variant table (pinned by test), ready for real art.
+- ✅ `IllustratedMushroomSprite` (`src/rendering/illustrated_mushroom_sprite.gd`)
+  — real 5×5 (25-variant) sheets for all 6 species
+  (`assets/sprites/mushrooms/*.png`), chroma-key despilled where needed
+  (5 of 6 sheets; `fly_agaric`'s own background is already transparent),
+  each with its own measured `marker_scale(species_id)`. See
+  [ai_sprite_prompts.md section 12](../art/ai_sprite_prompts.md#12-wild-mushrooms-one-5x5-sheet-per-species-2026-09-05).
 - ✅ `WildMushroomPatch` (`src/world/wild_mushroom_patch.gd`) — fixed
   per-chunk sites, PixelNoise-seeded, flush/recovery/pick.
-- ✅ Item catalog entries for all 5 species (`item_catalog.gd`) — a
+- ✅ Item catalog entries for all 6 species (`item_catalog.gd`) — a
   hard prerequisite for the marker below, since `ItemCatalog.make()`
   fails loudly on an unregistered id.
 - ✅ `MushroomMarker` (`src/rendering/mushroom_marker.gd`) — the visible,
   pickable ground object: identification-gated sprite/name, joins
   `DroppedItem.GROUP_NAME`/`FORAGEABLE_GROUP_NAME`, `pick_up(picker)`
-  always resolves to the real species item.
+  always resolves to the real species item, and (once identified) scales
+  the illustrated sprite by its own measured `marker_scale`, not the
+  procedural generator's flat scale.
 - ✅ `MushroomRenderer` (`src/rendering/mushroom_renderer.gd`) —
   spawn_markers/sync_markers, pushing live `identified` onto every
   already-standing marker each tick (not just new ones).
@@ -326,11 +337,13 @@ repeating it.
   regression test from the start (the exact gap that shipped silently for
   wild crops once before), not added after the fact.
 
-**Every piece is now real, tested, and reachable from a running game**:
-chunk load grows real mushroom sites, the world's own per-frame loop
-advances fruiting and pushes live identification onto every standing
-marker, and eating one calls back into the real toxin/learning wiring —
-~155 tests total, all green. What's left is entirely the "No illustrated
-art this pass" / "No literal host-tree proximity check" / other
-deliberate scope cuts named above, not missing wiring — see progress.md
-for the session-by-session record of this landing.
+**Every piece is now real, tested, and reachable from a running game,
+including real illustrated art for every species**: chunk load grows real
+mushroom sites, the world's own per-frame loop advances fruiting and
+pushes live identification onto every standing marker, an identified
+mushroom renders its own real illustrated sheet at its own measured
+on-screen size, and eating one calls back into the real toxin/learning
+wiring — all green. What's left is entirely the "No literal host-tree
+proximity check" / other deliberate scope cuts named above, not missing
+wiring — see progress.md for the session-by-session record of this
+landing.
