@@ -1045,6 +1045,16 @@ func test_the_web_is_framed_on_the_class_once_the_tab_is_laid_out():
 
 # -- starter kit tab (docs/concept/starting_kit.md) ---------------------------
 
+func test_every_starter_item_card_shows_a_real_sprite():
+	for item_id in StarterKit.POOL:
+		var card: PanelContainer = menu._starter_item_buttons[item_id]
+		var found := card.find_children("*", "TextureRect", true, false)
+		assert_eq(found.size(), 1, "%s should have exactly one icon" % item_id)
+		var icon: TextureRect = found[0]
+		assert_not_null(icon.texture, "%s's icon should have a real texture" % item_id)
+		assert_gt(icon.texture.get_width(), 0, item_id)
+
+
 func test_starts_with_the_default_starter_items_selected():
 	assert_eq(menu.current_starter_items(), StarterKit.DEFAULT_CHOICES)
 

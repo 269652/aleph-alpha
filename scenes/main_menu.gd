@@ -25,6 +25,7 @@ const SkillWebView = preload("res://scenes/skill_web_view.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
 const StarterKit = preload("res://src/gameplay/starter_kit.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 
 ## Shared look, reusing UiTheme's palette (the same dark/rounded/gold-accent
 ## theme World assigns to every other menu/window -- see World._ui_theme) so
@@ -212,6 +213,7 @@ var reroll_save_path := "user://hero_dna_rerolls.bin"
 
 var _archetypes := ClassArchetype.new()
 var _item_catalog := ItemCatalog.new()
+var _item_sprite := ProceduralItemSprite.new()
 var _appearance_maker := HeroAppearance.new()
 var _char_sprite := ProceduralCharacterSprite.new()
 var _player_save := PlayerSave.new()
@@ -1261,27 +1263,52 @@ func _build_starter_kit_tab() -> Control:
 	return box
 
 
-## One pool item as a small square card -- mirrors _build_class_card's exact
-## shape (a PanelContainer, a transparent full-rect Button hitbox), just
-## toggling this item in/out of _selected_starter_items instead of replacing
-## a single selection.
+## Bigger than _CLASS_ICON_SIZE: a class card shows nothing but its
+## portrait (the name lives in a separate label outside the grid,
+## _class_name_label) -- a starter item card has no such second place to
+## show its name, so it needs room for both the sprite and a legible label
+## in one card.
+const _STARTER_ITEM_CARD_SIZE := 84.0
+
+## One pool item as a small square card -- mirrors _build_class_card's shape
+## (a PanelContainer, a transparent full-rect Button hitbox), just showing a
+## real item sprite (ProceduralItemSprite, the same generator inventory_
+## window.gd/crafting_window.gd already use for every other item icon in
+## this game -- not a second, bespoke art path) above its name, and toggling
+## this item in/out of _selected_starter_items instead of replacing a single
+## selection.
 func _build_starter_item_card(item_id: String) -> PanelContainer:
-	var card := _card_panel(Vector2(_CLASS_ICON_SIZE, _CLASS_ICON_SIZE))
+	var card := _card_panel(Vector2(_STARTER_ITEM_CARD_SIZE, _STARTER_ITEM_CARD_SIZE))
 	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	var display_name := item_id
+	var sprite_id := item_id
 	if _item_catalog.has(item_id):
-		display_name = _item_catalog.make(item_id).display_name
+		var item := _item_catalog.make(item_id)
+		display_name = item.display_name
+		sprite_id = item.sprite_id
 	card.tooltip_text = "%s\n%s" % [display_name, STARTER_ITEM_BLURBS.get(item_id, "")]
+
+	var inner := VBoxContainer.new()
+	inner.add_theme_constant_override("separation", 2)
+	inner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(inner)
+
+	var icon := TextureRect.new()
+	icon.texture = _item_sprite.generate_texture(sprite_id)
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.custom_minimum_size = Vector2(0, _STARTER_ITEM_CARD_SIZE * 0.55)
+	icon.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	inner.add_child(icon)
 
 	var label := Label.new()
 	label.text = display_name
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.add_theme_font_size_override("font_size", 11)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	label.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	card.add_child(label)
+	inner.add_child(label)
 
 	var hitbox := Button.new()
 	hitbox.flat = true
