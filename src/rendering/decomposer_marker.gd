@@ -358,10 +358,16 @@ func _step_seeking(delta: float) -> void:
 ## crash on non-DroppedItem members (see git history: that crash was fixed
 ## first and measurably helped, but did not fully explain the reported
 ## collapse on its own -- this scan-scope fix is the rest of it).
-## FORAGEABLE_GROUP_NAME is joined only by a DroppedItem actually holding a
-## TreeSpecies.IDS species, at creation time, so this loop only ever visits
-## real fallen windfall, never a dropped tool, ore chunk, or the far larger
-## set of stones lying around.
+## FORAGEABLE_GROUP_NAME is joined by a DroppedItem actually holding a
+## TreeSpecies.IDS species at creation time (real fallen windfall, never a
+## dropped tool, ore chunk, or the far larger set of stones lying around),
+## and -- since this pass -- by MushroomMarker too (real fungivory, see
+## docs/concept/soil_fauna.md's fungivory follow-up): a mushroom joined
+## this exact group from the moment it was first built (see that class's
+## own doc comment), but this loop's `not (node is DroppedItem)` guard
+## silently excluded it again right afterward, so a decomposer could never
+## actually reach one at all until this fix. Reported live: "when a bug
+## takes a bite."
 func _nearest_food() -> Node2D:
 	var best: Node2D = null
 	var best_effective_distance := SEARCH_RADIUS_PX
@@ -374,13 +380,16 @@ func _nearest_food() -> Node2D:
 				best = node
 				best_effective_distance = effective
 	for node in get_tree().get_nodes_in_group(DroppedItem.FORAGEABLE_GROUP_NAME):
-		# Defensive, not load-bearing for correctness: FORAGEABLE_GROUP_NAME
-		# is only ever joined by a real DroppedItem holding a real fruit/nut
-		# (see DroppedItem._ready()), so this should never actually trip --
-		# kept anyway so a future bug in THAT join can never reintroduce the
-		# exact "invalid access to item_stack" crash this whole
-		# investigation started from.
-		if not (node is DroppedItem) or node.item_stack == null:
+		# Only a real DroppedItem is required to actually hold an
+		# item_stack -- defensive, not load-bearing for correctness today
+		# (see DroppedItem._ready()), kept so a future bug in THAT join can
+		# never reintroduce the exact "invalid access to item_stack" crash
+		# this whole investigation started from. A MushroomMarker (or any
+		# other non-DroppedItem member this group ever gains) is judged on
+		# distance alone, same as fallen fruit -- _step_feeding's own
+		# has_method("take_bite")/has_method("consume_leaf_litter") checks
+		# are what actually tell these apart once one is picked.
+		if node is DroppedItem and node.item_stack == null:
 			continue
 		var distance: float = position.distance_to(node.position)
 		if distance <= best_effective_distance:

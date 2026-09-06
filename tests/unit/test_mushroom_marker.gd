@@ -28,22 +28,33 @@ class StubPicker:
 class StubMushroomWorld:
 	extends RefCounted
 	var taken: Array = []
+	var bitten: Array = []
+	## Lets a test force bite() to report "nothing there" without needing a
+	## real WildMushroomPatch's recovery state.
+	var bite_result := true
 
 	# No need to override has_method() -- Godot's own reflection already
-	# reports true for this real, defined method. Named `pick` to match
-	# WildMushroomPatch's own real method -- the actual mushroom_world a
-	# live MushroomRenderer injects is that sim directly (spawn_markers/
-	# sync_markers already hold the exact right per-chunk instance), not a
-	# wrapper with a different name.
+	# reports true for this real, defined method. Named `pick`/`bite` to
+	# match WildMushroomPatch's own real methods -- the actual
+	# mushroom_world a live MushroomRenderer injects is that sim directly
+	# (spawn_markers/sync_markers already hold the exact right per-chunk
+	# instance), not a wrapper with a different name.
 	func pick(cell: Vector2i) -> bool:
 		taken.append(cell)
 		return true
 
+	func bite(cell: Vector2i) -> bool:
+		if not bite_result:
+			return false
+		bitten.append(cell)
+		return true
 
-func _make_marker(species_id: String, cell: Vector2i = Vector2i.ZERO) -> MushroomMarker:
+
+func _make_marker(species_id: String, cell: Vector2i = Vector2i.ZERO, corpse_kind: String = "") -> MushroomMarker:
 	var marker := MushroomMarker.new()
 	marker.species_id = species_id
 	marker.cell = cell
+	marker.corpse_kind = corpse_kind
 	add_child_autofree(marker)
 	return marker
 
@@ -149,3 +160,66 @@ func test_stays_exactly_where_placed():
 	var marker := _make_marker("chanterelle")
 	marker.position = Vector2(80, 60)
 	assert_eq(marker.position, Vector2(80, 60))
+
+
+# -- corpses: crushed/bitten remains show the real delivered art (see
+# docs/concept/mushrooms.md "Crushed underfoot", docs/concept/soil_fauna.md
+# fungivory follow-up, IllustratedMushroomSprite.crushed_frame_for/
+# bitten_frame_for). corpse_kind is set before add_child by
+# MushroomRenderer.sync_markers, same convention as species_id/cell.
+
+func test_shows_crushed_art_when_corpse_kind_is_crushed_and_the_species_has_it():
+	var marker := _make_marker("chanterelle", Vector2i.ZERO, "crushed")
+	var sprite := marker.get_child(0) as Sprite2D
+	var expected := IllustratedMushroomSprite.new().crushed_frame_for("chanterelle", marker.mushroom_seed)
+	assert_eq(sprite.texture.get_image().get_data(), expected.get_image().get_data())
+
+
+func test_shows_bitten_art_when_corpse_kind_is_bitten_and_the_species_has_it():
+	var marker := _make_marker("chanterelle", Vector2i.ZERO, "bitten")
+	var sprite := marker.get_child(0) as Sprite2D
+	var expected := IllustratedMushroomSprite.new().bitten_frame_for("chanterelle", marker.mushroom_seed)
+	assert_eq(sprite.texture.get_image().get_data(), expected.get_image().get_data())
+
+
+## fly_agaric has no crushed/bitten art yet (reported live: "some are still
+## missing but I'll add while you wire") -- the has-art-or-doesn't fallback
+## every optional illustrated-art seam in this codebase uses, so a corpse
+## of an undelivered species still shows ITS real look rather than a blank/
+## missing texture.
+func test_falls_back_to_the_normal_look_when_the_species_has_no_crushed_or_bitten_art_yet():
+	var marker := _make_marker("fly_agaric", Vector2i.ZERO, "crushed")
+	var sprite := marker.get_child(0) as Sprite2D
+	var expected := IllustratedMushroomSprite.new().frame_for("fly_agaric", marker.mushroom_seed)
+	assert_eq(sprite.texture.get_image().get_data(), expected.get_image().get_data())
+
+
+# -- take_bite: a decomposer's single bite ---------------------------------
+
+func test_take_bite_calls_bite_on_the_mushroom_world_and_frees_the_marker():
+	var marker := _make_marker("chanterelle", Vector2i(3, 4))
+	marker.mushroom_world = StubMushroomWorld.new()
+	assert_true(marker.take_bite(1.0))
+	assert_eq(marker.mushroom_world.bitten, [Vector2i(3, 4)])
+	assert_true(marker.is_queued_for_deletion())
+
+
+func test_take_bite_returns_false_when_the_sim_says_nothing_to_bite():
+	var marker := _make_marker("chanterelle")
+	var world := StubMushroomWorld.new()
+	world.bite_result = false
+	marker.mushroom_world = world
+	assert_false(marker.take_bite(1.0))
+	assert_false(marker.is_queued_for_deletion())
+
+
+## A decomposer doesn't re-bite what something already finished -- mirrors
+## Carcass.take_bite's own "no-op until/unless a real gate condition holds"
+## contract shape.
+func test_take_bite_is_a_no_op_on_a_marker_that_is_already_a_corpse():
+	var marker := _make_marker("chanterelle", Vector2i.ZERO, "crushed")
+	var world := StubMushroomWorld.new()
+	marker.mushroom_world = world
+	assert_false(marker.take_bite(1.0))
+	assert_true(world.bitten.is_empty(), "an already-corpse marker should never even ask the sim to bite it")
+	assert_false(marker.is_queued_for_deletion())
