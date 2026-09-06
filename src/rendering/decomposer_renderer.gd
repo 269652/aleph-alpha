@@ -19,8 +19,6 @@ const LAND_BIOMES := {
 	"desert": true, "tundra": true, "mountain": true,
 }
 
-const MIN_ANTS_PER_CHUNK := 2
-const MAX_ANTS_PER_CHUNK := 4
 const MIN_BUGS_PER_CHUNK := 1
 const MAX_BUGS_PER_CHUNK := 2
 
@@ -28,6 +26,16 @@ const MAX_BUGS_PER_CHUNK := 2
 ## Spawns this chunk's decomposers into `parent`, returning the markers so
 ## the caller (EarthChunkManager) can track/despawn them per chunk, same
 ## contract as WildCropRenderer.spawn_markers.
+##
+## "ant" retired as a decomposer species (2026-09-06, "unify any
+## duplicates" -- see docs/concept/soil_fauna.md's "A real food economy"
+## section): a decomposer-flavoured ant and a real AntColony forager
+## (AntForagerMarker) drew the identical art and were impossible for a
+## player to tell apart, yet only the real forager could ever carry
+## anything home, grow a colony, or register on a mound's food stat --
+## this one just wandered decoratively, with no mound behind it at all,
+## even on biomes (desert/tundra/mountain) no real AntColony mound can
+## ever exist on. Every "ant" in the world now means the same real thing.
 func spawn_decomposers(
 	parent: Node, biome_name: String, chunk_origin: Vector2i, chunk_size: int,
 	tile_size: float, chunk_seed: int
@@ -35,9 +43,6 @@ func spawn_decomposers(
 	var markers: Array = []
 	if not LAND_BIOMES.has(biome_name):
 		return markers
-	markers.append_array(
-		_spawn_species(parent, "ant", chunk_origin, chunk_size, tile_size, chunk_seed, MIN_ANTS_PER_CHUNK, MAX_ANTS_PER_CHUNK)
-	)
 	markers.append_array(
 		_spawn_species(parent, "bug", chunk_origin, chunk_size, tile_size, chunk_seed, MIN_BUGS_PER_CHUNK, MAX_BUGS_PER_CHUNK)
 	)

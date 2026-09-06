@@ -25,8 +25,8 @@ func before_each():
 
 func test_spawns_a_guaranteed_number_on_a_land_biome():
 	var markers := renderer.spawn_decomposers(parent, "grassland", CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 1)
-	assert_gte(markers.size(), DecomposerRenderer.MIN_ANTS_PER_CHUNK + DecomposerRenderer.MIN_BUGS_PER_CHUNK)
-	assert_lte(markers.size(), DecomposerRenderer.MAX_ANTS_PER_CHUNK + DecomposerRenderer.MAX_BUGS_PER_CHUNK)
+	assert_gte(markers.size(), DecomposerRenderer.MIN_BUGS_PER_CHUNK)
+	assert_lte(markers.size(), DecomposerRenderer.MAX_BUGS_PER_CHUNK)
 	assert_eq(parent.get_child_count(), markers.size())
 
 
@@ -61,7 +61,16 @@ func test_spawning_is_deterministic_for_the_same_seed():
 	assert_eq(positions_a, positions_b)
 
 
-func test_both_ants_and_bugs_can_appear():
+## "ant" retired as a decomposer species entirely (2026-09-06, "unify any
+## duplicates"): a decomposer-flavoured "ant" and a real AntColony forager
+## drew the exact same art and were impossible for a player to tell apart
+## (see docs/concept/soil_fauna.md), yet only one of them was a real
+## colony that could carry food home, grow, or show up in a mound's food
+## stat -- the other just wandered decoratively, mechanically disconnected
+## from any mound, and on biomes (desert/tundra/mountain) no real mound
+## can ever exist in at all. Every "ant" the player sees now means the
+## same real thing: a forager from a real, nearby colony.
+func test_only_bugs_are_decomposer_species_now():
 	var species_seen := {}
 	for chunk_seed in 20:
 		var markers := renderer.spawn_decomposers(
@@ -71,5 +80,4 @@ func test_both_ants_and_bugs_can_appear():
 			species_seen[m.species] = true
 		for m in markers:
 			m.free()
-	assert_true(species_seen.has("ant"))
-	assert_true(species_seen.has("bug"))
+	assert_eq(species_seen.keys(), ["bug"])

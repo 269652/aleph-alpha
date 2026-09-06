@@ -98,3 +98,36 @@ func test_a_healthy_kept_animal_is_not_nagging_about_anything():
 	var text := panel.condition_text().to_lower()
 	for complaint in ["hungry", "thirsty", "cold", "sick"]:
 		assert_false(text.contains(complaint), "a comfortable animal should not report '%s'" % complaint)
+
+
+# -- a generic bar/percentage card, not only a creature's HP one (see
+# docs/concept/soil_fauna.md's "A mound's own hover panel") -------------
+#
+# Reported directly: an ant mound's own food-supply stat should be
+# "visible on hover like hunger/thirst" -- the player's own mental model
+## for that IS this exact bar-and-percentage card, not a second UI. Rather
+# than a second scene, this card's own state contract gains two small,
+# backward-compatible fields so it can show ANY [0,1] fraction under its
+# own label, not only a creature's HP.
+
+func test_the_bar_label_defaults_to_hp_so_every_existing_caller_is_unchanged():
+	panel.set_state(_state())
+	assert_string_contains(panel.headline_bar_text(), "HP")
+
+
+func test_a_caller_can_relabel_the_bar_for_a_non_creature():
+	panel.set_state(_state({"bar_label": "Food", "health_fraction": 0.6}))
+	assert_string_contains(panel.headline_bar_text(), "Food")
+	assert_string_contains(panel.headline_bar_text(), "60%")
+	assert_false(panel.headline_bar_text().contains("HP"))
+
+
+func test_show_level_defaults_to_true_so_every_existing_caller_is_unchanged():
+	panel.set_state(_state())
+	assert_string_contains(panel.headline(), "Lv.")
+
+
+func test_a_caller_can_hide_the_level_for_something_with_no_level():
+	panel.set_state(_state({"name": "Ant Mound", "show_level": false}))
+	assert_string_contains(panel.headline(), "Ant Mound")
+	assert_false(panel.headline().contains("Lv."))

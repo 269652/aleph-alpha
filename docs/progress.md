@@ -8736,6 +8736,88 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   `AntPopulationModel` is tracked per mound, not per chunk, unlike every
   other species' aggregate).
   Full writeup: [soil_fauna.md](concept/soil_fauna.md#thriving-colonies-and-a-real-swarm).
+- **A real food economy: storage, upkeep, and fewer, bigger, hungrier
+  colonies** (large) — ✅ Done — requested directly, live: *"ants should
+  bring food (seeds, leaves, nuts) to the mound which should get a food
+  supply stat (visible on hover like hunger/thirst)... food then becomes
+  driver and constraint of population growth... make there much less
+  mounds, I'd say 1 for every 5, then make them substantially bigger
+  (mound size also based on population)... start at 15 ants at the
+  beginning... unify any duplicates."* Six real, individually-tested
+  changes:
+  1. **Unified the duplicate ants.** `DecomposerRenderer` no longer spawns
+     an "ant" species at all — it drew the identical art as a real
+     `AntForagerMarker` colony worker with no way for a player to tell
+     them apart, yet only the real one could ever carry anything home or
+     register on a mound's own food stat below; the decorative one also
+     wandered biomes (desert/tundra/mountain) no real `AntColony` mound
+     can ever exist on. Every "ant" anywhere in the world now means the
+     same real thing.
+  2. **A real, depleting/accumulating per-mound food stockpile**
+     (`AntColony.food_stored_at`/`deposit_food`) — fed by the one place a
+     completed forage trip already reports its outcome
+     (`record_forage_result`, now also depositing `FOOD_PER_SUCCESSFUL_
+     FORAGE` on every success across all three forage kinds — seed,
+     windfall, leaf — alongside the existing myrmecochory replant/consume
+     rolls, not instead of them: a real ant colony genuinely both feeds
+     itself on part of a find and disperses the rest), depleted every
+     simulated day by the colony's own population upkeep
+     (`FOOD_PER_ANT_PER_DAY`). `capacity_at` now multiplies the existing
+     forage-success/moisture-driven capacity by `food_availability_
+     fraction` (how much of a healthy `FOOD_BUFFER_DAYS` reserve is
+     actually on hand) — food becomes the real driver (nothing else can
+     raise capacity once the reserve runs low) AND the constraint
+     (`PopulationModel.step`'s own existing famine/overcrowding decline
+     does the rest — no new starvation branch needed) from one small
+     multiplicative gate.
+     **Real bug caught during TDD**: a population that genuinely starves
+     to exactly 0.0 (`PopulationModel.step`'s own pre-existing
+     "`capacity <= 0` → population 0" rule, reachable for ants for the
+     first time now that `food_availability_fraction` can hit a literal
+     zero) made a naive "population 0 = fully food-secure" reading
+     permanently lie that a dead colony was thriving, since zero
+     population can never grow itself back out of that reading. An
+     extinct mound now honestly reads 0.0 food availability instead,
+     pinned by a direct regression test
+     (`test_a_fully_starved_colony_reads_zero_food_availability_not_full`).
+  3. **`AntColony.MAX_MOUNDS`: 10 → 2** — "1 for every 5," taken
+     literally.
+  4. **A mound's own hover panel** — the same bar-and-percentage
+     `CreaturePanel` card every wild creature already gets on hover,
+     reading a mound's real food-supply fraction under its own "Food"
+     label rather than duplicating the whole UI for a second scene:
+     `CreaturePanel.set_state` gains two small, backward-compatible
+     fields (`bar_label`, default `"HP"`; `show_level`, default `true`) so
+     every existing creature card is byte-for-byte unchanged, and
+     `AntMoundMarker.panel_state()` returns the matching dict.
+     `World._update_creature_panels` now walks `AntMoundMarker.GROUP_NAME`
+     into the same nearby-and-sorted-by-distance list `CreatureMarker`
+     already builds, competing for one of the same `MAX_CREATURE_PANELS`
+     slots rather than a parallel, separately-capped UI.
+  5. **`AntPopulationModel.STARTING_POPULATION`: a seeded-range floor
+     (1.0) → a flat `15.0`** — "start at 15 ants," a specific number taken
+     literally rather than folded back into the previous pass's own
+     seeded range. `BASE_CAPACITY` raised to match exactly (15.0 → the
+     same "never seed above the unfed ceiling" safety the previous pass
+     already established, preserved at the new scale), so
+     `MAX_REFERENCE_POPULATION` (derived) rises to 45 — a founding colony
+     now reads at a real, established 1/3 of its own growth range, not a
+     newborn wisp.
+  6. **Mound size, `MAX_CONCURRENT_FORAGERS`, and the two ceilings above
+     moved together, deliberately**: `ProceduralAntMoundSprite.
+     MOUND_WORLD_WIDTH_MAX` (a mound's reading at max growth) triples,
+     half the player's own height → 1.5x it — "substantially bigger."
+     `MAX_CONCURRENT_FORAGERS`: 6 → 15, matching the new starting
+     population, so fewer/bigger colonies don't mean LESS total visible
+     ant activity across the world.
+  Five existing tests across four files shared the same now-outdated
+  "forage success up front, then coast for hundreds of simulated days
+  with zero further income" shape — a colony that genuinely stops finding
+  food for that long now correctly starves (the whole point of this
+  pass), so each was redesigned to keep depositing food throughout at a
+  real per-day rate, matching how a genuinely thriving colony would
+  actually forage, rather than a one-off burst.
+  Full writeup: [soil_fauna.md](concept/soil_fauna.md#a-real-food-economy-storage-upkeep-and-fewer-bigger-hungrier-colonies).
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to

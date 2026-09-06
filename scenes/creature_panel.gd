@@ -63,7 +63,19 @@ func _ready() -> void:
 	root.add_child(_condition_label)
 
 
-## Shows one animal's card from CreatureMarker.animal_state().
+## Shows one animal's card from CreatureMarker.animal_state() -- or, since
+## 2026-09-06 (see docs/concept/soil_fauna.md "A mound's own hover panel"),
+## any OTHER nearby thing's own compatible state dict, e.g.
+## AntMoundMarker.panel_state(). Two fields make that possible without a
+## second scene, both defaulting to the ONLY values every creature caller
+## has ever passed, so this is a pure addition -- no existing call site's
+## card changes at all:
+##   - `bar_label` (default "HP"): what the fill bar's own percentage
+##     reads as. A mound's food-supply stat is the same bar/percentage
+##     widget a hungry sheep's HP already is, just under its own label.
+##   - `show_level` (default true): whether the name line includes
+##     "Lv.N" at all -- a mound has no level, and showing a fake one
+##     would be a real lie, not just an unwanted extra.
 ##
 ## Condition (trust / food / water / warmth) is shown only for an animal the
 ## player has a STAKE in -- tamed, part-tamed, or on the end of a rope. Five
@@ -76,10 +88,13 @@ func _ready() -> void:
 ## CreatureMarker.animal_state) -- including food and water, which the
 ## simulation stores the other way round as deficits.
 func set_state(state: Dictionary) -> void:
-	_name_label.text = "%s Lv.%d" % [state.get("name", "?"), int(state.get("level", 0))]
+	if bool(state.get("show_level", true)):
+		_name_label.text = "%s Lv.%d" % [state.get("name", "?"), int(state.get("level", 0))]
+	else:
+		_name_label.text = str(state.get("name", "?"))
 	var fraction := float(state.get("health_fraction", 0.0))
 	_bar_fill.size.x = _health_bar.fill_width(fraction, 1.0, BAR_WIDTH)
-	_hp_label.text = "HP %d%%" % int(round(fraction * 100.0))
+	_hp_label.text = "%s %d%%" % [state.get("bar_label", "HP"), int(round(fraction * 100.0))]
 
 	_condition_label.visible = bool(state.get("invested", false))
 	if not _condition_label.visible:
@@ -101,6 +116,13 @@ func set_state(state: Dictionary) -> void:
 ## The headline row, for tests and for anything that wants the same string.
 func headline() -> String:
 	return _name_label.text
+
+
+## The bar's own percentage row (e.g. "HP 80%", or "Food 60%" -- see
+## set_state's own bar_label), for tests and for anything that wants the
+## same string.
+func headline_bar_text() -> String:
+	return _hp_label.text
 
 
 func shows_condition() -> bool:

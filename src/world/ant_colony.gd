@@ -64,7 +64,15 @@ const MOUND_CHANCE := 0.05
 ## worm is one worm, so far fewer of them are needed to represent a chunk's
 ## ground as "actively foraged." Above the ~50 a full soil chunk seeds at
 ## MOUND_CHANCE, so in practice it is what actually governs the count.
-const MAX_MOUNDS := 10
+##
+## 10 -> 2 (2026-09-06, "make there much less mounds, I'd say 1 for every
+## 5" -- taken literally against this exact constant, see docs/concept/
+## soil_fauna.md's "A real food economy" section). Fewer, individually
+## bigger and better-fed colonies (see STARTING_POPULATION/BASE_CAPACITY
+## and MOUND_WORLD_WIDTH_MAX moving together with this) read as real
+## neighbours a player can learn and return to, not an undifferentiated
+## scatter of a dozen indistinguishable small holes.
+const MAX_MOUNDS := 2
 
 ## Chance, per call to advance(), that a given mound's colony sends a
 ## forager out to check the ground near it this step. A caller (see
@@ -157,6 +165,22 @@ const _POPULATION_SALT := 88301
 ## test_windfall_is_consumed_mostly_true_but_leaves_a_real_minority_cached.
 const WINDFALL_CONSUMED_CHANCE := 0.93
 
+## How much real food one completed, successful forage trip deposits into
+## its mound's own stockpile (see food_stored_at/deposit_food), regardless
+## of which of the three forage kinds (seed/windfall/leaf) it was -- a
+## plain, equal-weight deposit rather than an invented per-food-type
+## nutrition table nothing in this file has ever measured. Defined as
+## exactly 1.0 to match AntPopulationModel.FOOD_PER_ANT_PER_DAY's own
+## "one food unit is one ant's daily ration" unit choice: one successful
+## trip feeds one ant for one day. Does not touch or replace any of the
+## existing myrmecochory above (WINDFALL_CONSUMED_CHANCE/CARRY_MIN_TILES/
+## CARRY_MAX_TILES) -- a real ant colony genuinely both feeds itself on
+## part of what it forages (a myrmecochorous seed's own fatty elaiosome,
+## a fallen fruit's soft pulp) and disperses the rest, so a deposit here
+## and a plant/consume roll there are compatible uses of the same trip,
+## not competing ones.
+const FOOD_PER_SUCCESSFUL_FORAGE := 1.0
+
 ## Salt for the windfall consumed-vs-cached roll (see windfall_carrier_seed_for/
 ## windfall_is_consumed), independent of both _FORAGE_SALT (does this mound
 ## forage this step) and _CARRY_SALT (where a harvested item gets cached) --
@@ -229,6 +253,16 @@ var _moisture: Dictionary = {}
 ## sluggisher than the other.
 const MOISTURE_EMA_RATE := FORAGE_SUCCESS_EMA_RATE
 
+## Per-mound real, depleting/accumulating food reserve, in the same "food
+## units" FOOD_PER_SUCCESSFUL_FORAGE/AntPopulationModel.FOOD_PER_ANT_PER_DAY
+## are measured in -- see food_stored_at/deposit_food/
+## food_availability_fraction and docs/concept/soil_fauna.md's "A real
+## food economy" section. Unlike _forage_success/_moisture above (a
+## rolling average of recent LUCK), this is a real quantity: it goes up
+## exactly when food is actually carried home and down exactly as fast as
+## the colony's own population actually eats from it.
+var _food_stored: Dictionary = {}
+
 var _population_model := AntPopulationModel.new()
 
 ## Per-mound trail pheromone (see PheromoneField) -- Vector2i cell ->
@@ -255,7 +289,15 @@ var _pheromones: Dictionary = {}
 ## most one worker ever out to show it. Raising the cap is what lets that
 ## existing mechanism actually read as a swarm converging on a rich find,
 ## not new behaviour.
-const MAX_CONCURRENT_FORAGERS := 6
+##
+## 6 -> 15 (2026-09-06, matching the new flat starting population -- see
+## docs/concept/soil_fauna.md's "A real food economy" section): fewer,
+## bigger colonies (MAX_MOUNDS just dropped to a fifth of its previous
+## value) would otherwise mean LESS total visible ant activity across the
+## world even though each colony individually thrives harder. A healthy,
+## well-fed mound can now visibly have as many workers out at once as it
+## actually starts with.
+const MAX_CONCURRENT_FORAGERS := 15
 
 
 func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
@@ -289,6 +331,7 @@ func advance(delta_seconds: float) -> void:
 	var delta_days := delta_seconds / SECONDS_PER_SIMULATED_DAY
 	for cell in _mounds:
 		_population[cell] = _population_model.step(population_at(cell), capacity_at(cell), delta_days)
+		_deplete_food(cell, delta_days)
 
 
 ## Whether this mound's colony sends a forager out to check for a nearby
@@ -336,20 +379,106 @@ func population_at(cell: Vector2i) -> float:
 ## recent soil moisture (see record_moisture), the real feedback loop
 ## named in docs/concept/soil_fauna.md's "A queen, and where a colony's
 ## size comes from" / "Water, not just food: a second real growth
-## driver".
+## driver" -- gated by its own real, on-hand food reserve (see
+## food_availability_fraction and "A real food economy" in that same
+## doc): however good recent luck and rainfall have been, a colony
+## cannot support more than its own actual stockpile can currently feed.
 func capacity_at(cell: Vector2i) -> float:
-	return _population_model.capacity(_forage_success.get(cell, 0.0), _moisture.get(cell, 0.0))
+	return (
+		_population_model.capacity(_forage_success.get(cell, 0.0), _moisture.get(cell, 0.0))
+		* food_availability_fraction(cell)
+	)
 
 
 ## Records whether one dispatched forager's real round trip actually found
 ## food -- called once per trip, on real resolution (arrival), never at
 ## dispatch time, since dispatch itself does not yet know the outcome (see
 ## docs/concept/soil_fauna.md "Real foraging: a round trip, not an instant
-## resolve"). Feeds the recent-success signal capacity_at reads.
+## resolve"). Feeds the recent-success signal capacity_at reads, AND (a
+## successful trip only) the real food reserve that same capacity is now
+## also gated by (see "A real food economy" in that same doc) -- the one
+## place a completed trip's outcome is already reported is the one place
+## that outcome needs to feed both.
 func record_forage_result(cell: Vector2i, succeeded: bool) -> void:
 	var current: float = _forage_success.get(cell, 0.0)
 	var target := 1.0 if succeeded else 0.0
 	_forage_success[cell] = lerpf(current, target, FORAGE_SUCCESS_EMA_RATE)
+	if succeeded:
+		deposit_food(cell, FOOD_PER_SUCCESSFUL_FORAGE)
+
+
+## This mound's own real, currently-stored food reserve, in the same
+## "food units" FOOD_PER_SUCCESSFUL_FORAGE/AntPopulationModel.
+## FOOD_PER_ANT_PER_DAY are measured in. A real mound not yet present in
+## _food_stored (never advanced, never fed) reads as _seed_initial_mounds'
+## own seeded value would be BEFORE any real depletion -- the same
+## "unset reads as the fresh-mound default" fallback shape population_at
+## already uses.
+func food_stored_at(cell: Vector2i) -> float:
+	return _food_stored.get(cell, _founding_food_reserve())
+
+
+## Adds real food to this mound's own reserve -- called whenever a
+## completed forage trip actually brings something home (see
+## record_forage_result) or directly by a caller that already knows an
+## amount (kept separate from record_forage_result so "a trip succeeded"
+## and "food increased by this much" stay two independently-testable
+## facts, even though the former always implies the latter today).
+func deposit_food(cell: Vector2i, amount: float) -> void:
+	_food_stored[cell] = food_stored_at(cell) + amount
+
+
+## How much of a healthy FOOD_BUFFER_DAYS-day reserve, at this mound's own
+## CURRENT population's upkeep rate, is actually on hand right now -- [0, 1],
+## 1.0 a colony sitting on a full or better buffer (capacity_at reads
+## exactly what recent forage-success/moisture already say it should,
+## unconstrained), less than that a colony running low, 0.0 one that has
+## genuinely run out OR has no population left at all to report on.
+##
+## A population of 0 reads 0.0, not 1.0 -- checked directly, not assumed:
+## PopulationModel.step has its own real, existing "carrying_capacity <=
+## 0.0 -> population immediately reads exactly 0.0" rule (a genuine, real
+## famine, not a smooth approach to it), which THIS mechanism's own
+## capacity_at multiplier is the first thing ever able to actually drive
+## to a literal zero for ants. Reading a population-0 mound as "fully
+## food-secure" would have been a real lie the instant that happened --
+## capacity_at would recompute at its full forage-success/moisture-driven
+## ceiling (up to MAX_REFERENCE_POPULATION) for a colony that has, in
+## fact, gone completely extinct, and (population stuck at exactly 0.0
+## being the one input a pure logistic multiplier can never grow back
+## from on its own) stay that convincingly-healthy-looking forever.
+## Reading 0.0 instead means an extinct mound's own food stat honestly
+## reports "nothing," not "thriving."
+func food_availability_fraction(cell: Vector2i) -> float:
+	var population := population_at(cell)
+	if population <= 0.0:
+		return 0.0
+	var needed := population * AntPopulationModel.FOOD_PER_ANT_PER_DAY * AntPopulationModel.FOOD_BUFFER_DAYS
+	if needed <= 0.0:
+		return 0.0
+	return clampf(food_stored_at(cell) / needed, 0.0, 1.0)
+
+
+## The real upkeep a mound's own population represents -- more ants, more
+## mouths, more draw on the same reserve every simulated day. Clamped at
+## zero: a colony cannot owe food it does not have.
+func _deplete_food(cell: Vector2i, delta_days: float) -> void:
+	var consumed := population_at(cell) * AntPopulationModel.FOOD_PER_ANT_PER_DAY * delta_days
+	_food_stored[cell] = maxf(0.0, food_stored_at(cell) - consumed)
+
+
+## A freshly-seeded mound is never born already starving -- exactly a full
+## FOOD_BUFFER_DAYS reserve for its OWN seeded starting population (see
+## _seed_initial_mounds), so food_availability_fraction reads exactly 1.0
+## the instant a mound is (re)seeded, derived from the same constants that
+## reserve is measured against rather than a second, independently-chosen
+## number that could drift from what "a full buffer" actually means.
+func _founding_food_reserve() -> float:
+	return (
+		AntPopulationModel.STARTING_POPULATION
+		* AntPopulationModel.FOOD_PER_ANT_PER_DAY
+		* AntPopulationModel.FOOD_BUFFER_DAYS
+	)
 
 
 ## Records this mound's own current soil moisture -- called by
@@ -434,16 +563,19 @@ static func windfall_is_consumed(windfall_seed: int) -> bool:
 
 ## Seeds every mound at a real, established population instead of the
 ## bare founding minimum -- see STARTING_POPULATION's own doc comment for
-## why. Ranges [STARTING_POPULATION, AntPopulationModel.BASE_CAPACITY]:
-## the floor is a genuinely young/struggling colony (a real, legitimate
-## roll, not excluded), the ceiling is the unfed-baseline capacity every
-## mound starts at before any real forage_success/moisture observation
-## ever raises it -- deliberately never seeded ABOVE that ceiling, which
-## would make PopulationModel.step read the mound as already over
-## capacity and immediately start shrinking it back down before the
-## player ever sees it settle. PixelNoise-seeded off its own independent
-## salt so different mounds read as different ages/fortunes rather than
-## one flat number for every mound in the world.
+## why. Flat AntPopulationModel.STARTING_POPULATION for every mound
+## (2026-09-06, "start at 15 ants at the beginning," a specific number
+## taken literally -- superseded the previous pass's own seeded RANGE,
+## [STARTING_POPULATION, BASE_CAPACITY], which existed only because that
+## pass had no specific number to seed instead of one). _POPULATION_SALT
+## is kept, unused for now, rather than deleted: a future pass reintroducing
+## per-mound variance (ages/fortunes) around this same specific number
+## would want its own independent roll, exactly this one already is.
+##
+## Also seeds this mound's starting food reserve (_founding_food_reserve,
+## a full FOOD_BUFFER_DAYS buffer for its own starting population -- see
+## "A real food economy" in docs/concept/soil_fauna.md) so a freshly-
+## founded colony is never born already starving.
 func _seed_initial_mounds() -> void:
 	for y in _height:
 		for x in _width:
@@ -455,7 +587,5 @@ func _seed_initial_mounds() -> void:
 				continue
 			var cell := Vector2i(x, y)
 			_mounds[cell] = true
-			_population[cell] = PixelNoise.range_value(
-				_seed_value + _POPULATION_SALT, x, y,
-				AntPopulationModel.STARTING_POPULATION, AntPopulationModel.BASE_CAPACITY
-			)
+			_population[cell] = AntPopulationModel.STARTING_POPULATION
+			_food_stored[cell] = _founding_food_reserve()

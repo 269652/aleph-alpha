@@ -113,3 +113,26 @@ func get_display_name() -> String:
 	if _colony == null:
 		return "Ant Mound"
 	return "Ant Mound (population %d)" % int(round(_colony.population_at(_cell)))
+
+
+## For World's real hover panel (see docs/concept/soil_fauna.md "A mound's
+## own hover panel") -- the same bar-and-percentage card every wild
+## creature's own CreatureMarker.animal_state() already feeds
+## (CreaturePanel.set_state), reading this mound's real food-supply
+## fraction under its own label rather than a creature's health. No level
+## (a mound has none) and never "invested" (a mound is never tamed) --
+## both would show CreaturePanel rows that make no sense for a mound.
+## Falls back to a founding mound's own reading (0.0 food availability,
+## the same "optional world" graceful default get_display_name/
+## _growth_fraction already use) without a real colony wired up.
+func panel_state() -> Dictionary:
+	var food_fraction := 0.0
+	if _colony != null:
+		food_fraction = _colony.food_availability_fraction(_cell)
+	return {
+		"name": "Ant Mound",
+		"show_level": false,
+		"bar_label": "Food",
+		"health_fraction": food_fraction,
+		"invested": false,
+	}

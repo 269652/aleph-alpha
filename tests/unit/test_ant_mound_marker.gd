@@ -48,6 +48,46 @@ func test_get_display_name_names_it_an_ant_mound():
 	assert_eq(marker.get_display_name(), "Ant Mound")
 
 
+# -- a real hover panel, not just plain tooltip text (see docs/concept/
+# soil_fauna.md's "A mound's own hover panel") ---------------------------
+#
+# Reported directly: a mound's food-supply stat should be "visible on
+# hover like hunger/thirst" -- the same bar-and-percentage CreaturePanel
+# card every wild creature already gets, not the plain cursor-following
+# text label get_display_name() feeds HoverTargetFinder.
+
+func test_panel_state_with_no_colony_reads_as_a_founding_mound():
+	var state := marker.panel_state()
+	assert_eq(state.get("name"), "Ant Mound")
+	assert_almost_eq(float(state.get("health_fraction")), 0.0, 0.001)
+
+
+## No level, no player-investment condition row -- a mound is never
+## tamed and has no level system, and CreaturePanel would otherwise show
+## a nonsensical "Lv.0".
+func test_panel_state_never_shows_a_level_or_a_condition_row():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	marker.setup(colony, cell)
+	var state := marker.panel_state()
+	assert_eq(state.get("show_level"), false)
+	assert_eq(state.get("invested"), false)
+
+
+## The bar reads the mound's own real food-supply fraction, under its own
+## label -- not health, and not the plain population number the text
+## tooltip already reports separately.
+func test_panel_state_bar_is_labelled_food_and_reads_the_real_fraction():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	marker.setup(colony, cell)
+	var state := marker.panel_state()
+	assert_eq(state.get("bar_label"), "Food")
+	assert_almost_eq(
+		float(state.get("health_fraction")), colony.food_availability_fraction(cell), 0.001
+	)
+
+
 ## docs/concept/soil_fauna.md's own "What the player actually sees" names
 ## this directly: a mound's hover tooltip is the one place a player can
 ## read an exact population figure, not only infer it from traffic/size.
@@ -107,6 +147,13 @@ func test_stays_exactly_where_placed():
 ## world marker in this codebase -- a real colony's own current growth
 ## fraction should size the sprite from the very first frame, not wait
 ## for the first periodic re-check.
+## Keeps depositing food throughout the 400-day loop, at a real per-day
+## rate, not just up front (2026-09-06, food economy -- see
+## test_ant_colony.gd's own test_growth_fraction_approaches_one_for_a_
+## thriving_colony for the full reasoning): a colony fed once and never
+## again would now genuinely starve back down over 400 simulated days
+## (AntColony.food_availability_fraction), which is correct, but is not
+## what "a thriving colony" means to set up here.
 func test_setup_sizes_the_sprite_from_the_real_colonys_growth_fraction_immediately():
 	var colony := _colony()
 	var cell: Vector2i = colony.mound_cells()[0]
@@ -114,6 +161,8 @@ func test_setup_sizes_the_sprite_from_the_real_colonys_growth_fraction_immediate
 		colony.record_forage_result(cell, true)
 		colony.record_moisture(cell, 1.0)
 	for i in 400:
+		for trip in 50:
+			colony.record_forage_result(cell, true)
 		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
 	var grown := AntMoundMarker.new()
 	grown.mound_seed = 3
@@ -145,6 +194,8 @@ func test_mound_grows_larger_over_time_as_its_colony_grows():
 		colony.record_forage_result(cell, true)
 		colony.record_moisture(cell, 1.0)
 	for i in 400:
+		for trip in 50:
+			colony.record_forage_result(cell, true)
 		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
 	growing._process(AntMoundMarker.RESIZE_INTERVAL_SECONDS + 1.0)
 

@@ -68,6 +68,38 @@ func test_max_reference_population_matches_capacity_at_full_food_and_water():
 	)
 
 
+## 4.0 -> 15.0 (2026-09-06, "start at 15 ants"): raised to match the new
+## flat starting population exactly (see test_starting_population_
+## matches_the_unfed_baseline_capacity above) -- FOOD_CAPACITY_BONUS/
+## WATER_CAPACITY_BONUS stay at their existing 1.0-of-BASE_CAPACITY ratio,
+## unchanged, so MAX_REFERENCE_POPULATION rises proportionally (45.0) with
+## no separate decision needed.
+func test_base_capacity_matches_the_new_starting_population():
+	assert_almost_eq(AntPopulationModel.BASE_CAPACITY, 15.0, 0.001)
+
+
+func test_max_reference_population_is_forty_five():
+	assert_almost_eq(AntPopulationModel.MAX_REFERENCE_POPULATION, 45.0, 0.001)
+
+
+## How much a single ant draws from its own mound's stored food reserve
+## per simulated day -- see AntColony.advance/food_stored_at. Defined as
+## exactly 1.0 so "one food unit" IS "one ant's daily ration": the
+## simplest possible unit choice, needing no separate justification for
+## what the number itself means.
+func test_food_per_ant_per_day_is_one_ration_unit():
+	assert_almost_eq(AntPopulationModel.FOOD_PER_ANT_PER_DAY, 1.0, 0.001)
+
+
+## How many days of reserve, at the CURRENT population's own upkeep rate,
+## counts as "secure" (food_availability_fraction reads 1.0) -- see
+## AntColony.food_availability_fraction. A modest few-day buffer: real
+## enough to survive an ordinary short dry spell, not a hoard so large the
+## constraint this whole mechanism exists for could never actually bite.
+func test_food_buffer_days_is_three():
+	assert_almost_eq(AntPopulationModel.FOOD_BUFFER_DAYS, 3.0, 0.001)
+
+
 ## Real ant colonies mature over years -- the slowest-growing population
 ## this game tracks, against land mammals'/fish's/birds' comparatively
 ## fast seasonal reproduction. Pinned below PredatorPopulationModel's own
@@ -76,10 +108,15 @@ func test_growth_rate_is_the_slowest_population_this_game_tracks():
 	assert_lt(AntPopulationModel.GROWTH_RATE_PER_DAY, PredatorPopulationModel.GROWTH_RATE_PER_DAY)
 
 
+## Capacity (30.0) picked comfortably ABOVE STARTING_POPULATION (15.0,
+## since 2026-09-06's flat-15 starting population -- see
+## test_starting_population_matches_the_unfed_baseline_capacity below for
+## why 10.0 no longer works here) so this keeps testing real growth,
+## not a population already above the capacity it's meant to grow toward.
 func test_step_grows_population_toward_capacity():
-	var next := model.step(AntPopulationModel.STARTING_POPULATION, 10.0, 30.0)
+	var next := model.step(AntPopulationModel.STARTING_POPULATION, 30.0, 30.0)
 	assert_gt(next, AntPopulationModel.STARTING_POPULATION)
-	assert_lte(next, 10.0)
+	assert_lte(next, 30.0)
 
 
 func test_step_does_not_grow_past_capacity():
@@ -87,6 +124,14 @@ func test_step_does_not_grow_past_capacity():
 	assert_almost_eq(next, 10.0, 0.01)
 
 
-func test_starting_population_is_a_small_founding_colony():
-	assert_gt(AntPopulationModel.STARTING_POPULATION, 0.0)
-	assert_lt(AntPopulationModel.STARTING_POPULATION, AntPopulationModel.new().capacity(0.0, 0.0))
+## Deliberately EQUAL, not merely less-than (2026-09-06, food economy):
+## AntColony._seed_initial_mounds never seeds a mound above its own
+## unfed-baseline capacity ceiling (BASE_CAPACITY), on pain of
+## PopulationModel.step reading it as already overcrowded and shrinking
+## it back down before a player ever sees it settle -- a real, tested
+## safety this file's own git history shows was already load-bearing at
+## the old 1.0/4.0 scale, preserved exactly, just at the new one.
+func test_starting_population_matches_the_unfed_baseline_capacity():
+	assert_almost_eq(
+		AntPopulationModel.STARTING_POPULATION, AntPopulationModel.new().capacity(0.0, 0.0), 0.001
+	)

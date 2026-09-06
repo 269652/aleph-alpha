@@ -42,12 +42,19 @@ const MOUND_WORLD_WIDTH_MIN := 4.0
 const PLAYER_WORLD_HEIGHT_PX := -CharacterView.HEAD_TOP_Y * CharacterView.SCALE
 
 ## How wide a thriving, near-AntPopulationModel.MAX_REFERENCE_POPULATION
-## mound reads: half the player's own real-world height. Requested
-## directly, right after relaunch: mounds read as barely visible at their
-## previous flat size -- "it should be half a human high and grow with
-## the colony" (see docs/concept/soil_fauna.md "Mound size grows with the
-## colony").
-const MOUND_WORLD_WIDTH_MAX := PLAYER_WORLD_HEIGHT_PX * 0.5
+## mound reads: 1.5x the player's own real-world height. Originally half
+## the player's own height ("it should be half a human high and grow with
+## the colony" -- see docs/concept/soil_fauna.md "Mound size grows with
+## the colony"), tripled (2026-09-06, "make them substantially bigger" --
+## see that same doc's "A real food economy" section, shipped alongside
+## fewer, more populous, higher-ceiling mounds so all the numbers move
+## together): a real, well-established nest -- large ant species' mounds
+## routinely spread well past a person's own height across -- is a
+## genuinely substantial feature of the ground it sits on, not something
+## a player can walk past without noticing. The floor (a founding
+## colony's smallest reading, MOUND_WORLD_WIDTH_MIN) is unchanged; only
+## the ceiling moved.
+const MOUND_WORLD_WIDTH_MAX := PLAYER_WORLD_HEIGHT_PX * 1.5
 
 ## Growth reads fastest early and flattens out approaching full size --
 ## the identical `pow`-exponent-below-1 technique and reasoning
