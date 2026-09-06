@@ -419,6 +419,27 @@ correct tile positions once `TILE_SIZE` changes.
   since they cover more screen area regardless of mechanism, which is
   exactly why it was checked with a real forest render rather than shipped
   on arithmetic alone.
+
+  **Reverted back to 1.0, asked directly** ("undo scaling of trees by 1.3?
+  but keep crispness as far as possible"). Not in tension with each other:
+  everything this whole Phase actually did for CRISPNESS lives in
+  `DETAIL_MULTIPLIER`/`SIZE` (the offline compositing canvas resolution)
+  and `scale_piece`'s area-average downscale (the spring-blur fix, two
+  entries above) -- `VISUAL_SCALE` never touched either. All it did was let
+  a player see more of that already-crisp texture by drawing it bigger on
+  screen; giving that up returns trees to their own `WORLD_SIZE` footprint
+  without undoing one pixel of the actual resolution work. No pixel-
+  alignment regression either: trees are minified relative to their native
+  canvas at every value checked in this whole 1.0-3.0 comparison (`screen_
+  pixels_per_art_pixel` stays well below 1.0 throughout, per `SIZE`'s own
+  doc comment), and nearest-neighbour minification of this smoothly-shaded
+  art was already confirmed to read coherently regardless of the exact
+  ratio -- unlike a MAGNIFIED sprite, where a non-whole screen-pixels-per-
+  texel ratio visibly softens nearest-neighbour edges (see the separate,
+  unrelated camera-zoom pixel-alignment issue in `docs/progress.md`'s
+  character-scale entry). Kept as a live, still-multiplied constant
+  (`ProceduralTreeSprite.VISUAL_SCALE := 1.0`) rather than deleted, in case
+  this on-screen-size-vs-crowding trade-off is revisited again.
 - ⬜ Phase 4 (creatures).
 - ⬜ Phase 5 (structures).
 - ⬜ Phase 6 (items / icons).

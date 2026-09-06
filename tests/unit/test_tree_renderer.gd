@@ -274,18 +274,29 @@ func test_tree_art_is_authored_at_its_own_tree_specific_detail_multiplier():
 ## art_resolution.md's Phase 3, fourth follow-up) that "exactly as big"
 ## (screen_pixels_per_art_pixel == 1.0) makes a real forest read as an
 ## undifferentiated, barely-walkable mass -- a bigger jump than the
-## already-reverted WORLD_SIZE 40x56 attempt. VISUAL_SCALE(1.3) is the
-## picked middle ground, chosen from a real rendered comparison
+## already-reverted WORLD_SIZE 40x56 attempt. VISUAL_SCALE(1.3) was the
+## picked middle ground at the time, chosen from a real rendered comparison
 ## (tools/probe_native_scale_forest.gd), not eyeballed.
+##
+## Reverted back to 1.0, asked directly: "undo scaling of trees by 1.3?
+## but keep crispness as far as possible" (see this constant's own doc
+## comment for why that ask and "keep crispness" are not in tension --
+## crispness lives entirely in DETAIL_MULTIPLIER/scale_piece's area-average
+## downscale, both untouched here; VISUAL_SCALE only ever changed how big
+## that already-crisp texture drew on screen, never its own detail).
 func test_tree_visual_scale_is_the_pinned_tuned_constant():
-	assert_almost_eq(ProceduralTreeSprite.VISUAL_SCALE, 1.3, 0.0001)
+	assert_almost_eq(ProceduralTreeSprite.VISUAL_SCALE, 1.0, 0.0001)
 
 
-## The sprite is scaled back down from its oversized DETAIL_MULTIPLIER-authored
-## art, THEN scaled back UP by VISUAL_SCALE -- so it draws bigger than the
-## tree's own world/collision footprint (TreeRenderer.TREE_SIZE) on purpose,
-## not by accident of the two multipliers only partly cancelling.
-func test_tree_sprite_draws_bigger_than_its_own_world_footprint():
+## VISUAL_SCALE=1.0 collapses this to an equality (a tree draws AT its own
+## world/collision footprint, matching TreeRenderer.TREE_SIZE exactly) --
+## but the relationship pinned here is the general one (drawn size = world
+## size times whatever VISUAL_SCALE currently is), which held just as true
+## back when VISUAL_SCALE was 1.3 and the sprite genuinely drew bigger than
+## its own footprint on purpose. Kept general rather than rewritten to a
+## bare equality check so a future re-tune of VISUAL_SCALE needs no test
+## change here, only the constant.
+func test_tree_sprite_draws_at_world_footprint_times_visual_scale():
 	var chunk := _make_forest_chunk()
 	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
 	assert_gt(spawned.size(), 0, "fixture should spawn at least one tree")
@@ -296,9 +307,9 @@ func test_tree_sprite_draws_bigger_than_its_own_world_footprint():
 	var expected_scale := ProceduralTreeSprite.SPRITE_SCALE * ProceduralTreeSprite.VISUAL_SCALE
 	assert_almost_eq(sprite.scale.x, expected_scale, 0.0001)
 	assert_almost_eq(sprite.scale.y, expected_scale, 0.0001)
-	# The drawn size is the art size times the scale -- VISUAL_SCALE times the
-	# world size, not the world size itself (see the doc comment above for why
-	# that gap is now deliberate).
+	# The drawn size is the art size times the scale -- world size times
+	# VISUAL_SCALE, currently 1.0 so this collapses to plain world size (see
+	# the doc comment above).
 	var drawn := Vector2(sprite.texture.get_size()) * sprite.scale
 	assert_almost_eq(drawn.x, TreeRenderer.TREE_SIZE.x * ProceduralTreeSprite.VISUAL_SCALE, 0.01)
 	assert_almost_eq(drawn.y, TreeRenderer.TREE_SIZE.y * ProceduralTreeSprite.VISUAL_SCALE, 0.01)

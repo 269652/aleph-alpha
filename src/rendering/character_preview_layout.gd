@@ -294,14 +294,14 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 ## ProceduralTreeSprite.SPRITE_SCALE * ProceduralTreeSprite.VISUAL_SCALE --
 ## trees' own multipliers, not ArtResolution's shared one), so it occupies
 ## [x - w/2, x + w/2] x [y - h, y] where w/h are WORLD_SIZE times
-## VISUAL_SCALE, not WORLD_SIZE alone (see that constant's own doc comment:
-## the sprite draws bigger than its world footprint on purpose). Derived
-## from the tree art's OWN drawn size, never an eyeballed margin -- if the
-## art or its visual scale ever change, this follows. Previously
+## VISUAL_SCALE (currently 1.0, so this collapses to plain WORLD_SIZE today
+## -- see that constant's own doc comment). Derived from the tree art's OWN
+## drawn size, never an eyeballed margin -- if the art or its visual scale
+## ever change, this follows automatically, in either direction. Previously
 ## unconstrained, which cut canopies off the top of the frame and trunks off
 ## its sides (reported live: trees clipped by the frame) -- and previously
-## under-constrained again the moment VISUAL_SCALE made the sprite draw
-## bigger than WORLD_SIZE without this margin following it.
+## under-constrained again the moment VISUAL_SCALE (at 1.3 then) made the
+## sprite draw bigger than WORLD_SIZE without this margin following it.
 static func tree_bounds(footprint: Vector2) -> Rect2:
 	var drawn_width := float(ProceduralTreeSprite.WORLD_SIZE.x) * ProceduralTreeSprite.VISUAL_SCALE
 	var drawn_height := float(ProceduralTreeSprite.WORLD_SIZE.y) * ProceduralTreeSprite.VISUAL_SCALE

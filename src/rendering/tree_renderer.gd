@@ -264,11 +264,13 @@ func _build_tree_node(position: Vector2, age_seconds: float = INF) -> ChoppableT
 	body.growth_scale = TreeGrowth.new().scale_at(age_seconds)
 	# The canopy art is authored ProceduralTreeSprite.DETAIL_MULTIPLIER times
 	# oversized for pixel detail; scaling it back down by SPRITE_SCALE alone
-	# would draw the tree at exactly its world footprint (see docs/concept/
-	# art_resolution.md). VISUAL_SCALE then draws it bigger than that ON
-	# PURPOSE (see its own doc comment, on ProceduralTreeSprite alongside
-	# SPRITE_SCALE) -- the world footprint, collision and forest spacing are
-	# untouched, only how big the sprite draws.
+	# draws the tree at exactly its world footprint (see docs/concept/
+	# art_resolution.md). VISUAL_SCALE is an independent on-screen-size
+	# multiplier layered on top (see its own doc comment, on
+	# ProceduralTreeSprite alongside SPRITE_SCALE) -- currently 1.0, so it's
+	# a no-op today, but the world footprint/collision/forest spacing stay
+	# untouched by it regardless of its value; only how big the sprite draws
+	# ever moves.
 	# NOT ArtResolution.SPRITE_SCALE -- trees use their own, larger,
 	# tree-specific multiplier now (see that constant's own doc comment).
 	sprite.scale = (

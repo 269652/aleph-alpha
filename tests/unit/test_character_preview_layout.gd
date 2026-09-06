@@ -320,9 +320,10 @@ func test_kept_grass_cells_clump_together():
 ## top edge and trunks past its sides (reported live: trees clipped by the
 ## frame).
 func test_tree_positions_leave_room_for_the_trees_own_drawn_body():
-	# * VISUAL_SCALE: the sprite now draws bigger than WORLD_SIZE on purpose
-	# (see that constant's own doc comment) -- the clipping margin must grow
-	# with it or this reintroduces the exact bug this test was written for.
+	# * VISUAL_SCALE: whatever the sprite draws bigger than WORLD_SIZE by
+	# (see that constant's own doc comment; currently 1.0, a no-op here) --
+	# the clipping margin must grow with it or this reintroduces the exact
+	# bug this test was written for.
 	var half_width := float(ProceduralTreeSprite.WORLD_SIZE.x) * 0.5 * ProceduralTreeSprite.VISUAL_SCALE
 	var height := float(ProceduralTreeSprite.WORLD_SIZE.y) * ProceduralTreeSprite.VISUAL_SCALE
 	for seed_value in 60:

@@ -109,7 +109,8 @@ const DETAIL_MULTIPLIER := 12
 ## SPRITE_SCALE, since trees no longer share that class's multiplier.
 const SPRITE_SCALE := 1.0 / float(DETAIL_MULTIPLIER)
 
-## ## The sprite draws bigger than WORLD_SIZE, on purpose
+## ## An independent lever for how big the sprite draws, separate from its
+## ## own native detail
 ##
 ## Reported directly, a live gameplay screenshot next to the illustrated
 ## source sheet open at its own native resolution: "the cherry tree has
@@ -150,8 +151,35 @@ const SPRITE_SCALE := 1.0 / float(DETAIL_MULTIPLIER)
 ## 1.6x/2.0x/3.0x and handed back rather than guessed: 1.3x read as a
 ## clear, safe crispness win with the forest still legible; 1.6x (right at
 ## the previously-reverted ratio) still looked acceptable but was flagged
-## as the risky edge; 2.0x was visibly crowding.
-const VISUAL_SCALE := 1.3
+## as the risky edge; 2.0x was visibly crowding. Shipped as 1.3.
+##
+## ## Reverted back to 1.0
+##
+## Asked directly: "undo scaling of trees by 1.3? but keep crispness as far
+## as possible." Those two asks are NOT in tension, because the "crispness
+## win" 1.3x was picked for above was never about this constant making the
+## art itself any crisper -- the art's own detail is entirely
+## DETAIL_MULTIPLIER/SIZE (the offline compositing canvas) and scale_piece's
+## area-average downscale (docs/concept/art_resolution.md's spring-blur
+## fix), neither of which this constant touches even in the slightest.
+## What 1.3x actually did was let a player see more of that ALREADY-crisp
+## texture by drawing it bigger on screen -- a real, but separate, benefit
+## from resolution itself. Reverting to 1.0 gives up that "more screen
+## space to look at the detail" benefit and returns trees to their own
+## WORLD_SIZE footprint, but the underlying texture is exactly as detailed
+## and exactly as crisply downscaled as it was at 1.3x -- nothing about
+## DETAIL_MULTIPLIER, SIZE, or scale_piece changed here. No pixel-alignment
+## regression either: trees are minified relative to their native canvas at
+## EVERY value in this constant's whole 1.0-3.0 range checked above (see
+## SIZE's own doc comment on `screen_pixels_per_art_pixel` staying well
+## below 1.0 throughout), and nearest-neighbour minification of this
+## smoothly-shaded art was already confirmed to read coherently regardless
+## of the exact ratio (same doc comment) -- unlike a MAGNIFIED sprite (the
+## player's own, or these trees before DETAIL_MULTIPLIER existed), where a
+## non-whole screen-pixels-per-texel ratio visibly softens nearest-neighbour
+## edges. Kept as a live, still-multiplied constant rather than deleted, in
+## case this on-screen-size-vs-crowding trade-off is revisited again.
+const VISUAL_SCALE := 1.0
 
 ## The ART canvas, DETAIL_MULTIPLIER times the world footprint (see
 ## docs/concept/art_resolution.md) -- TreeRenderer draws it at
