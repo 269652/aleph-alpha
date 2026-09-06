@@ -127,6 +127,24 @@ func test_apple_and_cherry_out_yield_walnut():
 	assert_gt(TreeSpecies.yield_multiplier_for("cherry"), walnut_yield)
 
 
+## Cherries bear more prolifically than any other species in this roster --
+## this file's own class doc comment already says so ("bear prolifically --
+## lots of small, fast fruit"), a claim the actual multiplier did not yet
+## match (reported live, from a screenshot, as a visibly sparse crop for how
+## prolific a real cherry tree actually is). Pinned as the strict maximum
+## across the whole roster rather than a bare literal, so this cannot
+## silently drift back below another species' own value again.
+func test_cherry_is_the_most_prolific_bearer_in_the_roster():
+	var cherry_yield: float = TreeSpecies.yield_multiplier_for("cherry")
+	for id in TreeSpecies.IDS:
+		if id == "cherry":
+			continue
+		assert_gt(
+			cherry_yield, TreeSpecies.yield_multiplier_for(id),
+			"cherry should out-yield %s" % id
+		)
+
+
 func test_an_unknown_species_falls_back_rather_than_crashing():
 	assert_gt(TreeSpecies.display_name_for("dragonfruit").length(), 0)
 	var c: Color = TreeSpecies.canopy_color_for("dragonfruit")

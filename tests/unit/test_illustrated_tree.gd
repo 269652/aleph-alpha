@@ -151,27 +151,107 @@ func test_the_snow_frame_reads_neutral_rather_than_a_season_hue():
 
 # -- fruit -------------------------------------------------------------------
 
-## Two frames, so a crop coming in is visible on the tree before it can be
-## picked -- the same information FruitingModel already tracks, shown rather
-## than hidden.
-func test_fruit_has_an_unripe_and_a_ripe_frame():
-	assert_not_null(trees.fruit_for("cherry", false))
-	assert_not_null(trees.fruit_for("cherry", true))
+## `ripe` no longer distinguishes anything for any of the six species' real
+## on-tree art -- re-measured directly while fixing a real off-season
+## fruit-leaf-colour bug (see fruit_for's own doc comment / "What a fruit
+## frame means" above): every species' real on-tree row today carries
+## exactly CANOPY_FRAME_COUNT frames, one per canopy SEASON rather than a
+## ripening stage, so `ripe`/`unripe` both resolve to whichever season was
+## asked for (default: summer). This used to read as "ripe differs from
+## unripe" purely because the row's LAST column happens to be autumn/
+## turning and the one before it summer/leaf -- a coincidence of column
+## order, not a real ripening depiction, and exactly the coincidence that
+## let a hanging summer cherry wear autumn's orange leaves unnoticed (the
+## bug this whole fix addresses -- see the cherry season-matching tests
+## below). Documented here as today's real, measured state, not a design
+## goal: a future species that ships a genuine ripening sequence again
+## would need this test consciously updated, not silently broken either
+## way.
+func test_ripe_and_unripe_are_identical_for_every_species_current_art():
+	for species in ["cherry", "walnut", "acorn", "hazelnut", "pine", "apple"]:
+		assert_not_null(trees.fruit_for(species, false), "%s should have an on-tree frame" % species)
+		assert_not_null(trees.fruit_for(species, true), "%s should have an on-tree frame" % species)
+		assert_eq(
+			trees.fruit_for(species, true).get_image().get_data(),
+			trees.fruit_for(species, false).get_image().get_data(),
+			"%s's ripe and unripe on-tree frames should currently match (season-aligned art, no ripening stage)" % species
+		)
+
+
+## Cherry's on-tree row carries exactly CANOPY_FRAME_COUNT frames, one per
+## canopy season (measured: test_on_tree_frames_skip_a_leading_twig_row_
+## with_no_real_fruit already pins this at 4), so its own small accent
+## leaves match whatever canopy colour is currently showing around the
+## fruit -- the same `_CANOPY_FRAME_BY_SEASON` table canopy_for's own season
+## lookup already uses (see fruit_for's own doc comment).
+##
+## Reported live, from a screenshot: a fully green SUMMER canopy with ripe
+## cherries still carrying the AUTUMN column's orange leaves -- fruit_for
+## never looked at season at all before this, always returning the row's
+## LAST entry (frames[3], the turning column) regardless of the actual
+## season.
+func test_ripe_cherry_fruit_matches_the_summer_canopy_column():
+	var on_tree := trees.on_tree_frames_for("cherry")
+	assert_eq(
+		trees.fruit_for("cherry", true, "summer").get_image().get_data(),
+		on_tree[IllustratedTree.CANOPY_LEAF].get_image().get_data(),
+		"summer's ripe cherry closeup should be the leaf-column drawing, not autumn's"
+	)
+
+
+func test_ripe_cherry_fruit_is_not_the_autumn_closeup_during_summer():
 	assert_ne(
-		trees.fruit_for("cherry", true).get_image().get_data(),
-		trees.fruit_for("cherry", false).get_image().get_data(),
-		"a ripe cherry should not look like an unripe one"
+		trees.fruit_for("cherry", true, "summer").get_image().get_data(),
+		trees.fruit_for("cherry", true, "autumn").get_image().get_data(),
+		"a summer cherry should not carry the turning column's orange leaves"
 	)
 
 
-## Ripe is the red one. Backwards here would mean an orchard of green fruit
-## that is somehow ready to pick.
-func test_the_ripe_frame_is_the_redder_one():
-	assert_gt(
-		_red_share(trees.fruit_for("cherry", true).get_image()),
-		_red_share(trees.fruit_for("cherry", false).get_image()),
-		"ripe fruit should be the redder frame"
-	)
+## Every canopy season has its own matching fruit closeup, not just summer --
+## the same per-season table canopy_for's own lookup uses
+## (_CANOPY_FRAME_BY_SEASON), so a future edit cannot regress the other three
+## columns unnoticed even though cherries never actually hang outside summer
+## in real play (see FruitingModel.RIPENING_BY_SPECIES's own cherry window).
+func test_ripe_cherry_fruit_follows_every_canopy_seasons_own_column():
+	var on_tree := trees.on_tree_frames_for("cherry")
+	var expected_index_by_season := {
+		"winter": IllustratedTree.CANOPY_BARE,
+		"spring": IllustratedTree.CANOPY_BLOSSOM,
+		"summer": IllustratedTree.CANOPY_LEAF,
+		"autumn": IllustratedTree.CANOPY_TURNING,
+	}
+	for season in expected_index_by_season:
+		var expected_index: int = expected_index_by_season[season]
+		assert_eq(
+			trees.fruit_for("cherry", true, season).get_image().get_data(),
+			on_tree[expected_index].get_image().get_data(),
+			"%s's ripe cherry closeup should be its own matching canopy column" % season
+		)
+
+
+## The same fix generalizes past cherry: every species' on-tree row happens
+## to share cherry's exact shape today (see
+## test_ripe_and_unripe_are_identical_for_every_species_current_art --
+## measured, not assumed), so the identical off-season fruit-leaf-colour bug
+## applied to all six, not just the one reported. Confirmed directly here
+## rather than left to cherry's own coverage alone, since nothing about
+## fruit_for's fix is species-specific.
+func test_every_species_fruit_follows_its_own_canopy_seasons_column():
+	var expected_index_by_season := {
+		"winter": IllustratedTree.CANOPY_BARE,
+		"spring": IllustratedTree.CANOPY_BLOSSOM,
+		"summer": IllustratedTree.CANOPY_LEAF,
+		"autumn": IllustratedTree.CANOPY_TURNING,
+	}
+	for species in ["cherry", "walnut", "acorn", "hazelnut", "pine", "apple"]:
+		var on_tree := trees.on_tree_frames_for(species)
+		for season in expected_index_by_season:
+			var expected_index: int = expected_index_by_season[season]
+			assert_eq(
+				trees.fruit_for(species, true, season).get_image().get_data(),
+				on_tree[expected_index].get_image().get_data(),
+				"%s's %s fruit closeup should be its own matching canopy column" % [species, season]
+			)
 
 
 # -- leaf litter: a real, correctly-coloured single foliage closeup for -----
@@ -821,6 +901,33 @@ func test_cherrys_on_tree_frames_are_actually_red_cherries():
 		)
 
 
+## Reported live: a visible WHITE centre inside the rendered cherry sprite
+## that should be transparent. Measured directly against the real sheet:
+## composite_cherry.png is fully opaque (CompositeSheetSlicer.needs_keying
+## reads true), so its regions go through reachability-only keying -- but
+## two of the on-tree row's own leafy-twig drawings have a fully-ENCLOSED
+## opaque-white pocket (a gap between leaf/cherry shapes that never touches
+## the drawing's own edge, measured at 166 and 180 connected pixels), too
+## big for despeckle's speckle-vs-feature size cutoff
+## (SPECKLE_MAX_COMPONENT_PIXELS, 150) and never reached by reachability
+## alone. cut_out's own `aggressive` mode handles exactly this shape of gap
+## (see its doc comment) but was, until now, scoped to only the bare-winter
+## canopy frame. Cherry's on-tree row is a second, separately-safe case:
+## the snow column is already excluded from it (_without_snow_column), and
+## real cherries/leaves are never near-white, so nothing pale-and-real is at
+## risk there the way a blossom or a snow frame would be.
+##
+## _near_white_share already only counts OPAQUE pixels (skips alpha<0.5) --
+## exactly the measure that should drop once the enclosed pocket is actually
+## keyed transparent rather than left opaque.
+func test_cherrys_on_tree_frames_have_no_leftover_white_background():
+	for frame in trees.on_tree_frames_for("cherry"):
+		assert_lt(
+			_near_white_share(frame.get_image()), 0.02,
+			"a cherry on-tree frame should not show leftover opaque white background"
+		)
+
+
 ## Ripe must never be the snow-dusted branch -- the same "not a season, a
 ## weather overlay" reasoning canopy_for's own season table already applies
 ## to CANOPY_SNOW (see its doc comment) extends to the fruit row: a species
@@ -842,16 +949,6 @@ func test_ripe_and_unripe_are_never_the_snow_dusted_branch():
 		assert_lt(
 			_near_white_share(unripe_img), 0.5,
 			"%s unripe fruit should not read as a snow-covered branch" % species
-		)
-
-
-## A ripe crop does not look like an unripe one on any species.
-func test_every_species_shows_its_crop_ripening():
-	for species in ["cherry", "walnut", "acorn", "hazelnut", "pine", "apple"]:
-		assert_ne(
-			trees.fruit_for(species, true).get_image().get_data(),
-			trees.fruit_for(species, false).get_image().get_data(),
-			"%s ripens invisibly" % species
 		)
 
 

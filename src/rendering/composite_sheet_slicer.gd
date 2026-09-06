@@ -587,17 +587,25 @@ static func needs_keying(sheet: Image) -> bool:
 	return sheet != null and sheet.get_width() > 0 and sheet.get_pixel(0, 0).a > 0.9
 
 
-## ## Two more bugs found keying acorn and apple
+## ## Two more bugs found keying acorn and apple, and a stale claim corrected
 ##
-## `needs_keying` sheets are the exception, not the rule -- of the six
-## species, only acorn and apple currently trip it, pine/hazelnut/walnut/
-## cherry all having been re-exported with real alpha since the paragraph
-## above was written (measured: their corner pixels read alpha 0, not the
-## checkerboard's 0.96-0.99 opaque grey it describes). That made the two
-## remaining opaque sheets easy to under-test -- the reachability keying
-## above looked sound and had real doc comments explaining its one known
-## limit, but nobody had measured it actually removing a pixel on either of
-## them.
+## This section used to claim only acorn and apple tripped `needs_keying`,
+## with pine/hazelnut/walnut/cherry having been re-exported with real alpha.
+## Re-measured directly (2026-09-06, chasing a real white background left
+## inside a rendered cherry -- see IllustratedTree.fruit_for's own doc
+## comment): that claim is now backwards. Cherry, walnut, hazelnut and pine
+## all read fully OPAQUE at their own corner pixel today (`needs_keying` ->
+## true); apple and acorn are the two that read real alpha 0 there
+## (`needs_keying` -> false). Nothing here settles WHY it flipped -- a later
+## art regeneration, or a mismeasurement at the time -- only that the
+## previous claim no longer matches the sheets on disk, and this comment is
+## corrected rather than silently rewritten so a future reader trusts what
+## was actually measured over an old, unverified claim. The two real bugs
+## this section documents below (missing FORMAT_RGBA8 conversion, enclosed
+## background pockets on the bare-winter frame) are unaffected by which
+## specific sheets trip `needs_keying` at any given time -- that was, and
+## remains, easy to under-test precisely because it can silently change
+## under an art regeneration with no code change at all.
 ##
 ## It wasn't. `sheet.get_region()` returns a piece in the SHEET's own format,
 ## and both acorn's and apple's composite sheets decode as FORMAT_RGB8 --
@@ -629,12 +637,19 @@ static func needs_keying(sheet: Image) -> bool:
 ## clumps reachability is protecting). But the bare-winter frame is the one
 ## canopy role that never draws anything pale by design -- no leaf, no
 ## blossom, no snow, just brown branches -- so `cut_out` takes an
-## `aggressive` flag, used ONLY for that one frame by IllustratedTree, that
-## keys every background-COLOURED pixel in the crop regardless of whether
-## the fill ever reached it. Every other frame -- the other three seasons,
-## the snow frame, the trunk, every fruit stage -- keeps the reachability-
-## only behaviour unchanged, so a real pale drawing anywhere else on the
-## sheet is exactly as protected as it always was.
+## `aggressive` flag that keys every background-COLOURED pixel in the crop
+## regardless of whether the fill ever reached it. Originally used ONLY for
+## that one frame by IllustratedTree; a second, separately-safe case joined
+## it later (2026-09-06, a real enclosed white pocket found inside cherry's
+## own on-tree fruit closeups -- see fruit_for's own doc comment): an
+## on-tree row with exactly CANOPY_FRAME_COUNT entries has already had its
+## snow-column entry dropped (_without_snow_column), so nothing pale-and-real
+## is at risk there either. Every OTHER frame -- the other three canopy
+## seasons, the snow frame, the trunk, every harvested/separate-file fruit
+## stage, and any on-tree row that is a real ripening sequence rather than a
+## season-column set -- keeps the reachability-only behaviour unchanged, so
+## a real pale drawing anywhere else on the sheet is exactly as protected as
+## it always was.
 ##
 ## Even colour-based removal was not quite enough on its own. These sheets
 ## are anti-aliased against their opaque background, so every branch edge
