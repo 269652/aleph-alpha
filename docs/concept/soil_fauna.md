@@ -1098,6 +1098,33 @@ rule as every wild animal, rather than a parallel, separately-capped UI.
   follow-up left undone: `nearest_leaf_litter_near` only ever reports the
   single closest leaf, with no plural "leaves near" query to run
   `PheromoneField.best_candidate_index` against the way seed/windfall do.
+  **Follow-up bug, same day:** "disappears at the mound" above was the
+  intended final state, but the shipped code actually made the leaf vanish
+  at PICKUP instead — `_resolve_arrival_at_food`'s `consume_leaf_litter_at`
+  call genuinely removes it from `LeafLitterField` (and so from the ground
+  renderer) the instant the ant arrives, correct for the ground-litter
+  side of the world, but nothing ever stood in for it visually for the
+  walk back: only the ant's OWN body switched to its carry pose, same as
+  an empty-handed return. Reported directly: "the ant now uses the carry
+  sprite sheet animation row when dragging a leaf into the mound but it
+  still disappears when the ant touches it ... it should actually drag
+  the real leaf entity visibly over the ground and it should vanish only
+  when it's in the mound." Fixed by threading the picked-up leaf's own
+  species/season through from dispatch time (`_forage_leaf_near_mound`
+  already has both, from the same `nearest_leaf_litter_near` call that
+  found the target position) to a second, real sprite on
+  `AntForagerMarker` — cropped from the exact same `LeafLitterAtlas` cell
+  a ground-resting leaf of that species/season would use, at the same
+  `LeafLitterRenderer.WORLD_SIZE` — shown only while genuinely returning
+  with real food, hidden on an empty-handed return, and freed automatically
+  with the rest of the forager at real arrival at the mound (ordinary
+  Godot child-node ownership, no extra bookkeeping needed for "vanish only
+  at the mound"). Also reported in the same message: **ant forager walking
+  speed halved** (`AntForagerMarker.WALK_SPEED`, 24.0 → 12.0) — a
+  deliberate, tuned divergence from `DecomposerMarker`'s own ambient
+  ants/bugs, which this constant used to equal on purpose (see that
+  constant's own doc comment); the ambient decomposer ants/bugs are
+  unchanged.
 - **Mound COUNT is still fixed and deterministic per chunk** (see "A queen,
   and where a colony's size comes from" above for what is no longer fixed
   — each mound's own population now genuinely grows or stalls with real

@@ -9059,6 +9059,38 @@ best_candidate_index` against the way seed/windfall do. 24/24 green in
 `test_earth_chunk_manager.gd`. Full writeup: `soil_fauna.md`'s own
 cross-reference, now resolved.
 
+✅ **A carried leaf now stays visible for the whole walk home, and forager
+ants walk at half speed (2026-09-06, same day)** — reported live: "the ant
+now uses the carry sprite sheet animation row when dragging a leaf into
+the mound but it still disappears when the ant touches it ... it should
+actually drag the real leaf entity visibly over the ground and it should
+vanish only when it's in the mound", plus "half ants speed". The entry
+above's own "it disappears at the mound" was the correct DESIGN intent,
+but the shipped code actually made the leaf vanish at PICKUP instead
+(`consume_leaf_litter_at` genuinely removes it from `LeafLitterField` on
+real arrival, correct for the ground side, but nothing ever stood in for
+it visually on the way back — only the ant's own body switched to its
+carry pose). Fixed by threading the picked-up leaf's own species/season
+through from `_forage_leaf_near_mound`'s own dispatch (already known
+there, from the same `nearest_leaf_litter_near` call that found the
+target position — `EarthChunkManager._dispatch_ant_forager` gained two
+new optional `leaf_species`/`leaf_season` params, defaulted `""` for
+seed/windfall trips) to `AntForagerMarker.carried_leaf_species`/
+`carried_leaf_season`, which a new second child sprite reads to show the
+exact atlas cell (`LeafLitterAtlas.cell_index`) a ground-resting leaf of
+that species/season would use, at the same real-world size
+(`LeafLitterRenderer.WORLD_SIZE`) — visible only while genuinely
+returning with real food (never on an empty-handed return, never for a
+seed/windfall trip), freed automatically with the rest of the forager at
+real arrival at the mound (ordinary Godot child-node ownership, not new
+bookkeeping). Separately, `AntForagerMarker.WALK_SPEED` halved (24.0 →
+12.0) — a deliberate, tuned divergence from `DecomposerMarker`'s own
+ambient ants/bugs, which this constant used to equal on purpose; the
+ambient ants/bugs are unchanged. 31/31 green in `test_ant_forager_
+marker.gd`, all pre-existing leaf-dispatch coverage in
+`test_earth_chunk_manager.gd` still green. Full writeup: `soil_fauna.md`'s
+own follow-up note on the same entry.
+
 ⬜ **Still no litter-density accumulation or soil-fertility feedback, and
 no ground-covering visual effect** (unchanged scope cut — see
 `leaf_litter.md`'s own "Deliberately not modeled" section).

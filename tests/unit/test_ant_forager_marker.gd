@@ -106,6 +106,16 @@ func test_sprite_is_scaled_down_like_every_other_decomposer_ant():
 
 # -- movement: walks toward whichever leg it is currently on ---------------
 
+## Reported directly: "half ants speed" -- halved from its original 24.0
+## (see WALK_SPEED's own doc comment for what that used to mean). Pinned,
+## not just a bare literal in the constant's own declaration, per this
+## project's "tuned values must be tested" rule -- a future change back
+## toward 24.0 (or any other drift) now fails a real test rather than only
+## an eyeballed comment.
+func test_walk_speed_is_pinned_to_half_its_original_value():
+	assert_eq(AntForagerMarker.WALK_SPEED, 12.0)
+
+
 func test_starts_in_the_approaching_phase():
 	var f := _spawned(Vector2(50, 0), Vector2.ZERO)
 	assert_eq(f._behavior.phase, AntForageBehavior.Phase.APPROACHING)
@@ -120,7 +130,7 @@ func test_walks_toward_the_target_before_arriving():
 
 func test_does_not_overshoot_a_short_approach():
 	var f := _spawned(Vector2(5, 0), Vector2.ZERO)
-	f._process(1.0)  # WALK_SPEED*1.0 = 24px, far more than the 5px leg
+	f._process(1.0)  # WALK_SPEED*1.0 = 12px, still far more than the 5px leg
 	assert_almost_eq(f.position.x, 5.0, 0.01, "should land exactly on a short target, not overshoot past it")
 
 
@@ -330,3 +340,114 @@ func test_shows_the_walk_pose_while_returning_empty_handed():
 	var sprite := f.get_child(0) as Sprite2D
 	var walk_frames := IllustratedDecomposerSprite.new().generate_textures("ant", "walk")
 	assert_true(walk_frames.has(sprite.texture), "an empty-handed return should still show the plain walk cycle, not carry")
+
+
+# -- the carried leaf itself: a REAL, visible ground-litter sprite that rides
+# home with the ant, not just its own body's carry pose -----------------------
+#
+# Bug report: "the ant now uses the carry sprite sheet animation row when
+# dragging a leaf into the mound but it still disappears when the ant
+# touches it ... it should actually drag the real leaf entity visibly over
+# the ground and it should vanish only when it's in the mound." Traced to
+# _resolve_arrival_at_food's own consume_leaf_litter_at call: it genuinely
+# removes the leaf from LeafLitterField (and so from the ground renderer)
+# the moment the ant ARRIVES at it, which is correct for the ground-litter
+# side of the world, but nothing ever stood in for it visually for the
+# whole walk back -- only the ant's OWN body switched to its "carry" pose
+# (see the section above), same as an empty-handed seed/windfall return.
+# `carried_leaf_species`/`carried_leaf_season` (set at dispatch time, from
+# the same nearest_leaf_litter_near lookup that found the target position
+# in the first place -- see test_earth_chunk_manager.gd's own coverage) let
+# this second sprite show the exact leaf that was actually picked up,
+# cropped from LeafLitterAtlas the same way the ground renderer itself
+# draws it, so a carried cherry autumn leaf looks like the SAME cherry
+# autumn leaf that just vanished off the ground, not a generic placeholder.
+
+const LeafLitterAtlas = preload("res://src/rendering/leaf_litter_atlas.gd")
+const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
+
+
+func test_shows_no_carried_leaf_visual_while_approaching():
+	var f := _spawned(Vector2(50, 0), Vector2.ZERO)
+	f.forage_kind = "leaf"
+	var leaf_sprite := f.get_child(1) as Sprite2D
+	assert_false(leaf_sprite.visible, "nothing has been picked up yet -- no carried leaf to show")
+
+
+func test_shows_a_carried_leaf_visual_while_returning_with_a_real_leaf():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned(Vector2(2, 0), Vector2.ZERO, world, colony)
+	f.forage_kind = "leaf"
+	f.carried_leaf_species = "cherry"
+	f.carried_leaf_season = "autumn"
+	f._process(1.0)  # arrive, pick up the leaf, start returning
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	assert_true(f._behavior.found_food)
+	var leaf_sprite := f.get_child(1) as Sprite2D
+	assert_true(leaf_sprite.visible, "a real leaf was just picked up -- it should now visibly ride home")
+	assert_not_null(leaf_sprite.texture)
+
+
+func test_shows_no_carried_leaf_visual_on_an_empty_handed_leaf_return():
+	var world := StubWorld.new()
+	world.leaf_present = false
+	var colony := _new_colony()
+	var f := _spawned(Vector2(2, 0), Vector2.ZERO, world, colony)
+	f.forage_kind = "leaf"
+	f._process(1.0)
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	assert_false(f._behavior.found_food)
+	var leaf_sprite := f.get_child(1) as Sprite2D
+	assert_false(leaf_sprite.visible, "nothing was actually found -- there is no leaf to visibly carry home")
+
+
+func test_shows_no_carried_leaf_visual_for_a_seed_trip():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned(Vector2(2, 0), Vector2.ZERO, world, colony)
+	f._process(1.0)  # default forage_kind "seed"
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	assert_true(f._behavior.found_food)
+	var leaf_sprite := f.get_child(1) as Sprite2D
+	assert_false(leaf_sprite.visible, "a grass seed has its own carry pose already -- this visual is leaf-only")
+
+
+## Pinned, not eyeballed: a carried leaf should read as the SAME SIZE as one
+## still sitting on the ground (LeafLitterRenderer.WORLD_SIZE), not the
+## atlas stamp's own native pixel size (LeafLitterAtlas.STAMP_SIZE, a fixed
+## 64px regardless of how big the art should actually READ in the world).
+func test_the_carried_leaf_visual_is_scaled_to_match_ground_litter_size():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned(Vector2(2, 0), Vector2.ZERO, world, colony)
+	f.forage_kind = "leaf"
+	f.carried_leaf_species = "cherry"
+	f.carried_leaf_season = "autumn"
+	f._process(1.0)
+	var leaf_sprite := f.get_child(1) as Sprite2D
+	var expected_scale := Vector2.ONE * (LeafLitterRenderer.WORLD_SIZE / float(LeafLitterAtlas.STAMP_SIZE))
+	assert_eq(leaf_sprite.scale, expected_scale)
+
+
+## Pinned against the SAME atlas math the ground renderer itself packs (see
+## LeafLitterAtlas.cell_index/CELL_SIZE/STAMP_PADDING/STAMP_SIZE) -- the
+## carried sprite must crop the identical cell a ground-resting leaf of this
+## exact species/season would use, not merely "some texture, non-null".
+func test_the_carried_leaf_visual_crops_the_correct_atlas_cell():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned(Vector2(2, 0), Vector2.ZERO, world, colony)
+	f.forage_kind = "leaf"
+	f.carried_leaf_species = "cherry"
+	f.carried_leaf_season = "autumn"
+	f._process(1.0)
+	var leaf_sprite := f.get_child(1) as Sprite2D
+	var atlas := LeafLitterAtlas.new()
+	var index := atlas.cell_index("cherry", "autumn")
+	var expected_region := Rect2(
+		index * LeafLitterAtlas.CELL_SIZE + LeafLitterAtlas.STAMP_PADDING, LeafLitterAtlas.STAMP_PADDING,
+		LeafLitterAtlas.STAMP_SIZE, LeafLitterAtlas.STAMP_SIZE
+	)
+	assert_true(leaf_sprite.texture is AtlasTexture)
+	assert_eq((leaf_sprite.texture as AtlasTexture).region, expected_region)

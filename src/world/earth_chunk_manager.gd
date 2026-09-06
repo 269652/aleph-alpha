@@ -7396,7 +7396,9 @@ func _forage_leaf_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i
 	var found := nearest_leaf_litter_near(mound_pixel, reach)
 	if found.is_empty():
 		return false
-	_dispatch_ant_forager(origin + cell, colony, cell, mound_pixel, found.position, "leaf")
+	_dispatch_ant_forager(
+		origin + cell, colony, cell, mound_pixel, found.position, "leaf", found.species, found.season
+	)
 	return true
 
 
@@ -7410,9 +7412,17 @@ func _forage_leaf_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i
 ## AntPopulationModel), so a thriving colony visibly has more than one
 ## worker out at once. Stale (freed) entries in _active_ant_foragers are
 ## pruned here, lazily, rather than eagerly elsewhere.
+## `leaf_species`/`leaf_season`: only meaningful when `forage_kind == "leaf"`
+## -- already known at THIS discovery point, from the exact same
+## nearest_leaf_litter_near call that found `target_position` (see
+## _forage_leaf_near_mound), so the forager can show a real, correctly-
+## coloured carried-leaf visual without needing to ask the world again
+## later (see AntForagerMarker.carried_leaf_species/carried_leaf_season).
+## Left "" (the default) for seed/windfall trips, which have no such visual.
 func _dispatch_ant_forager(
 	global_tile: Vector2i, colony: AntColony, cell: Vector2i,
-	mound_pixel: Vector2, target_position: Vector2, forage_kind: String
+	mound_pixel: Vector2, target_position: Vector2, forage_kind: String,
+	leaf_species: String = "", leaf_season: String = ""
 ) -> void:
 	if _entities_parent == null:
 		return
@@ -7425,6 +7435,8 @@ func _dispatch_ant_forager(
 	forager.target_position = target_position
 	forager.mound_position = mound_pixel
 	forager.forage_kind = forage_kind
+	forager.carried_leaf_species = leaf_species
+	forager.carried_leaf_season = leaf_season
 	forager.position = mound_pixel
 	forager.setup(self, colony, cell)
 	_entities_parent.add_child(forager)
