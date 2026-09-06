@@ -2,8 +2,7 @@ extends GutTest
 
 ## EarthChunkManager's wild-mushroom lifecycle (see docs/concept/
 ## mushrooms.md): a WildMushroomPatch per loaded chunk, visible
-## MushroomMarkers kept in sync via step_wild_mushrooms, and the current
-## player's identification state pushed in via set_mushroom_identification.
+## MushroomMarkers kept in sync via step_wild_mushrooms.
 ## Uses `_load_chunk` directly rather than `update()` (see CONTRIBUTING.md /
 ## test_earth_chunk_manager.gd's own known-slow-file note: a single
 ## `_load_chunk` costs a small fraction of a full `update()`'s radius of
@@ -85,27 +84,3 @@ func test_step_wild_mushrooms_removes_a_marker_whose_mushroom_was_picked():
 
 	assert_false(manager._mushroom_markers[_berlin_chunk].has(cell))
 	assert_true(marker.is_queued_for_deletion())
-
-
-func test_identification_reaches_every_live_marker_on_the_next_step():
-	manager._load_chunk(_berlin_chunk)
-	var sim: WildMushroomPatch = manager._mushroom_sims[_berlin_chunk]
-	if sim.get_fruiting_cells().is_empty():
-		pass_test("precondition unmet (no fruiting site near Berlin this run) -- nothing to check")
-		return
-
-	manager.set_mushroom_identification(true)
-	manager.step_wild_mushrooms(EarthChunkManager.CHUNK_SIZE)
-
-	for marker in manager._mushroom_markers[_berlin_chunk].values():
-		assert_true(marker.identified)
-
-
-func test_identification_defaults_to_false():
-	manager._load_chunk(_berlin_chunk)
-	var sim: WildMushroomPatch = manager._mushroom_sims[_berlin_chunk]
-	if sim.get_fruiting_cells().is_empty():
-		pass_test("precondition unmet (no fruiting site near Berlin this run) -- nothing to check")
-		return
-	for marker in manager._mushroom_markers[_berlin_chunk].values():
-		assert_false(marker.identified)

@@ -1433,11 +1433,10 @@ func _venom_step(delta: float) -> void:
 	active_venom_debuffs = _debuff_stack.advance(active_venom_debuffs, delta)
 
 
-# -- wild mushrooms: real poisoning, per-species severity, and
-# identification learned by real experience (see docs/concept/mushrooms.md's
-# "Eating one" and "Identification") -- mirrors venom's own DebuffStack
-# shape, plus a permanent, persisted encounter counter venom needed no
-# equivalent of.
+# -- wild mushrooms: real poisoning, per-species severity (see
+# docs/concept/mushrooms.md's "Eating one") -- mirrors venom's own
+# DebuffStack shape, plus a permanent, persisted lifetime encounter
+# counter venom needed no equivalent of.
 
 var mushrooms_eaten := 0
 var active_mushroom_toxin_debuffs: Array = []
@@ -1452,9 +1451,8 @@ var _mushroom_toxin_species := ""
 
 
 ## Called from eat_food whenever ANY mushroom (edible or toxic) is eaten --
-## every real encounter counts toward identification (see
-## knows_mushrooms), and a toxic species additionally applies a real
-## poisoning debuff.
+## increments the permanent lifetime counter, and a toxic species
+## additionally applies a real poisoning debuff.
 func _eat_mushroom(species_id: String) -> void:
 	mushrooms_eaten += 1
 	if MushroomSpecies.is_toxic(species_id):
@@ -1479,15 +1477,6 @@ func _mushroom_toxin_step(delta: float) -> void:
 	if stacks > 0:
 		take_damage(_mushroom_toxin.damage_per_second(stacks, _mushroom_toxin_species) * delta)
 	active_mushroom_toxin_debuffs = _debuff_stack.advance(active_mushroom_toxin_debuffs, delta)
-
-
-## Whether the player has learned to identify mushrooms on sight (see
-## MushroomMarker's identification gate) -- real foraging knowledge earned
-## through direct field experience (mushrooms_eaten), not a purchased skill
-## point (see docs/concept/mushrooms.md's "Identification" for why this
-## isn't a skill_web.gd node).
-func knows_mushrooms() -> bool:
-	return mushrooms_eaten >= MushroomSpecies.MUSHROOMS_TO_LEARN_IDENTIFICATION
 
 
 # -- spell-cast status effects: ignite/blight/freeze/root/slow (see

@@ -568,12 +568,6 @@ var _mushroom_sims: Dictionary = {}
 var _mushroom_markers: Dictionary = {}
 var _mushroom_refresh_accumulator := 0.0
 var _mushroom_renderer := MushroomRenderer.new()
-## Whether the current focus player has learned to identify mushrooms (see
-## Player.knows_mushrooms), pushed in once per frame by World
-## (set_mushroom_identification) -- the same "external state pushed in,
-## read by a later step" idiom `_season_tint`/`set_season_tint` already
-## use, so step_wild_mushrooms itself needs no player reference at all.
-var _mushroom_identification_known := false
 
 ## Player-tilled farm plots (docs/concept/farming.md's "farming loop") --
 ## flat and NOT chunk-scoped, unlike wild crops: a farm plot is a single,
@@ -5362,21 +5356,13 @@ func step_wild_crops(delta_seconds: float) -> void:
 			)
 
 
-## Whether the current focus player has learned to identify mushrooms (see
-## Player.knows_mushrooms) -- pushed in by World once a frame, read by
-## step_wild_mushrooms's own marker sync. Mirrors set_season_tint's exact
-## "external state pushed in, consumed later" shape.
-func set_mushroom_identification(known: bool) -> void:
-	_mushroom_identification_known = known
-
-
-## Wild mushroom fruiting + identification sync (see docs/concept/
-## mushrooms.md). Same throttled-accumulator shape as step_wild_crops
-## immediately above: flush_drive is a pure function of real, regional
-## conditions (WeatherModel.soil_moisture, SeasonCycle.season_at) sampled
-## per CHUNK the same way step_worms already samples moisture per chunk,
-## never a global figure -- so a rain shower over one loaded neighbourhood
-## doesn't flush mushrooms three chunks away under clear sky.
+## Wild mushroom fruiting sync (see docs/concept/mushrooms.md). Same
+## throttled-accumulator shape as step_wild_crops immediately above:
+## flush_drive is a pure function of real, regional conditions
+## (WeatherModel.soil_moisture, SeasonCycle.season_at) sampled per CHUNK
+## the same way step_worms already samples moisture per chunk, never a
+## global figure -- so a rain shower over one loaded neighbourhood doesn't
+## flush mushrooms three chunks away under clear sky.
 func step_wild_mushrooms(delta_seconds: float) -> void:
 	_mushroom_refresh_accumulator += delta_seconds
 	if _mushroom_refresh_accumulator < MUSHROOM_REFRESH_INTERVAL:
@@ -5396,7 +5382,7 @@ func step_wild_mushrooms(delta_seconds: float) -> void:
 		sim.advance(elapsed, flush_drive)
 		_mushroom_renderer.sync_markers(
 			_entities_parent, sim, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
-			_mushroom_identification_known, _mushroom_markers[chunk_coord]
+			_mushroom_markers[chunk_coord]
 		)
 
 
@@ -9575,19 +9561,15 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_wild_crop_sims[chunk_coord] = crop_sims
 	_wild_crop_markers[chunk_coord] = crop_markers
 
-	# Wild mushrooms (see docs/concept/mushrooms.md): one sim covering all 5
+	# Wild mushrooms (see docs/concept/mushrooms.md): one sim covering all 6
 	# species for this chunk, already carrying whatever it seeded/was
-	# already fruiting on arrival, and the current identification state so a
-	# chunk streamed in after the player has already learned it doesn't
-	# start every marker unidentified only to correct itself on the next
-	# refresh tick.
+	# already fruiting on arrival.
 	var mushroom_sim := WildMushroomPatch.new(
 		hash("%d_%d_mushroom" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
 	)
 	_mushroom_sims[chunk_coord] = mushroom_sim
 	_mushroom_markers[chunk_coord] = _mushroom_renderer.spawn_markers(
-		_entities_parent, mushroom_sim, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
-		_mushroom_identification_known
+		_entities_parent, mushroom_sim, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	)
 
 	_decomposer_markers[chunk_coord] = _decomposer_renderer.spawn_decomposers(
