@@ -25,6 +25,7 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 ## copying it").
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const FlapGlide = preload("res://src/rendering/flap_glide.gd")
+const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 
 ## How far below cruise altitude the sprite visibly drops at the bottom of a
 ## dive -- a simple vertical offset "descent" (a kingfisher dives essentially
@@ -60,6 +61,8 @@ var _movement: AmbientFlyerMovement
 var _behavior := PiscivoreBirdBehavior.new()
 var _elapsed_time := 0.0
 var _dive_attempts := 0
+var _lod_accumulated := 0.0
+var _cached_player: Node = null
 ## The fish currently in this bird's beak, shown while it carries its catch.
 var _carried_fish: Sprite2D = null
 ## The specific fish this bird is hunting.
@@ -101,7 +104,46 @@ func get_display_name() -> String:
 	return species.capitalize()
 
 
-func _process(delta: float) -> void:
+## Distance-based update rate -- mirrors AntForagerMarker/DecomposerMarker/
+## MillipedeMarker/CreatureMarker's own _lod_step exactly (see that class's
+## own doc comment for why this was needed: nearest_fish_position scans
+## EVERY loaded chunk's fish, unscoped, with no throttle at all, unlike
+## every sibling creature marker in this codebase -- the round-3 FPS
+## regression's real, if secondary, second contributor). Returns the delta
+## to advance by when this frame should actually process, or NEGATIVE when
+## it should be skipped (accumulated, not lost).
+func _lod_step(delta: float) -> float:
+	_lod_accumulated += delta
+	var player = _nearest_player_position()
+	if player == null:
+		return _take_lod_step()  # nobody to be far from: always full rate
+	var interval := SimulationLod.update_interval(position.distance_to(player))
+	if _lod_accumulated < interval:
+		return -1.0
+	return _take_lod_step()
+
+
+func _take_lod_step() -> float:
+	var step := _lod_accumulated
+	_lod_accumulated = 0.0
+	return step
+
+
+func _nearest_player_position():
+	if not is_inside_tree():
+		return null
+	if _cached_player == null or not is_instance_valid(_cached_player):
+		var players := get_tree().get_nodes_in_group("player")
+		if players.is_empty():
+			return null
+		_cached_player = players[0]
+	return _cached_player.position
+
+
+func _process(frame_delta: float) -> void:
+	var delta := _lod_step(frame_delta)
+	if delta < 0.0:
+		return
 	_elapsed_time += delta
 	if _movement == null:
 		return

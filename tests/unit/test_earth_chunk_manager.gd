@@ -4469,6 +4469,54 @@ func test_crushing_ants_where_there_are_none_fails_rather_than_erroring():
 	assert_false(manager.crush_ants_near(Vector2(-9000000, -9000000), 1000000.0))
 
 
+## Reported live, real crash: "Invalid access to property or key 'position'
+## on a base object of type 'previously freed'" at crush_ants_near.
+## _active_ant_foragers is only pruned LAZILY at dispatch time (see
+## _dispatch_forager's own doc comment) -- a forager that already
+## queue_free()'d itself naturally (a completed round trip, see
+## AntForagerMarker._process's RETURNING branch) sits in this array as a
+## stale, by-then-actually-freed reference until the next dispatch happens
+## to prune it. A real step landing on that stale entry in between must
+## not crash on it.
+func test_crushing_ants_does_not_crash_on_a_stale_already_freed_entry():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var global_tile: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(2, 2)
+	var stale := AntForagerMarker.new()
+	stale.position = _pixel_for(chunk_coord, cell)
+	stale.free()  # actually freed already, not merely queue_free()'d -- the worst case
+	manager._active_ant_foragers[global_tile] = [stale]
+	var pixel := _pixel_for(chunk_coord, cell)
+
+	assert_false(
+		manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"nothing real was there to crush -- only a stale freed reference"
+	)
+
+
+## The real, reported scenario exactly: a stale freed entry sits alongside
+## a real, currently-alive forager on a DIFFERENT tile -- the stale entry
+## must not stop the scan from reaching the real one.
+func test_crushing_ants_still_reaches_a_real_forager_past_a_stale_entry():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var mound_cell := Vector2i(2, 2)
+	var global_tile: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + mound_cell
+	var stale := AntForagerMarker.new()
+	stale.position = _pixel_for(chunk_coord, Vector2i(1, 1))
+	stale.free()
+	var real_forager := AntForagerMarker.new()
+	add_child_autofree(real_forager)
+	var cell := Vector2i(5, 5)
+	real_forager.position = _pixel_for(chunk_coord, cell)
+	manager._active_ant_foragers[global_tile] = [stale, real_forager]
+	var pixel := _pixel_for(chunk_coord, cell)
+
+	assert_true(manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	# Not instantly queue_free()'d any more (see AntForagerMarker.crush()) --
+	# it dies visibly first, THEN frees itself.
+	assert_true(real_forager._dying, "the real forager should start dying immediately")
+
+
 ## Two different mounds in the same chunk each have their own key in
 ## _active_ant_foragers -- a real step must still reach an ant belonging
 ## to EITHER mound, not just whichever one happens to be scanned first.

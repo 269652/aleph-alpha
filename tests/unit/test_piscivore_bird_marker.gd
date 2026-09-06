@@ -9,6 +9,7 @@ const PiscivoreBirdMarker = preload("res://src/rendering/piscivore_bird_marker.g
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const PiscivoreBirdBehavior = preload("res://src/gameplay/piscivore_bird_behavior.gd")
 const PiscivoreAppetite = preload("res://src/gameplay/piscivore_appetite.gd")
+const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 
 
 ## A stub fish standing at a fixed spot, with the one method a startled fish
@@ -41,7 +42,14 @@ class StubWorld:
 		return capacity
 	func record_fish_catch_near(pixel_position: Vector2, count: float) -> void:
 		recorded_catches.append({"position": pixel_position, "count": count})
+	## How many times this was actually called -- see the LOD-throttle test
+	## below (reported live, real measured cost: nearest_fish_position
+	## scans EVERY loaded chunk's fish, unscoped, called every single frame
+	## by every hunting bird with no throttle at all, unlike every sibling
+	## creature marker in this codebase).
+	var nearest_fish_call_count := 0
 	func nearest_fish_position(_pixel_position: Vector2, _max_distance: float):
+		nearest_fish_call_count += 1
 		return fish if fish != null and is_instance_valid(fish) else null
 	func catch_nearest_fish(_pixel_position: Vector2, _max_distance: float) -> String:
 		if fish == null or not is_instance_valid(fish):
@@ -360,3 +368,53 @@ func test_without_flap_frames_the_marker_keeps_its_original_texture():
 		marker.texture, original,
 		"a marker with no flap_frames (an old caller, a test double) should be a no-op, not an error"
 	)
+
+
+# -- performance: hunting must not rescan every loaded fish every single
+# -- frame regardless of distance from the player (reported live, real
+# -- measured FPS-regression investigation: nearest_fish_position scans
+# -- every loaded chunk's fish, unscoped, and this class was the second
+# -- creature marker found with no SimulationLod throttling at all,
+# -- alongside AntForagerMarker -- see docs/concept/soil_fauna.md's own
+# -- "Generalized... FPS regression round 3" section). ----------------------
+
+## Mirrors AntForagerMarker/DecomposerMarker/MillipedeMarker's own
+## test_far_from_the_player_... tests exactly -- a hunting bird far from
+## the player must advance in fewer, larger LOD-coalesced steps, not call
+## _step_hunting (and so nearest_fish_position) on every tiny _process
+## call regardless of distance.
+func test_far_from_the_player_updates_at_the_lod_reduced_rate():
+	var world := StubWorld.new()
+	marker.setup(world, AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	marker._hunger = 999.0  # guarantees ACTIVITY_HUNT immediately, no timing dependency
+	add_child_autofree(marker)
+	var player := Node2D.new()
+	add_child_autofree(player)
+	player.add_to_group("player")
+	player.position = marker.position + Vector2(
+		SimulationLod.FULL_RATE_RADIUS_PX + SimulationLod.FALLOFF_PX + 1.0, 0
+	)
+	for i in 20:
+		marker._process(0.01)
+	assert_eq(
+		world.nearest_fish_call_count, 0,
+		"far from the player, a hunting bird should not have accumulated enough LOD-reduced time to hunt yet"
+	)
+
+
+## Sanity check that the LOD gate does not somehow ALSO throttle a bird
+## right next to the player -- the existing tests above (none of which add
+## a "player" group node at all) already prove this indirectly, but this
+## makes it explicit: close enough, hunting still happens promptly.
+func test_close_to_the_player_still_hunts_normally():
+	var world := StubWorld.new()
+	marker.setup(world, AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	marker._hunger = 999.0  # guarantees ACTIVITY_HUNT immediately, no timing dependency
+	add_child_autofree(marker)
+	var player := Node2D.new()
+	add_child_autofree(player)
+	player.add_to_group("player")
+	player.position = marker.position
+	for i in 20:
+		marker._process(0.01)
+	assert_gt(world.nearest_fish_call_count, 0, "right next to the player, hunting should proceed at full rate")

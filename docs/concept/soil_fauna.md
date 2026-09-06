@@ -2048,6 +2048,88 @@ never reachable by `pick_up` under the corpse model, since biting froze
 and replaced it). The crushed half above is UNCHANGED and still exactly
 as described.
 
+### FPS regression round 3: AntForagerMarker never got SimulationLod (2026-09-07)
+
+Reported directly: "Can you fix performance to get it back to 60fps?"
+Diagnosed the same way rounds 1-2 were (see the fps-regression-
+investigation-and-fixes memory this doc's own earlier entries reference):
+a real `--solo` session, aggregate per-class timing, `set_process(false)`-
+style bisection by class.
+
+`AntForagerMarker` turned out to be the one creature marker in the whole
+codebase with no `SimulationLod` throttling at all — every sibling
+(`DecomposerMarker`, `MillipedeMarker`, `CreatureMarker`, `FishMarker`)
+already has it, and this file's own top doc comment even claims it
+mirrors `DecomposerMarker`'s wander, but the actual `_lod_step`/
+`_nearest_player_position` machinery was simply never added. Confirmed
+live: FPS collapsed to 3-5, with ~1000-1300ms of CPU spent per 3-second
+window inside `_sense_food_nearby` alone (three separate 3x3-chunk
+world-area scans — `leaf_litter_near`/`grass_seeds_near`/`fruit_near` —
+called every single frame, no cache, no throttle), across roughly 1000
+concurrently-scouting foragers. That population scale is not a
+coincidence: three deliberate tuning commits in the prior ~24h
+(`MAX_CONCURRENT_FORAGERS` 3→6→15 — see "A real food economy" above;
+`FORAGE_RADIUS_TILES` 1.0→2.0 — see "Thriving ant colonies" above;
+scout/resolver WAVES instead of one-at-a-time dispatch — see "Cluster
+recruitment" above) each independently raised the realistic standing
+population and/or each forager's own unthrottled scouting lifetime,
+compounding on top of a gap that had been silently there since this
+marker was first built.
+
+Two real fixes:
+
+- **`_lod_step`/`_nearest_player_position`**, mirroring `MillipedeMarker`'s
+  own implementation exactly (distance-based update coalescing — far-
+  from-the-player foragers advance in fewer, larger steps; time is
+  accumulated across skipped frames, never lost).
+- **A new, dedicated `SENSE_INTERVAL_SECONDS` (0.2s) throttle on
+  `_sense_food_nearby` specifically**, independent of the LOD gate above:
+  even a full-rate (near-player) scout doesn't need to re-run three
+  separate world-area scans every single frame at its own ~4.2px/s
+  walking speed (`WALK_SPEED * SCOUT_SPEED_FRACTION`). The very first
+  scouting step still senses immediately (`_sense_accumulator` starts
+  already at the interval, not at zero) — only REPEATED re-checks are
+  throttled — so no existing test needed to change at all.
+
+Alongside this, a real, actively-firing crash was found straight from
+the investigation's own session log: "Invalid access to property or key
+'position' on a base object of type 'previously freed'" at
+`EarthChunkManager.crush_ants_near`, on every single frame.
+`_active_ant_foragers` is only pruned LAZILY, at the next
+`_dispatch_forager` call (see that function's own doc comment) — a
+forager that already completed its round trip and `queue_free()`'d
+itself naturally could sit in the array as a stale, by-then-actually-
+freed reference for a while, and `crush_ants_near` accessed
+`marker.position` on every entry with no validity check at all. Fixed
+with the identical `is_instance_valid(marker) or marker.is_queued_for_
+deletion()` guard `_dispatch_forager`'s own pruning already used —
+applied defensively to the shared `_crush_markers_near` caterpillar/
+millipede/decomposer helper too, since it has the identical shape and
+the same latent risk even though it hasn't been observed crashing yet.
+
+**`PiscivoreBirdMarker` had the identical missing-LOD gap**, found
+alongside the above (see `ecosystem_dynamics.md`'s "fish-eating birds"):
+`nearest_fish_position` scans every loaded chunk's fish, completely
+unscoped, with no throttle at all. A smaller-population contributor
+than the ant swarm (at most one kingfisher per water chunk), but real —
+fixed with the same `_lod_step` pattern.
+
+**Honest result, not fully resolved**: measured before/after, `ant_
+forager`'s own per-3-second-window cost dropped roughly 3x and FPS
+roughly doubled (3-5 → 5-10) immediately after these fixes — real,
+confirmed progress. But a longer `--solo` session (~2 minutes total)
+showed FPS drifting back down again (to 5-7), with `ambient_flyer`'s own
+per-call cost climbing over time even though its own live instance/call
+count stayed exactly flat across that stretch — a differently-shaped
+problem from either fix above (not a missing throttle; some per-call
+cost creeping up the longer a session runs), not yet root-caused.
+`ant_mound`'s own call count staying perfectly flat across that same
+stretch rules out unbounded mound budding as the immediate driver of
+THIS specific trend — but `_maybe_bud_ant_colony` having no upper bound
+on mound count at all (only the initial seed is capped by `MAX_MOUNDS`)
+remains a real, separate, undiscovered-extent gap worth a dedicated look
+later.
+
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
 A real, hand-illustrated sheet (`assets/sprites/animals/worm.png`) replaces

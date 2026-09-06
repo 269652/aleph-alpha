@@ -791,6 +791,21 @@ Two consequences worth stating plainly rather than discovering later:
   tables, `FLYER_WORLD_SCALE`, `FlyerDiet` and `FLYER_RANGE` — not a widening
   of the bands.
 
+**`PiscivoreBirdMarker` had no `SimulationLod` throttling at all
+(2026-09-07)**, found during a general FPS-regression investigation (see
+`soil_fauna.md`'s own "FPS regression round 3" for the full session, its
+dominant cause was elsewhere — `AntForagerMarker` — but this class had
+the identical gap): `nearest_fish_position` scans every loaded chunk's
+fish, completely unscoped, called every single frame by every hunting
+bird with no throttle at all — unlike `FishMarker`, which already has
+`SimulationLod`. Fixed with the same `_lod_step`/`_nearest_player_
+position` pattern every other creature marker uses. A smaller-population
+contributor than the ant swarm (at most one kingfisher per water chunk),
+but real and unthrottled all the same. The unscoped global fish scan
+inside `nearest_fish_position` itself is left alone for now — no
+evidence yet that it's still a real cost once called at the throttled
+rate.
+
 
 ### Open questions
 

@@ -8963,6 +8963,66 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   unload — chunk-local, ephemeral state, the same explicit scope cut
   `soil_fauna.md`'s worm burrows already made for the same reason.
 
+**FPS regression round 3: AntForagerMarker, and a real live crash
+(2026-09-07).** Reported directly: "Can you fix performance to get it
+back to 60fps?" Two real, independently confirmed bugs, both merged to
+`main`:
+
+- **A live crash, found from the investigation's own `--solo` session
+  log**: "Invalid access to property or key 'position' on a base object
+  of type 'previously freed'" at `crush_ants_near`, firing every single
+  frame. `_active_ant_foragers` is only pruned lazily (at the next
+  `_dispatch_forager` call), so a forager that already completed its
+  round trip and `queue_free()`'d itself naturally could sit in the
+  array as a stale, by-then-actually-freed reference until the next
+  dispatch happened to prune it — `crush_ants_near` (and, defensively,
+  the shared `_crush_markers_near` caterpillar/millipede/decomposer
+  helper) accessed `.position` on every entry unconditionally. Fixed
+  with the same `is_instance_valid`/`is_queued_for_deletion` guard
+  `_dispatch_forager`'s own pruning already used.
+- **`AntForagerMarker` was the one creature marker in the whole codebase
+  with no `SimulationLod` throttling at all** (unlike `DecomposerMarker`/
+  `MillipedeMarker`/`CreatureMarker`/`FishMarker`, all of which have it),
+  despite its own top doc comment claiming it mirrors `DecomposerMarker`'s
+  wander. Confirmed live via aggregate per-class timing (mirroring round
+  2's own proven method exactly — see this doc's fish/hydrology
+  entries): FPS collapsed to 3-5, with ~1000-1300ms of CPU spent per
+  3-second window inside `_sense_food_nearby` alone, across roughly 1000
+  concurrently-scouting foragers. A parallel static-analysis pass dated
+  the cause precisely: three deliberate tuning commits in the prior
+  ~24h (`MAX_CONCURRENT_FORAGERS` 3→6→15, `FORAGE_RADIUS_TILES`
+  1.0→2.0, scout/resolver WAVES instead of one-at-a-time dispatch)
+  multiplied both the realistic population and each forager's own
+  unthrottled scouting lifetime several-fold on top of that pre-existing
+  gap. Fixed with `SimulationLod`/`_lod_step` (mirroring `MillipedeMarker`
+  exactly) plus a new, dedicated `SENSE_INTERVAL_SECONDS` (0.2s) throttle
+  on `_sense_food_nearby` specifically, independent of LOD — even a
+  full-rate scout doesn't need to re-run three separate 3x3-chunk
+  world-area scans every single frame at its own ~4.2px/s walking speed.
+  The very first scouting step still senses immediately, so no existing
+  test needed changing.
+- **`PiscivoreBirdMarker` had the identical gap**, found alongside the
+  above: `nearest_fish_position` scans every loaded chunk's fish,
+  unscoped, with no throttle at all. Smaller population (at most one
+  kingfisher per water chunk) than the ant swarm, but real. Fixed with
+  the same `_lod_step` pattern.
+
+Measured before/after via a real `--solo` session: `ant_forager`'s own
+per-3-second-window cost dropped roughly 3x (from ~1200-1600ms to
+~350-500ms) immediately after the fix, and FPS roughly doubled (from
+3-5 to 5-10) in the same short session. **Not a full return to 60fps**,
+though — a longer session (~2 minutes) showed FPS drifting back down
+again (to 5-7), with `ambient_flyer`'s own per-call cost climbing over
+time even though its live instance/call count stayed exactly stable —
+a different-shaped problem from either fix above (not a missing
+throttle; something's per-call cost creeping up the longer a session
+runs), not yet root-caused. `ant_mound`'s own call count staying
+perfectly flat across that same stretch rules out unbounded mound
+budding as the immediate driver of that specific trend, though
+`_maybe_bud_ant_colony` having no upper bound on mound count at all
+(only the initial seed is capped) remains a real, separate, undiscovered-
+extent gap worth a future look.
+
 ### Flies (`concept/flies.md`)
 
 Another concept doc with real, substantial ✅ status entirely of its own
