@@ -53,6 +53,30 @@ func test_only_the_robin_hunts_worms_among_the_songbirds():
 	assert_eq(worm_eaters, ["robin"])
 
 
+## Real robins are famous caterpillar-hunters -- caterpillars are what a
+## robin feeds its own chicks more than almost anything else. A second real
+## ground-forage food alongside worms/fruit (see FOOD_WORMS/FOOD_FRUIT
+## above), not a new mechanism: this reuses the identical descend/sit/peck
+## ground-forage cycle those already drive.
+func test_robins_also_eat_caterpillars():
+	assert_true(FlyerDiet.eats("robin", FlyerDiet.FOOD_CATERPILLARS))
+
+
+## Sparrows are granivores, not the insectivorous specialist a robin is --
+## caterpillar-hunting stays a robin-only trait, the same "only the robin"
+## shape FOOD_WORMS already has.
+func test_only_the_robin_eats_caterpillars_among_the_songbirds():
+	var caterpillar_eaters: Array = []
+	for species in AmbientFlyerRenderer.BIRD_SPECIES_POOL:
+		if FlyerDiet.eats(species, FlyerDiet.FOOD_CATERPILLARS):
+			caterpillar_eaters.append(species)
+	assert_eq(caterpillar_eaters, ["robin"])
+
+
+func test_caterpillars_are_a_ground_food():
+	assert_true(FlyerDiet.GROUND_FOODS.has(FlyerDiet.FOOD_CATERPILLARS))
+
+
 # -- the rest of the roster -------------------------------------------------
 
 func test_the_kingfisher_eats_fish_and_nothing_on_the_ground():
@@ -130,7 +154,7 @@ func test_a_kingfisher_is_not_a_ground_forager():
 func test_the_food_types_the_roadmap_needs_all_exist():
 	var types := [
 		FlyerDiet.FOOD_WORMS, FlyerDiet.FOOD_SEEDS, FlyerDiet.FOOD_FRUIT,
-		FlyerDiet.FOOD_FISH, FlyerDiet.FOOD_NECTAR,
+		FlyerDiet.FOOD_FISH, FlyerDiet.FOOD_NECTAR, FlyerDiet.FOOD_CATERPILLARS,
 	]
 	var distinct := {}
 	for type in types:

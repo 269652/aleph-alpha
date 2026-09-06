@@ -29,16 +29,19 @@ const FOOD_SEEDS := "seeds"
 const FOOD_FRUIT := "fruit"
 const FOOD_FISH := "fish"
 const FOOD_NECTAR := "nectar"
+const FOOD_CATERPILLARS := "caterpillars"
 
-const FOOD_TYPES := [FOOD_WORMS, FOOD_SEEDS, FOOD_FRUIT, FOOD_FISH, FOOD_NECTAR]
+const FOOD_TYPES := [FOOD_WORMS, FOOD_SEEDS, FOOD_FRUIT, FOOD_FISH, FOOD_NECTAR, FOOD_CATERPILLARS]
 
 ## Foods a flyer has to LAND to eat -- the ones that put it through the
 ## descend/sit/peck/resume cycle (see GroundForageBehavior). Fish is not one
 ## of them (a kingfisher dives, see PiscivoreBirdBehavior), and neither is
 ## nectar (a pollinator settles on the bloom itself, see PollinatorForaging).
 ## Fruit IS one -- fallen fruit sits on the ground exactly like a worm does
-## (see docs/concept/ecosystem_dynamics.md's frugivory section).
-const GROUND_FOODS := [FOOD_WORMS, FOOD_SEEDS, FOOD_FRUIT]
+## (see docs/concept/ecosystem_dynamics.md's frugivory section). So is a
+## ground-based caterpillar (see FOOD_CATERPILLARS's own doc comment) --
+## the same descend-and-peck a robin already does for a worm.
+const GROUND_FOODS := [FOOD_WORMS, FOOD_SEEDS, FOOD_FRUIT, FOOD_CATERPILLARS]
 
 ## Real robins are insectivores that hunt worms by sight from the ground, AND
 ## genuine omnivores that switch onto soft fruit/berries once it's available
@@ -70,8 +73,21 @@ static func eats_fruit_species(species: String, fruit_species: String) -> bool:
 	return FRUIT_SPECIES_BY_FLYER[species].has(fruit_species)
 
 
+## Real robins are famous caterpillar-hunters -- caterpillars are what a
+## robin feeds its own chicks more than almost anything else, right
+## alongside worms (see docs/concept/soil_fauna.md's own bird-diet
+## follow-up: "some birds eat caterpillars too"). Deliberately robin-only,
+## the same "only the robin" shape FOOD_WORMS already has: a sparrow's
+## granivore bill and a kingfisher's fish-only diet are both a poor real-
+## world fit, so this stays narrow rather than spreading it across every
+## songbird just because the mechanism now exists. Ground-based
+## caterpillars only (see EarthChunkManager.caterpillars_near) -- a
+## caterpillar up a tree, mid-climb, is a real gap this pass names rather
+## than silently drops: gleaning prey off foliage is a genuinely different
+## targeting problem from a ground-forage descend-and-peck, and is not
+## solved here.
 const DIET_BY_SPECIES := {
-	"robin": [FOOD_WORMS, FOOD_FRUIT],
+	"robin": [FOOD_WORMS, FOOD_FRUIT, FOOD_CATERPILLARS],
 	"sparrow": [FOOD_SEEDS, FOOD_FRUIT],
 	"kingfisher": [FOOD_FISH],
 	"monarch": [FOOD_NECTAR],
