@@ -119,60 +119,11 @@ func test_gradient_direction_points_roughly_toward_a_nearby_deposit():
 	var direction := field.gradient_direction(sample_point, TILE_SIZE)
 	assert_gt(direction.x, 0.5, "the gradient should point toward the deposit, roughly east")
 
-
-# -- best_candidate_index: nearest by default, recruitment when marked -----
-
-func test_best_candidate_index_picks_the_nearest_with_no_pheromone_field():
-	var origin := Vector2(0, 0)
-	var candidates := [
-		{"position": Vector2(100, 0)},
-		{"position": Vector2(20, 0)},
-		{"position": Vector2(50, 0)},
-	]
-	assert_eq(PheromoneField.best_candidate_index(origin, candidates, null, TILE_SIZE), 1)
-
-
-func test_best_candidate_index_picks_the_nearest_with_an_empty_pheromone_field():
-	var origin := Vector2(0, 0)
-	var candidates := [{"position": Vector2(100, 0)}, {"position": Vector2(20, 0)}]
-	assert_eq(PheromoneField.best_candidate_index(origin, candidates, field, TILE_SIZE), 1)
-
-
-## Real recruitment: a colony that has successfully foraged at a spot
-## before should be willing to send the next forager a little further to
-## revisit it, over an equally-plausible but never-visited closer spot.
-##
-## Both candidates are placed at the SAME y as the deposit's own tile
-## centre (not y=0): a tile's centre sits at (tile + 0.5) * tile_size in
-## BOTH axes, so anchoring only x and leaving y=0 would silently introduce
-## an unaccounted diagonal offset into every distance in this test.
-func test_best_candidate_index_prefers_a_marked_candidate_over_a_slightly_closer_unmarked_one():
-	var origin := Vector2(0, 0)
-	var marked_tile := Vector2i(7, 0)
-	var marked_position := (Vector2(marked_tile) + Vector2(0.5, 0.5)) * TILE_SIZE
-	var closer_unmarked_position := marked_position - Vector2(20.0, 0.0)
-	field.deposit(marked_tile, PheromoneField.DEPOSIT_AMOUNT)
-	var candidates := [
-		{"position": closer_unmarked_position},
-		{"position": marked_position},
-	]
-	assert_eq(
-		PheromoneField.best_candidate_index(origin, candidates, field, TILE_SIZE), 1,
-		"a marked source only slightly further away should win over a closer, never-visited one"
-	)
-
-
-func test_best_candidate_index_does_not_let_pheromone_override_a_much_closer_candidate():
-	var origin := Vector2(0, 0)
-	var marked_tile := Vector2i(31, 0)
-	var marked_far_position := (Vector2(marked_tile) + Vector2(0.5, 0.5)) * TILE_SIZE
-	var much_closer_position := Vector2(20.0, marked_far_position.y)
-	field.deposit(marked_tile, PheromoneField.DEPOSIT_AMOUNT)
-	var candidates := [
-		{"position": much_closer_position},
-		{"position": marked_far_position},
-	]
-	assert_eq(
-		PheromoneField.best_candidate_index(origin, candidates, field, TILE_SIZE), 0,
-		"pheromone preference should not be strong enough to send a forager wildly out of its way"
-	)
+# best_candidate_index (an omniscient "score every known candidate from a
+# stationary point and pick the best one" primitive) was removed here
+# (see docs/concept/soil_fauna.md "Scouting: real search, not omniscient
+# dispatch" -- reported live: "no omniscience please"). gradient_direction
+# above is what real recruitment reads instead now: a LOCAL concentration
+# sensed exactly where a scout currently stands, not a list of known
+# destinations compared from afar. See AntScoutWander for how that local
+# gradient biases a scout's own wander heading.

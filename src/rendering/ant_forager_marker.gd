@@ -1,21 +1,34 @@
 extends Node2D
 
 ## A REAL forager (see docs/concept/soil_fauna.md "Real foraging: a round
-## trip, not an instant resolve"): walks to a known food position, takes
-## the food only on real arrival (re-checked then -- something else may
-## have taken it first), walks back to the mound, and only THERE does the
-## cache/consume roll resolve and the marker free itself. This used to be
-## a purely decorative, one-shot walk along an already-resolved path;
-## AntColony's own forage-and-cache resolution has moved out of
-## EarthChunkManager's instant lookup and into the two real moments this
-## marker itself now causes (see AntForageBehavior).
+## trip, not an instant resolve" and "Scouting: real search, not
+## omniscient dispatch"): SCOUTS for a real food item (wandering, no known
+## target -- see _step_scouting), commits and walks to it once its own
+## local sensing finds one, takes it only on real arrival (re-checked then
+## -- something else may have taken it first), walks back to the mound,
+## and only THERE does the cache/consume roll resolve and the marker free
+## itself. This used to be a purely decorative, one-shot walk along an
+## already-resolved path; AntColony's own forage-and-cache resolution has
+## moved out of EarthChunkManager's instant lookup and into the real
+## moments this marker itself now causes (see AntForageBehavior).
 ##
-## Deliberately no SEEKING phase: the colony already found this real,
-## reachable target before dispatching a forager at all (see
-## EarthChunkManager._forage_seed_near_mound/_forage_windfall_near_mound,
-## and PheromoneField.best_candidate_index for how that target is chosen
-## when more than one candidate is in reach) -- this marker owns the walk
-## and the two real world effects at each end, not target discovery.
+## Reported live: "ants go straight to the next leaf when moving out the
+## mound ... they should either explore randomly or follow pheromones",
+## then, once a pheromone-biased OMNISCIENT candidate-list dispatch was
+## built to answer that: "no omniscience please". This is the real
+## answer: nothing here ever asks "what is the single/best food item
+## anywhere within the mound's whole forage reach" from a stationary
+## point any more. A dispatched scout starts with NO known target,
+## wanders (AmbientFlyerMovement, home-anchored at the mound -- the same
+## already-tested primitive DecomposerMarker's own ambient wander already
+## uses), and at each step senses only within SENSE_RADIUS_TILES of its
+## OWN current, moving position (see _sense_food_nearby) -- genuinely
+## smaller than the mound's whole home range, so real wandering is
+## required to cover it. A locally-sensed PheromoneField gradient (real
+## chemotaxis: a concentration sensed exactly where the scout stands, not
+## a list of known candidates compared from afar -- see AntScoutWander)
+## biases which way it turns, the real recruitment effect, without ever
+## needing to know where else a trail might lead.
 ##
 ## Uses IllustratedDecomposerSprite's real "ant" art where it exists
 ## (checked first, same has_X()-gated fallback convention every optional
@@ -34,6 +47,9 @@ const AntColony = preload("res://src/world/ant_colony.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const LeafLitterAtlas = preload("res://src/rendering/leaf_litter_atlas.gd")
 const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
+const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
+const AntScoutWander = preload("res://src/gameplay/ant_scout_wander.gd")
+const TreeSpecies = preload("res://src/world/tree_species.gd")
 
 const GROUP_NAME := "ant_forager"
 
@@ -49,16 +65,77 @@ const WALK_SPEED := 12.0
 ## tolerance.
 const ARRIVE_DISTANCE_PX := 4.0
 
-## Where the real food is. Set before add_child, same convention as every
-## other marker's per-instance fields.
+## Ambient wander is slower than a committed approach -- mirrors
+## DecomposerMarker.WANDER_SPEED_FRACTION's own reasoning exactly: a
+## hurrying insect reads as one that has actually found something, so
+## SCOUTING (nothing found yet) stays visibly slower than APPROACHING
+## (something real just got sensed) even though both use the same
+## underlying WALK_SPEED.
+const SCOUT_SPEED_FRACTION := 0.35
+
+## How many times over a scout could cross its OWN whole wander disc
+## (2 * AntColony.FORAGE_RADIUS_TILES, the home-anchor diameter
+## AmbientFlyerMovement roams within) before giving up empty-handed --
+## a real, if inherently judgment-called, design knob (see
+## AntColony.FORAGE_RADIUS_TILES's own doc comment for precedent: "a real
+## design knob, not itself test-locked"), chosen generously enough that a
+## scout gets several genuine sweeps of its small home range rather than
+## bailing after barely crossing it once. MAX_SCOUT_SECONDS below is
+## DERIVED from this, not a second, independently-eyeballed number.
+const MAX_SCOUT_CROSSINGS := 3.0
+
+## Derived, not eyeballed (see MAX_SCOUT_CROSSINGS's own doc comment):
+## real seconds to cross the scout's whole wander disc at scouting speed,
+## times MAX_SCOUT_CROSSINGS. Pinned by test_max_scout_seconds_is_derived_
+## not_eyeballed.
+const MAX_SCOUT_SECONDS := (
+	(2.0 * AntColony.FORAGE_RADIUS_TILES * TerrainRenderer.TILE_SIZE)
+	/ (WALK_SPEED * SCOUT_SPEED_FRACTION) * MAX_SCOUT_CROSSINGS
+)
+
+## Where the real food is. Unset (Vector2.ZERO) until a scout commits to
+## something it has actually sensed nearby (see _sense_food_nearby) --
+## real production dispatch no longer sets this before add_child the way
+## it used to; a direct construction (e.g. a test exercising the
+## APPROACHING/RETURNING legs in isolation) still can.
 var target_position: Vector2 = Vector2.ZERO
-## Where this forager returns to once its trip resolves either way.
+## Where this forager returns to once its trip resolves either way. Also
+## this scout's own home anchor while SCOUTING (see AmbientFlyerMovement).
 var mound_position: Vector2 = Vector2.ZERO
-## "seed" (grass seed -- always survives to be planted) or "windfall"
+## "seed" (grass seed -- always survives to be planted), "windfall"
 ## (fallen fruit/nut -- resolves through AntColony.windfall_is_consumed
-## first, same as before). Decides which of the world's take/plant APIs
-## this trip actually calls.
+## first), or "leaf" (real detritus, never re-cached). Decides which of
+## the world's take/plant APIs this trip actually calls. A scout decides
+## this ITSELF, the moment it senses something real nearby (see
+## _sense_food_nearby) -- no longer decided by the dispatcher in advance.
 var forage_kind := "seed"
+
+## Opts into scouting (see this file's own top doc comment and
+## AntForageBehavior.begin_scouting) instead of the original
+## already-know-the-target contract. Set before add_child by real
+## dispatch (see EarthChunkManager._dispatch_ant_forager); left false (the
+## default) keeps every existing direct-construction caller (chiefly
+## tests exercising APPROACHING/RETURNING in isolation) completely
+## unaffected.
+var scout := false
+## This forager's own per-instance identity for AmbientFlyerMovement's
+## roam (see that class's own direction_at: "deterministic" there means
+## stable WITHIN one forager's own lifetime, not reproducible across runs
+## -- the same contract every other wander_seed in this codebase already
+## has). Rolled once at _ready() for a scouting forager (see that
+## function) purely so several scouts out at once don't all wander in
+## lockstep -- unlike a squirrel/bird's carry direction, a scout's own
+## wander shape has nothing else it needs to agree with, so an injected,
+## save-restorable seed (the shape every OTHER wander_seed in this
+## codebase uses, for creatures that persist across saves) buys nothing
+## here: an ant forager is one-shot-per-trip and is never itself saved.
+var wander_seed := 0
+var _elapsed_time := 0.0
+## Built only for a scouting forager (see _ready) -- home-anchored at
+## mound_position, radius AntColony.FORAGE_RADIUS_TILES: the mound's own
+## forage reach doubles as this scout's own wander disc, so it never
+## needs a second, independently-tuned range.
+var _movement: AmbientFlyerMovement
 
 ## Which leaf this trip is carrying, if `forage_kind == "leaf"` -- set at
 ## dispatch time (see EarthChunkManager._dispatch_ant_forager's own doc
@@ -122,12 +199,52 @@ func setup(world, colony: AntColony, mound_cell: Vector2i) -> void:
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
 	add_to_group(HoverTargetFinder.GROUP_NAME)
+	_ensure_initialized()
+
+
+## Real Godot _ready() timing depends on this whole node's own branch
+## actually being attached to a live SceneTree -- true for every real
+## dispatch, but NOT guaranteed for a synthetic test double parent (see
+## EarthChunkManager's own test suite, whose _entities_parent is never
+## itself added to a tree) that still calls _process() directly. Splitting
+## setup out of _ready() into this idempotent helper -- called from BOTH
+## _ready() (the normal path) and defensively at the top of _process()
+## (see that function) -- means scouting activates correctly either way,
+## rather than silently depending on Godot's own tree-attachment timing
+## for correctness.
+func _ensure_initialized() -> void:
+	if _sprite != null:
+		return
 	_sprite = Sprite2D.new()
 	add_child(_sprite)
 	_leaf_sprite = Sprite2D.new()
 	_leaf_sprite.visible = false
 	add_child(_leaf_sprite)
+	if scout:
+		wander_seed = randi()
+		_movement = AmbientFlyerMovement.new(
+			WALK_SPEED * SCOUT_SPEED_FRACTION,
+			AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE),
+			_scout_direction_change_interval()
+		)
+		_behavior.begin_scouting()
 	_update_sprite()
+
+
+## Derived, not eyeballed -- how long it would take to cross the scout's
+## OWN wander disc at scouting speed, mirroring DecomposerMarker.WANDER_
+## DIRECTION_CHANGE_INTERVAL_SECONDS's own identical derivation exactly
+## (see that constant's own doc comment for why: keeps this in proportion
+## automatically if FORAGE_RADIUS_TILES/WALK_SPEED/SCOUT_SPEED_FRACTION
+## are ever retuned, instead of silently drifting out of sync with them).
+## A function, not a top-level const, since AntColony.FORAGE_RADIUS_TILES
+## is itself a real value at load time, not a compile-time constant this
+## file could fold in directly.
+func _scout_direction_change_interval() -> float:
+	return (
+		(AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE))
+		/ (WALK_SPEED * SCOUT_SPEED_FRACTION)
+	)
 
 
 ## For World's mouse-hover tooltip (see docs/concept/soil_fauna.md "Ants at
@@ -147,6 +264,11 @@ func _current_leg_target() -> Vector2:
 
 
 func _process(delta: float) -> void:
+	_ensure_initialized()
+	_elapsed_time += delta
+	if _behavior.phase == AntForageBehavior.Phase.SCOUTING:
+		_step_scouting(delta)
+		return
 	var leg_target := _current_leg_target()
 	if position.distance_to(leg_target) > ARRIVE_DISTANCE_PX:
 		# move_toward, not += direction * speed * delta -- the exact
@@ -163,6 +285,84 @@ func _process(delta: float) -> void:
 		AntForageBehavior.Phase.RETURNING:
 			_resolve_arrival_at_mound()
 			queue_free()
+
+
+## No known target: wander (home-anchored at the mound, see _ready), local
+## pheromone gradient biasing which way (real chemotaxis -- see
+## AntScoutWander), sensing only its own immediate vicinity for real food
+## (see _sense_food_nearby) as it goes. Gives up (see AntForageBehavior.
+## give_up_scouting) past MAX_SCOUT_SECONDS of fruitless wandering, same
+## "still walks home, just empty-handed" contract an unsuccessful
+## APPROACHING trip already has.
+func _step_scouting(delta: float) -> void:
+	if _elapsed_time >= MAX_SCOUT_SECONDS:
+		_behavior.give_up_scouting()
+		_update_sprite()
+		return
+	var found := _sense_food_nearby()
+	if not found.is_empty():
+		target_position = found.position
+		forage_kind = found.kind
+		carried_leaf_species = found.get("species", "")
+		carried_leaf_season = found.get("season", "")
+		_behavior.commit_to_food()
+		_update_sprite()
+		return
+	var wander_direction := _movement.direction_at(mound_position, position, _elapsed_time, wander_seed)
+	var gradient := Vector2.ZERO
+	if _colony != null:
+		var field = _colony.pheromones_at(_mound_cell)
+		if field != null:
+			gradient = field.gradient_direction(position, float(TerrainRenderer.TILE_SIZE))
+	var heading := AntScoutWander.biased_heading(wander_direction, gradient)
+	position += heading * (WALK_SPEED * SCOUT_SPEED_FRACTION) * delta
+	_face(heading)
+
+
+## Real, LOCAL sensing -- ONLY within SENSE_RADIUS_TILES of this scout's
+## OWN current position, never the mound's whole forage reach (see this
+## file's own top doc comment: that wider, stationary-point query is
+## exactly the omniscience being replaced). Leaf is checked first, same
+## priority DecomposerMarker's own sensing already gives it, since it is
+## not biome-gated at all -- then seed and windfall, both real, ordinary
+## checks that simply come back empty wherever the world itself does not
+## place that kind of food (grassland grows no fruiting trees; forest/
+## rainforest grows no TallGrass), so no separate biome pre-filter is
+## needed here the way the old per-mound dispatch required one. Returns
+## {} if nothing real is close enough yet, or {"kind", "position",
+## "species"?, "season"?} for whichever real thing was found.
+func _sense_food_nearby() -> Dictionary:
+	if _world == null:
+		return {}
+	var sense_radius_px := AntColony.SENSE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
+	var leaves: Array = _world.leaf_litter_near(position, sense_radius_px)
+	if not leaves.is_empty():
+		var leaf: Dictionary = leaves[0]
+		return {
+			"kind": "leaf", "position": leaf.position,
+			"species": leaf.get("species", ""), "season": leaf.get("season", ""),
+		}
+	var sense_radius_tiles := int(ceil(AntColony.SENSE_RADIUS_TILES))
+	var seeds: Array = _world.grass_seeds_near(position, sense_radius_tiles)
+	seeds = seeds.filter(func(s): return position.distance_to(s["position"]) <= sense_radius_px)
+	if not seeds.is_empty():
+		return {"kind": "seed", "position": seeds[0]["position"]}
+	var fruit: Array = _world.fruit_near(position, sense_radius_tiles)
+	fruit = fruit.filter(func(f): return position.distance_to(f["position"]) <= sense_radius_px)
+	fruit = fruit.filter(func(f): return TreeSpecies.is_nut(String(f.get("species", ""))))
+	if not fruit.is_empty():
+		return {"kind": "windfall", "position": fruit[0]["position"], "species": fruit[0]["species"]}
+	return {}
+
+
+## Shared by _update_sprite (which leg's geometry decides facing while
+## APPROACHING/RETURNING) and _step_scouting (its own live wander heading
+## decides facing instead, since there is no "leg" yet to read a direction
+## from). Both sheets face left (IllustratedDecomposerSprite.faces_left)
+## -- mirror only when actually heading right.
+func _face(direction: Vector2) -> void:
+	if absf(direction.x) > 0.01:
+		_sprite.flip_h = direction.x > 0.0
 
 
 ## Real arrival at the food's own position: take it for real (re-checked
@@ -228,13 +428,7 @@ func _update_sprite() -> void:
 	if _illustrated_generator.has_action("ant", action):
 		_sprite.texture = _illustrated_generator.generate_textures("ant", action)[0]
 		_sprite.scale = Vector2.ONE * _illustrated_generator.marker_scale("ant", action)
-		# Both sheets face left (IllustratedDecomposerSprite.faces_left) --
-		# this marker walks purely along its own current leg's geometry
-		# with no other facing logic, so mirror only when actually heading
-		# right.
-		var to_target := _current_leg_target() - position
-		if absf(to_target.x) > 0.01:
-			_sprite.flip_h = to_target.x > 0.0
+		_face(_current_leg_target() - position)
 	else:
 		_sprite.texture = _procedural_generator.generate_texture("ant")
 		_sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE

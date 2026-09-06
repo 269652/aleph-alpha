@@ -3,6 +3,7 @@ extends GutTest
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
+const AntForageBehavior = preload("res://src/gameplay/ant_forage_behavior.gd")
 const AntPopulationModel = preload("res://src/world/ant_population_model.gd")
 const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
@@ -6692,17 +6693,21 @@ func test_step_leaf_litter_fills_the_multimesh_from_the_fields_current_leaves():
 	assert_eq(mmi.multimesh.instance_count, 1)
 
 
-## Real foraging now (see docs/concept/soil_fauna.md "Real foraging: a
-## round trip, not an instant resolve"): dispatching a forager no longer
-## takes the seed on the spot -- that only happens once the forager itself
-## has genuinely walked to it (see AntForagerMarker). This proves the
-## dispatch half: a real candidate is found and a real forager is sent
-## after it, carrying the real colony/cell/target it needs to resolve the
-## rest for itself. A synthetic mound cell placed directly on top of a
-## real shed seed (rather than hoping a real AntColony mound happened to
-## roll next to one) keeps this deterministic regardless of mound
-## placement.
-func test_a_successful_grass_seed_forage_dispatches_a_real_forager_at_the_seed():
+## Scouting now (see docs/concept/soil_fauna.md "Scouting: real search, not
+## omniscient dispatch"): dispatching no longer resolves a target at all --
+## a scout starts with NO known food, and its own local sensing (see
+## AntForagerMarker._sense_food_nearby) is what commits it to something
+## real. Food is placed exactly at the scout's own mound cell (mirrors the
+## old, pre-scouting version of this test's identical approach: "A
+## synthetic mound cell placed directly on top of a real shed seed") so
+## sensing commits on the very FIRST _process() call, before any wander
+## movement -- this proves the real EarthChunkManager wiring
+## (grass_seeds_near is the SAME real query method the scout itself calls)
+## deterministically, without depending on an unpredictable wander_seed
+## roll actually finding something far away (see test_ant_forager_
+## marker.gd's own coverage of that, seeded deterministically via a
+## StubWorld instead of real terrain).
+func test_a_dispatched_scout_commits_to_a_real_seed_sensed_at_the_mound():
 	manager.update(_berlin_tile)
 	for i in 40:
 		manager.step_tall_grass(EarthChunkManager.GRASS_REFRESH_INTERVAL)
@@ -6719,38 +6724,44 @@ func test_a_successful_grass_seed_forage_dispatches_a_real_forager_at_the_seed()
 	var global_tile := origin + cell
 
 	var before_children := manager._entities_parent.get_child_count()
-	manager._forage_seed_near_mound(colony, origin, cell)
+	manager._dispatch_ant_scout(colony, origin, cell)
 
 	assert_gt(
 		manager._entities_parent.get_child_count(), before_children,
-		"a real, successful forage should dispatch a visible forager sprite"
+		"a real dispatch should send out a visible scout sprite"
 	)
 	assert_true(manager._active_ant_foragers.has(global_tile))
 	var forager: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
-	assert_eq(forager.target_position, seed_position, "the forager should be sent at the REAL seed position")
-	assert_true(seeds.any(func(s): return s["position"] == seed_position))
+	# Scouting activation is itself lazy (see AntForagerMarker._ensure_
+	# initialized's own doc comment: real Godot _ready() timing depends on
+	# this whole node's branch already being attached to a live tree,
+	# which this file's own synthetic _entities_parent never is) -- it
+	# only actually happens the first time _process() runs, not
+	# synchronously at dispatch. So "no known target yet" is checked via
+	# target_position/forage_kind's own untouched defaults here, not via
+	# phase, which only becomes meaningful post-initialization.
+	assert_eq(forager.target_position, Vector2.ZERO, "no known target yet, before any processing")
+
+	forager._process(0.1)  # sensing happens before any wander movement
+	assert_eq(forager._behavior.phase, AntForageBehavior.Phase.APPROACHING, "should have sensed the real nearby seed")
+	assert_eq(forager.target_position, seed_position, "should have committed to the REAL seed position")
+	assert_eq(forager.forage_kind, "seed")
 	# The take has NOT happened yet -- only the forager's own real arrival
-	# resolves it now (see test_ant_forager_marker.gd's own coverage of
-	# that). Confirmed here by the seed still being reachable, not taken.
+	# resolves it (see test_ant_forager_marker.gd's own coverage of that).
 	assert_gt(manager.grass_seeds_near(centre, 40).size(), 0, "the seed must still be there until the ant arrives")
 
 
 ## Bug report: "ants... eat leaves at the spot instead of physically
 ## carrying the leaf to the mound where it should disappear... the ant
-## should be seen dragging the leaf to the mound". Traced to a real,
-## already-named gap: docs/concept/soil_fauna.md's own "Leaf litter is a
-## separate forage source this mound simulation does not see" -- the
-## VISIBLE ambient DecomposerMarker ants/bugs already eat leaf litter (in
-## place, since they have no mound/colony concept at all -- see carrion.md),
-## but the real AntColony mound simulation never looked for it, so its own
-## foragers (the ones that DO carry seed/windfall home, with a real "carry"
-## pose) could never carry a leaf. Mirrors
-## test_a_successful_grass_seed_forage_dispatches_a_real_forager_at_the_seed's
-## exact shape, using a synthetic mound/field pair (this file's own "reach
-## into manager state directly" convention -- see _ant_colony_with_one_mound/
-## _field_at) rather than a real generated chunk, since leaf litter needs
-## no terrain/biome data at all to test the dispatch itself.
-func test_a_successful_leaf_forage_dispatches_a_real_forager_at_the_leaf():
+## should be seen dragging the leaf to the mound", later "ants go straight
+## to the next leaf when moving out the mound ... they should either
+## explore randomly or follow pheromones", then "no omniscience please".
+## Mirrors test_a_dispatched_scout_commits_to_a_real_seed_sensed_at_the_
+## mound's exact shape for leaf, using a synthetic mound/field pair (this
+## file's own "reach into manager state directly" convention -- see
+## _ant_colony_with_one_mound/_field_at) rather than a real generated
+## chunk, since leaf litter needs no terrain/biome data at all.
+func test_a_dispatched_scout_commits_to_a_real_leaf_sensed_at_the_mound():
 	var colony := _ant_colony_with_one_mound()
 	var cell: Vector2i = colony.mound_cells()[0]
 	var origin := Vector2i(1000, 1000)  # arbitrary -- does not need to be a real loaded chunk
@@ -6758,77 +6769,40 @@ func test_a_successful_leaf_forage_dispatches_a_real_forager_at_the_leaf():
 	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
 	var chunk_coord := manager._chunk_coord_for_tile(global_tile)
 	var field := _field_at(chunk_coord)
-	var leaf_position := mound_pixel + Vector2(10, 0)
+	var leaf_position := mound_pixel + Vector2(2, 0)  # well within SENSE_RADIUS_TILES
 	field.add_leaf(leaf_position, "cherry", "autumn", 0.0)
 
-	var before_children := manager._entities_parent.get_child_count()
-	var dispatched := manager._forage_leaf_near_mound(colony, origin, cell)
-
-	assert_true(dispatched, "a real nearby leaf should dispatch a forager")
-	assert_gt(
-		manager._entities_parent.get_child_count(), before_children,
-		"a real, successful leaf forage should dispatch a visible forager sprite"
-	)
-	assert_true(manager._active_ant_foragers.has(global_tile))
+	manager._dispatch_ant_scout(colony, origin, cell)
 	var forager: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
-	assert_eq(forager.target_position, leaf_position, "the forager should be sent at the REAL leaf position")
+	forager._process(0.1)
+
+	assert_eq(forager._behavior.phase, AntForageBehavior.Phase.APPROACHING, "should have sensed the real nearby leaf")
+	assert_eq(forager.target_position, leaf_position, "should have committed to the REAL leaf position")
 	assert_eq(forager.forage_kind, "leaf")
-	# Bug report: "it should actually drag the real leaf entity visibly over
-	# the ground and vanish only when it's in the mound" -- consume_leaf_
-	# litter_at (called on real arrival, see AntForagerMarker._resolve_
-	# arrival_at_food) only ever returned a bool, with nowhere to recover
-	# WHICH leaf (species/season) to draw while carrying it home. The
-	# identity is already known here, at DISPATCH time, from the exact same
-	# leaf_litter_near call that found leaf_position -- threading it
-	# through now costs nothing extra later.
-	assert_eq(forager.carried_leaf_species, "cherry", "the dispatch already knows which species this leaf is")
-	assert_eq(forager.carried_leaf_season, "autumn", "the dispatch already knows which season this leaf fell in")
+	assert_eq(forager.carried_leaf_species, "cherry", "sensing already knows which species this leaf is")
+	assert_eq(forager.carried_leaf_season, "autumn", "sensing already knows which season this leaf fell in")
 	# The take has NOT happened yet -- only the forager's own real arrival
 	# resolves it (see test_ant_forager_marker.gd's own coverage of that).
 	assert_eq(field.leaves().size(), 1, "the leaf must still be there until the ant arrives")
 
 
-## Bug report: "ants go straight to the next leaf when moving out the mound
-## ... they should either explore randomly or follow pheromones". Before
-## this, _forage_leaf_near_mound only ever asked for the SINGLE nearest
-## leaf (nearest_leaf_litter_near) -- there was never more than one
-## candidate to choose among, so a known pheromone trail could not matter
-## even in principle. Now that leaf_litter_near reports every candidate in
-## reach, a real trail can bias which one gets picked, mirroring
-## _forage_seed_near_mound/_forage_windfall_near_mound exactly (see
-## PheromoneField.best_candidate_index's own tests for the bias math
-## itself -- this only proves the dispatch actually wires multiple real
-## candidates through to it, the same "any of them" shape
-## test_a_successful_grass_seed_forage_dispatches_a_real_forager_at_the_seed
-## already uses for seed).
-func test_a_successful_leaf_forage_with_multiple_leaves_in_reach_dispatches_at_a_real_one():
+## A scout with genuinely nothing in reach does not hang around forever
+## occupying its mound's own forager-cap slot -- it wanders for a real,
+## bounded time (AntForagerMarker.MAX_SCOUT_SECONDS) and gives up, same
+## "still returns, just with nothing to show for it" contract an
+## unsuccessful APPROACHING trip already has.
+func test_a_dispatched_scout_with_nothing_in_reach_eventually_gives_up():
 	var colony := _ant_colony_with_one_mound()
 	var cell: Vector2i = colony.mound_cells()[0]
-	var origin := Vector2i(1000, 1000)
+	var origin := Vector2i(2000, 2000)  # nothing planted anywhere nearby
 	var global_tile := origin + cell
-	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
-	var chunk_coord := manager._chunk_coord_for_tile(global_tile)
-	var field := _field_at(chunk_coord)
-	field.add_leaf(mound_pixel + Vector2(10, 0), "cherry", "autumn", 0.0)
-	field.add_leaf(mound_pixel + Vector2(0, 12), "apple", "autumn", 0.0)
 
-	var dispatched := manager._forage_leaf_near_mound(colony, origin, cell)
-
-	assert_true(dispatched, "a real nearby leaf should dispatch a forager, whichever one is picked")
+	manager._dispatch_ant_scout(colony, origin, cell)
 	var forager: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
-	var candidates := field.leaves_near(mound_pixel, AntColony.FORAGE_RADIUS_TILES * TerrainRenderer.TILE_SIZE)
-	assert_true(
-		candidates.any(func(leaf): return leaf.position == forager.target_position),
-		"the dispatched target should be one of the REAL candidates, not an unrelated position"
-	)
-	assert_eq(field.leaves().size(), 2, "neither leaf should be taken until the ant actually arrives")
+	forager._process(AntForagerMarker.MAX_SCOUT_SECONDS + 1.0)
 
-
-func test_forage_leaf_near_mound_returns_false_with_no_leaf_in_reach():
-	var colony := _ant_colony_with_one_mound()
-	var cell: Vector2i = colony.mound_cells()[0]
-	var origin := Vector2i(2000, 2000)  # a chunk with no leaf-litter field at all
-	assert_false(manager._forage_leaf_near_mound(colony, origin, cell))
+	assert_eq(forager._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	assert_false(forager._behavior.found_food)
 
 
 ## Unlike grass seed (grassland-only) and windfall (forest/rainforest-only),
@@ -6871,6 +6845,11 @@ func test_step_ants_dispatches_at_a_leaf_even_for_a_grassland_mound():
 		"a nearby leaf should be dispatched at even though this mound's biome (grassland) would otherwise forage seed"
 	)
 	var forager: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
+	# forage_kind is no longer decided at dispatch time (see docs/concept/
+	# soil_fauna.md "Scouting: real search, not omniscient dispatch") --
+	# the scout itself only commits to "leaf" once its own first real
+	# sensing tick runs.
+	forager._process(0.1)
 	assert_eq(forager.forage_kind, "leaf")
 
 
@@ -6887,20 +6866,17 @@ func test_does_not_spawn_a_second_forager_for_a_mound_already_at_its_own_cap():
 	var colony := _ant_colony_with_one_mound()
 	var cell: Vector2i = colony.mound_cells()[0]
 	var cap := colony.active_forager_cap_at(cell)
-	var global_tile := Vector2i(123_456, 123_456)  # arbitrary -- does not need to be a real mound
-	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var origin := Vector2i(123_456, 123_456)  # arbitrary -- does not need to be a real mound
 	var before := manager._entities_parent.get_child_count()
 
 	for i in cap:
-		manager._dispatch_ant_forager(
-			global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(10 + i, 0), "seed"
-		)
+		manager._dispatch_ant_scout(colony, origin, cell)
 	assert_eq(
 		manager._entities_parent.get_child_count(), before + cap,
 		"precondition: every slot up to the mound's own cap should fill"
 	)
 
-	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(-10, 0), "seed")
+	manager._dispatch_ant_scout(colony, origin, cell)
 	assert_eq(
 		manager._entities_parent.get_child_count(), before + cap,
 		"a forager beyond the mound's own cap should not spawn while the others are still out"
@@ -6932,12 +6908,11 @@ func test_dispatches_a_second_forager_once_the_mounds_own_cap_allows_it():
 			colony.record_forage_result(cell, true)
 		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)  # one simulated day per call
 	assert_gt(colony.active_forager_cap_at(cell), 1, "precondition: a long-thriving colony should allow more than one")
-	var global_tile := Vector2i(654_321, 654_321)
-	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var origin := Vector2i(654_321, 654_321)
 	var before := manager._entities_parent.get_child_count()
 
-	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(10, 0), "seed")
-	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(-10, 0), "seed")
+	manager._dispatch_ant_scout(colony, origin, cell)
+	manager._dispatch_ant_scout(colony, origin, cell)
 
 	assert_eq(
 		manager._entities_parent.get_child_count(), before + 2,
@@ -6951,15 +6926,15 @@ func test_dispatches_a_second_forager_once_the_mounds_own_cap_allows_it():
 func test_a_finished_forager_frees_its_slot_for_a_new_one():
 	var colony := _ant_colony_with_one_mound()
 	var cell: Vector2i = colony.mound_cells()[0]
-	var global_tile := Vector2i(111_111, 111_111)
-	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var origin := Vector2i(111_111, 111_111)
+	var global_tile := origin + cell
 
-	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(10, 0), "seed")
+	manager._dispatch_ant_scout(colony, origin, cell)
 	var first: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
 	first.free()
 
 	var before := manager._entities_parent.get_child_count()
-	manager._dispatch_ant_forager(global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(-10, 0), "seed")
+	manager._dispatch_ant_scout(colony, origin, cell)
 	assert_eq(manager._entities_parent.get_child_count(), before + 1, "a freed slot should accept a new forager")
 
 

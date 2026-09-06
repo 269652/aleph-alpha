@@ -216,11 +216,12 @@ func nearest_leaf_near(pos: Vector2, radius: float) -> Dictionary:
 ## Every leaf within `radius` of `pos`, each as {position, species, season}
 ## -- the plural counterpart nearest_leaf_near never had (see that
 ## function's own doc comment: it only ever tracks the single closest
-## match). Exists so a caller with more than one real candidate to choose
-## among (see PheromoneField.best_candidate_index, and
-## EarthChunkManager._forage_leaf_near_mound which is the concrete reason
-## this was added) can bias that choice toward a known-good trail instead
-## of being limited to whichever leaf happens to be geometrically nearest.
+## match). Used by AntForagerMarker._sense_food_nearby with a SMALL,
+## local sensing radius around a scouting forager's own current position
+## (see docs/concept/soil_fauna.md "Scouting: real search, not omniscient
+## dispatch") -- a caller checking for more than one real candidate at
+## once needs a plural query to run in the first place, which
+## nearest_leaf_near alone could never provide.
 func leaves_near(pos: Vector2, radius: float) -> Array[Dictionary]:
 	var found: Array[Dictionary] = []
 	for leaf in _leaves:

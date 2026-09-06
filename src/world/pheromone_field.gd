@@ -1,13 +1,18 @@
 extends RefCounted
 
 ## A real ant colony's trail pheromone -- see docs/concept/soil_fauna.md
-## "Pheromone trails: recruitment to a known-good source". A successful
-## forager deposits it at a food source on the way home; it fades over
-## real time; another forager reads it as a bias toward a KNOWN source
-## over an equally-convenient unknown one -- the mechanism behind real ant
-## colonies collectively favouring shorter/richer paths (Deneubourg et
-## al.'s double-bridge experiments) with no individual ant ever comparing
-## routes.
+## "Pheromone trails: recruitment to a known-good source" and "Scouting:
+## real search, not omniscient dispatch". A successful forager deposits it
+## at a food source on the way home; it fades over real time; another
+## forager reads it as a bias toward a KNOWN source over an equally-
+## convenient unknown one -- the mechanism behind real ant colonies
+## collectively favouring shorter/richer paths (Deneubourg et al.'s
+## double-bridge experiments) with no individual ant ever comparing
+## routes. Read via gradient_direction -- a LOCAL concentration sensed
+## exactly where a scout currently stands (real chemotaxis), never a list
+## of known candidate destinations compared from a stationary point (that
+## omniscient shape, best_candidate_index, was removed -- see
+## AntScoutWander for what replaced it).
 ##
 ## Deliberately NOT a reuse of ScentField, despite the similar-sounding
 ## job: ScentField.concentration_at recomputes fresh, every call, from
@@ -46,26 +51,6 @@ const DEPOSIT_AMOUNT := 1.0
 ## Step used when sampling the field to estimate its gradient, in tiles --
 ## mirrors ScentField.GRADIENT_SAMPLE_TILES exactly, same reasoning.
 const GRADIENT_SAMPLE_TILES := 1.0
-
-## How much a full-strength trail (read right at its own deposit point) is
-## worth in candidate scoring, stated as a multiple of one tile's worth of
-## walking distance a forager will tolerate to reach it instead of an
-## unmarked candidate -- the natural unit this game already reasons about
-## proximity in. Three tiles, not one: real recruitment is a REINFORCEMENT
-## effect (Deneubourg et al.'s double-bridge result is exactly that a
-## colony can come to favour a marked branch that is not even the
-## shortest one), so a fresh trail should comfortably outweigh a modest
-## distance difference, not just barely break a tie -- and because the
-## field is CONTINUOUS, a candidate merely near a marked one already
-## picks up real residual concentration of its own (this is not a bug --
-## a genuinely nearby, never-independently-visited spot SHOULD read as
-## partly-known too), which eats into the marked candidate's own net
-## advantage more than a naive point-bonus would suggest. Pinned by test
-## against a real two-candidate scenario, not derived algebraically, since
-## the interaction between falloff and the distance term is exactly the
-## kind of thing worth measuring rather than trusting by inspection. See
-## best_candidate_index.
-const PREFERENCE_TILE_SIZES_PER_UNIT := 3.0
 
 var _deposits: Dictionary = {}  # Vector2i tile -> float amount
 
@@ -136,28 +121,3 @@ func gradient_direction(point: Vector2, tile_size: float) -> Vector2:
 
 func is_empty() -> bool:
 	return _deposits.is_empty()
-
-
-## Which of `candidates` (an Array of {"position": Vector2, ...}) a forager
-## dispatched from `origin` should head for: closer is better, but a
-## location already carrying pheromone (the colony's own prior success
-## there) can outweigh a marginally closer, never-visited one -- real
-## recruitment. `pheromones` may be null (no field yet, e.g. a colony's
-## first-ever forage attempt), in which case this is pure
-## nearest-candidate selection.
-static func best_candidate_index(
-	origin: Vector2, candidates: Array, pheromones, tile_size: float
-) -> int:
-	var best_index := 0
-	var best_score := -INF
-	for i in candidates.size():
-		var position: Vector2 = candidates[i]["position"]
-		var distance: float = origin.distance_to(position)
-		var trail := 0.0
-		if pheromones != null:
-			trail = pheromones.concentration_at(position, tile_size)
-		var score := -distance + trail * tile_size * PREFERENCE_TILE_SIZES_PER_UNIT
-		if score > best_score:
-			best_score = score
-			best_index = i
-	return best_index

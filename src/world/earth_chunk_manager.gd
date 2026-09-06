@@ -76,7 +76,6 @@ const ProceduralAquaticVegetationSprite = preload("res://src/rendering/procedura
 const AntColony = preload("res://src/world/ant_colony.gd")
 const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
-const PheromoneField = preload("res://src/world/pheromone_field.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
@@ -7028,11 +7027,11 @@ func nearest_leaf_litter_near(pixel_position: Vector2, radius_px: float) -> Dict
 
 ## Plural counterpart of nearest_leaf_litter_near -- every leaf within
 ## `radius_px` across the same 3x3 chunk neighbourhood, not just the single
-## closest one. This is what makes real pheromone-biased recruitment
-## possible for leaf litter at all (see PheromoneField.best_candidate_index,
-## and _forage_leaf_near_mound's own doc comment for the concrete gap this
-## closes): a caller cannot bias a choice among candidates it was never
-## given in the first place.
+## closest one. Used by AntForagerMarker._sense_food_nearby with a SMALL,
+## local SENSE_RADIUS_TILES around a scout's own current position (see
+## docs/concept/soil_fauna.md "Scouting: real search, not omniscient
+## dispatch") -- a caller cannot sense more than one real candidate at
+## once without a plural query to run in the first place.
 func leaf_litter_near(pixel_position: Vector2, radius_px: float) -> Array:
 	var found: Array = []
 	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
@@ -7229,18 +7228,7 @@ func step_ants(delta_seconds: float) -> void:
 		for cell in colony.mound_cells():
 			if not colony.should_forage(cell):
 				continue
-			# Leaf litter is checked FIRST, ahead of the biome branch below --
-			# unlike grass seed (grassland-only) and windfall (forest/
-			# rainforest-only), it is not biome-gated at all (see
-			# _forage_leaf_near_mound's own doc comment), so any mound may
-			# have one in reach regardless of its own biome.
-			if _forage_leaf_near_mound(colony, origin, cell):
-				continue
-			var global_tile: Vector2i = origin + cell
-			if biome_at_global(global_tile.x, global_tile.y) == "grassland":
-				_forage_seed_near_mound(colony, origin, cell)
-			else:
-				_forage_windfall_near_mound(colony, origin, cell)
+			_dispatch_ant_scout(colony, origin, cell)
 
 	_ant_moisture_refresh_accumulator += delta_seconds
 	if _ant_moisture_refresh_accumulator < WORM_REFRESH_INTERVAL:
@@ -7306,156 +7294,43 @@ func step_leaf_litter(delta_seconds: float) -> void:
 			_leaf_litter_renderer.fill(mmi, field.leaves())
 
 
-## One mound's forager: look for the nearest fallen grass seed within its
-## SHORT foraging reach (AntColony.FORAGE_RADIUS_TILES, well under a mouse's
-## own SeedCaching.PICKUP_RADIUS_TILES -- an ant's range from its mound is
-## far smaller than a mouse's whole home range) and, if there's more than
-## one in reach, prefers whichever already carries this mound's own trail
-## pheromone (see PheromoneField.best_candidate_index) -- real recruitment
-## to a known-good source over an equally-convenient unknown one. Dispatches
-## a REAL forager at the chosen candidate (see _dispatch_ant_forager) rather
-## than resolving the take/cache here: the actual seed take, the cache
-## roll, and this mound's own pheromone deposit all now happen inside
-## AntForagerMarker itself, on real arrival, not instantly here (see
-## docs/concept/soil_fauna.md "Real foraging: a round trip, not an instant
-## resolve").
-func _forage_seed_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i) -> void:
-	var mound_pixel := Vector2(
-		float(origin.x + cell.x) + 0.5, float(origin.y + cell.y) + 0.5
-	) * float(TerrainRenderer.TILE_SIZE)
-	var nearby := grass_seeds_near(mound_pixel, int(ceil(AntColony.FORAGE_RADIUS_TILES)))
-	if nearby.is_empty():
-		return
-	var reach := AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
-	var in_reach: Array = nearby.filter(
-		func(c): return mound_pixel.distance_to(c["position"]) <= reach
-	)
-	if in_reach.is_empty():
-		return
-	var best_index := PheromoneField.best_candidate_index(
-		mound_pixel, in_reach, colony.pheromones_at(cell), float(TerrainRenderer.TILE_SIZE)
-	)
-	var target_position: Vector2 = in_reach[best_index]["position"]
-	_dispatch_ant_forager(origin + cell, colony, cell, mound_pixel, target_position, "seed")
-
-
-## One mound's forager in a forest/rainforest chunk: TallGrass never grows
-## outside grassland (see AntColony's own doc comment), so a forest/
-## rainforest mound instead checks for a nearby fallen windfall fruit/nut
-## ground item -- the same fruit_near/take_fruit_at API SquirrelNutCaching
-## already uses -- gated to real NUTS (TreeSpecies.is_nut) exactly like
-## SquirrelNutCaching's own gate: a single forager ant cannot meaningfully
-## interact with an intact fleshy fruit the way a bird or squirrel does, so a
-## fallen cherry/apple is left for the ordinary generic fruit-eating path,
-## the same reasoning _step_squirrel_nut_caching's own doc comment gives.
+## Real per-mound SCOUT dispatch (see docs/concept/soil_fauna.md "Scouting:
+## real search, not omniscient dispatch"). Replaces the three separate
+## _forage_seed_near_mound/_forage_windfall_near_mound/_forage_leaf_near_
+## mound functions this used to be (each ran its own omniscient "every
+## candidate within the mound's whole forage reach, from this stationary
+## point" query and picked the best-scored one before ever dispatching
+## anyone -- exactly the pattern reported live as a problem: "ants go
+## straight to the next leaf... no omniscience please"). A dispatched
+## scout starts with NO known target or forage_kind at all -- it discovers
+## both itself, via its own local sensing as it wanders (see
+## AntForagerMarker._sense_food_nearby/_step_scouting), which is also why
+## no biome pre-check is needed here any more: seed/windfall queries
+## simply come back empty wherever the world itself does not place that
+## kind of food, the same way they always have.
 ##
-## Mirrors _forage_seed_near_mound's find-and-dispatch shape exactly (same
-## FORAGE_RADIUS_TILES reach, same pheromone-aware candidate scoring); the
-## consumed-vs-cached roll (AntColony.windfall_is_consumed) now resolves
-## inside AntForagerMarker itself, at the mound, once the forager actually
-## gets there -- not here, and not at the pickup site (see the concept
-## doc's own geometry note on why the cache leg moved).
-func _forage_windfall_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i) -> void:
-	var mound_pixel := Vector2(
-		float(origin.x + cell.x) + 0.5, float(origin.y + cell.y) + 0.5
-	) * float(TerrainRenderer.TILE_SIZE)
-	var nearby := fruit_near(mound_pixel, int(ceil(AntColony.FORAGE_RADIUS_TILES)))
-	nearby = nearby.filter(func(f): return TreeSpecies.is_nut(String(f.get("species", ""))))
-	if nearby.is_empty():
-		return
-	var reach := AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
-	var in_reach: Array = nearby.filter(
-		func(c): return mound_pixel.distance_to(c["position"]) <= reach
-	)
-	if in_reach.is_empty():
-		return
-	var best_index := PheromoneField.best_candidate_index(
-		mound_pixel, in_reach, colony.pheromones_at(cell), float(TerrainRenderer.TILE_SIZE)
-	)
-	var target_position: Vector2 = in_reach[best_index]["position"]
-	_dispatch_ant_forager(origin + cell, colony, cell, mound_pixel, target_position, "windfall")
-
-
-## Checked before the biome-specific branch in step_ants (see that function's
-## own doc comment): fallen leaf litter (see LeafLitterField,
-## docs/concept/leaf_litter.md) closes the gap
-## docs/concept/soil_fauna.md named as "Leaf litter is a separate forage
-## source this mound simulation does not see" -- a leaf can land near a
-## mound regardless of that mound's own biome (a "grassland" chunk can still
-## have real trees shedding leaves onto it), unlike grass seed (grassland
-## only) or windfall (forest/rainforest only). Returns whether a forager was
-## actually dispatched, so step_ants only falls through to the biome-specific
-## branch when there was genuinely no leaf in reach.
-##
-## Mirrors _forage_seed_near_mound/_forage_windfall_near_mound's own
-## find-and-dispatch shape exactly, INCLUDING the pheromone-aware candidate
-## scoring -- unlike before (see leaf_litter_near's own doc comment), this
-## is no longer limited to the single geometrically closest leaf. Reported
-## live: "ants go straight to the next leaf when moving out the mound ...
-## they should either explore randomly or follow pheromones" -- true then:
-## with only ever ONE candidate to choose from, a known trail could not
-## possibly matter, so the walk was always a beeline to whichever leaf
-## happened to be nearest, trip after trip. Now every leaf within reach is
-## a real candidate, and PheromoneField.best_candidate_index picks among
-## them the same real-recruitment way seed/windfall always have (a
-## previously-successful spot's own trail can outweigh a marginally closer,
-## never-visited one -- see that function's own doc comment); with no
-## trail yet (a colony's first-ever leaf forage), this still reduces to
-## pure nearest-candidate selection, same as before.
-func _forage_leaf_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i) -> bool:
-	var mound_pixel := Vector2(
-		float(origin.x + cell.x) + 0.5, float(origin.y + cell.y) + 0.5
-	) * float(TerrainRenderer.TILE_SIZE)
-	var reach := AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
-	var nearby := leaf_litter_near(mound_pixel, reach)
-	if nearby.is_empty():
-		return false
-	var best_index := PheromoneField.best_candidate_index(
-		mound_pixel, nearby, colony.pheromones_at(cell), float(TerrainRenderer.TILE_SIZE)
-	)
-	var found: Dictionary = nearby[best_index]
-	_dispatch_ant_forager(
-		origin + cell, colony, cell, mound_pixel, found.position, "leaf", found.species, found.season
-	)
-	return true
-
-
-## Real per-mound forager dispatch (see docs/concept/soil_fauna.md "Real
-## foraging: a round trip, not an instant resolve") -- replaces the old
-## instant take-then-decorate resolution: the real take/plant effects and
-## the pheromone deposit now happen inside AntForagerMarker itself, on real
-## arrival. Capped at colony.active_forager_cap_at(cell) CONCURRENT
-## foragers per mound, not the old hardcoded one -- that cap scales with
-## the mound's own queen-driven population (see AntColony/
-## AntPopulationModel), so a thriving colony visibly has more than one
-## worker out at once. Stale (freed) entries in _active_ant_foragers are
-## pruned here, lazily, rather than eagerly elsewhere.
-## `leaf_species`/`leaf_season`: only meaningful when `forage_kind == "leaf"`
-## -- already known at THIS discovery point, from the exact same
-## nearest_leaf_litter_near call that found `target_position` (see
-## _forage_leaf_near_mound), so the forager can show a real, correctly-
-## coloured carried-leaf visual without needing to ask the world again
-## later (see AntForagerMarker.carried_leaf_species/carried_leaf_season).
-## Left "" (the default) for seed/windfall trips, which have no such visual.
-func _dispatch_ant_forager(
-	global_tile: Vector2i, colony: AntColony, cell: Vector2i,
-	mound_pixel: Vector2, target_position: Vector2, forage_kind: String,
-	leaf_species: String = "", leaf_season: String = ""
-) -> void:
+## Capped at colony.active_forager_cap_at(cell) CONCURRENT foragers per
+## mound, not a hardcoded one -- that cap scales with the mound's own
+## queen-driven population (see AntColony/AntPopulationModel), so a
+## thriving colony visibly has more than one worker out at once. Stale
+## (freed) entries in _active_ant_foragers are pruned here, lazily, rather
+## than eagerly elsewhere.
+func _dispatch_ant_scout(colony: AntColony, origin: Vector2i, cell: Vector2i) -> void:
 	if _entities_parent == null:
 		return
+	var global_tile: Vector2i = origin + cell
 	var active: Array = _active_ant_foragers.get(global_tile, [])
 	active = active.filter(func(f): return is_instance_valid(f) and not f.is_queued_for_deletion())
 	if active.size() >= colony.active_forager_cap_at(cell):
 		_active_ant_foragers[global_tile] = active
 		return
+	var mound_pixel := Vector2(
+		float(global_tile.x) + 0.5, float(global_tile.y) + 0.5
+	) * float(TerrainRenderer.TILE_SIZE)
 	var forager := AntForagerMarker.new()
-	forager.target_position = target_position
 	forager.mound_position = mound_pixel
-	forager.forage_kind = forage_kind
-	forager.carried_leaf_species = leaf_species
-	forager.carried_leaf_season = leaf_season
 	forager.position = mound_pixel
+	forager.scout = true
 	forager.setup(self, colony, cell)
 	_entities_parent.add_child(forager)
 	active.append(forager)

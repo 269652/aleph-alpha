@@ -156,6 +156,19 @@ func test_ant_forage_radius_is_shorter_than_rodent_pickup_radius():
 	assert_lt(AntColony.FORAGE_RADIUS_TILES, SeedCaching.PICKUP_RADIUS_TILES)
 
 
+## How close a scouting forager (see docs/concept/soil_fauna.md's
+## "Scouting: real search, not omniscient dispatch") has to physically be
+## to notice real food at all -- derived from FORAGE_RADIUS_TILES itself
+## (half of it) rather than an independently-eyeballed number, so this
+## stays proportionally meaningfully SMALLER than the whole home range a
+## scout wanders (real wandering is required to cover it) if that range
+## is ever retuned again. Pinned directly, not re-derived in the test,
+## since the derivation itself is what this guards against silently
+## drifting.
+func test_sense_radius_is_half_the_forage_radius():
+	assert_eq(AntColony.SENSE_RADIUS_TILES, AntColony.FORAGE_RADIUS_TILES * 0.5)
+
+
 func test_carry_direction_is_a_unit_vector():
 	for seed_value in [1, 42, 999]:
 		var direction: Vector2 = AntColony.carry_direction(seed_value)

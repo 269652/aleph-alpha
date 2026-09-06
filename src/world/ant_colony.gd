@@ -107,6 +107,19 @@ const FORAGE_CHANCE := 0.05
 ## confirming the tradeoff -- this pass is that confirmation.
 const FORAGE_RADIUS_TILES := 2.0
 
+## How close a SCOUTING forager (see docs/concept/soil_fauna.md's
+## "Scouting: real search, not omniscient dispatch") has to physically be
+## to a real leaf/seed/nut to notice it at all -- a scout no longer knows
+## where food is in advance the way the old omniscient dispatch did; it
+## has to actually wander close enough to sense it. Derived as HALF
+## FORAGE_RADIUS_TILES (not an independently-eyeballed number) so a scout
+## genuinely has to cover real ground within its own home range before
+## stumbling onto something, rather than sensing the whole range at once
+## from wherever it happens to be standing -- which would just be
+## omniscience again, at a smaller radius. Pinned by test_sense_radius_
+## is_half_the_forage_radius.
+const SENSE_RADIUS_TILES := FORAGE_RADIUS_TILES * 0.5
+
 ## How far a mound caches a harvested seed before it counts as planted, in
 ## tiles. This is the shortest-range disperser of the game's whole carrier
 ## family, and deliberately so, in order:
@@ -283,8 +296,8 @@ var _pheromones: Dictionary = {}
 ## swarm" -- exactly the framing this request asks to change. A cap alone
 ## was never the whole story, though (see _seed_initial_mounds' own doc
 ## comment on the population floor this pass also raises) -- the pheromone
-## trail's own recruitment (PheromoneField.best_candidate_index, biasing
-## EVERY concurrently-dispatched forager toward the same known-good
+## trail's own recruitment (PheromoneField.gradient_direction, biasing
+## EVERY concurrently-scouting forager toward the same known-good
 ## source) was already correct swarm behaviour, just invisible with at
 ## most one worker ever out to show it. Raising the cap is what lets that
 ## existing mechanism actually read as a swarm converging on a rich find,
@@ -515,9 +528,10 @@ func active_forager_cap_at(cell: Vector2i) -> int:
 
 
 ## This mound's own trail pheromone field, or null if it has never laid
-## one down -- a pure read, so a caller scoring forage candidates (see
-## PheromoneField.best_candidate_index, which already accepts null) never
-## forces an allocation just to find a mound has no trail yet.
+## one down -- a pure read, so a scouting forager sensing a local gradient
+## (see PheromoneField.gradient_direction, called only when this is
+## non-null -- see AntForagerMarker._step_scouting) never forces an
+## allocation just to find a mound has no trail yet.
 func pheromones_at(cell: Vector2i) -> PheromoneField:
 	return _pheromones.get(cell)
 
