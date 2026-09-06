@@ -50,6 +50,7 @@ const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd"
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const AntScoutWander = preload("res://src/gameplay/ant_scout_wander.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
+const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
 
 const GROUP_NAME := "ant_forager"
 
@@ -305,6 +306,27 @@ func get_display_name() -> String:
 	return "Ant"
 
 
+## Set by crush() -- once true, _process skips its whole round-trip walk and
+## only ticks the linger clock before freeing.
+var _dying := false
+var _dying_elapsed := 0.0
+
+
+## Called by EarthChunkManager.crush_ants_near in place of an instant
+## queue_free() -- see docs/concept/soil_fauna.md's own "no corpse/recovery
+## state ... no timed death animation either" scope cut, now closed.
+## IllustratedDecomposerSprite's "ant" art has no dedicated crushed pose at
+## all, so this reuses SquashCrushEffect's shared procedural fallback,
+## applied to whatever frame (walk or carry) this forager happened to be
+## showing at the moment it died. Idempotent, same contract as
+## CaterpillarMarker.crush()/DecomposerMarker.crush().
+func crush() -> void:
+	if _dying:
+		return
+	_dying = true
+	SquashCrushEffect.apply(_sprite)
+
+
 ## Which leg of the round trip this forager is currently walking.
 func _current_leg_target() -> Vector2:
 	if _behavior.phase == AntForageBehavior.Phase.APPROACHING:
@@ -314,6 +336,11 @@ func _current_leg_target() -> Vector2:
 
 func _process(delta: float) -> void:
 	_ensure_initialized()
+	if _dying:
+		_dying_elapsed += delta
+		if _dying_elapsed >= SquashCrushEffect.LINGER_SECONDS:
+			queue_free()
+		return
 	_elapsed_time += delta
 	if _behavior.phase == AntForageBehavior.Phase.SCOUTING:
 		_step_scouting(delta)

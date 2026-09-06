@@ -17,6 +17,7 @@ const IllustratedDecomposerSprite = preload("res://src/rendering/illustrated_dec
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
 
 const MOUND_CELL := Vector2i(3, 3)
 
@@ -845,3 +846,41 @@ func test_a_scouts_assigned_spread_direction_measurably_changes_its_wander():
 		position_with_bias, position_without_bias,
 		"an assigned spread direction should measurably change this scout's own wander step"
 	)
+
+
+# -- crushed underfoot: procedural squash fallback (see SquashCrushEffect's -
+# -- own doc comment -- IllustratedDecomposerSprite's ant art has no ------
+# -- dedicated crushed pose at all, unlike worm/millipede's own real art) ---
+
+func test_crush_applies_the_squash_effect_to_its_sprite():
+	var forager := _spawned(Vector2(50, 50), Vector2(0, 0))
+	forager.crush()
+	var sprite := forager.get_child(0) as Sprite2D
+	assert_almost_eq(sprite.scale.y, SquashCrushEffect.VERTICAL_SQUASH, 0.001)
+	assert_eq(sprite.modulate, SquashCrushEffect.TINT)
+
+
+func test_crush_stops_walking():
+	var forager := _spawned(Vector2(50, 50), Vector2(0, 0))
+	forager.crush()
+	var position_before := forager.position
+	forager._process(1.0)
+	assert_eq(forager.position, position_before, "a crushed forager should no longer walk its round trip")
+
+
+func test_crush_removes_the_marker_after_lingering():
+	var forager := _spawned(Vector2(50, 50), Vector2(0, 0))
+	forager.crush()
+	forager._process(SquashCrushEffect.LINGER_SECONDS - 0.01)
+	assert_false(forager.is_queued_for_deletion(), "should still be lingering just before the linger duration elapses")
+	forager._process(0.02)
+	assert_true(forager.is_queued_for_deletion(), "should free itself once the linger duration has passed")
+
+
+func test_crush_called_twice_does_not_push_the_linger_clock_back_out():
+	var forager := _spawned(Vector2(50, 50), Vector2(0, 0))
+	forager.crush()
+	forager._process(SquashCrushEffect.LINGER_SECONDS - 0.01)
+	forager.crush()
+	forager._process(0.02)
+	assert_true(forager.is_queued_for_deletion(), "a second crush call should not reset the linger timer")

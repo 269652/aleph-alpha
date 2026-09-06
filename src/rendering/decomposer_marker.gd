@@ -50,6 +50,7 @@ const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
+const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
 
 const GROUP_NAME := "decomposer"
 
@@ -168,6 +169,27 @@ func get_display_name() -> String:
 	return species.capitalize()
 
 
+## Set by crush() -- once true, _process skips every forage/wander step
+## entirely and only ticks the linger clock before freeing.
+var _dying := false
+var _dying_elapsed := 0.0
+
+
+## Called by EarthChunkManager.crush_decomposers_near (via
+## _crush_markers_near) in place of an instant queue_free() -- see
+## docs/concept/soil_fauna.md's own "no corpse/recovery state" scope cut,
+## now closed. Neither the "ant" nor "bug" sheet has a dedicated crushed
+## pose, so this reuses SquashCrushEffect's shared procedural fallback,
+## applied to whichever species/action frame this decomposer happened to be
+## showing at the moment it died. Idempotent, same contract as
+## CaterpillarMarker.crush()/AntForagerMarker.crush().
+func crush() -> void:
+	if _dying:
+		return
+	_dying = true
+	SquashCrushEffect.apply(_sprite)
+
+
 ## FEEDING (biting in place) shows the idle cycle (legs gathered) -- a
 ## stationary decomposer with animated walking legs would read as sliding
 ## in place. Every other phase (ambient wander, committed approach) shows
@@ -276,6 +298,11 @@ func _process(frame_delta: float) -> void:
 	# SimulationLod) -- same time passes, fewer scans to pay for.
 	var delta := _lod_step(frame_delta)
 	if delta < 0.0:
+		return
+	if _dying:
+		_dying_elapsed += delta
+		if _dying_elapsed >= SquashCrushEffect.LINGER_SECONDS:
+			queue_free()
 		return
 	# Advanced by the same (possibly LOD-coalesced) delta everything else in
 	# this function uses, so a decomposer far from the player keeps the same

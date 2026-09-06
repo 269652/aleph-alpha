@@ -24,6 +24,7 @@ const CaterpillarMarker = preload("res://src/rendering/caterpillar_marker.gd")
 const CaterpillarForageBehavior = preload("res://src/gameplay/caterpillar_forage_behavior.gd")
 const IllustratedCaterpillarSprite = preload("res://src/rendering/illustrated_caterpillar_sprite.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
+const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
 
 const TILE_SIZE := 16.0
 
@@ -251,3 +252,41 @@ func test_approaching_a_close_target_does_not_overshoot_and_orbit_forever():
 		marker._behavior.phase, CaterpillarForageBehavior.Phase.EATING,
 		"a target closer than one approach step should still be reached, not orbited forever"
 	)
+
+
+# -- crushed underfoot: procedural squash fallback (see SquashCrushEffect's -
+# -- own doc comment -- no dedicated crushed art exists for a caterpillar, -
+# -- unlike worm's real "die" row or millipede's real "crushed" row) --------
+
+func test_crush_applies_the_squash_effect_to_its_sprite():
+	marker.crush()
+	var sprite := marker.get_child(0) as Sprite2D
+	assert_almost_eq(sprite.scale.y, SquashCrushEffect.VERTICAL_SQUASH, 0.001)
+	assert_eq(sprite.modulate, SquashCrushEffect.TINT)
+
+
+func test_crush_stops_all_movement_and_foraging():
+	var world := StubWorld.new()
+	world.field.add_leaf(Vector2(105, 100), "cherry", "spring", 0.0)
+	marker.setup(world)
+	marker.crush()
+	var position_before := marker.position
+	marker._process(1.0)
+	assert_eq(marker.position, position_before, "a crushed caterpillar should no longer move")
+	assert_false(world.field.leaves().is_empty(), "a crushed caterpillar should no longer forage")
+
+
+func test_crush_removes_the_marker_after_lingering():
+	marker.crush()
+	marker._process(SquashCrushEffect.LINGER_SECONDS - 0.01)
+	assert_false(marker.is_queued_for_deletion(), "should still be lingering just before the linger duration elapses")
+	marker._process(0.02)
+	assert_true(marker.is_queued_for_deletion(), "should free itself once the linger duration has passed")
+
+
+func test_crush_called_twice_does_not_push_the_linger_clock_back_out():
+	marker.crush()
+	marker._process(SquashCrushEffect.LINGER_SECONDS - 0.01)
+	marker.crush()  # a second heavy footstep landing before the corpse has cleared
+	marker._process(0.02)
+	assert_true(marker.is_queued_for_deletion(), "a second crush call should not reset the linger timer")

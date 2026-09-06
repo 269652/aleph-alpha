@@ -47,6 +47,7 @@ const IllustratedCaterpillarSprite = preload("res://src/rendering/illustrated_ca
 const CaterpillarForageBehavior = preload("res://src/gameplay/caterpillar_forage_behavior.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
+const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
 
 const GROUP_NAME := "caterpillar"
 
@@ -167,6 +168,30 @@ func get_display_name() -> String:
 	return "Caterpillar"
 
 
+## Set by crush() -- once true, _process skips every forage/wander/climb
+## step entirely and only ticks the linger clock before freeing.
+var _dying := false
+var _dying_elapsed := 0.0
+
+
+## Called by EarthChunkManager.crush_caterpillars_near (via
+## _crush_markers_near) in place of an instant queue_free() -- see
+## docs/concept/soil_fauna.md's own "No corpse state, no splat VFX" scope
+## cut, now closed. Unlike MillipedeMarker.crush() there is no dedicated
+## crushed row to play (caterpillar.png's four rows are crawl/climb/eat/rest
+## -- no "crushed" pose was ever delivered, see IllustratedCaterpillarSprite's
+## own doc comment), so this reuses SquashCrushEffect's shared procedural
+## fallback instead, applied directly to whatever frame the caterpillar
+## happened to be showing at the moment it died. Idempotent: a second crush
+## call before the linger clock runs out does nothing further (in
+## particular, never pushes _dying_elapsed back to 0).
+func crush() -> void:
+	if _dying:
+		return
+	_dying = true
+	SquashCrushEffect.apply(_sprite)
+
+
 ## crawl: ambient wander, or approaching/eating ground litter -- level
 ## ground the whole time. climb: approaching OR eating at a tree -- the
 ## "eat" row's own head-down grazing pose reads fine questing partway up a
@@ -229,6 +254,11 @@ var _cached_player: Node = null
 func _process(frame_delta: float) -> void:
 	var delta := _lod_step(frame_delta)
 	if delta < 0.0:
+		return
+	if _dying:
+		_dying_elapsed += delta
+		if _dying_elapsed >= SquashCrushEffect.LINGER_SECONDS:
+			queue_free()
 		return
 	_elapsed_time += delta
 	var position_before := position

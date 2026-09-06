@@ -21,6 +21,7 @@ const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
+const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
 
 ## Minimal duck-typed `_world` (see DecomposerMarker.setup) wrapping a real
 ## LeafLitterField -- mirrors test_creature_marker.gd's own ForageWorld
@@ -545,3 +546,37 @@ func test_far_from_the_player_does_not_rescan_carrion_on_every_process_call():
 		marker._behavior.phase, CarrionForageBehavior.Phase.SEEKING,
 		"far from the player, a decomposer should not re-scan for carrion on every _process call -- it should still be waiting out its LOD interval"
 	)
+
+
+# -- crushed underfoot: procedural squash fallback (see SquashCrushEffect's -
+# -- own doc comment -- neither the "ant" nor "bug" sheet has a dedicated --
+# -- crushed pose, unlike worm/millipede's own real art) --------------------
+
+func test_crush_applies_the_squash_effect_to_its_sprite():
+	marker.crush()
+	var sprite := marker.get_child(0) as Sprite2D
+	assert_almost_eq(sprite.scale.y, SquashCrushEffect.VERTICAL_SQUASH, 0.001)
+	assert_eq(sprite.modulate, SquashCrushEffect.TINT)
+
+
+func test_crush_stops_all_movement_and_foraging():
+	marker.crush()
+	var position_before := marker.position
+	marker._process(1.0)
+	assert_eq(marker.position, position_before, "a crushed decomposer should no longer move")
+
+
+func test_crush_removes_the_marker_after_lingering():
+	marker.crush()
+	marker._process(SquashCrushEffect.LINGER_SECONDS - 0.01)
+	assert_false(marker.is_queued_for_deletion(), "should still be lingering just before the linger duration elapses")
+	marker._process(0.02)
+	assert_true(marker.is_queued_for_deletion(), "should free itself once the linger duration has passed")
+
+
+func test_crush_called_twice_does_not_push_the_linger_clock_back_out():
+	marker.crush()
+	marker._process(SquashCrushEffect.LINGER_SECONDS - 0.01)
+	marker.crush()
+	marker._process(0.02)
+	assert_true(marker.is_queued_for_deletion(), "a second crush call should not reset the linger timer")
