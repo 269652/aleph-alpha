@@ -17,6 +17,7 @@ const IllustratedDecomposerSprite = preload("res://src/rendering/illustrated_dec
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 
 const MOUND_CELL := Vector2i(3, 3)
 
@@ -67,7 +68,16 @@ class StubWorld:
 	var nearby_seeds: Array = []
 	var nearby_fruit: Array = []
 
+	## How many times each real EarthChunkManager query this stub stands in
+	## for was actually called -- see the sense-interval-throttle tests
+	## below (reported live, real measured cost: ~1000-1300ms of CPU per
+	## 3-second window across ~1000 concurrently-scouting foragers, each
+	## calling all three of these every single frame with no throttle at
+	## all -- the round-3 FPS regression's dominant cause).
+	var sense_call_count := 0
+
 	func leaf_litter_near(_position: Vector2, _radius_px: float) -> Array:
+		sense_call_count += 1
 		return nearby_leaves
 
 	func grass_seeds_near(_position: Vector2, _radius_tiles: int) -> Array:
@@ -654,6 +664,73 @@ func test_max_scout_seconds_is_derived_not_eyeballed():
 		* AntForagerMarker.MAX_SCOUT_CROSSINGS
 	)
 	assert_almost_eq(AntForagerMarker.MAX_SCOUT_SECONDS, expected, 0.001)
+
+
+# -- performance: a scouting forager must not re-sense every single frame,
+# -- and must update at SimulationLod's reduced rate far from the player
+# -- (reported live, real measured cost via a --solo perf investigation
+# -- session: FPS collapsed to 3-5, ~1000-1300ms of CPU per 3-second window
+# -- spent inside _sense_food_nearby alone, across roughly 1000
+# -- concurrently-scouting foragers -- this class was the one creature
+# -- marker in the whole codebase with no SimulationLod throttling at all,
+# -- unlike DecomposerMarker/MillipedeMarker/CreatureMarker/FishMarker,
+# -- despite this file's own top doc comment claiming it mirrors
+# -- DecomposerMarker's wander). See docs/concept/soil_fauna.md's own
+# -- "Generalized... FPS regression round 3" section. -----------------------
+
+## A scout senses its surroundings on its very first scouting step
+## (immediately -- see SENSE_INTERVAL_SECONDS' own doc comment), but not
+## again on every subsequent frame regardless of how close it still is:
+## real food lying there does not need re-discovering every 1/60th of a
+## second when the ant itself has barely moved between checks.
+func test_scouting_does_not_re_sense_every_single_frame():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.01)  # the immediate first-ever sense
+	var after_first_call := world.sense_call_count
+	assert_eq(after_first_call, 1, "precondition: the very first scouting step should sense immediately")
+	for i in 15:
+		f._process(0.01)  # 15 * 0.01s = 0.15s, under SENSE_INTERVAL_SECONDS
+	assert_eq(
+		world.sense_call_count, after_first_call,
+		"re-sensing this soon after the first check should be throttled, not run every frame"
+	)
+
+
+## Once SENSE_INTERVAL_SECONDS has genuinely elapsed, sensing DOES run
+## again -- this is a real throttle, not a permanent one-shot.
+func test_scouting_re_senses_once_the_interval_actually_elapses():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.01)
+	assert_eq(world.sense_call_count, 1, "precondition")
+	f._process(AntForagerMarker.SENSE_INTERVAL_SECONDS + 0.01)
+	assert_eq(world.sense_call_count, 2, "a real elapsed interval should trigger a fresh sense check")
+
+
+## Mirrors DecomposerMarker's own test_far_from_the_player_does_not_
+## rescan_carrion_on_every_process_call exactly -- a scouting forager far
+## from the player must advance in fewer, larger LOD-coalesced steps, not
+## call _step_scouting (and so _sense_food_nearby) on every tiny _process
+## call regardless of distance.
+func test_far_from_the_player_updates_at_the_lod_reduced_rate():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	var player := Node2D.new()
+	add_child_autofree(player)
+	player.add_to_group("player")
+	player.position = f.position + Vector2(
+		SimulationLod.FULL_RATE_RADIUS_PX + SimulationLod.FALLOFF_PX + 1.0, 0
+	)
+	for i in 20:
+		f._process(0.01)
+	assert_eq(
+		world.sense_call_count, 0,
+		"far from the player, a scouting forager should not have accumulated enough LOD-reduced time to sense yet"
+	)
 
 
 # -- cluster recruitment: only a real cluster ever lays a trail, directional,

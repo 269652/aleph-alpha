@@ -50,6 +50,8 @@ const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd"
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const AntScoutWander = preload("res://src/gameplay/ant_scout_wander.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
+const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
 
 const GROUP_NAME := "ant_forager"
 
@@ -64,6 +66,26 @@ const WALK_SPEED := 12.0
 ## DecomposerMarker.ARRIVE_DISTANCE_PX exactly, the same tiny-insect arrival
 ## tolerance.
 const ARRIVE_DISTANCE_PX := 4.0
+
+## How often a SCOUTING forager actually re-senses its surroundings (see
+## _sense_food_nearby), independent of the SimulationLod throttle below --
+## even a full-rate (near-player) scout doesn't need to re-run three
+## separate world-area scans every single frame: at its own walking speed
+## (WALK_SPEED * SCOUT_SPEED_FRACTION ~= 4.2px/s) it barely moves between
+## one check and the next, so real food nearby is not about to be missed
+## by checking 5 times a second instead of 60. Reported live, real
+## measured cost via a --solo perf investigation session: this was the
+## round-3 FPS regression's dominant cause -- FPS collapsed to 3-5, with
+## ~1000-1300ms of CPU spent per 3-second window inside
+## _sense_food_nearby alone, across roughly 1000 concurrently-scouting
+## foragers (three deliberate tuning passes in the prior ~24h had raised
+## both the realistic population and each forager's own scouting lifetime
+## several-fold on top of a class that never got SimulationLod's
+## treatment at all -- see docs/concept/soil_fauna.md's own "Generalized...
+## FPS regression round 3" section). The FIRST scouting step always senses
+## immediately regardless (see _sense_accumulator's own default) -- only
+## repeated re-checks are throttled.
+const SENSE_INTERVAL_SECONDS := 0.2
 
 ## Ambient wander is slower than a committed approach -- mirrors
 ## DecomposerMarker.WANDER_SPEED_FRACTION's own reasoning exactly: a
@@ -156,6 +178,12 @@ var assigned_heading_bias := Vector2.ZERO
 ## here: an ant forager is one-shot-per-trip and is never itself saved.
 var wander_seed := 0
 var _elapsed_time := 0.0
+## Starts already at (not past) SENSE_INTERVAL_SECONDS -- see that
+## constant's own doc comment: the very first scouting step always senses
+## immediately, and this field only gates REPEATED re-checks after that.
+var _sense_accumulator := SENSE_INTERVAL_SECONDS
+var _lod_accumulated := 0.0
+var _cached_player: Node = null
 ## Built only for a scouting forager (see _ready) -- home-anchored at
 ## mound_position, radius AntColony.FORAGE_RADIUS_TILES: the mound's own
 ## forage reach doubles as this scout's own wander disc, so it never
@@ -312,12 +340,60 @@ func _current_leg_target() -> Vector2:
 	return mound_position
 
 
-func _process(delta: float) -> void:
+## Distance-based update rate -- mirrors DecomposerMarker/MillipedeMarker/
+## CreatureMarker's own _lod_step exactly (see SENSE_INTERVAL_SECONDS' own
+## doc comment for why this class needed it: it never had it before,
+## despite every sibling creature marker in this codebase already using
+## it). Returns the delta to advance by when this frame should actually
+## process, or NEGATIVE when it should be skipped (accumulated, not lost --
+## see _take_lod_step).
+func _lod_step(delta: float) -> float:
+	_lod_accumulated += delta
+	var player = _nearest_player_position()
+	if player == null:
+		return _take_lod_step()  # nobody to be far from: always full rate
+	var interval := SimulationLod.update_interval(position.distance_to(player))
+	if _lod_accumulated < interval:
+		return -1.0
+	return _take_lod_step()
+
+
+func _take_lod_step() -> float:
+	var step := _lod_accumulated
+	_lod_accumulated = 0.0
+	return step
+
+
+## Cheap: the player group holds one node in solo play. Cached per frame by
+## the caller rather than scanned per creature would be better still, but
+## this is already off the hot path for everything nearby (see
+## DecomposerMarker's own identical helper and doc comment).
+func _nearest_player_position():
+	if not is_inside_tree():
+		return null
+	if _cached_player == null or not is_instance_valid(_cached_player):
+		var players := get_tree().get_nodes_in_group("player")
+		if players.is_empty():
+			return null
+		_cached_player = players[0]
+	return _cached_player.position
+
+
+func _process(frame_delta: float) -> void:
+	PerfProbe.begin("ant_forager._process")
+	PerfProbe.count_instance("ant_forager (live)")
+	var delta := _lod_step(frame_delta)
+	if delta < 0.0:
+		PerfProbe.end("ant_forager._process")
+		return
 	_ensure_initialized()
 	_elapsed_time += delta
 	if _behavior.phase == AntForageBehavior.Phase.SCOUTING:
+		PerfProbe.count_instance("ant_forager (scouting)")
 		_step_scouting(delta)
+		PerfProbe.end("ant_forager._process")
 		return
+	PerfProbe.end("ant_forager._process")
 	var leg_target := _current_leg_target()
 	if position.distance_to(leg_target) > ARRIVE_DISTANCE_PX:
 		# move_toward, not += direction * speed * delta -- the exact
@@ -353,7 +429,14 @@ func _step_scouting(delta: float) -> void:
 		_behavior.give_up_scouting()
 		_update_sprite()
 		return
-	var found := _sense_food_nearby()
+	# Throttled independent of SimulationLod above -- see
+	# SENSE_INTERVAL_SECONDS' own doc comment: even a full-rate scout
+	# doesn't need to re-run three world-area scans every single frame.
+	_sense_accumulator += delta
+	var found := {}
+	if _sense_accumulator >= SENSE_INTERVAL_SECONDS:
+		_sense_accumulator = 0.0
+		found = _sense_food_nearby()
 	if not found.is_empty():
 		target_position = found.position
 		forage_kind = found.kind
@@ -406,6 +489,13 @@ func _step_scouting(delta: float) -> void:
 ## {} if nothing real is close enough yet, or {"kind", "position",
 ## "species"?, "season"?} for whichever real thing was found.
 func _sense_food_nearby() -> Dictionary:
+	PerfProbe.begin("ant_forager._sense_food_nearby")
+	var result := _sense_food_nearby_impl()
+	PerfProbe.end("ant_forager._sense_food_nearby")
+	return result
+
+
+func _sense_food_nearby_impl() -> Dictionary:
 	if _world == null:
 		return {}
 	var sense_radius_px := AntColony.SENSE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
