@@ -59,6 +59,7 @@ const Chunk = preload("res://src/world/chunk.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 const CaterpillarMarker = preload("res://src/rendering/caterpillar_marker.gd")
+const MillipedeMarker = preload("res://src/rendering/millipede_marker.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -4206,6 +4207,66 @@ func test_crushing_caterpillars_where_there_are_none_fails_rather_than_erroring(
 	assert_false(manager.crush_caterpillars_near(Vector2(-9000000, -9000000), 1000000.0))
 
 
+# -- crushed underfoot, the millipede side (see docs/concept/soil_fauna.md
+# "Generalized to millipedes too") -- same shape as the caterpillar section
+# immediately above, deliberately: a millipede is the same kind of victim
+# (a real, independently-positioned Node2D), sharing crush_caterpillars_
+# near's own _crush_markers_near helper rather than a third hand-copied
+# implementation. ------------------------------------------------------------
+
+func _millipede_at(chunk_coord: Vector2i, cell: Vector2i) -> MillipedeMarker:
+	var millipede := MillipedeMarker.new()
+	millipede.position = _pixel_for(chunk_coord, cell)
+	add_child_autofree(millipede)
+	manager._millipede_markers[chunk_coord] = [millipede]
+	return millipede
+
+
+func test_crushing_a_millipede_with_enough_momentum_removes_it_from_the_world():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var millipede := _millipede_at(chunk_coord, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(
+		manager.crush_millipedes_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"a horse-scale step on a millipede should crush it"
+	)
+	assert_true(millipede.is_queued_for_deletion(), "the millipede itself is gone")
+	assert_false(
+		manager._millipede_markers[chunk_coord].has(millipede),
+		"and dropped from tracking so chunk-unload never double-frees it"
+	)
+
+
+func test_crushing_a_millipede_with_too_little_momentum_leaves_it_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var millipede := _millipede_at(chunk_coord, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_false(
+		manager.crush_millipedes_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 0.01),
+		"a mouse-scale step should not crush a millipede"
+	)
+	assert_false(millipede.is_queued_for_deletion(), "the millipede should still be there")
+	assert_true(manager._millipede_markers[chunk_coord].has(millipede))
+
+
+func test_crushing_a_millipede_on_a_different_tile_leaves_it_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var millipede := _millipede_at(chunk_coord, Vector2i(5, 5))
+	var elsewhere := _pixel_for(chunk_coord, Vector2i(20, 20))
+	assert_false(
+		manager.crush_millipedes_near(elsewhere, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"stepping on a different tile should not reach a millipede standing elsewhere"
+	)
+	assert_false(millipede.is_queued_for_deletion())
+
+
+func test_crushing_millipedes_where_there_are_none_fails_rather_than_erroring():
+	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
+	assert_false(manager.crush_millipedes_near(Vector2(-9000000, -9000000), 1000000.0))
+
+
 # -- aquatic vegetation: a real food source for fish (see docs/concept/
 # aquatic_foraging.md). _load_chunk, not the slow real update() (see this
 # file's own CONTRIBUTING.md note) -- Berlin sits on the Spree's own
@@ -6554,6 +6615,33 @@ func test_unloading_a_chunk_frees_its_caterpillar_markers():
 	manager._unload_chunk(chunk_coord)
 
 	assert_false(manager._caterpillar_markers.has(chunk_coord))
+
+
+# -- millipedes: a dedicated autumn leaf-litter decomposer (see
+# docs/concept/soil_fauna.md), spawned year-round -- unlike caterpillars
+# just above, NO season gate at all. _load_chunk/_unload_chunk directly,
+# same perf reasoning as the caterpillar section immediately above.
+
+func test_load_chunk_spawns_millipedes_near_berlin_regardless_of_season():
+	for year_fraction in [0.3, 0.9]:  # summer, then winter
+		manager.set_world_age_seconds(SeasonCycle.SECONDS_PER_YEAR * year_fraction)
+		var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+		manager._unload_chunk(chunk_coord)
+		manager._load_chunk(chunk_coord)
+		assert_true(manager._millipede_markers.has(chunk_coord), "year_fraction %.1f" % year_fraction)
+		assert_gt(manager._millipede_markers[chunk_coord].size(), 0, "year_fraction %.1f" % year_fraction)
+		for marker in manager._millipede_markers[chunk_coord]:
+			assert_not_null(marker._world, "each spawned millipede should have its world wired for real leaf litter")
+
+
+func test_unloading_a_chunk_frees_its_millipede_markers():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	assert_true(manager._millipede_markers.has(chunk_coord), "precondition: the chunk had millipedes")
+
+	manager._unload_chunk(chunk_coord)
+
+	assert_false(manager._millipede_markers.has(chunk_coord))
 
 
 # -- ant colonies: visible mounds + traveling foragers (see docs/concept/
