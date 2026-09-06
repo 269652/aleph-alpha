@@ -495,47 +495,124 @@ nothing about whether the seed was really taken.
 That is no longer true. A forage attempt now dispatches a **real** forager
 that:
 
-1. Is given a genuine target position (still found the same way —
-   `grass_seeds_near`/`fruit_near` within `FORAGE_RADIUS_TILES`, see
-   "Pheromone trails" below for how it's chosen when more than one
-   candidate exists) and **walks there for real**, at the same
-   `WALK_SPEED` it always animated at.
-2. **Takes the seed/nut only on real arrival** (`take_grass_seed_at`/
-   `take_fruit_at`), re-checked at that moment — something else (a mouse,
-   a bird, simple bad luck) may have taken it first in the time the ant
-   spent walking, in which case the trip comes back empty. This is the
-   actual, meaningful sense in which foraging is now real rather than
-   scripted: the walk has a causal effect that can fail, not a guaranteed
-   one animated after the fact.
+1. **Scouts for a real target** rather than being handed one (see
+   "Scouting: real search, not omniscient dispatch" below) and, once it
+   has genuinely sensed something nearby, **walks there for real**, at
+   the same `WALK_SPEED` it always animated at.
+2. **Takes the seed/nut/leaf only on real arrival** (`take_grass_seed_at`/
+   `take_fruit_at`/`consume_leaf_litter_at`), re-checked at that moment —
+   something else (a mouse, a bird, simple bad luck) may have taken it
+   first in the time the ant spent walking, in which case the trip comes
+   back empty. This is the actual, meaningful sense in which foraging is
+   now real rather than scripted: the walk has a causal effect that can
+   fail, not a guaranteed one animated after the fact.
 3. **Walks back to the mound**, not onward to a cache point out in the
    field — a genuine change from the old geometry, and a more accurate
    one: real ants carry a harvested seed *toward the nest*, discarding the
    processed remnant in a midden near the entrance, not out where they
    found it. The cache/consume roll (`AntColony.windfall_is_consumed` for
-   windfall; grass seed always survives to be planted, exactly as before)
-   and the resulting `plant_grass_at`/`try_plant_seed_at` call now happen
-   at the mound, using `carry_distance_tiles`/`carry_direction` from the
-   *mound's* position rather than the pickup's.
+   windfall; grass seed always survives to be planted; a leaf simply
+   disappears, real detritus rather than a propagule) and the resulting
+   `plant_grass_at`/`try_plant_seed_at` call now happen at the mound,
+   using `carry_distance_tiles`/`carry_direction` from the *mound's*
+   position rather than the pickup's.
 4. Frees itself once home, the same one-shot-per-trip lifetime as before.
 
 `AntForageBehavior` (new, pure, no engine dependency, mirroring
-`CarrionForageBehavior`'s shape) owns the two phases this needs —
-`APPROACHING` (walking to the target, arrival resolves found-or-not) and
-`RETURNING` (walking home, arrival resolves cache-or-consumed) — simpler
-than its siblings because there is no `SEEKING` phase: the mound already
-found a real, reachable candidate before dispatching anyone, exactly as
-before. `AntForagerMarker` now takes a duck-typed `_world` reference (the
-same contract shape `FishMarker`/`PiscivoreBirdMarker` already use) so it
-can make these calls itself, plus the owning `AntColony` and mound `cell`
-so the cache roll at arrival reads the colony's own deterministic
+`CarrionForageBehavior`'s shape) owns the phases this needs —
+`SCOUTING` (no known target yet, see below), `APPROACHING` (walking to a
+now-sensed target, arrival resolves found-or-not), and `RETURNING`
+(walking home, arrival resolves cache-or-consumed). `phase` still
+*defaults* to `APPROACHING`, not `SCOUTING` — a deliberate compatibility
+seam: a direct construction (chiefly a test exercising APPROACHING/
+RETURNING in isolation against an already-known target, the shape every
+test written before scouting existed already uses) is completely
+unaffected; only real dispatch opts in, via `begin_scouting()`.
+`AntForagerMarker` takes a duck-typed `_world` reference (the same
+contract shape `FishMarker`/`PiscivoreBirdMarker` already use) so it can
+make these calls itself, plus the owning `AntColony` and mound `cell` so
+the cache roll at arrival reads the colony's own deterministic
 per-(cell, step) carrier seed, sampled live at the moment it's actually
 needed rather than captured stale at dispatch time.
+
+### Scouting: real search, not omniscient dispatch
+
+Reported live, in sequence: first "ants go straight to the next leaf when
+moving out the mound... they should either explore randomly or follow
+pheromones"; then, after that was answered with a pheromone-*biased*
+version of the dispatch below (score every candidate within reach against
+the mound's own trail, send the forager at whichever scores highest) —
+"no omniscience please". The second report was right to reject the first
+fix: scoring every real candidate within the mound's *whole* forage reach,
+from the mound's own stationary position, before a forager ever takes a
+single step, is still a colony that already knows exactly where the food
+is. An ant that "explores" was never actually possible under that model —
+there was nothing left to discover.
+
+A dispatched forager now starts knowing **nothing**. `AntForagerMarker.
+scout` (set only by real dispatch — `EarthChunkManager._dispatch_ant_
+scout`, which replaces the old `_forage_seed_near_mound`/
+`_forage_windfall_near_mound`/`_forage_leaf_near_mound` trio entirely, one
+per forage kind, each running its own omniscient query) puts the forager
+into `SCOUTING` with no `target_position` and no `forage_kind` at all.
+While scouting it:
+
+1. **Wanders.** `AmbientFlyerMovement` — the same already-tested,
+   home-anchored roam algorithm `DecomposerMarker`'s own ambient ants/bugs
+   already use for their idle wander, not a second, near-duplicate one —
+   anchored at the mound, with `AntColony.FORAGE_RADIUS_TILES` doubling as
+   the wander disc's own radius: the mound's forage reach and a scout's
+   home range are the same real-world quantity, so this needed no second,
+   independently-tuned number. Slower than a committed approach
+   (`SCOUT_SPEED_FRACTION`, mirroring `DecomposerMarker.WANDER_SPEED_
+   FRACTION`'s identical "a hurrying insect reads as one that found
+   something" reasoning) — an ant visibly speeds up the instant it
+   commits to something real, the same tell a player already reads off
+   the carry pose.
+2. **Senses, locally.** New `LeafLitterField.leaves_near`/
+   `EarthChunkManager.leaf_litter_near` (the plural counterparts
+   `nearest_leaf_near`/`nearest_leaf_litter_near` never had — both of
+   *those* are untouched, still used by `DecomposerMarker`'s own
+   unrelated in-place eating) let a scout check for real food within
+   `AntColony.SENSE_RADIUS_TILES` — half `FORAGE_RADIUS_TILES`, derived
+   rather than an independent number, so a scout must genuinely cover
+   real ground within its own small home range before stumbling onto
+   something, rather than sensing the whole range at once from wherever
+   it happens to stand (which would just be omniscience again, at a
+   smaller radius) — of its own **current, moving** position, never the
+   mound's. Leaf is checked first (not biome-gated at all, so any mound
+   may have one nearby regardless of biome), then seed and windfall
+   (gated to real nuts, `TreeSpecies.is_nut`, exactly as before — a lone
+   ant cannot meaningfully take an intact fleshy fruit). No biome
+   pre-filter is needed at dispatch time any more: those two queries
+   simply come back empty wherever the world itself doesn't place that
+   kind of food (no `TallGrass` outside grassland, no fruiting trees
+   outside forest/rainforest), the same way they always have.
+3. **Commits** the instant something real is sensed — `target_position`/
+   `forage_kind` (and, for a leaf, `carried_leaf_species`/`season`) are
+   set from what was actually found, `AntForageBehavior.commit_to_food()`
+   moves to `APPROACHING`, and the rest of the round trip above resolves
+   exactly as it always has.
+4. **Gives up** if nothing turns up within `AntForagerMarker.MAX_SCOUT_
+   SECONDS` — derived from how long it would take to cross its own
+   wander disc several times over at scouting speed, not an independent
+   guess — and walks home empty-handed, the same "still returns, just
+   with nothing to show for it" contract an unsuccessful `APPROACHING`
+   trip already has.
+
+**Deliberately not built:** biome-aware re-sensing as a scout physically
+wanders into a neighbouring biome (it still only ever senses for the kind
+its OWN mound's placement would suggest is worth checking — sensing all
+three kinds unconditionally already covers this well enough in practice,
+since a query for a kind the world doesn't place nearby just comes back
+empty; a scout literally crossing a live biome boundary mid-wander is a
+real, separable refinement, not attempted here).
 
 ### Pheromone trails: recruitment to a known-good source
 
 Real ants recruit nestmates to a food source with a **trail pheromone**: a
 successful forager lays it down as it returns to the nest, it evaporates
-over real time, and other foragers read it as a bias toward a *known*
+over real time, and another forager senses it as a bias toward a *known*
 source rather than an equally-convenient unknown one — the mechanism
 behind Deneubourg et al.'s classic double-bridge experiments, where a
 colony collectively converges on the shorter of two paths to a food source
@@ -557,21 +634,35 @@ dictionary doesn't grow forever) — while still borrowing `ScentField`'s
 finite-difference `gradient_direction` sampling, because a concentration
 field is a concentration field regardless of what maintains it.
 
-**Where it plugs into foraging, concretely.** `FORAGE_RADIUS_TILES`
-doubles (1.0 → 2.0 tiles — still comfortably under `SeedCaching.
-PICKUP_RADIUS_TILES`, the ordering `test_ant_forage_radius_is_shorter_
-than_rodent_pickup_radius` already pins, just not AT the old value), which
-matters here specifically because it is what makes more than one candidate
-food item plausible within reach at once. When there is more than one,
-`PheromoneField.best_candidate_index` scores each by distance **and** the
-trail concentration already sitting at it, and the mound sends its forager
-to whichever scores highest — a location the colony has recently foraged
-successfully (and therefore already marked) can beat a marginally closer
-but never-visited one, exactly the real recruitment effect. A successful
-forager deposits at the food's own position the moment it picks its find
-up (marking "there was food here, worth checking again"), read by the
-*next* dispatched forager's own candidate scoring, not by anything this
-one does for the rest of its own trip.
+**Where it plugs into foraging, concretely — read locally, not compared
+from afar.** A first version of this scored every real candidate within a
+mound's whole reach by distance *and* the trail concentration already
+sitting at each one (`PheromoneField.best_candidate_index`), sending the
+forager straight at whichever scored highest. That is real recruitment
+math, but it is also exactly the omniscient shape reported as a problem
+(see "Scouting" above) — it still requires knowing every candidate's
+existence and position up front. `best_candidate_index` is gone (along
+with its 4 dedicated tests); a scout instead reads `gradient_direction` —
+a concentration **sensed at its own current position**, real chemotaxis —
+and `AntScoutWander.biased_heading` (new, mirrors `ThreatAvoidantWander`'s
+own shape: a pure post-process on an already-computed candidate heading,
+so `AmbientFlyerMovement` itself never needs touching for this one extra,
+ant-specific need) bends its wander heading toward that gradient when one
+is sensed nearby, leaving it completely untouched — genuine, undirected
+exploration — when nothing is. A previously-successful spot's own trail
+can still pull a scout further out of its way than a fresh, unmarked one
+would (`AntScoutWander.TRAIL_BIAS`), the same real recruitment effect,
+just read the way a real ant actually reads it: locally, in passing, not
+compared against a remembered list. With no trail nearby yet (a colony's
+first-ever forage in some direction), a scout's own heading is simply
+untouched, undirected exploration — not "pick the nearest candidate" the
+way the old omniscient dispatch's own no-pheromone fallback was, since
+there is no candidate list left to fall back to at all.
+
+A successful forager still deposits at the food's own real position the
+moment it picks its find up (marking "there was food here, worth checking
+again") — unchanged; what changed is only how a *later* scout reads that
+mark.
 
 **Per mound, not per chunk.** Each mound owns its own `PheromoneField`
 (lazily created on first deposit) — different colonies don't smell each

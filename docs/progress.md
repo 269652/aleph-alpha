@@ -9228,6 +9228,55 @@ tweak — named as a real, separate follow-up rather than attempted here.
 manager.gd`/`test_ant_forager_marker.gd`'s leaf-related coverage. Full
 writeup: `soil_fauna.md`'s own second follow-up note on the same entry.
 
+✅ **Real scouting replaces omniscient dispatch entirely (2026-09-06, same
+day)** — the "deliberately NOT built" gap named at the end of the entry
+above closed out the same day, reported live: "please implement a
+scouting phase and true no-target wander", then, after a first attempt
+(pheromone-*biased* dispatch, scoring every candidate within the mound's
+whole reach and picking the best) was built to answer it — "no
+omniscience please", correctly rejecting that first attempt as still
+omniscient (every candidate's existence and position was still known
+up front; nothing was ever undiscovered). `EarthChunkManager._forage_
+seed_near_mound`/`_forage_windfall_near_mound`/`_forage_leaf_near_mound`
+(three separate omniscient queries, one per forage kind) collapsed into
+one `_dispatch_ant_scout`. A dispatched forager now starts with NO known
+target or forage_kind at all (`AntForagerMarker.scout`, opt-in —
+`AntForageBehavior.phase` still *defaults* to `APPROACHING`, so every
+test built before scouting existed, exercising APPROACHING/RETURNING
+against an already-known target directly, is completely unaffected).
+While `SCOUTING` it wanders (`AmbientFlyerMovement`, the SAME
+already-tested home-anchored roam `DecomposerMarker`'s own ambient
+ants/bugs already use — anchored at the mound, `AntColony.FORAGE_RADIUS_
+TILES` doubling as the wander disc's own radius), senses real food only
+within a small, LOCAL `AntColony.SENSE_RADIUS_TILES` (half
+`FORAGE_RADIUS_TILES`, derived) of its own current, moving position (new
+`LeafLitterField.leaves_near`/`EarthChunkManager.leaf_litter_near`,
+already added the same day for the leaf-recruitment entry above, now
+also the mechanism scouting itself senses through — `nearest_leaf_near`/
+`nearest_leaf_litter_near` stay untouched, still `DecomposerMarker`'s
+own), and gives up (`AntForagerMarker.MAX_SCOUT_SECONDS`, derived from
+crossing its own wander disc several times over) if nothing turns up.
+`PheromoneField.best_candidate_index` (the omniscient "score every known
+candidate from a stationary point" primitive, and its 4 dedicated tests)
+is gone; new `AntScoutWander.biased_heading` (mirrors `ThreatAvoidant
+Wander`'s own "pure post-process on a candidate heading" shape) instead
+bends a scout's wander heading toward `PheromoneField.gradient_
+direction` — a concentration sensed exactly where the scout currently
+stands, real chemotaxis — when a real trail is nearby, leaving it
+untouched (genuine, undirected exploration) when none is. `AntForager
+Marker._ensure_initialized` (setup that used to live only in `_ready()`,
+which turned out to depend on this node's own branch actually being
+attached to a live SceneTree — true for every real dispatch, but not
+guaranteed for `EarthChunkManager`'s own test-double `_entities_parent`)
+is now also called defensively at the top of `_process()`, so scouting
+activates correctly either way. 129/129 green across `test_ant_scout_
+wander.gd` (new)/`test_ant_colony.gd`/`test_ant_forage_behavior.gd`/
+`test_ant_forager_marker.gd`/`test_pheromone_field.gd`; the full leaf/
+forager/scout ant-dispatch cluster in `test_earth_chunk_manager.gd`
+(real chunk-load integration tests included) all green. Full writeup:
+`soil_fauna.md`'s new "Scouting: real search, not omniscient dispatch"
+section, and its "Pheromone trails" section's own rewrite to match.
+
 ⬜ **Still no litter-density accumulation or soil-fertility feedback, and
 no ground-covering visual effect** (unchanged scope cut — see
 `leaf_litter.md`'s own "Deliberately not modeled" section).
