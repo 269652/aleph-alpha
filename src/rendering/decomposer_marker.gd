@@ -307,6 +307,23 @@ func _step_seeking(delta: float) -> void:
 		var found := _nearest_food()
 		if found != null:
 			_target = found
+			# Relocates the wander anchor to wherever real food actually is,
+			# exactly like AmbientFlyerMarker already does at every one of its
+			# own commit sites (e.g. "if _worm_target.distance_to(home) >
+			# _movement.radius: home = _worm_target"). Without this, a
+			# decomposer that walks beyond its own tiny WANDER_RADIUS_PX to
+			# reach a real target -- entirely possible, since SEARCH_RADIUS_PX
+			# is more than double it -- returns to SEEKING still anchored on
+			# the stale point it started from, and the home-anchored wander's
+			# containment pull (see AmbientFlyerMovement.direction_at) drags
+			# it straight back there before it can settle near wherever it
+			# just ate. Reported live: "bugs run to a new leaf instantly then
+			# walk back a bit then speed to the next leaf" -- the "walk back"
+			# was this exact pull, and relocating home here is what lets a
+			# decomposer keep wandering naturally around a real food patch
+			# instead of yo-yoing to and from an arbitrary spawn point.
+			if found.position.distance_to(home) > _movement.radius:
+				home = found.position
 			_behavior.begin_approach()
 
 

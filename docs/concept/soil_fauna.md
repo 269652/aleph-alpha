@@ -872,16 +872,41 @@ the slowest in the game.
   flies over a carcass is real and common but out of scope here. Windfall
   foraging above is a separate, narrower thing — a fallen fruit/nut ground
   item via the existing tree-fruit API, not the corpse/rot system.
-- **Leaf litter is a separate forage source this mound simulation does not
-  see.** [leaf_litter.md](leaf_litter.md) adds a fallen-leaf ground item
-  alongside fallen fruit/nut, picked up by the VISIBLE `DecomposerMarker`
-  ants/bugs ([carrion.md](carrion.md)) via the ordinary
+- ~~**Leaf litter is a separate forage source this mound simulation does
+  not see.** [leaf_litter.md](leaf_litter.md) adds a fallen-leaf ground
+  item alongside fallen fruit/nut, picked up by the VISIBLE
+  `DecomposerMarker` ants/bugs ([carrion.md](carrion.md)) via the ordinary
   `DroppedItem.FORAGEABLE_GROUP_NAME` path with no changes needed there —
   but this invisible colony's own `_forage_windfall_near_mound` queries the
   fruiting model's abstract fruit/nut stock directly, never `DroppedItem`
   nodes, so it has no way to see a leaf item without a parallel query this
   pass does not build. Named there as a reasonable, separable follow-up,
-  not silently dropped.
+  not silently dropped.~~ **Resolved (2026-09-06).** Reported live as "ants
+  eat leaves at the spot instead of physically carrying the leaf to the
+  mound" — a real, confirmed gap, not a misreading: the VISIBLE ambient
+  `DecomposerMarker` ants/bugs genuinely do eat leaf litter in place (they
+  have no mound/colony concept at all, by design — see carrion.md), and a
+  player watching one has no visual way to tell it apart from a real
+  colony forager, since both draw the identical "ant" art. But the
+  above-quoted premise ("via the ordinary `DroppedItem.FORAGEABLE_
+  GROUP_NAME` path") was itself stale: leaf litter is GPU-instanced plain
+  data (`LeafLitterField`), never a real `DroppedItem` node, reached
+  through `EarthChunkManager.nearest_leaf_litter_near`/
+  `consume_leaf_litter_at` instead (see leaf_litter.md). New
+  `EarthChunkManager._forage_leaf_near_mound` gives the real colony
+  simulation that same query, checked in `step_ants` BEFORE the
+  grassland/forest-rainforest biome branch below — unlike grass seed or
+  windfall, a leaf is not biome-gated at all (a "grassland" chunk can
+  still have real trees shedding leaves onto it). `AntForagerMarker`
+  carries it home exactly like a seed or windfall nut (same walk, same
+  real "carry" pose, same real-arrival-resolves contract against
+  `consume_leaf_litter_at`), but a leaf is real detritus/food, not a
+  propagule — it disappears at the mound rather than being re-cached or
+  re-planted, unlike a survived grass seed or windfall nut. Pheromone-
+  biased recruitment toward a known-good leaf source is a real, separable
+  follow-up left undone: `nearest_leaf_litter_near` only ever reports the
+  single closest leaf, with no plural "leaves near" query to run
+  `PheromoneField.best_candidate_index` against the way seed/windfall do.
 - **Mound COUNT is still fixed and deterministic per chunk** (see "A queen,
   and where a colony's size comes from" above for what is no longer fixed
   — each mound's own population now genuinely grows or stalls with real

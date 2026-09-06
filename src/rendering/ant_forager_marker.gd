@@ -147,6 +147,8 @@ func _resolve_arrival_at_food() -> void:
 		if forage_kind == "windfall":
 			_carried_species = _world.take_fruit_at(target_position)
 			succeeded = _carried_species != ""
+		elif forage_kind == "leaf":
+			succeeded = _world.consume_leaf_litter_at(target_position)
 		else:
 			succeeded = _world.take_grass_seed_at(target_position)
 	_behavior.arrive_at_food(succeeded)
@@ -173,6 +175,8 @@ func _resolve_arrival_at_mound() -> void:
 		return
 	if forage_kind == "windfall" and AntColony.windfall_is_consumed(_colony.windfall_carrier_seed_for(_mound_cell)):
 		return  # eaten on the spot at the mound -- no cache leg
+	if forage_kind == "leaf":
+		return  # real detritus/food, not a propagule -- consumed already, never re-cached
 	var carrier_seed := _colony.carrier_seed_for(_mound_cell)
 	var carry_tiles := AntColony.carry_distance_tiles(carrier_seed)
 	var direction: Vector2 = AntColony.carry_direction(carrier_seed)

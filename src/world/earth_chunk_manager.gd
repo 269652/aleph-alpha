@@ -7218,6 +7218,13 @@ func step_ants(delta_seconds: float) -> void:
 		for cell in colony.mound_cells():
 			if not colony.should_forage(cell):
 				continue
+			# Leaf litter is checked FIRST, ahead of the biome branch below --
+			# unlike grass seed (grassland-only) and windfall (forest/
+			# rainforest-only), it is not biome-gated at all (see
+			# _forage_leaf_near_mound's own doc comment), so any mound may
+			# have one in reach regardless of its own biome.
+			if _forage_leaf_near_mound(colony, origin, cell):
+				continue
 			var global_tile: Vector2i = origin + cell
 			if biome_at_global(global_tile.x, global_tile.y) == "grassland":
 				_forage_seed_near_mound(colony, origin, cell)
@@ -7356,6 +7363,35 @@ func _forage_windfall_near_mound(colony: AntColony, origin: Vector2i, cell: Vect
 	)
 	var target_position: Vector2 = in_reach[best_index]["position"]
 	_dispatch_ant_forager(origin + cell, colony, cell, mound_pixel, target_position, "windfall")
+
+
+## Checked before the biome-specific branch in step_ants (see that function's
+## own doc comment): fallen leaf litter (see LeafLitterField,
+## docs/concept/leaf_litter.md) closes the gap
+## docs/concept/soil_fauna.md named as "Leaf litter is a separate forage
+## source this mound simulation does not see" -- a leaf can land near a
+## mound regardless of that mound's own biome (a "grassland" chunk can still
+## have real trees shedding leaves onto it), unlike grass seed (grassland
+## only) or windfall (forest/rainforest only). Returns whether a forager was
+## actually dispatched, so step_ants only falls through to the biome-specific
+## branch when there was genuinely no leaf in reach.
+##
+## Unlike _forage_seed_near_mound/_forage_windfall_near_mound, there is no
+## plural "leaves near" query to run PheromoneField.best_candidate_index
+## against -- nearest_leaf_litter_near only ever reports the single closest
+## leaf (see its own doc comment). Pheromone-biased recruitment toward a
+## known-good leaf source is therefore a real, separable follow-up, not
+## attempted here.
+func _forage_leaf_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i) -> bool:
+	var mound_pixel := Vector2(
+		float(origin.x + cell.x) + 0.5, float(origin.y + cell.y) + 0.5
+	) * float(TerrainRenderer.TILE_SIZE)
+	var reach := AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
+	var found := nearest_leaf_litter_near(mound_pixel, reach)
+	if found.is_empty():
+		return false
+	_dispatch_ant_forager(origin + cell, colony, cell, mound_pixel, found.position, "leaf")
+	return true
 
 
 ## Real per-mound forager dispatch (see docs/concept/soil_fauna.md "Real

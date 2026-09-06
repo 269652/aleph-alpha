@@ -246,7 +246,29 @@ see that doc's own mechanism spec and Status.
      same clamped-arrival shape `NpcMarker._process` already uses; pinned
      by `test_approaching_a_close_target_does_not_overshoot_and_orbit_
      forever`.
-  3. **Opportunistic fallen-fruit/nut foraging.** An ant/carrion bug is a
+
+     **Follow-up (2026-09-06): "bugs run to a new leaf instantly then walk
+     back a bit then speed to the next leaf... should wander slowly and
+     eat one when they see it but walk towards it in a realistic
+     motion."** No literal teleport exists anywhere in this file —
+     `position` only ever moves via the two bounded calls above
+     (`move_toward`/`AmbientFlyerMovement.step_position`) — the real,
+     confirmed gap was that `home` never relocated when a decomposer
+     committed to a real target farther away than its own tiny
+     `WANDER_RADIUS_PX` (24px), routinely true since `SEARCH_RADIUS_PX`
+     (60px) is more than double it. Once the decomposer finished eating and
+     returned to SEEKING, the home-anchored wander's containment pull (see
+     `AmbientFlyerMovement.direction_at`) dragged it straight back toward
+     the now-stale original spawn point before it could settle near
+     wherever it actually just ate — read live as "walk back a bit"
+     sandwiched between two fast, sudden beelines. `AmbientFlyerMarker`
+     already solves the identical problem at every one of its own commit
+     sites (worm/fruit/seed/grass-seed: `if _worm_target.distance_to(home)
+     > _movement.radius: home = _worm_target`) — the same fix, applied once
+     at `DecomposerMarker`'s single commit point in `_step_seeking`, now
+     covers carrion/fruit/leaf uniformly. Pinned by
+     `test_committing_to_a_distant_target_relocates_home_there`.
+  4. **Opportunistic fallen-fruit/nut foraging.** An ant/carrion bug is a
      real omnivorous scavenger, not a carrion specialist — and this
      project already has an entirely separate, invisible ant simulation
      (`AntColony`, see `soil_fauna.md`) that eats fallen seeds and windfall
@@ -273,10 +295,16 @@ see that doc's own mechanism spec and Status.
      the time (only cosmetic seasonal ground-tint/canopy color, no real
      leaf-litter entity) — a real prerequisite-free win here was wiring
      the visible ants into fallen fruit, which already existed, rather
-     than building a whole new leaf-litter system speculatively. Leaves
-     have since become a real `FORAGEABLE_GROUP_NAME` item too, needing no
-     further change to this function at all — see
-     [leaf_litter.md](leaf_litter.md).
+     than building a whole new leaf-litter system speculatively. **Leaves
+     have since become a real forage source too — correction, not via
+     `FORAGEABLE_GROUP_NAME` as first assumed here**: leaf litter shipped
+     as GPU-instanced plain data (`LeafLitterField`), never a real
+     `DroppedItem` node, so `_nearest_food` reaches it through a separate
+     injected `_world.nearest_leaf_litter_near`/`consume_leaf_litter_at`
+     query instead (a synthetic, never-added-to-tree `LeafForageHandle`
+     stands in for "the fallen leaf currently being foraged," the one
+     thing `_step_feeding` needs a `position` and a `consume_leaf_litter()`
+     method on) — see [leaf_litter.md](leaf_litter.md).
 - ✅ Real illustrated art for both species (2026-09-05), replacing
   `ProceduralDecomposerSprite`'s drawn silhouettes: `ant.png`/`beetle.png`,
   hand-illustrated walk cycles (`IllustratedDecomposerSprite`, same
