@@ -83,18 +83,23 @@ func test_different_birds_head_off_in_different_directions():
 
 # -- where a dispersed tree seed can root ------------------------------------
 #
-# Delegated to TreeRooting, which is the ONE answer to "can a tree stand here".
-# This module used to keep its own list -- forest and rainforest only -- while
-# ground spread had no check at all, which is how trees ended up standing in a
-# lake. Two rules for one question is the drift this project keeps getting bitten
-# by.
-#
-# Grassland is now included, which is a real widening: a bird carrying seed out
-# into a meadow is most of what bird dispersal is FOR, and a wood that can never
-# leave the wood cannot colonise anything.
+# NOT delegated to TreeRooting, even though that looks like the same
+# question: TreeRooting also answers yes for grassland, because a
+# GROUND-SPREAD tree is allowed to creep out from a forest edge into an
+# adjoining meadow (see TreeRooting's own doc comment) -- a real, correct
+# answer for THAT mechanism. A bird-planted seed is deliberately narrower --
+# forest/rainforest only, the same biomes the map-generated forest already
+# grows in -- matching try_plant_seed_at's own doc comment and
+# docs/concept/flora.md#bird-endozoochory-swallowing-the-seed-not-just-
+# carrying-it's "Where it can land". This module briefly delegated to
+# TreeRooting on the theory that one rule beats two that can drift, which
+# silently widened where a bird could plant a tree past what its own
+# contract ever specified -- caught by
+# test_try_plant_seed_at_fails_outside_forest_or_rainforest in
+# test_earth_chunk_manager.gd.
 
 func test_tree_seed_roots_where_a_tree_can_stand():
-	for biome in ["forest", "rainforest", "grassland"]:
+	for biome in ["forest", "rainforest"]:
 		assert_true(SeedEndozoochory.can_root_in(biome), biome)
 
 
@@ -103,10 +108,16 @@ func test_tree_seed_does_not_root_on_water_or_rock():
 		assert_false(SeedEndozoochory.can_root_in(biome), "%s should not sprout a tree" % biome)
 
 
-## The delegation is the point: one rule, not two that can drift.
-func test_it_gives_the_same_answer_as_the_shared_rooting_rule():
+## Deliberately narrower than the shared ground-spread rule: a bird-planted
+## seed must not establish in grassland even though TreeRooting (ground
+## spread) allows it there -- see the section doc comment above for why
+## these look like the same question but are not. Everywhere else, the two
+## rules still agree.
+func test_it_is_narrower_than_the_shared_ground_spread_rule():
 	var TreeRooting := load("res://src/world/tree_rooting.gd")
-	for biome in ["forest", "rainforest", "grassland", "ocean", "mountain", "desert", "tundra", "x"]:
+	assert_true(TreeRooting.can_root_in("grassland"), "precondition: ground spread allows grassland")
+	assert_false(SeedEndozoochory.can_root_in("grassland"), "a bird-planted seed must not root in grassland")
+	for biome in ["forest", "rainforest", "ocean", "mountain", "desert", "tundra", "x"]:
 		assert_eq(
 			SeedEndozoochory.can_root_in(biome), TreeRooting.can_root_in(biome), biome
 		)

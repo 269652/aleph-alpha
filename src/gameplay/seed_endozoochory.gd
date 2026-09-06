@@ -21,7 +21,6 @@ extends RefCounted
 
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const TreePlacement = preload("res://src/world/tree_placement.gd")
-const TreeRooting = preload("res://src/world/tree_rooting.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 static var _fitness := AnimalFitness.new()
 
@@ -77,16 +76,24 @@ static func carry_direction(carrier_seed: int) -> Vector2:
 
 
 ## Whether a tree seed dropped on `biome_name` can sprout there at all.
-## Delegates to TreeRooting, which is the ONE answer to "can a tree stand
-## here".
 ##
-## This used to keep its own list -- forest and rainforest, where the
-## map-generated forest already grows -- while ground spread had no check at
-## all. Two rules for one question is how this project has repeatedly ended up
-## with a rendered assumption and a simulated one drifting apart, and it also
-## meant a bird could not seed a meadow, which is most of what birds are for.
+## Deliberately its OWN check, not a delegation to TreeRooting: that shared
+## rule also answers yes for grassland, because a GROUND-SPREAD tree is
+## allowed to creep out from a forest edge into an adjoining meadow (see
+## TreeRooting's own doc comment) -- a real, correct answer for THAT
+## mechanism. A bird-planted seed is a narrower question, forest/rainforest
+## only, matching the biomes the map-generated forest already grows in (see
+## docs/concept/flora.md#bird-endozoochory-swallowing-the-seed-not-just-
+## carrying-it's "Where it can land" and try_plant_seed_at's own doc
+## comment). A brief delegation here, on the theory that one rule beats two
+## that can drift, silently widened where a bird could plant a tree past
+## what its own contract ever specified -- caught by
+## test_try_plant_seed_at_fails_outside_forest_or_rainforest in
+## test_earth_chunk_manager.gd; see
+## test_it_is_narrower_than_the_shared_ground_spread_rule for the pinned
+## divergence.
 static func can_root_in(biome_name: String) -> bool:
-	return TreeRooting.can_root_in(biome_name)
+	return TreePlacement.FOREST_BIOMES.has(biome_name)
 
 
 ## Fraction of swallowed GROUND seed -- flower or grass seed picked up bare
