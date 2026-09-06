@@ -18,6 +18,7 @@ const IllustratedDecomposerSprite = preload("res://src/rendering/illustrated_dec
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
+const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 
@@ -411,6 +412,66 @@ func test_never_looks_for_leaf_litter_without_an_injected_world():
 ## The filter has to be real (TreeSpecies.IDS), not "any dropped_item" --
 ## otherwise an ant would wander off eating dropped ore/tools/weapons, which
 ## is not what "ants forage fallen fruit" means.
+# -- mushroom fungivory: a bite marks it bitten, it doesn't destroy it ------
+#
+# Reported: "bugs should forage mushrooms (when a bug takes a bite from a
+# mushroom it should get the bitten flag)". MushroomMarker already joins
+# DroppedItem.FORAGEABLE_GROUP_NAME (see its own doc comment) specifically
+# so a decomposer can find and eat one, but _nearest_food's `is DroppedItem`
+# gate silently skipped it every time -- a MushroomMarker is not one.
+
+class StubMushroomWorld:
+	extends RefCounted
+
+	func bite(_cell: Vector2i) -> bool:
+		return true
+
+
+func _mushroom_at(at: Vector2, species_id: String = "champignon") -> MushroomMarker:
+	var mushroom := MushroomMarker.new()
+	mushroom.species_id = species_id
+	mushroom.position = at
+	mushroom.mushroom_world = StubMushroomWorld.new()
+	add_child_autofree(mushroom)
+	return mushroom
+
+
+func test_finds_and_bites_a_nearby_mushroom_when_theres_no_carrion_or_fruit():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bitten:
+			break
+	assert_true(mushroom.bitten, "a decomposer should have bitten the nearby mushroom")
+
+
+## Unlike fallen fruit (eaten whole, removed) or a carcass (whittled to
+## zero, then removed), biting a mushroom must never remove it -- it stays
+## present and pickable, just diminished (see MushroomMarker.
+## take_mushroom_bite).
+func test_biting_a_mushroom_never_removes_it():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bitten:
+			break
+	assert_false(mushroom.is_queued_for_deletion(), "biting a mushroom must not remove it")
+
+
+## One bite is enough (see WildMushroomPatch.bite) -- an already-bitten
+## mushroom has nothing left to offer, so a decomposer must not waste a
+## trip committing to one.
+func test_an_already_bitten_mushroom_is_never_a_target():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	mushroom.bitten = true
+	for i in 200:
+		marker._process(0.5)
+	assert_eq(
+		marker._behavior.phase, CarrionForageBehavior.Phase.SEEKING,
+		"nothing left to bite -- should keep seeking, never approach"
+	)
+
+
 func test_ignores_a_dropped_item_that_is_not_food():
 	var stone := DroppedItem.new()
 	stone.item_stack = ItemStack.new(Item.new("iron_ore", "Iron Ore", "material", 20), 1)
