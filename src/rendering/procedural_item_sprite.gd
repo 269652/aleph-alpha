@@ -158,6 +158,25 @@ const _ITEM_LOOKS := {
 	# so an empty bottle and an already-jarred catch never read as the same
 	# icon.
 	"glass_bottle": {"color": Color(0.6, 0.82, 0.75), "shape": "jar"},
+	# Wild mushroom species (see MushroomSpecies, docs/concept/mushrooms.md's
+	# fungivory section) -- each color deliberately matches MushroomSpecies.
+	# SPECIES' own cap_color, the same "match the source art's own colour"
+	# precedent cherry/apple/walnut already establish above. The "_bitten"
+	# variant (see MushroomBiting.gd, ItemCatalog) keeps the identical
+	# color -- a bite doesn't recolor a mushroom -- and only sets "bitten"
+	# so _draw_mushroom carves a visible notch out of the cap.
+	"fly_agaric": {"color": Color(0.78, 0.14, 0.1), "shape": "mushroom"},
+	"fly_agaric_bitten": {"color": Color(0.78, 0.14, 0.1), "shape": "mushroom", "bitten": true},
+	"psylo": {"color": Color(0.62, 0.5, 0.34), "shape": "mushroom"},
+	"psylo_bitten": {"color": Color(0.62, 0.5, 0.34), "shape": "mushroom", "bitten": true},
+	"black_trumpet": {"color": Color(0.22, 0.19, 0.17), "shape": "mushroom"},
+	"black_trumpet_bitten": {"color": Color(0.22, 0.19, 0.17), "shape": "mushroom", "bitten": true},
+	"champignon": {"color": Color(0.88, 0.84, 0.74), "shape": "mushroom"},
+	"champignon_bitten": {"color": Color(0.88, 0.84, 0.74), "shape": "mushroom", "bitten": true},
+	"chanterelle": {"color": Color(0.92, 0.68, 0.12), "shape": "mushroom"},
+	"chanterelle_bitten": {"color": Color(0.92, 0.68, 0.12), "shape": "mushroom", "bitten": true},
+	"parasol": {"color": Color(0.72, 0.58, 0.4), "shape": "mushroom"},
+	"parasol_bitten": {"color": Color(0.72, 0.58, 0.4), "shape": "mushroom", "bitten": true},
 }
 const _FALLBACK := {"color": Color(0.6, 0.6, 0.6), "shape": "round"}
 
@@ -225,6 +244,8 @@ func generate_image(item_id: String) -> Image:
 			_draw_jar(image, base)
 		"cage":
 			_draw_cage(image, base)
+		"mushroom":
+			_draw_mushroom(image, base, look.get("bitten", false))
 		_:
 			_draw_blob(image, base, 0.36, 0.36)
 
@@ -504,6 +525,41 @@ func _draw_cage(image: Image, base: Color) -> void:
 			image.set_pixel(x, y, base)
 	_draw_filled_ellipse(image, CAGED_SONGBIRD_COLOR, Vector2(SIZE / 2.0, SIZE * 0.55), SIZE * 0.12, SIZE * 0.1)
 
+
+const MUSHROOM_STEM_COLOR := Color(0.85, 0.8, 0.7)
+
+
+## A mushroom: a domed cap over a short pale stem -- the silhouette every
+## real mushroom shares regardless of species, distinguished by cap COLOR
+## alone (see _ITEM_LOOKS' own mushroom entries). `bitten` carves a small
+## wedge out of the cap's upper-right -- the same real, visible "something
+## has eaten from this" mark MushroomMarker's own bitten sprite swap shows
+## in the world (see docs/concept/mushrooms.md's fungivory section).
+func _draw_mushroom(image: Image, cap_color: Color, bitten: bool) -> void:
+	var cap_center := Vector2(SIZE / 2.0, SIZE * 0.38)
+	var cap_rx := SIZE * 0.34
+	var cap_ry := SIZE * 0.26
+	var bite_center := Vector2(cap_center.x + cap_rx * 0.55, cap_center.y - cap_ry * 0.4)
+	var bite_rx := cap_rx * 0.55
+	var bite_ry := cap_ry * 0.55
+	for y in range(0, int(SIZE * 0.55)):
+		for x in SIZE:
+			var dx := (x + 0.5 - cap_center.x) / cap_rx
+			var dy := (y + 0.5 - cap_center.y) / cap_ry
+			var d := dx * dx + dy * dy
+			if d > 1.0 or dy > 0.15:  # a domed top, flat where the cap meets the stem
+				continue
+			if bitten:
+				var bite_dx := (x + 0.5 - bite_center.x) / bite_rx
+				var bite_dy := (y + 0.5 - bite_center.y) / bite_ry
+				if bite_dx * bite_dx + bite_dy * bite_dy <= 1.0:
+					continue
+			image.set_pixel(x, y, _shade(cap_color, d, dy))
+	var stem_x0 := int(SIZE / 2.0 - SIZE * 0.1)
+	var stem_x1 := int(SIZE / 2.0 + SIZE * 0.1)
+	for y in range(int(SIZE * 0.5), int(SIZE * 0.85)):
+		for x in range(stem_x0, stem_x1):
+			image.set_pixel(x, y, MUSHROOM_STEM_COLOR)
 
 
 ## Base color shaded by radial distance (outline near the rim) and vertical
