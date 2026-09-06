@@ -6910,6 +6910,21 @@ func test_a_finished_forager_frees_its_slot_for_a_new_one():
 ## test_stepping_worms_drives_them_from_the_live_weather_and_season's own
 ## shape exactly. _load_chunk, not the slow real update() (see this
 ## file's own CONTRIBUTING.md note).
+##
+## Deposits a large up-front food reserve before stepping (2026-09-06,
+## see AntColony.food_availability_fraction, added by the food-economy
+## pass after this test was first written): capacity_at now gates its
+## weather/forage-luck capacity by the mound's own real, depleting food
+## stockpile, so 20 unfed steps would starve that reserve down and
+## confound the one signal this test actually cares about -- exactly the
+## "keeps depositing food throughout" isolation
+## test_dispatches_a_second_forager_once_the_mounds_own_cap_allows_it
+## above already needed for the same reason. deposit_food, not
+## record_forage_result: the latter would also perturb the recent-
+## forage-success EMA capacity() reads, which must stay at its unfed 0.0
+## default for expected_capacity below to hold -- the same per-signal
+## isolation test_ant_colony.gd's own capacity_at tests (moisture-only,
+## food-only, both) already rely on.
 func test_stepping_ants_drives_capacity_from_the_live_weather():
 	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
 	manager._load_chunk(chunk_coord)
@@ -6918,6 +6933,18 @@ func test_stepping_ants_drives_capacity_from_the_live_weather():
 		pending("no real ant mound landed in this chunk this seed -- placement is probabilistic")
 		return
 	var cell: Vector2i = colony.mound_cells()[0]
+
+	# An upper bound on what the whole run below could ever consume: every
+	# mound eating at once, at the highest population capacity_at can ever
+	# produce, for the whole run's elapsed simulated time -- times 10 for
+	# headroom, so this reserve can never be the thing that runs out.
+	var total_simulated_days := (
+		20 * (EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0) / AntColony.SECONDS_PER_SIMULATED_DAY
+	)
+	colony.deposit_food(
+		cell,
+		AntPopulationModel.MAX_REFERENCE_POPULATION * AntPopulationModel.FOOD_PER_ANT_PER_DAY * total_simulated_days * 10.0
+	)
 
 	# Several refresh-interval-sized steps, not one -- record_moisture is an
 	# EMA (see AntColony.MOISTURE_EMA_RATE), so a single sample only moves
