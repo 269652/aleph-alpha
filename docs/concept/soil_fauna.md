@@ -1256,7 +1256,7 @@ rule as every wild animal, rather than a parallel, separately-capped UI.
   exactly, including `PheromoneField.best_candidate_index` — a real,
   previously-successful spot's own trail can now outweigh a marginally
   closer, never-visited leaf, the same recruitment effect seed/windfall
-  foraging already had. Deliberately NOT built: a genuine random-explore/
+  foraging already had. ~~Deliberately NOT built: a genuine random-explore/
   wander phase before a target is even known — every forage kind in this
   simulation (seed, windfall, leaf alike) is architected around the colony
   already having found a real, reachable candidate before ever dispatching
@@ -1265,9 +1265,16 @@ rule as every wild animal, rather than a parallel, separately-capped UI.
   known target yet" scout behaviour would be a materially bigger,
   cross-cutting change to that shared architecture, not a leaf-specific
   fix — left as a separate, explicitly named follow-up rather than
-  attempted here. With no trail yet (a colony's first-ever leaf forage,
-  or after one has fully decayed), `best_candidate_index` still falls back
-  to pure nearest-candidate selection, same as before this fix.
+  attempted here.~~ **Partially resolved (2026-09-06) — see "Scouts mark
+  leaf clusters, workers collect from marks" below.** A real scout/worker
+  split now exists, but the SEEKING-phase gap named above is still
+  genuinely open: a "scout" is still dispatched to an already-known
+  candidate exactly like an ordinary forager, just one found at a wider
+  radius — there remains no true "wanders with no target at all yet"
+  behaviour anywhere in this simulation. With no trail yet (a colony's
+  first-ever leaf forage, or after one has fully decayed),
+  `best_candidate_index` still falls back to pure nearest-candidate
+  selection, same as before this fix.
 - **Mound COUNT is still fixed and deterministic per chunk** (see "A queen,
   and where a colony's size comes from" above for what is no longer fixed
   — each mound's own population now genuinely grows or stalls with real
@@ -1302,6 +1309,111 @@ rule as every wild animal, rather than a parallel, separately-capped UI.
   INITIAL population at an established range instead of the bare
   minimum — see above. Real persistence/catch-up remains open, now
   honestly scoped rather than mis-justified as unnecessary.
+
+### A real food stock number, not just a percentage, on hover
+
+Requested directly: "the ant mount should show how much food is on stock
+in the hover tooltip." "A mound's own hover panel" above already reads
+`food_availability_fraction` — a derived 0-1 RATIO (stored ÷ what the
+current population needs for a healthy buffer) — as a percentage bar,
+which answers "is this colony food-secure," a genuinely different
+question from "how much is actually in the larder." `AntColony.
+food_stored_at(cell)` has held that raw absolute quantity since the food
+economy landed (see above) but was never plumbed through to either hover
+surface. Added to `AntMoundMarker.get_display_name()` (the plain
+mouse-hover NAME tooltip, via `HoverTargetFinder`) rather than the bar
+panel: that surface already establishes the exact "interpolate a real
+number into hover text" pattern for population
+(`"Ant Mound (population %d)"`), so the stock number joins it there —
+`"Ant Mound (population %d, food %d)"` — rather than teaching the shared,
+every-creature `CreaturePanel` a second number format for one species.
+The bar panel's own percentage is untouched; the two hover surfaces stay
+complementary, not duplicated.
+
+### Scouts mark leaf clusters, workers collect from marks
+
+Requested directly: "the mound should send out more ants for scouting
+which mark clusters of leaves ... and then workers are sent out to
+collect marked clusters and invalidated when its empty." Scoped to leaf
+litter specifically (the explicit example given, and the one real
+"clusters" naturally form in this simulation — see leaf_litter.md's own
+GPU-instanced point-record shape); generalizing to seed/windfall clusters
+is a reasonable, separable follow-up, not attempted here.
+
+**Landed alongside, then rebuilt on top of, "Scouting: real search, not
+omniscient dispatch" above** — both were in flight the same day. The
+first version of this section marked a cluster by pre-scanning a wider
+`SCOUT_RADIUS_TILES` from the mound before ever dispatching anyone — the
+exact "every candidate within reach, from a stationary point" shape the
+real-scouting rework above was busy removing for the identical reason
+("no omniscience please"). Once real scouting landed on `main`, this was
+rebuilt to fit it rather than reintroducing the pattern it was built to
+remove: **not a second, separate scout dispatch at all** — the mound's
+own real scout (`AntForagerMarker.scout`, see above) already wanders,
+senses locally, and finds individual food on its own. This adds exactly
+one thing to that existing trip: on a SUCCESSFUL leaf pickup, check
+whether real leaves are still there once this one is gone
+(`AntColony.CLUSTER_MIN_LEAVES` (3) or more within the ordinary
+`FORAGE_RADIUS_TILES` of the spot just picked from) and, if so, mark it
+(`AntColony.mark_cluster`) — the same "on the way back" moment
+`deposit_pheromone` already marks a single tile at (see "Pheromone
+trails" above — this is a second, coarser, ENUMERABLE concept alongside
+that one, not a replacement for it: a continuous decaying field can't
+answer "list every place worth sending a dedicated worker," only "how
+strong is the trail exactly here"). A WORKER's own trip (`scout ==
+false`, see below) never re-marks on arrival — only a real scout's own
+fresh discovery counts.
+
+`AntColony._cluster_marks` (`Dictionary`, mound cell -> `Array[Vector2]`)
+is a mound's own remembered cluster positions, capped at
+`MAX_CLUSTER_MARKS_PER_MOUND` (3) — a mound already at its limit ignores
+a newly-found cluster rather than evicting an older, possibly still-
+productive one. `EarthChunkManager._dispatch_cluster_workers` (new)
+sends a worker straight at EVERY mark a mound currently holds, once per
+`should_forage` tick — constructing `AntForagerMarker` directly with an
+already-known `target_position` (`scout` left at its own default,
+`false`), the exact shape every real dispatch used before real scouting
+existed and still fully supports. It re-verifies each mark's own area is
+still real and non-empty FIRST (`leaf_litter_near(mark_position,
+FORAGE_RADIUS_TILES)`), the same "never trust a stale record, look at
+the real world again before dispatching" convention this file's forage
+functions have always followed, picking whichever real leaf is still
+there (no `PheromoneField.best_candidate_index` any more — removed
+alongside the rest of the old omniscient dispatch; a small,
+already-confirmed cluster has nothing left to score a trail against).
+**Invalidated when its empty**, exactly as requested: a mark whose area
+has genuinely run dry is removed (`AntColony.invalidate_cluster_mark`)
+instead of sending a worker after it — a real state check tied to actual
+food presence, a different mechanism from `PheromoneField.decay`'s own
+pure real-time clock, which has no idea whether what it once marked is
+still there.
+
+**Workers genuinely ADD ants, not just re-purpose existing ones** — the
+literal "send out MORE ants" ask, now delivered by the worker half alone
+(ordinary scouting already covers "more ants exploring" as a baseline,
+per the rework above). `_dispatch_cluster_workers` lands in its own
+SEPARATE tracking bucket and cap
+(`EarthChunkManager._active_ant_scouts_and_workers` /
+`AntColony.active_cluster_ant_cap_at`, mirroring `active_forager_cap_at`'s
+own population-scaled shape against a smaller, separate ceiling,
+`MAX_CONCURRENT_CLUSTER_ANTS` (5) rather than `MAX_CONCURRENT_FORAGERS`
+(15) — a real cluster is rarer than an ordinary single item, so this pool
+doesn't need the same headroom) — so a mound already running its full
+scout complement can still send workers on top of that, rather than the
+two competing for the same slots.
+
+**What this does NOT include**, named rather than silently dropped: no
+visual distinction between a worker and an ordinary scout (both are the
+identical `AntForagerMarker`, same art, same walk — a worker just starts
+with `target_position` already known instead of discovering it). No seed/
+windfall cluster marking (leaf-only, see above). No cap on how many
+DIFFERENT clusters can be found per unit time beyond the ordinary
+scouting cadence and `MAX_CLUSTER_MARKS_PER_MOUND` ceiling. And the
+underlying SEEKING-phase gap the real-scouting rework closed for
+ORDINARY foraging does not extend to workers — a worker is deliberately
+sent straight at an already-known mark, never wandering to find one, the
+same "real ants remember and return to a known-good source" reasoning
+pheromone recruitment already relies on.
 
 
 ## Crawling out, and back down

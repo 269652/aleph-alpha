@@ -368,8 +368,21 @@ func _face(direction: Vector2) -> void:
 ## Real arrival at the food's own position: take it for real (re-checked
 ## HERE, not guaranteed by having been dispatched at all -- something else
 ## may have taken it first) and, on success, mark the spot with this
-## mound's own trail pheromone so the NEXT dispatched forager can be drawn
-## back to a known-good source (see PheromoneField).
+## mound's own trail pheromone so the next dispatched scout's own local
+## sensing is more likely to be drawn back to a known-good source (see
+## PheromoneField).
+##
+## A successful LEAF pickup by a real SCOUT (`scout`) additionally checks
+## whether real leaves are still there once this one is gone (see
+## docs/concept/soil_fauna.md "Scouts mark leaf clusters, workers collect
+## from marks") -- AntColony.CLUSTER_MIN_LEAVES or more remaining within
+## FORAGE_RADIUS_TILES marks the spot as a real cluster worth a dedicated
+## worker trip later (EarthChunkManager._dispatch_cluster_workers), rather
+## than the ordinary single find this trip already resolved on its own. A
+## WORKER (`scout == false`, sent straight at an already-known mark) never
+## re-marks on arrival -- only a real scout's own fresh discovery counts,
+## the same "on the way back" moment pheromone deposit already marks a
+## single tile at.
 func _resolve_arrival_at_food() -> void:
 	var succeeded := false
 	if _world != null:
@@ -381,8 +394,13 @@ func _resolve_arrival_at_food() -> void:
 		else:
 			succeeded = _world.take_grass_seed_at(target_position)
 	_behavior.arrive_at_food(succeeded)
-	if succeeded and _colony != null:
-		_deposit_pheromone_at(target_position)
+	if not succeeded or _colony == null:
+		return
+	_deposit_pheromone_at(target_position)
+	if scout and forage_kind == "leaf" and _world != null:
+		var reach := AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
+		if _world.leaf_litter_near(target_position, reach).size() >= AntColony.CLUSTER_MIN_LEAVES:
+			_colony.mark_cluster(_mound_cell, target_position)
 
 
 func _deposit_pheromone_at(pixel_position: Vector2) -> void:

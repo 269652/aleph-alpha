@@ -312,6 +312,39 @@ var _pheromones: Dictionary = {}
 ## actually starts with.
 const MAX_CONCURRENT_FORAGERS := 15
 
+## How many leaves within FORAGE_RADIUS_TILES of a real scout's own find
+## (see docs/concept/soil_fauna.md "Scouts mark leaf clusters, workers
+## collect from marks") count as a real CLUSTER worth marking for
+## dedicated worker trips, rather than the ordinary single pickup any
+## scout already resolves on its own. Deliberately reuses
+## FORAGE_RADIUS_TILES rather than a second, independently-tuned reach --
+## a real scout's own local sensing (AntColony.SENSE_RADIUS_TILES) is
+## what finds the food in the first place now (see "Scouting: real
+## search, not omniscient dispatch"); this only asks whether MORE turns
+## out to be nearby once something real is already in hand, at the same
+## "immediate vicinity" scale this codebase already has a name for.
+const CLUSTER_MIN_LEAVES := 3
+
+## How many clusters one mound remembers at once -- a hard cap so a
+## colony's own memory can't grow without bound if scouts keep finding
+## clusters faster than workers clear them. A mound already remembering
+## its max ignores a newly-scouted cluster rather than evicting an older,
+## possibly still-productive mark.
+const MAX_CLUSTER_MARKS_PER_MOUND := 3
+
+## How many scouts+workers this mound may have concurrently active,
+## SEPARATELY from MAX_CONCURRENT_FORAGERS -- requested directly ("send
+## out MORE ants for scouting"), so this genuinely adds concurrent ants
+## rather than competing with ordinary foragers for the same
+## active_forager_cap_at slots. Smaller than MAX_CONCURRENT_FORAGERS: not
+## every tick finds a cluster-worthy patch to begin with, so this pool
+## doesn't need the same ceiling ordinary, near-constant foraging does.
+const MAX_CONCURRENT_CLUSTER_ANTS := 5
+
+## Vector2i mound cell -> Array[Vector2] (real pixel positions of clusters
+## this mound currently remembers -- see mark_cluster).
+var _cluster_marks: Dictionary = {}
+
 
 func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
 	_seed_value = seed_value
@@ -527,6 +560,18 @@ func active_forager_cap_at(cell: Vector2i) -> int:
 	return clampi(roundi(fraction * MAX_CONCURRENT_FORAGERS), 1, MAX_CONCURRENT_FORAGERS)
 
 
+## The scout/worker sibling of active_forager_cap_at -- identical
+## population-scaled shape, against the separate MAX_CONCURRENT_CLUSTER_
+## ANTS ceiling (see that constant's own doc comment on why it is smaller
+## and separate).
+func active_cluster_ant_cap_at(cell: Vector2i) -> int:
+	var capacity := capacity_at(cell)
+	if capacity <= 0.0:
+		return 1
+	var fraction := population_at(cell) / capacity
+	return clampi(roundi(fraction * MAX_CONCURRENT_CLUSTER_ANTS), 1, MAX_CONCURRENT_CLUSTER_ANTS)
+
+
 ## This mound's own trail pheromone field, or null if it has never laid
 ## one down -- a pure read, so a scouting forager sensing a local gradient
 ## (see PheromoneField.gradient_direction, called only when this is
@@ -534,6 +579,39 @@ func active_forager_cap_at(cell: Vector2i) -> int:
 ## allocation just to find a mound has no trail yet.
 func pheromones_at(cell: Vector2i) -> PheromoneField:
 	return _pheromones.get(cell)
+
+
+## Marks a leaf cluster centred at `position` (a real pixel position,
+## already confirmed by the caller -- see EarthChunkManager._scout_for_
+## leaf_cluster_near_mound -- to have at least CLUSTER_MIN_LEAVES nearby)
+## as a known target for this mound's own worker dispatch. Capped at
+## MAX_CLUSTER_MARKS_PER_MOUND -- a mound already remembering its max
+## ignores a new one rather than evicting an older, possibly still-
+## productive mark.
+func mark_cluster(cell: Vector2i, position: Vector2) -> void:
+	var marks: Array = _cluster_marks.get(cell, [])
+	if marks.size() >= MAX_CLUSTER_MARKS_PER_MOUND:
+		return
+	marks.append(position)
+	_cluster_marks[cell] = marks
+
+
+## This mound's own remembered cluster positions, or an empty array if it
+## has never marked one (or every mark has since been invalidated).
+func cluster_marks_at(cell: Vector2i) -> Array:
+	return _cluster_marks.get(cell, [])
+
+
+## Forgets one marked cluster -- called once a fresh dispatch check
+## confirms its leaves are actually gone (see EarthChunkManager._dispatch_
+## cluster_workers). A no-op, not an error, for a position that was never
+## marked (or already invalidated) -- the same forgiving "just try and let
+## this decide" contract every other per-cell record in this class already
+## has.
+func invalidate_cluster_mark(cell: Vector2i, position: Vector2) -> void:
+	var marks: Array = _cluster_marks.get(cell, [])
+	marks.erase(position)
+	_cluster_marks[cell] = marks
 
 
 ## Deposits into this mound's own trail field, creating it on first use.

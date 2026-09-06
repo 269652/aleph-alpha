@@ -329,6 +329,79 @@ func test_a_failed_trip_deposits_no_pheromone():
 	assert_null(colony.pheromones_at(MOUND_CELL), "nothing was found, so there is nothing to recruit toward")
 
 
+# -- scouting: a successful scout trip also checks for and marks a real
+# CLUSTER (see docs/concept/soil_fauna.md "Scouts mark leaf clusters,
+# workers collect from marks") ------------------------------------------
+
+func test_a_successful_scout_trip_marks_a_real_cluster():
+	var world := StubWorld.new()
+	for i in AntColony.CLUSTER_MIN_LEAVES:
+		world.nearby_leaves.append({"position": Vector2(3000 + i, 3000), "species": "cherry", "season": "autumn"})
+	var colony := _new_colony()
+	var target := Vector2(3000, 3000)
+	var f := _spawned(target, Vector2(3002, 3000), world, colony)
+	f.forage_kind = "leaf"
+	f.scout = true
+	f._process(1.0)  # arrive and take the leaf
+	assert_eq(colony.cluster_marks_at(MOUND_CELL), [target])
+
+
+## A single find with nothing else nearby is the ordinary case any leaf
+## trip already resolves on its own -- not every successful scout trip
+## turns up a real cluster.
+func test_a_successful_scout_trip_below_the_cluster_minimum_marks_nothing():
+	var world := StubWorld.new()  # nearby_leaves stays empty -- just the one taken
+	var colony := _new_colony()
+	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
+	f.forage_kind = "leaf"
+	f.scout = true
+	f._process(1.0)
+	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty(), "one lone leaf is not a cluster")
+
+
+## A WORKER (scout == false, sent straight at an already-known mark) never
+## re-marks on arrival, even with real leaves still nearby -- only a real
+## scout's own fresh discovery counts.
+func test_a_non_scout_leaf_trip_never_marks_a_cluster():
+	var world := StubWorld.new()
+	for i in AntColony.CLUSTER_MIN_LEAVES:
+		world.nearby_leaves.append({"position": Vector2(3000 + i, 3000), "species": "cherry", "season": "autumn"})
+	var colony := _new_colony()
+	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
+	f.forage_kind = "leaf"
+	f.scout = false
+	f._process(1.0)
+	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty(), "a worker's own trip must not mark a cluster")
+
+
+func test_a_failed_scout_trip_marks_no_cluster():
+	var world := StubWorld.new()
+	world.leaf_present = false
+	for i in AntColony.CLUSTER_MIN_LEAVES:
+		world.nearby_leaves.append({"position": Vector2(3000 + i, 3000), "species": "cherry", "season": "autumn"})
+	var colony := _new_colony()
+	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
+	f.forage_kind = "leaf"
+	f.scout = true
+	f._process(1.0)
+	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty(), "nothing was found, so there is no cluster to mark")
+
+
+## A scout dispatched for seed/windfall still never marks a cluster --
+## marking is scoped to real leaf trips only (see docs/concept/
+## soil_fauna.md's own "leaf-only" scope note).
+func test_a_successful_scout_trip_for_a_non_leaf_kind_marks_no_cluster():
+	var world := StubWorld.new()
+	for i in AntColony.CLUSTER_MIN_LEAVES:
+		world.nearby_leaves.append({"position": Vector2(3000 + i, 3000), "species": "cherry", "season": "autumn"})
+	var colony := _new_colony()
+	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
+	f.forage_kind = "seed"
+	f.scout = true
+	f._process(1.0)
+	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty())
+
+
 # -- the queen hears about it: arrival records the real outcome ------------
 
 func test_arriving_home_records_the_forage_result_with_the_colony():

@@ -709,6 +709,16 @@ var _ant_mound_markers: Dictionary = {}
 ## alive. Keyed globally (not per-chunk) since a mound's own identity
 ## (chunk_coord*CHUNK_SIZE + cell) is already a stable global tile.
 var _active_ant_foragers: Dictionary = {}
+
+## SEPARATE tracking for scouts+workers (see docs/concept/soil_fauna.md
+## "Scouts mark leaf clusters, workers collect from marks") -- same
+## Vector2i global_tile -> Array[AntForagerMarker] shape as
+## _active_ant_foragers, but genuinely a different bucket, capped against
+## AntColony.active_cluster_ant_cap_at rather than active_forager_cap_at,
+## so scouting/collecting ADDS concurrent ants instead of competing with
+## ordinary foraging for the same slots (the literal "send out MORE ants"
+## ask).
+var _active_ant_scouts_and_workers: Dictionary = {}
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_ambient_flyers: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
@@ -7296,6 +7306,13 @@ func step_ants(delta_seconds: float) -> void:
 			if not colony.should_forage(cell):
 				continue
 			_dispatch_ant_scout(colony, origin, cell)
+			# Worker dispatch (see docs/concept/soil_fauna.md "Scouts mark
+			# leaf clusters, workers collect from marks") -- genuinely
+			# SEPARATE from ordinary scouting above (its own tracking
+			# bucket/cap, see _dispatch_cluster_workers' own doc comment),
+			# so it runs on every qualifying tick regardless of whether a
+			# scout was also just dispatched this same tick.
+			_dispatch_cluster_workers(colony, origin, cell)
 
 	_ant_moisture_refresh_accumulator += delta_seconds
 	if _ant_moisture_refresh_accumulator < WORM_REFRESH_INTERVAL:
@@ -7402,6 +7419,75 @@ func _dispatch_ant_scout(colony: AntColony, origin: Vector2i, cell: Vector2i) ->
 	_entities_parent.add_child(forager)
 	active.append(forager)
 	_active_ant_foragers[global_tile] = active
+
+
+## Dispatches a worker straight at an already-known cluster mark (see
+## AntColony.mark_cluster/cluster_marks_at, docs/concept/soil_fauna.md
+## "Scouts mark leaf clusters, workers collect from marks") -- unlike
+## _dispatch_ant_scout above, this is NOT omniscient about food it has
+## never encountered: a mark only ever exists because a real scout
+## already visited that spot and found it productive (see
+## AntForagerMarker._resolve_arrival_at_food's own cluster-marking side
+## effect), the same "a known-good source, not an ungrounded search" real
+## recruitment already gives pheromone-biased scouting. Re-verifies each
+## mark's own area is still real and non-empty FIRST
+## (leaf_litter_near at the ordinary FORAGE_RADIUS_TILES reach) -- the
+## same "never trust a stale record, look at the real world again before
+## dispatching" convention this file's other forage functions have
+## always followed -- and invalidates a mark that has genuinely run dry
+## instead of sending a worker after it, exactly as requested
+## ("invalidated when its empty"). Picks the nearest real leaf still
+## there rather than PheromoneField.best_candidate_index (removed
+## alongside the rest of the old omniscient dispatch, see
+## _dispatch_ant_scout's own doc comment) -- a small, already-confirmed
+## cluster area has nothing left to score a trail against.
+##
+## Tracked in its own SEPARATE _active_ant_scouts_and_workers/
+## active_cluster_ant_cap_at pool -- a worker genuinely ADDS to a mound's
+## own ant traffic beyond ordinary scouting, not a re-purposing of the
+## same active_forager_cap_at slots _dispatch_ant_scout already competes
+## for. Constructs AntForagerMarker directly with a known target (`scout`
+## stays false, its own default) -- the exact shape every real dispatch
+## used before real scouting existed, still fully supported (see that
+## class's own doc comment on target_position/scout).
+func _dispatch_cluster_workers(colony: AntColony, origin: Vector2i, cell: Vector2i) -> void:
+	if _entities_parent == null:
+		return
+	var global_tile: Vector2i = origin + cell
+	var active: Array = _active_ant_scouts_and_workers.get(global_tile, [])
+	active = active.filter(func(f): return is_instance_valid(f) and not f.is_queued_for_deletion())
+	var mound_pixel := Vector2(
+		float(global_tile.x) + 0.5, float(global_tile.y) + 0.5
+	) * float(TerrainRenderer.TILE_SIZE)
+	var reach := AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
+	for mark_position in colony.cluster_marks_at(cell):
+		var nearby := leaf_litter_near(mark_position, reach)
+		if nearby.is_empty():
+			colony.invalidate_cluster_mark(cell, mark_position)
+			continue
+		if active.size() >= colony.active_cluster_ant_cap_at(cell):
+			break
+		var found: Dictionary = nearby[0]
+		var forager := AntForagerMarker.new()
+		forager.target_position = found.position
+		forager.mound_position = mound_pixel
+		forager.forage_kind = "leaf"
+		forager.carried_leaf_species = found.get("species", "")
+		forager.carried_leaf_season = found.get("season", "")
+		forager.position = mound_pixel
+		forager.setup(self, colony, cell)
+		_entities_parent.add_child(forager)
+		active.append(forager)
+	# Only touches the dictionary when there is something real to record --
+	# an unconditional write here would plant a stale EMPTY array under a
+	# mound that never actually got a worker, which reads as "something is
+	# out" to any caller that only checks .has(global_tile) (see
+	# test_dispatch_cluster_workers_invalidates_a_mark_whose_area_has_run_
+	# dry, which caught exactly this).
+	if not active.is_empty():
+		_active_ant_scouts_and_workers[global_tile] = active
+	elif _active_ant_scouts_and_workers.has(global_tile):
+		_active_ant_scouts_and_workers.erase(global_tile)
 
 
 ## Inches every surfaced worm along, every frame, and keeps its animation

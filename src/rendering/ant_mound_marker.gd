@@ -109,10 +109,22 @@ func _process(delta: float) -> void:
 ## a colony is wired up (see "What the player actually sees" in that same
 ## doc section); falls back to the plain name otherwise, the same
 ## optional-world fallback every accessor on this marker already uses.
+##
+## Also reports the real STORED food quantity (`food_stored_at`), not
+## `panel_state`'s own derived percentage -- requested directly ("the ant
+## mount should show how much food is on stock in the hover tooltip", see
+## docs/concept/soil_fauna.md "A real food stock number, not just a
+## percentage, on hover"): a fraction answers "is this colony food-secure",
+## a genuinely different question from "how much is actually in the
+## larder". Joins this same tooltip (not the bar panel) since this is
+## already where a raw number is interpolated into hover text, for
+## population.
 func get_display_name() -> String:
 	if _colony == null:
 		return "Ant Mound"
-	return "Ant Mound (population %d)" % int(round(_colony.population_at(_cell)))
+	return "Ant Mound (population %d, food %d)" % [
+		int(round(_colony.population_at(_cell))), int(round(_colony.food_stored_at(_cell)))
+	]
 
 
 ## For World's real hover panel (see docs/concept/soil_fauna.md "A mound's

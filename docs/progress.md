@@ -8914,6 +8914,68 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   depositing food throughout" isolation the five tests mentioned above
   already needed, for the identical reason. No production code changed.
   Full writeup: [soil_fauna.md](concept/soil_fauna.md#a-real-food-economy-storage-upkeep-and-fewer-bigger-hungrier-colonies).
+- ✅ **Real food stock (not just a percentage) on hover, and scouts that
+  mark leaf clusters for dedicated workers (2026-09-06)** — requested
+  directly: (1) "the ant mount should show how much food is on stock in
+  the hover tooltip", (2) "the mound should send out more ants for
+  scouting which mark clusters of leaves ... and then workers are sent
+  out to collect marked clusters and invalidated when its empty".
+  1. **`AntMoundMarker.get_display_name()`** now reports
+     `AntColony.food_stored_at` (the real absolute quantity, already
+     existed, never surfaced) alongside population —
+     `"Ant Mound (population 15, food 45)"` — joining the mouse-hover
+     tooltip rather than the bar panel above, which already answers a
+     different question ("is this colony food-secure", a 0-1 fraction)
+     than "how much is in the larder" (a raw number).
+  2. **`AntColony._cluster_marks`** (new, `mark_cluster`/
+     `cluster_marks_at`/`invalidate_cluster_mark`) — a mound's own
+     remembered leaf-cluster positions, capped at
+     `MAX_CLUSTER_MARKS_PER_MOUND` (3). A second, coarser, ENUMERABLE
+     concept alongside the existing `PheromoneField` trail (a continuous
+     decaying field can answer "how strong is the trail exactly here",
+     never "list every place worth sending a dedicated worker").
+  3. **`AntForagerMarker._resolve_arrival_at_food`** now also checks, on
+     a successful real-scout (`scout == true`) leaf pickup, whether real
+     leaves are still there once this one is gone
+     (`AntColony.CLUSTER_MIN_LEAVES`, 3, within the ordinary
+     `FORAGE_RADIUS_TILES`) and marks the spot (`AntColony.mark_cluster`)
+     if so — the same "on the way back" moment `deposit_pheromone`
+     already marks a single tile at. A worker's own trip (`scout ==
+     false`) never re-marks.
+  4. **`EarthChunkManager._dispatch_cluster_workers`** (new) sends a
+     worker straight at every mark a mound holds, re-verifying each is
+     still real and non-empty FIRST — an empty one is invalidated
+     instead of dispatched to, exactly as requested.
+  5. **Genuinely ADDS ants, not just re-purposes existing ones** — the
+     literal "send out MORE ants" ask, delivered by the worker half
+     (ordinary scouting already means "more ants exploring" as a
+     baseline). `_dispatch_cluster_workers` lands in its own SEPARATE
+     tracking bucket and cap (`_active_ant_scouts_and_workers` /
+     `AntColony.active_cluster_ant_cap_at`, mirroring
+     `active_forager_cap_at`'s own population-scaled shape against a
+     smaller, separate ceiling, `MAX_CONCURRENT_CLUSTER_ANTS` (5) vs.
+     `MAX_CONCURRENT_FORAGERS` (15)) — so a mound already running its
+     full scout complement can still send workers on top of that.
+  **Landed the same day as, then rebuilt on top of, "Real scouting
+  replaces omniscient dispatch entirely"** (see that entry below): the
+  first version of this pass pre-scanned a wider radius from the mound
+  before ever dispatching a scout — exactly the "every candidate within
+  reach, from a stationary point" shape that entry's own "no omniscience
+  please" report was busy removing. Rebuilt once that landed to fit it
+  instead of reintroducing the pattern: no separate scout dispatch
+  exists any more at all — the mound's real scout already wanders and
+  finds food on its own; this only adds the cluster-check-and-mark step
+  to its existing successful pickup, and a genuinely new worker dispatch
+  that goes straight at a mark instead of wandering to find one. Scoped
+  to leaf litter only (the explicit example given); no visual
+  distinction between a worker and an ordinary scout (both are the
+  identical `AntForagerMarker`). New/rewritten coverage in
+  `test_ant_colony.gd`, `test_ant_forager_marker.gd`,
+  `test_ant_mound_marker.gd`, and `test_earth_chunk_manager.gd`
+  (scout/cluster/forage-substring regression sweeps all green) confirm
+  this sits cleanly alongside the real-scouting rework rather than
+  duplicating or conflicting with it. Full writeup:
+  [soil_fauna.md](concept/soil_fauna.md#scouts-mark-leaf-clusters-workers-collect-from-marks).
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to
