@@ -1711,3 +1711,59 @@ first pass in this doc uses:
   call, but nothing in `CaterpillarMarker` ever asks for it yet — the same
   "measured and available, not yet wired to a real trigger" gap this
   doc's own kingfisher-adjacent rows have had before being closed later.
+
+## Caterpillars actually climb, and move a third as fast (2026-09-06)
+
+Requested directly, watching a live game session: *"Caterpillars should
+crawl up trees also they should be 66% slower"*, clarified immediately
+after — *"1/3 of the speed"*. Two independent tweaks to the same creature,
+landed together.
+
+**Speed: `CaterpillarMarker.WALK_SPEED` becomes `14.0 / 3.0`** (not a
+rounded `14.0 * 0.34` — "1/3 of the speed" is an exact fraction, so the
+constant is too). Every other movement-timing constant in this file
+already derives FROM `WALK_SPEED` rather than duplicating it —
+`WANDER_DIRECTION_CHANGE_INTERVAL_SECONDS`'s own doc comment says so
+explicitly ("keeps this in proportion automatically") — so ambient wander
+and the committed walk to a food source both slow down in the same 3x
+proportion with no second constant to touch.
+
+**Climbing closes the "No canopy-height offset" gap named directly above**
+(the previous pass's own "What this does NOT include"): a caterpillar
+approaching or eating at a tree now visually rises up the trunk rather
+than staying pinned to the same trunk-foot ground level every other perch
+in this codebase uses. New `CaterpillarMarker._climb_height_px` rises
+toward a new `CLIMB_HEIGHT_PX` (`TILE_SIZE`, 16px — roughly one tile's
+worth up the trunk, not into the canopy proper: a real caterpillar grazes
+low branches and the trunk itself at least as often as the crown, and a
+modest climb reads clearly without this file needing to know anything
+about `ProceduralTreeSprite`'s own canopy dimensions, a dependency this
+class has deliberately never had) at the same `WALK_SPEED` pace ground
+movement uses, for as long as `_target_is_tree` is true and the phase
+isn't SEEKING — i.e. rising through the walk there (the same phase the
+`climb` sprite pose is already shown for, see `_current_action`) and
+holding through EATING, then settling back to 0 once the phase returns to
+SEEKING. A leaf-litter visit never climbs at all: `_target_is_tree` stays
+false the whole time, so the target height is always 0.
+
+**Purely a sprite offset (`_sprite.position.y = -_climb_height_px`), never
+the node's own `.position`** — the same "a plain position + a which-kind
+flag is everything approach/eat need" reasoning the class doc comment
+already draws for why a tree target needs no live node reference at all.
+`_step_approaching`'s arrival check, `_nearest_food`'s distance
+comparisons, and anything that might Y-sort a caterpillar in the future
+all keep reading the real ground tile the caterpillar is logically
+standing on — a caterpillar visually eight pixels up a trunk is still, as
+far as every other system in this game is concerned, standing exactly
+where it always was. Named, not silently accepted: a caterpillar climbing
+a tall gap in a real forest can end up drawn slightly out of its usual
+draw-order relationship with the trunk it's climbing — a minor visual
+layering wrinkle, not a logic bug, and not attempted here.
+
+New tests in `test_caterpillar_marker.gd` pin `_climb_height_px` actually
+rising while approaching/eating at a tree, settling back to 0 once
+finished, and staying at 0 for a leaf-litter visit throughout; `test_
+caterpillar_forage_behavior.gd`/existing `test_caterpillar_marker.gd`
+cases needed no changes — nothing about phase transitions, arrival
+distance, or eating/bite timing moved, only how fast the walk covers
+ground and where the sprite draws while it does.

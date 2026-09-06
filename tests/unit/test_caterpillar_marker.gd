@@ -131,8 +131,15 @@ func test_climbs_and_eats_at_a_nearby_tree():
 			ate = true
 			break
 	assert_true(ate, "a caterpillar with a real tree nearby should climb it and eat")
-	assert_almost_eq(
-		marker.position, tree_position, Vector2.ONE * 2.0,
+	# The real, intentional arrival contract is ARRIVE_DISTANCE_PX (see
+	# _step_approaching) -- not a tighter, arbitrary number. A slower
+	# WALK_SPEED (2026-09-06, requested "1/3 of the speed") takes finer
+	# steps on the final approach, so the exact position the instant
+	# arrival triggers can legitimately land anywhere up to that real
+	# radius, not snap almost exactly onto the target the way a single
+	# large fast-speed step used to.
+	assert_lte(
+		marker.position.distance_to(tree_position), CaterpillarMarker.ARRIVE_DISTANCE_PX,
 		"it should actually be at the tree while eating, not merely EATING in name"
 	)
 
@@ -165,6 +172,65 @@ func test_eating_at_a_tree_never_removes_it():
 	for i in 400:
 		marker._process(0.5)
 	assert_eq(world.trees.size(), 1, "a tree is not a one-visit consumable the way a leaf is")
+
+
+# -- climbing: a caterpillar visually rises up the trunk while targeting a --
+# -- tree, purely a sprite offset (see docs/concept/soil_fauna.md's ---------
+# -- "Caterpillars actually climb, and move a third as fast") --------------
+
+func test_climbs_while_targeting_a_tree():
+	var world := StubWorld.new()
+	world.trees = [{"position": Vector2(105, 100), "species": "apple"}]
+	marker.setup(world)
+	var reached_positive_climb := false
+	for i in 400:
+		marker._process(0.5)
+		if marker._climb_height_px > 0.0:
+			reached_positive_climb = true
+			break
+	assert_true(reached_positive_climb, "a caterpillar targeting a tree should visually climb")
+	assert_lte(
+		marker._climb_height_px, CaterpillarMarker.CLIMB_HEIGHT_PX,
+		"should never climb past its own ceiling"
+	)
+
+
+## Direct state manipulation, the same "isolate this one behaviour" shape
+## test_approaching_a_close_target_does_not_overshoot_and_orbit_forever
+## already uses below -- seeded already at full climb height rather than
+## derived by first running an organic approach/eat cycle, since an
+## organic cycle risks the caterpillar simply re-committing to the SAME
+## nearby tree the instant REHUNT_SECONDS clears (nothing else exists in
+## this minimal stub world), which would start it climbing again before
+## this could observe a clean, uninterrupted descent.
+func test_settles_back_to_ground_level_once_a_tree_is_no_longer_the_target():
+	marker._climb_height_px = CaterpillarMarker.CLIMB_HEIGHT_PX
+	assert_eq(marker._climb_height_px, CaterpillarMarker.CLIMB_HEIGHT_PX, "precondition: seeded at full climb height")
+	marker._target_is_tree = false
+	marker._behavior.phase = CaterpillarForageBehavior.Phase.SEEKING
+	for i in 20:
+		marker._process(0.5)
+	assert_almost_eq(
+		marker._climb_height_px, 0.0, 0.01,
+		"should climb back down to ground level once no longer targeting a tree"
+	)
+
+
+func test_never_climbs_for_ground_leaf_litter():
+	var world := StubWorld.new()
+	world.field.add_leaf(Vector2(105, 100), "cherry", "summer", 0.0)
+	marker.setup(world)
+	var max_climb := 0.0
+	for i in 400:
+		marker._process(0.5)
+		max_climb = maxf(max_climb, marker._climb_height_px)
+	assert_almost_eq(max_climb, 0.0, 0.0001, "a ground leaf visit should never climb even briefly")
+
+
+# -- speed: 1/3 of the original, requested alongside climbing above --------
+
+func test_walk_speed_is_a_third_of_the_original_fourteen():
+	assert_almost_eq(CaterpillarMarker.WALK_SPEED, 14.0 / 3.0, 0.0001)
 
 
 ## Same overshoot guard test_decomposer_marker.gd's own identical test

@@ -7624,6 +7624,33 @@ state had never once been set by anything in `src/`.
   renamed to `test_world_crush_wiring.gd` and extended with a caterpillar
   mirror of every existing worm assertion. Full writeup:
   [soil_fauna.md](concept/soil_fauna.md#generalized-to-caterpillars-too-2026-09-06).
+- **Caterpillars actually climb, and move a third as fast (2026-09-06)**
+  (small) — ✅ Done — requested live watching a running session: "Caterpillars
+  should crawl up trees also they should be 66% slower" / "1/3 of the
+  speed". `CaterpillarMarker.WALK_SPEED` becomes `14.0 / 3.0` (an exact
+  fraction, not a rounded "66% slower" approximation) — every other
+  movement-timing constant in the file already derives FROM it, so ambient
+  wander slows in the same proportion automatically. New
+  `_climb_height_px` (a sprite-only offset — `_sprite.position.y`, never
+  the node's own `.position`, so distance checks and any future Y-sort
+  stay anchored to the real ground tile) rises toward a new
+  `CLIMB_HEIGHT_PX` (`TILE_SIZE`, 16px) at `WALK_SPEED` pace while a tree
+  is the current target and the phase isn't SEEKING — through the walk
+  there (the same phase the `climb` sprite pose is already shown for) and
+  holding through EATING — then settles back to ground level once SEEKING
+  resumes; a leaf-litter visit never climbs. Closes the previous pass's
+  own named "No canopy-height offset" gap. Two pre-existing tests needed
+  fixing as a direct, correctly-diagnosed consequence of the slower speed
+  rather than a climb-logic bug: the tree-arrival test's position
+  tolerance had been implicitly calibrated to the old fast speed's coarse
+  single big step landing almost exactly on target (now asserts the real
+  `ARRIVE_DISTANCE_PX` contract instead), and a new settle-back-down test
+  needed isolating with direct state seeding rather than an organic full
+  cycle, which raced against the caterpillar simply re-committing to the
+  same nearby tree the instant `REHUNT_SECONDS` cleared in the minimal
+  test stub. 15/15 in `test_caterpillar_marker.gd`, 32/32 across the
+  sibling caterpillar test files (regression check). Full writeup:
+  [soil_fauna.md](concept/soil_fauna.md#caterpillars-actually-climb-and-move-a-third-as-fast-2026-09-06).
 
 ### Flora (`concept/flora.md`)
 
