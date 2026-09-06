@@ -95,6 +95,14 @@ var _sites: Dictionary = {}
 var _fruiting: Dictionary = {}
 ## Subset of _sites' keys on a post-fruiting cooldown -> seconds remaining.
 var _recovery: Dictionary = {}
+## Subset of _recovery's keys whose fruiting body didn't just get picked or
+## age out quietly, but left a corpse worth showing -> "crushed" or
+## "bitten" (see is_corpse/corpse_kind). Rides the identical _recovery
+## clock -- cleared alongside it in advance(), never on a second timer --
+## the same "a corpse is new ground" shape EarthwormPatch._crushed already
+## established (see docs/concept/soil_fauna.md), generalized here to two
+## distinct causes instead of one.
+var _corpse_kind: Dictionary = {}
 
 
 func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
@@ -154,7 +162,40 @@ func crush(cell: Vector2i, momentum_kg_m_s: float) -> bool:
 		return false
 	_fruiting.erase(cell)
 	_recovery[cell] = SPENT_SECONDS
+	_corpse_kind[cell] = "crushed"
 	return true
+
+
+## A decomposer's single bite (see docs/concept/soil_fauna.md's fungivory
+## follow-up) -- reported live: "when a bug takes a bite" should show real
+## bitten art. Mirrors pick()/crush()'s exact has_fruiting gate and
+## recovery shape; the only difference from crush() is which corpse_kind
+## it leaves behind, so the sprite layer can tell "stepped on" apart from
+## "nibbled" (crushed_frame_for vs bitten_frame_for). Unlike crush(), no
+## momentum/threshold gate -- an insect bite isn't a weight-emergent
+## physics event, it simply happens once a decomposer commits to feeding.
+func bite(cell: Vector2i) -> bool:
+	if not has_fruiting(cell):
+		return false
+	_fruiting.erase(cell)
+	_recovery[cell] = SPENT_SECONDS
+	_corpse_kind[cell] = "bitten"
+	return true
+
+
+## Whether `cell` currently holds a crushed or bitten corpse -- distinct
+## from simply having been picked (pick() never sets this) or aged out on
+## its own, so the sprite layer can tell "show crushed/bitten art and hold
+## it" apart from "just disappear" (mirrors EarthwormPatch.is_corpse).
+func is_corpse(cell: Vector2i) -> bool:
+	return _corpse_kind.has(cell)
+
+
+## "crushed", "bitten", or "" (never died, or already recovered) -- what
+## the sprite layer picks IllustratedMushroomSprite.crushed_frame_for vs
+## bitten_frame_for by.
+func corpse_kind(cell: Vector2i) -> String:
+	return String(_corpse_kind.get(cell, ""))
 
 
 ## Ages every currently-fruiting body (a real one doesn't stand forever,
@@ -175,6 +216,10 @@ func advance(delta: float, flush_drive: float) -> void:
 		_recovery[cell] -= delta
 		if _recovery[cell] <= 0.0:
 			_recovery.erase(cell)
+			# Whatever died here is gone by the time the site could fruit
+			# fresh again -- the identical clock, never a second one (see
+			# _corpse_kind's own doc comment).
+			_corpse_kind.erase(cell)
 
 	if flush_drive <= 0.0:
 		return
