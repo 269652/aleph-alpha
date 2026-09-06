@@ -2,7 +2,7 @@
 
 ![New Game Screen](./screenshots/new-game.png)
 
-> A proprietary, non-commercial alpha game.
+> A proprietary, non-commercial alpha — built solo, still finding its shape, and not for sale.
 
 A single-player-first survival RPG set on a real, simulated Earth — actual elevation and climate data, a real day/night and season cycle, and a planet that keeps turning whether or not you're watching.
 
@@ -12,18 +12,33 @@ Walk these woods in autumn and every birch is going gold at its own pace, leaves
 ![In Game Autumn](./screenshots/ingame-2.png)
 ![In Game Winter](./screenshots/ingame-3.png)
 Built solo/part-time in Godot 4 (GDScript), strict test-driven development
-throughout.
+throughout — come see what that looks like after a few hundred nights and
+weekends.
+
+## Features
+
+A taste, not the whole menu:
+
+* Procedural rivers, lakes, and terrain — carved from real elevation and climate data
+* Seasons that actually happen — trees turn and shed their own leaves, snow piles up and melts
+* A living food web — ants forage and carry dinner home, songbirds hunt real worms, boars live where boars can actually thrive
+* Forests that grow old, one real season at a time
+* Farming, foraging, fishing, and taming (or just hunt everything instead — your call)
+* Crafting from real physics — combine simple pieces and let the simulation decide what you made
+* Building, villages, and trade
+* NPCs living lives nobody scripted for them
+* Combat, magic, and the occasional world boss pulled from real regional folklore
+* ...and plenty more we're leaving out on purpose
 
 ## Overview
 
-Aleph Alpha is an experimental game about exploring systems, possibilities,
-and the consequences of your choices. It is built as a living alpha:
-mechanics, content, presentation, and balance will evolve as the project
-develops.
+Aleph Alpha is a game about poking at a real, running world and seeing what
+happens — less a story you're told, more a place you're let loose in. It's a
+living alpha: the mechanics, content, presentation, and balance you see today
+are a snapshot, not a finished picture.
 
-The game is designed to reward curiosity rather than prescribe a single
-correct way to play. Experimentation, observation, adaptation, and
-interpretation are central to the experience. Concretely, that means:
+There's no single correct way to play. Experiment, watch, adapt, and draw
+your own conclusions — that's the actual game. In practice, that means:
 
 - The world is a real, running simulation — terrain, climate, seasons, plant
   growth, animal populations, and (increasingly) NPC society all keep
