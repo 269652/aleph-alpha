@@ -13253,3 +13253,98 @@ GPU-gated smoke test. Screenshots land in the same top-level
 (no new subfolder). No on-screen "saved" confirmation toast yet
 (`screenshot_saved`/`screenshot_failed` signals exist, unwired), no
 rebindable key, no format choice — see the concept doc's Non-goals.
+
+### Karma and Luck (`concept/karma_and_luck.md`, new this pass)
+
+Asked directly: "a Luck skill which influences dice rolls and a Karma
+system which influences Luck; e.g. stepping on a worm should give -1
+Karma.. Abandoning a quest as well. Helping an NPC +1 Karma." Ran head-on
+into this codebase's own explicit "no random rolls anywhere in gameplay"
+design rule (`secret_d20.gd`'s own doc comment: combat/crafting/
+spellcasting are "fully deterministic by design," `SecretD20` the one
+deliberately-isolated exception). Resolved with three scoping questions
+put to the user rather than assumed: Luck biases EXISTING deterministic
+formulas rather than adding a new roll (recommended, chosen); build the
+REAL quest accept/abandon lifecycle now rather than stub it (the
+bigger-scope option, chosen); every worm/creature crush, not just the
+player's own, costs Karma (recommended, chosen).
+
+✅ **`Karma` module** (`src/gameplay/karma.gd`): three named event
+constants (`WORM_OR_CATERPILLAR_CRUSH_PENALTY`, `QUEST_ABANDON_PENALTY`,
+`QUEST_FULFILLED_REWARD`, all `1.0` today, free to diverge later without a
+signature change anywhere) and `luck_for(karma)`, saturating at
+`KARMA_CEILING` (15, deliberately the same number `Taming.AFFINITY_CEILING`
+already uses — both represent "the practical ceiling of investing in this
+axis at all"). Karma itself is a real, permanent, UNCLAMPED ledger (it can
+go arbitrarily negative — a true record of what happened, not a score);
+only the Luck it produces saturates in `[-1, 1]`.
+
+✅ **`Player.karma` + `Player.luck()`**, persisted the exact one-line-each-
+side shape `mushrooms_eaten` already established. `Player.
+apply_karma_delta(delta)` is the single external mutator, called by
+whoever actually detects a named event — mirrors how every other
+externally-triggered Player state change in `World` is a named method call
+(`activate_item_id`, `craft`, `allocate_skill`, ...), never a raw field
+poke from outside.
+
+✅ **`Taming.break_free_chance` and `OreYield.yields` both read
+`Player.luck()`** — the two formulas chosen because both already had a
+proven "player-stat nudges this number, byte-identical at zero
+investment" slot to extend (the same shape `affinity` already uses in the
+first, the seeded extra-ore roll's own position in the second), so no new
+formula shape was invented for either. `luck == 0.0` (neutral karma) is
+byte-identical to before either parameter existed. Deliberately NOT
+reached this pass, named rather than silently skipped:
+`FishingMinigame.fish_rarity`, `KnappingModel.shard_yield`,
+`RarityTier.roll_tier` (the last has zero call sites anywhere yet — loot
+drops aren't wired up at all, a separate gap this pass doesn't close).
+
+✅ **Worm/caterpillar crush → Karma**, wired into `World._client_process`'s
+existing crush pass: `EarthChunkManager.crush_worm_at`/
+`crush_caterpillars_near` already returned a bool for whether something
+was actually crushed, previously discarded. A `true` return now charges
+the named penalty on the local player — for the player's OWN step AND for
+every creature's, per the user's explicit choice that every crush should
+count.
+
+✅ **`QuestLog`** (`src/emergence/quest_log.gd`): the player's own
+commitment record layered over `quest.gd`'s existing stateless Production-
+shortfall projection (the only of `concept/quests.md`'s three need sources
+that's real today). Pure static funcs, no state of its own —
+`Player.accepted_quest_ids`/`karma` ARE the state. `offer_id_for(quest)` is
+DERIVED, never allocated (`"production:<household_id>:<recipe_id>"`,
+matching `quests.md`'s own stated convention) so the same real shortage
+always yields the same id across a save/reload. `accept` is pure
+set-membership (no Karma change — accepting isn't itself a deed).
+`abandon` charges `-1` Karma, a no-op if the offer was never accepted (so
+a stray double-call can't double-charge one withdrawal). `reconcile` is
+fulfilment as DERIVED state, never a separate mutator, matching
+`quests.md`'s own "rewards are re-derived, never trusted from the offer"
+rule: any accepted offer_id no longer present in a freshly-recomputed
+whole-world quest list gets `+1` Karma ("helping an NPC" — every quest
+this codebase's real slice implements literally IS one NPC's own stated
+need) and is cleared; anything still real is left untouched.
+`EarthChunkManager.all_production_shortfall_quests()` is the new
+whole-world aggregate `reconcile` needs, built from the same settlement
+enumeration `step_settlements` itself already uses.
+
+`QuestLog.reconcile` now runs automatically: `World._step_ecology_batch`
+calls a new throttled `_step_quest_reconciliation` at the end of its
+per-tick work (after `step_settlements`/`step_regional_trade` have had
+their own chance to resupply a household that same tick), guarded behind
+a non-null `focus_player`. It early-returns whenever the player has
+accepted nothing (free in the common case), and otherwise throttles at
+`EarthChunkManager.SETTLEMENT_STEP_INTERVAL` — reused rather than a fresh
+invented number, since that's the actual cadence the underlying
+production/market data can even change on.
+
+⬜ **Deliberately out of scope, named rather than silently assumed done**
+(see the concept doc's own Status list): a Character Sheet display of
+Karma/Luck; a player-facing interaction to actually call `QuestLog.
+accept`/`abandon` (dialogue or otherwise — `QuestLog` itself is real,
+tested, engine-free logic with no UI consumer yet, same as `quest.gd`);
+the `FishingMinigame`/`KnappingModel`/`RarityTier` Luck hooks named above;
+every other part of `concept/quests.md`'s fuller vision (settlement
+quorum, safety/social need sources, village endangerment, rewards/
+currency transactions) that was already unbuilt before this pass and
+stays exactly as unbuilt now.

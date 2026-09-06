@@ -189,8 +189,11 @@ change to `PlayerSave`'s own schemaless-Dictionary format.
 - ✅ `Taming.break_free_chance` and `OreYield.yields` read `Player.luck()`.
 - ✅ Worm/caterpillar crush → Karma, wired into `World`'s existing crush
   pass.
-- ⬜ `QuestLog`: accept/abandon/derived-fulfilment, wired to Karma.
-  (`Player.accepted_quest_ids` itself is persisted and ready.)
+- ✅ `QuestLog`: accept/abandon/derived-fulfilment, wired to Karma.
+  `reconcile` runs automatically every `EarthChunkManager.
+  SETTLEMENT_STEP_INTERVAL` from `World._step_ecology_batch` whenever the
+  player has an accepted quest. `accept`/`abandon` themselves are ready to
+  be called by a future player-facing interaction (see the next line).
 - ⬜ Character Sheet display of Karma/Luck.
 - ⬜ Player-facing accept/abandon interaction (dialogue or otherwise).
 - ⬜ `FishingMinigame`/`KnappingModel`/`RarityTier` Luck hooks.
