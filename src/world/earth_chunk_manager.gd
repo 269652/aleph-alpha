@@ -7150,6 +7150,17 @@ func crush_ants_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 	for global_tile in _active_ant_foragers.keys():
 		var markers: Array = _active_ant_foragers[global_tile]
 		for marker in markers.duplicate():
+			# _active_ant_foragers is only pruned LAZILY, at the next
+			# dispatch (see _dispatch_forager's own doc comment) -- a
+			# forager that already completed its round trip and
+			# queue_free()'d itself can sit here as a stale, by-then-
+			# actually-freed reference for a while. Reported live, real
+			# crash: "Invalid access to property or key 'position' on a
+			# base object of type 'previously freed'" -- direct dot-access
+			# on every entry assumed every one was still real.
+			if not is_instance_valid(marker) or marker.is_queued_for_deletion():
+				markers.erase(marker)
+				continue
 			if _world_tile_for_pixel(marker.position) == tile:
 				markers.erase(marker)
 				marker.queue_free()
@@ -7173,6 +7184,13 @@ func _crush_markers_near(markers_by_chunk: Dictionary, pixel_position: Vector2, 
 	var markers: Array = markers_by_chunk.get(chunk_coord, [])
 	var crushed_any := false
 	for marker in markers.duplicate():
+		# Defensive, mirroring crush_ants_near's own real, reported crash
+		# fix -- this dict is not guaranteed pruned eagerly the moment a
+		# marker frees itself either, so a stale reference here must not
+		# crash a direct .position access.
+		if not is_instance_valid(marker) or marker.is_queued_for_deletion():
+			markers.erase(marker)
+			continue
 		if _world_tile_for_pixel(marker.position) == tile:
 			markers.erase(marker)
 			marker.queue_free()
