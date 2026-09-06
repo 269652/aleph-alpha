@@ -212,6 +212,11 @@ Status:
   underlying `Sickness`/`DiseaseModel`/`DebuffStack` machinery each trigger
   reuses is real and already proven by the one trigger (creature bite)
   `disease.md` wired up this pass.
+- ⬜ (2026-09-06) A real `nutrition` meter now exists on `SurvivalMeters`
+  (see [material_dsl.md](material_dsl.md), fed by a fruit's real vitamin
+  content on eating) — the "rolling dietary-variety term" above still has
+  nothing wired to it, but it is no longer starting from zero: a real,
+  composition-derived number is now there to read.
 
 ### Stamina scope: movement only, not combat
 

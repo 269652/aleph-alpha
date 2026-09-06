@@ -102,6 +102,13 @@ function with a red-first test):
   reliable**, a property of the material type and its geology, *not* genetics.
   Mined, predictable, the dependable backbone.
 
+**First real organic-track content (2026-09-06)**: see
+[material_dsl.md](material_dsl.md) — a food's nutrient composition
+(water/sugar/vitamins) and a soft `"fruit_flesh"` entry in a new sibling
+`OrganicMaterialProperties`, kept out of `MaterialProperties.MATERIALS`
+itself per this section's own scoping. Still fixed data, not yet
+DNA-driven — the variability half of this track remains unbuilt.
+
 **Revised 2026-08-24** (was: materials stay pure, no alloying/compositing —
 see [smelting.md](smelting.md)'s "Alloying: emergent metallurgy" for the
 full mechanism): the original reasoning — leaning the whole game toward
