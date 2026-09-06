@@ -710,6 +710,16 @@ var _ant_mound_markers: Dictionary = {}
 ## alive. Keyed globally (not per-chunk) since a mound's own identity
 ## (chunk_coord*CHUNK_SIZE + cell) is already a stable global tile.
 var _active_ant_foragers: Dictionary = {}
+
+## SEPARATE tracking for scouts+workers (see docs/concept/soil_fauna.md
+## "Scouts mark leaf clusters, workers collect from marks") -- same
+## Vector2i global_tile -> Array[AntForagerMarker] shape as
+## _active_ant_foragers, but genuinely a different bucket, capped against
+## AntColony.active_cluster_ant_cap_at rather than active_forager_cap_at,
+## so scouting/collecting ADDS concurrent ants instead of competing with
+## ordinary foraging for the same slots (the literal "send out MORE ants"
+## ask).
+var _active_ant_scouts_and_workers: Dictionary = {}
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_ambient_flyers: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
@@ -7296,6 +7306,14 @@ func step_ants(delta_seconds: float) -> void:
 		for cell in colony.mound_cells():
 			if not colony.should_forage(cell):
 				continue
+			# Scouting/worker dispatch (see docs/concept/soil_fauna.md
+			# "Scouts mark leaf clusters, workers collect from marks") --
+			# genuinely SEPARATE from the ordinary forage branch below (its
+			# own tracking bucket/cap, see _dispatch_ant_forager's own doc
+			# comment), so both run on every qualifying tick regardless of
+			# whether ordinary foraging also found something this tick.
+			_scout_for_leaf_cluster_near_mound(colony, origin, cell)
+			_dispatch_cluster_workers(colony, origin, cell)
 			# Leaf litter is checked FIRST, ahead of the biome branch below --
 			# unlike grass seed (grassland-only) and windfall (forest/
 			# rainforest-only), it is not biome-gated at all (see
@@ -7504,17 +7522,36 @@ func _forage_leaf_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i
 ## coloured carried-leaf visual without needing to ask the world again
 ## later (see AntForagerMarker.carried_leaf_species/carried_leaf_season).
 ## Left "" (the default) for seed/windfall trips, which have no such visual.
+## `role`: `"forager"` (default -- every pre-existing call site is
+## unaffected), `"scout"`, or `"worker"` (see docs/concept/soil_fauna.md
+## "Scouts mark leaf clusters, workers collect from marks"). A scout/
+## worker dispatch tracks against `_active_ant_scouts_and_workers`/
+## `colony.active_cluster_ant_cap_at` instead of the ordinary `_active_
+## ant_foragers`/`active_forager_cap_at` pair -- a genuinely separate
+## pool, not a re-purposing of the same slots. `is_scout` (only true for
+## `role == "scout"`) is the one thing that actually changes the
+## forager's own behaviour (see AntForagerMarker._resolve_arrival_at_
+## food) -- a worker walks/takes/returns exactly like an ordinary
+## forager, just sent at a marked position instead of a freshly
+## discovered one.
 func _dispatch_ant_forager(
 	global_tile: Vector2i, colony: AntColony, cell: Vector2i,
 	mound_pixel: Vector2, target_position: Vector2, forage_kind: String,
-	leaf_species: String = "", leaf_season: String = ""
+	leaf_species: String = "", leaf_season: String = "", role: String = "forager"
 ) -> void:
 	if _entities_parent == null:
 		return
-	var active: Array = _active_ant_foragers.get(global_tile, [])
+	var tracking: Dictionary = (
+		_active_ant_foragers if role == "forager" else _active_ant_scouts_and_workers
+	)
+	var cap: int = (
+		colony.active_forager_cap_at(cell) if role == "forager"
+		else colony.active_cluster_ant_cap_at(cell)
+	)
+	var active: Array = tracking.get(global_tile, [])
 	active = active.filter(func(f): return is_instance_valid(f) and not f.is_queued_for_deletion())
-	if active.size() >= colony.active_forager_cap_at(cell):
-		_active_ant_foragers[global_tile] = active
+	if active.size() >= cap:
+		tracking[global_tile] = active
 		return
 	var forager := AntForagerMarker.new()
 	forager.target_position = target_position
@@ -7522,11 +7559,70 @@ func _dispatch_ant_forager(
 	forager.forage_kind = forage_kind
 	forager.carried_leaf_species = leaf_species
 	forager.carried_leaf_season = leaf_season
+	forager.is_scout = (role == "scout")
 	forager.position = mound_pixel
 	forager.setup(self, colony, cell)
 	_entities_parent.add_child(forager)
 	active.append(forager)
-	_active_ant_foragers[global_tile] = active
+	tracking[global_tile] = active
+
+
+## A scouting trip (see docs/concept/soil_fauna.md "Scouts mark leaf
+## clusters, workers collect from marks"): unlike an ordinary leaf forage
+## (_forage_leaf_near_mound, reaching only AntColony.FORAGE_RADIUS_TILES),
+## this checks the wider AntColony.SCOUT_RADIUS_TILES for a real CLUSTER
+## -- AntColony.CLUSTER_MIN_LEAVES or more real leaves within that reach,
+## worth remembering for dedicated worker trips later. Dispatched through
+## the SAME _dispatch_ant_forager machinery as an ordinary forager (role
+## "scout") -- a scout walks, takes, and returns exactly like any other
+## leaf trip; marking only happens on a SUCCESSFUL arrival (see
+## AntForagerMarker._resolve_arrival_at_food), not here at discovery time,
+## since something else may take the chosen leaf first. Returns whether a
+## scout was actually dispatched, mirroring _forage_leaf_near_mound's own
+## boolean contract.
+func _scout_for_leaf_cluster_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i) -> bool:
+	var mound_pixel := Vector2(
+		float(origin.x + cell.x) + 0.5, float(origin.y + cell.y) + 0.5
+	) * float(TerrainRenderer.TILE_SIZE)
+	var scout_reach := AntColony.SCOUT_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
+	var nearby := leaf_litter_near(mound_pixel, scout_reach)
+	if nearby.size() < AntColony.CLUSTER_MIN_LEAVES:
+		return false
+	var best_index := PheromoneField.best_candidate_index(
+		mound_pixel, nearby, colony.pheromones_at(cell), float(TerrainRenderer.TILE_SIZE)
+	)
+	var found: Dictionary = nearby[best_index]
+	_dispatch_ant_forager(
+		origin + cell, colony, cell, mound_pixel, found.position, "leaf", found.species, found.season, "scout"
+	)
+	return true
+
+
+## Dispatches a worker to EVERY cluster mark this mound currently holds
+## (see AntColony.mark_cluster/cluster_marks_at) -- re-verified fresh
+## here, the same "never trust a stale record, look at the real world
+## again before dispatching" convention every other forage function in
+## this file already follows: a mark whose area has genuinely run dry (no
+## leaves left within an ordinary FORAGE_RADIUS_TILES of it) is
+## invalidated (see docs/concept/soil_fauna.md's own "invalidated when
+## its empty" note) instead of sending a worker after it.
+func _dispatch_cluster_workers(colony: AntColony, origin: Vector2i, cell: Vector2i) -> void:
+	var mound_pixel := Vector2(
+		float(origin.x + cell.x) + 0.5, float(origin.y + cell.y) + 0.5
+	) * float(TerrainRenderer.TILE_SIZE)
+	var reach := AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
+	for mark_position in colony.cluster_marks_at(cell):
+		var nearby := leaf_litter_near(mark_position, reach)
+		if nearby.is_empty():
+			colony.invalidate_cluster_mark(cell, mark_position)
+			continue
+		var best_index := PheromoneField.best_candidate_index(
+			mark_position, nearby, colony.pheromones_at(cell), float(TerrainRenderer.TILE_SIZE)
+		)
+		var found: Dictionary = nearby[best_index]
+		_dispatch_ant_forager(
+			origin + cell, colony, cell, mound_pixel, found.position, "leaf", found.species, found.season, "worker"
+		)
 
 
 ## Inches every surfaced worm along, every frame, and keeps its animation

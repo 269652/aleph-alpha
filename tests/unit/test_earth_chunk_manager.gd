@@ -7025,6 +7025,199 @@ func test_a_finished_forager_frees_its_slot_for_a_new_one():
 	assert_eq(manager._entities_parent.get_child_count(), before + 1, "a freed slot should accept a new forager")
 
 
+# -- scouting: further-out cluster discovery, and role-based dispatch caps
+# (see docs/concept/soil_fauna.md "Scouts mark leaf clusters, workers
+# collect from marks") -------------------------------------------------
+
+## AntColony.SCOUT_RADIUS_TILES is DOUBLE FORAGE_RADIUS_TILES -- a cluster
+## placed just outside the ordinary reach, but within the wider scouting
+## one, proves this genuinely looks further than an ordinary leaf forage
+## ever would (test_forage_leaf_near_mound_returns_false_with_no_leaf_in_
+## reach's own FORAGE_RADIUS_TILES-only contract is unaffected by this).
+func test_scout_for_leaf_cluster_finds_a_cluster_beyond_ordinary_forage_reach():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var origin := Vector2i(1000, 1000)
+	var global_tile := origin + cell
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var chunk_coord := manager._chunk_coord_for_tile(global_tile)
+	var field := _field_at(chunk_coord)
+	var ordinary_reach := AntColony.FORAGE_RADIUS_TILES * TerrainRenderer.TILE_SIZE
+	var scout_reach := AntColony.SCOUT_RADIUS_TILES * TerrainRenderer.TILE_SIZE
+	var cluster_center := mound_pixel + Vector2((ordinary_reach + scout_reach) * 0.5, 0)
+	for i in AntColony.CLUSTER_MIN_LEAVES:
+		field.add_leaf(cluster_center + Vector2(i, 0), "cherry", "autumn", 0.0)
+	assert_false(
+		manager._forage_leaf_near_mound(colony, origin, cell),
+		"precondition: this cluster must be genuinely beyond ordinary forage reach"
+	)
+
+	var dispatched := manager._scout_for_leaf_cluster_near_mound(colony, origin, cell)
+
+	assert_true(dispatched, "a real cluster beyond ordinary reach should dispatch a scout")
+	assert_true(manager._active_ant_scouts_and_workers.has(global_tile))
+	var scout: AntForagerMarker = manager._active_ant_scouts_and_workers[global_tile][0]
+	assert_true(scout.is_scout)
+	assert_eq(scout.forage_kind, "leaf")
+
+
+func test_scout_for_leaf_cluster_returns_false_below_the_cluster_minimum():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var origin := Vector2i(1000, 1000)
+	var global_tile := origin + cell
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var chunk_coord := manager._chunk_coord_for_tile(global_tile)
+	var field := _field_at(chunk_coord)
+	for i in AntColony.CLUSTER_MIN_LEAVES - 1:
+		field.add_leaf(mound_pixel + Vector2(10 + i, 0), "cherry", "autumn", 0.0)
+	assert_false(manager._scout_for_leaf_cluster_near_mound(colony, origin, cell))
+
+
+func test_scouting_uses_a_separate_tracking_bucket_from_ordinary_foragers():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var global_tile := Vector2i(444_444, 444_444)
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var ordinary_cap := colony.active_forager_cap_at(cell)
+	for i in ordinary_cap:
+		manager._dispatch_ant_forager(
+			global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(10 + i, 0), "seed"
+		)
+
+	manager._dispatch_ant_forager(
+		global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(-10, 0), "leaf", "cherry", "autumn", "scout"
+	)
+
+	assert_true(manager._active_ant_scouts_and_workers.has(global_tile), "a scout dispatch should land in its own bucket")
+	assert_eq(manager._active_ant_scouts_and_workers[global_tile].size(), 1)
+	assert_eq(manager._active_ant_foragers[global_tile].size(), ordinary_cap, "ordinary foragers unaffected")
+
+
+func test_a_worker_dispatch_also_lands_in_the_scout_and_worker_bucket():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var global_tile := Vector2i(555_555, 555_555)
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+
+	manager._dispatch_ant_forager(
+		global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(10, 0), "leaf", "cherry", "autumn", "worker"
+	)
+
+	var worker: AntForagerMarker = manager._active_ant_scouts_and_workers[global_tile][0]
+	assert_false(worker.is_scout, "a worker is not a scout -- it must not mark a new cluster on arrival")
+
+
+func test_scout_and_worker_dispatch_is_capped_separately_from_max_concurrent_foragers():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var global_tile := Vector2i(666_666, 666_666)
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var cap := colony.active_cluster_ant_cap_at(cell)
+	for i in cap:
+		manager._dispatch_ant_forager(
+			global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(10 + i, 0), "leaf", "", "", "scout"
+		)
+	assert_eq(manager._active_ant_scouts_and_workers[global_tile].size(), cap)
+
+	manager._dispatch_ant_forager(
+		global_tile, colony, cell, mound_pixel, mound_pixel + Vector2(-10, 0), "leaf", "", "", "scout"
+	)
+
+	assert_eq(
+		manager._active_ant_scouts_and_workers[global_tile].size(), cap,
+		"a scout beyond the mound's own cluster-ant cap should not spawn"
+	)
+
+
+## Workers: dispatched to a real, currently-marked cluster, re-verified
+## fresh here -- a real leaf must still be there for a worker to actually
+## be sent.
+func test_dispatch_cluster_workers_sends_a_worker_to_a_real_marked_cluster():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var origin := Vector2i(1000, 1000)
+	var global_tile := origin + cell
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var chunk_coord := manager._chunk_coord_for_tile(global_tile)
+	var field := _field_at(chunk_coord)
+	var mark_position := mound_pixel + Vector2(30, 0)
+	field.add_leaf(mark_position, "cherry", "autumn", 0.0)
+	colony.mark_cluster(cell, mark_position)
+
+	manager._dispatch_cluster_workers(colony, origin, cell)
+
+	assert_true(manager._active_ant_scouts_and_workers.has(global_tile))
+	var worker: AntForagerMarker = manager._active_ant_scouts_and_workers[global_tile][0]
+	assert_eq(worker.forage_kind, "leaf")
+	assert_false(worker.is_scout)
+
+
+## Invalidated when its empty, exactly as requested.
+func test_dispatch_cluster_workers_invalidates_a_mark_whose_area_has_run_dry():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var origin := Vector2i(1000, 1000)
+	var global_tile := origin + cell
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var mark_position := mound_pixel + Vector2(30, 0)  # no leaf actually placed there
+
+	colony.mark_cluster(cell, mark_position)
+	manager._dispatch_cluster_workers(colony, origin, cell)
+
+	assert_true(colony.cluster_marks_at(cell).is_empty(), "an empty mark should be invalidated, not dispatched to")
+	assert_false(manager._active_ant_scouts_and_workers.has(global_tile), "no worker should be sent after empty air")
+
+
+func test_dispatch_cluster_workers_visits_every_mark_this_mound_holds():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var origin := Vector2i(1000, 1000)
+	var global_tile := origin + cell
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var chunk_coord := manager._chunk_coord_for_tile(global_tile)
+	var field := _field_at(chunk_coord)
+	var mark_a := mound_pixel + Vector2(30, 0)
+	var mark_b := mound_pixel + Vector2(-30, 0)
+	field.add_leaf(mark_a, "cherry", "autumn", 0.0)
+	field.add_leaf(mark_b, "apple", "autumn", 0.0)
+	colony.mark_cluster(cell, mark_a)
+	colony.mark_cluster(cell, mark_b)
+
+	manager._dispatch_cluster_workers(colony, origin, cell)
+
+	assert_eq(manager._active_ant_scouts_and_workers[global_tile].size(), 2)
+
+
+## step_ants itself: both new dispatch calls must actually be reachable
+## from the real per-tick loop, not just callable in isolation.
+func test_step_ants_also_scouts_and_dispatches_workers():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var chunk_coord := Vector2i(2000, 2000)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE
+	var global_tile := origin + cell
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	manager._ant_colonies[chunk_coord] = colony
+	var field := _field_at(chunk_coord)
+	var ordinary_reach := AntColony.FORAGE_RADIUS_TILES * TerrainRenderer.TILE_SIZE
+	var scout_reach := AntColony.SCOUT_RADIUS_TILES * TerrainRenderer.TILE_SIZE
+	var cluster_center := mound_pixel + Vector2((ordinary_reach + scout_reach) * 0.5, 0)
+	for i in AntColony.CLUSTER_MIN_LEAVES:
+		field.add_leaf(cluster_center + Vector2(i, 0), "cherry", "autumn", 0.0)
+	colony.mark_cluster(cell, mound_pixel + Vector2(-30, 0))  # an unrelated, already-known mark
+
+	# should_forage is a per-(seed, step, salt) chance roll -- advance a
+	# real handful of steps rather than assuming step 0 itself rolls true.
+	var scouted := false
+	for i in 200:
+		manager.step_ants(1.0)
+		if manager._active_ant_scouts_and_workers.has(global_tile):
+			scouted = true
+			break
+	assert_true(scouted, "step_ants should eventually scout and/or dispatch a worker through the real per-tick loop")
+
+
 ## Water, not just food (see docs/concept/soil_fauna.md's own section by
 ## that name): step_ants must actually push the real weather-derived soil
 ## moisture into every loaded mound, the identical WORM_REFRESH_INTERVAL-
