@@ -66,6 +66,36 @@ func test_satisfying_one_drive_leaves_the_others_alone():
 	assert_eq(drives.level("thirst"), 1.0)
 
 
+# -- satisfy_amount: a real meal size, not the profile's fixed one ----------
+# -- (see docs/concept/material_dsl.md) --------------------------------------
+
+func test_satisfy_amount_reduces_the_drive_by_the_given_amount():
+	var drives := Drives.new(_profile())
+	drives.advance(100000.0)
+	drives.satisfy_amount("hunger", 0.3)
+	assert_almost_eq(drives.level("hunger"), 0.7, 0.0001)
+
+
+func test_satisfy_amount_never_drops_below_nothing():
+	var drives := Drives.new(_profile())
+	drives.advance(100000.0)
+	drives.satisfy_amount("hunger", 5.0)
+	assert_eq(drives.level("hunger"), 0.0)
+
+
+func test_satisfy_amount_ignores_the_profiles_own_fixed_meal_size():
+	var drives := Drives.new(_profile())
+	drives.advance(100000.0)
+	drives.satisfy_amount("thirst", 0.05)  # thirst's own profile "meal" is 0.3
+	assert_almost_eq(drives.level("thirst"), 0.95, 0.0001)
+
+
+func test_satisfy_amount_on_an_unknown_drive_does_nothing():
+	var drives := Drives.new(_profile())
+	drives.satisfy_amount("stamina", 0.5)
+	assert_false(drives.levels.has("stamina"))
+
+
 func test_a_profile_may_start_a_drive_part_way():
 	var drives := Drives.new({"hunger": {"rise_seconds": 10.0, "threshold": 1.0, "meal": 1.0, "start": 1.0}})
 	assert_eq(drives.level("hunger"), 1.0)

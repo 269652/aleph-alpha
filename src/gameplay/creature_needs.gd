@@ -136,6 +136,17 @@ func drink() -> void:
 	_drives.satisfy(Ethogram.DRIVE_THIRST)
 
 
+## A real meal size (see docs/concept/material_dsl.md's NutrientRelease),
+## instead of the mammal body plan's fixed "meal" -- thin wrappers over
+## Drives.satisfy_amount, alongside feed()/drink() which are untouched.
+func feed_amount(amount: float) -> void:
+	_drives.satisfy_amount(Ethogram.DRIVE_HUNGER, amount)
+
+
+func drink_amount(amount: float) -> void:
+	_drives.satisfy_amount(Ethogram.DRIVE_THIRST, amount)
+
+
 ## The needs as the behaviour kernel's gates (Drives.gains): what
 ## CreatureMarker hands CreatureBehavior as `drives`.
 func gains() -> Dictionary:

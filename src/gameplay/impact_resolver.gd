@@ -58,7 +58,20 @@ const T_BRITTLE_TOUGHNESS: float = 3.0
 ## by test_a_point_cannot_pierce_anything_the_tooltip_calls_hard.
 const PIERCE_HARDNESS_CAP: float = MaterialProperties.HARD_HARDNESS
 
-var _materials: RefCounted = MaterialProperties.new()
+var _materials: RefCounted
+
+
+## `materials_source` defaults to the real mineral table -- every existing
+## caller (combat, throwables) constructs ImpactResolver.new() with no
+## argument and keeps exactly today's behaviour. See
+## docs/concept/material_dsl.md: the only caller that passes one is the new
+## eating path, injecting OrganicMaterialProperties so a bite resolves
+## through this SAME outcome table instead of a parallel one. Any object
+## exposing `property_value(material, property_name) -> float` works --
+## structural, not a shared base class, the same duck-typed shape this
+## file's own tests already use to fake it.
+func _init(materials_source: RefCounted = MaterialProperties.new()) -> void:
+	_materials = materials_source
 
 
 ## Resolves a single impact into one of: "cut", "dent", "crush", "pierce",

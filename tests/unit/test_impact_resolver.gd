@@ -83,3 +83,30 @@ func test_point_below_pierce_threshold_dents() -> void:
 
 func test_unknown_geometry_dents() -> void:
 	assert_eq(resolver.resolve_impact(5.0, "sideways", "wood"), "dent")
+
+
+## See docs/concept/material_dsl.md: an injected materials source lets the
+## organic track (OrganicMaterialProperties) resolve through the exact same
+## outcome table, without a parallel resolver. Every OTHER test in this file
+## constructs ImpactResolver.new() with no argument and must keep reading
+## against the default mineral table -- this is additive, not a signature
+## change for existing callers.
+class FakeMaterials:
+	extends RefCounted
+	func property_value(_material: String, property_name: String) -> float:
+		if property_name == "toughness":
+			return 100.0  # never brittle
+		return 0.0  # e.g. hardness -- always soft
+
+
+func test_an_injected_materials_source_is_used_instead_of_the_default() -> void:
+	var fake_resolver: RefCounted = ImpactResolver.new(FakeMaterials.new())
+	# The default table's "obsidian" is brittle (shatters); the fake table
+	# says every material has toughness 100 (never brittle) -- if the
+	# injected source were ignored, this would still shatter.
+	assert_eq(fake_resolver.resolve_impact(4.0, "blunt", "obsidian"), "crush")
+
+
+func test_omitting_the_materials_source_still_uses_the_real_mineral_table() -> void:
+	var default_resolver: RefCounted = ImpactResolver.new()
+	assert_eq(default_resolver.resolve_impact(4.0, "blunt", "obsidian"), "shatter")

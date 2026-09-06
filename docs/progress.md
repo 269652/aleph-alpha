@@ -13785,3 +13785,92 @@ population/food-economy modeling (unlike `AntColony`, a millipede has no
 colony, no stockpile, no carrying-capacity feedback — the same deferred
 "litter input → detritivore biomass" follow-up the worm section already
 names).
+
+### Material DSL: fruit composition → crush → nutrients (`concept/material_dsl.md`, new this pass)
+
+Requested directly: describe a material (e.g. an apple) as percentages of
+real substances (60% water, 20% sugar, 2% vitamins), have eating apply a
+real crushing force to it, and have the resulting composition convert into
+nutrients that satisfy thirst/hunger/nutrition — the same mechanism working
+implicitly for the player and every animal species. Two design forks were
+resolved directly with the user before implementing: a plain data table
+over a parsed text grammar (the codebase already has both conventions —
+Device DSL is parsed text, Ethogram is data — and a composition record has
+no control flow, so it fits the data shape), and full `ImpactResolver`
+integration over a minimal always-crushes gate (a real bite-scale
+calibration point on the existing damage model, not a rubber-stamped
+boolean).
+
+✅ **`OrganicMaterialProperties`** (`src/gameplay/organic_material_properties.gd`)
+— the organic material track `materials.md`'s "Two material tracks" section
+always declared but never populated (`dna.md`/`evolution.md` carry no
+material-property content today). A sibling to `MaterialProperties`,
+identical shape, never merged into its `MATERIALS` table — that file's own
+doc comment scopes it to the mineral track. One entry, `"fruit_flesh"`:
+negligibly soft (on par with `MaterialProperties`' own "flesh" muscle
+tissue), toughness placed just above `ImpactResolver.T_BRITTLE_TOUGHNESS`
+so a firm bite reads as crush, not shatter.
+
+✅ **`ImpactResolver` accepts an injected materials source**
+(`_init(materials_source: RefCounted = MaterialProperties.new())`) — every
+existing caller (combat, throwables, `collapsed_passage.gd`, the player's
+own melee resolver) passes no argument and keeps today's exact behaviour;
+only the new eating path injects `OrganicMaterialProperties`, resolving a
+bite through the same outcome table rather than a parallel one.
+
+✅ **`FoodComposition`** (`src/gameplay/food_composition.gd`) — the actual
+"Material DSL" data: a flat dict, no parser, mirroring `ethogram.gd`'s own
+data-not-program convention. Apple and cherry only (soft, shell-less fruit
+— see Status below for nuts). Real (USDA-ballpark) water/sugar fractions;
+"vitamins" is documented as a deliberately coarse gameplay abstraction, not
+literal vitamin-C mass (the real figure is under 0.01% by mass, too small
+a number to be a legible lever). `composition_for()` returns `{}` for
+anything unmodeled, and every entry's fractions are test-pinned to sum to
+no more than 1.0.
+
+✅ **`NutrientRelease`** (`src/gameplay/nutrient_release.gd`) — the generic,
+species-blind core: `consume(food_id)` resolves a real bite-scale impact
+(`BITE_MOMENTUM_KG_M_S`, a new named calibration point alongside
+`CrushMechanic`'s footstep scale and `ImpactResolver.T_CRUSH`'s combat
+scale) against `"fruit_flesh"`, and on a genuine crush scales
+`FoodComposition`'s real fractions by `NUTRIENT_UNIT_SCALE` (calibrated so
+a whole apple's sugar content lands in the same ballpark as the old flat
+`EAT_HUNGER_RELIEF` it replaces) into meter-ready `{water, sugar,
+vitamins}` amounts. Pure and content-driven — it does not know or care who
+is eating, which is what makes "implicitly the same for all species" fall
+out of the caller side.
+
+✅ **`SurvivalMeters.nutrition`** — a new meter, but shaped like
+fitness/stamina (a resource you HAVE, falling without vitamin intake), not
+like hunger/thirst (a need that rises until relieved). `nourish()` raises
+it; `is_malnourished()` (placed the same distance from its own bad extreme
+that `STARVING_THRESHOLD`/`DEHYDRATED_THRESHOLD` are from theirs) now also
+stresses fitness in `advance()`, the same way starvation/dehydration/cold
+already do — a real integration, not inert decoration. Gives
+[survival.md](concept/survival.md)'s named-but-unbuilt "dietary variety
+affects disease resistance" follow-on a real meter to eventually read;
+wiring resistance itself stays out of this pass.
+
+✅ **Per-eater adapters, additive**: `Drives.satisfy_amount(drive, amount)`
+(the existing `satisfy()`'s own arithmetic, parameterized instead of
+pulling the body plan's fixed "meal" size) and
+`CreatureNeeds.feed_amount`/`drink_amount` (thin wrappers over it) —
+`satisfy()`/`feed()`/`drink()` and every existing caller are untouched.
+`Player.eat_food()` and `CreatureMarker._take_forage_bite()`'s
+`GrazerForaging.FOOD_FRUIT` branch both now call `NutrientRelease.consume`
+and route real amounts to their own meters; an unmodeled food (everything
+except apple/cherry) falls back to exactly its old flat behaviour in both
+— confirmed via the only two `test_creature_marker.gd` tests that
+construct real fruit entities, and a full `test_player.gd` regression
+sweep.
+
+⬜ Named, not silently skipped: shelled nuts (walnut/acorn/hazelnut)
+already have a separate "crack it open" mechanic
+(`EarthChunkManager.crush_walnut_near`) — whether a cracked kernel then
+feeds through this same pipeline is a real, separate design question, not
+decided here. Birds (`BirdDigestion`), `AntColony`'s own flat food-unit
+ledger, and caterpillars (no meter at all today) — `NutrientRelease.
+consume` already works for them unchanged; each just needs its own thin
+per-eater adapter, the same shape `CreatureNeeds` got here. Composition
+for any food beyond apple/cherry — meat, fish, mushrooms, root vegetables
+all keep today's flat behaviour until someone measures them in.

@@ -1523,6 +1523,34 @@ func test_eating_a_plain_fish_grants_no_buff():
 	assert_eq(player.active_food_buffs.size(), 0)
 
 
+# -- Material DSL: a modeled fruit relieves hunger, thirst, AND nutrition, --
+# -- by its real composition; an unmodeled food keeps today's exact flat ---
+# -- behaviour (see docs/concept/material_dsl.md) ----------------------------
+
+func test_eating_an_apple_relieves_hunger_thirst_and_nutrition_by_its_real_composition():
+	const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
+	player.survival.advance(100000.0)
+	player.survival.nutrition = 0.0
+	player.inventory.add(_item_catalog.make("apple"), 1)
+
+	assert_true(player.eat_food("apple"))
+
+	var nutrients: Dictionary = NutrientRelease.consume("apple")
+	assert_almost_eq(player.survival.hunger, 1.0 - nutrients["sugar"], 0.0001)
+	assert_almost_eq(player.survival.thirst, clampf(1.0 - nutrients["water"], 0.0, 1.0), 0.0001)
+	assert_almost_eq(player.survival.nutrition, nutrients["vitamins"], 0.0001)
+
+
+func test_eating_an_unmodeled_food_keeps_the_old_flat_hunger_relief():
+	player.survival.advance(100000.0)
+	player.inventory.add(_item_catalog.make("fish"), 1)
+
+	assert_true(player.eat_food("fish"))
+
+	assert_almost_eq(player.survival.hunger, 1.0 - Player.EAT_HUNGER_RELIEF, 0.0001)
+	assert_eq(player.survival.thirst, 1.0, "an unmodeled food must not touch thirst")
+
+
 func test_damage_buff_multiplier_is_higher_after_eating_a_legendary_fish():
 	var before := player._damage_buff_multiplier()
 

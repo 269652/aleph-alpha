@@ -24,6 +24,7 @@ const CreatureInfo = preload("res://src/world/creature_info.gd")
 const AnimalAnatomy = preload("res://src/rendering/animal_anatomy.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const CreatureNeeds = preload("res://src/gameplay/creature_needs.gd")
+const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
 const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
 const GrazerForaging = preload("res://src/gameplay/grazer_foraging.gd")
 const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
@@ -2454,23 +2455,41 @@ func _visible_food(kind: String) -> Array:
 ## gone (another animal got there first) simply feeds nothing -- the bout
 ## still plays out, which reads as the animal finding the patch already
 ## cropped rather than teleporting to another one.
+##
+## Fruit alone resolves its real composition (see NutrientRelease/
+## docs/concept/material_dsl.md): the species take_fruit_at returns is
+## checked against a real bite-scale crush, releasing real water/sugar
+## into thirst/hunger instead of the flat full-meter _needs.feed() every
+## OTHER forage kind still uses -- there is no composition data yet for
+## grass/seed/worm/underfoot.
 func _take_forage_bite() -> void:
 	if not _has_forage_target:
 		return
 	var got := false
+	var fruit_species := ""
 	match _forage_kind:
 		GrazerForaging.FOOD_UNDERFOOT:
 			got = true  # it is standing in its food; there is nothing to remove
 		GrazerForaging.FOOD_GRASS:
 			got = _world.has_method("graze_grass_at") and _world.graze_grass_at(_forage_target)
 		GrazerForaging.FOOD_FRUIT:
-			got = _world.has_method("take_fruit_at") and _world.take_fruit_at(_forage_target) != ""
+			if _world.has_method("take_fruit_at"):
+				fruit_species = _world.take_fruit_at(_forage_target)
+				got = fruit_species != ""
 		GrazerForaging.FOOD_SEED:
 			got = _world.has_method("take_seed_at") and _world.take_seed_at(_forage_target) != ""
 		GrazerForaging.FOOD_WORM:
 			got = _world.has_method("take_worm_at") and _world.take_worm_at(_forage_target)
 	if got:
-		_needs.feed()
+		if _forage_kind == GrazerForaging.FOOD_FRUIT:
+			var nutrients: Dictionary = NutrientRelease.consume(fruit_species)
+			if nutrients.get("crushed", false):
+				_needs.feed_amount(nutrients.get("sugar", 0.0))
+				_needs.drink_amount(nutrients.get("water", 0.0))
+			else:
+				_needs.feed()
+		else:
+			_needs.feed()
 		_gain_energy()
 	_drop_forage_target()
 
