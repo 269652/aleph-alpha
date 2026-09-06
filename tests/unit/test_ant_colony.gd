@@ -581,6 +581,183 @@ func test_a_colony_that_never_restocks_food_eventually_shrinks():
 	assert_lt(colony.population_at(cell), starting_population)
 
 
+# -- cold soil: real dormancy, not a guaranteed permanent death sentence
+# (reported live: "now i don't see any ant mounds at all anymore (fresh
+# start, winter)") -- confirmed root cause: FOOD_BUFFER_DAYS(3) *
+# SECONDS_PER_SIMULATED_DAY(60) = 180 real seconds is far shorter than a
+# real winter's near-total lack of forage success (bare trees drop no
+# windfall, fallen leaf litter ages into its own terminal decay stage with
+# nothing replacing it -- see docs/concept/leaf_litter.md), so every mound
+# starves to a literal population 0.0 well within one season, and (see the
+# next section) can never recover from that on its own. -----------------
+
+## Mirrors EarthwormPatch's own record_moisture-shaped API exactly.
+func test_record_warmth_accepts_a_reading_without_error():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony.record_warmth(cell, 0.3)
+	pass_test("record_warmth accepted a reading without error")
+
+
+## Never recorded at all (a mound that has not yet had its first periodic
+## refresh -- see EarthChunkManager._refresh_ant_moisture's own cadence)
+## must read as full, undiminished activity, the OPPOSITE default
+## moisture/forage_success use. Deliberately so: those two feed a BONUS
+## (a missing one just reads as "none earned yet", still a perfectly
+## healthy baseline -- see capacity()'s own "1.0 +" floor), but warmth
+## drives a PENALTY here -- defaulting it to "coldest possible" would
+## throttle every freshly-loaded mound before its own first real reading
+## ever arrives, directly contradicting "a freshly-seeded mound is never
+## born already starving" (_founding_food_reserve's own doc comment).
+func test_a_mound_with_no_warmth_recorded_yet_depletes_at_the_undiminished_rate():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var before := colony.food_stored_at(cell)
+	colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	var expected_drop := colony.population_at(cell) * AntPopulationModel.FOOD_PER_ANT_PER_DAY
+	assert_almost_eq(colony.food_stored_at(cell), before - expected_drop, 0.01)
+
+
+## The actual fix: cold soil throttles upkeep the same way EarthwormPatch's
+## own soil_warmth already throttles worm surfacing (same soil, same real
+## mechanism) -- real ants, like real earthworms, drastically cut activity
+## in cold soil rather than continuing to draw full upkeep while genuinely
+## unable to forage for it. 20 repeated readings (same EMA warm-up
+## convention test_recording_moisture_raises_capacity already uses) so the
+## EMA has actually settled near the recorded value rather than still
+## sitting close to its own "no reading yet" default -- a REALISTIC
+## soil_warmth-scale reading (0.05), not an abstract "0.0 on an independent
+## coldness slider": EarthwormPatch's own COLD_CUTOFF/MILD_WARMTH are
+## calibrated against soil_warmth's real climate*seasonal output range,
+## which a temperate biome's own real winter genuinely reaches down into
+## (see soil_warmth's own doc comment on why a raw 1.0 essentially never
+## occurs there either).
+func test_cold_soil_depletes_food_slower_than_warm_soil():
+	var cold := _colony("grassland", 42)
+	var warm := _colony("grassland", 42)
+	var cell: Vector2i = cold.mound_cells()[0]
+	for i in 20:
+		cold.record_warmth(cell, 0.05)
+		warm.record_warmth(cell, 1.0)
+	cold.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	warm.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_gt(
+		cold.food_stored_at(cell), warm.food_stored_at(cell),
+		"cold, dormant soil should draw the food reserve down slower than warm soil"
+	)
+
+
+## Never all the way to zero -- a genuinely dormant colony still needs
+## SOME food to survive winter on stored fat. A hard 0.0 floor here would
+## just move the identical permanent-death bug to "a sufficiently long or
+## severe cold spell" instead of actually fixing it.
+func test_cold_soil_still_depletes_some_food_not_zero():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 20:
+		colony.record_warmth(cell, 0.05)
+	var before := colony.food_stored_at(cell)
+	colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_lt(colony.food_stored_at(cell), before)
+
+
+## The actual reported symptom, closed: a colony sitting through a real,
+## sustained cold spell with ZERO forage success (exactly what a real
+## winter's lack of leaf litter/seed/windfall gives it) must not starve to
+## extinction purely from the cold itself, over the same stretch that
+## test_a_fully_starved_colony_reads_zero_food_availability_not_full's own
+## WARM-soil equivalent already fully starves. Warmth is pre-settled
+## (same 20-reading warm-up as the tests above) before the advance loop
+## begins, matching how a mound already deep in winter -- not one just now
+## starting to cool -- is the realistic case this fix targets.
+func test_a_colony_kept_cold_and_foodless_survives_far_longer_than_a_warm_one():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 20:
+		colony.record_warmth(cell, 0.05)
+	for i in 10:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_gt(
+		colony.population_at(cell), 0.0,
+		"a cold, dormant colony should not yet have starved over the same stretch that fully starves a warm one"
+	)
+
+
+# -- re-founding: a mound that hit a literal population 0.0 is not gone
+# forever -- see PopulationModel.step's own hard "carrying_capacity <= 0.0
+# -> population immediately 0.0" rule, confirmed directly below to be
+# permanent and unrecoverable through ordinary growth alone (growth is
+# proportional to CURRENT population, and zero population growing at any
+# rate is still zero) --------------------------------------------------
+
+## Pinned directly: feeding a starved colony a GUARANTEED forage success
+## on every single advance() call never lifts population off a literal
+## 0.0 -- food_availability_fraction's own guard (population <= 0.0 ->
+## 0.0, unconditionally) means capacity_at stays locked at exactly 0.0
+## regardless of how good recent forage success/moisture read, so
+## PopulationModel.step's "carrying_capacity <= 0.0" rule keeps re-firing
+## forever. Deliberately only 20 successes (not enough to cross
+## _founding_food_reserve and trigger REAL recovery -- see the refounding
+## tests below, which are what actually lifts this) -- this test is
+## isolated to prove growth math ALONE never does it.
+func test_a_starved_colony_does_not_recover_through_ordinary_growth_alone():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 10:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_almost_eq(colony.population_at(cell), 0.0, 0.001, "precondition: colony should have fully starved")
+	for i in 20:
+		colony.record_forage_result(cell, true)
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_almost_eq(
+		colony.population_at(cell), 0.0, 0.001,
+		"ordinary growth alone should never lift population off a literal 0.0"
+	)
+
+
+## The actual fix: once real food has genuinely piled back up to a full
+## founding reserve at an empty mound (the same standard _seed_initial_
+## mounds itself starts every brand-new colony at -- see _founding_food_
+## reserve) -- still reachable even for an "extinct" mound, since
+## EarthChunkManager._dispatch_forager's own active_forager_cap_at floors
+## at 1 forager regardless of population -- a fresh colony re-founds
+## there, the same real recolonization a wiped-out nest site actually gets
+## once conditions genuinely improve.
+func test_a_starved_mound_refounds_once_a_full_reserve_genuinely_accumulates():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 10:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_almost_eq(colony.population_at(cell), 0.0, 0.001, "precondition: colony should have fully starved")
+	colony.deposit_food(cell, 10000.0)  # a real, large surplus -- not a special-cased amount
+	colony.advance(0.01)
+	assert_gt(colony.population_at(cell), 0.0, "a genuinely refounded mound should have real population again")
+
+
+func test_refounding_lands_at_the_same_starting_population_a_brand_new_mound_gets():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 10:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	colony.deposit_food(cell, 10000.0)
+	colony.advance(0.01)
+	assert_almost_eq(colony.population_at(cell), AntPopulationModel.STARTING_POPULATION, 0.001)
+
+
+## Scoped to a genuinely EXTINCT mound only -- refounding must never
+## trigger for (and so never silently reset) a colony that still has any
+## real population left, no matter how abundant its food is.
+func test_refounding_never_triggers_for_a_colony_that_still_has_any_real_population():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony.deposit_food(cell, 10000.0)
+	colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_almost_eq(
+		colony.population_at(cell), AntPopulationModel.STARTING_POPULATION, 0.5,
+		"a colony that never actually went extinct should follow ordinary growth, not silently reset"
+	)
+
+
 # -- fewer, bigger colonies from the start (see docs/concept/soil_fauna.md's
 # "A real food economy" section) -------------------------------------------
 

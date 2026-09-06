@@ -21,6 +21,7 @@ const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
 
 var manager: EarthChunkManager
 var tile_map_layer: TileMapLayer
@@ -99,3 +100,39 @@ func test_crush_walnut_near_returns_false_when_nothing_is_there():
 	assert_false(
 		manager.crush_walnut_near(Vector2(100.0, 100.0), CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
 	)
+
+
+## Reported live, real crash: "Invalid access to property or key
+## 'item_stack' on a base object of type 'Node2D (liftable_stone.gd)'."
+## DroppedItem.GROUP_NAME is shared by every ground-pickable thing in
+## this game, LiftableStone very much included (see DroppedItem's own
+## doc comment) -- a LiftableStone has no item_stack field at all, so
+## direct dot-access crashes the instant one exists anywhere near a
+## step. Must duck-check the same safe way Player.
+## nearest_kickable_dropped_item_near already does ("item_stack" in
+## item), not assume every DroppedItem.GROUP_NAME member is shaped like
+## an actual DroppedItem.
+func test_crush_walnut_near_does_not_crash_on_a_liftable_stone_in_the_group():
+	var stone := LiftableStone.new()
+	stone.position = Vector2(100.0, 100.0)
+	entities_parent.add_child(stone)
+
+	assert_false(
+		manager.crush_walnut_near(Vector2(100.0, 100.0), CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	)
+
+
+## The real, reported scenario exactly: a stone sits on the group
+## alongside a real walnut elsewhere -- the stone must not stop the scan
+## from finding and cracking the actual walnut.
+func test_crush_walnut_near_still_finds_a_walnut_past_a_liftable_stone():
+	var stone := LiftableStone.new()
+	stone.position = Vector2(500.0, 500.0)
+	entities_parent.add_child(stone)
+	var walnut := _drop("walnut", Vector2(100.0, 100.0))
+
+	assert_true(
+		manager.crush_walnut_near(Vector2(100.0, 100.0), CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	)
+
+	assert_true(walnut.is_queued_for_deletion())

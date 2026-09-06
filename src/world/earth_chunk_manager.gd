@@ -58,6 +58,7 @@ const MushroomFlush = preload("res://src/world/mushroom_flush.gd")
 const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
 const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
 const CaterpillarRenderer = preload("res://src/rendering/caterpillar_renderer.gd")
+const MillipedeRenderer = preload("res://src/rendering/millipede_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
@@ -348,6 +349,7 @@ var _cave_entrance_placement := CaveEntrancePlacement.new()
 var _wild_crop_renderer := WildCropRenderer.new()
 var _decomposer_renderer := DecomposerRenderer.new()
 var _caterpillar_renderer := CaterpillarRenderer.new()
+var _millipede_renderer := MillipedeRenderer.new()
 ## "an NPC moves in" (see docs/concept/timber_construction.md's NPC
 ## section) -- no dedicated renderer class needed (spawning one
 ## LumberjackMarker per Sägewerk tile is simple enough to do directly, see
@@ -586,6 +588,11 @@ var _decomposer_markers: Dictionary = {}
 ## shape as _decomposer_markers immediately above, for the same reason: a
 ## caterpillar's whole behaviour lives on the marker itself.
 var _caterpillar_markers: Dictionary = {}
+## Vector2i chunk_coord -> Array[MillipedeMarker], same per-chunk-array
+## shape as _caterpillar_markers immediately above, for the same reason
+## (see docs/concept/soil_fauna.md "Millipedes: a dedicated autumn
+## leaf-litter decomposer").
+var _millipede_markers: Dictionary = {}
 
 ## The Sägewerk's own Lumberjack -- "an NPC moves in" the moment a
 ## "sagewerk" modification tile exists (see
@@ -5485,7 +5492,14 @@ func crush_walnut_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 		return false
 	var tile := _world_tile_for_pixel(pixel_position)
 	for item in _entities_parent.get_tree().get_nodes_in_group(DroppedItem.GROUP_NAME):
-		if item.item_stack == null or item.item_stack.item.id != "walnut":
+		# DroppedItem.GROUP_NAME is shared by every ground-pickable thing in
+		# this game -- LiftableStone/PickableSeed very much included (see
+		# DroppedItem's own doc comment) -- and neither has an item_stack
+		# field at all. Duck-check the same safe way Player.
+		# nearest_kickable_dropped_item_near already does; a direct
+		# item.item_stack dot-access crashes the instant one of those
+		# exists anywhere near a step.
+		if not ("item_stack" in item) or item.item_stack == null or item.item_stack.item.id != "walnut":
 			continue
 		if _world_tile_for_pixel(item.position) != tile:
 			continue
@@ -7022,11 +7036,36 @@ func crush_worm_at(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 ## drops out of _caterpillar_markers, the same removal chunk-unload already
 ## performs. Returns whether anything was actually crushed.
 func crush_caterpillars_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
+	return _crush_markers_near(_caterpillar_markers, pixel_position, momentum_kg_m_s)
+
+
+## The millipede-shaped sibling of crush_caterpillars_near (see
+## docs/concept/soil_fauna.md "Generalized to millipedes too") -- a
+## millipede is the identical SHAPE of victim a caterpillar already is (a
+## real, independently-positioned Node2D, not per-tile cell state like a
+## worm), so this shares crush_caterpillars_near's own body via
+## _crush_markers_near rather than a third hand-copied implementation of
+## the same "resolve the stepped-on tile, scan this chunk's own tracked
+## markers by real position, free anything that clears the threshold"
+## logic. Returns whether anything was actually crushed.
+func crush_millipedes_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
+	return _crush_markers_near(_millipede_markers, pixel_position, momentum_kg_m_s)
+
+
+## Shared body for crush_caterpillars_near/crush_millipedes_near -- both
+## victims are a real Node2D tracked in a chunk_coord -> Array dictionary,
+## crushed identically (see either caller's own doc comment for the
+## reasoning); the ONLY thing that differs between them is which
+## dictionary to scan, so that is the one thing passed in. `markers_by_
+## chunk` is mutated in place (an Array is a reference type in GDScript),
+## the same "erase from the caller's own tracking dict directly" contract
+## crush_caterpillars_near's own pre-refactor body already had.
+func _crush_markers_near(markers_by_chunk: Dictionary, pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 	if not CrushMechanic.is_crushed_by(momentum_kg_m_s):
 		return false
 	var tile := _world_tile_for_pixel(pixel_position)
 	var chunk_coord := _chunk_coord_for_tile(tile)
-	var markers: Array = _caterpillar_markers.get(chunk_coord, [])
+	var markers: Array = markers_by_chunk.get(chunk_coord, [])
 	var crushed_any := false
 	for marker in markers.duplicate():
 		if _world_tile_for_pixel(marker.position) == tile:
@@ -7383,12 +7422,22 @@ func step_ants(delta_seconds: float) -> void:
 
 ## Water, not just food (see docs/concept/soil_fauna.md's own section by
 ## that name): pushes each loaded chunk's own live weather-derived soil
-## moisture into every mound it holds. Sampled per CHUNK's own centre
-## tile, the identical "weather is already a per-region roll, sample the
-## centre rather than the player's own tile" reasoning step_worms already
-## uses for EarthwormPatch -- moisture is a slow, day-timescale condition,
-## not something worth a per-mound lookup.
+## moisture AND soil warmth into every mound it holds. Sampled per CHUNK's
+## own centre tile, the identical "weather is already a per-region roll,
+## sample the centre rather than the player's own tile" reasoning
+## step_worms already uses for EarthwormPatch -- both are slow,
+## day-timescale conditions, not something worth a per-mound lookup.
+##
+## Warmth reuses EarthwormPatch.soil_warmth(climate, season_warmth)
+## directly -- the SAME real climate+season computation step_worms
+## already runs for the identical soil, not a second, independent
+## reading (see AntColony.record_warmth's own doc comment on why this
+## particular fix exists: real winter, with nothing left for a mound to
+## forage, was starving every colony to a literal, permanent population
+## 0.0 within 180 real seconds -- reported live: "now i don't see any ant
+## mounds at all anymore (fresh start, winter)").
 func _refresh_ant_moisture() -> void:
+	var season_warmth := _season_cycle.warmth_modifier(_world_age_seconds)
 	for chunk_coord in _ant_colonies:
 		var colony: AntColony = _ant_colonies[chunk_coord]
 		var centre_tile: Vector2i = chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
@@ -7396,8 +7445,13 @@ func _refresh_ant_moisture() -> void:
 			float(centre_tile.x) + 0.5, float(centre_tile.y) + 0.5
 		) * float(TerrainRenderer.TILE_SIZE)
 		var moisture := _weather_model.soil_moisture(current_weather(centre_pixel))
+		var climate := clampf(
+			generator.temperature_at_global(centre_tile.x, centre_tile.y), 0.0, 1.0
+		)
+		var warmth := EarthwormPatch.soil_warmth(climate, season_warmth)
 		for cell in colony.mound_cells():
 			colony.record_moisture(cell, moisture)
+			colony.record_warmth(cell, warmth)
 
 
 ## Central fallen-leaf-litter step (see LeafLitterField,
@@ -9683,6 +9737,26 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for caterpillar_marker in _caterpillar_markers[chunk_coord]:
 		caterpillar_marker.setup(self)
 
+	# Requested live, after a screenshot of an autumn floor carpeted in
+	# leaves: "what else decomposes leaves I could add into the ecosystem
+	# to increase decomposition rate?" (see docs/concept/soil_fauna.md
+	# "Millipedes: a dedicated autumn leaf-litter decomposer"). No season
+	# read at all, unlike caterpillars just above -- a millipede spawns
+	# year-round, since the entire point is being present for the autumn
+	# pile a caterpillar structurally cannot touch.
+	_millipede_markers[chunk_coord] = _millipede_renderer.spawn_millipedes(
+		_entities_parent, _biome_classifier.dominant_biome(chunk.biome),
+		chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		hash("%d_%d_millipedes" % [chunk_coord.x, chunk_coord.y])
+	)
+	# Gives each freshly-spawned millipede this manager as its optional
+	# `_world` (see MillipedeMarker.setup) -- the one thing it needs an
+	# injected world for at all: finding chunk-specific leaf litter (see
+	# nearest_leaf_litter_near/consume_leaf_litter_at, the same ports
+	# DecomposerMarker/CaterpillarMarker already share).
+	for millipede_marker in _millipede_markers[chunk_coord]:
+		millipede_marker.setup(self)
+
 	# Re-staff every Sägewerk this chunk already had persisted, before this
 	# load, with a fresh Lumberjack -- "an NPC moves in" applies just as much
 	# to a revisited worksite as a freshly-placed one (see
@@ -10288,6 +10362,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for marker in _caterpillar_markers.get(chunk_coord, []):
 		marker.free()
 	_caterpillar_markers.erase(chunk_coord)
+
+	for marker in _millipede_markers.get(chunk_coord, []):
+		marker.free()
+	_millipede_markers.erase(chunk_coord)
 
 	for marker in _sagewerk_lumberjacks.get(chunk_coord, {}).values():
 		marker.free()

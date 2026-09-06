@@ -63,7 +63,7 @@ named events only:
 
 | Event | Delta | Source |
 |---|---|---|
-| A worm or caterpillar is crushed underfoot (player's own step OR any creature's, since `CrushMechanic` already treats both identically — see its own doc comment) | `-1.0` | `CrushMechanic`/`EarthwormPatch`/`EarthChunkManager.crush_caterpillars_near`, hooked from `World`'s existing per-frame crush pass |
+| A worm, caterpillar, or millipede is crushed underfoot (player's own step OR any creature's, since `CrushMechanic` already treats all three identically — see its own doc comment). Millipedes joined the same day this table's first two entries did, once `docs/concept/soil_fauna.md`'s "Generalized to millipedes too" gave them the identical crush shape a caterpillar already has | `-1.0` | `CrushMechanic`/`EarthwormPatch`/`EarthChunkManager.crush_caterpillars_near`/`crush_millipedes_near`, hooked from `World`'s existing per-frame crush pass |
 | A quest is abandoned (see Quest lifecycle below) | `-1.0` | `QuestLog.abandon` |
 | A quest is fulfilled — this is the request's "helping an NPC": every quest in this codebase's real, implemented slice is literally an NPC's own stated need (`docs/concept/quests.md` pillar 1), so completing one and helping the NPC who asked for it are the same event, not two mechanisms | `+1.0` | `QuestLog`, detected the same re-derivation way completion always works here (see below) |
 

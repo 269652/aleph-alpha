@@ -1477,6 +1477,88 @@ scout, a resolver, and an ordinary solo forager (identical
 simultaneously-active trails — `nearest_trail_near` returns only the
 single closest one.
 
+### Winter dormancy, and a mound that can come back from zero (2026-09-06)
+
+Reported live: "now i don't see any ant mounds at all anymore (fresh
+start, winter)". Root-caused directly rather than assumed, by simulating
+a freshly-seeded mound receiving zero successful forages: `FOOD_BUFFER_
+DAYS`(3) × `SECONDS_PER_SIMULATED_DAY`(60) = 180 real seconds is far
+shorter than a real winter's near-total lack of forage success (bare
+trees drop no windfall; fallen leaf litter ages into its own terminal
+decay stage — see [leaf_litter.md](leaf_litter.md) — with nothing
+replacing it while the canopy stays bare), so every mound was starving to
+a literal `population_at` 0.0 well within one season. Worse: once there,
+it stayed there — `PopulationModel.step`'s own hard "`carrying_capacity
+<= 0.0` → population immediately 0.0" rule means population can never
+grow itself back out through ordinary logistic growth alone (growth is
+proportional to CURRENT population, and zero population growing at any
+rate is still zero) — confirmed directly by feeding a starved mound a
+GUARANTEED forage success on every single `advance()` call for a real 5
+simulated minutes: `food_stored` climbed into the thousands: `population_
+at` never moved off 0.0. "A real food economy"'s own `test_a_fully_
+starved_colony_reads_zero_food_availability_not_full` had already pinned
+the "starves within a handful of simulated days" half of this as a
+confirmed, deliberate famine; nothing had yet pinned that this made
+EVERY colony's eventual, permanent extinction a certainty rather than a
+real, occasional risk.
+
+**Two changes, addressing both halves.**
+
+1. **Real winter dormancy**, mirroring `EarthwormPatch`'s own cold-gate
+   exactly (same soil, same real mechanism — real ants, like real
+   earthworms, drastically cut activity and metabolism in cold soil
+   rather than continuing to draw full upkeep while genuinely unable to
+   forage for it). `AntColony.record_warmth` (new, mirrors `record_
+   moisture`'s own EMA-fed, `EarthChunkManager._refresh_ant_moisture`
+   -sourced shape) feeds `dormancy_multiplier_at`, which reuses
+   `EarthwormPatch.COLD_CUTOFF`/`MILD_WARMTH` directly against the
+   SAME real `EarthwormPatch.soil_warmth(climate, season_warmth)`
+   reading `step_worms` already computes for the identical soil — not a
+   second, independently-eyeballed pair of numbers. `_deplete_food` now
+   scales its draw by this multiplier, floored at `DORMANCY_FLOOR` (0.2,
+   never all the way to 0.0 — mirrors `WINTER_SOIL_FLOOR`'s own "a
+   seasonal swing is a partial cooling, not a multiplication down to
+   zero" reasoning exactly: a genuinely dormant colony still needs SOME
+   food to survive winter on stored fat, the same as a real
+   overwintering colony). A mound that has never had a real reading yet
+   defaults to full, undiminished activity (`record_warmth`'s own "1.0,
+   not 0.0" default) — the OPPOSITE of moisture/forage-success's own
+   defaults, deliberately: those feed a capacity BONUS, where "none
+   earned yet" safely reads as a neutral baseline; warmth drives a
+   PENALTY, where the equivalent "coldest possible" default would
+   throttle every freshly-loaded mound before its own first real reading
+   ever arrives, directly contradicting "a freshly-seeded mound is never
+   born already starving" (`_founding_food_reserve`'s own doc comment).
+2. **Re-founding**: the actual fix for a mound that DOES still reach a
+   literal 0.0 regardless (a sufficiently long or severe cold spell, or
+   any other real famine — dormancy above narrows how often this
+   happens, it does not claim to make it impossible). Real ant nest
+   sites get recolonized once conditions improve — a new queen/swarm
+   founds again where an old colony died out — so `AntColony.advance`
+   now checks, per mound per step, whether a real, full founding reserve
+   (the same standard `_seed_initial_mounds` itself starts every
+   brand-new colony at) has genuinely piled back up at an empty mound,
+   and re-founds it at `STARTING_POPULATION` exactly as a brand-new mound
+   would, before the ordinary logistic-growth step ever runs that tick.
+   Still reachable even for an "extinct" mound: `EarthChunkManager.
+   _dispatch_forager`'s own `active_forager_cap_at` floors at 1 forager
+   regardless of population, so a lone forager keeps trying — and can
+   keep depositing real food home — even after every worker has starved.
+
+**What this does NOT include**: no seasonal reduction in FORAGE_CHANCE
+or dispatch itself (a dormant colony still sends its usual foragers out;
+it is only the UPKEEP draw that is throttled, matching how real dormant
+ants still occasionally forage on a mild winter day rather than sealing
+the nest outright). No warning/UI telling a player a mound is dormant or
+has gone extinct — `AntMoundMarker`'s own hover tooltip already reports
+real population/food, so an attentive player can already read a dormant
+or refounding mound off the same numbers. No migration-based
+recolonization from a NEIGHBOURING mound (`AntPopulationModel`'s own doc
+comment already names ants as the one regional population in this game
+with no `migrate()` at all, mounds being sessile) — re-founding here is
+a single mound's own site recovering, never population moving in from
+elsewhere.
+
 
 ## Crawling out, and back down
 
@@ -2071,3 +2153,112 @@ caterpillar_forage_behavior.gd`/existing `test_caterpillar_marker.gd`
 cases needed no changes — nothing about phase transitions, arrival
 distance, or eating/bite timing moved, only how fast the walk covers
 ground and where the sprite draws while it does.
+
+## Millipedes: a dedicated autumn leaf-litter decomposer (2026-09-06)
+
+Requested directly, reported live with a screenshot of an autumn floor
+carpeted in fallen leaves: *"Leaves are too many in autumn what else
+decomposes leaves I could add into the ecosystem to increase decomposition
+rate?"* Investigated first, rather than assumed: leaf litter's only
+non-seasonal removal sinks are ants (`AntColony`/`AntForagerMarker`, real
+but heavily rate-limited — 2 mounds/chunk, a 5%-per-step forage roll, a
+1-tile sense radius) and caterpillars — and caterpillars are structurally
+incapable of ever touching the pile this complaint is actually about:
+`CaterpillarMarker._is_green` only eats a leaf whose own recorded season is
+`"spring"`/`"summer"`, permanently excluding every `"autumn"`-tagged leaf
+(see "Caterpillars: on trees, on the ground, green leaves only" above).
+Flies and earthworms have no relationship to leaf litter at all (flies
+breed on rotting dropped food; worms are driven by soil moisture).
+Meanwhile leaf-fall chance itself ramps from a 6% summer trickle to
+effectively 100% per tree per tick by late autumn
+(`EarthChunkManager.LEAF_AUTUMN_BASELINE_CHANCE`) — the removal side was
+never provisioned to keep up with that at all.
+
+**Real-world grounding.** Millipedes (Diplopoda) are among the most
+important detritivores of a deciduous forest floor specifically — unlike a
+carrion beetle or an omnivorous ant, they are near-exclusively
+saprophagous: they eat dead, decaying plant matter (leaf litter above all),
+not carrion, not fresh fruit, not live foliage. This is the opposite
+restriction from a caterpillar's own green-leaf-only diet, and exactly the
+gap nothing else in this ecosystem fills.
+
+**Deliberately reuses `CaterpillarForageBehavior` directly, not a new
+near-duplicate state machine.** That class's own `SEEKING -> APPROACHING ->
+EATING -> SEEKING` cycle is already fully generic — nothing tree-specific
+lives in the behavior itself, only in how `CaterpillarMarker` interprets
+its own `_target_is_tree` flag (see above). A millipede has no second food
+source and no climbing to interpret, so `MillipedeMarker`
+(`src/rendering/millipede_marker.gd`) is a smaller sibling of
+`CaterpillarMarker`: same `SEEKING`/`APPROACHING`/`EATING` phases, same
+`AmbientFlyerMovement`-driven ambient wander, same
+`nearest_leaf_litter_near`/`consume_leaf_litter_at` duck-typed
+`EarthChunkManager` ports every ground decomposer in this doc already
+shares — but with the season filter DROPPED entirely (any leaf, any
+season, is real food) and no tree branch at all.
+
+**Biome-gated at spawn, same set as caterpillars**
+(`{"grassland", "forest", "rainforest"}`, `MillipedeRenderer` mirroring
+`CaterpillarRenderer.CATERPILLAR_BIOMES` exactly) — wherever trees can grow
+leaf litter to decompose, not the wider carrion-adjacent land set
+`DecomposerRenderer`'s "bug" uses. No season gate at all (unlike
+caterpillars): a millipede's whole reason for existing is to be present
+when the autumn leaf pile actually happens, not absent for it.
+
+**Real illustrated art from the start**
+(`assets/sprites/animals/millipede.png`, an 8-column x 4-row sheet sharing
+worm.png/caterpillar.png's exact grid dimensions — 1536x1024, 192x256 per
+cell, confirmed directly against the PNG header). Four real animations:
+`crawl` (a flat, level, many-legged gait — the travel/wander pose and what
+approaching a leaf plays), `alert` (rears its front segments up, head
+raised — played while EATING, a millipede pausing to feed), `curl` (rolls
+into a defensive coil, a real millipede threat response), and `crushed` (a
+level crawl transitioning into a flattened, splattered pose). Only `crawl`
+and `alert` are wired to anything today — `curl` and `crushed` are
+measured, confirmed-real, and available, not yet wired to a real trigger,
+the same "available, not yet wired" gap this doc's own caterpillar `rest`
+row and kingfisher-adjacent rows have had before being closed later.
+
+### Generalized to millipedes too (2026-09-06)
+
+The same `CrushMechanic` a worm and a caterpillar already share (see
+"Generalized to caterpillars too" above) now has a third detection side:
+**`EarthChunkManager.crush_millipedes_near(pixel_position,
+momentum_kg_m_s) -> bool`**, sharing its actual body with
+`crush_caterpillars_near` via a new private `_crush_markers_near` helper
+rather than a third hand-copied implementation of the identical "resolve
+the stepped-on tile, scan this chunk's own tracked markers by real
+position, free anything that clears the threshold" logic — a millipede is
+the same *shape* of victim a caterpillar already is (a real,
+independently-positioned `Node2D`, not per-tile cell state like a worm), so
+there is nothing here that needs its own copy the way the worm/caterpillar
+split itself does. Wired identically to both existing calls, in the same
+`World._client_process` block: the player's own
+`_PLAYER_STEP_MOMENTUM_KG_M_S`, and every `CreatureMarker`'s own
+`CreatureMass.mass_kg_for(species)`-derived momentum.
+
+**Also feeds Karma** (see `docs/concept/karma_and_luck.md`): a crushed
+millipede charges the same `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` a
+crushed worm or caterpillar already does — the constant's own name
+predates this third species, but the event it represents ("a small,
+harmless decomposer died underfoot") is identical, and karma_and_luck.md's
+own event table is updated to say so rather than silently reusing the
+constant under a now-inaccurate name with no cross-reference.
+
+### What this does NOT include
+
+- **No timed death animation.** The `crushed` row exists and is real, but a
+  crushed millipede simply `queue_free()`s the instant
+  `crush_millipedes_near` finds it, the exact same "just disappear" outcome
+  a crushed worm or caterpillar already has — playing a death animation
+  before removal would need the marker to survive a few more frames in a
+  new terminal phase, a real follow-up, not silently half-built here.
+- **No `curl` trigger.** A real defensive reaction (fleeing/curling when
+  the player approaches) would need this creature to sense threats at all,
+  which nothing in `MillipedeMarker`/`CaterpillarForageBehavior` does
+  today — named, not silently assumed.
+- **No population/food-economy modeling.** Unlike `AntColony`'s real mound/
+  food-store/growth loop, a millipede is the ant/worm/caterpillar shape:
+  spawned once per qualifying chunk at load, wandering and eating
+  independently, with no colony, no stockpile, no carrying-capacity
+  feedback. A real "litter input -> detritivore biomass" model remains the
+  same deferred follow-up this doc's own worm section already names.
