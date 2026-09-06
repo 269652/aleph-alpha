@@ -32,12 +32,18 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const AntForageBehavior = preload("res://src/gameplay/ant_forage_behavior.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const LeafLitterAtlas = preload("res://src/rendering/leaf_litter_atlas.gd")
+const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
 
 const GROUP_NAME := "ant_forager"
 
-## Same walking speed as every other decomposer -- a colony's own forager is
-## the identical animal, not a faster/slower special case.
-const WALK_SPEED := 24.0
+## Originally the same walking speed as every other decomposer (24.0, see
+## DecomposerMarker.WALK_SPEED), on the reasoning that a colony's own
+## forager is the identical animal, not a faster/slower special case.
+## Reported directly ("half ants speed") and halved -- now a deliberately
+## independent, slower value; DecomposerMarker's own ambient ants/bugs are
+## untouched. Pinned by test_walk_speed_is_pinned_to_half_its_original_value.
+const WALK_SPEED := 12.0
 ## How close counts as "arrived at this leg's target" -- mirrors
 ## DecomposerMarker.ARRIVE_DISTANCE_PX exactly, the same tiny-insect arrival
 ## tolerance.
@@ -53,6 +59,16 @@ var mound_position: Vector2 = Vector2.ZERO
 ## first, same as before). Decides which of the world's take/plant APIs
 ## this trip actually calls.
 var forage_kind := "seed"
+
+## Which leaf this trip is carrying, if `forage_kind == "leaf"` -- set at
+## dispatch time (see EarthChunkManager._dispatch_ant_forager's own doc
+## comment) from the SAME nearest_leaf_litter_near lookup that found
+## target_position in the first place, so this marker never has to ask the
+## world a second time just to know what the leaf it is about to carry
+## home actually looks like. Left "" (the default) for seed/windfall trips,
+## which have no such visual (see _update_carried_leaf).
+var carried_leaf_species := ""
+var carried_leaf_season := ""
 
 var _behavior := AntForageBehavior.new()
 ## The species this trip is carrying, if any (windfall only -- a grass
@@ -80,8 +96,17 @@ var _sprite: Sprite2D
 ## still show the plain walk cycle, never carry.
 var _carrying := false
 
+## The real, visible leaf riding home with this ant (see _update_carried_
+## leaf) -- a SECOND child, added after _sprite so the ant's own body draws
+## on top of it (the same "carrying something held against the body"
+## read the ant's own carry POSE already establishes), never the only
+## visual standing in for "carrying". Hidden by default: only forage_kind
+## == "leaf" trips that actually found something ever show it.
+var _leaf_sprite: Sprite2D
+
 static var _procedural_generator := ProceduralDecomposerSprite.new()
 static var _illustrated_generator := IllustratedDecomposerSprite.new()
+static var _leaf_atlas := LeafLitterAtlas.new()
 
 
 ## `world` (duck-typed, see _world's own doc comment), `colony` (the real
@@ -99,6 +124,9 @@ func _ready() -> void:
 	add_to_group(HoverTargetFinder.GROUP_NAME)
 	_sprite = Sprite2D.new()
 	add_child(_sprite)
+	_leaf_sprite = Sprite2D.new()
+	_leaf_sprite.visible = false
+	add_child(_leaf_sprite)
 	_update_sprite()
 
 
@@ -131,6 +159,7 @@ func _process(delta: float) -> void:
 		AntForageBehavior.Phase.APPROACHING:
 			_resolve_arrival_at_food()
 			_update_sprite()
+			_update_carried_leaf()
 		AntForageBehavior.Phase.RETURNING:
 			_resolve_arrival_at_mound()
 			queue_free()
@@ -210,3 +239,60 @@ func _update_sprite() -> void:
 		_sprite.texture = _procedural_generator.generate_texture("ant")
 		_sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 		_sprite.flip_h = false
+
+
+## How far behind the ant's own centre the carried leaf sits, so it reads as
+## dragged along the ground rather than perfectly overlapping the ant's own
+## body -- half the leaf's own rendered size (LeafLitterRenderer.WORLD_SIZE),
+## the same "proportional to the real thing being placed" grounding this
+## codebase already uses elsewhere (e.g. AntColony's own carry_distance_tiles)
+## rather than an eyeballed pixel count.
+const _TRAIL_OFFSET_FRACTION := 0.5
+
+
+## The real, visible leaf riding home with the ant (see docs/concept/
+## soil_fauna.md's "Resolved" note on this bug) -- shown for the whole
+## RETURNING leg of a successful leaf trip, never just a flash at pickup:
+## unlike _update_sprite (which only ever needs to flip its OWN texture
+## between two known frames), this sprite's texture/scale/position are only
+## ever set ONCE, the same single moment _update_sprite is itself called
+## (real arrival at the food -- see _process's APPROACHING branch), since
+## nothing about a carried leaf changes for the rest of the straight-line
+## walk home. Frees automatically (as a child) the instant the whole
+## forager does, at real arrival at the mound -- see _resolve_arrival_at_
+## mound/_process's RETURNING branch -- so "vanish only when it's in the
+## mound" falls out of ordinary Godot node ownership, not extra bookkeeping
+## here.
+func _update_carried_leaf() -> void:
+	var carrying_leaf := (
+		forage_kind == "leaf"
+		and _behavior.phase == AntForageBehavior.Phase.RETURNING
+		and _behavior.found_food
+	)
+	_leaf_sprite.visible = carrying_leaf
+	if not carrying_leaf:
+		return
+	_leaf_sprite.texture = _leaf_texture_for(carried_leaf_species, carried_leaf_season)
+	_leaf_sprite.scale = Vector2.ONE * (LeafLitterRenderer.WORLD_SIZE / float(LeafLitterAtlas.STAMP_SIZE))
+	var to_mound := mound_position - position
+	var trail_direction := -to_mound.normalized() if to_mound.length() > 0.01 else Vector2.ZERO
+	_leaf_sprite.position = trail_direction * LeafLitterRenderer.WORLD_SIZE * _TRAIL_OFFSET_FRACTION
+
+
+## Crops `species`/`season`'s own stamp out of the SAME shared atlas texture
+## LeafLitterRenderer's ground-litter shader samples (see LeafLitterAtlas),
+## via the exact same cell_index/CELL_SIZE/STAMP_PADDING/STAMP_SIZE pixel
+## math that atlas already exposes -- so a carried leaf is genuinely the
+## SAME art a ground-resting one of this species/season would show, not an
+## independent lookalike. AtlasTexture (not a fresh cropped Image) so this
+## costs no new texture upload: it shares the ground renderer's own already-
+## built atlas_texture() outright.
+static func _leaf_texture_for(species: String, season: String) -> AtlasTexture:
+	var index := _leaf_atlas.cell_index(species, season)
+	var atlas_tex := AtlasTexture.new()
+	atlas_tex.atlas = _leaf_atlas.atlas_texture()
+	atlas_tex.region = Rect2(
+		index * LeafLitterAtlas.CELL_SIZE + LeafLitterAtlas.STAMP_PADDING, LeafLitterAtlas.STAMP_PADDING,
+		LeafLitterAtlas.STAMP_SIZE, LeafLitterAtlas.STAMP_SIZE
+	)
+	return atlas_tex

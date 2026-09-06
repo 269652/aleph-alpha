@@ -6748,6 +6748,16 @@ func test_a_successful_leaf_forage_dispatches_a_real_forager_at_the_leaf():
 	var forager: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
 	assert_eq(forager.target_position, leaf_position, "the forager should be sent at the REAL leaf position")
 	assert_eq(forager.forage_kind, "leaf")
+	# Bug report: "it should actually drag the real leaf entity visibly over
+	# the ground and vanish only when it's in the mound" -- consume_leaf_
+	# litter_at (called on real arrival, see AntForagerMarker._resolve_
+	# arrival_at_food) only ever returned a bool, with nowhere to recover
+	# WHICH leaf (species/season) to draw while carrying it home. The
+	# identity is already known here, at DISPATCH time, from the exact same
+	# nearest_leaf_litter_near call that found leaf_position -- threading it
+	# through now costs nothing extra later.
+	assert_eq(forager.carried_leaf_species, "cherry", "the dispatch already knows which species this leaf is")
+	assert_eq(forager.carried_leaf_season, "autumn", "the dispatch already knows which season this leaf fell in")
 	# The take has NOT happened yet -- only the forager's own real arrival
 	# resolves it (see test_ant_forager_marker.gd's own coverage of that).
 	assert_eq(field.leaves().size(), 1, "the leaf must still be there until the ant arrives")
