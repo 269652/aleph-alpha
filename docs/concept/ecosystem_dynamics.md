@@ -826,17 +826,35 @@ Two consequences worth stating plainly rather than discovering later:
   never grew or declined for the time spent away).~~ **Resolved**: one
   missing `_ecosystem.seed_fish_population(chunk_coord, float(caught_up.get("fish", 0.0)))`
   call, mirroring the six calls it already sat alongside.
-- **Marker top-up is reload-only, not continuous, for these three (new,
-  this pass)**: `EarthChunkManager._refresh_creatures` tops up/thins land
-  creature and fish MARKERS every periodic ecosystem step so a chunk's
-  visible count tracks its aggregate population continuously while loaded.
-  Robin/sparrow/kingfisher markers are not part of that pass yet — their
-  visible count is set from the aggregate population at chunk load (and
-  stays there until the chunk unloads and reloads), even though the
-  aggregate numbers themselves keep growing/declining underneath every
-  simulated day via `_refresh_bird_food_density`/`EcosystemSimulation.step`.
-  A robin population that has genuinely doubled since load will not spawn a
-  second visible robin until the player leaves the chunk and comes back.
+- ~~**Marker top-up is reload-only, not continuous, for these three**:
+  `EarthChunkManager._refresh_creatures` tops up/thins land creature and
+  fish MARKERS every periodic ecosystem step so a chunk's visible count
+  tracks its aggregate population continuously while loaded. Robin/
+  sparrow/kingfisher markers are not part of that pass yet — their visible
+  count is set from the aggregate population at chunk load (and stays
+  there until the chunk unloads and reloads), even though the aggregate
+  numbers themselves keep growing/declining underneath every simulated day
+  via `_refresh_bird_food_density`/`EcosystemSimulation.step`. A robin
+  population that has genuinely doubled since load will not spawn a second
+  visible robin until the player leaves the chunk and comes back.~~
+  **Resolved for robin/sparrow (2026-09-06); still open for kingfisher.**
+  This turned out to be exactly the mechanism behind the "zero sparrow
+  spawns" report below, not a separate gap: `spawn_ambient_flyers` promotes
+  population into markers exactly once, at chunk load, the instant
+  `add_region` seeds `sparrow_population` at 0.0 — so a species whose food
+  signal starts at genuine zero and only rises over real elapsed time could
+  never get a marker for the rest of a chunk's loaded lifetime.
+  `AmbientFlyerRenderer.reconcile_bird_markers`, wired into
+  `_refresh_creatures` via `EarthChunkManager._reconcile_chunk_ambient_
+  flyers`, now adds/removes robin and sparrow markers in place to match
+  their live population every periodic ecosystem step — the same add/
+  remove-never-rebuild shape `_reconcile_chunk_creatures` already used for
+  herbivores/predators. Kingfisher was left unchanged: its food signal (the
+  existing fish population) is seeded to a real equilibrium immediately at
+  chunk load (see `add_region`'s own doc comment), so it never exhibited
+  this symptom, and closing its half of the gap too was out of scope for
+  the specific report this fix addresses. See "Zero sparrow spawns,
+  resolved" below for the full investigation.
 - **No biogeographic realm axis exists anywhere in the project**, and a
   latitude band cannot substitute for one: a band cannot separate Nearctic
   from Palearctic, so a monarch can still appear on a 40°N Eurasian steppe,
@@ -1166,6 +1184,63 @@ healthy, which may be a correct fact about this save's local seed
 supply or may be a real bug in the seed-density → population pipeline.
 Flagged as a separate follow-up task rather than chased down as part of
 this one — out of scope for "does foraging work", which it does.
+
+**Zero sparrow spawns, resolved: a real bug in marker promotion, not a
+local seed shortage.** Measured directly rather than guessed at, since the
+two candidate explanations (no seed source nearby vs. a pipeline bug)
+needed real numbers to tell apart. A raw `godot -s` probe script cannot
+construct `EarthChunkManager` at all in this project — confirmed with a
+minimal repro: even a bare `WorldItemBus` reference in a one-line
+`SceneTree` script fails to compile under `-s` ("Identifier not found"),
+while the identical reference compiles fine through GUT's own
+`-s addons/gut/gut_cmdln.gd` entry point or the real game boot — so the
+probe was written as a temporary GUT test instead (`_load_chunk` on the
+real spawn point's own 3×3 chunk neighborhood, deleted after use per this
+project's manual-probe convention).
+
+Result: every one of those 9 chunks was dominated by grassland (712–1024
+of 1024 cells) with 20–205 standing tall-grass patches each — plentiful
+food, not a shortage. `sparrow_population` really was exactly `0.0` in
+every one of them at chunk load, matching `robin_population` at a healthy
+3.6–4.8 in the same chunks. Stepping `step_tall_grass`/`step_flowers`/
+`step_ecosystem` forward 20 simulated minutes (the same functions
+`World._process` drives every frame at normal speed) grew ground-seed
+cells to `TallGrass`'s own 48-cell cap and sparrow population to 4.2–5.4 —
+fully comparable to robin. The food-density → population pipeline
+(`SparrowPopulationModel`, `update_seed_density`, `TallGrass.shed_seed`)
+works correctly end to end.
+
+The actual bug was the marker-promotion gap already named above under
+"Marker top-up is reload-only" — `spawn_ambient_flyers` promotes a
+chunk's aggregate population into visible markers exactly ONCE, at chunk
+load, the instant `add_region` seeds `sparrow_population` at `0.0` by
+design (its food signal, ground-seed cells, is reported in later). Robin's
+own food signal (`EarthwormPatch.worm_cells()`) is a structural feature
+already in place at that same instant, so it reads 3–5 immediately and
+never notices the gap; sparrow's needs real elapsed shedding time that
+has not happened yet, so it is promoted at exactly `0` and nothing ever
+re-promotes it afterward for the rest of that chunk's loaded lifetime —
+regardless of how long the player stays. A player exploring outward
+(loading many DIFFERENT chunks for the first time, exactly what the
+reporting playtest did) can therefore go an entire session without ever
+seeing a sparrow, while every robin-qualifying chunk shows robins the
+instant it loads. That is the reported 48-vs-0 census, exactly.
+
+Fixed by closing the marker-top-up gap for robin/sparrow specifically
+(see the bullet above): `AmbientFlyerRenderer.reconcile_bird_markers`
+adds/removes robin and sparrow markers in place to match their current
+population, wired into the existing periodic `_refresh_creatures` pass.
+`FlyerSpawnLayout.scattered_cells` gained a `start` offset so a topped-up
+batch continues the same deterministic layout instead of landing a new
+marker on top of one already there — the same role
+`CreatureRenderer.spawn_creatures`' `start_index` already plays.
+End-to-end regression coverage: `test_earth_chunk_manager.gd`'s
+`test_refresh_creatures_promotes_sparrows_once_population_rises_after_
+load` reproduces the exact reported shape (a chunk loaded with zero
+sparrow population, forced to a real one without a reload, must show real
+sparrow markers) alongside targeted `reconcile_bird_markers` coverage in
+`test_ambient_flyer_renderer.gd` and the `scattered_cells` offset in
+`test_flyer_spawn_layout.gd`.
 
 **Same message, second half: "also birds should sit down on trees to
 tweet / dance".** Idle rest (see above) deliberately never touched
