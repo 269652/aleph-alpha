@@ -4923,15 +4923,16 @@ func _client_process(delta: float) -> void:
 		_chunk_manager.tread_snow_at(creature.position, false)
 	# Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
 	# weight-emergent worm mortality" and its "Generalized to caterpillars
-	# too"/"Generalized to millipedes too"/"Generalized to ants too"
-	# follow-ups) -- mirrors the tread_snow_at pair just above exactly
-	# (player, then every creature), but keyed on real weight rather than
-	# snow depth, so it runs regardless of season. crush_worm_at/
-	# crush_caterpillars_near/crush_millipedes_near/crush_ants_near share
-	# the identical momentum value per stepper -- one shared physics rule
-	# (CrushMechanic), two detection shapes (a worm is per-tile cell state,
-	# a caterpillar/millipede/ant forager a real Node2D). No debounce
-	# needed for any of the four: every removal is already idempotent
+	# too"/"Generalized to millipedes too"/"Generalized to ants too"/
+	# "Generalized to bugs too" follow-ups) -- mirrors the tread_snow_at
+	# pair just above exactly (player, then every creature), but keyed on
+	# real weight rather than snow depth, so it runs regardless of season.
+	# crush_worm_at/crush_caterpillars_near/crush_millipedes_near/
+	# crush_ants_near/crush_decomposers_near share the identical momentum
+	# value per stepper -- one shared physics rule (CrushMechanic), two
+	# detection shapes (a worm is per-tile cell state, a caterpillar/
+	# millipede/ant forager/decomposer a real Node2D). No debounce needed
+	# for any of the five: every removal is already idempotent
 	# (already-gone simply reports false again next frame), the same
 	# reasoning that let this skip the per-entity "last tile" tracking
 	# PathScarring/the snow trail's own debounce needs for a CONTINUOUS
@@ -4942,9 +4943,9 @@ func _client_process(delta: float) -> void:
 	# "stepping on a worm should give -1 Karma", asked for every crush, the
 	# player's own step OR any creature's, not just the player's deliberate
 	# ones -- so the penalty lands on local_player regardless of which of
-	# the two loops below did the crushing. A crushed millipede or ant
-	# charges the same constant -- its name predates both, but the event
-	# it represents is identical (see karma.gd's own doc comment).
+	# the two loops below did the crushing. A crushed millipede, ant or bug
+	# charges the same constant -- its name predates all three, but the
+	# event it represents is identical (see karma.gd's own doc comment).
 	if _chunk_manager.crush_worm_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	if _chunk_manager.crush_caterpillars_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
@@ -4952,6 +4953,8 @@ func _client_process(delta: float) -> void:
 	if _chunk_manager.crush_millipedes_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	if _chunk_manager.crush_ants_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
+		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
+	if _chunk_manager.crush_decomposers_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	# A mushroom is a fungus and a walnut a plant seed, neither an animal --
 	# crush_mushroom_at/crush_walnut_near's own bool returns are
@@ -4971,6 +4974,8 @@ func _client_process(delta: float) -> void:
 		if _chunk_manager.crush_millipedes_near(marker.position, momentum):
 			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 		if _chunk_manager.crush_ants_near(marker.position, momentum):
+			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
+		if _chunk_manager.crush_decomposers_near(marker.position, momentum):
 			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 		_chunk_manager.crush_mushroom_at(marker.position, momentum)
 		_chunk_manager.crush_walnut_near(marker.position, momentum)

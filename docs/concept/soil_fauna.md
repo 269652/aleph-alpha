@@ -2305,3 +2305,42 @@ trip as far as `AntColony.record_forage_result` is concerned (it is
 never called at all for a crushed forager, the same "silently
 disappeared mid-trip" outcome a crushed caterpillar/millipede already
 has relative to whatever they were doing).
+
+### Generalized to bugs too (2026-09-06)
+
+Asked directly, alongside mushrooms/ants: "a bug should count as a small
+creature too." `DecomposerMarker` — the ambient carrion/fruit/leaf-litter
+forager whose own `species` is `"ant"` or `"bug"` (see "Unifying the
+duplicate ants first" above) — was the one remaining victim shape
+`CrushMechanic`'s per-frame pass still had not reached, even after
+worm/caterpillar/millipede/`AntForagerMarker` all got it.
+
+**`EarthChunkManager.crush_decomposers_near(pixel_position,
+momentum_kg_m_s) -> bool`** is the fifth detection side — same
+`CrushMechanic.is_crushed_by` physics, same "insufficient momentum is a
+no-op" contract every other crush call already has. Unlike
+`crush_ants_near`, a `DecomposerMarker` IS tracked chunk-keyed, in
+`_decomposer_markers`, the identical shape `_caterpillar_markers`/
+`_millipede_markers` already are — so this shares `_crush_markers_near`'s
+own body directly, the same way `crush_millipedes_near` already does,
+rather than a fifth hand-copied scan. Wired identically to the other
+four calls, in the same `World._client_process` block: the player's own
+`_PLAYER_STEP_MOMENTUM_KG_M_S`, and every `CreatureMarker`'s own
+`CreatureMass.mass_kg_for(species)`-derived momentum.
+
+**Also feeds Karma** (see `docs/concept/karma_and_luck.md`): a crushed
+bug charges the same `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` a crushed
+worm/caterpillar/millipede/ant already does — the identical "a small,
+harmless invertebrate died underfoot" event, and `karma_and_luck.md`'s
+own event table is updated to say so. Applies identically whichever
+species string this particular `DecomposerMarker` happens to be drawing
+(`"ant"` or `"bug"`) — the crush check itself never reads `species` at
+all, only position, the same way `crush_ants_near` treats every
+`AntForagerMarker` alike regardless of which mound dispatched it.
+
+**What this does NOT include**: no corpse/recovery state (a crushed
+decomposer simply `queue_free()`s, same "just disappear" outcome every
+other crush victim already has). No effect on whatever it was doing —
+foraging a carcass, fruit, or leaf litter — beyond that one instance
+disappearing mid-task, the same "silently disappeared mid-trip" outcome
+a crushed caterpillar/millipede/ant already has.

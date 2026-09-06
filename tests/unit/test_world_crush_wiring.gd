@@ -22,6 +22,12 @@ extends GutTest
 ## Node2D), so it shares the identical wiring shape and Karma treatment,
 ## even though EarthChunkManager.crush_ants_near itself cannot share
 ## _crush_markers_near's own body (see that function's own doc comment).
+## crush_decomposers_near joined as a fifth call (asked directly: "a bug
+## should count as a small creature too") -- a DecomposerMarker is the
+## same shape of victim as a caterpillar/millipede (a real,
+## independently-positioned Node2D, chunk-keyed exactly like those two),
+## so it shares _crush_markers_near's own body and the identical Karma
+## treatment.
 
 const World = preload("res://scenes/world.gd")
 
@@ -40,6 +46,7 @@ func test_the_premise_the_other_tests_rely_on():
 	assert_true(body.contains("crush_caterpillars_near"), "must also call the caterpillar crush mechanism")
 	assert_true(body.contains("crush_millipedes_near"), "must also call the millipede crush mechanism")
 	assert_true(body.contains("crush_ants_near"), "must also call the ant crush mechanism")
+	assert_true(body.contains("crush_decomposers_near"), "must also call the decomposer/bug crush mechanism")
 
 
 ## The player's own step must use a real mass-derived momentum, not a
@@ -101,6 +108,12 @@ func test_crush_ants_near_is_called_for_both_the_player_and_creatures():
 	assert_eq(_count_occurrences(body, "crush_ants_near("), 2, "expected exactly one call for the player and one inside the creature loop")
 
 
+## The decomposer/bug-shaped mirror of the four tests above.
+func test_crush_decomposers_near_is_called_for_both_the_player_and_creatures():
+	var body := _client_process_body()
+	assert_eq(_count_occurrences(body, "crush_decomposers_near("), 2, "expected exactly one call for the player and one inside the creature loop")
+
+
 func _count_occurrences(haystack: String, needle: String) -> int:
 	var count := 0
 	var search_from := 0
@@ -124,15 +137,18 @@ func test_the_creature_crush_calls_are_inside_a_creaturemarker_group_loop():
 	var caterpillar_crush_at := body.rfind("crush_caterpillars_near(")
 	var millipede_crush_at := body.rfind("crush_millipedes_near(")
 	var ant_crush_at := body.rfind("crush_ants_near(")
+	var decomposer_crush_at := body.rfind("crush_decomposers_near(")
 	assert_gt(group_loop_at, -1)
 	assert_gt(worm_crush_at, -1)
 	assert_gt(caterpillar_crush_at, -1)
 	assert_gt(millipede_crush_at, -1)
 	assert_gt(ant_crush_at, -1)
+	assert_gt(decomposer_crush_at, -1)
 	assert_lt(group_loop_at, worm_crush_at, "the creature worm-crush call must come after entering the group loop")
 	assert_lt(group_loop_at, caterpillar_crush_at, "the creature caterpillar-crush call must come after entering the group loop")
 	assert_lt(group_loop_at, millipede_crush_at, "the creature millipede-crush call must come after entering the group loop")
 	assert_lt(group_loop_at, ant_crush_at, "the creature ant-crush call must come after entering the group loop")
+	assert_lt(group_loop_at, decomposer_crush_at, "the creature decomposer-crush call must come after entering the group loop")
 
 
 # -- Karma (see docs/concept/karma_and_luck.md) ------------------------------
@@ -141,20 +157,20 @@ func test_the_creature_crush_calls_are_inside_a_creaturemarker_group_loop():
 # player's own step OR any creature's -- not just the player's deliberate
 # ones. A crush call that ran but never fed Karma would defeat the entire
 # point of threading CrushMechanic's bool return value through at all.
-# Millipedes (docs/concept/soil_fauna.md "Generalized to millipedes too")
-# and ants (docs/concept/soil_fauna.md "Generalized to ants too") charge
-# the SAME constant a worm/caterpillar crush already does -- the name
-# predates both, but the event it represents ("a small, harmless
-# invertebrate died underfoot") is identical (see karma.gd's own doc
-# comment).
+# Millipedes (docs/concept/soil_fauna.md "Generalized to millipedes too"),
+# ants (docs/concept/soil_fauna.md "Generalized to ants too") and bugs
+# (docs/concept/soil_fauna.md "Generalized to bugs too") charge the SAME
+# constant a worm/caterpillar crush already does -- the name predates all
+# three, but the event it represents ("a small, harmless invertebrate died
+# underfoot") is identical (see karma.gd's own doc comment).
 
 
 func test_every_crush_call_site_applies_the_karma_penalty():
 	var body := _client_process_body()
 	assert_eq(
 		_count_occurrences(body, "apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)"),
-		8,
-		"expected the penalty applied at all 8 crush call sites (worm+caterpillar+millipede+ant, player+creature loop)"
+		10,
+		"expected the penalty applied at all 10 crush call sites (worm+caterpillar+millipede+ant+decomposer, player+creature loop)"
 	)
 
 
@@ -163,7 +179,7 @@ func test_every_crush_call_site_applies_the_karma_penalty():
 ## regardless of whether anything was actually crushed.
 func test_the_karma_penalty_is_only_charged_when_a_crush_actually_happens():
 	var body := _client_process_body()
-	for call_name in ["crush_worm_at(", "crush_caterpillars_near(", "crush_millipedes_near(", "crush_ants_near("]:
+	for call_name in ["crush_worm_at(", "crush_caterpillars_near(", "crush_millipedes_near(", "crush_ants_near(", "crush_decomposers_near("]:
 		var search_from := 0
 		var checked := 0
 		while true:

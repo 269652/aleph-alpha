@@ -13809,6 +13809,23 @@ different dictionary keys), plus `test_world_crush_wiring.gd`'s existing
 source-contract tests all extended to cover the fourth call site (16/16
 green). Full writeup: [soil_fauna.md](concept/soil_fauna.md#generalized-to-ants-too-2026-09-06).
 
+✅ **Bugs generalized into the crush pass too (2026-09-06)** — asked
+directly, alongside the mushroom/ant Karma work below: "a bug should
+count as a small creature too." `DecomposerMarker` (the ambient carrion/
+fruit/leaf-litter forager, species `"ant"` or `"bug"`) was the one
+remaining victim shape `CrushMechanic`'s per-frame pass had not reached.
+New `EarthChunkManager.crush_decomposers_near` is the fifth
+`CrushMechanic`-driven detection side — unlike `crush_ants_near`, a
+`DecomposerMarker` IS tracked chunk-keyed (`_decomposer_markers`, the
+same shape `_caterpillar_markers`/`_millipede_markers` already are), so
+this one shares `_crush_markers_near`'s own body directly rather than a
+fifth hand-copied scan. Wired into `World._client_process` identically
+to the other four and charges the same `Karma.WORM_OR_CATERPILLAR_
+CRUSH_PENALTY`. 6 new tests in `test_earth_chunk_manager.gd`, plus
+`test_world_crush_wiring.gd`'s existing source-contract tests extended
+to cover the fifth call site (17/17 green). Full writeup:
+[soil_fauna.md](concept/soil_fauna.md#generalized-to-bugs-too-2026-09-06).
+
 ### Material DSL: fruit composition → crush → nutrients (`concept/material_dsl.md`, new this pass)
 
 Requested directly: describe a material (e.g. an apple) as percentages of
