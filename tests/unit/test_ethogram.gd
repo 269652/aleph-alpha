@@ -283,10 +283,17 @@ func test_the_villager_profile_is_hunger_only_at_the_mammal_pace():
 
 
 ## A songbird eats through the day (BirdDigestion): an empty crop fills by
-## about 0.7 per meal and empties in an eighth of the world day.
+## about 0.7 per meal and empties in a THIRTY-SECOND of the world day.
+##
+## Was /8.0 (13 meals/day, ~18 real minutes hungry-to-hungry) until
+## reported live, twice: a robin standing right next to visible worms
+## reads as "not eating" -- confirmed working, just too rare to catch (a
+## 2-second peck once every ~18 minutes). Asked directly whether to speed
+## it up: yes, 4x -- see test_a_bird_forages_four_times_as_often
+## (test_bird_digestion.gd) for the pinned ratio.
 func test_the_bird_profile_is_the_songbird_crop():
 	var profile := Ethogram.drive_profile("", "bird")
-	assert_almost_eq(profile["hunger"]["rise_seconds"], SeasonCycle.SECONDS_PER_DAY / 8.0, 0.0001)
+	assert_almost_eq(profile["hunger"]["rise_seconds"], SeasonCycle.SECONDS_PER_DAY / 32.0, 0.0001)
 	assert_almost_eq(profile["hunger"]["threshold"], 1.0 - 0.35, 0.0001)
 	assert_almost_eq(profile["hunger"]["meal"], 0.7, 0.0001)
 	assert_almost_eq(profile["hunger"]["start"], 1.0, 0.0, "a bird starts empty")

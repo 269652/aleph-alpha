@@ -40,6 +40,16 @@ func test_fullness_never_runs_past_its_ends():
 
 
 ## A bird eats a few times a day, not constantly and not once a week.
+##
+## Upper bound raised 40 -> 60 (2026-09-06): reported live, twice now (see
+## docs/progress.md), that a robin standing right next to visible worms
+## reads as "not eating" -- confirmed working (a real strike takes a
+## hungry bird, a bird is hungry roughly every ~18 real minutes at the
+## previous DIGEST_SECONDS) but genuinely too rare to actually catch.
+## Asked directly whether to speed it up: yes. 60 gives the same real
+## bracketing intent ("through the day, not constant") at the new,
+## faster cadence -- see test_a_bird_forages_four_times_as_often below for
+## the tuned ratio itself.
 func test_a_bird_eats_several_times_a_day():
 	var meals := 0
 	var fullness: float = BirdDigestion.STARTING_FULLNESS
@@ -51,7 +61,19 @@ func test_a_bird_eats_several_times_a_day():
 		if BirdDigestion.is_hungry(fullness):
 			fullness = BirdDigestion.fullness_after_meal(fullness)
 			meals += 1
-	assert_between(meals, 3, 40, "a songbird should feed through the day, not once")
+	assert_between(meals, 3, 60, "a songbird should feed through the day, not once")
+
+
+## Same reasoning as this session's other tuning ratio tests (Snowfall's
+## covering speed, the camera zoom): pin the RATIO against the previous
+## tuning, not just the new literal, so "meaningfully faster" survives
+## independently of the exact numbers on either side.
+func test_a_bird_forages_four_times_as_often():
+	var previous_digest_seconds := SeasonCycle.SECONDS_PER_DAY / 8.0
+	assert_almost_eq(
+		previous_digest_seconds / BirdDigestion.DIGEST_SECONDS, 4.0, 0.0001,
+		"a bird should get hungry (and so forage) 4x as often as before"
+	)
 
 
 # -- one clock, not two ------------------------------------------------------

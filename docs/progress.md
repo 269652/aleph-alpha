@@ -7222,6 +7222,26 @@ state had never once been set by anything in `src/`.
   tests (4 chunk-manager, 3 marker), 222/224 green across the renderer
   and marker suites (same 2 pre-existing `SpiralFlight` failures aside).
   Writeup: `concept/ecosystem_dynamics.md`'s same section.
+  **Third report, same symptom, next day (2026-09-06): "the robin does not
+  eat even though there are two worms near".** Investigated fresh rather
+  than assumed already-answered: confirmed the SAME conclusion as the
+  follow-up above (mechanism genuinely works; a hungry-and-committed bird
+  really does strike), and additionally that a robin can be standing
+  right on top of untouched worms for a completely unrelated reason --
+  the hunger-independent `_step_idle_rest` perch clock, which plants a
+  bird on the ground regardless of whether `GroundForageBehavior` has
+  anything to hunt. This time asked directly whether the pacing itself
+  (not the mechanism) should change: yes. `Ethogram`'s shared `"bird"`
+  hunger profile (`DRIVE_HUNGER.rise_seconds`, robin AND sparrow both --
+  kingfisher has its own separate override, untouched) moved from
+  `SeasonCycle.SECONDS_PER_DAY / 8.0` to `/ 32.0`, a real, tested 4x
+  speedup (`test_a_bird_forages_four_times_as_often`,
+  `test_bird_digestion.gd`) -- a bird now gets hungry roughly every
+  ~4-5 real minutes instead of ~18, comfortably catchable in one sitting
+  rather than a rare event across a whole session.
+  `test_a_bird_eats_several_times_a_day`'s own upper bound (a real,
+  deliberate bracket -- "not constant, not once a week") moved 40 -> 60
+  to keep bracketing the new, faster cadence rather than rejecting it.
   **Follow-up (2026-09-06), the "zero sparrow spawns" finding above,
   resolved.** Measured directly first: a GUT-routed probe (raw `godot -s`
   cannot construct `EarthChunkManager` — it transitively references the

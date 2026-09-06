@@ -1269,6 +1269,32 @@ behaviour in `test_ambient_flyer_marker.gd`), 222/224 green across the
 renderer and marker suites (the same 2 pre-existing, already-flagged
 `SpiralFlight` failures aside).
 
+**Third report, same symptom, the next day: "the robin does not eat even
+though there are two worms near".** Investigated fresh rather than
+assumed already-settled by the follow-up above — confirmed the same
+conclusion again (the mechanism genuinely works; a hungry, committed bird
+really does strike) — and found one more contributing cause: a robin can
+be standing motionless right next to untouched worms for a reason that
+has nothing to do with hunting at all. `_step_idle_rest`'s perch clock
+(added by the tree-perching work directly above) fires regardless of
+whether `GroundForageBehavior` has anything to hunt, so "a robin sitting
+still near food it is ignoring" is exactly what a hunger-independent idle
+rest looks like from outside, not a sign anything is broken.
+
+This time, asked directly whether the PACING itself — not the mechanism
+— should change, since two live reports of the same symptom a day apart
+is a stronger signal than the "one live observation" the follow-up above
+explicitly declined to act on. Answer: yes, speed it up. `Ethogram`'s
+shared `"bird"` profile's `DRIVE_HUNGER.rise_seconds` (robin and sparrow
+both draw from this; kingfisher has its own separate, untouched override)
+moved from `SeasonCycle.SECONDS_PER_DAY / 8.0` to `/ 32.0` — a real,
+tested 4x speedup (`test_a_bird_forages_four_times_as_often`,
+`test_bird_digestion.gd`), taking the measured hungry-to-hungry interval
+from ~18 real minutes down to ~4-5. `test_a_bird_eats_several_times_a_day`'s
+own bracket (a real, deliberate "not constant, not once a week" check)
+moved its upper bound 40 → 60 to keep bracketing the new cadence rather
+than rejecting it outright.
+
 ## Region difficulty (gating the roster by player readiness)
 
 Rounding out the roster with real predators (bear, lion) and a real hazard
