@@ -27,6 +27,7 @@ const SolarPosition = preload("res://src/world/solar_position.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
 const MinimapRenderer = preload("res://src/rendering/minimap_renderer.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
@@ -2491,6 +2492,11 @@ func _build_death_label() -> void:
 ## CreaturePanel), not text/labels attached to the creature's world-space
 ## sprite, so they stay upright and readable regardless of where the
 ## creature wanders.
+## Ant mounds (2026-09-06, see docs/concept/soil_fauna.md "A mound's own
+## hover panel") compete for the same nearby-and-sorted-by-distance slots
+## as every wild creature, via the identical {"state", "distance"} shape
+## AntMoundMarker.panel_state() was built to satisfy -- one shared list,
+## one shared MAX_CREATURE_PANELS cap, not a parallel mound-only UI.
 func _update_creature_panels(local_player: Player, delta: float) -> void:
 	_creature_panels_accumulator += delta
 	if _creature_panels_accumulator < CREATURE_PANELS_REFRESH_INTERVAL:
@@ -2502,6 +2508,10 @@ func _update_creature_panels(local_player: Player, delta: float) -> void:
 		var distance := local_player.position.distance_to(creature.position)
 		if distance <= CREATURE_PANELS_RADIUS:
 			nearby.append({"state": creature.animal_state(), "distance": distance})
+	for mound in get_tree().get_nodes_in_group(AntMoundMarker.GROUP_NAME):
+		var distance := local_player.position.distance_to(mound.position)
+		if distance <= CREATURE_PANELS_RADIUS:
+			nearby.append({"state": mound.panel_state(), "distance": distance})
 	nearby.sort_custom(func(a, b): return a.distance < b.distance)
 
 	for child in _creature_panels_container.get_children():
