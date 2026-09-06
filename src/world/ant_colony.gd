@@ -107,6 +107,19 @@ const FORAGE_CHANCE := 0.05
 ## confirming the tradeoff -- this pass is that confirmation.
 const FORAGE_RADIUS_TILES := 2.0
 
+## How close a SCOUTING forager (see docs/concept/soil_fauna.md's
+## "Scouting: real search, not omniscient dispatch") has to physically be
+## to a real leaf/seed/nut to notice it at all -- a scout no longer knows
+## where food is in advance the way the old omniscient dispatch did; it
+## has to actually wander close enough to sense it. Derived as HALF
+## FORAGE_RADIUS_TILES (not an independently-eyeballed number) so a scout
+## genuinely has to cover real ground within its own home range before
+## stumbling onto something, rather than sensing the whole range at once
+## from wherever it happens to be standing -- which would just be
+## omniscience again, at a smaller radius. Pinned by test_sense_radius_
+## is_half_the_forage_radius.
+const SENSE_RADIUS_TILES := FORAGE_RADIUS_TILES * 0.5
+
 ## How far a mound caches a harvested seed before it counts as planted, in
 ## tiles. This is the shortest-range disperser of the game's whole carrier
 ## family, and deliberately so, in order:
@@ -283,8 +296,8 @@ var _pheromones: Dictionary = {}
 ## swarm" -- exactly the framing this request asks to change. A cap alone
 ## was never the whole story, though (see _seed_initial_mounds' own doc
 ## comment on the population floor this pass also raises) -- the pheromone
-## trail's own recruitment (PheromoneField.best_candidate_index, biasing
-## EVERY concurrently-dispatched forager toward the same known-good
+## trail's own recruitment (PheromoneField.gradient_direction, biasing
+## EVERY concurrently-scouting forager toward the same known-good
 ## source) was already correct swarm behaviour, just invisible with at
 ## most one worker ever out to show it. Raising the cap is what lets that
 ## existing mechanism actually read as a swarm converging on a rich find,
@@ -299,17 +312,17 @@ var _pheromones: Dictionary = {}
 ## actually starts with.
 const MAX_CONCURRENT_FORAGERS := 15
 
-## How far a SCOUTING trip looks for a leaf CLUSTER (see docs/concept/
-## soil_fauna.md "Scouts mark leaf clusters, workers collect from marks")
-## -- wider than FORAGE_RADIUS_TILES, an ordinary trip's own immediate
-## pickup range: scouting specifically means noticing a denser patch
-## further out than a normal forage trip would ever range to bring back
-## just one leaf.
-const SCOUT_RADIUS_TILES := FORAGE_RADIUS_TILES * 2.0
-
-## How many leaves within SCOUT_RADIUS_TILES of each other count as a real
-## CLUSTER worth marking for dedicated worker trips, rather than the
-## ordinary single find any leaf forager already handles on its own.
+## How many leaves within FORAGE_RADIUS_TILES of a real scout's own find
+## (see docs/concept/soil_fauna.md "Scouts mark leaf clusters, workers
+## collect from marks") count as a real CLUSTER worth marking for
+## dedicated worker trips, rather than the ordinary single pickup any
+## scout already resolves on its own. Deliberately reuses
+## FORAGE_RADIUS_TILES rather than a second, independently-tuned reach --
+## a real scout's own local sensing (AntColony.SENSE_RADIUS_TILES) is
+## what finds the food in the first place now (see "Scouting: real
+## search, not omniscient dispatch"); this only asks whether MORE turns
+## out to be nearby once something real is already in hand, at the same
+## "immediate vicinity" scale this codebase already has a name for.
 const CLUSTER_MIN_LEAVES := 3
 
 ## How many clusters one mound remembers at once -- a hard cap so a
@@ -560,9 +573,10 @@ func active_cluster_ant_cap_at(cell: Vector2i) -> int:
 
 
 ## This mound's own trail pheromone field, or null if it has never laid
-## one down -- a pure read, so a caller scoring forage candidates (see
-## PheromoneField.best_candidate_index, which already accepts null) never
-## forces an allocation just to find a mound has no trail yet.
+## one down -- a pure read, so a scouting forager sensing a local gradient
+## (see PheromoneField.gradient_direction, called only when this is
+## non-null -- see AntForagerMarker._step_scouting) never forces an
+## allocation just to find a mound has no trail yet.
 func pheromones_at(cell: Vector2i) -> PheromoneField:
 	return _pheromones.get(cell)
 

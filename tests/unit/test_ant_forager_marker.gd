@@ -55,6 +55,27 @@ class StubWorld:
 		leaf_present = false
 		return was_present
 
+	## Scouting-sensing stand-ins for EarthChunkManager's own real
+	## leaf_litter_near/grass_seeds_near/fruit_near (see AntForagerMarker.
+	## _sense_food_nearby) -- each defaults to "nothing nearby" (empty), a
+	## scouting test opts a specific kind IN by setting its own array to a
+	## real candidate list. Radius is ignored here on purpose: a stub
+	## reporting whatever the test put there IS the "sensed it" signal,
+	## the same "trust the caller already scoped this" convention the
+	## other stub methods above already use.
+	var nearby_leaves: Array = []
+	var nearby_seeds: Array = []
+	var nearby_fruit: Array = []
+
+	func leaf_litter_near(_position: Vector2, _radius_px: float) -> Array:
+		return nearby_leaves
+
+	func grass_seeds_near(_position: Vector2, _radius_tiles: int) -> Array:
+		return nearby_seeds
+
+	func fruit_near(_position: Vector2, _radius_tiles: int) -> Array:
+		return nearby_fruit
+
 
 func _new_colony() -> AntColony:
 	var biome := PackedStringArray()
@@ -68,6 +89,20 @@ func _spawned(target: Vector2, mound: Vector2, world = null, colony: AntColony =
 	forager.target_position = target
 	forager.mound_position = mound
 	forager.position = mound
+	if world != null or colony != null:
+		forager.setup(world, colony, MOUND_CELL)
+	add_child_autofree(forager)
+	return forager
+
+
+## Real dispatch always scouts now (see EarthChunkManager._dispatch_ant_
+## scout) -- no known target_position at all, opted in via `scout` instead
+## of the direct-construction shape _spawned above uses.
+func _spawned_scout(mound: Vector2, world = null, colony: AntColony = null) -> AntForagerMarker:
+	var forager := AntForagerMarker.new()
+	forager.mound_position = mound
+	forager.position = mound
+	forager.scout = true
 	if world != null or colony != null:
 		forager.setup(world, colony, MOUND_CELL)
 	add_child_autofree(forager)
@@ -294,52 +329,75 @@ func test_a_failed_trip_deposits_no_pheromone():
 	assert_null(colony.pheromones_at(MOUND_CELL), "nothing was found, so there is nothing to recruit toward")
 
 
-# -- scouting: a successful scout trip also marks the cluster (see
-# docs/concept/soil_fauna.md "Scouts mark leaf clusters, workers collect
-# from marks") --------------------------------------------------------
+# -- scouting: a successful scout trip also checks for and marks a real
+# CLUSTER (see docs/concept/soil_fauna.md "Scouts mark leaf clusters,
+# workers collect from marks") ------------------------------------------
 
-func test_a_successful_scout_trip_marks_the_cluster():
+func test_a_successful_scout_trip_marks_a_real_cluster():
 	var world := StubWorld.new()
+	for i in AntColony.CLUSTER_MIN_LEAVES:
+		world.nearby_leaves.append({"position": Vector2(3000 + i, 3000), "species": "cherry", "season": "autumn"})
 	var colony := _new_colony()
 	var target := Vector2(3000, 3000)
 	var f := _spawned(target, Vector2(3002, 3000), world, colony)
 	f.forage_kind = "leaf"
-	f.is_scout = true
+	f.scout = true
 	f._process(1.0)  # arrive and take the leaf
 	assert_eq(colony.cluster_marks_at(MOUND_CELL), [target])
 
 
-func test_a_non_scout_leaf_trip_never_marks_a_cluster():
-	var world := StubWorld.new()
+## A single find with nothing else nearby is the ordinary case any leaf
+## trip already resolves on its own -- not every successful scout trip
+## turns up a real cluster.
+func test_a_successful_scout_trip_below_the_cluster_minimum_marks_nothing():
+	var world := StubWorld.new()  # nearby_leaves stays empty -- just the one taken
 	var colony := _new_colony()
 	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
 	f.forage_kind = "leaf"
-	f.is_scout = false
+	f.scout = true
 	f._process(1.0)
-	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty(), "an ordinary leaf trip must not mark a cluster")
+	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty(), "one lone leaf is not a cluster")
+
+
+## A WORKER (scout == false, sent straight at an already-known mark) never
+## re-marks on arrival, even with real leaves still nearby -- only a real
+## scout's own fresh discovery counts.
+func test_a_non_scout_leaf_trip_never_marks_a_cluster():
+	var world := StubWorld.new()
+	for i in AntColony.CLUSTER_MIN_LEAVES:
+		world.nearby_leaves.append({"position": Vector2(3000 + i, 3000), "species": "cherry", "season": "autumn"})
+	var colony := _new_colony()
+	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
+	f.forage_kind = "leaf"
+	f.scout = false
+	f._process(1.0)
+	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty(), "a worker's own trip must not mark a cluster")
 
 
 func test_a_failed_scout_trip_marks_no_cluster():
 	var world := StubWorld.new()
 	world.leaf_present = false
+	for i in AntColony.CLUSTER_MIN_LEAVES:
+		world.nearby_leaves.append({"position": Vector2(3000 + i, 3000), "species": "cherry", "season": "autumn"})
 	var colony := _new_colony()
 	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
 	f.forage_kind = "leaf"
-	f.is_scout = true
+	f.scout = true
 	f._process(1.0)
 	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty(), "nothing was found, so there is no cluster to mark")
 
 
-## A scout dispatched for seed/windfall (not attempted by the current
-## dispatcher, but not this marker's own job to forbid) still never marks
-## a cluster -- marking is scoped to real leaf trips only (see docs/
-## concept/soil_fauna.md's own "leaf-only" scope note).
+## A scout dispatched for seed/windfall still never marks a cluster --
+## marking is scoped to real leaf trips only (see docs/concept/
+## soil_fauna.md's own "leaf-only" scope note).
 func test_a_successful_scout_trip_for_a_non_leaf_kind_marks_no_cluster():
 	var world := StubWorld.new()
+	for i in AntColony.CLUSTER_MIN_LEAVES:
+		world.nearby_leaves.append({"position": Vector2(3000 + i, 3000), "species": "cherry", "season": "autumn"})
 	var colony := _new_colony()
 	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
 	f.forage_kind = "seed"
-	f.is_scout = true
+	f.scout = true
 	f._process(1.0)
 	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty())
 
@@ -501,3 +559,125 @@ func test_the_carried_leaf_visual_crops_the_correct_atlas_cell():
 	)
 	assert_true(leaf_sprite.texture is AtlasTexture)
 	assert_eq((leaf_sprite.texture as AtlasTexture).region, expected_region)
+
+
+# -- scouting: real search, not omniscient dispatch (see docs/concept/
+# soil_fauna.md's section of that name) ------------------------------------
+#
+# Reported live: "ants go straight to the next leaf when moving out the
+# mound ... they should either explore randomly or follow pheromones",
+# then, after a pheromone-biased candidate-LIST dispatch answered that:
+# "no omniscience please". A scout starts with NO known target at all
+# (opt in via `scout`, see _spawned_scout) -- it senses real food only
+# within its own small, LOCAL SENSE_RADIUS_TILES as it wanders, never the
+# whole mound's forage reach from a stationary point. Food is placed
+# right at the mound's own spawn position in these tests so sensing
+# commits on the very FIRST _process() call, before any wander movement
+# at all -- this is what keeps these tests deterministic despite real
+# wandering itself being seeded by an unpredictable randi() roll (see
+# wander_seed's own doc comment): the COMMIT logic is being proven here,
+# not "wandering eventually stumbles onto a specific far-off point",
+# which is a claim about AmbientFlyerMovement/AntScoutWander's own already
+#-tested pure math, not about this marker's wiring.
+
+func test_a_scout_starts_in_the_scouting_phase():
+	var f := _spawned_scout(Vector2.ZERO)
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.SCOUTING)
+
+
+func test_a_scout_wanders_when_nothing_is_sensed_nearby():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(1.0)
+	assert_ne(f.position, Vector2.ZERO, "nothing was sensed -- it should still be wandering, not frozen in place")
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.SCOUTING)
+
+
+func test_a_scout_commits_to_a_real_leaf_within_sensing_range():
+	var world := StubWorld.new()
+	world.nearby_leaves = [{"position": Vector2(5, 0), "species": "cherry", "season": "autumn"}]
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.1)
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.APPROACHING)
+	assert_eq(f.target_position, Vector2(5, 0))
+	assert_eq(f.forage_kind, "leaf")
+	assert_eq(f.carried_leaf_species, "cherry")
+	assert_eq(f.carried_leaf_season, "autumn")
+
+
+func test_a_scout_commits_to_a_real_seed_within_sensing_range():
+	var world := StubWorld.new()
+	world.nearby_seeds = [{"position": Vector2(5, 0)}]
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.1)
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.APPROACHING)
+	assert_eq(f.target_position, Vector2(5, 0))
+	assert_eq(f.forage_kind, "seed")
+
+
+func test_a_scout_commits_to_a_real_nut_within_sensing_range():
+	var world := StubWorld.new()
+	world.nearby_fruit = [{"position": Vector2(5, 0), "species": "acorn"}]
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.1)
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.APPROACHING)
+	assert_eq(f.target_position, Vector2(5, 0))
+	assert_eq(f.forage_kind, "windfall")
+
+
+## Mirrors _forage_windfall_near_mound's own original gate exactly (see
+## that function's history): a single ant cannot meaningfully interact
+## with an intact fleshy fruit the way a bird or squirrel does.
+func test_a_scout_ignores_a_fleshy_fruit_only_a_real_nut_counts():
+	var world := StubWorld.new()
+	world.nearby_fruit = [{"position": Vector2(5, 0), "species": "apple"}]
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.1)
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.SCOUTING, "a fleshy fruit is not real prey for a lone ant")
+
+
+## Leaf litter is not biome-gated at all, unlike seed/windfall (see
+## _sense_food_nearby's own doc comment) -- checked first, same priority
+## DecomposerMarker's own ambient sensing already gives it.
+func test_a_scout_prefers_a_leaf_over_a_seed_sensed_at_the_same_time():
+	var world := StubWorld.new()
+	world.nearby_leaves = [{"position": Vector2(5, 0), "species": "cherry", "season": "autumn"}]
+	world.nearby_seeds = [{"position": Vector2(-5, 0)}]
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.1)
+	assert_eq(f.forage_kind, "leaf")
+
+
+func test_a_scout_gives_up_after_the_scouting_budget_with_nothing_found():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(AntForagerMarker.MAX_SCOUT_SECONDS + 1.0)
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	assert_false(f._behavior.found_food)
+
+
+func test_a_scout_with_no_world_gives_up_rather_than_crashing():
+	var f := _spawned_scout(Vector2.ZERO)  # no setup() call at all
+	f._process(AntForagerMarker.MAX_SCOUT_SECONDS + 1.0)
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	assert_false(f._behavior.found_food)
+
+
+## Pinned, not eyeballed (see CLAUDE.md's own "tuned values must be
+## tested" rule and MAX_SCOUT_CROSSINGS/MAX_SCOUT_SECONDS' own doc
+## comments): a real derivation from FORAGE_RADIUS_TILES/WALK_SPEED/
+## SCOUT_SPEED_FRACTION, not an independent literal.
+func test_max_scout_seconds_is_derived_not_eyeballed():
+	var expected := (
+		(2.0 * AntColony.FORAGE_RADIUS_TILES * TerrainRenderer.TILE_SIZE)
+		/ (AntForagerMarker.WALK_SPEED * AntForagerMarker.SCOUT_SPEED_FRACTION)
+		* AntForagerMarker.MAX_SCOUT_CROSSINGS
+	)
+	assert_almost_eq(AntForagerMarker.MAX_SCOUT_SECONDS, expected, 0.001)

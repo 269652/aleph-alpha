@@ -113,6 +113,12 @@ Left alone, deliberately, and NOT folded into this entry: the shared main checko
 
 ✅ **The trunk's own selection is now defended against the exact failure mode above, not just patched at the asset level.** `IllustratedTree._composite_parts` picked the trunk as the BIGGEST drawing below the canopy strip; against the regenerated walnut sheet that picked a blob merged out of an on-branch fruit drawing and its harvested forms (a few percent bigger by area than any of the five real, season-tinted trunk copies sitting in a row beside it), leaving four leftover trunk copies to be misread as fruit. `_trunk_row` replaces "biggest" with the first ROW below the canopy -- position, not size -- keeping only its first member as the trunk and dropping every other region that row: one drawing when the sheet has one, all five when an artist draws it once per season column instead of sharing it. Naive vertical-overlap alone over-swept: a real, well-structured sheet's single trunk is tall enough to overlap a much shorter fruit row sitting BESIDE it (acorn, apple, hazelnut all draw it this way), which pulled that fruit row into the trunk role entirely on first attempt. A region only joins the row when it also stands close to the first region's own HEIGHT (`TRUNK_ROW_HEIGHT_RATIO := 0.85`) -- measured on the real sheets, a genuine duplicated trunk row's members are always within 3% of each other's height while a real trunk is never less than ~1.65x taller than the closest fruit row it overlaps, a wide gap 0.85 sits safely inside. Pinned with five synthetic-region unit tests in `test_illustrated_tree.gd` (`_trunk_row` takes a plain `Array[Rect2i]`, no image or disk I/O needed) rather than only against the current sheets, so a future regeneration that reintroduces a duplicated trunk row fails loud in this file's own tests instead of silently corrupting `fruit_frames_for` again.
 
+✅ **Reported live, from a screenshot: ripe cherries in a fully green SUMMER canopy still carrying AUTUMN's orange accent leaves.** Root-caused directly against `IllustratedTree.fruit_for` rather than assumed: it never read season at all, always returning the on-tree row's LAST frame regardless (`frames.size() - 1`) -- for cherry that is column 3, the turning/autumn drawing. Re-measuring while fixing it found the bug is not cherry-specific: every one of the six species' real on-tree row today measures exactly `CANOPY_FRAME_COUNT` (4) frames, one per canopy column (bare/blossom/leaf/turning, snow already excluded), not the two-or-three-stage ripening sequence line 75 above describes -- that description is now stale for every species, not just cherry (line 75 itself left as historical record rather than rewritten, per this file's own established convention above). `fruit_for(species, ripe, season)` gained a `season` parameter (default `"summer"`, so every untouched call site keeps working) and now picks the frame matching the CURRENT canopy season via the same `_CANOPY_FRAME_BY_SEASON` table `canopy_for` already keys on, threaded through `ProceduralTreeSprite._composite_illustrated` -> `_blend_illustrated_fruit` -> `_scaled_fruit` (cache key now includes season too). `ripe` is accepted but ignored whenever a row is season-aligned (which is every species today) -- three pre-existing tests asserting "ripe looks different from unripe" (`test_fruit_has_an_unripe_and_a_ripe_frame`, `test_the_ripe_frame_is_the_redder_one`, `test_every_species_shows_its_crop_ripening`) were asserting something now confirmed FALSE for all six species and were replaced with tests reflecting the measured reality, plus new season-matching regression coverage for cherry specifically and all six species generally. `test_illustrated_tree.gd` 122/123 (the one pending is pine's pre-existing, unrelated bare-winter art gap, unchanged).
+
+✅ **Reported live: a visible WHITE centre inside the rendered cherry sprite that should be transparent.** Measured directly against the real sheet: `composite_cherry.png` is fully opaque (`CompositeSheetSlicer.needs_keying` reads true), so its regions go through reachability-only background keying -- but two of the on-tree row's own leafy-twig drawings have a fully-ENCLOSED opaque-white pocket (measured at 166 and 180 connected pixels) that never touches the drawing's own edge, too big for `despeckle`'s 150px speckle-vs-feature cutoff and unreached by reachability alone. `cut_out`'s existing `aggressive` keying mode handles exactly this shape of gap but was previously scoped to only the bare-winter canopy frame; it now ALSO applies to an on-tree fruit row when that row is season-aligned (exactly `CANOPY_FRAME_COUNT` frames -- the same measured fact the fix above relies on), since the snow column is already excluded from it and real fruit/leaves are never near-white, so nothing pale-and-real is at risk the way a blossom or snow frame would be. A stale doc-comment claim in `CompositeSheetSlicer` ("only acorn and apple currently trip `needs_keying`, the other four re-exported with real alpha") was also corrected -- re-measured now, it's exactly backwards: cherry/walnut/hazelnut/pine are the opaque ones today, apple/acorn the transparent ones. New regression test against the real sheet (`test_cherrys_on_tree_frames_have_no_leftover_white_background`).
+
+✅ **Reported live: "cherry trees should bear more cherries."** `TreeSpecies.SPECIES["cherry"]["yield_multiplier"]`: 1.3 -> 1.8, now the roster's own strict maximum (previously below acorn's 1.5, despite this same file's class doc comment already claiming cherries "bear prolifically -- lots of small, fast fruit"). Pinned as an ordering (`test_cherry_is_the_most_prolific_bearer_in_the_roster`), not a bare literal, matching this roster's own established idiom.
+
 ⬜ Superseded: pine/acorn/hazelnut now exist as species; this note is kept only to record that they once did not.
 
 
@@ -8928,41 +8934,47 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
      concept alongside the existing `PheromoneField` trail (a continuous
      decaying field can answer "how strong is the trail exactly here",
      never "list every place worth sending a dedicated worker").
-  3. **`AntForagerMarker.is_scout`** (new) — a scouting trip still does
-     the identical walk/take/return round trip any forager does; the
-     only difference is that a successful arrival at real leaf litter
-     also marks the cluster, the same "on the way back" moment
-     `deposit_pheromone` already marks a single tile at.
-  4. **`EarthChunkManager._scout_for_leaf_cluster_near_mound`** (new)
-     checks the wider `AntColony.SCOUT_RADIUS_TILES` (double the
-     ordinary `FORAGE_RADIUS_TILES`) for `CLUSTER_MIN_LEAVES` (3) or more
-     real leaves, dispatching a scout there. **`_dispatch_cluster_workers`**
-     (new) sends a worker to every mark a mound holds, re-verifying each
-     is still real and non-empty FIRST — an empty one is invalidated
+  3. **`AntForagerMarker._resolve_arrival_at_food`** now also checks, on
+     a successful real-scout (`scout == true`) leaf pickup, whether real
+     leaves are still there once this one is gone
+     (`AntColony.CLUSTER_MIN_LEAVES`, 3, within the ordinary
+     `FORAGE_RADIUS_TILES`) and marks the spot (`AntColony.mark_cluster`)
+     if so — the same "on the way back" moment `deposit_pheromone`
+     already marks a single tile at. A worker's own trip (`scout ==
+     false`) never re-marks.
+  4. **`EarthChunkManager._dispatch_cluster_workers`** (new) sends a
+     worker straight at every mark a mound holds, re-verifying each is
+     still real and non-empty FIRST — an empty one is invalidated
      instead of dispatched to, exactly as requested.
   5. **Genuinely ADDS ants, not just re-purposes existing ones** — the
-     literal "send out MORE ants" ask. `_dispatch_ant_forager` gains a
-     `role` parameter (`"forager"`/`"scout"`/`"worker"`, default
-     `"forager"` so the three pre-existing call sites are unchanged)
-     routing to a SEPARATE tracking bucket and cap
-     (`_active_ant_scouts_and_workers` / `AntColony.
-     active_cluster_ant_cap_at`, mirroring `active_forager_cap_at`'s own
-     population-scaled shape against a smaller, separate ceiling,
-     `MAX_CONCURRENT_CLUSTER_ANTS` (5) vs. `MAX_CONCURRENT_FORAGERS`
-     (15)) — so a mound already running its full ordinary-forager
-     complement can still send scouts/workers on top of that.
-  **Explicitly NOT the previously-deferred SEEKING-phase scout** (see
-  the "Pheromone trails" section's own strikethrough note) — a scout
-  here is still dispatched to an already-known candidate, just one found
-  at a wider radius; there remains no true "wanders with no target at
-  all yet" behaviour anywhere in this simulation. Scoped to leaf litter
-  only (the explicit example given); no visual distinction between a
-  scout, a worker, and an ordinary forager (all three are the identical
-  `AntForagerMarker`). 9 new tests in `test_earth_chunk_manager.gd`
-  (scout/cluster dispatch), plus new coverage in `test_ant_colony.gd`,
-  `test_ant_forager_marker.gd`, and `test_ant_mound_marker.gd`; a full
-  "forage"-substring regression sweep (13/13) confirmed nothing broke
-  from generalizing `_dispatch_ant_forager`'s signature. Full writeup:
+     literal "send out MORE ants" ask, delivered by the worker half
+     (ordinary scouting already means "more ants exploring" as a
+     baseline). `_dispatch_cluster_workers` lands in its own SEPARATE
+     tracking bucket and cap (`_active_ant_scouts_and_workers` /
+     `AntColony.active_cluster_ant_cap_at`, mirroring
+     `active_forager_cap_at`'s own population-scaled shape against a
+     smaller, separate ceiling, `MAX_CONCURRENT_CLUSTER_ANTS` (5) vs.
+     `MAX_CONCURRENT_FORAGERS` (15)) — so a mound already running its
+     full scout complement can still send workers on top of that.
+  **Landed the same day as, then rebuilt on top of, "Real scouting
+  replaces omniscient dispatch entirely"** (see that entry below): the
+  first version of this pass pre-scanned a wider radius from the mound
+  before ever dispatching a scout — exactly the "every candidate within
+  reach, from a stationary point" shape that entry's own "no omniscience
+  please" report was busy removing. Rebuilt once that landed to fit it
+  instead of reintroducing the pattern: no separate scout dispatch
+  exists any more at all — the mound's real scout already wanders and
+  finds food on its own; this only adds the cluster-check-and-mark step
+  to its existing successful pickup, and a genuinely new worker dispatch
+  that goes straight at a mark instead of wandering to find one. Scoped
+  to leaf litter only (the explicit example given); no visual
+  distinction between a worker and an ordinary scout (both are the
+  identical `AntForagerMarker`). New/rewritten coverage in
+  `test_ant_colony.gd`, `test_ant_forager_marker.gd`,
+  `test_ant_mound_marker.gd`, and `test_earth_chunk_manager.gd`
+  (scout/cluster/forage-substring regression sweeps all green) confirm
+  this sits cleanly alongside the real-scouting rework rather than
+  duplicating or conflicting with it. Full writeup:
   [soil_fauna.md](concept/soil_fauna.md#scouts-mark-leaf-clusters-workers-collect-from-marks).
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
@@ -9283,6 +9295,55 @@ tweak — named as a real, separate follow-up rather than attempted here.
 61/61 green across `test_leaf_litter_field.gd`/`test_earth_chunk_
 manager.gd`/`test_ant_forager_marker.gd`'s leaf-related coverage. Full
 writeup: `soil_fauna.md`'s own second follow-up note on the same entry.
+
+✅ **Real scouting replaces omniscient dispatch entirely (2026-09-06, same
+day)** — the "deliberately NOT built" gap named at the end of the entry
+above closed out the same day, reported live: "please implement a
+scouting phase and true no-target wander", then, after a first attempt
+(pheromone-*biased* dispatch, scoring every candidate within the mound's
+whole reach and picking the best) was built to answer it — "no
+omniscience please", correctly rejecting that first attempt as still
+omniscient (every candidate's existence and position was still known
+up front; nothing was ever undiscovered). `EarthChunkManager._forage_
+seed_near_mound`/`_forage_windfall_near_mound`/`_forage_leaf_near_mound`
+(three separate omniscient queries, one per forage kind) collapsed into
+one `_dispatch_ant_scout`. A dispatched forager now starts with NO known
+target or forage_kind at all (`AntForagerMarker.scout`, opt-in —
+`AntForageBehavior.phase` still *defaults* to `APPROACHING`, so every
+test built before scouting existed, exercising APPROACHING/RETURNING
+against an already-known target directly, is completely unaffected).
+While `SCOUTING` it wanders (`AmbientFlyerMovement`, the SAME
+already-tested home-anchored roam `DecomposerMarker`'s own ambient
+ants/bugs already use — anchored at the mound, `AntColony.FORAGE_RADIUS_
+TILES` doubling as the wander disc's own radius), senses real food only
+within a small, LOCAL `AntColony.SENSE_RADIUS_TILES` (half
+`FORAGE_RADIUS_TILES`, derived) of its own current, moving position (new
+`LeafLitterField.leaves_near`/`EarthChunkManager.leaf_litter_near`,
+already added the same day for the leaf-recruitment entry above, now
+also the mechanism scouting itself senses through — `nearest_leaf_near`/
+`nearest_leaf_litter_near` stay untouched, still `DecomposerMarker`'s
+own), and gives up (`AntForagerMarker.MAX_SCOUT_SECONDS`, derived from
+crossing its own wander disc several times over) if nothing turns up.
+`PheromoneField.best_candidate_index` (the omniscient "score every known
+candidate from a stationary point" primitive, and its 4 dedicated tests)
+is gone; new `AntScoutWander.biased_heading` (mirrors `ThreatAvoidant
+Wander`'s own "pure post-process on a candidate heading" shape) instead
+bends a scout's wander heading toward `PheromoneField.gradient_
+direction` — a concentration sensed exactly where the scout currently
+stands, real chemotaxis — when a real trail is nearby, leaving it
+untouched (genuine, undirected exploration) when none is. `AntForager
+Marker._ensure_initialized` (setup that used to live only in `_ready()`,
+which turned out to depend on this node's own branch actually being
+attached to a live SceneTree — true for every real dispatch, but not
+guaranteed for `EarthChunkManager`'s own test-double `_entities_parent`)
+is now also called defensively at the top of `_process()`, so scouting
+activates correctly either way. 129/129 green across `test_ant_scout_
+wander.gd` (new)/`test_ant_colony.gd`/`test_ant_forage_behavior.gd`/
+`test_ant_forager_marker.gd`/`test_pheromone_field.gd`; the full leaf/
+forager/scout ant-dispatch cluster in `test_earth_chunk_manager.gd`
+(real chunk-load integration tests included) all green. Full writeup:
+`soil_fauna.md`'s new "Scouting: real search, not omniscient dispatch"
+section, and its "Pheromone trails" section's own rewrite to match.
 
 ⬜ **Still no litter-density accumulation or soil-fertility feedback, and
 no ground-covering visual effect** (unchanged scope cut — see

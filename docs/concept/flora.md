@@ -1155,11 +1155,19 @@ branches — so it walks the same four stages as four tones of conifer and is
 unaffected by any of this. Both are pinned by tests, because both are claims
 about pixels somebody could repaint.
 
-**Fruit is two frames, unripe and ripe**, so a crop coming in is visible on the
-tree before it can be picked -- the same information the fruiting model already
-tracks (see `FruitingModel`) but shown rather than hidden. Fruit is scattered
-across the canopy from the tree's own seed, so a heavy crop reads as heavy
-without needing a frame drawn for every count.
+**Fruit was originally meant to be two frames, unripe and ripe**, so a crop
+coming in would be visible on the tree before it can be picked -- the same
+information the fruiting model already tracks (see `FruitingModel`) but shown
+rather than hidden. Fruit is scattered across the canopy from the tree's own
+seed, so a heavy crop reads as heavy without needing a frame drawn for every
+count.
+
+**Correction (2026-09-06): every species' real on-tree row today is
+season-aligned, not a ripening sequence, and `ripe`/`unripe` distinguishes
+nothing.** Re-measured directly while fixing a real bug (reported live, from a
+screenshot: a fully green SUMMER canopy with ripe cherries still carrying
+AUTUMN's orange accent leaves). See "A fruit frame's row says what it means"
+below for what actually ships today.
 
 **One sheet or three.** Art arrives either as three separate files or as a
 single composite holding canopy strip, trunk and fruit together. The composite
@@ -1182,12 +1190,21 @@ the crop AS IT HANGS ON THE TREE -- drawn on a branch, with leaves or needles.
 The rows below are what you get once you have picked it: shelled, cracked open,
 the kernel. Only the first row is ever drawn on a tree.
 
-Species differ in how many stages they have. Walnut, acorn and hazelnut each
-draw two on-tree stages; pine draws three, its extra one a bare needle sprig
-carrying no cone at all. So ripe is the LAST on-tree stage and unripe the one
-before it, counted from the END. Counted from the start, pine's bare sprig
-would be its unripe crop and its green cone the ripe one -- a tree bearing
-needles instead of cones.
+This used to say species differ in how many on-tree stages they have --
+walnut/acorn/hazelnut two, pine three (an extra bare needle sprig, no cone) --
+with ripe the LAST stage and unripe the one before it, counted from the end so
+pine's bare sprig would not become its "ripe" stage read from the start.
+Re-measured directly (2026-09-06): every one of the six species' real on-tree
+row today carries exactly the same four frames the canopy strip does, one per
+canopy SEASON (winter/spring/summer/autumn) rather than a ripening stage, with
+the snow column already excluded. None currently draws a real ripening
+sequence on the tree at all -- "ripe is the last stage" only ever worked
+because the last column happens to be autumn and the one before it summer, a
+coincidence of column order rather than a real ripening depiction. `IllustratedTree.fruit_for(species, ripe, season)` now picks by `season`
+instead, matching whichever canopy column is currently showing (the same
+table `canopy_for` keys its own season lookup on); `ripe` is accepted for a
+future species that might ship a real ripening sequence again, but is not a
+fact any current species' art distinguishes.
 
 **Trunk and canopy are proportioned, and vary together.** A trunk is tall and
 narrow. Scaled to preserve the source art's aspect it came out squat and wide,
@@ -1231,17 +1248,25 @@ fifth frame: snow is not a season" below), so the background is found by
 REACHABILITY instead: flooded inward from the crop's own edges, so anything
 truly enclosed by the drawing survives whatever colour it is.
 
-Reachability alone is not enough on the one frame that is allowed to be
-aggressive about it: the bare-winter canopy, which never draws anything
-pale by design, so it is safe to key every background-coloured pixel
-there regardless of whether the flood fill reached it, plus the thin
-anti-aliasing halo every branch edge carries against an opaque background
-(a bare tree's branch network has enough total edge length that this halo,
-left in, was measured making the frame read as dense as its own summer
-canopy rather than bare). Every other frame on these sheets -- the other
-three seasons, the fifth snow frame, the trunk, every fruit stage -- keeps
-the conservative, reachability-only behaviour, so a real pale drawing
-anywhere else is exactly as protected as it always was. See
+Reachability alone is not enough on the frames that are allowed to be
+aggressive about it. Originally just the bare-winter canopy, which never
+draws anything pale by design, so it is safe to key every
+background-coloured pixel there regardless of whether the flood fill
+reached it, plus the thin anti-aliasing halo every branch edge carries
+against an opaque background (a bare tree's branch network has enough total
+edge length that this halo, left in, was measured making the frame read as
+dense as its own summer canopy rather than bare). A second, separately-safe
+case joined it later (2026-09-06, a real enclosed white pocket found inside
+cherry's own on-tree fruit closeups, big enough to survive despeckling and
+show as a visible white blob in the running game): the on-tree fruit ROW
+itself, but only when that row carries one closeup per canopy season rather
+than a real ripening sequence (see "A fruit frame's row says what it means"
+above) -- its snow-column entry is already excluded before this ever runs,
+so nothing pale-and-real is at risk there either. Every OTHER frame on these
+sheets -- the other canopy seasons, the fifth snow frame, the trunk, every
+harvested fruit stage, and any on-tree row that IS a real ripening sequence
+-- keeps the conservative, reachability-only behaviour, so a real pale
+drawing anywhere else is exactly as protected as it always was. See
 `CompositeSheetSlicer.cut_out`'s own doc comments for the measurements
 behind this.
 

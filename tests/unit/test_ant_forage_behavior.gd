@@ -40,3 +40,45 @@ func test_arriving_with_nothing_still_moves_to_returning_but_remembers_failure()
 
 func test_found_food_defaults_to_false_before_arrival():
 	assert_false(behavior.found_food)
+
+
+# -- scouting: real search, not omniscient dispatch (see docs/concept/
+# soil_fauna.md's section of that name) -- opt-in via begin_scouting()
+# rather than a new default phase, so every trip dispatched the OLD way
+# (a pre-known target, still real: a test constructing this behavior
+# directly and calling arrive_at_food from APPROACHING) is completely
+# unaffected. Real production dispatch now always calls begin_scouting()
+# first (see AntForagerMarker.scout).
+
+func test_begin_scouting_moves_to_the_scouting_phase():
+	behavior.begin_scouting()
+	assert_eq(behavior.phase, AntForageBehavior.Phase.SCOUTING)
+
+
+func test_committing_to_food_moves_from_scouting_to_approaching():
+	behavior.begin_scouting()
+	behavior.commit_to_food()
+	assert_eq(behavior.phase, AntForageBehavior.Phase.APPROACHING)
+
+
+## A scout that commits to a real, sensed food item still has to walk the
+## last short distance and re-check on real arrival, exactly like the
+## non-scouting path always has -- committing is "I know where it is now",
+## not "I already have it".
+func test_after_committing_arrival_still_resolves_normally():
+	behavior.begin_scouting()
+	behavior.commit_to_food()
+	behavior.arrive_at_food(true)
+	assert_eq(behavior.phase, AntForageBehavior.Phase.RETURNING)
+	assert_true(behavior.found_food)
+
+
+## Wandered too long/far and found nothing -- a real scout does not just
+## vanish, it walks home empty-handed, the same "still returns, just with
+## nothing to show for it" contract an unsuccessful APPROACHING trip
+## already has.
+func test_giving_up_scouting_moves_to_returning_empty_handed():
+	behavior.begin_scouting()
+	behavior.give_up_scouting()
+	assert_eq(behavior.phase, AntForageBehavior.Phase.RETURNING)
+	assert_false(behavior.found_food)
