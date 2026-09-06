@@ -25,14 +25,32 @@ Project Settings > Application > Config > Version).
   dialog, same as any local Godot project.
 - **Your private signing key** (`.pem`, from `tools/generate_keypair.gd`),
   kept **outside this repository entirely** — a password manager
-  attachment or an encrypted offline drive (see
-  [`docs/licensing.md`](../../docs/licensing.md)). Neither script has a
-  default path or auto-discovery for it; you pass it explicitly every
-  time via `-KeyPath`. **Never** put it inside this repo, inside the
-  export/dist output folder as anything other than a throwaway local-test
-  copy, or anywhere `build_release.ps1`'s packaging step might see it —
-  see that script's own `Assert-NoPrivateKeyAmong` safety check, which
-  refuses to package anything that looks like a key.
+  attachment or an encrypted offline drive is
+  [`docs/licensing.md`](../../docs/licensing.md)'s own recommendation; a
+  plain folder outside any repo (e.g. next to your Godot install) is the
+  accepted minimum as long as you control that machine. **Never** put it
+  inside this repo, inside the export/dist output folder as anything
+  other than a throwaway local-test copy, or anywhere
+  `build_release.ps1`'s packaging step might see it — see that script's
+  own `Assert-NoPrivateKeyAmong` safety check, which refuses to package
+  anything that looks like a key.
+
+  Pass it via `-KeyPath` each time, or set it once as an environment
+  variable so you don't have to retype it:
+
+  ```powershell
+  # Add to your PowerShell profile ($PROFILE) -- this lives under your own
+  # user profile and is never committed to this repo, unlike a script
+  # default would be.
+  $env:ALEPH_ALPHA_SIGNING_KEY = "C:\path\to\your-signing-key.pem"
+  ```
+
+  `build_release.ps1` falls back to this variable whenever `-KeyPath` is
+  omitted. Deliberately no hardcoded default and no filesystem
+  auto-discovery in the script itself: a script committed to this repo
+  that hardcoded your real key's literal path would permanently document
+  exactly where to look for it to anyone who ever gets read access to
+  this source.
 
 ## Usage
 
@@ -73,8 +91,9 @@ name — without actually exporting, signing, tagging, or touching GitHub):
 
 ## What `build_release.ps1` actually does, in order
 
-1. Preflight: key file exists, Godot binary exists, `gh` installed and
-   authenticated.
+1. Resolves the signing key from `-KeyPath`, or `$env:ALEPH_ALPHA_SIGNING_KEY`
+   if omitted. Preflight: key file exists, Godot binary exists, `gh`
+   installed and authenticated.
 2. Reads the current version from `project.godot`.
 3. Reads the export output path for the chosen preset straight out of
    `export_presets.cfg` (never a second, hand-maintained copy of it).
