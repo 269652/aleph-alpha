@@ -443,3 +443,38 @@ func test_netting_curiosity_items_look_different_from_each_other():
 	var jar := generator.generate_image("jarred_insect")
 	var cage := generator.generate_image("caged_songbird")
 	assert_ne(jar.get_data(), cage.get_data())
+
+
+# -- wild mushrooms (see MushroomSpecies, MushroomBiting.gd) -----------------
+#
+# Previously fell back to the generic pebble in inventory/on the ground
+# regardless of species (see docs/concept/mushrooms.md's fungivory section --
+# "render... in world and inventory"). A real cap+stem silhouette, colored to
+# match MushroomSpecies' own cap_color per species (the same "match the
+# source art's own colour" precedent cherry/apple/walnut already establish
+# above), with a visible bite notch once bitten.
+
+func test_mushroom_has_its_own_look_rather_than_falling_back_to_the_generic_pebble():
+	var mushroom := generator.generate_image("champignon")
+	var fallback := generator.generate_image("some_totally_unknown_item")
+	assert_ne(mushroom.get_data(), fallback.get_data())
+
+
+func test_different_mushroom_species_look_different_from_each_other():
+	var champignon := generator.generate_image("champignon")
+	var fly_agaric := generator.generate_image("fly_agaric")
+	assert_ne(champignon.get_data(), fly_agaric.get_data())
+
+
+func test_a_bitten_mushroom_looks_different_from_its_unbitten_self():
+	var whole := generator.generate_image("parasol")
+	var bitten := generator.generate_image("parasol_bitten")
+	assert_ne(whole.get_data(), bitten.get_data())
+
+
+## Bitten is a visible bite mark on the SAME species -- the same base cap
+## colour, just diminished, not a wholesale re-colour.
+func test_bitten_mushroom_keeps_its_species_own_cap_color():
+	assert_eq(
+		ProceduralItemSprite.color_for("parasol_bitten"), ProceduralItemSprite.color_for("parasol")
+	)

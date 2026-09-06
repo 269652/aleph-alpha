@@ -210,7 +210,12 @@ func test_mushrooms_near_does_not_find_anything_from_far_away():
 	assert_true(manager.mushrooms_near(far_pixel, 8).is_empty())
 
 
-func test_take_mushroom_at_eats_a_real_fruiting_mushroom_and_leaves_a_bitten_corpse():
+## A bite is a real bite (see docs/concept/mushrooms.md "Bitten by a
+## decomposer") -- distinct from pick()/crush(), it does NOT end the
+## fruiting instance. A boar's bite marks the SAME live marker bitten
+## (real bitten-look art where delivered) rather than replacing it with a
+## corpse, exactly like a decomposer's own bite.
+func test_take_mushroom_at_eats_a_real_fruiting_mushroom_and_marks_it_bitten():
 	manager._load_chunk(_berlin_chunk)
 	var sim: WildMushroomPatch = manager._mushroom_sims[_berlin_chunk]
 	if sim.site_count() == 0:
@@ -224,8 +229,12 @@ func test_take_mushroom_at_eats_a_real_fruiting_mushroom_and_leaves_a_bitten_cor
 	var eaten := manager.take_mushroom_at(pixel)
 
 	assert_eq(eaten, species)
-	assert_false(sim.has_fruiting(site))
-	assert_eq(sim.corpse_kind(site), "bitten", "a boar's bite is a real bite, not a pick -- same corpse art as a decomposer's")
+	assert_true(sim.has_fruiting(site), "a bite is not a pick or a crush -- it stays fruiting")
+	assert_true(sim.is_bitten(site))
+	assert_true(
+		manager._mushroom_markers[_berlin_chunk][site].bitten,
+		"the live marker itself, not just the sim, should show bitten"
+	)
 
 
 func test_take_mushroom_at_returns_empty_string_when_nothing_is_there():

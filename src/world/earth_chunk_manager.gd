@@ -5510,14 +5510,18 @@ func mushrooms_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 ## Eats the wild mushroom fruiting at `pixel_position`, if there is one (see
 ## mushrooms_near) -- the mutation counterpart, mirroring take_fruit_at's
 ## own "return what was actually swallowed, or empty" contract. Resolves
-## through WildMushroomPatch.bite, NOT pick -- pick is specifically the
+## through the live MushroomMarker's own take_mushroom_bite() -- NOT
+## sim.bite directly, and NOT pick_up -- pick_up is specifically the
 ## player's own "add to inventory" action; an animal eats a mushroom in
-## place, the same real primitive the decomposer's own bite already uses
-## (see docs/concept/mushrooms.md "A decomposer's single bite"), so a
-## boar's bite shows the identical real bitten corpse art with no new
-## rendering work. Same immediate re-sync crush_mushroom_at already does,
-## so a bitten mushroom doesn't visibly linger as "still fruiting" until
-## step_wild_mushrooms's own next throttled tick.
+## place, the same real take-bite-shaped primitive the decomposer's own
+## bite already uses (see docs/concept/mushrooms.md "Bitten by a
+## decomposer"), so a boar's bite shows the identical real bitten-look art
+## with no new rendering work. A bitten mushroom stays fruiting and
+## pickable (unlike a crushed one, see WildMushroomPatch.bite's own doc
+## comment) -- there is no marker to rebuild here, only the existing one
+## to mark, which is exactly what going through the marker itself (rather
+## than the sim) gets for free: take_mushroom_bite() updates its own
+## sprite/bitten flag immediately, no separate re-sync needed.
 func take_mushroom_at(pixel_position: Vector2) -> String:
 	var tile := _world_tile_for_pixel(pixel_position)
 	var chunk_coord := _chunk_coord_for_tile(tile)
@@ -5526,12 +5530,9 @@ func take_mushroom_at(pixel_position: Vector2) -> String:
 		return ""
 	var cell := tile - chunk_coord * CHUNK_SIZE
 	var species := sim.species_at(cell)
-	if not sim.bite(cell):
+	var marker = _mushroom_markers.get(chunk_coord, {}).get(cell)
+	if marker == null or not marker.take_mushroom_bite():
 		return ""
-	_mushroom_renderer.sync_markers(
-		_entities_parent, sim, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
-		_mushroom_markers[chunk_coord]
-	)
 	return species
 
 

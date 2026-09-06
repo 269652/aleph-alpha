@@ -380,16 +380,20 @@ func _nearest_food() -> Node2D:
 				best = node
 				best_effective_distance = effective
 	for node in get_tree().get_nodes_in_group(DroppedItem.FORAGEABLE_GROUP_NAME):
-		# Only a real DroppedItem is required to actually hold an
-		# item_stack -- defensive, not load-bearing for correctness today
-		# (see DroppedItem._ready()), kept so a future bug in THAT join can
-		# never reintroduce the exact "invalid access to item_stack" crash
-		# this whole investigation started from. A MushroomMarker (or any
-		# other non-DroppedItem member this group ever gains) is judged on
-		# distance alone, same as fallen fruit -- _step_feeding's own
-		# has_method("take_bite")/has_method("consume_leaf_litter") checks
-		# are what actually tell these apart once one is picked.
-		if node is DroppedItem and node.item_stack == null:
+		# FORAGEABLE_GROUP_NAME is joined by a real DroppedItem holding a
+		# real fruit/nut (see DroppedItem._ready()) OR a MushroomMarker with
+		# something left to bite (see MushroomMarker._ready(), take_
+		# mushroom_bite -- real fungivory, docs/concept/mushrooms.md). The
+		# `is DroppedItem`/`item_stack` half is defensive, not load-bearing
+		# for correctness -- kept so a future bug in that join can never
+		# reintroduce the exact "invalid access to item_stack" crash this
+		# whole investigation started from. An already-bitten mushroom has
+		# nothing left to offer, so it is excluded here rather than costing
+		# a decomposer a wasted trip only to find take_mushroom_bite() a
+		# no-op on arrival.
+		var is_real_fruit: bool = node is DroppedItem and node.item_stack != null
+		var is_biteable_mushroom: bool = node.has_method("take_mushroom_bite") and not node.bitten
+		if not is_real_fruit and not is_biteable_mushroom:
 			continue
 		var distance: float = position.distance_to(node.position)
 		if distance <= best_effective_distance:
@@ -448,6 +452,19 @@ func _step_feeding(delta: float) -> void:
 			# several visits, same as always.
 			_target.take_bite(BITE_AMOUNT)
 			_step_disease_carry()
+		elif _target.has_method("take_mushroom_bite"):
+			# A mushroom (see MushroomMarker.take_mushroom_bite): unlike a
+			# carcass's whittled-down health pool or a fallen fruit eaten
+			# whole in one visit, one bite marks it bitten and done -- it
+			# stays present, in the world and later in an inventory, just
+			# diminished (see MushroomBiting.gd), rather than removed
+			# outright. So this decomposer is done here regardless of what
+			# take_mushroom_bite() itself returns -- there is nothing left
+			# to gain from a second bite (see WildMushroomPatch.bite).
+			_target.take_mushroom_bite()
+			_target = null
+			_behavior.abort()
+			return
 		elif _target.has_method("consume_leaf_litter"):
 			# Fallen-leaf litter (see _nearest_food's own leaf-litter
 			# branch): the handle itself has no health pool either -- one

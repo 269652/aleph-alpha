@@ -398,10 +398,12 @@ at all (see [mushrooms.md](mushrooms.md#animals-can-find-and-eat-wild-mushrooms)
   mushrooms_near`/`take_mushroom_at` in the exact sight-based shape
   `FOOD_FRUIT`'s `fruit_near`/`take_fruit_at` already use — `_visible_food`
   gains a case, nothing about the phase machine (seek/approach/graze)
-  changes. `take_mushroom_at` resolves through `WildMushroomPatch.bite`
-  (see mushrooms.md), not `pick` — a boar eats a mushroom in place, the
-  same real "bitten" corpse the recent crushed/bitten-art pass already
-  built for a decomposer's bite, not a player's inventory pickup.
+  changes. `take_mushroom_at` resolves through the live `MushroomMarker`'s
+  own `take_mushroom_bite()` (see mushrooms.md), not `pick_up` — a boar
+  eats a mushroom in place, the same real bitten-look art a decomposer's
+  own bite already shows, not a player's inventory pickup. A bite is not
+  a corpse (see mushrooms.md's "Bitten by a decomposer") -- the same live
+  marker just gets marked bitten and stays fruiting.
 - **A real, boar-specific search radius** — `GrazerForaging.
   search_radius_for(species)`, defaulting to the flat `SEARCH_TILES`
   every other grazer still uses. Boar's own override is the mechanical

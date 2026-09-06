@@ -2008,6 +2008,35 @@ gap, generalizing `EarthwormPatch`'s own `is_corpse`/`corpse_age_seconds`
   repeated bites. A bitten (or crushed) corpse clears exactly like an
   ordinary spent site once its `SPENT_SECONDS` recovery runs out.
 
+**Correction, 2026-09-06, same day: the bite half of this was replaced by
+a concurrent session's independent build of the same request, merged
+second.** Two sessions built "a bug bites a mushroom" from the same
+report at the same time; this section describes the first one merged.
+The second modeled a bite as a genuinely different shape, not a second
+corpse cause: "mushrooms with a bitten flag have less value; weigh less
+and render... in world and inventory, their title reads as e.g. Parasol
+(bitten)" requires a bitten mushroom to stay a real, pickable item — a
+corpse that replaces the live marker and is never picked up cannot
+satisfy that. See [mushrooms.md's "Bitten by a
+decomposer"](mushrooms.md#bitten-by-a-decomposer) for what actually
+shipped. Concretely, superseded by the second session's version:
+`WildMushroomPatch._corpse_kind` no longer takes `"bitten"` as a value
+(crush() is now its only writer); `bite(cell)` marks a new, orthogonal
+`_bitten: Dictionary` instead, WITHOUT erasing the cell from `_fruiting`
+-- the mushroom never stops being fruiting/pickable, so `is_corpse`/
+`corpse_kind` never apply to it at all. `MushroomMarker.take_bite`
+(the duck-typed `has_method("take_bite")` catch used above) is gone,
+replaced by `take_mushroom_bite()` -- a distinct name so a bitten
+mushroom does NOT duck-type into the Carcass branch, and so
+`DecomposerMarker._nearest_food`'s gate can name it directly (see
+carrion.md's own correction on the same fix). `MushroomMarker.bitten:
+bool` (not `corpse_kind == "bitten"`) drives the bitten sprite/display-
+name branches, and `pick_up()` resolves to a real `"<species>_bitten"`
+catalog item (`MushroomBiting.gd`) rather than nothing (the marker was
+never reachable by `pick_up` under the corpse model, since biting froze
+and replaced it). The crushed half above is UNCHANGED and still exactly
+as described.
+
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
 A real, hand-illustrated sheet (`assets/sprites/animals/worm.png`) replaces

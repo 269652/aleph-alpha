@@ -22,12 +22,22 @@ const NET := "butterfly_net"
 const TRAP := "trap"
 const REINFORCED_ROPE := "reinforced_rope"
 
-## The trap-vs-lasso size cutoff, derived from the mouse's OWN world_scale --
-## not a guessed number. Anything at or below this scale needs a Trap rather
-## than a Lasso: a rope loop has a real minimum practical diameter (see
-## taming.md's real-world grounding), the same reason field biologists reach
-## for a box trap on a mouse rather than a smaller rope.
-static var TRAP_WORLD_SCALE_CEILING: float = AnimalAnatomy.profile_for("mouse")["world_scale"]
+## The trap-vs-lasso size cutoff. Anything at or below this scale needs a
+## Trap rather than a Lasso: a rope loop has a real minimum practical
+## diameter (see taming.md's real-world grounding), the same reason field
+## biologists reach for a box trap on a mouse rather than a smaller rope.
+##
+## A fixed literal, not a live AnimalAnatomy.profile_for("mouse") reference
+## (which is what this was until mice were sized up for visibility -- see
+## docs/progress.md): mouse's own world_scale is a rendering/legibility
+## tuning knob, not a definition of "how big can something be and still need
+## a trap" -- coupling the two meant a purely cosmetic mouse-size change
+## would silently flip squirrel/arctic_fox/sheep/lynx from Lasso to Trap the
+## moment mouse's own scale crossed theirs. Set to exactly today's mouse
+## world_scale (0.40) so mouse itself keeps needing a Trap (see
+## test_a_mouse_needs_the_trap) while every other species' tool requirement
+## stays exactly as it was.
+const TRAP_WORLD_SCALE_CEILING: float = 0.40
 
 
 ## The tool `species`' body plan actually requires, or "" if AnimalAnatomy

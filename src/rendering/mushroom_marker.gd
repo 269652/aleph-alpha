@@ -30,6 +30,7 @@ extends Node2D
 const ProceduralMushroomSprite = preload("res://src/rendering/procedural_mushroom_sprite.gd")
 const IllustratedMushroomSprite = preload("res://src/rendering/illustrated_mushroom_sprite.gd")
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
@@ -50,11 +51,27 @@ var mushroom_seed := 0
 var cell := Vector2i.ZERO
 var mushroom_world = null
 
-## "" for a live fruiting specimen, "crushed" or "bitten" for a lingering
-## corpse (see WildMushroomPatch.is_corpse/corpse_kind, docs/concept/
-## mushrooms.md's "Crushed underfoot") -- set before add_child by
-## MushroomRenderer.sync_markers, same convention as species_id/cell.
+## "" for a live fruiting specimen, "crushed" for a lingering corpse (see
+## WildMushroomPatch.is_corpse/corpse_kind, docs/concept/mushrooms.md's
+## "Crushed underfoot") -- set before add_child by
+## MushroomRenderer.sync_markers, same convention as species_id/cell. A
+## crushed corpse is a FRESH marker built to replace the live one that was
+## just crushed (see sync_markers); a bitten mushroom (see `bitten` below)
+## is the opposite -- the ORIGINAL live marker, never replaced, so this
+## stays "" for it.
 var corpse_kind := ""
+
+## Whether a decomposer bug has bitten THIS live mushroom (see
+## take_mushroom_bite, docs/concept/mushrooms.md's fungivory section).
+## Unlike being picked or crushed, a bite does not remove it or replace it
+## with a corpse marker -- it stays present and pickable, just diminished
+## (a different look, a different, lighter catalog item once picked up --
+## see MushroomBiting.gd). Deliberately a separate field from corpse_kind,
+## not a third corpse_kind value: a bitten mushroom is not a corpse, it is
+## still standing, still fruiting (see WildMushroomPatch._bitten's own
+## doc comment for why the two are tracked orthogonally on the sim side
+## too).
+var bitten := false
 
 var _sprite: Sprite2D
 
@@ -81,19 +98,24 @@ func get_hover_actions() -> Array:
 ## Real illustrated art if this species has any (has-art-or-doesn't
 ## fallback chain every optional illustrated-art seam in this codebase
 ## uses), the procedural species-coloured silhouette otherwise. Always the
-## real species' own look -- see class doc comment. A corpse (corpse_kind
-## != "") prefers the matching crushed_frame_for/bitten_frame_for when the
-## species has that art yet (see docs/concept/mushrooms.md's "Crushed
-## underfoot") -- falling through to the ordinary live look otherwise, the
-## same has-or-doesn't gate, so a species still missing its crushed/bitten
-## sheet (reported live: "some are still missing but I'll add while you
-## wire") never shows a blank texture, just its real live look a beat
-## longer than the fully-delivered species do.
+## real species' own look -- see class doc comment. A crushed corpse
+## (corpse_kind == "crushed") or a bitten live specimen (bitten == true)
+## prefers the matching crushed_frame_for/bitten_frame_for when the species
+## has that art yet (see docs/concept/mushrooms.md's "Crushed underfoot"/
+## "Bitten by a decomposer") -- falling through to the ordinary live look
+## otherwise, the same has-or-doesn't gate, so a species still missing its
+## crushed/bitten sheet never shows a blank texture, just its real live
+## look a beat longer than the fully-delivered species do.
 func _rebuild_sprite() -> void:
 	if corpse_kind == "crushed" and _illustrated_generator.has_crushed_variant(species_id):
 		_sprite.texture = _illustrated_generator.crushed_frame_for(species_id, mushroom_seed)
 		_sprite.scale = Vector2.ONE * _illustrated_generator.marker_scale(species_id)
-	elif corpse_kind == "bitten" and _illustrated_generator.has_bitten_variant(species_id):
+	elif bitten and _illustrated_generator.has_bitten_variant(species_id):
+		# The bitten look, when the species has real art for it -- see
+		# IllustratedMushroomSprite._BITTEN_SHEETS' own doc comment for
+		# which species do so far. Reuses the SAME marker_scale(species_id)
+		# the ordinary look uses (a bug's bite doesn't shrink the specimen
+		# enough to need its own separately-measured scale).
 		_sprite.texture = _illustrated_generator.bitten_frame_for(species_id, mushroom_seed)
 		_sprite.scale = Vector2.ONE * _illustrated_generator.marker_scale(species_id)
 	elif _illustrated_generator.has_variants(species_id):
@@ -109,21 +131,53 @@ func _rebuild_sprite() -> void:
 
 
 ## The real species name plus a toxic/edible hint -- always, see class
-## doc comment.
+## doc comment. Bitten takes priority over that hint once a decomposer has
+## visibly marked it (see take_mushroom_bite): that is the more salient
+## thing to name at that point.
 func get_display_name() -> String:
 	var species_name := MushroomSpecies.display_name_for(species_id)
+	if bitten:
+		return "%s (Bitten)" % species_name
 	if MushroomSpecies.is_toxic(species_id):
 		return "%s (Toxic)" % species_name
 	return "%s (Edible)" % species_name
 
 
+## Marks this mushroom bitten by a decomposer bug (see docs/concept/
+## mushrooms.md's fungivory section, MushroomBiting.gd) -- the take_bite-
+## shaped verb DecomposerMarker._step_feeding's take_mushroom_bite branch
+## calls. Deliberately its OWN method name, not take_bite(): a MushroomMarker
+## must NOT answer has_method("take_bite") true, or DecomposerMarker would
+## route it into the Carcass/CarcassGuts branch instead of the mushroom one.
+## Unlike Carcass.take_bite, this never frees the marker: a bitten mushroom
+## stays present and pickable, just diminished (see
+## _rebuild_sprite/get_display_name/pick_up). Returns false (a no-op) when
+## already bitten, or there's no real sim to tell (mushroom_world unset --
+## e.g. a marker built standalone in a test) -- the same false a
+## decomposer relies on to know it's done here and should move on (see
+## WildMushroomPatch.bite's own doc comment).
+func take_mushroom_bite() -> bool:
+	if bitten:
+		return false
+	if mushroom_world == null or not mushroom_world.has_method("bite"):
+		return false
+	if not mushroom_world.bite(cell):
+		return false
+	bitten = true
+	_rebuild_sprite()
+	return true
+
+
 ## Takes this mushroom into `picker`'s inventory. Same "return whether
 ## anything was collected" contract DroppedItem/LiftableStone/PickableSeed
-## all keep.
+## all keep. A bitten mushroom resolves to its OWN, lighter catalog item
+## (see MushroomBiting.bitten_item_id_for) rather than the ordinary species
+## one -- what it visibly is by the time it's picked up.
 func pick_up(picker) -> bool:
 	if picker == null or picker.inventory == null or species_id == "":
 		return false
-	var item := _item_catalog.make(species_id)
+	var item_id := MushroomBiting.bitten_item_id_for(species_id) if bitten else species_id
+	var item := _item_catalog.make(item_id)
 	if picker.inventory.add(item, 1) > 0:
 		return false
 	# Taken from the sim as well as from the screen: a picked mushroom must
@@ -133,36 +187,5 @@ func pick_up(picker) -> bool:
 	# the exact right per-chunk sim instance here, not a wrapper.
 	if mushroom_world != null and mushroom_world.has_method("pick"):
 		mushroom_world.pick(cell)
-	queue_free()
-	return true
-
-
-## A decomposer's single bite (see DecomposerMarker._step_feeding's
-## has_method("take_bite") branch, docs/concept/soil_fauna.md's fungivory
-## follow-up) -- reported live: "1 bite is enough for when a bug takes a
-## bite." `amount` is unused -- unlike Carcass/CarcassGuts' numeric health
-## pool, a mushroom has no multi-visit health to whittle down (only one
-## bitten-art stage exists today; more are explicitly planned later per
-## the user's own words) -- kept only so this duck-types identically into
-## DecomposerMarker's existing take_bite branch. No-op (returns false) on
-## a marker that is already a corpse -- a decomposer doesn't re-bite what
-## something already finished (mirrors Carcass.take_bite's own "no-op
-## until/unless a real gate condition holds" contract shape), and never
-## even asks the sim in that case. Otherwise defers to
-## WildMushroomPatch.bite (this marker's own live cell may already be
-## spent by the time the bite lands -- e.g. picked or crushed a moment
-## earlier -- in which case bite() itself reports false and this marker is
-## left exactly as it was, for sync_markers to reconcile on its own next
-## tick). On a real bite, this marker -- the LIVE one -- is freed; the
-## corpse the player then sees is a fresh marker MushroomRenderer.
-## sync_markers builds from the sim's own corpse_kind, the same "the sim
-## is the truth, the marker just mirrors it" shape pick_up already uses.
-func take_bite(_amount: float) -> bool:
-	if corpse_kind != "":
-		return false
-	if mushroom_world == null or not mushroom_world.has_method("bite"):
-		return false
-	if not mushroom_world.bite(cell):
-		return false
 	queue_free()
 	return true

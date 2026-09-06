@@ -1,13 +1,12 @@
 extends RefCounted
 
-## Illustrated mushroom cap art, sliced from one AI-illustrated 5x5
-## reference sheet PER SPECIES -- 25 independent individual specimens, NOT
-## an animation (see MushroomMarker, docs/concept/mushrooms.md,
-## docs/art/ai_sprite_prompts.md section 12). Same "hand/AI-illustrated
-## sheet -> SpriteSheetSlicer -> cached frames, picked per-instance by a
-## seeded index" shape as IllustratedAntMoundSprite's single mound pool --
-## just one pool per species instead of one pool total, since every
-## species now has its own real sheet.
+## Real illustrated art for MushroomMarker's identified look (see
+## docs/concept/mushrooms.md, docs/art/ai_sprite_prompts.md section 12) --
+## a 5x5 grid of 25 independent individual specimens per species sheet, not
+## an animation. Same "hand/AI-illustrated sheet -> SpriteSheetSlicer ->
+## cached frames, picked per-instance by a seeded index" shape as
+## IllustratedAntMoundSprite's single mound pool -- just one pool per species
+## instead of one pool total, since every species now has its own real sheet.
 ##
 ## Two real background conventions among the delivered sheets, confirmed
 ## by pixel-sampling each one directly rather than assumed from a preview:
@@ -31,16 +30,16 @@ extends RefCounted
 ##   clean up afterward.
 ##
 ## Crushed/bitten counterparts (see docs/concept/mushrooms.md's "Crushed
-## underfoot", docs/concept/soil_fauna.md's decomposer-bite follow-up):
-## real 1:1-per-specimen sheets (same 5x5-per-1254x1254-canvas layout,
-## same magenta convention), delivered incrementally species by species --
+## underfoot", docs/concept/soil_fauna.md's decomposer-bite follow-up): real
+## 1:1-per-specimen sheets (same 5x5-per-1254x1254-canvas layout, same
+## magenta convention), delivered incrementally species by species --
 ## has_crushed_variant/has_bitten_variant gate exactly like has_variants
-## already does, so a species with no crushed/bitten art yet falls
-## through to a caller-chosen fallback rather than erroring. "1:1" holds
-## exactly once a sheet's own frame count matches the normal sheet's (25);
-## until then, crushed_frame_for/bitten_frame_for still pick a
-## deterministic, in-range variant of THAT sheet's own size (see their own
-## doc comments) rather than assuming every sheet is already complete.
+## already does, so a species with no crushed/bitten art yet falls through
+## to a caller-chosen fallback rather than erroring. "1:1" holds exactly
+## once a sheet's own frame count matches the normal sheet's (25); until
+## then, crushed_frame_for/bitten_frame_for still pick a deterministic,
+## in-range variant of THAT sheet's own size (see their own doc comments)
+## rather than assuming every sheet is already complete.
 
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
@@ -100,8 +99,8 @@ const _SHEETS := {
 	},
 }
 
-## Crushed-underfoot counterparts -- deliberately incomplete (see class
-## doc comment): only species with a real delivered sheet appear here.
+## Crushed-underfoot counterparts -- deliberately incomplete (see class doc
+## comment): only species with a real delivered sheet appear here.
 ## Filenames are as-delivered, including "champigon" (missing an "n")
 ## matching the real file on disk -- not renamed, same reasoning as
 ## "chantarelle" above.
@@ -133,9 +132,15 @@ const _CRUSHED_SHEETS := {
 	},
 }
 
-## One-bite-taken counterparts -- deliberately incomplete, same reasoning
-## as _CRUSHED_SHEETS. More bite stages are planned later (see
-## docs/concept/soil_fauna.md); only stage 1 exists today.
+## One-bite-taken counterparts -- deliberately incomplete, same reasoning as
+## _CRUSHED_SHEETS: only 3 of 6 species have real bitten art delivered so
+## far; an absent id falls back through MushroomMarker's own
+## has_bitten_variant gate to the ordinary look, the same has-or-doesn't
+## convention has_variants/frame_for already use. Filenames are
+## as-delivered, including "champigon" (missing an "n") and "chantarelle"
+## (matching the base sheet's own misspelling) -- not renamed, same
+## reasoning as _SHEETS/_CRUSHED_SHEETS above. More bite stages are planned
+## later (see docs/concept/soil_fauna.md); only stage 1 exists today.
 const _BITTEN_SHEETS := {
 	"black_trumpet": {
 		"path": "res://assets/sprites/mushrooms/black_trumpet_bitten_1.png",
@@ -215,23 +220,24 @@ func has_crushed_variant(species_id: String) -> bool:
 	return _CRUSHED_SHEETS.has(species_id)
 
 
-## The crushed counterpart of the specimen `seed_value` would otherwise
-## pick via frame_for -- same seed, same index-selection shape, so a
-## crushed mushroom reads as the SAME specimen once both sheets share the
-## normal 25-frame count (see class doc comment for the "not complete
-## yet" caveat). Null if `species_id` has no crushed sheet at all.
+## The crushed counterpart of the specimen `seed_value` would otherwise pick
+## via frame_for -- same seed, same index-selection shape, so a crushed
+## mushroom reads as the SAME specimen once both sheets share the normal
+## 25-frame count (see class doc comment for the "not complete yet"
+## caveat). Null if `species_id` has no crushed sheet at all.
 func crushed_frame_for(species_id: String, seed_value: int) -> ImageTexture:
 	return _pick_frame(_frames_from(_CRUSHED_SHEETS, _crushed_frames_cache, species_id), seed_value)
 
 
+## Whether there is real bitten-mushroom art registered for `species_id` --
+## see _BITTEN_SHEETS' own doc comment for which species have it so far.
 func has_bitten_variant(species_id: String) -> bool:
 	return _BITTEN_SHEETS.has(species_id)
 
 
 ## The one-bite-taken counterpart of the specimen `seed_value` would
-## otherwise pick via frame_for -- see crushed_frame_for's own doc
-## comment, identical reasoning. Null if `species_id` has no bitten sheet
-## at all.
+## otherwise pick via frame_for -- see crushed_frame_for's own doc comment,
+## identical reasoning. Null if `species_id` has no bitten sheet at all.
 func bitten_frame_for(species_id: String, seed_value: int) -> ImageTexture:
 	return _pick_frame(_frames_from(_BITTEN_SHEETS, _bitten_frames_cache, species_id), seed_value)
 
@@ -298,10 +304,10 @@ func _apply_chroma_key(image: Image, key: Color, tolerance: float) -> Image:
 ## match the canvas proportions (mirrors IllustratedAntMoundSprite/
 ## IllustratedAnimalSprite marker_scale). Cached per species: art doesn't
 ## change once loaded. Reused as-is for the crushed/bitten look of the
-## same species -- a simplification (see class doc comment): a squashed
-## or bitten specimen's own opaque-pixel spread is not measured
-## separately, on the assumption it reads close enough to the same real
-## specimen's own normal-frame size.
+## same species -- a simplification (see class doc comment): a squashed or
+## bitten specimen's own opaque-pixel spread is not measured separately, on
+## the assumption it reads close enough to the same real specimen's own
+## normal-frame size.
 func marker_scale(species_id: String) -> float:
 	if not _SHEETS.has(species_id):
 		return 1.0

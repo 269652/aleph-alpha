@@ -154,6 +154,89 @@ func test_pickup_fails_gracefully_with_no_picker():
 	assert_false(marker.is_queued_for_deletion())
 
 
+# -- bug fungivory: a bite marks it bitten, it doesn't remove it -----------
+#
+# Reported: "bugs should forage mushrooms -- when a bug takes a bite from a
+# mushroom it should get the bitten flag... mushrooms with a bitten flag
+# have less value; weigh less and render their mushroom_bitten_1.png in
+# world and inventory, their title reads as e.g. Parasol (bitten)".
+
+func test_bitten_defaults_to_false():
+	assert_false(_make_marker("parasol").bitten)
+
+
+func test_take_mushroom_bite_marks_it_bitten_and_returns_true():
+	var marker := _make_marker("parasol", Vector2i(3, 4))
+	marker.mushroom_world = StubMushroomWorld.new()
+	assert_true(marker.take_mushroom_bite())
+	assert_true(marker.bitten)
+
+
+func test_take_mushroom_bite_tells_the_mushroom_world():
+	var marker := _make_marker("parasol", Vector2i(3, 4))
+	marker.mushroom_world = StubMushroomWorld.new()
+	marker.take_mushroom_bite()
+	assert_eq(marker.mushroom_world.bitten, [Vector2i(3, 4)])
+
+
+## One bite is enough -- see WildMushroomPatch.bite's own doc comment for why
+## DecomposerMarker relies on this false to know when to move on.
+func test_a_second_bite_is_a_no_op():
+	var marker := _make_marker("parasol", Vector2i(3, 4))
+	marker.mushroom_world = StubMushroomWorld.new()
+	assert_true(marker.take_mushroom_bite())
+	assert_false(marker.take_mushroom_bite(), "already bitten -- nothing left to take")
+
+
+func test_take_mushroom_bite_fails_gracefully_with_no_mushroom_world():
+	var marker := _make_marker("parasol")
+	assert_false(marker.take_mushroom_bite())
+	assert_false(marker.bitten)
+
+
+func test_take_mushroom_bite_swaps_the_sprite_when_the_species_has_bitten_art():
+	var marker := _make_marker("champignon")
+	marker.mushroom_world = StubMushroomWorld.new()
+	var before: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
+	marker.take_mushroom_bite()
+	var after: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
+	assert_ne(before, after, "champignon has real bitten art -- the sprite should change")
+
+
+## Same has-or-doesn't fallback every optional illustrated-art seam in this
+## codebase uses -- only 3 of 6 species have real bitten art so far (see
+## IllustratedMushroomSprite).
+func test_take_mushroom_bite_falls_back_to_the_normal_look_without_bitten_art():
+	var marker := _make_marker("fly_agaric")
+	marker.mushroom_world = StubMushroomWorld.new()
+	var before: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
+	marker.take_mushroom_bite()
+	var after: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
+	assert_eq(before, after, "fly_agaric has no bitten art yet -- the look should stay the same")
+
+
+## Bitten takes priority over the ordinary toxic/edible suffix -- once a
+## mushroom is visibly bitten, that's the more salient thing to name.
+func test_display_name_shows_bitten_instead_of_toxicity_once_bitten():
+	var marker := _make_marker("psylo")
+	marker.mushroom_world = StubMushroomWorld.new()
+	marker.take_mushroom_bite()
+	assert_eq(marker.get_display_name(), "Psilocybe (Bitten)")
+
+
+## Picking up a bitten mushroom adds the "_bitten" catalog variant (see
+## MushroomBiting.gd, ItemCatalog) -- lighter, distinctly named -- not the
+## ordinary species item it would have been unbitten.
+func test_pickup_of_a_bitten_mushroom_adds_the_bitten_item():
+	var marker := _make_marker("parasol")
+	marker.mushroom_world = StubMushroomWorld.new()
+	marker.take_mushroom_bite()
+	var picker := _make_picker()
+	assert_true(marker.pick_up(picker))
+	assert_eq(picker.inventory.count_of("parasol_bitten"), 1)
+	assert_eq(picker.inventory.count_of("parasol"), 0)
+
+
 # -- position -------------------------------------------------------------
 
 func test_stays_exactly_where_placed():
@@ -175,51 +258,21 @@ func test_shows_crushed_art_when_corpse_kind_is_crushed_and_the_species_has_it()
 	assert_eq(sprite.texture.get_image().get_data(), expected.get_image().get_data())
 
 
-func test_shows_bitten_art_when_corpse_kind_is_bitten_and_the_species_has_it():
-	var marker := _make_marker("chanterelle", Vector2i.ZERO, "bitten")
-	var sprite := marker.get_child(0) as Sprite2D
-	var expected := IllustratedMushroomSprite.new().bitten_frame_for("chanterelle", marker.mushroom_seed)
-	assert_eq(sprite.texture.get_image().get_data(), expected.get_image().get_data())
+## A bitten mushroom is NOT a "bitten" corpse_kind -- it is still standing,
+## still fruiting, tracked via the separate `bitten` field instead (see
+## MushroomMarker.take_mushroom_bite, WildMushroomPatch._bitten's own doc
+## comment for why the two are orthogonal). Covered by
+## test_take_mushroom_bite_swaps_the_sprite_when_the_species_has_bitten_art
+## above via the real mechanism instead.
 
 
-## fly_agaric has no crushed/bitten art yet (reported live: "some are still
+## fly_agaric has no crushed art yet (reported live: "some are still
 ## missing but I'll add while you wire") -- the has-art-or-doesn't fallback
 ## every optional illustrated-art seam in this codebase uses, so a corpse
 ## of an undelivered species still shows ITS real look rather than a blank/
 ## missing texture.
-func test_falls_back_to_the_normal_look_when_the_species_has_no_crushed_or_bitten_art_yet():
+func test_falls_back_to_the_normal_look_when_the_species_has_no_crushed_art_yet():
 	var marker := _make_marker("fly_agaric", Vector2i.ZERO, "crushed")
 	var sprite := marker.get_child(0) as Sprite2D
 	var expected := IllustratedMushroomSprite.new().frame_for("fly_agaric", marker.mushroom_seed)
 	assert_eq(sprite.texture.get_image().get_data(), expected.get_image().get_data())
-
-
-# -- take_bite: a decomposer's single bite ---------------------------------
-
-func test_take_bite_calls_bite_on_the_mushroom_world_and_frees_the_marker():
-	var marker := _make_marker("chanterelle", Vector2i(3, 4))
-	marker.mushroom_world = StubMushroomWorld.new()
-	assert_true(marker.take_bite(1.0))
-	assert_eq(marker.mushroom_world.bitten, [Vector2i(3, 4)])
-	assert_true(marker.is_queued_for_deletion())
-
-
-func test_take_bite_returns_false_when_the_sim_says_nothing_to_bite():
-	var marker := _make_marker("chanterelle")
-	var world := StubMushroomWorld.new()
-	world.bite_result = false
-	marker.mushroom_world = world
-	assert_false(marker.take_bite(1.0))
-	assert_false(marker.is_queued_for_deletion())
-
-
-## A decomposer doesn't re-bite what something already finished -- mirrors
-## Carcass.take_bite's own "no-op until/unless a real gate condition holds"
-## contract shape.
-func test_take_bite_is_a_no_op_on_a_marker_that_is_already_a_corpse():
-	var marker := _make_marker("chanterelle", Vector2i.ZERO, "crushed")
-	var world := StubMushroomWorld.new()
-	marker.mushroom_world = world
-	assert_false(marker.take_bite(1.0))
-	assert_true(world.bitten.is_empty(), "an already-corpse marker should never even ask the sim to bite it")
-	assert_false(marker.is_queued_for_deletion())

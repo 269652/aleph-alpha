@@ -304,7 +304,19 @@ see that doc's own mechanism spec and Status.
      query instead (a synthetic, never-added-to-tree `LeafForageHandle`
      stands in for "the fallen leaf currently being foraged," the one
      thing `_step_feeding` needs a `position` and a `consume_leaf_litter()`
-     method on) — see [leaf_litter.md](leaf_litter.md).
+     method on) — see [leaf_litter.md](leaf_litter.md). **Mushrooms have
+     since become a real forage source too — via `FORAGEABLE_GROUP_NAME`
+     exactly as first assumed here, unlike leaves**: `MushroomMarker` had
+     already joined that group specifically so a decomposer could find and
+     eat one, but `_nearest_food`'s `node is DroppedItem` gate silently
+     skipped every one — a `MushroomMarker` is not a `DroppedItem`. Fixed
+     by broadening that gate (a `has_method("take_mushroom_bite")` branch
+     alongside the existing `is DroppedItem` one), and — unlike a fruit
+     eaten whole in one visit — a bite marks the mushroom bitten rather
+     than removing it: it stays fruiting and pickable, just diminished.
+     See [mushrooms.md's "Bitten by a
+     decomposer"](mushrooms.md#bitten-by-a-decomposer) for the full
+     mechanism.
 - ✅ Real illustrated art for both species (2026-09-05), replacing
   `ProceduralDecomposerSprite`'s drawn silhouettes: `ant.png`/`beetle.png`,
   hand-illustrated walk cycles (`IllustratedDecomposerSprite`, same

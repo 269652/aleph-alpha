@@ -516,7 +516,7 @@ const _PROFILES := {
 	# Tiny body, oversized ears, long bare tail -- nothing like the others.
 	"mouse": {
 		"barrel_squareness": 0.2,
-		"world_scale": 0.35,
+		"world_scale": 0.40,
 		"body_length": 0.30, "body_height": 0.16, "body_y": 0.62, "shoulder_hump": 0.01,
 		"neck_length": 0.03, "neck_thickness": 0.09, "neck_carriage": NECK_LEVEL,
 		"head_length": 0.11, "head_height": 0.10, "muzzle": 0.7, "ear_size": 0.62,

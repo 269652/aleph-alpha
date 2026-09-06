@@ -251,6 +251,72 @@ func test_carrot_and_potato_are_both_light_enough_to_kick():
 	assert_true(Kick.is_kickable(catalog.make("potato").mass_kg))
 
 
+# -- real mushroom mass (see docs/concept/mushrooms.md) ---------------------
+#
+# Real whole-specimen average masses foraged fresh -- the same real
+# reference-weight convention carrot/potato already use just above (a whole
+# item, not a material x volume estimate). Ordered smallest to largest:
+# Psilocybe's thin, fragile cap barely registers; a mature Parasol's
+# dinner-plate-sized cap is a real forager's favourite specifically because
+# one specimen is substantial.
+
+func test_psylo_has_a_plausible_real_mushroom_mass():
+	assert_between(catalog.make("psylo").mass_kg, 0.002, 0.01)
+
+
+func test_black_trumpet_has_a_plausible_real_mushroom_mass():
+	assert_between(catalog.make("black_trumpet").mass_kg, 0.005, 0.02)
+
+
+func test_champignon_has_a_plausible_real_mushroom_mass():
+	assert_between(catalog.make("champignon").mass_kg, 0.01, 0.03)
+
+
+func test_chanterelle_has_a_plausible_real_mushroom_mass():
+	assert_between(catalog.make("chanterelle").mass_kg, 0.01, 0.03)
+
+
+func test_fly_agaric_has_a_plausible_real_mushroom_mass():
+	assert_between(catalog.make("fly_agaric").mass_kg, 0.05, 0.12)
+
+
+func test_parasol_has_a_plausible_real_mushroom_mass():
+	assert_between(catalog.make("parasol").mass_kg, 0.1, 0.2)
+
+
+# -- bitten mushroom variants (see MushroomBiting.gd, docs/concept/ ----------
+# -- mushrooms.md's fungivory section) ---------------------------------------
+
+const _MUSHROOM_SPECIES_IDS := [
+	"fly_agaric", "psylo", "black_trumpet", "champignon", "chanterelle", "parasol"
+]
+
+
+func test_every_species_has_a_bitten_catalog_variant():
+	for species_id in _MUSHROOM_SPECIES_IDS:
+		var bitten = catalog.make(species_id + "_bitten")
+		assert_not_null(bitten, species_id)
+		assert_eq(bitten.kind, "food", species_id)
+
+
+func test_bitten_display_name_names_the_state():
+	assert_eq(catalog.make("parasol_bitten").display_name, "Parasol (Bitten)")
+	assert_eq(catalog.make("champignon_bitten").display_name, "Champignon (Bitten)")
+
+
+## A bitten mushroom weighs exactly MushroomBiting.RETAINED_FRACTION_AFTER_
+## BITE of its own unbitten baseline -- never independently eyeballed, so
+## the two can't silently drift apart.
+func test_bitten_mushroom_weighs_the_retained_fraction_of_the_base():
+	const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
+	for species_id in _MUSHROOM_SPECIES_IDS:
+		var base_mass: float = catalog.make(species_id).mass_kg
+		var bitten_mass: float = catalog.make(species_id + "_bitten").mass_kg
+		assert_almost_eq(
+			bitten_mass, MushroomBiting.after_bite(base_mass), 0.0001, species_id
+		)
+
+
 # -- wayfinding & citizenship instruments (see docs/concept/wayfinding.md, --
 # -- docs/concept/player_citizenship.md) -- Compass/RoughCompass, Map, -------
 # -- Spyglass, WeatherForecast, SeasonAlmanac, and the property/contract/ ----

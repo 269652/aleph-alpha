@@ -38,8 +38,8 @@ func test_a_world_boss_needs_the_reinforced_rope():
 	assert_eq(CaptureTool.required_tool_for("krampus"), CaptureTool.REINFORCED_ROPE)
 
 
-## Mouse is the anchor for the trap-vs-lasso size cutoff: at-or-below its own
-## world_scale is Trapped.
+## Mouse's own world_scale sits exactly at the trap-vs-lasso size cutoff
+## (see CaptureTool.TRAP_WORLD_SCALE_CEILING) -- at-or-below is Trapped.
 func test_a_mouse_needs_the_trap():
 	assert_eq(CaptureTool.required_tool_for("mouse"), CaptureTool.TRAP)
 
