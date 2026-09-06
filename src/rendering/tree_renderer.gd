@@ -184,8 +184,57 @@ func _stand_position(global_x: int, global_y: int, tile_size: int) -> Vector2:
 	var down := float(PixelNoise.range_index(global_x * 104729 + global_y, 223, 0, 1001)) / 500.0 - 1.0
 	return Vector2(
 		(float(global_x) + 0.5) * float(tile_size) + across * span,
-		(float(global_y) + 0.5) * float(tile_size) + down * span
+		(float(global_y) + 0.5) * float(tile_size) + down * span + _y_sort_tie_break(global_x, global_y)
 	)
+
+
+## ## Why every tree needs its OWN Y, not just its own tile
+##
+## Reported directly, right after VISUAL_SCALE(1.3) made canopies overlap
+## far more than before: "There is some y order problem where some trees
+## flicker" -- confirmed a real, discrete pop (not a sway/shimmer), and
+## happening even standing still.
+##
+## `down` above is `PixelNoise.range_index(..., 0, 1001)` -- only 1001
+## discrete buckets. Two DIFFERENT tiles landing on the exact same bucket is
+## not a rare edge case: sampling an 80x80 tile neighbourhood turns up
+## dozens of exact Y ties (see test_no_two_tiles_produce_the_same_y_sort_key,
+## which failed with hundreds of them before this fix existed). For every
+## tied pair, Y-sort has no real order to use and falls back to sibling/
+## insertion order -- stable only as long as nothing ever re-parents either
+## tree. Confirmed directly that something does, and that this is enough by
+## itself to swap which one draws on top with nothing else changing at all
+## (tools/probe_ysort_readd.gd, real GPU: two trees forced to an exact tie
+## drew in a fixed, correct order across 8 real animated frames, then
+## visibly swapped the instant one was removed and re-added to the same
+## parent -- same position, same texture, only sibling order different).
+##
+## Fixed at the source rather than chasing whatever re-parents a tree: give
+## every tile a genuinely distinct Y so ties can never occur, and Y-sort
+## always has a real order to fall back on. A continuous function of
+## (global_x, global_y) rather than another `PixelNoise.range_index` bucket
+## call -- bucketing is the exact mechanism that caused the collisions in
+## the first place, so reusing it here would just move the birthday-paradox
+## problem to a smaller scale rather than removing it. Two small,
+## deliberately non-round multipliers: colliding would need two different
+## integer tile pairs to land on the exact same weighted sum, which
+## non-commensurate steps make vanishingly unlikely across any real map
+## (checked directly, zero collisions across an 80x80 sample).
+##
+## Magnitude capped far below anything perceptible: within any
+## neighbourhood that could ever be on screen together (a few hundred
+## tiles either side -- trees further apart than that can never visually
+## overlap regardless of Y-sort), the nudge stays a small fraction of a
+## single world pixel -- nowhere near enough to cross a tile boundary, move
+## a tree's collision box, or read as "jittered" on top of the real
+## placement jitter above. It only ever matters for the handful of trees
+## per neighbourhood that would otherwise have tied exactly.
+const Y_SORT_TIE_BREAK_X_STEP := 0.0000731
+const Y_SORT_TIE_BREAK_Y_STEP := 0.0000127
+
+
+func _y_sort_tie_break(global_x: int, global_y: int) -> float:
+	return float(global_x) * Y_SORT_TIE_BREAK_X_STEP + float(global_y) * Y_SORT_TIE_BREAK_Y_STEP
 
 
 func _build_tree_node(position: Vector2, age_seconds: float = INF) -> ChoppableTree:
