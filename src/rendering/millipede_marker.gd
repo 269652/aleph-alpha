@@ -121,19 +121,62 @@ func get_display_name() -> String:
 
 ## crawl: ambient wander, or approaching a leaf. alert: EATING -- a
 ## millipede pausing to feed (see IllustratedMillipedeSprite's own row
-## doc comment). curl/crushed are real, registered art with no trigger
-## wired in this pass (see docs/concept/soil_fauna.md's "What this does
-## NOT include" -- named explicitly, not silently assumed).
+## doc comment). crushed: dying (see crush()) -- closes the gap
+## docs/concept/soil_fauna.md's own "What this does NOT include" named
+## explicitly ("the `crushed` row exists and is real ... not yet wired to
+## a real trigger"). curl alone remains genuinely unwired (no threat-sense
+## exists to trigger it).
 func _current_action() -> String:
+	if _dying:
+		return "crushed"
 	if _behavior.phase == CaterpillarForageBehavior.Phase.EATING:
 		return "alert"
 	return "crawl"
 
 
+## Set by crush() (see its own doc comment) -- once true, _process skips
+## every forage/wander step entirely and only ticks the death animation.
+var _dying := false
+
+
+## Called by EarthChunkManager.crush_millipedes_near (via _crush_markers_near)
+## in place of an instant queue_free() -- see docs/concept/soil_fauna.md's
+## own "No timed death animation" scope-cut, now closed: real "crushed" art
+## already existed (IllustratedMillipedeSprite's row 4), delivered but never
+## wired to any trigger; this is that trigger. Restarts _elapsed_time from
+## 0.0 so the crushed row plays from its own first frame regardless of
+## whatever the crawl/alert cycle's counter happened to read at the moment
+## of death, then holds on the LAST crushed frame (see _update_sprite's own
+## clamped-vs-wrapped indexing) for one more full frame's worth of time
+## before _process actually frees the marker -- long enough to read as a
+## real death, not an instant swap. Idempotent: crushing an already-dying
+## millipede a second time (e.g. a second heavy footstep landing before the
+## animation finishes) does nothing further.
+func crush() -> void:
+	if _dying:
+		return
+	_dying = true
+	_elapsed_time = 0.0
+	_update_sprite(Vector2.ZERO)
+
+
+## How long the crushed row plays before the marker actually frees itself --
+## derived from the row's own real frame count (25, per
+## IllustratedMillipedeSprite.EXPECTED_FRAME_COUNT) times the same
+## FRAME_DURATION_SECONDS every other action already animates at, not a
+## second, independently-eyeballed duration.
+func _crushed_duration() -> float:
+	return float(_illustrated_generator.generate_textures("crushed").size()) * FRAME_DURATION_SECONDS
+
+
 func _update_sprite(moved: Vector2) -> void:
 	var action := _current_action()
 	var frames := _illustrated_generator.generate_textures(action)
-	_sprite.texture = frames[int(_elapsed_time / FRAME_DURATION_SECONDS) % frames.size()]
+	var index := int(_elapsed_time / FRAME_DURATION_SECONDS)
+	# Dying holds its LAST frame once fully played (a flattened corpse
+	# should stay flattened, not loop back to crawling) -- every other
+	# action still wraps forever via modulo, exactly as before.
+	_sprite.texture = frames[clampi(index, 0, frames.size() - 1)] if _dying else frames[index % frames.size()]
 	_sprite.scale = Vector2.ONE * _illustrated_generator.world_scale()
 	if absf(moved.x) > FACING_DEADZONE_PX:
 		_sprite.flip_h = moved.x > 0.0
@@ -180,6 +223,11 @@ func _process(frame_delta: float) -> void:
 	if delta < 0.0:
 		return
 	_elapsed_time += delta
+	if _dying:
+		_update_sprite(Vector2.ZERO)
+		if _elapsed_time >= _crushed_duration():
+			queue_free()
+		return
 	var position_before := position
 	match _behavior.phase:
 		CaterpillarForageBehavior.Phase.SEEKING:

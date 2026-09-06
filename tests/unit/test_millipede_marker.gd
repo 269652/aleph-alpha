@@ -136,3 +136,46 @@ func test_approaching_a_close_target_does_not_overshoot_and_orbit_forever():
 ## CaterpillarMarker._step_climb does.
 func test_has_no_climb_mechanism():
 	assert_false(marker.has_method("_step_climb"))
+
+
+# -- crushed underfoot: real "crushed" art, now wired to a real terminal ----
+# -- death animation (see docs/concept/soil_fauna.md's own "What this does -
+# -- NOT include" -- "the `crushed` row exists and is real ... not yet ----
+# -- wired to a real trigger", now closed) ----------------------------------
+
+func test_crush_switches_to_the_real_crushed_art():
+	marker.crush()
+	var sprite := marker.get_child(0) as Sprite2D
+	assert_eq(
+		sprite.texture, IllustratedMillipedeSprite.new().generate_textures("crushed")[0],
+		"a freshly-crushed millipede should show the crushed row's first frame"
+	)
+
+
+func test_crush_stops_foraging_and_wandering():
+	var world := StubWorld.new()
+	world.field.add_leaf(Vector2(105, 100), "cherry", "autumn", 0.0)
+	marker.setup(world)
+	marker.crush()
+	var position_before := marker.position
+	marker._process(1.0)
+	assert_eq(marker.position, position_before, "a crushed millipede should no longer move")
+	assert_false(world.field.leaves().is_empty(), "a crushed millipede should no longer forage")
+
+
+func test_crush_holds_the_final_crushed_frame_then_removes_the_marker():
+	marker.crush()
+	var frame_count := IllustratedMillipedeSprite.new().generate_textures("crushed").size()
+	var duration := float(frame_count) * MillipedeMarker.FRAME_DURATION_SECONDS
+	marker._process(duration - 0.01)
+	assert_false(marker.is_queued_for_deletion(), "should still be lingering just before the animation finishes")
+	marker._process(0.02)
+	assert_true(marker.is_queued_for_deletion(), "should free itself once the crushed animation has fully played")
+
+
+func test_crush_is_idempotent():
+	marker.crush()
+	marker._process(0.1)
+	var elapsed_before = marker._elapsed_time
+	marker.crush()
+	assert_eq(marker._elapsed_time, elapsed_before, "crushing an already-crushed millipede should be a no-op")

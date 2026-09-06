@@ -10,6 +10,7 @@ extends RefCounted
 const Item = preload("res://src/gameplay/item.gd")
 const MaterialProperties = preload("res://src/gameplay/material_properties.gd")
 const CraftedItemRegistry = preload("res://src/gameplay/crafted_item_registry.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 
 ## Optional fallback for content-addressed, emergent item ids (see
 ## docs/concept/item_identity.md). Null in a fresh catalog, so a bare
@@ -99,6 +100,23 @@ const _ITEMS := {
 	"parasol": ["Parasol", "food", 20, 0.0],
 	"death_cap": ["Death Cap", "food", 20, 0.0],
 	"false_death_cap": ["False Death Cap", "food", 20, 0.0],
+	# A bug's single bite (see MushroomBiting, DecomposerMarker.
+	# take_mushroom_bite) turns a mushroom into its OWN catalog id rather
+	# than a mutable flag on the shared Item -- the same "state change
+	# becomes its own catalog identity" shape "meat" -> "cooked_meat"
+	# already establishes below. Stays present and pickable (unlike
+	# crush()'s outright destruction), just diminished: lighter (see
+	# _mass_kg_for) and visibly marked, both in the world
+	# (MushroomMarker._rebuild_sprite) and in inventory
+	# (ProceduralItemSprite).
+	"fly_agaric_bitten": ["Fly Agaric (Bitten)", "food", 20, 0.0],
+	"psylo_bitten": ["Psilocybe (Bitten)", "food", 20, 0.0],
+	"black_trumpet_bitten": ["Black Trumpet (Bitten)", "food", 20, 0.0],
+	"champignon_bitten": ["Champignon (Bitten)", "food", 20, 0.0],
+	"chanterelle_bitten": ["Chanterelle (Bitten)", "food", 20, 0.0],
+	"parasol_bitten": ["Parasol (Bitten)", "food", 20, 0.0],
+	"death_cap_bitten": ["Death Cap (Bitten)", "food", 20, 0.0],
+	"false_death_cap_bitten": ["False Death Cap (Bitten)", "food", 20, 0.0],
 	"wood": ["Wood", "material", 40, 0.0],
 	"wooden_club": ["Wooden Club", "weapon", 1, 8.0],
 	"iron_sword": ["Iron Sword", "weapon", 1, 15.0],
@@ -307,13 +325,40 @@ const _PRODUCE_MASS_KG := {
 	"potato": 0.17,
 }
 
+## Real average whole-specimen mass, kilograms, foraged fresh -- the same
+## real-reference-weight convention _PRODUCE_MASS_KG uses just above (a
+## whole mushroom, not a material x volume estimate). Ordered smallest to
+## largest: Psilocybe's thin, fragile cap barely registers; a mature
+## Parasol's dinner-plate-sized cap is a real forager's favourite
+## specifically because one specimen is substantial.
+const _MUSHROOM_MASS_KG := {
+	"psylo": 0.005,
+	"black_trumpet": 0.01,
+	"champignon": 0.02,
+	"chanterelle": 0.02,
+	"fly_agaric": 0.08,
+	"parasol": 0.15,
+	# Death Cap (Amanita phalloides): a real, substantial cap similar in
+	# scale to Fly Agaric. False Death Cap (Amanita citrina) is real but
+	# smaller, closer to Champignon/Chanterelle.
+	"death_cap": 0.07,
+	"false_death_cap": 0.025,
+}
+
 
 ## Real mass for `item_id` -- a real weapon (material + volume estimate, see
-## _WEAPON_MATERIAL_AND_VOLUME) or a real harvested vegetable
-## (_PRODUCE_MASS_KG); 0.0 for anything with no real mass modeled yet.
+## _WEAPON_MATERIAL_AND_VOLUME), a real harvested vegetable
+## (_PRODUCE_MASS_KG), a real foraged mushroom (_MUSHROOM_MASS_KG), or --
+## for a "_bitten" id (see MushroomBiting) -- MushroomBiting.
+## RETAINED_FRACTION_AFTER_BITE of its own unbitten base mushroom's mass.
+## 0.0 for anything with no real mass modeled yet.
 func _mass_kg_for(item_id: String) -> float:
+	if MushroomBiting.is_bitten_item_id(item_id):
+		return MushroomBiting.after_bite(_mass_kg_for(MushroomBiting.base_item_id_for(item_id)))
 	if _PRODUCE_MASS_KG.has(item_id):
 		return _PRODUCE_MASS_KG[item_id]
+	if _MUSHROOM_MASS_KG.has(item_id):
+		return _MUSHROOM_MASS_KG[item_id]
 	if not _WEAPON_MATERIAL_AND_VOLUME.has(item_id):
 		return 0.0
 	var material_and_volume: Array = _WEAPON_MATERIAL_AND_VOLUME[item_id]

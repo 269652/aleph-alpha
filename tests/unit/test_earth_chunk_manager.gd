@@ -4172,11 +4172,15 @@ func test_crushing_a_caterpillar_with_enough_momentum_removes_it_from_the_world(
 		manager.crush_caterpillars_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
 		"a horse-scale step on a caterpillar should crush it"
 	)
-	assert_true(caterpillar.is_queued_for_deletion(), "the caterpillar itself is gone")
+	# Not instantly queue_free()'d any more (see CaterpillarMarker.crush()) --
+	# it dies visibly first, THEN frees itself.
+	assert_true(caterpillar._dying, "the caterpillar should start dying immediately")
 	assert_false(
 		manager._caterpillar_markers[chunk_coord].has(caterpillar),
-		"and dropped from tracking so chunk-unload never double-frees it"
+		"and dropped from tracking immediately so chunk-unload never double-frees it"
 	)
+	caterpillar._process(10.0)
+	assert_true(caterpillar.is_queued_for_deletion(), "and actually removed once its death animation has played out")
 
 
 func test_crushing_a_caterpillar_with_too_little_momentum_leaves_it_alone():
@@ -4208,6 +4212,46 @@ func test_crushing_caterpillars_where_there_are_none_fails_rather_than_erroring(
 	assert_false(manager.crush_caterpillars_near(Vector2(-9000000, -9000000), 1000000.0))
 
 
+# -- a bird's-eye view: caterpillars_near/take_caterpillar_near (see --------
+# -- docs/concept/soil_fauna.md's own bird-diet follow-up -- mirrors --------
+# -- worms_near/take_worm_at's own shape exactly, so a caterpillar-eating --
+# -- bird gets the identical sense/take contract a worm-eating one has) ----
+
+func test_caterpillars_near_finds_a_real_tracked_caterpillar():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var caterpillar := _caterpillar_at(chunk_coord, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	var found := manager.caterpillars_near(pixel, 8)
+	assert_gt(found.size(), 0, "a caterpillar underfoot should be findable")
+	var positions := []
+	for entry in found:
+		positions.append(entry["position"])
+	assert_true(positions.has(caterpillar.position), "and reported at its own real position")
+
+
+func test_caterpillars_near_respects_its_radius():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	_caterpillar_at(chunk_coord, Vector2i(5, 5))
+	var far_pixel := _pixel_for(chunk_coord, Vector2i(5, 5)) + Vector2(2000.0, 2000.0)
+	assert_eq(manager.caterpillars_near(far_pixel, 2).size(), 0, "nothing outside the radius should be reported")
+
+
+func test_take_caterpillar_near_removes_the_nearest_real_caterpillar():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var caterpillar := _caterpillar_at(chunk_coord, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(manager.take_caterpillar_near(pixel), "a real caterpillar right there should be taken")
+	assert_true(caterpillar.is_queued_for_deletion(), "eaten outright -- a bird's meal, not a crush corpse")
+	assert_false(manager._caterpillar_markers[chunk_coord].has(caterpillar))
+
+
+func test_take_caterpillar_near_where_there_are_none_fails_rather_than_erroring():
+	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
+	assert_false(manager.take_caterpillar_near(Vector2(-9000000, -9000000)))
+
+
 # -- crushed underfoot, the millipede side (see docs/concept/soil_fauna.md
 # "Generalized to millipedes too") -- same shape as the caterpillar section
 # immediately above, deliberately: a millipede is the same kind of victim
@@ -4232,11 +4276,15 @@ func test_crushing_a_millipede_with_enough_momentum_removes_it_from_the_world():
 		manager.crush_millipedes_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
 		"a horse-scale step on a millipede should crush it"
 	)
-	assert_true(millipede.is_queued_for_deletion(), "the millipede itself is gone")
+	# Not instantly queue_free()'d any more (see MillipedeMarker.crush()) --
+	# it plays the real crushed animation first, THEN frees itself.
+	assert_true(millipede._dying, "the millipede should start dying immediately")
 	assert_false(
 		manager._millipede_markers[chunk_coord].has(millipede),
-		"and dropped from tracking so chunk-unload never double-frees it"
+		"and dropped from tracking immediately so chunk-unload never double-frees it"
 	)
+	millipede._process(10.0)
+	assert_true(millipede.is_queued_for_deletion(), "and actually removed once its death animation has played out")
 
 
 func test_crushing_a_millipede_with_too_little_momentum_leaves_it_alone():
@@ -4294,11 +4342,15 @@ func test_crushing_a_decomposer_with_enough_momentum_removes_it_from_the_world()
 		manager.crush_decomposers_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
 		"a horse-scale step on a bug should crush it"
 	)
-	assert_true(decomposer.is_queued_for_deletion(), "the bug itself is gone")
+	# Not instantly queue_free()'d any more (see DecomposerMarker.crush()) --
+	# it dies visibly first, THEN frees itself.
+	assert_true(decomposer._dying, "the bug should start dying immediately")
 	assert_false(
 		manager._decomposer_markers[chunk_coord].has(decomposer),
-		"and dropped from tracking so chunk-unload never double-frees it"
+		"and dropped from tracking immediately so chunk-unload never double-frees it"
 	)
+	decomposer._process(10.0)
+	assert_true(decomposer.is_queued_for_deletion(), "and actually removed once its death animation has played out")
 
 
 func test_crushing_a_decomposer_with_too_little_momentum_leaves_it_alone():
@@ -4360,10 +4412,32 @@ func test_crushing_an_ant_with_enough_momentum_removes_it_from_the_world():
 		manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
 		"a horse-scale step on an ant should crush it"
 	)
-	assert_true(forager.is_queued_for_deletion(), "the ant itself is gone")
+	# Not instantly queue_free()'d any more (see AntForagerMarker.crush()) --
+	# it dies visibly first, THEN frees itself.
+	assert_true(forager._dying, "the ant should start dying immediately")
 	assert_false(
 		manager._active_ant_foragers[global_tile].has(forager),
 		"and dropped from tracking so its own mound's dispatch cap never counts a corpse"
+	)
+	forager._process(10.0)
+	assert_true(forager.is_queued_for_deletion(), "and actually removed once its death animation has played out")
+
+
+## See docs/concept/soil_fauna.md's own "Generalized to ants too" -- "no
+## effect on the mound's own population/food economy beyond the one
+## forager actually lost", now closed.
+func test_crushing_an_ant_reduces_its_own_mounds_population():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var colony := _ant_colony_with_one_mound()
+	var mound_cell: Vector2i = colony.mound_cells()[0]
+	manager._ant_colonies[chunk_coord] = colony
+	var cell := Vector2i(5, 5)
+	_ant_forager_at(chunk_coord, mound_cell, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	var population_before := colony.population_at(mound_cell)
+	manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	assert_almost_eq(
+		colony.population_at(mound_cell), population_before - AntColony.FORAGER_CRUSH_POPULATION_LOSS, 0.001
 	)
 
 
@@ -4395,6 +4469,54 @@ func test_crushing_ants_where_there_are_none_fails_rather_than_erroring():
 	assert_false(manager.crush_ants_near(Vector2(-9000000, -9000000), 1000000.0))
 
 
+## Reported live, real crash: "Invalid access to property or key 'position'
+## on a base object of type 'previously freed'" at crush_ants_near.
+## _active_ant_foragers is only pruned LAZILY at dispatch time (see
+## _dispatch_forager's own doc comment) -- a forager that already
+## queue_free()'d itself naturally (a completed round trip, see
+## AntForagerMarker._process's RETURNING branch) sits in this array as a
+## stale, by-then-actually-freed reference until the next dispatch happens
+## to prune it. A real step landing on that stale entry in between must
+## not crash on it.
+func test_crushing_ants_does_not_crash_on_a_stale_already_freed_entry():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var global_tile: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(2, 2)
+	var stale := AntForagerMarker.new()
+	stale.position = _pixel_for(chunk_coord, cell)
+	stale.free()  # actually freed already, not merely queue_free()'d -- the worst case
+	manager._active_ant_foragers[global_tile] = [stale]
+	var pixel := _pixel_for(chunk_coord, cell)
+
+	assert_false(
+		manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"nothing real was there to crush -- only a stale freed reference"
+	)
+
+
+## The real, reported scenario exactly: a stale freed entry sits alongside
+## a real, currently-alive forager on a DIFFERENT tile -- the stale entry
+## must not stop the scan from reaching the real one.
+func test_crushing_ants_still_reaches_a_real_forager_past_a_stale_entry():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var mound_cell := Vector2i(2, 2)
+	var global_tile: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + mound_cell
+	var stale := AntForagerMarker.new()
+	stale.position = _pixel_for(chunk_coord, Vector2i(1, 1))
+	stale.free()
+	var real_forager := AntForagerMarker.new()
+	add_child_autofree(real_forager)
+	var cell := Vector2i(5, 5)
+	real_forager.position = _pixel_for(chunk_coord, cell)
+	manager._active_ant_foragers[global_tile] = [stale, real_forager]
+	var pixel := _pixel_for(chunk_coord, cell)
+
+	assert_true(manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	# Not instantly queue_free()'d any more (see AntForagerMarker.crush()) --
+	# it dies visibly first, THEN frees itself.
+	assert_true(real_forager._dying, "the real forager should start dying immediately")
+
+
 ## Two different mounds in the same chunk each have their own key in
 ## _active_ant_foragers -- a real step must still reach an ant belonging
 ## to EITHER mound, not just whichever one happens to be scanned first.
@@ -4405,8 +4527,8 @@ func test_crushing_an_ant_reaches_either_mounds_forager_in_the_same_chunk():
 	var forager_b := _ant_forager_at(chunk_coord, Vector2i(6, 6), Vector2i(15, 15))
 	var pixel := _pixel_for(chunk_coord, cell)
 	assert_true(manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
-	assert_true(forager_a.is_queued_for_deletion())
-	assert_false(forager_b.is_queued_for_deletion(), "a step on one mound's ant must not reach the other mound's")
+	assert_true(forager_a._dying, "the reached forager should start dying immediately")
+	assert_false(forager_b._dying, "a step on one mound's ant must not reach the other mound's")
 
 
 # -- aquatic vegetation: a real food source for fish (see docs/concept/

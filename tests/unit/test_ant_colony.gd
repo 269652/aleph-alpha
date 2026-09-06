@@ -1114,3 +1114,37 @@ func test_each_mound_owns_its_own_independent_pheromone_field():
 
 func test_seconds_per_simulated_day_matches_earth_chunk_managers_own_constant():
 	assert_eq(AntColony.SECONDS_PER_SIMULATED_DAY, EarthChunkManager.SECONDS_PER_SIMULATED_DAY)
+
+
+# -- crushed underfoot: one real forager lost (see docs/concept/
+# soil_fauna.md's own "Generalized to ants too" -- "no effect on the
+# mound's own population/food economy beyond the one forager actually
+# lost", now closed) ---------------------------------------------------------
+
+func test_forager_crushed_reduces_population_by_one_worker():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var population_before := colony.population_at(cell)
+	colony.forager_crushed(cell)
+	assert_almost_eq(
+		colony.population_at(cell), population_before - AntColony.FORAGER_CRUSH_POPULATION_LOSS, 0.001
+	)
+
+
+func test_forager_crushed_never_drives_population_negative():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 1000:
+		colony.forager_crushed(cell)
+	assert_almost_eq(colony.population_at(cell), 0.0, 0.001)
+
+
+func test_forager_crushed_at_an_unrelated_cell_does_not_touch_a_real_mound():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var population_before := colony.population_at(cell)
+	colony.forager_crushed(cell + Vector2i(1000, 1000))
+	assert_almost_eq(
+		colony.population_at(cell), population_before, 0.001,
+		"crushing at an unrelated cell must not touch a real mound"
+	)

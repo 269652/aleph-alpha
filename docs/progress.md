@@ -8963,6 +8963,66 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   unload — chunk-local, ephemeral state, the same explicit scope cut
   `soil_fauna.md`'s worm burrows already made for the same reason.
 
+**FPS regression round 3: AntForagerMarker, and a real live crash
+(2026-09-07).** Reported directly: "Can you fix performance to get it
+back to 60fps?" Two real, independently confirmed bugs, both merged to
+`main`:
+
+- **A live crash, found from the investigation's own `--solo` session
+  log**: "Invalid access to property or key 'position' on a base object
+  of type 'previously freed'" at `crush_ants_near`, firing every single
+  frame. `_active_ant_foragers` is only pruned lazily (at the next
+  `_dispatch_forager` call), so a forager that already completed its
+  round trip and `queue_free()`'d itself naturally could sit in the
+  array as a stale, by-then-actually-freed reference until the next
+  dispatch happened to prune it — `crush_ants_near` (and, defensively,
+  the shared `_crush_markers_near` caterpillar/millipede/decomposer
+  helper) accessed `.position` on every entry unconditionally. Fixed
+  with the same `is_instance_valid`/`is_queued_for_deletion` guard
+  `_dispatch_forager`'s own pruning already used.
+- **`AntForagerMarker` was the one creature marker in the whole codebase
+  with no `SimulationLod` throttling at all** (unlike `DecomposerMarker`/
+  `MillipedeMarker`/`CreatureMarker`/`FishMarker`, all of which have it),
+  despite its own top doc comment claiming it mirrors `DecomposerMarker`'s
+  wander. Confirmed live via aggregate per-class timing (mirroring round
+  2's own proven method exactly — see this doc's fish/hydrology
+  entries): FPS collapsed to 3-5, with ~1000-1300ms of CPU spent per
+  3-second window inside `_sense_food_nearby` alone, across roughly 1000
+  concurrently-scouting foragers. A parallel static-analysis pass dated
+  the cause precisely: three deliberate tuning commits in the prior
+  ~24h (`MAX_CONCURRENT_FORAGERS` 3→6→15, `FORAGE_RADIUS_TILES`
+  1.0→2.0, scout/resolver WAVES instead of one-at-a-time dispatch)
+  multiplied both the realistic population and each forager's own
+  unthrottled scouting lifetime several-fold on top of that pre-existing
+  gap. Fixed with `SimulationLod`/`_lod_step` (mirroring `MillipedeMarker`
+  exactly) plus a new, dedicated `SENSE_INTERVAL_SECONDS` (0.2s) throttle
+  on `_sense_food_nearby` specifically, independent of LOD — even a
+  full-rate scout doesn't need to re-run three separate 3x3-chunk
+  world-area scans every single frame at its own ~4.2px/s walking speed.
+  The very first scouting step still senses immediately, so no existing
+  test needed changing.
+- **`PiscivoreBirdMarker` had the identical gap**, found alongside the
+  above: `nearest_fish_position` scans every loaded chunk's fish,
+  unscoped, with no throttle at all. Smaller population (at most one
+  kingfisher per water chunk) than the ant swarm, but real. Fixed with
+  the same `_lod_step` pattern.
+
+Measured before/after via a real `--solo` session: `ant_forager`'s own
+per-3-second-window cost dropped roughly 3x (from ~1200-1600ms to
+~350-500ms) immediately after the fix, and FPS roughly doubled (from
+3-5 to 5-10) in the same short session. **Not a full return to 60fps**,
+though — a longer session (~2 minutes) showed FPS drifting back down
+again (to 5-7), with `ambient_flyer`'s own per-call cost climbing over
+time even though its live instance/call count stayed exactly stable —
+a different-shaped problem from either fix above (not a missing
+throttle; something's per-call cost creeping up the longer a session
+runs), not yet root-caused. `ant_mound`'s own call count staying
+perfectly flat across that same stretch rules out unbounded mound
+budding as the immediate driver of that specific trend, though
+`_maybe_bud_ant_colony` having no upper bound on mound count at all
+(only the initial seed is capped) remains a real, separate, undiscovered-
+extent gap worth a future look.
+
 ### Flies (`concept/flies.md`)
 
 Another concept doc with real, substantial ✅ status entirely of its own
@@ -9105,6 +9165,86 @@ constant's own doc comment). Built red-first end to end, merged to
 
 Built red-first end to end throughout, merged to `main`.
 
+**Mice rendered noticeably bigger, capped below squirrel.** Reported:
+"mice should be 2.4x as big." Literally, `AnimalAnatomy.profile_for
+("mouse").world_scale` would go 0.35 → 0.84, past squirrel's own 0.45 --
+inverting the real-world fact `test_squirrel_is_small_and_short_legged_
+but_bigger_than_a_mouse` already pinned. User chose capping below
+squirrel over the literal multiplier; landed on 0.40 (a real, visible
+jump, comfortably under 0.45 rather than a hair's-width short of it).
+Also decoupled `CaptureTool.TRAP_WORLD_SCALE_CEILING`, previously a
+LIVE `AnimalAnatomy.profile_for("mouse")` reference -- a purely cosmetic
+mouse-size change would otherwise have silently flipped squirrel/
+arctic_fox/sheep from Lasso to Trap the moment mouse's own scale crossed
+theirs, and broken the lynx-lasso regression test outright. Now a fixed
+literal at exactly the new mouse value, so mouse itself keeps needing a
+Trap and every other species' tool requirement is completely
+unaffected. Green: `test_animal_anatomy.gd` 42/42, `test_capture_tool.gd`
+10/10, plus the lynx-lasso and mouse-silhouette regression tests.
+
+**Bugs forage mushrooms; a bitten one is a real, discounted, re-skinned
+item, not a destroyed corpse.** Reported: "bugs should forage mushrooms
+(when a bug takes a bite from a mushroom it should get the bitten
+flag)... mushrooms with a bitten flag have less value; weigh less and
+render their `mushroom_bitten_1.png` in world and inventory, their title
+reads as e.g. `Parasol (bitten)`". Full mechanism spec in
+[mushrooms.md's "Bitten by a
+decomposer"](concept/mushrooms.md#bitten-by-a-decomposer) and
+[carrion.md's fallen-fruit-foraging
+item](concept/carrion.md#opportunistic-fallen-fruit-nut-foraging) (its
+own correction note now covers mushrooms too). In short:
+- New `MushroomBiting` module (`src/gameplay/mushroom_biting.gd`): the
+  bitten catalog-id shape (`"parasol"` → `"parasol_bitten"`, mirroring
+  `"meat"` → `"cooked_meat"`) and the single shared
+  `RETAINED_FRACTION_AFTER_BITE` (0.83 -- per-user, "17% less weight
+  than an unbitten [mushroom]").
+- `WildMushroomPatch.bite(cell)` marks a fruiting mushroom bitten
+  WITHOUT ending the fruiting instance -- deliberately a different
+  shape from `pick()`/`crush()`, both of which remove it outright. One
+  bite is enough; the flag clears whenever the site stops fruiting for
+  any reason so a later fresh fruiting never inherits a stale bite.
+- Mushrooms get real baseline `mass_kg` for the first time (previously
+  0.0/unmodeled for all six species) in `ItemCatalog`, plus a
+  `"_bitten"` catalog row per species whose mass is derived from the
+  base via `MushroomBiting.after_bite` -- enforced in code, not just by
+  comment. "Value" deliberately did NOT become a new gold-price/
+  nutrition concept (both considered and rejected -- Shop.CATALOG is a
+  small curated starter list mushrooms were never meant to join, and
+  its own doc comment states outright that `Item` carries no value
+  field so as not to invent "a number with nothing behind it"; the
+  Material DSL's nutrition system only models apple/cherry so far):
+  per explicit user direction, less value IS less weight, nothing more.
+- `MushroomMarker.take_mushroom_bite()` swaps to real bitten-look
+  illustrated art where delivered (`black_trumpet`/`champignon`/
+  `chanterelle` -- assets pulled from the unmerged
+  `feature/mushroom-crushed-bitten-sprites` branch, whose OWN "bitten =
+  a destroyed corpse, like crushed" model was deliberately not reused,
+  since the user's own wording requires a bitten mushroom to stay a
+  real, pickable item), falls back to the ordinary look for the other
+  three, and shows `(Bitten)` in its display name ahead of the ordinary
+  toxic/edible hint. `pick_up()` resolves to the bitten catalog item.
+- `DecomposerMarker._nearest_food`'s `node is DroppedItem` gate had
+  silently skipped every `MushroomMarker` since fungivory was first
+  half-built (see carrion.md's own correction note) -- broadened to
+  also accept `has_method("take_mushroom_bite")`, excluding an
+  already-bitten mushroom so a decomposer never wastes a trip on one
+  with nothing left to give. `_step_feeding` gets a new branch: one
+  bite, then unconditionally back to seeking (unlike a carcass's
+  whittled health pool or a fruit eaten whole in one visit).
+- `ProceduralItemSprite` gets a real "mushroom" shape (cap+stem,
+  colored to match `MushroomSpecies`' own `cap_color` per species) for
+  the first time -- mushrooms previously fell back to the generic grey
+  pebble in inventory regardless of species, bitten or not. A bitten
+  variant keeps the identical color and carves a visible notch out of
+  the cap. Still no pathway anywhere in this codebase to render a real
+  PNG as an inventory icon (every item renders via
+  `ProceduralItemSprite`'s procedural shapes) -- a separate, substantial
+  subsystem, deliberately not built here.
+
+Built red-first throughout (each piece confirmed failing for the
+expected reason before any implementation). Final consolidated run
+across all nine touched test files: 260/260, zero regressions.
+
 **Roster redesigned, then real illustrated art wired end to end
 (`feature/mushroom-real-art`).** The originally-designed roster (Fly
 Agaric/Death Cap/Chanterelle/Porcini/Puffball) was never actually
@@ -9190,6 +9330,30 @@ multi-bite consumption (only one bitten-art stage exists today, by the
 user's own explicit choice — more stages are a later pass). See the
 concept doc's own "Deliberately not modeled" section for the full list
 and reasoning.
+
+**Crushed/bitten art now complete for all 8 species (2026-09-06).**
+Reported live: "I added all missing mushroom spritesheets... wire them."
+The remaining 3 species (fly_agaric/psylo/parasol) had crushed art wired
+in, and every species' bitten art now uses whatever was actually
+delivered rather than a single assumed file: most species got 3
+independently-delivered bitten sheets, not one, so
+`IllustratedMushroomSprite._load_frames` was generalized to accept a
+`path` that's either a single string or an Array of them, combining every
+delivered sheet into one bigger frame pool (`crushed_frame_count`/
+`bitten_frame_count`, new, make this directly testable rather than only
+inferrable). Two real, confirmed-broken references surfaced and got fixed
+along the way: `chanterelle`/`false_death_cap`'s previously-wired single
+bitten files, and `death_cap`'s own `death_cap_eaten.png`, had all three
+been silently replaced on disk by newer delivered files without the code
+being updated — `Image.load_from_file` on the literal path confirmed each
+one was simply gone, not a hypothetical risk. Also confirmed directly by
+pixel-sampling (not assumed): `fly_agaric`'s crushed/bitten sheets use
+the standard magenta background convention every other species' does,
+despite `fly_agaric.png` itself (the normal look) being the one sheet
+with a genuinely transparent background — a naive corner-pixel sample
+misread this as plain white due to antialiasing feathering; sampling each
+image's own most-common pixel color instead gave the real answer. 22/22
+tests green (up from the prior pass's smaller roster), merged to `main`.
 
 ### Leaf Litter (`concept/leaf_litter.md`)
 
@@ -13991,6 +14155,55 @@ exempt. `test_world_crush_wiring.gd`'s source-contract test for the old
 (17/17 green). `concept/mushrooms.md` and `concept/karma_and_luck.md`
 updated to match.
 
+✅ **A real death treatment for every small crush victim (2026-09-06)** —
+asked directly, after the ant-crush investigation above confirmed the
+missing sprite/population effects were deliberate scope cuts, not bugs:
+"build both — crushed sprite for all small animals and population
+decrease." `MillipedeMarker.crush()` finally wires `millipede.png`'s row-4
+`crushed` frames (real, delivered, unused since that feature shipped) into
+an actual terminal animation — plays from frame 0, holds the last
+flattened frame, then frees. `caterpillar.png` and the ant/bug decomposer
+sheets have no dedicated crushed pose at all, so new shared
+`SquashCrushEffect` (`src/rendering/squash_crush_effect.gd`) is a
+procedural fallback for all three: flattens and tints whatever frame the
+marker was already showing, no new art needed. `EarthChunkManager.
+_crush_markers_near`/`crush_ants_near` now call `marker.crush()` instead
+of an instant `queue_free()` (falling back to `queue_free()` for a marker
+with no `crush()`, so a test double is unaffected). Worm needed no
+changes — its own real "die" corpse was already closed earlier the same
+day. 109+ tests green across the five affected marker/manager files. Full
+writeup: [soil_fauna.md](concept/soil_fauna.md#a-real-death-treatment-for-every-small-victim-2026-09-06).
+
+✅ **A crushed ant now costs its mound one worker (2026-09-06, same
+ask)** — `AntColony.forager_crushed(cell)` subtracts
+`FORAGER_CRUSH_POPULATION_LOSS` (1.0) from the mound's own abstract
+colony-strength number, floored at 0.0 the same way starvation already
+is. `crush_ants_near` calls it whenever a real `AntColony` is registered
+for the crushed forager's own chunk, converting the forager's GLOBAL tile
+key back to the LOCAL cell `AntColony`'s own population dict actually
+uses. Still no effect on `record_forage_result`/the forage-success EMA —
+only the raw population number moves. 3 new tests in `test_ant_colony.gd`,
+1 integration test in `test_earth_chunk_manager.gd` (97/97 green).
+
+✅ **Robins now hunt and eat ground caterpillars too (2026-09-06)** —
+asked directly, alongside the crush work above: "Also some birds (where it
+fits) should eat caterpillars." `FlyerDiet.FOOD_CATERPILLARS` joins
+worms/fruit on the robin's own diet entry only (real robins feed their
+chicks caterpillars more than almost anything else; a sparrow's granivore
+bill and a kingfisher's fish-only diet are both a poor fit, so this stays
+narrow). New `EarthChunkManager.caterpillars_near`/`take_caterpillar_near`
+mirror `worms_near`/`take_worm_at` exactly; `AmbientFlyerMarker` grows a
+`caterpillar_world`/`_caterpillar_target` trio mirroring the worm-hunting
+one, reusing the same `WORM_SNIFF_INTERVAL` throttle and
+`GroundForageBehavior.choose_worm` scatter-pick fruit/seed already share
+under that name rather than inventing duplicates. Ground-based
+caterpillars only — one mid-climb up a tree is a named, deliberate gap
+(gleaning off foliage is a different targeting problem), not a silently
+dropped one. 26/26 in `test_flyer_diet.gd`, 3 new tests in
+`test_ambient_flyer_marker.gd` (175/177 in the full suite — the 2 failures
+are the pre-existing, unrelated butterfly whirl-dance issue already on
+record). Full writeup: [soil_fauna.md](concept/soil_fauna.md#some-birds-eat-caterpillars-too-2026-09-06).
+
 ### Material DSL: fruit composition → crush → nutrients (`concept/material_dsl.md`, new this pass)
 
 Requested directly: describe a material (e.g. an apple) as percentages of
@@ -14126,6 +14339,26 @@ level of abstraction, to warrant per-species numbers. The shared
 fruit-only nutrient-routing logic in `CreatureMarker._take_forage_bite`
 was extracted into `_apply_nutrient_bite(species)`, now called from both
 the `FOOD_FRUIT` and `FOOD_MUSHROOM` cases.
+
+**Correction, merged same day: "bite" no longer means "corpse" anywhere,
+boar included.** This entry (and the crushed/bitten-art entry above it)
+both describe a decomposer's bite as leaving a `corpse_kind == "bitten"`
+lingering remain, exactly like a crush. A concurrently-merged session
+replaced that model (see [mushrooms.md's "Bitten by a
+decomposer"](concept/mushrooms.md#bitten-by-a-decomposer)): a bite marks
+the mushroom bitten WITHOUT ending the fruiting instance, so it stays a
+real, pickable, lighter item rather than becoming inert. This boar
+feature's own `take_mushroom_at` called `WildMushroomPatch.bite` directly
+and re-synced markers, exactly the way `crush_mushroom_at` correctly
+does for an ACTUAL corpse cause — under the replaced bite model, that
+left a boar's bite with no visible effect at all (the cell never left
+`_fruiting`, so there was nothing for the sync to rebuild). Fixed
+alongside the merge: `take_mushroom_at` now resolves through the live
+`MushroomMarker`'s own `take_mushroom_bite()` instead, the same primitive
+the decomposer's own bite already uses, updating the marker directly
+with no separate re-sync needed. `test_take_mushroom_at_eats_a_real_
+fruiting_mushroom_and_leaves_a_bitten_corpse` renamed and re-pinned to
+match (`..._and_marks_it_bitten`).
 
 ✅ **A toxic mushroom is eaten exactly like any other** —
 `MushroomSpecies.is_toxic` is never consulted for an animal's bite; no

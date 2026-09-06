@@ -18,9 +18,10 @@ const IllustratedDecomposerSprite = preload("res://src/rendering/illustrated_dec
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
+const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
-const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
+const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
 
 ## Minimal duck-typed `_world` (see DecomposerMarker.setup) wrapping a real
 ## LeafLitterField -- mirrors test_creature_marker.gd's own ForageWorld
@@ -412,6 +413,66 @@ func test_never_looks_for_leaf_litter_without_an_injected_world():
 ## The filter has to be real (TreeSpecies.IDS), not "any dropped_item" --
 ## otherwise an ant would wander off eating dropped ore/tools/weapons, which
 ## is not what "ants forage fallen fruit" means.
+# -- mushroom fungivory: a bite marks it bitten, it doesn't destroy it ------
+#
+# Reported: "bugs should forage mushrooms (when a bug takes a bite from a
+# mushroom it should get the bitten flag)". MushroomMarker already joins
+# DroppedItem.FORAGEABLE_GROUP_NAME (see its own doc comment) specifically
+# so a decomposer can find and eat one, but _nearest_food's `is DroppedItem`
+# gate silently skipped it every time -- a MushroomMarker is not one.
+
+class StubMushroomWorld:
+	extends RefCounted
+
+	func bite(_cell: Vector2i) -> bool:
+		return true
+
+
+func _mushroom_at(at: Vector2, species_id: String = "champignon") -> MushroomMarker:
+	var mushroom := MushroomMarker.new()
+	mushroom.species_id = species_id
+	mushroom.position = at
+	mushroom.mushroom_world = StubMushroomWorld.new()
+	add_child_autofree(mushroom)
+	return mushroom
+
+
+func test_finds_and_bites_a_nearby_mushroom_when_theres_no_carrion_or_fruit():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bitten:
+			break
+	assert_true(mushroom.bitten, "a decomposer should have bitten the nearby mushroom")
+
+
+## Unlike fallen fruit (eaten whole, removed) or a carcass (whittled to
+## zero, then removed), biting a mushroom must never remove it -- it stays
+## present and pickable, just diminished (see MushroomMarker.
+## take_mushroom_bite).
+func test_biting_a_mushroom_never_removes_it():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bitten:
+			break
+	assert_false(mushroom.is_queued_for_deletion(), "biting a mushroom must not remove it")
+
+
+## One bite is enough (see WildMushroomPatch.bite) -- an already-bitten
+## mushroom has nothing left to offer, so a decomposer must not waste a
+## trip committing to one.
+func test_an_already_bitten_mushroom_is_never_a_target():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	mushroom.bitten = true
+	for i in 200:
+		marker._process(0.5)
+	assert_eq(
+		marker._behavior.phase, CarrionForageBehavior.Phase.SEEKING,
+		"nothing left to bite -- should keep seeking, never approach"
+	)
+
+
 func test_ignores_a_dropped_item_that_is_not_food():
 	var stone := DroppedItem.new()
 	stone.item_stack = ItemStack.new(Item.new("iron_ore", "Iron Ore", "material", 20), 1)
@@ -453,44 +514,6 @@ func test_ignores_a_liftable_stone_sharing_the_dropped_item_group():
 	assert_false(stone.is_queued_for_deletion(), "a decomposer must never treat a stone as edible")
 
 
-# -- real fungivory: a mushroom is forageable too (see docs/concept/
-# soil_fauna.md's fungivory follow-up) -- reported live: "when a bug takes
-# a bite". MushroomMarker already joins DroppedItem.FORAGEABLE_GROUP_NAME
-# (see its own doc comment) -- but _nearest_food's `not (node is
-# DroppedItem)` guard silently excluded it again immediately afterward (a
-# MushroomMarker extends Node2D, not DroppedItem): confirmed dead code
-# path, not a hypothetical -- a decomposer could never actually reach a
-# mushroom at all before this fix, joining the group notwithstanding.
-
-class StubMushroomWorld:
-	extends RefCounted
-	func bite(_cell: Vector2i) -> bool:
-		return true
-
-
-func _mushroom_at(at: Vector2, species_id: String = "chanterelle") -> MushroomMarker:
-	var mushroom := MushroomMarker.new()
-	mushroom.species_id = species_id
-	mushroom.mushroom_world = StubMushroomWorld.new()
-	mushroom.position = at
-	add_child_autofree(mushroom)
-	return mushroom
-
-
-func test_nearest_food_finds_a_mushroom_marker():
-	var mushroom := _mushroom_at(Vector2(105, 100))
-	assert_eq(marker._nearest_food(), mushroom)
-
-
-func test_forages_and_takes_one_bite_of_a_nearby_mushroom_when_theres_no_carrion():
-	var mushroom := _mushroom_at(Vector2(105, 100))
-	for i in 200:
-		marker._process(0.5)
-		if mushroom.is_queued_for_deletion():
-			break
-	assert_true(mushroom.is_queued_for_deletion(), "a decomposer should forage and bite a nearby mushroom too")
-
-
 func test_far_from_the_player_does_not_rescan_carrion_on_every_process_call():
 	# Reach the moment a fresh decomposer is willing to commit to a target
 	# (see CarrionForageBehavior.REHUNT_SECONDS) with no player registered
@@ -523,3 +546,37 @@ func test_far_from_the_player_does_not_rescan_carrion_on_every_process_call():
 		marker._behavior.phase, CarrionForageBehavior.Phase.SEEKING,
 		"far from the player, a decomposer should not re-scan for carrion on every _process call -- it should still be waiting out its LOD interval"
 	)
+
+
+# -- crushed underfoot: procedural squash fallback (see SquashCrushEffect's -
+# -- own doc comment -- neither the "ant" nor "bug" sheet has a dedicated --
+# -- crushed pose, unlike worm/millipede's own real art) --------------------
+
+func test_crush_applies_the_squash_effect_to_its_sprite():
+	marker.crush()
+	var sprite := marker.get_child(0) as Sprite2D
+	assert_almost_eq(sprite.scale.y, SquashCrushEffect.VERTICAL_SQUASH, 0.001)
+	assert_eq(sprite.modulate, SquashCrushEffect.TINT)
+
+
+func test_crush_stops_all_movement_and_foraging():
+	marker.crush()
+	var position_before := marker.position
+	marker._process(1.0)
+	assert_eq(marker.position, position_before, "a crushed decomposer should no longer move")
+
+
+func test_crush_removes_the_marker_after_lingering():
+	marker.crush()
+	marker._process(SquashCrushEffect.LINGER_SECONDS - 0.01)
+	assert_false(marker.is_queued_for_deletion(), "should still be lingering just before the linger duration elapses")
+	marker._process(0.02)
+	assert_true(marker.is_queued_for_deletion(), "should free itself once the linger duration has passed")
+
+
+func test_crush_called_twice_does_not_push_the_linger_clock_back_out():
+	marker.crush()
+	marker._process(SquashCrushEffect.LINGER_SECONDS - 0.01)
+	marker.crush()
+	marker._process(0.02)
+	assert_true(marker.is_queued_for_deletion(), "a second crush call should not reset the linger timer")
