@@ -2071,3 +2071,112 @@ caterpillar_forage_behavior.gd`/existing `test_caterpillar_marker.gd`
 cases needed no changes — nothing about phase transitions, arrival
 distance, or eating/bite timing moved, only how fast the walk covers
 ground and where the sprite draws while it does.
+
+## Millipedes: a dedicated autumn leaf-litter decomposer (2026-09-06)
+
+Requested directly, reported live with a screenshot of an autumn floor
+carpeted in fallen leaves: *"Leaves are too many in autumn what else
+decomposes leaves I could add into the ecosystem to increase decomposition
+rate?"* Investigated first, rather than assumed: leaf litter's only
+non-seasonal removal sinks are ants (`AntColony`/`AntForagerMarker`, real
+but heavily rate-limited — 2 mounds/chunk, a 5%-per-step forage roll, a
+1-tile sense radius) and caterpillars — and caterpillars are structurally
+incapable of ever touching the pile this complaint is actually about:
+`CaterpillarMarker._is_green` only eats a leaf whose own recorded season is
+`"spring"`/`"summer"`, permanently excluding every `"autumn"`-tagged leaf
+(see "Caterpillars: on trees, on the ground, green leaves only" above).
+Flies and earthworms have no relationship to leaf litter at all (flies
+breed on rotting dropped food; worms are driven by soil moisture).
+Meanwhile leaf-fall chance itself ramps from a 6% summer trickle to
+effectively 100% per tree per tick by late autumn
+(`EarthChunkManager.LEAF_AUTUMN_BASELINE_CHANCE`) — the removal side was
+never provisioned to keep up with that at all.
+
+**Real-world grounding.** Millipedes (Diplopoda) are among the most
+important detritivores of a deciduous forest floor specifically — unlike a
+carrion beetle or an omnivorous ant, they are near-exclusively
+saprophagous: they eat dead, decaying plant matter (leaf litter above all),
+not carrion, not fresh fruit, not live foliage. This is the opposite
+restriction from a caterpillar's own green-leaf-only diet, and exactly the
+gap nothing else in this ecosystem fills.
+
+**Deliberately reuses `CaterpillarForageBehavior` directly, not a new
+near-duplicate state machine.** That class's own `SEEKING -> APPROACHING ->
+EATING -> SEEKING` cycle is already fully generic — nothing tree-specific
+lives in the behavior itself, only in how `CaterpillarMarker` interprets
+its own `_target_is_tree` flag (see above). A millipede has no second food
+source and no climbing to interpret, so `MillipedeMarker`
+(`src/rendering/millipede_marker.gd`) is a smaller sibling of
+`CaterpillarMarker`: same `SEEKING`/`APPROACHING`/`EATING` phases, same
+`AmbientFlyerMovement`-driven ambient wander, same
+`nearest_leaf_litter_near`/`consume_leaf_litter_at` duck-typed
+`EarthChunkManager` ports every ground decomposer in this doc already
+shares — but with the season filter DROPPED entirely (any leaf, any
+season, is real food) and no tree branch at all.
+
+**Biome-gated at spawn, same set as caterpillars**
+(`{"grassland", "forest", "rainforest"}`, `MillipedeRenderer` mirroring
+`CaterpillarRenderer.CATERPILLAR_BIOMES` exactly) — wherever trees can grow
+leaf litter to decompose, not the wider carrion-adjacent land set
+`DecomposerRenderer`'s "bug" uses. No season gate at all (unlike
+caterpillars): a millipede's whole reason for existing is to be present
+when the autumn leaf pile actually happens, not absent for it.
+
+**Real illustrated art from the start**
+(`assets/sprites/animals/millipede.png`, an 8-column x 4-row sheet sharing
+worm.png/caterpillar.png's exact grid dimensions — 1536x1024, 192x256 per
+cell, confirmed directly against the PNG header). Four real animations:
+`crawl` (a flat, level, many-legged gait — the travel/wander pose and what
+approaching a leaf plays), `alert` (rears its front segments up, head
+raised — played while EATING, a millipede pausing to feed), `curl` (rolls
+into a defensive coil, a real millipede threat response), and `crushed` (a
+level crawl transitioning into a flattened, splattered pose). Only `crawl`
+and `alert` are wired to anything today — `curl` and `crushed` are
+measured, confirmed-real, and available, not yet wired to a real trigger,
+the same "available, not yet wired" gap this doc's own caterpillar `rest`
+row and kingfisher-adjacent rows have had before being closed later.
+
+### Generalized to millipedes too (2026-09-06)
+
+The same `CrushMechanic` a worm and a caterpillar already share (see
+"Generalized to caterpillars too" above) now has a third detection side:
+**`EarthChunkManager.crush_millipedes_near(pixel_position,
+momentum_kg_m_s) -> bool`**, sharing its actual body with
+`crush_caterpillars_near` via a new private `_crush_markers_near` helper
+rather than a third hand-copied implementation of the identical "resolve
+the stepped-on tile, scan this chunk's own tracked markers by real
+position, free anything that clears the threshold" logic — a millipede is
+the same *shape* of victim a caterpillar already is (a real,
+independently-positioned `Node2D`, not per-tile cell state like a worm), so
+there is nothing here that needs its own copy the way the worm/caterpillar
+split itself does. Wired identically to both existing calls, in the same
+`World._client_process` block: the player's own
+`_PLAYER_STEP_MOMENTUM_KG_M_S`, and every `CreatureMarker`'s own
+`CreatureMass.mass_kg_for(species)`-derived momentum.
+
+**Also feeds Karma** (see `docs/concept/karma_and_luck.md`): a crushed
+millipede charges the same `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` a
+crushed worm or caterpillar already does — the constant's own name
+predates this third species, but the event it represents ("a small,
+harmless decomposer died underfoot") is identical, and karma_and_luck.md's
+own event table is updated to say so rather than silently reusing the
+constant under a now-inaccurate name with no cross-reference.
+
+### What this does NOT include
+
+- **No timed death animation.** The `crushed` row exists and is real, but a
+  crushed millipede simply `queue_free()`s the instant
+  `crush_millipedes_near` finds it, the exact same "just disappear" outcome
+  a crushed worm or caterpillar already has — playing a death animation
+  before removal would need the marker to survive a few more frames in a
+  new terminal phase, a real follow-up, not silently half-built here.
+- **No `curl` trigger.** A real defensive reaction (fleeing/curling when
+  the player approaches) would need this creature to sense threats at all,
+  which nothing in `MillipedeMarker`/`CaterpillarForageBehavior` does
+  today — named, not silently assumed.
+- **No population/food-economy modeling.** Unlike `AntColony`'s real mound/
+  food-store/growth loop, a millipede is the ant/worm/caterpillar shape:
+  spawned once per qualifying chunk at load, wandering and eating
+  independently, with no colony, no stockpile, no carrying-capacity
+  feedback. A real "litter input -> detritivore biomass" model remains the
+  same deferred follow-up this doc's own worm section already names.

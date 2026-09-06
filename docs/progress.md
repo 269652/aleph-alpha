@@ -13646,3 +13646,77 @@ every other part of `concept/quests.md`'s fuller vision (settlement
 quorum, safety/social need sources, village endangerment, rewards/
 currency transactions) that was already unbuilt before this pass and
 stays exactly as unbuilt now.
+
+### Millipedes: a dedicated autumn leaf-litter decomposer (`concept/soil_fauna.md`, new this pass)
+
+Requested directly, with a live screenshot of an autumn floor carpeted in
+fallen leaves: *"Leaves are too many in autumn what else decomposes
+leaves I could add into the ecosystem to increase decomposition rate?"*
+Investigated before proposing anything: leaf litter's only real removal
+sinks were a 270-day lifetime timer and heavily rate-limited ants (2
+mounds/chunk, 5%/step, 1-tile sense radius); caterpillars already eat
+leaf litter but `CaterpillarMarker._is_green` permanently excludes every
+`"autumn"`-tagged leaf, so they were structurally incapable of ever
+touching the exact pile the report was about. Flies/earthworms have no
+leaf-litter relationship at all. Presented the finding plus a
+recommendation (millipedes, real-world near-exclusive detritivores —
+the opposite diet restriction from a caterpillar) against two
+alternatives (loosening the ants' own limits, or both); the user chose
+millipedes and supplied a real illustrated sprite sheet directly.
+
+✅ **`IllustratedMillipedeSprite`** (`src/rendering/illustrated_millipede_sprite.gd`)
+— `assets/sprites/animals/millipede.png`, an 8-column x 4-row sheet
+sharing worm.png/caterpillar.png's exact 1536x1024/192x256-cell grid
+(confirmed directly against the PNG header) and identical magenta-despill
+technique; all 4 rows (`crawl`, `alert`, `curl`, `crushed`) have real,
+confirmed, visually-distinct content — 10/10 tests passed on the first
+run with zero adjustment, confirming the sheet follows the established
+convention exactly.
+
+✅ **`MillipedeMarker`** (`src/rendering/millipede_marker.gd`) — reuses
+`CaterpillarForageBehavior` directly rather than a near-duplicate state
+machine (it was already fully generic; nothing tree-specific lives in
+the behavior itself). One food source (real leaf litter), no tree/climb
+concept at all, and — the entire reason this creature exists — NO
+green/brown season filter: it eats a leaf of any recorded season,
+autumn included. `crawl`/`alert` are wired; `curl`/`crushed` are real,
+tested, and available but not yet triggered by anything, named explicitly
+rather than silently assumed (same "measured, not yet wired" gap this
+doc's own caterpillar `rest` row already had before being closed later).
+
+✅ **`MillipedeRenderer`** (`src/rendering/millipede_renderer.gd`) — same
+per-chunk spawn shape as `CaterpillarRenderer`, same qualifying biome set
+(grassland/forest/rainforest, pinned equal to `CaterpillarRenderer.
+CATERPILLAR_BIOMES` directly), but NO season gate at all — a millipede
+spawns year-round, since being present for the autumn pile specifically
+is the whole point.
+
+✅ **Wired into `EarthChunkManager`**: `_millipede_markers` spawned/`setup()`'d
+at chunk load alongside caterpillars, freed on unload, same shape as
+every other per-chunk marker array in this file. `crush_millipedes_near`
+shares `crush_caterpillars_near`'s own body via a new private
+`_crush_markers_near(markers_by_chunk, ...)` helper (a millipede is the
+identical shape of victim a caterpillar already is) rather than a third
+hand-copied implementation — a real refactor landed alongside new
+functionality, not just new code bolted on.
+
+✅ **Wired into `World`'s crush pass and Karma**: a third
+`crush_millipedes_near` call alongside the existing worm/caterpillar
+pair, player's own step and every creature's, charging the same
+`Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` a crushed worm or caterpillar
+already does (the constant's name predates this third species; both
+`karma.gd`'s own doc comment and `karma_and_luck.md`'s event table are
+updated to cross-reference rather than silently reusing it under a
+stale name).
+
+Every new piece TDD'd red-first and green on implementation with zero
+follow-up fixes needed — the illustrated sprite, the marker, the
+renderer, and the `EarthChunkManager`/`World` wiring each landed as their
+own commit. ⬜ Named, not silently skipped: no timed death animation (a
+crushed millipede `queue_free()`s instantly, the same "just disappear"
+outcome a crushed worm/caterpillar already has); no `curl` trigger (would
+need a threat-sensing mechanism nothing in this class has); no
+population/food-economy modeling (unlike `AntColony`, a millipede has no
+colony, no stockpile, no carrying-capacity feedback — the same deferred
+"litter input → detritivore biomass" follow-up the worm section already
+names).
