@@ -1663,6 +1663,31 @@ func test_every_eaten_mushroom_increments_the_lifetime_counter_toxic_or_not():
 	assert_eq(player.mushrooms_eaten, 2)
 
 
+# -- Karma (see docs/concept/karma_and_luck.md) ------------------------------
+#
+# apply_karma_delta is the single external mutator for the permanent karma
+# ledger -- called by World's crush pass and (once built) QuestLog, mirroring
+# how every other externally-triggered Player state change here is a named
+# method call, never a raw field poke from outside (see e.g. World's own
+# local_player.activate_item_id/craft/allocate_skill call sites).
+
+
+func test_apply_karma_delta_adjusts_karma_by_the_given_amount():
+	player.apply_karma_delta(-1.0)
+	assert_almost_eq(player.karma, -1.0, 0.0001)
+	player.apply_karma_delta(2.5)
+	assert_almost_eq(player.karma, 1.5, 0.0001)
+
+
+## Karma is a real permanent record of what happened, not a score clamped at
+## zero (see docs/concept/karma_and_luck.md pillar 4) -- repeated penalties
+## must be free to keep going negative; only the LUCK it produces saturates.
+func test_apply_karma_delta_is_not_clamped_and_can_go_deeply_negative():
+	for i in 20:
+		player.apply_karma_delta(-1.0)
+	assert_almost_eq(player.karma, -20.0, 0.0001)
+
+
 # -- disease spillover: routed through Sickness, NOT a new debuff module
 # (see docs/concept/disease.md "Player spillover") ---------------------------
 

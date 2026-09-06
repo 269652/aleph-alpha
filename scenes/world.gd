@@ -46,6 +46,7 @@ const CreaturePanel = preload("res://scenes/creature_panel.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
+const Karma = preload("res://src/gameplay/karma.gd")
 
 ## The player's own real momentum at ordinary walking pace (see
 ## docs/concept/soil_fauna.md "Crushed underfoot: weight-emergent worm
@@ -4871,14 +4872,25 @@ func _client_process(delta: float) -> void:
 	# reasoning that let this skip the per-entity "last tile" tracking
 	# PathScarring/the snow trail's own debounce needs for a CONTINUOUS
 	# accumulator.
-	_chunk_manager.crush_worm_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
-	_chunk_manager.crush_caterpillars_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
+	#
+	# Each call's own bool return (true only when something was actually
+	# crushed) now also feeds Karma (see docs/concept/karma_and_luck.md):
+	# "stepping on a worm should give -1 Karma", asked for every crush, the
+	# player's own step OR any creature's, not just the player's deliberate
+	# ones -- so the penalty lands on local_player regardless of which of
+	# the two loops below did the crushing.
+	if _chunk_manager.crush_worm_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
+		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
+	if _chunk_manager.crush_caterpillars_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
+		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		var marker := creature as CreatureMarker
 		var species: String = marker.info.species if marker.info != null else ""
 		var momentum := CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
-		_chunk_manager.crush_worm_at(marker.position, momentum)
-		_chunk_manager.crush_caterpillars_near(marker.position, momentum)
+		if _chunk_manager.crush_worm_at(marker.position, momentum):
+			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
+		if _chunk_manager.crush_caterpillars_near(marker.position, momentum):
+			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).

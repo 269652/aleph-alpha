@@ -104,6 +104,22 @@ func test_a_fresh_player_starts_with_neutral_karma_and_luck():
 	assert_almost_eq(source.luck(), 0.0, 0.0001)
 
 
+## QuestLog's own commitment record (see docs/concept/karma_and_luck.md's
+## Quest lifecycle) -- same "must survive reload" expectation as karma and
+## mushrooms_eaten just above, exact shape mushrooms_eaten already
+## established: one line added to each side, no PlayerSave change.
+func test_a_restored_player_remembers_accepted_quest_ids():
+	source.accepted_quest_ids = ["production:household:stone_pickaxe"]
+
+	restored.apply_save_dict(source.to_save_dict())
+
+	assert_eq(restored.accepted_quest_ids, ["production:household:stone_pickaxe"])
+
+
+func test_a_fresh_player_has_accepted_no_quests():
+	assert_eq(source.accepted_quest_ids, [])
+
+
 func test_a_restored_player_carries_the_same_inventory_contents():
 	# Start from a clean slate so the assertion isn't fighting _ready()'s
 	# starter grants (sword/axe/leather set/fishing rod).

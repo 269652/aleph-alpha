@@ -1059,6 +1059,9 @@ func to_save_dict() -> Dictionary:
 		# get clamped back toward zero: a negative karma is as real a fact
 		# as a positive one.
 		"karma": karma,
+		# QuestLog's commitment record (see docs/concept/karma_and_luck.md) --
+		# must survive reload the same as karma just above.
+		"accepted_quest_ids": accepted_quest_ids.duplicate(),
 		"inventory": inventory_data,
 		"equipment": equipment_data,
 		# Alongside the inventory rather than inside it: an inventory entry is
@@ -1098,6 +1101,7 @@ func apply_save_dict(data: Dictionary) -> void:
 	_skill_points_paid = (data.get("skill_points_paid", _skill_points_paid) as Dictionary).duplicate()
 	mushrooms_eaten = data.get("mushrooms_eaten", mushrooms_eaten)
 	karma = data.get("karma", karma)
+	accepted_quest_ids = (data.get("accepted_quest_ids", accepted_quest_ids) as Array).duplicate()
 	# Rebuilds the genome net from the seed BEFORE anything reads the web, so a
 	# reloaded character's own unique nodes are grafted again rather than
 	# silently missing from a save that still lists them as allocated. A save
@@ -1194,6 +1198,27 @@ var karma := 0.0
 ## second accumulator to drift" shape skill_bonus already established.
 func luck() -> float:
 	return Karma.luck_for(karma)
+
+
+## The single external mutator for `karma` -- called by whoever actually
+## detects a named Karma event (World's crush pass, QuestLog), each passing
+## its own named constant from karma.gd (e.g.
+## -Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY). Deliberately unclamped: karma
+## is a real permanent record, not a score (see docs/concept/karma_and_luck.md
+## pillar 4) -- only luck(), not karma itself, saturates. Mirrors how every
+## other externally-triggered Player state change is a named method call
+## rather than a raw field poke from outside (see e.g. World's own
+## local_player.activate_item_id/craft/allocate_skill call sites).
+func apply_karma_delta(delta: float) -> void:
+	karma += delta
+
+
+## QuestLog's own commitment record (see docs/concept/karma_and_luck.md's
+## Quest lifecycle: accept, abandon, fulfil) -- offer_ids the player has
+## accepted and not yet abandoned or had fulfilled. QuestLog itself holds no
+## state of its own; this Array IS the state, the same "logic in a pure
+## module, data on Player" split karma/luck already use.
+var accepted_quest_ids: Array = []
 
 
 ## Takes a node on the passive web: it must be REACHABLE (your class's own start
