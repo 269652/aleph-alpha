@@ -4145,6 +4145,66 @@ func test_crushing_a_worm_where_there_is_none_fails_rather_than_erroring():
 	assert_false(manager.crush_worm_at(Vector2(-9000000, -9000000), 1000000.0))
 
 
+# -- crushed underfoot, the caterpillar side (see docs/concept/soil_fauna.md
+# "Generalized to caterpillars too"). Unlike a worm, a caterpillar is a real
+# Node2D with its own position rather than per-tile cell state, so these
+# inject a real CaterpillarMarker directly into manager._caterpillar_markers
+# at a known position -- deterministic, no "no worm/caterpillar landed this
+# seed" pending() skip needed the way the worm tests above require. -------
+
+func _caterpillar_at(chunk_coord: Vector2i, cell: Vector2i) -> CaterpillarMarker:
+	var caterpillar := CaterpillarMarker.new()
+	caterpillar.position = _pixel_for(chunk_coord, cell)
+	add_child_autofree(caterpillar)
+	manager._caterpillar_markers[chunk_coord] = [caterpillar]
+	return caterpillar
+
+
+func test_crushing_a_caterpillar_with_enough_momentum_removes_it_from_the_world():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var caterpillar := _caterpillar_at(chunk_coord, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(
+		manager.crush_caterpillars_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"a horse-scale step on a caterpillar should crush it"
+	)
+	assert_true(caterpillar.is_queued_for_deletion(), "the caterpillar itself is gone")
+	assert_false(
+		manager._caterpillar_markers[chunk_coord].has(caterpillar),
+		"and dropped from tracking so chunk-unload never double-frees it"
+	)
+
+
+func test_crushing_a_caterpillar_with_too_little_momentum_leaves_it_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var caterpillar := _caterpillar_at(chunk_coord, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_false(
+		manager.crush_caterpillars_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 0.01),
+		"a mouse-scale step should not crush a caterpillar"
+	)
+	assert_false(caterpillar.is_queued_for_deletion(), "the caterpillar should still be there")
+	assert_true(manager._caterpillar_markers[chunk_coord].has(caterpillar))
+
+
+func test_crushing_a_caterpillar_on_a_different_tile_leaves_it_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var caterpillar := _caterpillar_at(chunk_coord, Vector2i(5, 5))
+	var elsewhere := _pixel_for(chunk_coord, Vector2i(20, 20))
+	assert_false(
+		manager.crush_caterpillars_near(elsewhere, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"stepping on a different tile should not reach a caterpillar standing elsewhere"
+	)
+	assert_false(caterpillar.is_queued_for_deletion())
+
+
+func test_crushing_caterpillars_where_there_are_none_fails_rather_than_erroring():
+	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
+	assert_false(manager.crush_caterpillars_near(Vector2(-9000000, -9000000), 1000000.0))
+
+
 # -- aquatic vegetation: a real food source for fish (see docs/concept/
 # aquatic_foraging.md). _load_chunk, not the slow real update() (see this
 # file's own CONTRIBUTING.md note) -- Berlin sits on the Spree's own
