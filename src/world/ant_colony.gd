@@ -418,10 +418,14 @@ func advance(delta_seconds: float) -> void:
 ## recolonized once conditions improve -- a new queen/swarm founds again
 ## where an old colony died out -- so this is that, abstracted the same
 ## way _seed_initial_mounds already abstracts "a colony is already here"
-## at chunk-load time: once a real, full founding reserve (the same
-## standard a brand-new mound starts with -- see _founding_food_reserve)
-## has genuinely piled back up at an empty mound, a fresh colony re-founds
-## there exactly as a brand-new one would.
+## at chunk-load time: once real, on-hand food genuinely piles back up at
+## an empty mound (see REFOUNDING_FOOD_THRESHOLD's own doc comment for
+## why that is NOT the same standard a brand-new mound starts at), a
+## fresh colony re-founds there at STARTING_POPULATION exactly as a
+## brand-new one would -- still fragile at first (food_availability_
+## fraction reads low relative to that fresh population's own upkeep
+## until the ordinary economy has time to catch up), the same real
+## vulnerability any newly-founded colony already has.
 ##
 ## Still reachable even for an "extinct" mound: EarthChunkManager.
 ## _dispatch_forager's own active_forager_cap_at floors at 1 forager
@@ -430,10 +434,108 @@ func advance(delta_seconds: float) -> void:
 func _maybe_refound(cell: Vector2i) -> bool:
 	if population_at(cell) > 0.0:
 		return false
-	if food_stored_at(cell) < _founding_food_reserve():
+	if food_stored_at(cell) < REFOUNDING_FOOD_THRESHOLD:
 		return false
 	_population[cell] = AntPopulationModel.STARTING_POPULATION
 	return true
+
+
+## How much real, on-hand food counts as "enough evidence this site is
+## viable again" for a fully extinct mound to re-found. Deliberately NOT
+## _founding_food_reserve()'s own full, multi-day standard: reported live,
+## after that first version shipped -- "when an ant mound collapses and
+## hits 0 population then it stays at 0 population even if new ants enter
+## or bring food. the food stock correctly increments, but the population
+## stays zero" -- confirmed directly (a throwaway diagnostic probe, not a
+## logic bug): gating on a full 45.0-unit reserve took over 22 REAL
+## MINUTES to ever re-found, even under a perfectly successful lone
+## forager trip (the only kind an extinct mound can still send, see
+## _maybe_refound's own doc comment) every 30 real seconds -- a threshold
+## nobody would ever realistically observe recover. 3 successful trips'
+## worth (FOOD_PER_SUCCESSFUL_FORAGE * 3.0) is real, repeated evidence the
+## site is productive again -- not a single lucky fluke, but nowhere near
+## a full mature colony's own reserve -- mirroring CLUSTER_THRESHOLD's own
+## identical "3, not 1, not a fluke" reasoning.
+const REFOUNDING_FOOD_THRESHOLD := FOOD_PER_SUCCESSFUL_FORAGE * 3.0
+
+
+## Colony budding (reported live: "ant mounds should have a maximum
+## capacity and upon overpopulation half of the colony will found a new
+## mound, hatch a new queen and grow the new colony again... they should
+## found based on minimum distance to original mound and food
+## availability within scout radius") -- real ant colonies bud/split this
+## way once a nest genuinely outgrows its site, a new queen and a share of
+## the workforce founding a fresh, independent colony nearby rather than
+## the parent growing without limit forever.
+##
+## AntPopulationModel.MAX_REFERENCE_POPULATION is already named "the
+## ceiling capacity() can ever produce" (see that constant's own doc
+## comment) -- population chasing a capacity that itself never exceeds it
+## means this already IS the real, natural maximum a mound can sustain,
+## not a second, redundant "capacity" concept invented on top of it.
+func is_overpopulated_at(cell: Vector2i) -> bool:
+	return population_at(cell) >= AntPopulationModel.MAX_REFERENCE_POPULATION
+
+
+## The same two real-world facts _seed_initial_mounds itself already
+## gates a brand-new mound on: real, excavatable soil (SOIL_BIOMES), and
+## not already somebody else's entrance. EarthChunkManager is expected to
+## call this once per real candidate cell while searching for a real bud
+## site (see docs/concept/soil_fauna.md's own "Colony budding" section) --
+## a pure, cheap check, no world/food knowledge needed here at all (that
+## half of site selection is EarthChunkManager's own job, the same
+## "AntColony owns the abstract economy, EarthChunkManager owns the real
+## ground" split every other mound accessor already keeps).
+func is_valid_mound_site(cell: Vector2i) -> bool:
+	if cell.x < 0 or cell.x >= _width or cell.y < 0 or cell.y >= _height:
+		return false
+	if _mounds.has(cell):
+		return false
+	return SOIL_BIOMES.has(_biome[cell.y * _width + cell.x])
+
+
+## Chance, per call to advance(), that a genuinely overpopulated mound
+## actually ATTEMPTS to bud this step -- mirrors FORAGE_CHANCE/MOUND_
+## CHANCE's own "small deterministic per-step chance, ongoing background
+## activity, not a single guaranteed burst the instant the condition is
+## met" reasoning exactly. Keeps EarthChunkManager's own real site-search
+## (checking real food at every real candidate cell) naturally rare even
+## while a colony sits at its own reference maximum for a long stretch,
+## rather than repeating an expensive search every single step.
+const BUD_CHANCE := 0.05
+
+## Salt for the per-step budding roll, independent of every other per-mound
+## roll for the same reason they are all independent of each other (see
+## _FORAGE_SALT's own doc comment) -- "does this overpopulated mound bud
+## THIS step" must not correlate with "does it forage this exact step".
+const _BUD_SALT := 27644437
+
+func should_bud(cell: Vector2i) -> bool:
+	if not is_overpopulated_at(cell):
+		return false
+	return PixelNoise.unit(_seed_value + _step_count + _BUD_SALT, cell.x, cell.y) < BUD_CHANCE
+
+
+## The actual split: "half of the colony" -- both its population AND its
+## real stored food reserve, so the new colony is not born starving
+## (mirrors _founding_food_reserve's own "never born already starving"
+## reasoning) and the parent is not left with an oddly outsized reserve
+## for its own now-halved population. A no-op at an invalid target (the
+## caller is expected to have already checked is_valid_mound_site, but
+## this stays safe on its own regardless, the same defensive "just try
+## and let this decide" contract invalidate_pheromone_near and friends
+## already have) -- neither mound is touched at all if `to_cell` turns
+## out not to be real, excavatable, unoccupied soil.
+func bud_new_mound(from_cell: Vector2i, to_cell: Vector2i) -> void:
+	if not is_valid_mound_site(to_cell):
+		return
+	var half_population := population_at(from_cell) * 0.5
+	var half_food := food_stored_at(from_cell) * 0.5
+	_population[from_cell] = half_population
+	_food_stored[from_cell] = half_food
+	_mounds[to_cell] = true
+	_population[to_cell] = half_population
+	_food_stored[to_cell] = half_food
 
 
 ## Whether this mound's colony sends a forager out to check for a nearby

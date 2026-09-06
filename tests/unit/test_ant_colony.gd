@@ -696,17 +696,17 @@ func test_a_colony_kept_cold_and_foodless_survives_far_longer_than_a_warm_one():
 ## 0.0, unconditionally) means capacity_at stays locked at exactly 0.0
 ## regardless of how good recent forage success/moisture read, so
 ## PopulationModel.step's "carrying_capacity <= 0.0" rule keeps re-firing
-## forever. Deliberately only 20 successes (not enough to cross
-## _founding_food_reserve and trigger REAL recovery -- see the refounding
-## tests below, which are what actually lifts this) -- this test is
-## isolated to prove growth math ALONE never does it.
+## forever. Deliberately only 2 successes (not enough to cross
+## REFOUNDING_FOOD_THRESHOLD and trigger REAL recovery -- see the
+## refounding tests below, which are what actually lifts this) -- this
+## test is isolated to prove growth math ALONE never does it.
 func test_a_starved_colony_does_not_recover_through_ordinary_growth_alone():
 	var colony := _colony("grassland", 42)
 	var cell: Vector2i = colony.mound_cells()[0]
 	for i in 10:
 		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
 	assert_almost_eq(colony.population_at(cell), 0.0, 0.001, "precondition: colony should have fully starved")
-	for i in 20:
+	for i in 2:
 		colony.record_forage_result(cell, true)
 		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
 	assert_almost_eq(
@@ -734,6 +734,39 @@ func test_a_starved_mound_refounds_once_a_full_reserve_genuinely_accumulates():
 	assert_gt(colony.population_at(cell), 0.0, "a genuinely refounded mound should have real population again")
 
 
+## Reported live: "when an ant mound collapses and hits 0 population then
+## it stays at 0 population even if new ants enter or bring food. the
+## food stock correctly increments, but the population stays zero" --
+## confirmed directly (a throwaway diagnostic probe, deleted once its job
+## was done): gating refounding on a FULL _founding_food_reserve() (the
+## same 45.0-unit, multi-day standard a brand-new mound starts with) took
+## over 22 REAL MINUTES even under a perfectly successful lone forager
+## trip every 30 real seconds -- not a bug in the mechanism itself, but a
+## threshold nobody would ever realistically observe recover.
+## REFOUNDING_FOOD_THRESHOLD must be far smaller -- real, repeated
+## evidence a handful of trips home is possible again, not a whole mature
+## colony's own reserve.
+func test_refounding_food_threshold_is_far_smaller_than_a_full_founding_reserve():
+	var colony := _colony()
+	assert_lt(AntColony.REFOUNDING_FOOD_THRESHOLD, colony._founding_food_reserve() * 0.5)
+
+
+## The actual fix: far less than a full founding reserve is now enough --
+## a handful of successful trips' worth, not 45 of them.
+func test_a_starved_mound_refounds_with_far_less_than_a_full_founding_reserve():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 10:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_almost_eq(colony.population_at(cell), 0.0, 0.001, "precondition: colony should have fully starved")
+	colony.deposit_food(cell, AntColony.REFOUNDING_FOOD_THRESHOLD)
+	colony.advance(0.01)
+	assert_gt(
+		colony.population_at(cell), 0.0,
+		"exactly the new, smaller threshold should already be enough to refound"
+	)
+
+
 func test_refounding_lands_at_the_same_starting_population_a_brand_new_mound_gets():
 	var colony := _colony("grassland", 42)
 	var cell: Vector2i = colony.mound_cells()[0]
@@ -756,6 +789,153 @@ func test_refounding_never_triggers_for_a_colony_that_still_has_any_real_populat
 		colony.population_at(cell), AntPopulationModel.STARTING_POPULATION, 0.5,
 		"a colony that never actually went extinct should follow ordinary growth, not silently reset"
 	)
+
+
+# -- colony budding: a mound at its own maximum capacity founds a new one
+# (reported live: "ant mounds should have a maximum capacity and upon
+# overpopulation half of the colony will found a new mound hatch a new
+# queen and grow the new colony again... they should found based on
+# minimum distance to original mound and food availability within scout
+# radius") -- real ant colonies bud/split this way once a nest genuinely
+# outgrows its site, a new queen and a share of the workforce founding a
+# fresh, independent colony nearby rather than the parent growing without
+# limit forever. AntColony.MAX_REFERENCE_POPULATION is already named "the
+# ceiling capacity() can ever produce" (see that constant's own doc
+# comment) -- population chasing a capacity that itself never exceeds it
+# means this IS already the real, natural maximum a mound can sustain, not
+# a second, redundant "capacity" concept invented on top. -------------------
+
+func test_is_overpopulated_at_is_false_for_a_founding_mound():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	assert_false(colony.is_overpopulated_at(cell))
+
+
+func test_is_overpopulated_at_is_true_once_population_reaches_the_reference_maximum():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony._population[cell] = AntPopulationModel.MAX_REFERENCE_POPULATION
+	assert_true(colony.is_overpopulated_at(cell))
+
+
+func test_is_overpopulated_at_is_false_just_short_of_the_reference_maximum():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony._population[cell] = AntPopulationModel.MAX_REFERENCE_POPULATION - 0.01
+	assert_false(colony.is_overpopulated_at(cell))
+
+
+## is_valid_mound_site: the same two real-world facts _seed_initial_mounds
+## itself already gates a brand-new mound on (see that function) -- real
+## soil (SOIL_BIOMES), and not already somebody else's entrance.
+func test_is_valid_mound_site_is_true_for_a_real_soil_cell_with_no_mound():
+	var colony := _colony("grassland")
+	var occupied: Vector2i = colony.mound_cells()[0]
+	var empty := Vector2i((occupied.x + 1) % SIZE, occupied.y)
+	while colony.mound_cells().has(empty):
+		empty.x = (empty.x + 1) % SIZE
+	assert_true(colony.is_valid_mound_site(empty))
+
+
+func test_is_valid_mound_site_is_false_for_a_cell_that_is_already_a_mound():
+	var colony := _colony("grassland")
+	var occupied: Vector2i = colony.mound_cells()[0]
+	assert_false(colony.is_valid_mound_site(occupied))
+
+
+func test_is_valid_mound_site_is_false_outside_soil_biomes():
+	var colony := AntColony.new(1234, SIZE, SIZE, _biome("ocean"))
+	assert_false(colony.is_valid_mound_site(Vector2i(4, 4)))
+
+
+## A caller searching for a bud site (EarthChunkManager._find_bud_site)
+## may reasonably scan a fixed CHUNK_SIZE window without first checking
+## it against THIS colony's own (possibly smaller, in a synthetic test)
+## real width/height -- out of bounds must read as "not valid" rather
+## than indexing _biome out of its own real range.
+func test_is_valid_mound_site_is_false_out_of_bounds():
+	var colony := _colony("grassland")
+	assert_false(colony.is_valid_mound_site(Vector2i(-1, 0)))
+	assert_false(colony.is_valid_mound_site(Vector2i(0, -1)))
+	assert_false(colony.is_valid_mound_site(Vector2i(SIZE, 0)))
+	assert_false(colony.is_valid_mound_site(Vector2i(0, SIZE)))
+
+
+## bud_new_mound: "half of the colony" -- both population AND its stored
+## food reserve, so the new colony is not born starving (mirrors
+## _founding_food_reserve's own "never born already starving" reasoning)
+## nor is the parent left with an oddly outsized reserve for its own now-
+## halved population.
+func test_bud_new_mound_halves_the_parents_population_and_food():
+	var colony := _colony("grassland", 42)
+	var from_cell: Vector2i = colony.mound_cells()[0]
+	colony._population[from_cell] = AntPopulationModel.MAX_REFERENCE_POPULATION
+	var population_before := colony.population_at(from_cell)
+	var food_before := colony.food_stored_at(from_cell)
+	var to_cell := Vector2i((from_cell.x + 3) % SIZE, from_cell.y)
+	colony.bud_new_mound(from_cell, to_cell)
+	assert_almost_eq(colony.population_at(from_cell), population_before * 0.5, 0.01)
+	assert_almost_eq(colony.food_stored_at(from_cell), food_before * 0.5, 0.01)
+
+
+func test_bud_new_mound_gives_the_new_mound_the_other_half():
+	var colony := _colony("grassland", 42)
+	var from_cell: Vector2i = colony.mound_cells()[0]
+	colony._population[from_cell] = AntPopulationModel.MAX_REFERENCE_POPULATION
+	var population_before := colony.population_at(from_cell)
+	var food_before := colony.food_stored_at(from_cell)
+	var to_cell := Vector2i((from_cell.x + 3) % SIZE, from_cell.y)
+	colony.bud_new_mound(from_cell, to_cell)
+	assert_true(colony.mound_cells().has(to_cell), "the new mound must be real, not just a population entry")
+	assert_almost_eq(colony.population_at(to_cell), population_before * 0.5, 0.01)
+	assert_almost_eq(colony.food_stored_at(to_cell), food_before * 0.5, 0.01)
+
+
+## A no-op, not an error, at an invalid site -- the caller (EarthChunkManager)
+## is expected to have already checked is_valid_mound_site, but this stays
+## safe on its own regardless, the same defensive contract invalidate_
+## pheromone_near/other "just try and let this decide" accessors already
+## have.
+func test_bud_new_mound_does_nothing_at_a_site_that_is_already_a_mound():
+	var colony := _colony("grassland")
+	var cells: Array = colony.mound_cells()
+	assert_gt(cells.size(), 1, "need at least two mounds for this test's own premise")
+	var population_before := colony.population_at(cells[0])
+	colony.bud_new_mound(cells[0], cells[1])
+	assert_almost_eq(colony.population_at(cells[0]), population_before, 0.01, "an invalid target must not touch the source either")
+
+
+func test_should_bud_is_false_when_not_overpopulated():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	assert_false(colony.should_bud(cell))
+
+
+## Mirrors test_forage_roll_spreads_across_true_and_false's own shape: a
+## small per-step chance, not an instant guarantee the moment a mound
+## crosses the threshold -- real budding is a rare event even for a
+## genuinely overpopulated colony, the same "ongoing background activity,
+## not a burst" reasoning FORAGE_CHANCE/MOUND_CHANCE's own doc comments
+## already give.
+func test_should_bud_spreads_across_true_and_false_once_overpopulated():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony._population[cell] = AntPopulationModel.MAX_REFERENCE_POPULATION
+	var saw_true := false
+	var saw_false := false
+	for i in 200:
+		colony._step_count = i
+		if colony.should_bud(cell):
+			saw_true = true
+		else:
+			saw_false = true
+	assert_true(saw_true, "should roll true at least once across 200 steps")
+	assert_true(saw_false, "should roll false at least once across 200 steps -- not an instant guarantee")
+
+
+func test_bud_chance_is_small():
+	assert_lt(AntColony.BUD_CHANCE, 0.5)
+	assert_gt(AntColony.BUD_CHANCE, 0.0)
 
 
 # -- fewer, bigger colonies from the start (see docs/concept/soil_fauna.md's

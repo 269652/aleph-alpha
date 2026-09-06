@@ -9507,9 +9507,8 @@ fixes, addressing both halves:
 2. **`AntColony._maybe_refound`** (new, called from `advance`) re-founds
    a mound that DOES still reach a literal 0.0 (dormancy above narrows
    how often this happens, it does not claim to make it impossible) once
-   a real, full founding reserve has genuinely piled back up there — the
-   same standard `_seed_initial_mounds` itself starts every brand-new
-   colony at — resetting it to `STARTING_POPULATION` exactly as a
+   real food has genuinely piled back up there past `REFOUNDING_FOOD_
+   THRESHOLD` — resetting it to `STARTING_POPULATION` exactly as a
    brand-new mound would. Still reachable even for an "extinct" mound:
    `EarthChunkManager._dispatch_forager`'s own `active_forager_cap_at`
    floors at 1 forager regardless of population, so a lone forager keeps
@@ -9523,6 +9522,74 @@ works), deleted once its job was done. 9 new tests in `test_ant_colony.gd`
 production-wiring test in `test_earth_chunk_manager.gd` mirroring `test_
 stepping_ants_drives_capacity_from_the_live_weather`'s own shape exactly.
 Full writeup: [soil_fauna.md](concept/soil_fauna.md#winter-dormancy-and-a-mound-that-can-come-back-from-zero-2026-09-06).
+
+✅ **Follow-up (2026-09-06, same day): the re-founding threshold itself
+was too slow to ever be observed working.** Reported live: "when an ant
+mound collapses and hits 0 population then it stays at 0 population even
+if new ants enter or bring food. the food stock correctly increments,
+but the population stays zero." Root-caused directly with another
+throwaway probe, not a logic bug: gating re-founding on the original
+full founding reserve (45.0 units) took over 22 REAL MINUTES to trigger
+even under a perfectly successful lone-forager trip every 30 real
+seconds. New `AntColony.REFOUNDING_FOOD_THRESHOLD`
+(`FOOD_PER_SUCCESSFUL_FORAGE * 3.0`) replaces that gate — 3 successful
+trips' worth, real repeated evidence rather than either a single fluke
+or a whole mature colony's own reserve, mirroring `CLUSTER_THRESHOLD`'s
+identical reasoning. 2 new tests in `test_ant_colony.gd` (91 total, all
+green); one pre-existing test's own isolation loop count reduced (20 → 2
+successes) so it stays isolated to proving ordinary growth math alone
+never recovers, not incidentally also crossing the new, smaller
+threshold. Full writeup: same soil_fauna.md section, follow-up
+paragraph.
+
+✅ **Colony budding: overpopulation founds a new mound (2026-09-06)** —
+reported live: "ant mounds should have a maximum capacity and upon
+overpopulation half of the colony will found a new mound hatch a new
+queen and grow the new colony again... they should found based on
+minimum distance to original mound and food availability within scout
+radius." No new "maximum capacity" concept needed:
+`AntPopulationModel.MAX_REFERENCE_POPULATION` was already named "the
+ceiling `capacity()` can ever produce", so `AntColony.is_overpopulated_
+at(cell)` is simply `population_at(cell) >= MAX_REFERENCE_POPULATION`.
+1. **`AntColony.bud_new_mound(from_cell, to_cell)`** (new) — "half of the
+   colony": both population AND stored food reserve, so the new colony
+   is not born starving and the parent is not left oddly outsized for
+   its own now-halved population. A no-op at an invalid target.
+2. **`AntColony.should_bud(cell)`** (new) — gated on `is_overpopulated_
+   at`, then a small per-step chance (`BUD_CHANCE`, mirroring `FORAGE_
+   CHANCE`/`MOUND_CHANCE`'s own "ongoing background activity, not a
+   guaranteed burst" reasoning) — keeps the real site-search naturally
+   rare even while a colony sits at its own maximum for a long stretch.
+3. **`AntColony.is_valid_mound_site(cell)`** (new) — the pure, world-blind
+   half of site selection (real soil + not already occupied, bounds-
+   checked): the same "AntColony owns the abstract economy, EarthChunk
+   Manager owns the real ground" split every other mound accessor
+   already keeps.
+4. **`EarthChunkManager._find_bud_site(chunk_coord, colony, from_cell)`**
+   (new) — the real half: every valid candidate in the chunk, sorted
+   NEAREST-first, checked in that order via new `_has_food_near` (leaf
+   litter/grass seed/real windfall nut within `AntColony.SENSE_RADIUS_
+   TILES` — the literal "scout radius" a real scout would need to
+   physically wander into range of, mirroring `AntForagerMarker._sense_
+   food_nearby`'s own priority query), returning the first (so nearest)
+   real candidate that actually has food nearby — the literal "minimum
+   distance... and food availability within scout radius" ask.
+5. **Wired into `step_ants`**, independently of the ordinary forage roll
+   (a mound can bud AND forage on the same tick). A successful bud
+   spawns a real, visible `AntMoundMarker` via new `_spawn_ant_mound_
+   marker` — extracted from `_load_chunk`'s own original inline
+   marker-creation loop (a real refactor, not a second hand-copied
+   construction) so budding's one new mound gets the identical
+   illustrated-variant seeding every mound has had since chunk-load.
+**Deliberately NOT capped by `AntColony.MAX_MOUNDS`** (that constant
+governs initial seeding density only — budding is a separate, later-game
+growth mechanic allowed to exceed it, named explicitly rather than
+silently gated into rarely firing). No cross-chunk budding (a real,
+named scope cut — `_find_bud_site` only searches the mound's own chunk).
+12 new tests in `test_earth_chunk_manager.gd`, 12 in `test_ant_colony.gd`
+(a mix of `is_overpopulated_at`/`is_valid_mound_site`/`bud_new_mound`/
+`should_bud` unit tests and a bounds-safety regression), all green. Full
+writeup: [soil_fauna.md](concept/soil_fauna.md#colony-budding-overpopulation-founds-a-new-mound-2026-09-06).
 
 ⬜ **Still no litter-density accumulation or soil-fertility feedback, and
 no ground-covering visual effect** (unchanged scope cut — see
