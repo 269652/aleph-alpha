@@ -551,3 +551,183 @@ func test_wind_does_not_roll_before_its_own_throttle_interval_elapses():
 	# roll rather than happening to land past it by coincidence.
 	field.advance(0.1, LeafLitterField.TRANSITION_DURATION + 0.2)
 	assert_eq(_positions(field), before, "an unelapsed throttle interval must never roll early")
+
+
+# -- floating on water (docs/concept/leaf_litter.md's own section) ----------
+#
+# A leaf/blossom that lands on a river flows with the current, gets pushed
+# by nearby turbulence, and resists ordinary ground wind far more than dry
+# litter (see LeafWaterDrift). Whether a position counts as "on water" at
+# all is answered by the injected current probe alone (set_current_probe):
+# no probe set, or a probe reporting zero speed, means off-water -- matching
+# every existing test above, none of which ever calls set_current_probe, so
+# none of this section changes their behaviour.
+
+const LeafWaterDrift = preload("res://src/world/leaf_water_drift.gd")
+
+
+## Reports the SAME {direction, speed_m_s} everywhere -- for tests that only
+## care "is there current here at all", not any real position-dependence.
+func _uniform_current(direction: Vector2, speed_m_s: float) -> Callable:
+	return func(_position): return {"direction": direction, "speed_m_s": speed_m_s}
+
+
+func test_a_leaf_added_with_no_probe_set_is_not_on_water():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	assert_false(field.leaves()[0].on_water)
+
+
+func test_a_leaf_added_where_the_probe_reports_zero_speed_is_not_on_water():
+	var field := _field()
+	field.set_current_probe(_uniform_current(Vector2.RIGHT, 0.0))
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	assert_false(field.leaves()[0].on_water)
+
+
+func test_a_leaf_added_where_the_probe_reports_real_speed_is_on_water():
+	var field := _field()
+	field.set_current_probe(_uniform_current(Vector2.RIGHT, 0.6))
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	assert_true(field.leaves()[0].on_water)
+
+
+func test_an_on_water_leaf_drifts_downstream_at_the_currents_own_speed():
+	var field := _field()
+	field.set_current_probe(_uniform_current(Vector2.RIGHT, 0.6))
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, 1.0)
+	var expected_velocity := LeafWaterDrift.velocity_px_s(
+		Vector2.RIGHT, 0.6, Vector2.ZERO, 0.0, PackedVector2Array(), Vector2(100, 100)
+	)
+	var leaf: Dictionary = field.leaves()[0]
+	assert_almost_eq(leaf.position.x, 100.0 + expected_velocity.x, 0.01)
+	assert_almost_eq(leaf.position.y, 100.0 + expected_velocity.y, 0.01)
+
+
+func test_an_on_water_leaf_keeps_transition_from_equal_to_position_every_frame():
+	# No eased "catch up" cosmetic on a floating leaf -- see LeafWaterDrift's
+	# own doc comment on why a continuous glide and an occasional discrete
+	# hop cannot share one transition mechanism. The renderer must see an
+	# "already arrived" leaf every single frame, or it would visibly lag
+	# behind its own real position for up to TRANSITION_DURATION and then
+	# snap, repeatedly.
+	var field := _field()
+	field.set_current_probe(_uniform_current(Vector2.RIGHT, 0.6))
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	for i in 5:
+		field.advance(0.2, 0.2 * (i + 1))
+		var leaf: Dictionary = field.leaves()[0]
+		assert_eq(leaf.transition_from, leaf.position, "frame %d" % i)
+
+
+func test_an_on_water_leaf_still_decays_its_season_like_any_other():
+	var field := _field()
+	field.set_current_probe(_uniform_current(Vector2.RIGHT, 0.6))
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.DECAY_TO_FADING_SECONDS + 1.0)
+	assert_eq(field.leaves()[0].season, "fading")
+
+
+func test_an_on_water_leaf_is_never_touched_by_the_discrete_wind_roll():
+	# Deterministic, not probabilistic: a continuous drift's own position is
+	# fully determined by delta/current, so across many throttled checks it
+	# must match the closed-form prediction EXACTLY, never once landing on
+	# WindDispersal.leaf_ground_drift's own (much larger, randomised) offset.
+	var field := _field()
+	field.set_current_probe(_uniform_current(Vector2.RIGHT, 0.6))
+	field.add_leaf(Vector2(0, 0), "cherry", "autumn", 0.0)
+	field.set_wind(Vector2.RIGHT, 1.0)  # a real, strong wind -- maximises wind-roll chance
+	var now := 0.0
+	var elapsed := 0.0
+	for i in _WIND_TEST_CHECKS:
+		now += LeafLitterField.WIND_DISPERSAL_INTERVAL
+		elapsed += LeafLitterField.WIND_DISPERSAL_INTERVAL
+		field.advance(LeafLitterField.WIND_DISPERSAL_INTERVAL, now)
+		var expected_velocity := LeafWaterDrift.velocity_px_s(
+			Vector2.RIGHT, 0.6, Vector2.RIGHT, 1.0, PackedVector2Array(), Vector2.ZERO
+		)
+		var expected_x: float = expected_velocity.x * elapsed
+		assert_almost_eq(
+			field.leaves()[0].position.x, expected_x, 0.5,
+			"check %d: must match pure continuous drift, never a discrete ground-style jump" % i
+		)
+
+
+func test_wind_still_nudges_an_on_water_leaf_a_little_continuously():
+	var field := _field()
+	field.set_current_probe(_uniform_current(Vector2.RIGHT, 0.6))
+	field.add_leaf(Vector2(0, 0), "cherry", "autumn", 0.0)
+	field.set_wind(Vector2.RIGHT, 1.0)
+	field.advance(1.0, 1.0)
+
+	var without_wind := _field()
+	without_wind.set_current_probe(_uniform_current(Vector2.RIGHT, 0.6))
+	without_wind.add_leaf(Vector2(0, 0), "cherry", "autumn", 0.0)
+	without_wind.advance(1.0, 1.0)
+
+	assert_gt(
+		field.leaves()[0].position.x, without_wind.leaves()[0].position.x,
+		"a downstream gale should still push a floating leaf a little further than current alone"
+	)
+
+
+func test_turbulence_from_a_nearby_wader_perturbs_an_on_water_leaf():
+	var field := _field()
+	field.set_current_probe(_uniform_current(Vector2.RIGHT, 0.6))
+	field.add_leaf(Vector2(0, 0), "cherry", "autumn", 0.0)
+	field.set_nearby_waders(PackedVector2Array([Vector2(0.0, 5.0)]))
+	field.advance(1.0, 1.0)
+
+	var without_wader := _field()
+	without_wader.set_current_probe(_uniform_current(Vector2.RIGHT, 0.6))
+	without_wader.add_leaf(Vector2(0, 0), "cherry", "autumn", 0.0)
+	without_wader.advance(1.0, 1.0)
+
+	assert_ne(field.leaves()[0].position.y, without_wader.leaves()[0].position.y)
+
+
+func test_an_on_water_leaf_stops_floating_once_the_current_it_is_in_stops():
+	var field := _field()
+	# A Dictionary, not a plain bool: GDScript lambdas capture a local
+	# variable by VALUE at the moment they're created, so a bare `var
+	# still_flowing := true` reassigned later would never be seen by the
+	# already-created closure below -- a Dictionary's CONTENTS, mutated
+	# after capture, are visible because the closure captured the container
+	# itself, not a copy of what was in it.
+	var state := {"flowing": true}
+	field.set_current_probe(func(_position):
+		return {"direction": Vector2.RIGHT, "speed_m_s": 0.6} if state.flowing else {"direction": Vector2.ZERO, "speed_m_s": 0.0}
+	)
+	field.add_leaf(Vector2(0, 0), "cherry", "autumn", 0.0)
+	field.advance(1.0, 1.0)
+	assert_true(field.leaves()[0].on_water, "precondition: started floating")
+	var position_when_current_stopped: Vector2 = field.leaves()[0].position
+
+	state.flowing = false
+	field.advance(1.0, 2.0)
+	assert_false(field.leaves()[0].on_water, "the current it was riding is gone -- falls back to ordinary litter")
+	assert_eq(field.leaves()[0].position, position_when_current_stopped, "no current left to drift with")
+
+
+func test_relocate_leaf_near_re_derives_on_water_at_the_new_position():
+	var field := _field()
+	field.set_current_probe(func(position): return {"direction": Vector2.RIGHT, "speed_m_s": 0.6} if position.x > 500.0 else {"direction": Vector2.ZERO, "speed_m_s": 0.0})
+	field.add_leaf(Vector2(0, 0), "cherry", "autumn", 0.0)
+	assert_false(field.leaves()[0].on_water, "precondition: starts on dry land")
+	field.relocate_leaf_near(Vector2(0, 0), 10.0, Vector2(600, 0), 1.0)
+	assert_true(field.leaves()[0].on_water, "nudged onto the river -- should start floating")
+
+
+func test_try_disperse_near_re_derives_on_water_at_the_new_position():
+	var field := _field()
+	field.set_current_probe(func(position): return {"direction": Vector2.RIGHT, "speed_m_s": 0.6} if position.x > 500.0 else {"direction": Vector2.ZERO, "speed_m_s": 0.0})
+	field.add_leaf(Vector2(600, 0), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.TRANSITION_DURATION + 0.1)
+	assert_true(field.leaves()[0].on_water, "precondition: starts on the river")
+	for attempt in 50:
+		if field.try_disperse_near(Vector2(602, 0), PebbleDispersion.TRIGGER_RADIUS_PX, 10.0 + attempt):
+			break
+	# Whatever the roll actually did, on_water must reflect the leaf's real
+	# FINAL position, never a stale flag from before the nudge.
+	assert_eq(field.leaves()[0].on_water, field.leaves()[0].position.x > 500.0)

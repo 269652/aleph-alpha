@@ -50,11 +50,28 @@ extends RefCounted
 ##                        already had (see try_disperse_near) -- its own
 ##                        running counter, salted separately from `seed`
 ##                        alone so consecutive contacts don't reuse one roll.
+##   on_water         -- is this leaf currently floating on a river (see
+##                        docs/concept/leaf_litter.md's "Floating on water"
+##                        section)? Re-derived from the injected current
+##                        probe (see set_current_probe/_is_on_water)
+##                        every time a leaf's position is actually set --
+##                        add_leaf, relocate_leaf_near, try_disperse_near,
+##                        and advance's own wind-roll -- NOT re-checked every
+##                        frame for a leaf that hasn't moved, so the vast
+##                        majority of (dry, motionless) litter never costs a
+##                        single current-probe call. Once true, advance's
+##                        main loop probes it fresh every frame instead (a
+##                        floating leaf's position changes every frame by
+##                        definition, so there is no motionless case to
+##                        cheaply skip there) and flips it back to false the
+##                        moment that probe ever reports no real current at
+##                        the leaf's own (still updating) position.
 
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const WindDispersal = preload("res://src/world/wind_dispersal.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const LeafWaterDrift = preload("res://src/world/leaf_water_drift.gd")
 
 ## How long un-eaten litter lingers before it despawns -- reported directly:
 ## "leafs should take roughly 270 days to rot / decay / vanish". 270
@@ -156,6 +173,20 @@ var _leaves: Array[Dictionary] = []
 var _wind_direction := Vector2.RIGHT
 var _wind_strength := 0.0
 var _wind_accumulator := 0.0
+## {direction, speed_m_s} for a given world position -- EarthChunkManager.
+## river_current_at_global (wrapped to take a pixel position, see that
+## class's own leaf-litter wiring), invalid until set_current_probe is
+## called. Left invalid (rather than defaulting to a real river query this
+## file would have to reach across to EarthChunkManager for) is what keeps
+## this file's own "cheap plain data, no scene-tree/world dependency" shape
+## -- see this file's own header comment -- and every EXISTING test that
+## never calls set_current_probe sees exactly its old behaviour: no probe,
+## no leaf is ever on_water, full stop.
+var _current_probe: Callable = Callable()
+## The world positions of every nearby wader/fish (see RiverFlowShader.
+## obstacle_lateral_shift_px) -- pushed once per frame the same way
+## set_wind is, read by advance's own on-water turbulence term.
+var _nearby_waders: PackedVector2Array = PackedVector2Array()
 ## Which throttled wind check this is -- salted into the per-leaf roll (see
 ## _WIND_ROLL_SALT) so consecutive checks don't all reuse the same sample.
 var _wind_check_count := 0
@@ -189,6 +220,7 @@ func add_leaf(position: Vector2, species: String, season: String, now: float) ->
 		"transition_start": now,
 		"seed": _next_leaf_seed,
 		"contact_count": 0,
+		"on_water": _is_on_water(position),
 	})
 	_next_leaf_seed += 1
 
@@ -265,6 +297,7 @@ func relocate_leaf_near(pos: Vector2, radius: float, new_position: Vector2, now:
 	leaf.transition_from = leaf.position
 	leaf.transition_start = now
 	leaf.position = new_position
+	leaf.on_water = _is_on_water(new_position)
 	return true
 
 
@@ -297,6 +330,7 @@ func try_disperse_near(walker_position: Vector2, radius: float, now: float) -> b
 	leaf.transition_from = leaf.position
 	leaf.transition_start = now
 	leaf.position = new_position
+	leaf.on_water = _is_on_water(new_position)
 	return true
 
 
@@ -308,6 +342,80 @@ func try_disperse_near(walker_position: Vector2, radius: float, now: float) -> b
 func set_wind(direction: Vector2, strength: float) -> void:
 	_wind_direction = direction
 	_wind_strength = strength
+
+
+## The water-current query this field uses to decide, and continuously
+## drive, which leaves are floating (see the "on_water" field's own doc
+## comment and docs/concept/leaf_litter.md's "Floating on water" section).
+## `probe` takes a world pixel position and returns {direction, speed_m_s},
+## the exact shape EarthChunkManager.river_current_at_global itself returns
+## -- EarthChunkManager wraps that call (pixel -> tile, mirroring FishMarker
+## ._current_at's identical conversion) and passes the wrapper here once,
+## at field creation, since the underlying river data it reads never needs
+## refreshing the way the day's ambient wind does (see set_wind).
+func set_current_probe(probe: Callable) -> void:
+	_current_probe = probe
+
+
+## The world positions of every nearby wader/fish -- pushed once per frame
+## from the SAME already-computed list EarthChunkManager.set_river_flow_
+## waders feeds the visual current-line shader, so a floating leaf's own
+## turbulence wobble is driven by the identical waders the water's surface
+## art already bends around (see LeafWaterDrift.turbulence_velocity_px_s).
+func set_nearby_waders(positions: PackedVector2Array) -> void:
+	_nearby_waders = positions
+
+
+## Is `position` on real, currently-flowing water right now? A real river
+## reach never reports exactly zero speed (RiverFlowShader.STILL_FLOW_M_S's
+## own doc comment: no Manning-solved channel is that quiet), so a positive
+## speed IS "there is a river or a river-mouth plume here" -- no separate
+## is_river_at_global call needed. No probe set (the common case: most
+## worlds/tests never call set_current_probe) means "no way to know, so no"
+## rather than an error.
+func _is_on_water(position: Vector2) -> bool:
+	if not _current_probe.is_valid():
+		return false
+	var current: Dictionary = _current_probe.call(position)
+	return current.get("speed_m_s", 0.0) > 0.0
+
+
+## The continuous half of a floating leaf's motion, called once per frame
+## from advance's own main loop for any leaf already on_water -- see
+## LeafWaterDrift for the actual current/wind/turbulence math. Re-probes at
+## the leaf's OWN current position every call (not once at the moment it
+## started floating): a real river's course bends and its hydraulics vary
+## along its length, so the current a leaf actually feels must track where
+## it has drifted TO, not where it fell. Flips on_water back off the
+## instant that probe ever reports no real current at the leaf's own
+## (still updating) position -- see _is_on_water's own doc comment on why a
+## positive speed already means "real river or plume here" with no separate
+## check -- at which point it simply stops moving and rejoins ordinary
+## land-litter behaviour (the wind-roll below, once next SETTLED).
+##
+## Keeps transition_from equal to position on every call, deliberately
+## skipping the eased fall-in/relocation cosmetic entirely for a floating
+## leaf -- see LeafWaterDrift's own doc comment for why a continuous glide
+## and an occasional discrete hop cannot share that one mechanism: an
+## uncorrected eased transition would show the leaf perpetually chasing a
+## target that keeps moving away from it, snapping back into sync every
+## TRANSITION_DURATION rather than gliding.
+func _advance_floating_leaf(leaf: Dictionary, delta: float) -> void:
+	if not _current_probe.is_valid():
+		leaf.on_water = false
+		return
+	var current: Dictionary = _current_probe.call(leaf.position)
+	if current.get("speed_m_s", 0.0) <= 0.0:
+		leaf.on_water = false
+		leaf.transition_from = leaf.position
+		return
+	var velocity := LeafWaterDrift.velocity_px_s(
+		current.direction, current.speed_m_s,
+		_wind_direction, _wind_strength,
+		_nearby_waders, leaf.position
+	)
+	leaf.position = leaf.position + velocity * delta
+	leaf.transition_from = leaf.position
 
 
 ## Ages every leaf, prunes anything past LIFETIME, settles any transition
@@ -332,6 +440,8 @@ func advance(delta: float, now: float) -> void:
 		if now - leaf.spawned_at >= LIFETIME:
 			_leaves.remove_at(i)
 			continue
+		if leaf.on_water:
+			_advance_floating_leaf(leaf, delta)
 		if leaf.transition_from != leaf.position and now - leaf.transition_start >= TRANSITION_DURATION:
 			leaf.transition_from = leaf.position
 		if leaf.transition_from == leaf.position:
@@ -349,6 +459,14 @@ func advance(delta: float, now: float) -> void:
 	if _wind_strength <= 0.0:
 		return  # dead calm: litter must not spontaneously scatter
 	for leaf in _leaves:
+		# A floating leaf is EXCLUDED outright, not just "unlikely to roll"
+		# -- see LeafWaterDrift's own doc comment on why a continuous glide
+		# and this discrete, occasional hop cannot share one leaf's motion
+		# without visibly fighting each other. Wind still reaches a floating
+		# leaf, just far less (WATER_WIND_DAMPING), continuously, through
+		# _advance_floating_leaf above instead.
+		if leaf.on_water:
+			continue
 		# Only a SETTLED leaf is eligible -- one still mid-transition (just
 		# fallen, or already nudged earlier this very check) is left alone
 		# rather than re-rolled on top of its own unfinished motion.
@@ -369,3 +487,7 @@ func advance(delta: float, now: float) -> void:
 		leaf.transition_from = leaf.position
 		leaf.transition_start = now
 		leaf.position = leaf.position + offset
+		# A gust can blow a dry leaf straight into the river -- from the
+		# very next frame it floats and this same mechanism never touches
+		# it again (see the on_water guard just above).
+		leaf.on_water = _is_on_water(leaf.position)
