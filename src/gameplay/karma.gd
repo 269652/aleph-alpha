@@ -16,10 +16,15 @@ extends RefCounted
 ## persistence, no RNG held here.
 
 ## Asked directly: "stepping on a worm should give -1 Karma." Applies
-## identically to a caterpillar crush -- CrushMechanic already treats both
-## as the same physical event (see its own doc comment), and to either the
-## player's own step or any creature's, since the request asked for every
-## crush to count, not just the player's own deliberate ones.
+## identically to a caterpillar OR millipede crush -- CrushMechanic already
+## treats all three as the same physical event (see its own doc comment,
+## and docs/concept/soil_fauna.md's "Generalized to millipedes too"), and
+## to either the player's own step or any creature's, since the request
+## asked for every crush to count, not just the player's own deliberate
+## ones. The constant's own name predates the millipede joining -- kept
+## rather than renamed, since a rename would touch every already-shipped,
+## tested call site for a purely cosmetic reason; this doc comment and
+## karma_and_luck.md's own event table are the cross-reference.
 const WORM_OR_CATERPILLAR_CRUSH_PENALTY := 1.0
 
 ## Asked directly: "Abandoning a quest as well [-1 Karma]."
