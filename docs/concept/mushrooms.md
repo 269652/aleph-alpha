@@ -260,6 +260,45 @@ walnuts"](soil_fauna.md#generalized-past-animals-mushrooms-and-walnuts-2026-09-0
 for the full mechanism this reuses, including why no Karma penalty
 applies (a mushroom is a fungus, not an animal).
 
+### Bitten by a decomposer
+
+Reported live: "bugs should forage mushrooms (when a bug takes a bite
+from a mushroom it should get the bitten flag)... mushrooms with a
+bitten flag have less value; weigh less and render their
+`mushroom_bitten_1.png` in world and inventory, their title reads as
+e.g. `Parasol (bitten)`". `MushroomMarker` had joined
+`DroppedItem.FORAGEABLE_GROUP_NAME` since it was first built specifically
+so "a decomposer ant/bug can find and eat one too — real fungivory" (see
+its own doc comment), but `DecomposerMarker._nearest_food`'s `node is
+DroppedItem` gate silently skipped every one — a `MushroomMarker` is not
+a `DroppedItem`. Closed by broadening that gate (the same
+`has_method()`-branching idiom `DecomposerMarker` already uses to tell a
+carcass/leaf/fruit target apart) and giving `WildMushroomPatch.bite(cell)`/
+`MushroomMarker.take_mushroom_bite()` the take-bite-shaped verb
+`DecomposerMarker._step_feeding` calls.
+
+Deliberately a DIFFERENT shape from crushing, not a reskin of it: crushing
+destroys the fruiting body outright (see `WildMushroomPatch.crush`
+above); a bite leaves it standing, bitten. It stays exactly what it was
+— fruiting, present, pickable — just diminished: `MushroomBiting.
+RETAINED_FRACTION_AFTER_BITE` (0.83 — a single insect bite is a small
+loss, not most of the mushroom) scales its `mass_kg` down from a real
+per-species baseline (mushrooms had none modeled before this — see
+`ItemCatalog._MUSHROOM_MASS_KG`), it renders its real bitten-look
+illustrated art in the world where delivered (`black_trumpet`/
+`champignon`/`chanterelle` today; the other three fall back to the
+ordinary look, the same has-or-doesn't convention every optional
+illustrated-art seam in this codebase already uses) and a distinct
+procedural cap+notch icon in inventory (no PNG-in-inventory pathway
+exists anywhere in this codebase yet — see `ProceduralItemSprite`), and
+its display name gains a `(Bitten)` suffix ahead of the ordinary
+toxic/edible hint. Picking it up resolves to its own `"<species>_bitten"`
+catalog item — the same "a state change becomes its own catalog
+identity" shape `"meat"` → `"cooked_meat"` already establishes, not a
+mutable flag bolted onto the shared `Item`. One bite is enough: a second
+bite, or a decomposer scanning for food, both treat an already-bitten
+mushroom as having nothing left to give.
+
 ## Deliberately not modeled
 
 - **No visible growth stages.** A fruiting body appears fully formed — see

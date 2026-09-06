@@ -9105,6 +9105,86 @@ constant's own doc comment). Built red-first end to end, merged to
 
 Built red-first end to end throughout, merged to `main`.
 
+**Mice rendered noticeably bigger, capped below squirrel.** Reported:
+"mice should be 2.4x as big." Literally, `AnimalAnatomy.profile_for
+("mouse").world_scale` would go 0.35 → 0.84, past squirrel's own 0.45 --
+inverting the real-world fact `test_squirrel_is_small_and_short_legged_
+but_bigger_than_a_mouse` already pinned. User chose capping below
+squirrel over the literal multiplier; landed on 0.40 (a real, visible
+jump, comfortably under 0.45 rather than a hair's-width short of it).
+Also decoupled `CaptureTool.TRAP_WORLD_SCALE_CEILING`, previously a
+LIVE `AnimalAnatomy.profile_for("mouse")` reference -- a purely cosmetic
+mouse-size change would otherwise have silently flipped squirrel/
+arctic_fox/sheep from Lasso to Trap the moment mouse's own scale crossed
+theirs, and broken the lynx-lasso regression test outright. Now a fixed
+literal at exactly the new mouse value, so mouse itself keeps needing a
+Trap and every other species' tool requirement is completely
+unaffected. Green: `test_animal_anatomy.gd` 42/42, `test_capture_tool.gd`
+10/10, plus the lynx-lasso and mouse-silhouette regression tests.
+
+**Bugs forage mushrooms; a bitten one is a real, discounted, re-skinned
+item, not a destroyed corpse.** Reported: "bugs should forage mushrooms
+(when a bug takes a bite from a mushroom it should get the bitten
+flag)... mushrooms with a bitten flag have less value; weigh less and
+render their `mushroom_bitten_1.png` in world and inventory, their title
+reads as e.g. `Parasol (bitten)`". Full mechanism spec in
+[mushrooms.md's "Bitten by a
+decomposer"](concept/mushrooms.md#bitten-by-a-decomposer) and
+[carrion.md's fallen-fruit-foraging
+item](concept/carrion.md#opportunistic-fallen-fruit-nut-foraging) (its
+own correction note now covers mushrooms too). In short:
+- New `MushroomBiting` module (`src/gameplay/mushroom_biting.gd`): the
+  bitten catalog-id shape (`"parasol"` → `"parasol_bitten"`, mirroring
+  `"meat"` → `"cooked_meat"`) and the single shared
+  `RETAINED_FRACTION_AFTER_BITE` (0.83 -- per-user, "17% less weight
+  than an unbitten [mushroom]").
+- `WildMushroomPatch.bite(cell)` marks a fruiting mushroom bitten
+  WITHOUT ending the fruiting instance -- deliberately a different
+  shape from `pick()`/`crush()`, both of which remove it outright. One
+  bite is enough; the flag clears whenever the site stops fruiting for
+  any reason so a later fresh fruiting never inherits a stale bite.
+- Mushrooms get real baseline `mass_kg` for the first time (previously
+  0.0/unmodeled for all six species) in `ItemCatalog`, plus a
+  `"_bitten"` catalog row per species whose mass is derived from the
+  base via `MushroomBiting.after_bite` -- enforced in code, not just by
+  comment. "Value" deliberately did NOT become a new gold-price/
+  nutrition concept (both considered and rejected -- Shop.CATALOG is a
+  small curated starter list mushrooms were never meant to join, and
+  its own doc comment states outright that `Item` carries no value
+  field so as not to invent "a number with nothing behind it"; the
+  Material DSL's nutrition system only models apple/cherry so far):
+  per explicit user direction, less value IS less weight, nothing more.
+- `MushroomMarker.take_mushroom_bite()` swaps to real bitten-look
+  illustrated art where delivered (`black_trumpet`/`champignon`/
+  `chanterelle` -- assets pulled from the unmerged
+  `feature/mushroom-crushed-bitten-sprites` branch, whose OWN "bitten =
+  a destroyed corpse, like crushed" model was deliberately not reused,
+  since the user's own wording requires a bitten mushroom to stay a
+  real, pickable item), falls back to the ordinary look for the other
+  three, and shows `(Bitten)` in its display name ahead of the ordinary
+  toxic/edible hint. `pick_up()` resolves to the bitten catalog item.
+- `DecomposerMarker._nearest_food`'s `node is DroppedItem` gate had
+  silently skipped every `MushroomMarker` since fungivory was first
+  half-built (see carrion.md's own correction note) -- broadened to
+  also accept `has_method("take_mushroom_bite")`, excluding an
+  already-bitten mushroom so a decomposer never wastes a trip on one
+  with nothing left to give. `_step_feeding` gets a new branch: one
+  bite, then unconditionally back to seeking (unlike a carcass's
+  whittled health pool or a fruit eaten whole in one visit).
+- `ProceduralItemSprite` gets a real "mushroom" shape (cap+stem,
+  colored to match `MushroomSpecies`' own `cap_color` per species) for
+  the first time -- mushrooms previously fell back to the generic grey
+  pebble in inventory regardless of species, bitten or not. A bitten
+  variant keeps the identical color and carves a visible notch out of
+  the cap. Still no pathway anywhere in this codebase to render a real
+  PNG as an inventory icon (every item renders via
+  `ProceduralItemSprite`'s procedural shapes) -- a separate, substantial
+  subsystem, deliberately not built here.
+
+Built red-first throughout (each piece confirmed failing for the
+expected reason before any implementation). Final consolidated run
+across all nine touched test files: 260/260, zero regressions.
+
 **Roster redesigned, then real illustrated art wired end to end
 (`feature/mushroom-real-art`).** The originally-designed roster (Fly
 Agaric/Death Cap/Chanterelle/Porcini/Puffball) was never actually
