@@ -67,6 +67,29 @@ func test_feeding_does_not_affect_thirst_and_vice_versa():
 	assert_eq(needs.hunger, 0.0)
 
 
+# -- feed_amount/drink_amount: a real meal size, not the body plan's fixed --
+# -- one (see docs/concept/material_dsl.md) ----------------------------------
+
+func test_feed_amount_reduces_hunger_by_the_given_amount():
+	needs.advance(100000.0)
+	needs.feed_amount(0.3)
+	assert_almost_eq(needs.hunger, 0.7, 0.0001)
+
+
+func test_drink_amount_reduces_thirst_by_the_given_amount():
+	needs.advance(100000.0)
+	needs.drink_amount(0.3)
+	assert_almost_eq(needs.thirst, 0.7, 0.0001)
+
+
+func test_feed_amount_does_not_affect_thirst_and_vice_versa():
+	needs.advance(100000.0)
+	needs.feed_amount(0.3)
+	assert_eq(needs.thirst, 1.0)
+	needs.drink_amount(0.3)
+	assert_almost_eq(needs.hunger, 0.7, 0.0001)
+
+
 # -- a herd is not synchronised ----------------------------------------------
 #
 # Every creature started at hunger 0 and rose at the same fixed rate, so an
