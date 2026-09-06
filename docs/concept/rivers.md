@@ -837,12 +837,60 @@ driven look — full tint, now also the full sink — is unchanged.
 
 Animals get the same treatment in fresh water: `CreatureMarker.
 _apply_submersion` used to tint a swimming illustrated species at a FIXED
-per-species waterline regardless of depth (reasonable for the ocean, which
-has no cheap per-tile depth this class can ask for) — now, when standing in
-real river/lake water, the waterline is the same continuous lerp (toward
-the species' own existing fixed value at full wade depth) and the same
-shared sink applies. See Creature water-depth awareness below for the
-detection gap this depended on closing first.
+per-species waterline regardless of depth (reasonable for the ocean at the
+time, since nothing in this codebase yet asked for a cheap per-tile ocean
+depth) — now, when standing in real river/lake water, the waterline is the
+same continuous lerp (toward the species' own existing fixed value at full
+wade depth) and the same shared sink applies. See Creature water-depth
+awareness below for the detection gap this depended on closing first.
+**Ocean itself stays the one exception here** (see the next Update below
+for why the excuse above no longer fully holds, and why animals were left
+out of that particular fix's scope rather than folded in silently).
+
+**Update (2026-09-06): ocean depth itself is gradual now too, for the
+player.** Reported directly, immediately after the fix above: "ocean depth
+too" (in response to naming it as the one remaining gap: "ocean depth is
+still a fixed waterline rather than gradual"). Unlike river/lake,
+`Player._resolve_water_state`'s ocean-depth conversion (`BiomeClassifier.
+depth_meters_at`) WAS already being fed continuous, per-tile real
+elevation — the bug was not that it was un-computed or binary in the
+literal sense, but that it converted elevation to metres using
+`EarthChunkGenerator.EARTH_OCEAN_DEPTH_RANGE_METERS` (8000.0, the REAL
+bathymetric depth this world's bundled elevation data encodes at its
+lowest point). Correct as "real metres of ocean depth," but the wrong
+scale to drive gameplay/tint calibration with: measured directly across 28
+real generated shorelines (`tools/probe_ocean_shore_gradient2.gd`), the
+MEDIAN near-shore slope reached the full `WaterMovementModel.
+WADE_DEPTH_METERS` (1.5m) threshold within ~0.03 tiles at that scale — a
+small fraction of a single tile, reading as an instant on/off switch no
+matter how gradually the underlying elevation itself actually changed.
+
+New `WaterMovementModel.OCEAN_DEPTH_RANGE_METERS` (50.0) is a separate,
+gameplay-calibrated scale for the SAME conversion — the same
+"recalibrate to what gameplay actually needs, not the real physical
+range" idiom `WADE_DEPTH_METERS`'s own doc comment already applies, and
+`RiverDepth`'s own curated/procedural depth ceilings already apply to
+river depth. Picked from the same measured sample: at 50.0, the median
+real slope reaches wade depth in ~5.4 tiles (a believable multi-step walk
+into the water), while five real, genuinely deep open-ocean points
+(mid-Pacific, mid-Atlantic, the Mariana Trench area, the Indian Ocean)
+still resolve to 22-41m — comfortably clear of the wade threshold, not
+accidentally shallow. Verified end to end at a real, measured near-shore
+point (a real Arctic coastline sitting almost exactly at the median of
+the 28 sampled shorelines, `tests/unit/test_player_ocean_water_state.gd`):
+the water's edge now reads well under the wade threshold, and walking a
+few tiles further out measurably deepens rather than the very first wet
+tile already reading as full swimming.
+
+**Scoped to the player only, this pass** — `CreatureMarker._apply_
+submersion`'s own ocean case is unchanged (still the fixed per-species
+waterline the paragraph above describes), even though the infrastructure
+this fix proves out (a cheap per-tile ocean depth query, now correctly
+gameplay-scaled) is exactly what a future pass would need to extend the
+same fresh-water gradual-tint treatment to ocean-swimming animals too —
+not attempted here because it was not what was reported, mirroring this
+project's own repeated "close the exact gap named, note the adjacent one
+rather than silently expanding scope" pattern.
 
 ## Decoration exclusion: trees, grass, and snow (2026-08-29)
 
