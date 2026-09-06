@@ -19,15 +19,15 @@ weekends.
 
 A taste, not the whole menu:
 
-* Procedural rivers, lakes, and terrain — carved from real elevation and climate data
-* Seasons that actually happen — trees turn and shed their own leaves, snow piles up and melts
-* A living food web — ants forage and carry dinner home, songbirds hunt real worms, boars live where boars can actually thrive
-* Forests that grow old, one real season at a time
-* Farming, foraging, fishing, and taming (or just hunt everything instead — your call)
-* Crafting from real physics — combine simple pieces and let the simulation decide what you made
-* Building, villages, and trade
-* NPCs living lives nobody scripted for them
-* Combat, magic, and the occasional world boss pulled from real regional folklore
+* A real planet underfoot — rivers, coasts, and mountains carved from actual elevation and climate data, not hand-painted
+* Seasons that actually commit — leaves turn and drop on their own clock, snow melts only once the calendar agrees
+* A food web nobody's puppeteering — ants haul dinner home, boars live only where boars could actually survive
+* Forests that age for real — a hundred-year oak earned its size one century at a time, not a slider
+* Farm, forage, fish, tame a horse, or skip all that and just eat the horse
+* Crafting from real physics — combine real materials and shapes and let the simulation decide what you made
+* Villages, trade, and NPCs quietly living lives nobody scripted for them
+* Combat, magic, and the occasional world boss pulled from actual regional folklore
+* Step on the wrong bug and karma keeps score, whether you're watching or not
 * ...and plenty more we're leaving out on purpose
 
 ## Overview
@@ -80,24 +80,6 @@ missing key shows an in-game "enter your license key" screen instead. Paste a
 key below into that screen and it saves itself, no file to place by hand. (A
 `license.txt` holding just the serial code, in Godot's `user://` data
 directory or next to the running executable, works too.)
-
-A 7-day trial key, valid through **2026-08-31**, base game only:
-
-```
-040G00000000004HBW0G0064JHN6QKTH8QRE7WR5
-1P8SY9HD487AM5M5TC0K2YD5NRV4MEX448ZC86TJ
-TJB9SKNZ6Z93YPHRYAN9D5JQ8JRWC7SXM3HPTVDZ
-4091AXMDENKGH504M3169T326R8G999NTNSX10TR
-YHWJR6X6BD6YXC1DH1AAXE4EYSA2H72QX3296Q3T
-ASMENMMX7EJKPJQDKF97BNVV7ZGAVMNDY7NA5GBE
-KW91VRFNFTCGFY5KC3P3VABS5B6MZ1XYWMBGJ7AS
-BYXX7BYGTDKF68R6ZX8K4FJTWX15F4TYKKE0SRTB
-SA909Y903P02KG22TVDQMRP0Z824DJC2RCM1F9N8
-VDPSWTKK686JKCG4F3635SV8A840E9H6507AJEJS
-S4EXDK17KAAJ4M1Q3D38J2FF9H2ESYZXJ823Y
-```
-
-After it expires, contact us (see Contact below) for an alpha tester key.
 
 An extended key, valid through **2027-12-31**, base game only:
 
