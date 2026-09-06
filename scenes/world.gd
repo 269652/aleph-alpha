@@ -526,6 +526,8 @@ var _xp_label: Label
 ## player, visible only once that keystone is unlocked -- see
 ## _update_land_sense_label.
 var _land_sense_label: Label
+## Karma's own HUD readout (asked directly) -- see _build_karma_display.
+var _karma_label: Label
 ## The one top-centre stack every transient world message is shown in, and
 ## the themed cards inside it -- see _build_message_stack for why there is
 ## one stack rather than five hand-positioned, background-less Labels. The
@@ -733,6 +735,7 @@ func _ready() -> void:
 	_build_survival_bar()
 	_build_xp_bar()
 	_build_land_sense_label()
+	_build_karma_display()
 	_build_message_stack()
 	_build_joust_view()
 	_build_handheld_view()
@@ -1622,6 +1625,30 @@ func _build_land_sense_label() -> void:
 	_land_sense_label.add_theme_font_size_override("font_size", 10)
 	_land_sense_label.visible = false
 	_ui.add_child(_land_sense_label)
+
+
+## Karma's own HUD readout (asked directly: "Karma should be displayed
+## somewhere in a UI with golden and red accents for positive vs negative
+## karma" -- see docs/concept/karma_and_luck.md). A themed card (pillar 1
+## of docs/concept/hud.md: nothing that carries meaning may be bare text
+## over the world, and Karma's colour IS the meaning here), not a bare
+## Label the way the XP/land-sense readouts still are. Sits just under the
+## minimap, top-right -- the corner column mirroring how the XP bar/land-
+## sense/creature-panels already stack below the health bar, top-left.
+func _build_karma_display() -> void:
+	var panel := PanelContainer.new()
+	panel.theme = _ui_theme
+	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	panel.offset_left = -170.0
+	panel.offset_top = 178.0
+	panel.offset_right = -8.0
+	panel.offset_bottom = 210.0
+	_ui.add_child(panel)
+
+	_karma_label = Label.new()
+	_karma_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_karma_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	panel.add_child(_karma_label)
 
 
 ## Every transient message the world shows the player -- fishing, taming,
@@ -3720,6 +3747,48 @@ static func meter_label_text(meter_name: String, reserve: float) -> String:
 	return "%s %d%%" % [meter_name, int(round(clampf(reserve, 0.0, 1.0) * 100.0))]
 
 
+## Karma's own HUD readout (asked directly: "Karma should be displayed
+## somewhere in a UI" -- see docs/concept/karma_and_luck.md). Always signed,
+## so a positive reading isn't mistaken for the neutral/zero case at a
+## glance -- unlike a meter's 0-100% reserve, Karma is an unbounded permanent
+## ledger (see Player.karma's own doc comment), so this is a plain signed
+## integer, not a percentage. Branches on `karma`'s own sign, the same way
+## karma_display_color does (not on the truncated integer), so the two can
+## never disagree about which side of zero a fractional value falls on --
+## unreachable today (every named delta in karma.gd is a whole 1.0), but
+## the two pure functions stay provably consistent regardless.
+static func karma_display_text(karma: float) -> String:
+	if karma > 0.0:
+		return "Karma: +%d" % int(karma)
+	elif karma < 0.0:
+		return "Karma: %d" % int(karma)
+	return "Karma: 0"
+
+
+## Gold for positive Karma, red for negative, neutral text colour at exactly
+## zero (asked directly: "golden and red accents for positive vs negative
+## karma"). The number and its colour are always read from the same `karma`
+## value by construction, the same "one source, no second line to drift"
+## shape reserve_for_deficit/meter_label_text already established.
+static func karma_display_color(karma: float) -> Color:
+	if karma > 0.0:
+		return UiTheme.ACCENT
+	elif karma < 0.0:
+		return UiTheme.NEGATIVE
+	return UiTheme.TEXT
+
+
+## Refreshed every frame straight from the live Player.karma -- "instant"
+## feedback for the moment a crush actually happens, the same per-frame-poll
+## pattern every other HUD readout already uses (Player has no change signal
+## for this -- see docs/concept/hud.md's testing boundary and karma_display_
+## text/karma_display_color's own doc comments for the pure halves this
+## glues together).
+func _update_karma_display(local_player: Player) -> void:
+	_karma_label.text = karma_display_text(local_player.karma)
+	_karma_label.add_theme_color_override("font_color", karma_display_color(local_player.karma))
+
+
 ## Every meter reads as a RESERVE: full is good, and the number always says
 ## the same thing as the bar under it -- the same convention the health bar
 ## has always used. Food and Water are named for what is LEFT rather than for
@@ -4763,6 +4832,7 @@ func _client_process(delta: float) -> void:
 	_update_survival_bar(local_player)
 	_update_xp_bar(local_player)
 	_update_land_sense_label(local_player)
+	_update_karma_display(local_player)
 	_update_fishing_label(local_player)
 	_update_lasso_label(local_player)
 	_update_trade_label(local_player)
@@ -4923,15 +4993,16 @@ func _client_process(delta: float) -> void:
 		_chunk_manager.tread_snow_at(creature.position, false)
 	# Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
 	# weight-emergent worm mortality" and its "Generalized to caterpillars
-	# too"/"Generalized to millipedes too"/"Generalized to ants too"
-	# follow-ups) -- mirrors the tread_snow_at pair just above exactly
-	# (player, then every creature), but keyed on real weight rather than
-	# snow depth, so it runs regardless of season. crush_worm_at/
-	# crush_caterpillars_near/crush_millipedes_near/crush_ants_near share
-	# the identical momentum value per stepper -- one shared physics rule
-	# (CrushMechanic), two detection shapes (a worm is per-tile cell state,
-	# a caterpillar/millipede/ant forager a real Node2D). No debounce
-	# needed for any of the four: every removal is already idempotent
+	# too"/"Generalized to millipedes too"/"Generalized to ants too"/
+	# "Generalized to bugs too" follow-ups) -- mirrors the tread_snow_at
+	# pair just above exactly (player, then every creature), but keyed on
+	# real weight rather than snow depth, so it runs regardless of season.
+	# crush_worm_at/crush_caterpillars_near/crush_millipedes_near/
+	# crush_ants_near/crush_decomposers_near share the identical momentum
+	# value per stepper -- one shared physics rule (CrushMechanic), two
+	# detection shapes (a worm is per-tile cell state, a caterpillar/
+	# millipede/ant forager/decomposer a real Node2D). No debounce needed
+	# for any of the five: every removal is already idempotent
 	# (already-gone simply reports false again next frame), the same
 	# reasoning that let this skip the per-entity "last tile" tracking
 	# PathScarring/the snow trail's own debounce needs for a CONTINUOUS
@@ -4942,9 +5013,9 @@ func _client_process(delta: float) -> void:
 	# "stepping on a worm should give -1 Karma", asked for every crush, the
 	# player's own step OR any creature's, not just the player's deliberate
 	# ones -- so the penalty lands on local_player regardless of which of
-	# the two loops below did the crushing. A crushed millipede or ant
-	# charges the same constant -- its name predates both, but the event
-	# it represents is identical (see karma.gd's own doc comment).
+	# the two loops below did the crushing. A crushed millipede, ant or bug
+	# charges the same constant -- its name predates all three, but the
+	# event it represents is identical (see karma.gd's own doc comment).
 	if _chunk_manager.crush_worm_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	if _chunk_manager.crush_caterpillars_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
@@ -4953,12 +5024,17 @@ func _client_process(delta: float) -> void:
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	if _chunk_manager.crush_ants_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-	# A mushroom is a fungus and a walnut a plant seed, neither an animal --
-	# crush_mushroom_at/crush_walnut_near's own bool returns are
-	# deliberately not fed into Karma the way the worm/caterpillar/
-	# millipede calls just above are (see docs/concept/mushrooms.md,
-	# docs/concept/soil_fauna.md).
-	_chunk_manager.crush_mushroom_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
+	if _chunk_manager.crush_decomposers_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
+		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
+	# A mushroom now costs Karma too (asked directly, reversing the
+	# original "a fungus is not an animal" exemption -- see docs/concept/
+	# mushrooms.md's own Status note on the reversal): crush_mushroom_at's
+	# bool return feeds Karma exactly like every crush call above. A
+	# walnut is a plant seed, not a fungus or an animal, and stays exempt
+	# -- crush_walnut_near's own bool return is deliberately not fed into
+	# Karma (see docs/concept/soil_fauna.md).
+	if _chunk_manager.crush_mushroom_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
+		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	_chunk_manager.crush_walnut_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		var marker := creature as CreatureMarker
@@ -4972,7 +5048,10 @@ func _client_process(delta: float) -> void:
 			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 		if _chunk_manager.crush_ants_near(marker.position, momentum):
 			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-		_chunk_manager.crush_mushroom_at(marker.position, momentum)
+		if _chunk_manager.crush_decomposers_near(marker.position, momentum):
+			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
+		if _chunk_manager.crush_mushroom_at(marker.position, momentum):
+			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 		_chunk_manager.crush_walnut_near(marker.position, momentum)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above

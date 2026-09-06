@@ -257,8 +257,17 @@ one it should be crushed because of the player weight."
 threshold, same "recover on the same clock as being picked" shape) —
 see [soil_fauna.md's "Generalized past animals: mushrooms and
 walnuts"](soil_fauna.md#generalized-past-animals-mushrooms-and-walnuts-2026-09-06)
-for the full mechanism this reuses, including why no Karma penalty
-applies (a mushroom is a fungus, not an animal).
+for the full mechanism this reuses.
+
+**Reversed (2026-09-06, same day): now costs Karma too.** Originally
+shipped exempt — "a mushroom is a fungus, not an animal" — but asked
+directly, as part of "instant karma feedback": a mushroom underfoot
+should cost the same `-1 Karma` a bug/ant/caterpillar does. `World`'s
+`crush_mushroom_at` call sites are now wrapped in the identical `if
+...: apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)` guard
+every other crush call already has (see `docs/concept/karma_and_luck.md`'s
+event table). A walnut (a plant seed, not a fungus) is unaffected by
+this reversal and stays exempt.
 
 A crushed (or bitten, below) mushroom now genuinely *lingers* rather than
 its marker vanishing the instant it stops fruiting — `WildMushroomPatch.

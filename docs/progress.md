@@ -13797,16 +13797,40 @@ accepted nothing (free in the common case), and otherwise throttles at
 invented number, since that's the actual cadence the underlying
 production/market data can even change on.
 
+✅ **In-game HUD display of Karma** (2026-09-06, asked directly: "Karma
+should be displayed somewhere in a UI with golden and red accents for
+positive vs negative karma") — a themed corner readout, `World._build_
+karma_display`/`_update_karma_display`, just under the minimap, top-right
+(`PanelContainer` on `UiTheme.panel_stylebox`, not a bare `Label` — see
+`concept/hud.md` pillar 1). Two pure, tested halves carry the actual
+decision (`test_world_hud.gd`): `World.karma_display_text(karma)` — a
+signed integer, `"Karma: +3"`/`"Karma: -5"`/`"Karma: 0"` — and `World.
+karma_display_color(karma)` — the new `UiTheme.NEGATIVE` (a warm,
+saturated red, pinned distinct from `ACCENT`'s gold by `test_ui_theme.
+gd`) for negative, the existing `UiTheme.ACCENT` (gold) for positive,
+`UiTheme.TEXT` (neutral) at exactly zero. Refreshed every frame from the
+live `Player.karma` — the same per-frame-poll pattern every other HUD
+readout already uses; `Player` has no change signal for this, and none
+was added. **Deliberately built in the live HUD, not the companion
+server's Character Sheet web page** the concept doc's own design pillar
+originally anticipated: a display only checked from a separate browser
+tab would not give "instant" feedback for the moment a crush actually
+happens during play — see `karma_and_luck.md`'s own note on the
+divergence. 6 new tests (`test_world_hud.gd` ×3, `test_ui_theme.gd` ×1,
+plus the two colour/text pins) all green, zero implementation changes
+needed afterward.
+
 ⬜ **Deliberately out of scope, named rather than silently assumed done**
-(see the concept doc's own Status list): a Character Sheet display of
-Karma/Luck; a player-facing interaction to actually call `QuestLog.
-accept`/`abandon` (dialogue or otherwise — `QuestLog` itself is real,
-tested, engine-free logic with no UI consumer yet, same as `quest.gd`);
-the `FishingMinigame`/`KnappingModel`/`RarityTier` Luck hooks named above;
-every other part of `concept/quests.md`'s fuller vision (settlement
-quorum, safety/social need sources, village endangerment, rewards/
-currency transactions) that was already unbuilt before this pass and
-stays exactly as unbuilt now.
+(see the concept doc's own Status list): a *second*, Character-Sheet
+(companion server) view of the same Karma/Luck numbers — the HUD above
+covers the request that prompted this; a player-facing interaction to
+actually call `QuestLog.accept`/`abandon` (dialogue or otherwise —
+`QuestLog` itself is real, tested, engine-free logic with no UI consumer
+yet, same as `quest.gd`); the `FishingMinigame`/`KnappingModel`/
+`RarityTier` Luck hooks named above; every other part of `concept/
+quests.md`'s fuller vision (settlement quorum, safety/social need
+sources, village endangerment, rewards/currency transactions) that was
+already unbuilt before this pass and stays exactly as unbuilt now.
 
 ### Millipedes: a dedicated autumn leaf-litter decomposer (`concept/soil_fauna.md`, new this pass)
 
@@ -13904,6 +13928,38 @@ never reaches a different mound's, since the two now live under
 different dictionary keys), plus `test_world_crush_wiring.gd`'s existing
 source-contract tests all extended to cover the fourth call site (16/16
 green). Full writeup: [soil_fauna.md](concept/soil_fauna.md#generalized-to-ants-too-2026-09-06).
+
+✅ **Bugs generalized into the crush pass too (2026-09-06)** — asked
+directly, alongside the mushroom/ant Karma work below: "a bug should
+count as a small creature too." `DecomposerMarker` (the ambient carrion/
+fruit/leaf-litter forager, species `"ant"` or `"bug"`) was the one
+remaining victim shape `CrushMechanic`'s per-frame pass had not reached.
+New `EarthChunkManager.crush_decomposers_near` is the fifth
+`CrushMechanic`-driven detection side — unlike `crush_ants_near`, a
+`DecomposerMarker` IS tracked chunk-keyed (`_decomposer_markers`, the
+same shape `_caterpillar_markers`/`_millipede_markers` already are), so
+this one shares `_crush_markers_near`'s own body directly rather than a
+fifth hand-copied scan. Wired into `World._client_process` identically
+to the other four and charges the same `Karma.WORM_OR_CATERPILLAR_
+CRUSH_PENALTY`. 6 new tests in `test_earth_chunk_manager.gd`, plus
+`test_world_crush_wiring.gd`'s existing source-contract tests extended
+to cover the fifth call site (17/17 green). Full writeup:
+[soil_fauna.md](concept/soil_fauna.md#generalized-to-bugs-too-2026-09-06).
+
+✅ **Mushroom crush now costs Karma too (reversal, 2026-09-06)** — asked
+directly, as part of "instant karma feedback": a mushroom underfoot
+should cost `-1 Karma` the same as a bug/ant/caterpillar. Originally
+shipped exempt ("a mushroom is a fungus, not an animal" — see
+`concept/soil_fauna.md`'s "Generalized past animals: mushrooms and
+walnuts"); both `crush_mushroom_at` call sites in `World._client_process`
+are now wrapped in the identical `if ...: apply_karma_delta(-Karma.
+WORM_OR_CATERPILLAR_CRUSH_PENALTY)` guard every other crush call already
+has. A walnut (a plant seed, not a fungus) is unaffected and stays
+exempt. `test_world_crush_wiring.gd`'s source-contract test for the old
+"never applies Karma" behavior is replaced with its opposite; the
+"every crush call site applies the penalty" count moves from 10 to 12
+(17/17 green). `concept/mushrooms.md` and `concept/karma_and_luck.md`
+updated to match.
 
 ### Material DSL: fruit composition → crush → nutrients (`concept/material_dsl.md`, new this pass)
 

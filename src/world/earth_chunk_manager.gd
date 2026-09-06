@@ -7113,6 +7113,19 @@ func crush_millipedes_near(pixel_position: Vector2, momentum_kg_m_s: float) -> b
 	return _crush_markers_near(_millipede_markers, pixel_position, momentum_kg_m_s)
 
 
+## The decomposer/bug-shaped sibling of crush_caterpillars_near/
+## crush_millipedes_near (see docs/concept/soil_fauna.md "Generalized to
+## bugs too" -- asked directly: "a bug should count as a small creature
+## too"). A DecomposerMarker is the identical SHAPE of victim a
+## caterpillar/millipede already is (a real, independently-positioned
+## Node2D), tracked chunk-keyed in _decomposer_markers exactly like
+## _caterpillar_markers/_millipede_markers, so this shares
+## _crush_markers_near's own body directly. Returns whether anything was
+## actually crushed.
+func crush_decomposers_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
+	return _crush_markers_near(_decomposer_markers, pixel_position, momentum_kg_m_s)
+
+
 ## The ant-shaped sibling of crush_caterpillars_near/crush_millipedes_near
 ## (see docs/concept/soil_fauna.md "Generalized to ants too" -- reported
 ## live: "ants are also not crushed when a player is walking over them").

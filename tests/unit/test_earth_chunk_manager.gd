@@ -60,6 +60,7 @@ const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 const CaterpillarMarker = preload("res://src/rendering/caterpillar_marker.gd")
 const MillipedeMarker = preload("res://src/rendering/millipede_marker.gd")
+const DecomposerMarker = preload("res://src/rendering/decomposer_marker.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -4265,6 +4266,68 @@ func test_crushing_a_millipede_on_a_different_tile_leaves_it_alone():
 func test_crushing_millipedes_where_there_are_none_fails_rather_than_erroring():
 	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
 	assert_false(manager.crush_millipedes_near(Vector2(-9000000, -9000000), 1000000.0))
+
+
+# -- crushed underfoot, the decomposer/bug side (see docs/concept/soil_fauna.md
+# "Generalized to bugs too") -- asked directly: "a bug should count as a small
+# creature too." A DecomposerMarker (species "ant" or "bug" -- see its own
+# doc comment) is the identical SHAPE of victim a caterpillar/millipede
+# already is (a real, independently-positioned Node2D, tracked chunk-keyed in
+# _decomposer_markers exactly like _caterpillar_markers/_millipede_markers),
+# so this shares _crush_markers_near's own body rather than a fourth
+# hand-copied implementation. --------------------------------------------
+
+func _decomposer_at(chunk_coord: Vector2i, cell: Vector2i) -> DecomposerMarker:
+	var decomposer := DecomposerMarker.new()
+	decomposer.position = _pixel_for(chunk_coord, cell)
+	add_child_autofree(decomposer)
+	manager._decomposer_markers[chunk_coord] = [decomposer]
+	return decomposer
+
+
+func test_crushing_a_decomposer_with_enough_momentum_removes_it_from_the_world():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var decomposer := _decomposer_at(chunk_coord, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(
+		manager.crush_decomposers_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"a horse-scale step on a bug should crush it"
+	)
+	assert_true(decomposer.is_queued_for_deletion(), "the bug itself is gone")
+	assert_false(
+		manager._decomposer_markers[chunk_coord].has(decomposer),
+		"and dropped from tracking so chunk-unload never double-frees it"
+	)
+
+
+func test_crushing_a_decomposer_with_too_little_momentum_leaves_it_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var decomposer := _decomposer_at(chunk_coord, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_false(
+		manager.crush_decomposers_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 0.01),
+		"a mouse-scale step should not crush a bug"
+	)
+	assert_false(decomposer.is_queued_for_deletion(), "the bug should still be there")
+	assert_true(manager._decomposer_markers[chunk_coord].has(decomposer))
+
+
+func test_crushing_a_decomposer_on_a_different_tile_leaves_it_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var decomposer := _decomposer_at(chunk_coord, Vector2i(5, 5))
+	var elsewhere := _pixel_for(chunk_coord, Vector2i(20, 20))
+	assert_false(
+		manager.crush_decomposers_near(elsewhere, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"stepping on a different tile should not reach a bug standing elsewhere"
+	)
+	assert_false(decomposer.is_queued_for_deletion())
+
+
+func test_crushing_decomposers_where_there_are_none_fails_rather_than_erroring():
+	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
+	assert_false(manager.crush_decomposers_near(Vector2(-9000000, -9000000), 1000000.0))
 
 
 # -- crushed underfoot, the ant side (see docs/concept/soil_fauna.md

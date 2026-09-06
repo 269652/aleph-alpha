@@ -1920,11 +1920,19 @@ then every `CreatureMarker`'s own species-derived momentum).
   "gone, not transformed into a different item" outcome a crushed worm/
   caterpillar already gets; nothing in this project models a separate
   cracked-kernel item, and inventing one was out of scope for this pass.
-- **No Karma penalty for either** — a deliberate divergence from the
-  worm/caterpillar wiring. Stepping on a worm or caterpillar ends an
-  animal's life; a mushroom is a fungus and a walnut a seed, neither an
-  animal, so `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` (its very name
-  scoped to those two) simply never applies to either new call.
+- **No Karma penalty for either, originally** — a deliberate divergence
+  from the worm/caterpillar wiring. Stepping on a worm or caterpillar
+  ends an animal's life; a mushroom is a fungus and a walnut a seed,
+  neither an animal, so `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` simply
+  never applied to either new call.
+  **Reversed for mushrooms only, same day:** asked directly, as part of
+  "instant karma feedback" — a mushroom underfoot should cost Karma too.
+  `crush_mushroom_at`'s bool return now feeds `Karma.
+  WORM_OR_CATERPILLAR_CRUSH_PENALTY` the identical way every animal
+  crush call does (see `docs/concept/mushrooms.md`'s own "Crushed
+  underfoot" section and `karma_and_luck.md`'s event table). Walnuts are
+  unaffected — a seed still is not a fungus or an animal, so
+  `crush_walnut_near` stays exempt.
 - **Flowers are excluded by construction, not a new check** — flowers are
   deliberately not `Node2D`s in any group at all (a bare `Sprite2D` per
   cell, no script -- see `EarthChunkManager._sync_flower_sprites`'s own
@@ -2486,3 +2494,42 @@ trip as far as `AntColony.record_forage_result` is concerned (it is
 never called at all for a crushed forager, the same "silently
 disappeared mid-trip" outcome a crushed caterpillar/millipede already
 has relative to whatever they were doing).
+
+### Generalized to bugs too (2026-09-06)
+
+Asked directly, alongside mushrooms/ants: "a bug should count as a small
+creature too." `DecomposerMarker` — the ambient carrion/fruit/leaf-litter
+forager whose own `species` is `"ant"` or `"bug"` (see "Unifying the
+duplicate ants first" above) — was the one remaining victim shape
+`CrushMechanic`'s per-frame pass still had not reached, even after
+worm/caterpillar/millipede/`AntForagerMarker` all got it.
+
+**`EarthChunkManager.crush_decomposers_near(pixel_position,
+momentum_kg_m_s) -> bool`** is the fifth detection side — same
+`CrushMechanic.is_crushed_by` physics, same "insufficient momentum is a
+no-op" contract every other crush call already has. Unlike
+`crush_ants_near`, a `DecomposerMarker` IS tracked chunk-keyed, in
+`_decomposer_markers`, the identical shape `_caterpillar_markers`/
+`_millipede_markers` already are — so this shares `_crush_markers_near`'s
+own body directly, the same way `crush_millipedes_near` already does,
+rather than a fifth hand-copied scan. Wired identically to the other
+four calls, in the same `World._client_process` block: the player's own
+`_PLAYER_STEP_MOMENTUM_KG_M_S`, and every `CreatureMarker`'s own
+`CreatureMass.mass_kg_for(species)`-derived momentum.
+
+**Also feeds Karma** (see `docs/concept/karma_and_luck.md`): a crushed
+bug charges the same `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` a crushed
+worm/caterpillar/millipede/ant already does — the identical "a small,
+harmless invertebrate died underfoot" event, and `karma_and_luck.md`'s
+own event table is updated to say so. Applies identically whichever
+species string this particular `DecomposerMarker` happens to be drawing
+(`"ant"` or `"bug"`) — the crush check itself never reads `species` at
+all, only position, the same way `crush_ants_near` treats every
+`AntForagerMarker` alike regardless of which mound dispatched it.
+
+**What this does NOT include**: no corpse/recovery state (a crushed
+decomposer simply `queue_free()`s, same "just disappear" outcome every
+other crush victim already has). No effect on whatever it was doing —
+foraging a carcass, fruit, or leaf litter — beyond that one instance
+disappearing mid-task, the same "silently disappeared mid-trip" outcome
+a crushed caterpillar/millipede/ant already has.

@@ -12,6 +12,12 @@ const WINDOW_BG := Color(0.11, 0.12, 0.16, 0.96)
 const PANEL_BG := Color(0.15, 0.16, 0.21, 0.98)
 const PANEL_BORDER := Color(0.32, 0.34, 0.42, 0.9)
 const ACCENT := Color(0.95, 0.72, 0.25)  # warm gold
+## The negative counterpart to ACCENT (asked directly: "golden and red
+## accents for positive vs negative karma") -- this theme's first formal
+## good/bad pair. A warm, saturated red, distinct in hue from ACCENT's
+## gold rather than merely darker/desaturated, so the two read as opposite
+## judgements at a glance, not two shades of the same thing.
+const NEGATIVE := Color(0.85, 0.25, 0.25)
 const TEXT := Color(0.92, 0.93, 0.96)
 const TEXT_MUTED := Color(0.62, 0.65, 0.72)
 

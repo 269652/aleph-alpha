@@ -18,6 +18,16 @@ func test_accent_is_a_saturated_colour():
 	assert_gt(UiTheme.ACCENT.s, 0.3, "the accent should be a distinct saturated hue")
 
 
+## Golden vs. red accents for positive vs. negative Karma (asked directly) --
+## NEGATIVE is this theme's first formal "bad" counterpart to ACCENT's warm
+## gold "good". Pinned the same way ACCENT's own hue/saturation are: a
+## distinct, clearly-red, clearly-saturated hue, not a muddy or washed-out one.
+func test_negative_is_a_saturated_red_distinct_from_the_accent():
+	assert_gt(UiTheme.NEGATIVE.s, 0.3, "the negative colour should be a distinct saturated hue")
+	assert_lt(UiTheme.NEGATIVE.h, 0.05, "should read as red, not orange/gold like the accent")
+	assert_gt(absf(UiTheme.NEGATIVE.h - UiTheme.ACCENT.h), 0.05, "must be a visibly different hue from the accent")
+
+
 func test_panel_stylebox_is_rounded_and_dark():
 	var sb := ui.panel_stylebox()
 	assert_true(sb is StyleBoxFlat)
