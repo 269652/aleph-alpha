@@ -1691,6 +1691,36 @@ func test_every_eaten_mushroom_increments_the_lifetime_counter_toxic_or_not():
 	assert_eq(player.mushrooms_eaten, 2)
 
 
+## Real, end-to-end proof (not just MushroomToxin.severity_for's own pure
+## ordering test) that the roster's one genuinely dangerous species
+## actually hurts through the real eat_food path.
+func test_eating_a_death_cap_applies_the_toxin_debuff_and_deals_real_damage():
+	player.inventory.add(_item_catalog.make("death_cap"), 1)
+	var before := player.health
+
+	assert_true(player.eat_food("death_cap"))
+	assert_eq(player.active_mushroom_toxin_debuffs.size(), 1)
+
+	player._mushroom_toxin_step(1.0)
+
+	assert_lt(player.health, before)
+
+
+## Real: despite the name and its real visual resemblance to Death Cap,
+## False Death Cap is not itself seriously toxic (see MushroomSpecies.
+## is_toxic's own doc comment) -- proven through the real eat_food path,
+## the same way test_eating_an_edible_mushroom_causes_no_harm proves it
+## for an ordinary edible.
+func test_eating_a_false_death_cap_causes_no_harm_despite_the_name():
+	player.inventory.add(_item_catalog.make("false_death_cap"), 1)
+	var health_before := player.health
+
+	assert_true(player.eat_food("false_death_cap"))
+
+	assert_eq(player.health, health_before)
+	assert_eq(player.active_mushroom_toxin_debuffs.size(), 0)
+
+
 # -- Karma (see docs/concept/karma_and_luck.md) ------------------------------
 #
 # apply_karma_delta is the single external mutator for the permanent karma
