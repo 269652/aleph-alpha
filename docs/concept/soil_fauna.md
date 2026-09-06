@@ -1535,15 +1535,40 @@ real, occasional risk.
    happens, it does not claim to make it impossible). Real ant nest
    sites get recolonized once conditions improve — a new queen/swarm
    founds again where an old colony died out — so `AntColony.advance`
-   now checks, per mound per step, whether a real, full founding reserve
-   (the same standard `_seed_initial_mounds` itself starts every
-   brand-new colony at) has genuinely piled back up at an empty mound,
-   and re-founds it at `STARTING_POPULATION` exactly as a brand-new mound
-   would, before the ordinary logistic-growth step ever runs that tick.
-   Still reachable even for an "extinct" mound: `EarthChunkManager.
-   _dispatch_forager`'s own `active_forager_cap_at` floors at 1 forager
-   regardless of population, so a lone forager keeps trying — and can
-   keep depositing real food home — even after every worker has starved.
+   now checks, per mound per step, whether real, on-hand food has
+   genuinely piled back up at an empty mound past
+   `REFOUNDING_FOOD_THRESHOLD` (see that constant's own doc comment for
+   why this is deliberately NOT the same full, multi-day standard
+   `_seed_initial_mounds` starts a brand-new colony at), and re-founds it
+   at `STARTING_POPULATION` exactly as a brand-new mound would, before
+   the ordinary logistic-growth step ever runs that tick. Still reachable
+   even for an "extinct" mound: `EarthChunkManager._dispatch_forager`'s
+   own `active_forager_cap_at` floors at 1 forager regardless of
+   population, so a lone forager keeps trying — and can keep depositing
+   real food home — even after every worker has starved.
+
+**Follow-up (2026-09-06, same day): the re-founding threshold itself was
+too slow to ever be observed working.** Reported live: "when an ant mound
+collapses and hits 0 population then it stays at 0 population even if
+new ants enter or bring food. the food stock correctly increments, but
+the population stays zero." Root-caused directly (a throwaway diagnostic
+probe, not a logic bug): gating re-founding on a full founding reserve
+(45.0 units) took over 22 REAL MINUTES to trigger even under a perfectly
+successful lone-forager trip every 30 real seconds — a threshold nobody
+would ever realistically wait out, even though the mechanism itself was
+working exactly as designed. `REFOUNDING_FOOD_THRESHOLD` (new,
+`FOOD_PER_SUCCESSFUL_FORAGE * 3.0`) replaces the full-reserve gate: 3
+successful trips' worth is real, repeated evidence the site is
+productive again — not a single lucky fluke, but nowhere near a full
+mature colony's own reserve — mirroring `CLUSTER_THRESHOLD`'s own
+identical "3, not 1, not a fluke" reasoning from the cluster-recruitment
+section above. A mound re-founded this way starts at the full
+`STARTING_POPULATION` but on a comparatively thin food reserve, so it
+reads as genuinely fragile at first (`food_availability_fraction` low
+relative to that fresh population's own upkeep) rather than instantly
+"safe" — the same real vulnerability any newly-founded colony already
+has, resolved by the ordinary food economy catching up over subsequent
+ticks, not a special case.
 
 **What this does NOT include**: no seasonal reduction in FORAGE_CHANCE
 or dispatch itself (a dormant colony still sends its usual foragers out;
@@ -1558,6 +1583,94 @@ comment already names ants as the one regional population in this game
 with no `migrate()` at all, mounds being sessile) — re-founding here is
 a single mound's own site recovering, never population moving in from
 elsewhere.
+
+### Colony budding: overpopulation founds a new mound (2026-09-06)
+
+Reported live: "ant mounds should have a maximum capacity and upon
+overpopulation half of the colony will found a new mound hatch a new
+queen and grow the new colony again... they should found based on
+minimum distance to original mound and food availability within scout
+radius." Real ant colonies bud/split exactly this way once a nest
+genuinely outgrows its site — a new queen and a share of the workforce
+founding a fresh, independent colony nearby rather than the parent
+growing without limit forever.
+
+**"Maximum capacity" is not a new concept — it already exists.**
+`AntPopulationModel.MAX_REFERENCE_POPULATION` is already named "the
+ceiling `capacity()` can ever produce" (see that constant's own doc
+comment), and population chases capacity via ordinary logistic growth —
+so a mound whose population has reached it is already, by construction,
+sitting at the real maximum it can ever sustain. `AntColony.
+is_overpopulated_at(cell)` is simply `population_at(cell) >=
+MAX_REFERENCE_POPULATION`, no second, redundant ceiling invented on top.
+
+**The split, `AntColony.bud_new_mound(from_cell, to_cell)`**: "half of
+the colony" — both its population AND its real stored food reserve, so
+the new colony is not born starving (the same "never born already
+starving" standard `_founding_food_reserve` already gives every
+brand-new mound) and the parent is not left with an oddly outsized
+reserve for its own now-halved population. A no-op at an invalid target
+(the caller is expected to have already checked `is_valid_mound_site`,
+but this stays safe on its own regardless).
+
+**Whether a mound even attempts to bud this step, `AntColony.
+should_bud(cell)`**: gated on `is_overpopulated_at`, then a small
+per-step chance (`BUD_CHANCE`, mirroring `FORAGE_CHANCE`/`MOUND_CHANCE`'s
+own "ongoing background activity, not a single guaranteed burst"
+reasoning exactly) — keeps the real site-search below naturally rare
+even while a colony sits at its own reference maximum for a long
+stretch, rather than repeating an expensive search every single tick.
+
+**Site selection is EarthChunkManager's job, not AntColony's** — the
+same "AntColony owns the abstract economy, EarthChunkManager owns the
+real ground" split every other mound accessor already keeps.
+`AntColony.is_valid_mound_site(cell)` only knows the two facts
+`_seed_initial_mounds` itself already gates a brand-new mound on: real,
+excavatable soil (`SOIL_BIOMES`), and not already somebody else's
+entrance (bounds-checked too, so a caller scanning a fixed window
+larger than this colony's own real grid — a real possibility once a
+budded colony can, in principle, differ from the chunk's own `CHUNK_
+SIZE` — never indexes `_biome` out of range). `EarthChunkManager.
+_find_bud_site(chunk_coord, colony, from_cell)` does the rest, and IS
+the literal "minimum distance... and food availability within scout
+radius" ask: every real candidate cell in the chunk is collected via
+`is_valid_mound_site`, sorted NEAREST-to-`from_cell` first, then checked
+in that order via new `_has_food_near` (leaf litter, grass seed, or a
+real windfall nut within `AntColony.SENSE_RADIUS_TILES` — the literal
+"scout radius" a real scout would need to physically wander into range
+of to notice anything at all, mirroring `AntForagerMarker._sense_food_
+nearby`'s own identical priority query at the site-selection level
+rather than a live forager's own current position) — returning the
+first, so nearest, real candidate that actually has food nearby, or no
+site at all if nothing in the whole chunk qualifies this attempt (tried
+again on some future tick, per `should_bud`'s own small chance).
+
+**Wired into `step_ants`**: per mound, per step, independently of the
+ordinary forage roll right below it (an overpopulated mound can bud AND
+send a forage wave out on the identical tick — the two are unrelated
+events). A successful bud calls `bud_new_mound`, then spawns a real,
+visible `AntMoundMarker` for the new mound via `_spawn_ant_mound_marker`
+— extracted from `_load_chunk`'s own original inline marker-creation loop
+(a real refactor landed alongside the new functionality, not a second
+hand-copied construction) so budding's one new mound gets the identical
+illustrated-variant seeding, tile-centre placement, and colony/cell
+wiring every mound has had since chunk-load.
+
+**What this does NOT include**: no cap on how many mounds budding can
+add to a chunk beyond `AntColony.MAX_MOUNDS` — that constant governs
+INITIAL seeding density only (see its own doc comment's "fewer, bigger
+colonies" reasoning); budding is a separate, later-game growth mechanic
+deliberately allowed to exceed it, since gating a thriving colony's own
+real expansion behind the same cap that limits how many colonies a
+chunk starts with would make the feature rarely fire in practice. No
+cross-chunk budding — `_find_bud_site` only searches the SAME chunk the
+overpopulated mound already lives in; a mound on a chunk boundary
+finding no room within its own chunk simply keeps re-rolling
+`should_bud` until conditions change, a real, named scope cut rather
+than the cross-`AntColony`-instance coordination true cross-chunk search
+would need. No visual "budding in progress" animation or effect — the
+new mound simply appears, fully formed, the same "no fanfare" precedent
+`_maybe_refound` already set for re-founding.
 
 
 ## Crawling out, and back down
@@ -1807,17 +1920,122 @@ then every `CreatureMarker`'s own species-derived momentum).
   "gone, not transformed into a different item" outcome a crushed worm/
   caterpillar already gets; nothing in this project models a separate
   cracked-kernel item, and inventing one was out of scope for this pass.
-- **No Karma penalty for either** — a deliberate divergence from the
-  worm/caterpillar wiring. Stepping on a worm or caterpillar ends an
-  animal's life; a mushroom is a fungus and a walnut a seed, neither an
-  animal, so `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` (its very name
-  scoped to those two) simply never applies to either new call.
+- **No Karma penalty for either, originally** — a deliberate divergence
+  from the worm/caterpillar wiring. Stepping on a worm or caterpillar
+  ends an animal's life; a mushroom is a fungus and a walnut a seed,
+  neither an animal, so `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` simply
+  never applied to either new call.
+  **Reversed for mushrooms only, same day:** asked directly, as part of
+  "instant karma feedback" — a mushroom underfoot should cost Karma too.
+  `crush_mushroom_at`'s bool return now feeds `Karma.
+  WORM_OR_CATERPILLAR_CRUSH_PENALTY` the identical way every animal
+  crush call does (see `docs/concept/mushrooms.md`'s own "Crushed
+  underfoot" section and `karma_and_luck.md`'s event table). Walnuts are
+  unaffected — a seed still is not a fungus or an animal, so
+  `crush_walnut_near` stays exempt.
 - **Flowers are excluded by construction, not a new check** — flowers are
   deliberately not `Node2D`s in any group at all (a bare `Sprite2D` per
   cell, no script -- see `EarthChunkManager._sync_flower_sprites`'s own
   doc comment), so there is nothing flower-shaped for either new crush
   call to sweep in; the request's "except flowers" needed no code of its
   own to honour.
+
+### Mushroom corpses actually linger, and a bug's single bite (2026-09-06)
+
+The user delivered real 1:1 crushed/bitten art for each specimen (see
+`docs/concept/mushrooms.md`'s own "Crushed underfoot") — wiring the ART
+LOADING side first (`IllustratedMushroomSprite.crushed_frame_for`/
+`bitten_frame_for`) exposed that `crush_mushroom_at` froze the marker at
+the exact moment it stopped fruiting, same as a picked mushroom — there
+was nowhere for the new art to ever actually be seen. This closes that
+gap, generalizing `EarthwormPatch`'s own `is_corpse`/`corpse_age_seconds`
+"a corpse is new ground" precedent (see below) from one cause to two.
+
+- **`WildMushroomPatch._corpse_kind: Dictionary`** (cell → `"crushed"` or
+  `"bitten"`) replaces what would have been a plain `EarthwormPatch`-style
+  bool: a mushroom corpse can arise from either `crush()` (now also
+  recording `"crushed"`) or the new `bite()` (recording `"bitten"`) — two
+  distinct causes needing two distinct sprites, unlike a worm's single
+  death. Both ride the identical `_recovery`/`SPENT_SECONDS` clock,
+  cleared there and nowhere else, exactly like the worm's own
+  `_crushed`. `pick()` still leaves no corpse at all.
+- **`WildMushroomPatch.bite(cell)`** — a decomposer's single bite (real
+  fungivory, reported live: "a bug takes a bite"). No momentum/threshold
+  gate, unlike `crush()`: an insect bite isn't a weight-emergent physics
+  event, it simply happens once a decomposer commits to feeding. Otherwise
+  mirrors `pick()`/`crush()`'s exact `has_fruiting` gate and recovery
+  shape.
+- **`MushroomRenderer.sync_markers`** now also treats every
+  `sim.is_corpse(cell)` as live (mirrors
+  `EarthChunkManager._sync_worm_sprites`'s own `is_corpse` check) instead
+  of sourcing `live_cells` from `get_fruiting_cells()` alone — a corpse's
+  marker survives the sync that would otherwise have freed it the instant
+  `crush()`/`bite()` erased the cell from fruiting. `_build_marker` always
+  bakes `sim.corpse_kind(cell)` into the marker it builds (a live cell
+  simply gets `""` back), so both call sites (`spawn_markers` and
+  `sync_markers`) pick the right art with no separate wiring.
+- **`MushroomMarker.corpse_kind`** — set before `add_child`, same
+  convention as `species_id`/`cell`. `_rebuild_sprite` prefers
+  `crushed_frame_for`/`bitten_frame_for` when it matches and the species
+  has that art yet, falling back to the ordinary live look otherwise (the
+  same has-or-doesn't gate `has_variants` already uses) — a species still
+  missing its crushed/bitten sheet (fly_agaric/psylo/parasol as of this
+  delivery) never shows a blank texture, just its live look a beat longer.
+- **Real fungivory, finally reachable**: `MushroomMarker` has joined
+  `DroppedItem.FORAGEABLE_GROUP_NAME` since an earlier phase (see that
+  class's own doc comment), but `DecomposerMarker._nearest_food`'s `not
+  (node is DroppedItem) or node.item_stack == null` guard silently
+  excluded it again immediately afterward — a `MushroomMarker` extends
+  `Node2D`, not `DroppedItem`, so it always failed that check. Confirmed
+  dead code path, not a hypothetical: a decomposer could never actually
+  reach a mushroom at all before this fix, the earlier group-join
+  notwithstanding. Fixed by only gating a *real* `DroppedItem` on having a
+  real `item_stack`; anything else in this forageable group is judged on
+  distance alone. `MushroomMarker.take_bite(_amount)` then duck-types
+  straight into `_step_feeding`'s existing `has_method("take_bite")`
+  branch, unchanged — it defers to `WildMushroomPatch.bite(cell)` and
+  frees the (live) marker on a real bite, so `sync_markers` builds the
+  actual corpse marker fresh from the sim's own `corpse_kind` on its next
+  tick, the same "the sim is the truth, the marker just mirrors it" shape
+  `pick_up` already uses. No-op on a marker that is already a corpse
+  itself (mirrors `Carcass.take_bite`'s own gate shape) — a decomposer
+  doesn't re-bite what something already finished.
+- **What this does NOT include**: only one bitten-art stage exists today,
+  by the user's own explicit choice ("for a later stage I will add more
+  bitten stages but now 1 bite is enough") — so a single bite already
+  reaches the only bitten look there is, and nothing yet models a bitten
+  mushroom being progressively consumed further or fully removed by
+  repeated bites. A bitten (or crushed) corpse clears exactly like an
+  ordinary spent site once its `SPENT_SECONDS` recovery runs out.
+
+**Correction, 2026-09-06, same day: the bite half of this was replaced by
+a concurrent session's independent build of the same request, merged
+second.** Two sessions built "a bug bites a mushroom" from the same
+report at the same time; this section describes the first one merged.
+The second modeled a bite as a genuinely different shape, not a second
+corpse cause: "mushrooms with a bitten flag have less value; weigh less
+and render... in world and inventory, their title reads as e.g. Parasol
+(bitten)" requires a bitten mushroom to stay a real, pickable item — a
+corpse that replaces the live marker and is never picked up cannot
+satisfy that. See [mushrooms.md's "Bitten by a
+decomposer"](mushrooms.md#bitten-by-a-decomposer) for what actually
+shipped. Concretely, superseded by the second session's version:
+`WildMushroomPatch._corpse_kind` no longer takes `"bitten"` as a value
+(crush() is now its only writer); `bite(cell)` marks a new, orthogonal
+`_bitten: Dictionary` instead, WITHOUT erasing the cell from `_fruiting`
+-- the mushroom never stops being fruiting/pickable, so `is_corpse`/
+`corpse_kind` never apply to it at all. `MushroomMarker.take_bite`
+(the duck-typed `has_method("take_bite")` catch used above) is gone,
+replaced by `take_mushroom_bite()` -- a distinct name so a bitten
+mushroom does NOT duck-type into the Carcass branch, and so
+`DecomposerMarker._nearest_food`'s gate can name it directly (see
+carrion.md's own correction on the same fix). `MushroomMarker.bitten:
+bool` (not `corpse_kind == "bitten"`) drives the bitten sprite/display-
+name branches, and `pick_up()` resolves to a real `"<species>_bitten"`
+catalog item (`MushroomBiting.gd`) rather than nothing (the marker was
+never reachable by `pick_up` under the corpse model, since biting froze
+and replaced it). The crushed half above is UNCHANGED and still exactly
+as described.
 
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
@@ -2305,3 +2523,42 @@ trip as far as `AntColony.record_forage_result` is concerned (it is
 never called at all for a crushed forager, the same "silently
 disappeared mid-trip" outcome a crushed caterpillar/millipede already
 has relative to whatever they were doing).
+
+### Generalized to bugs too (2026-09-06)
+
+Asked directly, alongside mushrooms/ants: "a bug should count as a small
+creature too." `DecomposerMarker` — the ambient carrion/fruit/leaf-litter
+forager whose own `species` is `"ant"` or `"bug"` (see "Unifying the
+duplicate ants first" above) — was the one remaining victim shape
+`CrushMechanic`'s per-frame pass still had not reached, even after
+worm/caterpillar/millipede/`AntForagerMarker` all got it.
+
+**`EarthChunkManager.crush_decomposers_near(pixel_position,
+momentum_kg_m_s) -> bool`** is the fifth detection side — same
+`CrushMechanic.is_crushed_by` physics, same "insufficient momentum is a
+no-op" contract every other crush call already has. Unlike
+`crush_ants_near`, a `DecomposerMarker` IS tracked chunk-keyed, in
+`_decomposer_markers`, the identical shape `_caterpillar_markers`/
+`_millipede_markers` already are — so this shares `_crush_markers_near`'s
+own body directly, the same way `crush_millipedes_near` already does,
+rather than a fifth hand-copied scan. Wired identically to the other
+four calls, in the same `World._client_process` block: the player's own
+`_PLAYER_STEP_MOMENTUM_KG_M_S`, and every `CreatureMarker`'s own
+`CreatureMass.mass_kg_for(species)`-derived momentum.
+
+**Also feeds Karma** (see `docs/concept/karma_and_luck.md`): a crushed
+bug charges the same `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` a crushed
+worm/caterpillar/millipede/ant already does — the identical "a small,
+harmless invertebrate died underfoot" event, and `karma_and_luck.md`'s
+own event table is updated to say so. Applies identically whichever
+species string this particular `DecomposerMarker` happens to be drawing
+(`"ant"` or `"bug"`) — the crush check itself never reads `species` at
+all, only position, the same way `crush_ants_near` treats every
+`AntForagerMarker` alike regardless of which mound dispatched it.
+
+**What this does NOT include**: no corpse/recovery state (a crushed
+decomposer simply `queue_free()`s, same "just disappear" outcome every
+other crush victim already has). No effect on whatever it was doing —
+foraging a carcass, fruit, or leaf litter — beyond that one instance
+disappearing mid-task, the same "silently disappeared mid-trip" outcome
+a crushed caterpillar/millipede/ant already has.

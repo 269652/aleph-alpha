@@ -266,6 +266,55 @@ func test_a_bitten_mushroom_that_ages_out_clears_the_bitten_flag():
 	assert_false(patch.is_bitten(cell))
 
 
+# -- corpses: a crushed remain lingers instead of vanishing instantly -------
+# (see docs/concept/soil_fauna.md's "A corpse is new ground",
+# EarthwormPatch.is_corpse/corpse_age_seconds) -- reported live: real
+# crushed art was delivered for wiring in, which needs a cell to stay a
+# distinguishable corpse for a while rather than freeing its marker the
+# instant crush() erases it from _fruiting, exactly the gap EarthwormPatch
+# already closed for worms. A bite is deliberately NOT a second corpse
+# cause here (see _bitten's own doc comment above) -- a bitten mushroom
+# never stops fruiting, so there is nothing for is_corpse to report.
+
+func test_nothing_is_a_corpse_before_anything_dies():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	assert_false(patch.is_corpse(cell))
+	assert_eq(patch.corpse_kind(cell), "")
+
+
+func test_crushing_a_mushroom_makes_it_a_crushed_corpse():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	assert_true(patch.is_corpse(cell), "a crushed mushroom should leave a corpse")
+	assert_eq(patch.corpse_kind(cell), "crushed")
+
+
+## Picking must NOT leave a corpse -- only crush() does. pick() and crush()
+## reduce the model to the identical _fruiting/_recovery state; this is the
+## one bit that actually distinguishes them afterward, the same distinction
+## EarthwormPatch.take/crush already draws.
+func test_picking_a_mushroom_leaves_no_corpse():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.pick(cell)
+	assert_false(patch.is_corpse(cell), "a picked mushroom is not a corpse")
+
+
+## A corpse rides the identical SPENT_SECONDS/_recovery clock as ordinary
+## recovery -- it clears the instant the site could fruit fresh again, not
+## on a second, independent timer (mirrors EarthwormPatch's own
+## test_a_corpse_clears_when_its_burrow_recovers).
+func test_a_crushed_corpse_clears_once_recovery_expires():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	patch.advance(WildMushroomPatch.SPENT_SECONDS + 1.0, 0.0)
+	assert_false(patch.is_corpse(cell), "the corpse should be long gone once the site can fruit again")
+	assert_eq(patch.corpse_kind(cell), "")
+
+
 # -- force_fruit_near: a debug/dev-console way to see one on demand --------
 #
 # Reported live, after an extended investigation confirmed the fruiting sim

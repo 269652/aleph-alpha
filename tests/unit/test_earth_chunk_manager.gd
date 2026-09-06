@@ -60,6 +60,7 @@ const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 const CaterpillarMarker = preload("res://src/rendering/caterpillar_marker.gd")
 const MillipedeMarker = preload("res://src/rendering/millipede_marker.gd")
+const DecomposerMarker = preload("res://src/rendering/decomposer_marker.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -4267,6 +4268,68 @@ func test_crushing_millipedes_where_there_are_none_fails_rather_than_erroring():
 	assert_false(manager.crush_millipedes_near(Vector2(-9000000, -9000000), 1000000.0))
 
 
+# -- crushed underfoot, the decomposer/bug side (see docs/concept/soil_fauna.md
+# "Generalized to bugs too") -- asked directly: "a bug should count as a small
+# creature too." A DecomposerMarker (species "ant" or "bug" -- see its own
+# doc comment) is the identical SHAPE of victim a caterpillar/millipede
+# already is (a real, independently-positioned Node2D, tracked chunk-keyed in
+# _decomposer_markers exactly like _caterpillar_markers/_millipede_markers),
+# so this shares _crush_markers_near's own body rather than a fourth
+# hand-copied implementation. --------------------------------------------
+
+func _decomposer_at(chunk_coord: Vector2i, cell: Vector2i) -> DecomposerMarker:
+	var decomposer := DecomposerMarker.new()
+	decomposer.position = _pixel_for(chunk_coord, cell)
+	add_child_autofree(decomposer)
+	manager._decomposer_markers[chunk_coord] = [decomposer]
+	return decomposer
+
+
+func test_crushing_a_decomposer_with_enough_momentum_removes_it_from_the_world():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var decomposer := _decomposer_at(chunk_coord, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(
+		manager.crush_decomposers_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"a horse-scale step on a bug should crush it"
+	)
+	assert_true(decomposer.is_queued_for_deletion(), "the bug itself is gone")
+	assert_false(
+		manager._decomposer_markers[chunk_coord].has(decomposer),
+		"and dropped from tracking so chunk-unload never double-frees it"
+	)
+
+
+func test_crushing_a_decomposer_with_too_little_momentum_leaves_it_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var decomposer := _decomposer_at(chunk_coord, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_false(
+		manager.crush_decomposers_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 0.01),
+		"a mouse-scale step should not crush a bug"
+	)
+	assert_false(decomposer.is_queued_for_deletion(), "the bug should still be there")
+	assert_true(manager._decomposer_markers[chunk_coord].has(decomposer))
+
+
+func test_crushing_a_decomposer_on_a_different_tile_leaves_it_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var decomposer := _decomposer_at(chunk_coord, Vector2i(5, 5))
+	var elsewhere := _pixel_for(chunk_coord, Vector2i(20, 20))
+	assert_false(
+		manager.crush_decomposers_near(elsewhere, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"stepping on a different tile should not reach a bug standing elsewhere"
+	)
+	assert_false(decomposer.is_queued_for_deletion())
+
+
+func test_crushing_decomposers_where_there_are_none_fails_rather_than_erroring():
+	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
+	assert_false(manager.crush_decomposers_near(Vector2(-9000000, -9000000), 1000000.0))
+
+
 # -- crushed underfoot, the ant side (see docs/concept/soil_fauna.md
 # "Generalized to ants too") -- reported live: "ants are also not crushed
 # when a player is walking over them". Same CrushMechanic.is_crushed_by
@@ -7280,6 +7343,157 @@ func test_step_ants_dispatches_resolvers_once_a_trail_is_known():
 	assert_true(manager._active_ant_foragers.has(global_tile))
 	var forager: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
 	assert_true(forager.resolver, "with a known active trail, step_ants should dispatch a resolver, not a scout")
+
+
+# -- colony budding: overpopulation founds a new mound nearby (reported
+# live: "ant mounds should have a maximum capacity and upon overpopulation
+# half of the colony will found a new mound hatch a new queen and grow
+# the new colony again... they should found based on minimum distance to
+# original mound and food availability within scout radius") -- site
+# selection (real distance + real food) is EarthChunkManager's own job
+# (see AntColony.is_valid_mound_site's own doc comment on the split);
+# AntColony.bud_new_mound/should_bud/is_overpopulated_at do the pure,
+# world-blind half. ---------------------------------------------------
+
+## A hand-built colony with exactly one mound at a KNOWN cell, already
+## overpopulated -- distinct from _ant_colony_with_one_mound's own
+## seed-driven (unpredictable) placement, since these tests need real
+## control over exact distances between candidate cells.
+func _colony_with_mound_at(cell: Vector2i, size: int = 16) -> AntColony:
+	var biome := PackedStringArray()
+	for i in size * size:
+		biome.append("grassland")
+	var colony := AntColony.new(9999, size, size, biome)
+	colony._mounds.clear()
+	colony._population.clear()
+	colony._food_stored.clear()
+	colony._mounds[cell] = true
+	colony._population[cell] = AntPopulationModel.MAX_REFERENCE_POPULATION
+	colony._food_stored[cell] = 1000.0
+	# capacity_at also needs recent forage-success/moisture at their own
+	# maximum, or capacity_at reads only BASE_CAPACITY (the unfed/unwatered
+	# floor) against a population sitting at MAX_REFERENCE_POPULATION --
+	# read as wildly overcrowded relative to ITS OWN current capacity, and
+	# the ordinary logistic decline would crash population back down
+	# within the very first advance() call, long before is_overpopulated_
+	# at ever gets a fair, sustained chance to matter across many calls.
+	colony._forage_success[cell] = 1.0
+	colony._moisture[cell] = 1.0
+	return colony
+
+
+func test_find_bud_site_prefers_the_nearest_candidate_with_real_food():
+	var cell := Vector2i(8, 8)
+	var colony := _colony_with_mound_at(cell)
+	var chunk_coord := Vector2i(90, 90)
+	manager._ant_colonies[chunk_coord] = colony
+	var near_cell := Vector2i(9, 8)
+	var far_cell := Vector2i(12, 8)
+	var field := _field_at(chunk_coord)
+	field.add_leaf(_pixel_for(chunk_coord, near_cell), "cherry", "autumn", 0.0)
+	field.add_leaf(_pixel_for(chunk_coord, far_cell), "cherry", "autumn", 0.0)
+	var found := manager._find_bud_site(chunk_coord, colony, cell)
+	assert_eq(found, near_cell)
+
+
+func test_find_bud_site_skips_a_foodless_site_for_a_farther_one_with_food():
+	var cell := Vector2i(8, 8)
+	var colony := _colony_with_mound_at(cell)
+	var chunk_coord := Vector2i(91, 91)
+	manager._ant_colonies[chunk_coord] = colony
+	var near_cell := Vector2i(9, 8)  # closer, but nothing there
+	var far_cell := Vector2i(16, 8)  # farther -- well past SENSE_RADIUS_TILES of near_cell, has real food
+	var field := _field_at(chunk_coord)
+	field.add_leaf(_pixel_for(chunk_coord, far_cell), "cherry", "autumn", 0.0)
+	var found := manager._find_bud_site(chunk_coord, colony, cell)
+	# Not necessarily far_cell itself -- SENSE_RADIUS_TILES's own real reach
+	# (see _has_food_near) means a cell one tile closer than far_cell can
+	# legitimately sense the SAME leaf and win on real distance instead.
+	# The actual property this test cares about: the closer, FOODLESS cell
+	# must never win over one that genuinely has food nearby.
+	assert_false(found == Vector2i(-1, -1), "a real site with food should have been found")
+	assert_false(found == near_cell, "a closer site with no food should lose to a farther one that actually has some")
+
+
+func test_find_bud_site_returns_no_site_when_nothing_qualifies():
+	var cell := Vector2i(8, 8)
+	var colony := _colony_with_mound_at(cell)
+	var chunk_coord := Vector2i(92, 92)
+	manager._ant_colonies[chunk_coord] = colony
+	var found := manager._find_bud_site(chunk_coord, colony, cell)
+	assert_eq(found, Vector2i(-1, -1))
+
+
+func test_find_bud_site_never_returns_a_cell_that_is_already_a_mound():
+	var cell := Vector2i(8, 8)
+	var colony := _colony_with_mound_at(cell)
+	var chunk_coord := Vector2i(93, 93)
+	manager._ant_colonies[chunk_coord] = colony
+	var adjacent := Vector2i(9, 8)  # the real nearest cell -- but already a mound
+	colony._mounds[adjacent] = true
+	colony._population[adjacent] = 5.0
+	var farther := Vector2i(16, 8)  # well past SENSE_RADIUS_TILES of `adjacent`
+	var field := _field_at(chunk_coord)
+	field.add_leaf(_pixel_for(chunk_coord, farther), "cherry", "autumn", 0.0)
+	var found := manager._find_bud_site(chunk_coord, colony, cell)
+	# Not necessarily farther itself -- a cell one tile closer can
+	# legitimately sense the same leaf and win on real distance (see the
+	# identical note in test_find_bud_site_skips_a_foodless_site_for_a_
+	# farther_one_with_food). The actual property this test cares about:
+	# an already-occupied cell must never be the one returned.
+	assert_false(found == Vector2i(-1, -1), "a real site with food should have been found")
+	assert_false(found == adjacent, "an already-occupied cell must never be returned as a bud site")
+
+
+func test_step_ants_buds_a_new_mound_when_overpopulated_and_food_is_nearby():
+	var cell := Vector2i(8, 8)
+	var colony := _colony_with_mound_at(cell)
+	var chunk_coord := Vector2i(94, 94)
+	manager._ant_colonies[chunk_coord] = colony
+	var target := Vector2i(9, 8)
+	_field_at(chunk_coord).add_leaf(_pixel_for(chunk_coord, target), "cherry", "autumn", 0.0)
+
+	var budded := false
+	for i in 200:
+		manager.step_ants(0.1)
+		if colony.mound_cells().size() > 1:
+			budded = true
+			break
+
+	assert_true(budded, "an overpopulated colony with a real nearby site should eventually bud")
+	assert_true(colony.mound_cells().has(target))
+	assert_eq(
+		manager._ant_mound_markers.get(chunk_coord, []).size(), 1,
+		"a real, visible marker should exist for the new mound"
+	)
+
+
+## Never fires for a colony that is not actually overpopulated, even with
+## real food sitting right next door -- budding is gated on
+## is_overpopulated_at, not merely "a valid site happens to exist".
+func test_step_ants_does_not_bud_an_ordinary_colony():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var chunk_coord := Vector2i(95, 95)
+	manager._ant_colonies[chunk_coord] = colony
+	# _ant_colony_with_one_mound only guarantees "at least one" mound, not
+	# exactly one -- the real precondition this test needs is "however
+	# many real mounds exist, that count must not change", not a bare
+	# hardcoded 1.
+	var mounds_before := colony.mound_cells().size()
+	var target := Vector2i((cell.x + 1) % 8, cell.y)
+	if target == cell:
+		pending("this random mound seed collided with the test's own fixed offset")
+		return
+	_field_at(chunk_coord).add_leaf(_pixel_for(chunk_coord, target), "cherry", "autumn", 0.0)
+
+	for i in 200:
+		manager.step_ants(0.1)
+
+	assert_eq(
+		colony.mound_cells().size(), mounds_before,
+		"an ordinary, non-overpopulated colony should never bud"
+	)
 
 
 ## Water, not just food (see docs/concept/soil_fauna.md's own section by

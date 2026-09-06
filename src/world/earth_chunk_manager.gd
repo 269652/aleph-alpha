@@ -7052,6 +7052,19 @@ func crush_millipedes_near(pixel_position: Vector2, momentum_kg_m_s: float) -> b
 	return _crush_markers_near(_millipede_markers, pixel_position, momentum_kg_m_s)
 
 
+## The decomposer/bug-shaped sibling of crush_caterpillars_near/
+## crush_millipedes_near (see docs/concept/soil_fauna.md "Generalized to
+## bugs too" -- asked directly: "a bug should count as a small creature
+## too"). A DecomposerMarker is the identical SHAPE of victim a
+## caterpillar/millipede already is (a real, independently-positioned
+## Node2D), tracked chunk-keyed in _decomposer_markers exactly like
+## _caterpillar_markers/_millipede_markers, so this shares
+## _crush_markers_near's own body directly. Returns whether anything was
+## actually crushed.
+func crush_decomposers_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
+	return _crush_markers_near(_decomposer_markers, pixel_position, momentum_kg_m_s)
+
+
 ## The ant-shaped sibling of crush_caterpillars_near/crush_millipedes_near
 ## (see docs/concept/soil_fauna.md "Generalized to ants too" -- reported
 ## live: "ants are also not crushed when a player is walking over them").
@@ -7430,12 +7443,19 @@ func step_worms(delta_seconds: float) -> void:
 ## cluster trail is already known (see AntColony.has_active_pheromone_
 ## trail), or a wave of blind scouts otherwise (see docs/concept/
 ## soil_fauna.md "Scouting: real search, not omniscient dispatch").
+##
+## Also checks colony.should_bud per mound (see docs/concept/soil_fauna.md
+## "Colony budding") -- independent of the forage roll just below it, a
+## genuinely overpopulated mound can bud on the same tick it also sends a
+## forage wave out, the two are unrelated events.
 func step_ants(delta_seconds: float) -> void:
 	for chunk_coord in _ant_colonies:
 		var colony: AntColony = _ant_colonies[chunk_coord]
 		colony.advance(delta_seconds)
 		var origin: Vector2i = chunk_coord * CHUNK_SIZE
 		for cell in colony.mound_cells():
+			if colony.should_bud(cell):
+				_maybe_bud_ant_colony(chunk_coord, colony, cell)
 			if not colony.should_forage(cell):
 				continue
 			if colony.has_active_pheromone_trail(cell):
@@ -7448,6 +7468,99 @@ func step_ants(delta_seconds: float) -> void:
 		return
 	_ant_moisture_refresh_accumulator = 0.0
 	_refresh_ant_moisture()
+
+
+## The visible half of colony budding: real site selection (distance +
+## food), the pure colony-side split, and a real new AntMoundMarker, in
+## that order. A no-op if no real site qualifies this attempt (see
+## _find_bud_site) -- should_bud's own small per-step chance means this is
+## simply tried again on some future tick, the same "spread across many
+## attempts" reasoning FORAGE_CHANCE's own dispatch already relies on.
+func _maybe_bud_ant_colony(chunk_coord: Vector2i, colony: AntColony, from_cell: Vector2i) -> void:
+	var to_cell := _find_bud_site(chunk_coord, colony, from_cell)
+	if to_cell == Vector2i(-1, -1):
+		return
+	colony.bud_new_mound(from_cell, to_cell)
+	var markers: Array = _ant_mound_markers.get(chunk_coord, [])
+	markers.append(_spawn_ant_mound_marker(colony, chunk_coord, to_cell))
+	_ant_mound_markers[chunk_coord] = markers
+
+
+## The real site-selection half of colony budding (reported live: "they
+## should found based on minimum distance to original mound and food
+## availability within scout radius") -- AntColony.is_valid_mound_site
+## only knows biome/occupancy (pure, world-blind), so the real distance
+## sort and real food check both live here, EarthChunkManager's own job
+## (see is_valid_mound_site's doc comment on the split). Every real
+## candidate cell in the chunk is collected, sorted NEAREST first, then
+## checked for real food in that order, returning the first (so nearest)
+## one that actually has some -- Vector2i(-1, -1) if nothing in the whole
+## chunk qualifies this attempt.
+func _find_bud_site(chunk_coord: Vector2i, colony: AntColony, from_cell: Vector2i) -> Vector2i:
+	var candidates: Array = []
+	for y in CHUNK_SIZE:
+		for x in CHUNK_SIZE:
+			var candidate := Vector2i(x, y)
+			if colony.is_valid_mound_site(candidate):
+				candidates.append(candidate)
+	candidates.sort_custom(
+		func(a: Vector2i, b: Vector2i) -> bool:
+			return (a - from_cell).length_squared() < (b - from_cell).length_squared()
+	)
+	for candidate in candidates:
+		var pixel := (
+			Vector2(chunk_coord * CHUNK_SIZE + candidate) + Vector2(0.5, 0.5)
+		) * float(TerrainRenderer.TILE_SIZE)
+		if _has_food_near(pixel):
+			return candidate
+	return Vector2i(-1, -1)
+
+
+## Whether ANY real, forageable food (leaf litter, grass seed, or a real
+## windfall nut) sits within AntColony.SENSE_RADIUS_TILES of
+## `pixel_position` -- the same "scout radius" a real scout would need to
+## physically wander into range of to notice anything at all (see
+## AntForagerMarker._sense_food_nearby's own identical leaf-then-seed-
+## then-windfall priority query, which this mirrors at the SITE-SELECTION
+## level rather than a live forager's own position). Only whether
+## something is there, not which kind -- a bud site's own future scouts
+## discover that for themselves exactly as any other scout does.
+func _has_food_near(pixel_position: Vector2) -> bool:
+	var sense_radius_px := AntColony.SENSE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
+	if not leaf_litter_near(pixel_position, sense_radius_px).is_empty():
+		return true
+	var sense_radius_tiles := int(ceil(AntColony.SENSE_RADIUS_TILES))
+	var seeds := grass_seeds_near(pixel_position, sense_radius_tiles)
+	seeds = seeds.filter(func(s): return pixel_position.distance_to(s["position"]) <= sense_radius_px)
+	if not seeds.is_empty():
+		return true
+	var fruit := fruit_near(pixel_position, sense_radius_tiles)
+	fruit = fruit.filter(func(f): return pixel_position.distance_to(f["position"]) <= sense_radius_px)
+	fruit = fruit.filter(func(f): return TreeSpecies.is_nut(String(f.get("species", ""))))
+	return not fruit.is_empty()
+
+
+## Shared by _load_chunk's own initial-mound loop and _maybe_bud_ant_
+## colony's single new one -- one real, visible AntMoundMarker per mound
+## cell, positioned at its own tile centre, its illustrated variant seeded
+## from the GLOBAL cell (not the chunk-local one alone, or two different
+## chunks' own local (0,0)-ish mounds would always pick the identical
+## variant -- see IllustratedAntMoundSprite.frame_for), wired to the real
+## colony/cell pair so its own visible size actually grows with the real
+## population living there (see docs/concept/soil_fauna.md "Mound size
+## grows with the colony"). Extracted rather than hand-copied a second
+## time once budding needed the identical construction outside the
+## chunk-load loop.
+func _spawn_ant_mound_marker(colony: AntColony, chunk_coord: Vector2i, mound_cell: Vector2i) -> AntMoundMarker:
+	var marker := AntMoundMarker.new()
+	var global_cell := Vector2i(
+		chunk_coord.x * CHUNK_SIZE + mound_cell.x, chunk_coord.y * CHUNK_SIZE + mound_cell.y
+	)
+	marker.mound_seed = hash(global_cell)
+	marker.position = (Vector2(global_cell) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+	marker.setup(colony, mound_cell)
+	_entities_parent.add_child(marker)
+	return marker
 
 
 ## Water, not just food (see docs/concept/soil_fauna.md's own section by
@@ -9854,27 +9967,11 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# background number (reported live: ants "should be a real gear in the
 	# ecosystem"). Placed at the mound's own tile centre, the same
 	# cell-to-pixel convention _forage_seed_near_mound uses for its own
-	# mound_pixel.
+	# mound_pixel -- see _spawn_ant_mound_marker, shared with colony
+	# budding's own later, single new mound.
 	var mound_markers: Array = []
 	for mound_cell in _ant_colonies[chunk_coord].mound_cells():
-		var marker := AntMoundMarker.new()
-		var global_cell := Vector2i(
-			chunk_coord.x * CHUNK_SIZE + mound_cell.x, chunk_coord.y * CHUNK_SIZE + mound_cell.y
-		)
-		# Which illustrated variant this mound picks (see
-		# IllustratedAntMoundSprite.frame_for) -- the GLOBAL cell, not
-		# mound_cell alone, so two different chunks' own local (0,0)-ish
-		# mounds don't all pick the identical variant.
-		marker.mound_seed = hash(global_cell)
-		marker.position = (Vector2(global_cell) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
-		# Gives this mound its own real colony (LOCAL mound_cell, the same
-		# key every other AntColony accessor uses -- see
-		# _dispatch_ant_forager's identical convention) so its own visible
-		# size actually grows with the real population living there (see
-		# docs/concept/soil_fauna.md "Mound size grows with the colony").
-		marker.setup(_ant_colonies[chunk_coord], mound_cell)
-		_entities_parent.add_child(marker)
-		mound_markers.append(marker)
+		mound_markers.append(_spawn_ant_mound_marker(_ant_colonies[chunk_coord], chunk_coord, mound_cell))
 	_ant_mound_markers[chunk_coord] = mound_markers
 
 	# Fallen-leaf litter (see docs/concept/leaf_litter.md). Empty at

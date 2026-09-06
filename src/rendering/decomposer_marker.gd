@@ -358,10 +358,16 @@ func _step_seeking(delta: float) -> void:
 ## crash on non-DroppedItem members (see git history: that crash was fixed
 ## first and measurably helped, but did not fully explain the reported
 ## collapse on its own -- this scan-scope fix is the rest of it).
-## FORAGEABLE_GROUP_NAME is joined only by a DroppedItem actually holding a
-## TreeSpecies.IDS species, at creation time, so this loop only ever visits
-## real fallen windfall, never a dropped tool, ore chunk, or the far larger
-## set of stones lying around.
+## FORAGEABLE_GROUP_NAME is joined by a DroppedItem actually holding a
+## TreeSpecies.IDS species at creation time (real fallen windfall, never a
+## dropped tool, ore chunk, or the far larger set of stones lying around),
+## and -- since this pass -- by MushroomMarker too (real fungivory, see
+## docs/concept/soil_fauna.md's fungivory follow-up): a mushroom joined
+## this exact group from the moment it was first built (see that class's
+## own doc comment), but this loop's `not (node is DroppedItem)` guard
+## silently excluded it again right afterward, so a decomposer could never
+## actually reach one at all until this fix. Reported live: "when a bug
+## takes a bite."
 func _nearest_food() -> Node2D:
 	var best: Node2D = null
 	var best_effective_distance := SEARCH_RADIUS_PX

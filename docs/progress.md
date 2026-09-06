@@ -9208,9 +9208,38 @@ own background is already transparent) and gained a real
 lands at the same on-screen size the procedural fallback always used,
 not the raw art canvas.
 
+**Crushed/bitten art wired end to end, decomposer fungivory finally
+reachable (`feature/mushroom-crushed-bitten-sprites`).** The user
+delivered real 1:1 crushed/bitten sheets per species incrementally ("some
+are still missing but I'll add while you wire... 1 bite is enough for
+when a bug takes a bite"). Landed in two halves, art-loading first:
+`IllustratedMushroomSprite.crushed_frame_for`/`bitten_frame_for` for the
+3 species delivered so far (black_trumpet/champignon/chanterelle; the
+other 3 fall back to the live look via the same has-or-doesn't gate
+`has_variants` already uses). Then the game-logic half, generalizing
+`EarthwormPatch`'s own `is_corpse` "a corpse is new ground" precedent
+from one cause to two: `WildMushroomPatch.is_corpse`/`corpse_kind` (
+"crushed" or "bitten"), a new `bite(cell)` (a decomposer's single bite,
+no momentum gate), and `MushroomRenderer.sync_markers` now keeping a
+corpse's marker alive across the sync instead of freeing it the instant
+`crush`/`bite` ends its fruiting — closing the exact gap that would have
+made the newly-wired art unreachable in play. Along the way, a real,
+confirmed bug surfaced and got fixed: `MushroomMarker` had joined
+`DroppedItem.FORAGEABLE_GROUP_NAME` since the physicality pass above, but
+`DecomposerMarker._nearest_food`'s own `not (node is DroppedItem)` guard
+silently excluded it again immediately afterward — a decomposer could
+never actually reach a mushroom at all until this pass. See
+[soil_fauna.md's "Mushroom corpses actually linger, and a bug's single
+bite"](concept/soil_fauna.md#mushroom-corpses-actually-linger-and-a-bugs-single-bite-2026-09-06)
+for the full mechanism. Built red-first end to end throughout, merged to
+`main`.
+
 ⬜ No literal host-tree proximity check (mycorrhizal species are
-biome-gated only). No cooking-recipe integration. See the concept doc's
-own "Deliberately not modeled" section for the full list and reasoning.
+biome-gated only). No cooking-recipe integration. No progressive
+multi-bite consumption (only one bitten-art stage exists today, by the
+user's own explicit choice — more stages are a later pass). See the
+concept doc's own "Deliberately not modeled" section for the full list
+and reasoning.
 
 ### Leaf Litter (`concept/leaf_litter.md`)
 
@@ -9587,9 +9616,8 @@ fixes, addressing both halves:
 2. **`AntColony._maybe_refound`** (new, called from `advance`) re-founds
    a mound that DOES still reach a literal 0.0 (dormancy above narrows
    how often this happens, it does not claim to make it impossible) once
-   a real, full founding reserve has genuinely piled back up there — the
-   same standard `_seed_initial_mounds` itself starts every brand-new
-   colony at — resetting it to `STARTING_POPULATION` exactly as a
+   real food has genuinely piled back up there past `REFOUNDING_FOOD_
+   THRESHOLD` — resetting it to `STARTING_POPULATION` exactly as a
    brand-new mound would. Still reachable even for an "extinct" mound:
    `EarthChunkManager._dispatch_forager`'s own `active_forager_cap_at`
    floors at 1 forager regardless of population, so a lone forager keeps
@@ -9603,6 +9631,74 @@ works), deleted once its job was done. 9 new tests in `test_ant_colony.gd`
 production-wiring test in `test_earth_chunk_manager.gd` mirroring `test_
 stepping_ants_drives_capacity_from_the_live_weather`'s own shape exactly.
 Full writeup: [soil_fauna.md](concept/soil_fauna.md#winter-dormancy-and-a-mound-that-can-come-back-from-zero-2026-09-06).
+
+✅ **Follow-up (2026-09-06, same day): the re-founding threshold itself
+was too slow to ever be observed working.** Reported live: "when an ant
+mound collapses and hits 0 population then it stays at 0 population even
+if new ants enter or bring food. the food stock correctly increments,
+but the population stays zero." Root-caused directly with another
+throwaway probe, not a logic bug: gating re-founding on the original
+full founding reserve (45.0 units) took over 22 REAL MINUTES to trigger
+even under a perfectly successful lone-forager trip every 30 real
+seconds. New `AntColony.REFOUNDING_FOOD_THRESHOLD`
+(`FOOD_PER_SUCCESSFUL_FORAGE * 3.0`) replaces that gate — 3 successful
+trips' worth, real repeated evidence rather than either a single fluke
+or a whole mature colony's own reserve, mirroring `CLUSTER_THRESHOLD`'s
+identical reasoning. 2 new tests in `test_ant_colony.gd` (91 total, all
+green); one pre-existing test's own isolation loop count reduced (20 → 2
+successes) so it stays isolated to proving ordinary growth math alone
+never recovers, not incidentally also crossing the new, smaller
+threshold. Full writeup: same soil_fauna.md section, follow-up
+paragraph.
+
+✅ **Colony budding: overpopulation founds a new mound (2026-09-06)** —
+reported live: "ant mounds should have a maximum capacity and upon
+overpopulation half of the colony will found a new mound hatch a new
+queen and grow the new colony again... they should found based on
+minimum distance to original mound and food availability within scout
+radius." No new "maximum capacity" concept needed:
+`AntPopulationModel.MAX_REFERENCE_POPULATION` was already named "the
+ceiling `capacity()` can ever produce", so `AntColony.is_overpopulated_
+at(cell)` is simply `population_at(cell) >= MAX_REFERENCE_POPULATION`.
+1. **`AntColony.bud_new_mound(from_cell, to_cell)`** (new) — "half of the
+   colony": both population AND stored food reserve, so the new colony
+   is not born starving and the parent is not left oddly outsized for
+   its own now-halved population. A no-op at an invalid target.
+2. **`AntColony.should_bud(cell)`** (new) — gated on `is_overpopulated_
+   at`, then a small per-step chance (`BUD_CHANCE`, mirroring `FORAGE_
+   CHANCE`/`MOUND_CHANCE`'s own "ongoing background activity, not a
+   guaranteed burst" reasoning) — keeps the real site-search naturally
+   rare even while a colony sits at its own maximum for a long stretch.
+3. **`AntColony.is_valid_mound_site(cell)`** (new) — the pure, world-blind
+   half of site selection (real soil + not already occupied, bounds-
+   checked): the same "AntColony owns the abstract economy, EarthChunk
+   Manager owns the real ground" split every other mound accessor
+   already keeps.
+4. **`EarthChunkManager._find_bud_site(chunk_coord, colony, from_cell)`**
+   (new) — the real half: every valid candidate in the chunk, sorted
+   NEAREST-first, checked in that order via new `_has_food_near` (leaf
+   litter/grass seed/real windfall nut within `AntColony.SENSE_RADIUS_
+   TILES` — the literal "scout radius" a real scout would need to
+   physically wander into range of, mirroring `AntForagerMarker._sense_
+   food_nearby`'s own priority query), returning the first (so nearest)
+   real candidate that actually has food nearby — the literal "minimum
+   distance... and food availability within scout radius" ask.
+5. **Wired into `step_ants`**, independently of the ordinary forage roll
+   (a mound can bud AND forage on the same tick). A successful bud
+   spawns a real, visible `AntMoundMarker` via new `_spawn_ant_mound_
+   marker` — extracted from `_load_chunk`'s own original inline
+   marker-creation loop (a real refactor, not a second hand-copied
+   construction) so budding's one new mound gets the identical
+   illustrated-variant seeding every mound has had since chunk-load.
+**Deliberately NOT capped by `AntColony.MAX_MOUNDS`** (that constant
+governs initial seeding density only — budding is a separate, later-game
+growth mechanic allowed to exceed it, named explicitly rather than
+silently gated into rarely firing). No cross-chunk budding (a real,
+named scope cut — `_find_bud_site` only searches the mound's own chunk).
+12 new tests in `test_earth_chunk_manager.gd`, 12 in `test_ant_colony.gd`
+(a mix of `is_overpopulated_at`/`is_valid_mound_site`/`bud_new_mound`/
+`should_bud` unit tests and a bounds-safety regression), all green. Full
+writeup: [soil_fauna.md](concept/soil_fauna.md#colony-budding-overpopulation-founds-a-new-mound-2026-09-06).
 
 ⬜ **Still no litter-density accumulation or soil-fertility feedback, and
 no ground-covering visual effect** (unchanged scope cut — see
@@ -13781,16 +13877,40 @@ accepted nothing (free in the common case), and otherwise throttles at
 invented number, since that's the actual cadence the underlying
 production/market data can even change on.
 
+✅ **In-game HUD display of Karma** (2026-09-06, asked directly: "Karma
+should be displayed somewhere in a UI with golden and red accents for
+positive vs negative karma") — a themed corner readout, `World._build_
+karma_display`/`_update_karma_display`, just under the minimap, top-right
+(`PanelContainer` on `UiTheme.panel_stylebox`, not a bare `Label` — see
+`concept/hud.md` pillar 1). Two pure, tested halves carry the actual
+decision (`test_world_hud.gd`): `World.karma_display_text(karma)` — a
+signed integer, `"Karma: +3"`/`"Karma: -5"`/`"Karma: 0"` — and `World.
+karma_display_color(karma)` — the new `UiTheme.NEGATIVE` (a warm,
+saturated red, pinned distinct from `ACCENT`'s gold by `test_ui_theme.
+gd`) for negative, the existing `UiTheme.ACCENT` (gold) for positive,
+`UiTheme.TEXT` (neutral) at exactly zero. Refreshed every frame from the
+live `Player.karma` — the same per-frame-poll pattern every other HUD
+readout already uses; `Player` has no change signal for this, and none
+was added. **Deliberately built in the live HUD, not the companion
+server's Character Sheet web page** the concept doc's own design pillar
+originally anticipated: a display only checked from a separate browser
+tab would not give "instant" feedback for the moment a crush actually
+happens during play — see `karma_and_luck.md`'s own note on the
+divergence. 6 new tests (`test_world_hud.gd` ×3, `test_ui_theme.gd` ×1,
+plus the two colour/text pins) all green, zero implementation changes
+needed afterward.
+
 ⬜ **Deliberately out of scope, named rather than silently assumed done**
-(see the concept doc's own Status list): a Character Sheet display of
-Karma/Luck; a player-facing interaction to actually call `QuestLog.
-accept`/`abandon` (dialogue or otherwise — `QuestLog` itself is real,
-tested, engine-free logic with no UI consumer yet, same as `quest.gd`);
-the `FishingMinigame`/`KnappingModel`/`RarityTier` Luck hooks named above;
-every other part of `concept/quests.md`'s fuller vision (settlement
-quorum, safety/social need sources, village endangerment, rewards/
-currency transactions) that was already unbuilt before this pass and
-stays exactly as unbuilt now.
+(see the concept doc's own Status list): a *second*, Character-Sheet
+(companion server) view of the same Karma/Luck numbers — the HUD above
+covers the request that prompted this; a player-facing interaction to
+actually call `QuestLog.accept`/`abandon` (dialogue or otherwise —
+`QuestLog` itself is real, tested, engine-free logic with no UI consumer
+yet, same as `quest.gd`); the `FishingMinigame`/`KnappingModel`/
+`RarityTier` Luck hooks named above; every other part of `concept/
+quests.md`'s fuller vision (settlement quorum, safety/social need
+sources, village endangerment, rewards/currency transactions) that was
+already unbuilt before this pass and stays exactly as unbuilt now.
 
 ### Millipedes: a dedicated autumn leaf-litter decomposer (`concept/soil_fauna.md`, new this pass)
 
@@ -13888,6 +14008,38 @@ never reaches a different mound's, since the two now live under
 different dictionary keys), plus `test_world_crush_wiring.gd`'s existing
 source-contract tests all extended to cover the fourth call site (16/16
 green). Full writeup: [soil_fauna.md](concept/soil_fauna.md#generalized-to-ants-too-2026-09-06).
+
+✅ **Bugs generalized into the crush pass too (2026-09-06)** — asked
+directly, alongside the mushroom/ant Karma work below: "a bug should
+count as a small creature too." `DecomposerMarker` (the ambient carrion/
+fruit/leaf-litter forager, species `"ant"` or `"bug"`) was the one
+remaining victim shape `CrushMechanic`'s per-frame pass had not reached.
+New `EarthChunkManager.crush_decomposers_near` is the fifth
+`CrushMechanic`-driven detection side — unlike `crush_ants_near`, a
+`DecomposerMarker` IS tracked chunk-keyed (`_decomposer_markers`, the
+same shape `_caterpillar_markers`/`_millipede_markers` already are), so
+this one shares `_crush_markers_near`'s own body directly rather than a
+fifth hand-copied scan. Wired into `World._client_process` identically
+to the other four and charges the same `Karma.WORM_OR_CATERPILLAR_
+CRUSH_PENALTY`. 6 new tests in `test_earth_chunk_manager.gd`, plus
+`test_world_crush_wiring.gd`'s existing source-contract tests extended
+to cover the fifth call site (17/17 green). Full writeup:
+[soil_fauna.md](concept/soil_fauna.md#generalized-to-bugs-too-2026-09-06).
+
+✅ **Mushroom crush now costs Karma too (reversal, 2026-09-06)** — asked
+directly, as part of "instant karma feedback": a mushroom underfoot
+should cost `-1 Karma` the same as a bug/ant/caterpillar. Originally
+shipped exempt ("a mushroom is a fungus, not an animal" — see
+`concept/soil_fauna.md`'s "Generalized past animals: mushrooms and
+walnuts"); both `crush_mushroom_at` call sites in `World._client_process`
+are now wrapped in the identical `if ...: apply_karma_delta(-Karma.
+WORM_OR_CATERPILLAR_CRUSH_PENALTY)` guard every other crush call already
+has. A walnut (a plant seed, not a fungus) is unaffected and stays
+exempt. `test_world_crush_wiring.gd`'s source-contract test for the old
+"never applies Karma" behavior is replaced with its opposite; the
+"every crush call site applies the penalty" count moves from 10 to 12
+(17/17 green). `concept/mushrooms.md` and `concept/karma_and_luck.md`
+updated to match.
 
 ### Material DSL: fruit composition → crush → nutrients (`concept/material_dsl.md`, new this pass)
 

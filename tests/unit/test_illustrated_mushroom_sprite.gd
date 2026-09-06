@@ -112,32 +112,73 @@ func test_marker_scale_produces_the_procedural_mushrooms_own_world_width():
 		)
 
 
-# -- bitten variants (see MushroomBiting.gd, docs/concept/mushrooms.md's ----
-# -- fungivory section) ------------------------------------------------------
-#
-# Reported: "bugs should forage mushrooms... render their
-# mushroom_bitten_1.png in world and inventory". Only 3 of 6 species have
-# real bitten art delivered so far -- the has-or-doesn't fallback every
-# other optional illustrated-art seam in this codebase already uses (see
-# has_variants/frame_for above).
+# -- crushed/bitten variants (see docs/concept/mushrooms.md's "Crushed
+# underfoot" / soil_fauna.md's decomposer-bite follow-up) -- reported
+# live: real 1:1 crushed/bitten counterparts for each specimen, delivered
+# incrementally (some species still missing as of this pass -- has_X()
+# gating covers exactly this the same way has_variants() already does).
 
-const _BITTEN_SPECIES_IDS := ["black_trumpet", "champignon", "chanterelle"]
-const _UNBITTEN_SPECIES_IDS := ["fly_agaric", "psylo", "parasol"]
+const _SPECIES_WITH_CRUSHED_AND_BITTEN_ART := ["black_trumpet", "champignon", "chanterelle"]
+const _SPECIES_WITHOUT_CRUSHED_OR_BITTEN_ART_YET := ["fly_agaric", "psylo", "parasol"]
 
 
-func test_has_bitten_variant_for_the_three_delivered_species():
-	for id in _BITTEN_SPECIES_IDS:
+func test_has_crushed_variant_for_delivered_species():
+	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
+		assert_true(sprite.has_crushed_variant(id), "%s should have real crushed art" % id)
+
+
+func test_no_crushed_variant_yet_for_species_still_missing_it():
+	for id in _SPECIES_WITHOUT_CRUSHED_OR_BITTEN_ART_YET:
+		assert_false(sprite.has_crushed_variant(id), "%s should not claim crushed art it doesn't have" % id)
+		assert_null(sprite.crushed_frame_for(id, 0))
+
+
+func test_crushed_frame_for_returns_a_real_non_blank_texture():
+	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
+		var image: Image = sprite.crushed_frame_for(id, 0).get_image()
+		var has_opaque_pixel := false
+		for y in image.get_height():
+			for x in image.get_width():
+				if image.get_pixel(x, y).a > 0.5:
+					has_opaque_pixel = true
+					break
+			if has_opaque_pixel:
+				break
+		assert_true(has_opaque_pixel, "%s crushed frame 0 should draw a real illustration" % id)
+
+
+func test_crushed_frame_for_has_no_leftover_magenta():
+	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
+		var image: Image = sprite.crushed_frame_for(id, 0).get_image()
+		for y in image.get_height():
+			for x in image.get_width():
+				var c := image.get_pixel(x, y)
+				if c.a <= 0.5:
+					continue
+				assert_false(
+					c.r > 0.85 and c.b > 0.85 and c.g < 0.3,
+					"%s: an opaque crushed pixel should never still read as magenta background" % id
+				)
+
+
+func test_crushed_frame_for_is_deterministic_per_seed():
+	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
+		assert_eq(sprite.crushed_frame_for(id, 42), sprite.crushed_frame_for(id, 42))
+
+
+func test_has_bitten_variant_for_delivered_species():
+	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
 		assert_true(sprite.has_bitten_variant(id), "%s should have real bitten art" % id)
 
 
-func test_no_bitten_variant_yet_for_the_other_three_species():
-	for id in _UNBITTEN_SPECIES_IDS:
-		assert_false(sprite.has_bitten_variant(id), "%s should not claim bitten art yet" % id)
-		assert_null(sprite.bitten_frame_for(id, 1))
+func test_no_bitten_variant_yet_for_species_still_missing_it():
+	for id in _SPECIES_WITHOUT_CRUSHED_OR_BITTEN_ART_YET:
+		assert_false(sprite.has_bitten_variant(id), "%s should not claim bitten art it doesn't have" % id)
+		assert_null(sprite.bitten_frame_for(id, 0))
 
 
 func test_bitten_frame_for_returns_a_real_non_blank_texture():
-	for id in _BITTEN_SPECIES_IDS:
+	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
 		var image: Image = sprite.bitten_frame_for(id, 0).get_image()
 		var has_opaque_pixel := false
 		for y in image.get_height():
@@ -147,11 +188,11 @@ func test_bitten_frame_for_returns_a_real_non_blank_texture():
 					break
 			if has_opaque_pixel:
 				break
-		assert_true(has_opaque_pixel, "%s bitten frame 0 should draw a real illustration, not a blank cell" % id)
+		assert_true(has_opaque_pixel, "%s bitten frame 0 should draw a real illustration" % id)
 
 
 func test_bitten_frame_for_has_no_leftover_magenta():
-	for id in _BITTEN_SPECIES_IDS:
+	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
 		var image: Image = sprite.bitten_frame_for(id, 0).get_image()
 		for y in image.get_height():
 			for x in image.get_width():
@@ -160,10 +201,22 @@ func test_bitten_frame_for_has_no_leftover_magenta():
 					continue
 				assert_false(
 					c.r > 0.85 and c.b > 0.85 and c.g < 0.3,
-					"%s bitten: an opaque pixel should never still read as magenta background" % id
+					"%s: an opaque bitten pixel should never still read as magenta background" % id
 				)
 
 
 func test_bitten_frame_for_is_deterministic_per_seed():
-	for id in _BITTEN_SPECIES_IDS:
+	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
 		assert_eq(sprite.bitten_frame_for(id, 42), sprite.bitten_frame_for(id, 42))
+
+
+## The crushed/bitten look must actually differ from the normal look --
+## a caller that got the wrong sheet by mistake would still pass every
+## other test above.
+func test_crushed_and_bitten_frames_differ_from_the_normal_frame():
+	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
+		var normal: PackedByteArray = sprite.frame_for(id, 0).get_image().get_data()
+		var crushed: PackedByteArray = sprite.crushed_frame_for(id, 0).get_image().get_data()
+		var bitten: PackedByteArray = sprite.bitten_frame_for(id, 0).get_image().get_data()
+		assert_ne(normal, crushed, "%s crushed should look different from normal" % id)
+		assert_ne(normal, bitten, "%s bitten should look different from normal" % id)

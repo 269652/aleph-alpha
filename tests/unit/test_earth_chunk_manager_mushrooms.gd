@@ -122,6 +122,11 @@ func _pixel_position_for(tile: Vector2i) -> Vector2:
 	return Vector2((tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE)
 
 
+## Reported live, art delivered: crushed underfoot now leaves a lingering
+## corpse rather than the site going bare instantly (see docs/concept/
+## soil_fauna.md's "A corpse is new ground", WildMushroomPatch.is_corpse) --
+## this test used to assert the OLD marker-just-vanishes behaviour;
+## updated to assert the new one instead of merely dropping the coverage.
 func test_crush_mushroom_at_removes_a_fruiting_marker():
 	manager._load_chunk(_berlin_chunk)
 	var sim: WildMushroomPatch = manager._mushroom_sims[_berlin_chunk]
@@ -138,8 +143,14 @@ func test_crush_mushroom_at_removes_a_fruiting_marker():
 	)
 
 	assert_false(sim.has_fruiting(cell))
-	assert_false(manager._mushroom_markers[_berlin_chunk].has(cell))
+	# The OLD live marker is freed and replaced -- but a crushed corpse now
+	# lingers at the same cell rather than the site going bare instantly.
 	assert_true(marker.is_queued_for_deletion())
+	assert_true(
+		manager._mushroom_markers[_berlin_chunk].has(cell),
+		"a crushed corpse should still have a marker, not vanish outright"
+	)
+	assert_eq(manager._mushroom_markers[_berlin_chunk][cell].corpse_kind, "crushed")
 
 
 func test_crush_mushroom_at_does_nothing_below_threshold():
