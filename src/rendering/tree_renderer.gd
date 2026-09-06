@@ -214,11 +214,17 @@ func _build_tree_node(position: Vector2, age_seconds: float = INF) -> ChoppableT
 	# trees are already mature -- they predate the session.
 	body.growth_scale = TreeGrowth.new().scale_at(age_seconds)
 	# The canopy art is authored ProceduralTreeSprite.DETAIL_MULTIPLIER times
-	# oversized for pixel detail; scaling it back down is what keeps the
-	# tree's world footprint unchanged (see docs/concept/art_resolution.md).
+	# oversized for pixel detail; scaling it back down by SPRITE_SCALE alone
+	# would draw the tree at exactly its world footprint (see docs/concept/
+	# art_resolution.md). VISUAL_SCALE then draws it bigger than that ON
+	# PURPOSE (see its own doc comment, on ProceduralTreeSprite alongside
+	# SPRITE_SCALE) -- the world footprint, collision and forest spacing are
+	# untouched, only how big the sprite draws.
 	# NOT ArtResolution.SPRITE_SCALE -- trees use their own, larger,
 	# tree-specific multiplier now (see that constant's own doc comment).
-	sprite.scale = Vector2.ONE * ProceduralTreeSprite.SPRITE_SCALE
+	sprite.scale = (
+		Vector2.ONE * ProceduralTreeSprite.SPRITE_SCALE * ProceduralTreeSprite.VISUAL_SCALE
+	)
 	# Anchor the tree at the FOOT of its trunk rather than its middle, by
 	# drawing the canopy above the node's origin. Y-sorting compares node
 	# origins, so a centre-anchored tree sorts as though it stood where its
