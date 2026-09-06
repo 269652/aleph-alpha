@@ -282,6 +282,101 @@ func test_caps_sparrow_count_for_a_very_large_population():
 	assert_gt(sparrows, 0)
 
 
+# -- reconciling bird markers against a population that grows AFTER spawn ---
+#
+# Robin/sparrow food density (worm burrows, ground-seed cells) keeps changing
+# while a chunk stays loaded -- see EcosystemSimulation.update_worm_density/
+# update_seed_density. Robin's own signal (worm burrows) is a structural
+# feature already in place the instant a chunk loads, so it never notices
+# this gap; sparrow's (ground-seed cells) is always EXACTLY zero at that same
+# instant and only rises over several real minutes of shedding (see
+# SparrowPopulationModel/TallGrass.shed_seed) -- reported live as 48 robin
+# sightings against 0 sparrow, ever, over several real minutes near spawn.
+# spawn_ambient_flyers only ever promotes population into markers ONCE, at
+# load, so a species whose population is still zero at that one instant can
+# never get a marker for the rest of that chunk's loaded lifetime without
+# this reconciliation -- mirroring how CreatureRenderer's own creature/fish
+# markers already get periodically re-promoted (see EarthChunkManager.
+# _refresh_creatures).
+
+
+func test_reconcile_adds_sparrows_once_population_rises_after_spawn():
+	var chunk := _make_chunk("grassland")
+	# The exact reported bug: at spawn time the population is still zero, so
+	# nothing sparrow-shaped exists yet.
+	var existing := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 0.0, 0.0
+	)
+	for flyer in existing:
+		assert_ne(flyer.species, "sparrow")
+
+	# The chunk never reloads -- only its aggregate population changed, the
+	# same "still-loaded, population moved" case _refresh_creatures already
+	# handles for herbivores/predators/fish.
+	var reconciled := renderer.reconcile_bird_markers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", existing, 0.0, 3.2
+	)
+	var sparrows := 0
+	for flyer in reconciled:
+		if flyer.species == "sparrow":
+			sparrows += 1
+	assert_eq(sparrows, 3)
+
+
+func test_reconcile_removes_robins_as_population_falls():
+	var chunk := _make_chunk("grassland")
+	var existing := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 4.0, 0.0
+	)
+	var reconciled := renderer.reconcile_bird_markers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", existing, 0.0, 0.0
+	)
+	for flyer in reconciled:
+		assert_ne(flyer.species, "robin")
+
+
+func test_reconcile_leaves_butterflies_and_bees_untouched():
+	var chunk := _make_chunk("grassland")
+	var existing := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 0.0, 0.0
+	)
+	var before_non_birds: Array = []
+	for flyer in existing:
+		if flyer.species != "robin" and flyer.species != "sparrow":
+			before_non_birds.append(flyer)
+	assert_gt(before_non_birds.size(), 0, "the fixture chunk should have spawned some butterflies/bees")
+
+	var reconciled := renderer.reconcile_bird_markers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", existing, 2.0, 2.0
+	)
+	var after_non_birds: Array = []
+	for flyer in reconciled:
+		if flyer.species != "robin" and flyer.species != "sparrow":
+			after_non_birds.append(flyer)
+	assert_eq(after_non_birds, before_non_birds)
+
+
+func test_reconcile_keeps_the_same_marker_instances_rather_than_duplicating_them():
+	var chunk := _make_chunk("grassland")
+	var existing := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 2.0, 0.0
+	)
+	var reconciled := renderer.reconcile_bird_markers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", existing, 2.0, 0.0
+	)
+	var robins := 0
+	for flyer in reconciled:
+		if flyer.species == "robin":
+			robins += 1
+	assert_eq(robins, 2, "population unchanged -- must not add extras or drop the existing pair")
+	for flyer in existing:
+		if flyer.species == "robin":
+			assert_true(
+				reconciled.has(flyer),
+				"an unchanged population must keep the SAME marker (in-place, no blink-and-reappear)"
+			)
+
+
 func test_positions_are_deterministic_for_the_same_inputs():
 	var chunk := _make_chunk("grassland")
 	var first := renderer.spawn_ambient_flyers(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland")
