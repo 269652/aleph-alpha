@@ -72,9 +72,13 @@ func get_hover_actions() -> Array:
 ## only for either kind). Drops every yielded item stack into the world,
 ## marks the underlying Strata cell as a permanent tunnel, and frees the
 ## node -- the exact MinableOre contract, plus the Strata write-back.
-func mine(pickaxe_power: float) -> void:
+## `luck` is the handler's Player.luck() at the moment of the swing (see
+## docs/concept/karma_and_luck.md), forwarded straight through to
+## OreYield.yields -- 0.0 for neutral karma is byte-identical to before this
+## parameter existed.
+func mine(pickaxe_power: float, luck: float = 0.0) -> void:
 	var drops: Array = (
-		_ore_yield.yields(ore_type, pickaxe_power, ore_seed) if kind == Strata.KIND_ORE
+		_ore_yield.yields(ore_type, pickaxe_power, ore_seed, luck) if kind == Strata.KIND_ORE
 		else [{"item_id": "stone", "count": STONE_PER_SOLID_MINE}]
 	)
 	var offset := Vector2.ZERO

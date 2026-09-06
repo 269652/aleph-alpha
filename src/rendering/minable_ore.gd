@@ -49,9 +49,13 @@ func get_hover_actions() -> Array:
 
 ## Mines the node with a pickaxe of `pickaxe_power` (0 = bare hands, stone
 ## only). Drops every yielded item stack into the world and frees the node.
-func mine(pickaxe_power: float) -> void:
+## `luck` is the handler's Player.luck() at the moment of the swing (see
+## docs/concept/karma_and_luck.md), forwarded straight through to
+## OreYield.yields -- 0.0 for neutral karma is byte-identical to before this
+## parameter existed.
+func mine(pickaxe_power: float, luck: float = 0.0) -> void:
 	var offset := Vector2.ZERO
-	for drop in _ore_yield.yields(ore_type, pickaxe_power, ore_seed):
+	for drop in _ore_yield.yields(ore_type, pickaxe_power, ore_seed, luck):
 		WorldItemBus.item_dropped.emit(_stack_for(drop), position + offset)
 		offset += Vector2(6, 4)
 	queue_free()

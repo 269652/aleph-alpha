@@ -2242,7 +2242,7 @@ func _smash_step() -> void:
 	for index in _melee_attack.targets_in_range(position, positions, ATTACK_RANGE):
 		var node = stones[index]
 		if node.has_method("mine"):
-			node.mine(pickaxe_power)
+			node.mine(pickaxe_power, luck())
 		elif node.has_method("smash"):
 			node.smash(carrying_rock)
 

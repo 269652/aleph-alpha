@@ -38,6 +38,23 @@ func test_mining_with_a_pickaxe_yields_stone_plus_ore():
 	assert_true(ids.has("iron_ore"))
 
 
+## Luck (see docs/concept/karma_and_luck.md) forwards through mine() to
+## OreYield.yields() exactly the way pickaxe_power already does -- pinned
+## against this ore_seed's own known-shifted result (seed 7, power 3.0: 1
+## iron_ore at neutral luck, 3 at full good luck; see OreYield's own luck
+## tests for the general property, this just proves mine() doesn't drop the
+## argument on the floor).
+func test_mining_forwards_luck_to_ore_yield():
+	watch_signals(WorldItemBus)
+	ore.mine(3.0, 1.0)
+	var iron_ore_count := 0
+	for i in get_signal_emit_count(WorldItemBus, "item_dropped"):
+		var stack = get_signal_parameters(WorldItemBus, "item_dropped", i)[0]
+		if stack.item.id == "iron_ore":
+			iron_ore_count = stack.count
+	assert_eq(iron_ore_count, 3)
+
+
 # -- hover tooltip: name + available actions ---------------------------------
 
 ## The display name is the actual yielded item's name (via ItemCatalog),

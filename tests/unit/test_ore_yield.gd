@@ -75,3 +75,70 @@ func test_ore_count_respects_max_scaling_constant():
 func test_stone_count_is_pinned_constant():
 	var drops := oy.yields("iron", 2.0, 1)
 	assert_eq(_total_of(drops, "stone"), OreYield.STONE_PER_MINE)
+
+
+# --- Luck (see docs/concept/karma_and_luck.md) ------------------------------
+#
+# Luck nudges the existing extra-ore roll's own position within its already-
+# tuned [0, span] range, never the guaranteed base yield -- bad luck can only
+# make BONUS ore rarer, never take away the ore a swing already earned.
+
+
+## At zero luck (a neutral-karma character), yields must behave exactly as
+## before this parameter existed -- the same "byte-identical with no
+## investment" guarantee Taming.break_free_chance's luck parameter has.
+func test_yields_is_unchanged_with_zero_luck():
+	for s in range(0, 60):
+		assert_eq(
+			oy.yields("iron", 3.0, s, 0.0),
+			oy.yields("iron", 3.0, s),
+			"seed %d should be unaffected by an explicit zero luck" % s
+		)
+
+
+## Good luck can only ever push the extra-ore roll UP from its zero-luck
+## result, never down -- the roll's position within its own range shifts
+## toward the top, it never gets reshuffled to a worse draw.
+func test_good_luck_never_reduces_the_extra_ore_roll():
+	for s in range(0, 60):
+		var neutral := _total_of(oy.yields("iron", 3.0, s, 0.0), "iron_ore")
+		var lucky := _total_of(oy.yields("iron", 3.0, s, 1.0), "iron_ore")
+		assert_gte(lucky, neutral, "good luck should never yield less ore at seed %d" % s)
+
+
+## Symmetric: bad luck can only ever push the roll DOWN, never up.
+func test_bad_luck_never_increases_the_extra_ore_roll():
+	for s in range(0, 60):
+		var neutral := _total_of(oy.yields("iron", 3.0, s, 0.0), "iron_ore")
+		var unlucky := _total_of(oy.yields("iron", 3.0, s, -1.0), "iron_ore")
+		assert_lte(unlucky, neutral, "bad luck should never yield more ore at seed %d" % s)
+
+
+## Luck has to actually DO something, not just be a no-op bounds clamp --
+## across enough seeds, full good luck must beat neutral at least once.
+func test_good_luck_sometimes_actually_increases_the_extra_ore_roll():
+	var any_increase := false
+	for s in range(0, 60):
+		var neutral := _total_of(oy.yields("iron", 3.0, s, 0.0), "iron_ore")
+		var lucky := _total_of(oy.yields("iron", 3.0, s, 1.0), "iron_ore")
+		if lucky > neutral:
+			any_increase = true
+			break
+	assert_true(any_increase, "full good luck never once increased the roll across 60 seeds")
+
+
+## However far luck pushes the roll, the guaranteed base ore a swing already
+## earned is never taken away, and the ceiling this power level already
+## pins is never exceeded either -- luck only moves the roll WITHIN the
+## already-tested range, it cannot widen it.
+func test_luck_never_pushes_ore_count_out_of_the_pinned_range():
+	for luck in [-1.0, -0.5, 0.0, 0.5, 1.0]:
+		for s in range(0, 100):
+			var drops := oy.yields("iron", 3.0, s, luck)
+			var n := _total_of(drops, "iron_ore")
+			assert_between(
+				n,
+				OreYield.BASE_ORE,
+				OreYield.BASE_ORE + int(ceil(3.0 * OreYield.ORE_PER_POWER)),
+				"ore count out of pinned range at luck %.1f, seed %d" % [luck, s]
+			)
