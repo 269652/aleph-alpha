@@ -213,6 +213,22 @@ func nearest_leaf_near(pos: Vector2, radius: float) -> Dictionary:
 	return {"position": leaf.position, "species": leaf.species, "season": leaf.season}
 
 
+## Every leaf within `radius` of `pos`, each as {position, species, season}
+## -- the plural counterpart nearest_leaf_near never had (see that
+## function's own doc comment: it only ever tracks the single closest
+## match). Exists so a caller with more than one real candidate to choose
+## among (see PheromoneField.best_candidate_index, and
+## EarthChunkManager._forage_leaf_near_mound which is the concrete reason
+## this was added) can bias that choice toward a known-good trail instead
+## of being limited to whichever leaf happens to be geometrically nearest.
+func leaves_near(pos: Vector2, radius: float) -> Array[Dictionary]:
+	var found: Array[Dictionary] = []
+	for leaf in _leaves:
+		if leaf.position.distance_to(pos) <= radius:
+			found.append({"position": leaf.position, "species": leaf.species, "season": leaf.season})
+	return found
+
+
 ## Removes the leaf standing at `pos` (see CONSUME_TOLERANCE_PX), returning
 ## whether one was actually there -- the mutation counterpart of
 ## nearest_leaf_near, mirroring take_fruit_at/take_seed_at's identical

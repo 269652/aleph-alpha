@@ -9079,7 +9079,7 @@ real arrival, correct for the ground side, but nothing ever stood in for
 it visually on the way back — only the ant's own body switched to its
 carry pose). Fixed by threading the picked-up leaf's own species/season
 through from `_forage_leaf_near_mound`'s own dispatch (already known
-there, from the same `nearest_leaf_litter_near` call that found the
+there, from the same leaf-near query that found the
 target position — `EarthChunkManager._dispatch_ant_forager` gained two
 new optional `leaf_species`/`leaf_season` params, defaulted `""` for
 seed/windfall trips) to `AntForagerMarker.carried_leaf_species`/
@@ -9097,6 +9097,37 @@ ambient ants/bugs are unchanged. 31/31 green in `test_ant_forager_
 marker.gd`, all pre-existing leaf-dispatch coverage in
 `test_earth_chunk_manager.gd` still green. Full writeup: `soil_fauna.md`'s
 own follow-up note on the same entry.
+
+✅ **Leaf foraging now recruits toward a known pheromone trail, same as
+seed/windfall (2026-09-06, same day)** — reported live: "ants go straight
+to the next leaf when moving out the mound ... they should either explore
+randomly or follow pheromones." The named gap two entries above
+("Pheromone-biased recruitment toward a known-good leaf source is a real,
+separable follow-up left undone") was the exact cause: `nearest_leaf_
+litter_near` only ever reported the SINGLE closest leaf, so there was
+never more than one candidate for a trail to bias a choice among — every
+trip beelined to whichever leaf happened to be geometrically nearest,
+trip after trip. New `LeafLitterField.leaves_near`/`EarthChunkManager.
+leaf_litter_near` are the missing plural query (mirrors `nearest_leaf_
+near`/`nearest_leaf_litter_near`'s own radius contract exactly, just
+collecting every match instead of the single best one; those two are
+UNTOUCHED, still used by `DecomposerMarker`'s own single-leaf in-place
+eating). `_forage_leaf_near_mound` now mirrors `_forage_seed_near_mound`/
+`_forage_windfall_near_mound`'s shape exactly, including `PheromoneField.
+best_candidate_index` — a real, previously-successful leaf source's own
+trail can now outweigh a marginally closer, never-visited one. With no
+trail yet, this still reduces to pure nearest-candidate selection, same
+as before. Deliberately NOT built: a genuine random-explore/wander phase
+before any target is known at all — every forage kind (seed, windfall,
+leaf) is architected around the colony already having found a real
+candidate before ever dispatching a forager (`AntForageBehavior` has no
+SEEKING phase for any of them, by original design), so true "wanders
+with nothing known yet" scouting would be a materially bigger,
+cross-cutting change to that shared architecture, not a leaf-specific
+tweak — named as a real, separate follow-up rather than attempted here.
+61/61 green across `test_leaf_litter_field.gd`/`test_earth_chunk_
+manager.gd`/`test_ant_forager_marker.gd`'s leaf-related coverage. Full
+writeup: `soil_fauna.md`'s own second follow-up note on the same entry.
 
 ⬜ **Still no litter-density accumulation or soil-fertility feedback, and
 no ground-covering visual effect** (unchanged scope cut — see

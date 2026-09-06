@@ -7040,6 +7040,25 @@ func nearest_leaf_litter_near(pixel_position: Vector2, radius_px: float) -> Dict
 	return best
 
 
+## Plural counterpart of nearest_leaf_litter_near -- every leaf within
+## `radius_px` across the same 3x3 chunk neighbourhood, not just the single
+## closest one. This is what makes real pheromone-biased recruitment
+## possible for leaf litter at all (see PheromoneField.best_candidate_index,
+## and _forage_leaf_near_mound's own doc comment for the concrete gap this
+## closes): a caller cannot bias a choice among candidates it was never
+## given in the first place.
+func leaf_litter_near(pixel_position: Vector2, radius_px: float) -> Array:
+	var found: Array = []
+	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var field: LeafLitterField = _leaf_litter_fields.get(center_chunk + Vector2i(dx, dy))
+			if field == null:
+				continue
+			found.append_array(field.leaves_near(pixel_position, radius_px))
+	return found
+
+
 ## Removes the fallen leaf standing at `pixel_position`, if there is one
 ## close enough (see LeafLitterField.CONSUME_TOLERANCE_PX) -- the mutation
 ## counterpart of nearest_leaf_litter_near, mirroring take_fruit_at/
@@ -7382,20 +7401,33 @@ func _forage_windfall_near_mound(colony: AntColony, origin: Vector2i, cell: Vect
 ## actually dispatched, so step_ants only falls through to the biome-specific
 ## branch when there was genuinely no leaf in reach.
 ##
-## Unlike _forage_seed_near_mound/_forage_windfall_near_mound, there is no
-## plural "leaves near" query to run PheromoneField.best_candidate_index
-## against -- nearest_leaf_litter_near only ever reports the single closest
-## leaf (see its own doc comment). Pheromone-biased recruitment toward a
-## known-good leaf source is therefore a real, separable follow-up, not
-## attempted here.
+## Mirrors _forage_seed_near_mound/_forage_windfall_near_mound's own
+## find-and-dispatch shape exactly, INCLUDING the pheromone-aware candidate
+## scoring -- unlike before (see leaf_litter_near's own doc comment), this
+## is no longer limited to the single geometrically closest leaf. Reported
+## live: "ants go straight to the next leaf when moving out the mound ...
+## they should either explore randomly or follow pheromones" -- true then:
+## with only ever ONE candidate to choose from, a known trail could not
+## possibly matter, so the walk was always a beeline to whichever leaf
+## happened to be nearest, trip after trip. Now every leaf within reach is
+## a real candidate, and PheromoneField.best_candidate_index picks among
+## them the same real-recruitment way seed/windfall always have (a
+## previously-successful spot's own trail can outweigh a marginally closer,
+## never-visited one -- see that function's own doc comment); with no
+## trail yet (a colony's first-ever leaf forage), this still reduces to
+## pure nearest-candidate selection, same as before.
 func _forage_leaf_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i) -> bool:
 	var mound_pixel := Vector2(
 		float(origin.x + cell.x) + 0.5, float(origin.y + cell.y) + 0.5
 	) * float(TerrainRenderer.TILE_SIZE)
 	var reach := AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
-	var found := nearest_leaf_litter_near(mound_pixel, reach)
-	if found.is_empty():
+	var nearby := leaf_litter_near(mound_pixel, reach)
+	if nearby.is_empty():
 		return false
+	var best_index := PheromoneField.best_candidate_index(
+		mound_pixel, nearby, colony.pheromones_at(cell), float(TerrainRenderer.TILE_SIZE)
+	)
+	var found: Dictionary = nearby[best_index]
 	_dispatch_ant_forager(
 		origin + cell, colony, cell, mound_pixel, found.position, "leaf", found.species, found.season
 	)

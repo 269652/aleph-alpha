@@ -1111,8 +1111,8 @@ rule as every wild animal, rather than a parallel, separately-capped UI.
   the real leaf entity visibly over the ground and it should vanish only
   when it's in the mound." Fixed by threading the picked-up leaf's own
   species/season through from dispatch time (`_forage_leaf_near_mound`
-  already has both, from the same `nearest_leaf_litter_near` call that
-  found the target position) to a second, real sprite on
+  already has both, from the same leaf-near query that found the target
+  position) to a second, real sprite on
   `AntForagerMarker` — cropped from the exact same `LeafLitterAtlas` cell
   a ground-resting leaf of that species/season would use, at the same
   `LeafLitterRenderer.WORLD_SIZE` — shown only while genuinely returning
@@ -1125,6 +1125,35 @@ rule as every wild animal, rather than a parallel, separately-capped UI.
   ants/bugs, which this constant used to equal on purpose (see that
   constant's own doc comment); the ambient decomposer ants/bugs are
   unchanged.
+  **Second follow-up, same day: the named pheromone-recruitment gap above
+  is now closed.** Reported live: "ants go straight to the next leaf when
+  moving out the mound ... they should either explore randomly or follow
+  pheromones." True as reported: with `nearest_leaf_litter_near` only ever
+  returning the SINGLE closest leaf, a known trail could never matter even
+  in principle — there was never more than one candidate to bias a choice
+  among, so every trip beelined to whichever leaf happened to be nearest.
+  New `LeafLitterField.leaves_near`/`EarthChunkManager.leaf_litter_near`
+  are the missing plural query (mirrors `nearest_leaf_near`/
+  `nearest_leaf_litter_near`'s own radius contract exactly, just collecting
+  every match instead of tracking only the best one; those two are
+  untouched and still used by `DecomposerMarker`'s own single-leaf
+  in-place eating). `_forage_leaf_near_mound` now mirrors
+  `_forage_seed_near_mound`/`_forage_windfall_near_mound`'s own shape
+  exactly, including `PheromoneField.best_candidate_index` — a real,
+  previously-successful spot's own trail can now outweigh a marginally
+  closer, never-visited leaf, the same recruitment effect seed/windfall
+  foraging already had. Deliberately NOT built: a genuine random-explore/
+  wander phase before a target is even known — every forage kind in this
+  simulation (seed, windfall, leaf alike) is architected around the colony
+  already having found a real, reachable candidate before ever dispatching
+  a forager at all (`AntForageBehavior` has no SEEKING phase for any of
+  them, by original design, not oversight), so a true "wanders with no
+  known target yet" scout behaviour would be a materially bigger,
+  cross-cutting change to that shared architecture, not a leaf-specific
+  fix — left as a separate, explicitly named follow-up rather than
+  attempted here. With no trail yet (a colony's first-ever leaf forage,
+  or after one has fully decayed), `best_candidate_index` still falls back
+  to pure nearest-candidate selection, same as before this fix.
 - **Mound COUNT is still fixed and deterministic per chunk** (see "A queen,
   and where a colony's size comes from" above for what is no longer fixed
   — each mound's own population now genuinely grows or stalls with real

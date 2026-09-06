@@ -6613,6 +6613,31 @@ func test_nearest_leaf_litter_near_reaches_into_a_neighbouring_chunk():
 	assert_eq(found.get("species"), "acorn")
 
 
+## Plural counterpart of nearest_leaf_litter_near -- see leaf_litter_near's
+## own doc comment for why _forage_leaf_near_mound needs this (real
+## pheromone-biased recruitment among several candidates, not omniscient
+## nearest-only pickup). Same 3x3-chunk-neighbourhood scan/radius contract.
+func test_leaf_litter_near_finds_every_leaf_in_the_center_chunk():
+	var field := _field_at(Vector2i(0, 0))
+	field.add_leaf(Vector2(10, 10), "cherry", "autumn", 0.0)
+	field.add_leaf(Vector2(15, 10), "apple", "autumn", 0.0)
+	var found := manager.leaf_litter_near(Vector2(12, 10), 20.0)
+	assert_eq(found.size(), 2)
+	var species: Array = found.map(func(leaf): return leaf["species"])
+	assert_true(species.has("cherry"))
+	assert_true(species.has("apple"))
+
+
+func test_leaf_litter_near_reaches_into_a_neighbouring_chunk():
+	var chunk_size_px := EarthChunkManager.CHUNK_SIZE * TerrainRenderer.TILE_SIZE
+	var neighbour_position := Vector2(chunk_size_px + 5.0, 10.0)
+	var field := _field_at(Vector2i(1, 0))
+	field.add_leaf(neighbour_position, "acorn", "autumn", 0.0)
+	var found := manager.leaf_litter_near(Vector2(chunk_size_px - 5.0, 10.0), 20.0)
+	assert_eq(found.size(), 1)
+	assert_eq(found[0]["species"], "acorn")
+
+
 func test_consume_leaf_litter_at_removes_a_real_leaf_and_reports_success():
 	var field := _field_at(Vector2i(0, 0))
 	field.add_leaf(Vector2(10, 10), "cherry", "autumn", 0.0)
@@ -6754,13 +6779,49 @@ func test_a_successful_leaf_forage_dispatches_a_real_forager_at_the_leaf():
 	# arrival_at_food) only ever returned a bool, with nowhere to recover
 	# WHICH leaf (species/season) to draw while carrying it home. The
 	# identity is already known here, at DISPATCH time, from the exact same
-	# nearest_leaf_litter_near call that found leaf_position -- threading it
+	# leaf_litter_near call that found leaf_position -- threading it
 	# through now costs nothing extra later.
 	assert_eq(forager.carried_leaf_species, "cherry", "the dispatch already knows which species this leaf is")
 	assert_eq(forager.carried_leaf_season, "autumn", "the dispatch already knows which season this leaf fell in")
 	# The take has NOT happened yet -- only the forager's own real arrival
 	# resolves it (see test_ant_forager_marker.gd's own coverage of that).
 	assert_eq(field.leaves().size(), 1, "the leaf must still be there until the ant arrives")
+
+
+## Bug report: "ants go straight to the next leaf when moving out the mound
+## ... they should either explore randomly or follow pheromones". Before
+## this, _forage_leaf_near_mound only ever asked for the SINGLE nearest
+## leaf (nearest_leaf_litter_near) -- there was never more than one
+## candidate to choose among, so a known pheromone trail could not matter
+## even in principle. Now that leaf_litter_near reports every candidate in
+## reach, a real trail can bias which one gets picked, mirroring
+## _forage_seed_near_mound/_forage_windfall_near_mound exactly (see
+## PheromoneField.best_candidate_index's own tests for the bias math
+## itself -- this only proves the dispatch actually wires multiple real
+## candidates through to it, the same "any of them" shape
+## test_a_successful_grass_seed_forage_dispatches_a_real_forager_at_the_seed
+## already uses for seed).
+func test_a_successful_leaf_forage_with_multiple_leaves_in_reach_dispatches_at_a_real_one():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var origin := Vector2i(1000, 1000)
+	var global_tile := origin + cell
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var chunk_coord := manager._chunk_coord_for_tile(global_tile)
+	var field := _field_at(chunk_coord)
+	field.add_leaf(mound_pixel + Vector2(10, 0), "cherry", "autumn", 0.0)
+	field.add_leaf(mound_pixel + Vector2(0, 12), "apple", "autumn", 0.0)
+
+	var dispatched := manager._forage_leaf_near_mound(colony, origin, cell)
+
+	assert_true(dispatched, "a real nearby leaf should dispatch a forager, whichever one is picked")
+	var forager: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
+	var candidates := field.leaves_near(mound_pixel, AntColony.FORAGE_RADIUS_TILES * TerrainRenderer.TILE_SIZE)
+	assert_true(
+		candidates.any(func(leaf): return leaf.position == forager.target_position),
+		"the dispatched target should be one of the REAL candidates, not an unrelated position"
+	)
+	assert_eq(field.leaves().size(), 2, "neither leaf should be taken until the ant actually arrives")
 
 
 func test_forage_leaf_near_mound_returns_false_with_no_leaf_in_reach():

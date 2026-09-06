@@ -83,6 +83,55 @@ func test_nearest_leaf_near_picks_the_closer_of_two():
 	assert_eq(found.get("species"), "apple")
 
 
+# -- leaves_near -- the PLURAL counterpart nearest_leaf_near never was ------
+#
+# Bug report: "ants go straight to the next leaf when moving out the mound
+# ... they should either explore randomly or follow pheromones." Traced to
+# a real, already-named gap (see this file's own docs/concept/soil_fauna.md
+# cross-reference): _forage_seed_near_mound/_forage_windfall_near_mound
+# already bias their choice among several candidates toward a known-good
+# PheromoneField trail (real ant recruitment, not omniscient nearest-only
+# selection), but _forage_leaf_near_mound had nothing to bias AMONG --
+# nearest_leaf_near only ever reports the single closest leaf. leaves_near
+# is that missing plural query, mirroring nearest_leaf_near's own shape and
+# radius contract exactly, just collecting every match instead of tracking
+# only the best one.
+
+func test_leaves_near_finds_every_leaf_within_radius():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.add_leaf(Vector2(110, 100), "apple", "autumn", 0.0)
+	var found := field.leaves_near(Vector2(105, 100), 20.0)
+	assert_eq(found.size(), 2)
+	var species: Array = found.map(func(leaf): return leaf.species)
+	assert_true(species.has("cherry"))
+	assert_true(species.has("apple"))
+
+
+func test_leaves_near_excludes_anything_outside_radius():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.add_leaf(Vector2(500, 500), "apple", "autumn", 0.0)
+	var found := field.leaves_near(Vector2(105, 100), 20.0)
+	assert_eq(found.size(), 1)
+	assert_eq(found[0].species, "cherry")
+
+
+func test_leaves_near_returns_empty_when_nothing_in_range():
+	var field := _field()
+	field.add_leaf(Vector2(500, 500), "cherry", "autumn", 0.0)
+	assert_eq(field.leaves_near(Vector2.ZERO, 20.0), [])
+
+
+func test_leaves_near_reports_position_species_and_season_per_leaf():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	var found := field.leaves_near(Vector2(100, 100), 20.0)
+	assert_eq(found[0].position, Vector2(100, 100))
+	assert_eq(found[0].species, "cherry")
+	assert_eq(found[0].season, "autumn")
+
+
 # -- consume_leaf_at --------------------------------------------------------
 
 func test_consume_leaf_at_removes_the_leaf_and_reports_success():
