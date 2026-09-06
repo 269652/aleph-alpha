@@ -9113,9 +9113,38 @@ own background is already transparent) and gained a real
 lands at the same on-screen size the procedural fallback always used,
 not the raw art canvas.
 
+**Crushed/bitten art wired end to end, decomposer fungivory finally
+reachable (`feature/mushroom-crushed-bitten-sprites`).** The user
+delivered real 1:1 crushed/bitten sheets per species incrementally ("some
+are still missing but I'll add while you wire... 1 bite is enough for
+when a bug takes a bite"). Landed in two halves, art-loading first:
+`IllustratedMushroomSprite.crushed_frame_for`/`bitten_frame_for` for the
+3 species delivered so far (black_trumpet/champignon/chanterelle; the
+other 3 fall back to the live look via the same has-or-doesn't gate
+`has_variants` already uses). Then the game-logic half, generalizing
+`EarthwormPatch`'s own `is_corpse` "a corpse is new ground" precedent
+from one cause to two: `WildMushroomPatch.is_corpse`/`corpse_kind` (
+"crushed" or "bitten"), a new `bite(cell)` (a decomposer's single bite,
+no momentum gate), and `MushroomRenderer.sync_markers` now keeping a
+corpse's marker alive across the sync instead of freeing it the instant
+`crush`/`bite` ends its fruiting — closing the exact gap that would have
+made the newly-wired art unreachable in play. Along the way, a real,
+confirmed bug surfaced and got fixed: `MushroomMarker` had joined
+`DroppedItem.FORAGEABLE_GROUP_NAME` since the physicality pass above, but
+`DecomposerMarker._nearest_food`'s own `not (node is DroppedItem)` guard
+silently excluded it again immediately afterward — a decomposer could
+never actually reach a mushroom at all until this pass. See
+[soil_fauna.md's "Mushroom corpses actually linger, and a bug's single
+bite"](concept/soil_fauna.md#mushroom-corpses-actually-linger-and-a-bugs-single-bite-2026-09-06)
+for the full mechanism. Built red-first end to end throughout, merged to
+`main`.
+
 ⬜ No literal host-tree proximity check (mycorrhizal species are
-biome-gated only). No cooking-recipe integration. See the concept doc's
-own "Deliberately not modeled" section for the full list and reasoning.
+biome-gated only). No cooking-recipe integration. No progressive
+multi-bite consumption (only one bitten-art stage exists today, by the
+user's own explicit choice — more stages are a later pass). See the
+concept doc's own "Deliberately not modeled" section for the full list
+and reasoning.
 
 ### Leaf Litter (`concept/leaf_litter.md`)
 

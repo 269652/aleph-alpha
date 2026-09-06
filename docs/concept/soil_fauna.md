@@ -1819,6 +1819,74 @@ then every `CreatureMarker`'s own species-derived momentum).
   call to sweep in; the request's "except flowers" needed no code of its
   own to honour.
 
+### Mushroom corpses actually linger, and a bug's single bite (2026-09-06)
+
+The user delivered real 1:1 crushed/bitten art for each specimen (see
+`docs/concept/mushrooms.md`'s own "Crushed underfoot") — wiring the ART
+LOADING side first (`IllustratedMushroomSprite.crushed_frame_for`/
+`bitten_frame_for`) exposed that `crush_mushroom_at` froze the marker at
+the exact moment it stopped fruiting, same as a picked mushroom — there
+was nowhere for the new art to ever actually be seen. This closes that
+gap, generalizing `EarthwormPatch`'s own `is_corpse`/`corpse_age_seconds`
+"a corpse is new ground" precedent (see below) from one cause to two.
+
+- **`WildMushroomPatch._corpse_kind: Dictionary`** (cell → `"crushed"` or
+  `"bitten"`) replaces what would have been a plain `EarthwormPatch`-style
+  bool: a mushroom corpse can arise from either `crush()` (now also
+  recording `"crushed"`) or the new `bite()` (recording `"bitten"`) — two
+  distinct causes needing two distinct sprites, unlike a worm's single
+  death. Both ride the identical `_recovery`/`SPENT_SECONDS` clock,
+  cleared there and nowhere else, exactly like the worm's own
+  `_crushed`. `pick()` still leaves no corpse at all.
+- **`WildMushroomPatch.bite(cell)`** — a decomposer's single bite (real
+  fungivory, reported live: "a bug takes a bite"). No momentum/threshold
+  gate, unlike `crush()`: an insect bite isn't a weight-emergent physics
+  event, it simply happens once a decomposer commits to feeding. Otherwise
+  mirrors `pick()`/`crush()`'s exact `has_fruiting` gate and recovery
+  shape.
+- **`MushroomRenderer.sync_markers`** now also treats every
+  `sim.is_corpse(cell)` as live (mirrors
+  `EarthChunkManager._sync_worm_sprites`'s own `is_corpse` check) instead
+  of sourcing `live_cells` from `get_fruiting_cells()` alone — a corpse's
+  marker survives the sync that would otherwise have freed it the instant
+  `crush()`/`bite()` erased the cell from fruiting. `_build_marker` always
+  bakes `sim.corpse_kind(cell)` into the marker it builds (a live cell
+  simply gets `""` back), so both call sites (`spawn_markers` and
+  `sync_markers`) pick the right art with no separate wiring.
+- **`MushroomMarker.corpse_kind`** — set before `add_child`, same
+  convention as `species_id`/`cell`. `_rebuild_sprite` prefers
+  `crushed_frame_for`/`bitten_frame_for` when it matches and the species
+  has that art yet, falling back to the ordinary live look otherwise (the
+  same has-or-doesn't gate `has_variants` already uses) — a species still
+  missing its crushed/bitten sheet (fly_agaric/psylo/parasol as of this
+  delivery) never shows a blank texture, just its live look a beat longer.
+- **Real fungivory, finally reachable**: `MushroomMarker` has joined
+  `DroppedItem.FORAGEABLE_GROUP_NAME` since an earlier phase (see that
+  class's own doc comment), but `DecomposerMarker._nearest_food`'s `not
+  (node is DroppedItem) or node.item_stack == null` guard silently
+  excluded it again immediately afterward — a `MushroomMarker` extends
+  `Node2D`, not `DroppedItem`, so it always failed that check. Confirmed
+  dead code path, not a hypothetical: a decomposer could never actually
+  reach a mushroom at all before this fix, the earlier group-join
+  notwithstanding. Fixed by only gating a *real* `DroppedItem` on having a
+  real `item_stack`; anything else in this forageable group is judged on
+  distance alone. `MushroomMarker.take_bite(_amount)` then duck-types
+  straight into `_step_feeding`'s existing `has_method("take_bite")`
+  branch, unchanged — it defers to `WildMushroomPatch.bite(cell)` and
+  frees the (live) marker on a real bite, so `sync_markers` builds the
+  actual corpse marker fresh from the sim's own `corpse_kind` on its next
+  tick, the same "the sim is the truth, the marker just mirrors it" shape
+  `pick_up` already uses. No-op on a marker that is already a corpse
+  itself (mirrors `Carcass.take_bite`'s own gate shape) — a decomposer
+  doesn't re-bite what something already finished.
+- **What this does NOT include**: only one bitten-art stage exists today,
+  by the user's own explicit choice ("for a later stage I will add more
+  bitten stages but now 1 bite is enough") — so a single bite already
+  reaches the only bitten look there is, and nothing yet models a bitten
+  mushroom being progressively consumed further or fully removed by
+  repeated bites. A bitten (or crushed) corpse clears exactly like an
+  ordinary spent site once its `SPENT_SECONDS` recovery runs out.
+
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
 A real, hand-illustrated sheet (`assets/sprites/animals/worm.png`) replaces
