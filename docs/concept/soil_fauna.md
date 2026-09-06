@@ -1299,6 +1299,88 @@ flower shared one invented height; once flowers were pinned to the player's own
 scale the worm was suddenly longer than several of them and read as a snake
 lying in the grass.
 
+### Generalized to caterpillars too (2026-09-06)
+
+Reported directly, right after caterpillars shipped: *"they don't get
+flattened when I step on them ... make that mechanic work for all animals
+based on physics (only worms and caterpillars are affected by that
+tho)"* — i.e. the underlying RULE should be one shared, physics-based
+check available to any creature small enough to be at risk underfoot at
+all, not a worm-specific special case duplicated by hand for a second
+species; the request's own parenthetical already recognises that in
+practice, today, that still only ever means worms and caterpillars —
+nothing else in this codebase is both small enough and lacks its own real
+health/combat stack the way `CreatureMarker` wildlife (sheep, wolf, deer,
+...) does.
+
+**The threshold itself moves out of `EarthwormPatch`**, into a new
+`CrushMechanic` (`src/world/crush_mechanic.gd`) — `CRUSH_MOMENTUM_
+THRESHOLD_KG_M_S` and `is_crushed_by(momentum_kg_m_s)`, byte-for-byte the
+same constant and comparison, just no longer owned by a class named after
+one specific victim. `EarthwormPatch.crush` now calls through
+`CrushMechanic.is_crushed_by` instead of a local copy — a pure rename at
+the physics layer, not a behaviour change (every existing worm crush test
+still holds, unchanged in substance, just now targeting the class that
+actually owns the rule).
+
+**The DETECTION side, not the threshold, is what actually differs between
+the two victims** — and deliberately stays two call sites rather than one,
+because a worm and a caterpillar are not the same *shape* of thing in this
+codebase (see "Caterpillars: on trees, on the ground, green leaves only"
+above): a worm is per-tile cell state inside a chunk's own `EarthwormPatch`
+sim, with no node identity at all, while a caterpillar is a real,
+independently-positioned `Node2D` (`CaterpillarMarker`). Forcing both
+through one lookup shape would mean inventing fake node identity for worms
+or fake cell state for caterpillars, purely to satisfy a shared function
+signature — the "three similar things beats a premature abstraction"
+reasoning this doc's own ant/desert-scrub sections already lean on
+elsewhere. So:
+
+- **`EarthChunkManager.crush_caterpillars_near(pixel_position,
+  momentum_kg_m_s) -> bool`** (new) — the caterpillar-shaped sibling of
+  `crush_worm_at`. Resolves the stepper's own tile/chunk coordinate (the
+  same `_world_tile_for_pixel`/`_chunk_coord_for_tile` pair every other
+  per-tile query in this file already uses), then checks every
+  `CaterpillarMarker` this manager is tracking for THAT chunk
+  (`_caterpillar_markers`, the same dictionary `_load_chunk`
+  populates and chunk-unload frees) against the identical tile, via each
+  marker's own real `.position` — a caterpillar has no burrow to look up,
+  its position IS the lookup. A caterpillar on the stepped-on tile whose
+  momentum clears `CrushMechanic.is_crushed_by` is `queue_free()`'d and
+  dropped from the tracking array; returns whether anything was actually
+  crushed, mirroring `crush_worm_at`'s own boolean contract exactly.
+- **Wired identically to the worm call**, in the same `World._client_
+  process` block, right alongside it: the player's own
+  `_PLAYER_STEP_MOMENTUM_KG_M_S`, and every `CreatureMarker`'s own
+  `CreatureMass.mass_kg_for(species)`-derived momentum — so a wolf or a
+  deer stepping on a caterpillar crushes it exactly as readily as the
+  player does, the same "any sufficiently heavy stepper, not just the
+  player" generalization the worm mechanic already had from the start.
+
+**No corpse state, no splat VFX, same scope cut the worm mechanic itself
+already named**: a crushed caterpillar simply `queue_free()`s, the same
+"just disappear" outcome an eaten one already has (nothing removes a
+`CaterpillarMarker` today except chunk unload or this). `EarthwormPatch`'s
+own corpse/recovery machinery (`_crushed`, `RECOVERY_SECONDS`) exists
+because a worm's burrow is a renewable resource that repopulates on a
+clock; a caterpillar has no equivalent "spot" to repopulate — it was
+never tied to a place the way a worm's burrow is, so there is nothing for
+a recovery clock to apply to. A future caterpillar respawn, if wanted,
+belongs to the same spawn-density reasoning `CaterpillarRenderer.spawn_
+caterpillars` already owns, not to this mechanic.
+
+**Bigger animals are excluded by which system a creature lives in, not by
+a new per-species mass check on the VICTIM side** — there still is no
+"how much can this creature's own body withstand" table for anyone
+(worm, caterpillar, or otherwise; see `CreatureMass`'s own doc comment:
+it is entirely the STEPPER's mass, never the steppee's). Sheep/wolf/deer/
+etc. are `CreatureMarker` instances in the `"creature"` group, with their
+own real health and combat stack — structurally a different tier from
+both worms and caterpillars, and simply never scanned by either crush
+call. The exclusion the request's own parenthetical asked for falls out
+of scope (which sim/group a creature belongs to) rather than a size
+threshold that would need its own tuning and its own test.
+
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
 A real, hand-illustrated sheet (`assets/sprites/animals/worm.png`) replaces
