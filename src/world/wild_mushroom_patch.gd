@@ -218,11 +218,11 @@ func _seed_initial_fruiting() -> void:
 			_fruiting[cell] = 0.0
 
 
-## Which real species (if any) could ever grow at (x, y): a mycorrhizal
-## species needs its own real host tree's biome (forest/rainforest); a real
-## saprotroph (see MushroomSpecies.is_saprotroph -- Psilocybe, Champignon,
-## Parasol) additionally allows grassland, since none of the three need a
-## living host tree. Deterministic per cell.
+## Which real species (if any) could ever grow at (x, y) -- delegates the
+## actual real-world biome eligibility to MushroomSpecies.allows_biome
+## (see that method's own doc comment: mycorrhizal species need their real
+## host tree's biome, and saprotrophs vary by real species rather than
+## sharing one blanket rule). Deterministic per cell.
 func _eligible_species_at(x: int, y: int, biome: PackedStringArray) -> String:
 	var here: String = biome[y * _width + x]
 	var candidates: Array[String] = []
@@ -235,8 +235,4 @@ func _eligible_species_at(x: int, y: int, biome: PackedStringArray) -> String:
 
 
 func _biome_allows(species_id: String, biome: String) -> bool:
-	if biome == "forest" or biome == "rainforest":
-		return true
-	if biome == "grassland":
-		return MushroomSpecies.is_saprotroph(species_id)
-	return false
+	return MushroomSpecies.allows_biome(species_id, biome)

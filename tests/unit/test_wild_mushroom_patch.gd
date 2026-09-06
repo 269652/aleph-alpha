@@ -32,13 +32,24 @@ func test_desert_never_hosts_a_site():
 	assert_eq(patch.site_count(), 0)
 
 
-func test_forest_can_host_any_species():
+func test_forest_can_host_several_species():
 	var patch := WildMushroomPatch.new(3, 40, 40, _all_biome("forest", 40, 40))
 	assert_gt(patch.site_count(), 0, "a 40x40 forest chunk should have some sites")
 	var seen := {}
 	for cell in patch.get_site_cells():
 		seen[patch.species_at(cell)] = true
 	assert_gt(seen.size(), 1, "a real forest should host more than one species")
+
+
+## Reported live: "forest mushrooms should spawn in forests and e.g.
+## champignons on pasture" -- Champignon (the real "field mushroom") is
+## specifically a pasture species, genuinely uncommon in deep forest (see
+## MushroomSpecies.allows_biome's own doc comment), unlike the mixed-
+## habitat Psilocybe/Parasol.
+func test_champignon_never_hosts_in_forest():
+	var patch := WildMushroomPatch.new(3, 60, 60, _all_biome("forest", 60, 60))
+	for cell in patch.get_site_cells():
+		assert_ne(patch.species_at(cell), "champignon", "champignon should never site in forest")
 
 
 func test_grassland_only_ever_hosts_real_saprotrophs():
@@ -50,6 +61,16 @@ func test_grassland_only_ever_hosts_real_saprotrophs():
 			MushroomSpecies.is_saprotroph(species),
 			"grassland should only ever host a real saprotroph (%s is not one)" % species
 		)
+
+
+func test_champignon_can_host_in_grassland():
+	# A big enough grassland patch that champignon (1 of only 3 eligible
+	# saprotrophs there) should turn up at least once.
+	var patch := WildMushroomPatch.new(5, 80, 80, _all_biome("grassland", 80, 80))
+	var seen := {}
+	for cell in patch.get_site_cells():
+		seen[patch.species_at(cell)] = true
+	assert_true(seen.has("champignon"), "champignon should be able to site in grassland")
 
 
 func test_sites_are_capped():
