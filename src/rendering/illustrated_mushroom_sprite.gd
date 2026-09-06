@@ -86,9 +86,40 @@ const _ROW_BANDS := [
 const CANVAS_SIZE := Vector2i(64, 64)
 const BASELINE_Y := 64
 
+## species_id -> {"path": ..., "chroma_key":?, "chroma_key_tolerance":?} for
+## the bitten look (see MushroomBiting.gd, docs/concept/mushrooms.md's
+## fungivory section) -- only 3 of 6 species have real bitten art delivered
+## so far; an absent id falls back through MushroomMarker's own
+## has_bitten_variant gate to the ordinary look, the same has-or-doesn't
+## convention has_variants/frame_for already use. All three delivered
+## sheets use the magenta-background convention (none of the three is
+## fly_agaric, the one species with a genuinely transparent background).
+const _BITTEN_SHEETS := {
+	"black_trumpet": {
+		"path": "res://assets/sprites/mushrooms/black_trumpet_bitten_1.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+	# The delivered sheet's own filename is misspelled "champigon" (missing
+	# the second "n") -- pointed at as-delivered rather than renamed on
+	# disk, the same convention "chanterelle" -> chantarelle.png already
+	# uses above.
+	"champignon": {
+		"path": "res://assets/sprites/mushrooms/champigon_bitten_1.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+	"chanterelle": {
+		"path": "res://assets/sprites/mushrooms/chantarelle_bitten.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+}
+
 var _slicer := SpriteSheetSlicer.new()
 
 static var _frames_cache: Dictionary = {}
+static var _bitten_frames_cache: Dictionary = {}
 static var _marker_scale_cache: Dictionary = {}
 
 
@@ -101,7 +132,7 @@ func has_variants(species_id: String) -> bool:
 
 
 func frame_count(species_id: String) -> int:
-	return _all_frames(species_id).size()
+	return _frames_from(_SHEETS, _frames_cache, species_id).size()
 
 
 ## One deterministically-picked variant for `seed_value`, or null if
@@ -110,23 +141,38 @@ func frame_count(species_id: String) -> int:
 ## sheet's full variant count via PixelNoise.range_index's bucket-avoidance
 ## (mirrors IllustratedAntMoundSprite.frame_for exactly).
 func frame_for(species_id: String, seed_value: int) -> ImageTexture:
-	var frames := _all_frames(species_id)
+	return _pick_frame(_frames_from(_SHEETS, _frames_cache, species_id), seed_value)
+
+
+## Whether there is real bitten-mushroom art registered for `species_id` --
+## see _BITTEN_SHEETS' own doc comment for which species have it so far.
+func has_bitten_variant(species_id: String) -> bool:
+	return _BITTEN_SHEETS.has(species_id)
+
+
+## One deterministically-picked BITTEN-look variant for `seed_value`, or
+## null if `species_id` has no registered bitten sheet -- same contract as
+## frame_for.
+func bitten_frame_for(species_id: String, seed_value: int) -> ImageTexture:
+	return _pick_frame(_frames_from(_BITTEN_SHEETS, _bitten_frames_cache, species_id), seed_value)
+
+
+func _pick_frame(frames: Array, seed_value: int) -> ImageTexture:
 	if frames.is_empty():
 		return null
 	var index: int = PixelNoise.range_index(seed_value, 0, 0, frames.size())
 	return frames[index]
 
 
-func _all_frames(species_id: String) -> Array:
-	if not _SHEETS.has(species_id):
+func _frames_from(sheets: Dictionary, cache: Dictionary, species_id: String) -> Array:
+	if not sheets.has(species_id):
 		return []
-	if not _frames_cache.has(species_id):
-		_frames_cache[species_id] = _load_frames(species_id)
-	return _frames_cache[species_id]
+	if not cache.has(species_id):
+		cache[species_id] = _load_frames(sheets[species_id])
+	return cache[species_id]
 
 
-func _load_frames(species_id: String) -> Array[ImageTexture]:
-	var sheet: Dictionary = _SHEETS[species_id]
+func _load_frames(sheet: Dictionary) -> Array[ImageTexture]:
 	var image := SpriteSheetLoader.load_image(sheet["path"])
 	# Turning the chroma-keyed background transparent up front lets the
 	# exact same downstream detect_frames/normalize_frames (via
@@ -178,7 +224,7 @@ func marker_scale(species_id: String) -> float:
 		return 1.0
 	if _marker_scale_cache.has(species_id):
 		return _marker_scale_cache[species_id]
-	var frames := _all_frames(species_id)
+	var frames := _frames_from(_SHEETS, _frames_cache, species_id)
 	if frames.is_empty():
 		return 1.0
 	var image: Image = frames[0].get_image()

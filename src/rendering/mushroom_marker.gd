@@ -30,6 +30,7 @@ extends Node2D
 const ProceduralMushroomSprite = preload("res://src/rendering/procedural_mushroom_sprite.gd")
 const IllustratedMushroomSprite = preload("res://src/rendering/illustrated_mushroom_sprite.gd")
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
@@ -49,6 +50,13 @@ var mushroom_seed := 0
 ## tell the real WildMushroomPatch its mushroom was taken.
 var cell := Vector2i.ZERO
 var mushroom_world = null
+
+## Whether a decomposer bug has bitten this mushroom (see take_mushroom_bite,
+## docs/concept/mushrooms.md's fungivory section). Unlike being picked or
+## crushed, a bite does not remove it -- it stays present and pickable, just
+## diminished (a different look, a different, lighter catalog item once
+## picked up -- see MushroomBiting.gd).
+var bitten := false
 
 var _sprite: Sprite2D
 
@@ -77,7 +85,15 @@ func get_hover_actions() -> Array:
 ## uses), the procedural species-coloured silhouette otherwise. Always the
 ## real species' own look -- see class doc comment.
 func _rebuild_sprite() -> void:
-	if _illustrated_generator.has_variants(species_id):
+	if bitten and _illustrated_generator.has_bitten_variant(species_id):
+		# The bitten look, when the species has real art for it -- see
+		# IllustratedMushroomSprite._BITTEN_SHEETS' own doc comment for
+		# which species do so far. Reuses the SAME marker_scale(species_id)
+		# the ordinary look uses (a bug's bite doesn't shrink the specimen
+		# enough to need its own separately-measured scale).
+		_sprite.texture = _illustrated_generator.bitten_frame_for(species_id, mushroom_seed)
+		_sprite.scale = Vector2.ONE * _illustrated_generator.marker_scale(species_id)
+	elif _illustrated_generator.has_variants(species_id):
 		_sprite.texture = _illustrated_generator.frame_for(species_id, mushroom_seed)
 		# Illustrated art's own canvas proportions don't match the
 		# procedural generator's -- use its own measured-from-the-real-art
@@ -90,21 +106,50 @@ func _rebuild_sprite() -> void:
 
 
 ## The real species name plus a toxic/edible hint -- always, see class
-## doc comment.
+## doc comment. Bitten takes priority over that hint once a decomposer has
+## visibly marked it (see take_mushroom_bite): that is the more salient
+## thing to name at that point.
 func get_display_name() -> String:
 	var species_name := MushroomSpecies.display_name_for(species_id)
+	if bitten:
+		return "%s (Bitten)" % species_name
 	if MushroomSpecies.is_toxic(species_id):
 		return "%s (Toxic)" % species_name
 	return "%s (Edible)" % species_name
 
 
+## Marks this mushroom bitten by a decomposer bug (see docs/concept/
+## mushrooms.md's fungivory section, MushroomBiting.gd) -- the take_bite-
+## shaped verb DecomposerMarker._step_feeding's take_mushroom_bite branch
+## calls. Unlike Carcass.take_bite, this never frees the marker: a bitten
+## mushroom stays present and pickable, just diminished (see
+## _rebuild_sprite/get_display_name/pick_up). Returns false (a no-op) when
+## already bitten, or there's no real sim to tell (mushroom_world unset --
+## e.g. a marker built standalone in a test) -- the same false a
+## decomposer relies on to know it's done here and should move on (see
+## WildMushroomPatch.bite's own doc comment).
+func take_mushroom_bite() -> bool:
+	if bitten:
+		return false
+	if mushroom_world == null or not mushroom_world.has_method("bite"):
+		return false
+	if not mushroom_world.bite(cell):
+		return false
+	bitten = true
+	_rebuild_sprite()
+	return true
+
+
 ## Takes this mushroom into `picker`'s inventory. Same "return whether
 ## anything was collected" contract DroppedItem/LiftableStone/PickableSeed
-## all keep.
+## all keep. A bitten mushroom resolves to its OWN, lighter catalog item
+## (see MushroomBiting.bitten_item_id_for) rather than the ordinary species
+## one -- what it visibly is by the time it's picked up.
 func pick_up(picker) -> bool:
 	if picker == null or picker.inventory == null or species_id == "":
 		return false
-	var item := _item_catalog.make(species_id)
+	var item_id := MushroomBiting.bitten_item_id_for(species_id) if bitten else species_id
+	var item := _item_catalog.make(item_id)
 	if picker.inventory.add(item, 1) > 0:
 		return false
 	# Taken from the sim as well as from the screen: a picked mushroom must

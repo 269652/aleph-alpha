@@ -95,6 +95,13 @@ var _sites: Dictionary = {}
 var _fruiting: Dictionary = {}
 ## Subset of _sites' keys on a post-fruiting cooldown -> seconds remaining.
 var _recovery: Dictionary = {}
+## Subset of _fruiting's keys that a decomposer has bitten (see bite()) --
+## orthogonal to _fruiting/_recovery: a bitten mushroom stays fruiting and
+## pickable, just diminished, unlike pick()/crush(), which both end the
+## fruiting instance outright. Cleared whenever a site stops fruiting for
+## ANY reason (picked, crushed, or aged out), so a later fresh fruiting at
+## the same site never inherits a stale bite.
+var _bitten: Dictionary = {}
 
 
 func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
@@ -135,7 +142,31 @@ func pick(cell: Vector2i) -> bool:
 	if not _fruiting.has(cell):
 		return false
 	_fruiting.erase(cell)
+	_bitten.erase(cell)
 	_recovery[cell] = SPENT_SECONDS
+	return true
+
+
+## Whether the fruiting body at `cell` has been bitten by a decomposer (see
+## bite()).
+func is_bitten(cell: Vector2i) -> bool:
+	return _bitten.has(cell)
+
+
+## Marks the fruiting mushroom at `cell` as bitten by a decomposer bug (see
+## docs/concept/mushrooms.md's fungivory section, MushroomBiting.gd). Unlike
+## pick()/crush(), this does NOT end the fruiting instance -- a bitten
+## mushroom stays right where it was, still pickable, just diminished.
+## Returns false (a no-op) when there's nothing fruiting at `cell`, or it's
+## already bitten -- one bite is enough (see
+## DecomposerMarker._step_feeding's take_mushroom_bite branch, which relies
+## on this false to know when to move on to a fresh target).
+func bite(cell: Vector2i) -> bool:
+	if not has_fruiting(cell):
+		return false
+	if _bitten.has(cell):
+		return false
+	_bitten[cell] = true
 	return true
 
 
@@ -153,6 +184,7 @@ func crush(cell: Vector2i, momentum_kg_m_s: float) -> bool:
 	if not CrushMechanic.is_crushed_by(momentum_kg_m_s):
 		return false
 	_fruiting.erase(cell)
+	_bitten.erase(cell)
 	_recovery[cell] = SPENT_SECONDS
 	return true
 
@@ -169,6 +201,7 @@ func advance(delta: float, flush_drive: float) -> void:
 		_fruiting[cell] += delta
 		if _fruiting[cell] >= SPENT_SECONDS:
 			_fruiting.erase(cell)
+			_bitten.erase(cell)
 			_recovery[cell] = SPENT_SECONDS
 
 	for cell in _recovery.keys():

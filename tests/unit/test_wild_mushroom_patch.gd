@@ -198,6 +198,74 @@ func test_a_crushed_site_recovers_on_the_same_clock_as_a_picked_one():
 	)
 
 
+# -- bug fungivory: a bite marks a mushroom bitten, it doesn't remove it -----
+#
+# Reported: "bugs should forage mushrooms -- when a bug takes a bite from a
+# mushroom it should get the bitten flag". Distinct from pick()/crush(): a
+# bitten mushroom stays fruiting and pickable, just diminished (see
+# MushroomBiting.gd, ItemCatalog's "_bitten" catalog rows) -- the "stays
+# present, marked, not destroyed" shape neither pick() nor crush() have
+# (both end the fruiting instance outright).
+
+func test_bite_fails_on_a_cell_that_is_not_fruiting():
+	var patch := WildMushroomPatch.new(1, 20, 20, _all_biome("desert", 20, 20))
+	assert_false(patch.bite(Vector2i(5, 5)))
+
+
+func test_bite_marks_a_fruiting_mushroom_bitten():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	assert_false(patch.is_bitten(cell), "precondition: not bitten yet")
+	assert_true(patch.bite(cell))
+	assert_true(patch.is_bitten(cell))
+
+
+## Unlike pick()/crush(), one bite does not end the fruiting instance -- the
+## whole point is that a bitten mushroom stays there to be picked up.
+func test_a_bitten_mushroom_is_still_fruiting():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.bite(cell)
+	assert_true(patch.has_fruiting(cell), "a bitten mushroom should still be there to pick")
+
+
+## One bite is enough -- a decomposer that already took its bite has nothing
+## more to gain here (see DecomposerMarker._step_feeding's take_mushroom_bite
+## branch, which relies on this false to know when to move on).
+func test_a_second_bite_is_a_no_op():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	assert_true(patch.bite(cell))
+	assert_false(patch.bite(cell), "already bitten -- nothing left to take")
+
+
+func test_picking_a_bitten_mushroom_clears_the_bitten_flag():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.bite(cell)
+	patch.pick(cell)
+	assert_false(patch.is_bitten(cell))
+
+
+func test_crushing_a_bitten_mushroom_clears_the_bitten_flag():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.bite(cell)
+	patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	assert_false(patch.is_bitten(cell))
+
+
+## A bitten mushroom nobody picked or crushed still ages out on its own
+## fruiting clock (unaffected by biting) -- and must not leave a stale bite
+## behind for whatever fruits at that same site next.
+func test_a_bitten_mushroom_that_ages_out_clears_the_bitten_flag():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.bite(cell)
+	patch.advance(WildMushroomPatch.SPENT_SECONDS + 1.0, 0.0)
+	assert_false(patch.is_bitten(cell))
+
+
 # -- force_fruit_near: a debug/dev-console way to see one on demand --------
 #
 # Reported live, after an extended investigation confirmed the fruiting sim

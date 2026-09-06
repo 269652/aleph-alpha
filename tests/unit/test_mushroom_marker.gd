@@ -28,6 +28,7 @@ class StubPicker:
 class StubMushroomWorld:
 	extends RefCounted
 	var taken: Array = []
+	var bitten: Array = []
 
 	# No need to override has_method() -- Godot's own reflection already
 	# reports true for this real, defined method. Named `pick` to match
@@ -37,6 +38,14 @@ class StubMushroomWorld:
 	# wrapper with a different name.
 	func pick(cell: Vector2i) -> bool:
 		taken.append(cell)
+		return true
+
+	# Same reasoning as pick() above -- named to match WildMushroomPatch.bite
+	# exactly, and mirrors its own "already bitten is a no-op" contract.
+	func bite(cell: Vector2i) -> bool:
+		if bitten.has(cell):
+			return false
+		bitten.append(cell)
 		return true
 
 
@@ -141,6 +150,89 @@ func test_pickup_fails_gracefully_with_no_picker():
 	var marker := _make_marker("parasol")
 	assert_false(marker.pick_up(null))
 	assert_false(marker.is_queued_for_deletion())
+
+
+# -- bug fungivory: a bite marks it bitten, it doesn't remove it -----------
+#
+# Reported: "bugs should forage mushrooms -- when a bug takes a bite from a
+# mushroom it should get the bitten flag... mushrooms with a bitten flag
+# have less value; weigh less and render their mushroom_bitten_1.png in
+# world and inventory, their title reads as e.g. Parasol (bitten)".
+
+func test_bitten_defaults_to_false():
+	assert_false(_make_marker("parasol").bitten)
+
+
+func test_take_mushroom_bite_marks_it_bitten_and_returns_true():
+	var marker := _make_marker("parasol", Vector2i(3, 4))
+	marker.mushroom_world = StubMushroomWorld.new()
+	assert_true(marker.take_mushroom_bite())
+	assert_true(marker.bitten)
+
+
+func test_take_mushroom_bite_tells_the_mushroom_world():
+	var marker := _make_marker("parasol", Vector2i(3, 4))
+	marker.mushroom_world = StubMushroomWorld.new()
+	marker.take_mushroom_bite()
+	assert_eq(marker.mushroom_world.bitten, [Vector2i(3, 4)])
+
+
+## One bite is enough -- see WildMushroomPatch.bite's own doc comment for why
+## DecomposerMarker relies on this false to know when to move on.
+func test_a_second_bite_is_a_no_op():
+	var marker := _make_marker("parasol", Vector2i(3, 4))
+	marker.mushroom_world = StubMushroomWorld.new()
+	assert_true(marker.take_mushroom_bite())
+	assert_false(marker.take_mushroom_bite(), "already bitten -- nothing left to take")
+
+
+func test_take_mushroom_bite_fails_gracefully_with_no_mushroom_world():
+	var marker := _make_marker("parasol")
+	assert_false(marker.take_mushroom_bite())
+	assert_false(marker.bitten)
+
+
+func test_take_mushroom_bite_swaps_the_sprite_when_the_species_has_bitten_art():
+	var marker := _make_marker("champignon")
+	marker.mushroom_world = StubMushroomWorld.new()
+	var before: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
+	marker.take_mushroom_bite()
+	var after: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
+	assert_ne(before, after, "champignon has real bitten art -- the sprite should change")
+
+
+## Same has-or-doesn't fallback every optional illustrated-art seam in this
+## codebase uses -- only 3 of 6 species have real bitten art so far (see
+## IllustratedMushroomSprite).
+func test_take_mushroom_bite_falls_back_to_the_normal_look_without_bitten_art():
+	var marker := _make_marker("fly_agaric")
+	marker.mushroom_world = StubMushroomWorld.new()
+	var before: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
+	marker.take_mushroom_bite()
+	var after: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
+	assert_eq(before, after, "fly_agaric has no bitten art yet -- the look should stay the same")
+
+
+## Bitten takes priority over the ordinary toxic/edible suffix -- once a
+## mushroom is visibly bitten, that's the more salient thing to name.
+func test_display_name_shows_bitten_instead_of_toxicity_once_bitten():
+	var marker := _make_marker("psylo")
+	marker.mushroom_world = StubMushroomWorld.new()
+	marker.take_mushroom_bite()
+	assert_eq(marker.get_display_name(), "Psilocybe (Bitten)")
+
+
+## Picking up a bitten mushroom adds the "_bitten" catalog variant (see
+## MushroomBiting.gd, ItemCatalog) -- lighter, distinctly named -- not the
+## ordinary species item it would have been unbitten.
+func test_pickup_of_a_bitten_mushroom_adds_the_bitten_item():
+	var marker := _make_marker("parasol")
+	marker.mushroom_world = StubMushroomWorld.new()
+	marker.take_mushroom_bite()
+	var picker := _make_picker()
+	assert_true(marker.pick_up(picker))
+	assert_eq(picker.inventory.count_of("parasol_bitten"), 1)
+	assert_eq(picker.inventory.count_of("parasol"), 0)
 
 
 # -- position -------------------------------------------------------------

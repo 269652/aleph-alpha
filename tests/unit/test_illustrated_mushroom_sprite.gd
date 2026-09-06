@@ -110,3 +110,60 @@ func test_marker_scale_produces_the_procedural_mushrooms_own_world_width():
 			opaque_width * sprite.marker_scale(id), ProceduralMushroomSprite.MUSHROOM_WORLD_WIDTH, 0.5,
 			"%s marker_scale should reproduce the procedural fallback's own world width" % id
 		)
+
+
+# -- bitten variants (see MushroomBiting.gd, docs/concept/mushrooms.md's ----
+# -- fungivory section) ------------------------------------------------------
+#
+# Reported: "bugs should forage mushrooms... render their
+# mushroom_bitten_1.png in world and inventory". Only 3 of 6 species have
+# real bitten art delivered so far -- the has-or-doesn't fallback every
+# other optional illustrated-art seam in this codebase already uses (see
+# has_variants/frame_for above).
+
+const _BITTEN_SPECIES_IDS := ["black_trumpet", "champignon", "chanterelle"]
+const _UNBITTEN_SPECIES_IDS := ["fly_agaric", "psylo", "parasol"]
+
+
+func test_has_bitten_variant_for_the_three_delivered_species():
+	for id in _BITTEN_SPECIES_IDS:
+		assert_true(sprite.has_bitten_variant(id), "%s should have real bitten art" % id)
+
+
+func test_no_bitten_variant_yet_for_the_other_three_species():
+	for id in _UNBITTEN_SPECIES_IDS:
+		assert_false(sprite.has_bitten_variant(id), "%s should not claim bitten art yet" % id)
+		assert_null(sprite.bitten_frame_for(id, 1))
+
+
+func test_bitten_frame_for_returns_a_real_non_blank_texture():
+	for id in _BITTEN_SPECIES_IDS:
+		var image: Image = sprite.bitten_frame_for(id, 0).get_image()
+		var has_opaque_pixel := false
+		for y in image.get_height():
+			for x in image.get_width():
+				if image.get_pixel(x, y).a > 0.5:
+					has_opaque_pixel = true
+					break
+			if has_opaque_pixel:
+				break
+		assert_true(has_opaque_pixel, "%s bitten frame 0 should draw a real illustration, not a blank cell" % id)
+
+
+func test_bitten_frame_for_has_no_leftover_magenta():
+	for id in _BITTEN_SPECIES_IDS:
+		var image: Image = sprite.bitten_frame_for(id, 0).get_image()
+		for y in image.get_height():
+			for x in image.get_width():
+				var c := image.get_pixel(x, y)
+				if c.a <= 0.5:
+					continue
+				assert_false(
+					c.r > 0.85 and c.b > 0.85 and c.g < 0.3,
+					"%s bitten: an opaque pixel should never still read as magenta background" % id
+				)
+
+
+func test_bitten_frame_for_is_deterministic_per_seed():
+	for id in _BITTEN_SPECIES_IDS:
+		assert_eq(sprite.bitten_frame_for(id, 42), sprite.bitten_frame_for(id, 42))
