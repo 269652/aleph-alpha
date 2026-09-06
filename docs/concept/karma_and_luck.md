@@ -28,11 +28,19 @@ already does for `Taming.break_free_chance`.
    — see `Taming.break_free_chance`'s own `affinity` parameter for the
    pattern this copies exactly.
 2. **Karma is legible, not hidden.** A karmic act names its own cause and
-   effect in a code comment and a doc entry — no "mystery meter." The
-   Character Sheet (see `character-sheet-portrait-shipped.md`) is the
-   natural place a player would eventually see it; this pass wires the
-   underlying number correctly and leaves the display as a named,
-   separate follow-up rather than inventing UI under time pressure.
+   effect in a code comment and a doc entry — no "mystery meter." This
+   pillar originally left the display as a named, separate follow-up
+   ("the Character Sheet is the natural place") rather than inventing UI
+   under time pressure — but asked directly, in a later pass: "Karma
+   should be displayed somewhere in a UI." **Built in the live in-game
+   HUD instead of the companion server's Character Sheet web page** (see
+   Status below) — a deliberate divergence from what this pillar
+   originally anticipated: the Character Sheet is a separate browser tab
+   on a second device, so a display only checked there would not give
+   "instant" feedback for the moment a crush actually happens during
+   play. The Character Sheet itself remains a possible future home for a
+   *second*, at-a-glance view of the same number; nothing here forecloses
+   that.
 3. **Karma tracks the player's own DELIBERATE-enough acts, not narrated
    morality.** The starting set below is small and concrete on purpose:
    a real, checkable event (a worm died underfoot, a quest was abandoned,
@@ -187,14 +195,31 @@ change to `PlayerSave`'s own schemaless-Dictionary format.
 - ✅ `Karma` module: event constants, `luck_for`.
 - ✅ `Player.karma` + `Player.luck()`, persisted.
 - ✅ `Taming.break_free_chance` and `OreYield.yields` read `Player.luck()`.
-- ✅ Worm/caterpillar crush → Karma, wired into `World`'s existing crush
-  pass.
+- ✅ Worm/caterpillar/millipede/ant/bug crush → Karma, wired into
+  `World`'s existing crush pass (see `docs/concept/soil_fauna.md`'s
+  "Generalized to..." follow-ups). Mushroom crush joined the same way,
+  reversing its original "a fungus is not an animal" exemption.
 - ✅ `QuestLog`: accept/abandon/derived-fulfilment, wired to Karma.
   `reconcile` runs automatically every `EarthChunkManager.
   SETTLEMENT_STEP_INTERVAL` from `World._step_ecology_batch` whenever the
   player has an accepted quest. `accept`/`abandon` themselves are ready to
   be called by a future player-facing interaction (see the next line).
-- ⬜ Character Sheet display of Karma/Luck.
+- ✅ **In-game HUD display of Karma** (2026-09-06, asked directly) — a
+  themed corner readout, `World._build_karma_display`/`_update_karma_
+  display`, just under the minimap, top-right. `World.karma_display_
+  text`/`karma_display_color` are the pure, tested halves: a signed
+  integer ("Karma: +3"/"Karma: -5"/"Karma: 0"), coloured `UiTheme.ACCENT`
+  (gold) when positive, the new `UiTheme.NEGATIVE` (red) when negative,
+  `UiTheme.TEXT` (neutral) at exactly zero — this pillar's own "should
+  raw Karma be shown as a number" open question, answered: yes, a number,
+  since the request asked for one directly. Refreshed every frame from
+  the live `Player.karma`, the same per-frame-poll pattern every other
+  HUD readout already uses (no change signal exists on `Player`). See
+  design pillar 2 above for why this is the in-game HUD and not the
+  companion server's Character Sheet web page.
+- ⬜ Character Sheet (companion server) display of Karma/Luck — the
+  in-game HUD above covers the request that prompted this; a *second*
+  glance-able view there remains a possible, separate follow-up.
 - ⬜ Player-facing accept/abandon interaction (dialogue or otherwise).
 - ⬜ `FishingMinigame`/`KnappingModel`/`RarityTier` Luck hooks.
 - ⬜ Safety/social quest need sources, settlement quorum, and everything
@@ -207,6 +232,8 @@ change to `PlayerSave`'s own schemaless-Dictionary format.
   slowly" framing), or stay a pure permanent ledger? Left as a pure
   ledger for this pass — simpler, and reversible later without touching
   any of the event-recording call sites, only `luck_for`'s own math.
-- Once a Character Sheet display exists, should raw Karma be shown as a
-  number, or only its qualitative effect on Luck? Deferred to whoever
-  builds that display.
+- ~~Once a display exists, should raw Karma be shown as a number, or only
+  its qualitative effect on Luck?~~ **Answered (2026-09-06):** a signed
+  number (`"Karma: +3"`/`"Karma: -5"`/`"Karma: 0"`), asked for directly —
+  see the in-game HUD entry in Status above. A Character Sheet view, if
+  built later, is free to make its own call independently.

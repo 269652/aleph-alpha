@@ -13701,16 +13701,40 @@ accepted nothing (free in the common case), and otherwise throttles at
 invented number, since that's the actual cadence the underlying
 production/market data can even change on.
 
+✅ **In-game HUD display of Karma** (2026-09-06, asked directly: "Karma
+should be displayed somewhere in a UI with golden and red accents for
+positive vs negative karma") — a themed corner readout, `World._build_
+karma_display`/`_update_karma_display`, just under the minimap, top-right
+(`PanelContainer` on `UiTheme.panel_stylebox`, not a bare `Label` — see
+`concept/hud.md` pillar 1). Two pure, tested halves carry the actual
+decision (`test_world_hud.gd`): `World.karma_display_text(karma)` — a
+signed integer, `"Karma: +3"`/`"Karma: -5"`/`"Karma: 0"` — and `World.
+karma_display_color(karma)` — the new `UiTheme.NEGATIVE` (a warm,
+saturated red, pinned distinct from `ACCENT`'s gold by `test_ui_theme.
+gd`) for negative, the existing `UiTheme.ACCENT` (gold) for positive,
+`UiTheme.TEXT` (neutral) at exactly zero. Refreshed every frame from the
+live `Player.karma` — the same per-frame-poll pattern every other HUD
+readout already uses; `Player` has no change signal for this, and none
+was added. **Deliberately built in the live HUD, not the companion
+server's Character Sheet web page** the concept doc's own design pillar
+originally anticipated: a display only checked from a separate browser
+tab would not give "instant" feedback for the moment a crush actually
+happens during play — see `karma_and_luck.md`'s own note on the
+divergence. 6 new tests (`test_world_hud.gd` ×3, `test_ui_theme.gd` ×1,
+plus the two colour/text pins) all green, zero implementation changes
+needed afterward.
+
 ⬜ **Deliberately out of scope, named rather than silently assumed done**
-(see the concept doc's own Status list): a Character Sheet display of
-Karma/Luck; a player-facing interaction to actually call `QuestLog.
-accept`/`abandon` (dialogue or otherwise — `QuestLog` itself is real,
-tested, engine-free logic with no UI consumer yet, same as `quest.gd`);
-the `FishingMinigame`/`KnappingModel`/`RarityTier` Luck hooks named above;
-every other part of `concept/quests.md`'s fuller vision (settlement
-quorum, safety/social need sources, village endangerment, rewards/
-currency transactions) that was already unbuilt before this pass and
-stays exactly as unbuilt now.
+(see the concept doc's own Status list): a *second*, Character-Sheet
+(companion server) view of the same Karma/Luck numbers — the HUD above
+covers the request that prompted this; a player-facing interaction to
+actually call `QuestLog.accept`/`abandon` (dialogue or otherwise —
+`QuestLog` itself is real, tested, engine-free logic with no UI consumer
+yet, same as `quest.gd`); the `FishingMinigame`/`KnappingModel`/
+`RarityTier` Luck hooks named above; every other part of `concept/
+quests.md`'s fuller vision (settlement quorum, safety/social need
+sources, village endangerment, rewards/currency transactions) that was
+already unbuilt before this pass and stays exactly as unbuilt now.
 
 ### Millipedes: a dedicated autumn leaf-litter decomposer (`concept/soil_fauna.md`, new this pass)
 
