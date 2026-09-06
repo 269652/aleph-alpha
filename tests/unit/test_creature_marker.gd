@@ -2453,6 +2453,32 @@ func test_a_deer_takes_the_windfall_a_horse_ignores():
 	assert_true(horse_world.taken_fruit.is_empty(), "a horse does not")
 
 
+## See docs/concept/material_dsl.md: fruit's real composition, not the flat
+## full-meter-reset feed()/drink() every OTHER forage kind (grass/seed/
+## worm/underfoot) still uses, unchanged, in every neighbouring test here.
+func test_eating_fruit_relieves_hunger_and_thirst_by_its_real_composition():
+	var NutrientRelease := preload("res://src/gameplay/nutrient_release.gd")
+	var world := ForageWorld.new()
+	world.fruit = [{"position": Vector2(20, 0), "species": "apple"}]
+	var deer := _hungry_grazer("deer", world)
+	# Below CreatureNeeds.THIRSTY_THRESHOLD -- observable but not urgent, so
+	# it doesn't compete with hunger for which need the animal acts on (a
+	# real, separate priority this stub world -- with no water at all --
+	# cannot resolve; see SurvivalMeters' own "thirst bites sooner" doc
+	# comment for why thirst would otherwise win).
+	deer._needs.thirst = 0.3
+	for _i in 900:
+		deer._process(1.0 / 60.0)
+		if not world.taken_fruit.is_empty():
+			break
+	assert_false(world.taken_fruit.is_empty(), "the deer should have taken the fruit")
+	var nutrients: Dictionary = NutrientRelease.consume("apple")
+	assert_almost_eq(deer._needs.hunger, 1.0 - nutrients["sugar"], 0.01,
+		"hunger should fall by the real sugar content, not reset to zero")
+	assert_almost_eq(deer._needs.thirst, clampf(0.3 - nutrients["water"], 0.0, 1.0), 0.01,
+		"a juicy fruit should relieve some thirst too")
+
+
 ## Nothing to walk to must not mean standing around starving: an animal on
 ## food terrain still crops what is under it, so a bare meadow with no tuft
 ## entities behaves as it always did.
