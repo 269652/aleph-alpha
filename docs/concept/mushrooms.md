@@ -78,10 +78,23 @@ one genuinely poisons the player.
   context. Psilocybe (psilocybin) poisoning is primarily perceptual/
   psychoactive and rarely physically dangerous on its own, a real, genuinely
   smaller physical danger than Fly Agaric, not a second copy of the same
-  number. Neither is anywhere near the originally-considered Death Cap
-  (*Amanita phalloides*, real amatoxin poisoning, often fatal) — this
-  roster deliberately has no "certainly lethal" tier (see "Revised once
-  real art arrived" below).
+  number. Death Cap (*Amanita phalloides*) — added once real art surfaced
+  for it (see "Roster extended a second time" below) — is a real
+  categorical step beyond both: amatoxin poisoning is a delayed-onset
+  (6–24h), progressive liver/kidney failure, responsible for most fatal
+  mushroom poisonings worldwide. This roster's one certainly-dangerous
+  species, deliberately pinned well clear of Fly Agaric's own severity
+  rather than left as a marginal difference (see `MushroomToxin.
+  severity_for`).
+- **A real lookalike is not automatically a real toxin.** False Death Cap
+  (*Amanita citrina*) shares Death Cap's name and its real visual
+  resemblance (the actual reason foragers treat it with caution), but
+  modern mycological consensus is that it is not itself seriously toxic —
+  at most mildly unpalatable. Its real danger is being *mistaken* for
+  something deadly, not its own chemistry; this project doesn't model
+  lookalike-confusion as a mechanic (see "Deliberately not modeled" below),
+  but the toxicity data itself is still real rather than invented for
+  symmetry with its namesake.
 - **Black Trumpet, Champignon, Chanterelle, and Parasol are real, prized,
   commonly foraged edibles** — the payoff side of the same real activity
   the toxic species make risky.
@@ -100,7 +113,19 @@ follows, applied to art instead of a skill slot. Every replacement species
 below is real, grounded, and re-verified against real mycology rather than
 just renamed in place.
 
-Six species, mirroring `TreeSpecies`'s exact shape (`IDS` + a `SPECIES`
+**Roster extended a second time, once real art surfaced for Death Cap
+too.** While wiring the crushed/bitten sprite sheets for the six species
+above (see "Crushed underfoot" below), real base+crushed+bitten art for
+Death Cap and its real lookalike False Death Cap turned up in the same
+delivery — the very species the original design called for, discovered
+sitting unused rather than commissioned fresh. Wired in as a genuine
+seventh and eighth species rather than a retroactive edit to the six
+above, following the exact same "match what actually exists" principle
+as the first revision. This closes the
+original design's "no certainly lethal species" gap the first revision
+had left open (see the real-world grounding above).
+
+Eight species, mirroring `TreeSpecies`'s exact shape (`IDS` + a `SPECIES`
 profile dict + small per-trait lookups):
 
 | id | display name | toxic | host tree | why |
@@ -111,6 +136,8 @@ profile dict + small per-trait lookups):
 | `champignon` | Champignon | — | *(none — saprotroph)* | the common cultivated table mushroom; real edible |
 | `chanterelle` | Chanterelle | — | `acorn` (oak) | real prized edible, golden |
 | `parasol` | Parasol | — | *(none — saprotroph)* | real edible, large flat cap on a tall stem |
+| `death_cap` | Death Cap | ✅ | `acorn` (oak) | real amatoxin poisoning, often fatal — the roster's one certainly-dangerous species |
+| `false_death_cap` | False Death Cap | — | `pine` | real Amanita lookalike, genuinely NOT seriously toxic despite the name |
 
 `host_tree` reuses `TreeSpecies.IDS` values directly (`"pine"`/`"acorn"`) —
 not a new tree taxonomy — since these are the same real species this
@@ -302,11 +329,15 @@ until this pass.
 - **No persistence/catch-up across a chunk unload**, for the same reason
   `EarthwormPatch`'s burrows and `AntColony`'s mounds aren't — short-
   timescale, self-renewing, chunk-local.
-- **No visual lookalike confusion between species.** All six real species
-  above are visually distinct from each other — there is no in-game
-  ambiguity to create in the first place any more (see "Revised again"
-  above); recognizing danger is entirely a real-time, real-world visual
-  skill now.
+- **No visual lookalike confusion between species.** All eight real
+  species above are visually distinct from each other — there is no
+  in-game ambiguity to create in the first place any more (see "Revised
+  again" above); recognizing danger is entirely a real-time, real-world
+  visual skill now. This holds even for Death Cap/False Death Cap, whose
+  real-world resemblance is exactly what makes the latter a genuinely
+  interesting addition (see the real-world grounding above) — the game
+  simply doesn't model THAT specific confusion as a mechanic, the same
+  choice already made for every other species pair.
 - **No cooking-recipe integration.** `CookingRecipeBook`'s multi-ingredient
   recipe table has zero live callers anywhere in this project today —
   wiring it in at all is a separate, larger, pre-existing gap, not something
@@ -318,29 +349,33 @@ until this pass.
   as a corpse until its recovery clock runs out, same as a crushed one).
   More bite stages are explicitly a later pass, not an oversight here.
 - **Crushed/bitten art is incomplete by the user's own choice.** Only
-  black_trumpet/champignon/chanterelle have real crushed/bitten sheets as
-  of this delivery; fly_agaric/psylo/parasol fall back to their ordinary
-  live look when crushed/bitten (`has_crushed_variant`/
-  `has_bitten_variant` gate this the same way `has_variants` already
-  does) until their art arrives.
+  black_trumpet/champignon/chanterelle/death_cap/false_death_cap have
+  real crushed/bitten sheets as of this delivery; fly_agaric/psylo/parasol
+  fall back to their ordinary live look when crushed/bitten
+  (`has_crushed_variant`/`has_bitten_variant` gate this the same way
+  `has_variants` already does) until their art arrives.
 
 ## Status
 
-- ✅ `MushroomSpecies` (`src/world/mushroom_species.gd`) — IDS, display
-  names, cap colours, `is_toxic`, `host_tree_for`/`is_saprotroph`.
+- ✅ `MushroomSpecies` (`src/world/mushroom_species.gd`) — IDS (8 species,
+  including Death Cap/False Death Cap added once real art surfaced for
+  them), display names, cap colours, `is_toxic`, `host_tree_for`/
+  `is_saprotroph`.
 - ✅ `MushroomFlush` (`src/world/mushroom_flush.gd`) — `flush_drive(moisture,
   season)`, autumn-weighted, zero in winter.
 - ✅ `MushroomToxin` (`src/gameplay/mushroom_toxin.gd`) — per-species
   `severity_for`, `damage_per_second(stacks, species_id)`, wired all the
-  way to a real eat action (see below).
+  way to a real eat action (see below). Death Cap rated well clear of
+  Fly Agaric's own severity, this roster's one certainly-dangerous
+  species; False Death Cap deliberately carries no severity at all.
 - ✅ `ProceduralMushroomSprite` (`src/rendering/procedural_mushroom_sprite.gd`)
   — `generate_image(species_id, identified)` still supports the plain
   shared look as a generator capability, but `MushroomMarker` no longer
   ever calls it with `false` (see "Revised again" above).
 - ✅ `IllustratedMushroomSprite` (`src/rendering/illustrated_mushroom_sprite.gd`)
-  — real 5×5 (25-variant) sheets for all 6 species
+  — real 5×5 (25-variant) sheets for all 8 species
   (`assets/sprites/mushrooms/*.png`), chroma-key despilled where needed
-  (5 of 6 sheets; `fly_agaric`'s own background is already transparent),
+  (7 of 8 sheets; `fly_agaric`'s own background is already transparent),
   each with its own measured `marker_scale(species_id)`. See
   [ai_sprite_prompts.md section 12](../art/ai_sprite_prompts.md#12-wild-mushrooms-one-5x5-sheet-per-species-2026-09-05).
 - ✅ `WildMushroomPatch` (`src/world/wild_mushroom_patch.gd`) — fixed
@@ -348,7 +383,7 @@ until this pass.
   `MushroomSpecies.allows_biome`), PixelNoise-seeded, flush/recovery/
   pick/crush/bite, `is_corpse`/`corpse_kind` (crushed vs bitten, same
   recovery clock as ordinary spent sites -- see "Crushed underfoot").
-- ✅ Item catalog entries for all 6 species (`item_catalog.gd`) — a
+- ✅ Item catalog entries for all 8 species (`item_catalog.gd`) — a
   hard prerequisite for the marker below, since `ItemCatalog.make()`
   fails loudly on an unregistered id.
 - ✅ `MushroomMarker` (`src/rendering/mushroom_marker.gd`) — the visible,
@@ -359,10 +394,11 @@ until this pass.
   the real species item, and scales an illustrated sprite by its own
   measured `marker_scale`, not the procedural generator's flat scale.
   `corpse_kind` shows real `crushed_frame_for`/`bitten_frame_for` art for
-  the 3 species delivered so far (black_trumpet/champignon/chanterelle),
-  falling back to the live look for the 3 not yet delivered.
-  `take_bite(_amount)` duck-types into `DecomposerMarker`'s existing bite
-  path — see "A decomposer's single bite".
+  the 5 species delivered so far (black_trumpet/champignon/chanterelle/
+  death_cap/false_death_cap), falling back to the live look for the 3 not
+  yet delivered (fly_agaric/psylo/parasol). `take_bite(_amount)`
+  duck-types into `DecomposerMarker`'s existing bite path — see "A
+  decomposer's single bite".
 - ✅ `MushroomRenderer` (`src/rendering/mushroom_renderer.gd`) —
   spawn_markers/sync_markers keep markers in sync with which cells are
   fruiting (no per-tick identification push any more), and now also keep
