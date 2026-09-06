@@ -37,14 +37,40 @@ const TRAIL_BIAS := 0.7
 ## case this returns wander_heading completely unchanged: real
 ## exploration, nothing to bias toward.
 static func biased_heading(wander_heading: Vector2, gradient: Vector2) -> Vector2:
-	if gradient == Vector2.ZERO:
+	return _lerped_heading(wander_heading, gradient, TRAIL_BIAS)
+
+
+## How gently a scout's own ASSIGNED sector (see spread_heading's own doc
+## comment) nudges its wander heading -- deliberately far weaker than
+## TRAIL_BIAS: an assigned sector is not a real discovery, just a
+## diversity nudge so several scouts dispatched together fan out rather
+## than converging on near-identical paths (reported live: "other ants
+## follow him in a line even when nothing has been discovered yet"). A
+## real sensed trail (TRAIL_BIAS) must always be able to override it
+## outright -- pinned by test_spread_heading_bias_is_gentler_than_real_
+## trail_bias, not just asserted by convention.
+const SPREAD_BIAS := 0.3
+
+
+## `assigned_direction`: this scout's own dispatch-time assigned sector
+## (see EarthChunkManager's own scout-wave dispatch, which spreads several
+## scouts' assigned directions evenly around a circle) -- Vector2.ZERO for
+## a scout dispatched alone (or any caller with nothing to spread against),
+## in which case this returns wander_heading unchanged, same "nothing to
+## bias toward" contract biased_heading's own gradient parameter has.
+static func spread_heading(wander_heading: Vector2, assigned_direction: Vector2) -> Vector2:
+	return _lerped_heading(wander_heading, assigned_direction, SPREAD_BIAS)
+
+
+static func _lerped_heading(wander_heading: Vector2, bias_direction: Vector2, weight: float) -> Vector2:
+	if bias_direction == Vector2.ZERO:
 		return wander_heading
-	var blended := wander_heading.lerp(gradient, TRAIL_BIAS)
+	var blended := wander_heading.lerp(bias_direction, weight)
 	if blended.length() < 0.0001:
-		# wander_heading and gradient point almost exactly opposite -- lerp
-		# degenerates toward zero exactly at the midpoint. Break the tie
-		# with a perpendicular nudge (same "never return a dead zero
+		# wander_heading and bias_direction point almost exactly opposite --
+		# lerp degenerates toward zero exactly at the midpoint. Break the
+		# tie with a perpendicular nudge (same "never return a dead zero
 		# vector" reasoning ThreatAvoidantWander.away_biased_step already
 		# uses) rather than propagate a non-unit-length NaN-prone result.
-		return Vector2(-gradient.y, gradient.x)
+		return Vector2(-bias_direction.y, bias_direction.x)
 	return blended.normalized()

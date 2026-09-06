@@ -8914,68 +8914,27 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   depositing food throughout" isolation the five tests mentioned above
   already needed, for the identical reason. No production code changed.
   Full writeup: [soil_fauna.md](concept/soil_fauna.md#a-real-food-economy-storage-upkeep-and-fewer-bigger-hungrier-colonies).
-- ✅ **Real food stock (not just a percentage) on hover, and scouts that
-  mark leaf clusters for dedicated workers (2026-09-06)** — requested
-  directly: (1) "the ant mount should show how much food is on stock in
-  the hover tooltip", (2) "the mound should send out more ants for
-  scouting which mark clusters of leaves ... and then workers are sent
-  out to collect marked clusters and invalidated when its empty".
-  1. **`AntMoundMarker.get_display_name()`** now reports
-     `AntColony.food_stored_at` (the real absolute quantity, already
-     existed, never surfaced) alongside population —
-     `"Ant Mound (population 15, food 45)"` — joining the mouse-hover
-     tooltip rather than the bar panel above, which already answers a
-     different question ("is this colony food-secure", a 0-1 fraction)
-     than "how much is in the larder" (a raw number).
-  2. **`AntColony._cluster_marks`** (new, `mark_cluster`/
-     `cluster_marks_at`/`invalidate_cluster_mark`) — a mound's own
-     remembered leaf-cluster positions, capped at
-     `MAX_CLUSTER_MARKS_PER_MOUND` (3). A second, coarser, ENUMERABLE
-     concept alongside the existing `PheromoneField` trail (a continuous
-     decaying field can answer "how strong is the trail exactly here",
-     never "list every place worth sending a dedicated worker").
-  3. **`AntForagerMarker._resolve_arrival_at_food`** now also checks, on
-     a successful real-scout (`scout == true`) leaf pickup, whether real
-     leaves are still there once this one is gone
-     (`AntColony.CLUSTER_MIN_LEAVES`, 3, within the ordinary
-     `FORAGE_RADIUS_TILES`) and marks the spot (`AntColony.mark_cluster`)
-     if so — the same "on the way back" moment `deposit_pheromone`
-     already marks a single tile at. A worker's own trip (`scout ==
-     false`) never re-marks.
-  4. **`EarthChunkManager._dispatch_cluster_workers`** (new) sends a
-     worker straight at every mark a mound holds, re-verifying each is
-     still real and non-empty FIRST — an empty one is invalidated
-     instead of dispatched to, exactly as requested.
-  5. **Genuinely ADDS ants, not just re-purposes existing ones** — the
-     literal "send out MORE ants" ask, delivered by the worker half
-     (ordinary scouting already means "more ants exploring" as a
-     baseline). `_dispatch_cluster_workers` lands in its own SEPARATE
-     tracking bucket and cap (`_active_ant_scouts_and_workers` /
-     `AntColony.active_cluster_ant_cap_at`, mirroring
-     `active_forager_cap_at`'s own population-scaled shape against a
-     smaller, separate ceiling, `MAX_CONCURRENT_CLUSTER_ANTS` (5) vs.
-     `MAX_CONCURRENT_FORAGERS` (15)) — so a mound already running its
-     full scout complement can still send workers on top of that.
-  **Landed the same day as, then rebuilt on top of, "Real scouting
-  replaces omniscient dispatch entirely"** (see that entry below): the
-  first version of this pass pre-scanned a wider radius from the mound
-  before ever dispatching a scout — exactly the "every candidate within
-  reach, from a stationary point" shape that entry's own "no omniscience
-  please" report was busy removing. Rebuilt once that landed to fit it
-  instead of reintroducing the pattern: no separate scout dispatch
-  exists any more at all — the mound's real scout already wanders and
-  finds food on its own; this only adds the cluster-check-and-mark step
-  to its existing successful pickup, and a genuinely new worker dispatch
-  that goes straight at a mark instead of wandering to find one. Scoped
-  to leaf litter only (the explicit example given); no visual
-  distinction between a worker and an ordinary scout (both are the
-  identical `AntForagerMarker`). New/rewritten coverage in
-  `test_ant_colony.gd`, `test_ant_forager_marker.gd`,
-  `test_ant_mound_marker.gd`, and `test_earth_chunk_manager.gd`
-  (scout/cluster/forage-substring regression sweeps all green) confirm
-  this sits cleanly alongside the real-scouting rework rather than
-  duplicating or conflicting with it. Full writeup:
-  [soil_fauna.md](concept/soil_fauna.md#scouts-mark-leaf-clusters-workers-collect-from-marks).
+- ✅ **Real food stock (not just a percentage) on hover (2026-09-06)** —
+  requested directly: "the ant mount should show how much food is on
+  stock in the hover tooltip". `AntMoundMarker.get_display_name()` now
+  reports `AntColony.food_stored_at` (the real absolute quantity, already
+  existed, never surfaced) alongside population —
+  `"Ant Mound (population 15, food 45)"` — joining the mouse-hover
+  tooltip rather than the bar panel above, which already answers a
+  different question ("is this colony food-secure", a 0-1 fraction) than
+  "how much is in the larder" (a raw number).
+  **A same-day companion pass built alongside this one — scouts marking
+  leaf clusters (`AntColony._cluster_marks`) for a separate
+  `EarthChunkManager._dispatch_cluster_workers` dispatch straight at
+  those remembered exact positions — was superseded the same day by a
+  more complete cluster-recruitment mechanism (see the entry below) and
+  has been removed entirely**, rather than kept running alongside it: a
+  worker dispatched straight at a remembered exact position is still
+  omniscient dispatch (a smaller, scout-populated candidate list instead
+  of a whole-mound scan, but still no local sensing/trail-following in
+  the traffic it actually sent out), and it never encoded a direction or
+  a stop signal into the pheromone field the way the replacement does.
+  Full writeup: [soil_fauna.md](concept/soil_fauna.md#a-real-food-stock-number-not-just-a-percentage-on-hover).
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to
@@ -9410,6 +9369,95 @@ forager/scout ant-dispatch cluster in `test_earth_chunk_manager.gd`
 (real chunk-load integration tests included) all green. Full writeup:
 `soil_fauna.md`'s new "Scouting: real search, not omniscient dispatch"
 section, and its "Pheromone trails" section's own rewrite to match.
+
+✅ **Cluster recruitment: multi-scout waves, directional trails, and
+invalidation (2026-09-06, same day)** — reported live, as a single dense
+follow-up to the scouting rework above: "the ant behavior still has some
+flaws ... When a scout goes out other ants follow him in a line even
+when nothing has been discovered yet... the mound should send out
+multiple scouts in random directs. these scouts should only lay out
+pheromones after they discovered a cluster for which multiple ants are
+needed ... he encodes direction and amount in the pheromones so other
+ants don't follow it back into the mound on the way back from a
+discovery ... then when the scouts return the mound dispatches more ants
+which follow / resolve the pheromone trails and the last ant which takes
+home the last piece or one that encounters it empty invalidates the
+pheromone trail by masking the existing pheromone trail with complete
+marker." Built on a separate branch while a CONCURRENT session
+independently built and merged its own "scouts mark leaf clusters,
+workers collect from marks" pass (`AntColony._cluster_marks`, see the
+entry above) into `main` — the two were reconciled at merge time by
+keeping this mechanism and removing that one entirely (see that entry's
+own note on why: an exact-remembered-position worker dispatch is still
+omniscient, and never encoded a direction or stop signal into the
+pheromone field the way this does).
+1. **`PheromoneField`'s deposit shape** is now `{amount, direction,
+   exhausted}` (was a bare scalar). New `deposit_trail(tile, direction,
+   amount)` REPLACES whatever was at a tile (a fresh reading beats a
+   blended history here); plain `deposit()` is kept, unchanged, for
+   backward compatibility. New `nearest_trail_near`/`has_active_trail`
+   read only real, non-exhausted, DIRECTIONAL deposits; `concentration_
+   at`/`gradient_direction` skip an exhausted deposit entirely. New
+   `invalidate_near(point, radius_tiles, tile_size)` masks every real
+   deposit within radius as `exhausted = true` in place (kept, not
+   erased, so it still decays on its own ordinary schedule). 10 new
+   tests (22 total, `test_pheromone_field.gd`).
+2. **`AntColony.CLUSTER_THRESHOLD` (3)** — how many real items sensed
+   together count as a cluster worth recruiting for, versus one forager
+   quietly handling a solo find alone. New wrapper methods
+   `deposit_pheromone_trail`/`has_active_pheromone_trail`/`nearest_
+   pheromone_trail_near`/`invalidate_pheromone_near` (all null-safe) sit
+   in front of the `PheromoneField` methods above. New `SCOUT_WAVE_SIZE`
+   (3) / `RESOLVER_WAVE_SIZE` (2).
+3. **`AntForagerMarker`** gained `resolver`/`assigned_heading_bias`.
+   `_sense_food_nearby` now reports `cluster_size`; a find at or past
+   `CLUSTER_THRESHOLD` sets `_is_cluster_find`. Only a cluster find (or a
+   resolver) ever touches the pheromone field, in either direction — a
+   solo find neither deposits nor invalidates anything. A cluster find
+   lays one trail tile per newly-crossed tile on the walk home
+   (`_maybe_deposit_trail_tile`, called from `_process`'s RETURNING leg),
+   direction computed fresh from THAT tile toward the food's own real
+   position — so a trail read anywhere on the way home points back OUT
+   toward the resource, never toward the mound. A `resolver` checks
+   `nearest_pheromone_trail_near` FIRST every scouting step and, if
+   found, walks in exactly that stored direction with no blending at
+   all; otherwise it falls through to the same wander/gradient/spread
+   heading an ordinary scout uses. Arrival (`_resolve_arrival_at_food`)
+   invalidates the trail immediately on arriving to an already-empty
+   spot, or once a fresh, real, LOCAL re-check
+   (`_remaining_same_kind_count`) finds nothing of the same kind left.
+4. **`AntScoutWander.spread_heading`** (new, `SPREAD_BIAS` 0.3, sharing a
+   `_lerped_heading` helper with the existing `biased_heading`) nudges
+   each wave member's own wander toward its assigned sector, applied
+   AFTER the real pheromone-gradient bias so a genuine trail still wins.
+5. **`EarthChunkManager.step_ants`** now calls `AntColony.has_active_
+   pheromone_trail(cell)` per mound, per forage tick, dispatching a
+   resolver wave (new `_dispatch_ant_resolver_wave`) if a trail is
+   already known, or a scout wave (new `_dispatch_ant_scout_wave`, each
+   member assigned a different sector spread evenly around a circle)
+   otherwise — both funnel through a shared `_dispatch_forager`, and
+   both draw from the SAME `active_forager_cap_at` pool ordinary
+   foraging already used (a resolver is not additional traffic on top of
+   scouting, it is what the mound dispatches next once something is
+   known — unlike the superseded `_cluster_marks` design's own separate
+   concurrent-ant pool). `_dispatch_ant_scout` kept as a thin,
+   un-spread wrapper for existing direct-dispatch callers.
+**What this does NOT include**: seed/windfall cluster recruitment
+(leaf litter is still the only kind this project places densely enough
+to realistically cluster); any visual distinction between a scout, a
+resolver, and an ordinary solo forager; a choice between several
+simultaneously-active trails (`nearest_trail_near` returns only the
+closest one). 168/168 green across `test_pheromone_field.gd` (22),
+`test_ant_scout_wander.gd` (10), `test_ant_colony.gd` (67),
+`test_ant_forager_marker.gd` (53), and `test_ant_mound_marker.gd` (16);
+the scout-wave/resolver-wave/dispatch tests in
+`test_earth_chunk_manager.gd` (`test_dispatch_ant_scout_wave_spreads_
+several_scouts_across_distinct_sectors`, `test_dispatch_ant_resolver_
+wave_dispatches_real_resolvers`, `test_step_ants_dispatches_scouts_when_
+no_trail_is_known`, `test_step_ants_dispatches_resolvers_once_a_trail_is_
+known`, plus the pre-existing ant-dispatch/weather/mound-marker coverage
+in that same file) all green too. Full writeup:
+[soil_fauna.md](concept/soil_fauna.md#cluster-recruitment-multi-scout-waves-directional-trails-and-invalidation).
 
 ⬜ **Still no litter-density accumulation or soil-fertility feedback, and
 no ground-covering visual effect** (unchanged scope cut — see

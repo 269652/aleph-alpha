@@ -118,6 +118,31 @@ var forage_kind := "seed"
 ## tests exercising APPROACHING/RETURNING in isolation) completely
 ## unaffected.
 var scout := false
+
+## Dispatched specifically to FOLLOW a known trail (see
+## EarthChunkManager's own scout-vs-resolver dispatch choice, gated on
+## AntColony.has_active_pheromone_trail) rather than explore blind --
+## reported live: "when the scouts return the mound dispatches more ants
+## which follow / resolve the pheromone trails". Shares the exact same
+## SCOUTING phase/sensing/commit contract `scout` does (see _step_
+## scouting) -- the only real difference is that a resolver PRIORITIZES
+## PheromoneField.nearest_trail_near over ambient wander, while a plain
+## scout only ever gets the softer gradient_direction bias. Mutually
+## exclusive with `scout` in practice (real dispatch sets exactly one),
+## but nothing enforces that structurally -- both are plain opt-in flags,
+## same as `scout` always has been.
+var resolver := false
+
+## This scout's own dispatch-time assigned sector (see EarthChunkManager's
+## own scout-wave dispatch, which spreads several scouts' assigned
+## directions evenly around a circle) -- Vector2.ZERO (the default) for a
+## resolver, or a scout dispatched alone, in which case AntScoutWander.
+## spread_heading leaves wander completely unbiased. Reported live: "the
+## mound should send out multiple scouts in random directs" -- this is
+## the concrete fix for several scouts dispatched together otherwise
+## reading as one wandering ant with others following in a line.
+var assigned_heading_bias := Vector2.ZERO
+
 ## This forager's own per-instance identity for AmbientFlyerMovement's
 ## roam (see that class's own direction_at: "deterministic" there means
 ## stable WITHIN one forager's own lifetime, not reproducible across runs
@@ -146,6 +171,30 @@ var _movement: AmbientFlyerMovement
 ## which have no such visual (see _update_carried_leaf).
 var carried_leaf_species := ""
 var carried_leaf_season := ""
+
+## Whether the food this trip committed to (see _sense_food_nearby) was
+## sensed alongside AntColony.CLUSTER_THRESHOLD or more of its own kind --
+## a real recruitment-worthy find, not something one ant quietly cleans up
+## alone. Only a cluster find ever lays a trail on the way home (see
+## _process's RETURNING branch) -- reported live: "these scouts should
+## only lay out pheromones after they discovered a cluster for which
+## multiple ants are needed".
+var _is_cluster_find := false
+## How many were sensed together at commit time (see _sense_food_nearby) --
+## encoded into the trail as its own "amount" (see PheromoneField.
+## deposit_trail) so a resolver reading it has some idea how much is
+## really out there, not just that something is.
+var _cluster_size := 0
+## Set once this specific ant has determined the cluster is spent (took
+## the last real item, or arrived to find it already empty -- see
+## _resolve_arrival_at_food) so the walk home never lays a fresh trail
+## for something that no longer exists.
+var _trail_invalidated := false
+## Throttles trail deposits to once per NEW tile crossed on the way home
+## (see _maybe_deposit_trail_tile), not every single frame -- a real ant
+## does not re-mark ground it is still standing on.
+var _last_trail_tile := Vector2i.ZERO
+var _has_deposited_trail_tile := false
 
 var _behavior := AntForageBehavior.new()
 ## The species this trip is carrying, if any (windfall only -- a grass
@@ -220,7 +269,7 @@ func _ensure_initialized() -> void:
 	_leaf_sprite = Sprite2D.new()
 	_leaf_sprite.visible = false
 	add_child(_leaf_sprite)
-	if scout:
+	if scout or resolver:
 		wander_seed = randi()
 		_movement = AmbientFlyerMovement.new(
 			WALK_SPEED * SCOUT_SPEED_FRACTION,
@@ -276,6 +325,11 @@ func _process(delta: float) -> void:
 		# once hit (a short leg + one big step overshoots past the target,
 		# then overshoots back, forever), avoided here from the start.
 		position = position.move_toward(leg_target, WALK_SPEED * delta)
+		if (
+			_behavior.phase == AntForageBehavior.Phase.RETURNING
+			and _is_cluster_find and not _trail_invalidated
+		):
+			_maybe_deposit_trail_tile()
 		return
 	match _behavior.phase:
 		AntForageBehavior.Phase.APPROACHING:
@@ -305,9 +359,28 @@ func _step_scouting(delta: float) -> void:
 		forage_kind = found.kind
 		carried_leaf_species = found.get("species", "")
 		carried_leaf_season = found.get("season", "")
+		_cluster_size = found.get("cluster_size", 1)
+		_is_cluster_find = _cluster_size >= AntColony.CLUSTER_THRESHOLD
 		_behavior.commit_to_food()
 		_update_sprite()
 		return
+	# A resolver's whole job is to reliably reach a KNOWN cluster, not
+	# explore -- if a real trail is sensed nearby, follow its own stored
+	# direction exactly (no blending with ambient wander at all: unlike a
+	# scout's own soft gradient_direction bias, this is a deliberate,
+	# purposeful step, the same "follow / resolve the pheromone trails"
+	# distinct role reported live). A scout never takes this branch at all
+	# (dispatch only ever sends resolvers where a trail is already known
+	# to exist -- see EarthChunkManager's own dispatch choice).
+	if resolver and _colony != null:
+		var trail := _colony.nearest_pheromone_trail_near(
+			_mound_cell, position, float(TerrainRenderer.TILE_SIZE)
+		)
+		if not trail.is_empty():
+			var trail_direction: Vector2 = trail.direction
+			position += trail_direction * (WALK_SPEED * SCOUT_SPEED_FRACTION) * delta
+			_face(trail_direction)
+			return
 	var wander_direction := _movement.direction_at(mound_position, position, _elapsed_time, wander_seed)
 	var gradient := Vector2.ZERO
 	if _colony != null:
@@ -315,6 +388,7 @@ func _step_scouting(delta: float) -> void:
 		if field != null:
 			gradient = field.gradient_direction(position, float(TerrainRenderer.TILE_SIZE))
 	var heading := AntScoutWander.biased_heading(wander_direction, gradient)
+	heading = AntScoutWander.spread_heading(heading, assigned_heading_bias)
 	position += heading * (WALK_SPEED * SCOUT_SPEED_FRACTION) * delta
 	_face(heading)
 
@@ -341,17 +415,21 @@ func _sense_food_nearby() -> Dictionary:
 		return {
 			"kind": "leaf", "position": leaf.position,
 			"species": leaf.get("species", ""), "season": leaf.get("season", ""),
+			"cluster_size": leaves.size(),
 		}
 	var sense_radius_tiles := int(ceil(AntColony.SENSE_RADIUS_TILES))
 	var seeds: Array = _world.grass_seeds_near(position, sense_radius_tiles)
 	seeds = seeds.filter(func(s): return position.distance_to(s["position"]) <= sense_radius_px)
 	if not seeds.is_empty():
-		return {"kind": "seed", "position": seeds[0]["position"]}
+		return {"kind": "seed", "position": seeds[0]["position"], "cluster_size": seeds.size()}
 	var fruit: Array = _world.fruit_near(position, sense_radius_tiles)
 	fruit = fruit.filter(func(f): return position.distance_to(f["position"]) <= sense_radius_px)
 	fruit = fruit.filter(func(f): return TreeSpecies.is_nut(String(f.get("species", ""))))
 	if not fruit.is_empty():
-		return {"kind": "windfall", "position": fruit[0]["position"], "species": fruit[0]["species"]}
+		return {
+			"kind": "windfall", "position": fruit[0]["position"],
+			"species": fruit[0]["species"], "cluster_size": fruit.size(),
+		}
 	return {}
 
 
@@ -367,22 +445,16 @@ func _face(direction: Vector2) -> void:
 
 ## Real arrival at the food's own position: take it for real (re-checked
 ## HERE, not guaranteed by having been dispatched at all -- something else
-## may have taken it first) and, on success, mark the spot with this
-## mound's own trail pheromone so the next dispatched scout's own local
-## sensing is more likely to be drawn back to a known-good source (see
-## PheromoneField).
-##
-## A successful LEAF pickup by a real SCOUT (`scout`) additionally checks
-## whether real leaves are still there once this one is gone (see
-## docs/concept/soil_fauna.md "Scouts mark leaf clusters, workers collect
-## from marks") -- AntColony.CLUSTER_MIN_LEAVES or more remaining within
-## FORAGE_RADIUS_TILES marks the spot as a real cluster worth a dedicated
-## worker trip later (EarthChunkManager._dispatch_cluster_workers), rather
-## than the ordinary single find this trip already resolved on its own. A
-## WORKER (`scout == false`, sent straight at an already-known mark) never
-## re-marks on arrival -- only a real scout's own fresh discovery counts,
-## the same "on the way back" moment pheromone deposit already marks a
-## single tile at.
+## may have taken it first). Reported live: "these scouts should only lay
+## out pheromones after they discovered a cluster... the last ant which
+## takes home the last piece or one that encounters it empty invalidates
+## the pheromone trail" -- a solo (non-cluster) find never touches the
+## pheromone field at all any more, in either direction. A cluster find
+## either keeps recruiting (something real is still left nearby -- the
+## actual trail-laying happens progressively on the walk home, see
+## _process's RETURNING branch) or gets invalidated immediately: on a
+## failed take (something else already emptied it) or on a successful
+## take that turns out to be the last one.
 func _resolve_arrival_at_food() -> void:
 	var succeeded := false
 	if _world != null:
@@ -394,19 +466,77 @@ func _resolve_arrival_at_food() -> void:
 		else:
 			succeeded = _world.take_grass_seed_at(target_position)
 	_behavior.arrive_at_food(succeeded)
-	if not succeeded or _colony == null:
+	if not (_is_cluster_find or resolver):
 		return
-	_deposit_pheromone_at(target_position)
-	if scout and forage_kind == "leaf" and _world != null:
-		var reach := AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
-		if _world.leaf_litter_near(target_position, reach).size() >= AntColony.CLUSTER_MIN_LEAVES:
-			_colony.mark_cluster(_mound_cell, target_position)
+	if not succeeded:
+		_invalidate_trail_near(target_position)  # arrived to find it already empty
+		return
+	if _remaining_same_kind_count() <= 0:
+		_invalidate_trail_near(target_position)  # took the last real item
 
 
-func _deposit_pheromone_at(pixel_position: Vector2) -> void:
+## Real, LOCAL re-check (mirrors _sense_food_nearby's own per-kind query,
+## at the food's own position rather than this ant's current one -- by
+## now they are the same spot) -- how many of forage_kind are still there
+## after this ant's own take. Reads the REAL world state fresh rather than
+## doing arithmetic on the cluster_size sensed at commit time: the take
+## itself already mutated the real data (consume_leaf_litter_at/
+## take_grass_seed_at/take_fruit_at), so a fresh query already reflects
+## one fewer -- no separate "minus one" bookkeeping needed, and no risk of
+## drifting out of sync with whatever else might also be consuming the
+## same cluster concurrently.
+func _remaining_same_kind_count() -> int:
+	if _world == null:
+		return 0
+	var sense_radius_px := AntColony.SENSE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
+	var sense_radius_tiles := int(ceil(AntColony.SENSE_RADIUS_TILES))
+	match forage_kind:
+		"leaf":
+			return _world.leaf_litter_near(target_position, sense_radius_px).size()
+		"seed":
+			return _world.grass_seeds_near(target_position, sense_radius_tiles).size()
+		"windfall":
+			var fruit: Array = _world.fruit_near(target_position, sense_radius_tiles)
+			return fruit.filter(func(f): return TreeSpecies.is_nut(String(f.get("species", "")))).size()
+	return 0
+
+
+## Masks the trail as spent (see PheromoneField.invalidate_near) and
+## remembers it locally so this ant's own walk home never lays a fresh
+## one for something that no longer exists (see _process's RETURNING
+## branch). SENSE_RADIUS_TILES, the same local-vicinity scale this
+## marker's own sensing already uses, rather than reaching into
+## PheromoneField's own RADIUS_TILES constant for a second, unrelated
+## notion of "nearby".
+func _invalidate_trail_near(pixel_position: Vector2) -> void:
+	_trail_invalidated = true
+	if _colony == null:
+		return
+	_colony.invalidate_pheromone_near(
+		_mound_cell, pixel_position, AntColony.SENSE_RADIUS_TILES, float(TerrainRenderer.TILE_SIZE)
+	)
+
+
+## Lays one real trail marker per NEW tile crossed on the way home (see
+## _process's RETURNING branch, which calls this only for a cluster find
+## not yet invalidated) -- direction computed exactly toward the food's
+## own real position from wherever this tile is, never inferred, so a
+## later ant reading it near the mound heads OUT rather than mistaking
+## the trail's own origin for its destination (reported live: "he encodes
+## direction and amount in the pheromones so other ants don't follow it
+## back into the mound").
+func _maybe_deposit_trail_tile() -> void:
+	if _colony == null:
+		return
 	var tile_size := float(TerrainRenderer.TILE_SIZE)
-	var tile := Vector2i(floori(pixel_position.x / tile_size), floori(pixel_position.y / tile_size))
-	_colony.deposit_pheromone(_mound_cell, tile)
+	var tile := Vector2i(floori(position.x / tile_size), floori(position.y / tile_size))
+	if _has_deposited_trail_tile and tile == _last_trail_tile:
+		return
+	_has_deposited_trail_tile = true
+	_last_trail_tile = tile
+	var to_food := target_position - position
+	var direction := to_food.normalized() if to_food.length() > 0.01 else Vector2.ZERO
+	_colony.deposit_pheromone_trail(_mound_cell, tile, direction, float(_cluster_size))
 
 
 ## Real arrival back at the mound: tells the colony (and through it, the

@@ -120,6 +120,45 @@ const FORAGE_RADIUS_TILES := 2.0
 ## is_half_the_forage_radius.
 const SENSE_RADIUS_TILES := FORAGE_RADIUS_TILES * 0.5
 
+## How many real items a scout must sense together (see AntForagerMarker.
+## _sense_food_nearby) before it counts as a real CLUSTER worth recruiting
+## other ants for, rather than something one ant can quietly clean up
+## alone -- reported live: "these scouts should only lay out pheromones
+## after they discovered a cluster for which multiple ants are needed".
+## 3, not 2: a pair sitting together is still well within what a single
+## forager handles over a couple of ordinary trips without ever needing
+## to recruit help; real mass recruitment in ant colonies kicks in for
+## genuinely rich finds, not the first hint of more than one item. A real
+## design knob, not itself test-locked (see FORAGE_RADIUS_TILES's own doc
+## comment for the identical precedent) -- pinned by test_cluster_
+## threshold_is_pinned so a future change is a deliberate edit, not a
+## silent drift.
+const CLUSTER_THRESHOLD := 3
+
+## How many scouts go out TOGETHER, spread evenly around a circle (see
+## EarthChunkManager._dispatch_ant_scout_wave/AntScoutWander.spread_
+## heading), when a mound has no known active trail to recruit toward --
+## reported live: "the mound should send out multiple scouts in random
+## directs". Naturally clamped by active_forager_cap_at like any other
+## dispatch (a young mound with a cap of 1 still only ever gets one scout
+## out, wave or not) -- this is "how many to ATTEMPT", not a guarantee.
+## 3, matching CLUSTER_THRESHOLD's own reasoning: enough real coverage of
+## the mound's small home range to plausibly find something without
+## committing a large fraction of a young colony's whole workforce to
+## speculative exploration at once.
+const SCOUT_WAVE_SIZE := 3
+
+## How many resolvers go out once a mound DOES have a known active trail
+## (see EarthChunkManager._dispatch_ant_resolver_wave) -- reported live:
+## "when the scouts return the mound dispatches more ants which follow /
+## resolve the pheromone trails". Smaller than SCOUT_WAVE_SIZE: a
+## confirmed cluster is a focused, already-de-risked effort, not blind
+## exploration, so it does not need as many committed at once -- the
+## trail persists (see PheromoneField.decay/invalidate_near) long enough
+## for further waves across later step_ants ticks if the cluster is still
+## good.
+const RESOLVER_WAVE_SIZE := 2
+
 ## How far a mound caches a harvested seed before it counts as planted, in
 ## tiles. This is the shortest-range disperser of the game's whole carrier
 ## family, and deliberately so, in order:
@@ -311,39 +350,6 @@ var _pheromones: Dictionary = {}
 ## well-fed mound can now visibly have as many workers out at once as it
 ## actually starts with.
 const MAX_CONCURRENT_FORAGERS := 15
-
-## How many leaves within FORAGE_RADIUS_TILES of a real scout's own find
-## (see docs/concept/soil_fauna.md "Scouts mark leaf clusters, workers
-## collect from marks") count as a real CLUSTER worth marking for
-## dedicated worker trips, rather than the ordinary single pickup any
-## scout already resolves on its own. Deliberately reuses
-## FORAGE_RADIUS_TILES rather than a second, independently-tuned reach --
-## a real scout's own local sensing (AntColony.SENSE_RADIUS_TILES) is
-## what finds the food in the first place now (see "Scouting: real
-## search, not omniscient dispatch"); this only asks whether MORE turns
-## out to be nearby once something real is already in hand, at the same
-## "immediate vicinity" scale this codebase already has a name for.
-const CLUSTER_MIN_LEAVES := 3
-
-## How many clusters one mound remembers at once -- a hard cap so a
-## colony's own memory can't grow without bound if scouts keep finding
-## clusters faster than workers clear them. A mound already remembering
-## its max ignores a newly-scouted cluster rather than evicting an older,
-## possibly still-productive mark.
-const MAX_CLUSTER_MARKS_PER_MOUND := 3
-
-## How many scouts+workers this mound may have concurrently active,
-## SEPARATELY from MAX_CONCURRENT_FORAGERS -- requested directly ("send
-## out MORE ants for scouting"), so this genuinely adds concurrent ants
-## rather than competing with ordinary foragers for the same
-## active_forager_cap_at slots. Smaller than MAX_CONCURRENT_FORAGERS: not
-## every tick finds a cluster-worthy patch to begin with, so this pool
-## doesn't need the same ceiling ordinary, near-constant foraging does.
-const MAX_CONCURRENT_CLUSTER_ANTS := 5
-
-## Vector2i mound cell -> Array[Vector2] (real pixel positions of clusters
-## this mound currently remembers -- see mark_cluster).
-var _cluster_marks: Dictionary = {}
 
 
 func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
@@ -560,18 +566,6 @@ func active_forager_cap_at(cell: Vector2i) -> int:
 	return clampi(roundi(fraction * MAX_CONCURRENT_FORAGERS), 1, MAX_CONCURRENT_FORAGERS)
 
 
-## The scout/worker sibling of active_forager_cap_at -- identical
-## population-scaled shape, against the separate MAX_CONCURRENT_CLUSTER_
-## ANTS ceiling (see that constant's own doc comment on why it is smaller
-## and separate).
-func active_cluster_ant_cap_at(cell: Vector2i) -> int:
-	var capacity := capacity_at(cell)
-	if capacity <= 0.0:
-		return 1
-	var fraction := population_at(cell) / capacity
-	return clampi(roundi(fraction * MAX_CONCURRENT_CLUSTER_ANTS), 1, MAX_CONCURRENT_CLUSTER_ANTS)
-
-
 ## This mound's own trail pheromone field, or null if it has never laid
 ## one down -- a pure read, so a scouting forager sensing a local gradient
 ## (see PheromoneField.gradient_direction, called only when this is
@@ -579,39 +573,6 @@ func active_cluster_ant_cap_at(cell: Vector2i) -> int:
 ## allocation just to find a mound has no trail yet.
 func pheromones_at(cell: Vector2i) -> PheromoneField:
 	return _pheromones.get(cell)
-
-
-## Marks a leaf cluster centred at `position` (a real pixel position,
-## already confirmed by the caller -- see EarthChunkManager._scout_for_
-## leaf_cluster_near_mound -- to have at least CLUSTER_MIN_LEAVES nearby)
-## as a known target for this mound's own worker dispatch. Capped at
-## MAX_CLUSTER_MARKS_PER_MOUND -- a mound already remembering its max
-## ignores a new one rather than evicting an older, possibly still-
-## productive mark.
-func mark_cluster(cell: Vector2i, position: Vector2) -> void:
-	var marks: Array = _cluster_marks.get(cell, [])
-	if marks.size() >= MAX_CLUSTER_MARKS_PER_MOUND:
-		return
-	marks.append(position)
-	_cluster_marks[cell] = marks
-
-
-## This mound's own remembered cluster positions, or an empty array if it
-## has never marked one (or every mark has since been invalidated).
-func cluster_marks_at(cell: Vector2i) -> Array:
-	return _cluster_marks.get(cell, [])
-
-
-## Forgets one marked cluster -- called once a fresh dispatch check
-## confirms its leaves are actually gone (see EarthChunkManager._dispatch_
-## cluster_workers). A no-op, not an error, for a position that was never
-## marked (or already invalidated) -- the same forgiving "just try and let
-## this decide" contract every other per-cell record in this class already
-## has.
-func invalidate_cluster_mark(cell: Vector2i, position: Vector2) -> void:
-	var marks: Array = _cluster_marks.get(cell, [])
-	marks.erase(position)
-	_cluster_marks[cell] = marks
 
 
 ## Deposits into this mound's own trail field, creating it on first use.
@@ -623,6 +584,49 @@ func deposit_pheromone(cell: Vector2i, tile: Vector2i) -> void:
 	if not _pheromones.has(cell):
 		_pheromones[cell] = PheromoneField.new()
 	_pheromones[cell].deposit(tile)
+
+
+## Real directional trail deposit for a CLUSTER find (see
+## PheromoneField.deposit_trail's own doc comment and docs/concept/
+## soil_fauna.md "Scouting: real search, not omniscient dispatch") --
+## creates the field on first use, same as deposit_pheromone.
+func deposit_pheromone_trail(cell: Vector2i, tile: Vector2i, direction: Vector2, amount: float) -> void:
+	if not _pheromones.has(cell):
+		_pheromones[cell] = PheromoneField.new()
+	_pheromones[cell].deposit_trail(tile, direction, amount)
+
+
+## Whether this mound's own trail field currently holds a real, followable
+## cluster trail (see PheromoneField.has_active_trail) -- what step_ants
+## checks to decide whether to dispatch RESOLVERS (a known cluster is
+## still being worked) or a fresh WAVE of blind scouts (nothing known yet).
+## False on a mound that has never deposited at all -- no allocation
+## needed just to answer "no".
+func has_active_pheromone_trail(cell: Vector2i) -> bool:
+	var field: PheromoneField = _pheromones.get(cell)
+	return field != null and field.has_active_trail()
+
+
+## The nearest real trail near `position` (see PheromoneField.
+## nearest_trail_near) -- {} on a mound that has never deposited at all,
+## the same "no allocation just to answer empty" reasoning
+## has_active_pheromone_trail already uses.
+func nearest_pheromone_trail_near(cell: Vector2i, position: Vector2, tile_size: float) -> Dictionary:
+	var field: PheromoneField = _pheromones.get(cell)
+	if field == null:
+		return {}
+	return field.nearest_trail_near(position, tile_size)
+
+
+## Masks this mound's own trail near `position` as spent (see
+## PheromoneField.invalidate_near) -- a genuine no-op on a mound that has
+## never deposited at all, since there is nothing there yet that could
+## mislead a future resolver.
+func invalidate_pheromone_near(cell: Vector2i, position: Vector2, radius_tiles: float, tile_size: float) -> void:
+	var field: PheromoneField = _pheromones.get(cell)
+	if field == null:
+		return
+	field.invalidate_near(position, radius_tiles, tile_size)
 
 
 ## How far this carry travels before the seed counts as cached, in tiles.

@@ -127,3 +127,96 @@ func test_gradient_direction_points_roughly_toward_a_nearby_deposit():
 # sensed exactly where a scout currently stands, not a list of known
 # destinations compared from afar. See AntScoutWander for how that local
 # gradient biases a scout's own wander heading.
+
+# -- deposit_trail: direction + amount, so a later ant knows which way ------
+# is OUT without inferring it from a noisy concentration gradient (reported
+# live: "he encodes direction and amount in the pheromones so other ants
+# don't follow it back into the mound on the way back from a discovery").
+# deposit(tile, amount) above still works completely unchanged -- it is
+# deposit_trail(tile, Vector2.ZERO, amount) under the hood, same storage,
+# same concentration_at/gradient_direction math, just no direction encoded
+# (nothing before this needed one).
+
+func test_deposit_trail_is_read_back_by_nearest_trail_near():
+	var tile := Vector2i(4, 0)
+	var direction := Vector2(1, 0)
+	field.deposit_trail(tile, direction, 3.0)
+	var tile_center := (Vector2(tile) + Vector2(0.5, 0.5)) * TILE_SIZE
+	var found := field.nearest_trail_near(tile_center, TILE_SIZE)
+	assert_eq(found.get("direction"), direction)
+	assert_eq(found.get("amount"), 3.0)
+
+
+func test_nearest_trail_near_finds_nothing_beyond_radius_tiles():
+	field.deposit_trail(Vector2i(0, 0), Vector2(1, 0), 3.0)
+	var far_point := Vector2(PheromoneField.RADIUS_TILES * TILE_SIZE * 10.0, 0.0)
+	assert_eq(field.nearest_trail_near(far_point, TILE_SIZE), {})
+
+
+func test_nearest_trail_near_ignores_a_plain_scalar_deposit_with_no_direction():
+	# deposit() (used by nothing but its own tests any more, kept for full
+	# backward compatibility) never sets a real direction -- there is
+	# nothing directional to follow there, so a trail-follower must not
+	# mistake it for a real trail.
+	var tile := Vector2i(0, 0)
+	field.deposit(tile, 1.0)
+	var tile_center := (Vector2(tile) + Vector2(0.5, 0.5)) * TILE_SIZE
+	assert_eq(field.nearest_trail_near(tile_center, TILE_SIZE), {})
+
+
+func test_nearest_trail_near_picks_the_closest_of_several():
+	field.deposit_trail(Vector2i(10, 0), Vector2(1, 0), 3.0)
+	field.deposit_trail(Vector2i(1, 0), Vector2(1, 0), 5.0)
+	var origin := Vector2(0, 0)
+	var found := field.nearest_trail_near(origin, TILE_SIZE)
+	assert_eq(found.get("amount"), 5.0, "should read the CLOSER deposit, not an arbitrary/farther one")
+
+
+# -- has_active_trail: whether resolvers are worth dispatching at all -------
+
+func test_has_active_trail_is_false_when_empty():
+	assert_false(field.has_active_trail())
+
+
+func test_has_active_trail_is_true_after_a_real_trail_deposit():
+	field.deposit_trail(Vector2i(2, 2), Vector2(0, 1), 3.0)
+	assert_true(field.has_active_trail())
+
+
+func test_has_active_trail_is_false_for_a_plain_scalar_deposit_with_no_direction():
+	field.deposit(Vector2i(2, 2), 1.0)
+	assert_false(field.has_active_trail(), "a directionless deposit is not a trail a resolver could follow")
+
+
+# -- invalidate_near: masking a spent trail with a real stop signal ---------
+# (reported live: "the last ant which takes home the last piece or one that
+# encounters it empty invalidates the pheromone trail by masking the
+# existing pheromone trail with complete marker")
+
+func test_invalidate_near_marks_a_nearby_trail_exhausted():
+	var tile := Vector2i(5, 5)
+	field.deposit_trail(tile, Vector2(1, 0), 3.0)
+	var tile_center := (Vector2(tile) + Vector2(0.5, 0.5)) * TILE_SIZE
+	field.invalidate_near(tile_center, PheromoneField.RADIUS_TILES, TILE_SIZE)
+	assert_false(field.has_active_trail(), "an invalidated trail should no longer be worth resolving")
+	assert_eq(field.nearest_trail_near(tile_center, TILE_SIZE), {}, "a resolver must not be sent to a spent trail")
+
+
+func test_invalidate_near_does_not_touch_a_trail_outside_the_radius():
+	var far_tile := Vector2i(1000, 1000)
+	field.deposit_trail(far_tile, Vector2(1, 0), 3.0)
+	field.invalidate_near(Vector2.ZERO, PheromoneField.RADIUS_TILES, TILE_SIZE)
+	assert_true(field.has_active_trail(), "a trail far outside the invalidated area should be untouched")
+
+
+func test_an_exhausted_deposit_no_longer_contributes_concentration():
+	var tile := Vector2i(6, 6)
+	field.deposit_trail(tile, Vector2(1, 0), 3.0)
+	var tile_center := (Vector2(tile) + Vector2(0.5, 0.5)) * TILE_SIZE
+	var before := field.concentration_at(tile_center, TILE_SIZE)
+	field.invalidate_near(tile_center, PheromoneField.RADIUS_TILES, TILE_SIZE)
+	assert_gt(before, 0.0, "precondition: the trail was sensed before invalidation")
+	assert_eq(
+		field.concentration_at(tile_center, TILE_SIZE), 0.0,
+		"an exhausted deposit must stop pulling a scout's own ambient wander toward a known-empty spot"
+	)

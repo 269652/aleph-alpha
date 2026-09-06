@@ -109,6 +109,21 @@ func _spawned_scout(mound: Vector2, world = null, colony: AntColony = null) -> A
 	return forager
 
 
+## Dispatched once a scout has already reported a real cluster (see
+## EarthChunkManager's own scout-vs-resolver dispatch choice) -- follows a
+## KNOWN trail rather than exploring blind. Otherwise identical to a
+## scout: no known target, opts into SCOUTING the same way.
+func _spawned_resolver(mound: Vector2, world = null, colony: AntColony = null) -> AntForagerMarker:
+	var forager := AntForagerMarker.new()
+	forager.mound_position = mound
+	forager.position = mound
+	forager.resolver = true
+	if world != null or colony != null:
+		forager.setup(world, colony, MOUND_CELL)
+	add_child_autofree(forager)
+	return forager
+
+
 # -- identity: group membership and tooltip (see docs/concept/soil_fauna.md
 # "Ants at half their old size, and finally hoverable") --------------------
 
@@ -309,15 +324,46 @@ func test_an_empty_handed_leaf_trip_plants_nothing():
 
 # -- pheromones: a successful trip marks the food location ------------------
 
-func test_a_successful_trip_deposits_pheromone_at_the_food_location():
+## Only a CLUSTER find lays a trail now (see this file's own "cluster
+## recruitment" section below for the full story) -- a plain, direct-
+## construction version of that same claim, in this section's own
+## simpler style (no full scout-sensing pipeline needed to prove the
+## RETURNING-leg trail-laying mechanic itself).
+func test_a_successful_cluster_trip_lays_a_trail_on_the_way_home():
 	var world := StubWorld.new()
 	var colony := _new_colony()
 	var target := Vector2(3000, 3000)
-	var f := _spawned(target, Vector2(3002, 3000), world, colony)
-	f._process(1.0)  # arrive and take the seed
+	var mound := Vector2(3100, 3000)  # far enough that RETURNING takes a real step
+	var f := _spawned(target, mound, world, colony)
+	f._is_cluster_find = true
+	f._cluster_size = 3
+	# Still 2 more left after taking one -- otherwise arrival-time
+	# invalidation (see test_taking_the_last_cluster_item_invalidates_the_
+	# trail below) fires immediately and this test would never reach the
+	# RETURNING-leg trail-laying it means to exercise.
+	world.nearby_seeds = [{"position": target}, {"position": target}]
+	f._process(200.0)  # close the whole approach distance
+	f._process(0.1)  # now within arrive-distance -- takes it, starts RETURNING
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	f._process(1.0)  # a real step on the way home should lay a trail tile
 	var field = colony.pheromones_at(MOUND_CELL)
-	assert_not_null(field, "a successful find should lay down a real trail")
-	assert_gt(field.concentration_at(target, TerrainRenderer.TILE_SIZE), 0.0)
+	assert_not_null(field, "a successful CLUSTER find should lay down a real trail on the way home")
+	assert_true(field.has_active_trail())
+
+
+func test_a_successful_solo_trip_deposits_no_pheromone_at_all():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var target := Vector2(3000, 3000)
+	var mound := Vector2(3100, 3000)
+	var f := _spawned(target, mound, world, colony)
+	# _is_cluster_find left at its default false -- a solo find.
+	f._process(200.0)
+	f._process(0.1)
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	f._process(1.0)
+	var field = colony.pheromones_at(MOUND_CELL)
+	assert_true(field == null or not field.has_active_trail(), "a solo find must never lay a recruiting trail")
 
 
 func test_a_failed_trip_deposits_no_pheromone():
@@ -327,79 +373,6 @@ func test_a_failed_trip_deposits_no_pheromone():
 	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
 	f._process(1.0)
 	assert_null(colony.pheromones_at(MOUND_CELL), "nothing was found, so there is nothing to recruit toward")
-
-
-# -- scouting: a successful scout trip also checks for and marks a real
-# CLUSTER (see docs/concept/soil_fauna.md "Scouts mark leaf clusters,
-# workers collect from marks") ------------------------------------------
-
-func test_a_successful_scout_trip_marks_a_real_cluster():
-	var world := StubWorld.new()
-	for i in AntColony.CLUSTER_MIN_LEAVES:
-		world.nearby_leaves.append({"position": Vector2(3000 + i, 3000), "species": "cherry", "season": "autumn"})
-	var colony := _new_colony()
-	var target := Vector2(3000, 3000)
-	var f := _spawned(target, Vector2(3002, 3000), world, colony)
-	f.forage_kind = "leaf"
-	f.scout = true
-	f._process(1.0)  # arrive and take the leaf
-	assert_eq(colony.cluster_marks_at(MOUND_CELL), [target])
-
-
-## A single find with nothing else nearby is the ordinary case any leaf
-## trip already resolves on its own -- not every successful scout trip
-## turns up a real cluster.
-func test_a_successful_scout_trip_below_the_cluster_minimum_marks_nothing():
-	var world := StubWorld.new()  # nearby_leaves stays empty -- just the one taken
-	var colony := _new_colony()
-	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
-	f.forage_kind = "leaf"
-	f.scout = true
-	f._process(1.0)
-	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty(), "one lone leaf is not a cluster")
-
-
-## A WORKER (scout == false, sent straight at an already-known mark) never
-## re-marks on arrival, even with real leaves still nearby -- only a real
-## scout's own fresh discovery counts.
-func test_a_non_scout_leaf_trip_never_marks_a_cluster():
-	var world := StubWorld.new()
-	for i in AntColony.CLUSTER_MIN_LEAVES:
-		world.nearby_leaves.append({"position": Vector2(3000 + i, 3000), "species": "cherry", "season": "autumn"})
-	var colony := _new_colony()
-	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
-	f.forage_kind = "leaf"
-	f.scout = false
-	f._process(1.0)
-	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty(), "a worker's own trip must not mark a cluster")
-
-
-func test_a_failed_scout_trip_marks_no_cluster():
-	var world := StubWorld.new()
-	world.leaf_present = false
-	for i in AntColony.CLUSTER_MIN_LEAVES:
-		world.nearby_leaves.append({"position": Vector2(3000 + i, 3000), "species": "cherry", "season": "autumn"})
-	var colony := _new_colony()
-	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
-	f.forage_kind = "leaf"
-	f.scout = true
-	f._process(1.0)
-	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty(), "nothing was found, so there is no cluster to mark")
-
-
-## A scout dispatched for seed/windfall still never marks a cluster --
-## marking is scoped to real leaf trips only (see docs/concept/
-## soil_fauna.md's own "leaf-only" scope note).
-func test_a_successful_scout_trip_for_a_non_leaf_kind_marks_no_cluster():
-	var world := StubWorld.new()
-	for i in AntColony.CLUSTER_MIN_LEAVES:
-		world.nearby_leaves.append({"position": Vector2(3000 + i, 3000), "species": "cherry", "season": "autumn"})
-	var colony := _new_colony()
-	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
-	f.forage_kind = "seed"
-	f.scout = true
-	f._process(1.0)
-	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty())
 
 
 # -- the queen hears about it: arrival records the real outcome ------------
@@ -681,3 +654,194 @@ func test_max_scout_seconds_is_derived_not_eyeballed():
 		* AntForagerMarker.MAX_SCOUT_CROSSINGS
 	)
 	assert_almost_eq(AntForagerMarker.MAX_SCOUT_SECONDS, expected, 0.001)
+
+
+# -- cluster recruitment: only a real cluster ever lays a trail, directional,
+# -- invalidated once spent (reported live: "when a scout goes out other
+# -- ants follow him in a line even when nothing has been discovered yet
+# -- ... these scouts should only lay out pheromones after they discovered
+# -- a cluster for which multiple ants are needed ... he encodes direction
+# -- and amount in the pheromones so other ants don't follow it back into
+# -- the mound ... then when the scouts return the mound dispatches more
+# -- ants which follow / resolve the pheromone trails and the last ant
+# -- which takes home the last piece or one that encounters it empty
+# -- invalidates the pheromone trail") ---------------------------------------
+
+const PheromoneField = preload("res://src/world/pheromone_field.gd")
+
+## Three real items sensed together, matching AntColony.CLUSTER_THRESHOLD
+## exactly -- the minimum that counts as a real cluster.
+const _CLUSTER_LEAVES: Array = [
+	{"position": Vector2(100, 0), "species": "cherry", "season": "autumn"},
+	{"position": Vector2(101, 0), "species": "cherry", "season": "autumn"},
+	{"position": Vector2(102, 0), "species": "cherry", "season": "autumn"},
+]
+
+
+func test_a_scout_flags_a_cluster_find_when_enough_items_are_sensed_together():
+	var world := StubWorld.new()
+	world.nearby_leaves = _CLUSTER_LEAVES.duplicate(true)
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.1)
+	assert_true(f._is_cluster_find)
+	assert_eq(f._cluster_size, 3)
+
+
+func test_a_scout_does_not_flag_a_cluster_for_a_single_item():
+	var world := StubWorld.new()
+	world.nearby_leaves = [_CLUSTER_LEAVES[0].duplicate(true)]
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.1)
+	assert_false(f._is_cluster_find)
+
+
+func test_a_cluster_find_lays_a_trail_on_the_way_home():
+	var world := StubWorld.new()
+	world.nearby_leaves = _CLUSTER_LEAVES.duplicate(true)
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.1)  # senses the cluster (stub ignores real distance), commits
+	assert_true(f._is_cluster_find, "precondition")
+	f._process(100.0)  # walk all the way to the food
+	f._process(0.1)  # now within arrive-distance -- takes it, starts RETURNING
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	f._process(1.0)  # a real step on the way home should lay a trail tile
+	var field: PheromoneField = colony.pheromones_at(MOUND_CELL)
+	assert_not_null(field, "a cluster find should start a real trail on the way home")
+	assert_true(field.has_active_trail())
+
+
+func test_a_solo_find_lays_no_trail_at_all():
+	var world := StubWorld.new()
+	world.nearby_leaves = [_CLUSTER_LEAVES[0].duplicate(true)]
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.1)
+	assert_false(f._is_cluster_find, "precondition")
+	f._process(100.0)
+	f._process(0.1)
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	f._process(1.0)
+	var field: PheromoneField = colony.pheromones_at(MOUND_CELL)
+	assert_true(
+		field == null or not field.has_active_trail(),
+		"a solo find must never lay a recruiting trail"
+	)
+
+
+func test_the_trail_direction_points_toward_the_food_not_the_mound():
+	var world := StubWorld.new()
+	world.nearby_leaves = _CLUSTER_LEAVES.duplicate(true)
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.1)
+	f._process(100.0)
+	f._process(0.1)  # arrival, now RETURNING (walking from the food at x=100 back toward x=0)
+	f._process(1.0)  # lays a trail tile somewhere between the food and the mound
+	var field: PheromoneField = colony.pheromones_at(MOUND_CELL)
+	var trail := field.nearest_trail_near(f.position, float(TerrainRenderer.TILE_SIZE))
+	assert_gt(
+		trail.get("direction").x, 0.5,
+		"the trail should point back OUT toward the food (+x), not toward the mound"
+	)
+
+
+func test_taking_the_last_cluster_item_invalidates_the_trail():
+	var world := StubWorld.new()
+	world.leaf_present = true
+	world.nearby_leaves = []  # nothing else left once this last one is taken
+	var colony := _new_colony()
+	colony.deposit_pheromone_trail(MOUND_CELL, Vector2i(6, 0), Vector2(1, 0), 3.0)
+	var f := _spawned(Vector2(100, 0), Vector2.ZERO, world, colony)
+	f.forage_kind = "leaf"
+	f._is_cluster_find = true  # as if a scout/resolver had already committed to this as a cluster
+	f._process(200.0)  # close the whole approach distance
+	f._process(0.1)  # arrival -- takes the last real item
+	assert_true(f._behavior.found_food, "precondition: the take itself should succeed")
+	var field: PheromoneField = colony.pheromones_at(MOUND_CELL)
+	assert_false(field.has_active_trail(), "taking the last real item should invalidate the trail immediately")
+
+
+func test_arriving_to_find_a_cluster_already_empty_invalidates_the_trail():
+	var world := StubWorld.new()
+	world.leaf_present = false  # already gone by the time this ant arrives
+	var colony := _new_colony()
+	colony.deposit_pheromone_trail(MOUND_CELL, Vector2i(6, 0), Vector2(1, 0), 3.0)
+	var f := _spawned(Vector2(100, 0), Vector2.ZERO, world, colony)
+	f.forage_kind = "leaf"
+	f._is_cluster_find = true
+	f._process(200.0)
+	f._process(0.1)  # arrival -- the take fails
+	assert_false(f._behavior.found_food, "precondition: nothing was really there any more")
+	var field: PheromoneField = colony.pheromones_at(MOUND_CELL)
+	assert_false(
+		field.has_active_trail(),
+		"arriving to find the cluster already empty should invalidate the existing trail too"
+	)
+
+
+# -- resolvers: dispatched once a scout has already reported a real cluster,
+# -- they FOLLOW a known trail rather than exploring blind ------------------
+
+func test_a_resolver_follows_a_known_trail_instead_of_wandering_blind():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	colony.deposit_pheromone_trail(MOUND_CELL, Vector2i(0, 0), Vector2(1, 0), 3.0)
+	var f := _spawned_resolver(Vector2.ZERO, world, colony)
+	f._process(0.1)
+	assert_gt(
+		f.position.x, 0.0,
+		"should have stepped in the trail's own stored direction, not an arbitrary wander heading"
+	)
+
+
+func test_a_resolver_with_no_known_trail_wanders_like_a_plain_scout():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned_resolver(Vector2.ZERO, world, colony)
+	f._process(1.0)
+	assert_ne(f.position, Vector2.ZERO, "with nothing to follow, a resolver should still be wandering, not frozen")
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.SCOUTING)
+
+
+func test_a_resolver_that_senses_real_food_directly_commits_just_like_a_scout():
+	var world := StubWorld.new()
+	world.nearby_leaves = [_CLUSTER_LEAVES[0].duplicate(true)]
+	var colony := _new_colony()
+	colony.deposit_pheromone_trail(MOUND_CELL, Vector2i(0, 0), Vector2(1, 0), 3.0)
+	var f := _spawned_resolver(Vector2.ZERO, world, colony)
+	f._process(0.1)
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.APPROACHING, "sensing real food takes priority over trail-following")
+
+
+# -- scout waves: an assigned spread sector nudges wander, so several ------
+# -- scouts dispatched together fan out (reported live: "the mound should
+# -- send out multiple scouts in random directs") ---------------------------
+
+func test_a_scouts_assigned_spread_direction_measurably_changes_its_wander():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+
+	var f1 := _spawned_scout(Vector2.ZERO, world, colony)
+	f1._process(0.001)  # runs _ensure_initialized() once
+	f1.wander_seed = 777
+	f1._elapsed_time = 0.0
+	f1.position = Vector2.ZERO
+	f1._process(0.1)
+	var position_without_bias := f1.position
+
+	var f2 := _spawned_scout(Vector2.ZERO, world, colony)
+	f2._process(0.001)
+	f2.wander_seed = 777
+	f2._elapsed_time = 0.0
+	f2.position = Vector2.ZERO
+	f2.assigned_heading_bias = Vector2.UP
+	f2._process(0.1)
+	var position_with_bias := f2.position
+
+	assert_ne(
+		position_with_bias, position_without_bias,
+		"an assigned spread direction should measurably change this scout's own wander step"
+	)

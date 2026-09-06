@@ -169,6 +169,22 @@ func test_sense_radius_is_half_the_forage_radius():
 	assert_eq(AntColony.SENSE_RADIUS_TILES, AntColony.FORAGE_RADIUS_TILES * 0.5)
 
 
+func test_cluster_threshold_is_pinned():
+	assert_eq(AntColony.CLUSTER_THRESHOLD, 3)
+
+
+func test_scout_wave_size_is_pinned():
+	assert_eq(AntColony.SCOUT_WAVE_SIZE, 3)
+
+
+func test_resolver_wave_size_is_pinned():
+	assert_eq(AntColony.RESOLVER_WAVE_SIZE, 2)
+
+
+func test_resolver_wave_is_smaller_than_scout_wave():
+	assert_lt(AntColony.RESOLVER_WAVE_SIZE, AntColony.SCOUT_WAVE_SIZE)
+
+
 func test_carry_direction_is_a_unit_vector():
 	for seed_value in [1, 42, 999]:
 		var direction: Vector2 = AntColony.carry_direction(seed_value)
@@ -732,97 +748,6 @@ func test_each_mound_owns_its_own_independent_pheromone_field():
 	assert_gt(cells.size(), 1, "need at least two mounds to prove independence")
 	colony.deposit_pheromone(cells[0], Vector2i(1, 1))
 	assert_null(colony.pheromones_at(cells[1]), "a deposit at one mound must not appear at another")
-
-
-# -- scouting: cluster marks, workers collect from them (see docs/concept/
-# soil_fauna.md "Scouts mark leaf clusters, workers collect from marks") --
-
-func test_cluster_marks_at_is_empty_before_any_mark():
-	var colony := _colony()
-	var cell: Vector2i = colony.mound_cells()[0]
-	assert_true(colony.cluster_marks_at(cell).is_empty())
-
-
-func test_mark_cluster_records_a_real_mark():
-	var colony := _colony()
-	var cell: Vector2i = colony.mound_cells()[0]
-	var position := Vector2(40, 40)
-	colony.mark_cluster(cell, position)
-	assert_eq(colony.cluster_marks_at(cell), [position])
-
-
-func test_mark_cluster_can_record_more_than_one_mark():
-	var colony := _colony()
-	var cell: Vector2i = colony.mound_cells()[0]
-	colony.mark_cluster(cell, Vector2(40, 40))
-	colony.mark_cluster(cell, Vector2(80, 80))
-	assert_eq(colony.cluster_marks_at(cell).size(), 2)
-
-
-## A mound already at its own limit ignores a newly-found cluster rather
-## than evicting an older, possibly still-productive mark.
-func test_mark_cluster_is_capped_at_the_per_mound_maximum():
-	var colony := _colony()
-	var cell: Vector2i = colony.mound_cells()[0]
-	for i in AntColony.MAX_CLUSTER_MARKS_PER_MOUND + 5:
-		colony.mark_cluster(cell, Vector2(i * 10.0, 0.0))
-	assert_eq(colony.cluster_marks_at(cell).size(), AntColony.MAX_CLUSTER_MARKS_PER_MOUND)
-
-
-## Different mounds remember different clusters -- the same independence
-## every other per-mound record (pheromones, food) already has.
-func test_each_mound_owns_its_own_independent_cluster_marks():
-	var colony := _colony()
-	var cells: Array = colony.mound_cells()
-	assert_gt(cells.size(), 1, "need at least two mounds to prove independence")
-	colony.mark_cluster(cells[0], Vector2(40, 40))
-	assert_true(colony.cluster_marks_at(cells[1]).is_empty(), "a mark at one mound must not appear at another")
-
-
-func test_invalidate_cluster_mark_removes_it():
-	var colony := _colony()
-	var cell: Vector2i = colony.mound_cells()[0]
-	var position := Vector2(40, 40)
-	colony.mark_cluster(cell, position)
-	colony.invalidate_cluster_mark(cell, position)
-	assert_true(colony.cluster_marks_at(cell).is_empty())
-
-
-## Invalidating a mark that was never there (or already gone) is a no-op,
-## not an error -- the same forgiving contract every other "forget this"
-## accessor in this codebase already has.
-func test_invalidating_an_unknown_mark_does_not_error():
-	var colony := _colony()
-	var cell: Vector2i = colony.mound_cells()[0]
-	colony.invalidate_cluster_mark(cell, Vector2(999, 999))
-	assert_true(colony.cluster_marks_at(cell).is_empty())
-
-
-# -- scout/worker dispatch cap: separate from active_forager_cap_at, so
-# scouting genuinely ADDS ants rather than competing with ordinary
-# foraging for the same slots ------------------------------------------
-
-func test_active_cluster_ant_cap_is_at_least_one_for_a_brand_new_mound():
-	var colony := _colony()
-	var cell: Vector2i = colony.mound_cells()[0]
-	assert_gte(colony.active_cluster_ant_cap_at(cell), 1)
-
-
-func test_active_cluster_ant_cap_never_exceeds_its_own_maximum():
-	var colony := _colony("grassland", 42)
-	var cell: Vector2i = colony.mound_cells()[0]
-	for i in 100:
-		colony.record_forage_result(cell, true)
-		colony.advance(1.0)
-	assert_lte(colony.active_cluster_ant_cap_at(cell), AntColony.MAX_CONCURRENT_CLUSTER_ANTS)
-
-
-## Its OWN ceiling is genuinely separate from (and, per the request,
-## smaller than) the ordinary forager one -- scouting a wider radius for a
-## denser-than-usual patch is rarer than ordinary single-item foraging, so
-## this pool does not need the same headroom.
-func test_max_concurrent_cluster_ants_is_smaller_than_max_concurrent_foragers():
-	assert_lt(AntColony.MAX_CONCURRENT_CLUSTER_ANTS, AntColony.MAX_CONCURRENT_FORAGERS)
 
 
 # -- SECONDS_PER_SIMULATED_DAY must stay in sync with EarthChunkManager's
