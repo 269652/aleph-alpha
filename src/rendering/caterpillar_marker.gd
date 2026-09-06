@@ -62,11 +62,26 @@ const ARRIVE_DISTANCE_PX := 4.0
 
 ## How far it wanders from home while nothing is around to eat.
 const WANDER_RADIUS_PX := 24.0
-const WALK_SPEED := 14.0
+## Requested directly: "they should be 66% slower", clarified immediately
+## after as "1/3 of the speed" -- an exact fraction of the original 14.0,
+## not a rounded approximation of "66% slower". WANDER_SPEED_FRACTION and
+## WANDER_DIRECTION_CHANGE_INTERVAL_SECONDS below both derive FROM this
+## rather than duplicating it, so ambient wander slows down in the same
+## proportion automatically.
+const WALK_SPEED := 14.0 / 3.0
 ## Ambient wander is slower than a committed approach -- a hurrying
 ## caterpillar reads as one that has actually found something, same
 ## reasoning as DecomposerMarker.WANDER_SPEED_FRACTION.
 const WANDER_SPEED_FRACTION := 0.35
+
+## How high, in pixels, a caterpillar visually climbs while targeting a
+## tree (see _step_climb) -- one tile's worth up the trunk, not into the
+## canopy proper: a real caterpillar grazes low branches and the trunk
+## itself at least as often as the crown, and a modest climb reads clearly
+## without this class needing to know anything about ProceduralTreeSprite's
+## own canopy dimensions, a dependency it has deliberately never had (see
+## the class doc comment's "duck-typed" framing for trees_near itself).
+const CLIMB_HEIGHT_PX := TILE_SIZE
 
 ## How long the illustrated crawl/climb/eat cycle holds each frame -- a flat
 ## elapsed-time cadence, same shape as DecomposerMarker.WALK_FRAME_DURATION_
@@ -101,6 +116,18 @@ var _behavior := CaterpillarForageBehavior.new()
 ## anything", the same contract AmbientFlyerMarker's own _worm_target uses.
 var _target_position = null  # Vector2, or null
 var _target_is_tree := false
+
+## How far up the trunk this caterpillar has visually climbed right now --
+## purely a SPRITE offset (see _step_climb), never this node's own
+## `position`: _step_approaching's arrival check, _nearest_food's distance
+## comparisons, and anything that might Y-sort a caterpillar in the future
+## all keep reading the real ground tile it is logically standing on. A
+## caterpillar visually several pixels up a trunk is still, as far as
+## every other system in this game is concerned, standing exactly where it
+## always was -- the same "a plain position is everything approach/eat
+## need" reasoning the class doc comment already draws for why a tree
+## target needs no live node reference at all.
+var _climb_height_px := 0.0
 
 ## Idle-wander motion -- reuses this one already-tested, home-anchored roam
 ## algorithm instead of a second, near-duplicate one. Built in _ready()
@@ -212,7 +239,24 @@ func _process(frame_delta: float) -> void:
 			_step_approaching(delta)
 		CaterpillarForageBehavior.Phase.EATING:
 			_step_eating(delta)
+	_step_climb(delta)
 	_update_sprite(position - position_before)
+
+
+## Requested directly: "caterpillars should crawl up trees" -- rises toward
+## CLIMB_HEIGHT_PX at the same WALK_SPEED pace ground movement uses, for as
+## long as a tree is the current target and the phase isn't SEEKING (i.e.
+## rising through the walk there -- the same phase the "climb" sprite pose
+## is already shown for, see _current_action -- and holding through
+## EATING), then settling back to ground level once the phase returns to
+## SEEKING. A leaf-litter visit never climbs at all: _target_is_tree stays
+## false the whole time, so the target height is always 0.
+func _step_climb(delta: float) -> void:
+	var target_height := 0.0
+	if _target_is_tree and _behavior.phase != CaterpillarForageBehavior.Phase.SEEKING:
+		target_height = CLIMB_HEIGHT_PX
+	_climb_height_px = move_toward(_climb_height_px, target_height, WALK_SPEED * delta)
+	_sprite.position.y = -_climb_height_px
 
 
 func _step_seeking(delta: float) -> void:
