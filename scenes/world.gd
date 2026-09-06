@@ -47,6 +47,7 @@ const PathScarring = preload("res://src/world/path_scarring.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
 const Karma = preload("res://src/gameplay/karma.gd")
+const QuestLog = preload("res://src/emergence/quest_log.gd")
 
 ## The player's own real momentum at ordinary walking pace (see
 ## docs/concept/soil_fauna.md "Crushed underfoot: weight-emergent worm
@@ -2680,6 +2681,39 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	_chunk_manager.step_regional_trade(delta)
 	_step_herbivore_food_consumption(delta)
 	_step_reproduction(delta)
+	# Quest fulfilment is DERIVED, never a separate mutator (see
+	# QuestLog.reconcile, docs/concept/karma_and_luck.md's "Quest lifecycle")
+	# -- runs last in this batch so it sees the freshest possible production/
+	# market state, after step_settlements and step_regional_trade have both
+	# had their own chance to resupply a household this same tick.
+	# focus_player can be null (a dedicated server, or before a player has
+	# spawned) -- this function's own signature takes it unguarded, so the
+	# call site guards it, same as _process already guards
+	# _step_pebble_dispersion/_step_leaf_litter_dispersion.
+	if focus_player != null:
+		_step_quest_reconciliation(focus_player, delta)
+
+
+## How often accepted quests are checked against the live projection they
+## came from (see QuestLog.reconcile) -- reuses EarthChunkManager.
+## SETTLEMENT_STEP_INTERVAL rather than inventing a fresh number: that is
+## the cadence the underlying production/market data can even change on
+## (see EarthChunkManager.step_settlements), so checking more often would
+## only ever re-observe the same unchanged shortfall.
+var _quest_reconciliation_accumulator := 0.0
+
+
+## Skips the whole re-derivation whenever the player has accepted nothing --
+## the common case, so this costs nothing until the player actually commits
+## to a quest.
+func _step_quest_reconciliation(local_player: Player, delta: float) -> void:
+	if local_player.accepted_quest_ids.is_empty():
+		return
+	_quest_reconciliation_accumulator += delta
+	if _quest_reconciliation_accumulator < EarthChunkManager.SETTLEMENT_STEP_INTERVAL:
+		return
+	_quest_reconciliation_accumulator = 0.0
+	QuestLog.reconcile(local_player, _chunk_manager.all_production_shortfall_quests())
 
 
 func _any_gameplay_window_open() -> bool:
