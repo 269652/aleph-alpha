@@ -404,11 +404,18 @@ Implemented and live-wired on `main`:
   `license.txt` file next to the executable (or `user://license.txt`),
   not an in-game typed field (6/6 tests).
 - `src/licensing/embedded_public_keys.gd` — the ship-side public key
-  list. **A real public key is now embedded** (the matching private key
-  lives only on the key owner's machine, gitignored — see "Operational
-  security"). Before this, the list was empty, which meant the shipped
-  game refused every code, including a genuinely valid one — the correct,
-  safe default for that state, not a bug.
+  list. **Two real public keys are now embedded** (both private keys are
+  gitignored, kept only on the key owner's machine — see "Operational
+  security"). The original private key was never recoverable when the
+  first real Windows distributable build was prepared (2026-09 — no
+  password-manager or offline backup existed), so a second keypair was
+  generated and its public half added alongside the first rather than
+  replacing it, per "Key rotation" above — every serial already issued
+  under the original key (both codes in README.md's "License Key"
+  section) still verifies. Before either key existed, the list was
+  empty, which meant the shipped game refused every code, including a
+  genuinely valid one — the correct, safe default for that state, not a
+  bug.
 - `src/licensing/key_fingerprint.gd` — key-swap resistance (9/9 tests).
   `LicenseGate`/`SelfIntegrity`'s production `_init()` independently
   checks `EmbeddedPublicKeys.PUBLIC_KEY_PEMS`'s SHA-256 fingerprint
@@ -670,6 +677,7 @@ revocation list" above):
 |---|---|---|---|
 | 90001 | 1 (base game) | 1788134400 / 2026-08-31 | Public 7-day trial key, published in `README.md`'s "License Key" section |
 | 1 | all 64 bits set (every product/DLC) | 0 / never | Owner/developer key, local testing only. The code itself is deliberately **not** written here (this doc is pushed to the shared remote) — it lives only in the two local `license.txt` files it was written to. Not for distribution. |
+| 2 | 1 (base game) | 0 / never | First serial signed under the **rotated** (second) key — see the `embedded_public_keys.gd` note above. Bundled as the `license.txt` inside the first real Windows distributable build (2026-09), for a specific friend. The code itself is deliberately not written here; it lives only in that build's `license.txt`. |
 
 **Still left to the user, by design** (this repo intentionally contains
 no *other* real signed serials beyond the public trial key above):
