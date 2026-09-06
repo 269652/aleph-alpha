@@ -537,6 +537,55 @@ func test_a_tree_stands_in_the_same_spot_every_time():
 		assert_eq(second[index].position, places[index])
 
 
+# -- no two trees ever tie on the Y-sort key ---------------------------------
+#
+# Reported directly, after VISUAL_SCALE(1.3) made canopies overlap far more
+# than before: "There is some y order problem where some trees flicker" --
+# confirmed a real, discrete pop, even standing still (not a sway/shimmer).
+# Reproduced the mechanism directly (tools/probe_ysort_readd.gd, real GPU):
+# two trees forced to the EXACT same Y draw in a fixed, stable order across
+# 8 real animated frames -- UNTIL one of them is simply removed and
+# re-added to the same parent (same position, same everything else, only
+# sibling order changes), which visibly SWAPS which one draws on top. Y-sort
+# ties are being broken by sibling order, which is only as stable as
+# whatever else in the scene tree causes a node to be re-parented -- not
+# something this codebase controls or should have to reason about per call
+# site. _stand_position's own jitter (PixelNoise.range_index with only 1001
+# discrete buckets) makes an EXACT tie between two different tiles a real,
+# not-rare occurrence across a populated forest.
+#
+# The fix: every tree's Y gets an additional tiny, deterministic,
+# per-TILE nudge, so two DIFFERENT tiles' trees can never land on the exact
+# same Y -- Y-sort then always has a real, stable order to fall back on and
+# never needs sibling order to break a tie at all.
+
+func test_no_two_tiles_produce_the_same_y_sort_key():
+	var seen := {}
+	for gy in range(-40, 40):
+		for gx in range(-40, 40):
+			var y := renderer._stand_position(gx, gy, TILE_SIZE).y
+			assert_false(
+				seen.has(y),
+				"tiles (%d,%d) and %s both produced y=%s -- a real Y-sort tie" % [gx, gy, seen.get(y), y]
+			)
+			seen[y] = Vector2i(gx, gy)
+
+
+## The tie-break must be genuinely negligible: nowhere near big enough to
+## visibly move a tree, push it toward a tile boundary, or perturb any of
+## the position guarantees the tests above already pin.
+func test_the_tie_break_nudge_is_visually_negligible():
+	for gy in range(-5, 5):
+		for gx in range(-5, 5):
+			var with_tile_size := renderer._stand_position(gx, gy, TILE_SIZE).y
+			var base := (float(gy) + 0.5) * float(TILE_SIZE)
+			var max_jitter := float(TILE_SIZE) * TreeRenderer.STAND_OFFSET_FRACTION
+			assert_lt(
+				absf(with_tile_size - base), max_jitter + 0.05,
+				"the tie-break nudge is large enough to be visible, not just a tie-breaker"
+			)
+
+
 # -- a building piece occupies its tile against vegetation ---------------------
 #
 # Reported: a tree with its trunk rooted in a village house's stone floor and
