@@ -3253,7 +3253,7 @@ func _throw_rope_tool(tool_id: String) -> void:
 		return
 	# The throw itself reuses the melee swing, the same way casting a rod does.
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
-	if best.restrain_to(position, false, skill_bonus("taming_affinity"), tool_id):
+	if best.restrain_to(position, false, skill_bonus("taming_affinity"), tool_id, luck()):
 		_lassoed = best
 
 

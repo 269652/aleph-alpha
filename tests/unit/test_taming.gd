@@ -101,6 +101,47 @@ func test_full_affinity_never_guarantees_a_hold():
 	assert_gt(Taming.break_free_chance(0.1, false, 15.0), 0.0)
 
 
+## At zero luck, break_free_chance must behave exactly as before this
+## parameter existed -- the same "byte-identical with no investment"
+## guarantee affinity already has.
+func test_break_free_chance_is_unchanged_with_zero_luck():
+	for step in 11:
+		var condition: float = float(step) / 10.0
+		assert_almost_eq(
+			Taming.break_free_chance(condition, false, 5.0, 0.0),
+			Taming.break_free_chance(condition, false, 5.0),
+			0.0001
+		)
+
+
+## Good luck (see docs/concept/karma_and_luck.md) makes a struggling
+## animal measurably easier to hold, the same direction affinity already
+## pushes.
+func test_good_luck_reduces_break_free_chance():
+	assert_lt(
+		Taming.break_free_chance(1.0, false, 0.0, 1.0), Taming.break_free_chance(1.0, false, 0.0, 0.0),
+		"good luck should help hold a struggling animal"
+	)
+
+
+## Bad luck pushes the other way -- symmetric around zero.
+func test_bad_luck_increases_break_free_chance():
+	assert_gt(
+		Taming.break_free_chance(1.0, false, 0.0, -1.0), Taming.break_free_chance(1.0, false, 0.0, 0.0),
+		"bad luck should make a struggling animal harder to hold"
+	)
+
+
+## Luck alone, at its own extreme, never produces a probability outside
+## [0, 1] -- it can only ever nudge a real chance, never break it.
+func test_luck_never_pushes_break_free_chance_out_of_a_valid_probability():
+	for luck in [-1.0, -0.5, 0.0, 0.5, 1.0]:
+		for step in 11:
+			var condition: float = float(step) / 10.0
+			var chance: float = Taming.break_free_chance(condition, true, 15.0, luck)
+			assert_between(chance, 0.0, 1.0, "invalid probability at luck %.1f, condition %.1f" % [luck, condition])
+
+
 ## Monotonic in condition: there is never a health value where being HEALTHIER
 ## makes an animal easier to hold.
 func test_being_healthier_never_makes_an_animal_easier_to_hold():

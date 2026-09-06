@@ -2670,6 +2670,15 @@ func test_restrain_to_stores_the_handlers_affinity_for_the_struggle_roll():
 	assert_eq(horse._capture_affinity, 7.5)
 
 
+## Same shape as affinity, for the handler's own Luck (see
+## docs/concept/karma_and_luck.md) -- stored for every subsequent struggle
+## roll rather than dropping it on the floor.
+func test_restrain_to_stores_the_handlers_luck_for_the_struggle_roll():
+	var horse := _catchable("horse")
+	horse.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.LASSO, 0.6)
+	assert_eq(horse._capture_luck, 0.6)
+
+
 ## _step_restraint must actually pass is_predator AND affinity into
 ## Taming.break_free_chance -- mirrors the exact same formula the
 ## production code uses (same wander_seed/struggle-count hash), so this
@@ -2681,6 +2690,20 @@ func test_step_restraint_consults_the_predator_and_affinity_aware_break_free_cha
 	wolf.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.LASSO)
 	var roll := float(absi(hash("%d_%d_struggle" % [wolf.wander_seed, 1])) % 10000) / 10000.0
 	var expected_chance := Taming.break_free_chance(1.0, true, 0.0)
+	var expected_still_held := roll >= expected_chance
+	wolf._step_restraint(CreatureMarker.STRUGGLE_INTERVAL)
+	assert_eq(wolf.is_restrained(), expected_still_held)
+
+
+## Same coverage, for luck -- fails the moment the call site regresses to
+## the predator/affinity-only form, dropping a stored luck value on the
+## floor.
+func test_step_restraint_consults_the_luck_aware_break_free_chance():
+	var wolf := _catchable("wolf")
+	wolf.info.health = wolf.info.max_health
+	wolf.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.LASSO, 0.8)
+	var roll := float(absi(hash("%d_%d_struggle" % [wolf.wander_seed, 1])) % 10000) / 10000.0
+	var expected_chance := Taming.break_free_chance(1.0, true, 0.0, 0.8)
 	var expected_still_held := roll >= expected_chance
 	wolf._step_restraint(CreatureMarker.STRUGGLE_INTERVAL)
 	assert_eq(wolf.is_restrained(), expected_still_held)
