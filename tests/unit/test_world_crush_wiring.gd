@@ -198,3 +198,48 @@ func test_crushing_a_mushroom_never_applies_a_karma_penalty():
 		checked += 1
 		search_from = at + 1
 	assert_eq(checked, 2, "should still have exactly 2 call sites")
+
+
+# -- walnuts (see docs/concept/soil_fauna.md, EarthChunkManager.
+# crush_walnut_near) -- reported live: "Same for walnuts (crack open)."
+# Same wiring shape as mushrooms: player + creature loop, no Karma.
+
+func test_crush_walnut_near_is_called_for_both_the_player_and_creatures():
+	var body := _client_process_body()
+	assert_eq(
+		_count_occurrences(body, "crush_walnut_near("), 2,
+		"expected exactly one call for the player and one inside the creature loop"
+	)
+
+
+func test_the_creature_walnut_crush_call_is_inside_a_creaturemarker_group_loop():
+	var body := _client_process_body()
+	var group_loop_at := body.find("get_nodes_in_group(CreatureMarker.GROUP_NAME)")
+	var walnut_crush_at := body.rfind("crush_walnut_near(")
+	assert_gt(group_loop_at, -1)
+	assert_gt(walnut_crush_at, -1)
+	assert_lt(group_loop_at, walnut_crush_at, "the creature walnut-crush call must come after entering the group loop")
+
+
+func test_crushing_a_walnut_never_applies_a_karma_penalty():
+	var body := _client_process_body()
+	var search_from := 0
+	var checked := 0
+	while true:
+		var at := body.find("crush_walnut_near(", search_from)
+		if at == -1:
+			break
+		var line_start := body.rfind("\n", at) + 1
+		var line_end := body.find("\n", at)
+		var line := body.substr(line_start, line_end - line_start).strip_edges()
+		assert_false(
+			line.begins_with("if "),
+			"crush_walnut_near should be a bare call, not gated behind an if (found: %s)" % line
+		)
+		assert_false(
+			body.substr(at, line_end - at).contains("apply_karma_delta"),
+			"crush_walnut_near's own line should never apply a Karma penalty"
+		)
+		checked += 1
+		search_from = at + 1
+	assert_eq(checked, 2, "should still have exactly 2 call sites")

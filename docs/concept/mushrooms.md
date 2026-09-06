@@ -248,6 +248,18 @@ game loop for a time, purely decorative until that gap was caught; this
 system is built to prove the same thing from the start rather than risk
 repeating it.
 
+### Crushed underfoot
+
+Reported live: "A mushroom is a physical entity... when you walk over
+one it should be crushed because of the player weight."
+`WildMushroomPatch.crush(cell, momentum_kg_m_s)` mirrors
+`EarthwormPatch.crush` exactly (same shared `CrushMechanic.is_crushed_by`
+threshold, same "recover on the same clock as being picked" shape) —
+see [soil_fauna.md's "Generalized past animals: mushrooms and
+walnuts"](soil_fauna.md#generalized-past-animals-mushrooms-and-walnuts-2026-09-06)
+for the full mechanism this reuses, including why no Karma penalty
+applies (a mushroom is a fungus, not an animal).
+
 ## Deliberately not modeled
 
 - **No visible growth stages.** A fruiting body appears fully formed — see
@@ -293,16 +305,19 @@ repeating it.
   each with its own measured `marker_scale(species_id)`. See
   [ai_sprite_prompts.md section 12](../art/ai_sprite_prompts.md#12-wild-mushrooms-one-5x5-sheet-per-species-2026-09-05).
 - ✅ `WildMushroomPatch` (`src/world/wild_mushroom_patch.gd`) — fixed
-  per-chunk sites, PixelNoise-seeded, flush/recovery/pick.
+  per-chunk sites (real per-species biome eligibility via
+  `MushroomSpecies.allows_biome`), PixelNoise-seeded, flush/recovery/
+  pick/crush.
 - ✅ Item catalog entries for all 6 species (`item_catalog.gd`) — a
   hard prerequisite for the marker below, since `ItemCatalog.make()`
   fails loudly on an unregistered id.
 - ✅ `MushroomMarker` (`src/rendering/mushroom_marker.gd`) — the visible,
   pickable ground object: always its real species' own sprite/name, joins
-  `DroppedItem.GROUP_NAME`/`FORAGEABLE_GROUP_NAME`, `pick_up(picker)`
-  resolves to the real species item, and scales an illustrated sprite by
-  its own measured `marker_scale`, not the procedural generator's flat
-  scale.
+  `DroppedItem.GROUP_NAME`/`FORAGEABLE_GROUP_NAME`/
+  `HoverTargetFinder.GROUP_NAME` (the last one reported live as missing —
+  "they need hover tooltips" — and fixed), `pick_up(picker)` resolves to
+  the real species item, and scales an illustrated sprite by its own
+  measured `marker_scale`, not the procedural generator's flat scale.
 - ✅ `MushroomRenderer` (`src/rendering/mushroom_renderer.gd`) —
   spawn_markers/sync_markers keep markers in sync with which cells are
   fruiting (no per-tick identification push any more).
