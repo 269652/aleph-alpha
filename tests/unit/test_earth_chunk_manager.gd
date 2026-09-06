@@ -9799,6 +9799,23 @@ func test_production_shortfall_quests_for_an_unfounded_settlement_is_empty():
 	assert_eq(manager.production_shortfall_quests_for_settlement("settlement:999_999"), [])
 
 
+## World-level reconciliation (QuestLog, see docs/concept/karma_and_luck.md's
+## Quest lifecycle) needs every currently-real quest across every
+## settlement, not just one at a time -- built from the exact same
+## per-settlement query and settlement enumeration every other coordinator
+## in this file already uses, so it can never diverge from what
+## production_shortfall_quests_for_settlement itself would say for each.
+func test_all_production_shortfall_quests_aggregates_across_every_settlement():
+	manager.record_settlement_founded_if_new(Vector2i(91, 91), [NpcIdentity.new(8)])
+	manager.record_settlement_founded_if_new(Vector2i(93, 93), [NpcIdentity.new(8)])
+
+	assert_eq(manager.all_production_shortfall_quests().size(), 2)
+
+
+func test_all_production_shortfall_quests_is_empty_with_no_settlements_founded():
+	assert_eq(manager.all_production_shortfall_quests(), [])
+
+
 # -- emergence: Phase 13 -- governance form and legitimacy, from real flows -
 
 func test_governance_form_for_settlement_reads_real_institution_history():
