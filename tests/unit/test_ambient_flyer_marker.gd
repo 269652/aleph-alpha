@@ -794,6 +794,74 @@ func test_a_robin_with_nothing_to_hunt_never_commits_to_food_that_isnt_there():
 	assert_ne(marker.position, Vector2.ZERO, "and it still wanders")
 
 
+# -- caterpillars: a second real ground food for the robin (see -----------
+# -- docs/concept/soil_fauna.md's own bird-diet follow-up: "some birds ---
+# -- eat caterpillars too") -- mirrors the worm section immediately -------
+# -- above exactly, since FlyerDiet/AmbientFlyerMarker treat both the -----
+# -- identical "duck-typed world + ground-forage state machine" way -------
+
+## Duck-typed caterpillar world: the two methods a ground-foraging marker
+## calls on its `caterpillar_world` (see EarthChunkManager's real
+## caterpillars_near/take_caterpillar_near) -- mirrors StubWormWorld exactly.
+class StubCaterpillarWorld:
+	var caterpillars: Array = []
+	var taken: Array = []
+	func caterpillars_near(position: Vector2, radius_tiles: int) -> Array:
+		var out: Array = []
+		for c in caterpillars:
+			if position.distance_to(c["position"]) / TILE_SIZE <= float(radius_tiles):
+				out.append(c)
+		return out
+	func take_caterpillar_near(position: Vector2) -> bool:
+		taken.append(position)
+		for i in caterpillars.size():
+			if caterpillars[i]["position"].distance_to(position) < 0.01:
+				caterpillars.remove_at(i)
+				return true
+		return false
+
+
+func _world_with_one_caterpillar(at: Vector2 = Vector2(80, 0)) -> StubCaterpillarWorld:
+	var world := StubCaterpillarWorld.new()
+	world.caterpillars = [{"position": at}]
+	return world
+
+
+func test_a_robin_flies_to_a_caterpillar_and_eats_it():
+	_make_robin(StubWormWorld.new())  # no worms nearby -- only the caterpillar should be found
+	var world := _world_with_one_caterpillar()
+	marker.caterpillar_world = world
+	for i in 1200:
+		marker._process(0.05)
+	assert_gt(world.taken.size(), 0, "a robin should actually take a caterpillar")
+	assert_eq(world.caterpillars.size(), 0, "and the caterpillar should be gone from the world")
+
+
+## The per-species diet made structural, same as the worm-side test above: a
+## sparrow is spawned without a ground-forage brain at all.
+func test_a_bird_without_a_ground_forage_brain_never_takes_caterpillars():
+	_make_robin(StubWormWorld.new())
+	marker.species = "sparrow"
+	marker.ground_forage = null
+	var world := _world_with_one_caterpillar()
+	marker.caterpillar_world = world
+	for i in 1200:
+		marker._process(0.05)
+	assert_eq(world.taken.size(), 0, "a sparrow does not hunt caterpillars")
+	assert_eq(world.caterpillars.size(), 1)
+
+
+func test_a_robin_with_nothing_to_hunt_never_commits_to_a_caterpillar_that_isnt_there():
+	_make_robin(StubWormWorld.new())
+	marker.caterpillar_world = StubCaterpillarWorld.new()
+	for i in 400:
+		marker._process(0.05)
+		assert_eq(
+			marker.ground_forage.phase, GroundForageBehavior.Phase.SEEKING,
+			"nothing to hunt -- it must never commit to a caterpillar that isn't there"
+		)
+
+
 # -- the visible animation --------------------------------------------------
 
 func test_a_robin_sits_down_on_the_worm_to_peck_it():

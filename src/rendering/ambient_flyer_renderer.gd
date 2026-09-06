@@ -795,6 +795,18 @@ func _build_marker(
 		marker.ground_forage = GroundForageBehavior.new()
 		if sprite_generator.has_method("generate_pecking_texture"):
 			marker.peck_frame = sprite_generator.generate_pecking_texture(species, seed_value)
+	# Caterpillars: robins only too (see FlyerDiet.FOOD_CATERPILLARS) --
+	# reuses the identical ground_forage/peck-frame wiring the worm
+	# branch immediately above already set up for the same species, so
+	# this only needs to guard against creating a second, redundant
+	# GroundForageBehavior (the same defensive check the seed branch
+	# above already uses for the identical reason).
+	if FlyerDiet.eats(species, FlyerDiet.FOOD_CATERPILLARS) and scent_world != null:
+		marker.caterpillar_world = scent_world
+		if marker.ground_forage == null:
+			marker.ground_forage = GroundForageBehavior.new()
+		if sprite_generator.has_method("generate_pecking_texture"):
+			marker.peck_frame = sprite_generator.generate_pecking_texture(species, seed_value)
 	# Fallen tree fruit: robins again (see FlyerDiet -- a second diet entry,
 	# not a new species), bird endozoochory (see SeedEndozoochory /
 	# docs/concept/flora.md#bird-endozoochory). Shares ground_forage with

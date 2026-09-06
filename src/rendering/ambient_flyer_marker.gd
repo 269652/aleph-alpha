@@ -118,6 +118,13 @@ var scent_world = null
 ## sparrow has no brain to run and no world to query, so nothing below can
 ## fire for it.
 var worm_world = null
+## Ground-based caterpillars (see FlyerDiet.FOOD_CATERPILLARS,
+## docs/concept/soil_fauna.md's own bird-diet follow-up: "some birds eat
+## caterpillars too"). Duck-typed for caterpillars_near/take_caterpillar_near
+## (see EarthChunkManager), exactly mirroring worm_world's own contract --
+## set only for species whose diet contains FOOD_CATERPILLARS (today: robin
+## alone), so a sparrow has no world to query here either.
+var caterpillar_world = null
 ## Fallen tree fruit -- endozoochory (see SeedEndozoochory /
 ## docs/concept/flora.md#bird-endozoochory). Set only for species whose diet
 ## contains fruit (currently the robin -- see FlyerDiet): `fruit_world` is
@@ -220,6 +227,15 @@ var _worm_target = null  # Vector2, or null
 ## picks differ while staying deterministic (see GroundForageBehavior.
 ## choose_worm).
 var _worm_pick_index := 0
+
+## The caterpillar-shaped sibling of the three worm fields immediately
+## above -- same throttled-sniff/target/pick-index shape, reusing
+## WORM_SNIFF_INTERVAL and GroundForageBehavior.choose_worm directly rather
+## than inventing a same-shaped duplicate of either (fruit/seed/grass-seed
+## below already reuse both the same way).
+var _caterpillar_sniff_accumulator := 0.0
+var _caterpillar_target = null  # Vector2, or null
+var _caterpillar_pick_index := 0
 
 ## Fallen fruit uses the same throttled-sniff shape as worms, but its own
 ## accumulator/target/pick-index -- worm-hunting and fruit-foraging run in
@@ -1357,6 +1373,8 @@ func _step_ground_forage(delta: float) -> bool:
 			# flies at.
 			if _worm_target != null:
 				_fly_at_worm(delta)
+			elif _caterpillar_target != null:
+				_fly_at_caterpillar(delta)
 			elif _fruit_target != null:
 				_fly_at_fruit(delta)
 			elif _seed_target != null:
@@ -1374,6 +1392,8 @@ func _step_ground_forage(delta: float) -> bool:
 			if struck:
 				if _worm_target != null:
 					_take_targeted_worm()
+				elif _caterpillar_target != null:
+					_take_targeted_caterpillar()
 				elif _fruit_target != null:
 					_take_targeted_fruit()
 				elif _seed_target != null:
@@ -1398,10 +1418,12 @@ func _step_ground_forage(delta: float) -> bool:
 	# already committed (moved ground_forage out of SEEKING), the fruit
 	# search's own can_commit() check is simply false and it no-ops.
 	_worm_target = null
+	_caterpillar_target = null
 	_fruit_target = null
 	_seed_target = null
 	_grass_seed_target = null
 	_look_for_worms(delta)
+	_look_for_caterpillars(delta)
 	_look_for_fruit(delta)
 	_look_for_seeds(delta)
 	_look_for_grass_seeds(delta)
@@ -1662,6 +1684,70 @@ func _look_for_worms(delta: float) -> void:
 	# the exact failure the pollinator path already hit and fixed.
 	if _worm_target.distance_to(home) > _movement.radius:
 		home = _worm_target
+
+
+## The caterpillar-shaped sibling of _fly_at_worm -- identical shape, a
+## different target field and a different landing call (see
+## _take_targeted_caterpillar).
+func _fly_at_caterpillar(delta: float) -> void:
+	if _caterpillar_target == null:
+		ground_forage.abort()
+		return
+	var before := position
+	var to_target: Vector2 = _caterpillar_target - position
+	if to_target.length() <= GroundForageBehavior.LANDING_DISTANCE:
+		_begin_ground_touchdown(_caterpillar_target)
+		ground_forage.arrive()
+		perched = true
+		return
+	position += to_target.normalized() * _movement.speed * delta
+	face_travel(position - before, delta)
+
+
+## The caterpillar-shaped sibling of _take_targeted_worm -- take_caterpillar_
+## near, not crush_caterpillars_near: a bird's meal is an entirely different
+## event from being crushed underfoot (see EarthChunkManager.
+## take_caterpillar_near's own doc comment), so this never plays the
+## crushed death animation, the same instant-disappear outcome an eaten
+## worm already gets.
+func _take_targeted_caterpillar() -> void:
+	_fullness = BirdDigestion.fullness_after_meal(_fullness)
+	if caterpillar_world == null or _caterpillar_target == null:
+		return
+	caterpillar_world.take_caterpillar_near(_caterpillar_target)
+
+
+## The caterpillar-shaped sibling of _look_for_worms -- identical shape,
+## reusing the same WORM_SNIFF_INTERVAL throttle and GroundForageBehavior.
+## choose_worm scatter-pick (see _caterpillar_sniff_accumulator/
+## _caterpillar_pick_index's own doc comment for why neither gets its own
+## same-shaped duplicate).
+func _look_for_caterpillars(delta: float) -> void:
+	if caterpillar_world == null:
+		return
+	_caterpillar_sniff_accumulator += delta
+	if _caterpillar_sniff_accumulator < WORM_SNIFF_INTERVAL:
+		return
+	_caterpillar_sniff_accumulator = 0.0
+	if not ground_forage.can_commit():
+		return
+	var caterpillars: Array = caterpillar_world.caterpillars_near(
+		position, int(GroundForageBehavior.SEARCH_TILES)
+	)
+	if caterpillars.is_empty():
+		return
+	_caterpillar_pick_index += 1
+	var target := GroundForageBehavior.choose_worm(
+		position, caterpillars, PixelNoise.value(wander_seed, _caterpillar_pick_index, 0)
+	)
+	if target.is_empty():
+		return
+	_caterpillar_target = target["position"]
+	if not ground_forage.begin_descent():
+		_caterpillar_target = null
+		return
+	if _caterpillar_target.distance_to(home) > _movement.radius:
+		home = _caterpillar_target
 
 
 ## Looks for the next fallen fruit, on a throttled interval, and commits to
@@ -2267,6 +2353,7 @@ func _abandon_ground_forage() -> void:
 	ground_forage.abort()
 	perched = false
 	_worm_target = null
+	_caterpillar_target = null
 	_fruit_target = null
 	_seed_target = null
 	_grass_seed_target = null
