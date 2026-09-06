@@ -59,6 +59,25 @@ func test_mining_an_ore_cell_with_a_pickaxe_yields_stone_plus_ore():
 	assert_true(ids.has("iron_ore"))
 
 
+## Luck (see docs/concept/karma_and_luck.md) forwards through mine() to
+## OreYield.yields() exactly the way pickaxe_power already does -- pinned
+## against this default ore_seed's own known-shifted result (seed 0, power
+## 3.0: 2 iron_ore at neutral luck, 4 at full good luck; see OreYield's own
+## luck tests for the general property, this just proves mine() doesn't drop
+## the argument on the floor, mirroring test_minable_ore.gd's identical test).
+func test_mining_forwards_luck_to_ore_yield():
+	rock.kind = Strata.KIND_ORE
+	rock.ore_type = "iron"
+	watch_signals(WorldItemBus)
+	rock.mine(3.0, 1.0)
+	var iron_ore_count := 0
+	for i in get_signal_emit_count(WorldItemBus, "item_dropped"):
+		var stack = get_signal_parameters(WorldItemBus, "item_dropped", i)[0]
+		if stack.item.id == "iron_ore":
+			iron_ore_count = stack.count
+	assert_eq(iron_ore_count, 4)
+
+
 func test_mining_writes_the_tunnel_back_into_strata():
 	var strata := Strata.new(Strata.LAYER_TOPSOIL_REGOLITH, Vector2i.ZERO)
 	var cell := Vector2i(3, 3)

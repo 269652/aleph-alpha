@@ -600,6 +600,12 @@ While scouting it:
    with nothing to show for it" contract an unsuccessful `APPROACHING`
    trip already has.
 
+`_dispatch_ant_scout` above is kept as a single, un-spread dispatch for
+direct callers, but real production dispatch (`step_ants`) no longer calls
+it directly — see "Cluster recruitment: multi-scout waves, directional
+trails, and invalidation" below for the actual per-tick scout-vs-resolver
+wave dispatch this now goes through.
+
 **Deliberately not built:** biome-aware re-sensing as a scout physically
 wanders into a neighbouring biome (it still only ever senses for the kind
 its OWN mound's placement would suggest is worth checking — sensing all
@@ -659,10 +665,13 @@ untouched, undirected exploration — not "pick the nearest candidate" the
 way the old omniscient dispatch's own no-pheromone fallback was, since
 there is no candidate list left to fall back to at all.
 
-A successful forager still deposits at the food's own real position the
-moment it picks its find up (marking "there was food here, worth checking
-again") — unchanged; what changed is only how a *later* scout reads that
-mark.
+A successful forager depositing at the food's own position the moment it
+picked its find up, unconditionally, was the model at this point in the
+project — since superseded (see "Cluster recruitment: multi-scout waves,
+directional trails, and invalidation" below) by a deposit that fires only
+for a real cluster find, encodes a direction rather than a bare amount,
+and is laid progressively on the walk home rather than once at the food
+itself.
 
 **Per mound, not per chunk.** Each mound owns its own `PheromoneField`
 (lazily created on first deposit) — different colonies don't smell each
@@ -1256,7 +1265,7 @@ rule as every wild animal, rather than a parallel, separately-capped UI.
   exactly, including `PheromoneField.best_candidate_index` — a real,
   previously-successful spot's own trail can now outweigh a marginally
   closer, never-visited leaf, the same recruitment effect seed/windfall
-  foraging already had. Deliberately NOT built: a genuine random-explore/
+  foraging already had. ~~Deliberately NOT built: a genuine random-explore/
   wander phase before a target is even known — every forage kind in this
   simulation (seed, windfall, leaf alike) is architected around the colony
   already having found a real, reachable candidate before ever dispatching
@@ -1265,9 +1274,16 @@ rule as every wild animal, rather than a parallel, separately-capped UI.
   known target yet" scout behaviour would be a materially bigger,
   cross-cutting change to that shared architecture, not a leaf-specific
   fix — left as a separate, explicitly named follow-up rather than
-  attempted here. With no trail yet (a colony's first-ever leaf forage,
-  or after one has fully decayed), `best_candidate_index` still falls back
-  to pure nearest-candidate selection, same as before this fix.
+  attempted here.~~ **Partially resolved (2026-09-06) — see "Scouts mark
+  leaf clusters, workers collect from marks" below.** A real scout/worker
+  split now exists, but the SEEKING-phase gap named above is still
+  genuinely open: a "scout" is still dispatched to an already-known
+  candidate exactly like an ordinary forager, just one found at a wider
+  radius — there remains no true "wanders with no target at all yet"
+  behaviour anywhere in this simulation. With no trail yet (a colony's
+  first-ever leaf forage, or after one has fully decayed),
+  `best_candidate_index` still falls back to pure nearest-candidate
+  selection, same as before this fix.
 - **Mound COUNT is still fixed and deterministic per chunk** (see "A queen,
   and where a colony's size comes from" above for what is no longer fixed
   — each mound's own population now genuinely grows or stalls with real
@@ -1302,6 +1318,164 @@ rule as every wild animal, rather than a parallel, separately-capped UI.
   INITIAL population at an established range instead of the bare
   minimum — see above. Real persistence/catch-up remains open, now
   honestly scoped rather than mis-justified as unnecessary.
+
+### A real food stock number, not just a percentage, on hover
+
+Requested directly: "the ant mount should show how much food is on stock
+in the hover tooltip." "A mound's own hover panel" above already reads
+`food_availability_fraction` — a derived 0-1 RATIO (stored ÷ what the
+current population needs for a healthy buffer) — as a percentage bar,
+which answers "is this colony food-secure," a genuinely different
+question from "how much is actually in the larder." `AntColony.
+food_stored_at(cell)` has held that raw absolute quantity since the food
+economy landed (see above) but was never plumbed through to either hover
+surface. Added to `AntMoundMarker.get_display_name()` (the plain
+mouse-hover NAME tooltip, via `HoverTargetFinder`) rather than the bar
+panel: that surface already establishes the exact "interpolate a real
+number into hover text" pattern for population
+(`"Ant Mound (population %d)"`), so the stock number joins it there —
+`"Ant Mound (population %d, food %d)"` — rather than teaching the shared,
+every-creature `CreaturePanel` a second number format for one species.
+The bar panel's own percentage is untouched; the two hover surfaces stay
+complementary, not duplicated.
+
+### Cluster recruitment: multi-scout waves, directional trails, and invalidation
+
+Reported live, as a single dense follow-up to the scouting rework above:
+"the ant behavior still has some flaws ... When a scout goes out other
+ants follow him in a line even when nothing has been discovered yet...
+the mound should send out multiple scouts in random directs. these
+scouts should only lay out pheromones after they discovered a cluster
+for which multiple ants are needed ... he encodes direction and amount
+in the pheromones so other ants don't follow it back into the mound on
+the way back from a discovery ... then when the scouts return the mound
+dispatches more ants which follow / resolve the pheromone trails and the
+last ant which takes home the last piece or one that encounters it empty
+invalidates the pheromone trail by masking the existing pheromone trail
+with complete marker."
+
+**This superseded two earlier, narrower mechanisms built in the same
+spot, both landed the same day, neither meeting this bar.** The plain
+per-tile `PheromoneField.deposit` described in "Pheromone trails" above
+fired unconditionally on every successful pickup regardless of size — a
+lone find recruiting nobody was never distinguished from a real cluster.
+Separately, a concurrently-built `AntColony._cluster_marks` memory (a
+mound remembering a handful of exact pixel positions where a scout once
+found `CLUSTER_MIN_LEAVES`-or-more leaves together, then dispatching
+workers straight at those remembered coordinates via
+`EarthChunkManager._dispatch_cluster_workers`) was real progress on
+"collect from marks," but not on "explore randomly... other ants follow
+him in a line": a worker sent straight at a remembered exact position is
+still omniscient dispatch, just against a smaller, scout-populated
+candidate list instead of a whole-mound scan, and it never encoded a
+direction or a stop signal into the pheromone field itself — the actual
+mechanism asked for. That whole memory (constants, dispatch function,
+tracking bucket, and its own dedicated tests) was removed in favour of
+the mechanism below, rather than kept running alongside it — the two
+disagreed on what a successful arrival should even do to the pheromone
+field, and running both would have meant one silently overwriting the
+other's effect on every single trip.
+
+**Scouts wander in a real spread, not a line.**
+`EarthChunkManager._dispatch_ant_scout_wave` dispatches
+`AntColony.SCOUT_WAVE_SIZE` (3) scouts together, each assigned a
+DIFFERENT sector spread evenly around a circle
+(`Vector2.from_angle(TAU * i / SCOUT_WAVE_SIZE)`) as its own
+`assigned_heading_bias`. `AntScoutWander.spread_heading` (new,
+`SPREAD_BIAS := 0.3`, sharing a `_lerped_heading` helper with the
+existing `biased_heading`) gently nudges each scout's own independent
+wander toward its assigned sector — applied AFTER `biased_heading`'s own
+real pheromone-gradient bias, never instead of it, so a genuine nearby
+trail still wins over an assigned sector — so several scouts dispatched
+from the same mound at the same moment visibly fan out in different
+directions, rather than reading as one wandering ant with the others
+correlating onto the same path by coincidence of a shared `wander_seed`.
+
+**Only a real cluster ever touches the pheromone field, in either
+direction.** `AntForagerMarker._sense_food_nearby` now reports a
+`cluster_size` (how many of the same kind were sensed together at commit
+time); `_is_cluster_find := cluster_size >= AntColony.CLUSTER_THRESHOLD`
+(3, deliberately not 2 — see that constant's own doc comment: a pair is
+still well within what one forager quietly handles over ordinary trips).
+A solo find below threshold neither deposits nor invalidates anything —
+the exact "should only lay out pheromones after they discovered a
+cluster" ask, read as a hard gate rather than a bias.
+
+**Direction and amount, laid progressively on the way home, not at the
+food and not at the mound.** `PheromoneField`'s own deposit shape is now
+`{amount, direction, exhausted}` (previously a bare scalar).
+`deposit_trail(tile, direction, amount)` REPLACES whatever was at a tile
+rather than accumulating into it, the way plain `deposit` still does — a
+fresh "amount left, which way to the resource" reading is more useful
+here than a blended history of possibly-stale ones.
+`AntForagerMarker._maybe_deposit_trail_tile`, called from `_process`'s
+RETURNING branch once per newly-crossed tile (tracked via
+`_last_trail_tile`/`_has_deposited_trail_tile`, not once per frame),
+computes `direction` as the real unit vector from THAT tile toward the
+food's own position — so a trail read anywhere along the homeward walk
+points back OUT toward the resource, never toward the mound. This is the
+literal fix for "other ants don't follow it back into the mound on the
+way back from a discovery": the earlier plain-deposit model marked only
+the food's own position, which a later ant reading it from partway home
+had no way to distinguish from "the mound is this way." `amount` carries
+the cluster's own sensed size through unchanged from commit.
+
+**Resolvers follow the exact trail; scouts merely lean toward it.**
+`PheromoneField.nearest_trail_near(point, tile_size)` returns the
+nearest deposit that is both non-exhausted AND carries a real direction
+— a plain historical `deposit()` (`Vector2.ZERO` direction) or an
+exhausted one is never returned. A `resolver`
+(`AntForagerMarker.resolver`, set only by dispatch, never a plain scout)
+checks this FIRST on every scouting step and, if found, walks in exactly
+that stored direction — no blending with its own ambient wander at all,
+a deliberate committed step, unlike a scout's own soft
+`gradient_direction` lean. A resolver with no known trail nearby (or a
+scout, which never takes this branch) falls through to the same
+wander-plus-gradient-plus-spread heading every scout already uses.
+
+**Which role the mound actually dispatches.** `EarthChunkManager.
+step_ants` calls `AntColony.has_active_pheromone_trail(cell)` (true iff
+the mound's own field has any real, non-exhausted, directional deposit)
+to decide, per mound, per forage tick: a resolver wave
+(`RESOLVER_WAVE_SIZE`, 2) if a trail is already known, or a scout wave
+(`SCOUT_WAVE_SIZE`, 3) otherwise — "the mound should send out multiple
+scouts... then when the scouts return the mound dispatches more ants
+which follow / resolve the pheromone trails," read as a literal per-tick
+EITHER/OR. Unlike the superseded `_cluster_marks` design, there is no
+separate concurrent-ant pool here: scouts and resolvers both draw from
+the same `active_forager_cap_at` slots ordinary foraging has always used
+— a resolver is not additional traffic on top of scouting, it is what
+the SAME mound dispatches next once something is actually known.
+
+**Invalidated by masking with a stop signal, not by erasing.**
+`PheromoneField.invalidate_near(point, radius_tiles, tile_size)` sets
+`exhausted = true` on every real deposit within radius, kept rather than
+removed so it still decays on its own ordinary schedule instead of a
+fresh, unrelated deposit reusing the same tile before the stop signal
+has had time to matter. `concentration_at`/`gradient_direction`/
+`nearest_trail_near`/`has_active_trail` all already skip an exhausted
+entry, so masking one is enough to make it inert everywhere at once.
+Triggered from `AntForagerMarker._resolve_arrival_at_food`, for any
+cluster find or resolver (never a plain solo find): arriving to discover
+the spot already emptied invalidates immediately; otherwise a fresh,
+real, LOCAL re-check (`_remaining_same_kind_count`, re-querying the world
+at the food's own position the same way `_sense_food_nearby` does, not
+arithmetic on the `cluster_size` sensed back at commit time) invalidates
+the instant nothing of the same kind remains. "The last ant which takes
+home the last piece or one that encounters it empty invalidates the
+pheromone trail by masking the existing pheromone trail with complete
+marker" — both halves, literally.
+
+**What this does NOT include**, named rather than silently dropped: no
+seed/windfall cluster recruitment (`CLUSTER_THRESHOLD`'s own gating is
+kind-agnostic, but leaf litter is still the only kind this project places
+densely enough to realistically cluster — see leaf_litter.md's own
+GPU-instanced point-record shape; seed/windfall clusters are a
+reasonable, separable follow-up). No visual distinction between a
+scout, a resolver, and an ordinary solo forager (identical
+`AntForagerMarker`, same art, same walk). No choice between several
+simultaneously-active trails — `nearest_trail_near` returns only the
+single closest one.
 
 
 ## Crawling out, and back down

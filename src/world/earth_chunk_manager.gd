@@ -709,6 +709,7 @@ var _ant_mound_markers: Dictionary = {}
 ## alive. Keyed globally (not per-chunk) since a mound's own identity
 ## (chunk_coord*CHUNK_SIZE + cell) is already a stable global tile.
 var _active_ant_foragers: Dictionary = {}
+
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_ambient_flyers: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
@@ -2056,6 +2057,20 @@ func production_shortfall_quests_for_settlement(settlement_id: String) -> Array:
 	var household_occupations := _household_occupations_for_settlement(settlement_id)
 	var market := _market_store.market_for(settlement_id)
 	return Quest.production_shortfall_quests_for(settlement_id, household_occupations, market, _recipe_book)
+
+
+## Every currently-real production-shortfall quest across every settlement
+## that has ever been founded -- QuestLog's own reconciliation (see
+## docs/concept/karma_and_luck.md's Quest lifecycle) needs the whole live
+## set to check the player's accepted offer_ids against, not one settlement
+## at a time. Built from the exact same _known_settlement_ids enumeration
+## step_settlements itself uses, so this can never see a different set of
+## settlements than the rest of this file already assesses.
+func all_production_shortfall_quests() -> Array:
+	var quests: Array = []
+	for settlement_id in _known_settlement_ids():
+		quests.append_array(production_shortfall_quests_for_settlement(settlement_id))
+	return quests
 
 
 ## household_id -> occupation for every household in `settlement_id` with a

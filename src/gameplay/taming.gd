@@ -88,12 +88,25 @@ static var AFFINITY_MAX_REDUCTION_FRACTION: float = MIN_BREAK_FREE_CHANCE / MAX_
 ## character with no investment sees byte-identical numbers to before this
 ## parameter existed (see
 ## test_break_free_chance_is_unchanged_with_no_predator_and_no_affinity).
-static func break_free_chance(condition: float, is_predator: bool = false, affinity: float = 0.0) -> float:
+##
+## `luck` (Player.luck(), see docs/concept/karma_and_luck.md -- always in
+## [-1, 1]) applies the SAME AFFINITY_MAX_REDUCTION_FRACTION, not a fresh
+## eyeballed number, over luck's own signed range instead of affinity's
+## [0, ceiling] one: good luck (positive) shaves up to that same fraction
+## off on top of whatever affinity already did, bad luck (negative) adds it
+## back. At luck 0 this is a no-op, so a character with neutral karma sees
+## byte-identical numbers to before this parameter existed (see
+## test_break_free_chance_is_unchanged_with_zero_luck).
+static func break_free_chance(
+	condition: float, is_predator: bool = false, affinity: float = 0.0, luck: float = 0.0
+) -> float:
 	var predator_multiplier := PREDATOR_BREAK_FREE_MULTIPLIER if is_predator else 1.0
 	var scaled_condition := clampf(condition, 0.0, 1.0) * predator_multiplier
 	var chance := lerpf(MIN_BREAK_FREE_CHANCE, MAX_BREAK_FREE_CHANCE, clampf(scaled_condition, 0.0, 1.0))
 	var affinity_fraction := clampf(affinity, 0.0, AFFINITY_CEILING) / AFFINITY_CEILING
-	return chance * (1.0 - affinity_fraction * AFFINITY_MAX_REDUCTION_FRACTION)
+	chance *= (1.0 - affinity_fraction * AFFINITY_MAX_REDUCTION_FRACTION)
+	chance *= (1.0 - clampf(luck, -1.0, 1.0) * AFFINITY_MAX_REDUCTION_FRACTION)
+	return clampf(chance, 0.0, 1.0)
 
 
 ## Stamina spent per failed struggle, and how long a rested animal takes to

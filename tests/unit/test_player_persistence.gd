@@ -8,6 +8,7 @@ extends GutTest
 const PlayerScene = preload("res://scenes/player.tscn")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
+const Karma = preload("res://src/gameplay/karma.gd")
 
 var source: Player
 var restored: Player
@@ -75,6 +76,48 @@ func test_a_restored_player_remembers_mushrooms_eaten():
 	restored.apply_save_dict(source.to_save_dict())
 
 	assert_eq(restored.mushrooms_eaten, 3)
+
+
+## Karma is a permanent ledger (see docs/concept/karma_and_luck.md) --
+## same "must survive reload" expectation as mushrooms_eaten just above,
+## including staying negative (it is a real record of what happened, not
+## a clamped-at-zero score).
+func test_a_restored_player_remembers_karma():
+	source.karma = -2.5
+
+	restored.apply_save_dict(source.to_save_dict())
+
+	assert_almost_eq(restored.karma, -2.5, 0.0001)
+
+
+## Player.luck() is the single reader every Luck-consuming formula calls
+## (see docs/concept/karma_and_luck.md) -- pinned here as a thin,
+## byte-for-byte forward to Karma.luck_for(karma), the same "one reader,
+## no second accumulator to drift" shape skill_bonus already uses.
+func test_luck_is_derived_from_karma():
+	source.karma = 7.5
+	assert_almost_eq(source.luck(), Karma.luck_for(7.5), 0.0001)
+
+
+func test_a_fresh_player_starts_with_neutral_karma_and_luck():
+	assert_almost_eq(source.karma, 0.0, 0.0001)
+	assert_almost_eq(source.luck(), 0.0, 0.0001)
+
+
+## QuestLog's own commitment record (see docs/concept/karma_and_luck.md's
+## Quest lifecycle) -- same "must survive reload" expectation as karma and
+## mushrooms_eaten just above, exact shape mushrooms_eaten already
+## established: one line added to each side, no PlayerSave change.
+func test_a_restored_player_remembers_accepted_quest_ids():
+	source.accepted_quest_ids = ["production:household:stone_pickaxe"]
+
+	restored.apply_save_dict(source.to_save_dict())
+
+	assert_eq(restored.accepted_quest_ids, ["production:household:stone_pickaxe"])
+
+
+func test_a_fresh_player_has_accepted_no_quests():
+	assert_eq(source.accepted_quest_ids, [])
 
 
 func test_a_restored_player_carries_the_same_inventory_contents():

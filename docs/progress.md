@@ -8914,6 +8914,27 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   depositing food throughout" isolation the five tests mentioned above
   already needed, for the identical reason. No production code changed.
   Full writeup: [soil_fauna.md](concept/soil_fauna.md#a-real-food-economy-storage-upkeep-and-fewer-bigger-hungrier-colonies).
+- ✅ **Real food stock (not just a percentage) on hover (2026-09-06)** —
+  requested directly: "the ant mount should show how much food is on
+  stock in the hover tooltip". `AntMoundMarker.get_display_name()` now
+  reports `AntColony.food_stored_at` (the real absolute quantity, already
+  existed, never surfaced) alongside population —
+  `"Ant Mound (population 15, food 45)"` — joining the mouse-hover
+  tooltip rather than the bar panel above, which already answers a
+  different question ("is this colony food-secure", a 0-1 fraction) than
+  "how much is in the larder" (a raw number).
+  **A same-day companion pass built alongside this one — scouts marking
+  leaf clusters (`AntColony._cluster_marks`) for a separate
+  `EarthChunkManager._dispatch_cluster_workers` dispatch straight at
+  those remembered exact positions — was superseded the same day by a
+  more complete cluster-recruitment mechanism (see the entry below) and
+  has been removed entirely**, rather than kept running alongside it: a
+  worker dispatched straight at a remembered exact position is still
+  omniscient dispatch (a smaller, scout-populated candidate list instead
+  of a whole-mound scan, but still no local sensing/trail-following in
+  the traffic it actually sent out), and it never encoded a direction or
+  a stop signal into the pheromone field the way the replacement does.
+  Full writeup: [soil_fauna.md](concept/soil_fauna.md#a-real-food-stock-number-not-just-a-percentage-on-hover).
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to
@@ -9307,6 +9328,95 @@ forager/scout ant-dispatch cluster in `test_earth_chunk_manager.gd`
 (real chunk-load integration tests included) all green. Full writeup:
 `soil_fauna.md`'s new "Scouting: real search, not omniscient dispatch"
 section, and its "Pheromone trails" section's own rewrite to match.
+
+✅ **Cluster recruitment: multi-scout waves, directional trails, and
+invalidation (2026-09-06, same day)** — reported live, as a single dense
+follow-up to the scouting rework above: "the ant behavior still has some
+flaws ... When a scout goes out other ants follow him in a line even
+when nothing has been discovered yet... the mound should send out
+multiple scouts in random directs. these scouts should only lay out
+pheromones after they discovered a cluster for which multiple ants are
+needed ... he encodes direction and amount in the pheromones so other
+ants don't follow it back into the mound on the way back from a
+discovery ... then when the scouts return the mound dispatches more ants
+which follow / resolve the pheromone trails and the last ant which takes
+home the last piece or one that encounters it empty invalidates the
+pheromone trail by masking the existing pheromone trail with complete
+marker." Built on a separate branch while a CONCURRENT session
+independently built and merged its own "scouts mark leaf clusters,
+workers collect from marks" pass (`AntColony._cluster_marks`, see the
+entry above) into `main` — the two were reconciled at merge time by
+keeping this mechanism and removing that one entirely (see that entry's
+own note on why: an exact-remembered-position worker dispatch is still
+omniscient, and never encoded a direction or stop signal into the
+pheromone field the way this does).
+1. **`PheromoneField`'s deposit shape** is now `{amount, direction,
+   exhausted}` (was a bare scalar). New `deposit_trail(tile, direction,
+   amount)` REPLACES whatever was at a tile (a fresh reading beats a
+   blended history here); plain `deposit()` is kept, unchanged, for
+   backward compatibility. New `nearest_trail_near`/`has_active_trail`
+   read only real, non-exhausted, DIRECTIONAL deposits; `concentration_
+   at`/`gradient_direction` skip an exhausted deposit entirely. New
+   `invalidate_near(point, radius_tiles, tile_size)` masks every real
+   deposit within radius as `exhausted = true` in place (kept, not
+   erased, so it still decays on its own ordinary schedule). 10 new
+   tests (22 total, `test_pheromone_field.gd`).
+2. **`AntColony.CLUSTER_THRESHOLD` (3)** — how many real items sensed
+   together count as a cluster worth recruiting for, versus one forager
+   quietly handling a solo find alone. New wrapper methods
+   `deposit_pheromone_trail`/`has_active_pheromone_trail`/`nearest_
+   pheromone_trail_near`/`invalidate_pheromone_near` (all null-safe) sit
+   in front of the `PheromoneField` methods above. New `SCOUT_WAVE_SIZE`
+   (3) / `RESOLVER_WAVE_SIZE` (2).
+3. **`AntForagerMarker`** gained `resolver`/`assigned_heading_bias`.
+   `_sense_food_nearby` now reports `cluster_size`; a find at or past
+   `CLUSTER_THRESHOLD` sets `_is_cluster_find`. Only a cluster find (or a
+   resolver) ever touches the pheromone field, in either direction — a
+   solo find neither deposits nor invalidates anything. A cluster find
+   lays one trail tile per newly-crossed tile on the walk home
+   (`_maybe_deposit_trail_tile`, called from `_process`'s RETURNING leg),
+   direction computed fresh from THAT tile toward the food's own real
+   position — so a trail read anywhere on the way home points back OUT
+   toward the resource, never toward the mound. A `resolver` checks
+   `nearest_pheromone_trail_near` FIRST every scouting step and, if
+   found, walks in exactly that stored direction with no blending at
+   all; otherwise it falls through to the same wander/gradient/spread
+   heading an ordinary scout uses. Arrival (`_resolve_arrival_at_food`)
+   invalidates the trail immediately on arriving to an already-empty
+   spot, or once a fresh, real, LOCAL re-check
+   (`_remaining_same_kind_count`) finds nothing of the same kind left.
+4. **`AntScoutWander.spread_heading`** (new, `SPREAD_BIAS` 0.3, sharing a
+   `_lerped_heading` helper with the existing `biased_heading`) nudges
+   each wave member's own wander toward its assigned sector, applied
+   AFTER the real pheromone-gradient bias so a genuine trail still wins.
+5. **`EarthChunkManager.step_ants`** now calls `AntColony.has_active_
+   pheromone_trail(cell)` per mound, per forage tick, dispatching a
+   resolver wave (new `_dispatch_ant_resolver_wave`) if a trail is
+   already known, or a scout wave (new `_dispatch_ant_scout_wave`, each
+   member assigned a different sector spread evenly around a circle)
+   otherwise — both funnel through a shared `_dispatch_forager`, and
+   both draw from the SAME `active_forager_cap_at` pool ordinary
+   foraging already used (a resolver is not additional traffic on top of
+   scouting, it is what the mound dispatches next once something is
+   known — unlike the superseded `_cluster_marks` design's own separate
+   concurrent-ant pool). `_dispatch_ant_scout` kept as a thin,
+   un-spread wrapper for existing direct-dispatch callers.
+**What this does NOT include**: seed/windfall cluster recruitment
+(leaf litter is still the only kind this project places densely enough
+to realistically cluster); any visual distinction between a scout, a
+resolver, and an ordinary solo forager; a choice between several
+simultaneously-active trails (`nearest_trail_near` returns only the
+closest one). 168/168 green across `test_pheromone_field.gd` (22),
+`test_ant_scout_wander.gd` (10), `test_ant_colony.gd` (67),
+`test_ant_forager_marker.gd` (53), and `test_ant_mound_marker.gd` (16);
+the scout-wave/resolver-wave/dispatch tests in
+`test_earth_chunk_manager.gd` (`test_dispatch_ant_scout_wave_spreads_
+several_scouts_across_distinct_sectors`, `test_dispatch_ant_resolver_
+wave_dispatches_real_resolvers`, `test_step_ants_dispatches_scouts_when_
+no_trail_is_known`, `test_step_ants_dispatches_resolvers_once_a_trail_is_
+known`, plus the pre-existing ant-dispatch/weather/mound-marker coverage
+in that same file) all green too. Full writeup:
+[soil_fauna.md](concept/soil_fauna.md#cluster-recruitment-multi-scout-waves-directional-trails-and-invalidation).
 
 ⬜ **Still no litter-density accumulation or soil-fertility feedback, and
 no ground-covering visual effect** (unchanged scope cut — see
@@ -13400,3 +13510,98 @@ GPU-gated smoke test. Screenshots land in the same top-level
 (no new subfolder). No on-screen "saved" confirmation toast yet
 (`screenshot_saved`/`screenshot_failed` signals exist, unwired), no
 rebindable key, no format choice — see the concept doc's Non-goals.
+
+### Karma and Luck (`concept/karma_and_luck.md`, new this pass)
+
+Asked directly: "a Luck skill which influences dice rolls and a Karma
+system which influences Luck; e.g. stepping on a worm should give -1
+Karma.. Abandoning a quest as well. Helping an NPC +1 Karma." Ran head-on
+into this codebase's own explicit "no random rolls anywhere in gameplay"
+design rule (`secret_d20.gd`'s own doc comment: combat/crafting/
+spellcasting are "fully deterministic by design," `SecretD20` the one
+deliberately-isolated exception). Resolved with three scoping questions
+put to the user rather than assumed: Luck biases EXISTING deterministic
+formulas rather than adding a new roll (recommended, chosen); build the
+REAL quest accept/abandon lifecycle now rather than stub it (the
+bigger-scope option, chosen); every worm/creature crush, not just the
+player's own, costs Karma (recommended, chosen).
+
+✅ **`Karma` module** (`src/gameplay/karma.gd`): three named event
+constants (`WORM_OR_CATERPILLAR_CRUSH_PENALTY`, `QUEST_ABANDON_PENALTY`,
+`QUEST_FULFILLED_REWARD`, all `1.0` today, free to diverge later without a
+signature change anywhere) and `luck_for(karma)`, saturating at
+`KARMA_CEILING` (15, deliberately the same number `Taming.AFFINITY_CEILING`
+already uses — both represent "the practical ceiling of investing in this
+axis at all"). Karma itself is a real, permanent, UNCLAMPED ledger (it can
+go arbitrarily negative — a true record of what happened, not a score);
+only the Luck it produces saturates in `[-1, 1]`.
+
+✅ **`Player.karma` + `Player.luck()`**, persisted the exact one-line-each-
+side shape `mushrooms_eaten` already established. `Player.
+apply_karma_delta(delta)` is the single external mutator, called by
+whoever actually detects a named event — mirrors how every other
+externally-triggered Player state change in `World` is a named method call
+(`activate_item_id`, `craft`, `allocate_skill`, ...), never a raw field
+poke from outside.
+
+✅ **`Taming.break_free_chance` and `OreYield.yields` both read
+`Player.luck()`** — the two formulas chosen because both already had a
+proven "player-stat nudges this number, byte-identical at zero
+investment" slot to extend (the same shape `affinity` already uses in the
+first, the seeded extra-ore roll's own position in the second), so no new
+formula shape was invented for either. `luck == 0.0` (neutral karma) is
+byte-identical to before either parameter existed. Deliberately NOT
+reached this pass, named rather than silently skipped:
+`FishingMinigame.fish_rarity`, `KnappingModel.shard_yield`,
+`RarityTier.roll_tier` (the last has zero call sites anywhere yet — loot
+drops aren't wired up at all, a separate gap this pass doesn't close).
+
+✅ **Worm/caterpillar crush → Karma**, wired into `World._client_process`'s
+existing crush pass: `EarthChunkManager.crush_worm_at`/
+`crush_caterpillars_near` already returned a bool for whether something
+was actually crushed, previously discarded. A `true` return now charges
+the named penalty on the local player — for the player's OWN step AND for
+every creature's, per the user's explicit choice that every crush should
+count.
+
+✅ **`QuestLog`** (`src/emergence/quest_log.gd`): the player's own
+commitment record layered over `quest.gd`'s existing stateless Production-
+shortfall projection (the only of `concept/quests.md`'s three need sources
+that's real today). Pure static funcs, no state of its own —
+`Player.accepted_quest_ids`/`karma` ARE the state. `offer_id_for(quest)` is
+DERIVED, never allocated (`"production:<household_id>:<recipe_id>"`,
+matching `quests.md`'s own stated convention) so the same real shortage
+always yields the same id across a save/reload. `accept` is pure
+set-membership (no Karma change — accepting isn't itself a deed).
+`abandon` charges `-1` Karma, a no-op if the offer was never accepted (so
+a stray double-call can't double-charge one withdrawal). `reconcile` is
+fulfilment as DERIVED state, never a separate mutator, matching
+`quests.md`'s own "rewards are re-derived, never trusted from the offer"
+rule: any accepted offer_id no longer present in a freshly-recomputed
+whole-world quest list gets `+1` Karma ("helping an NPC" — every quest
+this codebase's real slice implements literally IS one NPC's own stated
+need) and is cleared; anything still real is left untouched.
+`EarthChunkManager.all_production_shortfall_quests()` is the new
+whole-world aggregate `reconcile` needs, built from the same settlement
+enumeration `step_settlements` itself already uses.
+
+`QuestLog.reconcile` now runs automatically: `World._step_ecology_batch`
+calls a new throttled `_step_quest_reconciliation` at the end of its
+per-tick work (after `step_settlements`/`step_regional_trade` have had
+their own chance to resupply a household that same tick), guarded behind
+a non-null `focus_player`. It early-returns whenever the player has
+accepted nothing (free in the common case), and otherwise throttles at
+`EarthChunkManager.SETTLEMENT_STEP_INTERVAL` — reused rather than a fresh
+invented number, since that's the actual cadence the underlying
+production/market data can even change on.
+
+⬜ **Deliberately out of scope, named rather than silently assumed done**
+(see the concept doc's own Status list): a Character Sheet display of
+Karma/Luck; a player-facing interaction to actually call `QuestLog.
+accept`/`abandon` (dialogue or otherwise — `QuestLog` itself is real,
+tested, engine-free logic with no UI consumer yet, same as `quest.gd`);
+the `FishingMinigame`/`KnappingModel`/`RarityTier` Luck hooks named above;
+every other part of `concept/quests.md`'s fuller vision (settlement
+quorum, safety/social need sources, village endangerment, rewards/
+currency transactions) that was already unbuilt before this pass and
+stays exactly as unbuilt now.

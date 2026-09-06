@@ -101,6 +101,22 @@ func test_get_display_name_reports_real_population_once_a_colony_is_set_up():
 	assert_string_contains(linked.get_display_name(), str(int(round(colony.population_at(cell)))))
 
 
+## Requested directly: "the ant mount should show how much food is on
+## stock in the hover tooltip" -- the raw stored quantity (food_stored_at),
+## not the bar panel's own derived percentage (food_availability_fraction,
+## see test_panel_state_bar_is_labelled_food_and_reads_the_real_fraction
+## below), which answers a different question ("is this colony
+## food-secure") than "how much is actually in the larder."
+func test_get_display_name_reports_the_real_food_stock():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var linked := AntMoundMarker.new()
+	linked.mound_seed = 3
+	linked.setup(colony, cell)
+	add_child_autofree(linked)
+	assert_string_contains(linked.get_display_name(), str(int(round(colony.food_stored_at(cell)))))
+
+
 ## Real illustrated mound art now exists (see IllustratedAntMoundSprite) --
 ## checked first, same has_X()-gated fallback convention every other
 ## optional illustrated-art seam in this codebase uses.

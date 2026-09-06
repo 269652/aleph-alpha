@@ -105,3 +105,40 @@ func test_the_creature_crush_calls_are_inside_a_creaturemarker_group_loop():
 	assert_gt(caterpillar_crush_at, -1)
 	assert_lt(group_loop_at, worm_crush_at, "the creature worm-crush call must come after entering the group loop")
 	assert_lt(group_loop_at, caterpillar_crush_at, "the creature caterpillar-crush call must come after entering the group loop")
+
+
+# -- Karma (see docs/concept/karma_and_luck.md) ------------------------------
+#
+# "Stepping on a worm should give -1 Karma", asked for every crush -- the
+# player's own step OR any creature's -- not just the player's deliberate
+# ones. A crush call that ran but never fed Karma would defeat the entire
+# point of threading CrushMechanic's bool return value through at all.
+
+
+func test_every_crush_call_site_applies_the_karma_penalty():
+	var body := _client_process_body()
+	assert_eq(
+		_count_occurrences(body, "apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)"),
+		4,
+		"expected the penalty applied at all 4 crush call sites (worm+caterpillar, player+creature loop)"
+	)
+
+
+## Each penalty must be gated behind its own crush call actually succeeding
+## -- an `if <crush call>:` guard, not a bare statement charged every frame
+## regardless of whether anything was actually crushed.
+func test_the_karma_penalty_is_only_charged_when_a_crush_actually_happens():
+	var body := _client_process_body()
+	for call_name in ["crush_worm_at(", "crush_caterpillars_near("]:
+		var search_from := 0
+		var checked := 0
+		while true:
+			var at := body.find(call_name, search_from)
+			if at == -1:
+				break
+			var line_start := body.rfind("\n", at) + 1
+			var line := body.substr(line_start, at - line_start).strip_edges()
+			assert_true(line.begins_with("if "), "%s call must be an if's condition, found: %s" % [call_name, line])
+			checked += 1
+			search_from = at + 1
+		assert_eq(checked, 2, "%s should still have exactly 2 call sites" % call_name)
