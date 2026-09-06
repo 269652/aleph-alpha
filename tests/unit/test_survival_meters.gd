@@ -15,11 +15,13 @@ func test_starts_sated_hydrated_energized_and_fit():
 	assert_eq(meters.thirst, 0.0)
 	assert_eq(meters.stamina, 1.0)
 	assert_eq(meters.fitness, 1.0)
+	assert_eq(meters.nutrition, 1.0)
 	assert_false(meters.is_hungry())
 	assert_false(meters.is_thirsty())
 	assert_false(meters.is_exhausted())
 	assert_false(meters.is_starving())
 	assert_false(meters.is_dehydrated())
+	assert_false(meters.is_malnourished())
 
 
 func test_hunger_and_thirst_rise_over_time():
@@ -51,6 +53,44 @@ func test_drinking_reduces_thirst():
 	var before := meters.thirst
 	meters.drink(0.1)
 	assert_lt(meters.thirst, before)
+
+
+# -- nutrition: see docs/concept/material_dsl.md -- a resource you HAVE, ----
+# -- falling without vitamin intake, the same shape as fitness/stamina, ----
+# -- not the hunger/thirst "rises until relieved" shape. --------------------
+
+func test_nutrition_falls_over_time_without_being_nourished():
+	meters.advance(SurvivalMeters.SECONDS_TO_LOSE_NUTRITION)
+	assert_lt(meters.nutrition, 1.0)
+
+
+func test_nutrition_clamps_at_zero():
+	meters.advance(SurvivalMeters.SECONDS_TO_LOSE_NUTRITION * 100000.0)
+	assert_eq(meters.nutrition, 0.0)
+
+
+func test_nourish_raises_nutrition():
+	meters.advance(SurvivalMeters.SECONDS_TO_LOSE_NUTRITION)
+	var before := meters.nutrition
+	meters.nourish(0.1)
+	assert_gt(meters.nutrition, before)
+
+
+func test_nourish_clamps_at_one():
+	meters.nourish(0.5)
+	assert_eq(meters.nutrition, 1.0)
+
+
+func test_is_malnourished_once_nutrition_drops_low_enough():
+	meters.nutrition = SurvivalMeters.MALNOURISHED_THRESHOLD
+	assert_true(meters.is_malnourished())
+
+
+func test_severe_malnutrition_stresses_fitness_like_starvation_and_cold_do():
+	meters.nutrition = SurvivalMeters.MALNOURISHED_THRESHOLD
+	var before := meters.fitness
+	meters.advance(10.0)
+	assert_lt(meters.fitness, before)
 
 
 func test_drinking_clamps_at_zero():

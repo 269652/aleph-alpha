@@ -53,18 +53,37 @@ const WETNESS_CHILL := 0.5
 const COLD_THRESHOLD := 0.4
 const FREEZING_THRESHOLD := 0.15
 
+## How long going with no vitamin intake at all takes to bottom the
+## nutrition meter out (see docs/concept/material_dsl.md). A resource you
+## HAVE, not a need that rises -- the same shape as stamina/fitness, not
+## hunger/thirst's "rises until relieved". Slower than SECONDS_TO_STARVE:
+## the body's own vitamin reserves deplete over weeks, not a single missed
+## meal's worth of calories -- the real reason a dietary deficiency like
+## scurvy takes far longer than a day of hunger to set in, even though the
+## real "dietary variety affects resistance" mechanic this feeds
+## (concept/survival.md) is still future work.
+const SECONDS_TO_LOSE_NUTRITION := SeasonCycle.SECONDS_PER_DAY * 4.0
+const NUTRITION_RATE_PER_SECOND := 1.0 / SECONDS_TO_LOSE_NUTRITION
+
+## Nutrition this low measurably stresses the body -- placed the same
+## distance from its own "bad" extreme (0.0) that STARVING_THRESHOLD/
+## DEHYDRATED_THRESHOLD (0.85) are from theirs (1.0).
+const MALNOURISHED_THRESHOLD := 0.15
+
 var hunger := 0.0
 var thirst := 0.0
 var stamina := 1.0
 var fitness := 1.0
 var warmth := 1.0
+var nutrition := 1.0
 
 
 func advance(delta_seconds: float) -> void:
 	hunger = clampf(hunger + HUNGER_RATE_PER_SECOND * delta_seconds, 0.0, 1.0)
 	thirst = clampf(thirst + THIRST_RATE_PER_SECOND * delta_seconds, 0.0, 1.0)
 	stamina = clampf(stamina + STAMINA_REGEN_PER_SECOND * delta_seconds, 0.0, 1.0)
-	if is_starving() or is_dehydrated() or is_cold():
+	nutrition = clampf(nutrition - NUTRITION_RATE_PER_SECOND * delta_seconds, 0.0, 1.0)
+	if is_starving() or is_dehydrated() or is_cold() or is_malnourished():
 		fitness = clampf(fitness - FITNESS_DROP_PER_SECOND * delta_seconds, 0.0, 1.0)
 	else:
 		fitness = clampf(fitness + FITNESS_RECOVER_PER_SECOND * delta_seconds, 0.0, 1.0)
@@ -95,6 +114,13 @@ func drink(amount: float) -> void:
 	thirst = clampf(thirst - amount, 0.0, 1.0)
 
 
+## Raises nutrition -- the mirror of eat()/drink(), but adding rather than
+## subtracting, since nutrition is a resource you HAVE (see its own const's
+## doc comment), not a need being relieved.
+func nourish(amount: float) -> void:
+	nutrition = clampf(nutrition + amount, 0.0, 1.0)
+
+
 func rest(amount: float) -> void:
 	stamina = clampf(stamina + amount, 0.0, 1.0)
 
@@ -121,3 +147,7 @@ func is_starving() -> bool:
 
 func is_dehydrated() -> bool:
 	return thirst >= DEHYDRATED_THRESHOLD
+
+
+func is_malnourished() -> bool:
+	return nutrition <= MALNOURISHED_THRESHOLD
