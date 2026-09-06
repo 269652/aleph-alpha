@@ -78,6 +78,7 @@ const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const Why = preload("res://src/emergence/why.gd")
 const SimulationMetrics = preload("res://src/emergence/simulation_metrics.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
+const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 const DragSlot = preload("res://src/ui/drag_slot.gd")
 const TimeLapse = preload("res://src/gameplay/time_lapse.gd")
 const FruitSpoilage = preload("res://src/gameplay/fruit_spoilage.gd")
@@ -2738,7 +2739,7 @@ func _on_console_command(command: String, args: Array) -> void:
 				(
 					"Commands: /day [off]  /night [off]  /time <hh:mm>|off"
 					+ "  /season [name] [progress]  /weather [state|off]"
-					+ "  /ecotest [seconds_per_year|off]"
+					+ "  /mushroom  /ecotest [seconds_per_year|off]"
 					+ "  /history <entity_id>  /why <event_id>  /remember <entity_id>"
 					+ "  /household <entity_id>  /contract <entity_id>  /market <entity_id>"
 					+ "  /institution <entity_id>  /settlement <entity_id>  /boss <entity_id>"
@@ -2811,6 +2812,8 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_season_command(args)
 		"weather":
 			_handle_weather_command(args)
+		"mushroom":
+			_handle_mushroom_command(args)
 		"ecotest":
 			_handle_ecotest_command(args)
 		"spawn":
@@ -3138,6 +3141,27 @@ func _handle_weather_command(args: Array) -> void:
 	# hunting for a state that does not exist.
 	if wanted == "rain" or wanted == "storm":
 		_dev_console.log_line("In winter this falls as snow -- try /season winter with it.")
+
+
+## /mushroom -- forces the nearest real mushroom site in the local
+## player's own chunk to fruit right now, rather than waiting on the rare
+## natural flush roll (see WildMushroomPatch.force_fruit_near/
+## EarthChunkManager.force_mushroom_near). Reported live, after an
+## extended investigation that confirmed the mushroom system itself was
+## working correctly, just too rare/easy to miss to verify on demand:
+## "make a command that grows one near me".
+func _handle_mushroom_command(_args: Array) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		_dev_console.log_line("No local player.")
+		return
+	var species := _chunk_manager.force_mushroom_near(_tile_for_position(local_player.position))
+	if species.is_empty():
+		_dev_console.log_line(
+			"No mushroom site in this chunk -- try a forest or grassland tile."
+		)
+		return
+	_dev_console.log_line("A %s just fruited nearby." % MushroomSpecies.display_name_for(species))
 
 
 ## /day [off] and /night [off] -- pin the sky for the rest of the session,
@@ -4806,9 +4830,13 @@ func _client_process(delta: float) -> void:
 	# player and the animals get (see EarthChunkManager.river_wader_positions).
 	for fish in get_tree().get_nodes_in_group("fish"):
 		wader_candidates.append(fish.position)
-	_chunk_manager.set_river_flow_waders(
-		_chunk_manager.river_wader_positions(wader_candidates)
-	)
+	var river_waders := _chunk_manager.river_wader_positions(wader_candidates)
+	_chunk_manager.set_river_flow_waders(river_waders)
+	# The SAME list, reused for floating leaf litter's own turbulence (see
+	# EarthChunkManager.set_leaf_litter_waders's own doc comment) -- reported
+	# directly: fallen leaves/blossoms on a river "should also be influenced
+	# by turbulence (fish moving; waders)".
+	_chunk_manager.set_leaf_litter_waders(river_waders)
 	# "make them swim away from player and animals who wade near them" --
 	# the same river_wader_positions water-filter, reused to find which
 	# players/animals are actually standing in water near a fish (see
@@ -4859,20 +4887,26 @@ func _client_process(delta: float) -> void:
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		_chunk_manager.tread_snow_at(creature.position, false)
 	# Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
-	# weight-emergent worm mortality") -- mirrors the tread_snow_at pair just
-	# above exactly (player, then every creature), but keyed on real weight
-	# rather than snow depth, so it runs regardless of season. No debounce
-	# needed for either: crush_worm_at's own removal is already idempotent
-	# (a worm that is already gone simply reports false again next frame),
-	# the same reasoning that let this skip the per-entity "last tile"
-	# tracking PathScarring/the snow trail's own debounce needs for a
-	# CONTINUOUS accumulator.
+	# weight-emergent worm mortality" and its "Generalized to caterpillars
+	# too" follow-up) -- mirrors the tread_snow_at pair just above exactly
+	# (player, then every creature), but keyed on real weight rather than
+	# snow depth, so it runs regardless of season. crush_worm_at and
+	# crush_caterpillars_near share the identical momentum value per
+	# stepper -- one shared physics rule (CrushMechanic), two detection
+	# shapes (a worm is per-tile cell state, a caterpillar a real Node2D).
+	# No debounce needed for either: both removals are already idempotent
+	# (already-gone simply reports false again next frame), the same
+	# reasoning that let this skip the per-entity "last tile" tracking
+	# PathScarring/the snow trail's own debounce needs for a CONTINUOUS
+	# accumulator.
 	_chunk_manager.crush_worm_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
+	_chunk_manager.crush_caterpillars_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		var marker := creature as CreatureMarker
 		var species: String = marker.info.species if marker.info != null else ""
 		var momentum := CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
 		_chunk_manager.crush_worm_at(marker.position, momentum)
+		_chunk_manager.crush_caterpillars_near(marker.position, momentum)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).

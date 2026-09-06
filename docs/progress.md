@@ -7588,6 +7588,69 @@ state had never once been set by anything in `src/`.
   cycle's larval stage), and the sheet's own `rest` row has real,
   confirmed art but no wired trigger yet. Full writeup:
   [soil_fauna.md](concept/soil_fauna.md#caterpillars-on-trees-on-the-ground-green-leaves-only).
+- **Crushed underfoot, generalized to caterpillars (2026-09-06)** (small)
+  — ✅ Done — reported directly right after caterpillars shipped: "they
+  don't get flattened when I step on them ... make that mechanic work for
+  all animals based on physics (only worms and caterpillars are affected
+  by that tho)". The threshold/comparison itself moved out of
+  `EarthwormPatch` into a new shared `CrushMechanic`
+  (`src/world/crush_mechanic.gd`, `CRUSH_MOMENTUM_THRESHOLD_KG_M_S`/
+  `is_crushed_by` — byte-for-byte the same rule, just no longer owned by a
+  class named after one specific victim); `EarthwormPatch.crush` now
+  delegates to it rather than keeping its own copy. New
+  `EarthChunkManager.crush_caterpillars_near(pixel_position,
+  momentum_kg_m_s)` is the caterpillar-shaped sibling of `crush_worm_at` —
+  same physics, but scans the stepped-on chunk's own tracked
+  `CaterpillarMarker` instances by real `.position` instead of a per-tile
+  patch/cell lookup, since a caterpillar (unlike a worm) is a real Node2D
+  with no cell-sim state to speak of. Wired into `World._client_process`
+  at the exact same two call sites `crush_worm_at` already uses (the
+  player, and every `CreatureMarker`), reusing the identical
+  per-stepper momentum — a wolf or deer crushes a caterpillar exactly as
+  readily as it already crushes a worm. No corpse/recovery state and no
+  splat VFX for a crushed caterpillar (it simply `queue_free()`s) — the
+  same scope cut the original worm mechanic already named; a worm's
+  burrow is a renewable resource with something for a recovery clock to
+  apply to, a caterpillar was never tied to a place the way a burrow is.
+  Bigger animals (sheep/wolf/deer/...) stay excluded by which system a
+  creature lives in — `CreatureMarker` instances in the `"creature"`
+  group, with their own real health/combat stack — rather than a new
+  per-species victim-mass check: there still is no "how much can this
+  creature's own body withstand" table for anyone, worm or caterpillar
+  included (`CreatureMass` is entirely the STEPPER's mass, never the
+  steppee's). 4 new tests inject a real `CaterpillarMarker` directly at a
+  known position for full determinism (no random per-seed spawn luck to
+  work around, unlike the worm tests); `test_world_worm_crush_wiring.gd`
+  renamed to `test_world_crush_wiring.gd` and extended with a caterpillar
+  mirror of every existing worm assertion. Full writeup:
+  [soil_fauna.md](concept/soil_fauna.md#generalized-to-caterpillars-too-2026-09-06).
+- **Caterpillars actually climb, and move a third as fast (2026-09-06)**
+  (small) — ✅ Done — requested live watching a running session: "Caterpillars
+  should crawl up trees also they should be 66% slower" / "1/3 of the
+  speed". `CaterpillarMarker.WALK_SPEED` becomes `14.0 / 3.0` (an exact
+  fraction, not a rounded "66% slower" approximation) — every other
+  movement-timing constant in the file already derives FROM it, so ambient
+  wander slows in the same proportion automatically. New
+  `_climb_height_px` (a sprite-only offset — `_sprite.position.y`, never
+  the node's own `.position`, so distance checks and any future Y-sort
+  stay anchored to the real ground tile) rises toward a new
+  `CLIMB_HEIGHT_PX` (`TILE_SIZE`, 16px) at `WALK_SPEED` pace while a tree
+  is the current target and the phase isn't SEEKING — through the walk
+  there (the same phase the `climb` sprite pose is already shown for) and
+  holding through EATING — then settles back to ground level once SEEKING
+  resumes; a leaf-litter visit never climbs. Closes the previous pass's
+  own named "No canopy-height offset" gap. Two pre-existing tests needed
+  fixing as a direct, correctly-diagnosed consequence of the slower speed
+  rather than a climb-logic bug: the tree-arrival test's position
+  tolerance had been implicitly calibrated to the old fast speed's coarse
+  single big step landing almost exactly on target (now asserts the real
+  `ARRIVE_DISTANCE_PX` contract instead), and a new settle-back-down test
+  needed isolating with direct state seeding rather than an organic full
+  cycle, which raced against the caterpillar simply re-committing to the
+  same nearby tree the instant `REHUNT_SECONDS` cleared in the minimal
+  test stub. 15/15 in `test_caterpillar_marker.gd`, 32/32 across the
+  sibling caterpillar test files (regression check). Full writeup:
+  [soil_fauna.md](concept/soil_fauna.md#caterpillars-actually-climb-and-move-a-third-as-fast-2026-09-06).
 
 ### Flora (`concept/flora.md`)
 
@@ -8825,6 +8888,26 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   real per-day rate, matching how a genuinely thriving colony would
   actually forage, rather than a one-off burst.
   Full writeup: [soil_fauna.md](concept/soil_fauna.md#a-real-food-economy-storage-upkeep-and-fewer-bigger-hungrier-colonies).
+- ✅ **A pre-existing weather/moisture test broken by the food economy
+  above, found and fixed (2026-09-06).**
+  `test_stepping_ants_drives_capacity_from_the_live_weather`
+  (`tests/unit/test_earth_chunk_manager.gd`, predates this pass) started
+  failing deterministically the moment the food economy merged to
+  `main` — expecting `capacity_at(cell)` to converge on a pure
+  weather-derived value after 20 stepped intervals, but landing at ~6.5
+  against an expected ~18.75. Root-caused directly against
+  `AntColony`/`AntPopulationModel` rather than assumed: not a
+  convergence-timing or EMA-rate bug in the moisture wiring (which
+  converges >99.9% within those 20 steps), but
+  `food_availability_fraction(cell)` correctly gating `capacity_at` down
+  exactly as designed above — the test simply never fed its colony, so
+  its reserve drained over the run. Fixed by pinning the food economy
+  non-limiting with a single large `deposit_food` call before stepping
+  (not `record_forage_result`, which would also move the unrelated
+  recent-forage-success EMA `capacity()` itself reads) — the same "keep
+  depositing food throughout" isolation the five tests mentioned above
+  already needed, for the identical reason. No production code changed.
+  Full writeup: [soil_fauna.md](concept/soil_fauna.md#a-real-food-economy-storage-upkeep-and-fewer-bigger-hungrier-colonies).
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to
@@ -9585,6 +9668,46 @@ the summer trickle, the spring blossom trickle, and autumn's own
 baseline floor all at once; autumn's own ramp ceiling stays at 1.0
 (certainty) — reached sooner, not made "more certain". Full leaf/trickle
 test battery in `test_earth_chunk_manager.gd` green.
+
+✅ **Follow-up (2026-09-06): a leaf/blossom that lands on a river now
+flows, wobbles from turbulence, and barely feels the wind** (see
+`concept/leaf_litter.md`'s own "Floating on water" section for the full
+mechanism). Reported directly: "when things land on a river like a leaf
+or blossom then they should flow with the water at the same speed they
+should also be influenced by turbulance (fish moving; waders).. they
+should be less affected by wind (adhesion)". New pure module
+`LeafWaterDrift` (`src/world/leaf_water_drift.gd`): the water's own
+current is the dominant (and, with wind/turbulence both zero, only) term,
+converted through `RiverFlowShader.surface_px_per_s` — the same conversion
+`ripple_center` already uses, so a floating leaf moves in visual lockstep
+with the current-line art under it rather than at an independently-tuned
+speed. Turbulence reuses `RiverFlowShader.obstacle_lateral_shift_px`
+directly (the exact math the current-line art already bends around a
+wading player/creature/fish), fed the same wader-position list
+`world.gd` already computes once a frame for `set_river_flow_waders` — no
+second wader gather, and "fish moving" needs no separate mechanism since a
+fish is already a member of that list by this codebase's own existing
+definition. Wind is damped to `WATER_WIND_DAMPING` (0.2) of the local
+current's own speed and applied continuously rather than through the
+existing discrete ground-wind-relocation roll, which now excludes a
+floating leaf outright (`LeafLitterField.advance`'s own
+`if leaf.on_water: continue`) — a discrete hop every couple of seconds
+would visibly fight a smooth continuous glide, so "less affected by wind"
+is exclusion from that mechanism plus a heavily damped continuous one, not
+a smaller version of the same hop.
+
+`LeafLitterField` gains an injected current probe
+(`set_current_probe`) and a per-leaf `on_water` flag, re-derived only when
+a leaf's position is actually set (`add_leaf`/`relocate_leaf_near`/
+`try_disperse_near`/the wind-roll) rather than every frame for litter that
+hasn't moved — the overwhelming majority of all litter at any moment never
+costs a single current-probe call. `EarthChunkManager` wires its own
+`river_current_at_global` in once, at chunk-field creation (river
+hydraulics need no periodic refresh the way the day's ambient wind does).
+No probe set — every world/test that predates this change — means exactly
+the old behaviour: no leaf is ever on_water. 12 new tests in
+`test_leaf_litter_field.gd` (59/59 total, all 45 pre-existing ones
+untouched) plus 14 in the new `test_leaf_water_drift.gd`.
 
 <details>
 <summary>First pass (superseded above), kept for history</summary>

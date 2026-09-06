@@ -84,3 +84,28 @@ func test_step_wild_mushrooms_removes_a_marker_whose_mushroom_was_picked():
 
 	assert_false(manager._mushroom_markers[_berlin_chunk].has(cell))
 	assert_true(marker.is_queued_for_deletion())
+
+
+# -- force_mushroom_near: the /mushroom dev-console command's real entry --
+# point (see World._handle_mushroom_command) -- see WildMushroomPatch's own
+# force_fruit_near for why this needs to exist at all.
+
+func test_force_mushroom_near_spawns_a_real_marker_right_away():
+	manager._load_chunk(_berlin_chunk)
+	var sim: WildMushroomPatch = manager._mushroom_sims[_berlin_chunk]
+	if sim.site_count() == 0:
+		pass_test("precondition unmet (no mushroom site near Berlin this run) -- nothing to check")
+		return
+	var site: Vector2i = sim.get_site_cells()[0]
+	var global_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + site
+
+	var species := manager.force_mushroom_near(global_tile)
+
+	assert_eq(species, sim.species_at(site))
+	assert_true(sim.has_fruiting(site))
+	assert_true(manager._mushroom_markers[_berlin_chunk].has(site))
+
+
+func test_force_mushroom_near_returns_empty_string_for_an_unloaded_chunk():
+	var far_away_tile := Vector2i(999999, 999999)
+	assert_eq(manager.force_mushroom_near(far_away_tile), "")

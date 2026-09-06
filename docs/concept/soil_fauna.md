@@ -983,6 +983,29 @@ reported; a well-stocked colony visibly supports more simultaneous
 foragers and a bigger mound, and a colony a player watches go through a
 real dry spell visibly shrinks back down, not just stalls.
 
+**A pre-existing test's stale assumption, found and fixed (2026-09-06).**
+`test_stepping_ants_drives_capacity_from_the_live_weather`
+(`tests/unit/test_earth_chunk_manager.gd`, introduced in a344983, well
+before this section's own food-economy pass — see "Water, not just food"
+above) started failing deterministically the moment this pass merged:
+it expects `capacity_at(cell)` to converge on a pure weather-derived
+value after 20 stepped intervals, but landed at ~6.5 against an expected
+~18.75. Root-caused directly against `AntColony`/`AntPopulationModel`
+rather than assumed: not a convergence-timing or EMA-rate bug in the
+moisture wiring (`MOISTURE_EMA_RATE` is over 99.9% converged within
+those 20 steps), but `food_availability_fraction(cell)` gating
+`capacity_at` down exactly as designed just above — the test never fed
+its colony a single successful forage or deposit, so its reserve simply
+drained over the run, precisely the "food becomes driver AND constraint"
+behaviour this section exists to produce. Fixed by pinning the food
+economy non-limiting with a single large `deposit_food` call before
+stepping (not `record_forage_result`, which would also move the
+unrelated recent-forage-success EMA `capacity()` itself reads, and so
+break the test's own weather-only expectation in a different way) — the
+same "keep depositing food throughout" isolation the five tests
+mentioned above already needed, for the identical reason. No production
+code changed; this section's own mechanism was never the bug.
+
 ### A mound's own hover panel
 
 **The gap.** Every wild creature already gets a live, bar-and-percentage
@@ -1328,6 +1351,88 @@ flower shared one invented height; once flowers were pinned to the player's own
 scale the worm was suddenly longer than several of them and read as a snake
 lying in the grass.
 
+### Generalized to caterpillars too (2026-09-06)
+
+Reported directly, right after caterpillars shipped: *"they don't get
+flattened when I step on them ... make that mechanic work for all animals
+based on physics (only worms and caterpillars are affected by that
+tho)"* — i.e. the underlying RULE should be one shared, physics-based
+check available to any creature small enough to be at risk underfoot at
+all, not a worm-specific special case duplicated by hand for a second
+species; the request's own parenthetical already recognises that in
+practice, today, that still only ever means worms and caterpillars —
+nothing else in this codebase is both small enough and lacks its own real
+health/combat stack the way `CreatureMarker` wildlife (sheep, wolf, deer,
+...) does.
+
+**The threshold itself moves out of `EarthwormPatch`**, into a new
+`CrushMechanic` (`src/world/crush_mechanic.gd`) — `CRUSH_MOMENTUM_
+THRESHOLD_KG_M_S` and `is_crushed_by(momentum_kg_m_s)`, byte-for-byte the
+same constant and comparison, just no longer owned by a class named after
+one specific victim. `EarthwormPatch.crush` now calls through
+`CrushMechanic.is_crushed_by` instead of a local copy — a pure rename at
+the physics layer, not a behaviour change (every existing worm crush test
+still holds, unchanged in substance, just now targeting the class that
+actually owns the rule).
+
+**The DETECTION side, not the threshold, is what actually differs between
+the two victims** — and deliberately stays two call sites rather than one,
+because a worm and a caterpillar are not the same *shape* of thing in this
+codebase (see "Caterpillars: on trees, on the ground, green leaves only"
+above): a worm is per-tile cell state inside a chunk's own `EarthwormPatch`
+sim, with no node identity at all, while a caterpillar is a real,
+independently-positioned `Node2D` (`CaterpillarMarker`). Forcing both
+through one lookup shape would mean inventing fake node identity for worms
+or fake cell state for caterpillars, purely to satisfy a shared function
+signature — the "three similar things beats a premature abstraction"
+reasoning this doc's own ant/desert-scrub sections already lean on
+elsewhere. So:
+
+- **`EarthChunkManager.crush_caterpillars_near(pixel_position,
+  momentum_kg_m_s) -> bool`** (new) — the caterpillar-shaped sibling of
+  `crush_worm_at`. Resolves the stepper's own tile/chunk coordinate (the
+  same `_world_tile_for_pixel`/`_chunk_coord_for_tile` pair every other
+  per-tile query in this file already uses), then checks every
+  `CaterpillarMarker` this manager is tracking for THAT chunk
+  (`_caterpillar_markers`, the same dictionary `_load_chunk`
+  populates and chunk-unload frees) against the identical tile, via each
+  marker's own real `.position` — a caterpillar has no burrow to look up,
+  its position IS the lookup. A caterpillar on the stepped-on tile whose
+  momentum clears `CrushMechanic.is_crushed_by` is `queue_free()`'d and
+  dropped from the tracking array; returns whether anything was actually
+  crushed, mirroring `crush_worm_at`'s own boolean contract exactly.
+- **Wired identically to the worm call**, in the same `World._client_
+  process` block, right alongside it: the player's own
+  `_PLAYER_STEP_MOMENTUM_KG_M_S`, and every `CreatureMarker`'s own
+  `CreatureMass.mass_kg_for(species)`-derived momentum — so a wolf or a
+  deer stepping on a caterpillar crushes it exactly as readily as the
+  player does, the same "any sufficiently heavy stepper, not just the
+  player" generalization the worm mechanic already had from the start.
+
+**No corpse state, no splat VFX, same scope cut the worm mechanic itself
+already named**: a crushed caterpillar simply `queue_free()`s, the same
+"just disappear" outcome an eaten one already has (nothing removes a
+`CaterpillarMarker` today except chunk unload or this). `EarthwormPatch`'s
+own corpse/recovery machinery (`_crushed`, `RECOVERY_SECONDS`) exists
+because a worm's burrow is a renewable resource that repopulates on a
+clock; a caterpillar has no equivalent "spot" to repopulate — it was
+never tied to a place the way a worm's burrow is, so there is nothing for
+a recovery clock to apply to. A future caterpillar respawn, if wanted,
+belongs to the same spawn-density reasoning `CaterpillarRenderer.spawn_
+caterpillars` already owns, not to this mechanic.
+
+**Bigger animals are excluded by which system a creature lives in, not by
+a new per-species mass check on the VICTIM side** — there still is no
+"how much can this creature's own body withstand" table for anyone
+(worm, caterpillar, or otherwise; see `CreatureMass`'s own doc comment:
+it is entirely the STEPPER's mass, never the steppee's). Sheep/wolf/deer/
+etc. are `CreatureMarker` instances in the `"creature"` group, with their
+own real health and combat stack — structurally a different tier from
+both worms and caterpillars, and simply never scanned by either crush
+call. The exclusion the request's own parenthetical asked for falls out
+of scope (which sim/group a creature belongs to) rather than a size
+threshold that would need its own tuning and its own test.
+
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
 A real, hand-illustrated sheet (`assets/sprites/animals/worm.png`) replaces
@@ -1606,3 +1711,59 @@ first pass in this doc uses:
   call, but nothing in `CaterpillarMarker` ever asks for it yet — the same
   "measured and available, not yet wired to a real trigger" gap this
   doc's own kingfisher-adjacent rows have had before being closed later.
+
+## Caterpillars actually climb, and move a third as fast (2026-09-06)
+
+Requested directly, watching a live game session: *"Caterpillars should
+crawl up trees also they should be 66% slower"*, clarified immediately
+after — *"1/3 of the speed"*. Two independent tweaks to the same creature,
+landed together.
+
+**Speed: `CaterpillarMarker.WALK_SPEED` becomes `14.0 / 3.0`** (not a
+rounded `14.0 * 0.34` — "1/3 of the speed" is an exact fraction, so the
+constant is too). Every other movement-timing constant in this file
+already derives FROM `WALK_SPEED` rather than duplicating it —
+`WANDER_DIRECTION_CHANGE_INTERVAL_SECONDS`'s own doc comment says so
+explicitly ("keeps this in proportion automatically") — so ambient wander
+and the committed walk to a food source both slow down in the same 3x
+proportion with no second constant to touch.
+
+**Climbing closes the "No canopy-height offset" gap named directly above**
+(the previous pass's own "What this does NOT include"): a caterpillar
+approaching or eating at a tree now visually rises up the trunk rather
+than staying pinned to the same trunk-foot ground level every other perch
+in this codebase uses. New `CaterpillarMarker._climb_height_px` rises
+toward a new `CLIMB_HEIGHT_PX` (`TILE_SIZE`, 16px — roughly one tile's
+worth up the trunk, not into the canopy proper: a real caterpillar grazes
+low branches and the trunk itself at least as often as the crown, and a
+modest climb reads clearly without this file needing to know anything
+about `ProceduralTreeSprite`'s own canopy dimensions, a dependency this
+class has deliberately never had) at the same `WALK_SPEED` pace ground
+movement uses, for as long as `_target_is_tree` is true and the phase
+isn't SEEKING — i.e. rising through the walk there (the same phase the
+`climb` sprite pose is already shown for, see `_current_action`) and
+holding through EATING, then settling back to 0 once the phase returns to
+SEEKING. A leaf-litter visit never climbs at all: `_target_is_tree` stays
+false the whole time, so the target height is always 0.
+
+**Purely a sprite offset (`_sprite.position.y = -_climb_height_px`), never
+the node's own `.position`** — the same "a plain position + a which-kind
+flag is everything approach/eat need" reasoning the class doc comment
+already draws for why a tree target needs no live node reference at all.
+`_step_approaching`'s arrival check, `_nearest_food`'s distance
+comparisons, and anything that might Y-sort a caterpillar in the future
+all keep reading the real ground tile the caterpillar is logically
+standing on — a caterpillar visually eight pixels up a trunk is still, as
+far as every other system in this game is concerned, standing exactly
+where it always was. Named, not silently accepted: a caterpillar climbing
+a tall gap in a real forest can end up drawn slightly out of its usual
+draw-order relationship with the trunk it's climbing — a minor visual
+layering wrinkle, not a logic bug, and not attempted here.
+
+New tests in `test_caterpillar_marker.gd` pin `_climb_height_px` actually
+rising while approaching/eating at a tree, settling back to 0 once
+finished, and staying at 0 for a leaf-litter visit throughout; `test_
+caterpillar_forage_behavior.gd`/existing `test_caterpillar_marker.gd`
+cases needed no changes — nothing about phase transitions, arrival
+distance, or eating/bite timing moved, only how fast the walk covers
+ground and where the sprite draws while it does.

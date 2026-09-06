@@ -156,6 +156,30 @@ func advance(delta: float, flush_drive: float) -> void:
 			_fruiting[cell] = 0.0
 
 
+## Forces the nearest real site to `cell` into fruiting immediately,
+## bypassing recovery -- a debug/dev-console entry point (see
+## World._handle_mushroom_command), never called from the ordinary
+## advance() flush path. Real fruiting is a deliberately rare roll
+## (SITE_CHANCE/FLUSH_CHANCE_PER_STEP are both small, see their own doc
+## comments) -- too slow to demo or verify against on demand, hence this.
+## Returns the cell that actually fruited, or Vector2i(-1, -1) if this
+## patch has no sites at all (a genuinely site-less biome, e.g. desert,
+## has nothing to force -- see _eligible_species_at).
+func force_fruit_near(cell: Vector2i) -> Vector2i:
+	if _sites.is_empty():
+		return Vector2i(-1, -1)
+	var nearest: Vector2i = Vector2i.ZERO
+	var nearest_distance := -1.0
+	for site in _sites.keys():
+		var distance: float = (site - cell).length_squared()
+		if nearest_distance < 0.0 or distance < nearest_distance:
+			nearest = site
+			nearest_distance = distance
+	_recovery.erase(nearest)
+	_fruiting[nearest] = 0.0
+	return nearest
+
+
 ## Whether `cell` (a real site) starts fruiting THIS step -- a pure,
 ## PixelNoise-seeded roll against the site's own position and the sim's
 ## current step, exactly AntColony.should_forage's shape.

@@ -498,6 +498,94 @@ scatter.
   marker's existing `_world.record_water_disturbance(...)` call for water
   ripples) rather than one central scan over every creature.
 
+### Floating on water
+
+Reported directly: "when things land on a river like a leaf or blossom
+then they should flow with the water at the same speed they should also be
+influenced by turbulance (fish moving; waders).. they should be less
+affected by wind (adhesion)". A genuinely different MOTION from everything
+above -- continuous and current-driven rather than an occasional discrete
+hop -- so it is a separate mechanism (`LeafWaterDrift`), not a fourth
+trigger bolted onto Dispersal's existing shape.
+
+- **Whether a leaf is floating at all is answered by one question: is
+  there real current at its own position right now?** `LeafLitterField.
+  set_current_probe` takes a `Callable` (world pixel position ->
+  `{direction, speed_m_s}`) -- `EarthChunkManager` wires its own
+  `river_current_at_global` here (wrapped to take a pixel position, the
+  same pixel -> tile conversion `FishMarker._current_at` already uses),
+  once, at chunk-field creation, since river hydraulics need no periodic
+  refresh the way the day's ambient wind does. A speed above zero already
+  means "this is a river or a river-mouth plume" -- no Manning-solved
+  channel this game generates is ever that quiet (see `RiverFlowShader.
+  STILL_FLOW_M_S`'s own doc comment) -- so no separate `is_river_at_global`
+  call is needed. No probe set (every world/test that never calls
+  `set_current_probe`) means every leaf behaves exactly as it already did
+  before this section existed.
+- **Re-derived only when a leaf's position is actually SET, not every
+  frame for a leaf that hasn't moved.** `add_leaf`, `relocate_leaf_near`,
+  `try_disperse_near`, and the wind-roll's own relocation all re-check the
+  leaf's new position through the probe. A motionless land leaf -- the
+  overwhelming majority of all litter at any moment -- never costs a
+  single current-probe call. Once floating, `advance`'s main loop DOES
+  re-probe every frame (a floating leaf's position changes every frame by
+  definition, so there is no motionless case left to skip), and flips back
+  to ordinary land litter the instant that probe ever reports no current
+  at wherever the leaf has drifted to.
+- **Flows at the water's own speed -- the dominant, and with wind/
+  turbulence both at zero the ONLY, term.** `LeafWaterDrift.velocity_px_s`
+  converts the probe's `speed_m_s` through `RiverFlowShader.
+  surface_px_per_s` -- the SAME conversion `ripple_center` already uses to
+  carry a ripple downstream at the water's own visible speed -- so a
+  floating leaf moves in exact visual lockstep with the current-line art
+  it is riding, not at some independently-tuned speed that would read as
+  disagreeing with the water underneath it.
+- **Turbulence from fish and waders, reusing the water surface's own
+  obstacle math.** `LeafWaterDrift.turbulence_velocity_px_s` calls
+  `RiverFlowShader.obstacle_lateral_shift_px` directly, with the exact same
+  `WADER_RADIUS_PX`/`WADER_REACH_PX`/`WADER_WAKE_TRAIL` the current-line
+  shader already bends around a wading player/creature/fish -- so a
+  floating leaf's own wobble near a wader visually agrees with how the
+  water's surface art bends there, rather than inventing a second,
+  disagreeing obstacle shape. `EarthChunkManager.set_leaf_litter_waders`
+  is fed the SAME already-computed wader-position list `world.gd` hands
+  `set_river_flow_waders` every frame (player + creatures + fish,
+  `river_wader_positions`) -- one data source, reused, not a second wader
+  gather. "Fish moving" needs no separate mechanism: a fish is already a
+  member of that exact wader list by this codebase's own existing
+  definition.
+- **Less affected by wind -- adhesion -- expressed as EXCLUSION from the
+  discrete mechanism plus a heavily damped continuous one, not a smaller
+  version of the same discrete hop.** A floating leaf is fully excluded
+  from the throttled ground-wind-relocation roll above (`advance`'s own
+  `if leaf.on_water: continue`) -- a discrete jump every couple of seconds
+  would visibly fight a smooth, continuous current-driven glide. Instead,
+  wind reaches a floating leaf continuously, every frame, scaled by
+  `LeafWaterDrift.WATER_WIND_DAMPING` (0.2) of the water's OWN visible
+  speed at that exact spot -- proportional to the local current rather
+  than a flat px/s figure, so it stays in proportion if river-speed tuning
+  is ever retuned. At this fraction, even a full gale blowing exactly
+  downstream adds at most a fifth of that same frame's current-driven
+  motion; blowing exactly upstream it can slow the leaf but never reverse
+  or outrun the water carrying it.
+- **The eased fall-in/relocation cosmetic is skipped entirely while
+  floating**, not merely re-triggered every frame. `transition_from` is
+  kept equal to `position` on every `advance` call for an on-water leaf --
+  the renderer's "ease toward wherever `position` currently is" motion,
+  built for an occasional discrete hop, would otherwise show the leaf
+  perpetually chasing a target that keeps moving away from it under it,
+  snapping back into sync every `TRANSITION_DURATION` instead of gliding.
+  Its season still decays normally throughout (an unrelated, orthogonal
+  clock) -- only the transition/motion cosmetic is affected.
+- **Relocation stays within the leaf's own originating chunk's field,
+  same as ordinary Dispersal above** -- a leaf that drifts far enough
+  downstream to cross a chunk boundary keeps updating and rendering from
+  its origin chunk regardless of where it visually ends up, rather than
+  migrating between `LeafLitterField`s. The same simplification Dispersal
+  already accepts for a cosmetic scatter; `LIFETIME` (see Lifecycle below)
+  is still the only bound on how long, and so how far, a floating leaf
+  keeps drifting.
+
 ### Consumption
 
 A fallen leaf is no longer a scene node at all, so it cannot join
@@ -616,6 +704,17 @@ GPU-instanced their rendering is -- are not that: each one is still a real,
 addressable, lifetime-bounded record, not an aggregate coverage value with
 no leaf-shaped thing behind it.
 
+**No visual bobbing/wake-ripple cue on a floating leaf itself, and no
+gameplay change to what a decomposer can find and eat.** The renderer's
+per-instance GPU data (`LeafLitterRenderer`'s 4 packed `INSTANCE_CUSTOM`
+channels) is already fully spent -- a distinct "floating" visual would need
+a new channel budget decision, real scope on its own, not a byproduct of
+the motion fix. `nearest_leaf_near`/`leaves_near` (a decomposer's own
+forage query) are untouched -- a floating leaf is still discoverable and
+edible exactly as before; whether a ground-dwelling decomposer should even
+be ABLE to reach a leaf riding a moving river is a real, separate design
+question this pass does not answer either way.
+
 ~~No third, "rotten/black" colour stage for a leaf still on the ground~~
 -- **reversed 2026-09-05.** The first pass's reasoning above (`LIFETIME`
 despawns a leaf long before any real season boundary could reach it) is
@@ -626,6 +725,13 @@ this became, timed against `LIFETIME` itself rather than against the
 calendar for exactly that reason.
 
 ## Status
+
+**Floating on water (2026-09-06).** Built -- see that section above. A
+leaf/blossom landing on real river current now flows at the water's own
+speed, wobbles from nearby fish/wader turbulence, and is excluded from
+ordinary ground wind entirely in favour of a far more heavily damped
+continuous push. No visual "floating" cue on the leaf itself yet (see
+Deliberately not modeled).
 
 **Back on by default (2026-09-05).** Was briefly off (requested directly:
 "deactivate leaf littering", right after the GPU rewrite below shipped),

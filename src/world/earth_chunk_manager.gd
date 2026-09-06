@@ -70,6 +70,7 @@ const ProceduralScrubSprite = preload("res://src/rendering/procedural_scrub_spri
 const TundraLichen = preload("res://src/world/tundra_lichen.gd")
 const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sprite.gd")
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
+const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 const IllustratedWormSprite = preload("res://src/rendering/illustrated_worm_sprite.gd")
 const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
 const ProceduralAquaticVegetationSprite = preload("res://src/rendering/procedural_aquatic_vegetation_sprite.gd")
@@ -3925,6 +3926,24 @@ func set_river_flow_waders(positions: PackedVector2Array) -> void:
 	material.set_shader_parameter("waders", padded)
 
 
+## The SAME wader/fish positions above, fed to every loaded chunk's leaf
+## litter field too (see LeafLitterField.set_nearby_waders) -- reported
+## directly: fallen leaves/blossoms on a river "should also be influenced
+## by turbulence (fish moving; waders)". world.gd passes the identical
+## already-computed river_wader_positions() result it hands set_river_flow_
+## waders, so a floating leaf's own wobble is driven by the exact same
+## obstacles the water's surface art already bends around -- one data
+## source, reused, not a second wader gather. Broadcasting the whole
+## (small, WADER_SLOTS-capped) list to every field regardless of whether
+## that chunk actually has a river is safe and simple: LeafWaterDrift.
+## turbulence_velocity_px_s already returns zero for anything outside
+## RiverFlowShader.WADER_REACH_PX, so an irrelevant, far-away wader costs
+## nothing beyond iterating a short list.
+func set_leaf_litter_waders(positions: PackedVector2Array) -> void:
+	for field in _leaf_litter_fields.values():
+		field.set_nearby_waders(positions)
+
+
 ## Filters wader candidates (pixel positions: the player plus any creature
 ## markers) down to the ones actually standing in river water, capped at
 ## the shader's wader slots. The river lookup walks real polylines, so
@@ -5383,6 +5402,29 @@ func step_wild_mushrooms(delta_seconds: float) -> void:
 			_entities_parent, sim, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
 			_mushroom_markers[chunk_coord]
 		)
+
+
+## Debug/dev-console entry point (see World._handle_mushroom_command):
+## forces the nearest real mushroom site in `global_tile`'s own chunk to
+## fruit immediately (see WildMushroomPatch.force_fruit_near for why) and
+## spawns its marker right away, rather than waiting for
+## step_wild_mushrooms's own throttled cadence. Returns the species that
+## fruited, or "" if that chunk isn't loaded or has no mushroom sites at
+## all (a genuinely site-less biome, e.g. desert).
+func force_mushroom_near(global_tile: Vector2i) -> String:
+	var chunk_coord := _chunk_coord_for_tile(global_tile)
+	if not _mushroom_sims.has(chunk_coord):
+		return ""
+	var sim: WildMushroomPatch = _mushroom_sims[chunk_coord]
+	var local_cell := global_tile - chunk_coord * CHUNK_SIZE
+	var fruited_cell := sim.force_fruit_near(local_cell)
+	if fruited_cell == Vector2i(-1, -1):
+		return ""
+	_mushroom_renderer.sync_markers(
+		_entities_parent, sim, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		_mushroom_markers[chunk_coord]
+	)
+	return sim.species_at(fruited_cell)
 
 
 ## Tills and plants `crop_id` at a global tile (see docs/concept/farming.md,
@@ -6902,6 +6944,31 @@ func crush_worm_at(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 	return true
 
 
+## The caterpillar-shaped sibling of crush_worm_at (see docs/concept/
+## soil_fauna.md "Generalized to caterpillars too") -- same
+## CrushMechanic.is_crushed_by physics, same "insufficient momentum is a
+## no-op" contract, but a caterpillar is a real Node2D with its own
+## position rather than per-tile cell state, so this scans the stepped-on
+## chunk's own tracked markers by real position instead of looking up one
+## patch/cell. No corpse/recovery state to set (see the doc's own "No
+## corpse state" note) -- a crushed caterpillar simply queue_free()s and
+## drops out of _caterpillar_markers, the same removal chunk-unload already
+## performs. Returns whether anything was actually crushed.
+func crush_caterpillars_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
+	if not CrushMechanic.is_crushed_by(momentum_kg_m_s):
+		return false
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var markers: Array = _caterpillar_markers.get(chunk_coord, [])
+	var crushed_any := false
+	for marker in markers.duplicate():
+		if _world_tile_for_pixel(marker.position) == tile:
+			markers.erase(marker)
+			marker.queue_free()
+			crushed_any = true
+	return crushed_any
+
+
 ## Every fallen, NAMED-SPECIES tree-fruit item lying within `radius_tiles` of
 ## `pixel_position` (see TreeSpecies -- cherry/apple/walnut, dropped via
 ## step_fruiting), in the shape a fruit-eating bird expects (see
@@ -7924,6 +7991,17 @@ func river_current_at_global(global_x: int, global_y: int) -> Dictionary:
 		return {"direction": Vector2.ZERO, "speed_m_s": 0.0}
 	var radians := deg_to_rad(bearing_deg)
 	return {"direction": Vector2(sin(radians), -cos(radians)), "speed_m_s": speed}
+
+
+## river_current_at_global wrapped to take a world PIXEL position rather
+## than a global tile -- the shape LeafLitterField.set_current_probe wants
+## (see docs/concept/leaf_litter.md's "Floating on water" section), so a
+## floating leaf's own current lookup mirrors FishMarker._current_at's
+## identical pixel -> tile conversion exactly.
+func _leaf_current_probe(pixel_position: Vector2) -> Dictionary:
+	var tile_px := float(TerrainRenderer.TILE_SIZE)
+	var tile := Vector2i(floori(pixel_position.x / tile_px), floori(pixel_position.y / tile_px))
+	return river_current_at_global(tile.x, tile.y)
 
 
 ## Real metres of lake water over a tile, 0.0 off a lake. Unlike river
@@ -9571,6 +9649,16 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# never seeded up front; step_fruiting's own leaf-fall block populates it
 	# over time as trees actually shed.
 	_leaf_litter_fields[chunk_coord] = LeafLitterField.new()
+	# Wired ONCE, here, rather than every step_leaf_litter tick the way
+	# set_wind is: unlike the day's ambient wind, river_current_at_global's
+	# own live hydraulics need no periodic refresh -- the SAME bound method,
+	# called later, already reads whatever is current then. Set at creation
+	# (not lazily on first use) so a leaf falling in this chunk's very first
+	# frame -- before step_leaf_litter has run for it even once -- still
+	# gets a real on-water check at add_leaf time instead of a stale "no
+	# probe yet" false negative (see docs/concept/leaf_litter.md's "Floating
+	# on water" section).
+	_leaf_litter_fields[chunk_coord].set_current_probe(_leaf_current_probe)
 	# Its visible counterpart: one MultiMeshInstance2D, empty until
 	# step_leaf_litter's own fill() call gives it real leaves to draw.
 	var leaf_litter_mmi := MultiMeshInstance2D.new()

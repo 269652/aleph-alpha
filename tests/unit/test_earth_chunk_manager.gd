@@ -57,6 +57,8 @@ const Shop = preload("res://src/gameplay/shop.gd")
 const BuildingStatics = preload("res://src/gameplay/building_statics.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
+const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
+const CaterpillarMarker = preload("res://src/rendering/caterpillar_marker.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -4116,7 +4118,7 @@ func test_crushing_a_worm_with_enough_momentum_removes_it_from_the_world():
 	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
 	var pixel := _pixel_for(chunk_coord, cell)
 	assert_true(
-		manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		manager.crush_worm_at(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
 		"a horse-scale step on a worm should crush it"
 	)
 	assert_false(patch.is_surfaced(cell), "and the worm is gone")
@@ -4133,7 +4135,7 @@ func test_crushing_with_too_little_momentum_leaves_the_worm_alone():
 	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
 	var pixel := _pixel_for(chunk_coord, cell)
 	assert_false(
-		manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 0.01),
+		manager.crush_worm_at(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 0.01),
 		"a mouse-scale step should not crush a worm"
 	)
 	assert_true(patch.is_surfaced(cell), "the worm should still be there")
@@ -4142,6 +4144,66 @@ func test_crushing_with_too_little_momentum_leaves_the_worm_alone():
 func test_crushing_a_worm_where_there_is_none_fails_rather_than_erroring():
 	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
 	assert_false(manager.crush_worm_at(Vector2(-9000000, -9000000), 1000000.0))
+
+
+# -- crushed underfoot, the caterpillar side (see docs/concept/soil_fauna.md
+# "Generalized to caterpillars too"). Unlike a worm, a caterpillar is a real
+# Node2D with its own position rather than per-tile cell state, so these
+# inject a real CaterpillarMarker directly into manager._caterpillar_markers
+# at a known position -- deterministic, no "no worm/caterpillar landed this
+# seed" pending() skip needed the way the worm tests above require. -------
+
+func _caterpillar_at(chunk_coord: Vector2i, cell: Vector2i) -> CaterpillarMarker:
+	var caterpillar := CaterpillarMarker.new()
+	caterpillar.position = _pixel_for(chunk_coord, cell)
+	add_child_autofree(caterpillar)
+	manager._caterpillar_markers[chunk_coord] = [caterpillar]
+	return caterpillar
+
+
+func test_crushing_a_caterpillar_with_enough_momentum_removes_it_from_the_world():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var caterpillar := _caterpillar_at(chunk_coord, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(
+		manager.crush_caterpillars_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"a horse-scale step on a caterpillar should crush it"
+	)
+	assert_true(caterpillar.is_queued_for_deletion(), "the caterpillar itself is gone")
+	assert_false(
+		manager._caterpillar_markers[chunk_coord].has(caterpillar),
+		"and dropped from tracking so chunk-unload never double-frees it"
+	)
+
+
+func test_crushing_a_caterpillar_with_too_little_momentum_leaves_it_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var caterpillar := _caterpillar_at(chunk_coord, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_false(
+		manager.crush_caterpillars_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 0.01),
+		"a mouse-scale step should not crush a caterpillar"
+	)
+	assert_false(caterpillar.is_queued_for_deletion(), "the caterpillar should still be there")
+	assert_true(manager._caterpillar_markers[chunk_coord].has(caterpillar))
+
+
+func test_crushing_a_caterpillar_on_a_different_tile_leaves_it_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var caterpillar := _caterpillar_at(chunk_coord, Vector2i(5, 5))
+	var elsewhere := _pixel_for(chunk_coord, Vector2i(20, 20))
+	assert_false(
+		manager.crush_caterpillars_near(elsewhere, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"stepping on a different tile should not reach a caterpillar standing elsewhere"
+	)
+	assert_false(caterpillar.is_queued_for_deletion())
+
+
+func test_crushing_caterpillars_where_there_are_none_fails_rather_than_erroring():
+	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
+	assert_false(manager.crush_caterpillars_near(Vector2(-9000000, -9000000), 1000000.0))
 
 
 # -- aquatic vegetation: a real food source for fish (see docs/concept/
@@ -4652,7 +4714,7 @@ func test_crushing_a_worm_shows_the_die_animation_and_keeps_its_sprite():
 		pending("no surfaced worm in this exact chunk this seed")
 		return
 	var pixel := _pixel_for(chunk_coord, cell)
-	assert_true(manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	assert_true(manager.crush_worm_at(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
 	assert_true(
 		manager._worm_sprites[chunk_coord].has(cell),
 		"a crushed worm's sprite should survive to show the die animation, not vanish outright"
@@ -4675,7 +4737,7 @@ func test_the_die_animation_holds_its_last_frame_once_it_finishes_playing():
 		pending("no surfaced worm in this exact chunk this seed")
 		return
 	var pixel := _pixel_for(chunk_coord, cell)
-	assert_true(manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	assert_true(manager.crush_worm_at(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
 	# Comfortably past the whole squash (8 frames * WORM_DEATH_FRAME_SECONDS),
 	# well short of the RECOVERY_SECONDS the corpse then lies there for.
 	patch.advance(10.0)
@@ -4698,7 +4760,7 @@ func test_a_corpses_sprite_is_removed_once_its_burrow_recovers():
 		pending("no surfaced worm in this exact chunk this seed")
 		return
 	var pixel := _pixel_for(chunk_coord, cell)
-	assert_true(manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	assert_true(manager.crush_worm_at(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
 	patch.advance(EarthwormPatch.RECOVERY_SECONDS + 1.0)
 	manager._sync_worm_sprites(chunk_coord)
 	assert_false(
@@ -6946,6 +7008,21 @@ func test_a_finished_forager_frees_its_slot_for_a_new_one():
 ## test_stepping_worms_drives_them_from_the_live_weather_and_season's own
 ## shape exactly. _load_chunk, not the slow real update() (see this
 ## file's own CONTRIBUTING.md note).
+##
+## Deposits a large up-front food reserve before stepping (2026-09-06,
+## see AntColony.food_availability_fraction, added by the food-economy
+## pass after this test was first written): capacity_at now gates its
+## weather/forage-luck capacity by the mound's own real, depleting food
+## stockpile, so 20 unfed steps would starve that reserve down and
+## confound the one signal this test actually cares about -- exactly the
+## "keeps depositing food throughout" isolation
+## test_dispatches_a_second_forager_once_the_mounds_own_cap_allows_it
+## above already needed for the same reason. deposit_food, not
+## record_forage_result: the latter would also perturb the recent-
+## forage-success EMA capacity() reads, which must stay at its unfed 0.0
+## default for expected_capacity below to hold -- the same per-signal
+## isolation test_ant_colony.gd's own capacity_at tests (moisture-only,
+## food-only, both) already rely on.
 func test_stepping_ants_drives_capacity_from_the_live_weather():
 	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
 	manager._load_chunk(chunk_coord)
@@ -6954,6 +7031,18 @@ func test_stepping_ants_drives_capacity_from_the_live_weather():
 		pending("no real ant mound landed in this chunk this seed -- placement is probabilistic")
 		return
 	var cell: Vector2i = colony.mound_cells()[0]
+
+	# An upper bound on what the whole run below could ever consume: every
+	# mound eating at once, at the highest population capacity_at can ever
+	# produce, for the whole run's elapsed simulated time -- times 10 for
+	# headroom, so this reserve can never be the thing that runs out.
+	var total_simulated_days := (
+		20 * (EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0) / AntColony.SECONDS_PER_SIMULATED_DAY
+	)
+	colony.deposit_food(
+		cell,
+		AntPopulationModel.MAX_REFERENCE_POPULATION * AntPopulationModel.FOOD_PER_ANT_PER_DAY * total_simulated_days * 10.0
+	)
 
 	# Several refresh-interval-sized steps, not one -- record_moisture is an
 	# EMA (see AntColony.MOISTURE_EMA_RATE), so a single sample only moves
