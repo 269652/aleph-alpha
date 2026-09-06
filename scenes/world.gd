@@ -4945,6 +4945,10 @@ func _client_process(delta: float) -> void:
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	if _chunk_manager.crush_caterpillars_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
+	# A mushroom is a fungus, not an animal -- crush_mushroom_at's own bool
+	# return is deliberately not fed into Karma the way the worm/caterpillar
+	# calls just above are (see docs/concept/mushrooms.md).
+	_chunk_manager.crush_mushroom_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		var marker := creature as CreatureMarker
 		var species: String = marker.info.species if marker.info != null else ""
@@ -4953,6 +4957,7 @@ func _client_process(delta: float) -> void:
 			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 		if _chunk_manager.crush_caterpillars_near(marker.position, momentum):
 			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
+		_chunk_manager.crush_mushroom_at(marker.position, momentum)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).

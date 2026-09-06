@@ -142,3 +142,59 @@ func test_the_karma_penalty_is_only_charged_when_a_crush_actually_happens():
 			checked += 1
 			search_from = at + 1
 		assert_eq(checked, 2, "%s should still have exactly 2 call sites" % call_name)
+
+
+# -- mushrooms (see docs/concept/mushrooms.md, WildMushroomPatch.crush) -----
+#
+# Reported live: "A mushroom is a physical entity... when you walk over
+# one it should be crushed because of the player weight." Mirrors the
+# worm/caterpillar wiring's exact shape (same momentum per stepper, same
+# player-then-creature-loop structure) but deliberately does NOT feed
+# Karma the way crush_worm_at/crush_caterpillars_near do -- a mushroom is
+# a fungus, not an animal, so the existing
+# test_every_crush_call_site_applies_the_karma_penalty's count staying at
+# 4 (not 6) is the real regression guard for that; the test below pins it
+# explicitly rather than relying only on that count not changing.
+
+func test_crush_mushroom_at_is_called_for_both_the_player_and_creatures():
+	var body := _client_process_body()
+	assert_eq(
+		_count_occurrences(body, "crush_mushroom_at("), 2,
+		"expected exactly one call for the player and one inside the creature loop"
+	)
+
+
+func test_the_creature_mushroom_crush_call_is_inside_a_creaturemarker_group_loop():
+	var body := _client_process_body()
+	var group_loop_at := body.find("get_nodes_in_group(CreatureMarker.GROUP_NAME)")
+	var mushroom_crush_at := body.rfind("crush_mushroom_at(")
+	assert_gt(group_loop_at, -1)
+	assert_gt(mushroom_crush_at, -1)
+	assert_lt(group_loop_at, mushroom_crush_at, "the creature mushroom-crush call must come after entering the group loop")
+
+
+## The deliberate divergence from the worm/caterpillar shape: neither
+## crush_mushroom_at call site may be wrapped in an `if ...: apply_karma_
+## delta(...)` guard -- crushing a mushroom costs no Karma.
+func test_crushing_a_mushroom_never_applies_a_karma_penalty():
+	var body := _client_process_body()
+	var search_from := 0
+	var checked := 0
+	while true:
+		var at := body.find("crush_mushroom_at(", search_from)
+		if at == -1:
+			break
+		var line_start := body.rfind("\n", at) + 1
+		var line_end := body.find("\n", at)
+		var line := body.substr(line_start, line_end - line_start).strip_edges()
+		assert_false(
+			line.begins_with("if "),
+			"crush_mushroom_at should be a bare call, not gated behind an if (found: %s)" % line
+		)
+		assert_false(
+			body.substr(at, line_end - at).contains("apply_karma_delta"),
+			"crush_mushroom_at's own line should never apply a Karma penalty"
+		)
+		checked += 1
+		search_from = at + 1
+	assert_eq(checked, 2, "should still have exactly 2 call sites")

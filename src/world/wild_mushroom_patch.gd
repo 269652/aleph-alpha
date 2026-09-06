@@ -28,6 +28,7 @@ extends RefCounted
 
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
+const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 
 ## Fraction of biome-eligible cells that are even a possible mushroom SITE
 ## at all (the mycelium footprint) -- real mycelium networks are patchy,
@@ -132,6 +133,24 @@ func species_at(cell: Vector2i) -> String:
 ## and let the sim decide" contract.
 func pick(cell: Vector2i) -> bool:
 	if not _fruiting.has(cell):
+		return false
+	_fruiting.erase(cell)
+	_recovery[cell] = SPENT_SECONDS
+	return true
+
+
+## Crushes the fruiting body at `cell` underfoot -- see docs/concept/
+## soil_fauna.md "Crushed underfoot", CrushMechanic. Mirrors
+## EarthwormPatch.crush exactly: the same shared momentum threshold, the
+## same "recover on the identical clock as being taken" shape -- a crushed
+## site is not destroyed, only whatever fruiting body was on it at the
+## time. Returns false, leaving a fruiting mushroom exactly where it was,
+## when there is nothing fruiting there (the identical has_fruiting gate
+## pick() already uses) OR when the momentum simply is not enough.
+func crush(cell: Vector2i, momentum_kg_m_s: float) -> bool:
+	if not has_fruiting(cell):
+		return false
+	if not CrushMechanic.is_crushed_by(momentum_kg_m_s):
 		return false
 	_fruiting.erase(cell)
 	_recovery[cell] = SPENT_SECONDS

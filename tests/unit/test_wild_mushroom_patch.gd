@@ -15,6 +15,7 @@ extends GutTest
 
 const WildMushroomPatch = preload("res://src/world/wild_mushroom_patch.gd")
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
+const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 
 
 func _all_biome(id: String, width: int, height: int) -> PackedStringArray:
@@ -154,6 +155,47 @@ func test_zero_flush_drive_never_creates_new_fruiting():
 	for i in 5:
 		patch.advance(1.0, 0.0)
 	assert_eq(patch.get_fruiting_cells(), before)
+
+
+# -- crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot",
+# CrushMechanic) -- reported live: "A mushroom is a physical entity...
+# when you walk over one it should be crushed because of the player
+# weight." Mirrors EarthwormPatch.crush exactly: the same shared
+# CrushMechanic.is_crushed_by threshold, the same "recover on the
+# identical clock as being taken" shape -- a crushed site is not
+# destroyed, only whatever fruiting body was on it at the time.
+
+func test_crush_below_threshold_leaves_a_fruiting_mushroom_untouched():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	assert_false(patch.crush(cell, 0.01), "momentum this small should not crush anything")
+	assert_true(patch.has_fruiting(cell), "the mushroom should still be there")
+
+
+func test_crush_above_threshold_removes_a_fruiting_mushroom():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	assert_true(patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	assert_false(patch.has_fruiting(cell), "the mushroom should be gone once crushed")
+
+
+## Nothing to crush where nothing is fruiting -- crush honors the same
+## has_fruiting gate pick() already does.
+func test_crush_fails_on_a_cell_that_is_not_fruiting_even_at_huge_momentum():
+	var patch := WildMushroomPatch.new(1, 20, 20, _all_biome("desert", 20, 20))
+	assert_false(patch.crush(Vector2i(5, 5), 1000000.0))
+
+
+func test_a_crushed_site_recovers_on_the_same_clock_as_a_picked_one():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	for i in 10:
+		patch.advance(1.0, 1.0)
+	assert_false(
+		patch.has_fruiting(cell),
+		"a crushed site should still be recovering nowhere near SPENT_SECONDS later"
+	)
 
 
 # -- force_fruit_near: a debug/dev-console way to see one on demand --------
