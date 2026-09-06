@@ -81,6 +81,16 @@ func satisfy(drive: String) -> void:
 	levels[drive] = after_meal(float(levels[drive]), float(_profile[drive].get("meal", 1.0)))
 
 
+## A meal of a specific, real size (see docs/concept/material_dsl.md) --
+## satisfy()'s own arithmetic, parameterized instead of pulling the
+## body-plan's fixed "meal" size from the profile. satisfy() itself, and
+## every existing caller, is untouched.
+func satisfy_amount(drive: String, amount: float) -> void:
+	if not levels.has(drive):
+		return
+	levels[drive] = after_meal(float(levels[drive]), amount)
+
+
 ## This drive as the kernel's gate: 0 closed, 1 open, a ramp between `onset`
 ## and `threshold` when the profile asks for one.
 func gain(drive: String) -> float:
