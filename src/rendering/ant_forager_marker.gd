@@ -51,7 +51,6 @@ const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement
 const AntScoutWander = preload("res://src/gameplay/ant_scout_wander.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
-const PerfProbe = preload("res://src/rendering/perf_probe.gd")
 
 const GROUP_NAME := "ant_forager"
 
@@ -380,20 +379,14 @@ func _nearest_player_position():
 
 
 func _process(frame_delta: float) -> void:
-	PerfProbe.begin("ant_forager._process")
-	PerfProbe.count_instance("ant_forager (live)")
 	var delta := _lod_step(frame_delta)
 	if delta < 0.0:
-		PerfProbe.end("ant_forager._process")
 		return
 	_ensure_initialized()
 	_elapsed_time += delta
 	if _behavior.phase == AntForageBehavior.Phase.SCOUTING:
-		PerfProbe.count_instance("ant_forager (scouting)")
 		_step_scouting(delta)
-		PerfProbe.end("ant_forager._process")
 		return
-	PerfProbe.end("ant_forager._process")
 	var leg_target := _current_leg_target()
 	if position.distance_to(leg_target) > ARRIVE_DISTANCE_PX:
 		# move_toward, not += direction * speed * delta -- the exact
@@ -489,13 +482,6 @@ func _step_scouting(delta: float) -> void:
 ## {} if nothing real is close enough yet, or {"kind", "position",
 ## "species"?, "season"?} for whichever real thing was found.
 func _sense_food_nearby() -> Dictionary:
-	PerfProbe.begin("ant_forager._sense_food_nearby")
-	var result := _sense_food_nearby_impl()
-	PerfProbe.end("ant_forager._sense_food_nearby")
-	return result
-
-
-func _sense_food_nearby_impl() -> Dictionary:
 	if _world == null:
 		return {}
 	var sense_radius_px := AntColony.SENSE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
