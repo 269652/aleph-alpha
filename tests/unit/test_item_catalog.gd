@@ -3,6 +3,7 @@ extends GutTest
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
 const CraftedItemRegistry = preload("res://src/gameplay/crafted_item_registry.gd")
+const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 
 var catalog := ItemCatalog.new()
 
@@ -284,12 +285,21 @@ func test_parasol_has_a_plausible_real_mushroom_mass():
 	assert_between(catalog.make("parasol").mass_kg, 0.1, 0.2)
 
 
+func test_death_cap_has_a_plausible_real_mushroom_mass():
+	assert_between(catalog.make("death_cap").mass_kg, 0.05, 0.12)
+
+
+func test_false_death_cap_has_a_plausible_real_mushroom_mass():
+	assert_between(catalog.make("false_death_cap").mass_kg, 0.01, 0.04)
+
+
 # -- bitten mushroom variants (see MushroomBiting.gd, docs/concept/ ----------
 # -- mushrooms.md's fungivory section) ---------------------------------------
 
-const _MUSHROOM_SPECIES_IDS := [
-	"fly_agaric", "psylo", "black_trumpet", "champignon", "chanterelle", "parasol"
-]
+## References MushroomSpecies.IDS directly (not a locally hardcoded copy) so
+## this never silently goes stale the next time a species is added -- a
+## real gap two separate concurrent sessions each hit once already.
+const _MUSHROOM_SPECIES_IDS := MushroomSpecies.IDS
 
 
 func test_every_species_has_a_bitten_catalog_variant():

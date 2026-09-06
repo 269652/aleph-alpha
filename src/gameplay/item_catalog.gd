@@ -98,6 +98,8 @@ const _ITEMS := {
 	"champignon": ["Champignon", "food", 20, 0.0],
 	"chanterelle": ["Chanterelle", "food", 20, 0.0],
 	"parasol": ["Parasol", "food", 20, 0.0],
+	"death_cap": ["Death Cap", "food", 20, 0.0],
+	"false_death_cap": ["False Death Cap", "food", 20, 0.0],
 	# A bug's single bite (see MushroomBiting, DecomposerMarker.
 	# take_mushroom_bite) turns a mushroom into its OWN catalog id rather
 	# than a mutable flag on the shared Item -- the same "state change
@@ -113,6 +115,8 @@ const _ITEMS := {
 	"champignon_bitten": ["Champignon (Bitten)", "food", 20, 0.0],
 	"chanterelle_bitten": ["Chanterelle (Bitten)", "food", 20, 0.0],
 	"parasol_bitten": ["Parasol (Bitten)", "food", 20, 0.0],
+	"death_cap_bitten": ["Death Cap (Bitten)", "food", 20, 0.0],
+	"false_death_cap_bitten": ["False Death Cap (Bitten)", "food", 20, 0.0],
 	"wood": ["Wood", "material", 40, 0.0],
 	"wooden_club": ["Wooden Club", "weapon", 1, 8.0],
 	"iron_sword": ["Iron Sword", "weapon", 1, 15.0],
@@ -334,6 +338,11 @@ const _MUSHROOM_MASS_KG := {
 	"chanterelle": 0.02,
 	"fly_agaric": 0.08,
 	"parasol": 0.15,
+	# Death Cap (Amanita phalloides): a real, substantial cap similar in
+	# scale to Fly Agaric. False Death Cap (Amanita citrina) is real but
+	# smaller, closer to Champignon/Chanterelle.
+	"death_cap": 0.07,
+	"false_death_cap": 0.025,
 }
 
 

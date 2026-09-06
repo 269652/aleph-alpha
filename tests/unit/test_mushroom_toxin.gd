@@ -35,8 +35,17 @@ func test_psylo_is_still_genuinely_toxic_not_zero():
 
 
 func test_a_non_toxic_species_has_zero_severity():
-	for id in ["black_trumpet", "champignon", "chanterelle", "parasol"]:
-		assert_eq(MushroomToxin.severity_for(id), 0.0, "%s is a real edible, not toxic" % id)
+	for id in ["black_trumpet", "champignon", "chanterelle", "parasol", "false_death_cap"]:
+		assert_eq(MushroomToxin.severity_for(id), 0.0, "%s is a real edible/non-toxic species" % id)
+
+
+## Real: Amanita phalloides amatoxin poisoning is a delayed-onset (6-24h),
+## progressive liver/kidney failure -- categorically more dangerous than
+## Fly Agaric's real ibotenic-acid/muscimol effects (mostly sedation/GI
+## distress) or Psilocybe's (primarily perceptual). Death Cap should read
+## as clearly, not just marginally, the roster's most severe species.
+func test_death_cap_is_far_more_severe_than_fly_agaric():
+	assert_gt(MushroomToxin.severity_for("death_cap"), MushroomToxin.severity_for("fly_agaric") * 2.0)
 
 
 func test_an_unknown_species_has_zero_severity():

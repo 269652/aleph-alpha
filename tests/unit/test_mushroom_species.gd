@@ -23,7 +23,10 @@ const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 func test_ids_lists_every_named_species():
 	assert_eq(
 		MushroomSpecies.IDS,
-		["fly_agaric", "psylo", "black_trumpet", "champignon", "chanterelle", "parasol"]
+		[
+			"fly_agaric", "psylo", "black_trumpet", "champignon", "chanterelle", "parasol",
+			"death_cap", "false_death_cap",
+		]
 	)
 
 
@@ -49,9 +52,14 @@ func test_an_unknown_species_falls_back_rather_than_crashing():
 
 # -- toxicity (see docs/concept/mushrooms.md's real-world grounding) -----
 #
-# Fly Agaric and Psilocybe are the roster's two real psychoactive species
-# (neither typically lethal, unlike the original roster's Death Cap); the
-# other four are real, commonly foraged edibles.
+# Fly Agaric and Psilocybe are two real psychoactive species (neither
+# typically lethal); the other four original-roster species are real,
+# commonly foraged edibles. Death Cap -- added later once real art
+# surfaced for it -- is the roster's one genuinely, often-fatally toxic
+# species (real amatoxin poisoning). False Death Cap, despite the name and
+# its real visual resemblance to Death Cap (the actual reason foragers
+# fear it), is not itself seriously toxic -- see is_toxic("false_death_
+# cap")'s own test below.
 
 func test_fly_agaric_and_psylo_are_toxic():
 	assert_true(MushroomSpecies.is_toxic("fly_agaric"))
@@ -63,18 +71,43 @@ func test_the_edible_species_are_not_toxic():
 		assert_false(MushroomSpecies.is_toxic(id), "%s is a real edible, not toxic" % id)
 
 
+## Real: Amanita phalloides -- amatoxin poisoning, responsible for most
+## fatal mushroom poisonings worldwide (delayed-onset liver/kidney
+## failure). Unambiguously the roster's single most dangerous species; see
+## MushroomToxin.severity_for's own doc comment for the actual severity
+## ordering this implies.
+func test_death_cap_is_toxic():
+	assert_true(MushroomSpecies.is_toxic("death_cap"))
+
+
+## Real: Amanita citrina. Despite its name and its genuine visual
+## resemblance to true Death Cap (the actual, real reason it's treated
+## with caution by foragers), modern mycological consensus is that it is
+## not itself seriously toxic -- at most mildly unpalatable, never the
+## amatoxin poisoning its namesake causes. Its danger in reality is being
+## MISTAKEN for something deadly, not its own chemistry.
+func test_false_death_cap_is_not_toxic():
+	assert_false(MushroomSpecies.is_toxic("false_death_cap"))
+
+
 # -- host tree: mycorrhizal partnership vs. saprotroph --------------------
 #
 # Fly Agaric real-partners with pine; Black Trumpet and Chanterelle with
 # oak (this project's "acorn" tree) -- all three real mycorrhizal
 # relationships. Psilocybe, Champignon, and Parasol are real saprotrophs --
 # meadow/pasture/forest-edge species that decompose organic matter
-# directly and need no living host tree at all.
+# directly and need no living host tree at all. Death Cap and False Death
+# Cap (both real Amanita, both genuinely mycorrhizal, never saprotrophic)
+# join the mycorrhizal side: Death Cap classically oak-associated (like
+# Black Trumpet/Chanterelle), False Death Cap classically conifer-
+# associated (like Fly Agaric -- both real Amanita partnering with pine).
 
 func test_mycorrhizal_species_name_their_real_host_tree():
 	assert_eq(MushroomSpecies.host_tree_for("fly_agaric"), "pine")
 	assert_eq(MushroomSpecies.host_tree_for("black_trumpet"), "acorn")
 	assert_eq(MushroomSpecies.host_tree_for("chanterelle"), "acorn")
+	assert_eq(MushroomSpecies.host_tree_for("death_cap"), "acorn")
+	assert_eq(MushroomSpecies.host_tree_for("false_death_cap"), "pine")
 
 
 func test_saprotroph_species_have_no_host_tree():
@@ -84,7 +117,7 @@ func test_saprotroph_species_have_no_host_tree():
 
 
 func test_mycorrhizal_species_are_not_saprotrophs():
-	for id in ["fly_agaric", "black_trumpet", "chanterelle"]:
+	for id in ["fly_agaric", "black_trumpet", "chanterelle", "death_cap", "false_death_cap"]:
 		assert_false(MushroomSpecies.is_saprotroph(id))
 
 
@@ -108,7 +141,7 @@ func test_every_host_tree_is_a_real_tree_species():
 # mixed-habitat species kept eligible in forest AND grassland.
 
 func test_mycorrhizal_species_only_allow_forest_and_rainforest():
-	for id in ["fly_agaric", "black_trumpet", "chanterelle"]:
+	for id in ["fly_agaric", "black_trumpet", "chanterelle", "death_cap", "false_death_cap"]:
 		assert_true(MushroomSpecies.allows_biome(id, "forest"), "%s should allow forest" % id)
 		assert_true(MushroomSpecies.allows_biome(id, "rainforest"), "%s should allow rainforest" % id)
 		assert_false(MushroomSpecies.allows_biome(id, "grassland"), "%s should not allow grassland" % id)

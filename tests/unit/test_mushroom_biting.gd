@@ -7,6 +7,7 @@ extends GutTest
 ## CrushMechanic already establish for "one small, focused, tested rule".
 
 const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
+const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 
 
 # -- the bitten catalog identity ----------------------------------------------
@@ -38,8 +39,11 @@ func test_base_item_id_passes_through_an_unbitten_id_unchanged():
 	assert_eq(MushroomBiting.base_item_id_for("parasol"), "parasol")
 
 
+## Iterates MushroomSpecies.IDS directly (not a locally hardcoded copy) so
+## this never silently goes stale the next time a species is added -- a
+## real gap two separate concurrent sessions each hit once already.
 func test_bitten_and_base_id_round_trip():
-	for species_id in ["fly_agaric", "psylo", "black_trumpet", "champignon", "chanterelle", "parasol"]:
+	for species_id in MushroomSpecies.IDS:
 		var bitten_id := MushroomBiting.bitten_item_id_for(species_id)
 		assert_true(MushroomBiting.is_bitten_item_id(bitten_id), species_id)
 		assert_eq(MushroomBiting.base_item_id_for(bitten_id), species_id)

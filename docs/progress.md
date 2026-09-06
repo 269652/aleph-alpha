@@ -9234,6 +9234,36 @@ bite"](concept/soil_fauna.md#mushroom-corpses-actually-linger-and-a-bugs-single-
 for the full mechanism. Built red-first end to end throughout, merged to
 `main`.
 
+**Roster extended to 8 species: Death Cap and False Death Cap wired in
+(`feature/mushroom-death-cap-species`).** While wiring the crushed/bitten
+sheets above, real base+crushed+bitten art for Death Cap/False Death Cap
+(`death_cap*.png`/`false_death_cap*.png`) turned up already delivered but
+unused — flagged as an observation, then wired in on request. Added as a
+genuine seventh/eighth species (mirroring the first roster revision's own
+"match what actually exists" principle) rather than replacing anything:
+`MushroomSpecies.IDS`/`SPECIES`/`is_toxic`/`host_tree_for`/
+`allows_biome`, `ItemCatalog` entries, `IllustratedMushroomSprite`
+sheets (base/crushed/bitten -- Death Cap's bitten counterpart is named
+"_eaten" rather than "_bitten"/"_bitten_1" like every other species,
+pointed at as-delivered), and real severity data in `MushroomToxin`.
+Death Cap is real amatoxin poisoning (*Amanita phalloides*) -- a
+delayed-onset, progressive liver/kidney failure responsible for most
+fatal mushroom poisonings worldwide, and the exact "certainly lethal"
+tier the original roster design called for but never got real art for;
+severity pinned well clear of Fly Agaric's own (3.0 vs. 1.0), not left
+as a marginal difference, and this phase's own doc comments/tests
+correcting the now-stale "this roster has no certainly lethal tier"
+claim left over from the first revision. False Death Cap (*Amanita
+citrina*) is deliberately NOT toxic despite the name and its real visual
+resemblance to Death Cap -- modern mycological consensus is it isn't
+itself seriously dangerous, its real risk is being mistaken for
+something that is, which this project doesn't model as a lookalike
+mechanic (distinct art either way). Both real mycorrhizal Amanita,
+forest/rainforest only (oak/pine respectively, mirroring Black Trumpet/
+Chanterelle and Fly Agaric's own existing host trees). Built red-first
+end to end, including real Player-level eat_food coverage proving Death
+Cap hurts and False Death Cap doesn't, merged to `main`.
+
 ⬜ No literal host-tree proximity check (mycorrhizal species are
 biome-gated only). No cooking-recipe integration. No progressive
 multi-bite consumption (only one bitten-art stage exists today, by the

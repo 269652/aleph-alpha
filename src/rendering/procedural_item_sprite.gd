@@ -177,6 +177,10 @@ const _ITEM_LOOKS := {
 	"chanterelle_bitten": {"color": Color(0.92, 0.68, 0.12), "shape": "mushroom", "bitten": true},
 	"parasol": {"color": Color(0.72, 0.58, 0.4), "shape": "mushroom"},
 	"parasol_bitten": {"color": Color(0.72, 0.58, 0.4), "shape": "mushroom", "bitten": true},
+	"death_cap": {"color": Color(0.66, 0.68, 0.42), "shape": "mushroom"},
+	"death_cap_bitten": {"color": Color(0.66, 0.68, 0.42), "shape": "mushroom", "bitten": true},
+	"false_death_cap": {"color": Color(0.85, 0.82, 0.55), "shape": "mushroom"},
+	"false_death_cap_bitten": {"color": Color(0.85, 0.82, 0.55), "shape": "mushroom", "bitten": true},
 }
 const _FALLBACK := {"color": Color(0.6, 0.6, 0.6), "shape": "round"}
 
