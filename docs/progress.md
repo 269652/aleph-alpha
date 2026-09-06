@@ -1987,6 +1987,12 @@ This permanently drops `screen_pixels_per_art_pixel` well BELOW 1.0 at every tar
 
 `SPECKLE_COUNT` scaled with the new canvas area (508 -> 4572, 9x for the 3x-linear jump). Two existing tests broke as a direct, correctly-diagnosed consequence of preserving more real source detail rather than a rendering regression, both confirmed by direct visual inspection before touching anything: a fixed single-pixel trunk sample could legitimately land in a genuine (and rather nicely rendered) gap between two individual root "toes" once the root flare stopped being blurred into one solid mass; and a single-8-bit-step green-quantisation-noise pixel (a near-white highlight fleck) tripped a bare `>` green-dominance check that used to never see values this close together. Both fixed at the TEST level (a wider, trunk-box-width scan; a green-dominance epsilon above the 1/255 noise floor) rather than the rendering.
 
+✅ **Trees now draw 1.3x bigger than their own world footprint, on purpose (2026-09-06).** Reported directly, a live gameplay screenshot next to `composite_cherry.png` open at its own native resolution: "the cherry tree has significantly less pixels in game than the sprite... can you make trees bigger than their sprite? Or exactly as big." Re-derived the mechanism rather than assumed: `SPRITE_SCALE == 1.0/DETAIL_MULTIPLIER`, so a tree's on-screen size (`SIZE * SPRITE_SCALE * CAMERA_ZOOM.x`) always collapses to `WORLD_SIZE * CAMERA_ZOOM.x` -- `DETAIL_MULTIPLIER` cancels out of it entirely. Raising it (as the entry above just had, 4 -> 12) can only change what the GPU's live minification samples FROM; it can never change how many screen pixels a tree occupies.
+
+Taking "exactly as big as their sprite" fully literally (`screen_pixels_per_art_pixel == 1.0` against the current DETAIL_MULTIPLIER=12 canvas) means a 3.0x linear jump -- bigger than the already-reverted `WORLD_SIZE` 40x56 (1.6x) attempt above. Rendered directly rather than assumed (`tools/probe_native_scale_forest.gd`, real GPU, a real 73-tree forest at real spacing/zoom): at that literal scale canopies fill the frame edge to edge, individual trees barely distinguishable. Rendered the space between (1.0x/1.3x/1.6x/2.0x/3.0x) and handed the comparison back rather than guessing: 1.3x read as a clear, safe improvement with the forest still legible; 1.6x (matching the previously-reverted ratio almost exactly) still read acceptably but was flagged as the risky edge; 2.0x was visibly crowding. Picked: 1.3x.
+
+Shipped as `ProceduralTreeSprite.VISUAL_SCALE := 1.3` (lives there, not on `TreeRenderer`, so `CharacterPreviewLayout`'s pure placement math can read it without pulling in `TreeRenderer`'s own `ChoppableTree`/`WindSway`/`DropShadow` dependency chain), multiplying `TreeRenderer._build_tree_node`'s `sprite.scale` only. `WORLD_SIZE`, `trunk_world_width()` (so the trunk's own collision box), and `TreePlacement`'s stand-spacing/density check are all deliberately untouched -- a materially different lever from the reverted `WORLD_SIZE` 40x56 attempt, which grew the collision box and possibly spacing right along with the visual size. A real downstream consumer needed a matching fix: `CharacterPreviewLayout.tree_bounds` (the main-menu diorama's canopy-clipping margin) still measured against raw `WORLD_SIZE`, which would have silently reintroduced the exact "trees clipped by the frame" bug it was written to fix the moment the sprite started drawing bigger than that -- caught by two tests (`test_tree_positions_leave_room_for_the_trees_own_drawn_body`, `test_tree_bounds_are_derived_from_the_tree_arts_own_size`) going properly red first, fixed by multiplying its margin by `VISUAL_SCALE` too. See `docs/concept/art_resolution.md`'s Phase 3, fourth follow-up, for the full history.
+
 
 ### Seasons turn gradually; smell becomes a real sense
 
@@ -7009,13 +7015,15 @@ state had never once been set by anything in `src/`.
   remove one specific bird from its aggregate; only food DENSITY, sampled
   fresh, moves the carrying capacity these populations grow or decline
   toward (the same gap herbivore/predator/fish had before `record_death`/
-  `record_catch`/`record_birth`); (2) no continuous marker top-up —
+  `record_catch`/`record_birth`); ~~(2) no continuous marker top-up —
   `EarthChunkManager._refresh_creatures` tops up land-creature/fish MARKERS
   every periodic ecosystem step, but robin/sparrow/kingfisher markers are
   only resynced to their aggregate population at chunk load/reload, not
   every step, even though the aggregate numbers themselves do keep evolving
-  underneath in the meantime. See `concept/ecosystem_dynamics.md`'s Open
-  questions for the full writeup of both.
+  underneath in the meantime~~ **Resolved for robin/sparrow (2026-09-06),
+  see "Zero sparrow spawns, resolved" below; kingfisher deliberately left
+  open, out of scope for that fix.** See `concept/ecosystem_dynamics.md`'s
+  Open questions for the full writeup of both.
   Tests: `tests/unit/test_robin_population_model.gd`,
   `test_sparrow_population_model.gd`, `test_kingfisher_population_model.gd`
   ~~(3) no persistence/unloaded-chunk catch-up integration — unlike
@@ -7208,6 +7216,44 @@ state had never once been set by anything in `src/`.
   tests (4 chunk-manager, 3 marker), 222/224 green across the renderer
   and marker suites (same 2 pre-existing `SpiralFlight` failures aside).
   Writeup: `concept/ecosystem_dynamics.md`'s same section.
+  **Follow-up (2026-09-06), the "zero sparrow spawns" finding above,
+  resolved.** Measured directly first: a GUT-routed probe (raw `godot -s`
+  cannot construct `EarthChunkManager` — it transitively references the
+  `WorldItemBus` autoload, which does not resolve at all under a bare `-s`
+  script, confirmed with a minimal repro; GUT's own `-s
+  addons/gut/gut_cmdln.gd` entry point and the real game boot both work
+  fine) loaded the real spawn point's 3×3 chunk neighborhood directly.
+  Every chunk was grassland-dominated with 20–205 standing tall-grass
+  patches — plenty of food, not a shortage. `sparrow_population` was
+  exactly `0.0` at chunk load in all nine (matching `robin_population` at
+  a healthy 3.6–4.8 in the same chunks), but 20 simulated minutes of
+  `step_tall_grass`/`step_flowers`/`step_ecosystem` grew it to 4.2–5.4,
+  fully comparable to robin — the food-density → population pipeline
+  works. The real bug: `spawn_ambient_flyers` promotes population into
+  markers exactly ONCE, at chunk load, the instant `add_region` seeds
+  `sparrow_population` at `0.0` by design. Robin's food signal (worm
+  burrows) is a structural feature already in place at that instant, so
+  it reads 3–5 immediately; sparrow's (ground-seed cells) needs real
+  elapsed shedding time that has not happened yet, so it promotes at
+  exactly `0` and nothing ever re-promotes it again for that chunk's
+  loaded lifetime — the exact "(2) no continuous marker top-up" non-goal
+  named above, now confirmed as the actual cause rather than a merely
+  theoretical gap. Fixed with `AmbientFlyerRenderer.reconcile_bird_
+  markers` (adds/removes robin and sparrow markers in place to match
+  live population, mirroring `_reconcile_chunk_creatures`'s exact shape),
+  wired into `_refresh_creatures` via a new
+  `EarthChunkManager._reconcile_chunk_ambient_flyers`; `FlyerSpawnLayout.
+  scattered_cells` gained a `start` offset (mirroring `CreatureRenderer.
+  spawn_creatures`'s `start_index`) so a topped-up batch continues the
+  same layout instead of duplicating an already-placed marker. Kingfisher
+  left deliberately unchanged — its food signal (existing fish
+  population) is seeded to a real equilibrium immediately at chunk load,
+  so it never exhibited this symptom. 3 test files touched: `test_flyer_
+  spawn_layout.gd` (2 new `scattered_cells` tests), `test_ambient_flyer_
+  renderer.gd` (4 new `reconcile_bird_markers` tests, 54/54 green),
+  `test_earth_chunk_manager.gd` (1 new end-to-end regression test
+  reproducing the exact reported shape). Writeup: `concept/
+  ecosystem_dynamics.md`'s "Zero sparrow spawns, resolved".
 - **Persistence / catch-up integration of eaten burrows** (medium) — ⬜ Not
   started, deliberately — a reloaded chunk re-seeds deterministically and
   loses which burrows had been eaten, exactly like `FlowerPatch`, `TallGrass`,
@@ -8357,6 +8403,30 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   win here, rather than building a whole new leaf-litter system
   speculatively on top of a bugfix request. **Leaves have since gained
   their own real mechanic — see "Leaf Litter" below.**
+  **Follow-up (2026-09-06): "bugs run to a new leaf instantly then walk
+  back a bit then speed to the next leaf... should wander slowly and eat
+  one when they see it but walk towards it in a realistic motion."**
+  Traced to a real, confirmed gap — no literal teleport exists anywhere in
+  this file, `position` only ever moves via bounded `move_toward`/
+  `step_position` calls — `home` never relocated when a decomposer
+  committed to a real target farther away than its own tiny
+  `WANDER_RADIUS_PX` (24px), routinely true since `SEARCH_RADIUS_PX`
+  (60px) is more than double it. Once the decomposer finished eating and
+  returned to SEEKING, `AmbientFlyerMovement`'s home-anchored containment
+  pulled it straight back toward the now-stale original spawn point before
+  it could settle near wherever it actually just ate — read live as "walk
+  back a bit" sandwiched between two fast, sudden beelines. Fixed by
+  relocating `home` to the target's position at the moment of commit
+  (`if found.position.distance_to(home) > _movement.radius: home =
+  found.position`), the exact idiom `AmbientFlyerMarker` already uses at
+  every one of ITS OWN commit sites (worm/fruit/seed/grass-seed —
+  `if _worm_target.distance_to(home) > _movement.radius: home =
+  _worm_target`) — applied once, at `DecomposerMarker`'s single commit
+  point in `_step_seeking`, covering carrion/fruit/leaf uniformly rather
+  than special-casing leaves. New test proves the mechanism directly:
+  committing to a target beyond the wander radius relocates home there.
+  26/26 green in `test_decomposer_marker.gd`. Full writeup:
+  [carrion.md](concept/carrion.md)'s "Decomposers" Status entry.
 - **Ants + beetles: real illustrated art, replacing every procedural
   silhouette** (medium) — ✅ Done — reported live: "finish ants and beetles
   / ground foraging? I added sprites for ants" (`ant.png`/`beetle.png`/
@@ -8572,8 +8642,74 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   dispatch rare to catch by chance in a short session. Left unchanged
   rather than loosened without confirming that tradeoff is what's
   actually wanted.
+  **Update, that confirmation now given** — see "Thriving colonies, and
+  a real swarm" a few entries below: `FORAGE_RADIUS_TILES` doubled to
+  2.0 tiles.
   Full writeup: [soil_fauna.md](concept/soil_fauna.md#water-not-just-food-a-second-real-growth-driver)
   and [mound size grows with the colony](concept/soil_fauna.md#mound-size-grows-with-the-colony).
+- **Thriving colonies, and a real swarm** (medium) — ✅ Done — requested
+  directly, live: *"I almost see no ants but a lot of mounds ... we want
+  real swarm intelligence and thriving ant colonies."* Not a rendering
+  or LOD bug (foragers carry no decoration-culling at all, confirmed by
+  reading both marker classes in full) — three compounding, individually
+  reasonable tuning decisions meant almost no mound a player ever
+  encounters in ordinary play was ever seen above its own absolute
+  floor. Investigated with real numbers, not assumed: reaching a
+  population fraction that unlocks more than one concurrent forager
+  took, by this project's own pre-existing test timescales, on the
+  order of **200 simulated real-time minutes** of one mound's chunk
+  staying continuously loaded
+  (`test_dispatches_a_second_forager_once_the_mounds_own_cap_allows_it`),
+  and **400** to approach the visual-growth ceiling
+  (`test_growth_fraction_approaches_one_for_a_thriving_colony`) — and
+  since mounds reset to the bare founding minimum on every chunk
+  unload/reload, almost no real playthrough ever keeps one mound loaded
+  anywhere near that long. Three real fixes:
+  1. **`AntColony.FORAGE_RADIUS_TILES`: 1.0 → 2.0 tiles** — actually
+     ships the doubling `soil_fauna.md`'s own "Pheromone trails" section
+     already claimed, which (checked directly against the live constant
+     and the file's full git history) had never actually been made —
+     the constant read 1.0 in every commit since its introduction. This
+     closes the exact tradeoff the "investigated, found no bug" entry
+     above left open pending confirmation.
+  2. **`AntColony._seed_initial_mounds` now seeds population across a
+     real established range** (`AntPopulationModel.STARTING_POPULATION`
+     .. `BASE_CAPACITY`, `PixelNoise`-seeded per mound) instead of
+     uniformly at the bare founding minimum every single time — the one
+     patch-sim in this game still seeding "freshly founded" on every
+     load where `TallGrass`/`WildCropPatch`/every tree already start
+     mature. Capped at `BASE_CAPACITY` (never above it) so a freshly
+     seeded mound never reads as already over its own unobserved
+     capacity ceiling, which would read as overcrowded and immediately
+     shrink back down. Ongoing growth is untouched and stays genuinely
+     slow (real ant colonies mature over years, still this game's
+     slowest-tracked population) — only the FIRST-ever-observed value
+     changed, from always-minimum to a believable established range.
+  3. **`AntColony.MAX_CONCURRENT_FORAGERS`: 3 → 6** — the old value was
+     explicitly framed as "a special sight, not a swarm," which is
+     exactly the framing this report asks to change. This is also what
+     makes the ALREADY-correct pheromone-trail recruitment
+     (`PheromoneField.best_candidate_index`, biasing every
+     concurrently-dispatched forager toward the same known-good,
+     trail-marked source) actually read as a swarm converging on a rich
+     find rather than one ant's smarter-but-solitary pathing — "real
+     swarm intelligence" was already implemented correctly; it never had
+     enough simultaneous foragers to look like one.
+  Also corrected a real internal doc inconsistency found while
+  investigating: `soil_fauna.md`'s own "Not persisted, not catch-up
+  integrated" scope note had borrowed `EarthwormPatch`'s "short-
+  timescale, self-renewing" reasoning for skipping `ChunkEcologyCatchup`
+  — but ant colony growth is the OPPOSITE of short-timescale (deliberately
+  the slowest population this game tracks), so that reasoning never
+  actually applied; corrected to name the real, still-open limitation
+  honestly (population is seeded well now, but a specific mound's exact
+  number still is not remembered indefinitely across a reload) rather
+  than mis-justify it as unnecessary. Real persistence/catch-up remains a
+  separate, bigger, still-open lift (would need first extending
+  `ChunkEcologyCatchup` to per-MOUND granularity, since
+  `AntPopulationModel` is tracked per mound, not per chunk, unlike every
+  other species' aggregate).
+  Full writeup: [soil_fauna.md](concept/soil_fauna.md#thriving-colonies-and-a-real-swarm).
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to
@@ -8789,11 +8925,31 @@ be, at which point `test_step_fruiting_adds_no_leaf_when_leaf_litter_
 disabled` correctly went red. Fixed to set the flag explicitly in both
 directions. Full writeup: `leaf_litter.md`'s own Status entry.
 
-⬜ **The invisible `AntColony` mound simulation still does not forage
-leaves** (unchanged gap from the first pass) — the VISIBLE `DecomposerMarker`
-ants/bugs above already close the "ants eat fallen leaves" gap the report
-asked for; extending the invisible colony simulation too is a reasonable,
-separable follow-up (see `soil_fauna.md`'s own cross-reference).
+✅ **The invisible `AntColony` mound simulation now forages leaves too
+(2026-09-06)** — reported live as "ants eat leaves at the spot instead of
+physically carrying the leaf to the mound where it should disappear...
+the ant should be seen dragging the leaf to the mound". A real, confirmed
+gap, not a misreading: the VISIBLE `DecomposerMarker` ants/bugs above
+genuinely do eat leaf litter in place (no mound/colony concept at all, by
+design), and a player has no visual way to tell one apart from a real
+`AntColony` forager, since both draw the identical "ant" art. New
+`EarthChunkManager._forage_leaf_near_mound` gives the real colony
+simulation the same `nearest_leaf_litter_near`/`consume_leaf_litter_at`
+query `DecomposerMarker` already uses, checked in `step_ants` BEFORE the
+grassland/forest-rainforest biome branch — unlike grass seed or windfall,
+a leaf is not biome-gated (a "grassland" chunk can still have real trees
+shedding leaves onto it). `AntForagerMarker` carries a leaf home exactly
+like a seed or nut (same walk, same real "carry" pose, same
+real-arrival-resolves contract), but a leaf is real detritus/food, not a
+propagule — it disappears at the mound rather than being re-cached or
+re-planted like a surviving grass seed or windfall nut. Pheromone-biased
+recruitment toward a known-good leaf source is a real, separable
+follow-up left undone: `nearest_leaf_litter_near` only ever reports the
+single closest leaf, with no plural query to run `PheromoneField.
+best_candidate_index` against the way seed/windfall do. 24/24 green in
+`test_ant_forager_marker.gd`, 25/25 in the leaf-related subset of
+`test_earth_chunk_manager.gd`. Full writeup: `soil_fauna.md`'s own
+cross-reference, now resolved.
 
 ⬜ **Still no litter-density accumulation or soil-fertility feedback, and
 no ground-covering visual effect** (unchanged scope cut — see
@@ -9780,6 +9936,46 @@ germany" and a 4-tile minimum width).
   genuinely_large_river_still_resolves_to_swimming` (the Rhine at Cologne
   reports 0.0 depth) — a hydraulics/curated-course regression predating
   this session, tracked as its own follow-up.
+
+- **Ocean depth made gradual too, for the player (2026-09-06)** (small) —
+  ✅ Done — reported directly, immediately after the fix above shipped and
+  the one remaining gap ("ocean depth is still a fixed waterline rather
+  than gradual") was named back: "ocean depth too." Ocean was never
+  literally un-computed or binary — `Player._resolve_water_state` already
+  fed `BiomeClassifier.depth_meters_at` continuous, real per-tile
+  elevation — the bug was the CONVERSION scale: `EarthChunkGenerator.
+  EARTH_OCEAN_DEPTH_RANGE_METERS` (8000.0, the real bathymetric depth this
+  world's bundled elevation data encodes at its lowest point) is correct
+  as "real metres" but is a wild mismatch against `WaterMovementModel.
+  WADE_DEPTH_METERS` (1.5m). Measured directly across 28 real generated
+  shorelines (`tools/probe_ocean_shore_gradient2.gd`, sampled with a
+  spread of world columns rather than one hand-picked transect): the
+  MEDIAN near-shore slope reached the full wade threshold within ~0.03
+  tiles at the real scale — a small fraction of a single tile, an instant
+  on/off switch regardless of how gradual the underlying elevation itself
+  actually was.
+
+  New `WaterMovementModel.OCEAN_DEPTH_RANGE_METERS` (50.0) is a separate,
+  gameplay-calibrated scale for the same conversion — the same
+  "recalibrate to what gameplay needs, not the real physical range"
+  reasoning `WADE_DEPTH_METERS`'s own doc comment already applies, and
+  `RiverDepth`'s own curated/procedural depth ceilings already apply to
+  rivers. Picked from the same measured sample: the median real slope now
+  reaches wade depth in ~5.4 tiles (a believable multi-step walk into the
+  water), while five real, genuinely deep open-ocean points (mid-Pacific,
+  mid-Atlantic, the Mariana Trench area, the Indian Ocean) still resolve to
+  22-41m — comfortably clear of the wade threshold, not accidentally
+  shallow. Verified end to end at a real, measured near-shore point (a
+  real Arctic coastline sitting almost exactly at the median of the 28
+  sampled shorelines, `tests/unit/test_player_ocean_water_state.gd`): the
+  water's edge now reads well under the wade threshold, and walking a few
+  tiles further out measurably deepens rather than the very first wet
+  tile already reading as full swimming. Scoped to the player only:
+  `CreatureMarker._apply_submersion`'s own ocean case is unchanged (still
+  the fixed per-species waterline it always used) — not attempted here
+  because it was not what was reported, though the infrastructure this
+  fix proves out (a cheap, now correctly-scaled per-tile ocean depth
+  query) is exactly what a future pass extending animals would need.
 - **Real hydraulics: volume, pressure, current speed** (large) — ✅ Done —
   reported directly ("implement real water flow with volume pressure current
   speed"). Before this, depth was an AUTHORED 2.5 m linear taper, current

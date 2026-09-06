@@ -83,8 +83,21 @@ const FORAGE_CHANCE := 0.05
 ## notice it, in tiles. SHORTER than SeedCaching.PICKUP_RADIUS_TILES (3.0,
 ## a foraging mouse's own noticing range): an ant's foraging range from its
 ## mound entrance is far smaller than a mouse's whole home range. Pinned by
-## test_ant_forage_radius_is_shorter_than_rodent_pickup_radius.
-const FORAGE_RADIUS_TILES := 1.0
+## test_ant_forage_radius_is_shorter_than_rodent_pickup_radius, which only
+## requires staying under 3.0 -- this specific value is otherwise a real
+## design knob, not itself test-locked.
+##
+## 1.0 -> 2.0 (2026-09-05, "thriving ant colonies"): the concept doc's own
+## "Pheromone trails" section already documented this exact doubling --
+## "which matters here specifically because it is what makes more than one
+## candidate food item plausible within reach at once" -- but the actual
+## constant was never changed when that section shipped (confirmed via
+## git history: FORAGE_RADIUS_TILES has been 1.0 in every commit since its
+## introduction). At 1.0 tile, real dispatches were rare enough to catch by
+## chance that docs/progress.md's own investigation of "ants don't carry
+## anything" left it explicitly unresolved rather than loosen it without
+## confirming the tradeoff -- this pass is that confirmation.
+const FORAGE_RADIUS_TILES := 2.0
 
 ## How far a mound caches a harvested seed before it counts as planted, in
 ## tiles. This is the shortest-range disperser of the game's whole carrier
@@ -110,6 +123,13 @@ const CARRY_MAX_TILES := 0.9
 ## from correlating.
 const _FORAGE_SALT := 419
 const _CARRY_SALT := 6131
+
+## Salt for the initial-population seed roll (see _seed_initial_mounds) --
+## independent of every other per-mound roll above for the same reason
+## they're independent of each other: "how established is this colony
+## already" must not correlate with "does it forage this exact step" or
+## "where does it cache."
+const _POPULATION_SALT := 88301
 
 ## Fraction of a windfall fruit/nut find a mound's forager consumes outright
 ## on the spot rather than surviving to be cached as a new sapling
@@ -221,9 +241,21 @@ var _pheromones: Dictionary = {}
 ## How many foragers a mound may have concurrently active -- scales with
 ## its own population, the same "aggregate population promotes to visible
 ## individual markers" shape FishRenderer.target_count already uses for
-## fish (see active_forager_cap_at). A special sight, not a swarm -- kept
-## small on purpose, mirroring MAX_FISH_PER_CHUNK-style caps elsewhere.
-const MAX_CONCURRENT_FORAGERS := 3
+## fish (see active_forager_cap_at).
+##
+## 3 -> 6 (2026-09-05, "real swarm intelligence and thriving ant
+## colonies," requested directly after a live report of plentiful mounds
+## and almost no visible ants): 3 was deliberately "a special sight, not a
+## swarm" -- exactly the framing this request asks to change. A cap alone
+## was never the whole story, though (see _seed_initial_mounds' own doc
+## comment on the population floor this pass also raises) -- the pheromone
+## trail's own recruitment (PheromoneField.best_candidate_index, biasing
+## EVERY concurrently-dispatched forager toward the same known-good
+## source) was already correct swarm behaviour, just invisible with at
+## most one worker ever out to show it. Raising the cap is what lets that
+## existing mechanism actually read as a swarm converging on a rich find,
+## not new behaviour.
+const MAX_CONCURRENT_FORAGERS := 6
 
 
 func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
@@ -291,8 +323,10 @@ func windfall_carrier_seed_for(cell: Vector2i) -> int:
 
 ## This mound's own current colony strength -- an abstract number, not a
 ## literal worker headcount (see AntPopulationModel.STARTING_POPULATION's
-## own doc comment), defaulting to the founding size for a mound advance()
-## has never grown yet.
+## own doc comment). Every real mound has a real entry from
+## _seed_initial_mounds; the fallback below only ever answers for a cell
+## that was never a real mound at all (e.g. a caller probing an arbitrary
+## coordinate).
 func population_at(cell: Vector2i) -> float:
 	return _population.get(cell, AntPopulationModel.STARTING_POPULATION)
 
@@ -398,6 +432,18 @@ static func windfall_is_consumed(windfall_seed: int) -> bool:
 	return PixelNoise.unit(windfall_seed, 0, 0) < WINDFALL_CONSUMED_CHANCE
 
 
+## Seeds every mound at a real, established population instead of the
+## bare founding minimum -- see STARTING_POPULATION's own doc comment for
+## why. Ranges [STARTING_POPULATION, AntPopulationModel.BASE_CAPACITY]:
+## the floor is a genuinely young/struggling colony (a real, legitimate
+## roll, not excluded), the ceiling is the unfed-baseline capacity every
+## mound starts at before any real forage_success/moisture observation
+## ever raises it -- deliberately never seeded ABOVE that ceiling, which
+## would make PopulationModel.step read the mound as already over
+## capacity and immediately start shrinking it back down before the
+## player ever sees it settle. PixelNoise-seeded off its own independent
+## salt so different mounds read as different ages/fortunes rather than
+## one flat number for every mound in the world.
 func _seed_initial_mounds() -> void:
 	for y in _height:
 		for x in _width:
@@ -407,4 +453,9 @@ func _seed_initial_mounds() -> void:
 				continue
 			if PixelNoise.unit(_seed_value, x, y) >= MOUND_CHANCE:
 				continue
-			_mounds[Vector2i(x, y)] = true
+			var cell := Vector2i(x, y)
+			_mounds[cell] = true
+			_population[cell] = PixelNoise.range_value(
+				_seed_value + _POPULATION_SALT, x, y,
+				AntPopulationModel.STARTING_POPULATION, AntPopulationModel.BASE_CAPACITY
+			)

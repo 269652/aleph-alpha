@@ -272,10 +272,45 @@ func test_windfall_carrier_seed_differs_from_the_grass_carrier_seed():
 # -- a queen, and where a colony's size comes from (see docs/concept/
 # soil_fauna.md#a-queen-and-where-a-colonys-size-comes-from) ---------------
 
-func test_population_starts_at_the_founding_size():
+## Mounds are not freshly founded the instant a chunk loads -- most have
+## already existed in this simulated world for real, if unmodeled, time
+## (the same "map-generated content starts already established"
+## convention every other patch-sim in this game already follows: grass,
+## wild crops, and every tree all start mature, not as seedlings). Seeded
+## once per mound across a real established-colony range instead of
+## uniformly at the bare founding minimum -- see "Mounds are not freshly
+## founded" in docs/concept/soil_fauna.md.
+func test_population_starts_within_an_established_range():
 	var colony := _colony()
 	var cell: Vector2i = colony.mound_cells()[0]
-	assert_eq(colony.population_at(cell), AntPopulationModel.STARTING_POPULATION)
+	assert_between(
+		colony.population_at(cell), AntPopulationModel.STARTING_POPULATION, AntPopulationModel.BASE_CAPACITY
+	)
+
+
+## Different mounds read as different ages/fortunes -- a flat identical
+## seed for every mound would read as a mechanism, not a real world (the
+## same "never Godot's string hash(), which correlates neighbouring
+## inputs" reasoning this whole file already applies to every other roll).
+func test_different_mounds_start_with_different_populations():
+	var colony := _colony("grassland", 99)
+	var cells: Array = colony.mound_cells()
+	assert_gt(cells.size(), 1, "precondition: need at least two mounds to compare")
+	var populations := {}
+	for cell in cells:
+		populations[colony.population_at(cell)] = true
+	assert_gt(populations.size(), 1, "different mounds should not all start at the identical population")
+
+
+## A reloaded chunk must reproduce the exact same mound at the exact same
+## established population every time -- the identical determinism
+## guarantee every other PixelNoise-seeded roll in this file already
+## gives, so the same world looks the same on every visit.
+func test_starting_population_is_deterministic_for_the_same_seed():
+	var a := _colony("grassland", 55)
+	var b := _colony("grassland", 55)
+	var cell: Vector2i = a.mound_cells()[0]
+	assert_eq(a.population_at(cell), b.population_at(cell))
 
 
 func test_capacity_starts_at_the_unfed_baseline():
@@ -418,13 +453,27 @@ func test_active_forager_cap_never_exceeds_its_own_maximum():
 	assert_lte(colony.active_forager_cap_at(cell), AntColony.MAX_CONCURRENT_FORAGERS)
 
 
+## Saturates the recent-success EMA (fixing the capacity ceiling) BEFORE
+## advancing, the same order test_growth_fraction_approaches_one_for_a_
+## thriving_colony uses and for the identical reason: recording success
+## and advancing in the SAME short loop raises the ceiling (EMA, fast)
+## well ahead of population (GROWTH_RATE_PER_DAY, genuinely the slowest
+## in the game) ever catching up to it, so a mound whose own seeded
+## population (see AntColony._seed_initial_mounds) already started above
+## the OLD baseline ceiling would see its cap transiently DROP as the
+## ceiling jumps out from under it, before growth has had any real time
+## to close the gap -- exactly backwards from what this test means to
+## show. Advancing by many SECONDS_PER_SIMULATED_DAY-sized steps AFTER
+## the ceiling is already fixed is what actually gives population time to
+## grow toward it.
 func test_active_forager_cap_grows_with_a_thriving_colony():
 	var colony := _colony("grassland", 42)
 	var cell: Vector2i = colony.mound_cells()[0]
 	var before := colony.active_forager_cap_at(cell)
-	for i in 100:
+	for i in 20:
 		colony.record_forage_result(cell, true)
-		colony.advance(1.0)
+	for i in 300:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
 	assert_gte(colony.active_forager_cap_at(cell), before)
 
 

@@ -95,8 +95,15 @@ static func wanted_count(
 ## subset reads as scattered rather than clustered in raster order (the same
 ## technique as FishRenderer._spawn_target_count). This is what bees and
 ## birds still get.
+##
+## `start` skips the first `start` cells of the SAME ranking rather than
+## drawing a fresh one -- a caller topping up an already-placed batch (see
+## AmbientFlyerRenderer.reconcile_bird_markers) asks for its next few cells
+## this way, the same "continue, don't restart" role CreatureRenderer.
+## spawn_creatures' start_index parameter already plays for herbivores/
+## predators. Defaults to 0 so every pre-existing call site is unaffected.
 static func scattered_cells(
-	chunk_origin: Vector2i, width: int, height: int, salt: String, wanted: int
+	chunk_origin: Vector2i, width: int, height: int, salt: String, wanted: int, start: int = 0
 ) -> Array[Vector2i]:
 	var candidates: Array[Vector2i] = []
 	for y in height:
@@ -107,7 +114,7 @@ static func scattered_cells(
 		func(a, b): return _spawn_rank(a.x, a.y, salt) < _spawn_rank(b.x, b.y, salt)
 	)
 	var chosen: Array[Vector2i] = []
-	for i in mini(wanted, candidates.size()):
+	for i in range(mini(start, candidates.size()), mini(start + wanted, candidates.size())):
 		chosen.append(candidates[i])
 	return chosen
 

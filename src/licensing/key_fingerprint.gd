@@ -28,7 +28,10 @@ extends RefCounted
 ## match_the_real_pinned_fingerprint fails loudly if the two ever drift
 ## apart, whether by an attacker's swap or your own forgetting to update
 ## both files together.
-const EXPECTED_FINGERPRINT_HEX := "7713327705750006b44158732d0c0fdf1fb727340a9d813a4aee56def83a3871"
+##
+## Updated 2026-09 for the second (rotated) key added alongside the
+## original -- see embedded_public_keys.gd's own comment on that entry.
+const EXPECTED_FINGERPRINT_HEX := "b6867f85e9d19b67b661d20d316f85eb4b38bd34eb75ac4e39cdccf381c1d16c"
 
 
 ## SHA-256 hex digest of `pems`, joined in order with a delimiter that

@@ -345,6 +345,117 @@ func spawn_ambient_flyers(
 	return spawned
 
 
+## Brings one chunk's ROBIN and SPARROW markers in line with their CURRENT
+## aggregate populations by adding or removing, never by rebuilding --
+## mirrors CreatureRenderer._reconcile_chunk_creatures's exact shape (see
+## that function's own doc comment for why: in-place state, no
+## blink-and-reappear). Butterflies/bees are a flat per-chunk budget fixed at
+## spawn time and are passed through untouched in `existing`.
+##
+## Robin and sparrow are the only ambient flyers promoted from a population
+## that keeps changing AFTER spawn time (worm/seed density -- see
+## EcosystemSimulation.update_worm_density/update_seed_density), and
+## spawn_ambient_flyers only ever promotes population into markers ONCE, at
+## chunk load. Robin's own food signal (worm burrows) is a structural
+## feature already in place at that instant, so it never hits this gap --
+## but sparrow's (ground-seed cells) is always EXACTLY zero right then and
+## only rises over several real minutes of shedding (see
+## SparrowPopulationModel/TallGrass.shed_seed), so without a caller
+## reconciling again later, a chunk's sparrow markers can never appear for
+## the rest of its loaded lifetime no matter how long the player stays.
+## Reported live as 48 robin sightings against 0 sparrow, ever, over several
+## real minutes near spawn.
+func reconcile_bird_markers(
+	parent: Node2D,
+	chunk: Chunk,
+	chunk_origin_tiles: Vector2i,
+	tile_size: int,
+	biome_name: String,
+	existing: Array,
+	robin_population: float,
+	sparrow_population: float,
+	scent_world = null
+) -> Array:
+	var kept: Array = []
+	var robins: Array = []
+	var sparrows: Array = []
+	for marker in existing:
+		if not is_instance_valid(marker) or marker.is_queued_for_deletion():
+			continue
+		if marker.species == "robin":
+			robins.append(marker)
+		elif marker.species == "sparrow":
+			sparrows.append(marker)
+		else:
+			kept.append(marker)
+
+	if not BIRD_BIOMES.has(biome_name):
+		for marker in robins:
+			marker.queue_free()
+		for marker in sparrows:
+			marker.queue_free()
+		return kept
+
+	var abs_latitude := _abs_latitude_for(chunk, chunk_origin_tiles)
+	kept.append_array(
+		_reconcile_one_species(
+			parent, chunk, chunk_origin_tiles, tile_size, "robin_spawn",
+			_in_range_pool(ROBIN_SPECIES_POOL, biome_name, abs_latitude),
+			robins, robin_population, MAX_ROBINS_PER_CHUNK,
+			_bird_sprite_generator_for("robin"), scent_world
+		)
+	)
+	kept.append_array(
+		_reconcile_one_species(
+			parent, chunk, chunk_origin_tiles, tile_size, "sparrow_spawn",
+			_in_range_pool(SPARROW_SPECIES_POOL, biome_name, abs_latitude),
+			sparrows, sparrow_population, MAX_SPARROWS_PER_CHUNK,
+			_bird_sprite_generator_for("sparrow"), scent_world
+		)
+	)
+	return kept
+
+
+## One species' half of reconcile_bird_markers: `alive` is already filtered
+## to just this species. Frees the surplus (never the invested/tamed
+## exemption creatures have -- an ambient flyer is never kept/tamed) or
+## spawns the deficit at a fresh start_index so the new ones continue the
+## same deterministic layout instead of landing on top of markers already
+## there (see FlyerSpawnLayout.scattered_cells's own start parameter).
+func _reconcile_one_species(
+	parent: Node2D,
+	chunk: Chunk,
+	chunk_origin_tiles: Vector2i,
+	tile_size: int,
+	salt: String,
+	species_pool: Array[String],
+	alive: Array,
+	population: float,
+	cap: int,
+	sprite_generator,
+	scent_world
+) -> Array:
+	var target := marker_count_for(population, cap)
+	if alive.size() > target:
+		for i in range(target, alive.size()):
+			alive[i].queue_free()
+		return alive.slice(0, target)
+	if alive.size() < target and not species_pool.is_empty():
+		var needed := target - alive.size()
+		alive.append_array(
+			_spawn_species(
+				parent, chunk, chunk_origin_tiles, tile_size, salt, species_pool,
+				needed, needed,
+				AmbientFlyerMovement.new(BIRD_SPEED, BIRD_RADIUS, BIRD_INTERVAL),
+				sprite_generator,
+				scent_world,
+				false,
+				alive.size()
+			)
+		)
+	return alive
+
+
 ## Deterministically places between min_count and max_count flyers in this
 ## chunk, guaranteeing a qualifying chunk always shows at least min_count and
 ## never relying on an independent per-cell probability that could land on
@@ -377,6 +488,7 @@ func _spawn_species(
 	sprite_generator,
 	scent_world = null,
 	aggregate: bool = false,
+	start_index: int = 0,
 ) -> Array[Node2D]:
 	# Nothing in this pool can live here (see FLYER_RANGE and _in_range_pool):
 	# an empty pool must spawn nothing, not divide by zero on the modulo that
@@ -389,12 +501,16 @@ func _spawn_species(
 		chunk_origin_tiles, salt, min_count, max_count, cell_total
 	)
 
+	# `start_index` continues the SAME deterministic layout rather than
+	# redrawing it -- see reconcile_bird_markers, which tops up a chunk's
+	# robin/sparrow markers as their population grows after spawn time and
+	# must not place a new one on top of a marker already there.
 	var placements: Array = []  # [position, species, seed]
 	if aggregate:
 		var positions := FlyerSpawnLayout.aggregated_positions(
-			chunk_origin_tiles, chunk.width, chunk.height, tile_size, salt, wanted
+			chunk_origin_tiles, chunk.width, chunk.height, tile_size, salt, start_index + wanted
 		)
-		for i in positions.size():
+		for i in range(start_index, positions.size()):
 			placements.append([
 				positions[i],
 				FlyerSpawnLayout.aggregation_species(species_pool, chunk_origin_tiles, salt, i),
@@ -404,7 +520,7 @@ func _spawn_species(
 			])
 	else:
 		for cell in FlyerSpawnLayout.scattered_cells(
-			chunk_origin_tiles, chunk.width, chunk.height, salt, wanted
+			chunk_origin_tiles, chunk.width, chunk.height, salt, wanted, start_index
 		):
 			placements.append([
 				Vector2((cell.x + 0.5) * tile_size, (cell.y + 0.5) * tile_size),

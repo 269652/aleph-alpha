@@ -73,6 +73,34 @@ func test_the_count_is_a_guaranteed_range_never_zero():
 		assert_between(wanted, 2, 4)
 
 
+## `start` lets a caller top up an already-placed batch (see
+## AmbientFlyerRenderer.reconcile_bird_markers, which promotes more markers
+## as a chunk's robin/sparrow population grows after spawn time) without
+## re-drawing the whole ranking from scratch -- CreatureRenderer.
+## spawn_creatures' own start_index parameter solves the identical problem
+## for herbivores/predators. The next `wanted` cells after skipping `start`
+## must be exactly the same ranking's next slice, not a different draw, or a
+## caller topping up its count would place new flyers on top of ones already
+## there.
+func test_a_start_offset_continues_the_same_ranking_without_repeating_cells():
+	var origin := Vector2i(64, GERMANY_ROW)
+	var already_placed := FlyerSpawnLayout.scattered_cells(origin, CHUNK_SIZE, CHUNK_SIZE, SALT, 3)
+	var full_ranking := FlyerSpawnLayout.scattered_cells(origin, CHUNK_SIZE, CHUNK_SIZE, SALT, 5)
+	var topped_up := FlyerSpawnLayout.scattered_cells(origin, CHUNK_SIZE, CHUNK_SIZE, SALT, 2, 3)
+
+	assert_eq(topped_up, full_ranking.slice(3, 5))
+	for cell in topped_up:
+		assert_false(already_placed.has(cell), "a start-offset batch must not repeat an earlier cell")
+
+
+func test_a_start_offset_past_the_available_cells_returns_nothing():
+	var origin := Vector2i(64, GERMANY_ROW)
+	var cells := FlyerSpawnLayout.scattered_cells(
+		origin, CHUNK_SIZE, CHUNK_SIZE, SALT, 4, CHUNK_SIZE * CHUNK_SIZE
+	)
+	assert_eq(cells.size(), 0)
+
+
 # -- the aggregation, which is what butterflies really do --------------------
 
 ## Real butterflies do not spread themselves evenly over a meadow. They

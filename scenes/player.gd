@@ -4050,8 +4050,16 @@ func _submit_plant(pressed: bool) -> void:
 
 func _resolve_water_state(tile: Vector2i, delta: float) -> Dictionary:
 	var elevation := _chunk_manager.elevation_at_global(tile.x, tile.y)
+	# WaterMovementModel.OCEAN_DEPTH_RANGE_METERS, NOT EarthChunkGenerator.
+	# EARTH_OCEAN_DEPTH_RANGE_METERS -- the latter is the real bathymetric
+	# depth (8000.0m) this world's elevation data encodes at its lowest
+	# point, which reads correctly as "real metres" but is the wrong scale
+	# to convert with for gameplay/tint purposes (see that constant's own
+	# doc comment: at the real scale, the wade threshold arrives within a
+	# fraction of a single tile of any shoreline, an instant on/off switch
+	# rather than a gradual fill).
 	var ocean_depth := _biome_classifier.depth_meters_at(
-		elevation, EarthChunkGenerator.EARTH_SEA_LEVEL, EarthChunkGenerator.EARTH_OCEAN_DEPTH_RANGE_METERS
+		elevation, EarthChunkGenerator.EARTH_SEA_LEVEL, WaterMovementModel.OCEAN_DEPTH_RANGE_METERS
 	)
 	# A river never changes elevation/biome_at_global's own result (see
 	# docs/concept/rivers.md's "Rendering" section), so ocean_depth above is

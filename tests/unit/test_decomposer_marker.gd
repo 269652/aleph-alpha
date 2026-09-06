@@ -361,6 +361,43 @@ func test_forages_and_eats_a_nearby_fallen_leaf():
 	assert_true(world.field.leaves().is_empty(), "a decomposer should forage and eat a fallen leaf too")
 
 
+## Bug report: "bugs run to a new leaf instantly then walk back a bit then
+## speed to the next leaf ... should wander slowly and eat one when they see
+## it but walk towards it in a realistic motion". Traced to a real, confirmed
+## gap, not a literal teleport (position only ever changes via bounded
+## move_toward/step_position calls in this file): `home` never relocates when
+## a decomposer commits to a target farther away than its own wander radius,
+## so once it finishes eating a distant leaf, _step_seeking's home-anchored
+## wander pulls it straight back toward the stale original point before it
+## can settle near wherever it actually just ate -- reading as "walk back a
+## bit" sandwiched between two fast, sudden beelines. AmbientFlyerMarker
+## already solves the identical problem at every one of its own commit sites
+## (see e.g. "if _worm_target.distance_to(home) > _movement.radius: home =
+## _worm_target") -- a decomposer needs the same fix, applied once at the
+## single place every food type (carrion/fruit/leaf alike) commits.
+func test_committing_to_a_distant_target_relocates_home_there():
+	var world := LeafLitterWorld.new()
+	# Comfortably outside WANDER_RADIUS_PX (24px) from home, but still well
+	# inside SEARCH_RADIUS_PX (60px) even allowing for wander drift before
+	# the marker is willing to commit.
+	var leaf_position: Vector2 = marker.home + Vector2(40, 0)
+	world.field.add_leaf(leaf_position, "cherry", "autumn", 0.0)
+	marker.setup(world)
+	for i in 10:
+		marker._process(0.5)
+		if marker._target != null:
+			break
+	assert_not_null(marker._target, "precondition: should have committed to the leaf by now")
+	assert_eq(
+		marker.home, leaf_position,
+		"home should relocate to a target farther than the wander radius, not stay at the stale spawn point"
+	)
+	# The committed-to LeafForageHandle is never added to any tree (see its
+	# own class doc comment) -- freed directly here since this test stops
+	# short of the full eat cycle that would otherwise free it.
+	marker._target.free()
+
+
 ## Without an injected _world at all (most of this file's own tests, and
 ## every decomposer that predates this feature), leaf litter is simply never
 ## found -- the marker keeps foraging carrion/fruit exactly as before, not a

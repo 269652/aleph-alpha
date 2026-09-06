@@ -639,13 +639,14 @@ its own works have grown, not by being shown her directly) — but
 population now drives two real, visible things, not one:
 
 1. How many foragers a mound may have **concurrently active**
-   (`active_forager_cap_for`, `MAX_CONCURRENT_FORAGERS` = 3), replacing
-   the old hardcoded "one forager in flight at a time." A young or
-   food-poor colony still reads exactly as before — one ant, one trip at
-   a time — while a large, well-fed one visibly has two or three workers
-   out at once, the same "aggregate population promotes to visible
-   individual markers" pattern `FishRenderer`'s own `target_count`
-   already uses for fish.
+   (`active_forager_cap_for`, `MAX_CONCURRENT_FORAGERS` = 6 — see
+   "Thriving colonies, and a real swarm" below for why this rose from its
+   own original 3), replacing the old hardcoded "one forager in flight at
+   a time." A young or food-poor colony still reads exactly as before —
+   one ant, one trip at a time — while a large, well-fed one visibly has
+   several workers out at once, the same "aggregate population promotes
+   to visible individual markers" pattern `FishRenderer`'s own
+   `target_count` already uses for fish.
 2. **The mound's own size** — see "Mound size grows with the colony"
    below, added directly in response to a real report: with the fixed
    size the previous pass shipped, a mound read as static regardless of
@@ -738,6 +739,100 @@ number that is, for all practical purposes, motionless between checks. A
 mound a player watches over a real session should visibly, if slowly,
 grow.
 
+### Thriving colonies, and a real swarm
+
+**Reported live**: "I almost see no ants but a lot of mounds... we want
+real swarm intelligence and thriving ant colonies." Investigated end to
+end rather than assumed — this was not a rendering or LOD bug (foragers
+carry no decoration-culling of any kind, and never did); it was three
+compounding, individually-reasoned tuning decisions that, together, meant
+almost no mound a player ever encounters in ordinary play was ever seen
+above its own absolute floor.
+
+**Why "a lot of mounds, almost no ants" was the honest, arithmetic
+result of the numbers above.** `active_forager_cap_at` scales with
+`population_at(cell) / capacity_at(cell)` — but until this pass, EVERY
+mound seeded at exactly `AntPopulationModel.STARTING_POPULATION` (1.0),
+the literal founding minimum, regardless of how long that mound had
+"existed" in the world before the player found it. `GROWTH_RATE_PER_DAY`
+is deliberately the slowest-growing population this game tracks — real
+ant colonies mature over years, not seasons — so climbing from that
+floor to a population fraction that unlocks more than one concurrent
+forager took, by the project's own test timescales, on the order of
+**200 simulated real-time MINUTES** of one mound's own chunk staying
+continuously loaded (`test_dispatches_a_second_forager_once_the_mounds_
+own_cap_allows_it`), and **400** to approach the visual-growth ceiling
+(`test_growth_fraction_approaches_one_for_a_thriving_colony`). Since
+mounds are not persisted across a chunk unload/reload, and a player
+exploring an open world rarely dwells within 2-3 chunks of one spot for
+anywhere near that long, almost every mound a player ever actually looks
+at was permanently stuck at its own lowest tier — capped at exactly one
+concurrent forager, and even that one only actually dispatched when real
+food happened to fall within a mere 1-tile radius of that exact mound
+cell. Compounding this further: this doc's own "Pheromone trails"
+section above already specified doubling `FORAGE_RADIUS_TILES` to 2.0
+"because it is what makes more than one candidate food item plausible
+within reach at once" — checked directly against the live constant and
+the full git history of this file, **that change was never actually
+made** (the constant has been 1.0 in every commit since its
+introduction). `docs/progress.md`'s own investigation of an earlier,
+related report ("ants don't carry seeds/nuts to the mound") had already
+found this exact radius too tight to catch a real dispatch in a short
+session, and left it "unchanged rather than loosened without confirming
+that tradeoff is what's actually wanted" — this pass is that
+confirmation.
+
+**Three real, grounded fixes, not one:**
+
+1. **`FORAGE_RADIUS_TILES`: 1.0 → 2.0 tiles.** Actually ships the
+   doubling this doc already specified above. Still comfortably under
+   `SeedCaching.PICKUP_RADIUS_TILES` (3.0) and still the shortest forage
+   reach of any disperser in this game — an ant's mound-centred range
+   stays real, just no longer so tight that a genuine nearby seed rarely
+   ever falls inside it.
+2. **A mound's population now SEEDS across a real established range**
+   (`AntPopulationModel.STARTING_POPULATION` .. `BASE_CAPACITY`, i.e.
+   1.0 .. 4.0, `PixelNoise`-seeded per mound off its own independent
+   salt) instead of uniformly at the bare founding minimum — see
+   `AntPopulationModel.STARTING_POPULATION`'s own doc comment. This is
+   not a new mechanism, only a corrected starting point: every other
+   map-generated patch-sim in this game (`TallGrass`, `WildCropPatch`,
+   every tree) already starts mature rather than as a seedling, on the
+   reasoning that a freshly-LOADED chunk represents content that has
+   existed in the game world for real (if previously unmodeled) time —
+   `AntColony` was the one holdout still seeding every mound at the
+   literal instant of founding, every single time, which is what made a
+   "thriving" colony functionally unreachable in ordinary play regardless
+   of how sound the ongoing growth model was. The range is capped at
+   `BASE_CAPACITY` (never higher) specifically so a freshly-seeded mound
+   never reads as already ABOVE its own (still-unobserved) capacity
+   ceiling, which would make `PopulationModel.step` read it as
+   overcrowded and immediately start shrinking it back down before the
+   player ever sees it settle. Ongoing growth — a colony's population
+   catching up to a RAISED ceiling as it keeps finding food and damp
+   ground — is untouched and still genuinely slow, preserving the real
+   grounding above; only the moment a mound is first ever observed reads
+   as an established colony instead of a newborn one.
+3. **`MAX_CONCURRENT_FORAGERS`: 3 → 6.** The old value was deliberately
+   framed as "a special sight, not a swarm" — exactly the framing this
+   report asks to change. Raising it is also what makes the EXISTING
+   pheromone-trail recruitment (`PheromoneField.best_candidate_index`,
+   biasing every concurrently-dispatched forager toward the same
+   known-good, trail-marked source) actually visible as a swarm
+   converging on a rich find, rather than one ant's smarter-but-solitary
+   pathing — "real swarm intelligence" was already correctly implemented
+   at the individual-forager level; it simply never had enough
+   simultaneous foragers to read as a swarm with.
+
+**What this does NOT change**: mound count is still fixed and
+deterministic per chunk (unchanged from "Mound COUNT is still fixed" in
+the scope list below); colonies still are not persisted or
+catch-up-integrated across a chunk unload/reload — a specific mound's
+exact population is not remembered forever, only its INITIAL seed is now
+a believable established value rather than the bare minimum, every time
+it is (re)seeded; and ongoing population growth is still deliberately
+the slowest in the game.
+
 ### What is explicitly NOT in this pass
 
 - **Rendered presence (2026-09-04).** Every mound now has a real,
@@ -786,16 +881,41 @@ grow.
   flies over a carcass is real and common but out of scope here. Windfall
   foraging above is a separate, narrower thing — a fallen fruit/nut ground
   item via the existing tree-fruit API, not the corpse/rot system.
-- **Leaf litter is a separate forage source this mound simulation does not
-  see.** [leaf_litter.md](leaf_litter.md) adds a fallen-leaf ground item
-  alongside fallen fruit/nut, picked up by the VISIBLE `DecomposerMarker`
-  ants/bugs ([carrion.md](carrion.md)) via the ordinary
+- ~~**Leaf litter is a separate forage source this mound simulation does
+  not see.** [leaf_litter.md](leaf_litter.md) adds a fallen-leaf ground
+  item alongside fallen fruit/nut, picked up by the VISIBLE
+  `DecomposerMarker` ants/bugs ([carrion.md](carrion.md)) via the ordinary
   `DroppedItem.FORAGEABLE_GROUP_NAME` path with no changes needed there —
   but this invisible colony's own `_forage_windfall_near_mound` queries the
   fruiting model's abstract fruit/nut stock directly, never `DroppedItem`
   nodes, so it has no way to see a leaf item without a parallel query this
   pass does not build. Named there as a reasonable, separable follow-up,
-  not silently dropped.
+  not silently dropped.~~ **Resolved (2026-09-06).** Reported live as "ants
+  eat leaves at the spot instead of physically carrying the leaf to the
+  mound" — a real, confirmed gap, not a misreading: the VISIBLE ambient
+  `DecomposerMarker` ants/bugs genuinely do eat leaf litter in place (they
+  have no mound/colony concept at all, by design — see carrion.md), and a
+  player watching one has no visual way to tell it apart from a real
+  colony forager, since both draw the identical "ant" art. But the
+  above-quoted premise ("via the ordinary `DroppedItem.FORAGEABLE_
+  GROUP_NAME` path") was itself stale: leaf litter is GPU-instanced plain
+  data (`LeafLitterField`), never a real `DroppedItem` node, reached
+  through `EarthChunkManager.nearest_leaf_litter_near`/
+  `consume_leaf_litter_at` instead (see leaf_litter.md). New
+  `EarthChunkManager._forage_leaf_near_mound` gives the real colony
+  simulation that same query, checked in `step_ants` BEFORE the
+  grassland/forest-rainforest biome branch below — unlike grass seed or
+  windfall, a leaf is not biome-gated at all (a "grassland" chunk can
+  still have real trees shedding leaves onto it). `AntForagerMarker`
+  carries it home exactly like a seed or windfall nut (same walk, same
+  real "carry" pose, same real-arrival-resolves contract against
+  `consume_leaf_litter_at`), but a leaf is real detritus/food, not a
+  propagule — it disappears at the mound rather than being re-cached or
+  re-planted, unlike a survived grass seed or windfall nut. Pheromone-
+  biased recruitment toward a known-good leaf source is a real, separable
+  follow-up left undone: `nearest_leaf_litter_near` only ever reports the
+  single closest leaf, with no plural "leaves near" query to run
+  `PheromoneField.best_candidate_index` against the way seed/windfall do.
 - **Mound COUNT is still fixed and deterministic per chunk** (see "A queen,
   and where a colony's size comes from" above for what is no longer fixed
   — each mound's own population now genuinely grows or stalls with real
@@ -808,11 +928,28 @@ grow.
   is visually and behaviourally identical; real polymorphic castes (major/
   minor workers, soldiers) are a separate, later refinement, not attempted
   here.
-- **Not persisted, not catch-up integrated**, for the identical reason
-  `EarthwormPatch`'s own burrows are not (see that section's Scope choices
-  above): a reloaded chunk re-seeds its mounds deterministically, and a
+- **Not persisted, not catch-up integrated.** A reloaded chunk re-seeds
+  its mounds deterministically; a specific mound's exact population is
+  not remembered indefinitely across an unload/reload. **Correction**:
+  earlier revisions of this note borrowed `EarthwormPatch`'s own "a
   short-timescale, self-renewing local effect does not need
-  `ChunkEcologyCatchup` fidelity.
+  `ChunkEcologyCatchup` fidelity" reasoning — that never actually applied
+  here. Worm surfacing genuinely IS short-timescale (`SURFACE_RATE`
+  reaches full emergence in ~2 seconds); ant colony growth is the
+  OPPOSITE — this section's own `GROWTH_RATE_PER_DAY` is deliberately
+  pinned as the slowest-maturing population this game tracks. That
+  mismatch is exactly why colonies never appeared to mature in ordinary
+  play (see "Thriving colonies, and a real swarm" above) — not a
+  short-timescale effect that didn't need catch-up, but a long-timescale
+  one that was never given any way to accumulate. This pass's real fix
+  is not persistence (a bigger, separate lift — genuine
+  `ChunkEcologyCatchup` integration would need first extending it to
+  per-MOUND granularity, since `AntPopulationModel`'s own doc comment
+  already notes a colony's population lives per mound, not per chunk,
+  unlike every other species' aggregate) but seeding every mound's
+  INITIAL population at an established range instead of the bare
+  minimum — see above. Real persistence/catch-up remains open, now
+  honestly scoped rather than mis-justified as unnecessary.
 
 
 ## Crawling out, and back down

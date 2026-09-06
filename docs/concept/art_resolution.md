@@ -359,6 +359,66 @@ correct tile positions once `TILE_SIZE` changes.
   noise floor, below any real canopy colour's actual margin) rather than
   the rendering, since direct visual inspection confirmed the rendering
   itself is correct, not regressed.
+  **Fourth follow-up (2026-09-06): a direct side-by-side screenshot** --
+  live gameplay next to `composite_cherry.png` open at its own native
+  resolution in an image editor -- "the cherry tree has significantly less
+  pixels in game than the sprite... why is it not possible to give trees
+  more pixels?", then, once the mechanism was explained: **"can you make
+  trees bigger than their sprite? Or exactly as big."**
+
+  The mechanism, confirmed by re-deriving it rather than assumed: a tree's
+  ON-SCREEN size is `TreeRenderer.TREE_SIZE (== ProceduralTreeSprite.
+  WORLD_SIZE) * Player.CAMERA_ZOOM.x`, and `SPRITE_SCALE == 1.0 /
+  DETAIL_MULTIPLIER` by construction -- so `SIZE (== WORLD_SIZE *
+  DETAIL_MULTIPLIER) * SPRITE_SCALE * CAMERA_ZOOM.x` collapses straight
+  back to `WORLD_SIZE * CAMERA_ZOOM.x`, with `DETAIL_MULTIPLIER` gone from
+  the result entirely. Raising it (as the follow-up directly above just
+  had, 4 -> 12) can only change what the GPU's live minification samples
+  FROM; it can never change how many screen pixels a tree occupies. That
+  screen-pixel budget was, and remains, exactly what
+  `WORLD_SIZE * CAMERA_ZOOM.x` says it is -- currently ~100px wide at the
+  720p design reference, regardless of DETAIL_MULTIPLIER.
+
+  So "make trees bigger than their sprite" is not a resolution question at
+  all -- it is the SAME lever as `WORLD_SIZE` itself, which a much smaller
+  version of this exact ask already hit a real wall on (Phase 3's
+  "25%-bigger-WORLD_SIZE" entry above, and its own rejected 2x/40x56
+  attempt, reverted same-day for "forests crowded and read worse"). Taking
+  "exactly as big as their sprite" completely literally --
+  `screen_pixels_per_art_pixel == 1.0` against the CURRENT (`DETAIL_
+  MULTIPLIER = 12`, 300x396) canvas -- means a 3.0x linear jump
+  (`CAMERA_ZOOM.x(4) / DETAIL_MULTIPLIER(12)` undone, i.e. `sprite.scale =
+  1.0 / CAMERA_ZOOM.x` instead of `SPRITE_SCALE`), nearly double the
+  already-reverted 1.6x (40x56) attempt's own linear bump. Rendered
+  directly rather than assumed (`tools/probe_native_scale_forest.gd`, real
+  GPU, a real 73-tree forest at real spacing and real camera zoom): at that
+  literal scale canopies fill the frame almost edge to edge -- individual
+  trees are barely distinguishable, let alone walkable between. Confirmed:
+  "exactly as big as their sprite" is a real, working, per-tree-crisp
+  render, and also a genuinely worse-looking, less-playable forest than
+  today's.
+
+  Rendered the space between (1.0x/1.3x/1.6x/2.0x/3.0x) instead of picking
+  one end, and handed the comparison back rather than guessing which
+  trade-off the ask actually wanted. 1.3x read as a clear, safe
+  improvement with the forest still legible; 1.6x (matching the previously
+  -reverted ratio almost exactly) still read acceptably in this test but
+  was flagged as the risky edge, not a safe default; 2.0x was visibly
+  crowding. Picked: **1.3x**.
+
+  Shipped as `TreeRenderer.VISUAL_SCALE := 1.3`, multiplying `sprite.scale`
+  ONLY -- `WORLD_SIZE`, `trunk_world_width()` (and so the trunk's collision
+  box), and `TreePlacement`'s stand-spacing/density check are all
+  deliberately untouched, so the tree's GAMEPLAY footprint (what it blocks,
+  how close together they generate) is identical to before this change;
+  only how big the SPRITE draws is different. This is a materially
+  different lever from the reverted `WORLD_SIZE` 40x56 attempt, which grew
+  the world footprint itself (and so the collision box derived from it,
+  `trunk_world_width()`) alongside the visual size -- this change cannot
+  reproduce THAT failure mode, though it can still crowd canopies visually
+  since they cover more screen area regardless of mechanism, which is
+  exactly why it was checked with a real forest render rather than shipped
+  on arithmetic alone.
 - ⬜ Phase 4 (creatures).
 - ⬜ Phase 5 (structures).
 - ⬜ Phase 6 (items / icons).
