@@ -2187,15 +2187,26 @@ func test_secondary_action_does_nothing_for_an_empty_net():
 
 # -- bottling never spends a LOADED bottle (found at the 2026-09-05 merge) ----
 #
-## main now grants an empty glass bottle from the start, which exposed two
-## real bugs in one code path: Inventory.add merged a freshly loaded bottle
-## into the empty stack by id alone (the creature vanished), and "Put into
-## bottle" counted and could spend a LOADED bottle as if it were empty. These
-## pin the player-facing half; test_inventory.gd pins the inventory half.
+## Found at the 2026-09-05 merge, the first time a new player started with an
+## empty glass bottle already in the pack, which exposed two real bugs in one
+## code path: Inventory.add merged a freshly loaded bottle into the empty
+## stack by id alone (the creature vanished), and "Put into bottle" counted
+## and could spend a LOADED bottle as if it were empty. Both are fixed
+## (Inventory.add / ItemStack.can_stack_with, and _bottle_captive / Inventory.
+## remove's captive_species filter) and the fix is independent of how the
+## bottle got into the pack -- the automatic starting-bottle grant these
+## tests originally exercised was itself replaced hours later, the same day,
+## by the Starting Kit tab (docs/concept/starting_kit.md): a fresh player is
+## granted nothing until grant_starter_items runs, and glass_bottle isn't in
+## DEFAULT_CHOICES (see test_a_new_player_starts_completely_unequipped_before_
+## any_grant above), so these grant a bottle explicitly instead, the same way
+## every other bottling test in this file already does. These pin the
+## player-facing half; test_inventory.gd pins the inventory half.
 
-func test_bottling_with_the_starting_bottle_keeps_the_creature():
+func test_bottling_with_an_empty_bottle_on_hand_keeps_the_creature():
+	player.inventory.add(_item_catalog.make("glass_bottle"), 1)
 	_load_net_with("monarch")
-	assert_eq(player.inventory.count_of("glass_bottle", ""), 1, "the starting empty bottle")
+	assert_eq(player.inventory.count_of("glass_bottle", ""), 1, "an empty bottle on hand")
 	player._bottle_captive()
 	assert_eq(player.equipped_item.captive_species, "")
 	assert_eq(player.inventory.count_of("glass_bottle", "monarch"), 1, "the monarch is in a bottle, not lost in a merge")
@@ -2203,6 +2214,7 @@ func test_bottling_with_the_starting_bottle_keeps_the_creature():
 
 
 func test_a_loaded_bottle_is_never_spent_to_bottle_a_second_catch():
+	player.inventory.add(_item_catalog.make("glass_bottle"), 1)
 	_load_net_with("monarch")
 	player._bottle_captive()
 	# The only bottle left holds the monarch. Net a sparrow and try again,
