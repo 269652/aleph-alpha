@@ -142,6 +142,9 @@ Food types are strings so the follow-on work slots in without redesign:
 seed sim, a `seeds_near`/`take_seed_at` pair on the chunk manager, and the same
 ground-forage state machine — and **fruit** (fruit trees, later) becomes a
 third entry that a robin's diet can gain without touching the machinery.
+(Both have since shipped, alongside a fourth robin entry, caterpillars — see
+"Some birds eat caterpillars too" far below for the full account; this
+table predates all three and is not updated in place.)
 
 ### Ground foraging behaviour
 
@@ -1869,17 +1872,25 @@ elsewhere. So:
   player does, the same "any sufficiently heavy stepper, not just the
   player" generalization the worm mechanic already had from the start.
 
-**No corpse state, no splat VFX, same scope cut the worm mechanic itself
-already named**: a crushed caterpillar simply `queue_free()`s, the same
-"just disappear" outcome an eaten one already has (nothing removes a
-`CaterpillarMarker` today except chunk unload or this). `EarthwormPatch`'s
-own corpse/recovery machinery (`_crushed`, `RECOVERY_SECONDS`) exists
-because a worm's burrow is a renewable resource that repopulates on a
-clock; a caterpillar has no equivalent "spot" to repopulate — it was
-never tied to a place the way a worm's burrow is, so there is nothing for
-a recovery clock to apply to. A future caterpillar respawn, if wanted,
-belongs to the same spawn-density reasoning `CaterpillarRenderer.spawn_
-caterpillars` already owns, not to this mechanic.
+**No corpse/recovery state** — unlike `EarthwormPatch`'s own machinery
+(`_crushed`, `RECOVERY_SECONDS`), which exists because a worm's burrow is a
+renewable resource that repopulates on a clock, a caterpillar has no
+equivalent "spot" to repopulate — it was never tied to a place the way a
+worm's burrow is, so there is nothing for a recovery clock to apply to. A
+future caterpillar respawn, if wanted, belongs to the same spawn-density
+reasoning `CaterpillarRenderer.spawn_caterpillars` already owns, not to
+this mechanic.
+
+**The "no splat VFX" gap this section originally named here is closed**
+(2026-09-06, "build both — crushed sprite for all small animals"):
+`caterpillar.png` has no dedicated crushed pose of its own (its four rows
+are crawl/climb/eat/rest, see `IllustratedCaterpillarSprite`'s own doc
+comment), so `CaterpillarMarker.crush()` reuses `SquashCrushEffect`'s
+shared procedural fallback — flattens and tints whatever frame it was
+already showing, lingers briefly, then frees — rather than the instant
+`queue_free()` this section originally described. See "A real death
+treatment for every small victim" further down for the full account
+across all five victims.
 
 **Bigger animals are excluded by which system a creature lives in, not by
 a new per-species mass check on the VICTIM side** — there still is no
@@ -2464,12 +2475,11 @@ constant under a now-inaccurate name with no cross-reference.
 
 ### What this does NOT include
 
-- **No timed death animation.** The `crushed` row exists and is real, but a
-  crushed millipede simply `queue_free()`s the instant
-  `crush_millipedes_near` finds it, the exact same "just disappear" outcome
-  a crushed worm or caterpillar already has — playing a death animation
-  before removal would need the marker to survive a few more frames in a
-  new terminal phase, a real follow-up, not silently half-built here.
+- ~~No timed death animation.~~ **Closed (2026-09-06, "build both — crushed
+  sprite for all small animals").** `MillipedeMarker.crush()` now plays the
+  real `crushed` row from frame 0, holds the final flattened frame, then
+  frees itself — see "A real death treatment for every small victim"
+  further down.
 - **No `curl` trigger.** A real defensive reaction (fleeing/curling when
   the player approaches) would need this creature to sense threats at all,
   which nothing in `MillipedeMarker`/`CaterpillarForageBehavior` does
@@ -2513,16 +2523,18 @@ worm/caterpillar/millipede already does — the identical "a small,
 harmless invertebrate died underfoot" event, and `karma_and_luck.md`'s
 own event table is updated to say so.
 
-**What this does NOT include**: no corpse/recovery state (a crushed ant
-simply `queue_free()`s, same "just disappear" outcome every other crush
-victim already has — no timed death animation either, same deferred
-follow-up the millipede section above names). No effect on the mound's
-own population/food economy beyond the one forager actually lost — a
-crushed ant is not distinguished from one that simply completed its
-trip as far as `AntColony.record_forage_result` is concerned (it is
-never called at all for a crushed forager, the same "silently
-disappeared mid-trip" outcome a crushed caterpillar/millipede already
-has relative to whatever they were doing).
+**Both gaps this section originally named here are closed** (2026-09-06,
+"build both — crushed sprite for all small animals"): `AntForagerMarker.
+crush()` now plays a real death treatment (`IllustratedDecomposerSprite`'s
+"ant" art has no dedicated crushed pose, so this reuses `SquashCrushEffect`'s
+shared procedural fallback — see "A real death treatment for every small
+victim" further down) instead of an instant `queue_free()`, and
+`AntColony.forager_crushed(cell)` now subtracts one worker's worth of
+abstract colony strength from the mound that lost it (floored at 0.0) —
+still no effect on `record_forage_result`/the forage-success EMA
+specifically (a crushed forager still simply vanishes mid-trip as far as
+that separate signal is concerned), only on the raw population number
+itself.
 
 ### Generalized to bugs too (2026-09-06)
 
@@ -2556,9 +2568,116 @@ species string this particular `DecomposerMarker` happens to be drawing
 all, only position, the same way `crush_ants_near` treats every
 `AntForagerMarker` alike regardless of which mound dispatched it.
 
-**What this does NOT include**: no corpse/recovery state (a crushed
-decomposer simply `queue_free()`s, same "just disappear" outcome every
-other crush victim already has). No effect on whatever it was doing —
-foraging a carcass, fruit, or leaf litter — beyond that one instance
-disappearing mid-task, the same "silently disappeared mid-trip" outcome
-a crushed caterpillar/millipede/ant already has.
+**The corpse/recovery gap this section originally named here is closed**
+(2026-09-06, "build both — crushed sprite for all small animals"):
+neither the "ant" nor "bug" sheet has a dedicated crushed pose, so
+`DecomposerMarker.crush()` reuses `SquashCrushEffect`'s shared procedural
+fallback — see "A real death treatment for every small victim" further
+down — instead of an instant `queue_free()`. Still no effect on whatever
+it was doing (foraging a carcass, fruit, or leaf litter) beyond that one
+instance disappearing mid-task — that part of the original scope cut
+still holds.
+
+### A real death treatment for every small victim (2026-09-06)
+
+Asked directly, after the ant-crush investigation above confirmed the
+missing sprite/population effects were deliberate scope cuts rather than
+bugs: "build both — crushed sprite for all small animals and population
+decrease." Every one of the five crush victims above (worm, caterpillar,
+millipede, ant forager, decomposer/bug) now plays a real death treatment
+before disappearing, instead of the instant `queue_free()` most of them
+had:
+
+- **Worm** — already closed, before this pass even started: `EarthwormPatch.
+  crush()`/`is_corpse()`/`corpse_age_seconds()` play the real `die` row
+  (see "Illustrated worm sprite" above) and hold a genuine 45-second corpse
+  while the burrow recovers. Untouched here.
+- **Millipede** — `millipede.png`'s row 4 `crushed` frames were real,
+  measured, and delivered from the start (see "Millipedes: a dedicated
+  autumn leaf-litter decomposer" above) but never wired to a trigger.
+  `MillipedeMarker.crush()` now plays that row from frame 0, holding the
+  final flattened frame (`_update_sprite` clamps rather than wraps once
+  `_dying`), for `frame_count * FRAME_DURATION_SECONDS` before freeing.
+- **Caterpillar, ant forager, decomposer/bug** — none of their three sheets
+  has a dedicated crushed pose (`caterpillar.png`'s four rows are
+  crawl/climb/eat/rest; neither `IllustratedDecomposerSprite`'s "ant" nor
+  "bug" art has one at all). New shared `SquashCrushEffect`
+  (`src/rendering/squash_crush_effect.gd`) is the procedural fallback for
+  all three — three real call sites clears this codebase's own "three
+  similar things beats a premature abstraction" bar. `apply(sprite)`
+  flattens the sprite vertically (`VERTICAL_SQUASH = 0.35`) and tints it
+  dark/reddish (`TINT`), applied to whatever frame the marker was already
+  showing at the moment it died — no new art asset needed. Each marker's
+  own `crush()` applies it once, stops all further forage/wander
+  processing immediately, and frees itself after `LINGER_SECONDS` (2.0).
+
+All five are wired through the same two chokepoints: `EarthChunkManager.
+_crush_markers_near` (caterpillar/millipede/decomposer) calls
+`marker.crush()` when the marker has one, falling back to `queue_free()`
+for a test double that doesn't (so nothing outside this codebase's own
+tests is affected); `crush_ants_near` (which cannot share that helper —
+see its own doc comment) calls `AntForagerMarker.crush()` directly.
+
+**Ant population, the second half of the ask.** `AntColony.
+forager_crushed(cell)` subtracts `FORAGER_CRUSH_POPULATION_LOSS` (1.0 — one
+worker, the smallest indivisible unit this abstraction can represent) from
+the mound's own current colony strength, floored at 0.0 the same way
+starvation already is. `crush_ants_near` calls it whenever a real
+`AntColony` is registered for the crushed forager's own chunk, converting
+the forager's GLOBAL tile key (`_active_ant_foragers`' own indexing) back
+to the LOCAL cell `AntColony`'s own `_population` dict actually uses. A
+crushed forager still never touches `record_forage_result`/the
+forage-success EMA (that signal still just sees the trip silently
+vanish) — only the raw population number moves.
+
+**What this does NOT include**: no crushed-sprite art of any kind for
+caterpillar/ant/bug beyond the generic squash-and-tint (a real bespoke
+"flattened insect" illustration for any of the three, if wanted, is a
+follow-up art delivery, not a code gap); no population effect for anything
+other than ants (worm/caterpillar/millipede/bug have no equivalent
+colony-strength number to move at all).
+
+### Some birds eat caterpillars too (2026-09-06)
+
+Asked directly, alongside the crushed-sprite/population work above:
+"Also some birds (where it fits) should eat caterpillars." Real robins are
+committed caterpillar-hunters — caterpillars, not worms, are what a robin
+actually feeds its own chicks most of the time — so this adds
+`FlyerDiet.FOOD_CATERPILLARS` to the robin's own diet entry alongside
+worms and fruit (see "Bird diet, as a first-class concept" above), not a
+new mechanism: it reuses the identical ground-forage descend/sit/peck
+cycle a worm hunt already drives.
+
+Deliberately **robin-only**, the same shape `FOOD_WORMS` already has: a
+sparrow's granivore bill and a kingfisher's fish-only diet are both a poor
+real-world fit for hunting insects, so this stays narrow rather than
+spreading it across every songbird just because the machinery now exists
+— the literal "where it fits" from the request.
+
+**`EarthChunkManager.caterpillars_near`/`take_caterpillar_near`** mirror
+`worms_near`/`take_worm_at`'s own shape exactly (same Chebyshev-in-tiles
+radius check, same 3x3-chunk-neighborhood scan, same "eaten on real
+arrival, re-checked here" contract) — reading from and removing out of the
+same `_caterpillar_markers` tracking dict the crush mechanism above
+already uses. `take_caterpillar_near` calls `queue_free()` directly, never
+`crush()`: a bird's meal is an entirely different event from being crushed
+underfoot, with no death animation of its own to play through.
+
+`AmbientFlyerMarker` grows `caterpillar_world`/`_caterpillar_target` plus
+`_fly_at_caterpillar`/`_take_targeted_caterpillar`/`_look_for_caterpillars`,
+each a direct mirror of the worm-hunting trio — including reusing the same
+`WORM_SNIFF_INTERVAL` throttle and `GroundForageBehavior.choose_worm`
+scatter-pick fruit/seed/grass-seed already share under that same
+historical name, rather than inventing same-shaped duplicates.
+`AmbientFlyerRenderer._build_marker` sets `caterpillar_world` for any
+species with `FlyerDiet.FOOD_CATERPILLARS`, guarding against creating a
+second, redundant `GroundForageBehavior` when the same species (a robin)
+already got one from the worm branch just above it.
+
+**What this does NOT include**, named rather than silently dropped: a
+caterpillar up a tree, mid-climb (see `CaterpillarMarker._target_is_tree`),
+is never hunted — only a ground-based one is findable by
+`caterpillars_near` at all. Real robins do glean insects off foliage too,
+but that is a genuinely different targeting problem (perching on/near a
+branch, not a ground descend-and-peck) from what this pass builds, and is
+a real, deliberate follow-up rather than an oversight.

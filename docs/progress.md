@@ -14095,6 +14095,55 @@ exempt. `test_world_crush_wiring.gd`'s source-contract test for the old
 (17/17 green). `concept/mushrooms.md` and `concept/karma_and_luck.md`
 updated to match.
 
+✅ **A real death treatment for every small crush victim (2026-09-06)** —
+asked directly, after the ant-crush investigation above confirmed the
+missing sprite/population effects were deliberate scope cuts, not bugs:
+"build both — crushed sprite for all small animals and population
+decrease." `MillipedeMarker.crush()` finally wires `millipede.png`'s row-4
+`crushed` frames (real, delivered, unused since that feature shipped) into
+an actual terminal animation — plays from frame 0, holds the last
+flattened frame, then frees. `caterpillar.png` and the ant/bug decomposer
+sheets have no dedicated crushed pose at all, so new shared
+`SquashCrushEffect` (`src/rendering/squash_crush_effect.gd`) is a
+procedural fallback for all three: flattens and tints whatever frame the
+marker was already showing, no new art needed. `EarthChunkManager.
+_crush_markers_near`/`crush_ants_near` now call `marker.crush()` instead
+of an instant `queue_free()` (falling back to `queue_free()` for a marker
+with no `crush()`, so a test double is unaffected). Worm needed no
+changes — its own real "die" corpse was already closed earlier the same
+day. 109+ tests green across the five affected marker/manager files. Full
+writeup: [soil_fauna.md](concept/soil_fauna.md#a-real-death-treatment-for-every-small-victim-2026-09-06).
+
+✅ **A crushed ant now costs its mound one worker (2026-09-06, same
+ask)** — `AntColony.forager_crushed(cell)` subtracts
+`FORAGER_CRUSH_POPULATION_LOSS` (1.0) from the mound's own abstract
+colony-strength number, floored at 0.0 the same way starvation already
+is. `crush_ants_near` calls it whenever a real `AntColony` is registered
+for the crushed forager's own chunk, converting the forager's GLOBAL tile
+key back to the LOCAL cell `AntColony`'s own population dict actually
+uses. Still no effect on `record_forage_result`/the forage-success EMA —
+only the raw population number moves. 3 new tests in `test_ant_colony.gd`,
+1 integration test in `test_earth_chunk_manager.gd` (97/97 green).
+
+✅ **Robins now hunt and eat ground caterpillars too (2026-09-06)** —
+asked directly, alongside the crush work above: "Also some birds (where it
+fits) should eat caterpillars." `FlyerDiet.FOOD_CATERPILLARS` joins
+worms/fruit on the robin's own diet entry only (real robins feed their
+chicks caterpillars more than almost anything else; a sparrow's granivore
+bill and a kingfisher's fish-only diet are both a poor fit, so this stays
+narrow). New `EarthChunkManager.caterpillars_near`/`take_caterpillar_near`
+mirror `worms_near`/`take_worm_at` exactly; `AmbientFlyerMarker` grows a
+`caterpillar_world`/`_caterpillar_target` trio mirroring the worm-hunting
+one, reusing the same `WORM_SNIFF_INTERVAL` throttle and
+`GroundForageBehavior.choose_worm` scatter-pick fruit/seed already share
+under that name rather than inventing duplicates. Ground-based
+caterpillars only — one mid-climb up a tree is a named, deliberate gap
+(gleaning off foliage is a different targeting problem), not a silently
+dropped one. 26/26 in `test_flyer_diet.gd`, 3 new tests in
+`test_ambient_flyer_marker.gd` (175/177 in the full suite — the 2 failures
+are the pre-existing, unrelated butterfly whirl-dance issue already on
+record). Full writeup: [soil_fauna.md](concept/soil_fauna.md#some-birds-eat-caterpillars-too-2026-09-06).
+
 ### Material DSL: fruit composition → crush → nutrients (`concept/material_dsl.md`, new this pass)
 
 Requested directly: describe a material (e.g. an apple) as percentages of
