@@ -169,6 +169,10 @@ func test_sense_radius_is_half_the_forage_radius():
 	assert_eq(AntColony.SENSE_RADIUS_TILES, AntColony.FORAGE_RADIUS_TILES * 0.5)
 
 
+func test_cluster_threshold_is_pinned():
+	assert_eq(AntColony.CLUSTER_THRESHOLD, 3)
+
+
 func test_carry_direction_is_a_unit_vector():
 	for seed_value in [1, 42, 999]:
 		var direction: Vector2 = AntColony.carry_direction(seed_value)

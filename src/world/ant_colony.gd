@@ -120,6 +120,21 @@ const FORAGE_RADIUS_TILES := 2.0
 ## is_half_the_forage_radius.
 const SENSE_RADIUS_TILES := FORAGE_RADIUS_TILES * 0.5
 
+## How many real items a scout must sense together (see AntForagerMarker.
+## _sense_food_nearby) before it counts as a real CLUSTER worth recruiting
+## other ants for, rather than something one ant can quietly clean up
+## alone -- reported live: "these scouts should only lay out pheromones
+## after they discovered a cluster for which multiple ants are needed".
+## 3, not 2: a pair sitting together is still well within what a single
+## forager handles over a couple of ordinary trips without ever needing
+## to recruit help; real mass recruitment in ant colonies kicks in for
+## genuinely rich finds, not the first hint of more than one item. A real
+## design knob, not itself test-locked (see FORAGE_RADIUS_TILES's own doc
+## comment for the identical precedent) -- pinned by test_cluster_
+## threshold_is_pinned so a future change is a deliberate edit, not a
+## silent drift.
+const CLUSTER_THRESHOLD := 3
+
 ## How far a mound caches a harvested seed before it counts as planted, in
 ## tiles. This is the shortest-range disperser of the game's whole carrier
 ## family, and deliberately so, in order:
@@ -545,6 +560,49 @@ func deposit_pheromone(cell: Vector2i, tile: Vector2i) -> void:
 	if not _pheromones.has(cell):
 		_pheromones[cell] = PheromoneField.new()
 	_pheromones[cell].deposit(tile)
+
+
+## Real directional trail deposit for a CLUSTER find (see
+## PheromoneField.deposit_trail's own doc comment and docs/concept/
+## soil_fauna.md "Scouting: real search, not omniscient dispatch") --
+## creates the field on first use, same as deposit_pheromone.
+func deposit_pheromone_trail(cell: Vector2i, tile: Vector2i, direction: Vector2, amount: float) -> void:
+	if not _pheromones.has(cell):
+		_pheromones[cell] = PheromoneField.new()
+	_pheromones[cell].deposit_trail(tile, direction, amount)
+
+
+## Whether this mound's own trail field currently holds a real, followable
+## cluster trail (see PheromoneField.has_active_trail) -- what step_ants
+## checks to decide whether to dispatch RESOLVERS (a known cluster is
+## still being worked) or a fresh WAVE of blind scouts (nothing known yet).
+## False on a mound that has never deposited at all -- no allocation
+## needed just to answer "no".
+func has_active_pheromone_trail(cell: Vector2i) -> bool:
+	var field: PheromoneField = _pheromones.get(cell)
+	return field != null and field.has_active_trail()
+
+
+## The nearest real trail near `position` (see PheromoneField.
+## nearest_trail_near) -- {} on a mound that has never deposited at all,
+## the same "no allocation just to answer empty" reasoning
+## has_active_pheromone_trail already uses.
+func nearest_pheromone_trail_near(cell: Vector2i, position: Vector2, tile_size: float) -> Dictionary:
+	var field: PheromoneField = _pheromones.get(cell)
+	if field == null:
+		return {}
+	return field.nearest_trail_near(position, tile_size)
+
+
+## Masks this mound's own trail near `position` as spent (see
+## PheromoneField.invalidate_near) -- a genuine no-op on a mound that has
+## never deposited at all, since there is nothing there yet that could
+## mislead a future resolver.
+func invalidate_pheromone_near(cell: Vector2i, position: Vector2, radius_tiles: float, tile_size: float) -> void:
+	var field: PheromoneField = _pheromones.get(cell)
+	if field == null:
+		return
+	field.invalidate_near(position, radius_tiles, tile_size)
 
 
 ## How far this carry travels before the seed counts as cached, in tiles.
