@@ -26,16 +26,23 @@ const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 
 const SIZE := Vector2i(16, 16)
 
-## How wide a mushroom should read ON THE GROUND, in world pixels -- a
-## small forest-floor object, smaller than even the smallest excavated
-## ant mound (ProceduralAntMoundSprite.MOUND_WORLD_WIDTH_MIN -- a mound
-## now GROWS with its colony rather than sitting at one flat width, see
-## that class's own "Mound size grows with the colony" doc reference, but
-## even a founding colony's own smallest mound stays comfortably above
-## this). Picked comfortably below the flat value this constant was
-## originally set against (3.5, see docs/concept/mushrooms.md's merge
-## note), not the very first 7.0 either.
-const MUSHROOM_WORLD_WIDTH := 2.5
+## How wide a mushroom should read ON THE GROUND, in world pixels.
+## Previously 2.5 -- "smaller than even the smallest excavated ant
+## mound" -- but reported live, repeatedly, even after both the
+## identification gate was removed AND a debug /mushroom command was
+## added to force one to fruit at the player's own feet: still not
+## something a player could actually find. The exact same complaint
+## ("make them substantially bigger... not something a player can walk
+## past without noticing") already landed for ant mounds the same day
+## (see ProceduralAntMoundSprite.MOUND_WORLD_WIDTH_MAX's own doc
+## comment) -- "smaller than an ant mound" was never the real design
+## goal, "a real forager can actually spot one" was, and 2.5 world-px
+## (10 screen-px at this game's 4x camera zoom, see player.gd's
+## CAMERA_ZOOM) failed that goal outright. Still meaningfully smaller
+## than a whole tilled soil patch (ProceduralSoilSprite.SOIL_WORLD_WIDTH,
+## 10.0) -- a mushroom is a small object, just no longer an
+## imperceptible one.
+const MUSHROOM_WORLD_WIDTH := 6.0
 ## The scale factor a marker applies to a SIZE-authored sprite to make it
 ## actually read at MUSHROOM_WORLD_WIDTH on screen -- never left unscaled,
 ## the exact "gigantic ant blobs" failure this project has already hit more

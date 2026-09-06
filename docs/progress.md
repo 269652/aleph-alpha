@@ -8997,6 +8997,31 @@ gated on them); `Player.mushrooms_eaten` stays, persisted, as a plain
 lifetime counter with no further consequence. Built red-first end to end
 against the removed/simplified signatures, merged to `main`.
 
+**Still reported live as "can't find any," even after the identification
+fix -- traced to the save itself, then to real scarcity/size
+(`feature/mushroom-debug-command`, `feature/mushroom-more-common`).**
+First: the actual save file (`player_save.bin`/`world_clock.bin`) had
+been wiped -- only a New Game click does that -- leaving every session
+in a fresh spring world where natural flush is a deliberately rare roll;
+a real `.bak` backup of the previously-verified autumn save was found
+still on disk. Added a `/mushroom` dev-console command
+(`WildMushroomPatch.force_fruit_near` /
+`EarthChunkManager.force_mushroom_near`) forcing the nearest real site
+near the player to fruit immediately, for exactly this "verify it works
+without waiting on RNG" need. Still reported live even after that command
+supposedly guaranteed one nearby ("make them well more common") -- with
+`ProceduralAntMoundSprite`'s own identical "make them substantially
+bigger... not something a player can walk past without noticing" fix
+having landed the same day for mounds, both real levers were pulled
+together rather than guessing which one alone would fix it:
+`WildMushroomPatch.SITE_CHANCE` (0.05→0.15), `MAX_SITES` (30→60),
+`INITIAL_FRUITING_CHANCE` (0.15→0.35), `FLUSH_CHANCE_PER_STEP`
+(0.05→0.15), and `ProceduralMushroomSprite.MUSHROOM_WORLD_WIDTH`
+(2.5→6.0, retiring "smaller than an ant mound" as the binding
+constraint in favour of "smaller than a tilled soil patch" -- see that
+constant's own doc comment). Built red-first end to end, merged to
+`main`.
+
 **Roster redesigned, then real illustrated art wired end to end
 (`feature/mushroom-real-art`).** The originally-designed roster (Fly
 Agaric/Death Cap/Chanterelle/Porcini/Puffball) was never actually
