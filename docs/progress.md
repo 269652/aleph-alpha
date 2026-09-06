@@ -9642,6 +9642,46 @@ baseline floor all at once; autumn's own ramp ceiling stays at 1.0
 (certainty) — reached sooner, not made "more certain". Full leaf/trickle
 test battery in `test_earth_chunk_manager.gd` green.
 
+✅ **Follow-up (2026-09-06): a leaf/blossom that lands on a river now
+flows, wobbles from turbulence, and barely feels the wind** (see
+`concept/leaf_litter.md`'s own "Floating on water" section for the full
+mechanism). Reported directly: "when things land on a river like a leaf
+or blossom then they should flow with the water at the same speed they
+should also be influenced by turbulance (fish moving; waders).. they
+should be less affected by wind (adhesion)". New pure module
+`LeafWaterDrift` (`src/world/leaf_water_drift.gd`): the water's own
+current is the dominant (and, with wind/turbulence both zero, only) term,
+converted through `RiverFlowShader.surface_px_per_s` — the same conversion
+`ripple_center` already uses, so a floating leaf moves in visual lockstep
+with the current-line art under it rather than at an independently-tuned
+speed. Turbulence reuses `RiverFlowShader.obstacle_lateral_shift_px`
+directly (the exact math the current-line art already bends around a
+wading player/creature/fish), fed the same wader-position list
+`world.gd` already computes once a frame for `set_river_flow_waders` — no
+second wader gather, and "fish moving" needs no separate mechanism since a
+fish is already a member of that list by this codebase's own existing
+definition. Wind is damped to `WATER_WIND_DAMPING` (0.2) of the local
+current's own speed and applied continuously rather than through the
+existing discrete ground-wind-relocation roll, which now excludes a
+floating leaf outright (`LeafLitterField.advance`'s own
+`if leaf.on_water: continue`) — a discrete hop every couple of seconds
+would visibly fight a smooth continuous glide, so "less affected by wind"
+is exclusion from that mechanism plus a heavily damped continuous one, not
+a smaller version of the same hop.
+
+`LeafLitterField` gains an injected current probe
+(`set_current_probe`) and a per-leaf `on_water` flag, re-derived only when
+a leaf's position is actually set (`add_leaf`/`relocate_leaf_near`/
+`try_disperse_near`/the wind-roll) rather than every frame for litter that
+hasn't moved — the overwhelming majority of all litter at any moment never
+costs a single current-probe call. `EarthChunkManager` wires its own
+`river_current_at_global` in once, at chunk-field creation (river
+hydraulics need no periodic refresh the way the day's ambient wind does).
+No probe set — every world/test that predates this change — means exactly
+the old behaviour: no leaf is ever on_water. 12 new tests in
+`test_leaf_litter_field.gd` (59/59 total, all 45 pre-existing ones
+untouched) plus 14 in the new `test_leaf_water_drift.gd`.
+
 <details>
 <summary>First pass (superseded above), kept for history</summary>
 
