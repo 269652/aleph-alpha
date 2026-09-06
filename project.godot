@@ -30,6 +30,7 @@ ConsoleFocus="*res://src/ui/console_focus_bus.gd"
 SelfIntegrity="*res://src/licensing/self_integrity.gd"
 LicenseGate="*res://src/licensing/license_gate.gd"
 CompanionServer="*res://src/companion_server/companion_server.gd"
+ScreenshotCapture="*res://src/ui/screenshot_capture.gd"
 
 [display]
 

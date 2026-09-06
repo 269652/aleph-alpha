@@ -12975,3 +12975,22 @@ never actually true for it the way it is for Snare/Trap, which stay cut.
 of the same capture-DSL pass) and is registered here as a small, isolated
 port — just the `ItemCatalog` entry + icon, not the whole DSL — since this
 branch forked before that work landed on `main`.
+
+### Screenshots (`concept/screenshots.md`)
+
+✅ **F12, anywhere, saves `./screenshots/DD-MM-YY HH-MM-SS.webp`.**
+`ScreenshotCapture` (`src/ui/screenshot_capture.gd`) is its own autoload —
+deliberately not routed through `Keybindings`/`World._apply_keybindings`,
+which only ever registers its `InputMap` actions once a game session
+starts — so the key already works on the character-creation diorama and
+every other pre-game screen, not just in-game. `ScreenshotNaming`
+(`src/ui/screenshot_naming.gd`) is the pure filename/collision-suffix half
+(`" (2)"`, `" (3)"`, ... rather than a silent overwrite); the glue half
+reads `get_viewport().get_texture().get_image()` and calls
+`Image.save_webp()`, both swapped for injected `Callable`s in tests so the
+real viewport/clock are never touched outside the one explicitly
+GPU-gated smoke test. Screenshots land in the same top-level
+`screenshots/` folder the README's own hand-picked PNGs already live in
+(no new subfolder). No on-screen "saved" confirmation toast yet
+(`screenshot_saved`/`screenshot_failed` signals exist, unwired), no
+rebindable key, no format choice — see the concept doc's Non-goals.
