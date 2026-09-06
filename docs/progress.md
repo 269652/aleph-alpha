@@ -13786,6 +13786,29 @@ colony, no stockpile, no carrying-capacity feedback — the same deferred
 "litter input → detritivore biomass" follow-up the worm section already
 names).
 
+✅ **Ants generalized into the crush pass too (2026-09-06)** — reported
+live: "ants are also not crushed when a player is walking over them", a
+real gap: `AntForagerMarker` (the visible walking ant) was the one
+victim shape left out even after worm/caterpillar/millipede all joined
+the same day. New `EarthChunkManager.crush_ants_near` is the fourth
+`CrushMechanic`-driven detection side, but does NOT share
+`_crush_markers_near`'s own body the way `crush_millipedes_near` shares
+`crush_caterpillars_near`'s: an ant forager is tracked in
+`_active_ant_foragers`, keyed by each MOUND's own global tile rather
+than by `chunk_coord` (a single chunk can hold up to `AntColony.
+MAX_MOUNDS` mounds, each its own key), so `crush_ants_near` scans every
+currently-active forager across every loaded mound directly instead —
+still a small, already-capped-per-mound number
+(`active_forager_cap_at`'s own ceiling). Wired into `World._client_
+process` identically to the other three (player's own step, every
+`CreatureMarker`'s own mass-derived momentum) and charges the same
+`Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY`. 5 new tests in `test_earth_
+chunk_manager.gd` (including one confirming a step on one mound's ant
+never reaches a different mound's, since the two now live under
+different dictionary keys), plus `test_world_crush_wiring.gd`'s existing
+source-contract tests all extended to cover the fourth call site (16/16
+green). Full writeup: [soil_fauna.md](concept/soil_fauna.md#generalized-to-ants-too-2026-09-06).
+
 ### Material DSL: fruit composition → crush → nutrients (`concept/material_dsl.md`, new this pass)
 
 Requested directly: describe a material (e.g. an apple) as percentages of

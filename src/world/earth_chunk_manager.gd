@@ -7052,6 +7052,36 @@ func crush_millipedes_near(pixel_position: Vector2, momentum_kg_m_s: float) -> b
 	return _crush_markers_near(_millipede_markers, pixel_position, momentum_kg_m_s)
 
 
+## The ant-shaped sibling of crush_caterpillars_near/crush_millipedes_near
+## (see docs/concept/soil_fauna.md "Generalized to ants too" -- reported
+## live: "ants are also not crushed when a player is walking over them").
+## An ant forager is the identical SHAPE of victim a caterpillar/millipede
+## already is (a real, independently-positioned Node2D), but tracked in
+## _active_ant_foragers, keyed by each MOUND's own global tile rather than
+## by chunk_coord the way _caterpillar_markers/_millipede_markers are (a
+## single chunk can hold up to AntColony.MAX_MOUNDS mounds, each its own
+## key -- see _dispatch_forager) -- so this cannot share
+## _crush_markers_near's own chunk-keyed lookup directly. Scans every
+## currently-active forager across every loaded mound instead (a small,
+## already-capped-per-mound number -- active_forager_cap_at tops out at
+## AntColony.MAX_CONCURRENT_FORAGERS -- the same bounded scale every other
+## per-frame crush check already works at). Returns whether anything was
+## actually crushed.
+func crush_ants_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
+	if not CrushMechanic.is_crushed_by(momentum_kg_m_s):
+		return false
+	var tile := _world_tile_for_pixel(pixel_position)
+	var crushed_any := false
+	for global_tile in _active_ant_foragers.keys():
+		var markers: Array = _active_ant_foragers[global_tile]
+		for marker in markers.duplicate():
+			if _world_tile_for_pixel(marker.position) == tile:
+				markers.erase(marker)
+				marker.queue_free()
+				crushed_any = true
+	return crushed_any
+
+
 ## Shared body for crush_caterpillars_near/crush_millipedes_near -- both
 ## victims are a real Node2D tracked in a chunk_coord -> Array dictionary,
 ## crushed identically (see either caller's own doc comment for the

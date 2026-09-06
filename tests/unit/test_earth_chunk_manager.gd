@@ -4267,6 +4267,85 @@ func test_crushing_millipedes_where_there_are_none_fails_rather_than_erroring():
 	assert_false(manager.crush_millipedes_near(Vector2(-9000000, -9000000), 1000000.0))
 
 
+# -- crushed underfoot, the ant side (see docs/concept/soil_fauna.md
+# "Generalized to ants too") -- reported live: "ants are also not crushed
+# when a player is walking over them". Same CrushMechanic.is_crushed_by
+# physics and "insufficient momentum is a no-op" contract as the
+# caterpillar/millipede sections above, but an ant forager is tracked in
+# _active_ant_foragers, keyed by each MOUND's own global tile rather than
+# by chunk_coord the way _caterpillar_markers/_millipede_markers are (a
+# single chunk can hold up to AntColony.MAX_MOUNDS mounds, each its own
+# key) -- so this cannot reuse _crush_markers_near's own chunk-keyed
+# lookup directly, and gets its own dedicated crush_ants_near instead. ---
+
+func _ant_forager_at(chunk_coord: Vector2i, mound_cell: Vector2i, cell: Vector2i) -> AntForagerMarker:
+	var forager := AntForagerMarker.new()
+	forager.position = _pixel_for(chunk_coord, cell)
+	add_child_autofree(forager)
+	var global_tile: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + mound_cell
+	manager._active_ant_foragers[global_tile] = [forager]
+	return forager
+
+
+func test_crushing_an_ant_with_enough_momentum_removes_it_from_the_world():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var forager := _ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	var global_tile: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(2, 2)
+	assert_true(
+		manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"a horse-scale step on an ant should crush it"
+	)
+	assert_true(forager.is_queued_for_deletion(), "the ant itself is gone")
+	assert_false(
+		manager._active_ant_foragers[global_tile].has(forager),
+		"and dropped from tracking so its own mound's dispatch cap never counts a corpse"
+	)
+
+
+func test_crushing_an_ant_with_too_little_momentum_leaves_it_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var forager := _ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_false(
+		manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 0.01),
+		"a mouse-scale step should not crush an ant"
+	)
+	assert_false(forager.is_queued_for_deletion(), "the ant should still be there")
+
+
+func test_crushing_an_ant_on_a_different_tile_leaves_it_alone():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var forager := _ant_forager_at(chunk_coord, Vector2i(2, 2), Vector2i(5, 5))
+	var elsewhere := _pixel_for(chunk_coord, Vector2i(20, 20))
+	assert_false(
+		manager.crush_ants_near(elsewhere, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"stepping on a different tile should not reach an ant standing elsewhere"
+	)
+	assert_false(forager.is_queued_for_deletion())
+
+
+func test_crushing_ants_where_there_are_none_fails_rather_than_erroring():
+	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
+	assert_false(manager.crush_ants_near(Vector2(-9000000, -9000000), 1000000.0))
+
+
+## Two different mounds in the same chunk each have their own key in
+## _active_ant_foragers -- a real step must still reach an ant belonging
+## to EITHER mound, not just whichever one happens to be scanned first.
+func test_crushing_an_ant_reaches_either_mounds_forager_in_the_same_chunk():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(9, 9)
+	var forager_a := _ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var forager_b := _ant_forager_at(chunk_coord, Vector2i(6, 6), Vector2i(15, 15))
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	assert_true(forager_a.is_queued_for_deletion())
+	assert_false(forager_b.is_queued_for_deletion(), "a step on one mound's ant must not reach the other mound's")
+
+
 # -- aquatic vegetation: a real food source for fish (see docs/concept/
 # aquatic_foraging.md). _load_chunk, not the slow real update() (see this
 # file's own CONTRIBUTING.md note) -- Berlin sits on the Spree's own

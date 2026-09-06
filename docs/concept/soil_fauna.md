@@ -2262,3 +2262,46 @@ constant under a now-inaccurate name with no cross-reference.
   independently, with no colony, no stockpile, no carrying-capacity
   feedback. A real "litter input -> detritivore biomass" model remains the
   same deferred follow-up this doc's own worm section already names.
+
+### Generalized to ants too (2026-09-06)
+
+Reported live: "ants are also not crushed when a player is walking over
+them" — a real, confirmed gap: `AntForagerMarker`, the visible walking
+ant every real forage/scout/resolver trip spawns (see "Ants at half
+their old size, and finally hoverable" above), was the one victim shape
+`CrushMechanic`'s per-frame pass never reached at all, even after
+worm/caterpillar/millipede all got it the same day.
+
+**`EarthChunkManager.crush_ants_near(pixel_position, momentum_kg_m_s) ->
+bool`** is the fourth detection side — same `CrushMechanic.is_crushed_by`
+physics, same "insufficient momentum is a no-op" contract every other
+crush call already has. It does NOT share `_crush_markers_near`'s own
+body the way `crush_millipedes_near` shares `crush_caterpillars_near`'s:
+that helper scans one `chunk_coord -> Array` dictionary, but an ant
+forager is tracked in `_active_ant_foragers`, keyed by each MOUND's own
+GLOBAL TILE instead (a single chunk can hold up to `AntColony.MAX_MOUNDS`
+mounds, each its own key — see `_dispatch_forager`) — so `crush_ants_near`
+scans every currently-active forager across every loaded mound directly,
+a small, already-capped-per-mound number (`active_forager_cap_at` tops
+out at `AntColony.MAX_CONCURRENT_FORAGERS`), rather than trying to force
+a chunk-keyed lookup onto a mound-keyed dictionary. Wired identically to
+the other three calls, in the same `World._client_process` block: the
+player's own `_PLAYER_STEP_MOMENTUM_KG_M_S`, and every `CreatureMarker`'s
+own `CreatureMass.mass_kg_for(species)`-derived momentum.
+
+**Also feeds Karma** (see `docs/concept/karma_and_luck.md`): a crushed
+ant charges the same `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` a crushed
+worm/caterpillar/millipede already does — the identical "a small,
+harmless invertebrate died underfoot" event, and `karma_and_luck.md`'s
+own event table is updated to say so.
+
+**What this does NOT include**: no corpse/recovery state (a crushed ant
+simply `queue_free()`s, same "just disappear" outcome every other crush
+victim already has — no timed death animation either, same deferred
+follow-up the millipede section above names). No effect on the mound's
+own population/food economy beyond the one forager actually lost — a
+crushed ant is not distinguished from one that simply completed its
+trip as far as `AntColony.record_forage_result` is concerned (it is
+never called at all for a crushed forager, the same "silently
+disappeared mid-trip" outcome a crushed caterpillar/millipede already
+has relative to whatever they were doing).
