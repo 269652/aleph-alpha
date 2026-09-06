@@ -1807,11 +1807,19 @@ then every `CreatureMarker`'s own species-derived momentum).
   "gone, not transformed into a different item" outcome a crushed worm/
   caterpillar already gets; nothing in this project models a separate
   cracked-kernel item, and inventing one was out of scope for this pass.
-- **No Karma penalty for either** — a deliberate divergence from the
-  worm/caterpillar wiring. Stepping on a worm or caterpillar ends an
-  animal's life; a mushroom is a fungus and a walnut a seed, neither an
-  animal, so `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` (its very name
-  scoped to those two) simply never applies to either new call.
+- **No Karma penalty for either, originally** — a deliberate divergence
+  from the worm/caterpillar wiring. Stepping on a worm or caterpillar
+  ends an animal's life; a mushroom is a fungus and a walnut a seed,
+  neither an animal, so `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` simply
+  never applied to either new call.
+  **Reversed for mushrooms only, same day:** asked directly, as part of
+  "instant karma feedback" — a mushroom underfoot should cost Karma too.
+  `crush_mushroom_at`'s bool return now feeds `Karma.
+  WORM_OR_CATERPILLAR_CRUSH_PENALTY` the identical way every animal
+  crush call does (see `docs/concept/mushrooms.md`'s own "Crushed
+  underfoot" section and `karma_and_luck.md`'s event table). Walnuts are
+  unaffected — a seed still is not a fungus or an animal, so
+  `crush_walnut_near` stays exempt.
 - **Flowers are excluded by construction, not a new check** — flowers are
   deliberately not `Node2D`s in any group at all (a bare `Sprite2D` per
   cell, no script -- see `EarthChunkManager._sync_flower_sprites`'s own

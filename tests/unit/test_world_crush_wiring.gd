@@ -169,8 +169,8 @@ func test_every_crush_call_site_applies_the_karma_penalty():
 	var body := _client_process_body()
 	assert_eq(
 		_count_occurrences(body, "apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)"),
-		10,
-		"expected the penalty applied at all 10 crush call sites (worm+caterpillar+millipede+ant+decomposer, player+creature loop)"
+		12,
+		"expected the penalty applied at all 12 crush call sites (worm+caterpillar+millipede+ant+decomposer+mushroom, player+creature loop)"
 	)
 
 
@@ -179,7 +179,7 @@ func test_every_crush_call_site_applies_the_karma_penalty():
 ## regardless of whether anything was actually crushed.
 func test_the_karma_penalty_is_only_charged_when_a_crush_actually_happens():
 	var body := _client_process_body()
-	for call_name in ["crush_worm_at(", "crush_caterpillars_near(", "crush_millipedes_near(", "crush_ants_near(", "crush_decomposers_near("]:
+	for call_name in ["crush_worm_at(", "crush_caterpillars_near(", "crush_millipedes_near(", "crush_ants_near(", "crush_decomposers_near(", "crush_mushroom_at("]:
 		var search_from := 0
 		var checked := 0
 		while true:
@@ -199,12 +199,16 @@ func test_the_karma_penalty_is_only_charged_when_a_crush_actually_happens():
 # Reported live: "A mushroom is a physical entity... when you walk over
 # one it should be crushed because of the player weight." Mirrors the
 # worm/caterpillar wiring's exact shape (same momentum per stepper, same
-# player-then-creature-loop structure) but deliberately does NOT feed
-# Karma the way crush_worm_at/crush_caterpillars_near do -- a mushroom is
-# a fungus, not an animal, so the existing
-# test_every_crush_call_site_applies_the_karma_penalty's count staying at
-# 4 (not 6) is the real regression guard for that; the test below pins it
-# explicitly rather than relying only on that count not changing.
+# player-then-creature-loop structure).
+#
+# Originally shipped WITHOUT a Karma penalty -- "a mushroom is a fungus,
+# not an animal" -- but asked directly, as part of "instant karma
+# feedback": a mushroom should cost Karma the same as a bug/ant/
+# caterpillar. Reversed here (see docs/concept/mushrooms.md's own Status
+# note on the reversal): crush_mushroom_at's bool return now feeds Karma
+# exactly like every other crush call above, so
+# test_every_crush_call_site_applies_the_karma_penalty's count includes
+# it too.
 
 func test_crush_mushroom_at_is_called_for_both_the_player_and_creatures():
 	var body := _client_process_body()
@@ -223,10 +227,12 @@ func test_the_creature_mushroom_crush_call_is_inside_a_creaturemarker_group_loop
 	assert_lt(group_loop_at, mushroom_crush_at, "the creature mushroom-crush call must come after entering the group loop")
 
 
-## The deliberate divergence from the worm/caterpillar shape: neither
-## crush_mushroom_at call site may be wrapped in an `if ...: apply_karma_
-## delta(...)` guard -- crushing a mushroom costs no Karma.
-func test_crushing_a_mushroom_never_applies_a_karma_penalty():
+## The reversal from the mushroom shape's original divergence: every
+## crush_mushroom_at call site must now be wrapped in an `if ...: apply_
+## karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)` guard, the same
+## as worm/caterpillar/millipede/ant/decomposer -- crushing a mushroom
+## costs Karma too now.
+func test_crushing_a_mushroom_now_costs_karma_like_any_other_small_creature():
 	var body := _client_process_body()
 	var search_from := 0
 	var checked := 0
@@ -235,16 +241,8 @@ func test_crushing_a_mushroom_never_applies_a_karma_penalty():
 		if at == -1:
 			break
 		var line_start := body.rfind("\n", at) + 1
-		var line_end := body.find("\n", at)
-		var line := body.substr(line_start, line_end - line_start).strip_edges()
-		assert_false(
-			line.begins_with("if "),
-			"crush_mushroom_at should be a bare call, not gated behind an if (found: %s)" % line
-		)
-		assert_false(
-			body.substr(at, line_end - at).contains("apply_karma_delta"),
-			"crush_mushroom_at's own line should never apply a Karma penalty"
-		)
+		var line := body.substr(line_start, at - line_start).strip_edges()
+		assert_true(line.begins_with("if "), "crush_mushroom_at call must be an if's condition, found: %s" % line)
 		checked += 1
 		search_from = at + 1
 	assert_eq(checked, 2, "should still have exactly 2 call sites")

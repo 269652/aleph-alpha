@@ -13826,6 +13826,21 @@ CRUSH_PENALTY`. 6 new tests in `test_earth_chunk_manager.gd`, plus
 to cover the fifth call site (17/17 green). Full writeup:
 [soil_fauna.md](concept/soil_fauna.md#generalized-to-bugs-too-2026-09-06).
 
+✅ **Mushroom crush now costs Karma too (reversal, 2026-09-06)** — asked
+directly, as part of "instant karma feedback": a mushroom underfoot
+should cost `-1 Karma` the same as a bug/ant/caterpillar. Originally
+shipped exempt ("a mushroom is a fungus, not an animal" — see
+`concept/soil_fauna.md`'s "Generalized past animals: mushrooms and
+walnuts"); both `crush_mushroom_at` call sites in `World._client_process`
+are now wrapped in the identical `if ...: apply_karma_delta(-Karma.
+WORM_OR_CATERPILLAR_CRUSH_PENALTY)` guard every other crush call already
+has. A walnut (a plant seed, not a fungus) is unaffected and stays
+exempt. `test_world_crush_wiring.gd`'s source-contract test for the old
+"never applies Karma" behavior is replaced with its opposite; the
+"every crush call site applies the penalty" count moves from 10 to 12
+(17/17 green). `concept/mushrooms.md` and `concept/karma_and_luck.md`
+updated to match.
+
 ### Material DSL: fruit composition → crush → nutrients (`concept/material_dsl.md`, new this pass)
 
 Requested directly: describe a material (e.g. an apple) as percentages of
