@@ -291,20 +291,26 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 ## from it in main_menu's diorama view). A tree sprite is anchored at the
 ## trunk foot and drawn upward from there (TreeRenderer._build_tree_node sets
 ## sprite.offset.y = -ProceduralTreeSprite.SIZE.y * 0.5 at
-## ProceduralTreeSprite.SPRITE_SCALE -- trees' own multiplier, not
-## ArtResolution's shared one), so it occupies [x - w/2, x + w/2] x
-## [y - h, y]. Derived from the tree art's OWN world size, never an eyeballed
-## margin -- if the art ever changes size, this follows it. Previously
+## ProceduralTreeSprite.SPRITE_SCALE * ProceduralTreeSprite.VISUAL_SCALE --
+## trees' own multipliers, not ArtResolution's shared one), so it occupies
+## [x - w/2, x + w/2] x [y - h, y] where w/h are WORLD_SIZE times
+## VISUAL_SCALE, not WORLD_SIZE alone (see that constant's own doc comment:
+## the sprite draws bigger than its world footprint on purpose). Derived
+## from the tree art's OWN drawn size, never an eyeballed margin -- if the
+## art or its visual scale ever change, this follows. Previously
 ## unconstrained, which cut canopies off the top of the frame and trunks off
-## its sides (reported live: trees clipped by the frame).
+## its sides (reported live: trees clipped by the frame) -- and previously
+## under-constrained again the moment VISUAL_SCALE made the sprite draw
+## bigger than WORLD_SIZE without this margin following it.
 static func tree_bounds(footprint: Vector2) -> Rect2:
-	var half_width := float(ProceduralTreeSprite.WORLD_SIZE.x) * 0.5
-	var height := float(ProceduralTreeSprite.WORLD_SIZE.y)
+	var drawn_width := float(ProceduralTreeSprite.WORLD_SIZE.x) * ProceduralTreeSprite.VISUAL_SCALE
+	var drawn_height := float(ProceduralTreeSprite.WORLD_SIZE.y) * ProceduralTreeSprite.VISUAL_SCALE
+	var half_width := drawn_width * 0.5
 	return Rect2(
-		Vector2(half_width, height),
+		Vector2(half_width, drawn_height),
 		Vector2(
-			maxf(footprint.x - float(ProceduralTreeSprite.WORLD_SIZE.x), 0.0),
-			maxf(footprint.y - height, 0.0)
+			maxf(footprint.x - drawn_width, 0.0),
+			maxf(footprint.y - drawn_height, 0.0)
 		)
 	)
 

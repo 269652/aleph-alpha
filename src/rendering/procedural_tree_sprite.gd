@@ -109,6 +109,50 @@ const DETAIL_MULTIPLIER := 12
 ## SPRITE_SCALE, since trees no longer share that class's multiplier.
 const SPRITE_SCALE := 1.0 / float(DETAIL_MULTIPLIER)
 
+## ## The sprite draws bigger than WORLD_SIZE, on purpose
+##
+## Reported directly, a live gameplay screenshot next to the illustrated
+## source sheet open at its own native resolution: "the cherry tree has
+## significantly less pixels in game than the sprite... can you make trees
+## bigger than their sprite? Or exactly as big." (see docs/concept/
+## art_resolution.md, Phase 3's fourth follow-up, for the full history).
+##
+## SPRITE_SCALE alone draws a tree at EXACTLY WORLD_SIZE -- it is defined
+## as 1.0/DETAIL_MULTIPLIER, so `SIZE (== WORLD_SIZE * DETAIL_MULTIPLIER) *
+## SPRITE_SCALE` always collapses straight back to WORLD_SIZE regardless of
+## DETAIL_MULTIPLIER. Making a tree's ART more detailed can never, by
+## itself, make it draw bigger on screen -- only VISUAL_SCALE (or
+## WORLD_SIZE itself) can do that; TreeRenderer._build_tree_node multiplies
+## both together into the sprite's actual `scale`.
+##
+## Lives here (not on TreeRenderer, where WORLD_SIZE's collision/spacing
+## siblings live) so pure placement math that already depends on this file
+## for WORLD_SIZE -- CharacterPreviewLayout.tree_bounds, specifically --
+## can read the real drawn size too without pulling in TreeRenderer's own
+## ChoppableTree/WindSway/DropShadow dependency chain, which that file's
+## own doc comment says it was written to stay free of.
+##
+## Taking "exactly as big as their sprite" fully literally
+## (`screen_pixels_per_art_pixel == 1.0` against the current, DETAIL_
+## MULTIPLIER=12 canvas) means VISUAL_SCALE = 3.0 -- checked directly with
+## a real 73-tree forest render (tools/probe_native_scale_forest.gd, kept
+## for the next time this ratio needs re-checking): canopies filled the
+## frame edge to edge, individual trees barely distinguishable. Bigger than
+## the ALREADY-reverted WORLD_SIZE 40x56 attempt's own 1.6x bump (Phase 3
+## above), and this is a materially different lever from that one --
+## VISUAL_SCALE touches ONLY the drawn sprite, never trunk_world_width()
+## (so the collision box) or TreePlacement's stand-spacing, both of which
+## the WORLD_SIZE attempt moved too -- but it can still crowd canopies
+## VISUALLY since they cover more screen area either way, which is why it
+## was checked with a render rather than shipped on arithmetic alone.
+##
+## Picked from that same real-forest comparison, rendered at 1.0x/1.3x/
+## 1.6x/2.0x/3.0x and handed back rather than guessed: 1.3x read as a
+## clear, safe crispness win with the forest still legible; 1.6x (right at
+## the previously-reverted ratio) still looked acceptable but was flagged
+## as the risky edge; 2.0x was visibly crowding.
+const VISUAL_SCALE := 1.3
+
 ## The ART canvas, DETAIL_MULTIPLIER times the world footprint (see
 ## docs/concept/art_resolution.md) -- TreeRenderer draws it at
 ## SPRITE_SCALE (this file's own, not ArtResolution's) so the tree gains

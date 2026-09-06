@@ -320,8 +320,11 @@ func test_kept_grass_cells_clump_together():
 ## top edge and trunks past its sides (reported live: trees clipped by the
 ## frame).
 func test_tree_positions_leave_room_for_the_trees_own_drawn_body():
-	var half_width := float(ProceduralTreeSprite.WORLD_SIZE.x) * 0.5
-	var height := float(ProceduralTreeSprite.WORLD_SIZE.y)
+	# * VISUAL_SCALE: the sprite now draws bigger than WORLD_SIZE on purpose
+	# (see that constant's own doc comment) -- the clipping margin must grow
+	# with it or this reintroduces the exact bug this test was written for.
+	var half_width := float(ProceduralTreeSprite.WORLD_SIZE.x) * 0.5 * ProceduralTreeSprite.VISUAL_SCALE
+	var height := float(ProceduralTreeSprite.WORLD_SIZE.y) * ProceduralTreeSprite.VISUAL_SCALE
 	for seed_value in 60:
 		var result := CharacterPreviewLayout.generate(seed_value, footprint)
 		for tree_position in result.tree_positions:
@@ -331,12 +334,16 @@ func test_tree_positions_leave_room_for_the_trees_own_drawn_body():
 			assert_lte(tree_position.y, footprint.y, "seed %d: tree %s clipped at the bottom" % [seed_value, tree_position])
 
 
-## The inset band is derived from the tree art's own world size, never an
-## eyeballed margin -- if the art ever changes size the placement follows it.
+## The inset band is derived from the tree art's own DRAWN size (world size
+## times VISUAL_SCALE -- see that constant's own doc comment), never an
+## eyeballed margin -- if the art or its visual scale ever change, the
+## placement follows.
 func test_tree_bounds_are_derived_from_the_tree_arts_own_size():
 	var bounds := CharacterPreviewLayout.tree_bounds(footprint)
-	assert_eq(bounds.position, Vector2(float(ProceduralTreeSprite.WORLD_SIZE.x) * 0.5, float(ProceduralTreeSprite.WORLD_SIZE.y)))
-	assert_eq(bounds.end, Vector2(footprint.x - float(ProceduralTreeSprite.WORLD_SIZE.x) * 0.5, footprint.y))
+	var drawn_width := float(ProceduralTreeSprite.WORLD_SIZE.x) * ProceduralTreeSprite.VISUAL_SCALE
+	var drawn_height := float(ProceduralTreeSprite.WORLD_SIZE.y) * ProceduralTreeSprite.VISUAL_SCALE
+	assert_eq(bounds.position, Vector2(drawn_width * 0.5, drawn_height))
+	assert_eq(bounds.end, Vector2(footprint.x - drawn_width * 0.5, footprint.y))
 
 
 func test_grass_positions_avoid_the_pond():

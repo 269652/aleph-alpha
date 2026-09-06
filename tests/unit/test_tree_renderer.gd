@@ -267,9 +267,25 @@ func test_tree_art_is_authored_at_its_own_tree_specific_detail_multiplier():
 	)
 
 
-## The sprite must be scaled back down, or the oversized art would render a
-## tree DETAIL_MULTIPLIER times its world footprint.
-func test_tree_sprite_is_scaled_back_to_its_world_footprint():
+## Reported directly, a live gameplay screenshot next to the source sheet
+## open at its own native resolution: "the cherry tree has significantly
+## less pixels in game than the sprite... can you make trees bigger than
+## their sprite? Or exactly as big." Confirmed (see docs/concept/
+## art_resolution.md's Phase 3, fourth follow-up) that "exactly as big"
+## (screen_pixels_per_art_pixel == 1.0) makes a real forest read as an
+## undifferentiated, barely-walkable mass -- a bigger jump than the
+## already-reverted WORLD_SIZE 40x56 attempt. VISUAL_SCALE(1.3) is the
+## picked middle ground, chosen from a real rendered comparison
+## (tools/probe_native_scale_forest.gd), not eyeballed.
+func test_tree_visual_scale_is_the_pinned_tuned_constant():
+	assert_almost_eq(ProceduralTreeSprite.VISUAL_SCALE, 1.3, 0.0001)
+
+
+## The sprite is scaled back down from its oversized DETAIL_MULTIPLIER-authored
+## art, THEN scaled back UP by VISUAL_SCALE -- so it draws bigger than the
+## tree's own world/collision footprint (TreeRenderer.TREE_SIZE) on purpose,
+## not by accident of the two multipliers only partly cancelling.
+func test_tree_sprite_draws_bigger_than_its_own_world_footprint():
 	var chunk := _make_forest_chunk()
 	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
 	assert_gt(spawned.size(), 0, "fixture should spawn at least one tree")
@@ -277,12 +293,31 @@ func test_tree_sprite_is_scaled_back_to_its_world_footprint():
 	# is also a Sprite2D, so take the one TreeRenderer bound as the canopy.
 	var sprite: Sprite2D = spawned[0]._canopy_sprite
 	assert_not_null(sprite, "a tree should have a bound canopy sprite")
-	assert_almost_eq(sprite.scale.x, ProceduralTreeSprite.SPRITE_SCALE, 0.0001)
-	assert_almost_eq(sprite.scale.y, ProceduralTreeSprite.SPRITE_SCALE, 0.0001)
-	# The drawn size is the art size times the scale -- i.e. the world size.
+	var expected_scale := ProceduralTreeSprite.SPRITE_SCALE * ProceduralTreeSprite.VISUAL_SCALE
+	assert_almost_eq(sprite.scale.x, expected_scale, 0.0001)
+	assert_almost_eq(sprite.scale.y, expected_scale, 0.0001)
+	# The drawn size is the art size times the scale -- VISUAL_SCALE times the
+	# world size, not the world size itself (see the doc comment above for why
+	# that gap is now deliberate).
 	var drawn := Vector2(sprite.texture.get_size()) * sprite.scale
-	assert_almost_eq(drawn.x, TreeRenderer.TREE_SIZE.x, 0.01)
-	assert_almost_eq(drawn.y, TreeRenderer.TREE_SIZE.y, 0.01)
+	assert_almost_eq(drawn.x, TreeRenderer.TREE_SIZE.x * ProceduralTreeSprite.VISUAL_SCALE, 0.01)
+	assert_almost_eq(drawn.y, TreeRenderer.TREE_SIZE.y * ProceduralTreeSprite.VISUAL_SCALE, 0.01)
+
+
+## The GAMEPLAY footprint -- collision width, in particular -- must NOT move
+## just because the sprite now draws bigger, or this would silently reproduce
+## the reverted WORLD_SIZE 40x56 attempt's crowding (that one grew the
+## collision box along with the visual size). See trunk_world_width's own
+## doc comment: it is untouched by VISUAL_SCALE entirely.
+func test_visual_scale_does_not_change_the_trunk_collision_width():
+	var tree := renderer.spawn_tree_at(parent, Vector2(48, 48))
+	var shape: RectangleShape2D = _collision_of(tree).shape
+	assert_almost_eq(
+		shape.size.x,
+		ProceduralTreeSprite.trunk_world_width() * TreeRenderer.TRUNK_COLLISION_WIDTH_SCALE,
+		0.01,
+		"collision width must stay off the OLD (non-visual-scaled) trunk width"
+	)
 
 
 # -- saplings actually start small ------------------------------------------
