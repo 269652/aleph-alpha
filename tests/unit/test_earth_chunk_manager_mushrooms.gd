@@ -12,6 +12,8 @@ const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const WildMushroomPatch = preload("res://src/world/wild_mushroom_patch.gd")
+const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 var manager: EarthChunkManager
 var tile_map_layer: TileMapLayer
@@ -109,3 +111,50 @@ func test_force_mushroom_near_spawns_a_real_marker_right_away():
 func test_force_mushroom_near_returns_empty_string_for_an_unloaded_chunk():
 	var far_away_tile := Vector2i(999999, 999999)
 	assert_eq(manager.force_mushroom_near(far_away_tile), "")
+
+
+# -- crush_mushroom_at: the real entry point World._client_process calls --
+# (see docs/concept/soil_fauna.md "Crushed underfoot", CrushMechanic).
+# Mirrors crush_worm_at's exact three-step shape: resolve the chunk/sim
+# from a real pixel position, delegate to the sim, resync markers.
+
+func _pixel_position_for(tile: Vector2i) -> Vector2:
+	return Vector2((tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE)
+
+
+func test_crush_mushroom_at_removes_a_fruiting_marker():
+	manager._load_chunk(_berlin_chunk)
+	var sim: WildMushroomPatch = manager._mushroom_sims[_berlin_chunk]
+	var fruiting: Array = sim.get_fruiting_cells()
+	if fruiting.is_empty():
+		pass_test("precondition unmet (no fruiting site near Berlin this run) -- nothing to check")
+		return
+	var cell: Vector2i = fruiting[0]
+	var marker = manager._mushroom_markers[_berlin_chunk][cell]
+	var tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + cell
+
+	assert_true(
+		manager.crush_mushroom_at(_pixel_position_for(tile), CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	)
+
+	assert_false(sim.has_fruiting(cell))
+	assert_false(manager._mushroom_markers[_berlin_chunk].has(cell))
+	assert_true(marker.is_queued_for_deletion())
+
+
+func test_crush_mushroom_at_does_nothing_below_threshold():
+	manager._load_chunk(_berlin_chunk)
+	var sim: WildMushroomPatch = manager._mushroom_sims[_berlin_chunk]
+	var fruiting: Array = sim.get_fruiting_cells()
+	if fruiting.is_empty():
+		pass_test("precondition unmet (no fruiting site near Berlin this run) -- nothing to check")
+		return
+	var cell: Vector2i = fruiting[0]
+	var tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + cell
+
+	assert_false(manager.crush_mushroom_at(_pixel_position_for(tile), 0.01))
+	assert_true(sim.has_fruiting(cell))
+
+
+func test_crush_mushroom_at_returns_false_for_an_unloaded_chunk():
+	assert_false(manager.crush_mushroom_at(_pixel_position_for(Vector2i(999999, 999999)), 1000000.0))

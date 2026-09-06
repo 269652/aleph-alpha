@@ -97,6 +97,43 @@ func test_every_host_tree_is_a_real_tree_species():
 		assert_true(tree_species.IDS.has(host), "%s names an unknown host tree %s" % [id, host])
 
 
+# -- real biome eligibility (see docs/concept/mushrooms.md) ----------------
+#
+# Reported live: "forest mushrooms should spawn in forests and e.g.
+# champignons on pasture" -- the roster's real ecology is more specific
+# than the old "mycorrhizal -> forest only, any saprotroph -> forest OR
+# grassland" split let it read as. Champignon (Agaricus campestris, the
+# real "field mushroom") is specifically a pasture/grassland species,
+# genuinely uncommon in deep forest -- unlike Psilocybe/Parasol, both real
+# mixed-habitat species kept eligible in forest AND grassland.
+
+func test_mycorrhizal_species_only_allow_forest_and_rainforest():
+	for id in ["fly_agaric", "black_trumpet", "chanterelle"]:
+		assert_true(MushroomSpecies.allows_biome(id, "forest"), "%s should allow forest" % id)
+		assert_true(MushroomSpecies.allows_biome(id, "rainforest"), "%s should allow rainforest" % id)
+		assert_false(MushroomSpecies.allows_biome(id, "grassland"), "%s should not allow grassland" % id)
+		assert_false(MushroomSpecies.allows_biome(id, "desert"), "%s should not allow desert" % id)
+
+
+func test_champignon_is_pasture_only_not_forest():
+	assert_true(MushroomSpecies.allows_biome("champignon", "grassland"))
+	assert_false(MushroomSpecies.allows_biome("champignon", "forest"))
+	assert_false(MushroomSpecies.allows_biome("champignon", "rainforest"))
+
+
+func test_psylo_and_parasol_are_real_mixed_habitat_species():
+	for id in ["psylo", "parasol"]:
+		assert_true(MushroomSpecies.allows_biome(id, "forest"), "%s should allow forest" % id)
+		assert_true(MushroomSpecies.allows_biome(id, "rainforest"), "%s should allow rainforest" % id)
+		assert_true(MushroomSpecies.allows_biome(id, "grassland"), "%s should allow grassland" % id)
+
+
+func test_no_species_allows_a_biome_with_no_real_mushroom_ecology():
+	for id in MushroomSpecies.IDS:
+		assert_false(MushroomSpecies.allows_biome(id, "desert"), "%s should not allow desert" % id)
+		assert_false(MushroomSpecies.allows_biome(id, "mountain"), "%s should not allow mountain" % id)
+
+
 # -- item catalog (see docs/concept/mushrooms.md: picking one up always ---
 # resolves to its real species id, which must survive save/load per
 # item_identity.md -- an id ItemCatalog doesn't know evaporates on reload)

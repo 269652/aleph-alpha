@@ -17,17 +17,22 @@ extends Node2D
 ##
 ## Joins DroppedItem.GROUP_NAME (ordinary E/click pickup, the same
 ## duck-typed pick_up(picker) contract PickableSeed/LiftableStone already
-## use) and DroppedItem.FORAGEABLE_GROUP_NAME (a decomposer ant/bug can
-## find and eat one too -- real fungivory, distinct from the invisible
+## use), DroppedItem.FORAGEABLE_GROUP_NAME (a decomposer ant/bug can find
+## and eat one too -- real fungivory, distinct from the invisible
 ## mycelium's own decomposition of dead wood/litter this system doesn't
-## otherwise model). Picking one up resolves to the same real species item
-## id it was already showing.
+## otherwise model), and HoverTargetFinder.GROUP_NAME (reported live:
+## "they need hover tooltips" -- World._update_hover_tooltip only scans
+## THIS group, so get_display_name() alone was never enough on its own to
+## make a marker's name show on mouse hover; get_hover_actions() mirrors
+## DroppedItem/LiftableStone/WildCropMarker's own contract). Picking one
+## up resolves to the same real species item id it was already showing.
 
 const ProceduralMushroomSprite = preload("res://src/rendering/procedural_mushroom_sprite.gd")
 const IllustratedMushroomSprite = preload("res://src/rendering/illustrated_mushroom_sprite.gd")
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
 ## The real species this marker represents -- set before add_child, same
 ## per-instance-field convention as every other marker here (e.g.
@@ -55,9 +60,16 @@ static var _item_catalog := ItemCatalog.new()
 func _ready() -> void:
 	add_to_group(DroppedItem.GROUP_NAME)
 	add_to_group(DroppedItem.FORAGEABLE_GROUP_NAME)
+	add_to_group(HoverTargetFinder.GROUP_NAME)
 	_sprite = Sprite2D.new()
 	add_child(_sprite)
 	_rebuild_sprite()
+
+
+## For World's mouse-hover tooltip (see HoverTargetFinder) -- the same
+## "Pick Up" verb DroppedItem's own generic pickup uses.
+func get_hover_actions() -> Array:
+	return [{"verb": "Pick Up", "action": "pickup"}]
 
 
 ## Real illustrated art if this species has any (has-art-or-doesn't

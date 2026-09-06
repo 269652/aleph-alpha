@@ -9049,6 +9049,47 @@ constraint in favour of "smaller than a tilled soil patch" -- see that
 constant's own doc comment). Built red-first end to end, merged to
 `main`.
 
+**Real ecology + physicality pass, all reported live in one message
+(`feature/mushroom-physicality`):**
+- **Champignon is a real pasture species, not a forest one.** "forest
+  mushrooms should spawn in forests and e.g. champignons on pastry
+  [pasture]" -- the old rule was one blanket "any saprotroph allows
+  forest OR grassland"; `MushroomSpecies.allows_biome(species_id,
+  biome)` replaces it with real per-species eligibility (Champignon
+  grassland-only; Psilocybe/Parasol genuinely mixed-habitat, both).
+- **Hover tooltip, actually fixed.** "They need hover tooltips" --
+  confirmed root cause: `World._update_hover_tooltip` only ever scans
+  `HoverTargetFinder.GROUP_NAME`, which `MushroomMarker` never joined
+  (`get_display_name()` existing was never sufficient on its own, the
+  same gap every sibling marker doesn't have). Fixed: joins the group,
+  adds `get_hover_actions()`.
+- **Pickup investigated, no code defect found.** "picking them up
+  doesn't add it to the inventory which generally doesn't seem to
+  work" -- a thorough static read of the real E-key pickup path
+  (`Player.pickup_nearby` → `DroppedItem.GROUP_NAME` scan → `pick_up`
+  → `ItemCatalog.make`/`Inventory.add`) found it logically correct and
+  independent of `HoverTargetFinder` entirely (`PickableSeed` proves
+  this -- it picks up fine with neither the hover group nor
+  `get_hover_actions()`). Most likely explanation: zero on-screen
+  feedback existed before the hover fix above, so a working pickup was
+  indistinguishable from a broken one; a real secondary possibility is
+  a decomposer eating a mushroom via the same `FORAGEABLE_GROUP_NAME`
+  race just before the player reaches it.
+- **Crushed underfoot, generalized past animals.** "A mushroom is a
+  physical entity... when you walk over one it should be crushed...
+  Same for walnuts (crack open) except flowers" -- see
+  [soil_fauna.md's "Generalized past animals: mushrooms and
+  walnuts"](concept/soil_fauna.md#generalized-past-animals-mushrooms-and-walnuts-2026-09-06)
+  for the full mechanism. `WildMushroomPatch.crush`/
+  `EarthChunkManager.crush_mushroom_at` mirror the existing worm
+  mechanism exactly; `EarthChunkManager.crush_walnut_near` is a
+  genuinely new third detection shape (a walnut is a plain
+  `DroppedItem`, no per-chunk sim or marker at all). Neither applies a
+  Karma penalty (a fungus/seed, not an animal); flowers are excluded
+  by construction (never in any group at all), needing no new check.
+
+Built red-first end to end throughout, merged to `main`.
+
 **Roster redesigned, then real illustrated art wired end to end
 (`feature/mushroom-real-art`).** The originally-designed roster (Fly
 Agaric/Death Cap/Chanterelle/Porcini/Puffball) was never actually
