@@ -186,10 +186,9 @@ change to `PlayerSave`'s own schemaless-Dictionary format.
 
 - ✅ `Karma` module: event constants, `luck_for`.
 - ✅ `Player.karma` + `Player.luck()`, persisted.
-- ✅ `Taming.break_free_chance` reads `Player.luck()`.
+- ✅ `Taming.break_free_chance` and `OreYield.yields` read `Player.luck()`.
 - ⬜ Worm/caterpillar crush → Karma, wired into `World`'s existing crush
   pass.
-- ⬜ `OreYield.yields` reads `Player.luck()`.
 - ⬜ `QuestLog`: accept/abandon/derived-fulfilment, wired to Karma.
 - ⬜ Character Sheet display of Karma/Luck.
 - ⬜ Player-facing accept/abandon interaction (dialogue or otherwise).
