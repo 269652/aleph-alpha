@@ -78,6 +78,7 @@ const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const Why = preload("res://src/emergence/why.gd")
 const SimulationMetrics = preload("res://src/emergence/simulation_metrics.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
+const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 const DragSlot = preload("res://src/ui/drag_slot.gd")
 const TimeLapse = preload("res://src/gameplay/time_lapse.gd")
 const FruitSpoilage = preload("res://src/gameplay/fruit_spoilage.gd")
@@ -2738,7 +2739,7 @@ func _on_console_command(command: String, args: Array) -> void:
 				(
 					"Commands: /day [off]  /night [off]  /time <hh:mm>|off"
 					+ "  /season [name] [progress]  /weather [state|off]"
-					+ "  /ecotest [seconds_per_year|off]"
+					+ "  /mushroom  /ecotest [seconds_per_year|off]"
 					+ "  /history <entity_id>  /why <event_id>  /remember <entity_id>"
 					+ "  /household <entity_id>  /contract <entity_id>  /market <entity_id>"
 					+ "  /institution <entity_id>  /settlement <entity_id>  /boss <entity_id>"
@@ -2811,6 +2812,8 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_season_command(args)
 		"weather":
 			_handle_weather_command(args)
+		"mushroom":
+			_handle_mushroom_command(args)
 		"ecotest":
 			_handle_ecotest_command(args)
 		"spawn":
@@ -3138,6 +3141,27 @@ func _handle_weather_command(args: Array) -> void:
 	# hunting for a state that does not exist.
 	if wanted == "rain" or wanted == "storm":
 		_dev_console.log_line("In winter this falls as snow -- try /season winter with it.")
+
+
+## /mushroom -- forces the nearest real mushroom site in the local
+## player's own chunk to fruit right now, rather than waiting on the rare
+## natural flush roll (see WildMushroomPatch.force_fruit_near/
+## EarthChunkManager.force_mushroom_near). Reported live, after an
+## extended investigation that confirmed the mushroom system itself was
+## working correctly, just too rare/easy to miss to verify on demand:
+## "make a command that grows one near me".
+func _handle_mushroom_command(_args: Array) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		_dev_console.log_line("No local player.")
+		return
+	var species := _chunk_manager.force_mushroom_near(_tile_for_position(local_player.position))
+	if species.is_empty():
+		_dev_console.log_line(
+			"No mushroom site in this chunk -- try a forest or grassland tile."
+		)
+		return
+	_dev_console.log_line("A %s just fruited nearby." % MushroomSpecies.display_name_for(species))
 
 
 ## /day [off] and /night [off] -- pin the sky for the rest of the session,

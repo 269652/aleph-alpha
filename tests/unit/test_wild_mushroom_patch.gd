@@ -133,3 +133,59 @@ func test_zero_flush_drive_never_creates_new_fruiting():
 	for i in 5:
 		patch.advance(1.0, 0.0)
 	assert_eq(patch.get_fruiting_cells(), before)
+
+
+# -- force_fruit_near: a debug/dev-console way to see one on demand --------
+#
+# Reported live, after an extended investigation confirmed the fruiting sim
+# itself was working correctly: "make a command that grows one near me" --
+# real fruiting is a rare roll by design (SITE_CHANCE/FLUSH_CHANCE_PER_STEP
+# are both deliberately small), too slow to demo/verify against on demand.
+
+func test_force_fruit_near_makes_the_nearest_site_fruit_immediately():
+	var patch := WildMushroomPatch.new(5, 40, 40, _all_biome("forest", 40, 40))
+	var site: Vector2i = patch.get_site_cells()[0]
+	if patch.has_fruiting(site):
+		patch.pick(site)  # start from a clean not-fruiting site
+
+	var fruited := patch.force_fruit_near(site)
+
+	assert_eq(fruited, site)
+	assert_true(patch.has_fruiting(site))
+
+
+func test_force_fruit_near_returns_the_sentinel_when_the_patch_has_no_sites():
+	var patch := WildMushroomPatch.new(1, 20, 20, _all_biome("desert", 20, 20))
+	assert_eq(patch.force_fruit_near(Vector2i(5, 5)), Vector2i(-1, -1))
+
+
+func test_force_fruit_near_picks_the_actual_nearest_site_not_just_any_site():
+	var patch := WildMushroomPatch.new(5, 40, 40, _all_biome("forest", 40, 40))
+	var sites: Array = patch.get_site_cells()
+	assert_gt(sites.size(), 1, "precondition: more than one site to choose between")
+	# A point that is itself NOT a site, so "nearest" is a real question --
+	# querying an actual site trivially returns itself (distance 0).
+	var target := Vector2i(-1000, -1000)
+	var nearest: Vector2i = sites[0]
+	var nearest_distance: float = (nearest - target).length_squared()
+	for site in sites:
+		var distance: float = (site - target).length_squared()
+		if distance < nearest_distance:
+			nearest = site
+			nearest_distance = distance
+
+	var fruited := patch.force_fruit_near(target)
+
+	assert_eq(fruited, nearest)
+
+
+func test_force_fruit_near_overrides_recovery_so_a_just_picked_site_can_be_forced():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.pick(cell)
+	assert_false(patch.has_fruiting(cell), "precondition: freshly picked, now recovering")
+
+	var fruited := patch.force_fruit_near(cell)
+
+	assert_eq(fruited, cell)
+	assert_true(patch.has_fruiting(cell))

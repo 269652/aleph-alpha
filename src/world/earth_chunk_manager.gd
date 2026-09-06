@@ -5387,6 +5387,29 @@ func step_wild_mushrooms(delta_seconds: float) -> void:
 		)
 
 
+## Debug/dev-console entry point (see World._handle_mushroom_command):
+## forces the nearest real mushroom site in `global_tile`'s own chunk to
+## fruit immediately (see WildMushroomPatch.force_fruit_near for why) and
+## spawns its marker right away, rather than waiting for
+## step_wild_mushrooms's own throttled cadence. Returns the species that
+## fruited, or "" if that chunk isn't loaded or has no mushroom sites at
+## all (a genuinely site-less biome, e.g. desert).
+func force_mushroom_near(global_tile: Vector2i) -> String:
+	var chunk_coord := _chunk_coord_for_tile(global_tile)
+	if not _mushroom_sims.has(chunk_coord):
+		return ""
+	var sim: WildMushroomPatch = _mushroom_sims[chunk_coord]
+	var local_cell := global_tile - chunk_coord * CHUNK_SIZE
+	var fruited_cell := sim.force_fruit_near(local_cell)
+	if fruited_cell == Vector2i(-1, -1):
+		return ""
+	_mushroom_renderer.sync_markers(
+		_entities_parent, sim, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		_mushroom_markers[chunk_coord]
+	)
+	return sim.species_at(fruited_cell)
+
+
 ## Tills and plants `crop_id` at a global tile (see docs/concept/farming.md,
 ## FarmPlot, FarmPlotMarker, Player._plant_step) -- lazily creates the
 ## plot's marker the first time this tile is farmed. Same "chunk must be
