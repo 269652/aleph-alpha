@@ -28,24 +28,39 @@ const PopulationModel = preload("res://src/world/population_model.gd")
 ## eyeballed number" reason.
 const GROWTH_RATE_PER_DAY := 0.05
 
-## The FLOOR of the real range `AntColony` seeds a mound's initial
-## population across (see `AntColony._seed_initial_mounds`) -- an abstract
-## colony-strength number, not a literal worker headcount, the same
-## abstraction level fish_population/herbivore_population already sit at.
+## Every mound's population at the instant it is (re)seeded (see
+## `AntColony._seed_initial_mounds`) -- an abstract colony-strength
+## number, not a literal worker headcount, the same abstraction level
+## fish_population/herbivore_population already sit at.
 ##
-## Not every mound a player ever finds is freshly founded this instant --
+## 1.0 (a seeded-RANGE floor) -> flat 15.0 (2026-09-06, "start at 15 ants
+## at the beginning," taken literally rather than folded back into a
+## range): every mound is not freshly founded the instant a chunk loads --
 ## most have already existed in this simulated world for real, if
 ## unmodeled, time before being loaded for the first time, the same
 ## "map-generated content starts already established" convention every
 ## other patch-sim in this game already follows (TallGrass/WildCropPatch/
-## every tree all start mature, never as seedlings/saplings). A colony
-## seeded exactly at this floor is a real, currently-young-or-struggling
-## one, not an error -- it is the low end of the range, not the only
-## value in it.
-const STARTING_POPULATION := 1.0
+## every tree all start mature, never as seedlings/saplings). The
+## previous pass's own seeded-RANGE fix (1.0..BASE_CAPACITY) was itself a
+## correction for exactly this same problem at the old scale; given a
+## specific number directly this time, every mound now founds at exactly
+## it, matching BASE_CAPACITY below so a fresh colony reads as
+## established without already being AT its own unfed ceiling.
+const STARTING_POPULATION := 15.0
 
-## What an average mound supports with no particular feeding advantage.
-const BASE_CAPACITY := 4.0
+## What an average mound supports with no particular feeding advantage --
+## deliberately kept equal to STARTING_POPULATION (see that constant's own
+## doc comment): a freshly-seeded mound must never read as already ABOVE
+## its own unobserved capacity ceiling, or PopulationModel.step would read
+## it as overcrowded and start shrinking it back down before a player ever
+## sees it settle -- the identical safety the previous 1.0/4.0-scale pass
+## already established, preserved at the new scale rather than
+## reintroducing the bug it fixed.
+##
+## 4.0 -> 15.0 (2026-09-06, matching the new starting population).
+## FOOD_CAPACITY_BONUS/WATER_CAPACITY_BONUS stay at their existing ratio
+## to this base, so MAX_REFERENCE_POPULATION (below) rises proportionally.
+const BASE_CAPACITY := 15.0
 
 ## How much extra capacity a consistently well-fed colony can support, as
 ## a multiple of BASE_CAPACITY, at recent_forage_success == 1.0 (an
@@ -73,6 +88,32 @@ const WATER_CAPACITY_BONUS := 1.0
 ## silently drift from the real ceiling (cross-checked by
 ## test_max_reference_population_matches_capacity_at_full_food_and_water).
 const MAX_REFERENCE_POPULATION := BASE_CAPACITY * (1.0 + FOOD_CAPACITY_BONUS + WATER_CAPACITY_BONUS)
+
+## ## A real food economy: storage, upkeep, and a real growth constraint
+##
+## See docs/concept/soil_fauna.md's "A real food economy" section.
+## Everything above this point is "how well a colony's LUCK has been
+## running lately" (an EMA of recent forage/moisture outcomes); this is
+## the real, depleting/accumulating stockpile those outcomes actually
+## fill and a growing population actually draws from -- reported directly:
+## "food then becomes driver and constraint of population growth."
+
+## How much a single ant draws from its own mound's stored food reserve
+## per simulated day (see AntColony.advance/food_stored_at). Defined as
+## exactly 1.0 so "one food unit" IS "one ant's daily ration" -- the
+## simplest possible unit choice, needing no separate justification for
+## what the number itself means.
+const FOOD_PER_ANT_PER_DAY := 1.0
+
+## How many days of reserve, at the CURRENT population's own upkeep rate,
+## counts as "secure" -- AntColony.food_availability_fraction reads 1.0
+## (capacity() is used exactly as recent forage-success/moisture already
+## say it should be, unconstrained) once food_stored_at reaches this many
+## days' worth of upkeep, and something less than 1.0 below it. A modest
+## few-day buffer: real enough to ride out an ordinary short dry spell,
+## not a hoard so large the constraint this whole mechanism exists for
+## could never actually bite.
+const FOOD_BUFFER_DAYS := 3.0
 
 var _population_model := PopulationModel.new(GROWTH_RATE_PER_DAY)
 

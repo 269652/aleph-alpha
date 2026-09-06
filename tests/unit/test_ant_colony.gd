@@ -272,34 +272,32 @@ func test_windfall_carrier_seed_differs_from_the_grass_carrier_seed():
 # -- a queen, and where a colony's size comes from (see docs/concept/
 # soil_fauna.md#a-queen-and-where-a-colonys-size-comes-from) ---------------
 
-## Mounds are not freshly founded the instant a chunk loads -- most have
-## already existed in this simulated world for real, if unmodeled, time
-## (the same "map-generated content starts already established"
-## convention every other patch-sim in this game already follows: grass,
-## wild crops, and every tree all start mature, not as seedlings). Seeded
-## once per mound across a real established-colony range instead of
-## uniformly at the bare founding minimum -- see "Mounds are not freshly
-## founded" in docs/concept/soil_fauna.md.
-func test_population_starts_within_an_established_range():
+## Asked directly, a specific number rather than a range: "start at 15
+## ants at the beginning." Supersedes the previous pass's own seeded-RANGE
+## fix (below) -- that was itself a correction for colonies that could
+## functionally never be seen thriving in ordinary play (see "Thriving
+## colonies" in docs/concept/soil_fauna.md); given a specific number here,
+## every mound now founds at exactly it rather than variance around it.
+## Mounds are still not freshly founded at some bare minimum the instant a
+## chunk loads -- 15 IS the established-colony reading, not a floor a real
+## colony grows up from over the player's own session.
+func test_population_starts_at_fifteen():
 	var colony := _colony()
 	var cell: Vector2i = colony.mound_cells()[0]
-	assert_between(
-		colony.population_at(cell), AntPopulationModel.STARTING_POPULATION, AntPopulationModel.BASE_CAPACITY
-	)
+	assert_almost_eq(colony.population_at(cell), AntPopulationModel.STARTING_POPULATION, 0.001)
+	assert_almost_eq(AntPopulationModel.STARTING_POPULATION, 15.0, 0.001)
 
 
-## Different mounds read as different ages/fortunes -- a flat identical
-## seed for every mound would read as a mechanism, not a real world (the
-## same "never Godot's string hash(), which correlates neighbouring
-## inputs" reasoning this whole file already applies to every other roll).
-func test_different_mounds_start_with_different_populations():
-	var colony := _colony("grassland", 99)
-	var cells: Array = colony.mound_cells()
-	assert_gt(cells.size(), 1, "precondition: need at least two mounds to compare")
-	var populations := {}
-	for cell in cells:
-		populations[colony.population_at(cell)] = true
-	assert_gt(populations.size(), 1, "different mounds should not all start at the identical population")
+## Superseded (2026-09-06): asked directly for a flat starting population
+## (see test_population_starts_at_fifteen above) rather than the previous
+## pass's own seeded range -- every mound now starts at the identical,
+## specific population by design, so "different mounds start with
+## different populations" is no longer a real invariant to hold. This is
+## not a regression the way a coincidental flatness would be: it is
+## exactly what was asked for. (Mounds still read as real, distinct
+## colonies via their own independent forage-success/moisture/food
+## histories once advance() actually runs -- see the food-economy tests
+## below -- just not from their STARTING population any more.)
 
 
 ## A reloaded chunk must reproduce the exact same mound at the exact same
@@ -402,13 +400,188 @@ func test_a_well_watered_mound_grows_larger_than_a_dry_one():
 	assert_gt(damp.population_at(cell), dry.population_at(cell))
 
 
+# -- a real food economy: storage, upkeep, and a real growth constraint
+# (see docs/concept/soil_fauna.md's "A real food economy" section) --------
+#
+# Reported live: "ants should bring food (seeds, leaves, nuts) to the
+# mound which should get a food supply stat... food then becomes driver
+# and constraint of population growth."
+
+## A freshly-seeded mound is never born already starving -- the same
+## "map-generated content starts already established" reasoning the
+## population itself already follows. Seeded at exactly a full
+## FOOD_BUFFER_DAYS reserve for its OWN starting population, so
+## food_availability_fraction (below) reads exactly 1.0 for a brand-new
+## colony -- derived from the same constants that reserve is measured
+## against, not a second, independently-chosen number that could drift
+## from what "a full buffer" actually means.
+func test_food_stored_starts_at_a_full_buffer_for_the_seeded_population():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var expected := (
+		AntPopulationModel.STARTING_POPULATION
+		* AntPopulationModel.FOOD_PER_ANT_PER_DAY
+		* AntPopulationModel.FOOD_BUFFER_DAYS
+	)
+	assert_almost_eq(colony.food_stored_at(cell), expected, 0.001)
+
+
+func test_deposit_food_increases_the_stored_amount():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var before := colony.food_stored_at(cell)
+	colony.deposit_food(cell, 5.0)
+	assert_almost_eq(colony.food_stored_at(cell), before + 5.0, 0.001)
+
+
+## The one place AntForagerMarker already reports a completed trip (see
+## docs/concept/soil_fauna.md) now also feeds the real stockpile, for
+## every forage kind alike (seed/windfall/leaf) -- a successful trip
+## bringing food home is the whole point of the mechanism this stat
+## exists for.
+func test_recording_forage_success_also_deposits_food():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var before := colony.food_stored_at(cell)
+	colony.record_forage_result(cell, true)
+	assert_almost_eq(colony.food_stored_at(cell), before + AntColony.FOOD_PER_SUCCESSFUL_FORAGE, 0.001)
+
+
+func test_recording_forage_failure_does_not_deposit_food():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var before := colony.food_stored_at(cell)
+	colony.record_forage_result(cell, false)
+	assert_almost_eq(colony.food_stored_at(cell), before, 0.001)
+
+
+## The real upkeep a population represents: more ants, more draw on the
+## same reserve, every simulated day advance() represents.
+func test_advancing_depletes_food_by_population_upkeep():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var before := colony.food_stored_at(cell)
+	colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	var expected_drop := (
+		colony.population_at(cell) * AntPopulationModel.FOOD_PER_ANT_PER_DAY
+	)
+	assert_almost_eq(colony.food_stored_at(cell), before - expected_drop, 0.01)
+
+
+func test_food_stored_never_drops_below_zero():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 1000:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_gte(colony.food_stored_at(cell), 0.0)
+
+
+func test_food_availability_fraction_starts_at_one():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	assert_almost_eq(colony.food_availability_fraction(cell), 1.0, 0.001)
+
+
+func test_food_availability_fraction_drops_as_food_depletes():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 30:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_lt(colony.food_availability_fraction(cell), 1.0)
+
+
+func test_food_availability_fraction_is_never_negative_or_above_one():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 1000:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_gte(colony.food_availability_fraction(cell), 0.0)
+	assert_lte(colony.food_availability_fraction(cell), 1.0)
+
+
+## The real "driver" half: even a colony with a perfect forage-success
+## record and ideal moisture cannot exceed the unfed baseline once its
+## real reserve actually runs dry -- food is what capacity() answers to
+## now, not recent luck alone.
+func test_capacity_drops_below_baseline_once_food_runs_out():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 20:
+		colony.record_forage_result(cell, true)
+		colony.record_moisture(cell, 1.0)
+	for i in 200:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_lt(colony.capacity_at(cell), AntPopulationModel.BASE_CAPACITY)
+
+
+## A real bug caught by test_food_availability_fraction_drops_as_food_
+## depletes going red for the wrong reason during development: with zero
+## income, population crashes all the way to a literal 0.0 within a
+## handful of simulated days (PopulationModel.step's own existing
+## "carrying_capacity <= 0.0 -> population 0.0" rule, once food_stored
+## itself hits zero) -- and a naive "population 0 means food isn't the
+## constraint" reading of food_availability_fraction reported that DEAD
+## colony as a perfectly healthy 1.0 forever after, since a population
+## stuck at exactly 0.0 can never grow itself back out of that reading.
+## Pinned directly so this exact false-healthy-reading regression can't
+## come back unnoticed.
+func test_a_fully_starved_colony_reads_zero_food_availability_not_full():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 10:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_almost_eq(colony.population_at(cell), 0.0, 0.001, "precondition: colony should have fully starved by now")
+	assert_almost_eq(colony.food_availability_fraction(cell), 0.0, 0.001)
+
+
+## The real "constraint" half, end to end: a colony fed once at the start
+## and never again, over enough simulated time, genuinely shrinks back
+## down -- the same real famine/overcrowding decline PopulationModel.step
+## already gives every species once population outruns its own capacity,
+## now reachable through a real depleting food store rather than a new
+## bespoke starvation branch.
+func test_a_colony_that_never_restocks_food_eventually_shrinks():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	var starting_population := colony.population_at(cell)
+	for i in 20:
+		colony.record_forage_result(cell, true)
+		colony.record_moisture(cell, 1.0)
+	for i in 400:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_lt(colony.population_at(cell), starting_population)
+
+
+# -- fewer, bigger colonies from the start (see docs/concept/soil_fauna.md's
+# "A real food economy" section) -------------------------------------------
+
+## "1 for every 5" of the previous per-chunk cap, taken literally.
+func test_max_mounds_is_one_fifth_of_its_previous_value():
+	assert_eq(AntColony.MAX_MOUNDS, 2)
+
+
+## Matches the new starting population exactly -- a healthy, well-fed
+## mound can have as many workers out at once as it actually starts with.
+func test_max_concurrent_foragers_matches_the_new_starting_population():
+	assert_eq(AntColony.MAX_CONCURRENT_FORAGERS, int(AntPopulationModel.STARTING_POPULATION))
+
+
 # -- growth_fraction_at: what a mound's own visual size reads (see
 # ProceduralAntMoundSprite.world_width_for) -------------------------------
 
-func test_growth_fraction_starts_near_zero_for_a_founding_colony():
+## Superseded (2026-09-06): a founding colony now starts at a specific,
+## substantial population (15, see test_population_starts_at_fifteen)
+## rather than the bare single-digit minimum this test's own premise
+## assumed -- reading as an established colony with real room left to
+## grow, not a newborn wisp. Replaced with the bound that actually still
+## holds: comfortably inside (0, 1), neither a founding wisp's own old
+## near-zero reading nor already maxed out the instant it is seeded.
+func test_growth_fraction_starts_comfortably_between_founding_and_maxed_out():
 	var colony := _colony()
 	var cell: Vector2i = colony.mound_cells()[0]
-	assert_lt(colony.growth_fraction_at(cell), 0.1)
+	var fraction := colony.growth_fraction_at(cell)
+	assert_gt(fraction, 0.1)
+	assert_lt(fraction, 0.9)
 
 
 ## AntColony.advance is a single Euler step (PopulationModel.step), not a
@@ -420,6 +593,24 @@ func test_growth_fraction_starts_near_zero_for_a_founding_colony():
 ## population this game tracks, so reaching near-capacity takes real
 ## simulated YEARS' worth of daily steps, not a handful of arbitrary
 ## advance() calls.
+## Forage success is now recorded THROUGHOUT the 400-day loop, not just
+## up front (2026-09-06, food economy): a mound's own population now
+## genuinely eats from a real, depleting food store between successful
+## trips (see AntColony.food_availability_fraction) -- a colony fed once
+## and then left alone for 400 simulated days would run its reserve down
+## and starve back down (a REAL, correctly-modelled outcome -- see
+## test_a_colony_that_never_restocks_food_eventually_shrinks -- not a bug
+## in this test). A colony that keeps finding food EVERY simulated day,
+## the way an actually thriving one would, is what this test means to
+## show approaches full growth -- so it keeps depositing food the whole
+## way through, at a real per-day RATE (50 completed trips/day) rather
+## than the arbitrary single call/day a test loop's own iteration count
+## would otherwise imply: MAX_CONCURRENT_FORAGERS (15) foragers each
+## completing a trip every few real seconds can complete far more than
+## one trip per simulated (60-real-second) day in actual play (see
+## docs/concept/soil_fauna.md) -- 50/day is a real, comfortably-above-its-
+## own-upkeep rate for a colony approaching MAX_REFERENCE_POPULATION (45,
+## needing 45 food/day at FOOD_PER_ANT_PER_DAY=1.0), not a contrived one.
 func test_growth_fraction_approaches_one_for_a_thriving_colony():
 	var colony := _colony("grassland", 42)
 	var cell: Vector2i = colony.mound_cells()[0]
@@ -427,6 +618,8 @@ func test_growth_fraction_approaches_one_for_a_thriving_colony():
 		colony.record_forage_result(cell, true)
 		colony.record_moisture(cell, 1.0)
 	for i in 400:
+		for trip in 50:
+			colony.record_forage_result(cell, true)
 		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
 	assert_gt(colony.growth_fraction_at(cell), 0.9)
 
@@ -466,6 +659,15 @@ func test_active_forager_cap_never_exceeds_its_own_maximum():
 ## show. Advancing by many SECONDS_PER_SIMULATED_DAY-sized steps AFTER
 ## the ceiling is already fixed is what actually gives population time to
 ## grow toward it.
+## Forage success is now recorded THROUGHOUT the 300-day loop, at a real
+## per-day RATE, for the identical reason test_growth_fraction_
+## approaches_one_for_a_thriving_colony above now does (see that test's
+## own doc comment) -- a real, depleting food store (see AntColony.
+## food_availability_fraction) means a colony fed only once and left
+## alone for 300 simulated days would starve back toward its unfed floor,
+## the real "constraint" half of the new mechanism working as designed --
+## not what this test, about a colony that keeps thriving, means to
+## exercise.
 func test_active_forager_cap_grows_with_a_thriving_colony():
 	var colony := _colony("grassland", 42)
 	var cell: Vector2i = colony.mound_cells()[0]
@@ -473,6 +675,8 @@ func test_active_forager_cap_grows_with_a_thriving_colony():
 	for i in 20:
 		colony.record_forage_result(cell, true)
 	for i in 300:
+		for trip in 50:
+			colony.record_forage_result(cell, true)
 		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
 	assert_gte(colony.active_forager_cap_at(cell), before)
 
