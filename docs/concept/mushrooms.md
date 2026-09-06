@@ -483,7 +483,10 @@ and any debuff/toxicity mechanic for non-player creatures generally.
   delivered so far (black_trumpet/champignon/chanterelle/death_cap/
   false_death_cap), falling back to the live look for the 3 not yet
   delivered (fly_agaric/psylo/parasol); `bitten` (a separate field) does
-  the same for `bitten_frame_for`, with no corpse involved -- see "Bitten
+  the same for `bitten_frame_for`, delivered for the identical 5 species
+  above (death_cap's own delivered filename is "_eaten" rather than
+  "_bitten"/"_bitten_1" -- pointed at as-delivered, same convention as
+  the misspelled filenames above), with no corpse involved -- see "Bitten
   by a decomposer". `take_mushroom_bite()` -- its own method, deliberately
   not `take_bite` -- is what `DecomposerMarker`'s bite path calls.
 - ✅ `MushroomRenderer` (`src/rendering/mushroom_renderer.gd`) —
