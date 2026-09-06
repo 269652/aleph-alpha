@@ -1604,11 +1604,8 @@ func test_repeated_bites_stack_venom_up_to_the_cap():
 
 # -- toxic mushrooms: real poisoning, per-species severity (see
 # docs/concept/mushrooms.md's "Eating one") -- mirrors apply_venom/
-# _venom_step's own shape (DebuffStack-tracked, once-per-authority-frame),
-# plus identification by real experience rather than a purchased skill
-# point (see that doc's "Identification" section for why).
+# _venom_step's own shape (DebuffStack-tracked, once-per-authority-frame).
 
-const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 const MushroomToxin = preload("res://src/gameplay/mushroom_toxin.gd")
 
 
@@ -1656,7 +1653,7 @@ func test_mushroom_toxin_step_expires_after_its_duration():
 	assert_eq(player.active_mushroom_toxin_debuffs.size(), 0)
 
 
-func test_every_eaten_mushroom_counts_toward_identification_toxic_or_not():
+func test_every_eaten_mushroom_increments_the_lifetime_counter_toxic_or_not():
 	player.inventory.add(_item_catalog.make("chanterelle"), 1)
 	player.inventory.add(_item_catalog.make("psylo"), 1)
 
@@ -1664,17 +1661,6 @@ func test_every_eaten_mushroom_counts_toward_identification_toxic_or_not():
 	player.eat_food("psylo")
 
 	assert_eq(player.mushrooms_eaten, 2)
-
-
-func test_knows_mushrooms_is_false_before_enough_real_encounters():
-	assert_false(player.knows_mushrooms())
-
-
-func test_knows_mushrooms_becomes_true_after_enough_real_encounters():
-	for id in MushroomSpecies.IDS:
-		player.inventory.add(_item_catalog.make(id), 1)
-		player.eat_food(id)
-	assert_true(player.knows_mushrooms())
 
 
 # -- disease spillover: routed through Sickness, NOT a new debuff module

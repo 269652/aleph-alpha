@@ -8874,11 +8874,9 @@ doc's own claims.
 Reported: "brainstorm and implement mushrooms next, 5x5 illustrated
 variant sheets per species." Full new system: fungal fruiting bodies as a
 per-chunk event-driven patch-sim (not continuous growth — a fruiting body
-appears fully formed), a real rain+autumn flush trigger, one shared
-"Unidentified Mushroom" look/name until the player has learned to
-identify them (`ProceduralEggSprite`'s pre-hatch idiom, gated on
-experience instead of a life stage), and real per-species toxicity on
-eating one.
+appears fully formed), a real rain+autumn flush trigger, always its real
+species' own illustrated look and name (see below — this went through two
+revisions), and real per-species toxicity on eating one.
 
 ✅ Species catalog, fruiting-trigger model, per-species toxin model, both
 sprite generators, the per-chunk patch-sim, item catalog entries, the
@@ -8896,7 +8894,25 @@ Development-process rule) found every ring in every wedge already at its
 structural change touching all seven wedges. Replaced with
 `Player.mushrooms_eaten`/`knows_mushrooms()`: real foraging identification
 earned through direct field experience (eating mushrooms, risk included),
-not a purchased skill point — arguably the more honest mechanic anyway.
+not a purchased skill point.
+
+**Identification gate removed entirely, once real art existed for every
+species (`feature/mushroom-always-identified`).** Reported live: mushrooms
+weren't showing up as expected in a real save, traced to the gate working
+exactly as designed (the save had `mushrooms_eaten = 0`, so every mushroom
+correctly rendered the plain ~10px unidentified blob rather than the real
+art) — followed by an explicit design call: since the illustrated art
+directly resembles its real counterpart, hiding it behind a grind fought
+the art rather than showing it off, and a mushroom identification guide on
+the companion website (external reference, the user's own addition) makes
+more sense as the "how do I tell these apart" answer than an in-game
+unlock. `MushroomMarker`/`MushroomRenderer` no longer carry any
+`identified` concept at all — a marker always shows its real species' own
+sprite and name. `Player.knows_mushrooms()` and `MushroomSpecies.
+MUSHROOMS_TO_LEARN_IDENTIFICATION` are deleted (fully dead once nothing
+gated on them); `Player.mushrooms_eaten` stays, persisted, as a plain
+lifetime counter with no further consequence. Built red-first end to end
+against the removed/simplified signatures, merged to `main`.
 
 **Roster redesigned, then real illustrated art wired end to end
 (`feature/mushroom-real-art`).** The originally-designed roster (Fly
