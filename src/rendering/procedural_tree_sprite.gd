@@ -1100,7 +1100,7 @@ func _composite_illustrated(
 		_blend_at(image, canopy_image, canopy_box.position.x, canopy_box.position.y)
 
 	if ripe_count > 0:
-		_blend_illustrated_fruit(image, art, species_id, seed_value, ripe_count, canopy_box)
+		_blend_illustrated_fruit(image, art, species_id, seed_value, ripe_count, canopy_box, season)
 	return image
 
 
@@ -1113,11 +1113,12 @@ func _composite_illustrated(
 ## Scattered within the canopy's rect rather than an invented ellipse -- placed
 ## against the frame rectangle instead, most of a crop fell outside the foliage.
 func _blend_illustrated_fruit(
-	image: Image, art, species_id: String, seed_value: int, ripe_count: int, canopy: Rect2i
+	image: Image, art, species_id: String, seed_value: int, ripe_count: int, canopy: Rect2i,
+	season: String
 ) -> void:
 	var variant := tree_variant_for(seed_value)
 	var fruit_width := maxi(2, int(float(SIZE.x) * ILLUSTRATED_FRUIT_WIDTH_FRAC))
-	var fruit_image := _scaled_fruit(art, species_id, fruit_width)
+	var fruit_image := _scaled_fruit(art, species_id, fruit_width, season)
 	if fruit_image == null:
 		return
 	# Placed in the FOLIAGE, not across the canopy box. The box reaches well
@@ -1195,17 +1196,20 @@ static func fruit_ground_offset(variant: int, index: int) -> Vector2:
 	)
 
 
-## The ripe fruit, trimmed and scaled once. Same reason as the other pieces:
-## it never changes, and fetching it back from the GPU per tree is what made a
-## forest freeze.
+## The ripe fruit, trimmed and scaled once per species/season/width. Same
+## reason as the other pieces: none of those three ever change what this
+## looks like, and fetching it back from the GPU per tree is what made a
+## forest freeze. Keyed on season too (not just species/width) since a
+## season-aligned species' own closeup genuinely differs by season -- see
+## IllustratedTree.fruit_for's own doc comment.
 static var _fruit_cache := {}
 
 
-func _scaled_fruit(art, species_id: String, width: int) -> Image:
-	var key := "%s/%d" % [species_id, width]
+func _scaled_fruit(art, species_id: String, width: int, season: String) -> Image:
+	var key := "%s/%s/%d" % [species_id, season, width]
 	if _fruit_cache.has(key):
 		return _fruit_cache[key]
-	var fruit: Texture2D = art.fruit_for(species_id, true)
+	var fruit: Texture2D = art.fruit_for(species_id, true, season)
 	var scaled: Image = null
 	if fruit != null:
 		scaled = _fit_width(_trimmed(fruit.get_image()), width)
