@@ -9271,6 +9271,30 @@ user's own explicit choice — more stages are a later pass). See the
 concept doc's own "Deliberately not modeled" section for the full list
 and reasoning.
 
+**Crushed/bitten art now complete for all 8 species (2026-09-06).**
+Reported live: "I added all missing mushroom spritesheets... wire them."
+The remaining 3 species (fly_agaric/psylo/parasol) had crushed art wired
+in, and every species' bitten art now uses whatever was actually
+delivered rather than a single assumed file: most species got 3
+independently-delivered bitten sheets, not one, so
+`IllustratedMushroomSprite._load_frames` was generalized to accept a
+`path` that's either a single string or an Array of them, combining every
+delivered sheet into one bigger frame pool (`crushed_frame_count`/
+`bitten_frame_count`, new, make this directly testable rather than only
+inferrable). Two real, confirmed-broken references surfaced and got fixed
+along the way: `chanterelle`/`false_death_cap`'s previously-wired single
+bitten files, and `death_cap`'s own `death_cap_eaten.png`, had all three
+been silently replaced on disk by newer delivered files without the code
+being updated — `Image.load_from_file` on the literal path confirmed each
+one was simply gone, not a hypothetical risk. Also confirmed directly by
+pixel-sampling (not assumed): `fly_agaric`'s crushed/bitten sheets use
+the standard magenta background convention every other species' does,
+despite `fly_agaric.png` itself (the normal look) being the one sheet
+with a genuinely transparent background — a naive corner-pixel sample
+misread this as plain white due to antialiasing feathering; sampling each
+image's own most-common pixel color instead gave the real answer. 22/22
+tests green (up from the prior pass's smaller roster), merged to `main`.
+
 ### Leaf Litter (`concept/leaf_litter.md`)
 
 ✅ **Rewritten onto a GPU-instanced per-chunk data model

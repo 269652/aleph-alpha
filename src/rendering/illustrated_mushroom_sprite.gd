@@ -32,14 +32,17 @@ extends RefCounted
 ## Crushed/bitten counterparts (see docs/concept/mushrooms.md's "Crushed
 ## underfoot", docs/concept/soil_fauna.md's decomposer-bite follow-up): real
 ## 1:1-per-specimen sheets (same 5x5-per-1254x1254-canvas layout, same
-## magenta convention), delivered incrementally species by species --
-## has_crushed_variant/has_bitten_variant gate exactly like has_variants
-## already does, so a species with no crushed/bitten art yet falls through
-## to a caller-chosen fallback rather than erroring. "1:1" holds exactly
-## once a sheet's own frame count matches the normal sheet's (25); until
-## then, crushed_frame_for/bitten_frame_for still pick a deterministic,
-## in-range variant of THAT sheet's own size (see their own doc comments)
-## rather than assuming every sheet is already complete.
+## magenta convention as every species' normal sheet except fly_agaric's --
+## and confirmed directly by pixel-sampling that even fly_agaric's OWN
+## crushed/bitten sheets use magenta, unlike its normal one). Now complete
+## for all 8 species on both fronts, delivered incrementally over several
+## passes (see docs/progress.md) -- has_crushed_variant/has_bitten_variant
+## still gate exactly like has_variants already does, so an unknown or any
+## future-missing species id still falls through to a caller-chosen
+## fallback rather than erroring. Most bitten sheets came as 3 INDEPENDENT
+## delivered images per species rather than one -- _load_frames combines
+## every one of them into a single bigger frame pool (see its own doc
+## comment) rather than only ever using the first.
 
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
@@ -100,11 +103,29 @@ const _SHEETS := {
 }
 
 ## Crushed-underfoot counterparts -- deliberately incomplete (see class doc
-## comment): only species with a real delivered sheet appear here.
-## Filenames are as-delivered, including "champigon" (missing an "n")
-## matching the real file on disk -- not renamed, same reasoning as
-## "chantarelle" above.
+## comment): now complete -- all 8 species have a real delivered crushed
+## sheet (fly_agaric/psylo/parasol were the last 3, added once real art
+## surfaced for them -- see docs/progress.md). Filenames are as-delivered,
+## including "champigon" (missing an "n") matching the real file on disk
+## -- not renamed, same reasoning as "chantarelle" above.
 const _CRUSHED_SHEETS := {
+	# Despite fly_agaric.png (the normal look) needing no chroma_key at all
+	## (see class doc comment), its crushed/bitten counterparts DO use the
+	## standard magenta convention -- confirmed directly by sampling each
+	## image's own most-common pixel color, not assumed from the normal
+	## sheet's own different convention (a corner-only sample here reads
+	## misleadingly near-white, the exact "antialiasing feathering" trap
+	## the class doc comment already warns about).
+	"fly_agaric": {
+		"path": "res://assets/sprites/mushrooms/fly_agaric_crushed.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+	"psylo": {
+		"path": "res://assets/sprites/mushrooms/psylo_crushed.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
 	"black_trumpet": {
 		"path": "res://assets/sprites/mushrooms/black_trumpet_crushed.png",
 		"chroma_key": _MAGENTA,
@@ -120,6 +141,11 @@ const _CRUSHED_SHEETS := {
 		"chroma_key": _MAGENTA,
 		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
 	},
+	"parasol": {
+		"path": "res://assets/sprites/mushrooms/parasol_crushed.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
 	"death_cap": {
 		"path": "res://assets/sprites/mushrooms/death_cap_crushed.png",
 		"chroma_key": _MAGENTA,
@@ -132,41 +158,93 @@ const _CRUSHED_SHEETS := {
 	},
 }
 
-## One-bite-taken counterparts -- deliberately incomplete, same reasoning as
-## _CRUSHED_SHEETS: only 3 of 6 species have real bitten art delivered so
-## far; an absent id falls back through MushroomMarker's own
-## has_bitten_variant gate to the ordinary look, the same has-or-doesn't
-## convention has_variants/frame_for already use. Filenames are
+## One-bite-taken counterparts -- now complete for all 8 species (see
+## _CRUSHED_SHEETS' own doc comment for the same "now complete" update).
+## Most species had 3 INDEPENDENT bitten sheets delivered, not just one --
+## "path" is an Array for those, combined into one bigger frame pool by
+## _load_frames rather than only ever using the first and leaving the rest
+## of the delivered art unused (see that function's own doc comment).
+## death_cap has only 1 delivered bitten sheet so far, same shape as every
+## _CRUSHED_SHEETS entry -- an honest reflection of what's actually been
+## delivered, not a uniform assumption either way. Filenames are
 ## as-delivered, including "champigon" (missing an "n") and "chantarelle"
 ## (matching the base sheet's own misspelling) -- not renamed, same
-## reasoning as _SHEETS/_CRUSHED_SHEETS above. More bite stages are planned
-## later (see docs/concept/soil_fauna.md); only stage 1 exists today.
+## reasoning as _SHEETS/_CRUSHED_SHEETS above. More bite STAGES (as opposed
+## to these same-stage variety frames) are planned later (see
+## docs/concept/soil_fauna.md); only one stage exists today.
 const _BITTEN_SHEETS := {
+	# Same fly_agaric-specific note as _CRUSHED_SHEETS above: these DO need
+	# the standard magenta key, confirmed the same way (most-common-pixel
+	# sampling, not a misleading corner sample).
+	"fly_agaric": {
+		"path": [
+			"res://assets/sprites/mushrooms/fly_agaric_bitten_1.png",
+			"res://assets/sprites/mushrooms/fly_agaric_bitten_2.png",
+			"res://assets/sprites/mushrooms/fly_agaric_bitten_3.png",
+		],
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+	"psylo": {
+		"path": [
+			"res://assets/sprites/mushrooms/psylo_bitten_1.png",
+			"res://assets/sprites/mushrooms/psylo_bitten_2.png",
+			"res://assets/sprites/mushrooms/psylo_bitten_3.png",
+		],
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
 	"black_trumpet": {
-		"path": "res://assets/sprites/mushrooms/black_trumpet_bitten_1.png",
+		"path": [
+			"res://assets/sprites/mushrooms/black_trumpet_bitten_1.png",
+			"res://assets/sprites/mushrooms/black_trumpet_bitten_2.png",
+			"res://assets/sprites/mushrooms/black_trumpet_bitten_3.png",
+		],
 		"chroma_key": _MAGENTA,
 		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
 	},
 	"champignon": {
-		"path": "res://assets/sprites/mushrooms/champigon_bitten_1.png",
+		"path": [
+			"res://assets/sprites/mushrooms/champigon_bitten_1.png",
+			"res://assets/sprites/mushrooms/champigon_bitten_2.png",
+			"res://assets/sprites/mushrooms/champigon_bitten_3.png",
+		],
 		"chroma_key": _MAGENTA,
 		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
 	},
 	"chanterelle": {
-		"path": "res://assets/sprites/mushrooms/chantarelle_bitten.png",
+		"path": [
+			"res://assets/sprites/mushrooms/chantarelle_bitten_1.png",
+			"res://assets/sprites/mushrooms/chantarelle_bitten_2.png",
+			"res://assets/sprites/mushrooms/chantarelle_bitten_3.png",
+		],
 		"chroma_key": _MAGENTA,
 		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
 	},
-	# Delivered filename is "_eaten" rather than "_bitten_1"/"_bitten" like
-	# every other species -- pointed at as-delivered, same reasoning as
-	# "chantarelle"/"champigon"'s own misspellings above.
+	"parasol": {
+		"path": [
+			"res://assets/sprites/mushrooms/parasol_bitten_1.png",
+			"res://assets/sprites/mushrooms/parasol_bitten_2.png",
+			"res://assets/sprites/mushrooms/parasol_bitten_3.png",
+		],
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+	# Only 1 delivered so far (see class doc comment) -- was previously
+	# wired to a "death_cap_eaten.png" that no longer exists on disk
+	# (replaced by this real, delivered file); fixed as part of the same
+	# pass that wired in the rest of the missing bitten art.
 	"death_cap": {
-		"path": "res://assets/sprites/mushrooms/death_cap_eaten.png",
+		"path": "res://assets/sprites/mushrooms/death_cap_bitten_1.png",
 		"chroma_key": _MAGENTA,
 		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
 	},
 	"false_death_cap": {
-		"path": "res://assets/sprites/mushrooms/false_death_cap_bitten.png",
+		"path": [
+			"res://assets/sprites/mushrooms/false_death_cap_bitten_1.png",
+			"res://assets/sprites/mushrooms/false_death_cap_bitten_2.png",
+			"res://assets/sprites/mushrooms/false_death_cap_bitten_3.png",
+		],
 		"chroma_key": _MAGENTA,
 		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
 	},
@@ -229,10 +307,22 @@ func crushed_frame_for(species_id: String, seed_value: int) -> ImageTexture:
 	return _pick_frame(_frames_from(_CRUSHED_SHEETS, _crushed_frames_cache, species_id), seed_value)
 
 
+func crushed_frame_count(species_id: String) -> int:
+	return _frames_from(_CRUSHED_SHEETS, _crushed_frames_cache, species_id).size()
+
+
 ## Whether there is real bitten-mushroom art registered for `species_id` --
 ## see _BITTEN_SHEETS' own doc comment for which species have it so far.
 func has_bitten_variant(species_id: String) -> bool:
 	return _BITTEN_SHEETS.has(species_id)
+
+
+## How many real bitten frames exist for `species_id` -- 25 for a species
+## with one delivered sheet, more for a species with several combined
+## (see _load_frames' own doc comment). 0 for an unknown/undelivered
+## species, the same "0, not an error" contract frame_count already has.
+func bitten_frame_count(species_id: String) -> int:
+	return _frames_from(_BITTEN_SHEETS, _bitten_frames_cache, species_id).size()
 
 
 ## The one-bite-taken counterpart of the specimen `seed_value` would
@@ -257,21 +347,33 @@ func _frames_from(sheets: Dictionary, cache: Dictionary, species_id: String) -> 
 	return cache[species_id]
 
 
+## `sheet["path"]` is either a single path (every _SHEETS/_CRUSHED_SHEETS
+## entry, and any _BITTEN_SHEETS entry with only one delivered sheet so
+## far) or an Array of paths -- most bitten entries have 3 independently-
+## delivered sheets (see _BITTEN_SHEETS' own doc comment), and this
+## combines every one of them into a single, bigger frame pool rather than
+## silently using only the first and leaving the rest of the delivered art
+## unused. Same chroma-key/slicing treatment applies per-sheet, in order,
+## so bitten_frame_count/crushed_frame_count naturally reflect exactly how
+## much real art exists for a species -- 25 for a single sheet, 75 for
+## three, no hardcoded assumption either way.
 func _load_frames(sheet: Dictionary) -> Array[ImageTexture]:
-	var image := SpriteSheetLoader.load_image(sheet["path"])
-	# Turning the chroma-keyed background transparent up front lets the
-	# exact same downstream detect_frames/normalize_frames (via
-	# SpriteSheetSlicer.is_empty's alpha check) handle it with no separate
-	# "or matches this color" branch -- same reasoning as
-	# IllustratedAnimalSprite._slice_bands.
-	if sheet.has("chroma_key"):
-		image = _apply_chroma_key(image, sheet["chroma_key"], sheet["chroma_key_tolerance"])
+	var paths: Array = sheet["path"] if sheet["path"] is Array else [sheet["path"]]
 	var textures: Array[ImageTexture] = []
-	for band in _ROW_BANDS:
-		var rect: Vector2i = band
-		var frames := _slicer.detect_frames(image, rect.x, rect.y, 60, 1)
-		for frame_image in _slicer.normalize_frames(image, frames, CANVAS_SIZE, BASELINE_Y):
-			textures.append(ImageTexture.create_from_image(frame_image))
+	for path in paths:
+		var image := SpriteSheetLoader.load_image(path)
+		# Turning the chroma-keyed background transparent up front lets the
+		# exact same downstream detect_frames/normalize_frames (via
+		# SpriteSheetSlicer.is_empty's alpha check) handle it with no
+		# separate "or matches this color" branch -- same reasoning as
+		# IllustratedAnimalSprite._slice_bands.
+		if sheet.has("chroma_key"):
+			image = _apply_chroma_key(image, sheet["chroma_key"], sheet["chroma_key_tolerance"])
+		for band in _ROW_BANDS:
+			var rect: Vector2i = band
+			var frames := _slicer.detect_frames(image, rect.x, rect.y, 60, 1)
+			for frame_image in _slicer.normalize_frames(image, frames, CANVAS_SIZE, BASELINE_Y):
+				textures.append(ImageTexture.create_from_image(frame_image))
 	return textures
 
 

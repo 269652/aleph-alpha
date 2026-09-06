@@ -5,11 +5,13 @@ extends GutTest
 ## a 5x5 grid of 25 independent individual specimens per species sheet, not
 ## an animation. Same "hand/AI-illustrated sheet -> SpriteSheetSlicer ->
 ## cached frames, picked per-instance by a seeded index" shape as
-## IllustratedAntMoundSprite, across all 6 real delivered species sheets.
+## IllustratedAntMoundSprite, across all 8 real delivered species sheets.
 ##
-## Two real background conventions among the delivered sheets (see the
-## class's own doc comment): fly_agaric needs no magenta despill (a
-## genuinely transparent background); the other five do.
+## Two real background conventions among the delivered NORMAL-look sheets
+## (see the class's own doc comment): fly_agaric needs no magenta despill
+## (a genuinely transparent background); the other seven do -- including
+## fly_agaric's OWN crushed/bitten sheets, which (confirmed directly by
+## pixel-sampling, not assumed) use magenta same as everything else.
 
 const IllustratedMushroomSprite = preload("res://src/rendering/illustrated_mushroom_sprite.gd")
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
@@ -114,29 +116,34 @@ func test_marker_scale_produces_the_procedural_mushrooms_own_world_width():
 
 # -- crushed/bitten variants (see docs/concept/mushrooms.md's "Crushed
 # underfoot" / soil_fauna.md's decomposer-bite follow-up) -- reported
-# live: real 1:1 crushed/bitten counterparts for each specimen, delivered
-# incrementally (some species still missing as of this pass -- has_X()
-# gating covers exactly this the same way has_variants() already does).
-
-const _SPECIES_WITH_CRUSHED_AND_BITTEN_ART := [
-	"black_trumpet", "champignon", "chanterelle", "death_cap", "false_death_cap",
-]
-const _SPECIES_WITHOUT_CRUSHED_OR_BITTEN_ART_YET := ["fly_agaric", "psylo", "parasol"]
+# live: "I added all missing mushroom spritesheets... wire them". All 8
+# species now have real crushed AND bitten art delivered -- no more
+# has_X()-false roster gap (the has_X() gate itself stays, the same
+# "safe for an unknown/future-missing species" contract has_variants()
+## already has for the normal look -- see the unknown-species test below).
 
 
-func test_has_crushed_variant_for_delivered_species():
-	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
+func test_has_crushed_variant_for_every_real_species():
+	for id in MushroomSpecies.IDS:
 		assert_true(sprite.has_crushed_variant(id), "%s should have real crushed art" % id)
 
 
-func test_no_crushed_variant_yet_for_species_still_missing_it():
-	for id in _SPECIES_WITHOUT_CRUSHED_OR_BITTEN_ART_YET:
-		assert_false(sprite.has_crushed_variant(id), "%s should not claim crushed art it doesn't have" % id)
-		assert_null(sprite.crushed_frame_for(id, 0))
+func test_has_bitten_variant_for_every_real_species():
+	for id in MushroomSpecies.IDS:
+		assert_true(sprite.has_bitten_variant(id), "%s should have real bitten art" % id)
+
+
+func test_has_crushed_and_bitten_variant_false_for_an_unknown_species():
+	assert_false(sprite.has_crushed_variant("portobello"))
+	assert_null(sprite.crushed_frame_for("portobello", 0))
+	assert_eq(sprite.crushed_frame_count("portobello"), 0)
+	assert_false(sprite.has_bitten_variant("portobello"))
+	assert_null(sprite.bitten_frame_for("portobello", 0))
+	assert_eq(sprite.bitten_frame_count("portobello"), 0)
 
 
 func test_crushed_frame_for_returns_a_real_non_blank_texture():
-	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
+	for id in MushroomSpecies.IDS:
 		var image: Image = sprite.crushed_frame_for(id, 0).get_image()
 		var has_opaque_pixel := false
 		for y in image.get_height():
@@ -150,7 +157,7 @@ func test_crushed_frame_for_returns_a_real_non_blank_texture():
 
 
 func test_crushed_frame_for_has_no_leftover_magenta():
-	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
+	for id in MushroomSpecies.IDS:
 		var image: Image = sprite.crushed_frame_for(id, 0).get_image()
 		for y in image.get_height():
 			for x in image.get_width():
@@ -164,23 +171,20 @@ func test_crushed_frame_for_has_no_leftover_magenta():
 
 
 func test_crushed_frame_for_is_deterministic_per_seed():
-	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
+	for id in MushroomSpecies.IDS:
 		assert_eq(sprite.crushed_frame_for(id, 42), sprite.crushed_frame_for(id, 42))
 
 
-func test_has_bitten_variant_for_delivered_species():
-	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
-		assert_true(sprite.has_bitten_variant(id), "%s should have real bitten art" % id)
-
-
-func test_no_bitten_variant_yet_for_species_still_missing_it():
-	for id in _SPECIES_WITHOUT_CRUSHED_OR_BITTEN_ART_YET:
-		assert_false(sprite.has_bitten_variant(id), "%s should not claim bitten art it doesn't have" % id)
-		assert_null(sprite.bitten_frame_for(id, 0))
+## Every species has exactly one delivered crushed sheet -- unlike bitten
+## (see below), there is no multi-sheet combination on the crushed side
+## yet, so this stays a flat 25 across the whole roster.
+func test_crushed_frame_count_is_25_for_every_species():
+	for id in MushroomSpecies.IDS:
+		assert_eq(sprite.crushed_frame_count(id), EXPECTED_FRAME_COUNT, id)
 
 
 func test_bitten_frame_for_returns_a_real_non_blank_texture():
-	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
+	for id in MushroomSpecies.IDS:
 		var image: Image = sprite.bitten_frame_for(id, 0).get_image()
 		var has_opaque_pixel := false
 		for y in image.get_height():
@@ -194,7 +198,7 @@ func test_bitten_frame_for_returns_a_real_non_blank_texture():
 
 
 func test_bitten_frame_for_has_no_leftover_magenta():
-	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
+	for id in MushroomSpecies.IDS:
 		var image: Image = sprite.bitten_frame_for(id, 0).get_image()
 		for y in image.get_height():
 			for x in image.get_width():
@@ -208,15 +212,43 @@ func test_bitten_frame_for_has_no_leftover_magenta():
 
 
 func test_bitten_frame_for_is_deterministic_per_seed():
-	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
+	for id in MushroomSpecies.IDS:
 		assert_eq(sprite.bitten_frame_for(id, 42), sprite.bitten_frame_for(id, 42))
+
+
+## Most species had 3 independent bitten sheets delivered (not just 1) --
+## a "path" entry can now be a whole Array of sheets to combine into one
+## bigger pool, the same way _SHEETS/_CRUSHED_SHEETS' single-path entries
+## still work unchanged. death_cap has only 1 delivered bitten sheet so
+## far, same as every crushed entry -- the mixed counts here are the real,
+## honest reflection of what's actually been delivered per species, not a
+## uniform assumption.
+func test_bitten_frame_count_reflects_every_delivered_sheet_combined():
+	for id in ["fly_agaric", "psylo", "black_trumpet", "champignon", "chanterelle", "parasol", "false_death_cap"]:
+		assert_eq(
+			sprite.bitten_frame_count(id), EXPECTED_FRAME_COUNT * 3,
+			"%s has 3 delivered bitten sheets, should combine into 75 frames" % id
+		)
+	assert_eq(sprite.bitten_frame_count("death_cap"), EXPECTED_FRAME_COUNT, "death_cap has only 1 delivered bitten sheet so far")
+
+
+## Spreading across a combined multi-sheet pool, not just the first sheet
+## in the list -- a caller that only ever loaded sheet 1 and ignored 2/3
+## would still pass every test above (frame 0 of sheet 1 is a real,
+## non-blank, correctly-keyed frame regardless).
+func test_bitten_frame_for_spreads_across_every_combined_sheet():
+	for id in ["fly_agaric", "psylo", "black_trumpet", "champignon", "chanterelle", "parasol", "false_death_cap"]:
+		var seen := {}
+		for i in 300:
+			seen[sprite.bitten_frame_for(id, i)] = true
+		assert_gt(seen.size(), EXPECTED_FRAME_COUNT, "%s: should pick variants beyond just the first sheet's own 25" % id)
 
 
 ## The crushed/bitten look must actually differ from the normal look --
 ## a caller that got the wrong sheet by mistake would still pass every
 ## other test above.
 func test_crushed_and_bitten_frames_differ_from_the_normal_frame():
-	for id in _SPECIES_WITH_CRUSHED_AND_BITTEN_ART:
+	for id in MushroomSpecies.IDS:
 		var normal: PackedByteArray = sprite.frame_for(id, 0).get_image().get_data()
 		var crushed: PackedByteArray = sprite.crushed_frame_for(id, 0).get_image().get_data()
 		var bitten: PackedByteArray = sprite.bitten_frame_for(id, 0).get_image().get_data()

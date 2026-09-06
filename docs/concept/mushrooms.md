@@ -479,16 +479,18 @@ and any debuff/toxicity mechanic for non-player creatures generally.
   "they need hover tooltips" — and fixed), `pick_up(picker)` resolves to
   the real species item, and scales an illustrated sprite by its own
   measured `marker_scale`, not the procedural generator's flat scale.
-  `corpse_kind` shows real `crushed_frame_for` art for the 5 species
-  delivered so far (black_trumpet/champignon/chanterelle/death_cap/
-  false_death_cap), falling back to the live look for the 3 not yet
-  delivered (fly_agaric/psylo/parasol); `bitten` (a separate field) does
-  the same for `bitten_frame_for`, delivered for the identical 5 species
-  above (death_cap's own delivered filename is "_eaten" rather than
-  "_bitten"/"_bitten_1" -- pointed at as-delivered, same convention as
-  the misspelled filenames above), with no corpse involved -- see "Bitten
-  by a decomposer". `take_mushroom_bite()` -- its own method, deliberately
-  not `take_bite` -- is what `DecomposerMarker`'s bite path calls.
+  `corpse_kind` shows real `crushed_frame_for` art, and `bitten` (a
+  separate field, no corpse involved -- see "Bitten by a decomposer")
+  shows `bitten_frame_for` art -- both now complete for all 8 species
+  (reported live: "I added all missing mushroom spritesheets... wire
+  them"). Most bitten sheets came as 3 independently-delivered images per
+  species rather than one; `IllustratedMushroomSprite._load_frames`
+  combines all of them into one bigger frame pool instead of only ever
+  using the first (`death_cap` has just 1 delivered bitten sheet so far,
+  same shape every crushed entry already has -- an honest count, not a
+  uniform assumption). `take_mushroom_bite()` -- its own method,
+  deliberately not `take_bite` -- is what `DecomposerMarker`'s bite path
+  calls.
 - ✅ `MushroomRenderer` (`src/rendering/mushroom_renderer.gd`) —
   spawn_markers/sync_markers keep markers in sync with which cells are
   fruiting (no per-tick identification push any more), and now also keep

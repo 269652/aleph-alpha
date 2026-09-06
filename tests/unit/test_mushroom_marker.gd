@@ -204,15 +204,18 @@ func test_take_mushroom_bite_swaps_the_sprite_when_the_species_has_bitten_art():
 
 
 ## Same has-or-doesn't fallback every optional illustrated-art seam in this
-## codebase uses -- only 3 of 6 species have real bitten art so far (see
-## IllustratedMushroomSprite).
+## codebase uses -- all 8 real species have real bitten art now (see
+## IllustratedMushroomSprite), so this exercises the fallback itself via a
+## species id that can never have real art at all, the same "portobello"
+## stand-in test_illustrated_mushroom_sprite.gd's own unknown-species test
+## already uses.
 func test_take_mushroom_bite_falls_back_to_the_normal_look_without_bitten_art():
-	var marker := _make_marker("fly_agaric")
+	var marker := _make_marker("portobello")
 	marker.mushroom_world = StubMushroomWorld.new()
 	var before: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
 	marker.take_mushroom_bite()
 	var after: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
-	assert_eq(before, after, "fly_agaric has no bitten art yet -- the look should stay the same")
+	assert_eq(before, after, "an unknown species has no bitten art -- the look should stay the same")
 
 
 ## Bitten takes priority over the ordinary toxic/edible suffix -- once a
@@ -266,13 +269,16 @@ func test_shows_crushed_art_when_corpse_kind_is_crushed_and_the_species_has_it()
 ## above via the real mechanism instead.
 
 
-## fly_agaric has no crushed art yet (reported live: "some are still
-## missing but I'll add while you wire") -- the has-art-or-doesn't fallback
-## every optional illustrated-art seam in this codebase uses, so a corpse
-## of an undelivered species still shows ITS real look rather than a blank/
-## missing texture.
-func test_falls_back_to_the_normal_look_when_the_species_has_no_crushed_art_yet():
-	var marker := _make_marker("fly_agaric", Vector2i.ZERO, "crushed")
+## All 8 real species have real crushed (and normal, and bitten)
+## illustrated art now (reported live: "I added all missing mushroom
+## spritesheets... wire them") -- a species with the middle case this test
+## used to cover (real normal look, no crushed look) no longer exists, so
+## this now exercises the DEEPEST fallback instead: a species id with no
+## illustrated art of ANY kind still falls all the way through to the
+## procedural generator rather than a blank/missing texture (see
+## MushroomMarker._rebuild_sprite's own final `else` branch).
+func test_falls_back_to_the_procedural_look_for_a_species_with_no_illustrated_art_at_all():
+	var marker := _make_marker("portobello", Vector2i.ZERO, "crushed")
 	var sprite := marker.get_child(0) as Sprite2D
-	var expected := IllustratedMushroomSprite.new().frame_for("fly_agaric", marker.mushroom_seed)
+	var expected := ProceduralMushroomSprite.new().generate_texture("portobello", true)
 	assert_eq(sprite.texture.get_image().get_data(), expected.get_image().get_data())
