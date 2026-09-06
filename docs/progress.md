@@ -14129,3 +14129,104 @@ consume` already works for them unchanged; each just needs its own thin
 per-eater adapter, the same shape `CreatureNeeds` got here. Composition
 for any food beyond apple/cherry — meat, fish, mushrooms, root vegetables
 all keep today's flat behaviour until someone measures them in.
+
+### Boar: a real diet identity, and wild-mushroom foraging (`concept/ecosystem_dynamics.md`, `concept/mushrooms.md`, new this pass)
+
+Requested directly: "make boars forage apples, cherries, nuts and
+mushrooms and add full fledged foraging behavior." Apples/cherries/nuts
+turned out to already be mechanically eaten by boars — `TreeSpecies.IDS`
+treats all six fruit/nut species identically under `GrazerForaging.
+FOOD_FRUIT` — but only because boar shared the generic `"Omnivore"` diet
+label byte-for-byte with bear via `FORAGE_KINDS_BY_DIET`, with zero
+boar-owned data or code anywhere. Mushrooms had no eating path for any
+non-player creature at all — only player pickup and a decomposer's
+purely-visual bite (no hunger tracked). Landed the same day as a
+concurrent session's "mushroom crushed/bitten sprites" pass
+(`WildMushroomPatch.bite`/`is_corpse`/`corpse_kind`, real bitten-corpse
+art) — investigated directly via `git show origin/main:<path>` before
+writing any code, and built on top of it rather than duplicating it.
+
+✅ **Boar gets its own `GrazerForaging.FORAGE_KINDS_BY_SPECIES` entry** —
+no longer a silent bear clone — `[FOOD_FRUIT, FOOD_MUSHROOM, FOOD_SEED,
+FOOD_WORM, FOOD_GRASS]`, mast and fungi prioritized ahead of grass. Bear
+keeps the shared, unmodified `"Omnivore"` template untouched.
+
+✅ **A new `FOOD_MUSHROOM` kind**, wired through new
+`EarthChunkManager.mushrooms_near`/`take_mushroom_at`, mirroring
+`fruit_near`/`take_fruit_at`'s exact sight-based `{position, species}`
+shape (scanning the same 3x3 chunk neighbourhood
+`nearest_leaf_litter_near` already does, since a `WildMushroomPatch` is
+bucketed per chunk like a `LeafLitterField`, not a flat list).
+`CreatureMarker._visible_food` gained one new `match` case; nothing about
+the seek/approach/graze phase machine changed. `take_mushroom_at`
+resolves through `WildMushroomPatch.bite`, not `pick` (which is
+specifically the player's own "add to inventory" action) — a boar's bite
+shows the identical real bitten corpse art the concurrent crushed/
+bitten-art pass built for a decomposer's bite, with zero new rendering
+work.
+
+✅ **Real nutrition, not a cosmetic bite** — unlike the existing
+decomposer bite (purely visual, no hunger/nutrition tracked anywhere), a
+boar's mushroom bite runs through `NutrientRelease.consume` exactly like
+its fruit bite already does. `FoodComposition.composition_for` now falls
+back to one shared, real vector (water 0.90, sugar 0.02, vitamins 0.03)
+for any `MushroomSpecies.IDS` entry rather than six duplicated literal
+rows — real fungi don't differ enough in gross macro composition, at this
+level of abstraction, to warrant per-species numbers. The shared
+fruit-only nutrient-routing logic in `CreatureMarker._take_forage_bite`
+was extracted into `_apply_nutrient_bite(species)`, now called from both
+the `FOOD_FRUIT` and `FOOD_MUSHROOM` cases.
+
+**Correction, merged same day: "bite" no longer means "corpse" anywhere,
+boar included.** This entry (and the crushed/bitten-art entry above it)
+both describe a decomposer's bite as leaving a `corpse_kind == "bitten"`
+lingering remain, exactly like a crush. A concurrently-merged session
+replaced that model (see [mushrooms.md's "Bitten by a
+decomposer"](concept/mushrooms.md#bitten-by-a-decomposer)): a bite marks
+the mushroom bitten WITHOUT ending the fruiting instance, so it stays a
+real, pickable, lighter item rather than becoming inert. This boar
+feature's own `take_mushroom_at` called `WildMushroomPatch.bite` directly
+and re-synced markers, exactly the way `crush_mushroom_at` correctly
+does for an ACTUAL corpse cause — under the replaced bite model, that
+left a boar's bite with no visible effect at all (the cell never left
+`_fruiting`, so there was nothing for the sync to rebuild). Fixed
+alongside the merge: `take_mushroom_at` now resolves through the live
+`MushroomMarker`'s own `take_mushroom_bite()` instead, the same primitive
+the decomposer's own bite already uses, updating the marker directly
+with no separate re-sync needed. `test_take_mushroom_at_eats_a_real_
+fruiting_mushroom_and_leaves_a_bitten_corpse` renamed and re-pinned to
+match (`..._and_marks_it_bitten`).
+
+✅ **A toxic mushroom is eaten exactly like any other** —
+`MushroomSpecies.is_toxic` is never consulted for an animal's bite; no
+debuff, no avoidance. A deliberate choice extending the boar's own
+already-real high `DECAY` tolerance/valence in the ethogram (*"untroubled
+by a little rot"*) to fungal toxins generally — real wild boars are
+documented to tolerate compounds that would sicken other foragers — and
+no debuff-stack wiring exists for animals to extend here regardless.
+
+✅ **A real, boar-specific search radius** —
+`GrazerForaging.search_radius_for(species)`, 1.5x the flat default for
+boar, applied to every forage kind (not narrowly to mushrooms — a real
+nose is not selectively deaf to everything but fungi). The mechanical
+expression of `Ethogram.SPECIES["boar"]`'s own pre-existing comment,
+*"Rooting omnivore: excellent nose,"* which before this did nothing
+beyond gating the (fruit-only) smell check.
+
+⬜ **Explicitly not built, named in both concept docs**: true scent-based
+mushroom detection (a boar smelling out a fungus the way it already can a
+windfall apple) — the scent system's molecule set (`Olfaction.MOLECULES`)
+is closed at `SUGAR/DECAY/GREEN/MUSK/SMOKE` with exactly one mixture
+generator (`fruit_mixture`) in the whole codebase, and `_seek_by_smell()`
+hardcodes `_forage_kind = FOOD_FRUIT` on any successful smell match —
+real "truffle pig" behaviour needs a new molecule, per-species receptor
+wiring, and a restructured smell-consumption path, a separate feature in
+its own right. Also not built: seasonal mast-driven population/behaviour
+shifts (mirroring `AntColony`'s own food-success-to-capacity feedback), a
+larger ecosystem-feedback feature deliberately kept out of this pass; and
+real composition for nuts specifically — a fallen walnut/acorn/hazelnut
+already walks through the ordinary `FOOD_FRUIT` path unchanged (unaffected
+by anything in this pass), but since `FoodComposition` still only models
+apple/cherry, `NutrientRelease.consume` returns `crushed = false` for a
+nut and `_apply_nutrient_bite` falls back to the old flat `_needs.feed()`,
+exactly as it already did before the Material DSL existed at all.

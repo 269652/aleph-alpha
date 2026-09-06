@@ -40,6 +40,37 @@ func test_only_rooters_take_worms():
 	assert_false(GrazerForaging.eats("deer", "Grazer", GrazerForaging.FOOD_WORM))
 
 
+## See docs/concept/ecosystem_dynamics.md "A boar's own diet, and real
+## wild-mushroom foraging" -- a boar owns its diet data now, no longer a
+## silent copy of bear's shared "Omnivore" template.
+func test_a_boar_forages_mushrooms_too():
+	assert_true(GrazerForaging.eats("boar", "Omnivore", GrazerForaging.FOOD_MUSHROOM))
+
+
+## Mast and fungi come before grass in a boar's own priority order (see
+## _look_for_a_bite's "kinds tried in diet order" doc comment).
+func test_a_boar_prioritizes_mast_and_fungi_over_grass():
+	var kinds := GrazerForaging.forage_kinds("boar", "Omnivore")
+	assert_true(kinds.find(GrazerForaging.FOOD_FRUIT) < kinds.find(GrazerForaging.FOOD_GRASS))
+	assert_true(kinds.find(GrazerForaging.FOOD_MUSHROOM) < kinds.find(GrazerForaging.FOOD_GRASS))
+
+
+## Boar's own diet entry must not leak into the shared "Omnivore" template
+## every other omnivore (bear) still reads.
+func test_bear_is_unaffected_by_boars_own_diet_entry():
+	assert_false(GrazerForaging.eats("bear", "Omnivore", GrazerForaging.FOOD_MUSHROOM))
+
+
+# -- search radius: a real, boar-specific "excellent nose" -------------------
+
+func test_a_boar_has_a_wider_search_radius_than_the_default():
+	assert_true(GrazerForaging.search_radius_for("boar") > GrazerForaging.SEARCH_TILES)
+
+
+func test_an_unlisted_species_uses_the_default_search_radius():
+	assert_almost_eq(GrazerForaging.search_radius_for("horse"), GrazerForaging.SEARCH_TILES, 0.0001)
+
+
 ## The diet LABEL drives the default, so a species added later with no entry
 ## of its own still forages instead of silently standing around.
 func test_an_unlisted_grazer_still_forages_off_its_diet_label():

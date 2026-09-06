@@ -2434,7 +2434,11 @@ func _seek_by_smell() -> bool:
 
 
 func _visible_food(kind: String) -> Array:
-	var radius := int(GrazerForaging.SEARCH_TILES)
+	# Per-species radius (see GrazerForaging.search_radius_for) -- a boar's
+	# own "excellent nose" applies to every forage kind, not narrowly to
+	# mushrooms; every other species still gets the flat SEARCH_TILES
+	# default this always used.
+	var radius := int(GrazerForaging.search_radius_for(info.species if info != null else ""))
 	match kind:
 		GrazerForaging.FOOD_GRASS:
 			if _world.has_method("grass_near"):
@@ -2448,6 +2452,9 @@ func _visible_food(kind: String) -> Array:
 		GrazerForaging.FOOD_WORM:
 			if _world.has_method("worms_near"):
 				return _world.worms_near(position, radius)
+		GrazerForaging.FOOD_MUSHROOM:
+			if _world.has_method("mushrooms_near"):
+				return _world.mushrooms_near(position, radius)
 	return []
 
 
@@ -2456,17 +2463,22 @@ func _visible_food(kind: String) -> Array:
 ## still plays out, which reads as the animal finding the patch already
 ## cropped rather than teleporting to another one.
 ##
-## Fruit alone resolves its real composition (see NutrientRelease/
-## docs/concept/material_dsl.md): the species take_fruit_at returns is
-## checked against a real bite-scale crush, releasing real water/sugar
-## into thirst/hunger instead of the flat full-meter _needs.feed() every
-## OTHER forage kind still uses -- there is no composition data yet for
-## grass/seed/worm/underfoot.
+## Fruit and mushroom alone resolve their real composition (see
+## _apply_nutrient_bite/NutrientRelease/docs/concept/material_dsl.md): the
+## species take_fruit_at/take_mushroom_at returns is checked against a
+## real bite-scale crush, releasing real water/sugar into thirst/hunger
+## instead of the flat full-meter _needs.feed() every OTHER forage kind
+## still uses -- there is no composition data yet for grass/seed/worm/
+## underfoot. A mushroom bite resolves through take_mushroom_at, which
+## itself calls WildMushroomPatch.bite rather than pick -- an animal eats
+## a mushroom in place, the same real primitive the crushed/bitten-art
+## pass already gave a decomposer's own bite (see docs/concept/
+## mushrooms.md "Animals can find and eat wild mushrooms").
 func _take_forage_bite() -> void:
 	if not _has_forage_target:
 		return
 	var got := false
-	var fruit_species := ""
+	var species := ""
 	match _forage_kind:
 		GrazerForaging.FOOD_UNDERFOOT:
 			got = true  # it is standing in its food; there is nothing to remove
@@ -2474,24 +2486,42 @@ func _take_forage_bite() -> void:
 			got = _world.has_method("graze_grass_at") and _world.graze_grass_at(_forage_target)
 		GrazerForaging.FOOD_FRUIT:
 			if _world.has_method("take_fruit_at"):
-				fruit_species = _world.take_fruit_at(_forage_target)
-				got = fruit_species != ""
+				species = _world.take_fruit_at(_forage_target)
+				got = species != ""
+		GrazerForaging.FOOD_MUSHROOM:
+			if _world.has_method("take_mushroom_at"):
+				species = _world.take_mushroom_at(_forage_target)
+				got = species != ""
 		GrazerForaging.FOOD_SEED:
 			got = _world.has_method("take_seed_at") and _world.take_seed_at(_forage_target) != ""
 		GrazerForaging.FOOD_WORM:
 			got = _world.has_method("take_worm_at") and _world.take_worm_at(_forage_target)
 	if got:
-		if _forage_kind == GrazerForaging.FOOD_FRUIT:
-			var nutrients: Dictionary = NutrientRelease.consume(fruit_species)
-			if nutrients.get("crushed", false):
-				_needs.feed_amount(nutrients.get("sugar", 0.0))
-				_needs.drink_amount(nutrients.get("water", 0.0))
-			else:
-				_needs.feed()
+		if _forage_kind == GrazerForaging.FOOD_FRUIT or _forage_kind == GrazerForaging.FOOD_MUSHROOM:
+			_apply_nutrient_bite(species)
 		else:
 			_needs.feed()
 		_gain_energy()
 	_drop_forage_target()
+
+
+## Real composition-derived hunger/thirst, shared by every forage kind that
+## has real Material DSL data (fruit, mushroom) -- see NutrientRelease/
+## docs/concept/material_dsl.md. `species`'s MushroomSpecies.is_toxic (if
+## any) is never consulted here: a boar eats a toxic mushroom exactly like
+## any other (see docs/concept/mushrooms.md's own reasoning) -- no animal
+## debuff/toxicity mechanic exists to gate this on regardless. A crush
+## that doesn't land (unmodeled food, or -- never happens today against
+## the materials this resolves against, but checked for real rather than
+## assumed -- an impact that somehow doesn't resolve to "crush") falls
+## back to the flat full-meter _needs.feed() every other forage kind uses.
+func _apply_nutrient_bite(species: String) -> void:
+	var nutrients: Dictionary = NutrientRelease.consume(species)
+	if nutrients.get("crushed", false):
+		_needs.feed_amount(nutrients.get("sugar", 0.0))
+		_needs.drink_amount(nutrients.get("water", 0.0))
+	else:
+		_needs.feed()
 
 
 func _drop_forage_target() -> void:

@@ -169,3 +169,78 @@ func test_crush_mushroom_at_does_nothing_below_threshold():
 
 func test_crush_mushroom_at_returns_false_for_an_unloaded_chunk():
 	assert_false(manager.crush_mushroom_at(_pixel_position_for(Vector2i(999999, 999999)), 1000000.0))
+
+
+# -- mushrooms_near/take_mushroom_at: a boar's own find-and-eat query -------
+# (see docs/concept/mushrooms.md "Animals can find and eat wild mushrooms")
+# -- the sight-based FOOD_MUSHROOM sibling to fruit_near/take_fruit_at.
+# force_mushroom_near guarantees a real fruiting cell to test against,
+# rather than the "precondition unmet" skip the crush tests above use --
+# both are real, established patterns in this same file.
+
+func test_mushrooms_near_finds_a_real_fruiting_mushroom():
+	manager._load_chunk(_berlin_chunk)
+	var sim: WildMushroomPatch = manager._mushroom_sims[_berlin_chunk]
+	if sim.site_count() == 0:
+		pass_test("precondition unmet (no mushroom site near Berlin this run) -- nothing to check")
+		return
+	var site: Vector2i = sim.get_site_cells()[0]
+	var global_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + site
+	var species := manager.force_mushroom_near(global_tile)
+	var pixel := _pixel_position_for(global_tile)
+
+	var found := manager.mushrooms_near(pixel, 8)
+
+	var matching := found.filter(func(f): return f["position"].distance_to(pixel) < 1.0)
+	assert_false(matching.is_empty(), "the forced fruiting mushroom should be found nearby")
+	assert_eq(matching[0]["species"], species)
+
+
+func test_mushrooms_near_does_not_find_anything_from_far_away():
+	manager._load_chunk(_berlin_chunk)
+	var sim: WildMushroomPatch = manager._mushroom_sims[_berlin_chunk]
+	if sim.site_count() == 0:
+		pass_test("precondition unmet (no mushroom site near Berlin this run) -- nothing to check")
+		return
+	var site: Vector2i = sim.get_site_cells()[0]
+	var global_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + site
+	manager.force_mushroom_near(global_tile)
+	var far_pixel := _pixel_position_for(global_tile + Vector2i(500, 500))
+
+	assert_true(manager.mushrooms_near(far_pixel, 8).is_empty())
+
+
+## A bite is a real bite (see docs/concept/mushrooms.md "Bitten by a
+## decomposer") -- distinct from pick()/crush(), it does NOT end the
+## fruiting instance. A boar's bite marks the SAME live marker bitten
+## (real bitten-look art where delivered) rather than replacing it with a
+## corpse, exactly like a decomposer's own bite.
+func test_take_mushroom_at_eats_a_real_fruiting_mushroom_and_marks_it_bitten():
+	manager._load_chunk(_berlin_chunk)
+	var sim: WildMushroomPatch = manager._mushroom_sims[_berlin_chunk]
+	if sim.site_count() == 0:
+		pass_test("precondition unmet (no mushroom site near Berlin this run) -- nothing to check")
+		return
+	var site: Vector2i = sim.get_site_cells()[0]
+	var global_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + site
+	var species := manager.force_mushroom_near(global_tile)
+	var pixel := _pixel_position_for(global_tile)
+
+	var eaten := manager.take_mushroom_at(pixel)
+
+	assert_eq(eaten, species)
+	assert_true(sim.has_fruiting(site), "a bite is not a pick or a crush -- it stays fruiting")
+	assert_true(sim.is_bitten(site))
+	assert_true(
+		manager._mushroom_markers[_berlin_chunk][site].bitten,
+		"the live marker itself, not just the sim, should show bitten"
+	)
+
+
+func test_take_mushroom_at_returns_empty_string_when_nothing_is_there():
+	manager._load_chunk(_berlin_chunk)
+	assert_eq(manager.take_mushroom_at(_pixel_position_for(_berlin_tile + Vector2i(500, 500))), "")
+
+
+func test_take_mushroom_at_returns_empty_string_for_an_unloaded_chunk():
+	assert_eq(manager.take_mushroom_at(_pixel_position_for(Vector2i(999999, 999999))), "")

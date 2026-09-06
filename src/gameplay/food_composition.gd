@@ -1,5 +1,7 @@
 extends RefCounted
 
+const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
+
 ## The actual "Material DSL" data (see docs/concept/material_dsl.md):
 ## per-food nutrient composition as plain fractions of substance. No control
 ## flow to a composition record, so -- mirroring ethogram.gd's own
@@ -24,9 +26,27 @@ const COMPOSITION: Dictionary = {
 	"cherry": {"water": 0.82, "sugar": 0.13, "vitamins": 0.025},
 }
 
+## One shared, real composition for every `MushroomSpecies.IDS` entry (see
+## docs/concept/mushrooms.md "Animals can find and eat wild mushrooms") --
+## real fungi don't differ enough in gross macro composition, at this
+## level of abstraction, to warrant six duplicated literal entries. Real
+## mushrooms are famously mostly water, with negligible sugar but a real,
+## well-documented B-vitamin/mineral density -- a genuinely HIGHER
+## vitamins fraction than either fruit above, not just a filled-in guess.
+## `MushroomSpecies.is_toxic` is deliberately never consulted here: a boar
+## eats a toxic species exactly like any other (see that doc's own
+## reasoning).
+const _MUSHROOM_COMPOSITION: Dictionary = {"water": 0.90, "sugar": 0.02, "vitamins": 0.03}
+
 
 ## `food_id`'s real composition, or an empty dict for anything unmodeled --
 ## the unmodeled-material fallback shape this project uses throughout
-## (MaterialProperties.property_value, ItemDurability.max_wear).
+## (MaterialProperties.property_value, ItemDurability.max_wear). Falls
+## back to the shared mushroom vector for any MushroomSpecies id not
+## already in the explicit table above.
 func composition_for(food_id: String) -> Dictionary:
-	return COMPOSITION.get(food_id, {})
+	if COMPOSITION.has(food_id):
+		return COMPOSITION[food_id]
+	if MushroomSpecies.IDS.has(food_id):
+		return _MUSHROOM_COMPOSITION
+	return {}

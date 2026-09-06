@@ -335,6 +335,42 @@ mutable flag bolted onto the shared `Item`. One bite is enough: a second
 bite, or a decomposer scanning for food, both treat an already-bitten
 mushroom as having nothing left to give.
 
+### Animals can find and eat wild mushrooms
+
+Before this, the ONLY "creature eats a mushroom" path was the decomposer
+bite above — purely visual and mechanical, no hunger or nutrition tracked
+anywhere (`DecomposerMarker` has no such field). A boar (see
+[ecosystem_dynamics.md](ecosystem_dynamics.md#a-boars-own-diet-and-real-wild-mushroom-foraging-2026-09-06)
+is the first `GrazerForaging`-driven creature to actually forage one:
+`EarthChunkManager.mushrooms_near`/`take_mushroom_at` mirror `fruit_near`/
+`take_fruit_at`'s exact sight-based shape (a `{position, species}` query,
+a "take it and tell me what species" mutator), reached through a new
+`GrazerForaging.FOOD_MUSHROOM` diet kind — no change to the seek/approach/
+graze phase machine, which already didn't care what it was walking toward.
+
+`take_mushroom_at` resolves through the live `MushroomMarker`'s own
+`take_mushroom_bite()` (not `sim.bite` directly, and not `pick_up`, which
+is specifically the player's "add to inventory" action) — the same real
+take-bite-shaped primitive the decomposer's own bite above already uses,
+so a boar's bite shows the identical real bitten-look art with zero new
+rendering work, and updates the SAME marker in place (a bite never ends
+the fruiting instance or produces a corpse — see "Bitten by a decomposer"
+above) rather than needing a separate re-sync. Unlike the decomposer's
+bite, a boar's actually feeds it: the species eaten is run through
+`NutrientRelease.consume` ([material_dsl.md](material_dsl.md)) exactly
+like a fruit bite already is, releasing real hunger/thirst/nutrition from
+a shared mushroom composition vector (mushrooms are real, well-documented
+sources of B vitamins/minerals relative to their negligible sugar — a
+genuinely higher vitamins fraction than either fruit). `MushroomSpecies.
+is_toxic` is deliberately never consulted here: a boar eats a toxic
+species exactly like any other, extending its own already-real high
+`DECAY` tolerance (`ethogram.gd`'s *"untroubled by a little rot"*) to
+fungal toxins generally, real grounding for wild boars specifically.
+**Explicitly not built**: true scent-based mushroom detection (see
+ecosystem_dynamics.md's own section for why — the scent system's
+molecule set is closed and the smell-consumption path hardcodes fruit)
+and any debuff/toxicity mechanic for non-player creatures generally.
+
 ## Deliberately not modeled
 
 - **No visible growth stages.** A fruiting body appears fully formed — see
@@ -394,8 +430,10 @@ mushroom as having nothing left to give.
 - ✅ `WildMushroomPatch` (`src/world/wild_mushroom_patch.gd`) — fixed
   per-chunk sites (real per-species biome eligibility via
   `MushroomSpecies.allows_biome`), PixelNoise-seeded, flush/recovery/
-  pick/crush/bite, `is_corpse`/`corpse_kind` (crushed vs bitten, same
-  recovery clock as ordinary spent sites -- see "Crushed underfoot").
+  pick/crush, `is_corpse`/`corpse_kind` (crushed only, same recovery
+  clock as ordinary spent sites -- see "Crushed underfoot"). `bite()` is
+  a separate, orthogonal `_bitten` dict -- it does NOT end the fruiting
+  instance, so it is never a corpse cause (see "Bitten by a decomposer").
 - ✅ Item catalog entries for all 6 species (`item_catalog.gd`) — a
   hard prerequisite for the marker below, since `ItemCatalog.make()`
   fails loudly on an unregistered id.
@@ -406,20 +444,24 @@ mushroom as having nothing left to give.
   "they need hover tooltips" — and fixed), `pick_up(picker)` resolves to
   the real species item, and scales an illustrated sprite by its own
   measured `marker_scale`, not the procedural generator's flat scale.
-  `corpse_kind` shows real `crushed_frame_for`/`bitten_frame_for` art for
-  the 3 species delivered so far (black_trumpet/champignon/chanterelle),
-  falling back to the live look for the 3 not yet delivered.
-  `take_bite(_amount)` duck-types into `DecomposerMarker`'s existing bite
-  path — see "A decomposer's single bite".
+  `corpse_kind` shows real `crushed_frame_for` art for the 3 species
+  delivered so far (black_trumpet/champignon/chanterelle), falling back
+  to the live look for the 3 not yet delivered; `bitten` (a separate
+  field) does the same for `bitten_frame_for`, with no corpse involved --
+  see "Bitten by a decomposer". `take_mushroom_bite()` -- its own method,
+  deliberately not `take_bite` -- is what `DecomposerMarker`'s bite path
+  calls.
 - ✅ `MushroomRenderer` (`src/rendering/mushroom_renderer.gd`) —
   spawn_markers/sync_markers keep markers in sync with which cells are
   fruiting (no per-tick identification push any more), and now also keep
-  a crushed/bitten corpse's marker alive across the sync instead of
-  freeing it (see "Crushed underfoot").
+  a crushed corpse's marker alive across the sync instead of freeing it
+  (see "Crushed underfoot"). A bitten mushroom never needs this -- it
+  never leaves `get_fruiting_cells()`, so its existing live marker just
+  survives the sync untouched.
 - ✅ `DecomposerMarker._nearest_food` — real fungivory, fixed: a confirmed
   dead-code guard silently excluded every `MushroomMarker` from this scan
   since the group-join was first added; a decomposer can now actually
-  reach and bite one (see "A decomposer's single bite").
+  reach and bite one (see "Bitten by a decomposer").
 - ✅ `Player.mushrooms_eaten`/`apply_mushroom_toxin`/`_mushroom_toxin_step`,
   wired into `eat_food` and `_authority_step`, and `mushrooms_eaten`
   persisted through save/load as a simple lifetime counter. Eating a
@@ -432,6 +474,13 @@ mushroom as having nothing left to give.
   `test_world_ecology_batch_wild_mushrooms.gd` — built with that
   regression test from the start (the exact gap that shipped silently for
   wild crops once before), not added after the fact.
+- ✅ (2026-09-06) `EarthChunkManager.mushrooms_near`/`take_mushroom_at` +
+  `GrazerForaging.FOOD_MUSHROOM` — a boar can now actually find and eat a
+  real fruiting mushroom, resolved through `WildMushroomPatch.bite` and
+  real `NutrientRelease`-derived nutrition, not just the decomposer's
+  purely-visual bite above. See "Animals can find and eat wild mushrooms".
+  ⬜ Scent-based mushroom detection for a nosed forager remains unbuilt
+  (see that section, and ecosystem_dynamics.md's own writeup).
 
 **Every piece is now real, tested, and reachable from a running game,
 including real illustrated art for every species**: chunk load grows real
