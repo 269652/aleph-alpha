@@ -24,10 +24,21 @@
 
 .PARAMETER KeyPath
     Path to your FULL private signing key (see tools/generate_keypair.gd).
-    Required, with deliberately NO default and NO auto-discovery -- see
+    Falls back to the ALEPH_ALPHA_SIGNING_KEY environment variable if
+    omitted, so you can set that once in your own PowerShell profile ($PROFILE
+    -- lives under your user profile, never committed to this repo) instead
+    of retyping the path every release. Deliberately NO hardcoded default
+    and NO filesystem auto-discovery in the script itself, though -- see
     docs/licensing.md: this file must never live inside this repo or its
     export output, only somewhere that never touches git (a password
-    manager attachment, an encrypted offline drive).
+    manager attachment or an encrypted offline drive is docs/licensing.md's
+    own recommendation; a plain folder outside any repo, as long as you
+    control that machine, is the accepted minimum). A script committed to
+    this repo hardcoding your real key's literal filesystem path would
+    permanently document exactly where to look for it to anyone who ever
+    gets read access to this source -- that's what the environment-variable
+    indirection avoids: the PATH lives only in your own local profile, never
+    in tracked source.
 
 .PARAMETER GodotPath
     Path to the Godot editor binary. Defaults to this machine's known
@@ -47,16 +58,24 @@
     .\tools\release\build_release.ps1 -KeyPath D:\secure\aleph-alpha-signing-key.pem
 
 .EXAMPLE
-    .\tools\release\build_release.ps1 -KeyPath D:\secure\key.pem -DryRun
+    # With $env:ALEPH_ALPHA_SIGNING_KEY already set (see -KeyPath above):
+    .\tools\release\build_release.ps1 -DryRun
 #>
 param(
-    [Parameter(Mandatory = $true)][string]$KeyPath,
+    [string]$KeyPath,
     [string]$GodotPath = "$env:USERPROFILE\Godot\Godot_v4.7.2-stable_win64_console.exe",
     [string]$Preset = "Windows Desktop",
     [switch]$DryRun
 )
 
 . "$PSScriptRoot\ReleaseCommon.ps1"
+
+if ([string]::IsNullOrWhiteSpace($KeyPath)) {
+    $KeyPath = $env:ALEPH_ALPHA_SIGNING_KEY
+}
+if ([string]::IsNullOrWhiteSpace($KeyPath)) {
+    throw "No signing key given. Pass -KeyPath <path-to-your-private-key.pem>, or set it once via `$env:ALEPH_ALPHA_SIGNING_KEY in your PowerShell profile (`$PROFILE) -- see tools/release/README.md."
+}
 
 function Invoke-Checked {
     param([string]$Description, [scriptblock]$Action)
