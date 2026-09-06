@@ -28,6 +28,7 @@ const MOUND_CELL := Vector2i(3, 3)
 class StubWorld:
 	var seed_present := true
 	var fruit_species := "apple"  # "" means nothing there
+	var leaf_present := true
 	var planted_grass: Array = []
 	var planted_seeds: Array = []  # [{"position": Vector2, "species": String}]
 
@@ -48,6 +49,11 @@ class StubWorld:
 	func try_plant_seed_at(position: Vector2, species: String) -> bool:
 		planted_seeds.append({"position": position, "species": species})
 		return true
+
+	func consume_leaf_litter_at(_position: Vector2) -> bool:
+		var was_present := leaf_present
+		leaf_present = false
+		return was_present
 
 
 func _new_colony() -> AntColony:
@@ -204,6 +210,56 @@ func test_a_windfall_trip_uses_the_fruit_api_and_resolves_deterministically():
 	else:
 		assert_eq(world.planted_seeds.size(), 1, "a surviving windfall find should be cached as a new sapling")
 		assert_eq(world.planted_seeds[0]["species"], "apple")
+
+
+## Bug report: "ants... eat leaves at the spot instead of physically
+## carrying the leaf to the mound where it should disappear... the ant
+## should be seen dragging the leaf to the mound" (see
+## docs/concept/soil_fauna.md's "Leaf litter is a separate forage source
+## this mound simulation does not see", now closed). A leaf resolves through
+## the same real-arrival-takes-it contract as a seed, just against
+## consume_leaf_litter_at instead of take_grass_seed_at.
+func test_a_leaf_trip_uses_the_leaf_litter_api_and_resolves_on_arrival():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned(Vector2(2, 0), Vector2.ZERO, world, colony)
+	f.forage_kind = "leaf"
+	f._process(1.0)  # comfortably enough to close a 2px leg
+	assert_false(world.leaf_present, "arrival should really consume the leaf")
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	assert_true(f._behavior.found_food)
+
+
+## A leaf is real detritus/food the colony consumes on the spot, not a
+## propagule like a grass seed (myrmecochory) or a surviving windfall nut --
+## it must simply disappear once carried home, never re-cached/re-planted
+## anywhere (see soil_fauna.md's own "where it should disappear" framing).
+func test_a_successful_leaf_trip_plants_nothing_and_frees_itself():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var mound := Vector2(5000, 5000)
+	var f := _spawned(mound + Vector2(2, 0), mound, world, colony)
+	f.forage_kind = "leaf"
+	f._process(1.0)  # arrive at the leaf, take it, start returning
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	f._process(1.0)  # arrive back at the mound
+	assert_eq(world.planted_grass.size(), 0, "a leaf must never be re-planted as a grass patch")
+	assert_eq(world.planted_seeds.size(), 0, "a leaf must never be cached as a sapling")
+	assert_true(f.is_queued_for_deletion(), "a forager should free itself once its whole round trip is walked")
+
+
+func test_an_empty_handed_leaf_trip_plants_nothing():
+	var world := StubWorld.new()
+	world.leaf_present = false
+	var colony := _new_colony()
+	var mound := Vector2(5000, 5000)
+	var f := _spawned(mound + Vector2(2, 0), mound, world, colony)
+	f.forage_kind = "leaf"
+	f._process(1.0)
+	f._process(1.0)
+	assert_eq(world.planted_grass.size(), 0)
+	assert_eq(world.planted_seeds.size(), 0)
+	assert_true(f.is_queued_for_deletion())
 
 
 # -- pheromones: a successful trip marks the food location ------------------

@@ -6666,6 +6666,99 @@ func test_a_successful_grass_seed_forage_dispatches_a_real_forager_at_the_seed()
 	assert_gt(manager.grass_seeds_near(centre, 40).size(), 0, "the seed must still be there until the ant arrives")
 
 
+## Bug report: "ants... eat leaves at the spot instead of physically
+## carrying the leaf to the mound where it should disappear... the ant
+## should be seen dragging the leaf to the mound". Traced to a real,
+## already-named gap: docs/concept/soil_fauna.md's own "Leaf litter is a
+## separate forage source this mound simulation does not see" -- the
+## VISIBLE ambient DecomposerMarker ants/bugs already eat leaf litter (in
+## place, since they have no mound/colony concept at all -- see carrion.md),
+## but the real AntColony mound simulation never looked for it, so its own
+## foragers (the ones that DO carry seed/windfall home, with a real "carry"
+## pose) could never carry a leaf. Mirrors
+## test_a_successful_grass_seed_forage_dispatches_a_real_forager_at_the_seed's
+## exact shape, using a synthetic mound/field pair (this file's own "reach
+## into manager state directly" convention -- see _ant_colony_with_one_mound/
+## _field_at) rather than a real generated chunk, since leaf litter needs
+## no terrain/biome data at all to test the dispatch itself.
+func test_a_successful_leaf_forage_dispatches_a_real_forager_at_the_leaf():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var origin := Vector2i(1000, 1000)  # arbitrary -- does not need to be a real loaded chunk
+	var global_tile := origin + cell
+	var mound_pixel := Vector2(global_tile) * TerrainRenderer.TILE_SIZE
+	var chunk_coord := manager._chunk_coord_for_tile(global_tile)
+	var field := _field_at(chunk_coord)
+	var leaf_position := mound_pixel + Vector2(10, 0)
+	field.add_leaf(leaf_position, "cherry", "autumn", 0.0)
+
+	var before_children := manager._entities_parent.get_child_count()
+	var dispatched := manager._forage_leaf_near_mound(colony, origin, cell)
+
+	assert_true(dispatched, "a real nearby leaf should dispatch a forager")
+	assert_gt(
+		manager._entities_parent.get_child_count(), before_children,
+		"a real, successful leaf forage should dispatch a visible forager sprite"
+	)
+	assert_true(manager._active_ant_foragers.has(global_tile))
+	var forager: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
+	assert_eq(forager.target_position, leaf_position, "the forager should be sent at the REAL leaf position")
+	assert_eq(forager.forage_kind, "leaf")
+	# The take has NOT happened yet -- only the forager's own real arrival
+	# resolves it (see test_ant_forager_marker.gd's own coverage of that).
+	assert_eq(field.leaves().size(), 1, "the leaf must still be there until the ant arrives")
+
+
+func test_forage_leaf_near_mound_returns_false_with_no_leaf_in_reach():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var origin := Vector2i(2000, 2000)  # a chunk with no leaf-litter field at all
+	assert_false(manager._forage_leaf_near_mound(colony, origin, cell))
+
+
+## Unlike grass seed (grassland-only) and windfall (forest/rainforest-only),
+## leaf litter is not biome-gated -- a chunk classified "grassland" can still
+## have real trees shedding leaves onto it (mixed-biome chunks are real and
+## common -- see ecosystem_dynamics.md's own sparrow-investigation biome
+## measurements). step_ants must therefore check for a nearby leaf BEFORE
+## falling back to the mound's own biome-specific branch, not only for
+## non-grassland mounds.
+func test_step_ants_dispatches_at_a_leaf_even_for_a_grassland_mound():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	# step_ants reconstructs origin as chunk_coord * CHUNK_SIZE itself (see
+	# its own loop) -- starting from an arbitrary chunk_coord and deriving
+	# origin/global_tile FROM it, rather than the other way around, keeps
+	# this test's own geometry consistent with what step_ants will compute.
+	var chunk_coord := Vector2i(90, 90)  # arbitrary -- does not need to be a real generated chunk
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE
+	var global_tile := origin + cell
+	var mound_pixel := Vector2(
+		float(global_tile.x) + 0.5, float(global_tile.y) + 0.5
+	) * TerrainRenderer.TILE_SIZE
+	var field := _field_at(chunk_coord)
+	var leaf_position := mound_pixel + Vector2(10, 0)
+	field.add_leaf(leaf_position, "cherry", "autumn", 0.0)
+	manager._ant_colonies[chunk_coord] = colony
+
+	# should_forage is a real, deterministic-per-step roll (AntColony.
+	# FORAGE_CHANCE = 0.05) -- call step_ants itself repeatedly (rather than
+	# driving colony.advance() separately) so every call's own advance() and
+	# should_forage() stay in lockstep on the SAME step count; 200 tries is
+	# comfortable headroom over the ~20 expected at that chance.
+	for i in 200:
+		manager.step_ants(0.1)
+		if manager._active_ant_foragers.has(global_tile):
+			break
+
+	assert_true(
+		manager._active_ant_foragers.has(global_tile),
+		"a nearby leaf should be dispatched at even though this mound's biome (grassland) would otherwise forage seed"
+	)
+	var forager: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
+	assert_eq(forager.forage_kind, "leaf")
+
+
 ## AntColony.FORAGE_CHANCE can succeed several times a second per mound at
 ## normal frame rate -- a new visible ant for every single one would be a
 ## flicker of overlapping sprites, not a colony reading as alive. Fills a
