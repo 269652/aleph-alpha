@@ -34,6 +34,11 @@ const FOOD_GRASS := "grass"
 const FOOD_FRUIT := "fruit"
 const FOOD_SEED := "seed"
 const FOOD_WORM := "worm"
+## A real, sight-based find-and-eat wild mushroom (see EarthChunkManager.
+## mushrooms_near/take_mushroom_at, docs/concept/mushrooms.md "Animals can
+## find and eat wild mushrooms") -- boar-only today (see
+## FORAGE_KINDS_BY_SPECIES), not part of the shared Omnivore template.
+const FOOD_MUSHROOM := "mushroom"
 
 ## The fallback "bite": whatever is growing on the tile the animal already
 ## stands on, with no entity behind it. Not a diet entry -- an animal that can
@@ -62,8 +67,16 @@ const FORAGE_KINDS_BY_DIET := {
 ## also windfall fruit and hard mast, which is why deer turn up under apple
 ## trees and horses don't. It shares the "Grazer" label with the horse
 ## because that label is also the creature-info panel's user-facing text.
+##
+## A boar owns its own entry too (see docs/concept/ecosystem_dynamics.md
+## "A boar's own diet, and real wild-mushroom foraging") rather than
+## silently falling through to FORAGE_KINDS_BY_DIET["Omnivore"] -- which it
+## shares byte-for-byte with bear. Mast and fungi first, matching real
+## boar foraging priority and _look_for_a_bite's own "kinds tried in diet
+## order" contract; bear keeps the shared, unmodified Omnivore template.
 const FORAGE_KINDS_BY_SPECIES := {
 	"deer": [FOOD_GRASS, FOOD_FRUIT],
+	"boar": [FOOD_FRUIT, FOOD_MUSHROOM, FOOD_SEED, FOOD_WORM, FOOD_GRASS],
 }
 
 ## How far a land animal looks for its next bite, in tiles. Between the
@@ -73,6 +86,27 @@ const FORAGE_KINDS_BY_SPECIES := {
 ## square metre, but still only eats what it can see. Comfortably inside the
 ## 3x3 chunk window EarthChunkManager's *_near queries actually scan.
 const SEARCH_TILES := 12.0
+
+## Species whose real search radius the flat SEARCH_TILES undersells.
+##
+## A boar's own override -- the mechanical expression of Ethogram.
+## SPECIES["boar"]'s existing "Rooting omnivore: excellent nose" comment,
+## which before this did nothing beyond gating the (fruit-only) smell
+## check. Applies to every forage kind, not narrowly to mushrooms: a real
+## nose is not selectively deaf to everything but fungi. A real, sourced
+## number would need field data on wild boar foraging-detection range this
+## project doesn't have; a third comfortably above the flat default is a
+## legibility choice, not a measurement -- the same "ordering, not
+## measurement" caveat materials.md's own non-measured columns carry.
+const SEARCH_TILES_BY_SPECIES := {
+	"boar": SEARCH_TILES * 1.5,
+}
+
+
+## `species`'s real search radius, in tiles -- the flat SEARCH_TILES for
+## anything with no override (every grazer except boar, today).
+static func search_radius_for(species: String) -> float:
+	return float(SEARCH_TILES_BY_SPECIES.get(species, SEARCH_TILES))
 
 ## How long one head-down bout lasts, and how long the animal steps between
 ## bouts. The RATIO is the part that matters and the part that is tested

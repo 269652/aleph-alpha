@@ -5474,6 +5474,67 @@ func crush_mushroom_at(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 	return true
 
 
+## Every real, currently-fruiting wild mushroom within `radius_tiles` of
+## `pixel_position` (see WildMushroomPatch), in the shape fruit_near
+## already uses ({position, species}) so GrazerForaging's FOOD_MUSHROOM
+## kind slots into CreatureMarker._visible_food identically to FOOD_FRUIT
+## (see docs/concept/mushrooms.md "Animals can find and eat wild
+## mushrooms"). Scans the same 3x3 chunk neighbourhood nearest_leaf_
+## litter_near/leaf_litter_near already do -- a WildMushroomPatch, like a
+## LeafLitterField, is bucketed per chunk, not one flat list. A fruiting
+## cell has no pixel position of its own (see WildMushroomPatch's
+## own local-cell-only API), so this converts it the same way a mound's
+## own cell already becomes a pixel elsewhere in this file: the tile's
+## centre, not its corner.
+func mushrooms_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
+	var out: Array = []
+	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	var radius_px := float(radius_tiles) * TerrainRenderer.TILE_SIZE
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var chunk_coord := center_chunk + Vector2i(dx, dy)
+			var sim: WildMushroomPatch = _mushroom_sims.get(chunk_coord)
+			if sim == null:
+				continue
+			for cell in sim.get_fruiting_cells():
+				var global_tile: Vector2i = chunk_coord * CHUNK_SIZE + cell
+				var cell_pixel := Vector2(
+					float(global_tile.x) + 0.5, float(global_tile.y) + 0.5
+				) * TerrainRenderer.TILE_SIZE
+				if cell_pixel.distance_to(pixel_position) > radius_px:
+					continue
+				out.append({"position": cell_pixel, "species": sim.species_at(cell)})
+	return out
+
+
+## Eats the wild mushroom fruiting at `pixel_position`, if there is one (see
+## mushrooms_near) -- the mutation counterpart, mirroring take_fruit_at's
+## own "return what was actually swallowed, or empty" contract. Resolves
+## through WildMushroomPatch.bite, NOT pick -- pick is specifically the
+## player's own "add to inventory" action; an animal eats a mushroom in
+## place, the same real primitive the decomposer's own bite already uses
+## (see docs/concept/mushrooms.md "A decomposer's single bite"), so a
+## boar's bite shows the identical real bitten corpse art with no new
+## rendering work. Same immediate re-sync crush_mushroom_at already does,
+## so a bitten mushroom doesn't visibly linger as "still fruiting" until
+## step_wild_mushrooms's own next throttled tick.
+func take_mushroom_at(pixel_position: Vector2) -> String:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var sim: WildMushroomPatch = _mushroom_sims.get(chunk_coord)
+	if sim == null:
+		return ""
+	var cell := tile - chunk_coord * CHUNK_SIZE
+	var species := sim.species_at(cell)
+	if not sim.bite(cell):
+		return ""
+	_mushroom_renderer.sync_markers(
+		_entities_parent, sim, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		_mushroom_markers[chunk_coord]
+	)
+	return species
+
+
 ## The walnut-shaped sibling of crush_mushroom_at (see docs/concept/
 ## soil_fauna.md "Crushed underfoot", CrushMechanic) -- "crack open" a
 ## fallen walnut underfoot. Unlike a worm/caterpillar/mushroom, a walnut

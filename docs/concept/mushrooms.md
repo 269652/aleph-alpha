@@ -287,6 +287,40 @@ _nearest_food`'s own type guard silently excluded it again immediately
 afterward, so a decomposer could never actually reach a mushroom at all
 until this pass.
 
+### Animals can find and eat wild mushrooms
+
+Before this, the ONLY "creature eats a mushroom" path was the decomposer
+bite above — purely visual and mechanical, no hunger or nutrition tracked
+anywhere (`DecomposerMarker` has no such field). A boar (see
+[ecosystem_dynamics.md](ecosystem_dynamics.md#a-boars-own-diet-and-real-wild-mushroom-foraging-2026-09-06)
+is the first `GrazerForaging`-driven creature to actually forage one:
+`EarthChunkManager.mushrooms_near`/`take_mushroom_at` mirror `fruit_near`/
+`take_fruit_at`'s exact sight-based shape (a `{position, species}` query,
+a "take it and tell me what species" mutator), reached through a new
+`GrazerForaging.FOOD_MUSHROOM` diet kind — no change to the seek/approach/
+graze phase machine, which already didn't care what it was walking toward.
+
+`take_mushroom_at` resolves through `WildMushroomPatch.bite`, the same
+real primitive the decomposer's own bite above already uses (not `pick`,
+which is specifically the player's "add to inventory" action — an animal
+eats a mushroom in place) — so a boar's bite shows the identical real
+bitten corpse art the crushed/bitten pass built, with zero new rendering
+work. Unlike the decomposer's bite, a boar's actually feeds it: the
+species eaten is run through `NutrientRelease.consume`
+([material_dsl.md](material_dsl.md)) exactly like a fruit bite already is,
+releasing real hunger/thirst/nutrition from a shared mushroom composition
+vector (mushrooms are real, well-documented sources of B vitamins/
+minerals relative to their negligible sugar — a genuinely higher vitamins
+fraction than either fruit). `MushroomSpecies.is_toxic` is deliberately
+never consulted here: a boar eats a toxic species exactly like any other,
+extending its own already-real high `DECAY` tolerance (`ethogram.gd`'s
+*"untroubled by a little rot"*) to fungal toxins generally, real
+grounding for wild boars specifically. **Explicitly not built**: true
+scent-based mushroom detection (see ecosystem_dynamics.md's own section
+for why — the scent system's molecule set is closed and the smell-
+consumption path hardcodes fruit) and any debuff/toxicity mechanic for
+non-player creatures generally.
+
 ## Deliberately not modeled
 
 - **No visible growth stages.** A fruiting body appears fully formed — see
@@ -384,6 +418,13 @@ until this pass.
   `test_world_ecology_batch_wild_mushrooms.gd` — built with that
   regression test from the start (the exact gap that shipped silently for
   wild crops once before), not added after the fact.
+- ✅ (2026-09-06) `EarthChunkManager.mushrooms_near`/`take_mushroom_at` +
+  `GrazerForaging.FOOD_MUSHROOM` — a boar can now actually find and eat a
+  real fruiting mushroom, resolved through `WildMushroomPatch.bite` and
+  real `NutrientRelease`-derived nutrition, not just the decomposer's
+  purely-visual bite above. See "Animals can find and eat wild mushrooms".
+  ⬜ Scent-based mushroom detection for a nosed forager remains unbuilt
+  (see that section, and ecosystem_dynamics.md's own writeup).
 
 **Every piece is now real, tested, and reachable from a running game,
 including real illustrated art for every species**: chunk load grows real

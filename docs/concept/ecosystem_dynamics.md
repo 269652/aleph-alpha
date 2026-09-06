@@ -379,6 +379,61 @@ modelled on): **see a specific thing, walk to it, put your head down, move on.**
   timeout: a grazer is not just cropping a tuft any more, it is working
   through what is landing on top of it to keep its muzzle in the grass.
 
+### A boar's own diet, and real wild-mushroom foraging (2026-09-06)
+
+Requested directly: "make boars forage apples, cherries, nuts and
+mushrooms and add full fledged foraging behavior." Boar already
+mechanically ate windfall fruit and nuts (`TreeSpecies.IDS` treats
+apple/cherry/walnut/acorn/hazelnut identically under `GrazerForaging.
+FOOD_FRUIT`) — but only because it shared the generic `"Omnivore"` diet
+label byte-for-byte with bear, via `FORAGE_KINDS_BY_DIET`, not through any
+boar-owned data. Mushrooms had no eating path for any non-player creature
+at all (see [mushrooms.md](mushrooms.md#animals-can-find-and-eat-wild-mushrooms)).
+
+- **Boar gets its own `FORAGE_KINDS_BY_SPECIES` entry** — no longer a
+  silent bear clone — prioritizing mast and fungi over grass:
+  `[FOOD_FRUIT, FOOD_MUSHROOM, FOOD_SEED, FOOD_WORM, FOOD_GRASS]`. Bear
+  keeps the shared, unmodified `"Omnivore"` template.
+- **A new `FOOD_MUSHROOM` kind**, wired through `EarthChunkManager.
+  mushrooms_near`/`take_mushroom_at` in the exact sight-based shape
+  `FOOD_FRUIT`'s `fruit_near`/`take_fruit_at` already use — `_visible_food`
+  gains a case, nothing about the phase machine (seek/approach/graze)
+  changes. `take_mushroom_at` resolves through `WildMushroomPatch.bite`
+  (see mushrooms.md), not `pick` — a boar eats a mushroom in place, the
+  same real "bitten" corpse the recent crushed/bitten-art pass already
+  built for a decomposer's bite, not a player's inventory pickup.
+- **A real, boar-specific search radius** — `GrazerForaging.
+  search_radius_for(species)`, defaulting to the flat `SEARCH_TILES`
+  every other grazer still uses. Boar's own override is the mechanical
+  expression of `Ethogram.SPECIES["boar"]`'s own existing comment,
+  *"Rooting omnivore: excellent nose"* — which, before this, did nothing
+  beyond gating the (fruit-only) smell check. Applies to every forage kind,
+  not narrowly to mushrooms: a real nose is not selectively deaf to
+  everything but fungi.
+- **Real nutrition, not a cosmetic bite.** A boar's mushroom bite runs
+  through `NutrientRelease.consume` exactly like its fruit bite already
+  does (see [material_dsl.md](material_dsl.md)) — real hunger/thirst/
+  nutrition from the mushroom's own composition, something the existing
+  decomposer bite (purely visual, no hunger tracked at all) does not have.
+- **A toxic mushroom is eaten exactly like any other** —
+  `MushroomSpecies.is_toxic` is not consulted at all for a boar's bite; no
+  debuff, no avoidance. A deliberate choice extending the boar's own
+  already-real high `DECAY` tolerance/valence (*"untroubled by a little
+  rot"*) to fungal toxins generally — real wild boars are documented to
+  tolerate compounds that would sicken other foragers, and no debuff-stack
+  wiring exists for animals to extend here regardless.
+- **Explicitly NOT built**: true scent-based mushroom detection (a boar
+  smelling out a fungus the way it already can a windfall apple). The
+  scent system's molecule set (`Olfaction.MOLECULES`) is closed at
+  `SUGAR/DECAY/GREEN/MUSK/SMOKE` with exactly one mixture generator
+  (`fruit_mixture`) in the whole codebase, and `_seek_by_smell()` hardcodes
+  `_forage_kind = FOOD_FRUIT` on any successful smell match — real
+  "truffle pig" behaviour needs a new molecule, per-species receptor
+  wiring, and a restructured smell-consumption path, a separate feature in
+  its own right. Also not built: seasonal mast-driven population/behaviour
+  shifts (mirrors `AntColony`'s own food-success-to-capacity feedback, a
+  larger ecosystem-feedback feature deliberately kept out of this pass).
+
 ## Biome-specific species composition
 
 Pillar 1 ("boars live where boars thrive") extends beyond population *size* to
