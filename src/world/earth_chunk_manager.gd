@@ -7779,12 +7779,15 @@ func _refresh_bird_food_density() -> void:
 		_ecosystem.update_seed_density(chunk_coord, seed_count)
 
 
-## Refreshes both creature and fish markers to match the ecosystem's current
-## aggregate populations -- a fished-down or recovering water chunk visibly
-## shows fewer/more fish on the next periodic refresh, not just on reload.
+## Refreshes creature, fish AND ambient-flyer-bird markers to match the
+## ecosystem's current aggregate populations -- a fished-down or recovering
+## water chunk visibly shows fewer/more fish on the next periodic refresh,
+## not just on reload; same now for a chunk whose sparrow/robin population
+## has moved since it was spawned in.
 func _refresh_creatures() -> void:
 	for chunk_coord in _loaded_chunks.keys():
 		_reconcile_chunk_creatures(chunk_coord)
+		_reconcile_chunk_ambient_flyers(chunk_coord)
 
 		var chunk: Chunk = _loaded_chunks[chunk_coord]
 		for fish in _loaded_fish.get(chunk_coord, []):
@@ -7842,6 +7845,29 @@ func _reconcile_chunk_creatures(chunk_coord: Vector2i) -> void:
 			)
 		)
 	_loaded_creatures[chunk_coord] = alive
+
+
+## Brings one chunk's robin/sparrow markers in line with their CURRENT
+## aggregate populations, the ambient-flyer sibling of
+## _reconcile_chunk_creatures immediately above -- see
+## AmbientFlyerRenderer.reconcile_bird_markers's own doc comment for why this
+## exists: sparrow's food signal (ground-seed cells) is always exactly zero
+## the instant a chunk loads and only rises over real elapsed time, so
+## without this, its markers could never appear for the rest of that chunk's
+## loaded lifetime once the one-time load-time spawn had already run.
+func _reconcile_chunk_ambient_flyers(chunk_coord: Vector2i) -> void:
+	var chunk: Chunk = _loaded_chunks[chunk_coord]
+	_loaded_ambient_flyers[chunk_coord] = _ambient_flyer_renderer.reconcile_bird_markers(
+		_creatures_parent,
+		chunk,
+		chunk_coord * CHUNK_SIZE,
+		TerrainRenderer.TILE_SIZE,
+		_biome_classifier.dominant_biome(chunk.biome),
+		_loaded_ambient_flyers.get(chunk_coord, []),
+		_ecosystem.robin_population(chunk_coord),
+		_ecosystem.sparrow_population(chunk_coord),
+		self
+	)
 
 
 ## Removes `surplus` animals from a chunk whose population has fallen, and

@@ -7009,13 +7009,15 @@ state had never once been set by anything in `src/`.
   remove one specific bird from its aggregate; only food DENSITY, sampled
   fresh, moves the carrying capacity these populations grow or decline
   toward (the same gap herbivore/predator/fish had before `record_death`/
-  `record_catch`/`record_birth`); (2) no continuous marker top-up —
+  `record_catch`/`record_birth`); ~~(2) no continuous marker top-up —
   `EarthChunkManager._refresh_creatures` tops up land-creature/fish MARKERS
   every periodic ecosystem step, but robin/sparrow/kingfisher markers are
   only resynced to their aggregate population at chunk load/reload, not
   every step, even though the aggregate numbers themselves do keep evolving
-  underneath in the meantime. See `concept/ecosystem_dynamics.md`'s Open
-  questions for the full writeup of both.
+  underneath in the meantime~~ **Resolved for robin/sparrow (2026-09-06),
+  see "Zero sparrow spawns, resolved" below; kingfisher deliberately left
+  open, out of scope for that fix.** See `concept/ecosystem_dynamics.md`'s
+  Open questions for the full writeup of both.
   Tests: `tests/unit/test_robin_population_model.gd`,
   `test_sparrow_population_model.gd`, `test_kingfisher_population_model.gd`
   ~~(3) no persistence/unloaded-chunk catch-up integration — unlike
@@ -7208,6 +7210,44 @@ state had never once been set by anything in `src/`.
   tests (4 chunk-manager, 3 marker), 222/224 green across the renderer
   and marker suites (same 2 pre-existing `SpiralFlight` failures aside).
   Writeup: `concept/ecosystem_dynamics.md`'s same section.
+  **Follow-up (2026-09-06), the "zero sparrow spawns" finding above,
+  resolved.** Measured directly first: a GUT-routed probe (raw `godot -s`
+  cannot construct `EarthChunkManager` — it transitively references the
+  `WorldItemBus` autoload, which does not resolve at all under a bare `-s`
+  script, confirmed with a minimal repro; GUT's own `-s
+  addons/gut/gut_cmdln.gd` entry point and the real game boot both work
+  fine) loaded the real spawn point's 3×3 chunk neighborhood directly.
+  Every chunk was grassland-dominated with 20–205 standing tall-grass
+  patches — plenty of food, not a shortage. `sparrow_population` was
+  exactly `0.0` at chunk load in all nine (matching `robin_population` at
+  a healthy 3.6–4.8 in the same chunks), but 20 simulated minutes of
+  `step_tall_grass`/`step_flowers`/`step_ecosystem` grew it to 4.2–5.4,
+  fully comparable to robin — the food-density → population pipeline
+  works. The real bug: `spawn_ambient_flyers` promotes population into
+  markers exactly ONCE, at chunk load, the instant `add_region` seeds
+  `sparrow_population` at `0.0` by design. Robin's food signal (worm
+  burrows) is a structural feature already in place at that instant, so
+  it reads 3–5 immediately; sparrow's (ground-seed cells) needs real
+  elapsed shedding time that has not happened yet, so it promotes at
+  exactly `0` and nothing ever re-promotes it again for that chunk's
+  loaded lifetime — the exact "(2) no continuous marker top-up" non-goal
+  named above, now confirmed as the actual cause rather than a merely
+  theoretical gap. Fixed with `AmbientFlyerRenderer.reconcile_bird_
+  markers` (adds/removes robin and sparrow markers in place to match
+  live population, mirroring `_reconcile_chunk_creatures`'s exact shape),
+  wired into `_refresh_creatures` via a new
+  `EarthChunkManager._reconcile_chunk_ambient_flyers`; `FlyerSpawnLayout.
+  scattered_cells` gained a `start` offset (mirroring `CreatureRenderer.
+  spawn_creatures`'s `start_index`) so a topped-up batch continues the
+  same layout instead of duplicating an already-placed marker. Kingfisher
+  left deliberately unchanged — its food signal (existing fish
+  population) is seeded to a real equilibrium immediately at chunk load,
+  so it never exhibited this symptom. 3 test files touched: `test_flyer_
+  spawn_layout.gd` (2 new `scattered_cells` tests), `test_ambient_flyer_
+  renderer.gd` (4 new `reconcile_bird_markers` tests, 54/54 green),
+  `test_earth_chunk_manager.gd` (1 new end-to-end regression test
+  reproducing the exact reported shape). Writeup: `concept/
+  ecosystem_dynamics.md`'s "Zero sparrow spawns, resolved".
 - **Persistence / catch-up integration of eaten burrows** (medium) — ⬜ Not
   started, deliberately — a reloaded chunk re-seeds deterministically and
   loses which burrows had been eaten, exactly like `FlowerPatch`, `TallGrass`,
