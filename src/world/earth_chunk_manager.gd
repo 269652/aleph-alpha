@@ -5451,6 +5451,58 @@ func force_mushroom_near(global_tile: Vector2i) -> String:
 	return sim.species_at(fruited_cell)
 
 
+## Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot",
+## CrushMechanic) -- mirrors crush_worm_at's own shape exactly (same real
+## pixel-position -> tile -> chunk/sim lookup, same immediate re-sync so a
+## crushed mushroom doesn't visibly linger until step_wild_mushrooms's own
+## next throttled tick), but resolves through WildMushroomPatch.crush
+## instead of pick: an insufficient `momentum_kg_m_s` leaves a fruiting
+## mushroom exactly where it was, the same as never having been stepped on
+## at all. No Karma penalty applies here (unlike crush_worm_at/
+## crush_caterpillars_near) -- a mushroom is a fungus, not an animal (see
+## docs/concept/mushrooms.md).
+func crush_mushroom_at(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var sim: WildMushroomPatch = _mushroom_sims.get(chunk_coord)
+	if sim == null:
+		return false
+	if not sim.crush(tile - chunk_coord * CHUNK_SIZE, momentum_kg_m_s):
+		return false
+	_mushroom_renderer.sync_markers(
+		_entities_parent, sim, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		_mushroom_markers[chunk_coord]
+	)
+	return true
+
+
+## The walnut-shaped sibling of crush_mushroom_at (see docs/concept/
+## soil_fauna.md "Crushed underfoot", CrushMechanic) -- "crack open" a
+## fallen walnut underfoot. Unlike a worm/caterpillar/mushroom, a walnut
+## is a plain DroppedItem with no per-chunk sim of its own, so detection
+## scans DroppedItem.GROUP_NAME directly, filtered to real walnut item
+## stacks, matched by exact tile -- the same tile-exact-match
+## crush_caterpillars_near already uses for a real Node2D rather than
+## per-cell sim state. Cracking one destroys it outright, the same "gone,
+## not transformed into a different item" outcome a crushed worm/
+## caterpillar already gets -- nothing in this project models a separate
+## cracked-kernel item.
+func crush_walnut_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
+	if not CrushMechanic.is_crushed_by(momentum_kg_m_s):
+		return false
+	if _entities_parent == null or not _entities_parent.is_inside_tree():
+		return false
+	var tile := _world_tile_for_pixel(pixel_position)
+	for item in _entities_parent.get_tree().get_nodes_in_group(DroppedItem.GROUP_NAME):
+		if item.item_stack == null or item.item_stack.item.id != "walnut":
+			continue
+		if _world_tile_for_pixel(item.position) != tile:
+			continue
+		item.queue_free()
+		return true
+	return false
+
+
 ## Tills and plants `crop_id` at a global tile (see docs/concept/farming.md,
 ## FarmPlot, FarmPlotMarker, Player._plant_step) -- lazily creates the
 ## plot's marker the first time this tile is farmed. Same "chunk must be

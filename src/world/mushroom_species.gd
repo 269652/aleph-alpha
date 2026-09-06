@@ -122,3 +122,28 @@ static func is_saprotroph(species_id: String) -> bool:
 	return host_tree_for(species_id).is_empty()
 
 
+## Real biome eligibility per species (see docs/concept/mushrooms.md).
+## Mycorrhizal species (a non-empty host_tree_for) only ever grow where
+## their real host tree does -- forest/rainforest. Saprotrophs vary by
+## real species rather than sharing one blanket rule: Champignon (Agaricus
+## campestris, the real "field mushroom") is specifically a pasture/
+## grassland species, genuinely uncommon in deep forest -- unlike
+## Psilocybe/Parasol, both real mixed-habitat species (grassland AND
+## forest-edge/leaf-litter), kept eligible in both. An unlisted id falls
+## back to forest/rainforest only, matching a mycorrhizal default.
+const _BIOMES_BY_SPECIES := {
+	"fly_agaric": ["forest", "rainforest"],
+	"black_trumpet": ["forest", "rainforest"],
+	"chanterelle": ["forest", "rainforest"],
+	"champignon": ["grassland"],
+	"psylo": ["forest", "rainforest", "grassland"],
+	"parasol": ["forest", "rainforest", "grassland"],
+}
+const _FALLBACK_BIOMES := ["forest", "rainforest"]
+
+
+static func allows_biome(species_id: String, biome: String) -> bool:
+	var biomes: Array = _BIOMES_BY_SPECIES.get(species_id, _FALLBACK_BIOMES)
+	return biomes.has(biome)
+
+

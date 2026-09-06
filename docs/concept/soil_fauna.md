@@ -1636,6 +1636,45 @@ call. The exclusion the request's own parenthetical asked for falls out
 of scope (which sim/group a creature belongs to) rather than a size
 threshold that would need its own tuning and its own test.
 
+### Generalized past animals: mushrooms and walnuts (2026-09-06)
+
+Reported directly: *"A mushroom is a physical entity and should have
+mechanical und structural definitions like most entities and when you
+walk over one it should be crushed because of the player weight. Same
+for walnuts (crack open) excempt flowers."* `CrushMechanic.is_crushed_by`
+itself needed no change at all (see its own doc comment: it was already
+victim-agnostic from the start) — this is purely two more DETECTION
+shapes, a third and fourth beyond the worm/caterpillar pair above, wired
+into the identical `World._client_process` block (player's own momentum,
+then every `CreatureMarker`'s own species-derived momentum).
+
+- **`WildMushroomPatch.crush(cell, momentum_kg_m_s)`** — a real third
+  shape, but one that fits the WORM'S pattern almost exactly (per-tile
+  sim state, not a Node2D): mirrors `EarthwormPatch.crush` line for line
+  (see `docs/concept/mushrooms.md`). `EarthChunkManager.
+  crush_mushroom_at` mirrors `crush_worm_at`'s own three-step shape.
+- **`EarthChunkManager.crush_walnut_near(pixel_position, momentum_kg_m_s)`**
+  — the one genuinely NEW shape: a fallen walnut is a plain `DroppedItem`
+  with no per-chunk sim and no dedicated marker class at all (unlike a
+  worm, caterpillar, or mushroom). Detection scans `DroppedItem.
+  GROUP_NAME` directly, filtered to a real walnut item stack, matched by
+  exact tile (the same tile-exact-match `crush_caterpillars_near` already
+  uses for a real Node2D). Cracking one destroys it outright — the same
+  "gone, not transformed into a different item" outcome a crushed worm/
+  caterpillar already gets; nothing in this project models a separate
+  cracked-kernel item, and inventing one was out of scope for this pass.
+- **No Karma penalty for either** — a deliberate divergence from the
+  worm/caterpillar wiring. Stepping on a worm or caterpillar ends an
+  animal's life; a mushroom is a fungus and a walnut a seed, neither an
+  animal, so `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY` (its very name
+  scoped to those two) simply never applies to either new call.
+- **Flowers are excluded by construction, not a new check** — flowers are
+  deliberately not `Node2D`s in any group at all (a bare `Sprite2D` per
+  cell, no script -- see `EarthChunkManager._sync_flower_sprites`'s own
+  doc comment), so there is nothing flower-shaped for either new crush
+  call to sweep in; the request's "except flowers" needed no code of its
+  own to honour.
+
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
 A real, hand-illustrated sheet (`assets/sprites/animals/worm.png`) replaces

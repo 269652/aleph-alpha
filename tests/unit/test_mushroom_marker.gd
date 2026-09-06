@@ -17,6 +17,7 @@ const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const ProceduralMushroomSprite = preload("res://src/rendering/procedural_mushroom_sprite.gd")
 const IllustratedMushroomSprite = preload("res://src/rendering/illustrated_mushroom_sprite.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const Inventory = preload("res://src/gameplay/inventory.gd")
 
 class StubPicker:
@@ -64,6 +65,24 @@ func test_joins_the_dropped_item_group():
 func test_joins_the_forageable_group_so_decomposers_can_eat_it_too():
 	var marker := _make_marker("chanterelle")
 	assert_true(marker.is_in_group(DroppedItem.FORAGEABLE_GROUP_NAME))
+
+
+## Reported live: "They need hover tooltips." World._update_hover_tooltip
+## only scans HoverTargetFinder.GROUP_NAME (see that class's own doc
+## comment) -- a marker not in it is invisible to the whole hover system
+## no matter what get_display_name() returns, the same gap
+## WildCropMarker/LiftableStone don't have.
+func test_joins_the_hoverable_group_so_the_mouse_tooltip_actually_shows():
+	var marker := _make_marker("chanterelle")
+	assert_true(marker.is_in_group(HoverTargetFinder.GROUP_NAME))
+
+
+## Mirrors DroppedItem/WildCropMarker/LiftableStone's own
+## get_hover_actions() contract -- the same "Pick Up" verb DroppedItem's
+## own generic pickup uses.
+func test_get_hover_actions_offers_pick_up():
+	var marker := _make_marker("chanterelle")
+	assert_eq(marker.get_hover_actions(), [{"verb": "Pick Up", "action": "pickup"}])
 
 
 # -- always the real species' own look and name --------------------------
