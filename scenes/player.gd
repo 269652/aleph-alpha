@@ -12,6 +12,7 @@ const TileTargeting = preload("res://src/gameplay/tile_targeting.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const Inventory = preload("res://src/gameplay/inventory.gd")
 const SurvivalMeters = preload("res://src/gameplay/survival_meters.gd")
+const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
 const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
 const Wallet = preload("res://src/gameplay/wallet.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
@@ -1816,11 +1817,23 @@ func grant_starter_items(item_ids: Array) -> void:
 ## hunger (see SurvivalMeters.eat) -- called from World when the player
 ## clicks a food row in the inventory window. Returns false (no-op) if the
 ## player doesn't actually hold a food item with this id.
+##
+## A food with a real composition (see NutrientRelease/
+## docs/concept/material_dsl.md) resolves a real bite-scale crush and
+## routes its actual water/sugar/vitamins to thirst/hunger/nutrition; an
+## unmodeled food (everything today except apple/cherry) falls back to
+## exactly the old flat EAT_HUNGER_RELIEF, untouched.
 func eat_food(item_id: String) -> bool:
 	for stack in inventory.stacks():
 		if stack.item.id == item_id and stack.item.kind == "food":
 			inventory.remove(item_id, 1)
-			survival.eat(EAT_HUNGER_RELIEF)
+			var nutrients: Dictionary = NutrientRelease.consume(item_id)
+			if nutrients.get("crushed", false):
+				survival.drink(nutrients.get("water", 0.0))
+				survival.eat(nutrients.get("sugar", 0.0))
+				survival.nourish(nutrients.get("vitamins", 0.0))
+			else:
+				survival.eat(EAT_HUNGER_RELIEF)
 			# Rare/legendary catches (see FoodConsumption.FISH_BUFFS) grant a
 			# timed buff directly on eating -- no cooking/recipe required.
 			if FoodConsumption.FISH_BUFFS.has(item_id):
