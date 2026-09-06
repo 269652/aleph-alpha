@@ -57,6 +57,7 @@ const MushroomRenderer = preload("res://src/rendering/mushroom_renderer.gd")
 const MushroomFlush = preload("res://src/world/mushroom_flush.gd")
 const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
 const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
+const CaterpillarRenderer = preload("res://src/rendering/caterpillar_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
@@ -346,6 +347,7 @@ var _geology_renderer := GeologyRenderer.new()
 var _cave_entrance_placement := CaveEntrancePlacement.new()
 var _wild_crop_renderer := WildCropRenderer.new()
 var _decomposer_renderer := DecomposerRenderer.new()
+var _caterpillar_renderer := CaterpillarRenderer.new()
 ## "an NPC moves in" (see docs/concept/timber_construction.md's NPC
 ## section) -- no dedicated renderer class needed (spawning one
 ## LumberjackMarker per Sägewerk tile is simple enough to do directly, see
@@ -586,6 +588,10 @@ var _farm_plots: Dictionary = {}
 ## since a decomposer's whole behavior lives on the marker itself and it
 ## queries the Carcass/CarcassGuts groups directly.
 var _decomposer_markers: Dictionary = {}
+## Vector2i chunk_coord -> Array[CaterpillarMarker], same per-chunk-array
+## shape as _decomposer_markers immediately above, for the same reason: a
+## caterpillar's whole behaviour lives on the marker itself.
+var _caterpillar_markers: Dictionary = {}
 
 ## The Sägewerk's own Lumberjack -- "an NPC moves in" the moment a
 ## "sagewerk" modification tile exists (see
@@ -9489,6 +9495,24 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for decomposer_marker in _decomposer_markers[chunk_coord]:
 		decomposer_marker.setup(self)
 
+	# Requested live: "wire caterpillars which live on trees and on the
+	# ground around them; they should also do groundforaging and eat green
+	# leaves (spring, summer only)". Season is read once, at spawn time
+	# (see CaterpillarRenderer's own doc comment for why that -- not a
+	# continuous per-frame check -- is the right place for it).
+	_caterpillar_markers[chunk_coord] = _caterpillar_renderer.spawn_caterpillars(
+		_entities_parent, _biome_classifier.dominant_biome(chunk.biome), current_season(),
+		chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		hash("%d_%d_caterpillars" % [chunk_coord.x, chunk_coord.y])
+	)
+	# Gives each freshly-spawned caterpillar this manager as its optional
+	# `_world` (see CaterpillarMarker.setup) -- real nearby trees
+	# (trees_near) and real leaf litter (nearest_leaf_litter_near/
+	# consume_leaf_litter_at), the same two ports AmbientFlyerMarker's own
+	# bird idle-rest and DecomposerMarker's own leaf foraging already use.
+	for caterpillar_marker in _caterpillar_markers[chunk_coord]:
+		caterpillar_marker.setup(self)
+
 	# Re-staff every Sägewerk this chunk already had persisted, before this
 	# load, with a fresh Lumberjack -- "an NPC moves in" applies just as much
 	# to a revisited worksite as a freshly-placed one (see
@@ -10080,6 +10104,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for marker in _decomposer_markers.get(chunk_coord, []):
 		marker.free()
 	_decomposer_markers.erase(chunk_coord)
+
+	for marker in _caterpillar_markers.get(chunk_coord, []):
+		marker.free()
+	_caterpillar_markers.erase(chunk_coord)
 
 	for marker in _sagewerk_lumberjacks.get(chunk_coord, {}).values():
 		marker.free()

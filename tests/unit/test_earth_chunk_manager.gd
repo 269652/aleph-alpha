@@ -6423,6 +6423,50 @@ func test_evicting_old_chunks_frees_decomposer_markers():
 	assert_false(manager._decomposer_markers.has(old_chunk))
 
 
+# -- caterpillars: live on trees and on the ground around them, real
+# groundforaging and real tree-eating, spring/summer only (see
+# CaterpillarRenderer/CaterpillarMarker). Uses _load_chunk/_unload_chunk
+# directly rather than the slow update() path every test above this
+# section still uses (see CONTRIBUTING.md / this file's own perf note) --
+# a chunk coordinate needs no fixture setup beyond what's already loaded
+# for Berlin, so there is nothing update()'s own multi-chunk sweep buys
+# here that the direct call doesn't already cover in a fraction of the
+# time.
+
+func test_load_chunk_spawns_caterpillars_near_berlin_in_summer():
+	# A known-summer world age (see SeasonCycle.SECONDS_PER_YEAR: spring
+	# starts at year_fraction 0, so 0.25 of the way through is summer's own
+	# start) -- Berlin already spawns real ambient birds under
+	# AmbientFlyerRenderer.BIRD_BIOMES (test_update_spawns_ambient_flyers_
+	# near_berlin), the identical biome set CaterpillarRenderer.
+	# CATERPILLAR_BIOMES uses, so only the season needs forcing here.
+	manager.set_world_age_seconds(SeasonCycle.SECONDS_PER_YEAR * 0.3)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	assert_true(manager._caterpillar_markers.has(chunk_coord))
+	assert_gt(manager._caterpillar_markers[chunk_coord].size(), 0)
+	for marker in manager._caterpillar_markers[chunk_coord]:
+		assert_not_null(marker._world, "each spawned caterpillar should have its world wired for real trees/leaf litter")
+
+
+func test_load_chunk_spawns_no_caterpillars_near_berlin_in_winter():
+	manager.set_world_age_seconds(SeasonCycle.SECONDS_PER_YEAR * 0.9)  # winter
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	assert_eq(manager._caterpillar_markers.get(chunk_coord, []).size(), 0)
+
+
+func test_unloading_a_chunk_frees_its_caterpillar_markers():
+	manager.set_world_age_seconds(SeasonCycle.SECONDS_PER_YEAR * 0.3)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	assert_true(manager._caterpillar_markers.has(chunk_coord), "precondition: the chunk had caterpillars")
+
+	manager._unload_chunk(chunk_coord)
+
+	assert_false(manager._caterpillar_markers.has(chunk_coord))
+
+
 # -- ant colonies: visible mounds + traveling foragers (see docs/concept/
 # soil_fauna.md "Ants: myrmecochory", AntColony) -- previously a pure
 # background population effect with zero rendered presence at all (reported

@@ -277,7 +277,16 @@ watched the bird peck at them.
   size grows with the colony"). What's left of the original item (ants as
   prey, or as non-windfall detritivores) is still open, see that
   section's own scope note.
-- ⬜ Insect larvae, snails, and any other soil fauna beyond ants — the table
+- ✅ Caterpillars (requested live: "wire caterpillars which live on trees
+  and on the ground around them; they should also do groundforaging and
+  eat green leaves (spring, summer only)") — real illustrated crawl/climb/
+  eat art, a pure `CaterpillarForageBehavior` state machine (seek ->
+  approach -> eat, no flight), a `CaterpillarMarker` that climbs a real
+  nearby tree to eat OR forages real green (spring/summer-fallen) leaf
+  litter on the ground, and a season-gated per-chunk spawn
+  (`CaterpillarRenderer`, spring/summer only). See "Caterpillars: on
+  trees, on the ground, green leaves only" below.
+- ⬜ Snails, and any other soil fauna beyond ants/caterpillars — the table
   and the patch-sim contract extend to them the same way ants did, nothing
   else is needed structurally, but nothing has built one yet.
 
@@ -1102,3 +1111,123 @@ unchanged by this entire pass: `take_worm_at` never shows `die`, and
 never shows `retreat` either (it still vanishes on the same frame it's
 taken, exactly as before) — only `crush_worm_at` reaches the new corpse
 state at all.
+
+## Caterpillars: on trees, on the ground, green leaves only
+
+Requested live: *"wire caterpillars which live on trees and on the ground
+around them; they should also do groundforaging and eat green leaves
+(spring, summer only)"*. A real caterpillar spends its whole larval life
+doing exactly two things — eating foliage and moving to find more of it —
+split across two real locations: up on a host plant chewing leaves, and
+down on the ground travelling between them. Spring/summer only is real
+biology too: a caterpillar is a growing-season life stage, not a
+year-round presence, the same way this doc's own worms/ants are present
+all year but a caterpillar specifically is not.
+
+**Deliberately mirrors `DecomposerMarker`/`CarrionForageBehavior`
+(ant/carrion bug), not `GroundForageBehavior`** (the robin/flyer module):
+a caterpillar never flies, and `GroundForageBehavior`'s own `DESCENDING`
+phase, `is_grounded()`, and `REHUNT_SECONDS`'s doc comment are all
+explicitly about being airborne between bites — none of that means
+anything for a creature that is on the ground (or a tree) the whole time.
+`CaterpillarForageBehavior` (`src/gameplay/caterpillar_forage_behavior.gd`)
+is a pure `SEEKING -> APPROACHING -> EATING -> SEEKING` state machine, no
+engine dependencies, unit-testable headlessly like every other creature
+behaviour in this codebase.
+
+**The one real departure from its own template**: `CarrionForageBehavior`'s
+`FEEDING` phase runs until the carcass is actually gone — there is no
+timeout, because a carcass IS a depleting resource. A tree is not: nothing
+in this codebase counts or depletes a live tree's leaves (no such resource
+exists anywhere — see "What this does NOT include" below), so `EATING`
+would never end on its own if it worked the carcass way, and a caterpillar
+that found a tree first would simply never be seen doing the other half of
+what was asked for. `EAT_SECONDS` gives it a real clock instead: eat for a
+while, then move on — which is also, mechanically, the entire reason
+"groundforaging" is something this creature is ever actually seen doing at
+all, not just a phrase in the request.
+
+**Two real food sources**, picked between by `CaterpillarMarker`
+(`src/rendering/caterpillar_marker.gd`) by whichever is nearer, the same
+"pick the nearest real thing" shape `AmbientFlyerMarker`'s own bird
+forage already uses for worm/fruit/seed:
+
+- **Real, in-season leaf litter on the ground** — the exact
+  `nearest_leaf_litter_near`/`consume_leaf_litter_at` duck-typed
+  `EarthChunkManager` ports `DecomposerMarker` already established for
+  ants, reused rather than re-invented. Filtered to the leaf's own
+  recorded season being spring or summer: `LeafLitterField`'s real 270-day
+  decay lifespan means an old, brown, still-decaying autumn leaf can
+  genuinely still be lying on the ground come the following spring or
+  summer, and that is not what "eat green leaves" asked for. A caterpillar
+  eats the green trickle `docs/concept/leaf_litter.md` already describes
+  (`LEAF_SUMMER_TRICKLE_CHANCE`/`LEAF_SPRING_TRICKLE_CHANCE`), not the big
+  autumn fall.
+- **A real nearby tree** — `EarthChunkManager.trees_near`, the same query
+  `AmbientFlyerMarker`'s own bird idle-rest already perches on (see this
+  doc's sibling ecosystem_dynamics.md entry), reused rather than a second,
+  near-identical "is there a tree nearby" query being written. Climbed
+  (its own distinct `climb` animation, not the level `crawl` gait ground
+  litter uses), and never removed or depleted — see the departure noted
+  above for why.
+
+**Season gating lives entirely at the spawn decision**
+(`CaterpillarRenderer.spawn_caterpillars`, gated on both biome —
+grassland/forest/rainforest, mirroring `AmbientFlyerRenderer.BIRD_BIOMES`
+exactly, since "lives on trees" doesn't extend to desert/tundra/mountain
+the way ants' wider carrion-adjacent `LAND_BIOMES` does — and season,
+spring/summer only), not re-checked continuously at runtime. This is the
+same accepted approximation every other ambient decoration in this
+codebase already has: nothing re-validates a spawned butterfly's own
+range/season eligibility continuously either, only at the chunk-load spawn
+roll. A caterpillar chunk that stays loaded continuously across a season
+boundary (a long single sitting rather than a reload) will keep foraging
+into autumn rather than vanishing mid-season — named explicitly as a
+known, accepted gap rather than silently left unhandled.
+
+Real illustrated art (`assets/sprites/animals/caterpillar.png`, an
+8-column x 4-row sheet sharing worm.png's exact grid dimensions) replaces
+what would otherwise have been a from-scratch procedural silhouette —
+this creature shipped with real art from the start, unlike ants/worms,
+which both began procedural and were swapped later. Four real animations,
+each confirmed against the actual sliced-and-despilled pixels before
+shipping (see `tools/probe_caterpillar_sheet.gd`), not just an eyeballed
+thumbnail: `crawl` (a flat, level inching gait — the travel/wander pose),
+`climb` (rears near-vertical at its peak frames — moving up a trunk, not
+level ground), `eat` (head held low throughout — the grazing pose, played
+whether it's eating from a tree or the ground), and `rest` (progressively
+flattens into a held, motionless pose).
+
+### What this does NOT include
+
+Named explicitly, the same convention every other appropriately-scoped
+first pass in this doc uses:
+
+- **No live-canopy leaf resource.** Nothing anywhere in this codebase
+  counts or depletes a standing tree's foliage — a tree's canopy is purely
+  an art state driven by the season clock (`TreePhenology`), with no leaf
+  count of any kind (the only *countable* thing on a tree today is ripe
+  fruit — `ChoppableTree._ripe_count`). Eating at a tree is real (gated on
+  a real behavioural clock, ends and resumes for real, shown with real,
+  distinct art) but purely non-depleting — a caterpillar visiting a tree a
+  hundred times leaves it exactly as leafy as one visit did. Building a
+  real, persisted, per-tree leaf-mass resource (with its own
+  `ChunkSerializer` save format) is a genuinely separate, larger
+  commitment, not something this pass silently almost-built.
+- **No canopy-height offset.** A climbing caterpillar is drawn at the same
+  trunk-foot ground level every other perch in this codebase already uses
+  (the same level `AmbientFlyerMarker`'s own tree-perching idle rest
+  lands a bird at) — it does not visually rise into the branches. No
+  canopy-height field exists anywhere in this codebase to hook into yet
+  (a real future enhancement, not invented here for either creature).
+- **No pupation, no becoming a butterfly.** This is a standalone wired
+  creature, the ant/worm shape, not the larval stage of
+  `AmbientFlyerMarker`'s own existing butterfly life cycle
+  (`src/gameplay/life_cycle.gd`) — the two are not connected. A
+  caterpillar simply stops being spawned once a chunk reloads outside
+  spring/summer; it does not transform into anything.
+- **No `rest` trigger.** The sheet's fourth row (a settled, flattened
+  idle) has real, confirmed art and a working `generate_textures("rest")`
+  call, but nothing in `CaterpillarMarker` ever asks for it yet — the same
+  "measured and available, not yet wired to a real trigger" gap this
+  doc's own kingfisher-adjacent rows have had before being closed later.

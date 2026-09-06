@@ -7459,6 +7459,56 @@ state had never once been set by anything in `src/`.
   `EarthChunkManager`'s own real-gameplay worm generator, since that
   sheet was never the only consumer. Full writeup:
   [soil_fauna.md](concept/soil_fauna.md#illustrated-worm-sprite-crawl-emerge-retreat-die).
+- **Caterpillars: live on trees and on the ground, real groundforaging,
+  eat green leaves, spring/summer only** (medium) — ✅ Done — requested
+  live verbatim in the title above. Real illustrated art
+  (`assets/sprites/animals/caterpillar.png`, sharing worm.png's exact
+  1536×1024/8×4 grid, measured and visually confirmed with a new
+  `tools/probe_caterpillar_sheet.gd` before shipping) via new
+  `IllustratedCaterpillarSprite` (mirrors `IllustratedWormSprite`'s own
+  no-species-dimension shape exactly). New pure
+  `CaterpillarForageBehavior` (seek → approach → eat → seek) mirrors
+  `CarrionForageBehavior`'s shape (no flight, so no separate "descend"
+  phase) rather than `GroundForageBehavior` (the robin/flyer module,
+  whose `DESCENDING`/`is_grounded()`/`REHUNT_SECONDS` are all explicitly
+  about being airborne between bites — a poor fit for a creature that
+  never flies) — but departs from its own carrion template in one real
+  way: `EATING` ends on its own clock (`EAT_SECONDS`) rather than running
+  "until it's gone", since a tree never runs out the way a carcass does,
+  and that clock is also mechanically the entire reason "groundforaging"
+  is something this creature is ever actually seen doing, not just a
+  phrase in the request. New `CaterpillarMarker` (mirrors
+  `DecomposerMarker`'s shape, not `CreatureMarker` — the wrong stack for
+  a tiny insect) picks between two real food sources by whichever is
+  nearer: real, in-season (green, spring/summer-fallen — filtered against
+  an old brown autumn leaf that can genuinely still be lying around,
+  given `LeafLitterField`'s own 270-day decay lifespan) fallen leaf
+  litter via the same `nearest_leaf_litter_near`/`consume_leaf_litter_at`
+  ports `DecomposerMarker` already established, or a real nearby tree via
+  `EarthChunkManager.trees_near` (the same query `AmbientFlyerMarker`'s
+  bird idle-rest already perches on) — climbed, never removed or
+  depleted. New `CaterpillarRenderer` spawns a guaranteed per-chunk count
+  (mirrors `DecomposerRenderer`'s own minimal shape) gated on both biome
+  (grassland/forest/rainforest, mirroring `AmbientFlyerRenderer.
+  BIRD_BIOMES`) and season (spring/summer only) — checked once, at the
+  spawn decision, not continuously at runtime, the same accepted
+  approximation every other ambient decoration in this codebase already
+  has. Wired into `EarthChunkManager`'s own load/unload cycle exactly
+  like decomposers. 46 new tests green across five new files
+  (`test_illustrated_caterpillar_sprite.gd` 10, `test_caterpillar_forage_
+  behavior.gd` 15, `test_caterpillar_marker.gd` 11, `test_caterpillar_
+  renderer.gd` 7, plus 3 new integration tests directly in
+  `test_earth_chunk_manager.gd` using the fast `_load_chunk`/
+  `_unload_chunk` path rather than the slow `update()` sweep). **Not
+  included, named explicitly**: no live-canopy leaf resource (nothing
+  anywhere in this codebase counts or depletes a standing tree's foliage
+  at all — eating at a tree is real and gated on a real clock, but
+  non-depleting), no canopy-height offset (climbs to the same trunk-foot
+  ground level every other perch already uses), no connection to the
+  existing butterfly life cycle (a standalone creature, not that life
+  cycle's larval stage), and the sheet's own `rest` row has real,
+  confirmed art but no wired trigger yet. Full writeup:
+  [soil_fauna.md](concept/soil_fauna.md#caterpillars-on-trees-on-the-ground-green-leaves-only).
 
 ### Flora (`concept/flora.md`)
 
