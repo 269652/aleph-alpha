@@ -1477,6 +1477,88 @@ scout, a resolver, and an ordinary solo forager (identical
 simultaneously-active trails — `nearest_trail_near` returns only the
 single closest one.
 
+### Winter dormancy, and a mound that can come back from zero (2026-09-06)
+
+Reported live: "now i don't see any ant mounds at all anymore (fresh
+start, winter)". Root-caused directly rather than assumed, by simulating
+a freshly-seeded mound receiving zero successful forages: `FOOD_BUFFER_
+DAYS`(3) × `SECONDS_PER_SIMULATED_DAY`(60) = 180 real seconds is far
+shorter than a real winter's near-total lack of forage success (bare
+trees drop no windfall; fallen leaf litter ages into its own terminal
+decay stage — see [leaf_litter.md](leaf_litter.md) — with nothing
+replacing it while the canopy stays bare), so every mound was starving to
+a literal `population_at` 0.0 well within one season. Worse: once there,
+it stayed there — `PopulationModel.step`'s own hard "`carrying_capacity
+<= 0.0` → population immediately 0.0" rule means population can never
+grow itself back out through ordinary logistic growth alone (growth is
+proportional to CURRENT population, and zero population growing at any
+rate is still zero) — confirmed directly by feeding a starved mound a
+GUARANTEED forage success on every single `advance()` call for a real 5
+simulated minutes: `food_stored` climbed into the thousands: `population_
+at` never moved off 0.0. "A real food economy"'s own `test_a_fully_
+starved_colony_reads_zero_food_availability_not_full` had already pinned
+the "starves within a handful of simulated days" half of this as a
+confirmed, deliberate famine; nothing had yet pinned that this made
+EVERY colony's eventual, permanent extinction a certainty rather than a
+real, occasional risk.
+
+**Two changes, addressing both halves.**
+
+1. **Real winter dormancy**, mirroring `EarthwormPatch`'s own cold-gate
+   exactly (same soil, same real mechanism — real ants, like real
+   earthworms, drastically cut activity and metabolism in cold soil
+   rather than continuing to draw full upkeep while genuinely unable to
+   forage for it). `AntColony.record_warmth` (new, mirrors `record_
+   moisture`'s own EMA-fed, `EarthChunkManager._refresh_ant_moisture`
+   -sourced shape) feeds `dormancy_multiplier_at`, which reuses
+   `EarthwormPatch.COLD_CUTOFF`/`MILD_WARMTH` directly against the
+   SAME real `EarthwormPatch.soil_warmth(climate, season_warmth)`
+   reading `step_worms` already computes for the identical soil — not a
+   second, independently-eyeballed pair of numbers. `_deplete_food` now
+   scales its draw by this multiplier, floored at `DORMANCY_FLOOR` (0.2,
+   never all the way to 0.0 — mirrors `WINTER_SOIL_FLOOR`'s own "a
+   seasonal swing is a partial cooling, not a multiplication down to
+   zero" reasoning exactly: a genuinely dormant colony still needs SOME
+   food to survive winter on stored fat, the same as a real
+   overwintering colony). A mound that has never had a real reading yet
+   defaults to full, undiminished activity (`record_warmth`'s own "1.0,
+   not 0.0" default) — the OPPOSITE of moisture/forage-success's own
+   defaults, deliberately: those feed a capacity BONUS, where "none
+   earned yet" safely reads as a neutral baseline; warmth drives a
+   PENALTY, where the equivalent "coldest possible" default would
+   throttle every freshly-loaded mound before its own first real reading
+   ever arrives, directly contradicting "a freshly-seeded mound is never
+   born already starving" (`_founding_food_reserve`'s own doc comment).
+2. **Re-founding**: the actual fix for a mound that DOES still reach a
+   literal 0.0 regardless (a sufficiently long or severe cold spell, or
+   any other real famine — dormancy above narrows how often this
+   happens, it does not claim to make it impossible). Real ant nest
+   sites get recolonized once conditions improve — a new queen/swarm
+   founds again where an old colony died out — so `AntColony.advance`
+   now checks, per mound per step, whether a real, full founding reserve
+   (the same standard `_seed_initial_mounds` itself starts every
+   brand-new colony at) has genuinely piled back up at an empty mound,
+   and re-founds it at `STARTING_POPULATION` exactly as a brand-new mound
+   would, before the ordinary logistic-growth step ever runs that tick.
+   Still reachable even for an "extinct" mound: `EarthChunkManager.
+   _dispatch_forager`'s own `active_forager_cap_at` floors at 1 forager
+   regardless of population, so a lone forager keeps trying — and can
+   keep depositing real food home — even after every worker has starved.
+
+**What this does NOT include**: no seasonal reduction in FORAGE_CHANCE
+or dispatch itself (a dormant colony still sends its usual foragers out;
+it is only the UPKEEP draw that is throttled, matching how real dormant
+ants still occasionally forage on a mild winter day rather than sealing
+the nest outright). No warning/UI telling a player a mound is dormant or
+has gone extinct — `AntMoundMarker`'s own hover tooltip already reports
+real population/food, so an attentive player can already read a dormant
+or refounding mound off the same numbers. No migration-based
+recolonization from a NEIGHBOURING mound (`AntPopulationModel`'s own doc
+comment already names ants as the one regional population in this game
+with no `migrate()` at all, mounds being sessile) — re-founding here is
+a single mound's own site recovering, never population moving in from
+elsewhere.
+
 
 ## Crawling out, and back down
 

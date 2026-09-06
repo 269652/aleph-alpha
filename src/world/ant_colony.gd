@@ -16,19 +16,24 @@ extends RefCounted
 ## only a place, and a small deterministic per-step chance that the colony
 ## sends a forager out to check the ground near its mound for a fallen grass
 ## seed (grassland) or a fallen windfall fruit/nut (forest/rainforest, see
-## WINDFALL_CONSUMED_CHANCE below). There is no surfacing/weather machinery:
-## ants are not driven by soil moisture the way earthworms are, and giving
-## them one here would be unjustified plumbing for a behaviour this pass
-## doesn't need.
+## WINDFALL_CONSUMED_CHANCE below).
 ##
 ## No RandomNumberGenerator, and no Godot string hash either for anything
 ## PER-CELL: all placement and per-step rolls are derived from the chunk seed
 ## via PixelNoise, which (unlike `hash`) decorrelates neighbouring cells and
 ## neighbouring steps -- the clustering bug this project has hit five times.
+##
+## Ants ARE now driven by real soil conditions the same way earthworms are
+## (see record_moisture/record_warmth below) -- moisture feeds capacity()'s
+## own real growth bonus, and warmth throttles upkeep via a real winter
+## dormancy (see dormancy_multiplier_at's own doc comment) -- this class's
+## original "no surfacing/weather machinery" framing predates both and is
+## no longer accurate.
 
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const AntPopulationModel = preload("res://src/world/ant_population_model.gd")
 const PheromoneField = preload("res://src/world/pheromone_field.gd")
+const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 
 ## Biomes with real organic soil an ant can excavate -- the same set
 ## EarthwormPatch uses, and for the same reasons (ocean has no soil, desert
@@ -305,6 +310,21 @@ var _moisture: Dictionary = {}
 ## sluggisher than the other.
 const MOISTURE_EMA_RATE := FORAGE_SUCCESS_EMA_RATE
 
+## Per-mound exponential moving average of recent soil warmth, in [0, 1] --
+## the sibling record_moisture above never needed for capacity() (a real
+## GROWTH bonus, safely defaulting to 0.0/"none earned yet"), but a real
+## winter dormancy does (see dormancy_multiplier_at below, a real upkeep
+## PENALTY, which must NOT default to "coldest possible" for a mound that
+## has simply never had its first reading yet -- see that default's own
+## doc comment). Fed by EarthChunkManager.step_ants via record_warmth, the
+## same cadence/source EarthwormPatch.soil_warmth already reads (this
+## project's own "same soil, same real signal" precedent).
+var _warmth: Dictionary = {}
+
+## Same weight as MOISTURE_EMA_RATE -- see that constant's own doc comment;
+## warmth is not structurally twitchier or sluggisher than moisture either.
+const WARMTH_EMA_RATE := MOISTURE_EMA_RATE
+
 ## Per-mound real, depleting/accumulating food reserve, in the same "food
 ## units" FOOD_PER_SUCCESSFUL_FORAGE/AntPopulationModel.FOOD_PER_ANT_PER_DAY
 ## are measured in -- see food_stored_at/deposit_food/
@@ -382,8 +402,38 @@ func advance(delta_seconds: float) -> void:
 		field.decay(delta_seconds)
 	var delta_days := delta_seconds / SECONDS_PER_SIMULATED_DAY
 	for cell in _mounds:
+		if _maybe_refound(cell):
+			continue
 		_population[cell] = _population_model.step(population_at(cell), capacity_at(cell), delta_days)
 		_deplete_food(cell, delta_days)
+
+
+## A mound whose population has genuinely hit a literal 0.0 can never
+## recover through ordinary logistic growth alone -- growth is
+## proportional to CURRENT population, and zero population growing at any
+## rate is still zero (confirmed directly: test_a_starved_colony_does_
+## not_recover_through_ordinary_growth_alone feeds a guaranteed forage
+## success on every single advance() call for a real 200 simulated days
+## and population never moves off 0.0). Real ant nest sites DO get
+## recolonized once conditions improve -- a new queen/swarm founds again
+## where an old colony died out -- so this is that, abstracted the same
+## way _seed_initial_mounds already abstracts "a colony is already here"
+## at chunk-load time: once a real, full founding reserve (the same
+## standard a brand-new mound starts with -- see _founding_food_reserve)
+## has genuinely piled back up at an empty mound, a fresh colony re-founds
+## there exactly as a brand-new one would.
+##
+## Still reachable even for an "extinct" mound: EarthChunkManager.
+## _dispatch_forager's own active_forager_cap_at floors at 1 forager
+## regardless of population, so a lone forager keeps trying, and can keep
+## depositing real food home, even after every worker has starved.
+func _maybe_refound(cell: Vector2i) -> bool:
+	if population_at(cell) > 0.0:
+		return false
+	if food_stored_at(cell) < _founding_food_reserve():
+		return false
+	_population[cell] = AntPopulationModel.STARTING_POPULATION
+	return true
 
 
 ## Whether this mound's colony sends a forager out to check for a nearby
@@ -512,11 +562,52 @@ func food_availability_fraction(cell: Vector2i) -> float:
 
 
 ## The real upkeep a mound's own population represents -- more ants, more
-## mouths, more draw on the same reserve every simulated day. Clamped at
-## zero: a colony cannot owe food it does not have.
+## mouths, more draw on the same reserve every simulated day, throttled by
+## dormancy_multiplier_at in cold soil. Clamped at zero: a colony cannot owe
+## food it does not have.
 func _deplete_food(cell: Vector2i, delta_days: float) -> void:
-	var consumed := population_at(cell) * AntPopulationModel.FOOD_PER_ANT_PER_DAY * delta_days
+	var consumed := (
+		population_at(cell) * AntPopulationModel.FOOD_PER_ANT_PER_DAY * delta_days
+		* dormancy_multiplier_at(cell)
+	)
 	_food_stored[cell] = maxf(0.0, food_stored_at(cell) - consumed)
+
+
+## Below this soil warmth, ants go dormant -- cluster deep in the mound and
+## barely feed at all -- mirroring EarthwormPatch's own COLD_CUTOFF/
+## MILD_WARMTH cold-gate exactly (same soil, same real mechanism: real
+## ants, like real earthworms sharing the same ground, drastically cut
+## activity in cold soil; unlike worms they do not need to surface to do
+## this, but the same warmth-driven ramp still governs how much a mound
+## actually consumes). Reused directly rather than a second,
+## independently-eyeballed pair of numbers for the identical soil.
+##
+## DORMANCY_FLOOR, not all the way to 0.0 -- mirrors EarthwormPatch.
+## WINTER_SOIL_FLOOR's own "a seasonal swing is a partial cooling, not a
+## multiplication down to zero" reasoning exactly: a genuinely dormant
+## colony still needs SOME food to survive winter on stored fat, the same
+## as a real overwintering colony. Reported live: "now i don't see any ant
+## mounds at all anymore (fresh start, winter)" -- confirmed root cause,
+## directly: FOOD_BUFFER_DAYS(3) * SECONDS_PER_SIMULATED_DAY(60) = 180
+## real seconds is far shorter than a real winter's near-total lack of
+## forage success (bare trees drop no windfall, fallen leaf litter ages
+## into its own terminal decay stage with nothing replacing it -- see
+## docs/concept/leaf_litter.md), so every mound was starving to a literal
+## population 0.0 well within one season -- and, worse, PopulationModel.
+## step's own hard "carrying_capacity <= 0.0 -> population immediately
+## 0.0" rule meant that was PERMANENT (see _maybe_refound below for the
+## other half of this fix: a hard 0.0 floor here alone would only move
+## the same permanent-death bug to "a sufficiently long or severe cold
+## spell" instead of actually fixing it).
+const DORMANCY_FLOOR := 0.2
+
+func dormancy_multiplier_at(cell: Vector2i) -> float:
+	var warmth: float = _warmth.get(cell, 1.0)
+	var cold_gate := clampf(
+		(warmth - EarthwormPatch.COLD_CUTOFF) / (EarthwormPatch.MILD_WARMTH - EarthwormPatch.COLD_CUTOFF),
+		0.0, 1.0
+	)
+	return DORMANCY_FLOOR + (1.0 - DORMANCY_FLOOR) * cold_gate
 
 
 ## A freshly-seeded mound is never born already starving -- exactly a full
@@ -541,6 +632,17 @@ func _founding_food_reserve() -> float:
 func record_moisture(cell: Vector2i, moisture: float) -> void:
 	var current: float = _moisture.get(cell, 0.0)
 	_moisture[cell] = lerpf(current, clampf(moisture, 0.0, 1.0), MOISTURE_EMA_RATE)
+
+
+## Records this mound's own current soil warmth -- called by
+## EarthChunkManager.step_ants on the same cadence/source record_moisture
+## already uses (EarthwormPatch.soil_warmth's own climate+season_warmth
+## computation, reused directly rather than a second, independent reading
+## of the identical soil). Feeds dormancy_multiplier_at, which throttles
+## real food upkeep in cold soil (see that function's own doc comment).
+func record_warmth(cell: Vector2i, warmth: float) -> void:
+	var current: float = _warmth.get(cell, 1.0)
+	_warmth[cell] = lerpf(current, clampf(warmth, 0.0, 1.0), WARMTH_EMA_RATE)
 
 
 ## How far this mound's own colony is toward AntPopulationModel.

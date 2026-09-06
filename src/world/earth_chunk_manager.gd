@@ -7415,12 +7415,22 @@ func step_ants(delta_seconds: float) -> void:
 
 ## Water, not just food (see docs/concept/soil_fauna.md's own section by
 ## that name): pushes each loaded chunk's own live weather-derived soil
-## moisture into every mound it holds. Sampled per CHUNK's own centre
-## tile, the identical "weather is already a per-region roll, sample the
-## centre rather than the player's own tile" reasoning step_worms already
-## uses for EarthwormPatch -- moisture is a slow, day-timescale condition,
-## not something worth a per-mound lookup.
+## moisture AND soil warmth into every mound it holds. Sampled per CHUNK's
+## own centre tile, the identical "weather is already a per-region roll,
+## sample the centre rather than the player's own tile" reasoning
+## step_worms already uses for EarthwormPatch -- both are slow,
+## day-timescale conditions, not something worth a per-mound lookup.
+##
+## Warmth reuses EarthwormPatch.soil_warmth(climate, season_warmth)
+## directly -- the SAME real climate+season computation step_worms
+## already runs for the identical soil, not a second, independent
+## reading (see AntColony.record_warmth's own doc comment on why this
+## particular fix exists: real winter, with nothing left for a mound to
+## forage, was starving every colony to a literal, permanent population
+## 0.0 within 180 real seconds -- reported live: "now i don't see any ant
+## mounds at all anymore (fresh start, winter)").
 func _refresh_ant_moisture() -> void:
+	var season_warmth := _season_cycle.warmth_modifier(_world_age_seconds)
 	for chunk_coord in _ant_colonies:
 		var colony: AntColony = _ant_colonies[chunk_coord]
 		var centre_tile: Vector2i = chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
@@ -7428,8 +7438,13 @@ func _refresh_ant_moisture() -> void:
 			float(centre_tile.x) + 0.5, float(centre_tile.y) + 0.5
 		) * float(TerrainRenderer.TILE_SIZE)
 		var moisture := _weather_model.soil_moisture(current_weather(centre_pixel))
+		var climate := clampf(
+			generator.temperature_at_global(centre_tile.x, centre_tile.y), 0.0, 1.0
+		)
+		var warmth := EarthwormPatch.soil_warmth(climate, season_warmth)
 		for cell in colony.mound_cells():
 			colony.record_moisture(cell, moisture)
+			colony.record_warmth(cell, warmth)
 
 
 ## Central fallen-leaf-litter step (see LeafLitterField,

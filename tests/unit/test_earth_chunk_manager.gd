@@ -7256,6 +7256,42 @@ func test_stepping_ants_drives_capacity_from_the_live_weather():
 	assert_almost_eq(colony.capacity_at(cell), expected_capacity, 0.5)
 
 
+## The winter-dormancy fix's actual production wiring (see docs/concept/
+## soil_fauna.md's own follow-up on "A real food economy" -- reported
+## live: "now i don't see any ant mounds at all anymore (fresh start,
+## winter)") -- step_ants must ALSO push the real, live climate+season
+## warmth into every loaded mound, on the identical cadence/source
+## step_worms already samples for EarthwormPatch.soil_warmth (the same
+## soil, the same real signal -- see AntColony.record_warmth's own doc
+## comment), not just moisture. Mirrors test_stepping_ants_drives_
+## capacity_from_the_live_weather's own shape exactly, checking
+## dormancy_multiplier_at instead of capacity_at.
+func test_stepping_ants_drives_dormancy_from_the_live_season():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var colony: AntColony = manager._ant_colonies.get(chunk_coord)
+	if colony == null or colony.mound_cells().is_empty():
+		pending("no real ant mound landed in this chunk this seed -- placement is probabilistic")
+		return
+	var cell: Vector2i = colony.mound_cells()[0]
+
+	for i in 20:
+		manager.step_ants(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+
+	var centre_tile: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(
+		EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2
+	)
+	var climate := clampf(manager.generator.temperature_at_global(centre_tile.x, centre_tile.y), 0.0, 1.0)
+	var season_warmth := manager._season_cycle.warmth_modifier(manager._world_age_seconds)
+	var expected_warmth := EarthwormPatch.soil_warmth(climate, season_warmth)
+	var cold_gate := clampf(
+		(expected_warmth - EarthwormPatch.COLD_CUTOFF) / (EarthwormPatch.MILD_WARMTH - EarthwormPatch.COLD_CUTOFF),
+		0.0, 1.0
+	)
+	var expected_multiplier := AntColony.DORMANCY_FLOOR + (1.0 - AntColony.DORMANCY_FLOOR) * cold_gate
+	assert_almost_eq(colony.dormancy_multiplier_at(cell), expected_multiplier, 0.05)
+
+
 # -- Sägewerk: "an NPC moves in" the moment the worksite exists (see
 # docs/concept/timber_construction.md) -- exactly one LumberjackMarker per
 # placed Sägewerk instance, mirroring the decomposer/wild-crop per-chunk

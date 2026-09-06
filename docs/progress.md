@@ -9459,6 +9459,56 @@ known`, plus the pre-existing ant-dispatch/weather/mound-marker coverage
 in that same file) all green too. Full writeup:
 [soil_fauna.md](concept/soil_fauna.md#cluster-recruitment-multi-scout-waves-directional-trails-and-invalidation).
 
+✅ **Winter dormancy, and a mound that can come back from zero
+(2026-09-06)** — reported live: "now i don't see any ant mounds at all
+anymore (fresh start, winter)". Root-caused by direct simulation, not
+assumed: a freshly-seeded mound given zero successful forages starves to
+a literal `population_at` 0.0 in ~193 real seconds (`FOOD_BUFFER_
+DAYS`(3) × `SECONDS_PER_SIMULATED_DAY`(60) = 180s, far shorter than a
+real winter's near-total lack of forage success) — and, confirmed by
+feeding a starved mound a GUARANTEED forage success every single
+`advance()` call for 5 more real minutes (`food_stored` climbed into the
+thousands), population NEVER recovered: `PopulationModel.step`'s own hard
+"`carrying_capacity <= 0.0` → population immediately 0.0" rule makes a
+literal-zero population permanent, since logistic growth is proportional
+to CURRENT population and zero growing at any rate is still zero. Two
+fixes, addressing both halves:
+1. **`AntColony.record_warmth`/`dormancy_multiplier_at`** (new) throttle
+   real food upkeep (`_deplete_food`) in cold soil, mirroring
+   `EarthwormPatch`'s own `COLD_CUTOFF`/`MILD_WARMTH` cold-gate exactly
+   against the SAME real `EarthwormPatch.soil_warmth(climate, season_
+   warmth)` reading `step_worms` already computes for the identical soil
+   (wired into production via `EarthChunkManager._refresh_ant_moisture`,
+   the same cadence/source `record_moisture` already uses). Floored at
+   `DORMANCY_FLOOR` (0.2, never all the way to 0.0 — mirrors `WINTER_
+   SOIL_FLOOR`'s own "partial cooling, not a multiplication to zero"
+   shape: a dormant colony still needs SOME food to survive on stored
+   fat). A never-yet-recorded mound defaults to full activity (1.0), the
+   OPPOSITE of moisture/forage-success's own "0.0, none earned yet"
+   defaults — deliberately: those feed a capacity BONUS (a missing one
+   safely reads as neutral), warmth drives a real upkeep PENALTY (the
+   equivalent cold default would throttle every freshly-loaded mound
+   before its own first real reading ever arrives).
+2. **`AntColony._maybe_refound`** (new, called from `advance`) re-founds
+   a mound that DOES still reach a literal 0.0 (dormancy above narrows
+   how often this happens, it does not claim to make it impossible) once
+   a real, full founding reserve has genuinely piled back up there — the
+   same standard `_seed_initial_mounds` itself starts every brand-new
+   colony at — resetting it to `STARTING_POPULATION` exactly as a
+   brand-new mound would. Still reachable even for an "extinct" mound:
+   `EarthChunkManager._dispatch_forager`'s own `active_forager_cap_at`
+   floors at 1 forager regardless of population, so a lone forager keeps
+   trying, and can keep depositing real food home, even after every
+   worker has starved.
+Confirmed root-cause and both fixes with a throwaway `-s` diagnostic probe
+before writing any test (`AntColony`/`AntPopulationModel`/`PopulationModel`
+are plain `RefCounted`, no autoload dependency, so a bare `-s` script
+works), deleted once its job was done. 9 new tests in `test_ant_colony.gd`
+(76 total, all green) plus a new
+production-wiring test in `test_earth_chunk_manager.gd` mirroring `test_
+stepping_ants_drives_capacity_from_the_live_weather`'s own shape exactly.
+Full writeup: [soil_fauna.md](concept/soil_fauna.md#winter-dormancy-and-a-mound-that-can-come-back-from-zero-2026-09-06).
+
 ⬜ **Still no litter-density accumulation or soil-fertility feedback, and
 no ground-covering visual effect** (unchanged scope cut — see
 `leaf_litter.md`'s own "Deliberately not modeled" section).
