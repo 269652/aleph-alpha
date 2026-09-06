@@ -1,12 +1,14 @@
 extends GutTest
 
-## ProceduralMushroomSprite (see docs/concept/mushrooms.md's "No illustrated
-## art this pass"). Same house style as every other procedural generator
-## here (PixelForm's lit-spheroid shading through PixelRamp, PixelPalette's
-## outline) -- but with a rendering-identity gate ProceduralEggSprite
-## already established: ONE shared, plain look regardless of species while
-## unidentified (a real observer cannot tell mushroom species apart at a
-## glance either), the real species' own colour only once identified.
+## ProceduralMushroomSprite -- the fallback for any species with no real
+## illustrated sheet registered in IllustratedMushroomSprite (none today,
+## see docs/concept/mushrooms.md). Same house style as every other
+## procedural generator here (PixelForm's lit-spheroid shading through
+## PixelRamp, PixelPalette's outline). `identified` is still a real,
+## tested parameter of this generator (a plain shared look vs. the
+## species' own colour) even though MushroomMarker itself always calls it
+## with `true` now (see docs/concept/mushrooms.md's "Revised again: the
+## identification gate is gone").
 
 const ProceduralMushroomSprite = preload("res://src/rendering/procedural_mushroom_sprite.gd")
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
@@ -114,12 +116,14 @@ func test_world_width_and_scale_are_positive():
 	assert_gt(ProceduralMushroomSprite.MUSHROOM_WORLD_SCALE, 0.0)
 
 
-func test_is_smaller_on_the_ground_than_an_ant_mound():
-	# A mushroom is a small forest-floor object, smaller than even the
-	# smallest (founding-colony) excavated ant mound -- a mound now grows
-	# with its colony (see ProceduralAntMoundSprite.world_width_for), so
-	# MOUND_WORLD_WIDTH_MIN is the real, still-standing floor of that
-	# comparison, not a stale reference to a flat constant that no longer
-	# exists.
-	var ant_mound = load("res://src/rendering/procedural_ant_mound_sprite.gd")
-	assert_lt(ProceduralMushroomSprite.MUSHROOM_WORLD_WIDTH, ant_mound.MOUND_WORLD_WIDTH_MIN)
+## "Smaller than an ant mound" was retired as the binding constraint (see
+## MUSHROOM_WORLD_WIDTH's own doc comment -- ant mounds grew substantially
+## the same day this test itself was revised, for the identical "a player
+## should actually be able to notice this" reason). A mushroom is still a
+## small object, just no longer measured against a mound that has since
+## grown well past being a useful ceiling -- a whole tilled soil patch
+## (ProceduralSoilSprite.SOIL_WORLD_WIDTH) is the more meaningful "still
+## clearly smaller than X" comparison now.
+func test_is_smaller_on_the_ground_than_a_tilled_soil_patch():
+	var soil = load("res://src/rendering/procedural_soil_sprite.gd")
+	assert_lt(ProceduralMushroomSprite.MUSHROOM_WORLD_WIDTH, soil.SOIL_WORLD_WIDTH)

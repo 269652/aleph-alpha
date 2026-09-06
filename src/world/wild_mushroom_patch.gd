@@ -31,21 +31,31 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 
 ## Fraction of biome-eligible cells that are even a possible mushroom SITE
 ## at all (the mycelium footprint) -- real mycelium networks are patchy,
-## not everywhere eligible ground actually has one. Deliberately far below
-## TallGrass.SEED_CHANCE (0.20): a mushroom find is meant to read as rare.
-const SITE_CHANCE := 0.05
+## not everywhere eligible ground actually has one. Close to
+## TallGrass.SEED_CHANCE (0.20) rather than far below it as originally set
+## (0.05): reported live, repeatedly, across an identification-gate
+## removal AND a debug /mushroom force-command -- a real forager finding
+## mushrooms in season is not this rare, and a mechanic nobody can ever
+## actually encounter during normal play isn't doing its job (see
+## MUSHROOM_WORLD_WIDTH's own doc comment for the same finding applied to
+## size instead of count).
+const SITE_CHANCE := 0.15
 
-## Hard cap on sites per chunk -- a scattered handful of possible finds,
-## not a carpet.
-const MAX_SITES := 30
+## Hard cap on sites per chunk. Doubled alongside SITE_CHANCE so the
+## higher chance actually manifests instead of being capped away
+## immediately -- still a scattered handful relative to a whole chunk's
+## cell count, not a full carpet.
+const MAX_SITES := 60
 
 ## Of the real sites, how many already happen to be fruiting the moment a
 ## chunk is first generated -- a freshly-loaded chunk should not always
 ## read as uniformly empty (the mycelium was already there; see class doc
-## comment). Well below 1.0: most sites are NOT fruiting at any given
-## moment, since a real fruiting body only stands for a while (SPENT_
-## SECONDS) out of a much longer dormant span.
-const INITIAL_FRUITING_CHANCE := 0.15
+## comment). Raised alongside SITE_CHANCE/MAX_SITES (see their own doc
+## comments): most sites still are NOT fruiting at any given moment, since
+## a real fruiting body only stands for a while (SPENT_SECONDS) out of a
+## much longer dormant span, but a genuinely findable fraction of them
+## now are.
+const INITIAL_FRUITING_CHANCE := 0.35
 
 ## How long a fruiting body stands before it's spent and its site can roll
 ## again -- applies whether it was picked or simply left alone (a real
@@ -56,11 +66,11 @@ const SPENT_SECONDS := 240.0
 
 ## Per-step base chance a site starts fruiting when flush_drive is at its
 ## theoretical maximum (1.0) -- flush_drive SCALES this base rate rather
-## than being the raw per-step chance itself, the same "a small per-step
-## roll, not a certainty even at max drive" order of magnitude
-## AntColony.FORAGE_CHANCE (0.05) already uses for an analogous "does this
-## site do something this step" roll.
-const FLUSH_CHANCE_PER_STEP := 0.05
+## than being the raw per-step chance itself. Raised alongside SITE_CHANCE/
+## MAX_SITES/INITIAL_FRUITING_CHANCE (see their own doc comments): new
+## fruiting during ongoing play should keep pace with the now-denser site
+## population, not lag behind it.
+const FLUSH_CHANCE_PER_STEP := 0.15
 
 ## Independent PixelNoise salts, one per distinct kind of roll, so they
 ## never correlate with each other -- the same convention AntColony's own
