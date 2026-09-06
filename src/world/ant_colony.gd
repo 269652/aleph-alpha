@@ -578,6 +578,30 @@ func population_at(cell: Vector2i) -> float:
 	return _population.get(cell, AntPopulationModel.STARTING_POPULATION)
 
 
+## How much of a mound's own abstract colony strength one crushed forager
+## costs -- the smallest indivisible unit this abstraction can represent
+## ("one worker," not a percentage), the same "real, if inherently
+## judgment-called, design knob" framing FORAGE_RADIUS_TILES's own doc
+## comment already uses. Pinned by
+## test_forager_crushed_reduces_population_by_one_worker.
+const FORAGER_CRUSH_POPULATION_LOSS := 1.0
+
+
+## A real forager belonging to this mound died underfoot (see
+## docs/concept/soil_fauna.md's own "Generalized to ants too" -- "no effect
+## on the mound's own population/food economy beyond the one forager
+## actually lost", now closed by EarthChunkManager.crush_ants_near calling
+## this). Floors at 0.0, the same floor ordinary starvation already
+## respects (see _deplete_food/AntPopulationModel.step's own logistic-growth
+## contract) -- a mound can lose its very last forager without ever reading
+## a nonsensical negative population. A cell that was never a real mound at
+## all still accepts this harmlessly (population_at's own documented
+## fallback default minus the loss), the same "narrows, doesn't break" shape
+## every other optional/best-effort query in this codebase already has.
+func forager_crushed(cell: Vector2i) -> void:
+	_population[cell] = maxf(0.0, population_at(cell) - FORAGER_CRUSH_POPULATION_LOSS)
+
+
 ## How large a colony this mound can currently support -- rises with its
 ## own recent forage success (see record_forage_result) AND its own
 ## recent soil moisture (see record_moisture), the real feedback loop
