@@ -21,11 +21,14 @@ extends RefCounted
 ## designed Death Cap/Porcini/Puffball, which no art exists for.
 
 ## Two real psychoactive species (Fly Agaric, Psilocybe -- neither
-## typically lethal) and four real, commonly foraged edibles (Black
-## Trumpet, Champignon, Chanterelle, Parasol) -- see docs/concept/
+## typically lethal), four real, commonly foraged edibles (Black Trumpet,
+## Champignon, Chanterelle, Parasol), and -- added once real art surfaced
+## for them -- one genuinely, often-fatally toxic species (Death Cap) plus
+## its real, non-toxic lookalike (False Death Cap) -- see docs/concept/
 ## mushrooms.md's real-world grounding.
 const IDS: Array[String] = [
-	"fly_agaric", "psylo", "black_trumpet", "champignon", "chanterelle", "parasol"
+	"fly_agaric", "psylo", "black_trumpet", "champignon", "chanterelle", "parasol",
+	"death_cap", "false_death_cap",
 ]
 
 const SPECIES := {
@@ -62,6 +65,21 @@ const SPECIES := {
 		# A real Parasol's cap is a warm tan scattered with darker scales.
 		"cap_color": Color(0.72, 0.58, 0.4),
 	},
+	"death_cap": {
+		"display_name": "Death Cap",
+		# A real Amanita phalloides cap is an eerie, muted olive-yellow-
+		# green -- distinct from every other cap colour in the roster, the
+		# same way its real toxicity is distinct from everything else here.
+		"cap_color": Color(0.66, 0.68, 0.42),
+	},
+	"false_death_cap": {
+		"display_name": "False Death Cap",
+		# A real Amanita citrina cap reads as a paler, more uniform lemon-
+		# yellow than Death Cap's more olive tone -- close enough to explain
+		# the real confusion between them, distinct enough to still be its
+		# own colour in this roster.
+		"cap_color": Color(0.85, 0.82, 0.55),
+	},
 }
 
 ## Fail-safe for an unrecognized id, matching tree_species.gd's `.get(x,
@@ -91,11 +109,17 @@ static func cap_color_for(species_id: String) -> Color:
 
 ## Whether `species_id` is genuinely toxic/psychoactive (see docs/concept/
 ## mushrooms.md -- Fly Agaric and Psilocybe are real, psychoactive species,
-## neither typically lethal in a modern medical context, unlike the
-## originally-designed roster's Death Cap). The rest of the roster is real,
-## commonly foraged edibles. An unlisted/unknown id defaults to false,
-## matching this file's existing fallback convention.
-const _TOXIC_SPECIES := {"fly_agaric": true, "psylo": true}
+## neither typically lethal in a modern medical context. Death Cap is the
+## one exception: real amatoxin poisoning, often fatal without treatment --
+## see MushroomToxin.severity_for's own doc comment for how much more
+## severe it is rated than the other two). False Death Cap is deliberately
+## NOT listed here despite its name and its real visual similarity to
+## Death Cap: modern mycological consensus is that it is not itself
+## seriously toxic (its real danger is being mistaken for something that
+## is). The rest of the roster is real, commonly foraged edibles. An
+## unlisted/unknown id defaults to false, matching this file's existing
+## fallback convention.
+const _TOXIC_SPECIES := {"fly_agaric": true, "psylo": true, "death_cap": true}
 
 static func is_toxic(species_id: String) -> bool:
 	return _TOXIC_SPECIES.has(species_id)
@@ -109,6 +133,14 @@ const _HOST_TREE_BY_SPECIES := {
 	"fly_agaric": "pine",
 	"black_trumpet": "acorn",
 	"chanterelle": "acorn",
+	# Both real Amanita, both genuinely mycorrhizal (never saprotrophic --
+	# see is_saprotroph below). Death Cap classically oak-associated in its
+	# native range (the same real partnership Black Trumpet/Chanterelle
+	# already use "acorn" for); False Death Cap classically conifer-
+	# associated (the same real partnership Fly Agaric -- also Amanita --
+	# already uses "pine" for).
+	"death_cap": "acorn",
+	"false_death_cap": "pine",
 }
 # psylo/champignon/parasol deliberately absent -- see is_saprotroph below:
 # all three are real grassland/pasture/forest-edge saprotrophs, not
@@ -138,6 +170,11 @@ const _BIOMES_BY_SPECIES := {
 	"champignon": ["grassland"],
 	"psylo": ["forest", "rainforest", "grassland"],
 	"parasol": ["forest", "rainforest", "grassland"],
+	# Both real mycorrhizal Amanita, same as fly_agaric/black_trumpet/
+	# chanterelle above -- forest/rainforest only, matching their real host
+	# trees (see _HOST_TREE_BY_SPECIES).
+	"death_cap": ["forest", "rainforest"],
+	"false_death_cap": ["forest", "rainforest"],
 }
 const _FALLBACK_BIOMES := ["forest", "rainforest"]
 

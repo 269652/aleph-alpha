@@ -97,6 +97,8 @@ const _ITEMS := {
 	"champignon": ["Champignon", "food", 20, 0.0],
 	"chanterelle": ["Chanterelle", "food", 20, 0.0],
 	"parasol": ["Parasol", "food", 20, 0.0],
+	"death_cap": ["Death Cap", "food", 20, 0.0],
+	"false_death_cap": ["False Death Cap", "food", 20, 0.0],
 	"wood": ["Wood", "material", 40, 0.0],
 	"wooden_club": ["Wooden Club", "weapon", 1, 8.0],
 	"iron_sword": ["Iron Sword", "weapon", 1, 15.0],
