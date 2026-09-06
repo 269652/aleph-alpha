@@ -66,8 +66,9 @@ func test_a_restored_player_keeps_the_saved_health_not_a_full_heal():
 	assert_eq(restored.max_health, source.max_health)
 
 
-## Real foraging knowledge, once earned, should not evaporate on reload --
-## see docs/concept/mushrooms.md's "Identification".
+## A permanent lifetime stat, once earned, should not evaporate on reload --
+## same "must survive reload like any other permanent progression fact"
+## expectation every other counter here gets.
 func test_a_restored_player_remembers_mushrooms_eaten():
 	source.mushrooms_eaten = 3
 

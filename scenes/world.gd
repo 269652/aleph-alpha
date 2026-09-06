@@ -2635,14 +2635,7 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	_chunk_manager.step_wild_crops(delta)
 	# Wild mushrooms (see EarthChunkManager.step_wild_mushrooms,
 	# docs/concept/mushrooms.md) -- same throttled cadence as its wild-crop
-	# cousin just above. Identification is pushed in from whichever player is
-	# in focus (Player.knows_mushrooms(), see that doc's "Identification"
-	# section) BEFORE the step, so a marker that was already standing shows
-	# newly-learned identification the same frame; null-safe for the
-	# no-focus-player case (see test_world_ecology_batch_wild_crops.gd's own
-	# `null` convention -- step_wild_crops needs no player at all, but this
-	# step's IDENTIFICATION half does).
-	_chunk_manager.set_mushroom_identification(focus_player != null and focus_player.knows_mushrooms())
+	# cousin just above.
 	_chunk_manager.step_wild_mushrooms(delta)
 	# Player-tilled farm plots (see EarthChunkManager.step_farm_plots,
 	# docs/concept/farming.md) -- same tick this crop's wild cousin grows on

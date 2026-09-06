@@ -5,11 +5,11 @@ sheets per species."
 
 This doc specifies a new **wild mushroom** layer: fungal fruiting bodies that
 appear on the forest floor after a real weather trigger, stand there as a
-genuine forageable/pickable ground object, and — because a real forager
-cannot tell species apart at a glance — read as one shared, unidentified
-shape until the player has actually learned to identify them. Eating one for
-real has a real consequence: an edible species relieves hunger like any raw
-food, a toxic one genuinely poisons the player.
+genuine forageable/pickable ground object, and always show their real
+species' own illustrated look and name (see "Revised again: the
+identification gate is gone" below for why). Eating one for real has a real
+consequence: an edible species relieves hunger like any raw food, a toxic
+one genuinely poisons the player.
 
 ## Design pillars
 
@@ -22,17 +22,19 @@ food, a toxic one genuinely poisons the player.
    show as a multi-stage growth animation. So a mushroom simply appears, at
    full size, when a flush condition is met — closer to a fruit dropping than
    to a crop growing.
-2. **You cannot always tell what you're looking at, and that is the point.**
-   An untrained forager genuinely cannot reliably identify a mushroom species
-   at a glance across a forest floor — this is real and well-documented (it
-   is the entire reason amateur mushroom poisoning is a recognized
-   public-health category), not an arbitrary game restriction. This project
-   already has the exact shape for "this is real but not yet identifiable" —
-   `ProceduralEggSprite`/`AmbientFlyerMarker._is_pre_hatch` shows one shared
-   generic look for every pollinator species pre-hatch because "a real
-   butterfly/bee egg is not identifiable by species to the naked eye either"
-   ([ecosystem_dynamics.md](ecosystem_dynamics.md)). Mushrooms reuse that
-   identical shape, gated on a learned skill instead of a life stage.
+2. **Real illustrated art doubles as the field guide.** Originally this pillar
+   was "you cannot always tell what you're looking at" — a real, well-
+   documented fact about amateur foraging, modeled with an in-game
+   identification-by-experience gate reusing `ProceduralEggSprite`'s shared
+   pre-hatch look. **Revised once real art arrived**: since every species'
+   illustrated sheet is drawn to directly resemble its real-world
+   counterpart, hiding that art behind a grind gate fought the art itself
+   rather than showcasing it. The game now always shows a mushroom's real
+   species — recognizing danger is a real-time visual-pattern skill, the
+   same way an actual forager cross-checks against a physical field guide
+   rather than starting from zero. That guide lives on the companion
+   website, external to the game world, not as an in-game unlock (see
+   "Revised again: the identification gate is gone" below).
 3. **Eating one is real, not flavor text.** [carrion.md](carrion.md)/the
    venomous-snake pass already prove this project is willing to let a real
    hazard hurt the player (`VenomModel`/`DebuffStack`). A toxic mushroom is
@@ -47,10 +49,9 @@ food, a toxic one genuinely poisons the player.
    player pickup (`LiftableStone`/`PickableSeed`'s duck-typed `pick_up`),
    deterministic per-cell art variants (`IllustratedAntMoundSprite`'s
    9-variant sheet, [soil_fauna.md](soil_fauna.md)), a real weather-driven
-   flush trigger (`EarthwormPatch.surface_drive`), a real toxin debuff
-   (`VenomModel`), and a binary (non-scaling) skill unlock
-   (`KeystonePassive`'s `land_sense`). Nothing here is a new shape; it's five
-   existing shapes recombined for fungi specifically.
+   flush trigger (`EarthwormPatch.surface_drive`), and a real toxin debuff
+   (`VenomModel`). Nothing here is a new shape; it's existing shapes
+   recombined for fungi specifically.
 
 ## Real-world grounding
 
@@ -151,25 +152,12 @@ A `Node2D` per fruiting cell, deterministic `mushroom_seed := hash(global_cell)`
 exactly like `AntMoundMarker.mound_seed`, so the same world position always
 re-picks the same look across a reload.
 
-**Identification gate, checked before species art at all** — the exact
-shape `AmbientFlyerMarker._animate_wings` already uses to swap in
-`ProceduralEggSprite`'s shared egg look pre-hatch, with the gate condition
-swapped from a life stage to a learned skill:
-
-```
-if not Player.knows_mushrooms():
-    sprite.texture = unidentified_frame   # one shared look, built once from
-                                           # mushroom_seed alone, no species
-else:
-    sprite.texture = <this cell's true species' frame>
-```
-
-`unidentified_frame` is built once per marker, from the seed only — a
-plain, nondescript brown toadstool shape, the fungal equivalent of the
-pollinator egg's "not identifiable to the naked eye" stand-in. The hover
-name (`get_display_name`) mirrors the same gate: **"Unidentified Mushroom"**
-unidentified, the real species name (plus a "(toxic)"/"(edible)" hint) once
-`Player.knows_mushrooms()` is true.
+**Always the real species' own art and name** (see "Revised again" below) —
+`_rebuild_sprite` draws the real illustrated sheet if one exists for
+`species_id` (has-art-or-doesn't fallback chain every optional
+illustrated-art seam in this codebase uses), the procedural
+species-coloured silhouette otherwise. The hover name (`get_display_name`)
+is always the real species name plus a "(Toxic)"/"(Edible)" hint.
 
 Joins `DroppedItem.GROUP_NAME` (ordinary E/click pickup) and
 `DroppedItem.FORAGEABLE_GROUP_NAME` (a decomposer ant/bug can find and eat
@@ -178,38 +166,31 @@ bodies, distinct from and in addition to the invisible mycelium's own
 decomposition of dead wood/litter, which this system does not otherwise
 model).
 
-**Picking one up always resolves to its real species item id.** The
-ambiguity is about what you see standing in the world at a distance, not
-about what ends up in your hand — a specimen you are actually holding is
-close enough to identify by inspection even if you don't yet know its name,
-the same way a real forager can look closely at what they picked. This
-sidesteps [item_identity.md](item_identity.md)'s id-only-stacking rule
-entirely: two `fly_agaric` items always correctly stack, whether or not the
-player has unlocked identification. See Deliberately not modeled for the
-one consequence of this scope cut (inventory display is not re-gated).
+**Picking one up resolves to the same real species item id it was already
+showing.** This sidesteps [item_identity.md](item_identity.md)'s
+id-only-stacking rule entirely: two `fly_agaric` items always correctly
+stack.
 
-### Identification: learned by real encounters, not a purchased skill point
+### Revised again: the identification gate is gone
 
-**Revised while implementing.** The original plan here was a new
-`skill_web.gd` node in the herbalist wedge, alongside
-`naturalist_1`/`naturalist_2`. Reading that file's actual structure first
-(per CLAUDE.md) showed every ring in every wedge, herbalist included,
-already sits exactly at its `RING_SLOT_COUNT` capacity: `1/1, 3/3, 3/3,
-2/2, 2/2`. There is no free slot to add one to without either growing
-`RING_SLOT_COUNT` globally (a structural change touching all seven
-wedges' layouts and tests, for one small unlock) or displacing an
-existing, already-shipped node — neither is a reasonable price for this.
+**Originally an in-game learned-by-experience mechanic, now removed
+entirely** — every mushroom always shows its real species (see pillar 2
+above). The first revision here replaced a planned `skill_web.gd` unlock
+(no free ring slot existed in the herbalist wedge — every ring in every
+wedge sat exactly at its `RING_SLOT_COUNT` capacity) with
+`Player.mushrooms_eaten`/`knows_mushrooms()`, a real-encounters counter
+gating the sprite/name. Once real illustrated art existed for every
+species, gating it behind a grind fought the art rather than showing it
+off — the player then supplies their own reference (a mushroom guide on
+the companion website, external to the game world) the same way a real
+forager carries a physical field guide, rather than the game itself
+withholding species identity until a threshold is crossed.
 
-The replacement is arguably a better fit anyway: **real foraging
-identification comes from direct field experience, not a certificate.**
-`Player.mushrooms_eaten: int` (persisted) counts every real mushroom
-eaten, edible or toxic — risk included, the same way a real forager's
-first few encounters with a dangerous species are what teaches them to
-recognize it. `Player.knows_mushrooms() -> bool` is `mushrooms_eaten >=
-MushroomSpecies.MUSHROOMS_TO_LEARN_IDENTIFICATION` (6 — one real
-encounter per roster species, not an arbitrary grind number). This
-sidesteps `skill_web.gd` entirely rather than forcing a fit it has no
-room for.
+`Player.knows_mushrooms()` and `MushroomSpecies.
+MUSHROOMS_TO_LEARN_IDENTIFICATION` are removed — nothing reads them any
+more. `Player.mushrooms_eaten: int` stays, persisted, as a simple lifetime
+counter (every real mushroom eaten, edible or toxic) — harmless flavor
+telemetry, no longer gating anything.
 
 One named simplification: `_mushroom_toxin_step`'s damage-over-time reads
 a single `_mushroom_toxin_species` field, so eating a second toxic
@@ -275,16 +256,11 @@ repeating it.
 - **No persistence/catch-up across a chunk unload**, for the same reason
   `EarthwormPatch`'s burrows and `AntColony`'s mounds aren't — short-
   timescale, self-renewing, chunk-local.
-- **Inventory display is not re-gated by identification.** Once picked up,
-  an item shows its real name regardless of whether `knows_mushrooms()` is
-  true — only the world-standing marker (seen at a distance) is ambiguous.
-  Re-gating the inventory/hover UI too is a real, separable follow-up, not
-  required for the core "you can't tell from across the clearing" mechanic
-  to be real.
 - **No visual lookalike confusion between species.** All six real species
-  above are visually distinct from each other; the shared "Unidentified
-  Mushroom" look is what creates the challenge, not any one species
-  disguising itself as another.
+  above are visually distinct from each other — there is no in-game
+  ambiguity to create in the first place any more (see "Revised again"
+  above); recognizing danger is entirely a real-time, real-world visual
+  skill now.
 - **No cooking-recipe integration.** `CookingRecipeBook`'s multi-ingredient
   recipe table has zero live callers anywhere in this project today —
   wiring it in at all is a separate, larger, pre-existing gap, not something
@@ -299,8 +275,10 @@ repeating it.
 - ✅ `MushroomToxin` (`src/gameplay/mushroom_toxin.gd`) — per-species
   `severity_for`, `damage_per_second(stacks, species_id)`, wired all the
   way to a real eat action (see below).
-- ✅ `ProceduralMushroomSprite` (`src/rendering/procedural_mushroom_sprite.gd`),
-  incl. the shared unidentified look.
+- ✅ `ProceduralMushroomSprite` (`src/rendering/procedural_mushroom_sprite.gd`)
+  — `generate_image(species_id, identified)` still supports the plain
+  shared look as a generator capability, but `MushroomMarker` no longer
+  ever calls it with `false` (see "Revised again" above).
 - ✅ `IllustratedMushroomSprite` (`src/rendering/illustrated_mushroom_sprite.gd`)
   — real 5×5 (25-variant) sheets for all 6 species
   (`assets/sprites/mushrooms/*.png`), chroma-key despilled where needed
@@ -313,25 +291,22 @@ repeating it.
   hard prerequisite for the marker below, since `ItemCatalog.make()`
   fails loudly on an unregistered id.
 - ✅ `MushroomMarker` (`src/rendering/mushroom_marker.gd`) — the visible,
-  pickable ground object: identification-gated sprite/name, joins
+  pickable ground object: always its real species' own sprite/name, joins
   `DroppedItem.GROUP_NAME`/`FORAGEABLE_GROUP_NAME`, `pick_up(picker)`
-  always resolves to the real species item, and (once identified) scales
-  the illustrated sprite by its own measured `marker_scale`, not the
-  procedural generator's flat scale.
+  resolves to the real species item, and scales an illustrated sprite by
+  its own measured `marker_scale`, not the procedural generator's flat
+  scale.
 - ✅ `MushroomRenderer` (`src/rendering/mushroom_renderer.gd`) —
-  spawn_markers/sync_markers, pushing live `identified` onto every
-  already-standing marker each tick (not just new ones).
-- ✅ `Player.mushrooms_eaten`/`knows_mushrooms()`/`apply_mushroom_toxin`/
-  `_mushroom_toxin_step`, wired into `eat_food` and `_authority_step`, and
-  `mushrooms_eaten` persisted through save/load. Eating any mushroom now
-  really does count toward identification and, for a toxic species,
-  really does poison the player — through the ordinary `eat_food` path a
-  player already uses for every other food item.
+  spawn_markers/sync_markers keep markers in sync with which cells are
+  fruiting (no per-tick identification push any more).
+- ✅ `Player.mushrooms_eaten`/`apply_mushroom_toxin`/`_mushroom_toxin_step`,
+  wired into `eat_food` and `_authority_step`, and `mushrooms_eaten`
+  persisted through save/load as a simple lifetime counter. Eating a
+  toxic species really does poison the player — through the ordinary
+  `eat_food` path a player already uses for every other food item.
 - ✅ `EarthChunkManager.step_wild_mushrooms` + chunk load/unload lifecycle
   — chunk load creates a real `WildMushroomPatch` and spawns its markers;
-  unload frees them; `set_mushroom_identification`/
-  `_mushroom_identification_known` mirror `set_season_tint`/`_season_tint`'s
-  exact "external state pushed in, consumed by a later step" shape.
+  unload frees them.
 - ✅ Wired into `scenes/world.gd`'s live `_step_ecology_batch`, proven by
   `test_world_ecology_batch_wild_mushrooms.gd` — built with that
   regression test from the start (the exact gap that shipped silently for
@@ -339,11 +314,9 @@ repeating it.
 
 **Every piece is now real, tested, and reachable from a running game,
 including real illustrated art for every species**: chunk load grows real
-mushroom sites, the world's own per-frame loop advances fruiting and
-pushes live identification onto every standing marker, an identified
-mushroom renders its own real illustrated sheet at its own measured
-on-screen size, and eating one calls back into the real toxin/learning
-wiring — all green. What's left is entirely the "No literal host-tree
-proximity check" / other deliberate scope cuts named above, not missing
-wiring — see progress.md for the session-by-session record of this
-landing.
+mushroom sites, the world's own per-frame loop advances fruiting, every
+standing marker renders its own real illustrated sheet at its own measured
+on-screen size, and eating one calls back into the real toxin wiring — all
+green. What's left is entirely the "No literal host-tree proximity check"
+/ other deliberate scope cuts named above, not missing wiring — see
+progress.md for the session-by-session record of this landing.
