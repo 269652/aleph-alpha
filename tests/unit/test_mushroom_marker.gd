@@ -2,12 +2,16 @@ extends GutTest
 
 ## The visible marker over one fruiting WildMushroomPatch site -- see
 ## docs/concept/mushrooms.md. Deliberately inert (AntMoundMarker's own
-## reasoning: purely "stand here and be visible"), but carries the
-## identification gate this feature is actually about: an unidentified
-## marker draws ONE shared, plain look and name regardless of its true
-## species, exactly ProceduralEggSprite's "a real observer can't tell
-## species apart yet" idiom -- and picking one up always resolves to the
-## REAL species item, whether or not the player has identified it.
+## reasoning: purely "stand here and be visible").
+##
+## Always shows its REAL species' own look and name -- no identification
+## gate (see docs/concept/mushrooms.md's "Revised again: the
+## identification gate is gone"): the illustrated art directly resembles
+## its real counterpart, so recognizing danger at a glance is meant to be
+## real and immediate, the same way a real forager cross-checks against a
+## physical field guide rather than starting from zero. Picking one up
+## always resolves to the REAL species item, matching what it already
+## visibly was.
 
 const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const ProceduralMushroomSprite = preload("res://src/rendering/procedural_mushroom_sprite.gd")
@@ -35,10 +39,9 @@ class StubMushroomWorld:
 		return true
 
 
-func _make_marker(species_id: String, identified: bool, cell: Vector2i = Vector2i.ZERO) -> MushroomMarker:
+func _make_marker(species_id: String, cell: Vector2i = Vector2i.ZERO) -> MushroomMarker:
 	var marker := MushroomMarker.new()
 	marker.species_id = species_id
-	marker.identified = identified
 	marker.cell = cell
 	add_child_autofree(marker)
 	return marker
@@ -54,28 +57,20 @@ func _make_picker(slots: int = 10) -> StubPicker:
 # -- groups -------------------------------------------------------------
 
 func test_joins_the_dropped_item_group():
-	var marker := _make_marker("chanterelle", true)
+	var marker := _make_marker("chanterelle")
 	assert_true(marker.is_in_group(DroppedItem.GROUP_NAME))
 
 
 func test_joins_the_forageable_group_so_decomposers_can_eat_it_too():
-	var marker := _make_marker("chanterelle", true)
+	var marker := _make_marker("chanterelle")
 	assert_true(marker.is_in_group(DroppedItem.FORAGEABLE_GROUP_NAME))
 
 
-# -- identification gates the look AND the name --------------------------
+# -- always the real species' own look and name --------------------------
 
-func test_unidentified_looks_the_same_regardless_of_true_species():
-	var fly_agaric := _make_marker("fly_agaric", false)
-	var chanterelle := _make_marker("chanterelle", false)
-	var fly_agaric_sprite := fly_agaric.get_child(0) as Sprite2D
-	var chanterelle_sprite := chanterelle.get_child(0) as Sprite2D
-	assert_eq(fly_agaric_sprite.texture.get_image().get_data(), chanterelle_sprite.texture.get_image().get_data())
-
-
-func test_identified_species_look_different_from_each_other():
-	var fly_agaric := _make_marker("fly_agaric", true)
-	var chanterelle := _make_marker("chanterelle", true)
+func test_different_species_look_different_from_each_other():
+	var fly_agaric := _make_marker("fly_agaric")
+	var chanterelle := _make_marker("chanterelle")
 	var fly_agaric_sprite := fly_agaric.get_child(0) as Sprite2D
 	var chanterelle_sprite := chanterelle.get_child(0) as Sprite2D
 	assert_ne(fly_agaric_sprite.texture.get_image().get_data(), chanterelle_sprite.texture.get_image().get_data())
@@ -85,70 +80,38 @@ func test_identified_species_look_different_from_each_other():
 ## sprites hit once (applying the wrong world scale to real illustrated
 ## art, whose canvas proportions don't match the procedural fallback's) --
 ## pinned directly rather than trusted by inspection. Real illustrated art
-## now exists for every species (see IllustratedMushroomSprite), so an
-## identified marker must use ITS OWN measured-from-the-real-art
-## marker_scale(species_id), not the procedural generator's flat
-## MUSHROOM_WORLD_SCALE.
-func test_identified_illustrated_species_use_the_illustrated_marker_scale():
-	var marker := _make_marker("chanterelle", true)
+## exists for every species (see IllustratedMushroomSprite), so a marker
+## must use ITS OWN measured-from-the-real-art marker_scale(species_id),
+## not the procedural generator's flat MUSHROOM_WORLD_SCALE.
+func test_species_with_illustrated_variants_use_the_illustrated_marker_scale():
+	var marker := _make_marker("chanterelle")
 	var sprite := marker.get_child(0) as Sprite2D
 	assert_eq(sprite.scale, Vector2.ONE * IllustratedMushroomSprite.new().marker_scale("chanterelle"))
 
 
-func test_unidentified_name_hides_the_real_species():
-	var marker := _make_marker("psylo", false)
-	assert_eq(marker.get_display_name(), "Unidentified Mushroom")
+func test_display_name_reveals_the_real_species_and_toxicity():
+	assert_eq(_make_marker("psylo").get_display_name(), "Psilocybe (Toxic)")
+	assert_eq(_make_marker("chanterelle").get_display_name(), "Chanterelle (Edible)")
 
 
-func test_identified_name_reveals_the_real_species_and_toxicity():
-	assert_eq(_make_marker("psylo", true).get_display_name(), "Psilocybe (Toxic)")
-	assert_eq(_make_marker("chanterelle", true).get_display_name(), "Chanterelle (Edible)")
+# -- picking up: always the real species -----------------------------------
 
-
-## Player.knows_mushrooms() can flip from false to true mid-play (see
-## docs/concept/mushrooms.md's "Identification") -- an already-spawned,
-## still-standing marker has to actually show that, not wait for a respawn.
-func test_becoming_identified_after_spawn_updates_the_sprite():
-	var marker := _make_marker("chanterelle", false)
-	var before: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
-
-	marker.identified = true
-
-	var after: PackedByteArray = (marker.get_child(0) as Sprite2D).texture.get_image().get_data()
-	assert_ne(after, before)
-
-
-func test_becoming_identified_after_spawn_updates_the_name():
-	var marker := _make_marker("chanterelle", false)
-	marker.identified = true
-	assert_eq(marker.get_display_name(), "Chanterelle (Edible)")
-
-
-# -- picking up: always the real species, whether or not identified -------
-
-func test_pickup_adds_the_real_species_item_even_when_unidentified():
-	var marker := _make_marker("fly_agaric", false)
+func test_pickup_adds_the_real_species_item():
+	var marker := _make_marker("fly_agaric")
 	var picker := _make_picker()
 	assert_true(marker.pick_up(picker))
 	assert_eq(picker.inventory.count_of("fly_agaric"), 1)
 
 
-func test_pickup_adds_the_real_species_item_when_identified():
-	var marker := _make_marker("black_trumpet", true)
-	var picker := _make_picker()
-	assert_true(marker.pick_up(picker))
-	assert_eq(picker.inventory.count_of("black_trumpet"), 1)
-
-
 func test_pickup_frees_the_marker():
-	var marker := _make_marker("parasol", true)
+	var marker := _make_marker("parasol")
 	var picker := _make_picker()
 	marker.pick_up(picker)
 	assert_true(marker.is_queued_for_deletion())
 
 
 func test_pickup_tells_the_mushroom_world_its_site_was_taken():
-	var marker := _make_marker("parasol", true, Vector2i(3, 4))
+	var marker := _make_marker("parasol", Vector2i(3, 4))
 	marker.mushroom_world = StubMushroomWorld.new()
 	var picker := _make_picker()
 	marker.pick_up(picker)
@@ -156,7 +119,7 @@ func test_pickup_tells_the_mushroom_world_its_site_was_taken():
 
 
 func test_pickup_fails_gracefully_with_no_picker():
-	var marker := _make_marker("parasol", true)
+	var marker := _make_marker("parasol")
 	assert_false(marker.pick_up(null))
 	assert_false(marker.is_queued_for_deletion())
 
@@ -164,6 +127,6 @@ func test_pickup_fails_gracefully_with_no_picker():
 # -- position -------------------------------------------------------------
 
 func test_stays_exactly_where_placed():
-	var marker := _make_marker("chanterelle", true)
+	var marker := _make_marker("chanterelle")
 	marker.position = Vector2(80, 60)
 	assert_eq(marker.position, Vector2(80, 60))
