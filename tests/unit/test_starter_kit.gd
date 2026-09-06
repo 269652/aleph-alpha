@@ -37,6 +37,18 @@ func test_every_default_choice_is_a_real_pool_member():
 		assert_true(StarterKit.is_valid_choice(item_id))
 
 
+## Reported directly: "now I can't fell any trees anymore" -- a live save
+## showed a totally untouched default (crude_blade + stone_pickaxe +
+## fishing_rod, per the OLD DEFAULT_CHOICES) equipped with stone_pickaxe,
+## the game's own auto-equip rule having no weapon-kind item to prefer. See
+## docs/concept/starting_kit.md's "The default couldn't chop wood" for the
+## full trace (why iron_axe replaces crude_blade specifically, and not
+## stone_pickaxe -- mining is hard-gated, wood-chopping only a soft
+## multiplier).
+func test_default_choices_is_the_axe_pickaxe_fishing_rod_kit():
+	assert_eq(StarterKit.DEFAULT_CHOICES, ["iron_axe", "stone_pickaxe", "fishing_rod"])
+
+
 func test_is_valid_choice_true_for_a_pool_member():
 	assert_true(StarterKit.is_valid_choice("lasso"))
 

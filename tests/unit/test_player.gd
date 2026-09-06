@@ -33,6 +33,9 @@ const Item = preload("res://src/gameplay/item.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
+const TreeRenderer = preload("res://src/rendering/tree_renderer.gd")
+const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
+const StarterKit = preload("res://src/gameplay/starter_kit.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -554,6 +557,81 @@ func test_attacking_with_an_unmodeled_material_item_never_accrues_wear():
 	player._perform_attack()
 
 	assert_almost_eq(axe.wear, 0.0, 0.0001, "an item with no modeled material must never accrue wear")
+
+
+## -- felling trees (Player._chop_step) --
+## Reported directly, right after the tree Y-sort tie-break fix and the
+## 1.3x visual-scale bump both landed on main: "now I can't fell any trees
+## anymore." No existing test exercised _chop_step at all before this --
+## every tree-adjacent test up to now (test_tree_renderer.gd) only asserted
+## on rendering/placement, never on a Player actually damaging one. These
+## are the first direct regression tests for that path, following the same
+## real-integration pattern the weapon-wear tests above already establish: a
+## real tree spawned into the SAME live tree the player is already a child
+## of (TreeRenderer.spawn_tree_at's own `parent` argument, mirroring
+## _creature_at/_flyer_at's add_child_autofree) so distances compare in the
+## same coordinate space _melee_attack.targets_in_range assumes.
+
+func _tree_at(offset: Vector2) -> ChoppableTree:
+	# spawn_tree_at wants a Node2D parent (it sets `parent.y_sort_enabled`) --
+	# this test's own root is a plain Node (GutTest), not a Node2D, so a
+	# throwaway Node2D container stands in, added the same add_child_autofree
+	# way _creature_at/_flyer_at add their own targets directly. Zero
+	# position/rotation/scale on the container keeps its local space identical
+	# to `self`'s, so `player.position + offset` still lands where it says.
+	var container := Node2D.new()
+	add_child_autofree(container)
+	return TreeRenderer.new().spawn_tree_at(container, player.position + offset)
+
+
+func test_an_axe_swing_in_range_damages_a_tree():
+	var axe := _item_catalog.make("iron_axe")
+	player.inventory.add(axe, 1)
+	player.equip_item(axe)
+	var tree := _tree_at(Vector2(10, 0))
+	var starting_health := tree.health
+
+	player._perform_attack()
+
+	assert_lt(tree.health, starting_health, "a connecting axe swing must damage a tree in range")
+
+
+func test_enough_axe_swings_fell_a_tree():
+	var axe := _item_catalog.make("iron_axe")
+	player.inventory.add(axe, 1)
+	player.equip_item(axe)
+	var tree := _tree_at(Vector2(10, 0))
+
+	for swing in 10:
+		player._perform_attack()
+
+	assert_true(tree.is_felled(), "enough connecting axe swings must fell the tree")
+
+
+func test_a_tree_out_of_range_takes_no_damage():
+	var axe := _item_catalog.make("iron_axe")
+	player.inventory.add(axe, 1)
+	player.equip_item(axe)
+	var tree := _tree_at(Vector2(500, 0))  # far past ATTACK_RANGE
+	var starting_health := tree.health
+
+	player._perform_attack()
+
+	assert_almost_eq(tree.health, starting_health, 0.0001, "a tree out of range must not take damage")
+
+
+func test_even_bare_handed_chopping_damages_a_tree():
+	# No weapon/tool equipped at all -- unarmed still carries a real (if
+	# small) wood multiplier (MaterialDamage.MULTIPLIERS), so a totally
+	# unequipped player should still be ABLE to fell a tree, just slowly.
+	# Rules out "the player somehow has no axe" as a sufficient explanation
+	# for a total, zero-effect failure to chop.
+	var tree := _tree_at(Vector2(10, 0))
+	var starting_health := tree.health
+
+	player._perform_attack()
+
+	assert_lt(tree.health, starting_health, "even bare hands must chip away at a tree")
 
 
 func test_blocking_a_real_hit_wears_the_equipped_weapon():
@@ -2932,6 +3010,23 @@ func test_grant_starter_items_leaves_the_player_bare_handed_when_neither_kind_wa
 	assert_null(player.equipped_item, "precondition: nothing equipped yet")
 	player.grant_starter_items([])
 	assert_null(player.equipped_item)
+
+
+## Reported directly: "now I can't fell any trees anymore." A real player's
+## own live save showed exactly this scenario -- Starting Kit tab never
+## opened, so the untouched DEFAULT_CHOICES auto-equipped whatever it
+## contained. Before this default carried an axe, that was stone_pickaxe
+## (see docs/concept/starting_kit.md's "The default couldn't chop wood"),
+## which _held_kind() reads as plain "unarmed" -- a real, if slow, 0.25x
+## wood multiplier, never actually zero (see the felling tests above), but
+## 12-24x slower than what the old fixed kit's guaranteed Iron Axe gave
+## every player for free. Pins the actual player-facing guarantee the fix
+## protects: a player who never touches the Starting Kit tab still ends up
+## holding something with a REAL wood multiplier, not just a nonzero one.
+func test_the_default_no_choice_kit_auto_equips_an_axe_so_wood_chopping_still_works():
+	player.grant_starter_items(StarterKit.DEFAULT_CHOICES)
+
+	assert_eq(player._held_kind(), "axe", "the do-nothing default must auto-equip a real wood-chopping tool")
 
 
 func test_a_granted_weapons_mass_matches_the_catalogs_real_mass():

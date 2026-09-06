@@ -2001,6 +2001,11 @@ Fixed at the source rather than chasing every possible re-parent trigger: `_stan
 
 ✅ **The 1.3x visual scale above, undone (2026-09-06).** Asked directly: "undo scaling of trees by 1.3? but keep crispness as far as possible." `ProceduralTreeSprite.VISUAL_SCALE` reverted `1.3 -> 1.0` -- trees draw at exactly their own `WORLD_SIZE` footprint again, the same as before that entry shipped. Not in tension with "keep crispness": everything that actually made tree art crisp (`DETAIL_MULTIPLIER=12`'s native-resolution canvas, `scale_piece`'s area-average downscale fixing the spring-blur report) lives entirely outside this constant and is completely untouched by the revert -- `VISUAL_SCALE` only ever controlled how big that already-crisp texture drew on screen, never its own detail. `CharacterPreviewLayout.tree_bounds`'s clipping margin (derived from `VISUAL_SCALE`, not hardcoded) follows automatically, needing no separate fix. Kept as a live constant (now 1.0) rather than removed, since `TreeRenderer`/`CharacterPreviewLayout` both still multiply by it and a future re-tune of this exact trade-off shouldn't need either file touched again, only the constant. `test_tree_visual_scale_is_the_pinned_tuned_constant` updated to `1.0`; the two `CharacterPreviewLayout` margin tests and the general "drawn size = world size times VISUAL_SCALE" tree test needed no logic changes, only doc-comment updates, since they were already written against the constant rather than a hardcoded 1.3. See `docs/concept/art_resolution.md`'s Phase 3 for the full reasoning.
 
+✅ **"Now I can't fell any trees anymore" traced to the Starting Kit default, not the two tree changes just above (2026-09-06, same day).** Reported directly, right after the visual-scale and Y-sort fixes above (and independently of the revert immediately above this entry -- both landed the same day, neither caused the other). `Player._chop_step` had never had a dedicated test at all -- four new direct `test_player.gd` integration tests (real axe, real `ChoppableTree`, in-range/out-of-range/bare-handed) came back 4/4 green first, clearing both recent tree commits outright: the damage/felling pipeline itself was never broken.
+
+The reporter's own live save (`user://player_save.bin`, read via a one-off read-only `PlayerSave.load_data()` probe script -- never written to) told the real story instead: `character_class: "warrior"`, `equipment: {"weapon": "stone_pickaxe"}`, hotbar/inventory exactly `StarterKit.DEFAULT_CHOICES` -- the Starting Kit tab had never been opened. Neither `crude_blade` nor `stone_pickaxe` carries a real wood multiplier (`MaterialDamage`: sword 0.5x, a non-axe tool falls through `Player._held_kind()` to unarmed 0.25x) -- 12-24 swings to fell one tree, against the OLD pre-Starting-Kit fixed kit's guaranteed Iron Axe (3.0x, 2 swings) this feature replaced (see Starting Kit below). Technically nonzero, never literally broken, but 6-12x slower than what the game used to hand every player for free reads exactly like "broken."
+
+Fixed in `StarterKit.DEFAULT_CHOICES` itself, not here -- see the Starting Kit entry below for the swap and why `crude_blade`, not `stone_pickaxe`, was the one to move.
 
 ### Seasons turn gradually; smell becomes a real sense
 
@@ -13059,6 +13064,41 @@ never actually true for it the way it is for Snare/Trap, which stay cut.
 of the same capture-DSL pass) and is registered here as a small, isolated
 port — just the `ItemCatalog` entry + icon, not the whole DSL — since this
 branch forked before that work landed on `main`.
+
+**Update (2026-09-06): `iron_axe` replaces `crude_blade` in `DEFAULT_CHOICES`.**
+Traced from "now I can't fell any trees anymore" — see the felled-trees
+entry above for the full investigation. The do-nothing default's only
+weapon-kind item was `crude_blade` (a sword: 0.5x wood), so
+`grant_starter_items`' own "first weapon-kind, else first tool-kind"
+auto-equip rule always picked it over `stone_pickaxe` (an even weaker
+0.25x, being neither an axe nor a weapon) — meaning NEITHER default item
+could chop wood at a reasonable rate, a real regression against the old
+fixed kit's guaranteed Iron Axe this feature replaced. Swapped `crude_blade`
+for `iron_axe`, still exactly `MAX_CHOICES` (3) entries — an in-place swap,
+not an addition. Deliberately not `stone_pickaxe` instead: mining is
+HARD-gated (`Player._pickaxe_power()`'s own doc comment — a pickaxe mines
+ore, anything else has ZERO mining power, a binary 0.0 rather than a soft
+multiplier), so dropping the pickaxe from the default would make ore
+literally unminable rather than merely slow — a strictly worse regression
+than the one being fixed. `iron_axe` sorts first in the new array, so the
+existing auto-equip rule now picks it up automatically with no change to
+`grant_starter_items` itself.
+
+Combat trades down in exchange: the default now has no weapon-KIND item at
+all, so a do-nothing player's base attack falls back to `UNARMED_DAMAGE`
+(times the axe's own 0.8x flesh multiplier when it's the one held, still
+better than bare hands' 0.5x, just not a dedicated weapon's `weapon_damage`).
+Accepted: wood-chopping is this game's larger, more central, more actively
+developed mechanic, and real combat gear is still one Starting Kit tab pick
+away for anyone who wants it — the tab itself, and every symbolic reference
+to `StarterKit.DEFAULT_CHOICES` (`World`, `MainMenu`, their tests), needed
+no changes at all; nothing else in the codebase hardcoded the array's
+literal contents. One existing `test_main_menu.gd` fixture did hardcode
+`iron_axe` itself as its example of "a pool item NOT among the defaults"
+(`test_toggling_a_fourth_item_while_three_are_selected_is_a_no_op`) — fixed
+to probe with `crude_blade` instead, the item that actually left the
+default set. Full trace and alternatives considered in
+`docs/concept/starting_kit.md`'s "The default couldn't chop wood".
 
 ### Screenshots (`concept/screenshots.md`)
 

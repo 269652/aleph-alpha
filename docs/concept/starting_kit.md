@@ -100,11 +100,13 @@ further gate anywhere else, so these don't invent one either.
 
 - `StarterKit` (`src/gameplay/starter_kit.gd`) — pure data, mirrors
   `class_archetype.gd`'s shape exactly: the pool, `MAX_CHOICES := 3`, a
-  `DEFAULT_CHOICES` (crude_blade + stone_pickaxe + fishing_rod — a weapon,
-  a mining tool, and specifically the same item the old fixed kit granted
-  for the exact same "discover fishing" reason), and `is_valid_choice()`.
-  No blurb/UI text — that lives in `MainMenu.STARTER_ITEM_BLURBS`, the same
-  split `CLASS_BLURBS` already uses for classes.
+  `DEFAULT_CHOICES` (iron_axe + stone_pickaxe + fishing_rod — see "The
+  default couldn't chop wood" below for why this is an axe and not
+  crude_blade now — a mining tool, and specifically the same item the old
+  fixed kit granted for the exact same "discover fishing" reason), and
+  `is_valid_choice()`. No blurb/UI text — that lives in
+  `MainMenu.STARTER_ITEM_BLURBS`, the same split `CLASS_BLURBS` already
+  uses for classes.
 - `MainMenu`'s Starting Kit tab (between Character and Skills — Skills is
   an explicit no-commitment preview, this is a real committed choice like
   class itself) — one card per pool item, mirroring the class picker's own
@@ -124,6 +126,59 @@ further gate anywhere else, so these don't invent one either.
 - The load-game path (`apply_save_dict`) is untouched — a loaded
   character's inventory has always come from the save file, never from
   `_ready()`'s grant.
+
+## The default couldn't chop wood (2026-09-06)
+
+Reported directly, right after the tree Y-sort tie-break and 1.3x
+visual-scale changes landed: "now I can't fell any trees anymore." A direct
+integration test of `Player._chop_step` (real axe, real `ChoppableTree`,
+real range/out-of-range/bare-handed cases — `tests/unit/test_player.gd`'s
+"felling trees" section) came back 4/4 green, clearing both recent tree
+changes outright. The reporter's own live save
+(`user://player_save.bin`, read-only via `PlayerSave.load_data`) told the
+real story instead: `character_class: warrior`, `equipment: {"weapon":
+"stone_pickaxe"}`, `hotbar/inventory` exactly `["crude_blade",
+"stone_pickaxe", "fishing_rod"]` — the untouched `DEFAULT_CHOICES`, meaning
+the Starting Kit tab was never opened.
+
+Neither default item carries a real wood multiplier
+(`MaterialDamage.MULTIPLIERS`: sword 0.5x, an equipped tool that isn't an
+axe falls through `Player._held_kind()` to the unarmed 0.25x) — 12-24
+swings to fell one 30-health tree, against the *old, pre-Starting-Kit fixed
+kit* this feature's own Status section says it replaced, which guaranteed
+an Iron Axe (3.0x, 2 swings) to literally every player regardless of class.
+Technically nonzero damage (proven by the same test file's
+`test_even_bare_handed_chopping_damages_a_tree`) reads as "broken" once
+it's 6-12x slower than what the game used to hand out for free.
+
+**Fix:** swap `crude_blade` for `iron_axe` in `DEFAULT_CHOICES`, still
+exactly `MAX_CHOICES` (3) entries (`test_default_choices_has_exactly_
+max_choices_entries` stays pinned, unchanged) — not a straight *addition*,
+and specifically not swapping out `stone_pickaxe` instead: mining is HARD-
+gated (`Player._pickaxe_power()`'s own doc comment: "a pickaxe mines ore,
+anything else (or nothing) has zero mining power" — a binary 0.0, not a
+soft multiplier), so dropping the pickaxe from the do-nothing default would
+make ore literally unminable rather than merely slow, a strictly worse
+regression than the one being fixed. `iron_axe` sorts first in the new
+array, so `Player.grant_starter_items`'s "first WEAPON-kind, else first
+TOOL-kind" auto-equip rule (mechanism section above) picks it automatically
+— a do-nothing player now stands there holding the axe, not the pickaxe.
+
+Combat trades down in exchange: `crude_blade` was the default's only
+weapon-KIND item (`Item.is_weapon()`), so `Player._held_weapon()` returned
+it and `_perform_attack` used its real `weapon_damage`; an axe is
+`kind: "tool"`, so `_held_weapon()` reads null for it and combat falls back
+to `UNARMED_DAMAGE` (times the axe's own 0.8x flesh multiplier — still
+better than bare hands' 0.5x, just not a dedicated weapon's damage). Judged
+the right trade: wood-chopping is core, ongoing, and this game's own
+`ChoppableTree`/tree-rendering/tree-ecology surface area dwarfs the
+default's now-lost baseline combat edge, and a player who wants that edge
+back has always had it one Starting Kit tab away.
+
+Both `StarterKit.POOL` and every symbolic reference to
+`StarterKit.DEFAULT_CHOICES` (`World`, `MainMenu`, their tests) needed zero
+changes — nothing else in the codebase hardcodes the array's literal
+contents, only its own definition and this doc did.
 
 ## Non-goals (for now)
 

@@ -1086,8 +1086,14 @@ func test_toggling_an_already_selected_item_deselects_it():
 
 func test_toggling_a_fourth_item_while_three_are_selected_is_a_no_op():
 	assert_eq(menu.current_starter_items().size(), StarterKit.MAX_CHOICES, "precondition: 3 defaults")
-	menu._toggle_starter_item("iron_axe")  # not among the defaults
-	assert_false(menu.current_starter_items().has("iron_axe"))
+	# crude_blade, not iron_axe (2026-09-06, see docs/concept/starting_kit.md's
+	# "The default couldn't chop wood"): iron_axe is now itself one of the 3
+	# defaults, so toggling IT would deselect a default rather than probe the
+	# "blocked from adding a 4th" rule this test actually means to cover.
+	# crude_blade is the item that left the default set, so it's guaranteed
+	# not among the current 3 regardless of which items DEFAULT_CHOICES holds.
+	menu._toggle_starter_item("crude_blade")  # not among the defaults
+	assert_false(menu.current_starter_items().has("crude_blade"))
 	assert_eq(menu.current_starter_items().size(), StarterKit.MAX_CHOICES)
 
 
