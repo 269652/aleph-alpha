@@ -64,10 +64,14 @@ one genuinely poisons the player.
 - **Two real nutritional strategies, and they place differently.**
   Ectomycorrhizal fungi live in a real symbiosis with a living tree's roots
   and cannot fruit without one nearby — Fly Agaric partners with pine,
-  Black Trumpet and Chanterelle with oak. Saprotrophic fungi instead
-  decompose dead organic matter directly and need no living host — Psilocybe,
-  Champignon, and Parasol are this roster's saprotrophs, which is why they
-  alone can also appear in grassland.
+  Black Trumpet and Chanterelle with oak; all three are forest/rainforest
+  only. Saprotrophic fungi instead decompose dead organic matter directly
+  and need no living host, but real saprotrophs don't all share one
+  habitat either: Champignon (*Agaricus campestris*, the real "field
+  mushroom") is specifically a pasture/grassland species, genuinely
+  uncommon in deep forest, while Psilocybe and Parasol are real
+  mixed-habitat species found in both grassland and forest (see
+  `MushroomSpecies.allows_biome`).
 - **Toxicity is real, specific, and asymmetric.** Fly Agaric
   (*Amanita muscaria*) is toxic — ibotenic acid/muscimol poisoning, real GI
   distress and neurological effects — but rarely fatal in a modern medical
@@ -124,9 +128,12 @@ because pillar 1 above means there is no visible growth stage to track.
 
 Mycorrhizal species (`fly_agaric`, `black_trumpet`, `chanterelle`) seed
 only on forest/rainforest soil — the same biome their real host tree
-already grows in, per `TreeSpecies`. `psylo`, `champignon`, and `parasol`
-additionally seed on grassland, being the roster's real saprotrophs, not
-tied to any host tree. (Literally
+already grows in, per `TreeSpecies`. The saprotrophs don't share one
+blanket rule: `champignon` (a real pasture species) seeds ONLY on
+grassland, while `psylo` and `parasol` (real mixed-habitat species) seed
+on forest/rainforest as well as grassland — see
+`MushroomSpecies.allows_biome`, the single real source of truth for this
+`WildMushroomPatch` itself only delegates to. (Literally
 checking proximity to a specific live tree instance is real and grounded,
 but is a genuine new cross-system query this pass does not build — see
 Deliberately not modeled.)
