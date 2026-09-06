@@ -129,3 +129,40 @@ func test_a_meter_percent_never_leaves_the_zero_to_a_hundred_range():
 	assert_eq(World.meter_label_text("Water", World.reserve_for_deficit(-0.3)), "Water 100%")
 	assert_eq(World.meter_label_text("Stamina", 2.0), "Stamina 100%")
 	assert_eq(World.meter_label_text("Stamina", -1.0), "Stamina 0%")
+
+
+# -- Karma readout: golden vs. red accents for positive vs. negative --------
+#
+# Asked directly: "Karma should be displayed somewhere in a UI with golden
+# and red accents for positive vs negative karma." docs/concept/karma_and_
+# luck.md left "should raw Karma be shown as a number, or only its
+# qualitative effect on Luck?" as an open question for whoever built this --
+# answered here: a signed number, since the request asked for one directly.
+# Built in the live in-game HUD (not the companion server's Character Sheet
+# web page the concept doc's own Status line anticipated) -- see that doc's
+# own note on the divergence: a display only checked from a separate browser
+# tab would not give "instant" feedback for the moment a crush actually
+# happens during play.
+
+func test_positive_karma_reads_with_an_explicit_plus_sign():
+	assert_eq(World.karma_display_text(3.0), "Karma: +3")
+
+
+func test_negative_karma_reads_with_its_own_minus_sign():
+	assert_eq(World.karma_display_text(-5.0), "Karma: -5")
+
+
+func test_zero_karma_reads_as_a_plain_zero_not_signed_either_way():
+	assert_eq(World.karma_display_text(0.0), "Karma: 0")
+
+
+func test_positive_karma_is_the_themes_gold_accent():
+	assert_eq(World.karma_display_color(3.0), UiTheme.ACCENT)
+
+
+func test_negative_karma_is_the_themes_red_accent():
+	assert_eq(World.karma_display_color(-5.0), UiTheme.NEGATIVE)
+
+
+func test_zero_karma_is_neutral_text_colour_not_gold_or_red():
+	assert_eq(World.karma_display_color(0.0), UiTheme.TEXT)

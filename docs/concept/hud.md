@@ -127,6 +127,14 @@ only — the percentage under it is still the same reserve the bar shows.
 - ✅ **Meters read as reserves** — `World.reserve_for_deficit` /
   `meter_label_text`, tested (`test_world_hud.gd`), including the pin that the
   label and the fill agree at every deficit.
+- ✅ **Karma readout, on the shared themed card** (2026-09-06, asked
+  directly — see `docs/concept/karma_and_luck.md`) —
+  `World._build_karma_display`/`_update_karma_display`, a `PanelContainer`
+  (`UiTheme.panel_stylebox` via `_ui_theme`, pillar 1) just under the
+  minimap, top-right. `World.karma_display_text`/`karma_display_color`
+  are the pure, tested halves (`test_world_hud.gd`): a signed number,
+  coloured gold/red/neutral by sign. Built on the shared card from the
+  start, unlike the still-bare readouts the next line names.
 - 🚧 **The rest of the HUD is not audited against pillar 1.** The land-sense
   readout (`_land_sense_label`), the death label, the XP label and the charge
   meter are still bare `Label`s/`ColorRect`s without the shared card. The
