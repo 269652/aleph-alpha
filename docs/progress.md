@@ -8353,6 +8353,30 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   win here, rather than building a whole new leaf-litter system
   speculatively on top of a bugfix request. **Leaves have since gained
   their own real mechanic — see "Leaf Litter" below.**
+  **Follow-up (2026-09-06): "bugs run to a new leaf instantly then walk
+  back a bit then speed to the next leaf... should wander slowly and eat
+  one when they see it but walk towards it in a realistic motion."**
+  Traced to a real, confirmed gap — no literal teleport exists anywhere in
+  this file, `position` only ever moves via bounded `move_toward`/
+  `step_position` calls — `home` never relocated when a decomposer
+  committed to a real target farther away than its own tiny
+  `WANDER_RADIUS_PX` (24px), routinely true since `SEARCH_RADIUS_PX`
+  (60px) is more than double it. Once the decomposer finished eating and
+  returned to SEEKING, `AmbientFlyerMovement`'s home-anchored containment
+  pulled it straight back toward the now-stale original spawn point before
+  it could settle near wherever it actually just ate — read live as "walk
+  back a bit" sandwiched between two fast, sudden beelines. Fixed by
+  relocating `home` to the target's position at the moment of commit
+  (`if found.position.distance_to(home) > _movement.radius: home =
+  found.position`), the exact idiom `AmbientFlyerMarker` already uses at
+  every one of ITS OWN commit sites (worm/fruit/seed/grass-seed —
+  `if _worm_target.distance_to(home) > _movement.radius: home =
+  _worm_target`) — applied once, at `DecomposerMarker`'s single commit
+  point in `_step_seeking`, covering carrion/fruit/leaf uniformly rather
+  than special-casing leaves. New test proves the mechanism directly:
+  committing to a target beyond the wander radius relocates home there.
+  26/26 green in `test_decomposer_marker.gd`. Full writeup:
+  [carrion.md](concept/carrion.md)'s "Decomposers" Status entry.
 - **Ants + beetles: real illustrated art, replacing every procedural
   silhouette** (medium) — ✅ Done — reported live: "finish ants and beetles
   / ground foraging? I added sprites for ants" (`ant.png`/`beetle.png`/
@@ -8851,11 +8875,31 @@ be, at which point `test_step_fruiting_adds_no_leaf_when_leaf_litter_
 disabled` correctly went red. Fixed to set the flag explicitly in both
 directions. Full writeup: `leaf_litter.md`'s own Status entry.
 
-⬜ **The invisible `AntColony` mound simulation still does not forage
-leaves** (unchanged gap from the first pass) — the VISIBLE `DecomposerMarker`
-ants/bugs above already close the "ants eat fallen leaves" gap the report
-asked for; extending the invisible colony simulation too is a reasonable,
-separable follow-up (see `soil_fauna.md`'s own cross-reference).
+✅ **The invisible `AntColony` mound simulation now forages leaves too
+(2026-09-06)** — reported live as "ants eat leaves at the spot instead of
+physically carrying the leaf to the mound where it should disappear...
+the ant should be seen dragging the leaf to the mound". A real, confirmed
+gap, not a misreading: the VISIBLE `DecomposerMarker` ants/bugs above
+genuinely do eat leaf litter in place (no mound/colony concept at all, by
+design), and a player has no visual way to tell one apart from a real
+`AntColony` forager, since both draw the identical "ant" art. New
+`EarthChunkManager._forage_leaf_near_mound` gives the real colony
+simulation the same `nearest_leaf_litter_near`/`consume_leaf_litter_at`
+query `DecomposerMarker` already uses, checked in `step_ants` BEFORE the
+grassland/forest-rainforest biome branch — unlike grass seed or windfall,
+a leaf is not biome-gated (a "grassland" chunk can still have real trees
+shedding leaves onto it). `AntForagerMarker` carries a leaf home exactly
+like a seed or nut (same walk, same real "carry" pose, same
+real-arrival-resolves contract), but a leaf is real detritus/food, not a
+propagule — it disappears at the mound rather than being re-cached or
+re-planted like a surviving grass seed or windfall nut. Pheromone-biased
+recruitment toward a known-good leaf source is a real, separable
+follow-up left undone: `nearest_leaf_litter_near` only ever reports the
+single closest leaf, with no plural query to run `PheromoneField.
+best_candidate_index` against the way seed/windfall do. 24/24 green in
+`test_ant_forager_marker.gd`, 25/25 in the leaf-related subset of
+`test_earth_chunk_manager.gd`. Full writeup: `soil_fauna.md`'s own
+cross-reference, now resolved.
 
 ⬜ **Still no litter-density accumulation or soil-fertility feedback, and
 no ground-covering visual effect** (unchanged scope cut — see
