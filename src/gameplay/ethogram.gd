@@ -203,8 +203,21 @@ const BODY_PLANS := {
 	},
 	"bird": {
 		"drives": {
+			# rise_seconds was SECONDS_PER_DAY/8.0 (13 meals/day, ~18 real
+			# minutes hungry-to-hungry). Reported live, twice: a robin
+			# standing right next to visible worms reads as "not eating".
+			# Investigated and confirmed working (a real strike takes a
+			# hungry bird -- see docs/progress.md), just too rare to
+			# actually catch: a 2-second peck once every ~18 minutes. Asked
+			# directly whether to speed it up: yes. /32.0 quarters
+			# rise_seconds, which quarters the hungry-to-hungry interval in
+			# turn (pinned by test_a_bird_forages_four_times_as_often,
+			# test_bird_digestion.gd) -- a robin (and a sparrow, which
+			# shares this same "bird" plan; kingfisher has its own separate
+			# override below and is untouched) gets hungry roughly every
+			# ~4-5 real minutes now, comfortably catchable in one sitting.
 			DRIVE_HUNGER: {
-				"rise_seconds": SeasonCycle.SECONDS_PER_DAY / 8.0, "threshold": 1.0 - 0.35, "meal": 0.7, "start": 1.0,
+				"rise_seconds": SeasonCycle.SECONDS_PER_DAY / 32.0, "threshold": 1.0 - 0.35, "meal": 0.7, "start": 1.0,
 			},
 		},
 	},
