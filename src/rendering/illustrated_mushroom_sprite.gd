@@ -28,6 +28,18 @@ extends RefCounted
 ##   identically effective on sheep/wolf/the world-boss sheets, and
 ##   simpler since these are fresh single-pass renders with no
 ##   resize-induced magenta-cast bleed to clean up afterward.
+##
+## Crushed/bitten counterparts (see docs/concept/mushrooms.md's "Crushed
+## underfoot", docs/concept/soil_fauna.md's decomposer-bite follow-up):
+## real 1:1-per-specimen sheets (same 5x5-per-1254x1254-canvas layout,
+## same magenta convention), delivered incrementally species by species --
+## has_crushed_variant/has_bitten_variant gate exactly like has_variants
+## already does, so a species with no crushed/bitten art yet falls
+## through to a caller-chosen fallback rather than erroring. "1:1" holds
+## exactly once a sheet's own frame count matches the normal sheet's (25);
+## until then, crushed_frame_for/bitten_frame_for still pick a
+## deterministic, in-range variant of THAT sheet's own size (see their own
+## doc comments) rather than assuming every sheet is already complete.
 
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
@@ -73,9 +85,53 @@ const _SHEETS := {
 	},
 }
 
+## Crushed-underfoot counterparts -- deliberately incomplete (see class
+## doc comment): only species with a real delivered sheet appear here.
+## Filenames are as-delivered, including "champigon" (missing an "n")
+## matching the real file on disk -- not renamed, same reasoning as
+## "chantarelle" above.
+const _CRUSHED_SHEETS := {
+	"black_trumpet": {
+		"path": "res://assets/sprites/mushrooms/black_trumpet_crushed.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+	"champignon": {
+		"path": "res://assets/sprites/mushrooms/champignon_crushed.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+	"chanterelle": {
+		"path": "res://assets/sprites/mushrooms/chantarelle_crushed.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+}
+
+## One-bite-taken counterparts -- deliberately incomplete, same reasoning
+## as _CRUSHED_SHEETS. More bite stages are planned later (see
+## docs/concept/soil_fauna.md); only stage 1 exists today.
+const _BITTEN_SHEETS := {
+	"black_trumpet": {
+		"path": "res://assets/sprites/mushrooms/black_trumpet_bitten_1.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+	"champignon": {
+		"path": "res://assets/sprites/mushrooms/champigon_bitten_1.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+	"chanterelle": {
+		"path": "res://assets/sprites/mushrooms/chantarelle_bitten.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+}
+
 ## Five content rows, identical across every sheet -- all six are the same
 ## 1254x1254 canvas divided into 5 equal bands (measured directly, not
-## assumed).
+## assumed). Confirmed identical for the crushed/bitten sheets too.
 const _ROW_BANDS := [
 	Vector2i(0, 251), Vector2i(251, 502), Vector2i(502, 752), Vector2i(752, 1003), Vector2i(1003, 1254)
 ]
@@ -89,6 +145,8 @@ const BASELINE_Y := 64
 var _slicer := SpriteSheetSlicer.new()
 
 static var _frames_cache: Dictionary = {}
+static var _crushed_frames_cache: Dictionary = {}
+static var _bitten_frames_cache: Dictionary = {}
 static var _marker_scale_cache: Dictionary = {}
 
 
@@ -101,7 +159,7 @@ func has_variants(species_id: String) -> bool:
 
 
 func frame_count(species_id: String) -> int:
-	return _all_frames(species_id).size()
+	return _frames_from(_SHEETS, _frames_cache, species_id).size()
 
 
 ## One deterministically-picked variant for `seed_value`, or null if
@@ -110,23 +168,52 @@ func frame_count(species_id: String) -> int:
 ## sheet's full variant count via PixelNoise.range_index's bucket-avoidance
 ## (mirrors IllustratedAntMoundSprite.frame_for exactly).
 func frame_for(species_id: String, seed_value: int) -> ImageTexture:
-	var frames := _all_frames(species_id)
+	return _pick_frame(_frames_from(_SHEETS, _frames_cache, species_id), seed_value)
+
+
+## Whether `species_id` has a real crushed-underfoot sheet yet (see class
+## doc comment -- delivered incrementally, not every species has one).
+func has_crushed_variant(species_id: String) -> bool:
+	return _CRUSHED_SHEETS.has(species_id)
+
+
+## The crushed counterpart of the specimen `seed_value` would otherwise
+## pick via frame_for -- same seed, same index-selection shape, so a
+## crushed mushroom reads as the SAME specimen once both sheets share the
+## normal 25-frame count (see class doc comment for the "not complete
+## yet" caveat). Null if `species_id` has no crushed sheet at all.
+func crushed_frame_for(species_id: String, seed_value: int) -> ImageTexture:
+	return _pick_frame(_frames_from(_CRUSHED_SHEETS, _crushed_frames_cache, species_id), seed_value)
+
+
+func has_bitten_variant(species_id: String) -> bool:
+	return _BITTEN_SHEETS.has(species_id)
+
+
+## The one-bite-taken counterpart of the specimen `seed_value` would
+## otherwise pick via frame_for -- see crushed_frame_for's own doc
+## comment, identical reasoning. Null if `species_id` has no bitten sheet
+## at all.
+func bitten_frame_for(species_id: String, seed_value: int) -> ImageTexture:
+	return _pick_frame(_frames_from(_BITTEN_SHEETS, _bitten_frames_cache, species_id), seed_value)
+
+
+func _pick_frame(frames: Array, seed_value: int) -> ImageTexture:
 	if frames.is_empty():
 		return null
 	var index: int = PixelNoise.range_index(seed_value, 0, 0, frames.size())
 	return frames[index]
 
 
-func _all_frames(species_id: String) -> Array:
-	if not _SHEETS.has(species_id):
+func _frames_from(sheets: Dictionary, cache: Dictionary, species_id: String) -> Array:
+	if not sheets.has(species_id):
 		return []
-	if not _frames_cache.has(species_id):
-		_frames_cache[species_id] = _load_frames(species_id)
-	return _frames_cache[species_id]
+	if not cache.has(species_id):
+		cache[species_id] = _load_frames(sheets[species_id])
+	return cache[species_id]
 
 
-func _load_frames(species_id: String) -> Array[ImageTexture]:
-	var sheet: Dictionary = _SHEETS[species_id]
+func _load_frames(sheet: Dictionary) -> Array[ImageTexture]:
 	var image := SpriteSheetLoader.load_image(sheet["path"])
 	# Turning the chroma-keyed background transparent up front lets the
 	# exact same downstream detect_frames/normalize_frames (via
@@ -172,13 +259,17 @@ func _apply_chroma_key(image: Image, key: Color, tolerance: float) -> Image:
 ## the real art's own opaque width per species rather than assumed to
 ## match the canvas proportions (mirrors IllustratedAntMoundSprite/
 ## IllustratedAnimalSprite marker_scale). Cached per species: art doesn't
-## change once loaded.
+## change once loaded. Reused as-is for the crushed/bitten look of the
+## same species -- a simplification (see class doc comment): a squashed
+## or bitten specimen's own opaque-pixel spread is not measured
+## separately, on the assumption it reads close enough to the same real
+## specimen's own normal-frame size.
 func marker_scale(species_id: String) -> float:
 	if not _SHEETS.has(species_id):
 		return 1.0
 	if _marker_scale_cache.has(species_id):
 		return _marker_scale_cache[species_id]
-	var frames := _all_frames(species_id)
+	var frames := _frames_from(_SHEETS, _frames_cache, species_id)
 	if frames.is_empty():
 		return 1.0
 	var image: Image = frames[0].get_image()

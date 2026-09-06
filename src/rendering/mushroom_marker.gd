@@ -50,6 +50,12 @@ var mushroom_seed := 0
 var cell := Vector2i.ZERO
 var mushroom_world = null
 
+## "" for a live fruiting specimen, "crushed" or "bitten" for a lingering
+## corpse (see WildMushroomPatch.is_corpse/corpse_kind, docs/concept/
+## mushrooms.md's "Crushed underfoot") -- set before add_child by
+## MushroomRenderer.sync_markers, same convention as species_id/cell.
+var corpse_kind := ""
+
 var _sprite: Sprite2D
 
 static var _procedural_generator := ProceduralMushroomSprite.new()
@@ -75,9 +81,22 @@ func get_hover_actions() -> Array:
 ## Real illustrated art if this species has any (has-art-or-doesn't
 ## fallback chain every optional illustrated-art seam in this codebase
 ## uses), the procedural species-coloured silhouette otherwise. Always the
-## real species' own look -- see class doc comment.
+## real species' own look -- see class doc comment. A corpse (corpse_kind
+## != "") prefers the matching crushed_frame_for/bitten_frame_for when the
+## species has that art yet (see docs/concept/mushrooms.md's "Crushed
+## underfoot") -- falling through to the ordinary live look otherwise, the
+## same has-or-doesn't gate, so a species still missing its crushed/bitten
+## sheet (reported live: "some are still missing but I'll add while you
+## wire") never shows a blank texture, just its real live look a beat
+## longer than the fully-delivered species do.
 func _rebuild_sprite() -> void:
-	if _illustrated_generator.has_variants(species_id):
+	if corpse_kind == "crushed" and _illustrated_generator.has_crushed_variant(species_id):
+		_sprite.texture = _illustrated_generator.crushed_frame_for(species_id, mushroom_seed)
+		_sprite.scale = Vector2.ONE * _illustrated_generator.marker_scale(species_id)
+	elif corpse_kind == "bitten" and _illustrated_generator.has_bitten_variant(species_id):
+		_sprite.texture = _illustrated_generator.bitten_frame_for(species_id, mushroom_seed)
+		_sprite.scale = Vector2.ONE * _illustrated_generator.marker_scale(species_id)
+	elif _illustrated_generator.has_variants(species_id):
 		_sprite.texture = _illustrated_generator.frame_for(species_id, mushroom_seed)
 		# Illustrated art's own canvas proportions don't match the
 		# procedural generator's -- use its own measured-from-the-real-art
@@ -114,5 +133,36 @@ func pick_up(picker) -> bool:
 	# the exact right per-chunk sim instance here, not a wrapper.
 	if mushroom_world != null and mushroom_world.has_method("pick"):
 		mushroom_world.pick(cell)
+	queue_free()
+	return true
+
+
+## A decomposer's single bite (see DecomposerMarker._step_feeding's
+## has_method("take_bite") branch, docs/concept/soil_fauna.md's fungivory
+## follow-up) -- reported live: "1 bite is enough for when a bug takes a
+## bite." `amount` is unused -- unlike Carcass/CarcassGuts' numeric health
+## pool, a mushroom has no multi-visit health to whittle down (only one
+## bitten-art stage exists today; more are explicitly planned later per
+## the user's own words) -- kept only so this duck-types identically into
+## DecomposerMarker's existing take_bite branch. No-op (returns false) on
+## a marker that is already a corpse -- a decomposer doesn't re-bite what
+## something already finished (mirrors Carcass.take_bite's own "no-op
+## until/unless a real gate condition holds" contract shape), and never
+## even asks the sim in that case. Otherwise defers to
+## WildMushroomPatch.bite (this marker's own live cell may already be
+## spent by the time the bite lands -- e.g. picked or crushed a moment
+## earlier -- in which case bite() itself reports false and this marker is
+## left exactly as it was, for sync_markers to reconcile on its own next
+## tick). On a real bite, this marker -- the LIVE one -- is freed; the
+## corpse the player then sees is a fresh marker MushroomRenderer.
+## sync_markers builds from the sim's own corpse_kind, the same "the sim
+## is the truth, the marker just mirrors it" shape pick_up already uses.
+func take_bite(_amount: float) -> bool:
+	if corpse_kind != "":
+		return false
+	if mushroom_world == null or not mushroom_world.has_method("bite"):
+		return false
+	if not mushroom_world.bite(cell):
+		return false
 	queue_free()
 	return true

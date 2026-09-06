@@ -198,6 +198,94 @@ func test_a_crushed_site_recovers_on_the_same_clock_as_a_picked_one():
 	)
 
 
+# -- corpses: crushed/bitten remains linger instead of vanishing instantly --
+# (see docs/concept/soil_fauna.md's "A corpse is new ground",
+# EarthwormPatch.is_corpse/corpse_age_seconds) -- reported live: real
+# crushed/bitten art was delivered for wiring in, which needs a cell to stay
+# a distinguishable corpse for a while rather than freeing its marker the
+# instant crush()/bite() erases it from _fruiting, exactly the gap
+# EarthwormPatch already closed for worms. A mushroom corpse can have TWO
+# distinct causes (crushed underfoot vs. a decomposer's bite), unlike a
+# worm's single `is_corpse` bool -- corpse_kind(cell) reports which, so the
+# sprite layer can pick crushed_frame_for vs bitten_frame_for.
+
+func test_nothing_is_a_corpse_before_anything_dies():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	assert_false(patch.is_corpse(cell))
+	assert_eq(patch.corpse_kind(cell), "")
+
+
+func test_crushing_a_mushroom_makes_it_a_crushed_corpse():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	assert_true(patch.is_corpse(cell), "a crushed mushroom should leave a corpse")
+	assert_eq(patch.corpse_kind(cell), "crushed")
+
+
+## Picking must NOT leave a corpse -- only crush()/bite() do. pick() and
+## crush() reduce the model to the identical _fruiting/_recovery state;
+## this is the one bit that actually distinguishes them afterward, the
+## same distinction EarthwormPatch.take/crush already draws.
+func test_picking_a_mushroom_leaves_no_corpse():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.pick(cell)
+	assert_false(patch.is_corpse(cell), "a picked mushroom is not a corpse")
+
+
+## A corpse rides the identical SPENT_SECONDS/_recovery clock as ordinary
+## recovery -- it clears the instant the site could fruit fresh again, not
+## on a second, independent timer (mirrors EarthwormPatch's own
+## test_a_corpse_clears_when_its_burrow_recovers).
+func test_a_crushed_corpse_clears_once_recovery_expires():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	patch.advance(WildMushroomPatch.SPENT_SECONDS + 1.0, 0.0)
+	assert_false(patch.is_corpse(cell), "the corpse should be long gone once the site can fruit again")
+	assert_eq(patch.corpse_kind(cell), "")
+
+
+# -- bite(): a decomposer's single bite (see docs/concept/soil_fauna.md's
+# fungivory follow-up) -- reported live: "1 bite is enough for when a bug
+# takes a bite." Mirrors pick()/crush()'s exact has_fruiting gate and
+# recovery shape, differing only in which corpse_kind it leaves behind.
+
+func test_bite_returns_false_when_nothing_is_fruiting_there():
+	var patch := WildMushroomPatch.new(1, 20, 20, _all_biome("desert", 20, 20))
+	assert_false(patch.bite(Vector2i(0, 0)))
+
+
+func test_bite_removes_a_fruiting_mushroom_and_starts_recovery():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	assert_true(patch.bite(cell))
+	assert_false(patch.has_fruiting(cell))
+	assert_false(patch.bite(cell), "biting the same spot twice should find nothing the second time")
+
+
+func test_bite_leaves_a_bitten_corpse_not_a_crushed_one():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.bite(cell)
+	assert_true(patch.is_corpse(cell))
+	assert_eq(patch.corpse_kind(cell), "bitten")
+
+
+func test_a_bitten_corpse_recovers_on_the_same_clock_as_a_picked_one():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.bite(cell)
+	for i in 10:
+		patch.advance(1.0, 1.0)
+	assert_false(
+		patch.has_fruiting(cell),
+		"a bitten site should still be recovering nowhere near SPENT_SECONDS later"
+	)
+
+
 # -- force_fruit_near: a debug/dev-console way to see one on demand --------
 #
 # Reported live, after an extended investigation confirmed the fruiting sim

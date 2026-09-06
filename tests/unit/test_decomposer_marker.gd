@@ -20,6 +20,7 @@ const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
+const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 
 ## Minimal duck-typed `_world` (see DecomposerMarker.setup) wrapping a real
 ## LeafLitterField -- mirrors test_creature_marker.gd's own ForageWorld
@@ -450,6 +451,44 @@ func test_ignores_a_liftable_stone_sharing_the_dropped_item_group():
 	# reaching this line at all is the fix. Kept as an explicit assert
 	# rather than an empty test so the intent reads without the comment.
 	assert_false(stone.is_queued_for_deletion(), "a decomposer must never treat a stone as edible")
+
+
+# -- real fungivory: a mushroom is forageable too (see docs/concept/
+# soil_fauna.md's fungivory follow-up) -- reported live: "when a bug takes
+# a bite". MushroomMarker already joins DroppedItem.FORAGEABLE_GROUP_NAME
+# (see its own doc comment) -- but _nearest_food's `not (node is
+# DroppedItem)` guard silently excluded it again immediately afterward (a
+# MushroomMarker extends Node2D, not DroppedItem): confirmed dead code
+# path, not a hypothetical -- a decomposer could never actually reach a
+# mushroom at all before this fix, joining the group notwithstanding.
+
+class StubMushroomWorld:
+	extends RefCounted
+	func bite(_cell: Vector2i) -> bool:
+		return true
+
+
+func _mushroom_at(at: Vector2, species_id: String = "chanterelle") -> MushroomMarker:
+	var mushroom := MushroomMarker.new()
+	mushroom.species_id = species_id
+	mushroom.mushroom_world = StubMushroomWorld.new()
+	mushroom.position = at
+	add_child_autofree(mushroom)
+	return mushroom
+
+
+func test_nearest_food_finds_a_mushroom_marker():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	assert_eq(marker._nearest_food(), mushroom)
+
+
+func test_forages_and_takes_one_bite_of_a_nearby_mushroom_when_theres_no_carrion():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.is_queued_for_deletion():
+			break
+	assert_true(mushroom.is_queued_for_deletion(), "a decomposer should forage and bite a nearby mushroom too")
 
 
 func test_far_from_the_player_does_not_rescan_carrion_on_every_process_call():
