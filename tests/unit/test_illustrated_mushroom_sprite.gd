@@ -118,7 +118,9 @@ func test_marker_scale_produces_the_procedural_mushrooms_own_world_width():
 # incrementally (some species still missing as of this pass -- has_X()
 # gating covers exactly this the same way has_variants() already does).
 
-const _SPECIES_WITH_CRUSHED_AND_BITTEN_ART := ["black_trumpet", "champignon", "chanterelle"]
+const _SPECIES_WITH_CRUSHED_AND_BITTEN_ART := [
+	"black_trumpet", "champignon", "chanterelle", "death_cap", "false_death_cap",
+]
 const _SPECIES_WITHOUT_CRUSHED_OR_BITTEN_ART_YET := ["fly_agaric", "psylo", "parasol"]
 
 

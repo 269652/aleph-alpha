@@ -9,25 +9,26 @@ extends RefCounted
 ## just one pool per species instead of one pool total, since every
 ## species now has its own real sheet.
 ##
-## Two real background conventions among the six delivered sheets,
-## confirmed by pixel-sampling each one directly rather than assumed from a
-## preview:
+## Two real background conventions among the delivered sheets, confirmed
+## by pixel-sampling each one directly rather than assumed from a preview:
 ## - fly_agaric.png: a genuinely transparent background already (an
 ##   earlier visual read of it as "solid black" was a wide low-alpha
 ##   antialiasing fringe composited against a dark preview canvas, not
 ##   real content -- confirmed by sampling interior background pixels and
 ##   by running the real slicer over it). No chroma_key entry:
 ##   SpriteSheetSlicer's own alpha_threshold handles it directly.
-## - every other species: a solid magenta background (~Color(0.98, 0.01,
-##   0.98), sampled at interior background points -- corners/edges read
-##   misleadingly pale due to antialiasing feathering). Uses
-##   IllustratedAnimalSprite's simpler single-pass _apply_chroma_key
-##   technique (a per-channel-tolerance key-out to full transparency,
-##   applied once before slicing) rather than IllustratedStoneSprite/
-##   IllustratedAntMoundSprite's cast-removal despill quartet -- proven
-##   identically effective on sheep/wolf/the world-boss sheets, and
-##   simpler since these are fresh single-pass renders with no
-##   resize-induced magenta-cast bleed to clean up afterward.
+## - every other species (including death_cap/false_death_cap, added
+##   later once real art surfaced for them -- see docs/progress.md): a
+##   solid magenta background (~Color(0.98, 0.01, 0.98), sampled at
+##   interior background points -- corners/edges read misleadingly pale
+##   due to antialiasing feathering). Uses IllustratedAnimalSprite's
+##   simpler single-pass _apply_chroma_key technique (a per-channel-
+##   tolerance key-out to full transparency, applied once before slicing)
+##   rather than IllustratedStoneSprite/IllustratedAntMoundSprite's
+##   cast-removal despill quartet -- proven identically effective on
+##   sheep/wolf/the world-boss sheets, and simpler since these are fresh
+##   single-pass renders with no resize-induced magenta-cast bleed to
+##   clean up afterward.
 ##
 ## Crushed/bitten counterparts (see docs/concept/mushrooms.md's "Crushed
 ## underfoot", docs/concept/soil_fauna.md's decomposer-bite follow-up):
@@ -83,6 +84,20 @@ const _SHEETS := {
 		"chroma_key": _MAGENTA,
 		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
 	},
+	# Added once real art surfaced for both (see docs/progress.md's
+	# mushrooms section) -- same 1254x1254/5-row-band grid, same magenta
+	# background convention as every non-fly_agaric sheet above (confirmed
+	# by direct pixel-sampling, not assumed).
+	"death_cap": {
+		"path": "res://assets/sprites/mushrooms/death_cap.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+	"false_death_cap": {
+		"path": "res://assets/sprites/mushrooms/false_death_cap.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
 }
 
 ## Crushed-underfoot counterparts -- deliberately incomplete (see class
@@ -106,6 +121,16 @@ const _CRUSHED_SHEETS := {
 		"chroma_key": _MAGENTA,
 		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
 	},
+	"death_cap": {
+		"path": "res://assets/sprites/mushrooms/death_cap_crushed.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+	"false_death_cap": {
+		"path": "res://assets/sprites/mushrooms/false_death_cap_crushed.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
 }
 
 ## One-bite-taken counterparts -- deliberately incomplete, same reasoning
@@ -124,6 +149,19 @@ const _BITTEN_SHEETS := {
 	},
 	"chanterelle": {
 		"path": "res://assets/sprites/mushrooms/chantarelle_bitten.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+	# Delivered filename is "_eaten" rather than "_bitten_1"/"_bitten" like
+	# every other species -- pointed at as-delivered, same reasoning as
+	# "chantarelle"/"champigon"'s own misspellings above.
+	"death_cap": {
+		"path": "res://assets/sprites/mushrooms/death_cap_eaten.png",
+		"chroma_key": _MAGENTA,
+		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
+	},
+	"false_death_cap": {
+		"path": "res://assets/sprites/mushrooms/false_death_cap_bitten.png",
 		"chroma_key": _MAGENTA,
 		"chroma_key_tolerance": _MAGENTA_TOLERANCE,
 	},

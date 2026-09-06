@@ -22,14 +22,23 @@ const BASE_DAMAGE_PER_SECOND_PER_STACK := 1.5
 ## rarely physically dangerous -- not a second copy of the same number.
 ## Pinned as an ORDERING (fly_agaric > psylo), the same "pinned above/below
 ## its siblings, not an eyeballed absolute value" idiom AntColony.
-## WINDFALL_CONSUMED_CHANCE uses. Neither is anywhere near as dangerous as
-## the originally-designed roster's Death Cap (real amatoxin poisoning,
-## often fatal) -- this roster genuinely has no "certainly lethal" tier
-## (see docs/concept/mushrooms.md's merge note). A non-toxic species (or an
-## unrecognized id) does no damage at all.
+## WINDFALL_CONSUMED_CHANCE uses.
+##
+## Death Cap (added once real art surfaced for it) is a real, categorical
+## step beyond both: real amatoxin poisoning is a delayed-onset (6-24h),
+## progressive liver/kidney failure, responsible for most fatal mushroom
+## poisonings worldwide -- nothing like Fly Agaric/Psilocybe's largely
+## survivable effects. Pinned well clear of fly_agaric's own 1.0 (a plain
+## "higher" would be true even one 0.01 above it) rather than left as a
+## marginal difference, so this roster's one certainly-dangerous species
+## actually reads as such. False Death Cap has no entry at all -- see
+## MushroomSpecies.is_toxic's own doc comment: despite the name, it is not
+## itself seriously toxic. A non-toxic species (or an unrecognized id)
+## does no damage at all.
 const _SEVERITY_BY_SPECIES := {
 	"fly_agaric": 1.0,
 	"psylo": 0.5,
+	"death_cap": 3.0,
 }
 const _DEFAULT_SEVERITY := 0.0
 
