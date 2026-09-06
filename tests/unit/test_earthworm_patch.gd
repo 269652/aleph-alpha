@@ -259,42 +259,13 @@ func test_an_eaten_burrow_is_repopulated_eventually():
 
 # -- crushed underfoot: weight-emergent worm mortality (see docs/concept/
 # soil_fauna.md's own section by that name) --------------------------------
+# The is_crushed_by/CRUSH_MOMENTUM_THRESHOLD_KG_M_S tests that used to live
+# here moved to test_crush_mechanic.gd (2026-09-06) once caterpillars
+# needed the identical physics rule -- see CrushMechanic and docs/concept/
+# soil_fauna.md's "Generalized to caterpillars too". What's left here is
+# scoped to what's actually specific to a worm's own burrow/cell state.
 
-## The real, tested boundary this whole mechanic exists to draw: a mouse's
-## own momentum (see CreatureMass/PebbleDispersion.FOOTSTEP_SPEED_MPS)
-## must fall under the threshold, and a horse's/player's own must clear
-## it -- computed here from the SAME real numbers the live game actually
-## uses, not invented test-only figures.
-func test_is_crushed_by_spares_a_mouses_own_real_momentum():
-	const CreatureMass = preload("res://src/world/creature_mass.gd")
-	const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
-	var mouse_momentum: float = CreatureMass.mass_kg_for("mouse") * PebbleDispersion.FOOTSTEP_SPEED_MPS
-	assert_false(EarthwormPatch.is_crushed_by(mouse_momentum))
-
-
-func test_is_crushed_by_kills_under_a_horses_own_real_momentum():
-	const CreatureMass = preload("res://src/world/creature_mass.gd")
-	const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
-	var horse_momentum: float = CreatureMass.mass_kg_for("horse") * PebbleDispersion.FOOTSTEP_SPEED_MPS
-	assert_true(EarthwormPatch.is_crushed_by(horse_momentum))
-
-
-## The calibration example given directly: a light creature's step spares
-## a worm, a heavy one's kills it. No frog exists in this game (see the
-## concept doc's own note) -- mouse/squirrel stand in for it here.
-func test_is_crushed_by_spares_small_creatures_and_kills_under_large_ones():
-	const CreatureMass = preload("res://src/world/creature_mass.gd")
-	const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
-	for species in ["mouse", "squirrel"]:
-		var momentum: float = CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
-		assert_false(EarthwormPatch.is_crushed_by(momentum), "%s should spare a worm" % species)
-	for species in ["horse", "boar", "deer", "bear"]:
-		var momentum: float = CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
-		assert_true(EarthwormPatch.is_crushed_by(momentum), "%s should crush a worm" % species)
-
-
-func test_is_crushed_by_is_never_true_at_zero_momentum():
-	assert_false(EarthwormPatch.is_crushed_by(0.0))
+const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 
 
 func test_crush_below_threshold_leaves_a_surfaced_worm_untouched():
@@ -311,7 +282,7 @@ func test_crush_above_threshold_kills_a_surfaced_worm():
 	patch.set_conditions(1.0, 1.0)
 	_settle(patch)
 	var cell: Vector2i = patch.worm_cells()[0]
-	assert_true(patch.crush(cell, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	assert_true(patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
 	assert_false(patch.is_surfaced(cell), "the worm should be gone once crushed")
 
 
@@ -330,7 +301,7 @@ func test_a_crushed_burrow_is_repopulated_on_the_same_clock_as_an_eaten_one():
 	patch.set_conditions(1.0, 1.0)
 	_settle(patch)
 	var cell: Vector2i = patch.worm_cells()[0]
-	patch.crush(cell, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
 	_settle(patch, EarthwormPatch.RECOVERY_SECONDS * 2.0)
 	assert_true(patch.is_surfaced(cell), "a new worm should occupy the burrow eventually")
 
@@ -565,7 +536,7 @@ func test_crushing_a_worm_makes_it_a_corpse():
 	_settle(patch)
 	var cell: Vector2i = patch.worm_cells()[0]
 	assert_false(patch.is_corpse(cell), "nothing has died yet")
-	patch.crush(cell, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
 	assert_true(patch.is_corpse(cell), "a crushed worm should leave a corpse")
 
 
@@ -589,7 +560,7 @@ func test_a_corpse_clears_when_its_burrow_recovers():
 	patch.set_conditions(1.0, 1.0)
 	_settle(patch)
 	var cell: Vector2i = patch.worm_cells()[0]
-	patch.crush(cell, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
 	_settle(patch, EarthwormPatch.RECOVERY_SECONDS * 2.0)
 	assert_false(patch.is_corpse(cell), "the corpse should be long gone by the time a new worm surfaces")
 
@@ -602,7 +573,7 @@ func test_corpse_age_rises_from_zero():
 	patch.set_conditions(1.0, 1.0)
 	_settle(patch)
 	var cell: Vector2i = patch.worm_cells()[0]
-	patch.crush(cell, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
 	assert_almost_eq(patch.corpse_age_seconds(cell), 0.0, 0.01)
 	patch.advance(5.0)
 	assert_almost_eq(patch.corpse_age_seconds(cell), 5.0, 0.01)

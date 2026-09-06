@@ -56,6 +56,8 @@ const Shop = preload("res://src/gameplay/shop.gd")
 const BuildingStatics = preload("res://src/gameplay/building_statics.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
+const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
+const CaterpillarMarker = preload("res://src/rendering/caterpillar_marker.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -4115,7 +4117,7 @@ func test_crushing_a_worm_with_enough_momentum_removes_it_from_the_world():
 	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
 	var pixel := _pixel_for(chunk_coord, cell)
 	assert_true(
-		manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		manager.crush_worm_at(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
 		"a horse-scale step on a worm should crush it"
 	)
 	assert_false(patch.is_surfaced(cell), "and the worm is gone")
@@ -4132,7 +4134,7 @@ func test_crushing_with_too_little_momentum_leaves_the_worm_alone():
 	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
 	var pixel := _pixel_for(chunk_coord, cell)
 	assert_false(
-		manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 0.01),
+		manager.crush_worm_at(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 0.01),
 		"a mouse-scale step should not crush a worm"
 	)
 	assert_true(patch.is_surfaced(cell), "the worm should still be there")
@@ -4651,7 +4653,7 @@ func test_crushing_a_worm_shows_the_die_animation_and_keeps_its_sprite():
 		pending("no surfaced worm in this exact chunk this seed")
 		return
 	var pixel := _pixel_for(chunk_coord, cell)
-	assert_true(manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	assert_true(manager.crush_worm_at(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
 	assert_true(
 		manager._worm_sprites[chunk_coord].has(cell),
 		"a crushed worm's sprite should survive to show the die animation, not vanish outright"
@@ -4674,7 +4676,7 @@ func test_the_die_animation_holds_its_last_frame_once_it_finishes_playing():
 		pending("no surfaced worm in this exact chunk this seed")
 		return
 	var pixel := _pixel_for(chunk_coord, cell)
-	assert_true(manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	assert_true(manager.crush_worm_at(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
 	# Comfortably past the whole squash (8 frames * WORM_DEATH_FRAME_SECONDS),
 	# well short of the RECOVERY_SECONDS the corpse then lies there for.
 	patch.advance(10.0)
@@ -4697,7 +4699,7 @@ func test_a_corpses_sprite_is_removed_once_its_burrow_recovers():
 		pending("no surfaced worm in this exact chunk this seed")
 		return
 	var pixel := _pixel_for(chunk_coord, cell)
-	assert_true(manager.crush_worm_at(pixel, EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	assert_true(manager.crush_worm_at(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
 	patch.advance(EarthwormPatch.RECOVERY_SECONDS + 1.0)
 	manager._sync_worm_sprites(chunk_coord)
 	assert_false(
