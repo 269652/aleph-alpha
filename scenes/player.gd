@@ -540,6 +540,7 @@ const SpellBook = preload("res://src/gameplay/spell_book.gd")
 const SpellExecutor = preload("res://src/gameplay/spell_executor.gd")
 const SpellAtomEffects = preload("res://src/gameplay/spell_atom_effects.gd")
 const SpellTargeting = preload("res://src/gameplay/spell_targeting.gd")
+const Karma = preload("res://src/gameplay/karma.gd")
 
 var _spell_book := SpellBook.new()
 var _spell_executor := SpellExecutor.new()
@@ -1053,6 +1054,14 @@ func to_save_dict() -> Dictionary:
 		# docs/concept/mushrooms.md's "Identification") -- must not evaporate
 		# on reload, the same as any other permanent progression fact.
 		"mushrooms_eaten": mushrooms_eaten,
+		# A real, permanent record of what happened (see docs/concept/
+		# karma_and_luck.md) -- must not evaporate on reload, and must not
+		# get clamped back toward zero: a negative karma is as real a fact
+		# as a positive one.
+		"karma": karma,
+		# QuestLog's commitment record (see docs/concept/karma_and_luck.md) --
+		# must survive reload the same as karma just above.
+		"accepted_quest_ids": accepted_quest_ids.duplicate(),
 		"inventory": inventory_data,
 		"equipment": equipment_data,
 		# Alongside the inventory rather than inside it: an inventory entry is
@@ -1091,6 +1100,8 @@ func apply_save_dict(data: Dictionary) -> void:
 	unlocked_keystones = (data.get("unlocked_keystones", unlocked_keystones) as Dictionary).duplicate()
 	_skill_points_paid = (data.get("skill_points_paid", _skill_points_paid) as Dictionary).duplicate()
 	mushrooms_eaten = data.get("mushrooms_eaten", mushrooms_eaten)
+	karma = data.get("karma", karma)
+	accepted_quest_ids = (data.get("accepted_quest_ids", accepted_quest_ids) as Array).duplicate()
 	# Rebuilds the genome net from the seed BEFORE anything reads the web, so a
 	# reloaded character's own unique nodes are grafted again rather than
 	# silently missing from a save that still lists them as allocated. A save
@@ -1173,6 +1184,41 @@ func skill_point_cost(node_id: String) -> int:
 ## with allocated_nodes, no second accumulator to drift.
 func skill_bonus(stat_name: String) -> float:
 	return skill_web.total_bonus(stat_name, allocated_nodes, dna_resonance, dna_seed)
+
+
+## A permanent ledger of named events (see docs/concept/karma_and_luck.md)
+## -- a real record of what happened, not a score clamped at zero, so it
+## can go arbitrarily negative or positive over a long game. Changed only
+## by discrete calls from wherever the actual event happens (World's crush
+## pass, QuestLog), never decremented/incremented ad hoc elsewhere.
+var karma := 0.0
+
+## Karma -> Luck, always in [-1.0, 1.0] (see Karma.luck_for). The single
+## reader every Luck-consuming formula calls, the same "one reader, no
+## second accumulator to drift" shape skill_bonus already established.
+func luck() -> float:
+	return Karma.luck_for(karma)
+
+
+## The single external mutator for `karma` -- called by whoever actually
+## detects a named Karma event (World's crush pass, QuestLog), each passing
+## its own named constant from karma.gd (e.g.
+## -Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY). Deliberately unclamped: karma
+## is a real permanent record, not a score (see docs/concept/karma_and_luck.md
+## pillar 4) -- only luck(), not karma itself, saturates. Mirrors how every
+## other externally-triggered Player state change is a named method call
+## rather than a raw field poke from outside (see e.g. World's own
+## local_player.activate_item_id/craft/allocate_skill call sites).
+func apply_karma_delta(delta: float) -> void:
+	karma += delta
+
+
+## QuestLog's own commitment record (see docs/concept/karma_and_luck.md's
+## Quest lifecycle: accept, abandon, fulfil) -- offer_ids the player has
+## accepted and not yet abandoned or had fulfilled. QuestLog itself holds no
+## state of its own; this Array IS the state, the same "logic in a pure
+## module, data on Player" split karma/luck already use.
+var accepted_quest_ids: Array = []
 
 
 ## Takes a node on the passive web: it must be REACHABLE (your class's own start
@@ -2221,7 +2267,7 @@ func _smash_step() -> void:
 	for index in _melee_attack.targets_in_range(position, positions, ATTACK_RANGE):
 		var node = stones[index]
 		if node.has_method("mine"):
-			node.mine(pickaxe_power)
+			node.mine(pickaxe_power, luck())
 		elif node.has_method("smash"):
 			node.smash(carrying_rock)
 
@@ -3232,7 +3278,7 @@ func _throw_rope_tool(tool_id: String) -> void:
 		return
 	# The throw itself reuses the melee swing, the same way casting a rod does.
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
-	if best.restrain_to(position, false, skill_bonus("taming_affinity"), tool_id):
+	if best.restrain_to(position, false, skill_bonus("taming_affinity"), tool_id, luck()):
 		_lassoed = best
 
 

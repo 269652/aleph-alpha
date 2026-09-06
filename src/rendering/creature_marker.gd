@@ -303,6 +303,11 @@ var _struggle_count := 0
 ## reference back to the player for the same "never outlives a dangling
 ## holder" reason `_rope_anchor`/`follow_target` are.
 var _capture_affinity := 0.0
+## The handler's Player.luck() at the moment of the catch (see
+## docs/concept/karma_and_luck.md / Taming.break_free_chance), captured
+## alongside _capture_affinity for the exact same reason: every struggle roll
+## needs it, and the player object itself must not be held onto.
+var _capture_luck := 0.0
 
 
 ## Active foraging (see GrazerForaging): the phase machine, the bite this
@@ -1102,10 +1107,12 @@ func is_tame() -> bool:
 ## `affinity` is the handler's Player.skill_bonus("taming_affinity") at the
 ## moment of the catch (0.0 for an uninvested character, byte-identical to
 ## the pre-affinity behaviour -- see Taming.break_free_chance), stored for
-## every subsequent struggle roll in _step_restraint.
+## every subsequent struggle roll in _step_restraint. `luck` is the same idea
+## for Player.luck() (see docs/concept/karma_and_luck.md): 0.0 for neutral
+## karma is byte-identical to the pre-luck behaviour too.
 func restrain_to(
 	anchor: Vector2, tied: bool = false, affinity: float = 0.0,
-	tool_id: String = CaptureTool.LASSO
+	tool_id: String = CaptureTool.LASSO, luck: float = 0.0
 ) -> bool:
 	if info == null or not Taming.can_be_tamed(info.species, tool_id):
 		return false
@@ -1115,6 +1122,7 @@ func restrain_to(
 	_rope_anchor = anchor
 	_tied = tied
 	_capture_affinity = affinity
+	_capture_luck = luck
 	return true
 
 
@@ -1166,7 +1174,7 @@ func _step_restraint(delta: float) -> void:
 	var health_fraction := info.health / info.max_health if info.max_health > 0.0 else 0.0
 	var condition := Taming.effective_condition(health_fraction, _struggle_fatigue)
 	var roll := float(absi(hash("%d_%d_struggle" % [wander_seed, _struggle_count])) % 10000) / 10000.0
-	if roll < Taming.break_free_chance(condition, info.is_predator, _capture_affinity):
+	if roll < Taming.break_free_chance(condition, info.is_predator, _capture_affinity, _capture_luck):
 		release()
 		# It has learned what the rope means: bolt.
 		_flee_direction = (position - _rope_anchor).normalized()
