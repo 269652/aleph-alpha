@@ -5492,7 +5492,14 @@ func crush_walnut_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 		return false
 	var tile := _world_tile_for_pixel(pixel_position)
 	for item in _entities_parent.get_tree().get_nodes_in_group(DroppedItem.GROUP_NAME):
-		if item.item_stack == null or item.item_stack.item.id != "walnut":
+		# DroppedItem.GROUP_NAME is shared by every ground-pickable thing in
+		# this game -- LiftableStone/PickableSeed very much included (see
+		# DroppedItem's own doc comment) -- and neither has an item_stack
+		# field at all. Duck-check the same safe way Player.
+		# nearest_kickable_dropped_item_near already does; a direct
+		# item.item_stack dot-access crashes the instant one of those
+		# exists anywhere near a step.
+		if not ("item_stack" in item) or item.item_stack == null or item.item_stack.item.id != "walnut":
 			continue
 		if _world_tile_for_pixel(item.position) != tile:
 			continue
