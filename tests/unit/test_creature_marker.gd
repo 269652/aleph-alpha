@@ -2282,6 +2282,12 @@ class ForageWorld:
 	var worms: Array = []
 	var grazed: Array = []
 	var taken_fruit: Array = []
+	var mushrooms: Array = []
+	var taken_mushrooms: Array = []
+	## The species take_mushroom_at reports eaten -- settable per test, the
+	## same "always this one species" simplification take_fruit_at's own
+	## hardcoded "apple" already uses below.
+	var mushroom_species_to_take := "champignon"
 	## Whether snow is actively falling -- see docs/concept/weather.md's
 	## "Weather feeds creature behaviour". Settable per test; defaults to
 	## false, matching EarthChunkManager.is_snowing() before any step_snow.
@@ -2305,6 +2311,9 @@ class ForageWorld:
 	func worms_near(_p: Vector2, _r: int = 8) -> Array:
 		return worms
 
+	func mushrooms_near(_p: Vector2, _r: int = 8) -> Array:
+		return mushrooms
+
 	func graze_grass_at(p: Vector2) -> bool:
 		grazed.append(p)
 		grass = grass.filter(func(g): return g.position != p)
@@ -2319,6 +2328,10 @@ class ForageWorld:
 
 	func take_worm_at(_p: Vector2) -> bool:
 		return true
+
+	func take_mushroom_at(p: Vector2) -> String:
+		taken_mushrooms.append(p)
+		return mushroom_species_to_take
 
 	func solid_obstacles_near(_p: Vector2, _r: float) -> Array:
 		return []
@@ -2477,6 +2490,55 @@ func test_eating_fruit_relieves_hunger_and_thirst_by_its_real_composition():
 		"hunger should fall by the real sugar content, not reset to zero")
 	assert_almost_eq(deer._needs.thirst, clampf(0.3 - nutrients["water"], 0.0, 1.0), 0.01,
 		"a juicy fruit should relieve some thirst too")
+
+
+## See docs/concept/mushrooms.md "Animals can find and eat wild
+## mushrooms" -- a boar's own FOOD_MUSHROOM kind, the same real
+## NutrientRelease composition path FOOD_FRUIT already has, not the flat
+## full-meter _needs.feed() every other forage kind still uses.
+func test_a_boar_eating_a_mushroom_relieves_hunger_and_thirst_by_its_real_composition():
+	var NutrientRelease := preload("res://src/gameplay/nutrient_release.gd")
+	var world := ForageWorld.new()
+	world.mushrooms = [{"position": Vector2(20, 0), "species": "champignon"}]
+	var boar := _hungry_grazer("boar", world)
+	boar._needs.thirst = 0.3
+	for _i in 900:
+		boar._process(1.0 / 60.0)
+		if not world.taken_mushrooms.is_empty():
+			break
+	assert_false(world.taken_mushrooms.is_empty(), "the boar should have taken the mushroom")
+	var nutrients: Dictionary = NutrientRelease.consume("champignon")
+	assert_almost_eq(boar._needs.hunger, 1.0 - nutrients["sugar"], 0.01,
+		"hunger should fall by the real composition, not reset to zero")
+	assert_almost_eq(boar._needs.thirst, clampf(0.3 - nutrients["water"], 0.0, 1.0), 0.01,
+		"a mostly-water mushroom should relieve real thirst too")
+
+
+## A boar eats a toxic species exactly like any other -- MushroomSpecies.
+## is_toxic is deliberately never consulted for an animal's bite (see the
+## concept doc's own reasoning: the boar's already-real high DECAY
+## tolerance extended to fungal toxins generally). No debuff exists for
+## this because none is wired for animals at all -- the point of this
+## test is that eating still succeeds and still feeds, not that some
+## debuff is correctly skipped.
+func test_a_boar_eats_a_toxic_mushroom_without_harm():
+	var NutrientRelease := preload("res://src/gameplay/nutrient_release.gd")
+	var world := ForageWorld.new()
+	world.mushrooms = [{"position": Vector2(20, 0), "species": "fly_agaric"}]
+	world.mushroom_species_to_take = "fly_agaric"
+	var boar := _hungry_grazer("boar", world)
+	for _i in 900:
+		boar._process(1.0 / 60.0)
+		if not world.taken_mushrooms.is_empty():
+			break
+	assert_false(world.taken_mushrooms.is_empty(), "the boar should have taken the toxic mushroom")
+	# The same real composition-derived relief as any other mushroom, not a
+	# smaller/zeroed one and not the full-meter reset a debuff-avoidance
+	# path might otherwise apply -- eating a toxic species is mechanically
+	# identical to eating any other.
+	var nutrients: Dictionary = NutrientRelease.consume("fly_agaric")
+	assert_almost_eq(boar._needs.hunger, 1.0 - nutrients["sugar"], 0.01,
+		"a toxic mushroom should feed the boar the same real amount as any other")
 
 
 ## Nothing to walk to must not mean standing around starving: an animal on
