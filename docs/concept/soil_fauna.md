@@ -983,6 +983,29 @@ reported; a well-stocked colony visibly supports more simultaneous
 foragers and a bigger mound, and a colony a player watches go through a
 real dry spell visibly shrinks back down, not just stalls.
 
+**A pre-existing test's stale assumption, found and fixed (2026-09-06).**
+`test_stepping_ants_drives_capacity_from_the_live_weather`
+(`tests/unit/test_earth_chunk_manager.gd`, introduced in a344983, well
+before this section's own food-economy pass — see "Water, not just food"
+above) started failing deterministically the moment this pass merged:
+it expects `capacity_at(cell)` to converge on a pure weather-derived
+value after 20 stepped intervals, but landed at ~6.5 against an expected
+~18.75. Root-caused directly against `AntColony`/`AntPopulationModel`
+rather than assumed: not a convergence-timing or EMA-rate bug in the
+moisture wiring (`MOISTURE_EMA_RATE` is over 99.9% converged within
+those 20 steps), but `food_availability_fraction(cell)` gating
+`capacity_at` down exactly as designed just above — the test never fed
+its colony a single successful forage or deposit, so its reserve simply
+drained over the run, precisely the "food becomes driver AND constraint"
+behaviour this section exists to produce. Fixed by pinning the food
+economy non-limiting with a single large `deposit_food` call before
+stepping (not `record_forage_result`, which would also move the
+unrelated recent-forage-success EMA `capacity()` itself reads, and so
+break the test's own weather-only expectation in a different way) — the
+same "keep depositing food throughout" isolation the five tests
+mentioned above already needed, for the identical reason. No production
+code changed; this section's own mechanism was never the bug.
+
 ### A mound's own hover panel
 
 **The gap.** Every wild creature already gets a live, bar-and-percentage

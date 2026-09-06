@@ -8825,6 +8825,26 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   real per-day rate, matching how a genuinely thriving colony would
   actually forage, rather than a one-off burst.
   Full writeup: [soil_fauna.md](concept/soil_fauna.md#a-real-food-economy-storage-upkeep-and-fewer-bigger-hungrier-colonies).
+- ✅ **A pre-existing weather/moisture test broken by the food economy
+  above, found and fixed (2026-09-06).**
+  `test_stepping_ants_drives_capacity_from_the_live_weather`
+  (`tests/unit/test_earth_chunk_manager.gd`, predates this pass) started
+  failing deterministically the moment the food economy merged to
+  `main` — expecting `capacity_at(cell)` to converge on a pure
+  weather-derived value after 20 stepped intervals, but landing at ~6.5
+  against an expected ~18.75. Root-caused directly against
+  `AntColony`/`AntPopulationModel` rather than assumed: not a
+  convergence-timing or EMA-rate bug in the moisture wiring (which
+  converges >99.9% within those 20 steps), but
+  `food_availability_fraction(cell)` correctly gating `capacity_at` down
+  exactly as designed above — the test simply never fed its colony, so
+  its reserve drained over the run. Fixed by pinning the food economy
+  non-limiting with a single large `deposit_food` call before stepping
+  (not `record_forage_result`, which would also move the unrelated
+  recent-forage-success EMA `capacity()` itself reads) — the same "keep
+  depositing food throughout" isolation the five tests mentioned above
+  already needed, for the identical reason. No production code changed.
+  Full writeup: [soil_fauna.md](concept/soil_fauna.md#a-real-food-economy-storage-upkeep-and-fewer-bigger-hungrier-colonies).
 - ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
   jackal actually walking to and eating a fresh carcass/guts instead of
   only hunting live prey) — `take_bite`'s contract is already shaped to
