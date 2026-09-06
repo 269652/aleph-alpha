@@ -7022,6 +7022,49 @@ func take_worm_at(pixel_position: Vector2) -> bool:
 	return true
 
 
+## Every real, currently-tracked CaterpillarMarker within radius_tiles of
+## pixel_position, in the shape a caterpillar-eating bird expects (see
+## docs/concept/soil_fauna.md's own bird-diet follow-up: "some birds eat
+## caterpillars too"). Mirrors worms_near's own shape exactly, including its
+## Chebyshev-in-tiles radius check and 3x3-chunk-neighborhood scan (a
+## caterpillar just across a chunk boundary from the querying position is
+## exactly as real as one on the same side of it).
+func caterpillars_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
+	var out: Array = []
+	var center := _world_tile_for_pixel(pixel_position)
+	var center_chunk := _chunk_coord_for_tile(center)
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var chunk_coord := center_chunk + Vector2i(dx, dy)
+			var markers: Array = _caterpillar_markers.get(chunk_coord, [])
+			for marker in markers:
+				var tile := _world_tile_for_pixel(marker.position)
+				if maxi(absi(tile.x - center.x), absi(tile.y - center.y)) > radius_tiles:
+					continue
+				out.append({"position": marker.position})
+	return out
+
+
+## Removes the real CaterpillarMarker standing on the same tile as
+## pixel_position -- mirrors take_worm_at's own "eaten on real arrival,
+## re-checked here, not guaranteed by having been sensed at all" contract.
+## Calls queue_free() directly rather than crush(): a bird's meal is an
+## entirely different event from being crushed underfoot (see
+## crush_caterpillars_near below), with no death animation of its own to
+## play through first -- the same instant-disappear outcome take_worm_at
+## already gives an eaten worm.
+func take_caterpillar_near(pixel_position: Vector2) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var markers: Array = _caterpillar_markers.get(chunk_coord, [])
+	for marker in markers.duplicate():
+		if _world_tile_for_pixel(marker.position) == tile:
+			markers.erase(marker)
+			marker.queue_free()
+			return true
+	return false
+
+
 ## Every real aquatic vegetation patch within `radius_tiles` of
 ## `pixel_position` -- mirrors worms_near's own exact shape (a 3x3
 ## chunk-neighbourhood scan, the same margin every other per-chunk
@@ -7152,8 +7195,28 @@ func crush_ants_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 		for marker in markers.duplicate():
 			if _world_tile_for_pixel(marker.position) == tile:
 				markers.erase(marker)
-				marker.queue_free()
+				# crush(), not queue_free(): dies visibly (see
+				# AntForagerMarker.crush()/SquashCrushEffect) instead of
+				# instantly vanishing -- see docs/concept/soil_fauna.md's own
+				# "no timed death animation either" scope cut, now closed.
+				marker.crush()
 				crushed_any = true
+				# One real forager belonging to this mound is now gone --
+				# also closes "no effect on the mound's own population/food
+				# economy beyond the one forager actually lost" (same
+				# section). _active_ant_foragers' own outer key IS the
+				# mound's GLOBAL tile (see this function's own class-level
+				# doc comment); AntColony's own _population dict is keyed by
+				# LOCAL cell within its owning chunk, so the global tile is
+				# converted back to local before reaching it. Silently a
+				# no-op when no real colony is registered for this chunk
+				# (e.g. a marker built standalone in a test) -- the same
+				# "optional, narrows rather than breaks" contract every
+				# other duck-typed world query in this file already has.
+				var mound_chunk_coord := _chunk_coord_for_tile(global_tile)
+				var colony: AntColony = _ant_colonies.get(mound_chunk_coord)
+				if colony != null:
+					colony.forager_crushed(global_tile - mound_chunk_coord * CHUNK_SIZE)
 	return crushed_any
 
 
@@ -7175,7 +7238,17 @@ func _crush_markers_near(markers_by_chunk: Dictionary, pixel_position: Vector2, 
 	for marker in markers.duplicate():
 		if _world_tile_for_pixel(marker.position) == tile:
 			markers.erase(marker)
-			marker.queue_free()
+			# crush() when the marker has one (every real caterpillar/
+			# millipede/decomposer does -- see MillipedeMarker.crush()/
+			# CaterpillarMarker.crush()/DecomposerMarker.crush(), the real
+			# death animation or squash-and-tint fallback each plays before
+			# actually freeing itself) -- falls back to queue_free() so a
+			# lightweight test double with no crush() of its own still
+			# behaves exactly as it did before this method existed.
+			if marker.has_method("crush"):
+				marker.crush()
+			else:
+				marker.queue_free()
 			crushed_any = true
 	return crushed_any
 
