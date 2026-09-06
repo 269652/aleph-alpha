@@ -4806,9 +4806,13 @@ func _client_process(delta: float) -> void:
 	# player and the animals get (see EarthChunkManager.river_wader_positions).
 	for fish in get_tree().get_nodes_in_group("fish"):
 		wader_candidates.append(fish.position)
-	_chunk_manager.set_river_flow_waders(
-		_chunk_manager.river_wader_positions(wader_candidates)
-	)
+	var river_waders := _chunk_manager.river_wader_positions(wader_candidates)
+	_chunk_manager.set_river_flow_waders(river_waders)
+	# The SAME list, reused for floating leaf litter's own turbulence (see
+	# EarthChunkManager.set_leaf_litter_waders's own doc comment) -- reported
+	# directly: fallen leaves/blossoms on a river "should also be influenced
+	# by turbulence (fish moving; waders)".
+	_chunk_manager.set_leaf_litter_waders(river_waders)
 	# "make them swim away from player and animals who wade near them" --
 	# the same river_wader_positions water-filter, reused to find which
 	# players/animals are actually standing in water near a fish (see

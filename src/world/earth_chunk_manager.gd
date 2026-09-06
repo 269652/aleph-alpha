@@ -3927,6 +3927,24 @@ func set_river_flow_waders(positions: PackedVector2Array) -> void:
 	material.set_shader_parameter("waders", padded)
 
 
+## The SAME wader/fish positions above, fed to every loaded chunk's leaf
+## litter field too (see LeafLitterField.set_nearby_waders) -- reported
+## directly: fallen leaves/blossoms on a river "should also be influenced
+## by turbulence (fish moving; waders)". world.gd passes the identical
+## already-computed river_wader_positions() result it hands set_river_flow_
+## waders, so a floating leaf's own wobble is driven by the exact same
+## obstacles the water's surface art already bends around -- one data
+## source, reused, not a second wader gather. Broadcasting the whole
+## (small, WADER_SLOTS-capped) list to every field regardless of whether
+## that chunk actually has a river is safe and simple: LeafWaterDrift.
+## turbulence_velocity_px_s already returns zero for anything outside
+## RiverFlowShader.WADER_REACH_PX, so an irrelevant, far-away wader costs
+## nothing beyond iterating a short list.
+func set_leaf_litter_waders(positions: PackedVector2Array) -> void:
+	for field in _leaf_litter_fields.values():
+		field.set_nearby_waders(positions)
+
+
 ## Filters wader candidates (pixel positions: the player plus any creature
 ## markers) down to the ones actually standing in river water, capped at
 ## the shader's wader slots. The river lookup walks real polylines, so
@@ -8077,6 +8095,17 @@ func river_current_at_global(global_x: int, global_y: int) -> Dictionary:
 	return {"direction": Vector2(sin(radians), -cos(radians)), "speed_m_s": speed}
 
 
+## river_current_at_global wrapped to take a world PIXEL position rather
+## than a global tile -- the shape LeafLitterField.set_current_probe wants
+## (see docs/concept/leaf_litter.md's "Floating on water" section), so a
+## floating leaf's own current lookup mirrors FishMarker._current_at's
+## identical pixel -> tile conversion exactly.
+func _leaf_current_probe(pixel_position: Vector2) -> Dictionary:
+	var tile_px := float(TerrainRenderer.TILE_SIZE)
+	var tile := Vector2i(floori(pixel_position.x / tile_px), floori(pixel_position.y / tile_px))
+	return river_current_at_global(tile.x, tile.y)
+
+
 ## Real metres of lake water over a tile, 0.0 off a lake. Unlike river
 ## depth this delegates directly: nothing a player builds ponds a lake.
 func lake_depth_meters_at_global(global_x: int, global_y: int) -> float:
@@ -9722,6 +9751,16 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# never seeded up front; step_fruiting's own leaf-fall block populates it
 	# over time as trees actually shed.
 	_leaf_litter_fields[chunk_coord] = LeafLitterField.new()
+	# Wired ONCE, here, rather than every step_leaf_litter tick the way
+	# set_wind is: unlike the day's ambient wind, river_current_at_global's
+	# own live hydraulics need no periodic refresh -- the SAME bound method,
+	# called later, already reads whatever is current then. Set at creation
+	# (not lazily on first use) so a leaf falling in this chunk's very first
+	# frame -- before step_leaf_litter has run for it even once -- still
+	# gets a real on-water check at add_leaf time instead of a stale "no
+	# probe yet" false negative (see docs/concept/leaf_litter.md's "Floating
+	# on water" section).
+	_leaf_litter_fields[chunk_coord].set_current_probe(_leaf_current_probe)
 	# Its visible counterpart: one MultiMeshInstance2D, empty until
 	# step_leaf_litter's own fill() call gives it real leaves to draw.
 	var leaf_litter_mmi := MultiMeshInstance2D.new()
