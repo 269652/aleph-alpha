@@ -274,6 +274,15 @@ func test_squirrel_is_small_and_short_legged_but_bigger_than_a_mouse():
 	assert_lt(squirrel.leg_length, 0.15, "real squirrels have short legs relative to body")
 
 
+## Reported live: mice render too small. 0.40 is as close to the reported
+## "2.4x bigger" (which would land at 0.84) as the real-world constraint
+## that a mouse must stay smaller than a squirrel allows (see the test
+## just above) -- comfortably under squirrel's 0.45, not a hair's-width
+## short of it, while still a real, visible jump from the old 0.35.
+func test_mouse_world_scale_is_pinned():
+	assert_eq(AnimalAnatomy.profile_for("mouse").world_scale, 0.40)
+
+
 ## A squirrel's tail is proportionally one of its most distinctive real-world
 ## features -- LONGER relative to its own body than any other profile's,
 ## including mouse's own already-long thin cord tail, but bushy rather than
