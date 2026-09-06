@@ -1999,6 +1999,11 @@ Root cause investigated and reproduced directly rather than guessed at. `TreeRen
 
 Fixed at the source rather than chasing every possible re-parent trigger: `_stand_position` now adds a tiny, deterministic, per-tile nudge to each tree's Y (`_y_sort_tie_break`, two small non-commensurate multipliers on `global_x`/`global_y` -- a continuous function, deliberately NOT another `PixelNoise.range_index` bucket call, since bucketing is the exact mechanism that caused the original collisions). Magnitude is capped far below anything perceptible -- nowhere near enough to cross a tile boundary, move a tree's collision box, or read as jitter on top of the real placement jitter. `test_no_two_tiles_produce_the_same_y_sort_key` pins the actual guarantee (zero collisions across an 80x80 sample, which failed with hundreds before the fix) and `test_the_tie_break_nudge_is_visually_negligible` pins the magnitude; both new, alongside the three existing `_stand_position`/collision tests confirmed still green (45/45 in `test_tree_renderer.gd`).
 
+✅ **"Now I can't fell any trees anymore" traced to the Starting Kit default, not the two tree changes just above (2026-09-06, same day).** Reported directly, right after the visual-scale and Y-sort fixes above. `Player._chop_step` had never had a dedicated test at all -- four new direct `test_player.gd` integration tests (real axe, real `ChoppableTree`, in-range/out-of-range/bare-handed) came back 4/4 green first, clearing both recent tree commits outright: the damage/felling pipeline itself was never broken.
+
+The reporter's own live save (`user://player_save.bin`, read via a one-off read-only `PlayerSave.load_data()` probe script -- never written to) told the real story instead: `character_class: "warrior"`, `equipment: {"weapon": "stone_pickaxe"}`, hotbar/inventory exactly `StarterKit.DEFAULT_CHOICES` -- the Starting Kit tab had never been opened. Neither `crude_blade` nor `stone_pickaxe` carries a real wood multiplier (`MaterialDamage`: sword 0.5x, a non-axe tool falls through `Player._held_kind()` to unarmed 0.25x) -- 12-24 swings to fell one tree, against the OLD pre-Starting-Kit fixed kit's guaranteed Iron Axe (3.0x, 2 swings) this feature replaced (see Starting Kit below). Technically nonzero, never literally broken, but 6-12x slower than what the game used to hand every player for free reads exactly like "broken."
+
+Fixed in `StarterKit.DEFAULT_CHOICES` itself, not here -- see the Starting Kit entry below for the swap and why `crude_blade`, not `stone_pickaxe`, was the one to move.
 
 ### Seasons turn gradually; smell becomes a real sense
 
@@ -13057,6 +13062,41 @@ never actually true for it the way it is for Snare/Trap, which stay cut.
 of the same capture-DSL pass) and is registered here as a small, isolated
 port — just the `ItemCatalog` entry + icon, not the whole DSL — since this
 branch forked before that work landed on `main`.
+
+**Update (2026-09-06): `iron_axe` replaces `crude_blade` in `DEFAULT_CHOICES`.**
+Traced from "now I can't fell any trees anymore" — see the felled-trees
+entry above for the full investigation. The do-nothing default's only
+weapon-kind item was `crude_blade` (a sword: 0.5x wood), so
+`grant_starter_items`' own "first weapon-kind, else first tool-kind"
+auto-equip rule always picked it over `stone_pickaxe` (an even weaker
+0.25x, being neither an axe nor a weapon) — meaning NEITHER default item
+could chop wood at a reasonable rate, a real regression against the old
+fixed kit's guaranteed Iron Axe this feature replaced. Swapped `crude_blade`
+for `iron_axe`, still exactly `MAX_CHOICES` (3) entries — an in-place swap,
+not an addition. Deliberately not `stone_pickaxe` instead: mining is
+HARD-gated (`Player._pickaxe_power()`'s own doc comment — a pickaxe mines
+ore, anything else has ZERO mining power, a binary 0.0 rather than a soft
+multiplier), so dropping the pickaxe from the default would make ore
+literally unminable rather than merely slow — a strictly worse regression
+than the one being fixed. `iron_axe` sorts first in the new array, so the
+existing auto-equip rule now picks it up automatically with no change to
+`grant_starter_items` itself.
+
+Combat trades down in exchange: the default now has no weapon-KIND item at
+all, so a do-nothing player's base attack falls back to `UNARMED_DAMAGE`
+(times the axe's own 0.8x flesh multiplier when it's the one held, still
+better than bare hands' 0.5x, just not a dedicated weapon's `weapon_damage`).
+Accepted: wood-chopping is this game's larger, more central, more actively
+developed mechanic, and real combat gear is still one Starting Kit tab pick
+away for anyone who wants it — the tab itself, and every symbolic reference
+to `StarterKit.DEFAULT_CHOICES` (`World`, `MainMenu`, their tests), needed
+no changes at all; nothing else in the codebase hardcoded the array's
+literal contents. One existing `test_main_menu.gd` fixture did hardcode
+`iron_axe` itself as its example of "a pool item NOT among the defaults"
+(`test_toggling_a_fourth_item_while_three_are_selected_is_a_no_op`) — fixed
+to probe with `crude_blade` instead, the item that actually left the
+default set. Full trace and alternatives considered in
+`docs/concept/starting_kit.md`'s "The default couldn't chop wood".
 
 ### Screenshots (`concept/screenshots.md`)
 
