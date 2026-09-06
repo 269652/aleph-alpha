@@ -7287,6 +7287,13 @@ func step_worms(delta_seconds: float) -> void:
 ## Branches on the MOUND's own biome, not the colony's -- a single chunk can
 ## straddle a biome boundary, so different mounds in the same colony can take
 ## different branches.
+## Reported live: "the mound should send out multiple scouts in random
+## directs... then when the scouts return the mound dispatches more ants
+## which follow / resolve the pheromone trails" -- per mound, per real
+## forage opportunity, dispatches a whole WAVE of resolvers if a real
+## cluster trail is already known (see AntColony.has_active_pheromone_
+## trail), or a wave of blind scouts otherwise (see docs/concept/
+## soil_fauna.md "Scouting: real search, not omniscient dispatch").
 func step_ants(delta_seconds: float) -> void:
 	for chunk_coord in _ant_colonies:
 		var colony: AntColony = _ant_colonies[chunk_coord]
@@ -7295,7 +7302,10 @@ func step_ants(delta_seconds: float) -> void:
 		for cell in colony.mound_cells():
 			if not colony.should_forage(cell):
 				continue
-			_dispatch_ant_scout(colony, origin, cell)
+			if colony.has_active_pheromone_trail(cell):
+				_dispatch_ant_resolver_wave(colony, origin, cell)
+			else:
+				_dispatch_ant_scout_wave(colony, origin, cell)
 
 	_ant_moisture_refresh_accumulator += delta_seconds
 	if _ant_moisture_refresh_accumulator < WORM_REFRESH_INTERVAL:
@@ -7382,7 +7392,57 @@ func step_leaf_litter(delta_seconds: float) -> void:
 ## thriving colony visibly has more than one worker out at once. Stale
 ## (freed) entries in _active_ant_foragers are pruned here, lazily, rather
 ## than eagerly elsewhere.
+## A single, un-spread scout -- kept for existing direct-dispatch callers
+## (chiefly tests exercising ordinary cap-limiting/dispatch bookkeeping in
+## isolation, unrelated to wave-spreading itself). Real production
+## dispatch (step_ants) always goes through _dispatch_ant_scout_wave/
+## _dispatch_ant_resolver_wave instead -- see those functions' own doc
+## comments.
 func _dispatch_ant_scout(colony: AntColony, origin: Vector2i, cell: Vector2i) -> void:
+	_dispatch_forager(colony, origin, cell, Vector2.ZERO, false)
+
+
+## Real per-mound scout dispatch when no cluster trail is known yet (see
+## AntColony.SCOUT_WAVE_SIZE's own doc comment) -- several scouts at once,
+## each assigned a DIFFERENT sector spread evenly around a circle (see
+## AntScoutWander.spread_heading, which gently nudges each one's own
+## wander toward its assigned sector without ever overriding a REAL
+## sensed trail) rather than one scout's own independent wander_seed
+## alone, which could coincidentally correlate across several dispatched
+## close together and read as one wandering ant with others following in
+## a line -- reported live, exactly that: "the mound should send out
+## multiple scouts in random directs".
+func _dispatch_ant_scout_wave(colony: AntColony, origin: Vector2i, cell: Vector2i) -> void:
+	for i in AntColony.SCOUT_WAVE_SIZE:
+		var angle := TAU * float(i) / float(AntColony.SCOUT_WAVE_SIZE)
+		_dispatch_forager(colony, origin, cell, Vector2.from_angle(angle), false)
+
+
+## Real per-mound resolver dispatch once a scout has already reported a
+## real cluster (see AntColony.RESOLVER_WAVE_SIZE's own doc comment) --
+## reported live: "then when the scouts return the mound dispatches more
+## ants which follow / resolve the pheromone trails". No assigned sector
+## at all: a resolver does not explore, it follows the one real trail it
+## senses (see AntForagerMarker._step_scouting's own resolver branch).
+func _dispatch_ant_resolver_wave(colony: AntColony, origin: Vector2i, cell: Vector2i) -> void:
+	for i in AntColony.RESOLVER_WAVE_SIZE:
+		_dispatch_forager(colony, origin, cell, Vector2.ZERO, true)
+
+
+## Real per-mound forager dispatch (see docs/concept/soil_fauna.md "Real
+## foraging: a round trip, not an instant resolve" and "Scouting: real
+## search, not omniscient dispatch") -- the actual node creation both
+## _dispatch_ant_scout/_dispatch_ant_scout_wave/_dispatch_ant_resolver_
+## wave delegate to. Capped at colony.active_forager_cap_at(cell)
+## CONCURRENT foragers per mound, not a hardcoded one -- that cap scales
+## with the mound's own queen-driven population (see AntColony/
+## AntPopulationModel), so a thriving colony visibly has more than one
+## worker out at once, wave or not. Stale (freed) entries in
+## _active_ant_foragers are pruned here, lazily, rather than eagerly
+## elsewhere.
+func _dispatch_forager(
+	colony: AntColony, origin: Vector2i, cell: Vector2i, assigned_heading_bias: Vector2, is_resolver: bool
+) -> void:
 	if _entities_parent == null:
 		return
 	var global_tile: Vector2i = origin + cell
@@ -7397,7 +7457,9 @@ func _dispatch_ant_scout(colony: AntColony, origin: Vector2i, cell: Vector2i) ->
 	var forager := AntForagerMarker.new()
 	forager.mound_position = mound_pixel
 	forager.position = mound_pixel
-	forager.scout = true
+	forager.scout = not is_resolver
+	forager.resolver = is_resolver
+	forager.assigned_heading_bias = assigned_heading_bias
 	forager.setup(self, colony, cell)
 	_entities_parent.add_child(forager)
 	active.append(forager)

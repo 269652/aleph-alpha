@@ -7000,6 +7000,115 @@ func test_a_finished_forager_frees_its_slot_for_a_new_one():
 	assert_eq(manager._entities_parent.get_child_count(), before + 1, "a freed slot should accept a new forager")
 
 
+## A colony whose mound cap comfortably exceeds AntColony.SCOUT_WAVE_SIZE
+## -- mirrors test_dispatches_a_second_forager_once_the_mounds_own_cap_
+## allows_it's own exact "long-thriving colony" setup, just carried
+## further (that test only needs cap > 1; a wave needs real headroom for
+## every scout in it to actually get out).
+func _thriving_colony_with_high_cap() -> AntColony:
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 20:
+		colony.record_forage_result(cell, true)
+	for i in 400:
+		for trip in 50:
+			colony.record_forage_result(cell, true)
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	assert_gte(
+		colony.active_forager_cap_at(cell), AntColony.SCOUT_WAVE_SIZE,
+		"precondition: this colony needs real headroom for a whole scout wave"
+	)
+	return colony
+
+
+## Reported live: "the mound should send out multiple scouts in random
+## directs" -- a wave dispatches more than one scout at once (bounded by
+## the mound's own cap, same as any other dispatch), each with its own
+## DIFFERENT assigned sector (see AntScoutWander.spread_heading) so they
+## visibly fan out rather than reading as one wandering ant with others
+## following in a line.
+func test_dispatch_ant_scout_wave_spreads_several_scouts_across_distinct_sectors():
+	var colony := _thriving_colony_with_high_cap()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var origin := Vector2i(700_000, 700_000)
+	var global_tile := origin + cell
+
+	manager._dispatch_ant_scout_wave(colony, origin, cell)
+
+	assert_true(manager._active_ant_foragers.has(global_tile))
+	var wave: Array = manager._active_ant_foragers[global_tile]
+	assert_eq(wave.size(), AntColony.SCOUT_WAVE_SIZE, "the whole wave should fit under this colony's own high cap")
+	var headings: Array = []
+	for forager in wave:
+		assert_true(forager.scout, "every member of a scout wave should itself be a plain scout")
+		assert_false(forager.resolver)
+		assert_false(headings.has(forager.assigned_heading_bias), "no two scouts in the same wave should share a sector")
+		headings.append(forager.assigned_heading_bias)
+
+
+## Reported live: "then when the scouts return the mound dispatches more
+## ants which follow / resolve the pheromone trails".
+func test_dispatch_ant_resolver_wave_dispatches_real_resolvers():
+	var colony := _thriving_colony_with_high_cap()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var origin := Vector2i(700_001, 700_001)
+	var global_tile := origin + cell
+
+	manager._dispatch_ant_resolver_wave(colony, origin, cell)
+
+	assert_true(manager._active_ant_foragers.has(global_tile))
+	var wave: Array = manager._active_ant_foragers[global_tile]
+	assert_eq(wave.size(), AntColony.RESOLVER_WAVE_SIZE)
+	for forager in wave:
+		assert_true(forager.resolver)
+		assert_false(forager.scout)
+
+
+## step_ants itself picks scouts-vs-resolvers per mound based on whether a
+## real trail is already known (see AntColony.has_active_pheromone_trail)
+## -- reported live: "the mound should send out multiple scouts... then
+## when the scouts return the mound dispatches more ants which follow /
+## resolve the pheromone trails". should_forage's own FORAGE_CHANCE roll
+## (0.05) means this needs several tries, same "call step_ants itself
+## repeatedly" convention test_step_ants_dispatches_at_a_leaf_even_for_a_
+## grassland_mound already uses.
+func test_step_ants_dispatches_scouts_when_no_trail_is_known():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var chunk_coord := Vector2i(80, 80)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE
+	var global_tile := origin + cell
+	manager._ant_colonies[chunk_coord] = colony
+
+	for i in 200:
+		manager.step_ants(0.1)
+		if manager._active_ant_foragers.has(global_tile):
+			break
+
+	assert_true(manager._active_ant_foragers.has(global_tile))
+	var forager: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
+	assert_true(forager.scout, "with no known trail, step_ants should dispatch a scout, not a resolver")
+
+
+func test_step_ants_dispatches_resolvers_once_a_trail_is_known():
+	var colony := _ant_colony_with_one_mound()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var chunk_coord := Vector2i(81, 81)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE
+	var global_tile := origin + cell
+	manager._ant_colonies[chunk_coord] = colony
+	colony.deposit_pheromone_trail(cell, Vector2i(0, 0), Vector2(1, 0), 3.0)
+
+	for i in 200:
+		manager.step_ants(0.1)
+		if manager._active_ant_foragers.has(global_tile):
+			break
+
+	assert_true(manager._active_ant_foragers.has(global_tile))
+	var forager: AntForagerMarker = manager._active_ant_foragers[global_tile][0]
+	assert_true(forager.resolver, "with a known active trail, step_ants should dispatch a resolver, not a scout")
+
+
 ## Water, not just food (see docs/concept/soil_fauna.md's own section by
 ## that name): step_ants must actually push the real weather-derived soil
 ## moisture into every loaded mound, the identical WORM_REFRESH_INTERVAL-

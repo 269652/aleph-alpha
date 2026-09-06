@@ -173,6 +173,18 @@ func test_cluster_threshold_is_pinned():
 	assert_eq(AntColony.CLUSTER_THRESHOLD, 3)
 
 
+func test_scout_wave_size_is_pinned():
+	assert_eq(AntColony.SCOUT_WAVE_SIZE, 3)
+
+
+func test_resolver_wave_size_is_pinned():
+	assert_eq(AntColony.RESOLVER_WAVE_SIZE, 2)
+
+
+func test_resolver_wave_is_smaller_than_scout_wave():
+	assert_lt(AntColony.RESOLVER_WAVE_SIZE, AntColony.SCOUT_WAVE_SIZE)
+
+
 func test_carry_direction_is_a_unit_vector():
 	for seed_value in [1, 42, 999]:
 		var direction: Vector2 = AntColony.carry_direction(seed_value)

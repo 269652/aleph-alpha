@@ -135,6 +135,30 @@ const SENSE_RADIUS_TILES := FORAGE_RADIUS_TILES * 0.5
 ## silent drift.
 const CLUSTER_THRESHOLD := 3
 
+## How many scouts go out TOGETHER, spread evenly around a circle (see
+## EarthChunkManager._dispatch_ant_scout_wave/AntScoutWander.spread_
+## heading), when a mound has no known active trail to recruit toward --
+## reported live: "the mound should send out multiple scouts in random
+## directs". Naturally clamped by active_forager_cap_at like any other
+## dispatch (a young mound with a cap of 1 still only ever gets one scout
+## out, wave or not) -- this is "how many to ATTEMPT", not a guarantee.
+## 3, matching CLUSTER_THRESHOLD's own reasoning: enough real coverage of
+## the mound's small home range to plausibly find something without
+## committing a large fraction of a young colony's whole workforce to
+## speculative exploration at once.
+const SCOUT_WAVE_SIZE := 3
+
+## How many resolvers go out once a mound DOES have a known active trail
+## (see EarthChunkManager._dispatch_ant_resolver_wave) -- reported live:
+## "when the scouts return the mound dispatches more ants which follow /
+## resolve the pheromone trails". Smaller than SCOUT_WAVE_SIZE: a
+## confirmed cluster is a focused, already-de-risked effort, not blind
+## exploration, so it does not need as many committed at once -- the
+## trail persists (see PheromoneField.decay/invalidate_near) long enough
+## for further waves across later step_ants ticks if the cluster is still
+## good.
+const RESOLVER_WAVE_SIZE := 2
+
 ## How far a mound caches a harvested seed before it counts as planted, in
 ## tiles. This is the shortest-range disperser of the game's whole carrier
 ## family, and deliberately so, in order:
