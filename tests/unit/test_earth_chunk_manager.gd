@@ -5180,6 +5180,7 @@ func test_solid_obstacles_near_reads_the_radius_from_the_obstacles_own_collision
 ## FOOD_SEEDS entry with nothing in the world to eat.
 func test_seeds_near_reports_seed_lying_on_the_ground():
 	manager.update(_berlin_tile)
+	_pollinate_every_flower_near_berlin()
 	# Seed is shed over time now, not present from the moment a chunk loads.
 	for i in 400:
 		manager.step_flowers(1.0)
@@ -5197,6 +5198,7 @@ func test_seeds_near_reports_seed_lying_on_the_ground():
 ## actually removes it, so two birds can't eat the same seed.
 func test_take_seed_at_returns_the_species_and_removes_it():
 	manager.update(_berlin_tile)
+	_pollinate_every_flower_near_berlin()
 	for i in 400:
 		manager.step_flowers(1.0)
 	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
@@ -5216,7 +5218,7 @@ func test_take_seed_at_returns_the_species_and_removes_it():
 func test_an_eaten_seed_names_a_real_plantable_species():
 	const FlowerSpecies = preload("res://src/world/flower_species.gd")
 	manager.update(_berlin_tile)
-	_pollinate_flowers_near_berlin()
+	_pollinate_every_flower_near_berlin()
 	for i in 400:
 		manager.step_flowers(1.0)
 	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
@@ -5241,7 +5243,7 @@ func test_an_eaten_seed_names_a_real_plantable_species():
 ## real", the invariant this broke.
 func test_every_edible_seed_is_rendered():
 	manager.update(_berlin_tile)
-	_pollinate_flowers_near_berlin()
+	_pollinate_every_flower_near_berlin()
 	for i in 400:
 		manager.step_flowers(1.0)
 	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
@@ -5269,7 +5271,7 @@ func test_every_edible_seed_is_rendered():
 ## flowers as their own entities and are rendered where they lie.
 func test_shed_seed_appears_on_the_ground_and_is_rendered():
 	manager.update(_berlin_tile)
-	_pollinate_flowers_near_berlin()
+	_pollinate_every_flower_near_berlin()
 	for i in 400:
 		manager.step_flowers(1.0)
 
@@ -5285,6 +5287,7 @@ func test_shed_seed_appears_on_the_ground_and_is_rendered():
 
 func test_a_bird_eating_a_seed_removes_its_sprite():
 	manager.update(_berlin_tile)
+	_pollinate_every_flower_near_berlin()
 	for i in 400:
 		manager.step_flowers(1.0)
 	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
@@ -11741,7 +11744,15 @@ func _meadow_cells(chunk_coord: Vector2i) -> Array:
 ## take_seed_at themselves search (see EarthChunkManager.seeds_near), the
 ## same neighbourhood shape, so whatever this seeds lands inside the radius
 ## those callers actually check.
-func _pollinate_flowers_near_berlin() -> void:
+##
+## This exact fix (and this exact helper name) was already designed and
+## recorded in docs/progress.md on 2026-08-26 -- "Pollinator visits now feed
+## back into flower seed set too" -- naming these same six tests as fixed.
+## The prose survived; the code apparently did not (this repo's visible git
+## history is two heavily squashed snapshot commits ahead of a long real
+## history -- see initial commit / 7dce29f). Restored here rather than
+## invented fresh, so the doc's own account of itself is true again.
+func _pollinate_every_flower_near_berlin() -> void:
 	var center := _berlin_chunk()
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):

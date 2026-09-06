@@ -8055,6 +8055,21 @@ just bees -- unlike the tree-blossom branch above, which is deliberately
 bee-only. See `concept/flora.md`'s "Pollination feedback" entry for the full
 account.
 
+**Correction, 2026-09-06: the test-side half of this entry had gone missing
+from the actual checkout.** All six named tests above were found failing
+again on a clean checkout, independent of any concurrent work, in exactly
+the shape this entry describes (their "some seed has been shed"/"something
+to eat" preconditions unmet) -- but `_pollinate_every_flower_near_berlin`
+did not exist anywhere in `tests/unit/test_earth_chunk_manager.gd`, nor in
+any commit reachable via `git log --all -S`. The production fix
+(`EarthChunkManager.pollinate_flower_at`, `AmbientFlyerMarker._carried_
+pollen`) is real and present -- only the test helper and its six call sites
+were absent. This repository's visible git history is two heavily squashed
+snapshot commits (`5c470bb`, and `7dce29f` "96 commits behind") ahead of a
+much longer real history, which is the most likely place this diff was
+lost while this entry's prose survived. Restored verbatim under the same
+name; all six confirmed green again in isolation.
+
 Trees are real, individual, choppable, genetically-varied, and now spread on
 their own -- see the Vegetation Growth Model row in the Phase 1 table above
 for the implementation detail. Most of this doc's deeper trait-rarity/
