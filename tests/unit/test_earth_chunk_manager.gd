@@ -5216,6 +5216,7 @@ func test_take_seed_at_returns_the_species_and_removes_it():
 func test_an_eaten_seed_names_a_real_plantable_species():
 	const FlowerSpecies = preload("res://src/world/flower_species.gd")
 	manager.update(_berlin_tile)
+	_pollinate_flowers_near_berlin()
 	for i in 400:
 		manager.step_flowers(1.0)
 	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
@@ -5240,6 +5241,7 @@ func test_an_eaten_seed_names_a_real_plantable_species():
 ## real", the invariant this broke.
 func test_every_edible_seed_is_rendered():
 	manager.update(_berlin_tile)
+	_pollinate_flowers_near_berlin()
 	for i in 400:
 		manager.step_flowers(1.0)
 	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
@@ -5267,6 +5269,7 @@ func test_every_edible_seed_is_rendered():
 ## flowers as their own entities and are rendered where they lie.
 func test_shed_seed_appears_on_the_ground_and_is_rendered():
 	manager.update(_berlin_tile)
+	_pollinate_flowers_near_berlin()
 	for i in 400:
 		manager.step_flowers(1.0)
 
@@ -11723,6 +11726,30 @@ func test_an_unloaded_settlement_really_declines_by_eating_through_its_stores():
 func _meadow_cells(chunk_coord: Vector2i) -> Array:
 	var patch = manager._flower_patches.get(chunk_coord)
 	return [] if patch == null else patch.get_flower_cells()
+
+
+## Stands in for a real bee/AmbientFlyerMarker actually landing on a bloom.
+##
+## FlowerPatch.shed_seed only sheds seed from a cell _pollinated has recorded
+## (see Pollination.gd -- "no bees, no seed" is deliberate, the bees are
+## load-bearing) and the ONLY production caller of patch.pollinate() is
+## EarthChunkManager.pollinate_flower_at, itself only ever called from
+## AmbientFlyerMarker's own _process-driven AI. A synchronous test body that
+## just calls manager.step_flowers() in a loop never runs a single frame of
+## that AI, so without this, no amount of stepping ever sheds a seed --
+## pollinates every flower in the 3x3 chunk neighbourhood seeds_near/
+## take_seed_at themselves search (see EarthChunkManager.seeds_near), the
+## same neighbourhood shape, so whatever this seeds lands inside the radius
+## those callers actually check.
+func _pollinate_flowers_near_berlin() -> void:
+	var center := _berlin_chunk()
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var patch = manager._flower_patches.get(center + Vector2i(dx, dy))
+			if patch == null:
+				continue
+			for cell in patch.get_flower_cells():
+				patch.pollinate(cell, patch.species_at(cell))
 
 
 func test_a_loaded_meadow_is_spaced_out_rather_than_carpeted():
