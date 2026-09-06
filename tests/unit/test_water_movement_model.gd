@@ -50,3 +50,37 @@ func test_swimming_speed_decreases_as_carried_weight_increases():
 func test_swimming_at_exactly_the_weight_limit_is_still_swimming_not_drowning():
 	var result := model.resolve(3.0, 50.0, 50.0)
 	assert_eq(result.mode, "swimming")
+
+
+# -- OCEAN_DEPTH_RANGE_METERS: gameplay-scaled, not real bathymetry ----------
+#
+# Reported directly: "the players submerged tint should gradually fill from
+# the feet upwards as he walks down the shore into deeper water based on the
+# elevation and slope" -- already true for river/lake by this point (see
+# docs/concept/rivers.md), but NOT for ocean: Player._resolve_water_state
+# converted ocean elevation to metres via BiomeClassifier.depth_meters_at
+# using EarthChunkGenerator.EARTH_OCEAN_DEPTH_RANGE_METERS (8000.0 -- the
+# REAL bathymetric depth this world's bundled elevation data encodes at its
+# lowest point). That scale is correct for "real depth in metres," but
+# wildly mismatched against WADE_DEPTH_METERS (1.5m): measured directly
+# across 28 real generated shorelines (see tools/probe_ocean_shore_gradient
+## .gd), the MEDIAN near-shore slope reaches the full 1.5m wade/swim
+# threshold in ~0.03 tiles at the 8000.0 scale -- a small fraction of a
+# SINGLE tile, reading as an instant on/off switch rather than a gradual
+# fill no matter how gradually the underlying elevation itself actually
+# changes.
+#
+# OCEAN_DEPTH_RANGE_METERS is a SEPARATE, gameplay-calibrated scale for the
+# SAME conversion, deliberately decoupled from EARTH_OCEAN_DEPTH_RANGE_
+# METERS's own real-bathymetric meaning -- the same "recalibrate to what
+# gameplay actually needs, not the real physical range" idiom
+# WADE_DEPTH_METERS's own doc comment already establishes, and RiverDepth's
+# MAX_CURATED_RIVER_DEPTH_METERS/PROCEDURAL_RIVER_DEPTH_METERS (2.5m/1.0m)
+# already apply to river depth. Picked from the SAME measured 28-shoreline
+# sample: at 50.0, the median real slope reaches wade depth in ~5.4 tiles
+# (a believable multi-step walk into the water) while five real, genuinely
+# deep open-ocean points (mid-Pacific, mid-Atlantic, the Mariana Trench
+# area, the Indian Ocean) still resolve to 22-41m -- comfortably, clearly
+# past the wade threshold, not accidentally shallow.
+func test_ocean_depth_range_is_pinned_to_the_measured_gameplay_scale():
+	assert_almost_eq(WaterMovementModel.OCEAN_DEPTH_RANGE_METERS, 50.0, 0.001)

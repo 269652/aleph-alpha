@@ -8,6 +8,36 @@ extends RefCounted
 const WADE_DEPTH_METERS := 1.5
 ## Fraction of walking speed lost at the deepest wadeable depth.
 const WADE_SPEED_LOSS := 0.5
+
+## The gameplay-calibrated scale Player._resolve_water_state converts real
+## OCEAN elevation into metres of depth with (BiomeClassifier.depth_meters_
+## at's own `max_depth_meters` argument) -- DELIBERATELY separate from
+## EarthChunkGenerator.EARTH_OCEAN_DEPTH_RANGE_METERS (8000.0), which is
+## correct as "the real bathymetric depth this world's bundled elevation
+## data encodes at its lowest point" but is the wrong number to convert
+## with for gameplay/visual purposes, the same "recalibrate to what
+## gameplay actually needs, not the real physical range" reasoning
+## WADE_DEPTH_METERS's own doc comment above already applies, and
+## RiverDepth's MAX_CURATED_RIVER_DEPTH_METERS/PROCEDURAL_RIVER_DEPTH_
+## METERS (2.5m/1.0m) already apply to river depth.
+##
+## Reported directly: "the players submerged tint should gradually fill
+## from the feet upwards as he walks down the shore into deeper water
+## based on the elevation and slope" -- already true for river/lake, but
+## not ocean: at the real 8000.0 scale, measured directly across 28 real
+## generated shorelines (tools/probe_ocean_shore_gradient2.gd), the MEDIAN
+## near-shore slope reached the full WADE_DEPTH_METERS threshold within
+## ~0.03 tiles -- a small fraction of a single tile, an instant on/off
+## switch regardless of how gradually the underlying elevation itself
+## actually changes.
+##
+## 50.0 is picked from that SAME measured sample: at this scale, the
+## median real slope reaches wade depth in ~5.4 tiles (a believable
+## multi-step walk into the water), while five real, genuinely deep
+## open-ocean points (mid-Pacific, mid-Atlantic, the Mariana Trench area,
+## the Indian Ocean) still resolve to 22-41m of depth -- comfortably past
+## the wade threshold, not accidentally shallow.
+const OCEAN_DEPTH_RANGE_METERS := 50.0
 ## Swimming speed relative to normal walking speed, for an unweighted swimmer.
 const BASE_SWIM_SPEED := 0.6
 

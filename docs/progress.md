@@ -9836,6 +9836,46 @@ germany" and a 4-tile minimum width).
   genuinely_large_river_still_resolves_to_swimming` (the Rhine at Cologne
   reports 0.0 depth) — a hydraulics/curated-course regression predating
   this session, tracked as its own follow-up.
+
+- **Ocean depth made gradual too, for the player (2026-09-06)** (small) —
+  ✅ Done — reported directly, immediately after the fix above shipped and
+  the one remaining gap ("ocean depth is still a fixed waterline rather
+  than gradual") was named back: "ocean depth too." Ocean was never
+  literally un-computed or binary — `Player._resolve_water_state` already
+  fed `BiomeClassifier.depth_meters_at` continuous, real per-tile
+  elevation — the bug was the CONVERSION scale: `EarthChunkGenerator.
+  EARTH_OCEAN_DEPTH_RANGE_METERS` (8000.0, the real bathymetric depth this
+  world's bundled elevation data encodes at its lowest point) is correct
+  as "real metres" but is a wild mismatch against `WaterMovementModel.
+  WADE_DEPTH_METERS` (1.5m). Measured directly across 28 real generated
+  shorelines (`tools/probe_ocean_shore_gradient2.gd`, sampled with a
+  spread of world columns rather than one hand-picked transect): the
+  MEDIAN near-shore slope reached the full wade threshold within ~0.03
+  tiles at the real scale — a small fraction of a single tile, an instant
+  on/off switch regardless of how gradual the underlying elevation itself
+  actually was.
+
+  New `WaterMovementModel.OCEAN_DEPTH_RANGE_METERS` (50.0) is a separate,
+  gameplay-calibrated scale for the same conversion — the same
+  "recalibrate to what gameplay needs, not the real physical range"
+  reasoning `WADE_DEPTH_METERS`'s own doc comment already applies, and
+  `RiverDepth`'s own curated/procedural depth ceilings already apply to
+  rivers. Picked from the same measured sample: the median real slope now
+  reaches wade depth in ~5.4 tiles (a believable multi-step walk into the
+  water), while five real, genuinely deep open-ocean points (mid-Pacific,
+  mid-Atlantic, the Mariana Trench area, the Indian Ocean) still resolve to
+  22-41m — comfortably clear of the wade threshold, not accidentally
+  shallow. Verified end to end at a real, measured near-shore point (a
+  real Arctic coastline sitting almost exactly at the median of the 28
+  sampled shorelines, `tests/unit/test_player_ocean_water_state.gd`): the
+  water's edge now reads well under the wade threshold, and walking a few
+  tiles further out measurably deepens rather than the very first wet
+  tile already reading as full swimming. Scoped to the player only:
+  `CreatureMarker._apply_submersion`'s own ocean case is unchanged (still
+  the fixed per-species waterline it always used) — not attempted here
+  because it was not what was reported, though the infrastructure this
+  fix proves out (a cheap, now correctly-scaled per-tile ocean depth
+  query) is exactly what a future pass extending animals would need.
 - **Real hydraulics: volume, pressure, current speed** (large) — ✅ Done —
   reported directly ("implement real water flow with volume pressure current
   speed"). Before this, depth was an AUTHORED 2.5 m linear taper, current
