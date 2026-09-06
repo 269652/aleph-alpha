@@ -1142,10 +1142,6 @@ func apply_save_dict(data: Dictionary) -> void:
 		else:
 			equipment.equip(item)
 
-	var hotbar_data: Array = data.get("hotbar", [])
-	for i in range(hotbar_data.size()):
-		hotbar.assign(i, hotbar_data[i])
-
 	# Bonded companions (docs/concept/taming.md's Kinship path): re-spawn one
 	# live BondedCompanionMarker per saved entry. Any markers from BEFORE
 	# this load (there should be none on a freshly-spawned player, but this
@@ -1160,6 +1156,19 @@ func apply_save_dict(data: Dictionary) -> void:
 		_spawn_bonded_marker(entry)
 
 	inventory_changed.emit()
+
+	# AFTER inventory_changed above (not before): that emit runs sync_hotbar,
+	# whose prune_missing clears any slot not backed by inventory.stacks() --
+	# it doesn't know about equipped items either, let alone a slot bound to
+	# an id the player doesn't currently hold at all, which is a legal
+	# explicit-assignment state (see Hotbar). Restoring the save's exact
+	# bindings LAST makes them win over that reconciliation instead of being
+	# wiped by it. A save with no "hotbar" key (pre-hotbar-persistence) keeps
+	# whatever sync_hotbar just auto-filled from the restored inventory,
+	# which is the right fallback for that legacy case.
+	var hotbar_data: Array = data.get("hotbar", [])
+	for i in range(hotbar_data.size()):
+		hotbar.assign(i, hotbar_data[i])
 
 
 ## Awards XP (see ExperienceTrack); each level gained bumps max health and heals
