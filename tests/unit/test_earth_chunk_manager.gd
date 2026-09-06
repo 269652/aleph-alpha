@@ -6850,7 +6850,15 @@ func test_dispatches_a_second_forager_once_the_mounds_own_cap_allows_it():
 	# it badly (a single step extrapolates from the STARTING slope only),
 	# so this simulates many moderate simulated-days instead, matching how
 	# advance() is actually called many times over real elapsed play.
+	# Keeps depositing food throughout, at a real per-day rate, not just up
+	# front (2026-09-06, food economy -- see test_ant_colony.gd's own
+	# test_growth_fraction_approaches_one_for_a_thriving_colony): a colony
+	# fed once and never again would now genuinely starve back down over
+	# 200 simulated days (AntColony.food_availability_fraction), which is
+	# correct, but is not what "a long-thriving colony" means to set up.
 	for i in 200:
+		for trip in 50:
+			colony.record_forage_result(cell, true)
 		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)  # one simulated day per call
 	assert_gt(colony.active_forager_cap_at(cell), 1, "precondition: a long-thriving colony should allow more than one")
 	var global_tile := Vector2i(654_321, 654_321)

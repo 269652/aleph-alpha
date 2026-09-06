@@ -10,7 +10,6 @@ extends GutTest
 
 const ProceduralAntMoundSprite = preload("res://src/rendering/procedural_ant_mound_sprite.gd")
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
-const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 var mound: ProceduralAntMoundSprite
 
@@ -74,8 +73,21 @@ func test_entrance_color_is_distinguishable_from_the_outline():
 # world_width_for(growth_fraction) taking AntColony.growth_fraction_at's
 # own [0,1] output. -----------------------------------------------------
 
-func test_mound_world_width_is_smaller_than_a_full_tile_even_at_max_growth():
-	assert_lt(ProceduralAntMoundSprite.world_width_for(1.0), TerrainRenderer.TILE_SIZE)
+## Superseded (2026-09-06, "make them substantially bigger" -- see
+## docs/concept/soil_fauna.md's "A real food economy" section): this
+## test's real job was catching a forgotten-scale "gigantic" regression
+## (the class of bug named in the section comment above), using "smaller
+## than a tile" as a rough stand-in ceiling back when MOUND_WORLD_WIDTH_MAX
+## (half a player's height) happened to be under TerrainRenderer.TILE_SIZE.
+## A player was asked directly for a mound substantially bigger than a
+## tile at full growth -- 1.5x their own height, now the real, deliberate,
+## already-pinned ceiling (test_mound_world_width_at_max_growth_is_1_5x_
+## the_player_height) -- so "under one tile" is no longer a meaningful
+## sanity bound to hold separately; the actual "never overshoots its own
+## intended ceiling even for an untrusted input" guarantee this test stood
+## in for is already covered precisely by
+## test_mound_world_width_grows_with_growth_fraction's own growth_fraction
+## > 1.0 check.
 
 
 func test_mound_world_scale_actually_produces_the_declared_world_width():
@@ -109,15 +121,18 @@ func test_mound_world_width_grows_with_growth_fraction():
 	)
 
 
-## Requested directly: "it should be half a human high" -- pinned to
-## CharacterView's own real player height (the same "read against the
-## player" convention StoneSize/ProceduralFlowerSprite already establish),
-## not an independently-eyeballed number, and cross-checked here so the
-## two can't silently drift apart.
-func test_mound_world_width_at_max_growth_is_half_the_player_height():
+## "half a human high" -> 1.5x a human's own height (2026-09-06, "make
+## them substantially bigger" -- see docs/concept/soil_fauna.md's "A real
+## food economy" section, shipped alongside fewer/more-populous mounds and
+## a bigger starting/max population so the numbers stay consistent with
+## each other). Still pinned to CharacterView's own real player height
+## (the same "read against the player" convention StoneSize/
+## ProceduralFlowerSprite already establish), not an independently-
+## eyeballed number -- only the multiplier moved.
+func test_mound_world_width_at_max_growth_is_1_5x_the_player_height():
 	assert_almost_eq(
 		ProceduralAntMoundSprite.world_width_for(1.0),
-		ProceduralAntMoundSprite.PLAYER_WORLD_HEIGHT_PX * 0.5, 0.001
+		ProceduralAntMoundSprite.PLAYER_WORLD_HEIGHT_PX * 1.5, 0.001
 	)
 
 

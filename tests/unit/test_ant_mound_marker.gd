@@ -107,6 +107,13 @@ func test_stays_exactly_where_placed():
 ## world marker in this codebase -- a real colony's own current growth
 ## fraction should size the sprite from the very first frame, not wait
 ## for the first periodic re-check.
+## Keeps depositing food throughout the 400-day loop, at a real per-day
+## rate, not just up front (2026-09-06, food economy -- see
+## test_ant_colony.gd's own test_growth_fraction_approaches_one_for_a_
+## thriving_colony for the full reasoning): a colony fed once and never
+## again would now genuinely starve back down over 400 simulated days
+## (AntColony.food_availability_fraction), which is correct, but is not
+## what "a thriving colony" means to set up here.
 func test_setup_sizes_the_sprite_from_the_real_colonys_growth_fraction_immediately():
 	var colony := _colony()
 	var cell: Vector2i = colony.mound_cells()[0]
@@ -114,6 +121,8 @@ func test_setup_sizes_the_sprite_from_the_real_colonys_growth_fraction_immediate
 		colony.record_forage_result(cell, true)
 		colony.record_moisture(cell, 1.0)
 	for i in 400:
+		for trip in 50:
+			colony.record_forage_result(cell, true)
 		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
 	var grown := AntMoundMarker.new()
 	grown.mound_seed = 3
@@ -145,6 +154,8 @@ func test_mound_grows_larger_over_time_as_its_colony_grows():
 		colony.record_forage_result(cell, true)
 		colony.record_moisture(cell, 1.0)
 	for i in 400:
+		for trip in 50:
+			colony.record_forage_result(cell, true)
 		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
 	growing._process(AntMoundMarker.RESIZE_INTERVAL_SECONDS + 1.0)
 
