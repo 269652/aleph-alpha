@@ -70,6 +70,7 @@ const ProceduralScrubSprite = preload("res://src/rendering/procedural_scrub_spri
 const TundraLichen = preload("res://src/world/tundra_lichen.gd")
 const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sprite.gd")
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
+const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 const IllustratedWormSprite = preload("res://src/rendering/illustrated_worm_sprite.gd")
 const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
 const ProceduralAquaticVegetationSprite = preload("res://src/rendering/procedural_aquatic_vegetation_sprite.gd")
@@ -6901,6 +6902,31 @@ func crush_worm_at(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 		return false
 	_sync_worm_sprites(chunk_coord)
 	return true
+
+
+## The caterpillar-shaped sibling of crush_worm_at (see docs/concept/
+## soil_fauna.md "Generalized to caterpillars too") -- same
+## CrushMechanic.is_crushed_by physics, same "insufficient momentum is a
+## no-op" contract, but a caterpillar is a real Node2D with its own
+## position rather than per-tile cell state, so this scans the stepped-on
+## chunk's own tracked markers by real position instead of looking up one
+## patch/cell. No corpse/recovery state to set (see the doc's own "No
+## corpse state" note) -- a crushed caterpillar simply queue_free()s and
+## drops out of _caterpillar_markers, the same removal chunk-unload already
+## performs. Returns whether anything was actually crushed.
+func crush_caterpillars_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
+	if not CrushMechanic.is_crushed_by(momentum_kg_m_s):
+		return false
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var markers: Array = _caterpillar_markers.get(chunk_coord, [])
+	var crushed_any := false
+	for marker in markers.duplicate():
+		if _world_tile_for_pixel(marker.position) == tile:
+			markers.erase(marker)
+			marker.queue_free()
+			crushed_any = true
+	return crushed_any
 
 
 ## Every fallen, NAMED-SPECIES tree-fruit item lying within `radius_tiles` of

@@ -7588,6 +7588,42 @@ state had never once been set by anything in `src/`.
   cycle's larval stage), and the sheet's own `rest` row has real,
   confirmed art but no wired trigger yet. Full writeup:
   [soil_fauna.md](concept/soil_fauna.md#caterpillars-on-trees-on-the-ground-green-leaves-only).
+- **Crushed underfoot, generalized to caterpillars (2026-09-06)** (small)
+  — ✅ Done — reported directly right after caterpillars shipped: "they
+  don't get flattened when I step on them ... make that mechanic work for
+  all animals based on physics (only worms and caterpillars are affected
+  by that tho)". The threshold/comparison itself moved out of
+  `EarthwormPatch` into a new shared `CrushMechanic`
+  (`src/world/crush_mechanic.gd`, `CRUSH_MOMENTUM_THRESHOLD_KG_M_S`/
+  `is_crushed_by` — byte-for-byte the same rule, just no longer owned by a
+  class named after one specific victim); `EarthwormPatch.crush` now
+  delegates to it rather than keeping its own copy. New
+  `EarthChunkManager.crush_caterpillars_near(pixel_position,
+  momentum_kg_m_s)` is the caterpillar-shaped sibling of `crush_worm_at` —
+  same physics, but scans the stepped-on chunk's own tracked
+  `CaterpillarMarker` instances by real `.position` instead of a per-tile
+  patch/cell lookup, since a caterpillar (unlike a worm) is a real Node2D
+  with no cell-sim state to speak of. Wired into `World._client_process`
+  at the exact same two call sites `crush_worm_at` already uses (the
+  player, and every `CreatureMarker`), reusing the identical
+  per-stepper momentum — a wolf or deer crushes a caterpillar exactly as
+  readily as it already crushes a worm. No corpse/recovery state and no
+  splat VFX for a crushed caterpillar (it simply `queue_free()`s) — the
+  same scope cut the original worm mechanic already named; a worm's
+  burrow is a renewable resource with something for a recovery clock to
+  apply to, a caterpillar was never tied to a place the way a burrow is.
+  Bigger animals (sheep/wolf/deer/...) stay excluded by which system a
+  creature lives in — `CreatureMarker` instances in the `"creature"`
+  group, with their own real health/combat stack — rather than a new
+  per-species victim-mass check: there still is no "how much can this
+  creature's own body withstand" table for anyone, worm or caterpillar
+  included (`CreatureMass` is entirely the STEPPER's mass, never the
+  steppee's). 4 new tests inject a real `CaterpillarMarker` directly at a
+  known position for full determinism (no random per-seed spawn luck to
+  work around, unlike the worm tests); `test_world_worm_crush_wiring.gd`
+  renamed to `test_world_crush_wiring.gd` and extended with a caterpillar
+  mirror of every existing worm assertion. Full writeup:
+  [soil_fauna.md](concept/soil_fauna.md#generalized-to-caterpillars-too-2026-09-06).
 
 ### Flora (`concept/flora.md`)
 

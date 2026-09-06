@@ -4859,20 +4859,26 @@ func _client_process(delta: float) -> void:
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		_chunk_manager.tread_snow_at(creature.position, false)
 	# Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
-	# weight-emergent worm mortality") -- mirrors the tread_snow_at pair just
-	# above exactly (player, then every creature), but keyed on real weight
-	# rather than snow depth, so it runs regardless of season. No debounce
-	# needed for either: crush_worm_at's own removal is already idempotent
-	# (a worm that is already gone simply reports false again next frame),
-	# the same reasoning that let this skip the per-entity "last tile"
-	# tracking PathScarring/the snow trail's own debounce needs for a
-	# CONTINUOUS accumulator.
+	# weight-emergent worm mortality" and its "Generalized to caterpillars
+	# too" follow-up) -- mirrors the tread_snow_at pair just above exactly
+	# (player, then every creature), but keyed on real weight rather than
+	# snow depth, so it runs regardless of season. crush_worm_at and
+	# crush_caterpillars_near share the identical momentum value per
+	# stepper -- one shared physics rule (CrushMechanic), two detection
+	# shapes (a worm is per-tile cell state, a caterpillar a real Node2D).
+	# No debounce needed for either: both removals are already idempotent
+	# (already-gone simply reports false again next frame), the same
+	# reasoning that let this skip the per-entity "last tile" tracking
+	# PathScarring/the snow trail's own debounce needs for a CONTINUOUS
+	# accumulator.
 	_chunk_manager.crush_worm_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
+	_chunk_manager.crush_caterpillars_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		var marker := creature as CreatureMarker
 		var species: String = marker.info.species if marker.info != null else ""
 		var momentum := CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
 		_chunk_manager.crush_worm_at(marker.position, momentum)
+		_chunk_manager.crush_caterpillars_near(marker.position, momentum)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).
