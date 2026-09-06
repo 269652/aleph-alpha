@@ -93,14 +93,25 @@ const _FALLBACK_SEASON := "summer"
 ## with leaves or needles -- and the rows below it are what you get once you
 ## have picked it: shelled, cracked open, the kernel.
 ##
-## Every sheet follows it. Walnut, acorn and hazelnut each draw two on-tree
-## stages and two harvested ones; pine draws three of each, its extra on-tree
-## stage being a bare needle sprig carrying no cone at all.
-##
-## Ripe is therefore the LAST on-tree stage and unripe the one before it,
-## counted from the END rather than the start. Counted from the start, pine's
-## bare sprig would be its unripe crop and its green cone the ripe one -- a
-## tree bearing needles instead of cones.
+## This used to describe the on-tree row as a short RIPENING sequence --
+## two stages for walnut/acorn/hazelnut, three for pine (its extra stage a
+## bare needle sprig with no cone), ripe the LAST stage and unripe the one
+## before it. Re-measured directly (2026-09-06, chasing a real off-season
+## fruit-leaf-colour bug reported on cherry -- see fruit_for's own doc
+## comment): every one of the six species' real on-tree row today measures
+## exactly CANOPY_FRAME_COUNT frames -- the same "one closeup per canopy
+## season" shape, snow column already excluded, that used to be described
+## as cherry's own special case. None of the six currently draws a real
+## ripening sequence here at all: "ripe is the last stage, unripe the one
+## before" only ever worked because the last column happens to be autumn/
+## turning and the one before it summer/leaf -- a coincidence of column
+## order, not a real ripening depiction, and exactly the coincidence that
+## let a hanging summer cherry wear autumn's orange leaves unnoticed.
+## `ripe`/`unripe` is not a fact this row distinguishes for any species
+## today; only `season` (fruit_for's own argument) picks which closeup
+## shows. Kept here as a documented correction rather than silently
+## rewritten, the same treatment CompositeSheetSlicer's own stale
+## needs_keying claim got at the same time.
 ##
 ## The frames below the first row are not drawn on trees at all. They are the
 ## fruit's later life and belong to item art.
@@ -305,14 +316,35 @@ func foliage_leaf_for(species: String, season: String) -> Texture2D:
 
 
 ## The fruit as it hangs on the tree: the LAST on-tree stage when ripe, the one
-## before it when not.
+## before it when not -- for a species whose on-tree row is a real ripening
+## SEQUENCE (see "What a fruit frame means" above). A row that instead carries
+## exactly CANOPY_FRAME_COUNT frames is a different case entirely: not a
+## ripening sequence at all, but the SAME fruiting closeup redrawn once per
+## canopy season -- its own small accent leaves painted to match that
+## season's canopy colour, using the identical `_CANOPY_FRAME_BY_SEASON`
+## table `canopy_for`'s own season lookup already keys on, so the closeup
+## keeps blending into whatever canopy currently surrounds it (cherry, today:
+## its real fruit row draws a matching closeup under every canopy column, not
+## a two-stage crop). `ripe` has nothing left to distinguish for a row like
+## that, so it is ignored; `season` decides instead.
+##
+## Reported live, from a screenshot: a fully green SUMMER canopy with ripe
+## cherries still carrying the AUTUMN column's orange leaves -- this never
+## looked at season at all before, always returning the row's last entry
+## (frames[3], the turning column, for cherry specifically) regardless of the
+## actual season.
 ##
 ## Counted from the end so a species with an extra early stage still ripens
 ## into the right frame (see "What a fruit frame means").
-func fruit_for(species: String, ripe: bool) -> Texture2D:
+func fruit_for(species: String, ripe: bool, season: String = _FALLBACK_SEASON) -> Texture2D:
 	var frames := on_tree_frames_for(species)
 	if frames.is_empty():
 		return null
+	if frames.size() == CANOPY_FRAME_COUNT:
+		var season_index: int = _CANOPY_FRAME_BY_SEASON.get(
+			season, _CANOPY_FRAME_BY_SEASON[_FALLBACK_SEASON]
+		)
+		return frames[clampi(season_index, 0, frames.size() - 1)]
 	var index: int = frames.size() - (1 if ripe else 2)
 	return frames[clampi(index, 0, frames.size() - 1)]
 
@@ -393,9 +425,25 @@ func _composite_parts(species: String) -> Dictionary:
 		# so they are cut fresh from the sheet rather than reusing an
 		# already-cut piece.
 		var on_tree_regions: Array = _on_tree_row(fruit_regions, canopy_x_centers, sheet)
+		# Aggressive keying (see CompositeSheetSlicer.cut_out's own doc
+		# comment) is safe here too, not just the bare-winter canopy frame:
+		# an on-tree row with exactly CANOPY_FRAME_COUNT entries is one
+		# closeup per canopy SEASON (see fruit_for's own doc comment), with
+		# its snow-column entry already dropped just above
+		# (_without_snow_column) -- so nothing pale-and-real (a blossom
+		# petal, a snow-dusted twig) is at risk here the way it would be for
+		# a species whose row is a real, unfiltered ripening sequence
+		# instead. Reported live: a real enclosed white pocket inside two of
+		# cherry's own leafy-twig drawings -- a gap between leaf/cherry
+		# shapes that never touches the drawing's own edge -- too big for
+		# despeckle's size cutoff and unreached by reachability alone (see
+		# test_cherrys_on_tree_frames_have_no_leftover_white_background).
+		var aggressive_on_tree := on_tree_regions.size() == CANOPY_FRAME_COUNT
 		for region in on_tree_regions:
 			var rect: Rect2i = region
-			on_tree.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, rect)))
+			on_tree.append(ImageTexture.create_from_image(
+				CompositeSheetSlicer.cut_out(sheet, rect, aggressive_on_tree)
+			))
 		for region in fruit_regions:
 			var rect: Rect2i = region
 			# Skip harvest for any fragment a merge above already folded

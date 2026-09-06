@@ -89,7 +89,18 @@ const SPECIES := {
 		"display_name": "Cherry",
 		"canopy_color": Color(0.22, 0.58, 0.2),
 		"fruit_color": Color(0.75, 0.08, 0.18),
-		"yield_multiplier": 1.3,
+		# 1.3 -> 1.8 (reported live, from a screenshot: visibly sparse fruiting).
+		# The class doc comment above already claims cherries "bear
+		# prolifically -- lots of small, fast fruit," but 1.3 left it BELOW
+		# acorn's 1.5 -- not actually the most prolific bearer the roster's
+		# own stated grounding says it should be. Real cherry trees bear a
+		# large crop reliably every year; a real oak's own mast fruiting is
+		# comparably huge but irregular, heavy only in occasional mast years
+		# and much lighter most years -- so a reliable annual cherry crop
+		# earning the roster's single highest multiplier is the more honest
+		# yearly comparison. Pinned as the strict roster maximum, not a bare
+		# literal (test_cherry_is_the_most_prolific_bearer_in_the_roster).
+		"yield_multiplier": 1.8,
 		"ripening_multiplier": 0.65,
 	},
 	"apple": {
