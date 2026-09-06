@@ -70,6 +70,18 @@ var forage_kind := "seed"
 var carried_leaf_species := ""
 var carried_leaf_season := ""
 
+## Whether this trip is a SCOUTING trip (see docs/concept/soil_fauna.md
+## "Scouts mark leaf clusters, workers collect from marks") -- set at
+## dispatch time by EarthChunkManager._scout_for_leaf_cluster_near_mound,
+## which has already confirmed a real cluster exists at/near
+## target_position before ever creating this marker. A scout walks, takes,
+## and returns exactly like any other leaf trip (see _process/
+## _resolve_arrival_at_mound, both untouched) -- the ONLY difference is
+## that a successful arrival at the food ALSO marks the cluster (see
+## _resolve_arrival_at_food), the same "on the way back" moment
+## _deposit_pheromone_at already marks a single tile at.
+var is_scout := false
+
 var _behavior := AntForageBehavior.new()
 ## The species this trip is carrying, if any (windfall only -- a grass
 ## seed has no species to remember, TallGrass.plant_grass_at needs none).
@@ -169,7 +181,13 @@ func _process(delta: float) -> void:
 ## HERE, not guaranteed by having been dispatched at all -- something else
 ## may have taken it first) and, on success, mark the spot with this
 ## mound's own trail pheromone so the NEXT dispatched forager can be drawn
-## back to a known-good source (see PheromoneField).
+## back to a known-good source (see PheromoneField). A scouting trip
+## (is_scout) additionally marks the whole CLUSTER it was sent to confirm
+## (see docs/concept/soil_fauna.md "Scouts mark leaf clusters, workers
+## collect from marks") -- the dispatcher (EarthChunkManager._scout_for_
+## leaf_cluster_near_mound) already verified one exists at target_position
+## before creating this marker at all, so a successful pickup here is
+## enough to commit it to this mound's own memory.
 func _resolve_arrival_at_food() -> void:
 	var succeeded := false
 	if _world != null:
@@ -183,6 +201,8 @@ func _resolve_arrival_at_food() -> void:
 	_behavior.arrive_at_food(succeeded)
 	if succeeded and _colony != null:
 		_deposit_pheromone_at(target_position)
+		if is_scout and forage_kind == "leaf":
+			_colony.mark_cluster(_mound_cell, target_position)
 
 
 func _deposit_pheromone_at(pixel_position: Vector2) -> void:

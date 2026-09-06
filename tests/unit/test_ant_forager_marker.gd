@@ -294,6 +294,56 @@ func test_a_failed_trip_deposits_no_pheromone():
 	assert_null(colony.pheromones_at(MOUND_CELL), "nothing was found, so there is nothing to recruit toward")
 
 
+# -- scouting: a successful scout trip also marks the cluster (see
+# docs/concept/soil_fauna.md "Scouts mark leaf clusters, workers collect
+# from marks") --------------------------------------------------------
+
+func test_a_successful_scout_trip_marks_the_cluster():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var target := Vector2(3000, 3000)
+	var f := _spawned(target, Vector2(3002, 3000), world, colony)
+	f.forage_kind = "leaf"
+	f.is_scout = true
+	f._process(1.0)  # arrive and take the leaf
+	assert_eq(colony.cluster_marks_at(MOUND_CELL), [target])
+
+
+func test_a_non_scout_leaf_trip_never_marks_a_cluster():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
+	f.forage_kind = "leaf"
+	f.is_scout = false
+	f._process(1.0)
+	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty(), "an ordinary leaf trip must not mark a cluster")
+
+
+func test_a_failed_scout_trip_marks_no_cluster():
+	var world := StubWorld.new()
+	world.leaf_present = false
+	var colony := _new_colony()
+	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
+	f.forage_kind = "leaf"
+	f.is_scout = true
+	f._process(1.0)
+	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty(), "nothing was found, so there is no cluster to mark")
+
+
+## A scout dispatched for seed/windfall (not attempted by the current
+## dispatcher, but not this marker's own job to forbid) still never marks
+## a cluster -- marking is scoped to real leaf trips only (see docs/
+## concept/soil_fauna.md's own "leaf-only" scope note).
+func test_a_successful_scout_trip_for_a_non_leaf_kind_marks_no_cluster():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned(Vector2(3000, 3000), Vector2(3002, 3000), world, colony)
+	f.forage_kind = "seed"
+	f.is_scout = true
+	f._process(1.0)
+	assert_true(colony.cluster_marks_at(MOUND_CELL).is_empty())
+
+
 # -- the queen hears about it: arrival records the real outcome ------------
 
 func test_arriving_home_records_the_forage_result_with_the_colony():
