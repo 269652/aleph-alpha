@@ -953,6 +953,32 @@ func test_evicting_old_chunks_frees_their_ambient_flyers():
 		assert_false(is_instance_valid(flyer), "Berlin's ambient flyers should be freed once out of range")
 
 
+## The reported bug, reproduced directly: a chunk's sparrow population is
+## always exactly zero the instant it first loads (ground-seed cells need
+## real elapsed shedding time -- see SparrowPopulationModel), so the ONE-TIME
+## promotion-from-population spawn inside _load_chunk can never show one.
+## Population is forced up directly here (seed_sparrow_population) to isolate
+## marker promotion from the growth model itself, which has its own tests --
+## the periodic refresh must pick up a population that changed while the
+## chunk stayed loaded, the same "still loaded, population moved" case
+## _refresh_creatures already handles for herbivores/predators/fish.
+func test_refresh_creatures_promotes_sparrows_once_population_rises_after_load():
+	var chunk_coord: Vector2i = _berlin_tile / EarthChunkManager.CHUNK_SIZE
+	manager._load_chunk(chunk_coord)
+	assert_eq(manager._ecosystem.sparrow_population(chunk_coord), 0.0)
+	for flyer in manager._loaded_ambient_flyers.get(chunk_coord, []):
+		assert_ne(flyer.species, "sparrow")
+
+	manager._ecosystem.seed_sparrow_population(chunk_coord, 3.0)
+	manager._refresh_creatures()
+
+	var sparrows := 0
+	for flyer in manager._loaded_ambient_flyers[chunk_coord]:
+		if flyer.species == "sparrow":
+			sparrows += 1
+	assert_eq(sparrows, 3, "a chunk's sparrow markers must track its live population without a reload")
+
+
 # -- piscivore birds: kingfishers dive for fish (see PiscivoreBirdRenderer,
 # PiscivoreBirdMarker) and actually decrement the aquatic population --------
 
