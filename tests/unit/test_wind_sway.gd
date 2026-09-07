@@ -96,3 +96,133 @@ func test_set_wind_strength_before_materials_are_built_still_applies_once_built(
 	fresh.set_wind_strength(1.4)
 	assert_eq(fresh.shared_material().get_shader_parameter("wind_strength"), 1.4)
 	assert_eq(fresh.tuft_material().get_shader_parameter("wind_strength"), 1.4)
+
+
+# -- canopy sparkle (see docs/concept/snow_cover.md, "Sparkle: specular
+# glints on lying snow" -- the shared twinkle pattern + colour gate are
+# pinned by test_snow_sparkle_shader.gd; these tests are WindSway's own
+# WIRING: uniform plumbing, defaults, and tree-vs-tuft isolation) ----------
+
+const SnowSparkleShader = preload("res://src/rendering/snow_sparkle_shader.gd")
+
+
+## The two shaders must never silently drift apart -- ground's own copy is
+## pinned the same way in test_snow_bomb_shader.gd.
+func test_the_shader_code_contains_the_shared_sparkle_snippet_verbatim():
+	assert_string_contains(WindSway.SHADER_CODE, SnowSparkleShader.GLSL_SNIPPET)
+
+
+## world_pos must be computed AFTER the sway displacement (i.e. from the
+## swaying VERTEX, not the pre-sway one) so a glint rides along with the
+## twig it sits on rather than floating independently of it -- see
+## sparkle_intensity's own call site for why that is the intended, more
+## physically correct behaviour, not an oversight.
+func test_world_pos_is_computed_after_the_sway_displacement():
+	var code: String = WindSway.SHADER_CODE
+	var sway_line := code.find("VERTEX.x += gust")
+	var world_pos_line := code.find("world_pos = (MODEL_MATRIX")
+	assert_true(sway_line >= 0 and world_pos_line >= 0, "could not locate both lines")
+	assert_gt(world_pos_line, sway_line, "world_pos must be computed after VERTEX is swayed")
+
+
+## fragment() must read the incoming COLOR (already texture * modulate, per
+## Godot's own canvas_item default) rather than re-sampling TEXTURE itself --
+## re-sampling would silently drop whatever modulate a tree/tuft node might
+## carry, a real behaviour change this feature has no business making.
+## Comments stripped first -- a comment EXPLAINING that COLOR already equals
+## texture(TEXTURE, UV) must not itself be what trips this (the same
+## comment-vs-code trap test_snow_bomb_shader.gd's own
+## test_the_lattice_hash_is_trig_free doc comment warns about).
+func test_fragment_reuses_the_incoming_color_rather_than_resampling_texture():
+	var code: String = WindSway.SHADER_CODE
+	var start := code.find("void fragment()")
+	assert_true(start >= 0, "no fragment() found")
+	var raw_body := code.substr(start, code.length() - start)
+	var body := ""
+	for line in raw_body.split("\n"):
+		var stripped: String = line
+		var comment := stripped.find("//")
+		if comment >= 0:
+			stripped = stripped.substr(0, comment)
+		body += stripped + "\n"
+	assert_false(body.contains("texture(TEXTURE"), "fragment() must reuse COLOR, not resample TEXTURE")
+	assert_string_contains(body, "COLOR")
+
+
+## Sparkle must be gated on BOTH snow_coverage and the shared colour gate --
+## structural presence of both conditions, since the actual colour math is
+## already pinned by test_snow_sparkle_shader.gd's own gate tests.
+func test_fragment_gates_sparkle_on_coverage_and_the_colour_gate():
+	var code: String = WindSway.SHADER_CODE
+	assert_string_contains(code, "snow_coverage")
+	assert_string_contains(code, "sparkle_min_value")
+	assert_string_contains(code, "sparkle_max_saturation")
+	assert_string_contains(code, "sparkle_intensity(world_pos, TIME)")
+
+
+func test_make_material_defaults_snow_coverage_to_zero():
+	var material := wind.make_material()
+	assert_eq(material.get_shader_parameter("snow_coverage"), 0.0)
+
+
+func test_the_material_carries_every_shared_sparkle_uniform():
+	var material := wind.make_material()
+	var expected := {
+		"sparkle_cell_world": SnowSparkleShader.SPARKLE_CELL_WORLD,
+		"sparkle_density": SnowSparkleShader.SPARKLE_DENSITY,
+		"sparkle_jitter_world": SnowSparkleShader.SPARKLE_JITTER_WORLD,
+		"sparkle_point_radius_world": SnowSparkleShader.SPARKLE_POINT_RADIUS_WORLD,
+		"sparkle_hz": SnowSparkleShader.SPARKLE_HZ,
+		"sparkle_duty_exponent": SnowSparkleShader.SPARKLE_DUTY_EXPONENT,
+		"sparkle_brightness": SnowSparkleShader.SPARKLE_BRIGHTNESS,
+	}
+	for name in expected:
+		assert_almost_eq(
+			float(material.get_shader_parameter(name)), float(expected[name]), 0.0001,
+			"the shader's %s does not match SnowSparkleShader's own constant" % name
+		)
+
+
+func test_the_material_carries_the_colour_gate_uniforms():
+	var material := wind.make_material()
+	assert_almost_eq(
+		float(material.get_shader_parameter("sparkle_min_value")),
+		SnowSparkleShader.SPARKLE_MIN_VALUE, 0.0001
+	)
+	assert_almost_eq(
+		float(material.get_shader_parameter("sparkle_max_saturation")),
+		SnowSparkleShader.SPARKLE_MAX_SATURATION, 0.0001
+	)
+
+
+## THE isolation guarantee: sparkle was asked for on trees and ground, not
+## grass -- set_snow_coverage must reach shared_material() (trees) and must
+## NEVER reach tuft_material() (grass/scrub/blooms), which stays at its
+## fixed 0.0 default forever, structurally incapable of sparkling.
+func test_set_snow_coverage_updates_the_shared_material_but_never_the_tuft_material():
+	var shared := wind.shared_material()
+	var tuft := wind.tuft_material()
+	wind.set_snow_coverage(0.8)
+	assert_eq(shared.get_shader_parameter("snow_coverage"), 0.8)
+	assert_eq(
+		tuft.get_shader_parameter("snow_coverage"), 0.0,
+		"grass/scrub tufts must never receive snow_coverage -- sparkle is trees+ground only"
+	)
+
+
+## Mirrors set_wind_strength's own store-and-forward shape: a caller may push
+## snow_coverage before shared_material() has ever been built.
+func test_set_snow_coverage_before_material_is_built_still_applies_once_built():
+	var fresh := WindSway.new()
+	fresh.set_snow_coverage(0.5)
+	assert_eq(fresh.shared_material().get_shader_parameter("snow_coverage"), 0.5)
+	# And still never the tuft material, even freshly built after the push.
+	assert_eq(fresh.tuft_material().get_shader_parameter("snow_coverage"), 0.0)
+
+
+func test_set_snow_coverage_clamps_to_zero_one():
+	var shared := wind.shared_material()
+	wind.set_snow_coverage(5.0)
+	assert_almost_eq(float(shared.get_shader_parameter("snow_coverage")), 1.0, 0.0001)
+	wind.set_snow_coverage(-2.0)
+	assert_almost_eq(float(shared.get_shader_parameter("snow_coverage")), 0.0, 0.0001)

@@ -74,6 +74,11 @@ var _snow_coverage := 0.0
 
 func set_snow_coverage(coverage: float) -> void:
 	_snow_coverage = coverage
+	# Canopy SPARKLE (see docs/concept/snow_cover.md, "Sparkle: specular
+	# glints on lying snow") rides the exact same push: WindSway's shared
+	# tree material reads this as a live shader uniform on top of whatever
+	# the baked texture above already shows, no new call site needed.
+	_wind_sway.set_snow_coverage(coverage)
 
 
 ## Spawns a collidable tree node (as a child of `parent`) for every forested
