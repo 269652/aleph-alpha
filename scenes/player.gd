@@ -54,6 +54,7 @@ const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
+const BeeHiveMarker = preload("res://src/rendering/bee_hive_marker.gd")
 const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
@@ -2183,6 +2184,7 @@ func _perform_attack() -> void:
 
 	_chop_step()
 	_smash_step()
+	_harvest_beehive_step()
 	_harvest_grass_step()
 	_pull_wild_crop_step()
 	_butcher_step()
@@ -2353,6 +2355,22 @@ func _smash_step() -> void:
 			node.mine(pickaxe_power, luck())
 		elif node.has_method("smash"):
 			node.smash(carrying_rock)
+
+
+## Harvesting: a swing that reaches a real BeeHiveMarker breaks it down
+## for honey (see BeeHiveMarker.harvest, docs/concept/bees.md's
+## "Harvesting honey") -- multi-hit and destructive, the same family as
+## smashing a stone above, not a new input verb. No tool-power scaling
+## the way mining has (see _pickaxe_power) -- a real design choice, not
+## an oversight: nothing in the real-world grounding argues a better
+## tool should extract more honey per swing.
+func _harvest_beehive_step() -> void:
+	var hives := get_tree().get_nodes_in_group(BeeHiveMarker.GROUP_NAME)
+	var positions: Array = []
+	for hive in hives:
+		positions.append(hive.position)
+	for index in _melee_attack.targets_in_range(position, positions, ATTACK_RANGE):
+		hives[index].harvest()
 
 
 ## Mining power of the currently-equipped tool: a pickaxe mines ore, anything

@@ -1135,9 +1135,16 @@ class StubClaimingScentWorld extends StubScentWorld:
 		return claims.claimed_positions_near(position, radius, exclude_flyer_id)
 
 
+## Generic "some active nectar-feeder" fixture for tests that are not
+## conceptually about bees at all (trap-lining, flower-visit memory,
+## worked-out-neighborhood recovery) -- species = "monarch", not "bee":
+## "bee" is retired as an ambient flyer species entirely (see
+## docs/concept/bees.md/AmbientFlyerRenderer's own retirement), so it
+## can no longer occur here in real play. Any species with FOOD_NECTAR
+## in FlyerDiet works identically for what these tests actually check.
 func _pollinator_on(world) -> void:
 	marker.scent_world = world
-	marker.species = "bee"
+	marker.species = "monarch"
 	marker.home = Vector2.ZERO
 	marker.position = Vector2.ZERO
 	marker.wander_seed = 77

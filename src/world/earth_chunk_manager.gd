@@ -81,6 +81,11 @@ const ProceduralAquaticInvertebrateSprite = preload("res://src/rendering/procedu
 const AntColony = preload("res://src/world/ant_colony.gd")
 const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
+const BeeColony = preload("res://src/world/bee_colony.gd")
+const BeeHiveMarker = preload("res://src/rendering/bee_hive_marker.gd")
+const BeeForagerMarker = preload("res://src/rendering/bee_forager_marker.gd")
+const WildBeePatch = preload("res://src/world/wild_bee_patch.gd")
+const WildBeeNestMarker = preload("res://src/rendering/wild_bee_nest_marker.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
 const FootstepGait = preload("res://src/gameplay/footstep_gait.gd")
@@ -715,6 +720,19 @@ var _ant_colonies: Dictionary = {}
 ## so there is no reason for a second, independently-tuned interval for
 ## the identical kind of lookup.
 var _ant_moisture_refresh_accumulator := 0.0
+## Vector2i chunk_coord -> BeeColony (see step_bees, docs/concept/bees.md).
+## Unlike _ant_colonies, hive_cells() CAN change over a loaded chunk's own
+## life (swarming, absconding -- see BeeColony.bud_new_hive/abscond_to),
+## not fixed for the chunk's whole lifetime the way a mound's placement is.
+var _bee_colonies: Dictionary = {}
+## How often each loaded colony's own hives resample live soil/air warmth
+## (see step_bees/_refresh_bee_warmth) -- reuses WORM_REFRESH_INTERVAL's own
+## cadence, the same reasoning _ant_moisture_refresh_accumulator already has.
+var _bee_warmth_refresh_accumulator := 0.0
+## Vector2i chunk_coord -> WildBeePatch (see step_bees, docs/concept/
+## bees.md's own "Wild bee nests") -- a separate, much lighter population
+## from _bee_colonies just above.
+var _wild_bee_patches: Dictionary = {}
 ## Vector2i chunk_coord -> LeafLitterField (see step_leaf_litter,
 ## docs/concept/leaf_litter.md). Same create-at-load/erase-at-unload
 ## lifecycle as _ant_colonies just above.
@@ -791,6 +809,26 @@ var _ant_mound_markers: Dictionary = {}
 ## alive. Keyed globally (not per-chunk) since a mound's own identity
 ## (chunk_coord*CHUNK_SIZE + cell) is already a stable global tile.
 var _active_ant_foragers: Dictionary = {}
+
+## Vector2i chunk_coord -> Dictionary[Vector2i cell -> BeeHiveMarker] --
+## the visible counterpart to _bee_colonies' own hive_cells(). CELL-keyed,
+## not a flat Array the way _ant_mound_markers is: unlike a mound, a
+## specific hive's own marker can be individually torn down and replaced
+## mid-life (swarming adds one, absconding/harvest-destruction moves one),
+## so finding "the marker at THIS cell" has to be O(1), not a linear scan
+## over every marker in the chunk.
+var _bee_hive_markers: Dictionary = {}
+## Vector2i GLOBAL hive tile -> Array[BeeForagerMarker] currently out on a
+## real trip for that hive -- mirrors _active_ant_foragers exactly, minus
+## wave dispatch (see docs/concept/bees.md's own scope note on why bees
+## don't get pheromone-trail recruitment this pass).
+var _active_bee_foragers: Dictionary = {}
+## Same cell-keyed shape as _bee_hive_markers, for the identical reason:
+## a wild nest's own marker can be individually replaced when it relocates
+## (see WildBeePatch.relocate_to).
+var _wild_bee_nest_markers: Dictionary = {}
+## Mirrors _active_bee_foragers exactly, for WildBeePatch residents.
+var _active_wild_bee_foragers: Dictionary = {}
 
 ## Vector2i chunk_coord -> Array[AntForagerMarker], every crushed forager
 ## currently lying where it died (see AntForagerMarker.is_corpse) --
@@ -8530,6 +8568,318 @@ func _dispatch_forager(
 	_active_ant_foragers[global_tile] = active
 
 
+## Real per-chunk bee stepping (see docs/concept/bees.md) -- mirrors
+## step_ants' own shape: advances every loaded BeeColony/WildBeePatch,
+## checks swarming (colonies only -- see BeeColony.should_bud) and
+## absconding/relocation (both -- see BeeColony.should_abscond_at/
+## WildBeePatch.should_relocate_at, the one mechanism with no ant
+## precedent at all) per cell, and dispatches a real forager wherever
+## conditions allow.
+func step_bees(delta_seconds: float) -> void:
+	for chunk_coord in _bee_colonies:
+		var colony: BeeColony = _bee_colonies[chunk_coord]
+		colony.advance(delta_seconds)
+		var origin: Vector2i = chunk_coord * CHUNK_SIZE
+		for cell in colony.hive_cells():
+			if colony.should_abscond_at(cell):
+				_maybe_abscond_bee_colony(chunk_coord, colony, cell)
+				continue
+			if colony.should_bud(cell):
+				_maybe_bud_bee_colony(chunk_coord, colony, cell)
+			if not colony.should_forage(cell):
+				continue
+			_dispatch_bee_forager(colony, origin, cell)
+
+	for chunk_coord in _wild_bee_patches:
+		var patch: WildBeePatch = _wild_bee_patches[chunk_coord]
+		patch.advance(delta_seconds)
+		var wild_origin: Vector2i = chunk_coord * CHUNK_SIZE
+		for cell in patch.nest_cells():
+			if patch.should_relocate_at(cell):
+				_maybe_relocate_wild_bee_nest(chunk_coord, patch, cell)
+				continue
+			if not patch.should_forage(cell):
+				continue
+			_dispatch_wild_bee_forager(patch, wild_origin, cell)
+
+	_bee_warmth_refresh_accumulator += delta_seconds
+	if _bee_warmth_refresh_accumulator < WORM_REFRESH_INTERVAL:
+		return
+	_bee_warmth_refresh_accumulator = 0.0
+	_refresh_bee_warmth()
+
+
+## Swarming (see BeeColony.bud_new_hive's own doc comment: the real
+## biological mechanism a honeybee colony reproduces by). A no-op if no
+## real site qualifies this attempt (see _find_bee_hive_site) --
+## should_bud's own small per-step chance means this is simply tried
+## again on some future tick, the same "spread across many attempts"
+## reasoning FORAGE_CHANCE's own dispatch already relies on. The
+## ORIGINAL hive's own marker is untouched -- budding only ever adds a
+## new one.
+func _maybe_bud_bee_colony(chunk_coord: Vector2i, colony: BeeColony, from_cell: Vector2i) -> void:
+	var to_cell := _find_bee_hive_site(chunk_coord, colony, from_cell)
+	if to_cell == Vector2i(-1, -1):
+		return
+	colony.bud_new_hive(from_cell, to_cell)
+	var markers: Dictionary = _bee_hive_markers.get(chunk_coord, {})
+	markers[to_cell] = _spawn_bee_hive_marker(colony, chunk_coord, to_cell)
+	_bee_hive_markers[chunk_coord] = markers
+
+
+## Absconding triggered from INSIDE step_bees's own economic checks (see
+## BeeColony.should_abscond_at: population collapsed to zero, or forage
+## has genuinely dried up) -- as opposed to relocate_bee_hive_after_
+## harvest below, triggered externally by the harvest mechanic itself. A
+## no-op if nowhere real qualifies (see _find_bee_hive_site) -- the
+## colony simply tries again next tick, same as budding's identical
+## "spread across many attempts" shape.
+func _maybe_abscond_bee_colony(chunk_coord: Vector2i, colony: BeeColony, from_cell: Vector2i) -> void:
+	var to_cell := _find_bee_hive_site(chunk_coord, colony, from_cell)
+	if to_cell == Vector2i(-1, -1):
+		return
+	colony.abscond_to(from_cell, to_cell)
+	_replace_bee_hive_marker(chunk_coord, colony, from_cell, to_cell)
+
+
+## Called by BeeHiveMarker.harvest's own final hit (see that method's own
+## doc comment) -- the harvest mechanic's real hand-off back into the
+## world once a hive has been broken down to structural collapse.
+## Finds which chunk owns `colony` by identity: colonies are rare enough
+## per loaded region that a linear scan costs nothing real, and this only
+## ever runs on a genuine player-triggered harvest event, never a hot
+## per-frame path. A no-op for a colony this manager does not actually
+## know about (the same defensive "narrows, doesn't break" contract every
+## other optional-world accessor in this codebase already has) -- and,
+## separately, a no-op if no real site qualifies (see
+## _find_bee_hive_site): the colony is genuinely lost, an honest real
+## consequence of "no food anywhere nearby" (see docs/concept/bees.md),
+## not something papered over with a guaranteed-success relocation.
+func relocate_bee_hive_after_harvest(colony: BeeColony, cell: Vector2i) -> void:
+	var chunk_coord := Vector2i(-1, -1)
+	for candidate in _bee_colonies:
+		if _bee_colonies[candidate] == colony:
+			chunk_coord = candidate
+			break
+	if chunk_coord == Vector2i(-1, -1):
+		return
+	var to_cell := _find_bee_hive_site(chunk_coord, colony, cell)
+	if to_cell == Vector2i(-1, -1):
+		return
+	colony.abscond_to(cell, to_cell)
+	_replace_bee_hive_marker(chunk_coord, colony, cell, to_cell)
+
+
+## The real site-selection half of both swarming and absconding (see
+## BeeColony.is_valid_hive_site's own doc comment on the split: that
+## method only knows biome/occupancy, pure and world-blind -- the real
+## distance sort and real nearby-forage check both live here,
+## EarthChunkManager's own job). Mirrors _find_bud_site's own shape
+## exactly: every real candidate cell in the chunk, sorted NEAREST first,
+## checked for real nearby forage in that order, returning the first
+## (so nearest) that actually has some -- Vector2i(-1, -1) if nothing in
+## the whole chunk qualifies this attempt.
+func _find_bee_hive_site(chunk_coord: Vector2i, colony: BeeColony, from_cell: Vector2i) -> Vector2i:
+	var candidates: Array = []
+	for y in CHUNK_SIZE:
+		for x in CHUNK_SIZE:
+			var candidate := Vector2i(x, y)
+			if colony.is_valid_hive_site(candidate):
+				candidates.append(candidate)
+	candidates.sort_custom(
+		func(a: Vector2i, b: Vector2i) -> bool:
+			return (a - from_cell).length_squared() < (b - from_cell).length_squared()
+	)
+	for candidate in candidates:
+		var pixel := (
+			Vector2(chunk_coord * CHUNK_SIZE + candidate) + Vector2(0.5, 0.5)
+		) * float(TerrainRenderer.TILE_SIZE)
+		if _has_bee_food_near(pixel):
+			return candidate
+	return Vector2i(-1, -1)
+
+
+## The one absconding trigger a wild nest keeps (see WildBeePatch.
+## should_relocate_at's own doc comment) -- mirrors _maybe_abscond_bee_
+## colony's own shape, minus the honey/swarm halves a wild nest has
+## none of.
+func _maybe_relocate_wild_bee_nest(chunk_coord: Vector2i, patch: WildBeePatch, from_cell: Vector2i) -> void:
+	var to_cell := _find_wild_bee_nest_site(chunk_coord, patch, from_cell)
+	if to_cell == Vector2i(-1, -1):
+		return
+	patch.relocate_to(from_cell, to_cell)
+	_replace_wild_bee_nest_marker(chunk_coord, patch, from_cell, to_cell)
+
+
+## Mirrors _find_bee_hive_site exactly, against WildBeePatch's own
+## is_valid_nest_site.
+func _find_wild_bee_nest_site(chunk_coord: Vector2i, patch: WildBeePatch, from_cell: Vector2i) -> Vector2i:
+	var candidates: Array = []
+	for y in CHUNK_SIZE:
+		for x in CHUNK_SIZE:
+			var candidate := Vector2i(x, y)
+			if patch.is_valid_nest_site(candidate):
+				candidates.append(candidate)
+	candidates.sort_custom(
+		func(a: Vector2i, b: Vector2i) -> bool:
+			return (a - from_cell).length_squared() < (b - from_cell).length_squared()
+	)
+	for candidate in candidates:
+		var pixel := (
+			Vector2(chunk_coord * CHUNK_SIZE + candidate) + Vector2(0.5, 0.5)
+		) * float(TerrainRenderer.TILE_SIZE)
+		if _has_bee_food_near(pixel):
+			return candidate
+	return Vector2i(-1, -1)
+
+
+## Whether any real, in-bloom flower with real nectar sits within
+## BeeColony.SENSE_RADIUS_TILES of `pixel_position` -- the real "scout
+## radius" a bee forager would need to physically wander into range of
+## to notice anything at all (see BeeForagerMarker._sense_food_nearby's
+## own identical query, mirrored here at the SITE-SELECTION level rather
+## than a live forager's own position -- the same relationship
+## _has_food_near already has to AntForagerMarker._sense_food_nearby).
+## Shared by both honeybee-hive and wild-bee-nest site search: the real
+## forage check is identical for both real animals, only WHICH kind of
+## home is being searched for differs.
+func _has_bee_food_near(pixel_position: Vector2) -> bool:
+	var sense_radius_px := BeeColony.SENSE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
+	var sense_radius_tiles := int(ceil(BeeColony.SENSE_RADIUS_TILES))
+	var flowers := flowers_near(pixel_position, sense_radius_tiles)
+	flowers = flowers.filter(func(f): return pixel_position.distance_to(f["position"]) <= sense_radius_px)
+	flowers = flowers.filter(func(f): return float(f.get("nectar", 0.0)) > 0.0)
+	return not flowers.is_empty()
+
+
+## Shared by _load_chunk's own initial-hive loop and both swarming/
+## absconding's own single new one -- one real, visible BeeHiveMarker
+## per hive cell, mirrors _spawn_ant_mound_marker's own shape exactly.
+func _spawn_bee_hive_marker(colony: BeeColony, chunk_coord: Vector2i, hive_cell: Vector2i) -> BeeHiveMarker:
+	var marker := BeeHiveMarker.new()
+	var global_cell := Vector2i(
+		chunk_coord.x * CHUNK_SIZE + hive_cell.x, chunk_coord.y * CHUNK_SIZE + hive_cell.y
+	)
+	marker.position = (Vector2(global_cell) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+	marker.setup(self, colony, hive_cell)
+	_entities_parent.add_child(marker)
+	return marker
+
+
+## Mirrors _spawn_bee_hive_marker exactly, for WildBeeNestMarker -- no
+## `self`/world reference at all (see that marker's own doc comment: a
+## wild nest is never player-interactive, so it never needs to call
+## back into the world the way a harvested hive does).
+func _spawn_wild_bee_nest_marker(patch: WildBeePatch, chunk_coord: Vector2i, nest_cell: Vector2i) -> WildBeeNestMarker:
+	var marker := WildBeeNestMarker.new()
+	var global_cell := Vector2i(
+		chunk_coord.x * CHUNK_SIZE + nest_cell.x, chunk_coord.y * CHUNK_SIZE + nest_cell.y
+	)
+	marker.position = (Vector2(global_cell) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+	marker.setup(patch, nest_cell)
+	_entities_parent.add_child(marker)
+	return marker
+
+
+## Relocation (absconding, or a harvest hand-off): the OLD marker at
+## `from_cell` is torn down -- defensively (a harvest-triggered call has
+## already freed itself before ever calling in here, an absconding-
+## triggered one has not; checking is_queued_for_deletion covers both
+## without a separate branch for which caller this was) -- and a brand
+## new one spawned at `to_cell`.
+func _replace_bee_hive_marker(chunk_coord: Vector2i, colony: BeeColony, from_cell: Vector2i, to_cell: Vector2i) -> void:
+	var markers: Dictionary = _bee_hive_markers.get(chunk_coord, {})
+	if markers.has(from_cell):
+		var old_marker = markers[from_cell]
+		if is_instance_valid(old_marker) and not old_marker.is_queued_for_deletion():
+			old_marker.queue_free()
+		markers.erase(from_cell)
+	markers[to_cell] = _spawn_bee_hive_marker(colony, chunk_coord, to_cell)
+	_bee_hive_markers[chunk_coord] = markers
+
+
+## Mirrors _replace_bee_hive_marker exactly, for WildBeeNestMarker.
+func _replace_wild_bee_nest_marker(chunk_coord: Vector2i, patch: WildBeePatch, from_cell: Vector2i, to_cell: Vector2i) -> void:
+	var markers: Dictionary = _wild_bee_nest_markers.get(chunk_coord, {})
+	if markers.has(from_cell):
+		var old_marker = markers[from_cell]
+		if is_instance_valid(old_marker) and not old_marker.is_queued_for_deletion():
+			old_marker.queue_free()
+		markers.erase(from_cell)
+	markers[to_cell] = _spawn_wild_bee_nest_marker(patch, chunk_coord, to_cell)
+	_wild_bee_nest_markers[chunk_coord] = markers
+
+
+## Mirrors _dispatch_forager's own shape exactly, against BeeColony
+## instead of AntColony -- one bee at a time, no wave dispatch (see
+## docs/concept/bees.md's own "What's reused verbatim, what's a
+## deliberate new duplicate, and why": no pheromone-trail recruitment
+## for bees this pass), still capped at colony.active_forager_cap_at(cell)
+## CONCURRENT foragers, still scaling with the hive's own queen-driven
+## population.
+func _dispatch_bee_forager(colony: BeeColony, origin: Vector2i, cell: Vector2i) -> void:
+	if _entities_parent == null:
+		return
+	var global_tile: Vector2i = origin + cell
+	var active: Array = _active_bee_foragers.get(global_tile, [])
+	active = active.filter(func(f): return is_instance_valid(f) and not f.is_queued_for_deletion())
+	if active.size() >= colony.active_forager_cap_at(cell):
+		_active_bee_foragers[global_tile] = active
+		return
+	var hive_pixel := (Vector2(global_tile) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+	var forager := BeeForagerMarker.new()
+	forager.hive_position = hive_pixel
+	forager.position = hive_pixel
+	forager.scout = true
+	forager.setup(self, colony, cell)
+	_entities_parent.add_child(forager)
+	active.append(forager)
+	_active_bee_foragers[global_tile] = active
+
+
+## Mirrors _dispatch_bee_forager exactly, against WildBeePatch -- capped
+## at exactly ONE concurrent forager per nest: a solitary nest has one
+## resident female per real "worker," not a population-scaled cap the
+## way a hive has.
+func _dispatch_wild_bee_forager(patch: WildBeePatch, origin: Vector2i, cell: Vector2i) -> void:
+	if _entities_parent == null:
+		return
+	var global_tile: Vector2i = origin + cell
+	var active: Array = _active_wild_bee_foragers.get(global_tile, [])
+	active = active.filter(func(f): return is_instance_valid(f) and not f.is_queued_for_deletion())
+	if active.size() >= 1:
+		_active_wild_bee_foragers[global_tile] = active
+		return
+	var nest_pixel := (Vector2(global_tile) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+	var forager := BeeForagerMarker.new()
+	forager.hive_position = nest_pixel
+	forager.position = nest_pixel
+	forager.scout = true
+	forager.setup(self, patch, cell)
+	_entities_parent.add_child(forager)
+	active.append(forager)
+	_active_wild_bee_foragers[global_tile] = active
+
+
+## Winter dormancy (see BeeColony.dormancy_multiplier_at) -- mirrors
+## _refresh_ant_moisture's own warmth half exactly, reusing
+## EarthwormPatch.soil_warmth's identical real climate+season
+## computation (same soil, same real signal) -- minus the moisture half:
+## bees have no water-driven capacity bonus at all (see docs/concept/
+## bees.md's own doc comment on why).
+func _refresh_bee_warmth() -> void:
+	var season_warmth := _season_cycle.warmth_modifier(_world_age_seconds)
+	for chunk_coord in _bee_colonies:
+		var colony: BeeColony = _bee_colonies[chunk_coord]
+		var centre_tile: Vector2i = chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
+		var climate := clampf(
+			generator.temperature_at_global(centre_tile.x, centre_tile.y), 0.0, 1.0
+		)
+		var warmth := EarthwormPatch.soil_warmth(climate, season_warmth)
+		for cell in colony.hive_cells():
+			colony.record_warmth(cell, warmth)
+
+
 ## Inches every surfaced worm along, every frame, and keeps its animation
 ## current -- a worm at the surface is not a decal, it crawls slowly
 ## within its own cell (see EarthwormPatch.crawl_offset for why the CELL
@@ -10860,6 +11210,29 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		mound_markers.append(_spawn_ant_mound_marker(_ant_colonies[chunk_coord], chunk_coord, mound_cell))
 	_ant_mound_markers[chunk_coord] = mound_markers
 
+	# Honeybee hives (see docs/concept/bees.md). Placed once at chunk
+	# creation like the ant mounds just above -- but see BeeColony.
+	# bud_new_hive/abscond_to for why hive_cells() CAN change later over
+	# this loaded chunk's own life, unlike a mound's fixed placement.
+	_bee_colonies[chunk_coord] = BeeColony.new(
+		hash("%d_%d_bees" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+	)
+	var hive_markers: Dictionary = {}
+	for hive_cell in _bee_colonies[chunk_coord].hive_cells():
+		hive_markers[hive_cell] = _spawn_bee_hive_marker(_bee_colonies[chunk_coord], chunk_coord, hive_cell)
+	_bee_hive_markers[chunk_coord] = hive_markers
+
+	# Solitary wild bee nests (see docs/concept/bees.md's own "Wild bee
+	# nests") -- a separate, much lighter population from the honeybee
+	# hives just above.
+	_wild_bee_patches[chunk_coord] = WildBeePatch.new(
+		hash("%d_%d_wild_bees" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+	)
+	var nest_markers: Dictionary = {}
+	for nest_cell in _wild_bee_patches[chunk_coord].nest_cells():
+		nest_markers[nest_cell] = _spawn_wild_bee_nest_marker(_wild_bee_patches[chunk_coord], chunk_coord, nest_cell)
+	_wild_bee_nest_markers[chunk_coord] = nest_markers
+
 	# Fallen-leaf litter (see docs/concept/leaf_litter.md). Empty at
 	# creation -- unlike the ant mounds/earthworm burrows above, litter is
 	# never seeded up front; step_fruiting's own leaf-fall block populates it
@@ -11443,6 +11816,16 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for marker in _ant_mound_markers.get(chunk_coord, []):
 		marker.free()
 	_ant_mound_markers.erase(chunk_coord)
+
+	_bee_colonies.erase(chunk_coord)
+	for marker in _bee_hive_markers.get(chunk_coord, {}).values():
+		marker.free()
+	_bee_hive_markers.erase(chunk_coord)
+
+	_wild_bee_patches.erase(chunk_coord)
+	for marker in _wild_bee_nest_markers.get(chunk_coord, {}).values():
+		marker.free()
+	_wild_bee_nest_markers.erase(chunk_coord)
 
 	_leaf_litter_fields.erase(chunk_coord)
 	if _leaf_litter_mmis.has(chunk_coord):
