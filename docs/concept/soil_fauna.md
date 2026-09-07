@@ -251,7 +251,12 @@ watched the bird peck at them.
 - ✅ Crushed underfoot: weight-emergent worm mortality (`CreatureMass`,
   `EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S`/`is_crushed_by`,
   `EarthChunkManager.crush_worm_at`, wired for the player and every
-  `CreatureMarker`) — see "Crushed underfoot" below.
+  `CreatureMarker`) — see "Crushed underfoot" below. **Corrected
+  2026-09-07** (see [metabolism.md](metabolism.md)): the momentum term is
+  now each stepper's own real, live, unified `current_mass_kg()` rather
+  than a flat `CreatureMass.mass_kg_for(species)` re-lookup every frame —
+  `CreatureMass` itself is unchanged, still the real seed value; see that
+  doc for the full unification.
 - ✅ Illustrated worm sprite (crawl/emerge/retreat/die, real corpse
   persistence) — `src/rendering/illustrated_worm_sprite.gd`,
   `EarthwormPatch.is_corpse`/`corpse_age_seconds`/`is_rising`,
@@ -1743,6 +1748,16 @@ Nothing shows below the surfacing threshold, which is the same line the
 gameplay uses -- a bird can never see a worm it cannot take.
 
 ## Crushed underfoot: weight-emergent worm mortality
+
+**Corrected 2026-09-07** (see [metabolism.md](metabolism.md)'s "one real
+mass per creature" pillar): every `CreatureMass.mass_kg_for(species)`
+mentioned below as driving a stepper's own momentum was true when
+written, but a real, live creature now reads its own real, live, unified
+`current_mass_kg()` instead — seeded from this exact table, never a
+second competing number, and behavior-preserving at that seed value. The
+real physics this section specifies (momentum = mass × speed, the shared
+threshold) is completely unchanged; only WHERE the mass term comes from
+for an already-tracked creature instance is corrected.
 
 Requested directly: stepping on a worm should splatter it, and this should
 **emerge** from real weight and force rather than being a flat "anyone can
