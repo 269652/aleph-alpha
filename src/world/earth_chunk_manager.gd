@@ -7217,8 +7217,26 @@ func crush_ants_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 	if not CrushMechanic.is_crushed_by(momentum_kg_m_s):
 		return false
 	var tile := _world_tile_for_pixel(pixel_position)
+	var center_chunk := _chunk_coord_for_tile(tile)
 	var crushed_any := false
 	for global_tile in _active_ant_foragers.keys():
+		var mound_chunk_coord := _chunk_coord_for_tile(global_tile)
+		# Round-4 FPS regression (docs/concept/soil_fauna.md): a forager can
+		# only ever wander AntColony.FORAGE_RADIUS_TILES (2.0) from its own
+		# mound -- far inside a single CHUNK_SIZE=32 chunk -- so a real crush
+		# can never reach a mound outside the immediate 3x3 chunk
+		# neighbourhood around it, the exact same bound nearest_leaf_litter_
+		# near/leaf_litter_near/disperse_leaf_litter_near already use for an
+		# identical reason. Skipping every OTHER mound's key here (a cheap
+		# Vector2i comparison) is what keeps this function from paying for
+		# `markers.duplicate()` plus a full inner scan of EVERY mound in the
+		# WHOLE LOADED WORLD, unconditionally, on every single crush check,
+		# for every creature, every frame -- confirmed via PerfProbe as the
+		# round-4 regression's own dominant cost (crush.creature_loop alone
+		# measured 25-31ms per frame with the old unscoped scan).
+		var chunk_offset := mound_chunk_coord - center_chunk
+		if absi(chunk_offset.x) > 1 or absi(chunk_offset.y) > 1:
+			continue
 		var markers: Array = _active_ant_foragers[global_tile]
 		for marker in markers.duplicate():
 			# _active_ant_foragers is only pruned LAZILY, at the next
@@ -7252,7 +7270,6 @@ func crush_ants_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 				# (e.g. a marker built standalone in a test) -- the same
 				# "optional, narrows rather than breaks" contract every
 				# other duck-typed world query in this file already has.
-				var mound_chunk_coord := _chunk_coord_for_tile(global_tile)
 				var colony: AntColony = _ant_colonies.get(mound_chunk_coord)
 				if colony != null:
 					colony.forager_crushed(global_tile - mound_chunk_coord * CHUNK_SIZE)
@@ -7481,6 +7498,37 @@ func disperse_leaf_litter_near(walker_position: Vector2) -> bool:
 			):
 				return true
 	return false
+
+
+## Every ambient flyer within `radius_px` of `pixel_position`, across the
+## same 3x3 chunk neighbourhood every other "near" query in this file already
+## scans (see nearest_leaf_litter_near/leaf_litter_near's own doc comments).
+## The scoped counterpart of the FLOCK_GROUP-wide `get_tree().get_nodes_in_
+## group` walk AmbientFlyerMarker._scan_for_partners used to do (see
+## docs/concept/soil_fauna.md, round-4 FPS regression): a real courtship/
+## bird-court/whirl partner is only ever within Courtship/BirdCourtship/
+## SpiralFlight's own (small, tens-of-pixels) NOTICE_RADIUS_PX, so walking
+## every flyer in the WHOLE LOADED WORLD, for every single flyer that wants
+## a partner, every time its own PARTNER_SEARCH_INTERVAL cooldown expires,
+## was pure work that grows with total world population rather than with
+## anything actually local -- confirmed via PerfProbe as the round-4
+## regression's own single largest cost (ambient_flyer._process measured
+## 700-730ms per ~3s window against a population in the thousands).
+## Reads _loaded_ambient_flyers directly -- the same per-chunk bucket
+## EarthChunkManager itself already maintains (spawn_ambient_flyers/
+## reconcile_bird_markers), so this needs no new bookkeeping.
+func flyers_near(pixel_position: Vector2, radius_px: float) -> Array:
+	var found: Array = []
+	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var flyers: Array = _loaded_ambient_flyers.get(center_chunk + Vector2i(dx, dy), [])
+			for flyer in flyers:
+				if not is_instance_valid(flyer):
+					continue
+				if flyer.position.distance_to(pixel_position) <= radius_px:
+					found.append(flyer)
+	return found
 
 
 ## The nearest tree within `max_distance` of `pixel_position` that currently

@@ -9023,6 +9023,81 @@ budding as the immediate driver of that specific trend, though
 (only the initial seed is capped) remains a real, separate, undiscovered-
 extent gap worth a future look.
 
+**FPS regression round 4: two unscoped whole-world scans, on the user's
+own real save (2026-09-07).** Reported live again, hours after round 3:
+"it still has only 4fps after a clean reboot and restart which should
+have 30-60fps." Reproduced against a fresh `--user-data-dir` snapshot
+**copy** of the user's own actual live save (never the live directory
+itself while their game was still running — a second concurrent writer
+risks corrupting it; `--user-data-dir` is a real Godot engine flag, not
+project-specific), so the real accumulated mound populations and
+explored-chunk history carried over without any risk to their session.
+
+The live hypothesis going in — dense accumulated leaf litter (the
+screenshot showed more than any prior screenshot in the project's
+history) making `LeafLitterField` queries scale badly — was **refuted at
+the timescale that actually explains a 4fps reading**: leaf litter is
+never persisted across a save/load (rebuilt from empty at every chunk
+load), so a fresh `--solo` session starts at 0 leaves regardless of the
+screenshot, and every leaf-litter-related cost stayed under 150ms of a
+~3000ms window for the first several minutes. **Confirmed real at a
+longer timescale, though**: left running ~19 minutes pre-fix, leaf count
+climbed 0→2,361 and `step_leaf_litter`'s own cost climbed with it
+(20ms→578ms/window) — a genuine, still-open, separate cost on a
+long-played save (see `soil_fauna.md`'s own round-4 entry for the root
+shape: `LeafLitterRenderer.fill` rebuilds a chunk's entire MultiMesh
+every frame regardless of whether anything in it changed).
+
+The REAL dominant costs, found via a fresh round-4 `PerfProbe` (same
+shape as round 2/3's own, reconstructed — the original was never
+committed) and fixed:
+
+- **`AmbientFlyerMarker._scan_for_partners`** walked
+  `get_tree().get_nodes_in_group(FLOCK_GROUP)` — every flyer in the whole
+  loaded world — on every partner search. This IS round 3's own flagged
+  "ambient_flyer's own per-call cost climbing over time... not yet
+  root-caused" anomaly above, now closed. Measured pre-fix: 700-730ms
+  per ~3s window, the single largest tracked cost. Fixed with a new
+  `EarthChunkManager.flyers_near` (mirrors `leaf_litter_near`'s own 3x3-
+  chunk-neighbourhood scan), queried at `SpiralFlight.NOTICE_RADIUS_PX`
+  (test-pinned as the widest of the three interaction radii).
+- **`EarthChunkManager.crush_ants_near`** walked every key in
+  `_active_ant_foragers` — every mound anywhere in the whole loaded
+  world — for every creature's crush check, every frame, unlike every
+  sibling "near" query in the file. Measured pre-fix: `crush.
+  creature_loop` (the whole per-frame crush pass) 440-452ms per window
+  from only 14-18 frames. Fixed by skipping mounds outside the 3x3 chunk
+  neighbourhood around the crush position before paying for
+  `markers.duplicate()` plus a full inner scan.
+
+A follow-up gauge checked whether round 3's OTHER flagged gap
+(`_maybe_bud_ant_colony` having no upper bound on mound count) was
+driving the remaining cost — measured a bounded ~30 mounds / ~600-740
+active foragers on this real save, not runaway growth, so that gap is
+confirmed real but NOT round 4's driver.
+
+Both fixed with real growth-rate/complexity-bound tests (not timing):
+`test_crushing_an_ant_never_scans_a_mounds_forager_list_in_a_distant_
+chunk` / `test_flyers_near_never_reaches_a_distant_chunk_regardless_of_
+radius` each prove a distant mound/flyer is never visited regardless of
+query radius, mirroring `_CountingPhaseGenerator`'s own call-observing
+idiom elsewhere in `test_earth_chunk_manager.gd`.
+
+**Measured before/after, live, on the identical real save**: total
+tracked per-window cost dropped from ~1900ms of a ~3040ms window (~62%)
+to ~1120ms of a ~3030ms window (~37%) — at a HIGHER population on the
+after side (roughly double across every marker class), so the real
+improvement is understated, not overstated, by that raw comparison.
+Frame-processing rate roughly 2.2-2.6x (14-18 frames/window → 36-37).
+Raw CPU/wall-clock ratio stayed pegged near 100% both sides (still fully
+CPU-bound either way — the fix means more useful frames per saturated
+core-second, not that the core stops being saturated). **Not a full
+return to 30-60fps** — two real, confirmed, out-of-scope items remain:
+leaf litter's growing per-frame render cost (above), and the sheer
+bounded-but-large population scale itself (a tuning/density question,
+not a bug). See `soil_fauna.md`'s own round-4 entry for the full
+writeup.
+
 ### Flies (`concept/flies.md`)
 
 Another concept doc with real, substantial ✅ status entirely of its own

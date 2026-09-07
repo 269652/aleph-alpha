@@ -4579,6 +4579,52 @@ func test_crushing_an_ant_reaches_either_mounds_forager_in_the_same_chunk():
 	assert_false(forager_b._dying, "a step on one mound's ant must not reach the other mound's")
 
 
+## Round-4 FPS regression (docs/concept/soil_fauna.md): crush_ants_near used
+## to walk EVERY key in _active_ant_foragers -- every mound with an active
+## forager anywhere in the whole loaded world, not just near the crush
+## position -- unlike every sibling "near" query in this file (leaf litter/
+## worms/seeds/_crush_markers_near itself), all of which scope to a bounded
+## chunk neighbourhood. A forager can only ever wander FORAGE_RADIUS_TILES
+## (2.0) from its own mound, far inside a single CHUNK_SIZE=32 chunk, so a
+## real crush can never reach a mound outside the 3x3 chunk neighbourhood
+## around it -- scanning further is pure wasted, unbounded-by-world-size
+## work paid on every single crush check, every frame, for every creature.
+##
+## Real signal, no timing involved: a STALE (already-freed) entry sitting in
+## a mound many chunks away is only ever pruned by crush_ants_near if that
+## mound's own key actually gets visited (see
+## test_crushing_ants_does_not_crash_on_a_stale_already_freed_entry for the
+## same prune-on-visit mechanism, used there to prove the visit is safe --
+## used here to prove a distant mound is never visited at all). A step near
+## a real, nearby forager must still crush it -- the neighbourhood bound
+## must never shrink to less than what every existing test above already
+## relies on.
+func test_crushing_an_ant_never_scans_a_mounds_forager_list_in_a_distant_chunk():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var nearby_forager := _ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+
+	var distant_chunk_coord := chunk_coord + Vector2i(50, 50)
+	var distant_global_tile: Vector2i = (
+		distant_chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(2, 2)
+	)
+	var distant_stale := AntForagerMarker.new()
+	distant_stale.position = _pixel_for(distant_chunk_coord, Vector2i(5, 5))
+	distant_stale.free()  # actually freed already, the same worst case as the sibling test above
+	manager._active_ant_foragers[distant_global_tile] = [distant_stale]
+
+	assert_true(
+		manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"a real, nearby forager must still be reached"
+	)
+	assert_true(nearby_forager._dying)
+	assert_eq(
+		manager._active_ant_foragers[distant_global_tile].size(), 1,
+		"a mound many chunks away must never be visited/pruned by a crush check near a different mound"
+	)
+
+
 # -- aquatic vegetation: a real food source for fish (see docs/concept/
 # aquatic_foraging.md). _load_chunk, not the slow real update() (see this
 # file's own CONTRIBUTING.md note) -- Berlin sits on the Spree's own
@@ -7105,6 +7151,55 @@ func test_leaf_litter_near_reaches_into_a_neighbouring_chunk():
 	var found := manager.leaf_litter_near(Vector2(chunk_size_px - 5.0, 10.0), 20.0)
 	assert_eq(found.size(), 1)
 	assert_eq(found[0]["species"], "acorn")
+
+
+## Round-4 FPS regression (docs/concept/soil_fauna.md): the scoped
+## counterpart of the FLOCK_GROUP-wide walk AmbientFlyerMarker._scan_for_
+## partners used to do -- same 3x3-chunk-neighbourhood contract as every
+## other "near" query on this page (leaf_litter_near immediately above).
+func _flyer_at(chunk_coord: Vector2i, position: Vector2) -> AmbientFlyerMarker:
+	var flyer := AmbientFlyerMarker.new()
+	flyer.position = position
+	add_child_autofree(flyer)
+	if not manager._loaded_ambient_flyers.has(chunk_coord):
+		manager._loaded_ambient_flyers[chunk_coord] = []
+	manager._loaded_ambient_flyers[chunk_coord].append(flyer)
+	return flyer
+
+
+func test_flyers_near_finds_every_flyer_in_the_center_chunk():
+	_flyer_at(Vector2i(0, 0), Vector2(10, 10))
+	_flyer_at(Vector2i(0, 0), Vector2(15, 10))
+	var found := manager.flyers_near(Vector2(12, 10), 20.0)
+	assert_eq(found.size(), 2)
+
+
+func test_flyers_near_reaches_into_a_neighbouring_chunk():
+	var chunk_size_px := EarthChunkManager.CHUNK_SIZE * TerrainRenderer.TILE_SIZE
+	var neighbour_position := Vector2(chunk_size_px + 5.0, 10.0)
+	_flyer_at(Vector2i(1, 0), neighbour_position)
+	var found := manager.flyers_near(Vector2(chunk_size_px - 5.0, 10.0), 20.0)
+	assert_eq(found.size(), 1)
+
+
+## The real growth-rate/complexity bound this whole fix exists for: a flyer
+## many chunks away must never be reachable, no matter how large the query
+## radius is -- proving the cost is bounded by LOCAL population (the 3x3
+## chunk neighbourhood), never by total world population, the same
+## complexity-class guarantee test_crushing_an_ant_never_scans_a_mounds_
+## forager_list_in_a_distant_chunk pins for crush_ants_near.
+func test_flyers_near_never_reaches_a_distant_chunk_regardless_of_radius():
+	_flyer_at(Vector2i(0, 0), Vector2(10, 10))
+	_flyer_at(Vector2i(50, 50), Vector2(10, 10))
+	var found := manager.flyers_near(Vector2(12, 10), 999999.0)
+	assert_eq(found.size(), 1, "a flyer many chunks away must never be reachable regardless of radius")
+
+
+func test_flyers_near_excludes_a_flyer_outside_the_radius_in_the_same_chunk():
+	_flyer_at(Vector2i(0, 0), Vector2(10, 10))
+	_flyer_at(Vector2i(0, 0), Vector2(500, 500))
+	var found := manager.flyers_near(Vector2(12, 10), 20.0)
+	assert_eq(found.size(), 1)
 
 
 func test_consume_leaf_litter_at_removes_a_real_leaf_and_reports_success():
