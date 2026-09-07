@@ -286,23 +286,28 @@ ball offset for a big-toe bulge, a narrower heel) is generated directly,
 the same "procedural first" precedent `ProceduralMushroomSprite`
 already establishes, shaded with a two-tone rim+core technique so a
 print reads as pressed IN rather than a flat sticker ("... stamped into
-the snow with displacement"). One shape per SURFACE (snow/grass/
-forest — a cool shadow-blue snow print, pressed-earth-through-flattened-
-cover for grass/forest); "left" vs "right" is a render-time horizontal
-mirror of the same shape, not a second texture. Three plain
+the snow with displacement"). One shape per SURFACE (snow/grass/forest/
+underwater — see "Underwater prints" below — a cool shadow-blue snow
+print, pressed-earth-through-flattened-cover for grass/forest, a dark
+blue-shifted puddle for underwater); "left" vs "right" is a render-time
+horizontal mirror of the same shape, not a second texture. Four plain
 `MultiMeshInstance2D` per chunk (one per surface), deliberately simpler
 than `LeafLitterRenderer`: a static mark needs no per-frame vertex-shader
 motion, wind, or atlas, just Godot's own built-in per-instance
 `Transform2D`.
 
-**Surface precedence mirrors `PathScarring`'s own gate exactly**
-(`EarthChunkManager.footstep_surface_for`): `snow_depth()` is a single
-GLOBAL scalar, not per-tile, so snow lying at all means every step
-everywhere is a snow print regardless of biome; otherwise grassland/
-forest only (matching `World.PATH_SCAR_BIOMES` — the "proper pathscarring
-for grass and forest tiles" half of the same report), everything else
-(desert, mountain, tundra, rainforest, ocean) gets no footprint at all —
-this feature's own explicit scope, not an oversight.
+**Surface precedence mirrors `PathScarring`'s own gate, then layers one
+more override on top** (`EarthChunkManager.footstep_surface_for`):
+`snow_depth()` is a single GLOBAL scalar, not per-tile, so snow lying at
+all means every step everywhere is a snow print regardless of biome;
+otherwise grassland/forest only (matching `World.PATH_SCAR_BIOMES` — the
+"proper pathscarring for grass and forest tiles" half of the same
+report), everything else (desert, mountain, tundra, rainforest, ocean)
+gets no footprint at all — this feature's own explicit scope, not an
+oversight. A real river or lake crossing grassland/forest (see
+"Underwater prints" below) overrides that surface to `"underwater"`
+instead, unless snow is lying (frozen water is not open water, so snow
+still wins).
 
 `EarthChunkManager.record_footstep(pixel_position, heading)` is the real
 per-frame entry point, called once per frame alongside `tread_snow_at`
@@ -345,6 +350,48 @@ Both surfaces stay visibly subtler than snow's own near-white rim
 brighter than it. Real, test-pinned luminance-contrast margins against
 `TerrainRenderer`'s own grassland/forest ground colors, not eyeballed
 numbers (see `tests/unit/test_procedural_footprint_sprite.gd`).
+
+### Underwater prints, and drawing below the river's own current lines (2026-09-07)
+
+Asked directly: *"underwater footprints should be tinted, and below
+river contour lines."* A river or lake never changes `biome_at_global`'s
+own result (see `docs/concept/rivers.md`), so before this, a player
+wading through a river running over grassland/forest already got an
+ordinary `"grass"`/`"forest"` print stamped — nothing distinguished a dry
+footprint from one made underfoot in moving water.
+
+**The tint.** `EarthChunkManager.record_footstep` now also checks
+`is_river_at_global`/`is_lake_at_global` at the footstep tile;
+`footstep_surface_for` treats either as a pure OVERRIDE on top of
+whatever biome would otherwise give a real footprint (a true `"ocean"`
+biome tile still gets none at all — this doesn't invent a footprint
+anywhere a dry biome wouldn't already have one), unless snow is lying
+(frozen water is not open water, so snow keeps its existing top
+priority). `ProceduralFootprintSprite._TONES_BY_SURFACE["underwater"]`
+is shaped differently from every dry surface above on purpose: those all
+read LIGHTER at the rim (dry material pushed up, catching the light),
+but standing water has no equivalent edge — both core AND rim read
+darker than dry ground here (wet soil measurably loses diffuse
+reflectance once its surface pores fill with water), distinguished from
+plain dark mud by a real blue shift instead of by brightness. Real,
+test-pinned contrast/hue margins, not eyeballed numbers (see
+`tests/unit/test_procedural_footprint_sprite.gd`'s own "underwater"
+section).
+
+**The z-order.** `river_flow_shader.gd`'s own animated current-line
+streaks are literally CONTOURS (level sets) of the smooth advected flow
+field (see that file's own doc comment) — the visible "river contour
+lines" the request names. `RiverFlowFx` and `GroundDecor` (where every
+footprint MultiMesh actually lives) share `z_index = -1`, so their draw
+order was decided purely by scene-tree sibling order (see
+`docs/concept/rivers.md`'s own "same z_index, sibling order decides" note
+and `tests/unit/test_world_ground_layer_order.gd`) — and `GroundDecor`
+was ORIGINALLY a LATER sibling, so a footprint stamped in a river drew
+ON TOP of the current's own streaks, obscuring them, the same class of
+mistake `HillshadeFx`/`SnowFx` had already been fixed for against
+`RiverFlowFx`. Swapped in `scenes/world.tscn` so `GroundDecor` is now the
+EARLIER sibling: a river footprint now sits under the current's own
+visible motion, matching the request's own words exactly.
 
 ### What the CPU still does
 
@@ -637,6 +684,14 @@ for, and why both exist.
   a real, larger core-to-ground contrast drop than grassland does (the
   literal "a bit deeper" ask), both stay subtler than snow's own
   near-white rim.
+- ✅ **Underwater prints, and drawn below the river's own current lines**
+  (2026-09-07) — see "Underwater prints, and drawing below the river's
+  own current lines" above. `footstep_surface_for`'s new `underwater`
+  override (river/lake, checked via `is_river_at_global`/
+  `is_lake_at_global`) plus a new, deliberately darker-not-lighter,
+  blue-shifted `_TONES_BY_SURFACE["underwater"]` entry; `scenes/
+  world.tscn` reordered so `GroundDecor` draws below `RiverFlowFx`'s own
+  contour-line streaks instead of over them (see `concept/rivers.md`).
 - ⬜ **Far-world precision** — the no-`sin(` structural pin exists
   (`SHADER_CODE` greps clean), but there is no real-GPU readback test yet at
   far-world coordinates; add one, since that is exactly where the old river

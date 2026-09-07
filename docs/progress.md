@@ -15299,3 +15299,55 @@ corpse forage-kind, carried-corpse visuals), `test_earth_chunk_manager.gd`
 181/183 (the 2 failures are the pre-existing, unrelated whirl-pair flake
 this doc already flags elsewhere), `test_ambient_flyer_renderer.gd`
 54/54.
+
+### Underwater footprints, tinted, and drawn below the river's own current lines (`concept/snow_cover.md`, `concept/rivers.md`, 2026-09-07)
+
+Asked directly: *"underwater footprints should be tinted, and below
+river contour lines."* Before this, a river/lake never changes
+`biome_at_global`'s own result, so wading through a river running over
+grassland/forest already stamped an ordinary `"grass"`/`"forest"`
+print — nothing distinguished a footprint made in moving water from one
+made on the dry bank.
+
+✅ **The tint** — `EarthChunkManager.footstep_surface_for` gains a third,
+defaulted `underwater: bool = false` parameter: a pure override on top of
+whatever biome would otherwise give a real footprint (a true `"ocean"`
+biome tile still gets none at all, underwater or not — this doesn't
+invent a footprint anywhere a dry biome wouldn't already have one), beaten
+only by snow (frozen water is not open water). `record_footstep` now
+checks `is_river_at_global`/`is_lake_at_global` at the footstep tile and
+threads the result through. New `ProceduralFootprintSprite.
+_TONES_BY_SURFACE["underwater"]` is shaped differently from every dry
+surface on purpose: those all read LIGHTER at the rim (dry material
+pushed up, catching the light), but standing water has no such edge —
+both core AND rim read darker than dry ground here (wet soil measurably
+loses diffuse reflectance once its pores fill with water), distinguished
+from plain dark mud by a real blue shift (`core.b > core.r`, more so than
+either grass's or forest's own core) rather than by brightness. New
+`"underwater"` entry in `FootprintRenderer.SURFACES` — its own
+`MultiMeshInstance2D` per chunk, same as the other three.
+
+✅ **The z-order** — `river_flow_shader.gd`'s animated current streaks are
+literally CONTOURS (level sets) of the smooth advected flow field — the
+"river contour lines" the request names. `GroundDecor` (every footprint's
+real home) shares `z_index=-1` with `RiverFlowFx`, so draw order was
+decided purely by scene-tree sibling order (see `concept/rivers.md`'s own
+"same z_index, sibling order decides" fix, previously applied to
+`HillshadeFx`/`SnowFx`) — and `GroundDecor` was ORIGINALLY a later
+sibling, drawing footprints on top of and obscuring the current's own
+streaks, the exact same bug class. Reordered in `scenes/world.tscn` so
+`GroundDecor` is now the EARLIER sibling (RiverFlowFx itself stays last
+of the six, unchanged relative to Hillshade/Snow).
+
+12 new tests: 4 pinning `footstep_surface_for`'s new override
+(`test_earth_chunk_manager_footprints.gd`), 2 source-contract tests
+proving `record_footstep` actually checks river/lake and threads the
+result through (real river placement isn't guaranteed at the fixed test
+fixture tile, the same reasoning `test_world_crush_wiring.gd` already
+established), 5 new tone tests (`test_procedural_footprint_sprite.gd`,
+including the multimesh-per-surface/non-blank-shape/distinct-look tests
+extended to cover the new surface), 1 new z-order pin
+(`test_world_ground_layer_order.gd`). Every pre-existing 2-arg
+`footstep_surface_for`/`record_footstep` call site across the project is
+unaffected (`underwater` defaults to `false`). All green, zero
+regressions across every pre-existing footprint/ground-layer test.
