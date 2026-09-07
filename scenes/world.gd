@@ -70,6 +70,7 @@ const GithubDeviceAuth = preload("res://src/licensing/github_device_auth.gd")
 const GithubDeviceFlow = preload("res://src/licensing/github_device_flow.gd")
 const GithubTokenStore = preload("res://src/licensing/github_token_store.gd")
 const MainMenu = preload("res://scenes/main_menu.gd")
+const IntroSplash = preload("res://scenes/intro_splash.gd")
 const LoadingOverlay = preload("res://scenes/loading_overlay.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const StarterKit = preload("res://src/gameplay/starter_kit.gd")
@@ -759,10 +760,12 @@ func _ready() -> void:
 	elif _has_network_arg(args):
 		_start_client(args)
 	else:
-		# Interactive launch: show the main menu (New Game / Host / Join /
-		# class pick) and hold the world paused until the player chooses, rather
-		# than dropping straight into a default single-player game.
-		_show_main_menu()
+		# Interactive launch: play the boot logo intro first (see
+		# docs/concept/intro_splash.md), then show the main menu (New Game /
+		# Host / Join / class pick) and hold the world paused until the player
+		# chooses, rather than dropping straight into a default single-player
+		# game.
+		_play_intro_splash()
 
 
 ## Path to the menu's painted backdrop (see concept art prompt in the commit
@@ -770,6 +773,22 @@ func _ready() -> void:
 ## the plain dim ColorRect (below) is all that shows, so dropping the asset
 ## in later works with no code change.
 const MENU_BACKGROUND_PATH := "res://assets/backgrounds/main.png"
+
+
+## Plays the boot logo intro once (see IntroSplash, docs/concept/
+## intro_splash.md), then shows the main menu -- the intro doesn't know what
+## comes after it (just emits `finished`, on completion OR an early skip), so
+## this is the one place that decides. Never called for --solo/--server/join
+## launches (see _ready's own branching just above) -- those are dev/
+## diagnostic or straight-to-multiplayer paths that should stay instant, not
+## the ordinary player-facing "double-click and play" launch this belongs to.
+func _play_intro_splash() -> void:
+	var intro := IntroSplash.new()
+	_ui.add_child(intro)
+	intro.finished.connect(func():
+		intro.queue_free()
+		_show_main_menu()
+	)
 
 
 ## Builds the start-up main menu (see MainMenu). The world is paused behind it

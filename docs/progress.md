@@ -14875,3 +14875,36 @@ pre-existing tests confirmed unaffected). `karma.gd`'s own
 `WORM_OR_CATERPILLAR_CRUSH_PENALTY` doc comment and `karma_and_luck.md`'s
 event table + Status list updated to match, with the reversal dated and
 the original request quoted rather than silently rewritten.
+
+### Boot logo intro shipped (`concept/intro_splash.md`, 2026-09-07)
+
+Requested directly: a rotating pixel-art Earth with "Aleph Alpha" building
+in, "similar to some movie intros" (Universal Pictures' spinning-globe
+ident is the direct reference), as a real spritesheet asset the user
+generated from a prompt and dropped in as `assets/sprites/intro.png`.
+1983×793px, 8 columns × 4 rows = 32 frames -- AI-generated, so **not** a
+perfectly regular grid the way `worm.png` is (1983/8 and 793/4 aren't
+whole numbers); `IntroSplashSheet` measures its own row bands directly
+(`tools/probe_intro_sheet.gd`, mirroring `tools/probe_worm_sheet.gd`'s own
+"measure before pinning constants" convention) rather than assuming even
+division, and deliberately skips `SpriteSheetSlicer.normalize_frames`
+(every other illustrated sheet's own convention) since its shared-scale-
+from-widest-content behaviour would make the globe itself appear to
+change size as the wordmark's own ink extent grows across the sequence --
+see `docs/concept/intro_splash.md`'s own "The sheet" section for the full
+reasoning. Frame timing is a pure, headlessly-tested `IntroSplashSequencer`
+(32 frames @ 10fps, ~3.2s one-shot, never loops); `IntroSplash` is thin
+engine glue that plays it once and skips instantly on any key/mouse/
+gamepad press. Wired into `World._ready`'s ordinary interactive-launch
+branch only -- `--solo`/`--server`/join launches are untouched, so nothing
+about dev iteration got slower. Strict TDD throughout the two pure
+classes (confirmed red first: an undefined `IntroSplashSequencer`/
+`IntroSplashSheet` reference fails the whole test script's parse, the
+same legitimate red shape prior fixes in this doc have already hit for an
+undefined method); the thin `IntroSplash` Node's own wiring test
+(finishes after full duration, skips on any input, never fires `finished`
+twice) was written alongside its glue code rather than strictly
+before it, consistent with how this codebase already treats thin engine
+glue versus pure logic elsewhere (e.g. `LeafLitterRenderer.fill`'s own
+untested-in-isolation wrapper around its tested static functions). 18 new
+tests total (7 sequencer + 6 sheet + 5 node), all green.
