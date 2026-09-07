@@ -4167,6 +4167,25 @@ describes:
   real source pixels to write a meaningful test against, the same sequencing
   `IllustratedCharacterSprite._PARTS` already follows (stays empty until
   hair/beard art exists) — not an oversight, the established order here.
+- **Illustrated art addressing: registry + resolver scaffolded** (small,
+  2026-09-07) — 🚧 `concept/illustrated_art_addressing.md`'s one-file-per-
+  animation convention, adopted over the "Combat sheets" section's own
+  two-row `wooden_club` pilot above (which was never actually built beyond
+  an unmerged sample sheet, sitting stale for several days on
+  `claude/wooden-club-sprite-7e5fsn` — the branch's own later commits had
+  proposed this very replacement without merging either shape). Built:
+  `illustrated_art_registry.gd` (subject declarations for `wooden_club`
+  and `campfire`, the doc's own two worked examples) and
+  `illustrated_art_resolver.gd` (the fallback lattice, returning an
+  address — not yet pixels). The resolver implements an actual lattice
+  search rather than a literal walk of the doc's numbered fallback order,
+  because that list contradicts the doc's own worked example (state must
+  be preferred over animation in a tie the list gets backwards — see the
+  resolver's own doc comment). 23 tests, both worked examples covered,
+  zero regressions elsewhere (untouched code). Not built: the generic
+  pixel loader, season-clock wiring, overlay compositing, the prompt
+  tool, or either real migration (club/campfire) — see that doc's own
+  Status section for the itemized remainder.
 - **Item durability: wear and fatigue failure** (medium) — ✅ Done (basic),
   see `concept/item_durability.md` (new). Closes the half of materials.md's
   "Physical honesty over time" pillar that was `emergent_crafting.md`'s own
