@@ -8,17 +8,21 @@ const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 
 
 ## Width is always a full, un-inset cell (bleed only ever runs vertically,
-## row into row -- see ROW_TOP_BLEED_PX's own doc comment); height is
-## shorter than a full cell for any row whose own measured bleed inset is
+## row into row -- see ROW_TOP_BLEED_PX_BY_SEASON's own doc comment); height
+## is shorter than a full cell for any row whose own measured bleed inset is
 ## nonzero, since that inset is cropped off the region's own top edge on
 ## purpose. growth=0.45 lands in row 4 (int(0.45*10)=4), whose real measured
-## inset is 13px -- asserted against ROW_TOP_BLEED_PX directly rather than a
-## hardcoded number, so this test can't silently drift out of sync with the
-## table if it's ever remeasured. Seed (42) only picks the column here and is
-## otherwise unconstrained by this test.
+## inset is 13px -- asserted against ROW_TOP_BLEED_PX_BY_SEASON directly
+## rather than a hardcoded number, so this test can't silently drift out of
+## sync with the table if it's ever remeasured. Seed (42) only picks the
+## column here and is otherwise unconstrained by this test. No season is
+## passed, so this exercises atlas_region_for's own DEFAULT_SEASON fallback
+## -- rows 0-5 are identical across every season anyway (see that table's own
+## doc comment), so which season this defaults to doesn't matter here.
 func test_growth_and_seed_together_select_one_tile_inside_the_delivered_10x10_atlas():
 	var rect := IllustratedGrassPatch.atlas_region_for(42, 0.45)
-	var expected_height := 1254 / 10 - IllustratedGrassPatch.ROW_TOP_BLEED_PX[4]
+	var default_bleed_table: Array = IllustratedGrassPatch.ROW_TOP_BLEED_PX_BY_SEASON[IllustratedGrassPatch.DEFAULT_SEASON]
+	var expected_height: int = 1254 / 10 - int(default_bleed_table[4])
 	assert_between(rect.size.x, 125, 126)
 	assert_between(rect.size.y, expected_height - 1, expected_height + 1)
 	assert_gte(rect.position.x, 0)
@@ -43,13 +47,14 @@ func test_growth_and_seed_together_select_one_tile_inside_the_delivered_10x10_at
 ## bad enough to see clearly, but the bleed itself is independent of snow --
 ## reproduced over both white and green backgrounds).
 ##
-## Swept against all four real delivered season sheets: `atlas_region_for`'s
-## row-selection is one shared code path for all four, so a season whose art
-## bleeds differently would otherwise go unchecked. Checked against the SAME
-## chroma-keyed image production actually samples (IllustratedGrassPatch.
-## BACKGROUND_KEY/_TOLERANCE) -- three of the four delivered sheets ship with
-## no real alpha channel at all (see _texture_for's own doc comment) and
-## would otherwise read as one solid opaque rectangle, not "no bleed found".
+## Swept against all four real delivered season sheets, passing EACH
+## season's own name into `atlas_region_for` so its own `ROW_TOP_BLEED_PX_
+## BY_SEASON` entry is what actually gets checked, not one shared value
+## stretched across all four. Checked against the SAME chroma-keyed image
+## production actually samples (IllustratedGrassPatch.BACKGROUND_KEY/
+## _TOLERANCE) -- three of the four delivered sheets ship with no real alpha
+## channel at all (see _texture_for's own doc comment) and would otherwise
+## read as one solid opaque rectangle, not "no bleed found".
 ##
 ## Asserts on the FRACTION of each region's own top row that is mostly
 ## transparent (>= 90%), not on every individual sampled x: a real hand-
@@ -65,20 +70,30 @@ func test_growth_and_seed_together_select_one_tile_inside_the_delivered_10x10_at
 ## DIFFERENT single solid-opaque cell failing each time, before this form
 ## replaced it).
 ##
-## Rows 6-9 (the four densest rows -- full, flowering/fruiting clumps) are
-## EXCLUDED across ALL seasons, not overlooked: measured well under the 90%
-## bar on most columns in MULTIPLE seasons at different rows within 6-9
-## (autumn at rows 7-9, winter at rows 6-9), not a single season's outlier a
-## shared inset could absorb. Bleed severity climbs with row density -- the
-## least-dense of the four (row 6/7 depending on season) sits closer to the
-## bar, the fullest (row 9) falls furthest under it (roughly 30-70% clear on
-## most columns, not a one-or-two-column exception). This content genuinely
-## runs deep into the row above across most of each excluded row's width,
-## not fixable by nudging a shared per-row inset without cropping real art
-## everywhere else too. A known, flagged gap (see docs/concept/long_grass.md's
-## Status) needing its own dedicated look -- most plausibly a per-row-and-
-## season bleed table rather than one shared table, given how consistently
-## this scales with both a row's own density and varies by season.
+## Rows 6-9 (the four densest rows -- full, flowering/fruiting clumps) now
+## converge cleanly for every season except ONE (winter's own row 9, see
+## below) once each season gets its OWN measured inset
+## (`ROW_TOP_BLEED_PX_BY_SEASON`) instead of one value shared across all
+## four. The original single-shared-table investigation found rows 6-9
+## failing across MULTIPLE seasons at different rows within that range
+## (autumn at rows 7-9, winter at rows 6-9) precisely because a single number
+## had to simultaneously satisfy the least-bled AND most-bled season at
+## once -- measuring and tuning each season independently resolves every one
+## of those 35 remaining (season, row) combinations.
+##
+## winter row 9 is excluded here, not overlooked: its own art fills nearly
+## its ENTIRE cell height with a dense, frost-laden clump (confirmed with a
+## direct visual crop, not just measured), so no inset -- however large --
+## lands the region's own top edge in a genuinely transparent zone across
+## all 10 columns without cropping the row down to a sliver. The best
+## available inset (`ROW_TOP_BLEED_PX_BY_SEASON.winter[9]` = 12px) gets 8 of
+## 10 columns fully clear and the worst one to 81% -- a real, substantial
+## improvement over the OLD shared-table value's ~31% on that same column
+## (pinned directly by
+## test_winter_row_9_bleed_is_narrowed_but_not_fully_closed_by_the_per_
+## season_table below), just genuinely short of this test's own 90% bar. A
+## known, narrowed gap (see docs/concept/long_grass.md's Status), not a bug
+## in this function.
 func test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_on_any_season_sheet():
 	var checked_any := false
 	for season in IllustratedGrassPatch.SEASON_ATLAS_PATHS:
@@ -90,14 +105,11 @@ func test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_on
 		)
 		var size := image.get_size()
 		for row in range(1, IllustratedGrassPatch.ATLAS_ROWS):
-			# Rows 6-9 (the four densest rows -- full, flowering/fruiting
-			# clumps) measure well under this check's own 90% bar on most
-			# columns in MULTIPLE seasons (autumn and winter both, at
-			# different rows within 6-9) -- a structural property of how
-			# tightly these sheets pack their own densest rows together, not
-			# a single season's outlier a shared inset can absorb. See
-			# ROW_TOP_BLEED_PX's own doc comment.
-			if row >= 6:
+			# The one remaining, narrowly-scoped known gap -- see this test's
+			# own doc comment and
+			# test_winter_row_9_bleed_is_narrowed_but_not_fully_closed_by_
+			# the_per_season_table.
+			if season == "winter" and row == 9:
 				continue
 			# Midpoint of the row's own growth bucket, not its exact lower
 			# boundary -- float(row)/ATLAS_ROWS can land a hair under the
@@ -105,7 +117,7 @@ func test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_on
 			# PREVIOUS row instead under int() truncation.
 			var growth := (float(row) + 0.5) / float(IllustratedGrassPatch.ATLAS_ROWS)
 			for column in IllustratedGrassPatch.ATLAS_COLUMNS:
-				var region := IllustratedGrassPatch.atlas_region_for(column, growth, size)
+				var region := IllustratedGrassPatch.atlas_region_for(column, growth, size, season)
 				checked_any = true
 				var clear_samples := 0
 				var total_samples := 0
@@ -120,7 +132,99 @@ func test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_on
 						+ "still includes the previous row's bled-over content"
 					) % [season, row, column, region.position.y, clear_samples, total_samples]
 				)
-	assert_true(checked_any, "precondition: rows 1-9 were actually checked across all season sheets")
+	assert_true(checked_any, "precondition: rows 1-9 (except the one flagged winter/row-9 gap) were actually checked across all season sheets")
+
+
+## The one gap the per-season table cannot close (see the big test above):
+## winter's own row 9 draws a dense, frost-laden clump that fills nearly its
+## entire cell height, so no inset lands its region's own top edge in a
+## genuinely transparent zone across all 10 columns. Pins the REAL achieved
+## improvement precisely rather than leaving it undocumented: at the best
+## available inset (`ROW_TOP_BLEED_PX_BY_SEASON.winter[9]` = 12px), the worst
+## column reaches 81% clear -- short of the 90% bar the main bleed test
+## above uses, but a real, substantial improvement over the OLD single-
+## shared-table value (30px, still today's fallback for an unrecognized
+## season) at the exact same column, which only reached 31%. A regression
+## FLOOR, not just a description -- if `BACKGROUND_KEY_TOLERANCE`, the winter
+## art, or this table's own value ever regresses, this test notices.
+func test_winter_row_9_bleed_is_narrowed_but_not_fully_closed_by_the_per_season_table():
+	var raw := SpriteSheetLoader.load_image(IllustratedGrassPatch.SEASON_ATLAS_PATHS["winter"])
+	assert_not_null(raw, "precondition: the real winter sheet loads")
+	var image := SpriteSheetSlicer.chroma_keyed(
+		raw, IllustratedGrassPatch.BACKGROUND_KEY, IllustratedGrassPatch.BACKGROUND_KEY_TOLERANCE
+	)
+	var size := image.get_size()
+	var growth := 9.5 / float(IllustratedGrassPatch.ATLAS_ROWS)  # row 9's own midpoint
+
+	var worst_fraction := 1.0
+	for column in IllustratedGrassPatch.ATLAS_COLUMNS:
+		var region := IllustratedGrassPatch.atlas_region_for(column, growth, size, "winter")
+		var clear_samples := 0
+		var total_samples := 0
+		for x in range(region.position.x, region.position.x + region.size.x, 4):
+			total_samples += 1
+			if image.get_pixel(x, region.position.y).a < 0.5:
+				clear_samples += 1
+		worst_fraction = minf(worst_fraction, float(clear_samples) / float(total_samples))
+
+	assert_gt(worst_fraction, 0.75, "the per-season table's own value must clear real, substantial ground versus the old shared value's ~0.31")
+	assert_lt(worst_fraction, 0.9, "honestly documents this as still short of the bar every other (season, row) combination clears -- if this ever passes 0.9, the gap has genuinely closed and this test (and the exclusion above) should be updated to say so")
+
+
+## `ROW_TOP_BLEED_PX_BY_SEASON` exists to give each season its OWN measured
+## inset for the densest rows rather than stretching one shared value across
+## all four (see the big bleed test above) -- this proves the table is
+## actually WIRED into `atlas_region_for`'s real computation, not just
+## defined and ignored. Row 9: spring's real measured inset (12px) differs
+## from summer's (7px), so the SAME seed/growth must produce a differently-
+## cropped region depending on which season is asked for.
+func test_atlas_region_for_uses_a_per_season_bleed_table_for_the_densest_rows():
+	var growth := 9.5 / float(IllustratedGrassPatch.ATLAS_ROWS)
+	var spring_region := IllustratedGrassPatch.atlas_region_for(3, growth, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, "spring")
+	var summer_region := IllustratedGrassPatch.atlas_region_for(3, growth, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, "summer")
+	var spring_inset: int = IllustratedGrassPatch.ROW_TOP_BLEED_PX_BY_SEASON["spring"][9]
+	var summer_inset: int = IllustratedGrassPatch.ROW_TOP_BLEED_PX_BY_SEASON["summer"][9]
+	assert_ne(spring_inset, summer_inset, "precondition: the two seasons' own real measured insets actually differ")
+	assert_eq(
+		spring_region.position.y - summer_region.position.y, spring_inset - summer_inset,
+		"the two seasons' own real measured insets must each be independently honored, not one shared value"
+	)
+
+
+## Mirrors `_texture_for`'s own fallback-to-`DEFAULT_SEASON` pattern (see its
+## doc comment) -- an unrecognized season name must not crash or silently
+## read a null/zeroed table, it must behave exactly as if DEFAULT_SEASON had
+## been passed.
+func test_atlas_region_for_falls_back_to_the_default_season_for_an_unrecognized_name():
+	var growth := 9.5 / float(IllustratedGrassPatch.ATLAS_ROWS)
+	var fallback_region := IllustratedGrassPatch.atlas_region_for(3, growth, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, "not_a_real_season")
+	var default_region := IllustratedGrassPatch.atlas_region_for(3, growth, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, IllustratedGrassPatch.DEFAULT_SEASON)
+	assert_eq(fallback_region, default_region)
+
+
+## `instances_for_cards` must forward its own `season` argument all the way
+## into `atlas_region_for`, or a per-season bleed table can be as correct as
+## it likes and never actually affect what gets drawn -- today's only real
+## caller, `fill_band`, already receives a real per-band `season` for texture
+## selection (see its own doc comment), so this is the OTHER half of
+## actually wiring a season through, not the texture swap alone. Row 9's
+## spring/summer insets differ (see the atlas_region_for test above), so the
+## SAME card must pack a different atlas region depending on which season
+## `instances_for_cards` is told to place it for.
+func test_instances_for_cards_threads_season_through_to_the_per_season_bleed_table():
+	var growth := 9.5 / float(IllustratedGrassPatch.ATLAS_ROWS)
+	var card_specs: Array[Dictionary] = [{"atlas_seed": 3, "position": Vector2.ZERO, "growth": growth}]
+	var spring_instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, "spring")
+	var summer_instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, "summer")
+	assert_ne(
+		spring_instances[0].custom_data, summer_instances[0].custom_data,
+		"the packed atlas region must differ by season once each has its own real bleed inset"
+	)
+	# Default (no season arg) must still work unmodified -- every existing
+	# caller/test that never mentions season keeps behaving exactly as before.
+	var default_instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE)
+	var explicit_default_instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, IllustratedGrassPatch.DEFAULT_SEASON)
+	assert_eq(default_instances[0].custom_data, explicit_default_instances[0].custom_data)
 
 
 ## Every sheet must load, chroma-key to a real RGBA image with actual
@@ -288,6 +392,50 @@ func test_grass_opacity_is_never_reduced_by_the_players_own_proximity():
 	assert_false(code.contains("occlusion_fade"), "the alpha-fade occlusion hack must be gone")
 	assert_false(code.contains("passed_by_walker"), "the alpha-fade occlusion hack must be gone")
 	assert_false(code.contains("COLOR.a *="), "grass must never have its opacity reduced")
+
+
+## `clamp(local_x, 0.0, 1.0)` (see fragment()'s own comment trail) keeps
+## every SAMPLE POSITION safely inside the atlas -- but at extreme bend,
+## many consecutive fragments can all clamp to the SAME single edge column
+## of the card's own region, repeating whatever pixel sits there across a
+## visible stretch of the quad. Reported live: "all seasons except summer
+## produce artifacts when parting" -- measured directly (real, non-headless
+## render + a direct pixel probe, per this codebase's established
+## technique): winter's row 9/column 0 region has a real, fully-opaque
+## (alpha=1.0) pixel sitting exactly at its own right edge (x=124, the last
+## column INSIDE the region), and spring/autumn have the same at the
+## identical spot -- summer alone is clean there (its own native alpha
+## channel, not chroma-keyed). A bend strong enough to clamp there stretches
+## that ONE pixel into a visible horizontal smear, present on every season
+## whose art happens to reach that boundary and absent on the one whose
+## doesn't.
+##
+## Fixed by tracking the UN-clamped sample position (`raw_local_x`)
+## alongside the clamped one: the clamped value still picks a safe, in-
+## bounds texture coordinate (never an actual out-of-range read), but
+## whenever the true, unclamped position would have fallen outside the
+## card's own [0,1] region, that fragment is made fully transparent instead
+## of showing whatever pixel the clamp landed on.
+##
+## This is NOT a re-introduction of the SUPERSEDED occlusion-fade hack
+## above -- it is not a continuous function of distance-to-player, does not
+## scale with `walker_radius`, and fires identically for a strong AMBIENT
+## WIND gust far from any player (`bend_offset` combines wind AND push) as
+## it does for a walker's push: it only ever discards the rare fragments
+## whose own bend has carried them physically past the edge of their own
+## source art. Everywhere else, opacity is exactly the sampled texel's own
+## alpha, unmodified -- a straight `COLOR.a = 0.0` is not `COLOR.a *=`, and
+## never triggers from proximity alone, so this does not conflict with
+## test_grass_opacity_is_never_reduced_by_the_players_own_proximity above.
+func test_shader_discards_a_fragment_that_bends_past_its_own_regions_edge():
+	var code: String = IllustratedGrassPatch.SHADER_CODE
+	var fragment_body := code.substr(code.find("void fragment()"))
+	assert_string_contains(fragment_body, "raw_local_x")
+	# Must key off the UN-clamped position -- checking the already-clamped
+	# value could never be true/false, since it is forced into [0,1] first.
+	assert_string_contains(fragment_body, "raw_local_x < 0.0")
+	assert_string_contains(fragment_body, "raw_local_x > 1.0")
+	assert_string_contains(fragment_body, "COLOR.a = 0.0")
 
 
 ## The player's own real max reach above their feet/root -- HeadSlot, the
@@ -1029,3 +1177,115 @@ func test_split_cards_by_turn_only_ever_moves_cards_from_from_to_to_as_progress_
 		for seed_value in previous_to_seeds:
 			assert_true(to_seeds.has(seed_value), "a card that has turned must stay turned as progress only climbs")
 		previous_to_seeds = to_seeds
+
+
+# -- winter's own sheet is a snow overlay, not a calendar destination (see
+# docs/concept/long_grass.md's "Winter's own sheet is a snow overlay, not a
+# calendar destination") ---------------------------------------------------
+
+
+func test_base_render_season_maps_winter_to_autumn():
+	assert_eq(IllustratedGrassPatch.base_render_season("winter"), "autumn")
+
+
+func test_base_render_season_passes_every_other_season_through_unchanged():
+	for season in ["spring", "summer", "autumn"]:
+		assert_eq(IllustratedGrassPatch.base_render_season(season), season)
+
+
+func test_base_render_season_passes_an_unrecognized_name_through_unchanged():
+	# Not this function's job to validate/fall back to DEFAULT_SEASON -- it
+	# only ever special-cases the one literal string "winter"; every other
+	# caller-supplied name (including a typo or a name it has never heard
+	# of) passes straight through, exactly like today.
+	assert_eq(IllustratedGrassPatch.base_render_season("not_a_real_season"), "not_a_real_season")
+
+
+## Mirrors turn_threshold_for_seed's own tests exactly -- see that function's
+## doc comment for why a snow-overlay threshold needs its OWN hash, distinct
+## from both the seed/column hash AND turn_threshold_for_seed itself: a
+## card's calendar-turn speed and its snow-overlay speed must never
+## correlate, or a card quick to turn seasons would also always be quick to
+## frost over.
+func test_snow_overlay_threshold_for_seed_is_deterministic():
+	assert_eq(
+		IllustratedGrassPatch.snow_overlay_threshold_for_seed(42),
+		IllustratedGrassPatch.snow_overlay_threshold_for_seed(42)
+	)
+
+
+func test_snow_overlay_threshold_for_seed_is_a_usable_zero_to_one_mix_weight():
+	for atlas_seed in [0, 1, -7, 42, 100000, -100000]:
+		var threshold := IllustratedGrassPatch.snow_overlay_threshold_for_seed(atlas_seed)
+		assert_gte(threshold, 0.0)
+		assert_lt(threshold, 1.0)
+
+
+func test_snow_overlay_threshold_for_seed_spreads_across_many_seeds_not_just_a_few_buckets():
+	var thresholds := {}
+	for atlas_seed in range(200):
+		var bucket := int(IllustratedGrassPatch.snow_overlay_threshold_for_seed(atlas_seed) * 10.0)
+		thresholds[bucket] = thresholds.get(bucket, 0) + 1
+	assert_gte(thresholds.size(), 8, "should spread across most of the [0,1) range, not clump in a few buckets")
+
+
+## Independent of turn_threshold_for_seed -- a card's calendar-turn threshold
+## and its snow-overlay threshold must not be the same number, or the two
+## mechanisms would silently correlate despite being conceptually unrelated.
+func test_snow_overlay_threshold_for_seed_does_not_correlate_with_turn_threshold_for_seed():
+	var matches := 0
+	var total := 200
+	for atlas_seed in range(total):
+		var turn_bucket := int(IllustratedGrassPatch.turn_threshold_for_seed(atlas_seed) * 10.0)
+		var snow_bucket := int(IllustratedGrassPatch.snow_overlay_threshold_for_seed(atlas_seed) * 10.0)
+		if turn_bucket == snow_bucket:
+			matches += 1
+	# Two INDEPENDENT uniform [0,10) buckets agree by pure chance ~10% of the
+	# time; a hard correlation (e.g. the same hash reused) would agree 100%.
+	assert_lt(matches, total / 2, "the two thresholds must not be the same hash reused")
+
+
+func test_split_cards_by_snow_overlay_puts_every_card_in_base_at_zero_depth():
+	var card_specs: Array[Dictionary] = []
+	for atlas_seed in range(20):
+		card_specs.append({"atlas_seed": atlas_seed, "position": Vector2.ZERO, "growth": 1.0})
+	var split := IllustratedGrassPatch.split_cards_by_snow_overlay(card_specs, 0.0)
+	assert_eq(split.base.size(), 20)
+	assert_eq(split.winter.size(), 0)
+
+
+func test_split_cards_by_snow_overlay_puts_every_card_in_winter_at_full_depth():
+	var card_specs: Array[Dictionary] = []
+	for atlas_seed in range(20):
+		card_specs.append({"atlas_seed": atlas_seed, "position": Vector2.ZERO, "growth": 1.0})
+	var split := IllustratedGrassPatch.split_cards_by_snow_overlay(card_specs, 1.0)
+	assert_eq(split.base.size(), 0)
+	assert_eq(split.winter.size(), 20)
+
+
+func test_split_cards_by_snow_overlay_splits_a_real_mix_at_a_mid_depth_without_losing_any_card():
+	var card_specs: Array[Dictionary] = []
+	for atlas_seed in range(200):
+		card_specs.append({"atlas_seed": atlas_seed, "position": Vector2.ZERO, "growth": 1.0})
+	var split := IllustratedGrassPatch.split_cards_by_snow_overlay(card_specs, 0.5)
+	assert_eq(split.base.size() + split.winter.size(), 200, "no card may be dropped or duplicated by the split")
+	assert_gt(split.base.size(), 0, "precondition: a real mid-depth split must leave some cards untouched")
+	assert_gt(split.winter.size(), 0, "precondition: a real mid-depth split must overlay some cards")
+
+
+## As depth climbs, a card can only move from "base" to "winter", never back
+## -- mirrors split_cards_by_turn's own one-way sweep exactly.
+func test_split_cards_by_snow_overlay_only_ever_moves_cards_from_base_to_winter_as_depth_climbs():
+	var card_specs: Array[Dictionary] = []
+	for atlas_seed in range(100):
+		card_specs.append({"atlas_seed": atlas_seed, "position": Vector2.ZERO, "growth": 1.0})
+	var previous_winter_seeds := {}
+	for step in range(11):
+		var depth := float(step) / 10.0
+		var split := IllustratedGrassPatch.split_cards_by_snow_overlay(card_specs, depth)
+		var winter_seeds := {}
+		for card in split.winter:
+			winter_seeds[card.atlas_seed] = true
+		for seed_value in previous_winter_seeds:
+			assert_true(winter_seeds.has(seed_value), "a card the snow has already caught must stay caught as depth only climbs")
+		previous_winter_seeds = winter_seeds
