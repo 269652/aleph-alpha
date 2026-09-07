@@ -2639,7 +2639,26 @@ func _scan_for_partners(wants_courtship: bool, wants_bird_court: bool, wants_spi
 	if not is_inside_tree():
 		return found
 	var own_id := get_instance_id()
-	for other in get_tree().get_nodes_in_group(FLOCK_GROUP):
+	var candidates: Array
+	if courtship_world != null and courtship_world.has_method("flyers_near"):
+		# Round-4 FPS regression (docs/concept/soil_fauna.md): bounded to the
+		# same 3x3-chunk-neighbourhood a real EarthChunkManager already scopes
+		# every other "near" query to (see EarthChunkManager.flyers_near's own
+		# doc comment), instead of walking get_tree().get_nodes_in_group(
+		# FLOCK_GROUP) -- literally every flyer in the whole loaded world --
+		# on every single scan. SpiralFlight.NOTICE_RADIUS_PX is the widest of
+		# the three interaction radii (test-pinned in test_spiral_flight.gd:
+		# wider than Courtship.NOTICE_RADIUS_PX), so querying that far out can
+		# never miss a candidate any of the three narrower checks below would
+		# otherwise have accepted.
+		candidates = courtship_world.flyers_near(position, SpiralFlight.NOTICE_RADIUS_PX)
+	else:
+		# No courtship_world wired (e.g. a standalone marker built directly
+		# in a test, or a real flyer whose renderer hasn't set one) -- fall
+		# back to the old, unscoped group walk so behaviour away from a real
+		# EarthChunkManager is preserved exactly.
+		candidates = get_tree().get_nodes_in_group(FLOCK_GROUP)
+	for other in candidates:
 		if other == self or other.get("species") == null:
 			continue
 		if (

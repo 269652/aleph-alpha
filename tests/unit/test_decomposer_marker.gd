@@ -553,9 +553,13 @@ func test_far_from_the_player_does_not_rescan_carrion_on_every_process_call():
 # -- crushed pose, unlike worm/millipede's own real art) --------------------
 
 func test_crush_applies_the_squash_effect_to_its_sprite():
-	marker.crush()
 	var sprite := marker.get_child(0) as Sprite2D
-	assert_almost_eq(sprite.scale.y, SquashCrushEffect.VERTICAL_SQUASH, 0.001)
+	var scale_before := sprite.scale.y
+	marker.crush()
+	assert_almost_eq(
+		sprite.scale.y, scale_before * SquashCrushEffect.VERTICAL_SQUASH, 0.0001,
+		"the squash must apply RELATIVE to the decomposer's own existing scale, not overwrite it outright"
+	)
 	assert_eq(sprite.modulate, SquashCrushEffect.TINT)
 
 

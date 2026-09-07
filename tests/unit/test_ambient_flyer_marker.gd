@@ -1924,6 +1924,81 @@ func test_two_monarchs_side_by_side_actually_begin_a_dance():
 	assert_true(began, "two monarchs 20px apart must actually start a dance")
 
 
+## Round-4 FPS regression (docs/concept/soil_fauna.md): _scan_for_partners
+## used to walk get_tree().get_nodes_in_group(FLOCK_GROUP) -- literally
+## every flyer in the whole loaded world -- for every flyer that wants a
+## partner, on every expired PARTNER_SEARCH_INTERVAL, instead of a bounded
+## local query the way every other "near" lookup in this codebase already
+## works (see EarthChunkManager.flyers_near). Proven the same call-
+## observing way test_earth_chunk_manager.gd's own _CountingPhaseGenerator
+## proves an expensive call never happens: a courtship_world double whose
+## flyers_near is the ONLY thing that can supply a real candidate.
+class _CountingFlyerWorld:
+	var result: Array = []
+	var call_count := 0
+
+	func flyers_near(_pixel_position: Vector2, _radius_px: float) -> Array:
+		call_count += 1
+		return result
+
+
+## Positive half: pairing must still succeed using ONLY what flyers_near
+## hands back -- the existing per-candidate eligibility/distance checks
+## inside _scan_for_partners still apply to whatever it returns.
+func test_scan_for_partners_pairs_using_only_what_flyers_near_returns():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("monarch", Vector2(120, 100), parent)
+	var world := _CountingFlyerWorld.new()
+	# Both -- not just [b] -- the same reason a real flyers_near/FLOCK_GROUP
+	# scan naturally includes both sides: a's own scan needs to find b, AND
+	# b's own later scan needs to find a (see this function's own class-level
+	# doc comment on why finishing a pair takes BOTH sides independently
+	# scanning and finding each other, not one side wiring up the other).
+	# The `other == self` guard inside _scan_for_partners filters each one
+	# down to just the other, exactly as it does for a real, unscoped list.
+	world.result = [a, b]
+	a.courtship_world = world
+	b.courtship_world = world
+
+	var began := false
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._courting_with != 0 and b._courting_with != 0:
+			began = true
+			break
+	assert_true(began, "pairing must still succeed using only what flyers_near returns")
+	assert_gt(world.call_count, 0, "flyers_near must actually be consulted when a courtship_world offers it")
+
+
+## Negative half, the real regression signal: two real markers 20px apart
+## in the SAME scene-tree FLOCK_GROUP would pair under the old global-group
+## walk regardless of what any courtship_world says -- proving the fix
+## actually REPLACES that walk (not merely adds an unused alternative) once
+## a courtship_world offering flyers_near is wired, exactly the way a real
+## AmbientFlyerRenderer-spawned flyer always has one (see
+## AmbientFlyerRenderer.reconcile_bird_markers/spawn_ambient_flyers).
+func test_scan_for_partners_does_not_fall_back_to_the_whole_tree_group():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("monarch", Vector2(120, 100), parent)
+	var world := _CountingFlyerWorld.new()
+	world.result = []  # nobody -- even though b is right there, 20px away, in the group
+	a.courtship_world = world
+	b.courtship_world = world
+
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+	assert_eq(
+		a._courting_with, 0,
+		"must not fall back to scanning the whole tree group once a courtship_world is wired"
+	)
+
+
 ## PHASE 4: bird courtship (see BirdCourtship). The exact class of bug the
 ## comment on _scan_for_partners documents (a rule can be right and still
 ## produce ONE flyer orbiting nothing, because nothing drove two real

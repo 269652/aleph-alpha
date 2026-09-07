@@ -9023,6 +9023,81 @@ budding as the immediate driver of that specific trend, though
 (only the initial seed is capped) remains a real, separate, undiscovered-
 extent gap worth a future look.
 
+**FPS regression round 4: two unscoped whole-world scans, on the user's
+own real save (2026-09-07).** Reported live again, hours after round 3:
+"it still has only 4fps after a clean reboot and restart which should
+have 30-60fps." Reproduced against a fresh `--user-data-dir` snapshot
+**copy** of the user's own actual live save (never the live directory
+itself while their game was still running — a second concurrent writer
+risks corrupting it; `--user-data-dir` is a real Godot engine flag, not
+project-specific), so the real accumulated mound populations and
+explored-chunk history carried over without any risk to their session.
+
+The live hypothesis going in — dense accumulated leaf litter (the
+screenshot showed more than any prior screenshot in the project's
+history) making `LeafLitterField` queries scale badly — was **refuted at
+the timescale that actually explains a 4fps reading**: leaf litter is
+never persisted across a save/load (rebuilt from empty at every chunk
+load), so a fresh `--solo` session starts at 0 leaves regardless of the
+screenshot, and every leaf-litter-related cost stayed under 150ms of a
+~3000ms window for the first several minutes. **Confirmed real at a
+longer timescale, though**: left running ~19 minutes pre-fix, leaf count
+climbed 0→2,361 and `step_leaf_litter`'s own cost climbed with it
+(20ms→578ms/window) — a genuine, still-open, separate cost on a
+long-played save (see `soil_fauna.md`'s own round-4 entry for the root
+shape: `LeafLitterRenderer.fill` rebuilds a chunk's entire MultiMesh
+every frame regardless of whether anything in it changed).
+
+The REAL dominant costs, found via a fresh round-4 `PerfProbe` (same
+shape as round 2/3's own, reconstructed — the original was never
+committed) and fixed:
+
+- **`AmbientFlyerMarker._scan_for_partners`** walked
+  `get_tree().get_nodes_in_group(FLOCK_GROUP)` — every flyer in the whole
+  loaded world — on every partner search. This IS round 3's own flagged
+  "ambient_flyer's own per-call cost climbing over time... not yet
+  root-caused" anomaly above, now closed. Measured pre-fix: 700-730ms
+  per ~3s window, the single largest tracked cost. Fixed with a new
+  `EarthChunkManager.flyers_near` (mirrors `leaf_litter_near`'s own 3x3-
+  chunk-neighbourhood scan), queried at `SpiralFlight.NOTICE_RADIUS_PX`
+  (test-pinned as the widest of the three interaction radii).
+- **`EarthChunkManager.crush_ants_near`** walked every key in
+  `_active_ant_foragers` — every mound anywhere in the whole loaded
+  world — for every creature's crush check, every frame, unlike every
+  sibling "near" query in the file. Measured pre-fix: `crush.
+  creature_loop` (the whole per-frame crush pass) 440-452ms per window
+  from only 14-18 frames. Fixed by skipping mounds outside the 3x3 chunk
+  neighbourhood around the crush position before paying for
+  `markers.duplicate()` plus a full inner scan.
+
+A follow-up gauge checked whether round 3's OTHER flagged gap
+(`_maybe_bud_ant_colony` having no upper bound on mound count) was
+driving the remaining cost — measured a bounded ~30 mounds / ~600-740
+active foragers on this real save, not runaway growth, so that gap is
+confirmed real but NOT round 4's driver.
+
+Both fixed with real growth-rate/complexity-bound tests (not timing):
+`test_crushing_an_ant_never_scans_a_mounds_forager_list_in_a_distant_
+chunk` / `test_flyers_near_never_reaches_a_distant_chunk_regardless_of_
+radius` each prove a distant mound/flyer is never visited regardless of
+query radius, mirroring `_CountingPhaseGenerator`'s own call-observing
+idiom elsewhere in `test_earth_chunk_manager.gd`.
+
+**Measured before/after, live, on the identical real save**: total
+tracked per-window cost dropped from ~1900ms of a ~3040ms window (~62%)
+to ~1120ms of a ~3030ms window (~37%) — at a HIGHER population on the
+after side (roughly double across every marker class), so the real
+improvement is understated, not overstated, by that raw comparison.
+Frame-processing rate roughly 2.2-2.6x (14-18 frames/window → 36-37).
+Raw CPU/wall-clock ratio stayed pegged near 100% both sides (still fully
+CPU-bound either way — the fix means more useful frames per saturated
+core-second, not that the core stops being saturated). **Not a full
+return to 30-60fps** — two real, confirmed, out-of-scope items remain:
+leaf litter's growing per-frame render cost (above), and the sheer
+bounded-but-large population scale itself (a tuning/density question,
+not a bug). See `soil_fauna.md`'s own round-4 entry for the full
+writeup.
+
 ### Flies (`concept/flies.md`)
 
 Another concept doc with real, substantial ✅ status entirely of its own
@@ -14393,3 +14468,68 @@ by anything in this pass), but since `FoodComposition` still only models
 apple/cherry, `NutrientRelease.consume` returns `crushed = false` for a
 nut and `_apply_nutrient_bite` falls back to the old flat `_needs.feed()`,
 exactly as it already did before the Material DSL existed at all.
+
+### Mushroom hover tooltip now shows a crushed corpse's real state (`concept/mushrooms.md`, 2026-09-07)
+
+Reported directly: *"Champignons should show state in hover tooltip e.g.
+Parasol (Crushed); Parasol (Edible); Death Cap (Poisonous)"*.
+`MushroomMarker.get_display_name()` already named bitten (`"(Bitten)"`)
+and toxic/edible (`"(Toxic)"`/`"(Edible)"` — this codebase's own
+established word, kept rather than renamed to "Poisonous") specimens, but
+never checked `corpse_kind` at all: a crushed corpse fell through to the
+ordinary species-driven toxic/edible hint, the same answer a live,
+untouched specimen shows — flatly wrong for a corpse. Fixed by checking
+`corpse_kind == "crushed"` first, mirroring `_rebuild_sprite`'s own
+already-established crushed-first priority so the tooltip and the sprite
+can't silently drift apart on which state wins. `test_display_name_
+reveals_a_crushed_corpse` (new) plus 44/45 pre-existing `display_name`-
+matching tests reconfirmed green (the one unrelated failure,
+`test_companion_item_catalog_view.gd`'s Iron Sword listing, predates and
+is untouched by this change).
+
+### Leaf-fall chance now tapers off as the canopy finishes turning bare (`concept/leaf_litter.md`, 2026-09-07)
+
+Reported directly: *"when trees are rendered with their bare winter sprite
+no leaf litter should happen."* The autumn ramp (`leaf_fall_chance_for`,
+`SeasonCycle.progress_through_season` driven, `LEAF_AUTUMN_BASELINE_CHANCE`
+→ certainty at the calendar season's end) was deliberately un-gated from
+`canopy_turn_progress` when it was introduced — but `canopy_turn_progress`
+(`TreePhenology._settled_then_turn`) ramps 0→1 across exactly the SAME
+final stretch of autumn the calendar ramp is also climbing through, so at
+`season_progress` near 1.0 the canopy is ALSO near-fully blended into its
+bare winter frame (the same `canopy_turn_progress` `step_fruiting` already
+hands `tree.set_ripe_fruit` for that real sprite blend) — a tree already
+reading as visually bare kept shedding at its own peak rate right up to
+the literal calendar boundary. Fixed with a new, optional 3rd argument on
+`leaf_fall_chance_for` (`canopy_turn_progress`, default `0.0` — a true
+no-op on every pre-existing 2-arg call site/test, since that value is
+already exactly `0.0` across autumn's own settled majority): the ramp is
+now multiplied by `(1.0 - canopy_turn_progress)`, receding to exactly
+`0.0` the instant the canopy finishes emptying — continuous with
+`canopy_season` itself flipping to `"winter"` (chance `0.0`) at that same
+instant. 3 new tests (tapers to zero once fully turned, unaffected while
+still settled, recedes partway through the turn) plus all 6 pre-existing
+`leaf_fall_chance_for` tests reconfirmed green (9/9, 23 asserts).
+
+### A crushed ant now stays ant-sized instead of shrinking away (`concept/soil_fauna.md`, 2026-09-07)
+
+Reported directly: *"crushed ants should have the same size as normal
+ants just using the crush animation / last frame... atm ants seem to
+disappear."* `AntForagerMarker.crush()` reused `SquashCrushEffect`'s
+shared procedural fallback (flatten `scale.y` by 65%, tint dark red) --
+correct for `CaterpillarMarker`/`DecomposerMarker`, whose own live scale
+is nowhere near this small, but an ant's own `marker_scale` is already
+tiny (`IllustratedDecomposerSprite.ANT_WORLD_WIDTH` is 4.5px against a
+several-hundred-pixel source frame; measured directly, live `scale.y` is
+around 0.013). Squashing THAT by another 65% left `scale.y` around
+0.0046 -- a small fraction of a percent of the texture's own height,
+effectively invisible against the ground. Fixed by having `crush()` set
+`_sprite.modulate = SquashCrushEffect.TINT` directly rather than calling
+`SquashCrushEffect.apply()` -- the same tint every other crushed small
+creature shows, no flatten at all, so a crushed ant reads at exactly the
+same size as a live one. `CaterpillarMarker`/`DecomposerMarker` untouched
+(not reported, and not remotely this small to begin with).
+`test_crush_tints_the_sprite_without_shrinking_it` (replacing the old
+`test_crush_applies_the_squash_effect_to_its_sprite`, whose own assertion
+was the exact behavior this fix removes) plus all 73 `test_crush`-
+matching tests project-wide reconfirmed green (5431 asserts).
