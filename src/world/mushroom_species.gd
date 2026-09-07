@@ -125,6 +125,26 @@ static func is_toxic(species_id: String) -> bool:
 	return _TOXIC_SPECIES.has(species_id)
 
 
+## Whether `species_id` causes real, genuine psychoactive/perceptual
+## effects (docs/concept/soil_fauna.md's "Progressive, mass-scaled bites,
+## and real toxic effects") -- a SECOND, separate real classification from
+## is_toxic, not a replacement for it: every psychoactive species here is
+## also toxic, but is_toxic alone conflates two mechanistically different
+## real hazards. Fly Agaric (ibotenic acid/muscimol) and Psilocybe
+## (psilocybin) both cause real, documented motor-coordination impairment/
+## disorientation in an animal that eats them. Death Cap's real amatoxin
+## poisoning has NO perceptual component at all -- a progressive illness,
+## not a high -- so it is toxic but deliberately NOT listed here, the same
+## real distinction MushroomEffect's own DISORIENTED vs. WEAKENED effect
+## shapes are built on. False Death Cap and every real edible are neither.
+## An unlisted/unknown id defaults to false, matching this file's existing
+## fallback convention.
+const _PSYCHOACTIVE_SPECIES := {"fly_agaric": true, "psylo": true}
+
+static func is_psychoactive(species_id: String) -> bool:
+	return _PSYCHOACTIVE_SPECIES.has(species_id)
+
+
 ## The real tree species (a tree_species.gd id) this mushroom is
 ## mycorrhizal with -- it fruits only where that host actually grows. An
 ## unlisted id returns "", meaning a real saprotroph: it decomposes litter

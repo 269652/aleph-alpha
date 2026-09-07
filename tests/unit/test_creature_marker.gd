@@ -2329,8 +2329,14 @@ class ForageWorld:
 	func take_worm_at(_p: Vector2) -> bool:
 		return true
 
-	func take_mushroom_at(p: Vector2) -> String:
+	## Records every bite_stages value it was called with (see
+	## docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and
+	## real toxic effects") so a test can confirm the caller's own real,
+	## mass-scaled bite count actually reached here, not a hardcoded 1.
+	var taken_mushroom_bite_stages: Array = []
+	func take_mushroom_at(p: Vector2, bite_stages: int = 1) -> String:
 		taken_mushrooms.append(p)
+		taken_mushroom_bite_stages.append(bite_stages)
 		return mushroom_species_to_take
 
 	func solid_obstacles_near(_p: Vector2, _r: float) -> Array:
@@ -2512,6 +2518,30 @@ func test_a_boar_eating_a_mushroom_relieves_hunger_and_thirst_by_its_real_compos
 		"hunger should fall by the real composition, not reset to zero")
 	assert_almost_eq(boar._needs.thirst, clampf(0.3 - nutrients["water"], 0.0, 1.0), 0.01,
 		"a mostly-water mushroom should relieve real thirst too")
+
+
+## The report's own concrete example: "a boar takes multiple successive
+## bites which would visibly reduce the mushroom" -- see docs/concept/
+## soil_fauna.md's "Progressive, mass-scaled bites, and real toxic
+## effects", MushroomBiting.bites_per_visit_for. A 90kg boar is
+## LARGE_EATER_MASS_THRESHOLD_KG and up -- every remaining stage in one
+## visit, not a bug's flat single nibble.
+func test_a_boar_eats_a_mushroom_using_its_own_mass_scaled_bite_count():
+	var MushroomBiting := preload("res://src/gameplay/mushroom_biting.gd")
+	var CreatureMass := preload("res://src/world/creature_mass.gd")
+	var world := ForageWorld.new()
+	world.mushrooms = [{"position": Vector2(20, 0), "species": "champignon"}]
+	var boar := _hungry_grazer("boar", world)
+	for _i in 900:
+		boar._process(1.0 / 60.0)
+		if not world.taken_mushroom_bite_stages.is_empty():
+			break
+	assert_eq(
+		world.taken_mushroom_bite_stages,
+		[MushroomBiting.bites_per_visit_for(CreatureMass.mass_kg_for("boar"))],
+		"a boar's own real mass-scaled bite count should reach take_mushroom_at, not a hardcoded 1"
+	)
+	assert_eq(world.taken_mushroom_bite_stages[0], MushroomBiting.MAX_BITE_STAGES)
 
 
 ## A boar eats a toxic species exactly like any other -- MushroomSpecies.

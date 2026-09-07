@@ -27,6 +27,8 @@ const CreatureNeeds = preload("res://src/gameplay/creature_needs.gd")
 const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
 const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
 const GrazerForaging = preload("res://src/gameplay/grazer_foraging.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
 const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
@@ -2490,7 +2492,16 @@ func _take_forage_bite() -> void:
 				got = species != ""
 		GrazerForaging.FOOD_MUSHROOM:
 			if _world.has_method("take_mushroom_at"):
-				species = _world.take_mushroom_at(_forage_target)
+				# How many of MushroomBiting.MAX_BITE_STAGES this one bite
+				# EVENT advances scales with this animal's own real mass
+				# (docs/concept/soil_fauna.md's "Progressive, mass-scaled
+				# bites, and real toxic effects") -- a boar's own bigger
+				# mouthful visibly reduces a mushroom further in one visit
+				# than a bug's single nibble would.
+				var bite_stages := MushroomBiting.bites_per_visit_for(
+					CreatureMass.mass_kg_for(info.species if info != null else "")
+				)
+				species = _world.take_mushroom_at(_forage_target, bite_stages)
 				got = species != ""
 		GrazerForaging.FOOD_SEED:
 			got = _world.has_method("take_seed_at") and _world.take_seed_at(_forage_target) != ""

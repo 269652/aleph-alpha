@@ -5696,7 +5696,14 @@ func mushrooms_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 ## to mark, which is exactly what going through the marker itself (rather
 ## than the sim) gets for free: take_mushroom_bite() updates its own
 ## sprite/bitten flag immediately, no separate re-sync needed.
-func take_mushroom_at(pixel_position: Vector2) -> String:
+##
+## `bite_stages` (default 1) is how many of MushroomBiting.MAX_BITE_STAGES
+## this one bite event advances -- the caller's own real, mass-scaled bite
+## count (see docs/concept/soil_fauna.md's "Progressive, mass-scaled
+## bites, and real toxic effects", MushroomBiting.bites_per_visit_for), so
+## a boar's own bigger bite can visibly reduce a mushroom further than a
+## bug's single nibble in one visit.
+func take_mushroom_at(pixel_position: Vector2, bite_stages: int = 1) -> String:
 	var tile := _world_tile_for_pixel(pixel_position)
 	var chunk_coord := _chunk_coord_for_tile(tile)
 	var sim: WildMushroomPatch = _mushroom_sims.get(chunk_coord)
@@ -5705,7 +5712,7 @@ func take_mushroom_at(pixel_position: Vector2) -> String:
 	var cell := tile - chunk_coord * CHUNK_SIZE
 	var species := sim.species_at(cell)
 	var marker = _mushroom_markers.get(chunk_coord, {}).get(cell)
-	if marker == null or not marker.take_mushroom_bite():
+	if marker == null or not marker.take_mushroom_bite(bite_stages):
 		return ""
 	return species
 
