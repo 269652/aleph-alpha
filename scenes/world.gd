@@ -2,6 +2,8 @@ extends Node2D
 
 const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const TorchGlow = preload("res://src/rendering/torch_glow.gd")
+const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 const RenderResolution = preload("res://src/rendering/render_resolution.gd")
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 const RainOverlay = preload("res://src/rendering/rain_overlay.gd")
@@ -331,6 +333,14 @@ var _ground_tint := GroundTint.new()
 @onready var _players: Node2D = $Entities
 @onready var _player_spawner: MultiplayerSpawner = $PlayerSpawner
 @onready var _day_night: CanvasModulate = $DayNightTint
+
+## The torch's own additive glow -- see docs/concept/lighting.md. Built
+## lazily on first real use (_update_torch_glow), not pre-placed in the
+## scene file, the same "dynamically-created rendering node, not hand-
+## authored in the .tscn" convention IllustratedGrassPatch's own
+## MultiMeshInstance2D bands already use.
+var _torch_glow := TorchGlow.new()
+var _torch_glow_mesh: MeshInstance2D
 @onready var _ui: CanvasLayer = $UI
 @onready var _debug_label: Label = $UI/DebugLabel
 @onready var _minimap: TextureRect = $UI/Minimap
@@ -5053,6 +5063,7 @@ func _client_process(delta: float) -> void:
 	var local_minute := int((local_hour - float(local_hour_whole)) * 60.0)
 	var sunlight := _solar_position.sunlight_intensity(elevation)
 	_day_night.color = day_night_tint_for(sunlight)
+	_update_torch_glow(local_player)
 	# The river strokes lift toward moonlight from the SAME sunlight -- the
 	# CanvasModulate above multiplies every canvas pixel, and without the
 	# lift the current marks fall below visibility exactly when the world
@@ -5260,6 +5271,31 @@ func _client_process(delta: float) -> void:
 			local_player.current_speed_multiplier * 100,
 		]
 	)
+
+
+## Pushes the torch glow's own position/visibility every frame -- see
+## docs/concept/lighting.md. An ADDITIVE effect layered after the day/night
+## CanvasModulate tint, not gated on time of day (that doc's own "Deliberately
+## not gated on time of day" reasoning: an additive glow tuned for night
+## visibility is nearly invisible added on top of an already-bright daytime
+## scene, so it reads as useful exactly when it needs to, for free). Builds
+## its own MeshInstance2D lazily on first real use rather than a node
+## pre-placed in world.tscn, the same convention IllustratedGrassPatch's own
+## dynamically-created MultiMeshInstance2D bands already use.
+func _update_torch_glow(local_player: Player) -> void:
+	if _torch_glow_mesh == null:
+		var radius_px: float = TorchGlow.GLOW_RADIUS_METERS * GroundSlide.PX_PER_METER
+		var quad := QuadMesh.new()
+		quad.size = Vector2(radius_px, radius_px) * 2.0
+		_torch_glow_mesh = MeshInstance2D.new()
+		_torch_glow_mesh.mesh = quad
+		_torch_glow_mesh.material = _torch_glow.material()
+		add_child(_torch_glow_mesh)
+	var equipped := local_player.equipped_item
+	var lit := equipped != null and TorchGlow.is_lit_item_id(equipped.id)
+	_torch_glow_mesh.visible = lit
+	if lit:
+		_torch_glow_mesh.global_position = local_player.global_position
 
 
 ## Searches an expanding ring around a candidate spawn tile for dry land, in
