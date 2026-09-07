@@ -5227,6 +5227,51 @@ func _mature_tree_positions() -> Array:
 	return _tree_maturity.mature_positions(original_positions, saplings, _world_age_seconds)
 
 
+## Narrows `positions` (candidate seed sources for TreeSpread.propose_
+## saplings, i.e. step_tree_spread's own dominant reproduction path -- see
+## docs/concept/flora.md#where-a-forest-comes-from) to ones actually
+## eligible to spread this cycle.
+##
+## TreeMaturity.mature_positions/TreeSpread.propose_saplings carry bare
+## Vector2 positions with no species or pollination awareness at all, by
+## design (see tree_maturity.gd's own doc comment) -- gating happens HERE,
+## a filter step ahead of both, rather than changing either pure, already-
+## tested signature. An insect-pollinated tree (TreeSpecies.
+## needs_pollinators_for) only counts as a seed source if it was actually
+## visited at least once this bearing cycle -- an unvisited one set no real
+## fruit (see FruitingModel.pollination_factor's own hard gate), so it has
+## nothing real to spread from. Every wind-pollinated species passes
+## through untouched. A position with no resolvable tree node in
+## `_loaded_trees` fails OPEN (spreads) rather than being silently dropped
+## for a data gap this filter has no way to judge.
+##
+## Does not change what a NEW sapling becomes: a spread tree's own species
+## is still derived purely from ITS OWN landing position (see
+## TreeMaturity's own doc comment), never inherited from whichever parent
+## seeded it -- this only decides which existing trees are allowed to seed
+## at all.
+func _pollination_eligible_tree_positions(positions: Array) -> Array:
+	var tree_at := {}
+	for trees in _loaded_trees.values():
+		for tree in trees:
+			if is_instance_valid(tree):
+				tree_at[tree.position] = tree
+
+	var eligible: Array = []
+	for position in positions:
+		var tree = tree_at.get(position)
+		if tree == null:
+			eligible.append(position)
+			continue
+		var species_id := TreeSpecies.species_for_bias(tree.species_bias)
+		if not TreeSpecies.needs_pollinators_for(species_id):
+			eligible.append(position)
+			continue
+		if tree.pollination_visits_in_cycle(FruitingModel.BEARING_CYCLE_SECONDS, _world_age_seconds) > 0.0:
+			eligible.append(position)
+	return eligible
+
+
 ## Advances the world clock.
 ##
 ## Separated from step_tree_spread, which used to own it. The two have quite
@@ -5261,7 +5306,7 @@ func step_tree_spread(delta_seconds: float) -> void:
 	if _spread_accumulator >= SPREAD_INTERVAL:
 		_spread_accumulator = fmod(_spread_accumulator, SPREAD_INTERVAL)
 
-	var mature_positions := _mature_tree_positions()
+	var mature_positions := _pollination_eligible_tree_positions(_mature_tree_positions())
 	var all_positions := _loaded_tree_positions()
 	var saplings := _tree_spread.propose_saplings(
 		mature_positions, all_positions, _spread_tick, SPREAD_ATTEMPTS_PER_TICK

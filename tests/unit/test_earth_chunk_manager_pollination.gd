@@ -56,12 +56,27 @@ func _position_for_species(species_id: String) -> Vector2:
 ## the real record_pollination_visit/pollination_visits_in_cycle methods,
 ## unlike test_earth_chunk_manager.gd's own bare-Node2D harvest_peak_fruit_
 ## near fixtures, which predate this feature and never touch pollination.
+##
+## Sets the node's own species_bias from the SAME position-derived genome
+## _position_for_species already used to choose this position -- a fresh
+## ChoppableTree defaults species_bias to 0.5 (walnut), and functions that
+## read the node's species directly (blossoms_near,
+## _pollination_eligible_tree_positions) would otherwise silently disagree
+## with the species this position was actually chosen for.
+##
+## APPENDS to Vector2i(0, 0)'s own bucket rather than replacing it, so
+## several calls in the same test (see the mixed-list tests below) each add
+## a real, independently-findable tree instead of the later call silently
+## overwriting the earlier one.
 func _tree_at(position: Vector2) -> ChoppableTree:
 	var tree := ChoppableTree.new()
 	tree.position = position
+	tree.species_bias = ForageScheduler.new().genome_for(position).species_bias
 	tree.bind_canopy(Sprite2D.new())
 	entities_parent.add_child(tree)
-	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+	var bucket: Array = manager._loaded_trees.get(Vector2i(0, 0), [])
+	bucket.append(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = bucket
 	return tree
 
 
@@ -135,13 +150,7 @@ func test_a_wind_pollinated_tree_can_be_harvested_with_zero_pollinator_visits():
 
 func test_a_blossoming_tree_carries_its_real_species_scent_strength():
 	var position := _position_for_species("apple")
-	var tree := _tree_at(position)
-	# blossoms_near reads the NODE's own species_bias directly (unlike
-	# harvest_peak_fruit_near/step_fruiting, which derive it from the
-	# position's genome via _forage_scheduler.genome_for) -- a fresh
-	# ChoppableTree defaults to 0.5 (walnut), so it has to be set explicitly
-	# to match the position this test already chose for "apple".
-	tree.species_bias = ForageScheduler.new().genome_for(position).species_bias
+	_tree_at(position)
 	manager.set_world_age_seconds(0.1 * SeasonCycle.SECONDS_PER_YEAR)  # spring
 	assert_eq(manager.current_season(), "spring", "precondition: blossoms_near is spring-only")
 
@@ -150,3 +159,58 @@ func test_a_blossoming_tree_carries_its_real_species_scent_strength():
 	assert_almost_eq(
 		float(blossoms[0]["scent_strength"]), TreeSpecies.blossom_scent_for("apple"), 0.001
 	)
+
+
+# -- _pollination_eligible_tree_positions gates TreeSpread's own dominant ----
+# -- reproduction path (see docs/concept/flora.md#where-a-forest-comes-from) -
+#
+# TreeSpread.propose_saplings/TreeMaturity.mature_positions carry no species
+# or pollination awareness at all -- bare Vector2 positions, by design (see
+# tree_maturity.gd's own doc comment) -- so step_tree_spread filters the
+# candidate seed-source list through this before ever calling
+# propose_saplings, rather than changing either of those two pure, already-
+# tested signatures.
+
+func test_an_unpollinated_insect_pollinated_tree_is_not_a_seed_source():
+	var position := _position_for_species("apple")
+	_tree_at(position)  # never visited
+
+	var eligible := manager._pollination_eligible_tree_positions([position])
+	assert_eq(eligible, [], "an unvisited apple should not seed new trees")
+
+
+func test_a_pollinated_insect_pollinated_tree_is_still_a_seed_source():
+	var position := _position_for_species("apple")
+	var tree := _tree_at(position)
+	tree.record_pollination_visit(FruitingModel.BEARING_CYCLE_SECONDS, 0.0, 1.0)  # any real visit at all
+
+	var eligible := manager._pollination_eligible_tree_positions([position])
+	assert_eq(eligible, [position])
+
+
+func test_a_wind_pollinated_tree_is_a_seed_source_with_zero_visits():
+	var position := _position_for_species("walnut")
+	_tree_at(position)  # never visited, and never needs to be
+
+	var eligible := manager._pollination_eligible_tree_positions([position])
+	assert_eq(eligible, [position], "a wind-pollinated tree needs no insect to spread")
+
+
+## A position with no resolvable tree node fails OPEN (spreads) rather than
+## being silently dropped for a data gap this filter has no way to judge --
+## see this function's own doc comment.
+func test_a_position_with_no_loaded_tree_fails_open():
+	var eligible := manager._pollination_eligible_tree_positions([Vector2(12345, 67890)])
+	assert_eq(eligible, [Vector2(12345, 67890)])
+
+
+## A mixed list only drops the specific ineligible position, keeping every
+## other candidate (of either kind) intact -- not an all-or-nothing gate.
+func test_a_mixed_list_only_drops_the_ineligible_position():
+	var unpollinated_apple := _position_for_species("apple")
+	_tree_at(unpollinated_apple)
+	var walnut := _position_for_species("walnut")
+	_tree_at(walnut)
+
+	var eligible := manager._pollination_eligible_tree_positions([unpollinated_apple, walnut])
+	assert_eq(eligible, [walnut])
