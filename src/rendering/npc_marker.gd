@@ -94,7 +94,17 @@ func setup_economy(market) -> void:
 	economy = NpcEconomy.new(identity.seed_value, identity.occupation, market)
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(delta: float) -> void:
+	PerfProbe.begin("npc._process")
+	PerfProbe.count_instance("npc (live)")
+	_process_impl(delta)
+	PerfProbe.end("npc._process")
+
+
+func _process_impl(delta: float) -> void:
 	_elapsed_time += delta
 	if schedule.is_empty():
 		schedule = _planner.plan_day(identity, _day_index)

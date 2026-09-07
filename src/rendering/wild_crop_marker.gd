@@ -132,7 +132,17 @@ func _ready() -> void:
 	_apply_season_tint()
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(delta: float) -> void:
+	PerfProbe.begin("wild_crop._process")
+	PerfProbe.count_instance("wild_crop (live)")
+	_process_impl(delta)
+	PerfProbe.end("wild_crop._process")
+
+
+func _process_impl(delta: float) -> void:
 	if not _pulling:
 		return
 	_pull_elapsed += delta

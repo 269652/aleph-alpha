@@ -4194,7 +4194,23 @@ func _compute_dry_land_spawn_tile() -> Vector2i:
 const MAX_GROUND_ITEMS := 80
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(delta: float) -> void:
+	PerfProbe.set_gauge("frame.fps", int(Engine.get_frames_per_second()))
+	PerfProbe.set_gauge("frame.time_process_ms", int(Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0))
+	PerfProbe.set_gauge("frame.time_physics_ms", int(Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0))
+	PerfProbe.set_gauge("frame.node_count", int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)))
+	PerfProbe.set_gauge("frame.render_objects", int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)))
+	PerfProbe.count_instance("frames")
+	PerfProbe.maybe_report()
+	PerfProbe.begin("world._process")
+	_process_impl(delta)
+	PerfProbe.end("world._process")
+
+
+func _process_impl(delta: float) -> void:
 	if not _world_ready:
 		return
 	# Ages every recorded water disturbance (fish/player/animal ripples) so
@@ -4248,7 +4264,9 @@ func _process(delta: float) -> void:
 	if _is_dedicated_server:
 		_server_process()
 	else:
+		PerfProbe.begin("world._client_process")
 		_client_process(delta)
+		PerfProbe.end("world._client_process")
 
 
 ## How often worn/recovered path tiles are diffed against the rendered
@@ -5016,6 +5034,7 @@ func _client_process(delta: float) -> void:
 	# the two loops below did the crushing. A crushed millipede, ant or bug
 	# charges the same constant -- its name predates all three, but the
 	# event it represents is identical (see karma.gd's own doc comment).
+	PerfProbe.begin("crush.player")
 	if _chunk_manager.crush_worm_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	if _chunk_manager.crush_caterpillars_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
@@ -5036,7 +5055,10 @@ func _client_process(delta: float) -> void:
 	if _chunk_manager.crush_mushroom_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	_chunk_manager.crush_walnut_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
+	PerfProbe.end("crush.player")
+	PerfProbe.begin("crush.creature_loop")
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		PerfProbe.count_instance("crush.creature_loop.creatures")
 		var marker := creature as CreatureMarker
 		var species: String = marker.info.species if marker.info != null else ""
 		var momentum := CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
@@ -5053,6 +5075,7 @@ func _client_process(delta: float) -> void:
 		if _chunk_manager.crush_mushroom_at(marker.position, momentum):
 			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 		_chunk_manager.crush_walnut_near(marker.position, momentum)
+	PerfProbe.end("crush.creature_loop")
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).

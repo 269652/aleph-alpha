@@ -838,7 +838,17 @@ func _nearest_player_position():
 var _cached_player: Node = null
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(frame_delta: float) -> void:
+	PerfProbe.begin("ambient_flyer._process")
+	PerfProbe.count_instance("ambient_flyer (live)")
+	_process_impl(frame_delta)
+	PerfProbe.end("ambient_flyer._process")
+
+
+func _process_impl(frame_delta: float) -> void:
 	# Off-screen flyers update in fewer, larger steps (see SimulationLod).
 	# There are hundreds of these -- 266 butterflies were counted in one
 	# meadow -- and almost none of them are on screen.

@@ -711,7 +711,17 @@ func _nearest_player_position():
 var _cached_player: Node = null
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(frame_delta: float) -> void:
+	PerfProbe.begin("creature._process")
+	PerfProbe.count_instance("creature (live)")
+	_process_impl(frame_delta)
+	PerfProbe.end("creature._process")
+
+
+func _process_impl(frame_delta: float) -> void:
 	# Animals far from the player advance in fewer, larger steps (see
 	# SimulationLod) -- same time passes, fewer updates to pay for.
 	var delta := _lod_step(frame_delta)
