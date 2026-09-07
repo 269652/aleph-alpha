@@ -184,3 +184,59 @@ static func allows_biome(species_id: String, biome: String) -> bool:
 	return biomes.has(biome)
 
 
+## Real per-species timing WITHIN autumn (see docs/concept/mushrooms.md
+## "Fruiting times, aligned to real species" -- asked directly: "mushrooms
+## should fruit at their respective times... research fruiting times for
+## each mushroom and align them with ingame autumn"). [start, end) is a
+## fraction through SeasonCycle.progress_through_season while season ==
+## "autumn" -- read by MushroomFlush.species_multiplier, which
+## WildMushroomPatch.advance applies. A real month range doesn't map onto
+## one compressed in-game quarter directly; this instead ranks each
+## species' REAL relative position against the other seven (does it start
+## before others? does it linger after others taper off?) and spaces the
+## eight windows accordingly, all sourced from real Northern-Hemisphere-
+## temperate fruiting data:
+const _FRUITING_WINDOW_BY_SPECIES := {
+	# Real season starts as early as June/July -- before every other
+	# species here even begins -- and is "typically over by end of
+	# September" in Britain. The roster's earliest-starting AND earliest-
+	# finishing species.
+	"chanterelle": Vector2(0.0, 0.55),
+	# Real "late summer through fall" -- starts as early as chanterelle,
+	# but a real fruiting persists more evenly across the whole season
+	# rather than tapering off early.
+	"champignon": Vector2(0.0, 0.7),
+	# Real "July to October" (UK) -- early-starting, wrapped up by
+	# early-to-mid autumn.
+	"parasol": Vector2(0.0, 0.6),
+	# Real peak specifically August-September -- starts fractionally
+	# later than the three above (an early-AUTUMN peak, not a late-summer
+	# one) but still tapers off by two-thirds through the season.
+	"false_death_cap": Vector2(0.05, 0.65),
+	# Real August-November, peak September-October -- the roster's most
+	# evenly MID-season species, spanning from well after the earliest
+	# starters to well before the latest finishers.
+	"fly_agaric": Vector2(0.15, 0.85),
+	# Real July-November, its own "normal fruiting period" cited as late
+	# August to early November -- genuinely the roster's widest, most
+	# weakly-seasonal real window. Left effectively unrestricted
+	# (matching _DEFAULT_FRUITING_WINDOW below) rather than an invented
+	# narrower one -- the real research itself doesn't support one.
+	"death_cap": Vector2(0.0, 1.0),
+	# Real "begins late summer, peaks September-October, extends into
+	# November-December" -- a real late-loaded species.
+	"psylo": Vector2(0.35, 1.0),
+	# Real peak specifically October, with a real tail into what would be
+	# winter in a finer calendar (documented as late as January/February
+	# in mild Iberian years) -- the roster's latest-peaking species.
+	"black_trumpet": Vector2(0.45, 1.0),
+}
+## An unlisted id gets no additional restriction beyond the outer season
+## gate (MushroomFlush.SEASON_MULTIPLIER) -- matching death_cap's own real
+## breadth, the safest default for a species this research didn't cover.
+const _DEFAULT_FRUITING_WINDOW := Vector2(0.0, 1.0)
+
+static func fruiting_window_for(species_id: String) -> Vector2:
+	return _FRUITING_WINDOW_BY_SPECIES.get(species_id, _DEFAULT_FRUITING_WINDOW)
+
+

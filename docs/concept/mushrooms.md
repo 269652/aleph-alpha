@@ -173,12 +173,61 @@ string — full in autumn, a small named trickle in spring/summer, exactly
 zero in winter (the inverse emphasis of `EarthwormPatch`'s own cold-gate,
 which suppresses winter specifically rather than favoring one season; the
 discrete season-string gate itself matches [leaf_litter.md](leaf_litter.md)'s
-autumn leaf-fall trigger). `WildMushroomPatch.advance(delta,
-flush_drive)` rolls each non-fruiting cell against it; a successful roll
-starts fruiting immediately (no growth animation to run first). A fruiting
-cell reverts to available-to-reroll after a real, tested "spent" duration
-(a fruiting body doesn't last forever either), mirroring
-`EarthwormPatch`'s post-predation `recovery` countdown in shape, not value.
+autumn leaf-fall trigger). `WildMushroomPatch.advance(delta, flush_drive,
+season, progress_through_season)` rolls each non-fruiting cell against
+`flush_drive`, additionally scaled per-cell by its own species' real
+fruiting window while `season` is `"autumn"` (see "Fruiting times,
+aligned to real species" below) -- a successful roll starts fruiting
+immediately (no growth animation to run first). A fruiting cell reverts
+to available-to-reroll after a real, tested "spent" duration (a fruiting
+body doesn't last forever either), mirroring `EarthwormPatch`'s
+post-predation `recovery` countdown in shape, not value.
+
+### Fruiting times, aligned to real species
+
+Asked directly: *"mushrooms should fruit at their respective times ...
+research fruiting times for each mushroom and align them with ingame
+autumn."* Before this, all eight species shared one blanket autumn curve
+(`MushroomFlush.SEASON_MULTIPLIER`) with no internal timing at all --
+every species was equally likely on autumn's first day as its last, which
+is not how real fungal fruiting works: real species have their own real
+peak windows, some early, some late, some spanning nearly the whole
+season.
+
+`MushroomSpecies.fruiting_window_for(species_id) -> Vector2` names each
+species' own `[start, end)` as a fraction through `SeasonCycle.
+progress_through_season` while season is autumn (0.0 is autumn's first
+instant, 1.0 its last) -- see that constant's own doc comment in
+`mushroom_species.gd` for the real-world month-range source behind each
+one. A real month range doesn't map onto one compressed in-game quarter
+directly, so this ranks each species' REAL relative position against the
+other seven (does it start before others? does it linger after others
+taper off?) rather than inventing a literal date conversion:
+
+| species | real window (approx.) | in-game window |
+|---|---|---|
+| `chanterelle` | July–Sept (Britain), earliest to start and finish | `[0.0, 0.55)` |
+| `champignon` | late summer through fall, evenly | `[0.0, 0.7)` |
+| `parasol` | July–October (UK) | `[0.0, 0.6)` |
+| `false_death_cap` | peak August–September | `[0.05, 0.65)` |
+| `fly_agaric` | August–November, peak Sept–Oct | `[0.15, 0.85)` |
+| `death_cap` | July–November, "normal" late Aug–early Nov | `[0.0, 1.0)` (widest, least seasonal) |
+| `psylo` | begins late summer, peaks Sept–Oct, extends into Nov–Dec | `[0.35, 1.0)` |
+| `black_trumpet` | peak October, real tail into what would be winter (Iberia: Jan/Feb in mild years) | `[0.45, 1.0)` (latest-peaking) |
+
+`MushroomFlush.species_multiplier(species_id, progress_through_season) ->
+float` reads that window: `1.0` inside it, `WINDOW_SHOULDER_MULTIPLIER`
+(0.3) outside it -- a real but reduced shoulder-season chance, not a hard
+cutoff to zero, the same "named trickle, not zero" idiom
+`SEASON_MULTIPLIER`'s own spring/summer trickle already uses. Applied
+only while `season == "autumn"` -- outside autumn every species still
+shares the one small blanket trickle unchanged.
+
+`season`/`progress_through_season` both default (`"autumn"`, `0.5`) so
+every pre-existing 2-arg caller keeps behaving exactly as it did before
+this feature: `0.5` sits inside every species' own window by
+construction, so the default reads as "assume mid-autumn" rather than
+silently suppressing anyone.
 
 ### What the player (and everyone else) sees (`MushroomMarker`)
 
@@ -454,9 +503,12 @@ and any debuff/toxicity mechanic for non-player creatures generally.
 - ✅ `MushroomSpecies` (`src/world/mushroom_species.gd`) — IDS (8 species,
   including Death Cap/False Death Cap added once real art surfaced for
   them), display names, cap colours, `is_toxic`, `host_tree_for`/
-  `is_saprotroph`.
+  `is_saprotroph`, `fruiting_window_for` (see "Fruiting times, aligned to
+  real species" above).
 - ✅ `MushroomFlush` (`src/world/mushroom_flush.gd`) — `flush_drive(moisture,
-  season)`, autumn-weighted, zero in winter.
+  season)`, autumn-weighted, zero in winter; `species_multiplier(species_id,
+  progress_through_season)` layers each species' own real timing on top
+  (see "Fruiting times, aligned to real species" above).
 - ✅ `MushroomToxin` (`src/gameplay/mushroom_toxin.gd`) — per-species
   `severity_for`, `damage_per_second(stacks, species_id)`, wired all the
   way to a real eat action (see below). Death Cap rated well clear of
@@ -479,6 +531,10 @@ and any debuff/toxicity mechanic for non-player creatures generally.
   clock as ordinary spent sites -- see "Crushed underfoot"). `bite()` is
   a separate, orthogonal `_bitten` dict -- it does NOT end the fruiting
   instance, so it is never a corpse cause (see "Bitten by a decomposer").
+  `advance` additionally takes `season`/`progress_through_season` (both
+  defaulted so every pre-existing caller is unaffected) to apply each
+  site's own species' real fruiting window (see "Fruiting times, aligned
+  to real species" above).
 - ✅ Item catalog entries for all 8 species (`item_catalog.gd`) — a
   hard prerequisite for the marker below, since `ItemCatalog.make()`
   fails loudly on an unregistered id.

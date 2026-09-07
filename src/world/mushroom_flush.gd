@@ -13,6 +13,8 @@ extends RefCounted
 ## than a continuous warmth figure, the same discrete season-name gate
 ## leaf_litter.md's autumn leaf-fall trigger already uses.
 
+const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
+
 ## Real: fruiting is near-exclusively an autumn event. A small residual
 ## flush in spring/summer acknowledges real off-season fruitings exist
 ## without making the mechanic invisible outside autumn -- the same
@@ -41,3 +43,24 @@ const _DEFAULT_SEASON_MULTIPLIER := 0.05
 static func flush_drive(moisture: float, season: String) -> float:
 	var season_term: float = SEASON_MULTIPLIER.get(season, _DEFAULT_SEASON_MULTIPLIER)
 	return clampf(clampf(moisture, 0.0, 1.0) * season_term, 0.0, 1.0)
+
+
+## `species_id`'s own real-world-timed multiplier for this moment through
+## the CURRENT season (see docs/concept/mushrooms.md "Fruiting times,
+## aligned to real species", MushroomSpecies.fruiting_window_for -- the
+## actual per-species [start, end) data this reads): 1.0 inside its real
+## window, WINDOW_SHOULDER_MULTIPLIER outside it -- a real shoulder season
+## (still sometimes found, just less reliably), not a hard cutoff to zero,
+## the same "named trickle, not zero" idiom SEASON_MULTIPLIER's own spring/
+## summer trickle already uses. Deliberately independent of `season`
+## itself: WildMushroomPatch.advance (the only caller) applies this only
+## while season == "autumn", where alone this research actually
+## distinguishes anything -- outside autumn every species already shares
+## one small blanket trickle (see SEASON_MULTIPLIER), unaffected by this.
+const WINDOW_SHOULDER_MULTIPLIER := 0.3
+
+static func species_multiplier(species_id: String, progress_through_season: float) -> float:
+	var window := MushroomSpecies.fruiting_window_for(species_id)
+	if progress_through_season >= window.x and progress_through_season < window.y:
+		return 1.0
+	return WINDOW_SHOULDER_MULTIPLIER
