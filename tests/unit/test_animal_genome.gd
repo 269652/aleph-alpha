@@ -84,7 +84,7 @@ func test_genes_vary_independently_of_one_another():
 ## The genome expresses through the ethogram: this is the reader the guard
 ## above names, exercised rather than merely listed.
 func test_a_seeded_genome_expresses_through_the_ethogram():
-	var typical := Ethogram.express("boar")["sensitivity"]["decay"]
+	var typical: float = Ethogram.express("boar")["sensitivity"]["decay"]
 	var differs := 0
 	for seed_value in range(1, 50):
 		var expressed: float = Ethogram.express("boar", AnimalGenome.for_seed(seed_value))["sensitivity"]["decay"]
