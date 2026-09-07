@@ -5100,6 +5100,7 @@ func _client_process(delta: float) -> void:
 	# outside it is left for step_fruiting (host) or a later, nearer sync
 	# (any peer) instead of paying a redraw nobody can see.
 	_chunk_manager.sync_tree_season(local_player.position)
+	_chunk_manager.sync_grass_season()
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (
 		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"

@@ -605,15 +605,35 @@ framebuffer), so several of these needed a real, non-headless, off-screen
   pattern), pinned by `tests/unit/test_world_season_fanout.gd`. On top of
   that, which of the four delivered sheets (`grass_blades_spring/summer/
   autumn/winter.png`) a card actually samples now turns too, staggered per
-  card rather than snapping the whole field at once — see "Seasonal art"
-  above. `TallGrass.GROWTH_RATE` is still season-independent (only
-  appearance turns, not growth speed) — see [seasons.md](seasons.md).
+  card rather than snapping the whole field at once — `EarthChunkManager.
+  sync_grass_season` mirrors `sync_tree_season`'s own shared-clock/signature-
+  guard shape exactly, and `_sync_grass_sprites` splits a transitioning
+  band into up to two `MultiMeshInstance2D`s (one per season,
+  `IllustratedGrassPatch.split_cards_by_turn` deciding per card by comparing
+  each card's own `turn_threshold_for_seed` against the shared, quantised
+  progress), collapsing back to one the instant the transition settles. See
+  "Seasonal art" above for the full mechanism and why this is a hard
+  per-card sheet-swap rather than a cross-fade. `TallGrass.GROWTH_RATE` is
+  still season-independent (only appearance turns, not growth speed) — see
+  [seasons.md](seasons.md). Pinned by `tests/unit/test_earth_chunk_manager.
+  gd`'s `test_sync_grass_season_*` tests and `test_illustrated_grass_patch.
+  gd`'s `split_cards_by_turn`/`turn_threshold_for_seed` tests.
 - ✅ Growth stage is a real drawn row, not a scaled-down copy of the mature
   art — `IllustratedGrassPatch.atlas_region_for` maps `TallGrass.get_growth`
   (0..1) to one of the sheet's 10 rows, the per-card seed keeps choosing the
   column/variant independently, and `instances_for_cards` no longer damps a
   young card's scale on top of that (see "Seasonal art" above for why
   double-damping was wrong once a real shoot row existed to draw instead).
+- ⬜ `IllustratedGrassPatch.ROW_TOP_BLEED_PX` (the per-row floating-artefact
+  inset -- see its own doc comment) is only exhaustively verified for rows
+  0-5 across all four seasonal sheets. Rows 6-9 (the four densest, fullest
+  rows) measurably do not converge to one shared inset across every season
+  -- bleed severity climbs with row density in more than one season, not a
+  single outlier a bigger margin can absorb without cropping real art
+  elsewhere. A real, flagged gap (a card in one of these rows may
+  occasionally show a thin sliver of the row above bleeding into its tip),
+  most plausibly needing a per-row-and-season table rather than one shared
+  one -- not chased further when the seasonal sheets first landed.
 - ⬜ Creature wake uses the same shader input but is not yet wired.
 - ✅ Cards spread across most of a cell's own footprint (`card_specs_for_
   seed`, `CARD_COUNT = 8`) rather than clustering in one small sub-region —
