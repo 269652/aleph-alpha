@@ -731,3 +731,180 @@ func test_try_disperse_near_re_derives_on_water_at_the_new_position():
 	# Whatever the roll actually did, on_water must reflect the leaf's real
 	# FINAL position, never a stale flag from before the nudge.
 	assert_eq(field.leaves()[0].on_water, field.leaves()[0].position.x > 500.0)
+
+
+# -- generation: dirty-tracking for the renderer's own refill decision ------
+#
+# EarthChunkManager.step_leaf_litter used to call LeafLitterRenderer.fill
+# unconditionally, every frame, for every decorating chunk -- rebuilding
+# that chunk's entire MultiMesh instance buffer even for leaves that are
+# fully settled and doing nothing. Measured live (docs/concept/soil_fauna.md
+# "FPS regression round 4", on the user's own real long-played save):
+# step_leaf_litter's own per-window cost climbed from ~20ms to ~578ms over
+# ~19 real minutes as accumulated leaf count climbed to 2,361 -- a genuine,
+# growing cost invisible to a short session because leaf litter is never
+# persisted across save/load. generation(), bumped only when something
+# about this field's RENDERING-relevant state actually changes, lets the
+# caller skip the call entirely once a chunk's litter goes idle -- NOT a
+# periodic throttle, which step_leaf_litter's own doc comment already
+# explicitly rejects for this exact call site ("ANY multi-second sync lag
+# here would hide the [leaf fall] animation entirely, not just delay it").
+
+func test_a_fresh_field_starts_at_generation_zero():
+	var field := _field()
+	assert_eq(field.generation(), 0)
+
+
+func test_add_leaf_bumps_the_generation():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	assert_eq(field.generation(), 1)
+
+
+func test_consuming_a_real_leaf_bumps_the_generation():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	var after_add := field.generation()
+	field.consume_leaf_at(Vector2(100, 100))
+	assert_gt(field.generation(), after_add)
+
+
+func test_a_missed_consume_does_not_bump_the_generation():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	var after_add := field.generation()
+	field.consume_leaf_at(Vector2(900, 900))
+	assert_eq(field.generation(), after_add, "nothing actually changed -- a miss must not look dirty")
+
+
+func test_relocating_a_real_leaf_bumps_the_generation():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	var after_add := field.generation()
+	field.relocate_leaf_near(Vector2(100, 100), 20.0, Vector2(140, 100), 1.0)
+	assert_gt(field.generation(), after_add)
+
+
+func test_a_missed_relocate_does_not_bump_the_generation():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	var after_add := field.generation()
+	field.relocate_leaf_near(Vector2(900, 900), 20.0, Vector2(940, 900), 1.0)
+	assert_eq(field.generation(), after_add)
+
+
+func test_a_successful_dispersal_bumps_the_generation():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.TRANSITION_DURATION + 0.1)  # settle first
+	var before := field.generation()
+	var moved := false
+	for attempt in 50:
+		if field.try_disperse_near(Vector2(102, 100), PebbleDispersion.TRIGGER_RADIUS_PX, 10.0 + attempt):
+			moved = true
+			break
+	assert_true(moved, "precondition: a leaf this light disperses within 50 contact rolls")
+	assert_gt(field.generation(), before)
+
+
+func test_a_missed_dispersal_does_not_bump_the_generation():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	var after_add := field.generation()
+	field.try_disperse_near(Vector2(900, 900), PebbleDispersion.TRIGGER_RADIUS_PX, 10.0)
+	assert_eq(field.generation(), after_add, "nothing within radius -- must not look dirty")
+
+
+func test_advancing_with_nothing_to_do_does_not_bump_the_generation():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.TRANSITION_DURATION + 0.1)  # settles; its own bump(s) already done
+	var settled := field.generation()
+	field.advance(0.016, LeafLitterField.TRANSITION_DURATION + 0.116)
+	assert_eq(field.generation(), settled, "a settled leaf doing nothing must never look dirty again")
+
+
+func test_a_lifetime_prune_bumps_the_generation():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	var before := field.generation()
+	field.advance(1.0, LeafLitterField.LIFETIME + 1.0)
+	assert_gt(field.generation(), before)
+
+
+## The renderer NEEDS the settle snap itself pushed once to stay alias-safe
+## past WRAP_PERIOD (see transition_from's own doc comment, and
+## test_advance_snaps_the_transition_once_its_duration_has_passed above) --
+## a dirty-tracking scheme that skipped this bump would silently leave
+## stale, un-snapped (non-zero-offset) data sitting in the MultiMesh
+## forever once nothing else ever changes about that leaf again.
+func test_the_settle_snap_itself_bumps_the_generation_once():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	var mid_fall := field.generation()
+	field.advance(1.0, LeafLitterField.TRANSITION_DURATION + 0.5)
+	assert_gt(field.generation(), mid_fall, "the settle snap must itself be pushed to the renderer once")
+
+
+func test_a_decay_tier_transition_bumps_the_generation():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.TRANSITION_DURATION + 0.1)  # settle first
+	var before := field.generation()
+	field.advance(1.0, LeafLitterField.DECAY_TO_FADING_SECONDS + 1.0)
+	assert_gt(field.generation(), before)
+
+
+func test_remaining_within_the_same_decay_tier_does_not_bump_the_generation_again():
+	var field := _field()
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", 0.0)
+	field.advance(1.0, LeafLitterField.DECAY_TO_FADING_SECONDS + 1.0)  # crosses into "fading"
+	var faded := field.generation()
+	field.advance(1.0, LeafLitterField.DECAY_TO_FADING_SECONDS + 2.0)  # still fading, nothing new
+	assert_eq(field.generation(), faded, "re-asserting the same season every frame must not look dirty")
+
+
+func test_a_wind_relocation_bumps_the_generation():
+	var field := _settled_field(40)
+	var before := field.generation()
+	var now := LeafLitterField.TRANSITION_DURATION + 0.1
+	var bumped := false
+	for i in _WIND_TEST_CHECKS:
+		now += LeafLitterField.WIND_DISPERSAL_INTERVAL
+		field.advance(LeafLitterField.WIND_DISPERSAL_INTERVAL, now)
+		if field.generation() != before:
+			bumped = true
+			break
+	assert_true(bumped, "a real wind-driven relocation must bump the generation")
+
+
+func test_dead_calm_does_not_bump_the_generation():
+	var field := _settled_field(40, Vector2.RIGHT, 0.0)
+	var before := field.generation()
+	var now := LeafLitterField.TRANSITION_DURATION + 0.1
+	for i in _WIND_TEST_CHECKS:
+		now += LeafLitterField.WIND_DISPERSAL_INTERVAL
+		field.advance(LeafLitterField.WIND_DISPERSAL_INTERVAL, now)
+	assert_eq(field.generation(), before, "dead calm must never look dirty")
+
+
+## A floating leaf's position is driven continuously on the CPU side, every
+## single advance() call -- unlike a settled/transitioning leaf, the vertex
+## shader never animates it (see _advance_floating_leaf's own doc comment:
+## an uncorrected eased transition would show the leaf perpetually chasing a
+## target that keeps moving away from it). Dirty-tracking must never let a
+## floating leaf go stale, or it would visibly freeze mid-river while the
+## simulation keeps moving it underneath the frozen sprite.
+func test_a_floating_leaf_bumps_the_generation_every_advance_even_with_nothing_else_changing():
+	var field := _field()
+	field.set_current_probe(func(_position): return {"direction": Vector2.RIGHT, "speed_m_s": 0.6})
+	field.add_leaf(Vector2(0, 0), "cherry", "autumn", 0.0)
+	assert_true(field.leaves()[0].on_water, "precondition: this leaf is floating")
+	var floating_generation := field.generation()
+
+	field.advance(1.0, 2.0)
+	assert_gt(field.generation(), floating_generation, "a floating leaf's own continuous drift must always look dirty")
+
+	var after_first_drift := field.generation()
+	field.advance(1.0, 3.0)
+	assert_gt(field.generation(), after_first_drift, "...and again on the very next frame, not just once")

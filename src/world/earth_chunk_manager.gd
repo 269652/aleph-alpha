@@ -698,6 +698,16 @@ var _leaf_litter_fields: Dictionary = {}
 ## reusing them is what keeps this a single shared cost, not a per-chunk one.
 var _leaf_litter_mmis: Dictionary = {}
 var _leaf_litter_renderer := LeafLitterRenderer.new()
+## Vector2i chunk_coord -> the LeafLitterField.generation() value actually
+## pushed to _leaf_litter_renderer.fill for that chunk, last time it
+## happened (see step_leaf_litter's own doc comment for why comparing
+## against this -- not a periodic throttle -- is what lets a long-settled
+## chunk's litter stop costing a full MultiMesh rebuild every single frame
+## once nothing about it is actually changing, while a chunk that IS
+## changing still refills the very same frame it changes, exactly as
+## before). Same create-at-load/erase-at-unload lifecycle as
+## _leaf_litter_fields/_leaf_litter_mmis above.
+var _leaf_litter_filled_generation: Dictionary = {}
 ## Vector2i chunk_coord -> Array[AntMoundMarker] -- the visible counterpart
 ## to _ant_colonies' own mound_cells(), one static marker per mound, spawned
 ## alongside the colony and freed with its chunk exactly like every other
@@ -7843,6 +7853,29 @@ func _refresh_ant_moisture() -> void:
 ##
 ## The day's live per-chunk wind (see set_wind) is read the SAME way
 ## step_flowers already reads it for seed dispersal -- no new weather state.
+## Dirty-tracked (docs/concept/soil_fauna.md "FPS regression round 4"):
+## _leaf_litter_renderer.fill used to run unconditionally here, every
+## single frame, for every decorating chunk -- rebuilding that chunk's
+## ENTIRE MultiMesh instance buffer (two engine calls per leaf, plus a
+## fresh instance-dictionary allocation per leaf via instances_for_leaves)
+## even for leaves that are fully settled and doing nothing at all.
+## Measured live on the user's own long-played save: step_leaf_litter's own
+## per-window cost climbed from ~20ms to ~578ms over ~19 real minutes as
+## accumulated leaf count climbed to 2,361 -- real, and growing with real
+## session length, because leaf litter is never persisted across save/load
+## so a short session never sees it.
+##
+## LeafLitterField.generation() (bumped only when something about that
+## field's rendering-relevant state actually changes -- see that method's
+## own doc comment for the exact trigger list, including the subtle floating-
+## leaf and transition-settle-snap cases) now lets this skip the call
+## entirely once a chunk goes idle, compared each time against
+## _leaf_litter_filled_generation's own last-pushed record for that chunk.
+## Deliberately NOT a periodic throttle: unlike a flower's own many-minute
+## growth, ANY multi-second sync lag here would hide the leaf-fall animation
+## entirely, not just delay it (see this function's own header comment
+## above) -- a chunk that IS changing still refills the very same frame it
+## changes, exactly as before this fix.
 func step_leaf_litter(delta_seconds: float) -> void:
 	_leaf_litter_renderer.set_current_time(_world_age_seconds)
 	var weather_day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
@@ -7860,8 +7893,9 @@ func step_leaf_litter(delta_seconds: float) -> void:
 		if mmi == null:
 			continue
 		mmi.visible = _decorates(chunk_coord)
-		if mmi.visible:
+		if mmi.visible and _leaf_litter_filled_generation.get(chunk_coord, -1) != field.generation():
 			_leaf_litter_renderer.fill(mmi, field.leaves())
+			_leaf_litter_filled_generation[chunk_coord] = field.generation()
 
 
 ## Real per-mound SCOUT dispatch (see docs/concept/soil_fauna.md "Scouting:
@@ -10777,6 +10811,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	if _leaf_litter_mmis.has(chunk_coord):
 		_leaf_litter_mmis[chunk_coord].free()
 		_leaf_litter_mmis.erase(chunk_coord)
+	_leaf_litter_filled_generation.erase(chunk_coord)
 
 	# Snapshot the aggregate ecology before dropping the region, so revisiting
 	# this chunk catch-up integrates from where it left off (see

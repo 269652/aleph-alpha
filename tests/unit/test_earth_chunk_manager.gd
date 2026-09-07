@@ -57,6 +57,7 @@ const Shop = preload("res://src/gameplay/shop.gd")
 const BuildingStatics = preload("res://src/gameplay/building_statics.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
+const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
 const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 const CaterpillarMarker = preload("res://src/rendering/caterpillar_marker.gd")
 const MillipedeMarker = preload("res://src/rendering/millipede_marker.gd")
@@ -7254,6 +7255,78 @@ func test_step_leaf_litter_fills_the_multimesh_from_the_fields_current_leaves():
 	var mmi: MultiMeshInstance2D = manager._leaf_litter_mmis[chunk_coord]
 	assert_not_null(mmi.multimesh, "step_leaf_litter must build the MultiMesh once there is a leaf to show")
 	assert_eq(mmi.multimesh.instance_count, 1)
+
+
+## Test double that counts calls, matching _CountingPhaseGenerator's own
+## convention (see that class's own doc comment further down this file) --
+## proves step_leaf_litter skips LeafLitterRenderer.fill entirely for a
+## chunk whose field hasn't changed since the last time it was actually
+## pushed. Calls through to the real fill() (super.fill) rather than
+## stubbing it out, so the underlying MultiMesh wiring stays genuinely
+## exercised, not just the call count.
+class _CountingLeafLitterRenderer extends LeafLitterRenderer:
+	var fill_call_count := 0
+
+	func fill(mmi: MultiMeshInstance2D, leaves: Array[Dictionary]) -> void:
+		fill_call_count += 1
+		super.fill(mmi, leaves)
+
+
+## Round-4 FPS regression, part 2 (docs/concept/soil_fauna.md "FPS
+## regression round 4"): step_leaf_litter used to call
+## LeafLitterRenderer.fill unconditionally, every frame, for every
+## decorating chunk -- rebuilding that chunk's entire MultiMesh instance
+## buffer even when nothing about its leaves had changed since the last
+## frame. Measured live: step_leaf_litter's own per-window cost climbed
+## from ~20ms to ~578ms over a ~19-minute session as accumulated leaf count
+## climbed to 2,361, on a save that never persists leaf litter across
+## sessions (so this cost keeps resetting to near-zero and re-growing,
+## invisible to a short session). Real signal, no timing involved --
+## mirrors _CountingPhaseGenerator's own call-observing idiom:
+## LeafLitterField.generation() (bumped only when something actually
+## changes -- see that method's own doc comment) lets step_leaf_litter skip
+## the call outright once a chunk's litter is fully idle, which a periodic
+## throttle could never do without also delaying (and therefore hiding) the
+## leaf-fall animation itself -- explicitly rejected by step_leaf_litter's
+## own doc comment above.
+func test_step_leaf_litter_does_not_refill_a_chunk_whose_leaves_have_not_changed():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	manager._decoration_center = chunk_coord
+	var counting_renderer := _CountingLeafLitterRenderer.new()
+	manager._leaf_litter_renderer = counting_renderer
+	var field: LeafLitterField = manager._leaf_litter_fields[chunk_coord]
+	field.add_leaf(Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE, "cherry", "autumn", 0.0)
+
+	manager.step_leaf_litter(0.016)
+	assert_eq(counting_renderer.fill_call_count, 1, "the new leaf must be pushed at least once")
+
+	manager.step_leaf_litter(0.016)
+	manager.step_leaf_litter(0.016)
+	assert_eq(
+		counting_renderer.fill_call_count, 1,
+		"nothing about the chunk's leaves changed -- must not rebuild the MultiMesh again"
+	)
+
+
+## The complement of the test above: a chunk that DOES keep changing (a new
+## leaf falling) must still be refilled the very same step it changes --
+## proving this is real dirty-tracking, not an accidental throttle that
+## would also (wrongly) delay a fresh leaf's own fall animation.
+func test_step_leaf_litter_refills_a_chunk_once_a_new_leaf_actually_falls():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	manager._decoration_center = chunk_coord
+	var counting_renderer := _CountingLeafLitterRenderer.new()
+	manager._leaf_litter_renderer = counting_renderer
+	var field: LeafLitterField = manager._leaf_litter_fields[chunk_coord]
+	field.add_leaf(Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE, "cherry", "autumn", 0.0)
+	manager.step_leaf_litter(0.016)
+	assert_eq(counting_renderer.fill_call_count, 1)
+
+	field.add_leaf(Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE + Vector2(5, 5), "acorn", "autumn", 0.0)
+	manager.step_leaf_litter(0.016)
+	assert_eq(counting_renderer.fill_call_count, 2, "a genuinely new leaf must still trigger an immediate refill")
 
 
 ## Scouting now (see docs/concept/soil_fauna.md "Scouting: real search, not

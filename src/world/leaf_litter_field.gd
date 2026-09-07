@@ -198,12 +198,40 @@ var _wind_check_count := 0
 ## LEAF_SCATTER_RADIUS) never collide on the same roll.
 var _next_leaf_seed := 0
 
+## Bumped every time something about this field's RENDERING-relevant state
+## actually changes -- see generation()'s own doc comment for the full list
+## of triggers and why each one is (or, for things the shader animates on
+## its own, deliberately is NOT) included.
+var _generation := 0
+
 
 ## Every leaf currently in this field, as plain Dictionaries (see this file's
 ## own doc comment for the shape). Returned directly, the same
 ## "caller treats this as read-only" convention AntColony.mound_cells() uses.
 func leaves() -> Array[Dictionary]:
 	return _leaves
+
+
+## A monotonically-increasing counter, bumped whenever this field's own
+## RENDERING-relevant state changes: a leaf added/removed/relocated/
+## dispersed, a settled leaf's throttled wind-roll nudge (see advance), a
+## decay-tier transition (the "season" field's own doc comment), the
+## CPU-side transition-settle snap (transition_from's own doc comment --
+## the renderer NEEDS this pushed once to stay alias-safe past
+## LeafLitterRenderer.WRAP_PERIOD), and any leaf currently on_water (see
+## _advance_floating_leaf's own doc comment: its continuous drift is driven
+## entirely on the CPU side every frame, unlike the vertex-shader-animated
+## fall/sway every other leaf gets, so it must always look dirty).
+##
+## Deliberately NOT bumped for: a no-op query (consume/relocate/disperse
+## that found nothing), re-asserting a season a leaf already has, or an
+## ordinary settled leaf simply existing while nothing about it changes --
+## these are exactly the cases EarthChunkManager.step_leaf_litter uses this
+## counter to skip re-pushing to LeafLitterRenderer.fill (see that
+## function's own doc comment for why a periodic throttle would be wrong
+## here instead).
+func generation() -> int:
+	return _generation
 
 
 ## Adds a freshly-fallen leaf at `position` (its own final landing spot --
@@ -223,6 +251,7 @@ func add_leaf(position: Vector2, species: String, season: String, now: float) ->
 		"on_water": _is_on_water(position),
 	})
 	_next_leaf_seed += 1
+	_generation += 1
 
 
 ## The single nearest leaf to `pos` within `radius` world pixels, as
@@ -273,6 +302,7 @@ func consume_leaf_at(pos: Vector2) -> bool:
 	for i in _leaves.size():
 		if _leaves[i].position.distance_to(pos) <= CONSUME_TOLERANCE_PX:
 			_leaves.remove_at(i)
+			_generation += 1
 			return true
 	return false
 
@@ -299,6 +329,7 @@ func relocate_leaf_near(pos: Vector2, radius: float, new_position: Vector2, now:
 	leaf.transition_start = now
 	leaf.position = new_position
 	leaf.on_water = _is_on_water(new_position)
+	_generation += 1
 	return true
 
 
@@ -332,6 +363,7 @@ func try_disperse_near(walker_position: Vector2, radius: float, now: float) -> b
 	leaf.transition_start = now
 	leaf.position = new_position
 	leaf.on_water = _is_on_water(new_position)
+	_generation += 1
 	return true
 
 
@@ -440,17 +472,38 @@ func advance(delta: float, now: float) -> void:
 		var leaf: Dictionary = _leaves[i]
 		if now - leaf.spawned_at >= LIFETIME:
 			_leaves.remove_at(i)
+			_generation += 1
 			continue
 		if leaf.on_water:
+			# A floating leaf's position is driven right here, continuously,
+			# every single frame -- the vertex shader never animates it (see
+			# _advance_floating_leaf's own doc comment), unlike a settled/
+			# transitioning leaf whose motion the shader handles entirely
+			# once its data has been pushed once. So it must always look
+			# dirty to a caller comparing generation() against a prior
+			# fill, or it would visibly freeze mid-drift the moment
+			# dirty-tracking stopped the routine per-frame refill.
 			_advance_floating_leaf(leaf, delta)
+			_generation += 1
 		if leaf.transition_from != leaf.position and now - leaf.transition_start >= TRANSITION_DURATION:
 			leaf.transition_from = leaf.position
+			# The renderer NEEDS this real, CPU-confirmed "at rest" snap
+			# pushed at least once -- see transition_from's own doc comment
+			# on why a wrapped GPU clock can alias after long enough
+			# without it. Skipping this bump would leave stale, un-snapped
+			# (non-zero-offset) data sitting in the MultiMesh forever once
+			# nothing else about this leaf ever changes again.
+			_generation += 1
 		if leaf.transition_from == leaf.position:
 			var age: float = now - leaf.spawned_at
 			if age >= DECAY_TO_WINTER_SECONDS:
-				leaf.season = "winter"
+				if leaf.season != "winter":
+					leaf.season = "winter"
+					_generation += 1
 			elif age >= DECAY_TO_FADING_SECONDS:
-				leaf.season = "fading"
+				if leaf.season != "fading":
+					leaf.season = "fading"
+					_generation += 1
 
 	_wind_accumulator += delta
 	if _wind_accumulator < WIND_DISPERSAL_INTERVAL:
@@ -492,3 +545,4 @@ func advance(delta: float, now: float) -> void:
 		# very next frame it floats and this same mechanism never touches
 		# it again (see the on_water guard just above).
 		leaf.on_water = _is_on_water(leaf.position)
+		_generation += 1
