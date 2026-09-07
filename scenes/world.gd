@@ -2682,6 +2682,11 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	# Fallen-leaf litter ages/prunes on the same batched cadence ant mounds do
 	# (see EarthChunkManager.step_leaf_litter, docs/concept/leaf_litter.md).
 	_chunk_manager.step_leaf_litter(delta)
+	# Footprint stamps age/prune on the same batched cadence (see
+	# EarthChunkManager.step_footprints, FootprintField.LIFETIME_SECONDS --
+	# far shorter than leaf litter's own, but nothing here needs a finer
+	# cadence than this batch already runs at).
+	_chunk_manager.step_footprints()
 	_chunk_manager.step_flowers(delta)
 	_chunk_manager.step_desert_scrub(delta)
 	_chunk_manager.step_tundra_lichen(delta)
@@ -4983,6 +4988,14 @@ func _client_process(delta: float) -> void:
 	_chunk_manager.step_snow(snowing, warmth)
 	# Walking packs the snow down, which is what leaves a trail.
 	_chunk_manager.tread_snow_at(local_player.position)
+	# Real per-step left/right footprint stamps (see FootstepGait,
+	# docs/concept/snow_cover.md's "Footprints"/docs/concept/
+	# infrastructure.md's path-scarring framing) -- purely additive on top
+	# of the tread_snow_at/PathScarring wear tracking above and below,
+	# neither of which this touches at all. Player-only (reported live
+	# scope: "real footstep prints"), unlike tread_snow_at/the crush pass
+	# below which both also run per-creature.
+	_chunk_manager.record_footstep(local_player.position, local_player.facing_direction())
 	# Individually-simulated creatures pack it down too, reusing the exact
 	# same SnowTrail data and shared GPU mask the player's own tread does
 	# (see EarthChunkManager.tread_snow_at's own doc comment) -- but never
