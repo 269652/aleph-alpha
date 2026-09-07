@@ -68,3 +68,28 @@ func test_shader_uses_additive_blending():
 ## silently different curve nobody would notice drift from the mirror.
 func test_shader_source_uses_the_same_smoothstep_edge_fade_as_the_cpu_mirror():
 	assert_string_contains(TorchGlow.SHADER_CODE, "smoothstep(")
+
+
+## Which equipped item ids count as a lit light source -- currently just
+## "torch" (equipping IS being lit; see docs/concept/lighting.md's own
+## reasoning for why no separate ignite/extinguish state exists yet, since
+## a torch cannot even model "broken" today). A named, testable function
+## rather than an inline string comparison scattered at each call site, so
+## a future second light source (a lantern, say) has exactly one place to
+## add itself.
+func test_is_lit_item_id_is_true_only_for_torch():
+	assert_true(TorchGlow.is_lit_item_id("torch"))
+	assert_false(TorchGlow.is_lit_item_id("iron_sword"))
+	assert_false(TorchGlow.is_lit_item_id(""))
+
+
+## material() lazily builds and caches a real ShaderMaterial running
+## SHADER_CODE, mirroring IllustratedGrassPatch.material()'s exact
+## lazy-build-and-cache shape -- the same instance every caller in one
+## frame gets, not a fresh (and differently-configured) one each time.
+func test_material_is_built_once_and_cached():
+	var glow := TorchGlow.new()
+	var first := glow.material()
+	var second := glow.material()
+	assert_eq(first, second)
+	assert_eq(first.shader.code, TorchGlow.SHADER_CODE)

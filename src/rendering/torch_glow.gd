@@ -25,6 +25,33 @@ const GLOW_COLOR := Color(1.0, 0.7, 0.35)
 
 static var SHADER_CODE: String = _build_shader_code()
 
+var _material: ShaderMaterial
+
+## Which equipped item ids count as a lit light source -- currently just
+## "torch". Equipping IS being lit: a torch has no fuel/ignition state
+## modeled (item_catalog.gd never lists it in _WEAPON_MATERIAL_AND_VOLUME,
+## so ItemWear.condition_for always reports it "pristine" -- it cannot
+## even model "broken" today), so a separate ignite/extinguish toggle
+## would be a second mechanic nobody asked for. A named, testable function
+## rather than an inline string comparison at each call site, so a future
+## second light source (a lantern, say) has exactly one place to add
+## itself.
+static func is_lit_item_id(item_id: String) -> bool:
+	return item_id == "torch"
+
+
+## Lazily builds and caches a real ShaderMaterial running SHADER_CODE --
+## mirrors IllustratedGrassPatch.material()'s exact lazy-build-and-cache
+## shape, so every caller in a given frame gets the SAME instance rather
+## than a fresh (and separately-configured) one each time.
+func material() -> ShaderMaterial:
+	if _material == null:
+		var shader := Shader.new()
+		shader.code = SHADER_CODE
+		_material = ShaderMaterial.new()
+		_material.shader = shader
+	return _material
+
 ## Pure CPU mirror of the shader's own radial falloff -- a fragment shader
 ## cannot be asserted headless, so the tuned math is mirrored here, the
 ## same relationship `SnowSparkleShader`/`WaterShader` already have to
