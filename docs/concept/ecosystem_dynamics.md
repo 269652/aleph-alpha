@@ -806,6 +806,15 @@ inside `nearest_fish_position` itself is left alone for now — no
 evidence yet that it's still a real cost once called at the throttled
 rate.
 
+**`AmbientFlyerMarker._scan_for_partners` walked the ENTIRE flock, every
+flyer in the whole loaded world, on every single partner search
+(2026-09-07)** — root-caused as round 3's own open "ambient_flyer's own
+per-call cost climbing over time... not yet root-caused" flag, see
+`soil_fauna.md`'s own "FPS regression round 4" for the full session (real
+PerfProbe numbers, the fix, and what's still open). Fixed by scoping the
+candidate search to `EarthChunkManager.flyers_near`'s 3x3-chunk
+neighbourhood instead of `get_tree().get_nodes_in_group(FLOCK_GROUP)`.
+
 
 ### Open questions
 

@@ -2130,6 +2130,168 @@ on mound count at all (only the initial seed is capped by `MAX_MOUNDS`)
 remains a real, separate, undiscovered-extent gap worth a dedicated look
 later.
 
+### FPS regression round 4: two unscoped whole-world scans (2026-09-07)
+
+Reported live, again, hours after round 3 shipped: "it still has only
+4fps after a clean reboot and restart which should have 30-60fps," on the
+user's own real, long-lived save (screenshot showed unusually dense leaf
+litter — "more than any other screenshot in this project's history" —
+plus two healthy Ant Mounds). The live hypothesis going in, offered
+explicitly as unverified: that dense litter meant `LeafLitterField`
+queries scale badly against a genuinely large accumulated leaf count,
+paid repeatedly by every forager/decomposer/caterpillar/millipede in
+range.
+
+**Reproduced against the user's own real save, not a fresh one.** Godot
+has no `--user-data-dir` isolation concern once accounted for: worktrees
+and the main checkout already share one real `user://` (see the
+`godot-tests-share-user-data-dir-across-worktrees` session note), but the
+user's own game was still actively running at investigation time, so
+reusing it live risked a second writer corrupting the save mid-session.
+Fix: `--user-data-dir <path>` (a real Godot engine flag, not a project
+one) pointed at a snapshot **copy** of the live `user://` directory
+instead — same real accumulated state (mound populations, explored chunk
+history), zero risk to the user's own session. Re-copied fresh from the
+live save for each `--solo` run so before/after started from the same
+real conditions.
+
+**The leaf-litter hypothesis was refuted at the timescale that matters,
+confirmed real at a longer one.** `LeafLitterField` is never persisted
+across a save/load (`_leaf_litter_fields[chunk_coord] = LeafLitterField.
+new()` at chunk load — see `EarthChunkManager`'s own doc comment) —
+purely runtime state, rebuilt from empty every session regardless of how
+dense the litter was when the screenshot was taken. A round-4 `PerfProbe`
+(same aggregate-per-class-timing shape as round 2/3's own, reconstructed
+fresh — the original `perf_probe.gd` was never committed) confirmed this
+directly: `leaf_litter.total_leaves_world` sat at **0 for the first ~3
+minutes** of a fresh `--solo` session on the exact same save, and every
+leaf-litter-related cost (`step_leaf_litter`/`field_advance`/
+`renderer_fill`/the three `_near` queries) summed to under 150ms of a
+~3000ms window throughout — real, but nowhere near dominant. **The
+dominant costs were two separate unscoped whole-world scans, unrelated to
+leaf litter**, below.
+
+Left running ~19 minutes on the *pre-fix* code, `total_leaves_world` did
+climb from 0 to 2,361, and `step_leaf_litter`'s own cost climbed with it
+(pushed 20ms→578ms per window; `field_advance` 20ms→420ms;
+`renderer_fill` 9ms→150ms) — so the original hypothesis was right about
+mechanism, wrong about timescale: on the user's *actual* long-played save
+(hours, not minutes) this is a real and growing cost, just not the one
+that explains a 4fps reading in the first few minutes of any given
+session. Root cause (not yet fixed, see below): `LeafLitterRenderer.fill`
+unconditionally rebuilds a chunk's *entire* MultiMesh buffer — two engine
+calls per leaf, plus a fresh instance-dictionary allocation per leaf via
+`instances_for_leaves` — every single frame, for every decorating chunk,
+regardless of whether anything about that chunk's leaves actually changed
+since the last frame. The vertex shader alone drives all visible
+motion/sway once a leaf is pushed, so a long-settled, non-transitioning
+leaf never needed re-pushing at all.
+
+**Root cause 1 (the single largest cost): `AmbientFlyerMarker.
+_scan_for_partners` walked `get_tree().get_nodes_in_group(FLOCK_GROUP)` —
+every flyer in the whole loaded world — on every partner search.** This
+*is* round 3's own flagged-but-unexplained "ambient_flyer's own per-call
+cost climbing over time... not yet root-caused" anomaly, now closed: a
+`PARTNER_SEARCH_INTERVAL` cooldown throttles *how often* any one flyer
+scans, but not *what it scans* — each scan still walked the entire
+population. Measured: `ambient_flyer._process` 700-730ms per ~3s window
+pre-fix, the single largest tracked cost, against a population in the
+thousands. Fixed with a new `EarthChunkManager.flyers_near` (mirrors
+`leaf_litter_near`'s own 3x3-chunk-neighbourhood scan exactly, reading
+the existing `_loaded_ambient_flyers` per-chunk buckets — no new
+bookkeeping needed), queried at `SpiralFlight.NOTICE_RADIUS_PX` — test-
+pinned as the widest of the three interaction radii, so it can never miss
+a candidate any of the three narrower per-candidate checks would have
+accepted. Falls back to the old unscoped walk when no `courtship_world`
+is wired (a standalone marker built directly in a test), preserving
+existing behaviour there exactly.
+
+**Root cause 2: `EarthChunkManager.crush_ants_near` walked every key in
+`_active_ant_foragers` — every mound with an active forager anywhere in
+the whole loaded world — for every single creature's crush check, every
+frame.** Unlike every sibling "near" query in this file (leaf litter,
+worms, seeds, `_crush_markers_near` itself), which all scope to the 3x3
+chunk neighbourhood around the query position, `crush_ants_near`'s own
+doc comment had always flagged it as the one exception ("cannot share
+`_crush_markers_near`'s own chunk-keyed lookup directly"). A forager can
+only ever wander `AntColony.FORAGE_RADIUS_TILES` (2.0) from its own
+mound — far inside a single `CHUNK_SIZE`=32 chunk — so nothing was ever
+actually gained by scanning further. Measured: `crush.creature_loop`
+(the whole per-frame crush pass, called once per `CreatureMarker`)
+440-452ms per window from only 14-18 frames (25-31ms per frame). Fixed
+by skipping every mound key outside the 3x3 chunk neighbourhood around
+the crush position (one cheap `Vector2i` comparison per mound) before
+paying for `markers.duplicate()` plus a full inner scan of that mound's
+forager list.
+
+**A live worry checked and laid to rest**: with `crush.creature_loop`
+still costing something non-trivial even after fix 2, the next suspect
+was round 3's own other flagged-but-undiscovered-extent gap —
+`_maybe_bud_ant_colony` having no upper bound on mound count at all. A
+temporary follow-up gauge (`ant_colony.mound_count`/
+`active_forager_keys`/`active_forager_total`, removed with the rest of
+the round-4 `PerfProbe` instrumentation) measured a **bounded, reasonable
+~30 mounds and ~600-740 active foragers** at steady state on this real
+save — not runaway growth. The unbounded-mound-count gap is still real
+and still worth closing on its own terms eventually, but it is NOT what
+was driving round 4's regression, and the remaining `crush.creature_loop`
+cost at that population scale (now genuinely just "iterate ~30 mounds
+plus scan the handful actually nearby, times however many creatures are
+on screen, every frame") is in the range every other correctly-scoped
+system in this file already operates at.
+
+**Both fixed with real growth-rate/complexity-bound tests, not timing**
+(`CLAUDE.md`'s own rule against eyeballed thresholds; timing assertions
+are also just flaky): `test_crushing_an_ant_never_scans_a_mounds_
+forager_list_in_a_distant_chunk` and `test_flyers_near_never_reaches_a_
+distant_chunk_regardless_of_radius` each plant a mound/flyer many chunks
+away and prove it is never visited/pruned/returned regardless of query
+radius — the same call-observing idiom `test_earth_chunk_manager.gd`'s
+own `_CountingPhaseGenerator` already established for "an expensive call
+never happens." `test_scan_for_partners_pairs_using_only_what_flyers_
+near_returns`/`_does_not_fall_back_to_the_whole_tree_group` pin the
+`AmbientFlyerMarker` wiring itself the same way, with a counting
+`courtship_world` test double.
+
+**Measured before/after, live, on the identical real save** (fresh
+`--user-data-dir` snapshot each side, same `--solo` methodology, steady-
+state ~3-minute mark): total tracked per-window cost dropped from
+**~1900ms of a ~3040ms window (~62%) to ~1120ms of a ~3030ms window
+(~37%)** — measured at a HIGHER population on the after side (ant_forager
+~11800→~23400 calls/window, ambient_flyer ~6000-8000→~12100-16200,
+caterpillar/decomposer/millipede all roughly doubled too), so the real
+per-unit-of-work improvement is understated by that raw comparison, not
+overstated. Frame-processing rate (crush-pass calls per window, a direct
+frame-count proxy) went from **14-18 frames per ~3s window (~5fps) to
+36-37 (~12fps)** — roughly 2.2-2.6x, at higher load. Raw CPU-time/wall-
+clock ratio stayed pegged near 100% on both sides (0.998 before, 0.982
+after) — expected and not a contradiction: the process is still fully
+CPU-bound either way, the fix means more USEFUL frames get processed
+within that same saturated core, not that the core stops being
+saturated. **Not a full return to 30-60fps** — see the two open items
+below.
+
+**Real, confirmed, explicitly out of scope for this round:**
+
+- **Leaf litter's per-frame render/advance cost, growing with real
+  session length** (see above) — a dirty-tracking or throttled-refill
+  mechanism for `LeafLitterRenderer.fill`, careful not to reintroduce the
+  "hides the fall animation behind a sync lag" problem the original
+  `step_leaf_litter` doc comment explicitly designed around. Real,
+  measured, growing — just not yet fixed.
+- **Sheer, bounded-but-large population scale.** `ant_forager` alone
+  plateaued around 600-740 concurrent foragers across ~30 mounds on this
+  save, `ambient_flyer` in the low thousands, caterpillar/millipede/
+  decomposer each in the hundreds-to-low-thousands — all now correctly
+  scoped and throttled, but still enough live instances that their
+  summed *per-instance* cost is real. Whether these population targets
+  are the right density for the intended experience is a design/tuning
+  question, not a bug this round touched.
+- **The unbounded ant-mound-budding gap itself** (`_maybe_bud_ant_colony`
+  has no upper bound on mound count) — confirmed NOT the round-4 driver
+  (mound count measured bounded at ~30 on this real save), but still an
+  open, undiscovered-extent gap on its own terms.
+
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
 A real, hand-illustrated sheet (`assets/sprites/animals/worm.png`) replaces
