@@ -18,6 +18,12 @@ extends RefCounted
 ## The shader runs entirely on the GPU: no per-frame script cost anywhere,
 ## which keeps ChoppableTree's deliberate no-_process constraint intact.
 ##
+## Also carries the sapling->mature MORPH dissolve (see tree_morph_shader.gd's
+## own header) -- a tree's canopy sprite already carries ONE shader for wind
+## sway (+ snow sparkle, below), and this project's own precedent for
+## "another live effect on that same sprite" is composing a second GLSL
+## snippet in, not fighting over the single `material` slot a Sprite2D has.
+##
 ## Also carries canopy SPARKLE (see docs/concept/snow_cover.md, "Sparkle:
 ## specular glints on lying snow") -- a live per-fragment glint on top of the
 ## baked snow-covered canopy composite, sharing SnowSparkleShader's own
@@ -31,6 +37,7 @@ extends RefCounted
 ## tools/probe_snow_sparkle_colors.gd and test_snow_sparkle_shader.gd) so it
 ## can never fire on e.g. cherry's illustrated pink blossom.
 const SnowSparkleShader = preload("res://src/rendering/snow_sparkle_shader.gd")
+const TreeMorphShader = preload("res://src/rendering/tree_morph_shader.gd")
 
 const SHADER_CODE := """
 shader_type canvas_item;
@@ -53,7 +60,7 @@ uniform float wind_strength = 1.0;
 uniform float snow_coverage : hint_range(0.0, 1.0) = 0.0;
 uniform float sparkle_min_value = 0.85;
 uniform float sparkle_max_saturation = 0.18;
-""" + SnowSparkleShader.GLSL_SNIPPET + """
+""" + SnowSparkleShader.GLSL_SNIPPET + TreeMorphShader.GLSL_SNIPPET + """
 
 varying vec2 world_pos;
 
@@ -77,6 +84,9 @@ void fragment() {
 	// modulate working exactly as it did before this shader gained a
 	// fragment() at all.
 	vec4 base = COLOR;
+	if (morph_progress < 1.0) {
+		base = morph_canopy(base, UV, vec2(textureSize(TEXTURE, 0)));
+	}
 	if (snow_coverage > 0.0 && base.a > 0.5) {
 		float v = sparkle_value(base.rgb);
 		float s = sparkle_saturation(base.rgb);
@@ -155,6 +165,13 @@ func make_material(
 	material.set_shader_parameter("sparkle_min_value", SnowSparkleShader.SPARKLE_MIN_VALUE)
 	material.set_shader_parameter("sparkle_max_saturation", SnowSparkleShader.SPARKLE_MAX_SATURATION)
 	SnowSparkleShader.push_shared_uniforms(material)
+	# Explicit, not left to the GLSL uniform's own declared default: a
+	# ShaderMaterial only reports a value from get_shader_parameter for a
+	# parameter that was actually SET on it, not one merely inheriting its
+	# shader's compiled-in default -- so leaving this unset here silently
+	# breaks anything reading it back (a real test failure this exact gap
+	# produced) even though rendering itself would have used 1.0 either way.
+	TreeMorphShader.clear(material)
 	return material
 
 

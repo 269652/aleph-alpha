@@ -9,6 +9,7 @@ extends GutTest
 
 const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const CharacterView = preload("res://scenes/character_view.gd")
 
 var growth: TreeGrowth
 
@@ -221,3 +222,103 @@ func test_old_growth_advances_monotonically_and_smoothly():
 		previous = scale
 		sizes[snappedf(scale, 0.001)] = true
 	assert_gt(sizes.size(), 10, "old growth reads as %d jumps, not a curve" % sizes.size())
+
+
+# -- branches wait for the tree to reach the player's own height ------------
+#
+# Reported: "small newborn trees are not saplings but rather have a
+# miniaturized full canopy... they should grow like the players height
+# before branches start growing". scale_at above already grows a tree's
+# HEIGHT continuously; canopy_growth_fraction is the SEPARATE signal that
+# gates when the sapling art hands off to the real mature tree, so the two
+# can be sequenced (grow tall AS a sapling, only then become a branching
+# tree) instead of moving together the way a single growth scalar used to.
+
+## Shares the threshold by IMPORT, not a copied literal -- "as tall as the
+## player" should mean the SAME fraction CharacterView already reads the
+## player at (TARGET_HEIGHT_FRACTION_OF_TREE), not a second, independently
+## -chosen number that could silently drift from it.
+func test_branch_start_fraction_is_the_players_own_height_not_a_second_number():
+	assert_eq(TreeGrowth.BRANCH_START_FRACTION, CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE)
+
+
+func test_canopy_growth_is_zero_for_any_height_at_or_below_the_threshold():
+	assert_eq(growth.canopy_growth_fraction(0.0), 0.0)
+	assert_eq(growth.canopy_growth_fraction(TreeGrowth.SEEDLING_SCALE), 0.0)
+	assert_eq(growth.canopy_growth_fraction(TreeGrowth.BRANCH_START_FRACTION), 0.0)
+
+
+func test_canopy_growth_ramps_up_once_past_the_threshold():
+	var just_past := growth.canopy_growth_fraction(TreeGrowth.BRANCH_START_FRACTION + 0.01)
+	assert_gt(just_past, 0.0)
+	assert_lt(just_past, 1.0)
+
+
+func test_canopy_growth_reaches_full_exactly_at_full_height():
+	assert_almost_eq(growth.canopy_growth_fraction(1.0), 1.0, 0.001)
+
+
+func test_canopy_growth_never_exceeds_full_even_for_old_growth_heights():
+	assert_almost_eq(growth.canopy_growth_fraction(1.0 + TreeGrowth.OLD_GROWTH_BONUS), 1.0, 0.001)
+
+
+func test_canopy_growth_advances_monotonically_with_height():
+	var previous := -1.0
+	for step in 60:
+		var height_scale := float(step) / 59.0 * (1.0 + TreeGrowth.OLD_GROWTH_BONUS)
+		var fraction := growth.canopy_growth_fraction(height_scale)
+		assert_gte(fraction, previous, "canopy growth must never shrink as the tree grows taller")
+		previous = fraction
+
+
+# -- how far through the SAPLING sheet a tree below branch-start height is --
+#
+# The counterpart signal to canopy_growth_fraction, for the OTHER phase: a
+# tree below BRANCH_START_FRACTION draws from IllustratedTree's sapling
+# sheet (see that class's own "sapling growth sequence" section) rather than
+# any generated mature texture at all, and this is what tells a renderer how
+# far through that sheet a given height_scale should show.
+
+func test_sapling_progress_is_zero_for_a_freshly_planted_seedling():
+	assert_eq(growth.sapling_progress(0.0), 0.0)
+
+
+func test_sapling_progress_reaches_full_exactly_at_branch_start():
+	assert_almost_eq(growth.sapling_progress(TreeGrowth.BRANCH_START_FRACTION), 1.0, 0.001)
+
+
+func test_sapling_progress_is_midway_at_half_the_branch_start_height():
+	assert_almost_eq(
+		growth.sapling_progress(TreeGrowth.BRANCH_START_FRACTION * 0.5), 0.5, 0.001
+	)
+
+
+## Past branch-start height the tree has moved on to the OTHER phase (see
+## canopy_growth_fraction) -- sapling_progress must stay pinned at 1.0
+## rather than climb past it, the same "clamped, not extrapolated" shape
+## canopy_growth_fraction's own ceiling test pins on the other side of the
+## same threshold.
+func test_sapling_progress_never_exceeds_full_past_branch_start():
+	assert_almost_eq(growth.sapling_progress(1.0 + TreeGrowth.OLD_GROWTH_BONUS), 1.0, 0.001)
+
+
+func test_sapling_progress_advances_monotonically_with_height():
+	var previous := -1.0
+	for step in 30:
+		var height_scale := float(step) / 29.0 * TreeGrowth.BRANCH_START_FRACTION
+		var progress := growth.sapling_progress(height_scale)
+		assert_gte(progress, previous, "sapling progress must never shrink as the tree grows taller")
+		previous = progress
+
+
+## The two phases meet exactly at the threshold, with neither signal
+## double-counting it: sapling_progress finishes AT BRANCH_START_FRACTION
+## (checked above) and canopy_growth_fraction is still exactly zero there
+## (see test_canopy_growth_is_zero_for_any_height_at_or_below_the_threshold)
+## -- so a tree never shows a half-dissolved canopy while still nominally
+## "just a sapling", and never keeps advancing the sapling sheet once
+## branching has actually begun.
+func test_the_two_growth_phases_hand_off_at_exactly_the_same_height():
+	var at_threshold := TreeGrowth.BRANCH_START_FRACTION
+	assert_almost_eq(growth.sapling_progress(at_threshold), 1.0, 0.001)
+	assert_almost_eq(growth.canopy_growth_fraction(at_threshold), 0.0, 0.001)

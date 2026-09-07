@@ -20,6 +20,7 @@ extends RefCounted
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const CompositeSheetSlicer = preload("res://src/rendering/composite_sheet_slicer.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 
 const _SHEET_DIR := "res://assets/sprites/trees"
 
@@ -124,6 +125,9 @@ static var _frame_cache := {}
 static var _image_cache := {}
 ## Sliced composite sheets, keyed by path.
 static var _composite_cache := {}
+## The sliced sapling growth frames -- one shared sheet, so unlike every
+## cache above this is never keyed by species.
+static var _sapling_frame_cache: Array[Texture2D] = []
 
 
 static func has_art_for(species: String) -> bool:
@@ -214,6 +218,95 @@ func snow_canopy_for(species: String) -> Texture2D:
 	if not has_snow_frame_for(species):
 		return null
 	return canopy_frames_for(species)[CANOPY_SNOW]
+
+
+## ## The sapling growth sequence
+##
+## A young tree used to be the mature composite drawn small -- crown, boughs,
+## every twig, only shrunk -- which reads as a toy tree rather than a real
+## young one (reported: "small newborn trees are not saplings but rather
+## have a miniaturized full canopy"). This is a real seed-to-young-shoot
+## drawn sequence instead (see docs/concept/flora.md's "Sapling phase"),
+## shown while a tree is shorter than the player's own height.
+##
+## ONE shared sheet for every species, not a per-species entry like trunk/
+## canopy/fruit: a real sapling of any of this project's six species reads
+## close enough to identical that six nearly-the-same growth sequences was
+## not worth asking for yet -- a deliberate v1 simplification, named as such
+## in the concept doc rather than silently assumed permanent.
+##
+## Drawn on an opaque black ground rather than real transparency or this
+## project's usual magenta key (see character_art_brief.md), so it is
+## chroma-keyed here rather than relying on SpriteSheetSlicer's default
+## alpha-only reading of "background".
+const _SAPLING_SHEET_PATH := "%s/sapling.png" % _SHEET_DIR
+
+## Frames are non-uniform width (a seed is narrow, a young tree wide) and
+## separated by real gaps rather than a divider line, so the default
+## min-frame-width comfortably clears noise while still catching the
+## narrowest (seed) frame.
+const _SAPLING_MIN_FRAME_WIDTH := 20
+
+## The working canvas every sapling frame is normalized onto before caching
+## -- generous enough to hold the sheet's own largest frame content without
+## downscaling it, matching this class's existing "cut once, let the
+## renderer's own _scaled_piece rescale to the final box" division of
+## labour (see trunk_for/canopy_for, neither of which pre-scales for a
+## specific tree either).
+const _SAPLING_CANVAS_SIZE := Vector2i(320, 480)
+const _SAPLING_BASELINE_Y := 470
+
+var _sapling_slicer := SpriteSheetSlicer.new()
+
+
+## How many real growth-stage drawings the sapling sheet carries.
+func sapling_frame_count() -> int:
+	return _sapling_frames().size()
+
+
+## The sapling frame at `index`, clamped into range -- a creator/renderer
+## walking a growth fraction into an index never has to separately guard
+## the ends, the same "wrap/clamp so a caller can't go out of range"
+## contract this project's other indexed pools already give (see
+## HeroAppearance._wrap's own doc comment for the general shape, though
+## this clamps rather than wraps: a sapling has no "previous" past frame 0).
+func sapling_frame(index: int) -> Texture2D:
+	var frames := _sapling_frames()
+	if frames.is_empty():
+		return null
+	return frames[clampi(index, 0, frames.size() - 1)]
+
+
+## The sapling frame for a continuous [0, 1] growth fraction (see TreeGrowth.
+## sapling_progress) -- the one place that turns "how far through the
+## sequence" into a concrete frame index, so a renderer never has to
+## quantise it itself. Clamped the same way sapling_frame's own index is: a
+## caller handing in progress it derived itself (which can round fractionally
+## outside [0, 1] at the very ends) never has to separately guard them.
+func sapling_frame_for_progress(progress: float) -> Texture2D:
+	var frames := _sapling_frames()
+	if frames.is_empty():
+		return null
+	var index := int(round(clampf(progress, 0.0, 1.0) * float(frames.size() - 1)))
+	return sapling_frame(index)
+
+
+func _sapling_frames() -> Array[Texture2D]:
+	if not _sapling_frame_cache.is_empty():
+		return _sapling_frame_cache
+	var sheet := _load_image(_SAPLING_SHEET_PATH)
+	if sheet == null:
+		return []
+	var keyed := SpriteSheetSlicer.chroma_keyed(sheet, Color.BLACK, 0.08)
+	var rects := _sapling_slicer.detect_frames(keyed, 0, keyed.get_height(), _SAPLING_MIN_FRAME_WIDTH)
+	var normalized := _sapling_slicer.normalize_frames(
+		keyed, rects, _SAPLING_CANVAS_SIZE, _SAPLING_BASELINE_Y
+	)
+	var frames: Array[Texture2D] = []
+	for frame_image in normalized:
+		frames.append(ImageTexture.create_from_image(frame_image))
+	_sapling_frame_cache = frames
+	return _sapling_frame_cache
 
 
 ## Every fruit frame this species has, in sheet order.

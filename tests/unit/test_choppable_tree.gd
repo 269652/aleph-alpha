@@ -214,6 +214,118 @@ func test_a_sapling_is_still_a_smaller_node():
 	assert_almost_eq(tree.scale.x, 1.0, 0.02)
 
 
+# -- the sapling sheet, and the morph into a real mature tree ---------------
+#
+# A young tree below the player's own height (TreeGrowth.BRANCH_START_
+# FRACTION) draws from IllustratedTree's real sapling art instead of any
+# generated mature texture at all (reported: "small newborn trees are not
+# saplings but rather have a miniaturized full canopy"). Past that height it
+# shows the real MATURE texture, dissolving in from the sapling sheet's last
+# frame via TreeMorphShader as canopy_growth_fraction climbs; once that
+# finishes the morph clears and today's ordinary rendering takes over
+# untouched.
+
+const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
+const WindSway = preload("res://src/rendering/wind_sway.gd")
+
+
+## A tree whose canopy carries the REAL production shader material (see
+## TreeRenderer._build_tree_node) rather than _tree()'s own bare, material-
+## less Sprite2D -- needed to read back morph_progress/the sapling texture
+## uniform, which only exist on a real compiled ShaderMaterial.
+func _tree_with_shader_canopy() -> ChoppableTree:
+	var grown := _tree()
+	grown._canopy_sprite.material = WindSway.new().shared_material()
+	return grown
+
+
+func test_a_tree_below_branch_start_height_shows_real_sapling_art():
+	var tree := _tree()
+	tree.set_age(0.0)
+	var expected := IllustratedTree.new().sapling_frame_for_progress(
+		TreeGrowth.new().sapling_progress(tree.growth_scale)
+	)
+	assert_eq(
+		tree._canopy_sprite.texture.get_image().get_data(), expected.get_image().get_data()
+	)
+
+
+## The whole point of fixing this at the redraw itself, rather than relying
+## on the next season sync to correct a spawn-time placeholder: a fresh
+## sapling must show real sapling art immediately, with no season ever
+## having been set on it yet -- exactly the live window (a freshly-spread
+## seed, spawned with TreeRenderer's shared, always-fully-grown cached
+## texture, before the next season sync ever reaches it) the original bug
+## was actually seen in.
+func test_a_tree_below_branch_start_height_needs_no_season_at_all():
+	var tree := _tree()
+	assert_eq(tree.current_season(), "", "precondition: no season has been synced yet")
+	tree.set_age(0.0)
+	assert_not_null(tree._canopy_sprite.texture, "a young tree should already show something")
+
+
+func test_a_tree_past_branch_start_height_shows_the_real_mature_texture():
+	var tree := _tree()
+	tree.set_ripe_fruit(0, "summer")
+	tree.set_age(TreeGrowth.MATURITY_SECONDS * 0.5)
+	assert_gt(tree.growth_scale, TreeGrowth.BRANCH_START_FRACTION, "precondition: past branch-start")
+	assert_lt(tree.growth_scale, 1.0, "precondition: not yet fully grown")
+	var expected := ProceduralTreeSprite.new().generate_texture_with_fruit(
+		tree.species_bias, tree.sprite_seed, 0, "summer", "", 0.0, 1.0, 0.0
+	)
+	assert_eq(
+		tree._canopy_sprite.texture.get_image().get_data(), expected.get_image().get_data(),
+		"the morph dissolves a FULLY mature texture in, not a partially-branched one"
+	)
+
+
+func test_a_tree_mid_morph_pushes_the_real_progress_onto_its_shader():
+	var tree := _tree_with_shader_canopy()
+	tree.set_ripe_fruit(0, "summer")
+	tree.set_age(TreeGrowth.MATURITY_SECONDS * 0.5)
+	var expected_progress := TreeGrowth.new().canopy_growth_fraction(tree.growth_scale)
+	assert_between(expected_progress, 0.01, 0.99, "precondition: a real mid-morph value")
+	var material: ShaderMaterial = tree._canopy_sprite.material
+	assert_almost_eq(
+		float(material.get_shader_parameter("morph_progress")), expected_progress, 0.001
+	)
+	assert_not_null(
+		material.get_shader_parameter("morph_sapling_texture"),
+		"a mid-morph tree must actually carry a sapling texture to dissolve from"
+	)
+
+
+func test_a_fully_mature_tree_clears_the_morph():
+	var tree := _tree_with_shader_canopy()
+	tree.set_ripe_fruit(0, "summer")
+	tree.set_age(TreeGrowth.MATURITY_SECONDS * 2.0)  # well past full growth
+	var material: ShaderMaterial = tree._canopy_sprite.material
+	assert_almost_eq(float(material.get_shader_parameter("morph_progress")), 1.0, 0.001)
+
+
+## Two different trees dissolving at the same progress must scatter a
+## DIFFERENT set of clumps -- "each individual tree looks different when
+## maturing" -- via a distinct per-tree variant seed, the same property
+## TreeMorphShader itself already pins for the raw hash.
+func test_two_different_trees_get_different_morph_variant_seeds():
+	var tree_a := _tree_with_shader_canopy()
+	tree_a.sprite_seed = 11
+	tree_a.set_ripe_fruit(0, "summer")
+	tree_a.set_age(TreeGrowth.MATURITY_SECONDS * 0.5)
+
+	var tree_b := _tree_with_shader_canopy()
+	tree_b.sprite_seed = 97
+	tree_b.set_ripe_fruit(0, "summer")
+	tree_b.set_age(TreeGrowth.MATURITY_SECONDS * 0.5)
+
+	var material_a: ShaderMaterial = tree_a._canopy_sprite.material
+	var material_b: ShaderMaterial = tree_b._canopy_sprite.material
+	assert_ne(
+		material_a.get_shader_parameter("morph_variant_seed"),
+		material_b.get_shader_parameter("morph_variant_seed")
+	)
+
+
 # -- snow, a live-weather overlay pushed alongside season/turn --------------
 #
 # Unlike season/turn, snow coverage is not the world clock's business -- it
