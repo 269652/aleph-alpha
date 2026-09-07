@@ -80,6 +80,14 @@ static var _illustrated_generator := IllustratedMushroomSprite.new()
 static var _item_catalog := ItemCatalog.new()
 
 
+## One-line hook World._ready() calls once, before any decomposer can
+## possibly reach a mushroom -- see IllustratedMushroomSprite.warm_cache's
+## own doc comment for why. Delegates to the same shared _illustrated_
+## generator instance every MushroomMarker already reads its sprite from.
+static func warm_art_cache() -> void:
+	_illustrated_generator.warm_cache()
+
+
 func _ready() -> void:
 	add_to_group(DroppedItem.GROUP_NAME)
 	add_to_group(DroppedItem.FORAGEABLE_GROUP_NAME)
