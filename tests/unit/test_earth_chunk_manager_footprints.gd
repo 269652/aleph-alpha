@@ -84,6 +84,43 @@ func test_other_biomes_get_no_footprint_at_all():
 		)
 
 
+# -- underwater: a river/lake crossing grass/forest ground (rivers/lakes ---
+# -- never change biome_at_global's own result -- see docs/concept/
+# -- rivers.md) -- asked directly: "underwater footprints should be
+# -- tinted". A pure override on top of whatever biome would otherwise
+# -- give a real footprint -- it does NOT invent a footprint anywhere a
+# -- dry biome wouldn't already have one (a true "ocean" biome tile still
+# -- gets none at all, unaffected by this flag).
+
+func test_underwater_overrides_grass_and_forest():
+	assert_eq(EarthChunkManager.footstep_surface_for("grassland", false, true), "underwater")
+	assert_eq(EarthChunkManager.footstep_surface_for("forest", false, true), "underwater")
+
+
+func test_underwater_has_no_effect_on_biomes_with_no_footprint_at_all():
+	for biome in ["desert", "mountain", "tundra", "rainforest", "ocean"]:
+		assert_eq(
+			EarthChunkManager.footstep_surface_for(biome, false, true), "",
+			"%s should still get no footprint at all, underwater or not" % biome
+		)
+
+
+## Snow lying on top means the surface is frozen, not open water -- the
+## same priority order the function already had (snow checked first),
+## just confirmed to still hold now that a second override exists.
+func test_snow_still_wins_over_underwater():
+	assert_eq(EarthChunkManager.footstep_surface_for("grassland", true, true), "snow")
+	assert_eq(EarthChunkManager.footstep_surface_for("forest", true, true), "snow")
+
+
+## The default (no third argument) must keep matching dry land exactly --
+## every pre-existing 2-arg call site across the whole project is
+## unaffected by this feature.
+func test_underwater_defaults_to_false_for_every_pre_existing_caller():
+	assert_eq(EarthChunkManager.footstep_surface_for("grassland", false), "grass")
+	assert_eq(EarthChunkManager.footstep_surface_for("forest", false), "forest")
+
+
 # -- chunk lifecycle: same create-at-load/erase-at-unload shape as -------
 # -- _leaf_litter_fields ---------------------------------------------------
 
@@ -96,7 +133,7 @@ func test_a_loaded_chunk_gets_a_real_footprint_field():
 func test_a_loaded_chunk_gets_one_multimeshinstance_per_surface():
 	manager._load_chunk(_berlin_chunk)
 	var mmis: Dictionary = manager._footprint_mmis[_berlin_chunk]
-	for surface in ["snow", "grass", "forest"]:
+	for surface in ["snow", "grass", "forest", "underwater"]:
 		assert_true(mmis.has(surface))
 		assert_true(mmis[surface] is MultiMeshInstance2D)
 
@@ -106,6 +143,50 @@ func test_unloading_a_chunk_frees_its_footprint_state():
 	manager._unload_chunk(_berlin_chunk)
 	assert_false(manager._footprint_fields.has(_berlin_chunk))
 	assert_false(manager._footprint_mmis.has(_berlin_chunk))
+
+
+# -- record_footstep threads real river/lake presence through -------------
+# -- (see footstep_surface_for's own "underwater" tests above) -- a
+# -- source-contract test on the function body, the same shape and
+# -- reasoning test_world_crush_wiring.gd/test_world_footstep_wiring.gd
+# -- already use: a real river/lake at this specific test's fixed Berlin
+# -- tile is not guaranteed, so this proves the WIRING rather than
+# -- depending on world generation landing a river there.
+
+func _record_footstep_body() -> String:
+	var source := FileAccess.get_file_as_string("res://src/world/earth_chunk_manager.gd")
+	var start := source.find("func record_footstep")
+	assert_gt(start, -1, "the premise: this function must still exist and be named that")
+	var body_end := source.find("\nfunc ", start + 1)
+	return source.substr(start, body_end - start)
+
+
+func test_record_footstep_checks_for_a_real_river_or_lake():
+	var body := _record_footstep_body()
+	assert_true(body.contains("is_river_at_global("), "must check for a real river at the footstep tile")
+	assert_true(body.contains("is_lake_at_global("), "must check for a real lake at the footstep tile too")
+
+
+## Structural, not name-coupled: proves a THIRD argument was actually
+## added to the real call (not just that the river/lake check exists
+## somewhere unused in the function) without depending on whatever local
+## variable name holds it. To end of statement (a newline), not the first
+## ")" -- biome_at_global(tile.x, tile.y) has its own closing paren
+## nested inside, which a naive first-")" search stops at before reaching
+## the real one (the exact gotcha test_world_footstep_wiring.gd's own
+## "players_own_position_and_facing" test already documents avoiding).
+## Expects 3 commas, not 2: biome_at_global(tile.x, tile.y)'s own nested
+## call contributes one, on top of the two top-level argument separators.
+func test_record_footstep_passes_a_third_argument_to_footstep_surface_for():
+	var body := _record_footstep_body()
+	var call_index := body.find("footstep_surface_for(")
+	assert_gt(call_index, -1, "must still call footstep_surface_for at all")
+	var call_end := body.find("\n", call_index)
+	var call_text := body.substr(call_index, call_end - call_index)
+	assert_eq(
+		call_text.count(","), 3,
+		"must pass a third argument (the underwater check) alongside biome and snow_lying: %s" % call_text
+	)
 
 
 # -- record_footstep: the real per-frame entry point -----------------------

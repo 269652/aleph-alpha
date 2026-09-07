@@ -21,7 +21,7 @@ extends RefCounted
 
 const ProceduralFootprintSprite = preload("res://src/rendering/procedural_footprint_sprite.gd")
 
-const SURFACES := ["snow", "grass", "forest"]
+const SURFACES := ["snow", "grass", "forest", "underwater"]
 const _FALLBACK_SURFACE := "grass"
 
 static var _generator := ProceduralFootprintSprite.new()

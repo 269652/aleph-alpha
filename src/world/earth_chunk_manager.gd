@@ -4742,12 +4742,28 @@ const _FOOTSTEP_TELEPORT_GAP_PX := 200.0
 ## like World._step_path_scarring's own gate already does for its wear
 ## tracking. Any other biome (desert, mountain, tundra, rainforest,
 ## ocean) gets no footprint at all -- this feature's own explicit scope.
+##
+## `underwater` (asked directly: "underwater footprints should be
+## tinted") is a pure OVERRIDE on top of whatever biome would otherwise
+## give a real footprint -- a river or lake never changes biome_at_
+## global's own result (see docs/concept/rivers.md), so a river crossing
+## grassland/forest still reads as that same dry biome underneath; this
+## is what actually distinguishes "stepping in the river" from "stepping
+## on the bank" for a footprint's own look. It does NOT invent a
+## footprint anywhere a dry biome wouldn't already have one -- a true
+## "ocean" biome tile still gets none at all, underwater flag or not.
+## Snow still wins over it (frozen water is not open water), matching
+## snow's existing top priority exactly. Defaults to false so every
+## pre-existing 2-arg call site across the whole project is unaffected.
 const _SURFACE_BY_FOOTSTEP_BIOME := {"grassland": "grass", "forest": "forest"}
 
-static func footstep_surface_for(biome: String, snow_lying: bool) -> String:
+static func footstep_surface_for(biome: String, snow_lying: bool, underwater: bool = false) -> String:
 	if snow_lying:
 		return "snow"
-	return String(_SURFACE_BY_FOOTSTEP_BIOME.get(biome, ""))
+	var surface := String(_SURFACE_BY_FOOTSTEP_BIOME.get(biome, ""))
+	if surface.is_empty():
+		return ""
+	return "underwater" if underwater else surface
 
 
 ## Real per-step footfall placement (see FootstepGait, FootprintField --
@@ -4785,7 +4801,8 @@ func record_footstep(pixel_position: Vector2, heading: Vector2) -> void:
 	if side.is_empty():
 		return
 	var tile := _world_tile_for_pixel(pixel_position)
-	var surface := footstep_surface_for(biome_at_global(tile.x, tile.y), _snow_depth > 0.0)
+	var underwater := is_river_at_global(tile.x, tile.y) or is_lake_at_global(tile.x, tile.y)
+	var surface := footstep_surface_for(biome_at_global(tile.x, tile.y), _snow_depth > 0.0, underwater)
 	if surface.is_empty():
 		return
 	var print_position := pixel_position + FootstepGait.print_offset(heading, side)
