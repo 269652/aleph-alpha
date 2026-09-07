@@ -300,6 +300,26 @@ section, which now cross-references here).
   convention on disk yet for that test to sweep, so it is deferred to
   whichever migration (club or campfire) actually authors files, rather
   than written against an empty tree now.
+- ✅ **Icon-context coverage extended to the first 100 `ItemCatalog` ids**
+  (2026-09-08, `tests/unit/test_item_icon_registry_coverage.gd`) — closes
+  item_illustrations.md's own "Icon... eventually, per item" gap at the
+  registry-declaration level: every one of the first 100 ids (in
+  `_ITEMS`' own declared order) now has a bare `icon` context (`center`
+  anchor, one un-differentiated `"default"` state, one static `"still"`
+  frame) — `iron_sword`/`crude_blade` use `wooden_club`'s own real
+  `pristine`/`worn`/`broken` vocabulary instead, since item_durability.md
+  already models real wear for exactly those three weapons. `wooden_club`
+  itself gained an explicit `icon` context alongside its existing `held`
+  one, closing the specific icon-falls-back-to-held gap this doc's own
+  Status notes above already named as unimplemented. Deliberately bare:
+  no real art exists on disk for any of these yet, so every one still
+  resolves through to the procedural fallback exactly as before this pass
+  (pillar 4, "author the base, fill in the rest") — `has_subject`/
+  `entry_for` returning real data is what changes, not what a player sees
+  on screen today. Scope is icon only, per this pass's own ask — `placed`/
+  `held` contexts for placeable/weapon items among the 100, and the
+  remaining 2 catalog ids past the 100th, are still open, un-scaffolded
+  follow-ups, not an oversight.
 - ✅ `illustrated_art_resolver.gd` — the lattice above, returning
   `{is_procedural, context, season, state, animation}` (address only, not
   yet `frames` — loading real pixels waits on the generic loader below).

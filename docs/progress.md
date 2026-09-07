@@ -15925,3 +15925,48 @@ Combat/hunt/attack exertion for wildlife and the player both fall back to
 ordinary MOVING today (only `_is_fleeing`/`input_direction` are read) --
 a real, named simplification worth a follow-up once those states are
 tracked as persistently as fleeing already is.
+
+### Icon-context registry scaffolding for the first 100 ItemCatalog ids (`concept/illustrated_art_addressing.md`, `concept/item_illustrations.md`, 2026-09-08)
+
+Asked directly to scaffold "the first 100 items"; item_illustrations.md's
+own "Icon" states-table row already named this an open, unblocked gap
+("Eventually, per item... nothing blocks on this today"), and
+illustrated_art_addressing.md's registry (`illustrated_art_registry.gd`)
+had only ever declared its own two pilot subjects (`wooden_club`,
+`campfire`) since landing the day before.
+
+✅ Every one of the first 100 `ItemCatalog._ITEMS` ids (in their own
+declared order) now has a real `illustrated_art_registry.gd` entry
+declaring at minimum an `icon` context (`center` anchor, one
+un-differentiated `"default"` state, one static `"still"` frame) --
+`iron_sword`/`crude_blade` use `wooden_club`'s own real
+`pristine`/`worn`/`broken` state vocabulary instead, since
+item_durability.md already models real wear for exactly those three
+weapons; `wooden_club` itself gained an explicit `icon` context alongside
+its existing `held` one. New `tests/unit/test_item_icon_registry_
+coverage.gd` (4 tests, written red-first against the pre-existing 2-of-
+100 coverage) pins the exact 100-id list and requires each to resolve an
+icon context; the registry's own pre-existing self-consistency tests
+(`test_illustrated_art_registry.gd`) automatically extended their
+coverage to all 98 new entries with no test changes needed there, since
+they already iterate every registered subject generically.
+
+Deliberately bare and icon-only: no real art exists on disk for any of
+these yet, so every one still resolves through to the procedural
+fallback exactly as it did before this pass (pillar 4, "author the base,
+fill in the rest") -- this is registry-declaration groundwork, not a
+visible change, the same "real, live groundwork rather than a visible
+change on its own" shape `Item.sprite_id` was when it shipped. `placed`/
+`held` contexts for the placeable/weapon items among the 100 (campfire,
+furnace, sagewerk, storage, stone_dam; iron_sword, crude_blade), and the
+2 catalog ids past the 100th (`climbing_rope`, `honey`, both added to the
+catalog mid-session), are named, out-of-scope follow-ups, not an
+oversight -- see illustrated_art_addressing.md's own updated Status
+entry for the exact boundary.
+
+Also found and flagged (not fixed, spawned as a separate task): a full
+project-wide GUT discovery scan surfaced `tests/unit/test_nectar_
+economy.gd` silently failing to compile on `main` since 2026-09-04 (a
+pre-existing, unrelated bug -- the same "GUT swallows a parse error as a
+discovery warning, not a test failure" shape this session already hit
+twice before, in `test_player.gd` and `test_animal_genome.gd`).
