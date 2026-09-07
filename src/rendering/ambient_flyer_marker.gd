@@ -125,6 +125,17 @@ var worm_world = null
 ## set only for species whose diet contains FOOD_CATERPILLARS (today: robin
 ## alone), so a sparrow has no world to query here either.
 var caterpillar_world = null
+## Live ants -- reported live: "birds should forage live ants" (see
+## FlyerDiet.FOOD_ANTS, docs/concept/soil_fauna.md's own "Ants are not bird
+## prey" scope cut, now closed). Duck-typed for ants_near/take_ant_near (see
+## EarthChunkManager), same mound-tracked-forager query AntColony's own
+## corpse-foraging trip uses to find a live one to crush -- a bird's meal
+## targets the identical live forager, never a settled corpse (see
+## AntForagerMarker.is_corpse), and never plays the crushed death
+## animation. UNLIKE caterpillar_world above, this is set for BOTH
+## ground-foraging songbirds (see FlyerDiet.FOOD_ANTS's own doc comment for
+## why robin-only would be the wrong call here).
+var ant_world = null
 ## Fallen tree fruit -- endozoochory (see SeedEndozoochory /
 ## docs/concept/flora.md#bird-endozoochory). Set only for species whose diet
 ## contains fruit (currently the robin -- see FlyerDiet): `fruit_world` is
@@ -236,6 +247,13 @@ var _worm_pick_index := 0
 var _caterpillar_sniff_accumulator := 0.0
 var _caterpillar_target = null  # Vector2, or null
 var _caterpillar_pick_index := 0
+
+## The ant-shaped sibling of the same three-field shape, tried in parallel
+## with worm/caterpillar/fruit/seed every SEEKING tick, same as the rest of
+## this family.
+var _ant_sniff_accumulator := 0.0
+var _ant_target = null  # Vector2, or null
+var _ant_pick_index := 0
 
 ## Fallen fruit uses the same throttled-sniff shape as worms, but its own
 ## accumulator/target/pick-index -- worm-hunting and fruit-foraging run in
@@ -1375,6 +1393,8 @@ func _step_ground_forage(delta: float) -> bool:
 				_fly_at_worm(delta)
 			elif _caterpillar_target != null:
 				_fly_at_caterpillar(delta)
+			elif _ant_target != null:
+				_fly_at_ant(delta)
 			elif _fruit_target != null:
 				_fly_at_fruit(delta)
 			elif _seed_target != null:
@@ -1394,6 +1414,8 @@ func _step_ground_forage(delta: float) -> bool:
 					_take_targeted_worm()
 				elif _caterpillar_target != null:
 					_take_targeted_caterpillar()
+				elif _ant_target != null:
+					_take_targeted_ant()
 				elif _fruit_target != null:
 					_take_targeted_fruit()
 				elif _seed_target != null:
@@ -1419,11 +1441,13 @@ func _step_ground_forage(delta: float) -> bool:
 	# search's own can_commit() check is simply false and it no-ops.
 	_worm_target = null
 	_caterpillar_target = null
+	_ant_target = null
 	_fruit_target = null
 	_seed_target = null
 	_grass_seed_target = null
 	_look_for_worms(delta)
 	_look_for_caterpillars(delta)
+	_look_for_ants(delta)
 	_look_for_fruit(delta)
 	_look_for_seeds(delta)
 	_look_for_grass_seeds(delta)
@@ -1748,6 +1772,74 @@ func _look_for_caterpillars(delta: float) -> void:
 		return
 	if _caterpillar_target.distance_to(home) > _movement.radius:
 		home = _caterpillar_target
+
+
+## The ant-shaped sibling of _fly_at_worm -- identical shape, a different
+## target field and a different landing call (see _take_targeted_ant).
+func _fly_at_ant(delta: float) -> void:
+	if _ant_target == null:
+		ground_forage.abort()
+		return
+	var before := position
+	var to_target: Vector2 = _ant_target - position
+	if to_target.length() <= GroundForageBehavior.LANDING_DISTANCE:
+		_begin_ground_touchdown(_ant_target)
+		ground_forage.arrive()
+		perched = true
+		return
+	position += to_target.normalized() * _movement.speed * delta
+	face_travel(position - before, delta)
+
+
+## The ant-shaped sibling of _take_targeted_worm -- take_ant_near, a live
+## forager (see EarthChunkManager.take_ant_near's own doc comment: never a
+## settled corpse, and never AntColony.forager_crushed's Karma-relevant
+## crush -- a bird's meal is an entirely different event, handled by the
+## Karma-neutral AntColony.forager_eaten instead). Never plays the crushed
+## death animation, the same instant-disappear outcome an eaten worm or
+## caterpillar already gets.
+func _take_targeted_ant() -> void:
+	_fullness = BirdDigestion.fullness_after_meal(_fullness)
+	if ant_world == null or _ant_target == null:
+		return
+	ant_world.take_ant_near(_ant_target)
+
+
+## The ant-shaped sibling of _look_for_worms -- identical shape, reusing the
+## same WORM_SNIFF_INTERVAL throttle and GroundForageBehavior.choose_worm
+## scatter-pick. UNLIKE ants_near's own EarthChunkManager contract (radius
+## in pixels, shared with ant_corpses_near/leaf_litter_near), this converts
+## GroundForageBehavior.SEARCH_TILES to pixels before calling in -- the same
+## tiles-to-pixels conversion PollinatorForaging's own FORAGE_SEARCH_TILES
+## already needs at its call site, for the identical reason: the query it
+## is calling was built to the chunk-scan family's pixel-radius contract,
+## not the older tile-radius one worms/caterpillars/fruit/seeds all share.
+func _look_for_ants(delta: float) -> void:
+	if ant_world == null:
+		return
+	_ant_sniff_accumulator += delta
+	if _ant_sniff_accumulator < WORM_SNIFF_INTERVAL:
+		return
+	_ant_sniff_accumulator = 0.0
+	if not ground_forage.can_commit():
+		return
+	var ants: Array = ant_world.ants_near(
+		position, GroundForageBehavior.SEARCH_TILES * float(TerrainRenderer.TILE_SIZE)
+	)
+	if ants.is_empty():
+		return
+	_ant_pick_index += 1
+	var target := GroundForageBehavior.choose_worm(
+		position, ants, PixelNoise.value(wander_seed, _ant_pick_index, 0)
+	)
+	if target.is_empty():
+		return
+	_ant_target = target["position"]
+	if not ground_forage.begin_descent():
+		_ant_target = null
+		return
+	if _ant_target.distance_to(home) > _movement.radius:
+		home = _ant_target
 
 
 ## Looks for the next fallen fruit, on a throttled interval, and commits to
@@ -2354,6 +2446,7 @@ func _abandon_ground_forage() -> void:
 	perched = false
 	_worm_target = null
 	_caterpillar_target = null
+	_ant_target = null
 	_fruit_target = null
 	_seed_target = null
 	_grass_seed_target = null

@@ -49,6 +49,69 @@ func test_blooming_cells_only_returns_species_in_bloom_this_season():
 			)
 
 
+# -- blooming_cells' own real-time cache (fps round 8, docs/concept/
+# soil_fauna.md) -- every pollinator's own flowers_near call recomputed this
+# fresh, independently, every ~0.5s sniff (up to 300+ live pollinators):
+# real live measurement found this the single largest cost inside
+# AmbientFlyerMarker._step_scent (44-49% of its own total). blooming_cells
+# now takes an OPTIONAL `now_msec` -- omitted (the default), it behaves
+# exactly as before (always recomputes fresh, what every existing caller
+# above and the sprite-sync path in EarthChunkManager still get); passed a
+# real clock, results are memoized per season for at most
+# FlowerPatch.BLOOMING_CACHE_REFRESH_SECONDS of real time, which is what
+# flowers_near's own hot path now opts into.
+
+
+## A species reliably in bloom during "summer" -- whichever one it happens to
+## be, not a specific hardcoded id, so this stays correct if the roster ever
+## changes.
+func _a_summer_blooming_species() -> String:
+	for id in FlowerSpecies.IDS:
+		if FlowerSpecies.is_in_bloom(id, "summer"):
+			return id
+	assert_true(false, "expected at least one summer-blooming species to exist")
+	return ""
+
+
+func test_blooming_cells_without_a_clock_still_recomputes_fresh_every_call():
+	var patch := _patch()
+	var before := patch.blooming_cells("summer").size()
+	var new_cell := Vector2i(999, 999)
+	patch._flowers[new_cell] = _a_summer_blooming_species()
+	# No now_msec passed -- the pre-round-8 contract every existing caller
+	# above relies on: always fresh, never cached.
+	assert_eq(patch.blooming_cells("summer").size(), before + 1, "omitting now_msec must never cache")
+
+
+func test_blooming_cells_with_a_clock_does_not_see_a_change_within_the_refresh_window():
+	var patch := _patch()
+	var before := patch.blooming_cells("summer", 1000)
+	var new_cell := Vector2i(999, 999)
+	patch._flowers[new_cell] = _a_summer_blooming_species()
+	var after := patch.blooming_cells("summer", 1000)
+	assert_eq(after, before, "a call inside the same refresh window should return the cached result, missing the mutation")
+
+
+func test_blooming_cells_with_a_clock_sees_a_change_once_the_refresh_window_elapses():
+	var patch := _patch()
+	var before := patch.blooming_cells("summer", 1000).size()
+	var new_cell := Vector2i(999, 999)
+	patch._flowers[new_cell] = _a_summer_blooming_species()
+	var window_ms := int(FlowerPatch.BLOOMING_CACHE_REFRESH_SECONDS * 1000.0)
+	var after := patch.blooming_cells("summer", 1000 + window_ms + 1)
+	assert_eq(after.size(), before + 1, "a call past the refresh window should recompute and see the mutation")
+
+
+func test_blooming_cells_with_a_clock_still_only_returns_species_actually_in_bloom():
+	var patch := _patch()
+	for season in SEASONS:
+		for cell in patch.blooming_cells(season, 1000 + SEASONS.find(season) * 10000):
+			assert_true(
+				FlowerSpecies.is_in_bloom(patch.species_at(cell), season),
+				"a cached result must still only ever contain in-bloom species"
+			)
+
+
 ## The filter must not simply empty the world: every season has bloomers, so
 ## hiding everything would be as wrong as hiding nothing.
 ##

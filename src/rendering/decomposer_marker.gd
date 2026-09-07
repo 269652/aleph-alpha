@@ -51,6 +51,10 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
+const MushroomEffect = preload("res://src/gameplay/mushroom_effect.gd")
+const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
 
 const GROUP_NAME := "decomposer"
 
@@ -115,6 +119,32 @@ var wander_seed := 0
 var carrying_disease := false
 var _disease_model := DiseaseModel.new()
 var _disease_roll_count := 0
+
+## Real seconds left before this decomposer will consider a mushroom bite
+## again, set from MushroomBiting.satiation_seconds_for(this decomposer's
+## own real mass) on a successful bite (see _step_feeding) -- the report's
+## own "a small bug... is satisfied for a few hours" (docs/concept/
+## soil_fauna.md's "Progressive, mass-scaled bites, and real toxic
+## effects"). Deliberately narrow: gates ONLY the mushroom branch of
+## _nearest_food, not carrion/fruit/leaf-litter foraging, which this
+## marker has no general hunger concept for at all and this pass does not
+## add one.
+var _mushroom_satiation_remaining := 0.0
+
+## Toxic mushroom effects (docs/concept/mushrooms.md's "Toxic effects:
+## disorientation and illness", docs/concept/soil_fauna.md's "Progressive,
+## mass-scaled bites, and real toxic effects", MushroomEffect) -- the
+## exact real, reported case: "i just saw a bug eat a psylo and it didn't
+## do anything to it." Mirrors CreatureMarker's own active_spell_debuffs/
+## active_mushroom_debuffs shape exactly (a DebuffStack-tracked array),
+## extended to a decomposer for the first time -- this marker had no
+## timed-effect concept at all before this.
+var active_mushroom_debuffs: Array = []
+var _debuff_stack := DebuffStack.new()
+## Which real species most recently caused the CURRENT effect -- see
+## CreatureMarker._mushroom_effect_species' own doc comment for why this
+## single field (not per-stack) is an accepted, documented simplification.
+var _mushroom_effect_species := ""
 
 var _behavior := CarrionForageBehavior.new()
 var _target: Node2D = null
@@ -274,6 +304,49 @@ func _take_lod_step() -> float:
 	return step
 
 
+## Applies the real effect `species_id` causes (see MushroomEffect.
+## effect_kind_for) -- a no-op for a non-toxic species. Called from
+## _step_feeding once a bite lands on a real toxic mushroom species.
+func apply_mushroom_effect(species_id: String) -> void:
+	var kind := MushroomEffect.effect_kind_for(species_id)
+	if kind == "":
+		return
+	_mushroom_effect_species = species_id
+	active_mushroom_debuffs = _debuff_stack.apply(
+		active_mushroom_debuffs, kind, MushroomEffect.duration_for(species_id), MushroomEffect.MAX_STACKS
+	)
+
+
+## Advances every active mushroom debuff's remaining duration. Deliberately
+## does NOT roll a death chance the way CreatureMarker._mushroom_effect_step
+## does -- see MushroomEffect.is_lethal_capable's own doc comment: real
+## insects are documented as considerably more amatoxin-tolerant than
+## mammals (fungus gnat larvae famously develop IN death cap fruiting
+## bodies), so a decomposer gets the real Weakened slowdown below but never
+## risks dying from it.
+func _mushroom_effect_step(delta: float) -> void:
+	active_mushroom_debuffs = _debuff_stack.advance(active_mushroom_debuffs, delta)
+
+
+## Applies this decomposer's own active mushroom effects to one step's
+## worth of movement, `delta_vec` -- the actual position change
+## _step_seeking/_step_approaching already computed. Disoriented (a real
+## psychoactive species) wobbles the heading -- the report's own "how they
+## walk" ask -- rather than touching AmbientFlyerMovement itself (a
+## shared, carefully-tuned algorithm this file's own git history shows is
+## fragile to exactly this kind of change). Weakened (Death Cap) applies a
+## real, flat speed penalty, the identical mechanical shape
+## CreatureMarker's own _advance uses.
+func _mushroom_affected_delta(delta_vec: Vector2) -> Vector2:
+	if _debuff_stack.stacks_of(active_mushroom_debuffs, MushroomEffect.DISORIENTED_ID) > 0:
+		delta_vec = MushroomEffect.wobble_direction(
+			delta_vec, MushroomEffect.wobble_radians_for(_mushroom_effect_species), wander_seed, _elapsed_time
+		)
+	if _debuff_stack.stacks_of(active_mushroom_debuffs, MushroomEffect.WEAKENED_ID) > 0:
+		delta_vec *= MushroomEffect.weakened_speed_multiplier_for(_mushroom_effect_species)
+	return delta_vec
+
+
 ## Cheap: the player group holds one node in solo play. Cached per frame by
 ## the caller rather than scanned per creature would be better still, but
 ## this is already off the hot path for everything nearby.
@@ -309,6 +382,8 @@ func _process(frame_delta: float) -> void:
 	# wander-heading cadence relative to its OWN simulated time -- not real
 	# wall-clock frames it may be skipping most of.
 	_elapsed_time += delta
+	_mushroom_satiation_remaining = maxf(0.0, _mushroom_satiation_remaining - delta)
+	_mushroom_effect_step(delta)
 	var position_before := position
 	match _behavior.phase:
 		CarrionForageBehavior.Phase.SEEKING:
@@ -328,7 +403,12 @@ func _process(frame_delta: float) -> void:
 ## home-anchored AmbientFlyerMovement algorithm AmbientFlyerMarker already
 ## uses (see _movement's own doc comment).
 func _step_seeking(delta: float) -> void:
-	position = _movement.step_position(home, position, _elapsed_time, delta, wander_seed)
+	var position_before_wander := position
+	var stepped := _movement.step_position(home, position, _elapsed_time, delta, wander_seed)
+	# Toxic mushroom effects (see _mushroom_affected_delta's own doc
+	# comment) wobble/slow the actual step, rather than touching
+	# AmbientFlyerMovement itself.
+	position = position_before_wander + _mushroom_affected_delta(stepped - position_before_wander)
 	_behavior.advance(delta)  # no-op outside FEEDING, just ticks the rehunt clock
 	if _behavior.can_commit():
 		var found := _nearest_food()
@@ -484,12 +564,23 @@ func _nearest_food() -> Node2D:
 		# `is DroppedItem`/`item_stack` half is defensive, not load-bearing
 		# for correctness -- kept so a future bug in that join can never
 		# reintroduce the exact "invalid access to item_stack" crash this
-		# whole investigation started from. An already-bitten mushroom has
-		# nothing left to offer, so it is excluded here rather than costing
-		# a decomposer a wasted trip only to find take_mushroom_bite() a
-		# no-op on arrival.
+		# whole investigation started from. A FULLY eaten mushroom (see
+		# MushroomMarker.can_be_bitten, docs/concept/soil_fauna.md's
+		# "Progressive, mass-scaled bites") has nothing left to offer, so
+		# it is excluded here rather than costing a decomposer a wasted
+		# trip only to find take_mushroom_bite() a no-op on arrival -- a
+		# PARTIALLY bitten one (some real capacity still left) stays a
+		# real target, so a second bug can take a second bite.
 		var is_real_fruit: bool = node is DroppedItem and node.item_stack != null
-		var is_biteable_mushroom: bool = node.has_method("take_mushroom_bite") and not node.bitten
+		# Satiated (see _mushroom_satiation_remaining's own doc comment):
+		# recently ate a mushroom, not hungry enough to seek another one
+		# yet -- the report's own "is satisfied for a few hours". Gates
+		# ONLY this branch, not fruit/carrion above.
+		var is_biteable_mushroom: bool = (
+			_mushroom_satiation_remaining <= 0.0
+			and node.has_method("take_mushroom_bite")
+			and node.can_be_bitten()
+		)
 		if not is_real_fruit and not is_biteable_mushroom:
 			continue
 		var distance: float = position.distance_to(node.position)
@@ -535,7 +626,13 @@ func _step_approaching(delta: float) -> void:
 	# right beside home, so the overshoot case could never trigger); exposed
 	# by giving SEEKING a real wander distance to close. Same clamped-arrival
 	# shape NpcMarker._process already uses to walk toward its own target.
-	position = position.move_toward(_target.position, WALK_SPEED * delta)
+	# Toxic mushroom effects (see _mushroom_affected_delta's own doc
+	# comment) wobble/slow this step too -- a disoriented decomposer
+	# stumbles toward its target rather than beelining for it, re-aiming
+	# fresh from wherever it actually ends up each frame (move_toward
+	# recomputes to_target live), so it still eventually arrives.
+	var approach_step := position.move_toward(_target.position, WALK_SPEED * delta) - position
+	position += _mushroom_affected_delta(approach_step)
 
 
 func _step_feeding(delta: float) -> void:
@@ -552,13 +649,30 @@ func _step_feeding(delta: float) -> void:
 		elif _target.has_method("take_mushroom_bite"):
 			# A mushroom (see MushroomMarker.take_mushroom_bite): unlike a
 			# carcass's whittled-down health pool or a fallen fruit eaten
-			# whole in one visit, one bite marks it bitten and done -- it
-			# stays present, in the world and later in an inventory, just
-			# diminished (see MushroomBiting.gd), rather than removed
-			# outright. So this decomposer is done here regardless of what
-			# take_mushroom_bite() itself returns -- there is nothing left
-			# to gain from a second bite (see WildMushroomPatch.bite).
-			_target.take_mushroom_bite()
+			# whole in one visit, a bite advances a real per-mushroom stage
+			# count and stays present, in the world and later in an
+			# inventory, just diminished (see MushroomBiting.gd), rather
+			# than removed outright. How many stages -- and how long this
+			# decomposer stays satisfied afterward -- both scale with its
+			# own real mass (docs/concept/soil_fauna.md's "Progressive,
+			# mass-scaled bites, and real toxic effects"): a bug/ant-scale
+			# decomposer takes exactly one small nibble and won't seek
+			# another mushroom for a real while (see
+			# _mushroom_satiation_remaining). This decomposer is done here
+			# regardless of what take_mushroom_bite() itself returns --
+			# even a refused bite (already fully eaten by the time it
+			# arrived) means there is nothing left to gain from trying
+			# again immediately (see WildMushroomPatch.bite).
+			var mass_kg := CreatureMass.mass_kg_for(species)
+			var species_id: String = _target.species_id
+			if _target.take_mushroom_bite(MushroomBiting.bites_per_visit_for(mass_kg)):
+				_mushroom_satiation_remaining = MushroomBiting.satiation_seconds_for(mass_kg)
+				# Corrected 2026-09-07 -- the exact reported case: "i just
+				# saw a bug eat a psylo and it didn't do anything to it"
+				# (see docs/concept/mushrooms.md's "Toxic effects:
+				# disorientation and illness"). A no-op for a non-toxic
+				# species (see MushroomEffect.effect_kind_for).
+				apply_mushroom_effect(species_id)
 			_target = null
 			_behavior.abort()
 			return

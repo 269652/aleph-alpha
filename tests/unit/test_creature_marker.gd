@@ -14,6 +14,7 @@ const Carcass = preload("res://src/rendering/carcass.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
+const MushroomEffect = preload("res://src/gameplay/mushroom_effect.gd")
 
 const TILE_SIZE := 16
 
@@ -2329,8 +2330,14 @@ class ForageWorld:
 	func take_worm_at(_p: Vector2) -> bool:
 		return true
 
-	func take_mushroom_at(p: Vector2) -> String:
+	## Records every bite_stages value it was called with (see
+	## docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and
+	## real toxic effects") so a test can confirm the caller's own real,
+	## mass-scaled bite count actually reached here, not a hardcoded 1.
+	var taken_mushroom_bite_stages: Array = []
+	func take_mushroom_at(p: Vector2, bite_stages: int = 1) -> String:
 		taken_mushrooms.append(p)
+		taken_mushroom_bite_stages.append(bite_stages)
 		return mushroom_species_to_take
 
 	func solid_obstacles_near(_p: Vector2, _r: float) -> Array:
@@ -2514,14 +2521,40 @@ func test_a_boar_eating_a_mushroom_relieves_hunger_and_thirst_by_its_real_compos
 		"a mostly-water mushroom should relieve real thirst too")
 
 
-## A boar eats a toxic species exactly like any other -- MushroomSpecies.
-## is_toxic is deliberately never consulted for an animal's bite (see the
-## concept doc's own reasoning: the boar's already-real high DECAY
-## tolerance extended to fungal toxins generally). No debuff exists for
-## this because none is wired for animals at all -- the point of this
-## test is that eating still succeeds and still feeds, not that some
-## debuff is correctly skipped.
-func test_a_boar_eats_a_toxic_mushroom_without_harm():
+## The report's own concrete example: "a boar takes multiple successive
+## bites which would visibly reduce the mushroom" -- see docs/concept/
+## soil_fauna.md's "Progressive, mass-scaled bites, and real toxic
+## effects", MushroomBiting.bites_per_visit_for. A 90kg boar is
+## LARGE_EATER_MASS_THRESHOLD_KG and up -- every remaining stage in one
+## visit, not a bug's flat single nibble.
+func test_a_boar_eats_a_mushroom_using_its_own_mass_scaled_bite_count():
+	var MushroomBiting := preload("res://src/gameplay/mushroom_biting.gd")
+	var CreatureMass := preload("res://src/world/creature_mass.gd")
+	var world := ForageWorld.new()
+	world.mushrooms = [{"position": Vector2(20, 0), "species": "champignon"}]
+	var boar := _hungry_grazer("boar", world)
+	for _i in 900:
+		boar._process(1.0 / 60.0)
+		if not world.taken_mushroom_bite_stages.is_empty():
+			break
+	assert_eq(
+		world.taken_mushroom_bite_stages,
+		[MushroomBiting.bites_per_visit_for(CreatureMass.mass_kg_for("boar"))],
+		"a boar's own real mass-scaled bite count should reach take_mushroom_at, not a hardcoded 1"
+	)
+	assert_eq(world.taken_mushroom_bite_stages[0], MushroomBiting.MAX_BITE_STAGES)
+
+
+## A boar's TARGET SELECTION still never consults MushroomSpecies.is_toxic
+## (see the concept doc's own reasoning: the boar's already-real high
+## DECAY tolerance means it's willing to TRY any species) -- it walks to
+## and bites a toxic mushroom exactly like any other, and is fed the same
+## real amount either way. **Corrected 2026-09-07**: eating one now DOES
+## apply a real, observable MushroomEffect debuff afterward (see
+## docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and real
+## toxic effects") -- "untroubled by a little rot" was never the same
+## real fact as "immune to a psychoactive compound once swallowed".
+func test_a_boar_eats_a_toxic_mushroom_and_is_still_fed_the_same_real_amount():
 	var NutrientRelease := preload("res://src/gameplay/nutrient_release.gd")
 	var world := ForageWorld.new()
 	world.mushrooms = [{"position": Vector2(20, 0), "species": "fly_agaric"}]
@@ -2533,12 +2566,131 @@ func test_a_boar_eats_a_toxic_mushroom_without_harm():
 			break
 	assert_false(world.taken_mushrooms.is_empty(), "the boar should have taken the toxic mushroom")
 	# The same real composition-derived relief as any other mushroom, not a
-	# smaller/zeroed one and not the full-meter reset a debuff-avoidance
-	# path might otherwise apply -- eating a toxic species is mechanically
-	# identical to eating any other.
+	# smaller/zeroed one -- eating a toxic species still feeds it the
+	# identical real amount, only now ALSO applies a real toxic effect
+	# afterward (see the mushroom-effect tests below).
 	var nutrients: Dictionary = NutrientRelease.consume("fly_agaric")
 	assert_almost_eq(boar._needs.hunger, 1.0 - nutrients["sugar"], 0.01,
 		"a toxic mushroom should feed the boar the same real amount as any other")
+
+
+## The real, closing half of the report's own headline complaint: a boar
+## (or any real wildlife) eating a psychoactive mushroom now really is
+## measurably disoriented afterward, not unaffected.
+func test_a_boar_eating_a_psychoactive_mushroom_becomes_disoriented():
+	var world := ForageWorld.new()
+	world.mushrooms = [{"position": Vector2(20, 0), "species": "fly_agaric"}]
+	world.mushroom_species_to_take = "fly_agaric"
+	var boar := _hungry_grazer("boar", world)
+	for _i in 900:
+		boar._process(1.0 / 60.0)
+		if not world.taken_mushrooms.is_empty():
+			break
+	assert_gt(
+		boar._debuff_stack.stacks_of(boar.active_mushroom_debuffs, MushroomEffect.DISORIENTED_ID), 0,
+		"eating fly_agaric should leave the boar genuinely disoriented"
+	)
+
+
+## Death Cap is a real, categorically different hazard -- weakened, not
+## disoriented.
+func test_a_boar_eating_death_cap_becomes_weakened_not_disoriented():
+	var world := ForageWorld.new()
+	world.mushrooms = [{"position": Vector2(20, 0), "species": "death_cap"}]
+	world.mushroom_species_to_take = "death_cap"
+	var boar := _hungry_grazer("boar", world)
+	for _i in 900:
+		boar._process(1.0 / 60.0)
+		if not world.taken_mushrooms.is_empty():
+			break
+	assert_gt(boar._debuff_stack.stacks_of(boar.active_mushroom_debuffs, MushroomEffect.WEAKENED_ID), 0)
+	assert_eq(boar._debuff_stack.stacks_of(boar.active_mushroom_debuffs, MushroomEffect.DISORIENTED_ID), 0)
+
+
+## A real edible causes no effect at all -- this is not a blanket "eating a
+## mushroom always debuffs you" change.
+func test_a_boar_eating_an_edible_mushroom_gets_no_effect():
+	var world := ForageWorld.new()
+	world.mushrooms = [{"position": Vector2(20, 0), "species": "champignon"}]
+	world.mushroom_species_to_take = "champignon"
+	var boar := _hungry_grazer("boar", world)
+	for _i in 900:
+		boar._process(1.0 / 60.0)
+		if not world.taken_mushrooms.is_empty():
+			break
+	assert_eq(boar.active_mushroom_debuffs, [])
+
+
+# -- MushroomEffect wired into CreatureMarker's own movement/death (unit-level,
+# not the full forage-and-eat integration above) --------------------------
+
+func test_apply_mushroom_effect_applies_the_real_debuff_for_a_toxic_species():
+	marker.apply_mushroom_effect("psylo")
+	assert_gt(marker._debuff_stack.stacks_of(marker.active_mushroom_debuffs, MushroomEffect.DISORIENTED_ID), 0)
+
+
+func test_apply_mushroom_effect_is_a_no_op_for_a_non_toxic_species():
+	marker.apply_mushroom_effect("champignon")
+	assert_eq(marker.active_mushroom_debuffs, [])
+
+
+## The real "how they walk" ask: a disoriented creature's actual movement
+## direction measurably differs from its undisturbed heading -- not an
+## internal flag nothing reads.
+func test_disoriented_creature_does_not_walk_in_a_straight_line():
+	marker.apply_mushroom_effect("fly_agaric")  # the more dramatic wobble of the two psychoactive species
+	var start := marker.position
+	marker._advance(Vector2.RIGHT, 100.0, 1.0)
+	var straight_line_position := start + Vector2.RIGHT * 100.0
+	assert_ne(
+		marker.position, straight_line_position,
+		"a disoriented creature's real heading should visibly deviate from a straight line"
+	)
+
+
+## Mirrors test_herd_disease_severity_slows_an_infected_herbivores_movement's
+## own exact shape: a real, measurable speed difference, not a flag.
+func test_weakened_creature_moves_measurably_slower():
+	var start := marker.position
+	marker.apply_mushroom_effect("death_cap")
+	marker._advance(Vector2.RIGHT, 100.0, 1.0)
+	var weakened_distance := marker.position.distance_to(start)
+
+	marker.position = start
+	marker.active_mushroom_debuffs = []
+	marker._facing_commit_remaining = 0.0
+	marker._advance(Vector2.RIGHT, 100.0, 1.0)
+	var healthy_distance := marker.position.distance_to(start)
+
+	assert_lt(weakened_distance, healthy_distance)
+
+
+func test_mushroom_effect_expires_on_its_own():
+	marker.apply_mushroom_effect("psylo")
+	marker._mushroom_effect_step(MushroomEffect.DISORIENTED_DURATION_SECONDS + 1.0)
+	assert_eq(marker._debuff_stack.stacks_of(marker.active_mushroom_debuffs, MushroomEffect.DISORIENTED_ID), 0)
+
+
+## Real, but a genuine roll -- mirrors test_a_lethal_disease_death_leaves_
+## a_carcass_and_frees_the_marker's own exact "huge delta forces the
+## per-second chance past 1.0, deterministic regardless of seed" trick.
+func test_a_lethal_mushroom_effect_death_leaves_a_carcass_and_frees_the_marker():
+	var before := get_tree().get_nodes_in_group(Carcass.GROUP_NAME).size()
+	marker.apply_mushroom_effect("death_cap")
+	marker._mushroom_effect_step(1000.0)
+	assert_true(marker.is_queued_for_deletion())
+	var carcasses := get_tree().get_nodes_in_group(Carcass.GROUP_NAME)
+	assert_eq(carcasses.size(), before + 1)
+
+
+## The real, deliberate mammal-only asymmetry lives in DecomposerMarker
+## never calling this at all (see test_decomposer_marker.gd) -- but even
+## for CreatureMarker, disorientation itself (fly_agaric/psylo) must never
+## be lethal, only Death Cap's own weakened effect can be.
+func test_disorientation_alone_is_never_lethal_even_with_a_huge_delta():
+	marker.apply_mushroom_effect("psylo")
+	marker._mushroom_effect_step(1000.0)
+	assert_false(marker.is_queued_for_deletion())
 
 
 ## Nothing to walk to must not mean standing around starving: an animal on

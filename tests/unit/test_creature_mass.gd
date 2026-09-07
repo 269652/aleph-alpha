@@ -70,3 +70,21 @@ func test_mythical_bosses_scale_by_their_own_world_scale():
 
 func test_unknown_species_falls_back_rather_than_crashing():
 	assert_gt(CreatureMass.mass_kg_for("not_a_real_species"), 0.0)
+
+
+## Real reference figures for DecomposerMarker's own two species strings
+## (see docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and
+## real toxic effects") -- neither is an AnimalAnatomy species (a
+## decomposer is not built on CreatureMarker/CreatureAnatomy at all, see
+## DecomposerMarker's own class doc comment), so both need a real,
+## explicitly-tabulated entry rather than falling back to
+## _mass_from_world_scale, which has no AnimalAnatomy profile for either
+## to derive from.
+func test_a_bug_is_genuinely_tiny_and_lighter_than_a_mouse():
+	assert_gt(CreatureMass.mass_kg_for("bug"), 0.0)
+	assert_lt(CreatureMass.mass_kg_for("bug"), CreatureMass.mass_kg_for("mouse"))
+
+
+func test_an_ant_is_lighter_than_a_bug():
+	assert_gt(CreatureMass.mass_kg_for("ant"), 0.0)
+	assert_lt(CreatureMass.mass_kg_for("ant"), CreatureMass.mass_kg_for("bug"))

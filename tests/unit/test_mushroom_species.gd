@@ -90,6 +90,53 @@ func test_false_death_cap_is_not_toxic():
 	assert_false(MushroomSpecies.is_toxic("false_death_cap"))
 
 
+# -- psychoactive vs. purely toxic: two genuinely different real hazards ----
+#
+# Reported live, directly: "i just saw a bug eat a psylo and it didn't do
+# anything to it." Closing that gap (see docs/concept/soil_fauna.md's
+# "Progressive, mass-scaled bites, and real toxic effects") needed telling
+# apart two real, mechanistically DIFFERENT hazards `is_toxic` alone
+# conflates: real psilocybin/ibotenic-acid mushrooms cause genuine
+# motor-coordination impairment/disorientation, while Death Cap's real
+# amatoxin poisoning is a progressive illness with no perceptual
+# component at all. A new, second boolean trait, not a replacement for
+# is_toxic -- every psychoactive species IS toxic, but not every toxic
+# species is psychoactive.
+
+func test_fly_agaric_and_psylo_are_psychoactive():
+	assert_true(MushroomSpecies.is_psychoactive("fly_agaric"))
+	assert_true(MushroomSpecies.is_psychoactive("psylo"))
+
+
+## Real amatoxin poisoning (Death Cap) has no perceptual/psychoactive
+## component -- a categorically different real hazard (progressive
+## illness, not disorientation).
+func test_death_cap_is_toxic_but_not_psychoactive():
+	assert_true(MushroomSpecies.is_toxic("death_cap"))
+	assert_false(MushroomSpecies.is_psychoactive("death_cap"))
+
+
+func test_edible_species_are_not_psychoactive():
+	for id in ["black_trumpet", "champignon", "chanterelle", "parasol"]:
+		assert_false(MushroomSpecies.is_psychoactive(id), "%s is a real edible, not psychoactive" % id)
+
+
+## Every psychoactive species is itself toxic -- there is no real mushroom
+## that is psychoactive but not toxic in this roster.
+func test_every_psychoactive_species_is_also_toxic():
+	for id in MushroomSpecies.IDS:
+		if MushroomSpecies.is_psychoactive(id):
+			assert_true(MushroomSpecies.is_toxic(id), "%s is psychoactive -- it must also be toxic" % id)
+
+
+func test_false_death_cap_is_not_psychoactive():
+	assert_false(MushroomSpecies.is_psychoactive("false_death_cap"))
+
+
+func test_an_unknown_species_is_not_psychoactive():
+	assert_false(MushroomSpecies.is_psychoactive("portobello"))
+
+
 # -- host tree: mycorrhizal partnership vs. saprotroph --------------------
 #
 # Fly Agaric real-partners with pine; Black Trumpet and Chanterelle with

@@ -9498,6 +9498,83 @@ population alone -- not a bug in any one system, an architectural
 scale question for a future round. See `soil_fauna.md`'s own round-6
 entry for the full writeup.
 
+**FPS regression round 7: fish schooling's own unscoped whole-world scan
+(2026-09-07).** Direct follow-up to round 6's own closing note, picking
+up the still-open population-scale question: `fish_marker` and `ambient_
+flyer_marker` were the two costliest individual classes measured there
+(~13ms/frame each in a calm window); fish's per-instance cost ran ~2.5x
+ambient_flyer's despite a smaller population, the signature of a real
+per-call inefficiency rather than pure volume. Root cause: `FishMarker.
+_nearest_other_fish`'s own `get_tree().get_nodes_in_group("fish")` walk
+ran once PER FISH PER SCHOOLING SCAN, independently -- the FOURTH
+confirmed instance of the "one marker scans the whole world instead of a
+scoped neighbourhood" anti-pattern (after round 4's `AmbientFlyerMarker.
+_scan_for_partners`/`EarthChunkManager.crush_ants_near`, round 5's
+`DecomposerMarker._nearest_food`). Measured at 88-91% of `_step_
+schooling`'s own total. A real feedback loop, not just a flat cost: the
+0.5s re-scan gate runs on real wall-clock time via accumulated delta, so
+lower fps means more real time per engine frame, which crosses that gate
+more often per unit of frame count, re-triggering the unshared scan more
+-- consistent with this whole investigation's own recurring "why does it
+stay pinned at 4-10fps" pattern.
+
+Fixed the same way round 5 was: one shared fetch per real-time window
+(matching `FishSchooling.SCAN_INTERVAL`'s own cadence exactly), cached
+via a `static var` shared across every fish instead of each independently
+re-fetching. `EarthChunkManager.nearest_fish_position` was checked first
+as a possible existing scoped registry to reuse and found to have the
+identical unscoped shape itself -- no real per-chunk fish registry exists
+yet, so the shared-cache fix was right-sized here too. 57/58 green in
+`test_fish_marker.gd` (the one non-failing "risky" result is pre-existing
+and unrelated), strict TDD with a real call-counting stub
+(`_CountingFishTree`), mirroring round 5's own idiom. Live `--solo` boot
+confirmed clean. **Real, confirmed, explicitly still open**: `ambient_
+flyer_marker` remains the other ~13ms/frame contributor, not yet
+investigated (a genuinely more complex precedence-ordered behavior tree,
+not a simple three-step shape like fish); the broader population-scale
+question round 6 named stays open regardless of how many more
+concentrated bugs like this one get found. See `soil_fauna.md`'s own
+round-7 entry for the full writeup.
+
+**FPS regression round 8: pollinator scent's own redundant per-chunk
+recompute (2026-09-07).** Direct follow-up, same session, to round 7's
+own closing note ("Jap mache weiter"): `ambient_flyer_marker._process`
+split into its full 13-region breakdown (every named `_step_*`, the
+behavior-tree branch, forage/wander tails); `_step_scent` alone
+accounted for 44-67% of the whole function's total. First hypothesis
+(`EarthChunkManager.claims_near`'s own doc-commented "O(pollinators on
+screen), a couple hundred at most" assumption, the same shape this
+investigation keeps finding) tested via a 5-way split of `_step_scent`
+and REJECTED -- genuinely small, under 10% of scent's own total. Root
+cause instead: `EarthChunkManager.flowers_near`, already correctly
+scoped to a 3x3 chunk neighbourhood by a documented prior fix, still
+recomputed `FlowerPatch.blooming_cells` (a full linear scan of every
+planted cell) completely fresh, independently, for every pollinator's
+own ~0.5s sniff -- measured at 44-49% of `_step_scent`'s total, with up
+to 300+ live pollinators redundantly recomputing the identical
+per-chunk answer within the same real-time window. Structurally the
+same "many instances redundantly recompute a shared answer" shape
+rounds 4/5/7 already closed, via a different mechanism: the query was
+already scoped, the waste was in never sharing the expensive per-chunk
+computation across askers.
+
+Fixed with per-patch memoization rather than a shared flat-list cache
+(unlike rounds 5/7, `FlowerPatch` already exists one-per-chunk, so the
+instance itself is the natural cache unit): `blooming_cells(season,
+now_msec)` takes an optional real clock, defaulting to the exact
+pre-round-8 always-fresh behavior for every existing caller; only
+`flowers_near`'s own hot path opts in, memoized per season for at most
+0.5s (matching `SCENT_SNIFF_INTERVAL`'s own cadence). A real regression
+risk -- `test_earth_chunk_manager.gd`'s own plant-then-immediately-query
+test -- was checked directly rather than assumed safe, and still
+passes. 42/42 green in `test_flower_patch.gd` with four new tests using
+real mutation between calls (no injectable computation seam existed to
+spy on, unlike rounds 5/7's cache tests). Live `--solo` boot confirmed
+clean. Explicitly still open: the population-scale question rounds 6/7
+already named, and `ambient_flyer_marker`'s own aggregate cost was not
+re-measured after this fix. See `soil_fauna.md`'s own round-8 entry for
+the full writeup.
+
 ### Flies (`concept/flies.md`)
 
 Another concept doc with real, substantial ✅ status entirely of its own
@@ -15107,3 +15184,225 @@ flushes readily once autumn reaches ITS OWN window
 progress through rather than just moisture/season
 (`test_earth_chunk_manager_mushrooms.gd`) -- all green, zero regressions
 across every pre-existing mushroom test file.
+
+### Progressive, mass-scaled mushroom bites, and real toxic effects (`concept/mushrooms.md`, `concept/soil_fauna.md`, `concept/ecosystem_dynamics.md`, 2026-09-07)
+
+Reported live, directly, three real gaps in one report: *"i just saw a
+bug eat a psylo and it didn't do anything to it... also the amount the
+bug eats should be based on mass; hunger and calories so a small bug
+probably only takes a single bite out of the mushroom and is satisfied
+for a few hours... so a bug biting into a mushroom should only increase
+bitten step by 1 so another bug can take a second bite or a boar takes
+multiple successive bites which would visibly reduce the mushroom."*
+Each verified against the real, current code before assuming any of
+them unbuilt (per this project's own established habit) — see
+[soil_fauna.md's "Progressive, mass-scaled bites, and real toxic
+effects"](concept/soil_fauna.md#progressive-mass-scaled-bites-and-real-toxic-effects-2026-09-07)
+for the full mechanism spec this entry summarizes.
+
+**(A) One bite is now a real step, not a one-shot flag.**
+`WildMushroomPatch._bitten` (bool) → `_bite_stage` (int, capped at a new
+`MushroomBiting.MAX_BITE_STAGES := 3`, matching exactly how many
+independently-delivered bitten sheets exist per species). `bite(cell,
+stages: int = 1) -> int` returns stages actually applied and clamps to
+remaining capacity; reaching the cap genuinely consumes the mushroom
+(ends fruiting, new `"eaten"` corpse kind, mirroring the existing
+`"crushed"` one). `IllustratedMushroomSprite`'s 3 delivered bitten sheets
+per species — previously flattened into one 75-frame same-stage variety
+pool — are now 3 real progressive STAGES
+(`bitten_frame_for(species_id, seed, stage)`), so a mushroom's own art
+visibly advances as it's eaten further. `MushroomMarker.bite_stage`
+(authoritative) + `bitten` (kept as a `bite_stage > 0` compatibility
+mirror) + new `can_be_bitten()` replace the old flag throughout.
+
+**(B) Bite count and satiation scale with the eater's real mass.** New
+`MushroomBiting.bites_per_visit_for(mass_kg)` — tiered on real body mass
+(`CreatureMass`, gaining real `"ant"` 3mg/`"bug"` 300mg entries): under
+1kg takes 1 stage, 1–50kg takes 2, 50kg+ (a 90kg boar) takes all 3 in one
+visit — the user's own two worked examples exactly. New
+`MushroomBiting.satiation_seconds_for(mass_kg)`, derived from Kleiber's
+law (BMR ∝ mass^0.75 ⟹ satiation duration ∝ mass^0.25, not eyeballed):
+pinned at 90 real seconds for a bug (the report's own "a few hours" read
+against how a play session actually narrates elapsed time, not the
+literal `SeasonCycle.SECONDS_PER_DAY` calendar, which would place it at
+real tens of minutes instead), landing around 35 real minutes for a boar
+as a derived consequence. Wired narrowly:
+`DecomposerMarker._mushroom_satiation_remaining` gates only the mushroom
+branch of its own foraging (carrion/fruit/leaf-litter untouched);
+`CreatureMarker` needed no separate gate — its existing `_needs` hunger
+meter already is the general satiation mechanism for real wildlife, only
+its bite COUNT (`EarthChunkManager.take_mushroom_at`'s new
+`bite_stages` parameter) needed to scale.
+
+**(C) Which creatures eat a mushroom — confirmed, then extended.** A
+decomposer ant/bug already could (`carrion.md`'s fungivory), and a boar
+already could too (2026-09-06's own entry above) — so this was NOT a new
+integration, contrary to how large a "does a boar eat mushrooms" ask
+could have been; it needed the SAME generic bite-step/mass-scaling
+machinery from (A)/(B) wired into boar's already-existing bite call
+site, not a parallel system.
+
+**(D) Real, distinct toxic effects — the report's own headline bug,
+closed.** New `MushroomSpecies.is_psychoactive` (fly_agaric/psylo — real
+motor-coordination impairment) as a second classification alongside
+`is_toxic`, since Death Cap is toxic but NOT psychoactive (real amatoxin
+poisoning has no perceptual component — a categorically different real
+hazard). New pure module `MushroomEffect`
+(`src/gameplay/mushroom_effect.gd`): **Disoriented** — an erratic
+movement-heading wobble (±60° at Fly Agaric's own reference severity,
+scaled down for Psilocybe via the existing `MushroomToxin.severity_for`
+ordering, re-rolled every 0.5s), 45 real seconds. **Weakened** — a real
+movement-speed penalty (50% at Death Cap's reference severity), 60 real
+seconds, plus — mammal-scale wildlife only — a small, pinned per-second
+death chance (`DEATH_CAP_DEATH_CHANCE_PER_SECOND := 0.0015`, cumulative
+~8.6% over one full 60s window: a real, reachable, deliberately
+uncommon outcome, not an accidental instant kill). Both reuse the exact
+`DebuffStack`/`active_spell_debuffs` pattern `SpellStatusEffects` already
+proved on `CreatureMarker` (a second, parallel `active_mushroom_debuffs`
+array), extended to `DecomposerMarker` for the first time — `DiseaseModel`
+was read and rejected as the wrong shape (a single ingestion event has no
+SIRS contact-transmission cycle to model). Wired into each marker's own
+single movement choke point (`CreatureMarker._advance`,
+`DecomposerMarker._step_seeking`/`_step_approaching`'s own computed
+position delta — NOT `AmbientFlyerMovement` itself, documented elsewhere
+as fragile to exactly this kind of change) and a new unconditional
+per-frame `_mushroom_effect_step`. **Lethality is deliberately
+mammal-only**: `DecomposerMarker` gets the identical Weakened slowdown
+but never rolls a death chance at all — real insects (famously, fungus
+gnat larvae that develop IN death cap fruiting bodies) are documented as
+considerably more amatoxin-tolerant than mammals, a real-world-grounded
+asymmetry, not a cost-cutting shortcut.
+
+**Deliberate scope cuts, named rather than silently left inconsistent**:
+a picked-up multi-stage-bitten mushroom's catalog mass is NOT
+stage-scaled (still the existing flat `MushroomBiting.
+RETAINED_FRACTION_AFTER_BITE`, regardless of which stage it was picked
+at — making it stage-aware would need new per-stage catalog rows for
+every species, a separate, larger change); a boar's nutrient yield from
+one mushroom bite is NOT scaled by how many stages that bite consumed
+(still the existing flat per-bite-event amount).
+
+All-new/updated: `src/gameplay/mushroom_biting.gd`,
+`src/gameplay/mushroom_effect.gd` (new), `src/world/mushroom_species.gd`,
+`src/world/creature_mass.gd`, `src/world/wild_mushroom_patch.gd`,
+`src/rendering/illustrated_mushroom_sprite.gd`,
+`src/rendering/mushroom_marker.gd`, `src/rendering/decomposer_marker.gd`,
+`src/rendering/creature_marker.gd`, `src/world/earth_chunk_manager.gd`.
+453 tests across 10 test files (1 new: `test_mushroom_effect.gd`, 25
+tests) green, plus every pre-existing mushroom/decomposer/creature-marker
+suite reconfirmed unaffected.
+
+### Crushed ants are now real corpses other ants forage home, and both ground-foraging songbirds hunt live ants (`concept/soil_fauna.md`, 2026-09-07)
+
+Reported directly: *"ants do also disappear after a few seconds after
+being crushed.. instead dead ants should be foraged by other ants so they
+get visibly dragged into the mound... also birds should forage life
+[live] ants."* Closes two things `soil_fauna.md` named explicitly: a
+crushed ant fading on a bare timer with nothing ever sensing it, and the
+"Ants are not bird prey" scope cut.
+
+**Ant corpses.** `AntForagerMarker.is_corpse()` is true once a crushed
+ant's `SquashCrushEffect` linger has actually completed -- mid-death is
+never a valid target. A settled corpse then persists for
+`EarthwormPatch.RECOVERY_SECONDS` (reusing the exact constant
+`EarthwormPatch` already uses for its own drowned/predated-worm corpse)
+before decomposing away on its own if nothing finds it first.
+`EarthChunkManager._ant_corpses` tracks corpses chunk-keyed rather than
+mound-keyed -- a corpse has no owner, so any mound's forager can take it,
+the same first-come-first-served free-for-all every other forage resource
+here already has, not a new ownership/rivalry concept.
+`ant_corpses_near`/`take_ant_corpse_near` mirror `leaf_litter_near`/
+`consume_leaf_litter_at`'s exact 3x3-chunk-neighbourhood scan shape.
+`_sense_food_nearby` gained a fourth, last-checked `forage_kind`
+("corpse", after seed/windfall/leaf), and a successful trip visibly
+carries the corpse home exactly like a carried leaf
+(`AntForagerMarker._update_carried_corpse`, tinted with the shared
+`SquashCrushEffect.TINT`), feeding the mound's real food reserve on
+arrival through the existing `"leaf"`-shaped RETURNING/deposit path
+(`_resolve_arrival_at_mound` now treats `"leaf"` and `"corpse"`
+identically).
+
+**Birds hunting live ants.** `EarthChunkManager.ants_near`/`take_ant_near`
+scan the SAME mound-keyed `_active_ant_foragers` dict `crush_ants_near`
+already uses, mirroring its shape, but explicitly exclude a settled
+corpse (`marker.is_corpse()`) -- a bird's meal, a crush, and a same-
+species corpse pickup are three distinct events sharing one underlying
+marker. `AntColony.forager_eaten(cell)` is a deliberate, Karma-neutral
+sibling of `forager_crushed`: a wild bird eating a wild ant is not a
+player action and must never cost Karma. `FlyerDiet.FOOD_ANTS` is new,
+and -- asked directly, "can you mimick real world there?" after an
+initial robin-only plan mirroring the caterpillar precedent -- given to
+BOTH the robin and the sparrow, not just the robin: real American robins
+are documented generalist ground insectivores that take ants among their
+varied invertebrate diet, but real house sparrows, despite being
+primarily granivorous, are ALSO well-documented opportunistic ant-eaters,
+arguably proportionally more so than robins, since a ground-foraging,
+bare-soil/short-grass bird routinely crosses ant trails and mounds while
+working seed heads rather than visually hunting one specific, larger prey
+item the way a robin's own worm/caterpillar hunting already does.
+`AmbientFlyerMarker.ant_world`/`_look_for_ants`/`_fly_at_ant`/
+`_take_targeted_ant` mirror the caterpillar trio exactly (same throttled
+sniff, same `GroundForageBehavior.choose_worm` scatter pick), through the
+shared seek/descend/peck/resume cycle -- converting `GroundForageBehavior.
+SEARCH_TILES` to pixels at the call site (`TerrainRenderer.TILE_SIZE`),
+since `ants_near` speaks the newer pixel-radius contract
+`ant_corpses_near`/`leaf_litter_near` share, not the older tile-radius one
+worms/caterpillars/fruit/seeds all use.
+
+Still explicitly out of scope, unchanged: ants scavenging `fly_colony.gd`
+CARRION (a dead animal/creature) -- same-species corpse retrieval above is
+a genuinely different, narrower thing and does not touch that system.
+
+All coverage green: `test_ant_forager_marker.gd` 74/74 (corpse lifecycle,
+corpse forage-kind, carried-corpse visuals), `test_earth_chunk_manager.gd`
+'s ant/corpse-scoped tests, `test_ant_colony.gd` 97/97 (`forager_eaten`),
+`test_flyer_diet.gd` 30/30 (`FOOD_ANTS`), `test_ambient_flyer_marker.gd`
+181/183 (the 2 failures are the pre-existing, unrelated whirl-pair flake
+this doc already flags elsewhere), `test_ambient_flyer_renderer.gd`
+54/54.
+
+### A wild creature mid-chase now survives crossing a chunk border (`concept/ecosystem_dynamics.md`, 2026-09-07)
+
+Reported live: *"animals (like a boar chasing or a deer being hunted) don't
+survive chunk borders and just disappear."*
+
+✅ **`EarthChunkManager._unload_chunk`'s creature-free loop now checks each
+creature's live position first.** Root cause: `_loaded_creatures` tracks
+chunk membership by bookkeeping set once at spawn/reconcile time and never
+updated as a creature actually moves, so a predator mid-hunt or prey
+mid-flee (`CreatureMarker`'s uncapped `FLEE_SPEED`/`HUNT_SPEED`, no
+home-range leash) that wandered into a neighbouring, still-loaded chunk was
+freed anyway the instant its *original* chunk fell outside
+`UNLOAD_RADIUS` — deleted while standing right next to the player. New
+`_rehome_wandered_creature(creature, stale_chunk_coord)` re-derives the
+creature's current chunk from its live position: still in the chunk being
+unloaded, or wandered somewhere not currently loaded at all, and it is
+freed exactly as before; wandered into a chunk this manager still
+considers loaded, and it is re-filed there instead — the same live
+instance, not a respawn. Deliberately excludes anything
+`_save_kept_animals`/`_save_growing_juveniles` already cover (tamed, tied,
+or an immature juvenile) — those are already serialized to the stale
+chunk's own save file and respawned fresh on its next load, so re-homing
+the same live instance too would produce a duplicate.
+
+⬜ **No chase-distance leash added, named rather than silently absorbed.**
+A hunt/flee can in principle still carry a creature across more than one
+chunk between two `EarthChunkManager.update()` calls (calls happen every
+client frame, so in practice this needs a lot of open, chunk-sparse
+ground); landing somewhere not yet loaded at all is still an ordinary
+despawn, the same "two fidelities" trade-off as any other creature
+leaving the relevant area.
+
+New `tests/unit/test_earth_chunk_manager_creature_persistence.gd` (5/5,
+minimal-manager style, no real chunk generation needed) covers the core
+repro, the still-freed regressions (never left / wandered somewhere
+unloaded), and the tamed-animal exclusion. Regression-checked directly
+against `test_earth_chunk_manager.gd`'s own real-pipeline creature tests:
+`test_a_tamed_horse_is_still_there_after_its_chunk_unloads`,
+`test_evicting_old_chunks_frees_their_creature_markers`,
+`test_a_hunted_out_region_stops_showing_creature_markers` — all green (the
+tamed-horse test's first run hit the known shared-`user://`-dir flake at
+the "Berlin" fixture coordinate, unrelated to this change: a tamed
+creature's fate is decided entirely by the pre-existing
+`KeptAnimals.is_worth_keeping` check, which returns before this fix's own
+position logic ever runs; a clean retry passed).

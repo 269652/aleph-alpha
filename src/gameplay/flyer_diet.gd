@@ -30,8 +30,11 @@ const FOOD_FRUIT := "fruit"
 const FOOD_FISH := "fish"
 const FOOD_NECTAR := "nectar"
 const FOOD_CATERPILLARS := "caterpillars"
+const FOOD_ANTS := "ants"
 
-const FOOD_TYPES := [FOOD_WORMS, FOOD_SEEDS, FOOD_FRUIT, FOOD_FISH, FOOD_NECTAR, FOOD_CATERPILLARS]
+const FOOD_TYPES := [
+	FOOD_WORMS, FOOD_SEEDS, FOOD_FRUIT, FOOD_FISH, FOOD_NECTAR, FOOD_CATERPILLARS, FOOD_ANTS,
+]
 
 ## Foods a flyer has to LAND to eat -- the ones that put it through the
 ## descend/sit/peck/resume cycle (see GroundForageBehavior). Fish is not one
@@ -40,8 +43,10 @@ const FOOD_TYPES := [FOOD_WORMS, FOOD_SEEDS, FOOD_FRUIT, FOOD_FISH, FOOD_NECTAR,
 ## Fruit IS one -- fallen fruit sits on the ground exactly like a worm does
 ## (see docs/concept/ecosystem_dynamics.md's frugivory section). So is a
 ## ground-based caterpillar (see FOOD_CATERPILLARS's own doc comment) --
-## the same descend-and-peck a robin already does for a worm.
-const GROUND_FOODS := [FOOD_WORMS, FOOD_SEEDS, FOOD_FRUIT, FOOD_CATERPILLARS]
+## the same descend-and-peck a robin already does for a worm. So is a live
+## ant (see FOOD_ANTS's own doc comment) -- the identical cycle again, just
+## against EarthChunkManager.ants_near/take_ant_near instead.
+const GROUND_FOODS := [FOOD_WORMS, FOOD_SEEDS, FOOD_FRUIT, FOOD_CATERPILLARS, FOOD_ANTS]
 
 ## Real robins are insectivores that hunt worms by sight from the ground, AND
 ## genuine omnivores that switch onto soft fruit/berries once it's available
@@ -86,9 +91,27 @@ static func eats_fruit_species(species: String, fruit_species: String) -> bool:
 ## than silently drops: gleaning prey off foliage is a genuinely different
 ## targeting problem from a ground-forage descend-and-peck, and is not
 ## solved here.
+##
+## Reported live: "birds should forage live ants" (see docs/concept/
+## soil_fauna.md's own "Ants are not bird prey" scope cut, now closed).
+## UNLIKE caterpillars above, this is deliberately given to BOTH ground-
+## foraging songbirds, not robin-only: real American robins are
+## documented generalist ground insectivores that do take ants among
+## their varied invertebrate diet (the same "worms, caterpillars, and
+## more" pattern this file already gives them), but real house sparrows --
+## despite being primarily granivorous -- are ALSO well-documented
+## opportunistic ant-eaters, arguably proportionally more so than robins,
+## precisely because a ground-foraging, short-grass/bare-soil bird
+## routinely crosses ant trails and mounds while working seed heads,
+## rather than visually hunting a specific, larger prey item the way a
+## robin's own worm/caterpillar hunting already does. Ants target
+## EarthChunkManager.ants_near/take_ant_near -- a live forager, never a
+## settled corpse (see AntForagerMarker.is_corpse) -- a bird's meal is an
+## entirely different event from being crushed underfoot or foraged home
+## by another ant, and never plays that death animation.
 const DIET_BY_SPECIES := {
-	"robin": [FOOD_WORMS, FOOD_FRUIT, FOOD_CATERPILLARS],
-	"sparrow": [FOOD_SEEDS, FOOD_FRUIT],
+	"robin": [FOOD_WORMS, FOOD_FRUIT, FOOD_CATERPILLARS, FOOD_ANTS],
+	"sparrow": [FOOD_SEEDS, FOOD_FRUIT, FOOD_ANTS],
 	"kingfisher": [FOOD_FISH],
 	"monarch": [FOOD_NECTAR],
 	"swallowtail": [FOOD_NECTAR],
