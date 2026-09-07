@@ -23,6 +23,19 @@ const PLAYER_MASS_KG := StoneSize.AVERAGE_BODY_MASS_KG
 ## so those fall back to _mass_from_world_scale instead (see
 ## mass_kg_for).
 const _REAL_MASS_KG := {
+	# Neither "ant" nor "bug" is an AnimalAnatomy species (DecomposerMarker
+	# is deliberately not built on CreatureMarker/CreatureAnatomy at all --
+	# see that class's own doc comment), so both need a real, explicitly-
+	# tabulated entry here rather than falling back to
+	# _mass_from_world_scale, which has no AnimalAnatomy profile for either
+	# to derive from (see docs/concept/soil_fauna.md's "Progressive,
+	# mass-scaled bites, and real toxic effects" -- the mass-scaled bite
+	# economics this table now also drives, alongside worm-crush).
+	# A common ant worker's real, commonly-cited mass.
+	"ant": 0.000003,
+	# A real ground/carrion-beetle-scale figure -- DecomposerMarker's other
+	# species string, a mid-sized insect clearly heavier than a single ant.
+	"bug": 0.0003,
 	"mouse": 0.02,
 	"squirrel": 0.5,
 	"arctic_fox": 3.5,
