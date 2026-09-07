@@ -312,6 +312,40 @@ Includes a teleport guard: a huge position jump between two consecutive
 calls (respawn, dev command, save load) re-baselines instead of stamping
 a stray print bridging the gap.
 
+### Grass/forest prints were already wired but effectively invisible (2026-09-07)
+
+Reported live: *"footsteps only show when snow is visible... they should
+generally show up lighter for grassland and forest even without snow...
+a bit deeper in forest ground."* `record_footstep`/`footstep_surface_for`
+already produced real `"grass"`/`"forest"` prints without snow lying (see
+above — never snow-gated) — the report traces to `ProceduralFootprintSprite
+._TONES_BY_SURFACE`'s original core/rim colors reading as near-invisible
+against the real ground, confirmed by rendering actual swatches (composited
+onto `TerrainRenderer`'s own flat grassland/forest colors at real
+`PRINT_WORLD_SCALE`) rather than trusting a code trace: grass's rim
+(the LARGER of the two shapes) was barely distinguishable in luminance
+from grassland's own ground color, and forest's rim read slightly
+*darker* than forest's own ground — the opposite of "pushed-up material
+catching the light" the rim is meant to show. Snow's own tones happened
+to clear a real contrast margin already (a near-white rim against snow,
+a shadow-blue core); grass/forest's did not.
+
+Retuned with the SAME rim+core shape, new colors grounded in what each
+disturbed surface actually looks like: grass's core reads as pale
+trampled/yellowed blade-and-dirt showing through (lighter than before,
+matching "lighter... for grassland"), its rim a bright sunlit crushed-
+blade highlight; forest's core reads as dark, damp humus revealed under
+the leaf litter — deliberately the LARGER core-to-ground contrast drop of
+the two surfaces (see `test_forest_reads_a_bit_deeper_than_grassland`),
+the literal "a bit deeper in forest ground" — with a warm, dry-leaf-litter
+rim for contrast against both the dark core and the green canopy floor.
+Both surfaces stay visibly subtler than snow's own near-white rim
+(`test_grass_and_forest_stay_subtler_than_snows_own_rim_brightness`) —
+"lighter" here means less dramatic than snow's flash, not literally
+brighter than it. Real, test-pinned luminance-contrast margins against
+`TerrainRenderer`'s own grassland/forest ground colors, not eyeballed
+numbers (see `tests/unit/test_procedural_footprint_sprite.gd`).
+
 ### What the CPU still does
 
 Per frame: push one float (`depth`), and the trail mask only when a
@@ -595,6 +629,14 @@ for, and why both exist.
   touched. 56/56 tests passing across the new files (5 of them GPU-
   readback smoke tests, confirmed for real with
   `--rendering-driver opengl3`, not just headless).
+- ✅ **Grass/forest print tones retuned for real visibility** (2026-09-07)
+  — see "Grass/forest prints were already wired but effectively
+  invisible" above. `_TONES_BY_SURFACE`'s grass/forest core/rim colors
+  rechosen against real, test-pinned luminance-contrast margins measured
+  from `TerrainRenderer`'s own ground colors, not eyeballed; forest reads
+  a real, larger core-to-ground contrast drop than grassland does (the
+  literal "a bit deeper" ask), both stay subtler than snow's own
+  near-white rim.
 - ⬜ **Far-world precision** — the no-`sin(` structural pin exists
   (`SHADER_CODE` greps clean), but there is no real-GPU readback test yet at
   far-world coordinates; add one, since that is exactly where the old river

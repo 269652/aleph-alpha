@@ -433,3 +433,116 @@ func test_force_fruit_near_overrides_recovery_so_a_just_picked_site_can_be_force
 
 	assert_eq(fruited, cell)
 	assert_true(patch.has_fruiting(cell))
+
+
+# -- advance() honours each species' own real fruiting window --------------
+# (see docs/concept/mushrooms.md "Fruiting times, aligned to real species",
+# MushroomSpecies.fruiting_window_for/MushroomFlush.species_multiplier --
+# the pure data/logic this wires in). Direct _sites injection, the same
+# "bypass the constructor's random per-biome assignment" idiom the crush
+# tests elsewhere in this codebase already use for CaterpillarMarker,
+# since a real forest biome hosts several species at once and the
+# constructor won't guarantee which lands where.
+
+func test_a_species_flushes_readily_within_its_own_real_window():
+	var patch := WildMushroomPatch.new(1, 60, 60, _all_biome("forest", 60, 60))
+	var cell := Vector2i(5, 5)
+	patch._sites[cell] = "chanterelle"  # real window [0.0, 0.55)
+	patch._fruiting.erase(cell)
+	patch._recovery.erase(cell)
+
+	var flushed := false
+	for i in 400:
+		patch.advance(1.0, 1.0, "autumn", 0.1)  # early autumn -- inside chanterelle's own window
+		if patch.has_fruiting(cell):
+			flushed = true
+			break
+	assert_true(flushed, "chanterelle should flush readily at early autumn, its own real window")
+
+
+## The shoulder multiplier (0.3, see MushroomFlush.WINDOW_SHOULDER_
+## MULTIPLIER) is a REDUCED chance, not a hard zero -- over enough tries it
+## still eventually flushes (real off-window fruitings do happen). What
+## the feature actually promises is FEWER of them, so this compares
+## relative FREQUENCY across many independent trials on the same site
+## rather than asserting an absolute "never", which the real numbers
+## (~4.5%/step even at the reduced multiplier) would make a coin flip
+## whether it happens at least once in any fixed trial count.
+func _count_flushes(patch: WildMushroomPatch, cell: Vector2i, season: String, progress: float, trials: int) -> int:
+	var count := 0
+	for i in trials:
+		patch._fruiting.erase(cell)
+		patch._recovery.erase(cell)
+		patch.advance(1.0, 1.0, season, progress)
+		if patch.has_fruiting(cell):
+			count += 1
+	return count
+
+
+func test_a_species_flushes_far_less_readily_outside_its_own_real_window():
+	var patch := WildMushroomPatch.new(1, 60, 60, _all_biome("forest", 60, 60))
+	var cell := Vector2i(6, 6)
+	patch._sites[cell] = "black_trumpet"  # real window [0.45, 1.0)
+
+	var in_window := _count_flushes(patch, cell, "autumn", 0.7, 500)  # inside its own window
+	var outside_window := _count_flushes(patch, cell, "autumn", 0.1, 500)  # early autumn, before it starts
+	assert_gt(
+		in_window, outside_window * 2,
+		"black_trumpet should flush much more often once autumn reaches its own real window " +
+		"(%d in-window vs %d outside, of 500 tries each)" % [in_window, outside_window]
+	)
+
+
+func test_the_same_late_species_flushes_readily_once_autumn_reaches_its_own_window():
+	var patch := WildMushroomPatch.new(1, 60, 60, _all_biome("forest", 60, 60))
+	var cell := Vector2i(6, 6)
+	patch._sites[cell] = "black_trumpet"  # real window [0.45, 1.0)
+	patch._fruiting.erase(cell)
+	patch._recovery.erase(cell)
+
+	var flushed := false
+	for i in 400:
+		patch.advance(1.0, 1.0, "autumn", 0.7)  # late autumn -- inside black_trumpet's own window
+		if patch.has_fruiting(cell):
+			flushed = true
+			break
+	assert_true(flushed, "black_trumpet should flush readily once autumn reaches its own real window")
+
+
+## The whole point: this research only distinguishes anything WITHIN
+## autumn -- outside it, every species still shares whatever blanket
+## trickle MushroomFlush.SEASON_MULTIPLIER already gives them alike.
+func test_the_window_has_no_effect_outside_autumn():
+	var patch := WildMushroomPatch.new(1, 60, 60, _all_biome("forest", 60, 60))
+	var cell := Vector2i(6, 6)
+	patch._sites[cell] = "black_trumpet"  # real window [0.45, 1.0), irrelevant here
+	patch._fruiting.erase(cell)
+	patch._recovery.erase(cell)
+
+	var flushed := false
+	for i in 400:
+		patch.advance(1.0, 1.0, "spring", 0.1)  # outside black_trumpet's window, but NOT autumn
+		if patch.has_fruiting(cell):
+			flushed = true
+			break
+	assert_true(flushed, "outside autumn every species shares one blanket trickle -- windowing shouldn't gate it")
+
+
+## Old 2-arg call sites (season/progress both defaulted) must keep behaving
+## exactly as before this feature -- 0.5 sits inside every real species'
+## window in mushroom_species.gd, by construction, so the default reads as
+## "assume mid-autumn" and never silently suppresses an old caller.
+func test_the_default_season_and_progress_preserve_every_pre_existing_caller():
+	var patch := WildMushroomPatch.new(1, 60, 60, _all_biome("forest", 60, 60))
+	var cell := Vector2i(6, 6)
+	patch._sites[cell] = "black_trumpet"  # the narrowest, latest real window of all 8
+	patch._fruiting.erase(cell)
+	patch._recovery.erase(cell)
+
+	var flushed := false
+	for i in 400:
+		patch.advance(1.0, 1.0)  # no season/progress given at all -- the old 2-arg call shape
+		if patch.has_fruiting(cell):
+			flushed = true
+			break
+	assert_true(flushed, "the defaulted season/progress must land inside even the narrowest real window")

@@ -27,6 +27,7 @@ extends RefCounted
 ## times).
 
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
+const MushroomFlush = preload("res://src/world/mushroom_flush.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
@@ -255,9 +256,17 @@ func corpse_kind(cell: Vector2i) -> String:
 ## Ages every currently-fruiting body (a real one doesn't stand forever,
 ## picked or not) and every recovering site's cooldown, then -- for every
 ## site that is neither fruiting nor recovering -- rolls a fresh flush
-## against the live `flush_drive` (see MushroomFlush.flush_drive). Bounded
-## to _sites, never the whole chunk grid -- see class doc comment.
-func advance(delta: float, flush_drive: float) -> void:
+## against the live `flush_drive` (see MushroomFlush.flush_drive), scaled
+## per-cell by its own species' real fruiting window while `season` is
+## "autumn" (see MushroomFlush.species_multiplier, MushroomSpecies.
+## fruiting_window_for -- docs/concept/mushrooms.md's "Fruiting times,
+## aligned to real species"). `season`/`progress_through_season` default
+## to "autumn"/0.5 -- the season the model already treats as the real
+## flush event, at a progress every real species' own window in
+## mushroom_species.gd includes by construction -- so every pre-existing
+## 2-arg caller keeps behaving exactly as it did before this feature.
+## Bounded to _sites, never the whole chunk grid -- see class doc comment.
+func advance(delta: float, flush_drive: float, season: String = "autumn", progress_through_season: float = 0.5) -> void:
 	_step_count += 1
 
 	for cell in _fruiting.keys():
@@ -281,7 +290,10 @@ func advance(delta: float, flush_drive: float) -> void:
 	for cell in _sites:
 		if _fruiting.has(cell) or _recovery.has(cell):
 			continue
-		if should_flush(cell, flush_drive):
+		var effective_drive := flush_drive
+		if season == "autumn":
+			effective_drive *= MushroomFlush.species_multiplier(_sites[cell], progress_through_season)
+		if should_flush(cell, effective_drive):
 			_fruiting[cell] = 0.0
 
 

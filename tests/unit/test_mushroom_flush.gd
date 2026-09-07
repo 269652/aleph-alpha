@@ -54,3 +54,47 @@ func test_an_unknown_season_behaves_like_the_small_off_season_residual():
 	var autumn := MushroomFlush.flush_drive(1.0, "autumn")
 	assert_gt(unknown, 0.0)
 	assert_lt(unknown, autumn)
+
+
+# -- species_multiplier: real per-species timing within autumn ------------
+# (see docs/concept/mushrooms.md "Fruiting times, aligned to real species",
+# MushroomSpecies.fruiting_window_for -- the actual per-species [start, end)
+# data this reads). Independent of `season` itself: WildMushroomPatch.
+# advance only applies this while season == "autumn", where alone this
+# research actually distinguishes anything.
+
+func test_a_species_squarely_inside_its_own_window_gets_the_full_multiplier():
+	# Chanterelle's real window is [0.0, 0.55) -- early-mid autumn.
+	assert_eq(MushroomFlush.species_multiplier("chanterelle", 0.2), 1.0)
+
+
+func test_a_species_outside_its_own_window_gets_the_shoulder_multiplier():
+	# Chanterelle's real window ends at 0.55 -- late autumn (0.9) is well
+	# outside it, a real but much less likely shoulder-season find.
+	assert_eq(MushroomFlush.species_multiplier("chanterelle", 0.9), MushroomFlush.WINDOW_SHOULDER_MULTIPLIER)
+	assert_lt(MushroomFlush.WINDOW_SHOULDER_MULTIPLIER, 1.0)
+
+
+func test_the_window_start_is_inclusive_and_the_end_is_exclusive():
+	# black_trumpet's real window is [0.45, 1.0).
+	assert_eq(MushroomFlush.species_multiplier("black_trumpet", 0.45), 1.0, "the start instant is already inside")
+	assert_eq(
+		MushroomFlush.species_multiplier("black_trumpet", 0.4499),
+		MushroomFlush.WINDOW_SHOULDER_MULTIPLIER,
+		"just before the start is still outside"
+	)
+
+
+func test_a_species_with_the_widest_window_is_always_full_strength():
+	# death_cap's real fruiting is genuinely the roster's least seasonal --
+	# left effectively unrestricted (Vector2(0.0, 1.0)) rather than invented.
+	for progress in [0.0, 0.25, 0.5, 0.75, 0.99]:
+		assert_eq(MushroomFlush.species_multiplier("death_cap", progress), 1.0)
+
+
+func test_two_species_can_disagree_at_the_same_moment():
+	# The whole point: at early autumn (0.1), the early-loaded chanterelle
+	# should be in its own window while the late-loaded black_trumpet
+	# (real window [0.45, 1.0)) should not be.
+	assert_eq(MushroomFlush.species_multiplier("chanterelle", 0.1), 1.0)
+	assert_eq(MushroomFlush.species_multiplier("black_trumpet", 0.1), MushroomFlush.WINDOW_SHOULDER_MULTIPLIER)

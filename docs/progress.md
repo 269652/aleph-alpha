@@ -15026,6 +15026,66 @@ glue versus pure logic elsewhere (e.g. `LeafLitterRenderer.fill`'s own
 untested-in-isolation wrapper around its tested static functions). 18 new
 tests total (7 sequencer + 6 sheet + 5 node), all green.
 
+### Mushrooms now fruit at their own real-world-timed windows within autumn (`concept/mushrooms.md`, 2026-09-07)
+
+Asked directly: *"mushrooms should fruit at their respective times ...
+research fruiting times for each mushroom and align them with ingame
+autumn."* Before this, all eight species shared one identical blanket
+autumn curve (`MushroomFlush.SEASON_MULTIPLIER`) with no internal timing
+at all -- real fungal fruiting concentrates around a species' own real
+peak window, not evenly across the whole season.
+
+Researched each of the 8 roster species' real Northern-Hemisphere-
+temperate fruiting months directly (see docs/concept/mushrooms.md's own
+"Fruiting times, aligned to real species" table for the full sourcing):
+chanterelle and champignon start as early as real summer and are
+substantially done by mid-autumn; fly agaric sits solidly mid-season;
+black trumpet and psilocybe peak latest, with black trumpet's own real
+tail extending into what would be winter in a finer calendar (documented
+as late as January/February in mild Iberian years); death cap's real
+window is genuinely the least seasonal of the eight, so it was left
+effectively unrestricted rather than an invented narrower one.
+
+✅ **`MushroomSpecies.fruiting_window_for(species_id) -> Vector2`** (new)
+-- each species' own `[start, end)` fraction through `SeasonCycle.
+progress_through_season` while season is autumn, ranking each species'
+REAL relative position against the other seven (a real month range
+doesn't map onto one compressed in-game quarter directly) rather than a
+literal date conversion. An unlisted id gets `Vector2(0.0, 1.0)`, matching
+death cap's own real breadth -- the safest default for a species this
+research didn't cover.
+
+✅ **`MushroomFlush.species_multiplier(species_id, progress_through_
+season) -> float`** (new) -- `1.0` inside a species' own real window,
+the new `WINDOW_SHOULDER_MULTIPLIER` (`0.3`) outside it: a real but
+reduced shoulder-season chance, not a hard cutoff to zero, the same
+"named trickle, not zero" idiom `SEASON_MULTIPLIER`'s own spring/summer
+trickle already uses. Deliberately independent of `season` itself --
+applied by the one caller only while `season == "autumn"`, where alone
+this research actually distinguishes anything.
+
+✅ **`WildMushroomPatch.advance`** now takes `season`/`progress_through_
+season` (both defaulted to `"autumn"`/`0.5`, which sits inside every
+species' own window by construction) alongside the existing `flush_drive`
+-- every pre-existing 2-arg call site across the whole project keeps
+behaving exactly as it did before this feature, unchanged. Wired from
+`EarthChunkManager.step_wild_mushrooms`, which now also samples
+`SeasonCycle.progress_through_season` (previously only the season NAME
+reached the flush model, never how far through it the world clock
+actually was).
+
+7 new tests pinning the exact per-species window data
+(`test_mushroom_species.gd`), 5 new tests on the pure multiplier
+(`test_mushroom_flush.gd`), 6 new tests proving `WildMushroomPatch.
+advance` actually differentiates an early-loaded species from a
+late-loaded one at the same moment -- and that the same late species
+flushes readily once autumn reaches ITS OWN window
+(`test_wild_mushroom_patch.gd`), plus a source-contract test confirming
+`EarthChunkManager.step_wild_mushrooms` actually threads real season
+progress through rather than just moisture/season
+(`test_earth_chunk_manager_mushrooms.gd`) -- all green, zero regressions
+across every pre-existing mushroom test file.
+
 ### Progressive, mass-scaled mushroom bites, and real toxic effects (`concept/mushrooms.md`, `concept/soil_fauna.md`, `concept/ecosystem_dynamics.md`, 2026-09-07)
 
 Reported live, directly, three real gaps in one report: *"i just saw a

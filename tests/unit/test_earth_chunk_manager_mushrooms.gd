@@ -265,3 +265,27 @@ func test_take_mushroom_at_returns_empty_string_when_nothing_is_there():
 
 func test_take_mushroom_at_returns_empty_string_for_an_unloaded_chunk():
 	assert_eq(manager.take_mushroom_at(_pixel_position_for(Vector2i(999999, 999999))), "")
+
+
+# -- step_wild_mushrooms threads real season progress through --------------
+# (see docs/concept/mushrooms.md "Fruiting times, aligned to real species").
+# A source-contract test on the function body, the same shape and reasoning
+# test_world_crush_wiring.gd already uses -- WildMushroomPatch.advance's
+# own per-species window behavior is already thoroughly exercised directly
+# in test_wild_mushroom_patch.gd; what's specific to THIS function is
+# whether it actually passes SeasonCycle.progress_through_season through
+# rather than just moisture/season, which a live statistical test would
+# entangle with real, uncontrolled weather/moisture.
+
+func test_step_wild_mushrooms_threads_season_progress_through_to_advance():
+	var source := FileAccess.get_file_as_string("res://src/world/earth_chunk_manager.gd")
+	var start := source.find("func step_wild_mushrooms")
+	assert_gt(start, -1, "the premise: this function must still exist and be named that")
+	var body_end := source.find("\nfunc ", start + 1)
+	var body := source.substr(start, body_end - start)
+	assert_true(body.contains("sim.advance("), "must still call through to the sim's own advance")
+	assert_true(
+		body.contains("progress_through_season"),
+		"must pass real season progress through, not just moisture/season -- otherwise every species" +
+		" would flush as if it were always mid-autumn"
+	)
