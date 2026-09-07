@@ -117,6 +117,8 @@ Left alone, deliberately, and NOT folded into this entry: the shared main checko
 
 ✅ **Reported live: a visible WHITE centre inside the rendered cherry sprite that should be transparent.** Measured directly against the real sheet: `composite_cherry.png` is fully opaque (`CompositeSheetSlicer.needs_keying` reads true), so its regions go through reachability-only background keying -- but two of the on-tree row's own leafy-twig drawings have a fully-ENCLOSED opaque-white pocket (measured at 166 and 180 connected pixels) that never touches the drawing's own edge, too big for `despeckle`'s 150px speckle-vs-feature cutoff and unreached by reachability alone. `cut_out`'s existing `aggressive` keying mode handles exactly this shape of gap but was previously scoped to only the bare-winter canopy frame; it now ALSO applies to an on-tree fruit row when that row is season-aligned (exactly `CANOPY_FRAME_COUNT` frames -- the same measured fact the fix above relies on), since the snow column is already excluded from it and real fruit/leaves are never near-white, so nothing pale-and-real is at risk the way a blossom or snow frame would be. A stale doc-comment claim in `CompositeSheetSlicer` ("only acorn and apple currently trip `needs_keying`, the other four re-exported with real alpha") was also corrected -- re-measured now, it's exactly backwards: cherry/walnut/hazelnut/pine are the opaque ones today, apple/acorn the transparent ones. New regression test against the real sheet (`test_cherrys_on_tree_frames_have_no_leftover_white_background`).
 
+✅ **Reported live: "the cherry trees snow accumulation is wrong and fills holes with white instead of accumulating snow on branches per branch" (2026-09-07).** A different bug from the "settles top-down" fix two entries up -- that one fixed HOW MUCH of a settled twig shows at a given coverage; this one is about WHERE snow is allowed to settle at all. Investigated with the render-and-inspect discipline this exact class of bug has needed before (a fifth-frame lost-asset report, a fruit-row wrong-row report): a new dev tool, `tools/probe_cherry_snow_holes.gd`, renders real contact sheets through the production `generate_image_with_fruit` path and a pixel-for-pixel diagnostic mask comparing the season canopy's own alpha against the snow frame's own alpha at the exact box `_composite_illustrated` blends them at. The rendered contact sheets showed it directly: at full coverage the bare-winter canopy came out as a near-solid white puffball, the thin branch tracery completely swallowed, rather than individually snow-dusted twigs. Root cause confirmed with real pixel data, not guessed: `ProceduralTreeSprite._snowed_canopy` composited the snow frame's own opaque pixels wherever THAT frame alone had paint, with no check against whether the season canopy underneath had any real content there at all -- and since the snow frame is a separate illustrated drawing (a full crown's worth of snow-laden twigs, not a snow-tinted copy of the current season's own art), its silhouette never lines up pixel-for-pixel with any given season's real branch shape. Measured directly: rendering cherry, walnut and apple through the identical pipeline at full coverage on the bare-winter canopy (the sparsest, so the worst case), 55-61% of every one of the three species' own "snowed" pixels were gap fills, not branches -- confirming this is a SHARED-MECHANISM bug, not cherry-specific fragmentation, before writing a line of fix code. Spring/autumn showed the same defect at a smaller (3-17%) magnitude, masked visually by their much denser canopies. `CompositeSheetSlicer` was deliberately left untouched again, matching this codebase's established precedent (see the fruit-row fix two entries up) -- the defect lives entirely in the compositing step, not the slicer. Fixed minimally: `_snowed_canopy` now skips any pixel where `canopy` itself is below `ALPHA_VISIBLE` before even looking at the snow frame there, reusing the exact same "worth compositing at all" floor already applied to the flake's own alpha, so a snow frame overlapping even a faint anti-aliased branch edge still shows -- only a truly empty gap is now excluded. `test_full_snow_shows_the_whole_snow_frame_on_every_canopy` had encoded the bug as its own claim ("the whole snow frame is on the tree, whatever lies beneath it") and is corrected to `test_full_snow_shows_the_whole_snow_frame_wherever_the_canopy_has_a_branch`, checking `_snowed_canopy` directly against its real box-local inputs rather than the full composited canvas (reading alpha off the full canvas also sees the TRUNK showing through a transparent canopy gap, which is not "a branch" and would fail this test for an unrelated reason). Two new tests: `test_snow_never_paints_a_pixel_the_canopy_left_fully_transparent` (an isolated, deterministic synthetic-image regression directly against `_snowed_canopy`, confirmed red before the fix) and `test_no_species_snows_into_a_transparent_canopy_gap` (real-art regression across all six species with a snow frame, every snowable canopy, also confirmed red before the fix with counts matching the probe's own measurements). Re-rendered all three sampled species post-fix and confirmed visually: bare-winter canopies now show snow following the real branch tracery with clear sky/background between twigs, and spring/autumn canopies still show blossom/leaf colour clearly through the snow -- no species regressed. `test_illustrated_tree.gd` 124/125 (the one pending is pine's pre-existing, unrelated bare-winter art gap, unchanged), `test_procedural_tree_sprite.gd` 36/36, `test_choppable_tree.gd` 27/27, `test_composite_sheet_slicer.gd` 16/16 (untouched, sanity-checked). `docs/concept/flora.md`'s "A fifth frame: snow is not a season" updated with the corrected contract.
+
 ✅ **Reported live: "cherry trees should bear more cherries."** `TreeSpecies.SPECIES["cherry"]["yield_multiplier"]`: 1.3 -> 1.8, now the roster's own strict maximum (previously below acorn's 1.5, despite this same file's class doc comment already claiming cherries "bear prolifically -- lots of small, fast fruit"). Pinned as an ordering (`test_cherry_is_the_most_prolific_bearer_in_the_roster`), not a bare literal, matching this roster's own established idiom.
 
 ⬜ Superseded: pine/acorn/hazelnut now exist as species; this note is kept only to record that they once did not.
@@ -2341,6 +2343,57 @@ confirmed failing against the old exclusion first. 20/20 snow tests in
 `test_earth_chunk_manager.gd`, 26/26 `test_snow_bomb_shader.gd`, 14/14
 `test_snow_stamp_atlas.gd`, 2/2 `test_world_ground_layer_order.gd`. See
 [snow_cover.md](concept/snow_cover.md#snow-under-a-river-reads-as-a-staircase).
+
+
+### Sparkle / glitter on lying snow (2026-09-07)
+
+Requested live: "add sparkles / glitter effects to snow on trees and
+ground? But not too heavy" — asked on a day already dominated by a real
+FPS emergency (see this doc's own round 1-4 entries and
+[ecosystem_dynamics.md](concept/ecosystem_dynamics.md)'s round-4 section),
+so "not too heavy" was treated as a hard cost constraint, not just a
+visual taste note.
+
+✅ **`SnowSparkleShader`** (`src/rendering/snow_sparkle_shader.gd`) — a
+shared specular-glint pattern (see
+[snow_cover.md](concept/snow_cover.md#sparkle-specular-glints-on-lying-snow)'s
+own design section for the real-world grounding and pillars), spliced as
+GLSL into both `SnowBombShader` (ground) and `WindSway`'s shared tree
+material (canopy) rather than reimplemented per surface. Pure per-fragment
+GPU math — `sparkle_intensity(x, y, time)` takes no population-sized
+input, so nothing about calling it can scale with how many trees or tiles
+are loaded, which is the load-bearing property given the day's own FPS
+history. Ground gates on its own already-computed `lying` coverage
+(unambiguous); canopy gates on a `snow_coverage` uniform (pushed through
+`TreeRenderer.set_snow_coverage`'s existing call site — the SAME live
+value ground's own `snow_depth` already is, at the same cadence, zero new
+call sites) plus a near-white/low-saturation colour gate measured against
+the real art (`tools/probe_snow_sparkle_colors.gd`: cherry's own snow
+frame passes it 35.7% of its own pixels, cherry/apple's blossom frames
+under 1% — a >50x separation) so it structurally cannot fire on cherry's
+illustrated pink blossom. Grass/scrub tufts (`WindSway.tuft_material()`)
+never receive `snow_coverage` at all and stay at its fixed 0.0 default
+forever — sparkle is trees+ground only, per the request.
+
+Rendered with a real GPU and inspected directly (not just traced):
+`tools/probe_render_sparkle.gd` draws full-coverage ground snow and a
+cherry tree in spring blossom under full snow coverage (deliberately the
+riskiest real combination) at several moments; `tools/probe_diff_sparkle.gd`
+amplifies the frame-to-frame difference to make the deliberately-subtle
+effect visible. Real, sparse, scattered point-glints in both — 0.09% of
+ground pixels and 0.04% of canopy pixels change between moments (wind
+sway isolated out of the canopy measurement so it doesn't dominate the
+diff), the canopy's own glints confined to the tree's silhouette and
+never landing on its blossom.
+
+117 tests total (`test_snow_sparkle_shader.gd` 15/15,
+`test_snow_bomb_shader.gd` 35/35 with all 26 pre-existing unmodified,
+`test_wind_sway.gd` 21/21 with all 11 pre-existing unmodified,
+`test_tree_renderer.gd` 46/46 with all 45 pre-existing unmodified) —
+zero regressions to either shipped shader. See
+[snow_cover.md](concept/snow_cover.md#sparkle-specular-glints-on-lying-snow)
+and [flora.md](concept/flora.md)'s "A fifth frame: snow is not a season"
+cross-reference.
 
 
 ### Flowers: too dense, no tooltip, and a wind that never blew

@@ -4953,6 +4953,32 @@ func test_try_plant_seed_at_fails_when_the_chunk_is_not_loaded():
 ## SeedEndozoochory.can_root_in) -- a seed dropped on grassland/ocean/etc. is
 ## simply lost, same "not every drop succeeds" honesty flower dispersal
 ## already models.
+##
+## Investigated 2026-09-07 after a report that this test's own precondition
+## assertion was failing on main (no non-forest/rainforest biome anywhere in
+## the 21x21 window). Did not reproduce: a fresh origin/main checkout with a
+## clean --import passes this test outright (grassland is the DOMINANT
+## biome in the window -- 319/441 cells at radius 10, vs. 122 forest).
+## Confirmed by git history that every input this depends on (BiomeClassifier's
+## thresholds, ClimateModel, the moisture noise seed/frequency, EARTH_SEA_LEVEL/
+## EARTH_MOUNTAIN_LEVEL, world_elevation.png, and geo_coordinates.tile_for_
+## latitude/tile_for_longitude which _berlin_tile itself is built from) has
+## been byte-identical since before this test existed -- the one addition
+## since (2bc5e18d, slope-forced mountain) can only ADD non-forest biome
+## instances, never remove them. Rivers/hydrology (the other big worldgen
+## addition since) are explicitly excluded by design: see
+## is_river_at_global's own doc comment -- a river never becomes an eighth
+## KNOWN_BIOMES entry, and moisture (what actually decides forest vs.
+## grassland at Berlin's temperature band) doesn't read hydrology at all.
+## Best-guess explanation for the original report: an environmental issue in
+## that session's checkout (e.g. a stale .godot import cache or a crash
+## partway through manager.update() leaving the Berlin chunk unloaded, which
+## would make biome_at_global return "" for the whole window and this
+## precondition fail exactly this way) -- see
+## godot-stale-import-cache-in-shared-checkout in project memory for a
+## previously-documented instance of the same failure class on an unrelated
+## asset. If this precondition genuinely fails again on a clean checkout,
+## that IS worth treating as a real regression.
 func test_try_plant_seed_at_fails_outside_forest_or_rainforest():
 	manager.update(_berlin_tile)
 	var found := false

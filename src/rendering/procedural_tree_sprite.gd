@@ -1398,8 +1398,27 @@ func _sweep_rank(x: int, y: int, along: float, variant: int) -> float:
 ## frame's blank pixels) before the snow frame filled back in (reported: the
 ## canopy should accumulate snow twig by twig). So a settled pixel is blended
 ## OVER the canopy's own, and a blank snow pixel leaves it untouched -- at any
-## coverage every pixel the canopy had is still there, and at full coverage
-## the whole snow frame lies on top of it.
+## coverage every pixel the canopy had is still there.
+##
+## Corrected (live report: "the cherry tree's snow accumulation is wrong and
+## fills holes with white instead of accumulating snow on branches per
+## branch"). This doc comment used to end "...and at full coverage the whole
+## snow frame lies on top of it" -- that was the bug, written down as if it
+## were the design. `snow_image` is a SEPARATE drawing from `canopy` (a
+## standalone illustrated "full crown's worth of snow-laden twigs", not a
+## snow-tinted copy of the current season's own art), so its own opaque
+## pixels do not line up with the season canopy's real branch shape. Painting
+## wherever the snow frame alone had paint, with no check against the canopy
+## it was supposedly settling onto, wrote solid snow colour into every gap
+## the season canopy left transparent too -- worst on the sparse bare-winter
+## canopy (measured on the real art: 55-61% of cherry's, walnut's and
+## apple's own "snowed" pixels there were gap fills, not branches; not
+## cherry-specific, see test_no_species_snows_into_a_transparent_canopy_gap
+## in test_illustrated_tree.gd). Snow may now only settle where `canopy`
+## itself already has real content -- ALPHA_VISIBLE, the same "worth
+## compositing at all" floor already used for the flake below, so a snow
+## frame overlapping even a faint anti-aliased branch edge still shows,
+## exactly as before; only a truly empty gap is now excluded.
 ##
 ## Both images are the same size, from _scaled_piece at one box, so the crown
 ## cannot jump or slide as snow settles.
@@ -1415,6 +1434,8 @@ func _snowed_canopy(
 	var result: Image = canopy.duplicate()
 	for y in height:
 		for x in width:
+			if canopy.get_pixel(x, y).a < ALPHA_VISIBLE:
+				continue  # not part of the crown at all -- a real gap, not a twig
 			var flake := snow_image.get_pixel(x, y)
 			if flake.a < ALPHA_VISIBLE:
 				continue

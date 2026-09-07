@@ -200,6 +200,25 @@ func test_set_wind_strength_forwards_to_the_shared_sway_material():
 	assert_true(checked_any, "precondition: the forest chunk spawned at least one tree sprite")
 
 
+## Canopy SPARKLE (see docs/concept/snow_cover.md, "Sparkle: specular glints
+## on lying snow") reaches the shared sway material's OWN snow_coverage
+## uniform through the exact same call as the baked-texture push above --
+## one push, both effects, no new call site (see TreeRenderer.
+## set_snow_coverage's own doc comment and EarthChunkManager's real call
+## sites, which already call this for the baked-texture path).
+func test_set_snow_coverage_also_forwards_to_the_shared_sway_material():
+	var chunk := _make_forest_chunk()
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	renderer.set_snow_coverage(0.8)
+	var checked_any := false
+	for tree in spawned:
+		for child in tree.get_children():
+			if child is Sprite2D and child.name != "Shadow":
+				assert_eq(child.material.get_shader_parameter("snow_coverage"), 0.8)
+				checked_any = true
+	assert_true(checked_any, "precondition: the forest chunk spawned at least one tree sprite")
+
+
 # -- live snow reaching a newly spawned tree ---------------------------------
 #
 # set_snow_coverage is the SPAWN-path half of canopy snow (see
