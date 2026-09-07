@@ -128,13 +128,18 @@ func crop_potential(genome, yield_multiplier: float = 1.0) -> int:
 ## yield_multiplier crop_potential already takes (species_yield * this),
 ## rather than this replacing that multiplier.
 
-## The floor an insect-pollinated tree with ZERO visits this cycle still sits
-## at. Real apples and cherries are not self-sterile: an isolated tree still
-## sets some fruit from self- or incidental pollination (a breeze carrying
-## pollen a short distance, a visit from something other than a bee), just far
-## below what cross-pollination by a working hive achieves. Grounded at a
-## fifth of the ceiling -- low enough that bees visibly matter, never zero.
-const UNPOLLINATED_YIELD_FLOOR := 0.2
+## The floor an insect-pollinated tree with ZERO visits this cycle sits at:
+## a genuine zero, not a soft discount.
+##
+## Revised (2026-09-07) from a 0.2 floor grounded in "real apples/cherries
+## are not self-sterile" -- true of a self-FERTILE tree, but most commercial
+## eating-apple and sweet-cherry cultivars are actually self-INCOMPATIBLE:
+## they cannot set fruit from their own pollen at all and need a real
+## pollinator carrying compatible pollen from another tree, which is exactly
+## what a bee visit models here. A tree that nothing ever visits should bear
+## nothing, full stop -- which is also what "only bear fruit if pollinated"
+## means.
+const UNPOLLINATED_YIELD_FLOOR := 0.0
 
 ## Visits within one bearing cycle at which pollination is treated as fully
 ## done -- more visits beyond this keep the yield at its ceiling rather than

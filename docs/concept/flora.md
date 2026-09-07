@@ -529,9 +529,29 @@ stance `water.md`'s wave model takes).
 Scent only counts while a species is actually **in bloom**, so a meadow's
 pull rises and falls across the season rather than being a constant.
 
+**Tree blossoms emit real scent too** (2026-09-07), not just meadow
+flowers. `ScentField.concentration_at`/`gradient_direction` read an
+optional per-entry `scent_strength` override before falling back to
+`FlowerSpecies.scent_strength` — additive, so every existing flower-only
+caller is unaffected — and `EarthChunkManager.blossoms_near` sets it from
+`TreeSpecies.blossom_scent_for` (apple's real bloom carries a noticeably
+stronger, sweeter scent than cherry's, so apple out-scents cherry; both
+sit in the same 0..1 range flowers use, comfortably below a rose). A
+blossoming orchard is exactly as real a source on the field as a flower
+bed — it superposes with any flowers nearby the same way a second flower
+would, `blossoms_near`'s own spring-only gate does the "in bloom" check
+for it, and it composes into `pollinator_spawn_multiplier` too, since
+that reads the same field. (The override key was overdue independent of
+bees: the one *existing* call site that already merged blossoms into a
+gradient computation — `AmbientFlyerMarker`'s `TREE_POLLINATING_SPECIES`
+branch, dead since the decorative "bee" it was written for retired, see
+`bees.md` — had been silently riding `FlowerSpecies`'s fallback profile's
+unrelated 0.4 default for an unrecognized species id, not a real,
+chosen, tested value for a blossom.)
+
 ### Pollinators follow the gradient
 
-Butterflies and bees (see `AmbientFlyerRenderer`) use the field two ways:
+Butterflies (see `AmbientFlyerRenderer`) use the field two ways:
 
 - **Spawn rate** scales with local concentration, so heavily flowered
   meadows are visibly busier than bare grass.
@@ -540,6 +560,40 @@ Butterflies and bees (see `AmbientFlyerRenderer`) use the field two ways:
 
 The result is emergent rather than scripted: nothing places butterflies at
 flowers: they accumulate there because that is where the signal is strongest.
+
+**Bees (`BeeForagerMarker`, honeybee hives and wild bee nests alike — see
+`bees.md`) are a separate system, not `AmbientFlyerRenderer`, and detect
+scent at range rather than steering up a gradient** (2026-09-07): once
+nothing is within its close, guaranteed-commit sensing range
+(`BeeColony.SENSE_RADIUS_TILES`), a scout also checks its WHOLE home
+range (`BeeColony.FORAGE_RADIUS_TILES`) for flowers/blossoms and commits
+straight to whichever real source scores highest — closing blossom →
+scent → bee attraction → visit → fruit set into an actual loop rather
+than three unconnected mechanisms.
+
+This is deliberately NOT a gradient blend (contrast the butterfly
+mechanism just above, or the design originally sketched here): a real
+scent plume only carries `ScentField.RADIUS_TILES` (6 tiles), which is
+*smaller* than a bee's own `SENSE_RADIUS_TILES` (9) — so a gradient
+sampled from the scout's own position could never register anything by
+the time this wider check even runs; anything close enough to smell
+would already have been close enough to commit to directly. (A
+butterfly's own landing distance sits *below* 6 tiles, which is exactly
+what leaves it a real gap where gradient-steering matters — bees and
+butterflies are not interchangeable here, and the first draft of this
+section wrongly assumed they were.) The honest fix is a wider DETECTION
+range instead: real honeybees do orient toward a source well beyond
+where a plume alone would resolve a direction, combining scent with
+memory and landmarks — simplified here to "detectable anywhere in the
+home range."
+
+Ranking still uses `ScentField.concentration_at` (not merely nearest-
+first), so real superposition still applies: several blooms clustered
+together outscore one individually-stronger bloom sitting alone, and a
+more strongly-scented species (apple over cherry, a rose over a tulip)
+wins between two otherwise-similar candidates — the same "a meadow pulls
+harder than a single flower" point the field's own docstring makes,
+just resolved once at detection time rather than continuously steered.
 
 ### Foraging is a cycle, not a stable attractor
 
@@ -962,6 +1016,54 @@ Two consequences worth naming:
   pollinator, grounded in real (modest, not order-of-magnitude) individual
   variation in pollinator foraging efficiency, and nowhere near enough on
   its own to meaningfully dent `POLLINATION_SATURATION_VISITS`.
+  **Revised (2026-09-07): the floor above is now a real gate, not a soft
+  discount, and reproduction is gated too.** "An isolated tree still sets
+  a reduced-but-real crop… real apples/cherries are not self-sterile" was
+  the wrong grounding to lean on: most commercial eating-apple and
+  sweet-cherry cultivars are actually self-*incompatible* — they cannot
+  set fruit from their own pollen at all and need a real pollinator
+  carrying compatible pollen from another tree, which is exactly what a
+  bee visit is. `UNPOLLINATED_YIELD_FLOOR` is now `0.0`: zero real visits
+  this bearing cycle means zero fruit, full stop, rising toward the
+  species' usual ceiling as visits accumulate over the same curve as
+  before (`POLLINATION_SATURATION_VISITS` and the fitness-weighted visit
+  accumulator are unchanged — only the floor moved). This also closes
+  `harvest_peak_fruit_near`, which computed its own `yield_multiplier`
+  without `pollination_factor` at all — an unpollinated apple's canopy
+  correctly showed no fruit via `step_fruiting`, yet a player could still
+  walk up and harvest one anyway, and an NPC gather instruction
+  (`NpcInstructionEffects`, which reads this same function) could too.
+  Both now compose `pollination_factor` identically.
+  **Reproduction is gated the same way, for the dominant path.** A tree
+  spreads new saplings two ways (see "Where a forest comes from" below):
+  `TreeSpread`'s own age/maturity mechanism (Path A, the one that
+  actually runs continuously) and bird endozoochory (Path B, a real bird
+  eating real fallen fruit and carrying its seed off). Path A carries no
+  species or fruiting awareness at all — `TreeMaturity.mature_positions`
+  and `TreeSpread.propose_saplings` work over bare positions on purpose
+  (same "no per-tree state, everything re-derived from position" idiom
+  as everywhere else in this file) — so `EarthChunkManager.
+  step_tree_spread` now filters the candidate seed-source positions
+  through `_pollination_eligible_tree_positions` first: an insect-
+  pollinated tree (cherry/apple) only counts as a seed source if it was
+  actually visited this bearing cycle; every wind-pollinated species
+  passes through untouched, and a position with no resolvable tree node
+  fails open (spreads) rather than being silently dropped for a data gap
+  this filter cannot judge. This does not change what a NEW sapling
+  becomes — a spread tree's own species is still derived purely from
+  *its own* landing position, never inherited from whichever parent
+  seeded it, same as before. **Path B needed no code change at all**,
+  verified rather than assumed: a bird can only recognize and eat a
+  *named-species* fallen-fruit item (`fruit_near` filters on
+  `TreeSpecies.IDS.has(id)`), and `step_fruiting` is the only place that
+  ever drops one — so a tree `step_fruiting` correctly never drops fruit
+  from has nothing on the ground for a bird to find in the first place.
+  (`EarthChunkManager.step_forage`'s much older, separate windfall roll —
+  `ForageScheduler.drops`, generic `"fruit"`/`"nut"` items keyed on raw
+  `species_bias` rather than a named species — is untouched by any of
+  this and stays a known, pre-existing, unrelated simplification: it
+  predates `TreeSpecies` entirely, a bird cannot eat what it drops
+  regardless, and gating it is a separate, non-blocking cleanup.)
 - ⬜ **A bloom that has gone over is not redrawn as withered.**
   `FlowerBloom.is_withered` is evaluated once, at sprite creation, inside
   `EarthChunkManager._sync_flower_sprites`, and baked into the generated
@@ -1097,6 +1199,25 @@ hung on bare branches through the cold.
 mammals, by birds who carry the seed on -- or it rots. Fruit that lies
 untouched forever turns the ground under every tree into a permanent larder and
 removes the reason to come back in season.
+
+**An unpollinated insect-pollinated tree cannot seed a new one this way**
+(2026-09-07). The paragraphs above describe seed genuinely following from
+fruit -- but the mechanism they describe (spread_radius, the 3x3 landing
+block, MIN_TREE_SPACING/MAX_TREES_PER_TILE) is `TreeSpread`, which is
+really a pure age/maturity check with no fruit or species awareness of
+its own; a mature tree seeded its neighbours on schedule whether or not
+it had ever actually borne anything. `EarthChunkManager.
+step_tree_spread` now closes that gap for cherry/apple specifically:
+`_pollination_eligible_tree_positions` drops any insect-pollinated tree
+from the candidate seed-source list unless it was visited at least once
+this bearing cycle (see "Pollination feedback" above), so a bee-less
+orchard genuinely stops spreading, not just fruiting. Wind-pollinated
+species are untouched -- a real pine needs no insect to set its cone
+crop, so its own spread is rightly unconditional. This still isn't a
+full model of real seed dispersal DISTANCE varying by disperser (wind
+vs. gut passage vs. a rodent's cache) -- out of scope here, same as
+before -- only *whether* an insect-pollinated tree gets to spread at
+all.
 
 
 ## Illustrated trees

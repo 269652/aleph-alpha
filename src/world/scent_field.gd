@@ -63,9 +63,19 @@ static func falloff(distance_tiles: float) -> float:
 	return t * t
 
 
-## Total scent at `point` (world pixels): every blooming flower's strength
-## scaled by its falloff, summed. `season` gates which species are actually
-## advertising (see FlowerSpecies.scent_strength).
+## Total scent at `point` (world pixels): every source's strength scaled by
+## its falloff, summed. `season` gates which FlowerSpecies-keyed entries are
+## actually advertising (see FlowerSpecies.scent_strength).
+##
+## A source may carry its own "scent_strength", read FIRST and in place of
+## the species lookup -- additive, so any existing FlowerSpecies-keyed caller
+## (no such key present) is unaffected. This is what lets a source outside
+## the FlowerSpecies roster join the same field: a tree blossom is not a
+## flowering plant (see TreeSpecies.blossom_scent_for /
+## EarthChunkManager.blossoms_near, docs/concept/flora.md#tree-blossoms-
+## emit-real-scent-too) and never will be in FlowerSpecies' own table, so it
+## cannot be scored by species id the way a real flower is -- but it
+## superposes and falls off exactly like one once given a strength directly.
 static func concentration_at(
 	point: Vector2, flowers: Array, season: String, tile_size: float
 ) -> float:
@@ -73,9 +83,12 @@ static func concentration_at(
 		return 0.0
 	var total := 0.0
 	for flower in flowers:
-		var strength := FlowerSpecies.scent_strength(String(flower["species"]), season)
+		var strength: float = (
+			float(flower["scent_strength"]) if flower.has("scent_strength")
+			else FlowerSpecies.scent_strength(String(flower["species"]), season)
+		)
 		if strength <= 0.0:
-			continue  # present, but not in bloom -- nothing to smell
+			continue  # present, but not in bloom (or a zero override) -- nothing to smell
 		var distance_tiles: float = point.distance_to(flower["position"]) / tile_size
 		total += strength * falloff(distance_tiles)
 	return total

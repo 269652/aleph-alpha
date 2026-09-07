@@ -575,13 +575,21 @@ func test_fruit_leave_from_the_top_of_the_order():
 # back. Composes into crop_potential's existing `yield_multiplier` alongside
 # the species multiplier (TreeSpecies.yield_multiplier_for) -- it does not
 # replace it -- so a real apple/cherry visited by bees can reach the same
-# ceiling it always could, and an unvisited one still bears something (real
-# self-/incidental pollination is not zero) rather than going sterile.
+# ceiling it always could.
+#
+# Revised (2026-09-07): zero visits now means a genuine zero, not a reduced-
+# but-real floor. The floor used to sit at 0.2, grounded in "real apples/
+# cherries are not self-sterile" -- but most commercial eating-apple and
+# sweet-cherry cultivars are actually self-INCOMPATIBLE: they cannot set
+# fruit from their own pollen at all and need a real pollinator carrying
+# compatible pollen from another tree. A hard gate is the more honest
+# grounding, and it is also what "only bear fruit if pollinated" means.
 
-func test_zero_visits_still_yields_a_reduced_but_nonzero_factor():
-	var factor := FruitingModel.pollination_factor(0)
-	assert_gt(factor, 0.0, "an isolated tree is not sterile -- self/incidental pollination is real")
-	assert_lt(factor, 1.0, "but a bee-less tree should fall short of its full potential")
+func test_zero_visits_yields_a_true_zero_factor():
+	assert_eq(
+		FruitingModel.pollination_factor(0), 0.0,
+		"zero real pollinator visits this cycle should mean zero fruit set, not a soft discount"
+	)
 
 
 func test_more_visits_raise_the_factor_toward_the_ceiling():

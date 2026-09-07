@@ -47,6 +47,8 @@ const BeeColony = preload("res://src/world/bee_colony.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const ScentField = preload("res://src/world/scent_field.gd")
+const TreeSpecies = preload("res://src/world/tree_species.gd")
 
 const GROUP_NAME := "bee_forager"
 
@@ -82,6 +84,27 @@ const MAX_SCOUT_SECONDS := (
 	(2.0 * BeeColony.FORAGE_RADIUS_TILES * TerrainRenderer.TILE_SIZE)
 	/ (FLY_SPEED * SCOUT_SPEED_FRACTION) * MAX_SCOUT_CROSSINGS
 )
+
+## How far a scout can detect (and commit to) a real flower or blossom by
+## scent alone, once nothing is within the tighter BeeColony.
+## SENSE_RADIUS_TILES that already guarantees a successful approach -- see
+## _sense_distant_food, docs/concept/flora.md#tree-blossoms-emit-real-
+## scent-too.
+##
+## NOT ScentField.gradient_direction/RADIUS_TILES (6 tiles): that models a
+## real physical scent PLUME and is deliberately short-ranged, but
+## SENSE_RADIUS_TILES (9) already exceeds it -- a gradient computed from
+## the scout's own position could never contribute anything, since
+## anything close enough to register on it would already have been close
+## enough to commit to directly. This is the same real limitation
+## AmbientFlyerMarker's own "KNOWN DIVERGENCE" comment documents for
+## butterflies (targeting reaches further than scent literally carries);
+## the honest fix here is a wider DETECTION range, not a gradient lean
+## that can never fire. Real honeybees do detect and orient toward a food
+## source well beyond the range at which a plume alone would resolve a
+## direction, using memory and landmarks alongside scent -- this is that,
+## simplified to "detectable across the whole home range."
+const DISTANT_SENSE_RADIUS_TILES := BeeColony.FORAGE_RADIUS_TILES
 
 ## Where the real flower is. Unset (Vector2.ZERO) until a scout commits
 ## to something it has actually sensed nearby -- mirrors
@@ -298,13 +321,18 @@ func _process(frame_delta: float) -> void:
 	_update_sprite(position - position_before)
 
 
-## No known target: wander (home-anchored at the hive), sensing only its
-## own immediate vicinity for real nectar as it goes (see
-## _sense_food_nearby) -- no pheromone/trail bias at all (see this
-## file's own header doc comment), unlike AntForagerMarker's own
-## gradient-biased equivalent. Gives up past MAX_SCOUT_SECONDS of
-## fruitless wandering, same "still flies home, just empty-handed"
-## contract an unsuccessful APPROACHING trip already has.
+## No known target: wander (home-anchored at the hive), sensing its own
+## immediate vicinity for real nectar as it goes (see _sense_food_nearby)
+## -- no pheromone-TRAIL bias at all, i.e. no bee-to-bee recruitment
+## signal (see this file's own header doc comment), unlike AntForagerMarker's
+## own gradient-biased equivalent. It DOES also check its whole home range
+## for something merely detectable rather than guaranteed-reachable (see
+## _sense_distant_food/DISTANT_SENSE_RADIUS_TILES) -- real scent from the
+## flowers/blossoms themselves, a genuinely different mechanism from a laid
+## trail between bees -- and commits straight to that if nothing closer
+## turned up. Gives up past MAX_SCOUT_SECONDS of fruitless wandering, same
+## "still flies home, just empty-handed" contract an unsuccessful
+## APPROACHING trip already has.
 func _step_scouting(delta: float) -> void:
 	if _elapsed_time >= MAX_SCOUT_SECONDS:
 		_behavior.give_up_scouting()
@@ -314,6 +342,8 @@ func _step_scouting(delta: float) -> void:
 	if _sense_accumulator >= SENSE_INTERVAL_SECONDS:
 		_sense_accumulator = 0.0
 		found = _sense_food_nearby()
+		if found.is_empty():
+			found = _sense_distant_food()
 	if not found.is_empty():
 		target_position = found.position
 		_target_kind = found.get("kind", "flower")
@@ -351,6 +381,73 @@ func _sense_food_nearby() -> Dictionary:
 		if not blossoms.is_empty():
 			return {"position": blossoms[0]["position"], "kind": "blossom", "cluster_size": blossoms.size()}
 	return {}
+
+
+## Real flower/blossom detection across this scout's WHOLE home range
+## (DISTANT_SENSE_RADIUS_TILES), well beyond the tight commit-radius
+## _sense_food_nearby uses -- this is what lets a real orchard or meadow
+## draw a bee before it happens to wander into guaranteed sensing range by
+## chance (see docs/concept/flora.md#tree-blossoms-emit-real-scent-too).
+##
+## Only ever consulted when _sense_food_nearby found nothing (see
+## _step_scouting) -- a bee always prefers something guaranteed-reachable
+## over something merely detected further off.
+##
+## Ranks candidates by ScentField.concentration_at (real superposition:
+## several blooms clustered together outscore one lone bloom of the same
+## individual strength, and a stronger-scented species like apple outranks
+## a fainter one like cherry at equal distance -- see TreeSpecies.
+## blossom_scent_for) rather than picking the nearest or the first found,
+## so a real meadow or orchard genuinely pulls harder than a single flower,
+## the same design point ScentField's own docstring makes for spawn rate
+## and butterfly steering. A blossom's species is a TreeSpecies id, which
+## ScentField's own FlowerSpecies-keyed lookup has never heard of --
+## scent_strength overrides that lookup (see ScentField.concentration_at),
+## same as EarthChunkManager.blossoms_near already sets it for its own
+## callers; set here too rather than relied upon, since a stub/minimal
+## world's blossoms_near is not guaranteed to carry it.
+##
+## has_method("current_season") is defensive the same way _sense_food_
+## nearby already is on "blossoms_near": a world that predates/doesn't
+## offer season reporting still gets a real (if not season-exact) answer
+## rather than crashing or refusing to find anything at all.
+func _sense_distant_food() -> Dictionary:
+	if _world == null:
+		return {}
+	var wide_radius_px := DISTANT_SENSE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
+	var wide_radius_tiles := int(ceil(DISTANT_SENSE_RADIUS_TILES))
+	var candidates: Array = []
+	for f in _world.flowers_near(position, wide_radius_tiles):
+		if position.distance_to(f["position"]) > wide_radius_px:
+			continue
+		if float(f.get("nectar", 0.0)) <= 0.0:
+			continue
+		var entry: Dictionary = f.duplicate()
+		entry["kind"] = "flower"
+		candidates.append(entry)
+	if _world.has_method("blossoms_near"):
+		for b in _world.blossoms_near(position, wide_radius_tiles):
+			if position.distance_to(b["position"]) > wide_radius_px:
+				continue
+			var entry: Dictionary = b.duplicate()
+			entry["kind"] = "blossom"
+			entry["scent_strength"] = TreeSpecies.blossom_scent_for(String(b.get("species", "")))
+			candidates.append(entry)
+	if candidates.is_empty():
+		return {}
+	var season := "spring"
+	if _world.has_method("current_season"):
+		season = _world.current_season()
+	var best: Dictionary = candidates[0]
+	var best_score := -1.0
+	for candidate in candidates:
+		var score: float = ScentField.concentration_at(
+			candidate["position"], candidates, season, float(TerrainRenderer.TILE_SIZE)
+		)
+		if score > best_score:
+			best_score = score
+			best = candidate
+	return {"position": best["position"], "kind": best["kind"]}
 
 
 ## Re-checks the real world on genuine arrival -- something else may

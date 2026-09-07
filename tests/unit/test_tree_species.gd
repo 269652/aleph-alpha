@@ -208,3 +208,42 @@ func test_nut_split_matches_the_wind_pollinated_split():
 		assert_eq(
 			TreeSpecies.is_nut(species), not TreeSpecies.needs_pollinators_for(species), species
 		)
+
+
+# -- blossom scent (see docs/concept/flora.md#tree-blossoms-emit-real-scent-
+# -- too): only the two insect-pollinated species have anything real to say
+# -- here -- a real blossom is what a bee is actually smelling toward, so
+# -- only the species a bee is ever rewarded for visiting need a value.
+
+func test_apple_and_cherry_have_a_real_positive_blossom_scent():
+	assert_gt(TreeSpecies.blossom_scent_for("apple"), 0.0)
+	assert_gt(TreeSpecies.blossom_scent_for("cherry"), 0.0)
+
+
+## Real apple blossom is generally the more noticeably fragrant of the two
+## orchard fruits -- both are genuinely scented and bee-visited, but apple
+## out-scents cherry, the same "grounded ordering, not just different
+## numbers" standard test_cherry_ripens_faster_than_walnut already sets.
+func test_apple_out_scents_cherry():
+	assert_gt(TreeSpecies.blossom_scent_for("apple"), TreeSpecies.blossom_scent_for("cherry"))
+
+
+## Wind-pollinated species (real catkins/cones) advertise nothing to a bee --
+## there is no blossom for one to be drawn toward.
+func test_wind_pollinated_species_have_no_blossom_scent():
+	for species in ["pine", "acorn", "hazelnut", "walnut"]:
+		assert_eq(TreeSpecies.blossom_scent_for(species), 0.0, "%s has no blossom a bee visits" % species)
+
+
+func test_an_unknown_species_has_no_blossom_scent():
+	assert_eq(TreeSpecies.blossom_scent_for("dragonfruit"), 0.0)
+
+
+## Real apple/cherry blossom scent sits in the same 0..1 range FlowerSpecies
+## uses for a meadow flower's own scent (see ScentField), comfortably below
+## a rose (1.0, the strongest in that roster) -- a blossoming orchard should
+## read as a real, strong source on the field, not an outlier that swamps
+## every flower a bee could otherwise be drawn to.
+func test_blossom_scent_stays_within_the_flower_scent_scale():
+	for species in ["apple", "cherry"]:
+		assert_between(TreeSpecies.blossom_scent_for(species), 0.0, 1.0)

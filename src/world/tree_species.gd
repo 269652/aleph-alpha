@@ -181,6 +181,22 @@ static func needs_pollinators_for(species_id: String) -> bool:
 	return _INSECT_POLLINATED.has(species_id)
 
 
+## How strongly a species' blossom advertises itself to a bee (see docs/
+## concept/flora.md#tree-blossoms-emit-real-scent-too / ScentField), on the
+## SAME 0..1 scale FlowerSpecies uses for a meadow flower's own scent so a
+## blossoming orchard superposes with nearby flowers as a real, comparable
+## source rather than a differently-scaled one. Real apple blossom is
+## generally the more noticeably fragrant of the two orchard fruits, so
+## apple out-scents cherry -- both genuinely bee-visited, neither anywhere
+## near a rose's own roster-topping 1.0. Species this codebase has nothing
+## to say about (wind-pollinated, or unknown) get 0.0: there is no real
+## blossom for a bee to be drawn toward.
+const _BLOSSOM_SCENT := {"cherry": 0.55, "apple": 0.65}
+
+static func blossom_scent_for(species_id: String) -> float:
+	return float(_BLOSSOM_SCENT.get(species_id, 0.0))
+
+
 ## Whether `species_id` is a real hard-shelled tree NUT rather than fleshy
 ## fruit (see docs/concept/flora.md's disperser-vs-predator tension and
 ## SquirrelNutCaching, which gates a squirrel's crack-or-cache behaviour on
