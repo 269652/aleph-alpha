@@ -323,15 +323,23 @@ no momentum gate (unlike `crush`, an insect bite isn't a weight-emergent
 event), otherwise the same `has_fruiting` gate and recovery shape as
 `pick`/`crush`. Reported live, delivered incrementally: "I added
 mushroom_crushed.png and mushroom_bitten_1.png... 1 bite is enough for
-when a bug takes a bite" — only one bitten-art stage exists today (more
-explicitly planned later), so a single bite already reaches the only
-look there is; nothing yet models progressive multi-bite consumption. See
-soil_fauna.md's section above for the full wiring, including the real,
-confirmed bug it also fixed: `MushroomMarker` had joined `DroppedItem.
-FORAGEABLE_GROUP_NAME` since an earlier phase, but `DecomposerMarker.
-_nearest_food`'s own type guard silently excluded it again immediately
-afterward, so a decomposer could never actually reach a mushroom at all
-until this pass.
+when a bug takes a bite" — only one bitten-art stage existed at the time
+(more explicitly planned later), so a single bite already reached the
+only look there was. **Superseded 2026-09-07**, once two more bitten
+sheets per species had landed and mass-scaled bite economics were
+requested directly: `bite(cell, stages: int = 1)` now advances a real
+per-cell stage counter (`MushroomBiting.MAX_BITE_STAGES`) instead of a
+one-shot flag, so the mushroom can take repeated bites — from the same or
+a different creature — until it is actually consumed. See
+[soil_fauna.md's "Progressive, mass-scaled bites, and real toxic
+effects"](soil_fauna.md#progressive-mass-scaled-bites-and-real-toxic-effects-2026-09-07)
+for the full mechanism. The rest of this section (and soil_fauna.md's own
+original write-up) still describes the real fungivory wiring itself,
+including the real, confirmed bug it fixed: `MushroomMarker` had joined
+`DroppedItem.FORAGEABLE_GROUP_NAME` since an earlier phase, but
+`DecomposerMarker._nearest_food`'s own type guard silently excluded it
+again immediately afterward, so a decomposer could never actually reach a
+mushroom at all until that pass.
 
 ### Bitten by a decomposer
 
@@ -368,9 +376,16 @@ its display name gains a `(Bitten)` suffix ahead of the ordinary
 toxic/edible hint. Picking it up resolves to its own `"<species>_bitten"`
 catalog item — the same "a state change becomes its own catalog
 identity" shape `"meat"` → `"cooked_meat"` already establishes, not a
-mutable flag bolted onto the shared `Item`. One bite is enough: a second
-bite, or a decomposer scanning for food, both treat an already-bitten
-mushroom as having nothing left to give.
+mutable flag bolted onto the shared `Item`. **Corrected 2026-09-07**: one
+bite is no longer necessarily enough — see [soil_fauna.md's "Progressive,
+mass-scaled bites, and real toxic
+effects"](soil_fauna.md#progressive-mass-scaled-bites-and-real-toxic-effects-2026-09-07).
+A mushroom now tracks a real `bite_stage` (1..`MushroomBiting.
+MAX_BITE_STAGES`) rather than a one-shot flag, so a second bite — from
+the same decomposer once its own mass-scaled satiation window has passed,
+or a different one in the meantime — can advance it further, each stage
+showing its own progressively-more-eaten illustrated look, until it is
+genuinely fully consumed.
 
 ### Animals can find and eat wild mushrooms
 
@@ -399,14 +414,61 @@ like a fruit bite already is, releasing real hunger/thirst/nutrition from
 a shared mushroom composition vector (mushrooms are real, well-documented
 sources of B vitamins/minerals relative to their negligible sugar — a
 genuinely higher vitamins fraction than either fruit). `MushroomSpecies.
-is_toxic` is deliberately never consulted here: a boar eats a toxic
-species exactly like any other, extending its own already-real high
-`DECAY` tolerance (`ethogram.gd`'s *"untroubled by a little rot"*) to
-fungal toxins generally, real grounding for wild boars specifically.
-**Explicitly not built**: true scent-based mushroom detection (see
-ecosystem_dynamics.md's own section for why — the scent system's
-molecule set is closed and the smell-consumption path hardcodes fruit)
-and any debuff/toxicity mechanic for non-player creatures generally.
+is_toxic` is still never consulted for TARGET SELECTION: a boar walks to
+and bites a toxic species exactly like any other, extending its own
+already-real high `DECAY` tolerance (`ethogram.gd`'s *"untroubled by a
+little rot"*) to which fungi it's willing to try. **Corrected 2026-09-07**:
+that tolerance no longer means immunity once it's swallowed — see "Toxic
+effects: disorientation and illness" below, and
+[soil_fauna.md](soil_fauna.md#real-toxic-effects-disorientation-vs-illness-mushroomeffect)
+for the full mechanism. **Explicitly not built**: true scent-based
+mushroom detection (see ecosystem_dynamics.md's own section for why — the
+scent system's molecule set is closed and the smell-consumption path
+hardcodes fruit).
+
+### Toxic effects: disorientation and illness (2026-09-07)
+
+Reported live, directly: *"i just saw a bug eat a psylo and it didn't do
+anything to it."* True until this pass: no non-player creature anywhere in
+this codebase consulted `MushroomSpecies.is_toxic` at all —
+`MushroomToxin`/`DebuffStack` only ever ran against `Player` (see "Eating
+one" above). Real psilocybin/ibotenic-acid mushrooms (`psylo`/
+`fly_agaric`) cause genuine motor-coordination impairment/disorientation
+in an animal that eats them; real Death Cap amatoxin poisoning is a
+categorically different hazard — progressive illness with a real, if
+uncommon, lethal outcome, not a perceptual effect. Modeling both as one
+"bad status" scaled only by severity would flatten a real, meaningful
+difference this doc's own "Toxicity is real, specific, and asymmetric"
+grounding above already insists on for the player-facing version.
+
+- **`MushroomSpecies.is_psychoactive(species_id)`** — a new, second
+  boolean trait alongside `is_toxic` (true for `fly_agaric`/`psylo`
+  specifically), because "toxic" alone conflates two different real
+  mechanisms: `death_cap` is toxic but NOT psychoactive (real amatoxin
+  poisoning has no perceptual component), `false_death_cap` is neither.
+- **`MushroomEffect`** (`src/gameplay/mushroom_effect.gd`) is the new
+  pure module deciding what each real classification actually DOES to an
+  eater — disorientation (an erratic movement wobble, real duration,
+  scaled by `MushroomToxin.severity_for` so Fly Agaric wobbles more than
+  Psilocybe, the same real ordering the player-facing debuff already
+  uses) for a psychoactive species, or a real slowed "weakened" movement
+  state — plus, for real mammal-scale wildlife only, a genuine small
+  chance of death — for `death_cap` specifically. See
+  [soil_fauna.md's "Progressive, mass-scaled bites, and real toxic
+  effects"](soil_fauna.md#progressive-mass-scaled-bites-and-real-toxic-effects-2026-09-07)
+  for the full mechanism spec, the exact tuned numbers, and why lethality
+  is deliberately mammal-only (real insect amatoxin tolerance).
+- Wired into both real mushroom-eating paths: `DecomposerMarker` (a bug's
+  bite, the exact case reported) and `CreatureMarker` (a boar's bite, see
+  "Animals can find and eat wild mushrooms" above) — reusing the
+  `DebuffStack`/`active_spell_debuffs`-shaped timed-effect contract
+  `SpellStatusEffects` already established on `CreatureMarker`, extended
+  to `DecomposerMarker` for the first time, rather than a third, parallel
+  status-effect system. `DiseaseModel`'s SIRS contact-transmission shape
+  was read and rejected as the wrong fit — a single creature eating a
+  single toxic item once has no susceptible/infected/recovered cycle, no
+  re-exposure risk, no density term; a direct ingestion dose is
+  `VenomModel`/`MushroomToxin`'s own shape, not disease's.
 
 ## Deliberately not modeled
 
@@ -436,12 +498,13 @@ and any debuff/toxicity mechanic for non-player creatures generally.
   recipe table has zero live callers anywhere in this project today —
   wiring it in at all is a separate, larger, pre-existing gap, not something
   a single new ingredient should be the one to close.
-- **No progressive multi-bite consumption.** Only one bitten-art stage
-  exists today, by the user's own explicit choice — a single decomposer
-  bite already reaches it, and nothing yet models a bitten mushroom being
-  eaten down further or fully removed by repeated bites (it simply lingers
-  as a corpse until its recovery clock runs out, same as a crushed one).
-  More bite stages are explicitly a later pass, not an oversight here.
+- ~~No progressive multi-bite consumption.~~ **Built 2026-09-07** — see
+  [soil_fauna.md's "Progressive, mass-scaled bites, and real toxic
+  effects"](soil_fauna.md#progressive-mass-scaled-bites-and-real-toxic-effects-2026-09-07).
+  A mushroom now tracks a real `bite_stage` up to `MushroomBiting.
+  MAX_BITE_STAGES` (3, matching the 3 delivered bitten sheets per
+  species) and is genuinely consumed once fully bitten, lingering as a
+  new `"eaten"` corpse kind exactly like a crushed one does.
 - **Crushed/bitten art is incomplete by the user's own choice.** Only
   black_trumpet/champignon/chanterelle/death_cap/false_death_cap have
   real crushed/bitten sheets as of this delivery; fly_agaric/psylo/parasol
@@ -475,10 +538,14 @@ and any debuff/toxicity mechanic for non-player creatures generally.
 - ✅ `WildMushroomPatch` (`src/world/wild_mushroom_patch.gd`) — fixed
   per-chunk sites (real per-species biome eligibility via
   `MushroomSpecies.allows_biome`), PixelNoise-seeded, flush/recovery/
-  pick/crush, `is_corpse`/`corpse_kind` (crushed only, same recovery
-  clock as ordinary spent sites -- see "Crushed underfoot"). `bite()` is
-  a separate, orthogonal `_bitten` dict -- it does NOT end the fruiting
-  instance, so it is never a corpse cause (see "Bitten by a decomposer").
+  pick/crush, `is_corpse`/`corpse_kind` (`"crushed"` or, since 2026-09-07,
+  `"eaten"` once fully bitten -- same recovery clock as ordinary spent
+  sites, see "Crushed underfoot"). `bite(cell, stages)` (2026-09-07: takes
+  a real stage count, see soil_fauna.md) advances an orthogonal
+  `_bite_stage` dict, capped at `MushroomBiting.MAX_BITE_STAGES` -- it
+  does NOT end the fruiting instance until that cap is reached, so a
+  partially-bitten mushroom is never a corpse cause (see "Bitten by a
+  decomposer").
 - ✅ Item catalog entries for all 8 species (`item_catalog.gd`) — a
   hard prerequisite for the marker below, since `ItemCatalog.make()`
   fails loudly on an unregistered id.
@@ -489,22 +556,28 @@ and any debuff/toxicity mechanic for non-player creatures generally.
   "they need hover tooltips" — and fixed), `pick_up(picker)` resolves to
   the real species item, and scales an illustrated sprite by its own
   measured `marker_scale`, not the procedural generator's flat scale.
-  `corpse_kind` shows real `crushed_frame_for` art, and `bitten` (a
-  separate field, no corpse involved -- see "Bitten by a decomposer")
-  shows `bitten_frame_for` art -- both now complete for all 8 species
-  (reported live: "I added all missing mushroom spritesheets... wire
-  them"). Most bitten sheets came as 3 independently-delivered images per
-  species rather than one; `IllustratedMushroomSprite._load_frames`
-  combines all of them into one bigger frame pool instead of only ever
-  using the first (`death_cap` has just 1 delivered bitten sheet so far,
-  same shape every crushed entry already has -- an honest count, not a
-  uniform assumption). `take_mushroom_bite()` -- its own method,
-  deliberately not `take_bite` -- is what `DecomposerMarker`'s bite path
-  calls. `get_display_name()`'s own state hint now checks `corpse_kind`
-  too (reported live: "Champignons should show state in hover tooltip
-  e.g. Parasol (Crushed)") -- it already named bitten/toxic/edible but
-  fell through to the ordinary toxic/edible hint for a crushed corpse,
-  same as an untouched specimen, which read as wrong for a corpse.
+  `corpse_kind` shows real `crushed_frame_for`/(2026-09-07) `"eaten"` art,
+  and `bite_stage` (a separate field, no corpse involved while it's still
+  under `MAX_BITE_STAGES` -- see "Bitten by a decomposer") shows the
+  matching `bitten_frame_for(species_id, seed, stage)` art -- all real for
+  every species that has delivered art (reported live: "I added all
+  missing mushroom spritesheets... wire them"). Most bitten sheets came
+  as 3 independently-delivered images per species rather than one;
+  `IllustratedMushroomSprite` now treats those three as three real
+  progressive STAGES (2026-09-07, see soil_fauna.md) rather than a single
+  flattened variety pool (`death_cap` has just 1 delivered bitten sheet
+  so far, so every stage resolves to it -- the same has-or-doesn't
+  convention every other optional illustrated-art seam already uses).
+  `bitten: bool` stays as a plain `bite_stage > 0` mirror for backward
+  compatibility; `take_mushroom_bite(bite_stages: int = 1)` -- its own
+  method, deliberately not `take_bite` -- is what `DecomposerMarker`'s
+  bite path and (2026-09-07, mass-scaled) `CreatureMarker`'s boar-bite
+  path both call. `get_display_name()`'s own state hint now checks
+  `corpse_kind` too (reported live: "Champignons should show state in
+  hover tooltip e.g. Parasol (Crushed)") -- it already named bitten/
+  toxic/edible but fell through to the ordinary toxic/edible hint for a
+  crushed corpse, same as an untouched specimen, which read as wrong for
+  a corpse.
 - ✅ `MushroomRenderer` (`src/rendering/mushroom_renderer.gd`) —
   spawn_markers/sync_markers keep markers in sync with which cells are
   fruiting (no per-tick identification push any more), and now also keep
@@ -535,6 +608,17 @@ and any debuff/toxicity mechanic for non-player creatures generally.
   purely-visual bite above. See "Animals can find and eat wild mushrooms".
   ⬜ Scent-based mushroom detection for a nosed forager remains unbuilt
   (see that section, and ecosystem_dynamics.md's own writeup).
+- ✅ (2026-09-07) Progressive, mass-scaled bites and real toxic effects —
+  `MushroomBiting.MAX_BITE_STAGES`/`bites_per_visit_for`/
+  `satiation_seconds_for`, `MushroomSpecies.is_psychoactive`, and the new
+  `MushroomEffect` module (disorientation/weakened, mammal-only
+  lethality), wired into both `DecomposerMarker` and `CreatureMarker`.
+  See "Toxic effects: disorientation and illness" above and
+  [soil_fauna.md](soil_fauna.md#progressive-mass-scaled-bites-and-real-toxic-effects-2026-09-07)
+  for the full mechanism, real numbers, and status. ⬜ A picked-up
+  mushroom's catalog mass is not stage-scaled, and a boar's nutrient yield
+  is not scaled by how many stages one visit consumed -- both named
+  explicitly there as deliberate scope lines, not oversights.
 
 **Every piece is now real, tested, and reachable from a running game,
 including real illustrated art for every species**: chunk load grows real

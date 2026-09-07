@@ -267,7 +267,14 @@ var _slicer := SpriteSheetSlicer.new()
 
 static var _frames_cache: Dictionary = {}
 static var _crushed_frames_cache: Dictionary = {}
-static var _bitten_frames_cache: Dictionary = {}
+## species_id -> Array of per-stage Array[ImageTexture] (one inner array per
+## real delivered bitten sheet, in stage order -- see bitten_frame_for's own
+## doc comment). Replaced 2026-09-07's flat, stage-blind pool (every
+## delivered sheet combined into one same-stage variety pool) -- see
+## docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and real
+## toxic effects": those 3 delivered sheets per species are real progressive
+## STAGES now, not interchangeable variety.
+static var _bitten_stage_frames_cache: Dictionary = {}
 static var _marker_scale_cache: Dictionary = {}
 
 
@@ -317,19 +324,48 @@ func has_bitten_variant(species_id: String) -> bool:
 	return _BITTEN_SHEETS.has(species_id)
 
 
-## How many real bitten frames exist for `species_id` -- 25 for a species
-## with one delivered sheet, more for a species with several combined
-## (see _load_frames' own doc comment). 0 for an unknown/undelivered
-## species, the same "0, not an error" contract frame_count already has.
-func bitten_frame_count(species_id: String) -> int:
-	return _frames_from(_BITTEN_SHEETS, _bitten_frames_cache, species_id).size()
+## How many real frames exist at bite `stage` (1-based, matching
+## MushroomBiting.MAX_BITE_STAGES) for `species_id` -- always 25 for a
+## known species regardless of stage (a stage past what was really
+## delivered clamps to the last real one, see _bitten_frames_for_stage), 0
+## for an unknown/undelivered species, the same "0, not an error" contract
+## frame_count already has.
+func bitten_frame_count(species_id: String, stage: int = 1) -> int:
+	return _bitten_frames_for_stage(species_id, stage).size()
 
 
-## The one-bite-taken counterpart of the specimen `seed_value` would
-## otherwise pick via frame_for -- see crushed_frame_for's own doc comment,
-## identical reasoning. Null if `species_id` has no bitten sheet at all.
-func bitten_frame_for(species_id: String, seed_value: int) -> ImageTexture:
-	return _pick_frame(_frames_from(_BITTEN_SHEETS, _bitten_frames_cache, species_id), seed_value)
+## The counterpart of the specimen `seed_value` would otherwise pick via
+## frame_for, once it has been bitten `stage` times (1-based) -- see
+## crushed_frame_for's own doc comment for the identical seed-driven
+## per-specimen-consistency reasoning, now also varying by stage so a
+## mushroom's own look genuinely advances as it is bitten further (see
+## docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and real
+## toxic effects"). `stage` clamps into whatever range is real for this
+## species -- below 1 clamps to 1, past the real delivered stage count
+## clamps to the last one (death_cap's own single delivered sheet, e.g.,
+## answers every stage identically -- the same has-art-or-doesn't
+## convention every optional illustrated-art seam in this codebase already
+## uses). Null if `species_id` has no bitten sheet at all.
+func bitten_frame_for(species_id: String, seed_value: int, stage: int = 1) -> ImageTexture:
+	return _pick_frame(_bitten_frames_for_stage(species_id, stage), seed_value)
+
+
+## `stage`'s own real frame pool for `species_id`, clamped into range --
+## see bitten_frame_for's own doc comment. Empty for an unknown species.
+func _bitten_frames_for_stage(species_id: String, stage: int) -> Array:
+	var stages := _bitten_stages_from(species_id)
+	if stages.is_empty():
+		return []
+	var clamped_index: int = clampi(stage, 1, stages.size()) - 1
+	return stages[clamped_index]
+
+
+func _bitten_stages_from(species_id: String) -> Array:
+	if not _BITTEN_SHEETS.has(species_id):
+		return []
+	if not _bitten_stage_frames_cache.has(species_id):
+		_bitten_stage_frames_cache[species_id] = _load_bitten_stages(_BITTEN_SHEETS[species_id])
+	return _bitten_stage_frames_cache[species_id]
 
 
 func _pick_frame(frames: Array, seed_value: int) -> ImageTexture:
@@ -347,34 +383,52 @@ func _frames_from(sheets: Dictionary, cache: Dictionary, species_id: String) -> 
 	return cache[species_id]
 
 
-## `sheet["path"]` is either a single path (every _SHEETS/_CRUSHED_SHEETS
-## entry, and any _BITTEN_SHEETS entry with only one delivered sheet so
-## far) or an Array of paths -- most bitten entries have 3 independently-
-## delivered sheets (see _BITTEN_SHEETS' own doc comment), and this
-## combines every one of them into a single, bigger frame pool rather than
-## silently using only the first and leaving the rest of the delivered art
-## unused. Same chroma-key/slicing treatment applies per-sheet, in order,
-## so bitten_frame_count/crushed_frame_count naturally reflect exactly how
-## much real art exists for a species -- 25 for a single sheet, 75 for
-## three, no hardcoded assumption either way.
+## `sheet["path"]` for _SHEETS/_CRUSHED_SHEETS is always a single path --
+## one real delivered sheet, sliced into its 25-frame pool. (_BITTEN_SHEETS
+## entries can carry an Array of several delivered sheets instead -- see
+## _load_bitten_stages below, which loads each one as its own separate
+## STAGE rather than flattening them together the way an earlier version of
+## this function once did.)
 func _load_frames(sheet: Dictionary) -> Array[ImageTexture]:
-	var paths: Array = sheet["path"] if sheet["path"] is Array else [sheet["path"]]
+	return _load_one_sheet(sheet["path"], sheet)
+
+
+## Every real frame in ONE delivered sheet at `path`, sliced and (if
+## `sheet` names a chroma_key) despilled -- the actual per-sheet work
+## _load_frames/_load_bitten_stages both need, factored out so neither has
+## to duplicate the chroma-key/band-slicing sequence.
+func _load_one_sheet(path: String, sheet: Dictionary) -> Array[ImageTexture]:
+	var image := SpriteSheetLoader.load_image(path)
+	# Turning the chroma-keyed background transparent up front lets the
+	# exact same downstream detect_frames/normalize_frames (via
+	# SpriteSheetSlicer.is_empty's alpha check) handle it with no
+	# separate "or matches this color" branch -- same reasoning as
+	# IllustratedAnimalSprite._slice_bands.
+	if sheet.has("chroma_key"):
+		image = _apply_chroma_key(image, sheet["chroma_key"], sheet["chroma_key_tolerance"])
 	var textures: Array[ImageTexture] = []
-	for path in paths:
-		var image := SpriteSheetLoader.load_image(path)
-		# Turning the chroma-keyed background transparent up front lets the
-		# exact same downstream detect_frames/normalize_frames (via
-		# SpriteSheetSlicer.is_empty's alpha check) handle it with no
-		# separate "or matches this color" branch -- same reasoning as
-		# IllustratedAnimalSprite._slice_bands.
-		if sheet.has("chroma_key"):
-			image = _apply_chroma_key(image, sheet["chroma_key"], sheet["chroma_key_tolerance"])
-		for band in _ROW_BANDS:
-			var rect: Vector2i = band
-			var frames := _slicer.detect_frames(image, rect.x, rect.y, 60, 1)
-			for frame_image in _slicer.normalize_frames(image, frames, CANVAS_SIZE, BASELINE_Y):
-				textures.append(ImageTexture.create_from_image(frame_image))
+	for band in _ROW_BANDS:
+		var rect: Vector2i = band
+		var frames := _slicer.detect_frames(image, rect.x, rect.y, 60, 1)
+		for frame_image in _slicer.normalize_frames(image, frames, CANVAS_SIZE, BASELINE_Y):
+			textures.append(ImageTexture.create_from_image(frame_image))
 	return textures
+
+
+## `sheet["path"]` is either a single path (a species with only one
+## delivered bitten sheet so far, e.g. death_cap) or an Array of paths, in
+## real stage order (most species: 3 independently-delivered sheets, one
+## per bite stage -- see docs/concept/soil_fauna.md's "Progressive,
+## mass-scaled bites, and real toxic effects"). Returns one real 25-frame
+## pool PER delivered sheet, kept separate by stage -- unlike _load_frames,
+## this does NOT flatten them together, since each one is now a genuinely
+## different look, not interchangeable variety on the same look.
+func _load_bitten_stages(sheet: Dictionary) -> Array:
+	var paths: Array = sheet["path"] if sheet["path"] is Array else [sheet["path"]]
+	var stages: Array = []
+	for path in paths:
+		stages.append(_load_one_sheet(path, sheet))
+	return stages
 
 
 ## A copy of `image` with every pixel within `tolerance` of `key` (each of

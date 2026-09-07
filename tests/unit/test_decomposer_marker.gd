@@ -20,6 +20,9 @@ const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
+const MushroomEffect = preload("res://src/gameplay/mushroom_effect.gd")
 const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
@@ -431,8 +434,8 @@ func test_never_looks_for_leaf_litter_without_an_injected_world():
 class StubMushroomWorld:
 	extends RefCounted
 
-	func bite(_cell: Vector2i) -> bool:
-		return true
+	func bite(_cell: Vector2i, stages: int = 1) -> int:
+		return stages
 
 
 func _mushroom_at(at: Vector2, species_id: String = "champignon") -> MushroomMarker:
@@ -466,18 +469,215 @@ func test_biting_a_mushroom_never_removes_it():
 	assert_false(mushroom.is_queued_for_deletion(), "biting a mushroom must not remove it")
 
 
-## One bite is enough (see WildMushroomPatch.bite) -- an already-bitten
-## mushroom has nothing left to offer, so a decomposer must not waste a
-## trip committing to one.
-func test_an_already_bitten_mushroom_is_never_a_target():
+## Corrected 2026-09-07 (see docs/concept/soil_fauna.md's "Progressive,
+## mass-scaled bites, and real toxic effects"): a partially-bitten mushroom
+## is STILL a real target now (a second bug can take a second bite) -- only
+## a genuinely fully-eaten one (bite_stage at MushroomBiting.MAX_BITE_STAGES,
+## MushroomMarker.can_be_bitten() false) has nothing left to offer, so a
+## decomposer must not waste a trip committing to one.
+func test_a_fully_eaten_mushroom_is_never_a_target():
 	var mushroom := _mushroom_at(Vector2(105, 100))
-	mushroom.bitten = true
+	mushroom.bite_stage = MushroomBiting.MAX_BITE_STAGES
 	for i in 200:
 		marker._process(0.5)
 	assert_eq(
 		marker._behavior.phase, CarrionForageBehavior.Phase.SEEKING,
 		"nothing left to bite -- should keep seeking, never approach"
 	)
+
+
+## The real point of the mass-scaled step-count fix: a mushroom bitten once
+## (but not yet fully eaten) is still a real target for the NEXT decomposer.
+func test_a_partially_bitten_mushroom_is_still_a_target():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	mushroom.bite_stage = 1
+	assert_true(mushroom.can_be_bitten(), "precondition: still has real capacity left")
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 1:
+			break
+	assert_gt(mushroom.bite_stage, 1, "a second bug should still be able to advance it further")
+
+
+# -- mass-scaled bite count and satiation ------------------------------------
+#
+# Reported live, directly: "the amount the bug eats should be based on mass;
+# hunger and calories so a small bug probably only takes a single bite...
+# and is satisfied for a few hours." See docs/concept/soil_fauna.md's
+# "Progressive, mass-scaled bites, and real toxic effects".
+
+## An "ant"/"bug"-scale decomposer is well under
+## MushroomBiting.SMALL_EATER_MASS_THRESHOLD_KG -- exactly one stage per
+## visit, the report's own "a small bug probably only takes a single bite".
+func test_bites_a_mushroom_using_its_own_mass_scaled_bite_count():
+	marker.species = "ant"
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	assert_eq(
+		mushroom.bite_stage,
+		MushroomBiting.bites_per_visit_for(CreatureMass.mass_kg_for("ant")),
+		"an ant's own mass-scaled bite count should land, not a hardcoded 1"
+	)
+
+
+## "ant" and "bug" both land in MushroomBiting's own smallest tier (1 bite
+## either way), so the test above alone can't prove the bite count is
+## really COMPUTED from CreatureMass.mass_kg_for(species) rather than a
+## hardcoded 1 that happens to match. This proves the real wiring: swap in
+## a species CreatureMass rates far heavier (never a real decomposer
+## species in the shipped game, but nothing stops the field holding one in
+## a test) and confirm its own mass-scaled bite count actually lands.
+func test_bite_count_is_genuinely_computed_from_the_markers_own_species_mass():
+	marker.species = "boar"
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	assert_eq(
+		mushroom.bite_stage,
+		MushroomBiting.bites_per_visit_for(CreatureMass.mass_kg_for("boar")),
+		"a heavier species string should really change the bite count, proving the mass lookup is wired in"
+	)
+	assert_eq(mushroom.bite_stage, MushroomBiting.MAX_BITE_STAGES)
+
+
+## The report's other half: "is satisfied for a few hours" -- a decomposer
+## that just fed must not immediately go looking for a SECOND mushroom to
+## bite, even with one still standing right next to it.
+func test_a_freshly_fed_decomposer_does_not_immediately_seek_another_mushroom():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	assert_gt(mushroom.bite_stage, 0, "precondition: it actually bit the first mushroom")
+	assert_gt(marker._mushroom_satiation_remaining, 0.0, "eating should start a real satiation window")
+
+	# A second, fresh mushroom appears right next to it -- satiated, the
+	# decomposer should not commit to it.
+	var second := _mushroom_at(Vector2(106, 100))
+	for i in 40:
+		marker._process(0.1)
+	assert_eq(second.bite_stage, 0, "a satiated decomposer should not bite a second mushroom yet")
+
+
+## Once the real mass-scaled satiation window actually elapses, the same
+## decomposer is willing to bite a mushroom again -- the SAME one, still
+## standing there with real capacity left (see can_be_bitten/
+## test_a_partially_bitten_mushroom_is_still_a_target), rather than staying
+## satiated forever.
+func test_satiation_expires_and_a_decomposer_can_bite_again():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	var stage_after_first_bite: int = mushroom.bite_stage
+	var remaining: float = marker._mushroom_satiation_remaining
+	assert_gt(remaining, 0.0, "precondition: currently satiated")
+	marker._process(remaining + 1.0)  # a single big step past the whole window
+
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > stage_after_first_bite:
+			break
+	assert_gt(mushroom.bite_stage, stage_after_first_bite, "satiation should have expired -- it should bite again")
+
+
+# -- toxic mushroom effects: the report's own headline complaint -----------
+#
+# Reported live, directly: "i just saw a bug eat a psylo and it didn't do
+# anything to it." See docs/concept/soil_fauna.md's "Progressive,
+# mass-scaled bites, and real toxic effects" / MushroomEffect.
+
+func test_biting_a_psychoactive_mushroom_disorients_the_decomposer():
+	var mushroom := _mushroom_at(Vector2(105, 100), "psylo")
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	assert_gt(
+		marker._debuff_stack.stacks_of(marker.active_mushroom_debuffs, MushroomEffect.DISORIENTED_ID), 0,
+		"the exact reported case: a bug eating psylo should visibly change"
+	)
+
+
+func test_biting_death_cap_weakens_the_decomposer_not_disorients():
+	var mushroom := _mushroom_at(Vector2(105, 100), "death_cap")
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	assert_gt(marker._debuff_stack.stacks_of(marker.active_mushroom_debuffs, MushroomEffect.WEAKENED_ID), 0)
+	assert_eq(marker._debuff_stack.stacks_of(marker.active_mushroom_debuffs, MushroomEffect.DISORIENTED_ID), 0)
+
+
+func test_biting_an_edible_mushroom_causes_no_effect():
+	var mushroom := _mushroom_at(Vector2(105, 100), "champignon")
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	assert_eq(marker.active_mushroom_debuffs, [])
+
+
+## The real "how they walk" ask, at the unit level: identical setup, seed,
+## and elapsed time -- only whether Disoriented is active differs -- must
+## produce a genuinely different resulting position. Mirrors
+## test_herd_disease_severity_slows_an_infected_herbivores_movement's own
+## "same setup, compare with/without" shape.
+func test_a_disoriented_decomposer_does_not_wander_identically_to_a_healthy_one():
+	marker._elapsed_time = 3.0
+	var start := marker.position
+	marker.apply_mushroom_effect("fly_agaric")
+	marker._step_seeking(0.5)
+	var disoriented_position := marker.position
+
+	marker.position = start
+	marker._elapsed_time = 3.0
+	marker.active_mushroom_debuffs = []
+	marker._step_seeking(0.5)
+	var healthy_position := marker.position
+
+	assert_ne(disoriented_position, healthy_position)
+
+
+func test_a_weakened_decomposer_wanders_measurably_slower():
+	marker._elapsed_time = 3.0
+	var start := marker.position
+	marker.apply_mushroom_effect("death_cap")
+	marker._step_seeking(0.5)
+	var weakened_distance := marker.position.distance_to(start)
+
+	marker.position = start
+	marker._elapsed_time = 3.0
+	marker.active_mushroom_debuffs = []
+	marker._step_seeking(0.5)
+	var healthy_distance := marker.position.distance_to(start)
+
+	assert_lt(weakened_distance, healthy_distance)
+
+
+func test_decomposer_mushroom_effect_expires_on_its_own():
+	marker.apply_mushroom_effect("psylo")
+	marker._mushroom_effect_step(MushroomEffect.DISORIENTED_DURATION_SECONDS + 1.0)
+	assert_eq(marker._debuff_stack.stacks_of(marker.active_mushroom_debuffs, MushroomEffect.DISORIENTED_ID), 0)
+
+
+## The real, deliberate real-world-grounded asymmetry (see
+## docs/concept/soil_fauna.md's own writeup): real insects are documented
+## as considerably more amatoxin-tolerant than mammals (fungus gnat larvae
+## famously develop IN death cap fruiting bodies) -- a decomposer gets the
+## real Weakened slowdown but must NEVER die from it, unlike CreatureMarker
+## (see test_creature_marker.gd's own mirror test).
+func test_decomposer_never_dies_from_a_mushroom_effect_even_with_a_huge_delta():
+	marker.apply_mushroom_effect("death_cap")
+	marker._mushroom_effect_step(1000.0)
+	assert_false(marker.is_queued_for_deletion())
 
 
 func test_ignores_a_dropped_item_that_is_not_food():

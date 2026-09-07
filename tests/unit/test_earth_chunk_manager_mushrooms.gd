@@ -13,6 +13,7 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const WildMushroomPatch = preload("res://src/world/wild_mushroom_patch.gd")
 const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 var manager: EarthChunkManager
@@ -235,6 +236,26 @@ func test_take_mushroom_at_eats_a_real_fruiting_mushroom_and_marks_it_bitten():
 		manager._mushroom_markers[_berlin_chunk][site].bitten,
 		"the live marker itself, not just the sim, should show bitten"
 	)
+
+
+## A bigger, mass-scaled eater's bite (see docs/concept/soil_fauna.md's
+## "Progressive, mass-scaled bites, and real toxic effects",
+## MushroomBiting.bites_per_visit_for) can advance the mushroom's own real
+## bite_stage by more than one in a single visit.
+func test_take_mushroom_at_accepts_a_bigger_bite_count():
+	manager._load_chunk(_berlin_chunk)
+	var sim: WildMushroomPatch = manager._mushroom_sims[_berlin_chunk]
+	if sim.site_count() == 0:
+		pass_test("precondition unmet (no mushroom site near Berlin this run) -- nothing to check")
+		return
+	var site: Vector2i = sim.get_site_cells()[0]
+	var global_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + site
+	manager.force_mushroom_near(global_tile)
+	var pixel := _pixel_position_for(global_tile)
+
+	manager.take_mushroom_at(pixel, MushroomBiting.MAX_BITE_STAGES)
+
+	assert_eq(manager._mushroom_markers[_berlin_chunk][site].bite_stage, MushroomBiting.MAX_BITE_STAGES)
 
 
 func test_take_mushroom_at_returns_empty_string_when_nothing_is_there():

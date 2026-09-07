@@ -3324,3 +3324,288 @@ is never hunted — only a ground-based one is findable by
 but that is a genuinely different targeting problem (perching on/near a
 branch, not a ground descend-and-peck) from what this pass builds, and is
 a real, deliberate follow-up rather than an oversight.
+
+### Progressive, mass-scaled bites, and real toxic effects (2026-09-07)
+
+Reported live, directly, after watching a bug actually reach a psilocybe:
+*"i just saw a bug eat a psylo and it didn't do anything to it... also the
+amount the bug eats should be based on mass; hunger and calories so a
+small bug probably only takes a single bite... and is satisfied for a few
+hours... so a bug biting into a mushroom should only increase bitten step
+by 1 so another bug can take a second bite or a boar takes multiple
+successive bites which would visibly reduce the mushroom."* Three real
+gaps, verified independently against the actual code before assuming any
+of them, per this doc's own long-standing habit of checking rather than
+guessing:
+
+1. **A bite was a one-shot boolean, not a step.** `WildMushroomPatch.
+   _bitten`/`MushroomMarker.bitten` were exactly that — a flag, not a
+   counter. The very first bite from ANY creature set it permanently, so a
+   SECOND bite (same bug later, a different bug, or a boar) was always a
+   no-op, `WildMushroomPatch.bite`'s own doc comment saying so explicitly
+   ("one bite is enough"). This was a deliberate, named scope cut at the
+   time (mushrooms.md's "No progressive multi-bite consumption" — "only
+   one bitten-art stage exists today, by the user's own explicit choice"),
+   not a bug — but the user's own later delivery of a SECOND and THIRD
+   bitten sheet per species (`*_bitten_2.png`/`*_bitten_3.png`, wired the
+   same day as the crushed/bitten completion pass) was already "the later
+   stage" that scope cut named in advance. This pass is that later stage.
+2. **Nothing scaled bite economics by the eater's own mass.** A single
+   bite always removed the identical, flat 17% of a mushroom
+   (`MushroomBiting.RETAINED_FRACTION_AFTER_BITE`) whether the eater was a
+   bug or (once boars could forage mushrooms at all, see
+   [ecosystem_dynamics.md](ecosystem_dynamics.md#a-boars-own-diet-and-real-wild-mushroom-foraging-2026-09-06))
+   a 90kg boar, and neither creature ever stopped re-targeting a mushroom
+   just because it had recently eaten one — decomposers have no hunger
+   concept at all (`DecomposerMarker` carries no such field, confirmed by
+   reading the whole file), so a bug that just fed would immediately
+   re-scan for the next bite the moment one existed nearby.
+3. **A toxic bite had zero effect on the eater.** Confirmed by reading
+   `DecomposerMarker`/`CreatureMarker` end to end: no non-player creature
+   anywhere in this codebase reads `MushroomSpecies.is_toxic` at all.
+   `MushroomToxin`/`DebuffStack` only ever runs against `Player`
+   (mushrooms.md's own "Eating one" section). Even the boar's real,
+   already-nutrition-driven mushroom bite explicitly says so —
+   ecosystem_dynamics.md's own "A toxic mushroom is eaten exactly like any
+   other" bullet, now corrected below.
+
+None of this needed a new status-effect framework. `SpellStatusEffects`/
+`DebuffStack` (spell_runtime.md) already gave `CreatureMarker` a real,
+generic, timed "apply a debuff, tick it down, read its stack count"
+contract (`active_spell_debuffs`/`apply_spell_debuff`/`_spell_status_step`)
+— exactly the shape a mushroom-poisoning effect needs, so this reuses that
+contract's PATTERN (a second, parallel `active_mushroom_debuffs` array
+driven by the same `DebuffStack`) rather than overloading
+`SpellStatusEffects` itself, whose own doc comment scopes it to spell
+atoms specifically. `DiseaseModel` was read and rejected as the wrong
+shape for the SAME reason its own doc comment gives disease a separate
+identity from `VenomModel`: SIRS (Susceptible/Infected/Recovered) contact
+transmission models a *contagion spreading through a population over
+time*, not a single creature eating a single toxic item once — there is no
+susceptible/infected/recovered cycle here, no re-exposure risk, no density
+term. A direct ingestion event is exactly `VenomModel`/`MushroomToxin`'s
+own shape (an instant dose, `DebuffStack`-tracked, ticking down), just
+finally wired to a non-player eater.
+
+#### One bite is a STEP, not the whole mushroom (`MushroomBiting.MAX_BITE_STAGES`)
+
+`WildMushroomPatch._bitten: Dictionary` (cell → `true`) becomes
+`_bite_stage: Dictionary` (cell → `int`, 1..`MushroomBiting.
+MAX_BITE_STAGES`). `bite(cell, stages: int = 1) -> int` now returns how
+many stages this call actually applied (0 if there was nothing to bite),
+clamped so a cell's stage never exceeds the cap. `is_bitten(cell)` stays
+(`bite_stage(cell) > 0`) for every existing caller that only ever asked
+the yes/no question. Reaching the cap ends the fruiting instance exactly
+like `pick()`/`crush()` already do, but records a THIRD `_corpse_kind`
+value, `"eaten"`, distinct from `"crushed"` — a fully-consumed mushroom
+lingers and shows real remains for the same `SPENT_SECONDS` recovery
+window a crushed one already does, rather than the marker just vanishing
+once nothing is left to bite.
+
+`MushroomBiting.MAX_BITE_STAGES := 3` is not an arbitrary cap: it is
+exactly how many independently-delivered bitten sheets exist per species
+today (`fly_agaric_bitten_1/2/3.png`, etc. — death_cap is the one
+exception, with only one delivered sheet, see below). Those three sheets
+were being used as a same-stage VARIETY pool (`IllustratedMushroomSprite.
+_load_frames` flattened all three into one 75-frame pool, picked by seed
+the same way the 25-variant normal sheet is) rather than as three
+progressive STAGES — a deliberate simplification at the time
+(`bitten_frame_for`'s own doc comment: *"More bite STAGES (as opposed to
+these same-stage variety frames) are planned later... only one stage
+exists today"*). This pass is that later stage:
+`IllustratedMushroomSprite.bitten_frame_for(species_id, seed_value, stage:
+int = 1)` now picks a deterministic variant from stage `N`'s OWN 25-frame
+sheet rather than the flattened pool, so a mushroom's art now visibly
+advances (bitten_1 → bitten_2 → bitten_3 look) as its `bite_stage`
+climbs, not just a single "some bite happened" look regardless of how
+much. `death_cap` (one delivered bitten sheet) resolves every stage to
+that same sheet — the identical has-art-or-doesn't fallback convention
+every other optional illustrated-art seam in this codebase already uses,
+not a special case invented for this.
+
+`MushroomMarker.bite_stage: int` replaces `bitten: bool` as the real
+state; `bitten` itself STAYS as a plain `bite_stage > 0` mirror (kept in
+sync on every change) purely so every existing caller/test that reads or
+sets it directly keeps working unchanged — a real, deliberate compatibility
+shim, not an oversight or a second source of truth (`bite_stage` is
+authoritative; `bitten` is derived and never diverges from it).
+`take_mushroom_bite(bite_stages: int = 1) -> bool` keeps its exact
+existing zero-argument call shape (every pre-existing call site —
+`DecomposerMarker._step_feeding`, every test that calls it bare — keeps
+working unmodified) while accepting how many stages ONE bite EVENT should
+advance, for mass-scaled callers (below) that pass more than one.
+
+#### Bite count and satiation scale with the eater's own mass (`MushroomBiting`)
+
+Grazer/decomposer diets already differ by species; nothing about "how much
+of THIS mushroom do you eat in one visit, and how long before you want
+another" ever did. Two new pure functions on `MushroomBiting`, reusing
+`CreatureMass.mass_kg_for` (`docs/concept/soil_fauna.md`'s own "Crushed
+underfoot" already established this as the one real per-species body-mass
+table — extended here with two new real entries, `"ant"` (0.000003kg /
+3mg) and `"bug"` (0.0003kg / 300mg, a real ground/carrion-beetle-scale
+figure), rather than inventing a second table):
+
+- **`bites_per_visit_for(mass_kg) -> int`** — how many of `MAX_BITE_
+  STAGES` one committed bite EVENT consumes. Tiered, not a continuous
+  formula: real per-species "what fraction of a mouthful is one small
+  mushroom" data does not exist to justify a precise curve, and a
+  threshold table is exactly as testable/pinnable while being honest about
+  that (`SMALL_EATER_MASS_THRESHOLD_KG := 1.0`, `LARGE_EATER_MASS_
+  THRESHOLD_KG := 50.0`) — under 1kg (a bug, an ant, a mouse) takes
+  exactly 1 stage; 1kg up to 50kg (most mid-sized wildlife) takes 2;
+  50kg and up (a boar at a real 90kg, see `CreatureMass`) takes all 3 —
+  fully consuming a mushroom in one committed visit, which is the actual
+  visible "successive bites... would visibly reduce the mushroom" the
+  report asked for: a boar's single bite event IS several real bites in
+  quick succession (a chomp, not a nibble), so it is modeled as one call
+  advancing multiple stages at once rather than restructuring
+  `GrazerForaging`'s whole seek/approach/graze phase machine to loop a
+  single animal back onto the same target for several separate bouts — a
+  materially larger, riskier change for the identical visible outcome.
+- **`satiation_seconds_for(mass_kg) -> float`** — real seconds (wall-clock,
+  the same unit every other timer in `GrazerForaging`/
+  `CarrionForageBehavior` already runs on — `GRAZE_SECONDS`,
+  `REHUNT_SECONDS`, etc.) a creature stops re-targeting a mushroom for
+  after successfully biting one. Grounded in Kleiber's law (BMR ∝
+  mass^0.75, the same real citation the task itself points at): a bigger
+  animal's metabolism runs at a LOWER mass-specific rate, so a
+  meal-relative-to-body-size lasts proportionally longer — if meal energy
+  roughly tracks body mass and burn rate tracks mass^0.75, how long that
+  meal lasts tracks mass / mass^0.75 = mass^0.25. `BUG_SATIATION_SECONDS
+  := 90.0` is the reference point at bug mass (`BUG_REFERENCE_MASS_KG`,
+  cross-checked by test against `CreatureMass.mass_kg_for("bug")` so the
+  two can never silently drift apart) — reading the user's own "satisfied
+  for a few [in-game] hours" against how casually players actually narrate
+  elapsed time in a play session (not the literal `SeasonCycle.
+  SECONDS_PER_DAY` calendar, which would put "a few hours" at real tens of
+  minutes — checked and rejected as clearly not what "a bug is
+  satisfied for a bit" reads as during actual play), 90 real seconds (1.5
+  real minutes) lands where the report's own parenthetical aside puts it.
+  `satiation_seconds_for(mass_kg) := BUG_SATIATION_SECONDS *
+  (mass_kg / BUG_REFERENCE_MASS_KG) ^ SATIATION_MASS_EXPONENT`
+  (`SATIATION_MASS_EXPONENT := 0.25`, the Kleiber-derived exponent above),
+  floored at `MIN_SATIATION_SECONDS` for robustness against a
+  hypothetically-tiny future mass. At boar mass (90kg,
+  `BOAR_REFERENCE_MASS_KG`, also cross-checked against `CreatureMass`)
+  this lands around 2100 real seconds (~35 real minutes) — a real,
+  derived consequence of the formula, not a separately eyeballed "boars
+  wait longer" constant, pinned by test as a range (multiple real minutes,
+  comfortably longer than the bug's) rather than the exact transcendental
+  value.
+
+Wired narrowly, not as a general hunger system neither creature type
+otherwise has: `DecomposerMarker` gains `_mushroom_satiation_remaining:
+float`, set on a successful bite and decremented every `_process`, which
+gates ONLY the mushroom branch of `_nearest_food`'s eligibility check (via
+a new `MushroomMarker.can_be_bitten() -> bool`, true while `bite_stage <
+MushroomBiting.MAX_BITE_STAGES`, replacing the old flat `not node.bitten`
+exclusion so a partially-bitten-but-not-fully-eaten mushroom stays a real
+target for the NEXT bug) — carrion/fruit/leaf-litter foraging is
+completely untouched, since the report was specifically about mushroom
+bite economy, not a general decomposer-hunger rebuild. `CreatureMarker`
+needs no separate satiation gate at all — its existing `_needs` hunger
+meter already IS the general "don't re-forage once fed" mechanism for
+real wildlife; the only change there is that `_take_forage_bite`'s
+`FOOD_MUSHROOM` branch now computes `MushroomBiting.bites_per_visit_for`
+off `CreatureMass.mass_kg_for(info.species)` and passes it through
+`EarthChunkManager.take_mushroom_at(pixel_position, bite_stages: int =
+1)` (new optional parameter, existing call sites unaffected) rather than
+always taking the implicit single stage.
+
+#### Real toxic effects: disorientation vs. illness (`MushroomEffect`)
+
+Two genuinely different real effects, not one "bad status" reskinned by
+severity alone — see [mushrooms.md](mushrooms.md#toxic-effects-disorientation-and-illness-2026-09-07)
+for the species-side classification (`MushroomSpecies.is_psychoactive`)
+and the full writeup. Mechanically, both ride the exact `DebuffStack`
+pattern `active_spell_debuffs` already established on `CreatureMarker`
+(a second, parallel `active_mushroom_debuffs` array + `_mushroom_effect_
+step`), extended to `DecomposerMarker` for the first time (it had no
+debuff/timed-effect concept at all before this).
+
+- **Disoriented** (`fly_agaric`/`psylo` — real psychoactive species):
+  erratic heading — `MushroomEffect.wobble_direction(direction,
+  wobble_radians, seed_value, elapsed_time)` rotates a creature's own
+  intended movement direction by a randomized angle in
+  `[-wobble_radians, wobble_radians]`, re-rolled every `WOBBLE_CHANGE_
+  INTERVAL_SECONDS` (0.5s — fast enough to read as erratic stumbling, not
+  a slow drift) — a real, measurable difference from the creature's own
+  undisturbed heading, not an internal flag nothing reads. Wired at each
+  marker's own single movement choke point: `CreatureMarker._advance`
+  (the same one spot the herd-disease speed multiplier already uses, so
+  it automatically covers wander/flee/seek/hunt/graze-approach alike) and
+  `DecomposerMarker._step_seeking`/`_step_approaching` (wobbling the
+  actual position delta each already computes, rather than touching the
+  shared, carefully-tuned `AmbientFlyerMovement` algorithm itself, which
+  this doc's own git history shows is fragile to exactly this kind of
+  change). `wobble_radians_for(species_id)` scales `BASE_WOBBLE_RADIANS`
+  (60°, at `fly_agaric`'s own reference severity) by `MushroomToxin.
+  severity_for(species_id)` — reusing the player-side severity ordering
+  that already rates Fly Agaric above Psilocybe (ibotenic acid/muscimol's
+  real, more dramatic ataxia vs. psilocybin's milder perceptual/motor
+  effect) rather than inventing a second severity table.
+- **Weakened** (`death_cap` — real amatoxin poisoning): a flat movement-
+  speed multiplier (`weakened_speed_multiplier_for`, scaled the same
+  severity-relative way, floor 0.5x at death_cap's own reference severity)
+  applied at the identical choke points — a real, measurably slower
+  creature, the same mechanical shape the herd-disease secondary effect
+  already proved (`DiseaseModel.movement_speed_multiplier`).
+- **Lethality is real, but deliberately mammal-only.** `CreatureMarker`
+  (a boar, today's only real mushroom-eating wildlife) rolls a real,
+  small per-second death chance while `Weakened` is active from a
+  lethal-capable species (`MushroomEffect.DEATH_CAP_DEATH_CHANCE_PER_
+  SECOND := 0.0015`, pinned so the cumulative chance across one full
+  `WEAKENED_DURATION_SECONDS` (60s) window lands around 8-9% — a real,
+  reachable, but deliberately uncommon outcome, the same "a genuine hazard,
+  not a coin flip" design intent `DiseaseModel`'s own predator/carrion
+  death chances already established), routed through the exact same
+  `_die()` a disease death or a predation kill already uses (real carcass,
+  real region-death bookkeeping). `DecomposerMarker` (an ant/bug) gets the
+  identical Weakened slowdown but NEVER rolls death — a deliberate,
+  real-world-grounded asymmetry, not an oversight: insects (famously,
+  fungus gnat larvae that develop IN death cap fruiting bodies) are
+  documented as considerably more tolerant of amatoxins than mammals are,
+  so "measurably sluggish, not at risk of dying from one mushroom" is the
+  honest shape for this codebase's own insect decomposers specifically,
+  not a cost-cutting shortcut.
+- **Both species classes are still eaten indiscriminately** — this does
+  NOT add avoidance. Neither a boar's `GrazerForaging` target selection
+  nor a decomposer's `_nearest_food` scan consults toxicity at all; the
+  effect is a consequence of having already eaten, exactly like a real
+  forager only discovers a mushroom was a bad idea after the fact. See
+  [ecosystem_dynamics.md](ecosystem_dynamics.md#a-boars-own-diet-and-real-wild-mushroom-foraging-2026-09-06)'s
+  corrected note.
+
+#### Status
+
+- ✅ Progressive bite stages (`MushroomBiting.MAX_BITE_STAGES`,
+  `WildMushroomPatch._bite_stage`/`bite(cell, stages)`, stage-aware
+  `IllustratedMushroomSprite.bitten_frame_for(species_id, seed, stage)`,
+  `MushroomMarker.bite_stage`/`can_be_bitten()`, the new `"eaten"` corpse
+  kind).
+- ✅ Mass-scaled bite count and satiation (`MushroomBiting.
+  bites_per_visit_for`/`satiation_seconds_for`, `CreatureMass` gaining
+  real `"ant"`/`"bug"` entries, `DecomposerMarker._mushroom_satiation_
+  remaining`, `EarthChunkManager.take_mushroom_at`'s new `bite_stages`
+  parameter, `CreatureMarker._take_forage_bite`'s `FOOD_MUSHROOM` branch
+  computing it).
+- ✅ Real, observable toxic effects (`MushroomEffect`, `MushroomSpecies.
+  is_psychoactive`, `active_mushroom_debuffs` on both `CreatureMarker` and
+  `DecomposerMarker`, wobble/weakened wired into each marker's own single
+  movement choke point, mammal-only lethality for `death_cap`).
+- ⬜ A picked-up multi-stage-bitten mushroom's catalog mass is NOT
+  stage-scaled — `MushroomBiting.after_bite`/`ItemCatalog`'s `"_bitten"`
+  rows keep their existing flat retained-fraction regardless of which
+  stage it was picked at. A real, deliberate scope line: the report's own
+  concrete, testable ask was the mushroom's own visible depletion and the
+  eater's own behaviour, not inventory-mass fidelity per bite stage, and
+  making the catalog id itself stage-aware would mean new per-stage
+  catalog rows for every species — a real, separate, larger change this
+  pass does not need to prove the mechanic.
+- ⬜ Nutrient yield from a boar's mushroom bite (`CreatureMarker._apply_
+  nutrient_bite`) is NOT scaled by how many stages that bite consumed —
+  it stays the existing flat per-bite-event amount regardless of
+  `bites_per_visit_for`'s result. Named rather than silently left
+  inconsistent: a boar eating 3 stages in one visit is not modeled as
+  gaining 3x the hunger/thirst relief of a bug's single stage.
