@@ -257,6 +257,10 @@ watched the bird peck at them.
   `EarthwormPatch.is_corpse`/`corpse_age_seconds`/`is_rising`,
   `EarthChunkManager._worm_texture_for` — see "Illustrated worm
   sprite" below.
+- ✅ Corpse pickup — `WormMarker`, `EarthwormPatch.take_corpse`, a real
+  massed `"worm"` `ItemCatalog` item — see "A corpse can be carried off"
+  below. Not yet wired into the fishing mechanic itself (see
+  `docs/concept/aquatic_foraging.md`'s still-⬜ "Worms as fish bait").
 - ✅ Ants (mound population + myrmecochory, both grassland grass-seed AND
   forest/rainforest windfall fruit/nut foraging, a real rendered presence
   that visibly grows with its own colony, real round-trip foraging
@@ -2961,6 +2965,46 @@ unchanged by this entire pass: `take_worm_at` never shows `die`, and
 never shows `retreat` either (it still vanishes on the same frame it's
 taken, exactly as before) — only `crush_worm_at` reaches the new corpse
 state at all.
+
+### A corpse can be carried off (2026-09-07)
+
+Reported live, directly: "crushing worms doesn't display their crushed
+sprite last frame; instead they vanish.. they should stay in world and
+still be able to picked up". The vanish half turned out to already be
+fixed (the section above, same day it was reported here as `⬜`) —
+almost certainly observed in a stale, pre-fix running instance. The
+pickup half was a real, complete gap: nothing joined `DroppedItem.
+GROUP_NAME` for a worm at all, live or dead.
+
+`WormMarker` (`src/rendering/worm_marker.gd`) closes it, mirroring
+`MushroomMarker.pick_up`'s exact shape (`ItemCatalog.make` + `inventory.
+add` + "tell the sim, then `queue_free`"), with one addition: `pick_up`
+is gated on `worm_world.is_corpse(cell)` up front. A live worm is
+deliberately NOT pickable — becoming bait is `docs/concept/
+aquatic_foraging.md`'s own separate, still-`⬜` "Worms as fish bait" pass,
+not this one, so only a crushed corpse is a takeable item here.
+`EarthwormPatch.take_corpse(cell)` clears `_crushed[cell]` alone,
+deliberately leaving `_recovery[cell]` running: carrying the body off
+does not heal the burrow any faster than an ordinary recovery would.
+
+Every worm's sprite is a `WormMarker` from the moment it first surfaces
+(the object is never recreated between then and corpse state, so it must
+already be the pickable class), but `pick_up` only ever *does* anything
+once `is_corpse` is true.
+
+This also surfaced a real, independent crash: pickup lets something
+OTHER than `_sync_worm_sprites`/`_crawl_worm_sprites` free a sprite that
+`_worm_sprites` still has a dictionary entry for — a possibility that
+never existed before pickup did. `_crawl_worm_sprites` runs every single
+`step_worms` call and touched `.position`/`.texture` unconditionally;
+`_sync_worm_sprites`'s own cleanup branch called `.free()` unconditionally
+too — reproduced directly (mirroring `test_crushing_ants_does_not_crash_
+on_a_stale_already_freed_entry`'s own ".free() the worst case" idiom): a
+script error from the former, an outright engine crash from the latter.
+Both now guard with `is_instance_valid` first, erasing the stale entry
+instead of touching it — the exact pattern `crush_ants_near`/
+`_crush_markers_near` already established for the identical shape of bug
+(see "FPS regression round 3" above).
 
 ## Caterpillars: on trees, on the ground, green leaves only
 
