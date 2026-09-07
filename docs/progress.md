@@ -9254,6 +9254,50 @@ bounded-but-large population scale itself (a tuning/density question,
 not a bug). See `soil_fauna.md`'s own round-4 entry for the full
 writeup.
 
+**FPS regression round 5: decomposer's own unscoped whole-world scan
+(2026-09-07).** Reported live again: "es ist immer noch bei 4-10 fps ...
+wir brauchen 60+ da war es auch schon" (still 4-10fps, need 60+, it was
+already like that before rounds 1-4). Same `--user-data-dir` real-save-
+snapshot methodology as rounds 3-4, round 4's own `PerfProbe`
+instrumentation temporarily re-applied and extended with whole-frame
+render/physics/object-count gauges specifically to rule those OUT before
+assuming script cost again -- confirmed flat and low throughout (draw
+calls 149-154, `PHYSICS_2D_ACTIVE_OBJECTS` at 1, `PHYSICS_2D_COLLISION_
+PAIRS` at 0), so neither was this round's driver.
+
+Root cause: `DecomposerMarker._nearest_food`'s own `Carcass`/
+`CarcassGuts`/`DroppedItem.FORAGEABLE_GROUP_NAME` walk ran every single
+frame for every decomposer still searching (`CarrionForageBehavior.
+can_commit()` stays true on every frame past `REHUNT_SECONDS`, not just
+once) -- a THIRD, previously-undiscovered instance of round 4's own
+"one marker scans the whole world instead of a scoped neighbourhood"
+anti-pattern, missed there because it lives in an unthrottled search
+TRIGGER rather than a fourth unscoped scan. Measured directly:
+`decomposer._process` spiked to 1500-7800ms per ~3s window against a
+0.15-0.25ms/call baseline at the identical population (645-900 live
+decomposers) -- erratic and population-decorrelated, the signature of
+"however many happen to be stuck searching this frame", not a smooth
+O(n) scaling bug.
+
+Fixed with a shared, class-level cache (one fetch per
+`FOOD_GROUP_REFRESH_SECONDS` = 0.5s of real wall-clock time, shared
+across every decomposer instance) rather than either a per-instance
+throttle (rejected: at the very low frame rates actually reported, one
+frame's own delta can already exceed a half-second cooldown, so a
+per-instance check barely suppresses anything in exactly the condition
+that matters most) or full per-chunk spatial bucketing, the shape round
+4's own `flyers_near`/`leaf_litter_near`/`trees_near` all use (rejected
+for THIS round only: those all reuse an existing per-chunk registry
+`EarthChunkManager` already maintained, but `Carcass`/`CarcassGuts`/
+`DroppedItem`(fruit)/`MushroomMarker` spawn from five separate,
+scattered call sites with no such registry to reuse -- a real,
+named-explicitly follow-up, not silently ruled out for good). 36/36
+green in `test_decomposer_marker.gd`, strict TDD with a real call-
+counting stub (`_CountingTree`), mirroring round 4's own
+`_CountingPhaseGenerator`/`_CountingFlyerWorld` idiom rather than a
+timing assertion. See `soil_fauna.md`'s own round-5 entry for the full
+writeup.
+
 ### Flies (`concept/flies.md`)
 
 Another concept doc with real, substantial ✅ status entirely of its own

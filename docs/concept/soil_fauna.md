@@ -2572,7 +2572,106 @@ reset-vs-fresh-clock distinction across all three relocation call sites
 via relocation, dispersal, or the wind-roll each start a fresh one). All 82
 tests in that file green after (75 pre-existing + 7 new), alongside
 `test_leaf_litter_renderer.gd` (42/42, untouched) and `test_earth_chunk_
-manager.gd`'s own "leaf" substring sweep (31/31) — zero regressions.
+### FPS regression round 5: decomposer's own unscoped whole-world scan (2026-09-07)
+
+Reported live, again, after rounds 1-4 above had all already shipped:
+"es ist immer noch bei 4-10 fps ... wir brauchen 60+ da war es auch
+schon" (still 4-10fps, need 60+, it was already like that before).
+Investigated the same way rounds 3-4 established: a real
+`--user-data-dir` snapshot of the user's own live save (never the live
+save itself — it was actively in use), `--solo`, round 4's own
+`PerfProbe` instrumentation temporarily re-applied (`git revert` of its
+own removal commit, one conflict resolved to keep the leaf-litter
+dirty-tracking fix's fill-gate intact) and EXTENDED with whole-frame
+gauges this investigation hadn't needed before — `Engine.get_frames_
+per_second`, `Performance.TIME_PROCESS`/`TIME_PHYSICS_PROCESS`,
+`RENDER_TOTAL_DRAW_CALLS_IN_FRAME`/`RENDER_TOTAL_PRIMITIVES_IN_FRAME`,
+`PHYSICS_2D_ACTIVE_OBJECTS`/`PHYSICS_2D_COLLISION_PAIRS`,
+`OBJECT_COUNT`/`OBJECT_NODE_COUNT` — specifically to rule rendering and
+the physics server's own internal step in or out before assuming the
+cost was script-side again.
+
+**Rendering and physics were ruled out directly, not assumed.** At
+steady state (all 30 chunks loaded, ~20,000 nodes, ~50,000 objects):
+draw calls held flat at 149-154, primitives at 8244-8254,
+`PHYSICS_2D_ACTIVE_OBJECTS` at 1 and `PHYSICS_2D_COLLISION_PAIRS` at 0
+throughout — none of the three scaled with population or spiked
+alongside the frame-time spikes below, ruling both out as the dominant
+cost this round.
+
+**Root cause: `DecomposerMarker._nearest_food`'s own `Carcass`/
+`CarcassGuts`/`DroppedItem.FORAGEABLE_GROUP_NAME` walk ran every single
+frame for every decomposer still searching, not once.**
+`CarrionForageBehavior.can_commit()` stays true on every frame past
+`REHUNT_SECONDS` until a target is actually found — so `_step_seeking`'s
+own `if _behavior.can_commit(): _nearest_food()` re-ran the FULL
+unscoped `get_tree().get_nodes_in_group(...)` walk continuously for as
+long as a decomposer had nothing nearby to eat. This is the identical
+"one marker scans the whole world instead of a scoped neighbourhood"
+anti-pattern round 4 above already found and fixed twice
+(`AmbientFlyerMarker._scan_for_partners`, `EarthChunkManager.
+crush_ants_near`) — a third, previously-undiscovered instance of the
+same shape, missed by round 4 because it lives in an UNTHROTTLED search
+trigger rather than a fourth unscoped scan of a new kind.
+
+Measured directly: `decomposer._process` spiked to 1500-7800ms per ~3s
+window (against a measured 0.15-0.25ms/call baseline at the SAME
+population — 645-900 live decomposers, confirmed via a `count_instance`
+gauge), erratic and population-DEcorrelated window to window — the
+signature of "however many decomposers happen to be stuck searching
+this particular frame", not a smooth cost that scales with total
+decomposer count the way a real O(n) bug would.
+
+**Fixed with a shared, class-level cache, not full per-chunk spatial
+bucketing.** The three group lists are refetched at most once per
+`FOOD_GROUP_REFRESH_SECONDS` (0.5s) of real wall-clock time (`Time.
+get_ticks_msec`, injected for testability rather than read directly),
+shared across every decomposer instance via a `static var` — not each of
+potentially hundreds of them independently re-fetching the identical
+whole-world lists. A pure PER-INSTANCE throttle (mirroring
+`AmbientFlyerMarker.WORM_SNIFF_INTERVAL`) was considered and rejected:
+at the very low frame rates this was actually reported at, one single
+frame's own delta can already exceed a half-second interval, so a
+per-instance cooldown checked once per frame barely suppresses anything
+in exactly the condition that matters most — sharing the fetch across
+every instance is what actually bounds the cost regardless of frame
+rate. Full per-chunk bucketing, the shape round 4's own `flyers_near`/
+`leaf_litter_near`/`trees_near` all use, was also considered and
+explicitly NOT chosen: those all reuse an EXISTING per-chunk registry
+`EarthChunkManager` already maintained for spawn/despawn tracking, but
+`Carcass`/`CarcassGuts`/`DroppedItem`(fruit)/`MushroomMarker` spawn from
+five separate, scattered call sites (creature death, player drops,
+world events, the mushroom renderer's own per-chunk spawn) with no such
+registry to reuse — building one from scratch is a materially larger,
+riskier change than this fix, named here explicitly as a real,
+smaller-scoped choice rather than silently passed off as the full
+round-4-style treatment. A genuine follow-up, not ruled out, just not
+this round's fix.
+
+Cached entries are re-validated with `is_instance_valid`/`is_queued_
+for_deletion` at read time — a live `get_nodes_in_group` call never
+needed this (it only ever returns currently-valid nodes), but a cached
+snapshot up to 0.5s stale can now hold an already-freed reference.
+
+**Strict TDD**, mirroring round 4's own call-observing test-double idiom
+(`test_earth_chunk_manager.gd`'s `_CountingPhaseGenerator`, `test_
+ambient_flyer_marker.gd`'s `_CountingFlyerWorld`): a `_CountingTree`
+stub standing in for the `SceneTree` proves one shared fetch serves 50
+calls within the refresh window and a second real fetch only happens
+once the window has genuinely elapsed — a real call count, not a timing
+assertion (`CLAUDE.md`'s own rule against eyeballed thresholds, which
+timing assertions always are). `test_still_finds_real_carrion_through_
+the_shared_cache` is the end-to-end regression guard that the refactor
+did not silently break real carrion-finding. 36/36 green in `test_
+decomposer_marker.gd`.
+
+**Real, confirmed, explicitly out of scope for this round**: the
+materially larger per-chunk-bucketing alternative considered and
+rejected above remains a real, cleaner long-term fix if the shared-cache
+approach's own residual per-decomposer distance-check loop (still
+O(cached group size) per decomposer, just no longer O(world) per
+decomposer PER FRAME) ever becomes the next bottleneck at a larger
+foragable-item population than this investigation measured against.
 
 
 ## Illustrated worm sprite: crawl, emerge, retreat, die
