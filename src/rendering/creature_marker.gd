@@ -29,6 +29,7 @@ const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
 const GrazerForaging = preload("res://src/gameplay/grazer_foraging.gd")
 const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
+const MushroomEffect = preload("res://src/gameplay/mushroom_effect.gd")
 const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
@@ -738,6 +739,14 @@ func _process(frame_delta: float) -> void:
 	_spell_status_step(delta)
 	if is_queued_for_deletion():
 		return  # an ignite/blight tick can kill too
+
+	# Same reasoning again: a weakened-by-Death-Cap creature's real, small
+	# death chance keeps rolling no matter what it's doing this frame (see
+	# docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and
+	# real toxic effects").
+	_mushroom_effect_step(delta)
+	if is_queued_for_deletion():
+		return  # a Death Cap weakened tick can kill too
 
 	if _knockback_time_remaining > 0.0:
 		var result := _knockback.step(_knockback_remaining, _knockback_time_remaining, delta)
@@ -1785,6 +1794,20 @@ func _advance(desired: Vector2, speed: float, delta: float) -> void:
 	# this creature is CURRENTLY standing on, not a scan over any area, so
 	# this stays O(creatures) regardless of how many creatures are loaded.
 	speed *= _terrain_speed_multiplier(_current_tile())
+	# Toxic mushroom effects (docs/concept/mushrooms.md's "Toxic effects:
+	# disorientation and illness") -- the SAME single movement choke point
+	# the disease multiplier above already proves works for every intent
+	# (wander/flee/seek/hunt/attack/graze-approach) at once. Disoriented
+	# (a real psychoactive species) wobbles the actual heading, not just
+	# speed -- the report's own "how they walk" ask; Weakened (Death Cap)
+	# is a real, flat speed penalty, the identical mechanical shape the
+	# herd-disease secondary effect already uses.
+	if _debuff_stack.stacks_of(active_mushroom_debuffs, MushroomEffect.DISORIENTED_ID) > 0:
+		desired = MushroomEffect.wobble_direction(
+			desired, MushroomEffect.wobble_radians_for(_mushroom_effect_species), wander_seed, _elapsed_time
+		)
+	if _debuff_stack.stacks_of(active_mushroom_debuffs, MushroomEffect.WEAKENED_ID) > 0:
+		speed *= MushroomEffect.weakened_speed_multiplier_for(_mushroom_effect_species)
 	_facing_commit_remaining = maxf(0.0, _facing_commit_remaining - delta)
 	var position_before := position
 	if not _is_serpent():
@@ -2512,20 +2535,27 @@ func _take_forage_bite() -> void:
 			_apply_nutrient_bite(species)
 		else:
 			_needs.feed()
+		if _forage_kind == GrazerForaging.FOOD_MUSHROOM:
+			# Corrected 2026-09-07 (see docs/concept/mushrooms.md's "Toxic
+			# effects: disorientation and illness"): TARGET SELECTION still
+			# never consults MushroomSpecies.is_toxic (a boar walks to and
+			# bites a toxic mushroom exactly like any other -- see
+			# docs/concept/ecosystem_dynamics.md's own corrected note), but
+			# eating one now really does apply a real, observable
+			# MushroomEffect debuff afterward -- a no-op for a non-toxic
+			# species (see MushroomEffect.effect_kind_for).
+			apply_mushroom_effect(species)
 		_gain_energy()
 	_drop_forage_target()
 
 
 ## Real composition-derived hunger/thirst, shared by every forage kind that
 ## has real Material DSL data (fruit, mushroom) -- see NutrientRelease/
-## docs/concept/material_dsl.md. `species`'s MushroomSpecies.is_toxic (if
-## any) is never consulted here: a boar eats a toxic mushroom exactly like
-## any other (see docs/concept/mushrooms.md's own reasoning) -- no animal
-## debuff/toxicity mechanic exists to gate this on regardless. A crush
-## that doesn't land (unmodeled food, or -- never happens today against
-## the materials this resolves against, but checked for real rather than
-## assumed -- an impact that somehow doesn't resolve to "crush") falls
-## back to the flat full-meter _needs.feed() every other forage kind uses.
+## docs/concept/material_dsl.md. A crush that doesn't land (unmodeled food,
+## or -- never happens today against the materials this resolves against,
+## but checked for real rather than assumed -- an impact that somehow
+## doesn't resolve to "crush") falls back to the flat full-meter
+## _needs.feed() every other forage kind uses.
 func _apply_nutrient_bite(species: String) -> void:
 	var nutrients: Dictionary = NutrientRelease.consume(species)
 	if nutrients.get("crushed", false):
@@ -2702,6 +2732,66 @@ func _spell_status_step(delta: float) -> void:
 		if stacks > 0:
 			take_damage(_spell_status_effects.damage_per_second(debuff_id, stacks) * delta)
 	active_spell_debuffs = _debuff_stack.advance(active_spell_debuffs, delta)
+
+
+# -- toxic mushroom effects: disorientation vs. weakened/lethal (see
+# docs/concept/mushrooms.md's "Toxic effects: disorientation and illness",
+# docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and real
+# toxic effects", MushroomEffect). Mirrors active_spell_debuffs' own
+# DebuffStack-tracked shape exactly -- a second, parallel array driven by
+# the SAME shared _debuff_stack instance (DebuffStack is a pure function of
+# whatever array it's handed, so one instance safely serves both).
+
+var active_mushroom_debuffs: Array = []
+## Which real species most recently caused the CURRENT effect -- severity/
+## duration/lethality all vary by species (see MushroomEffect's own
+## lookups), so this is needed to read them back on each tick. The same
+## documented simplification MushroomToxin's own `_mushroom_toxin_species`
+## already accepts for the player: a second toxic bite while still
+## affected overwrites which species the whole active stack reads its
+## severity from, rather than tracking each bite's species independently
+## -- acceptable here for the identical reason (back-to-back different
+## toxic species in one dose window is an edge case, not the common path).
+var _mushroom_effect_species := ""
+var _mushroom_death_roll_count := 0
+
+
+## Applies the real effect `species_id` causes (see MushroomEffect.
+## effect_kind_for) -- a no-op for a non-toxic species. Called from
+## _apply_nutrient_bite once a forage bite resolves to a real toxic
+## mushroom species.
+func apply_mushroom_effect(species_id: String) -> void:
+	var kind := MushroomEffect.effect_kind_for(species_id)
+	if kind == "":
+		return
+	_mushroom_effect_species = species_id
+	active_mushroom_debuffs = _debuff_stack.apply(
+		active_mushroom_debuffs, kind, MushroomEffect.duration_for(species_id), MushroomEffect.MAX_STACKS
+	)
+
+
+## Authority-side per-frame tick: while Weakened (Death Cap specifically --
+## see MushroomEffect.is_lethal_capable's own real-world-grounded "mammal,
+## not insect" reasoning), rolls a real, small per-second chance of death
+## each tick, routed through the exact same _die() a disease death or a
+## predation kill already uses (real carcass, real region-death
+## bookkeeping) -- then advances every active mushroom debuff's remaining
+## duration. Runs unconditionally, mirroring _disease_step/
+## _spell_status_step's own "keeps happening no matter what this frame is
+## doing" shape.
+func _mushroom_effect_step(delta: float) -> void:
+	if info == null:
+		return
+	var weakened_stacks := _debuff_stack.stacks_of(active_mushroom_debuffs, MushroomEffect.WEAKENED_ID)
+	if weakened_stacks > 0:
+		var chance := MushroomEffect.death_chance_per_second(_mushroom_effect_species, weakened_stacks) * delta
+		if chance > 0.0:
+			_mushroom_death_roll_count += 1
+			var seed_value := hash("%d_%d_mushroom_death" % [wander_seed, _mushroom_death_roll_count])
+			if MushroomEffect.attempt_death(chance, seed_value):
+				_die()
+				return
+	active_mushroom_debuffs = _debuff_stack.advance(active_mushroom_debuffs, delta)
 
 
 func _update_health_bar() -> void:
