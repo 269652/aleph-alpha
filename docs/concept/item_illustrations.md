@@ -155,6 +155,20 @@ one — mirrors `IllustratedStoneSprite`/`IllustratedTerrainSprite`'s existing
 
 ### Combat sheets: attack, defense, condition — wooden_club
 
+**Superseded (2026-09-07) by
+[illustrated_art_addressing.md](illustrated_art_addressing.md)** for all
+NEW art: this section's own two-rows-in-one-file sheet shape (row 1 =
+attack, row 2 = defense/worn/broken at fixed indices) was never actually
+built beyond an unmerged sample sheet and painter tool. The newer doc
+keeps this section's four-surface breakdown (attack/defense/worn/broken)
+and the "a worn club still swings using the pristine frames" behavior —
+now a general fallback-lattice rule rather than a per-class special case —
+but addresses each as its own single-row file
+(`wooden_club/held/any/pristine/attack.png`, etc.) instead of two rows in
+one sheet. Left below for the surface/frame-count breakdown, which is
+still accurate; the "Sheet layout" and "Wiring" subsections describe the
+superseded shape specifically.
+
 A real defense mechanic (`block.gd`'s weapon-dependent damage reduction) and
 a real condition mechanic ([item_durability.md](item_durability.md)'s
 `pristine`/`worn`/`broken`) both exist now, which the "Deferred" section
