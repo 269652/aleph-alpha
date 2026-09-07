@@ -324,14 +324,17 @@ decayed.
 banding (flat ground litter has no vertical extent to misorder -- it is
 parented under `_ground_decor_parent`, which never Y-sorts, the same as
 every other ground decoration). One `MultiMeshInstance2D` per chunk, filled
-from that chunk's `LeafLitterField.leaves()` every `step_leaf_litter` tick
-(bounded to chunks actually in decoration range, the same `_decorates`
-radius gate every other per-chunk decoration sync already uses) -- cheap,
-deliberately, unlike the periodic multi-second `GRASS_REFRESH_INTERVAL`
-cadence flowers/grass/worms use: a leaf's whole fall is over in under a
-second (`LeafLitterField.TRANSITION_DURATION`), so any real sync lag would
-hide the fall animation entirely rather than merely delay it the way a
-slow-growing flower can tolerate.
+from that chunk's `LeafLitterField.leaves()` (bounded to chunks actually in
+decoration range, the same `_decorates` radius gate every other per-chunk
+decoration sync already uses) whenever that chunk's litter has actually
+changed since the last fill -- dirty-tracked against
+`LeafLitterField.generation()` (see docs/progress.md's "FPS regression
+round 4" follow-up entry), not the periodic multi-second
+`GRASS_REFRESH_INTERVAL` cadence flowers/grass/worms use: a leaf's whole
+fall is over in under a second (`LeafLitterField.TRANSITION_DURATION`), so
+any real sync lag would hide the fall animation entirely rather than merely
+delay it the way a slow-growing flower can tolerate -- a chunk that IS
+changing still refills the very same tick it changes.
 
 **Falling and swaying are computed continuously in a shared vertex shader**,
 ported by hand from the first pass's own already-tested `DroppedItem._step_
@@ -746,6 +749,25 @@ this became, timed against `LIFETIME` itself rather than against the
 calendar for exactly that reason.
 
 ## Status
+
+**Per-frame render cost dirty-tracked, closing FPS regression round 4's
+own deferred item (2026-09-07).** `LeafLitterRenderer.fill` used to run
+unconditionally every `step_leaf_litter` tick, for every chunk in
+decoration range, rebuilding that chunk's entire MultiMesh instance buffer
+even when nothing about its leaves had changed since the last frame --
+real, and growing with real session length (leaf litter is never
+persisted across save/load, so a short session never sees it): measured
+live on the user's own long-played save, `step_leaf_litter`'s own
+per-window cost climbed from ~20ms to ~578ms over ~19 real minutes as
+accumulated leaf count climbed to 2,361. `LeafLitterField.generation()`, a
+counter bumped only when something about a field's rendering-relevant
+state actually changes, now lets `step_leaf_litter` skip the call entirely
+for an idle chunk -- see `docs/concept/soil_fauna.md`'s own follow-up
+entry (cross-referenced from `docs/progress.md`'s "FPS regression round 4"
+paragraph) for the full mechanism, the two correctness subtleties (a
+floating leaf's continuous CPU-driven drift, and the transition-settle
+alias-safety snap) it had to account for that the periodic-throttle
+alternative could not, and the live before/after numbers.
 
 **Floating on water (2026-09-06).** Built -- see that section above. A
 leaf/blossom landing on real river current now flows at the water's own

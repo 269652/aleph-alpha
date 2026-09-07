@@ -9083,6 +9083,45 @@ radius` each prove a distant mound/flyer is never visited regardless of
 query radius, mirroring `_CountingPhaseGenerator`'s own call-observing
 idiom elsewhere in `test_earth_chunk_manager.gd`.
 
+**Leaf litter's own deferred per-frame render cost — closed 2026-09-07,
+same day.** `LeafLitterField.generation()`, a counter bumped only when a
+field's rendering-relevant state actually changes (a leaf added/removed/
+relocated/dispersed, a wind-roll nudge, a decay-tier transition — plus
+two subtleties a naive trigger list misses: a floating leaf's continuous
+CPU-driven drift, and the CPU-side transition-settle snap that keeps the
+renderer's own wrapped-clock packing alias-safe), lets `step_leaf_litter`
+skip `LeafLitterRenderer.fill` entirely for a chunk once its litter goes
+idle — not a periodic throttle, which the original `step_leaf_litter` doc
+comment already explicitly rejected for this call site (a leaf's whole
+fall completes in under a second, so any sync lag would hide the fall
+animation rather than merely delay it). Same call-observing TDD idiom as
+the two fixes above (`_CountingLeafLitterRenderer`, matching
+`_CountingPhaseGenerator`'s convention): `fill` is proven to stop being
+called for an idle chunk while still firing the same step a leaf actually
+falls. 148 targeted tests green (`test_leaf_litter_field.gd` 75/75,
+`test_leaf_litter_renderer.gd` 42/42 untouched, `test_earth_chunk_
+manager.gd`'s full "leaf" substring sweep 31/31), zero regressions.
+Measured live on the identical real save, same snapshot/`--solo`
+methodology: cost climbed ~22ms→~650ms over the first ~14 minutes as
+leaves accumulated to 1,183, then **plateaued** at ~525–650ms for a
+further ~7 minutes even as accumulated leaf count kept climbing another
+35% to 1,596 — cost is now bounded by how much litter is *currently
+changing*, not by how much has *ever* accumulated, confirmed directly by
+`refilled_chunks_this_step` reading exactly 2 of 9 decorating chunks for
+417 of 430 measured windows. Absolute ms figures aren't ms-for-ms
+comparable to round 4's own (this machine runs many concurrent sessions;
+CPU contention swings wall-clock timing independent of the code) — the
+plateau shape, not the literal numbers, is the signal. One real, separate,
+honestly-named finding: the 2 chunks that never stopped refilling almost
+certainly each have a leaf actively floating on water (the only
+unconditional every-frame generation trigger this fix adds), and a chunk
+with genuine ongoing floating-leaf activity still costs proportionally to
+its own population every frame — correct behavior, not a bug, but a real
+limit of this fix's per-chunk (not per-leaf) granularity, left as a
+possible future follow-up rather than expanded into here. See
+`soil_fauna.md`'s own "Leaf litter dirty-tracking" entry for the full
+writeup, including the two correctness subtleties.
+
 **Measured before/after, live, on the identical real save**: total
 tracked per-window cost dropped from ~1900ms of a ~3040ms window (~62%)
 to ~1120ms of a ~3030ms window (~37%) — at a HIGHER population on the
