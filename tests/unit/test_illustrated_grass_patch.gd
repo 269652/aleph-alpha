@@ -394,6 +394,50 @@ func test_grass_opacity_is_never_reduced_by_the_players_own_proximity():
 	assert_false(code.contains("COLOR.a *="), "grass must never have its opacity reduced")
 
 
+## `clamp(local_x, 0.0, 1.0)` (see fragment()'s own comment trail) keeps
+## every SAMPLE POSITION safely inside the atlas -- but at extreme bend,
+## many consecutive fragments can all clamp to the SAME single edge column
+## of the card's own region, repeating whatever pixel sits there across a
+## visible stretch of the quad. Reported live: "all seasons except summer
+## produce artifacts when parting" -- measured directly (real, non-headless
+## render + a direct pixel probe, per this codebase's established
+## technique): winter's row 9/column 0 region has a real, fully-opaque
+## (alpha=1.0) pixel sitting exactly at its own right edge (x=124, the last
+## column INSIDE the region), and spring/autumn have the same at the
+## identical spot -- summer alone is clean there (its own native alpha
+## channel, not chroma-keyed). A bend strong enough to clamp there stretches
+## that ONE pixel into a visible horizontal smear, present on every season
+## whose art happens to reach that boundary and absent on the one whose
+## doesn't.
+##
+## Fixed by tracking the UN-clamped sample position (`raw_local_x`)
+## alongside the clamped one: the clamped value still picks a safe, in-
+## bounds texture coordinate (never an actual out-of-range read), but
+## whenever the true, unclamped position would have fallen outside the
+## card's own [0,1] region, that fragment is made fully transparent instead
+## of showing whatever pixel the clamp landed on.
+##
+## This is NOT a re-introduction of the SUPERSEDED occlusion-fade hack
+## above -- it is not a continuous function of distance-to-player, does not
+## scale with `walker_radius`, and fires identically for a strong AMBIENT
+## WIND gust far from any player (`bend_offset` combines wind AND push) as
+## it does for a walker's push: it only ever discards the rare fragments
+## whose own bend has carried them physically past the edge of their own
+## source art. Everywhere else, opacity is exactly the sampled texel's own
+## alpha, unmodified -- a straight `COLOR.a = 0.0` is not `COLOR.a *=`, and
+## never triggers from proximity alone, so this does not conflict with
+## test_grass_opacity_is_never_reduced_by_the_players_own_proximity above.
+func test_shader_discards_a_fragment_that_bends_past_its_own_regions_edge():
+	var code: String = IllustratedGrassPatch.SHADER_CODE
+	var fragment_body := code.substr(code.find("void fragment()"))
+	assert_string_contains(fragment_body, "raw_local_x")
+	# Must key off the UN-clamped position -- checking the already-clamped
+	# value could never be true/false, since it is forced into [0,1] first.
+	assert_string_contains(fragment_body, "raw_local_x < 0.0")
+	assert_string_contains(fragment_body, "raw_local_x > 1.0")
+	assert_string_contains(fragment_body, "COLOR.a = 0.0")
+
+
 ## The player's own real max reach above their feet/root -- HeadSlot, the
 ## topmost node in scenes/character_view.tscn, sits at local Y = -42 (world
 ## units above the character's own origin, which is the same root a grass

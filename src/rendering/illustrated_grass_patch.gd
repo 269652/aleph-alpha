@@ -246,7 +246,8 @@ void fragment() {
 	// is authored root-at-bottom-of-cell/tip-at-top, but mesh UV.y=0 is the
 	// root) - see illustrated_grass_patch.gd's band_index_for_local_y-
 	// adjacent comment trail for the empirical verification.
-	float local_x = clamp(UV.x - bend_offset, 0.0, 1.0);
+	float raw_local_x = UV.x - bend_offset;
+	float local_x = clamp(raw_local_x, 0.0, 1.0);
 	vec2 atlas_uv = region_uv0 + vec2(local_x, 1.0 - UV.y) * region_size;
 
 	// SUPERSEDED (2026-08-26): a blade whose own root the player has already
@@ -266,6 +267,22 @@ void fragment() {
 	// first, correctly covered) or genuinely in front (drawn after,
 	// correctly covering), always fully opaque either way.
 	COLOR = texture(TEXTURE, atlas_uv);
+	// At extreme bend, raw_local_x can run past [0,1] for many consecutive
+	// fragments at once -- local_x's own clamp keeps the SAMPLE safely
+	// in-bounds, but everything past the true edge would otherwise repeat
+	// whatever single edge pixel the clamp landed on, stretching it into a
+	// visible smear (reported live: "all seasons except summer produce
+	// artifacts when parting" -- three of the four delivered sheets have a
+	// real, non-transparent pixel sitting exactly at that edge; see this
+	// shader's own history/test for the measurement). A fragment whose true,
+	// unclamped position has bent past its own region's edge shows nothing
+	// instead of that stretched pixel -- not a proximity-based fade (see the
+	// SUPERSEDED note above): it fires identically for ambient wind alone,
+	// with no player nearby, and never reduces opacity anywhere the bend
+	// actually stays in-bounds.
+	if (raw_local_x < 0.0 || raw_local_x > 1.0) {
+		COLOR.a = 0.0;
+	}
 	// Gated on greenness for the same reason GroundTint is, and with the same
 	// gain: the illustrated atlas already carries dry/brown blades, and those
 	// must not be turned again by a season they are already wearing.
