@@ -259,9 +259,13 @@ func test_approaching_a_close_target_does_not_overshoot_and_orbit_forever():
 # -- unlike worm's real "die" row or millipede's real "crushed" row) --------
 
 func test_crush_applies_the_squash_effect_to_its_sprite():
-	marker.crush()
 	var sprite := marker.get_child(0) as Sprite2D
-	assert_almost_eq(sprite.scale.y, SquashCrushEffect.VERTICAL_SQUASH, 0.001)
+	var scale_before := sprite.scale.y
+	marker.crush()
+	assert_almost_eq(
+		sprite.scale.y, scale_before * SquashCrushEffect.VERTICAL_SQUASH, 0.0001,
+		"the squash must apply RELATIVE to the caterpillar's own existing scale, not overwrite it outright"
+	)
 	assert_eq(sprite.modulate, SquashCrushEffect.TINT)
 
 
