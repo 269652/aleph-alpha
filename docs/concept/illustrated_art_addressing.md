@@ -321,10 +321,34 @@ section, which now cross-references here).
   cover both worked examples below, the tie-break priority in isolation,
   and self-consistency checks on the registry data itself (every
   subject's own `base_state` is a member of its own `states` list, etc.).
-- ⬜ Generic single-row loader with `baseline`/`pivot`/`footprint`/`center`
-  anchors, built from `SpriteSheetSlicer` and the club pilot's cell-keeping
-  path. The resolver above returns an ADDRESS, not pixels — this is the
-  next piece, turning a resolved address into actual frames.
+- ✅ Generic single-row loader (`illustrated_art_loader.gd`) with all four
+  `baseline`/`pivot`/`footprint`/`center` anchors — turns a resolved
+  address's file into actual frames (the resolver above stops at the
+  address; this is what a real caller chains after it). `baseline`
+  dispatches straight to the existing, already-tested
+  `SpriteSheetSlicer.normalize_frames`; `pivot` generalizes the club
+  pilot's own cell-keeping path (whole cell, no content crop); `center`
+  and `footprint` are genuinely new (nothing shared their exact behaviour
+  before this). Two small, general-purpose additions to the shared
+  `SpriteSheetSlicer` itself, both reused rather than duplicated per
+  anchor: `chroma_keyed` (ported from the club pilot's own branch, which
+  had added it there untested — given fresh tests here) and a newly
+  PUBLIC `content_rect` (`_content_rect` renamed, a pure refactor with no
+  behavior change — `center` needs the identical content-cropping box
+  `normalize_frames` already computes for `baseline`, just positioned
+  differently). One real ordering subtlety worth knowing before touching
+  this file: cell boundaries must be detected on the RAW, un-keyed image
+  (a solid chroma-key ground is fully saturated, so it does not itself
+  read as "empty" background to `detect_frames`) — keying first and
+  detecting after, the naive order, finds only each frame's own drawn
+  content as if it were the whole cell. See the loader's own doc comment.
+  16 tests total across the loader and the two slicer additions
+  (`test_illustrated_art_loader.gd`, `test_sprite_sheet_slicer.gd`),
+  synthetic in-memory sheets throughout — no real art needed to prove the
+  pipeline. 128/128 across every file touched this pass, zero
+  regressions (re-checked directly against `IllustratedAnimalSprite`/
+  `IllustratedFlowerHead`, the two existing classes built on
+  `normalize_frames`).
 - ⬜ Season key from the shared clock derivation; hard switch at the
   quantised boundary.
 - ⬜ Overlay compositing (`snowed`), driven by snow depth.
