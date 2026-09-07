@@ -216,32 +216,55 @@ func test_bitten_frame_for_is_deterministic_per_seed():
 		assert_eq(sprite.bitten_frame_for(id, 42), sprite.bitten_frame_for(id, 42))
 
 
-## Most species had 3 independent bitten sheets delivered (not just 1) --
-## a "path" entry can now be a whole Array of sheets to combine into one
-## bigger pool, the same way _SHEETS/_CRUSHED_SHEETS' single-path entries
-## still work unchanged. death_cap has only 1 delivered bitten sheet so
-## far, same as every crushed entry -- the mixed counts here are the real,
-## honest reflection of what's actually been delivered per species, not a
-## uniform assumption.
-func test_bitten_frame_count_reflects_every_delivered_sheet_combined():
-	for id in ["fly_agaric", "psylo", "black_trumpet", "champignon", "chanterelle", "parasol", "false_death_cap"]:
-		assert_eq(
-			sprite.bitten_frame_count(id), EXPECTED_FRAME_COUNT * 3,
-			"%s has 3 delivered bitten sheets, should combine into 75 frames" % id
-		)
-	assert_eq(sprite.bitten_frame_count("death_cap"), EXPECTED_FRAME_COUNT, "death_cap has only 1 delivered bitten sheet so far")
+## Corrected 2026-09-07 (see docs/concept/soil_fauna.md's "Progressive,
+## mass-scaled bites, and real toxic effects"): most species' 3 independent
+## bitten sheets are now three real progressive STAGES, not one flattened
+## same-stage variety pool -- bitten_frame_for/bitten_frame_count both take
+## a real `stage` argument (1-based, matching MushroomBiting.MAX_BITE_STAGES),
+## each resolving to its OWN 25-frame sheet rather than a combined 75.
+func test_bitten_frame_count_is_25_per_stage_for_every_species():
+	for id in MushroomSpecies.IDS:
+		for stage in [1, 2, 3]:
+			assert_eq(sprite.bitten_frame_count(id, stage), EXPECTED_FRAME_COUNT, "%s stage %d" % [id, stage])
 
 
-## Spreading across a combined multi-sheet pool, not just the first sheet
-## in the list -- a caller that only ever loaded sheet 1 and ignored 2/3
-## would still pass every test above (frame 0 of sheet 1 is a real,
-## non-blank, correctly-keyed frame regardless).
-func test_bitten_frame_for_spreads_across_every_combined_sheet():
+## death_cap has only 1 delivered bitten sheet -- every stage falls back to
+## it (the same has-art-or-doesn't convention every optional illustrated-art
+## seam in this codebase already uses), so its three stages read identical.
+func test_death_cap_bitten_stages_all_fall_back_to_its_one_delivered_sheet():
+	assert_eq(sprite.bitten_frame_for("death_cap", 7, 1), sprite.bitten_frame_for("death_cap", 7, 2))
+	assert_eq(sprite.bitten_frame_for("death_cap", 7, 1), sprite.bitten_frame_for("death_cap", 7, 3))
+
+
+## The real point of this whole refactor: a species with 3 real delivered
+## bitten sheets shows genuinely DIFFERENT art per stage, so a mushroom's
+## own look actually advances as MushroomBiting.MAX_BITE_STAGES climbs,
+## not just "some bite happened" regardless of how much.
+func test_different_stages_show_genuinely_different_art():
 	for id in ["fly_agaric", "psylo", "black_trumpet", "champignon", "chanterelle", "parasol", "false_death_cap"]:
+		var stage_1: PackedByteArray = sprite.bitten_frame_for(id, 3, 1).get_image().get_data()
+		var stage_2: PackedByteArray = sprite.bitten_frame_for(id, 3, 2).get_image().get_data()
+		var stage_3: PackedByteArray = sprite.bitten_frame_for(id, 3, 3).get_image().get_data()
+		assert_ne(stage_1, stage_2, "%s: stage 1 and 2 should show different art" % id)
+		assert_ne(stage_2, stage_3, "%s: stage 2 and 3 should show different art" % id)
+
+
+## A stage past the real delivered count (or below 1) clamps to the nearest
+## real stage rather than erroring or returning a blank frame.
+func test_bitten_frame_for_clamps_an_out_of_range_stage():
+	for id in MushroomSpecies.IDS:
+		assert_eq(sprite.bitten_frame_for(id, 5, 99), sprite.bitten_frame_for(id, 5, 3))
+		assert_eq(sprite.bitten_frame_for(id, 5, 0), sprite.bitten_frame_for(id, 5, 1))
+
+
+## Still spreads across a full 25-variant pool WITHIN one stage, the same
+## seed-driven spread every other frame pool in this class already proves.
+func test_bitten_frame_for_spreads_across_variants_within_one_stage():
+	for id in MushroomSpecies.IDS:
 		var seen := {}
-		for i in 300:
-			seen[sprite.bitten_frame_for(id, i)] = true
-		assert_gt(seen.size(), EXPECTED_FRAME_COUNT, "%s: should pick variants beyond just the first sheet's own 25" % id)
+		for i in 100:
+			seen[sprite.bitten_frame_for(id, i, 1)] = true
+		assert_gt(seen.size(), 1, "%s: should pick more than one variant within stage 1" % id)
 
 
 ## The crushed/bitten look must actually differ from the normal look --
