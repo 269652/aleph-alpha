@@ -15103,6 +15103,28 @@ glue versus pure logic elsewhere (e.g. `LeafLitterRenderer.fill`'s own
 untested-in-isolation wrapper around its tested static functions). 18 new
 tests total (7 sequencer + 6 sheet + 5 node), all green.
 
+**Follow-up fix, same day:** reported directly, "the intro scene with the
+rotating earth is still not shown before main menu." The intro was wired
+correctly but at the END of `_ready()`, right before `_show_main_menu()`
+-- meaning its first frame could only appear once every OTHER `_ready()`
+step (chunk manager, every shader layer, `MushroomMarker.warm_art_cache`,
+~15 UI builder calls) had already finished. A live, timestamped launch on
+a loaded dev machine measured that setup taking 80+ real seconds, during
+which the window was blank -- the intro was never actually invisible, it
+was just started too late for anyone to ever see it. Moved the trigger to
+the TOP of `_ready()` (right after the license gate) with a single
+`await get_tree().process_frame` so the engine presents that first frame
+before the rest of `_ready()`'s synchronous work resumes; verified via
+the same real-launch-with-timestamps methodology that found the bug
+(~1.2s to first visible frame afterward, vs. ~94s before). See
+`concept/intro_splash.md`'s own "A real early-launch bug" section for the
+full writeup, including why this fix has no dedicated automated
+regression test (a statement-ordering change within `_ready()`'s already-
+untested wiring, per `test_world_hud.gd`'s own documented convention) and
+the honest remaining gap it does NOT close (the animation itself can
+still sit frozen mid-sequence for however long that same heavy setup
+takes, since that setup isn't broken into yield points).
+
 ### Mushrooms now fruit at their own real-world-timed windows within autumn (`concept/mushrooms.md`, 2026-09-07)
 
 Asked directly: *"mushrooms should fruit at their respective times ...

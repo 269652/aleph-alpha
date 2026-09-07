@@ -655,6 +655,33 @@ func _ready() -> void:
 		if not identity_ok:
 			return
 
+	# Boot logo intro (see docs/concept/intro_splash.md): triggered here, at
+	# the very top of _ready(), deliberately BEFORE any of the expensive
+	# synchronous per-boot setup below (EarthChunkManager, every shader
+	# layer, MushroomMarker.warm_art_cache, ~15 UI builder calls). A real
+	# live-launch measurement found that setup taking 80+ real seconds on a
+	# loaded machine, during which the OLD call site -- after all of it,
+	# behind the same args check reused below -- left the screen blank the
+	# entire time: the intro was structurally correct but started too late
+	# for anyone to ever see it (reported directly: "the intro scene... is
+	# still not shown before main menu"). The one process_frame yield below
+	# is enough for the engine to actually present the intro's first frame
+	# before this function's synchronous work resumes -- _ready() already
+	# awaits once above (the GitHub identity check), so suspending mid-
+	# _ready() is an established pattern here, not a new one. _world_ready
+	# is still false at this point, so the _process()/_unhandled_input()
+	# no-op guard just below is unaffected: this only ever adds the self-
+	# contained IntroSplash overlay, which touches none of the state that
+	# guard protects. `args` is computed once, here, and reused unchanged
+	# by the solo/server/join dispatch further down.
+	var args := OS.get_cmdline_user_args()
+	var plain_interactive_launch := not (
+		"--solo" in args or "--server" in args or _has_network_arg(args)
+	)
+	if plain_interactive_launch:
+		_play_intro_splash()
+		await get_tree().process_frame
+
 	# Real bug found live: _process()/_unhandled_input() run every frame
 	# regardless of whether _ready() returned early above -- before this
 	# flag existed, an unlicensed/unverified boot's early return still
@@ -751,7 +778,6 @@ func _ready() -> void:
 	_build_interaction_prompt()
 	_build_charge_meter()
 
-	var args := OS.get_cmdline_user_args()
 	if "--solo" in args:
 		# Dev/instrumentation launch: skip the menu and drop straight into a
 		# solo session. The project's standard way of finding a bug that
@@ -767,13 +793,12 @@ func _ready() -> void:
 		_start_server()
 	elif _has_network_arg(args):
 		_start_client(args)
-	else:
-		# Interactive launch: play the boot logo intro first (see
-		# docs/concept/intro_splash.md), then show the main menu (New Game /
-		# Host / Join / class pick) and hold the world paused until the player
-		# chooses, rather than dropping straight into a default single-player
-		# game.
-		_play_intro_splash()
+	# else: plain interactive launch -- the boot logo intro was already
+	# started at the top of _ready() (see the comment there for why), and
+	# its own `finished` handler shows the main menu (New Game / Host /
+	# Join / class pick), holding the world paused until the player
+	# chooses, rather than dropping straight into a default single-player
+	# game.
 
 
 ## Path to the menu's painted backdrop (see concept art prompt in the commit
@@ -786,10 +811,11 @@ const MENU_BACKGROUND_PATH := "res://assets/backgrounds/main.png"
 ## Plays the boot logo intro once (see IntroSplash, docs/concept/
 ## intro_splash.md), then shows the main menu -- the intro doesn't know what
 ## comes after it (just emits `finished`, on completion OR an early skip), so
-## this is the one place that decides. Never called for --solo/--server/join
-## launches (see _ready's own branching just above) -- those are dev/
-## diagnostic or straight-to-multiplayer paths that should stay instant, not
-## the ordinary player-facing "double-click and play" launch this belongs to.
+## this is the one place that decides. Called from the TOP of _ready(), not
+## "just above" here -- see that call site's own comment for why (started
+## before the expensive per-boot setup, not after it) -- so it never runs for
+## --solo/--server/join launches (those are dev/diagnostic or straight-to-
+## multiplayer paths that should stay instant), same as before.
 func _play_intro_splash() -> void:
 	var intro := IntroSplash.new()
 	_ui.add_child(intro)
