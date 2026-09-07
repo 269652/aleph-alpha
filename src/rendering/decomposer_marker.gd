@@ -484,12 +484,15 @@ func _nearest_food() -> Node2D:
 		# `is DroppedItem`/`item_stack` half is defensive, not load-bearing
 		# for correctness -- kept so a future bug in that join can never
 		# reintroduce the exact "invalid access to item_stack" crash this
-		# whole investigation started from. An already-bitten mushroom has
-		# nothing left to offer, so it is excluded here rather than costing
-		# a decomposer a wasted trip only to find take_mushroom_bite() a
-		# no-op on arrival.
+		# whole investigation started from. A FULLY eaten mushroom (see
+		# MushroomMarker.can_be_bitten, docs/concept/soil_fauna.md's
+		# "Progressive, mass-scaled bites") has nothing left to offer, so
+		# it is excluded here rather than costing a decomposer a wasted
+		# trip only to find take_mushroom_bite() a no-op on arrival -- a
+		# PARTIALLY bitten one (some real capacity still left) stays a
+		# real target, so a second bug can take a second bite.
 		var is_real_fruit: bool = node is DroppedItem and node.item_stack != null
-		var is_biteable_mushroom: bool = node.has_method("take_mushroom_bite") and not node.bitten
+		var is_biteable_mushroom: bool = node.has_method("take_mushroom_bite") and node.can_be_bitten()
 		if not is_real_fruit and not is_biteable_mushroom:
 			continue
 		var distance: float = position.distance_to(node.position)

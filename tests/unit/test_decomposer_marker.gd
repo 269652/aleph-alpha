@@ -20,6 +20,8 @@ const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
 const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
@@ -431,8 +433,8 @@ func test_never_looks_for_leaf_litter_without_an_injected_world():
 class StubMushroomWorld:
 	extends RefCounted
 
-	func bite(_cell: Vector2i) -> bool:
-		return true
+	func bite(_cell: Vector2i, stages: int = 1) -> int:
+		return stages
 
 
 func _mushroom_at(at: Vector2, species_id: String = "champignon") -> MushroomMarker:
@@ -466,18 +468,34 @@ func test_biting_a_mushroom_never_removes_it():
 	assert_false(mushroom.is_queued_for_deletion(), "biting a mushroom must not remove it")
 
 
-## One bite is enough (see WildMushroomPatch.bite) -- an already-bitten
-## mushroom has nothing left to offer, so a decomposer must not waste a
-## trip committing to one.
-func test_an_already_bitten_mushroom_is_never_a_target():
+## Corrected 2026-09-07 (see docs/concept/soil_fauna.md's "Progressive,
+## mass-scaled bites, and real toxic effects"): a partially-bitten mushroom
+## is STILL a real target now (a second bug can take a second bite) -- only
+## a genuinely fully-eaten one (bite_stage at MushroomBiting.MAX_BITE_STAGES,
+## MushroomMarker.can_be_bitten() false) has nothing left to offer, so a
+## decomposer must not waste a trip committing to one.
+func test_a_fully_eaten_mushroom_is_never_a_target():
 	var mushroom := _mushroom_at(Vector2(105, 100))
-	mushroom.bitten = true
+	mushroom.bite_stage = MushroomBiting.MAX_BITE_STAGES
 	for i in 200:
 		marker._process(0.5)
 	assert_eq(
 		marker._behavior.phase, CarrionForageBehavior.Phase.SEEKING,
 		"nothing left to bite -- should keep seeking, never approach"
 	)
+
+
+## The real point of the mass-scaled step-count fix: a mushroom bitten once
+## (but not yet fully eaten) is still a real target for the NEXT decomposer.
+func test_a_partially_bitten_mushroom_is_still_a_target():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	mushroom.bite_stage = 1
+	assert_true(mushroom.can_be_bitten(), "precondition: still has real capacity left")
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 1:
+			break
+	assert_gt(mushroom.bite_stage, 1, "a second bug should still be able to advance it further")
 
 
 func test_ignores_a_dropped_item_that_is_not_food():

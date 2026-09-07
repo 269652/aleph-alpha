@@ -19,6 +19,7 @@ const IllustratedMushroomSprite = preload("res://src/rendering/illustrated_mushr
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const Inventory = preload("res://src/gameplay/inventory.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 
 class StubPicker:
 	extends Node2D
@@ -29,9 +30,11 @@ class StubMushroomWorld:
 	extends RefCounted
 	var taken: Array = []
 	var bitten: Array = []
-	## Lets a test force bite() to report "nothing there" without needing a
-	## real WildMushroomPatch's recovery state.
-	var bite_result := true
+	## How many stages bite() reports as actually applied -- lets a test
+	## force "nothing left to take" (0) without needing a real
+	## WildMushroomPatch's own recovery/stage-cap state. Defaults to 1,
+	## matching a real sim's ordinary single-stage bite.
+	var bite_stages_result := 1
 
 	# No need to override has_method() -- Godot's own reflection already
 	# reports true for this real, defined method. Named `pick`/`bite` to
@@ -43,11 +46,11 @@ class StubMushroomWorld:
 		taken.append(cell)
 		return true
 
-	func bite(cell: Vector2i) -> bool:
-		if not bite_result:
-			return false
+	func bite(cell: Vector2i, _stages: int = 1) -> int:
+		if bite_stages_result <= 0:
+			return 0
 		bitten.append(cell)
-		return true
+		return bite_stages_result
 
 
 func _make_marker(species_id: String, cell: Vector2i = Vector2i.ZERO, corpse_kind: String = "") -> MushroomMarker:
@@ -179,13 +182,56 @@ func test_take_mushroom_bite_tells_the_mushroom_world():
 	assert_eq(marker.mushroom_world.bitten, [Vector2i(3, 4)])
 
 
-## One bite is enough -- see WildMushroomPatch.bite's own doc comment for why
-## DecomposerMarker relies on this false to know when to move on.
-func test_a_second_bite_is_a_no_op():
+## Corrected 2026-09-07 (see docs/concept/soil_fauna.md's "Progressive,
+## mass-scaled bites, and real toxic effects"): a second bite is no longer
+## necessarily a no-op -- it lands exactly when the sim reports there is
+## still real capacity left, and MushroomMarker.bite_stage accumulates
+## whatever it was told, rather than the marker enforcing a hardcoded
+## one-shot cap itself.
+func test_a_second_bite_advances_bite_stage_further():
 	var marker := _make_marker("parasol", Vector2i(3, 4))
 	marker.mushroom_world = StubMushroomWorld.new()
 	assert_true(marker.take_mushroom_bite())
-	assert_false(marker.take_mushroom_bite(), "already bitten -- nothing left to take")
+	assert_eq(marker.bite_stage, 1)
+	assert_true(marker.take_mushroom_bite(), "the sim still has capacity -- a second bite should land")
+	assert_eq(marker.bite_stage, 2)
+
+
+## Once the sim itself reports nothing left (see WildMushroomPatch.bite's own
+## real stage cap), a further bite is a genuine no-op -- MushroomMarker just
+## forwards whatever the sim decides, it doesn't second-guess it locally.
+func test_a_bite_the_sim_refuses_is_a_no_op():
+	var marker := _make_marker("parasol", Vector2i(3, 4))
+	var world := StubMushroomWorld.new()
+	marker.mushroom_world = world
+	assert_true(marker.take_mushroom_bite())
+	world.bite_stages_result = 0
+	assert_false(marker.take_mushroom_bite(), "the sim says nothing is left to take")
+	assert_eq(marker.bite_stage, 1, "a refused bite must not still advance the stage")
+
+
+## A bigger eater's bite (see MushroomBiting.bites_per_visit_for) can request
+## more than one stage in a single call.
+func test_take_mushroom_bite_accepts_a_bigger_bite_count():
+	var marker := _make_marker("parasol", Vector2i(3, 4))
+	var world := StubMushroomWorld.new()
+	world.bite_stages_result = 3
+	marker.mushroom_world = world
+	assert_true(marker.take_mushroom_bite(3))
+	assert_eq(marker.bite_stage, 3)
+
+
+func test_can_be_bitten_defaults_to_true():
+	assert_true(_make_marker("parasol").can_be_bitten())
+
+
+func test_can_be_bitten_is_false_once_fully_eaten():
+	var marker := _make_marker("parasol", Vector2i(3, 4))
+	var world := StubMushroomWorld.new()
+	world.bite_stages_result = MushroomBiting.MAX_BITE_STAGES
+	marker.mushroom_world = world
+	marker.take_mushroom_bite(MushroomBiting.MAX_BITE_STAGES)
+	assert_false(marker.can_be_bitten(), "fully eaten -- nothing left for the next decomposer to take")
 
 
 func test_take_mushroom_bite_fails_gracefully_with_no_mushroom_world():
@@ -277,6 +323,25 @@ func test_shows_crushed_art_when_corpse_kind_is_crushed_and_the_species_has_it()
 func test_display_name_reveals_a_crushed_corpse():
 	assert_eq(_make_marker("parasol", Vector2i.ZERO, "crushed").get_display_name(), "Parasol (Crushed)")
 	assert_eq(_make_marker("death_cap", Vector2i.ZERO, "crushed").get_display_name(), "Death Cap (Crushed)")
+
+
+## A fully-eaten mushroom (see WildMushroomPatch's new "eaten" corpse_kind,
+## docs/concept/soil_fauna.md's "Progressive, mass-scaled bites") gets its
+## own real state hint too, distinct from a crushed corpse.
+func test_display_name_reveals_an_eaten_corpse():
+	assert_eq(_make_marker("parasol", Vector2i.ZERO, "eaten").get_display_name(), "Parasol (Eaten)")
+
+
+## An eaten corpse shows the final bitten-stage art (the mushroom read as
+## most-consumed just before it was actually finished off), not the ordinary
+## live look, wherever real bitten art exists for the species.
+func test_shows_final_stage_bitten_art_when_corpse_kind_is_eaten():
+	var marker := _make_marker("chanterelle", Vector2i.ZERO, "eaten")
+	var sprite := marker.get_child(0) as Sprite2D
+	var expected := IllustratedMushroomSprite.new().bitten_frame_for(
+		"chanterelle", marker.mushroom_seed, MushroomBiting.MAX_BITE_STAGES
+	)
+	assert_eq(sprite.texture.get_image().get_data(), expected.get_image().get_data())
 
 
 ## A bitten mushroom is NOT a "bitten" corpse_kind -- it is still standing,

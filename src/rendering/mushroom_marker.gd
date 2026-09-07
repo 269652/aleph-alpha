@@ -61,16 +61,27 @@ var mushroom_world = null
 ## stays "" for it.
 var corpse_kind := ""
 
-## Whether a decomposer bug has bitten THIS live mushroom (see
-## take_mushroom_bite, docs/concept/mushrooms.md's fungivory section).
-## Unlike being picked or crushed, a bite does not remove it or replace it
-## with a corpse marker -- it stays present and pickable, just diminished
-## (a different look, a different, lighter catalog item once picked up --
-## see MushroomBiting.gd). Deliberately a separate field from corpse_kind,
-## not a third corpse_kind value: a bitten mushroom is not a corpse, it is
-## still standing, still fruiting (see WildMushroomPatch._bitten's own
-## doc comment for why the two are tracked orthogonally on the sim side
-## too).
+## How many real bite stages THIS live mushroom has taken so far, 0..
+## MushroomBiting.MAX_BITE_STAGES (see take_mushroom_bite, docs/concept/
+## mushrooms.md's fungivory section, docs/concept/soil_fauna.md's
+## "Progressive, mass-scaled bites, and real toxic effects"). Unlike being
+## picked or crushed, a PARTIAL bite (under the cap) does not remove this
+## marker or replace it with a corpse marker -- it stays present and
+## pickable, just diminished (a different look per stage, a different,
+## lighter catalog item once picked up -- see MushroomBiting.gd). Was a
+## plain bool before 2026-09-07 -- one bite from anyone was final; now a
+## real step count, mirroring WildMushroomPatch._bite_stage on the sim
+## side, so a second, later bite (same or different eater) can advance it
+## further, each stage showing its own progressively-more-eaten art.
+var bite_stage := 0
+
+## Plain `bite_stage > 0` mirror, kept in sync on every change -- a real,
+## deliberate backward-compatibility shim so every existing caller/test
+## that reads or sets `bitten` directly keeps working unchanged.
+## `bite_stage` is the authoritative field; this never diverges from it.
+## Deliberately a separate field from corpse_kind, not a third corpse_kind
+## value while still partial: a partially-bitten mushroom is not a corpse,
+## it is still standing, still fruiting.
 var bitten := false
 
 var _sprite: Sprite2D
@@ -98,25 +109,36 @@ func get_hover_actions() -> Array:
 ## Real illustrated art if this species has any (has-art-or-doesn't
 ## fallback chain every optional illustrated-art seam in this codebase
 ## uses), the procedural species-coloured silhouette otherwise. Always the
-## real species' own look -- see class doc comment. A crushed corpse
-## (corpse_kind == "crushed") or a bitten live specimen (bitten == true)
-## prefers the matching crushed_frame_for/bitten_frame_for when the species
-## has that art yet (see docs/concept/mushrooms.md's "Crushed underfoot"/
-## "Bitten by a decomposer") -- falling through to the ordinary live look
-## otherwise, the same has-or-doesn't gate, so a species still missing its
-## crushed/bitten sheet never shows a blank texture, just its real live
-## look a beat longer than the fully-delivered species do.
+## real species' own look -- see class doc comment. A crushed or fully-eaten
+## corpse (corpse_kind == "crushed"/"eaten") or a partially-bitten live
+## specimen (bite_stage > 0) prefers the matching crushed_frame_for/
+## bitten_frame_for when the species has that art yet (see docs/concept/
+## mushrooms.md's "Crushed underfoot"/"Bitten by a decomposer") -- falling
+## through to the ordinary live look otherwise, the same has-or-doesn't
+## gate, so a species still missing its crushed/bitten sheet never shows a
+## blank texture, just its real live look a beat longer than the
+## fully-delivered species do.
 func _rebuild_sprite() -> void:
 	if corpse_kind == "crushed" and _illustrated_generator.has_crushed_variant(species_id):
 		_sprite.texture = _illustrated_generator.crushed_frame_for(species_id, mushroom_seed)
 		_sprite.scale = Vector2.ONE * _illustrated_generator.marker_scale(species_id)
-	elif bitten and _illustrated_generator.has_bitten_variant(species_id):
-		# The bitten look, when the species has real art for it -- see
-		# IllustratedMushroomSprite._BITTEN_SHEETS' own doc comment for
-		# which species do so far. Reuses the SAME marker_scale(species_id)
-		# the ordinary look uses (a bug's bite doesn't shrink the specimen
-		# enough to need its own separately-measured scale).
-		_sprite.texture = _illustrated_generator.bitten_frame_for(species_id, mushroom_seed)
+	elif corpse_kind == "eaten" and _illustrated_generator.has_bitten_variant(species_id):
+		# A fully-consumed corpse shows the final bite stage's own art --
+		# the mushroom read as most-eaten just before it was actually
+		# finished off (see docs/concept/soil_fauna.md's "Progressive,
+		# mass-scaled bites").
+		_sprite.texture = _illustrated_generator.bitten_frame_for(
+			species_id, mushroom_seed, MushroomBiting.MAX_BITE_STAGES
+		)
+		_sprite.scale = Vector2.ONE * _illustrated_generator.marker_scale(species_id)
+	elif bite_stage > 0 and _illustrated_generator.has_bitten_variant(species_id):
+		# The bitten look for THIS stage, when the species has real art for
+		# it -- see IllustratedMushroomSprite._BITTEN_SHEETS' own doc
+		# comment for which species do so far. Reuses the SAME
+		# marker_scale(species_id) the ordinary look uses (a bug's bite
+		# doesn't shrink the specimen enough to need its own
+		# separately-measured scale).
+		_sprite.texture = _illustrated_generator.bitten_frame_for(species_id, mushroom_seed, bite_stage)
 		_sprite.scale = Vector2.ONE * _illustrated_generator.marker_scale(species_id)
 	elif _illustrated_generator.has_variants(species_id):
 		_sprite.texture = _illustrated_generator.frame_for(species_id, mushroom_seed)
@@ -148,33 +170,54 @@ func get_display_name() -> String:
 	var species_name := MushroomSpecies.display_name_for(species_id)
 	if corpse_kind == "crushed":
 		return "%s (Crushed)" % species_name
-	if bitten:
+	if corpse_kind == "eaten":
+		return "%s (Eaten)" % species_name
+	if bite_stage > 0:
 		return "%s (Bitten)" % species_name
 	if MushroomSpecies.is_toxic(species_id):
 		return "%s (Toxic)" % species_name
 	return "%s (Edible)" % species_name
 
 
-## Marks this mushroom bitten by a decomposer bug (see docs/concept/
-## mushrooms.md's fungivory section, MushroomBiting.gd) -- the take_bite-
-## shaped verb DecomposerMarker._step_feeding's take_mushroom_bite branch
-## calls. Deliberately its OWN method name, not take_bite(): a MushroomMarker
-## must NOT answer has_method("take_bite") true, or DecomposerMarker would
-## route it into the Carcass/CarcassGuts branch instead of the mushroom one.
-## Unlike Carcass.take_bite, this never frees the marker: a bitten mushroom
-## stays present and pickable, just diminished (see
-## _rebuild_sprite/get_display_name/pick_up). Returns false (a no-op) when
-## already bitten, or there's no real sim to tell (mushroom_world unset --
-## e.g. a marker built standalone in a test) -- the same false a
-## decomposer relies on to know it's done here and should move on (see
-## WildMushroomPatch.bite's own doc comment).
-func take_mushroom_bite() -> bool:
-	if bitten:
-		return false
+## Whether this live mushroom still has any real bite capacity left --
+## true while bite_stage is under MushroomBiting.MAX_BITE_STAGES, false
+## once it's been fully eaten. What DecomposerMarker._nearest_food checks
+## (see its own doc comment) to decide whether a partially-bitten mushroom
+## is still worth targeting for the NEXT bug, replacing the old flat
+## "not bitten at all" exclusion that used to treat any bite as final.
+func can_be_bitten() -> bool:
+	return bite_stage < MushroomBiting.MAX_BITE_STAGES
+
+
+## Bites this mushroom -- a decomposer bug's single nibble (default) or a
+## bigger, mass-scaled eater's own bigger mouthful (see
+## MushroomBiting.bites_per_visit_for) -- the take_bite-shaped verb
+## DecomposerMarker._step_feeding's take_mushroom_bite branch and
+## CreatureMarker's own boar-bite path both call. Deliberately its OWN
+## method name, not take_bite(): a MushroomMarker must NOT answer
+## has_method("take_bite") true, or DecomposerMarker would route it into
+## the Carcass/CarcassGuts branch instead of the mushroom one. Unlike
+## Carcass.take_bite, this never frees the marker while any capacity
+## remains -- a partially-bitten mushroom stays present and pickable, just
+## diminished (see _rebuild_sprite/get_display_name/pick_up).
+##
+## Delegates entirely to mushroom_world.bite(cell, bite_stages), which
+## returns how many stages actually landed (0 if there was nothing
+## fruiting, or it was already fully eaten -- see WildMushroomPatch.bite's
+## own doc comment) -- this marker does NOT locally enforce the cap
+## itself, it just mirrors whatever the sim (the one real source of truth)
+## reports, accumulating bite_stage by exactly that much. Returns false
+## (a no-op) when nothing landed, or there's no real sim to tell
+## (mushroom_world unset -- e.g. a marker built standalone in a test) --
+## the same false a decomposer relies on to know it's done here and
+## should move on.
+func take_mushroom_bite(bite_stages: int = 1) -> bool:
 	if mushroom_world == null or not mushroom_world.has_method("bite"):
 		return false
-	if not mushroom_world.bite(cell):
+	var applied: int = mushroom_world.bite(cell, bite_stages)
+	if applied <= 0:
 		return false
+	bite_stage += applied
 	bitten = true
 	_rebuild_sprite()
 	return true
