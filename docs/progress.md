@@ -16245,3 +16245,61 @@ change, but is structurally unrelated to it — it never calls
 expected count and the failing assertion — and has been flagged
 separately for a dedicated investigation rather than silently ignored
 or misattributed here.
+
+### Torch light source (`concept/lighting.md`, new doc, 2026-09-08)
+
+Asked directly: "wire items and add fully fledged end to end working
+items if they don't exist... e.g. the torch should light up the ambient
+so you can see in the night." Investigation found a real day/night
+`CanvasModulate` darkening cycle already live in `scenes/world.gd` (real
+astronomical sun elevation driving a linear tint interpolation) with no
+concept doc of its own anywhere, no local-light precedent in the codebase
+at all (zero `Light2D` usage), and none of this project's existing
+shaders (grass/water/terrain) define a `light()` callback -- meaning a
+real Godot `Light2D` would not affect them consistently even though this
+project's `gl_compatibility` renderer otherwise supports 2D lighting
+fine.
+
+✅ `docs/concept/lighting.md` written first (per CLAUDE.md): documents the
+pre-existing day/night mechanism for the first time, and specs the torch
+as an ADDITIVE glow layered after the tint rather than fighting it, so it
+reads correctly over every existing shader with zero changes to any of
+them. `TorchGlow` (`src/rendering/torch_glow.gd`) -- a radial falloff
+with a flat bright core and a smoothstep-faded edge (mirrored in GDScript
+per the same "a fragment shader cannot be asserted headless" reasoning
+`SnowSparkleShader`/`WaterShader` already follow), a warm firelit color,
+and `GLOW_RADIUS_METERS` (7.5) grounded in a real torch's real 6-9m
+useful-light range, converted via `GroundSlide.PX_PER_METER`. Gated on
+`TorchGlow.is_lit_item_id(equipped_item.id)` -- currently just `"torch"`,
+since equipping IS being lit (a torch cannot even model "broken" under
+today's wear system, so a separate ignite/extinguish toggle would be a
+second mechanic nobody asked for) -- and deliberately NOT gated on time
+of day, since an additive glow tuned for night visibility is nearly
+invisible added on top of an already-bright daytime scene, the same
+reason a real torch carried at noon doesn't visibly brighten the ground.
+
+Wired into `World._client_process` every frame (a lazily-built
+`MeshInstance2D`, not a node hand-placed in `world.tscn`, mirroring
+`IllustratedGrassPatch`'s own dynamically-created rendering nodes) right
+after the existing day/night tint update -- pinned by
+`tests/unit/test_world_torch_glow_fanout.gd`, which reads
+`World._client_process`'s own source the same way `test_world_season_
+fanout.gd` already does, so the wiring itself (not just `TorchGlow`'s own
+unit-tested logic) is what's actually pinned. Verified with a real
+(non-headless) render, not just reasoned about: the glow renders as a
+clean warm pool of light, and composited over a real `NIGHT_TINT`-tinted
+textured background it visibly punches through the dark while still
+preserving the underlying texture underneath it -- true additive
+blending, confirmed by eye, not assumed from the shader math.
+
+Tests: `tests/unit/test_torch_glow.gd` 10/10, `tests/unit/
+test_world_torch_glow_fanout.gd` 3/3, `tests/unit/
+test_world_daylight_default.gd` 19/19 and `tests/unit/
+test_world_season_fanout.gd` 13/13 (regression check, unaffected).
+
+⬜ Not attempted: a second light source (e.g. a lantern -- `is_lit_
+item_id` is the one seam that would need to grow), and a real fuel/
+ignition toggle separate from equip state. The user's other named
+example ("the compass, when in hand, should spawn a UI window with a
+compass pointing to north") is a separate, comparably-sized feature --
+tracked and built separately, not folded into this entry.
