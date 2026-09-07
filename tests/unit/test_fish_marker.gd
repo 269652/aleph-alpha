@@ -10,6 +10,9 @@ const CreatureWander = preload("res://src/rendering/creature_wander.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
 const FishSchooling = preload("res://src/gameplay/fish_schooling.gd")
 const FishForaging = preload("res://src/gameplay/fish_foraging.gd")
+const FishDiet = preload("res://src/gameplay/fish_diet.gd")
+const FishGrowth = preload("res://src/gameplay/fish_growth.gd")
+const FishMass = preload("res://src/world/fish_mass.gd")
 
 const TILE_SIZE := 16
 
@@ -59,6 +62,29 @@ class VegetationWorld:
 	func graze_aquatic_vegetation_at(pixel_position: Vector2) -> bool:
 		grazed.append(pixel_position)
 		return graze_result
+
+
+## Offers BOTH real aquatic food layers (see docs/concept/aquatic_foraging.md's
+## "Revised (2026-09-07)") -- mirrors VegetationWorld's own shape, extended
+## with the second, invertebrate-only layer trout's own real diet needs.
+class AquaticWorld:
+	extends StubWorld
+	var vegetation_patches: Array = []
+	var invertebrate_patches: Array = []
+	var vegetation_grazed: Array = []
+	var invertebrate_grazed: Array = []
+	var vegetation_graze_result := true
+	var invertebrate_graze_result := true
+	func aquatic_vegetation_near(_pixel_position: Vector2, _radius_tiles) -> Array:
+		return vegetation_patches
+	func graze_aquatic_vegetation_at(pixel_position: Vector2) -> bool:
+		vegetation_grazed.append(pixel_position)
+		return vegetation_graze_result
+	func aquatic_invertebrates_near(_pixel_position: Vector2, _radius_tiles) -> Array:
+		return invertebrate_patches
+	func graze_aquatic_invertebrates_at(pixel_position: Vector2) -> bool:
+		invertebrate_grazed.append(pixel_position)
+		return invertebrate_graze_result
 
 
 func test_a_fish_swims_in_a_river_whose_biome_is_land():
@@ -1176,3 +1202,121 @@ func test_a_fish_forages_instead_of_plain_wander_once_past_its_schooling_leash()
 		"past its schooling leash, a fish with food nearby should forage, not head home"
 	)
 	assert_almost_eq(marker._current_heading.y, -1.0, 1e-3)
+
+
+# -- diet-gated foraging: real per-species diet (see FishDiet, -------------
+# -- docs/concept/aquatic_foraging.md's "Revised (2026-09-07)") ------------
+
+## Real trout are overwhelmingly insectivorous -- plant matter barely
+## features in a real trout's diet, so a trout must never even target a
+## vegetation patch, however close or how starved for anything else it is.
+func test_trout_never_forages_vegetation_even_when_it_is_the_only_food_nearby():
+	marker.species = "trout"
+	var world := AquaticWorld.new()
+	world.vegetation_patches = [{"position": marker.position + Vector2(3, 0)}]  # well within arrival range
+
+	marker.setup(world, TILE_SIZE)
+	marker._process(FishForaging.SCAN_INTERVAL)
+
+	assert_null(marker._forage_target, "a trout should never target vegetation")
+	assert_eq(world.vegetation_grazed, [], "and never graze it either")
+
+
+func test_trout_forages_real_invertebrates():
+	marker.species = "trout"
+	var world := AquaticWorld.new()
+	world.invertebrate_patches = [{"position": marker.position + Vector2(50, 0)}]
+
+	marker.setup(world, TILE_SIZE)
+	marker._process(FishForaging.SCAN_INTERVAL)
+
+	assert_almost_eq(marker._current_heading.x, 1.0, 1e-3, "should head toward the only nearby invertebrate patch")
+	assert_almost_eq(marker._current_heading.y, 0.0, 1e-3)
+
+
+func test_trout_arriving_at_an_invertebrate_patch_grazes_it():
+	marker.species = "trout"
+	var world := AquaticWorld.new()
+	var patch_position: Vector2 = marker.position + Vector2(3, 0)
+	world.invertebrate_patches = [{"position": patch_position}]
+
+	marker.setup(world, TILE_SIZE)
+	marker._process(FishForaging.SCAN_INTERVAL)
+
+	assert_eq(world.invertebrate_grazed, [patch_position])
+	assert_null(marker._forage_target)
+
+
+## Bluegill/koi/goldfish eat both real food layers -- whichever is nearer
+## wins, the same "nearest, not a fixed priority" reasoning FishForaging.
+## nearest_target already applies within one food type.
+func test_an_omnivore_forages_the_nearer_invertebrate_patch_over_a_farther_vegetation_one():
+	marker.species = "goldfish"
+	var world := AquaticWorld.new()
+	world.vegetation_patches = [{"position": marker.position + Vector2(50, 0)}]
+	world.invertebrate_patches = [{"position": marker.position + Vector2(0, 10)}]  # much nearer
+
+	marker.setup(world, TILE_SIZE)
+	marker._process(FishForaging.SCAN_INTERVAL)
+
+	assert_almost_eq(marker._current_heading.x, 0.0, 1e-3, "the nearer invertebrate patch should win")
+	assert_almost_eq(marker._current_heading.y, 1.0, 1e-3)
+
+
+# -- forage-coupled mass growth (see FishGrowth/FishMass) -------------------
+
+func test_a_fresh_fish_starts_at_the_juvenile_fraction_of_its_adult_mass():
+	marker.species = "koi"
+	marker._process(0.001)  # runs _ensure_mass_initialized via _process's own defensive call
+
+	assert_almost_eq(
+		marker.mass_kg, FishMass.mass_kg_for("koi") * FishGrowth.JUVENILE_START_FRACTION, 0.0001
+	)
+
+
+## The patch sits well within GRAZE_ARRIVE_DISTANCE_PX (mirrors
+## test_arriving_at_a_forage_target_grazes_it_and_clears_the_target's own
+## shape), so the very first scan already both finds AND grazes it -- the
+## starting mass is the known, pure FishGrowth.starting_mass_for figure,
+## not something that needs a process call to observe first.
+func test_a_successful_graze_grows_the_fish():
+	marker.species = "goldfish"
+	var world := AquaticWorld.new()
+	var patch_position: Vector2 = marker.position + Vector2(3, 0)
+	world.vegetation_patches = [{"position": patch_position}]
+	marker.setup(world, TILE_SIZE)
+	var starting_mass := FishGrowth.starting_mass_for(FishMass.mass_kg_for("goldfish"))
+
+	marker._process(FishForaging.SCAN_INTERVAL)
+
+	assert_eq(world.vegetation_grazed, [patch_position], "precondition: the graze actually happened")
+	assert_gt(marker.mass_kg, starting_mass, "a real successful graze should grow this fish")
+
+
+func test_a_failed_graze_does_not_grow_the_fish():
+	marker.species = "goldfish"
+	var world := AquaticWorld.new()
+	var patch_position: Vector2 = marker.position + Vector2(3, 0)
+	world.vegetation_patches = [{"position": patch_position}]
+	world.vegetation_graze_result = false  # something else took it first
+	marker.setup(world, TILE_SIZE)
+	var starting_mass := FishGrowth.starting_mass_for(FishMass.mass_kg_for("goldfish"))
+
+	marker._process(FishForaging.SCAN_INTERVAL)
+
+	assert_almost_eq(marker.mass_kg, starting_mass, 0.0001, "a failed graze should not grow this fish")
+
+
+## Mass scales with the cube of a linear dimension (see FishGrowth.
+## visual_scale_fraction) -- growth must visibly shrink the sprite's own
+## scale below its full-grown value while young, not leave it unchanged.
+func test_growth_scales_the_sprite_below_full_size_while_young():
+	marker.species = "goldfish"
+	marker.scale = Vector2.ONE * 0.05  # a real, full-grown FishRenderer-set scale
+	marker._process(0.001)  # primes _base_scale from the value just set, then applies it
+
+	assert_lt(marker.scale.x, 0.05, "a young fish should render smaller than its full-grown scale")
+	assert_almost_eq(
+		marker.scale.x, 0.05 * FishGrowth.visual_scale_fraction(marker.mass_kg, FishMass.mass_kg_for("goldfish")),
+		0.0001
+	)

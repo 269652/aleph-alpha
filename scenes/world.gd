@@ -2714,6 +2714,11 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	# right next to it for the same reason step_wild_crops sits next to its
 	# own land-plant-growth cousin below.
 	_chunk_manager.step_aquatic_vegetation(delta)
+	# The second real aquatic food layer (see EarthChunkManager.
+	# step_aquatic_invertebrates, docs/concept/aquatic_foraging.md's
+	# "Revised (2026-09-07)") -- mirrors step_aquatic_vegetation's own
+	# cadence immediately above.
+	_chunk_manager.step_aquatic_invertebrates(delta)
 	# Wild carrot/potato growth + spread (see EarthChunkManager.step_wild_crops,
 	# docs/concept/wild_crops.md) -- mirrors step_tall_grass's own throttled
 	# cadence immediately above. This line was simply missing: the step

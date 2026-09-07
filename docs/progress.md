@@ -15047,6 +15047,72 @@ same size as a live one. `CaterpillarMarker`/`DecomposerMarker` untouched
 was the exact behavior this fix removes) plus all 73 `test_crush`-
 matching tests project-wide reconfirmed green (5431 asserts).
 
+### Real per-species fish diet, forage-coupled mass, and real catch items (`concept/aquatic_foraging.md`, `concept/fishing.md`, 2026-09-07)
+
+Brainstormed first: *"what the different fish we have eat and what we
+need to add to the ecosystem so every fish can properly forage and grow
+mass."* The investigation found species was purely cosmetic (a
+`FishMarker.species` field read only for sprite colour, never diet), the
+whole aquatic food web was one undifferentiated vegetation patch sim, and
+fish had no mass concept at all, individual or aggregate. Two follow-up
+questions, answered directly: *"Forage-coupled mass, and yes to real
+per-species items."*
+
+- **`FishDiet`** (`src/gameplay/fish_diet.gd`) -- mirrors `FlyerDiet`'s own
+  binary per-species table exactly. Bluegill/koi/goldfish eat both real
+  food layers below; trout (real insectivore, barely touches plant
+  matter) eats only invertebrates -- the same narrow, single-food-type
+  shape `FlyerDiet` already gives the fish-only kingfisher.
+- **`AquaticInvertebrates`** (`src/world/aquatic_invertebrates.gd`) -- a
+  second real aquatic food layer, mirroring `AquaticVegetation`'s own
+  patch-sim contract line for line (only `GROWTH_RATE` differs, tuned 5x
+  faster: a real insect-larva population turns over far quicker than a
+  weed bed's own rhizome-driven regrowth). Closes the real gap vegetation
+  alone left for an insectivorous species. Rendered by
+  `ProceduralAquaticInvertebrateSprite` -- a cluster of curled tan/brown
+  grubs, deliberately not a green recolor of vegetation's own blades.
+  `EarthChunkManager.aquatic_invertebrates_near`/
+  `graze_aquatic_invertebrates_at`/`step_aquatic_invertebrates` mirror the
+  vegetation wiring exactly, seeded in the same water-gated chunks.
+- **`FishMarker._step_foraging`** is now diet-gated: it only queries/grazes
+  the food types a fish's own species actually eats, picking whichever
+  real patch (of either type) is nearer when a species eats both.
+- **`FishMass`/`FishGrowth`** (`src/world/fish_mass.gd`,
+  `src/gameplay/fish_growth.gd`) -- real per-species adult mass (bluegill
+  0.25kg, goldfish 0.4kg, trout 0.5kg, koi 3.5kg -- real ornamental koi
+  genuinely dwarf the other three), the same real-reference-weight
+  convention `CreatureMass._REAL_MASS_KG` already established for land
+  animals. Deliberately NOT `MammalGrowth` (age-based, indifferent to
+  whether an animal ever eats) -- a fish starts at half its species' adult
+  mass (no hatch event is modeled, so there is no real "just born" moment
+  to anchor a tiny newborn fraction against) and grows only on a REAL
+  successful graze, a fixed fraction of its own adult mass per meal (~5
+  meals to mature, proportional across species the same way
+  `MammalGrowth` already scales maturation DURATION by species size).
+  Visual scale follows the cube root of the mass fraction -- the same
+  real cube-law relationship `CreatureMass._mass_from_world_scale` already
+  uses in the other direction -- so a young fish reads as believably
+  smaller, not distorted the way a linear mapping would.
+- **Real per-species catch items** (`ItemCatalog`: `trout`/`bluegill`/
+  `koi`/`goldfish` + `cooked_` pairs, matching `ProceduralFishSprite.
+  SPECIES_IDS` one-for-one) replace the flat generic `fish` for an
+  ordinary catch. `EarthChunkManager.catch_nearest_fish` now returns
+  `{"species", "mass_kg"}` instead of a bare species String -- carrying
+  the real caught individual's own forage-coupled mass. New
+  `ItemCatalog.make_with_mass(item_id, mass_kg)` grants that real mass
+  directly (every other item resolves mass from a static per-id table; a
+  caught fish is the one item whose real mass is only known per-catch).
+  Rare/legendary catches keep their own existing generic buff item
+  unchanged (not crossed with species), now also carrying the real caught
+  mass instead of a flat reference weight. `Player._fishing_step`
+  reordered to catch the real nearby fish FIRST and grant its own item;
+  `PiscivoreBirdMarker`'s own dive resolution and both markers' test
+  doubles updated to the new Dictionary contract.
+
+`docs/concept/aquatic_foraging.md` and `docs/concept/fishing.md` updated
+with the full mechanism spec ahead of this implementation, per this
+project's own concept-doc-first discipline.
+
 ### Karma: crushing is player-only again (`concept/karma_and_luck.md`)
 
 Reported live: *"Karma is constantly decreasing when wild animals step on

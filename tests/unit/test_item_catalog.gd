@@ -293,6 +293,63 @@ func test_false_death_cap_has_a_plausible_real_mushroom_mass():
 	assert_between(catalog.make("false_death_cap").mass_kg, 0.01, 0.04)
 
 
+# -- real per-species fish (see docs/concept/fishing.md's "Revised ----------
+# -- (2026-09-07): what you actually catch is now the real species" --------
+
+## Reported directly: "yes to real per-species items" -- before this, every
+## catch (species, mass, whatever the fish actually was) became the same
+## flat generic "fish"/"cooked_fish". Real ids matching
+## ProceduralFishSprite.SPECIES_IDS one-for-one, plus their cooked pairs,
+## mirroring the existing generic fish/cooked_fish pair exactly.
+func test_catalog_has_all_four_real_fish_species_raw_and_cooked():
+	for item_id in ["trout", "bluegill", "koi", "goldfish", "cooked_trout", "cooked_bluegill", "cooked_koi", "cooked_goldfish"]:
+		assert_true(catalog.has(item_id), "missing %s" % item_id)
+		assert_eq(catalog.make(item_id).kind, "food")
+
+
+## Reference (average, un-overridden) mass per species -- the same real
+## FishMass.mass_kg_for figures FishGrowth grows a live fish toward, kept
+## as the single source of truth rather than a second, independently
+## chosen number here.
+func test_each_fish_species_reference_mass_matches_fish_mass():
+	var FishMass = load("res://src/world/fish_mass.gd")
+	for species in ["trout", "bluegill", "koi", "goldfish"]:
+		assert_almost_eq(catalog.make(species).mass_kg, FishMass.mass_kg_for(species), 0.0001)
+
+
+## Real ornamental koi genuinely dwarf the other three species -- the catch
+## item must reflect that, not a flat generic weight.
+func test_a_caught_koi_weighs_far_more_than_a_caught_bluegill():
+	assert_gt(catalog.make("koi").mass_kg, catalog.make("bluegill").mass_kg * 2.0)
+
+
+# -- make_with_mass: the one item whose real mass is only known per-catch ---
+
+## Every other catalog item resolves its own mass from a static per-id
+## table (_mass_kg_for) -- a carrot is always the same reference weight. A
+## caught fish is the one item in this game whose real mass is only known
+## at the moment of catching (it depends on how well-fed that specific
+## individual was -- see FishGrowth), so this sibling entrypoint takes the
+## real, already-known mass directly instead of deriving one.
+func test_make_with_mass_overrides_the_static_reference_mass():
+	var heavy := catalog.make_with_mass("trout", 1.5)
+	assert_almost_eq(heavy.mass_kg, 1.5, 0.0001)
+
+
+func test_make_with_mass_still_resolves_the_real_name_and_kind():
+	var item := catalog.make_with_mass("koi", 2.0)
+	assert_eq(item.display_name, "Koi")
+	assert_eq(item.kind, "food")
+
+
+## The rare/legendary tier is unaffected by species -- make_with_mass must
+## work for those ids too (a legendary catch should also weigh what the
+## real individual fish actually weighed, not its own flat reference mass).
+func test_make_with_mass_works_for_rare_and_legendary_fish_too():
+	var item := catalog.make_with_mass("legendary_fish", 4.0)
+	assert_almost_eq(item.mass_kg, 4.0, 0.0001)
+
+
 # -- worm corpse pickup (see EarthwormPatch.take_corpse, WormMarker, ---------
 # -- docs/concept/aquatic_foraging.md's "Worms as fish bait") ----------------
 

@@ -51,12 +51,15 @@ class StubWorld:
 	func nearest_fish_position(_pixel_position: Vector2, _max_distance: float):
 		nearest_fish_call_count += 1
 		return fish if fish != null and is_instance_valid(fish) else null
-	func catch_nearest_fish(_pixel_position: Vector2, _max_distance: float) -> String:
+	## Revised (2026-09-07, see docs/concept/fishing.md's own "Revised
+	## (2026-09-07)" section): the real contract now returns
+	## {"species", "mass_kg"}, not a bare species String.
+	func catch_nearest_fish(_pixel_position: Vector2, _max_distance: float) -> Dictionary:
 		if fish == null or not is_instance_valid(fish):
-			return ""
+			return {"species": "", "mass_kg": 0.0}
 		fish.queue_free()
 		fish = null
-		return "goldfish"
+		return {"species": "goldfish", "mass_kg": 0.3}
 	func startle_fish_near(_pixel_position: Vector2, threat: Vector2, _max: float) -> bool:
 		startled.append(threat)
 		if fish != null and is_instance_valid(fish):
