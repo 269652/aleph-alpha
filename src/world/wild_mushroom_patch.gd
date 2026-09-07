@@ -29,6 +29,7 @@ extends RefCounted
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 
 ## Fraction of biome-eligible cells that are even a possible mushroom SITE
 ## at all (the mycelium footprint) -- real mycelium networks are patchy,
@@ -95,22 +96,29 @@ var _sites: Dictionary = {}
 var _fruiting: Dictionary = {}
 ## Subset of _sites' keys on a post-fruiting cooldown -> seconds remaining.
 var _recovery: Dictionary = {}
-## Subset of _fruiting's keys that a decomposer has bitten (see bite()) --
-## orthogonal to _fruiting/_recovery/_corpse_kind: a bitten mushroom stays
-## fruiting and pickable, just diminished, unlike pick()/crush(), which
-## both end the fruiting instance outright. Cleared whenever a site stops
-## fruiting for ANY reason (picked, crushed, or aged out), so a later
-## fresh fruiting at the same site never inherits a stale bite.
-var _bitten: Dictionary = {}
-## Subset of _recovery's keys whose fruiting body was crushed underfoot,
-## left a corpse worth showing during the recovery cooldown -> "crushed"
-## (see is_corpse/corpse_kind). Rides the identical _recovery clock --
-## cleared alongside it in advance(), never on a second timer -- the same
-## "a corpse is new ground" shape EarthwormPatch._crushed already
-## established (see docs/concept/soil_fauna.md). Deliberately NOT used for
-## a bite (see _bitten above): a bite does not end the fruiting instance,
-## so there is no "corpse" to show here -- the mushroom itself is still
-## standing, just bitten.
+## Subset of _fruiting's keys that a decomposer/animal has bitten at least
+## once (see bite()) -> how many real bite STAGES have landed so far, 1..
+## MushroomBiting.MAX_BITE_STAGES -- orthogonal to _fruiting/_recovery/
+## _corpse_kind while still under the cap: a partially-bitten mushroom
+## stays fruiting and pickable, just diminished, unlike pick()/crush(),
+## which both end the fruiting instance outright. Cleared whenever a site
+## stops fruiting for ANY reason (picked, crushed, aged out, or fully
+## eaten -- see bite()), so a later fresh fruiting at the same site never
+## inherits a stale bite. Was a plain bool before 2026-09-07 (see
+## docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and real
+## toxic effects") -- one bite from anyone was permanent and final; now a
+## real step count so a second, later bite (same or different eater) can
+## advance it further.
+var _bite_stage: Dictionary = {}
+## Subset of _recovery's keys whose fruiting body ended via crush() or a
+## fully-spent bite() -> "crushed" or "eaten", a corpse worth showing
+## during the recovery cooldown (see is_corpse/corpse_kind). Rides the
+## identical _recovery clock -- cleared alongside it in advance(), never
+## on a second timer -- the same "a corpse is new ground" shape
+## EarthwormPatch._crushed already established (see docs/concept/
+## soil_fauna.md). A bite() that does NOT reach MushroomBiting.
+## MAX_BITE_STAGES never sets this -- the mushroom is still standing,
+## still fruiting, just diminished, so there is no corpse to show yet.
 var _corpse_kind: Dictionary = {}
 
 
@@ -152,32 +160,58 @@ func pick(cell: Vector2i) -> bool:
 	if not _fruiting.has(cell):
 		return false
 	_fruiting.erase(cell)
-	_bitten.erase(cell)
+	_bite_stage.erase(cell)
 	_recovery[cell] = SPENT_SECONDS
 	return true
 
 
-## Whether the fruiting body at `cell` has been bitten by a decomposer (see
-## bite()).
+## Whether the fruiting body at `cell` has been bitten at all (see bite()).
 func is_bitten(cell: Vector2i) -> bool:
-	return _bitten.has(cell)
+	return _bite_stage.has(cell)
 
 
-## Marks the fruiting mushroom at `cell` as bitten by a decomposer bug (see
-## docs/concept/mushrooms.md's fungivory section, MushroomBiting.gd). Unlike
-## pick()/crush(), this does NOT end the fruiting instance -- a bitten
-## mushroom stays right where it was, still pickable, just diminished.
-## Returns false (a no-op) when there's nothing fruiting at `cell`, or it's
-## already bitten -- one bite is enough (see
-## DecomposerMarker._step_feeding's take_mushroom_bite branch, which relies
-## on this false to know when to move on to a fresh target).
-func bite(cell: Vector2i) -> bool:
+## How many real bite stages have landed at `cell` so far, 0 if never
+## bitten (or nothing has ever fruited there) up to
+## MushroomBiting.MAX_BITE_STAGES once fully eaten.
+func bite_stage(cell: Vector2i) -> int:
+	return int(_bite_stage.get(cell, 0))
+
+
+## Bites the fruiting mushroom at `cell` -- real fungivory (see docs/concept/
+## mushrooms.md's fungivory section, MushroomBiting.gd), or a bigger eater's
+## single, bigger bite EVENT (see docs/concept/soil_fauna.md's "Progressive,
+## mass-scaled bites"). `stages` is how many of MushroomBiting.
+## MAX_BITE_STAGES this one bite event advances -- 1 for a bug's single
+## nibble, more for a mass-scaled eater's own bigger mouthful (see
+## MushroomBiting.bites_per_visit_for) -- clamped to whatever capacity is
+## actually left, so a big bite against an already-mostly-eaten mushroom
+## never overshoots the cap. Returns how many stages actually landed (0 if
+## there was nothing fruiting at `cell`, or it was already fully eaten --
+## the same false-shaped "nothing left to take" signal
+## DecomposerMarker._step_feeding's take_mushroom_bite branch already relies
+## on to know when to move on, now as a zero instead of always a bare
+## false). Unlike pick()/crush(), a PARTIAL bite does NOT end the fruiting
+## instance -- a diminished mushroom stays right where it was, still
+## pickable. Reaching MushroomBiting.MAX_BITE_STAGES genuinely consumes it,
+## exactly like pick()/crush() do, and leaves a real "eaten" corpse behind
+## (see is_corpse/corpse_kind) rather than just vanishing.
+func bite(cell: Vector2i, stages: int = 1) -> int:
 	if not has_fruiting(cell):
-		return false
-	if _bitten.has(cell):
-		return false
-	_bitten[cell] = true
-	return true
+		return 0
+	var current: int = _bite_stage.get(cell, 0)
+	if current >= MushroomBiting.MAX_BITE_STAGES:
+		return 0
+	var applied: int = mini(maxi(stages, 0), MushroomBiting.MAX_BITE_STAGES - current)
+	if applied <= 0:
+		return 0
+	current += applied
+	_bite_stage[cell] = current
+	if current >= MushroomBiting.MAX_BITE_STAGES:
+		_fruiting.erase(cell)
+		_bite_stage.erase(cell)
+		_recovery[cell] = SPENT_SECONDS
+		_corpse_kind[cell] = "eaten"
+	return applied
 
 
 ## Crushes the fruiting body at `cell` underfoot -- see docs/concept/
@@ -194,19 +228,20 @@ func crush(cell: Vector2i, momentum_kg_m_s: float) -> bool:
 	if not CrushMechanic.is_crushed_by(momentum_kg_m_s):
 		return false
 	_fruiting.erase(cell)
-	_bitten.erase(cell)
+	_bite_stage.erase(cell)
 	_recovery[cell] = SPENT_SECONDS
 	_corpse_kind[cell] = "crushed"
 	return true
 
 
-## Whether `cell` currently holds a crushed corpse -- distinct from simply
-## having been picked (pick() never sets this) or aged out on its own, so
-## the sprite layer can tell "show crushed art and hold it" apart from
-## "just disappear" (mirrors EarthwormPatch.is_corpse). A bitten mushroom
-## is NOT a corpse (see _bitten's own doc comment) -- it is still standing,
-## still fruiting, so is_bitten (not this) is what the sprite layer checks
-## for that case.
+## Whether `cell` currently holds a real corpse (crushed OR fully eaten) --
+## distinct from simply having been picked (pick() never sets this) or aged
+## out on its own, so the sprite layer can tell "show corpse art and hold it"
+## apart from "just disappear" (mirrors EarthwormPatch.is_corpse). A
+## PARTIALLY bitten mushroom (bite_stage under MushroomBiting.MAX_BITE_STAGES,
+## see _bite_stage's own doc comment) is NOT a corpse -- it is still
+## standing, still fruiting, so bite_stage/is_bitten (not this) is what the
+## sprite layer checks for that case.
 func is_corpse(cell: Vector2i) -> bool:
 	return _corpse_kind.has(cell)
 
@@ -229,7 +264,7 @@ func advance(delta: float, flush_drive: float) -> void:
 		_fruiting[cell] += delta
 		if _fruiting[cell] >= SPENT_SECONDS:
 			_fruiting.erase(cell)
-			_bitten.erase(cell)
+			_bite_stage.erase(cell)
 			_recovery[cell] = SPENT_SECONDS
 
 	for cell in _recovery.keys():

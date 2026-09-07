@@ -27,6 +27,20 @@ const BITTEN_SUFFIX := "_bitten"
 ## test_retained_fraction_after_bite_is_pinned.
 const RETAINED_FRACTION_AFTER_BITE := 0.83
 
+## How many discrete bite STEPS a fruiting body can take before it is
+## genuinely consumed (see docs/concept/soil_fauna.md's "Progressive,
+## mass-scaled bites, and real toxic effects"). Not an arbitrary cap: this
+## is exactly how many independently-delivered bitten sheets exist per
+## species today (most species' own `*_bitten_1/2/3.png` -- see
+## IllustratedMushroomSprite), so every stage this whole mechanic can ever
+## reach has a real, distinct piece of art to show. death_cap is the one
+## exception with only one delivered bitten sheet -- it still has 3 real
+## bite STAGES (WildMushroomPatch tracks them the same as any other
+## species), it just re-shows that one sheet for stages 2/3 (the same
+## has-art-or-doesn't fallback convention every optional illustrated-art
+## seam in this codebase already uses).
+const MAX_BITE_STAGES := 3
+
 
 ## The catalog item id a bite turns `species_id` into.
 static func bitten_item_id_for(species_id: String) -> String:
