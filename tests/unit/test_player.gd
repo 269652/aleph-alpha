@@ -1239,7 +1239,13 @@ func _set_biome_at(global_tile: Vector2i, biome_name: String) -> void:
 ## helper's own caller controls for) now grants its own real species item
 ## instead of the flat generic "fish".
 func _fish_item_count(counts: Dictionary) -> int:
-	var total := counts.get("fish", 0) + counts.get("rare_fish", 0) + counts.get("legendary_fish", 0)
+	# Explicit `: int`, not `:=` -- Dictionary.get returns Variant, and
+	# GDScript's type inference cannot infer a concrete type across a chain
+	# of Variant-typed arithmetic (a real parse error: "Cannot infer the
+	# type of 'total' variable"), even though returning that same
+	# expression directly against this function's own declared `-> int`
+	# return type (the shape this replaced) works fine.
+	var total: int = counts.get("fish", 0) + counts.get("rare_fish", 0) + counts.get("legendary_fish", 0)
 	for species in ["trout", "bluegill", "koi", "goldfish"]:
 		total += counts.get(species, 0)
 	return total
