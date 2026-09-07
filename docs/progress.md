@@ -2653,6 +2653,17 @@ much meadow the world has. If `NECTAR_REGEN_PER_SECOND` should move, it should
 move on its own evidence. **This is the one item here worth watching in live
 play** — if bees visibly starve, that is the number to revisit.
 
+Re-measured again once the decorative ambient "bee" pollinator was retired
+(see [bees.md](bees.md), "The existing decorative bee pollinator is retired by
+this pass"): the scenario's own worst-case pollinator ceiling dropped from 150
+to 100 (bees no longer add a flat per-chunk budget on top of the butterfly
+one — every visible bee is now a real `BeeColony`/`WildBeePatch` forager with
+its own forage-bounded population instead), and both measured inputs moved
+with it — 184 of 200 reachable became 170 of 200 (85%, still comfortably
+covering the meadow) and 1438 drinks became 951, landing at **1.12x
+over-subscribed**. A smaller worst-case population measuring less demand is
+the expected direction for this change, not a new concern.
+
 ⬜ **Seed that blows out of a chunk is still discarded.** `FlowerPatch.shed_seed`
 drops any landing outside its own bounds instead of handing it to the
 neighbouring patch, so live dispersal is truncated at every chunk line — the
