@@ -2,8 +2,6 @@
 
 [![Latest Release](https://img.shields.io/github/v/release/269652/aleph-alpha?label=latest%20release)](https://github.com/269652/aleph-alpha/releases/latest)
 
-![New Game Screen](./screenshots/new-game.png)
-
 > A proprietary, non-commercial alpha — built solo, still finding its shape, and not for sale.
 
 A single-player-first survival RPG set on a real, simulated Earth — actual elevation and climate data, a real day/night and season cycle, and a planet that keeps turning whether or not you're watching.
