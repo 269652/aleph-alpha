@@ -434,6 +434,14 @@ var _play_interval_index := -1
 ## frame) until reached, so a fish commits to one patch instead of flickering
 ## between two similarly-near candidates as it moves.
 var _forage_target: Variant = null
+
+## Which food type `_forage_target` actually is ("" when there is no
+## target) -- a bare position alone can't say, once an omnivore's two
+## candidate lists (vegetation/invertebrates) are both in play, which food
+## type is actually sitting at that spot. Grazing must key off this, not
+## try one food type and silently fall back to the other at the same
+## position -- see _step_foraging's own doc comment.
+var _forage_target_food := ""
 var _forage_scan_accumulator := 0.0
 
 
@@ -452,6 +460,14 @@ var _forage_scan_accumulator := 0.0
 ## omnivore checks both and takes whichever is nearer. A real successful
 ## graze, of either food type, grows this fish's own mass (see FishGrowth) --
 ## a fish with nothing in reach of its own diet does not grow.
+##
+## Each food type's nearest candidate is found independently (not merged
+## into one list first) precisely so _forage_target_food can be set
+## alongside the winning position -- grazing then keys off THAT food type
+## alone rather than trying vegetation and silently falling back to
+## invertebrates (or vice versa) at the same spot: a real failed graze
+## ("something else took it first") must not let the other food type,
+## which was never actually located there, feed this fish instead.
 func _step_foraging(delta: float) -> void:
 	if _world == null or not _world.has_method("aquatic_vegetation_near"):
 		return
@@ -459,26 +475,38 @@ func _step_foraging(delta: float) -> void:
 	if _forage_scan_accumulator >= FishForaging.SCAN_INTERVAL:
 		_forage_scan_accumulator = 0.0
 		if _forage_target == null:
-			var candidates: Array = []
+			var target: Variant = null
+			var target_food := ""
 			if FishDiet.eats(species, FishDiet.FOOD_VEGETATION):
-				candidates.append_array(
-					_world.aquatic_vegetation_near(position, FishForaging.DETECTION_RADIUS_TILES)
+				var vegetation_candidates: Array = _world.aquatic_vegetation_near(
+					position, FishForaging.DETECTION_RADIUS_TILES
 				)
+				var nearest_vegetation: Variant = FishForaging.nearest_target(position, vegetation_candidates)
+				if nearest_vegetation != null:
+					target = nearest_vegetation
+					target_food = FishDiet.FOOD_VEGETATION
 			if FishDiet.eats(species, FishDiet.FOOD_INVERTEBRATES) and _world.has_method("aquatic_invertebrates_near"):
-				candidates.append_array(
-					_world.aquatic_invertebrates_near(position, FishForaging.DETECTION_RADIUS_TILES)
+				var invertebrate_candidates: Array = _world.aquatic_invertebrates_near(
+					position, FishForaging.DETECTION_RADIUS_TILES
 				)
-			_forage_target = FishForaging.nearest_target(position, candidates)
+				var nearest_invertebrates: Variant = FishForaging.nearest_target(position, invertebrate_candidates)
+				if nearest_invertebrates != null and (
+					target == null or position.distance_to(nearest_invertebrates) < position.distance_to(target)
+				):
+					target = nearest_invertebrates
+					target_food = FishDiet.FOOD_INVERTEBRATES
+			_forage_target = target
+			_forage_target_food = target_food
 	if _forage_target != null and position.distance_to(_forage_target) <= FishForaging.GRAZE_ARRIVE_DISTANCE_PX:
 		var fed := false
 		if (
-			FishDiet.eats(species, FishDiet.FOOD_VEGETATION)
+			_forage_target_food == FishDiet.FOOD_VEGETATION
 			and _world.has_method("graze_aquatic_vegetation_at")
 			and _world.graze_aquatic_vegetation_at(_forage_target)
 		):
 			fed = true
 		elif (
-			FishDiet.eats(species, FishDiet.FOOD_INVERTEBRATES)
+			_forage_target_food == FishDiet.FOOD_INVERTEBRATES
 			and _world.has_method("graze_aquatic_invertebrates_at")
 			and _world.graze_aquatic_invertebrates_at(_forage_target)
 		):
@@ -487,6 +515,7 @@ func _step_foraging(delta: float) -> void:
 			mass_kg = FishGrowth.feed(mass_kg, _adult_mass_kg)
 			_apply_growth_scale()
 		_forage_target = null
+		_forage_target_food = ""
 
 
 ## Re-scans for a schoolmate on FishSchooling.SCAN_INTERVAL's own cadence.
