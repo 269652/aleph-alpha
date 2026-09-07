@@ -9490,6 +9490,44 @@ population alone -- not a bug in any one system, an architectural
 scale question for a future round. See `soil_fauna.md`'s own round-6
 entry for the full writeup.
 
+**FPS regression round 7: fish schooling's own unscoped whole-world scan
+(2026-09-07).** Direct follow-up to round 6's own closing note, picking
+up the still-open population-scale question: `fish_marker` and `ambient_
+flyer_marker` were the two costliest individual classes measured there
+(~13ms/frame each in a calm window); fish's per-instance cost ran ~2.5x
+ambient_flyer's despite a smaller population, the signature of a real
+per-call inefficiency rather than pure volume. Root cause: `FishMarker.
+_nearest_other_fish`'s own `get_tree().get_nodes_in_group("fish")` walk
+ran once PER FISH PER SCHOOLING SCAN, independently -- the FOURTH
+confirmed instance of the "one marker scans the whole world instead of a
+scoped neighbourhood" anti-pattern (after round 4's `AmbientFlyerMarker.
+_scan_for_partners`/`EarthChunkManager.crush_ants_near`, round 5's
+`DecomposerMarker._nearest_food`). Measured at 88-91% of `_step_
+schooling`'s own total. A real feedback loop, not just a flat cost: the
+0.5s re-scan gate runs on real wall-clock time via accumulated delta, so
+lower fps means more real time per engine frame, which crosses that gate
+more often per unit of frame count, re-triggering the unshared scan more
+-- consistent with this whole investigation's own recurring "why does it
+stay pinned at 4-10fps" pattern.
+
+Fixed the same way round 5 was: one shared fetch per real-time window
+(matching `FishSchooling.SCAN_INTERVAL`'s own cadence exactly), cached
+via a `static var` shared across every fish instead of each independently
+re-fetching. `EarthChunkManager.nearest_fish_position` was checked first
+as a possible existing scoped registry to reuse and found to have the
+identical unscoped shape itself -- no real per-chunk fish registry exists
+yet, so the shared-cache fix was right-sized here too. 57/58 green in
+`test_fish_marker.gd` (the one non-failing "risky" result is pre-existing
+and unrelated), strict TDD with a real call-counting stub
+(`_CountingFishTree`), mirroring round 5's own idiom. Live `--solo` boot
+confirmed clean. **Real, confirmed, explicitly still open**: `ambient_
+flyer_marker` remains the other ~13ms/frame contributor, not yet
+investigated (a genuinely more complex precedence-ordered behavior tree,
+not a simple three-step shape like fish); the broader population-scale
+question round 6 named stays open regardless of how many more
+concentrated bugs like this one get found. See `soil_fauna.md`'s own
+round-7 entry for the full writeup.
+
 ### Flies (`concept/flies.md`)
 
 Another concept doc with real, substantial ✅ status entirely of its own
