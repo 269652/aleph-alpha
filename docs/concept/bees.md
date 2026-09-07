@@ -392,10 +392,67 @@ lighter mechanism above.
 
 ## Status
 
-⬜ Everything in this doc — greenfield, no prior implementation exists
-(confirmed against `docs/concept/*.md`, `docs/progress.md`, and this
-repo's full git history: two incidental prose references to "a honeybee
-commutes from a hive," both flavor-text justifying the existing
-decorative bee's spawn-layout choice, and zero code). Implementation
-proceeds in checkpoints; this section is updated as each lands, per this
-project's own `docs/progress.md` cross-alignment convention.
+✅ **Honeybee colony economy** (`src/world/bee_colony.gd`,
+`src/world/bee_population_model.gd`) — per-chunk placement (tree-bearing
+biomes, sparser than `AntColony`'s own mound density), queen-driven
+logistic growth bounded by real forage success, a real honey reserve
+that is both the colony's own food AND the exact quantity a harvest
+withdraws, winter dormancy (warmth only, no water/moisture input),
+swarming (`bud_new_hive`, an even population/honey split, real
+site-search), and absconding (`abscond_to`, a full-colony move, no
+same-site refounding the way a starved ant mound gets).
+
+✅ **Real illustrated growth/harvest art** (`src/rendering/
+illustrated_beehive_sprite.gd`, `src/rendering/
+procedural_beehive_sprite.gd`) — the user-supplied `beehive.png` sheet
+sliced on its own known-regular grid; 16 real growth-stage frames
+selected by a discrete `growth_stage_index` (the art itself dictated
+this technique over `IllustratedAntMoundSprite`'s own continuous-
+rescale one), 8 real destruction frames selected by harvest-hit count.
+
+✅ **`BeeHiveMarker`** (`src/rendering/bee_hive_marker.gd`) — hover
+tooltip (population + honey), HUD honey bar
+(`scenes/world.gd._update_creature_panels`), and the one genuinely new
+player interaction this whole feature adds: `harvest()`, multi-hit and
+destructive (`HARVEST_HITS_TO_DESTROY` pinned to the real 8-frame
+destruction sheet), wired into `scenes/player.gd._harvest_beehive_step`
+alongside `_chop_step`/`_smash_step`. The final hit frees the marker and
+hands off to `EarthChunkManager.relocate_bee_hive_after_harvest` — the
+colony survives, it just needs a new site.
+
+✅ **Real round-trip foraging** (`src/gameplay/bee_forage_behavior.gd`,
+`src/rendering/bee_forager_marker.gd`) — flies (not walks) via
+`AmbientFlyerMovement`, scouts with no known target, senses real
+in-bloom nectar through the SAME `EarthChunkManager.flowers_near/
+drink_nectar_at` query the old decorative pollinator used, re-checks on
+genuine arrival, deposits only once actually home. No pheromone-trail
+recruitment this pass (see "What's reused verbatim..." above).
+
+✅ **Wild bee nests** (`src/world/wild_bee_patch.gd`, `src/rendering/
+wild_bee_nest_marker.gd`, `src/rendering/
+procedural_wild_bee_nest_sprite.gd`) — the much lighter solitary/
+cavity-nesting system: no honey, no harvest, no swarming, a fixed-size
+procedural hole (no illustrated art supplied for this one — a real,
+named gap for future art), relocates on sustained lost forage (the one
+absconding trigger it keeps). `BeeForagerMarker` serves it too (a lone
+resident's own real forage trip), not a separate near-duplicate marker.
+
+✅ **`EarthChunkManager` wiring** — `step_bees` (chunk load/unload,
+advancing, swarming, absconding, forage dispatch for both hives and
+wild nests), called from `scenes/world.gd._step_ecology_batch` on the
+same batched cadence `step_ants` already uses.
+
+✅ **The decorative ambient "bee" pollinator is retired** —
+`FlyerDiet`/`AmbientFlyerRenderer`/`ProceduralButterflySprite` no longer
+spawn a bee with no hive, no population, and nothing behind it but
+wander+nectar-sip (see this doc's own "Foraging" section for the
+reasoning); every visible bee is now a real forager tied to a real
+hive or nest hole.
+
+⬜ **Pheromone-trail recruitment for honeybees** (the real waggle dance)
+— named explicitly as out of scope this pass, not silently dropped (see
+"What's reused verbatim, what's a deliberate new duplicate, and why").
+
+⬜ **Illustrated art for the wild bee nest hole** — ships procedural-only
+this pass, the same "real mechanism first, real art later" order ants
+themselves went through.
