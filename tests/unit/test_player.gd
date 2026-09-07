@@ -36,6 +36,8 @@ const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const TreeRenderer = preload("res://src/rendering/tree_renderer.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const StarterKit = preload("res://src/gameplay/starter_kit.gd")
+const BeeHiveMarker = preload("res://src/rendering/bee_hive_marker.gd")
+const BeeColony = preload("res://src/world/bee_colony.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -2812,6 +2814,57 @@ func test_smash_step_yields_a_sharp_shard_when_carrying_a_rock():
 		dropped_ids.has("sharp_shard"),
 		"expected a sharp_shard among a rock-carrying smash's drops, got %s" % [dropped_ids]
 	)
+
+
+# -- _harvest_beehive_step: real Player-level integration (see -----------
+# -- BeeHiveMarker.harvest, docs/concept/bees.md's "Harvesting honey") ----
+#
+# BeeColony/BeeHiveMarker already have thorough unit coverage of their own
+# (test_bee_colony.gd, test_bee_hive_marker.gd) -- this is the same
+# "does a live swing actually reach the marker" integration level
+# _smash_step's own tests just above already established for stones.
+
+func _bee_colony_with_one_hive() -> BeeColony:
+	var biome := PackedStringArray()
+	for i in 64:
+		biome.append("grassland")
+	for seed_value in range(200):
+		var colony := BeeColony.new(seed_value, 8, 8, biome)
+		if not colony.hive_cells().is_empty():
+			return colony
+	fail_test("expected at least one of 200 seeds to place a hive in an all-grassland 8x8 grid")
+	return null
+
+
+func test_harvest_beehive_step_drops_real_honey_from_a_real_hive_in_range():
+	var colony := _bee_colony_with_one_hive()
+	var cell: Vector2i = colony.hive_cells()[0]
+	var hive := BeeHiveMarker.new()
+	hive.position = player.position + Vector2(5, 5)  # well inside ATTACK_RANGE (20px)
+	hive.setup(null, colony, cell)
+	add_child_autofree(hive)
+
+	watch_signals(WorldItemBus)
+	player._harvest_beehive_step()
+
+	var dropped_ids: Array = []
+	for i in get_signal_emit_count(WorldItemBus, "item_dropped"):
+		dropped_ids.append(get_signal_parameters(WorldItemBus, "item_dropped", i)[0].item.id)
+	assert_true(dropped_ids.has("honey"), "expected honey among a real hive-harvest's drops, got %s" % [dropped_ids])
+
+
+func test_harvest_beehive_step_never_reaches_a_hive_out_of_range():
+	var colony := _bee_colony_with_one_hive()
+	var cell: Vector2i = colony.hive_cells()[0]
+	var hive := BeeHiveMarker.new()
+	hive.position = player.position + Vector2(900, 900)
+	hive.setup(null, colony, cell)
+	add_child_autofree(hive)
+
+	watch_signals(WorldItemBus)
+	player._harvest_beehive_step()
+
+	assert_eq(get_signal_emit_count(WorldItemBus, "item_dropped"), 0)
 
 
 ## Reported: "Carrots never end up in the inventory with a carrot in hand".
