@@ -1702,34 +1702,137 @@ func test_light_snow_settles_on_the_top_of_the_crown_first():
 		)
 
 
-## At full coverage the WHOLE snow frame is on the tree, whatever lies beneath
-## it: every opaque pixel of the frame is drawn exactly, on bare, blossom and
-## turning crowns alike.
-func test_full_snow_shows_the_whole_snow_frame_on_every_canopy():
+## Corrected (root-caused a live report: "the cherry tree's snow
+## accumulation is wrong and fills holes with white instead of accumulating
+## snow on branches per branch"). This test's own ORIGINAL claim -- that the
+## whole snow frame shows "whatever lies beneath it" -- was the bug, pinned
+## as a test: the snow frame is a SEPARATE drawing from the season canopy,
+## and its own silhouette does not line up with the canopy's real branch
+## shape, so showing it wholesale painted solid snow colour into every gap
+## the season canopy left transparent too -- worst on the sparse bare-winter
+## canopy (measured on the real art, before the fix: 55-61% of cherry's,
+## walnut's and apple's own "snowed" pixels there were gap fills, not
+## branches; see test_no_species_snows_into_a_transparent_canopy_gap below
+## for the fixed, pinned version of that same measurement). Not cherry-
+## specific -- the mechanism (_snowed_canopy never checked the canopy's own
+## alpha at all) is shared by every species with a snow frame; cherry was
+## simply the one reported live and, at these seed/box values, the worst of
+## the three sampled. Corrected to the real contract: at full coverage the
+## snow frame shows everywhere it overlaps a REAL branch, and nowhere else.
+## See _snowed_canopy's own doc comment and docs/concept/flora.md's "A fifth
+## frame: snow is not a season" for the divergence from this test's earlier
+## text.
+## Checks _snowed_canopy directly against the real box-local pieces (not the
+## full composited tree) so this is a fair test of ITS contract specifically:
+## reading alpha back off the full canvas would also see the TRUNK showing
+## through wherever the canopy piece is transparent (the crown box
+## deliberately overlaps the trunk -- see illustrated_canopy_box), which is
+## not "a branch" at all and would make this test fail for a reason that has
+## nothing to do with snow.
+func test_full_snow_shows_the_whole_snow_frame_wherever_the_canopy_has_a_branch():
 	var sprite := ProceduralTreeSprite.new()
 	for canopy in SNOWABLE_CANOPIES:
-		var snowed := sprite.generate_image_with_fruit(
-			_cherry_bias(), 7, 0, canopy, "", 0.0, 1.0, 1.0
-		)
 		var box: Rect2i = sprite.illustrated_canopy_box("cherry", 7, canopy)
+		var canopy_image: Image = sprite._scaled_piece("cherry", canopy, "canopy", box.size)
 		var frame: Image = sprite._scaled_piece(
 			"cherry", ProceduralTreeSprite.SNOW_CANOPY_KEY, "canopy", box.size
 		)
-		var opaque := 0
+		var result: Image = sprite._snowed_canopy(
+			canopy_image, frame, 1.0, sprite.tree_variant_for(7)
+		)
+		var opaque_on_a_branch := 0
 		var missing := 0
 		for y in frame.get_height():
 			for x in frame.get_width():
 				var pixel := frame.get_pixel(x, y)
 				if pixel.a < 0.95:
 					continue
-				var at := box.position + Vector2i(x, y)
-				if not Rect2i(Vector2i.ZERO, snowed.get_size()).has_point(at):
+				if canopy_image.get_pixel(x, y).a < 0.95:
+					# Either a real gap (alpha 0) or a genuinely anti-aliased
+					# branch edge -- Color.blend legitimately mixes in the
+					# canopy's own partial alpha there, so an exact match to
+					# the frame's raw colour is not a fair expectation. The
+					# gap tests above/below cover "never paints a true gap";
+					# this test is only about fully-opaque branch interiors.
 					continue
-				opaque += 1
-				if not _same_colour(snowed.get_pixel(at.x, at.y), pixel):
+				opaque_on_a_branch += 1
+				if not _same_colour(result.get_pixel(x, y), pixel):
 					missing += 1
-		assert_gt(opaque, 0, "%s: the snow frame should have opaque pixels" % canopy)
-		assert_eq(missing, 0, "%s: full snow should show the whole snow frame" % canopy)
+		assert_gt(
+			opaque_on_a_branch, 0, "%s: the snow frame should overlap some real branch" % canopy
+		)
+		assert_eq(
+			missing, 0, "%s: full snow should show wherever it overlaps a real branch" % canopy
+		)
+
+
+## Direct, isolated regression for the real live defect, against
+## _snowed_canopy itself with controlled synthetic art rather than the real
+## sheets: a fully-transparent gap pixel in the source canopy art must never
+## receive snow, regardless of what the standalone snow frame draws there or
+## how full coverage is. Two disconnected single-pixel "blobs" in the snow
+## image so each is its own skyline seed (_skyline_seeds finds the topmost
+## painted pixel per COLUMN) at trace cost 0 -- so both clear the coverage
+## gate at coverage 1.0 regardless of the clump-noise half of _sweep_rank,
+## making this deterministic without depending on real art or a real seed.
+func test_snow_never_paints_a_pixel_the_canopy_left_fully_transparent():
+	var sprite := ProceduralTreeSprite.new()
+	var canopy := Image.create(6, 6, false, Image.FORMAT_RGBA8)
+	canopy.fill(Color(0.0, 0.0, 0.0, 0.0))
+	canopy.set_pixel(1, 1, Color(0.4, 0.3, 0.2, 1.0))  # a real twig
+	# (4, 4) is left fully transparent: a real gap between branches.
+
+	var snow_image := Image.create(6, 6, false, Image.FORMAT_RGBA8)
+	snow_image.fill(Color(0.0, 0.0, 0.0, 0.0))
+	snow_image.set_pixel(1, 1, Color(1.0, 1.0, 1.0, 1.0))  # snow on the real twig
+	# The standalone snow frame is its OWN drawing and happens to paint here
+	# too, even though this canopy has nothing at (4, 4) at all.
+	snow_image.set_pixel(4, 4, Color(1.0, 1.0, 1.0, 1.0))
+
+	var result: Image = sprite._snowed_canopy(canopy, snow_image, 1.0, 0)
+
+	assert_gt(result.get_pixel(1, 1).a, 0.5, "snow should still settle on the real twig")
+	assert_eq(
+		result.get_pixel(4, 4).a, 0.0,
+		"snow must never paint a gap the canopy left fully transparent"
+	)
+
+
+## Real-art confirmation of the fix above, across every species that has a
+## snow frame today (all six -- see
+## test_every_illustrated_species_currently_has_a_snow_frame). Measured
+## directly before the fix, rendering the real sheets
+## (tools/probe_cherry_snow_holes.gd): at full coverage on the bare winter
+## canopy -- the sparsest, so the worst case -- 55-61% of cherry's, walnut's
+## and apple's own "snowed" pixels were painted into a gap the plain canopy
+## left fully transparent, not settled onto a real branch; spring and autumn
+## measured the same defect at a smaller (3-17%) but still real magnitude,
+## which is why every snowable canopy is checked here, not only winter.
+func test_no_species_snows_into_a_transparent_canopy_gap():
+	var sprite := ProceduralTreeSprite.new()
+	for species in IllustratedTree.SPECIES_WITH_ART:
+		if not TreeSpecies.IDS.has(species) or not trees.has_snow_frame_for(species):
+			continue
+		var bias := _bias_for(species)
+		for canopy in SNOWABLE_CANOPIES:
+			var plain := sprite.generate_image_with_fruit(bias, 7, 0, canopy)
+			var snowed := sprite.generate_image_with_fruit(
+				bias, 7, 0, canopy, "", 0.0, 1.0, 1.0
+			)
+			var painted_into_a_gap := 0
+			for y in plain.get_height():
+				for x in plain.get_width():
+					if plain.get_pixel(x, y).a > ProceduralTreeSprite.ALPHA_VISIBLE:
+						continue
+					if snowed.get_pixel(x, y).a > ProceduralTreeSprite.ALPHA_VISIBLE:
+						painted_into_a_gap += 1
+			assert_eq(
+				painted_into_a_gap, 0,
+				(
+					"%s %s: full snow should never paint a pixel the plain canopy left transparent"
+					% [species, canopy]
+				)
+			)
 
 
 ## Snow only ever ACCUMULATES as coverage rises: a twig that has taken snow at
