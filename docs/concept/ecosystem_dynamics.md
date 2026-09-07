@@ -783,20 +783,30 @@ The ranges are real, not invented:
 | monarch (*Danaus plexippus*) | grassland, forest | 15–50° | Nearctic butterfly of open country; absent from Europe — the reported bug |
 | swallowtail (*Papilio machaon*) | grassland, forest | 25–70° | The **Old World** swallowtail: Palearctic, Mediterranean into the subarctic. The swallowtail a German meadow really has |
 | blue_morpho (*Morpho* spp.) | rainforest | 0–25° | Neotropical rainforest, inside the tropics |
-| bee (*Apis mellifera*) | grassland, forest, rainforest | 0–70° | Near-cosmopolitan |
 | sparrow (*Passer domesticus*) | grassland, forest, rainforest | 0–70° | Near-cosmopolitan |
 | robin (*Erithacus rubecula* / *Turdus migratorius*) | grassland, forest | 20–70° | Temperate woodland and garden bird in both the Old and New World; not a rainforest species |
+
+"bee" (*Apis mellifera*) used to share sparrow's own near-cosmopolitan row
+here as a fourth ambient pollinator species — retired from this table, and
+from `AmbientFlyerRenderer`'s ambient spawn pools entirely, once a real
+honeybee-hive economy existed to give it a genuine home instead (see
+[bees.md](bees.md)). A bee is no longer promoted from this per-chunk
+range/biome roster at all; it is spawned/despawned by
+`EarthChunkManager.step_bees` against a real, separately-placed
+`BeeColony`/`WildBeePatch`, the same "real mechanism, not a decorative
+scatter" upgrade several other ambient tiers in this doc have already had.
 
 Two consequences worth stating plainly rather than discovering later:
 
 - A filtered pool can legitimately come out **empty** (nothing at all can live
   in a 52.5°N rainforest), so the spawn path returns nothing instead of
   dividing by zero on the modulo that picks a species.
-- **A German meadow now shows one butterfly species (swallowtail) plus bees,
-  where it used to show three.** That is the honest state of the roster, not a
-  loosening candidate: the butterfly roster is Americas-heavy. The fix for the
-  thinness is a roster *addition* — one genuinely Palearctic species such as a
-  peacock butterfly, which is procedural art plus an entry each in the sprite
+- **A German meadow now shows one butterfly species (swallowtail), where it
+  used to show three (plus bees, before that species' own retirement above).**
+  That is the honest state of the roster, not a loosening candidate: the
+  butterfly roster is Americas-heavy. The fix for the thinness is a roster
+  *addition* — one genuinely Palearctic species such as a peacock butterfly,
+  which is procedural art plus an entry each in the sprite
   tables, `FLYER_WORLD_SCALE`, `FlyerDiet` and `FLYER_RANGE` — not a widening
   of the bands.
 
@@ -849,10 +859,16 @@ neighbourhood instead of `get_tree().get_nodes_in_group(FLOCK_GROUP)`.
   population (`RobinPopulationModel`/`SparrowPopulationModel`), carrying
   capacity derived from worm burrow count and combined ground-seed-cell
   count respectively — see the Species roster section above for the full
-  wiring. Butterflies/bees remain purely decorative: there is still no
-  predation pressure on pollinators to make an aggregate number mean
-  anything, unlike birds (which now have a real food-density ceiling) or
-  fish (angler + bird harvest).
+  wiring. True butterflies (monarch/swallowtail/blue_morpho) remain purely
+  decorative: there is still no predation pressure on them to make an
+  aggregate number mean anything, unlike birds (which now have a real
+  food-density ceiling) or fish (angler + bird harvest). Bees are a
+  partial exception since [bees.md](bees.md): a real BeeColony/WildBeePatch
+  economy exists (forage-bounded population, real player harvest, real
+  absconding on starvation), but it is a per-hive/per-nest economy, not
+  the region-wide aggregate-DENSITY shape this section is about -- a
+  genuinely different population model, not (yet) folded into this same
+  aggregate-density family.
   **Explicit non-goal kept for this pass**: no death-on-eat term. A robin
   eating one specific worm, a sparrow eating one specific seed, or a
   kingfisher catching one specific fish does not directly remove one

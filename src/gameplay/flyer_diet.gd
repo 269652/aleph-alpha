@@ -116,7 +116,12 @@ const DIET_BY_SPECIES := {
 	"monarch": [FOOD_NECTAR],
 	"swallowtail": [FOOD_NECTAR],
 	"blue_morpho": [FOOD_NECTAR],
-	"bee": [FOOD_NECTAR],
+	# "bee" deliberately retired from this table (see docs/concept/
+	# bees.md's own "Foraging" section, AmbientFlyerRenderer's own
+	# retirement) -- a real BeeForagerMarker/WildBeePatch forager now
+	# owns every visible bee, tied to a real hive/nest economy, rather
+	# than a decorative flyer with no hive, no population, and nothing
+	# behind it but wander+nectar-sip.
 }
 
 

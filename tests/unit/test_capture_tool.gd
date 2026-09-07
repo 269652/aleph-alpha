@@ -55,11 +55,15 @@ func test_an_unknown_species_needs_no_tool_from_this_function():
 
 # -- is_ambient_flyer_species --------------------------------------------------
 
-func test_butterflies_and_bees_are_ambient_flyers():
+## "bee" deliberately no longer asserted here -- it is retired from
+## AmbientFlyerRenderer's own ambient spawn pools (see docs/concept/
+## bees.md), so it is no longer an ambient flyer species at all; a real
+## bee is now a BeeForagerMarker/WildBeePatch forager instead.
+func test_butterflies_are_ambient_flyers():
 	assert_true(CaptureTool.is_ambient_flyer_species("monarch"))
 	assert_true(CaptureTool.is_ambient_flyer_species("swallowtail"))
 	assert_true(CaptureTool.is_ambient_flyer_species("blue_morpho"))
-	assert_true(CaptureTool.is_ambient_flyer_species("bee"))
+	assert_false(CaptureTool.is_ambient_flyer_species("bee"))
 
 
 func test_small_birds_are_ambient_flyers():

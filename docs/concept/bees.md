@@ -442,14 +442,18 @@ advancing, swarming, absconding, forage dispatch for both hives and
 wild nests), called from `scenes/world.gd._step_ecology_batch` on the
 same batched cadence `step_ants` already uses.
 
-⬜ **Retiring the decorative ambient "bee" pollinator** — the real
-BeeForagerMarker/WildBeePatch foragers above are built and wired, but
-`FlyerDiet`/`AmbientFlyerRenderer`/`ProceduralButterflySprite` still
-also spawn the OLD decorative bee (no hive, no population, nothing
-behind it but wander+nectar-sip) as of this line -- see this doc's own
-"Foraging" section for why it should not stay running alongside the
-real one. In progress; this line flips to ✅ once the old roster entry
-is actually removed and its own tests updated to match.
+✅ **The decorative ambient "bee" pollinator is retired** —
+`FlyerDiet.DIET_BY_SPECIES`/`AmbientFlyerRenderer.BEE_SPECIES_POOL` (and
+its own per-chunk budget/spawn call) are gone; `TRUE_BUTTERFLY_SPECIES_POOL`
+(monarch/swallowtail/blue_morpho) is the only remaining ambient
+pollinator roster. `ProceduralButterflySprite`'s own "bee" art tables
+are deliberately UNTOUCHED (`BeeForagerMarker` still reuses that exact
+generator directly — only the old spawn/lifecycle is retired, never the
+art). Closing this also surfaced and fixed a real regression risk: the
+old decorative bee's `TREE_POLLINATING_SPECIES` was the ONLY code path
+pollinating blossoming fruit trees at all — `BeeForagerMarker` now
+covers that too (see "Foraging" above), so tree pollination did not
+silently disappear along with the decorative species.
 
 ⬜ **Pheromone-trail recruitment for honeybees** (the real waggle dance)
 — named explicitly as out of scope this pass, not silently dropped (see

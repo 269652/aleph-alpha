@@ -107,7 +107,7 @@ func test_never_exceeds_the_combined_per_chunk_cap():
 	)
 	assert_lte(
 		spawned.size(),
-		AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK + AmbientFlyerRenderer.MAX_BEES_PER_CHUNK
+		AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK
 		+ AmbientFlyerRenderer.MAX_ROBINS_PER_CHUNK + AmbientFlyerRenderer.MAX_SPARROWS_PER_CHUNK
 	)
 
@@ -205,11 +205,7 @@ func test_scent_never_raises_the_bird_half_of_the_ceiling():
 		AmbientFlyerRenderer.scented_budget(
 			AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK, ScentField.MAX_SPAWN_MULTIPLIER
 		)
-		+ AmbientFlyerRenderer.scented_budget(
-			AmbientFlyerRenderer.MAX_BEES_PER_CHUNK, ScentField.MAX_SPAWN_MULTIPLIER
-		)
 		- AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK
-		- AmbientFlyerRenderer.MAX_BEES_PER_CHUNK
 	)
 	assert_eq(
 		blooming - bare, pollinator_rise,
@@ -699,13 +695,15 @@ func test_a_german_meadow_has_no_monarchs_and_no_blue_morphos():
 
 ## The other half of the same fix: gating must not empty the meadow. Papilio
 ## machaon, the OLD WORLD swallowtail, really is the swallowtail a German
-## meadow has, and honeybees and both songbirds belong there too.
-func test_a_german_meadow_still_has_its_own_swallowtails_and_bees():
+## meadow has, and both songbirds belong there too. Honeybees no longer
+## spawn as an ambient species at all (see docs/concept/bees.md) -- a
+## real hive is now its own, separately-placed BeeColony/BeeHiveMarker,
+## not part of this per-chunk ambient roster.
+func test_a_german_meadow_still_has_its_own_swallowtails():
 	var seen := _species_seen_along_row(
 		GERMANY_ROW, "grassland", 40, float(AmbientFlyerRenderer.MAX_ROBINS_PER_CHUNK)
 	)
 	assert_true(seen.has("swallowtail"), "a German meadow should still have swallowtails")
-	assert_true(seen.has("bee"), "a German meadow should still have bees")
 	assert_true(seen.has("sparrow"), "a German meadow should still have sparrows")
 	assert_true(seen.has("robin"), "a German meadow should still have robins")
 
@@ -730,11 +728,18 @@ func test_a_chunk_no_butterfly_species_can_live_in_spawns_none_and_does_not_cras
 	var spawned := renderer.spawn_ambient_flyers(
 		parent, chunk, Vector2i(64, GERMANY_ROW), TILE_SIZE, "rainforest"
 	)
+	# Retiring the ambient "bee" (see docs/concept/bees.md) means `spawned`
+	# can now legitimately come back empty here (bee used to be the one
+	# thing padding it out at this latitude/biome) -- asserting on the
+	# FILTERED list directly, rather than looping over `spawned` and
+	# asserting per element, keeps this a real assertion either way
+	# instead of a silent no-op GUT flags as "risky" once the loop body
+	# never runs at all.
+	var butterflies_present: Array = []
 	for flyer in spawned:
-		assert_false(
-			AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL.has(flyer.species),
-			"no true butterfly can live in a 52.5N rainforest, but a %s spawned" % flyer.species
-		)
+		if AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL.has(flyer.species):
+			butterflies_present.append(flyer.species)
+	assert_eq(butterflies_present, [], "no true butterfly can live in a 52.5N rainforest")
 
 
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
@@ -863,12 +868,12 @@ func test_two_butterflies_of_the_same_species_and_seed_share_texture_and_flap_fr
 
 func test_flyer_range_biomes_agree_with_the_tier_wide_biome_gates():
 	var pollinator_biomes := {}
-	for species in AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL + AmbientFlyerRenderer.BEE_SPECIES_POOL:
+	for species in AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL:
 		for biome_name in AmbientFlyerRenderer.FLYER_RANGE[species]["biomes"]:
 			pollinator_biomes[biome_name] = true
 	assert_eq(
 		pollinator_biomes.keys(), AmbientFlyerRenderer.BUTTERFLY_BIOMES.keys(),
-		"the butterfly/bee range table and BUTTERFLY_BIOMES have drifted apart"
+		"the butterfly range table and BUTTERFLY_BIOMES have drifted apart"
 	)
 	var bird_biomes := {}
 	for species in AmbientFlyerRenderer.BIRD_SPECIES_POOL:
@@ -946,30 +951,14 @@ func test_a_freshly_spawned_club_is_staggered_not_synchronised():
 
 const SpiralFlight = preload("res://src/gameplay/spiral_flight.gd")
 
-
-## Bees deliberately do NOT club up: a honeybee commutes from a hive and works
-## the whole meadow, and turning the buzz into one knot would be wrong about
-## the animal as well as making the meadow look staged.
-func test_bees_are_still_scattered_across_the_whole_meadow():
-	var origin := Vector2i(3 * CHUNK_SIZE, GERMANY_ROW)
-	var bees: Array = []
-	for flyer in _spawn_grassland_at(origin):
-		if flyer.species == "bee":
-			bees.append(flyer.position)
-	assert_gt(bees.size(), 0, "precondition: a German meadow has bees")
-
-	var wanted := FlyerSpawnLayout.wanted_count(
-		origin, "bee_spawn",
-		AmbientFlyerRenderer.MIN_BEES_PER_CHUNK,
-		AmbientFlyerRenderer.MAX_BEES_PER_CHUNK,
-		CHUNK_SIZE * CHUNK_SIZE
-	)
-	var expected: Array = []
-	for cell in FlyerSpawnLayout.scattered_cells(
-		origin, CHUNK_SIZE, CHUNK_SIZE, "bee_spawn", wanted
-	):
-		expected.append(Vector2((cell.x + 0.5) * TILE_SIZE, (cell.y + 0.5) * TILE_SIZE))
-	assert_eq(bees, expected, "bees must still use the scatter, not the club")
+## test_bees_are_still_scattered_across_the_whole_meadow deliberately
+## removed here, not just updated -- its entire premise (an ambient
+## decorative "bee" species that scatters rather than clubs) no longer
+## applies now that bee is retired from the ambient spawn pools (see
+## docs/concept/bees.md). Every visible bee is now a real
+## BeeForagerMarker/WildBeePatch forager, spawned by EarthChunkManager.
+## step_bees against a real hive or nest hole, never this renderer's
+## own per-chunk scatter/club layout.
 
 
 # -- the settled (nectaring) frames -----------------------------------------

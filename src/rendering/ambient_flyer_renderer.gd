@@ -28,7 +28,8 @@ const FLYER_WORLD_SCALE := {
 	"monarch": 0.5,
 	"swallowtail": 0.55,
 	"blue_morpho": 0.6,
-	"bee": 0.3,
+	# "bee" deliberately retired from this table -- see
+	# TRUE_BUTTERFLY_SPECIES_POOL's own retirement note below.
 	# The smallest thing in the air. A fly is a speck with wings.
 	"fly": 0.2,
 }
@@ -80,19 +81,22 @@ const BIRD_INTERVAL := 1.8
 ## kingfisher is deliberately excluded -- it's the piscivore, spawned near
 ## water by piscivore_bird_renderer.gd instead, not an ambient land presence.
 ##
-## Bees are a SEPARATE pool from the true butterflies, each with their own
-## guaranteed per-chunk minimum (see MIN_BEES_PER_CHUNK below) -- they used
-## to ride the same shared pool as butterflies, which meant every bee that
-## rolled was one fewer butterfly out of the same fixed MIN..MAX budget,
-## silently halving true butterfly sightings once bees joined (reported:
-## "there are much less butterflies and bees"). Splitting the pools makes
-## bees a genuine ADDITION to the meadow's pollinator presence instead of a
-## slice out of it.
+## "bee" is deliberately NOT a member of this pool any more (see
+## docs/concept/bees.md's own "Foraging" section) -- it used to be a
+## separate, additive per-chunk pool (BEE_SPECIES_POOL, now retired
+## entirely) alongside the true butterflies below, decorative and
+## capped, with no hive, no population, and nothing behind it but
+## wander+nectar-sip. Every visible bee is now a real BeeForagerMarker/
+## WildBeePatch forager, spawned/despawned by EarthChunkManager.
+## step_bees against a real hive or nest hole, never this renderer's
+## own per-chunk ambient scatter.
 const TRUE_BUTTERFLY_SPECIES_POOL: Array[String] = ["monarch", "swallowtail", "blue_morpho"]
-const BEE_SPECIES_POOL: Array[String] = ["bee"]
 ## Kept for callers that only care "is this species a pollinator flyer"
-## (spawn-count bookkeeping, tests) -- the union of both pools above.
-const BUTTERFLY_SPECIES_POOL: Array[String] = ["monarch", "swallowtail", "blue_morpho", "bee"]
+## (spawn-count bookkeeping, tests) -- today just an alias for
+## TRUE_BUTTERFLY_SPECIES_POOL (bee's own retirement above removed the
+## second pool this once needed to union together), kept as its own
+## name since callers already refer to "the pollinator pool" by it.
+const BUTTERFLY_SPECIES_POOL: Array[String] = ["monarch", "swallowtail", "blue_morpho"]
 const BIRD_SPECIES_POOL: Array[String] = ["sparrow", "robin"]
 ## Single-species pools for the population-driven spawn calls below -- robin
 ## and sparrow each get their own aggregate population (see
@@ -135,15 +139,18 @@ const BIRD_BIOMES := {"grassland": true, "forest": true, "rainforest": true}
 ##    swallowtail a German meadow really has.
 ##  - blue_morpho (Morpho spp.): Neotropical RAINFOREST, inside the tropics,
 ##    roughly 0-25 deg.
-##  - bee (Apis mellifera) / sparrow (Passer domesticus): near-cosmopolitan,
-##    every flowering/inhabited band short of the high arctic.
+##  - sparrow (Passer domesticus): near-cosmopolitan, every flowering/
+##    inhabited band short of the high arctic. "bee" used to share this
+##    exact row (Apis mellifera is equally near-cosmopolitan) before its
+##    own retirement above -- see docs/concept/bees.md's own real-world
+##    grounding for where a honeybee hive/wild bee nest can now actually
+##    be sited instead (BeeColony.HIVE_BIOMES/WildBeePatch.NEST_BIOMES).
 ##  - robin (Erithacus rubecula / Turdus migratorius): a temperate woodland
 ##    and garden bird in both the Old and New World, not a rainforest species.
 const FLYER_RANGE := {
 	"monarch": {"biomes": ["grassland", "forest"], "abs_latitude": Vector2(15.0, 50.0)},
 	"swallowtail": {"biomes": ["grassland", "forest"], "abs_latitude": Vector2(25.0, 70.0)},
 	"blue_morpho": {"biomes": ["rainforest"], "abs_latitude": Vector2(0.0, 25.0)},
-	"bee": {"biomes": ["grassland", "forest", "rainforest"], "abs_latitude": Vector2(0.0, 70.0)},
 	"sparrow": {"biomes": ["grassland", "forest", "rainforest"], "abs_latitude": Vector2(0.0, 70.0)},
 	"robin": {"biomes": ["grassland", "forest"], "abs_latitude": Vector2(20.0, 70.0)},
 }
@@ -159,10 +166,10 @@ const FLYER_RANGE := {
 ## always be there.
 const MIN_BUTTERFLIES_PER_CHUNK := 2
 const MAX_BUTTERFLIES_PER_CHUNK := 4
-## Bees' own budget, additive to the butterfly one above -- deliberately
-## smaller (bees read as a background buzz, not the headline presence).
-const MIN_BEES_PER_CHUNK := 1
-const MAX_BEES_PER_CHUNK := 2
+## Bees no longer have their own additive per-chunk budget here at all --
+## see BUTTERFLY_SPECIES_POOL's own retirement note above; every visible
+## bee is now a real hive/nest-tied forager, spawned by EarthChunkManager.
+## step_bees against BeeColony/WildBeePatch instead.
 ## Robin/sparrow no longer have a flat MIN..MAX -- each is promoted from its
 ## own real aggregate population (EcosystemSimulation.robin_population/
 ## sparrow_population, food-linked to worm/seed density -- see
@@ -270,10 +277,8 @@ func spawn_ambient_flyers(
 		# meadow can never spawn an unbounded swarm). Birds below are
 		# deliberately NOT scaled -- they aren't pollinators.
 		#
-		# Butterflies and bees are spawned from separate pools/budgets (see
-		# TRUE_BUTTERFLY_SPECIES_POOL/BEE_SPECIES_POOL) -- a bee is an
-		# ADDITION to a meadow's pollinator presence, not drawn out of the
-		# butterfly count.
+		# Bees no longer spawn from a separate pool/budget here at all -- see
+		# BUTTERFLY_SPECIES_POOL's own retirement note above.
 		var scented_butterfly_min := scented_budget(MIN_BUTTERFLIES_PER_CHUNK, scent_multiplier)
 		var scented_butterfly_max := scented_budget(MAX_BUTTERFLIES_PER_CHUNK, scent_multiplier)
 		spawned.append_array(
@@ -288,18 +293,6 @@ func spawn_ambient_flyers(
 				# congregate at a good patch, and scattering them over a whole
 				# chunk is what made courtship unreachable.
 				true
-			)
-		)
-		var scented_bee_min := scented_budget(MIN_BEES_PER_CHUNK, scent_multiplier)
-		var scented_bee_max := scented_budget(MAX_BEES_PER_CHUNK, scent_multiplier)
-		spawned.append_array(
-			_spawn_species(
-				parent, chunk, chunk_origin_tiles, tile_size, "bee_spawn",
-				_in_range_pool(BEE_SPECIES_POOL, biome_name, abs_latitude),
-				scented_bee_min, scented_bee_max,
-				AmbientFlyerMovement.new(BUTTERFLY_SPEED, BUTTERFLY_RADIUS, BUTTERFLY_INTERVAL),
-				_butterfly_sprite,
-				scent_world
 			)
 		)
 	if BIRD_BIOMES.has(biome_name):
@@ -584,7 +577,6 @@ static func scented_budget(base_count: int, scent_multiplier: float) -> int:
 static func max_flyers_per_chunk(scent_multiplier: float = 1.0) -> int:
 	return (
 		scented_budget(MAX_BUTTERFLIES_PER_CHUNK, scent_multiplier)
-		+ scented_budget(MAX_BEES_PER_CHUNK, scent_multiplier)
 		+ MAX_ROBINS_PER_CHUNK + MAX_SPARROWS_PER_CHUNK
 	)
 

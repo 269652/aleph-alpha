@@ -92,12 +92,16 @@ func test_a_fly_is_darker_than_any_butterfly():
 		assert_lt(fly.v, other.v, "a fly should be darker than a %s" % species)
 
 
-## And smaller than a bee, which is the smallest thing already flying.
-func test_a_fly_is_smaller_than_a_bee():
+## And smaller than a monarch, the smallest true butterfly still in the
+## ambient roster -- was pinned against "bee" before that species' own
+## retirement from AmbientFlyerRenderer's ambient spawn pools (see
+## docs/concept/bees.md); monarch (0.5) is the smallest of the three
+## true butterflies (swallowtail 0.55, blue_morpho 0.6) that remain.
+func test_a_fly_is_smaller_than_a_monarch():
 	var AmbientFlyerRenderer := load("res://src/rendering/ambient_flyer_renderer.gd")
 	assert_lt(
 		float(AmbientFlyerRenderer.FLYER_WORLD_SCALE["fly"]),
-		float(AmbientFlyerRenderer.FLYER_WORLD_SCALE["bee"])
+		float(AmbientFlyerRenderer.FLYER_WORLD_SCALE["monarch"])
 	)
 
 
