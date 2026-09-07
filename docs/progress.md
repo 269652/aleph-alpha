@@ -13392,6 +13392,38 @@ under the smell API, and proves the DSL in tests.
   (the cache considered the genome already "seen"). Fixed with a shared
   `_ensure_wirings()` guard, pinned directly. 8 new/changed tests; full
   affected regression (534 tests) green.
+- ✅ **Correction (2026-09-07): the "534 tests green" above never actually
+  ran `test_animal_genome.gd`.** A chained-index `:=` this same slice
+  introduced broke GDScript's parse of that file outright, and GUT's
+  discovery failure for a broken parse prints the same generic "Ignoring
+  script … because it does not extend GutTest" it prints for an unrelated
+  file — indistinguishable from the outside, so all 9 of that file's
+  tests (including the new boldness test above) silently never ran.
+  Fixed on `main` first as its own commit (7f49b49a, type-annotation only:
+  `var typical := …` → `var typical: float = …`). That surfaced 3 tests
+  that had genuinely never executed before, all failing for the same
+  reason: `_unit()`'s two "independent" hash draws per gene were actually
+  correlated at r=0.57, not r≈0, because Godot's String hash is a simple
+  rolling hash and the two salts differed only by a trailing digit ahead
+  of an identical `"_animal_genome"` suffix — a known weakness of that
+  hash shape, confirmed by swapping suffixes/name/seed source in
+  isolation. `FlyerPersonality`'s byte-for-byte identical `_bell`/`_unit`
+  passes the *same* budget today only because its own `"_personality"`
+  suffix happens to measure a lower r=0.26 by luck — proof the
+  mean-of-two-independent-halves mechanism itself is sound, not that
+  `BELL_HALVES` needed raising or the budget needed loosening. Fixed by
+  varying each half's salt by *length*
+  (`"x".repeat(index + 1)`, not just its last digit), measured r=0.01,
+  landing every pinned population at ~3.3-4.5% extremes (near the ~4% a
+  true triangular distribution predicts), confirmed stable at n=4000 too.
+  Every wild individual's derived genome is still deterministic and
+  bell-shaped, just genuinely independent now — which shifted the
+  `CreatureMarker` test fixture's default `wander_seed=5` boldness gene
+  across the fear-wiring's 0.5 floor, breaking two hysteresis tests that
+  had never intentionally pinned personality; both now pin boldness to
+  the population median explicitly, the same idiom
+  `test_a_bold_marker_tolerates_a_predator_the_shyest_would_flee` already
+  used. 529/529 green across every directly-related suite.
 - 🚧 **Slice 5 (same day): investigated in full, nothing shipped, and the
   doc says exactly why for each of its five original pieces** — see
   `concept/ethogram.md`'s "Slice 5 investigation" for the full account.
