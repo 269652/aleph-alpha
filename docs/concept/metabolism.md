@@ -294,26 +294,63 @@ this — no second guess mass anywhere for the player either.
 
 ## Status
 
-- ⬜ `Metabolism` core module — Kleiber BMR, activity tiers, calorie/mass
+- ✅ `Metabolism` core module — Kleiber BMR, activity tiers, calorie/mass
   conversions, starvation floor/overfeeding ceiling, `advance`/
-  `feed_mass_kg`. `src/gameplay/metabolism.gd`.
-- ⬜ Unified mass migration: `CreatureMarker`/`DecomposerMarker` gain
-  `current_mass_kg`; the four species-lookup call sites named above read
-  it instead of `CreatureMass.mass_kg_for(species)`; behavior-preserving-
-  at-seed proven by test.
-- ⬜ The two named mushroom gaps: `MushroomBiting.
+  `feed_mass_kg`/`feed_hunger_relief`. `src/gameplay/metabolism.gd`, 25
+  tests. `feed_hunger_relief` (bridging an already-existing 0..1
+  hunger-relief fraction, grounded against the creature's own BMR) turned
+  out to be the integration bridge every wired creature type actually
+  uses; `feed_mass_kg` is real and tested but has no live caller yet —
+  kept for a future one that already knows a real food mass directly.
+- ✅ Unified mass migration: `CreatureMarker`/`DecomposerMarker`/
+  `CaterpillarMarker`/`Player` each gained `current_mass_kg()`; every
+  named species-lookup call site (both mushroom-bite scaling sites, both
+  crush-momentum sites in `scenes/world.gd`) reads it instead of
+  `CreatureMass.mass_kg_for(species)`/`PLAYER_MASS_KG` directly.
+  Behavior-preservation at seed mass proven directly (not assumed) by
+  `test_crush_momentum_at_seed_mass_matches_the_old_flat_species_lookup_exactly`
+  and its player-shaped mirror — bit-identical output against the real
+  momentum formula, across every real species checked.
+  `test_world_crush_wiring.gd`'s two source-contract tests that pinned
+  the OLD flat-lookup shape verbatim were updated to pin the new
+  live-mass shape instead.
+- ✅ The two named mushroom gaps, closed end to end: `MushroomBiting.
   remaining_fraction_for_stage`, `ItemCatalog.make`'s `bite_stage`
   parameter, `ItemStack.can_stack_with`'s mass comparison,
   `NutrientRelease.consume`'s `mass_fraction` parameter, the
-  `take_mushroom_at` stages-applied round trip.
-- ⬜ Decomposers (ant/bug) wired to real calorie burn/intake via
-  `CarrionForageBehavior`'s phase.
-- ⬜ Caterpillars wired the same way via their own `Phase`.
-- ⬜ Yield-on-death: `Butchering.meat_count`'s `mass_ratio`, `Carcass`
+  `take_mushroom_at` stages-applied round trip, and a genuinely
+  previously-unnoticed adjacent bug found and fixed along the way:
+  `FoodComposition.composition_for` didn't recognize a `"_bitten"` id at
+  all, so eating one never got real composition-scaled nutrients OR a
+  toxic species' effect (`Player.eat_food`'s `MushroomSpecies.IDS.has`
+  check against the raw, possibly-suffixed id was always false).
+- ✅ Decomposers (ant/bug) wired to real calorie burn/intake via
+  `CarrionForageBehavior`'s phase — every real bite kind
+  (carcass/guts/mushroom/leaf-litter/fruit) feeds `feed_hunger_relief`.
+- ✅ Caterpillars wired the same way via their own `Phase` (leaf or tree
+  bite). `CreatureMass` gained a real `"caterpillar"` seed entry it had
+  none of before.
+- ✅ Yield-on-death: `Butchering.meat_count`'s `mass_ratio`, `Carcass`
   carrying it, `CreatureMarker._spawn_carcass_if_eligible` stamping it.
-- ⬜ Player wiring: `current_mass_kg` + `Metabolism` instance on `Player`,
-  burned by real movement activity, fed by real eating events, read by
-  the player's own crush-momentum call site.
+  Proven with real before/after numbers for a boar fed to 1.3x seed mass:
+  3 meat (`round(2 * 1.3)`) vs. the old flat 2.
+- ✅ Player wiring, after reading `SurvivalMeters`/`survival.md` first:
+  that meter is mature and tuned, so this pass does NOT reweight it —
+  `current_mass_kg()` + a `Metabolism` instance on `Player`, burned by
+  real movement activity (the same `input_direction` threshold already
+  used for facing), fed by real `eat_food` events, read by the player's
+  own crush-momentum call site.
+- ⬜ Combat/hunt/attack exertion for wildlife and the player: both
+  currently fall back to ordinary MOVING (only `CreatureMarker.
+  _is_fleeing` and the player's `input_direction` are read as persistent
+  signals today) — a real, named simplification, not a silent gap; a
+  genuine EXERTION tier for combat needs a persistent flag this pass
+  didn't add.
+- ⬜ Ants' own invisible `AntColony` per-mound food economy and
+  millipedes were not reached — `AntColony`'s food-unit reserve is a
+  genuinely separate aggregate (colony-level, not per-instance) model;
+  wiring it into a per-forager `current_mass_kg` is real future work, not
+  attempted here.
 - ⬜ Fish and the remaining ambient-flyer/bird roster (`BirdDigestion`
   species: robin/sparrow/kingfisher) — explicitly not reached this pass;
   fish have no phase/hunger model of any kind to hang an activity signal
@@ -323,5 +360,6 @@ this — no second guess mass anywhere for the player either.
   tracking as "no needs, no hunger" by design), and would need that
   built first, which is its own separate pass, not a metabolism gap.
 
-See `docs/progress.md` for the session-by-session record of what actually
-shipped in this pass versus what remains named-but-deferred above.
+See `docs/progress.md`'s "Caloric metabolism: one unified live mass, real
+calorie burn/intake" entry for the full session-by-session record,
+including real test counts and the real before/after yield numbers.
