@@ -14,6 +14,7 @@ extends GutTest
 const ProceduralFootprintSprite = preload("res://src/rendering/procedural_footprint_sprite.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 var sprite: ProceduralFootprintSprite
 
@@ -97,3 +98,81 @@ func test_world_scale_is_derived_from_a_real_meter_measurement_not_eyeballed():
 func test_canvas_is_authored_at_the_shared_detail_multiplier():
 	assert_eq(ProceduralFootprintSprite.SIZE.x % ArtResolution.DETAIL_MULTIPLIER, 0)
 	assert_eq(ProceduralFootprintSprite.SIZE.y % ArtResolution.DETAIL_MULTIPLIER, 0)
+
+
+# -- real ground visibility (see docs/concept/snow_cover.md "Grass/forest --
+# prints were already wired but effectively invisible") -- reported live:
+# "footsteps only show when snow is visible... they should generally show
+# up lighter for grassland and forest even without snow... a bit deeper in
+# forest ground." Confirmed by rendering real swatches (composited onto
+# TerrainRenderer.BIOME_COLORS at real PRINT_WORLD_SCALE) that the ORIGINAL
+# grass/forest tones read as near-invisible: grass's rim was barely
+# distinguishable in luminance from grassland's own ground color, and
+# forest's rim was actually DARKER than forest's own ground -- the
+# opposite of "pushed-up material catching the light". These tests pin
+# real, test-checked luminance-contrast margins against TerrainRenderer's
+# own ground colors -- CLAUDE.md: tuned values are tested, never eyeballed.
+
+## A real, perceptible luminance step at 8-bit precision (>30 of 255
+## levels) -- not a hair's-breadth technically-true difference nobody
+## would actually notice on screen.
+const _MIN_CONTRAST := 0.12
+
+
+static func _luminance(c: Color) -> float:
+	return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b
+
+
+## The core is "the actual depression" (see the class's own doc comment)
+## -- it must read distinctly darker than the real ground it's pressed
+## into, not just a different hue at the same brightness.
+func test_grass_core_reads_visibly_darker_than_the_real_grassland_ground():
+	var tones: Dictionary = ProceduralFootprintSprite._TONES_BY_SURFACE["grass"]
+	var ground: Color = TerrainRenderer.BIOME_COLORS["grassland"]
+	assert_lt(_luminance(tones["core"]), _luminance(ground) - _MIN_CONTRAST)
+
+
+## The rim is "material pushed up and catching the light" -- it must read
+## distinctly LIGHTER than the real ground, not blend into it.
+func test_grass_rim_reads_visibly_lighter_than_the_real_grassland_ground():
+	var tones: Dictionary = ProceduralFootprintSprite._TONES_BY_SURFACE["grass"]
+	var ground: Color = TerrainRenderer.BIOME_COLORS["grassland"]
+	assert_gt(_luminance(tones["rim"]), _luminance(ground) + _MIN_CONTRAST)
+
+
+func test_forest_core_reads_visibly_darker_than_the_real_forest_ground():
+	var tones: Dictionary = ProceduralFootprintSprite._TONES_BY_SURFACE["forest"]
+	var ground: Color = TerrainRenderer.BIOME_COLORS["forest"]
+	assert_lt(_luminance(tones["core"]), _luminance(ground) - _MIN_CONTRAST)
+
+
+func test_forest_rim_reads_visibly_lighter_than_the_real_forest_ground():
+	var tones: Dictionary = ProceduralFootprintSprite._TONES_BY_SURFACE["forest"]
+	var ground: Color = TerrainRenderer.BIOME_COLORS["forest"]
+	assert_gt(_luminance(tones["rim"]), _luminance(ground) + _MIN_CONTRAST)
+
+
+## The literal ask: forest should read "a bit deeper" than grassland --
+## its own core-to-ground contrast (how much darker the depression reads
+## than the ground it's pressed into) must exceed grassland's own, not
+## just independently clear the same flat floor.
+func test_forest_reads_a_bit_deeper_than_grassland():
+	var grass_tones: Dictionary = ProceduralFootprintSprite._TONES_BY_SURFACE["grass"]
+	var forest_tones: Dictionary = ProceduralFootprintSprite._TONES_BY_SURFACE["forest"]
+	var grass_drop := (
+		_luminance(TerrainRenderer.BIOME_COLORS["grassland"]) - _luminance(grass_tones["core"])
+	)
+	var forest_drop := (
+		_luminance(TerrainRenderer.BIOME_COLORS["forest"]) - _luminance(forest_tones["core"])
+	)
+	assert_gt(forest_drop, grass_drop, "forest's own depression should read deeper than grassland's")
+
+
+## "Lighter... for grassland and forest" means subtler than snow's own
+## dramatic near-white flash, not literally brighter than it -- both
+## surfaces' rims must stay visibly below snow's own rim brightness.
+func test_grass_and_forest_stay_subtler_than_snows_own_rim_brightness():
+	var snow_rim: Color = ProceduralFootprintSprite._TONES_BY_SURFACE["snow"]["rim"]
+	for surface in ["grass", "forest"]:
+		var rim: Color = ProceduralFootprintSprite._TONES_BY_SURFACE[surface]["rim"]
+		assert_lt(_luminance(rim), _luminance(snow_rim), "%s's rim should read subtler than snow's" % surface)
