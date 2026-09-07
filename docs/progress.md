@@ -16124,3 +16124,124 @@ sprite.gd` 19/19, `test_procedural_wild_bee_nest_sprite.gd` 7/7) --
 `_ready()` (which loads and slices `honeybee_queen.png` for real) ran
 for real during this regression check, not only inside a standalone
 probe script.
+
+## Tree pollination is a real hard gate; blossoms emit real scent bees detect at range (2026-09-07)
+
+Requested live: *"Please wire full fledged tree pollinating system so
+they only bear fruits and reproduce if pollinated ... blossoms should
+produce scent and this should attract bees and then ...."* Closes the
+loop `bees.md`'s own fruit-tree pollination already started: a bee
+landing on a blossom fed `FruitingModel.pollination_factor`, but zero
+visits still yielded a real (if reduced) crop, `TreeSpread`'s own
+dominant reproduction path never checked pollination at all, and a
+blossom's own scent never reached the field a bee could actually be
+drawn by.
+
+**(A) `FruitingModel.pollination_factor`'s floor is now a genuine 0.0,
+not a 0.2 soft discount.** The prior grounding ("real apples/cherries
+are not self-sterile") was the wrong claim to lean on: most commercial
+eating-apple and sweet-cherry cultivars are actually self-*incompatible*
+and need real cross-pollination — chiefly by bees — to set fruit at
+all. Zero real pollinator visits this bearing cycle now means zero
+fruit, rising toward the species' usual ceiling over the same unchanged
+saturation curve (`POLLINATION_SATURATION_VISITS`, the fitness-weighted
+visit accumulator). `harvest_peak_fruit_near` composed no
+`pollination_factor` at all before this — an inconsistency with
+`step_fruiting`, now fixed identically in both: an unpollinated apple's
+canopy correctly showed no fruit, yet a player (or an NPC gather
+instruction, `NpcInstructionEffects`) could still walk up and harvest
+one anyway.
+
+**(B) Tree reproduction is gated the same way, for the dominant
+path.** A tree spreads new saplings two ways: `TreeSpread`'s own age/
+maturity mechanism (the one that actually runs continuously) and bird
+endozoochory. `TreeMaturity.mature_positions`/`TreeSpread.
+propose_saplings` carry bare `Vector2` positions with no species or
+pollination awareness at all, by design (the same "no per-tree state,
+everything re-derived from position" idiom used everywhere in this
+codebase) — so `EarthChunkManager.step_tree_spread` now filters
+candidate seed-source positions through a new
+`_pollination_eligible_tree_positions` first: an insect-pollinated tree
+only counts as a seed source if visited at least once this bearing
+cycle, every wind-pollinated species passes through untouched, and a
+position with no resolvable tree node fails OPEN (spreads) rather than
+being silently dropped for a data gap the filter cannot judge. This
+does not change what a new sapling *becomes* — its species is still
+derived purely from its own landing position, never inherited from
+whichever parent seeded it. **Bird endozoochory needed no code change
+at all, verified rather than assumed**: a bird can only recognize and
+eat a *named-species* fallen-fruit item (`fruit_near` filters on
+`TreeSpecies.IDS.has(id)`), and `step_fruiting` is the only place that
+ever drops one — an unpollinated tree that never drops fruit has
+nothing on the ground for a bird to find in the first place.
+(`step_forage`'s much older, separate windfall roll —
+`ForageScheduler.drops`, generic `"fruit"`/`"nut"` items keyed on raw
+`species_bias` rather than a named species — is untouched: it predates
+`TreeSpecies` entirely and a bird cannot eat what it drops regardless,
+a known, pre-existing, unrelated simplification, not something this
+pass silently left inconsistent.)
+
+**(C) Tree blossoms emit real, deliberate scent.**
+`TreeSpecies.blossom_scent_for` gives apple/cherry a real, tested,
+grounded blossom-scent value (apple's real bloom carries a noticeably
+stronger, sweeter scent than cherry's, so apple out-scents cherry) on
+the same 0..1 scale `FlowerSpecies` uses for a meadow flower's own
+scent. `ScentField.concentration_at`/`gradient_direction` grow an
+optional per-entry `scent_strength` override, read ahead of the
+species-keyed `FlowerSpecies` lookup — additive, so both existing real
+callers (`EarthChunkManager`'s spawn-multiplier probe,
+`AmbientFlyerMarker`'s gradient sniff) are unaffected.
+`EarthChunkManager.blossoms_near` now sets it from the new lookup,
+replacing what had been an accidental reliance on `FlowerSpecies`' own
+unrelated fallback default (0.4, meant for an unrecognized *flower* id)
+in the one existing call site that already merged blossoms into a
+gradient computation (`AmbientFlyerMarker`'s dead `TREE_POLLINATING_
+SPECIES` branch, orphaned since the decorative "bee" it was written for
+retired).
+
+**(D) A bee scout also detects real flower/blossom scent across its
+whole home range, not just what it can already sense up close.**
+`BeeForagerMarker._sense_distant_food`, consulted only when the
+existing close-range `_sense_food_nearby` finds nothing: checks
+`BeeColony.FORAGE_RADIUS_TILES` and commits straight to whichever real
+source scores highest by `ScentField.concentration_at`, so a real
+superposed cluster or a stronger-scented species genuinely out-pulls a
+lone or fainter one. **This is detection-and-commit, not a gradient
+blend** — the design originally sketched for this (mirroring
+`AmbientFlyerMarker.SCENT_STEER_WEIGHT`'s "lean, don't beeline" blend
+for butterflies) was built, then reverted, once it surfaced a real
+mismatch: `ScentField.RADIUS_TILES` (6 tiles, how far a plume actually
+carries) is *smaller* than a bee's own `SENSE_RADIUS_TILES` (9, its
+close-commit range already) — so a gradient sampled from the scout's
+own position could never register anything by the time the wider check
+even runs, unlike a butterfly, whose own landing distance sits below 6
+tiles and genuinely benefits from a gradient blend. The honest fix is a
+wider DETECTION range instead. Closes the full loop the feature exists
+for: blossom → scent → bee attraction → visit → fruit set and new
+growth.
+
+**Coverage**: strict TDD throughout, new dedicated fast file
+`test_earth_chunk_manager_pollination.gd` (mirroring `test_earth_
+chunk_manager_bees.gd`'s own shape — direct `_loaded_trees` injection,
+never the slow real `update()`) plus additions to `test_fruiting_
+model.gd`, `test_tree_species.gd`, `test_scent_field.gd`,
+`test_bee_forager_marker.gd`. Re-verified against the real (slow)
+Berlin-forest integration tests directly, not just the new fast unit
+tests: both `step_tree_spread` tests and all `harvest_peak_fruit_near`/
+`step_fruiting` tests in `test_earth_chunk_manager.gd` still pass.
+Fixed three pre-existing tests that used a bare `Node2D` (never capable
+of `pollination_visits_in_cycle`) for an insect-pollinated species,
+now incompatible with the fixed `harvest_peak_fruit_near`: upgraded to
+real `ChoppableTree` fixtures with a saturating visit recorded, since
+none of them were actually testing pollination
+(`test_earth_chunk_manager.gd`'s own `harvest_peak_fruit_near`/
+`step_fruiting` catch-up-ripeness tests, and `test_player_fruit_
+harvest.gd`'s shared tree-placement helper). A related, **pre-existing**
+flaky test in `test_earth_chunk_manager.gd`
+(`test_a_spread_tree_survives_unloading_and_reloading_its_chunk`) was
+found flip-flopping across runs of identical code while verifying this
+change, but is structurally unrelated to it — it never calls
+`step_tree_spread` (where the new filter lives) between capturing its
+expected count and the failing assertion — and has been flagged
+separately for a dedicated investigation rather than silently ignored
+or misattributed here.
