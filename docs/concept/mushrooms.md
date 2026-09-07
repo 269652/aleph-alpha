@@ -191,7 +191,17 @@ re-picks the same look across a reload.
 `species_id` (has-art-or-doesn't fallback chain every optional
 illustrated-art seam in this codebase uses), the procedural
 species-coloured silhouette otherwise. The hover name (`get_display_name`)
-is always the real species name plus a "(Toxic)"/"(Edible)" hint.
+is always the real species name plus a state hint: `"(Crushed)"` for a
+corpse (`corpse_kind == "crushed"`, checked first — reported live,
+directly: *"Champignons should show state in hover tooltip e.g. Parasol
+(Crushed); Parasol (Edible); Death Cap (Poisonous)"* — a crushed corpse
+used to fall through to the ordinary toxic/edible hint below, the same
+species-driven answer a live, untouched specimen shows, which reads as
+flatly wrong for a corpse), else `"(Bitten)"` once a decomposer has
+visibly marked a still-living specimen (see "Bitten by a decomposer"
+below), else `"(Toxic)"`/`"(Edible)"` by species (see "Toxicity is real,
+specific, and asymmetric" above — this codebase's own established word is
+"Toxic", not "Poisonous").
 
 Joins `DroppedItem.GROUP_NAME` (ordinary E/click pickup) and
 `DroppedItem.FORAGEABLE_GROUP_NAME` (a decomposer ant/bug can find and eat
@@ -490,7 +500,11 @@ and any debuff/toxicity mechanic for non-player creatures generally.
   same shape every crushed entry already has -- an honest count, not a
   uniform assumption). `take_mushroom_bite()` -- its own method,
   deliberately not `take_bite` -- is what `DecomposerMarker`'s bite path
-  calls.
+  calls. `get_display_name()`'s own state hint now checks `corpse_kind`
+  too (reported live: "Champignons should show state in hover tooltip
+  e.g. Parasol (Crushed)") -- it already named bitten/toxic/edible but
+  fell through to the ordinary toxic/edible hint for a crushed corpse,
+  same as an untouched specimen, which read as wrong for a corpse.
 - ✅ `MushroomRenderer` (`src/rendering/mushroom_renderer.gd`) —
   spawn_markers/sync_markers keep markers in sync with which cells are
   fruiting (no per-tick identification push any more), and now also keep

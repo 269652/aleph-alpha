@@ -2309,6 +2309,54 @@ func test_leaf_fall_chance_for_winter_is_always_zero():
 	assert_eq(EarthChunkManager.leaf_fall_chance_for("winter", 0.9), 0.0)
 
 
+# -- leaf_fall_chance_for's optional 3rd arg: tapered off by the canopy's ---
+# -- OWN visual turn into bare winter, not just the calendar ----------------
+#
+# Reported directly: "when trees are rendered with their bare winter sprite
+# no leaf litter should happen". The autumn ramp above (season_progress ->
+# 1.0 at CALENDAR season's end) was deliberately un-gated from
+# canopy_turn_progress when it was introduced (see this file's own doc
+# comment above), on the reasoning that nothing reported at the time asked
+# for anything beyond constant/continuous/increasing. But canopy_turn_
+# progress (TreePhenology._settled_then_turn) stays 0.0 for autumn's own
+# settled majority and then ramps 0->1 across exactly the SAME final
+# fraction of the season the calendar ramp above is also climbing through
+# -- so at season_progress close to 1.0, the canopy is ALSO close to fully
+# blended into its bare winter frame (see TreeRenderer.canopy_state, whose
+# own "turn_progress" is what EarthChunkManager.step_fruiting hands
+## tree.set_ripe_fruit for the actual sprite blend, read from the exact same
+# canopy Dictionary this leaf-fall gate reads its season from). Without
+# this, a tree already reading as visually bare kept shedding at its own
+# PEAK rate, right up to the literal calendar boundary.
+
+func test_leaf_fall_chance_for_autumn_tapers_to_zero_as_the_canopy_finishes_turning_bare():
+	assert_almost_eq(
+		EarthChunkManager.leaf_fall_chance_for("autumn", 1.0, 1.0), 0.0, 0.0001,
+		"a fully-turned, visually bare canopy has no leaves left to drop"
+	)
+
+
+func test_leaf_fall_chance_for_autumn_is_unaffected_while_the_canopy_is_still_settled():
+	# canopy_turn_progress reads exactly 0.0 for autumn's own settled
+	# majority (see TreePhenology._settled_then_turn) -- the taper must be a
+	# true no-op there, identical to the existing 2-arg calendar-only ramp.
+	assert_almost_eq(
+		EarthChunkManager.leaf_fall_chance_for("autumn", 0.5, 0.0),
+		EarthChunkManager.leaf_fall_chance_for("autumn", 0.5),
+		0.0001
+	)
+
+
+func test_leaf_fall_chance_for_autumn_recedes_as_the_canopy_empties_during_the_turn():
+	# Partway through the turn (canopy still visibly has leaves left) should
+	# shed MORE than once the canopy has finished emptying out, even though
+	# the calendar-only ramp alone would say the opposite (later == higher).
+	var mid_turn := EarthChunkManager.leaf_fall_chance_for("autumn", 0.9, 0.5)
+	var fully_turned := EarthChunkManager.leaf_fall_chance_for("autumn", 1.0, 1.0)
+	assert_gt(mid_turn, 0.0, "still visibly has leaves to drop partway through the turn")
+	assert_lt(fully_turned, mid_turn, "a fully bare canopy sheds less than one still partway turned")
+
+
 ## Reported directly: "there should always be an occasional falling leaf
 ## or blossom" -- a falling LEAF makes no botanical sense while a tree's
 ## canopy is still bare-to-blossoming and has no leaves yet, so a settled

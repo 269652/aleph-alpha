@@ -1193,14 +1193,39 @@ const LEAF_SPRING_TRICKLE_CHANCE := LEAF_SUMMER_TRICKLE_CHANCE
 ## is all three of those things, and nothing in the report asks for a
 ## particular shape beyond them.
 ##
+## `canopy_turn_progress` (optional, defaults to 0.0 -- a no-op on this
+## curve, see below) then TAPERS that same ramp back down as the canopy's
+## own visual turn into bare winter actually finishes. Reported directly:
+## "when trees are rendered with their bare winter sprite no leaf litter
+## should happen". canopy_turn_progress (TreePhenology._settled_then_turn,
+## read via TreeRenderer.canopy_state -- the exact same Dictionary
+## step_fruiting already hands tree.set_ripe_fruit for the real sprite
+## blend) reads 0.0 for autumn's own settled majority, same as
+## canopy_turn_progress always has, so multiplying by (1.0 -
+## canopy_turn_progress) is a true no-op there -- unchanged from the
+## original, twice-confirmed calendar-only ramp. Only in autumn's own
+## final turn -- the SAME final stretch season_progress is climbing
+## through toward 1.0 -- does this pull the chance back down, reaching
+## exactly 0.0 the instant the canopy finishes blending into its bare
+## frame (continuous with the `_` branch below: canopy_season itself flips
+## to "winter", chance 0.0, at that exact same instant). A tree with
+## nothing left to shed no longer keeps shedding at its own peak rate just
+## because the calendar alone says so.
+##
 ## Summer and spring stay flat at their own named trickle rate (real wind/
 ## petal damage is not something that builds across a season the way
-## autumn colour change does). Any other season (winter: bare, nothing
-## left to shed) returns 0.0.
-static func leaf_fall_chance_for(canopy_season: String, season_progress: float) -> float:
+## autumn colour change does) -- neither one's canopy is turning toward
+## BARE (summer turns into autumn's canopy, spring's own canopy_season
+## flips away before its calendar quarter even ends; see LEAF_SPRING_
+## TRICKLE_CHANCE's own doc comment), so no taper applies to either. Any
+## other season (winter: bare, nothing left to shed) returns 0.0.
+static func leaf_fall_chance_for(
+	canopy_season: String, season_progress: float, canopy_turn_progress: float = 0.0
+) -> float:
 	match canopy_season:
 		"autumn":
-			return lerpf(LEAF_AUTUMN_BASELINE_CHANCE, 1.0, clampf(season_progress, 0.0, 1.0))
+			var ramp := lerpf(LEAF_AUTUMN_BASELINE_CHANCE, 1.0, clampf(season_progress, 0.0, 1.0))
+			return ramp * (1.0 - clampf(canopy_turn_progress, 0.0, 1.0))
 		"summer":
 			return LEAF_SUMMER_TRICKLE_CHANCE
 		"spring":
@@ -3489,18 +3514,21 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 
 			# Falling leaves/blossom (see docs/concept/leaf_litter.md): a
 			# real leaf (summer/autumn) or blossom petal (spring) falls,
-			# driven by the SAME canopy_season this step already read once
-			# above for tree.set_ripe_fruit -- not a second schedule
-			# computing its own answer -- plus season_progress (see
-			# leaf_fall_chance_for's own doc comment for why THAT, not
-			# canopy_turn_progress, drives the chance). Independent of
-			# whether fruit fell this same step -- a tree can shed a leaf
-			# with nothing left to fruit.
+			# driven by the SAME canopy_season/canopy_turn_progress this
+			# step already read once above for tree.set_ripe_fruit -- not a
+			# second schedule computing its own answer -- plus
+			# season_progress (see leaf_fall_chance_for's own doc comment:
+			# season_progress drives the RAMP, canopy_turn_progress tapers
+			# it back off as the canopy visually finishes emptying into
+			# bare winter). Independent of whether fruit fell this same
+			# step -- a tree can shed a leaf with nothing left to fruit.
 			#
 			# Gated on LEAF_LITTER_ENABLED (see that constant's own doc
 			# comment) -- requested directly: "deactivate leaf littering".
 			if LEAF_LITTER_ENABLED:
-				var leaf_fall_chance := leaf_fall_chance_for(canopy_season, season_progress)
+				var leaf_fall_chance := leaf_fall_chance_for(
+					canopy_season, season_progress, canopy_turn_progress
+				)
 				if leaf_fall_chance > 0.0:
 					# Deterministic per-(tree, step) roll, not engine randf()
 					# -- see _LEAF_FALL_ROLL_STEPS' own doc comment.

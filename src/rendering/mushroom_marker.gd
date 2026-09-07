@@ -130,12 +130,24 @@ func _rebuild_sprite() -> void:
 		_sprite.scale = Vector2.ONE * ProceduralMushroomSprite.MUSHROOM_WORLD_SCALE
 
 
-## The real species name plus a toxic/edible hint -- always, see class
-## doc comment. Bitten takes priority over that hint once a decomposer has
-## visibly marked it (see take_mushroom_bite): that is the more salient
-## thing to name at that point.
+## The real species name plus a state hint -- always, see class doc
+## comment. A crushed corpse (corpse_kind == "crushed") takes priority over
+## everything else, the same first-checked priority _rebuild_sprite's own
+## sprite choice already gives it -- reported directly ("Champignons should
+## show state in hover tooltip e.g. Parasol (Crushed); Parasol (Edible);
+## Death Cap (Poisonous)"), closing the one state _rebuild_sprite already
+## understood that this never did: a crushed corpse used to fall through to
+## the ordinary toxic/edible hint, the same species-driven answer a live,
+## untouched specimen shows -- flatly wrong for a corpse. Bitten is next
+## (see take_mushroom_bite): the more salient thing to name once a
+## decomposer has visibly marked a still-living specimen. In practice a
+## marker is never both -- a crushed corpse is always a FRESH, unbitten
+## replacement (see corpse_kind's own doc comment) -- but the ordering
+## still matches _rebuild_sprite's so the two can't silently drift apart.
 func get_display_name() -> String:
 	var species_name := MushroomSpecies.display_name_for(species_id)
+	if corpse_kind == "crushed":
+		return "%s (Crushed)" % species_name
 	if bitten:
 		return "%s (Bitten)" % species_name
 	if MushroomSpecies.is_toxic(species_id):

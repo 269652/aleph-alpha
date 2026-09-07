@@ -261,6 +261,24 @@ func test_shows_crushed_art_when_corpse_kind_is_crushed_and_the_species_has_it()
 	assert_eq(sprite.texture.get_image().get_data(), expected.get_image().get_data())
 
 
+## Reported directly: mushroom hover tooltips should show state, e.g.
+## "Parasol (Crushed)". get_display_name() already named bitten/toxic/
+## edible (see test_display_name_reveals_the_real_species_and_toxicity/
+## test_display_name_reveals_bitten above and below) but never checked
+## corpse_kind at all -- a crushed corpse fell through to the ordinary
+## toxic/edible hint instead, the same species-driven answer a live,
+## untouched specimen shows, which reads as flatly wrong for a corpse.
+## Highest priority (checked before bitten/toxic/edible, mirroring
+## _rebuild_sprite's own identical corpse_kind-first priority): a crushed
+## marker is always a FRESH, unbitten replacement (see corpse_kind's own
+## doc comment), so this can never actually race bitten in practice, but
+## matching the sprite's own priority order keeps the two from silently
+## drifting apart.
+func test_display_name_reveals_a_crushed_corpse():
+	assert_eq(_make_marker("parasol", Vector2i.ZERO, "crushed").get_display_name(), "Parasol (Crushed)")
+	assert_eq(_make_marker("death_cap", Vector2i.ZERO, "crushed").get_display_name(), "Death Cap (Crushed)")
+
+
 ## A bitten mushroom is NOT a "bitten" corpse_kind -- it is still standing,
 ## still fruiting, tracked via the separate `bitten` field instead (see
 ## MushroomMarker.take_mushroom_bite, WildMushroomPatch._bitten's own doc

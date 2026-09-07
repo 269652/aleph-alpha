@@ -14393,3 +14393,45 @@ by anything in this pass), but since `FoodComposition` still only models
 apple/cherry, `NutrientRelease.consume` returns `crushed = false` for a
 nut and `_apply_nutrient_bite` falls back to the old flat `_needs.feed()`,
 exactly as it already did before the Material DSL existed at all.
+
+### Mushroom hover tooltip now shows a crushed corpse's real state (`concept/mushrooms.md`, 2026-09-07)
+
+Reported directly: *"Champignons should show state in hover tooltip e.g.
+Parasol (Crushed); Parasol (Edible); Death Cap (Poisonous)"*.
+`MushroomMarker.get_display_name()` already named bitten (`"(Bitten)"`)
+and toxic/edible (`"(Toxic)"`/`"(Edible)"` — this codebase's own
+established word, kept rather than renamed to "Poisonous") specimens, but
+never checked `corpse_kind` at all: a crushed corpse fell through to the
+ordinary species-driven toxic/edible hint, the same answer a live,
+untouched specimen shows — flatly wrong for a corpse. Fixed by checking
+`corpse_kind == "crushed"` first, mirroring `_rebuild_sprite`'s own
+already-established crushed-first priority so the tooltip and the sprite
+can't silently drift apart on which state wins. `test_display_name_
+reveals_a_crushed_corpse` (new) plus 44/45 pre-existing `display_name`-
+matching tests reconfirmed green (the one unrelated failure,
+`test_companion_item_catalog_view.gd`'s Iron Sword listing, predates and
+is untouched by this change).
+
+### Leaf-fall chance now tapers off as the canopy finishes turning bare (`concept/leaf_litter.md`, 2026-09-07)
+
+Reported directly: *"when trees are rendered with their bare winter sprite
+no leaf litter should happen."* The autumn ramp (`leaf_fall_chance_for`,
+`SeasonCycle.progress_through_season` driven, `LEAF_AUTUMN_BASELINE_CHANCE`
+→ certainty at the calendar season's end) was deliberately un-gated from
+`canopy_turn_progress` when it was introduced — but `canopy_turn_progress`
+(`TreePhenology._settled_then_turn`) ramps 0→1 across exactly the SAME
+final stretch of autumn the calendar ramp is also climbing through, so at
+`season_progress` near 1.0 the canopy is ALSO near-fully blended into its
+bare winter frame (the same `canopy_turn_progress` `step_fruiting` already
+hands `tree.set_ripe_fruit` for that real sprite blend) — a tree already
+reading as visually bare kept shedding at its own peak rate right up to
+the literal calendar boundary. Fixed with a new, optional 3rd argument on
+`leaf_fall_chance_for` (`canopy_turn_progress`, default `0.0` — a true
+no-op on every pre-existing 2-arg call site/test, since that value is
+already exactly `0.0` across autumn's own settled majority): the ramp is
+now multiplied by `(1.0 - canopy_turn_progress)`, receding to exactly
+`0.0` the instant the canopy finishes emptying — continuous with
+`canopy_season` itself flipping to `"winter"` (chance `0.0`) at that same
+instant. 3 new tests (tapers to zero once fully turned, unaffected while
+still settled, recedes partway through the turn) plus all 6 pre-existing
+`leaf_fall_chance_for` tests reconfirmed green (9/9, 23 asserts).

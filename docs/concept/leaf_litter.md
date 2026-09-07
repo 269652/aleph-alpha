@@ -134,16 +134,37 @@ autumn's first instant up to CERTAINTY (1.0) at its last: constant (never
 zero), continuous (no jump at the old turn-progress boundary), and
 increasing (strictly rises) the whole way -- linear because nothing in
 either report asks for a particular curve shape beyond those three
-properties, and it is the simplest one that has them. A tree at
-`season_progress == 1.0` still sheds essentially every step, exactly as
-the old formula's `canopy_turn_progress == 1.0` case did.
+properties, and it is the simplest one that has them.
 
-Read once per fruiting step (both `canopy_season` from
-`_tree_renderer.canopy_state()` and `season_progress` from
-`_season_cycle.progress_through_season`) -- the same values
-`EarthChunkManager.step_fruiting` already reads once per step (not per
-tree, see that function's own doc comment on why) for the windfall block
-right beside this one.
+**Revised (2026-09-07): that ramp is now TAPERED back off by the canopy's
+own visual turn into bare winter, via `leaf_fall_chance_for`'s optional
+3rd `canopy_turn_progress` argument.** Reported directly: "when trees are
+rendered with their bare winter sprite no leaf litter should happen." The
+`season_progress == 1.0` case above ("still sheds essentially every step")
+is no longer true by itself -- `canopy_turn_progress` (still `0.0` for
+autumn's own settled majority, exactly as the paragraph above already
+established, so the ramp is UNCHANGED for most of the season) rises across
+the SAME final stretch `season_progress` is also climbing through, and the
+chance is multiplied by `(1.0 - canopy_turn_progress)`: it now peaks
+partway through the turn and recedes to exactly 0.0 the instant the canopy
+finishes blending into its bare frame -- continuous with `canopy_season`
+itself flipping to `"winter"` (chance `0.0`) at that same instant. Still
+constant/continuous/never-zero across the season's own settled majority
+(nothing about that property changed); only the FINAL stretch, where the
+canopy is actively emptying, no longer keeps rising all the way to
+certainty -- a tree already reading as visually bare no longer sheds at
+its own peak rate.
+
+Read once per fruiting step (`canopy_season`, `canopy_turning_into`, AND
+`canopy_turn_progress` from `_tree_renderer.canopy_state()`, plus
+`season_progress` from `_season_cycle.progress_through_season`) -- the
+same values `EarthChunkManager.step_fruiting` already reads once per step
+(not per tree, see that function's own doc comment on why) for the
+windfall block right beside this one, and the same `canopy_turn_progress`
+value that same step already hands `tree.set_ripe_fruit` for the real
+sprite blend -- so the leaf-fall gate and the rendered bare-ness are
+provably reading the identical number, not two schedules that could drift
+apart.
 
 A settled SUMMER tree also sheds an occasional leaf -- real wind and
 petal damage, not the main fall (`LEAF_SUMMER_TRICKLE_CHANCE`, a flat 6%
@@ -840,6 +861,18 @@ tested `leaf_fall_chance_for` rather than only exercised through noisy
 per-tree roll sampling -- retroactively confirmed those tests actually
 catch a regression by temporarily stubbing the function and watching
 5 of 6 fail for the right reason.
+
+✅ **Revised (2026-09-07): that ramp now tapers back off across the
+canopy's own final turn into bare winter** (see "When leaves fall" above)
+-- reported directly ("when trees are rendered with their bare winter
+sprite no leaf litter should happen"). `leaf_fall_chance_for` gained an
+optional 3rd `canopy_turn_progress` argument (default `0.0`, a true no-op
+on every existing 2-arg call site/test above) that multiplies the ramp by
+`(1.0 - canopy_turn_progress)` -- unchanged across the season's own
+settled majority (where that value is still exactly `0.0`, same as
+always), receding to exactly `0.0` only across the final stretch where the
+canopy is actively emptying toward bare, in step with the SAME value
+`step_fruiting` already hands the renderer for the real sprite blend.
 
 ✅ **A settled SPRING tree sheds an occasional BLOSSOM, not a leaf** (see
 "When leaves fall"/"Rendering" above) -- reported directly ("there should
