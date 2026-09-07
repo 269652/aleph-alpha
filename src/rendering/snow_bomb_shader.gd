@@ -26,6 +26,7 @@ extends RefCounted
 
 const SnowStampAtlas = preload("res://src/rendering/snow_stamp_atlas.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const SnowSparkleShader = preload("res://src/rendering/snow_sparkle_shader.gd")
 
 const SHADER_CODE := """
 shader_type canvas_item;
@@ -72,6 +73,7 @@ uniform float world_units_per_tile = 16.0;
 uniform sampler2D trail_mask : filter_linear, repeat_disable;
 uniform vec2 trail_origin = vec2(0.0, 0.0);
 uniform float trail_world_size = 1024.0;
+""" + SnowSparkleShader.GLSL_SNIPPET + """
 
 varying vec2 world_pos;
 
@@ -328,6 +330,19 @@ void fragment() {
 			// as a real visual change, on top of site removal alone.
 			if (tread > 0.0) {
 				result.a *= 1.0 - clamp(tread, 0.0, 1.0) * tread_alpha_factor;
+			}
+			// Sparkle (see docs/concept/snow_cover.md, "Sparkle"): only
+			// where a stamp is ACTUALLY drawn here (result.a > 0), never at
+			// a point the bombing search left untouched -- otherwise a
+			// light dusting would show glints floating over visibly bare
+			// ground between stamps. Scaled by `lying` (not natural_lying)
+			// so a thin dusting glints fainter than solid cover, and
+			// packed/trodden snow glints fainter too -- the same "decorates
+			// coverage, proportionally" pillar TREAD_ALPHA_FACTOR's own
+			// alpha fade above already follows.
+			if (result.a > 0.0) {
+				float twinkle = sparkle_intensity(world_pos, TIME) * lying;
+				result.rgb += vec3(twinkle * sparkle_brightness);
 			}
 			COLOR = result;
 		}
@@ -684,6 +699,22 @@ func coverage_at(depth: float, world_x: float, world_y: float, tread: float = 0.
 	return raw * (1.0 - clampf(tread, 0.0, 1.0) * TREAD_ALPHA_FACTOR)
 
 
+## Sparkle mirror (see docs/concept/snow_cover.md, "Sparkle"): how brightly a
+## glint shows at this ground point right now, mirroring fragment()'s own
+## sparkle block exactly. Gated on coverage_at itself being nonzero -- an
+## actual snow pixel drawn here, not just "the abstract depth field is
+## nonzero somewhere nearby but no stamp overlaps this exact point" (see
+## fragment()'s own doc comment) -- and scaled by `lying` (not
+## natural_lying) so a light dusting glints fainter than solid cover.
+func ground_sparkle_at(
+	depth: float, world_x: float, world_y: float, time: float, tread: float = 0.0
+) -> float:
+	if coverage_at(depth, world_x, world_y, tread) <= 0.0:
+		return 0.0
+	var lying := lying_at(depth, world_x, world_y, tread)
+	return SnowSparkleShader.sparkle_intensity(world_x, world_y, time) * lying
+
+
 ## `lying` (the TREADED value) decides only WHETHER a site is present at
 ## all, via site_has_caught -- reducing it can only make that inequality
 ## harder to satisfy, so tread can only ever turn sites OFF, never on.
@@ -839,6 +870,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("trail_mask", _empty_trail_mask())
 	material.set_shader_parameter("trail_origin", Vector2.ZERO)
 	material.set_shader_parameter("trail_world_size", 1024.0)
+	SnowSparkleShader.push_shared_uniforms(material)
 	return material
 
 
