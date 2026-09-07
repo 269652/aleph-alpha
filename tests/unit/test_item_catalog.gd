@@ -293,6 +293,19 @@ func test_false_death_cap_has_a_plausible_real_mushroom_mass():
 	assert_between(catalog.make("false_death_cap").mass_kg, 0.01, 0.04)
 
 
+# -- worm corpse pickup (see EarthwormPatch.take_corpse, WormMarker, ---------
+# -- docs/concept/aquatic_foraging.md's "Worms as fish bait") ----------------
+
+func test_worm_has_a_plausible_real_earthworm_mass():
+	assert_between(catalog.make("worm").mass_kg, 0.002, 0.01)
+
+
+## "material", not "food" -- a worm corpse isn't people-food (see the
+## "worm" entry's own doc comment in item_catalog.gd for why).
+func test_worm_is_a_material_not_food():
+	assert_eq(catalog.kind_of("worm"), "material")
+
+
 # -- bitten mushroom variants (see MushroomBiting.gd, docs/concept/ ----------
 # -- mushrooms.md's fungivory section) ---------------------------------------
 
