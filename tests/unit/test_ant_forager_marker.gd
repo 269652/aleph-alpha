@@ -931,9 +931,13 @@ func test_a_scouts_assigned_spread_direction_measurably_changes_its_wander():
 
 func test_crush_applies_the_squash_effect_to_its_sprite():
 	var forager := _spawned(Vector2(50, 50), Vector2(0, 0))
-	forager.crush()
 	var sprite := forager.get_child(0) as Sprite2D
-	assert_almost_eq(sprite.scale.y, SquashCrushEffect.VERTICAL_SQUASH, 0.001)
+	var scale_before := sprite.scale.y
+	forager.crush()
+	assert_almost_eq(
+		sprite.scale.y, scale_before * SquashCrushEffect.VERTICAL_SQUASH, 0.0001,
+		"the squash must apply RELATIVE to the ant's own tiny existing scale, not overwrite it outright -- reported live: \"crushing an ant shows a distorted sprite which is very large\""
+	)
 	assert_eq(sprite.modulate, SquashCrushEffect.TINT)
 
 

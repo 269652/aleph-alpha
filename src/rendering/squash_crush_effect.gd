@@ -17,13 +17,23 @@ extends RefCounted
 ## crawl transitioning into a flattened, splattered pose") without needing
 ## bespoke art to draw it.
 
-## How much a crushed sprite flattens vertically -- pinned by
-## test_apply_flattens_the_sprite_vertically, not eyeballed. Only the
-## vertical axis changes: a squash spreads a body outward as it flattens in
-## real life, but widening the sprite too would fight whatever horizontal
-## scale a species-specific marker_scale already set, so this stays a pure
-## Y-axis flatten, the least invasive change that still reads as "crushed
-## flat" at a glance.
+## How much a crushed sprite flattens vertically, RELATIVE to whatever
+## scale.y it already had -- pinned by
+## test_apply_flattens_relative_to_a_tiny_creatures_own_scale_not_to_an_
+## absolute_value, not eyeballed. Only the vertical axis changes: a squash
+## spreads a body outward as it flattens in real life, but widening the
+## sprite too would fight whatever horizontal scale a species-specific
+## marker_scale already set, so this stays a pure Y-axis flatten, the least
+## invasive change that still reads as "crushed flat" at a glance.
+##
+## MUST be applied as a multiplier against the sprite's own current
+## scale.y, never as a flat overwrite -- reported live: "crushing an ant
+## shows a distorted sprite which is very large". An ant's own marker_scale
+## is a small fraction (this codebase's own established "gigantic ant
+## blobs" failure mode, see ProceduralDecomposerSprite's doc comment for
+## the precedent), so overwriting scale.y with this constant OUTRIGHT made
+## a crushed ant balloon up toward 0.35 -- far bigger than its own real
+## live size -- instead of flattening down from it.
 const VERTICAL_SQUASH := 0.35
 
 ## How dark/red a crushed sprite tints -- pinned by
@@ -42,5 +52,5 @@ const LINGER_SECONDS := 2.0
 
 
 static func apply(sprite: Sprite2D) -> void:
-	sprite.scale.y = VERTICAL_SQUASH
+	sprite.scale.y *= VERTICAL_SQUASH
 	sprite.modulate = TINT
