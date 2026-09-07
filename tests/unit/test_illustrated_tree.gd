@@ -132,6 +132,51 @@ func test_sapling_frame_index_clamps_to_the_real_range():
 	)
 
 
+## A caller (ChoppableTree, via TreeGrowth.sapling_progress) has a
+## continuous [0, 1] "how far through the sapling sheet" fraction, not a raw
+## frame index -- this is the one place that turns one into the other, so
+## every reader of the sheet quantises it identically.
+func test_sapling_frame_for_progress_zero_is_the_first_frame():
+	assert_eq(
+		trees.sapling_frame_for_progress(0.0).get_image().get_data(),
+		trees.sapling_frame(0).get_image().get_data()
+	)
+
+
+func test_sapling_frame_for_progress_one_is_the_last_frame():
+	assert_eq(
+		trees.sapling_frame_for_progress(1.0).get_image().get_data(),
+		trees.sapling_frame(trees.sapling_frame_count() - 1).get_image().get_data()
+	)
+
+
+## Out-of-range progress clamps rather than errors, the same contract
+## sapling_frame's own index clamp gives -- a caller should never have to
+## separately guard the ends of a fraction it derived itself.
+func test_sapling_frame_for_progress_clamps_out_of_range_input():
+	assert_eq(
+		trees.sapling_frame_for_progress(-0.5).get_image().get_data(),
+		trees.sapling_frame(0).get_image().get_data()
+	)
+	assert_eq(
+		trees.sapling_frame_for_progress(1.5).get_image().get_data(),
+		trees.sapling_frame(trees.sapling_frame_count() - 1).get_image().get_data()
+	)
+
+
+## Progress must advance through DIFFERENT real frames, not collapse the
+## whole sheet down to two endpoints -- a real growth sequence has to be
+## visibly walked through, the same "every frame is a real distinct
+## drawing" property test_every_sapling_frame_is_a_real_distinct_drawing
+## already pins for the raw sheet.
+func test_sapling_frame_for_progress_walks_through_distinct_frames():
+	var seen := {}
+	for step in 11:
+		var progress := float(step) / 10.0
+		seen[trees.sapling_frame_for_progress(progress).get_image().get_data()] = true
+	assert_gt(seen.size(), 1, "progress from 0 to 1 should show more than one frame")
+
+
 # -- the fifth frame: snow ----------------------------------------------------
 #
 # A canopy sheet may carry a FIFTH drawing after the four seasons -- how much

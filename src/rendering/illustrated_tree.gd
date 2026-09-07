@@ -277,6 +277,20 @@ func sapling_frame(index: int) -> Texture2D:
 	return frames[clampi(index, 0, frames.size() - 1)]
 
 
+## The sapling frame for a continuous [0, 1] growth fraction (see TreeGrowth.
+## sapling_progress) -- the one place that turns "how far through the
+## sequence" into a concrete frame index, so a renderer never has to
+## quantise it itself. Clamped the same way sapling_frame's own index is: a
+## caller handing in progress it derived itself (which can round fractionally
+## outside [0, 1] at the very ends) never has to separately guard them.
+func sapling_frame_for_progress(progress: float) -> Texture2D:
+	var frames := _sapling_frames()
+	if frames.is_empty():
+		return null
+	var index := int(round(clampf(progress, 0.0, 1.0) * float(frames.size() - 1)))
+	return sapling_frame(index)
+
+
 func _sapling_frames() -> Array[Texture2D]:
 	if not _sapling_frame_cache.is_empty():
 		return _sapling_frame_cache

@@ -14,6 +14,8 @@ const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite
 const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
 const FelledTree = preload("res://src/rendering/felled_tree.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
+const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
+const TreeMorphShader = preload("res://src/rendering/tree_morph_shader.gd")
 
 const GROUP_NAME := "tree"
 const MAX_HEALTH := 30.0
@@ -57,6 +59,13 @@ var _snow_coverage := 0.0
 ## canopy is what makes a sapling look like a sapling.
 var _drawn_growth := -1.0
 var _tree_sprite_generator := ProceduralTreeSprite.new()
+## The sapling art (see IllustratedTree's own "sapling growth sequence"
+## section) this tree draws from below TreeGrowth.BRANCH_START_FRACTION, and
+## dissolves out of via TreeMorphShader above it. A plain instance, mirroring
+## _tree_sprite_generator's own shape -- IllustratedTree's actual sapling
+## frames are cached STATIC on that class, so every ChoppableTree sharing one
+## instance each costs nothing extra.
+var _illustrated_art := IllustratedTree.new()
 
 
 func _ready() -> void:
@@ -139,10 +148,39 @@ func _canopy_growth() -> float:
 	return ProceduralTreeSprite.growth_level(growth_scale)
 
 
+## ## Two phases, ONE redraw entry point
+##
+## Below TreeGrowth.BRANCH_START_FRACTION a tree is still a bare, unbranched
+## shoot -- it draws from IllustratedTree's real sapling art (see
+## refresh_sapling_display) and never touches generate_texture_with_fruit at
+## all, since there is no "mature" picture to speak of yet. At and above it,
+## this draws the REAL, FULLY mature texture (growth pinned to 1.0, not
+## _drawn_growth -- see below) and lets TreeMorphShader dissolve the sapling
+## sheet's last frame OUT of it as canopy_growth_fraction climbs, clearing
+## the morph outright once that reaches 1.0 so a fully-grown tree renders
+## through today's exact, unmodified path with zero shader overhead.
+##
+## `growth` is passed as a literal 1.0 here, not _drawn_growth (still
+## computed below, unchanged, for set_ripe_fruit's OWN "did anything change"
+## comparison -- see _canopy_growth's doc comment): ProceduralTreeSprite.
+## growth_level clamps and quantises to GROWTH_LEVELS, so growth_level(x) is
+## already pinned at exactly 1.0 for any x >= 5/6 -- which _drawn_growth
+## always is by the time this branch can even run (BRANCH_START_FRACTION is
+## 0.595, comfortably below that). The OLD "fewer branches at lower growth"
+## picture that _drawn_growth would otherwise still ask for between 0.595
+## and 5/6 is exactly the range this feature replaces with the new dissolve
+## -- asking for anything less than the full picture there would draw a
+## half-branched tree UNDER a dissolve that is already trying to show the
+## canopy filling in, encoding "how grown" twice over.
 func _redraw_canopy() -> void:
-	if _canopy_sprite == null or _season == "":
+	if _canopy_sprite == null:
 		return
 	_drawn_growth = _canopy_growth()
+	if _tree_growth.sapling_progress(growth_scale) < 1.0:
+		refresh_sapling_display()
+		return
+	if _season == "":
+		return
 	_canopy_sprite.texture = _tree_sprite_generator.generate_texture_with_fruit(
 		species_bias,
 		sprite_seed,
@@ -150,9 +188,52 @@ func _redraw_canopy() -> void:
 		_season,
 		_turning_into,
 		_turn_progress,
-		_drawn_growth,
+		1.0,
 		_snow_coverage
 	)
+	var material := _canopy_sprite.material as ShaderMaterial
+	if material == null:
+		return
+	var canopy_growth := _tree_growth.canopy_growth_fraction(growth_scale)
+	if canopy_growth >= 1.0:
+		TreeMorphShader.clear(material)
+	else:
+		TreeMorphShader.apply(
+			material,
+			_illustrated_art.sapling_frame(_illustrated_art.sapling_frame_count() - 1),
+			ProceduralTreeSprite.tree_variant_for(sprite_seed),
+			canopy_growth
+		)
+
+
+## Shows this tree's real sapling art immediately, if it is still below
+## TreeGrowth.BRANCH_START_FRACTION -- the ONE place that actually reads the
+## sapling sheet, called both from _redraw_canopy's own first branch and
+## directly by TreeRenderer right after a fresh tree is bound (see
+## TreeRenderer._build_tree_node), before this tree has ever had a season
+## synced to it at all.
+##
+## That second call site is not a convenience: a freshly-spawned sapling's
+## sprite starts out holding TreeRenderer's shared, always-fully-grown
+## cached texture (see TreeRenderer._texture_for, which has no per-tree
+## growth to key on), and _redraw_canopy would otherwise only ever correct
+## that once this tree's OWN _season/_drawn_growth first change -- which
+## depends on an unrelated season-sync tick reaching it. Calling this once,
+## directly, the moment the canopy sprite exists closes that exact window --
+## the "miniaturized full canopy" bug as originally reported, at its worst:
+## a mid-session seed spawning right in front of the player.
+##
+## A no-op past the sapling phase, so a caller never has to check first.
+func refresh_sapling_display() -> void:
+	if _canopy_sprite == null:
+		return
+	var sapling_progress := _tree_growth.sapling_progress(growth_scale)
+	if sapling_progress >= 1.0:
+		return
+	_canopy_sprite.texture = _illustrated_art.sapling_frame_for_progress(sapling_progress)
+	var material := _canopy_sprite.material as ShaderMaterial
+	if material != null:
+		TreeMorphShader.clear(material)
 
 
 func current_season() -> String:

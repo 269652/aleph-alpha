@@ -180,3 +180,16 @@ func canopy_growth_fraction(height_scale: float) -> float:
 	return clampf(
 		(height_scale - BRANCH_START_FRACTION) / (1.0 - BRANCH_START_FRACTION), 0.0, 1.0
 	)
+
+
+## How far through IllustratedTree's sapling growth SHEET a tree at real
+## height fraction `height_scale` is, as [0, 1] -- the FIRST-phase
+## counterpart to canopy_growth_fraction above. Climbs from 0 (a freshly
+## planted seedling) to 1 exactly AT BRANCH_START_FRACTION, then stays
+## pinned there for any taller height: the sapling sheet has nothing left to
+## show once branching has actually begun, the same way canopy_growth_
+## fraction has nothing to show yet below that same threshold. The two
+## functions hand off at exactly one height with no gap and no overlap --
+## see test_the_two_growth_phases_hand_off_at_exactly_the_same_height.
+func sapling_progress(height_scale: float) -> float:
+	return clampf(height_scale / BRANCH_START_FRACTION, 0.0, 1.0)

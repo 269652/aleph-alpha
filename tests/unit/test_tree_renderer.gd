@@ -357,11 +357,34 @@ func test_visual_scale_does_not_change_the_trunk_collision_width():
 # stages were never seen.
 
 const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
+const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
 
 
 func test_a_freshly_planted_tree_spawns_as_a_seedling():
 	var tree := renderer.spawn_tree_at(parent, Vector2(32, 32), 0.0)
 	assert_almost_eq(tree.growth_scale, TreeGrowth.SEEDLING_SCALE, 0.001)
+
+
+## The ORIGINAL reported bug, at its worst: a freshly-spread seed's sprite
+## started life holding _texture_for's shared, always-fully-grown cached
+## texture (no per-tree growth to key on), and only self-corrected once an
+## unrelated season-sync tick happened to reach it. This asserts the
+## SPAWN-TIME sprite itself, before anything else has ever touched this
+## tree, already shows real sapling art rather than a "miniaturized full
+## canopy" -- see ChoppableTree.refresh_sapling_display's own doc comment
+## for why _build_tree_node has to call it directly rather than relying on
+## _redraw_canopy's own sapling branch, which nothing has triggered yet at
+## this point.
+func test_a_freshly_planted_tree_shows_real_sapling_art_from_the_first_frame():
+	var tree := renderer.spawn_tree_at(parent, Vector2(32, 32), 0.0)
+	var art := IllustratedTree.new()
+	var expected := art.sapling_frame_for_progress(
+		TreeGrowth.new().sapling_progress(tree.growth_scale)
+	)
+	assert_eq(
+		_canopy_texture_of(tree).get_image().get_data(), expected.get_image().get_data(),
+		"a freshly spawned seedling should show real sapling art immediately, not a mature canopy"
+	)
 
 
 ## Tolerance widened 0.001 -> 0.02: at 2x MATURITY_SECONDS a tree has
