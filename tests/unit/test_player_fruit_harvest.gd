@@ -18,6 +18,7 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const ForageScheduler = preload("res://src/gameplay/forage_scheduler.gd")
 const FruitingModel = preload("res://src/world/fruiting_model.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
+const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const EcologicalLiteracy = preload("res://src/gameplay/ecological_literacy.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
@@ -74,9 +75,17 @@ func _position_for_species(species_id: String) -> Vector2:
 ## and sets the world age to `elapsed_seconds`, returning the species' real
 ## FruitingModel window ({grow_end, fall_start, fall_end}, as year fractions)
 ## for the caller to compute peak/off-peak moments from.
+##
+## A real ChoppableTree, not a bare Node2D, with a saturating pollination
+## visit recorded: harvest_peak_fruit_near now reads pollination_visits_in_
+## cycle for any insect-pollinated species (apple included -- see docs/
+## concept/flora.md's "Pollination feedback"), and every test in this file
+## is about harvest/ripeness mechanics, not pollination itself.
 func _place_tree_and_get_window(species_id: String) -> Dictionary:
-	var tree := Node2D.new()
+	var tree := ChoppableTree.new()
 	tree.position = _position_for_species(species_id)
+	tree.bind_canopy(Sprite2D.new())
+	tree.record_pollination_visit(FruitingModel.BEARING_CYCLE_SECONDS, 0.0, FruitingModel.POLLINATION_SATURATION_VISITS)
 	entities_parent.add_child(tree)
 	chunk_manager._loaded_trees[Vector2i(0, 0)] = [tree]
 	player.position = tree.position

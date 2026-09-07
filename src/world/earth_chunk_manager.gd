@@ -8140,7 +8140,18 @@ func harvest_peak_fruit_near(pixel_position: Vector2, max_distance: float) -> Di
 			var species_id := TreeSpecies.species_for_bias(genome.species_bias)
 			if not _NAMED_FRUIT_ITEMS.has(species_id):
 				continue
-			var yield_multiplier := TreeSpecies.yield_multiplier_for(species_id)
+			# Composes pollination_factor exactly like step_fruiting does --
+			# this used to skip it entirely, so an unpollinated apple's
+			# canopy correctly showed no fruit via step_fruiting, yet a
+			# player (or an NPC gather instruction, see
+			# NpcInstructionEffects) could still walk up and harvest one
+			# anyway (see docs/concept/flora.md's "Pollination feedback").
+			var pollination_factor := 1.0
+			if TreeSpecies.needs_pollinators_for(species_id):
+				pollination_factor = FruitingModel.pollination_factor(
+					tree.pollination_visits_in_cycle(FruitingModel.BEARING_CYCLE_SECONDS, _world_age_seconds)
+				)
+			var yield_multiplier := TreeSpecies.yield_multiplier_for(species_id) * pollination_factor
 			var ripening_multiplier := TreeSpecies.ripening_multiplier_for(species_id)
 			var warmth := _warmth_at_pixel(tree.position)
 			var hanging := _fruiting_model.hanging_at(

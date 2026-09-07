@@ -1963,6 +1963,13 @@ func test_step_fruiting_skips_a_far_tree_then_shows_its_real_ripeness_once_in_ra
 	var tree := ChoppableTree.new()
 	tree.position = tree_position
 	tree.bind_canopy(Sprite2D.new())
+	# Apple is insect-pollinated (TreeSpecies._INSECT_POLLINATED); a real
+	# saturating visit is recorded so this test isolates catch-up ripeness,
+	# not pollination -- an unvisited insect-pollinated tree now bears a
+	# genuine zero (see docs/concept/flora.md's "Pollination feedback"),
+	# which would make "precondition: mid-plateau should carry real ripe
+	# fruit" below false for a reason this test never meant to explore.
+	tree.record_pollination_visit(FruitingModel.BEARING_CYCLE_SECONDS, 0.0, FruitingModel.POLLINATION_SATURATION_VISITS)
 	entities_parent.add_child(tree)
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 
@@ -1976,14 +1983,12 @@ func test_step_fruiting_skips_a_far_tree_then_shows_its_real_ripeness_once_in_ra
 
 	manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, tree.position)
 
-	# Apple is insect-pollinated (TreeSpecies._INSECT_POLLINATED) and this tree
-	# was never visited by a bee, so step_fruiting's own yield_multiplier
-	# composes FruitingModel.pollination_factor(0) -- the UNPOLLINATED_YIELD_
-	# FLOOR, a fifth of the ceiling -- on top of the species multiplier (see
-	# step_fruiting's own pollination_factor block). Leaving that out here
-	# used to overstate "expected" by 5x (10 instead of the real 2): this is
-	# the REAL catch-up ripeness the test's own name promises, not a second,
-	# looser opinion about it.
+	# step_fruiting's own yield_multiplier composes FruitingModel.
+	# pollination_factor(visits) on top of the species multiplier (see
+	# step_fruiting's own pollination_factor block) -- recomputed here from
+	# the SAME real visit count the tree above was actually given, so this
+	# stays the REAL catch-up ripeness the test's own name promises, not a
+	# second, looser opinion about it.
 	var pollination_factor := 1.0
 	if TreeSpecies.needs_pollinators_for(species_id):
 		pollination_factor = FruitingModel.pollination_factor(
@@ -5357,8 +5362,15 @@ func test_harvest_peak_fruit_near_finds_nothing_out_of_range():
 
 
 func test_harvest_peak_fruit_near_finds_nothing_before_anything_has_ripened():
-	var tree := Node2D.new()
+	# A real ChoppableTree, not a bare Node2D: harvest_peak_fruit_near now
+	# reads pollination_visits_in_cycle for any insect-pollinated species
+	# (see docs/concept/flora.md's "Pollination feedback"), and a saturating
+	# visit is recorded so ripening -- not pollination -- is what this test
+	# actually isolates.
+	var tree := ChoppableTree.new()
 	tree.position = _position_for_species("apple")
+	tree.bind_canopy(Sprite2D.new())
+	tree.record_pollination_visit(FruitingModel.BEARING_CYCLE_SECONDS, 0.0, FruitingModel.POLLINATION_SATURATION_VISITS)
 	entities_parent.add_child(tree)
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 
@@ -5373,8 +5385,15 @@ func test_harvest_peak_fruit_near_finds_nothing_before_anything_has_ripened():
 ## hardcoded assumption about when peak falls.
 func test_harvest_peak_fruit_near_reports_the_real_peak_state():
 	var species_id := "apple"
-	var tree := Node2D.new()
+	# A real ChoppableTree with a saturating pollination visit recorded, not
+	# a bare Node2D -- harvest_peak_fruit_near now reads pollination_visits_
+	# in_cycle for any insect-pollinated species (see docs/concept/flora.md's
+	# "Pollination feedback"), and this test is about peak-vs-off-peak
+	# ripeness reporting, not pollination.
+	var tree := ChoppableTree.new()
 	tree.position = _position_for_species(species_id)
+	tree.bind_canopy(Sprite2D.new())
+	tree.record_pollination_visit(FruitingModel.BEARING_CYCLE_SECONDS, 0.0, FruitingModel.POLLINATION_SATURATION_VISITS)
 	entities_parent.add_child(tree)
 	manager._loaded_trees[Vector2i(0, 0)] = [tree]
 
