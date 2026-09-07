@@ -11320,7 +11320,8 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 
 	_ecosystem.remove_region(chunk_coord)
 	for creature in _loaded_creatures.get(chunk_coord, []):
-		creature.free()
+		if not _rehome_wandered_creature(creature, chunk_coord):
+			creature.free()
 	_loaded_creatures.erase(chunk_coord)
 
 	for fish in _loaded_fish.get(chunk_coord, []):
@@ -11348,6 +11349,53 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for bird in _loaded_piscivore_birds.get(chunk_coord, []):
 		bird.free()
 	_loaded_piscivore_birds.erase(chunk_coord)
+
+
+## Whether a wild creature that has physically wandered away from the chunk
+## it is filed under should be re-homed to wherever it now stands rather
+## than freed outright with the rest of that chunk. Reported live: "animals
+## (like a boar chasing or a deer being hunted) don't survive chunk borders
+## and just disappear" (see docs/concept/ecosystem_dynamics.md "An
+## individually-rendered creature crossing a chunk border").
+##
+## _loaded_creatures tracks chunk membership by bookkeeping only, set once
+## when a creature spawns/reconciles and never updated as it actually
+## moves -- so a predator mid-hunt or prey mid-flee (CreatureMarker's
+## FLEE_SPEED/HUNT_SPEED, with no maximum chase distance) can cross into a
+## neighbouring chunk that is very much still loaded while still being
+## filed under the chunk it started in. Without this check, the moment that
+## original chunk falls outside UNLOAD_RADIUS, the still-visible creature
+## the player was watching would be deleted out from under them.
+##
+## Deliberately excludes anything _save_kept_animals/_save_growing_juveniles
+## already cover (tamed, tied, or an immature juvenile) -- those are already
+## serialized to THIS chunk's own save file (just above, in _unload_chunk)
+## and respawned fresh on its next load. Re-homing the same live instance
+## too would leave both a serialized record and a still-alive wandered
+## instance, producing a duplicate the moment the original chunk reloads. An
+## ordinary wild adult -- exactly the boar or deer in the report -- has no
+## such record, so this is the only protection it gets.
+func _rehome_wandered_creature(creature: Node2D, stale_chunk_coord: Vector2i) -> bool:
+	if not is_instance_valid(creature) or creature.info == null:
+		return false
+	if KeptAnimals.is_worth_keeping(float(creature.trust), creature.is_tied_up()):
+		return false
+	if GrowingJuveniles.is_worth_persisting(creature.age_seconds, creature.info.species):
+		return false
+	var current_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(creature.position))
+	if current_chunk == stale_chunk_coord:
+		return false
+	# Only a chunk this manager still actually considers loaded is a real
+	# destination -- a creature that outran even that (more than one chunk
+	# crossed between two update() calls, or genuinely wandered off into the
+	# unloaded distance) is not any more "still here" than before this fix,
+	# and is freed exactly as it always was.
+	if not _loaded_chunks.has(current_chunk):
+		return false
+	if not _loaded_creatures.has(current_chunk):
+		_loaded_creatures[current_chunk] = []
+	_loaded_creatures[current_chunk].append(creature)
+	return true
 
 
 func _modifications_path(chunk_coord: Vector2i) -> String:
