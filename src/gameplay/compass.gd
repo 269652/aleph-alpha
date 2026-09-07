@@ -44,3 +44,20 @@ static func reading_for(bearing: float, is_fine: bool) -> float:
 	if is_fine:
 		return fine_reading(bearing)
 	return rough_reading(bearing)
+
+
+## Which equipped item ids are members of the Compass family at all --
+## "rough_compass" and "compass" (docs/concept/wayfinding.md). A named,
+## testable function rather than an inline "== ... or == ..." comparison
+## repeated at every call site, mirroring TorchGlow.is_lit_item_id's own
+## reasoning: a future third compass tier has exactly one place to add
+## itself.
+static func is_compass_item_id(item_id: String) -> bool:
+	return item_id == "rough_compass" or item_id == "compass"
+
+
+## Which compass item id is the FINE quality tier -- see reading_for's own
+## rough/fine dispatch. Only "compass" (the iron-ingot recipe, item_catalog.
+## gd); "rough_compass" is always the crude 45-degree-snap tier.
+static func is_fine_item_id(item_id: String) -> bool:
+	return item_id == "compass"
