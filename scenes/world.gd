@@ -449,6 +449,10 @@ var _world_ready := false
 var _main_menu: MainMenu
 var _menu_backdrop: ColorRect
 var _menu_background: TextureRect
+## Kept alive (still covering the screen, frozen on whatever frame it ended
+## on) for the ENTIRE plain-interactive boot, not just its own ~3.2s
+## playback -- see _play_intro_splash()/_finish_intro_splash() for why.
+var _intro: IntroSplash
 var _loading_overlay: LoadingOverlay
 ## One-shot guard around the joining-client version of the loading stall (see
 ## _run_initial_client_chunk_load) -- true once that async chunk-load task has
@@ -664,29 +668,50 @@ func _ready() -> void:
 	# Boot logo intro (see docs/concept/intro_splash.md): triggered here, at
 	# the very top of _ready(), deliberately BEFORE any of the expensive
 	# synchronous per-boot setup below (EarthChunkManager, every shader
-	# layer, MushroomMarker.warm_art_cache, ~15 UI builder calls). A real
-	# live-launch measurement found that setup taking 80+ real seconds on a
-	# loaded machine, during which the OLD call site -- after all of it,
-	# behind the same args check reused below -- left the screen blank the
-	# entire time: the intro was structurally correct but started too late
-	# for anyone to ever see it (reported directly: "the intro scene... is
-	# still not shown before main menu"). The one process_frame yield below
-	# is enough for the engine to actually present the intro's first frame
-	# before this function's synchronous work resumes -- _ready() already
-	# awaits once above (the GitHub identity check), so suspending mid-
-	# _ready() is an established pattern here, not a new one. _world_ready
-	# is still false at this point, so the _process()/_unhandled_input()
-	# no-op guard just below is unaffected: this only ever adds the self-
-	# contained IntroSplash overlay, which touches none of the state that
-	# guard protects. `args` is computed once, here, and reused unchanged
-	# by the solo/server/join dispatch further down.
+	# layer, MushroomMarker.warm_art_cache, ~15 UI builder calls) -- AND,
+	# critically, this now fully AWAITS the intro finishing before letting
+	# that setup start at all.
+	#
+	# An earlier pass here (moving the trigger to the top of _ready(), a real
+	# fix for a real bug: an 80+-second blank screen on a loaded machine)
+	# only awaited a single process_frame, then let the heavy setup below
+	# start immediately while the intro was still nominally "playing" in the
+	# background. That undersold the actual bug. A live, screenshotted
+	# launch (not just a code trace -- see intro_splash.gd's own doc comment
+	# on why a code trace alone was wrong once already for this exact
+	# feature) showed the player never actually sees the intro at all: the
+	# heavy setup's own synchronous work blocks the engine from rendering
+	# any further intro frames the instant it starts, so what's on screen
+	# for its whole duration is whatever was painted at the single yielded
+	# frame -- and since that setup ALSO builds the ~15 pieces of real game
+	# UI (hotbar, health bar, minimap...) as direct children of the SAME
+	# `_ui` CanvasLayer the intro lives on, those newly-added nodes render
+	# on top of it once it's their turn, showing the raw, not-yet-populated
+	# HUD scaffold underneath instead. Reported directly, again, after the
+	# single-frame-yield fix already shipped: "the animated intro is still
+	# not showing... postpone the ui to after intro" -- exactly what that
+	# fix hadn't actually done.
+	#
+	# The real fix: `await _play_intro_splash()` below blocks _ready() at
+	# this line until IntroSplash's own `finished` signal fires -- on
+	# completion OR an early skip (see that scene's own doc comment; a
+	# player who skips gets this instantly, so nothing here can trap them
+	# behind unskippable ceremony). With nothing else competing for the main
+	# thread, the intro now plays smoothly for real. It stays alive (see
+	# `_intro`) through the heavy setup that follows -- frozen on its last
+	# frame rather than freed -- so the raw HUD scaffold is never exposed
+	# either; _finish_intro_splash() frees it only once _show_main_menu() is
+	# about to replace it, at the natural end of the interactive-launch
+	# dispatch further down. `args` is computed once, here, and reused
+	# unchanged by the solo/server/join dispatch further down; _world_ready
+	# is still false throughout this whole await, so the _process()/
+	# _unhandled_input() no-op guard just below is unaffected.
 	var args := OS.get_cmdline_user_args()
 	var plain_interactive_launch := not (
 		"--solo" in args or "--server" in args or _has_network_arg(args)
 	)
 	if plain_interactive_launch:
-		_play_intro_splash()
-		await get_tree().process_frame
+		await _play_intro_splash()
 
 	# Real bug found live: _process()/_unhandled_input() run every frame
 	# regardless of whether _ready() returned early above -- before this
@@ -799,12 +824,16 @@ func _ready() -> void:
 		_start_server()
 	elif _has_network_arg(args):
 		_start_client(args)
-	# else: plain interactive launch -- the boot logo intro was already
-	# started at the top of _ready() (see the comment there for why), and
-	# its own `finished` handler shows the main menu (New Game / Host /
-	# Join / class pick), holding the world paused until the player
-	# chooses, rather than dropping straight into a default single-player
-	# game.
+	elif plain_interactive_launch:
+		# The boot logo intro (already fully played out and awaited at the
+		# top of _ready() -- see the comment there) has been sitting frozen
+		# on its last frame, covering the screen, for the whole heavy setup
+		# above. This is the natural end of that setup, so it's also the
+		# natural place to hand off: free the intro and show the main menu
+		# (New Game / Host / Join / class pick) in the same beat, so the
+		# player never sees a gap between them.
+		_finish_intro_splash()
+		_show_main_menu()
 
 
 ## Path to the menu's painted backdrop (see concept art prompt in the commit
@@ -814,21 +843,37 @@ func _ready() -> void:
 const MENU_BACKGROUND_PATH := "res://assets/backgrounds/main.png"
 
 
-## Plays the boot logo intro once (see IntroSplash, docs/concept/
-## intro_splash.md), then shows the main menu -- the intro doesn't know what
-## comes after it (just emits `finished`, on completion OR an early skip), so
-## this is the one place that decides. Called from the TOP of _ready(), not
-## "just above" here -- see that call site's own comment for why (started
-## before the expensive per-boot setup, not after it) -- so it never runs for
+## Plays the boot logo intro and AWAITS its own `finished` signal -- on
+## completion or an early skip alike (see IntroSplash, docs/concept/
+## intro_splash.md) -- so the caller genuinely cannot proceed past this line
+## until the intro is done. Called and awaited from the TOP of _ready(), not
+## "just above" here -- see that call site's own comment for the full story
+## (a real bug: awaiting only one frame here let the heavy per-boot setup
+## race the intro instead of waiting for it) -- so it never runs for
 ## --solo/--server/join launches (those are dev/diagnostic or straight-to-
-## multiplayer paths that should stay instant), same as before.
+## multiplayer paths that should stay instant), same as before. Deliberately
+## does NOT free the intro node or show the main menu itself: it stays alive,
+## covering the screen, until _finish_intro_splash() releases it at the
+## natural end of the interactive-launch dispatch further down -- see that
+## function's own doc comment for why.
 func _play_intro_splash() -> void:
-	var intro := IntroSplash.new()
-	_ui.add_child(intro)
-	intro.finished.connect(func():
-		intro.queue_free()
-		_show_main_menu()
-	)
+	_intro = IntroSplash.new()
+	_ui.add_child(_intro)
+	await _intro.finished
+
+
+## Releases the boot logo intro (see _play_intro_splash()) once the main menu
+## is ready to replace it. Not called from _play_intro_splash()'s own await
+## site -- the intro is deliberately left alive, frozen on its last frame,
+## for the ENTIRE heavy per-boot setup in between, so the raw/not-yet-
+## populated UI underneath (hotbar, health bar, minimap -- all direct
+## siblings of the intro on the same `_ui` CanvasLayer, built as part of
+## that setup) is never exposed to the player. See the real live-launch
+## finding that motivated this in _ready()'s own intro-trigger comment.
+func _finish_intro_splash() -> void:
+	if _intro:
+		_intro.queue_free()
+		_intro = null
 
 
 ## Builds the start-up main menu (see MainMenu). The world is paused behind it

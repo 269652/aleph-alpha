@@ -113,16 +113,23 @@ decoupled from what follows it.
 right after the license/integrity gate, before any of the expensive
 synchronous per-boot setup (`EarthChunkManager` construction, every
 shader layer, `MushroomMarker.warm_art_cache`, ~15 UI builder calls) —
-for the plain "no `--solo`, no `--server`, no join argument" case, then
-`await`s one `process_frame` so the engine actually presents that first
-frame before the rest of `_ready()` resumes. Every other launch path is
-untouched; the solo/server/join dispatch later in `_ready()` reuses the
-same `args` computed at the top rather than re-parsing them.
+for the plain "no `--solo`, no `--server`, no join argument" case, and
+`await`s `_play_intro_splash()` in full: `_ready()` genuinely cannot
+proceed past that line until `IntroSplash.finished` fires, on natural
+completion or an early skip alike. Every other launch path is untouched;
+the solo/server/join dispatch later in `_ready()` reuses the same `args`
+computed at the top rather than re-parsing them.
 
-**Not** wired at the point the code visually reads as belonging (right
-before `_show_main_menu()`, at the end of the interactive-launch branch)
-— see "A real early-launch bug" below for why that reads-naturally
-placement was actually the bug.
+The intro node itself is deliberately **not** freed the instant it
+finishes. `World._intro` holds it alive, still covering the screen
+(frozen on its last frame), for the entire heavy per-boot setup that
+follows — freed only by `_finish_intro_splash()`, called in the same
+beat as `_show_main_menu()`, at the natural end of the interactive-launch
+dispatch (where the code visually reads as belonging). See "A second
+early-launch bug" below for why awaiting only a single frame here, and
+freeing the intro the instant it finished, was itself the bug — a first
+pass at fixing this feature's launch-timing problem that turned out not
+to fully fix it.
 
 ### A real early-launch bug (found 2026-09-07, fixed same day)
 
@@ -173,6 +180,76 @@ already carves out for this exact function (nothing else in `_ready()`'s
 instead via real timestamped launches — the same live-launch discipline
 this fix's own root cause required to find in the first place.
 
+### A second early-launch bug (found and fixed 2026-09-08)
+
+The pass above genuinely fixed its own bug — the intro's first frame does
+render almost immediately instead of after an 80-second blank screen —
+but reported again anyway, in almost the reporter's exact original words:
+"the animated intro is still not showing… postpone the ui to after
+intro." Both reports are real; they are reports of two *different* bugs
+that happen to look the same from outside ("I never really see the
+intro").
+
+The single-`process_frame` yield that pass added was enough to get the
+intro's first frame *painted*, but nowhere near enough to get the whole
+~3.2s sequence *watched*: `_ready()` resumed its own heavy synchronous
+setup on the very next line, without ever waiting for
+`IntroSplash.finished`. That setup — `EarthChunkManager`, every shader
+layer, `MushroomMarker.warm_art_cache`, and, critically, ~15 `_build_*`
+calls that each add a new top-level Control to the *same* `_ui`
+`CanvasLayer` the intro itself lives on — blocks the engine from
+rendering any further intro frames the instant it starts (single-threaded
+`_ready()`, same as the first bug's own root cause), and every one of
+those newly-added builders lands at a *higher* sibling index than the
+intro added before them, so each renders on top of it in turn. The net
+effect, confirmed on a real, timestamped, screenshotted launch: the
+player sees the intro's first frame for a beat, then the raw,
+not-yet-populated `UI` scaffold (`DebugLabel`'s literal placeholder text,
+an empty progress bar, a bare minimap dot) for however long the heavy
+setup takes, then the finished main menu — the intro's own ~3.2s
+animation never actually plays out on screen at all.
+
+**A methodology note worth recording, because it cost real time on this
+same pass.** The first, most direct way to check "is the fix working" —
+add a repeating `Timer` that dumps `get_viewport().get_texture().
+get_image()` to disk once a second — reproduced the *symptom* faithfully
+against the buggy code (a real ~11.5-second gap between captures,
+confirmed by file mtimes, matching the blocked-`_ready()` theory exactly)
+but then, re-run against the *fixed* code, appeared to show the same raw
+scaffold for the first few seconds — which would have meant the fix
+hadn't worked. It had: a *second* diagnostic, writing timestamped lines
+straight to a file with an explicit `flush()` after each one (bypassing
+stdout's own full-buffering-once-redirected-to-a-file behaviour, which
+had separately made a real multi-second gap between plain `print()`
+calls look instantaneous in a captured log on an earlier attempt),
+proved via `Time.get_ticks_msec()` that the intro really does play its
+full natural `elapsed=3.2` seconds before `_ready()` resumes. The
+viewport-texture screenshot method is unreliable for the first several
+frames after a major scene-tree change — it can return stale or default
+buffer content before the render pipeline has produced a first real
+frame — and should not be trusted for boot-sequence timing without a
+signal- or timestamp-based cross-check. (On the same live machine, the
+heavy per-boot setup this pass exposed the intro to measured ~54 real
+seconds, cold — the "80+ seconds on a loaded machine" the first bug's
+own writeup measured was not an exaggeration.)
+
+**The fix:** `_ready()` now `await`s `_play_intro_splash()` itself, not
+just one frame — see "Wiring" above for the mechanism (the intro stays
+alive through the heavy setup rather than being freed the instant it
+finishes, so the raw scaffold is never exposed either, on top of the
+intro now genuinely playing out for real with nothing competing with it
+for the main thread). This also happens to resolve the first pass's own
+"does not animate smoothly while the world loads" gap — not by giving
+the heavy setup its own yield points, which nothing here attempts, but
+because the intro simply isn't sharing the screen with that setup any
+more.
+
+Verified the same way as the first bug, for the same structural reason
+(a statement-ordering change with no natural unit-test seam): real,
+timestamped, flushed-to-disk launches, not a code trace alone — a code
+trace here would have (and, on the first attempt at diagnosing this
+exact pass, briefly did) looked like the mechanism was already correct.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
@@ -188,11 +265,16 @@ this fix's own root cause required to find in the first place.
   real early-launch bug" above. The intro's first frame now renders
   almost immediately rather than after a blank-screen wait that measured
   80+ seconds on a loaded machine.
-- ⬜ Does not animate smoothly while the world loads in the background —
-  it is visible immediately, but can sit frozen on whichever frame it
-  reached once the heavy synchronous per-boot setup resumes, since that
-  setup is not itself broken into yield points. A real, deliberately
-  deferred gap, not attempted in the early-launch-bug pass above.
+- ✅ The heavy per-boot setup (and the rest of the game's UI it builds)
+  no longer starts until the intro has genuinely finished playing, and
+  the intro stays alive, covering the screen, for the whole of that setup
+  afterward — see "A second early-launch bug" above. Confirmed on a real,
+  timestamped launch: the intro plays its full natural ~3.2s, then the
+  heavy setup runs (measured ~54s cold on this machine) with the intro's
+  last frame still covering the screen throughout, then the main menu
+  replaces it directly. The player now actually watches the intro, which
+  the first fix's own "first frame renders almost immediately" bar did
+  not guarantee.
 - ⬜ No audio. A logo intro without a sting/whoosh is a real, honest gap
   (this project has no music/SFX system wired up to hook into yet at
   all), not something this pass attempts.
