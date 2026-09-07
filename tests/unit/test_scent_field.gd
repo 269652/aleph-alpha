@@ -160,6 +160,74 @@ func test_a_single_flower_attracts_more_than_bare_ground():
 	)
 
 
+# -- a per-entry scent_strength override lets a NON-flower source (a tree ---
+# -- blossom) join the field, additively -----------------------------------
+#
+# concentration_at/gradient_direction were hardcoded to FlowerSpecies.
+# scent_strength, so nothing outside that roster could ever join the field --
+# a tree blossom has no entry there and never will (see docs/concept/
+# flora.md#tree-blossoms-emit-real-scent-too: TreeSpecies is its own,
+# separate roster). An optional per-entry "scent_strength" is read FIRST,
+# falling back to the species-keyed lookup only when it is absent -- additive
+# and backward compatible, so every existing flower-only caller (both real
+# call sites, EarthChunkManager's spawn-multiplier probe and
+# AmbientFlyerMarker's gradient sniff) is unaffected.
+
+func _scented(position: Vector2, strength: float) -> Dictionary:
+	return {"position": position, "species": "not_a_real_flower_species", "scent_strength": strength}
+
+
+func test_an_entry_with_an_explicit_scent_strength_ignores_the_species_lookup():
+	# "not_a_real_flower_species" would fall back to FlowerSpecies' own
+	# _FALLBACK profile (scent 0.4) if the override were not read first --
+	# a nonzero result here would be ambiguous about which path produced it,
+	# so the override is pinned to a value that fallback could never produce.
+	var entries := [_scented(Vector2.ZERO, 2.5)]
+	assert_almost_eq(
+		ScentField.concentration_at(Vector2.ZERO, entries, "summer", TILE), 2.5, 0.001
+	)
+
+
+func test_a_zero_scent_strength_override_contributes_nothing():
+	var entries := [_scented(Vector2.ZERO, 0.0)]
+	assert_eq(ScentField.concentration_at(Vector2.ZERO, entries, "summer", TILE), 0.0)
+
+
+func test_scent_strength_overrides_still_fall_off_and_superpose_normally():
+	var near := ScentField.concentration_at(
+		Vector2(TILE, 0), [_scented(Vector2.ZERO, 1.0)], "summer", TILE
+	)
+	var far := ScentField.concentration_at(
+		Vector2(TILE * 4.0, 0), [_scented(Vector2.ZERO, 1.0)], "summer", TILE
+	)
+	assert_gt(near, far, "an overridden source should fall off with distance exactly like a flower")
+
+	var one := ScentField.concentration_at(Vector2.ZERO, [_scented(Vector2.ZERO, 1.0)], "summer", TILE)
+	var two := ScentField.concentration_at(
+		Vector2.ZERO, [_scented(Vector2.ZERO, 1.0), _scented(Vector2(2.0, 0.0), 1.0)], "summer", TILE
+	)
+	assert_gt(two, one, "two overridden sources should superpose like two flowers")
+
+
+## A blossom (scent_strength override) and an ordinary flower (species-keyed)
+## must combine in the SAME field -- this is the whole point of the
+## override being additive rather than a parallel, separate mechanism.
+func test_an_override_source_and_a_species_keyed_flower_superpose_together():
+	var mixed := ScentField.concentration_at(
+		Vector2.ZERO, [_scented(Vector2.ZERO, 1.0), _flower(Vector2(2.0, 0.0))], "summer", TILE
+	)
+	var flower_alone := ScentField.concentration_at(
+		Vector2.ZERO, [_flower(Vector2(2.0, 0.0))], "summer", TILE
+	)
+	assert_gt(mixed, flower_alone, "the overridden source should add to, not replace, the flower's own contribution")
+
+
+func test_gradient_direction_also_honours_the_scent_strength_override():
+	var entries := [_scented(Vector2(TILE * 3.0, 0.0), 1.0)]
+	var direction := ScentField.gradient_direction(Vector2.ZERO, entries, "summer", TILE)
+	assert_gt(direction.x, 0.5, "should steer toward the overridden source, which lies east")
+
+
 ## ...but a whole field must clearly out-pull it, or clumping stops mattering.
 func test_a_field_out_pulls_a_single_flower():
 	var field: Array = []

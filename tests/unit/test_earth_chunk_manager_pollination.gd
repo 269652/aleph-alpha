@@ -12,6 +12,7 @@ const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const ForageScheduler = preload("res://src/gameplay/forage_scheduler.gd")
 const FruitingModel = preload("res://src/world/fruiting_model.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 var manager: EarthChunkManager
 var tile_map_layer: TileMapLayer
@@ -122,3 +123,30 @@ func test_a_wind_pollinated_tree_can_be_harvested_with_zero_pollinator_visits():
 
 	var found := manager.harvest_peak_fruit_near(position, 10.0)
 	assert_eq(found.get("species_id", ""), "walnut")
+
+
+# -- blossoms_near attaches a real scent_strength (see docs/concept/flora.md
+# -- #tree-blossoms-emit-real-scent-too) -------------------------------------
+#
+# Without this, a blossom entry fed into ScentField.concentration_at falls
+# back to FlowerSpecies' own _FALLBACK profile (an unrelated 0.4, chosen for
+# an unrecognized FLOWER id, not a real, deliberate blossom value) -- an
+# accident this makes into a real, tested, species-specific number instead.
+
+func test_a_blossoming_tree_carries_its_real_species_scent_strength():
+	var position := _position_for_species("apple")
+	var tree := _tree_at(position)
+	# blossoms_near reads the NODE's own species_bias directly (unlike
+	# harvest_peak_fruit_near/step_fruiting, which derive it from the
+	# position's genome via _forage_scheduler.genome_for) -- a fresh
+	# ChoppableTree defaults to 0.5 (walnut), so it has to be set explicitly
+	# to match the position this test already chose for "apple".
+	tree.species_bias = ForageScheduler.new().genome_for(position).species_bias
+	manager.set_world_age_seconds(0.1 * SeasonCycle.SECONDS_PER_YEAR)  # spring
+	assert_eq(manager.current_season(), "spring", "precondition: blossoms_near is spring-only")
+
+	var blossoms := manager.blossoms_near(position, 10)
+	assert_eq(blossoms.size(), 1, "precondition: the tree should be found in blossom")
+	assert_almost_eq(
+		float(blossoms[0]["scent_strength"]), TreeSpecies.blossom_scent_for("apple"), 0.001
+	)

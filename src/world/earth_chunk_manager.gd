@@ -7046,6 +7046,15 @@ func blossoms_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 					# flower already is regardless of how full it turns out
 					# to be (see PollinatorForaging.is_worth_visiting).
 					"nectar": 1.0,
+					# ScentField.concentration_at reads this key FIRST, ahead
+					# of its own FlowerSpecies-keyed lookup -- species_id
+					# here is a TreeSpecies id, which FlowerSpecies has never
+					# heard of and never will (see docs/concept/flora.md
+					# #tree-blossoms-emit-real-scent-too). Without this, a
+					# blossom silently rode FlowerSpecies' own _FALLBACK
+					# profile's unrelated 0.4 default for an unrecognized
+					# species id.
+					"scent_strength": TreeSpecies.blossom_scent_for(species_id),
 				})
 	return out
 
