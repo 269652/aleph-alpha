@@ -1541,6 +1541,37 @@ func test_eating_an_apple_relieves_hunger_thirst_and_nutrition_by_its_real_compo
 	assert_almost_eq(player.survival.nutrition, nutrients["vitamins"], 0.0001)
 
 
+## The second named gap this closes (see docs/concept/metabolism.md's "the
+## two named mushroom gaps"): a predator/forager's -- here, the PLAYER's
+## own -- nutrition from eating a mushroom must scale with how much of it
+## was actually left (its own real, already-stage-scaled mass_kg), not the
+## flat whole-item amount regardless of how diminished it visibly was.
+func test_eating_a_partially_bitten_mushroom_yields_mass_scaled_nutrients():
+	const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
+	player.survival.advance(100000.0)
+	player.survival.nutrition = 0.0
+	player.inventory.add(_item_catalog.make("parasol_bitten", 2), 1)
+
+	assert_true(player.eat_food("parasol_bitten"))
+
+	var mass_fraction := _item_catalog.remaining_mass_fraction_for(_item_catalog.make("parasol_bitten", 2))
+	var nutrients: Dictionary = NutrientRelease.consume("parasol_bitten", mass_fraction)
+	assert_almost_eq(player.survival.hunger, 1.0 - nutrients["sugar"], 0.0001)
+	assert_almost_eq(player.survival.nutrition, nutrients["vitamins"], 0.0001)
+
+
+## A more-eaten specimen must yield strictly less than a less-eaten one of
+## the same species -- the real, observable consequence of the fix above,
+## not just an internal accounting detail.
+func test_a_more_bitten_mushroom_yields_less_nutrition_than_a_less_bitten_one():
+	const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
+	var lightly_bitten_fraction := _item_catalog.remaining_mass_fraction_for(_item_catalog.make("parasol_bitten", 1))
+	var heavily_bitten_fraction := _item_catalog.remaining_mass_fraction_for(_item_catalog.make("parasol_bitten", 2))
+	var lightly_bitten_relief: float = NutrientRelease.consume("parasol_bitten", lightly_bitten_fraction)["sugar"]
+	var heavily_bitten_relief: float = NutrientRelease.consume("parasol_bitten", heavily_bitten_fraction)["sugar"]
+	assert_gt(lightly_bitten_relief, heavily_bitten_relief, "less relief -- more of it was already eaten")
+
+
 func test_eating_an_unmodeled_food_keeps_the_old_flat_hunger_relief():
 	player.survival.advance(100000.0)
 	player.inventory.add(_item_catalog.make("fish"), 1)

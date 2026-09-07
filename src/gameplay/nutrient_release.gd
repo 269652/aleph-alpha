@@ -39,12 +39,22 @@ const BITE_MATERIAL: String = "fruit_flesh"
 const NUTRIENT_UNIT_SCALE: float = 4.0
 
 
-## `food_id`'s real nutrient yield from one whole-item bite: `{"crushed":
-## bool, "water": float, "sugar": float, "vitamins": float}`. An unmodeled
-## food, or a bite that somehow does not resolve to "crush" (never happens
-## at BITE_MOMENTUM_KG_M_S against fruit_flesh today, but checked for real
+## `food_id`'s real nutrient yield from one bite: `{"crushed": bool,
+## "water": float, "sugar": float, "vitamins": float}`. An unmodeled food,
+## or a bite that somehow does not resolve to "crush" (never happens at
+## BITE_MOMENTUM_KG_M_S against fruit_flesh today, but checked for real
 ## rather than assumed), releases nothing.
-static func consume(food_id: String) -> Dictionary:
+##
+## `mass_fraction` is how much of a whole, undiminished item this one bite
+## event actually consumed -- see docs/concept/metabolism.md's "the two
+## named mushroom gaps": a partially-bitten mushroom (or any future
+## partial-consumption food) should yield proportionally less, not the
+## flat whole-item amount regardless of what was actually left. Defaults
+## to 1.0 (a whole item), so every caller that predates this parameter
+## keeps behaving exactly as it always did. Clamped to a real [0, 1] --
+## a bite can never yield MORE than one whole item's worth, nor a negative
+## amount, whatever an upstream caller passes.
+static func consume(food_id: String, mass_fraction: float = 1.0) -> Dictionary:
 	var composition: Dictionary = FoodComposition.new().composition_for(food_id)
 	if composition.is_empty():
 		return {"crushed": false, "water": 0.0, "sugar": 0.0, "vitamins": 0.0}
@@ -52,9 +62,10 @@ static func consume(food_id: String) -> Dictionary:
 	var verdict := resolver.resolve_impact(BITE_MOMENTUM_KG_M_S, BITE_GEOMETRY, BITE_MATERIAL)
 	if verdict != "crush":
 		return {"crushed": false, "water": 0.0, "sugar": 0.0, "vitamins": 0.0}
+	var fraction := clampf(mass_fraction, 0.0, 1.0)
 	return {
 		"crushed": true,
-		"water": float(composition.get("water", 0.0)) * NUTRIENT_UNIT_SCALE,
-		"sugar": float(composition.get("sugar", 0.0)) * NUTRIENT_UNIT_SCALE,
-		"vitamins": float(composition.get("vitamins", 0.0)) * NUTRIENT_UNIT_SCALE,
+		"water": float(composition.get("water", 0.0)) * NUTRIENT_UNIT_SCALE * fraction,
+		"sugar": float(composition.get("sugar", 0.0)) * NUTRIENT_UNIT_SCALE * fraction,
+		"vitamins": float(composition.get("vitamins", 0.0)) * NUTRIENT_UNIT_SCALE * fraction,
 	}

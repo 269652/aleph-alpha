@@ -191,3 +191,39 @@ func test_calories_from_food_mass_scales_linearly_with_mass():
 
 func test_calories_from_zero_food_mass_is_zero():
 	assert_almost_eq(Metabolism.calories_from_food_mass_kg(0.0), 0.0, 0.0001)
+
+
+# -- feeding from an existing hunger-relief fraction (wildlife bites) --------
+#
+# Wildlife's existing bite call sites (CreatureNeeds.feed_amount, the
+# fruit/mushroom NutrientRelease "sugar" fraction) already produce a real,
+# 0..1-scaled fraction of a full daily hunger meter -- not a raw food mass.
+# feed_hunger_relief lets every one of those existing call sites feed the
+# same real Metabolism instance without a separate per-food-type mass
+# table: relieving a WHOLE day's hunger (relief_fraction 1.0) is grounded
+# against this creature's OWN real BMR for one day, so a big animal's "one
+# full meal" implies more real calories than a small one's for free.
+
+func test_feeding_a_whole_days_hunger_relief_gains_exactly_one_days_bmr_worth_of_mass():
+	var seed_mass := 20.0
+	var metabolism := Metabolism.new(seed_mass)
+	metabolism.feed_hunger_relief(1.0)
+	var expected_gain := Metabolism.mass_delta_kg_for_calories(Metabolism.bmr_kcal_per_day(seed_mass))
+	assert_almost_eq(metabolism.current_mass_kg, seed_mass + expected_gain, 0.0001)
+
+
+func test_feeding_half_a_days_hunger_relief_gains_half_as_much_mass():
+	var whole := Metabolism.new(20.0)
+	whole.feed_hunger_relief(1.0)
+	var half := Metabolism.new(20.0)
+	half.feed_hunger_relief(0.5)
+	var whole_gain := whole.current_mass_kg - 20.0
+	var half_gain := half.current_mass_kg - 20.0
+	assert_almost_eq(half_gain, whole_gain * 0.5, 0.0001)
+
+
+func test_feeding_zero_or_negative_hunger_relief_does_nothing():
+	var metabolism := Metabolism.new(20.0)
+	metabolism.feed_hunger_relief(0.0)
+	metabolism.feed_hunger_relief(-1.0)
+	assert_almost_eq(metabolism.current_mass_kg, 20.0, 0.0001)

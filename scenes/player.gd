@@ -34,6 +34,7 @@ const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const VenomModel = preload("res://src/gameplay/venom_model.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 const MushroomToxin = preload("res://src/gameplay/mushroom_toxin.gd")
 const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
 const Sickness = preload("res://src/gameplay/sickness.gd")
@@ -1821,13 +1822,22 @@ func grant_starter_items(item_ids: Array) -> void:
 ## A food with a real composition (see NutrientRelease/
 ## docs/concept/material_dsl.md) resolves a real bite-scale crush and
 ## routes its actual water/sugar/vitamins to thirst/hunger/nutrition; an
-## unmodeled food (everything today except apple/cherry) falls back to
-## exactly the old flat EAT_HUNGER_RELIEF, untouched.
+## unmodeled food (everything today except apple/cherry/mushrooms) falls
+## back to exactly the old flat EAT_HUNGER_RELIEF, untouched.
+##
+## The real nutrients are scaled by how much of a whole item this specific
+## carried Item actually still is (`_item_catalog.
+## remaining_mass_fraction_for`) -- see docs/concept/metabolism.md's "the
+## two named mushroom gaps": a mushroom already diminished by real bite
+## stages before pickup must yield proportionally less, not the flat
+## whole-item amount. 1.0 (no change) for anything whose mass was never
+## diminished in the first place, so every other food is unaffected.
 func eat_food(item_id: String) -> bool:
 	for stack in inventory.stacks():
 		if stack.item.id == item_id and stack.item.kind == "food":
+			var mass_fraction := _item_catalog.remaining_mass_fraction_for(stack.item)
 			inventory.remove(item_id, 1)
-			var nutrients: Dictionary = NutrientRelease.consume(item_id)
+			var nutrients: Dictionary = NutrientRelease.consume(item_id, mass_fraction)
 			if nutrients.get("crushed", false):
 				survival.drink(nutrients.get("water", 0.0))
 				survival.eat(nutrients.get("sugar", 0.0))
@@ -1843,8 +1853,14 @@ func eat_food(item_id: String) -> bool:
 			# Wild mushrooms (see docs/concept/mushrooms.md's "Eating one" +
 			# "Identification") -- a real hazard for a toxic species, and real
 			# field experience toward identifying the whole roster either way.
-			if MushroomSpecies.IDS.has(item_id):
-				_eat_mushroom(item_id)
+			# Reads through a "_bitten" id's own base species (see
+			# MushroomBiting.base_item_id_for) so a partially-eaten mushroom
+			# still triggers a real toxic species' effect -- it used to check
+			# the raw (possibly "_bitten") id directly, which never matched
+			# any real MushroomSpecies id at all.
+			var mushroom_species_id := MushroomBiting.base_item_id_for(item_id)
+			if MushroomSpecies.IDS.has(mushroom_species_id):
+				_eat_mushroom(mushroom_species_id)
 			return true
 	return false
 

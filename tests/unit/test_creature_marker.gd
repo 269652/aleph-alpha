@@ -2330,15 +2330,24 @@ class ForageWorld:
 	func take_worm_at(_p: Vector2) -> bool:
 		return true
 
-	## Records every bite_stages value it was called with (see
-	## docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and
-	## real toxic effects") so a test can confirm the caller's own real,
-	## mass-scaled bite count actually reached here, not a hardcoded 1.
+	## Records every bite_stages REQUESTED (see docs/concept/soil_fauna.md's
+	## "Progressive, mass-scaled bites, and real toxic effects") so a test
+	## can confirm the caller's own real, mass-scaled bite count actually
+	## reached here, not a hardcoded 1.
 	var taken_mushroom_bite_stages: Array = []
-	func take_mushroom_at(p: Vector2, bite_stages: int = 1) -> String:
+	## How many of a requested bite_stages this stub reports as actually
+	## APPLIED -- settable per test to simulate a mushroom with less real
+	## capacity left than the eater requested (see docs/concept/
+	## metabolism.md's "the two named mushroom gaps": the real applied
+	## count can be clamped below the request near MushroomBiting.
+	## MAX_BITE_STAGES). -1 (the default) means "apply exactly what was
+	## requested" -- the ordinary, un-clamped case.
+	var mushroom_stages_applied_override := -1
+	func take_mushroom_at(p: Vector2, bite_stages: int = 1) -> Dictionary:
 		taken_mushrooms.append(p)
 		taken_mushroom_bite_stages.append(bite_stages)
-		return mushroom_species_to_take
+		var applied := bite_stages if mushroom_stages_applied_override < 0 else mushroom_stages_applied_override
+		return {"species": mushroom_species_to_take, "stages_applied": applied}
 
 	func solid_obstacles_near(_p: Vector2, _r: float) -> Array:
 		return []
@@ -2543,6 +2552,35 @@ func test_a_boar_eats_a_mushroom_using_its_own_mass_scaled_bite_count():
 		"a boar's own real mass-scaled bite count should reach take_mushroom_at, not a hardcoded 1"
 	)
 	assert_eq(world.taken_mushroom_bite_stages[0], MushroomBiting.MAX_BITE_STAGES)
+
+
+## The real gap this closes (see docs/concept/metabolism.md's "the two
+## named mushroom gaps"): a forager's nutrition must scale by how many
+## stages this ONE bite event actually APPLIED -- which can be clamped
+## below what it requested, near the real per-mushroom cap -- not always
+## the full whole-item amount regardless of what was actually left.
+func test_a_boar_biting_an_already_diminished_mushroom_gets_proportionally_less_nutrition():
+	var NutrientRelease := preload("res://src/gameplay/nutrient_release.gd")
+	var MushroomBiting := preload("res://src/gameplay/mushroom_biting.gd")
+	var world := ForageWorld.new()
+	world.mushrooms = [{"position": Vector2(20, 0), "species": "champignon"}]
+	# Only 1 of MAX_BITE_STAGES (3) is actually left, as if something else
+	# had already taken 2 real bites before the boar arrived -- even though
+	# a boar's own mass-scaled request asks for all 3.
+	world.mushroom_stages_applied_override = 1
+	var boar := _hungry_grazer("boar", world)
+	boar._needs.thirst = 0.3
+	for _i in 900:
+		boar._process(1.0 / 60.0)
+		if not world.taken_mushrooms.is_empty():
+			break
+	assert_false(world.taken_mushrooms.is_empty(), "the boar should have taken the mushroom")
+	var expected_fraction := 1.0 / float(MushroomBiting.MAX_BITE_STAGES)
+	var nutrients: Dictionary = NutrientRelease.consume("champignon", expected_fraction)
+	assert_almost_eq(
+		boar._needs.hunger, 1.0 - nutrients["sugar"], 0.01,
+		"only 1 of 3 real stages actually landed -- nutrition should scale down to match, not assume the whole mushroom"
+	)
 
 
 ## A boar's TARGET SELECTION still never consults MushroomSpecies.is_toxic

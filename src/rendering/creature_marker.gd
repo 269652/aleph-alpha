@@ -2504,6 +2504,12 @@ func _take_forage_bite() -> void:
 		return
 	var got := false
 	var species := ""
+	## How many of MushroomBiting.MAX_BITE_STAGES this one FOOD_MUSHROOM
+	## bite event actually applied -- see docs/concept/metabolism.md's "the
+	## two named mushroom gaps": can be clamped below the request near the
+	## real per-mushroom cap, so nutrition must scale by what actually
+	## landed, not what was merely requested.
+	var mushroom_stages_applied := 0
 	match _forage_kind:
 		GrazerForaging.FOOD_UNDERFOOT:
 			got = true  # it is standing in its food; there is nothing to remove
@@ -2524,15 +2530,19 @@ func _take_forage_bite() -> void:
 				var bite_stages := MushroomBiting.bites_per_visit_for(
 					CreatureMass.mass_kg_for(info.species if info != null else "")
 				)
-				species = _world.take_mushroom_at(_forage_target, bite_stages)
+				var result: Dictionary = _world.take_mushroom_at(_forage_target, bite_stages)
+				species = String(result.get("species", ""))
+				mushroom_stages_applied = int(result.get("stages_applied", 0))
 				got = species != ""
 		GrazerForaging.FOOD_SEED:
 			got = _world.has_method("take_seed_at") and _world.take_seed_at(_forage_target) != ""
 		GrazerForaging.FOOD_WORM:
 			got = _world.has_method("take_worm_at") and _world.take_worm_at(_forage_target)
 	if got:
-		if _forage_kind == GrazerForaging.FOOD_FRUIT or _forage_kind == GrazerForaging.FOOD_MUSHROOM:
+		if _forage_kind == GrazerForaging.FOOD_FRUIT:
 			_apply_nutrient_bite(species)
+		elif _forage_kind == GrazerForaging.FOOD_MUSHROOM:
+			_apply_nutrient_bite(species, float(mushroom_stages_applied) / float(MushroomBiting.MAX_BITE_STAGES))
 		else:
 			_needs.feed()
 		if _forage_kind == GrazerForaging.FOOD_MUSHROOM:
@@ -2556,8 +2566,16 @@ func _take_forage_bite() -> void:
 ## but checked for real rather than assumed -- an impact that somehow
 ## doesn't resolve to "crush") falls back to the flat full-meter
 ## _needs.feed() every other forage kind uses.
-func _apply_nutrient_bite(species: String) -> void:
-	var nutrients: Dictionary = NutrientRelease.consume(species)
+##
+## `mass_fraction` is how much of a whole item this one bite actually
+## consumed (default 1.0 -- a fruit bite is always a whole fruit). A
+## mushroom bite passes its own real applied-stage fraction (see
+## docs/concept/metabolism.md's "the two named mushroom gaps") so a bite
+## that only landed part of MushroomBiting.MAX_BITE_STAGES yields
+## proportionally less, not the flat whole-mushroom amount regardless of
+## how much was actually left to take.
+func _apply_nutrient_bite(species: String, mass_fraction: float = 1.0) -> void:
+	var nutrients: Dictionary = NutrientRelease.consume(species, mass_fraction)
 	if nutrients.get("crushed", false):
 		_needs.feed_amount(nutrients.get("sugar", 0.0))
 		_needs.drink_amount(nutrients.get("water", 0.0))

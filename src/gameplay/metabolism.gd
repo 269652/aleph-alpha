@@ -159,6 +159,21 @@ func feed_mass_kg(food_mass_kg: float) -> void:
 	_apply_calorie_delta(calories_from_food_mass_kg(food_mass_kg))
 
 
+## A real, discrete eating event expressed as a FRACTION of a whole day's
+## hunger-meter relief -- the same 0..1-scaled unit CreatureNeeds/Drives'
+## `feed`/`feed_amount` and the fruit/mushroom NutrientRelease "sugar"
+## fraction already produce -- rather than a raw food mass. Lets every one
+## of those existing wildlife bite call sites feed this same real
+## Metabolism instance with no separate per-food-type mass table: relieving
+## a WHOLE day's hunger (relief_fraction 1.0) is grounded against THIS
+## creature's own real BMR for one day (see bmr_kcal_per_day), so a big
+## animal's "one full meal" implies more real calories than a small one's,
+## for free. `feed_mass_kg` stays the right call for a caller that already
+## knows a real food mass (a picked-up item's own mass_kg).
+func feed_hunger_relief(relief_fraction: float) -> void:
+	_apply_calorie_delta(maxf(relief_fraction, 0.0) * bmr_kcal_per_day(current_mass_kg))
+
+
 ## The one path both advance()/feed_mass_kg() route a calorie delta
 ## through -- so there is exactly one place current_mass_kg is ever
 ## written, and exactly one place the real starvation floor/overfeeding

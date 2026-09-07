@@ -302,7 +302,15 @@ func kind_of(item_id: String) -> String:
 ## `inventory.add(_item_catalog.make(item_id), ...)` in scenes/player.gd) do not
 ## check has() first, and quietly handing them a null would turn a crash that
 ## names its bad id into a null item propagating into an inventory.
-func make(item_id: String) -> Item:
+##
+## `bite_stage`, given a real non-negative value, scales a "_bitten"
+## mushroom id's mass by MushroomBiting.remaining_fraction_for_stage(stage)
+## instead of the flat single-bite fraction -- see docs/concept/
+## metabolism.md's "the two named mushroom gaps". Defaults to -1 (no
+## override): every caller that predates this parameter (DevConsole's
+## /give included) keeps building the exact same flat-fraction item it
+## always did. Ignored entirely for a non-"_bitten" id.
+func make(item_id: String, bite_stage: int = -1) -> Item:
 	if not _ITEMS.has(item_id) and _crafted_registry != null:
 		var crafted := _crafted_registry.make_item(item_id)
 		if crafted != null:
@@ -310,7 +318,7 @@ func make(item_id: String) -> Item:
 	var spec: Array = _ITEMS[item_id]
 	var equip_slot: String = spec[4] if spec.size() > 4 else ""
 	var armor: float = spec[5] if spec.size() > 5 else 0.0
-	var mass_kg := _mass_kg_for(item_id)
+	var mass_kg := _mass_kg_for(item_id, bite_stage)
 	return Item.new(item_id, spec[0], spec[1], spec[2], spec[3], equip_slot, armor, mass_kg)
 
 
@@ -364,12 +372,18 @@ const _CREATURE_MASS_KG := {
 ## Real mass for `item_id` -- a real weapon (material + volume estimate, see
 ## _WEAPON_MATERIAL_AND_VOLUME), a real harvested vegetable
 ## (_PRODUCE_MASS_KG), a real foraged mushroom (_MUSHROOM_MASS_KG), or --
-## for a "_bitten" id (see MushroomBiting) -- MushroomBiting.
-## RETAINED_FRACTION_AFTER_BITE of its own unbitten base mushroom's mass.
-## 0.0 for anything with no real mass modeled yet.
-func _mass_kg_for(item_id: String) -> float:
+## for a "_bitten" id (see MushroomBiting) -- either a real, stage-scaled
+## fraction of its own unbitten base mushroom's mass (`bite_stage >= 0`,
+## see MushroomBiting.remaining_fraction_for_stage) or, unchanged, the old
+## flat MushroomBiting.RETAINED_FRACTION_AFTER_BITE (`bite_stage < 0`, the
+## default -- see make()'s own doc comment). 0.0 for anything with no real
+## mass modeled yet.
+func _mass_kg_for(item_id: String, bite_stage: int = -1) -> float:
 	if MushroomBiting.is_bitten_item_id(item_id):
-		return MushroomBiting.after_bite(_mass_kg_for(MushroomBiting.base_item_id_for(item_id)))
+		var base_mass := _mass_kg_for(MushroomBiting.base_item_id_for(item_id))
+		if bite_stage >= 0:
+			return base_mass * MushroomBiting.remaining_fraction_for_stage(bite_stage)
+		return MushroomBiting.after_bite(base_mass)
 	if _PRODUCE_MASS_KG.has(item_id):
 		return _PRODUCE_MASS_KG[item_id]
 	if _MUSHROOM_MASS_KG.has(item_id):
@@ -380,6 +394,23 @@ func _mass_kg_for(item_id: String) -> float:
 		return 0.0
 	var material_and_volume: Array = _WEAPON_MATERIAL_AND_VOLUME[item_id]
 	return _material_properties.mass_kg_for(material_and_volume[0], material_and_volume[1])
+
+
+## How much of `item`'s own species' whole, unbitten reference mass is
+## still actually left, read back from the item's OWN mass_kg -- see
+## docs/concept/metabolism.md's "the two named mushroom gaps". There is
+## only ONE real number involved (the item's own mass); this just answers
+## "what fraction of a fresh one is that" for a caller (Player.eat_food)
+## that needs to scale real nutrients by it. 1.0 for any item with no real
+## reference mass modeled at all (a real fresh mushroom's `mass_kg` is
+## always > 0, so this only ever falls back to "whole" for genuinely
+## unmodeled items, never divides by zero).
+func remaining_mass_fraction_for(item: Item) -> float:
+	var base_id := MushroomBiting.base_item_id_for(item.id)
+	var reference_mass := _mass_kg_for(base_id)
+	if reference_mass <= 0.0:
+		return 1.0
+	return clampf(item.mass_kg / reference_mass, 0.0, 1.0)
 
 
 ## Which real material `item_id` is made of (see _WEAPON_MATERIAL_AND_VOLUME),

@@ -1,6 +1,7 @@
 extends RefCounted
 
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 
 ## The actual "Material DSL" data (see docs/concept/material_dsl.md):
 ## per-food nutrient composition as plain fractions of substance. No control
@@ -43,10 +44,16 @@ const _MUSHROOM_COMPOSITION: Dictionary = {"water": 0.90, "sugar": 0.02, "vitami
 ## the unmodeled-material fallback shape this project uses throughout
 ## (MaterialProperties.property_value, ItemDurability.max_wear). Falls
 ## back to the shared mushroom vector for any MushroomSpecies id not
-## already in the explicit table above.
+## already in the explicit table above -- including a "_bitten" variant
+## (see MushroomBiting.base_item_id_for), so a partially-eaten mushroom
+## still resolves a real composition instead of silently skipping the
+## whole nutrient pipeline (see docs/concept/metabolism.md's "the two
+## named mushroom gaps" -- a bitten id is not itself a MushroomSpecies id,
+## so this used to fall straight through to "unmodeled" for every
+## partially-eaten mushroom regardless of mass).
 func composition_for(food_id: String) -> Dictionary:
 	if COMPOSITION.has(food_id):
 		return COMPOSITION[food_id]
-	if MushroomSpecies.IDS.has(food_id):
+	if MushroomSpecies.IDS.has(MushroomBiting.base_item_id_for(food_id)):
 		return _MUSHROOM_COMPOSITION
 	return {}
