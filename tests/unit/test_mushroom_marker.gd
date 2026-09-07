@@ -14,6 +14,7 @@ extends GutTest
 ## visibly was.
 
 const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
+const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 const ProceduralMushroomSprite = preload("res://src/rendering/procedural_mushroom_sprite.gd")
 const IllustratedMushroomSprite = preload("res://src/rendering/illustrated_mushroom_sprite.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
@@ -365,3 +366,22 @@ func test_falls_back_to_the_procedural_look_for_a_species_with_no_illustrated_ar
 	var sprite := marker.get_child(0) as Sprite2D
 	var expected := ProceduralMushroomSprite.new().generate_texture("portobello", true)
 	assert_eq(sprite.texture.get_image().get_data(), expected.get_image().get_data())
+
+
+## Round 6 FPS fix (see docs/concept/soil_fauna.md): a live decomposer bite
+## used to be the FIRST thing that ever asked for a not-yet-cached
+## species' bitten art, on a real gameplay frame -- measured up to ~1.6s
+## for one bite. warm_art_cache() is the one-line hook World._ready() now
+## calls once, before any decomposer can possibly reach a mushroom, so
+## take_mushroom_bite's own _rebuild_sprite() call always hits an already-
+## warm cache instead. Thin delegation to the shared _illustrated_
+## generator instance every MushroomMarker already reads from -- the real
+## coverage lives in test_illustrated_mushroom_sprite.gd's own warm_cache
+## tests; this just proves the wiring reaches the same shared instance.
+func test_warm_art_cache_warms_the_shared_illustrated_generator():
+	IllustratedMushroomSprite._frames_cache = {}
+	IllustratedMushroomSprite._crushed_frames_cache = {}
+	IllustratedMushroomSprite._bitten_frames_cache = {}
+	MushroomMarker.warm_art_cache()
+	for id in MushroomSpecies.IDS:
+		assert_true(IllustratedMushroomSprite._bitten_frames_cache.has(id), "%s bitten cache should be warm" % id)

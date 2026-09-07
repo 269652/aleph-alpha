@@ -368,6 +368,31 @@ func _bitten_stages_from(species_id: String) -> Array:
 	return _bitten_stage_frames_cache[species_id]
 
 
+## Eagerly loads every registered species' normal/crushed/bitten frame
+## cache, instead of leaving each to fill lazily on whichever call happens
+## to ask for it first. Real bug found live: DecomposerMarker._step_feeding
+## eating a not-yet-bitten mushroom is exactly such a first ask -- a real
+## sprite sheet load + whole-image chroma-key pass (bitten sheets combine
+## up to 3 separate full-resolution images, see _load_frames), measured
+## live on this session's own machine at up to ~1.6s for a SINGLE bite on
+## a species nothing had rendered a bitten look for yet (see
+## docs/concept/soil_fauna.md's fps round 6 write-up). That cost was
+## always going to be paid once per species per process -- the bug was
+## only ever WHEN: a random live gameplay frame, unpredictably, rather
+## than once here, before anything can possibly ask. Idempotent (routes
+## through the exact same _frames_from cache-check every ordinary call
+## already uses), so calling this more than once -- or a species some
+## earlier lazy call already warmed -- is a cheap no-op, not a reload.
+func warm_cache() -> void:
+	for species_id in _SHEETS:
+		if has_variants(species_id):
+			frame_for(species_id, 0)
+		if has_crushed_variant(species_id):
+			crushed_frame_for(species_id, 0)
+		if has_bitten_variant(species_id):
+			bitten_frame_for(species_id, 0)
+
+
 func _pick_frame(frames: Array, seed_value: int) -> ImageTexture:
 	if frames.is_empty():
 		return null

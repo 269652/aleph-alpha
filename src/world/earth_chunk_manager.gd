@@ -73,6 +73,7 @@ const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sp
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 const IllustratedWormSprite = preload("res://src/rendering/illustrated_worm_sprite.gd")
+const WormMarker = preload("res://src/rendering/worm_marker.gd")
 const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
 const ProceduralAquaticVegetationSprite = preload("res://src/rendering/procedural_aquatic_vegetation_sprite.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
@@ -155,6 +156,7 @@ const PickableSeed = preload("res://src/rendering/pickable_seed.gd")
 const SnowTrail = preload("res://src/world/snow_trail.gd")
 const Snowfall = preload("res://src/world/snowfall.gd")
 const SeasonTransition = preload("res://src/world/season_transition.gd")
+const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 const FlowerBloom = preload("res://src/world/flower_bloom.gd")
 const TreeRooting = preload("res://src/world/tree_rooting.gd")
 const FruitSpoilage = preload("res://src/gameplay/fruit_spoilage.gd")
@@ -552,6 +554,24 @@ var _flower_sprites: Dictionary = {}
 var _seed_sprites: Dictionary = {}
 var _flower_sprite_generator := ProceduralFlowerSprite.new()
 var _grass_sprites: Dictionary = {}  # Vector2i chunk_coord -> {band index int -> MultiMeshInstance2D}
+## The SECOND, "turning into" season's mesh per band, ONLY populated for a
+## band currently mid-transition (see sync_grass_season/_sync_grass_sprites
+## and docs/concept/long_grass.md's "Seasonal art") -- a settled season
+## (no active transition, the common case) leaves this empty entirely, so
+## the ordinary single-mesh-per-band draw-call cost this system was built
+## around is untouched outside a transition's own brief window.
+var _grass_sprites_turning: Dictionary = {}  # Vector2i chunk_coord -> {band index int -> MultiMeshInstance2D}
+## The live season state _sync_grass_sprites reads to pick which of the four
+## grass_blades_*.png sheets (and, mid-transition, which SECOND sheet) a
+## band's cards sample from -- kept as fields rather than re-derived inside
+## _sync_grass_sprites itself so a chunk load and a season change both drive
+## the exact same rendering path. Updated only by sync_grass_season.
+var _grass_season_name := SeasonalFoliage.FALLBACK_SEASON
+var _grass_turning_into := SeasonalFoliage.FALLBACK_SEASON
+var _grass_turn_progress := 0.0
+## The grass season the loaded fields were last drawn for -- see
+## sync_grass_season, mirroring _last_tree_season exactly.
+var _last_grass_season := ""
 var _grass_refresh_accumulator := 0.0
 ## Wild carrot/potato (see docs/concept/wild_crops.md). One WildCropPatch per
 ## chunk PER CROP, not one sim juggling both -- see WildCropPatch's own doc
@@ -762,6 +782,21 @@ var _ant_mound_markers: Dictionary = {}
 ## alive. Keyed globally (not per-chunk) since a mound's own identity
 ## (chunk_coord*CHUNK_SIZE + cell) is already a stable global tile.
 var _active_ant_foragers: Dictionary = {}
+
+## Vector2i chunk_coord -> Array[AntForagerMarker], every crushed forager
+## currently lying where it died (see AntForagerMarker.is_corpse) --
+## registered here by crush_ants_near the moment it actually crushes one,
+## chunk-keyed by wherever it died. NOT mound-keyed the way
+## _active_ant_foragers is: a corpse belongs to no mound any more once its
+## forager dies (see docs/concept/soil_fauna.md "Ant corpses: foraged
+## home, not left to vanish") -- any nearby mound's own scout can sense
+## and forage it, the same free-for-all "no ownership" contract every
+## other forage resource (leaf litter, grass seed, windfall) already has.
+## Pruned lazily wherever it's read (ant_corpses_near/take_ant_corpse_near),
+## the same "erase a stale/already-freed reference on next access"
+## contract _active_ant_foragers already has -- including no explicit
+## _unload_chunk cleanup, mirroring that sibling dictionary exactly.
+var _ant_corpses: Dictionary = {}
 
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
@@ -3422,6 +3457,7 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 	# in with its own stale cached ripe_fruit_count() the moment the season
 	# turns, and the "frozen forever" bug reappears through this door instead.
 	sync_tree_season(player_pixel)
+	sync_grass_season()
 	# ONE answer to "which canopy is this tree wearing", read from the same
 	# place the rest of the wood was just dressed from -- and read ONCE, not
 	# per tree. This used to be the calendar season plus a SeasonTransition
@@ -3650,6 +3686,7 @@ func set_world_age_seconds(value: float) -> void:
 	# load, so a world that opens in winter opens with bare trees instead of
 	# summer ones that correct themselves a tick later (see sync_tree_season).
 	sync_tree_season()
+	sync_grass_season()
 
 
 ## Rolls a brand new world's starting point in the year, once (see
@@ -3710,6 +3747,7 @@ func jump_to_season(season: String, progress: float = 0.0) -> bool:
 	# sync_tree_season). This skips the clock without going through
 	# set_world_age_seconds, so it needs the push of its own.
 	sync_tree_season()
+	sync_grass_season()
 	return true
 
 
@@ -5139,6 +5177,7 @@ func advance_world_age(delta_seconds: float) -> void:
 	# sync_tree_season). The quantised signature guard keeps this a string
 	# compare on all but a handful of calls per in-game year.
 	sync_tree_season()
+	sync_grass_season()
 
 
 ## Central, throttled tree spread: every SPREAD_INTERVAL of real time, a
@@ -6349,11 +6388,13 @@ const GRASS_VIEW_BUFFER_TILES := 2
 func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 	if not _decorates(chunk_coord):
 		_drop_decoration(_grass_sprites, chunk_coord)
+		_drop_decoration(_grass_sprites_turning, chunk_coord)
 		return
 	var sim: TallGrass = _grass_sims.get(chunk_coord)
 	if sim == null:
 		return
 	var bands: Dictionary = _grass_sprites.get(chunk_coord, {})
+	var turning_bands: Dictionary = _grass_sprites_turning.get(chunk_coord, {})
 
 	var origin := chunk_coord * CHUNK_SIZE
 	var half_span := _visible_half_span_tiles()
@@ -6405,7 +6446,23 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 		if not cards_by_band.has(band):
 			bands[band].queue_free()
 			bands.erase(band)
+	for band in turning_bands.keys().duplicate():
+		if not cards_by_band.has(band):
+			turning_bands[band].queue_free()
+			turning_bands.erase(band)
 
+	# A band whose cards straddle two seasons (see IllustratedGrassPatch.
+	# split_cards_by_turn/docs/concept/long_grass.md's "Seasonal art") needs
+	# a SECOND MultiMeshInstance2D so each half can sample its own season's
+	# texture -- MultiMeshInstance2D has exactly one `texture`, shared by
+	# every instance in it. Collapses back to a single mesh, freeing the
+	# second one, the instant the transition settles (progress reaches 0 or
+	# 1, or turning_into names the same season) -- matching every prior
+	# season's own single-mesh-per-band cost exactly.
+	var transitioning := (
+		_grass_turning_into != "" and _grass_turning_into != _grass_season_name
+		and _grass_turn_progress > 0.0 and _grass_turn_progress < 1.0
+	)
 	for band in cards_by_band.keys():
 		var mmi: MultiMeshInstance2D = bands.get(band)
 		if mmi == null:
@@ -6416,9 +6473,26 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 			)
 			_entities_parent.add_child(mmi)
 			bands[band] = mmi
-		_illustrated_grass.fill_band(mmi, mmi.position, cards_by_band[band])
+
+		if transitioning:
+			var split := IllustratedGrassPatch.split_cards_by_turn(cards_by_band[band], _grass_turn_progress)
+			_illustrated_grass.fill_band(mmi, mmi.position, split.from, _grass_season_name)
+			var turning_mmi: MultiMeshInstance2D = turning_bands.get(band)
+			if turning_mmi == null:
+				turning_mmi = MultiMeshInstance2D.new()
+				turning_mmi.position = mmi.position
+				_entities_parent.add_child(turning_mmi)
+				turning_bands[band] = turning_mmi
+			_illustrated_grass.fill_band(turning_mmi, turning_mmi.position, split.to, _grass_turning_into)
+		else:
+			_illustrated_grass.fill_band(mmi, mmi.position, cards_by_band[band], _grass_season_name)
+			var stale_turning_mmi: MultiMeshInstance2D = turning_bands.get(band)
+			if stale_turning_mmi != null:
+				stale_turning_mmi.queue_free()
+				turning_bands.erase(band)
 
 	_grass_sprites[chunk_coord] = bands
+	_grass_sprites_turning[chunk_coord] = turning_bands
 
 
 ## Adds/removes a Sprite2D per flower cell so the rendered blooms match the
@@ -7034,6 +7108,31 @@ func sync_tree_season(player_pixel: Variant = null) -> void:
 var _last_tree_season := ""
 
 
+## Mirrors sync_tree_season's own shape exactly, at grass-blade granularity:
+## a shared, quantised SeasonTransition state, guarded by a string signature
+## so the (comparatively rare) grass resync only fires a handful of times
+## per in-game year, not every frame. No player_pixel gate the way trees
+## take one -- _sync_grass_sprites is already gated per-chunk by _decorates/
+## the tile-precise view cutoff (see its own doc comment), so re-running it
+## for every currently-tracked grass chunk on a season change costs no more
+## than the ordinary per-chunk decoration sync already would. See
+## docs/concept/long_grass.md's "Seasonal art".
+func sync_grass_season() -> void:
+	var transition := SeasonalFoliage.transition_for_world_age(_world_age_seconds)
+	var season_name: String = transition.from
+	var turning_into: String = transition.to
+	var turn_progress: float = transition.progress
+	var signature := "%s/%s/%.2f" % [season_name, turning_into, turn_progress]
+	if signature == _last_grass_season:
+		return
+	_last_grass_season = signature
+	_grass_season_name = season_name
+	_grass_turning_into = turning_into
+	_grass_turn_progress = turn_progress
+	for chunk_coord in _grass_sprites.keys():
+		_sync_grass_sprites(chunk_coord)
+
+
 ## The season the flower sprite layer was last rebuilt for -- see
 ## step_flowers.
 var _last_flower_bloom_season := ""
@@ -7411,6 +7510,17 @@ func crush_ants_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 				# "no timed death animation either" scope cut, now closed.
 				marker.crush()
 				crushed_any = true
+				# Registers as a future corpse immediately, chunk-keyed by
+				# wherever it died -- see _ant_corpses' own doc comment.
+				# ant_corpses_near/take_ant_corpse_near both still gate on
+				# marker.is_corpse() (not yet true this frame -- it only
+				# settles once SquashCrushEffect's own death-animation
+				# linger finishes), so nothing can sense or forage it a
+				# moment before its death animation has actually played out.
+				var corpse_chunk := _chunk_coord_for_tile(tile)
+				var corpses: Array = _ant_corpses.get(corpse_chunk, [])
+				corpses.append(marker)
+				_ant_corpses[corpse_chunk] = corpses
 				# One real forager belonging to this mound is now gone --
 				# also closes "no effect on the mound's own population/food
 				# economy beyond the one forager actually lost" (same
@@ -7427,6 +7537,78 @@ func crush_ants_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 				if colony != null:
 					colony.forager_crushed(global_tile - mound_chunk_coord * CHUNK_SIZE)
 	return crushed_any
+
+
+## How close a query position has to be to a corpse's own position to
+## count as "the same corpse" for take_ant_corpse_near -- mirrors
+## LeafLitterField.CONSUME_TOLERANCE_PX's identical reasoning and value:
+## a corpse never moves once settled, so an exact-enough match is all a
+## caller handing back a position it already got from ant_corpses_near
+## ever needs.
+const ANT_CORPSE_TAKE_TOLERANCE_PX := 1.0
+
+
+## Every SETTLED ant corpse (see AntForagerMarker.is_corpse) within
+## `radius_px` of `pixel_position` -- the plural sensing query
+## AntForagerMarker._sense_food_nearby uses to find real corpses to
+## forage. Mirrors leaf_litter_near's identical shape (a 3x3 chunk-
+## neighbourhood scan, chunk-keyed, radius checked in real pixels): a
+## corpse, like a fallen leaf, belongs to no one mound any more (see
+## _ant_corpses' own doc comment), so this is the same free-for-all
+## sensing shape, not crush_ants_near's mound-keyed one. Each result is
+## {"position": Vector2} -- a corpse carries no species/season the way a
+## leaf does. A still-dying forager (crushed moments ago, mid
+## SquashCrushEffect linger) is real but not yet a settled corpse --
+## filtered out here via is_corpse(), not left to the caller, so nothing
+## can sense (or take) a corpse before its own death animation has
+## actually finished playing. Stale/already-freed entries are pruned
+## lazily here, the same contract _active_ant_foragers' own readers use.
+func ant_corpses_near(pixel_position: Vector2, radius_px: float) -> Array:
+	var found: Array = []
+	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var chunk_coord := center_chunk + Vector2i(dx, dy)
+			var corpses: Array = _ant_corpses.get(chunk_coord, [])
+			for corpse in corpses.duplicate():
+				if not is_instance_valid(corpse) or corpse.is_queued_for_deletion():
+					corpses.erase(corpse)
+					continue
+				if not corpse.is_corpse():
+					continue
+				if corpse.position.distance_to(pixel_position) <= radius_px:
+					found.append({"position": corpse.position})
+	return found
+
+
+## Removes the settled ant corpse standing at `pixel_position` (see
+## ANT_CORPSE_TAKE_TOLERANCE_PX), returning whether one was actually
+## there -- the mutation counterpart of ant_corpses_near, mirroring
+## consume_leaf_litter_at's identical "best-effort, no-op on a miss"
+## contract. A caller is expected to have just learned this exact
+## position FROM ant_corpses_near -- a corpse someone else already
+## foraged in between is correctly reported as a miss, not an error.
+## Frees the corpse marker directly: a forager taking it home IS the
+## corpse's own real removal from the world, the same "the take itself is
+## the world mutation" shape every other forage kind's take API already
+## has (take_fruit_at, consume_leaf_litter_at, take_grass_seed_at).
+func take_ant_corpse_near(pixel_position: Vector2) -> bool:
+	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var chunk_coord := center_chunk + Vector2i(dx, dy)
+			var corpses: Array = _ant_corpses.get(chunk_coord, [])
+			for corpse in corpses.duplicate():
+				if not is_instance_valid(corpse) or corpse.is_queued_for_deletion():
+					corpses.erase(corpse)
+					continue
+				if not corpse.is_corpse():
+					continue
+				if corpse.position.distance_to(pixel_position) <= ANT_CORPSE_TAKE_TOLERANCE_PX:
+					corpses.erase(corpse)
+					corpse.queue_free()
+					return true
+	return false
 
 
 ## Shared body for crush_caterpillars_near/crush_millipedes_near -- both
@@ -8154,7 +8336,16 @@ func _crawl_worm_sprites() -> void:
 		var patch: EarthwormPatch = _worm_patches.get(chunk_coord)
 		if patch == null:
 			continue
-		for cell in sprites:
+		for cell in sprites.keys().duplicate():
+			# This runs every step_worms call, far more often than
+			# _sync_worm_sprites reconciles the dict -- a corpse picked up
+			# via WormMarker.pick_up frees itself immediately, so a stale
+			# entry can sit here for up to WORM_REFRESH_INTERVAL before the
+			# next sync would otherwise catch it. See _sync_worm_sprites'
+			# own matching guard for the full reasoning.
+			if not is_instance_valid(sprites[cell]):
+				sprites.erase(cell)
+				continue
 			if not patch.is_corpse(cell):
 				var base := Vector2(
 					(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
@@ -8217,6 +8408,15 @@ func _sync_worm_sprites(chunk_coord: Vector2i) -> void:
 
 	var origin := chunk_coord * CHUNK_SIZE
 	for cell in sprites.keys().duplicate():
+		# A corpse's marker can now free ITSELF, from WormMarker.pick_up --
+		# something no sprite here could ever do to itself before pickup
+		# existed. A stale entry left behind by that must be dropped before
+		# anything below touches it (mirrors crush_ants_near's own
+		# is_instance_valid guard, same reasoning: whatever freed it already
+		# won -- this loop just needs to not crash on the leftover record).
+		if not is_instance_valid(sprites[cell]):
+			sprites.erase(cell)
+			continue
 		if not patch.is_surfaced(cell) and not patch.is_corpse(cell):
 			sprites[cell].free()
 			sprites.erase(cell)
@@ -8233,7 +8433,13 @@ func _sync_worm_sprites(chunk_coord: Vector2i) -> void:
 	for cell in patch.worm_cells():
 		if not patch.is_surfaced(cell) or sprites.has(cell):
 			continue
-		var sprite := Sprite2D.new()
+		# WormMarker, not a bare Sprite2D: a corpse's OWN sprite is what the
+		# player ends up picking up (see WormMarker.pick_up) -- it is never
+		# recreated between here and corpse state, so it must already be the
+		# pickable class from the moment a worm first surfaces.
+		var sprite := WormMarker.new()
+		sprite.cell = cell
+		sprite.worm_world = patch
 		sprite.texture = _worm_texture_for(patch, cell, origin)
 		# World scale from a world-space constant, never re-derived from the
 		# art canvas -- raising SIZE for detail must not change how big a worm
@@ -10211,6 +10417,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_ground_cover_blockers(chunk)
 	)
 	_grass_sprites[chunk_coord] = {}
+	_grass_sprites_turning[chunk_coord] = {}
 	_sync_grass_sprites(chunk_coord)
 
 	# Aquatic vegetation (see AquaticVegetation, docs/concept/
@@ -10881,6 +11088,9 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for mmi in _grass_sprites.get(chunk_coord, {}).values():
 		mmi.free()
 	_grass_sprites.erase(chunk_coord)
+	for mmi in _grass_sprites_turning.get(chunk_coord, {}).values():
+		mmi.free()
+	_grass_sprites_turning.erase(chunk_coord)
 	_grass_sims.erase(chunk_coord)
 
 	for markers_by_crop in _wild_crop_markers.get(chunk_coord, {}).values():

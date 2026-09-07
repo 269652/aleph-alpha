@@ -589,6 +589,59 @@ func test_corpse_age_is_zero_for_a_cell_that_never_died():
 	assert_eq(patch.corpse_age_seconds(cell), 0.0)
 
 
+# -- corpse pickup: "still be able to picked up" (see docs/concept/
+# aquatic_foraging.md's "Worms as fish bait") -----------------------------
+
+## Taking the corpse removes it -- the pickup contract WormMarker relies on
+## to actually carry the body into an inventory, the same "just try, sim
+## decides" bool-return shape take()/crush() already use.
+func test_take_corpse_removes_the_corpse():
+	var patch := _patch()
+	patch.set_conditions(1.0, 1.0)
+	_settle(patch)
+	var cell: Vector2i = patch.worm_cells()[0]
+	patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	assert_true(patch.take_corpse(cell), "a real corpse should be takeable")
+	assert_false(patch.is_corpse(cell), "the corpse should be gone once taken")
+
+
+## A cell with nothing to take (never died, or already recovered) must not
+## be takeable -- the same harmless-false-on-nothing-there contract
+## take()/crush() already use for an empty cell.
+func test_take_corpse_returns_false_when_there_is_no_corpse():
+	var patch := _patch()
+	var cell: Vector2i = patch.worm_cells()[0]
+	assert_false(patch.take_corpse(cell), "there is nothing to take here")
+
+
+## Taking the corpse away removes the visible/pickable marker, but does not
+## heal the burrow any faster than an ordinary recovery -- carrying the
+## body off is not a shortcut past RECOVERY_SECONDS, the burrow still needs
+## the same real time before a new worm can surface there.
+func test_take_corpse_does_not_shorten_recovery():
+	var patch := _patch()
+	patch.set_conditions(1.0, 1.0)
+	_settle(patch)
+	var cell: Vector2i = patch.worm_cells()[0]
+	patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	assert_true(patch.take_corpse(cell))
+	_settle(patch, EarthwormPatch.RECOVERY_SECONDS * 0.5)
+	assert_false(patch.is_surfaced(cell), "the burrow should still be recovering")
+
+
+## Once the corpse is taken, corpse_age_seconds returns to its harmless
+## zero default -- there is nothing left to age.
+func test_take_corpse_zeroes_corpse_age():
+	var patch := _patch()
+	patch.set_conditions(1.0, 1.0)
+	_settle(patch)
+	var cell: Vector2i = patch.worm_cells()[0]
+	patch.crush(cell, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	patch.advance(5.0)
+	patch.take_corpse(cell)
+	assert_eq(patch.corpse_age_seconds(cell), 0.0)
+
+
 # -- illustrated worm sprite: direction (see docs/concept/soil_fauna.md's
 # "Direction, not just amount") ------------------------------------------
 

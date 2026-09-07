@@ -277,3 +277,32 @@ func test_crushed_and_bitten_frames_differ_from_the_normal_frame():
 		var bitten: PackedByteArray = sprite.bitten_frame_for(id, 0).get_image().get_data()
 		assert_ne(normal, crushed, "%s crushed should look different from normal" % id)
 		assert_ne(normal, bitten, "%s bitten should look different from normal" % id)
+
+
+# -- warm_cache (see docs/concept/soil_fauna.md's fps round 6 write-up) --
+# frame_for/crushed_frame_for/bitten_frame_for are each lazily cached on
+# first use per species -- real, measured, whole-image chroma-key+slice
+# work (a bitten sheet in particular can combine up to 3 separate full-
+# resolution images), expensive enough that paying it on whichever live
+# gameplay frame happens to be the first bite of a not-yet-touched species
+# is a real, measured stutter (up to ~1.6s for a single bite on this
+# session's own machine), not a one-off. warm_cache() front-loads every
+# species' normal/crushed/bitten cache eagerly instead of leaving it to
+# chance which gameplay frame pays the bill.
+
+
+## Resets to a genuinely COLD cache first -- otherwise an earlier test in
+## this same file (or an earlier warm_cache() call) may have already
+## warmed some/all of these species via ordinary lazy use, and this test
+## would pass even if warm_cache() were a no-op. Same static-state-reset
+## shape DecomposerMarker's own tests already use for
+## _food_group_refresh_at_msec (see decomposer_marker.gd).
+func test_warm_cache_fills_a_cold_cache_for_every_species():
+	IllustratedMushroomSprite._frames_cache = {}
+	IllustratedMushroomSprite._crushed_frames_cache = {}
+	IllustratedMushroomSprite._bitten_frames_cache = {}
+	sprite.warm_cache()
+	for id in MushroomSpecies.IDS:
+		assert_true(IllustratedMushroomSprite._frames_cache.has(id), "%s normal cache should be warm" % id)
+		assert_true(IllustratedMushroomSprite._crushed_frames_cache.has(id), "%s crushed cache should be warm" % id)
+		assert_true(IllustratedMushroomSprite._bitten_frames_cache.has(id), "%s bitten cache should be warm" % id)
