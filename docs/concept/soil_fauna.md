@@ -2278,7 +2278,8 @@ below.
   mechanism for `LeafLitterRenderer.fill`, careful not to reintroduce the
   "hides the fall animation behind a sync lag" problem the original
   `step_leaf_litter` doc comment explicitly designed around. Real,
-  measured, growing — just not yet fixed.
+  measured, growing — just not yet fixed. **Closed 2026-09-07, see "Leaf
+  litter dirty-tracking" below.**
 - **Sheer, bounded-but-large population scale.** `ant_forager` alone
   plateaued around 600-740 concurrent foragers across ~30 mounds on this
   save, `ambient_flyer` in the low thousands, caterpillar/millipede/
@@ -2291,6 +2292,170 @@ below.
   has no upper bound on mound count) — confirmed NOT the round-4 driver
   (mound count measured bounded at ~30 on this real save), but still an
   open, undiscovered-extent gap on its own terms.
+
+### Leaf litter dirty-tracking: closing round 4's own deferred item (2026-09-07)
+
+Round 4 (above) named this explicitly rather than fixing it: `EarthChunkManager.step_leaf_litter` called `LeafLitterRenderer.fill`
+unconditionally every frame, for every chunk currently in decoration
+range — rebuilding that chunk's *entire* MultiMesh instance buffer (two
+engine calls per leaf via `MultiMesh.set_instance_transform_2d`/
+`set_instance_custom_data`, plus a fresh instance-dictionary allocation
+per leaf via `instances_for_leaves`) even for leaves that are fully
+settled and not transitioning at all. `LeafLitterRenderer`'s own vertex
+shader drives all visible fall/sway motion once a leaf's data has been
+pushed once (see that file's own doc comment) — a long-settled leaf's
+CPU-side data never actually needed re-pushing every frame, only when the
+chunk's leaf *set* changes.
+
+**Root cause confirmed, not just theorized.** Reproduced with the same
+`--user-data-dir` snapshot-copy technique round 4 established (a private
+copy of the user's own real save, `--solo --rendering-driver opengl3`,
+never the live directory while a real session might be using it — see
+round 4's own methodology note above): left running on the *pre-fix*
+code, `leaf_litter.total_leaves_world` climbed 0 → 2,361 over ~19 real
+minutes, and `step_leaf_litter`'s own per-window cost climbed with it
+(~20ms → ~578ms; `field_advance` ~20ms → ~420ms; `renderer_fill` ~9ms →
+~150ms) — real, and invisible to a short session because leaf litter is
+never persisted across save/load (a fresh session always starts at 0
+leaves, so this cost keeps resetting and re-growing rather than
+accumulating across sessions the way a persisted population would).
+
+**The fix: a generation counter, not a periodic throttle.**
+`LeafLitterField.generation()` (`src/world/leaf_litter_field.gd`) is a
+plain incrementing counter, bumped only when something about the field's
+own *rendering-relevant* state actually changes — a leaf added, removed,
+relocated, or dispersed (only on the branch that actually found and moved
+a leaf; a miss changes nothing and must not look dirty), a settled leaf's
+throttled wind-roll nudge, or a decay-tier transition (only on the frame
+`season` actually changes value, not every subsequent frame the leaf
+merely remains in that tier). `EarthChunkManager` tracks the generation it
+last actually pushed per chunk (`_leaf_litter_filled_generation`) and
+`step_leaf_litter` now only calls `fill` again once that value changes.
+Deliberately **not** a periodic throttle (a `GRASS_REFRESH_INTERVAL`-style
+multi-second cadence): `step_leaf_litter`'s own doc comment already
+explicitly rejects that for this exact call site — a leaf's whole fall is
+over in under a second (`LeafLitterField.TRANSITION_DURATION`), so *any*
+sync lag here would hide the fall animation entirely, not just delay it
+the way a slow-growing flower can tolerate. A chunk that IS changing still
+refills the very same frame it changes, exactly as before this fix — only
+a genuinely idle chunk's litter stops paying the rebuild cost.
+
+**Two correctness subtleties the naive bump-point list misses, caught by
+reasoning through the renderer's own doc comments rather than assumed
+away, and each pinned by its own test:**
+
+1. **A leaf currently `on_water` must always look dirty.** Every other
+   leaf's fall/sway motion is driven entirely by the vertex shader once
+   its data is pushed once — but a *floating* leaf is the one deliberate
+   exception: `_advance_floating_leaf`'s own doc comment explains that its
+   continuous downstream drift is computed on the CPU side, every single
+   frame, with `transition_from` deliberately kept equal to `position` so
+   the shader's own eased-transition offset stays at zero throughout (an
+   uncorrected eased transition would show the leaf perpetually chasing a
+   target that keeps moving away from it rather than gliding). A
+   dirty-tracking scheme that only bumped on the discrete trigger list
+   above would silently freeze a floating leaf in place the moment its
+   chunk otherwise went idle, exactly the "hides real motion behind a sync
+   gap" failure mode this whole fix exists to avoid. `advance()` now bumps
+   the generation on every call for any leaf currently on water, so a
+   floating leaf's chunk is refilled every frame it drifts, same as
+   before this fix.
+2. **The CPU-side transition-settle snap must itself be pushed once.**
+   `transition_from`'s own doc comment explains why `advance()` snaps a
+   completed transition's `transition_from` to exactly equal `position`
+   once `TRANSITION_DURATION` elapses: `LeafLitterRenderer`'s packed
+   `transition_start` is a *wrapped* fraction (`WRAP_PERIOD`-periodic, not
+   a raw growing timestamp — see that file's own doc comment on why an
+   8-bit-quantized packed clock has to wrap), and a long-completed
+   transition's stale, un-snapped, nonzero packed offset could alias back
+   to "just starting" once the wrapped clock eventually laps it, snapping
+   the leaf visibly back to an old offset. The snap is what makes that
+   structurally impossible — but only if the renderer actually *receives*
+   the snapped (zero-offset) data. A dirty-tracking scheme that treated
+   the settle snap as a no-op change would leave the stale, pre-snap data
+   sitting in the MultiMesh forever once nothing else about that leaf ever
+   changes again, silently reintroducing the exact aliasing bug the snap
+   exists to prevent. The settle snap now bumps the generation too, so it
+   gets pushed exactly once, after which the leaf never needs re-pushing
+   again.
+
+**Strict TDD**, mirroring round 4's own `test_crushing_an_ant_never_
+scans_a_mounds_forager_list_in_a_distant_chunk`/`test_flyers_near_never_
+reaches_a_distant_chunk_regardless_of_radius` call-observing idiom: a new
+`_CountingLeafLitterRenderer` test double (matching `test_world_boss_
+fitness.gd`'s own `_CountingPhaseGenerator` convention — count calls,
+delegate to the real implementation via `super`) proves
+`test_step_leaf_litter_does_not_refill_a_chunk_whose_leaves_have_not_
+changed`: `fill` is called exactly once for a chunk across three
+consecutive idle steps, not growing with elapsed step count, alongside
+`test_step_leaf_litter_refills_a_chunk_once_a_new_leaf_actually_falls`
+proving this is real dirty-tracking rather than an accidental throttle
+that would also (wrongly) delay a fresh leaf's own fall. 16 further
+`LeafLitterField`-level tests pin `generation()` itself: starts at 0;
+bumps on every documented trigger, including the two subtleties above;
+does *not* bump on a miss (consume/relocate/disperse finding nothing),
+dead calm, an ordinary idle `advance()` call, or re-asserting a decay tier
+the leaf is already in. All new tests confirmed red before implementation
+(a parse-time "cannot infer type" error from calling a `generation()`
+method that did not yet exist — GDScript's static `:=` inference makes an
+undefined-method call fail the whole script's parse, not just the
+assertion, which is itself a legitimate red for "the method doesn't exist
+yet"), green after.
+
+**Measured live, on the identical real save** (fresh `--user-data-dir`
+snapshot, same `--solo --rendering-driver opengl3` methodology as round
+4's own measurement above, ~21-minute run): `step_leaf_litter`'s own
+per-window cost climbed from ~22ms (37 leaves) to a peak of ~650ms (1,183
+leaves) over the first ~14 real minutes — then, unlike round 4's own
+still-climbing trend, **plateaued** at ~525–650ms for the remaining ~7
+minutes of the run even as `total_leaves_world` kept climbing a further
+35%, from 1,183 to 1,596. That plateau is the fix's real structural
+signature: cost is now bounded by how much litter is *currently changing*,
+not by how much has *ever accumulated* — confirmed directly by
+`refilled_chunks_this_step`, which read exactly 2 (of 9 decorating chunks)
+for 417 of 430 measured windows across the whole run, i.e. 7 of 9
+decorating chunks correctly paid zero refill cost for nearly the entire
+session, regardless of how large `total_leaves_world` grew.
+
+Absolute millisecond figures are **not** directly comparable ms-for-ms to
+round 4's own numbers — this machine routinely runs many concurrent Claude
+Code/Godot sessions at once (confirmed active during this very
+measurement: `git worktree list` showed a dozen-plus other live
+worktrees), and CPU contention alone can swing wall-clock timing
+independent of any code change. The *qualitative shape* — bounded vs.
+unbounded growth over time — is the meaningful signal here, not the
+literal ms values, which is why the comparison above is framed as a
+plateau against this run's own earlier climb rather than a subtraction
+against round 4's differently-contended session.
+
+**A real, honest, separate finding, not previously named.** The 2 chunks
+that never stopped refilling did so on very nearly every single frame
+throughout the run — the deterministic signature of at least one leaf
+currently `on_water` in each (the only *unconditional*, every-`advance()`-
+call generation bump this fix adds — see "Two correctness subtleties"
+above), almost certainly a river or river-mouth plume within this save's
+own spawn area. A chunk with genuinely ongoing floating-leaf activity
+still pays a real, per-frame cost proportional to *its own* active
+population — this is correct, not a bug (a leaf actually drifting
+downstream must be redrawn every frame to look right, per this fix's own
+`test_a_floating_leaf_bumps_the_generation_every_advance_even_with_
+nothing_else_changing`) — and it is architecturally unavoidable at this
+fix's per-**chunk** (not per-leaf) granularity: `LeafLitterRenderer.fill`
+still rebuilds a chunk's *entire* buffer at once, so one actively-drifting
+leaf costs as much as rebuilding every other, otherwise-idle leaf sharing
+its chunk. A genuinely idle chunk — the literal round-4 finding — now
+costs correctly close to nothing, proven both by this plateau and by the
+`refilled_chunks_this_step` count above; a chunk that keeps changing does
+not, and structurally cannot without a finer-grained (per-leaf
+incremental) rendering update, which this fix does not attempt — real,
+worth a future look if it is ever found to matter at ordinary play scale
+(a played session's decoration range moves with the player rather than
+sitting fixed on one spot for 20+ minutes the way this `--solo` methodology
+does, so this specific cost may matter far less in practice than this
+worst-case stationary measurement suggests), but out of scope here, which
+stayed deliberately scoped to exactly the dirty-tracking mechanism asked
+for.
+
 
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
