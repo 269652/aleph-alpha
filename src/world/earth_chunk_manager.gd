@@ -80,7 +80,6 @@ const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
-const PerfProbe = preload("res://src/rendering/perf_probe.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
@@ -7394,13 +7393,6 @@ func take_fruit_at(pixel_position: Vector2) -> String:
 ## is far smaller than a chunk, so the neighbourhood is a strict superset of
 ## what can be in range.
 func nearest_leaf_litter_near(pixel_position: Vector2, radius_px: float) -> Dictionary:
-	PerfProbe.begin("chunk_manager.nearest_leaf_litter_near")
-	var result := _nearest_leaf_litter_near_impl(pixel_position, radius_px)
-	PerfProbe.end("chunk_manager.nearest_leaf_litter_near")
-	return result
-
-
-func _nearest_leaf_litter_near_impl(pixel_position: Vector2, radius_px: float) -> Dictionary:
 	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
 	var best := {}
 	var best_distance := radius_px
@@ -7427,13 +7419,6 @@ func _nearest_leaf_litter_near_impl(pixel_position: Vector2, radius_px: float) -
 ## dispatch") -- a caller cannot sense more than one real candidate at
 ## once without a plural query to run in the first place.
 func leaf_litter_near(pixel_position: Vector2, radius_px: float) -> Array:
-	PerfProbe.begin("chunk_manager.leaf_litter_near")
-	var result := _leaf_litter_near_impl(pixel_position, radius_px)
-	PerfProbe.end("chunk_manager.leaf_litter_near")
-	return result
-
-
-func _leaf_litter_near_impl(pixel_position: Vector2, radius_px: float) -> Array:
 	var found: Array = []
 	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
 	for dy in range(-1, 2):
@@ -7453,13 +7438,6 @@ func _leaf_litter_near_impl(pixel_position: Vector2, radius_px: float) -> Array:
 ## can be sitting in a neighbouring chunk's own field rather than the exact
 ## chunk `pixel_position` resolves to.
 func consume_leaf_litter_at(pixel_position: Vector2) -> bool:
-	PerfProbe.begin("chunk_manager.consume_leaf_litter_at")
-	var result := _consume_leaf_litter_at_impl(pixel_position)
-	PerfProbe.end("chunk_manager.consume_leaf_litter_at")
-	return result
-
-
-func _consume_leaf_litter_at_impl(pixel_position: Vector2) -> bool:
 	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
@@ -7481,13 +7459,6 @@ func _consume_leaf_litter_at_impl(pixel_position: Vector2) -> bool:
 ## relocate_leaf_near's own doc comment gives. Returns whether a leaf was
 ## actually found and nudged.
 func disperse_leaf_litter_near(walker_position: Vector2) -> bool:
-	PerfProbe.begin("chunk_manager.disperse_leaf_litter_near")
-	var result := _disperse_leaf_litter_near_impl(walker_position)
-	PerfProbe.end("chunk_manager.disperse_leaf_litter_near")
-	return result
-
-
-func _disperse_leaf_litter_near_impl(walker_position: Vector2) -> bool:
 	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(walker_position))
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
@@ -7845,16 +7816,8 @@ func _refresh_ant_moisture() -> void:
 ## The day's live per-chunk wind (see set_wind) is read the SAME way
 ## step_flowers already reads it for seed dispersal -- no new weather state.
 func step_leaf_litter(delta_seconds: float) -> void:
-	PerfProbe.begin("chunk_manager.step_leaf_litter")
-	_step_leaf_litter_impl(delta_seconds)
-	PerfProbe.end("chunk_manager.step_leaf_litter")
-
-
-func _step_leaf_litter_impl(delta_seconds: float) -> void:
 	_leaf_litter_renderer.set_current_time(_world_age_seconds)
 	var weather_day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
-	var total_leaves := 0
-	var decorating_chunks := 0
 	for chunk_coord in _leaf_litter_fields:
 		var field: LeafLitterField = _leaf_litter_fields[chunk_coord]
 		var region_seed := hash("%d_%d" % [chunk_coord.x, chunk_coord.y])
@@ -7864,24 +7827,13 @@ func _step_leaf_litter_impl(delta_seconds: float) -> void:
 				_weather_model.weather_at(weather_day, region_seed)
 			)
 		)
-		var leaf_count: int = field.leaves().size()
-		total_leaves += leaf_count
-		PerfProbe.begin("leaf_litter.field_advance")
 		field.advance(delta_seconds, _world_age_seconds)
-		PerfProbe.end("leaf_litter.field_advance")
 		var mmi: MultiMeshInstance2D = _leaf_litter_mmis.get(chunk_coord)
 		if mmi == null:
 			continue
 		mmi.visible = _decorates(chunk_coord)
 		if mmi.visible:
-			decorating_chunks += 1
-			PerfProbe.begin("leaf_litter.renderer_fill")
 			_leaf_litter_renderer.fill(mmi, field.leaves())
-			PerfProbe.end("leaf_litter.renderer_fill")
-			PerfProbe.add_count("leaf_litter.leaf_instances_pushed_to_fill", leaf_count)
-	PerfProbe.set_gauge("leaf_litter.total_leaves_world", total_leaves)
-	PerfProbe.set_gauge("leaf_litter.loaded_chunks", _leaf_litter_fields.size())
-	PerfProbe.set_gauge("leaf_litter.decorating_chunks", decorating_chunks)
 
 
 ## Real per-mound SCOUT dispatch (see docs/concept/soil_fauna.md "Scouting:
