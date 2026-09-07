@@ -114,6 +114,19 @@ implemented either, but the two are designed to land together.
   now recognizes a decay straight from Trail past Path to bare ground in one
   gap as a real reclaim too). `World._step_path_scarring` paints/tapers it
   right alongside the existing Path loop.
+- ✅ **Real individual footprint stamps on grass/forest, not just the tile
+  wear/dirt-swap above** (2026-09-07) — reported live: "proper
+  pathscarring for grass and forest tiles", asked alongside the same
+  request for real snow footprints. `PathScarring`'s own tile-level wear/
+  dirt-swap/Trail mechanism above is completely UNCHANGED; a new, purely
+  additive visual layer (`FootstepGait`/`FootprintField`/
+  `FootprintRenderer`, shared with snow) now also stamps real, individually
+  -placed, alternating left/right prints as the player actually walks —
+  see [snow_cover.md's "Real left/right footprint
+  stamps"](snow_cover.md#real-leftright-footprint-stamps-2026-09-07) for
+  the full mechanism, since one field/renderer pair serves grass, forest,
+  and snow alike, distinguished only by which surface each print was
+  stamped on.
 - ⬜ Road tier (a higher wear threshold above Trail, its own rendering) —
   the Trail tier's own ceiling IS `PathScarring.MAX_WEAR`, so a Road tier
   needs the wear model's own ceiling raised first, not just a new threshold
