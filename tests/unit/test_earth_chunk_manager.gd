@@ -4017,6 +4017,7 @@ func test_find_nearest_village_is_deterministic():
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
 const IllustratedWormSprite = preload("res://src/rendering/illustrated_worm_sprite.gd")
+const WormMarker = preload("res://src/rendering/worm_marker.gd")
 const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
 
 
@@ -5212,6 +5213,92 @@ func test_a_corpses_sprite_is_removed_once_its_burrow_recovers():
 	assert_false(
 		manager._worm_sprites[chunk_coord].has(cell), "the corpse should be gone once the burrow recovers"
 	)
+
+
+# -- worm corpse pickup (see WormMarker, EarthwormPatch.take_corpse, --------
+# -- docs/concept/aquatic_foraging.md's "Worms as fish bait") ---------------
+# Reported live: "crushing worms... they should stay in world and still be
+# able to picked up". The vanish half was already fixed (see the die-
+# animation tests above); this section covers the still-missing pickup
+# half -- the sprite the manager creates must actually BE the pickable
+# class, wired to the right cell and sim.
+
+func test_every_worm_sprite_is_a_pickable_worm_marker():
+	manager.update(_berlin_tile)
+	_surface_all_worms()
+	manager.step_worms(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+	var checked := 0
+	for chunk_coord in manager._worm_sprites:
+		for cell in manager._worm_sprites[chunk_coord]:
+			assert_true(
+				manager._worm_sprites[chunk_coord][cell] is WormMarker,
+				"every worm sprite should be the pickable class, not a bare Sprite2D"
+			)
+			checked += 1
+	assert_gt(checked, 0, "precondition: some worms were rendered")
+
+
+func test_a_crushed_worms_marker_is_wired_to_its_cell_and_sim():
+	manager.update(_berlin_tile)
+	_surface_all_worms()
+	manager.step_worms(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	if patch.worm_cells().is_empty():
+		pending("no worm burrow in this exact chunk this seed")
+		return
+	var cell: Vector2i = patch.worm_cells()[0]
+	if not patch.is_surfaced(cell):
+		pending("no surfaced worm in this exact chunk this seed")
+		return
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(manager.crush_worm_at(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	var marker: WormMarker = manager._worm_sprites[chunk_coord][cell]
+	assert_eq(marker.cell, cell, "the marker must know which burrow it sits over")
+	assert_same(marker.worm_world, patch, "the marker must be able to tell the real sim its corpse was taken")
+
+
+## The real hazard pickup introduces: WormMarker.pick_up frees itself
+## directly (mirroring PickableSeed/MushroomMarker), but _worm_sprites'
+## dict entry only gets cleaned up on the next _sync_worm_sprites pass, up
+## to WORM_REFRESH_INTERVAL later -- while _crawl_worm_sprites runs every
+## single step_worms call in between. Mirrors test_crushing_ants_does_not_
+## crash_on_a_stale_already_freed_entry's own ".free() the worst case"
+## idiom exactly.
+func test_crawling_worm_sprites_does_not_crash_on_a_stale_already_freed_entry():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	if patch.worm_cells().is_empty():
+		pending("no worm burrow in this exact chunk this seed")
+		return
+	var cell: Vector2i = patch.worm_cells()[0]
+	var stale := WormMarker.new()
+	stale.free()  # actually freed already, not merely queue_free()'d -- the worst case
+	manager._worm_sprites[chunk_coord][cell] = stale
+	manager._crawl_worm_sprites()
+	assert_false(
+		manager._worm_sprites[chunk_coord].has(cell),
+		"a stale freed entry should be cleaned up, not left dangling for the next frame to trip over"
+	)
+
+
+## Same hazard, the other call site: _sync_worm_sprites' own "the worm went
+## back down or its corpse expired" cleanup branch calls .free() on
+## whatever sprite is on record -- which pickup may have already freed.
+func test_syncing_worm_sprites_does_not_crash_on_a_stale_already_freed_entry():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	if patch.worm_cells().is_empty():
+		pending("no worm burrow in this exact chunk this seed")
+		return
+	var cell: Vector2i = patch.worm_cells()[0]
+	var stale := WormMarker.new()
+	stale.free()
+	manager._worm_sprites[chunk_coord][cell] = stale
+	manager._sync_worm_sprites(chunk_coord)
+	assert_false(manager._worm_sprites[chunk_coord].has(cell))
 
 
 func test_unloading_a_chunk_drops_its_worms_and_their_sprites():
