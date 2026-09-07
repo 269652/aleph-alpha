@@ -31,6 +31,7 @@ class StubWorld:
 	var seed_present := true
 	var fruit_species := "apple"  # "" means nothing there
 	var leaf_present := true
+	var corpse_present := true
 	var planted_grass: Array = []
 	var planted_seeds: Array = []  # [{"position": Vector2, "species": String}]
 
@@ -57,17 +58,23 @@ class StubWorld:
 		leaf_present = false
 		return was_present
 
+	func take_ant_corpse_near(_position: Vector2) -> bool:
+		var was_present := corpse_present
+		corpse_present = false
+		return was_present
+
 	## Scouting-sensing stand-ins for EarthChunkManager's own real
-	## leaf_litter_near/grass_seeds_near/fruit_near (see AntForagerMarker.
-	## _sense_food_nearby) -- each defaults to "nothing nearby" (empty), a
-	## scouting test opts a specific kind IN by setting its own array to a
-	## real candidate list. Radius is ignored here on purpose: a stub
-	## reporting whatever the test put there IS the "sensed it" signal,
-	## the same "trust the caller already scoped this" convention the
-	## other stub methods above already use.
+	## leaf_litter_near/grass_seeds_near/fruit_near/ant_corpses_near (see
+	## AntForagerMarker._sense_food_nearby) -- each defaults to "nothing
+	## nearby" (empty), a scouting test opts a specific kind IN by setting
+	## its own array to a real candidate list. Radius is ignored here on
+	## purpose: a stub reporting whatever the test put there IS the
+	## "sensed it" signal, the same "trust the caller already scoped this"
+	## convention the other stub methods above already use.
 	var nearby_leaves: Array = []
 	var nearby_seeds: Array = []
 	var nearby_fruit: Array = []
+	var nearby_corpses: Array = []
 
 	## How many times each real EarthChunkManager query this stub stands in
 	## for was actually called -- see the sense-interval-throttle tests
@@ -86,6 +93,9 @@ class StubWorld:
 
 	func fruit_near(_position: Vector2, _radius_tiles: int) -> Array:
 		return nearby_fruit
+
+	func ant_corpses_near(_position: Vector2, _radius_px: float) -> Array:
+		return nearby_corpses
 
 
 func _new_colony() -> AntColony:
@@ -333,6 +343,72 @@ func test_an_empty_handed_leaf_trip_plants_nothing():
 	assert_true(f.is_queued_for_deletion())
 
 
+## The corpse-forage counterpart of the leaf trio just above -- a dead ant
+## is real food/detritus, resolved through take_ant_corpse_near exactly
+## like a leaf resolves through consume_leaf_litter_at, and (see
+## docs/concept/soil_fauna.md "Ant corpses: foraged home, not left to
+## vanish") never re-cached/re-planted once carried home, the same "real
+## detritus, not a propagule" shape a leaf already has.
+func test_a_corpse_trip_uses_the_ant_corpse_api_and_resolves_on_arrival():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned(Vector2(2, 0), Vector2.ZERO, world, colony)
+	f.forage_kind = "corpse"
+	f._process(1.0)  # comfortably enough to close a 2px leg
+	assert_false(world.corpse_present, "arrival should really forage the corpse")
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	assert_true(f._behavior.found_food)
+
+
+func test_a_successful_corpse_trip_plants_nothing_and_frees_itself():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var mound := Vector2(5000, 5000)
+	var f := _spawned(mound + Vector2(2, 0), mound, world, colony)
+	f.forage_kind = "corpse"
+	f._process(1.0)  # arrive at the corpse, take it, start returning
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	f._process(1.0)  # arrive back at the mound
+	assert_eq(world.planted_grass.size(), 0, "a corpse must never be re-planted as a grass patch")
+	assert_eq(world.planted_seeds.size(), 0, "a corpse must never be cached as a sapling")
+	assert_true(f.is_queued_for_deletion(), "a forager should free itself once its whole round trip is walked")
+
+
+func test_an_empty_handed_corpse_trip_plants_nothing():
+	var world := StubWorld.new()
+	world.corpse_present = false
+	var colony := _new_colony()
+	var mound := Vector2(5000, 5000)
+	var f := _spawned(mound + Vector2(2, 0), mound, world, colony)
+	f.forage_kind = "corpse"
+	f._process(1.0)
+	f._process(1.0)
+	assert_eq(world.planted_grass.size(), 0)
+	assert_eq(world.planted_seeds.size(), 0)
+	assert_true(f.is_queued_for_deletion())
+
+
+## record_forage_result is called unconditionally at the top of
+## _resolve_arrival_at_mound regardless of forage_kind, and it already
+## deposits AntColony.FOOD_PER_SUCCESSFUL_FORAGE on any success -- so a
+## successful corpse trip feeding the mound's real food reserve falls out
+## of the EXISTING kind-agnostic mechanism for free, with no new AntColony
+## method needed. Pinned directly so a future refactor cannot silently
+## drop it.
+func test_a_successful_corpse_trip_feeds_the_mounds_real_food_reserve():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var mound := Vector2(5000, 5000)
+	var before := colony.food_stored_at(MOUND_CELL)
+	var f := _spawned(mound + Vector2(2, 0), mound, world, colony)
+	f.forage_kind = "corpse"
+	f._process(1.0)
+	f._process(1.0)
+	assert_almost_eq(
+		colony.food_stored_at(MOUND_CELL), before + AntColony.FOOD_PER_SUCCESSFUL_FORAGE, 0.001
+	)
+
+
 # -- pheromones: a successful trip marks the food location ------------------
 
 ## Only a CLUSTER find lays a trail now (see this file's own "cluster
@@ -505,6 +581,63 @@ func test_shows_no_carried_leaf_visual_for_a_seed_trip():
 	assert_false(leaf_sprite.visible, "a grass seed has its own carry pose already -- this visual is leaf-only")
 
 
+# -- the carried CORPSE visual: "visibly dragged into the mound" ----------
+#
+# Reported live: "instead dead ants should be foraged by other ants so
+# they get visibly dragged into the mound" -- the visual half. A THIRD
+# child (after _sprite and _leaf_sprite), same trailing-behind-the-body
+## positioning _update_carried_leaf already established, tinted with
+## SquashCrushEffect.TINT (the same "no longer alive" tell the corpse
+## itself showed before being taken) rather than cropped from an atlas --
+## a dead ant looks like a live one, just tinted, the same "no dedicated
+## corpse pose, reuse the ordinary walk pose" shape the corpse's own
+## in-place tint already established.
+
+func test_shows_no_carried_corpse_visual_while_approaching():
+	var f := _spawned(Vector2(50, 0), Vector2.ZERO)
+	f.forage_kind = "corpse"
+	var corpse_sprite := f.get_child(2) as Sprite2D
+	assert_false(corpse_sprite.visible, "nothing has been picked up yet -- no carried corpse to show")
+
+
+func test_shows_a_carried_corpse_visual_while_returning_with_a_real_corpse():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned(Vector2(2, 0), Vector2.ZERO, world, colony)
+	f.forage_kind = "corpse"
+	f._process(1.0)  # arrive, pick up the corpse, start returning
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	assert_true(f._behavior.found_food)
+	var corpse_sprite := f.get_child(2) as Sprite2D
+	assert_true(corpse_sprite.visible, "a real corpse was just picked up -- it should now visibly ride home")
+	assert_not_null(corpse_sprite.texture)
+	assert_eq(corpse_sprite.modulate, SquashCrushEffect.TINT, "reads as dead, the same tell the corpse itself showed")
+
+
+func test_shows_no_carried_corpse_visual_on_an_empty_handed_corpse_return():
+	var world := StubWorld.new()
+	world.corpse_present = false
+	var colony := _new_colony()
+	var f := _spawned(Vector2(2, 0), Vector2.ZERO, world, colony)
+	f.forage_kind = "corpse"
+	f._process(1.0)
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	assert_false(f._behavior.found_food)
+	var corpse_sprite := f.get_child(2) as Sprite2D
+	assert_false(corpse_sprite.visible, "nothing was actually found -- there is no corpse to visibly carry home")
+
+
+func test_shows_no_carried_corpse_visual_for_a_seed_trip():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned(Vector2(2, 0), Vector2.ZERO, world, colony)
+	f._process(1.0)  # default forage_kind "seed"
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.RETURNING)
+	assert_true(f._behavior.found_food)
+	var corpse_sprite := f.get_child(2) as Sprite2D
+	assert_false(corpse_sprite.visible, "a grass seed has its own carry pose already -- this visual is corpse-only")
+
+
 ## Pinned, not eyeballed: a carried leaf should read as the SAME SIZE as one
 ## still sitting on the ground (LeafLitterRenderer.WORLD_SIZE), not the
 ## atlas stamp's own native pixel size (LeafLitterAtlas.STAMP_SIZE, a fixed
@@ -636,6 +769,32 @@ func test_a_scout_prefers_a_leaf_over_a_seed_sensed_at_the_same_time():
 	var f := _spawned_scout(Vector2.ZERO, world, colony)
 	f._process(0.1)
 	assert_eq(f.forage_kind, "leaf")
+
+
+## Reported live: "ants do also disappear after a few seconds after being
+## crushed.. instead dead ants should be foraged by other ants so they get
+## visibly dragged into the mound" -- the sensing half. Checked LAST (after
+## windfall), same append-only priority every other kind already has --
+## nothing about the existing leaf/seed/windfall order changes.
+func test_a_scout_commits_to_a_real_corpse_within_sensing_range():
+	var world := StubWorld.new()
+	world.nearby_corpses = [{"position": Vector2(5, 0)}]
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.1)
+	assert_eq(f._behavior.phase, AntForageBehavior.Phase.APPROACHING)
+	assert_eq(f.target_position, Vector2(5, 0))
+	assert_eq(f.forage_kind, "corpse")
+
+
+func test_a_scout_prefers_windfall_over_a_corpse_sensed_at_the_same_time():
+	var world := StubWorld.new()
+	world.nearby_fruit = [{"position": Vector2(5, 0), "species": "acorn"}]
+	world.nearby_corpses = [{"position": Vector2(-5, 0)}]
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.1)
+	assert_eq(f.forage_kind, "windfall")
 
 
 func test_a_scout_gives_up_after_the_scouting_budget_with_nothing_found():

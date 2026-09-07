@@ -127,10 +127,13 @@ var target_position: Vector2 = Vector2.ZERO
 var mound_position: Vector2 = Vector2.ZERO
 ## "seed" (grass seed -- always survives to be planted), "windfall"
 ## (fallen fruit/nut -- resolves through AntColony.windfall_is_consumed
-## first), or "leaf" (real detritus, never re-cached). Decides which of
-## the world's take/plant APIs this trip actually calls. A scout decides
-## this ITSELF, the moment it senses something real nearby (see
-## _sense_food_nearby) -- no longer decided by the dispatcher in advance.
+## first), "leaf" (real detritus, never re-cached), or "corpse" (a
+## settled, dead ant -- see EarthChunkManager.ant_corpses_near/
+## take_ant_corpse_near -- real food/detritus like a leaf, never
+## re-cached either). Decides which of the world's take/plant APIs this
+## trip actually calls. A scout decides this ITSELF, the moment it senses
+## something real nearby (see _sense_food_nearby) -- no longer decided by
+## the dispatcher in advance.
 var forage_kind := "seed"
 
 ## Opts into scouting (see this file's own top doc comment and
@@ -259,6 +262,15 @@ var _carrying := false
 ## == "leaf" trips that actually found something ever show it.
 var _leaf_sprite: Sprite2D
 
+## The real, visible corpse riding home with this ant (see
+## _update_carried_corpse) -- reported live: "instead dead ants should be
+## foraged by other ants so they get visibly dragged into the mound". A
+## THIRD child, same "drawn under the ant's own body, trailing behind it"
+## shape _leaf_sprite already establishes. Hidden by default: only
+## forage_kind == "corpse" trips that actually found something ever show
+## it.
+var _corpse_sprite: Sprite2D
+
 static var _procedural_generator := ProceduralDecomposerSprite.new()
 static var _illustrated_generator := IllustratedDecomposerSprite.new()
 static var _leaf_atlas := LeafLitterAtlas.new()
@@ -298,6 +310,9 @@ func _ensure_initialized() -> void:
 	_leaf_sprite = Sprite2D.new()
 	_leaf_sprite.visible = false
 	add_child(_leaf_sprite)
+	_corpse_sprite = Sprite2D.new()
+	_corpse_sprite.visible = false
+	add_child(_corpse_sprite)
 	if scout or resolver:
 		wander_seed = randi()
 		_movement = AmbientFlyerMovement.new(
@@ -478,6 +493,7 @@ func _process(frame_delta: float) -> void:
 			_resolve_arrival_at_food()
 			_update_sprite()
 			_update_carried_leaf()
+			_update_carried_corpse()
 		AntForageBehavior.Phase.RETURNING:
 			_resolve_arrival_at_mound()
 			queue_free()
@@ -579,6 +595,14 @@ func _sense_food_nearby() -> Dictionary:
 			"kind": "windfall", "position": fruit[0]["position"],
 			"species": fruit[0]["species"], "cluster_size": fruit.size(),
 		}
+	# Checked last -- an append-only addition, same priority every other
+	# kind already has (see docs/concept/soil_fauna.md "Ant corpses:
+	# foraged home, not left to vanish"). No biome gate needed, same
+	# reason leaf litter has none: a dead ant can be lying anywhere any
+	# mound's own scouts already range over.
+	var corpses: Array = _world.ant_corpses_near(position, sense_radius_px)
+	if not corpses.is_empty():
+		return {"kind": "corpse", "position": corpses[0]["position"], "cluster_size": corpses.size()}
 	return {}
 
 
@@ -612,6 +636,8 @@ func _resolve_arrival_at_food() -> void:
 			succeeded = _carried_species != ""
 		elif forage_kind == "leaf":
 			succeeded = _world.consume_leaf_litter_at(target_position)
+		elif forage_kind == "corpse":
+			succeeded = _world.take_ant_corpse_near(target_position)
 		else:
 			succeeded = _world.take_grass_seed_at(target_position)
 	_behavior.arrive_at_food(succeeded)
@@ -647,6 +673,8 @@ func _remaining_same_kind_count() -> int:
 		"windfall":
 			var fruit: Array = _world.fruit_near(target_position, sense_radius_tiles)
 			return fruit.filter(func(f): return TreeSpecies.is_nut(String(f.get("species", "")))).size()
+		"corpse":
+			return _world.ant_corpses_near(target_position, sense_radius_px).size()
 	return 0
 
 
@@ -701,7 +729,7 @@ func _resolve_arrival_at_mound() -> void:
 		return
 	if forage_kind == "windfall" and AntColony.windfall_is_consumed(_colony.windfall_carrier_seed_for(_mound_cell)):
 		return  # eaten on the spot at the mound -- no cache leg
-	if forage_kind == "leaf":
+	if forage_kind == "leaf" or forage_kind == "corpse":
 		return  # real detritus/food, not a propagule -- consumed already, never re-cached
 	var carrier_seed := _colony.carrier_seed_for(_mound_cell)
 	var carry_tiles := AntColony.carry_distance_tiles(carrier_seed)
@@ -768,6 +796,43 @@ func _update_carried_leaf() -> void:
 	var to_mound := mound_position - position
 	var trail_direction := -to_mound.normalized() if to_mound.length() > 0.01 else Vector2.ZERO
 	_leaf_sprite.position = trail_direction * LeafLitterRenderer.WORLD_SIZE * _TRAIL_OFFSET_FRACTION
+
+
+## The real, visible corpse riding home with the ant (see docs/concept/
+## soil_fauna.md "Ant corpses: foraged home, not left to vanish" --
+## reported live: "they get visibly dragged into the mound") -- shown for
+## the whole RETURNING leg of a successful corpse trip, same "set once at
+## real arrival, never touched again for the rest of the straight-line
+## walk home" shape _update_carried_leaf already establishes, same trailing-
+## behind-the-body positioning (ANT_WORLD_WIDTH standing in for
+## LeafLitterRenderer.WORLD_SIZE -- the real thing being dragged is
+## another ant now, not a leaf, so its own real-world size is what "how
+## far behind" should be proportional to). No dedicated corpse texture to
+## crop (IllustratedDecomposerSprite's "ant" art has no crushed pose any
+## more than a live one does -- see AntForagerMarker.crush()'s own doc
+## comment): reuses the identical texture _update_sprite's own "walk" pose
+## already draws, tinted with SquashCrushEffect.TINT on top -- the same
+## "no longer alive" tell the corpse itself showed, in place, before this
+## ant ever picked it up.
+func _update_carried_corpse() -> void:
+	var carrying_corpse := (
+		forage_kind == "corpse"
+		and _behavior.phase == AntForageBehavior.Phase.RETURNING
+		and _behavior.found_food
+	)
+	_corpse_sprite.visible = carrying_corpse
+	if not carrying_corpse:
+		return
+	if _illustrated_generator.has_action("ant", "walk"):
+		_corpse_sprite.texture = _illustrated_generator.generate_textures("ant", "walk")[0]
+		_corpse_sprite.scale = Vector2.ONE * _illustrated_generator.marker_scale("ant", "walk")
+	else:
+		_corpse_sprite.texture = _procedural_generator.generate_texture("ant")
+		_corpse_sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	_corpse_sprite.modulate = SquashCrushEffect.TINT
+	var to_mound := mound_position - position
+	var trail_direction := -to_mound.normalized() if to_mound.length() > 0.01 else Vector2.ZERO
+	_corpse_sprite.position = trail_direction * IllustratedDecomposerSprite.ANT_WORLD_WIDTH * _TRAIL_OFFSET_FRACTION
 
 
 ## Crops `species`/`season`'s own stamp out of the SAME shared atlas texture
