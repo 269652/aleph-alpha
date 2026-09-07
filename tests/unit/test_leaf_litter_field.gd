@@ -733,6 +733,152 @@ func test_try_disperse_near_re_derives_on_water_at_the_new_position():
 	assert_eq(field.leaves()[0].on_water, field.leaves()[0].position.x > 500.0)
 
 
+# -- waterlogging: a floating leaf sinks after a bounded, real-world- -------
+# -- grounded duration --------------------------------------------------------
+#
+# docs/concept/soil_fauna.md's own follow-up to the leaf-litter dirty-
+# tracking fix (generation() above) named a real, deliberately-deferred
+# finding: an on_water leaf is the ONE case that must always look dirty
+# (see test_a_floating_leaf_bumps_the_generation_every_advance_even_with_
+# nothing_else_changing above), so a chunk with an actively-floating leaf
+# still pays a full MultiMesh rebuild every single frame for as long as
+# that leaf keeps floating -- unbounded, since nothing before this made a
+# floating leaf ever STOP floating except the current itself drying up.
+# Live-measured (a --solo session with the character actually wandering,
+# not sitting still): this is not a rare edge case -- rivers act as
+# natural walking corridors, and over a ~27-real-minute wandering session
+# at least one decorating chunk had a floating leaf 92% of the time.
+#
+# Real-world grounding: a freshly fallen dry leaf floats at first on
+# trapped air and its own waxy cuticle, but progressively absorbs water
+# through its cut petiole and stomata (the "leaf conditioning"/leaching
+# process stream ecology studies document) and loses buoyancy within
+# roughly a day of continuous immersion -- the real mechanism behind why a
+# stream's floating litter settles into a benthic "leaf pack" rather than
+# drifting forever. MAX_FLOAT_SECONDS bounds how long any ONE leaf can keep
+# forcing its chunk to look dirty every frame, the same way LIFETIME bounds
+# how long any one leaf lingers at all.
+
+func _floating_field(now := 0.0) -> LeafLitterField:
+	var field := _field()
+	field.set_current_probe(_uniform_current(Vector2.RIGHT, 0.6))
+	field.add_leaf(Vector2(100, 100), "cherry", "autumn", now)
+	return field
+
+
+## Not an eyeballed number -- one real-world day (the low end of the "hours
+## to about a day" real waterlogging window cited above), expressed as
+## 1/365 of a real year, translated through the SAME real-year ->
+## compressed-game-time ratio LIFETIME's own doc comment already uses.
+func test_max_float_seconds_is_pinned_to_one_real_world_day_of_compressed_time():
+	assert_almost_eq(LeafLitterField.MAX_FLOAT_SECONDS, SeasonCycle.SECONDS_PER_YEAR / 365.0, 0.01)
+
+
+func test_a_floating_leaf_keeps_floating_before_max_float_seconds_elapses():
+	var field := _floating_field()
+	field.advance(LeafLitterField.MAX_FLOAT_SECONDS - 1.0, LeafLitterField.MAX_FLOAT_SECONDS - 1.0)
+	assert_true(field.leaves()[0].on_water, "not yet waterlogged")
+
+
+func test_a_floating_leaf_waterlogs_and_sinks_once_max_float_seconds_elapses():
+	var field := _floating_field()
+	var now := LeafLitterField.MAX_FLOAT_SECONDS + 1.0
+	field.advance(now, now)
+	var leaf: Dictionary = field.leaves()[0]
+	assert_false(leaf.on_water, "waterlogged after MAX_FLOAT_SECONDS -- sinks and rejoins ordinary litter")
+	assert_eq(
+		leaf.transition_from, leaf.position,
+		"settles in place with no pending eased-transition cosmetic, same as the current-stopped sink path"
+	)
+
+
+func test_a_sunk_leaf_no_longer_bumps_the_generation_every_frame():
+	var field := _floating_field()
+	var now := LeafLitterField.MAX_FLOAT_SECONDS + 1.0
+	field.advance(now, now)
+	assert_false(field.leaves()[0].on_water, "precondition: sunk")
+	var settled := field.generation()
+	field.advance(1.0, now + 1.0)
+	assert_eq(
+		field.generation(), settled,
+		"a sunk leaf must stop looking dirty every frame -- the whole point of waterlogging"
+	)
+
+
+func test_relocating_an_already_floating_leaf_does_not_restart_its_floating_clock():
+	var field := _floating_field()
+	assert_true(field.leaves()[0].on_water, "precondition: floating from the start (t=0)")
+	# A lateral nudge mid-water (still onto water) does not un-waterlog a
+	# leaf that has already been soaking -- the ORIGINAL floating_since (0)
+	# must survive the move, not reset to this relocation's own `now` (10).
+	field.relocate_leaf_near(Vector2(100, 100), 50.0, Vector2(150, 100), 10.0)
+	assert_true(field.leaves()[0].on_water, "precondition: still on water after the nudge")
+	# Past MAX_FLOAT_SECONDS since the ORIGINAL t=0 fall, but well short of
+	# MAX_FLOAT_SECONDS since the t=10 relocation -- only sinks here if the
+	# clock correctly did NOT reset.
+	var probe_time := LeafLitterField.MAX_FLOAT_SECONDS + 3.0
+	field.advance(probe_time, probe_time)
+	assert_false(
+		field.leaves()[0].on_water,
+		"must have sunk by now -- the clock started at the original t=0 fall, not the t=10 relocation"
+	)
+
+
+func test_a_leaf_relocated_onto_water_starts_a_fresh_floating_clock():
+	var field := _field()
+	field.set_current_probe(func(position): return {"direction": Vector2.RIGHT, "speed_m_s": 0.6} if position.x > 500.0 else {"direction": Vector2.ZERO, "speed_m_s": 0.0})
+	field.add_leaf(Vector2(0, 0), "cherry", "autumn", 0.0)
+	assert_false(field.leaves()[0].on_water, "precondition: starts on dry land")
+	# Relocated onto water well after MAX_FLOAT_SECONDS has already elapsed
+	# since the original t=0 fall -- if floating_since wrongly stayed at its
+	# stale dry-land default instead of resetting here, the very next
+	# advance() call would sink it immediately.
+	var relocate_time := LeafLitterField.MAX_FLOAT_SECONDS + 100.0
+	field.relocate_leaf_near(Vector2(0, 0), 10.0, Vector2(600, 0), relocate_time)
+	field.advance(1.0, relocate_time + 1.0)
+	assert_true(
+		field.leaves()[0].on_water,
+		"only 1 second into its own real floating clock -- must still be floating, not sunk"
+	)
+
+
+func test_the_wind_roll_starts_a_fresh_floating_clock_for_a_newly_floating_leaf():
+	var field := _settled_field(40)
+	# Water covers the whole field now -- any leaf the wind actually blows
+	# lands on it immediately, regardless of how far it travelled. Set
+	# AFTER _settled_field's own add_leaf calls, so every leaf starts dry
+	# (on_water only re-derives when a leaf's position is actually set --
+	# see the "on_water" field's own doc comment) and only the wind-roll's
+	# own relocation can flip one to floating.
+	field.set_current_probe(_uniform_current(Vector2.RIGHT, 0.6))
+	var now := LeafLitterField.TRANSITION_DURATION + 0.1
+	var landed_on_water := false
+	for i in _WIND_TEST_CHECKS:
+		now += LeafLitterField.WIND_DISPERSAL_INTERVAL
+		field.advance(LeafLitterField.WIND_DISPERSAL_INTERVAL, now)
+		for leaf in field.leaves():
+			if leaf.on_water:
+				landed_on_water = true
+				break
+		if landed_on_water:
+			break
+	assert_true(
+		landed_on_water,
+		"a real wind should eventually blow at least one leaf onto water across %d checks" % _WIND_TEST_CHECKS
+	)
+	# Confirm the clock just started (this relocation's own `now`), not some
+	# stale default -- advancing only a little further must not sink it.
+	field.advance(1.0, now + 1.0)
+	var still_floating := false
+	for leaf in field.leaves():
+		if leaf.on_water:
+			still_floating = true
+	assert_true(
+		still_floating,
+		"must still be floating shortly after the wind first landed it on water -- its clock just started"
+	)
+
+
 # -- generation: dirty-tracking for the renderer's own refill decision ------
 #
 # EarthChunkManager.step_leaf_litter used to call LeafLitterRenderer.fill

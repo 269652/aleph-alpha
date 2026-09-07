@@ -2457,6 +2457,124 @@ stayed deliberately scoped to exactly the dirty-tracking mechanism asked
 for.
 
 
+### Floating-leaf cost at ordinary play scale: confirmed real, bounded with a waterlog-and-sink duration (2026-09-07)
+
+The entry above left an explicit open question: does the floating-leaf
+full-chunk-rebuild cost actually matter once decoration range moves with
+the player, rather than sitting fixed near one river for 20+ minutes the
+way that measurement's stationary `--solo` spawn point did? Investigated
+directly rather than left as the "may matter far less in practice"
+speculation above — **the speculation does not hold up.**
+
+**Methodology: a `--solo` session that actually wanders, not a script that
+reasons about one.** `scenes/world.gd`'s `--solo` gate was extended
+(temporarily — never committed, reverted before this fix landed) with a
+`--wander` flag: a watchdog re-picks a random heading via
+`Input.action_press`/`action_release` (the same synthesized-input path a
+real keyboard drives) roughly every 5 real seconds, or immediately if the
+character's own position has stalled (walked into water/terrain) — a
+self-correcting autopilot, not a scripted route, so it explores organically
+rather than along a route chosen to prove a point either way. Run against
+the SAME `--user-data-dir` real-save-snapshot methodology the entries above
+already establish, with temporary instrumentation splitting
+`step_leaf_litter`'s own cost into its two real components
+(`LeafLitterField.advance()` vs `LeafLitterRenderer.fill()`) per 3-second
+window, alongside decorating/"hot" (has ≥1 `on_water` leaf) chunk counts.
+
+**Result: wandering does not reliably move decoration range away from
+water — if anything, the opposite.** Rivers act as natural walking
+corridors (water blocks/slows crossing, so the watchdog's own stall-
+detection selects FOR headings that run alongside a riverbank over headings
+that walk into one) — the same reason a real player tends to follow a
+shoreline rather than repeatedly wade across it. Across a ~27-real-minute
+session (534 measured windows): **at least one decorating chunk had a
+floating leaf in 92.7% of windows** (39 of 534 read zero), with the
+hot-chunk count itself frequently EXCEEDING the stationary baseline's own
+steady 2-of-9 — modal value 3, a majority of windows at 2 or more, briefly
+reaching all 9 decorating chunks simultaneously. Combined `advance()` +
+`fill()` cost, once total world leaf population reached a scale comparable
+to the stationary baseline's own 2,361-leaf endpoint (~2,150-2,220 leaves,
+reached here over the longer, more realistic ~27-minute wander rather than
+~19 stationary minutes — old chunks unloading as the player moves away
+resets their own litter, per this doc's own "not persisted" scope note, so
+a wandering session's total population grows more slowly but does still
+reach a comparable magnitude), repeatedly read 400-490ms/window — squarely
+comparable to the stationary plateau's own ~525-650ms, not the "far less in
+practice" this doc's own prior entry hoped for. (One window read
+1,196.5ms, well above either figure; treated as likely contention-inflated
+per this doc's own established shared-machine caveat rather than a load-
+bearing data point, since the surrounding windows already make the case on
+their own.)
+
+**A second, separate, previously-unattributed finding: `LeafLitterField.
+advance()` — not `LeafLitterRenderer.fill()` — is consistently the LARGER
+of the two cost components, roughly 2-4x fill's own share, in BOTH the
+stationary and wandering measurements.** The round-4 entry's own numbers
+already showed this (`field_advance` ~20ms→~420ms vs `renderer_fill`
+~9ms→~150ms) without naming it explicitly. `advance()` runs once per
+LOADED chunk every frame (measured here: up to 36 loaded against only 9
+ever decorating) regardless of visibility — the dirty-tracking fix above
+only ever gated `fill()`, never touched this loop at all, so a chunk's own
+per-leaf aging/decay/prune cost keeps paying in full for every chunk kept
+in memory for continuity, whether the player can see it or not. This is a
+real, structurally distinct, still entirely open cost — named here rather
+than silently folded into "the floating-leaf problem" it is easy to
+conflate with, and explicitly NOT fixed by the change below (which bounds
+on_water's own extra per-leaf cost and always-dirty behaviour, but does
+nothing for the baseline per-leaf loop cost every loaded leaf pays
+regardless of on_water status).
+
+**The fix: a floating leaf waterlogs and sinks, the same real mechanism
+that keeps a real stream's litter from drifting forever.** A freshly
+fallen dry leaf floats at first on trapped air and its own waxy cuticle,
+but progressively absorbs water through its cut petiole and stomata (the
+"leaf conditioning"/leaching process stream ecology studies document) and
+loses buoyancy within roughly a day of continuous immersion — the real
+reason a stream's floating litter settles into a benthic "leaf pack"
+rather than drifting indefinitely, and the specific real-world-groundable
+question `leaf_litter.md`'s own "Floating on water" section left
+unaddressed. `LeafLitterField.MAX_FLOAT_SECONDS` (one real-world day,
+translated through the same real-year → compressed-game-time ratio
+`LIFETIME` already uses) bounds how long any ONE leaf can keep forcing its
+own chunk to look dirty every frame: `_advance_floating_leaf` now checks
+`now - floating_since >= MAX_FLOAT_SECONDS` first, before any current
+probing, and — if crossed — settles the leaf in place and flips `on_water`
+false, exactly like the pre-existing "current dried up" sink path. A new
+per-leaf `floating_since` field (set whenever `on_water` transitions
+false→true at any of the four sites that can cause it — `add_leaf`,
+`relocate_leaf_near`, `try_disperse_near`, `advance`'s own wind-roll —
+deliberately left UNTOUCHED when an already-floating leaf is nudged to
+another spot still on water, since a lateral nudge mid-water does not
+un-waterlog it) tracks each floating episode's own real start, never a
+stale value from a prior episode. A sunk leaf is not banned from floating
+again — a genuine later current encounter starts a fresh clock and resumes
+the same "always dirty while floating" contract, unchanged.
+
+This does not, and is not intended to, fully close the gap measured above:
+it bounds any SINGLE leaf's own worst-case floating duration (and the
+`_advance_floating_leaf`-specific per-frame probe/drift cost that comes
+with it), but a chunk with continuous new leaf-fall landing on the same
+stretch of river can still have SOME leaf on_water at nearly any given
+moment, and the `advance()` baseline-cost finding above is untouched
+entirely. Both are named, explicit, deliberately out-of-scope follow-ups —
+this fix stayed scoped to exactly the mechanism its own investigation
+named: bounding an individual leaf's unbounded floating window.
+
+**Strict TDD**: 7 new tests in `test_leaf_litter_field.gd` (confirmed red
+first — a parse-time "cannot find member MAX_FLOAT_SECONDS" error, the
+same legitimate whole-script-parse-failure red the round-4 fix's own tests
+hit for an undefined `generation()` call) — the constant's own real-world-
+grounded pinning, floating-before/after-the-threshold behaviour, the sink
+frame's own settle-in-place contract, the post-sink "stops looking dirty
+every frame" payoff (the actual point of this fix), and the
+reset-vs-fresh-clock distinction across all three relocation call sites
+(mid-water nudge keeps the original clock; a genuinely new floating episode
+via relocation, dispersal, or the wind-roll each start a fresh one). All 82
+tests in that file green after (75 pre-existing + 7 new), alongside
+`test_leaf_litter_renderer.gd` (42/42, untouched) and `test_earth_chunk_
+manager.gd`'s own "leaf" substring sweep (31/31) — zero regressions.
+
+
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
 A real, hand-illustrated sheet (`assets/sprites/animals/worm.png`) replaces

@@ -9122,6 +9122,38 @@ possible future follow-up rather than expanded into here. See
 `soil_fauna.md`'s own "Leaf litter dirty-tracking" entry for the full
 writeup, including the two correctness subtleties.
 
+**Floating-leaf cost confirmed real at ordinary (non-stationary) play
+scale, and bounded — 2026-09-07, same day.** The paragraph above left an
+explicit open question: does a chunk with a floating leaf's unbounded
+per-frame rebuild cost actually matter once decoration range moves with
+the player, rather than sitting fixed near one river for 20+ minutes?
+Investigated directly with a `--solo` session where the character
+genuinely wanders (synthesized `Input.action_press` input, a self-
+correcting watchdog, never a scripted route) rather than sitting still —
+**the "may matter far less in practice" speculation did not hold up.**
+Rivers act as natural walking corridors (water blocks/slows crossing, so
+a stall-detecting autopilot — and, by the same logic, a real player —
+tends to walk alongside a riverbank rather than through it); across a
+~27-real-minute wandering session, at least one decorating chunk had a
+floating leaf in 92.7% of measured windows, with the hot-chunk count
+itself frequently exceeding the stationary baseline's own steady 2-of-9
+(briefly reaching all 9), and combined cost reaching magnitudes comparable
+to the stationary plateau once total population reached a similar scale.
+A second, separate finding surfaced along the way: `LeafLitterField.
+advance()`, not `LeafLitterRenderer.fill()`, is consistently the LARGER of
+the two cost components (2-4x) in both measurements — real, structurally
+distinct, and left open. Fixed (the floating-leaf part): a real-world-
+grounded `MAX_FLOAT_SECONDS` (one real-world day) now makes a floating
+leaf waterlog and sink, the same mechanism that keeps a real stream's
+litter from drifting forever, bounding any one leaf's own worst-case
+"always looks dirty" window. 7 new tests (confirmed red first), 82/82
+green after in `test_leaf_litter_field.gd`, zero regressions in
+`test_leaf_litter_renderer.gd` (42/42) or `test_earth_chunk_manager.gd`'s
+"leaf" substring sweep (31/31). See `soil_fauna.md`'s own "Floating-leaf
+cost at ordinary play scale" entry and `docs/concept/leaf_litter.md`'s
+"Floating on water" section for the full investigation, numbers, and the
+still-open `advance()` finding.
+
 **Measured before/after, live, on the identical real save**: total
 tracked per-window cost dropped from ~1900ms of a ~3040ms window (~62%)
 to ~1120ms of a ~3030ms window (~37%) — at a HIGHER population on the
