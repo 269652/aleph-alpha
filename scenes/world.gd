@@ -904,6 +904,7 @@ static func backed_up_directories() -> PackedStringArray:
 		EarthChunkManager.ROOF_MODIFICATIONS_DIR,
 		EarthChunkManager.ECOLOGY_DIR,
 		EarthChunkManager.KEPT_ANIMALS_DIR,
+		EarthChunkManager.GROWING_JUVENILES_DIR,
 	])
 
 
@@ -968,6 +969,13 @@ func _wipe_persisted_world() -> void:
 	# overgrazed pasture and their livestock.
 	_world_reset.wipe_directory(EarthChunkManager.ECOLOGY_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.KEPT_ANIMALS_DIR)
+	# A growing wild juvenile's age is world state exactly like the ecology and
+	# kept-animal records above -- it was added to the manager after this
+	# function was written and never joined it either. The stale file is READ
+	# BACK on the next chunk load (_restore_growing_juveniles), and it carries
+	# no world identity, so a new world inherited the previous world's
+	# not-yet-mature animals.
+	_world_reset.wipe_directory(EarthChunkManager.GROWING_JUVENILES_DIR)
 	_player_save.wipe()
 	# The event store and memory store are two more pieces of world-scoped
 	# state that must not survive "New Game" -- the same "New Game means new"
