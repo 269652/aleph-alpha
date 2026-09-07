@@ -304,6 +304,115 @@ the continuous `|across|` field `RiverFlowFx` reconstructs, so this same
 fix does not extend to it — a coastline under snow may show an analogous,
 un-addressed artifact.
 
+## Sparkle: specular glints on lying snow
+
+Lying snow catches light. This section covers the glint itself — a real,
+separate optical phenomenon from coverage (*how much* snow lies) and is
+layered on top of it, never a substitute for it.
+
+### Design pillars
+
+1. **Sparkle decorates coverage, it never implies it.** The glint is gated
+   strictly by "is there already real, correctly-placed snow here" — it must
+   never make a bare patch read as snowy, and it must never need coverage
+   itself to be recomputed or re-derived. It reads whatever coverage
+   mechanism already exists on a surface (ground's `lying`, canopy's
+   `snow_coverage`) and adds nothing to it.
+2. **Sparse and momentary, not a shimmer.** The user's own request was
+   explicit: "not too heavy." Real diamond-dust glinting is a small fraction
+   of a snow surface at any one instant (see "Real-world grounding" below) —
+   an implementation that reads as a wash of brightness or a pulsing whole-
+   field glow has already missed the phenomenon it is meant to depict, not
+   just overshot a taste preference. Both spatial sparsity (most points never
+   sparkle) and temporal sparsity (a point that can sparkle is mostly dark,
+   briefly bright) are load-bearing and are measured, not eyeballed — see
+   `test_snow_sparkle_shader.gd`.
+3. **Cost must not scale with how much snow — or how many trees — are
+   loaded**, for the identical reason coverage itself doesn't (design pillar
+   4 above). This is doubly true today: see `docs/progress.md`'s FPS
+   regression rounds 1-4, all four caused by per-loaded-object CPU work. The
+   glint adds a handful of ALU ops to a fragment shader that already runs
+   over exactly these pixels every frame; it adds no node, no draw call, no
+   per-tree or per-tile CPU work, and no new per-frame script cost.
+4. **One tuned mechanism, reused on every surface snow lies on.** Ground and
+   tree canopy get the literal same tested twinkle pattern
+   (`SnowSparkleShader`, `src/rendering/snow_sparkle_shader.gd`) rather than
+   two independently eyeballed effects that could visibly disagree in speed
+   or density. Each surface supplies only its own *gate* — the condition
+   deciding which of its own pixels are eligible at all.
+
+### Real-world grounding
+
+The effect being depicted is often called diamond dust: sunlight
+specularly reflecting off small, near-randomly-oriented ice crystal facets
+on a snow surface. The specular condition (facet normal exactly bisecting
+the light and view directions) is satisfied by only a small fraction of
+facets at any instant, so only scattered points glint — and because the
+population of facets satisfying it shifts continuously (the crystal field
+itself, and the viewer), individual points flare and fade rapidly and
+independently rather than staying lit or moving as a group. That is the
+real-world basis for both sparsity pillars above: a snow surface does not
+get *brighter*, scattered points on it flash.
+
+### Mechanism
+
+`SnowSparkleShader` exposes one pure function of world position and time,
+`sparkle_intensity(world_pos, time) -> float` (mirrored in GLSL as
+`sparkle_intensity(vec2, float)`), independent of coverage or colour:
+
+- Candidate sparkle points sit on their own world-space lattice
+  (`SPARKLE_CELL_WORLD`), deliberately finer than the snow stamp lattice —
+  ice-crystal glints are a much smaller-scale phenomenon than the lumps of
+  snow they sit on.
+- Only a hashed minority of lattice sites are eligible at all
+  (`SPARKLE_DENSITY`), each at its own small jittered point within its cell
+  (`SPARKLE_POINT_RADIUS_WORLD`) rather than filling the whole cell — a
+  point of light, not a patch.
+- An eligible site's brightness over time is a sharply-peaked function of
+  `TIME` (`pow(max(sin(...), 0.0), SPARKLE_DUTY_EXPONENT)`), phase-offset per
+  site by the same lattice hash so neighbouring sites flare at different
+  moments rather than in lockstep — the same "hash the site, not the world,
+  for anything that must desynchronize its neighbours" idea `SnowBombShader`
+  already uses for stamp variant/level/orientation, and the same
+  `sin(TIME * speed + phase)` shape `WindSway` already uses safely (`TIME` is
+  bounded by Godot's own time-rollover, so this is not the large-world-
+  coordinate sine hash failure `SnowBombShader`'s own hash was written to
+  avoid — that ban is specifically about hashing *world position* with
+  `sin`, not animating with it).
+
+Each surface applies its own gate on top:
+
+- **Ground** (`SnowBombShader.fragment()`): gated by the fragment's own
+  already-computed `lying` (the exact value that already decided how opaque
+  the snow stamp itself is) — no new ambiguity, no colour heuristic needed,
+  since the ground shader already knows with certainty which pixels are
+  snow.
+- **Canopy** (`WindSway`'s shared tree material, `fragment()`): canopy snow
+  is a *baked* compositing result (`ProceduralTreeSprite`/`IllustratedTree`,
+  see [flora.md](flora.md)'s "A fifth frame: snow is not a season"), not a
+  live per-pixel coverage field, so there is no runtime `lying`-equivalent to
+  read. The gate is therefore two-part: a `snow_coverage` uniform (the same
+  live weather value driving ground `snow_depth`, pushed once alongside it —
+  see below) is zero on every tree whenever there is no snow at all, and a
+  conservative near-white / low-saturation colour test on the sprite's own
+  already-sampled texture colour restricts sparkle to genuinely snow-white
+  pixels even when coverage is nonzero. The colour thresholds are measured
+  against the real art (`IllustratedTree.snow_canopy_for`/`canopy_for`), not
+  eyeballed — cherry's spring `blossom` frame is real, illustrated, pink, and
+  the one colour a snow sparkle must not fire on (see
+  `test_snow_sparkle_shader.gd`'s colour-gate tests for the measured
+  separation).
+
+Nothing pushes a per-tree or per-tile value: `snow_coverage` is one float,
+pushed once wherever `EarthChunkManager` already pushes `snow_depth` to the
+ground shader, onto the one shared tree material every spawned tree's sprite
+already points at (`WindSway.shared_material()`) — the identical "one push,
+every sharer sees it, cost independent of how many there are" shape
+`set_snow_depth` and `set_wind_strength` already use. Grass/scrub tufts
+(`WindSway.tuft_material()`) are a separate shared material that this never
+pushes to, so tufts are structurally unaffected — sparkle was asked for on
+trees and ground, not grass.
+
 ## The CPU mirror
 
 A fragment shader cannot be asserted headless, so the tuned parts of the
@@ -415,3 +524,19 @@ for, and why both exist.
   and not attempted here.
 - ⬜ **`snow_2/3/4.png`** — the middle of the level ladder is not drawn yet;
   the atlas reads whatever exists, so adding them needs no code change.
+- ✅ **Sparkle** (2026-09-07) — see "Sparkle: specular glints on lying snow"
+  above. `SnowSparkleShader` (shared twinkle pattern + colour gate, 15/15
+  tests), ground's own gate in `SnowBombShader.fragment()` (35/35, 26
+  pre-existing unmodified), canopy's own gate in `WindSway`'s shared tree
+  material (21/21, 11 pre-existing unmodified) forwarded through
+  `TreeRenderer.set_snow_coverage`'s existing call site (46/46, 45
+  pre-existing unmodified) — 117 tests total, zero regressions. Rendered
+  with a real GPU (`tools/probe_render_sparkle.gd`,
+  `tools/probe_diff_sparkle.gd`) and inspected directly: full-coverage
+  ground snow and a cherry tree in spring blossom UNDER full snow
+  coverage (the exact scenario the colour gate exists to protect) both
+  show real, sparse, scattered point-glints between rendered moments —
+  amplified frame-to-frame diffs measure 0.09% of ground pixels and 0.04%
+  of canopy pixels changing at a time (wind sway isolated out for the
+  canopy measurement), with the canopy's own glints spatially confined to
+  the tree's drawn silhouette and never landing on its pink blossom.

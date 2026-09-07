@@ -1406,6 +1406,15 @@ for whichever species is next: it is a strict boolean gate (`has_snow_frame_for`
 checked before a canopy image is ever touched, not a threshold or an
 assumption about the roster.
 
+**Snow on this frame can sparkle.** See [snow_cover.md](snow_cover.md)'s
+"Sparkle: specular glints on lying snow" for the mechanism (shared with the
+ground) and design pillars. It is a live per-fragment GPU decoration on top
+of the baked composite above, gated on `snow_coverage` plus a conservative
+near-white/low-saturation read of the sprite's own already-composited
+colour -- this section's own "neutral grey-white against every season
+frame's own hue" measurement (immediately above) is exactly the separation
+that gate leans on to never fire on cherry's pink blossom.
+
 
 ## Recolouring illustrated blooms
 
