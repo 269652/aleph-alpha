@@ -378,10 +378,15 @@ func test_falls_back_to_the_procedural_look_for_a_species_with_no_illustrated_ar
 ## generator instance every MushroomMarker already reads from -- the real
 ## coverage lives in test_illustrated_mushroom_sprite.gd's own warm_cache
 ## tests; this just proves the wiring reaches the same shared instance.
+## `_bitten_frames_cache` (checked here originally) was replaced by
+## `_bitten_stage_frames_cache` -- see test_illustrated_mushroom_sprite.gd's
+## own mirror test for why -- updated to the real field name post-merge.
 func test_warm_art_cache_warms_the_shared_illustrated_generator():
 	IllustratedMushroomSprite._frames_cache = {}
 	IllustratedMushroomSprite._crushed_frames_cache = {}
-	IllustratedMushroomSprite._bitten_frames_cache = {}
+	IllustratedMushroomSprite._bitten_stage_frames_cache = {}
 	MushroomMarker.warm_art_cache()
 	for id in MushroomSpecies.IDS:
-		assert_true(IllustratedMushroomSprite._bitten_frames_cache.has(id), "%s bitten cache should be warm" % id)
+		assert_true(
+			IllustratedMushroomSprite._bitten_stage_frames_cache.has(id), "%s bitten cache should be warm" % id
+		)

@@ -297,12 +297,20 @@ func test_crushed_and_bitten_frames_differ_from_the_normal_frame():
 ## would pass even if warm_cache() were a no-op. Same static-state-reset
 ## shape DecomposerMarker's own tests already use for
 ## _food_group_refresh_at_msec (see decomposer_marker.gd).
+## `_bitten_frames_cache` (checked here originally) was replaced by
+## `_bitten_stage_frames_cache` when the 3 delivered bitten sheets per
+## species became real progressive STAGES instead of one flattened pool
+## (see docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and
+## real toxic effects") -- updated to the real field name post-merge, same
+## "warm for every species" assertion either way.
 func test_warm_cache_fills_a_cold_cache_for_every_species():
 	IllustratedMushroomSprite._frames_cache = {}
 	IllustratedMushroomSprite._crushed_frames_cache = {}
-	IllustratedMushroomSprite._bitten_frames_cache = {}
+	IllustratedMushroomSprite._bitten_stage_frames_cache = {}
 	sprite.warm_cache()
 	for id in MushroomSpecies.IDS:
 		assert_true(IllustratedMushroomSprite._frames_cache.has(id), "%s normal cache should be warm" % id)
 		assert_true(IllustratedMushroomSprite._crushed_frames_cache.has(id), "%s crushed cache should be warm" % id)
-		assert_true(IllustratedMushroomSprite._bitten_frames_cache.has(id), "%s bitten cache should be warm" % id)
+		assert_true(
+			IllustratedMushroomSprite._bitten_stage_frames_cache.has(id), "%s bitten cache should be warm" % id
+		)
