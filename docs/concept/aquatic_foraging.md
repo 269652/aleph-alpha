@@ -156,6 +156,10 @@ its own follow-up pass).
   precedence chain at the wander tier.
 - ✅ `EarthChunkManager.aquatic_vegetation_near`/`graze_aquatic_vegetation_at`/
   `step_aquatic_vegetation`.
-- ⬜ Worms as fish bait (the direct next pass).
+- ⬜ Worms as fish bait (the direct next pass). A crushed worm's corpse
+  can now be carried (`WormMarker`, `EarthwormPatch.take_corpse`, see
+  `docs/concept/soil_fauna.md`'s "A corpse can be carried off") — the
+  prerequisite this pass needs, not the bait mechanic itself: nothing yet
+  reads a carried worm into `FishingSession.cast`'s `bait_quality`.
 - ⬜ Per-species fish diet, plankton, ocean vegetation, sprite sway animation
   (see scope note above).

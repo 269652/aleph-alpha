@@ -120,3 +120,14 @@ static func tint_at(year_fraction: float) -> Color:
 ## EarthChunkManager.world_age_seconds) rather than a year fraction.
 static func tint_for_world_age(elapsed_seconds: float) -> Color:
 	return tint_at(SeasonCycle.new().year_fraction(elapsed_seconds))
+
+
+## The raw {from, to, progress} SeasonTransition state at this point in the
+## world clock -- the SAME derivation tint_at/tint_for_world_age already read,
+## exposed directly for a caller that needs season IDENTITY (which of the
+## four grass_blades_*.png sheets a card samples, see docs/concept/
+## long_grass.md's "Seasonal art"), not just the colour multiplier derived
+## from it. One shared clock, never a second one a grass-blade-swap and the
+## ground tint under it could drift apart on.
+static func transition_for_world_age(elapsed_seconds: float) -> Dictionary:
+	return SeasonTransition.state_at(SeasonCycle.new().year_fraction(elapsed_seconds))

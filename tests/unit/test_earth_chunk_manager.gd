@@ -2551,6 +2551,149 @@ func test_sync_tree_season_reads_snow_depth_set_via_step_snow_not_only_set_snow_
 	assert_almost_eq(tree._snow_coverage, manager.snow_depth(), 0.0001)
 
 
+# -- sync_grass_season: per-blade staggered season transition ---------------
+#
+# Mirrors sync_tree_season's own shape (a shared, quantised SeasonTransition
+# state, guarded by a string signature) at CARD granularity instead of a
+# per-tree canopy swap -- see docs/concept/long_grass.md's "Seasonal art".
+#
+# Fixture is deliberately lightweight, not manager.update(_berlin_tile): a
+# real TallGrass sim with one patch FORCED directly into _patches (bypassing
+# the sim's own probabilistic initial seeding, which isn't guaranteed to
+# land anywhere) at chunk (0,0) -- _decoration_center/_decoration_radius and
+# _disturbance_center_tile all default to exactly that chunk/tile origin
+# (see EarthChunkManager's own field defaults), so _decorates and the
+# tile-precise view cutoff both pass with no real chunk load at all.
+
+func _seed_one_grass_patch() -> Vector2i:
+	var chunk_coord := Vector2i.ZERO
+	var biome := PackedStringArray()
+	biome.resize(EarthChunkManager.CHUNK_SIZE * EarthChunkManager.CHUNK_SIZE)
+	biome.fill("grassland")
+	var sim := TallGrass.new(0, EarthChunkManager.CHUNK_SIZE, EarthChunkManager.CHUNK_SIZE, biome, PackedByteArray())
+	sim._patches[Vector2i(5, 5)] = 1.0
+	manager._grass_sims[chunk_coord] = sim
+	manager._grass_sprites[chunk_coord] = {}
+	return chunk_coord
+
+
+func test_sync_grass_season_renders_one_multimesh_per_band_with_no_active_transition():
+	var chunk_coord := _seed_one_grass_patch()
+	manager.set_world_age_seconds(SeasonCycle.SECONDS_PER_YEAR * 0.375)  # mid-summer, settled
+
+	var bands: Dictionary = manager._grass_sprites[chunk_coord]
+	var found_any := false
+	for band in bands:
+		var mmi: MultiMeshInstance2D = bands[band]
+		assert_gt(mmi.multimesh.instance_count, 0)
+		found_any = true
+	assert_true(found_any, "precondition: the forced patch produced at least one band")
+	assert_true(
+		manager._grass_sprites_turning.get(chunk_coord, {}).is_empty(),
+		"no active transition must mean no second, 'turning' mesh exists at all"
+	)
+
+
+func test_sync_grass_season_uses_the_current_seasons_texture_with_no_active_transition():
+	var chunk_coord := _seed_one_grass_patch()
+	manager.set_world_age_seconds(SeasonCycle.SECONDS_PER_YEAR * 0.875)  # mid-winter, settled
+	var winter_texture := manager._illustrated_grass._texture_for("winter")
+
+	var bands: Dictionary = manager._grass_sprites[chunk_coord]
+	var checked_any := false
+	for band in bands:
+		var mmi: MultiMeshInstance2D = bands[band]
+		assert_eq(mmi.texture, winter_texture, "a settled winter must render winter's own sheet, not a stale default")
+		checked_any = true
+	assert_true(checked_any, "precondition: at least one band exists")
+
+
+## The core of "per blade transitions similar to trees": a card-granularity
+## sweep, not the whole field snapping to the new season's sheet at once.
+func test_sync_grass_season_splits_a_band_into_two_multimeshes_during_an_active_transition():
+	var chunk_coord := _seed_one_grass_patch()
+	# Several MORE forced patches, so CARD_COUNT * patch_count cards give a
+	# real chance of landing on both sides of a mid-progress split -- one
+	# patch (CARD_COUNT=8 cards) risks every card coincidentally sharing one
+	# side by chance.
+	var sim: TallGrass = manager._grass_sims[chunk_coord]
+	for i in range(20):
+		sim._patches[Vector2i(i % EarthChunkManager.CHUNK_SIZE, 5)] = 1.0
+	# Not every forced cell is guaranteed to survive the SAME tile-precise
+	# view+buffer cutoff _sync_grass_sprites itself applies (see
+	# test_cells_beyond_the_view_buffer_are_not_drawn_even_in_a_decorating_
+	# chunk) -- count how many actually do, rather than assuming all 20.
+	var half_span: Vector2 = manager._visible_half_span_tiles()
+	var visible_cells := 0
+	for cell in sim.get_patch_cells():
+		if DecorationLod.keeps_decoration_tile(
+			cell, manager._disturbance_center_tile, half_span, EarthChunkManager.GRASS_VIEW_BUFFER_TILES
+		):
+			visible_cells += 1
+	manager.set_world_age_seconds(SeasonCycle.SECONDS_PER_YEAR * 0.45)  # mid-turn, summer -> autumn
+
+	var bands: Dictionary = manager._grass_sprites[chunk_coord]
+	var turning_bands: Dictionary = manager._grass_sprites_turning.get(chunk_coord, {})
+	assert_false(turning_bands.is_empty(), "an active transition must create at least one 'turning' mesh")
+
+	var summer_texture := manager._illustrated_grass._texture_for("summer")
+	var autumn_texture := manager._illustrated_grass._texture_for("autumn")
+	var total_from := 0
+	var total_to := 0
+	for band in turning_bands:
+		assert_true(bands.has(band), "a band with a turning mesh must also still have its primary mesh")
+		var from_mmi: MultiMeshInstance2D = bands[band]
+		var to_mmi: MultiMeshInstance2D = turning_bands[band]
+		assert_eq(from_mmi.texture, summer_texture, "the primary mesh must keep sampling the OLD season")
+		assert_eq(to_mmi.texture, autumn_texture, "the turning mesh must sample the NEW season")
+		assert_gt(to_mmi.multimesh.instance_count, 0, "a mesh present at all must actually be drawing something")
+		total_from += from_mmi.multimesh.instance_count
+		total_to += to_mmi.multimesh.instance_count
+	assert_gt(total_from, 0, "a real mid-turn split must leave some cards on the old season")
+	assert_eq(
+		total_from + total_to, visible_cells * IllustratedGrassPatch.CARD_COUNT,
+		"no card may be lost or duplicated by the split"
+	)
+
+
+func test_sync_grass_season_frees_the_turning_mesh_once_the_transition_settles():
+	var chunk_coord := _seed_one_grass_patch()
+	manager.set_world_age_seconds(SeasonCycle.SECONDS_PER_YEAR * 0.45)  # mid-turn
+	assert_false(
+		manager._grass_sprites_turning.get(chunk_coord, {}).is_empty(), "precondition: a turning mesh exists mid-turn"
+	)
+
+	manager.set_world_age_seconds(SeasonCycle.SECONDS_PER_YEAR * 0.625)  # fully settled into autumn
+
+	assert_true(
+		manager._grass_sprites_turning.get(chunk_coord, {}).is_empty(),
+		"a settled season must free the turning mesh, not leave it behind forever"
+	)
+
+
+## Mirrors sync_tree_season's own signature-guard contract: an unchanged
+## season must not pay a full grass resync on every call (docs/concept/
+## long_grass.md's Status names this cost explicitly).
+func test_sync_grass_season_skips_a_resync_when_the_season_has_not_changed():
+	var chunk_coord := _seed_one_grass_patch()
+	manager.set_world_age_seconds(SeasonCycle.SECONDS_PER_YEAR * 0.375)  # mid-summer
+	var bands: Dictionary = manager._grass_sprites[chunk_coord]
+	var before_count := 0
+	for band in bands:
+		before_count += (bands[band] as MultiMeshInstance2D).multimesh.instance_count
+
+	# A new patch appears WITHOUT the season changing -- a real resync would
+	# pick it up; a correctly-guarded no-op call must not.
+	var sim: TallGrass = manager._grass_sims[chunk_coord]
+	sim._patches[Vector2i(6, 6)] = 1.0
+	manager.sync_grass_season()
+
+	var after_count := 0
+	for band in manager._grass_sprites[chunk_coord]:
+		after_count += (manager._grass_sprites[chunk_coord][band] as MultiMeshInstance2D).multimesh.instance_count
+	assert_eq(after_count, before_count, "an unchanged season must skip the resync entirely, new patch or not")
+
+
 # -- building/destruction -----------------------------------------------------
 
 func test_build_at_global_sets_a_modification_when_the_chunk_is_loaded():
@@ -4017,6 +4160,7 @@ func test_find_nearest_village_is_deterministic():
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
 const IllustratedWormSprite = preload("res://src/rendering/illustrated_worm_sprite.gd")
+const WormMarker = preload("res://src/rendering/worm_marker.gd")
 const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
 
 
@@ -5212,6 +5356,92 @@ func test_a_corpses_sprite_is_removed_once_its_burrow_recovers():
 	assert_false(
 		manager._worm_sprites[chunk_coord].has(cell), "the corpse should be gone once the burrow recovers"
 	)
+
+
+# -- worm corpse pickup (see WormMarker, EarthwormPatch.take_corpse, --------
+# -- docs/concept/aquatic_foraging.md's "Worms as fish bait") ---------------
+# Reported live: "crushing worms... they should stay in world and still be
+# able to picked up". The vanish half was already fixed (see the die-
+# animation tests above); this section covers the still-missing pickup
+# half -- the sprite the manager creates must actually BE the pickable
+# class, wired to the right cell and sim.
+
+func test_every_worm_sprite_is_a_pickable_worm_marker():
+	manager.update(_berlin_tile)
+	_surface_all_worms()
+	manager.step_worms(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+	var checked := 0
+	for chunk_coord in manager._worm_sprites:
+		for cell in manager._worm_sprites[chunk_coord]:
+			assert_true(
+				manager._worm_sprites[chunk_coord][cell] is WormMarker,
+				"every worm sprite should be the pickable class, not a bare Sprite2D"
+			)
+			checked += 1
+	assert_gt(checked, 0, "precondition: some worms were rendered")
+
+
+func test_a_crushed_worms_marker_is_wired_to_its_cell_and_sim():
+	manager.update(_berlin_tile)
+	_surface_all_worms()
+	manager.step_worms(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	if patch.worm_cells().is_empty():
+		pending("no worm burrow in this exact chunk this seed")
+		return
+	var cell: Vector2i = patch.worm_cells()[0]
+	if not patch.is_surfaced(cell):
+		pending("no surfaced worm in this exact chunk this seed")
+		return
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(manager.crush_worm_at(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0))
+	var marker: WormMarker = manager._worm_sprites[chunk_coord][cell]
+	assert_eq(marker.cell, cell, "the marker must know which burrow it sits over")
+	assert_same(marker.worm_world, patch, "the marker must be able to tell the real sim its corpse was taken")
+
+
+## The real hazard pickup introduces: WormMarker.pick_up frees itself
+## directly (mirroring PickableSeed/MushroomMarker), but _worm_sprites'
+## dict entry only gets cleaned up on the next _sync_worm_sprites pass, up
+## to WORM_REFRESH_INTERVAL later -- while _crawl_worm_sprites runs every
+## single step_worms call in between. Mirrors test_crushing_ants_does_not_
+## crash_on_a_stale_already_freed_entry's own ".free() the worst case"
+## idiom exactly.
+func test_crawling_worm_sprites_does_not_crash_on_a_stale_already_freed_entry():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	if patch.worm_cells().is_empty():
+		pending("no worm burrow in this exact chunk this seed")
+		return
+	var cell: Vector2i = patch.worm_cells()[0]
+	var stale := WormMarker.new()
+	stale.free()  # actually freed already, not merely queue_free()'d -- the worst case
+	manager._worm_sprites[chunk_coord][cell] = stale
+	manager._crawl_worm_sprites()
+	assert_false(
+		manager._worm_sprites[chunk_coord].has(cell),
+		"a stale freed entry should be cleaned up, not left dangling for the next frame to trip over"
+	)
+
+
+## Same hazard, the other call site: _sync_worm_sprites' own "the worm went
+## back down or its corpse expired" cleanup branch calls .free() on
+## whatever sprite is on record -- which pickup may have already freed.
+func test_syncing_worm_sprites_does_not_crash_on_a_stale_already_freed_entry():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var patch: EarthwormPatch = manager._worm_patches[chunk_coord]
+	if patch.worm_cells().is_empty():
+		pending("no worm burrow in this exact chunk this seed")
+		return
+	var cell: Vector2i = patch.worm_cells()[0]
+	var stale := WormMarker.new()
+	stale.free()
+	manager._worm_sprites[chunk_coord][cell] = stale
+	manager._sync_worm_sprites(chunk_coord)
+	assert_false(manager._worm_sprites[chunk_coord].has(cell))
 
 
 func test_unloading_a_chunk_drops_its_worms_and_their_sprites():
