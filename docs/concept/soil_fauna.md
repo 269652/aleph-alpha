@@ -277,9 +277,14 @@ watched the bird peck at them.
   hoverable"), and — this pass (2026-09-05) — growth being food-only and
   a mound's own size never reflecting how its colony was actually doing
   (see "Water, not just food: a second real growth driver" and "Mound
-  size grows with the colony"). What's left of the original item (ants as
-  prey, or as non-windfall detritivores) is still open, see that
-  section's own scope note.
+  size grows with the colony"), and — this pass (2026-09-07) — a crushed
+  ant now persists as a real, forageable corpse other mounds visibly carry
+  home instead of fading out on a timer, and both ground-foraging
+  songbirds (not just the robin) can hunt a live ant as food (see "Ants
+  are not bird prey" and the new corpse-retrieval entry, both in that
+  section). What's left of the original item (ants as detritivores of
+  `fly_colony.gd` CARRION, as opposed to their own dead) is still open,
+  see that section's own scope note.
 - ✅ Caterpillars (requested live: "wire caterpillars which live on trees
   and on the ground around them; they should also do groundforaging and
   eat green leaves (spring, summer only)") — real illustrated crawl/climb/
@@ -1179,16 +1184,58 @@ rule as every wild animal, rather than a parallel, separately-capped UI.
   matching (and more involved, since that ant animates continuously)
   upgrade. Both fall back to the procedural generator if `has_variants()`/
   `has_action()` ever reports no art, unchanged.
-- **Ants are not bird prey.** `FlyerDiet` is not extended with an insect
+- ~~**Ants are not bird prey.** `FlyerDiet` is not extended with an insect
   food type here — a real robin or sparrow eating ants at a mound would be
   a genuine, well-grounded follow-on (the same insectivore mechanism this
   doc's earthworm half already specifies), but it is a separate piece of
-  work, deliberately left for later.
+  work, deliberately left for later.~~ **Resolved (2026-09-07).** Reported
+  live: "birds should forage life [live] ants." `FlyerDiet.FOOD_ANTS` now
+  exists, and — unlike the caterpillar precedent immediately above it,
+  which stayed deliberately robin-only — is given to BOTH ground-foraging
+  songbirds: real American robins are documented generalist ground
+  insectivores that take ants among their varied invertebrate diet, but
+  real house sparrows, despite being primarily granivorous, are ALSO
+  well-documented opportunistic ant-eaters, arguably proportionally more
+  so than robins, precisely because a ground-foraging, bare-soil/short-
+  grass bird routinely crosses ant trails and mounds while working seed
+  heads. `EarthChunkManager.ants_near`/`take_ant_near` query the SAME
+  mound-tracked live foragers `crush_ants_near` already tracks (never a
+  settled corpse — see the next entry), and `AntColony.forager_eaten` is a
+  Karma-neutral sibling of `forager_crushed`: a wild bird's meal is not a
+  player action and must never cost Karma (see [[karma-and-luck-feature-
+  shipped]]/`Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY`'s own player-only
+  gate). `AmbientFlyerMarker._look_for_ants`/`_fly_at_ant`/
+  `_take_targeted_ant` mirror the caterpillar trio exactly, through the
+  same seek/descend/peck/resume `GroundForageBehavior` cycle.
 - **Ants are not detritivores of CARRION.** `fly_colony.gd`'s corpse/rot
   decomposer loop is untouched; ants scavenging carrion or competing with
   flies over a carcass is real and common but out of scope here. Windfall
   foraging above is a separate, narrower thing — a fallen fruit/nut ground
-  item via the existing tree-fruit API, not the corpse/rot system.
+  item via the existing tree-fruit API, not the corpse/rot system. Note
+  this is still accurate even after ants began retrieving their OWN dead
+  (see the new entry below) — that is same-species corpse retrieval, a
+  genuinely different, much narrower thing than scavenging `fly_colony.gd`
+  CARRION (a dead animal/creature), and does not touch that system at all.
+- **Crushed ants are now real, forageable corpses instead of a timed
+  fade-out (2026-09-07).** Reported live: "ants do also disappear after a
+  few seconds after being crushed. instead dead ants should be foraged by
+  other ants so they get visibly dragged into the mound." A crushed
+  `AntForagerMarker` now settles into `is_corpse()` once its
+  `SquashCrushEffect` linger completes, and stays a real, sensable corpse
+  for `EarthwormPatch.RECOVERY_SECONDS` before finally decomposing away on
+  its own if nothing finds it — the same corpse/recovery shape
+  `EarthwormPatch` already uses for a drowned/predated worm, not a new
+  pattern. Any mound's own forager can sense one via
+  `EarthChunkManager.ant_corpses_near` (a fourth `forage_kind`, alongside
+  seed/windfall/leaf, chunk-keyed rather than mound-keyed since a corpse
+  has no owning mound — the first-come-first-served free-for-all every
+  other forage resource here already has, not a new ownership/rivalry
+  concept), walk to it, and — on a successful trip — visibly carry it home
+  exactly like a carried leaf (`AntForagerMarker._update_carried_corpse`,
+  tinted with the shared `SquashCrushEffect.TINT`), feeding the mound's
+  real food reserve on arrival. A live, uncrushed ant is never a valid
+  corpse target (`is_corpse()` requires the crush to have actually
+  happened and lingered out first).
 - ~~**Leaf litter is a separate forage source this mound simulation does
   not see.** [leaf_litter.md](leaf_litter.md) adds a fallen-leaf ground
   item alongside fallen fruit/nut, picked up by the VISIBLE

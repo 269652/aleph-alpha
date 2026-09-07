@@ -862,6 +862,109 @@ func test_a_robin_with_nothing_to_hunt_never_commits_to_a_caterpillar_that_isnt_
 		)
 
 
+# -- ants: reported live ("birds should forage live ants"), and UNLIKE -----
+# -- caterpillars (robin-only), given to BOTH ground-foraging songbirds ----
+# -- (see FlyerDiet.FOOD_ANTS's own doc comment: real house sparrows are ---
+# -- well-documented opportunistic ant-eaters too, not just robins) --------
+# -- otherwise mirrors the caterpillar section immediately above exactly --
+
+## Duck-typed live-ant world: the two methods a ground-foraging marker calls
+## on its `ant_world` (see EarthChunkManager's real ants_near/take_ant_near).
+## Unlike StubWormWorld/StubCaterpillarWorld, the radius here is already in
+## PIXELS, not tiles -- it mirrors the real EarthChunkManager.ants_near's own
+## radius_px contract (shared with ant_corpses_near/leaf_litter_near, the
+## chunk-scan family it was built alongside), so the marker itself converts
+## SEARCH_TILES to pixels before calling in, the same way it already does
+## for PollinatorForaging's FORAGE_SEARCH_TILES.
+class StubAntWorld:
+	var ants: Array = []
+	var taken: Array = []
+	func ants_near(position: Vector2, radius_px: float) -> Array:
+		var out: Array = []
+		for a in ants:
+			if position.distance_to(a["position"]) <= radius_px:
+				out.append(a)
+		return out
+	func take_ant_near(position: Vector2) -> bool:
+		taken.append(position)
+		for i in ants.size():
+			if ants[i]["position"].distance_to(position) < 0.01:
+				ants.remove_at(i)
+				return true
+		return false
+
+
+func _world_with_one_ant(at: Vector2 = Vector2(80, 0)) -> StubAntWorld:
+	var world := StubAntWorld.new()
+	world.ants = [{"position": at}]
+	return world
+
+
+## Sparrow-shaped sibling of _make_robin -- ants are the first food this
+## suite gives a sparrow through the ground-forage cycle, so there is no
+## existing helper to reuse. No "other world" parameter (unlike _make_robin's
+## worm_world): the sparrow's own primary diet (seeds) plays no part in
+## these tests, so nothing else needs wiring for the ant-only contract below
+## to be meaningful.
+func _make_sparrow() -> void:
+	marker.species = "sparrow"
+	marker.ground_forage = GroundForageBehavior.new()
+	marker.flap_frames = [ImageTexture.new(), ImageTexture.new()]
+	marker.perched_frame = ImageTexture.new()
+	marker.peck_frame = ImageTexture.new()
+	marker.home = Vector2.ZERO
+	marker.position = Vector2.ZERO
+	marker.wander_seed = 5
+	marker.setup(AmbientFlyerMovement.new(34.0, 70.0, 1.8))
+
+
+func test_a_robin_flies_to_an_ant_and_eats_it():
+	_make_robin(StubWormWorld.new())  # no worms nearby -- only the ant should be found
+	var world := _world_with_one_ant()
+	marker.ant_world = world
+	for i in 1200:
+		marker._process(0.05)
+	assert_gt(world.taken.size(), 0, "a robin should actually take an ant")
+	assert_eq(world.ants.size(), 0, "and the ant should be gone from the world")
+
+
+## The whole point of this feature (see FlyerDiet.FOOD_ANTS): unlike
+## caterpillar-hunting, ant-eating is NOT robin-only.
+func test_a_sparrow_flies_to_an_ant_and_eats_it():
+	_make_sparrow()
+	var world := _world_with_one_ant()
+	marker.ant_world = world
+	for i in 1200:
+		marker._process(0.05)
+	assert_gt(world.taken.size(), 0, "a sparrow should actually take an ant too")
+	assert_eq(world.ants.size(), 0, "and the ant should be gone from the world")
+
+
+## The per-species diet made structural, same as the worm/caterpillar-side
+## tests above: a bird spawned without a ground-forage brain at all cannot
+## hunt, whatever world ports it happens to hold.
+func test_a_bird_without_a_ground_forage_brain_never_takes_ants():
+	_make_robin(StubWormWorld.new())
+	marker.ground_forage = null
+	var world := _world_with_one_ant()
+	marker.ant_world = world
+	for i in 1200:
+		marker._process(0.05)
+	assert_eq(world.taken.size(), 0, "no ground-forage brain -- no hunting")
+	assert_eq(world.ants.size(), 1)
+
+
+func test_a_robin_with_nothing_to_hunt_never_commits_to_an_ant_that_isnt_there():
+	_make_robin(StubWormWorld.new())
+	marker.ant_world = StubAntWorld.new()
+	for i in 400:
+		marker._process(0.05)
+		assert_eq(
+			marker.ground_forage.phase, GroundForageBehavior.Phase.SEEKING,
+			"nothing to hunt -- it must never commit to an ant that isn't there"
+		)
+
+
 # -- the visible animation --------------------------------------------------
 
 func test_a_robin_sits_down_on_the_worm_to_peck_it():

@@ -1148,3 +1148,41 @@ func test_forager_crushed_at_an_unrelated_cell_does_not_touch_a_real_mound():
 		colony.population_at(cell), population_before, 0.001,
 		"crushing at an unrelated cell must not touch a real mound"
 	)
+
+
+# -- forager_eaten: a live forager taken by a real bird predator ----------
+#
+# A distinctly-named sibling of forager_crushed, not a reuse of it --
+# see that method's own doc comment: the same population-loss effect
+# either way (losing a worker is losing a worker), but kept separate so
+# EarthChunkManager can wire a player-caused crush to Karma
+# (Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY, applied by the caller) while
+# natural bird predation never triggers that same penalty.
+
+func test_forager_eaten_reduces_population_by_one_worker():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var population_before := colony.population_at(cell)
+	colony.forager_eaten(cell)
+	assert_almost_eq(
+		colony.population_at(cell), population_before - AntColony.FORAGER_CRUSH_POPULATION_LOSS, 0.001
+	)
+
+
+func test_forager_eaten_never_drives_population_negative():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	for i in 1000:
+		colony.forager_eaten(cell)
+	assert_almost_eq(colony.population_at(cell), 0.0, 0.001)
+
+
+func test_forager_eaten_at_an_unrelated_cell_does_not_touch_a_real_mound():
+	var colony := _colony()
+	var cell: Vector2i = colony.mound_cells()[0]
+	var population_before := colony.population_at(cell)
+	colony.forager_eaten(cell + Vector2i(1000, 1000))
+	assert_almost_eq(
+		colony.population_at(cell), population_before, 0.001,
+		"eating a forager at an unrelated cell must not touch a real mound"
+	)

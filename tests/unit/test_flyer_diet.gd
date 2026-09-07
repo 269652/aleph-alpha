@@ -77,6 +77,35 @@ func test_caterpillars_are_a_ground_food():
 	assert_true(FlyerDiet.GROUND_FOODS.has(FlyerDiet.FOOD_CATERPILLARS))
 
 
+## Reported live: "birds should forage live ants". Unlike caterpillars
+## (robin-only -- a genuinely visual, foliage/ground-gleaning hunt closer
+## to a robin's own worm-hunting specialism), ants are deliberately given
+## to BOTH ground-foraging songbirds: real American robins are documented
+## generalist ground insectivores that do take ants among their varied
+## invertebrate diet, but real house sparrows -- despite being primarily
+## granivorous -- are ALSO well-documented opportunistic ant-eaters,
+## arguably proportionally more so than robins, precisely because
+## sparrows spend so much of their time working bare ground and short
+## grass where ant trails and mounds are common, rather than visually
+## hunting larger, specific prey the way a robin's worm/caterpillar
+## hunting already does. No strong real-world reason favours excluding
+## either, unlike the caterpillar case.
+func test_robins_also_eat_ants():
+	assert_true(FlyerDiet.eats("robin", FlyerDiet.FOOD_ANTS))
+
+
+func test_sparrows_also_eat_ants():
+	assert_true(FlyerDiet.eats("sparrow", FlyerDiet.FOOD_ANTS))
+
+
+func test_ants_are_a_ground_food():
+	assert_true(FlyerDiet.GROUND_FOODS.has(FlyerDiet.FOOD_ANTS))
+
+
+func test_the_kingfisher_does_not_eat_ants():
+	assert_false(FlyerDiet.eats("kingfisher", FlyerDiet.FOOD_ANTS))
+
+
 # -- the rest of the roster -------------------------------------------------
 
 func test_the_kingfisher_eats_fish_and_nothing_on_the_ground():
