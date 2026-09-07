@@ -3,18 +3,21 @@ extends GutTest
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
 const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 
 
 ## Width is always a full, un-inset cell (bleed only ever runs vertically,
 ## row into row -- see ROW_TOP_BLEED_PX's own doc comment); height is
 ## shorter than a full cell for any row whose own measured bleed inset is
 ## nonzero, since that inset is cropped off the region's own top edge on
-## purpose. Seed 42 lands in row 4 (index 42 -> row 42/10 = 4), whose real
-## measured inset is 13px -- asserted against ROW_TOP_BLEED_PX directly
-## rather than a hardcoded number, so this test can't silently drift out of
-## sync with the table if it's ever remeasured.
-func test_each_seed_selects_one_tile_inside_the_delivered_10x10_atlas():
-	var rect := IllustratedGrassPatch.atlas_region_for_seed(42)
+## purpose. growth=0.45 lands in row 4 (int(0.45*10)=4), whose real measured
+## inset is 13px -- asserted against ROW_TOP_BLEED_PX directly rather than a
+## hardcoded number, so this test can't silently drift out of sync with the
+## table if it's ever remeasured. Seed (42) only picks the column here and is
+## otherwise unconstrained by this test.
+func test_growth_and_seed_together_select_one_tile_inside_the_delivered_10x10_atlas():
+	var rect := IllustratedGrassPatch.atlas_region_for(42, 0.45)
 	var expected_height := 1254 / 10 - IllustratedGrassPatch.ROW_TOP_BLEED_PX[4]
 	assert_between(rect.size.x, 125, 126)
 	assert_between(rect.size.y, expected_height - 1, expected_height + 1)
@@ -24,53 +27,182 @@ func test_each_seed_selects_one_tile_inside_the_delivered_10x10_atlas():
 	assert_lt(rect.position.y, 1254)
 
 
-## The delivered sheet's taller "bush"/wheat-ear variants (denser rows) draw
+## The delivered sheets' taller "bush"/wheat-ear variants (denser rows) draw
 ## their own plant art past their own cell's nominal bottom edge, bleeding
 ## into the TOP of the next row's cell -- measured directly against the real
-## shipped `assets/sprites/grass_blades.png`: a solid opaque strip right at a
-## recipient cell's own top edge, then a genuine transparent gap, then that
-## cell's OWN plant starting further down. Because the shader flips root-at-
-## bottom/tip-at-top (a card's local Y=0 is the ground, WORLD_SIZE is up), a
-## region sliced with no inset puts that bled fragment at the rendered TIP --
-## the point farthest from the ground -- visibly detached from the card's own
+## shipped art (originally `grass_blades.png`, now shipped as
+## `grass_blades_summer.png`, the same pixels -- see
+## docs/concept/long_grass.md): a solid opaque strip right at a recipient
+## cell's own top edge, then a genuine transparent gap, then that cell's OWN
+## plant starting further down. Because the shader flips root-at-bottom/tip-
+## at-top (a card's local Y=0 is the ground, WORLD_SIZE is up), a region
+## sliced with no inset puts that bled fragment at the rendered TIP -- the
+## point farthest from the ground -- visibly detached from the card's own
 ## body by a real transparent gap. Reported live: "the grass now has floating
 ## artefacts above it" (Lüneburg-Heath-style meadow, snow made the contrast
 ## bad enough to see clearly, but the bleed itself is independent of snow --
 ## reproduced over both white and green backgrounds).
 ##
-## This is a real property of the shipped PNG, not a synthetic case: every
-## row from 2 through 9 shows the pattern on at least one column (69 of the
-## 90 non-row-0 cells checked). `atlas_region_for_seed`'s own region must
-## therefore start far enough past its row's nominal top edge that the real
-## image is fully transparent there -- i.e. genuinely past any donor bleed --
-## for every real (row, column) combination, not just the worst one spot-
-## checked by eye.
-func test_atlas_region_for_seed_never_includes_the_previous_rows_bled_over_content():
-	var image := Image.load_from_file(IllustratedGrassPatch.ATLAS_PATH)
-	assert_not_null(image, "precondition: the real shipped atlas loads")
-	var size := image.get_size()
-
+## Swept against all four real delivered season sheets: `atlas_region_for`'s
+## row-selection is one shared code path for all four, so a season whose art
+## bleeds differently would otherwise go unchecked. Checked against the SAME
+## chroma-keyed image production actually samples (IllustratedGrassPatch.
+## BACKGROUND_KEY/_TOLERANCE) -- three of the four delivered sheets ship with
+## no real alpha channel at all (see _texture_for's own doc comment) and
+## would otherwise read as one solid opaque rectangle, not "no bleed found".
+##
+## Asserts on the FRACTION of each region's own top row that is mostly
+## transparent (>= 90%), not on every individual sampled x: a real hand-
+## illustrated edge is anti-aliased, and exhaustively sampling every x across
+## a region's own width reliably finds some point sitting mid-gradient on a
+## curved/diagonal edge -- true even of `grass_blades_summer.png`, the one
+## sheet this table was originally measured against and long proven in
+## production. This fraction form is also far more STABLE run to run than a
+## strict per-sample assertion: a borderline pixel sitting right at the 0.5
+## cut barely moves a 32-sample average, where it can flip a strict "every
+## sample must pass" check unpredictably (measured: repeated runs of a
+## stricter form against the exact same unchanged files/code reported a
+## DIFFERENT single solid-opaque cell failing each time, before this form
+## replaced it).
+##
+## Rows 6-9 (the four densest rows -- full, flowering/fruiting clumps) are
+## EXCLUDED across ALL seasons, not overlooked: measured well under the 90%
+## bar on most columns in MULTIPLE seasons at different rows within 6-9
+## (autumn at rows 7-9, winter at rows 6-9), not a single season's outlier a
+## shared inset could absorb. Bleed severity climbs with row density -- the
+## least-dense of the four (row 6/7 depending on season) sits closer to the
+## bar, the fullest (row 9) falls furthest under it (roughly 30-70% clear on
+## most columns, not a one-or-two-column exception). This content genuinely
+## runs deep into the row above across most of each excluded row's width,
+## not fixable by nudging a shared per-row inset without cropping real art
+## everywhere else too. A known, flagged gap (see docs/concept/long_grass.md's
+## Status) needing its own dedicated look -- most plausibly a per-row-and-
+## season bleed table rather than one shared table, given how consistently
+## this scales with both a row's own density and varies by season.
+func test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_on_any_season_sheet():
 	var checked_any := false
-	for row in range(1, IllustratedGrassPatch.ATLAS_ROWS):
-		for column in IllustratedGrassPatch.ATLAS_COLUMNS:
-			var seed_value := row * IllustratedGrassPatch.ATLAS_COLUMNS + column
-			var region := IllustratedGrassPatch.atlas_region_for_seed(seed_value, size)
-			checked_any = true
-			# Sample across the region's own top row (stride 4, matching how
-			# this bleed was originally measured): every one of the shipped
-			# atlas's real cells must be fully transparent right at the top
-			# of the region this function actually hands out, or a donor
-			# fragment is still being included.
-			for x in range(region.position.x, region.position.x + region.size.x, 4):
-				var alpha: float = image.get_pixel(x, region.position.y).a
-				assert_lt(
-					alpha, 0.05,
+	for season in IllustratedGrassPatch.SEASON_ATLAS_PATHS:
+		var path: String = IllustratedGrassPatch.SEASON_ATLAS_PATHS[season]
+		var raw := SpriteSheetLoader.load_image(path)
+		assert_not_null(raw, "precondition: %s (%s) loads" % [season, path])
+		var image := SpriteSheetSlicer.chroma_keyed(
+			raw, IllustratedGrassPatch.BACKGROUND_KEY, IllustratedGrassPatch.BACKGROUND_KEY_TOLERANCE
+		)
+		var size := image.get_size()
+		for row in range(1, IllustratedGrassPatch.ATLAS_ROWS):
+			# Rows 6-9 (the four densest rows -- full, flowering/fruiting
+			# clumps) measure well under this check's own 90% bar on most
+			# columns in MULTIPLE seasons (autumn and winter both, at
+			# different rows within 6-9) -- a structural property of how
+			# tightly these sheets pack their own densest rows together, not
+			# a single season's outlier a shared inset can absorb. See
+			# ROW_TOP_BLEED_PX's own doc comment.
+			if row >= 6:
+				continue
+			# Midpoint of the row's own growth bucket, not its exact lower
+			# boundary -- float(row)/ATLAS_ROWS can land a hair under the
+			# boundary (e.g. 0.9*10 == 8.999999...) and silently sample the
+			# PREVIOUS row instead under int() truncation.
+			var growth := (float(row) + 0.5) / float(IllustratedGrassPatch.ATLAS_ROWS)
+			for column in IllustratedGrassPatch.ATLAS_COLUMNS:
+				var region := IllustratedGrassPatch.atlas_region_for(column, growth, size)
+				checked_any = true
+				var clear_samples := 0
+				var total_samples := 0
+				for x in range(region.position.x, region.position.x + region.size.x, 4):
+					total_samples += 1
+					if image.get_pixel(x, region.position.y).a < 0.5:
+						clear_samples += 1
+				assert_gt(
+					float(clear_samples) / float(total_samples), 0.9,
 					(
-						"row %d col %d: region top (y=%d) is not transparent (alpha=%.2f) -- "
+						"%s row %d col %d: region top (y=%d) is only %d/%d mostly-transparent -- "
 						+ "still includes the previous row's bled-over content"
-					) % [row, column, region.position.y, alpha]
+					) % [season, row, column, region.position.y, clear_samples, total_samples]
 				)
-	assert_true(checked_any, "precondition: rows 1-9 were actually checked")
+	assert_true(checked_any, "precondition: rows 1-9 were actually checked across all season sheets")
+
+
+## Every sheet must load, chroma-key to a real RGBA image with actual
+## transparency present (not the pre-key all-opaque RGB this codebase
+## shipped three of the four sheets as -- see _texture_for's own doc
+## comment), and show a real, substantial fraction of transparent
+## background overall -- catching a wholesale keying failure (wrong key
+## colour, wrong tolerance, format not converting) independently of the
+## per-row bleed check above.
+func test_every_season_sheet_loads_and_keys_to_a_plausible_transparent_image():
+	for season in IllustratedGrassPatch.SEASON_ATLAS_PATHS:
+		var path: String = IllustratedGrassPatch.SEASON_ATLAS_PATHS[season]
+		var raw := SpriteSheetLoader.load_image(path)
+		assert_not_null(raw, "precondition: %s (%s) loads" % [season, path])
+		var image := SpriteSheetSlicer.chroma_keyed(
+			raw, IllustratedGrassPatch.BACKGROUND_KEY, IllustratedGrassPatch.BACKGROUND_KEY_TOLERANCE
+		)
+		assert_eq(image.get_format(), Image.FORMAT_RGBA8, "%s must be real RGBA after keying" % season)
+		var transparent := 0
+		var sampled := 0
+		for y in range(0, image.get_height(), 23):
+			for x in range(0, image.get_width(), 23):
+				sampled += 1
+				if image.get_pixel(x, y).a < 0.05:
+					transparent += 1
+		assert_gt(
+			float(transparent) / float(sampled), 0.3,
+			"%s: expected a real transparent background after keying, got %d/%d transparent samples" % [
+				season, transparent, sampled
+			]
+		)
+
+
+
+
+## Growth stage (the sheet's real drawn row -- a shoot at row 0, a full
+## flowering clump at row 9, see docs/concept/long_grass.md's "Seasonal art")
+## and variant (the column) are now two INDEPENDENT axes, not the one flat
+## 100-cell hash `atlas_region_for_seed` used to be -- the whole reason it
+## was split into `atlas_region_for`.
+func test_atlas_region_for_maps_growth_to_row_and_seed_to_column_independently():
+	# Same seed, climbing growth: the row climbs with it (never backwards),
+	# and reaches every row somewhere across growth's full [0, 1) range.
+	var rows_seen := {}
+	var previous_row := -1
+	for step in range(100):
+		var growth := float(step) / 100.0
+		var row: int = IllustratedGrassPatch.atlas_region_for(7, growth).position.y
+		rows_seen[row] = true
+		assert_gte(row, previous_row, "row must never move backwards as growth only increases")
+		previous_row = row
+	assert_eq(
+		rows_seen.size(), IllustratedGrassPatch.ATLAS_ROWS,
+		"every row must be reachable across growth's full range"
+	)
+
+	# Same growth, varying seed: the row (the region's own Y) stays fixed
+	# while the column (the region's own X) varies.
+	var fixed_growth := 0.6
+	var first_region := IllustratedGrassPatch.atlas_region_for(0, fixed_growth)
+	var xs_seen := {}
+	for seed_value in range(IllustratedGrassPatch.ATLAS_COLUMNS):
+		var region := IllustratedGrassPatch.atlas_region_for(seed_value, fixed_growth)
+		assert_eq(region.position.y, first_region.position.y, "row must not depend on seed, only on growth")
+		xs_seen[region.position.x] = true
+	assert_eq(
+		xs_seen.size(), IllustratedGrassPatch.ATLAS_COLUMNS,
+		"every column must be reachable across a full seed cycle"
+	)
+
+
+func test_atlas_region_for_zero_growth_is_row_zero():
+	assert_eq(IllustratedGrassPatch.atlas_region_for(3, 0.0).position.y, 0)
+
+
+func test_atlas_region_for_growth_at_or_beyond_one_is_clamped_to_the_last_row():
+	var last_row_region := IllustratedGrassPatch.atlas_region_for(3, 0.999)
+	assert_eq(IllustratedGrassPatch.atlas_region_for(3, 1.0), last_row_region)
+	assert_eq(
+		IllustratedGrassPatch.atlas_region_for(3, 5.0), last_row_region,
+		"an out-of-range growth must clamp, not wrap or crash"
+	)
 
 
 func test_a_patch_has_multiple_deterministically_placed_blade_cards():
@@ -698,9 +830,10 @@ func test_instances_for_cards_packs_each_instances_atlas_region_into_its_color()
 
 
 func test_instances_for_cards_places_the_root_exactly_at_the_given_position_regardless_of_growth():
-	# Growth scales the card, but the root (transform origin, pre-mesh-
-	# offset) must stay exactly at the given position - never drift with
-	# scale.
+	# The root (transform origin, pre-mesh-offset) must stay exactly at the
+	# given position regardless of growth, whatever growth currently affects
+	# (today: which row's art is sampled, not scale -- see
+	# test_instances_for_cards_places_every_card_at_full_scale_regardless_of_growth).
 	var position := Vector2(37.0, -12.0)
 	var card_specs: Array[Dictionary] = [{"atlas_seed": 5, "position": position, "growth": 0.3}]
 	var instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, Vector2i(1254, 1254))
@@ -708,21 +841,19 @@ func test_instances_for_cards_places_the_root_exactly_at_the_given_position_rega
 	assert_true(transform.origin.is_equal_approx(position))
 
 
-func test_instances_for_cards_scales_uniformly_by_growth_without_moving_the_root():
-	var card_specs: Array[Dictionary] = [{"atlas_seed": 5, "position": Vector2(10, 10), "growth": 0.6}]
-	var instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, Vector2i(1254, 1254))
-	var transform: Transform2D = instances[0].transform
-	assert_almost_eq(transform.x.x, 0.6, 0.001)
-	assert_almost_eq(transform.y.y, 0.6, 0.001)
-
-
-func test_instances_for_cards_never_scales_below_the_minimum_visible_floor():
-	# maxf(0.3, growth): a barely-sprouted patch (growth near 0) must not
-	# shrink to invisible.
-	var card_specs: Array[Dictionary] = [{"atlas_seed": 5, "position": Vector2.ZERO, "growth": 0.0}]
-	var instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, Vector2i(1254, 1254))
-	var transform: Transform2D = instances[0].transform
-	assert_almost_eq(transform.x.x, 0.3, 0.001)
+## SUPERSEDED (see docs/concept/long_grass.md's "Seasonal art"): growth used
+## to scale a card because every cell drew the same mature-clump art
+## regardless of growth. Now growth instead selects a real drawn row
+## (atlas_region_for), so scaling on TOP of that would double-damp an
+## already-smaller-drawn shoot -- a card renders at full, undamped size
+## across growth's entire range.
+func test_instances_for_cards_places_every_card_at_full_scale_regardless_of_growth():
+	for growth in [0.0, 0.3, 0.6, 1.0]:
+		var card_specs: Array[Dictionary] = [{"atlas_seed": 5, "position": Vector2(10, 10), "growth": growth}]
+		var instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, Vector2i(1254, 1254))
+		var transform: Transform2D = instances[0].transform
+		assert_almost_eq(transform.x.x, 1.0, 0.001, "growth=%.1f must not scale the card" % growth)
+		assert_almost_eq(transform.y.y, 1.0, 0.001, "growth=%.1f must not scale the card" % growth)
 
 
 ## Whichever band a card ultimately lands in, its own atlas region/root

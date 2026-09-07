@@ -6,7 +6,7 @@ extends RefCounted
 ##
 ## This class only prepares ART -- it packs every TreeSpecies/season pair's
 ## litter texture into one runtime atlas on a FIXED cell grid (unlike
-## grass_blades.png's pre-baked sheet of irregular UV pairs): a fixed grid
+## the grass_blades_*.png sheets' pre-baked cells of irregular UV pairs): a fixed grid
 ## means addressing a cell costs a single small index, which leaves the
 ## renderer's own per-instance channel budget with room for its fall-phase
 ## timing (see LeafLitterRenderer's own doc comment).

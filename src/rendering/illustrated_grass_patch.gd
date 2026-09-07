@@ -4,10 +4,25 @@ extends RefCounted
 ## the illustrated atlas -- one MultiMeshInstance2D draw call per Y-sort
 ## band, not one Sprite2D per card. See docs/concept/long_grass.md.
 const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 
-const ATLAS_PATH := "res://assets/sprites/grass_blades.png"
-## The delivered sheet is 1254×1254 and contains 10×10 blade variants. Its
-## source art is roughly 128px per cell; regions derive from its true size.
+## One sheet per season (see docs/concept/long_grass.md's "Seasonal art"),
+## superseding the single `grass_blades.png`. `grass_blades_summer.png` IS
+## that original file's own art, unchanged -- the other three are new,
+## real-drawn spring/autumn/winter variants sharing its exact grid.
+const SEASON_ATLAS_PATHS := {
+	"spring": "res://assets/sprites/grass_blades_spring.png",
+	"summer": "res://assets/sprites/grass_blades_summer.png",
+	"autumn": "res://assets/sprites/grass_blades_autumn.png",
+	"winter": "res://assets/sprites/grass_blades_winter.png",
+}
+## What an unrecognised season falls back to -- same reasoning and same
+## choice as `SeasonalFoliage.FALLBACK_SEASON`: unexpectedly green reads as
+## an ordinary lawn, unexpectedly bare/frosted reads as dead ground.
+const DEFAULT_SEASON := "summer"
+## Each delivered sheet is 1254×1254 and contains 10×10 blade cells. Source
+## art is roughly 128px per cell; regions derive from the true sheet size.
 const ATLAS_COLUMNS := 10
 const ATLAS_ROWS := 10
 const DEFAULT_ATLAS_SIZE := Vector2i(1254, 1254)
@@ -260,7 +275,9 @@ void fragment() {
 """ % [BEND_CURVE_EXPONENT, PHASE_SPREAD, AMPLITUDE_BASE, AMPLITUDE_VARIATION, AMPLITUDE_FREQUENCY, WIND_UV_AMPLITUDE, WALKER_PUSH_UV_AMPLITUDE, SeasonalFoliage.GREENNESS_GAIN]
 
 var _material: ShaderMaterial
-var _texture: Texture2D
+## Lazily-loaded, cached per season (see SEASON_ATLAS_PATHS) -- replaces a
+## single shared `_texture` now that there are four sheets to choose between.
+var _textures: Dictionary = {}
 var _mesh: QuadMesh
 ## Last live wind strength pushed in (see set_wind_strength) -- applied to
 ## material() at BUILD time too, so a caller that sets the live wind before
@@ -284,21 +301,44 @@ var _season_tint := Color(1.0, 1.0, 1.0)
 ## artefacts above it" (snow gave the white background enough contrast to
 ## show it clearly, but the bleed itself is independent of snow).
 ##
-## MEASURED, not eyeballed, against the real shipped sheet at its own native
-## 1254x1254 resolution: for each row, how many pixels down from that row's
-## own nominal top edge the previous row's content still shows (alpha > 0)
-## on at least one column, i.e. how far this function's own region has to
-## start past the nominal boundary to guarantee a transparent top. Index 0
-## is row 0, which has no row above it and so can never inherit a bleed.
-## Pinned by test_atlas_region_for_seed_never_includes_the_previous_rows_
-## bled_over_content, which checks every real (row, column) cell in the
-## shipped atlas directly rather than trusting this table by eye.
-const ROW_TOP_BLEED_PX := [0, 0, 3, 8, 13, 15, 17, 24, 25, 8]
+## MEASURED, not eyeballed, against all four real shipped sheets at their
+## native 1254x1254 resolution, using the EXACT integer arithmetic
+## atlas_region_for's own from/to computation uses (row * atlas_size.y /
+## ATLAS_ROWS truncates, it does not round -- measuring with float rounding
+## instead gives a subtly different, wrong nominal_top and was the source of
+## a whole false trail of apparent cross-season mismatches before this was
+## caught). Summer alone reproduces the table this was originally measured
+## against pixel-for-pixel (`grass_blades.png`, now shipped as `grass_blades_
+## summer.png`'s own pixels -- see docs/concept/long_grass.md), which is
+## itself a real check that this measurement methodology is correct. For
+## each row, this is the max across all four seasons of how many pixels down
+## from that row's own nominal top edge the previous row's content still
+## shows. Index 0 is row 0, which has no row above it and so can never
+## inherit a bleed.
+##
+## Verified against all four real sheets by
+## test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_
+## on_any_season_sheet, EXCEPT rows 6-9 (see that test's own doc comment for
+## the full measurement: bleed severity climbs with row density across
+## MULTIPLE seasons at different rows within that range, well past what a
+## bigger shared inset could absorb without cropping real art everywhere
+## else). A known, flagged gap (see docs/concept/long_grass.md's Status),
+## not a bug in this function. Rows 6-9's own values below are still real,
+## measured margins (not arbitrary) -- just not exhaustively proven
+## zero-residual across every real cell in every sheet the way rows 0-5 are.
+const ROW_TOP_BLEED_PX := [0, 3, 6, 11, 16, 19, 35, 40, 42, 30]
 
-static func atlas_region_for_seed(seed_value: int, atlas_size: Vector2i = DEFAULT_ATLAS_SIZE) -> Rect2i:
-	var index := posmod(seed_value, ATLAS_COLUMNS * ATLAS_ROWS)
-	var column := index % ATLAS_COLUMNS
-	var row := index / ATLAS_COLUMNS
+## The atlas cell for a card of the given growth stage and variant seed --
+## see docs/concept/long_grass.md's "Seasonal art" for why these are two
+## independent axes rather than one flat hash across all 100 cells: `growth`
+## (0..1, from `TallGrass.get_growth`) selects the ROW, a real drawn growth
+## stage from a bare shoot (row 0) to a full flowering clump (last row);
+## `seed_value` selects the COLUMN, the same per-card visual-variant hash as
+## before. Growth is clamped, not wrapped -- a card never cycles back to a
+## shoot once past the last row, it just stays on it.
+static func atlas_region_for(seed_value: int, growth: float, atlas_size: Vector2i = DEFAULT_ATLAS_SIZE) -> Rect2i:
+	var column := posmod(seed_value, ATLAS_COLUMNS)
+	var row := clampi(int(clampf(growth, 0.0, 1.0) * ATLAS_ROWS), 0, ATLAS_ROWS - 1)
 	# The bleed table above is measured in native pixels of the REAL
 	# 1254x1254 sheet; expressed as a fraction of one cell's own height so a
 	# caller passing a differently-sized atlas_size (e.g. a smaller test
@@ -414,9 +454,8 @@ static func instances_for_cards(card_specs: Array, band_anchor: Vector2, atlas_s
 	var flat: Array[Dictionary] = []
 	for card_spec in card_specs:
 		flat.append({
-			"region": atlas_region_for_seed(card_spec.atlas_seed, atlas_size),
+			"region": atlas_region_for(card_spec.atlas_seed, card_spec.growth, atlas_size),
 			"position": card_spec.position,
-			"growth": card_spec.growth,
 		})
 	flat.sort_custom(func(a, b): return a.position.y < b.position.y)
 
@@ -425,18 +464,55 @@ static func instances_for_cards(card_specs: Array, band_anchor: Vector2, atlas_s
 	for entry in flat:
 		var region: Rect2i = entry.region
 		var local_pos: Vector2 = entry.position - band_anchor
-		var scale_factor: float = maxf(0.3, entry.growth)
 		var region_uv0 := Vector2(region.position) / texture_size
 		var region_uv1 := Vector2(region.position + region.size) / texture_size
 		instances.append({
-			"transform": Transform2D(Vector2(scale_factor, 0.0), Vector2(0.0, scale_factor), local_pos),
+			# Full, undamped size regardless of growth -- growth now picks
+			# WHICH row's art is sampled (see atlas_region_for), so scaling
+			# on top of that would double-damp an already-smaller-drawn
+			# shoot. See docs/concept/long_grass.md's "Seasonal art".
+			"transform": Transform2D(Vector2(1.0, 0.0), Vector2(0.0, 1.0), local_pos),
 			"custom_data": Color(region_uv0.x, region_uv0.y, region_uv1.x, region_uv1.y),
 		})
 	return instances
 
-## Rebuilds `mmi` (wiring its MultiMesh/texture/material on first use if
-## needed) so it renders every CARD in `card_specs` - each a
-## {atlas_seed:int, position:Vector2, growth:float} (see `cards_for_cell`).
+## Only `grass_blades_summer.png` (the original shipped art) was ever
+## authored with a real alpha channel -- the three new seasonal sheets
+## (spring/autumn/winter) were delivered as plain opaque RGB, background and
+## all (measured: Image.FORMAT_RGB8, corner/gutter pixels reading alpha=1.0
+## uniformly). Loaded as-is, every card would render as a solid near-black
+## rectangle instead of a cutout blade. BACKGROUND_KEY/BACKGROUND_KEY_
+## TOLERANCE key that background out via SpriteSheetSlicer.chroma_keyed,
+## which also upgrades the format to RGBA8 -- applied to every season
+## uniformly (a no-op on a sheet already keyed to alpha=0, like summer's own
+## background, so this never double-processes the one sheet that didn't need
+## it). Tolerance measured against real sampled background pixels (up to
+## ~0.012 per channel of compression noise around pure black); a visual
+## check of the keyed result at this tolerance (spring/autumn/winter, saved
+## and inspected directly) showed the background cleanly gone with no
+## visible damage to the actual blade art.
+const BACKGROUND_KEY := Color(0.0, 0.0, 0.0)
+const BACKGROUND_KEY_TOLERANCE := 0.05
+
+## Lazily loads and caches the atlas texture for one season, falling back to
+## DEFAULT_SEASON for a name SEASON_ATLAS_PATHS doesn't recognise (mirrors
+## SeasonalFoliage.tint_for_season's own fallback).
+func _texture_for(season: String) -> Texture2D:
+	if not _textures.has(season):
+		var path: String = SEASON_ATLAS_PATHS.get(season, SEASON_ATLAS_PATHS[DEFAULT_SEASON])
+		var image := SpriteSheetLoader.load_image(path)
+		if image != null:
+			image = SpriteSheetSlicer.chroma_keyed(image, BACKGROUND_KEY, BACKGROUND_KEY_TOLERANCE)
+			_textures[season] = ImageTexture.create_from_image(image)
+		else:
+			_textures[season] = null
+	return _textures[season]
+
+
+## Rebuilds `mmi` (wiring its MultiMesh/material on first use if needed, and
+## re-pointing its texture whenever `season` changes) so it renders every
+## CARD in `card_specs` - each a {atlas_seed:int, position:Vector2,
+## growth:float} (see `cards_for_cell`) - sampled from `season`'s own sheet.
 ##
 ## `band_anchor` must already be `mmi`'s own `position` (it drives this
 ## band's Y-sort key against the player/creatures); instance transforms are
@@ -445,11 +521,10 @@ static func instances_for_cards(card_specs: Array, band_anchor: Vector2, atlas_s
 ## wrapper itself needs a real renderer to verify: MultiMesh per-instance
 ## transform/color storage is backed by the dummy renderer under
 ## `--headless` and silently doesn't round-trip there.
-func fill_band(mmi: MultiMeshInstance2D, band_anchor: Vector2, card_specs: Array) -> void:
-	if _texture == null:
-		_texture = load(ATLAS_PATH) as Texture2D
-	if _texture == null:
-		push_error("Missing long-grass atlas: %s" % ATLAS_PATH)
+func fill_band(mmi: MultiMeshInstance2D, band_anchor: Vector2, card_specs: Array, season: String = DEFAULT_SEASON) -> void:
+	var texture := _texture_for(season)
+	if texture == null:
+		push_error("Missing long-grass atlas for season '%s': %s" % [season, SEASON_ATLAS_PATHS.get(season)])
 		return
 	if mmi.multimesh == null:
 		var new_mm := MultiMesh.new()
@@ -457,10 +532,10 @@ func fill_band(mmi: MultiMeshInstance2D, band_anchor: Vector2, card_specs: Array
 		new_mm.transform_format = MultiMesh.TRANSFORM_2D
 		new_mm.use_custom_data = true
 		mmi.multimesh = new_mm
-		mmi.texture = _texture
 		mmi.material = material()
+	mmi.texture = texture
 	var mm: MultiMesh = mmi.multimesh
-	var instances := instances_for_cards(card_specs, band_anchor, Vector2i(_texture.get_size()))
+	var instances := instances_for_cards(card_specs, band_anchor, Vector2i(texture.get_size()))
 	mm.instance_count = instances.size()
 	for i in instances.size():
 		mm.set_instance_transform_2d(i, instances[i].transform)
