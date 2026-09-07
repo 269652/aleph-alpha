@@ -88,3 +88,13 @@ func test_a_bug_is_genuinely_tiny_and_lighter_than_a_mouse():
 func test_an_ant_is_lighter_than_a_bug():
 	assert_gt(CreatureMass.mass_kg_for("ant"), 0.0)
 	assert_lt(CreatureMass.mass_kg_for("ant"), CreatureMass.mass_kg_for("bug"))
+
+
+## A real late-instar caterpillar is genuinely tiny (see docs/concept/
+## metabolism.md) -- heavier than an ant, but still far lighter than a
+## mouse, the same real insect-vs-mammal scale gap the ant/bug pair above
+## already draws.
+func test_a_caterpillar_is_tiny_and_lighter_than_a_mouse():
+	assert_gt(CreatureMass.mass_kg_for("caterpillar"), 0.0)
+	assert_gt(CreatureMass.mass_kg_for("caterpillar"), CreatureMass.mass_kg_for("ant"))
+	assert_lt(CreatureMass.mass_kg_for("caterpillar"), CreatureMass.mass_kg_for("mouse"))

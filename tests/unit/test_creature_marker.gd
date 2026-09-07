@@ -2268,6 +2268,91 @@ func _make_predator(at: Vector2) -> CreatureMarker:
 	return predator
 
 
+# -- one unified, live current_mass_kg (see docs/concept/metabolism.md) -----
+#
+# Corrected live, directly, after a first attempt proposed a static
+# per-species reference mass and a new per-instance dynamic mass as two
+# separate concepts: "No ... all mass systems should be unified." There is
+# exactly ONE real notion of "how much does this creature weigh" per live
+# instance -- CreatureMass.mass_kg_for(species) only ever seeds it.
+
+func test_a_fresh_creature_starts_at_exactly_its_species_seed_mass():
+	var CreatureMass := preload("res://src/world/creature_mass.gd")
+	var wolf := _make_predator(Vector2.ZERO)
+	wolf.info = CreatureInfo.new("wolf")
+	assert_almost_eq(wolf.current_mass_kg(), CreatureMass.mass_kg_for("wolf"), 0.0001)
+
+
+## The regression proof this whole unification promises: a creature nobody
+## has fed or starved yet must behave EXACTLY as before -- not merely
+## "close", exactly equal, since this is the value the crush-momentum
+## calculation now reads instead of the flat species table.
+func test_seed_mass_matches_creature_mass_exactly_for_every_real_species():
+	var CreatureMass := preload("res://src/world/creature_mass.gd")
+	for species_id in ["mouse", "deer", "wolf", "boar", "horse", "ant", "bug"]:
+		var creature := _make_predator(Vector2.ZERO)
+		creature.info = CreatureInfo.new(species_id)
+		assert_almost_eq(
+			creature.current_mass_kg(), CreatureMass.mass_kg_for(species_id), 0.0001, species_id
+		)
+
+
+## The regression proof docs/concept/metabolism.md's unification promises:
+## a creature at its default/seed mass produces the EXACT SAME crush
+## momentum the old flat CreatureMass.mass_kg_for(species) lookup did --
+## proven directly against the real formula scenes/world.gd's own crush
+## wiring uses (PebbleDispersion.FOOTSTEP_SPEED_MPS), not just "close".
+func test_crush_momentum_at_seed_mass_matches_the_old_flat_species_lookup_exactly():
+	var PebbleDispersion := preload("res://src/rendering/pebble_dispersion.gd")
+	var CreatureMass := preload("res://src/world/creature_mass.gd")
+	for species_id in ["mouse", "deer", "wolf", "boar", "horse", "ant", "bug"]:
+		var creature := _make_predator(Vector2.ZERO)
+		creature.info = CreatureInfo.new(species_id)
+		var old_momentum := CreatureMass.mass_kg_for(species_id) * PebbleDispersion.FOOTSTEP_SPEED_MPS
+		var new_momentum := creature.current_mass_kg() * PebbleDispersion.FOOTSTEP_SPEED_MPS
+		assert_almost_eq(new_momentum, old_momentum, 0.0001, species_id)
+
+
+## End to end: a real, well-fed boar killed above its species' seed mass
+## must yield real, proportionally MORE meat than a flat, mass-blind kill
+## would -- the actual payoff docs/concept/metabolism.md's unification
+## promised ("dynamic mass affects how much meat they drop when hunted").
+func test_a_heavier_than_seed_boar_yields_more_real_meat_when_killed():
+	var Butchering := preload("res://src/gameplay/butchering.gd")
+	var boar := _make_predator(Vector2.ZERO)
+	boar.info = CreatureInfo.new("boar")
+	var seed_mass := boar.current_mass_kg()
+	# A real, well-fed boar: genuinely heavier than its own species seed,
+	# through the real feeding API (not a hand-set number).
+	while boar.current_mass_kg() < seed_mass * 1.3:
+		boar._ensure_metabolism().feed_mass_kg(1.0)
+	var fed_mass := boar.current_mass_kg()
+	boar._spawn_carcass_if_eligible()
+	var carcasses := get_tree().get_nodes_in_group(Carcass.GROUP_NAME)
+	assert_eq(carcasses.size(), 1)
+	var carcass: Carcass = carcasses[0]
+	assert_almost_eq(carcass.mass_ratio, fed_mass / seed_mass, 0.001)
+	var real_yield := Butchering.meat_count(0.0, carcass.mass_ratio)
+	var old_flat_yield := Butchering.meat_count(0.0)
+	assert_gt(
+		real_yield, old_flat_yield,
+		"a real, heavier-than-seed boar (%.2fkg vs %.2fkg seed) must yield more meat (%d) than the old flat count (%d)" % [fed_mass, seed_mass, real_yield, old_flat_yield]
+	)
+	carcass.queue_free()
+
+
+func test_current_mass_kg_drops_after_prolonged_time_with_nothing_eaten():
+	var CreatureMass := preload("res://src/world/creature_mass.gd")
+	var deer := _make_predator(Vector2.ZERO)
+	deer.info = CreatureInfo.new("deer")
+	var seed_mass := deer.current_mass_kg()
+	for _i in 200:
+		deer._process(30.0)
+	assert_lt(deer.current_mass_kg(), seed_mass)
+	assert_almost_eq(CreatureMass.mass_kg_for("deer"), seed_mass, 0.0001,
+		"CreatureMass itself must stay the untouched species reference table")
+
+
 # -- active foraging: a grazer walks to its food (see GrazerForaging) ---------
 #
 # Herbivores used to absorb food from the BIOME they stood on: a hungry horse
@@ -2330,15 +2415,24 @@ class ForageWorld:
 	func take_worm_at(_p: Vector2) -> bool:
 		return true
 
-	## Records every bite_stages value it was called with (see
-	## docs/concept/soil_fauna.md's "Progressive, mass-scaled bites, and
-	## real toxic effects") so a test can confirm the caller's own real,
-	## mass-scaled bite count actually reached here, not a hardcoded 1.
+	## Records every bite_stages REQUESTED (see docs/concept/soil_fauna.md's
+	## "Progressive, mass-scaled bites, and real toxic effects") so a test
+	## can confirm the caller's own real, mass-scaled bite count actually
+	## reached here, not a hardcoded 1.
 	var taken_mushroom_bite_stages: Array = []
-	func take_mushroom_at(p: Vector2, bite_stages: int = 1) -> String:
+	## How many of a requested bite_stages this stub reports as actually
+	## APPLIED -- settable per test to simulate a mushroom with less real
+	## capacity left than the eater requested (see docs/concept/
+	## metabolism.md's "the two named mushroom gaps": the real applied
+	## count can be clamped below the request near MushroomBiting.
+	## MAX_BITE_STAGES). -1 (the default) means "apply exactly what was
+	## requested" -- the ordinary, un-clamped case.
+	var mushroom_stages_applied_override := -1
+	func take_mushroom_at(p: Vector2, bite_stages: int = 1) -> Dictionary:
 		taken_mushrooms.append(p)
 		taken_mushroom_bite_stages.append(bite_stages)
-		return mushroom_species_to_take
+		var applied := bite_stages if mushroom_stages_applied_override < 0 else mushroom_stages_applied_override
+		return {"species": mushroom_species_to_take, "stages_applied": applied}
 
 	func solid_obstacles_near(_p: Vector2, _r: float) -> Array:
 		return []
@@ -2543,6 +2637,52 @@ func test_a_boar_eats_a_mushroom_using_its_own_mass_scaled_bite_count():
 		"a boar's own real mass-scaled bite count should reach take_mushroom_at, not a hardcoded 1"
 	)
 	assert_eq(world.taken_mushroom_bite_stages[0], MushroomBiting.MAX_BITE_STAGES)
+
+
+## The real gap this closes (see docs/concept/metabolism.md's "the two
+## named mushroom gaps"): a forager's nutrition must scale by how many
+## stages this ONE bite event actually APPLIED -- which can be clamped
+## below what it requested, near the real per-mushroom cap -- not always
+## the full whole-item amount regardless of what was actually left.
+func test_a_boar_biting_an_already_diminished_mushroom_gets_proportionally_less_nutrition():
+	var NutrientRelease := preload("res://src/gameplay/nutrient_release.gd")
+	var MushroomBiting := preload("res://src/gameplay/mushroom_biting.gd")
+	var world := ForageWorld.new()
+	world.mushrooms = [{"position": Vector2(20, 0), "species": "champignon"}]
+	# Only 1 of MAX_BITE_STAGES (3) is actually left, as if something else
+	# had already taken 2 real bites before the boar arrived -- even though
+	# a boar's own mass-scaled request asks for all 3.
+	world.mushroom_stages_applied_override = 1
+	var boar := _hungry_grazer("boar", world)
+	boar._needs.thirst = 0.3
+	for _i in 900:
+		boar._process(1.0 / 60.0)
+		if not world.taken_mushrooms.is_empty():
+			break
+	assert_false(world.taken_mushrooms.is_empty(), "the boar should have taken the mushroom")
+	var expected_fraction := 1.0 / float(MushroomBiting.MAX_BITE_STAGES)
+	var nutrients: Dictionary = NutrientRelease.consume("champignon", expected_fraction)
+	assert_almost_eq(
+		boar._needs.hunger, 1.0 - nutrients["sugar"], 0.01,
+		"only 1 of 3 real stages actually landed -- nutrition should scale down to match, not assume the whole mushroom"
+	)
+
+
+## A real eating event now genuinely feeds the SAME unified mass the crush
+## mechanic reads -- see docs/concept/metabolism.md. A well-fed creature
+## should gain real mass from a real meal, not just relieve its hunger
+## meter with nothing else to show for it.
+func test_a_boar_eating_a_mushroom_gains_real_mass():
+	var world := ForageWorld.new()
+	world.mushrooms = [{"position": Vector2(20, 0), "species": "champignon"}]
+	var boar := _hungry_grazer("boar", world)
+	var seed_mass := boar.current_mass_kg()
+	for _i in 900:
+		boar._process(1.0 / 60.0)
+		if not world.taken_mushrooms.is_empty():
+			break
+	assert_false(world.taken_mushrooms.is_empty(), "the boar should have taken the mushroom")
+	assert_gt(boar.current_mass_kg(), seed_mass)
 
 
 ## A boar's TARGET SELECTION still never consults MushroomSpecies.is_toxic

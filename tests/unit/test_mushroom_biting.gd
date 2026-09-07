@@ -160,3 +160,54 @@ func test_satiation_seconds_is_monotonic_with_mass():
 ## a near-zero or negative satiation window.
 func test_satiation_seconds_never_drops_below_the_floor():
 	assert_gte(MushroomBiting.satiation_seconds_for(0.0000001), MushroomBiting.MIN_SATIATION_SECONDS)
+
+
+# -- remaining mass/nutrient fraction at a real bite STAGE -------------------
+#
+# See docs/concept/metabolism.md's "the two named mushroom gaps": a
+# picked-up mushroom's own item mass, and the nutrition an eater gets from
+# one bite, must both scale with how many real MAX_BITE_STAGES have
+# actually landed -- not the old flat one-bite RETAINED_FRACTION_AFTER_BITE
+# applied uniformly regardless of stage.
+
+## Stage 0 (never bitten) keeps the whole, unbitten mass -- the same
+## "un-bitten" meaning WildMushroomPatch.bite_stage()'s own 0 return
+## already carries.
+func test_remaining_fraction_for_stage_zero_is_the_whole_mushroom():
+	assert_almost_eq(MushroomBiting.remaining_fraction_for_stage(0), 1.0, 0.0001)
+
+
+## Stage 1 must match the existing after_bite/RETAINED_FRACTION_AFTER_BITE
+## exactly -- the new general function is a real generalization of the old
+## one-bite case, not a second, independently-tuned curve.
+func test_remaining_fraction_for_stage_one_matches_the_existing_single_bite():
+	assert_almost_eq(
+		MushroomBiting.remaining_fraction_for_stage(1),
+		MushroomBiting.RETAINED_FRACTION_AFTER_BITE,
+		0.0001
+	)
+
+
+## Each further stage compounds the SAME real per-bite loss (stage^N),
+## rather than a second, independently-tuned curve -- a real, derived
+## consequence of "the same fraction survives each successive bite" not a
+## separately eyeballed stage-2/stage-3 number.
+func test_remaining_fraction_compounds_across_stages():
+	assert_almost_eq(
+		MushroomBiting.remaining_fraction_for_stage(2),
+		MushroomBiting.RETAINED_FRACTION_AFTER_BITE * MushroomBiting.RETAINED_FRACTION_AFTER_BITE,
+		0.0001
+	)
+	assert_almost_eq(
+		MushroomBiting.remaining_fraction_for_stage(MushroomBiting.MAX_BITE_STAGES),
+		pow(MushroomBiting.RETAINED_FRACTION_AFTER_BITE, MushroomBiting.MAX_BITE_STAGES),
+		0.0001
+	)
+
+
+func test_remaining_fraction_strictly_decreases_with_each_stage():
+	var previous := MushroomBiting.remaining_fraction_for_stage(0)
+	for stage in range(1, MushroomBiting.MAX_BITE_STAGES + 1):
+		var current := MushroomBiting.remaining_fraction_for_stage(stage)
+		assert_lt(current, previous, "stage %d" % stage)
+		previous = current

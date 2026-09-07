@@ -227,9 +227,16 @@ func test_take_mushroom_at_eats_a_real_fruiting_mushroom_and_marks_it_bitten():
 	var species := manager.force_mushroom_near(global_tile)
 	var pixel := _pixel_position_for(global_tile)
 
-	var eaten := manager.take_mushroom_at(pixel)
+	# Corrected 2026-09-07 (see docs/concept/metabolism.md's "the two named
+	# mushroom gaps"): now returns {"species", "stages_applied"} rather than
+	# a bare species string, so a caller can scale real nutrition by how
+	# many stages actually landed (which can be clamped below what was
+	# requested, near the real per-mushroom cap), not just whether a bite
+	# happened at all.
+	var result: Dictionary = manager.take_mushroom_at(pixel)
 
-	assert_eq(eaten, species)
+	assert_eq(result.get("species", ""), species)
+	assert_gt(int(result.get("stages_applied", 0)), 0, "a real bite that actually landed must report a positive applied count")
 	assert_true(sim.has_fruiting(site), "a bite is not a pick or a crush -- it stays fruiting")
 	assert_true(sim.is_bitten(site))
 	assert_true(
@@ -258,13 +265,17 @@ func test_take_mushroom_at_accepts_a_bigger_bite_count():
 	assert_eq(manager._mushroom_markers[_berlin_chunk][site].bite_stage, MushroomBiting.MAX_BITE_STAGES)
 
 
-func test_take_mushroom_at_returns_empty_string_when_nothing_is_there():
+func test_take_mushroom_at_returns_empty_species_when_nothing_is_there():
 	manager._load_chunk(_berlin_chunk)
-	assert_eq(manager.take_mushroom_at(_pixel_position_for(_berlin_tile + Vector2i(500, 500))), "")
+	var result: Dictionary = manager.take_mushroom_at(_pixel_position_for(_berlin_tile + Vector2i(500, 500)))
+	assert_eq(result.get("species", ""), "")
+	assert_eq(int(result.get("stages_applied", -1)), 0)
 
 
-func test_take_mushroom_at_returns_empty_string_for_an_unloaded_chunk():
-	assert_eq(manager.take_mushroom_at(_pixel_position_for(Vector2i(999999, 999999))), "")
+func test_take_mushroom_at_returns_empty_species_for_an_unloaded_chunk():
+	var result: Dictionary = manager.take_mushroom_at(_pixel_position_for(Vector2i(999999, 999999)))
+	assert_eq(result.get("species", ""), "")
+	assert_eq(int(result.get("stages_applied", -1)), 0)
 
 
 # -- step_wild_mushrooms threads real season progress through --------------

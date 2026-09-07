@@ -397,6 +397,88 @@ func test_bitten_mushroom_weighs_the_retained_fraction_of_the_base():
 		)
 
 
+# -- bite_stage: a picked-up mushroom's mass scales with how much was -------
+# -- actually eaten (docs/concept/metabolism.md's "the two named mushroom ---
+# -- gaps") ------------------------------------------------------------------
+
+## Omitting bite_stage entirely (every caller that predates this
+## parameter -- DevConsole's /give included) must behave EXACTLY as
+## before: the old flat one-bite fraction, not stage-aware at all.
+func test_omitting_bite_stage_keeps_the_old_flat_bitten_mass():
+	const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
+	var base_mass: float = catalog.make("parasol").mass_kg
+	var bitten_mass: float = catalog.make("parasol_bitten").mass_kg
+	assert_almost_eq(bitten_mass, MushroomBiting.after_bite(base_mass), 0.0001)
+
+
+## Stage 1, given explicitly, matches the old flat fraction too -- the new
+## stage-aware path is a real generalization of the old one, not a
+## divergent second curve.
+func test_bite_stage_one_matches_the_old_flat_fraction():
+	const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
+	var flat: float = catalog.make("parasol_bitten").mass_kg
+	var staged: float = catalog.make("parasol_bitten", 1).mass_kg
+	assert_almost_eq(staged, flat, 0.0001)
+
+
+## Stage 0 is the whole, unbitten mushroom's own mass -- even though the
+## id passed in already carries "_bitten", an explicit stage 0 means
+## nothing has actually been removed yet.
+func test_bite_stage_zero_is_the_whole_unbitten_mass():
+	var base_mass: float = catalog.make("parasol").mass_kg
+	var staged: float = catalog.make("parasol_bitten", 0).mass_kg
+	assert_almost_eq(staged, base_mass, 0.0001)
+
+
+## A higher stage means a lighter item -- real, progressive mass loss, not
+## a flat number regardless of how much was actually eaten.
+func test_higher_bite_stage_weighs_strictly_less():
+	const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
+	var previous: float = catalog.make("parasol_bitten", 0).mass_kg
+	for stage in range(1, MushroomBiting.MAX_BITE_STAGES + 1):
+		var current: float = catalog.make("parasol_bitten", stage).mass_kg
+		assert_lt(current, previous, "stage %d" % stage)
+		previous = current
+
+
+## A non-bitten id is unaffected by a stray bite_stage argument -- the
+## stage only ever matters for a "_bitten" id.
+func test_bite_stage_is_ignored_for_a_non_bitten_id():
+	var without_stage: float = catalog.make("parasol").mass_kg
+	var with_stray_stage: float = catalog.make("parasol", 2).mass_kg
+	assert_almost_eq(with_stray_stage, without_stage, 0.0001)
+
+
+# -- remaining_mass_fraction_for: how much of a whole item is left ----------
+
+## A freshly-made, never-bitten item is, by construction, the whole thing.
+func test_remaining_mass_fraction_for_a_whole_item_is_one():
+	var item := catalog.make("parasol")
+	assert_almost_eq(catalog.remaining_mass_fraction_for(item), 1.0, 0.0001)
+
+
+## A stage-scaled bitten item reports exactly the fraction that stage
+## implies -- read back from the item's OWN mass_kg, not re-derived from a
+## separately-tracked stage number (there is only ONE real number here,
+## the item's own mass).
+func test_remaining_mass_fraction_for_a_bitten_item_matches_its_stage():
+	const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
+	var item := catalog.make("parasol_bitten", 2)
+	assert_almost_eq(
+		catalog.remaining_mass_fraction_for(item),
+		MushroomBiting.remaining_fraction_for_stage(2),
+		0.0001
+	)
+
+
+## An item with no real mass modeled at all (0.0 reference) must not
+## divide by zero -- reads as "the whole thing" rather than crashing or
+## returning NaN/inf.
+func test_remaining_mass_fraction_for_an_unmodeled_item_is_one():
+	var item := catalog.make("iron_axe")
+	assert_almost_eq(catalog.remaining_mass_fraction_for(item), 1.0, 0.0001)
+
+
 # -- wayfinding & citizenship instruments (see docs/concept/wayfinding.md, --
 # -- docs/concept/player_citizenship.md) -- Compass/RoughCompass, Map, -------
 # -- Spyglass, WeatherForecast, SeasonAlmanac, and the property/contract/ ----
