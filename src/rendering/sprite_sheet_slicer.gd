@@ -66,6 +66,33 @@ static func is_empty(
 	)
 
 
+## A copy of `image` with every pixel within `tolerance` of `key` (each of
+## R/G/B independently, ignoring alpha) turned fully transparent.
+##
+## Sheets cut out on a solid chroma-key colour (magenta, by this project's
+## prompts) rather than real transparency: keying them up front lets
+## detect_frames/normalize_frames treat the ground as the low-alpha
+## background they already understand, with no "or matches this colour"
+## branch anywhere downstream. Per-channel rather than one combined
+## distance, so a saturated key can use a generous tolerance for the
+## anti-aliased blend at a drawing's silhouette without also swallowing a
+## pale, low-saturation drawing colour of similar overall brightness.
+static func chroma_keyed(image: Image, key: Color, tolerance: float) -> Image:
+	var keyed := image.duplicate()
+	if keyed.get_format() != Image.FORMAT_RGBA8:
+		keyed.convert(Image.FORMAT_RGBA8)
+	for y in keyed.get_height():
+		for x in keyed.get_width():
+			var c: Color = keyed.get_pixel(x, y)
+			if (
+				absf(c.r - key.r) <= tolerance
+				and absf(c.g - key.g) <= tolerance
+				and absf(c.b - key.b) <= tolerance
+			):
+				keyed.set_pixel(x, y, Color(0, 0, 0, 0))
+	return keyed
+
+
 ## The frames in the band of rows between `top_y` and `bottom_y`.
 ##
 ## Scans column by column: a column with nothing but background in it is a
@@ -142,7 +169,7 @@ func normalize_frames(
 	var widest := 1
 	var tallest := 1
 	for frame in frames:
-		var content := _content_rect(image, frame, alpha_threshold, divider_gray_min)
+		var content := content_rect(image, frame, alpha_threshold, divider_gray_min)
 		contents.append(content)
 		if content.size.x > 0 and content.size.y > 0:
 			widest = maxi(widest, content.size.x)
@@ -178,8 +205,12 @@ func normalize_frames(
 
 
 ## The box the actual drawing occupies inside `rect`, ignoring background and
-## divider pixels around it.
-func _content_rect(
+## divider pixels around it. Public (not `_content_rect`): normalize_frames'
+## own content-crop-then-scale step and illustrated_art_addressing.md's
+## `center` anchor (content-cropped, centered on a square canvas, rather
+## than normalize_frames' own baseline-positioned centering) both need this
+## exact box -- reused rather than re-derived.
+func content_rect(
 	image: Image, rect: Rect2i, alpha_threshold: float, divider_gray_min: float
 ) -> Rect2i:
 	var clipped := rect.intersection(Rect2i(0, 0, image.get_width(), image.get_height()))
