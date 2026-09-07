@@ -934,8 +934,10 @@ character — much smaller canvas than the boss attack sheets in section 6):
 ## 9. General item icons — one kit per visual archetype (2026-08-28)
 
 The full item catalog (`item_catalog.gd`'s `_ITEMS`, the single source of
-truth for every id in the game — 74 entries as of this writing) has never
-had illustrated icon art at all. `docs/concept/art_resolution.md` flags
+truth for every id in the game — 92 entries as of this refresh, up from the
+74 this section originally scaffolded on 2026-08-28; the catalog keeps
+growing, so treat any count here as a snapshot, not a ceiling) has never had
+illustrated icon art at all. `docs/concept/art_resolution.md` flags
 items/icons as the one art category still on its pending Phase 6; every
 item today renders through `procedural_item_sprite.gd`'s color+silhouette
 generator instead (see [item_illustrations.md](../concept/item_illustrations.md),
@@ -951,6 +953,19 @@ section 1's flower archetypes or section 8's atom shape-families). The
 an item with no entry there at all (falls back to the generic grey pebble)
 is called out explicitly, since those are the items with literally no
 distinct look today, procedural or otherwise.
+
+**Refreshed against the current 92-entry catalog (this pass).** Every item
+added to `item_catalog.gd` since the original 2026-08-28 scaffold now has a
+home: `stone_dam` joins 9g (it's a placed structure, the same archetype),
+`glass_bottle` joins 9e (an empty capture-transfer vessel, the same
+archetype as `jarred_insect`/`caged_songbird`), and 9l below explains why
+the 16 mushroom-related ids (8 species + their 8 bitten states) are
+deliberately NOT a new icon kit — they already have real, shipped
+illustrated art through a different pipeline, and generating a second,
+independent picture for the same subject would be waste, not scaffolding.
+That leaves the catalog fully accounted for: every id is either in a kit
+below, in section 2 (carrot/potato), or explicitly routed to art reuse
+instead of generation (9l).
 
 **Prefix every prompt below with the shared style preamble from the top of
 this doc**, plus this icon-sheet addendum (a single still icon, not an
@@ -1044,7 +1059,7 @@ action cycle — much simpler than every other section here):
 > the cover. `spyglass` breaks from all three: a collapsible brass
 > telescope, sections tapering, one end wider than the other.
 
-### 9e. Capture, restraint & rope gear — lasso, snare, butterfly_net, trap, reinforced_rope, climbing_rope, jarred_insect, caged_songbird
+### 9e. Capture, restraint & rope gear — lasso, snare, butterfly_net, trap, reinforced_rope, climbing_rope, jarred_insect, caged_songbird, glass_bottle
 
 | Item | Current look | Note |
 |---|---|---|
@@ -1056,17 +1071,23 @@ action cycle — much simpler than every other section here):
 | `climbing_rope` | **No entry yet (added after the procedural generator was last extended) — falls back to the generic grey pebble.** | A coiled traversal rope, not a capture tool — see `docs/concept/transportation.md`. |
 | `jarred_insect` | Pale cyan-white, jar silhouette | Already bespoke — see `_draw_jar`. |
 | `caged_songbird` | Warm orange bird blur in a cage silhouette | Already bespoke — see `_draw_cage`. |
+| `glass_bottle` | **No entry yet (added after the procedural generator was last extended) — falls back to the generic grey pebble.** | The EMPTY vessel `jarred_insect`'s own "on transfer" atom fills (see `docs/concept/capture_dsl.md`) — a container, not a capture tool itself. |
 
-> Eight rope/restraint/containment items — several already have a strong,
+> Nine rope/restraint/containment items — several already have a strong,
 > distinct procedural silhouette worth MATCHING rather than reinventing
 > (snare's staked loop, the net's hoop-on-a-handle, the trap's cornered
 > box, the reinforced rope's metal-cored coil, the insect jar, the
 > songbird cage — describe each of these exactly as named above, just
-> rendered instead of drawn pixel-by-pixel). Two need real designs from
+> rendered instead of drawn pixel-by-pixel). Three need real designs from
 > scratch: `lasso` a coiled loop of pale sun-bleached rope, distinct from
 > `reinforced_rope`'s visible metal core; `climbing_rope` a neatly coiled
 > plain hemp rope with a small metal carabiner clipped through it, reading
-> as traversal gear rather than a capture tool.
+> as traversal gear rather than a capture tool; `glass_bottle` a small
+> clear glass jar with a pale blue-green tint and a simple cork stopper,
+> the SAME jar silhouette as `jarred_insect` but drawn genuinely EMPTY —
+> no insect, no contents, no cloudiness — since the two must read as
+> "before" and "after" one transfer rather than as two unrelated
+> containers.
 
 ### 9f. Worn armor — leather_helm/chest/legs/boots, iron_helm/chest/legs/boots
 
@@ -1089,7 +1110,7 @@ action cycle — much simpler than every other section here):
 > so the two sets read as a real material upgrade of the same armor rather
 > than two unrelated designs.
 
-### 9g. Placeable structures — campfire, furnace, sagewerk, storage
+### 9g. Placeable structures — campfire, furnace, sagewerk, storage, stone_dam
 
 | Item | Current look | Note |
 |---|---|---|
@@ -1097,17 +1118,22 @@ action cycle — much simpler than every other section here):
 | `furnace` | Bespoke stone block with a glowing firebox | Already bespoke — see `_draw_furnace`. |
 | `sagewerk` | **No entry — falls back to the generic flat "armor plate" rectangle.** | A sawmill worksite (see `docs/concept/timber_construction.md`) — needs its own building-icon read. |
 | `storage` | **No entry — falls back to the generic flat "armor plate" rectangle.** | A stock-holding structure (see `docs/concept/timber_construction.md`) — needs its own building-icon read. |
+| `stone_dam` | **No entry yet (added after the procedural generator was last extended) — falls back to the generic grey pebble.** | A river check dam (see `docs/concept/rivers.md`) — a stacked-stone barrier, built like the others but never inhabited/fired. |
 
-> Two placeable worksite icons, currently the least-distinguished items in
-> the whole catalog (both fall back to a plain flat rectangle today):
-> `sagewerk` a small open-sided timber-framed sawmill shed with a visible
-> saw-blade and stacked raw logs beside it; `storage` a simple wooden crate/
-> shed with visible plank construction and a barred door, reading clearly
-> as "a place things get kept" rather than "a place things get made" next
-> to sagewerk. `campfire`/`furnace` already have strong bespoke procedural
-> art (crossed burning logs; a glowing stone firebox) worth matching as
-> the reference point for this kit's overall style rather than
-> redesigning from scratch.
+> Three placeable worksite icons need real designs (two fall back to a
+> plain flat rectangle today, one to the generic pebble): `sagewerk` a
+> small open-sided timber-framed sawmill shed with a visible saw-blade and
+> stacked raw logs beside it; `storage` a simple wooden crate/shed with
+> visible plank construction and a barred door, reading clearly as "a
+> place things get kept" rather than "a place things get made" next to
+> sagewerk; `stone_dam` a short, compact weir of flat stacked river stones
+> with a small visible trickle of water at one low point — the one
+> structure in this kit that is inert masonry, not a worked building, so
+> keep it visually plainer than sagewerk/storage rather than giving it a
+> roofline or door it would never have. `campfire`/`furnace` already have
+> strong bespoke procedural art (crossed burning logs; a glowing stone
+> firebox) worth matching as the reference point for this kit's overall
+> style rather than redesigning from scratch.
 
 ### 9h. Raw & refined materials — hide, fang, wood, rock, sharp_shard, plant_fibre, log, beam, plank, stone, iron_ore, copper_ore, coal, iron_ingot, copper_ingot
 
@@ -1213,9 +1239,37 @@ action cycle — much simpler than every other section here):
 > or welded charm shape. All four should look like unremarkable found
 > objects, not loot.
 
----
+### 9l. Mushroom items — real art already exists; route via `sprite_id`, do not re-generate (2026-09-07)
 
-## 10. Placed structures — seeded-variant grids (2026-09-03)
+The 16 remaining catalog ids — 8 species (`fly_agaric`, `psylo`,
+`black_trumpet`, `champignon`, `chanterelle`, `parasol`, `death_cap`,
+`false_death_cap`) and their 8 bitten states (`fly_agaric_bitten`,
+`psylo_bitten`, `black_trumpet_bitten`, `champignon_bitten`,
+`chanterelle_bitten`, `parasol_bitten`, `death_cap_bitten`,
+`false_death_cap_bitten`) — are deliberately NOT a kit here, for the same
+reason `carrot`/`potato` are excluded above:
+**real, hand-generated, already-shipped illustrated art exists for every
+one of them.** `IllustratedMushroomSprite` (`src/rendering/
+illustrated_mushroom_sprite.gd`) already slices a real base sprite per
+species (`assets/sprites/mushrooms/<id>.png`, or `chantarelle.png` for
+`chanterelle` — a real, already-noted filename/id spelling mismatch, not a
+new one), and a real bitten variant per species exists too
+(`docs/progress.md`'s mushroom-bitten-art entry) — a mushroom's WORLD
+appearance is not the procedural fallback this section exists to replace
+for every other item.
+
+Generating a second, independent icon picture for a subject that already
+has one real illustrated picture is not scaffolding — it is asking the
+model to reinvent something that exists, at real risk of the icon and the
+world sprite visibly disagreeing on what the same mushroom looks like
+(the exact "two unrelated pictures, one item id" trap
+[item_illustrations.md](../concept/item_illustrations.md#placed-structures-a-second-surface-this-doc-never-named)
+already names for placed structures). The right next step for all 16 is
+the SAME one item_illustrations.md already left open for carrot/potato: a
+`sprite_id`-aware icon path that crops the item's own existing world sheet
+for inventory/hotbar/tooltip display, rather than a fresh generation
+prompt. Not committed as part of this pass — a real, small, code-only
+follow-up (no art to generate at all), not an art-prompt gap.
 
 The illustrated-art gap [item_illustrations.md](../concept/item_illustrations.md#placed-structures-a-second-surface-this-doc-never-named)
 names: what a placed `campfire`/`furnace`/`sagewerk`/`storage` looks like
