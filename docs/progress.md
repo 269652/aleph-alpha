@@ -2343,6 +2343,85 @@ confirmed failing against the old exclusion first. 20/20 snow tests in
 [snow_cover.md](concept/snow_cover.md#snow-under-a-river-reads-as-a-staircase).
 
 
+### Real left/right footprint stamps, and pathscarring for grass/forest (2026-09-07)
+
+Reported directly: *"Can you implement real footstep prints with left /
+right footprints spaced apart and stamped into the snow with displacement
+(snow amount should still be reduced)"*, then, in the same message
+thread: *"Also implement proper pathscarring for grass and forest
+tiles."* Confirmed (via a dedicated research pass before writing any
+code) that the existing `SnowTrail`/`PathScarring` mechanisms only ever
+reduced snow depth / swapped a whole tile to a dirt texture — neither
+ever drew an actual footprint SHAPE, individually placed and alternating
+left/right. Both existing mechanisms are completely UNCHANGED by this
+pass; a new, purely additive visual layer sits on top of both, serving
+snow/grass/forest alike from one field/renderer pair.
+
+Genuinely new machinery, confirmed via a dedicated research pass that
+nothing like it already existed:
+
+- **`FootstepGait`** (`src/gameplay/footstep_gait.gd`) — real per-step
+  footfall detection, driven by ACTUAL distance travelled (mirrors
+  `CreatureMarker._gait_distance`'s own "accumulate real travelled
+  distance, threshold it" shape, generalized from indexing an animation
+  frame into emitting a discrete world event instead). `STRIDE_LENGTH_
+  METERS`/`STANCE_WIDTH_METERS` (0.75m/0.12m) are real human-scale
+  measurements converted via the existing `GroundSlide.PX_PER_METER`.
+- **`FootprintField`** (`src/world/footprint_field.gd`) — per-chunk data
+  mirroring `LeafLitterField`'s exact shape, deliberately simpler (a
+  footprint is static once stamped, no wind/settle/decay-stage machinery
+  to mirror). `LIFETIME_SECONDS` is half a real in-game day, far shorter
+  than leaf litter's own 0.75-real-year lifetime.
+- **`ProceduralFootprintSprite`** (`src/rendering/`) — no real
+  hand-illustrated footprint art exists anywhere in the project (a
+  dedicated search confirmed this before writing any art code), so a
+  real asymmetric sole shape (ball+heel ellipses, ball offset for a real
+  big-toe bulge) is generated directly, same house style as
+  `ProceduralMushroomSprite`. "Stamped ... with displacement" via a
+  two-tone rim+core shading technique, not a flat silhouette. One shape
+  per surface (snow/grass/forest); left/right is a render-time mirror of
+  the same shape.
+- **`FootprintRenderer`** (`src/rendering/`) — three plain
+  `MultiMeshInstance2D` per chunk (one per surface), deliberately
+  simpler than `LeafLitterRenderer`: no per-frame vertex-shader motion
+  needed for a static mark, just Godot's own built-in per-instance
+  `Transform2D`. Caught and fixed a real bug during TDD: `Transform2D
+  (rotation, origin).scaled_local(...)` was silently discarding the
+  origin — switched to building the transform's basis vectors directly.
+  Then discovered that `MultiMesh` instance-transform readback itself
+  doesn't round-trip under `--headless` at all (an isolated diagnostic
+  probe confirmed it, then was deleted) — the same GPU-readback
+  limitation `test_leaf_litter_renderer_smoke.gd` already documents; the
+  affected tests were split into a dedicated, pending-guarded
+  `test_footprint_renderer_smoke.gd` mirroring that exact precedent,
+  rather than left flaky in the headless-safe suite.
+- **`EarthChunkManager.footstep_surface_for(biome, snow_lying)`** — pure,
+  directly testable, mirrors `PathScarring`'s own precedence exactly:
+  `snow_depth()` is a single GLOBAL scalar (not per-tile), so snow lying
+  at all means every step everywhere is a snow print regardless of
+  biome; otherwise grassland/forest only (matching `World.
+  PATH_SCAR_BIOMES`), everything else gets no footprint at all.
+  `record_footstep(pixel_position, heading)` is the real per-frame entry
+  point (called alongside `tread_snow_at`), with a teleport guard so a
+  huge position jump (respawn, dev command, save load) re-baselines
+  instead of stamping a stray print bridging the gap.
+- **`Player.facing_direction()`** — a new public accessor for
+  `_last_facing_direction` (holds the last real nonzero movement
+  direction, never zeroes at rest), which had none before this;
+  `record_footstep` needs the player's own real travel heading to orient
+  each print.
+
+Built red-first end to end throughout. 56/56 tests passing (5 of them
+real GPU-readback smoke tests, confirmed with `--rendering-driver
+opengl3`, not just headless); the existing snow (76/76) and path-
+scarring (26/26) suites re-verified unaffected. Confirmed live via a
+real `--solo` session that the new per-chunk load/unload wiring runs
+with zero script errors. See
+[snow_cover.md](concept/snow_cover.md#real-leftright-footprint-stamps-2026-09-07)
+and
+[infrastructure.md](concept/infrastructure.md) for the full mechanism.
+
+
 ### Flowers: too dense, no tooltip, and a wind that never blew
 
 Three things reported together: flowers *"still don't [show] hover tooltips"*,
