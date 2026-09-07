@@ -13,6 +13,7 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const WildMushroomPatch = preload("res://src/world/wild_mushroom_patch.gd")
 const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 var manager: EarthChunkManager
@@ -237,6 +238,26 @@ func test_take_mushroom_at_eats_a_real_fruiting_mushroom_and_marks_it_bitten():
 	)
 
 
+## A bigger, mass-scaled eater's bite (see docs/concept/soil_fauna.md's
+## "Progressive, mass-scaled bites, and real toxic effects",
+## MushroomBiting.bites_per_visit_for) can advance the mushroom's own real
+## bite_stage by more than one in a single visit.
+func test_take_mushroom_at_accepts_a_bigger_bite_count():
+	manager._load_chunk(_berlin_chunk)
+	var sim: WildMushroomPatch = manager._mushroom_sims[_berlin_chunk]
+	if sim.site_count() == 0:
+		pass_test("precondition unmet (no mushroom site near Berlin this run) -- nothing to check")
+		return
+	var site: Vector2i = sim.get_site_cells()[0]
+	var global_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + site
+	manager.force_mushroom_near(global_tile)
+	var pixel := _pixel_position_for(global_tile)
+
+	manager.take_mushroom_at(pixel, MushroomBiting.MAX_BITE_STAGES)
+
+	assert_eq(manager._mushroom_markers[_berlin_chunk][site].bite_stage, MushroomBiting.MAX_BITE_STAGES)
+
+
 func test_take_mushroom_at_returns_empty_string_when_nothing_is_there():
 	manager._load_chunk(_berlin_chunk)
 	assert_eq(manager.take_mushroom_at(_pixel_position_for(_berlin_tile + Vector2i(500, 500))), "")
@@ -244,3 +265,27 @@ func test_take_mushroom_at_returns_empty_string_when_nothing_is_there():
 
 func test_take_mushroom_at_returns_empty_string_for_an_unloaded_chunk():
 	assert_eq(manager.take_mushroom_at(_pixel_position_for(Vector2i(999999, 999999))), "")
+
+
+# -- step_wild_mushrooms threads real season progress through --------------
+# (see docs/concept/mushrooms.md "Fruiting times, aligned to real species").
+# A source-contract test on the function body, the same shape and reasoning
+# test_world_crush_wiring.gd already uses -- WildMushroomPatch.advance's
+# own per-species window behavior is already thoroughly exercised directly
+# in test_wild_mushroom_patch.gd; what's specific to THIS function is
+# whether it actually passes SeasonCycle.progress_through_season through
+# rather than just moisture/season, which a live statistical test would
+# entangle with real, uncontrolled weather/moisture.
+
+func test_step_wild_mushrooms_threads_season_progress_through_to_advance():
+	var source := FileAccess.get_file_as_string("res://src/world/earth_chunk_manager.gd")
+	var start := source.find("func step_wild_mushrooms")
+	assert_gt(start, -1, "the premise: this function must still exist and be named that")
+	var body_end := source.find("\nfunc ", start + 1)
+	var body := source.substr(start, body_end - start)
+	assert_true(body.contains("sim.advance("), "must still call through to the sim's own advance")
+	assert_true(
+		body.contains("progress_through_season"),
+		"must pass real season progress through, not just moisture/season -- otherwise every species" +
+		" would flush as if it were always mid-autumn"
+	)

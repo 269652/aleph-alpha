@@ -1895,6 +1895,17 @@ func craft(recipe_id: String) -> bool:
 	return true
 
 
+## The player's own real last-established travel heading (see
+## _last_facing_direction's own doc comment: holds the last real nonzero
+## movement direction, never zeroes out at rest) -- for anything OUTSIDE
+## this file needing it as a real Vector2 rather than the 4-way string
+## _facing_string below reduces it to (reported live: EarthChunkManager.
+## record_footstep needs this to orient each footprint stamp along the
+## real direction actually walked).
+func facing_direction() -> Vector2:
+	return _last_facing_direction
+
+
 ## Converts _last_facing_direction into the 4-way string WeaponSwing/
 ## CharacterView.play_attack_swing expect, mirroring CharacterView.set_facing's
 ## own dominant-axis logic.

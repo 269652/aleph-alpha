@@ -244,6 +244,12 @@ func before_each():
 	marker.wander_seed = 5
 	marker.species = "goldfish"
 	add_child(marker)
+	# Round 7's shared fish-group cache (see FishMarker._refresh_fish_
+	# group_if_stale's own doc comment) is a static var, so it survives
+	# across tests within the same run -- forces a real fetch on each
+	# test's first call, same static-state reset DecomposerMarker's own
+	# tests already use for _food_group_refresh_at_msec.
+	FishMarker._fish_group_refresh_at_msec = -1000000
 
 
 func after_each():
@@ -946,6 +952,62 @@ func test_a_fish_with_a_rolled_play_chance_starts_a_play_chase_at_its_schoolmate
 
 	assert_gt(marker._play_chase_remaining, 0.0, "a fish whose roll succeeds should start a play chase")
 	assert_eq(marker._play_chase_target, other)
+
+
+# -- shared fish-group cache (fps round 7, docs/concept/ecosystem_dynamics.md)
+# -- _nearest_other_fish's own get_tree().get_nodes_in_group("fish") walk ran
+# once PER FISH PER SCAN, independently -- real live measurement found this
+# dominating fish_marker's own aggregate _process cost (88-91% of
+# _step_schooling's own total), the identical "one marker scans the whole
+# world instead of a scoped neighbourhood" anti-pattern DecomposerMarker.
+# _nearest_food (round 5) and AmbientFlyerMarker._scan_for_partners/
+# EarthChunkManager.crush_ants_near (round 4) already had. Fixed the same
+# way round 5 was: one shared fetch per FISH_GROUP_REFRESH_SECONDS of real
+# wall-clock time, not a fresh get_nodes_in_group call from every fish on
+# every scan.
+
+
+## Duck-typed stand-in for the SceneTree, counting real fetches -- the same
+## call-observing idiom DecomposerMarker's own test_decomposer_marker.gd
+## uses for _CountingTree, proving "one shared fetch, not N independent
+## ones" via a real count rather than a timing assertion.
+class _CountingFishTree:
+	extends RefCounted
+	var fish: Array = []
+	var call_count := 0
+
+	func get_nodes_in_group(_group_name: String) -> Array:
+		call_count += 1
+		return fish
+
+
+func test_nearest_other_fish_shares_one_group_fetch_across_many_calls_within_the_refresh_window():
+	var tree := _CountingFishTree.new()
+	for i in 50:
+		FishMarker._refresh_fish_group_if_stale(tree, 1000)
+	assert_eq(tree.call_count, 1, "every call inside the same refresh window should share one fetch")
+
+
+func test_nearest_other_fish_refetches_once_the_refresh_window_elapses():
+	var tree := _CountingFishTree.new()
+	FishMarker._refresh_fish_group_if_stale(tree, 1000)
+	var window_ms := int(FishMarker.FISH_GROUP_REFRESH_SECONDS * 1000.0)
+	FishMarker._refresh_fish_group_if_stale(tree, 1000 + window_ms + 1)
+	assert_eq(tree.call_count, 2, "a call past the refresh window should trigger a real second fetch")
+
+
+## End-to-end regression guard, mirroring DecomposerMarker's own test_
+## still_finds_real_carrion_through_the_shared_cache: proves the refactor
+## did not silently break real schoolmate-finding through a real _process
+## call, not just the cache mechanism in isolation.
+func test_still_finds_a_real_nearby_schoolmate_through_the_shared_cache():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var other := _add_school_fish(marker.position + Vector2(20, 0))
+
+	marker._process(FishSchooling.SCAN_INTERVAL)
+
+	assert_eq(marker._school_neighbor, other, "should still find a real, genuinely nearby schoolmate through the shared cache")
 
 
 func test_play_chase_heading_points_directly_at_the_target_not_the_zoned_steering():

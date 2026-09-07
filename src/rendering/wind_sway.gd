@@ -17,6 +17,27 @@ extends RefCounted
 ##
 ## The shader runs entirely on the GPU: no per-frame script cost anywhere,
 ## which keeps ChoppableTree's deliberate no-_process constraint intact.
+##
+## Also carries the sapling->mature MORPH dissolve (see tree_morph_shader.gd's
+## own header) -- a tree's canopy sprite already carries ONE shader for wind
+## sway (+ snow sparkle, below), and this project's own precedent for
+## "another live effect on that same sprite" is composing a second GLSL
+## snippet in, not fighting over the single `material` slot a Sprite2D has.
+##
+## Also carries canopy SPARKLE (see docs/concept/snow_cover.md, "Sparkle:
+## specular glints on lying snow") -- a live per-fragment glint on top of the
+## baked snow-covered canopy composite, sharing SnowSparkleShader's own
+## tuned twinkle pattern with the ground (SnowBombShader). Gated on
+## `snow_coverage` (pushed ONLY onto shared_material(), i.e. trees -- never
+## tuft_material(), i.e. grass/scrub/blooms, which stays at its fixed 0.0
+## default and is therefore structurally incapable of sparkling: this
+## feature was asked for on trees and ground, not grass) plus a conservative
+## near-white/low-saturation colour gate on the sprite's own already-
+## composited colour, measured against the real art (see
+## tools/probe_snow_sparkle_colors.gd and test_snow_sparkle_shader.gd) so it
+## can never fire on e.g. cherry's illustrated pink blossom.
+const SnowSparkleShader = preload("res://src/rendering/snow_sparkle_shader.gd")
+const TreeMorphShader = preload("res://src/rendering/tree_morph_shader.gd")
 
 const SHADER_CODE := """
 shader_type canvas_item;
@@ -31,12 +52,50 @@ uniform float bend_exponent = 2.0;
 // amount regardless of what the sky is actually doing.
 uniform float wind_strength = 1.0;
 
+// Live weather snow coverage (see EarthChunkManager._snow_depth, the exact
+// same value the ground's own SnowBombShader.snow_depth uniform reads) --
+// pushed ONLY onto the tree material (see this file's own header). 0.0 on
+// every tuft, always, which is what keeps grass sparkle-free by
+// construction rather than by convention.
+uniform float snow_coverage : hint_range(0.0, 1.0) = 0.0;
+uniform float sparkle_min_value = 0.85;
+uniform float sparkle_max_saturation = 0.18;
+""" + SnowSparkleShader.GLSL_SNIPPET + TreeMorphShader.GLSL_SNIPPET + """
+
+varying vec2 world_pos;
+
 void vertex() {
 	float phase = MODEL_MATRIX[3].x * 0.045 + MODEL_MATRIX[3].y * 0.031;
 	float top_weight = pow(1.0 - UV.y, bend_exponent);
 	float gust = sin(TIME * wind_speed + phase) * 0.7
 		+ sin(TIME * wind_speed * 2.7 + phase * 1.7) * 0.3;
 	VERTEX.x += gust * amplitude_px * wind_strength * top_weight;
+	// AFTER the sway, deliberately: a glint sits on a physical twig, so it
+	// should ride along with the twig's own sway rather than floating
+	// independently of it (see test_world_pos_is_computed_after_the_sway_
+	// displacement).
+	world_pos = (MODEL_MATRIX * vec4(VERTEX, 0.0, 1.0)).xy;
+}
+
+void fragment() {
+	// COLOR already equals texture(TEXTURE, UV) * (this node's own modulate)
+	// -- Godot's own canvas_item default before fragment() runs. Reusing it
+	// (rather than sampling TEXTURE again here) is what keeps a tree/tuft's
+	// modulate working exactly as it did before this shader gained a
+	// fragment() at all.
+	vec4 base = COLOR;
+	if (morph_progress < 1.0) {
+		base = morph_canopy(base, UV, vec2(textureSize(TEXTURE, 0)));
+	}
+	if (snow_coverage > 0.0 && base.a > 0.5) {
+		float v = sparkle_value(base.rgb);
+		float s = sparkle_saturation(base.rgb);
+		if (v >= sparkle_min_value && s <= sparkle_max_saturation) {
+			float twinkle = sparkle_intensity(world_pos, TIME) * snow_coverage;
+			base.rgb += vec3(twinkle * sparkle_brightness);
+		}
+	}
+	COLOR = base;
 }
 """
 
@@ -71,10 +130,24 @@ var _tuft_material: ShaderMaterial
 ## order isn't guaranteed) doesn't lose it.
 var _wind_strength := DEFAULT_WIND_STRENGTH
 
+## Last live snow coverage pushed in (see set_snow_coverage) -- deliberately
+## NOT the same shape as _wind_strength: it is remembered and re-applied to
+## shared_material() (trees) at build time so a caller that pushes it before
+## a tree has spawned yet doesn't lose it, but is NEVER applied to
+## tuft_material() (grass/scrub/blooms) at any time -- see this file's own
+## header and set_snow_coverage's own doc comment for why that isolation is
+## load-bearing, not incidental.
+var _snow_coverage := 0.0
+
 
 ## A fresh sway material with explicit parameters -- callers that want a
 ## distinct wind feel (e.g. stiffer trees vs. floppy grass) can build their
 ## own; everything else should use shared_material()/tuft_material().
+##
+## snow_coverage always starts at 0.0 here, regardless of the live
+## _snow_coverage value -- shared_material() re-applies the live value right
+## after calling this (see its own doc comment); tuft_material() deliberately
+## never does, which is the entire mechanism keeping grass sparkle-free.
 func make_material(
 	amplitude_px: float = DEFAULT_AMPLITUDE_PX,
 	speed: float = DEFAULT_SPEED,
@@ -88,6 +161,17 @@ func make_material(
 	material.set_shader_parameter("wind_speed", speed)
 	material.set_shader_parameter("bend_exponent", bend_exponent)
 	material.set_shader_parameter("wind_strength", _wind_strength)
+	material.set_shader_parameter("snow_coverage", 0.0)
+	material.set_shader_parameter("sparkle_min_value", SnowSparkleShader.SPARKLE_MIN_VALUE)
+	material.set_shader_parameter("sparkle_max_saturation", SnowSparkleShader.SPARKLE_MAX_SATURATION)
+	SnowSparkleShader.push_shared_uniforms(material)
+	# Explicit, not left to the GLSL uniform's own declared default: a
+	# ShaderMaterial only reports a value from get_shader_parameter for a
+	# parameter that was actually SET on it, not one merely inheriting its
+	# shader's compiled-in default -- so leaving this unset here silently
+	# breaks anything reading it back (a real test failure this exact gap
+	# produced) even though rendering itself would have used 1.0 either way.
+	TreeMorphShader.clear(material)
 	return material
 
 
@@ -95,10 +179,18 @@ func make_material(
 func shared_material() -> ShaderMaterial:
 	if _shared_material == null:
 		_shared_material = make_material()
+		# Re-apply the live snow coverage a caller may have pushed before any
+		# tree existed yet -- see _snow_coverage's own doc comment.
+		_shared_material.set_shader_parameter("snow_coverage", _snow_coverage)
 	return _shared_material
 
 
 ## The grass/scrub tuft preset (see TUFT_* consts), built once and shared.
+##
+## Deliberately does NOT re-apply _snow_coverage the way shared_material()
+## does -- grass/scrub/blooms stay sparkle-free by construction, always at
+## the 0.0 make_material() already set, regardless of build order relative
+## to set_snow_coverage. See this file's own header.
 func tuft_material() -> ShaderMaterial:
 	if _tuft_material == null:
 		_tuft_material = make_material(TUFT_AMPLITUDE_PX, TUFT_SPEED, TUFT_BEND_EXPONENT)
@@ -118,3 +210,15 @@ func set_wind_strength(strength: float) -> void:
 		_shared_material.set_shader_parameter("wind_strength", strength)
 	if _tuft_material != null:
 		_tuft_material.set_shader_parameter("wind_strength", strength)
+
+
+## Pushes the live weather snow coverage (see EarthChunkManager._snow_depth,
+## forwarded via TreeRenderer.set_snow_coverage -- the exact same value the
+## ground's own SnowBombShader.snow_depth uniform reads, at the exact same
+## call sites) onto shared_material() ONLY -- see this file's own header for
+## why tuft_material() must never receive it. Clamped the same way
+## SnowBombShader.set_snow_depth clamps its own uniform of the same meaning.
+func set_snow_coverage(coverage: float) -> void:
+	_snow_coverage = clampf(coverage, 0.0, 1.0)
+	if _shared_material != null:
+		_shared_material.set_shader_parameter("snow_coverage", _snow_coverage)

@@ -16,6 +16,7 @@ extends GutTest
 const WildMushroomPatch = preload("res://src/world/wild_mushroom_patch.gd")
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 
 
 func _all_biome(id: String, width: int, height: int) -> PackedStringArray:
@@ -209,14 +210,14 @@ func test_a_crushed_site_recovers_on_the_same_clock_as_a_picked_one():
 
 func test_bite_fails_on_a_cell_that_is_not_fruiting():
 	var patch := WildMushroomPatch.new(1, 20, 20, _all_biome("desert", 20, 20))
-	assert_false(patch.bite(Vector2i(5, 5)))
+	assert_eq(patch.bite(Vector2i(5, 5)), 0)
 
 
 func test_bite_marks_a_fruiting_mushroom_bitten():
 	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
 	var cell: Vector2i = patch.get_fruiting_cells()[0]
 	assert_false(patch.is_bitten(cell), "precondition: not bitten yet")
-	assert_true(patch.bite(cell))
+	assert_eq(patch.bite(cell), 1)
 	assert_true(patch.is_bitten(cell))
 
 
@@ -229,14 +230,77 @@ func test_a_bitten_mushroom_is_still_fruiting():
 	assert_true(patch.has_fruiting(cell), "a bitten mushroom should still be there to pick")
 
 
-## One bite is enough -- a decomposer that already took its bite has nothing
-## more to gain here (see DecomposerMarker._step_feeding's take_mushroom_bite
-## branch, which relies on this false to know when to move on).
-func test_a_second_bite_is_a_no_op():
+## Corrected 2026-09-07 (see docs/concept/mushrooms.md "A decomposer's
+## single bite" / soil_fauna.md's "Progressive, mass-scaled bites, and real
+## toxic effects"): one bite is no longer necessarily enough. A mushroom now
+## tracks a real bite_stage, so a second bite -- the same decomposer once its
+## own satiation window passes, a different one, or a bigger eater's own
+## bigger bite -- can advance it further, up to MushroomBiting.MAX_BITE_STAGES.
+func test_a_second_bite_advances_to_a_further_stage():
 	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
 	var cell: Vector2i = patch.get_fruiting_cells()[0]
-	assert_true(patch.bite(cell))
-	assert_false(patch.bite(cell), "already bitten -- nothing left to take")
+	assert_eq(patch.bite(cell), 1)
+	assert_eq(patch.bite_stage(cell), 1)
+	assert_eq(patch.bite(cell), 1, "a second bite should still land -- not fully eaten yet")
+	assert_eq(patch.bite_stage(cell), 2)
+
+
+## Only once every real stage is spent is a further bite a genuine no-op --
+## mirrors the old one-shot test's own reasoning, now at the real cap instead
+## of after bite 1. bite_stage() itself resets to 0 once fully eaten (the
+## mushroom is a corpse now, not a partially-bitten live specimen -- see
+## test_a_fully_eaten_mushroom_becomes_a_real_corpse for the real signal to
+## check post-depletion), the same "cleared once it stops fruiting for any
+## reason" convention pick()/crush() already established.
+func test_bite_past_max_stages_is_a_no_op():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	for i in MushroomBiting.MAX_BITE_STAGES:
+		assert_eq(patch.bite(cell), 1, "bite %d of %d should still land" % [i + 1, MushroomBiting.MAX_BITE_STAGES])
+	assert_eq(patch.bite(cell), 0, "fully eaten -- nothing left to take")
+
+
+## A bigger eater's one bite EVENT can consume more than one stage at once
+## (see MushroomBiting.bites_per_visit_for) -- bite() reports how many
+## stages actually landed, so a caller feeding real nutrition off it (a
+## boar's own bite) knows exactly how much was really taken.
+func test_bite_returns_the_number_of_stages_actually_applied():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	assert_eq(patch.bite(cell, 2), 2)
+
+
+## A single big bite (a boar-scale visit asking for every remaining stage at
+## once) is clamped to whatever capacity is actually left, never overshooting
+## past MAX_BITE_STAGES.
+func test_bite_clamps_to_remaining_capacity():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.bite(cell, 1)
+	var applied := patch.bite(cell, MushroomBiting.MAX_BITE_STAGES)
+	assert_eq(applied, MushroomBiting.MAX_BITE_STAGES - 1, "only the remaining capacity should land")
+	assert_false(patch.has_fruiting(cell), "that exactly used up the last stage -- fully eaten")
+
+
+## Reaching the cap genuinely consumes the mushroom -- unlike a partial bite
+## (see test_a_bitten_mushroom_is_still_fruiting above), it stops being
+## fruiting/pickable exactly like a picked or crushed one.
+func test_reaching_max_bite_stages_ends_the_fruiting_instance():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.bite(cell, MushroomBiting.MAX_BITE_STAGES)
+	assert_false(patch.has_fruiting(cell), "fully eaten -- nothing left standing to pick")
+
+
+## A fully-eaten mushroom lingers as a real, distinct corpse kind (mirrors
+## "Crushed underfoot"'s own corpse-lingers precedent) rather than its marker
+## just vanishing the instant nothing is left to bite.
+func test_a_fully_eaten_mushroom_becomes_a_real_corpse():
+	var patch := WildMushroomPatch.new(11, 60, 60, _all_biome("forest", 60, 60))
+	var cell: Vector2i = patch.get_fruiting_cells()[0]
+	patch.bite(cell, MushroomBiting.MAX_BITE_STAGES)
+	assert_true(patch.is_corpse(cell))
+	assert_eq(patch.corpse_kind(cell), "eaten")
 
 
 func test_picking_a_bitten_mushroom_clears_the_bitten_flag():
@@ -369,3 +433,116 @@ func test_force_fruit_near_overrides_recovery_so_a_just_picked_site_can_be_force
 
 	assert_eq(fruited, cell)
 	assert_true(patch.has_fruiting(cell))
+
+
+# -- advance() honours each species' own real fruiting window --------------
+# (see docs/concept/mushrooms.md "Fruiting times, aligned to real species",
+# MushroomSpecies.fruiting_window_for/MushroomFlush.species_multiplier --
+# the pure data/logic this wires in). Direct _sites injection, the same
+# "bypass the constructor's random per-biome assignment" idiom the crush
+# tests elsewhere in this codebase already use for CaterpillarMarker,
+# since a real forest biome hosts several species at once and the
+# constructor won't guarantee which lands where.
+
+func test_a_species_flushes_readily_within_its_own_real_window():
+	var patch := WildMushroomPatch.new(1, 60, 60, _all_biome("forest", 60, 60))
+	var cell := Vector2i(5, 5)
+	patch._sites[cell] = "chanterelle"  # real window [0.0, 0.55)
+	patch._fruiting.erase(cell)
+	patch._recovery.erase(cell)
+
+	var flushed := false
+	for i in 400:
+		patch.advance(1.0, 1.0, "autumn", 0.1)  # early autumn -- inside chanterelle's own window
+		if patch.has_fruiting(cell):
+			flushed = true
+			break
+	assert_true(flushed, "chanterelle should flush readily at early autumn, its own real window")
+
+
+## The shoulder multiplier (0.3, see MushroomFlush.WINDOW_SHOULDER_
+## MULTIPLIER) is a REDUCED chance, not a hard zero -- over enough tries it
+## still eventually flushes (real off-window fruitings do happen). What
+## the feature actually promises is FEWER of them, so this compares
+## relative FREQUENCY across many independent trials on the same site
+## rather than asserting an absolute "never", which the real numbers
+## (~4.5%/step even at the reduced multiplier) would make a coin flip
+## whether it happens at least once in any fixed trial count.
+func _count_flushes(patch: WildMushroomPatch, cell: Vector2i, season: String, progress: float, trials: int) -> int:
+	var count := 0
+	for i in trials:
+		patch._fruiting.erase(cell)
+		patch._recovery.erase(cell)
+		patch.advance(1.0, 1.0, season, progress)
+		if patch.has_fruiting(cell):
+			count += 1
+	return count
+
+
+func test_a_species_flushes_far_less_readily_outside_its_own_real_window():
+	var patch := WildMushroomPatch.new(1, 60, 60, _all_biome("forest", 60, 60))
+	var cell := Vector2i(6, 6)
+	patch._sites[cell] = "black_trumpet"  # real window [0.45, 1.0)
+
+	var in_window := _count_flushes(patch, cell, "autumn", 0.7, 500)  # inside its own window
+	var outside_window := _count_flushes(patch, cell, "autumn", 0.1, 500)  # early autumn, before it starts
+	assert_gt(
+		in_window, outside_window * 2,
+		"black_trumpet should flush much more often once autumn reaches its own real window " +
+		"(%d in-window vs %d outside, of 500 tries each)" % [in_window, outside_window]
+	)
+
+
+func test_the_same_late_species_flushes_readily_once_autumn_reaches_its_own_window():
+	var patch := WildMushroomPatch.new(1, 60, 60, _all_biome("forest", 60, 60))
+	var cell := Vector2i(6, 6)
+	patch._sites[cell] = "black_trumpet"  # real window [0.45, 1.0)
+	patch._fruiting.erase(cell)
+	patch._recovery.erase(cell)
+
+	var flushed := false
+	for i in 400:
+		patch.advance(1.0, 1.0, "autumn", 0.7)  # late autumn -- inside black_trumpet's own window
+		if patch.has_fruiting(cell):
+			flushed = true
+			break
+	assert_true(flushed, "black_trumpet should flush readily once autumn reaches its own real window")
+
+
+## The whole point: this research only distinguishes anything WITHIN
+## autumn -- outside it, every species still shares whatever blanket
+## trickle MushroomFlush.SEASON_MULTIPLIER already gives them alike.
+func test_the_window_has_no_effect_outside_autumn():
+	var patch := WildMushroomPatch.new(1, 60, 60, _all_biome("forest", 60, 60))
+	var cell := Vector2i(6, 6)
+	patch._sites[cell] = "black_trumpet"  # real window [0.45, 1.0), irrelevant here
+	patch._fruiting.erase(cell)
+	patch._recovery.erase(cell)
+
+	var flushed := false
+	for i in 400:
+		patch.advance(1.0, 1.0, "spring", 0.1)  # outside black_trumpet's window, but NOT autumn
+		if patch.has_fruiting(cell):
+			flushed = true
+			break
+	assert_true(flushed, "outside autumn every species shares one blanket trickle -- windowing shouldn't gate it")
+
+
+## Old 2-arg call sites (season/progress both defaulted) must keep behaving
+## exactly as before this feature -- 0.5 sits inside every real species'
+## window in mushroom_species.gd, by construction, so the default reads as
+## "assume mid-autumn" and never silently suppresses an old caller.
+func test_the_default_season_and_progress_preserve_every_pre_existing_caller():
+	var patch := WildMushroomPatch.new(1, 60, 60, _all_biome("forest", 60, 60))
+	var cell := Vector2i(6, 6)
+	patch._sites[cell] = "black_trumpet"  # the narrowest, latest real window of all 8
+	patch._fruiting.erase(cell)
+	patch._recovery.erase(cell)
+
+	var flushed := false
+	for i in 400:
+		patch.advance(1.0, 1.0)  # no season/progress given at all -- the old 2-arg call shape
+		if patch.has_fruiting(cell):
+			flushed = true
+			break
+	assert_true(flushed, "the defaulted season/progress must land inside even the narrowest real window")

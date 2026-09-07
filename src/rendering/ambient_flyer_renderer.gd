@@ -807,6 +807,19 @@ func _build_marker(
 			marker.ground_forage = GroundForageBehavior.new()
 		if sprite_generator.has_method("generate_pecking_texture"):
 			marker.peck_frame = sprite_generator.generate_pecking_texture(species, seed_value)
+	# Live ants (see FlyerDiet.FOOD_ANTS) -- reuses the identical ground_
+	# forage/peck-frame wiring the caterpillar branch immediately above
+	# already set up, same defensive check against a redundant
+	# GroundForageBehavior. UNLIKE caterpillars (robin-only), this needs no
+	# species branching of its own: FlyerDiet.eats already answers "robin or
+	# sparrow" on its own (see its own doc comment), so this reads exactly
+	# like every other port here.
+	if FlyerDiet.eats(species, FlyerDiet.FOOD_ANTS) and scent_world != null:
+		marker.ant_world = scent_world
+		if marker.ground_forage == null:
+			marker.ground_forage = GroundForageBehavior.new()
+		if sprite_generator.has_method("generate_pecking_texture"):
+			marker.peck_frame = sprite_generator.generate_pecking_texture(species, seed_value)
 	# Fallen tree fruit: robins again (see FlyerDiet -- a second diet entry,
 	# not a new species), bird endozoochory (see SeedEndozoochory /
 	# docs/concept/flora.md#bird-endozoochory). Shares ground_forage with

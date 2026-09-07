@@ -350,6 +350,19 @@ func test_make_with_mass_works_for_rare_and_legendary_fish_too():
 	assert_almost_eq(item.mass_kg, 4.0, 0.0001)
 
 
+# -- worm corpse pickup (see EarthwormPatch.take_corpse, WormMarker, ---------
+# -- docs/concept/aquatic_foraging.md's "Worms as fish bait") ----------------
+
+func test_worm_has_a_plausible_real_earthworm_mass():
+	assert_between(catalog.make("worm").mass_kg, 0.002, 0.01)
+
+
+## "material", not "food" -- a worm corpse isn't people-food (see the
+## "worm" entry's own doc comment in item_catalog.gd for why).
+func test_worm_is_a_material_not_food():
+	assert_eq(catalog.kind_of("worm"), "material")
+
+
 # -- bitten mushroom variants (see MushroomBiting.gd, docs/concept/ ----------
 # -- mushrooms.md's fungivory section) ---------------------------------------
 

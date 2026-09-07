@@ -141,11 +141,58 @@ func get_flower_cells() -> Array:
 ## WORLD was lying about what was in bloom. The plant is still there and
 ## still simulated -- it simply isn't showing a bloom out of season, which
 ## is also what a real meadow looks like.
-func blooming_cells(season: String) -> Array:
+## How long a cached blooming_cells result stays valid, when a real clock is
+## passed (see that method's own doc comment for the full reasoning) --
+## matches AmbientFlyerMarker.SCENT_SNIFF_INTERVAL's own cadence exactly, so
+## no pollinator's own sniff can ever observe data staler than the interval
+## it already sniffs on.
+const BLOOMING_CACHE_REFRESH_SECONDS := 0.5
+
+## season (String) -> the cached Array this patch last computed for it.
+var _blooming_cache: Dictionary = {}
+## season (String) -> the real msec timestamp that cache entry was computed
+## at. Separate dictionary (rather than one shared timestamp) so caching one
+## season's result can never make a DIFFERENT season's own cache read as
+## fresher than it actually is.
+var _blooming_cache_at_msec: Dictionary = {}
+
+
+## Round 8 FPS fix (see docs/concept/soil_fauna.md): every pollinator's own
+## flowers_near call (EarthChunkManager) recomputed this fresh, independently,
+## every ~0.5s sniff -- with up to 300+ live pollinators, and this loop
+## walking every planted cell in the chunk (not just currently-blooming
+## ones), real live measurement found this the single largest cost inside
+## AmbientFlyerMarker._step_scent (44-49% of its own total) -- the identical
+## "many instances redundantly recompute the same shared per-chunk answer"
+## shape round 5/7's own fixes already closed elsewhere for a shared flat
+## list; here the natural unit to cache is per-PATCH (one already exists per
+## chunk), so this is plain memoization rather than a second, separately-
+## shared cache.
+##
+## `now_msec` is OPTIONAL, defaulting to -1 ("no clock given"): every
+## existing caller -- every test above, and EarthChunkManager's own
+## sprite-sync path, which is not the hot path this measured -- keeps this
+## method's exact original always-fresh contract, completely unaffected.
+## Only a caller that actually passes a real clock (flowers_near's own hot
+## path, from here on) opts into caching, at BLOOMING_CACHE_REFRESH_SECONDS'
+## own real-time granularity -- the same "accept brief real-time staleness,
+## shared across every asker within the window" tradeoff round 5/7 already
+## made, not silently promoted to a stronger "never stale" guarantee that
+## would need tracking every _flowers mutation site instead.
+func blooming_cells(season: String, now_msec: int = -1) -> Array:
+	if (
+		now_msec >= 0
+		and _blooming_cache.has(season)
+		and now_msec - _blooming_cache_at_msec.get(season, -1000000) < int(BLOOMING_CACHE_REFRESH_SECONDS * 1000.0)
+	):
+		return _blooming_cache[season]
 	var out: Array = []
 	for cell in _flowers:
 		if FlowerSpecies.is_in_bloom(_flowers[cell], season):
 			out.append(cell)
+	if now_msec >= 0:
+		_blooming_cache[season] = out
+		_blooming_cache_at_msec[season] = now_msec
 	return out
 
 

@@ -606,9 +606,31 @@ trigger bolted onto Dispersal's existing shape.
   downstream to cross a chunk boundary keeps updating and rendering from
   its origin chunk regardless of where it visually ends up, rather than
   migrating between `LeafLitterField`s. The same simplification Dispersal
-  already accepts for a cosmetic scatter; `LIFETIME` (see Lifecycle below)
-  is still the only bound on how long, and so how far, a floating leaf
-  keeps drifting.
+  already accepts for a cosmetic scatter.
+- **A floating leaf waterlogs and sinks after `LeafLitterField.
+  MAX_FLOAT_SECONDS` (2026-09-07) -- it does not drift indefinitely.**
+  Answers this section's own original open question (a floating leaf's own
+  discrete position had no answer for "does it eventually sink or decay
+  off the water" at all before this). Real-world grounding: a freshly
+  fallen dry leaf floats at first on trapped air and its own waxy cuticle,
+  but progressively absorbs water through its cut petiole and stomata (the
+  "leaf conditioning"/leaching process stream ecology studies document)
+  and loses buoyancy within roughly a day of continuous immersion -- the
+  real reason a stream's floating litter settles into a benthic "leaf
+  pack" rather than drifting forever. `MAX_FLOAT_SECONDS` is one real-world
+  day, translated through the same real-year -> compressed-game-time ratio
+  `LIFETIME` uses. Once a leaf's own current floating episode (tracked by
+  a per-leaf `floating_since`, reset only when a NEW episode genuinely
+  begins -- see that field's own doc comment) reaches this bound, it
+  settles in place and rejoins ordinary land litter exactly like the
+  "current dried up" case just above; a later genuine current encounter
+  starts a fresh clock rather than banning it from ever floating again.
+  This was not merely a realism gap: `docs/concept/soil_fauna.md`'s own
+  "Floating-leaf cost at ordinary play scale" entry measured a real,
+  previously-unbounded performance cost this closes -- see that entry for
+  the full investigation and numbers. `LIFETIME` (see Lifecycle below)
+  remains the OTHER, usually-much-longer bound on how long a leaf lingers
+  at all, settled or floating.
 
 ### Consumption
 
@@ -776,6 +798,21 @@ ordinary ground wind entirely in favour of a far more heavily damped
 continuous push. No visual "floating" cue on the leaf itself yet (see
 Deliberately not modeled).
 
+**A floating leaf now waterlogs and sinks after `MAX_FLOAT_SECONDS`
+(2026-09-07)**, closing this section's own original open question (see
+"Floating on water" above) -- and a real, measured performance cost named
+by `docs/concept/soil_fauna.md`'s own follow-up investigation into whether
+the leaf-litter dirty-tracking fix's one deliberately-deferred item (a
+chunk with a floating leaf must rebuild its whole MultiMesh every frame,
+unbounded) actually mattered at ordinary, non-stationary play scale. It
+does: a live `--solo` session with the character genuinely wandering (not
+sitting still) found at least one decorating chunk floating a leaf in
+92.7% of measured windows, comparable-to-worse than the stationary
+baseline this doc's own prior entry had hoped wandering would improve on.
+See that entry for the full investigation, numbers, and the separate,
+still-open `LeafLitterField.advance()` baseline-cost finding it surfaced
+but did not fix.
+
 **Back on by default (2026-09-05).** Was briefly off (requested directly:
 "deactivate leaf littering", right after the GPU rewrite below shipped),
 then reported live as the real cost of that: "ants and beetles just walk
@@ -937,6 +974,30 @@ and upwind. New `WindDispersal.leaf_ground_drift` bounds the angle to a
 wobble around the wind's own heading instead, verified both by test
 (200-seed sweeps: never past the bound, never reverses) and by
 re-simulating the exact scenario that first exposed the bug.
+
+✅ **A floating leaf waterlogs and sinks after a real-world-grounded
+`MAX_FLOAT_SECONDS` (one real-world day), rather than drifting until
+`LIFETIME` or the current itself drying up** (see "Floating on water"
+above). Closes this section's own original open question and a real,
+measured performance cost: `docs/concept/soil_fauna.md`'s own "Floating-
+leaf cost at ordinary play scale" entry found a wandering `--solo` session
+still had at least one decorating chunk floating a leaf 92.7% of the time,
+comparable-to-worse than the stationary baseline the prior dirty-tracking
+fix had only partly addressed. 7 new tests in `test_leaf_litter_field.gd`
+(confirmed red first), 82/82 green after, zero regressions in
+`test_leaf_litter_renderer.gd` (42/42) or `test_earth_chunk_manager.gd`'s
+own "leaf" substring sweep (31/31).
+
+⬜ **`LeafLitterField.advance()`'s own baseline per-leaf cost, independent
+of on_water status, scales with every LOADED chunk's total leaf population
+(not just decorating/visible chunks)** -- a real, separate, previously-
+unattributed cost surfaced (not fixed) by the investigation above:
+measured as consistently 2-4x LARGER than `LeafLitterRenderer.fill()`'s
+own cost in both the stationary and wandering measurements, and untouched
+by both the dirty-tracking fix (which only ever gated `fill()`) and the
+waterlog/sink fix just above (which only bounds on_water's own extra
+per-leaf cost). Worth a dedicated future pass if it is ever found to
+dominate a real session's own frame budget.
 
 ⬜ Invisible `AntColony` windfall foraging extended to leaves (see
 "Consumption" above) -- unchanged gap from the first pass.

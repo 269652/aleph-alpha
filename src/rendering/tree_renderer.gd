@@ -74,6 +74,11 @@ var _snow_coverage := 0.0
 
 func set_snow_coverage(coverage: float) -> void:
 	_snow_coverage = coverage
+	# Canopy SPARKLE (see docs/concept/snow_cover.md, "Sparkle: specular
+	# glints on lying snow") rides the exact same push: WindSway's shared
+	# tree material reads this as a live shader uniform on top of whatever
+	# the baked texture above already shows, no new call site needed.
+	_wind_sway.set_snow_coverage(coverage)
 
 
 ## Spawns a collidable tree node (as a child of `parent`) for every forested
@@ -286,6 +291,14 @@ func _build_tree_node(position: Vector2, age_seconds: float = INF) -> ChoppableT
 	sprite.material = _wind_sway.shared_material()
 	body.add_child(sprite)
 	body.bind_canopy(sprite)
+	# Closes the exact window the original bug lived in: sprite.texture above
+	# is _texture_for's shared, always-fully-grown cache (it has no per-tree
+	# growth to key on), and body's own _redraw_canopy would otherwise only
+	# ever correct that once its _season/_drawn_growth first change -- which
+	# depends on an unrelated season-sync tick reaching this specific tree.
+	# A no-op past the sapling phase (see refresh_sapling_display's own doc
+	# comment), so this never touches an original-forest tree's sprite.
+	body.refresh_sapling_display()
 
 	# Only the TRUNK is solid, and it sits at the node's origin -- which the
 	# Y-sort anchor put at the foot of the trunk. Sizing this to the whole

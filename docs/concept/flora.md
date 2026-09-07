@@ -1335,16 +1335,45 @@ implementation of it. Two things differ from a turn, and both are what
   frame filled back in (reported: the canopy should accumulate snow twig by
   twig, on the canopy that is there). Snow pixels are composited OVER the
   season canopy instead, so nothing the season drew is ever removed -- at any
-  coverage every pixel the plain canopy painted is still painted -- and at
-  full coverage the whole snow frame lies on top of whichever canopy is
-  showing, blossom or autumn colour still visible around the snow-laden
-  boughs.
+  coverage every pixel the plain canopy painted is still painted -- and,
+  wherever it overlaps a branch that is really there (see the next point),
+  full coverage shows the whole snow frame, blossom or autumn colour still
+  visible around the snow-laden boughs.
 - **It settles from above.** A turn walks outward from where the boughs leave
   the trunk; snow lands on the top of the crown first and works down the
   twigs. So the trace is seeded from the crown's top edge rather than its
   foot -- the same "different start, same trace" shape growth already uses
   (`growth_order` starts at the trunk join, the turn at the whole bottom
   rim, snow at the top).
+- **It only ever settles where a branch really is (2026-09-07).** Reported
+  live, on cherry: "the snow accumulation is wrong and fills holes with
+  white instead of accumulating snow on branches per branch." The snow frame
+  is its OWN separate drawing -- a full crown's worth of snow-laden twigs,
+  not a snow-tinted copy of whichever season is currently showing -- so its
+  silhouette never lines up pixel-for-pixel with any given season's real
+  branch shape. `_snowed_canopy` used to composite the snow frame's opaque
+  pixels wherever THAT frame alone had paint, with no check against the
+  season canopy underneath, so wherever the two silhouettes disagreed it
+  painted solid snow colour into a real gap instead of a twig -- worst on
+  the sparse bare-winter canopy (measured on the real art: 55-61% of
+  cherry's, walnut's and apple's own "snowed" pixels there were gap fills,
+  not branches; not cherry-specific -- every species with a snow frame
+  shares the mechanism, cherry was simply the one reported live and the
+  worst of the three measured). Fixed by gating the snow blend on the
+  season canopy's own alpha first: a pixel the canopy left fully transparent
+  can never take snow, whatever the standalone snow frame draws there or
+  however full coverage is. See `ProceduralTreeSprite._snowed_canopy`'s own
+  doc comment and `test_illustrated_tree.gd`'s
+  `test_no_species_snows_into_a_transparent_canopy_gap` /
+  `test_snow_never_paints_a_pixel_the_canopy_left_fully_transparent`.
+  Unrelated to both of this feature's other named wrinkles: not the
+  bottom-up-wipe blend fixed below (that was HOW MUCH of a settled twig
+  showed; this is WHERE a twig is allowed to be at all), and not cherry's
+  own on-tree-row slicer fragmentation (see "One sheet or three" above and
+  `docs/progress.md`'s "composite tree fruit-row fix" entries) -- confirmed
+  directly by rendering walnut and apple through the identical pipeline and
+  finding the same defect at the same magnitude, so `CompositeSheetSlicer`
+  was correctly left untouched again.
 
 **It settles on the branches a tree HAS.** A sapling has put out only the
 inner part of its crown (see "A young tree has fewer branches" above), and the
@@ -1376,6 +1405,15 @@ without one -- but the fallback this was built for is real and load-bearing
 for whichever species is next: it is a strict boolean gate (`has_snow_frame_for`)
 checked before a canopy image is ever touched, not a threshold or an
 assumption about the roster.
+
+**Snow on this frame can sparkle.** See [snow_cover.md](snow_cover.md)'s
+"Sparkle: specular glints on lying snow" for the mechanism (shared with the
+ground) and design pillars. It is a live per-fragment GPU decoration on top
+of the baked composite above, gated on `snow_coverage` plus a conservative
+near-white/low-saturation read of the sprite's own already-composited
+colour -- this section's own "neutral grey-white against every season
+frame's own hue" measurement (immediately above) is exactly the separation
+that gate leans on to never fire on cherry's pink blossom.
 
 
 ## Recolouring illustrated blooms
@@ -1546,6 +1584,100 @@ break the crown apart.
 whole tree picture to composite and cache, so growth is drawn in a fixed number
 of stages (`GROWTH_LEVELS`) exactly as the turn is. A continuous fraction would
 mean a new texture per frame per sapling in a wood full of them.
+
+**None of the above is what a young tree actually shows any more.** Read on --
+the trunk-outward trace above is still real, correct, independently-tested
+`ProceduralTreeSprite` code (nothing here was deleted), but no production tree
+below full growth reaches it today. It is what "fewer branches" looked like
+before the sapling sheet below replaced it for every species this game
+currently has.
+
+**Sapling phase: real art below the player's own height, not another
+procedural stage.** Even a pruned-canopy sapling (the trace above) is still
+fundamentally the mature crown's own painted pixels, cut back — reported
+directly: "small newborn trees are not saplings but rather have a
+miniaturized full canopy... they should grow like the player's height before
+branches start growing." A real seedling is not a shrunken adult at all; it is
+a different drawing, an unbranched shoot with no crown to speak of yet. Two
+procedural attempts at this were tried and rejected before landing on real
+art: extracting the bare trunk-outward branch trace as literal lines read as
+"almost as scaling the entire canopy" rather than a real young plant, and a
+version overlaying those lines onto a bare-branch sprite was confirmed
+workable but was still shrunken-adult geometry underneath. The art that
+shipped instead is `assets/sprites/trees/sapling.png` — a real ten-frame
+growth-stage strip (seed, sprout, ... a young branching shoot), one shared
+sheet across all six species (cherry, walnut, acorn, hazelnut, pine, apple) --
+a real sapling of any of them reads close enough to identical that six
+near-identical sequences was not worth commissioning for a first pass, named
+here as a deliberate v1 simplification rather than assumed permanent. Sliced
+and cached by `IllustratedTree` (`sapling_frame`/`sapling_frame_for_progress`
+-- the sheet is drawn on an opaque black ground rather than this project's
+usual magenta key or real transparency, so it is chroma-keyed on load rather
+than read as alpha-only background).
+
+**The threshold is the player's own height, because that number already
+exists.** "They should grow like the player's height before branches start
+growing" falls out of `CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE` — already
+exactly "how tall the player reads, as a fraction of a mature tree's own
+height" by construction — rather than inventing a second, arbitrary number
+that could quietly drift out of sync with it. `TreeGrowth.BRANCH_START_FRACTION`
+IS that constant, and `TreeGrowth.scale_at` (the tree's real height curve) is
+completely unchanged by any of this: a young tree still visibly grows shorter,
+exactly as it always has. What changes is which ART a given height shows:
+`TreeGrowth.sapling_progress(height_scale)` climbs 0 to 1 up to the threshold
+(the sapling sheet, indexed by real height), and
+`TreeGrowth.canopy_growth_fraction(height_scale)` climbs 0 to 1 from the
+threshold to full height (the morph below) -- the two hand off at exactly one
+height, with neither a gap nor an overlap between them.
+
+**The morph is a real GPU shader, scattered per clump -- not a sweep from the
+trunk.** Once past the threshold, `ChoppableTree` draws the REAL, fully mature
+texture and dissolves the sapling sheet's last frame OUT of it via
+`TreeMorphShader`, composited into `WindSway`'s existing shared canopy
+shader (the same "splice another GLSL snippet into the one material a
+Sprite2D can hold" precedent already used for canopy snow sparkle) as
+`canopy_growth_fraction` climbs. A CPU-composited version of this -- a
+geodesic flood-fill seeded at the trunk's foot, the exact same technique
+`growth_order`/the season turn already share -- was built and rendered first,
+and rejected on sight: it read as a wave sweeping up from the ground, not
+individual leaves coming in, confirmed directly against the season-turn
+comparison and corrected on explicit instruction ("use real gpu shading
+techniques similar to the season transitions per leaf and not bottom up").
+What shipped instead hashes each small (`morph_clump_px`) block of the canopy
+independently -- a trig-free lattice hash mirroring `RiverFlowShader`'s own,
+deliberately not sine-based for the same float32-precision reasons documented
+there -- and reveals it as mature once its own roll falls at or below the
+live progress, scattered across the whole tree rather than advancing from any
+one point. `morph_variant_seed` (`ProceduralTreeSprite.tree_variant_for`, the
+tree's own per-instance variant) means two trees at the identical progress
+dissolve through a different scatter of clumps, the same "no two trees look
+alike while growing" property the old trunk-outward trace already gave.
+Measured live on real GPU hardware (float32), not just the CPU mirror every
+GLSL hash in this codebase also carries for headless testing: a canopy-sized
+clump grid's smallest hashed roll can sit close enough to zero (~0.0008 in
+float64) that float32 arithmetic rounds it down to exactly 0.0, letting one
+clump reveal even at zero progress -- fixed with an explicit "progress <= 0.0
+shows nothing, full stop" short-circuit that skips the hash entirely,
+mirroring the shader's own pre-existing fast path at the opposite (fully
+revealed) end.
+
+**The hand-off is a real off-switch, not a fade that never quite finishes.**
+Once `canopy_growth_fraction` reaches 1.0, `TreeMorphShader.clear` resets the
+shared material's `morph_progress` uniform to 1.0 -- the shader's own
+`if (morph_progress >= 1.0) return mature;` fast path then skips sampling the
+sapling texture at all, so a fully-grown tree renders through exactly today's
+ordinary path, with no lingering shader cost and nothing left morphing in the
+background. This is also why the mature texture a morphing tree dissolves
+INTO is always asked for at full growth (a literal `1.0`, never the tree's own
+still-climbing `_drawn_growth`): the trunk-outward pruning above would
+otherwise still draw a visibly half-branched picture for a real stretch just
+past `BRANCH_START_FRACTION` (0.595) -- `GROWTH_LEVELS` only pins its own
+growth level to exactly 1.0 once height passes 5/6 (about 0.833), a fair way
+further up the SAME climb `canopy_growth_fraction` is already using to drive
+the dissolve. Asking for anything less there would draw that half-branched
+tree underneath a morph already trying to show "how filled in the canopy is"
+-- the same signal encoded twice over, once coarsely by the old trace and
+once, in the same range, by the new per-clump reveal.
 
 **Maturity is not the end of growth.** `TreeGrowth.scale_at` used to flatline
 at exactly full size once a tree crossed `MATURITY_SECONDS` (three simulated

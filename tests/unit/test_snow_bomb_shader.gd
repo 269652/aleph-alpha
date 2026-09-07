@@ -54,16 +54,23 @@ func _mean_coverage(depth: float, points: Array) -> float:
 ## EXPLAINING why sine is banned must not be what trips the pin (the
 ## comment-vs-code trap an earlier no-smoothstep test in this codebase fell
 ## into).
+## Scoped to the position-HASHING functions themselves (value_hash, and
+## sparkle_hash from the shared SnowSparkleShader snippet spliced in below --
+## see docs/concept/snow_cover.md's "Sparkle"), not the whole file: the
+## sparkle snippet's own sparkle_intensity legitimately uses sin() to
+## OSCILLATE OVER TIME, the same already-safe, already-shipped pattern
+## WindSway's own vertex() uses (TIME is bounded by Godot's own shader
+## time-rollover, unlike a world coordinate, so this is not the large-
+## coordinate collapse the ban below exists to catch) -- a whole-file ban
+## would flag the very thing that makes sparkle twinkle at all.
 func test_the_lattice_hash_is_trig_free():
-	var code := ""
-	for line in SnowBombShader.SHADER_CODE.split("\n"):
-		var stripped: String = line
-		var comment := stripped.find("//")
-		if comment >= 0:
-			stripped = stripped.substr(0, comment)
-		code += stripped + "\n"
-	assert_false(code.contains("sin("), "the shader must not hash with sine")
-	assert_false(code.contains("cos("), "the shader must not hash with cosine")
+	for fn_name in ["value_hash", "sparkle_hash"]:
+		var start: int = SnowBombShader.SHADER_CODE.find("float %s(" % fn_name)
+		assert_true(start >= 0, "could not locate %s in the shader" % fn_name)
+		var end: int = SnowBombShader.SHADER_CODE.find("\n}", start)
+		var body: String = SnowBombShader.SHADER_CODE.substr(start, end - start)
+		assert_false(body.contains("sin("), "%s must not hash with sine" % fn_name)
+		assert_false(body.contains("cos("), "%s must not hash with cosine" % fn_name)
 
 
 ## The hash has to actually spread across [0, 1) -- a hash that clusters
@@ -549,3 +556,119 @@ func test_presence_tile_set_has_exactly_one_tile():
 func test_presence_tile_set_uses_the_terrain_art_tile_size():
 	var tile_set := SnowBombShader.build_presence_tile_set()
 	assert_eq(tile_set.tile_size, Vector2i.ONE * TerrainRenderer.ART_TILE_SIZE)
+
+
+# -- sparkle (see docs/concept/snow_cover.md, "Sparkle: specular glints on
+# lying snow" -- the shared pattern itself is pinned by
+# test_snow_sparkle_shader.gd; these tests are only ground's own GATE) -------
+
+const SnowSparkleShader = preload("res://src/rendering/snow_sparkle_shader.gd")
+
+
+## The two shaders must never silently drift apart: ground's own copy of the
+## shared GLSL snippet must be byte-identical to the one canonical copy
+## SnowSparkleShader itself holds.
+func test_the_shader_code_contains_the_shared_sparkle_snippet_verbatim():
+	assert_string_contains(SnowBombShader.SHADER_CODE, SnowSparkleShader.GLSL_SNIPPET)
+
+
+func test_fragment_calls_sparkle_intensity():
+	assert_string_contains(SnowBombShader.SHADER_CODE, "sparkle_intensity(world_pos, TIME)")
+
+
+## Every uniform the shared snippet declares must actually reach the
+## material, from SnowSparkleShader's own constants -- the same "every
+## mirrored constant reaches the shader" guarantee
+## test_every_mirrored_constant_reaches_the_shader already pins for this
+## file's OWN tuned constants, extended to the shared ones spliced in.
+func test_the_material_carries_every_shared_sparkle_uniform():
+	var material := snow.make_material()
+	var expected := {
+		"sparkle_cell_world": SnowSparkleShader.SPARKLE_CELL_WORLD,
+		"sparkle_density": SnowSparkleShader.SPARKLE_DENSITY,
+		"sparkle_jitter_world": SnowSparkleShader.SPARKLE_JITTER_WORLD,
+		"sparkle_point_radius_world": SnowSparkleShader.SPARKLE_POINT_RADIUS_WORLD,
+		"sparkle_hz": SnowSparkleShader.SPARKLE_HZ,
+		"sparkle_duty_exponent": SnowSparkleShader.SPARKLE_DUTY_EXPONENT,
+		"sparkle_brightness": SnowSparkleShader.SPARKLE_BRIGHTNESS,
+	}
+	for name in expected:
+		assert_almost_eq(
+			float(material.get_shader_parameter(name)), float(expected[name]), 0.0001,
+			"the shader's %s does not match SnowSparkleShader's own constant" % name
+		)
+
+
+## No snow -> no sparkle: ground's own gate, mirroring fragment()'s new
+## sparkle block. A genuinely bare field must never glint, at any position or
+## moment -- sparkle decorates coverage, it never implies it (design pillar
+## 1 in docs/concept/snow_cover.md's "Sparkle" section).
+func test_a_bare_field_never_sparkles():
+	for point in _sample_points(200):
+		for t in [0.0, 3.7, 19.2]:
+			assert_eq(
+				snow.ground_sparkle_at(0.0, point.x, point.y, t), 0.0,
+				"bare ground sparkled at (%.1f, %.1f), t=%.1f" % [point.x, point.y, t]
+			)
+
+
+## Sparkle must only ever show where a stamp is actually drawn (coverage_at
+## > 0), never at a point the bombing search left untouched -- otherwise a
+## light dusting would show glints floating over visibly bare ground between
+## stamps, which is exactly the "implies more snow than there is" pillar 1
+## forbids.
+func test_sparkle_never_fires_where_nothing_is_drawn():
+	for point in _sample_points(400):
+		var alpha := snow.coverage_at(0.2, point.x, point.y)
+		if alpha <= 0.0:
+			var sparkle := snow.ground_sparkle_at(0.2, point.x, point.y, 5.0)
+			assert_eq(sparkle, 0.0, "sparkle fired at an undrawn point (%.1f, %.1f)" % [point.x, point.y])
+
+
+## Symmetrically: SOME real points with real coverage must be ABLE to
+## sparkle at SOME moment, or the feature would be silently dead code. Full
+## depth (solid cover, per test_a_fully_covered_field_draws_solid_cover_
+## everywhere) so coverage_at's own gate is never what's missing.
+##
+## _sample_points is unsuitable here: it walks a single sparse DIAGONAL LINE
+## (steps of ~14 world units), while a sparkle point is a ~0.55-unit-radius
+## target inside a 5-unit cell -- exactly the miss test_snow_sparkle_shader.gd's
+## own _find_eligible_site was written to avoid. A dense LOCAL grid (step
+## 0.5, under 2x the point radius, so a full sweep of one area is guaranteed
+## to land inside a site's point circle wherever the jitter put it) over a
+## few real cells is what actually finds one.
+func test_full_snow_can_actually_sparkle_at_some_point_in_time():
+	var ever := false
+	var x := 0.0
+	while x < 40.0 and not ever:
+		var y := 0.0
+		while y < 40.0 and not ever:
+			for i in 6:
+				if snow.ground_sparkle_at(1.0, x, y, float(i) * 0.37) > 0.0:
+					ever = true
+					break
+			y += 0.5
+		x += 0.5
+	assert_true(ever, "full snow never sparkles anywhere in a dense 40x40-unit sweep -- looks dead")
+
+
+## Sparkle scales with how much snow is actually lying -- a thin dusting
+## glints fainter than solid cover at its own moment of peak brightness, per
+## fragment()'s own "* lying" scale (design pillar 1: decorates coverage,
+## proportionally, never flatly).
+func test_sparkle_brightness_is_bounded_by_how_much_snow_is_lying():
+	for point in _sample_points(300):
+		for t in [1.0, 4.0, 9.0]:
+			var sparkle := snow.ground_sparkle_at(1.0, point.x, point.y, t)
+			assert_lte(sparkle, 1.0001, "sparkle intensity exceeded its own 0..1 range")
+
+
+## The whole mechanism is a pure function of (depth, position, time, tread) --
+## no world/tree/tile list anywhere in its signature, which is the
+## structural half of "cost independent of population" (see
+## test_snow_sparkle_shader.gd's identical argument for the shared module,
+## and docs/concept/snow_cover.md's "Sparkle" design pillar 3).
+func test_ground_sparkle_is_a_pure_function_with_no_population_sized_input():
+	var a := snow.ground_sparkle_at(1.0, 42.0, 99.0, 5.0)
+	var b := snow.ground_sparkle_at(1.0, 42.0, 99.0, 5.0)
+	assert_eq(a, b)

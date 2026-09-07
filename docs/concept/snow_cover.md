@@ -242,6 +242,110 @@ dirt underneath it. An already-scarred path from before the snow fell is
 unaffected (it decays/recovers and repaints normally in winter) — only
 FRESH scarring is what snow prevents.
 
+### Real left/right footprint stamps (2026-09-07)
+
+Reported live: *"real footstep prints with left/right footprints spaced
+apart and stamped into the snow with displacement (snow amount should
+still be reduced) ... also implement proper pathscarring for grass and
+forest tiles."* Everything above this subsection — `SnowTrail`'s
+per-tile tread/coverage reduction, the transparent GPU trail-mask overlay
+— is the answer to "does the snow actually get thinner where you walk."
+It never drew an actual footprint SHAPE, individually placed and
+alternating left/right; that gap is what this closes, as a purely
+additive visual layer stamped on top, touching neither `SnowTrail` nor
+`PathScarring`'s own wear tracking at all.
+
+**`FootstepGait`** (`src/gameplay/footstep_gait.gd`) — real per-step
+footfall detection, driven by ACTUAL distance travelled rather than a
+fixed per-frame or per-tile-entry event (the tile-entry debounce
+`SnowTrail`/`PathScarring` both already use is the wrong granularity for
+an individual foot-fall). `STRIDE_LENGTH_METERS`/`STANCE_WIDTH_METERS`
+are real, grounded human-scale measurements (0.75m/0.22m, the latter
+widened from a real average stance further along the same real range
+after live feedback — "space left and right foot a bit wider") converted
+via the existing `GroundSlide.PX_PER_METER`, not eyeballed pixel counts.
+`step_if_due(distance)` alternates left/right every stride; `print_offset
+(heading, side)` places each print a real stance-width to either side of
+the walked line, perpendicular to travel direction (reusing
+`LeafLitterRenderer`'s own existing perpendicular-rotation convention
+rather than inventing a second one).
+
+**`FootprintField`** (`src/world/footprint_field.gd`) — per-chunk data,
+mirroring `LeafLitterField`'s exact shape (plain Dictionary-per-instance
+records, no scene nodes) but deliberately simpler: a footprint is static
+once stamped, no wind drift or settle transition to age, just
+`LIFETIME_SECONDS` pruning (half a real in-game day — a real design
+knob, deliberately far shorter than `LeafLitterField`'s own 0.75-real-
+year lifetime, since a footprint is an ephemeral mark, not persistent
+litter).
+
+**`ProceduralFootprintSprite`**/**`FootprintRenderer`**
+(`src/rendering/`) — no real hand-illustrated footprint art exists
+anywhere in this project, so a real, asymmetric sole silhouette (a wider
+ball offset for a big-toe bulge, a narrower heel) is generated directly,
+the same "procedural first" precedent `ProceduralMushroomSprite`
+already establishes, shaded with a two-tone rim+core technique so a
+print reads as pressed IN rather than a flat sticker ("... stamped into
+the snow with displacement"). One shape per SURFACE (snow/grass/
+forest — a cool shadow-blue snow print, pressed-earth-through-flattened-
+cover for grass/forest); "left" vs "right" is a render-time horizontal
+mirror of the same shape, not a second texture. Three plain
+`MultiMeshInstance2D` per chunk (one per surface), deliberately simpler
+than `LeafLitterRenderer`: a static mark needs no per-frame vertex-shader
+motion, wind, or atlas, just Godot's own built-in per-instance
+`Transform2D`.
+
+**Surface precedence mirrors `PathScarring`'s own gate exactly**
+(`EarthChunkManager.footstep_surface_for`): `snow_depth()` is a single
+GLOBAL scalar, not per-tile, so snow lying at all means every step
+everywhere is a snow print regardless of biome; otherwise grassland/
+forest only (matching `World.PATH_SCAR_BIOMES` — the "proper pathscarring
+for grass and forest tiles" half of the same report), everything else
+(desert, mountain, tundra, rainforest, ocean) gets no footprint at all —
+this feature's own explicit scope, not an oversight.
+
+`EarthChunkManager.record_footstep(pixel_position, heading)` is the real
+per-frame entry point, called once per frame alongside `tread_snow_at`
+with the player's own real position and `Player.facing_direction()`
+(a new public accessor — `_last_facing_direction` had none before this).
+Includes a teleport guard: a huge position jump between two consecutive
+calls (respawn, dev command, save load) re-baselines instead of stamping
+a stray print bridging the gap.
+
+### Grass/forest prints were already wired but effectively invisible (2026-09-07)
+
+Reported live: *"footsteps only show when snow is visible... they should
+generally show up lighter for grassland and forest even without snow...
+a bit deeper in forest ground."* `record_footstep`/`footstep_surface_for`
+already produced real `"grass"`/`"forest"` prints without snow lying (see
+above — never snow-gated) — the report traces to `ProceduralFootprintSprite
+._TONES_BY_SURFACE`'s original core/rim colors reading as near-invisible
+against the real ground, confirmed by rendering actual swatches (composited
+onto `TerrainRenderer`'s own flat grassland/forest colors at real
+`PRINT_WORLD_SCALE`) rather than trusting a code trace: grass's rim
+(the LARGER of the two shapes) was barely distinguishable in luminance
+from grassland's own ground color, and forest's rim read slightly
+*darker* than forest's own ground — the opposite of "pushed-up material
+catching the light" the rim is meant to show. Snow's own tones happened
+to clear a real contrast margin already (a near-white rim against snow,
+a shadow-blue core); grass/forest's did not.
+
+Retuned with the SAME rim+core shape, new colors grounded in what each
+disturbed surface actually looks like: grass's core reads as pale
+trampled/yellowed blade-and-dirt showing through (lighter than before,
+matching "lighter... for grassland"), its rim a bright sunlit crushed-
+blade highlight; forest's core reads as dark, damp humus revealed under
+the leaf litter — deliberately the LARGER core-to-ground contrast drop of
+the two surfaces (see `test_forest_reads_a_bit_deeper_than_grassland`),
+the literal "a bit deeper in forest ground" — with a warm, dry-leaf-litter
+rim for contrast against both the dark core and the green canopy floor.
+Both surfaces stay visibly subtler than snow's own near-white rim
+(`test_grass_and_forest_stay_subtler_than_snows_own_rim_brightness`) —
+"lighter" here means less dramatic than snow's flash, not literally
+brighter than it. Real, test-pinned luminance-contrast margins against
+`TerrainRenderer`'s own grassland/forest ground colors, not eyeballed
+numbers (see `tests/unit/test_procedural_footprint_sprite.gd`).
+
 ### What the CPU still does
 
 Per frame: push one float (`depth`), and the trail mask only when a
@@ -303,6 +407,115 @@ with. **Ocean is deliberately left excluded and not fixed here**: `WaterFx`
 the continuous `|across|` field `RiverFlowFx` reconstructs, so this same
 fix does not extend to it — a coastline under snow may show an analogous,
 un-addressed artifact.
+
+## Sparkle: specular glints on lying snow
+
+Lying snow catches light. This section covers the glint itself — a real,
+separate optical phenomenon from coverage (*how much* snow lies) and is
+layered on top of it, never a substitute for it.
+
+### Design pillars
+
+1. **Sparkle decorates coverage, it never implies it.** The glint is gated
+   strictly by "is there already real, correctly-placed snow here" — it must
+   never make a bare patch read as snowy, and it must never need coverage
+   itself to be recomputed or re-derived. It reads whatever coverage
+   mechanism already exists on a surface (ground's `lying`, canopy's
+   `snow_coverage`) and adds nothing to it.
+2. **Sparse and momentary, not a shimmer.** The user's own request was
+   explicit: "not too heavy." Real diamond-dust glinting is a small fraction
+   of a snow surface at any one instant (see "Real-world grounding" below) —
+   an implementation that reads as a wash of brightness or a pulsing whole-
+   field glow has already missed the phenomenon it is meant to depict, not
+   just overshot a taste preference. Both spatial sparsity (most points never
+   sparkle) and temporal sparsity (a point that can sparkle is mostly dark,
+   briefly bright) are load-bearing and are measured, not eyeballed — see
+   `test_snow_sparkle_shader.gd`.
+3. **Cost must not scale with how much snow — or how many trees — are
+   loaded**, for the identical reason coverage itself doesn't (design pillar
+   4 above). This is doubly true today: see `docs/progress.md`'s FPS
+   regression rounds 1-4, all four caused by per-loaded-object CPU work. The
+   glint adds a handful of ALU ops to a fragment shader that already runs
+   over exactly these pixels every frame; it adds no node, no draw call, no
+   per-tree or per-tile CPU work, and no new per-frame script cost.
+4. **One tuned mechanism, reused on every surface snow lies on.** Ground and
+   tree canopy get the literal same tested twinkle pattern
+   (`SnowSparkleShader`, `src/rendering/snow_sparkle_shader.gd`) rather than
+   two independently eyeballed effects that could visibly disagree in speed
+   or density. Each surface supplies only its own *gate* — the condition
+   deciding which of its own pixels are eligible at all.
+
+### Real-world grounding
+
+The effect being depicted is often called diamond dust: sunlight
+specularly reflecting off small, near-randomly-oriented ice crystal facets
+on a snow surface. The specular condition (facet normal exactly bisecting
+the light and view directions) is satisfied by only a small fraction of
+facets at any instant, so only scattered points glint — and because the
+population of facets satisfying it shifts continuously (the crystal field
+itself, and the viewer), individual points flare and fade rapidly and
+independently rather than staying lit or moving as a group. That is the
+real-world basis for both sparsity pillars above: a snow surface does not
+get *brighter*, scattered points on it flash.
+
+### Mechanism
+
+`SnowSparkleShader` exposes one pure function of world position and time,
+`sparkle_intensity(world_pos, time) -> float` (mirrored in GLSL as
+`sparkle_intensity(vec2, float)`), independent of coverage or colour:
+
+- Candidate sparkle points sit on their own world-space lattice
+  (`SPARKLE_CELL_WORLD`), deliberately finer than the snow stamp lattice —
+  ice-crystal glints are a much smaller-scale phenomenon than the lumps of
+  snow they sit on.
+- Only a hashed minority of lattice sites are eligible at all
+  (`SPARKLE_DENSITY`), each at its own small jittered point within its cell
+  (`SPARKLE_POINT_RADIUS_WORLD`) rather than filling the whole cell — a
+  point of light, not a patch.
+- An eligible site's brightness over time is a sharply-peaked function of
+  `TIME` (`pow(max(sin(...), 0.0), SPARKLE_DUTY_EXPONENT)`), phase-offset per
+  site by the same lattice hash so neighbouring sites flare at different
+  moments rather than in lockstep — the same "hash the site, not the world,
+  for anything that must desynchronize its neighbours" idea `SnowBombShader`
+  already uses for stamp variant/level/orientation, and the same
+  `sin(TIME * speed + phase)` shape `WindSway` already uses safely (`TIME` is
+  bounded by Godot's own time-rollover, so this is not the large-world-
+  coordinate sine hash failure `SnowBombShader`'s own hash was written to
+  avoid — that ban is specifically about hashing *world position* with
+  `sin`, not animating with it).
+
+Each surface applies its own gate on top:
+
+- **Ground** (`SnowBombShader.fragment()`): gated by the fragment's own
+  already-computed `lying` (the exact value that already decided how opaque
+  the snow stamp itself is) — no new ambiguity, no colour heuristic needed,
+  since the ground shader already knows with certainty which pixels are
+  snow.
+- **Canopy** (`WindSway`'s shared tree material, `fragment()`): canopy snow
+  is a *baked* compositing result (`ProceduralTreeSprite`/`IllustratedTree`,
+  see [flora.md](flora.md)'s "A fifth frame: snow is not a season"), not a
+  live per-pixel coverage field, so there is no runtime `lying`-equivalent to
+  read. The gate is therefore two-part: a `snow_coverage` uniform (the same
+  live weather value driving ground `snow_depth`, pushed once alongside it —
+  see below) is zero on every tree whenever there is no snow at all, and a
+  conservative near-white / low-saturation colour test on the sprite's own
+  already-sampled texture colour restricts sparkle to genuinely snow-white
+  pixels even when coverage is nonzero. The colour thresholds are measured
+  against the real art (`IllustratedTree.snow_canopy_for`/`canopy_for`), not
+  eyeballed — cherry's spring `blossom` frame is real, illustrated, pink, and
+  the one colour a snow sparkle must not fire on (see
+  `test_snow_sparkle_shader.gd`'s colour-gate tests for the measured
+  separation).
+
+Nothing pushes a per-tree or per-tile value: `snow_coverage` is one float,
+pushed once wherever `EarthChunkManager` already pushes `snow_depth` to the
+ground shader, onto the one shared tree material every spawned tree's sprite
+already points at (`WindSway.shared_material()`) — the identical "one push,
+every sharer sees it, cost independent of how many there are" shape
+`set_snow_depth` and `set_wind_strength` already use. Grass/scrub tufts
+(`WindSway.tuft_material()`) are a separate shared material that this never
+pushes to, so tufts are structurally unaffected — sparkle was asked for on
+trees and ground, not grass.
 
 ## The CPU mirror
 
@@ -406,6 +619,24 @@ for, and why both exist.
   own already-on-top, sub-tile-accurate edge is what keeps the boundary
   looking seamless. Ocean coastlines are unchanged and may still show an
   analogous artifact — not fixed here.
+- ✅ **Real left/right footprint stamps, and PathScarring gets the same
+  treatment on grass/forest** (2026-09-07) — see "Real left/right
+  footprint stamps" above for the full mechanism (`FootstepGait`/
+  `FootprintField`/`ProceduralFootprintSprite`/`FootprintRenderer`,
+  wired via `EarthChunkManager.record_footstep`/`step_footprints`).
+  Purely additive on top of `SnowTrail`'s own existing depth reduction
+  and `PathScarring`'s own existing wear tracking, neither of which this
+  touched. 56/56 tests passing across the new files (5 of them GPU-
+  readback smoke tests, confirmed for real with
+  `--rendering-driver opengl3`, not just headless).
+- ✅ **Grass/forest print tones retuned for real visibility** (2026-09-07)
+  — see "Grass/forest prints were already wired but effectively
+  invisible" above. `_TONES_BY_SURFACE`'s grass/forest core/rim colors
+  rechosen against real, test-pinned luminance-contrast margins measured
+  from `TerrainRenderer`'s own ground colors, not eyeballed; forest reads
+  a real, larger core-to-ground contrast drop than grassland does (the
+  literal "a bit deeper" ask), both stay subtler than snow's own
+  near-white rim.
 - ⬜ **Far-world precision** — the no-`sin(` structural pin exists
   (`SHADER_CODE` greps clean), but there is no real-GPU readback test yet at
   far-world coordinates; add one, since that is exactly where the old river
@@ -415,3 +646,19 @@ for, and why both exist.
   and not attempted here.
 - ⬜ **`snow_2/3/4.png`** — the middle of the level ladder is not drawn yet;
   the atlas reads whatever exists, so adding them needs no code change.
+- ✅ **Sparkle** (2026-09-07) — see "Sparkle: specular glints on lying snow"
+  above. `SnowSparkleShader` (shared twinkle pattern + colour gate, 15/15
+  tests), ground's own gate in `SnowBombShader.fragment()` (35/35, 26
+  pre-existing unmodified), canopy's own gate in `WindSway`'s shared tree
+  material (21/21, 11 pre-existing unmodified) forwarded through
+  `TreeRenderer.set_snow_coverage`'s existing call site (46/46, 45
+  pre-existing unmodified) — 117 tests total, zero regressions. Rendered
+  with a real GPU (`tools/probe_render_sparkle.gd`,
+  `tools/probe_diff_sparkle.gd`) and inspected directly: full-coverage
+  ground snow and a cherry tree in spring blossom UNDER full snow
+  coverage (the exact scenario the colour gate exists to protect) both
+  show real, sparse, scattered point-glints between rendered moments —
+  amplified frame-to-frame diffs measure 0.09% of ground pixels and 0.04%
+  of canopy pixels changing at a time (wind sway isolated out for the
+  canopy measurement), with the canopy's own glints spatially confined to
+  the tree's drawn silhouette and never landing on its pink blossom.

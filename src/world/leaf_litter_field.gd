@@ -65,7 +65,23 @@ extends RefCounted
 ##                        definition, so there is no motionless case to
 ##                        cheaply skip there) and flips it back to false the
 ##                        moment that probe ever reports no real current at
-##                        the leaf's own (still updating) position.
+##                        the leaf's own (still updating) position, OR once
+##                        it has been floating continuously for
+##                        MAX_FLOAT_SECONDS (see that constant's own doc
+##                        comment) -- a real leaf waterlogs and sinks rather
+##                        than drifting forever.
+##   floating_since   -- world_age_seconds this leaf most recently STARTED
+##                        floating (see MAX_FLOAT_SECONDS). Set whenever
+##                        on_water transitions from false to true (add_leaf,
+##                        relocate_leaf_near, try_disperse_near, advance's
+##                        wind-roll) -- deliberately NOT touched when an
+##                        ALREADY-floating leaf is relocated to another spot
+##                        still on water (a lateral nudge mid-water does not
+##                        un-waterlog it), so this is always the moment its
+##                        CURRENT continuous floating episode actually began,
+##                        never a stale value from a prior episode nor reset
+##                        by an in-water nudge. Meaningless while on_water is
+##                        false.
 
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const WindDispersal = preload("res://src/world/wind_dispersal.gd")
@@ -106,6 +122,43 @@ const DECAY_TO_FADING_SECONDS := LIFETIME / 3.0
 ## exactly two-thirds of LIFETIME (the second of the "3 seasons" the
 ## report asked for) rather than an independently-chosen number.
 const DECAY_TO_WINTER_SECONDS := LIFETIME * 2.0 / 3.0
+
+## How long a leaf can drift on real flowing water before it waterlogs and
+## sinks, settling in place and rejoining ordinary land litter -- see the
+## "on_water"/"floating_since" fields' own doc comments above. Real-world
+## grounding: a freshly fallen dry leaf floats at first on trapped air and
+## its own waxy cuticle, but progressively absorbs water through its cut
+## petiole and stomata (the "leaf conditioning"/leaching process stream
+## ecology studies document) and loses buoyancy within roughly a day of
+## continuous immersion -- the real mechanism behind why a stream's
+## floating litter settles into a benthic "leaf pack" rather than drifting
+## forever. Expressed as one real-world day (1/365 of a year), translated
+## through the SAME real-year -> compressed-game-time ratio LIFETIME's own
+## doc comment above already uses.
+##
+## This bounds a real, measured performance cost, not just a visual nicety:
+## generation()'s own doc comment already explains that an on_water leaf is
+## the ONE case that must always look dirty every single advance() call
+## (its continuous drift is CPU-driven, never handled by the vertex shader
+## the way a settled leaf's fall/sway is) -- so EarthChunkManager.
+## step_leaf_litter's dirty-tracking fix (see docs/progress.md's "FPS
+## regression round 4" and docs/concept/soil_fauna.md's own follow-up
+## entry) still pays LeafLitterRenderer.fill's full per-chunk MultiMesh
+## rebuild every frame for as long as any leaf in that chunk keeps
+## floating. Live-measured with a --solo session where the character
+## actually WANDERS (not the round-4 methodology's stationary spawn point):
+## far from being a rare edge case rivers rarely touch, at least one
+## decorating chunk had a floating leaf in 92% of measured 3-second windows
+## across a ~27-real-minute session, briefly reaching all 9 decorating
+## chunks simultaneously, with combined advance()/fill() cost reaching
+## magnitudes comparable to (and briefly exceeding) the stationary
+## baseline's own ~525-650ms/window plateau once total leaf population
+## reached a similar scale -- see docs/concept/soil_fauna.md's own
+## "Floating-leaf full-chunk-rebuild cost at ordinary play scale" entry for
+## the full writeup. Before this constant, nothing ever made a floating
+## leaf stop floating except its own current drying up (a rare event for a
+## real river reach) -- MAX_FLOAT_SECONDS is the missing bound.
+const MAX_FLOAT_SECONDS := SeasonCycle.SECONDS_PER_YEAR / 365.0
 
 ## How high above its own landing spot a falling leaf starts, in world
 ## pixels -- ported unchanged from DroppedItem.FALL_HEIGHT (see
@@ -239,6 +292,7 @@ func generation() -> int:
 ## DroppedItem's identical "the physics may drift but the destination is
 ## fixed" contract). `now` is world_age_seconds at the moment it fell.
 func add_leaf(position: Vector2, species: String, season: String, now: float) -> void:
+	var is_floating := _is_on_water(position)
 	_leaves.append({
 		"position": position,
 		"species": species,
@@ -248,7 +302,8 @@ func add_leaf(position: Vector2, species: String, season: String, now: float) ->
 		"transition_start": now,
 		"seed": _next_leaf_seed,
 		"contact_count": 0,
-		"on_water": _is_on_water(position),
+		"on_water": is_floating,
+		"floating_since": now if is_floating else 0.0,
 	})
 	_next_leaf_seed += 1
 	_generation += 1
@@ -328,7 +383,10 @@ func relocate_leaf_near(pos: Vector2, radius: float, new_position: Vector2, now:
 	leaf.transition_from = leaf.position
 	leaf.transition_start = now
 	leaf.position = new_position
-	leaf.on_water = _is_on_water(new_position)
+	var is_floating := _is_on_water(new_position)
+	if is_floating and not leaf.on_water:
+		leaf.floating_since = now  # a NEW floating episode -- see that field's own doc comment
+	leaf.on_water = is_floating
 	_generation += 1
 	return true
 
@@ -362,7 +420,10 @@ func try_disperse_near(walker_position: Vector2, radius: float, now: float) -> b
 	leaf.transition_from = leaf.position
 	leaf.transition_start = now
 	leaf.position = new_position
-	leaf.on_water = _is_on_water(new_position)
+	var is_floating := _is_on_water(new_position)
+	if is_floating and not leaf.on_water:
+		leaf.floating_since = now  # a NEW floating episode -- see that field's own doc comment
+	leaf.on_water = is_floating
 	_generation += 1
 	return true
 
@@ -433,7 +494,22 @@ func _is_on_water(position: Vector2) -> bool:
 ## uncorrected eased transition would show the leaf perpetually chasing a
 ## target that keeps moving away from it, snapping back into sync every
 ## TRANSITION_DURATION rather than gliding.
-func _advance_floating_leaf(leaf: Dictionary, delta: float) -> void:
+##
+## `now` (the same authoritative world_age_seconds advance() itself
+## receives) drives the MAX_FLOAT_SECONDS waterlog-and-sink check below --
+## checked FIRST, before any current probing, so a leaf that has floated
+## its full allotted time settles in place on the exact frame it crosses
+## that threshold rather than drifting one extra frame first.
+func _advance_floating_leaf(leaf: Dictionary, delta: float, now: float) -> void:
+	if now - leaf.floating_since >= MAX_FLOAT_SECONDS:
+		# Waterlogged and sunk (see MAX_FLOAT_SECONDS' own doc comment) --
+		# settles wherever it last drifted to and rejoins ordinary litter;
+		# a later wind-roll/relocation/current-probe hit treats it exactly
+		# like any other settled leaf from here on, including floating
+		# again (with a fresh clock) if it genuinely re-encounters current.
+		leaf.on_water = false
+		leaf.transition_from = leaf.position
+		return
 	if not _current_probe.is_valid():
 		leaf.on_water = false
 		return
@@ -483,7 +559,7 @@ func advance(delta: float, now: float) -> void:
 			# dirty to a caller comparing generation() against a prior
 			# fill, or it would visibly freeze mid-drift the moment
 			# dirty-tracking stopped the routine per-frame refill.
-			_advance_floating_leaf(leaf, delta)
+			_advance_floating_leaf(leaf, delta, now)
 			_generation += 1
 		if leaf.transition_from != leaf.position and now - leaf.transition_start >= TRANSITION_DURATION:
 			leaf.transition_from = leaf.position
@@ -545,4 +621,6 @@ func advance(delta: float, now: float) -> void:
 		# very next frame it floats and this same mechanism never touches
 		# it again (see the on_water guard just above).
 		leaf.on_water = _is_on_water(leaf.position)
+		if leaf.on_water:
+			leaf.floating_since = now  # a NEW floating episode (guard above proves it was false)
 		_generation += 1

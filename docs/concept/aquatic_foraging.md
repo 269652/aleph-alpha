@@ -332,6 +332,11 @@ proves out, not required for a fish to have a complete real diet today.
   already established for land species.
 - ✅ Real per-species catch items — see `fishing.md`'s own "Individual-
   fidelity promotion" section for the catch-side half of this pass.
-- ⬜ Worms/terrestrial insects as an additional aquatic food source,
-  fish-on-fish predation, plankton, ocean vegetation, sprite sway
-  animation, starvation-driven mass loss (see scope note above).
+- ⬜ Worms as fish bait (the direct next pass). A crushed worm's corpse
+  can now be carried (`WormMarker`, `EarthwormPatch.take_corpse`, see
+  `docs/concept/soil_fauna.md`'s "A corpse can be carried off") — the
+  prerequisite this pass needs, not the bait mechanic itself: nothing yet
+  reads a carried worm into `FishingSession.cast`'s `bait_quality`.
+- ⬜ Fish-on-fish predation, plankton, ocean vegetation, terrestrial
+  insects falling into water, sprite sway animation, starvation-driven
+  mass loss (see scope note above).

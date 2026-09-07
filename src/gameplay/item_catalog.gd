@@ -156,6 +156,12 @@ const _ITEMS := {
 	"iron_ore": ["Iron Ore", "material", 40, 0.0],
 	"copper_ore": ["Copper Ore", "material", 40, 0.0],
 	"coal": ["Coal", "material", 40, 0.0],
+	# A crushed earthworm's corpse, picked up rather than left to decompose
+	# in place (see EarthwormPatch.take_corpse, WormMarker). "material" not
+	# "food": it isn't people-food, and wiring it into the fishing
+	# bait_quality model is docs/concept/aquatic_foraging.md's own named,
+	# still-⬜ "Worms as fish bait" follow-up, not this pass.
+	"worm": ["Worm", "material", 40, 0.0],
 	# Cooking chain: fish caught/dropped, cooked over a campfire. Kept as the
 	# fallback used when no real, nearby FishMarker was actually caught (see
 	# EarthChunkManager.catch_nearest_fish, docs/concept/fishing.md's own
@@ -385,6 +391,15 @@ const _MUSHROOM_MASS_KG := {
 	"false_death_cap": 0.025,
 }
 
+## Real average whole-specimen mass, kilograms -- the same real-reference-
+## weight convention _PRODUCE_MASS_KG/_MUSHROOM_MASS_KG use just above. A
+## common temperate-garden earthworm (the soil fauna docs/concept/
+## soil_fauna.md models generically, not one named species) averages
+## roughly 3-6g fresh; 5g sits centrally.
+const _CREATURE_MASS_KG := {
+	"worm": 0.005,
+}
+
 
 ## Real per-species fish ids this catalog knows (see ProceduralFishSprite.
 ## SPECIES_IDS, docs/concept/fishing.md's own "Revised (2026-09-07)"
@@ -413,6 +428,8 @@ func _mass_kg_for(item_id: String) -> float:
 	var fish_species := item_id.trim_prefix("cooked_")
 	if _FISH_SPECIES_IDS.has(fish_species):
 		return FishMass.mass_kg_for(fish_species)
+	if _CREATURE_MASS_KG.has(item_id):
+		return _CREATURE_MASS_KG[item_id]
 	if not _WEAPON_MATERIAL_AND_VOLUME.has(item_id):
 		return 0.0
 	var material_and_volume: Array = _WEAPON_MATERIAL_AND_VOLUME[item_id]

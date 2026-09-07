@@ -1734,6 +1734,20 @@ func test_eating_a_false_death_cap_causes_no_harm_despite_the_name():
 	assert_eq(player.active_mushroom_toxin_debuffs.size(), 0)
 
 
+# -- facing direction: a real public accessor for footprint placement -----
+#
+# Reported live: "real footstep prints with left/right footprints spaced
+# apart" -- EarthChunkManager.record_footstep needs the player's own real
+# travel heading to orient each print, and _last_facing_direction (which
+# already holds the last real nonzero movement direction, not zeroing at
+# rest -- see its own doc comment) was private with no public accessor at
+# all before this.
+
+func test_facing_direction_reports_the_real_last_established_heading():
+	player._last_facing_direction = Vector2.RIGHT
+	assert_eq(player.facing_direction(), Vector2.RIGHT)
+
+
 # -- Karma (see docs/concept/karma_and_luck.md) ------------------------------
 #
 # apply_karma_delta is the single external mutator for the permanent karma
@@ -2330,17 +2344,17 @@ func test_bonded_companions_are_capped():
 	player.allocated_nodes["menagerie"] = true
 	for i in Player.BONDED_COMPANION_CAP:
 		_hold_tool("butterfly_net")  # a fresh, empty net for each attempt
-		var bee := _flyer_at("bee", Vector2(8, 0))
-		_net_until_caught(bee)
+		var sparrow := _flyer_at("sparrow", Vector2(8, 0))
+		_net_until_caught(sparrow)
 	assert_eq(player.bonded_companions.size(), Player.BONDED_COMPANION_CAP)
 
 	# One more, past the cap: falls back to loading the net instead of
 	# silently discarding the catch.
 	_hold_tool("butterfly_net")
-	var bee := _flyer_at("bee", Vector2(8, 0))
-	_net_until_caught(bee)
+	var sparrow := _flyer_at("sparrow", Vector2(8, 0))
+	_net_until_caught(sparrow)
 	assert_eq(player.bonded_companions.size(), Player.BONDED_COMPANION_CAP)
-	assert_eq(player.equipped_item.captive_species, "bee")
+	assert_eq(player.equipped_item.captive_species, "sparrow")
 
 
 func test_bonding_a_companion_spawns_its_live_marker():

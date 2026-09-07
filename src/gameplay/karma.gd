@@ -18,13 +18,20 @@ extends RefCounted
 ## Asked directly: "stepping on a worm should give -1 Karma." Applies
 ## identically to a caterpillar OR millipede crush -- CrushMechanic already
 ## treats all three as the same physical event (see its own doc comment,
-## and docs/concept/soil_fauna.md's "Generalized to millipedes too"), and
-## to either the player's own step or any creature's, since the request
-## asked for every crush to count, not just the player's own deliberate
-## ones. The constant's own name predates the millipede joining -- kept
-## rather than renamed, since a rename would touch every already-shipped,
-## tested call site for a purely cosmetic reason; this doc comment and
-## karma_and_luck.md's own event table are the cross-reference.
+## and docs/concept/soil_fauna.md's "Generalized to millipedes too"). The
+## constant's own name predates the millipede joining -- kept rather than
+## renamed, since a rename would touch every already-shipped, tested call
+## site for a purely cosmetic reason; this doc comment and karma_and_luck.
+## md's own event table are the cross-reference.
+##
+## Player-only (reversed 2026-09-07): this used to fire for a wild
+## creature's own step too ("every crush should count, not just the
+## player's own deliberate ones") but was reported live as a real problem
+## -- "Karma is constantly decreasing when wild animals step on worms...
+## the player must do it" -- so `World`'s crush pass now only charges this
+## for the player's own step; a creature's own crush still happens (the
+## worm still dies), it just never reaches this constant. See
+## karma_and_luck.md's own 2026-09-07 reversal note.
 const WORM_OR_CATERPILLAR_CRUSH_PENALTY := 1.0
 
 ## Asked directly: "Abandoning a quest as well [-1 Karma]."
