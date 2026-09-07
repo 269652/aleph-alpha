@@ -459,6 +459,43 @@ func _play_chase_heading() -> Vector2:
 	return offset.normalized()
 
 
+## Shared across every fish -- mirrors DecomposerMarker._refresh_food_
+## groups_if_stale exactly (see that method's own doc comment for the full
+## reasoning). _nearest_other_fish's own get_tree().get_nodes_in_group(
+## "fish") walk used to run once PER FISH PER SCAN, independently, with no
+## sharing -- real live measurement (fps round 7, docs/concept/
+## ecosystem_dynamics.md) found this dominating fish_marker's own
+## aggregate _process cost (88-91% of _step_schooling's own total), and
+## WORSENING as fps drops: the scan is gated on FishSchooling.SCAN_
+## INTERVAL of REAL wall-clock time, not frame count, so a slower frame
+## rate means that interval elapses in fewer engine frames, re-triggering
+## the unshared scan more often per unit of actual gameplay time -- a real
+## feedback loop, not just a flat cost. The identical "one marker scans
+## the whole world instead of a scoped neighbourhood" anti-pattern
+## DecomposerMarker._nearest_food (round 5) and AmbientFlyerMarker.
+## _scan_for_partners/EarthChunkManager.crush_ants_near (round 4) already
+## had.
+##
+## Refreshed at most once per FISH_GROUP_REFRESH_SECONDS of real time,
+## matching FishSchooling.SCAN_INTERVAL's own cadence exactly -- no fish's
+## own scan can ever observe data staler than it already tolerates.
+const FISH_GROUP_REFRESH_SECONDS := FishSchooling.SCAN_INTERVAL
+static var _fish_group_refresh_at_msec: int = -1000000
+static var _cached_fish: Array = []
+
+
+## `now_msec` is INJECTED (not read directly via Time.get_ticks_msec here)
+## so this stays testable with a fake clock and a counting tree double,
+## the same call-observing idiom round 5's own DecomposerMarker fix uses.
+## `tree` is duck-typed (only needs get_nodes_in_group), matching every
+## other 'world' port in this codebase.
+static func _refresh_fish_group_if_stale(tree, now_msec: int) -> void:
+	if now_msec - _fish_group_refresh_at_msec < int(FISH_GROUP_REFRESH_SECONDS * 1000.0):
+		return
+	_fish_group_refresh_at_msec = now_msec
+	_cached_fish = tree.get_nodes_in_group("fish")
+
+
 ## The closest OTHER fish in the "fish" group within FishSchooling.
 ## ATTRACTION_RADIUS_PX, or null if none is that close -- the same "react to
 ## only your single nearest neighbour" simplification AmbientFlyerMarker's
@@ -466,9 +503,10 @@ func _play_chase_heading() -> Vector2:
 func _nearest_other_fish() -> Node:
 	if not is_inside_tree():
 		return null
+	_refresh_fish_group_if_stale(get_tree(), Time.get_ticks_msec())
 	var nearest: Node = null
 	var nearest_distance := FishSchooling.ATTRACTION_RADIUS_PX
-	for other in get_tree().get_nodes_in_group("fish"):
+	for other in _cached_fish:
 		if other == self or not is_instance_valid(other):
 			continue
 		var distance: float = position.distance_to(other.position)

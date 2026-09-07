@@ -2806,6 +2806,83 @@ harder, batching many instances into fewer processing passes, or capping
 population outright -- a real architectural question for a future round,
 not a bug this one's fix addresses, and not investigated further here.
 
+### FPS regression round 7: fish schooling's own unscoped whole-world scan (2026-09-07)
+
+Direct follow-up to round 6's own closing note above: "weiter mit den
+fps" (continue with the fps), picking up the still-open population-scale
+question. Rather than the broader architectural change round 6 named as
+out of scope, this round targeted the two costliest individual marker
+classes measured there (`ambient_flyer_marker` and `fish_marker`, each
+~13ms/frame in a calm window) for a MORE CONCENTRATED bug first --
+`fish_marker`'s cost per instance (~0.1ms) ran roughly 2.5x `ambient_
+flyer_marker`'s (~0.04ms) despite a smaller population, the signature of
+a real per-call inefficiency rather than pure population volume.
+
+**Root cause: `FishMarker._nearest_other_fish`'s own `get_tree().
+get_nodes_in_group("fish")` walk ran once PER FISH PER SCHOOLING SCAN,
+independently, with no sharing** -- the FOURTH confirmed instance of the
+"one marker scans the whole world instead of a scoped neighbourhood"
+anti-pattern (after `AmbientFlyerMarker._scan_for_partners`/
+`EarthChunkManager.crush_ants_near` in round 4, `DecomposerMarker.
+_nearest_food` in round 5). Measured directly by splitting `fish_marker.
+_process` into its three named sub-steps (`_step_water_ripple`,
+`_step_schooling`, `_step_foraging`) plus isolating `_nearest_other_
+fish` specifically within schooling: it accounted for 88-91% of `_step_
+schooling`'s own total in every measured window.
+
+**A real feedback loop, not just a flat cost.** `FishSchooling.
+SCAN_INTERVAL` (0.5s) gates the re-scan on REAL wall-clock time via the
+per-instance `delta` each fish accumulates, not engine frame count -- so
+a slower frame rate means MORE real time elapses per fixed number of
+engine frames, which means the interval crosses its threshold more
+often relative to frame count, which re-triggers the unshared O(fish
+population) scan more frequently per unit of actual gameplay time. Low
+fps making this specific cost WORSE, which in turn drags fps down
+further, is consistent with -- and likely part of the explanation for --
+this whole investigation's own recurring "why does it stay pinned at
+4-10fps no matter what already got fixed" pattern.
+
+**Fixed the same way round 5 was**: one shared fetch per `FISH_GROUP_
+REFRESH_SECONDS` (set equal to `FishSchooling.SCAN_INTERVAL` itself, so
+no fish's own scan can ever observe data staler than it already
+tolerates) of real wall-clock time, cached via a `static var` shared
+across every `FishMarker` instance instead of each independently
+re-fetching the identical whole-"fish"-group list. `EarthChunkManager.
+nearest_fish_position` was checked first as a possible existing
+scoped registry to reuse (round 4's preferred shape when available) and
+found to have the identical unscoped-iterate-everything shape itself
+(`_loaded_fish.values()` across every loaded chunk, not a 3x3
+neighbourhood) -- no real scoped fish registry exists yet to reuse, so
+the shared-cache fix was the right-sized one here too, not full spatial
+bucketing.
+
+**Strict TDD**, mirroring round 5's own call-observing test-double idiom
+exactly: a `_CountingFishTree` stub proves one shared fetch serves 50
+calls within the refresh window and a second real fetch only happens
+once the window has genuinely elapsed, plus an end-to-end regression
+guard (`test_still_finds_a_real_nearby_schoolmate_through_the_shared_
+cache`) that the refactor did not silently break real schoolmate-finding.
+57/58 green in `test_fish_marker.gd` (the one non-failing "risky" result
+is a pre-existing, unrelated no-assertion test on the `_world == null`
+path, untouched by this change). Live `--solo` boot against the same
+real-save snapshot this whole investigation has used confirmed a clean
+start with no script errors.
+
+**Real, confirmed, explicitly still open**: `ambient_flyer_marker`
+remains the other ~13ms/frame contributor, not yet investigated this
+round -- a genuinely more complex function (a full species-specific
+precedence-ordered behavior tree: player reaction, songbird flush,
+pair-interaction courtship/dance, ground foraging, idle rest, nectaring,
+scent tracking, plain wander) than fish's comparatively simple three-step
+shape, so a future round should expect to spend more measurement passes
+narrowing it down rather than finding one concentrated culprit as
+quickly. The broader population-scale question round 6 named (every
+marker class's cost summing to real, non-bug, non-trivial totals purely
+from entity count) remains open regardless of how many more concentrated
+bugs like this one get found -- each fix like this one lowers the floor,
+but does not by itself change the underlying population-times-per-call
+-cost shape of the problem.
+
 
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
