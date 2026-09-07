@@ -369,6 +369,48 @@ static func card_specs_for_seed(seed_value: int) -> Array[Dictionary]:
 		specs.append({"seed": h, "offset": offset, "depth": CARD_COUNT - index})
 	return specs
 
+
+## A stable [0, 1) pseudo-random threshold derived from a card's own atlas
+## seed -- a SEPARATE hash from the one that already picks its column/variant
+## (atlas_region_for), so the two never correlate: two cards sharing a column
+## must still be free to turn at different points in a season transition, or
+## every card in that column would turn in lockstep. Compared against
+## SeasonTransition's shared, quantised progress (see split_cards_by_turn)
+## to decide whether this ONE card has turned to the next season's sheet
+## yet -- the same "one shared clock, many independently-timed units" shape
+## ProceduralTreeSprite's per-pixel _sweep_rank turns a canopy with, at card
+## granularity instead of per-pixel (see docs/concept/long_grass.md's
+## "Seasonal art").
+static func turn_threshold_for_seed(atlas_seed: int) -> float:
+	return float(posmod(hash("%d_grass_turn" % atlas_seed), 10000)) / 10000.0
+
+
+## Splits `card_specs` (each {atlas_seed:int, position:Vector2, growth:float},
+## see cards_for_cell) into {"from": [...], "to": [...]} by comparing each
+## card's own turn_threshold_for_seed against `progress` -- a card samples
+## the OLD season's sheet while progress is still below its own threshold,
+## the NEW season's once progress reaches it. `progress <= 0.0` puts every
+## card in "from" and `progress >= 1.0` puts every card in "to" without
+## touching turn_threshold_for_seed at all, so a settled (non-transitioning)
+## season -- the common case -- collapses to a single, cheap bucket. Cards
+## are never dropped or duplicated: every input card lands in exactly one
+## of the two returned arrays.
+static func split_cards_by_turn(card_specs: Array, progress: float) -> Dictionary:
+	var from: Array = []
+	var to: Array = []
+	if progress <= 0.0:
+		from = card_specs.duplicate()
+	elif progress >= 1.0:
+		to = card_specs.duplicate()
+	else:
+		for card in card_specs:
+			if turn_threshold_for_seed(card.atlas_seed) <= progress:
+				to.append(card)
+			else:
+				from.append(card)
+	return {"from": from, "to": to}
+
+
 func material() -> ShaderMaterial:
 	if _material == null:
 		var shader := Shader.new()

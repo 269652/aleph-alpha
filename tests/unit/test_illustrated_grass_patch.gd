@@ -952,3 +952,80 @@ func test_the_bend_math_still_carries_its_own_tuned_constants():
 	assert_string_contains(
 		code, "wake * %s" % IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE
 	)
+
+
+# -- per-blade staggered season transition (see docs/concept/long_grass.md's
+# "Seasonal art" -- the same "one shared clock, many independently-timed
+# units" shape TreePhenology/ProceduralTreeSprite turn a canopy with, at
+# card granularity instead of per-pixel) -----------------------------------
+
+
+func test_turn_threshold_for_seed_is_deterministic():
+	assert_eq(
+		IllustratedGrassPatch.turn_threshold_for_seed(42), IllustratedGrassPatch.turn_threshold_for_seed(42)
+	)
+
+
+func test_turn_threshold_for_seed_is_a_usable_zero_to_one_mix_weight():
+	for atlas_seed in [0, 1, -7, 42, 100000, -100000]:
+		var threshold := IllustratedGrassPatch.turn_threshold_for_seed(atlas_seed)
+		assert_gte(threshold, 0.0)
+		assert_lt(threshold, 1.0)
+
+
+## Not correlated with which COLUMN a card's own atlas_seed already picks
+## (see atlas_region_for) -- two different seeds landing in the same column
+## must still be free to turn at different points, or every card in a
+## column would turn in lockstep.
+func test_turn_threshold_for_seed_spreads_across_many_seeds_not_just_a_few_buckets():
+	var thresholds := {}
+	for atlas_seed in range(200):
+		var bucket := int(IllustratedGrassPatch.turn_threshold_for_seed(atlas_seed) * 10.0)
+		thresholds[bucket] = thresholds.get(bucket, 0) + 1
+	assert_gte(thresholds.size(), 8, "should spread across most of the [0,1) range, not clump in a few buckets")
+
+
+func test_split_cards_by_turn_puts_every_card_in_from_at_zero_progress():
+	var card_specs: Array[Dictionary] = []
+	for atlas_seed in range(20):
+		card_specs.append({"atlas_seed": atlas_seed, "position": Vector2.ZERO, "growth": 1.0})
+	var split := IllustratedGrassPatch.split_cards_by_turn(card_specs, 0.0)
+	assert_eq(split.from.size(), 20)
+	assert_eq(split.to.size(), 0)
+
+
+func test_split_cards_by_turn_puts_every_card_in_to_at_full_progress():
+	var card_specs: Array[Dictionary] = []
+	for atlas_seed in range(20):
+		card_specs.append({"atlas_seed": atlas_seed, "position": Vector2.ZERO, "growth": 1.0})
+	var split := IllustratedGrassPatch.split_cards_by_turn(card_specs, 1.0)
+	assert_eq(split.from.size(), 0)
+	assert_eq(split.to.size(), 20)
+
+
+func test_split_cards_by_turn_splits_a_real_mix_at_a_mid_progress_without_losing_any_card():
+	var card_specs: Array[Dictionary] = []
+	for atlas_seed in range(200):
+		card_specs.append({"atlas_seed": atlas_seed, "position": Vector2.ZERO, "growth": 1.0})
+	var split := IllustratedGrassPatch.split_cards_by_turn(card_specs, 0.5)
+	assert_eq(split.from.size() + split.to.size(), 200, "no card may be dropped or duplicated by the split")
+	assert_gt(split.from.size(), 0, "precondition: a real mid-progress split must leave some cards untouched")
+	assert_gt(split.to.size(), 0, "precondition: a real mid-progress split must turn some cards")
+
+
+## As progress climbs, a card can only move from "from" to "to", never back
+## -- the same one-way sweep direction ProceduralTreeSprite's pixels turn in.
+func test_split_cards_by_turn_only_ever_moves_cards_from_from_to_to_as_progress_climbs():
+	var card_specs: Array[Dictionary] = []
+	for atlas_seed in range(100):
+		card_specs.append({"atlas_seed": atlas_seed, "position": Vector2.ZERO, "growth": 1.0})
+	var previous_to_seeds := {}
+	for step in range(11):
+		var progress := float(step) / 10.0
+		var split := IllustratedGrassPatch.split_cards_by_turn(card_specs, progress)
+		var to_seeds := {}
+		for card in split.to:
+			to_seeds[card.atlas_seed] = true
+		for seed_value in previous_to_seeds:
+			assert_true(to_seeds.has(seed_value), "a card that has turned must stay turned as progress only climbs")
+		previous_to_seeds = to_seeds
