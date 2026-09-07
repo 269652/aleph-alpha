@@ -1233,9 +1233,16 @@ func _set_biome_at(global_tile: Vector2i, biome_name: String) -> void:
 ## Sums every fish-family item id a catch can reward (see
 ## Player.FISH_ITEM_ID_BY_RARITY) -- the exact rarity is a deterministic hash
 ## roll off position/cast-count, not something a caller should have to
-## predict just to prove a catch reached the inventory.
+## predict just to prove a catch reached the inventory. Also sums the real
+## per-species ids (see docs/concept/fishing.md's own "Revised (2026-09-07)"
+## section) -- a real, nearby FishMarker being caught (not something this
+## helper's own caller controls for) now grants its own real species item
+## instead of the flat generic "fish".
 func _fish_item_count(counts: Dictionary) -> int:
-	return counts.get("fish", 0) + counts.get("rare_fish", 0) + counts.get("legendary_fish", 0)
+	var total := counts.get("fish", 0) + counts.get("rare_fish", 0) + counts.get("legendary_fish", 0)
+	for species in ["trout", "bluegill", "koi", "goldfish"]:
+		total += counts.get(species, 0)
+	return total
 
 
 func test_pressing_fish_away_from_water_does_not_start_a_session():

@@ -14,6 +14,9 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const FishSchooling = preload("res://src/gameplay/fish_schooling.gd")
 const FishForaging = preload("res://src/gameplay/fish_foraging.gd")
+const FishDiet = preload("res://src/gameplay/fish_diet.gd")
+const FishGrowth = preload("res://src/gameplay/fish_growth.gd")
+const FishMass = preload("res://src/world/fish_mass.gd")
 
 ## How much open water the fish keeps around its center on every side --
 ## roughly the sprite's half-extent, so no part of the fish visually overlaps
@@ -63,6 +66,20 @@ const TURN_RATE := 3.0
 var home := Vector2.ZERO
 var wander_seed := 0
 var species := "goldfish"
+
+## Forage-coupled mass (see docs/concept/aquatic_foraging.md's "Revised
+## (2026-09-07)") -- real kilograms, starting at FishGrowth.
+## JUVENILE_START_FRACTION of this species' own adult mass (FishMass) and
+## growing only on a real successful graze (see _step_foraging). Set lazily
+## by _ensure_mass_initialized, not at declaration, since species may still
+## change before this marker's first real frame (mirrors this file's own
+## _world/_tile_size setup-after-construction convention).
+var mass_kg := 0.0
+var _adult_mass_kg := 0.0
+## This species' own full-grown scale, captured once (see
+## _ensure_mass_initialized) from whatever FishRenderer originally set --
+## growth then renders as a fraction OF that, never a value invented here.
+var _base_scale := Vector2.ONE
 
 var _wander := CreatureWander.new()
 var _elapsed_time := 0.0
@@ -190,6 +207,33 @@ func _ready() -> void:
 	# World gathers every fish each frame as a flow-overlay wader, so a
 	# fish ripples the still water it swims in (docs/concept/hydrology.md).
 	add_to_group("fish")
+
+
+## Idempotent (guarded on _adult_mass_kg) -- called defensively at the top
+## of _process() ONLY, deliberately NOT from _ready() too: FishRenderer
+## always sets species and the full-grown scale BEFORE add_child (see
+## _build_fish), so by the time this first runs (a real marker's first real
+## frame), both are already final -- but a _ready()-time call would fire
+## during add_child itself, before a caller that sets species/scale
+## AFTER construction (several tests do, for a non-default species) ever
+## gets the chance to. Captures _base_scale from whatever scale this
+## marker already has THE FIRST TIME this runs, and never re-derives it,
+## rather than risk capturing an already-shrunk value on a second call.
+func _ensure_mass_initialized() -> void:
+	if _adult_mass_kg > 0.0:
+		return
+	_adult_mass_kg = FishMass.mass_kg_for(species)
+	mass_kg = FishGrowth.starting_mass_for(_adult_mass_kg)
+	_base_scale = scale
+	_apply_growth_scale()
+
+
+## Renders this fish at a fraction of its own full-grown scale, following
+## real physics (mass scales with the cube of a linear dimension -- see
+## FishGrowth.visual_scale_fraction's own doc comment) rather than an
+## arbitrary lerp.
+func _apply_growth_scale() -> void:
+	scale = _base_scale * FishGrowth.visual_scale_fraction(mass_kg, _adult_mass_kg)
 
 
 func set_attraction(target: Vector2) -> void:
@@ -401,6 +445,13 @@ var _forage_scan_accumulator := 0.0
 ## no aquatic_vegetation_near at all (an isolated test's bare StubWorld, or
 ## the character preview diorama) simply never forages -- the same graceful
 ## has_method absence _is_fresh_water_tile already tolerates.
+##
+## Diet-gated (see FishDiet, docs/concept/aquatic_foraging.md's "Revised
+## (2026-09-07)"): only queries/grazes the food types THIS species actually
+## eats -- a trout never so much as looks at a vegetation patch, an
+## omnivore checks both and takes whichever is nearer. A real successful
+## graze, of either food type, grows this fish's own mass (see FishGrowth) --
+## a fish with nothing in reach of its own diet does not grow.
 func _step_foraging(delta: float) -> void:
 	if _world == null or not _world.has_method("aquatic_vegetation_near"):
 		return
@@ -408,11 +459,33 @@ func _step_foraging(delta: float) -> void:
 	if _forage_scan_accumulator >= FishForaging.SCAN_INTERVAL:
 		_forage_scan_accumulator = 0.0
 		if _forage_target == null:
-			var candidates: Array = _world.aquatic_vegetation_near(position, FishForaging.DETECTION_RADIUS_TILES)
+			var candidates: Array = []
+			if FishDiet.eats(species, FishDiet.FOOD_VEGETATION):
+				candidates.append_array(
+					_world.aquatic_vegetation_near(position, FishForaging.DETECTION_RADIUS_TILES)
+				)
+			if FishDiet.eats(species, FishDiet.FOOD_INVERTEBRATES) and _world.has_method("aquatic_invertebrates_near"):
+				candidates.append_array(
+					_world.aquatic_invertebrates_near(position, FishForaging.DETECTION_RADIUS_TILES)
+				)
 			_forage_target = FishForaging.nearest_target(position, candidates)
 	if _forage_target != null and position.distance_to(_forage_target) <= FishForaging.GRAZE_ARRIVE_DISTANCE_PX:
-		if _world.has_method("graze_aquatic_vegetation_at"):
-			_world.graze_aquatic_vegetation_at(_forage_target)
+		var fed := false
+		if (
+			FishDiet.eats(species, FishDiet.FOOD_VEGETATION)
+			and _world.has_method("graze_aquatic_vegetation_at")
+			and _world.graze_aquatic_vegetation_at(_forage_target)
+		):
+			fed = true
+		elif (
+			FishDiet.eats(species, FishDiet.FOOD_INVERTEBRATES)
+			and _world.has_method("graze_aquatic_invertebrates_at")
+			and _world.graze_aquatic_invertebrates_at(_forage_target)
+		):
+			fed = true
+		if fed:
+			mass_kg = FishGrowth.feed(mass_kg, _adult_mass_kg)
+			_apply_growth_scale()
 		_forage_target = null
 
 
@@ -545,6 +618,7 @@ var _cached_player: Node = null
 
 
 func _process(frame_delta: float) -> void:
+	_ensure_mass_initialized()
 	# Fish far from the player advance in fewer, larger steps (see
 	# SimulationLod) -- same time passes, fewer updates to pay for.
 	var delta := _lod_step(frame_delta)

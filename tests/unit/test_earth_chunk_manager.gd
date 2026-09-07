@@ -911,22 +911,32 @@ func test_evicting_old_chunks_frees_their_fish_markers():
 		assert_false(is_instance_valid(fish), "Berlin's fish markers should be freed once out of range")
 
 
-func test_catch_nearest_fish_removes_it_and_returns_its_species():
+## Revised (2026-09-07, see docs/concept/fishing.md's own "Revised
+## (2026-09-07)" section): catch_nearest_fish now returns a Dictionary
+## ({"species", "mass_kg"}), not a bare species String -- carrying the real
+## caught fish's own forage-coupled mass (see FishGrowth) alongside its
+## species, so a catch can grant a real per-species item at its own real
+## weight instead of a flat generic one.
+func test_catch_nearest_fish_removes_it_and_returns_its_species_and_mass():
 	manager.update(_berlin_tile)
 	var fish: Array = _loaded_fish_markers()
 	assert_gt(fish.size(), 0)
 	var target = fish[0]
 	var target_position: Vector2 = target.position
+	var expected_mass: float = target.mass_kg
 
-	var species := manager.catch_nearest_fish(target_position, 1.0)
-	assert_ne(species, "")
+	var result := manager.catch_nearest_fish(target_position, 1.0)
+	assert_ne(result["species"], "")
+	assert_almost_eq(result["mass_kg"], expected_mass, 0.0001, "the real caught fish's own real mass")
 	assert_false(is_instance_valid(target), "the caught fish should be freed")
 
 
-func test_catch_nearest_fish_returns_empty_string_when_none_in_range():
+func test_catch_nearest_fish_returns_an_empty_result_when_none_in_range():
 	manager.update(_berlin_tile)
 	var far_from_everything := Vector2(-999999.0, -999999.0)
-	assert_eq(manager.catch_nearest_fish(far_from_everything, 5.0), "")
+	var result := manager.catch_nearest_fish(far_from_everything, 5.0)
+	assert_eq(result["species"], "")
+	assert_eq(result["mass_kg"], 0.0)
 
 
 # -- ambient flyers: decorative butterflies/songbirds (see AmbientFlyerRenderer) --
@@ -4018,6 +4028,7 @@ const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
 const IllustratedWormSprite = preload("res://src/rendering/illustrated_worm_sprite.gd")
 const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
+const AquaticInvertebrates = preload("res://src/world/aquatic_invertebrates.gd")
 
 
 ## Brings every worm in every loaded chunk to the surface, so the queries
@@ -4723,6 +4734,57 @@ func test_unloading_a_chunk_frees_its_vegetation_sim_and_sprites():
 	manager._unload_chunk(chunk_coord)
 	assert_false(manager._aquatic_vegetation.has(chunk_coord))
 	assert_false(manager._aquatic_vegetation_sprites.has(chunk_coord))
+
+
+# -- aquatic_invertebrates_near / graze_aquatic_invertebrates_at (see -------
+# -- docs/concept/aquatic_foraging.md's "Revised (2026-09-07)") -- mirrors --
+# -- the aquatic_vegetation tests immediately above exactly ------------------
+
+func test_aquatic_invertebrates_near_finds_a_real_patch():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var inverts: AquaticInvertebrates = manager._aquatic_invertebrates.get(chunk_coord)
+	if inverts == null or inverts.get_patch_cells().is_empty():
+		pending("no real invertebrate patch landed in this chunk this seed")
+		return
+	var cell: Vector2i = inverts.get_patch_cells()[0]
+	var pixel := _pixel_for(chunk_coord, cell)
+	var found := manager.aquatic_invertebrates_near(pixel, 2)
+	assert_gt(found.size(), 0, "a real patch underfoot should be findable")
+	var positions := []
+	for patch in found:
+		positions.append(patch["position"])
+	assert_true(positions.has(pixel))
+
+
+func test_grazing_a_real_invertebrate_patch_removes_it_from_the_world():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var inverts: AquaticInvertebrates = manager._aquatic_invertebrates.get(chunk_coord)
+	if inverts == null or inverts.get_patch_cells().is_empty():
+		pending("no real invertebrate patch landed in this chunk this seed")
+		return
+	var cell: Vector2i = inverts.get_patch_cells()[0]
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(manager.graze_aquatic_invertebrates_at(pixel), "a fish grazing a real patch should succeed")
+	assert_false(inverts.has_invertebrates(cell), "and the patch is gone")
+	assert_false(manager.graze_aquatic_invertebrates_at(pixel), "it cannot be grazed twice")
+
+
+func test_grazing_where_there_are_no_invertebrates_fails_rather_than_erroring():
+	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
+	assert_false(manager.graze_aquatic_invertebrates_at(Vector2(-9000000, -9000000)))
+
+
+func test_unloading_a_chunk_frees_its_invertebrate_sim_and_sprites():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	if not manager._aquatic_invertebrates.has(chunk_coord):
+		pending("no water in this exact chunk this seed")
+		return
+	manager._unload_chunk(chunk_coord)
+	assert_false(manager._aquatic_invertebrates.has(chunk_coord))
+	assert_false(manager._aquatic_invertebrates_sprites.has(chunk_coord))
 
 
 # -- fruit_near / take_fruit_at / try_plant_seed_at (bird endozoochory) -------

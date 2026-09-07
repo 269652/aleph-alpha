@@ -2933,23 +2933,46 @@ func _stash_step() -> void:
 ## bite (the bobber dips), then press the fish key again within the reaction
 ## window to land it (rarer catches yield more). Reeling too early or too
 ## late loses it. The HUD reads fishing_message.
+## Revised (2026-09-07, see docs/concept/fishing.md's own "Revised
+## (2026-09-07)" section): what's actually rewarded now depends on
+## catch_nearest_fish's own result, not rarity alone -- before this, the
+## reward item was purely rarity-driven and the real nearby fish (if any)
+## was only ever read for the flavour message, completely decoupled from
+## what landed in the inventory.
 func _fishing_step(delta: float) -> void:
 	_fishing.advance(delta)
 	if _fishing.phase() == FishingSession.CAUGHT:
 		var rarity := _fishing.rarity()
 		var count: int = FISH_REWARD_BY_RARITY.get(rarity, 1)
+		# Take the real, nearby fish (see FishRenderer) out of the water
+		# FIRST now, reading its own real species and forage-coupled mass
+		# (see FishGrowth) -- {"species": "", "mass_kg": 0.0} when nothing
+		# real was actually nearby, the same "purely cosmetic" fallback the
+		# old bare-string empty return already had.
+		var caught := {"species": "", "mass_kg": 0.0}
+		if _chunk_manager != null:
+			caught = _chunk_manager.catch_nearest_fish(position, FISH_CATCH_RADIUS)
+		var species: String = caught.get("species", "")
 		# Rare/legendary catches become their own buff-granting item (see
 		# FoodConsumption.FISH_BUFFS) so the rarity survives into the
-		# inventory instead of being lost the moment the reward is granted.
-		var fish_item_id: String = FISH_ITEM_ID_BY_RARITY.get(rarity, "fish")
-		inventory.add(_item_catalog.make(fish_item_id), count)
+		# inventory instead of being lost the moment the reward is granted --
+		# deliberately NOT crossed with species (still one generic rare/
+		# legendary item, whichever real fish if any was actually caught).
+		# Common/uncommon grants the real species item when a real fish was
+		# actually nearby (ItemCatalog's own trout/bluegill/koi/goldfish ids
+		# match ProceduralFishSprite.SPECIES_IDS one-for-one -- no id mapping
+		# needed), falling back to the flat generic "fish" exactly as before
+		# when nothing real was there.
+		var fish_item_id: String = FISH_ITEM_ID_BY_RARITY.get(rarity, species if species != "" else "fish")
+		# A real fish's own real caught mass (make_with_mass) when one was
+		# actually caught; otherwise the item's own static reference mass
+		# (make) -- exactly the old behaviour for an empty-looking spot.
+		var reward_item: Item = (
+			_item_catalog.make_with_mass(fish_item_id, caught["mass_kg"]) if species != ""
+			else _item_catalog.make(fish_item_id)
+		)
+		inventory.add(reward_item, count)
 		inventory_changed.emit()
-		# If a real, visible fish (see FishRenderer) happens to be nearby,
-		# make it disappear and name its species -- purely cosmetic, doesn't
-		# change what's rewarded (still the rarity-scaled item/count above).
-		var species := ""
-		if _chunk_manager != null:
-			species = _chunk_manager.catch_nearest_fish(position, FISH_CATCH_RADIUS)
 		if species != "":
 			_fishing_result_message = "Caught a %s %s! (x%d)" % [rarity, species, count]
 		else:

@@ -242,14 +242,65 @@ fished-down chunk visibly shows fewer markers on the next periodic refresh
 (`EarthChunkManager._refresh_creatures`), not just after a reload.
 
 What's still exactly as before: species is a per-tile deterministic pick,
-not DNA/phenotype-driven; a rare/legendary catch is its own item
-(`rare_fish`/`legendary_fish`, `FoodConsumption.FISH_BUFFS`) via a
-per-catch independent roll (`FishingMinigame.fish_rarity`), decoupled from
-the population sim; casting is visible (`fishing_cast.gd`,
+not DNA/phenotype-driven; casting is visible (`fishing_cast.gd`,
 `ProceduralBobberSprite`) and draws nearby fish toward the bobber
 (`EarthChunkManager.set_attraction_point`). Full DNA/evolution reuse,
 sexual selection, rare-phenotype desirability, bait-driven targeting, and
 taming/companion fish are all still open, unstarted work.
+
+**Revised (2026-09-07): what you actually catch is now the real species,
+weighing what that individual fish actually grew to** — see
+[aquatic_foraging.md](aquatic_foraging.md#revised-2026-09-07-real-per-species-diet-and-forage-coupled-mass)
+for the diet/growth mechanism this closes the catch-side loop for.
+Requested alongside forage-coupled mass in the same brainstorm: *"yes to
+real per-species items."*
+
+Before this, `catch_nearest_fish` returned a bare species `String` used
+ONLY for the flavour message ("Caught a common trout!") — the actual
+item granted was purely rarity-driven (`FISH_ITEM_ID_BY_RARITY.get(rarity,
+"fish")`), completely decoupled from which real fish, if any, was
+standing there. A koi and a bluegill granted the identical generic
+`"fish"` item. That decoupling is now closed:
+
+- `catch_nearest_fish(pixel_position, max_distance) -> Dictionary`
+  (`{"species": String, "mass_kg": float}`, empty species / `0.0` mass for
+  "nothing real nearby" — the same sentinel shape the old empty-string
+  return already used, just carrying one more real fact) replaces the bare
+  `String` return. All three real callers updated: the player's own rod
+  (`Player._fishing_step`), a piscivore bird's successful dive
+  (`PiscivoreBirdMarker._resolve_dive`), and the net (`Player.
+  _attempt_net_catch`, which already read `species` directly off the live
+  marker before freeing it and never consumed the return value — untouched).
+- **Four new real catalog items** — `trout`/`bluegill`/`koi`/`goldfish`
+  (plus their `cooked_` pairs, mirroring the existing generic `fish`/
+  `cooked_fish` pair exactly) — real per-species ids matching
+  `ProceduralFishSprite.SPECIES_IDS` one-for-one, so no second id mapping
+  layer was needed.
+- `ItemCatalog.make_with_mass(item_id, mass_kg) -> Item` is new: every
+  other catalog item resolves its own mass from a static per-id table
+  (`_mass_kg_for`) — a carrot is always the same reference weight. A
+  caught fish is the one item in this game whose real mass is only known
+  at the moment of catching (it depends on how well-fed that specific
+  individual was — see `FishGrowth`), so `make()`'s own static lookup
+  cannot answer it; this sibling entrypoint takes the real, already-known
+  mass directly instead of deriving one.
+- **Rod catches**: when a real, nearby `FishMarker` was actually caught
+  (`species != ""`), a COMMON/UNCOMMON rarity now grants that species'
+  own real item at its own real caught mass, instead of the flat generic
+  `fish`. RARE/LEGENDARY rarity still grants the existing
+  `rare_fish`/`legendary_fish` buff item (`FoodConsumption.FISH_BUFFS`)
+  UNCHANGED — species stays cosmetic at that tier, deliberately not
+  fragmented into eight rarity×species items nobody asked for — but now
+  ALSO carries the real caught mass via the same `make_with_mass`, rather
+  than the buff item's own flat reference weight. When nothing real was
+  actually nearby (a hole with no visible fish, or a distant cast), every
+  rarity tier falls back to exactly its old behaviour — the generic
+  `fish`/`rare_fish`/`legendary_fish` item at its own static reference
+  mass — so fishing an empty-looking spot is never worse off than before.
+- **A kingfisher's own successful catch** now also feeds `_hunger`/shows
+  its carried-fish sprite off the Dictionary's `species` field (`not
+  result.species.is_empty()`) rather than a bare string truthiness check
+  — behaviourally identical, just reading the new shape.
 
 **New since this doc was first written**: fish-eating birds (kingfishers)
 are live -- see [ecosystem_dynamics.md](ecosystem_dynamics.md#a-new-aerial-tier-ambient-flyers-and-one-predator)

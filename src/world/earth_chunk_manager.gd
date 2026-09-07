@@ -75,6 +75,8 @@ const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 const IllustratedWormSprite = preload("res://src/rendering/illustrated_worm_sprite.gd")
 const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
 const ProceduralAquaticVegetationSprite = preload("res://src/rendering/procedural_aquatic_vegetation_sprite.gd")
+const AquaticInvertebrates = preload("res://src/world/aquatic_invertebrates.gd")
+const ProceduralAquaticInvertebrateSprite = preload("res://src/rendering/procedural_aquatic_invertebrate_sprite.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
 const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
@@ -674,6 +676,13 @@ var _aquatic_vegetation: Dictionary = {}
 var _aquatic_vegetation_sprites: Dictionary = {}
 var _aquatic_vegetation_sprite_generator := ProceduralAquaticVegetationSprite.new()
 var _aquatic_vegetation_refresh_accumulator := 0.0
+## The second real aquatic food layer (see docs/concept/aquatic_foraging.md's
+## "Revised (2026-09-07)") -- mirrors _aquatic_vegetation's own exact shape
+## and gate, seeded alongside it in the same water-cell chunks.
+var _aquatic_invertebrates: Dictionary = {}
+var _aquatic_invertebrates_sprites: Dictionary = {}
+var _aquatic_invertebrates_sprite_generator := ProceduralAquaticInvertebrateSprite.new()
+var _aquatic_invertebrates_refresh_accumulator := 0.0
 ## Vector2i chunk_coord -> AntColony (see step_ants, docs/concept/soil_fauna.md
 ## "Ants").
 var _ant_colonies: Dictionary = {}
@@ -5379,6 +5388,23 @@ func step_aquatic_vegetation(delta_seconds: float) -> void:
 		_sync_aquatic_vegetation_sprites(chunk_coord)
 
 
+## Mirrors step_aquatic_vegetation's own exact shape (see AquaticInvertebrates,
+## docs/concept/aquatic_foraging.md's "Revised (2026-09-07)").
+func step_aquatic_invertebrates(delta_seconds: float) -> void:
+	_aquatic_invertebrates_refresh_accumulator += delta_seconds
+	if _aquatic_invertebrates_refresh_accumulator < GRASS_REFRESH_INTERVAL:
+		return
+	var elapsed := _aquatic_invertebrates_refresh_accumulator
+	_aquatic_invertebrates_refresh_accumulator = 0.0
+
+	var growth_modifier := _season_cycle.growth_modifier(_world_age_seconds)
+	for inverts in _aquatic_invertebrates.values():
+		inverts.advance(elapsed, growth_modifier)
+
+	for chunk_coord in _aquatic_invertebrates.keys():
+		_sync_aquatic_invertebrate_sprites(chunk_coord)
+
+
 ## The `accelerate_growth` spell atom's real hook (see docs/concept/
 ## spell_runtime.md): advances every wild crop patch in the chunk containing
 ## `global_tile` by `extra_seconds` -- the exact same real
@@ -7148,6 +7174,47 @@ func graze_aquatic_vegetation_at(pixel_position: Vector2) -> bool:
 	return true
 
 
+## Every real aquatic invertebrate patch within `radius_tiles` of
+## `pixel_position` -- mirrors aquatic_vegetation_near's own exact shape
+## (see AquaticInvertebrates, docs/concept/aquatic_foraging.md's "Revised
+## (2026-09-07)").
+func aquatic_invertebrates_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
+	var out: Array = []
+	var center := _world_tile_for_pixel(pixel_position)
+	var center_chunk := _chunk_coord_for_tile(center)
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var chunk_coord := center_chunk + Vector2i(dx, dy)
+			var inverts: AquaticInvertebrates = _aquatic_invertebrates.get(chunk_coord)
+			if inverts == null:
+				continue
+			var origin := chunk_coord * CHUNK_SIZE
+			for cell in inverts.get_patch_cells():
+				var tile: Vector2i = origin + cell
+				if maxi(absi(tile.x - center.x), absi(tile.y - center.y)) > radius_tiles:
+					continue
+				out.append({
+					"position": Vector2(
+						float(tile.x) + 0.5, float(tile.y) + 0.5
+					) * float(TerrainRenderer.TILE_SIZE),
+				})
+	return out
+
+
+## Grazes the invertebrate patch at `pixel_position`, if there is one --
+## mirrors graze_aquatic_vegetation_at's own exact shape.
+func graze_aquatic_invertebrates_at(pixel_position: Vector2) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var inverts: AquaticInvertebrates = _aquatic_invertebrates.get(chunk_coord)
+	if inverts == null:
+		return false
+	if not inverts.graze(tile - chunk_coord * CHUNK_SIZE):
+		return false
+	_sync_aquatic_invertebrate_sprites(chunk_coord)
+	return true
+
+
 ## Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
 ## weight-emergent worm mortality") -- mirrors take_worm_at's own shape
 ## exactly (same tile/chunk/patch lookup, same immediate re-sync so a
@@ -8148,6 +8215,46 @@ func _sync_aquatic_vegetation_sprites(chunk_coord: Vector2i) -> void:
 	_aquatic_vegetation_sprites[chunk_coord] = sprites
 
 
+## Mirrors _sync_aquatic_vegetation_sprites' own exact shape (see
+## AquaticInvertebrates, docs/concept/aquatic_foraging.md's "Revised
+## (2026-09-07)") -- a real invertebrate patch has no "surfacing" state to
+## gate on either, the same reason vegetation's own sync doesn't.
+func _sync_aquatic_invertebrate_sprites(chunk_coord: Vector2i) -> void:
+	if not _decorates(chunk_coord):
+		_drop_decoration(_aquatic_invertebrates_sprites, chunk_coord)
+		return
+	var inverts: AquaticInvertebrates = _aquatic_invertebrates.get(chunk_coord)
+	var sprites: Dictionary = _aquatic_invertebrates_sprites.get(chunk_coord, {})
+	if inverts == null:
+		return
+
+	for cell in sprites.keys().duplicate():
+		if not inverts.has_invertebrates(cell):
+			sprites[cell].free()
+			sprites.erase(cell)
+
+	var origin := chunk_coord * CHUNK_SIZE
+	for cell in inverts.get_patch_cells():
+		if sprites.has(cell):
+			continue
+		var sprite := Sprite2D.new()
+		sprite.texture = _aquatic_invertebrates_sprite_generator.generate_texture(
+			hash("%d_%d_aquatic_invertebrates" % [origin.x + cell.x, origin.y + cell.y])
+		)
+		# World scale from a world-space constant, never re-derived from
+		# the art canvas -- the same "raising SIZE for detail must not
+		# change how big it looks" trap this project has already hit
+		# twice (see ProceduralWormSprite's own identical doc comment).
+		sprite.scale = Vector2.ONE * ProceduralAquaticInvertebrateSprite.world_scale()
+		sprite.position = Vector2(
+			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
+			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+		)
+		_ground_decor_parent.add_child(sprite)
+		sprites[cell] = sprite
+	_aquatic_invertebrates_sprites[chunk_coord] = sprites
+
+
 ## Plants carried seed at a world position, if anything can grow there (see
 ## SeedDispersal.can_root_in and FlowerPatch.plant, which between them reject
 ## non-grassland, occupied and over-capacity cells). Returns true if a new
@@ -9059,7 +9166,15 @@ func startle_fish_near_waders(waders: PackedVector2Array) -> void:
 					break
 
 
-func catch_nearest_fish(pixel_position: Vector2, max_distance: float) -> String:
+## Revised (2026-09-07, see docs/concept/fishing.md's own "Revised
+## (2026-09-07)" section): returns {"species": String, "mass_kg": float}
+## instead of a bare species String -- {"": 0.0} sentinel (empty species,
+## zero mass) for "nothing real nearby", the same shape the old empty-
+## string return already used, just carrying one more real fact. Real
+## per-species catch items (see ItemCatalog.make_with_mass) need the
+## actual caught individual's own forage-coupled mass (FishGrowth), which
+## only the live marker itself -- freed by this same call -- ever knew.
+func catch_nearest_fish(pixel_position: Vector2, max_distance: float) -> Dictionary:
 	var nearest: Node2D = null
 	var nearest_distance := max_distance
 	for fish_list in _loaded_fish.values():
@@ -9069,14 +9184,15 @@ func catch_nearest_fish(pixel_position: Vector2, max_distance: float) -> String:
 				nearest = fish
 				nearest_distance = distance
 	if nearest == null:
-		return ""
+		return {"species": "", "mass_kg": 0.0}
 	var species: String = nearest.species
+	var mass_kg: float = nearest.mass_kg
 	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(nearest.position))
 	for chunk_key in _loaded_fish.keys():
 		_loaded_fish[chunk_key].erase(nearest)
 	nearest.free()
 	_ecosystem.record_catch(chunk_coord, 1.0)
-	return species
+	return {"species": species, "mass_kg": mass_kg}
 
 
 ## This pixel's chunk's aggregate fish population -- the duck-typed hook
@@ -10085,6 +10201,18 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_aquatic_vegetation_sprites[chunk_coord] = {}
 		_sync_aquatic_vegetation_sprites(chunk_coord)
 
+		# The second real aquatic food layer (see AquaticInvertebrates,
+		# docs/concept/aquatic_foraging.md's "Revised (2026-09-07)") -- same
+		# water_mask, same chunk, real ponds host both plants and insect
+		# life together. A different hash seed (the "aquatic_invertebrates"
+		# literal instead of "aquatic_vegetation") so the two layers don't
+		# seed onto the identical cells every time.
+		_aquatic_invertebrates[chunk_coord] = AquaticInvertebrates.new(
+			hash("%d_%d_aquatic_invertebrates" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, water_mask
+		)
+		_aquatic_invertebrates_sprites[chunk_coord] = {}
+		_sync_aquatic_invertebrate_sprites(chunk_coord)
+
 	var crop_sims := {}
 	var crop_markers := {}
 	for crop_id in WILD_CROP_IDS:
@@ -10801,6 +10929,11 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		sprite.free()
 	_aquatic_vegetation_sprites.erase(chunk_coord)
 	_aquatic_vegetation.erase(chunk_coord)
+
+	for sprite in _aquatic_invertebrates_sprites.get(chunk_coord, {}).values():
+		sprite.free()
+	_aquatic_invertebrates_sprites.erase(chunk_coord)
+	_aquatic_invertebrates.erase(chunk_coord)
 
 	_ant_colonies.erase(chunk_coord)
 	for marker in _ant_mound_markers.get(chunk_coord, []):
