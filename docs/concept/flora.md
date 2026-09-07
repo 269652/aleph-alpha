@@ -1335,16 +1335,45 @@ implementation of it. Two things differ from a turn, and both are what
   frame filled back in (reported: the canopy should accumulate snow twig by
   twig, on the canopy that is there). Snow pixels are composited OVER the
   season canopy instead, so nothing the season drew is ever removed -- at any
-  coverage every pixel the plain canopy painted is still painted -- and at
-  full coverage the whole snow frame lies on top of whichever canopy is
-  showing, blossom or autumn colour still visible around the snow-laden
-  boughs.
+  coverage every pixel the plain canopy painted is still painted -- and,
+  wherever it overlaps a branch that is really there (see the next point),
+  full coverage shows the whole snow frame, blossom or autumn colour still
+  visible around the snow-laden boughs.
 - **It settles from above.** A turn walks outward from where the boughs leave
   the trunk; snow lands on the top of the crown first and works down the
   twigs. So the trace is seeded from the crown's top edge rather than its
   foot -- the same "different start, same trace" shape growth already uses
   (`growth_order` starts at the trunk join, the turn at the whole bottom
   rim, snow at the top).
+- **It only ever settles where a branch really is (2026-09-07).** Reported
+  live, on cherry: "the snow accumulation is wrong and fills holes with
+  white instead of accumulating snow on branches per branch." The snow frame
+  is its OWN separate drawing -- a full crown's worth of snow-laden twigs,
+  not a snow-tinted copy of whichever season is currently showing -- so its
+  silhouette never lines up pixel-for-pixel with any given season's real
+  branch shape. `_snowed_canopy` used to composite the snow frame's opaque
+  pixels wherever THAT frame alone had paint, with no check against the
+  season canopy underneath, so wherever the two silhouettes disagreed it
+  painted solid snow colour into a real gap instead of a twig -- worst on
+  the sparse bare-winter canopy (measured on the real art: 55-61% of
+  cherry's, walnut's and apple's own "snowed" pixels there were gap fills,
+  not branches; not cherry-specific -- every species with a snow frame
+  shares the mechanism, cherry was simply the one reported live and the
+  worst of the three measured). Fixed by gating the snow blend on the
+  season canopy's own alpha first: a pixel the canopy left fully transparent
+  can never take snow, whatever the standalone snow frame draws there or
+  however full coverage is. See `ProceduralTreeSprite._snowed_canopy`'s own
+  doc comment and `test_illustrated_tree.gd`'s
+  `test_no_species_snows_into_a_transparent_canopy_gap` /
+  `test_snow_never_paints_a_pixel_the_canopy_left_fully_transparent`.
+  Unrelated to both of this feature's other named wrinkles: not the
+  bottom-up-wipe blend fixed below (that was HOW MUCH of a settled twig
+  showed; this is WHERE a twig is allowed to be at all), and not cherry's
+  own on-tree-row slicer fragmentation (see "One sheet or three" above and
+  `docs/progress.md`'s "composite tree fruit-row fix" entries) -- confirmed
+  directly by rendering walnut and apple through the identical pipeline and
+  finding the same defect at the same magnitude, so `CompositeSheetSlicer`
+  was correctly left untouched again.
 
 **It settles on the branches a tree HAS.** A sapling has put out only the
 inner part of its crown (see "A young tree has fewer branches" above), and the
