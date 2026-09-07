@@ -90,6 +90,48 @@ func test_an_unknown_season_still_yields_a_canopy():
 	)
 
 
+# -- the sapling growth sequence ---------------------------------------------
+#
+# One shared sheet (assets/sprites/trees/sapling.png), not per species: a
+# seed-to-young-shoot growth strip shown while a tree is shorter than the
+# player's own height (see docs/concept/flora.md's "Sapling phase"), instead
+# of a shrunk copy of the mature tree (reported: "small newborn trees ...
+# have a miniaturized full canopy").
+
+func test_the_sapling_sheet_has_ten_real_growth_frames():
+	assert_eq(trees.sapling_frame_count(), 10)
+
+
+func test_every_sapling_frame_is_a_real_distinct_drawing():
+	var seen := {}
+	for i in trees.sapling_frame_count():
+		var frame := trees.sapling_frame(i)
+		assert_not_null(frame, "sapling frame %d is missing" % i)
+		seen[frame.get_image().get_data()] = true
+	assert_eq(seen.size(), trees.sapling_frame_count(), "two sapling frames are pixel-identical")
+
+
+## Frame 0 (freshly planted) should read as much sparser than the last frame
+## (about to hand off to the real tree) -- the whole point of a growth STRIP
+## rather than one static sapling picture.
+func test_sapling_frames_grow_progressively_fuller():
+	var first := _opaque_share(trees.sapling_frame(0).get_image())
+	var last := _opaque_share(trees.sapling_frame(trees.sapling_frame_count() - 1).get_image())
+	assert_lt(first, last, "the first sapling frame should be sparser than the last")
+
+
+func test_sapling_frame_index_clamps_to_the_real_range():
+	assert_eq(
+		trees.sapling_frame(-5).get_image().get_data(),
+		trees.sapling_frame(0).get_image().get_data()
+	)
+	var last_index := trees.sapling_frame_count() - 1
+	assert_eq(
+		trees.sapling_frame(last_index + 50).get_image().get_data(),
+		trees.sapling_frame(last_index).get_image().get_data()
+	)
+
+
 # -- the fifth frame: snow ----------------------------------------------------
 #
 # A canopy sheet may carry a FIFTH drawing after the four seasons -- how much
