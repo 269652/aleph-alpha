@@ -109,10 +109,69 @@ decoupled from what follows it.
 
 ### Wiring
 
-`World._ready`'s interactive-launch branch (the plain "no `--solo`, no
-`--server`, no join argument" case) calls `_play_intro_splash()` instead
-of going straight to `_show_main_menu()`. Every other launch path is
-untouched.
+`World._ready` triggers the intro from the very TOP of the function —
+right after the license/integrity gate, before any of the expensive
+synchronous per-boot setup (`EarthChunkManager` construction, every
+shader layer, `MushroomMarker.warm_art_cache`, ~15 UI builder calls) —
+for the plain "no `--solo`, no `--server`, no join argument" case, then
+`await`s one `process_frame` so the engine actually presents that first
+frame before the rest of `_ready()` resumes. Every other launch path is
+untouched; the solo/server/join dispatch later in `_ready()` reuses the
+same `args` computed at the top rather than re-parsing them.
+
+**Not** wired at the point the code visually reads as belonging (right
+before `_show_main_menu()`, at the end of the interactive-launch branch)
+— see "A real early-launch bug" below for why that reads-naturally
+placement was actually the bug.
+
+### A real early-launch bug (found 2026-09-07, fixed same day)
+
+Originally wired at the end of `_ready()`, immediately before
+`_show_main_menu()` — reads naturally ("play the intro, then show the
+menu"), but means the intro's first frame can only appear once EVERY
+other `_ready()` step has already finished. A live launch on a loaded
+dev machine measured that setup taking **80+ real seconds**; the window
+sat on a blank/black screen the entire time, since nothing had been added
+to the display yet. Reported directly: "the intro scene... is still not
+shown before main menu." Confirmed via real timestamped launches (not
+just a code trace — the same "render before trusting a code trace"
+discipline this codebase already applies to sprite rendering claims): the
+sequencer's own timing held up fine once reached (Godot clamps process
+delta rather than reporting a catastrophic multi-second jump after a long
+synchronous gap), and `IntroSplashSheet.generate_textures()` itself was
+never the bottleneck (32/32 frames, under a second, even through
+`sprite_sheet_loader.gd`'s stale-cache fallback path) — the bug was
+purely about WHEN the intro node entered the tree relative to everything
+else, not the art or the timing math.
+
+Fixed by moving the trigger to the top of `_ready()` with a single
+`process_frame` yield (see "Wiring" above) — `_ready()` already awaits
+once, for the GitHub identity check, so a second mid-function suspension
+is an established pattern here, not a new one, and the yield happens
+before `_world_ready` is set, so the existing `_process`/
+`_unhandled_input` no-op guard (see that flag's own doc comment in
+`world.gd`) is unaffected. This guarantees the intro's first frame
+renders almost immediately (measured: ~1.2s after trigger on the same
+loaded machine, vs. ~94s before, and the ~1.2s is itself contention, not
+anything the intro or its yield adds) — a real, verified fix, not a
+full solution to the underlying slow-boot cost: the heavy per-boot setup
+itself is untouched and can still take a long time on a loaded machine,
+during which the intro is visible but effectively frozen on whichever
+frame it reached before the synchronous work resumed (Godot cannot
+process further frames for the intro while `_ready()`'s own thread is
+still busy). Smoothly animating the full 32-frame sequence WHILE the
+world loads in the background would need the heavy setup itself broken
+into yield-separated chunks (mirroring `update_with_progress`'s existing
+coroutine pattern) — a larger, real architectural change not attempted
+in this pass, and a known, honest gap (see Status below).
+
+No dedicated automated regression test covers this specific fix: it is a
+statement-ordering change within `World._ready()`, the same "thin Node
+wiring, untested glue" category `test_world_hud.gd`'s own doc comment
+already carves out for this exact function (nothing else in `_ready()`'s
+~150-line sequencing has a test pinning its call order either). Verified
+instead via real timestamped launches — the same live-launch discipline
+this fix's own root cause required to find in the first place.
 
 ## Status
 
@@ -125,6 +184,15 @@ untouched.
   `finished` twice — `IntroSplash`, `test_intro_splash.gd`.
 - ✅ Wired into the ordinary interactive boot path only — `World._ready`/
   `_play_intro_splash`; `--solo`/`--server`/join launches are unaffected.
+- ✅ Triggered before the expensive per-boot setup, not after — see "A
+  real early-launch bug" above. The intro's first frame now renders
+  almost immediately rather than after a blank-screen wait that measured
+  80+ seconds on a loaded machine.
+- ⬜ Does not animate smoothly while the world loads in the background —
+  it is visible immediately, but can sit frozen on whichever frame it
+  reached once the heavy synchronous per-boot setup resumes, since that
+  setup is not itself broken into yield points. A real, deliberately
+  deferred gap, not attempted in the early-launch-bug pass above.
 - ⬜ No audio. A logo intro without a sting/whoosh is a real, honest gap
   (this project has no music/SFX system wired up to hook into yet at
   all), not something this pass attempts.
