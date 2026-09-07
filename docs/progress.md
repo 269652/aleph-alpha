@@ -16402,3 +16402,62 @@ has two pre-existing failures on `main`,
 (expect 4 idle frames, both sheets now slice to 6) — flagged as a
 separate background task rather than fixed here, to keep this change
 scoped to the ant queen.
+
+### Compass in-world UI (`concept/wayfinding.md`, 2026-09-08)
+
+Asked directly, alongside the torch: "the compass when in hand should
+spawn a UI window with a compass point to north." Investigation found the
+Compass item's entire pure-logic layer (`src/gameplay/compass.gd` —
+bearing math, rough/fine quality reading, catalog entries, crafting
+recipes, art registry entries) has been on `main` since 2026-08-25, fully
+tested (`test_compass.gd`), with a real `/compass` dev-console call site —
+`docs/concept/wayfinding.md`'s own Status section already named "in-world
+UI" as the one deliberately-deferred gap across all five wayfinding
+instruments, and this session's own torch-lighting entry (just above/
+before this one) had already flagged the compass UI as "tracked and built
+separately." No other branch or worktree touched any compass-UI file
+(checked before starting: 495 branches, zero hits on an in-world compass
+window).
+
+✅ `Compass.is_compass_item_id`/`is_fine_item_id` (mirrors `TorchGlow.
+is_lit_item_id`'s own reasoning) gate a new `CompassWindow` (`scenes/
+compass_window.gd`) — a small always-on corner widget (top-left; the
+minimap already owns top-right), auto-shown/hidden every frame by
+`World._update_compass_window` based on the equipped item, the same
+"equip IS the gate, no keybind" shape `_update_torch_glow` already uses.
+Shows a needle rotated to the live bearing toward home
+(`Compass.bearing_degrees`/`reading_for` against `EarthChunkManager.
+spawn_chunk_coord()`'s tile center — the same "point me home" default the
+`/compass` command already reads) plus a numeric readout, correctly
+snapping to 8 positions for a rough compass vs. exact for a fine one
+(the same shared `reading_for` dispatch, so this can't drift from the
+console command's own behavior).
+
+**A real bug only a real render caught**: `tools/probe_compass_window.gd`
+found the needle's `rotation` silently reverting to 0.0 one frame after
+being set, whenever the `Label` was a `CenterContainer`'s own direct
+child — Godot's Container re-applies its own layout to a managed child on
+every sort pass, resetting the child's rotation along with its position/
+size. A code trace or headless test would never have surfaced this (the
+property reads back correctly synchronously; only a captured frame later
+shows it reverted). Fixed by wrapping the needle in a plain, non-Container
+`Control` that the `CenterContainer` centers instead, with the actual
+rotating `Label` positioned manually inside it — a plain `Control` never
+re-lays-out its own children, so the rotation sticks. Confirmed both
+visually and via an objective pixel-diff between captures at 0/90/180/270
+degrees (this investigation's own history shows a small rotated glyph is
+genuinely easy to misjudge by eye alone): a clean ▲/▶/▼/◀ at each, no
+clipping, readout legible throughout.
+
+Tests: `tests/unit/test_compass.gd` 15/15 (12 pre-existing + 3 new),
+`tests/unit/test_compass_window.gd` 6/6 (new, pure needle-angle/readout-
+text math), `tests/unit/test_world_compass_window_fanout.gd` 4/4 (new, the
+per-frame wiring itself, mirroring `test_world_torch_glow_fanout.gd`).
+Regression-checked: `test_world_torch_glow_fanout.gd` 3/3, `test_dev_
+console.gd` 10/10 (unaffected).
+
+⬜ Not attempted: a bound-waypoint second target (`wayfinding.md`'s own
+"switchable by the player" clause — today's needle always points home,
+never a player-set waypoint), and the other four instruments' own in-world
+UI (map render, forecast label, etc. — unchanged, separate gaps named in
+that doc's own Status section).

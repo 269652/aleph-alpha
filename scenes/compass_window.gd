@@ -42,15 +42,37 @@ func _ready() -> void:
 	needle_box.custom_minimum_size = Vector2(0, 48)
 	root.add_child(needle_box)
 
+	# A plain, non-Container Control between the CenterContainer and the
+	# rotating Label -- NOT redundant nesting. A Container re-applies its
+	# own layout to a direct child on every sort pass (theme changes, size
+	# changes, and more), and that pass resets the child's OWN rotation
+	# back to 0 as part of positioning it -- caught by a real render, not
+	# headless (tools/probe_compass_window.gd showed needle.rotation
+	# silently reverting to 0.0 one frame after being set to a nonzero
+	# value, only when the Label was CenterContainer's direct child). The
+	# wrapper is what CenterContainer actually manages/centers (never
+	# rotated itself); the Label inside it is positioned manually below and
+	# free to rotate, since a plain Control never re-lays-out its children.
+	var needle_wrapper := Control.new()
+	needle_wrapper.custom_minimum_size = Vector2(40, 40)
+	needle_box.add_child(needle_wrapper)
+
 	_needle = Label.new()
 	_needle.text = NEEDLE_GLYPH
 	_needle.add_theme_font_size_override("font_size", 28)
+	# MUST add_child before reading get_minimum_size(): an orphan Label not
+	# yet part of the live tree resolves its own font metrics against an
+	# incomplete theme context and under-reports its size (also caught by
+	# the same real-render probe -- see its own history for the details).
+	needle_wrapper.add_child(_needle)
+	var needle_size := _needle.get_minimum_size()
+	# Centered manually within the wrapper's own fixed box (a plain Control
+	# doesn't do this for its children the way a Container would).
+	_needle.position = (needle_wrapper.custom_minimum_size - needle_size) / 2.0
 	# The needle rotates around its own visual center, not its top-left
 	# corner -- Control.pivot_offset is in the control's own local pixel
-	# space, so this must be set after the label has a real size (its font
-	# size above is fixed, so its minimum size is already known here).
-	_needle.pivot_offset = _needle.get_minimum_size() / 2.0
-	needle_box.add_child(_needle)
+	# space.
+	_needle.pivot_offset = needle_size / 2.0
 
 	_reading_label = Label.new()
 	_reading_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

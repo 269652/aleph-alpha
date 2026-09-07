@@ -44,6 +44,7 @@ const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 const DevConsole = preload("res://scenes/dev_console.gd")
 const InventoryWindow = preload("res://scenes/inventory_window.gd")
+const CompassWindow = preload("res://scenes/compass_window.gd")
 const CraftingWindow = preload("res://scenes/crafting_window.gd")
 const SkillTreeWindow = preload("res://scenes/skill_tree_window.gd")
 const CreaturePanel = preload("res://scenes/creature_panel.gd")
@@ -445,6 +446,12 @@ var _item_catalog := ItemCatalog.new()
 var _crafting_recipe_book := CraftingRecipeBook.new()
 var _dev_console: PanelContainer
 var _inventory_window: PanelContainer
+## The compass's own in-world HUD -- see docs/concept/wayfinding.md and
+## CompassWindow's own doc comment. Built once, auto-shown/hidden every
+## frame by _update_compass_window based on the equipped item (mirroring
+## TorchGlow's own "one node, gated on equip" shape), not toggled by a
+## keybind like the console/inventory windows above.
+var _compass_window: PanelContainer
 var _crafting_window: CraftingWindow
 var _skill_window: SkillTreeWindow
 var _settings_overlay: SettingsOverlay
@@ -802,6 +809,7 @@ func _ready() -> void:
 	_build_spell_bar()
 	_build_dev_console()
 	_build_inventory_window()
+	_build_compass_window()
 	_build_crafting_window()
 	_build_skill_window()
 	_build_settings_overlay()
@@ -1224,6 +1232,24 @@ func _build_inventory_window() -> void:
 	_inventory_window.item_clicked.connect(_on_inventory_item_clicked)
 	_inventory_window.unequip_requested.connect(_on_inventory_unequip_requested)
 	_inventory_window.items_reordered.connect(_on_inventory_items_reordered)
+
+
+## Builds the compass's own in-world HUD (see CompassWindow), hidden until
+## _update_compass_window shows it based on the equipped item -- unlike the
+## dev console/inventory window above, there is no keybind toggle: a
+## compass reads at a glance while walking, the same "one node, gated on
+## equip, no keybind" shape TorchGlow already uses. Top-left corner, an
+## empty corner of the HUD (the minimap already owns top-right -- see
+## $UI/Minimap in world.tscn).
+func _build_compass_window() -> void:
+	_compass_window = CompassWindow.new()
+	_compass_window.theme = _ui_theme
+	_compass_window.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_compass_window.offset_left = 8.0
+	_compass_window.offset_top = 8.0
+	_compass_window.offset_right = 104.0
+	_compass_window.offset_bottom = 116.0
+	_ui.add_child(_compass_window)
 
 
 ## Clicking an inventory row activates that item (see Player.activate_item_id):
@@ -5064,6 +5090,7 @@ func _client_process(delta: float) -> void:
 	var sunlight := _solar_position.sunlight_intensity(elevation)
 	_day_night.color = day_night_tint_for(sunlight)
 	_update_torch_glow(local_player)
+	_update_compass_window(local_player)
 	# The river strokes lift toward moonlight from the SAME sunlight -- the
 	# CanvasModulate above multiplies every canvas pixel, and without the
 	# lift the current marks fall below visibility exactly when the world
@@ -5296,6 +5323,33 @@ func _update_torch_glow(local_player: Player) -> void:
 	_torch_glow_mesh.visible = lit
 	if lit:
 		_torch_glow_mesh.global_position = local_player.global_position
+
+
+## Pushes the compass window's own visibility/reading every frame -- see
+## docs/concept/wayfinding.md, CompassWindow's own doc comment, and
+## _update_torch_glow just above (the same "equip IS the gate" shape).
+## Shown only while a compass-family item (Compass.is_compass_item_id) is
+## the equipped item -- a compass put away tells you nothing, same as an
+## unlit torch. Bearing target mirrors _handle_compass_command's own "point
+## me home" default (EarthChunkManager.spawn_chunk_coord's tile center,
+## docs/concept/wayfinding.md's "natural default target before the player
+## ever sets their own waypoint") -- a bound-waypoint target is that doc's
+## own still-open second reference, not attempted here.
+func _update_compass_window(local_player: Player) -> void:
+	var equipped := local_player.equipped_item
+	var equipped_id := equipped.id if equipped != null else ""
+	var shown := Compass.is_compass_item_id(equipped_id)
+	_compass_window.visible = shown
+	if not shown:
+		return
+	var chunk_coord := _chunk_manager.spawn_chunk_coord()
+	var centre_tile := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(
+		EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2
+	)
+	var target_world_position := _spawn_position_for_tile(centre_tile)
+	var bearing := Compass.bearing_degrees(local_player.global_position, target_world_position)
+	var reading := Compass.reading_for(bearing, Compass.is_fine_item_id(equipped_id))
+	_compass_window.update_reading(reading)
 
 
 ## Searches an expanding ring around a candidate spawn tile for dry land, in
