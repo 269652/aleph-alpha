@@ -43,6 +43,15 @@ func _colony_with_one_hive() -> BeeColony:
 class StubFlowerWorld:
 	var flowers: Array = []
 	var taken: Array = []
+	## Real honeybee/solitary-bee fruit-tree pollination (see bees.md's
+	## own doc comment on this being the LIVE replacement for the retired
+	## decorative bee's own TREE_POLLINATING_SPECIES path) -- shares the
+	## identical {"position", "nectar"} dict shape flowers_near already
+	## uses (see EarthChunkManager.blossoms_near's own real return
+	## shape), so the same StubFlowerWorld covers both without a second
+	## stub class.
+	var blossoms: Array = []
+	var pollinated: Array = []
 	func flowers_near(position: Vector2, radius_tiles: int) -> Array:
 		var out: Array = []
 		for f in flowers:
@@ -55,6 +64,30 @@ class StubFlowerWorld:
 			if flowers[i]["position"].distance_to(position) < 0.01 and float(flowers[i].get("nectar", 0.0)) > 0.0:
 				flowers[i]["nectar"] = 0.0
 				return true
+		return false
+	func blossoms_near(position: Vector2, radius_tiles: int) -> Array:
+		var out: Array = []
+		for b in blossoms:
+			if position.distance_to(b["position"]) / float(TerrainRenderer.TILE_SIZE) <= float(radius_tiles):
+				out.append(b)
+		return out
+	func record_pollination_visit_at(position: Vector2, _visit_weight: float = 1.0) -> bool:
+		pollinated.append(position)
+		for b in blossoms:
+			if b["position"].distance_to(position) < 0.01:
+				return true
+		return false
+
+
+## A world implementing only the flower half of the contract -- no
+## blossoms_near/record_pollination_visit_at at all, mirroring
+## AmbientFlyerMarker's own has_method("blossoms_near") defensive gate
+## (a world that predates/doesn't offer tree pollination must never
+## crash a scout reaching for it).
+class MinimalFlowerWorld:
+	func flowers_near(_position: Vector2, _radius_tiles: int) -> Array:
+		return []
+	func drink_nectar_at(_position: Vector2) -> bool:
 		return false
 
 
@@ -226,6 +259,65 @@ func test_a_scout_never_commits_to_a_flower_that_isnt_there():
 func test_a_scout_gives_up_after_max_scout_seconds_and_heads_home_empty_handed():
 	_make_scout(StubFlowerWorld.new())
 	assert_true(_run_until_freed())
+
+
+# -- fruit-tree pollination: the LIVE replacement for the retired -----------
+# -- decorative bee's own TREE_POLLINATING_SPECIES path (see -----------
+# -- docs/concept/bees.md and AmbientFlyerRenderer's own retirement) --------
+#
+# Real honeybees (and real solitary bees) are genuine pollinators of
+# blossoming fruit trees, not just flower-nectar feeders -- retiring the
+# old decorative "bee" without giving this real forager the identical
+# capability would have silently dropped fruit-tree pollination from the
+# game entirely, a real regression this closes instead.
+
+func test_a_scout_commits_to_a_real_blossoming_tree_when_no_flower_is_nearer():
+	var world := StubFlowerWorld.new()
+	world.blossoms = [{"position": Vector2(5, 0), "species": "cherry", "nectar": 1.0}]
+	_make_scout(world)
+	var committed := false
+	for i in 200:
+		marker._process(0.05)
+		if marker._behavior.phase != BeeForageBehavior.Phase.SCOUTING:
+			committed = true
+			break
+	assert_true(committed, "a real blossoming tree well within sensing range should be committed to")
+
+
+func test_a_successful_blossom_trip_pollinates_the_tree_not_drinks_nectar():
+	var colony := _colony_with_one_hive()
+	var cell: Vector2i = colony.hive_cells()[0]
+	var world := StubFlowerWorld.new()
+	world.blossoms = [{"position": Vector2(4, 0), "species": "cherry", "nectar": 1.0}]
+	marker.setup(world, colony, cell)
+	marker.target_position = Vector2(4, 0)
+	marker._target_kind = "blossom"
+	marker.hive_position = Vector2.ZERO
+	marker.position = Vector2(3, 0)
+	add_child_autofree(marker)
+	assert_true(_run_until_freed())
+	assert_eq(world.pollinated.size(), 1, "a blossom trip should pollinate the tree")
+	assert_eq(world.taken.size(), 0, "a blossom trip should never call drink_nectar_at")
+
+
+func test_a_flower_is_preferred_over_a_blossom_at_equal_distance():
+	var world := StubFlowerWorld.new()
+	world.flowers = [{"position": Vector2(5, 0), "species": "daisy", "nectar": 1.0}]
+	world.blossoms = [{"position": Vector2(5, 0), "species": "cherry", "nectar": 1.0}]
+	_make_scout(world)
+	var found := marker._sense_food_nearby()
+	assert_eq(found.get("kind"), "flower")
+
+
+func test_scouting_never_crashes_when_the_world_has_no_blossoms_near_method():
+	# Mirrors AmbientFlyerMarker's own has_method("blossoms_near") gate --
+	# a world that only implements the flower half (e.g. an isolated test
+	# double, or in principle a future non-EarthChunkManager world) must
+	# never crash reaching for a method it doesn't have.
+	_make_scout(MinimalFlowerWorld.new())
+	for i in 20:
+		marker._process(0.05)
+	assert_ne(marker.position, Vector2.ZERO)
 
 
 func test_max_scout_seconds_is_derived_not_eyeballed():

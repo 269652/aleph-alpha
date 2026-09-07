@@ -84,6 +84,18 @@ const MAX_SCOUT_SECONDS := (
 ## AntForagerMarker.target_position's own backward-compatible contract
 ## (a direct construction can still set this before add_child).
 var target_position: Vector2 = Vector2.ZERO
+## Which kind of target this trip committed to (see _sense_food_nearby):
+## "flower" (drunk via _world.drink_nectar_at) or "blossom" (a real,
+## pollinator-needing, blossoming fruit tree, pollinated via
+## _world.record_pollination_visit_at) -- real honeybees, and real
+## solitary bees, are genuine fruit-tree pollinators too, not just
+## flower-nectar feeders. This is deliberately the ONE live path either
+## kind of bee actually visits a tree: the retired decorative ambient
+## "bee" (see AmbientFlyerRenderer/docs/concept/bees.md) was the only
+## previous path via its own TREE_POLLINATING_SPECIES, and this feature
+## replaces it rather than silently dropping tree pollination along
+## with the decorative species it retires.
+var _target_kind := "flower"
 ## Where this forager returns to once its trip resolves either way. Also
 ## this scout's own home anchor while SCOUTING.
 var hive_position: Vector2 = Vector2.ZERO
@@ -253,6 +265,7 @@ func _step_scouting(delta: float) -> void:
 		found = _sense_food_nearby()
 	if not found.is_empty():
 		target_position = found.position
+		_target_kind = found.get("kind", "flower")
 		_behavior.commit_to_food()
 		return
 	var heading := _movement.direction_at(hive_position, position, _elapsed_time, wander_seed)
@@ -262,8 +275,15 @@ func _step_scouting(delta: float) -> void:
 ## Real, LOCAL sensing -- ONLY within BeeColony.SENSE_RADIUS_TILES of
 ## this scout's OWN current position, never the hive's whole forage
 ## reach -- mirrors AntForagerMarker._sense_food_nearby's own real,
-## non-omniscient shape exactly, trimmed to the one food kind a bee
-## actually looks for.
+## non-omniscient shape exactly. Two real food kinds, checked in order:
+## a flower first (the everyday case), then -- only if none is near --
+## a real blossoming, pollinator-needing fruit tree (see
+## _target_kind's own doc comment on why this exists at all: the real
+## LIVE replacement for the retired decorative bee's tree-pollination
+## path, not a new mechanic invented here). Both share the identical
+## {"position", "nectar"} real-world shape (see EarthChunkManager.
+## blossoms_near's own doc comment), so this is a straightforward
+## second check, not a parallel targeting system.
 func _sense_food_nearby() -> Dictionary:
 	if _world == null:
 		return {}
@@ -272,18 +292,31 @@ func _sense_food_nearby() -> Dictionary:
 	var flowers: Array = _world.flowers_near(position, sense_radius_tiles)
 	flowers = flowers.filter(func(f): return position.distance_to(f["position"]) <= sense_radius_px)
 	flowers = flowers.filter(func(f): return float(f.get("nectar", 0.0)) > 0.0)
-	if flowers.is_empty():
-		return {}
-	return {"position": flowers[0]["position"], "cluster_size": flowers.size()}
+	if not flowers.is_empty():
+		return {"position": flowers[0]["position"], "kind": "flower", "cluster_size": flowers.size()}
+	if _world.has_method("blossoms_near"):
+		var blossoms: Array = _world.blossoms_near(position, sense_radius_tiles)
+		blossoms = blossoms.filter(func(b): return position.distance_to(b["position"]) <= sense_radius_px)
+		if not blossoms.is_empty():
+			return {"position": blossoms[0]["position"], "kind": "blossom", "cluster_size": blossoms.size()}
+	return {}
 
 
 ## Re-checks the real world on genuine arrival -- something else may
-## have drained the bloom in the time this bee spent flying over (see
-## AntForagerMarker._resolve_arrival_at_food's own identical reasoning).
+## have drained the bloom (or, for a blossom, simply nothing is wrong at
+## all: pollination is not a depleting resource, see blossoms_near's own
+## doc comment -- record_pollination_visit_at can still fail if the
+## tree itself is no longer there) in the time this bee spent flying
+## over (see AntForagerMarker._resolve_arrival_at_food's own identical
+## reasoning). A blossom target is pollinated, never drunk from -- the
+## two real methods are not interchangeable.
 func _resolve_arrival_at_food() -> void:
 	var succeeded := false
 	if _world != null:
-		succeeded = _world.drink_nectar_at(target_position)
+		if _target_kind == "blossom":
+			succeeded = _world.record_pollination_visit_at(target_position)
+		else:
+			succeeded = _world.drink_nectar_at(target_position)
 	_behavior.arrive_at_food(succeeded)
 
 
