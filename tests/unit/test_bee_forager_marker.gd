@@ -43,6 +43,14 @@ func _colony_with_one_hive() -> BeeColony:
 class StubFlowerWorld:
 	var flowers: Array = []
 	var taken: Array = []
+	## Real EarthChunkManager.current_season() -- read by the scent-gradient
+	## wander bias (see ScentField) to score flower entries the same way the
+	## real field does. Defaults to spring so a stub blossom entry (spring-
+	## only in the real world, see blossoms_near) is usable out of the box
+	## without every test having to set this explicitly.
+	var season := "spring"
+	func current_season() -> String:
+		return season
 	## Real honeybee/solitary-bee fruit-tree pollination (see bees.md's
 	## own doc comment on this being the LIVE replacement for the retired
 	## decorative bee's own TREE_POLLINATING_SPECIES path) -- shares the
@@ -80,13 +88,18 @@ class StubFlowerWorld:
 
 
 ## A world implementing only the flower half of the contract -- no
-## blossoms_near/record_pollination_visit_at at all, mirroring
-## AmbientFlyerMarker's own has_method("blossoms_near") defensive gate
-## (a world that predates/doesn't offer tree pollination must never
-## crash a scout reaching for it).
+## blossoms_near/record_pollination_visit_at/current_season at all,
+## mirroring AmbientFlyerMarker's own has_method("blossoms_near") defensive
+## gate (a world that predates/doesn't offer tree pollination, or season
+## reporting, must never crash a scout reaching for either).
 class MinimalFlowerWorld:
-	func flowers_near(_position: Vector2, _radius_tiles: int) -> Array:
-		return []
+	var flowers: Array = []
+	func flowers_near(position: Vector2, radius_tiles: int) -> Array:
+		var out: Array = []
+		for f in flowers:
+			if position.distance_to(f["position"]) / float(TerrainRenderer.TILE_SIZE) <= float(radius_tiles):
+				out.append(f)
+		return out
 	func drink_nectar_at(_position: Vector2) -> bool:
 		return false
 
@@ -314,6 +327,126 @@ func test_scouting_never_crashes_when_the_world_has_no_blossoms_near_method():
 	# a world that only implements the flower half (e.g. an isolated test
 	# double, or in principle a future non-EarthChunkManager world) must
 	# never crash reaching for a method it doesn't have.
+	_make_scout(MinimalFlowerWorld.new())
+	for i in 20:
+		marker._process(0.05)
+	assert_ne(marker.position, Vector2.ZERO)
+
+
+# -- distant detection: attraction from beyond close sensing range ---------
+#
+# Real bees are drawn to blossom/flower scent from well outside the range
+# at which they could already commit to landing on one -- see docs/concept/
+# flora.md#tree-blossoms-emit-real-scent-too / bees.md's own "A scout also
+# detects scent at range" addition. Local sensing (_sense_food_nearby,
+# BeeColony.SENSE_RADIUS_TILES) is UNCHANGED and still preferred whenever it
+# finds something; _sense_distant_food is a wider (DISTANT_SENSE_RADIUS_
+# TILES), lower-priority fallback consulted only when it finds nothing.
+#
+# NOT a gradient-steering blend (contrast AmbientFlyerMarker's own
+# SCENT_STEER_WEIGHT for butterflies): ScentField.RADIUS_TILES (6 tiles,
+# how far a real scent plume physically carries) is SMALLER than
+# BeeColony.SENSE_RADIUS_TILES (9) already, so a gradient sampled from the
+# scout's own position could never contribute anything by the time this
+# fallback is even reached -- anything within gradient range would already
+# have been within guaranteed-commit range. See DISTANT_SENSE_RADIUS_TILES's
+## own doc comment for the full reasoning.
+
+## Beyond SENSE_RADIUS_TILES (so _sense_food_nearby finds nothing and the
+## scout cannot simply commit) but within DISTANT_SENSE_RADIUS_TILES (so
+## the wider detection query can still reach it).
+const _BEYOND_CLOSE_SENSE_TILES := BeeColony.SENSE_RADIUS_TILES + 3.0
+
+
+func test_a_scout_commits_to_a_distant_blossom_beyond_close_sensing_range():
+	var world := StubFlowerWorld.new()
+	var far_position := Vector2(_BEYOND_CLOSE_SENSE_TILES * float(TerrainRenderer.TILE_SIZE), 0)
+	world.blossoms = [{"position": far_position, "species": "cherry", "nectar": 1.0}]
+	_make_scout(world)
+
+	var found := marker._sense_distant_food()
+	assert_eq(found.get("position"), far_position)
+	assert_eq(found.get("kind"), "blossom")
+
+
+func test_a_scout_commits_to_a_distant_flower_beyond_close_sensing_range():
+	var world := StubFlowerWorld.new()
+	var far_position := Vector2(_BEYOND_CLOSE_SENSE_TILES * float(TerrainRenderer.TILE_SIZE), 0)
+	world.flowers = [{"position": far_position, "species": "rose", "nectar": 1.0}]
+	_make_scout(world)
+
+	var found := marker._sense_distant_food()
+	assert_eq(found.get("position"), far_position)
+	assert_eq(found.get("kind"), "flower")
+
+
+func test_distant_food_finds_nothing_beyond_the_wider_home_range():
+	var world := StubFlowerWorld.new()
+	var too_far := Vector2((BeeColony.FORAGE_RADIUS_TILES + 3.0) * float(TerrainRenderer.TILE_SIZE), 0)
+	world.flowers = [{"position": too_far, "species": "rose", "nectar": 1.0}]
+	_make_scout(world)
+
+	assert_true(marker._sense_distant_food().is_empty())
+
+
+func test_distant_food_finds_nothing_when_the_world_has_nothing_at_all():
+	_make_scout(StubFlowerWorld.new())
+	assert_true(marker._sense_distant_food().is_empty())
+
+
+## Real superposition (see ScentField's own docstring: "a dense clump is a
+## genuinely stronger signal... which gives butterflies and bees a reason to
+## gather at meadows") -- an isolated bloom, however close, loses to a
+## cluster whose COMBINED concentration outscores it, even when the cluster
+## is individually farther away and each single bloom in it is weaker.
+func test_a_scout_prefers_a_real_cluster_over_a_closer_lone_bloom():
+	var world := StubFlowerWorld.new()
+	var lone_but_closer := Vector2(_BEYOND_CLOSE_SENSE_TILES * float(TerrainRenderer.TILE_SIZE), 0)
+	var cluster_center := Vector2(0, (_BEYOND_CLOSE_SENSE_TILES + 1.0) * float(TerrainRenderer.TILE_SIZE))
+	var tile := float(TerrainRenderer.TILE_SIZE)
+	# Same species (daisy, in bloom every growing season -- see
+	# FlowerSpecies) for both, so clustering is the ONLY variable: a
+	# species-strength mismatch (e.g. a summer-only rose scoring zero
+	# against spring's default season) would "win" the assertion for the
+	# wrong reason.
+	world.flowers = [{"position": lone_but_closer, "species": "daisy", "nectar": 1.0}]
+	for i in 5:
+		world.flowers.append({
+			"position": cluster_center + Vector2(float(i) * tile * 0.5, 0), "species": "daisy", "nectar": 1.0
+		})
+	_make_scout(world)
+
+	var found := marker._sense_distant_food()
+	# Whichever cluster member actually scores highest (not necessarily
+	# cluster_center itself -- a more central member can out-score an edge
+	# one), it must not be the closer, but lone and fainter, tulip.
+	assert_ne(
+		found.get("position"), lone_but_closer,
+		"the real cluster should out-pull the closer lone bloom"
+	)
+	assert_almost_eq(
+		found.get("position", Vector2.ZERO).distance_to(cluster_center), 0.0, tile * 2.5,
+		"the winner should be one of the clustered blooms"
+	)
+
+
+## has_method("current_season") is defensive (mirrors has_method(
+## "blossoms_near")): a world that predates/doesn't offer season reporting
+## must never crash reaching for distant detection, and should still find a
+## real flower (falling back to a default season for scoring) rather than
+## refusing to look at all.
+func test_distant_food_still_finds_a_flower_when_the_world_has_no_current_season_method():
+	var world := MinimalFlowerWorld.new()
+	var far_position := Vector2(_BEYOND_CLOSE_SENSE_TILES * float(TerrainRenderer.TILE_SIZE), 0)
+	world.flowers = [{"position": far_position, "species": "rose", "nectar": 1.0}]
+	_make_scout(world)
+
+	var found := marker._sense_distant_food()
+	assert_eq(found.get("position"), far_position)
+	assert_eq(found.get("kind"), "flower")
+
+
+func test_scouting_never_crashes_when_the_world_has_no_current_season_method():
 	_make_scout(MinimalFlowerWorld.new())
 	for i in 20:
 		marker._process(0.05)

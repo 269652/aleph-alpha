@@ -562,21 +562,38 @@ The result is emergent rather than scripted: nothing places butterflies at
 flowers: they accumulate there because that is where the signal is strongest.
 
 **Bees (`BeeForagerMarker`, honeybee hives and wild bee nests alike — see
-`bees.md`) are a separate system, not `AmbientFlyerRenderer`, but follow
-the identical gradient while scouting** (2026-09-07): once nothing is
-within its close, guaranteed-commit sensing range, a scout queries
-flowers and blossoms across its whole home range
-(`BeeColony.FORAGE_RADIUS_TILES`) and leans its wander toward the
-strongest combined signal — a real distant orchard or meadow now pulls a
-bee before it wanders into guaranteed range by chance, closing blossom →
+`bees.md`) are a separate system, not `AmbientFlyerRenderer`, and detect
+scent at range rather than steering up a gradient** (2026-09-07): once
+nothing is within its close, guaranteed-commit sensing range
+(`BeeColony.SENSE_RADIUS_TILES`), a scout also checks its WHOLE home
+range (`BeeColony.FORAGE_RADIUS_TILES`) for flowers/blossoms and commits
+straight to whichever real source scores highest — closing blossom →
 scent → bee attraction → visit → fruit set into an actual loop rather
-than three unconnected mechanisms. Blended, not absolute
-(`BeeForagerMarker.SCENT_STEER_WEIGHT`, mirroring
-`AmbientFlyerMarker.SCENT_STEER_WEIGHT`'s own "partial bias, not a
-beeline" reasoning) — but weighted higher than a butterfly's, grounded in
-the real behavioural difference the word itself comes from: a foraging
-honeybee with a scent bearing flies a comparatively direct line, where a
-butterfly's flight is erratic almost as a rule.
+than three unconnected mechanisms.
+
+This is deliberately NOT a gradient blend (contrast the butterfly
+mechanism just above, or the design originally sketched here): a real
+scent plume only carries `ScentField.RADIUS_TILES` (6 tiles), which is
+*smaller* than a bee's own `SENSE_RADIUS_TILES` (9) — so a gradient
+sampled from the scout's own position could never register anything by
+the time this wider check even runs; anything close enough to smell
+would already have been close enough to commit to directly. (A
+butterfly's own landing distance sits *below* 6 tiles, which is exactly
+what leaves it a real gap where gradient-steering matters — bees and
+butterflies are not interchangeable here, and the first draft of this
+section wrongly assumed they were.) The honest fix is a wider DETECTION
+range instead: real honeybees do orient toward a source well beyond
+where a plume alone would resolve a direction, combining scent with
+memory and landmarks — simplified here to "detectable anywhere in the
+home range."
+
+Ranking still uses `ScentField.concentration_at` (not merely nearest-
+first), so real superposition still applies: several blooms clustered
+together outscore one individually-stronger bloom sitting alone, and a
+more strongly-scented species (apple over cherry, a rose over a tulip)
+wins between two otherwise-similar candidates — the same "a meadow pulls
+harder than a single flower" point the field's own docstring makes,
+just resolved once at detection time rather than continuously steered.
 
 ### Foraging is a cycle, not a stable attractor
 
