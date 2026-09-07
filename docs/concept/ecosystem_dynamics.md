@@ -850,9 +850,17 @@ neighbourhood instead of `get_tree().get_nodes_in_group(FLOCK_GROUP)`.
   tree now measurably nudges that tree's yield (`FruitingModel.
   pollination_factor`, `EarthChunkManager.blossoms_near`/
   `record_pollination_visit_at` — see [flora.md](flora.md)'s pollination
-  feedback). Still open: the reverse direction, a region light on flowers
-  hatching fewer butterflies/bees (pollinator numbers are still purely
-  decorative, not fed by what they visit).
+  feedback) — and, as of 2026-09-07, this is a genuine hard gate, not a
+  soft nudge: zero real visits this bearing cycle means zero fruit AND no
+  new saplings spread from that tree (`EarthChunkManager.
+  step_tree_spread`'s own pollination filter), for either species. A
+  blossom also now emits real scent onto the same field a flower does
+  (`TreeSpecies.blossom_scent_for`/`ScentField`), which a bee scout
+  detects and heads toward from across its whole home range even before
+  wandering into guaranteed sensing range. Still open: the reverse
+  direction, a region light on flowers hatching fewer butterflies/bees
+  (pollinator numbers are still purely decorative, not fed by what they
+  visit).
 - ~~Should ambient flyers eventually graduate to their own lightweight
   aggregate population...~~ **Resolved for songbirds, still open for
   pollinators.** Robin and sparrow now have a real per-chunk aggregate
