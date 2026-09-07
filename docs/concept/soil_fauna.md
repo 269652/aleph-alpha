@@ -294,6 +294,23 @@ watched the bird peck at them.
   section). What's left of the original item (ants as detritivores of
   `fly_colony.gd` CARRION, as opposed to their own dead) is still open,
   see that section's own scope note.
+- ✅ **A real ant queen** (`has_queen_at`/`refounding_progress_at` in
+  `src/world/ant_colony.gd`, `src/rendering/ant_queen_marker.gd`) —
+  added live, directly after `BeeColony` got the analogous treatment:
+  "give ants a real queen as well". A DELIBERATE divergence from the bee
+  mechanic, not a port of it — `has_queen_at` is a derived read of
+  `population_at(cell) > 0.0` (real ant queens are irreplaceable by
+  workers in the vast majority of species, so there is no real
+  "queenless but still populated, declining on a requeening clock" state
+  for ants the way bees genuinely have one), reusing the pre-existing
+  `_maybe_refound`/`REFOUNDING_FOOD_THRESHOLD` extinction/refounding
+  mechanic rather than inventing a bee-style fixed-day timer.
+  `bud_new_mound` is deliberately NOT the queenless trigger it is for
+  bees (both the parent and the new mound keep/gain a queen). A new
+  procedural `"queen"` silhouette (`ProceduralDecomposerSprite`, no real
+  art delivered yet) is visibly larger with a far more pronounced
+  abdomen than a worker. See "A real ant queen, and why she cannot
+  requeen like a bee" below for the full grounding.
 - ✅ Caterpillars (requested live: "wire caterpillars which live on trees
   and on the ground around them; they should also do groundforaging and
   eat green leaves (spring, summer only)") — real illustrated crawl/climb/
@@ -748,12 +765,12 @@ constant rather than importing `EarthChunkManager` back into the class it
 is already owned by (that would be circular), and cross-checked by test
 so the two can't silently drift apart.
 
-**What the player actually sees.** There is still deliberately no
-separate queen sprite (real queens are sessile and essentially never seen
-outside the nest; a player learns a colony is thriving the same way they
-would in reality, from how much worker traffic it produces and how big
-its own works have grown, not by being shown her directly) — but
-population now drives two real, visible things, not one:
+**What the player actually sees.** *(Updated 2026-09-08 — see "A real ant
+queen, and why she cannot requeen like a bee" below: this paragraph's own
+"deliberately no separate queen sprite" is no longer current. There now
+is one, reversing that scope cut on direct live instruction — but she is
+still not the primary way a player reads colony health, which remains
+the two things below.)* Population drives two real, visible things:
 
 1. How many foragers a mound may have **concurrently active**
    (`active_forager_cap_for`, `MAX_CONCURRENT_FORAGERS` = 6 — see
@@ -773,6 +790,134 @@ population now drives two real, visible things, not one:
 A mound's hover tooltip reports the real population number directly (see
 above) — the one place a player can read an exact figure for what is
 otherwise inferred only from traffic and size.
+
+### A real ant queen, and why she cannot requeen like a bee (2026-09-08)
+
+Requested live, immediately after the honeybee queen shipped: *"give ants
+a real queen as well..."* Mirrored from `BeeColony`/`BeeQueenMarker`'s own
+shape (see `bees.md`'s "The queen") wherever the underlying biology
+genuinely agrees, and deliberately NOT mirrored where it does not —
+checked directly before writing a line of code, the same "don't force a
+match that isn't real" discipline `bees.md`'s own header already promises.
+
+**Real-world grounding: ants and bees diverge sharply here.** Honeybee
+workers can rear an entirely new queen from any sufficiently young female
+larva by feeding it royal jelly — the real biological fact that makes
+`BeeColony`'s "queenless, decline, requeen after `REQUEENING_DAYS`" shape
+correct for bees. **The overwhelming majority of ant species cannot do
+this at all.** Ant workers are, with rare specifically-studied exceptions
+(e.g. *Harpegnathos saltator*'s worker-vs-worker "duels" to become an
+egg-laying pseudoqueen — unrelated to anything this game models, and not
+the general case), reproductively sterile; a queenless established
+colony is generally in a **terminal** decline toward extinction, not a
+recoverable state the way a queenless beehive is. There is no
+worker-side path back to having a queen for an ant colony that has lost
+her.
+
+Real ant queen succession instead happens by **founding a new colony**:
+overwhelmingly a newly-mated queen from a nuptial flight founding an
+entirely independent nest from scratch, or — in species that reproduce by
+budding/fission (some *Formica*, army ants, and other polydomous/
+polygynous lineages) — an existing mated queen leaving with a share of
+the workforce to found a daughter nest, genuinely similar in shape to a
+honeybee swarm. Neither case is "an existing queenless colony gets
+repaired in place," which is exactly why this pass does not give ants
+anything shaped like `BeeColony._advance_queenless`/`REQUEENING_DAYS`.
+
+**This codebase already had exactly the right mechanic, from before this
+pass.** `AntColony._maybe_refound` (added for winter-dormancy die-offs —
+see "Winter dormancy, and a mound that can come back from zero" above): a
+mound whose population has genuinely hit a literal 0.0 can never recover
+through ordinary logistic growth alone (growth is proportional to
+CURRENT population), so once real, on-hand food has piled back up past
+`REFOUNDING_FOOD_THRESHOLD`, a **fresh** colony re-founds there at
+`STARTING_POPULATION`. That function's own doc comment already named
+this "a new queen/swarm founds again where an old colony died out" before
+a queen was ever a real, named concept anywhere in this file. Rather than
+build a second, parallel bee-style requeening timer ants do not
+biologically support, this pass gives that existing mechanism the real
+name it was already describing:
+
+- `AntColony.has_queen_at(cell)` — a **derived** read of
+  `population_at(cell) > 0.0`, deliberately NOT independent tracked state
+  the way `BeeColony.has_queen_at`/`_has_queen` is. This is a grounded
+  difference, not a shortcut: there is no real event anywhere in this
+  mechanic (`bud_new_mound` included, see below) that removes a queen
+  from a mound that still has anyone home, so there is no real,
+  separately-observable "queenless but still populated, declining on a
+  clock" state for ants to model the way bees genuinely have one. For as
+  long as a mound has any population left, its queen — never
+  individually simulated, exactly like every other mound-level
+  abstraction here — is alive by definition; the moment population
+  genuinely reaches zero she is gone with the rest of the colony.
+- `AntColony.refounding_progress_at(cell)` — mirrors `BeeColony.
+  requeening_progress_at`'s own hover-facing 0..1 contract, but reads the
+  real, existing food gate (`food_stored_at(cell) /
+  REFOUNDING_FOOD_THRESHOLD`) instead of a fixed-day clock: ants have no
+  timer to report progress against here, since real recovery time is
+  entirely food-luck-dependent (see `REFOUNDING_FOOD_THRESHOLD`'s own
+  doc comment on the real 22-real-minute worst case already found and
+  fixed once, with no equivalent fixed upper bound the way `BeeColony.
+  REQUEENING_DAYS` gives bees).
+- `AntMoundMarker.get_display_name()` reports queenless/refounding state
+  through the mound's own existing tooltip — `"...  -- queenless,
+  awaiting refounding (NN%)"` — mirroring `BeeHiveMarker`'s identical
+  choice, rather than growing a second hoverable entity.
+
+**`bud_new_mound` is deliberately NOT the queenless trigger it is for
+bees.** `BeeColony.bud_new_hive` sends the OLD queen away with the swarm,
+leaving the parent hive genuinely queenless — the real honeybee swarming
+mechanism. Ants' own budding request, from when that mechanic was first
+built (see "Colony budding" below), already used the ant-appropriate
+wording directly: *"...upon overpopulation half of the colony will found
+a new mound, **hatch a new queen** and grow the new colony again"* — the
+NEW mound gets its own freshly-hatched queen; the parent was never asked
+to lose its own. This also happens to match the more general real ant
+pattern better than a bee-swarm mirror would have: some ant species DO
+reproduce by an existing mated queen leaving with a share of the
+workforce (genuinely similar in shape to a honeybee swarm), but the far
+more common real pattern is an independently-founded new queen at the
+new site while the parent colony keeps its own. `has_queen_at` therefore
+reads true for **both** `from_cell` and `to_cell` after a successful
+`bud_new_mound` call, never false for the parent — and needed no code
+change to already be true (it is a derived read of population, and
+budding never zeroes either side's population); only its doc comment now
+says so explicitly.
+
+**Visual: a real, distinct silhouette — procedural, since no real art
+exists yet.** No real ant queen art has been delivered (only
+`ant.png`/`ant_mound.png` exist under `assets/sprites/animals/`, unlike
+bees' own real, delivered `honeybee_queen.png`). `AntQueenMarker`
+(`src/rendering/ant_queen_marker.gd` — mirrors `BeeQueenMarker`'s shape: a
+visual-only child of `AntMoundMarker`, never `AntForagerMarker`'s
+scout/forage state machine, since a real queen never forages or leaves
+the mound) falls back to a new, honest procedural silhouette instead:
+`ProceduralDecomposerSprite`'s new `"queen"` species, gated behind the
+same `has_action()` convention every optional illustrated-art seam in
+this codebase already uses (`IllustratedDecomposerSprite.
+has_action("queen", "walk")` is false today; real queen art, if ever
+delivered, slots in for free behind that exact gate). Same three-segment
+head/thorax/gaster anatomy and 6-leg layout as a worker — unlike the
+"bug" silhouette's different, legless-oval anatomy, so she reads
+unambiguously as the SAME kind of creature as a worker, just a queen of
+it — scaled up as a whole (`QUEEN_SIZE` 22 vs the worker's `SIZE` 12,
+roughly 1.8x — at the upper end of the commonly-cited real queen:worker
+body-length ratio for common temperate genera such as
+*Lasius*/*Formica*/*Camponotus*, roughly 1.5-2x for most castes) and with
+her gaster (abdomen) segment grown far more than that — more than double
+a worker's own abdomen radius — to read as genuinely physogastric, the
+real anatomical tell of an egg-laying queen, rather than just "a bigger
+ant". Same `ANT_COLOR` as a worker: she is the same species/chitin, not a
+different-colored creature. Confirmed via a real render
+(`tools/probe_ant_queen_verify.gd`), not assumed: at the same real
+`ArtResolution.SPRITE_SCALE` both a worker and the queen actually render
+at in game, she measures exactly 1.833x a worker's on-screen width, with
+a visibly larger, more elongated rear body. Hidden entirely whenever
+`has_queen_at` is false, the same "no misleading dying/requeening pose
+parked for a real waiting window" reasoning `BeeQueenMarker` already
+established — except for ants this window is exactly "population 0, not
+yet re-founded," which (unlike bees' own fixed `REQUEENING_DAYS`) could
+be brief or could be open-endedly long, depending on food luck alone.
 
 ### Water, not just food: a second real growth driver
 

@@ -16303,3 +16303,102 @@ ignition toggle separate from equip state. The user's other named
 example ("the compass, when in hand, should spawn a UI window with a
 compass pointing to north") is a separate, comparably-sized feature --
 tracked and built separately, not folded into this entry.
+
+## A real ant queen, deliberately NOT shaped like the bee one (2026-09-08)
+
+Requested live, immediately after the honeybee queen shipped: *"give ants
+a real queen as well..."* `AntMoundMarker`'s own doc comment already
+named the prior scope cut explicitly ("there is deliberately no separate
+queen sprite to hover -- real queens are sessile and unseen outside the
+nest"); this reverses that cut on direct instruction, the same way the
+bee pass reversed the identical cut for bees a few hours earlier — but
+NOT via a find-and-replace of that mechanic, because ant and honeybee
+queen biology genuinely differ in the one way that matters most here.
+
+**(A) Real-world grounding, checked before writing any code.** Honeybee
+workers can rear an entirely new queen from any sufficiently young female
+larva fed royal jelly — the real fact that makes `BeeColony`'s
+"queenless, decline, requeen after `REQUEENING_DAYS`" shape correct.
+**The overwhelming majority of ant species cannot do this at all**: ant
+workers are (barring rare, specifically-studied exceptions such as
+*Harpegnathos saltator*'s worker-vs-worker "duels" for pseudoqueen
+status, not the general case) reproductively sterile, so a queenless
+established ant colony is generally in a **terminal** decline toward
+extinction, not a recoverable state the way a queenless beehive is. Real
+ant queen succession instead happens by **founding a new colony** — most
+commonly an independently-mated queen from a nuptial flight, or (in
+budding/fission species) an existing mated queen leaving with a share of
+the workforce, genuinely similar in shape to a honeybee swarm — never an
+existing queenless colony repaired in place.
+
+**(B) The existing extinction/refounding mechanic was already the right
+answer, and needed no new machinery.** `AntColony._maybe_refound`
+(shipped earlier, for winter die-offs) already re-founds a mound whose
+population has genuinely hit 0.0 at `STARTING_POPULATION` once enough
+real food has piled back up (`REFOUNDING_FOOD_THRESHOLD`) — its own doc
+comment already called this "a new queen/swarm founds again where an old
+colony died out" before a queen was ever a real, named concept anywhere
+in this codebase. Rather than build a second, parallel bee-style
+requeening timer ants do not biologically support, this pass names that
+existing mechanism instead:
+- `AntColony.has_queen_at(cell)` — a **derived** read of
+  `population_at(cell) > 0.0`, deliberately NOT independent tracked
+  state the way `BeeColony.has_queen_at` is: there is no real event in
+  this whole mechanic that removes a queen from a mound that still has
+  anyone home, so there is nothing for independent state to track that
+  population doesn't already say.
+- `AntColony.refounding_progress_at(cell)` — mirrors `BeeColony.
+  requeening_progress_at`'s own hover-facing 0..1 contract, but reads
+  the real existing food gate instead of a fixed-day clock (ants have no
+  timer here; real recovery time is entirely food-luck-dependent).
+- `AntMoundMarker.get_display_name()` reports queenless/refounding state
+  through the mound's own existing tooltip, mirroring
+  `BeeHiveMarker`'s identical choice.
+
+**(C) `bud_new_mound` is deliberately NOT the queenless trigger it is for
+bees.** `BeeColony.bud_new_hive` sends the OLD queen away with the swarm,
+leaving the parent genuinely queenless. Ants' own original budding
+request already used different, ant-appropriate wording: *"...upon
+overpopulation half of the colony will found a new mound, **hatch a new
+queen** and grow the new colony again"* — the daughter mound gets its own
+freshly-hatched queen; the parent was never asked to lose its own, which
+also matches the more common real ant pattern better than a bee-swarm
+mirror would. `has_queen_at` reads true for BOTH mounds after a
+successful bud — no code change was needed for this to already be true,
+only a doc comment making it explicit.
+
+**(D) Visual: procedural, since no real queen art has been delivered.**
+Unlike bees (real, delivered `honeybee_queen.png`), only `ant.png`/
+`ant_mound.png` exist. `AntQueenMarker` (`src/rendering/
+ant_queen_marker.gd`) — new, visual-only child of `AntMoundMarker`, never
+`AntForagerMarker`'s scout/forage state machine — falls back to a new
+`ProceduralDecomposerSprite` `"queen"` silhouette: the same three-segment
+head/thorax/gaster anatomy and 6-leg layout as a worker (unlike the
+"bug" silhouette's different anatomy), scaled up as a whole (`QUEEN_SIZE`
+22 vs the worker's `SIZE` 12, ~1.8x — within the commonly-cited real
+queen:worker body-length ratio for common temperate genera) with her
+gaster grown far more than that (more than double a worker's own abdomen
+radius) to read as genuinely physogastric rather than just "a bigger
+ant". Confirmed via a real render (`tools/probe_ant_queen_verify.gd`),
+not assumed: she measures exactly 1.833x (22/12) a worker's on-screen
+width at the same real `ArtResolution.SPRITE_SCALE` both actually render
+at, with a visibly larger, more elongated rear body. Hidden entirely
+whenever `has_queen_at` is false, mirroring `BeeQueenMarker`'s identical
+"no misleading pose parked for a real waiting window" reasoning.
+
+**Coverage**: no new tests written — "skip tests for now" was live
+guidance this session. All 248 pre-existing tests across the 9
+ant-family test files re-run clean (`-gselect=ant_`: `test_ant_colony.gd`,
+`test_ant_forage_behavior.gd`, `test_ant_forager_marker.gd`,
+`test_ant_mound_marker.gd`, `test_ant_population_model.gd`,
+`test_ant_scout_wander.gd`, `test_illustrated_ant_mound_sprite.gd`,
+`test_procedural_ant_mound_sprite.gd`, `test_threat_avoidant_wander.gd`),
+plus `test_procedural_decomposer_sprite.gd` (10/10, the file directly
+touched for the new `"queen"` species). **Found in passing, NOT caused by
+this change** (confirmed via `git diff` — `illustrated_decomposer_sprite.
+gd` itself was never touched): `test_illustrated_decomposer_sprite.gd`
+has two pre-existing failures on `main`,
+`test_generate_textures_returns_four_idle_frames_for_ant`/`_bug`
+(expect 4 idle frames, both sheets now slice to 6) — flagged as a
+separate background task rather than fixed here, to keep this change
+scoped to the ant queen.
