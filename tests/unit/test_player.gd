@@ -2331,17 +2331,17 @@ func test_bonded_companions_are_capped():
 	player.allocated_nodes["menagerie"] = true
 	for i in Player.BONDED_COMPANION_CAP:
 		_hold_tool("butterfly_net")  # a fresh, empty net for each attempt
-		var bee := _flyer_at("bee", Vector2(8, 0))
-		_net_until_caught(bee)
+		var sparrow := _flyer_at("sparrow", Vector2(8, 0))
+		_net_until_caught(sparrow)
 	assert_eq(player.bonded_companions.size(), Player.BONDED_COMPANION_CAP)
 
 	# One more, past the cap: falls back to loading the net instead of
 	# silently discarding the catch.
 	_hold_tool("butterfly_net")
-	var bee := _flyer_at("bee", Vector2(8, 0))
-	_net_until_caught(bee)
+	var sparrow := _flyer_at("sparrow", Vector2(8, 0))
+	_net_until_caught(sparrow)
 	assert_eq(player.bonded_companions.size(), Player.BONDED_COMPANION_CAP)
-	assert_eq(player.equipped_item.captive_species, "bee")
+	assert_eq(player.equipped_item.captive_species, "sparrow")
 
 
 func test_bonding_a_companion_spawns_its_live_marker():
