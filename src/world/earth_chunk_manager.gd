@@ -73,6 +73,7 @@ const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sp
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 const IllustratedWormSprite = preload("res://src/rendering/illustrated_worm_sprite.gd")
+const WormMarker = preload("res://src/rendering/worm_marker.gd")
 const AquaticVegetation = preload("res://src/world/aquatic_vegetation.gd")
 const ProceduralAquaticVegetationSprite = preload("res://src/rendering/procedural_aquatic_vegetation_sprite.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
@@ -8147,7 +8148,16 @@ func _crawl_worm_sprites() -> void:
 		var patch: EarthwormPatch = _worm_patches.get(chunk_coord)
 		if patch == null:
 			continue
-		for cell in sprites:
+		for cell in sprites.keys().duplicate():
+			# This runs every step_worms call, far more often than
+			# _sync_worm_sprites reconciles the dict -- a corpse picked up
+			# via WormMarker.pick_up frees itself immediately, so a stale
+			# entry can sit here for up to WORM_REFRESH_INTERVAL before the
+			# next sync would otherwise catch it. See _sync_worm_sprites'
+			# own matching guard for the full reasoning.
+			if not is_instance_valid(sprites[cell]):
+				sprites.erase(cell)
+				continue
 			if not patch.is_corpse(cell):
 				var base := Vector2(
 					(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
@@ -8210,6 +8220,15 @@ func _sync_worm_sprites(chunk_coord: Vector2i) -> void:
 
 	var origin := chunk_coord * CHUNK_SIZE
 	for cell in sprites.keys().duplicate():
+		# A corpse's marker can now free ITSELF, from WormMarker.pick_up --
+		# something no sprite here could ever do to itself before pickup
+		# existed. A stale entry left behind by that must be dropped before
+		# anything below touches it (mirrors crush_ants_near's own
+		# is_instance_valid guard, same reasoning: whatever freed it already
+		# won -- this loop just needs to not crash on the leftover record).
+		if not is_instance_valid(sprites[cell]):
+			sprites.erase(cell)
+			continue
 		if not patch.is_surfaced(cell) and not patch.is_corpse(cell):
 			sprites[cell].free()
 			sprites.erase(cell)
@@ -8226,7 +8245,13 @@ func _sync_worm_sprites(chunk_coord: Vector2i) -> void:
 	for cell in patch.worm_cells():
 		if not patch.is_surfaced(cell) or sprites.has(cell):
 			continue
-		var sprite := Sprite2D.new()
+		# WormMarker, not a bare Sprite2D: a corpse's OWN sprite is what the
+		# player ends up picking up (see WormMarker.pick_up) -- it is never
+		# recreated between here and corpse state, so it must already be the
+		# pickable class from the moment a worm first surfaces.
+		var sprite := WormMarker.new()
+		sprite.cell = cell
+		sprite.worm_world = patch
 		sprite.texture = _worm_texture_for(patch, cell, origin)
 		# World scale from a world-space constant, never re-derived from the
 		# art canvas -- raising SIZE for detail must not change how big a worm

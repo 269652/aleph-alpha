@@ -260,8 +260,10 @@ footfall detection, driven by ACTUAL distance travelled rather than a
 fixed per-frame or per-tile-entry event (the tile-entry debounce
 `SnowTrail`/`PathScarring` both already use is the wrong granularity for
 an individual foot-fall). `STRIDE_LENGTH_METERS`/`STANCE_WIDTH_METERS`
-are real, grounded human-scale measurements (0.75m/0.12m) converted via
-the existing `GroundSlide.PX_PER_METER`, not eyeballed pixel counts.
+are real, grounded human-scale measurements (0.75m/0.22m, the latter
+widened from a real average stance further along the same real range
+after live feedback — "space left and right foot a bit wider") converted
+via the existing `GroundSlide.PX_PER_METER`, not eyeballed pixel counts.
 `step_if_due(distance)` alternates left/right every stride; `print_offset
 (heading, side)` places each print a real stance-width to either side of
 the walked line, perpendicular to travel direction (reusing

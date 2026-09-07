@@ -2418,8 +2418,10 @@ nothing like it already existed:
   `CreatureMarker._gait_distance`'s own "accumulate real travelled
   distance, threshold it" shape, generalized from indexing an animation
   frame into emitting a discrete world event instead). `STRIDE_LENGTH_
-  METERS`/`STANCE_WIDTH_METERS` (0.75m/0.12m) are real human-scale
-  measurements converted via the existing `GroundSlide.PX_PER_METER`.
+  METERS`/`STANCE_WIDTH_METERS` (0.75m/0.22m — the latter widened from
+  0.12m after live feedback, "space left and right foot a bit wider")
+  are real human-scale measurements converted via the existing
+  `GroundSlide.PX_PER_METER`.
 - **`FootprintField`** (`src/world/footprint_field.gd`) — per-chunk data
   mirroring `LeafLitterField`'s exact shape, deliberately simpler (a
   footprint is static once stamped, no wind/settle/decay-stage machinery
@@ -2473,6 +2475,67 @@ with zero script errors. See
 [snow_cover.md](concept/snow_cover.md#real-leftright-footprint-stamps-2026-09-07)
 and
 [infrastructure.md](concept/infrastructure.md) for the full mechanism.
+
+
+### A crushed worm's corpse can now be picked up (2026-09-07)
+
+✅ Reported live, directly: *"crushing worms doesn't display their
+crushed sprite last frame; instead they vanish.. they should stay in
+world and still be able to picked up."* Investigated both halves before
+writing any code: the "vanish" half turned out to already be fixed —
+`EarthwormPatch.is_corpse`/`EarthChunkManager._sync_worm_sprites`'s
+corpse-survives-the-sync check (see "A corpse is new ground" in
+[soil_fauna.md](concept/soil_fauna.md)) shipped 2026-09-05 and was
+re-confirmed passing directly against `main` before this pass began —
+almost certainly a stale, pre-fix running instance was what was actually
+observed live. The pickup half was real and genuinely missing: nothing
+ever joined a worm to `DroppedItem.GROUP_NAME`, live or dead.
+
+- **`EarthwormPatch.take_corpse(cell)`** — the same "just try, sim
+  decides" bool contract `take()`/`crush()` already use. Clears
+  `_crushed[cell]` alone, deliberately leaving `_recovery[cell]` running:
+  carrying the body off does not heal the burrow any faster than an
+  ordinary recovery would.
+- **`WormMarker`** (`src/rendering/worm_marker.gd`, NEW) — mirrors
+  `MushroomMarker.pick_up`'s exact shape (`ItemCatalog.make` +
+  `inventory.add` + "tell the sim, then `queue_free`"), gated on
+  `worm_world.is_corpse(cell)` up front: a live worm is deliberately NOT
+  pickable (becoming bait is `aquatic_foraging.md`'s own separate,
+  still-⬜ "Worms as fish bait" pass, not this one). Every worm's sprite is
+  now a `WormMarker` from the moment it first surfaces — the object is
+  never recreated between then and corpse state — but `pick_up` only ever
+  does anything once `is_corpse` is true.
+- **`ItemCatalog`** gained a `"worm"` entry — `"material"` kind (it isn't
+  people-food), with a real earthworm reference mass (~5g) via a new
+  `_CREATURE_MASS_KG` bucket, mirroring `_PRODUCE_MASS_KG`/
+  `_MUSHROOM_MASS_KG` exactly.
+
+**A real crash, found and fixed in the same pass, not shipped separately
+after the fact.** Pickup lets something OTHER than `EarthChunkManager`'s
+own sync loop free a worm sprite the `_worm_sprites` dictionary still has
+an entry for — a possibility that never existed before pickup did.
+`_crawl_worm_sprites` (runs every single `step_worms` call) touched
+`.position`/`.texture` on every dictionary entry unconditionally;
+`_sync_worm_sprites`'s own cleanup branch called `.free()`
+unconditionally too. Reproduced directly (mirroring
+`test_crushing_ants_does_not_crash_on_a_stale_already_freed_entry`'s own
+".free() the worst case" idiom — plant an already-`.free()`'d stand-in
+node straight into the manager's own dictionary): the former raised a
+script error, the latter crashed the engine process outright (confirmed
+reproducibly, exit code 127, before the fix). Both now guard with
+`is_instance_valid` first and erase the stale entry instead of touching
+it — the exact pattern `crush_ants_near`/`_crush_markers_near` already
+established for the identical shape of bug (see "FPS regression round 3"
+above).
+
+Built red-first throughout, including the crash reproduction itself.
+`test_earthworm_patch.gd` 59/59, `test_item_catalog.gd` 65/65,
+`test_worm_marker.gd` 8/8, and every worm-related
+`test_earth_chunk_manager.gd` test re-run and green, including the new
+stale-entry regression pair and the pre-existing die-animation/corpse
+suite this pass touched the same two functions as. See
+[soil_fauna.md](concept/soil_fauna.md#a-corpse-can-be-carried-off-2026-09-07)
+for the full mechanism.
 
 
 ### Flowers: too dense, no tooltip, and a wind that never blew
