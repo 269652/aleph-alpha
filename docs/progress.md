@@ -15245,6 +15245,45 @@ the honest remaining gap it does NOT close (the animation itself can
 still sit frozen mid-sequence for however long that same heavy setup
 takes, since that setup isn't broken into yield points).
 
+**Second follow-up fix, next day (2026-09-08):** reported again anyway,
+almost verbatim: "the animated intro is still not showing... postpone
+the ui to after intro." The single-frame-yield fix above genuinely fixed
+its own bug (first frame renders almost immediately) but never actually
+made `_ready()` wait for the intro to FINISH -- it resumed the same heavy
+synchronous setup one line later regardless, and that setup's ~15
+`_build_*` calls each add a new top-level Control to the same `_ui`
+CanvasLayer the intro lives on, landing at a higher sibling index and so
+rendering over it. Net effect, confirmed on a real timestamped +
+screenshotted launch: the intro's first frame flashes, then the raw
+not-yet-populated UI scaffold shows for however long setup takes, then
+the finished main menu -- the ~3.2s animation never actually plays.
+Fixed by awaiting `_play_intro_splash()` in full (not just one frame) and
+keeping the intro node alive -- covering the screen, frozen on its last
+frame -- through the entire heavy setup that follows, freed only at the
+natural end of the interactive-launch dispatch, in the same beat as
+`_show_main_menu()`. This also resolves the first pass's own left-open
+gap ("does not animate smoothly while the world loads"), not by yield-
+splitting the heavy setup but because the intro no longer shares the
+screen with it. See `concept/intro_splash.md`'s "A second early-launch
+bug" section for the full writeup, including a real methodology trap hit
+along the way: a `Timer`-driven `get_viewport().get_texture().get_image()`
+screenshot diagnostic reproduced the ORIGINAL bug correctly (via real
+file mtimes) but then, re-run against the FIXED code, misleadingly
+appeared to show the same raw scaffold -- the viewport-texture-capture
+technique turned out to be unreliable for the first several frames after
+a major scene-tree change. A second diagnostic, writing timestamped
+lines to a file with an explicit `flush()` per line (stdout fully
+buffers rather than line-buffers once redirected to a file, which
+separately made a real multi-second gap between plain `print()` calls
+look instantaneous in one captured log), proved via `Time.get_ticks_msec()`
+that the intro genuinely plays its full natural 3.2s before `_ready()`
+resumes, and that the heavy setup afterward measured ~54 real seconds
+cold on this machine with the intro's last frame covering it throughout.
+No dedicated automated regression test, same reason and same precedent as
+the first fix (a statement-ordering change with no natural unit-test
+seam) -- verified via real, timestamped, flushed-to-disk launches
+instead.
+
 ### Mushrooms now fruit at their own real-world-timed windows within autumn (`concept/mushrooms.md`, 2026-09-07)
 
 Asked directly: *"mushrooms should fruit at their respective times ...
