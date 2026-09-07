@@ -17,6 +17,7 @@ const ProceduralAntMoundSprite = preload("res://src/rendering/procedural_ant_mou
 const IllustratedAntMoundSprite = preload("res://src/rendering/illustrated_ant_mound_sprite.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
+const AntQueenMarker = preload("res://src/rendering/ant_queen_marker.gd")
 
 const GROUP_NAME := "ant_mound"
 
@@ -67,6 +68,16 @@ func _ready() -> void:
 	_sprite = Sprite2D.new()
 	add_child(_sprite)
 	_apply_growth(_growth_fraction())
+	# The queen's own real, minimal visual presence -- see
+	# AntQueenMarker's own doc comment. Only for a real, wired-up mound
+	# (mirrors this file's own "graceful no-op without a colony"
+	# contract, and BeeHiveMarker's identical choice for BeeQueenMarker):
+	# a marker built without setup() has nothing real for her to
+	# represent either.
+	if _colony != null:
+		var queen := AntQueenMarker.new()
+		queen.setup(_colony, _cell)
+		add_child(queen)
 
 
 ## Founding size (0.0) with no colony wired up -- the same "optional
@@ -101,14 +112,23 @@ func _process(delta: float) -> void:
 
 
 ## For World's mouse-hover tooltip (see docs/concept/soil_fauna.md "Ants at
-## half their old size, and finally hoverable") -- there is deliberately no
-## separate queen sprite to hover (real queens are sessile and unseen
-## outside the nest), so THIS is the one place a player can actually read
-## anything about a colony living here rather than only inferring it from
-## worker traffic and mound size. Reports the real population number once
-## a colony is wired up (see "What the player actually sees" in that same
-## doc section); falls back to the plain name otherwise, the same
-## optional-world fallback every accessor on this marker already uses.
+## half their old size, and finally hoverable") -- there IS now a real,
+## visible queen sprite (see AntQueenMarker, added 2026-09-08: "give ants
+## a real queen as well"), but she is still not separately hoverable (no
+## HoverTargetFinder contract of her own, mirroring BeeQueenMarker's
+## identical choice): her only real state (AntColony.has_queen_at) is
+## exactly "this mound's population is/isn't currently zero," which the
+## population number below already reports numerically, so THIS is still
+## the one place a player can actually read anything exact about a
+## colony living here rather than only inferring it from worker traffic,
+## mound size, and now whether she's visible at all. Reports the real
+## population number once a colony is wired up (see "What the player
+## actually sees" in that same doc section), and now real
+## queenless/refounding state too (see AntColony.refounding_progress_at)
+## -- mirrors BeeHiveMarker.get_display_name's identical "report it
+## through the existing tooltip, not a new hoverable entity" choice.
+## Falls back to the plain name otherwise, the same optional-world
+## fallback every accessor on this marker already uses.
 ##
 ## Also reports the real STORED food quantity (`food_stored_at`), not
 ## `panel_state`'s own derived percentage -- requested directly ("the ant
@@ -122,9 +142,13 @@ func _process(delta: float) -> void:
 func get_display_name() -> String:
 	if _colony == null:
 		return "Ant Mound"
-	return "Ant Mound (population %d, food %d)" % [
+	var base := "Ant Mound (population %d, food %d)" % [
 		int(round(_colony.population_at(_cell))), int(round(_colony.food_stored_at(_cell)))
 	]
+	if _colony.has_queen_at(_cell):
+		return base
+	var percent := int(round(_colony.refounding_progress_at(_cell) * 100.0))
+	return "%s -- queenless, awaiting refounding (%d%%)" % [base, percent]
 
 
 ## For World's real hover panel (see docs/concept/soil_fauna.md "A mound's

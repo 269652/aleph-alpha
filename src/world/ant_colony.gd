@@ -29,6 +29,14 @@ extends RefCounted
 ## dormancy (see dormancy_multiplier_at's own doc comment) -- this class's
 ## original "no surfacing/weather machinery" framing predates both and is
 ## no longer accurate.
+##
+## Real queen presence (`has_queen_at`/`refounding_progress_at`), added in
+## a later pass, directly after BeeColony got the analogous treatment: a
+## DELIBERATE divergence from that class's own shape, not a port of it --
+## see has_queen_at's own doc comment and docs/concept/soil_fauna.md's "A
+## real ant queen, and why she cannot requeen like a bee" for the full
+## real-world grounding on why ant queen succession does not work the way
+## honeybee queen succession does.
 
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const AntPopulationModel = preload("res://src/world/ant_population_model.gd")
@@ -431,6 +439,13 @@ func advance(delta_seconds: float) -> void:
 ## _dispatch_forager's own active_forager_cap_at floors at 1 forager
 ## regardless of population, so a lone forager keeps trying, and can keep
 ## depositing real food home, even after every worker has starved.
+##
+## This is also, now, the exact real mechanical meaning of has_queen_at
+## (added later, see that function's own doc comment for the full
+## grounding): a colony reduced to this state has no queen left either --
+## re-founding here IS the real "a new queen/swarm founds again" moment
+## already named above, not a second mechanism running in parallel with a
+## queen concept that used to be prose only.
 func _maybe_refound(cell: Vector2i) -> bool:
 	if population_at(cell) > 0.0:
 		return false
@@ -473,6 +488,25 @@ const REFOUNDING_FOOD_THRESHOLD := FOOD_PER_SUCCESSFUL_FORAGE * 3.0
 ## comment) -- population chasing a capacity that itself never exceeds it
 ## means this already IS the real, natural maximum a mound can sustain,
 ## not a second, redundant "capacity" concept invented on top of it.
+##
+## Unlike BeeColony.bud_new_hive, this is NOT the trigger for a queenless
+## parent -- see docs/concept/soil_fauna.md's "A real ant queen" section
+## for the full grounding. The original live request that asked for this
+## whole mechanism already used the ant-appropriate wording directly:
+## "...upon overpopulation half of the colony will found a new mound,
+## HATCH A NEW QUEEN and grow the new colony again" -- the NEW mound gets
+## its own freshly-hatched queen; the parent was never asked to lose its
+## own. This also matches the more general real ant pattern better than a
+## bee-swarm mirror would: some ant species DO reproduce by an existing
+## mated queen leaving with a share of the workforce (genuinely similar
+## in shape to a honeybee swarm), but the far more common real pattern is
+## an independently-founded new queen at the new site while the parent
+## colony keeps its own. has_queen_at (see that function) therefore reads
+## true for BOTH from_cell and to_cell after a successful bud_new_mound --
+## never false for the parent. No code change was needed in this function
+## itself for this to already be true (has_queen_at is a derived read of
+## population, and budding never zeroes either side's population) -- only
+## this doc comment, making explicit a fact that used to be implicit.
 func is_overpopulated_at(cell: Vector2i) -> bool:
 	return population_at(cell) >= AntPopulationModel.MAX_REFERENCE_POPULATION
 
@@ -796,6 +830,54 @@ func record_warmth(cell: Vector2i, warmth: float) -> void:
 ## time to grow into it) reads at 1.
 func growth_fraction_at(cell: Vector2i) -> float:
 	return clampf(population_at(cell) / AntPopulationModel.MAX_REFERENCE_POPULATION, 0.0, 1.0)
+
+
+## Whether this mound's colony currently has a live queen -- see
+## docs/concept/soil_fauna.md's "A real ant queen, and why she cannot
+## requeen like a bee" for the full real-world grounding on why this is
+## NOT shaped like BeeColony.has_queen_at/_advance_queenless. Real ant
+## queens are, in the vast majority of species, irreplaceable by workers
+## (unlike honeybees, who can rear an entirely new queen from any
+## sufficiently young female larva fed royal jelly) -- there is no
+## worker-side path back to having a queen for an established colony that
+## has lost her, so there is no real, separately-observable "queenless
+## but still populated, declining on a requeening clock" state for ants
+## to model at all. For as long as this mound has ANY population left,
+## its queen -- never individually simulated, exactly like every other
+## mound-level abstraction here -- is alive by definition; the moment
+## population genuinely reaches 0.0 she is gone with the rest of the
+## colony, not surviving alone.
+##
+## A DERIVED read of population_at, deliberately not independent tracked
+## state the way BeeColony._has_queen is: there is no real event anywhere
+## in this whole mechanic (bud_new_mound included -- see that function's
+## own doc comment) that removes a queen from a mound that still has
+## anyone home, so there is nothing for independent state to track that
+## population_at doesn't already say. This IS the same fact
+## _maybe_refound already encoded before a queen was ever a named
+## concept here (see that function's own doc comment) -- has_queen_at
+## just gives it a real name other code (AntQueenMarker, this mound's own
+## tooltip) can read.
+func has_queen_at(cell: Vector2i) -> bool:
+	return population_at(cell) > 0.0
+
+
+## Real progress toward a fresh queen re-founding a genuinely queenless
+## (population 0.0) mound, in [0, 1] -- 0.0 whenever the mound currently
+## has a queen (nothing to show progress toward). Mirrors BeeColony.
+## requeening_progress_at's own hover-facing contract, but reads the REAL
+## existing gate this mechanic already used before it had a name for it
+## (_maybe_refound/REFOUNDING_FOOD_THRESHOLD) rather than a bee-style
+## fixed-day clock: ants have no timer to report progress against here --
+## real recovery time depends entirely on how quickly food happens to
+## pile back up, which can vary hugely (REFOUNDING_FOOD_THRESHOLD's own
+## doc comment names a real 22-real-minute worst case this constant
+## already had to fix once; there is no equivalent fixed upper bound the
+## way BeeColony.REQUEENING_DAYS gives bees).
+func refounding_progress_at(cell: Vector2i) -> float:
+	if has_queen_at(cell):
+		return 0.0
+	return clampf(food_stored_at(cell) / REFOUNDING_FOOD_THRESHOLD, 0.0, 1.0)
 
 
 ## How many foragers this mound may have concurrently active -- always at
