@@ -5766,18 +5766,30 @@ func mushrooms_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 ## bites, and real toxic effects", MushroomBiting.bites_per_visit_for), so
 ## a boar's own bigger bite can visibly reduce a mushroom further than a
 ## bug's single nibble in one visit.
-func take_mushroom_at(pixel_position: Vector2, bite_stages: int = 1) -> String:
+## Returns `{"species": String, "stages_applied": int}` -- `species` ""
+## (with `stages_applied` 0) on any failure, the same "empty means nothing
+## happened" convention the old bare-String return used. `stages_applied`
+## is the REAL count that actually landed, which can be clamped below the
+## requested `bite_stages` near MushroomBiting.MAX_BITE_STAGES (see
+## WildMushroomPatch.bite's own doc comment) -- see docs/concept/
+## metabolism.md's "the two named mushroom gaps": the caller (CreatureMarker)
+## needs this real applied count, not just the request, to scale nutrition
+## by how much was actually eaten this one visit.
+func take_mushroom_at(pixel_position: Vector2, bite_stages: int = 1) -> Dictionary:
 	var tile := _world_tile_for_pixel(pixel_position)
 	var chunk_coord := _chunk_coord_for_tile(tile)
 	var sim: WildMushroomPatch = _mushroom_sims.get(chunk_coord)
 	if sim == null:
-		return ""
+		return {"species": "", "stages_applied": 0}
 	var cell := tile - chunk_coord * CHUNK_SIZE
 	var species := sim.species_at(cell)
 	var marker = _mushroom_markers.get(chunk_coord, {}).get(cell)
-	if marker == null or not marker.take_mushroom_bite(bite_stages):
-		return ""
-	return species
+	if marker == null:
+		return {"species": "", "stages_applied": 0}
+	var stage_before: int = marker.bite_stage
+	if not marker.take_mushroom_bite(bite_stages):
+		return {"species": "", "stages_applied": 0}
+	return {"species": species, "stages_applied": marker.bite_stage - stage_before}
 
 
 ## The walnut-shaped sibling of crush_mushroom_at (see docs/concept/

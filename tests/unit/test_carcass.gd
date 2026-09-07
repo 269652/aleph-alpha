@@ -74,6 +74,23 @@ func test_meat_yield_reads_the_skill_bonus_passed_in():
 	assert_eq(_drops[1].count, Butchering.meat_count(3.0))
 
 
+## The real, new consequence of a unified live mass (docs/concept/
+## metabolism.md): a carcass stamped with the killed animal's own real
+## mass_ratio at time of death yields real, proportionally scaled meat --
+## defaults to 1.0 (the old flat, mass-blind count) so nothing that never
+## sets it changes at all.
+func test_a_heavier_than_average_carcass_yields_more_meat():
+	carcass.mass_ratio = 1.5
+	carcass.butcher()  # hide
+	carcass.butcher()  # meat
+	assert_eq(_drops[1].count, Butchering.meat_count(0.0, 1.5))
+	assert_gt(_drops[1].count, Butchering.meat_count(0.0, 1.0))
+
+
+func test_mass_ratio_defaults_to_a_flat_one():
+	assert_almost_eq(carcass.mass_ratio, 1.0, 0.0001)
+
+
 func test_third_butcher_yields_guts_as_a_world_entity_not_a_dropped_item():
 	carcass.butcher()  # hide
 	carcass.butcher()  # meat

@@ -200,4 +200,30 @@ func test_remove_with_a_contents_filter_never_spends_a_loaded_container():
 func test_remove_without_a_filter_keeps_its_old_meaning():
 	inventory.add(_bottle("monarch"), 1)
 	assert_eq(inventory.remove("glass_bottle", 1), 1)
+
+
+# --- diminished items: two different remaining masses are not one stack ----
+# (docs/concept/metabolism.md's "the two named mushroom gaps" -- the exact
+# same real problem the loaded-vs-empty-bottle precedent above already
+# fixed once: a stack shares ONE Item plus a count, so merging two
+# genuinely different physical objects -- here, a mushroom bitten down to
+# two different remaining masses, there, a loaded vs an empty bottle --
+# would silently lose track of which unit is which.)
+
+func _mushroom(mass_kg: float) -> Item:
+	var item := Item.new("parasol_bitten", "Parasol (Bitten)", "food", 20, 0.0, "", 0.0, mass_kg)
+	return item
+
+
+func test_two_differently_diminished_items_of_the_same_id_do_not_stack():
+	inventory.add(_mushroom(0.1245), 1)
+	inventory.add(_mushroom(0.10335), 1)
+	assert_eq(inventory.used_slots(), 2, "same id, different remaining mass -- two real specimens")
+	assert_eq(inventory.count_of("parasol_bitten"), 2, "both are still really carried")
+
+
+func test_two_identically_diminished_items_of_the_same_id_still_stack():
+	inventory.add(_mushroom(0.1245), 1)
+	inventory.add(_mushroom(0.1245), 1)
+	assert_eq(inventory.used_slots(), 1, "same id, same real remaining mass -- genuinely the same specimen")
 	assert_eq(inventory.count_of("glass_bottle"), 0)

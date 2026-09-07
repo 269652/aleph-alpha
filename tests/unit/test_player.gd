@@ -1541,6 +1541,75 @@ func test_eating_an_apple_relieves_hunger_thirst_and_nutrition_by_its_real_compo
 	assert_almost_eq(player.survival.nutrition, nutrients["vitamins"], 0.0001)
 
 
+## The second named gap this closes (see docs/concept/metabolism.md's "the
+## two named mushroom gaps"): a predator/forager's -- here, the PLAYER's
+## own -- nutrition from eating a mushroom must scale with how much of it
+## was actually left (its own real, already-stage-scaled mass_kg), not the
+## flat whole-item amount regardless of how diminished it visibly was.
+func test_eating_a_partially_bitten_mushroom_yields_mass_scaled_nutrients():
+	const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
+	player.survival.advance(100000.0)
+	player.survival.nutrition = 0.0
+	player.inventory.add(_item_catalog.make("parasol_bitten", 2), 1)
+
+	assert_true(player.eat_food("parasol_bitten"))
+
+	var mass_fraction := _item_catalog.remaining_mass_fraction_for(_item_catalog.make("parasol_bitten", 2))
+	var nutrients: Dictionary = NutrientRelease.consume("parasol_bitten", mass_fraction)
+	assert_almost_eq(player.survival.hunger, 1.0 - nutrients["sugar"], 0.0001)
+	assert_almost_eq(player.survival.nutrition, nutrients["vitamins"], 0.0001)
+
+
+## A more-eaten specimen must yield strictly less than a less-eaten one of
+## the same species -- the real, observable consequence of the fix above,
+## not just an internal accounting detail.
+func test_a_more_bitten_mushroom_yields_less_nutrition_than_a_less_bitten_one():
+	const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
+	var lightly_bitten_fraction := _item_catalog.remaining_mass_fraction_for(_item_catalog.make("parasol_bitten", 1))
+	var heavily_bitten_fraction := _item_catalog.remaining_mass_fraction_for(_item_catalog.make("parasol_bitten", 2))
+	var lightly_bitten_relief: float = NutrientRelease.consume("parasol_bitten", lightly_bitten_fraction)["sugar"]
+	var heavily_bitten_relief: float = NutrientRelease.consume("parasol_bitten", heavily_bitten_fraction)["sugar"]
+	assert_gt(lightly_bitten_relief, heavily_bitten_relief, "less relief -- more of it was already eaten")
+
+
+# -- the player's own real, unified mass (docs/concept/metabolism.md) ------
+#
+# "No ... all mass systems should be unified" -- the player gets the same
+# real, live current_mass_kg every other creature this pass reaches gets,
+# seeded from CreatureMass.PLAYER_MASS_KG (already StoneSize.
+# AVERAGE_BODY_MASS_KG), not a second guess.
+
+func test_player_current_mass_kg_starts_at_the_seed_mass():
+	const CreatureMass = preload("res://src/world/creature_mass.gd")
+	assert_almost_eq(player.current_mass_kg(), CreatureMass.PLAYER_MASS_KG, 0.0001)
+
+
+func test_player_current_mass_kg_drops_after_prolonged_resting_with_nothing_eaten():
+	_register_all_keybindings()
+	var seed_mass := player.current_mass_kg()
+	for _i in 200:
+		player._authority_step(30.0)
+	assert_lt(player.current_mass_kg(), seed_mass)
+
+
+## The regression proof docs/concept/metabolism.md's unification promises:
+## the player at their default/seed mass produces the EXACT SAME crush
+## momentum the old flat CreatureMass.PLAYER_MASS_KG constant did.
+func test_player_crush_momentum_at_seed_mass_matches_the_old_flat_constant_exactly():
+	const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
+	const CreatureMass = preload("res://src/world/creature_mass.gd")
+	var old_momentum := CreatureMass.PLAYER_MASS_KG * PebbleDispersion.FOOTSTEP_SPEED_MPS
+	var new_momentum := player.current_mass_kg() * PebbleDispersion.FOOTSTEP_SPEED_MPS
+	assert_almost_eq(new_momentum, old_momentum, 0.0001)
+
+
+func test_player_eating_gains_real_mass():
+	player.inventory.add(_item_catalog.make("apple"), 1)
+	var seed_mass := player.current_mass_kg()
+	assert_true(player.eat_food("apple"))
+	assert_gt(player.current_mass_kg(), seed_mass)
+
+
 func test_eating_an_unmodeled_food_keeps_the_old_flat_hunger_relief():
 	player.survival.advance(100000.0)
 	player.inventory.add(_item_catalog.make("fish"), 1)

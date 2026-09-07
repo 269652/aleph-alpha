@@ -29,6 +29,7 @@ const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
 const GrazerForaging = preload("res://src/gameplay/grazer_foraging.gd")
 const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
+const Metabolism = preload("res://src/gameplay/metabolism.gd")
 const MushroomEffect = preload("res://src/gameplay/mushroom_effect.gd")
 const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
@@ -323,9 +324,23 @@ var _has_forage_target := false
 ## Bioenergetic condition (see AnimalReproduction / ecosystem_dynamics.md):
 ## rises when the creature eats, decays over time, and gates reproduction
 ## together with health and a birth cooldown. Starts moderate so a fresh herd
-## doesn't instantly breed.
+## doesn't instantly breed. A SEPARATE concern from _metabolism/
+## current_mass_kg below -- this is short-term reproductive readiness
+## (0..1), not a physical body mass; unifying mass never meant collapsing
+## this too.
 var energy := 0.5
 var _seconds_since_birth := 0.0
+
+## The one real, live, unified body mass this creature instance carries --
+## see docs/concept/metabolism.md's "one real mass per creature" pillar.
+## Lazily constructed (see _ensure_metabolism) so it always seeds correctly
+## from whatever species `info` actually names, regardless of exactly when
+## `info` becomes available relative to _ready(). CreatureMass.
+## mass_kg_for(species) seeds it ONCE, here, and is never read again for
+## THIS creature's own current weight -- every real consumer (crush
+## momentum, mushroom bite-count/satiation scaling, yield on death) reads
+## current_mass_kg() instead.
+var _metabolism: Metabolism = null
 
 ## How old this creature is, in real seconds (see MammalGrowth). Mirrors
 ## AmbientFlyerMarker's own `age_seconds` exactly: spawned creatures (a
@@ -553,6 +568,48 @@ func _ready() -> void:
 func setup(world, tile_size: int) -> void:
 	_world = world
 	_tile_size = tile_size
+
+
+## This creature's own real, live, current body mass -- see
+## docs/concept/metabolism.md. The ONE thing every real consumer (crush
+## momentum, mushroom bite-count/satiation, yield on death) should read
+## instead of the flat CreatureMass.mass_kg_for(species) table once a real
+## instance exists.
+func current_mass_kg() -> float:
+	return _ensure_metabolism().current_mass_kg
+
+
+## Builds this creature's own Metabolism instance the first time anything
+## asks for its mass, seeded from CreatureMass.mass_kg_for(this creature's
+## own species) -- see docs/concept/metabolism.md's "one real mass per
+## creature" pillar. Lazy rather than built in _ready(): `info` (and so the
+## species to seed from) is assigned by the spawner sometimes before,
+## sometimes only just after, _ready() runs (see this file's own `info`
+## doc comment on age_seconds), so asking on first real use is the only
+## timing that is always correct.
+func _ensure_metabolism() -> Metabolism:
+	if _metabolism == null:
+		var species := info.species if info != null else ""
+		_metabolism = Metabolism.new(CreatureMass.mass_kg_for(species))
+	return _metabolism
+
+
+## Maps this creature's own real, already-existing behaviour signals to
+## Metabolism's small closed activity vocabulary -- see docs/concept/
+## metabolism.md's activity-tier table. Reads whatever this creature is
+## CURRENTLY doing (last-settled state, not necessarily freshly recomputed
+## this exact frame): actively grazing/eating is FEEDING, fleeing is real
+## vigorous exertion (the one persistent high-exertion signal this class
+## already tracks -- attack/hunt/court are not yet their own persistent
+## flags, so they read as ordinary MOVING today, a named simplification,
+## not a silent gap), anything else (wandering, seeking, approaching) is
+## ordinary ambulatory MOVING.
+func _current_metabolic_activity() -> String:
+	if _forage.is_grazing():
+		return Metabolism.ACTIVITY_FEEDING
+	if _is_fleeing:
+		return Metabolism.ACTIVITY_EXERTION
+	return Metabolism.ACTIVITY_MOVING
 
 
 ## Registers this marker's ground-contact shadow (a plain Sprite2D child
@@ -791,6 +848,12 @@ func _process(frame_delta: float) -> void:
 	if not _restrained:
 		_struggle_fatigue = Taming.fatigue_after_rest(_struggle_fatigue, delta)
 	energy = AnimalReproduction.decay(energy, delta)
+	# Real calorie burn (see docs/concept/metabolism.md): Kleiber's-law BMR
+	# at this creature's OWN current mass, scaled by whatever it was doing
+	# as of the last settled state (see _current_metabolic_activity) --
+	# runs unconditionally here, ahead of every early-return branch below,
+	# the same placement energy's own flat decay just above already uses.
+	_ensure_metabolism().advance(delta, _current_metabolic_activity())
 	_seconds_since_birth += delta
 	_current_action = "walk"  # overridden below by whatever the AI actually does
 
@@ -2504,6 +2567,12 @@ func _take_forage_bite() -> void:
 		return
 	var got := false
 	var species := ""
+	## How many of MushroomBiting.MAX_BITE_STAGES this one FOOD_MUSHROOM
+	## bite event actually applied -- see docs/concept/metabolism.md's "the
+	## two named mushroom gaps": can be clamped below the request near the
+	## real per-mushroom cap, so nutrition must scale by what actually
+	## landed, not what was merely requested.
+	var mushroom_stages_applied := 0
 	match _forage_kind:
 		GrazerForaging.FOOD_UNDERFOOT:
 			got = true  # it is standing in its food; there is nothing to remove
@@ -2520,21 +2589,35 @@ func _take_forage_bite() -> void:
 				# (docs/concept/soil_fauna.md's "Progressive, mass-scaled
 				# bites, and real toxic effects") -- a boar's own bigger
 				# mouthful visibly reduces a mushroom further in one visit
-				# than a bug's single nibble would.
-				var bite_stages := MushroomBiting.bites_per_visit_for(
-					CreatureMass.mass_kg_for(info.species if info != null else "")
-				)
-				species = _world.take_mushroom_at(_forage_target, bite_stages)
+				# than a bug's single nibble would. Reads this creature's
+				# OWN real, live, unified mass (docs/concept/metabolism.md)
+				# rather than the flat species table -- a real, well-fed
+				# boar takes a genuinely bigger bite than a starving one of
+				# the same species.
+				var bite_stages := MushroomBiting.bites_per_visit_for(current_mass_kg())
+				var result: Dictionary = _world.take_mushroom_at(_forage_target, bite_stages)
+				species = String(result.get("species", ""))
+				mushroom_stages_applied = int(result.get("stages_applied", 0))
 				got = species != ""
 		GrazerForaging.FOOD_SEED:
 			got = _world.has_method("take_seed_at") and _world.take_seed_at(_forage_target) != ""
 		GrazerForaging.FOOD_WORM:
 			got = _world.has_method("take_worm_at") and _world.take_worm_at(_forage_target)
 	if got:
-		if _forage_kind == GrazerForaging.FOOD_FRUIT or _forage_kind == GrazerForaging.FOOD_MUSHROOM:
+		if _forage_kind == GrazerForaging.FOOD_FRUIT:
 			_apply_nutrient_bite(species)
+		elif _forage_kind == GrazerForaging.FOOD_MUSHROOM:
+			_apply_nutrient_bite(species, float(mushroom_stages_applied) / float(MushroomBiting.MAX_BITE_STAGES))
 		else:
 			_needs.feed()
+			# A real intake event for the SAME unified mass the crush
+			# mechanic reads (docs/concept/metabolism.md) -- no real
+			# composition data exists yet for grass/seed/worm/underfoot
+			# (see NutrientRelease's own doc comment), so this mirrors
+			# _needs.feed()'s own "one whole meal" granularity exactly,
+			# the same way _apply_nutrient_bite's composition-driven
+			# feed_hunger_relief(sugar) mirrors feed_amount(sugar) below.
+			_ensure_metabolism().feed_hunger_relief(1.0)
 		if _forage_kind == GrazerForaging.FOOD_MUSHROOM:
 			# Corrected 2026-09-07 (see docs/concept/mushrooms.md's "Toxic
 			# effects: disorientation and illness"): TARGET SELECTION still
@@ -2556,13 +2639,27 @@ func _take_forage_bite() -> void:
 ## but checked for real rather than assumed -- an impact that somehow
 ## doesn't resolve to "crush") falls back to the flat full-meter
 ## _needs.feed() every other forage kind uses.
-func _apply_nutrient_bite(species: String) -> void:
-	var nutrients: Dictionary = NutrientRelease.consume(species)
+##
+## `mass_fraction` is how much of a whole item this one bite actually
+## consumed (default 1.0 -- a fruit bite is always a whole fruit). A
+## mushroom bite passes its own real applied-stage fraction (see
+## docs/concept/metabolism.md's "the two named mushroom gaps") so a bite
+## that only landed part of MushroomBiting.MAX_BITE_STAGES yields
+## proportionally less, not the flat whole-mushroom amount regardless of
+## how much was actually left to take.
+func _apply_nutrient_bite(species: String, mass_fraction: float = 1.0) -> void:
+	var nutrients: Dictionary = NutrientRelease.consume(species, mass_fraction)
 	if nutrients.get("crushed", false):
 		_needs.feed_amount(nutrients.get("sugar", 0.0))
 		_needs.drink_amount(nutrients.get("water", 0.0))
+		# A real intake event for the SAME unified mass the crush mechanic
+		# reads (docs/concept/metabolism.md) -- the real, composition-
+		# derived sugar fraction this bite actually released, already
+		# scaled by mass_fraction above.
+		_ensure_metabolism().feed_hunger_relief(nutrients.get("sugar", 0.0))
 	else:
 		_needs.feed()
+		_ensure_metabolism().feed_hunger_relief(1.0)
 
 
 func _drop_forage_target() -> void:
@@ -2851,6 +2948,18 @@ func _spawn_carcass_if_eligible() -> void:
 	carcass.species = info.species
 	carcass.position = position
 	carcass.region_tier = region_tier
+	# Real, dynamic meat yield (see docs/concept/metabolism.md): this
+	# creature's own real, live, unified mass at the moment of death,
+	# relative to its species' CreatureMass reference -- a real, well-fed
+	# kill yields more meat, a starved one less, instead of every
+	# same-species carcass giving the identical flat amount. Reads
+	# straight from CreatureMass here (not current_mass_kg() twice) so the
+	# ratio is always against the real, untouched species reference, even
+	# for a mythical/derived species this table falls back to
+	# _mass_from_world_scale for.
+	var reference_mass := CreatureMass.mass_kg_for(info.species)
+	if reference_mass > 0.0:
+		carcass.mass_ratio = current_mass_kg() / reference_mass
 	get_parent().add_child(carcass)
 
 

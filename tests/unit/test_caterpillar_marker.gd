@@ -104,6 +104,33 @@ func test_forages_and_eats_a_nearby_green_leaf():
 	assert_true(world.field.leaves().is_empty(), "a caterpillar should forage and eat a green fallen leaf")
 
 
+# -- one unified, live current_mass_kg (see docs/concept/metabolism.md) -----
+
+func test_a_fresh_caterpillar_starts_at_exactly_its_species_seed_mass():
+	const CreatureMass = preload("res://src/world/creature_mass.gd")
+	assert_almost_eq(marker.current_mass_kg(), CreatureMass.mass_kg_for("caterpillar"), 0.0000001)
+
+
+func test_current_mass_kg_drops_after_prolonged_time_with_nothing_eaten():
+	var seed_mass := marker.current_mass_kg()
+	for i in 200:
+		marker._process(30.0)
+	assert_lt(marker.current_mass_kg(), seed_mass)
+
+
+func test_eating_a_green_leaf_gains_real_mass():
+	var world := StubWorld.new()
+	world.field.add_leaf(Vector2(105, 100), "cherry", "summer", 0.0)
+	marker.setup(world)
+	var seed_mass := marker.current_mass_kg()
+	for i in 400:
+		marker._process(0.5)
+		if world.field.leaves().is_empty():
+			break
+	assert_true(world.field.leaves().is_empty(), "precondition: the leaf must actually have been eaten")
+	assert_gt(marker.current_mass_kg(), seed_mass)
+
+
 ## The precision "eat green leaves" actually asks for: an old brown, still-
 ## decaying autumn leaf sitting on the ground (LeafLitterField's own 270-day
 ## lifespan means one absolutely can still be there come spring/summer) is

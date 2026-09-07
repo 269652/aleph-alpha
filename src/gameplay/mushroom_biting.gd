@@ -67,6 +67,21 @@ static func after_bite(base_value: float) -> float:
 	return base_value * RETAINED_FRACTION_AFTER_BITE
 
 
+## What fraction of a mushroom's ORIGINAL (stage-0, unbitten) mass/
+## nutrient value survives having taken `stage` real bite STAGES so far --
+## see docs/concept/metabolism.md's "the two named mushroom gaps". A real
+## generalization of after_bite/RETAINED_FRACTION_AFTER_BITE (which only
+## ever modeled exactly one bite) to WildMushroomPatch's own real
+## `bite_stage` counter, 0..MAX_BITE_STAGES: each successive bite removes
+## the same proportional fraction of whatever remains (the same real
+## "how much survives ONE bite" ratio RETAINED_FRACTION_AFTER_BITE's own
+## doc comment already describes), so stage 1 matches after_bite(1.0)
+## exactly and stage 0 is the whole, untouched mushroom -- not a second,
+## independently-tuned per-stage curve.
+static func remaining_fraction_for_stage(stage: int) -> float:
+	return pow(RETAINED_FRACTION_AFTER_BITE, float(maxi(stage, 0)))
+
+
 ## -- Bite count and satiation scale with the eater's own real mass --------
 ##
 ## Reported live, directly: "the amount the bug eats should be based on

@@ -42,6 +42,14 @@ const DECOMPOSE_HEALTH := 20.0
 const FLY_ATTRACTION_DELAY_SECONDS := ROT_SECONDS / 3.0
 
 var species := ""
+## This carcass's own real, live, unified mass at time of death (see
+## docs/concept/metabolism.md), relative to its species' CreatureMass
+## reference -- 1.0 (a creature exactly at its species' seed mass) by
+## default, so a carcass nothing ever stamps this on behaves exactly as
+## before. Set by whoever spawns this carcass (see CreatureMarker.
+## _spawn_carcass_if_eligible, which copies its own current_mass_kg()
+## ratio straight across) -- read by butcher() to scale real meat yield.
+var mass_ratio := 1.0
 var _age := 0.0
 var _parts_taken := 0
 var _decompose_health := DECOMPOSE_HEALTH
@@ -157,7 +165,7 @@ func butcher(meat_yield_bonus: float = 0.0) -> String:
 			)
 		"meat":
 			WorldItemBus.item_dropped.emit(
-				ItemStack.new(_item_catalog.make("meat"), Butchering.meat_count(meat_yield_bonus)),
+				ItemStack.new(_item_catalog.make("meat"), Butchering.meat_count(meat_yield_bonus, mass_ratio)),
 				position
 			)
 		"guts":

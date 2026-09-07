@@ -287,6 +287,45 @@ func test_pickup_of_a_bitten_mushroom_adds_the_bitten_item():
 	assert_eq(picker.inventory.count_of("parasol"), 0)
 
 
+## The first named gap this closes (see docs/concept/metabolism.md's "the
+## two named mushroom gaps"): a picked-up mushroom's own item mass must
+## account for how many real bite stages were actually taken out of it
+## BEFORE pickup, not the old flat single-bite fraction regardless of
+## stage.
+func test_pickup_mass_matches_the_real_bite_stage_taken():
+	const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+	var marker := _make_marker("parasol", Vector2i(3, 4))
+	marker.mushroom_world = StubMushroomWorld.new()
+	marker.take_mushroom_bite()
+	marker.take_mushroom_bite()
+	var picker := _make_picker()
+	marker.pick_up(picker)
+	var picked_up_mass: float = picker.inventory.stacks()[0].item.mass_kg
+	var expected_mass: float = ItemCatalog.new().make("parasol_bitten", 2).mass_kg
+	assert_almost_eq(picked_up_mass, expected_mass, 0.0001)
+
+
+## More stages taken before pickup means a genuinely lighter item, not a
+## flat number regardless of how much was actually eaten.
+func test_pickup_mass_decreases_with_more_bite_stages_taken():
+	var one_bite := _make_marker("parasol", Vector2i(1, 1))
+	one_bite.mushroom_world = StubMushroomWorld.new()
+	one_bite.take_mushroom_bite()
+	var one_bite_picker := _make_picker()
+	one_bite.pick_up(one_bite_picker)
+
+	var two_bites := _make_marker("parasol", Vector2i(2, 2))
+	two_bites.mushroom_world = StubMushroomWorld.new()
+	two_bites.take_mushroom_bite()
+	two_bites.take_mushroom_bite()
+	var two_bites_picker := _make_picker()
+	two_bites.pick_up(two_bites_picker)
+
+	var one_bite_mass: float = one_bite_picker.inventory.stacks()[0].item.mass_kg
+	var two_bites_mass: float = two_bites_picker.inventory.stacks()[0].item.mass_kg
+	assert_lt(two_bites_mass, one_bite_mass)
+
+
 # -- position -------------------------------------------------------------
 
 func test_stays_exactly_where_placed():

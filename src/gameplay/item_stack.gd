@@ -41,12 +41,23 @@ func is_edible(season: String) -> bool:
 	return item.kind != "food" or FruitSpoilage.is_edible(item.id, age_seconds, season)
 
 
-## Same item id AND the same captive_species (see Item.captive_species's own
-## doc comment): a stack shares ONE Item plus a count, so merging a loaded
-## container into a stack of empty ones (or two loaded ones holding
-## different catches) would silently lose track of which unit is which.
+## Same item id, the same captive_species (see Item.captive_species's own
+## doc comment), AND the same mass_kg (see docs/concept/metabolism.md's
+## "the two named mushroom gaps"): a stack shares ONE Item plus a count, so
+## merging a loaded container into a stack of empty ones (or two loaded
+## ones holding different catches), or a mushroom bitten down to one real
+## remaining mass into a stack of ones bitten to a DIFFERENT remaining
+## mass, would silently lose track of which unit is which. `is_equal_approx`
+## rather than `==`: mass_kg for a genuinely identical specimen (the same
+## species, the same real bite_stage) is deterministic, but still a
+## `pow()` result -- comparing exactly would risk two identically-staged
+## items failing to stack over float noise.
 func can_stack_with(other) -> bool:
-	return item.id == other.item.id and item.captive_species == other.item.captive_species
+	return (
+		item.id == other.item.id
+		and item.captive_species == other.item.captive_species
+		and is_equal_approx(item.mass_kg, other.item.mass_kg)
+	)
 
 
 func remaining_capacity() -> int:

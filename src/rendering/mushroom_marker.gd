@@ -235,12 +235,17 @@ func take_mushroom_bite(bite_stages: int = 1) -> bool:
 ## anything was collected" contract DroppedItem/LiftableStone/PickableSeed
 ## all keep. A bitten mushroom resolves to its OWN, lighter catalog item
 ## (see MushroomBiting.bitten_item_id_for) rather than the ordinary species
-## one -- what it visibly is by the time it's picked up.
+## one -- what it visibly is by the time it's picked up. Its own real
+## `bite_stage` (not just whether it was bitten at all) is passed straight
+## through to ItemCatalog.make so the item's mass genuinely reflects how
+## much was actually eaten before pickup -- see docs/concept/metabolism.md's
+## "the two named mushroom gaps" (a flat single-bite fraction used to apply
+## no matter how many real stages had landed).
 func pick_up(picker) -> bool:
 	if picker == null or picker.inventory == null or species_id == "":
 		return false
 	var item_id := MushroomBiting.bitten_item_id_for(species_id) if bitten else species_id
-	var item := _item_catalog.make(item_id)
+	var item := _item_catalog.make(item_id, bite_stage)
 	if picker.inventory.add(item, 1) > 0:
 		return false
 	# Taken from the sim as well as from the screen: a picked mushroom must
