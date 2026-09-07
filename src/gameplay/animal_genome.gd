@@ -76,6 +76,24 @@ static func _bell(seed_value: int, gene: String) -> float:
 
 ## A deterministic fraction in [0, 1), the same hash-derived shape the rest of
 ## the world uses for per-individual variation rather than RNG state.
+##
+## The salt for each half must not merely END in a different digit: Godot's
+## String hash is a simple rolling hash, and two salts that are identical
+## except for one trailing digit ahead of an identical constant suffix come
+## out correlated, not independent -- measured at r=0.57 between half 0 and
+## half 1 for the "_animal_genome" suffix specifically (FlyerPersonality's
+## byte-for-byte identical _bell/_unit shape happens to measure r=0.26 for
+## its own "_personality" suffix, low enough to scrape under the same <10%
+## extremes budget by luck, not by design). That correlation is what made
+## _bell's population run 13-14.5% "extreme" against the <10% budget
+## test_the_population_centres_on_the_species_template and
+## test_boldness_is_bell_shaped_around_the_neutral_gene pin -- correlated
+## halves fail to average extremes down, closer to one uniform draw's 20%
+## than two independent draws' theoretical ~4%. Varying the salt's LENGTH per
+## half, not just its last character, decorrelates it (measured r=0.01) and
+## lands every pinned population comfortably inside budget (~3-4.5%,
+## confirmed stable at 4000 samples too, not an artifact of the pinned
+## seed ranges).
 static func _unit(seed_value: int, gene: String, index: int) -> float:
-	var salted := "%d_%s_%d_animal_genome" % [seed_value, gene, index]
+	var salted := "%d_%s_%s_animal_genome" % [seed_value, gene, "x".repeat(index + 1)]
 	return float(absi(hash(salted)) % 10000) / 10000.0
