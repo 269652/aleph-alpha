@@ -337,6 +337,24 @@ func corpse_age_seconds(cell: Vector2i) -> float:
 	return RECOVERY_SECONDS - _recovery.get(cell, RECOVERY_SECONDS)
 
 
+## Takes the corpse at `cell` -- what lets a player carry the body off
+## rather than only ever watching it decompose (see docs/concept/
+## aquatic_foraging.md's "Worms as fish bait"). Returns false when there is
+## nothing to take, the same "just try, sim decides" contract take()/
+## crush() already use.
+##
+## Deliberately leaves _recovery running: taking the corpse away removes
+## the visible/pickable marker, but does not heal the burrow any faster
+## than an ordinary recovery would -- the burrow still needs the same real
+## RECOVERY_SECONDS before a new worm can surface there, corpse or no
+## corpse. Only _crushed clears.
+func take_corpse(cell: Vector2i) -> bool:
+	if not is_corpse(cell):
+		return false
+	_crushed.erase(cell)
+	return true
+
+
 ## Whether the environment is currently pulling `cell`'s worm UP -- false
 ## (the harmless default) for a burrow that has never advanced, is
 ## genuinely falling, or has already reached a steady state with nothing
