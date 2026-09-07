@@ -168,6 +168,35 @@ func test_every_season_the_cycle_can_report_has_a_grass_colour_of_its_own():
 		)
 
 
+## Grass season-SWAPPING (which of the four grass_blades_*.png sheets a card
+## samples, see docs/concept/long_grass.md's "Seasonal art") needs the same
+## {from, to, progress} shape the tint above already reads, not a new
+## schedule -- a card and the tint on the SAME field must never disagree
+## about what season it is. transition_for_world_age is the thin convenience
+## wrapper `tint_for_world_age` already models, over the SAME
+## SeasonTransition.state_at the tint itself uses (not a second, possibly-
+## drifting derivation).
+func test_transition_for_world_age_agrees_with_the_tints_own_state():
+	var elapsed := MID_AUTUMN * SeasonCycle.SECONDS_PER_YEAR
+	var transition := SeasonalFoliage.transition_for_world_age(elapsed)
+	var expected := SeasonTransition.state_at(SeasonCycle.new().year_fraction(elapsed))
+	assert_eq(transition.from, expected.from)
+	assert_eq(transition.to, expected.to)
+	assert_almost_eq(transition.progress, expected.progress, 0.0001)
+
+
+func test_transition_for_world_age_reports_mid_turn_the_same_way_the_tint_does():
+	# Same premise as test_the_tint_blends_across_a_season_turn_on_the_same_
+	# transition_the_canopies_use above: mid-turn must show real, partial
+	# progress between two DIFFERENT named seasons, not a settled endpoint.
+	var elapsed := 0.45 * SeasonCycle.SECONDS_PER_YEAR
+	var transition := SeasonalFoliage.transition_for_world_age(elapsed)
+	assert_eq(transition.from, "summer")
+	assert_eq(transition.to, "autumn")
+	assert_gt(transition.progress, 0.0)
+	assert_lt(transition.progress, 1.0)
+
+
 func test_the_summer_reference_is_the_shipped_grassland_colour_itself():
 	# This is WHY summer is the identity tint rather than a tuned 1.0: the
 	# multiplier is target/summer, and summer's target is the palette entry.

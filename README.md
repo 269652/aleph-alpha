@@ -1,5 +1,7 @@
 # Aleph Alpha
 
+[![Latest Release](https://img.shields.io/github/v/release/269652/aleph-alpha?label=latest%20release)](https://github.com/269652/aleph-alpha/releases/latest)
+
 ![New Game Screen](./screenshots/new-game.png)
 
 > A proprietary, non-commercial alpha — built solo, still finding its shape, and not for sale.
@@ -58,7 +60,24 @@ mechanism-by-mechanism implementation status is
 [`docs/progress.md`](docs/progress.md), and the phase plan is
 [`docs/roadmap.md`](docs/roadmap.md).
 
-## Running the Game
+## Playing the Game
+
+### Download and play (Windows, no Godot needed)
+
+1. Grab the latest Windows build from the
+   **[Releases page](https://github.com/269652/aleph-alpha/releases/latest)**
+   — download the `AlephAlpha-vX.Y.Z-windows.zip` asset.
+2. Extract the zip anywhere and run `AlephAlpha.exe`.
+3. Windows will likely show a "Windows protected your PC" SmartScreen
+   prompt — that's just an unrecognized-publisher warning, not a virus
+   flag. Click **More info > Run anyway**. (The executable already
+   carries the game's own internal signature, checked at startup — see
+   `docs/licensing.md` — just not a paid Windows code-signing
+   certificate, which is what SmartScreen actually checks for.)
+4. The first launch shows the in-game license screen — paste the key
+   below into it.
+
+### Run from source (for development)
 
 Requires [Godot](https://godotengine.org/download) 4.7 (the standard,
 non-.NET build -- the project doesn't use C#). From the repo root:

@@ -1,5 +1,6 @@
 extends Node2D
 
+const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const RenderResolution = preload("res://src/rendering/render_resolution.gd")
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
@@ -70,6 +71,7 @@ const GithubDeviceAuth = preload("res://src/licensing/github_device_auth.gd")
 const GithubDeviceFlow = preload("res://src/licensing/github_device_flow.gd")
 const GithubTokenStore = preload("res://src/licensing/github_token_store.gd")
 const MainMenu = preload("res://scenes/main_menu.gd")
+const IntroSplash = preload("res://scenes/intro_splash.gd")
 const LoadingOverlay = preload("res://scenes/loading_overlay.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const StarterKit = preload("res://src/gameplay/starter_kit.gd")
@@ -704,6 +706,13 @@ func _ready() -> void:
 	# EarthChunkManager.fruit_near/take_fruit_at read this directly rather
 	# than needing a second, parallel ground-item model.
 	_chunk_manager.set_ground_items(_ground_items)
+	# FPS round 6 (see docs/concept/soil_fauna.md): pays MushroomMarker's
+	# real, one-time-per-species bitten/crushed art-loading cost HERE,
+	# before any decomposer can possibly reach a mushroom, instead of
+	# leaving it to land unpredictably on whichever live gameplay frame
+	# happens to be the first bite of a not-yet-touched species (measured
+	# live at up to ~1.6s for a single bite).
+	MushroomMarker.warm_art_cache()
 	_player_spawner.spawn_path = _players.get_path()
 	_player_spawner.add_spawnable_scene(PlayerScene.resource_path)
 	WorldItemBus.item_dropped.connect(_on_item_dropped)
@@ -759,10 +768,12 @@ func _ready() -> void:
 	elif _has_network_arg(args):
 		_start_client(args)
 	else:
-		# Interactive launch: show the main menu (New Game / Host / Join /
-		# class pick) and hold the world paused until the player chooses, rather
-		# than dropping straight into a default single-player game.
-		_show_main_menu()
+		# Interactive launch: play the boot logo intro first (see
+		# docs/concept/intro_splash.md), then show the main menu (New Game /
+		# Host / Join / class pick) and hold the world paused until the player
+		# chooses, rather than dropping straight into a default single-player
+		# game.
+		_play_intro_splash()
 
 
 ## Path to the menu's painted backdrop (see concept art prompt in the commit
@@ -770,6 +781,22 @@ func _ready() -> void:
 ## the plain dim ColorRect (below) is all that shows, so dropping the asset
 ## in later works with no code change.
 const MENU_BACKGROUND_PATH := "res://assets/backgrounds/main.png"
+
+
+## Plays the boot logo intro once (see IntroSplash, docs/concept/
+## intro_splash.md), then shows the main menu -- the intro doesn't know what
+## comes after it (just emits `finished`, on completion OR an early skip), so
+## this is the one place that decides. Never called for --solo/--server/join
+## launches (see _ready's own branching just above) -- those are dev/
+## diagnostic or straight-to-multiplayer paths that should stay instant, not
+## the ordinary player-facing "double-click and play" launch this belongs to.
+func _play_intro_splash() -> void:
+	var intro := IntroSplash.new()
+	_ui.add_child(intro)
+	intro.finished.connect(func():
+		intro.queue_free()
+		_show_main_menu()
+	)
 
 
 ## Builds the start-up main menu (see MainMenu). The world is paused behind it
@@ -5022,13 +5049,17 @@ func _client_process(delta: float) -> void:
 	# accumulator.
 	#
 	# Each call's own bool return (true only when something was actually
-	# crushed) now also feeds Karma (see docs/concept/karma_and_luck.md):
-	# "stepping on a worm should give -1 Karma", asked for every crush, the
-	# player's own step OR any creature's, not just the player's deliberate
-	# ones -- so the penalty lands on local_player regardless of which of
-	# the two loops below did the crushing. A crushed millipede, ant or bug
+	# crushed) also feeds Karma for the PLAYER's own step below (see
+	# docs/concept/karma_and_luck.md): "stepping on a worm should give -1
+	# Karma." Player-only, not the creature loop beneath it -- reported
+	# live: "Karma is constantly decreasing when wild animals step on
+	# worms... it should only decrease when the player itself steps on
+	# something... the player must do it" (reversing this section's
+	# earlier "any creature's" reading, see karma_and_luck.md's own
+	# 2026-09-07 reversal note). A crushed millipede, ant or bug still
 	# charges the same constant -- its name predates all three, but the
-	# event it represents is identical (see karma.gd's own doc comment).
+	# event it represents is identical (see karma.gd's own doc comment) --
+	# it just only ever lands on local_player for local_player's OWN step.
 	if _chunk_manager.crush_worm_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	if _chunk_manager.crush_caterpillars_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
@@ -5049,22 +5080,23 @@ func _client_process(delta: float) -> void:
 	if _chunk_manager.crush_mushroom_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	_chunk_manager.crush_walnut_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
+	# A wild creature's own step still crushes what's underfoot (a real,
+	# weight-emergent ecosystem effect -- a deer's own hoof kills the worm
+	# the same as a player's boot would) but never touches Karma: every
+	# call here is a bare statement, exactly the shape crush_walnut_near
+	# (never Karma-eligible for anyone) already used on the line right
+	# below them. See this block's own doc comment above for the report
+	# that reversed this from the earlier "any creature's" design.
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		var marker := creature as CreatureMarker
 		var species: String = marker.info.species if marker.info != null else ""
 		var momentum := CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
-		if _chunk_manager.crush_worm_at(marker.position, momentum):
-			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-		if _chunk_manager.crush_caterpillars_near(marker.position, momentum):
-			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-		if _chunk_manager.crush_millipedes_near(marker.position, momentum):
-			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-		if _chunk_manager.crush_ants_near(marker.position, momentum):
-			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-		if _chunk_manager.crush_decomposers_near(marker.position, momentum):
-			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-		if _chunk_manager.crush_mushroom_at(marker.position, momentum):
-			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
+		_chunk_manager.crush_worm_at(marker.position, momentum)
+		_chunk_manager.crush_caterpillars_near(marker.position, momentum)
+		_chunk_manager.crush_millipedes_near(marker.position, momentum)
+		_chunk_manager.crush_ants_near(marker.position, momentum)
+		_chunk_manager.crush_decomposers_near(marker.position, momentum)
+		_chunk_manager.crush_mushroom_at(marker.position, momentum)
 		_chunk_manager.crush_walnut_near(marker.position, momentum)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
@@ -5100,6 +5132,7 @@ func _client_process(delta: float) -> void:
 	# outside it is left for step_fruiting (host) or a later, nearer sync
 	# (any peer) instead of paying a redraw nobody can see.
 	_chunk_manager.sync_tree_season(local_player.position)
+	_chunk_manager.sync_grass_season()
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (
 		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"

@@ -2422,8 +2422,10 @@ nothing like it already existed:
   `CreatureMarker._gait_distance`'s own "accumulate real travelled
   distance, threshold it" shape, generalized from indexing an animation
   frame into emitting a discrete world event instead). `STRIDE_LENGTH_
-  METERS`/`STANCE_WIDTH_METERS` (0.75m/0.12m) are real human-scale
-  measurements converted via the existing `GroundSlide.PX_PER_METER`.
+  METERS`/`STANCE_WIDTH_METERS` (0.75m/0.22m — the latter widened from
+  0.12m after live feedback, "space left and right foot a bit wider")
+  are real human-scale measurements converted via the existing
+  `GroundSlide.PX_PER_METER`.
 - **`FootprintField`** (`src/world/footprint_field.gd`) — per-chunk data
   mirroring `LeafLitterField`'s exact shape, deliberately simpler (a
   footprint is static once stamped, no wind/settle/decay-stage machinery
@@ -2477,6 +2479,67 @@ with zero script errors. See
 [snow_cover.md](concept/snow_cover.md#real-leftright-footprint-stamps-2026-09-07)
 and
 [infrastructure.md](concept/infrastructure.md) for the full mechanism.
+
+
+### A crushed worm's corpse can now be picked up (2026-09-07)
+
+✅ Reported live, directly: *"crushing worms doesn't display their
+crushed sprite last frame; instead they vanish.. they should stay in
+world and still be able to picked up."* Investigated both halves before
+writing any code: the "vanish" half turned out to already be fixed —
+`EarthwormPatch.is_corpse`/`EarthChunkManager._sync_worm_sprites`'s
+corpse-survives-the-sync check (see "A corpse is new ground" in
+[soil_fauna.md](concept/soil_fauna.md)) shipped 2026-09-05 and was
+re-confirmed passing directly against `main` before this pass began —
+almost certainly a stale, pre-fix running instance was what was actually
+observed live. The pickup half was real and genuinely missing: nothing
+ever joined a worm to `DroppedItem.GROUP_NAME`, live or dead.
+
+- **`EarthwormPatch.take_corpse(cell)`** — the same "just try, sim
+  decides" bool contract `take()`/`crush()` already use. Clears
+  `_crushed[cell]` alone, deliberately leaving `_recovery[cell]` running:
+  carrying the body off does not heal the burrow any faster than an
+  ordinary recovery would.
+- **`WormMarker`** (`src/rendering/worm_marker.gd`, NEW) — mirrors
+  `MushroomMarker.pick_up`'s exact shape (`ItemCatalog.make` +
+  `inventory.add` + "tell the sim, then `queue_free`"), gated on
+  `worm_world.is_corpse(cell)` up front: a live worm is deliberately NOT
+  pickable (becoming bait is `aquatic_foraging.md`'s own separate,
+  still-⬜ "Worms as fish bait" pass, not this one). Every worm's sprite is
+  now a `WormMarker` from the moment it first surfaces — the object is
+  never recreated between then and corpse state — but `pick_up` only ever
+  does anything once `is_corpse` is true.
+- **`ItemCatalog`** gained a `"worm"` entry — `"material"` kind (it isn't
+  people-food), with a real earthworm reference mass (~5g) via a new
+  `_CREATURE_MASS_KG` bucket, mirroring `_PRODUCE_MASS_KG`/
+  `_MUSHROOM_MASS_KG` exactly.
+
+**A real crash, found and fixed in the same pass, not shipped separately
+after the fact.** Pickup lets something OTHER than `EarthChunkManager`'s
+own sync loop free a worm sprite the `_worm_sprites` dictionary still has
+an entry for — a possibility that never existed before pickup did.
+`_crawl_worm_sprites` (runs every single `step_worms` call) touched
+`.position`/`.texture` on every dictionary entry unconditionally;
+`_sync_worm_sprites`'s own cleanup branch called `.free()`
+unconditionally too. Reproduced directly (mirroring
+`test_crushing_ants_does_not_crash_on_a_stale_already_freed_entry`'s own
+".free() the worst case" idiom — plant an already-`.free()`'d stand-in
+node straight into the manager's own dictionary): the former raised a
+script error, the latter crashed the engine process outright (confirmed
+reproducibly, exit code 127, before the fix). Both now guard with
+`is_instance_valid` first and erase the stale entry instead of touching
+it — the exact pattern `crush_ants_near`/`_crush_markers_near` already
+established for the identical shape of bug (see "FPS regression round 3"
+above).
+
+Built red-first throughout, including the crash reproduction itself.
+`test_earthworm_patch.gd` 59/59, `test_item_catalog.gd` 65/65,
+`test_worm_marker.gd` 8/8, and every worm-related
+`test_earth_chunk_manager.gd` test re-run and green, including the new
+stale-entry regression pair and the pre-existing die-animation/corpse
+suite this pass touched the same two functions as. See
+[soil_fauna.md](concept/soil_fauna.md#a-corpse-can-be-carried-off-2026-09-07)
+for the full mechanism.
 
 
 ### Flowers: too dense, no tooltip, and a wind that never blew
@@ -3957,7 +4020,7 @@ chunks away from the player). See the concept doc for the full spec.
 - **Frame-set generation shared across animals** (small) — ✅ Done — `ProceduralAnimalAnimation.textures_for` + `LOOK_VARIANTS = 8` (tested): every `CreatureMarker` used to draw its own frame set the first time it played an action, uncached. Measured live: **25 creatures crossing into "eat" together burned 1.18 SECONDS of frame generation inside one 5-second window** (~47ms each) — the 130–145ms frame spikes reported as lag. Generation is now bounded by species × action × 8 looks for the whole session, paid once.
 - **A herd is not on one clock** (small) — ✅ Done — `CreatureNeeds.new(seed_value)` / `START_STAGGER` (tested): every creature used to start at hunger 0 and rise at the same fixed rate, so a whole herd crossed the hunger threshold on the same tick and switched action in the same frame — the other half of the spike above. Each animal now starts at its own deterministic, hash-derived point in its cycle, below the threshold so nothing spawns already starving.
 - **Tall grass advances in one batched step** (small) — ✅ Done — `EarthChunkManager.step_tall_grass` walked every loaded chunk's every patch **every frame** (~25 chunks × up to 64 cells, 60×/s, measured at ~5ms of frame budget) to resolve growth of 0.01 per second. It now advances once per `GRASS_REFRESH_INTERVAL` with the accumulated delta; growth is linear in delta and spread carries its own accumulator, so the batched call lands in identical state (pinned by test).
-- **Illustrated long-grass cards** (medium) — 🚧 Partial — mature `TallGrass` cells now use the delivered 10×10 `assets/sprites/grass_blades.png` atlas as several deterministically selected, depth-layered blade cards instead of one procedural tuft. Tall grass now seeds at 20% of eligible cells (hard-capped at 205 per chunk — raised from an earlier, undersized 128, see the Long Grass section's `MAX_PATCHES` entry below) so it forms a visible field rather than isolated decorations. A shared GPU shader keeps roots planted while wind moves tips and bends nearby patches away from the player; `EarthChunkManager` writes one walker-position uniform per frame. Cards remain decoration-LOD scoped. Creature wake sharing is still open.
+- **Illustrated long-grass cards** (medium) — 🚧 Partial — mature `TallGrass` cells now use the delivered 10×10 `assets/sprites/grass_blades_{spring,summer,autumn,winter}.png` atlases (one per season, see the "Four seasonal sheets" entry further below) as several deterministically selected, depth-layered blade cards instead of one procedural tuft. Tall grass now seeds at 20% of eligible cells (hard-capped at 205 per chunk — raised from an earlier, undersized 128, see the Long Grass section's `MAX_PATCHES` entry below) so it forms a visible field rather than isolated decorations. A shared GPU shader keeps roots planted while wind moves tips and bends nearby patches away from the player; `EarthChunkManager` writes one walker-position uniform per frame. Cards remain decoration-LOD scoped. Creature wake sharing is still open.
 - **Dropped-item art is shared** (small) — ✅ Done — `ProceduralItemSprite.texture_for` (static cache): each `DroppedItem` rebuilt its own 32×32 image pixel by pixel on `_ready`. Fine for a few items, not fine once the world sheds windfall continuously.
 - **Variable-fidelity LOD / unloaded-chunk catch-up** (large) — ✅ Done — `src/world/chunk_ecology_catchup.gd` (tested, reuses the same logistic + predator-prey models as loaded chunks): a chunk records its aggregate ecology at unload; on revisit `EarthChunkManager._apply_ecology_catchup` integrates it forward over the elapsed unloaded time and installs the caught-up herbivore/predator populations (`EcosystemSimulation.seed_populations`) instead of resetting to fresh equilibrium — so a region the player left keeps evolving (herds grow or get thinned by predators). Closes the long-standing "regenerates at equilibrium on revisit" gap.
 - **Seasonal forcing of phenology** (medium) — ✅ Done — the stale claim that "warmth is instantaneous temperature, not a seasonal calendar variable" is contradicted by its own call site. `EarthChunkManager._warmth_at_pixel` (`src/world/earth_chunk_manager.gd:2271-2274`) multiplies the real Earth climate temperature at the player's tile by `SeasonCycle.warmth_modifier(_world_age_seconds)` (`src/world/season_cycle.gd:51` -- a cosine phase-shifted to peak mid-summer and trough mid-winter) and feeds the product to `FruitingModel`, so a tree ripens and sheds fast in summer and slowly in winter on top of its baseline climate. Vegetation runs on the same clock with a **dormancy floor rather than zero** (`SeasonCycle.growth_modifier`, `:60`, consumed for root crops at `earth_chunk_manager.gd:3401`: a plant goes dormant in winter, it does not die), and the earthworm sim is forced by the same warmth (`:4547`). Pinned as measured seasonal DIVERGENCE, not as a number: `tests/unit/test_fruiting_model.gd` walks a whole `SeasonCycle.SECONDS_PER_YEAR` in 60 steps sampling the real warmth curve at each one (`test_what_falls_is_exactly_what_stopped_hanging` at `:496`, `test_nothing_falls_that_was_not_hanging` at `:525`) -- its own comment records that a constant warmth **hid** the disagreement those tests exist to catch -- and `tests/unit/test_season_cycle.gd:33` `test_summer_is_warmer_than_winter` asserts the seasonal ordering. `concept/ecosystem_dynamics.md:676` and `concept/seasons.md:140` both already mark it ✅; this entry was the only one that disagreed.
@@ -8276,7 +8339,15 @@ disperser/climate scope is still unbuilt:
 - **Grass parts for every client, not just the simulation owner** (small) — ✅ Done — reported live: "grass doesn't part when the player walks through it." `World._process` called `EarthChunkManager.set_grass_walker_position` from inside the `_owns_ecosystem_simulation()` gate meant for actual simulation steps; that gate evaluates true in single-player (masking the bug there) but is false for every connected multiplayer client except the host, so a joining client's own local grass never parted for them. Fixed by moving the call out of the gate, unconditional every frame for every client — the same treatment `step_water_disturbances` (a fellow purely-cosmetic, per-client effect) already had, right above it in the same function. Investigated and REFUTED, via a real non-headless render (not just code reading): a `Player.position`/grass-`MODEL_MATRIX` coordinate-space mismatch (both are children of the same untransformed `$Entities` node) and the walker uniform/`wake` math not reaching the shader (a temporary `wake > 0.01` → solid-magenta diagnostic confirmed it fires exactly where expected, at the real tuned `walker_radius`/`WALKER_PUSH_UV_AMPLITUDE`, not just an artificially cranked one). See `concept/long_grass.md` History #5.
 - **Ambient wind sway scales with live weather** (small) — ✅ Done — `IllustratedGrassPatch`'s ambient wind term (not the walker push, which stays constant) now carries a `wind_strength` uniform fed by `EarthChunkManager.set_wind_strength` from the same live `WeatherModel.wind_strength_for` value the water's shimmer and `WindSway` (trees, grass/scrub tufts, and flower blooms — see the Phase 0 Project Scaffold row) already use — one shared wind concept, not a parallel one. Default `1.0` is calibrated to `wind_strength_for("clear")`, so today's tuned look is exactly reproduced on a clear day (the majority weather state) and scales up visibly in worse weather. Verified with a real non-headless render: a per-pixel motion-energy diff across a burst of frames under `storm` (1.8) vs `clear` (1.0) showed a distinct, coherent canopy-shaped region of high frame-to-frame displacement under storm that the clear-weather diff (dominated by uniform background/ground-texture noise) did not show.
 - **Blades carry the season** (small) — ✅ Done — built, tested and wired. `IllustratedGrassPatch`'s blade shader gained a `uniform vec3 season_tint` and a greenness-gated `mix(COLOR.rgb, COLOR.rgb * season_tint, greenness)` at the end of `fragment()`, plus `set_season_tint` and a `_season_tint` member re-applied at lazy `material()` build time, all fed from the same `SeasonalFoliage` table the terrain `GroundTint` uses so the lawn and the blades standing in it cannot disagree about the month (`test_illustrated_grass_patch.gd` 37/37). The missing caller was found by this same programme and then closed by it: `EarthChunkManager.set_season_tint` forwards onto `_illustrated_grass`, and `World._client_process` pushes the live tint once a frame (`test_world_season_fanout.gd` 6/6). The entry and `concept/long_grass.md`'s Status line were briefly downgraded to 🚧 while the receiving half stood alone, which is the honest history worth keeping. Deliberately appearance-only: `TallGrass.GROWTH_RATE` is untouched and `concept/seasons.md`'s "⬜ Seasonal scaling of vegetation/tall-grass growth RATE" stands, because a rendering fix must not smuggle a sim change in with it.
-- **Live pixel-greenness of the blade art is unverified** (small) — ⬜ Not checked — `assets/sprites/grass_blades.png` is illustrated art whose actual pixel greenness nobody has sampled. If many of its 100 variants are already dry/tan, the greenness gate will make the winter tint under-read on grass relative to the terrain beneath it. If it does, the lever is `GRASSLAND_BY_SEASON` in `seasonal_foliage.gd`, **not** a second per-shader constant. Needs one live look; not testable headlessly.
+- **Four seasonal sheets replace the single atlas, with a real per-blade staggered turn** (large) — ✅ Done — see `concept/long_grass.md`'s "Seasonal art" section for the full mechanism. The single `grass_blades.png` (renamed, byte-identical, to `grass_blades_summer.png`) is joined by three new delivered sheets, `grass_blades_{spring,autumn,winter}.png`, same 10×10 grid. Two changes followed: (1) a sheet's row is now a real growth stage rather than a second variant axis — `IllustratedGrassPatch.atlas_region_for(seed, growth, atlas_size)` maps `TallGrass.get_growth` to the row and the existing per-card seed to the column independently, retiring the old growth-as-scale trick (`instances_for_cards` no longer damps a young card's size, since a real shoot row now exists to draw instead of a shrunk mature clump); (2) which of the four sheets a card samples turns on a staggered per-card schedule mirroring `TreePhenology`/`ProceduralTreeSprite`'s "one shared clock, many independently-timed units" shape, just at CARD granularity instead of per-pixel (a hard sheet-swap, not a cross-fade — grass has thousands of simultaneous, non-persisted instances where a per-card baked-image cache would be the wrong shape). `EarthChunkManager.sync_grass_season` mirrors `sync_tree_season`'s own signature-guarded shape exactly, and `_sync_grass_sprites` splits a transitioning band into up to two `MultiMeshInstance2D`s (`IllustratedGrassPatch.split_cards_by_turn`, each card's own `turn_threshold_for_seed` compared against the shared, quantised progress), collapsing back to one mesh the instant the transition settles.
+
+  **Critical bug found by measurement, not assumption, before any of this could work at all:** three of the four delivered sheets (spring/autumn/winter) shipped as plain opaque RGB with no alpha channel (`Image.FORMAT_RGB8`, every pixel including background reading `alpha=1.0`) — loaded as-is, every card would have rendered as a solid near-black rectangle. Fixed by chroma-keying every season's sheet (`SpriteSheetSlicer.chroma_keyed`, an existing utility) before building its texture, a no-op on summer's own already-transparent background.
+
+  `IllustratedGrassPatch.ROW_TOP_BLEED_PX` (the pre-existing floating-artefact inset table) was re-measured against all four real sheets, exposing and fixing a real methodology bug along the way (float-rounding the row math gave a systematically different, wrong result from the integer truncation `atlas_region_for` actually uses) — rows 0-5 are now exhaustively verified transparent-enough across all four sheets. Rows 6-9 (the four densest, fullest rows) are a real, flagged, NOT-yet-closed gap: bleed severity climbs with row density in more than one season, past what a bigger shared margin can absorb without cropping real art elsewhere — see `concept/long_grass.md`'s Status for the measured detail. `tools/spawn_task` follow-up filed to investigate a per-row-and-season table.
+
+  Tests: `test_illustrated_grass_patch.gd` (atlas_region_for/split_cards_by_turn/turn_threshold_for_seed), `test_seasonal_foliage.gd` (`transition_for_world_age`), `test_earth_chunk_manager.gd` (`test_sync_grass_season_*`, five tests against a lightweight forced-patch fixture rather than a full `manager.update()` load).
+
+- **Live pixel-greenness of the blade art is unverified** (small) — ⬜ Not checked — `assets/sprites/grass_blades_summer.png` (the original shipped art, now one of four seasonal sheets) is illustrated art whose actual pixel greenness nobody has sampled. If many of its 100 variants are already dry/tan, the greenness gate will make the winter tint under-read on grass relative to the terrain beneath it. If it does, the lever is `GRASSLAND_BY_SEASON` in `seasonal_foliage.gd`, **not** a second per-shader constant. Needs one live look; not testable headlessly.
 - **Seed, and animal-carried dispersal to distant/cross-chunk locations** (large) — ✅ Done — see `concept/long_grass.md`'s "Reproduction" section for the full mechanism spec. `_step_spread` (existing) only ever creeps into the four cells touching a mature patch; this pass adds the OTHER half real grass reproduction needs: `TallGrass.shed_seed`/`ground_seed_cells`/`take_ground_seed` (mirrors `FlowerPatch`'s own shape, no bloom/pollination gate since grass has no bloom cycle, no species field since a chunk grows only one kind of grass) and `TallGrass.plant` (the sink, mirrors `FlowerPatch.plant`), backed by `EarthChunkManager.grass_seeds_near`/`take_grass_seed_at`/`plant_grass_at` (same 3×3-chunk-neighbourhood-scanned shape as `flowers_near`/`seeds_near`/`fruit_near`). Two carriers, deliberately different mechanisms: **sparrows** eat grass seed through the exact same `seed_world` port and `SeedEndozoochory` carry-distance model they already use for flower seed (a sparrow's crop doesn't care which plant a swallowed seed came from) — `AmbientFlyerMarker` gained a fourth parallel sniff track (`_grass_seed_*`) alongside worm/fruit/flower-seed, all sharing one `ground_forage` state machine and one `_carried_seed_species` slot. **Mice** do NOT get the bird treatment: a real scatter-hoarding rodent doesn't fly and doesn't digest a seed in transit, so `src/gameplay/seed_caching.gd` is its own small module (short GROUND carry, `CARRY_MIN/MAX_TILES` 1–6 vs the bird's 10–40 and the flower grazer's 3–14 — pinned by test to sit below both) wired through `EarthChunkManager._step_grass_seed_caching`, gated to `species == "mouse"` specifically rather than the whole "Forager" diet label. Both carriers land in the SAME sink (`plant_grass_at`), so either one can found a genuinely new, disconnected field a chunk (or neighbouring chunk) away — not just extend an existing one. **Grazing counter-pressure was already live before this pass** — `EarthChunkManager._graze_by_herbivores` already ate a mature patch under any non-predator creature standing on it (horses/sheep included), driven from the same throttled tick as growth/spread — this pass only needed to confirm it, not build it; a real-world probe (real Berlin chunk, real `AmbientFlyerMarker`/`CreatureMarker` instances driven through hundreds of real `_process` steps, deleted after use) measured genuine coverage divergence between grazers-present and grazers-absent runs over the same simulated span — see the probe numbers callout below. Found and fixed one adjacent latent bug while restructuring the carried-seed-kind branching to add a third kind: `_carried_seed_is_flower` was set `true` on eating a flower seed but never reset, so a bird that later ate fruit (sparrows are diet-eligible for both) would incorrectly call `plant_flower_at` with the fruit's species instead of `fruit_world.try_plant_seed_at` — now every `_take_targeted_*` method resets both kind flags before setting its own (regression-tested).
   - **Probe numbers** (real Berlin chunk data, 500 ticks × 5s = 2500 simulated seconds; probe scripts not kept in the tree — deleted after use, per this project's real-world-verification convention). **Full loop, end to end** (4 real `AmbientFlyerMarker` sparrows + 3 real `CreatureMarker` mice, all driven through hundreds of real `_process` steps against the real production code path, no mocks): 11 grass seeds eaten, 1 new distant patch established — by a MOUSE (`mouse grass-cachings: 11`, `sparrow grass-plantings: 0`). That zero for sparrows is a real, reproducible finding, not a bug: `AmbientFlyerMarker`'s four ground-forage searches run in a fixed priority (worm → fruit → flower-seed → grass-seed, unchanged order, grass-seed only appended at the end), so with real Berlin flower-seed abundant in range the whole run, sparrows committed to flower seed on every opportunity and grass-seed foraging never got a turn — proven mechanically correct in isolation (see `test_ambient_flyer_marker.gd`'s dedicated sparrow/grass-seed tests, a `StubSeedWorld` with ONLY grass seed on offer), but in a real mixed meadow today's fixed priority order makes mice the dominant real-world driver of new distant patches, not birds. Flagged as a judgment call, not fixed: changing that priority order risks the already-tested flower-dispersal behavior and wasn't asked for. **Grazing counter-pressure**, isolated from the above (a creature pinned onto a real, currently-mature patch in its own chunk every tick, re-picked as each one is eaten — the direct causal test, since a freely-wandering herd's tiny `WANDER_RADIUS` (40px, ~2.5 tiles) turned out to make the full-loop probe's own grazer placement a matter of luck, not a property of the mechanism): 121 real `TallGrass.graze()` calls over the run; total coverage **without** a grazer grew 3101 → 3200 (+99), **with** one continuously-grazing creature it fell 3101 → 3072 (−29) — a swing of 128 patches from a single animal, confirming the mechanism (already live before this pass, see below) is real and strong. Honest caveat for what a player actually sees: that strength depends on a herd's home point actually being near grass, since footfall grazing only fires on the exact tile a creature is standing on — the same 40px tether that made the full-loop probe's own grazer placement unreliable in the wild also governs how promptly a real, freely-wandering herd finds grass to crop in the first place.
 - **`MAX_PATCHES` raised from 128 to 205, fixing a real deterministic test failure** (small) — ✅ Done (2026-08-26) — `test_earth_chunk_manager.gd`'s `test_plant_grass_at_establishes_a_new_patch` failed every run against Berlin's own real chunk: `MAX_PATCHES` (128) was only ~12.5% of a real `CHUNK_SIZE`-square chunk (32×32=1024 cells), well under `FIELD_NOISE_THRESHOLD`'s own documented ~20% target coverage — so a chunk generating mostly/fully grassland (Berlin's included) hit the 128 cap from INITIAL SEEDING alone, before any spread or planting, leaving `TallGrass.plant()` permanently unable to succeed there no matter which empty cell a caller found (`plant()`'s first check is the cap, before the per-cell occupancy check). Fixed by raising `MAX_PATCHES` to 205, derived from the real chunk size and density target (32²×0.20≈204.8, rounded up) rather than picked by feel, with a new unit test (`test_max_patches_accommodates_the_density_target_for_a_real_full_chunk` in `test_tall_grass.gd`) that independently recomputes the same math against `EarthChunkManager`'s real `CHUNK_SIZE` so the relationship re-verifies automatically if either constant changes again. Also fixed a latent gap in the pre-existing `test_planting_respects_the_per_chunk_cap`: its 8×8=64-cell test grid was smaller than even the OLD `MAX_PATCHES` (128), so the cap-enforcement branch it exists to test could never actually fire — widened to a real `CHUNK_SIZE`-square grid, which genuinely exceeds `MAX_PATCHES` either way. See `concept/long_grass.md` History #9.
@@ -9380,6 +9451,52 @@ counting stub (`_CountingTree`), mirroring round 4's own
 `_CountingPhaseGenerator`/`_CountingFlyerWorld` idiom rather than a
 timing assertion. See `soil_fauna.md`'s own round-5 entry for the full
 writeup.
+
+**FPS regression round 6: mushroom bitten-art's own cold-cache bite
+(2026-09-07).** Reported live again right after round 5 shipped: "Kannst
+du weiter die Performance debuggen? Es ist immer nocht bei 4-10 fps...".
+A live GPU-contention hypothesis (25+ concurrent Claude Code sessions
+sharing one Intel iGPU) was directly measured via Windows' own `GPU
+Engine` performance counters and ruled OUT -- 1.9-2.1% GPU utilization
+at the exact moments frame time spiked, the signature of a CPU-bound,
+not GPU-bound, frame. `World._process`'s own top-level orchestration was
+split call-by-call and confirmed cheap (~20-25ms); a new shared
+per-marker-class tally (round 4/5's own `PerfProbe` shape, generalized
+to 17 classes at once) then found `DecomposerMarker` dominating whenever
+it spiked (up to 15.6s of aggregate `_process` per 60-frame window at an
+unchanged ~42-instance population), with round 5's own fix re-verified
+still holding (its shared cache/scan paths stayed under 400ms/window
+throughout). Splitting `_step_feeding`'s four target-type branches
+separately isolated the entire spike to `take_mushroom_bite` alone --
+essentially 100% of every affected window, up to ~1596ms for a SINGLE
+bite.
+
+Root cause: `MushroomMarker.take_mushroom_bite` -> `_rebuild_sprite` ->
+`IllustratedMushroomSprite.bitten_frame_for` lazily loads that species'
+real bitten-art sheets (up to 3 full-resolution images per species, each
+needing a whole-image chroma-key pass) on whichever live gameplay frame
+happens to be the FIRST bite of a not-yet-cached species -- the cache
+itself was already correct and idempotent, this was purely a WHEN bug
+(the same shape round 5's own root cause had), recurring up to 8 times
+(once per real species) over a session's life as different species get
+bitten for the first time at unpredictable moments.
+
+Fixed by pre-warming, not by touching the bite path itself:
+`IllustratedMushroomSprite.warm_cache()` eagerly fills all three
+per-species caches (normal/crushed/bitten) through the exact same
+already-correct cache-check every ordinary call uses; `MushroomMarker.
+warm_art_cache()` is a one-line static wrapper; `World._ready()` calls
+it once, well before any chunk (and so any decomposer) can load. 23/23
+green in `test_illustrated_mushroom_sprite.gd` (cold-cache reset first,
+mirroring round 5's own static-state-reset shape, so the test cannot
+pass on a no-op), 25/25 in `test_mushroom_marker.gd`, zero regressions
+in `test_world_streaming_budget.gd`'s literal source-string check on
+`World._ready`'s body. **Real, confirmed, explicitly still open**: even
+in a calm window, every marker class's `_process` summed together still
+costs roughly 50ms/frame from this save's own accumulated entity
+population alone -- not a bug in any one system, an architectural
+scale question for a future round. See `soil_fauna.md`'s own round-6
+entry for the full writeup.
 
 ### Flies (`concept/flies.md`)
 
@@ -13053,6 +13170,20 @@ intermediate "loaded, undecided" state at all.
   that branch's `StarterKit.POOL` does not include either item, and
   merging it as-is would silently drop this grant along with the rest of
   the old kit — worth reconciling at that point, not addressed here.
+  (**Reconciled, same day**: `claude/starter-kit` merged a couple of
+  hours later (`33da72c6`). `StarterKit.POOL` was NOT left missing
+  either item — `a98f3486` added both, reacting to this same "give the
+  player a glass bottle and butterfly net" report — so nothing was
+  silently dropped from the pool as feared above. The reconciliation
+  cuts the other way instead: `Player._ready()` no longer grants
+  anything automatically at all now; the hardcoded block this whole
+  bullet describes is gone, replaced by `World.grant_starter_items()`
+  once the player picks, or `StarterKit.DEFAULT_CHOICES`
+  (`iron_axe`/`stone_pickaxe`/`fishing_rod` — neither bottle nor net)
+  if they never open the tab. `bb7f6322` pins the new contract via
+  `test_a_new_player_starts_completely_unequipped_before_any_grant`.
+  Current reality lives in `docs/concept/starting_kit.md`, not the "now
+  also adds one butterfly_net and one glass_bottle" claim above.)
 
 ### Ethogram (`concept/ethogram.md`)
 
@@ -14816,3 +14947,141 @@ same size as a live one. `CaterpillarMarker`/`DecomposerMarker` untouched
 `test_crush_applies_the_squash_effect_to_its_sprite`, whose own assertion
 was the exact behavior this fix removes) plus all 73 `test_crush`-
 matching tests project-wide reconfirmed green (5431 asserts).
+
+### Karma: crushing is player-only again (`concept/karma_and_luck.md`)
+
+Reported live: *"Karma is constantly decreasing when wild animals step on
+worms or so.. it should only decrease when the player itself steps on
+something or abandons a quest; but the player must do it."* Reverses an
+earlier explicit request ("every crush should count, not just the
+player's own deliberate ones") that had put `World`'s crush pass in
+direct tension with `karma_and_luck.md`'s own pillar 3 (*"Karma tracks
+the player's own DELIBERATE-enough acts"* — a wild deer's footstep is not
+a deliberate act of the player's at all).
+
+✅ **`scenes/world.gd`'s `CreatureMarker` loop** — every crush call inside
+it (worm/caterpillar/millipede/ant/decomposer/mushroom) is now a bare
+statement, exactly the shape `crush_walnut_near` (never Karma-eligible
+for anyone) already used, instead of `if ...: local_player.
+apply_karma_delta(...)`. A wild creature's own step still crushes what's
+underfoot — a real, weight-emergent ecosystem effect, unrelated to the
+player's own moral ledger — it just no longer touches Karma. The
+player's own step (the block above the loop) is untouched: still
+if-guarded, still charges `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY`
+exactly as before.
+
+✅ **Quest abandonment checked too, needed no fix.** `QuestLog.abandon`/
+`accept` have zero call sites outside `tests/unit/test_quest_log.gd`
+today — no player-facing UI wires them yet (see karma_and_luck.md's own
+Status list) — and the one automatically-wired quest path (`QuestLog.
+reconcile`, run from `World._step_quest_reconciliation`) only ever
+applies the *positive* `QUEST_FULFILLED_REWARD`, never `QUEST_ABANDON_
+PENALTY`. Quest abandonment is therefore already player-only in design
+(in fact currently unreachable in real gameplay at all), confirmed by
+reading the real call graph before touching anything.
+
+`tests/unit/test_world_crush_wiring.gd`'s Karma section rewritten to
+match: `test_only_the_players_own_crush_calls_apply_the_karma_penalty`
+(6 call sites, not the old 12) and `test_a_creatures_own_crush_never_
+applies_the_karma_penalty` (every creature-loop crush call is bare, never
+followed by `apply_karma_delta`) replace the two tests that pinned the
+old "any creature's" behavior; the now-redundant mushroom-specific karma
+test was removed rather than patched, since the two new, more general
+tests already cover it. 17/17 tests passing (full file, including the 15
+pre-existing tests confirmed unaffected). `karma.gd`'s own
+`WORM_OR_CATERPILLAR_CRUSH_PENALTY` doc comment and `karma_and_luck.md`'s
+event table + Status list updated to match, with the reversal dated and
+the original request quoted rather than silently rewritten.
+
+### Boot logo intro shipped (`concept/intro_splash.md`, 2026-09-07)
+
+Requested directly: a rotating pixel-art Earth with "Aleph Alpha" building
+in, "similar to some movie intros" (Universal Pictures' spinning-globe
+ident is the direct reference), as a real spritesheet asset the user
+generated from a prompt and dropped in as `assets/sprites/intro.png`.
+1983×793px, 8 columns × 4 rows = 32 frames -- AI-generated, so **not** a
+perfectly regular grid the way `worm.png` is (1983/8 and 793/4 aren't
+whole numbers); `IntroSplashSheet` measures its own row bands directly
+(`tools/probe_intro_sheet.gd`, mirroring `tools/probe_worm_sheet.gd`'s own
+"measure before pinning constants" convention) rather than assuming even
+division, and deliberately skips `SpriteSheetSlicer.normalize_frames`
+(every other illustrated sheet's own convention) since its shared-scale-
+from-widest-content behaviour would make the globe itself appear to
+change size as the wordmark's own ink extent grows across the sequence --
+see `docs/concept/intro_splash.md`'s own "The sheet" section for the full
+reasoning. Frame timing is a pure, headlessly-tested `IntroSplashSequencer`
+(32 frames @ 10fps, ~3.2s one-shot, never loops); `IntroSplash` is thin
+engine glue that plays it once and skips instantly on any key/mouse/
+gamepad press. Wired into `World._ready`'s ordinary interactive-launch
+branch only -- `--solo`/`--server`/join launches are untouched, so nothing
+about dev iteration got slower. Strict TDD throughout the two pure
+classes (confirmed red first: an undefined `IntroSplashSequencer`/
+`IntroSplashSheet` reference fails the whole test script's parse, the
+same legitimate red shape prior fixes in this doc have already hit for an
+undefined method); the thin `IntroSplash` Node's own wiring test
+(finishes after full duration, skips on any input, never fires `finished`
+twice) was written alongside its glue code rather than strictly
+before it, consistent with how this codebase already treats thin engine
+glue versus pure logic elsewhere (e.g. `LeafLitterRenderer.fill`'s own
+untested-in-isolation wrapper around its tested static functions). 18 new
+tests total (7 sequencer + 6 sheet + 5 node), all green.
+
+### Mushrooms now fruit at their own real-world-timed windows within autumn (`concept/mushrooms.md`, 2026-09-07)
+
+Asked directly: *"mushrooms should fruit at their respective times ...
+research fruiting times for each mushroom and align them with ingame
+autumn."* Before this, all eight species shared one identical blanket
+autumn curve (`MushroomFlush.SEASON_MULTIPLIER`) with no internal timing
+at all -- real fungal fruiting concentrates around a species' own real
+peak window, not evenly across the whole season.
+
+Researched each of the 8 roster species' real Northern-Hemisphere-
+temperate fruiting months directly (see docs/concept/mushrooms.md's own
+"Fruiting times, aligned to real species" table for the full sourcing):
+chanterelle and champignon start as early as real summer and are
+substantially done by mid-autumn; fly agaric sits solidly mid-season;
+black trumpet and psilocybe peak latest, with black trumpet's own real
+tail extending into what would be winter in a finer calendar (documented
+as late as January/February in mild Iberian years); death cap's real
+window is genuinely the least seasonal of the eight, so it was left
+effectively unrestricted rather than an invented narrower one.
+
+✅ **`MushroomSpecies.fruiting_window_for(species_id) -> Vector2`** (new)
+-- each species' own `[start, end)` fraction through `SeasonCycle.
+progress_through_season` while season is autumn, ranking each species'
+REAL relative position against the other seven (a real month range
+doesn't map onto one compressed in-game quarter directly) rather than a
+literal date conversion. An unlisted id gets `Vector2(0.0, 1.0)`, matching
+death cap's own real breadth -- the safest default for a species this
+research didn't cover.
+
+✅ **`MushroomFlush.species_multiplier(species_id, progress_through_
+season) -> float`** (new) -- `1.0` inside a species' own real window,
+the new `WINDOW_SHOULDER_MULTIPLIER` (`0.3`) outside it: a real but
+reduced shoulder-season chance, not a hard cutoff to zero, the same
+"named trickle, not zero" idiom `SEASON_MULTIPLIER`'s own spring/summer
+trickle already uses. Deliberately independent of `season` itself --
+applied by the one caller only while `season == "autumn"`, where alone
+this research actually distinguishes anything.
+
+✅ **`WildMushroomPatch.advance`** now takes `season`/`progress_through_
+season` (both defaulted to `"autumn"`/`0.5`, which sits inside every
+species' own window by construction) alongside the existing `flush_drive`
+-- every pre-existing 2-arg call site across the whole project keeps
+behaving exactly as it did before this feature, unchanged. Wired from
+`EarthChunkManager.step_wild_mushrooms`, which now also samples
+`SeasonCycle.progress_through_season` (previously only the season NAME
+reached the flush model, never how far through it the world clock
+actually was).
+
+7 new tests pinning the exact per-species window data
+(`test_mushroom_species.gd`), 5 new tests on the pure multiplier
+(`test_mushroom_flush.gd`), 6 new tests proving `WildMushroomPatch.
+advance` actually differentiates an early-loaded species from a
+late-loaded one at the same moment -- and that the same late species
+flushes readily once autumn reaches ITS OWN window
+(`test_wild_mushroom_patch.gd`), plus a source-contract test confirming
+`EarthChunkManager.step_wild_mushrooms` actually threads real season
+progress through rather than just moisture/season
+(`test_earth_chunk_manager_mushrooms.gd`) -- all green, zero regressions
+across every pre-existing mushroom test file.
