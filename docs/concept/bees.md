@@ -320,6 +320,19 @@ project already made for caterpillars, ants, and millipedes: a shallow
 decorative stand-in gets replaced by the real mechanism once one exists,
 not run in parallel with it.
 
+**A scout also leans toward distant scent, not just what it can already
+sense locally** (2026-09-07, see `flora.md`#tree-blossoms-emit-real-
+scent-too for the full mechanism spec). Local sensing above
+(`_sense_food_nearby`, `BeeColony.SENSE_RADIUS_TILES`) is unchanged and
+still what actually commits a trip; layered underneath it, an
+uncommitted scout now also samples flowers *and* blossoms across its
+whole `BeeColony.FORAGE_RADIUS_TILES` home range on the same throttled
+cadence and blends `ScentField.gradient_direction` into its wander
+heading (`BeeForagerMarker.SCENT_STEER_WEIGHT`). This is what makes a
+real orchard or meadow pull a bee from beyond guaranteed sensing range,
+rather than the scout only ever finding one by wandering into it by
+chance — the missing half of "blossom scent should attract bees."
+
 ### Growth-stage and destruction art — `IllustratedBeehiveSprite`
 
 Rows 1-2 of `beehive.png` (16 frames, tiny exposed cluster → full sealed
@@ -427,6 +440,18 @@ in-bloom nectar through the SAME `EarthChunkManager.flowers_near/
 drink_nectar_at` query the old decorative pollinator used, re-checks on
 genuine arrival, deposits only once actually home. No pheromone-trail
 recruitment this pass (see "What's reused verbatim..." above).
+
+✅ **Scent-drawn foraging and a real pollination gate** (2026-09-07, see
+`flora.md`#tree-blossoms-emit-real-scent-too and #where-a-forest-comes-
+from) — an uncommitted scout now leans its wander toward the strongest
+combined flower/blossom scent across its whole home range
+(`BeeForagerMarker.SCENT_STEER_WEIGHT`), not just what local sensing
+already finds; `FruitingModel.pollination_factor`'s floor is a genuine
+0.0 (was a 0.2 soft discount), so an insect-pollinated tree with zero
+real visits this cycle bears nothing at all, and
+`EarthChunkManager.step_tree_spread` withholds an unvisited one from
+seeding new trees too. Closes the full loop the feature exists for:
+blossom → scent → bee attraction → visit → fruit set and new growth.
 
 ✅ **Wild bee nests** (`src/world/wild_bee_patch.gd`, `src/rendering/
 wild_bee_nest_marker.gd`, `src/rendering/
