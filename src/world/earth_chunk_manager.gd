@@ -5585,6 +5585,13 @@ func step_wild_mushrooms(delta_seconds: float) -> void:
 	_mushroom_refresh_accumulator = 0.0
 
 	var season := current_season()
+	# Real per-species timing within autumn (see docs/concept/mushrooms.md
+	# "Fruiting times, aligned to real species") -- progress_through_season
+	# is what actually distinguishes an early-loaded species (already
+	# tapering off) from a late-loaded one (not yet started) at the SAME
+	# season name and moisture; see MushroomFlush.species_multiplier/
+	# WildMushroomPatch.advance for where this is actually applied.
+	var progress := _season_cycle.progress_through_season(_world_age_seconds)
 	for chunk_coord in _mushroom_sims.keys():
 		var sim: WildMushroomPatch = _mushroom_sims[chunk_coord]
 		var centre_tile: Vector2i = chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
@@ -5593,7 +5600,7 @@ func step_wild_mushrooms(delta_seconds: float) -> void:
 		) * float(TerrainRenderer.TILE_SIZE)
 		var moisture := _weather_model.soil_moisture(current_weather(centre_pixel))
 		var flush_drive := MushroomFlush.flush_drive(moisture, season)
-		sim.advance(elapsed, flush_drive)
+		sim.advance(elapsed, flush_drive, season, progress)
 		_mushroom_renderer.sync_markers(
 			_entities_parent, sim, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
 			_mushroom_markers[chunk_coord]
