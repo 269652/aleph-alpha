@@ -9452,6 +9452,52 @@ counting stub (`_CountingTree`), mirroring round 4's own
 timing assertion. See `soil_fauna.md`'s own round-5 entry for the full
 writeup.
 
+**FPS regression round 6: mushroom bitten-art's own cold-cache bite
+(2026-09-07).** Reported live again right after round 5 shipped: "Kannst
+du weiter die Performance debuggen? Es ist immer nocht bei 4-10 fps...".
+A live GPU-contention hypothesis (25+ concurrent Claude Code sessions
+sharing one Intel iGPU) was directly measured via Windows' own `GPU
+Engine` performance counters and ruled OUT -- 1.9-2.1% GPU utilization
+at the exact moments frame time spiked, the signature of a CPU-bound,
+not GPU-bound, frame. `World._process`'s own top-level orchestration was
+split call-by-call and confirmed cheap (~20-25ms); a new shared
+per-marker-class tally (round 4/5's own `PerfProbe` shape, generalized
+to 17 classes at once) then found `DecomposerMarker` dominating whenever
+it spiked (up to 15.6s of aggregate `_process` per 60-frame window at an
+unchanged ~42-instance population), with round 5's own fix re-verified
+still holding (its shared cache/scan paths stayed under 400ms/window
+throughout). Splitting `_step_feeding`'s four target-type branches
+separately isolated the entire spike to `take_mushroom_bite` alone --
+essentially 100% of every affected window, up to ~1596ms for a SINGLE
+bite.
+
+Root cause: `MushroomMarker.take_mushroom_bite` -> `_rebuild_sprite` ->
+`IllustratedMushroomSprite.bitten_frame_for` lazily loads that species'
+real bitten-art sheets (up to 3 full-resolution images per species, each
+needing a whole-image chroma-key pass) on whichever live gameplay frame
+happens to be the FIRST bite of a not-yet-cached species -- the cache
+itself was already correct and idempotent, this was purely a WHEN bug
+(the same shape round 5's own root cause had), recurring up to 8 times
+(once per real species) over a session's life as different species get
+bitten for the first time at unpredictable moments.
+
+Fixed by pre-warming, not by touching the bite path itself:
+`IllustratedMushroomSprite.warm_cache()` eagerly fills all three
+per-species caches (normal/crushed/bitten) through the exact same
+already-correct cache-check every ordinary call uses; `MushroomMarker.
+warm_art_cache()` is a one-line static wrapper; `World._ready()` calls
+it once, well before any chunk (and so any decomposer) can load. 23/23
+green in `test_illustrated_mushroom_sprite.gd` (cold-cache reset first,
+mirroring round 5's own static-state-reset shape, so the test cannot
+pass on a no-op), 25/25 in `test_mushroom_marker.gd`, zero regressions
+in `test_world_streaming_budget.gd`'s literal source-string check on
+`World._ready`'s body. **Real, confirmed, explicitly still open**: even
+in a calm window, every marker class's `_process` summed together still
+costs roughly 50ms/frame from this save's own accumulated entity
+population alone -- not a bug in any one system, an architectural
+scale question for a future round. See `soil_fauna.md`'s own round-6
+entry for the full writeup.
+
 ### Flies (`concept/flies.md`)
 
 Another concept doc with real, substantial ✅ status entirely of its own

@@ -1,5 +1,6 @@
 extends Node2D
 
+const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const RenderResolution = preload("res://src/rendering/render_resolution.gd")
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
@@ -705,6 +706,13 @@ func _ready() -> void:
 	# EarthChunkManager.fruit_near/take_fruit_at read this directly rather
 	# than needing a second, parallel ground-item model.
 	_chunk_manager.set_ground_items(_ground_items)
+	# FPS round 6 (see docs/concept/soil_fauna.md): pays MushroomMarker's
+	# real, one-time-per-species bitten/crushed art-loading cost HERE,
+	# before any decomposer can possibly reach a mushroom, instead of
+	# leaving it to land unpredictably on whichever live gameplay frame
+	# happens to be the first bite of a not-yet-touched species (measured
+	# live at up to ~1.6s for a single bite).
+	MushroomMarker.warm_art_cache()
 	_player_spawner.spawn_path = _players.get_path()
 	_player_spawner.add_spawnable_scene(PlayerScene.resource_path)
 	WorldItemBus.item_dropped.connect(_on_item_dropped)

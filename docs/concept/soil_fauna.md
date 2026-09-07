@@ -2677,6 +2677,135 @@ O(cached group size) per decomposer, just no longer O(world) per
 decomposer PER FRAME) ever becomes the next bottleneck at a larger
 foragable-item population than this investigation measured against.
 
+### FPS regression round 6: mushroom bitten-art's own cold-cache bite (2026-09-07)
+
+Reported live, again, right after round 5 above had already shipped:
+"Kannst du weiter die Performance debuggen? Es ist immer nocht bei 4-10
+fps ... wir brauchen 60+ da war es auch schon" (still 4-10fps, need 60+,
+it was already like that before). Investigated the same way, extended
+one step further: round 4/5's own `PerfProbe`-style instrumentation
+re-applied to `World._process`, then to `EarthChunkManager.
+step_leaf_litter`, then split PER MARKER CLASS (a small shared static
+tally, one `Time.get_ticks_usec()` bracket per class's own `_process`),
+then split again inside whichever class turned out to dominate — a
+progressively finer-grained repeat of round 5's own "measure the whole
+frame, then measure the piece that's actually big" method, four levels
+deep this time.
+
+**A live, real-numbers side investigation first: GPU contention was
+directly measured and ruled out, not assumed.** With 25+ concurrent
+Claude Code sessions and several other GPU-accelerated apps sharing this
+machine's single Intel integrated GPU, and `project.godot` confirmed
+running with vsync effectively uncapped (ruling out a simple "waiting on
+the screen" explanation), a shared-GPU bottleneck was a real, reasoned
+hypothesis. Windows' own `GPU Engine` performance counters, sampled
+live against the running game's own PID, showed the opposite: 1.9-2.1%
+GPU utilization at the exact moments frame time spiked into the
+hundreds of milliseconds. A genuinely GPU-bound frame reads as the GPU
+pegged and the CPU idle waiting on it — this read as the CPU doing real,
+uninterrupted work while the GPU sat mostly idle, confirming the cost
+was CPU-side script time, the same category every prior round already
+found, not a new external contention source.
+
+**Rendering, physics, and World's own top-level `_process` orchestration
+were re-confirmed cheap.** `Performance.TIME_PROCESS` tracked observed
+fps almost exactly (85-460ms per frame in steady state, matching
+1000/fps), while draw calls/primitives stayed flat and low and
+`PHYSICS_2D_ACTIVE_OBJECTS` stayed at 1 -- the same shape round 5 already
+established. Splitting every top-level call inside `World._process`
+itself (water disturbance, grass parting, calendar advance, caravans,
+ecology fine/batch steps, path scarring, pebble/leaf dispersion,
+`_client_process`) accounted for only ~20-25ms of that -- confirming the
+missing 60-400+ms lived in the many individual marker classes' OWN
+`_process` callbacks, which Godot dispatches directly per-node, entirely
+outside `World._process`'s own call graph, and so were invisible to
+every previous round's instrumentation (which only ever bracketed
+`World`'s own functions).
+
+**A shared per-marker-class tally (same `PerfProbe` shape, generalized to
+17 classes at once) found `DecomposerMarker` dominating by a wide margin
+whenever it spiked** -- up to 12.5-15.6s of aggregate `_process` time per
+60-frame window against ~300-450ms in a calm window, at an unchanged
+~42-instance population (ruling out a population spike as the cause).
+Splitting `DecomposerMarker._process` itself into its own named pieces
+(`_lod_step`, the SEEKING/APPROACHING/FEEDING dispatch, `_update_sprite`,
+and -- re-testing round 5's own fix for a regression -- the shared
+group-scan/leaf-litter-query/group-refetch paths `_nearest_food` uses)
+ruled out everything round 5 touched: the shared cache held up, all
+under 400ms per window combined. The entire remaining cost traced to
+`_step_feeding` specifically, and within it, specifically to the frame a
+bite actually lands (`CarrionForageBehavior.advance`'s own once-per-
+`BITE_INTERVAL` gate) -- confirmed by call count (33-55 bite-landing
+calls per window, against ~2500 total `_process` calls) and by splitting
+`_step_feeding`'s own four target-type branches (carcass/guts, mushroom,
+leaf litter, fruit) separately: `take_mushroom_bite` alone accounted for
+essentially 100% of the spike in every affected window (e.g. 11169ms
+across 7 bites -- ~1596ms for a SINGLE bite).
+
+**Root cause: `MushroomMarker.take_mushroom_bite`'s own `_rebuild_sprite`
+call lazily loads that species' real bitten-art sheets (up to 3 separate
+full-resolution images, each needing a whole-image chroma-key pass, see
+`IllustratedMushroomSprite._load_frames`/`_apply_chroma_key`) on
+whichever live gameplay frame happens to be the FIRST bite of a
+not-yet-cached species, rather than paying that cost once, predictably,
+before any decomposer can possibly reach a mushroom.** The cache itself
+(`_frames_cache`/`_crushed_frames_cache`/`_bitten_frames_cache`, all
+`static var`, shared across every `MushroomMarker` instance via the
+class's own shared `_illustrated_generator`) was already correct and
+already idempotent -- this was never a caching bug, only a WHEN bug, the
+same shape round 5's own root cause had: real, bounded, per-species-
+per-process work, landing at an unpredictable moment instead of a
+controlled one. With 8 real species each carrying up to 3 delivered
+bitten sheets, this can recur up to 8 times over a session's life,
+independent of which specific species a decomposer happens to encounter
+first -- consistent with the spike recurring in non-adjacent windows
+(some species get bitten early, others only much later) rather than
+appearing once and never again.
+
+**Fixed by pre-warming, not by changing when/how a bite itself works.**
+`IllustratedMushroomSprite.warm_cache()` eagerly calls `frame_for`/
+`crushed_frame_for`/`bitten_frame_for` once per registered species,
+routing through the exact same `_frames_from` cache-check every ordinary
+call already uses -- idempotent, and a cheap no-op for any species an
+earlier call (or ordinary lazy use) already warmed. `MushroomMarker.
+warm_art_cache()` is a one-line static wrapper delegating to the shared
+generator instance every marker already reads from. `World._ready()`
+calls it once, alongside the rest of that function's other one-time
+world-setup work, well before `_apply_streaming_budget` can load a
+single chunk -- so the very first mushroom a decomposer ever reaches
+already has warm art, on every species, every session.
+
+**Strict TDD.** `test_illustrated_mushroom_sprite.gd` resets the three
+caches to genuinely empty first (mirroring round 5's own `_food_group_
+refresh_at_msec` static-state reset, since this file's other 22 tests
+already share and warm the SAME static caches across the whole test
+run -- without resetting, `warm_cache()` could pass even as a no-op)
+before asserting every one of the 8 real species is present in all three
+afterward: 23/23 green. `test_mushroom_marker.gd` adds one thin wiring
+test proving `warm_art_cache()` reaches the same shared instance: 25/25
+green. `test_world_streaming_budget.gd`'s own literal source-string
+assertion on `World._ready`'s body (`_apply_streaming_budget(_chunk_
+manager)` must still be present) stayed green -- the new call was
+inserted nearby, not over it. A live `--solo` boot against the same
+real-save snapshot every round in this investigation has used confirmed
+a clean start with no script errors from the new call site.
+
+**Real, confirmed, explicitly still open**: even in a CALM window (no
+mushroom spike, no other known bug active), the aggregate `_process`
+cost summed across every marker class -- `ambient_flyer_marker`,
+`ant_forager_marker`, `fish_marker`, `creature_marker`, `wild_crop_
+marker`, and a dozen smaller ones, several with populations in the
+hundreds -- still totalled roughly 50ms per frame on its own, on top of
+`World`'s own ~20-25ms and whatever rendering/engine overhead sits
+outside both. This is NOT a bug in any one system (each class measured
+individually cheap per call) -- it is the flat, honest cost of this
+save's own accumulated entity population, already passing through
+`SimulationLod`'s existing distance-based throttling, at the scale a
+long-played save reaches. Closing it further would mean throttling
+harder, batching many instances into fewer processing passes, or capping
+population outright -- a real architectural question for a future round,
+not a bug this one's fix addresses, and not investigated further here.
+
 
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
