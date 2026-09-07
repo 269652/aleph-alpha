@@ -46,7 +46,6 @@ const SkillTreeWindow = preload("res://scenes/skill_tree_window.gd")
 const CreaturePanel = preload("res://scenes/creature_panel.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
-const CreatureMass = preload("res://src/world/creature_mass.gd")
 const Karma = preload("res://src/gameplay/karma.gd")
 const QuestLog = preload("res://src/emergence/quest_log.gd")
 
@@ -55,9 +54,15 @@ const QuestLog = preload("res://src/emergence/quest_log.gd")
 ## mortality") -- full body mass, not PebbleDispersion's own foot-mass
 ## fraction (that is for a glancing kick past a pebble; standing weight
 ## settling onto something underfoot is a different, full-body-mass
-## event). Computed once rather than every _client_process call: neither
-## factor ever changes at runtime.
-const _PLAYER_STEP_MOMENTUM_KG_M_S := CreatureMass.PLAYER_MASS_KG * PebbleDispersion.FOOTSTEP_SPEED_MPS
+## event). Read live, every _client_process call, from the player's own
+## real, unified current_mass_kg() (see docs/concept/metabolism.md) rather
+## than precomputed once from the flat CreatureMass.PLAYER_MASS_KG
+## constant -- a real, well-fed player now hits harder underfoot than a
+## starving one, and reads EXACTLY the old flat value at the player's own
+## seed mass (nothing has fed or starved them yet), proven by
+## test_player_current_mass_kg_starts_at_the_seed_mass.
+func _player_step_momentum_kg_m_s(player: Player) -> float:
+	return player.current_mass_kg() * PebbleDispersion.FOOTSTEP_SPEED_MPS
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const Courtship = preload("res://src/gameplay/courtship.gd")
 const MammalCourtship = preload("res://src/gameplay/mammal_courtship.gd")
@@ -5060,15 +5065,16 @@ func _client_process(delta: float) -> void:
 	# charges the same constant -- its name predates all three, but the
 	# event it represents is identical (see karma.gd's own doc comment) --
 	# it just only ever lands on local_player for local_player's OWN step.
-	if _chunk_manager.crush_worm_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
+	var player_step_momentum_kg_m_s := _player_step_momentum_kg_m_s(local_player)
+	if _chunk_manager.crush_worm_at(local_player.position, player_step_momentum_kg_m_s):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-	if _chunk_manager.crush_caterpillars_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
+	if _chunk_manager.crush_caterpillars_near(local_player.position, player_step_momentum_kg_m_s):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-	if _chunk_manager.crush_millipedes_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
+	if _chunk_manager.crush_millipedes_near(local_player.position, player_step_momentum_kg_m_s):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-	if _chunk_manager.crush_ants_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
+	if _chunk_manager.crush_ants_near(local_player.position, player_step_momentum_kg_m_s):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-	if _chunk_manager.crush_decomposers_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
+	if _chunk_manager.crush_decomposers_near(local_player.position, player_step_momentum_kg_m_s):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	# A mushroom now costs Karma too (asked directly, reversing the
 	# original "a fungus is not an animal" exemption -- see docs/concept/
@@ -5077,9 +5083,9 @@ func _client_process(delta: float) -> void:
 	# walnut is a plant seed, not a fungus or an animal, and stays exempt
 	# -- crush_walnut_near's own bool return is deliberately not fed into
 	# Karma (see docs/concept/soil_fauna.md).
-	if _chunk_manager.crush_mushroom_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
+	if _chunk_manager.crush_mushroom_at(local_player.position, player_step_momentum_kg_m_s):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-	_chunk_manager.crush_walnut_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
+	_chunk_manager.crush_walnut_near(local_player.position, player_step_momentum_kg_m_s)
 	# A wild creature's own step still crushes what's underfoot (a real,
 	# weight-emergent ecosystem effect -- a deer's own hoof kills the worm
 	# the same as a player's boot would) but never touches Karma: every
@@ -5089,8 +5095,14 @@ func _client_process(delta: float) -> void:
 	# that reversed this from the earlier "any creature's" design.
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		var marker := creature as CreatureMarker
-		var species: String = marker.info.species if marker.info != null else ""
-		var momentum := CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
+		# Reads this creature's OWN real, live, unified mass (see
+		# docs/concept/metabolism.md) rather than a flat CreatureMass.
+		# mass_kg_for(species) lookup -- a real, well-fed deer now hits
+		# harder underfoot than a starving one of the same species, and
+		# reads EXACTLY the old flat value at this creature's own seed
+		# mass (see test_seed_mass_matches_creature_mass_exactly_for_
+		# every_real_species).
+		var momentum := marker.current_mass_kg() * PebbleDispersion.FOOTSTEP_SPEED_MPS
 		_chunk_manager.crush_worm_at(marker.position, momentum)
 		_chunk_manager.crush_caterpillars_near(marker.position, momentum)
 		_chunk_manager.crush_millipedes_near(marker.position, momentum)

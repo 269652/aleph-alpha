@@ -1572,6 +1572,44 @@ func test_a_more_bitten_mushroom_yields_less_nutrition_than_a_less_bitten_one():
 	assert_gt(lightly_bitten_relief, heavily_bitten_relief, "less relief -- more of it was already eaten")
 
 
+# -- the player's own real, unified mass (docs/concept/metabolism.md) ------
+#
+# "No ... all mass systems should be unified" -- the player gets the same
+# real, live current_mass_kg every other creature this pass reaches gets,
+# seeded from CreatureMass.PLAYER_MASS_KG (already StoneSize.
+# AVERAGE_BODY_MASS_KG), not a second guess.
+
+func test_player_current_mass_kg_starts_at_the_seed_mass():
+	const CreatureMass = preload("res://src/world/creature_mass.gd")
+	assert_almost_eq(player.current_mass_kg(), CreatureMass.PLAYER_MASS_KG, 0.0001)
+
+
+func test_player_current_mass_kg_drops_after_prolonged_resting_with_nothing_eaten():
+	_register_all_keybindings()
+	var seed_mass := player.current_mass_kg()
+	for _i in 200:
+		player._authority_step(30.0)
+	assert_lt(player.current_mass_kg(), seed_mass)
+
+
+## The regression proof docs/concept/metabolism.md's unification promises:
+## the player at their default/seed mass produces the EXACT SAME crush
+## momentum the old flat CreatureMass.PLAYER_MASS_KG constant did.
+func test_player_crush_momentum_at_seed_mass_matches_the_old_flat_constant_exactly():
+	const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
+	const CreatureMass = preload("res://src/world/creature_mass.gd")
+	var old_momentum := CreatureMass.PLAYER_MASS_KG * PebbleDispersion.FOOTSTEP_SPEED_MPS
+	var new_momentum := player.current_mass_kg() * PebbleDispersion.FOOTSTEP_SPEED_MPS
+	assert_almost_eq(new_momentum, old_momentum, 0.0001)
+
+
+func test_player_eating_gains_real_mass():
+	player.inventory.add(_item_catalog.make("apple"), 1)
+	var seed_mass := player.current_mass_kg()
+	assert_true(player.eat_food("apple"))
+	assert_gt(player.current_mass_kg(), seed_mass)
+
+
 func test_eating_an_unmodeled_food_keeps_the_old_flat_hunger_relief():
 	player.survival.advance(100000.0)
 	player.inventory.add(_item_catalog.make("fish"), 1)

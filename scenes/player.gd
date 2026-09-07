@@ -35,6 +35,8 @@ const VenomModel = preload("res://src/gameplay/venom_model.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
 const MushroomSpecies = preload("res://src/world/mushroom_species.gd")
 const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
+const Metabolism = preload("res://src/gameplay/metabolism.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
 const MushroomToxin = preload("res://src/gameplay/mushroom_toxin.gd")
 const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
 const Sickness = preload("res://src/gameplay/sickness.gd")
@@ -306,6 +308,14 @@ var equipped_item: Item
 ## plain bare-earth terraforming.
 var _selected_placeable_item: Item
 var survival := SurvivalMeters.new()
+## The player's own real, live, unified body mass -- see docs/concept/
+## metabolism.md's "one real mass per creature" pillar, applied to the
+## player exactly like every other creature this pass reaches. Seeded from
+## CreatureMass.PLAYER_MASS_KG (already StoneSize.AVERAGE_BODY_MASS_KG --
+## no second guess). Does NOT replace/reweight SurvivalMeters (mature,
+## tuned, its own concept doc) -- a separate, real caloric layer alongside
+## it, read today by the player's own crush-underfoot momentum.
+var _metabolism := Metabolism.new(CreatureMass.PLAYER_MASS_KG)
 ## Active timed buffs from eating rare/legendary fish (see
 ## FoodConsumption.FISH_BUFFS) -- category-slotted, ticked down in
 ## _food_buff_step. Empty means no active buff in any category.
@@ -1407,6 +1417,14 @@ func unequip_slot(slot: String) -> bool:
 	return true
 
 
+## This player's own real, live, current body mass -- see docs/concept/
+## metabolism.md. The ONE thing a real consumer (the player's own
+## crush-underfoot momentum) should read instead of the flat
+## CreatureMass.PLAYER_MASS_KG constant.
+func current_mass_kg() -> float:
+	return _metabolism.current_mass_kg
+
+
 ## Using a food item: if it's a raw item that can be cooked and the player is
 ## standing near a placed campfire (their heat source), cook it instead of
 ## eating it raw (see CampfireCooking) -- otherwise just eat it. So clicking
@@ -1842,8 +1860,15 @@ func eat_food(item_id: String) -> bool:
 				survival.drink(nutrients.get("water", 0.0))
 				survival.eat(nutrients.get("sugar", 0.0))
 				survival.nourish(nutrients.get("vitamins", 0.0))
+				# A real intake event for the player's OWN unified mass
+				# (docs/concept/metabolism.md) -- the same real,
+				# composition-derived sugar fraction just relieved hunger
+				# by, already scaled by how much of the item was actually
+				# left (mass_fraction above).
+				_metabolism.feed_hunger_relief(nutrients.get("sugar", 0.0))
 			else:
 				survival.eat(EAT_HUNGER_RELIEF)
+				_metabolism.feed_hunger_relief(1.0)
 			# Rare/legendary catches (see FoodConsumption.FISH_BUFFS) grant a
 			# timed buff directly on eating -- no cooking/recipe required.
 			if FoodConsumption.FISH_BUFFS.has(item_id):
@@ -1992,6 +2017,15 @@ func _authority_step(delta: float) -> void:
 	_step_water_ripples(delta, input_direction)
 
 	survival.advance(delta)
+	# Real calorie burn (see docs/concept/metabolism.md): the same real
+	# MOVING-vs-RESTING activity signal input_direction already IS above
+	# (the exact 0.01 threshold _last_facing_direction's own convention
+	# just above uses) -- no new signal invented. Combat/exertion is a
+	# named, deliberate scope cut for this pass (see the concept doc's
+	# Status list): the player reads as ordinary MOVING while fighting
+	# today, not yet its own EXERTION tier.
+	var activity := Metabolism.ACTIVITY_MOVING if input_direction.length() > 0.01 else Metabolism.ACTIVITY_RESTING
+	_metabolism.advance(delta, activity)
 	_regen_mana(delta)
 	_spell_status_step(delta)
 	_shield_step(delta)

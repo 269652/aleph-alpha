@@ -36,6 +36,13 @@ const _REAL_MASS_KG := {
 	# A real ground/carrion-beetle-scale figure -- DecomposerMarker's other
 	# species string, a mid-sized insect clearly heavier than a single ant.
 	"bug": 0.0003,
+	# A real late-instar (large, close to pupation) caterpillar's commonly-
+	# cited mass -- CaterpillarMarker is, like ant/bug, deliberately not
+	# built on CreatureMarker/AnimalAnatomy (see that class's own doc
+	# comment), so it needs its own explicit entry rather than falling
+	# back to _mass_from_world_scale, which has no AnimalAnatomy profile
+	# for it to derive from either.
+	"caterpillar": 0.003,
 	"mouse": 0.02,
 	"squirrel": 0.5,
 	"arctic_fox": 3.5,

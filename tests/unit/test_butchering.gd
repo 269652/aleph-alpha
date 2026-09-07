@@ -39,3 +39,32 @@ func test_meat_count_grows_with_the_skill_bonus():
 
 func test_meat_count_rounds_the_bonus_to_a_whole_item_count():
 	assert_eq(Butchering.meat_count(1.0), Butchering.BASE_MEAT_COUNT + 1)
+
+
+# -- mass_ratio: a real, heavier-or-lighter-than-average kill yields more --
+# -- or less meat (see docs/concept/metabolism.md) --------------------------
+
+## Omitting mass_ratio entirely (every caller that predates this
+## parameter) must behave exactly as before.
+func test_omitting_mass_ratio_keeps_the_old_behavior():
+	assert_eq(Butchering.meat_count(1.0), Butchering.meat_count(1.0, 1.0))
+
+
+## The real, new consequence of a unified live mass: a creature killed
+## while genuinely heavier than its own species' reference mass yields
+## MORE meat than the flat, mass-blind count.
+func test_a_heavier_than_average_kill_yields_more_meat():
+	assert_gt(Butchering.meat_count(0.0, 1.5), Butchering.meat_count(0.0, 1.0))
+
+
+## The mirror case: a starved kill, genuinely lighter than reference,
+## yields LESS meat.
+func test_a_lighter_than_average_kill_yields_less_meat():
+	assert_lt(Butchering.meat_count(0.0, 0.5), Butchering.meat_count(0.0, 1.0))
+
+
+## Defensive: a hypothetically negative ratio (should never actually reach
+## here -- Metabolism's own starvation floor keeps a real ratio well above
+## zero) never produces a negative meat count.
+func test_mass_ratio_never_produces_a_negative_meat_count():
+	assert_gte(Butchering.meat_count(0.0, -5.0), 0)

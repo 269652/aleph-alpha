@@ -48,6 +48,8 @@ const CaterpillarForageBehavior = preload("res://src/gameplay/caterpillar_forage
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
+const Metabolism = preload("res://src/gameplay/metabolism.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
 
 const GROUP_NAME := "caterpillar"
 
@@ -109,6 +111,11 @@ const WANDER_DIRECTION_CHANGE_INTERVAL_SECONDS := (
 var home := Vector2.ZERO
 var wander_seed := 0
 
+## This caterpillar's own real, live, unified body mass -- see
+## docs/concept/metabolism.md. Lazily seeded (see current_mass_kg) from
+## CreatureMass.mass_kg_for("caterpillar") the first time anything asks.
+var _metabolism: Metabolism = null
+
 var _behavior := CaterpillarForageBehavior.new()
 
 ## Where the current food target is, and which kind -- see the class doc
@@ -166,6 +173,28 @@ func _ready() -> void:
 
 func get_display_name() -> String:
 	return "Caterpillar"
+
+
+## This caterpillar's own real, live, current body mass -- see
+## docs/concept/metabolism.md.
+func current_mass_kg() -> float:
+	return _ensure_metabolism().current_mass_kg
+
+
+func _ensure_metabolism() -> Metabolism:
+	if _metabolism == null:
+		_metabolism = Metabolism.new(CreatureMass.mass_kg_for("caterpillar"))
+	return _metabolism
+
+
+## Maps CaterpillarForageBehavior's own real Phase to Metabolism's small
+## closed activity vocabulary (see docs/concept/metabolism.md's
+## activity-tier table): actually eating is FEEDING, seeking/approaching
+## (crawling or climbing toward food) is ordinary ambulatory MOVING.
+func _current_metabolic_activity() -> String:
+	if _behavior.phase == CaterpillarForageBehavior.Phase.EATING:
+		return Metabolism.ACTIVITY_FEEDING
+	return Metabolism.ACTIVITY_MOVING
 
 
 ## Set by crush() -- once true, _process skips every forage/wander/climb
@@ -261,6 +290,10 @@ func _process(frame_delta: float) -> void:
 			queue_free()
 		return
 	_elapsed_time += delta
+	# Real calorie burn (see docs/concept/metabolism.md): Kleiber's-law BMR
+	# at this caterpillar's OWN current mass, scaled by its real
+	# CaterpillarForageBehavior phase.
+	_ensure_metabolism().advance(delta, _current_metabolic_activity())
 	var position_before := position
 	match _behavior.phase:
 		CaterpillarForageBehavior.Phase.SEEKING:
@@ -361,16 +394,25 @@ func _step_eating(delta: float) -> void:
 	if _target_position == null:
 		_behavior.abort()
 		return
-	if _behavior.advance(delta) and not _target_is_tree:
-		# A leaf is a one-visit consumable (see the class doc comment) --
-		# removed on the bite that lands, exactly like DecomposerMarker's
-		# own leaf-litter case. Best-effort: if it's already gone (eaten by
-		# something else between being spotted and this caterpillar
-		# arriving), this simply does nothing further -- the phase still
-		# closes out normally on CaterpillarForageBehavior's own EAT_
-		# SECONDS clock either way.
-		if _world != null and _world.has_method("consume_leaf_litter_at"):
-			_world.consume_leaf_litter_at(_target_position)
+	if _behavior.advance(delta):
+		# A real intake event for this caterpillar's own unified mass (see
+		# docs/concept/metabolism.md) -- no composition data exists for
+		# green leaf litter or tree foliage, so (mirroring DecomposerMarker's
+		# identical fallback) one landed bite is treated as one whole
+		# meal's worth. Applies to BOTH real food sources (leaf or tree) --
+		# a tree bite is a real bite too, even though the tree itself is
+		# never removed (see below).
+		_ensure_metabolism().feed_hunger_relief(1.0)
+		if not _target_is_tree:
+			# A leaf is a one-visit consumable (see the class doc comment) --
+			# removed on the bite that lands, exactly like DecomposerMarker's
+			# own leaf-litter case. Best-effort: if it's already gone (eaten by
+			# something else between being spotted and this caterpillar
+			# arriving), this simply does nothing further -- the phase still
+			# closes out normally on CaterpillarForageBehavior's own EAT_
+			# SECONDS clock either way.
+			if _world != null and _world.has_method("consume_leaf_litter_at"):
+				_world.consume_leaf_litter_at(_target_position)
 	# A tree is never removed (see the class doc comment) -- nothing to do
 	# on a bite there beyond the animation itself, which _update_sprite
 	# already draws from _behavior.phase/_target_is_tree.

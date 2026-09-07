@@ -206,6 +206,32 @@ func test_finds_and_bites_a_nearby_rotten_carcass():
 	assert_lt(carcass._decompose_health, before)
 
 
+# -- one unified, live current_mass_kg (see docs/concept/metabolism.md) -----
+
+func test_a_fresh_decomposer_starts_at_exactly_its_species_seed_mass():
+	const CreatureMass = preload("res://src/world/creature_mass.gd")
+	assert_almost_eq(marker.current_mass_kg(), CreatureMass.mass_kg_for("ant"), 0.0000001)
+
+
+func test_current_mass_kg_drops_after_prolonged_time_with_nothing_eaten():
+	var seed_mass := marker.current_mass_kg()
+	for i in 200:
+		marker._process(30.0)
+	assert_lt(marker.current_mass_kg(), seed_mass)
+
+
+func test_biting_a_rotten_carcass_gains_real_mass():
+	carcass = _rotten_carcass_at(Vector2(110, 100))
+	var before: float = carcass._decompose_health
+	var seed_mass := marker.current_mass_kg()
+	for i in 200:
+		marker._process(0.5)
+		if carcass._decompose_health < before:
+			break
+	assert_lt(carcass._decompose_health, before, "precondition: the bite must actually have landed")
+	assert_gt(marker.current_mass_kg(), seed_mass)
+
+
 func test_eating_a_rotten_carcass_eventually_frees_it():
 	carcass = _rotten_carcass_at(Vector2(102, 100))  # close, so it arrives quickly
 	for i in 400:

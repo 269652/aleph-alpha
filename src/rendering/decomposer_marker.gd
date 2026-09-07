@@ -55,6 +55,7 @@ const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
 const MushroomEffect = preload("res://src/gameplay/mushroom_effect.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
+const Metabolism = preload("res://src/gameplay/metabolism.gd")
 
 const GROUP_NAME := "decomposer"
 
@@ -107,6 +108,11 @@ const WANDER_DIRECTION_CHANGE_INTERVAL_SECONDS := (
 var species := "ant"
 var home := Vector2.ZERO
 var wander_seed := 0
+
+## This decomposer's own real, live, unified body mass -- see
+## docs/concept/metabolism.md. Lazily seeded (see current_mass_kg) from
+## CreatureMass.mass_kg_for(species) the first time anything asks.
+var _metabolism: Metabolism = null
 
 ## Anthrax-like carry vector (docs/concept/disease.md's CARRION archetype):
 ## real blowflies/carrion beetles mechanically carry spores from an infected
@@ -197,6 +203,30 @@ func _ready() -> void:
 ## name-only-hoverable shape for the identical reason.
 func get_display_name() -> String:
 	return species.capitalize()
+
+
+## This decomposer's own real, live, current body mass -- see
+## docs/concept/metabolism.md. The ONE thing a real consumer (mushroom
+## bite-count/satiation scaling) should read instead of the flat
+## CreatureMass.mass_kg_for(species) table.
+func current_mass_kg() -> float:
+	return _ensure_metabolism().current_mass_kg
+
+
+func _ensure_metabolism() -> Metabolism:
+	if _metabolism == null:
+		_metabolism = Metabolism.new(CreatureMass.mass_kg_for(species))
+	return _metabolism
+
+
+## Maps CarrionForageBehavior's own real Phase to Metabolism's small closed
+## activity vocabulary (see docs/concept/metabolism.md's activity-tier
+## table): actually feeding is FEEDING, seeking/approaching is ordinary
+## ambulatory MOVING.
+func _current_metabolic_activity() -> String:
+	if _behavior.phase == CarrionForageBehavior.Phase.FEEDING:
+		return Metabolism.ACTIVITY_FEEDING
+	return Metabolism.ACTIVITY_MOVING
 
 
 ## Set by crush() -- once true, _process skips every forage/wander step
@@ -382,6 +412,10 @@ func _process(frame_delta: float) -> void:
 	# wander-heading cadence relative to its OWN simulated time -- not real
 	# wall-clock frames it may be skipping most of.
 	_elapsed_time += delta
+	# Real calorie burn (see docs/concept/metabolism.md): Kleiber's-law BMR
+	# at this decomposer's OWN current mass, scaled by its real
+	# CarrionForageBehavior phase.
+	_ensure_metabolism().advance(delta, _current_metabolic_activity())
 	_mushroom_satiation_remaining = maxf(0.0, _mushroom_satiation_remaining - delta)
 	_mushroom_effect_step(delta)
 	var position_before := position
@@ -646,6 +680,13 @@ func _step_feeding(delta: float) -> void:
 			# several visits, same as always.
 			_target.take_bite(BITE_AMOUNT)
 			_step_disease_carry()
+			# A real intake event for this decomposer's own unified mass
+			# (docs/concept/metabolism.md) -- no composition data exists
+			# for carrion (see NutrientRelease's own doc comment), so this
+			# treats one landed bite as one whole meal's worth, the same
+			# fallback granularity CreatureMarker's own uncomposed forage
+			# kinds already use.
+			_ensure_metabolism().feed_hunger_relief(1.0)
 		elif _target.has_method("take_mushroom_bite"):
 			# A mushroom (see MushroomMarker.take_mushroom_bite): unlike a
 			# carcass's whittled-down health pool or a fallen fruit eaten
@@ -663,7 +704,7 @@ func _step_feeding(delta: float) -> void:
 			# even a refused bite (already fully eaten by the time it
 			# arrived) means there is nothing left to gain from trying
 			# again immediately (see WildMushroomPatch.bite).
-			var mass_kg := CreatureMass.mass_kg_for(species)
+			var mass_kg := current_mass_kg()
 			var species_id: String = _target.species_id
 			if _target.take_mushroom_bite(MushroomBiting.bites_per_visit_for(mass_kg)):
 				_mushroom_satiation_remaining = MushroomBiting.satiation_seconds_for(mass_kg)
@@ -673,6 +714,11 @@ func _step_feeding(delta: float) -> void:
 				# disorientation and illness"). A no-op for a non-toxic
 				# species (see MushroomEffect.effect_kind_for).
 				apply_mushroom_effect(species_id)
+				# A real intake event for this decomposer's own unified
+				# mass (docs/concept/metabolism.md) -- only on an actually
+				# landed bite (take_mushroom_bite can refuse near the real
+				# per-mushroom cap).
+				_ensure_metabolism().feed_hunger_relief(1.0)
 			_target = null
 			_behavior.abort()
 			return
@@ -685,12 +731,14 @@ func _step_feeding(delta: float) -> void:
 			# there is no same-frame-iteration hazard to defer around.
 			_target.consume_leaf_litter()
 			_target.free()
+			_ensure_metabolism().feed_hunger_relief(1.0)
 		else:
 			# Fallen fruit/nut (see _nearest_food): a dropped cherry is not a
 			# boar carcass -- there is no health pool to whittle down, a
 			# decomposer finishing one just eats the whole thing in this one
 			# visit.
 			_target.queue_free()
+			_ensure_metabolism().feed_hunger_relief(1.0)
 		if not _target_still_here():
 			_target = null
 			_behavior.abort()

@@ -50,32 +50,36 @@ func test_the_premise_the_other_tests_rely_on():
 
 
 ## The player's own step must use a real mass-derived momentum, not a
-## placeholder -- _PLAYER_STEP_MOMENTUM_KG_M_S (precomputed once from
-## CreatureMass.PLAYER_MASS_KG * PebbleDispersion.FOOTSTEP_SPEED_MPS,
-## rather than recomputed every frame for two constants that never change
-## at runtime) is the one place that real number lives, reused for both
-## crush calls -- a worm and a caterpillar are crushed by the same
-## physics, not two independently-tuned numbers.
+## placeholder. Corrected (2026-09-07, see docs/concept/metabolism.md's
+## "one real mass per creature" pillar): a fixed, precomputed-once constant
+## would freeze the player's momentum at their SEED mass forever, exactly
+## the two-competing-mass-concepts shape that doc's own live correction
+## rejected -- so this is now a live per-frame read of the player's own
+## real, unified current_mass_kg(), computed once per _client_process call
+## (_player_step_momentum_kg_m_s) and reused for every crush call, still
+## one shared physics value per stepper, not a placeholder or a
+## per-call-site guess.
 func test_the_players_own_step_uses_a_real_mass_derived_momentum():
 	var body := _client_process_body()
-	assert_true(body.contains("_PLAYER_STEP_MOMENTUM_KG_M_S"))
+	assert_true(body.contains("player_step_momentum_kg_m_s"))
 	assert_true(body.contains("local_player.position"))
 	var source := FileAccess.get_file_as_string("res://scenes/world.gd")
 	assert_true(
-		source.contains("_PLAYER_STEP_MOMENTUM_KG_M_S := CreatureMass.PLAYER_MASS_KG"),
-		"the constant itself must actually derive from CreatureMass.PLAYER_MASS_KG, not an independent guess"
+		source.contains("player.current_mass_kg() * PebbleDispersion.FOOTSTEP_SPEED_MPS"),
+		"the player's own step momentum must read their real, live, unified mass, not a fixed guess"
 	)
 
 
-## The whole point of the mechanic: a creature's own species, not a flat
-## shared number, decides whether its step crushes anything underfoot --
-## so the wiring must read info.species and pass it through
-## CreatureMass.mass_kg_for per creature, not compute one momentum value
-## for every species alike.
+## The whole point of the mechanic: a creature's own real mass, not a flat
+## shared number, decides whether its step crushes anything underfoot.
+## Corrected (2026-09-07, see docs/concept/metabolism.md): this now reads
+## each creature's own real, live, unified current_mass_kg() -- seeded
+## from CreatureMass.mass_kg_for(species) but updated afterward by that
+## creature's own real metabolism -- rather than re-deriving a flat
+## species-average momentum from CreatureMass every frame.
 func test_each_creatures_own_species_drives_its_own_momentum():
 	var body := _client_process_body()
-	assert_true(body.contains("CreatureMass.mass_kg_for"))
-	assert_true(body.contains("marker.info.species") or body.contains(".info.species"))
+	assert_true(body.contains("marker.current_mass_kg()"))
 
 
 ## Both the player and every creature must actually reach crush_worm_at --
