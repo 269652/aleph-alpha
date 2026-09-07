@@ -242,6 +242,74 @@ dirt underneath it. An already-scarred path from before the snow fell is
 unaffected (it decays/recovers and repaints normally in winter) — only
 FRESH scarring is what snow prevents.
 
+### Real left/right footprint stamps (2026-09-07)
+
+Reported live: *"real footstep prints with left/right footprints spaced
+apart and stamped into the snow with displacement (snow amount should
+still be reduced) ... also implement proper pathscarring for grass and
+forest tiles."* Everything above this subsection — `SnowTrail`'s
+per-tile tread/coverage reduction, the transparent GPU trail-mask overlay
+— is the answer to "does the snow actually get thinner where you walk."
+It never drew an actual footprint SHAPE, individually placed and
+alternating left/right; that gap is what this closes, as a purely
+additive visual layer stamped on top, touching neither `SnowTrail` nor
+`PathScarring`'s own wear tracking at all.
+
+**`FootstepGait`** (`src/gameplay/footstep_gait.gd`) — real per-step
+footfall detection, driven by ACTUAL distance travelled rather than a
+fixed per-frame or per-tile-entry event (the tile-entry debounce
+`SnowTrail`/`PathScarring` both already use is the wrong granularity for
+an individual foot-fall). `STRIDE_LENGTH_METERS`/`STANCE_WIDTH_METERS`
+are real, grounded human-scale measurements (0.75m/0.12m) converted via
+the existing `GroundSlide.PX_PER_METER`, not eyeballed pixel counts.
+`step_if_due(distance)` alternates left/right every stride; `print_offset
+(heading, side)` places each print a real stance-width to either side of
+the walked line, perpendicular to travel direction (reusing
+`LeafLitterRenderer`'s own existing perpendicular-rotation convention
+rather than inventing a second one).
+
+**`FootprintField`** (`src/world/footprint_field.gd`) — per-chunk data,
+mirroring `LeafLitterField`'s exact shape (plain Dictionary-per-instance
+records, no scene nodes) but deliberately simpler: a footprint is static
+once stamped, no wind drift or settle transition to age, just
+`LIFETIME_SECONDS` pruning (half a real in-game day — a real design
+knob, deliberately far shorter than `LeafLitterField`'s own 0.75-real-
+year lifetime, since a footprint is an ephemeral mark, not persistent
+litter).
+
+**`ProceduralFootprintSprite`**/**`FootprintRenderer`**
+(`src/rendering/`) — no real hand-illustrated footprint art exists
+anywhere in this project, so a real, asymmetric sole silhouette (a wider
+ball offset for a big-toe bulge, a narrower heel) is generated directly,
+the same "procedural first" precedent `ProceduralMushroomSprite`
+already establishes, shaded with a two-tone rim+core technique so a
+print reads as pressed IN rather than a flat sticker ("... stamped into
+the snow with displacement"). One shape per SURFACE (snow/grass/
+forest — a cool shadow-blue snow print, pressed-earth-through-flattened-
+cover for grass/forest); "left" vs "right" is a render-time horizontal
+mirror of the same shape, not a second texture. Three plain
+`MultiMeshInstance2D` per chunk (one per surface), deliberately simpler
+than `LeafLitterRenderer`: a static mark needs no per-frame vertex-shader
+motion, wind, or atlas, just Godot's own built-in per-instance
+`Transform2D`.
+
+**Surface precedence mirrors `PathScarring`'s own gate exactly**
+(`EarthChunkManager.footstep_surface_for`): `snow_depth()` is a single
+GLOBAL scalar, not per-tile, so snow lying at all means every step
+everywhere is a snow print regardless of biome; otherwise grassland/
+forest only (matching `World.PATH_SCAR_BIOMES` — the "proper pathscarring
+for grass and forest tiles" half of the same report), everything else
+(desert, mountain, tundra, rainforest, ocean) gets no footprint at all —
+this feature's own explicit scope, not an oversight.
+
+`EarthChunkManager.record_footstep(pixel_position, heading)` is the real
+per-frame entry point, called once per frame alongside `tread_snow_at`
+with the player's own real position and `Player.facing_direction()`
+(a new public accessor — `_last_facing_direction` had none before this).
+Includes a teleport guard: a huge position jump between two consecutive
+calls (respawn, dev command, save load) re-baselines instead of stamping
+a stray print bridging the gap.
+
 ### What the CPU still does
 
 Per frame: push one float (`depth`), and the trail mask only when a
@@ -515,6 +583,16 @@ for, and why both exist.
   own already-on-top, sub-tile-accurate edge is what keeps the boundary
   looking seamless. Ocean coastlines are unchanged and may still show an
   analogous artifact — not fixed here.
+- ✅ **Real left/right footprint stamps, and PathScarring gets the same
+  treatment on grass/forest** (2026-09-07) — see "Real left/right
+  footprint stamps" above for the full mechanism (`FootstepGait`/
+  `FootprintField`/`ProceduralFootprintSprite`/`FootprintRenderer`,
+  wired via `EarthChunkManager.record_footstep`/`step_footprints`).
+  Purely additive on top of `SnowTrail`'s own existing depth reduction
+  and `PathScarring`'s own existing wear tracking, neither of which this
+  touched. 56/56 tests passing across the new files (5 of them GPU-
+  readback smoke tests, confirmed for real with
+  `--rendering-driver opengl3`, not just headless).
 - ⬜ **Far-world precision** — the no-`sin(` structural pin exists
   (`SHADER_CODE` greps clean), but there is no real-GPU readback test yet at
   far-world coordinates; add one, since that is exactly where the old river

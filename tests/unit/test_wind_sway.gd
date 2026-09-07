@@ -29,6 +29,27 @@ func test_shader_pins_sprite_bases_by_weighting_with_uv_y():
 	assert_string_contains(WindSway.SHADER_CODE, "UV.y")
 
 
+# -- sapling->mature morph dissolve (see tree_morph_shader.gd) ---------------
+
+func test_shader_carries_the_morph_dissolve():
+	assert_string_contains(WindSway.SHADER_CODE, "morph_canopy")
+
+
+func test_a_real_material_compiles_with_the_morph_uniforms_and_defaults_to_fully_mature():
+	const TreeMorphShader = preload("res://src/rendering/tree_morph_shader.gd")
+	var material := wind.make_material()
+	# 1.0 (fully mature, no sapling involved) is the GLSL uniform's OWN
+	# default -- a freshly built material that never called TreeMorphShader.
+	# apply() should already read as "done morphing", the same "off unless
+	# told otherwise" shape snow_coverage already has on this material.
+	assert_almost_eq(float(material.get_shader_parameter("morph_progress")), 1.0, 0.001)
+
+	var sapling_texture := ImageTexture.create_from_image(Image.create(4, 4, false, Image.FORMAT_RGBA8))
+	TreeMorphShader.apply(material, sapling_texture, 3, 0.5)
+	assert_eq(material.get_shader_parameter("morph_sapling_texture"), sapling_texture)
+	assert_almost_eq(float(material.get_shader_parameter("morph_progress")), 0.5, 0.001)
+
+
 func test_shader_phase_shifts_by_world_position():
 	assert_string_contains(WindSway.SHADER_CODE, "MODEL_MATRIX")
 

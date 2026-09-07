@@ -80,6 +80,9 @@ const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
+const FootstepGait = preload("res://src/gameplay/footstep_gait.gd")
+const FootprintField = preload("res://src/world/footprint_field.gd")
+const FootprintRenderer = preload("res://src/rendering/footprint_renderer.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
@@ -708,6 +711,39 @@ var _leaf_litter_renderer := LeafLitterRenderer.new()
 ## before). Same create-at-load/erase-at-unload lifecycle as
 ## _leaf_litter_fields/_leaf_litter_mmis above.
 var _leaf_litter_filled_generation: Dictionary = {}
+
+## Vector2i chunk_coord -> FootprintField (see FootstepGait,
+## docs/concept/snow_cover.md's "Footprints" / docs/concept/
+## infrastructure.md's path-scarring framing). Same create-at-load/
+## erase-at-unload lifecycle as _leaf_litter_fields above.
+var _footprint_fields: Dictionary = {}
+## Vector2i chunk_coord -> {surface: MultiMeshInstance2D} (see
+## FootprintRenderer.SURFACES) -- the visible counterpart to
+## _footprint_fields, three plain MultiMeshInstance2D per chunk (one per
+## real surface), parented under _ground_decor_parent exactly like
+## _leaf_litter_mmis.
+var _footprint_mmis: Dictionary = {}
+var _footprint_renderer := FootprintRenderer.new()
+## Vector2i chunk_coord -> the FootprintField.generation() value actually
+## pushed to _footprint_renderer.fill for that chunk, last time it
+## happened -- same dirty-tracking convention _leaf_litter_filled_
+## generation above already established (see docs/concept/soil_fauna.md's
+## "FPS regression round 4": rebuilding an unchanged MultiMesh buffer
+## every single frame is exactly the cost that regression was).
+var _footprint_filled_generation: Dictionary = {}
+
+## The single continuous stride accumulator for the PLAYER's own real
+## walking gait -- mirrors _last_player_snow_tile's own "one continuous,
+## cross-chunk accumulator" shape: a stride is inherently a single-walker
+## concern that must not reset at a chunk (or even a tile) boundary,
+## unlike _footprint_fields/_footprint_mmis above which are genuinely
+## per-chunk.
+var _player_footstep_gait := FootstepGait.new()
+## The player's own pixel position as of the last record_footstep call --
+## Vector2(INF, INF) means "no prior call yet" (see that function's own
+## doc comment), not a real position ever actually reachable in-world.
+var _last_footstep_position := Vector2(INF, INF)
+
 ## Vector2i chunk_coord -> Array[AntMoundMarker] -- the visible counterpart
 ## to _ant_colonies' own mound_cells(), one static marker per mound, spawned
 ## alongside the colony and freed with its chunk exactly like every other
@@ -4642,6 +4678,106 @@ func tread_snow_at(pixel_position: Vector2, move_trail_window: bool = true) -> v
 		_last_player_snow_tile = tile
 		_snow_trail_center_tile = tile
 	_snow_trail.step_on(tile)
+
+
+## Above this, two consecutive record_footstep calls are treated as a
+## teleport/respawn (dev command, save load, spawn) rather than real
+## continuous walking -- re-baselines without stamping a stray print
+## bridging the gap. Comfortably larger than any plausible single real
+## frame's movement even sprinting (Player.BASE_SPEED is 80px/s; even a
+## generously slow 10fps frame only covers ~40px at a hypothetical 5x
+## speed multiplier), small enough to still catch a genuine teleport,
+## which is typically hundreds to thousands of pixels.
+const _FOOTSTEP_TELEPORT_GAP_PX := 200.0
+
+## Which surface (see FootprintRenderer.SURFACES) a footstep on ground
+## whose real biome is `biome` should stamp, given whether snow currently
+## lies -- "" means no footprint at all. Pure and directly testable
+## independent of a real loaded chunk; record_footstep is the thin
+## integration wrapper that resolves the real biome/snow_depth and calls
+## this. Precedence mirrors PathScarring's own identical snow gate
+## exactly: snow_depth() is a single GLOBAL scalar, not per-tile (see
+## Snowfall/step_snow), so snow lying at all means every step everywhere
+## is a snow print regardless of biome; otherwise the same PATH_SCAR_
+## BIOMES-shaped list (grassland/forest only -- reported live: "proper
+## pathscarring for grass and forest tiles") gates grass/forest, exactly
+## like World._step_path_scarring's own gate already does for its wear
+## tracking. Any other biome (desert, mountain, tundra, rainforest,
+## ocean) gets no footprint at all -- this feature's own explicit scope.
+const _SURFACE_BY_FOOTSTEP_BIOME := {"grassland": "grass", "forest": "forest"}
+
+static func footstep_surface_for(biome: String, snow_lying: bool) -> String:
+	if snow_lying:
+		return "snow"
+	return String(_SURFACE_BY_FOOTSTEP_BIOME.get(biome, ""))
+
+
+## Real per-step footfall placement (see FootstepGait, FootprintField --
+## reported live: "real footstep prints with left/right footprints spaced
+## apart and stamped into the snow with displacement (snow amount should
+## still be reduced)... also implement proper pathscarring for grass and
+## forest tiles"). Called every frame with the walker's own continuous
+## position and real travel heading -- mirrors tread_snow_at/World.
+## _step_path_scarring's own "read the walker's continuous state every
+## frame, let the underlying mechanism decide whether anything actually
+## happens" shape, just driven by real distance (FootstepGait) rather
+## than tile-entry debounce, since an individual foot-fall is a finer
+## grain than either of those. `heading` orients the print (see
+## FootstepGait.print_offset) -- Player.facing_direction() for the real
+## player.
+##
+## Deliberately does NOT touch SnowTrail/PathScarring's own existing
+## snow-depth-reduction/wear tracking at all -- those keep working exactly
+## as before (see snow_depth()/tread_snow_at, PathScarring.step_on); this
+## is a purely additive VISUAL layer stamped on top of whatever those
+## mechanisms already do underneath.
+func record_footstep(pixel_position: Vector2, heading: Vector2) -> void:
+	if is_inf(_last_footstep_position.x):
+		_last_footstep_position = pixel_position
+		return
+	var distance := pixel_position.distance_to(_last_footstep_position)
+	_last_footstep_position = pixel_position
+	if distance > _FOOTSTEP_TELEPORT_GAP_PX:
+		# A real jump, not real walking -- re-baselined above already;
+		# also reset the gait accumulator so the far side of the jump
+		# doesn't inherit a stride debt built up before it.
+		_player_footstep_gait = FootstepGait.new()
+		return
+	var side := _player_footstep_gait.step_if_due(distance)
+	if side.is_empty():
+		return
+	var tile := _world_tile_for_pixel(pixel_position)
+	var surface := footstep_surface_for(biome_at_global(tile.x, tile.y), _snow_depth > 0.0)
+	if surface.is_empty():
+		return
+	var print_position := pixel_position + FootstepGait.print_offset(heading, side)
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(print_position))
+	var field: FootprintField = _footprint_fields.get(chunk_coord)
+	if field == null:
+		return
+	field.add_print(print_position, side, surface, heading, _world_age_seconds)
+
+
+## Ages/prunes every loaded chunk's FootprintField and refreshes its
+## MultiMeshes -- mirrors step_leaf_litter's own dirty-tracking shape
+## exactly (compare generation() against the last-pushed record, skip the
+## MultiMesh rebuild entirely once a chunk's prints have stopped changing
+## -- see docs/concept/soil_fauna.md's "FPS regression round 4" for why
+## that comparison matters, not a periodic throttle).
+func step_footprints() -> void:
+	for chunk_coord in _footprint_fields:
+		var field: FootprintField = _footprint_fields[chunk_coord]
+		field.advance(_world_age_seconds)
+		var mmis: Dictionary = _footprint_mmis.get(chunk_coord)
+		if mmis == null:
+			continue
+		var visible := _decorates(chunk_coord)
+		for surface in FootprintRenderer.SURFACES:
+			if mmis.has(surface):
+				mmis[surface].visible = visible
+		if visible and _footprint_filled_generation.get(chunk_coord, -1) != field.generation():
+			_footprint_renderer.fill(mmis, field.prints())
+			_footprint_filled_generation[chunk_coord] = field.generation()
 
 
 ## The world clock as of the last snow step, so snow can advance on the same
@@ -10258,6 +10394,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_ground_decor_parent.add_child(leaf_litter_mmi)
 	_leaf_litter_mmis[chunk_coord] = leaf_litter_mmi
 
+	# Footprint stamps (see FootstepGait/FootprintField). Empty at
+	# creation, same reasoning as leaf litter just above -- populated only
+	# as the player actually walks through, by record_footstep.
+	_footprint_fields[chunk_coord] = FootprintField.new()
+	_footprint_mmis[chunk_coord] = _footprint_renderer.build_multimeshes(_ground_decor_parent)
+
 	_ecosystem.add_region(chunk_coord, chunk)
 	# Robin/sparrow's food-density signal (worm burrows, ground seed cells)
 	# lives in the patch instances just created above, not in Chunk data --
@@ -10812,6 +10954,12 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_leaf_litter_mmis[chunk_coord].free()
 		_leaf_litter_mmis.erase(chunk_coord)
 	_leaf_litter_filled_generation.erase(chunk_coord)
+
+	_footprint_fields.erase(chunk_coord)
+	for mmi in _footprint_mmis.get(chunk_coord, {}).values():
+		mmi.free()
+	_footprint_mmis.erase(chunk_coord)
+	_footprint_filled_generation.erase(chunk_coord)
 
 	# Snapshot the aggregate ecology before dropping the region, so revisiting
 	# this chunk catch-up integrates from where it left off (see

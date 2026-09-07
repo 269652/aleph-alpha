@@ -1721,6 +1721,20 @@ func test_eating_a_false_death_cap_causes_no_harm_despite_the_name():
 	assert_eq(player.active_mushroom_toxin_debuffs.size(), 0)
 
 
+# -- facing direction: a real public accessor for footprint placement -----
+#
+# Reported live: "real footstep prints with left/right footprints spaced
+# apart" -- EarthChunkManager.record_footstep needs the player's own real
+# travel heading to orient each print, and _last_facing_direction (which
+# already holds the last real nonzero movement direction, not zeroing at
+# rest -- see its own doc comment) was private with no public accessor at
+# all before this.
+
+func test_facing_direction_reports_the_real_last_established_heading():
+	player._last_facing_direction = Vector2.RIGHT
+	assert_eq(player.facing_direction(), Vector2.RIGHT)
+
+
 # -- Karma (see docs/concept/karma_and_luck.md) ------------------------------
 #
 # apply_karma_delta is the single external mutator for the permanent karma

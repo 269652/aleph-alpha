@@ -1,6 +1,7 @@
 extends RefCounted
 
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const CharacterView = preload("res://scenes/character_view.gd")
 
 ## A tree's seven stages from seedling to full maturity.
 ##
@@ -138,3 +139,57 @@ func scale_at(age_seconds: float) -> float:
 ## Does a tree at this stage bear fruit and yield real wood?
 func is_productive(stage: int) -> bool:
 	return stage >= PRODUCTIVE_STAGE
+
+
+## ## Two phases: grow tall, then grow branches
+##
+## A young tree used to be the mature tree drawn small -- crown, boughs,
+## every twig, only shrunk -- which reads as a toy rather than a real young
+## tree (reported: "small newborn trees are not saplings but rather have a
+## miniaturized full canopy"). Real saplings do the opposite: they put on
+## HEIGHT first, as an unbranched shoot, and only start branching out once
+## established -- "they should grow like the players height before
+## branches start growing".
+##
+## scale_at above already grows height continuously and is UNCHANGED by
+## this -- the node still shrinks, a young tree really is shorter. This is
+## the separate signal that sequences the ART: below this fraction a tree
+## draws from the sapling growth sheet (see IllustratedTree.sapling_frame);
+## at and above it, ProceduralTreeSprite morphs from that sheet's last
+## frame into the real mature tree as canopy_growth_fraction climbs to 1.0.
+##
+## Reuses CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE rather than a second,
+## arbitrarily-chosen number: that constant IS "how tall the player reads,
+## as a fraction of a mature tree's own height" by construction (see its
+## own doc comment), so "branches start once the tree reaches the player's
+## own height" falls out of an existing, already-tuned value instead of
+## inventing a new one.
+const BRANCH_START_FRACTION := CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE
+
+## How far into the SECOND phase (branching) a tree at real height fraction
+## `height_scale` (scale_at's own result) is, as [0, 1]. Zero at and below
+## BRANCH_START_FRACTION (still purely a growing sapling); ramps across the
+## REMAINING height growth from there to full maturity (height_scale 1.0),
+## so the branching tree and the fully-grown tree arrive together rather
+## than the canopy finishing early or late relative to the trunk. Clamped
+## past 1.0 so an old-growth tree's extra height (up to 1.0 + OLD_GROWTH_
+## BONUS) never asks for more than a full canopy already gives.
+func canopy_growth_fraction(height_scale: float) -> float:
+	if height_scale <= BRANCH_START_FRACTION:
+		return 0.0
+	return clampf(
+		(height_scale - BRANCH_START_FRACTION) / (1.0 - BRANCH_START_FRACTION), 0.0, 1.0
+	)
+
+
+## How far through IllustratedTree's sapling growth SHEET a tree at real
+## height fraction `height_scale` is, as [0, 1] -- the FIRST-phase
+## counterpart to canopy_growth_fraction above. Climbs from 0 (a freshly
+## planted seedling) to 1 exactly AT BRANCH_START_FRACTION, then stays
+## pinned there for any taller height: the sapling sheet has nothing left to
+## show once branching has actually begun, the same way canopy_growth_
+## fraction has nothing to show yet below that same threshold. The two
+## functions hand off at exactly one height with no gap and no overlap --
+## see test_the_two_growth_phases_hand_off_at_exactly_the_same_height.
+func sapling_progress(height_scale: float) -> float:
+	return clampf(height_scale / BRANCH_START_FRACTION, 0.0, 1.0)

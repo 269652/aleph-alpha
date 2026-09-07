@@ -2031,6 +2031,10 @@ Fixed in `StarterKit.DEFAULT_CHOICES` itself, not here -- see the Starting Kit e
 
 ✅ **Trees grow branch by branch** (`ProceduralTreeSprite.growth_order` + `_grown_canopy`, wired through `ChoppableTree.set_age`). Growth was a single node scale, which drew a sapling as a full-grown tree in miniature -- crown, boughs and every twig, only small. The canopy is now pruned back to the branches the tree has actually put out: traced outward from the point where the trunk meets the crown, so a sapling is a short trunk with a few leaves, then a small crown, then boughs spreading, with the far tips last. Randomised per tree, so a nursery is not one sapling drawn many times. Two things had to differ from the season turn to make it read right, both found by rendering it and looking: the turn seeds from the crown's whole bottom edge (which on a spreading crown is the drooping outer RIM, and drew a young cherry as an arch floating clear of its trunk), and the turn mixes trace and clump noise half and half (which drew a sapling as confetti scattered over the whole mature crown box). Growth seeds from the trunk join alone and weights the trace at `GROWTH_BRANCH_WEIGHT`. Node scaling stays -- a young tree really is shorter -- fewer branches is in addition to it, not instead.
 
+**SUPERSEDED as of the sapling-sheet entry below** -- the code above is untouched and still correct (`test_procedural_tree_sprite.gd` still exercises it directly), but no production tree reaches it any more: `ChoppableTree` now shows real sapling art below the player's own height and always asks for full growth above it, so this pruning currently only fires if something other than `ChoppableTree` calls `generate_texture_with_fruit` with `growth < 1.0` by hand. Left in place rather than deleted -- a real, independent, still-tested capability of `ProceduralTreeSprite`, just not today's sapling mechanism.
+
+✅ **A sapling is a different drawing, not a pruned adult** (2026-09-07; `assets/sprites/trees/sapling.png`, `IllustratedTree.sapling_frame`/`sapling_frame_for_progress`, `TreeGrowth.BRANCH_START_FRACTION`/`sapling_progress`/`canopy_growth_fraction`, `TreeMorphShader`, wired through `ChoppableTree._redraw_canopy`/`refresh_sapling_display` and `TreeRenderer._build_tree_node`). Reported: "small newborn trees are not saplings but rather have a miniaturized full canopy... they should grow like the player's height before branches start growing... also make it so that the branches grow individually using the same mechanic the season transitions use... so that each individual tree looks different when maturing and growing branches." Even the branch-pruned canopy above is still fundamentally the mature crown's own pixels, cut back -- this instead swaps in a real ten-frame growth-stage illustration (one shared sheet across all six species, a named v1 simplification) below `CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE` -- reused rather than a second invented threshold, since that constant already IS "the player's own height as a fraction of a tree's" by construction -- and, past it, dissolves the sheet's last frame OUT into the real mature texture via a genuine per-clump GPU shader (`TreeMorphShader`, spliced into `WindSway`'s existing shared canopy material the same way canopy snow sparkle already is) as the tree keeps growing. Two procedural approaches were tried and rejected first, each confirmed by rendering and comparing rather than assumed: literal bare-branch-line extraction read as "almost as scaling the entire canopy" rather than a real seedling, and a CPU-composited trunk-outward flood fill for the morph itself (the exact technique the season turn/growth trace above already share) read as a wave sweeping up from the ground, not individual leaves coming in -- corrected on direct instruction ("use real gpu shading techniques similar to the season transitions per leaf and not bottom up"). The shipped hash is a trig-free lattice hash (mirroring `RiverFlowShader`'s own, for the same float32-precision reasons documented there) keyed by a per-tree variant seed (`ProceduralTreeSprite.tree_variant_for`), so two trees at identical progress scatter differently. Caught only on a real GPU, not the float64 CPU mirror every GLSL hash here also carries: a canopy-sized clump grid's smallest hashed roll can land close enough to zero (~0.0008) that float32 rounds it down to exactly 0, letting one clump reveal at zero progress -- fixed with an explicit "progress <= 0 shows nothing" short-circuit mirroring the shader's own pre-existing fast path at the fully-grown end. The hand-off back to ordinary rendering is a real off switch (`TreeMorphShader.clear` pins `morph_progress` to 1.0, and the shader's own fast path then skips the sapling texture entirely), and `TreeRenderer._build_tree_node` calls the same sapling-display path once, directly, right after a tree is bound -- closing the exact spawn-time window the original bug was seen in, where a freshly-spread seed's sprite started life holding the species/season-keyed shared texture cache (which has no per-tree growth to key on) until an unrelated season-sync tick happened to correct it. See [flora.md](flora.md#illustrated-trees)'s "Sapling phase" paragraphs for the full mechanism writeup.
+
 ✅ **A wood stops when it is full** (`TreeSpread.MAX_TREES_IN_WORLD`). Spread plants a few saplings per tick and the CALLER decides how often a tick happens, so the rate was frames-per-second rather than anything to do with the world clock. Nothing bounded the population: measured under `/ecotest`, about twenty-one saplings a second, two thousand loaded trees inside a minute, and the frame rate down to seven. Bounding the population rather than the rate is the fix that holds however the caller behaves. (The per-frame shed in `step_tree_spread` is deliberate and stays: under fast-forward it fires once per frame against ~960s of simulated time, so it plants far *slower* than the clock implies, not faster.)
 
 ✅ **Seasons arrive over time, branch by branch** (`SeasonTransition` + the canopy blend). The last third of each season is spent turning into the next, so by the moment spring starts the tree is already fully turned rather than swapping frames on one boundary. The turn spreads OUTWARD from where the canopy meets the trunk, so change runs along the branches to the twigs, with jitter so the edge breaks into individual twigs rather than sweeping as a clean arc.
@@ -2394,6 +2398,85 @@ zero regressions to either shipped shader. See
 [snow_cover.md](concept/snow_cover.md#sparkle-specular-glints-on-lying-snow)
 and [flora.md](concept/flora.md)'s "A fifth frame: snow is not a season"
 cross-reference.
+
+
+### Real left/right footprint stamps, and pathscarring for grass/forest (2026-09-07)
+
+Reported directly: *"Can you implement real footstep prints with left /
+right footprints spaced apart and stamped into the snow with displacement
+(snow amount should still be reduced)"*, then, in the same message
+thread: *"Also implement proper pathscarring for grass and forest
+tiles."* Confirmed (via a dedicated research pass before writing any
+code) that the existing `SnowTrail`/`PathScarring` mechanisms only ever
+reduced snow depth / swapped a whole tile to a dirt texture — neither
+ever drew an actual footprint SHAPE, individually placed and alternating
+left/right. Both existing mechanisms are completely UNCHANGED by this
+pass; a new, purely additive visual layer sits on top of both, serving
+snow/grass/forest alike from one field/renderer pair.
+
+Genuinely new machinery, confirmed via a dedicated research pass that
+nothing like it already existed:
+
+- **`FootstepGait`** (`src/gameplay/footstep_gait.gd`) — real per-step
+  footfall detection, driven by ACTUAL distance travelled (mirrors
+  `CreatureMarker._gait_distance`'s own "accumulate real travelled
+  distance, threshold it" shape, generalized from indexing an animation
+  frame into emitting a discrete world event instead). `STRIDE_LENGTH_
+  METERS`/`STANCE_WIDTH_METERS` (0.75m/0.12m) are real human-scale
+  measurements converted via the existing `GroundSlide.PX_PER_METER`.
+- **`FootprintField`** (`src/world/footprint_field.gd`) — per-chunk data
+  mirroring `LeafLitterField`'s exact shape, deliberately simpler (a
+  footprint is static once stamped, no wind/settle/decay-stage machinery
+  to mirror). `LIFETIME_SECONDS` is half a real in-game day, far shorter
+  than leaf litter's own 0.75-real-year lifetime.
+- **`ProceduralFootprintSprite`** (`src/rendering/`) — no real
+  hand-illustrated footprint art exists anywhere in the project (a
+  dedicated search confirmed this before writing any art code), so a
+  real asymmetric sole shape (ball+heel ellipses, ball offset for a real
+  big-toe bulge) is generated directly, same house style as
+  `ProceduralMushroomSprite`. "Stamped ... with displacement" via a
+  two-tone rim+core shading technique, not a flat silhouette. One shape
+  per surface (snow/grass/forest); left/right is a render-time mirror of
+  the same shape.
+- **`FootprintRenderer`** (`src/rendering/`) — three plain
+  `MultiMeshInstance2D` per chunk (one per surface), deliberately
+  simpler than `LeafLitterRenderer`: no per-frame vertex-shader motion
+  needed for a static mark, just Godot's own built-in per-instance
+  `Transform2D`. Caught and fixed a real bug during TDD: `Transform2D
+  (rotation, origin).scaled_local(...)` was silently discarding the
+  origin — switched to building the transform's basis vectors directly.
+  Then discovered that `MultiMesh` instance-transform readback itself
+  doesn't round-trip under `--headless` at all (an isolated diagnostic
+  probe confirmed it, then was deleted) — the same GPU-readback
+  limitation `test_leaf_litter_renderer_smoke.gd` already documents; the
+  affected tests were split into a dedicated, pending-guarded
+  `test_footprint_renderer_smoke.gd` mirroring that exact precedent,
+  rather than left flaky in the headless-safe suite.
+- **`EarthChunkManager.footstep_surface_for(biome, snow_lying)`** — pure,
+  directly testable, mirrors `PathScarring`'s own precedence exactly:
+  `snow_depth()` is a single GLOBAL scalar (not per-tile), so snow lying
+  at all means every step everywhere is a snow print regardless of
+  biome; otherwise grassland/forest only (matching `World.
+  PATH_SCAR_BIOMES`), everything else gets no footprint at all.
+  `record_footstep(pixel_position, heading)` is the real per-frame entry
+  point (called alongside `tread_snow_at`), with a teleport guard so a
+  huge position jump (respawn, dev command, save load) re-baselines
+  instead of stamping a stray print bridging the gap.
+- **`Player.facing_direction()`** — a new public accessor for
+  `_last_facing_direction` (holds the last real nonzero movement
+  direction, never zeroes at rest), which had none before this;
+  `record_footstep` needs the player's own real travel heading to orient
+  each print.
+
+Built red-first end to end throughout. 56/56 tests passing (5 of them
+real GPU-readback smoke tests, confirmed with `--rendering-driver
+opengl3`, not just headless); the existing snow (76/76) and path-
+scarring (26/26) suites re-verified unaffected. Confirmed live via a
+real `--solo` session that the new per-chunk load/unload wiring runs
+with zero script errors. See
+[snow_cover.md](concept/snow_cover.md#real-leftright-footprint-stamps-2026-09-07)
+and
+[infrastructure.md](concept/infrastructure.md) for the full mechanism.
 
 
 ### Flowers: too dense, no tooltip, and a wind that never blew
@@ -13016,6 +13099,20 @@ intermediate "loaded, undecided" state at all.
   that branch's `StarterKit.POOL` does not include either item, and
   merging it as-is would silently drop this grant along with the rest of
   the old kit — worth reconciling at that point, not addressed here.
+  (**Reconciled, same day**: `claude/starter-kit` merged a couple of
+  hours later (`33da72c6`). `StarterKit.POOL` was NOT left missing
+  either item — `a98f3486` added both, reacting to this same "give the
+  player a glass bottle and butterfly net" report — so nothing was
+  silently dropped from the pool as feared above. The reconciliation
+  cuts the other way instead: `Player._ready()` no longer grants
+  anything automatically at all now; the hardcoded block this whole
+  bullet describes is gone, replaced by `World.grant_starter_items()`
+  once the player picks, or `StarterKit.DEFAULT_CHOICES`
+  (`iron_axe`/`stone_pickaxe`/`fishing_rod` — neither bottle nor net)
+  if they never open the tab. `bb7f6322` pins the new contract via
+  `test_a_new_player_starts_completely_unequipped_before_any_grant`.
+  Current reality lives in `docs/concept/starting_kit.md`, not the "now
+  also adds one butterfly_net and one glass_bottle" claim above.)
 
 ### Ethogram (`concept/ethogram.md`)
 
@@ -14779,3 +14876,81 @@ same size as a live one. `CaterpillarMarker`/`DecomposerMarker` untouched
 `test_crush_applies_the_squash_effect_to_its_sprite`, whose own assertion
 was the exact behavior this fix removes) plus all 73 `test_crush`-
 matching tests project-wide reconfirmed green (5431 asserts).
+
+### Karma: crushing is player-only again (`concept/karma_and_luck.md`)
+
+Reported live: *"Karma is constantly decreasing when wild animals step on
+worms or so.. it should only decrease when the player itself steps on
+something or abandons a quest; but the player must do it."* Reverses an
+earlier explicit request ("every crush should count, not just the
+player's own deliberate ones") that had put `World`'s crush pass in
+direct tension with `karma_and_luck.md`'s own pillar 3 (*"Karma tracks
+the player's own DELIBERATE-enough acts"* — a wild deer's footstep is not
+a deliberate act of the player's at all).
+
+✅ **`scenes/world.gd`'s `CreatureMarker` loop** — every crush call inside
+it (worm/caterpillar/millipede/ant/decomposer/mushroom) is now a bare
+statement, exactly the shape `crush_walnut_near` (never Karma-eligible
+for anyone) already used, instead of `if ...: local_player.
+apply_karma_delta(...)`. A wild creature's own step still crushes what's
+underfoot — a real, weight-emergent ecosystem effect, unrelated to the
+player's own moral ledger — it just no longer touches Karma. The
+player's own step (the block above the loop) is untouched: still
+if-guarded, still charges `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY`
+exactly as before.
+
+✅ **Quest abandonment checked too, needed no fix.** `QuestLog.abandon`/
+`accept` have zero call sites outside `tests/unit/test_quest_log.gd`
+today — no player-facing UI wires them yet (see karma_and_luck.md's own
+Status list) — and the one automatically-wired quest path (`QuestLog.
+reconcile`, run from `World._step_quest_reconciliation`) only ever
+applies the *positive* `QUEST_FULFILLED_REWARD`, never `QUEST_ABANDON_
+PENALTY`. Quest abandonment is therefore already player-only in design
+(in fact currently unreachable in real gameplay at all), confirmed by
+reading the real call graph before touching anything.
+
+`tests/unit/test_world_crush_wiring.gd`'s Karma section rewritten to
+match: `test_only_the_players_own_crush_calls_apply_the_karma_penalty`
+(6 call sites, not the old 12) and `test_a_creatures_own_crush_never_
+applies_the_karma_penalty` (every creature-loop crush call is bare, never
+followed by `apply_karma_delta`) replace the two tests that pinned the
+old "any creature's" behavior; the now-redundant mushroom-specific karma
+test was removed rather than patched, since the two new, more general
+tests already cover it. 17/17 tests passing (full file, including the 15
+pre-existing tests confirmed unaffected). `karma.gd`'s own
+`WORM_OR_CATERPILLAR_CRUSH_PENALTY` doc comment and `karma_and_luck.md`'s
+event table + Status list updated to match, with the reversal dated and
+the original request quoted rather than silently rewritten.
+
+### Boot logo intro shipped (`concept/intro_splash.md`, 2026-09-07)
+
+Requested directly: a rotating pixel-art Earth with "Aleph Alpha" building
+in, "similar to some movie intros" (Universal Pictures' spinning-globe
+ident is the direct reference), as a real spritesheet asset the user
+generated from a prompt and dropped in as `assets/sprites/intro.png`.
+1983×793px, 8 columns × 4 rows = 32 frames -- AI-generated, so **not** a
+perfectly regular grid the way `worm.png` is (1983/8 and 793/4 aren't
+whole numbers); `IntroSplashSheet` measures its own row bands directly
+(`tools/probe_intro_sheet.gd`, mirroring `tools/probe_worm_sheet.gd`'s own
+"measure before pinning constants" convention) rather than assuming even
+division, and deliberately skips `SpriteSheetSlicer.normalize_frames`
+(every other illustrated sheet's own convention) since its shared-scale-
+from-widest-content behaviour would make the globe itself appear to
+change size as the wordmark's own ink extent grows across the sequence --
+see `docs/concept/intro_splash.md`'s own "The sheet" section for the full
+reasoning. Frame timing is a pure, headlessly-tested `IntroSplashSequencer`
+(32 frames @ 10fps, ~3.2s one-shot, never loops); `IntroSplash` is thin
+engine glue that plays it once and skips instantly on any key/mouse/
+gamepad press. Wired into `World._ready`'s ordinary interactive-launch
+branch only -- `--solo`/`--server`/join launches are untouched, so nothing
+about dev iteration got slower. Strict TDD throughout the two pure
+classes (confirmed red first: an undefined `IntroSplashSequencer`/
+`IntroSplashSheet` reference fails the whole test script's parse, the
+same legitimate red shape prior fixes in this doc have already hit for an
+undefined method); the thin `IntroSplash` Node's own wiring test
+(finishes after full duration, skips on any input, never fires `finished`
+twice) was written alongside its glue code rather than strictly
+before it, consistent with how this codebase already treats thin engine
+glue versus pure logic elsewhere (e.g. `LeafLitterRenderer.fill`'s own
+untested-in-isolation wrapper around its tested static functions). 18 new
+tests total (7 sequencer + 6 sheet + 5 node), all green.

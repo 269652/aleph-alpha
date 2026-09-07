@@ -153,10 +153,14 @@ func test_the_creature_crush_calls_are_inside_a_creaturemarker_group_loop():
 
 # -- Karma (see docs/concept/karma_and_luck.md) ------------------------------
 #
-# "Stepping on a worm should give -1 Karma", asked for every crush -- the
-# player's own step OR any creature's -- not just the player's deliberate
-# ones. A crush call that ran but never fed Karma would defeat the entire
-# point of threading CrushMechanic's bool return value through at all.
+# Reported live: "Karma is constantly decreasing when wild animals step on
+# worms... it should only decrease when the player itself steps on
+# something... the player must do it." Reverses the earlier "every crush
+# counts, player's own step OR any creature's" design (see karma_and_luck.md's
+# own 2026-09-07 reversal note) -- only the PLAYER's own step now applies
+# the penalty; a wild creature's own step still crushes what's underfoot
+# (a real ecosystem effect), it just never touches Karma, the same as
+# crush_walnut_near (never Karma-eligible for anyone) already didn't.
 # Millipedes (docs/concept/soil_fauna.md "Generalized to millipedes too"),
 # ants (docs/concept/soil_fauna.md "Generalized to ants too") and bugs
 # (docs/concept/soil_fauna.md "Generalized to bugs too") charge the SAME
@@ -165,33 +169,61 @@ func test_the_creature_crush_calls_are_inside_a_creaturemarker_group_loop():
 # underfoot") is identical (see karma.gd's own doc comment).
 
 
-func test_every_crush_call_site_applies_the_karma_penalty():
+func test_only_the_players_own_crush_calls_apply_the_karma_penalty():
 	var body := _client_process_body()
 	assert_eq(
 		_count_occurrences(body, "apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)"),
-		12,
-		"expected the penalty applied at all 12 crush call sites (worm+caterpillar+millipede+ant+decomposer+mushroom, player+creature loop)"
+		6,
+		"expected the penalty applied at exactly the 6 player-only crush call sites (worm+caterpillar+millipede+ant+decomposer+mushroom)"
 	)
 
 
-## Each penalty must be gated behind its own crush call actually succeeding
-## -- an `if <crush call>:` guard, not a bare statement charged every frame
-## regardless of whether anything was actually crushed.
-func test_the_karma_penalty_is_only_charged_when_a_crush_actually_happens():
+## The player's own 6 Karma-eligible crush calls -- the ones before the
+## CreatureMarker loop -- must each still be gated behind their own `if`,
+## charged only when a crush actually happened.
+func test_the_players_own_karma_penalty_is_only_charged_when_a_crush_actually_happens():
 	var body := _client_process_body()
+	# rfind, not find: an EARLIER, unrelated CreatureMarker.GROUP_NAME loop
+	# (snow-treading, see the tread_snow_at pairing this block's own doc
+	# comment mirrors) sits before the crush block entirely -- the crush
+	# pass's own creature loop is the LAST such loop in this function.
+	var group_loop_at := body.rfind("get_nodes_in_group(CreatureMarker.GROUP_NAME)")
+	assert_gt(group_loop_at, -1)
 	for call_name in ["crush_worm_at(", "crush_caterpillars_near(", "crush_millipedes_near(", "crush_ants_near(", "crush_decomposers_near(", "crush_mushroom_at("]:
-		var search_from := 0
-		var checked := 0
-		while true:
-			var at := body.find(call_name, search_from)
-			if at == -1:
-				break
-			var line_start := body.rfind("\n", at) + 1
-			var line := body.substr(line_start, at - line_start).strip_edges()
-			assert_true(line.begins_with("if "), "%s call must be an if's condition, found: %s" % [call_name, line])
-			checked += 1
-			search_from = at + 1
-		assert_eq(checked, 2, "%s should still have exactly 2 call sites" % call_name)
+		var at := body.find(call_name)
+		assert_gt(at, -1, "%s should still have a player call site" % call_name)
+		assert_lt(at, group_loop_at, "%s's player call site must come before the creature loop" % call_name)
+		var line_start := body.rfind("\n", at) + 1
+		var line := body.substr(line_start, at - line_start).strip_edges()
+		assert_true(line.begins_with("if "), "%s's player call must be an if's condition, found: %s" % [call_name, line])
+
+
+## The reversal itself: a wild creature's own crush (inside the
+## CreatureMarker loop) is now a bare statement, never gated behind an
+## `if` and never followed by apply_karma_delta -- the exact shape
+## crush_walnut_near (never Karma-eligible for anyone) has always used.
+## The crush mechanic still runs (a deer's own step still kills the worm
+## underfoot); only the Karma side effect is gone.
+func test_a_creatures_own_crush_never_applies_the_karma_penalty():
+	var body := _client_process_body()
+	# rfind, not find -- see the sibling test above's own comment on why.
+	var group_loop_at := body.rfind("get_nodes_in_group(CreatureMarker.GROUP_NAME)")
+	assert_gt(group_loop_at, -1)
+	for call_name in ["crush_worm_at(", "crush_caterpillars_near(", "crush_millipedes_near(", "crush_ants_near(", "crush_decomposers_near(", "crush_mushroom_at(", "crush_walnut_near("]:
+		var at := body.rfind(call_name)
+		assert_gt(at, -1, "%s should still have a creature call site" % call_name)
+		assert_gt(at, group_loop_at, "%s's creature call site must come after entering the group loop" % call_name)
+		var line_start := body.rfind("\n", at) + 1
+		var line_end := body.find("\n", at)
+		var line := body.substr(line_start, line_end - line_start).strip_edges()
+		assert_false(
+			line.begins_with("if "),
+			"%s's creature call should be a bare statement, not if-guarded, found: %s" % [call_name, line]
+		)
+		assert_false(
+			body.substr(at, line_end - at).contains("apply_karma_delta"),
+			"%s's creature call site should never apply a Karma penalty" % call_name
+		)
 
 
 # -- mushrooms (see docs/concept/mushrooms.md, WildMushroomPatch.crush) -----
@@ -206,9 +238,11 @@ func test_the_karma_penalty_is_only_charged_when_a_crush_actually_happens():
 # feedback": a mushroom should cost Karma the same as a bug/ant/
 # caterpillar. Reversed here (see docs/concept/mushrooms.md's own Status
 # note on the reversal): crush_mushroom_at's bool return now feeds Karma
-# exactly like every other crush call above, so
-# test_every_crush_call_site_applies_the_karma_penalty's count includes
-# it too.
+# for the PLAYER's own step exactly like every other crush call above, so
+# test_only_the_players_own_crush_calls_apply_the_karma_penalty's count
+# includes it too (its creature-loop call site is covered by
+# test_a_creatures_own_crush_never_applies_the_karma_penalty instead --
+# see that section's own reversal note).
 
 func test_crush_mushroom_at_is_called_for_both_the_player_and_creatures():
 	var body := _client_process_body()
@@ -225,27 +259,6 @@ func test_the_creature_mushroom_crush_call_is_inside_a_creaturemarker_group_loop
 	assert_gt(group_loop_at, -1)
 	assert_gt(mushroom_crush_at, -1)
 	assert_lt(group_loop_at, mushroom_crush_at, "the creature mushroom-crush call must come after entering the group loop")
-
-
-## The reversal from the mushroom shape's original divergence: every
-## crush_mushroom_at call site must now be wrapped in an `if ...: apply_
-## karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)` guard, the same
-## as worm/caterpillar/millipede/ant/decomposer -- crushing a mushroom
-## costs Karma too now.
-func test_crushing_a_mushroom_now_costs_karma_like_any_other_small_creature():
-	var body := _client_process_body()
-	var search_from := 0
-	var checked := 0
-	while true:
-		var at := body.find("crush_mushroom_at(", search_from)
-		if at == -1:
-			break
-		var line_start := body.rfind("\n", at) + 1
-		var line := body.substr(line_start, at - line_start).strip_edges()
-		assert_true(line.begins_with("if "), "crush_mushroom_at call must be an if's condition, found: %s" % line)
-		checked += 1
-		search_from = at + 1
-	assert_eq(checked, 2, "should still have exactly 2 call sites")
 
 
 # -- walnuts (see docs/concept/soil_fauna.md, EarthChunkManager.
