@@ -26,6 +26,15 @@ extends RefCounted
 ## honeybee recruitment is the waggle dance, a genuinely different signal
 ## from a laid scent trail, and modeling it faithfully is a separate piece
 ## of work).
+##
+## Real queen presence (`has_queen_at`/`_advance_queenless`), added in a
+## later pass: a NEW departure from AntColony, which has no queen entity
+## at all (see soil_fauna.md/AntMoundMarker -- a real ant queen is
+## sessile and deliberately never shown; population alone stands in for
+## her). Bees get a real, tracked queen because the user explicitly
+## supplied honeybee_queen.png and asked for her to have a real place in
+## the ecosystem, not just a sprite -- see BeeQueenMarker/bees.md's own
+## "The queen" section.
 
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const BeePopulationModel = preload("res://src/world/bee_population_model.gd")
@@ -149,6 +158,23 @@ var _warmth: Dictionary = {}
 var _food_stored: Dictionary = {}
 var _population_model := BeePopulationModel.new()
 
+## Vector2i cell -> bool: whether this hive currently has a live queen.
+## See has_queen_at's own doc comment for the unset-cell default. Real
+## mechanical grounding for "queen-driven population" (bees.md/soil_
+## fauna.md's own real-world-grounding language for the logistic growth
+## curve itself) -- this is a NEW, deliberate departure from that: ants
+## have no queen entity at all (soil_fauna.md/AntMoundMarker are explicit
+## that a real queen is sessile and never shown, and population is the
+## only trace of her), but the user explicitly supplied honeybee_queen.png
+## and asked for her to have "a real place in the ecosystem", so bees get
+## a real, tracked queen-presence state ants deliberately do not.
+var _has_queen: Dictionary = {}
+
+## Vector2i cell -> float: real simulated days this hive has been
+## queenless so far, only present for a cell currently mid-requeening
+## (see _advance_queenless/requeening_progress_at).
+var _requeening_days: Dictionary = {}
+
 ## Mirrors AntColony.SECONDS_PER_SIMULATED_DAY exactly -- see that
 ## constant's own doc comment for why this is restated locally rather
 ## than imported (EarthChunkManager already preloads BeeColony; the
@@ -186,8 +212,76 @@ func advance(delta_seconds: float) -> void:
 	_step_count += 1
 	var delta_days := delta_seconds / SECONDS_PER_SIMULATED_DAY
 	for cell in _hives:
-		_population[cell] = _population_model.step(population_at(cell), capacity_at(cell), delta_days)
+		if has_queen_at(cell):
+			_population[cell] = _population_model.step(population_at(cell), capacity_at(cell), delta_days)
+		else:
+			_advance_queenless(cell, delta_days)
 		_deplete_food(cell, delta_days)
+
+
+## How many real simulated days a hive spends queenless before it raises
+## a real replacement and resumes ordinary growth -- see bees.md's own
+## swarming section ("...the hive left behind raises a new queen from the
+## brood already there and carries on"), now a real mechanic rather than
+## flavor text. Grounded in real honeybee biology: a queen larva takes
+## ~16 days egg-to-emergence, then roughly another 5-10 days to mature
+## and complete her mating flights before she begins laying -- commonly
+## cited in aggregate as about four weeks for a colony to be fully
+## requeened with a new, laying queen.
+const REQUEENING_DAYS := 28.0
+
+## How fast a queenless hive's own population declines, per simulated
+## day. A real, if secondary, consequence of losing the queen: with no
+## new eggs being laid, existing workers are never replaced and age out
+## at their own real lifespan -- a worker honeybee's active-season
+## lifespan runs around 5 weeks (35 days). Derived from that real
+## lifespan as a halving rate (ln(2)/35), not an eyeballed number.
+const QUEENLESS_DECLINE_RATE_PER_DAY := 0.0198
+
+
+## Whether this hive cell currently has a live queen. An unset cell (one
+## this mechanic has never touched -- never swarmed from, never
+## relocated) reads true, the same "unset reads as the healthy default"
+## fallback population_at/honey_stored_at already use: a hive predates
+## this mechanic existing at all, so it starts assumed healthy rather
+## than retroactively queenless.
+func has_queen_at(cell: Vector2i) -> bool:
+	return _has_queen.get(cell, true)
+
+
+## Real progress toward requeening, [0, 1] -- 0.0 for a hive that
+## currently has a queen (nothing to show progress toward). What a
+## queen's own marker/a hive's tooltip can read to report real state
+## rather than a bare yes/no, mirroring growth_fraction_at's own "expose
+## the real underlying number, let the caller decide how to show it"
+## contract.
+func requeening_progress_at(cell: Vector2i) -> float:
+	if has_queen_at(cell):
+		return 0.0
+	return clampf(_requeening_days.get(cell, 0.0) / REQUEENING_DAYS, 0.0, 1.0)
+
+
+## A queenless hive cannot grow at all -- no queen laying means no new
+## brood, full stop, so there is no partial-capacity PopulationModel.step
+## call to make here the way a merely under-fed hive still gets (unlike
+## being under-fed, there is no partial version of "no queen"). Its
+## existing workforce gradually shrinks instead, as workers age out with
+## nothing replacing them (see QUEENLESS_DECLINE_RATE_PER_DAY) -- a real,
+## observable "hive strength degrades without a live queen" consequence.
+## Once REQUEENING_DAYS' worth of real simulated time has passed, the
+## hive raises a real replacement and resumes ordinary logistic growth
+## from whatever population actually survived -- bees.md's own swarming
+## grounding, now a real mechanic rather than flavor text.
+func _advance_queenless(cell: Vector2i, delta_days: float) -> void:
+	_population[cell] = maxf(
+		0.0, population_at(cell) * (1.0 - QUEENLESS_DECLINE_RATE_PER_DAY * delta_days)
+	)
+	var days_so_far: float = _requeening_days.get(cell, 0.0) + delta_days
+	if days_so_far >= REQUEENING_DAYS:
+		_has_queen[cell] = true
+		_requeening_days.erase(cell)
+	else:
+		_requeening_days[cell] = days_so_far
 
 
 ## How much a hive's population, honey reserve, and win/lose position
@@ -224,14 +318,25 @@ func abscond_to(from_cell: Vector2i, to_cell: Vector2i) -> void:
 		return
 	var population := population_at(from_cell)
 	var honey := honey_stored_at(from_cell)
+	# The queen (or her queenless-ness/requeening progress) carries over
+	# unchanged: absconding is the WHOLE colony relocating together (see
+	# bees.md's "Absconding" -- "not half, unlike swarming"), so whatever
+	# her real state was before the move, it still is after it.
+	var had_queen := has_queen_at(from_cell)
+	var requeening_days_so_far: float = _requeening_days.get(from_cell, 0.0)
 	_hives.erase(from_cell)
 	_population.erase(from_cell)
 	_food_stored.erase(from_cell)
 	_forage_success.erase(from_cell)
 	_warmth.erase(from_cell)
+	_has_queen.erase(from_cell)
+	_requeening_days.erase(from_cell)
 	_hives[to_cell] = true
 	_population[to_cell] = population
 	_food_stored[to_cell] = honey
+	_has_queen[to_cell] = had_queen
+	if not had_queen:
+		_requeening_days[to_cell] = requeening_days_so_far
 
 
 ## Colony budding/swarming (see bees.md's "Real-world grounding": the
@@ -274,6 +379,15 @@ func bud_new_hive(from_cell: Vector2i, to_cell: Vector2i) -> void:
 	_hives[to_cell] = true
 	_population[to_cell] = half_population
 	_food_stored[to_cell] = half_honey
+	# The real biological mechanism this whole method mirrors (see bees.md's
+	# "Real-world grounding"): the OLD queen leaves WITH the swarm, so the
+	# new hive has her from the start, while the hive left behind is
+	# genuinely queenless until it raises a replacement (see
+	# _advance_queenless/REQUEENING_DAYS) -- a real, observable consequence
+	# of swarming this method previously had no state to carry at all.
+	_has_queen[from_cell] = false
+	_requeening_days[from_cell] = 0.0
+	_has_queen[to_cell] = true
 
 
 ## The same two real-world facts _seed_initial_hives itself gates a
@@ -457,3 +571,4 @@ func _seed_initial_hives() -> void:
 			_hives[cell] = true
 			_population[cell] = BeePopulationModel.STARTING_POPULATION
 			_food_stored[cell] = _founding_honey_reserve()
+			_has_queen[cell] = true
