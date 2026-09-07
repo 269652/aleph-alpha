@@ -163,6 +163,75 @@ seamlessly across a chunk boundary -- a deliberate scope cut, not asked for
 and not attempted; a seamless version would need a shared noise seed
 sampled in global tile coordinates instead.
 
+## Seasonal art: growth-stage rows and a staggered per-blade turn
+
+The single `grass_blades.png` atlas above is superseded by four sheets, one
+per season (`grass_blades_spring.png`/`_summer.png`/`_autumn.png`/
+`_winter.png`, same 10×10 grid and 1254×1254 delivered size) -- spring in
+flower, summer as the original shipped art, autumn senescing toward orange/
+red, winter frosted. Two changes follow from this, one about what a single
+sheet's grid MEANS and one about having four of them at all.
+
+**A sheet's row is now a growth stage, not a second variant axis.** Before
+this, `atlas_region_for_seed`'s 100 cells were one flat, undifferentiated
+pool -- a "young shoot" was just a mature clump's own art scaled down
+(`instances_for_cards`' `maxf(0.3, growth)`), because no cell was actually
+drawn as a shoot. The delivered sheets changed that: row 0 is a bare single
+blade, row 9 a full flowering/fruiting-head clump, with a real, drawn
+progression between. Reusing that means splitting the seed's old dual job
+(pick a row AND a column) into two separate, independently-driven axes:
+`growth` (0..1, from `TallGrass.get_growth`) selects the ROW
+(`clampi(int(growth * ATLAS_ROWS), 0, ATLAS_ROWS - 1)`), and the existing
+per-card seed hash keeps selecting the COLUMN -- so two cards at the same
+growth still look different (variant), and one card's own look now actually
+changes as it grows, rather than just shrinking and growing back. This
+retires the growth-as-scale trick entirely (`instances_for_cards` always
+places cards at their full, undamped size now) -- double-damping an
+already-smaller-drawn sprout by ALSO shrinking it read as wrong once row 0
+existed to draw instead. `atlas_region_for_seed` (seed-only) is superseded by
+`atlas_region_for` (seed AND growth); the row-bleed correction
+(`ROW_TOP_BLEED_PX`) is unaffected by which axis picked the row -- it is
+about the sheet's own pixels, not about how a caller chose to address them.
+
+**Which of the four sheets a card samples is a staggered, per-card decision,
+not a field-wide swap -- the same idea trees use, at the granularity grass
+actually has.** `TreePhenology`/`ProceduralTreeSprite` turn a canopy by
+sweeping individual PIXELS across a shared `turn_progress`, baking and
+caching the result per (species, season-pair, progress) combination -- cheap
+because there are only ever a few hundred trees and a handful of distinct
+combinations in view at once (see `docs/concept/seasons.md`). Grass has no
+such headroom: several thousand simultaneous cards, recomputed from a hash
+every sync rather than persisted (see Mechanism above) -- baking a unique
+image per card is the wrong shape for this system entirely. So the sweep
+happens per CARD instead of per pixel, and the "which side of the sweep is
+this unit on" decision is pushed onto the GPU's existing per-instance data
+rather than costing a second CPU image per card: each card's own atlas seed
+already produces a stable pseudo-random value (`card_specs_for_seed`); a
+second hash of that same identity (`turn_threshold_for_seed`) gives a stable
+`[0, 1)` threshold, and a card samples the OLD season's sheet while
+`SeasonTransition`'s shared, quantised `progress` is still below its own
+threshold and the NEW season's sheet once progress reaches it -- so a turn
+spreads across many individually-timed cards exactly the way it spreads
+across many individually-timed branches on one tree, using the identical
+"one shared clock, many independently-thresholded units" shape, just with
+the unit resized from a pixel to a whole card.
+
+A card's decision is a hard swap between two fully-rendered sheets, not a
+cross-fade -- there is no meaningful halfway image between "row 6, spring
+sheet" and "row 6, autumn sheet" the way there is between two aligned tree-
+canopy pixels, so blending them would not read as a real intermediate season,
+only as a double-exposure. `EarthChunkManager` realizes the split by
+building up to two `MultiMeshInstance2D`s per band instead of one whenever a
+turn is actually in progress (`0 < progress < 1`) -- one bound to the "from"
+season's texture holding every card still below its own threshold, one bound
+to "to" holding the rest -- collapsing back to the day's single MMI the
+instant `progress` reaches `0` or `1` (matching every prior season, and
+today's behaviour, exactly). The doubled draw call is real but brief and
+bounded the same way the tree cache's rebuild cost is: `SeasonTransition`
+only advances in `TURN_STEPS=6` steps, a handful of times per in-game year,
+so the extra MMI exists for a small fraction of a chunk's decorated lifetime,
+never per-frame.
+
 ## View-distance culling: grass only draws what the camera can see
 
 Reported live: "optimize the grass blade rendering so it only draws what
@@ -528,19 +597,43 @@ framebuffer), so several of these needed a real, non-headless, off-screen
 - ✅ Ambient wind sway (not the walker push) scales with the live
   `WeatherModel.wind_strength_for` value, the same one driving the water's
   shimmer and every other swaying plant.
-- ✅ A field carries the season: the blade shader takes the same
-  `SeasonalFoliage` tint the ground under it wears
+- ✅ A field carries the season two ways now. The blade shader still takes
+  the `SeasonalFoliage` tint the ground under it wears
   (`IllustratedGrassPatch.set_season_tint`, greenness-gated with the shared
-  `GREENNESS_GAIN` so the atlas's already-dry blades are not turned twice).
-  The shader previously had no colour term at all — the sampled texel went
-  straight through — so tall grass stayed lush in deep winter. Appearance
-  only: `TallGrass.GROWTH_RATE` is still season-independent, see
-  [seasons.md](seasons.md). The sending half is wired:
-  `EarthChunkManager.set_season_tint` fans the live value onto
-  `_illustrated_grass` the way `set_wind_strength` already does, and
-  `World._client_process` pushes it once a frame off the world clock, so a
-  real session no longer shows lush winter grass. Pinned by
-  `tests/unit/test_world_season_fanout.gd`.
+  `GREENNESS_GAIN`) for the same-sheet colour shift `World._client_process`
+  already pushed every frame off the world clock (`set_wind_strength`'s own
+  pattern), pinned by `tests/unit/test_world_season_fanout.gd`. On top of
+  that, which of the four delivered sheets (`grass_blades_spring/summer/
+  autumn/winter.png`) a card actually samples now turns too, staggered per
+  card rather than snapping the whole field at once — `EarthChunkManager.
+  sync_grass_season` mirrors `sync_tree_season`'s own shared-clock/signature-
+  guard shape exactly, and `_sync_grass_sprites` splits a transitioning
+  band into up to two `MultiMeshInstance2D`s (one per season,
+  `IllustratedGrassPatch.split_cards_by_turn` deciding per card by comparing
+  each card's own `turn_threshold_for_seed` against the shared, quantised
+  progress), collapsing back to one the instant the transition settles. See
+  "Seasonal art" above for the full mechanism and why this is a hard
+  per-card sheet-swap rather than a cross-fade. `TallGrass.GROWTH_RATE` is
+  still season-independent (only appearance turns, not growth speed) — see
+  [seasons.md](seasons.md). Pinned by `tests/unit/test_earth_chunk_manager.
+  gd`'s `test_sync_grass_season_*` tests and `test_illustrated_grass_patch.
+  gd`'s `split_cards_by_turn`/`turn_threshold_for_seed` tests.
+- ✅ Growth stage is a real drawn row, not a scaled-down copy of the mature
+  art — `IllustratedGrassPatch.atlas_region_for` maps `TallGrass.get_growth`
+  (0..1) to one of the sheet's 10 rows, the per-card seed keeps choosing the
+  column/variant independently, and `instances_for_cards` no longer damps a
+  young card's scale on top of that (see "Seasonal art" above for why
+  double-damping was wrong once a real shoot row existed to draw instead).
+- ⬜ `IllustratedGrassPatch.ROW_TOP_BLEED_PX` (the per-row floating-artefact
+  inset -- see its own doc comment) is only exhaustively verified for rows
+  0-5 across all four seasonal sheets. Rows 6-9 (the four densest, fullest
+  rows) measurably do not converge to one shared inset across every season
+  -- bleed severity climbs with row density in more than one season, not a
+  single outlier a bigger margin can absorb without cropping real art
+  elsewhere. A real, flagged gap (a card in one of these rows may
+  occasionally show a thin sliver of the row above bleeding into its tip),
+  most plausibly needing a per-row-and-season table rather than one shared
+  one -- not chased further when the seasonal sheets first landed.
 - ⬜ Creature wake uses the same shader input but is not yet wired.
 - ✅ Cards spread across most of a cell's own footprint (`card_specs_for_
   seed`, `CARD_COUNT = 8`) rather than clustering in one small sub-region —
