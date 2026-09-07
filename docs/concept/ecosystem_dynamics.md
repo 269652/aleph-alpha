@@ -417,13 +417,22 @@ at all (see [mushrooms.md](mushrooms.md#animals-can-find-and-eat-wild-mushrooms)
   does (see [material_dsl.md](material_dsl.md)) — real hunger/thirst/
   nutrition from the mushroom's own composition, something the existing
   decomposer bite (purely visual, no hunger tracked at all) does not have.
-- **A toxic mushroom is eaten exactly like any other** —
-  `MushroomSpecies.is_toxic` is not consulted at all for a boar's bite; no
-  debuff, no avoidance. A deliberate choice extending the boar's own
-  already-real high `DECAY` tolerance/valence (*"untroubled by a little
-  rot"*) to fungal toxins generally — real wild boars are documented to
-  tolerate compounds that would sicken other foragers, and no debuff-stack
-  wiring exists for animals to extend here regardless.
+- **A toxic mushroom is still eaten exactly like any other — TARGET
+  SELECTION never consults toxicity** (corrected 2026-09-07, see
+  [soil_fauna.md](soil_fauna.md#real-toxic-effects-disorientation-vs-illness-mushroomeffect)):
+  `MushroomSpecies.is_toxic` still plays no role in which mushroom a boar
+  walks to or chooses to bite — a real wild boar's own documented
+  tolerance for what it's willing to TRY eating (*"untroubled by a little
+  rot"*) is a real, distinct fact from whether a compound measurably
+  affects it once swallowed. It no longer stops there: eating one now
+  really does apply a real, observable effect afterward (disorientation
+  for a psychoactive species, a real slowed/weakened state — and a real,
+  small, mammal-scale chance of death — for Death Cap specifically), the
+  same real consequence a toxic mushroom has always had for the player,
+  now finally reachable for wildlife too via `MushroomEffect`. The
+  "untroubled" framing survives exactly where it's real: a boar never
+  avoids a toxic mushroom in the first place, it just isn't immune to it
+  either.
 - **Explicitly NOT built**: true scent-based mushroom detection (a boar
   smelling out a fungus the way it already can a windfall apple). The
   scent system's molecule set (`Olfaction.MOLECULES`) is closed at

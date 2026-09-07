@@ -5742,7 +5742,14 @@ func mushrooms_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 ## to mark, which is exactly what going through the marker itself (rather
 ## than the sim) gets for free: take_mushroom_bite() updates its own
 ## sprite/bitten flag immediately, no separate re-sync needed.
-func take_mushroom_at(pixel_position: Vector2) -> String:
+##
+## `bite_stages` (default 1) is how many of MushroomBiting.MAX_BITE_STAGES
+## this one bite event advances -- the caller's own real, mass-scaled bite
+## count (see docs/concept/soil_fauna.md's "Progressive, mass-scaled
+## bites, and real toxic effects", MushroomBiting.bites_per_visit_for), so
+## a boar's own bigger bite can visibly reduce a mushroom further than a
+## bug's single nibble in one visit.
+func take_mushroom_at(pixel_position: Vector2, bite_stages: int = 1) -> String:
 	var tile := _world_tile_for_pixel(pixel_position)
 	var chunk_coord := _chunk_coord_for_tile(tile)
 	var sim: WildMushroomPatch = _mushroom_sims.get(chunk_coord)
@@ -5751,7 +5758,7 @@ func take_mushroom_at(pixel_position: Vector2) -> String:
 	var cell := tile - chunk_coord * CHUNK_SIZE
 	var species := sim.species_at(cell)
 	var marker = _mushroom_markers.get(chunk_coord, {}).get(cell)
-	if marker == null or not marker.take_mushroom_bite():
+	if marker == null or not marker.take_mushroom_bite(bite_stages):
 		return ""
 	return species
 
@@ -7615,6 +7622,74 @@ func take_ant_corpse_near(pixel_position: Vector2) -> bool:
 					corpses.erase(corpse)
 					corpse.queue_free()
 					return true
+	return false
+
+
+## Every LIVE forager (currently SCOUTING/APPROACHING/RETURNING -- never a
+## settled corpse, see is_corpse()) within `radius_px` of `pixel_position`
+## -- real prey for a bird hunting live ants (see docs/concept/
+## soil_fauna.md's own "Ants are not bird prey" scope cut, now closed).
+## Mirrors crush_ants_near's own mound-keyed 3x3-chunk-neighbourhood scan
+## exactly, NOT ant_corpses_near's simpler chunk-keyed shape: a live
+## forager is tracked in _active_ant_foragers (mound-keyed, since it can
+## only ever wander AntColony.FORAGE_RADIUS_TILES from its own mound --
+## the identical bound that scan already exploits), not _ant_corpses
+## (chunk-keyed, no owning mound once dead). Each result is
+## {"position": Vector2}. Stale/already-freed entries are pruned lazily
+## here, the same contract crush_ants_near's own readers already use.
+func ants_near(pixel_position: Vector2, radius_px: float) -> Array:
+	var found: Array = []
+	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	for global_tile in _active_ant_foragers.keys():
+		var mound_chunk_coord := _chunk_coord_for_tile(global_tile)
+		var chunk_offset := mound_chunk_coord - center_chunk
+		if absi(chunk_offset.x) > 1 or absi(chunk_offset.y) > 1:
+			continue
+		var markers: Array = _active_ant_foragers[global_tile]
+		for marker in markers.duplicate():
+			if not is_instance_valid(marker) or marker.is_queued_for_deletion():
+				markers.erase(marker)
+				continue
+			if marker.is_corpse():
+				continue  # dead -- not live prey, see ant_corpses_near instead
+			if marker.position.distance_to(pixel_position) <= radius_px:
+				found.append({"position": marker.position})
+	return found
+
+
+## Removes the live forager standing at `pixel_position`, returning
+## whether one was actually there -- the mutation counterpart of
+## ants_near, mirroring take_caterpillar_near's own "no death animation"
+## contract exactly: a bird's meal is an entirely different event from
+## being crushed underfoot (see that function's own doc comment), so this
+## never calls crush() and never registers a corpse -- there is no body
+## left for another ant to forage. Reduces the eaten forager's own
+## mound's population (see AntColony.forager_eaten's own doc comment for
+## why this is a distinctly-named sibling of forager_crushed, not a
+## reuse of it -- Karma applies to a player-caused crush, never to
+## natural predation).
+func take_ant_near(pixel_position: Vector2) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var center_chunk := _chunk_coord_for_tile(tile)
+	for global_tile in _active_ant_foragers.keys():
+		var mound_chunk_coord := _chunk_coord_for_tile(global_tile)
+		var chunk_offset := mound_chunk_coord - center_chunk
+		if absi(chunk_offset.x) > 1 or absi(chunk_offset.y) > 1:
+			continue
+		var markers: Array = _active_ant_foragers[global_tile]
+		for marker in markers.duplicate():
+			if not is_instance_valid(marker) or marker.is_queued_for_deletion():
+				markers.erase(marker)
+				continue
+			if marker.is_corpse():
+				continue
+			if _world_tile_for_pixel(marker.position) == tile:
+				markers.erase(marker)
+				marker.queue_free()
+				var colony: AntColony = _ant_colonies.get(mound_chunk_coord)
+				if colony != null:
+					colony.forager_eaten(global_tile - mound_chunk_coord * CHUNK_SIZE)
+				return true
 	return false
 
 
