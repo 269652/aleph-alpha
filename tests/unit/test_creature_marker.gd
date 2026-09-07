@@ -781,6 +781,11 @@ func test_creature_never_self_triggers_flee_while_home_sits_near_a_stationary_pl
 ## creature straight at it.
 func test_a_second_flee_episode_does_not_reuse_a_stale_heading_from_the_first():
 	marker.setup(StubWorld.new(), TILE_SIZE)
+	# Hysteresis, not personality, is under test -- pin boldness to the
+	# population median so this is not a hostage to whatever the fixture's
+	# own wander_seed happens to derive (see test_a_bold_marker_tolerates_a_
+	# predator_the_shyest_would_flee below for the test that IS about that).
+	marker.genome = {"boldness": EthogramForMarker.NEUTRAL_BOLDNESS_GENE}
 	var player := _add_stub_player(Vector2(150, 100))  # east -- flee west
 	# Each tick's delta exceeds SENSE_INTERVAL (0.25s) so sensing is always
 	# fresh, not throttled-stale -- this test cares about exactly what each
@@ -1437,6 +1442,9 @@ func test_a_creature_does_not_oscillate_in_and_out_of_fleeing_at_the_sense_bound
 func test_a_creature_stops_fleeing_once_the_threat_is_well_clear():
 	marker.info = CreatureInfo.new("horse")
 	marker.setup(StubWorld.new(), TILE_SIZE)
+	# Hysteresis, not personality, is under test -- pin boldness to the
+	# population median (see the comment on the stale-heading test above).
+	marker.genome = {"boldness": EthogramForMarker.NEUTRAL_BOLDNESS_GENE}
 	var player := _add_stub_player(Vector2(100 + CreatureMarker.SENSE_RADIUS - 5.0, 100))
 	marker._process(0.3)
 	assert_gt(marker._flee_commit_remaining, 0.0, "should be fleeing while the threat is inside sense range")
