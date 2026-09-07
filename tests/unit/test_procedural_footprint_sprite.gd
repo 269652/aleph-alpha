@@ -32,7 +32,7 @@ func _has_opaque_pixel(image: Image) -> bool:
 
 
 func test_draws_a_real_non_blank_shape_for_every_real_surface():
-	for surface in ["snow", "grass", "forest"]:
+	for surface in ["snow", "grass", "forest", "underwater"]:
 		var image := sprite.generate_image(surface)
 		assert_true(_has_opaque_pixel(image), "%s should draw a real print, not a blank canvas" % surface)
 
@@ -58,14 +58,18 @@ func test_the_print_has_at_least_two_distinct_opaque_tones_not_one_flat_fill():
 
 
 ## Different surfaces must not all secretly render the identical look --
-## snow, grass, and forest are visually distinct grounds.
+## snow, grass, forest, and underwater are visually distinct grounds.
 func test_different_surfaces_look_different_from_each_other():
 	var snow := sprite.generate_image("snow").get_data()
 	var grass := sprite.generate_image("grass").get_data()
 	var forest := sprite.generate_image("forest").get_data()
+	var underwater := sprite.generate_image("underwater").get_data()
 	assert_ne(snow, grass)
 	assert_ne(grass, forest)
 	assert_ne(snow, forest)
+	assert_ne(underwater, snow)
+	assert_ne(underwater, grass)
+	assert_ne(underwater, forest)
 
 
 func test_generate_texture_returns_a_real_texture():
@@ -176,3 +180,42 @@ func test_grass_and_forest_stay_subtler_than_snows_own_rim_brightness():
 	for surface in ["grass", "forest"]:
 		var rim: Color = ProceduralFootprintSprite._TONES_BY_SURFACE[surface]["rim"]
 		assert_lt(_luminance(rim), _luminance(snow_rim), "%s's rim should read subtler than snow's" % surface)
+
+
+# -- underwater (see docs/concept/snow_cover.md/rivers.md) -- asked directly:
+# -- "underwater footprints should be tinted". Real: standing water in a
+# -- depression reads measurably darker than the same ground dry (wet
+# -- soil loses diffuse reflectance once its surface pores fill with
+# -- water) -- unlike every dry surface above, whose RIM is pushed-up
+# -- material catching the light (so it reads LIGHTER than the ground),
+# -- a water-filled print has no equivalent "catches the light" edge: both
+# -- core AND rim read darker here, distinguished from plain wet mud by a
+# -- real blue shift rather than by brightness.
+
+func test_underwater_core_reads_visibly_darker_than_either_dry_ground():
+	var core: Color = ProceduralFootprintSprite._TONES_BY_SURFACE["underwater"]["core"]
+	for biome in ["grassland", "forest"]:
+		var ground: Color = TerrainRenderer.BIOME_COLORS[biome]
+		assert_lt(_luminance(core), _luminance(ground) - _MIN_CONTRAST, "vs %s" % biome)
+
+
+## Unlike grass/forest's own rim (deliberately LIGHTER than the ground --
+## see the class comment above), underwater's rim stays darker too: a
+## puddle's edge is soggy, compressed ground, not material catching light.
+func test_underwater_rim_reads_darker_than_either_dry_ground_not_lighter():
+	var rim: Color = ProceduralFootprintSprite._TONES_BY_SURFACE["underwater"]["rim"]
+	for biome in ["grassland", "forest"]:
+		var ground: Color = TerrainRenderer.BIOME_COLORS[biome]
+		assert_lt(_luminance(rim), _luminance(ground), "vs %s" % biome)
+
+
+## The one thing that must actually say "water", not just "dark mud":
+## a real blue shift, clearly beyond what grass/forest's own (brown/warm)
+## cores show.
+func test_underwater_core_reads_distinctly_blue_shifted():
+	var core: Color = ProceduralFootprintSprite._TONES_BY_SURFACE["underwater"]["core"]
+	assert_gt(core.b, core.r, "should read blue-dominant, like pooled water")
+	assert_gt(core.b, core.g)
+	for surface in ["grass", "forest"]:
+		var other: Color = ProceduralFootprintSprite._TONES_BY_SURFACE[surface]["core"]
+		assert_gt(core.b - core.r, other.b - other.r, "more blue-shifted than %s's own core" % surface)

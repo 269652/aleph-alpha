@@ -301,6 +301,28 @@ reproduces the exact z-order bug against the actual shipped scene file and
 now passes against the fixed one) plus the two ruled-out-with-evidence
 hypotheses, not a live screenshot.
 
+## A sixth ground-effects layer, and the same bug class again (2026-09-07)
+
+Asked directly: *"underwater footprints should be tinted, and below river
+contour lines"* — "contour lines" is this project's own name for the
+streaks above (each one literally IS a contour/level-set of the smooth
+advected flow field — see "Wave strokes" below). `GroundDecor` (where
+`FootprintRenderer`'s `MultiMeshInstance2D`s actually live — see
+`docs/concept/snow_cover.md`'s "Underwater prints" section) is a SIXTH
+node sharing the same `z_index=-1` tie this doc's own fix above already
+resolved among the first five — and it had the exact same shape of bug:
+inserted as a LATER sibling than `RiverFlowFx`, so a footprint stamped in
+a river drew ON TOP of the current's own streaks, obscuring them, same
+as `HillshadeFx`/`SnowFx` once did.
+
+Fixed the same way, confirmed the same way: `scenes/world.tscn` reordered
+so `GroundDecor` is now an EARLIER sibling than `RiverFlowFx` (while
+`RiverFlowFx` itself stays the LAST of the six, unchanged from the fix
+above — still after `HillshadeFx`/`SnowFx` too), and
+`test_world_ground_layer_order.gd` gained a new
+`test_ground_decor_layer_is_an_earlier_sibling_than_river_flow_layer`
+alongside its two existing pins rather than a live screenshot.
+
 ## Flow effect made more visible (2026-08-30)
 
 Reported directly, after the z-order fix above made the streaks actually

@@ -96,10 +96,22 @@ const _RIM_MARGIN_FRACTION := 0.12
 ## test-pinned luminance-contrast margins against TerrainRenderer's own
 ## ground colors (see tests/unit/test_procedural_footprint_sprite.gd),
 ## not eyeballed numbers.
+## "underwater" (asked directly: "underwater footprints should be
+## tinted" -- see EarthChunkManager.footstep_surface_for's own doc
+## comment for when this applies, a river/lake crossing grass/forest
+## ground) is deliberately shaped differently from every dry surface
+## above: those all read LIGHTER at the rim (dry material pushed up,
+## catching the light), but standing water has no such edge -- both core
+## AND rim read darker than dry ground here (wet soil measurably loses
+## diffuse reflectance once its surface pores fill with water), and what
+## actually marks it as WATER rather than plain dark mud is a real blue
+## shift instead. Test-pinned the same way (see
+## test_procedural_footprint_sprite.gd's own "underwater" section).
 const _TONES_BY_SURFACE := {
 	"snow": {"core": Color(0.58, 0.65, 0.75), "rim": Color(0.95, 0.97, 1.0)},
 	"grass": {"core": Color(0.42, 0.34, 0.20), "rim": Color(0.68, 0.76, 0.42)},
 	"forest": {"core": Color(0.10, 0.07, 0.05), "rim": Color(0.55, 0.42, 0.22)},
+	"underwater": {"core": Color(0.08, 0.14, 0.26), "rim": Color(0.12, 0.11, 0.10)},
 }
 ## A plain, nondescript fallback for any surface this generator doesn't
 ## specifically know -- same "never crash on an unlisted id" fallback
