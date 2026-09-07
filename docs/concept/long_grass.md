@@ -573,6 +573,43 @@ framebuffer), so several of these needed a real, non-headless, off-screen
     with little or no real bleed. Pinned directly against the real shipped
     PNG (`test_atlas_region_for_seed_never_includes_the_previous_rows_
     bled_over_content`), not just the measured table by eye.
+12. **Follow-up to the seasonal-sheets pass's own flagged gap: rows 6-9
+    (the four densest rows) never converged under ONE bleed inset shared
+    across all four season sheets.** The seasonal-art commit that
+    superseded `ROW_TOP_BLEED_PX` with a single, still-shared table
+    measured this directly and left it as a known gap rather than chasing
+    it further: the least-bled season's own real minimum sat well under
+    the most-bled season's, so no single number could clear the least-bled
+    season's real minimum without over-cropping it, or clear the
+    most-bled season without leaving real donor bleed on the others.
+    Investigated (not assumed) whether splitting the table by season could
+    close this: swept every candidate inset per (season, row) with a
+    temporary probe (deleted after use, per this project's convention),
+    using the EXACT integer arithmetic `atlas_region_for`'s own region math
+    uses (`row * atlas_size.y / ATLAS_ROWS`, which truncates — measuring
+    with float rounding instead was a real, since-fixed source of
+    confusion in the ORIGINAL single-table measurement) and the same
+    chroma-keyed image production actually samples
+    (`SpriteSheetSlicer.chroma_keyed`, `BACKGROUND_KEY`/
+    `BACKGROUND_KEY_TOLERANCE`). Result: `ROW_TOP_BLEED_PX_BY_SEASON`
+    replaces the flat table (rows 0-5 copied verbatim — a shared value
+    already covers those cleanly, so re-measuring them per season was out
+    of scope), and 35 of the 36 (season, row) combinations in 6-9 now
+    clear the same 90%-mostly-transparent bar rows 0-5 already met. The
+    one exception — winter's own row 9 — was confirmed with a direct
+    visual crop to draw a clump filling nearly its entire cell height, so
+    no inset (however large) lands a genuinely transparent top edge there
+    without cropping the row to a sliver; its best available value (12px)
+    still substantially improves on the old shared table's 30px (worst
+    column 31% clear → 81% clear), pinned as a regression floor rather
+    than silently accepted or fully skipped. For the fix to actually take
+    effect at render time, `atlas_region_for` and `instances_for_cards`
+    both gained a `season` parameter (defaulting to `DEFAULT_SEASON`, so
+    every pre-existing call site keeps behaving identically) — without
+    threading `season` this far down, a per-season table could be as
+    correct as it liked and never affect what a card actually samples,
+    since `fill_band` (which already received `season` for texture
+    selection) never forwarded it into the region math.
 
 ## Status
 
@@ -591,9 +628,12 @@ framebuffer), so several of these needed a real, non-headless, off-screen
 - ✅ The walker-position uniform updates every frame for every client
   (host and connected), not just whichever peer owns the ecosystem
   simulation — see History #5.
-- ✅ `IllustratedGrassPatch.atlas_region_for_seed` insets past every row's
-  own measured content-bleed from the row above it, so no card's region
-  carries a donor fragment at its own tip — see History #11.
+- ✅ `IllustratedGrassPatch.atlas_region_for` insets past every row's own
+  measured content-bleed from the row above it, so no card's region
+  carries a donor fragment at its own tip — see History #11. Per-season
+  since History #12 (`ROW_TOP_BLEED_PX_BY_SEASON`), not one value shared
+  across all four sheets — see the next entry for exactly how far that
+  goes.
 - ✅ Ambient wind sway (not the walker push) scales with the live
   `WeatherModel.wind_strength_for` value, the same one driving the water's
   shimmer and every other swaying plant.
@@ -624,16 +664,19 @@ framebuffer), so several of these needed a real, non-headless, off-screen
   column/variant independently, and `instances_for_cards` no longer damps a
   young card's scale on top of that (see "Seasonal art" above for why
   double-damping was wrong once a real shoot row existed to draw instead).
-- ⬜ `IllustratedGrassPatch.ROW_TOP_BLEED_PX` (the per-row floating-artefact
-  inset -- see its own doc comment) is only exhaustively verified for rows
-  0-5 across all four seasonal sheets. Rows 6-9 (the four densest, fullest
-  rows) measurably do not converge to one shared inset across every season
-  -- bleed severity climbs with row density in more than one season, not a
-  single outlier a bigger margin can absorb without cropping real art
-  elsewhere. A real, flagged gap (a card in one of these rows may
-  occasionally show a thin sliver of the row above bleeding into its tip),
-  most plausibly needing a per-row-and-season table rather than one shared
-  one -- not chased further when the seasonal sheets first landed.
+- 🚧 Rows 6-9 (the four densest, fullest rows) now converge for 35 of the
+  36 (season, row) combinations, via a per-season bleed table
+  (`ROW_TOP_BLEED_PX_BY_SEASON`) rather than the single shared table that
+  originally left this whole range unverified — see History #12. The one
+  exception, narrowed rather than closed: winter's own row 9 draws a
+  clump that fills nearly its entire cell height (confirmed with a direct
+  visual crop), so no inset lands a genuinely transparent top edge there
+  without cropping the row to a sliver — its best available value (12px)
+  still substantially improves on the old shared table's 30px (worst
+  column 31% clear → 81% clear), pinned as a regression floor by
+  `test_winter_row_9_bleed_is_narrowed_but_not_fully_closed_by_the_per_
+  season_table` rather than silently accepted, just short of the 90% bar
+  every other combination in this range clears.
 - ⬜ Creature wake uses the same shader input but is not yet wired.
 - ✅ Cards spread across most of a cell's own footprint (`card_specs_for_
   seed`, `CARD_COUNT = 8`) rather than clustering in one small sub-region —
