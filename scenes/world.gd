@@ -29,6 +29,7 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
+const BeeHiveMarker = preload("res://src/rendering/bee_hive_marker.gd")
 const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
 const MinimapRenderer = preload("res://src/rendering/minimap_renderer.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
@@ -2603,6 +2604,15 @@ func _update_creature_panels(local_player: Player, delta: float) -> void:
 		var distance := local_player.position.distance_to(mound.position)
 		if distance <= CREATURE_PANELS_RADIUS:
 			nearby.append({"state": mound.panel_state(), "distance": distance})
+	# A honeybee hive's own real honey bar (see BeeHiveMarker.panel_state,
+	# docs/concept/bees.md) -- the identical shared shape, not a parallel
+	# hive-only UI. WildBeeNestMarker deliberately has no panel_state at
+	# all (see that class's own doc comment: hoverable, never panel-
+	# worthy), so it never joins this scan.
+	for hive in get_tree().get_nodes_in_group(BeeHiveMarker.GROUP_NAME):
+		var distance := local_player.position.distance_to(hive.position)
+		if distance <= CREATURE_PANELS_RADIUS:
+			nearby.append({"state": hive.panel_state(), "distance": distance})
 	nearby.sort_custom(func(a, b): return a.distance < b.distance)
 
 	for child in _creature_panels_container.get_children():
@@ -2745,6 +2755,11 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	# grass/saplings the same way the mouse's/squirrel's own scatter-hoarding
 	# does.
 	_chunk_manager.step_ants(delta)
+	# Honeybee hives and wild bee nests (see docs/concept/bees.md) -- the
+	# same batched cadence ant mounds already step at, for the identical
+	# reason: population/forage economy moves over simulated days, not
+	# something that needs the fine per-time-lapse-slice cadence.
+	_chunk_manager.step_bees(delta)
 	# Fallen-leaf litter ages/prunes on the same batched cadence ant mounds do
 	# (see EarthChunkManager.step_leaf_litter, docs/concept/leaf_litter.md).
 	_chunk_manager.step_leaf_litter(delta)
