@@ -50,6 +50,7 @@ const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd"
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const AntScoutWander = preload("res://src/gameplay/ant_scout_wander.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
+const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 
 const GROUP_NAME := "ant_forager"
 
@@ -312,8 +313,62 @@ func _current_leg_target() -> Vector2:
 	return mound_position
 
 
-func _process(delta: float) -> void:
+var _lod_accumulated := 0.0
+
+## Distance-based update rate (see SimulationLod) -- mirrors DecomposerMarker/
+## CreatureMarker/AmbientFlyerMarker's own _lod_step exactly. Without this,
+## SCOUTING's own _sense_food_nearby (three real world queries -- leaf litter,
+## grass seeds, fallen nuts) ran completely unthrottled: every forager out of
+## potentially hundreds concurrently active across every loaded mound (see
+## AntColony.active_forager_cap_at -- a thriving colony keeps several out at
+## once) re-ran all three every single frame, however far from the player it
+## was. Confirmed live as the dominant remaining cost even after
+## crush_ants_near's own crash-storm was fixed ("game is back down to 1-3
+## fps"). Returns the time to advance by, or NEGATIVE when this frame should
+## be skipped entirely -- negative rather than zero, because zero is a
+## legitimate step (see CreatureMarker._lod_step's own doc comment).
+func _lod_step(delta: float) -> float:
+	_lod_accumulated += delta
+	var player = _nearest_player_position()
+	if player == null:
+		return _take_lod_step()  # nobody to be far from: always full rate
+	var interval := SimulationLod.update_interval(position.distance_to(player))
+	if _lod_accumulated < interval:
+		return -1.0
+	return _take_lod_step()
+
+
+func _take_lod_step() -> float:
+	var step := _lod_accumulated
+	_lod_accumulated = 0.0
+	return step
+
+
+## Cheap: the player group holds one node in solo play.
+func _nearest_player_position():
+	# Not in the tree (a marker built standalone in a test) means there is no
+	# player to measure against, so it runs at full rate.
+	if not is_inside_tree():
+		return null
+	if _cached_player == null or not is_instance_valid(_cached_player):
+		var players := get_tree().get_nodes_in_group("player")
+		if players.is_empty():
+			return null
+		_cached_player = players[0]
+	return _cached_player.position
+
+
+var _cached_player: Node = null
+
+
+func _process(frame_delta: float) -> void:
 	_ensure_initialized()
+	# Scouts/resolvers far from the player advance in fewer, larger steps
+	# (see _lod_step's own doc comment just above) -- same time passes, fewer
+	# world-sensing queries to pay for.
+	var delta := _lod_step(frame_delta)
+	if delta < 0.0:
+		return
 	_elapsed_time += delta
 	if _behavior.phase == AntForageBehavior.Phase.SCOUTING:
 		_step_scouting(delta)

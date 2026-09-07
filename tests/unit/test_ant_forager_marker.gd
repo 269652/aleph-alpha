@@ -17,6 +17,7 @@ const IllustratedDecomposerSprite = preload("res://src/rendering/illustrated_dec
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 
 const MOUND_CELL := Vector2i(3, 3)
 
@@ -578,6 +579,47 @@ func test_a_scout_commits_to_a_real_leaf_within_sensing_range():
 	assert_eq(f.forage_kind, "leaf")
 	assert_eq(f.carried_leaf_species, "cherry")
 	assert_eq(f.carried_leaf_season, "autumn")
+
+
+## Reported live: with dozens of mounds each keeping several concurrent
+## foragers out at once (see AntColony.active_forager_cap_at), a scouting
+## population easily runs into the hundreds -- and unlike every sibling
+## marker (CreatureMarker/DecomposerMarker/CaterpillarMarker/
+## MillipedeMarker/FishMarker/AmbientFlyerMarker, each already throttled by
+## SimulationLod), this one re-ran _sense_food_nearby's three real world
+## queries every single _process call regardless of distance from the
+## player ("game is back down to 1-3 fps").
+func test_far_from_the_player_does_not_resense_food_on_every_process_call():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var f := _spawned_scout(Vector2.ZERO, world, colony)
+	f._process(0.001)  # runs _ensure_initialized() once, at full rate (no player registered yet)
+
+	# A player far enough away that SimulationLod parks this marker at its
+	# slowest update rate (see FULL_RATE_RADIUS_PX/FALLOFF_PX/
+	# MAX_INTERVAL_SECONDS) -- comfortably past where the falloff saturates.
+	var player := Node2D.new()
+	add_child_autofree(player)
+	player.add_to_group("player")
+	player.position = f.position + Vector2(
+		SimulationLod.FULL_RATE_RADIUS_PX + SimulationLod.FALLOFF_PX + 1.0, 0
+	)
+
+	# A real leaf right beside the scout, placed only now -- if
+	# _step_scouting (and so _sense_food_nearby) ran on every one of the
+	# frames below, an un-throttled scout would find and commit to it
+	# almost immediately.
+	world.nearby_leaves = [{"position": f.position + Vector2(5, 0), "species": "cherry", "season": "autumn"}]
+
+	# Many tiny steps, each far under the ~0.5s LOD interval this far from
+	# the player.
+	for i in 20:
+		f._process(0.01)
+
+	assert_eq(
+		f._behavior.phase, AntForageBehavior.Phase.SCOUTING,
+		"far from the player, a scout should not re-sense food on every _process call -- it should still be waiting out its LOD interval"
+	)
 
 
 func test_a_scout_commits_to_a_real_seed_within_sensing_range():

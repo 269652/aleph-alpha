@@ -4390,6 +4390,37 @@ func test_crushing_an_ant_on_a_different_tile_leaves_it_alone():
 	assert_false(forager.is_queued_for_deletion())
 
 
+## Reported live: "game is back down to 1-3 fps" -- a real per-frame
+## crash-storm, not a cosmetic slowdown. crush_ants_near runs every frame
+## from World._process/_client_process and assumed every entry in
+## _active_ant_foragers was still a live node -- but _dispatch_forager's
+## own doc comment already documents these as lazily pruned: a forager
+## freed by ANY other path (finishing its own round trip, dying, being
+## crushed a moment earlier by a different caller, etc.) sits in the array
+## as a dangling reference until the mound's NEXT dispatch happens to prune
+## it. Confirmed live: "Invalid access to property or key 'position' on a
+## base object of type 'previously freed'" firing every single frame, the
+## same "repeated GDScript errors are not free" class of regression this
+## project has hit before (see DecomposerMarker's own LiftableStone
+## crash-storm history).
+func test_crush_ants_near_ignores_a_forager_already_freed_by_something_else():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var forager := _ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	var global_tile: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(2, 2)
+	forager.get_parent().remove_child(forager)
+	forager.free()  # freed by something else entirely -- _active_ant_foragers not yet pruned
+	assert_false(
+		manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0),
+		"nothing real was there to crush"
+	)
+	assert_true(
+		manager._active_ant_foragers[global_tile].is_empty(),
+		"the stale entry should be pruned here too, not left to error again next frame"
+	)
+
+
 func test_crushing_ants_where_there_are_none_fails_rather_than_erroring():
 	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
 	assert_false(manager.crush_ants_near(Vector2(-9000000, -9000000), 1000000.0))

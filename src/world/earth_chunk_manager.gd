@@ -7150,6 +7150,21 @@ func crush_ants_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 	for global_tile in _active_ant_foragers.keys():
 		var markers: Array = _active_ant_foragers[global_tile]
 		for marker in markers.duplicate():
+			# _dispatch_forager's own doc comment already documents entries
+			# here as lazily pruned -- a forager freed by ANY other path
+			# (finishing its own round trip, dying, an earlier crush this
+			# same call) can sit as a dangling reference until the mound's
+			# next dispatch happens to notice. This runs every frame (see
+			# World._process/_client_process), so an unguarded `.position`
+			# read here errors every single frame for as long as the stale
+			# entry survives -- confirmed live as the dominant cause of a
+			# real fps collapse ("game is back down to 1-3 fps"), the same
+			# "repeated GDScript errors are not free" class of regression
+			# this project has hit before. Pruned here too, not just left
+			# for the next dispatch, so a stale entry errors at most once.
+			if not is_instance_valid(marker) or marker.is_queued_for_deletion():
+				markers.erase(marker)
+				continue
 			if _world_tile_for_pixel(marker.position) == tile:
 				markers.erase(marker)
 				marker.queue_free()
