@@ -13053,6 +13053,20 @@ intermediate "loaded, undecided" state at all.
   that branch's `StarterKit.POOL` does not include either item, and
   merging it as-is would silently drop this grant along with the rest of
   the old kit — worth reconciling at that point, not addressed here.
+  (**Reconciled, same day**: `claude/starter-kit` merged a couple of
+  hours later (`33da72c6`). `StarterKit.POOL` was NOT left missing
+  either item — `a98f3486` added both, reacting to this same "give the
+  player a glass bottle and butterfly net" report — so nothing was
+  silently dropped from the pool as feared above. The reconciliation
+  cuts the other way instead: `Player._ready()` no longer grants
+  anything automatically at all now; the hardcoded block this whole
+  bullet describes is gone, replaced by `World.grant_starter_items()`
+  once the player picks, or `StarterKit.DEFAULT_CHOICES`
+  (`iron_axe`/`stone_pickaxe`/`fishing_rod` — neither bottle nor net)
+  if they never open the tab. `bb7f6322` pins the new contract via
+  `test_a_new_player_starts_completely_unequipped_before_any_grant`.
+  Current reality lives in `docs/concept/starting_kit.md`, not the "now
+  also adds one butterfly_net and one glass_bottle" claim above.)
 
 ### Ethogram (`concept/ethogram.md`)
 
