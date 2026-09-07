@@ -961,13 +961,25 @@ func test_crush_stops_walking():
 	assert_eq(forager.position, position_before, "a crushed forager should no longer walk its round trip")
 
 
-func test_crush_removes_the_marker_after_lingering():
+## Reported live: "ants do also disappear after a few seconds after being
+## crushed.. instead dead ants should be foraged by other ants so they get
+## visibly dragged into the mound" -- a crushed ant used to queue_free()
+## itself outright once its death animation finished; it now instead
+## becomes a settled, discoverable CORPSE (see is_corpse()), the same
+## "real death treatment, not an instant vanish" shape EarthwormPatch's own
+## corpse/recovery state already established (see docs/concept/
+## soil_fauna.md "A corpse is new ground"). It only actually frees itself
+## once something forages it (see EarthChunkManager.take_ant_corpse_near)
+## or, failing that, once it decomposes on its own after CORPSE_MAX_AGE_
+## SECONDS -- see the "corpse persistence" block below.
+func test_crush_becomes_a_settled_corpse_after_lingering():
 	var forager := _spawned(Vector2(50, 50), Vector2(0, 0))
 	forager.crush()
 	forager._process(SquashCrushEffect.LINGER_SECONDS - 0.01)
-	assert_false(forager.is_queued_for_deletion(), "should still be lingering just before the linger duration elapses")
+	assert_false(forager.is_corpse(), "should still be lingering just before the linger duration elapses")
 	forager._process(0.02)
-	assert_true(forager.is_queued_for_deletion(), "should free itself once the linger duration has passed")
+	assert_true(forager.is_corpse(), "should settle into a discoverable corpse once the linger duration has passed")
+	assert_false(forager.is_queued_for_deletion(), "a settled corpse must not free itself -- it waits to be foraged")
 
 
 func test_crush_called_twice_does_not_push_the_linger_clock_back_out():
@@ -976,4 +988,47 @@ func test_crush_called_twice_does_not_push_the_linger_clock_back_out():
 	forager._process(SquashCrushEffect.LINGER_SECONDS - 0.01)
 	forager.crush()
 	forager._process(0.02)
-	assert_true(forager.is_queued_for_deletion(), "a second crush call should not reset the linger timer")
+	assert_true(forager.is_corpse(), "a second crush call should not reset the linger timer")
+
+
+# -- corpse persistence: a crushed ant is forageable, not instantly gone --
+#
+# Mirrors EarthwormPatch's own corpse/recovery pattern (see
+# docs/concept/soil_fauna.md "A corpse is new ground") -- adapted here to a
+# live, mobile marker rather than a fixed-cell patch-sim entry:
+# is_corpse() is a computed property of the existing _dying/_dying_elapsed
+# state (no separate stored flag needed), true once the death animation's
+# own LINGER_SECONDS has elapsed. Actual removal happens one of two ways:
+# EarthChunkManager.take_ant_corpse_near frees it the instant another ant
+# forages it (see test_earth_chunk_manager.gd), or, if nothing ever does,
+# it decomposes on its own after CORPSE_MAX_AGE_SECONDS -- the same
+# "real, but not littered forever" balance EarthwormPatch's own
+# RECOVERY_SECONDS window already strikes, reused directly rather than a
+# second, independently-eyeballed lifetime.
+
+func test_a_freshly_crushed_ant_is_not_yet_a_settled_corpse():
+	var forager := _spawned(Vector2(100, 100), Vector2(0, 0))
+	forager.crush()
+	assert_false(forager.is_corpse(), "still mid death-animation -- not yet settled")
+
+
+func test_an_uncrushed_ant_is_never_a_corpse():
+	var forager := _spawned(Vector2(100, 100), Vector2(0, 0))
+	assert_false(forager.is_corpse())
+
+
+func test_a_settled_corpse_does_not_decompose_early():
+	var forager := _spawned(Vector2(100, 100), Vector2(0, 0))
+	forager.crush()
+	forager._process(SquashCrushEffect.LINGER_SECONDS + AntForagerMarker.CORPSE_MAX_AGE_SECONDS - 0.01)
+	assert_false(forager.is_queued_for_deletion(), "must not decompose a fraction of a second early")
+
+
+func test_an_unforaged_corpse_eventually_decomposes_on_its_own():
+	var forager := _spawned(Vector2(100, 100), Vector2(0, 0))
+	forager.crush()
+	forager._process(SquashCrushEffect.LINGER_SECONDS + AntForagerMarker.CORPSE_MAX_AGE_SECONDS + 0.01)
+	assert_true(
+		forager.is_queued_for_deletion(),
+		"nobody ever foraged it -- it decomposes eventually, same as an unfed worm corpse recovering"
+	)

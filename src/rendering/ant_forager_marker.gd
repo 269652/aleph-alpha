@@ -52,6 +52,7 @@ const AntScoutWander = preload("res://src/gameplay/ant_scout_wander.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 
 const GROUP_NAME := "ant_forager"
 
@@ -334,9 +335,34 @@ func get_display_name() -> String:
 
 
 ## Set by crush() -- once true, _process skips its whole round-trip walk and
-## only ticks the linger clock before freeing.
+## only ticks the linger clock, then (see is_corpse()) the corpse-decompose
+## clock, before freeing.
 var _dying := false
 var _dying_elapsed := 0.0
+
+## How long a settled corpse persists before decomposing on its own if
+## nothing ever forages it (see is_corpse() and EarthChunkManager.
+## take_ant_corpse_near) -- reused directly from EarthwormPatch's own
+## corpse/recovery window (docs/concept/soil_fauna.md "A corpse is new
+## ground") rather than a second, independently-eyeballed lifetime: both
+## are "how long should a small creature's corpse realistically linger
+## before something has found it, or it has rotted away" the same
+## real-world question, so there is no reason for the two to differ.
+const CORPSE_MAX_AGE_SECONDS := EarthwormPatch.RECOVERY_SECONDS
+
+
+## Whether this dead forager has finished its brief death animation and
+## settled into a real, discoverable corpse -- see docs/concept/
+## soil_fauna.md "Ant corpses: foraged home, not left to vanish". A
+## computed property of the existing _dying/_dying_elapsed state (no
+## separate stored flag needed): still mid-SquashCrushEffect-linger reads
+## false (matching the shared TINT-and-hold every crushed creature plays
+## through first), true from the moment that linger completes until this
+## marker actually frees itself (either foraged -- see
+## EarthChunkManager.take_ant_corpse_near -- or, failing that, once it
+## decomposes on its own past CORPSE_MAX_AGE_SECONDS, see _process below).
+func is_corpse() -> bool:
+	return _dying and _dying_elapsed >= SquashCrushEffect.LINGER_SECONDS
 
 
 ## Called by EarthChunkManager.crush_ants_near in place of an instant
@@ -420,7 +446,14 @@ func _process(frame_delta: float) -> void:
 	_ensure_initialized()
 	if _dying:
 		_dying_elapsed += delta
-		if _dying_elapsed >= SquashCrushEffect.LINGER_SECONDS:
+		# Past the death-animation linger AND the full corpse window with
+		# nothing ever foraging it (see is_corpse()/CORPSE_MAX_AGE_SECONDS)
+		# -- decomposes on its own, the same eventual fallback cleanup
+		# EarthwormPatch's own corpse/recovery clock already has. A corpse
+		# actually FOUND and foraged instead frees via EarthChunkManager.
+		# take_ant_corpse_near calling queue_free() directly -- this branch
+		# only ever fires for one nothing ever claimed.
+		if _dying_elapsed >= SquashCrushEffect.LINGER_SECONDS + CORPSE_MAX_AGE_SECONDS:
 			queue_free()
 		return
 	_elapsed_time += delta
