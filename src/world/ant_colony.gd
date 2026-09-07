@@ -602,6 +602,23 @@ func forager_crushed(cell: Vector2i) -> void:
 	_population[cell] = maxf(0.0, population_at(cell) - FORAGER_CRUSH_POPULATION_LOSS)
 
 
+## A real forager belonging to this mound was eaten by a real bird
+## predator (a robin or sparrow hunting live ants -- see
+## EarthChunkManager.take_ant_near) rather than crushed underfoot. The
+## SAME population-loss effect as forager_crushed (losing a worker is
+## losing a worker, whichever killed it), deliberately kept as its own,
+## distinctly-named method rather than a reuse of forager_crushed:
+## crushing is the one cause the PLAYER can trigger, and costs Karma
+## (Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY, applied by whichever caller
+## actually did the crushing -- never here), while a bird's natural
+## predation is not the player's doing and must never carry that same
+## penalty. Keeping the two call sites distinct is what lets
+## EarthChunkManager wire each cause to its own correct consequence
+## without a branch inside AntColony itself.
+func forager_eaten(cell: Vector2i) -> void:
+	_population[cell] = maxf(0.0, population_at(cell) - FORAGER_CRUSH_POPULATION_LOSS)
+
+
 ## How large a colony this mound can currently support -- rises with its
 ## own recent forage success (see record_forage_result) AND its own
 ## recent soil moisture (see record_moisture), the real feedback loop

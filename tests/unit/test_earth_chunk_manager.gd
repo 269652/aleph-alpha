@@ -4715,6 +4715,93 @@ func test_a_settled_corpse_can_only_be_taken_once():
 	assert_false(manager.take_ant_corpse_near(pixel), "something else already took it")
 
 
+# -- live ants as bird prey: ants_near/take_ant_near (see docs/concept/ ----
+# -- soil_fauna.md's own "Ants are not bird prey" scope cut, now closed) ---
+#
+# Mirrors crush_ants_near's own mound-keyed 3x3-chunk-neighbourhood scan
+## exactly (a live forager can only ever wander AntColony.FORAGE_RADIUS_
+## TILES from its own mound, the identical bound that shape already
+## exploits) -- NOT ant_corpses_near's simpler chunk-keyed shape, since a
+## LIVE forager is tracked in _active_ant_foragers (mound-keyed), not
+## _ant_corpses (chunk-keyed, no owning mound). take_ant_near never plays
+## a death animation (a bird's meal is an entirely different event from
+## being crushed underfoot -- see take_caterpillar_near's own identical
+## reasoning) and never registers a corpse either: there is no body left
+## for another ant to forage.
+
+func test_ants_near_finds_a_live_forager():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	_ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	var found := manager.ants_near(pixel, 20.0)
+	assert_eq(found.size(), 1)
+	assert_eq(found[0].position, pixel)
+
+
+func test_ants_near_excludes_a_settled_corpse():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var forager := _ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	forager._process(10.0)  # settled corpse -- no longer a live forager at all
+	assert_eq(manager.ants_near(pixel, 20.0).size(), 0, "a corpse is not live prey")
+
+
+func test_ants_near_never_reaches_a_distant_mounds_forager_regardless_of_radius():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	_ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	var distant_chunk_coord := chunk_coord + Vector2i(50, 50)
+	_ant_forager_at(distant_chunk_coord, Vector2i(5, 5), Vector2i(5, 5))
+	var found := manager.ants_near(pixel, 999999.0)
+	assert_eq(found.size(), 1, "a forager many chunks away must never be reachable regardless of radius")
+
+
+func test_take_ant_near_removes_the_live_forager_with_no_death_animation():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var forager := _ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	assert_true(manager.take_ant_near(pixel))
+	assert_true(forager.is_queued_for_deletion())
+	assert_false(forager._dying, "a bird's meal is a different event from being crushed -- no death animation")
+
+
+func test_take_ant_near_drops_the_forager_from_active_tracking():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var forager := _ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	var global_tile: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(2, 2)
+	manager.take_ant_near(pixel)
+	assert_false(
+		manager._active_ant_foragers[global_tile].has(forager),
+		"eaten -- dropped from tracking so its own mound's dispatch cap never counts it"
+	)
+
+
+func test_take_ant_near_reduces_its_own_mounds_population():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var colony := _ant_colony_with_one_mound()
+	var mound_cell: Vector2i = colony.mound_cells()[0]
+	manager._ant_colonies[chunk_coord] = colony
+	var cell := Vector2i(5, 5)
+	_ant_forager_at(chunk_coord, mound_cell, cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	var population_before := colony.population_at(mound_cell)
+	manager.take_ant_near(pixel)
+	assert_almost_eq(
+		colony.population_at(mound_cell), population_before - AntColony.FORAGER_CRUSH_POPULATION_LOSS, 0.001
+	)
+
+
+func test_take_ant_near_misses_an_empty_position():
+	assert_false(manager.take_ant_near(Vector2(900, 900)))
+
+
 ## See docs/concept/soil_fauna.md's own "Generalized to ants too" -- "no
 ## effect on the mound's own population/food economy beyond the one
 ## forager actually lost", now closed.

@@ -15230,3 +15230,72 @@ All-new/updated: `src/gameplay/mushroom_biting.gd`,
 453 tests across 10 test files (1 new: `test_mushroom_effect.gd`, 25
 tests) green, plus every pre-existing mushroom/decomposer/creature-marker
 suite reconfirmed unaffected.
+
+### Crushed ants are now real corpses other ants forage home, and both ground-foraging songbirds hunt live ants (`concept/soil_fauna.md`, 2026-09-07)
+
+Reported directly: *"ants do also disappear after a few seconds after
+being crushed.. instead dead ants should be foraged by other ants so they
+get visibly dragged into the mound... also birds should forage life
+[live] ants."* Closes two things `soil_fauna.md` named explicitly: a
+crushed ant fading on a bare timer with nothing ever sensing it, and the
+"Ants are not bird prey" scope cut.
+
+**Ant corpses.** `AntForagerMarker.is_corpse()` is true once a crushed
+ant's `SquashCrushEffect` linger has actually completed -- mid-death is
+never a valid target. A settled corpse then persists for
+`EarthwormPatch.RECOVERY_SECONDS` (reusing the exact constant
+`EarthwormPatch` already uses for its own drowned/predated-worm corpse)
+before decomposing away on its own if nothing finds it first.
+`EarthChunkManager._ant_corpses` tracks corpses chunk-keyed rather than
+mound-keyed -- a corpse has no owner, so any mound's forager can take it,
+the same first-come-first-served free-for-all every other forage resource
+here already has, not a new ownership/rivalry concept.
+`ant_corpses_near`/`take_ant_corpse_near` mirror `leaf_litter_near`/
+`consume_leaf_litter_at`'s exact 3x3-chunk-neighbourhood scan shape.
+`_sense_food_nearby` gained a fourth, last-checked `forage_kind`
+("corpse", after seed/windfall/leaf), and a successful trip visibly
+carries the corpse home exactly like a carried leaf
+(`AntForagerMarker._update_carried_corpse`, tinted with the shared
+`SquashCrushEffect.TINT`), feeding the mound's real food reserve on
+arrival through the existing `"leaf"`-shaped RETURNING/deposit path
+(`_resolve_arrival_at_mound` now treats `"leaf"` and `"corpse"`
+identically).
+
+**Birds hunting live ants.** `EarthChunkManager.ants_near`/`take_ant_near`
+scan the SAME mound-keyed `_active_ant_foragers` dict `crush_ants_near`
+already uses, mirroring its shape, but explicitly exclude a settled
+corpse (`marker.is_corpse()`) -- a bird's meal, a crush, and a same-
+species corpse pickup are three distinct events sharing one underlying
+marker. `AntColony.forager_eaten(cell)` is a deliberate, Karma-neutral
+sibling of `forager_crushed`: a wild bird eating a wild ant is not a
+player action and must never cost Karma. `FlyerDiet.FOOD_ANTS` is new,
+and -- asked directly, "can you mimick real world there?" after an
+initial robin-only plan mirroring the caterpillar precedent -- given to
+BOTH the robin and the sparrow, not just the robin: real American robins
+are documented generalist ground insectivores that take ants among their
+varied invertebrate diet, but real house sparrows, despite being
+primarily granivorous, are ALSO well-documented opportunistic ant-eaters,
+arguably proportionally more so than robins, since a ground-foraging,
+bare-soil/short-grass bird routinely crosses ant trails and mounds while
+working seed heads rather than visually hunting one specific, larger prey
+item the way a robin's own worm/caterpillar hunting already does.
+`AmbientFlyerMarker.ant_world`/`_look_for_ants`/`_fly_at_ant`/
+`_take_targeted_ant` mirror the caterpillar trio exactly (same throttled
+sniff, same `GroundForageBehavior.choose_worm` scatter pick), through the
+shared seek/descend/peck/resume cycle -- converting `GroundForageBehavior.
+SEARCH_TILES` to pixels at the call site (`TerrainRenderer.TILE_SIZE`),
+since `ants_near` speaks the newer pixel-radius contract
+`ant_corpses_near`/`leaf_litter_near` share, not the older tile-radius one
+worms/caterpillars/fruit/seeds all use.
+
+Still explicitly out of scope, unchanged: ants scavenging `fly_colony.gd`
+CARRION (a dead animal/creature) -- same-species corpse retrieval above is
+a genuinely different, narrower thing and does not touch that system.
+
+All coverage green: `test_ant_forager_marker.gd` 74/74 (corpse lifecycle,
+corpse forage-kind, carried-corpse visuals), `test_earth_chunk_manager.gd`
+'s ant/corpse-scoped tests, `test_ant_colony.gd` 97/97 (`forager_eaten`),
+`test_flyer_diet.gd` 30/30 (`FOOD_ANTS`), `test_ambient_flyer_marker.gd`
+181/183 (the 2 failures are the pre-existing, unrelated whirl-pair flake
+this doc already flags elsewhere), `test_ambient_flyer_renderer.gd`
+54/54.
