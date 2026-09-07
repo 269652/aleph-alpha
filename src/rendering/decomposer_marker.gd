@@ -395,18 +395,88 @@ func _step_seeking(delta: float) -> void:
 ## silently excluded it again right afterward, so a decomposer could never
 ## actually reach one at all until this fix. Reported live: "when a bug
 ## takes a bite."
+## Shared across every decomposer -- see this class doc comment history:
+## round 4 (docs/concept/soil_fauna.md) found and fixed two "one marker
+## scans the whole world instead of a scoped neighbourhood" bugs
+## (AmbientFlyerMarker._scan_for_partners, EarthChunkManager.
+## crush_ants_near) but missed this third instance of the identical
+## shape: CarrionForageBehavior.can_commit() stays true on EVERY frame
+## once past REHUNT_SECONDS, not just once, so _nearest_food's own
+## Carcass/CarcassGuts/FORAGEABLE_GROUP_NAME group walk ran once PER
+## DECOMPOSER PER FRAME for as long as it kept searching -- with live
+## population in the hundreds (confirmed: 645-900 on the user's own
+## real save), this reproduced the exact anti-pattern those two fixes
+## had already closed elsewhere. Reported live, again: "still at 4-10
+## fps" after both of those had already shipped.
+##
+## The underlying data ("where is food in the world right now") is
+## identical for every decomposer, so there is no reason each of
+## potentially hundreds of them independently re-fetches the SAME
+## whole-world group lists every frame. Refreshed at most once per
+## FOOD_GROUP_REFRESH_SECONDS of real (wall-clock, Time.get_ticks_msec)
+## time -- deliberately NOT a per-instance throttle mirroring
+## AmbientFlyerMarker.WORM_SNIFF_INTERVAL, which was considered and
+## rejected: at the very low frame rates this was actually reported at,
+## one single frame's own delta can already exceed a half-second
+## interval, so a per-INSTANCE cooldown checked once per frame barely
+## suppresses anything in exactly the condition that matters most.
+## Sharing the fetch across every instance is what actually bounds the
+## cost regardless of frame rate: one refresh serves every decomposer
+## that asks during its window, however many (or however few) real
+## frames that window happens to span.
+##
+## Deliberately NOT full per-chunk spatial bucketing either -- the shape
+## round 4's own flyers_near/leaf_litter_near/trees_near all use: those
+## all reuse an EXISTING per-chunk registry EarthChunkManager already
+## maintained for spawn/despawn tracking. Carcass/CarcassGuts/
+## DroppedItem(fruit)/MushroomMarker have no such registry to reuse --
+## they spawn from five separate, scattered call sites (creature death,
+## player drops, world events, the mushroom renderer's own per-chunk
+## spawn) with no existing per-chunk bucket, so building one from
+## scratch here would be a materially larger, riskier change than this
+## fix. Named explicitly as the smaller-scoped fix, not silently passed
+## off as the full round-4-style treatment -- a real follow-up, not
+## invented here.
+const FOOD_GROUP_REFRESH_SECONDS := 0.5
+static var _food_group_refresh_at_msec: int = -1000000
+static var _cached_carcasses: Array = []
+static var _cached_carcass_guts: Array = []
+static var _cached_forageables: Array = []
+
+
+## Refetches the three shared group lists from `tree` if the cache has
+## gone stale. `now_msec` is INJECTED (not read directly via Time.get_
+## ticks_msec here) so this stays testable with a fake clock and a
+## counting tree double, the same call-observing idiom round 4's own
+## tests already use. `tree` is duck-typed (only needs get_nodes_in_
+## group), matching every other 'world' port in this codebase.
+static func _refresh_food_groups_if_stale(tree, now_msec: int) -> void:
+	if now_msec - _food_group_refresh_at_msec < int(FOOD_GROUP_REFRESH_SECONDS * 1000.0):
+		return
+	_food_group_refresh_at_msec = now_msec
+	_cached_carcasses = tree.get_nodes_in_group(Carcass.GROUP_NAME)
+	_cached_carcass_guts = tree.get_nodes_in_group(CarcassGuts.GROUP_NAME)
+	_cached_forageables = tree.get_nodes_in_group(DroppedItem.FORAGEABLE_GROUP_NAME)
+
+
 func _nearest_food() -> Node2D:
+	if is_inside_tree():
+		_refresh_food_groups_if_stale(get_tree(), Time.get_ticks_msec())
 	var best: Node2D = null
 	var best_effective_distance := SEARCH_RADIUS_PX
-	for group_name in [Carcass.GROUP_NAME, CarcassGuts.GROUP_NAME]:
-		for node in get_tree().get_nodes_in_group(group_name):
+	for group in [_cached_carcasses, _cached_carcass_guts]:
+		for node in group:
+			if not is_instance_valid(node) or node.is_queued_for_deletion():
+				continue
 			var distance: float = position.distance_to(node.position)
 			var fly_count: int = node.fly_count() if node.has_method("fly_count") else 0
 			var effective := CarrionForageBehavior.effective_distance(distance, fly_count)
 			if effective <= best_effective_distance:
 				best = node
 				best_effective_distance = effective
-	for node in get_tree().get_nodes_in_group(DroppedItem.FORAGEABLE_GROUP_NAME):
+	for node in _cached_forageables:
+		if not is_instance_valid(node) or node.is_queued_for_deletion():
+			continue
 		# FORAGEABLE_GROUP_NAME is joined by a real DroppedItem holding a
 		# real fruit/nut (see DroppedItem._ready()) OR a MushroomMarker with
 		# something left to bite (see MushroomMarker._ready(), take_

@@ -10,6 +10,7 @@ extends GutTest
 const DecomposerMarker = preload("res://src/rendering/decomposer_marker.gd")
 const CarrionForageBehavior = preload("res://src/gameplay/carrion_forage_behavior.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
+const CarcassGuts = preload("res://src/rendering/carcass_guts.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
@@ -43,6 +44,12 @@ var carcass: Carcass
 
 func before_each():
 	marker = DecomposerMarker.new()
+	# Round-5 fix: _nearest_food shares ONE Carcass/CarcassGuts/
+	# FORAGEABLE_GROUP_NAME fetch across every decomposer (see that
+	# static cache own doc comment) -- forced stale here so each test
+	# gets a real fetch on its own first call, not a leftover from
+	# whichever test happened to run immediately before it.
+	DecomposerMarker._food_group_refresh_at_msec = -1000000
 	marker.species = "ant"
 	marker.home = Vector2(100, 100)
 	marker.position = Vector2(100, 100)
@@ -552,6 +559,74 @@ func test_far_from_the_player_does_not_rescan_carrion_on_every_process_call():
 # -- own doc comment -- neither the "ant" nor "bug" sheet has a dedicated --
 # -- crushed pose, unlike worm/millipede's own real art) --------------------
 
+
+# -- round 5: _nearest_food shares one group fetch, does not re-scan the ---
+# -- whole world once per decomposer per frame (docs/concept/soil_fauna.md) -
+#
+# Round 4 found and fixed two "one marker scans the whole world instead of
+# a scoped neighbourhood" bugs (AmbientFlyerMarker._scan_for_partners,
+# EarthChunkManager.crush_ants_near) but missed a third of the identical
+# shape: _nearest_food's own Carcass/CarcassGuts/DroppedItem.FORAGEABLE_
+# GROUP_NAME walk, called by EVERY decomposer, every single frame it is
+# still searching (CarrionForageBehavior.can_commit() stays true on every
+# frame past REHUNT_SECONDS, not just once) -- with population in the
+# hundreds this reproduces the exact anti-pattern at a THIRD call site.
+# Proven the same call-observing way round 4's own tests prove an
+# expensive call never happens (test_earth_chunk_manager.gd's own
+# _CountingPhaseGenerator, test_ambient_flyer_marker.gd's own
+# _CountingFlyerWorld): a counting stub standing in for the SceneTree
+# itself.
+class _CountingTree:
+	var carcasses: Array = []
+	var guts: Array = []
+	var forageables: Array = []
+	var call_count := 0
+
+	func get_nodes_in_group(group_name: String) -> Array:
+		call_count += 1
+		if group_name == Carcass.GROUP_NAME:
+			return carcasses
+		if group_name == CarcassGuts.GROUP_NAME:
+			return guts
+		return forageables
+
+
+func test_nearest_food_shares_one_group_fetch_across_many_calls_within_the_refresh_window():
+	var tree := _CountingTree.new()
+	DecomposerMarker._refresh_food_groups_if_stale(tree, 0)
+	for i in 50:
+		DecomposerMarker._refresh_food_groups_if_stale(tree, i)
+	assert_eq(
+		tree.call_count, 3,
+		"one shared fetch (3 groups) regardless of how many callers ask within the refresh window"
+	)
+
+
+func test_nearest_food_refetches_once_the_refresh_window_elapses():
+	var tree := _CountingTree.new()
+	DecomposerMarker._refresh_food_groups_if_stale(tree, 0)
+	var after_window := int(DecomposerMarker.FOOD_GROUP_REFRESH_SECONDS * 1000.0) + 1
+	DecomposerMarker._refresh_food_groups_if_stale(tree, after_window)
+	assert_eq(
+		tree.call_count, 6,
+		"a second real fetch (3 more groups) once the window has genuinely elapsed"
+	)
+
+
+## End-to-end: a decomposer must still actually find and eat real carrion
+## after the refactor -- the shared cache must not silently break what
+## test_finds_and_bites_a_nearby_rotten_carcass already proves, just stop
+## re-fetching it redundantly.
+func test_still_finds_real_carrion_through_the_shared_cache():
+	carcass = _rotten_carcass_at(Vector2(101, 100))
+	for i in 200:
+		marker._process(0.5)
+		if marker._behavior.phase != CarrionForageBehavior.Phase.SEEKING:
+			break
+	assert_ne(
+		marker._behavior.phase, CarrionForageBehavior.Phase.SEEKING,
+		"a decomposer must still find real carrion once the shared cache is in play"
+	)
 func test_crush_applies_the_squash_effect_to_its_sprite():
 	var sprite := marker.get_child(0) as Sprite2D
 	var scale_before := sprite.scale.y
