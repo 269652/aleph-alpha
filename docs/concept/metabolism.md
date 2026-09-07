@@ -351,14 +351,20 @@ this — no second guess mass anywhere for the player either.
   genuinely separate aggregate (colony-level, not per-instance) model;
   wiring it into a per-forager `current_mass_kg` is real future work, not
   attempted here.
-- ⬜ Fish and the remaining ambient-flyer/bird roster (`BirdDigestion`
-  species: robin/sparrow/kingfisher) — explicitly not reached this pass;
-  fish have no phase/hunger model of any kind to hang an activity signal
-  or feeding event off today (confirmed: no `FishDiet`/`FishGrowth`
-  module exists anywhere in this codebase; `docs/concept/aquatic_foraging.md`
-  and `docs/concept/fishing.md` both explicitly scope fish population
-  tracking as "no needs, no hunger" by design), and would need that
-  built first, which is its own separate pass, not a metabolism gap.
+- ⬜ Fish: not reached by THIS pass, and **superseded at merge time** —
+  true when written (fish had no phase/hunger model of any kind to hang
+  an activity signal or feeding event off, and both
+  `docs/concept/aquatic_foraging.md`/`docs/concept/fishing.md` scoped fish
+  population tracking as "no needs, no hunger" by design), but a
+  concurrent session shipped a real `FishDiet`/`FishGrowth`/`FishMass`
+  system in the same merge window. That system is real but genuinely
+  UNIFIED with nothing here — `FishMass` is its own independent
+  per-species reference table, not seeded through this module's
+  `Metabolism`/`current_mass_kg()`. Reconciling the two into one real
+  model is a named, real follow-up, deliberately not attempted under time
+  pressure immediately before this pass's own merge.
+- ⬜ The remaining ambient-flyer/bird roster (`BirdDigestion` species:
+  robin/sparrow/kingfisher) — explicitly not reached this pass.
 
 See `docs/progress.md`'s "Caloric metabolism: one unified live mass, real
 calorie burn/intake" entry for the full session-by-session record,

@@ -11,6 +11,7 @@ const Item = preload("res://src/gameplay/item.gd")
 const MaterialProperties = preload("res://src/gameplay/material_properties.gd")
 const CraftedItemRegistry = preload("res://src/gameplay/crafted_item_registry.gd")
 const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
+const FishMass = preload("res://src/world/fish_mass.gd")
 
 ## Optional fallback for content-addressed, emergent item ids (see
 ## docs/concept/item_identity.md). Null in a fresh catalog, so a bare
@@ -161,12 +162,33 @@ const _ITEMS := {
 	# bait_quality model is docs/concept/aquatic_foraging.md's own named,
 	# still-⬜ "Worms as fish bait" follow-up, not this pass.
 	"worm": ["Worm", "material", 40, 0.0],
-	# Cooking chain: fish caught/dropped, cooked over a campfire.
+	# Cooking chain: fish caught/dropped, cooked over a campfire. Kept as the
+	# fallback used when no real, nearby FishMarker was actually caught (see
+	# EarthChunkManager.catch_nearest_fish, docs/concept/fishing.md's own
+	# "Revised (2026-09-07)" section) -- real per-species ids below are the
+	# common case now.
 	"fish": ["Fish", "food", 20, 0.0],
 	"cooked_fish": ["Cooked Fish", "food", 20, 0.0],
+	# Real per-species catches (see ProceduralFishSprite.SPECIES_IDS,
+	# FishMass, docs/concept/fishing.md's own "Revised (2026-09-07)"
+	# section) -- reported directly: "yes to real per-species items". Mass
+	# is 0.0 here, same as the generic fish/mushroom/produce convention:
+	# the real reference weight comes from _mass_kg_for's own FishMass
+	# routing below, and a per-CATCH real weight from make_with_mass.
+	"trout": ["Trout", "food", 20, 0.0],
+	"cooked_trout": ["Cooked Trout", "food", 20, 0.0],
+	"bluegill": ["Bluegill", "food", 20, 0.0],
+	"cooked_bluegill": ["Cooked Bluegill", "food", 20, 0.0],
+	"koi": ["Koi", "food", 20, 0.0],
+	"cooked_koi": ["Cooked Koi", "food", 20, 0.0],
+	"goldfish": ["Goldfish", "food", 20, 0.0],
+	"cooked_goldfish": ["Cooked Goldfish", "food", 20, 0.0],
 	# Rare/legendary catches (see FishingMinigame.fish_rarity) are their own
-	# item ids, not just "fish" -- so the rarity survives into the
-	# inventory and grants a buff on eating (see FoodConsumption.FISH_BUFFS).
+	# item ids, not just the real species -- so the rarity survives into the
+	# inventory and grants a buff on eating (see FoodConsumption.FISH_BUFFS),
+	# deliberately not crossed with species (still one generic rare/
+	# legendary item each, not eight rarity x species items nobody asked
+	# for).
 	"rare_fish": ["Rare Fish", "food", 20, 0.0],
 	"legendary_fish": ["Legendary Fish", "food", 20, 0.0],
 	# Wearable armor (see Equipment / concept/items.md's equipment slots).
@@ -322,6 +344,24 @@ func make(item_id: String, bite_stage: int = -1) -> Item:
 	return Item.new(item_id, spec[0], spec[1], spec[2], spec[3], equip_slot, armor, mass_kg)
 
 
+## Same as make(), except `mass_kg` overrides whatever _mass_kg_for would
+## have derived. Every other catalog item resolves its own mass from a
+## static per-id table -- a carrot is always the same reference weight. A
+## caught fish is the one item in this game whose real mass is only known
+## at the moment of catching (it depends on how well-fed that specific
+## individual was -- see FishGrowth, docs/concept/aquatic_foraging.md's
+## "Revised (2026-09-07)"), so EarthChunkManager.catch_nearest_fish's own
+## real, already-known mass is handed here directly instead of letting
+## make() derive its own static reference figure. Not routed through
+## _crafted_registry -- an overridden-mass item is never a crafted
+## assembly, always an authored id from _ITEMS.
+func make_with_mass(item_id: String, mass_kg: float) -> Item:
+	var spec: Array = _ITEMS[item_id]
+	var equip_slot: String = spec[4] if spec.size() > 4 else ""
+	var armor: float = spec[5] if spec.size() > 5 else 0.0
+	return Item.new(item_id, spec[0], spec[1], spec[2], spec[3], equip_slot, armor, mass_kg)
+
+
 ## Real average mass of one harvested root/tuber, kilograms (see
 ## docs/concept/wild_crops.md) -- a REAL reference weight for the whole
 ## vegetable, not a material-density x volume estimate the way weapon mass
@@ -369,13 +409,24 @@ const _CREATURE_MASS_KG := {
 }
 
 
+## Real per-species fish ids this catalog knows (see ProceduralFishSprite.
+## SPECIES_IDS, docs/concept/fishing.md's own "Revised (2026-09-07)"
+## section) -- both the raw and "cooked_"-prefixed id share the same real
+## reference mass, the identical "cooking doesn't change the reference
+## weight" convention the flat generic fish/cooked_fish pair already has.
+const _FISH_SPECIES_IDS := ["trout", "bluegill", "koi", "goldfish"]
+
+
 ## Real mass for `item_id` -- a real weapon (material + volume estimate, see
 ## _WEAPON_MATERIAL_AND_VOLUME), a real harvested vegetable
-## (_PRODUCE_MASS_KG), a real foraged mushroom (_MUSHROOM_MASS_KG), or --
-## for a "_bitten" id (see MushroomBiting) -- either a real, stage-scaled
-## fraction of its own unbitten base mushroom's mass (`bite_stage >= 0`,
-## see MushroomBiting.remaining_fraction_for_stage) or, unchanged, the old
-## flat MushroomBiting.RETAINED_FRACTION_AFTER_BITE (`bite_stage < 0`, the
+## (_PRODUCE_MASS_KG), a real foraged mushroom (_MUSHROOM_MASS_KG), a real
+## per-species fish's own AVERAGE reference weight (_FISH_SPECIES_IDS, see
+## FishMass -- make_with_mass below overrides this with a real per-CATCH
+## weight when one is actually known), or -- for a "_bitten" id (see
+## MushroomBiting) -- either a real, stage-scaled fraction of its own
+## unbitten base mushroom's mass (`bite_stage >= 0`, see MushroomBiting.
+## remaining_fraction_for_stage) or, unchanged, the old flat
+## MushroomBiting.RETAINED_FRACTION_AFTER_BITE (`bite_stage < 0`, the
 ## default -- see make()'s own doc comment). 0.0 for anything with no real
 ## mass modeled yet.
 func _mass_kg_for(item_id: String, bite_stage: int = -1) -> float:
@@ -388,6 +439,9 @@ func _mass_kg_for(item_id: String, bite_stage: int = -1) -> float:
 		return _PRODUCE_MASS_KG[item_id]
 	if _MUSHROOM_MASS_KG.has(item_id):
 		return _MUSHROOM_MASS_KG[item_id]
+	var fish_species := item_id.trim_prefix("cooked_")
+	if _FISH_SPECIES_IDS.has(fish_species):
+		return FishMass.mass_kg_for(fish_species)
 	if _CREATURE_MASS_KG.has(item_id):
 		return _CREATURE_MASS_KG[item_id]
 	if not _WEAPON_MATERIAL_AND_VOLUME.has(item_id):

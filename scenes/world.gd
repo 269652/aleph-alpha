@@ -909,6 +909,7 @@ static func backed_up_directories() -> PackedStringArray:
 		EarthChunkManager.ROOF_MODIFICATIONS_DIR,
 		EarthChunkManager.ECOLOGY_DIR,
 		EarthChunkManager.KEPT_ANIMALS_DIR,
+		EarthChunkManager.GROWING_JUVENILES_DIR,
 	])
 
 
@@ -973,6 +974,13 @@ func _wipe_persisted_world() -> void:
 	# overgrazed pasture and their livestock.
 	_world_reset.wipe_directory(EarthChunkManager.ECOLOGY_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.KEPT_ANIMALS_DIR)
+	# A growing wild juvenile's age is world state exactly like the ecology and
+	# kept-animal records above -- it was added to the manager after this
+	# function was written and never joined it either. The stale file is READ
+	# BACK on the next chunk load (_restore_growing_juveniles), and it carries
+	# no world identity, so a new world inherited the previous world's
+	# not-yet-mature animals.
+	_world_reset.wipe_directory(EarthChunkManager.GROWING_JUVENILES_DIR)
 	_player_save.wipe()
 	# The event store and memory store are two more pieces of world-scoped
 	# state that must not survive "New Game" -- the same "New Game means new"
@@ -2711,6 +2719,11 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	# right next to it for the same reason step_wild_crops sits next to its
 	# own land-plant-growth cousin below.
 	_chunk_manager.step_aquatic_vegetation(delta)
+	# The second real aquatic food layer (see EarthChunkManager.
+	# step_aquatic_invertebrates, docs/concept/aquatic_foraging.md's
+	# "Revised (2026-09-07)") -- mirrors step_aquatic_vegetation's own
+	# cadence immediately above.
+	_chunk_manager.step_aquatic_invertebrates(delta)
 	# Wild carrot/potato growth + spread (see EarthChunkManager.step_wild_crops,
 	# docs/concept/wild_crops.md) -- mirrors step_tall_grass's own throttled
 	# cadence immediately above. This line was simply missing: the step

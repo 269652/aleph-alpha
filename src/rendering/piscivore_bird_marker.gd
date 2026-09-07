@@ -337,12 +337,18 @@ func _resolve_strike() -> void:
 		# drift apart over a hover and a dive, and aiming at the bird is why
 		# the grab used to come up empty.
 		var at: Vector2 = fish.position if has_target else _cruise_position
-		var taken: String = _world.catch_nearest_fish(at, STRIKE_DISTANCE_PX * 2.0)
-		if taken != "":
+		# {"species", "mass_kg"} (see EarthChunkManager.catch_nearest_fish,
+		# docs/concept/fishing.md's own "Revised (2026-09-07)" section) --
+		# only the species presence matters here, same as the old bare
+		# string's truthiness did; a kingfisher's own catch is purely
+		# cosmetic/appetite-feeding, not an inventory grant.
+		var taken: Dictionary = _world.catch_nearest_fish(at, STRIKE_DISTANCE_PX * 2.0)
+		var caught_something: bool = not String(taken.get("species", "")).is_empty()
+		if caught_something:
 			# Fed: a whole inter-meal interval before it is interested again.
 			_hunger = PiscivoreAppetite.hunger_after_meal(_hunger)
 			_activity_elapsed = ACTIVITY_INTERVAL  # pick something else to do now
-		_show_carried_fish(taken != "")
+		_show_carried_fish(caught_something)
 	elif has_target and fish.has_method("bolt_from"):
 		# The one that got away actually gets away.
 		fish.bolt_from(position)

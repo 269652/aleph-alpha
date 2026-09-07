@@ -12083,6 +12083,24 @@ New concept doc (2026-08-25), written for the one mechanism below:
 
 - **New Game / Load Game** — ✅ Done — previously the world persisted eagerly to `user://` regardless of menu choice while the player never persisted at all, so "New Game" actually meant "old world, new stats". `Player.to_save_dict()`/`apply_save_dict()` round-trip position, class, authored appearance (now retained in a new `Player.appearance` field instead of applied-once-and-forgotten), health/max health, wallet, XP/level, skill-tree allocations, inventory, worn equipment + held weapon, and hotbar bindings. `PlayerSave` (`src/gameplay/player_save.gd`) is the pure I/O layer (mirrors `ChunkSerializer`'s `store_var`/`get_var` convention). `MainMenu` gained a root-screen **Load Game** button, shown only when a save exists, that bypasses the character creator entirely. New Game / Host Game now wipe the previous run's player save and all three `EarthChunkManager` persistence dirs (`WorldReset`, `src/world/world_reset.gd`) before spawning, so a fresh character actually loads into a fresh world. Autosaves periodically (`World.AUTOSAVE_INTERVAL`, 60s) and once on window close. Tested: `test_player_persistence.gd`, `test_player_save.gd`, `test_main_menu.gd`, `test_world_reset.gd`, `test_world_persistence.gd`. `World`'s own spawn/autosave wiring is untested glue over those pieces, matching `World`'s pre-existing boundary (no `world.gd` function had a direct unit test before this either). Not yet: multiple save slots (out of scope, see the concept doc). **Follow-up: New Game was the only irreversible action in the game and had no undo of any kind.** Begin wiped `player_save.bin`, all three chunk-persistence directories, the event/memory/household/contract/market/institution/world-boss stores and the world clock on a single click, with no prompt, and the 60-second autosave then wrote the new character over the save file, closing even the undelete window — one misclick destroyed every emergent thing a world had accumulated. Both halves are now fixed. `MainMenu._begin_pressed` is the only path to `start_requested` and shows an in-panel confirmation screen (a fourth screen in the existing `_show` state machine, not a `ConfirmationDialog`) whenever `PlayerSave.has_save()` is true — the *same* predicate that already decides whether Load Game is offered, so "is there anything to lose" is answered in one place and a first-ever game is never made to click through a warning about a save that does not exist. The confirmation sits on **Begin**, not on the root screen's "New Game", because Host Game routes through the same creator and the same button and a root-screen prompt would have missed it entirely (`test_hosting_a_game_is_confirmed_too`). And `World._wipe_persisted_world` now backs up before it destroys: every directory and every store file is copied to `<path>.bak` first (`WorldReset.backup_file`/`backup_directory`, one generation, overwritten by the next New Game). What gets backed up is `World.backed_up_directories()`/`backed_up_files()`, pinned by `test_world_backup_paths.gd` — including a drift check that counts the `wipe_*` calls in `_wipe_persisted_world`'s own source, so a store added to the wipe without a matching backup entry fails a test instead of silently shipping as un-undoable data loss. 🚧 Restoring a `.bak` is still manual (rename it back with the game closed); that gap is recorded in `docs/concept/persistence.md`.
 
+- **New Game left `GROWING_JUVENILES_DIR` behind too** (2026-09-07, size:
+  trivial) — ✅ **Fixed** — `EarthChunkManager.GROWING_JUVENILES_DIR` (added
+  alongside `GrowingJuveniles`, see `concept/ecosystem_dynamics.md`'s
+  "juvenile's `age_seconds` now DOES persist" entry) was in neither
+  `World.backed_up_directories()` nor `_wipe_persisted_world()` — the same
+  shape `ROOF_MODIFICATIONS_DIR`/`ECOLOGY_DIR`/`KEPT_ANIMALS_DIR` had before
+  their own fixes above. New Game neither backed it up nor destroyed it, so a
+  fresh world could inherit the previous world's not-yet-mature wild
+  juveniles via `_restore_growing_juveniles`, with no world identity to tell
+  them apart and no `.bak` to recover from either. Caught by
+  `test_every_persisted_chunk_directory_is_both_backed_up_and_wiped`
+  (`tests/unit/test_world_backup_paths.gd`) — the generalized test added
+  after the `ECOLOGY_DIR`/`KEPT_ANIMALS_DIR` fix specifically to catch the
+  *next* missed directory on the day it's added, rather than needing its own
+  bespoke sibling test each time; this is that test doing its job, so no new
+  test was needed. Both lists moved together, drift pin still balanced
+  (`test_world_backup_paths.gd` 8/8).
+
 - **Loading screens** — ✅ Done (see `concept/persistence.md`'s "Loading screens" section) — reported: "the game doesn't appear to hang when starting a new game". Investigated with real timing instrumentation against a real running instance (not assumed): New Game/Load Game/Join's real stall is `EarthChunkManager.update()`'s first call for a freshly-centered chunk radius, inside `_compute_dry_land_spawn_tile`/`_spawn_local_singleplayer_from_save` — **measured ~39-90s+ for a single call** across dev-sandbox runs (`_spawn_local_singleplayer` end to end similarly dominated by this one call; the rest, mostly `CharacterView`'s appearance/portrait generation, is under a second). `LoadingOverlay` (`scenes/loading_overlay.gd`, a small dim-backdrop + centered status label + spinner `Control`) is shown via `World._show_loading_overlay`, which awaits **two** `process_frame` signals so the overlay is actually painted before the long call starts (confirmed against real rendered screenshots captured mid-freeze — one `await` alone was not reliably enough, and a first attempt without the explicit post-preset offset reset left the whole overlay pinned to a zero-size rect at the origin instead of covering the screen, the same `set_anchors_preset`-preserves-current-rect gotcha `MainMenu._ready()` already documents; both confirmed and fixed against real screenshots, not by re-reading the code and assuming it was right). Wired into all three entry points — `_on_menu_start_requested` ("Preparing a new world..."), `_on_menu_load_requested` ("Loading your world..."), `_on_menu_join_requested` ("Connecting to host...", covering a joining client's own version of the same stall).
   **Follow-up (2026-08-25, reported: "the loading screen doesn't show actual progress and still looks like it's hanging")** — the first pass's honest indeterminate spinner turned out not to actually fix the perceived-hang problem: nothing in `update()`'s call chain (`update` → `_load_chunk` → terrain paint + tree/stone/grass/crop/decomposer/flower/scrub/lichen spawning) ever `await`ed, so the engine could never present a frame during it — the spinner necessarily froze on whatever glyph it was on for the *entire* real duration, indistinguishable from an actual hang despite being "honest". Fixed at the actual cause rather than the screen over it: `EarthChunkManager.pending_load_chunks(tile)` (new, pure — the exact chunk set `update()` would load, no generation cost) makes the real total known up front, and `EarthChunkManager.update_with_progress(tile, on_progress)` (new) loads that set one chunk at a time, calling `on_progress(loaded, total)` and `await`ing one `process_frame` after each — the single structural change ("restructuring `EarthChunkManager` internals to load chunks across multiple frames") the original pass had explicitly deferred as out of scope for a loading screen alone. `update()` itself is completely untouched (verified: its own extensive existing test suite still passes after the refactor that extracted its shared decoration/grass/eviction bookkeeping into `_sync_decoration_and_grass_tracking`/`_evict_far_chunks` for `update_with_progress` to reuse) — every per-frame gameplay caller keeps calling synchronous `update()` unchanged; only the loading-screen entry points switch to the chunked variant. `LoadingOverlay.set_progress(loaded, total)` appends a real `"(N / M chunks)"` suffix onto the status line, called via `World._on_chunk_load_progress`, the one `on_progress` callback all three entry points share. Join's own version (`_client_process`) now runs its first load through a separate one-shot fire-and-forget async task, `_run_initial_client_chunk_load`, guarded by `_initial_client_chunk_load_task_running`/`_done` so it runs exactly once and never races the plain per-frame `update()` calls before/after it — done deliberately as a separate function rather than an inline `await` so `_client_process` itself stays a plain synchronous per-frame function (suspending it directly would also suspend every per-frame UI update below the chunk-load line). Tested: `EarthChunkManager.pending_load_chunks`/`update_with_progress` — total matches `chunks_in_radius`'s own count, same chunks end up loaded as plain `update()`, `on_progress` fires exactly once per chunk from `(0, total)` to `(total, total)`, eviction beyond `UNLOAD_RADIUS` still happens (`test_earth_chunk_manager.gd`, TDD red-then-green: the new tests failed with an undefined-method parse error before the methods existed). Also caught and fixed two `_compute_dry_land_spawn_tile()` call sites that would otherwise have silently used its result before the now-async call finished (`_on_peer_connected`, a dedicated-server peer-spawn path with no loading-overlay coverage at all, and the two menu entry points' own spawn functions) — found by grepping every call site after the signature changed, not assumed complete from the two obvious ones. `LoadingOverlay`/`World`'s own wiring stay the established untested Node-composition glue boundary (confirmed `world.gd` and `loading_overlay.gd` still compile and `world.gd`'s existing pure-helper tests, `test_world_persistence.gd`/`test_world_simulation_ownership.gd`/`test_world_daylight_default.gd`, still pass); unlike the original pass, this follow-up was **not** re-verified against a real running instance with screenshots — no live-GUI-automation harness was available in the session that built it (a native Godot window has no accessibility tree the way a browser page does, and driving one blind via raw screen coordinates on the dev machine's own active desktop session was judged not worth the risk for glue code already covered this thoroughly at the mechanism level) — so, same as Join's own hide-wiring already was, this is reasoned from the code and the passing chunk-manager tests rather than screenshot-confirmed.
   Separately, and NOT covered by any of the above: a stale/missing `TerrainAtlasCache` (`TerrainRenderer.build_tile_set`, gated on `ATLAS_VERSION`) is a real, similarly-sized stall (~62s measured in this dev sandbox on this session's own `ATLAS_VERSION` bump) that happens in `World._ready()`, unconditionally, before the main menu itself is even shown — out of scope here since there's no entry point left to wrap it with once it's already running before any menu click exists; self-heals after the first paid run (writes a fresh cache), so it's a one-time cost per `ATLAS_VERSION` bump rather than a recurring one.
@@ -15025,6 +15043,72 @@ same size as a live one. `CaterpillarMarker`/`DecomposerMarker` untouched
 was the exact behavior this fix removes) plus all 73 `test_crush`-
 matching tests project-wide reconfirmed green (5431 asserts).
 
+### Real per-species fish diet, forage-coupled mass, and real catch items (`concept/aquatic_foraging.md`, `concept/fishing.md`, 2026-09-07)
+
+Brainstormed first: *"what the different fish we have eat and what we
+need to add to the ecosystem so every fish can properly forage and grow
+mass."* The investigation found species was purely cosmetic (a
+`FishMarker.species` field read only for sprite colour, never diet), the
+whole aquatic food web was one undifferentiated vegetation patch sim, and
+fish had no mass concept at all, individual or aggregate. Two follow-up
+questions, answered directly: *"Forage-coupled mass, and yes to real
+per-species items."*
+
+- **`FishDiet`** (`src/gameplay/fish_diet.gd`) -- mirrors `FlyerDiet`'s own
+  binary per-species table exactly. Bluegill/koi/goldfish eat both real
+  food layers below; trout (real insectivore, barely touches plant
+  matter) eats only invertebrates -- the same narrow, single-food-type
+  shape `FlyerDiet` already gives the fish-only kingfisher.
+- **`AquaticInvertebrates`** (`src/world/aquatic_invertebrates.gd`) -- a
+  second real aquatic food layer, mirroring `AquaticVegetation`'s own
+  patch-sim contract line for line (only `GROWTH_RATE` differs, tuned 5x
+  faster: a real insect-larva population turns over far quicker than a
+  weed bed's own rhizome-driven regrowth). Closes the real gap vegetation
+  alone left for an insectivorous species. Rendered by
+  `ProceduralAquaticInvertebrateSprite` -- a cluster of curled tan/brown
+  grubs, deliberately not a green recolor of vegetation's own blades.
+  `EarthChunkManager.aquatic_invertebrates_near`/
+  `graze_aquatic_invertebrates_at`/`step_aquatic_invertebrates` mirror the
+  vegetation wiring exactly, seeded in the same water-gated chunks.
+- **`FishMarker._step_foraging`** is now diet-gated: it only queries/grazes
+  the food types a fish's own species actually eats, picking whichever
+  real patch (of either type) is nearer when a species eats both.
+- **`FishMass`/`FishGrowth`** (`src/world/fish_mass.gd`,
+  `src/gameplay/fish_growth.gd`) -- real per-species adult mass (bluegill
+  0.25kg, goldfish 0.4kg, trout 0.5kg, koi 3.5kg -- real ornamental koi
+  genuinely dwarf the other three), the same real-reference-weight
+  convention `CreatureMass._REAL_MASS_KG` already established for land
+  animals. Deliberately NOT `MammalGrowth` (age-based, indifferent to
+  whether an animal ever eats) -- a fish starts at half its species' adult
+  mass (no hatch event is modeled, so there is no real "just born" moment
+  to anchor a tiny newborn fraction against) and grows only on a REAL
+  successful graze, a fixed fraction of its own adult mass per meal (~5
+  meals to mature, proportional across species the same way
+  `MammalGrowth` already scales maturation DURATION by species size).
+  Visual scale follows the cube root of the mass fraction -- the same
+  real cube-law relationship `CreatureMass._mass_from_world_scale` already
+  uses in the other direction -- so a young fish reads as believably
+  smaller, not distorted the way a linear mapping would.
+- **Real per-species catch items** (`ItemCatalog`: `trout`/`bluegill`/
+  `koi`/`goldfish` + `cooked_` pairs, matching `ProceduralFishSprite.
+  SPECIES_IDS` one-for-one) replace the flat generic `fish` for an
+  ordinary catch. `EarthChunkManager.catch_nearest_fish` now returns
+  `{"species", "mass_kg"}` instead of a bare species String -- carrying
+  the real caught individual's own forage-coupled mass. New
+  `ItemCatalog.make_with_mass(item_id, mass_kg)` grants that real mass
+  directly (every other item resolves mass from a static per-id table; a
+  caught fish is the one item whose real mass is only known per-catch).
+  Rare/legendary catches keep their own existing generic buff item
+  unchanged (not crossed with species), now also carrying the real caught
+  mass instead of a flat reference weight. `Player._fishing_step`
+  reordered to catch the real nearby fish FIRST and grant its own item;
+  `PiscivoreBirdMarker`'s own dive resolution and both markers' test
+  doubles updated to the new Dictionary contract.
+
+`docs/concept/aquatic_foraging.md` and `docs/concept/fishing.md` updated
+with the full mechanism spec ahead of this implementation, per this
+project's own concept-doc-first discipline.
+
 ### Karma: crushing is player-only again (`concept/karma_and_luck.md`)
 
 Reported live: *"Karma is constantly decreasing when wild animals step on
@@ -15617,12 +15701,20 @@ suite), `test_decomposer_marker.gd` 51/51 (full suite),
 full-suite run surfaced it -- a reminder that a signature change needs a
 whole-tree grep for callers, not just `src/`).
 
-**Explicitly deferred, named rather than silently skipped**: fish (no
-phase/hunger model of any kind exists for fish anywhere in this codebase
-today -- confirmed, no `FishDiet`/`FishGrowth` module exists, and both
-`aquatic_foraging.md`/`fishing.md` explicitly scope fish population
-tracking as "no needs, no hunger" by design -- building that is its own
-separate pass, not a metabolism gap) and the remaining ambient-flyer/bird
+**Explicitly deferred, named rather than silently skipped**: fish -- true
+when this pass began (no phase/hunger model of any kind existed for fish
+anywhere in this codebase, and both `aquatic_foraging.md`/`fishing.md`
+explicitly scoped fish population tracking as "no needs, no hunger" by
+design), **superseded at merge time**: a concurrent session shipped a
+real `FishDiet`/`FishGrowth`/`FishMass` system in the same merge window
+(see "Real per-species fish diet, forage-coupled mass, and real catch
+items" above) -- real, but NOT unified with this pass's own `Metabolism`/
+`current_mass_kg()` model; `FishMass` is its own independent per-species
+reference table, not seeded through `Metabolism`. A real, named follow-up
+this pass did not attempt (reconciling two independently-shipped mass
+concepts for the same animal class under time pressure, immediately
+before a merge, is a worse risk than naming the gap honestly) and the
+remaining ambient-flyer/bird
 roster (robin/sparrow/kingfisher, all real `BirdDigestion` consumers
 today) -- a real, well-scoped next slice, not reached this pass for
 runway reasons. Millipedes and ants' own invisible `AntColony` food
