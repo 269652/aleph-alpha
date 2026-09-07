@@ -9,38 +9,99 @@ extends RefCounted
 ## failure mode (see ProceduralDecomposerSprite's own doc comment for the
 ## precedent this has already hit for ants). Fixed by real, delivered art
 ## plus a real, measured world_scale, exactly like every other small
-## creature in this codebase.
+## creature in this codebase. A third species, honeybee_queen.png (the
+## queen's own real, minimal place in the ecosystem -- see BeeColony.
+## has_queen_at, BeeQueenMarker), was added and wired in a later pass.
 ##
 ## Same "hand-drawn sheet -> known fixed grid -> cached frames" shape as
 ## IllustratedMillipedeSprite/IllustratedWormSprite/
-## IllustratedCaterpillarSprite -- honeybee.png (BeeColony hive workers)
-## and bee.png (WildBeePatch solitary foragers) are both dimension-
-## identical to those sheets (1536x1024, 192x256 per cell, confirmed
-## directly against the PNG header), keyed by species (like
-## IllustratedDecomposerSprite's "ant"/"bug") rather than one fixed sheet,
-## since there are genuinely two different bees here, not one.
+## IllustratedCaterpillarSprite, EXCEPT the grid: honeybee.png/bee.png/
+## honeybee_queen.png are all 1536x1024 like those sheets, but are NOT
+## those sheets' 4 EQUAL 256px rows -- see _ROW_BAND's own doc comment.
+## Keyed by species (like IllustratedDecomposerSprite's "ant"/"bug")
+## rather than one fixed sheet, since there are genuinely three different
+## bees here (two foragers plus a non-foraging queen), not one.
 ##
-## Only row 1 ("fly" -- a level, wings-spread flapping cycle) is wired
-## this pass. Both sheets have 3 more rows of real, delivered content
-## (alternate flight/banking angles, and a landed/lower-wing pose in row
-## 4) with no trigger wired to them yet -- BeeForagerMarker has no landed/
-## feeding PHASE at all today (arrival resolves in one instant tick, see
-## that class's own _resolve_arrival_at_food), so there is no real moment
-## to play a landed pose FOR yet. Available, not yet wired -- named
-## explicitly, the same "not silently assumed" gap this doc's own
-## caterpillar `rest`/millipede `curl` rows were before being closed
-## later.
-
+## Real row semantics, corrected -- live user correction: "Rows are:
+## walking, flying, foraging, building hive / nest, dying". The row
+## originally shipped as "fly" (row 0, assumed by dividing the sheet into
+## 4 equal 256px bands the same way worm/caterpillar/millipede's own
+## sheets really do divide) is actually WALKING -- these three bee sheets
+## were never independently probed for their own real grid the way THOSE
+## sheets each got their own tools/probe_*_sheet.gd; the 4-equal-rows
+## guess happened to land exactly on this sheet's real walk/fly boundary
+## by coincidence. See _ROW_BAND below for the real, measured layout
+## (tools/probe_bee_row_semantics.gd + tools/probe_bee_5rows.gd hold the
+## full evidence trail: a per-row pixel-density profile plus stitched,
+## despilled visual crops of every band, cross-checked against BOTH
+## worker sheets agreeing pixel-for-pixel). Every bee on screen had been
+## animating through its WALK cycle for its entire always-airborne
+## on-screen lifecycle (BeeForagerMarker has no landed phase at all --
+## see that class's own doc comment) until this fix.
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 const _SHEET_PATH_BY_SPECIES := {
 	"honeybee": "res://assets/sprites/animals/honeybee.png",
 	"wild_bee": "res://assets/sprites/animals/bee.png",
+	"honeybee_queen": "res://assets/sprites/animals/honeybee_queen.png",
 }
 const _COLUMNS := 8
-const _CELL_SIZE := Vector2i(192, 256)
-const _FLY_ROW := 0
+const _CELL_WIDTH := 192
+
+## Real, hand-measured, NON-uniform row bands (top-y, height), shared
+## identically across all three sheets (confirmed directly, not assumed
+## from matching file dimensions alone -- see this file's own header
+## comment). Packed edge to edge with NO blank divider row anywhere in
+## the whole 1024px height (confirmed: a blank-row scan found exactly one
+## band spanning all 1024 rows on every sheet) -- boundaries were only
+## resolved by finding where a pose that needs the full 256px stops and a
+## pose that fits a compact 128px starts:
+##   walk      y[0,   256) -- ground contact: legs planted, a real drop
+##             shadow beneath every frame.
+##   fly       y[256, 384) -- level flight: legs tucked, no ground
+##             shadow, minimal frame-to-frame variation (a steady cruise,
+##             not a dynamic maneuver) -- the one band this file wires.
+##   forage_a  y[384, 640) -- a taller, more dynamic reaching pose with a
+##             visible orange/red mark at the mouthparts on several
+##             frames (active nectar/pollen engagement).
+##   forage_b  y[640, 768) -- a compact variant of forage_a, same mark.
+##   dying     y[768, 1024)-- a progressive collapse across its 8 frames:
+##             upright, then leaning, then legs curling inward, ending
+##             lying on its side -- confirmed on all three sheets,
+##             including the queen's own (her crown stays visible through
+##             her own collapse).
+## "Building hive/nest" (one of the five real concepts named live) has NO
+## matching row on any of these three sheets at all -- a hive's own
+## construction/growth is already fully represented by the separate
+## beehive.png sheet (IllustratedBeehiveSprite.growth_stage_index), and
+## neither BeeForagerMarker nor BeeColony/WildBeePatch has any "under
+## construction" phase a bee's own body pose would need to play for. Not
+## a forced match -- a real, honest "doesn't need one" finding.
+const _ROW_BAND := {
+	"walk": Vector2i(0, 256),
+	"fly": Vector2i(256, 128),
+	"forage_a": Vector2i(384, 256),
+	"forage_b": Vector2i(640, 128),
+	"dying": Vector2i(768, 256),
+}
+
+## The only band actually wired to an animated cycle this pass.
+## BeeForagerMarker is airborne its ENTIRE lifecycle (SCOUTING ->
+## APPROACHING -> RETURNING, see that class's own doc comment on why it
+## deliberately has no landed phase) -- "fly" is the one real match, not
+## "forage_a"/"forage_b": those carry a visible feeding mark that would
+## read as wrong during SCOUTING/RETURNING, when nothing has been (or is
+## still being) fed on. "walk"/"forage_a"/"forage_b"/"dying" remain real,
+## delivered, and correctly left unwired for the same reason as before
+## this fix -- BeeForagerMarker has no landed/feeding/death phase to
+## trigger them from yet, named explicitly rather than silently dropped.
+const _FLY_BAND := "fly"
+
+## The queen's own real static pose -- see generate_queen_texture's own
+## doc comment for why she uses "walk", never "fly".
+const _QUEEN_SPECIES := "honeybee_queen"
+const _QUEEN_BAND := "walk"
 
 ## The canvas every sliced frame is normalized onto, its feet (well --
 ## flight line) landing on the same BASELINE_Y regardless of species --
@@ -83,6 +144,8 @@ var _slicer := SpriteSheetSlicer.new()
 static var _frame_cache: Dictionary = {}
 static var _keyed_image_cache: Dictionary = {}
 static var _reference_width_cache: Dictionary = {}
+static var _queen_texture_cache: ImageTexture = null
+static var _queen_reference_width_cache: float = -1.0
 
 
 func has_species(species: String) -> bool:
@@ -95,15 +158,33 @@ func generate_textures(species: String) -> Array[ImageTexture]:
 	if not has_species(species):
 		return []
 	if not _frame_cache.has(species):
-		_frame_cache[species] = _build_textures(species)
+		_frame_cache[species] = _build_frames(species, _FLY_BAND)
 	return _frame_cache[species]
 
 
-func _build_textures(species: String) -> Array[ImageTexture]:
+## The queen's one real static pose -- see docs/concept/bees.md's real
+## queen biology: unlike a worker, she never forages and never leaves the
+## hive, so she has no animated CYCLE to play at all. Frame 0 of the real
+## "walk" band (a calm, legs-planted stance -- every sheet's walk cycle
+## already opens on essentially the same resting pose), not "fly": she
+## does not fly either. Reuses the exact same sheet/despill/normalize
+## pipeline generate_textures does -- only the species and source band
+## differ. Null if the sheet is ever missing entirely (the same
+## defensive "narrows, doesn't break" contract every optional-art seam in
+## this codebase already has).
+func generate_queen_texture() -> ImageTexture:
+	if _queen_texture_cache == null:
+		var frames := _build_frames(_QUEEN_SPECIES, _QUEEN_BAND)
+		_queen_texture_cache = frames[0] if not frames.is_empty() else null
+	return _queen_texture_cache
+
+
+func _build_frames(species: String, band_name: String) -> Array[ImageTexture]:
 	var image := _keyed_image(species)
+	var band: Vector2i = _ROW_BAND[band_name]
 	var frames: Array[Rect2i] = []
 	for col in _COLUMNS:
-		frames.append(Rect2i(col * _CELL_SIZE.x, _FLY_ROW * _CELL_SIZE.y, _CELL_SIZE.x, _CELL_SIZE.y))
+		frames.append(Rect2i(col * _CELL_WIDTH, band.x, _CELL_WIDTH, band.y))
 	var textures: Array[ImageTexture] = []
 	for frame_image in _slicer.normalize_frames(image, frames, CANVAS_SIZE, BASELINE_Y):
 		# A second, final cleanup pass over each already-cropped-and-resized
@@ -182,7 +263,41 @@ func world_scale(species: String) -> float:
 func _reference_width(species: String) -> float:
 	if _reference_width_cache.has(species):
 		return _reference_width_cache[species]
-	var frame: Image = generate_textures(species)[0].get_image()
+	var width := _measure_reference_width(generate_textures(species)[0])
+	_reference_width_cache[species] = width
+	return width
+
+
+## Real-world size: a queen honeybee is genuinely larger than a worker,
+## with a notably longer, egg-filled abdomen -- a real queen commonly
+## runs around 18-22mm body length against a worker's ~12-15mm
+## (WORLD_LENGTH_TILES above), roughly 1.5x -- confirmed directly against
+## the delivered art too (see docs/concept/bees.md's own real render
+## verification of this pass): she reads visibly bigger with a longer
+## abdomen on the actual sheet, not just larger by citation alone. Same
+## mm-per-tile ratio WORLD_LENGTH_TILES already established (0.18 tiles
+## for ~13.5mm), scaled to ~20mm.
+const WORLD_LENGTH_TILES_QUEEN := 0.27
+
+
+## How much to scale generate_queen_texture()'s own frame so it reads at
+## WORLD_LENGTH_TILES_QUEEN -- mirrors world_scale exactly, against the
+## queen's own static "walk" frame rather than a forager's fly cycle.
+func queen_world_scale() -> float:
+	if _queen_reference_width_cache < 0.0:
+		var texture := generate_queen_texture()
+		_queen_reference_width_cache = (
+			_measure_reference_width(texture) if texture != null else float(CANVAS_SIZE.x)
+		)
+	return (WORLD_LENGTH_TILES_QUEEN * TILE_SIZE) / _queen_reference_width_cache
+
+
+## The real opaque-pixel width of `texture`'s own image -- shared measure
+## behind both world_scale (a forager's fly cycle) and queen_world_scale
+## (the queen's static pose): how wide the ACTUAL drawing is once
+## normalized onto CANVAS_SIZE, not the canvas's own fixed width.
+static func _measure_reference_width(texture: ImageTexture) -> float:
+	var frame: Image = texture.get_image()
 	var min_x := frame.get_width()
 	var max_x := -1
 	for y in frame.get_height():
@@ -190,6 +305,4 @@ func _reference_width(species: String) -> float:
 			if frame.get_pixel(x, y).a > 0.0:
 				min_x = mini(min_x, x)
 				max_x = maxi(max_x, x)
-	var width: float = float(max_x - min_x + 1) if max_x >= min_x else float(CANVAS_SIZE.x)
-	_reference_width_cache[species] = width
-	return width
+	return float(max_x - min_x + 1) if max_x >= min_x else float(CANVAS_SIZE.x)

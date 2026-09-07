@@ -15,6 +15,7 @@ const ProceduralBeehiveSprite = preload("res://src/rendering/procedural_beehive_
 const IllustratedBeehiveSprite = preload("res://src/rendering/illustrated_beehive_sprite.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const BeeColony = preload("res://src/world/bee_colony.gd")
+const BeeQueenMarker = preload("res://src/rendering/bee_queen_marker.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 
@@ -83,6 +84,14 @@ func _ready() -> void:
 	_sprite = Sprite2D.new()
 	add_child(_sprite)
 	_apply_growth(_growth_fraction())
+	# The queen's own real, minimal visual presence -- see BeeQueenMarker's
+	# own doc comment. Only for a real, wired-up hive (mirrors this file's
+	# own "graceful no-op without a colony" contract): a marker built
+	# without setup() has nothing real for her to represent either.
+	if _colony != null:
+		var queen := BeeQueenMarker.new()
+		queen.setup(_colony, _cell)
+		add_child(queen)
 
 
 ## Founding size (0.0) with no colony wired up -- mirrors
@@ -126,12 +135,22 @@ func _process(delta: float) -> void:
 ## nest's own text never mentions honey at all, because there genuinely
 ## is none to report), which is what makes the two read as real,
 ## different animals rather than a reskin of one mechanic.
+## Reports real queen state too (see BeeQueenMarker/BeeColony.
+## has_queen_at) -- the same existing tooltip contract the population/
+## honey numbers already use, rather than a separate hoverable entity
+## just for her: a queenless hive reads "requeening" plus real progress
+## toward BeeColony.REQUEENING_DAYS, an observable consequence of losing
+## her without inventing new UI surface for it.
 func get_display_name() -> String:
 	if _colony == null:
 		return "Honeybee Hive"
-	return "Honeybee Hive (population %d, honey %d)" % [
+	var base := "Honeybee Hive (population %d, honey %d)" % [
 		int(round(_colony.population_at(_cell))), int(round(_colony.honey_stored_at(_cell)))
 	]
+	if _colony.has_queen_at(_cell):
+		return base
+	var percent := int(round(_colony.requeening_progress_at(_cell) * 100.0))
+	return "%s -- queenless, requeening (%d%%)" % [base, percent]
 
 
 ## The one hover action this marker offers -- "attack" reuses the
