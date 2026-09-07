@@ -22,6 +22,7 @@ const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
+const MushroomEffect = preload("res://src/gameplay/mushroom_effect.gd")
 const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
@@ -585,6 +586,98 @@ func test_satiation_expires_and_a_decomposer_can_bite_again():
 		if mushroom.bite_stage > stage_after_first_bite:
 			break
 	assert_gt(mushroom.bite_stage, stage_after_first_bite, "satiation should have expired -- it should bite again")
+
+
+# -- toxic mushroom effects: the report's own headline complaint -----------
+#
+# Reported live, directly: "i just saw a bug eat a psylo and it didn't do
+# anything to it." See docs/concept/soil_fauna.md's "Progressive,
+# mass-scaled bites, and real toxic effects" / MushroomEffect.
+
+func test_biting_a_psychoactive_mushroom_disorients_the_decomposer():
+	var mushroom := _mushroom_at(Vector2(105, 100), "psylo")
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	assert_gt(
+		marker._debuff_stack.stacks_of(marker.active_mushroom_debuffs, MushroomEffect.DISORIENTED_ID), 0,
+		"the exact reported case: a bug eating psylo should visibly change"
+	)
+
+
+func test_biting_death_cap_weakens_the_decomposer_not_disorients():
+	var mushroom := _mushroom_at(Vector2(105, 100), "death_cap")
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	assert_gt(marker._debuff_stack.stacks_of(marker.active_mushroom_debuffs, MushroomEffect.WEAKENED_ID), 0)
+	assert_eq(marker._debuff_stack.stacks_of(marker.active_mushroom_debuffs, MushroomEffect.DISORIENTED_ID), 0)
+
+
+func test_biting_an_edible_mushroom_causes_no_effect():
+	var mushroom := _mushroom_at(Vector2(105, 100), "champignon")
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	assert_eq(marker.active_mushroom_debuffs, [])
+
+
+## The real "how they walk" ask, at the unit level: identical setup, seed,
+## and elapsed time -- only whether Disoriented is active differs -- must
+## produce a genuinely different resulting position. Mirrors
+## test_herd_disease_severity_slows_an_infected_herbivores_movement's own
+## "same setup, compare with/without" shape.
+func test_a_disoriented_decomposer_does_not_wander_identically_to_a_healthy_one():
+	marker._elapsed_time = 3.0
+	var start := marker.position
+	marker.apply_mushroom_effect("fly_agaric")
+	marker._step_seeking(0.5)
+	var disoriented_position := marker.position
+
+	marker.position = start
+	marker._elapsed_time = 3.0
+	marker.active_mushroom_debuffs = []
+	marker._step_seeking(0.5)
+	var healthy_position := marker.position
+
+	assert_ne(disoriented_position, healthy_position)
+
+
+func test_a_weakened_decomposer_wanders_measurably_slower():
+	marker._elapsed_time = 3.0
+	var start := marker.position
+	marker.apply_mushroom_effect("death_cap")
+	marker._step_seeking(0.5)
+	var weakened_distance := marker.position.distance_to(start)
+
+	marker.position = start
+	marker._elapsed_time = 3.0
+	marker.active_mushroom_debuffs = []
+	marker._step_seeking(0.5)
+	var healthy_distance := marker.position.distance_to(start)
+
+	assert_lt(weakened_distance, healthy_distance)
+
+
+func test_decomposer_mushroom_effect_expires_on_its_own():
+	marker.apply_mushroom_effect("psylo")
+	marker._mushroom_effect_step(MushroomEffect.DISORIENTED_DURATION_SECONDS + 1.0)
+	assert_eq(marker._debuff_stack.stacks_of(marker.active_mushroom_debuffs, MushroomEffect.DISORIENTED_ID), 0)
+
+
+## The real, deliberate real-world-grounded asymmetry (see
+## docs/concept/soil_fauna.md's own writeup): real insects are documented
+## as considerably more amatoxin-tolerant than mammals (fungus gnat larvae
+## famously develop IN death cap fruiting bodies) -- a decomposer gets the
+## real Weakened slowdown but must NEVER die from it, unlike CreatureMarker
+## (see test_creature_marker.gd's own mirror test).
+func test_decomposer_never_dies_from_a_mushroom_effect_even_with_a_huge_delta():
+	marker.apply_mushroom_effect("death_cap")
+	marker._mushroom_effect_step(1000.0)
+	assert_false(marker.is_queued_for_deletion())
 
 
 func test_ignores_a_dropped_item_that_is_not_food():
