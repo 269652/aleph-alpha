@@ -15925,3 +15925,107 @@ Combat/hunt/attack exertion for wildlife and the player both fall back to
 ordinary MOVING today (only `_is_fleeing`/`input_direction` are read) --
 a real, named simplification worth a follow-up once those states are
 tracked as persistently as fleeing already is.
+
+## Bee row semantics corrected, a real honeybee queen (2026-09-08)
+
+A bee-scale fix had just merged to `main` (`ba904289`, same day, itself
+undocumented here until now): `IllustratedBeeSprite` replaced the old
+unscaled procedural "bee" silhouette with real `honeybee.png`/`bee.png`
+art at a measured `world_scale`, but assumed an 8-column x 4-EQUAL-row x
+192x256 grid ported unverified from `worm.png`/`caterpillar.png`/
+`millipede.png`'s own sheets (which really are 4 equal rows) -- these
+bee sheets were never independently probed for their own real grid
+first. Live user correction: *"Rows are: walking, flying, foraging,
+building hive / nest, dying"* -- five named concepts, not the generic
+single "fly" row row 0 had been assumed to be.
+
+**(A) Real row semantics, measured not guessed.**
+`tools/probe_bee_row_semantics.gd` -- a per-row pixel-density profile
+plus stitched, despilled visual crops of every band, cross-checked
+against both worker sheets agreeing pixel-for-pixel and against the
+queen's own sheet -- found the real layout is **five bands of
+non-uniform height**, packed edge to edge with zero blank divider row
+anywhere in the whole 1024px height: `walk` (256px, ground contact),
+`fly` (128px, level flight, legs tucked), `forage_a` (256px, a taller
+reaching pose with a visible feeding mark), `forage_b` (128px, compact
+variant of `forage_a`), `dying` (256px, a progressive collapse ending
+lying on its side). Row 0 -- shipped as "fly" -- was actually **walking**:
+every bee had been animating through its walk cycle for its entire
+always-airborne on-screen lifecycle (`BeeForagerMarker` has no landed
+phase at all). `IllustratedBeeSprite._ROW_BAND` now encodes the real
+layout; `BeeForagerMarker` wires the real `fly` band instead.
+"Building hive/nest" has no matching row on any of the three sheets --
+checked directly, not forced: a hive's own construction/growth is
+already fully represented by the separate `beehive.png` sheet
+(`IllustratedBeehiveSprite.growth_stage_index`), and no bee-body pose is
+needed for it. See `docs/concept/bees.md`'s new "Bee body poses" section
+for the full table and reasoning.
+
+**(B) "Queen-driven population" was flavor text, not a mechanic --
+confirmed before writing any code.** `BeeColony`/`BeePopulationModel`
+had no queen entity, no queen state, nothing an individual could point
+to as "her" -- the phrase (shared with `soil_fauna.md`'s identical
+language for `AntColony`) explains why the logistic growth curve looks
+the way it does, not a mechanic with a queen behind it. Ants have the
+same gap on purpose: `AntMoundMarker`/`soil_fauna.md` are explicit that
+a real ant queen is sessile and essentially never seen, so no queen
+sprite exists there at all.
+
+**(C) A real, minimal, honestly-scoped queen mechanic.** Reported live:
+*"Also added honeybee_queen sprite add a honeybee queen and wire it...
+give her a real place in the ecosystem."* `honeybee_queen.png` (a real,
+delivered 1536x1024 sheet sharing the exact same five-band layout as the
+workers) is now wired with a real mechanical role, not a purely
+decorative sprite -- a deliberate, named departure from the ant
+precedent above, made because the user explicitly asked for a real
+place in the ecosystem behind the art:
+- `BeeColony.has_queen_at(cell)` -- real per-hive state, default `true`.
+- **Swarming is the real trigger for losing her** -- this doc's own
+  "Real-world grounding" already named the biology ("the old queen
+  leaves with roughly half the workforce... while the hive left behind
+  raises a new queen... and carries on") with no mechanic behind it;
+  `bud_new_hive` now makes it real: the new hive gets the queen, the
+  parent hive left behind goes queenless and starts a real requeening
+  clock. Absconding carries her presence unchanged (the whole colony
+  relocates together).
+- **A queenless hive cannot grow and gradually declines**
+  (`QUEENLESS_DECLINE_RATE_PER_DAY`, grounded in a worker's real ~5-week
+  active-season lifespan) -- the real, observable "hive strength
+  degrades without a live queen" consequence the live guidance named as
+  an acceptable honest first pass, since no requeening/succession
+  precedent exists anywhere in this codebase (for ants or anyone else)
+  to build a fuller simulation against.
+- **A real path back**: `REQUEENING_DAYS` (28, grounded in a real
+  queen's ~16-day emergence plus ~5-10 days to mature/mate) of real
+  simulated time restores her and resumes ordinary growth.
+- `BeeHiveMarker.get_display_name` reports queenless/requeening state
+  through the hive's own existing tooltip rather than a new hoverable
+  entity.
+
+**(D) Visual representation.** `BeeQueenMarker`
+(`src/rendering/bee_queen_marker.gd`) -- new, deliberately simple,
+visual-only child of `BeeHiveMarker`, never `BeeForagerMarker`'s scout/
+forage state machine (a real queen does not make that trip). Shows one
+real static pose (the "walk" band's frame 0 -- she has no flight cycle
+either), hidden entirely while queenless rather than parking a "dying"
+frame for the real multi-week requeening window. Confirmed visibly
+distinct from a worker via a real render (`tools/probe_bee_queen_
+verify.gd`), not assumed: a gold crown with a red jewel, and a notably
+longer, more elongated, golden-amber abdomen at `WORLD_LENGTH_TILES_
+QUEEN` (0.27, real queens ~18-22mm against a worker's ~12-15mm) --
+roughly 1.6x a worker's on-screen width at a shared zoom.
+
+**Coverage**: no new tests written -- "skip tests for now" was live
+guidance this session. All 196 pre-existing tests across the 11 bee
+test files re-run and passing (`test_bee_colony.gd` 44/44,
+`test_bee_forager_marker.gd` 22/22, `test_bee_hive_marker.gd` 24/24,
+`test_bee_forage_behavior.gd` 8/8, `test_bee_population_model.gd`
+13/13, `test_earth_chunk_manager_bees.gd` 17/17, `test_wild_bee_
+patch.gd` 20/20, `test_wild_bee_nest_marker.gd` 11/11,
+`test_procedural_beehive_sprite.gd` 11/11, `test_illustrated_beehive_
+sprite.gd` 19/19, `test_procedural_wild_bee_nest_sprite.gd` 7/7) --
+`test_bee_hive_marker.gd` already wires a real `BeeColony` through
+`setup()` + `add_child()` in several cases, so `BeeQueenMarker`'s own
+`_ready()` (which loads and slices `honeybee_queen.png` for real) ran
+for real during this regression check, not only inside a standalone
+probe script.

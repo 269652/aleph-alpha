@@ -225,6 +225,149 @@ multiple hive cells the same way. Per hive cell:
   the identical *shape* of query, against bee-appropriate site/forage
   checks).
 
+### The queen — a real, minimal presence, added live
+
+Requested live: *"Also added honeybee_queen sprite add a honeybee
+queen and wire it... give her a real place in the ecosystem."* This
+section was added alongside `honeybee_queen.png` (a real, delivered
+1536x1024 sheet sharing the exact same real row layout as the worker
+sheets — see "Bee body poses" below) in a later pass than the rest of
+this doc.
+
+**Was "queen-driven population" already a real mechanic?** No — checked
+directly before writing a line of code, per this doc's own header
+promise never to force a match that isn't real. `BeeColony`/
+`BeePopulationModel` have no queen entity, no queen state, nothing an
+individual could point to as "her" — "queen-driven" is real-world-
+grounding *language* (see "Real-world grounding" above and `soil_fauna.
+md`'s identical phrase for `AntColony`) explaining *why* the logistic
+growth curve looks the way it does, not a mechanic with a queen behind
+it. Ants have the same gap, deliberately: `AntMoundMarker`/`soil_fauna.
+md` are explicit that a real ant queen is sessile and essentially never
+seen, so no queen sprite exists there at all and population alone
+stands in for her. Bees now **depart from that ant precedent on
+purpose** — the user supplied real queen art and asked for a real
+place in the ecosystem, not a purely decorative reskin, so this is a
+new, minimal, tracked queen-presence mechanic ants still deliberately
+lack.
+
+**The real mechanism, scoped honestly.** A real queen does not forage —
+she stays in the hive her whole life, and her loss is existentially
+important to a real colony (a queenless hive cannot requeen itself
+forever; eventually it collapses without a replacement). No requeening/
+succession precedent exists anywhere in this codebase to mirror (ants
+have none either), so this ships the honest, minimal first pass named
+as acceptable up front rather than a full requeening simulation:
+
+- `BeeColony.has_queen_at(cell)` — real per-hive state, defaulting to
+  `true` (mirrors `population_at`'s own "unset reads as the healthy
+  default" fallback: a hive predates this mechanic, so it starts
+  assumed healthy).
+- **Swarming is the one real, already-named trigger for losing her** —
+  this doc's own "Real-world grounding" already stated the biology
+  ("the *old* queen leaves with roughly half the workforce... while the
+  hive left behind raises a new queen from the brood already there and
+  carries on") without any mechanic behind it. `bud_new_hive` now makes
+  this real: the new hive gets `has_queen_at = true` (she left with the
+  swarm), the parent hive left behind gets `has_queen_at = false` and
+  starts a real requeening clock. Absconding is deliberately NOT a
+  trigger — the whole colony relocates together, queen included, so
+  `abscond_to` carries her presence (or absence/requeening progress)
+  over unchanged.
+- **A queenless hive cannot grow at all** (no queen laying means no new
+  brood — there is no partial-capacity version of this the way merely
+  being under-fed still has one) **and gradually declines**
+  (`QUEENLESS_DECLINE_RATE_PER_DAY`, grounded in a worker honeybee's own
+  real ~5-week active-season lifespan: with nothing replacing them,
+  existing workers simply age out) — the real, observable "hive
+  strength degrades without a live queen" consequence, readable through
+  the hive's own existing population number and everything that already
+  derives from it (growth-stage art, `active_forager_cap_at`).
+- **A real path back**: once `REQUEENING_DAYS` (28 — grounded in a real
+  queen's ~16-day egg-to-emergence time plus roughly another 5-10 days
+  to mature and complete her mating flights, commonly cited in aggregate
+  as about four weeks) of real simulated time passes, the hive raises a
+  real replacement and resumes ordinary logistic growth from whatever
+  population actually survived.
+- `BeeHiveMarker.get_display_name` reports queenless/requeening state
+  through the hive's own existing tooltip (`"... -- queenless,
+  requeening (NN%)"`) rather than growing a second hoverable entity for
+  one real boolean plus a progress number.
+
+**Visual representation.** `BeeQueenMarker` (`src/rendering/
+bee_queen_marker.gd`) is a new, deliberately simple, visual-only child
+of `BeeHiveMarker` — never `BeeForagerMarker`'s scout/forage state
+machine, since a real queen does not make that trip at all. She shows
+one real static pose (`IllustratedBeeSprite.generate_queen_texture`,
+frame 0 of the real "walk" band — she has no flight cycle to play
+either) and is hidden entirely whenever `has_queen_at` is false, rather
+than playing a "dying" pose that would have to sit there, misleadingly,
+for the real multi-week `REQUEENING_DAYS` window. She reads as visibly
+distinct from a worker — confirmed via a real render
+(`tools/probe_bee_queen_verify.gd`), not assumed from real queen
+biology alone: a gold crown with a red jewel (an unambiguous "this is
+the queen" marker with no real-world equivalent, a deliberate legibility
+choice), and a notably longer, more elongated, golden-amber abdomen
+against a worker's shorter black-striped one, at
+`WORLD_LENGTH_TILES_QUEEN` (0.27, real queen honeybees running ~18-22mm
+against a worker's ~12-15mm) — roughly 1.6x a worker's on-screen width
+at a shared zoom.
+
+### Bee body poses — real row semantics, corrected
+
+`bee.png`/`honeybee.png`/`honeybee_queen.png` are all 1536x1024 sheets.
+Live user correction: *"Rows are: walking, flying, foraging, building
+hive / nest, dying"* — five named concepts. The row originally shipped
+as "fly" assumed an 8-column x 4-EQUAL-row x 192x256 grid (ported,
+unverified, from `worm.png`/`caterpillar.png`/`millipede.png`'s own
+sheets, which really do divide into 4 equal rows) — these three bee
+sheets were never independently probed for their own real grid the way
+every other illustrated sheet in this codebase was before shipping.
+That guess happened to land exactly on this sheet's real walk/fly
+boundary by coincidence, so row 0 ("assumed fly") was actually
+**walking** — every bee had been animating through its walk cycle for
+its entire always-airborne on-screen lifecycle (`BeeForagerMarker` has
+no landed phase at all, see that class's own doc comment) until this
+was corrected.
+
+Measured directly (`tools/probe_bee_row_semantics.gd`: a per-row pixel-
+density profile plus stitched, despilled visual crops of every band,
+cross-checked against both worker sheets agreeing pixel-for-pixel, and
+against the queen's own sheet): the real layout is **five bands of
+non-uniform height**, packed edge to edge with zero blank divider row
+anywhere in the whole 1024px height (confirmed: a blank-row scan found
+exactly one band spanning all 1024 rows on every sheet — boundaries
+were only found by locating where a pose needing the full 256px stops
+and a pose fitting a compact 128px starts):
+
+| Band | y range | Height | Real content |
+| --- | --- | --- | --- |
+| `walk` | [0, 256) | 256 | Ground contact: legs planted, a real drop shadow beneath every frame. |
+| `fly` | [256, 384) | 128 | Level flight: legs tucked, no ground shadow, minimal frame-to-frame variation — the one band actually wired. |
+| `forage_a` | [384, 640) | 256 | A taller, more dynamic reaching pose with a visible orange/red mark at the mouthparts on several frames (active nectar/pollen engagement). |
+| `forage_b` | [640, 768) | 128 | A compact variant of `forage_a`, same mark. |
+| `dying` | [768, 1024) | 256 | A progressive collapse across 8 frames: upright, then leaning, then legs curling inward, ending lying on its side — confirmed on all three sheets, including the queen's own (her crown stays visible through her own collapse). |
+
+`IllustratedBeeSprite._ROW_BAND` now encodes this real layout.
+`BeeForagerMarker` wires only `fly` — it is airborne its entire
+lifecycle (SCOUTING → APPROACHING → RETURNING, see that class's own doc
+comment on why it deliberately has no landed phase), and `forage_a`/
+`forage_b` both carry a visible feeding mark that would read as wrong
+during SCOUTING/RETURNING, when nothing has been (or is still being)
+fed on. `walk`/`forage_a`/`forage_b`/`dying` remain real, delivered, and
+correctly unwired for the identical reason they always were —
+`BeeForagerMarker` has no landed/feeding/death phase to trigger them
+from yet, named explicitly rather than silently dropped.
+
+**"Building hive/nest" has no matching row on any of the three
+sheets.** Checked directly rather than forced: a hive's own
+construction/growth is already fully represented by the separate
+`beehive.png` sheet (`IllustratedBeehiveSprite.growth_stage_index`,
+see "Growth-stage and destruction art" below), and neither
+`BeeForagerMarker` nor `BeeColony`/`WildBeePatch` has any "under
+construction" phase a bee's own body pose would need to play for. A
+real, honest "doesn't map, and doesn't need to" finding, not a gap.
+
 ### Absconding — relocation on destruction, harvest-collapse, or lost forage
 
 The one mechanism with no ant precedent at all (a starved ant mound
@@ -402,6 +545,19 @@ swarming (`bud_new_hive`, an even population/honey split, real
 site-search), and absconding (`abscond_to`, a full-colony move, no
 same-site refounding the way a starved ant mound gets).
 
+✅ **A real queen** (`has_queen_at`/`_advance_queenless` in
+`src/world/bee_colony.gd`, `src/rendering/bee_queen_marker.gd`) — added
+live, in a later pass than the rest of this doc: "queen-driven
+population" was flavor text with no queen entity behind it until this
+(see "The queen" above); `bud_new_hive` now makes her departure with a
+swarm real, a queenless hive cannot grow and gradually declines
+(`QUEENLESS_DECLINE_RATE_PER_DAY`), and a real `REQUEENING_DAYS` clock
+restores her. `BeeQueenMarker` shows her one real static pose at the
+hive, visibly distinct from a worker (crown, longer abdomen, larger
+`WORLD_LENGTH_TILES_QUEEN`), hidden entirely while queenless. A
+deliberate departure from the ant precedent (`AntColony` has no queen
+entity at all, by design).
+
 ✅ **Real illustrated growth/harvest art** (`src/rendering/
 illustrated_beehive_sprite.gd`, `src/rendering/
 procedural_beehive_sprite.gd`) — the user-supplied `beehive.png` sheet
@@ -427,6 +583,17 @@ in-bloom nectar through the SAME `EarthChunkManager.flowers_near/
 drink_nectar_at` query the old decorative pollinator used, re-checks on
 genuine arrival, deposits only once actually home. No pheromone-trail
 recruitment this pass (see "What's reused verbatim..." above).
+
+✅ **Real illustrated forager art, at a real scale, real row semantics**
+(`src/rendering/illustrated_bee_sprite.gd`) — `honeybee.png`/`bee.png`
+sliced and animated at a measured `world_scale` (~0.18 tiles, a real
+honeybee's own ~12-15mm), replacing the old unscaled procedural "bee"
+silhouette. The row wired for flight was corrected in a later pass —
+see "Bee body poses" above for the real, non-uniform 5-band layout and
+why the originally-shipped row was actually walking, not flying.
+
+✅ **`BeeQueenMarker`** (`src/rendering/bee_queen_marker.gd`) — see "The
+queen" above.
 
 ✅ **Wild bee nests** (`src/world/wild_bee_patch.gd`, `src/rendering/
 wild_bee_nest_marker.gd`, `src/rendering/
