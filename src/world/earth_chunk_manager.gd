@@ -6675,7 +6675,14 @@ func flowers_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 			# foraging withered and spent flowers). Neither is the omniscience
 			# the candidate search guards against: a bee can see whether a
 			# plant is in flower.
-			for cell in patch.blooming_cells(season_name):
+			#
+			# Round 8 FPS fix: this is called once per pollinator's own
+			# ~0.5s sniff, up to 300+ times independently for the identical
+			# per-chunk answer -- passing the real clock lets FlowerPatch.
+			# blooming_cells share one computation across every asker within
+			# its own refresh window instead of redoing the full per-cell
+			# scan every single time (see that method's own doc comment).
+			for cell in patch.blooming_cells(season_name, Time.get_ticks_msec()):
 				var tile: Vector2i = origin + cell
 				if maxi(absi(tile.x - center.x), absi(tile.y - center.y)) > radius_tiles:
 					continue

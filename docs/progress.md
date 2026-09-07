@@ -9536,6 +9536,45 @@ question round 6 named stays open regardless of how many more
 concentrated bugs like this one get found. See `soil_fauna.md`'s own
 round-7 entry for the full writeup.
 
+**FPS regression round 8: pollinator scent's own redundant per-chunk
+recompute (2026-09-07).** Direct follow-up, same session, to round 7's
+own closing note ("Jap mache weiter"): `ambient_flyer_marker._process`
+split into its full 13-region breakdown (every named `_step_*`, the
+behavior-tree branch, forage/wander tails); `_step_scent` alone
+accounted for 44-67% of the whole function's total. First hypothesis
+(`EarthChunkManager.claims_near`'s own doc-commented "O(pollinators on
+screen), a couple hundred at most" assumption, the same shape this
+investigation keeps finding) tested via a 5-way split of `_step_scent`
+and REJECTED -- genuinely small, under 10% of scent's own total. Root
+cause instead: `EarthChunkManager.flowers_near`, already correctly
+scoped to a 3x3 chunk neighbourhood by a documented prior fix, still
+recomputed `FlowerPatch.blooming_cells` (a full linear scan of every
+planted cell) completely fresh, independently, for every pollinator's
+own ~0.5s sniff -- measured at 44-49% of `_step_scent`'s total, with up
+to 300+ live pollinators redundantly recomputing the identical
+per-chunk answer within the same real-time window. Structurally the
+same "many instances redundantly recompute a shared answer" shape
+rounds 4/5/7 already closed, via a different mechanism: the query was
+already scoped, the waste was in never sharing the expensive per-chunk
+computation across askers.
+
+Fixed with per-patch memoization rather than a shared flat-list cache
+(unlike rounds 5/7, `FlowerPatch` already exists one-per-chunk, so the
+instance itself is the natural cache unit): `blooming_cells(season,
+now_msec)` takes an optional real clock, defaulting to the exact
+pre-round-8 always-fresh behavior for every existing caller; only
+`flowers_near`'s own hot path opts in, memoized per season for at most
+0.5s (matching `SCENT_SNIFF_INTERVAL`'s own cadence). A real regression
+risk -- `test_earth_chunk_manager.gd`'s own plant-then-immediately-query
+test -- was checked directly rather than assumed safe, and still
+passes. 42/42 green in `test_flower_patch.gd` with four new tests using
+real mutation between calls (no injectable computation seam existed to
+spy on, unlike rounds 5/7's cache tests). Live `--solo` boot confirmed
+clean. Explicitly still open: the population-scale question rounds 6/7
+already named, and `ambient_flyer_marker`'s own aggregate cost was not
+re-measured after this fix. See `soil_fauna.md`'s own round-8 entry for
+the full writeup.
+
 ### Flies (`concept/flies.md`)
 
 Another concept doc with real, substantial ✅ status entirely of its own

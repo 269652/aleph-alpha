@@ -2884,6 +2884,113 @@ but does not by itself change the underlying population-times-per-call
 -cost shape of the problem.
 
 
+### FPS regression round 8: pollinator scent's own redundant per-chunk recompute (2026-09-07)
+
+Direct follow-up, in the same session, to round 7's own closing note:
+"Jap mache weiter" (yep, keep going), picking up `ambient_flyer_marker`
+specifically. `_process` was split into its full 13-region breakdown
+(every named `_step_*` call, the behavior-tree branch, the forage-
+approach/wander tails) with the exact same shared-tally instrumentation
+round 6/7 already established. `_step_scent` alone accounted for
+44-67% of the WHOLE function's aggregate cost across every measured
+window -- by far the single largest region, dwarfing every other named
+step (behavior tree, pair interactions, wander tail, all well under
+half of scent's own total).
+
+**First hypothesis tested and ruled out with real numbers.**
+`_step_scent` calls `EarthChunkManager.claims_near` (via `ForageClaims.
+claimed_positions_near`), whose own doc comment explicitly assumes an
+unscoped scan over live pollinator claims is safe because the table is
+"O(pollinators on screen) -- a couple hundred at most." That is exactly
+this investigation's recurring shape (an assumption that held when
+written, outgrown by a long-played save's actual population) -- but
+splitting `_step_scent` into its five named sub-calls
+(`flowers_near`, `blossoms_near`, `gradient_direction`, `claims_near`,
+`choose_target`) found `claims_near` genuinely small (well under 10% of
+scent's own total in every window). The assumption in that comment
+still holds at this save's scale; a real, reasoned hypothesis, tested
+and rejected rather than assumed, per this whole investigation's own
+standing method.
+
+**Root cause: `EarthChunkManager.flowers_near`, already correctly
+scoped to a 3x3 chunk neighbourhood (a documented FIX from before this
+session), still recomputed `FlowerPatch.blooming_cells` -- a full linear
+scan of every planted cell in that chunk, not just the currently-
+blooming ones -- completely fresh, independently, for every single
+pollinator's own ~0.5s sniff.** Measured at 44-49% of `_step_scent`'s
+own total, by a wide margin the largest of its five sub-calls
+(`gradient_direction` next at 19-21%, everything else under 16%). With
+up to 300+ live pollinators each querying the same 9 neighbouring
+chunks' patches on their own independent clock, the SAME chunk's
+`blooming_cells` result gets recomputed from scratch dozens of times
+within any given real-time window, for an answer that cannot have
+changed between one pollinator's sniff and the next. Structurally the
+same "many instances redundantly recompute an identical shared answer"
+shape rounds 4/5/7 already closed, expressed through a different
+mechanism this time: the QUERY itself was already properly scoped (not
+an unscoped-whole-world bug), the waste was in never sharing the
+expensive PER-CHUNK computation across the many callers asking about
+that same chunk within the same short window.
+
+**Fixed with per-patch memoization, not a shared flat-list cache.**
+Unlike rounds 5/7 (one shared cache across many instances of the same
+marker class, because the underlying data was a single flat list),
+`FlowerPatch` already exists as one object per chunk -- the natural unit
+to cache against is the instance itself, keyed by season, not a
+second cross-instance cache. `blooming_cells(season, now_msec)` takes an
+OPTIONAL real clock: omitted (the default), it behaves exactly as
+before -- always fresh, what every pre-existing caller (every test, and
+`EarthChunkManager`'s own decoration sprite-sync path, which this round
+did not find to be the hot path) keeps unchanged; passed a real
+`Time.get_ticks_msec()` -- which only `flowers_near`'s own hot-path call
+now does -- results are memoized per season for at most
+`BLOOMING_CACHE_REFRESH_SECONDS` (0.5s, matching `AmbientFlyerMarker.
+SCENT_SNIFF_INTERVAL`'s own cadence exactly, so no sniff can ever
+observe data staler than it already tolerates). Deliberately NOT
+invalidated on every `_flowers` mutation (a plant/harvest/growth event)
+-- the same "accept brief real-time staleness, shared across every
+asker within the window" tradeoff rounds 5/7 already made, not silently
+promoted to a stronger guarantee that would need tracking every
+mutation site in a file this round did not otherwise need to touch.
+
+**A real regression risk found and directly checked, not assumed
+away**: `test_earth_chunk_manager.gd`'s own `test_a_freshly_planted_
+seedlings_landing_point_is_not_the_mature_blossom_height` plants a
+flower and immediately queries `flowers_near` for it in the same test
+-- exactly the shape a real-time cache could break, if some earlier
+step in that same test had already warmed the cache for that chunk
+before the flower existed. Run directly rather than assumed safe: still
+passes, because nothing earlier in that test path calls
+`blooming_cells` for that specific chunk first. The only other real
+`flowers_near` caller across the test suite
+(`test_ambient_flyer_marker.gd`, `test_pollinator_foraging.gd`) turned
+out to route through their own `StubScentWorld`/`StubClaimingScentWorld`
+test doubles, never reaching the real `EarthChunkManager` code this
+round touched at all.
+
+**Strict TDD.** `test_flower_patch.gd` gained four new tests: omitting
+`now_msec` never caches (the pre-round-8 contract every existing caller
+relies on, still verified true), a call inside the refresh window
+misses a mutation made after it, a call past the window sees it, and a
+cached result still only ever contains genuinely in-bloom species. Real
+mutation (`patch._flowers[cell] = species`) between calls, not a
+call-counting double -- FlowerPatch has no injectable computation seam
+the way `SceneTree`/a `tree` duck-type did for rounds 5/7's caches, so
+this round proves the caching BEHAVIOUR directly instead. 42/42 green
+in `test_flower_patch.gd`, confirmed unaffected the one real
+`test_earth_chunk_manager.gd` call site above. Live `--solo` boot
+confirmed clean.
+
+**Real, confirmed, explicitly still open**: this round closed the single
+largest concentrated cost inside `ambient_flyer_marker`, but did not
+re-measure the function's OWN aggregate total afterward (a genuine
+next step for whoever picks this up), and the broader population-scale
+question rounds 6/7 already named remains exactly as open as before --
+four concentrated bugs closed across rounds 4/5/7/8 lower the floor
+each time, without changing the underlying shape of "a long-played
+save accumulates enough live entities that even bug-free per-instance
+costs sum to something real."
+
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
 A real, hand-illustrated sheet (`assets/sprites/animals/worm.png`) replaces
