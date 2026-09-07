@@ -232,6 +232,79 @@ only advances in `TURN_STEPS=6` steps, a handful of times per in-game year,
 so the extra MMI exists for a small fraction of a chunk's decorated lifetime,
 never per-frame.
 
+### Winter's own sheet is a snow overlay, not a calendar destination
+
+Reported live: "the winter blades should use the autumn sprites and only
+overlay single blades from the winter sprite when snow accumulates." Real
+dormant-season grass does not turn a uniform frosted-white overnight the
+way this project's dedicated `grass_blades_winter.png` sheet draws it --
+it stands senescent (the same dried, straw/orange character `_autumn.png`
+already draws) for as long as the ground itself is bare, and only the
+specific blades actual lying snow has settled onto read as frosted. A
+calendar-driven hard swap into a wholly separate "winter" sheet the instant
+the season ticks over gets this backwards: it frosts every blade in the
+field on a bare, snowless winter day, and (since `Snowfall.falls_as_snow`
+is gated on temperature, not the season label -- see
+[snow_cover.md](snow_cover.md)) it also has no way to frost anything during
+a genuine cold-snap snowfall that arrives in late autumn, before the
+calendar has turned at all.
+
+**The calendar's own "winter" identity now renders as autumn's sheet.**
+`IllustratedGrassPatch.base_render_season(season)` maps `"winter" ->
+"autumn"` and passes every other name through unchanged; `EarthChunkManager.
+sync_grass_season` applies it to BOTH `_grass_season_name` and
+`_grass_turning_into` at the exact point it captures
+`SeasonalFoliage.transition_for_world_age`'s raw season names, so every
+downstream consumer (`fill_band`, `atlas_region_for`, `split_cards_by_turn`)
+already only ever sees "autumn" for what the calendar calls winter -- no
+separate code path to keep in sync. A pleasant side effect: because autumn
+and (remapped) winter now render identically, the real
+`autumn -> winter` calendar transition collapses to a genuine no-op for the
+per-card sheet-swap (`_grass_turning_into == _grass_season_name`, the same
+guard that already skips a turning mesh for an unchanged season) -- there
+is nothing to visually cross over, since winter was already showing
+autumn's own sheet as soon as it began. The one REAL sheet-swap transition
+into cold-season grass is still `summer -> autumn`; `winter -> spring` (the
+next real calendar turn) correctly transitions FROM autumn's own sheet,
+matching what was actually last on screen.
+
+**The dedicated winter sheet is repurposed as a snow-triggered per-card
+overlay**, the same "one shared clock/coverage value, many independently-
+thresholded units" shape the calendar turn above already uses, but keyed to
+`EarthChunkManager.snow_depth()` (the identical live global scalar ground
+snow and canopy sparkle already read -- see [snow_cover.md](snow_cover.md)
+-- not a new coverage concept) instead of `SeasonTransition`'s calendar
+progress. `IllustratedGrassPatch.snow_overlay_threshold_for_seed` mirrors
+`turn_threshold_for_seed` exactly but hashes a DIFFERENT salt, so a card's
+calendar-turn speed and its snow-overlay speed never correlate -- the same
+reasoning `turn_threshold_for_seed`'s own doc comment already gives for
+keeping it independent of the seed/column hash. `split_cards_by_snow_
+overlay(card_specs, snow_depth)` partitions a card list into `{"base":
+[...], "winter": [...]}` by comparing each card's own overlay threshold
+against `snow_depth` directly (already a clean `[0, 1]` scalar, no
+re-derivation needed) -- `snow_depth <= 0` collapses to an all-"base"
+single bucket, matching every other real-world case (spring/summer/most of
+autumn) where this mechanism should cost nothing.
+
+`EarthChunkManager._sync_grass_sprites` wires this in at CARD granularity,
+reusing the exact "second `MultiMeshInstance2D` per band" mechanism the
+calendar turn already built (`_grass_sprites_turning`) rather than adding a
+third parallel tracking structure -- a band renders its "base" cards
+(`_grass_season_name`, already autumn-remapped through a real winter) on
+the primary mesh and its "winter" cards on the turning-mesh slot, sampling
+the literal `"winter"` season string (bypassing `base_render_season` on
+purpose: this is the one deliberate consumer that still wants the REAL
+dedicated sheet). **Scoped deliberately, not silently: this reuse means an
+active CALENDAR transition and an active SNOW overlay are mutually
+exclusive** -- a card mid-turn between two calendar sheets does not also
+independently overlay snow in the same pass; the code prefers the calendar
+transition when both are true. Calendar transitions are brief and rare
+(`TURN_STEPS=6` steps, a handful of times per in-game year) and only two of
+them (`summer -> autumn`, `winter -> spring`) are even visually real once
+autumn/winter share a sheet, so the overlap window this leaves unhandled is
+narrow; a true three-way split is a real, scoped-out follow-up, not an
+oversight.
+
 ## View-distance culling: grass only draws what the camera can see
 
 Reported live: "optimize the grass blade rendering so it only draws what
@@ -573,6 +646,64 @@ framebuffer), so several of these needed a real, non-headless, off-screen
     with little or no real bleed. Pinned directly against the real shipped
     PNG (`test_atlas_region_for_seed_never_includes_the_previous_rows_
     bled_over_content`), not just the measured table by eye.
+12. **Follow-up to the seasonal-sheets pass's own flagged gap: rows 6-9
+    (the four densest rows) never converged under ONE bleed inset shared
+    across all four season sheets.** The seasonal-art commit that
+    superseded `ROW_TOP_BLEED_PX` with a single, still-shared table
+    measured this directly and left it as a known gap rather than chasing
+    it further: the least-bled season's own real minimum sat well under
+    the most-bled season's, so no single number could clear the least-bled
+    season's real minimum without over-cropping it, or clear the
+    most-bled season without leaving real donor bleed on the others.
+    Investigated (not assumed) whether splitting the table by season could
+    close this: swept every candidate inset per (season, row) with a
+    temporary probe (deleted after use, per this project's convention),
+    using the EXACT integer arithmetic `atlas_region_for`'s own region math
+    uses (`row * atlas_size.y / ATLAS_ROWS`, which truncates — measuring
+    with float rounding instead was a real, since-fixed source of
+    confusion in the ORIGINAL single-table measurement) and the same
+    chroma-keyed image production actually samples
+    (`SpriteSheetSlicer.chroma_keyed`, `BACKGROUND_KEY`/
+    `BACKGROUND_KEY_TOLERANCE`). Result: `ROW_TOP_BLEED_PX_BY_SEASON`
+    replaces the flat table (rows 0-5 copied verbatim — a shared value
+    already covers those cleanly, so re-measuring them per season was out
+    of scope), and 35 of the 36 (season, row) combinations in 6-9 now
+    clear the same 90%-mostly-transparent bar rows 0-5 already met. The
+    one exception — winter's own row 9 — was confirmed with a direct
+    visual crop to draw a clump filling nearly its entire cell height, so
+    no inset (however large) lands a genuinely transparent top edge there
+    without cropping the row to a sliver; its best available value (12px)
+    still substantially improves on the old shared table's 30px (worst
+    column 31% clear → 81% clear), pinned as a regression floor rather
+    than silently accepted or fully skipped. For the fix to actually take
+    effect at render time, `atlas_region_for` and `instances_for_cards`
+    both gained a `season` parameter (defaulting to `DEFAULT_SEASON`, so
+    every pre-existing call site keeps behaving identically) — without
+    threading `season` this far down, a per-season table could be as
+    correct as it liked and never affect what a card actually samples,
+    since `fill_band` (which already received `season` for texture
+    selection) never forwarded it into the region math.
+13. **"All seasons except summer produce artifacts when parting when a
+    player walks through"** — a thin, uniformly-coloured horizontal bar
+    extending from a bent blade under strong wind/walker push. Confirmed
+    with a real (non-headless) render plus a direct pixel probe, not
+    assumed from reading the shader: `clamp(local_x, 0.0, 1.0)` keeps
+    every SAMPLE POSITION safely inside the atlas, but at extreme bend
+    many consecutive fragments all clamp to the SAME single edge column of
+    the card's own region — repeating whatever pixel sits there across a
+    visible stretch of the quad. Winter's row 9/column 0 region has a
+    real, fully-opaque pixel sitting exactly at its own right edge
+    (spring/autumn: the identical spot); summer alone is clean there (its
+    own native alpha channel, never chroma-keyed). Fixed by tracking the
+    UN-clamped sample position (`raw_local_x`) alongside the clamped one:
+    a fragment whose true position bent past its own region's `[0,1]` edge
+    is made fully transparent instead of showing the clamped pixel — not a
+    re-introduction of History #5's superseded occlusion-fade hack, since
+    it is not a function of distance to the player and fires identically
+    for ambient wind alone with no player nearby. Pinned by
+    `test_shader_discards_a_fragment_that_bends_past_its_own_regions_edge`
+    and a real render before/after (probe deleted after use) confirming
+    the artifact gone on all four seasons.
 
 ## Status
 
@@ -591,9 +722,12 @@ framebuffer), so several of these needed a real, non-headless, off-screen
 - ✅ The walker-position uniform updates every frame for every client
   (host and connected), not just whichever peer owns the ecosystem
   simulation — see History #5.
-- ✅ `IllustratedGrassPatch.atlas_region_for_seed` insets past every row's
-  own measured content-bleed from the row above it, so no card's region
-  carries a donor fragment at its own tip — see History #11.
+- ✅ `IllustratedGrassPatch.atlas_region_for` insets past every row's own
+  measured content-bleed from the row above it, so no card's region
+  carries a donor fragment at its own tip — see History #11. Per-season
+  since History #12 (`ROW_TOP_BLEED_PX_BY_SEASON`), not one value shared
+  across all four sheets — see the next entry for exactly how far that
+  goes.
 - ✅ Ambient wind sway (not the walker push) scales with the live
   `WeatherModel.wind_strength_for` value, the same one driving the water's
   shimmer and every other swaying plant.
@@ -617,23 +751,41 @@ framebuffer), so several of these needed a real, non-headless, off-screen
   still season-independent (only appearance turns, not growth speed) — see
   [seasons.md](seasons.md). Pinned by `tests/unit/test_earth_chunk_manager.
   gd`'s `test_sync_grass_season_*` tests and `test_illustrated_grass_patch.
-  gd`'s `split_cards_by_turn`/`turn_threshold_for_seed` tests.
+  gd`'s `split_cards_by_turn`/`turn_threshold_for_seed` tests. The
+  calendar's own "winter" now renders as this same turn's "autumn" base
+  (`IllustratedGrassPatch.base_render_season`) — see the next entry.
+- ✅ Winter's own dedicated sheet (`grass_blades_winter.png`) is a snow-
+  triggered per-card overlay, not a calendar destination — see "Winter's
+  own sheet is a snow overlay, not a calendar destination" above for the
+  full mechanism and real-world grounding. `EarthChunkManager._sync_grass_
+  sprites` reuses the calendar turn's own second-mesh-per-band slot rather
+  than adding a third structure, so an active calendar transition and an
+  active snow overlay are deliberately mutually exclusive (the transition
+  wins) — a narrow, documented gap, not a full three-way split. Verified
+  with a real render: a field mixing autumn-look base cards and frosted
+  winter-overlay cards at a real mid `snow_depth`. Pinned by
+  `test_illustrated_grass_patch.gd`'s `base_render_season`/`snow_overlay_
+  threshold_for_seed`/`split_cards_by_snow_overlay` tests and
+  `test_earth_chunk_manager.gd`'s `test_sync_grass_sprites_*` tests.
 - ✅ Growth stage is a real drawn row, not a scaled-down copy of the mature
   art — `IllustratedGrassPatch.atlas_region_for` maps `TallGrass.get_growth`
   (0..1) to one of the sheet's 10 rows, the per-card seed keeps choosing the
   column/variant independently, and `instances_for_cards` no longer damps a
   young card's scale on top of that (see "Seasonal art" above for why
   double-damping was wrong once a real shoot row existed to draw instead).
-- ⬜ `IllustratedGrassPatch.ROW_TOP_BLEED_PX` (the per-row floating-artefact
-  inset -- see its own doc comment) is only exhaustively verified for rows
-  0-5 across all four seasonal sheets. Rows 6-9 (the four densest, fullest
-  rows) measurably do not converge to one shared inset across every season
-  -- bleed severity climbs with row density in more than one season, not a
-  single outlier a bigger margin can absorb without cropping real art
-  elsewhere. A real, flagged gap (a card in one of these rows may
-  occasionally show a thin sliver of the row above bleeding into its tip),
-  most plausibly needing a per-row-and-season table rather than one shared
-  one -- not chased further when the seasonal sheets first landed.
+- 🚧 Rows 6-9 (the four densest, fullest rows) now converge for 35 of the
+  36 (season, row) combinations, via a per-season bleed table
+  (`ROW_TOP_BLEED_PX_BY_SEASON`) rather than the single shared table that
+  originally left this whole range unverified — see History #12. The one
+  exception, narrowed rather than closed: winter's own row 9 draws a
+  clump that fills nearly its entire cell height (confirmed with a direct
+  visual crop), so no inset lands a genuinely transparent top edge there
+  without cropping the row to a sliver — its best available value (12px)
+  still substantially improves on the old shared table's 30px (worst
+  column 31% clear → 81% clear), pinned as a regression floor by
+  `test_winter_row_9_bleed_is_narrowed_but_not_fully_closed_by_the_per_
+  season_table` rather than silently accepted, just short of the 90% bar
+  every other combination in this range clears.
 - ⬜ Creature wake uses the same shader input but is not yet wired.
 - ✅ Cards spread across most of a cell's own footprint (`card_specs_for_
   seed`, `CARD_COUNT = 8`) rather than clustering in one small sub-region —
