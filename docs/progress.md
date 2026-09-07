@@ -15299,3 +15299,166 @@ corpse forage-kind, carried-corpse visuals), `test_earth_chunk_manager.gd`
 181/183 (the 2 failures are the pre-existing, unrelated whirl-pair flake
 this doc already flags elsewhere), `test_ambient_flyer_renderer.gd`
 54/54.
+
+### Honeybee hives and wild bee nests shipped (`concept/bees.md`, new doc, 2026-09-07)
+
+Reported live: *"can you add a real beehive system similar to the ant
+hive for honeybees which build hives which can be harvested for
+honey ... there should also be wild bees which lay eggs in little
+holes (twigs with holes) the distinction should be visible in tooltip
+hover and bees should relocate their hive if destroyed/harvested or if
+there is no food anymore near ... hives should produce more bees and
+if the hive gets to maximum population, half the hive builds and moves
+into a new hive."* A user-supplied `assets/sprites/beehive.png` (8x3
+grid, 256x256/cell: rows 0-1 a 16-frame growth progression, row 2 an
+8-frame harvest/destruction sequence). The single largest feature this
+doc has recorded in one pass — a full, deliberate sibling of `AntColony`
+(see `concept/bees.md`'s own "What's reused verbatim, what's a
+deliberate new duplicate, and why" for the exact boundary), not a
+reskin of it.
+
+**A) `BeeColony`/`BeePopulationModel`** (`src/world/bee_colony.gd`,
+`src/world/bee_population_model.gd`) — per-chunk hive placement
+(tree-bearing biomes, a hive hangs from a branch; `HIVE_CHANCE`/
+`MAX_HIVES` pinned sparser than `AntColony`'s own mound density — a
+real wild colony's territory is an order of magnitude bigger than a
+single ant nest's). Queen-driven logistic growth bounded by real
+forage success ALONE (deliberately no water/moisture capacity input the
+way ants have one — nectar/pollen availability is the real central
+driver for a hive, not soil humidity). Real honey storage is
+DELIBERATELY both the colony's own food reserve AND the exact quantity
+a harvest withdraws (`withdraw_honey`) — one number, two roles, so
+over-harvesting is a genuine trade-off against the colony's own future
+growth, not a free loot tap. Winter dormancy reuses
+`EarthwormPatch.COLD_CUTOFF`/`MILD_WARMTH` (same soil, same real
+signal). Swarming (`bud_new_hive`, an even population/honey split, a
+real site search) is a near-direct port of `AntColony.bud_new_mound` —
+the real biology genuinely converges here, the literal request ("half
+of the hive... moves into a new hive"). Absconding
+(`should_abscond_at`/`abscond_to`) is the one mechanism with NO ant
+precedent at all: a colony that runs out of population or forage moves
+its FULL population/honey to a brand new site, unlike a starved ant
+mound's own same-cell refound.
+
+**B) Real illustrated growth/harvest art**
+(`src/rendering/illustrated_beehive_sprite.gd`,
+`src/rendering/procedural_beehive_sprite.gd`,
+`tools/probe_beehive_sheet.gd`) — the supplied sheet sliced on its own
+KNOWN fixed grid (mirrors `tools/probe_worm_sheet.gd`'s established
+precedent for an equally regular sheet; measured and confirmed
+`SpriteSheetSlicer.detect_frames`' column-gap heuristic misreads 2 of
+the 3 rows, tripped up by internal honeycomb/debris content gaps the
+same way it once misread `worm.png`). 16 real growth-stage frames
+selected by a discrete `growth_stage_index` (follows
+`IllustratedCropSprite`'s own discrete-frame convention, not
+`IllustratedAntMoundSprite`'s continuous-rescale-one-frame one — the
+art itself, drawn as real size steps, dictated this). 8 real
+destruction frames selected by harvest-hit count.
+
+**C) `BeeHiveMarker`** (`src/rendering/bee_hive_marker.gd`) — hover
+tooltip (population + honey), a real HUD honey bar
+(`scenes/world.gd._update_creature_panels`), and the one genuinely new
+player interaction in this whole feature: `harvest()`. Multi-hit and
+destructive (`HARVEST_HITS_TO_DESTROY` pinned to the real 8-frame
+destruction sheet, not an arbitrary number), wired into
+`scenes/player.gd._harvest_beehive_step` alongside
+`_chop_step`/`_smash_step` (reuses the existing "attack" input, not a
+new verb). The final hit frees the marker and hands off to
+`EarthChunkManager.relocate_bee_hive_after_harvest` — the colony
+survives (its own real population/remaining honey carry over), it just
+needs a new site; if none is found nearby, the colony is honestly lost,
+not guaranteed a rescue.
+
+**D) Real round-trip foraging** (`src/gameplay/bee_forage_behavior.gd`,
+a clean small duplicate of `AntForageBehavior`, and
+`src/rendering/bee_forager_marker.gd`) — flies (via
+`AmbientFlyerMovement`, not a walking gait) with no known target,
+senses real in-bloom nectar through the exact same
+`EarthChunkManager.flowers_near`/`drink_nectar_at` query the old
+decorative pollinator used, commits only once something real is
+sensed, re-checks on genuine arrival, deposits only once actually home.
+Deliberately no pheromone-trail recruitment this pass (real honeybee
+recruitment is the waggle dance, a genuinely different signal — named
+as a real, open follow-up, not silently dropped).
+
+**E) Wild bee nests** (`src/world/wild_bee_patch.gd`,
+`src/rendering/wild_bee_nest_marker.gd`,
+`src/rendering/procedural_wild_bee_nest_sprite.gd`) — a deliberately
+MUCH lighter solitary/cavity-nesting system: no queen, no honey, no
+harvest, no swarming (real solitary bees are genuinely solitary — each
+female provisions her own few brood cells in her own hole, no economy
+to speak of). A "resident" count grows slowly under sustained REAL
+forage success (capped, since real solitary bees do nest
+gregariously), and the one absconding trigger a wild nest keeps is
+sustained lost forage. No illustrated art was supplied for this one —
+a small procedural bark-and-hole prop, a real named gap for future art,
+not a blocker. `BeeForagerMarker` serves it too (one shared marker, two
+duck-typed "home" kinds — `WildBeePatch.record_forage_result` already
+shares `BeeColony`'s own exact signature) rather than a near-duplicate
+marker, so a wild nest is visibly alive, not a static prop.
+
+**F) A real regression caught and closed before it shipped**: the OLD
+decorative "bee"'s `AmbientFlyerMarker.TREE_POLLINATING_SPECIES` was
+the ONLY code path in the whole game that made any flyer visit
+blossoming apple/cherry trees (`EarthChunkManager.blossoms_near`/
+`record_pollination_visit_at`, feeding `FruitingModel.
+pollination_factor`). Retiring the decorative bee outright would have
+silently dropped fruit-tree pollination from the game with no
+replacement — found via a dedicated research pass BEFORE deleting
+anything, not after a bug report. `BeeForagerMarker` now senses a real
+blossoming tree whenever no flower is nearer, and pollinates
+(`record_pollination_visit_at`) rather than drinks on arrival — real
+honeybees (and real solitary bees) are genuine fruit-tree pollinators,
+so this is a more correct home for the mechanism, not a workaround.
+Applies to both honeybee and wild-bee foragers automatically (one
+shared marker).
+
+**G) The decorative ambient "bee" pollinator retired** —
+`FlyerDiet.DIET_BY_SPECIES`/`AmbientFlyerRenderer.BEE_SPECIES_POOL`
+(and its own additive per-chunk budget/spawn call) are gone;
+`TRUE_BUTTERFLY_SPECIES_POOL` (monarch/swallowtail/blue_morpho) is the
+only remaining ambient pollinator roster. Deliberately UNCHANGED:
+`ProceduralButterflySprite`'s own "bee" art tables (`BeeForagerMarker`
+reuses that exact generator directly — only the spawn/lifecycle
+retires, never the art) and both `AmbientFlyerMarker`'s own now-dead-
+in-practice `TREE_POLLINATING_SPECIES` code and `Courtship.
+DANCING_SPECIES`'s own "bee" entry (both real, still-tested, merely
+unreachable once bee can't spawn there any more — no reason to delete
+proven code for that alone).
+
+**H) `EarthChunkManager` wiring** — `step_bees` (chunk load/unload,
+advancing, swarming, absconding, forage dispatch for both hives and
+wild nests, cell-KEYED marker dictionaries rather than
+`_ant_mound_markers`'s own flat arrays, since a specific hive/nest
+marker can be individually replaced mid-life in a way no ant mound ever
+is), on the same batched cadence `step_ants` already uses
+(`scenes/world.gd._step_ecology_batch`).
+
+Real-world grounding for the one bird-species-shaped decision this
+feature echoes from the ant/bird predation feature above: swarming
+mirrors the literal biological mechanism (the old queen leaves with
+roughly half the workforce), and absconding mirrors the real, separate,
+named phenomenon of a whole colony relocating together after
+disturbance or forage collapse — two genuinely different real
+behaviours, not one mechanic built twice.
+
+Coverage: `test_bee_population_model.gd` 13/13, `test_bee_colony.gd`
+44/44, `test_procedural_beehive_sprite.gd` 11/11,
+`test_illustrated_beehive_sprite.gd` 19/19, `test_bee_hive_marker.gd`
+24/24, `test_bee_forage_behavior.gd` 8/8, `test_bee_forager_marker.gd`
+22/22, `test_wild_bee_patch.gd` 20/20, `test_procedural_wild_bee_nest_
+sprite.gd` 7/7, `test_wild_bee_nest_marker.gd` 11/11,
+`test_earth_chunk_manager_bees.gd` 17/17 (a dedicated fast file,
+mirroring `test_earth_chunk_manager_mushrooms.gd`'s own convention
+rather than the slow 492-test monolith), plus 2 new `test_player.gd`
+integration tests and a full re-verification of every ambient-flyer/
+pollinator test file the retirement touched or could plausibly have
+touched (`test_ambient_flyer_renderer.gd` 53/53,
+`test_ambient_flyer_marker.gd` 181/183 — the 2 failures are the
+pre-existing, unrelated whirl-pair flake this doc already flags
+elsewhere — `test_procedural_butterfly_sprite.gd` 29/29,
+`test_capture_tool.gd` 10/10, `test_courtship.gd`/`test_spiral_
+flight.gd`/`test_flyer_personality.gd`/`test_flyer_spawn_layout.gd`/
+`test_flyer_diet.gd`/`test_wingbeat_bounce.gd`/`test_body_
+dimensions.gd`/`test_flap_glide.gd`/`test_bird_courtship.gd`/
+`test_illustrated_bird_sprite.gd` all reconfirmed unaffected).
