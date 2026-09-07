@@ -2644,6 +2644,58 @@ from nowhere, and it is capped from both ends: a region can never export more
 animals than it has, and the logistic step that follows holds every region to
 what its own land supports.
 
+### An individually-rendered creature crossing a chunk border (2026-09-07)
+
+Reported live: "animals (like a boar chasing or a deer being hunted) don't
+survive chunk borders and just disappear." This is a different failure from
+everything else in this section — not a fidelity trade-off, but a bug in
+*which* chunk an individually-rendered creature was considered to belong to.
+
+`EarthChunkManager._loaded_creatures` (chunk_coord → the markers spawned for
+it) is bookkeeping set once, at spawn/reconcile time, and never updated as a
+creature actually moves. `_unload_chunk`'s free loop trusted that stale
+membership completely: every marker still filed under an unloading chunk's
+key was freed outright, regardless of where it currently stood. A predator
+mid-hunt or prey mid-flee (`CreatureMarker`'s `FLEE_SPEED`/`HUNT_SPEED`, with
+no maximum chase distance) can easily cross into a neighbouring chunk that is
+very much still loaded — right next to the player — while its own
+bookkeeping still says it belongs to the chunk it started in. The moment
+that original chunk fell outside `UNLOAD_RADIUS`, the still-visible,
+still-relevant creature the player was watching was deleted out from under
+them.
+
+This does **not** reopen the two-fidelities pillar above: an animal that has
+genuinely left the loaded area still loses its individual state and merges
+back into the aggregate exactly as documented (hunger, an in-progress hunt, a
+courting pairing — none of that changes). The fix only corrects *which
+chunk a still-loaded creature is filed under*, so a creature that never
+actually left the relevant area is no longer destroyed by a bookkeeping
+error mistaking it for one that did.
+
+`_unload_chunk` now re-derives each creature's *current* chunk from its live
+position before freeing it. If that current chunk is a neighbour that is
+still loaded, the creature is re-filed there — the same live instance, not a
+respawn — instead of being freed; only a creature still standing in the
+chunk actually being unloaded, or one that has wandered somewhere not
+currently loaded at all, is freed exactly as before. Deliberately excluded:
+anything `_save_kept_animals`/`_save_growing_juveniles` already cover
+(tamed, tied, or an immature juvenile) — those are already serialized to the
+stale chunk's own save file and respawned fresh on its next load, so
+re-filing the same live instance too would leave both a serialized record
+and a still-alive wandered instance, producing a duplicate the moment the
+original chunk reloads. An ordinary wild adult — exactly the boar or deer in
+the report — has no such record, so this is the only protection it gets, and
+the only case this fix needs to cover.
+
+Left out on purpose, named rather than silently absorbed: no maximum chase
+distance or home-range leash was added, so a hunt/flee can still in
+principle carry a creature across more than one chunk between two
+`EarthChunkManager.update()` calls (calls happen every client frame, so in
+practice this needs a lot of open, chunk-sparse ground) — landing somewhere
+not yet loaded at all is still an ordinary despawn, the same "the two
+fidelities are one population" trade-off as any other creature leaving the
+relevant area.
+
 ## A kingfisher hunts
 
 The fish-eating bird used to cruise on the ordinary ambient wander and dive
