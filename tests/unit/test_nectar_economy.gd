@@ -20,10 +20,21 @@ extends GutTest
 ## flowers grow on), seeded by the real MeadowSpread/MAX_FLOWERS rules, in
 ## bloom for "summer" (the season with the most species flowering at once --
 ## see FlowerSpecies.SPECIES). Population is the real per-chunk pollinator
-## ceiling (AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK +
-## AmbientFlyerRenderer.MAX_BEES_PER_CHUNK, times 25 chunks = 150), flying at
-## the real AmbientFlyerRenderer.BUTTERFLY_SPEED (bees share it -- there is
-## no separate BEE_SPEED in that file).
+## ceiling (AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK, times 25 chunks =
+## 100), flying at the real AmbientFlyerRenderer.BUTTERFLY_SPEED.
+##
+## Bees no longer add to that ceiling. This scenario used to also add
+## AmbientFlyerRenderer.MAX_BEES_PER_CHUNK on top (150 total, not 100) before
+## the decorative ambient "bee" it budgeted for was retired in favour of a
+## real BeeColony/WildBeePatch hive economy (see docs/concept/bees.md, "The
+## existing decorative bee pollinator is retired by this pass") -- a
+## forage-bounded population with no flat per-chunk cap of that shape any
+## more, so there is no longer a constant of the same kind to add in here.
+## Modelling that real hive economy would need a real chunk manager and nest
+## sites, not this scenario's closed-form flower/pollinator loop, so bees
+## are simply outside what this measurement covers now -- the same kind of
+## deliberate scope cut the simplifications below already make for tumbling
+## flight and mid-flight re-sniff.
 ##
 ## ## The meadow got sparser, and this measurement moved with it
 ##
@@ -260,9 +271,14 @@ func test_current_nectar_supply_vs_demand_ratio_is_measured():
 	assert_gt(flowers.size(), 0, "the scenario must actually seed a meadow")
 
 	var chunks_per_side := CHUNK_RADIUS * 2 + 1
-	var pollinator_count := chunks_per_side * chunks_per_side * (
-		AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK + AmbientFlyerRenderer.MAX_BEES_PER_CHUNK
-	)
+	# Explicit `: int` rather than `:=`: this expression used to also
+	# reference AmbientFlyerRenderer.MAX_BEES_PER_CHUNK, which does not exist
+	# any more (see the header comment above) -- GDScript could not resolve
+	# a concrete type across that unresolved member and reported "Cannot
+	# infer the type of 'pollinator_count'" one line above its own real
+	# error. Typed explicitly now that the missing member is gone, matching
+	# this session's e7d8d588/7f49b49a fixes for the same symptom elsewhere.
+	var pollinator_count: int = chunks_per_side * chunks_per_side * AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK
 	var pollinators := _spawn_pollinators(
 		pollinator_count, float(chunks_per_side * CHUNK_TILES)
 	)
@@ -337,5 +353,16 @@ func test_current_nectar_supply_vs_demand_ratio_is_measured():
 	# 184 of 200, 1438 drinks, 1.56x over-subscribed) -- see this file's
 	# header for why that is recorded rather than tuned away, and for the two
 	# bounds on how much it matters.
-	assert_eq(reachable_flowers, 184, "reachable-flower count drifted -- re-measure the economy")
-	assert_eq(drinks_in_window, 1438, "measured drink throughput drifted -- re-measure the economy")
+	#
+	# Re-measured again when the decorative ambient "bee" was retired (see
+	# the header comment's "Bees no longer add to that ceiling"): the
+	# population this scenario drives dropped from 150 to 100 (bees no
+	# longer add a flat per-chunk budget on top of the butterfly one), so
+	# both measured inputs moved with it -- 184 of 200 reachable became 170
+	# of 200 (92% down to 85%, still comfortably covering the meadow), and
+	# 1438 drinks became 951, moving the ratio from 1.56x to 1.12x
+	# over-subscribed. A smaller worst-case pollinator ceiling measuring a
+	# smaller demand is exactly the expected direction for this change, not
+	# a surprise this test needed to investigate further.
+	assert_eq(reachable_flowers, 170, "reachable-flower count drifted -- re-measure the economy")
+	assert_eq(drinks_in_window, 951, "measured drink throughput drifted -- re-measure the economy")
