@@ -75,15 +75,31 @@ const _RIM_MARGIN_FRACTION := 0.12
 ## (real reference, not a physically-measurable constant): snow's core is
 ## a cool shadow-blue (the real look of compacted snow in its own
 ## shadow) with a near-white rim (fresh snow pushed up catching the
-## light); grass/forest cores are the pressed earth/leaf-litter showing
-## through flattened cover, with a slightly lighter rim of the
-## still-standing cover right at the edge -- forest reads a little
-## darker throughout than open grassland, real forest floor being
-## shadier and litter-covered rather than bare soil.
+## light).
+##
+## Grass/forest retuned (2026-09-07): reported live, "footsteps only show
+## when snow is visible... they should generally show up lighter for
+## grassland and forest even without snow... a bit deeper in forest
+## ground." The original grass/forest tones were already wired and never
+## snow-gated (see docs/concept/snow_cover.md's own note on this) but read
+## as near-invisible against the real ground -- confirmed by rendering
+## actual swatches against TerrainRenderer.BIOME_COLORS rather than
+## trusting a code trace. Grass's core is pale trampled/yellowed
+## blade-and-dirt showing through, its rim a bright sunlit crushed-blade
+## highlight; forest's core is dark, damp humus revealed under disturbed
+## leaf litter -- deliberately the LARGER core-to-ground contrast drop of
+## the two (see test_forest_reads_a_bit_deeper_than_grassland), the
+## literal "a bit deeper" -- with a warm, dry-leaf-litter rim for contrast
+## against both the dark core and the green canopy floor. Both stay
+## visibly subtler than snow's own near-white rim -- "lighter" here means
+## less dramatic than snow's flash, not literally brighter than it. Real,
+## test-pinned luminance-contrast margins against TerrainRenderer's own
+## ground colors (see tests/unit/test_procedural_footprint_sprite.gd),
+## not eyeballed numbers.
 const _TONES_BY_SURFACE := {
 	"snow": {"core": Color(0.58, 0.65, 0.75), "rim": Color(0.95, 0.97, 1.0)},
-	"grass": {"core": Color(0.26, 0.22, 0.13), "rim": Color(0.42, 0.5, 0.22)},
-	"forest": {"core": Color(0.22, 0.17, 0.11), "rim": Color(0.34, 0.28, 0.15)},
+	"grass": {"core": Color(0.42, 0.34, 0.20), "rim": Color(0.68, 0.76, 0.42)},
+	"forest": {"core": Color(0.10, 0.07, 0.05), "rim": Color(0.55, 0.42, 0.22)},
 }
 ## A plain, nondescript fallback for any surface this generator doesn't
 ## specifically know -- same "never crash on an unlisted id" fallback
