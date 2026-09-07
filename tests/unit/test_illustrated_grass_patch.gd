@@ -8,17 +8,21 @@ const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 
 
 ## Width is always a full, un-inset cell (bleed only ever runs vertically,
-## row into row -- see ROW_TOP_BLEED_PX's own doc comment); height is
-## shorter than a full cell for any row whose own measured bleed inset is
+## row into row -- see ROW_TOP_BLEED_PX_BY_SEASON's own doc comment); height
+## is shorter than a full cell for any row whose own measured bleed inset is
 ## nonzero, since that inset is cropped off the region's own top edge on
 ## purpose. growth=0.45 lands in row 4 (int(0.45*10)=4), whose real measured
-## inset is 13px -- asserted against ROW_TOP_BLEED_PX directly rather than a
-## hardcoded number, so this test can't silently drift out of sync with the
-## table if it's ever remeasured. Seed (42) only picks the column here and is
-## otherwise unconstrained by this test.
+## inset is 13px -- asserted against ROW_TOP_BLEED_PX_BY_SEASON directly
+## rather than a hardcoded number, so this test can't silently drift out of
+## sync with the table if it's ever remeasured. Seed (42) only picks the
+## column here and is otherwise unconstrained by this test. No season is
+## passed, so this exercises atlas_region_for's own DEFAULT_SEASON fallback
+## -- rows 0-5 are identical across every season anyway (see that table's own
+## doc comment), so which season this defaults to doesn't matter here.
 func test_growth_and_seed_together_select_one_tile_inside_the_delivered_10x10_atlas():
 	var rect := IllustratedGrassPatch.atlas_region_for(42, 0.45)
-	var expected_height := 1254 / 10 - IllustratedGrassPatch.ROW_TOP_BLEED_PX[4]
+	var default_bleed_table: Array = IllustratedGrassPatch.ROW_TOP_BLEED_PX_BY_SEASON[IllustratedGrassPatch.DEFAULT_SEASON]
+	var expected_height: int = 1254 / 10 - int(default_bleed_table[4])
 	assert_between(rect.size.x, 125, 126)
 	assert_between(rect.size.y, expected_height - 1, expected_height + 1)
 	assert_gte(rect.position.x, 0)
@@ -43,13 +47,14 @@ func test_growth_and_seed_together_select_one_tile_inside_the_delivered_10x10_at
 ## bad enough to see clearly, but the bleed itself is independent of snow --
 ## reproduced over both white and green backgrounds).
 ##
-## Swept against all four real delivered season sheets: `atlas_region_for`'s
-## row-selection is one shared code path for all four, so a season whose art
-## bleeds differently would otherwise go unchecked. Checked against the SAME
-## chroma-keyed image production actually samples (IllustratedGrassPatch.
-## BACKGROUND_KEY/_TOLERANCE) -- three of the four delivered sheets ship with
-## no real alpha channel at all (see _texture_for's own doc comment) and
-## would otherwise read as one solid opaque rectangle, not "no bleed found".
+## Swept against all four real delivered season sheets, passing EACH
+## season's own name into `atlas_region_for` so its own `ROW_TOP_BLEED_PX_
+## BY_SEASON` entry is what actually gets checked, not one shared value
+## stretched across all four. Checked against the SAME chroma-keyed image
+## production actually samples (IllustratedGrassPatch.BACKGROUND_KEY/
+## _TOLERANCE) -- three of the four delivered sheets ship with no real alpha
+## channel at all (see _texture_for's own doc comment) and would otherwise
+## read as one solid opaque rectangle, not "no bleed found".
 ##
 ## Asserts on the FRACTION of each region's own top row that is mostly
 ## transparent (>= 90%), not on every individual sampled x: a real hand-
@@ -65,20 +70,30 @@ func test_growth_and_seed_together_select_one_tile_inside_the_delivered_10x10_at
 ## DIFFERENT single solid-opaque cell failing each time, before this form
 ## replaced it).
 ##
-## Rows 6-9 (the four densest rows -- full, flowering/fruiting clumps) are
-## EXCLUDED across ALL seasons, not overlooked: measured well under the 90%
-## bar on most columns in MULTIPLE seasons at different rows within 6-9
-## (autumn at rows 7-9, winter at rows 6-9), not a single season's outlier a
-## shared inset could absorb. Bleed severity climbs with row density -- the
-## least-dense of the four (row 6/7 depending on season) sits closer to the
-## bar, the fullest (row 9) falls furthest under it (roughly 30-70% clear on
-## most columns, not a one-or-two-column exception). This content genuinely
-## runs deep into the row above across most of each excluded row's width,
-## not fixable by nudging a shared per-row inset without cropping real art
-## everywhere else too. A known, flagged gap (see docs/concept/long_grass.md's
-## Status) needing its own dedicated look -- most plausibly a per-row-and-
-## season bleed table rather than one shared table, given how consistently
-## this scales with both a row's own density and varies by season.
+## Rows 6-9 (the four densest rows -- full, flowering/fruiting clumps) now
+## converge cleanly for every season except ONE (winter's own row 9, see
+## below) once each season gets its OWN measured inset
+## (`ROW_TOP_BLEED_PX_BY_SEASON`) instead of one value shared across all
+## four. The original single-shared-table investigation found rows 6-9
+## failing across MULTIPLE seasons at different rows within that range
+## (autumn at rows 7-9, winter at rows 6-9) precisely because a single number
+## had to simultaneously satisfy the least-bled AND most-bled season at
+## once -- measuring and tuning each season independently resolves every one
+## of those 35 remaining (season, row) combinations.
+##
+## winter row 9 is excluded here, not overlooked: its own art fills nearly
+## its ENTIRE cell height with a dense, frost-laden clump (confirmed with a
+## direct visual crop, not just measured), so no inset -- however large --
+## lands the region's own top edge in a genuinely transparent zone across
+## all 10 columns without cropping the row down to a sliver. The best
+## available inset (`ROW_TOP_BLEED_PX_BY_SEASON.winter[9]` = 12px) gets 8 of
+## 10 columns fully clear and the worst one to 81% -- a real, substantial
+## improvement over the OLD shared-table value's ~31% on that same column
+## (pinned directly by
+## test_winter_row_9_bleed_is_narrowed_but_not_fully_closed_by_the_per_
+## season_table below), just genuinely short of this test's own 90% bar. A
+## known, narrowed gap (see docs/concept/long_grass.md's Status), not a bug
+## in this function.
 func test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_on_any_season_sheet():
 	var checked_any := false
 	for season in IllustratedGrassPatch.SEASON_ATLAS_PATHS:
@@ -90,14 +105,11 @@ func test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_on
 		)
 		var size := image.get_size()
 		for row in range(1, IllustratedGrassPatch.ATLAS_ROWS):
-			# Rows 6-9 (the four densest rows -- full, flowering/fruiting
-			# clumps) measure well under this check's own 90% bar on most
-			# columns in MULTIPLE seasons (autumn and winter both, at
-			# different rows within 6-9) -- a structural property of how
-			# tightly these sheets pack their own densest rows together, not
-			# a single season's outlier a shared inset can absorb. See
-			# ROW_TOP_BLEED_PX's own doc comment.
-			if row >= 6:
+			# The one remaining, narrowly-scoped known gap -- see this test's
+			# own doc comment and
+			# test_winter_row_9_bleed_is_narrowed_but_not_fully_closed_by_
+			# the_per_season_table.
+			if season == "winter" and row == 9:
 				continue
 			# Midpoint of the row's own growth bucket, not its exact lower
 			# boundary -- float(row)/ATLAS_ROWS can land a hair under the
@@ -105,7 +117,7 @@ func test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_on
 			# PREVIOUS row instead under int() truncation.
 			var growth := (float(row) + 0.5) / float(IllustratedGrassPatch.ATLAS_ROWS)
 			for column in IllustratedGrassPatch.ATLAS_COLUMNS:
-				var region := IllustratedGrassPatch.atlas_region_for(column, growth, size)
+				var region := IllustratedGrassPatch.atlas_region_for(column, growth, size, season)
 				checked_any = true
 				var clear_samples := 0
 				var total_samples := 0
@@ -120,7 +132,99 @@ func test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_on
 						+ "still includes the previous row's bled-over content"
 					) % [season, row, column, region.position.y, clear_samples, total_samples]
 				)
-	assert_true(checked_any, "precondition: rows 1-9 were actually checked across all season sheets")
+	assert_true(checked_any, "precondition: rows 1-9 (except the one flagged winter/row-9 gap) were actually checked across all season sheets")
+
+
+## The one gap the per-season table cannot close (see the big test above):
+## winter's own row 9 draws a dense, frost-laden clump that fills nearly its
+## entire cell height, so no inset lands its region's own top edge in a
+## genuinely transparent zone across all 10 columns. Pins the REAL achieved
+## improvement precisely rather than leaving it undocumented: at the best
+## available inset (`ROW_TOP_BLEED_PX_BY_SEASON.winter[9]` = 12px), the worst
+## column reaches 81% clear -- short of the 90% bar the main bleed test
+## above uses, but a real, substantial improvement over the OLD single-
+## shared-table value (30px, still today's fallback for an unrecognized
+## season) at the exact same column, which only reached 31%. A regression
+## FLOOR, not just a description -- if `BACKGROUND_KEY_TOLERANCE`, the winter
+## art, or this table's own value ever regresses, this test notices.
+func test_winter_row_9_bleed_is_narrowed_but_not_fully_closed_by_the_per_season_table():
+	var raw := SpriteSheetLoader.load_image(IllustratedGrassPatch.SEASON_ATLAS_PATHS["winter"])
+	assert_not_null(raw, "precondition: the real winter sheet loads")
+	var image := SpriteSheetSlicer.chroma_keyed(
+		raw, IllustratedGrassPatch.BACKGROUND_KEY, IllustratedGrassPatch.BACKGROUND_KEY_TOLERANCE
+	)
+	var size := image.get_size()
+	var growth := 9.5 / float(IllustratedGrassPatch.ATLAS_ROWS)  # row 9's own midpoint
+
+	var worst_fraction := 1.0
+	for column in IllustratedGrassPatch.ATLAS_COLUMNS:
+		var region := IllustratedGrassPatch.atlas_region_for(column, growth, size, "winter")
+		var clear_samples := 0
+		var total_samples := 0
+		for x in range(region.position.x, region.position.x + region.size.x, 4):
+			total_samples += 1
+			if image.get_pixel(x, region.position.y).a < 0.5:
+				clear_samples += 1
+		worst_fraction = minf(worst_fraction, float(clear_samples) / float(total_samples))
+
+	assert_gt(worst_fraction, 0.75, "the per-season table's own value must clear real, substantial ground versus the old shared value's ~0.31")
+	assert_lt(worst_fraction, 0.9, "honestly documents this as still short of the bar every other (season, row) combination clears -- if this ever passes 0.9, the gap has genuinely closed and this test (and the exclusion above) should be updated to say so")
+
+
+## `ROW_TOP_BLEED_PX_BY_SEASON` exists to give each season its OWN measured
+## inset for the densest rows rather than stretching one shared value across
+## all four (see the big bleed test above) -- this proves the table is
+## actually WIRED into `atlas_region_for`'s real computation, not just
+## defined and ignored. Row 9: spring's real measured inset (12px) differs
+## from summer's (7px), so the SAME seed/growth must produce a differently-
+## cropped region depending on which season is asked for.
+func test_atlas_region_for_uses_a_per_season_bleed_table_for_the_densest_rows():
+	var growth := 9.5 / float(IllustratedGrassPatch.ATLAS_ROWS)
+	var spring_region := IllustratedGrassPatch.atlas_region_for(3, growth, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, "spring")
+	var summer_region := IllustratedGrassPatch.atlas_region_for(3, growth, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, "summer")
+	var spring_inset: int = IllustratedGrassPatch.ROW_TOP_BLEED_PX_BY_SEASON["spring"][9]
+	var summer_inset: int = IllustratedGrassPatch.ROW_TOP_BLEED_PX_BY_SEASON["summer"][9]
+	assert_ne(spring_inset, summer_inset, "precondition: the two seasons' own real measured insets actually differ")
+	assert_eq(
+		spring_region.position.y - summer_region.position.y, spring_inset - summer_inset,
+		"the two seasons' own real measured insets must each be independently honored, not one shared value"
+	)
+
+
+## Mirrors `_texture_for`'s own fallback-to-`DEFAULT_SEASON` pattern (see its
+## doc comment) -- an unrecognized season name must not crash or silently
+## read a null/zeroed table, it must behave exactly as if DEFAULT_SEASON had
+## been passed.
+func test_atlas_region_for_falls_back_to_the_default_season_for_an_unrecognized_name():
+	var growth := 9.5 / float(IllustratedGrassPatch.ATLAS_ROWS)
+	var fallback_region := IllustratedGrassPatch.atlas_region_for(3, growth, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, "not_a_real_season")
+	var default_region := IllustratedGrassPatch.atlas_region_for(3, growth, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, IllustratedGrassPatch.DEFAULT_SEASON)
+	assert_eq(fallback_region, default_region)
+
+
+## `instances_for_cards` must forward its own `season` argument all the way
+## into `atlas_region_for`, or a per-season bleed table can be as correct as
+## it likes and never actually affect what gets drawn -- today's only real
+## caller, `fill_band`, already receives a real per-band `season` for texture
+## selection (see its own doc comment), so this is the OTHER half of
+## actually wiring a season through, not the texture swap alone. Row 9's
+## spring/summer insets differ (see the atlas_region_for test above), so the
+## SAME card must pack a different atlas region depending on which season
+## `instances_for_cards` is told to place it for.
+func test_instances_for_cards_threads_season_through_to_the_per_season_bleed_table():
+	var growth := 9.5 / float(IllustratedGrassPatch.ATLAS_ROWS)
+	var card_specs: Array[Dictionary] = [{"atlas_seed": 3, "position": Vector2.ZERO, "growth": growth}]
+	var spring_instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, "spring")
+	var summer_instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, "summer")
+	assert_ne(
+		spring_instances[0].custom_data, summer_instances[0].custom_data,
+		"the packed atlas region must differ by season once each has its own real bleed inset"
+	)
+	# Default (no season arg) must still work unmodified -- every existing
+	# caller/test that never mentions season keeps behaving exactly as before.
+	var default_instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE)
+	var explicit_default_instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, IllustratedGrassPatch.DEFAULT_ATLAS_SIZE, IllustratedGrassPatch.DEFAULT_SEASON)
+	assert_eq(default_instances[0].custom_data, explicit_default_instances[0].custom_data)
 
 
 ## Every sheet must load, chroma-key to a real RGBA image with actual

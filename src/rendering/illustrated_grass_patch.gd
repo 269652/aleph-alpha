@@ -288,45 +288,61 @@ var _wind_strength := DEFAULT_WIND_STRENGTH
 ## been lazily built doesn't lose it (same reasoning as _wind_strength above).
 var _season_tint := Color(1.0, 1.0, 1.0)
 
-## Some of the delivered sheet's taller "bush"/wheat-ear variants (the
+## Some of the delivered sheets' taller "bush"/wheat-ear variants (the
 ## denser rows) draw their own plant art past their own cell's nominal
 ## bottom edge, bleeding into the TOP of the next row down -- a real
-## property of `assets/sprites/grass_blades.png` itself, not a rendering
-## bug: a mechanically-sliced region with no inset hands a recipient card a
-## fragment of the row ABOVE's plant sitting right at its own top edge.
-## Because the shader flips root-at-bottom/tip-at-top (a card's local Y=0 is
-## the ground, growing up), that fragment renders at the TIP -- the point
-## farthest from the ground -- genuinely detached from the card's own body
-## by a real transparent gap. Reported live: "the grass now has floating
-## artefacts above it" (snow gave the white background enough contrast to
-## show it clearly, but the bleed itself is independent of snow).
+## property of the sheets themselves, not a rendering bug: a mechanically-
+## sliced region with no inset hands a recipient card a fragment of the row
+## ABOVE's plant sitting right at its own top edge. Because the shader flips
+## root-at-bottom/tip-at-top (a card's local Y=0 is the ground, growing up),
+## that fragment renders at the TIP -- the point farthest from the ground --
+## genuinely detached from the card's own body by a real transparent gap.
+## Reported live: "the grass now has floating artefacts above it" (snow gave
+## the white background enough contrast to show it clearly, but the bleed
+## itself is independent of snow).
 ##
-## MEASURED, not eyeballed, against all four real shipped sheets at their
-## native 1254x1254 resolution, using the EXACT integer arithmetic
-## atlas_region_for's own from/to computation uses (row * atlas_size.y /
-## ATLAS_ROWS truncates, it does not round -- measuring with float rounding
-## instead gives a subtly different, wrong nominal_top and was the source of
-## a whole false trail of apparent cross-season mismatches before this was
-## caught). Summer alone reproduces the table this was originally measured
-## against pixel-for-pixel (`grass_blades.png`, now shipped as `grass_blades_
-## summer.png`'s own pixels -- see docs/concept/long_grass.md), which is
-## itself a real check that this measurement methodology is correct. For
-## each row, this is the max across all four seasons of how many pixels down
-## from that row's own nominal top edge the previous row's content still
-## shows. Index 0 is row 0, which has no row above it and so can never
-## inherit a bleed.
+## MEASURED, not eyeballed, against each real shipped sheet at its native
+## 1254x1254 resolution, using the EXACT integer arithmetic atlas_region_
+## for's own from/to computation uses (row * atlas_size.y / ATLAS_ROWS
+## truncates, it does not round -- measuring with float rounding instead
+## gives a subtly different, wrong nominal_top and was the source of a whole
+## false trail of apparent cross-season mismatches before this was caught).
+## Summer alone reproduces the table this was originally measured against
+## pixel-for-pixel (`grass_blades.png`, now shipped as `grass_blades_summer.
+## png`'s own pixels -- see docs/concept/long_grass.md), which is itself a
+## real check that this measurement methodology is correct.
+##
+## PER-SEASON, not one table shared across all four: rows 0-5's own values
+## are identical across every season (copied verbatim from the single shared
+## table this superseded, not re-measured -- a shared value already covers
+## them cleanly, so re-measuring them per season was out of scope for the
+## investigation that split this table), but rows 6-9 (the four densest
+## rows) measurably do NOT converge on one shared value -- the least-bled
+## season's own real minimum sits well under the most-bled season's, so a
+## single number either under-crops the worst season (real donor bleed still
+## shows) or over-crops the best one (destroying real art that needed little
+## or no inset). Splitting this by season lets each sheet use its OWN real
+## minimum instead of the worst case across all four.
 ##
 ## Verified against all four real sheets by
 ## test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_
-## on_any_season_sheet, EXCEPT rows 6-9 (see that test's own doc comment for
-## the full measurement: bleed severity climbs with row density across
-## MULTIPLE seasons at different rows within that range, well past what a
-## bigger shared inset could absorb without cropping real art everywhere
-## else). A known, flagged gap (see docs/concept/long_grass.md's Status),
-## not a bug in this function. Rows 6-9's own values below are still real,
-## measured margins (not arbitrary) -- just not exhaustively proven
-## zero-residual across every real cell in every sheet the way rows 0-5 are.
-const ROW_TOP_BLEED_PX := [0, 3, 6, 11, 16, 19, 35, 40, 42, 30]
+## on_any_season_sheet, with exactly ONE remaining exception: winter's own
+## row 9, whose art fills nearly its entire cell height (confirmed with a
+## direct visual crop, not just measured) -- no inset, however large, lands
+## its region's own top edge in a genuinely transparent zone across every
+## column without cropping the row to a sliver. winter[9] below (12px) is
+## still the real, measured BEST available value (a substantial improvement
+## over the old shared table's 30px -- see
+## test_winter_row_9_bleed_is_narrowed_but_not_fully_closed_by_the_per_
+## season_table), just genuinely short of the 90% bar the other 35 (season,
+## row) combinations in 6-9 all clear. A known, narrowed gap (see
+## docs/concept/long_grass.md's Status), not a bug in this function.
+const ROW_TOP_BLEED_PX_BY_SEASON := {
+	"spring": [0, 3, 6, 11, 16, 19, 20, 26, 27, 12],
+	"summer": [0, 3, 6, 11, 16, 19, 15, 20, 23, 7],
+	"autumn": [0, 3, 6, 11, 16, 19, 19, 22, 27, 10],
+	"winter": [0, 3, 6, 11, 16, 19, 20, 25, 27, 12],
+}
 
 ## The atlas cell for a card of the given growth stage and variant seed --
 ## see docs/concept/long_grass.md's "Seasonal art" for why these are two
@@ -336,16 +352,24 @@ const ROW_TOP_BLEED_PX := [0, 3, 6, 11, 16, 19, 35, 40, 42, 30]
 ## `seed_value` selects the COLUMN, the same per-card visual-variant hash as
 ## before. Growth is clamped, not wrapped -- a card never cycles back to a
 ## shoot once past the last row, it just stays on it.
-static func atlas_region_for(seed_value: int, growth: float, atlas_size: Vector2i = DEFAULT_ATLAS_SIZE) -> Rect2i:
+##
+## `season` selects which of `ROW_TOP_BLEED_PX_BY_SEASON`'s own rows to
+## inset by -- an unrecognized name falls back to DEFAULT_SEASON, mirroring
+## `_texture_for`'s own fallback. Defaulting to DEFAULT_SEASON rather than a
+## required argument keeps every existing call site (this file's own
+## `instances_for_cards` included, when it isn't told a season either)
+## behaving exactly as before.
+static func atlas_region_for(seed_value: int, growth: float, atlas_size: Vector2i = DEFAULT_ATLAS_SIZE, season: String = DEFAULT_SEASON) -> Rect2i:
 	var column := posmod(seed_value, ATLAS_COLUMNS)
 	var row := clampi(int(clampf(growth, 0.0, 1.0) * ATLAS_ROWS), 0, ATLAS_ROWS - 1)
+	var bleed_table: Array = ROW_TOP_BLEED_PX_BY_SEASON.get(season, ROW_TOP_BLEED_PX_BY_SEASON[DEFAULT_SEASON])
 	# The bleed table above is measured in native pixels of the REAL
 	# 1254x1254 sheet; expressed as a fraction of one cell's own height so a
 	# caller passing a differently-sized atlas_size (e.g. a smaller test
 	# fixture) still gets a proportionally correct inset rather than an
 	# oversized or negative-height region.
 	var native_cell_height := float(DEFAULT_ATLAS_SIZE.y) / float(ATLAS_ROWS)
-	var bleed_fraction := float(ROW_TOP_BLEED_PX[row]) / native_cell_height
+	var bleed_fraction := float(bleed_table[row]) / native_cell_height
 	var cell_height := float(atlas_size.y) / float(ATLAS_ROWS)
 	var top_inset := int(round(bleed_fraction * cell_height))
 	var from := Vector2i(column * atlas_size.x / ATLAS_COLUMNS, row * atlas_size.y / ATLAS_ROWS + top_inset)
@@ -492,11 +516,18 @@ static func cards_for_cell(cell_spec: Dictionary) -> Array[Dictionary]:
 ## split across separate calls without any card drawn twice or dropped).
 ## Sorted back-to-front by ground Y so overlapping alpha-blended cards
 ## within a band blend in roughly the right order.
-static func instances_for_cards(card_specs: Array, band_anchor: Vector2, atlas_size: Vector2i) -> Array[Dictionary]:
+##
+## `season` forwards straight into `atlas_region_for` so its own per-season
+## bleed inset (`ROW_TOP_BLEED_PX_BY_SEASON`) actually takes effect -- without
+## this, that table could be as correct as it likes and never affect what a
+## card actually samples, since this is the only place `atlas_region_for` is
+## called from. Defaults to DEFAULT_SEASON so every existing caller/test that
+## never mentions a season keeps behaving exactly as before.
+static func instances_for_cards(card_specs: Array, band_anchor: Vector2, atlas_size: Vector2i, season: String = DEFAULT_SEASON) -> Array[Dictionary]:
 	var flat: Array[Dictionary] = []
 	for card_spec in card_specs:
 		flat.append({
-			"region": atlas_region_for(card_spec.atlas_seed, card_spec.growth, atlas_size),
+			"region": atlas_region_for(card_spec.atlas_seed, card_spec.growth, atlas_size, season),
 			"position": card_spec.position,
 		})
 	flat.sort_custom(func(a, b): return a.position.y < b.position.y)
@@ -554,7 +585,10 @@ func _texture_for(season: String) -> Texture2D:
 ## Rebuilds `mmi` (wiring its MultiMesh/material on first use if needed, and
 ## re-pointing its texture whenever `season` changes) so it renders every
 ## CARD in `card_specs` - each a {atlas_seed:int, position:Vector2,
-## growth:float} (see `cards_for_cell`) - sampled from `season`'s own sheet.
+## growth:float} (see `cards_for_cell`) - sampled from `season`'s own sheet,
+## using that SAME season's own bleed inset for the region math too
+## (forwarded into `instances_for_cards`, see its own doc comment) - not
+## just which texture is bound.
 ##
 ## `band_anchor` must already be `mmi`'s own `position` (it drives this
 ## band's Y-sort key against the player/creatures); instance transforms are
@@ -577,7 +611,7 @@ func fill_band(mmi: MultiMeshInstance2D, band_anchor: Vector2, card_specs: Array
 		mmi.material = material()
 	mmi.texture = texture
 	var mm: MultiMesh = mmi.multimesh
-	var instances := instances_for_cards(card_specs, band_anchor, Vector2i(texture.get_size()))
+	var instances := instances_for_cards(card_specs, band_anchor, Vector2i(texture.get_size()), season)
 	mm.instance_count = instances.size()
 	for i in instances.size():
 		mm.set_instance_transform_2d(i, instances[i].transform)
