@@ -250,6 +250,32 @@ func test_scouting_with_no_world_never_crashes_and_still_wanders():
 	assert_ne(marker.position, Vector2.ZERO)
 
 
+# -- one marker serves both a honeybee hive AND a solitary wild nest ------
+#
+# See BeeForagerMarker._colony's own doc comment: WildBeePatch.
+# record_forage_result shares BeeColony's own exact signature, so the
+# identical round-trip mechanism serves a lone WildBeePatch resident
+# too, not just a honeybee hive's own worker.
+
+func test_a_successful_trip_also_feeds_a_wild_bee_patchs_resident_count():
+	const WildBeePatch = preload("res://src/world/wild_bee_patch.gd")
+	var biome := _all_grassland()
+	var patch: WildBeePatch = null
+	for seed_value in range(1, 200):
+		patch = WildBeePatch.new(seed_value, WIDTH, HEIGHT, biome)
+		if patch.nest_cells().size() > 0:
+			break
+	var cell: Vector2i = patch.nest_cells()[0]
+	var world := _world_with_one_flower(Vector2(4, 0))
+	marker.setup(world, patch, cell)
+	marker.target_position = Vector2(4, 0)
+	marker.hive_position = Vector2.ZERO
+	marker.position = Vector2(3, 0)
+	add_child_autofree(marker)
+	assert_true(_run_until_freed())
+	assert_gt(patch.forage_success_at(cell), 0.5, "the real trip should have fed the patch's own record")
+
+
 func test_returning_with_no_colony_wired_up_still_frees_itself_without_crashing():
 	var world := _world_with_one_flower(Vector2(4, 0))
 	marker.setup(world, null, Vector2i.ZERO)

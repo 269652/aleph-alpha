@@ -29,6 +29,12 @@ extends Node2D
 ## shape/colour were already right for a bee, it is only the SPAWN/
 ## lifecycle half of the old decorative pollinator that this feature
 ## retires (see AmbientFlyerRenderer), never the art itself.
+##
+## ONE marker class serves BOTH a honeybee hive's own worker AND a
+## solitary WildBeePatch resident's own foraging trip -- see `_colony`'s
+## own doc comment for why this is a deliberate duck-typed reuse (both
+## objects share the identical record_forage_result(cell, succeeded)
+## call) rather than a near-duplicate WildBeeForagerMarker.
 
 const ProceduralButterflySprite = preload("res://src/rendering/procedural_butterfly_sprite.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
@@ -97,10 +103,19 @@ var _movement: AmbientFlyerMovement
 var _behavior := BeeForageBehavior.new()
 
 ## The hive's own owning colony -- for record_forage_result (see
-## setup()). Left null (default) is the same isolated-test fallback
-## every other optional-world marker in this codebase uses: movement
-## still works, the real world effects just no-op.
-var _colony: BeeColony = null
+## setup()). Deliberately UNTYPED, not `: BeeColony` -- this same
+## marker also serves a WildBeePatch's own solitary resident (see
+## docs/concept/bees.md's "Foraging"/"Wild bee nests": a lone female's
+## round trip to a real flower is the identical mechanism, just homed
+## on a nest hole instead of a hive), and WildBeePatch.
+## record_forage_result(cell, succeeded) already shares BeeColony's own
+## exact signature -- one marker, two duck-typed "home" kinds, rather
+## than a near-duplicate WildBeeForagerMarker for a difference that is
+## purely which object receives the SAME call. Left null (default) is
+## the same isolated-test fallback every other optional-world marker in
+## this codebase uses: movement still works, the real world effects
+## just no-op.
+var _colony = null
 var _hive_cell := Vector2i.ZERO
 ## Duck-typed: flowers_near/drink_nectar_at (see EarthChunkManager) --
 ## the same optional-world contract AntForagerMarker's own `_world`
