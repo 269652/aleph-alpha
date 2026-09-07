@@ -90,6 +90,12 @@ func test_different_seeds_can_place_hives_differently():
 ## A real wild honeybee colony forages over a MUCH larger real territory
 ## than a single ant nest's tiny local patch -- far fewer hives per unit
 ## area is the correct real-world shape, not an arbitrary aesthetic choice.
+## Mirrors AntColony's own identical derivation -- see
+## BeeColony.SENSE_RADIUS_TILES's own doc comment.
+func test_sense_radius_is_half_the_forage_radius():
+	assert_almost_eq(BeeColony.SENSE_RADIUS_TILES, BeeColony.FORAGE_RADIUS_TILES * 0.5, 0.001)
+
+
 func test_hives_are_sparser_than_ant_mounds():
 	const AntColony = preload("res://src/world/ant_colony.gd")
 	assert_lt(BeeColony.HIVE_CHANCE, AntColony.MOUND_CHANCE)

@@ -79,6 +79,16 @@ const FORAGE_CHANCE := 0.15
 ## cross-checked by test so the two cannot silently drift apart.
 const FORAGE_RADIUS_TILES := 18.0
 
+## How close a SCOUTING forager (see BeeForagerMarker) has to physically
+## be to a real, in-bloom flower to notice it at all -- mirrors
+## AntColony.SENSE_RADIUS_TILES exactly: derived as HALF
+## FORAGE_RADIUS_TILES (not an independently-eyeballed number) so a
+## scout genuinely has to cover real ground within its own home range
+## before stumbling onto nectar, rather than sensing the whole range at
+## once from wherever it happens to be flying -- which would just be
+## omniscience again, at a smaller radius.
+const SENSE_RADIUS_TILES := FORAGE_RADIUS_TILES * 0.5
+
 ## Salt for the per-step foraging roll, independent of every other
 ## per-hive roll for the same reason AntColony's own salts are (see that
 ## file's _FORAGE_SALT doc comment): "does this hive forage this step"
