@@ -5022,13 +5022,17 @@ func _client_process(delta: float) -> void:
 	# accumulator.
 	#
 	# Each call's own bool return (true only when something was actually
-	# crushed) now also feeds Karma (see docs/concept/karma_and_luck.md):
-	# "stepping on a worm should give -1 Karma", asked for every crush, the
-	# player's own step OR any creature's, not just the player's deliberate
-	# ones -- so the penalty lands on local_player regardless of which of
-	# the two loops below did the crushing. A crushed millipede, ant or bug
+	# crushed) also feeds Karma for the PLAYER's own step below (see
+	# docs/concept/karma_and_luck.md): "stepping on a worm should give -1
+	# Karma." Player-only, not the creature loop beneath it -- reported
+	# live: "Karma is constantly decreasing when wild animals step on
+	# worms... it should only decrease when the player itself steps on
+	# something... the player must do it" (reversing this section's
+	# earlier "any creature's" reading, see karma_and_luck.md's own
+	# 2026-09-07 reversal note). A crushed millipede, ant or bug still
 	# charges the same constant -- its name predates all three, but the
-	# event it represents is identical (see karma.gd's own doc comment).
+	# event it represents is identical (see karma.gd's own doc comment) --
+	# it just only ever lands on local_player for local_player's OWN step.
 	if _chunk_manager.crush_worm_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	if _chunk_manager.crush_caterpillars_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
@@ -5049,22 +5053,23 @@ func _client_process(delta: float) -> void:
 	if _chunk_manager.crush_mushroom_at(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	_chunk_manager.crush_walnut_near(local_player.position, _PLAYER_STEP_MOMENTUM_KG_M_S)
+	# A wild creature's own step still crushes what's underfoot (a real,
+	# weight-emergent ecosystem effect -- a deer's own hoof kills the worm
+	# the same as a player's boot would) but never touches Karma: every
+	# call here is a bare statement, exactly the shape crush_walnut_near
+	# (never Karma-eligible for anyone) already used on the line right
+	# below them. See this block's own doc comment above for the report
+	# that reversed this from the earlier "any creature's" design.
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		var marker := creature as CreatureMarker
 		var species: String = marker.info.species if marker.info != null else ""
 		var momentum := CreatureMass.mass_kg_for(species) * PebbleDispersion.FOOTSTEP_SPEED_MPS
-		if _chunk_manager.crush_worm_at(marker.position, momentum):
-			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-		if _chunk_manager.crush_caterpillars_near(marker.position, momentum):
-			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-		if _chunk_manager.crush_millipedes_near(marker.position, momentum):
-			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-		if _chunk_manager.crush_ants_near(marker.position, momentum):
-			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-		if _chunk_manager.crush_decomposers_near(marker.position, momentum):
-			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
-		if _chunk_manager.crush_mushroom_at(marker.position, momentum):
-			local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
+		_chunk_manager.crush_worm_at(marker.position, momentum)
+		_chunk_manager.crush_caterpillars_near(marker.position, momentum)
+		_chunk_manager.crush_millipedes_near(marker.position, momentum)
+		_chunk_manager.crush_ants_near(marker.position, momentum)
+		_chunk_manager.crush_decomposers_near(marker.position, momentum)
+		_chunk_manager.crush_mushroom_at(marker.position, momentum)
 		_chunk_manager.crush_walnut_near(marker.position, momentum)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
