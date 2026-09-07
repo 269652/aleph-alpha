@@ -2343,6 +2343,57 @@ confirmed failing against the old exclusion first. 20/20 snow tests in
 [snow_cover.md](concept/snow_cover.md#snow-under-a-river-reads-as-a-staircase).
 
 
+### Sparkle / glitter on lying snow (2026-09-07)
+
+Requested live: "add sparkles / glitter effects to snow on trees and
+ground? But not too heavy" — asked on a day already dominated by a real
+FPS emergency (see this doc's own round 1-4 entries and
+[ecosystem_dynamics.md](concept/ecosystem_dynamics.md)'s round-4 section),
+so "not too heavy" was treated as a hard cost constraint, not just a
+visual taste note.
+
+✅ **`SnowSparkleShader`** (`src/rendering/snow_sparkle_shader.gd`) — a
+shared specular-glint pattern (see
+[snow_cover.md](concept/snow_cover.md#sparkle-specular-glints-on-lying-snow)'s
+own design section for the real-world grounding and pillars), spliced as
+GLSL into both `SnowBombShader` (ground) and `WindSway`'s shared tree
+material (canopy) rather than reimplemented per surface. Pure per-fragment
+GPU math — `sparkle_intensity(x, y, time)` takes no population-sized
+input, so nothing about calling it can scale with how many trees or tiles
+are loaded, which is the load-bearing property given the day's own FPS
+history. Ground gates on its own already-computed `lying` coverage
+(unambiguous); canopy gates on a `snow_coverage` uniform (pushed through
+`TreeRenderer.set_snow_coverage`'s existing call site — the SAME live
+value ground's own `snow_depth` already is, at the same cadence, zero new
+call sites) plus a near-white/low-saturation colour gate measured against
+the real art (`tools/probe_snow_sparkle_colors.gd`: cherry's own snow
+frame passes it 35.7% of its own pixels, cherry/apple's blossom frames
+under 1% — a >50x separation) so it structurally cannot fire on cherry's
+illustrated pink blossom. Grass/scrub tufts (`WindSway.tuft_material()`)
+never receive `snow_coverage` at all and stay at its fixed 0.0 default
+forever — sparkle is trees+ground only, per the request.
+
+Rendered with a real GPU and inspected directly (not just traced):
+`tools/probe_render_sparkle.gd` draws full-coverage ground snow and a
+cherry tree in spring blossom under full snow coverage (deliberately the
+riskiest real combination) at several moments; `tools/probe_diff_sparkle.gd`
+amplifies the frame-to-frame difference to make the deliberately-subtle
+effect visible. Real, sparse, scattered point-glints in both — 0.09% of
+ground pixels and 0.04% of canopy pixels change between moments (wind
+sway isolated out of the canopy measurement so it doesn't dominate the
+diff), the canopy's own glints confined to the tree's silhouette and
+never landing on its blossom.
+
+117 tests total (`test_snow_sparkle_shader.gd` 15/15,
+`test_snow_bomb_shader.gd` 35/35 with all 26 pre-existing unmodified,
+`test_wind_sway.gd` 21/21 with all 11 pre-existing unmodified,
+`test_tree_renderer.gd` 46/46 with all 45 pre-existing unmodified) —
+zero regressions to either shipped shader. See
+[snow_cover.md](concept/snow_cover.md#sparkle-specular-glints-on-lying-snow)
+and [flora.md](concept/flora.md)'s "A fifth frame: snow is not a season"
+cross-reference.
+
+
 ### Flowers: too dense, no tooltip, and a wind that never blew
 
 Three things reported together: flowers *"still don't [show] hover tooltips"*,

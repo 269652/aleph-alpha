@@ -524,9 +524,19 @@ for, and why both exist.
   and not attempted here.
 - ⬜ **`snow_2/3/4.png`** — the middle of the level ladder is not drawn yet;
   the atlas reads whatever exists, so adding them needs no code change.
-- 🚧 **Sparkle** (2026-09-07) — see "Sparkle: specular glints on lying snow"
-  above. In progress: `SnowSparkleShader` module, ground gate in
-  `SnowBombShader`, canopy gate in `WindSway`'s shared tree material, and
-  `docs/concept/flora.md`'s cross-reference. Flip to ✅ once
-  `test_snow_sparkle_shader.gd` and the extended `test_snow_bomb_shader.gd`/
-  `test_wind_sway.gd` cases are green and a real render has been inspected.
+- ✅ **Sparkle** (2026-09-07) — see "Sparkle: specular glints on lying snow"
+  above. `SnowSparkleShader` (shared twinkle pattern + colour gate, 15/15
+  tests), ground's own gate in `SnowBombShader.fragment()` (35/35, 26
+  pre-existing unmodified), canopy's own gate in `WindSway`'s shared tree
+  material (21/21, 11 pre-existing unmodified) forwarded through
+  `TreeRenderer.set_snow_coverage`'s existing call site (46/46, 45
+  pre-existing unmodified) — 117 tests total, zero regressions. Rendered
+  with a real GPU (`tools/probe_render_sparkle.gd`,
+  `tools/probe_diff_sparkle.gd`) and inspected directly: full-coverage
+  ground snow and a cherry tree in spring blossom UNDER full snow
+  coverage (the exact scenario the colour gate exists to protect) both
+  show real, sparse, scattered point-glints between rendered moments —
+  amplified frame-to-frame diffs measure 0.09% of ground pixels and 0.04%
+  of canopy pixels changing at a time (wind sway isolated out for the
+  canopy measurement), with the canopy's own glints spatially confined to
+  the tree's drawn silhouette and never landing on its pink blossom.
