@@ -262,6 +262,10 @@ const _ITEMS := {
 	# once carried in inventory (Player._has_climbing_gear). Held in hand
 	# like the lasso/fishing_rod/saw -- a tool, not a stackable material.
 	"climbing_rope": ["Climbing Rope", "tool", 1, 0.0],
+	# Harvested from a real BeeColony hive (see docs/concept/bees.md's
+	# "Harvesting honey", BeeHiveMarker.harvest) -- a stackable food item,
+	# the same "kind" as fruit/meat/mushrooms above.
+	"honey": ["Honey", "food", 20, 0.0],
 }
 
 

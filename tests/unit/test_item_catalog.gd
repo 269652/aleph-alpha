@@ -566,3 +566,19 @@ func test_catalog_knows_the_climbing_rope():
 	var rope := catalog.make("climbing_rope")
 	assert_eq(rope.kind, "tool")
 	assert_eq(rope.max_stack, 1, "held in hand like every other tool, not a stackable material")
+
+
+# -- honey (docs/concept/bees.md's "Harvesting honey") -----------------------
+#
+## BeeHiveMarker.harvest constructs its own dropped Item directly (the same
+## established convention choppable_tree.gd/loot_table.gd already use for
+## drop-specific items -- see this file's own header doc comment), but a
+## harvested item still needs a real catalog entry or it silently evaporates
+## on save/load (see ItemCatalog's own doc comment on why: scenes/player.gd's
+## loader only keeps an item whose id `_item_catalog.has()` recognizes).
+
+func test_catalog_knows_honey():
+	assert_true(catalog.has("honey"), "missing honey")
+	var honey := catalog.make("honey")
+	assert_eq(honey.kind, "food")
+	assert_gt(honey.max_stack, 1, "a jar of honey should stack like every other food item")
