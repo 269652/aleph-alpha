@@ -4606,14 +4606,113 @@ func test_crushing_an_ant_with_enough_momentum_removes_it_from_the_world():
 		"a horse-scale step on an ant should crush it"
 	)
 	# Not instantly queue_free()'d any more (see AntForagerMarker.crush()) --
-	# it dies visibly first, THEN frees itself.
+	# it dies visibly first, THEN settles into a real, discoverable corpse
+	# (see the "ant corpses" block below) rather than vanishing outright.
 	assert_true(forager._dying, "the ant should start dying immediately")
 	assert_false(
 		manager._active_ant_foragers[global_tile].has(forager),
-		"and dropped from tracking so its own mound's dispatch cap never counts a corpse"
+		"and dropped from active-forager tracking so its own mound's dispatch cap never counts a corpse"
 	)
 	forager._process(10.0)
-	assert_true(forager.is_queued_for_deletion(), "and actually removed once its death animation has played out")
+	assert_true(forager.is_corpse(), "and settles into a corpse once its death animation has played out")
+	assert_false(forager.is_queued_for_deletion(), "a settled corpse persists -- it does not free itself")
+
+
+# -- ant corpses: real forage, not just a visual (see docs/concept/---------
+# -- soil_fauna.md "Ant corpses: foraged home, not left to vanish" and -----
+# -- test_ant_forager_marker.gd's own "corpse persistence" block) ----------
+
+func test_ant_corpses_near_finds_a_settled_corpse():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var forager := _ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	forager._process(10.0)  # settle into a corpse
+	var found := manager.ant_corpses_near(pixel, 20.0)
+	assert_eq(found.size(), 1)
+	assert_eq(found[0].position, pixel)
+
+
+func test_ant_corpses_near_does_not_yet_find_a_still_dying_ant():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	_ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	# no _process() call -- still mid death-animation, not a settled corpse yet
+	assert_eq(manager.ant_corpses_near(pixel, 20.0).size(), 0)
+
+
+func test_ant_corpses_near_excludes_a_corpse_outside_the_radius():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var forager := _ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	forager._process(10.0)
+	assert_eq(manager.ant_corpses_near(pixel + Vector2(500, 500), 20.0).size(), 0)
+
+
+## Mirrors test_crushing_an_ant_never_scans_a_mounds_forager_list_in_a_
+## distant_chunk's own call-observing shape (docs/concept/soil_fauna.md
+## "FPS regression round 4") -- proves ant_corpses_near is chunk-scoped
+## (mirroring leaf_litter_near's identical 3x3-neighbourhood contract),
+## never a whole-world scan, regardless of query radius.
+func test_ant_corpses_near_never_reaches_a_distant_chunk_regardless_of_radius():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var forager := _ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	forager._process(10.0)
+
+	var distant_chunk_coord := chunk_coord + Vector2i(50, 50)
+	var distant_forager := AntForagerMarker.new()
+	distant_forager.position = _pixel_for(distant_chunk_coord, Vector2i(5, 5))
+	add_child_autofree(distant_forager)
+	manager._ant_corpses[distant_chunk_coord] = [distant_forager]
+	distant_forager.crush()
+	distant_forager._process(10.0)  # also a settled corpse
+
+	var found := manager.ant_corpses_near(pixel, 999999.0)
+	assert_eq(found.size(), 1, "a corpse many chunks away must never be reachable regardless of radius")
+
+
+func test_take_ant_corpse_near_removes_a_settled_corpse_and_frees_it():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var forager := _ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	forager._process(10.0)
+	assert_true(manager.take_ant_corpse_near(pixel))
+	assert_true(forager.is_queued_for_deletion(), "foraging a corpse actually removes it from the world")
+	assert_eq(manager.ant_corpses_near(pixel, 20.0).size(), 0, "and it is no longer discoverable")
+
+
+func test_take_ant_corpse_near_misses_a_still_dying_ant():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	_ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	assert_false(manager.take_ant_corpse_near(pixel), "not yet settled -- nothing real to forage yet")
+
+
+func test_take_ant_corpse_near_misses_an_empty_position():
+	assert_false(manager.take_ant_corpse_near(Vector2(900, 900)))
+
+
+func test_a_settled_corpse_can_only_be_taken_once():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var cell := Vector2i(5, 5)
+	var forager := _ant_forager_at(chunk_coord, Vector2i(2, 2), cell)
+	var pixel := _pixel_for(chunk_coord, cell)
+	manager.crush_ants_near(pixel, CrushMechanic.CRUSH_MOMENTUM_THRESHOLD_KG_M_S * 10.0)
+	forager._process(10.0)
+	assert_true(manager.take_ant_corpse_near(pixel))
+	assert_false(manager.take_ant_corpse_near(pixel), "something else already took it")
 
 
 ## See docs/concept/soil_fauna.md's own "Generalized to ants too" -- "no
