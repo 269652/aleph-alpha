@@ -96,4 +96,21 @@ in the gating logic.
 
 ## Status
 
-- 🚧 In progress this pass — see `docs/progress.md`.
+- ✅ **Day/night cycle** — documented for the first time (see "The
+  existing day/night cycle" above); no code changes, `world.gd`'s own
+  `CanvasModulate` mechanism was already real and working.
+- ✅ **Torch glow** — `TorchGlow` (`src/rendering/torch_glow.gd`), wired
+  into `World._client_process` every frame, gated on
+  `TorchGlow.is_lit_item_id(equipped item id)`. Verified with a real
+  (non-headless) render: reads as a clean warm pool of light with a flat
+  core and soft edge, and visibly punches through a real `NIGHT_TINT`-
+  tinted background while preserving the underlying texture (true
+  additive blending). `tests/unit/test_torch_glow.gd` (10/10),
+  `tests/unit/test_world_torch_glow_fanout.gd` (3/3).
+- ⬜ **A second light source** (a lantern, say) — `TorchGlow.
+  is_lit_item_id` is the one seam that would need to grow a second id;
+  not asked for, not attempted here.
+- ⬜ **A real ignite/extinguish toggle** — today, equipping a torch IS
+  being lit (see `is_lit_item_id`'s own doc comment for why: a torch
+  cannot even model "broken" under the current wear system). A separate
+  fuel/ignition state is a plausible later mechanic, not this pass's.
