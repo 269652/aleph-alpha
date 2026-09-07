@@ -929,14 +929,26 @@ func test_a_scouts_assigned_spread_direction_measurably_changes_its_wander():
 # -- own doc comment -- IllustratedDecomposerSprite's ant art has no ------
 # -- dedicated crushed pose at all, unlike worm/millipede's own real art) ---
 
-func test_crush_applies_the_squash_effect_to_its_sprite():
+## SquashCrushEffect's own VERTICAL_SQUASH is deliberately NOT applied here
+## any more -- reported live: "crushed ants should have the same size as
+## normal ants... atm ants seem to disappear". An ant's own live marker_
+## scale is already tiny (IllustratedDecomposerSprite.ANT_WORLD_WIDTH is
+## 4.5px against a several-hundred-pixel source frame), so even the
+## RELATIVE squash the class doc comment already fixed once (see the test
+## this replaced: "crushing an ant shows a distorted sprite which is very
+## large" -- the OPPOSITE failure, an absolute overwrite) still shrank an
+## already-near-invisible sprite down toward nothing. Tint alone -- the
+## same shared TINT every other SquashCrushEffect user shows -- is enough
+## of a "no longer alive" tell at this scale; caterpillar/bug are
+## untouched (not reported, and not nearly as small to begin with).
+func test_crush_tints_the_sprite_without_shrinking_it():
 	var forager := _spawned(Vector2(50, 50), Vector2(0, 0))
 	var sprite := forager.get_child(0) as Sprite2D
-	var scale_before := sprite.scale.y
+	var scale_before := sprite.scale
 	forager.crush()
-	assert_almost_eq(
-		sprite.scale.y, scale_before * SquashCrushEffect.VERTICAL_SQUASH, 0.0001,
-		"the squash must apply RELATIVE to the ant's own tiny existing scale, not overwrite it outright -- reported live: \"crushing an ant shows a distorted sprite which is very large\""
+	assert_eq(
+		sprite.scale, scale_before,
+		"a crushed ant should read at the same size as a normal one, not shrink toward invisibility"
 	)
 	assert_eq(sprite.modulate, SquashCrushEffect.TINT)
 

@@ -2618,6 +2618,23 @@ specifically (a crushed forager still simply vanishes mid-trip as far as
 that separate signal is concerned), only on the raw population number
 itself.
 
+**Revised (2026-09-07): `AntForagerMarker.crush()` no longer applies
+`SquashCrushEffect`'s own `VERTICAL_SQUASH` flatten, tint only.** Reported
+live: "crushed ants should have the same size as normal ants... atm ants
+seem to disappear." An ant's own live `marker_scale` is already tiny
+(`IllustratedDecomposerSprite.ANT_WORLD_WIDTH` is 4.5px against a
+several-hundred-pixel source frame — `scale.y` measured around 0.013 in
+practice), so even `SquashCrushEffect`'s own RELATIVE squash (already
+fixed once from an absolute overwrite that made a crushed ant balloon up
+huge — see `SquashCrushEffect.VERTICAL_SQUASH`'s own doc comment) still
+shrank it by another 65%, down to a fraction of a percent of its texture
+height — effectively gone. `crush()` now sets `_sprite.modulate =
+SquashCrushEffect.TINT` directly, skipping the flatten entirely: same
+"no longer alive" tell, same footprint as a normal ant.
+`CaterpillarMarker`/`DecomposerMarker` keep the full `SquashCrushEffect
+.apply()` treatment unchanged — neither was reported, and neither
+starts anywhere near this small.
+
 ### Generalized to bugs too (2026-09-06)
 
 Asked directly, alongside mushrooms/ants: "a bug should count as a small

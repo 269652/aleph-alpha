@@ -343,15 +343,28 @@ var _dying_elapsed := 0.0
 ## queue_free() -- see docs/concept/soil_fauna.md's own "no corpse/recovery
 ## state ... no timed death animation either" scope cut, now closed.
 ## IllustratedDecomposerSprite's "ant" art has no dedicated crushed pose at
-## all, so this reuses SquashCrushEffect's shared procedural fallback,
-## applied to whatever frame (walk or carry) this forager happened to be
-## showing at the moment it died. Idempotent, same contract as
-## CaterpillarMarker.crush()/DecomposerMarker.crush().
+## all, so this reuses SquashCrushEffect's shared TINT (the same "no
+## longer alive" tell every other crushed creature shows), applied to
+## whatever frame (walk or carry) this forager happened to be showing at
+## the moment it died -- but deliberately WITHOUT SquashCrushEffect's own
+## VERTICAL_SQUASH flatten. Reported live: "crushed ants should have the
+## same size as normal ants... atm ants seem to disappear". An ant's own
+## live marker_scale is already tiny (IllustratedDecomposerSprite.
+## ANT_WORLD_WIDTH is 4.5px against a several-hundred-pixel source frame,
+## scale.y measured around 0.013 in practice) -- even the RELATIVE squash
+## VERTICAL_SQUASH already is (see that constant's own doc comment: fixed
+## once already, from an absolute overwrite that made a crushed ant
+## balloon up huge) still shrinks an already-near-invisible sprite by
+## another 65%, down toward a fraction of a percent of its texture height
+## -- effectively gone. Idempotent, same contract as CaterpillarMarker.
+## crush()/DecomposerMarker.crush(), both of which keep the full
+## SquashCrushEffect.apply() treatment unchanged -- neither was reported,
+## and neither starts anywhere near this small.
 func crush() -> void:
 	if _dying:
 		return
 	_dying = true
-	SquashCrushEffect.apply(_sprite)
+	_sprite.modulate = SquashCrushEffect.TINT
 
 
 ## Which leg of the round trip this forager is currently walking.

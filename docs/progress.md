@@ -14435,3 +14435,26 @@ now multiplied by `(1.0 - canopy_turn_progress)`, receding to exactly
 instant. 3 new tests (tapers to zero once fully turned, unaffected while
 still settled, recedes partway through the turn) plus all 6 pre-existing
 `leaf_fall_chance_for` tests reconfirmed green (9/9, 23 asserts).
+
+### A crushed ant now stays ant-sized instead of shrinking away (`concept/soil_fauna.md`, 2026-09-07)
+
+Reported directly: *"crushed ants should have the same size as normal
+ants just using the crush animation / last frame... atm ants seem to
+disappear."* `AntForagerMarker.crush()` reused `SquashCrushEffect`'s
+shared procedural fallback (flatten `scale.y` by 65%, tint dark red) --
+correct for `CaterpillarMarker`/`DecomposerMarker`, whose own live scale
+is nowhere near this small, but an ant's own `marker_scale` is already
+tiny (`IllustratedDecomposerSprite.ANT_WORLD_WIDTH` is 4.5px against a
+several-hundred-pixel source frame; measured directly, live `scale.y` is
+around 0.013). Squashing THAT by another 65% left `scale.y` around
+0.0046 -- a small fraction of a percent of the texture's own height,
+effectively invisible against the ground. Fixed by having `crush()` set
+`_sprite.modulate = SquashCrushEffect.TINT` directly rather than calling
+`SquashCrushEffect.apply()` -- the same tint every other crushed small
+creature shows, no flatten at all, so a crushed ant reads at exactly the
+same size as a live one. `CaterpillarMarker`/`DecomposerMarker` untouched
+(not reported, and not remotely this small to begin with).
+`test_crush_tints_the_sprite_without_shrinking_it` (replacing the old
+`test_crush_applies_the_squash_effect_to_its_sprite`, whose own assertion
+was the exact behavior this fix removes) plus all 73 `test_crush`-
+matching tests project-wide reconfirmed green (5431 asserts).
