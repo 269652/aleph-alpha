@@ -14816,3 +14816,48 @@ same size as a live one. `CaterpillarMarker`/`DecomposerMarker` untouched
 `test_crush_applies_the_squash_effect_to_its_sprite`, whose own assertion
 was the exact behavior this fix removes) plus all 73 `test_crush`-
 matching tests project-wide reconfirmed green (5431 asserts).
+
+### Karma: crushing is player-only again (`concept/karma_and_luck.md`)
+
+Reported live: *"Karma is constantly decreasing when wild animals step on
+worms or so.. it should only decrease when the player itself steps on
+something or abandons a quest; but the player must do it."* Reverses an
+earlier explicit request ("every crush should count, not just the
+player's own deliberate ones") that had put `World`'s crush pass in
+direct tension with `karma_and_luck.md`'s own pillar 3 (*"Karma tracks
+the player's own DELIBERATE-enough acts"* — a wild deer's footstep is not
+a deliberate act of the player's at all).
+
+✅ **`scenes/world.gd`'s `CreatureMarker` loop** — every crush call inside
+it (worm/caterpillar/millipede/ant/decomposer/mushroom) is now a bare
+statement, exactly the shape `crush_walnut_near` (never Karma-eligible
+for anyone) already used, instead of `if ...: local_player.
+apply_karma_delta(...)`. A wild creature's own step still crushes what's
+underfoot — a real, weight-emergent ecosystem effect, unrelated to the
+player's own moral ledger — it just no longer touches Karma. The
+player's own step (the block above the loop) is untouched: still
+if-guarded, still charges `Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY`
+exactly as before.
+
+✅ **Quest abandonment checked too, needed no fix.** `QuestLog.abandon`/
+`accept` have zero call sites outside `tests/unit/test_quest_log.gd`
+today — no player-facing UI wires them yet (see karma_and_luck.md's own
+Status list) — and the one automatically-wired quest path (`QuestLog.
+reconcile`, run from `World._step_quest_reconciliation`) only ever
+applies the *positive* `QUEST_FULFILLED_REWARD`, never `QUEST_ABANDON_
+PENALTY`. Quest abandonment is therefore already player-only in design
+(in fact currently unreachable in real gameplay at all), confirmed by
+reading the real call graph before touching anything.
+
+`tests/unit/test_world_crush_wiring.gd`'s Karma section rewritten to
+match: `test_only_the_players_own_crush_calls_apply_the_karma_penalty`
+(6 call sites, not the old 12) and `test_a_creatures_own_crush_never_
+applies_the_karma_penalty` (every creature-loop crush call is bare, never
+followed by `apply_karma_delta`) replace the two tests that pinned the
+old "any creature's" behavior; the now-redundant mushroom-specific karma
+test was removed rather than patched, since the two new, more general
+tests already cover it. 17/17 tests passing (full file, including the 15
+pre-existing tests confirmed unaffected). `karma.gd`'s own
+`WORM_OR_CATERPILLAR_CRUSH_PENALTY` doc comment and `karma_and_luck.md`'s
+event table + Status list updated to match, with the reversal dated and
+the original request quoted rather than silently rewritten.
