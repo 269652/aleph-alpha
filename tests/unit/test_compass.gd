@@ -76,3 +76,24 @@ func test_reading_for_dispatches_to_rough_reading_when_not_fine():
 
 func test_reading_for_dispatches_to_fine_reading_when_fine():
 	assert_almost_eq(Compass.reading_for(68.0, true), 68.0, 0.001)
+
+
+# -- is_compass_item_id / is_fine_item_id: the equip-gate the compass window
+# reads every frame (mirrors TorchGlow.is_lit_item_id's own reasoning -- a
+# named, testable function rather than an inline string comparison repeated
+# at each call site).
+
+func test_is_compass_item_id_is_true_for_both_quality_tiers():
+	assert_true(Compass.is_compass_item_id("rough_compass"))
+	assert_true(Compass.is_compass_item_id("compass"))
+
+
+func test_is_compass_item_id_is_false_for_an_unrelated_item():
+	assert_false(Compass.is_compass_item_id("iron_sword"))
+	assert_false(Compass.is_compass_item_id(""))
+
+
+func test_is_fine_item_id_is_true_only_for_the_iron_compass():
+	assert_true(Compass.is_fine_item_id("compass"))
+	assert_false(Compass.is_fine_item_id("rough_compass"))
+	assert_false(Compass.is_fine_item_id("iron_sword"))

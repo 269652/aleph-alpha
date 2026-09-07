@@ -184,15 +184,39 @@ passive effect on `World._update_hover_tooltip` rather than a command
 required a real fix to `HoverTargetFinder.info_under`, which previously
 re-capped its own selection at the bare constant regardless of the
 caller's widened scan radius; it now takes an explicit `radius` param).
-What's still missing for all five: only in-world UI (compass-needle
-sprite, a real fogged map render, an on-screen forecast label, etc.) — the
-dev console is a real, honest interim call site, not the design's own
-final interaction, the same role `/give`/`/craft` already play elsewhere
-in this project. Map's own remaining gap is unchanged: nothing calls
+What's still missing for the remaining four: in-world UI (a real fogged
+map render, an on-screen forecast label, etc.) — the dev console is a real,
+honest interim call site for those, not the design's own final
+interaction, the same role `/give`/`/craft` already play elsewhere in this
+project. Map's own remaining gap is unchanged: nothing calls
 `mark_chunk_explored` from the player's actual movement/visibility-range
 path yet (deliberately out of scope — see `ExploredTiles`' own doc comment
 on why "when does a chunk get marked explored" stays a caller-side decision
 for later).
+
+**Compass now has its own in-world UI** (2026-09-08, `scenes/compass_
+window.gd`'s `CompassWindow`) — a small always-on corner widget (top-left,
+the minimap's own `$UI/Minimap` already owns top-right), auto-shown/hidden
+every frame by `World._update_compass_window` based on the equipped item
+(`Compass.is_compass_item_id`), mirroring `TorchGlow`'s own "equip IS the
+gate, no keybind" shape exactly — a compass put away shows nothing, the
+same as an unlit torch. Shows a needle rotated to the live bearing toward
+home (`Compass.bearing_degrees`/`reading_for`, the same read the `/compass`
+command already used, now also driving a real visual) plus a numeric
+readout ("134° to home"). Rough vs. fine quality reads through the same
+shared `Compass.reading_for` dispatch the console command already used, so
+a rough compass's needle genuinely only snaps to 8 positions on screen —
+verified with a real render, not assumed: `tools/probe_compass_window.gd`
+caught (and this pass fixed) a real Godot behavior where a `Label` rotated
+while directly parented to a `CenterContainer` had its rotation silently
+reset to 0 by the container's own layout pass every frame — the needle is
+now a plain (non-Container) `Control`'s child instead, which a container
+never re-lays-out. `tests/unit/test_compass_window.gd` (6/6, pure needle-
+angle/readout-text math) and `tests/unit/test_world_compass_window_
+fanout.gd` (4/4, the per-frame wiring itself) pin what a headless test can;
+the container-reset bug itself could only have been caught by the real
+render. Still reads toward home only — a bound-waypoint second target
+(this doc's own "switchable by the player" clause) is not attempted here.
 
 Two of this doc's own named quality axes are still binary, not yet the
 graded material/skill axis described above: Compass's rough/fine split is
