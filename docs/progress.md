@@ -15299,3 +15299,49 @@ corpse forage-kind, carried-corpse visuals), `test_earth_chunk_manager.gd`
 181/183 (the 2 failures are the pre-existing, unrelated whirl-pair flake
 this doc already flags elsewhere), `test_ambient_flyer_renderer.gd`
 54/54.
+
+### A wild creature mid-chase now survives crossing a chunk border (`concept/ecosystem_dynamics.md`, 2026-09-07)
+
+Reported live: *"animals (like a boar chasing or a deer being hunted) don't
+survive chunk borders and just disappear."*
+
+✅ **`EarthChunkManager._unload_chunk`'s creature-free loop now checks each
+creature's live position first.** Root cause: `_loaded_creatures` tracks
+chunk membership by bookkeeping set once at spawn/reconcile time and never
+updated as a creature actually moves, so a predator mid-hunt or prey
+mid-flee (`CreatureMarker`'s uncapped `FLEE_SPEED`/`HUNT_SPEED`, no
+home-range leash) that wandered into a neighbouring, still-loaded chunk was
+freed anyway the instant its *original* chunk fell outside
+`UNLOAD_RADIUS` — deleted while standing right next to the player. New
+`_rehome_wandered_creature(creature, stale_chunk_coord)` re-derives the
+creature's current chunk from its live position: still in the chunk being
+unloaded, or wandered somewhere not currently loaded at all, and it is
+freed exactly as before; wandered into a chunk this manager still
+considers loaded, and it is re-filed there instead — the same live
+instance, not a respawn. Deliberately excludes anything
+`_save_kept_animals`/`_save_growing_juveniles` already cover (tamed, tied,
+or an immature juvenile) — those are already serialized to the stale
+chunk's own save file and respawned fresh on its next load, so re-homing
+the same live instance too would produce a duplicate.
+
+⬜ **No chase-distance leash added, named rather than silently absorbed.**
+A hunt/flee can in principle still carry a creature across more than one
+chunk between two `EarthChunkManager.update()` calls (calls happen every
+client frame, so in practice this needs a lot of open, chunk-sparse
+ground); landing somewhere not yet loaded at all is still an ordinary
+despawn, the same "two fidelities" trade-off as any other creature
+leaving the relevant area.
+
+New `tests/unit/test_earth_chunk_manager_creature_persistence.gd` (5/5,
+minimal-manager style, no real chunk generation needed) covers the core
+repro, the still-freed regressions (never left / wandered somewhere
+unloaded), and the tamed-animal exclusion. Regression-checked directly
+against `test_earth_chunk_manager.gd`'s own real-pipeline creature tests:
+`test_a_tamed_horse_is_still_there_after_its_chunk_unloads`,
+`test_evicting_old_chunks_frees_their_creature_markers`,
+`test_a_hunted_out_region_stops_showing_creature_markers` — all green (the
+tamed-horse test's first run hit the known shared-`user://`-dir flake at
+the "Berlin" fixture coordinate, unrelated to this change: a tamed
+creature's fate is decided entirely by the pre-existing
+`KeptAnimals.is_worth_keeping` check, which returns before this fix's own
+position logic ever runs; a clean retry passed).
