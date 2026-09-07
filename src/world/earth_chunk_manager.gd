@@ -783,6 +783,21 @@ var _ant_mound_markers: Dictionary = {}
 ## (chunk_coord*CHUNK_SIZE + cell) is already a stable global tile.
 var _active_ant_foragers: Dictionary = {}
 
+## Vector2i chunk_coord -> Array[AntForagerMarker], every crushed forager
+## currently lying where it died (see AntForagerMarker.is_corpse) --
+## registered here by crush_ants_near the moment it actually crushes one,
+## chunk-keyed by wherever it died. NOT mound-keyed the way
+## _active_ant_foragers is: a corpse belongs to no mound any more once its
+## forager dies (see docs/concept/soil_fauna.md "Ant corpses: foraged
+## home, not left to vanish") -- any nearby mound's own scout can sense
+## and forage it, the same free-for-all "no ownership" contract every
+## other forage resource (leaf litter, grass seed, windfall) already has.
+## Pruned lazily wherever it's read (ant_corpses_near/take_ant_corpse_near),
+## the same "erase a stale/already-freed reference on next access"
+## contract _active_ant_foragers already has -- including no explicit
+## _unload_chunk cleanup, mirroring that sibling dictionary exactly.
+var _ant_corpses: Dictionary = {}
+
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_ambient_flyers: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
@@ -7488,6 +7503,17 @@ func crush_ants_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 				# "no timed death animation either" scope cut, now closed.
 				marker.crush()
 				crushed_any = true
+				# Registers as a future corpse immediately, chunk-keyed by
+				# wherever it died -- see _ant_corpses' own doc comment.
+				# ant_corpses_near/take_ant_corpse_near both still gate on
+				# marker.is_corpse() (not yet true this frame -- it only
+				# settles once SquashCrushEffect's own death-animation
+				# linger finishes), so nothing can sense or forage it a
+				# moment before its death animation has actually played out.
+				var corpse_chunk := _chunk_coord_for_tile(tile)
+				var corpses: Array = _ant_corpses.get(corpse_chunk, [])
+				corpses.append(marker)
+				_ant_corpses[corpse_chunk] = corpses
 				# One real forager belonging to this mound is now gone --
 				# also closes "no effect on the mound's own population/food
 				# economy beyond the one forager actually lost" (same
@@ -7504,6 +7530,78 @@ func crush_ants_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 				if colony != null:
 					colony.forager_crushed(global_tile - mound_chunk_coord * CHUNK_SIZE)
 	return crushed_any
+
+
+## How close a query position has to be to a corpse's own position to
+## count as "the same corpse" for take_ant_corpse_near -- mirrors
+## LeafLitterField.CONSUME_TOLERANCE_PX's identical reasoning and value:
+## a corpse never moves once settled, so an exact-enough match is all a
+## caller handing back a position it already got from ant_corpses_near
+## ever needs.
+const ANT_CORPSE_TAKE_TOLERANCE_PX := 1.0
+
+
+## Every SETTLED ant corpse (see AntForagerMarker.is_corpse) within
+## `radius_px` of `pixel_position` -- the plural sensing query
+## AntForagerMarker._sense_food_nearby uses to find real corpses to
+## forage. Mirrors leaf_litter_near's identical shape (a 3x3 chunk-
+## neighbourhood scan, chunk-keyed, radius checked in real pixels): a
+## corpse, like a fallen leaf, belongs to no one mound any more (see
+## _ant_corpses' own doc comment), so this is the same free-for-all
+## sensing shape, not crush_ants_near's mound-keyed one. Each result is
+## {"position": Vector2} -- a corpse carries no species/season the way a
+## leaf does. A still-dying forager (crushed moments ago, mid
+## SquashCrushEffect linger) is real but not yet a settled corpse --
+## filtered out here via is_corpse(), not left to the caller, so nothing
+## can sense (or take) a corpse before its own death animation has
+## actually finished playing. Stale/already-freed entries are pruned
+## lazily here, the same contract _active_ant_foragers' own readers use.
+func ant_corpses_near(pixel_position: Vector2, radius_px: float) -> Array:
+	var found: Array = []
+	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var chunk_coord := center_chunk + Vector2i(dx, dy)
+			var corpses: Array = _ant_corpses.get(chunk_coord, [])
+			for corpse in corpses.duplicate():
+				if not is_instance_valid(corpse) or corpse.is_queued_for_deletion():
+					corpses.erase(corpse)
+					continue
+				if not corpse.is_corpse():
+					continue
+				if corpse.position.distance_to(pixel_position) <= radius_px:
+					found.append({"position": corpse.position})
+	return found
+
+
+## Removes the settled ant corpse standing at `pixel_position` (see
+## ANT_CORPSE_TAKE_TOLERANCE_PX), returning whether one was actually
+## there -- the mutation counterpart of ant_corpses_near, mirroring
+## consume_leaf_litter_at's identical "best-effort, no-op on a miss"
+## contract. A caller is expected to have just learned this exact
+## position FROM ant_corpses_near -- a corpse someone else already
+## foraged in between is correctly reported as a miss, not an error.
+## Frees the corpse marker directly: a forager taking it home IS the
+## corpse's own real removal from the world, the same "the take itself is
+## the world mutation" shape every other forage kind's take API already
+## has (take_fruit_at, consume_leaf_litter_at, take_grass_seed_at).
+func take_ant_corpse_near(pixel_position: Vector2) -> bool:
+	var center_chunk := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var chunk_coord := center_chunk + Vector2i(dx, dy)
+			var corpses: Array = _ant_corpses.get(chunk_coord, [])
+			for corpse in corpses.duplicate():
+				if not is_instance_valid(corpse) or corpse.is_queued_for_deletion():
+					corpses.erase(corpse)
+					continue
+				if not corpse.is_corpse():
+					continue
+				if corpse.position.distance_to(pixel_position) <= ANT_CORPSE_TAKE_TOLERANCE_PX:
+					corpses.erase(corpse)
+					corpse.queue_free()
+					return true
+	return false
 
 
 ## Shared body for crush_caterpillars_near/crush_millipedes_near -- both
