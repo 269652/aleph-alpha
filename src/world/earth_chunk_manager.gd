@@ -6354,6 +6354,20 @@ func _drop_decoration(holder: Dictionary, chunk_coord: Vector2i) -> void:
 ## framerate" -- see docs/concept/long_grass.md.
 const GRASS_VIEW_BUFFER_TILES := 2
 
+## Shared by both real reasons a band needs a SECOND MultiMeshInstance2D
+## (the calendar turn and the snow overlay, mutually exclusive -- see
+## _sync_grass_sprites' own doc comment): fetches the existing one for this
+## band or lazily creates it at the primary mesh's own position.
+func _get_or_create_turning_mmi(turning_bands: Dictionary, band: int, mmi_position: Vector2) -> MultiMeshInstance2D:
+	var turning_mmi: MultiMeshInstance2D = turning_bands.get(band)
+	if turning_mmi == null:
+		turning_mmi = MultiMeshInstance2D.new()
+		turning_mmi.position = mmi_position
+		_entities_parent.add_child(turning_mmi)
+		turning_bands[band] = turning_mmi
+	return turning_mmi
+
+
 ## One MultiMeshInstance2D draw call per Y-band, not one Sprite2D per card
 ## (see IllustratedGrassPatch.BAND_COUNT for why bands, not per-tile or
 ## per-chunk). Every band fully rebuilds from the sim's current patch set
@@ -6452,15 +6466,25 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 			bands[band] = mmi
 
 		if transitioning:
+			# An active calendar transition wins outright over the snow
+			# overlay below -- see docs/concept/long_grass.md's "Scoped
+			# deliberately, not silently": both reuse this SAME turning-mesh
+			# slot, so they are mutually exclusive, not composed.
 			var split := IllustratedGrassPatch.split_cards_by_turn(cards_by_band[band], _grass_turn_progress)
 			_illustrated_grass.fill_band(mmi, mmi.position, split.from, _grass_season_name)
-			var turning_mmi: MultiMeshInstance2D = turning_bands.get(band)
-			if turning_mmi == null:
-				turning_mmi = MultiMeshInstance2D.new()
-				turning_mmi.position = mmi.position
-				_entities_parent.add_child(turning_mmi)
-				turning_bands[band] = turning_mmi
+			var turning_mmi := _get_or_create_turning_mmi(turning_bands, band, mmi.position)
 			_illustrated_grass.fill_band(turning_mmi, turning_mmi.position, split.to, _grass_turning_into)
+		elif _snow_depth > 0.0:
+			# Winter's own dedicated sheet is a snow-triggered overlay, not a
+			# calendar destination -- see docs/concept/long_grass.md's
+			# "Winter's own sheet is a snow overlay, not a calendar
+			# destination". _grass_season_name is already autumn-remapped
+			# through a real calendar winter (see sync_grass_season), so
+			# "base" here never means the dedicated winter sheet by accident.
+			var split := IllustratedGrassPatch.split_cards_by_snow_overlay(cards_by_band[band], _snow_depth)
+			_illustrated_grass.fill_band(mmi, mmi.position, split.base, _grass_season_name)
+			var overlay_mmi := _get_or_create_turning_mmi(turning_bands, band, mmi.position)
+			_illustrated_grass.fill_band(overlay_mmi, overlay_mmi.position, split.winter, "winter")
 		else:
 			_illustrated_grass.fill_band(mmi, mmi.position, cards_by_band[band], _grass_season_name)
 			var stale_turning_mmi: MultiMeshInstance2D = turning_bands.get(band)
@@ -7096,8 +7120,18 @@ var _last_tree_season := ""
 ## docs/concept/long_grass.md's "Seasonal art".
 func sync_grass_season() -> void:
 	var transition := SeasonalFoliage.transition_for_world_age(_world_age_seconds)
-	var season_name: String = transition.from
-	var turning_into: String = transition.to
+	# base_render_season maps the calendar's own "winter" to "autumn" -- see
+	# docs/concept/long_grass.md's "Winter's own sheet is a snow overlay, not
+	# a calendar destination". Applied here, at the one point the raw
+	# calendar names are captured, so every downstream consumer (fill_band,
+	# atlas_region_for, split_cards_by_turn) already only ever sees "autumn"
+	# for what the calendar calls winter -- no second code path to keep in
+	# sync. A real autumn->winter turn collapses to season_name==turning_into
+	# as a direct consequence (nothing to visually cross over once both ends
+	# render the same sheet), which is what makes _sync_grass_sprites'
+	# existing "transitioning" guard skip a turning mesh for it automatically.
+	var season_name: String = IllustratedGrassPatch.base_render_season(transition.from)
+	var turning_into: String = IllustratedGrassPatch.base_render_season(transition.to)
 	var turn_progress: float = transition.progress
 	var signature := "%s/%s/%.2f" % [season_name, turning_into, turn_progress]
 	if signature == _last_grass_season:

@@ -232,6 +232,79 @@ only advances in `TURN_STEPS=6` steps, a handful of times per in-game year,
 so the extra MMI exists for a small fraction of a chunk's decorated lifetime,
 never per-frame.
 
+### Winter's own sheet is a snow overlay, not a calendar destination
+
+Reported live: "the winter blades should use the autumn sprites and only
+overlay single blades from the winter sprite when snow accumulates." Real
+dormant-season grass does not turn a uniform frosted-white overnight the
+way this project's dedicated `grass_blades_winter.png` sheet draws it --
+it stands senescent (the same dried, straw/orange character `_autumn.png`
+already draws) for as long as the ground itself is bare, and only the
+specific blades actual lying snow has settled onto read as frosted. A
+calendar-driven hard swap into a wholly separate "winter" sheet the instant
+the season ticks over gets this backwards: it frosts every blade in the
+field on a bare, snowless winter day, and (since `Snowfall.falls_as_snow`
+is gated on temperature, not the season label -- see
+[snow_cover.md](snow_cover.md)) it also has no way to frost anything during
+a genuine cold-snap snowfall that arrives in late autumn, before the
+calendar has turned at all.
+
+**The calendar's own "winter" identity now renders as autumn's sheet.**
+`IllustratedGrassPatch.base_render_season(season)` maps `"winter" ->
+"autumn"` and passes every other name through unchanged; `EarthChunkManager.
+sync_grass_season` applies it to BOTH `_grass_season_name` and
+`_grass_turning_into` at the exact point it captures
+`SeasonalFoliage.transition_for_world_age`'s raw season names, so every
+downstream consumer (`fill_band`, `atlas_region_for`, `split_cards_by_turn`)
+already only ever sees "autumn" for what the calendar calls winter -- no
+separate code path to keep in sync. A pleasant side effect: because autumn
+and (remapped) winter now render identically, the real
+`autumn -> winter` calendar transition collapses to a genuine no-op for the
+per-card sheet-swap (`_grass_turning_into == _grass_season_name`, the same
+guard that already skips a turning mesh for an unchanged season) -- there
+is nothing to visually cross over, since winter was already showing
+autumn's own sheet as soon as it began. The one REAL sheet-swap transition
+into cold-season grass is still `summer -> autumn`; `winter -> spring` (the
+next real calendar turn) correctly transitions FROM autumn's own sheet,
+matching what was actually last on screen.
+
+**The dedicated winter sheet is repurposed as a snow-triggered per-card
+overlay**, the same "one shared clock/coverage value, many independently-
+thresholded units" shape the calendar turn above already uses, but keyed to
+`EarthChunkManager.snow_depth()` (the identical live global scalar ground
+snow and canopy sparkle already read -- see [snow_cover.md](snow_cover.md)
+-- not a new coverage concept) instead of `SeasonTransition`'s calendar
+progress. `IllustratedGrassPatch.snow_overlay_threshold_for_seed` mirrors
+`turn_threshold_for_seed` exactly but hashes a DIFFERENT salt, so a card's
+calendar-turn speed and its snow-overlay speed never correlate -- the same
+reasoning `turn_threshold_for_seed`'s own doc comment already gives for
+keeping it independent of the seed/column hash. `split_cards_by_snow_
+overlay(card_specs, snow_depth)` partitions a card list into `{"base":
+[...], "winter": [...]}` by comparing each card's own overlay threshold
+against `snow_depth` directly (already a clean `[0, 1]` scalar, no
+re-derivation needed) -- `snow_depth <= 0` collapses to an all-"base"
+single bucket, matching every other real-world case (spring/summer/most of
+autumn) where this mechanism should cost nothing.
+
+`EarthChunkManager._sync_grass_sprites` wires this in at CARD granularity,
+reusing the exact "second `MultiMeshInstance2D` per band" mechanism the
+calendar turn already built (`_grass_sprites_turning`) rather than adding a
+third parallel tracking structure -- a band renders its "base" cards
+(`_grass_season_name`, already autumn-remapped through a real winter) on
+the primary mesh and its "winter" cards on the turning-mesh slot, sampling
+the literal `"winter"` season string (bypassing `base_render_season` on
+purpose: this is the one deliberate consumer that still wants the REAL
+dedicated sheet). **Scoped deliberately, not silently: this reuse means an
+active CALENDAR transition and an active SNOW overlay are mutually
+exclusive** -- a card mid-turn between two calendar sheets does not also
+independently overlay snow in the same pass; the code prefers the calendar
+transition when both are true. Calendar transitions are brief and rare
+(`TURN_STEPS=6` steps, a handful of times per in-game year) and only two of
+them (`summer -> autumn`, `winter -> spring`) are even visually real once
+autumn/winter share a sheet, so the overlap window this leaves unhandled is
+narrow; a true three-way split is a real, scoped-out follow-up, not an
+oversight.
+
 ## View-distance culling: grass only draws what the camera can see
 
 Reported live: "optimize the grass blade rendering so it only draws what
@@ -610,6 +683,27 @@ framebuffer), so several of these needed a real, non-headless, off-screen
     correct as it liked and never affect what a card actually samples,
     since `fill_band` (which already received `season` for texture
     selection) never forwarded it into the region math.
+13. **"All seasons except summer produce artifacts when parting when a
+    player walks through"** — a thin, uniformly-coloured horizontal bar
+    extending from a bent blade under strong wind/walker push. Confirmed
+    with a real (non-headless) render plus a direct pixel probe, not
+    assumed from reading the shader: `clamp(local_x, 0.0, 1.0)` keeps
+    every SAMPLE POSITION safely inside the atlas, but at extreme bend
+    many consecutive fragments all clamp to the SAME single edge column of
+    the card's own region — repeating whatever pixel sits there across a
+    visible stretch of the quad. Winter's row 9/column 0 region has a
+    real, fully-opaque pixel sitting exactly at its own right edge
+    (spring/autumn: the identical spot); summer alone is clean there (its
+    own native alpha channel, never chroma-keyed). Fixed by tracking the
+    UN-clamped sample position (`raw_local_x`) alongside the clamped one:
+    a fragment whose true position bent past its own region's `[0,1]` edge
+    is made fully transparent instead of showing the clamped pixel — not a
+    re-introduction of History #5's superseded occlusion-fade hack, since
+    it is not a function of distance to the player and fires identically
+    for ambient wind alone with no player nearby. Pinned by
+    `test_shader_discards_a_fragment_that_bends_past_its_own_regions_edge`
+    and a real render before/after (probe deleted after use) confirming
+    the artifact gone on all four seasons.
 
 ## Status
 
@@ -657,7 +751,22 @@ framebuffer), so several of these needed a real, non-headless, off-screen
   still season-independent (only appearance turns, not growth speed) — see
   [seasons.md](seasons.md). Pinned by `tests/unit/test_earth_chunk_manager.
   gd`'s `test_sync_grass_season_*` tests and `test_illustrated_grass_patch.
-  gd`'s `split_cards_by_turn`/`turn_threshold_for_seed` tests.
+  gd`'s `split_cards_by_turn`/`turn_threshold_for_seed` tests. The
+  calendar's own "winter" now renders as this same turn's "autumn" base
+  (`IllustratedGrassPatch.base_render_season`) — see the next entry.
+- ✅ Winter's own dedicated sheet (`grass_blades_winter.png`) is a snow-
+  triggered per-card overlay, not a calendar destination — see "Winter's
+  own sheet is a snow overlay, not a calendar destination" above for the
+  full mechanism and real-world grounding. `EarthChunkManager._sync_grass_
+  sprites` reuses the calendar turn's own second-mesh-per-band slot rather
+  than adding a third structure, so an active calendar transition and an
+  active snow overlay are deliberately mutually exclusive (the transition
+  wins) — a narrow, documented gap, not a full three-way split. Verified
+  with a real render: a field mixing autumn-look base cards and frosted
+  winter-overlay cards at a real mid `snow_depth`. Pinned by
+  `test_illustrated_grass_patch.gd`'s `base_render_season`/`snow_overlay_
+  threshold_for_seed`/`split_cards_by_snow_overlay` tests and
+  `test_earth_chunk_manager.gd`'s `test_sync_grass_sprites_*` tests.
 - ✅ Growth stage is a real drawn row, not a scaled-down copy of the mature
   art — `IllustratedGrassPatch.atlas_region_for` maps `TallGrass.get_growth`
   (0..1) to one of the sheet's 10 rows, the per-card seed keeps choosing the

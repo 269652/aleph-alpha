@@ -1177,3 +1177,115 @@ func test_split_cards_by_turn_only_ever_moves_cards_from_from_to_to_as_progress_
 		for seed_value in previous_to_seeds:
 			assert_true(to_seeds.has(seed_value), "a card that has turned must stay turned as progress only climbs")
 		previous_to_seeds = to_seeds
+
+
+# -- winter's own sheet is a snow overlay, not a calendar destination (see
+# docs/concept/long_grass.md's "Winter's own sheet is a snow overlay, not a
+# calendar destination") ---------------------------------------------------
+
+
+func test_base_render_season_maps_winter_to_autumn():
+	assert_eq(IllustratedGrassPatch.base_render_season("winter"), "autumn")
+
+
+func test_base_render_season_passes_every_other_season_through_unchanged():
+	for season in ["spring", "summer", "autumn"]:
+		assert_eq(IllustratedGrassPatch.base_render_season(season), season)
+
+
+func test_base_render_season_passes_an_unrecognized_name_through_unchanged():
+	# Not this function's job to validate/fall back to DEFAULT_SEASON -- it
+	# only ever special-cases the one literal string "winter"; every other
+	# caller-supplied name (including a typo or a name it has never heard
+	# of) passes straight through, exactly like today.
+	assert_eq(IllustratedGrassPatch.base_render_season("not_a_real_season"), "not_a_real_season")
+
+
+## Mirrors turn_threshold_for_seed's own tests exactly -- see that function's
+## doc comment for why a snow-overlay threshold needs its OWN hash, distinct
+## from both the seed/column hash AND turn_threshold_for_seed itself: a
+## card's calendar-turn speed and its snow-overlay speed must never
+## correlate, or a card quick to turn seasons would also always be quick to
+## frost over.
+func test_snow_overlay_threshold_for_seed_is_deterministic():
+	assert_eq(
+		IllustratedGrassPatch.snow_overlay_threshold_for_seed(42),
+		IllustratedGrassPatch.snow_overlay_threshold_for_seed(42)
+	)
+
+
+func test_snow_overlay_threshold_for_seed_is_a_usable_zero_to_one_mix_weight():
+	for atlas_seed in [0, 1, -7, 42, 100000, -100000]:
+		var threshold := IllustratedGrassPatch.snow_overlay_threshold_for_seed(atlas_seed)
+		assert_gte(threshold, 0.0)
+		assert_lt(threshold, 1.0)
+
+
+func test_snow_overlay_threshold_for_seed_spreads_across_many_seeds_not_just_a_few_buckets():
+	var thresholds := {}
+	for atlas_seed in range(200):
+		var bucket := int(IllustratedGrassPatch.snow_overlay_threshold_for_seed(atlas_seed) * 10.0)
+		thresholds[bucket] = thresholds.get(bucket, 0) + 1
+	assert_gte(thresholds.size(), 8, "should spread across most of the [0,1) range, not clump in a few buckets")
+
+
+## Independent of turn_threshold_for_seed -- a card's calendar-turn threshold
+## and its snow-overlay threshold must not be the same number, or the two
+## mechanisms would silently correlate despite being conceptually unrelated.
+func test_snow_overlay_threshold_for_seed_does_not_correlate_with_turn_threshold_for_seed():
+	var matches := 0
+	var total := 200
+	for atlas_seed in range(total):
+		var turn_bucket := int(IllustratedGrassPatch.turn_threshold_for_seed(atlas_seed) * 10.0)
+		var snow_bucket := int(IllustratedGrassPatch.snow_overlay_threshold_for_seed(atlas_seed) * 10.0)
+		if turn_bucket == snow_bucket:
+			matches += 1
+	# Two INDEPENDENT uniform [0,10) buckets agree by pure chance ~10% of the
+	# time; a hard correlation (e.g. the same hash reused) would agree 100%.
+	assert_lt(matches, total / 2, "the two thresholds must not be the same hash reused")
+
+
+func test_split_cards_by_snow_overlay_puts_every_card_in_base_at_zero_depth():
+	var card_specs: Array[Dictionary] = []
+	for atlas_seed in range(20):
+		card_specs.append({"atlas_seed": atlas_seed, "position": Vector2.ZERO, "growth": 1.0})
+	var split := IllustratedGrassPatch.split_cards_by_snow_overlay(card_specs, 0.0)
+	assert_eq(split.base.size(), 20)
+	assert_eq(split.winter.size(), 0)
+
+
+func test_split_cards_by_snow_overlay_puts_every_card_in_winter_at_full_depth():
+	var card_specs: Array[Dictionary] = []
+	for atlas_seed in range(20):
+		card_specs.append({"atlas_seed": atlas_seed, "position": Vector2.ZERO, "growth": 1.0})
+	var split := IllustratedGrassPatch.split_cards_by_snow_overlay(card_specs, 1.0)
+	assert_eq(split.base.size(), 0)
+	assert_eq(split.winter.size(), 20)
+
+
+func test_split_cards_by_snow_overlay_splits_a_real_mix_at_a_mid_depth_without_losing_any_card():
+	var card_specs: Array[Dictionary] = []
+	for atlas_seed in range(200):
+		card_specs.append({"atlas_seed": atlas_seed, "position": Vector2.ZERO, "growth": 1.0})
+	var split := IllustratedGrassPatch.split_cards_by_snow_overlay(card_specs, 0.5)
+	assert_eq(split.base.size() + split.winter.size(), 200, "no card may be dropped or duplicated by the split")
+	assert_gt(split.base.size(), 0, "precondition: a real mid-depth split must leave some cards untouched")
+	assert_gt(split.winter.size(), 0, "precondition: a real mid-depth split must overlay some cards")
+
+
+## As depth climbs, a card can only move from "base" to "winter", never back
+## -- mirrors split_cards_by_turn's own one-way sweep exactly.
+func test_split_cards_by_snow_overlay_only_ever_moves_cards_from_base_to_winter_as_depth_climbs():
+	var card_specs: Array[Dictionary] = []
+	for atlas_seed in range(100):
+		card_specs.append({"atlas_seed": atlas_seed, "position": Vector2.ZERO, "growth": 1.0})
+	var previous_winter_seeds := {}
+	for step in range(11):
+		var depth := float(step) / 10.0
+		var split := IllustratedGrassPatch.split_cards_by_snow_overlay(card_specs, depth)
+		var winter_seeds := {}
+		for card in split.winter:
+			winter_seeds[card.atlas_seed] = true
+		for seed_value in previous_winter_seeds:
+			assert_true(winter_seeds.has(seed_value), "a card the snow has already caught must stay caught as depth only climbs")
+		previous_winter_seeds = winter_seeds

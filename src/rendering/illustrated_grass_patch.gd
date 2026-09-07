@@ -452,6 +452,59 @@ static func split_cards_by_turn(card_specs: Array, progress: float) -> Dictionar
 	return {"from": from, "to": to}
 
 
+## The season a card's BASE render actually samples from -- see docs/concept/
+## long_grass.md's "Winter's own sheet is a snow overlay, not a calendar
+## destination": real dormant-season grass stands senescent (the same dried
+## character `_autumn.png` already draws) for as long as the ground is bare,
+## not uniformly frosted white the instant the calendar ticks into winter --
+## the dedicated `grass_blades_winter.png` sheet is reserved for the snow-
+## triggered overlay below, not the calendar's own default per-card look.
+## Every OTHER season name (including one this function has never heard of)
+## passes straight through unchanged -- this is not a validating/fallback
+## function like `_texture_for`'s DEFAULT_SEASON substitution, it only ever
+## special-cases the one literal string "winter".
+static func base_render_season(season: String) -> String:
+	if season == "winter":
+		return "autumn"
+	return season
+
+
+## A stable [0, 1) pseudo-random threshold derived from a card's own atlas
+## seed, for the snow-overlay split below -- mirrors `turn_threshold_for_seed`
+## exactly but hashes a DIFFERENT salt, so a card's calendar-turn speed and
+## its snow-overlay speed never correlate (the same reasoning
+## `turn_threshold_for_seed`'s own doc comment gives for staying independent
+## of the seed/column hash: two conceptually unrelated mechanisms sharing one
+## hash would silently move in lockstep).
+static func snow_overlay_threshold_for_seed(atlas_seed: int) -> float:
+	return float(posmod(hash("%d_grass_snow_overlay" % atlas_seed), 10000)) / 10000.0
+
+
+## Splits `card_specs` into `{"base": [...], "winter": [...]}` by comparing
+## each card's own `snow_overlay_threshold_for_seed` against `snow_depth`
+## (`EarthChunkManager.snow_depth()` -- the identical live global scalar
+## ground snow and canopy sparkle already read, not a new coverage concept;
+## see docs/concept/snow_cover.md). Mirrors `split_cards_by_turn` exactly:
+## `snow_depth <= 0` collapses to an all-"base" single bucket (every real-
+## world case with no snow lying, the overwhelming common one, costs
+## nothing), and a card that has caught snow stays caught as depth only
+## climbs, never reverting mid-comparison.
+static func split_cards_by_snow_overlay(card_specs: Array, snow_depth: float) -> Dictionary:
+	var base: Array = []
+	var winter: Array = []
+	if snow_depth <= 0.0:
+		base = card_specs.duplicate()
+	elif snow_depth >= 1.0:
+		winter = card_specs.duplicate()
+	else:
+		for card in card_specs:
+			if snow_overlay_threshold_for_seed(card.atlas_seed) <= snow_depth:
+				winter.append(card)
+			else:
+				base.append(card)
+	return {"base": base, "winter": winter}
+
+
 func material() -> ShaderMaterial:
 	if _material == null:
 		var shader := Shader.new()

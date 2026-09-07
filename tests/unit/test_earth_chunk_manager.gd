@@ -2594,18 +2594,37 @@ func test_sync_grass_season_renders_one_multimesh_per_band_with_no_active_transi
 	)
 
 
-func test_sync_grass_season_uses_the_current_seasons_texture_with_no_active_transition():
+## Winter's own dedicated sheet is reserved for the snow-triggered overlay
+## (see docs/concept/long_grass.md's "Winter's own sheet is a snow overlay,
+## not a calendar destination") -- a settled winter's BASE render samples
+## AUTUMN's sheet, via IllustratedGrassPatch.base_render_season, applied at
+## the exact point sync_grass_season captures the raw calendar name.
+func test_sync_grass_season_uses_autumns_texture_for_a_settled_winter():
 	var chunk_coord := _seed_one_grass_patch()
 	manager.set_world_age_seconds(SeasonCycle.SECONDS_PER_YEAR * 0.875)  # mid-winter, settled
-	var winter_texture := manager._illustrated_grass._texture_for("winter")
+	var autumn_texture := manager._illustrated_grass._texture_for("autumn")
 
 	var bands: Dictionary = manager._grass_sprites[chunk_coord]
 	var checked_any := false
 	for band in bands:
 		var mmi: MultiMeshInstance2D = bands[band]
-		assert_eq(mmi.texture, winter_texture, "a settled winter must render winter's own sheet, not a stale default")
+		assert_eq(mmi.texture, autumn_texture, "a settled winter must render autumn's own sheet, not the dedicated winter one")
 		checked_any = true
 	assert_true(checked_any, "precondition: at least one band exists")
+
+
+## A direct consequence of winter rendering as autumn: the real calendar
+## transition INTO winter has nothing left to visually cross over (both
+## ends now sample the identical sheet), so it must not pay for a second,
+## "turning" mesh at all -- the same signature guard that already skips one
+## for a genuinely unchanged season.
+func test_sync_grass_season_never_creates_a_turning_mesh_for_the_now_identical_autumn_to_winter_transition():
+	var chunk_coord := _seed_one_grass_patch()
+	manager.set_world_age_seconds(SeasonCycle.SECONDS_PER_YEAR * 0.70)  # mid-turn, autumn -> winter
+	assert_true(
+		manager._grass_sprites_turning.get(chunk_coord, {}).is_empty(),
+		"autumn and (remapped) winter render identically -- there is nothing for a turning mesh to hold"
+	)
 
 
 ## The core of "per blade transitions similar to trees": a card-granularity
@@ -2692,6 +2711,105 @@ func test_sync_grass_season_skips_a_resync_when_the_season_has_not_changed():
 	for band in manager._grass_sprites[chunk_coord]:
 		after_count += (manager._grass_sprites[chunk_coord][band] as MultiMeshInstance2D).multimesh.instance_count
 	assert_eq(after_count, before_count, "an unchanged season must skip the resync entirely, new patch or not")
+
+
+# -- winter's own sheet is a snow overlay, not a calendar destination (see
+# docs/concept/long_grass.md's "Winter's own sheet is a snow overlay, not a
+# calendar destination") ---------------------------------------------------
+
+
+## Reuses the calendar-turn split's own "second MultiMeshInstance2D per band"
+## mechanism (_grass_sprites_turning), but keyed to real snow depth via
+## IllustratedGrassPatch.split_cards_by_snow_overlay -- the same reasoning
+## test_sync_grass_season_splits_a_band_into_two_multimeshes_during_an_
+## active_transition already used, just for a different real trigger.
+func test_sync_grass_sprites_splits_a_band_by_snow_overlay_when_snow_is_lying():
+	var chunk_coord := _seed_one_grass_patch()
+	var sim: TallGrass = manager._grass_sims[chunk_coord]
+	for i in range(20):
+		sim._patches[Vector2i(i % EarthChunkManager.CHUNK_SIZE, 5)] = 1.0
+	var half_span: Vector2 = manager._visible_half_span_tiles()
+	var visible_cells := 0
+	for cell in sim.get_patch_cells():
+		if DecorationLod.keeps_decoration_tile(
+			cell, manager._disturbance_center_tile, half_span, EarthChunkManager.GRASS_VIEW_BUFFER_TILES
+		):
+			visible_cells += 1
+
+	# 150s at Snowfall.SECONDS_TO_COVER=300s (WeatherModel.WEATHER_PERIOD_
+	# SECONDS * 0.5) lands depth near 0.5 -- comfortably mid-range, not a
+	# corner case near 0 or 1.
+	manager.advance_world_age(150.0)
+	manager.step_snow(true, 0.0)  # cold and snowing
+	var snow_depth := manager.snow_depth()
+	assert_gt(snow_depth, 0.0, "precondition: step_snow should have laid down real snow")
+	assert_lt(snow_depth, 1.0, "precondition: a real mid-depth split needs snow depth strictly between 0 and 1")
+
+	manager._sync_grass_sprites(chunk_coord)
+
+	var bands: Dictionary = manager._grass_sprites[chunk_coord]
+	var overlay_bands: Dictionary = manager._grass_sprites_turning.get(chunk_coord, {})
+	assert_false(overlay_bands.is_empty(), "lying snow with a real mid-depth split must create at least one overlay mesh")
+
+	var base_texture := manager._illustrated_grass._texture_for(manager._grass_season_name)
+	var winter_texture := manager._illustrated_grass._texture_for("winter")
+	var total_base := 0
+	var total_winter := 0
+	for band in overlay_bands:
+		assert_true(bands.has(band), "a band with an overlay mesh must also still have its primary mesh")
+		var base_mmi: MultiMeshInstance2D = bands[band]
+		var winter_mmi: MultiMeshInstance2D = overlay_bands[band]
+		assert_eq(base_mmi.texture, base_texture, "the primary mesh must keep sampling the season's own base sheet")
+		assert_eq(winter_mmi.texture, winter_texture, "the overlay mesh must sample the dedicated winter sheet")
+		assert_gt(winter_mmi.multimesh.instance_count, 0, "a mesh present at all must actually be drawing something")
+		total_base += base_mmi.multimesh.instance_count
+		total_winter += winter_mmi.multimesh.instance_count
+	assert_gt(total_base, 0, "a real mid-depth split must leave some cards on the base sheet")
+	assert_eq(
+		total_base + total_winter, visible_cells * IllustratedGrassPatch.CARD_COUNT,
+		"no card may be lost or duplicated by the split"
+	)
+
+
+func test_sync_grass_sprites_has_no_overlay_mesh_when_no_snow_is_lying():
+	var chunk_coord := _seed_one_grass_patch()
+	assert_eq(manager.snow_depth(), 0.0, "precondition: no snow has fallen")
+	manager._sync_grass_sprites(chunk_coord)
+	assert_true(
+		manager._grass_sprites_turning.get(chunk_coord, {}).is_empty(),
+		"no snow lying must mean no overlay mesh exists at all"
+	)
+
+
+## Scoped deliberately (see the concept doc's own "Scoped deliberately, not
+## silently" paragraph): reusing the SAME turning-mesh slot for both the
+## calendar turn and the snow overlay means the two are mutually exclusive,
+## not composed. An active calendar transition wins outright.
+func test_sync_grass_sprites_prefers_an_active_calendar_transition_over_the_snow_overlay():
+	var chunk_coord := _seed_one_grass_patch()
+	var sim: TallGrass = manager._grass_sims[chunk_coord]
+	for i in range(20):
+		sim._patches[Vector2i(i % EarthChunkManager.CHUNK_SIZE, 5)] = 1.0
+
+	manager.advance_world_age(150.0)
+	manager.step_snow(true, 0.0)
+	assert_gt(manager.snow_depth(), 0.0, "precondition: real snow is lying")
+	manager.set_world_age_seconds(SeasonCycle.SECONDS_PER_YEAR * 0.45)  # mid-turn, summer -> autumn
+	assert_gt(manager._grass_turn_progress, 0.0, "precondition: a real calendar transition is active")
+
+	manager._sync_grass_sprites(chunk_coord)
+
+	var overlay_bands: Dictionary = manager._grass_sprites_turning.get(chunk_coord, {})
+	var summer_texture := manager._illustrated_grass._texture_for("summer")
+	var autumn_texture := manager._illustrated_grass._texture_for("autumn")
+	var checked_any := false
+	for band in overlay_bands:
+		var to_mmi: MultiMeshInstance2D = overlay_bands[band]
+		assert_eq(to_mmi.texture, autumn_texture, "the calendar transition's own 'to' texture must win, not the winter overlay")
+		var from_mmi: MultiMeshInstance2D = manager._grass_sprites[chunk_coord][band]
+		assert_eq(from_mmi.texture, summer_texture)
+		checked_any = true
+	assert_true(checked_any, "precondition: the calendar transition itself still produces an overlay mesh")
 
 
 # -- building/destruction -----------------------------------------------------
