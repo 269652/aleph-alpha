@@ -51,6 +51,8 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
+const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
 
 const GROUP_NAME := "decomposer"
 
@@ -115,6 +117,17 @@ var wander_seed := 0
 var carrying_disease := false
 var _disease_model := DiseaseModel.new()
 var _disease_roll_count := 0
+
+## Real seconds left before this decomposer will consider a mushroom bite
+## again, set from MushroomBiting.satiation_seconds_for(this decomposer's
+## own real mass) on a successful bite (see _step_feeding) -- the report's
+## own "a small bug... is satisfied for a few hours" (docs/concept/
+## soil_fauna.md's "Progressive, mass-scaled bites, and real toxic
+## effects"). Deliberately narrow: gates ONLY the mushroom branch of
+## _nearest_food, not carrion/fruit/leaf-litter foraging, which this
+## marker has no general hunger concept for at all and this pass does not
+## add one.
+var _mushroom_satiation_remaining := 0.0
 
 var _behavior := CarrionForageBehavior.new()
 var _target: Node2D = null
@@ -309,6 +322,7 @@ func _process(frame_delta: float) -> void:
 	# wander-heading cadence relative to its OWN simulated time -- not real
 	# wall-clock frames it may be skipping most of.
 	_elapsed_time += delta
+	_mushroom_satiation_remaining = maxf(0.0, _mushroom_satiation_remaining - delta)
 	var position_before := position
 	match _behavior.phase:
 		CarrionForageBehavior.Phase.SEEKING:
@@ -492,7 +506,15 @@ func _nearest_food() -> Node2D:
 		# PARTIALLY bitten one (some real capacity still left) stays a
 		# real target, so a second bug can take a second bite.
 		var is_real_fruit: bool = node is DroppedItem and node.item_stack != null
-		var is_biteable_mushroom: bool = node.has_method("take_mushroom_bite") and node.can_be_bitten()
+		# Satiated (see _mushroom_satiation_remaining's own doc comment):
+		# recently ate a mushroom, not hungry enough to seek another one
+		# yet -- the report's own "is satisfied for a few hours". Gates
+		# ONLY this branch, not fruit/carrion above.
+		var is_biteable_mushroom: bool = (
+			_mushroom_satiation_remaining <= 0.0
+			and node.has_method("take_mushroom_bite")
+			and node.can_be_bitten()
+		)
 		if not is_real_fruit and not is_biteable_mushroom:
 			continue
 		var distance: float = position.distance_to(node.position)
@@ -555,13 +577,23 @@ func _step_feeding(delta: float) -> void:
 		elif _target.has_method("take_mushroom_bite"):
 			# A mushroom (see MushroomMarker.take_mushroom_bite): unlike a
 			# carcass's whittled-down health pool or a fallen fruit eaten
-			# whole in one visit, one bite marks it bitten and done -- it
-			# stays present, in the world and later in an inventory, just
-			# diminished (see MushroomBiting.gd), rather than removed
-			# outright. So this decomposer is done here regardless of what
-			# take_mushroom_bite() itself returns -- there is nothing left
-			# to gain from a second bite (see WildMushroomPatch.bite).
-			_target.take_mushroom_bite()
+			# whole in one visit, a bite advances a real per-mushroom stage
+			# count and stays present, in the world and later in an
+			# inventory, just diminished (see MushroomBiting.gd), rather
+			# than removed outright. How many stages -- and how long this
+			# decomposer stays satisfied afterward -- both scale with its
+			# own real mass (docs/concept/soil_fauna.md's "Progressive,
+			# mass-scaled bites, and real toxic effects"): a bug/ant-scale
+			# decomposer takes exactly one small nibble and won't seek
+			# another mushroom for a real while (see
+			# _mushroom_satiation_remaining). This decomposer is done here
+			# regardless of what take_mushroom_bite() itself returns --
+			# even a refused bite (already fully eaten by the time it
+			# arrived) means there is nothing left to gain from trying
+			# again immediately (see WildMushroomPatch.bite).
+			var mass_kg := CreatureMass.mass_kg_for(species)
+			if _target.take_mushroom_bite(MushroomBiting.bites_per_visit_for(mass_kg)):
+				_mushroom_satiation_remaining = MushroomBiting.satiation_seconds_for(mass_kg)
 			_target = null
 			_behavior.abort()
 			return

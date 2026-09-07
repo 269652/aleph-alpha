@@ -498,6 +498,95 @@ func test_a_partially_bitten_mushroom_is_still_a_target():
 	assert_gt(mushroom.bite_stage, 1, "a second bug should still be able to advance it further")
 
 
+# -- mass-scaled bite count and satiation ------------------------------------
+#
+# Reported live, directly: "the amount the bug eats should be based on mass;
+# hunger and calories so a small bug probably only takes a single bite...
+# and is satisfied for a few hours." See docs/concept/soil_fauna.md's
+# "Progressive, mass-scaled bites, and real toxic effects".
+
+## An "ant"/"bug"-scale decomposer is well under
+## MushroomBiting.SMALL_EATER_MASS_THRESHOLD_KG -- exactly one stage per
+## visit, the report's own "a small bug probably only takes a single bite".
+func test_bites_a_mushroom_using_its_own_mass_scaled_bite_count():
+	marker.species = "ant"
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	assert_eq(
+		mushroom.bite_stage,
+		MushroomBiting.bites_per_visit_for(CreatureMass.mass_kg_for("ant")),
+		"an ant's own mass-scaled bite count should land, not a hardcoded 1"
+	)
+
+
+## "ant" and "bug" both land in MushroomBiting's own smallest tier (1 bite
+## either way), so the test above alone can't prove the bite count is
+## really COMPUTED from CreatureMass.mass_kg_for(species) rather than a
+## hardcoded 1 that happens to match. This proves the real wiring: swap in
+## a species CreatureMass rates far heavier (never a real decomposer
+## species in the shipped game, but nothing stops the field holding one in
+## a test) and confirm its own mass-scaled bite count actually lands.
+func test_bite_count_is_genuinely_computed_from_the_markers_own_species_mass():
+	marker.species = "boar"
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	assert_eq(
+		mushroom.bite_stage,
+		MushroomBiting.bites_per_visit_for(CreatureMass.mass_kg_for("boar")),
+		"a heavier species string should really change the bite count, proving the mass lookup is wired in"
+	)
+	assert_eq(mushroom.bite_stage, MushroomBiting.MAX_BITE_STAGES)
+
+
+## The report's other half: "is satisfied for a few hours" -- a decomposer
+## that just fed must not immediately go looking for a SECOND mushroom to
+## bite, even with one still standing right next to it.
+func test_a_freshly_fed_decomposer_does_not_immediately_seek_another_mushroom():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	assert_gt(mushroom.bite_stage, 0, "precondition: it actually bit the first mushroom")
+	assert_gt(marker._mushroom_satiation_remaining, 0.0, "eating should start a real satiation window")
+
+	# A second, fresh mushroom appears right next to it -- satiated, the
+	# decomposer should not commit to it.
+	var second := _mushroom_at(Vector2(106, 100))
+	for i in 40:
+		marker._process(0.1)
+	assert_eq(second.bite_stage, 0, "a satiated decomposer should not bite a second mushroom yet")
+
+
+## Once the real mass-scaled satiation window actually elapses, the same
+## decomposer is willing to bite a mushroom again -- the SAME one, still
+## standing there with real capacity left (see can_be_bitten/
+## test_a_partially_bitten_mushroom_is_still_a_target), rather than staying
+## satiated forever.
+func test_satiation_expires_and_a_decomposer_can_bite_again():
+	var mushroom := _mushroom_at(Vector2(105, 100))
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > 0:
+			break
+	var stage_after_first_bite: int = mushroom.bite_stage
+	var remaining: float = marker._mushroom_satiation_remaining
+	assert_gt(remaining, 0.0, "precondition: currently satiated")
+	marker._process(remaining + 1.0)  # a single big step past the whole window
+
+	for i in 200:
+		marker._process(0.5)
+		if mushroom.bite_stage > stage_after_first_bite:
+			break
+	assert_gt(mushroom.bite_stage, stage_after_first_bite, "satiation should have expired -- it should bite again")
+
+
 func test_ignores_a_dropped_item_that_is_not_food():
 	var stone := DroppedItem.new()
 	stone.item_stack = ItemStack.new(Item.new("iron_ore", "Iron Ore", "material", 20), 1)
