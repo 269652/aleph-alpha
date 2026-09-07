@@ -34,12 +34,18 @@ const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 const STRIDE_LENGTH_METERS := 0.75
 const STRIDE_LENGTH_PX := STRIDE_LENGTH_METERS * GroundSlide.PX_PER_METER
 
-## Real average adult walking stance width -- how far apart a left and
-## right print land to either side of the walked line, not the distance
-## between consecutive steps (that's STRIDE_LENGTH_PX above). A person
-## does not walk with their feet on a single line; each print offsets
-## sideways from the centre by half of this.
-const STANCE_WIDTH_METERS := 0.12
+## How far apart a left and right print land to either side of the
+## walked line, not the distance between consecutive steps (that's
+## STRIDE_LENGTH_PX above). A person does not walk with their feet on a
+## single line; each print offsets sideways from the centre by half of
+## this.
+##
+## Widened from the real average adult stance width (0.12m) to a real,
+## wider-gait value further along the same natural range -- reported
+## live, directly: "space left and right foot a bit wider". Still a real
+## human measurement, converted the same way, just further along the
+## same real range rather than an eyeballed pixel bump.
+const STANCE_WIDTH_METERS := 0.22
 const STANCE_WIDTH_PX := STANCE_WIDTH_METERS * GroundSlide.PX_PER_METER
 
 var _distance_since_last_step := 0.0
