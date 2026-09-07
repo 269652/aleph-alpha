@@ -15,9 +15,22 @@ Walk these woods in autumn and every birch is going gold at its own pace, leaves
 ![In Game Spring](./screenshots/ingame.png)
 ![In Game Autumn](./screenshots/ingame-2.png)
 ![In Game Winter](./screenshots/ingame-3.png)
+
 Built solo/part-time in Godot 4 (GDScript), strict test-driven development
 throughout — come see what that looks like after a few hundred nights and
 weekends.
+
+## Contents
+
+- [Features](#features)
+- [Overview](#overview)
+- [Playing the Game](#playing-the-game)
+- [License Key](#license-key)
+- [Private Alpha Use](#private-alpha-use)
+- [Ownership and Contributions](#ownership-and-contributions)
+- [Disclaimer](#disclaimer)
+- [Contact](#contact)
+- [License](#license)
 
 ## Features
 
@@ -74,8 +87,8 @@ mechanism-by-mechanism implementation status is
    prompt — that's just an unrecognized-publisher warning, not a virus
    flag. Click **More info > Run anyway**. (The executable already
    carries the game's own internal signature, checked at startup — see
-   `docs/licensing.md` — just not a paid Windows code-signing
-   certificate, which is what SmartScreen actually checks for.)
+   [docs/licensing.md](docs/licensing.md) — just not a paid Windows
+   code-signing certificate, which is what SmartScreen actually checks for.)
 4. The first launch shows the in-game license screen — paste the key
    below into it.
 
@@ -88,8 +101,10 @@ non-.NET build -- the project doesn't use C#). From the repo root:
 godot --path .
 ```
 
-That opens a play window directly on the main scene. If `godot` isn't on your
-PATH, call the binary by its full path instead, e.g.
+The very first time you open the project, Godot spends a while importing
+every asset before anything shows up — that's normal, not a hang. After
+that, the command above opens a play window directly on the main scene. If
+`godot` isn't on your PATH, call the binary by its full path instead, e.g.
 `"C:/Godot/Godot_v4.7-stable_win64.exe" --path .`
 
 The first launch shows the in-game license screen -- paste the key below.
@@ -119,10 +134,11 @@ KFN68JF1XFDVDBWTYRWYW8ECKRKD6B6MBRCW1STQ
 ```
 
 The game also verifies its own files haven't been tampered with at
-startup (see `docs/licensing.md`). **Removing or bypassing this signature
-verification is expressly prohibited** under the license terms below, in
-addition to being enforced technically (see `docs/licensing.md`'s
-"Key-swap resistance" for what happens if you try).
+startup (see [docs/licensing.md](docs/licensing.md)). **Removing or
+bypassing this signature verification is expressly prohibited** under the
+license terms below, in addition to being enforced technically (see
+[docs/licensing.md](docs/licensing.md)'s "Key-swap resistance" for what
+happens if you try).
 
 ## Private Alpha Use
 
@@ -165,7 +181,7 @@ once you're in.
 
 ## Disclaimer
 
-THE GAME IS PROVIDED “AS IS” WITHOUT WARRANTIES OF ANY KIND, TO THE MAXIMUM
+THE GAME IS PROVIDED "AS IS" WITHOUT WARRANTIES OF ANY KIND, TO THE MAXIMUM
 EXTENT PERMITTED BY LAW. THE COPYRIGHT HOLDER IS NOT LIABLE FOR DAMAGES
 ARISING FROM USE OF THE GAME, EXCEPT TO THE EXTENT LIABILITY CANNOT
 LAWFULLY BE EXCLUDED.
@@ -173,7 +189,7 @@ LAWFULLY BE EXCLUDED.
 ## Contact
 
 For permission requests, licensing inquiries, or bug reports, open an issue
-or contact the copyright holder through the repository owner’s GitHub
+or contact the copyright holder through the repository owner's GitHub
 profile.
 
 ## License
