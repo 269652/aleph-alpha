@@ -24,11 +24,14 @@ extends Node2D
 ## flight -- rather than the walking gait a ground forager uses: a bee
 ## is a flying insect, not a walking one.
 ##
-## Reuses ProceduralButterflySprite's existing "bee" art directly (a
-## compact amber silhouette) rather than inventing a new generator: the
-## shape/colour were already right for a bee, it is only the SPAWN/
-## lifecycle half of the old decorative pollinator that this feature
-## retires (see AmbientFlyerRenderer), never the art itself.
+## Draws real illustrated art (IllustratedBeeSprite -- honeybee.png for a
+## real hive worker, bee.png for a WildBeePatch resident, see
+## `is_wild_bee`'s own doc comment) at a real, measured world scale.
+## Previously drew EITHER species via ProceduralButterflySprite's own
+## generic "bee" silhouette with NO scale applied to the sprite at all --
+## reported live: "bees are drawn gigantic" -- this codebase's own
+## recurring "gigantic X" failure mode (see ProceduralDecomposerSprite's
+## own doc comment for the identical precedent already hit for ants).
 ##
 ## ONE marker class serves BOTH a honeybee hive's own worker AND a
 ## solitary WildBeePatch resident's own foraging trip -- see `_colony`'s
@@ -37,6 +40,7 @@ extends Node2D
 ## call) rather than a near-duplicate WildBeeForagerMarker.
 
 const ProceduralButterflySprite = preload("res://src/rendering/procedural_butterfly_sprite.gd")
+const IllustratedBeeSprite = preload("res://src/rendering/illustrated_bee_sprite.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const BeeForageBehavior = preload("res://src/gameplay/bee_forage_behavior.gd")
 const BeeColony = preload("res://src/world/bee_colony.gd")
@@ -105,6 +109,18 @@ var hive_position: Vector2 = Vector2.ZERO
 ## contract. Set before add_child by real dispatch.
 var scout := false
 
+## Which real sheet to draw (see IllustratedBeeSprite's own doc comment):
+## false (the default) is a honeybee.png hive worker, dispatched by
+## EarthChunkManager._dispatch_bee_forager; true is a bee.png WildBeePatch
+## resident, dispatched by _dispatch_wild_bee_forager. A plain bool rather
+## than reading `_colony`'s own runtime type: `_colony` is deliberately
+## untyped/duck-typed (see its own doc comment) specifically so this class
+## never has to care which kind of home it has for behaviour -- only the
+## ART differs by species, so that is the one place this class asks at
+## all, and it asks via an explicit flag set at dispatch time rather than
+## an is-a check on a value that is deliberately untyped everywhere else.
+var is_wild_bee := false
+
 var wander_seed := 0
 var _elapsed_time := 0.0
 var _sense_accumulator := SENSE_INTERVAL_SECONDS
@@ -135,9 +151,19 @@ var _hive_cell := Vector2i.ZERO
 ## real chunk manager.
 var _world = null
 
+## How much horizontal movement in one step counts as a real leftward/
+## rightward heading worth flipping the sprite for -- mirrors
+## DecomposerMarker.FACING_DEADZONE_PX exactly.
+const FACING_DEADZONE_PX := 0.05
+
 var _sprite: Sprite2D
 
 static var _generator := ProceduralButterflySprite.new()
+static var _illustrated_generator := IllustratedBeeSprite.new()
+
+
+func _species() -> String:
+	return "wild_bee" if is_wild_bee else "honeybee"
 
 
 ## `world` (duck-typed, see _world's own doc comment), `colony` (the real
@@ -174,7 +200,27 @@ func _ensure_initialized() -> void:
 			_scout_direction_change_interval()
 		)
 		_behavior.begin_scouting()
-	_sprite.texture = _generator.generate_texture("bee", wander_seed)
+	_update_sprite(Vector2.ZERO)
+
+
+## Real illustrated fly-cycle art where IllustratedBeeSprite has it for
+## this species (checked first, same has_X()-gated fallback convention
+## every other optional illustrated-art seam in this codebase uses),
+## ProceduralButterflySprite's own single static silhouette otherwise.
+## `moved` is how far position actually changed this step -- see
+## FACING_DEADZONE_PX's own doc comment for why only a real horizontal
+## step flips the sprite.
+func _update_sprite(moved: Vector2) -> void:
+	var species := _species()
+	if _illustrated_generator.has_species(species):
+		var frames := _illustrated_generator.generate_textures(species)
+		var index := int(_elapsed_time / IllustratedBeeSprite.FRAME_DURATION_SECONDS) % frames.size()
+		_sprite.texture = frames[index]
+		_sprite.scale = Vector2.ONE * _illustrated_generator.world_scale(species)
+		if absf(moved.x) > FACING_DEADZONE_PX:
+			_sprite.flip_h = moved.x > 0.0
+	else:
+		_sprite.texture = _generator.generate_texture("bee", wander_seed)
 
 
 func _scout_direction_change_interval() -> float:
@@ -232,12 +278,15 @@ func _process(frame_delta: float) -> void:
 		return
 	_ensure_initialized()
 	_elapsed_time += delta
+	var position_before := position
 	if _behavior.phase == BeeForageBehavior.Phase.SCOUTING:
 		_step_scouting(delta)
+		_update_sprite(position - position_before)
 		return
 	var leg_target := _current_leg_target()
 	if position.distance_to(leg_target) > ARRIVE_DISTANCE_PX:
 		position = position.move_toward(leg_target, FLY_SPEED * delta)
+		_update_sprite(position - position_before)
 		return
 	match _behavior.phase:
 		BeeForageBehavior.Phase.APPROACHING:
@@ -245,6 +294,8 @@ func _process(frame_delta: float) -> void:
 		BeeForageBehavior.Phase.RETURNING:
 			_resolve_arrival_at_hive()
 			queue_free()
+			return
+	_update_sprite(position - position_before)
 
 
 ## No known target: wander (home-anchored at the hive), sensing only its

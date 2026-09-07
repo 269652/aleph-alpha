@@ -8855,6 +8855,7 @@ func _dispatch_wild_bee_forager(patch: WildBeePatch, origin: Vector2i, cell: Vec
 	forager.hive_position = nest_pixel
 	forager.position = nest_pixel
 	forager.scout = true
+	forager.is_wild_bee = true
 	forager.setup(self, patch, cell)
 	_entities_parent.add_child(forager)
 	active.append(forager)
