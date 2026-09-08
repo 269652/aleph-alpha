@@ -16,6 +16,7 @@ const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd"
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const LeafLitterAtlas = preload("res://src/rendering/leaf_litter_atlas.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 
 # -- packing: every channel round-trips ---------------------------------------
@@ -403,6 +404,90 @@ func test_instances_for_leaves_covers_every_leaf_given():
 			"transition_from": Vector2(i * 10.0, 0.0), "transition_start": 0.0,
 		})
 	assert_eq(LeafLitterRenderer.instances_for_leaves(leaves, atlas, 0.0).size(), 5)
+
+
+# -- visible-area filtering: skip rendering leaves the camera cannot see -----
+#
+# Reported live: "make it so that it only computes leaf litter ... to the
+# current visible area". docs/concept/soil_fauna.md's own dirty-tracking
+# writeup already named the remaining gap this closes: fill() rebuilds a
+# chunk's ENTIRE leaf set at once, so one leaf actively changing far off the
+# real visible window costs as much as rebuilding every other, truly idle
+# leaf sharing its chunk -- "architecturally unavoidable ... without a
+# finer-grained (per-leaf incremental) rendering update". leaves_in_view
+# reuses (not reinvents) EarthChunkManager's own established per-tile camera
+# cutoff -- DecorationLod.keeps_decoration_tile, the same convention/buffer
+# grass's own GRASS_VIEW_BUFFER_TILES already established answering the
+# identical report for grass blades.
+
+func test_leaves_in_view_includes_a_leaf_at_the_players_own_position():
+	var leaves: Array[Dictionary] = [
+		{"position": Vector2.ZERO, "transition_from": Vector2.ZERO},
+	]
+	var visible := LeafLitterRenderer.leaves_in_view(leaves, Vector2i.ZERO, Vector2(10.0, 5.0), 2)
+	assert_eq(visible.size(), 1)
+
+
+func test_leaves_in_view_excludes_a_leaf_far_outside_the_window():
+	var far_position := Vector2(100000.0, 100000.0)
+	var leaves: Array[Dictionary] = [
+		{"position": far_position, "transition_from": far_position},
+	]
+	var visible := LeafLitterRenderer.leaves_in_view(leaves, Vector2i.ZERO, Vector2(10.0, 5.0), 2)
+	assert_eq(visible.size(), 0)
+
+
+## A leaf mid-transition AWAY from the window (wind just blew a previously-
+## visible, settled leaf toward a target outside it) must keep rendering for
+## its whole transition, not vanish the instant its own NEW target alone
+## crosses the boundary -- proven by checking transition_from, not position
+## alone.
+func test_leaves_in_view_includes_a_leaf_transitioning_out_of_the_window():
+	var leaves: Array[Dictionary] = [
+		{"position": Vector2(100000.0, 0.0), "transition_from": Vector2.ZERO},
+	]
+	var visible := LeafLitterRenderer.leaves_in_view(leaves, Vector2i.ZERO, Vector2(10.0, 5.0), 2)
+	assert_eq(visible.size(), 1, "still mid-transition away from a visible start point")
+
+
+## The mirror image: a leaf blown IN toward the window from far outside it
+## must render for its whole transition too, not pop in only once it lands.
+func test_leaves_in_view_includes_a_leaf_transitioning_into_the_window():
+	var leaves: Array[Dictionary] = [
+		{"position": Vector2.ZERO, "transition_from": Vector2(100000.0, 0.0)},
+	]
+	var visible := LeafLitterRenderer.leaves_in_view(leaves, Vector2i.ZERO, Vector2(10.0, 5.0), 2)
+	assert_eq(visible.size(), 1)
+
+
+func test_leaves_in_view_keeps_leaves_within_the_window_and_drops_the_rest():
+	var leaves: Array[Dictionary] = [
+		{"position": Vector2.ZERO, "transition_from": Vector2.ZERO},
+		{"position": Vector2(100000.0, 0.0), "transition_from": Vector2(100000.0, 0.0)},
+	]
+	var visible := LeafLitterRenderer.leaves_in_view(leaves, Vector2i.ZERO, Vector2(10.0, 5.0), 2)
+	assert_eq(visible.size(), 1)
+	assert_eq(visible[0].position, Vector2.ZERO)
+
+
+func test_leaves_in_view_returns_empty_for_no_leaves():
+	var leaves: Array[Dictionary] = []
+	assert_eq(LeafLitterRenderer.leaves_in_view(leaves, Vector2i.ZERO, Vector2(10.0, 5.0), 2).size(), 0)
+
+
+## The player's own tile is in world TILES; a leaf's position is in world
+## PIXELS -- proves the conversion actually happens (TerrainRenderer.
+## TILE_SIZE) rather than comparing mismatched units that would coincidentally
+## pass at the origin alone.
+func test_leaves_in_view_converts_pixel_position_to_tiles_before_comparing():
+	var tile_size := TerrainRenderer.TILE_SIZE
+	# 3 tiles from a player standing at tile (5, 5) -- inside a span of (10, 5) + buffer 2.
+	var near_pixel := Vector2(float((5 + 3) * tile_size), float(5 * tile_size))
+	var leaves: Array[Dictionary] = [
+		{"position": near_pixel, "transition_from": near_pixel},
+	]
+	var visible := LeafLitterRenderer.leaves_in_view(leaves, Vector2i(5, 5), Vector2(10.0, 5.0), 2)
+	assert_eq(visible.size(), 1)
 
 
 # -- housekeeping: mesh/material can be built headless (no MultiMesh fill) ---

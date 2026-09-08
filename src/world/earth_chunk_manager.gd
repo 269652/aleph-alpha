@@ -758,6 +758,18 @@ var _leaf_litter_renderer := LeafLitterRenderer.new()
 ## before). Same create-at-load/erase-at-unload lifecycle as
 ## _leaf_litter_fields/_leaf_litter_mmis above.
 var _leaf_litter_filled_generation: Dictionary = {}
+## Tile _leaf_litter_filled_generation's own filtered fill was last derived
+## against (see LeafLitterRenderer.leaves_in_view / LEAF_LITTER_VIEW_BUFFER_
+## TILES) -- mirrors _grass_view_synced_tile's identical role for grass.
+## Unlike a chunk's own generation() (which answers "did the DATA change"),
+## this answers the second, independent question a per-leaf visible-area
+## filter introduces: "did WHAT COUNTS AS NEARBY change" -- the player
+## walking toward a leaf that never itself moved must still reveal it, even
+## though field.generation() never bumped at all. step_leaf_litter forces a
+## refill of every currently-decorating chunk whenever this differs from
+## _disturbance_center_tile, then syncs it, the same "compare, act, sync"
+## shape _leaf_litter_filled_generation itself already uses.
+var _leaf_litter_view_synced_tile := Vector2i.ZERO
 
 ## Vector2i chunk_coord -> FootprintField (see FootstepGait,
 ## docs/concept/snow_cover.md's "Footprints" / docs/concept/
@@ -6522,6 +6534,16 @@ func _drop_decoration(holder: Dictionary, chunk_coord: Vector2i) -> void:
 ## framerate" -- see docs/concept/long_grass.md.
 const GRASS_VIEW_BUFFER_TILES := 2
 
+## Leaf litter's own tile-precise view buffer -- reuses GRASS_VIEW_BUFFER_
+## TILES' own exact value (the SAME camera-buffer convention, not a third
+## independently-tuned number -- mirrors LEAF_SPRING_TRICKLE_CHANCE reusing
+## LEAF_SUMMER_TRICKLE_CHANCE's own value for the identical reason). Fed to
+## LeafLitterRenderer.leaves_in_view by step_leaf_litter, answering the
+## live report this closes for leaf litter specifically ("make it so that
+## it only computes leaf litter ... to the current visible area") the same
+## way GRASS_VIEW_BUFFER_TILES already answered it for grass blades.
+const LEAF_LITTER_VIEW_BUFFER_TILES := GRASS_VIEW_BUFFER_TILES
+
 ## Shared by both real reasons a band needs a SECOND MultiMeshInstance2D
 ## (the calendar turn and the snow overlay, mutually exclusive -- see
 ## _sync_grass_sprites' own doc comment): fetches the existing one for this
@@ -8516,9 +8538,36 @@ func _refresh_ant_moisture() -> void:
 ## entirely, not just delay it (see this function's own header comment
 ## above) -- a chunk that IS changing still refills the very same frame it
 ## changes, exactly as before this fix.
+##
+## Visible-area filtering, on top of the dirty-tracking above (reported live:
+## "make it so that it only computes leaf litter ... to the current visible
+## area"): the dirty-tracking fix only ever gated WHETHER a chunk refills --
+## it still rebuilt EVERY leaf that chunk held, however far from the camera,
+## docs/concept/soil_fauna.md's own "architecturally unavoidable ...
+## without a finer-grained per-leaf ... update" finding. When a refill does
+## happen, only the leaves LeafLitterRenderer.leaves_in_view keeps (the same
+## tile-precise camera cutoff/buffer grass's own GRASS_VIEW_BUFFER_TILES
+## already established, see LEAF_LITTER_VIEW_BUFFER_TILES) are actually
+## pushed -- bounding fill()'s own rebuild cost by nearby litter instead of
+## by a chunk's total accumulated count, which is what a chunk with one
+## far-off, perpetually-dirty floating leaf (the case that must always look
+## dirty -- see LeafLitterField.generation()'s own doc comment) needed all
+## along.
+##
+## This adds a SECOND, independent reason to refill beyond generation():
+## "what counts as nearby" can change even when no leaf itself does, the
+## moment the player's own tile moves (_disturbance_center_tile). Comparing
+## it against _leaf_litter_view_synced_tile (that field's own doc comment)
+## mirrors _leaf_litter_filled_generation's identical compare-act-sync
+## shape, and stays cheap for the same reason a chunk-boundary crossing is
+## cheap to check for grass: a player's TILE changes at a walking pace (a
+## few times a second at most), nowhere near the 60/sec this function itself
+## runs at.
 func step_leaf_litter(delta_seconds: float) -> void:
 	_leaf_litter_renderer.set_current_time(_world_age_seconds)
 	var weather_day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
+	var half_span := _visible_half_span_tiles()
+	var view_moved := _disturbance_center_tile != _leaf_litter_view_synced_tile
 	for chunk_coord in _leaf_litter_fields:
 		var field: LeafLitterField = _leaf_litter_fields[chunk_coord]
 		var region_seed := hash("%d_%d" % [chunk_coord.x, chunk_coord.y])
@@ -8533,9 +8582,20 @@ func step_leaf_litter(delta_seconds: float) -> void:
 		if mmi == null:
 			continue
 		mmi.visible = _decorates(chunk_coord)
-		if mmi.visible and _leaf_litter_filled_generation.get(chunk_coord, -1) != field.generation():
-			_leaf_litter_renderer.fill(mmi, field.leaves())
+		# Explicitly typed, not := -- Dictionary.get's Variant return compared
+		# against field.generation()'s int makes static := inference bail
+		# ("cannot infer the type... doesn't have a set type"), the same
+		# reason every sibling dirty-check in this file (see
+		# _footprint_filled_generation's identical comparison) always inlines
+		# this comparison into the if rather than naming it first.
+		var data_changed: bool = _leaf_litter_filled_generation.get(chunk_coord, -1) != field.generation()
+		if mmi.visible and (data_changed or view_moved):
+			var visible_leaves := LeafLitterRenderer.leaves_in_view(
+				field.leaves(), _disturbance_center_tile, half_span, LEAF_LITTER_VIEW_BUFFER_TILES
+			)
+			_leaf_litter_renderer.fill(mmi, visible_leaves)
 			_leaf_litter_filled_generation[chunk_coord] = field.generation()
+	_leaf_litter_view_synced_tile = _disturbance_center_tile
 
 
 ## Real per-mound SCOUT dispatch (see docs/concept/soil_fauna.md "Scouting:
