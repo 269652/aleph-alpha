@@ -263,7 +263,14 @@ last season's real success rather than a fixed reset. Wired into the
 real running game via `EarthChunkManager._refresh_bee_warmth`, extended
 to also feed `_wild_bee_patches` the same real climate+season signal
 honeybee hives already get.
-⬜ True butterfly season-gated spawn window
+✅ True butterfly season-gated spawn window — `AmbientFlyerRenderer.
+spawn_ambient_flyers` gains a trailing `season: String = "summer"`
+parameter (default preserves every pre-existing caller's behavior, the
+same convention `robin_population`/`sparrow_population` already
+established) and a new `BUTTERFLY_ACTIVE_SEASONS := {"spring": true,
+"summer": true, "autumn": true}` table, mirroring `CaterpillarRenderer.
+ACTIVE_SEASONS`'s exact spawn-time-gate shape. Wired into the real game
+via `EarthChunkManager`'s spawn call now passing `current_season()`.
 ⬜ Decomposer "bug" cold-slowdown
 ⬜ Herbivore winter-forage-realism fix
 ⬜ Squirrel/mouse cache-preference

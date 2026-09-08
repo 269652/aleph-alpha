@@ -17243,3 +17243,34 @@ drive-to-cap pattern, then confirm: dormancy banks that exact count as
 brood and zeroes residents; a dormant nest never forages across 500
 ticks; warming re-hatches residents to exactly the banked value.
 `test_wild_bee_patch.gd` 24/24.
+
+### Seasonal behavior, phase 3: true butterflies stop flying in winter (2026-09-08)
+
+✅ **Monarchs/swallowtails/blue morphos no longer spawn once winter
+genuinely arrives.** Real adult butterflies of these species do not
+survive a freezing winter; the population overwinters as pupae. Mirrors
+`CaterpillarRenderer.ACTIVE_SEASONS`'s own proven spawn-time gate exactly
+(checked once at chunk load, not per-frame) rather than building a new
+population model — true butterflies stay purely decorative, a separate,
+already-named gap in `ecosystem_dynamics.md`.
+
+`AmbientFlyerRenderer.spawn_ambient_flyers` gains a trailing
+`season: String = "summer"` parameter and a new `BUTTERFLY_ACTIVE_
+SEASONS := {"spring": true, "summer": true, "autumn": true}` table (autumn
+included — real adult butterflies fly well into it; only winter genuinely
+grounds them), gating the existing butterfly-spawn branch alongside its
+biome check. The default value follows the exact "safe default preserves
+old behavior" convention `robin_population`/`sparrow_population` already
+established on this same function — every one of the ~25 pre-existing call
+sites across `test_ambient_flyer_renderer.gd` keeps compiling and keeps
+spawning butterflies unchanged. Wired into the real game: `EarthChunkManager`'s
+spawn call now passes `current_season()`.
+
+New tests confirm a qualifying chunk spawns its guaranteed minimum in an
+active season, spawns zero true butterflies in winter, and that omitting
+`season` entirely (the pre-existing call shape) still spawns butterflies —
+confirmed red first (`Too many arguments for "spawn_ambient_flyers()"
+call` — the same "GUT swallows this as a discovery warning, not a
+failure" trap this session already documented, caught immediately here
+via `--check-only` rather than a silent skip), green after.
+`test_ambient_flyer_renderer.gd` 56/56.
