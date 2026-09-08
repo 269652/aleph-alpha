@@ -31,12 +31,32 @@ func _ready() -> void:
 	# that would stop if something upstream paused the tree earlier.
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# set_deferred, NOT a direct assignment: reported live, repeatedly, as
+	# "no intro plays" even after the third and fourth passes fixed every
+	# timing/gating issue upstream of this node ever being added to the
+	# tree -- a real, timestamped, non-headless launch showed this Control
+	# (and its children below) stuck at size=(0,0) for the entire 3.2s
+	# playback, visible/is_visible_in_tree() both true throughout, so
+	# nothing was ever actually drawn. A freshly created top-level Control
+	# with non-equal opposite anchors (PRESET_FULL_RECT sets all four to
+	# different values) has its size silently overridden back to whatever
+	# the anchors alone resolve to -- here (0,0), since nothing establishes
+	# a parent-relative sizing context for a bare top-level Control under a
+	# CanvasLayer -- in an internal layout pass that runs AFTER _ready()
+	# returns, stomping any direct same-frame `size = ...` assignment.
+	# Godot's own engine warning names this fix verbatim: "Nodes with non-
+	# equal opposite anchors will have their size overridden after
+	# _ready()... consider using set_deferred()". See
+	# test_size_fills_the_viewport_once_ready_settles for real coverage
+	# (confirmed red against a direct assignment first).
+	set_deferred("size", get_viewport_rect().size)
 
 	var backdrop := ColorRect.new()
 	backdrop.color = Color.BLACK
 	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
 	backdrop.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(backdrop)
+	backdrop.set_deferred("size", get_viewport_rect().size)
 
 	_display = TextureRect.new()
 	_display.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -44,6 +64,7 @@ func _ready() -> void:
 	_display.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	_display.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(_display)
+	_display.set_deferred("size", get_viewport_rect().size)
 
 	_frames = IntroSplashSheet.new().generate_textures()
 	if _frames.is_empty():
