@@ -227,6 +227,47 @@ func test_nut_consumption_chance_stays_a_modest_nudge_around_the_base_chance():
 		assert_lt(chance, 1.0, "never certainty for any individual")
 
 
+# -- real forage scarcity shifts the eat-vs-cache balance (see docs/concept/
+# seasonal_behavior.md, "Squirrel/mouse cache-preference") -- this file's
+# own doc comment already names the real-world reasoning: "caching becomes
+# common mainly once immediate hunger is satisfied... or a mast glut
+# exceeds what can be eaten right away." The inverse holds too: a hungrier,
+# scarcer season should push a forager toward eating what it finds right
+# now rather than investing in a cache for later. growth_modifier (see
+# EarthChunkManager.current_growth_modifier) is the same real seasonal
+# signal phase 5's herbivore forage-realism fix already reuses.
+
+func test_nut_consumption_chance_increases_as_real_forage_gets_scarcer():
+	assert_gt(
+		SquirrelNutCaching.nut_consumption_chance_for(0, 0.2),
+		SquirrelNutCaching.nut_consumption_chance_for(0, 1.0),
+		"a scarce winter should push a squirrel toward eating now rather than caching for later"
+	)
+
+
+func test_nut_consumption_chance_defaults_to_no_scarcity_effect():
+	assert_almost_eq(
+		SquirrelNutCaching.nut_consumption_chance_for(7),
+		SquirrelNutCaching.nut_consumption_chance_for(7, 1.0),
+		0.0001,
+		"omitting growth_modifier entirely must not change any pre-existing caller's chance"
+	)
+
+
+func test_scarcity_never_pushes_consumption_chance_to_certainty():
+	assert_lt(
+		SquirrelNutCaching.nut_consumption_chance_for(0, 0.0), 1.0,
+		"even the bleakest real winter reading leaves some real chance of caching"
+	)
+
+
+func test_nut_is_consumed_defaults_growth_modifier_to_no_scarcity_effect():
+	assert_eq(
+		SquirrelNutCaching.nut_is_consumed(11, 11),
+		SquirrelNutCaching.nut_is_consumed(11, 11, 1.0)
+	)
+
+
 ## The actual point of wiring this in: nut_is_consumed accepts the eating
 ## squirrel's own identity seed separately from the per-pick roll seed, and
 ## uses it to nudge the chance -- both still inside the majority-but-not-

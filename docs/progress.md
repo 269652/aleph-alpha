@@ -17360,3 +17360,41 @@ signal at all (every pre-existing caller) keeps the exact old flat
 behavior. Confirmed red first (winter and summer gained identical mass —
 `0.2199 == 0.2199`, the exact bypass being fixed), green after.
 `test_creature_marker.gd` 231/231.
+
+### Seasonal behavior, phase 6: squirrel scarcity shifts eat-vs-cache (2026-09-08)
+
+✅ **Revised on implementation, not as originally scoped** — see
+`docs/concept/seasonal_behavior.md`'s own updated mechanism-spec section
+for the full reasoning, summarized here: "squirrel/mouse cache
+preference" assumed a personal, retrievable food store either species
+could draw from in winter. Reading `SquirrelNutCaching`/`SeedCaching` in
+full showed neither is that — "caching" here means real scatter-hoarding
+SEED DISPERSAL (a picked-up nut/seed is carried a short distance and
+either eaten outright or buried as a brand new planting site), never a
+stockpile the same animal returns to later. `SeedCaching` (mouse)
+additionally has no eat-vs-cache branch at all — a mouse's grass seed is
+ALWAYS re-cached, a deliberate pre-existing design choice. Building a
+genuine per-individual "remembers and returns to its own cache" mechanic
+would be a materially larger, new feature, not a cheap extension — not
+attempted here.
+
+The real, still-genuinely-seasonal mechanism actually shipped: this
+module's own pre-existing doc comment already implies the reasoning
+("caching becomes common mainly once immediate hunger is satisfied...");
+the inverse holds too, so `SquirrelNutCaching.nut_consumption_chance_for`/
+`nut_is_consumed` gain an optional `growth_modifier` term (defaulting to
+1.0, no effect — every pre-existing call site keeps its exact prior
+chance) that nudges consumption UP as real forage gets scarcer, via a new
+`SCARCITY_CHANCE_SWING := 0.15`. Wired into the real game:
+`EarthChunkManager._step_squirrel_nut_caching` now passes
+`current_growth_modifier()` (phase 5's same signal) through. Mouse is
+explicitly out of scope for this specific mechanism; its own seasonal
+hardship already comes from phase 5's shared `FOOD_UNDERFOOT`/`FOOD_SEED`
+forage-realism fix, the same as every other `CreatureMarker` species.
+
+TDD: new tests confirm consumption chance rises measurably as
+`growth_modifier` drops toward its real winter floor, never reaches
+certainty even at the bleakest reading, and defaults to the exact
+pre-existing chance when omitted. Confirmed red first ("Too many
+arguments" — the new parameter didn't exist), green after.
+`test_squirrel_nut_caching.gd` 24/24.
