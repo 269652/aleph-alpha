@@ -43,12 +43,21 @@ func test_max_reference_population_matches_capacity_at_full_forage_success():
 	assert_almost_eq(BeePopulationModel.MAX_REFERENCE_POPULATION, model.capacity(1.0), 0.001)
 
 
-func test_max_reference_population_is_forty():
-	assert_almost_eq(BeePopulationModel.MAX_REFERENCE_POPULATION, 40.0, 0.001)
+func test_max_reference_population_is_eighty():
+	assert_almost_eq(BeePopulationModel.MAX_REFERENCE_POPULATION, 80.0, 0.001)
 
 
+## Symbolic, not two independently-pinned literals: this IS the invariant
+## BASE_CAPACITY's own doc comment names (a freshly-founded hive must never
+## read as already above its own unobserved capacity ceiling) -- asserting
+## it this way catches either constant drifting out of step with the other,
+## not just today's specific values.
 func test_base_capacity_matches_the_starting_population():
-	assert_almost_eq(BeePopulationModel.BASE_CAPACITY, 20.0, 0.001)
+	assert_almost_eq(BeePopulationModel.BASE_CAPACITY, BeePopulationModel.STARTING_POPULATION, 0.001)
+
+
+func test_starting_population_is_forty():
+	assert_almost_eq(BeePopulationModel.STARTING_POPULATION, 40.0, 0.001)
 
 
 ## How much a single bee draws from its own hive's stored honey reserve
@@ -82,9 +91,10 @@ func test_growth_rate_is_fifteen_percent_per_day():
 
 
 func test_step_grows_population_toward_capacity():
-	var next := model.step(BeePopulationModel.STARTING_POPULATION, 40.0, 30.0)
+	var ceiling := BeePopulationModel.MAX_REFERENCE_POPULATION
+	var next := model.step(BeePopulationModel.STARTING_POPULATION, ceiling, 30.0)
 	assert_gt(next, BeePopulationModel.STARTING_POPULATION)
-	assert_lte(next, 40.0)
+	assert_lte(next, ceiling)
 
 
 func test_step_does_not_grow_past_capacity():

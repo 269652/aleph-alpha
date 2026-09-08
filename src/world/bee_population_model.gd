@@ -39,14 +39,18 @@ const GROWTH_RATE_PER_DAY := 0.15
 ## it re-establishes after a swarm or an absconding move -- an abstract
 ## colony-strength number, not a literal bee headcount, the same
 ## abstraction level AntColony._population already sits at.
-const STARTING_POPULATION := 20.0
+##
+## Doubled from 20 to 40 (requested live: "minimum / starting beehive size
+## should be double of current") -- a bigger, more established-looking
+## colony from the moment a hive is first founded or re-founded.
+const STARTING_POPULATION := 40.0
 
 ## Kept equal to STARTING_POPULATION for the identical reason
 ## AntPopulationModel.BASE_CAPACITY is: a freshly-founded hive must never
 ## read as already above its own unobserved capacity ceiling, or
 ## PopulationModel.step would read it as overcrowded and start shrinking
 ## it back down before a player ever sees it settle.
-const BASE_CAPACITY := 20.0
+const BASE_CAPACITY := 40.0
 
 ## How much extra capacity a consistently well-fed hive can support, as a
 ## multiple of BASE_CAPACITY, at recent_forage_success == 1.0 (an
