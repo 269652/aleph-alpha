@@ -16790,3 +16790,50 @@ change since every consumer already reads the constants symbolically):
 `test_bee_colony.gd` 44/44, `test_bee_hive_marker.gd` 24/24,
 `test_bee_forager_marker.gd` 29/29, `test_earth_chunk_manager_bees.gd`
 17/17.
+
+### Long grass per-blade turn: a real hash-correlation bug fixed (`concept/long_grass.md` History #14, 2026-09-08)
+
+Reported live: "The long grass sprites don't change season color per blade
+but instead per entity... each entity should progress its blades
+individually... it should transition per blade." The "staggered per-blade
+turn" mechanism this describes was already built (`IllustratedGrassPatch.
+split_cards_by_turn`/`turn_threshold_for_seed`) -- this was a real bug in
+it, not a stale report or a misunderstanding of the design, confirmed
+empirically before writing any fix: across 500 real cells (the actual
+`card_specs_for_seed`/`cards_for_cell` production path, not arbitrary
+seeds), the current implementation produced not a single one whose 8 cards
+split anywhere near evenly at a mid transition -- every cell's cards
+crossed a given progress step together.
+
+Root cause: `card_specs_for_seed`'s per-card `atlas_seed` is
+`hash("%d_grass_card_%d" % [seed_value, index])` for index 0..7 -- a
+shared prefix, one trailing digit varying -- and a throwaway probe
+confirmed directly that Godot's String hash does not avalanche on that
+shape at all: it returned `base+0, base+1, base+2, ... base+7`, an exactly
+linear sequence, not a hash. `turn_threshold_for_seed`'s own re-hash
+inherited the same vulnerability rather than correcting it (confirmed the
+same way). Fixed by hashing `atlas_seed` as an INT with a salt constant
+(`hash(atlas_seed + salt)`) instead of building a string to hash --
+`hash(int)` avalanches cleanly even on consecutive inputs, confirmed
+directly. `snow_overlay_threshold_for_seed` had the identical
+vulnerability (a different string salt, same shape) and got the identical
+fix, with its own distinct salt so the two thresholds stay independent.
+
+Pinned by two new tests in `test_illustrated_grass_patch.gd`, both driving
+the real card-generation path rather than arbitrary sequential seeds (the
+gap that let this ship in the first place -- the pre-existing spread test
+only ever exercised `range(200)` directly):
+`test_turn_threshold_for_seed_shows_real_per_cell_variance_not_a_
+suspiciously_narrow_band` (the primary regression pin -- across 100 real
+cells, at least one must show an extreme 0-1-or-7-8-of-8 split at a mid
+progress, which true independence predicts ~7% of the time and the bug
+produced zero of 500 times) and
+`test_a_real_cells_eight_cards_are_not_all_on_the_same_side_of_a_mid_
+transition`. 74/74 in `test_illustrated_grass_patch.gd` (72 pre-existing +
+2 new), regression-checked against `test_earth_chunk_manager.gd`'s 9
+`sync_grass_*` tests (9/9). Confirmed with a real render
+(`tools/probe_grass_per_blade_turn.gd`, kept per this codebase's own
+"keep the probe that confirmed it" convention): the same real cell/seed
+visibly shows a genuine mix of green (summer) and orange/red (autumn)
+blades at 33%, 50% and 67% progress, not a hard snap between one uniform
+color and another.
