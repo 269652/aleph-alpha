@@ -1,10 +1,12 @@
 # Intro Splash: the Boot Logo Animation
 
-A short, skippable, hand/AI-illustrated logo animation that plays once,
-before the main menu, on an ordinary interactive launch — a rotating
-pixel-art Earth with the "ALEPH ALPHA" wordmark building in, in the
-tradition of a movie studio's own opening ident (Universal Pictures'
-spinning-globe intro is the direct reference point).
+A short, skippable, hand/AI-illustrated logo animation that plays as a
+bumper over an already-visible menu or loading screen on an ordinary
+interactive launch — a rotating pixel-art Earth with the "ALEPH ALPHA"
+wordmark building in, in the tradition of a movie studio's own opening
+ident (Universal Pictures' spinning-globe intro is the direct reference
+point). **Not** "before the main menu" — see "A third pass" below for why
+that reads differently than it did through this doc's first two passes.
 
 ## Design pillars
 
@@ -103,33 +105,41 @@ a full-screen `TextureRect` (the same `EXPAND_IGNORE_SIZE` +
 `_menu_background` already uses), swaps its texture every `_process` call
 per the sequencer, and emits `finished` either once the sequence completes
 or the instant any key/mouse/gamepad press arrives. It does not know what
-happens after — `World._play_intro_splash` owns that decision (queue-free
-the intro, show the main menu), keeping the intro itself reusable/
-decoupled from what follows it.
+it's a bumper for, what precedes it, or what happens after — a caller
+awaits `World._play_intro_splash()` (which itself just adds the node,
+awaits `finished`, and frees it) at whatever point already suits it, and
+the intro stays reusable/decoupled either way.
 
 ### Wiring
 
-`World._ready` triggers the intro from the very TOP of the function —
-right after the license/integrity gate, before any of the expensive
-synchronous per-boot setup (`EarthChunkManager` construction, every
-shader layer, `MushroomMarker.warm_art_cache`, ~15 UI builder calls) —
-for the plain "no `--solo`, no `--server`, no join argument" case, and
-`await`s `_play_intro_splash()` in full: `_ready()` genuinely cannot
-proceed past that line until `IntroSplash.finished` fires, on natural
-completion or an early skip alike. Every other launch path is untouched;
-the solo/server/join dispatch later in `_ready()` reuses the same `args`
-computed at the top rather than re-parsing them.
+`World._ready` does **not** trigger the intro at all any more — a real
+departure from this doc's first two passes, both of which tried to run
+it somewhere before or during the heavy per-boot setup. See "A third
+pass" below for why. Two call sites now, both `await _play_intro_splash()`
+(the same function, unchanged in shape across all three passes: adds an
+`IntroSplash`, awaits its `finished` signal, frees it), and both
+deliberately placed AFTER whatever they're a bumper for is already
+built/underway, never before or during it:
 
-The intro node itself is deliberately **not** freed the instant it
-finishes. `World._intro` holds it alive, still covering the screen
-(frozen on its last frame), for the entire heavy per-boot setup that
-follows — freed only by `_finish_intro_splash()`, called in the same
-beat as `_show_main_menu()`, at the natural end of the interactive-launch
-dispatch (where the code visually reads as belonging). See "A second
-early-launch bug" below for why awaiting only a single frame here, and
-freeing the intro the instant it finished, was itself the bug — a first
-pass at fixing this feature's launch-timing problem that turned out not
-to fully fix it.
+- **`World._show_main_menu()`** calls `_show_main_menu()`'s own body
+  first (background, backdrop, `MainMenu` instance — fully built and
+  paused-but-interactive), then `await`s `_play_intro_splash()` — so the
+  intro plays as a bumper on top of a menu that would already be usable
+  the instant it's skipped or finishes. This replaces the intro trigger
+  that used to sit at the top of `_ready()`.
+- **`World._on_menu_start_requested()`** (New Game and Host Game both
+  route through this) `await`s `_play_intro_splash()` before
+  `_show_loading_overlay("Preparing a new world...")` — the same bumper,
+  now also on starting a run, and sequenced so it finishes (or is
+  skipped) before that overlay's own "shown and painted before the real
+  work starts" guarantee has to hold.
+
+`_play_intro_splash()` itself no longer needs to persist the intro node
+across anything external: both call sites `await` it fully before doing
+anything else, so it can add, await, and free the node in one
+self-contained function again (the `World._intro` field the second pass
+introduced, to keep it alive through the heavy setup, is gone — nothing
+external needs it to survive that long any more).
 
 ### A real early-launch bug (found 2026-09-07, fixed same day)
 
@@ -250,6 +260,71 @@ timestamped, flushed-to-disk launches, not a code trace alone — a code
 trace here would have (and, on the first attempt at diagnosing this
 exact pass, briefly did) looked like the mechanism was already correct.
 
+### A third pass: the intro no longer gates anything (same day)
+
+The second pass's own fix was real and verified — the intro genuinely
+does play its full ~3.2s now, confirmed by timestamped log. Reported a
+third time anyway, directly, in the reporter's own words: "it hangs for
+a minute or two when starting and just shows a grey window." A live
+re-verification (the same flushed-timestamp discipline, run twice more,
+in two different checkouts, with and without an explicit
+`--rendering-driver` flag) reproduced the second pass's own claim
+exactly — `elapsed=3.210`, no skip triggered — and still could not
+reproduce "no animation at all" on this machine. The gap wasn't in the
+mechanism; it was in what "verified" had been measuring.
+
+**What "the freeze" actually looks like from outside the process, which
+none of the first two passes' diagnostics could see.** Every prior
+measurement was internal — a GDScript log, a `Time.get_ticks_msec()`
+timestamp, a viewport screenshot taken from inside the same process that
+was frozen. None of that can observe what Windows itself does to an
+unresponsive top-level window: once `_ready()`'s single-threaded heavy
+setup goes long enough without pumping window messages (and it always
+has, independent of the intro, independent of this fix — 80+ seconds
+measured on 2026-09-07, ~51-54s on later runs on this same machine),
+Windows marks the whole window "Not Responding" and paints it a flat
+grey placeholder, not whatever the GPU last actually rendered. A 3.2s
+animation that plays cleanly for real, immediately followed by a
+minute-long grey "hung" window, does not read as "an intro played" to
+someone watching it — it reads as a crash, which is a fair reading of
+what a grey Windows placeholder window looks like.
+
+**The fix is a design change, not a bug fix in the usual sense: stop
+asking the intro to share the screen with the heavy setup's freeze at
+all**, rather than trying to win a race it can never reliably win on a
+slow machine. `World._ready` no longer triggers the intro anywhere near
+the heavy setup. The heavy setup still runs exactly as it always has —
+still freezes the window for the same real duration, still greys out —
+because nothing about *that* is fixed here (it remains the same
+known, deliberately deferred "heavy setup isn't yield-split" gap the
+first pass already named). What changes is that the intro is now saved
+for a moment on the other side of that freeze, when the engine is
+provably responsive again: once `_show_main_menu()` has already built a
+usable menu, and once a player has chosen New Game/Host Game, before
+that flow's own (separately, already-existing) loading overlay. See
+"Wiring" above for the exact call sites.
+
+A live, timestamped launch confirms the shape this produces: heavy setup
+~43s (grey window, unavoidable, unrelated to the intro), then
+`_show_main_menu()` itself measured a further ~11s to return (a real,
+separate, pre-existing slow spot inside menu construction — not touched
+by this pass, flagged here rather than silently absorbed into "the
+freeze"), then the intro plays its full natural ~3.2s cleanly on top of
+the now-built menu, with nothing competing with it for the render
+thread. The menu itself no longer waits on the intro at all — it is
+already fully interactive underneath from the moment it's built,
+regardless of whether the intro is still playing on top of it.
+
+No dedicated automated regression test covers this pass either, for the
+same reason the first two didn't: a statement-ordering change with no
+natural unit-test seam. Verified the same way, a third time: real,
+flushed-to-disk, timestamped launches — this time also cross-checked
+with a completely bare `godot --path .` invocation (no
+`--rendering-driver` override) to rule out that as a variable, since the
+reporter's own launch method (the Godot CLI, matching what every prior
+verification already used) was the first thing worth ruling out before
+looking anywhere else.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
@@ -259,26 +334,44 @@ exact pass, briefly did) looked like the mechanism was already correct.
   `test_intro_splash_sequencer.gd`.
 - ✅ Thin playback Node: plays once, skippable on any input, never fires
   `finished` twice — `IntroSplash`, `test_intro_splash.gd`.
-- ✅ Wired into the ordinary interactive boot path only — `World._ready`/
-  `_play_intro_splash`; `--solo`/`--server`/join launches are unaffected.
-- ✅ Triggered before the expensive per-boot setup, not after — see "A
-  real early-launch bug" above. The intro's first frame now renders
-  almost immediately rather than after a blank-screen wait that measured
-  80+ seconds on a loaded machine.
-- ✅ The heavy per-boot setup (and the rest of the game's UI it builds)
-  no longer starts until the intro has genuinely finished playing, and
-  the intro stays alive, covering the screen, for the whole of that setup
-  afterward — see "A second early-launch bug" above. Confirmed on a real,
-  timestamped launch: the intro plays its full natural ~3.2s, then the
-  heavy setup runs (measured ~54s cold on this machine) with the intro's
-  last frame still covering the screen throughout, then the main menu
-  replaces it directly. The player now actually watches the intro, which
-  the first fix's own "first frame renders almost immediately" bar did
-  not guarantee.
+- ✅ Wired into the ordinary interactive boot path only — never triggered
+  for `--solo`/`--server`/join launches.
+- ✅ Plays as a bumper AFTER whatever it's a bumper for is already
+  built/underway, at two call sites — `World._show_main_menu()` (boot)
+  and `World._on_menu_start_requested()` (New Game/Host Game) — never
+  before or during either one's own heavy work. See "A third pass"
+  above for why the first two passes' "trigger it before the heavy
+  setup" approaches were both superseded, not merely refined: the heavy
+  setup's own long synchronous freeze is real, unavoidable without a
+  much larger rearchitecture, and Windows marks the window "Not
+  Responding" (a flat grey placeholder) for its entire duration
+  regardless of the intro — so nothing gated behind or squeezed in front
+  of that freeze can ever reliably be *watched*. The menu itself no
+  longer waits on the intro either way: it is fully built and
+  interactive underneath from the moment `_show_main_menu()` returns.
+- ✅ Confirmed on a real, timestamped, three-times-repeated launch (two
+  checkouts, with and without an explicit `--rendering-driver`
+  override): the intro plays its full natural ~3.2s cleanly, with
+  nothing competing with it for the render thread, immediately visible
+  on top of the already-built menu.
+- ⬜ The heavy per-boot setup's own freeze (a real, separately-measured
+  ~43-54s on this machine, on top of which `_show_main_menu()` itself
+  measured a further ~11s) is untouched by any of the three passes on
+  this doc — a known, deliberately deferred, much larger architectural
+  gap (yield-splitting `EarthChunkManager`/shader setup/UI construction,
+  mirroring `update_with_progress`'s coroutine pattern) that this doc's
+  fixes work around rather than close. Windows greys out the window for
+  that whole stretch either way; this doc's only claim is that the
+  intro no longer has to share that stretch to be seen playing.
+- ⬜ `_show_main_menu()`'s own ~11s cost (measured, not previously
+  recorded anywhere) is a real, separate, likely-fixable slow spot
+  (background image load, `MainMenu` construction, or both) that this
+  pass found but did not investigate further — flagged, not fixed.
 - ⬜ No audio. A logo intro without a sting/whoosh is a real, honest gap
   (this project has no music/SFX system wired up to hook into yet at
   all), not something this pass attempts.
 - ⬜ No settings/persistence for "don't show this again" — every launch
-  plays it, skippable by hand each time. A real, deliberately deferred
-  convenience gap, not attempted here (the skip-on-any-key path already
-  makes repeat viewings cheap).
+  plays it, skippable by hand each time, twice now (boot and New
+  Game/Host Game) — a real, deliberately deferred convenience gap, not
+  attempted here (the skip-on-any-key path already makes repeat viewings
+  cheap).
