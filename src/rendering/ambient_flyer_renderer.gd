@@ -15,7 +15,12 @@ const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 ## were spent adjusting a table that never reached the screen. If a change
 ## here appears to do nothing, suspect the wiring before the value.
 const FLYER_WORLD_SCALE := {
-	"sparrow": 1.0,
+	# Reported live: "scale the sparrow so it's the size of a robin" -- a
+	# deliberate, requested departure from the real-world size difference
+	# (a house sparrow is genuinely a touch smaller than a robin), the
+	# same "make it visible/readable" reasoning already applied elsewhere
+	# in this codebase (ant mounds, mushrooms) over strict realism.
+	"sparrow": 1.5,
 	"robin": 1.5,
 	"kingfisher": 1.7,
 	# Not yet spawnable (see IllustratedBirdSprite's class doc comment on

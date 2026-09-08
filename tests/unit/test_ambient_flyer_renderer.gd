@@ -398,10 +398,15 @@ func test_positions_are_deterministic_for_the_same_inputs():
 ## is exactly what let a stray `marker.scale = ...` overwrite -- applied
 ## AFTER the real calculation -- sit unnoticed while every per-species size
 ## was silently discarded.
-func test_a_butterfly_renders_at_half_a_sparrows_size():
+## Was "half a sparrow's size" before "scale the sparrow so it's the size
+## of a robin" moved sparrow's own ratio up to match robin's (see
+## FLYER_WORLD_SCALE's own doc comment) -- the butterfly itself didn't
+## change, only what it's being compared against did, so the real ratio is
+## a third now, not half.
+func test_a_butterfly_is_about_a_third_of_a_sparrows_size():
 	var butterfly := AmbientFlyerRenderer.FLYER_WORLD_SCALE["monarch"]
 	var sparrow := AmbientFlyerRenderer.FLYER_WORLD_SCALE["sparrow"]
-	assert_almost_eq(butterfly / sparrow, 0.5, 0.06)
+	assert_almost_eq(butterfly / sparrow, 1.0 / 3.0, 0.06)
 
 func test_spawned_flyers_are_ambient_flyer_markers_with_a_texture():
 	var chunk := _make_chunk("grassland")
@@ -446,8 +451,17 @@ func test_build_bird_defaults_to_the_real_world_radius_but_accepts_an_override()
 const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 
 
-func test_a_sparrow_is_about_the_size_of_a_fish():
-	assert_almost_eq(AmbientFlyerRenderer.FLYER_WORLD_SCALE["sparrow"], 1.0, 0.05)
+## Reported live: "scale the sparrow so it's the size of a robin" -- a
+## deliberate departure from real-world proportions (see FLYER_WORLD_SCALE's
+## own doc comment), so a sparrow is now "about one and a half fish" too,
+## the identical figure test_a_robin_is_about_one_and_a_half_fish pins.
+func test_a_sparrow_is_now_the_same_size_as_a_robin():
+	assert_almost_eq(
+		AmbientFlyerRenderer.FLYER_WORLD_SCALE["sparrow"],
+		AmbientFlyerRenderer.FLYER_WORLD_SCALE["robin"],
+		0.001
+	)
+	assert_between(AmbientFlyerRenderer.FLYER_WORLD_SCALE["sparrow"], 1.4, 1.6)
 
 
 func test_butterflies_are_about_half_a_fish():
@@ -478,12 +492,15 @@ func test_a_robin_is_about_one_and_a_half_fish():
 	assert_between(AmbientFlyerRenderer.FLYER_WORLD_SCALE["robin"], 1.4, 1.6)
 
 
-## The birds run smallest to largest: sparrow, robin, kingfisher.
-func test_the_birds_run_smallest_to_largest():
+## Sparrow and robin are now tied on purpose ("scale the sparrow so it's
+## the size of a robin" -- see FLYER_WORLD_SCALE's own doc comment), not
+## strictly smallest-to-largest the way they used to be; kingfisher is
+## still the largest of the three.
+func test_the_birds_run_sparrow_tied_with_robin_then_kingfisher_largest():
 	var sparrow: float = AmbientFlyerRenderer.FLYER_WORLD_SCALE["sparrow"]
 	var robin: float = AmbientFlyerRenderer.FLYER_WORLD_SCALE["robin"]
 	var kingfisher: float = AmbientFlyerRenderer.FLYER_WORLD_SCALE["kingfisher"]
-	assert_lt(sparrow, robin)
+	assert_almost_eq(sparrow, robin, 0.001)
 	assert_lt(robin, kingfisher)
 
 

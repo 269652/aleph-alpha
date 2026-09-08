@@ -156,9 +156,14 @@ const _SHEETS := {
 ## exception list to keep in sync with _SHEETS.
 const _MIN_DIVIDER_WIDTH := 8
 
-## The on-screen world width (px) a sparrow -- the FLYER_WORLD_SCALE
-## reference species, ratio 1.0 -- should read at. Originally calibrated to
-## exactly reproduce ProceduralBirdSprite's own pre-existing on-screen size
+## The fixed reference unit _TARGET_WORLD_WIDTH's own per-species ratios
+## multiply against -- originally exactly a sparrow's own on-screen width,
+## back when sparrow was still the FLYER_WORLD_SCALE 1.0 reference (see
+## "scale the sparrow so it's the size of a robin", which moved sparrow to
+## 1.5 -- BASE_WORLD_WIDTH itself stays the same fixed unit either way, it
+## is just no longer literally any one species' own width). Originally
+## calibrated to exactly reproduce ProceduralBirdSprite's own pre-existing
+## on-screen size
 ## (6.6), matching this class's real content back to whatever the flat
 ## procedural-tuned scale used to draw. Reported live, in the actual
 ## running game, after that first calibration shipped: "the robin should
@@ -187,7 +192,11 @@ const BASE_WORLD_WIDTH := 3.3
 ## birds (~24cm) alongside a kingfisher (~17cm bill included), both well
 ## above a robin/sparrow (~14-15cm).
 const _TARGET_WORLD_WIDTH := {
-	"sparrow": BASE_WORLD_WIDTH,       # FLYER_WORLD_SCALE 1.0
+	# Reported live: "scale the sparrow so it's the size of a robin" --
+	# kept equal to robin's own target on purpose (see
+	# AmbientFlyerRenderer.FLYER_WORLD_SCALE's own doc comment on this
+	# same change), not the real-world size difference.
+	"sparrow": BASE_WORLD_WIDTH * 1.5,  # FLYER_WORLD_SCALE 1.5
 	"robin": BASE_WORLD_WIDTH * 1.5,   # FLYER_WORLD_SCALE 1.5
 	"kingfisher": BASE_WORLD_WIDTH * 1.7,  # FLYER_WORLD_SCALE 1.7
 	"blackbird": BASE_WORLD_WIDTH * 1.7,
