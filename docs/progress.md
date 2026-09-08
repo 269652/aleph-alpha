@@ -17046,3 +17046,63 @@ too.
 (flagged, not fixed, in the prior intro-splash pass) is untouched here —
 a separate, likely-fixable slow spot (background image load or
 `MainMenu` construction) for a future pass, not this one.
+
+## A fifth pass on the intro: its own Control was stuck at size=(0,0) (`concept/intro_splash.md`, 2026-09-08)
+
+Reported live again, in the same words as every prior recurrence: "no
+intro plays." By this point the third and fourth passes had already fixed
+every timing/gating issue upstream of the intro node ever being added to
+the tree, and the boot freeze itself was mostly fixed too (previous
+entry, same day) — so rather than trust another code trace, the very
+first step this time was a live, non-headless, mid-playback viewport
+screenshot. It showed nothing but the main menu underneath, no intro
+visible at all, despite the intro's own diagnostic log confirming
+`visible=true`, `is_visible_in_tree()=true`, and a correct
+`CanvasLayer` parent throughout.
+
+**The bug, found from the screenshot's own accompanying state dump:**
+`IntroSplash`'s `size=(0.0, 0.0)` — for `self` and its `backdrop`/
+`display` children alike, despite every one of them carrying
+`set_anchors_preset(Control.PRESET_FULL_RECT)`. A zero-size Control
+draws nothing, regardless of how correct its visibility or parent chain
+is — no need to invoke timing or frame presentation at all to explain
+"menu visible, intro invisible." A documented Godot engine behavior, not
+a logic bug: a freshly created top-level Control with non-equal opposite
+anchors has its size silently overridden back to whatever the anchors
+alone resolve to — here `(0,0)`, since nothing establishes a
+parent-relative sizing context for a bare top-level Control under a
+`CanvasLayer` — in an internal layout pass that runs AFTER `_ready()`
+returns, stomping any direct same-frame `size = ...` assignment. Godot's
+own engine warning names the fix verbatim: "Nodes with non-equal opposite
+anchors will have their size overridden after `_ready()`... consider
+using `set_deferred()`."
+
+**The fix:** `self`/`backdrop`/`display` each set `size` via
+`set_deferred("size", get_viewport_rect().size)` instead of a direct
+assignment, landing the write after the engine's own override pass
+instead of being clobbered by it.
+
+**Verified two ways, not one, given this exact feature's own track
+record of "fixed" claims that weren't.** A live mid-intro viewport
+screenshot showing the real illustrated Earth artwork on screen where
+previously nothing was drawn — re-run a second time specifically
+composed with the fourth pass's frame-gate fix (the two land on adjacent
+code), confirming they interact cleanly. And
+`test_size_fills_the_viewport_once_ready_settles`: confirmed red against
+the unfixed direct assignment first, reproducing the exact live `(0,0)`
+value via a real awaited frame (a same-frame check would have missed
+this — the direct assignment looks correct for one instant, before the
+engine's own layout pass overrides it back down), green after.
+
+**A structural side effect, not a regression:** `set_deferred`'s own
+write unavoidably re-triggers the identical engine warning it's named
+after (Godot warns on any manual `size` write while anchors are
+non-equal, direct or deferred). `test_world_play_intro_splash_frame_
+gate.gd`'s two real-coroutine tests exercise this exact path end to end
+and needed updating to consume the now-expected warning via
+`assert_engine_error_count` rather than auto-failing as an "Unexpected
+Error" — a real, useful signal that the fourth and fifth passes' fixes
+genuinely interact at the engine level. `test_intro_splash.gd` 6/6,
+`test_world_play_intro_splash_frame_gate.gd` 3/3, `test_world_intro_
+splash_after_load_fanout.gd` 5/5, all re-verified directly against the
+merged `main` state.
