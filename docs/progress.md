@@ -16572,3 +16572,70 @@ player has spawned), the intro still finishes before the menu is
 dismissed, and — as a regression guard — the boot bumper's own
 ordering is untouched. `test_intro_splash.gd` (the `IntroSplash` node's
 own playback/skip behavior) re-verified unaffected, 5/5.
+
+## A fourth pass: the boot intro was still being swallowed by an unyielded `_show_main_menu()` (2026-09-08)
+
+Reported live a third time, in almost the same words as the very first
+report: "the intro is still not showing... immediately after a fresh
+relaunch." The build being tested was already a direct descendant of the
+prior entry's own fix commit, so a stale build was ruled out before
+investigating further, and this time the investigation stayed live end to
+end rather than trusting a code trace: a real, non-headless launch
+(`--rendering-driver opengl3`, no `--solo`), instrumented with the same
+flushed-`FileAccess` + `Time.get_ticks_msec()` technique the second and
+third passes already established, plus an env-var-gated autopilot driving
+the real `MainMenu` New Game → Begin flow through its own real methods so
+both call sites could be watched in one run.
+
+**Real, timestamped measurement, not a guess:** `world._ready()`'s heavy
+setup cost 57,928ms as already known — but `_show_main_menu()` ALONE, run
+immediately after, cost a further **13,534ms** of fully synchronous,
+unyielded work (7 procedural class-icon portraits, the live
+character-creator diorama scene, the skill web, the menu backdrop image —
+see `MainMenu._build_create_screen()`), bigger than this doc's own
+previous "~11s" estimate for the same cost and never previously connected
+to the intro-visibility bug at all. Total unyielded stretch immediately
+before the boot intro's first frame was even added to the tree: ~72 real
+seconds, with not one yielded engine frame anywhere in it. The intro
+itself, once actually triggered, played back perfectly both times (32/32
+real per-frame timestamps at ~100ms spacing, `elapsed=3.204s`/`3.206s`) —
+the third pass's own fix to the playback mechanism was never wrong. The New
+Game reveal path showed no equivalent gap (the second intro was added
+within 4ms of the loading overlay being hidden — there is no
+`_show_main_menu()`-sized construction step on that path).
+
+**The bug:** the third pass moved the intro past the WORSE of two adjacent
+freezes but never gave the engine a single presented-frame checkpoint
+between the end of the second one (`_show_main_menu()`) and the intro
+appearing — the identical class of risk `_show_loading_overlay` already
+identified and fixed for itself ("two frames, not one... a single await
+isn't guaranteed to have been presented by," verified against a real
+running instance), sitting unapplied one function away.
+
+**The fix:** `_play_intro_splash()` now awaits two real `process_frame`
+signals before creating the `IntroSplash` node, reusing `_show_loading_
+overlay`'s own already-proven convention exactly, in the one function both
+call sites already share.
+
+**Real, run-for-real test coverage this time** (`test_world_play_intro_
+splash_frame_gate.gd`), not source-text-ordering alone: a bare `World.new()`
+is never added to a tree (so its unrelated heavy `_ready()` never runs),
+`_ui` is wired directly to a real in-tree `CanvasLayer` — the only field
+`_play_intro_splash()` touches — and the test calls the real, unmodified
+function as a live coroutine, asserting real child-count/type state driven
+by real `process_frame` signals. Confirmed red against the unfixed function
+(the intro was added with zero frame delay) before the fix, green after,
+plus a companion source-text assertion pinning the gate at exactly two
+frames. `test_intro_splash.gd`, `test_intro_splash_sequencer.gd`,
+`test_intro_splash_sheet.gd`, `test_world_intro_splash_after_load_
+fanout.gd`, and the sibling `test_world_*_fanout.gd`/`test_world_hud.gd`
+files were all re-run directly against `world.gd`'s new state and stay
+green.
+
+**Still honestly open, unchanged by this pass:** `world._ready()`'s own
+~58s heavy setup and `_show_main_menu()`'s own ~13.5s construction cost are
+both still real, both still fully synchronous, and neither is yield-split —
+this pass only guarantees a presented frame exists between the end of that
+freeze and the intro appearing, it does not make the freeze itself shorter
+or the window responsive during it. Windows still greys the window out for
+the same real duration either way.

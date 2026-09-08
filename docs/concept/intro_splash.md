@@ -336,6 +336,95 @@ reporter's own launch method (the Godot CLI, matching what every prior
 verification already used) was the first thing worth ruling out before
 looking anywhere else.
 
+### A fourth pass: gate the intro behind a real presented frame (same day)
+
+The third pass's own fix was real and verified -- moving the trigger past
+`world._ready()`'s heavy setup genuinely stopped the intro from being
+squeezed in front of that ~43-58s freeze. Reported a third time anyway,
+live, immediately after a fresh relaunch: "the intro is still not showing."
+This time the build being tested was already a direct descendant of the
+third pass's own commit, so "stale build" was ruled out before
+investigating further.
+
+**Live reproduction, not a code trace.** A real, non-headless launch
+(`--rendering-driver opengl3`, no `--solo`), instrumented with the same
+flushed-`FileAccess` + `Time.get_ticks_msec()` technique the second and
+third passes already established (a plain viewport-screenshot probe is
+still unreliable for the first few frames after a scene-tree change, and
+Godot's stdout still fully buffers once redirected to a file), and an
+env-var-gated autopilot that drove the real `MainMenu.New Game -> Begin`
+flow through its own real methods (`_show(_create_screen)`,
+`_emit_start_requested()`) so both the boot bumper and the New Game reveal
+could be watched in one run. Measured, real, timestamped:
+
+- `world._ready()`'s heavy setup: 57,928ms (7,759ms -> 65,687ms) -- in line
+  with the already-known ~43-58s figure.
+- `_show_main_menu()` ALONE, immediately after: **13,534ms** (65,688ms ->
+  79,222ms) -- a SECOND, real, fully synchronous, entirely unyielded
+  stretch, bigger than this doc's own previous "~11s" estimate for the same
+  cost. `_build_create_screen()` builds the whole character creator
+  synchronously: 7 procedural class-icon portraits
+  (`_class_icon_texture`/`ProceduralCharacterSprite.generate_hero_portrait_
+  texture`), the live diorama `SubViewport` scene
+  (`CharacterPreviewDiorama`), the skill web (`SkillWebView`), and the menu
+  backdrop image load -- nothing in it yields a frame.
+- The intro itself, once actually added to the tree, played back perfectly
+  cleanly both times: 32/32 real per-frame timestamps at ~100ms spacing
+  (matching `FPS := 10.0` exactly), finishing at `elapsed=3.204s` (boot) and
+  `elapsed=3.206s` (New Game) -- confirming the sequencer/playback mechanism
+  itself has been correct since the third pass, exactly as that pass's own
+  writeup claimed.
+- The New Game reveal path showed no equivalent gap: `_spawn_local_
+  singleplayer()`'s own real cost (35,924ms, genuinely long but covered by
+  the loading overlay's own real progress feedback via `update_with_
+  progress`, a previously-fixed and separately-documented cost) was
+  immediately followed by the second intro being added within 4ms of the
+  overlay being hidden -- no second freeze sits between "real work done" and
+  "intro shown" on this path the way one does on boot, because there is no
+  `_show_main_menu()`-sized construction step in between.
+
+**The bug: the third pass moved the intro past the WORSE of two adjacent
+freezes, but never gave the engine a single presented-frame checkpoint
+between the end of the second one and the intro appearing.** Total
+unyielded stretch immediately before the boot intro's first frame was ever
+added to the tree: ~72 real seconds (7,759ms -> 79,937ms), with not one
+yielded engine frame anywhere in it. `_show_loading_overlay` already
+established, and proved ("verified against a real running instance"), that
+a Control which just became visible needs TWO yielded `process_frame` calls
+before more synchronous work runs, or its own first queued draw is not
+guaranteed to ever actually reach the screen. That guard already existed in
+`world.gd` for the loading overlay, but was never applied to the
+menu-then-intro handoff sitting right next to it -- so the freshly-built
+menu's own first frame, and the intro's own first frame right after it,
+were both still at risk of never actually presenting before Windows'
+"Not Responding" grey placeholder cleared. A shorter freeze than the first
+bug's 80+ seconds, but still real, still unyielded, and still sitting
+directly in front of the intro -- reproducing the identical complaint via
+the identical underlying mechanism the third pass's own writeup diagnosed,
+just at a different call site than the one it fixed.
+
+**The fix:** `_play_intro_splash()` now `await`s two real `process_frame`
+signals before creating the `IntroSplash` node, mirroring `_show_loading_
+overlay`'s own already-proven "two frames, not one" convention exactly.
+Applied once, in the function both call sites already share, so it covers
+the boot bumper and the New Game/Host Game reveal uniformly with no
+duplication.
+
+**Tests: real, run-for-real coverage this time, not source-text alone.**
+`test_world_play_intro_splash_frame_gate.gd` calls the real, unmodified
+`_play_intro_splash()` as a live coroutine against a real engine
+`SceneTree` -- a bare `World.new()` is deliberately never added to a tree
+(so its unrelated heavy `_ready()` never runs), with `_ui` wired directly
+to a real, in-tree `CanvasLayer` (the only field this function touches).
+Confirmed red against the unfixed function for the right reason (the intro
+was added with zero frame delay -- exactly the live-reproduced bug) before
+the fix, and green after, asserting real child-count/type state driven by
+real `process_frame` signals, not a mock or a reimplementation. A companion
+source-text assertion (same technique as `test_world_intro_splash_after_
+load_fanout.gd`, for the same reason -- a real-`World` test can't cheaply
+or deterministically pin an EXACT frame count every run) pins the gate at
+exactly two frames, matching `_show_loading_overlay`'s own convention.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
