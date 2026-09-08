@@ -48,6 +48,12 @@ const MOUNTAIN_WIND_VOLUME := 0.85
 ## (grassland's winter cut) says otherwise.
 const FULL_BED_VOLUME := 1.0
 
+## Weather overlay volumes -- storm louder than plain rain, both real,
+## distinct, sub-full volumes so the overlay reads as ON TOP of the biome
+## bed rather than drowning it out.
+const RAIN_OVERLAY_VOLUME := 0.7
+const STORM_OVERLAY_VOLUME := 0.9
+
 
 ## The complete set of layers that should be audible right now, as
 ## {layer_name: volume}. Omits anything that should NOT be playing entirely
@@ -55,9 +61,37 @@ const FULL_BED_VOLUME := 1.0
 ## set and stop everything else -- see docs/concept/soundscape.md's
 ## "Playback" section.
 func layer_mix(
-	biome: String, season: String, _weather: String, is_night: bool, _is_snowing: bool
+	biome: String, season: String, weather: String, is_night: bool, is_snowing: bool
 ) -> Dictionary:
-	return _biome_bed(biome, season, is_night)
+	var mix := _biome_bed(biome, season, is_night)
+	_add_weather_overlay(mix, weather, is_snowing)
+	return mix
+
+
+## Additive, independent of the biome bed -- mutates `mix` in place rather
+## than returning a fresh Dictionary, so a layer the bed ALSO wants (wind, for
+## a desert/tundra/mountain biome during a snowy storm) collides on one key
+## and keeps the louder of the two rather than the bed's own volume being
+## silently clobbered by the overlay running second.
+func _add_weather_overlay(mix: Dictionary, weather: String, is_snowing: bool) -> void:
+	match weather:
+		"rain":
+			_layer_at_least(mix, "rain", RAIN_OVERLAY_VOLUME)
+		"storm":
+			# "It snows when it is cold, not when the calendar says winter"
+			# (docs/concept/weather.md#snow) -- a cold storm gets the
+			# blizzard (wind) read instead of rain-and-thunder, the exact
+			# same distinction RainOverlay already draws.
+			var storm_layer := "wind" if is_snowing else "storm"
+			_layer_at_least(mix, storm_layer, STORM_OVERLAY_VOLUME)
+		# "clear"/"cloudy": no overlay.
+
+
+## Sets mix[layer_name] to volume, unless it is already present at an even
+## louder volume -- see _add_weather_overlay's own doc comment for why a
+## collision keeps the louder side rather than whichever call ran last.
+func _layer_at_least(mix: Dictionary, layer_name: String, volume: float) -> void:
+	mix[layer_name] = maxf(mix.get(layer_name, 0.0), volume)
 
 
 ## The one biome bed layer -- see docs/concept/soundscape.md's own bed table

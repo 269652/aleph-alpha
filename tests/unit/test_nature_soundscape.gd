@@ -134,3 +134,48 @@ func test_desert_tundra_and_mountain_wind_bed_is_unchanged_at_night_and_by_seaso
 	var winter := soundscape.layer_mix("tundra", "winter", "clear", false, false)
 	assert_eq(day["wind"], night["wind"])
 	assert_eq(day["wind"], winter["wind"])
+
+
+# -- layer_mix: weather overlay -- additive on top of the biome bed ----------
+
+func test_clear_and_cloudy_weather_add_no_overlay():
+	for weather in ["clear", "cloudy"]:
+		var mix := soundscape.layer_mix("forest", "summer", weather, false, false)
+		assert_false(mix.has("rain"), weather)
+		assert_false(mix.has("storm"), weather)
+
+
+func test_rain_adds_the_rain_overlay_on_top_of_the_biome_bed():
+	var mix := soundscape.layer_mix("forest", "summer", "rain", false, false)
+	assert_true(mix.has("forest_day"), "the biome bed should still be present")
+	assert_eq(mix["rain"], NatureSoundscape.RAIN_OVERLAY_VOLUME)
+
+
+func test_storm_adds_the_storm_overlay_when_not_actually_snowing():
+	var mix := soundscape.layer_mix("forest", "summer", "storm", false, false)
+	assert_eq(mix["storm"], NatureSoundscape.STORM_OVERLAY_VOLUME)
+	assert_false(mix.has("rain"), "storm replaces rain, they don't both play")
+
+
+## "It snows when it is cold, not when the calendar says winter" -- and a
+## cold storm gets the blizzard (wind) read, not rain-and-thunder, the exact
+## same distinction RainOverlay already draws (docs/concept/weather.md#snow).
+func test_storm_while_actually_snowing_gets_the_wind_overlay_instead_of_storm():
+	var mix := soundscape.layer_mix("grassland", "summer", "storm", false, true)
+	assert_false(mix.has("storm"), "a snowy storm should not play rain-and-thunder")
+	assert_eq(mix["wind"], NatureSoundscape.STORM_OVERLAY_VOLUME)
+
+
+## A biome whose own BED is already the shared wind layer (mountain) plus a
+## snowy storm both want "wind" -- one Dictionary key, the louder of the two
+## wins rather than being silently overwritten by whichever rule runs last.
+func test_snowy_storm_wind_overlay_on_a_wind_bed_biome_takes_the_louder_volume():
+	var mix := soundscape.layer_mix("desert", "summer", "storm", false, true)
+	assert_eq(mix["wind"], maxf(NatureSoundscape.DESERT_WIND_VOLUME, NatureSoundscape.STORM_OVERLAY_VOLUME))
+
+
+func test_rain_overlay_volume_and_storm_overlay_volume_are_real_distinct_probabilities():
+	assert_gt(NatureSoundscape.RAIN_OVERLAY_VOLUME, 0.0)
+	assert_lt(NatureSoundscape.RAIN_OVERLAY_VOLUME, 1.0)
+	assert_gt(NatureSoundscape.STORM_OVERLAY_VOLUME, NatureSoundscape.RAIN_OVERLAY_VOLUME)
+	assert_lt(NatureSoundscape.STORM_OVERLAY_VOLUME, 1.0)
