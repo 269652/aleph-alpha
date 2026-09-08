@@ -14,33 +14,37 @@ extends RefCounted
 ## earth the way an ant mound is.
 
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
-const CharacterView = preload("res://scenes/character_view.gd")
 
 ## Authoring canvas -- taller than ProceduralAntMoundSprite's own square
 ## SIZE (20), to fit a teardrop shape's own taller-than-wide proportions
 ## without clipping.
 const SIZE := 24
 
-## How wide a brand-new, just-founded exposed comb reads ON THE GROUND
-## (well, in the air -- see the doc comment above), in world pixels -- a
-## small, fragile early cluster, comparable in spirit to
-## ProceduralAntMoundSprite.MOUND_WORLD_WIDTH_MIN's own "smallest a
-## founding colony ever reads" reasoning.
-const HIVE_WORLD_WIDTH_MIN := 3.0
+## The pre-rescale reference width (world px) -- what a just-founded hive
+## used to read at, before "scale the honeybee hive 3x and make it grow up
+## to 5x of current size as population grows" was reported live.
+## HIVE_WORLD_WIDTH_MIN/MAX below are now DIRECT, literal multiples of
+## this single number (3x and 5x respectively) rather than two
+## independently-reasoned figures (the old MAX was a player-height
+## fraction; see git history for that reasoning if it's ever needed
+## again) -- kept as its own named constant so "3x"/"5x" stay literal and
+## traceable instead of baking 9.0/15.0 in as opaque numbers.
+const _PRE_RESCALE_REFERENCE_WIDTH := 3.0
 
-const PLAYER_WORLD_HEIGHT_PX := -CharacterView.HEAD_TOP_Y * CharacterView.SCALE
+## How wide a brand-new, just-founded exposed comb reads ON THE GROUND
+## (well, in the air -- see the doc comment above), in world pixels --
+## 3x _PRE_RESCALE_REFERENCE_WIDTH, a direct live size directive.
+const HIVE_WORLD_WIDTH_MIN := _PRE_RESCALE_REFERENCE_WIDTH * 3.0
 
 ## How wide a thriving, near-BeePopulationModel.MAX_REFERENCE_POPULATION
-## hive reads. A real wild comb hanging from a branch is genuinely
-## smaller than a whole ant colony's excavated earthworks spread across
-## the ground -- deliberately well UNDER ProceduralAntMoundSprite.
-## MOUND_WORLD_WIDTH_MAX's own 1.5x-player-height ceiling (itself a
-## live-tuned correction across several reports this doc has no
-## equivalent live signal for yet). A real, named first-pass estimate --
-## comparable to a human torso's own width -- not claimed to be final;
-## expect this to move the same way the ant mound's own ceiling did once
-## a player has actually seen one in the world.
-const HIVE_WORLD_WIDTH_MAX := PLAYER_WORLD_HEIGHT_PX * 0.4
+## hive reads -- 5x _PRE_RESCALE_REFERENCE_WIDTH (the SAME original
+## reference HIVE_WORLD_WIDTH_MIN is also measured against, not a further
+## 5x on top of the already-3x'd floor). Still comfortably under
+## ProceduralAntMoundSprite.MOUND_WORLD_WIDTH_MAX (see
+## test_hive_ceiling_is_smaller_than_a_thriving_ant_mounds) -- a real wild
+## comb hanging from a branch is still genuinely smaller than a whole ant
+## colony's excavated earthworks, even scaled up.
+const HIVE_WORLD_WIDTH_MAX := _PRE_RESCALE_REFERENCE_WIDTH * 5.0
 
 ## Identical technique and reasoning to ProceduralAntMoundSprite.
 ## GROWTH_EXAGGERATION: a young colony's own workforce builds out its

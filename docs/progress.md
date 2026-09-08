@@ -9421,6 +9421,89 @@ cost at ordinary play scale" entry and `docs/concept/leaf_litter.md`'s
 "Floating on water" section for the full investigation, numbers, and the
 still-open `advance()` finding.
 
+**Leaf litter's per-chunk rebuild granularity closed with a visible-area
+filter — 2026-09-08.** The floating-leaf entry above named this
+explicitly as still open: dirty-tracking only ever gated WHETHER a chunk
+refills, never HOW MUCH of it gets rebuilt once it does, so a chunk with
+one persistently-dirty floating leaf (`advance()`'s own "must always look
+dirty" contract) still rebuilt its ENTIRE leaf set every frame regardless
+of camera position — "architecturally unavoidable ... without a
+finer-grained (per-leaf incremental) rendering update," per this doc's own
+prior framing above. Reported live, separately, as a fresh ask: "make it
+so that it only computes leaf litter and wind blowing to the current
+visible area." Before writing any code, checked whether a background
+session's own earlier "Throttle LeafLitterRenderer's per-frame MultiMesh
+rebuild" attempt had already landed — `git log --oneline -10 -- src/
+rendering/leaf_litter_renderer.gd` alone would have wrongly suggested no
+(that file was never touched by the two entries above; they only touched
+`earth_chunk_manager.gd`/`leaf_litter_field.gd`), but `git branch -a` and
+`git log --all` turned up `fix/leaf-litter-dirty-tracking` already merged
+(`23f18ddf`, 2026-09-07) — the two entries above ARE that work, already
+shipped, not abandoned. The real remaining gap was the one both of them
+already named honestly and left open.
+
+`LeafLitterRenderer.leaves_in_view` is the finer-grained filter — reused,
+not reinvented: the SAME tile-precise camera-view cutoff (`DecorationLod.
+keeps_decoration_tile`) and buffer convention (`GRASS_VIEW_BUFFER_TILES`)
+already established for grass answers the identical report for leaf
+litter, applied per-leaf rather than per-tile-cell. `step_leaf_litter` now
+passes only the leaves within the player's own tile-precise window to
+`fill`, and gained a second, independent refill trigger
+(`_leaf_litter_view_synced_tile`, mirroring `_grass_view_synced_tile`'s
+identical role) so a leaf that never itself changed is still revealed once
+the player's own tile walks close enough to see it — otherwise a leaf
+sitting just past the window could stay wrongly hidden (or a leaf just
+inside it stay wrongly rendered) purely because the CAMERA moved, which
+`LeafLitterField.generation()` alone has no way to know about.
+
+Simulation is deliberately untouched: `LeafLitterField.advance()` still
+runs unconditionally for every LOADED chunk regardless of visibility —
+this is a rendering-only restriction, matching this game's own "a real,
+running simulation ... whether or not you're watching" design pillar
+(`ecosystem_dynamics.md`), not a claim that off-screen litter stops being
+real. The separate `advance()` baseline-cost finding named two entries
+above remains exactly as open as it was; considered and explicitly
+rejected: replacing off-screen litter's real per-leaf state with a
+statistical/aggregate approximation, which would have addressed that cost
+but at the price of the exact "same simulation, not a faked one" guarantee
+this feature (and this game generally) exists to give.
+
+Measured directly (a real timing harness built inside `EarthChunkManager`,
+not a played `--solo` session — a controlled, reproducible harness at the
+documented real-play scale gave a cleaner signal for isolating THIS
+specific mechanism than a live session's own many confounded costs would
+have): reproducing the "hot chunk" scenario the entry above found still
+costly — ~2,000 settled leaves scattered across a full 32-tile chunk span,
+player standing at the chunk's own corner (`DecorationLod`'s own named
+worst case: "they can stand anywhere in it, including hard against an
+edge"), one leaf continuously floating at the far corner. `fill()`'s own
+share of `step_leaf_litter`'s per-call cost dropped from ~14.6ms to ~1.8ms
+(roughly 8x; an isolated fill()-only comparison at a more skewed real/
+visible leaf ratio measured up to ~40x). `LeafLitterField.advance()`'s own
+share stayed flat (~18.8ms → ~21.5ms, within this shared machine's own
+run-to-run contention noise, per this doc's own established caveat) —
+confirming the simulation itself is genuinely untouched, not merely
+assumed so. Combined `step_leaf_litter` cost for this worst-case scenario:
+~33.4ms → ~23.3ms per call, about 30% — smaller than fill()'s own
+improvement because `advance()`'s own separate, still-open baseline cost
+now dominates the total even more than before.
+
+Strict TDD: 7 new tests (`leaves_in_view`'s own pure-function coverage in
+`test_leaf_litter_renderer.gd`; `step_leaf_litter` integration coverage in
+`test_earth_chunk_manager.gd`, including a dedicated regression test
+proving an off-screen chunk's simulation keeps advancing — LIFETIME
+pruning — while its rendering is skipped). 3 pre-existing tests needed a
+`_disturbance_center_tile` poke (their leaf sat far from that field's
+default `Vector2i.ZERO`, so the new filter would have — correctly —
+excluded it). One legitimate parse-time red along the way (a `:=`-inferred
+variable over a `Dictionary.get()` Variant comparison, the same class of
+whole-script-parse-failure red this codebase's own `generation()`/
+`MAX_FLOAT_SECONDS` fixes hit before it), fixed with an explicit `: bool`
+annotation. Zero regressions: 49/49 `test_leaf_litter_renderer.gd`, 82/82
+`test_leaf_litter_field.gd`, 13/13 `test_decoration_lod.gd`, 34/34
+`test_earth_chunk_manager.gd`'s "leaf" substring sweep. See
+`docs/concept/leaf_litter.md`'s own Status section for the full writeup.
+
 **Measured before/after, live, on the identical real save**: total
 tracked per-window cost dropped from ~1900ms of a ~3040ms window (~62%)
 to ~1120ms of a ~3030ms window (~37%) — at a HIGHER population on the
@@ -15308,6 +15391,43 @@ the first fix (a statement-ordering change with no natural unit-test
 seam) -- verified via real, timestamped, flushed-to-disk launches
 instead.
 
+**Third follow-up fix, same day (2026-09-08):** reported a third time
+anyway, directly: "it hangs for a minute or two when starting and just
+shows a grey window... play it once the main menu is actually loaded
+and visible... and play it when you click new game so the freeze time
+doesn't matter." The second fix's own claim was genuinely re-verified
+(three more timestamped launches, two checkouts, with and without an
+explicit `--rendering-driver` override, all showing `elapsed=3.210`, no
+skip) -- the intro really does play its full 3.2s. The gap was in what
+those diagnostics could see: all of them were internal to the same
+process that goes unresponsive, and none could observe that Windows
+marks an unresponsive top-level window "Not Responding" -- a flat grey
+placeholder, not whatever was last actually rendered -- for the entire
+~43-54s the heavy setup's own single-threaded freeze always runs,
+independent of the intro, independent of either fix (measured 80+
+seconds on 2026-09-07, ~51-54s on later runs, same machine throughout).
+A 3.2s animation immediately followed by a minute of grey "hung" window
+does not read as "an intro played."
+
+Fixed as a design change rather than a race to win: the intro no longer
+triggers anywhere near the heavy setup at all. Two call sites now, both
+deliberately AFTER whatever they're a bumper for is already built or
+underway -- `World._show_main_menu()` (menu built and interactive
+first, intro plays on top of it) and `World._on_menu_start_requested()`
+(New Game/Host Game: intro plays before that flow's own pre-existing
+loading overlay). `_play_intro_splash()` no longer needs to persist the
+intro node externally -- both call sites `await` it fully before
+proceeding, so it went back to a self-contained add/await/free shape
+(the `World._intro` field the second fix introduced is gone). The heavy
+setup's own freeze is untouched and still real -- a known, deliberately
+deferred, much larger yield-splitting rearchitecture, unrelated to this
+fix -- but the intro no longer has to share it to be watched. Also
+surfaced a new, previously unmeasured, unfixed finding: `_show_main_menu()`
+itself costs a further ~11s on this machine, separate from the heavy
+setup. See `concept/intro_splash.md`'s "A third pass" section for the
+full writeup. Same verification discipline as both prior fixes (no
+natural unit-test seam) -- real, timestamped, flushed-to-disk launches.
+
 ### Mushrooms now fruit at their own real-world-timed windows within autumn (`concept/mushrooms.md`, 2026-09-07)
 
 Asked directly: *"mushrooms should fruit at their respective times ...
@@ -16533,3 +16653,112 @@ running game — today `layer_mix` is a fully tested pure function with
 nothing yet calling it from the live scene tree. Also deferred: a
 proximity/river-water layer, dedicated (rather than shared) desert/tundra
 recordings, and a settings volume slider.
+
+## New Game's intro splash is now the world reveal, not a pre-loading bumper (2026-09-08)
+
+Requested live: *"make it so the intro scene plays before the world
+starts? So you click new game; start; then it loads and when it loaded
+it shows the earth intro scene."* The intro-splash system itself
+(`docs/concept/intro_splash.md`) already shipped in full a day earlier
+— a rotating pixel-art Earth with the "ALEPH ALPHA" wordmark building
+in, played as a skippable bumper — but for New Game/Host Game it fired
+BEFORE `_show_loading_overlay(...)`, i.e. before any of the real world
+setup had even started: a bumper nobody's new world was actually behind
+yet.
+
+`World._on_menu_start_requested()` reordered: `await
+_play_intro_splash()` moved from immediately after the pending-class/
+appearance bookkeeping to immediately after `await
+_spawn_local_singleplayer()` — i.e. after `_wipe_persisted_world` and
+the real chunk-loading spawn work have genuinely finished, right before
+`_dismiss_main_menu()` hands control to the player. The loading
+overlay's spinner is now explicitly hidden first (`if
+_loading_overlay.visible: _loading_overlay.hide_overlay()`, the same
+defensive guard `_run_initial_client_chunk_load` already used for this
+exact overlay), so the intro plays as a clean reveal over the freshly-
+spawned (still paused, so static) world, not over a stale "Preparing a
+new world..." label. The boot-time call site (`_show_main_menu()` then
+the intro, as a bumper over the already-built menu) is untouched —
+this request was specifically about the New Game/Host Game path.
+
+New dedicated fast file `test_world_intro_splash_after_load_fanout.gd`
+(5 tests), mirroring `test_world_compass_window_fanout.gd`'s own
+established technique for wiring inside `World`: `World` is too heavy
+(EarthChunkManager, MainMenu, multiplayer spawn, ...) to stand up for
+real just to prove one `await` moved, so the tests read `World`'s own
+source and assert on relative substring position within a named
+function's body — real-not-real-instance, but precise about execution
+order for a linear `await` sequence. Covers: real setup starts before
+the intro is awaited, the player is spawned before the intro plays, the
+loading overlay is hidden before the intro plays (and only after the
+player has spawned), the intro still finishes before the menu is
+dismissed, and — as a regression guard — the boot bumper's own
+ordering is untouched. `test_intro_splash.gd` (the `IntroSplash` node's
+own playback/skip behavior) re-verified unaffected, 5/5.
+
+## A fourth pass: the boot intro was still being swallowed by an unyielded `_show_main_menu()` (2026-09-08)
+
+Reported live a third time, in almost the same words as the very first
+report: "the intro is still not showing... immediately after a fresh
+relaunch." The build being tested was already a direct descendant of the
+prior entry's own fix commit, so a stale build was ruled out before
+investigating further, and this time the investigation stayed live end to
+end rather than trusting a code trace: a real, non-headless launch
+(`--rendering-driver opengl3`, no `--solo`), instrumented with the same
+flushed-`FileAccess` + `Time.get_ticks_msec()` technique the second and
+third passes already established, plus an env-var-gated autopilot driving
+the real `MainMenu` New Game → Begin flow through its own real methods so
+both call sites could be watched in one run.
+
+**Real, timestamped measurement, not a guess:** `world._ready()`'s heavy
+setup cost 57,928ms as already known — but `_show_main_menu()` ALONE, run
+immediately after, cost a further **13,534ms** of fully synchronous,
+unyielded work (7 procedural class-icon portraits, the live
+character-creator diorama scene, the skill web, the menu backdrop image —
+see `MainMenu._build_create_screen()`), bigger than this doc's own
+previous "~11s" estimate for the same cost and never previously connected
+to the intro-visibility bug at all. Total unyielded stretch immediately
+before the boot intro's first frame was even added to the tree: ~72 real
+seconds, with not one yielded engine frame anywhere in it. The intro
+itself, once actually triggered, played back perfectly both times (32/32
+real per-frame timestamps at ~100ms spacing, `elapsed=3.204s`/`3.206s`) —
+the third pass's own fix to the playback mechanism was never wrong. The New
+Game reveal path showed no equivalent gap (the second intro was added
+within 4ms of the loading overlay being hidden — there is no
+`_show_main_menu()`-sized construction step on that path).
+
+**The bug:** the third pass moved the intro past the WORSE of two adjacent
+freezes but never gave the engine a single presented-frame checkpoint
+between the end of the second one (`_show_main_menu()`) and the intro
+appearing — the identical class of risk `_show_loading_overlay` already
+identified and fixed for itself ("two frames, not one... a single await
+isn't guaranteed to have been presented by," verified against a real
+running instance), sitting unapplied one function away.
+
+**The fix:** `_play_intro_splash()` now awaits two real `process_frame`
+signals before creating the `IntroSplash` node, reusing `_show_loading_
+overlay`'s own already-proven convention exactly, in the one function both
+call sites already share.
+
+**Real, run-for-real test coverage this time** (`test_world_play_intro_
+splash_frame_gate.gd`), not source-text-ordering alone: a bare `World.new()`
+is never added to a tree (so its unrelated heavy `_ready()` never runs),
+`_ui` is wired directly to a real in-tree `CanvasLayer` — the only field
+`_play_intro_splash()` touches — and the test calls the real, unmodified
+function as a live coroutine, asserting real child-count/type state driven
+by real `process_frame` signals. Confirmed red against the unfixed function
+(the intro was added with zero frame delay) before the fix, green after,
+plus a companion source-text assertion pinning the gate at exactly two
+frames. `test_intro_splash.gd`, `test_intro_splash_sequencer.gd`,
+`test_intro_splash_sheet.gd`, `test_world_intro_splash_after_load_
+fanout.gd`, and the sibling `test_world_*_fanout.gd`/`test_world_hud.gd`
+files were all re-run directly against `world.gd`'s new state and stay
+green.
+
+**Still honestly open, unchanged by this pass:** `world._ready()`'s own
+~58s heavy setup and `_show_main_menu()`'s own ~13.5s construction cost are
+both still real, both still fully synchronous, and neither is yield-split —
+this pass only guarantees a presented frame exists between the end of that
+freeze and the intro appearing, it does not make the freeze itself shorter
+or the window responsive during it. Windows still greys the window out for
+the same real duration either way.

@@ -7886,8 +7886,13 @@ func test_step_leaf_litter_fills_the_multimesh_from_the_fields_current_leaves():
 	# own doc comment) -- a bare _load_chunk (unlike a real update()) never
 	# centres decoration on the chunk it just loaded, so this pokes that
 	# internal directly, the same "reach into manager state" convention this
-	# whole file already relies on.
+	# whole file already relies on. _disturbance_center_tile is the SAME
+	# per-tile poke needed for leaves_in_view's own player-tile reference
+	# (see _sync_grass_sprites' identical convention) -- otherwise it stays
+	# at its default Vector2i.ZERO, far from _berlin_tile, and the new
+	# visible-area filter would (correctly) exclude this leaf.
 	manager._decoration_center = chunk_coord
+	manager._disturbance_center_tile = _berlin_tile
 	var field: LeafLitterField = manager._leaf_litter_fields[chunk_coord]
 	field.add_leaf(Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE, "cherry", "autumn", 0.0)
 
@@ -7934,6 +7939,7 @@ func test_step_leaf_litter_does_not_refill_a_chunk_whose_leaves_have_not_changed
 	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
 	manager._load_chunk(chunk_coord)
 	manager._decoration_center = chunk_coord
+	manager._disturbance_center_tile = _berlin_tile
 	var counting_renderer := _CountingLeafLitterRenderer.new()
 	manager._leaf_litter_renderer = counting_renderer
 	var field: LeafLitterField = manager._leaf_litter_fields[chunk_coord]
@@ -7958,6 +7964,7 @@ func test_step_leaf_litter_refills_a_chunk_once_a_new_leaf_actually_falls():
 	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
 	manager._load_chunk(chunk_coord)
 	manager._decoration_center = chunk_coord
+	manager._disturbance_center_tile = _berlin_tile
 	var counting_renderer := _CountingLeafLitterRenderer.new()
 	manager._leaf_litter_renderer = counting_renderer
 	var field: LeafLitterField = manager._leaf_litter_fields[chunk_coord]
@@ -7968,6 +7975,88 @@ func test_step_leaf_litter_refills_a_chunk_once_a_new_leaf_actually_falls():
 	field.add_leaf(Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE + Vector2(5, 5), "acorn", "autumn", 0.0)
 	manager.step_leaf_litter(0.016)
 	assert_eq(counting_renderer.fill_call_count, 2, "a genuinely new leaf must still trigger an immediate refill")
+
+
+# -- visible-area rendering: only push leaves near the player's own tile ----
+#
+# Reported live: "make it so that it only computes leaf litter ... to the
+# current visible area". The dirty-tracking fix above only ever gated
+# WHETHER fill() runs for a chunk; it always rebuilt every leaf a decorating
+# chunk had, however far from the camera. LeafLitterRenderer.leaves_in_view
+# (see that file's own doc comment) is the finer-grained filter that bounds
+# fill()'s own rebuild cost by nearby litter instead of by a chunk's total
+# accumulated count -- docs/concept/soil_fauna.md's own "architecturally
+# unavoidable ... without a finer-grained per-leaf ... update" finding.
+
+## The new, finer-grained cutoff on top of the existing chunk-level
+## _decorates gate: a leaf far from the player's own tile, even inside an
+## otherwise-decorating chunk, must not be pushed into the MultiMesh at all.
+func test_step_leaf_litter_excludes_a_leaf_far_outside_the_visible_window():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	manager._decoration_center = chunk_coord
+	manager._disturbance_center_tile = _berlin_tile
+	var field: LeafLitterField = manager._leaf_litter_fields[chunk_coord]
+	field.add_leaf(Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE, "cherry", "autumn", 0.0)
+	var far_position := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE + Vector2(1000000.0, 0.0)
+	field.add_leaf(far_position, "acorn", "autumn", 0.0)
+
+	manager.step_leaf_litter(0.016)
+
+	var mmi: MultiMeshInstance2D = manager._leaf_litter_mmis[chunk_coord]
+	assert_eq(mmi.multimesh.instance_count, 1, "only the leaf near the player's own tile should be pushed")
+
+
+## Complement: a leaf that starts outside the view window must be pushed the
+## moment the player's own tile brings it into range -- even though nothing
+## about the LEAF itself (or the field's own generation) ever changed. Proves
+## the view-position half of the dirty check, not just the data half every
+## other test on this page already covers.
+func test_step_leaf_litter_refills_once_the_player_walks_close_enough_to_see_a_leaf():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	manager._decoration_center = chunk_coord
+	manager._disturbance_center_tile = _berlin_tile
+	var field: LeafLitterField = manager._leaf_litter_fields[chunk_coord]
+	var far_tile := _berlin_tile + Vector2i(100000, 0)
+	field.add_leaf(Vector2(far_tile) * TerrainRenderer.TILE_SIZE, "cherry", "autumn", 0.0)
+
+	manager.step_leaf_litter(0.016)
+	var mmi: MultiMeshInstance2D = manager._leaf_litter_mmis[chunk_coord]
+	assert_eq(mmi.multimesh.instance_count, 0, "precondition: the leaf starts outside the view window")
+
+	manager._disturbance_center_tile = far_tile  # the player walks over to it
+	manager.step_leaf_litter(0.016)
+	assert_eq(
+		mmi.multimesh.instance_count, 1,
+		"walking close enough must reveal the leaf even though nothing about it changed"
+	)
+
+
+## The design guarantee this optimization must never trade away (see
+## docs/concept/ecosystem_dynamics.md's own "real, running simulation ...
+## whether or not you're watching" pillar, and README's identical framing):
+## a chunk that never decorates at all -- so step_leaf_litter never even
+## calls fill, let alone leaves_in_view -- must still age its own real leaf
+## litter exactly as if it were on screen. field.advance() runs
+## UNCONDITIONALLY at the top of the per-chunk loop, before the _decorates
+## gate is even read; this proves it with LIFETIME pruning, an unambiguous
+## real state change nothing about rendering could fake.
+func test_step_leaf_litter_still_advances_an_off_screen_chunks_simulation():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	# Far away on both the chunk-level AND tile-precise view references, so
+	# this chunk never decorates at all.
+	manager._decoration_center = chunk_coord + Vector2i(500, 500)
+	manager._disturbance_center_tile = _berlin_tile + Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 0)
+	var field: LeafLitterField = manager._leaf_litter_fields[chunk_coord]
+	field.add_leaf(Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE, "cherry", "autumn", 0.0)
+	assert_false(manager._decorates(chunk_coord), "precondition: this chunk must never decorate")
+
+	manager.set_world_age_seconds(LeafLitterField.LIFETIME + 1.0)
+	manager.step_leaf_litter(0.016)
+
+	assert_eq(field.leaves().size(), 0, "a leaf past LIFETIME must still be pruned even while off-screen")
 
 
 ## Scouting now (see docs/concept/soil_fauna.md "Scouting: real search, not

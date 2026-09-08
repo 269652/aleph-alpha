@@ -68,6 +68,7 @@ const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const LeafLitterAtlas = preload("res://src/rendering/leaf_litter_atlas.gd")
 const WindDispersal = preload("res://src/world/wind_dispersal.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const DecorationLod = preload("res://src/rendering/decoration_lod.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 
 ## How big a leaf reads on the ground, in world pixels. Originally ported
@@ -421,6 +422,67 @@ static func instances_for_leaves(
 			),
 		})
 	return instances
+
+
+# -- visible-area filtering: skip rendering leaves the camera cannot see -----
+#
+# Reported live: "make it so that it only computes leaf litter ... to the
+# current visible area". docs/concept/soil_fauna.md's own dirty-tracking
+# writeup already named the remaining gap this closes: fill() rebuilds a
+# chunk's ENTIRE leaf set at once, so one leaf actively changing far off the
+# real visible window costs as much as rebuilding every other, truly idle
+# leaf sharing its chunk -- "architecturally unavoidable ... without a
+# finer-grained (per-leaf incremental) rendering update". leaves_in_view
+# reuses (not reinvents) EarthChunkManager's own established per-tile camera
+# cutoff -- DecorationLod.keeps_decoration_tile, the same convention/buffer
+# grass's own GRASS_VIEW_BUFFER_TILES already established answering the
+# identical report for grass blades.
+
+## Leaves within `leaves` whose SETTLED position or its CURRENT transition's
+## own start point falls inside the tile-precise camera view window (see
+## this file's own section comment above for why this exists and what it
+## reuses).
+##
+## Checks BOTH `position` (the settled target) and `transition_from` (where
+## the CURRENT transition/hop started), not the target alone -- a leaf
+## actively blown toward or away from the window must keep rendering for its
+## whole ~0.9s transition (LeafLitterField.TRANSITION_DURATION), not pop
+## instantly the moment its OWN new target alone crosses the boundary. A
+## floating leaf (on_water) has transition_from == position on every call
+## (see LeafLitterField._advance_floating_leaf's own doc comment), so this
+## collapses to a single check for it -- no special-casing needed -- and
+## since a floating leaf's chunk is re-derived every single advance() call
+## (LeafLitterField.generation()'s own doc comment: the one case that must
+## always look dirty), a floating leaf crosses the window boundary frame by
+## frame with no popping at all, exactly like any other leaf's motion here.
+##
+## Pure and engine-free -- the same "headlessly-tested placement math, thin
+## engine wrapper does the rest" split instances_for_leaves above already
+## establishes.
+static func leaves_in_view(
+	leaves: Array[Dictionary], player_tile: Vector2i, half_span_tiles: Vector2, buffer_tiles: int
+) -> Array[Dictionary]:
+	var visible: Array[Dictionary] = []
+	for leaf in leaves:
+		if (
+			_pixel_in_view(leaf.position, player_tile, half_span_tiles, buffer_tiles)
+			or _pixel_in_view(leaf.transition_from, player_tile, half_span_tiles, buffer_tiles)
+		):
+			visible.append(leaf)
+	return visible
+
+
+## Pixel -> tile conversion mirrors FishMarker._current_at's own identical
+## floor-division idiom (see LeafLitterField's own doc comment on why
+## EarthChunkManager's river-current probe uses the same conversion).
+static func _pixel_in_view(
+	pixel_position: Vector2, player_tile: Vector2i, half_span_tiles: Vector2, buffer_tiles: int
+) -> bool:
+	var tile := Vector2i(
+		int(floor(pixel_position.x / TerrainRenderer.TILE_SIZE)),
+		int(floor(pixel_position.y / TerrainRenderer.TILE_SIZE)),
+	)
+	return DecorationLod.keeps_decoration_tile(tile, player_tile, half_span_tiles, buffer_tiles)
 
 
 static func _build_shader_code() -> String:
