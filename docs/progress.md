@@ -16493,3 +16493,43 @@ console.gd` 10/10 (unaffected).
 never a player-set waypoint), and the other four instruments' own in-world
 UI (map render, forecast label, etc. — unchanged, separate gaps named in
 that doc's own Status section).
+
+### Ambient nature soundscape (`concept/soundscape.md`, 2026-09-08)
+
+Asked directly: research, download real audio, and scaffold a natural
+soundscape. First real audio asset in the project (previously: zero
+`.ogg`/`.wav`/`.mp3` files anywhere in the repo, per `rush_ambient_cue.gd`'s
+own "no real composed audio exists in this environment" scope note).
+
+**Researched and downloaded 11 real recordings from Wikimedia Commons**
+(`assets/audio/soundscape/`, direct `upload.wikimedia.org` links, verified
+as real audio by magic bytes before use) — 4 public domain/CC0, 7 CC BY-SA
+(attributed in the directory's own `CREDITS.md`). Covers all 7 biomes
+(ocean/forest/grassland/rainforest/desert/tundra/mountain), day/night, all
+4 weather states, and one genuine seasonal variant (a real forest-in-winter
+recording), via **layered composition** rather than a 224-combination
+lookup table — see the concept doc's own pillars for why that's the honest
+way to cover a cross this large with a real, licensed asset set instead of
+either a handful of files or an impossible one-per-combination library.
+
+**Shipped, TDD, 29/29 green (`test_nature_soundscape.gd`)**:
+`src/audio/nature_soundscape.gd`'s pure `layer_mix(biome, season, weather,
+is_night, is_snowing)` — same "caller does the real-world computation, this
+module only decides" split `KrakenTrigger`/`EasterEggSightings` already use
+for `is_night`, so this took no dependency on `EarthChunkManager` and needed
+no scene/node to test. Three red→green slices: biome bed selection (with
+grounded exceptions — rainforest gets no winter swap, aseasonal near the
+equator; desert/tundra/mountain share one wind recording at three pinned
+volumes rather than three separately-sourced files), the rain/storm weather
+overlay (a snowy storm gets the wind/blizzard read instead of rain-and-
+thunder, mirroring `RainOverlay`'s own already-shipped distinction), and
+`hawk_call_eligible`/`check_hawk_call` (a `KrakenTrigger`-shaped occasional
+mountain accent, gated to daylight only — raptors are diurnal).
+
+⬜ **Not built this pass, deliberately deferred** (see the concept doc's own
+Status section): `NatureSoundscapePlayer`, the actual `AudioStreamPlayer`
+node wiring into `scenes/world.gd` that would make any of this audible in a
+running game — today `layer_mix` is a fully tested pure function with
+nothing yet calling it from the live scene tree. Also deferred: a
+proximity/river-water layer, dedicated (rather than shared) desert/tundra
+recordings, and a settings volume slider.
