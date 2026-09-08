@@ -8,6 +8,12 @@ extends RefCounted
 ## EasterEggSightings' own is_night handling, so this is fully unit-testable
 ## with plain String/bool inputs.
 
+## The one layer that is an occasional ONE-SHOT accent, not a continuous
+## bed/overlay -- named here so NatureSoundscapePlayer (the Node wrapper
+## that actually builds/drives AudioStreamPlayers) can tell it apart from
+## every other LAYERS entry without a second, duplicated string literal.
+const HAWK_CALL_LAYER := "mountain_hawk_call"
+
 ## Every asset this system can play. Flat by design (not nested per biome):
 ## a "layer" is an independent, separately-volumed thing that can be active
 ## at once alongside any other -- see docs/concept/soundscape.md's own
@@ -23,7 +29,7 @@ const LAYERS := {
 	"wind": "res://assets/audio/soundscape/wind.ogg",
 	"rain": "res://assets/audio/soundscape/rain.ogg",
 	"storm": "res://assets/audio/soundscape/storm.ogg",
-	"mountain_hawk_call": "res://assets/audio/soundscape/mountain_hawk_call.ogg",
+	HAWK_CALL_LAYER: "res://assets/audio/soundscape/mountain_hawk_call.ogg",
 }
 
 ## Real tuned constants (design decisions from docs/concept/soundscape.md's
