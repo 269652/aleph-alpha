@@ -7,6 +7,7 @@ const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 const RenderResolution = preload("res://src/rendering/render_resolution.gd")
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 const RainOverlay = preload("res://src/rendering/rain_overlay.gd")
+const NatureSoundscapePlayer = preload("res://src/audio/nature_soundscape_player.gd")
 const Snowfall = preload("res://src/world/snowfall.gd")
 const ConsoleSpecies = preload("res://src/gameplay/console_species.gd")
 const EasterEggSightings = preload("res://src/gameplay/easter_egg_sightings.gd")
@@ -295,6 +296,10 @@ const RAIN_INTENSITY_BY_WEATHER := {
 }
 
 var _rain_overlay := RainOverlay.new()
+## Ambient nature soundscape (docs/concept/soundscape.md) -- same "built
+## once in _ready(), fed fresh already-computed state every frame" shape as
+## _rain_overlay just above.
+var _nature_soundscape := NatureSoundscapePlayer.new()
 
 ## Held only to avoid allocating one per frame -- the material it pushes to is
 ## static and shared (see GroundTint._shared_material, pinned by
@@ -769,6 +774,9 @@ func _ready() -> void:
 	# and invisible until the weather model turns it on -- the water was
 	# already rippling from rain that never appeared to be falling.
 	add_child(_rain_overlay.build_overlay())
+	# Ambient nature soundscape (docs/concept/soundscape.md) -- built once
+	# here, fed fresh state every _client_process frame below.
+	add_child(_nature_soundscape.build())
 
 	# Bind every action to the InputMap up front (loading any saved overrides
 	# first), before Player spawns and starts polling -- Player's own
@@ -5152,6 +5160,24 @@ func _client_process(delta: float) -> void:
 	# in a storm than in ordinary rain (see RainOverlay).
 	_rain_overlay.set_intensity(RAIN_INTENSITY_BY_WEATHER.get(raw_weather, 0.0))
 	_rain_overlay.set_snowing(snowing)
+	# Ambient nature soundscape (docs/concept/soundscape.md) -- reuses every
+	# input above rather than re-deriving any of it: the same elevation this
+	# frame's day/night lighting already computed, the same raw_weather/
+	# snowing the rain overlay/water just reacted to, and the player's own
+	# tile's real biome (the same biome_at_global lookup CreatureMarker/
+	# FishMarker/NpcMarker already use, not dominant_biome's whole-chunk
+	# figure -- what the PLAYER stands on, not the chunk's overall mix).
+	# season is fetched fresh here rather than reusing the `season` local
+	# above, which is already .capitalize()'d for the HUD.
+	_nature_soundscape.update(
+		_chunk_manager.biome_at_global(player_tile.x, player_tile.y),
+		_chunk_manager.current_season(),
+		raw_weather,
+		elevation <= 0.0,
+		snowing,
+		randf(),
+		delta
+	)
 	# Depth, tracks and repaint all live behind one call now, and it reads the
 	# WORLD clock rather than this frame's delta -- see step_snow. Accumulating
 	# here against `delta` put the snow on a different clock from the season, so

@@ -129,16 +129,21 @@ sub-second reaction). Each step:
 
 ## Status
 
-- 🚧 **v1: the pure `layer_mix` mixing logic, the layer registry, and 11 real
+- ✅ **The pure `layer_mix` mixing logic, the layer registry, and 11 real
   licensed recordings** (`assets/audio/soundscape/`, see `CREDITS.md` for
   attribution) covering all 7 biomes, day/night, all 4 weather states, and one
   genuine seasonal variant (forest winter). Season for the other 6 biomes is
   mixing-rule modulation, not 24 additional bespoke recordings (see pillar 2).
-- ⬜ **`NatureSoundscapePlayer` wired into `scenes/world.gd`** — the pure logic
-  above is designed for this from day one, but instancing it into the actual
-  running scene, hooking the periodic refresh cadence, and an audio bus /
-  master-volume-slider settings hook are separate, deliberately not bundled
-  into the same pass as the design + asset research.
+- ✅ **`NatureSoundscapePlayer` wired into `scenes/world.gd`** — built once in
+  `_ready()` (`add_child(_nature_soundscape.build())`), fed real state every
+  `_client_process` frame (the player's own real `biome_at_global` tile, the
+  same real sun-elevation `is_night` and `raw_weather`/`snowing` every other
+  system this frame already reacts to — see `test_world_nature_soundscape_
+  fanout.gd`). Ambient sound now actually plays while the game runs, not just
+  in `test_nature_soundscape_player.gd`.
+- ⬜ **An audio bus / master-volume-slider settings hook** — today the only
+  volume control is per-layer inside `layer_mix`'s own constants; there is no
+  player-facing way to turn this down or off.
 - ⬜ **Proximity layers** (running water near a river/lake, per
   [hydrology_field.gd](../../src/world/hydrology_field.gd)) — a real, already-
   named future extension, not built here to keep this pass's asset list from
