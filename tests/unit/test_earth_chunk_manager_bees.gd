@@ -15,6 +15,7 @@ extends GutTest
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const BeeColony = preload("res://src/world/bee_colony.gd")
 const WildBeePatch = preload("res://src/world/wild_bee_patch.gd")
 const BeeHiveMarker = preload("res://src/rendering/bee_hive_marker.gd")
@@ -322,3 +323,103 @@ func test_relocate_bee_hive_after_harvest_at_an_unknown_colony_does_nothing():
 	var from_cell: Vector2i = orphan_colony.hive_cells()[0]
 	manager.relocate_bee_hive_after_harvest(orphan_colony, from_cell)
 	assert_true(orphan_colony.has_hive(from_cell), "an unregistered colony must be left untouched, not crash")
+
+
+# -- _has_real_hive_anchor: a hive must be on a real tree or structure, ------
+# -- never free-floating over open ground or a river -------------------------
+#
+# Requested live: "Beehives should only be able to build on trees or
+# structures like houses .. not free floating over a river or ground."
+# BeeColony/WildBeePatch are pure and world-blind (only ever see a biome
+# grid), so this real-world check lives here, on EarthChunkManager, exactly
+# like _has_bee_food_near already does (see that function's own doc
+# comment on the split).
+
+func _tile_pixel(tile: Vector2i) -> Vector2:
+	return (Vector2(tile) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+
+
+func test_has_real_hive_anchor_accepts_a_position_at_a_real_standing_tree():
+	manager._load_chunk(_berlin_chunk)
+	var trees: Array = manager._loaded_trees.get(_berlin_chunk, [])
+	if trees.is_empty():
+		pending("no real tree landed in Berlin's own chunk this seed")
+		return
+	var tree_position: Vector2 = trees[0].position
+	var tree_tile := Vector2i(
+		floori(tree_position.x / TerrainRenderer.TILE_SIZE), floori(tree_position.y / TerrainRenderer.TILE_SIZE)
+	)
+	assert_true(manager._has_real_hive_anchor(tree_position, tree_tile))
+
+
+## Nothing loaded at all means no real tree and no real building piece can
+## possibly be found nearby (both queries only ever see loaded data) --
+## the honest "free-floating" case this whole feature exists to reject.
+func test_has_real_hive_anchor_rejects_a_position_with_nothing_loaded_nearby():
+	assert_false(manager._has_real_hive_anchor(_tile_pixel(_berlin_tile), _berlin_tile))
+
+
+func test_has_real_hive_anchor_accepts_a_position_near_a_real_building_piece():
+	manager._load_chunk(_berlin_chunk)
+	assert_true(manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "wood_wall"))
+	assert_true(manager._has_real_hive_anchor(_tile_pixel(_berlin_tile), _berlin_tile))
+
+
+## A source-level wiring assertion, not a live-terrain one -- mirrors
+## test_earth_chunk_manager_footprints.gd's own test_record_footstep_
+## checks_for_a_real_river_or_lake exactly (same reasoning quoted there:
+## "a real river/lake at this specific test's fixed Berlin tile is not
+## guaranteed, so this proves the WIRING rather than depending on world
+## generation landing a river there").
+func _has_real_hive_anchor_body() -> String:
+	var source := FileAccess.get_file_as_string("res://src/world/earth_chunk_manager.gd")
+	var start := source.find("func _has_real_hive_anchor(")
+	assert_gt(start, -1, "the premise: this function must still exist and be named that")
+	var body_end := source.find("\nfunc ", start + 1)
+	return source.substr(start, body_end - start)
+
+
+func test_has_real_hive_anchor_checks_for_a_real_river_or_lake():
+	var body := _has_real_hive_anchor_body()
+	assert_true(body.contains("is_river_at_global("), "a hive must never float over a real river")
+	assert_true(body.contains("is_lake_at_global("), "a hive must never float over a real lake either")
+
+
+# -- wiring: the anchor check actually gates real site search/seeding -------
+
+func _find_bee_hive_site_body() -> String:
+	var source := FileAccess.get_file_as_string("res://src/world/earth_chunk_manager.gd")
+	var start := source.find("func _find_bee_hive_site(")
+	assert_gt(start, -1, "the premise: this function must still exist and be named that")
+	var body_end := source.find("\nfunc ", start + 1)
+	return source.substr(start, body_end - start)
+
+
+## Covers all three real callers uniformly (swarming, absconding, and
+## harvest-relocation -- see this function's own doc comment), without
+## depending on real, probabilistic terrain to prove it.
+func test_find_bee_hive_site_requires_a_real_anchor_too():
+	assert_true(
+		_find_bee_hive_site_body().contains("_has_real_hive_anchor("),
+		"site search must reject a candidate with real food nearby but no real tree/structure anchor"
+	)
+
+
+func _load_chunk_body() -> String:
+	var source := FileAccess.get_file_as_string("res://src/world/earth_chunk_manager.gd")
+	var start := source.find("func _load_chunk(")
+	assert_gt(start, -1, "the premise: this function must still exist and be named that")
+	var body_end := source.find("\nfunc ", start + 1)
+	return source.substr(start, body_end - start)
+
+
+## The one seeding path _find_bee_hive_site's own gate above never covers
+## (see BeeColony._seed_initial_hives's own doc comment: initial world-gen
+## placement has no post-seed filter to catch a free-floating hive
+## afterwards) -- the real reason this needs its OWN wiring proof rather
+## than trusting _find_bee_hive_site's fix to cover every hive in the game.
+func test_load_chunk_passes_the_real_anchor_check_into_bee_colony_seeding():
+	assert_true(
+		_load_chunk_body().contains("_has_real_hive_anchor("),
+		"initial chunk-load seeding must also refuse to seed a free-floating hive"
+	)

@@ -16899,3 +16899,74 @@ remaining candidates for why sound still might not be heard are outside
 this system's control entirely: Windows' actual default playback device,
 this game's own per-executable entry in the Windows Volume Mixer, or the
 system volume itself.
+
+## Beehives now require a real tree or building anchor -- never free-floating (2026-09-08)
+
+Requested live: *"Beehives should only be able to build on trees or
+structures like houses .. not free floating over a river or ground."*
+Before this, a hive site's only gates were biome membership
+(`BeeColony.HIVE_BIOMES`) and real nearby nectar
+(`EarthChunkManager._has_bee_food_near`) -- despite `HIVE_BIOMES`'s own
+doc comment already calling itself "a real tree-bearing biome," nothing
+ever confirmed a real tree (or building, or dry land) actually stood
+near the chosen cell. A hive could, and did, land on open ground or a
+river tile with nothing there.
+
+New `EarthChunkManager._has_real_hive_anchor(pixel, global_tile)`:
+rejects a river/lake tile outright (`is_river_at_global`/
+`is_lake_at_global`, the same exclusion `TreeRenderer.spawn_trees`
+already applies to trees, never previously applied to colony
+placement), then requires a real standing tree (`trees_near`) or a real
+building piece (`chunk.modifications` + `BuildingPiece.has_piece`, via
+new `_has_building_piece_near`) within a small, tight new
+`HIVE_ANCHOR_RADIUS_TILES` constant -- deliberately much smaller than
+`BeeColony.SENSE_RADIUS_TILES`/`FORAGE_RADIUS_TILES` (those are about
+finding food from a distance; this is about physical support, a hive
+genuinely hanging from or resting against something specific nearby).
+
+Wired at BOTH places a hive can come into existence, which needed two
+separate changes:
+- `_find_bee_hive_site` (swarming, absconding, and harvest-relocation
+  all route through this one function) now also requires
+  `_has_real_hive_anchor` alongside its existing forage check.
+- `BeeColony._seed_initial_hives` -- the initial world-generation
+  seeding path, and the most common way a hive appears at all -- has no
+  `_find_bee_hive_site` pass to filter it afterwards, so `BeeColony.
+  _init` gained an optional 5th parameter, `extra_site_check: Callable
+  = Callable()`, checked once per candidate cell on top of the existing
+  biome/spacing gate. Left unbound (a strict no-op, `.is_valid()` reads
+  false) for every existing test and caller -- `BeeColony` stays exactly
+  as pure/world-blind as before by default. `EarthChunkManager.
+  _load_chunk` is the one real caller that now injects it, wrapping
+  `_has_real_hive_anchor` with the chunk's own coordinate captured in
+  the closure. Real trees are already spawned into `_loaded_trees` for
+  a chunk before its `BeeColony` is constructed (confirmed by reading
+  `_load_chunk`'s own statement order), so the injected check sees real
+  tree data, not an empty chunk.
+
+Scoped to honeybee hives only, per the request -- `WildBeePatch` has
+the identical unenforced "needs real deadwood/an old stem nearby" claim
+in its own doc comment and is untouched by this pass; noted honestly in
+`docs/concept/bees.md` as a known, named, parallel gap rather than
+silently left inconsistent or silently also fixed.
+
+3 new tests in `test_bee_colony.gd` (extra_site_check backward-compat,
+rejects-everything, accepts-everything-matches-unconstrained) plus 6 in
+`test_earth_chunk_manager_bees.gd`: two behavioral (`_has_real_hive_
+anchor` accepts a position at a real Berlin tree; accepts one next to a
+real `build_at_global`-placed building piece), one behavioral-negative
+(rejects a position with nothing loaded at all -- both queries only
+ever see loaded data, so this is the honest "free-floating" case), and
+three source-level wiring assertions (river/lake check present in
+`_has_real_hive_anchor`'s own body; `_find_bee_hive_site`'s body calls
+it; `_load_chunk`'s body calls it) mirroring `test_earth_chunk_manager_
+footprints.gd`'s own `test_record_footstep_checks_for_a_real_river_or_
+lake` precedent exactly, for the identical reason quoted there: a real
+river/lake at a fixed test tile is not guaranteed, so these prove the
+WIRING rather than depending on world generation landing one there.
+`test_bee_colony.gd` 47/47 (44 pre-existing + 3 new), `test_earth_
+chunk_manager_bees.gd` 23/23 (17 pre-existing + 6 new) -- all real
+assertions this run, no `pending()` needed. Regression-checked: `test_
+bee_forager_marker.gd` 29/29, `test_bee_hive_marker.gd` 24/24, `test_
+bee_population_model.gd` 14/14, `test_wild_bee_patch.gd` 20/20, `test_
+wild_bee_nest_marker.gd` 11/11.

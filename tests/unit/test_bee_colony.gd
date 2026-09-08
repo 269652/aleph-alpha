@@ -351,6 +351,46 @@ func test_is_valid_hive_site_accepts_a_real_free_tree_bearing_cell():
 	assert_true(colony.is_valid_hive_site(_a_free_cell(colony)))
 
 
+# -- extra_site_check: an optional real-world constraint, injected -----------
+#
+# Requested live: "Beehives should only be able to build on trees or
+# structures like houses .. not free floating over a river or ground."
+# BeeColony itself is pure and world-blind (only ever sees a biome grid --
+# see is_valid_hive_site's own doc comment on the split), so it cannot know
+# whether a real tree or building actually stands near a candidate cell.
+# EarthChunkManager DOES know that (see _has_real_hive_anchor), so it is
+# injected as an optional Callable rather than baked into BeeColony's own
+# biome-only logic -- every existing 4-arg construction (every test above,
+# and most real callers) gets an unbound Callable, which is treated as "no
+## extra constraint" so existing behaviour is completely unchanged by
+# default.
+
+func test_seeding_with_no_extra_site_check_behaves_exactly_as_before():
+	var unconstrained := BeeColony.new(7, WIDTH, HEIGHT, _all_grassland())
+	var explicit_noop := BeeColony.new(7, WIDTH, HEIGHT, _all_grassland(), Callable())
+	assert_eq(explicit_noop.hive_cells(), unconstrained.hive_cells())
+
+
+func test_an_extra_site_check_rejecting_everything_seeds_no_hives_at_all():
+	var unconstrained := _colony_with_one_hive()
+	assert_gt(unconstrained.hive_cells().size(), 0, "precondition: this seed really does place a hive")
+	var constrained := BeeColony.new(
+		unconstrained._seed_value, WIDTH, HEIGHT, _all_grassland(), func(_cell: Vector2i) -> bool: return false
+	)
+	assert_eq(constrained.hive_cells(), [])
+
+
+## An extra_site_check that accepts everything must seed the IDENTICAL set
+## of hives an unconstrained colony would -- it is a pure additional filter,
+## never a second, different placement algorithm.
+func test_an_extra_site_check_accepting_everything_matches_unconstrained_seeding():
+	var unconstrained := _colony_with_one_hive()
+	var constrained := BeeColony.new(
+		unconstrained._seed_value, WIDTH, HEIGHT, _all_grassland(), func(_cell: Vector2i) -> bool: return true
+	)
+	assert_eq(constrained.hive_cells(), unconstrained.hive_cells())
+
+
 ## The colony's own pure half of relocation: carries the FULL population
 ## and FULL remaining honey across to the new site (unlike bud_new_hive's
 ## 50/50 swarm split) -- absconding is the whole colony moving house, not
