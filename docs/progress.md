@@ -17398,3 +17398,39 @@ certainty even at the bleakest reading, and defaults to the exact
 pre-existing chance when omitted. Confirmed red first ("Too many
 arguments" — the new parameter didn't exist), green after.
 `test_squirrel_nut_caching.gd` 24/24.
+
+## A seventh pass on the intro: shrunk to the character panel's footprint (`concept/intro_splash.md`, 2026-09-08)
+
+Every prior pass fixed a real bug that stopped the intro from rendering at
+all. Once it reliably did, reported live as a new, different complaint:
+"make it smaller, about the size of the new character panel... otherwise
+it looks pixelated and wobbly." `intro.png`'s 32 frames are a modest
+native resolution; stretching them across the FULL viewport via
+`STRETCH_KEEP_ASPECT_COVERED` meant a large upscale, reading as coarse
+blocky pixel art beyond this game's intentional 16-bit-styled look.
+
+**The fix:** the root `Control` and its full-screen black `backdrop` are
+untouched (the fifth pass's `set_deferred` fix still applies to them) —
+only the animated `TextureRect` shrank, to a new `IntroSplash.DISPLAY_SIZE`
+constant (`Vector2(880, 620)`, centered), matching `MainMenu.PANEL_SIZE`
+(the character creator panel) as a plain literal rather than a live
+`preload()` reference — pulling in `MainMenu`'s own preload chain
+(`CharacterPreviewDiorama` and the rest of the create-screen's build
+machinery) just to read one constant isn't worth risking on the intro's
+own boot-critical load path, given how expensive this exact area has
+already proven to be (see the sixth pass immediately above, which fixed
+exactly that expensive path for a different reason). `_display` also
+dropped `PRESET_FULL_RECT` in favor of plain default anchors with a
+direct size/position write, sidestepping the fifth pass's whole
+"non-equal opposite anchors get overridden after `_ready()`" bug class
+entirely rather than extending it with a second `set_deferred`.
+
+Covered by a new `test_display_is_sized_and_centered_to_the_character_
+panel_size` in `test_intro_splash.gd` (confirmed red against a missing
+`DISPLAY_SIZE`/`display_rect()` first, green after), asserting the real
+on-screen rect after a `wait_process_frames` settle rather than a
+same-frame read. `test_intro_splash.gd` 7/7, plus
+`test_intro_splash_sheet.gd`, `test_intro_splash_sequencer.gd`,
+`test_world_play_intro_splash_frame_gate.gd`, and
+`test_world_intro_splash_after_load_fanout.gd` all re-run clean —
+no regression in the timing/gating mechanics the prior six passes fixed.

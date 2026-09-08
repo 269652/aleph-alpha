@@ -17,6 +17,24 @@ signal finished
 const IntroSplashSheet = preload("res://src/rendering/intro_splash_sheet.gd")
 const IntroSplashSequencer = preload("res://src/rendering/intro_splash_sequencer.gd")
 
+## The animation's own on-screen footprint -- deliberately NOT the full
+## viewport (see docs/concept/intro_splash.md's "A sixth pass"). Reported
+## live: "make it smaller, about the size of the new character panel...
+## otherwise it looks pixelated and wobbly" -- intro.png's frames are a
+## modest native resolution (see IntroSplashSheet), so stretching them
+## across the whole screen meant a much bigger upscale than shrinking the
+## display box alone does, with the same STRETCH_KEEP_ASPECT_COVERED.
+##
+## The value matches MainMenu.PANEL_SIZE (the character creator panel the
+## reporter pointed at) as of this writing -- a plain literal, NOT a live
+## preload() reference to it: MainMenu's own preload chain pulls in
+## CharacterPreviewDiorama and the rest of the create-screen's build
+## machinery, exactly the kind of front-loaded cost this file's own
+## multi-pass boot-freeze history (see the concept doc) has repeatedly
+## found expensive on this exact load path -- not worth risking just to
+## read one constant. Re-sync by hand if MainMenu.PANEL_SIZE ever changes.
+const DISPLAY_SIZE := Vector2(880, 620)
+
 var _frames: Array[ImageTexture] = []
 var _display: TextureRect
 var _elapsed := 0.0
@@ -59,12 +77,18 @@ func _ready() -> void:
 	backdrop.set_deferred("size", get_viewport_rect().size)
 
 	_display = TextureRect.new()
-	_display.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Plain default anchors (0,0,0,0), NOT PRESET_FULL_RECT -- a direct
+	# size/position write under equal opposite anchors is never overridden
+	# by the layout pass that stomps a top-level full-rect Control's size
+	# back to (0,0) (see `self`'s own set_deferred above and
+	# test_size_fills_the_viewport_once_ready_settles), so this can be
+	# assigned immediately, no set_deferred needed.
+	_display.size = DISPLAY_SIZE
+	_display.position = (get_viewport_rect().size - DISPLAY_SIZE) / 2.0
 	_display.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_display.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	_display.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(_display)
-	_display.set_deferred("size", get_viewport_rect().size)
 
 	_frames = IntroSplashSheet.new().generate_textures()
 	if _frames.is_empty():
@@ -104,3 +128,10 @@ func _finish() -> void:
 		return
 	_finished = true
 	finished.emit()
+
+
+## The animation's own on-screen rect -- lets a caller (or a test) verify
+## what's actually displayed without reaching past this class into the
+## TextureRect node itself (same rationale as CharacterView.slot_texture).
+func display_rect() -> Rect2:
+	return Rect2(_display.position, _display.size)

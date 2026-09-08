@@ -580,6 +580,53 @@ the same two-`process_frame` convention `_play_intro_splash()`/
 `_show_loading_overlay()` already use) is a real, deliberately deferred
 follow-up, not attempted in this pass.
 
+### A seventh pass: shrunk to the character panel's own footprint (2026-09-08)
+
+Every prior pass fixed a real timing/gating/sizing bug that stopped the
+intro from being *seen* at all. Once it reliably was, a new, different
+complaint arrived: "make it smaller, about the size of the new character
+panel... otherwise it looks pixelated and wobbly." A real one this time
+too, just a different axis (legibility of the art itself, not whether it
+renders) -- `intro.png`'s 32 frames are a modest native resolution (see
+"The sheet" above), and `STRETCH_KEEP_ASPECT_COVERED` across the FULL
+viewport meant a large upscale, which reads as coarse, blocky pixel art
+rather than this game's intentional "16-bit-styled" look (see
+[pixel_art_engine.md](pixel_art_engine.md)) -- more upscale than the art
+was ever meant to carry.
+
+**The fix:** the root `Control` and its black `backdrop` still cover the
+full viewport exactly as before (the fifth pass's `set_deferred` fix is
+untouched) -- only the animated `TextureRect` (`_display`) shrank, to
+`IntroSplash.DISPLAY_SIZE` (`Vector2(880, 620)`), centered. The net look is
+a smaller, centered animation on a full black backdrop -- a conventional
+boot-logo treatment, and a real, measured reduction in upscale factor
+since the SAME `STRETCH_KEEP_ASPECT_COVERED` now covers a smaller target
+rect. `DISPLAY_SIZE`'s value matches `MainMenu.PANEL_SIZE` (the character
+creator panel the reporter pointed at) as of this writing -- a plain
+literal, not a live `preload()` reference to it: see `IntroSplash.
+DISPLAY_SIZE`'s own doc comment for why pulling in `MainMenu`'s own
+preload chain (`CharacterPreviewDiorama` and the rest of the create-
+screen's build machinery) isn't worth risking on the intro's own
+boot-critical load path just to read one constant. Re-sync by hand if
+`MainMenu.PANEL_SIZE` ever changes.
+
+`_display` also stopped using `PRESET_FULL_RECT` anchors in favor of
+plain default (equal, zero) anchors with a direct `size`/`position`
+assignment -- sidestepping the fifth pass's whole bug class rather than
+extending it: the "non-equal opposite anchors get overridden after
+`_ready()`" behavior only triggers for non-equal opposite anchors in the
+first place, so a fixed-size, explicitly-positioned Control under default
+anchors never needs `set_deferred` at all.
+
+Covered by `test_display_is_sized_and_centered_to_the_character_panel_
+size` in `test_intro_splash.gd`: asserts the real `display_rect()` (a
+small new getter, same rationale as `CharacterView.slot_texture` -- let a
+test verify what's shown without reaching past the class into its
+`TextureRect` node) against `DISPLAY_SIZE`, centered, after a real
+`wait_process_frames` settle -- not just a same-frame read, this file's
+own established caution given how many of its prior bugs were exactly
+that class of false confidence.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
@@ -660,6 +707,12 @@ follow-up, not attempted in this pass.
   from 13,534ms), with the deferred ~11.8s now falling only on a New
   Game/Host Game click. See "A sixth pass" below and
   `docs/progress.md`'s matching entry.
+- ✅ **Revised (2026-09-08, "A seventh pass"): the animation itself is
+  shrunk to `MainMenu.PANEL_SIZE`'s footprint (880x620), centered on a
+  still-full-viewport black backdrop, rather than stretched full-screen.**
+  Reported live as looking "pixelated and wobbly" at full-viewport size;
+  the same `STRETCH_KEEP_ASPECT_COVERED` now covers a smaller box, a real
+  reduction in upscale factor. See `IntroSplash.DISPLAY_SIZE`.
 - ⬜ No audio. A logo intro without a sting/whoosh is a real, honest gap
   (this project has no music/SFX system wired up to hook into yet at
   all), not something this pass attempts.
