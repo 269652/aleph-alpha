@@ -168,15 +168,38 @@ which is a real, if quiet, consequence; whether hunger should ever kill a
 creature outright is a separate, bigger design decision than "seasonal
 behavior," named here rather than decided by default.
 
-### Squirrel/mouse cache-preference
+### Squirrel scarcity-driven eat-vs-cache shift (revised from "cache preference")
 
-Both species already cache real food (`SquirrelNutCaching`,
-`SeedCaching`, surfaced via `CreatureMarker.carried_nut_species`/
-`carried_grass_seed`) — the real winter-survival strategy for
-non-hibernating rodents. The one missing piece: reusing the SAME
-`growth_modifier` signal from the fix above so a squirrel/mouse prefers
-drawing from its own cache over a fresh foraging attempt when fresh
-forage is cold/scarce, rather than treating the cache as pure flavor.
+**Corrected on implementation, not as originally scoped.** Both species
+have a "caching" mechanic, but reading `SquirrelNutCaching`/`SeedCaching`
+in full shows neither is a personal, retrievable food store an animal
+could later "prefer" over fresh foraging: caching here means real
+scatter-hoarding SEED DISPERSAL — a picked-up nut/seed is carried a short
+distance and either eaten outright or buried as a new planting site
+(`try_plant_seed_at`), never as a stockpile the same animal returns to
+draw down. `SeedCaching` (mouse) additionally has no eat-vs-cache branch
+at all — a mouse's grass seed is ALWAYS re-cached (redistributed onto the
+same ground-seed pool foraging already reads from), never eaten in place,
+a deliberate existing design choice, not a gap. Building a genuine
+per-individual "remembers and returns to its own cache" mechanic would be
+a materially larger, new feature — spatial cache-location tracking this
+file's own pure, stateless functions were never built for — not a cheap
+extension, and not attempted here.
+
+The real, buildable, still-genuinely-seasonal mechanism this file's own
+existing doc comment already implies: *"caching becomes common mainly
+once immediate hunger is satisfied... or a mast glut exceeds what can be
+eaten right away."* The inverse holds too — real forage scarcity should
+push a forager toward eating what it finds right now rather than
+investing effort in a cache for later. `SquirrelNutCaching.
+nut_consumption_chance_for`/`nut_is_consumed` gain an optional
+`growth_modifier` term (the same signal the herbivore forage-realism fix
+above reuses) that nudges consumption UP as real forage gets scarcer —
+real, cheap, and grounded in this module's own pre-existing reasoning.
+**Mouse is explicitly out of scope for this specific mechanism** (no
+eat-vs-cache branch to nudge); a mouse's own seasonal hardship already
+comes from the shared `FOOD_UNDERFOOT`/`FOOD_SEED` forage-realism fix
+above, the same as every other `CreatureMarker` species.
 
 ### Bear hibernation / snake brumation (new decision-ladder state)
 
@@ -293,7 +316,15 @@ grazing), but the real caloric/mass yield now honestly reflects how
 little is actually growing right now. The highest-leverage change in
 this whole doc: every herbivore, present and future, gets real winter
 hardship for free, no per-species code.
-⬜ Squirrel/mouse cache-preference
+✅ Squirrel scarcity-driven eat-vs-cache shift (revised scope — see the
+mechanism spec section above for why "mouse cache-preference" as
+originally worded does not map onto either species' real mechanism).
+`SquirrelNutCaching.nut_consumption_chance_for`/`nut_is_consumed` gain an
+optional `growth_modifier` term pushing consumption up as real forage
+gets scarcer, grounded in this module's own pre-existing "caching becomes
+common once hunger is satisfied" reasoning. Mouse gets no analogous
+change (no eat-vs-cache branch exists for it); its seasonal hardship
+already comes from the shared herbivore forage-realism fix above.
 ⬜ Alpaca as a real, live grazer
 ⬜ Bear hibernation / snake brumation
 ⬜ Blackbird: real population + real diet shift

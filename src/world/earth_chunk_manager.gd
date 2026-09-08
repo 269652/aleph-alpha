@@ -6433,8 +6433,13 @@ func _step_squirrel_nut_caching(creature) -> void:
 	# fitter individual forager is a slightly more efficient predator (see
 	# SquirrelNutCaching.NUT_FITNESS_CHANCE_SWING), threaded through the same
 	# way AmbientFlyerMarker._step_seed_carrying threads its own wander_seed
-	# into SeedEndozoochory.seed_is_consumed.
-	if not SquirrelNutCaching.nut_is_consumed(creature.wander_seed, creature.wander_seed):
+	# into SeedEndozoochory.seed_is_consumed. current_growth_modifier() (see
+	# docs/concept/seasonal_behavior.md, "Squirrel/mouse cache-preference")
+	# pushes a real scarce season toward eating now over caching for later --
+	# the same signal phase 5's herbivore forage-realism fix already reuses.
+	if not SquirrelNutCaching.nut_is_consumed(
+		creature.wander_seed, creature.wander_seed, current_growth_modifier()
+	):
 		try_plant_seed_at(creature.position, creature.carried_nut_species)
 	creature.carried_nut_species = ""
 	creature.carried_nut_direction = Vector2.ZERO
