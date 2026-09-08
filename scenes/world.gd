@@ -912,14 +912,6 @@ func _on_menu_start_requested(
 	# signal already carries this genome's stat modifiers, and the seed is the
 	# same roll's other half (see MainMenu.current_dna).
 	_pending_dna_seed = int(_main_menu.current_dna().get("seed_value", 0))
-	# The boot logo intro's second bumper spot (see docs/concept/
-	# intro_splash.md, _play_intro_splash()): a player choosing New Game or
-	# Host Game gets the same branded moment a fresh boot does, and it costs
-	# nothing extra here -- it's fully skippable, and it finishes (or is
-	# skipped) BEFORE the loading overlay below ever appears, so it never
-	# competes with or delays that overlay's own "shown and painted before
-	# the real work starts" guarantee.
-	await _play_intro_splash()
 	# Shown and PAINTED before any of the real, synchronous world-setup work
 	# below starts (see _show_loading_overlay) -- that work is what was
 	# reported as the game appearing to hang (see docs/progress.md's Loading
@@ -929,6 +921,21 @@ func _on_menu_start_requested(
 	if mode == "host":
 		_start_server()
 	await _spawn_local_singleplayer()
+	# The boot logo intro's second bumper spot (see docs/concept/
+	# intro_splash.md, _play_intro_splash()): a player choosing New Game or
+	# Host Game gets the same branded moment a fresh boot does, and it costs
+	# nothing extra here -- it's fully skippable. Requested live: the intro
+	# should be the REVEAL once the new world is actually ready, not a bumper
+	# played before a loading screen nobody watched it for -- moved from
+	# before _show_loading_overlay to here, after the real work (wipe/spawn)
+	# is genuinely done. The overlay's own spinner is dismissed first so the
+	# intro plays over the freshly-spawned (paused, so still) world it is
+	# actually a reveal for, not over a stale "Preparing a new world..."
+	# label -- same defensive `if visible` guard _run_initial_client_chunk_
+	# load already uses for this exact overlay.
+	if _loading_overlay.visible:
+		_loading_overlay.hide_overlay()
+	await _play_intro_splash()
 	_dismiss_main_menu()
 
 
