@@ -16970,3 +16970,79 @@ assertions this run, no `pending()` needed. Regression-checked: `test_
 bee_forager_marker.gd` 29/29, `test_bee_hive_marker.gd` 24/24, `test_
 bee_population_model.gd` 14/14, `test_wild_bee_patch.gd` 20/20, `test_
 wild_bee_nest_marker.gd` 11/11.
+
+## The boot freeze is mostly fixed, not just worked around (`concept/soil_fauna.md`, `concept/intro_splash.md`, 2026-09-08)
+
+Asked directly, as part of a broader "what would make this game more
+enjoyable" brainstorm: fix the boot freeze and the intro animation.
+Every prior pass on the intro (see above) correctly diagnosed that the
+heavy per-boot setup's own freeze was real, unavoidable without
+yield-splitting it, and untouched by any intro-sequencing fix — but
+always as a *measured, deferred* gap, never actually profiled to find
+out which part of "the heavy setup" was actually expensive. It turned
+out not to be evenly spread at all.
+
+**Measured, not guessed:** live, per-step timestamps across the whole
+of `World._ready()`'s heavy setup (`EarthChunkManager` construction,
+every shader-layer setter, `MushroomMarker.warm_art_cache()`, 21
+`_build_*` UI calls) found ONE call responsible for ~93% of the total —
+`MushroomMarker.warm_art_cache()` measured ~52 of ~56 real seconds.
+Every other step measured under a few hundred milliseconds except
+`EarthChunkManager.new()` (~3s). Building a general yield-splitting
+rearchitecture for all of `_ready()` would have been solving a problem
+that mostly didn't exist outside this one call.
+
+**The fix is scoped to that one call — see `concept/soil_fauna.md`'s
+"Round 6 follow-up" for the full account.** `IllustratedMushroomSprite.
+warm_cache()` now yields via `await Engine.get_main_loop().
+process_frame` after every real sheet load instead of running as one
+uninterrupted synchronous loop, mirroring `EarthChunkManager.
+update_with_progress`'s own already-established coroutine shape
+(including an optional `on_progress: Callable`, unused by any caller
+yet). Bitten stages are unrolled into their own per-sheet loop rather
+than yielding only around the whole `bitten_frame_for()` call, since a
+single species can deliver up to 3 full-resolution bitten sheets — that
+would still have been one multi-second block otherwise. The live-
+gameplay-facing `frame_for()`/`crushed_frame_for()`/`bitten_frame_for()`
+functions are completely untouched and still synchronous (`_rebuild_
+sprite()` calls them directly and needs a real texture back
+immediately, not a coroutine) — only the warming PASS learned to yield.
+
+**A real, second bug found live along the way, exposed BY this fix, not
+caused by it:** `World._ready()` set `_world_ready = true` at the very
+TOP of the heavy setup, before any of it had actually run — silently
+harmless for as long as the whole block ran synchronously (`_unhandled_
+input()` had no opportunity to fire mid-setup regardless of the flag),
+but the instant `warm_art_cache()` started genuinely yielding across
+real frames, any input arriving during one of those yields hit
+`_unhandled_input()` with keybindings not yet loaded, throwing
+"InputMap action ... doesn't exist" for every single bound action.
+Fixed by moving the flip to the true end of the heavy setup, matching
+what the flag's own doc comment always claimed ("set only once
+everything they touch has actually been built") rather than what it
+actually did. Confirmed via grep that `_world_ready` gates exactly two
+readers in the whole file (`_process`/`_unhandled_input`), so nothing
+between the old and new position needed it true early.
+
+**Verified two ways, deliberately not trusting either alone.** GUT:
+`test_warm_cache_reports_real_progress_from_zero_to_the_true_total`
+mirrors `test_update_with_progress_reports_real_progress_from_zero_
+to_the_true_total`'s own contract exactly (one call per unit of work,
+zero to the true total) — proves the SHAPE is right, not that Windows
+actually stays happy. For that, a live, isolated `--solo` launch was
+polled externally, every 0.5s, via PowerShell's `(Get-Process -Id
+<pid>).Responding` — the actual OS-level flag behind "Not Responding" —
+for the whole boot: `True` for all 110 polls, zero drops. A first,
+contended attempt (several other Godot processes competing for the
+machine at the same time) DID show real `Responding=False` stretches
+even with the fix applied, which could have been mistaken for the fix
+not working — re-run alone, clean, it held throughout. Worth recording
+plainly: a live fps/responsiveness number is meaningless while another
+process shares the machine, same lesson this project has hit before,
+now hit again for exactly this kind of external OS-level measurement
+too.
+
+**Honest remaining gap:** `_show_main_menu()`'s own ~11-19s cost
+(flagged, not fixed, in the prior intro-splash pass) is untouched here —
+a separate, likely-fixable slow spot (background image load or
+`MainMenu` construction) for a future pass, not this one.

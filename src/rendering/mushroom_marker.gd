@@ -95,8 +95,12 @@ static var _item_catalog := ItemCatalog.new()
 ## possibly reach a mushroom -- see IllustratedMushroomSprite.warm_cache's
 ## own doc comment for why. Delegates to the same shared _illustrated_
 ## generator instance every MushroomMarker already reads its sprite from.
-static func warm_art_cache() -> void:
-	_illustrated_generator.warm_cache()
+## Awaits warm_cache() in full -- it now yields internally across several
+## real engine frames (see its own doc comment), so callers that need the
+## cache genuinely warm before proceeding (World._ready()) must await this
+## too, not just call it and move on.
+static func warm_art_cache(on_progress: Callable = Callable()) -> void:
+	await _illustrated_generator.warm_cache(on_progress)
 
 
 func _ready() -> void:

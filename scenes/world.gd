@@ -721,9 +721,27 @@ func _ready() -> void:
 	# left the license/GitHub-verify overlay's screen crashing every
 	# frame on _chunk_manager (built further below) being null, via
 	# _process()'s step_water_disturbances() call. Both callbacks below
-	# now no-op until this is true, set only once everything they touch
-	# has actually been built.
-	_world_ready = true
+	# no-op until this is true -- set at the very END of the heavy setup
+	# below (right before the solo/server/join dispatch), NOT here at the
+	# top, despite this being the historically natural-looking spot for
+	# it. A SECOND real bug found live, later, is exactly why: this used
+	# to be set true here, before ANYTHING below had actually been built,
+	# which was silently fine only because the whole heavy setup ran as
+	# one uninterrupted synchronous block -- _unhandled_input() had no
+	# opportunity to fire before _ready() finished regardless of this
+	# flag's own value. The moment MushroomMarker.warm_art_cache() below
+	# started genuinely yielding across real engine frames (see its own
+	# doc comment), that stopped being true: real input arriving during
+	# one of those yields hit _unhandled_input() with this flag already
+	# true but _load_keybindings()/_apply_keybindings() (further below)
+	# not yet run, throwing "InputMap action ... doesn't exist" for every
+	# single bound action -- confirmed live. Moving this flip to the true
+	# end matches what this comment always claimed ("set only once
+	# everything they touch has actually been built") rather than what it
+	# actually did (set before any of it existed) -- _world_ready gates
+	# nothing else in this file (grep confirms exactly two readers, both
+	# early-return guards), so nothing between here and the true end
+	# needs it true early.
 
 	# Seeds SecretD20's OWN dedicated RandomNumberGenerator -- see that
 	# module's own doc comment for why this instance is never shared with
@@ -771,8 +789,14 @@ func _ready() -> void:
 	# before any decomposer can possibly reach a mushroom, instead of
 	# leaving it to land unpredictably on whichever live gameplay frame
 	# happens to be the first bite of a not-yet-touched species (measured
-	# live at up to ~1.6s for a single bite).
-	MushroomMarker.warm_art_cache()
+	# live at up to ~1.6s for a single bite). AWAITED, not fire-and-forget:
+	# this one call turned out to be the dominant cost of the whole boot
+	# freeze (measured ~52 of this block's ~56 real seconds -- see
+	# docs/concept/intro_splash.md's "A third pass" and warm_cache()'s own
+	# doc comment), and it now yields internally across many real engine
+	# frames instead of running as one uninterrupted block, so the rest of
+	# _ready() must genuinely wait for it, not race it.
+	await MushroomMarker.warm_art_cache()
 	_player_spawner.spawn_path = _players.get_path()
 	_player_spawner.add_spawnable_scene(PlayerScene.resource_path)
 	WorldItemBus.item_dropped.connect(_on_item_dropped)
@@ -816,6 +840,11 @@ func _ready() -> void:
 	_build_handheld_view()
 	_build_interaction_prompt()
 	_build_charge_meter()
+
+	# NOW everything _process()/_unhandled_input() touch actually exists --
+	# see this flag's own doc comment, up near where it used to be set, for
+	# why this moved here.
+	_world_ready = true
 
 	if "--solo" in args:
 		# Dev/instrumentation launch: skip the menu and drop straight into a

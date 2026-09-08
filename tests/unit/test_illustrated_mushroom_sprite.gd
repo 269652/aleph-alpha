@@ -307,10 +307,39 @@ func test_warm_cache_fills_a_cold_cache_for_every_species():
 	IllustratedMushroomSprite._frames_cache = {}
 	IllustratedMushroomSprite._crushed_frames_cache = {}
 	IllustratedMushroomSprite._bitten_stage_frames_cache = {}
-	sprite.warm_cache()
+	await sprite.warm_cache()
 	for id in MushroomSpecies.IDS:
 		assert_true(IllustratedMushroomSprite._frames_cache.has(id), "%s normal cache should be warm" % id)
 		assert_true(IllustratedMushroomSprite._crushed_frames_cache.has(id), "%s crushed cache should be warm" % id)
 		assert_true(
 			IllustratedMushroomSprite._bitten_stage_frames_cache.has(id), "%s bitten cache should be warm" % id
 		)
+
+
+## Real bug found live: this whole cache-warming pass measured at ~52s of
+## ONE uninterrupted synchronous block during World._ready() on this
+## session's own machine -- long enough that Windows marks the boot window
+## "Not Responding" and paints it grey for the whole stretch (reported
+## directly, a third time, about the boot logo intro that plays right after:
+## "it hangs for a minute or two when starting and just shows a grey
+## window"). warm_cache() must actually yield control back to the engine
+## between real units of work, not just be a plain synchronous loop that
+## happens to be awaitable -- this pins that it does, mirroring
+## EarthChunkManager.update_with_progress's own progress-callback contract
+## (test_update_with_progress_reports_real_progress_from_zero_to_the_true_total):
+## one call per unit of work actually completed, starting at zero, ending at
+## the true total. A no-op or single-shot `on_progress.call(total, total)`
+## implementation would fail this the same way a fake update_with_progress
+## would fail its own mirror test.
+func test_warm_cache_reports_real_progress_from_zero_to_the_true_total():
+	IllustratedMushroomSprite._frames_cache = {}
+	IllustratedMushroomSprite._crushed_frames_cache = {}
+	IllustratedMushroomSprite._bitten_stage_frames_cache = {}
+	var total := MushroomSpecies.IDS.size()
+	var calls := []
+	var record_progress := func(done: int, of_total: int) -> void:
+		calls.append([done, of_total])
+	await sprite.warm_cache(record_progress)
+	assert_eq(calls[0], [0, total], "first call reports zero of the true total")
+	assert_eq(calls[calls.size() - 1], [total, total], "last call reports completion")
+	assert_eq(calls.size(), total + 1, "one call per species warmed, plus the initial zero")
