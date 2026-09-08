@@ -86,6 +86,23 @@ part-enclosed comb, to a large, fully wax-sealed hive with a real
 entrance hole — a young, still-vulnerable colony investing more
 structure as it grows, not sprite-sheet padding.
 
+**Either way, a real hive is physically anchored to something — never
+free-standing over open ground or water.** A wild colony hangs its comb
+from a real tree branch or nests inside a real cavity; a manmade hive (a
+beekeeper's own box or skep) sits on a stand, typically near a
+structure for shelter and access, never planted in bare open ground and
+never over standing water. Requested live, after the honeybee hive
+system above had already shipped: *"Beehives should only be able to
+build on trees or structures like houses .. not free floating over a
+river or ground."* `EarthChunkManager._has_real_hive_anchor` (see
+"Absconding" below for where it is actually enforced) is the fix: a
+real tree or a real building piece within a small radius, and never a
+river/lake tile regardless. **A known, named gap, not silently
+extended: wild bee nests (`WildBeePatch`) have the identical
+"needs real deadwood/an old stem nearby" real-world claim below and no
+enforcement of it either — this pass fixes honeybee hives only, since
+that is what was asked for.**
+
 **Honey is the colony's own winter survival store, not a spare
 resource.** Bees convert nectar to honey and cap it in comb specifically
 to have something to live on through winter, when cold shuts down both
@@ -402,6 +419,31 @@ colony is lost outright — the honest, real consequence of "no food
 anywhere nearby," not something this doc papers over with a guaranteed
 success.
 
+**A site must also be a real, physical anchor — a tree or a structure,
+never free-floating** (2026-09-08, see "Real-world grounding" above).
+`BeeColony.is_valid_hive_site` only ever sees a biome grid — it cannot
+know whether a real tree or building actually stands nearby, so this
+lives one layer up, in `EarthChunkManager._find_bee_hive_site` itself,
+alongside the existing real-nearby-forage check:
+`_has_real_hive_anchor(pixel, global_tile)` rejects a river/lake tile
+outright, then requires a real tree (`trees_near`) or a real building
+piece (`chunk.modifications` + `BuildingPiece.has_piece`, the identical
+idiom `TreeRenderer.spawn_trees` already uses to keep a tree from
+rooting in a house) within a small, tight `HIVE_ANCHOR_RADIUS_TILES` —
+a hive hangs from a *specific* branch or sits beside a *specific* wall,
+not merely somewhere in the same general area as one. This covers
+swarming, absconding, and harvest-relocation uniformly (all three route
+through `_find_bee_hive_site`), but **not** initial world-generation
+seeding — `BeeColony._seed_initial_hives` is a separate path with no
+`_find_bee_hive_site` filter afterwards to catch a free-floating hive
+it already placed, so `EarthChunkManager._load_chunk` now injects the
+identical check as an optional `extra_site_check` Callable at
+construction instead (`BeeColony._init`'s new 5th parameter, unbound —
+and so a strict no-op — for every other/existing caller). Without this
+second wiring point, every hive placed by ordinary world generation
+(the most common way a hive appears at all) would have stayed
+unconstrained even after site-search relocation was fixed.
+
 ### Harvesting honey — the one genuinely new player-interaction mechanic
 
 No existing harvest mechanic fits a "take a partial resource from a
@@ -623,6 +665,19 @@ tree with zero real visits this cycle bears nothing at all, and
 `EarthChunkManager.step_tree_spread` withholds an unvisited one from
 seeding new trees too. Closes the full loop the feature exists for:
 blossom → scent → bee attraction → visit → fruit set and new growth.
+
+✅ **A hive must be a real physical anchor — a tree or a structure,
+never free-floating** (2026-09-08, see "Absconding" above) —
+`EarthChunkManager._has_real_hive_anchor` gates swarming, absconding,
+and harvest-relocation (via `_find_bee_hive_site`) AND initial
+world-generation seeding (via `BeeColony._init`'s new optional
+`extra_site_check` Callable, injected only by real chunk loading —
+every other/existing caller is completely unaffected). Never a
+river/lake tile; otherwise a real tree or a real building piece within
+a small, tight radius. **Wild bee nests have the identical claim
+("needs real deadwood/an old stem nearby") and no equivalent
+enforcement — a known, named, not-yet-fixed parallel gap**, since this
+pass was specifically asked about honeybee hives.
 
 ✅ **Wild bee nests** (`src/world/wild_bee_patch.gd`, `src/rendering/
 wild_bee_nest_marker.gd`, `src/rendering/

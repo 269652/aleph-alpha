@@ -181,12 +181,31 @@ var _requeening_days: Dictionary = {}
 ## reverse import would be circular), cross-checked by test.
 const SECONDS_PER_SIMULATED_DAY := 60.0
 
+## An optional additional Vector2i -> bool real-world site constraint,
+## injected by _init (see that function's own doc comment) -- checked by
+## _seed_initial_hives on top of its own biome-only gate. Unset (the
+## default) means "no extra constraint," never "reject everything": an
+## empty Callable is not .is_valid(), so every caller that never passes
+## this argument behaves exactly as it always has.
+var _extra_site_check := Callable()
 
-func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
+
+## `extra_site_check`, if bound, is an additional real-world constraint on
+## top of the biome-only check _seed_initial_hives already makes -- see
+## that function's own doc comment. Left unbound (the default -- an empty
+## Callable is not `.is_valid()`) for every existing caller and test: this
+## colony stays exactly as pure and world-blind as before unless a real
+## caller (EarthChunkManager, which actually knows about real trees/
+## buildings/rivers) opts in.
+func _init(
+	seed_value: int, width: int, height: int, biome: PackedStringArray,
+	extra_site_check: Callable = Callable()
+) -> void:
 	_seed_value = seed_value
 	_width = width
 	_height = height
 	_biome = biome
+	_extra_site_check = extra_site_check
 	_seed_initial_hives()
 
 
@@ -558,6 +577,15 @@ func active_forager_cap_at(cell: Vector2i) -> int:
 ## real, if unmodeled, time. Also seeds a full starting honey reserve
 ## (_founding_honey_reserve) so a freshly-seeded colony is never born
 ## already starving.
+##
+## _extra_site_check, if bound, gets one last say per candidate cell on
+## top of the biome/spacing gate above -- see that field's own doc
+## comment. This is the ONLY seeding path with no EarthChunkManager.
+## _find_bee_hive_site equivalent to filter through afterwards (swarming/
+## absconding/harvest-relocation all route through that function instead
+## -- see its own doc comment), so a hive placed here that fails the real
+## check simply never gets added, rather than being added and filtered
+## out later.
 func _seed_initial_hives() -> void:
 	for y in _height:
 		for x in _width:
@@ -568,6 +596,8 @@ func _seed_initial_hives() -> void:
 			if PixelNoise.unit(_seed_value, x, y) >= HIVE_CHANCE:
 				continue
 			var cell := Vector2i(x, y)
+			if _extra_site_check.is_valid() and not _extra_site_check.call(cell):
+				continue
 			_hives[cell] = true
 			_population[cell] = BeePopulationModel.STARTING_POPULATION
 			_food_stored[cell] = _founding_honey_reserve()

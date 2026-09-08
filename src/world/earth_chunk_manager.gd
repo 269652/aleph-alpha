@@ -8801,9 +8801,9 @@ func relocate_bee_hive_after_harvest(colony: BeeColony, cell: Vector2i) -> void:
 ## distance sort and real nearby-forage check both live here,
 ## EarthChunkManager's own job). Mirrors _find_bud_site's own shape
 ## exactly: every real candidate cell in the chunk, sorted NEAREST first,
-## checked for real nearby forage in that order, returning the first
-## (so nearest) that actually has some -- Vector2i(-1, -1) if nothing in
-## the whole chunk qualifies this attempt.
+## checked for real nearby forage AND a real physical anchor in that
+## order, returning the first (so nearest) that has both -- Vector2i(-1,
+## -1) if nothing in the whole chunk qualifies this attempt.
 func _find_bee_hive_site(chunk_coord: Vector2i, colony: BeeColony, from_cell: Vector2i) -> Vector2i:
 	var candidates: Array = []
 	for y in CHUNK_SIZE:
@@ -8816,12 +8816,70 @@ func _find_bee_hive_site(chunk_coord: Vector2i, colony: BeeColony, from_cell: Ve
 			return (a - from_cell).length_squared() < (b - from_cell).length_squared()
 	)
 	for candidate in candidates:
-		var pixel := (
-			Vector2(chunk_coord * CHUNK_SIZE + candidate) + Vector2(0.5, 0.5)
-		) * float(TerrainRenderer.TILE_SIZE)
-		if _has_bee_food_near(pixel):
+		var global_tile: Vector2i = chunk_coord * CHUNK_SIZE + candidate
+		var pixel := (Vector2(global_tile) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+		if not _has_bee_food_near(pixel):
+			continue
+		if _has_real_hive_anchor(pixel, global_tile):
 			return candidate
 	return Vector2i(-1, -1)
+
+
+## Requested live: "Beehives should only be able to build on trees or
+## structures like houses .. not free floating over a river or ground."
+## A real hive hangs from a real tree branch, or (a beekeeper's own
+## manmade hive) sits beside a real structure -- never bare open ground,
+## and never open water. Two gates: never a river/lake tile regardless of
+## what's nearby (mirrors TreeRenderer.spawn_trees's own river exclusion
+## -- a hive floating over open water is exactly the same bug class real
+## trees already got fixed for), then a real tree OR a real building
+## piece within HIVE_ANCHOR_RADIUS_TILES.
+func _has_real_hive_anchor(pixel_position: Vector2, global_tile: Vector2i) -> bool:
+	if is_river_at_global(global_tile.x, global_tile.y):
+		return false
+	if is_lake_at_global(global_tile.x, global_tile.y):
+		return false
+	if not trees_near(pixel_position, int(ceil(HIVE_ANCHOR_RADIUS_TILES))).is_empty():
+		return true
+	return _has_building_piece_near(global_tile, HIVE_ANCHOR_RADIUS_TILES)
+
+
+## How close a hive's own tile must be to a real tree or building piece to
+## read as genuinely anchored to it -- a hive HANGS from a branch or sits
+## beside a wall, it does not merely happen to share a neighbourhood with
+## one several tiles off. Deliberately small and tight, unlike BeeColony's
+## own much larger SENSE_RADIUS_TILES/FORAGE_RADIUS_TILES (those are about
+## finding food from a distance; this is about physical support).
+const HIVE_ANCHOR_RADIUS_TILES := 2.0
+
+
+## A real BuildingPiece stands within `radius_tiles` of `global_tile` --
+## the same chunk.modifications + BuildingPiece.has_piece idiom
+## TreeRenderer.spawn_trees already uses to keep a tree from rooting in a
+## house's own floor, read here instead of written (a hive does not
+## uproot the structure, it just needs one nearby). Walks a small tile
+## square rather than trusting one chunk's own modifications alone,
+## since HIVE_ANCHOR_RADIUS_TILES can spill into a neighbouring chunk at
+## an edge; an unloaded neighbour simply contributes nothing (fails
+## closed toward "no building found there," the same honest "only sees
+## what's currently loaded" limit _has_bee_food_near/trees_near already
+## accept).
+func _has_building_piece_near(global_tile: Vector2i, radius_tiles: float) -> bool:
+	var r := int(ceil(radius_tiles))
+	for dy in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			var offset := Vector2i(dx, dy)
+			if Vector2(offset).length() > radius_tiles:
+				continue
+			var tile := global_tile + offset
+			var chunk_coord := _chunk_coord_for_tile(tile)
+			var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+			if chunk == null:
+				continue
+			var local := tile - chunk_coord * CHUNK_SIZE
+			if BuildingPiece.has_piece(chunk.modifications.get(local, "")):
+				return true
+	return false
 
 
 ## The one absconding trigger a wild nest keeps (see WildBeePatch.
@@ -11340,8 +11398,23 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# creation like the ant mounds just above -- but see BeeColony.
 	# bud_new_hive/abscond_to for why hive_cells() CAN change later over
 	# this loaded chunk's own life, unlike a mound's fixed placement.
+	#
+	# The extra_site_check Callable is the ONLY thing standing between a
+	# freshly-generated world and a free-floating hive: unlike swarming/
+	# absconding/harvest-relocation (all routed through _find_bee_hive_
+	# site, which already applies _has_real_hive_anchor), initial seeding
+	# has no post-seed filter pass, so the real check has to be injected
+	# HERE, at construction, or it never runs at all for a hive placed
+	# this way (see BeeColony._seed_initial_hives's own doc comment).
+	# Real trees are already spawned into _loaded_trees for this chunk by
+	# this point (see TreeRenderer.spawn_trees above), so trees_near
+	# (inside _has_real_hive_anchor) sees real data, not an empty chunk.
 	_bee_colonies[chunk_coord] = BeeColony.new(
-		hash("%d_%d_bees" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+		hash("%d_%d_bees" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
+		func(local_cell: Vector2i) -> bool:
+			var global_tile: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+			var pixel := (Vector2(global_tile) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+			return _has_real_hive_anchor(pixel, global_tile)
 	)
 	var hive_markers: Dictionary = {}
 	for hive_cell in _bee_colonies[chunk_coord].hive_cells():
