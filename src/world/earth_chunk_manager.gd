@@ -11537,7 +11537,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_pollinator_multiplier_for(chunk_coord),
 		self,
 		_ecosystem.robin_population(chunk_coord),
-		_ecosystem.sparrow_population(chunk_coord)
+		_ecosystem.sparrow_population(chunk_coord),
+		current_season()
 	)
 	_loaded_piscivore_birds[chunk_coord] = _piscivore_bird_renderer.spawn_piscivore_birds(
 		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self,

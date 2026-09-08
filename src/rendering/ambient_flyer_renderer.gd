@@ -96,6 +96,15 @@ const BIRD_INTERVAL := 1.8
 ## step_bees against a real hive or nest hole, never this renderer's
 ## own per-chunk ambient scatter.
 const TRUE_BUTTERFLY_SPECIES_POOL: Array[String] = ["monarch", "swallowtail", "blue_morpho"]
+## Real adult monarchs/swallowtails/blue morphos do not survive a freezing
+## winter -- the population overwinters as pupae (see docs/concept/
+## seasonal_behavior.md, "True butterfly season-gated spawn window").
+## Mirrors CaterpillarRenderer.ACTIVE_SEASONS exactly (a spawn-time gate,
+## checked once at chunk load, not per-frame -- see that class's own doc
+## comment for why). Autumn is included, unlike caterpillar's own window:
+## real adult butterflies fly well into autumn, only winter genuinely
+## grounds them.
+const BUTTERFLY_ACTIVE_SEASONS := {"spring": true, "summer": true, "autumn": true}
 ## Kept for callers that only care "is this species a pollinator flyer"
 ## (spawn-count bookkeeping, tests) -- today just an alias for
 ## TRUE_BUTTERFLY_SPECIES_POOL (bee's own retirement above removed the
@@ -259,6 +268,13 @@ func _abs_latitude_for(chunk: Chunk, chunk_origin_tiles: Vector2i) -> float:
 ## food-linked to worm/seed density -- default 0.0 so every pre-existing call
 ## site keeps compiling (and, correctly, keeps spawning no robins/sparrows
 ## until a caller actually reports a real population).
+##
+## `season` gates true butterflies only (see BUTTERFLY_ACTIVE_SEASONS and
+## docs/concept/seasonal_behavior.md, "True butterfly season-gated spawn
+## window") -- default "summer" so every pre-existing call site keeps
+## compiling AND keeps spawning butterflies exactly as before, the same
+## "safe default preserves old behavior" reasoning robin_population/
+## sparrow_population already established just above.
 func spawn_ambient_flyers(
 	parent: Node2D,
 	chunk: Chunk,
@@ -268,14 +284,15 @@ func spawn_ambient_flyers(
 	scent_multiplier: float = 1.0,
 	scent_world = null,
 	robin_population: float = 0.0,
-	sparrow_population: float = 0.0
+	sparrow_population: float = 0.0,
+	season: String = "summer"
 ) -> Array[Node2D]:
 	var spawned: Array[Node2D] = []
 	# Which SPECIES this chunk can hold, not just whether the tier can be here
 	# at all (see FLYER_RANGE): a filtered pool may legitimately come back
 	# empty, which _spawn_species handles by spawning nothing.
 	var abs_latitude := _abs_latitude_for(chunk, chunk_origin_tiles)
-	if BUTTERFLY_BIOMES.has(biome_name):
+	if BUTTERFLY_BIOMES.has(biome_name) and BUTTERFLY_ACTIVE_SEASONS.has(season):
 		# Pollinators are drawn to flowers: a chunk thick with blooms hatches
 		# proportionally more pollinators than bare grass (see
 		# ScentField.pollinator_spawn_multiplier, which saturates so a big
