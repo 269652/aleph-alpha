@@ -81,3 +81,79 @@ func _stream_loops(stream: AudioStream) -> bool:
 		return stream.loop_mode != AudioStreamWAV.LOOP_DISABLED
 	fail_test("unexpected stream type %s" % stream)
 	return false
+
+
+# -- update(): throttled mixing + crossfade + hawk-call roll -----------------
+# AudioStreamPlayer.play()/.playing need a real, live tree the same way
+# test_world_play_intro_splash_frame_gate.gd's own CanvasLayer does -- built
+# fresh per test via add_child_autofree rather than shared setup, since
+# update() carries real internal ramp state across calls.
+
+func _live_root() -> Node:
+	var root := player.build()
+	add_child_autofree(root)
+	return root
+
+
+## The very first call must not sit silent for a full REFRESH_INTERVAL_
+## SECONDS before doing anything -- mirrors World's own MINIMAP_REFRESH_
+## ACCUMULATOR convention (starts pre-due, refreshes immediately).
+func test_first_update_call_refreshes_the_mix_immediately():
+	var root := _live_root()
+	player.update("ocean", "summer", "clear", false, false, 1.0, 0.01)
+	var ocean: AudioStreamPlayer = root.get_node("ocean")
+	assert_gt(ocean.volume_db, NatureSoundscapePlayer.SILENT_VOLUME_DB)
+
+
+## A tiny delta must NOT already be at the target -- a crossfade that
+## reaches full volume in one small step is not a crossfade.
+func test_volume_ramps_gradually_rather_than_snapping_to_target():
+	var root := _live_root()
+	player.update("ocean", "summer", "clear", false, false, 1.0, 0.01)
+	var ocean: AudioStreamPlayer = root.get_node("ocean")
+	assert_lt(ocean.volume_db, linear_to_db(NatureSoundscape.FULL_BED_VOLUME) - 0.01)
+
+
+## Enough cumulative time must actually settle at the target and start
+## playing -- a ramp that asymptotically approaches but never starts the
+## player would be silent forever in practice.
+func test_volume_reaches_target_and_plays_after_enough_time():
+	var root := _live_root()
+	player.update("ocean", "summer", "clear", false, false, 1.0, 100.0)
+	var ocean: AudioStreamPlayer = root.get_node("ocean")
+	assert_almost_eq(ocean.volume_db, linear_to_db(NatureSoundscape.FULL_BED_VOLUME), 0.01)
+	assert_true(ocean.playing)
+
+
+## Switching biome must fade the old layer back out and stop it, not leave
+## it playing silently (or worse, audibly) forever underneath the new one.
+func test_switching_biome_fades_out_and_stops_the_previous_layer():
+	var root := _live_root()
+	player.update("ocean", "summer", "clear", false, false, 1.0, 100.0)
+	var ocean: AudioStreamPlayer = root.get_node("ocean")
+	assert_true(ocean.playing, "sanity: ocean should be playing before the switch")
+	player.update("desert", "summer", "clear", false, false, 1.0, 100.0)
+	assert_false(ocean.playing, "the old layer must stop once it fades out")
+	var wind: AudioStreamPlayer = root.get_node("wind")
+	assert_true(wind.playing)
+
+
+func test_hawk_call_plays_when_eligible_and_the_roll_clears_the_threshold():
+	var root := _live_root()
+	player.update("mountain", "summer", "clear", false, false, 0.0, 100.0)
+	var hawk: AudioStreamPlayer = root.get_node(NatureSoundscape.HAWK_CALL_LAYER)
+	assert_true(hawk.playing)
+
+
+func test_hawk_call_does_not_play_when_not_eligible_even_with_a_guaranteed_roll():
+	var root := _live_root()
+	player.update("forest", "summer", "clear", false, false, 0.0, 100.0)
+	var hawk: AudioStreamPlayer = root.get_node(NatureSoundscape.HAWK_CALL_LAYER)
+	assert_false(hawk.playing)
+
+
+func test_hawk_call_does_not_play_when_the_roll_misses_the_threshold():
+	var root := _live_root()
+	player.update("mountain", "summer", "clear", false, false, 1.0, 100.0)
+	var hawk: AudioStreamPlayer = root.get_node(NatureSoundscape.HAWK_CALL_LAYER)
+	assert_false(hawk.playing)
