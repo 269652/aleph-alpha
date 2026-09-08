@@ -17274,3 +17274,38 @@ call` — the same "GUT swallows this as a discovery warning, not a
 failure" trap this session already documented, caught immediately here
 via `--check-only` rather than a silent skip), green after.
 `test_ambient_flyer_renderer.gd` 56/56.
+
+### Seasonal behavior, phase 4: decomposer "bug" cold-slowdown (2026-09-08)
+
+✅ **Ants/carrion bugs (`DecomposerMarker`) now genuinely slow down in cold
+soil**, mirroring real ground beetles sheltering and moving far less in
+winter. Unlike `AntColony`/`BeeColony`, this marker has no aggregate
+population/economy at all to throttle a food-store depletion rate against
+(stateless per-chunk spawn, confirmed zero warmth/season code beforehand)
+— so the individual marker's own wander/approach speed is what responds
+instead, the same "activity toggles with cold, headcount doesn't" shape
+`EarthwormPatch` already established.
+
+New static `activity_multiplier_for(warmth)` reuses `EarthwormPatch.
+COLD_CUTOFF`/`MILD_WARMTH`'s exact ramp and `DORMANCY_FLOOR := 0.2` — the
+same value AntColony/BeeColony/WildBeePatch all already use for the
+identical "never literally zero" reasoning, restated locally since this
+marker has no shared economy base class to import a constant from (see
+its own class doc comment on why it is deliberately not built on
+`CreatureMarker`'s stack either). Applied post-hoc to the computed wander
+and approach deltas in `_step_seeking`/`_step_approaching`, the exact
+same "don't touch the shared `AmbientFlyerMovement` algorithm" technique
+the toxic-mushroom Weakened effect already uses on this same marker.
+Reads real warmth via the SAME optional `_world.ambient_warmth()` this
+marker already has wired for leaf-litter foraging — `EarthChunkManager`
+already calls `.setup(self)` on every spawned decomposer, so this needed
+**no new production wiring at all**, only the marker's own behavior.
+
+TDD: new tests confirm the multiplier is undiminished at full warmth and
+never reaches a hard zero, a cold decomposer wanders measurably slower
+than a warm one from the identical setup (mirroring the existing
+Weakened-mushroom wander-speed comparison test's own shape), and a
+decomposer with no `_world` set at all keeps its exact prior speed (the
+same "safe default preserves old behavior" guard this session's other
+phases already added). Confirmed red first (`activity_multiplier_for()`
+did not exist), green after. `test_decomposer_marker.gd` 55/55.
