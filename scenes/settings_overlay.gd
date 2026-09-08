@@ -1,29 +1,39 @@
 extends PanelContainer
 
 ## The pause / settings menu (opened with toggle_settings, default Escape).
-## Three sections selectable by tab buttons: KEY BINDINGS (one rebindable row
+## Four sections selectable by tab buttons: KEY BINDINGS (one rebindable row
 ## per action from the tested Keybindings model -- click a key, press a new
-## one), GRAPHICS (fullscreen, vsync), and LICENSE (paste a new key to
-## replace the current one -- see docs/licensing.md's "In-game license
-## entry"). A Resume button closes it. Purely glue -- the rebinding
-## registry/rules live in Keybindings; World owns applying the InputMap,
-## pausing the game, persisting keybinding/graphics settings, and actually
-## verifying/saving a submitted license code.
+## one), GRAPHICS (fullscreen, vsync), AUDIO (master volume -- see
+## docs/concept/soundscape.md's own named gap: before this, nothing in the
+## game could be turned down), and LICENSE (paste a new key to replace the
+## current one -- see docs/licensing.md's "In-game license entry"). A
+## Resume button closes it. Purely glue -- the rebinding registry/rules
+## live in Keybindings, volume sanitization in AudioSettings; World owns
+## applying the InputMap, pausing the game, persisting keybinding/graphics/
+## audio settings, and actually verifying/saving a submitted license code.
 
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
 const RenderResolution = preload("res://src/rendering/render_resolution.gd")
+const AudioSettings = preload("res://src/audio/audio_settings.gd")
 
 signal binding_changed(action_name: String, keycode: int)
 signal reset_requested()
 signal graphics_changed(setting: String, enabled: bool)
 ## Settings that are a CHOICE rather than on/off (render resolution).
 signal graphics_option_changed(setting: String, value: String)
+## The master volume slider moved, to a value already in [0, 1] (the
+## HSlider itself is range-limited, so this never needs sanitizing again
+## before being applied -- see AudioSettings.sanitize_volume for the one
+## place a value that DIDN'T come from this slider, a loaded config file,
+## still gets guarded).
+signal audio_volume_changed(value: float)
 signal resume_requested()
 signal license_code_submitted(code: String)
 
 var _bindings: Keybindings
 var _key_section: VBoxContainer
 var _graphics_section: VBoxContainer
+var _audio_section: VBoxContainer
 var _license_section: VBoxContainer
 var _license_edit: TextEdit
 var _license_status_label: Label
@@ -32,11 +42,14 @@ var _listening_action := ""
 var _listening_button: Button
 
 
-## World hands in its live Keybindings + the current graphics state so the
-## menu renders from the same source of truth World applies.
-func setup(bindings: Keybindings, fullscreen: bool, vsync: bool, resolution: String = "") -> void:
+## World hands in its live Keybindings + the current graphics/audio state so
+## the menu renders from the same source of truth World applies.
+func setup(
+	bindings: Keybindings, fullscreen: bool, vsync: bool, resolution: String = "",
+	audio_volume: float = AudioSettings.DEFAULT_VOLUME
+) -> void:
 	_bindings = bindings
-	_build(fullscreen, vsync, resolution)
+	_build(fullscreen, vsync, resolution, audio_volume)
 
 
 func _ready() -> void:
@@ -54,7 +67,7 @@ func is_open() -> bool:
 	return visible
 
 
-func _build(fullscreen: bool, vsync: bool, resolution: String = "") -> void:
+func _build(fullscreen: bool, vsync: bool, resolution: String, audio_volume: float) -> void:
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 6)
 	add_child(root)
@@ -75,6 +88,10 @@ func _build(fullscreen: bool, vsync: bool, resolution: String = "") -> void:
 	gfx_tab.text = "Graphics"
 	gfx_tab.pressed.connect(func(): _show_section("graphics"))
 	tabs.add_child(gfx_tab)
+	var audio_tab := Button.new()
+	audio_tab.text = "Audio"
+	audio_tab.pressed.connect(func(): _show_section("audio"))
+	tabs.add_child(audio_tab)
 	var license_tab := Button.new()
 	license_tab.text = "License"
 	license_tab.pressed.connect(func(): _show_section("license"))
@@ -84,6 +101,8 @@ func _build(fullscreen: bool, vsync: bool, resolution: String = "") -> void:
 	root.add_child(_key_section)
 	_graphics_section = _build_graphics_section(fullscreen, vsync, resolution)
 	root.add_child(_graphics_section)
+	_audio_section = _build_audio_section(audio_volume)
+	root.add_child(_audio_section)
 	_license_section = _build_license_section()
 	root.add_child(_license_section)
 
@@ -186,6 +205,42 @@ func _build_graphics_section(fullscreen: bool, vsync: bool, resolution: String =
 	return section
 
 
+## Master volume -- see docs/concept/soundscape.md's own named gap ("no
+## player-facing way to turn this down"). One slider, applied to the whole
+## game's Master bus rather than per-system: the ambient soundscape is the
+## only sound in the game today, but a volume control belongs to the
+## player's ears, not to any one system that happens to make noise.
+func _build_audio_section(volume: float) -> VBoxContainer:
+	var section := VBoxContainer.new()
+	section.add_theme_constant_override("separation", 6)
+
+	var row := HBoxContainer.new()
+	var caption := Label.new()
+	caption.text = "Master volume"
+	row.add_child(caption)
+
+	var slider := HSlider.new()
+	slider.min_value = 0.0
+	slider.max_value = 1.0
+	slider.step = 0.01
+	slider.value = AudioSettings.sanitize_volume(volume)
+	slider.custom_minimum_size = Vector2(200, 0)
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(slider)
+
+	var percent_label := Label.new()
+	percent_label.text = "%d%%" % roundi(slider.value * 100.0)
+	percent_label.custom_minimum_size = Vector2(44, 0)
+	row.add_child(percent_label)
+
+	slider.value_changed.connect(func(value: float):
+		percent_label.text = "%d%%" % roundi(value * 100.0)
+		audio_volume_changed.emit(value)
+	)
+	section.add_child(row)
+	return section
+
+
 ## Lets a player replace their current key without leaving the game or
 ## hand-editing license.txt (see docs/licensing.md's "In-game license
 ## entry"). Distinct from LicenseGateOverlay: that one blocks play
@@ -232,6 +287,7 @@ func _show_section(which: String) -> void:
 	_stop_listening()
 	_key_section.visible = which == "keys"
 	_graphics_section.visible = which == "graphics"
+	_audio_section.visible = which == "audio"
 	_license_section.visible = which == "license"
 
 

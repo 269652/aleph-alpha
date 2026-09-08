@@ -8,6 +8,7 @@ const RenderResolution = preload("res://src/rendering/render_resolution.gd")
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 const RainOverlay = preload("res://src/rendering/rain_overlay.gd")
 const NatureSoundscapePlayer = preload("res://src/audio/nature_soundscape_player.gd")
+const AudioSettings = preload("res://src/audio/audio_settings.gd")
 const Snowfall = preload("res://src/world/snowfall.gd")
 const ConsoleSpecies = preload("res://src/gameplay/console_species.gd")
 const EasterEggSightings = preload("res://src/gameplay/easter_egg_sightings.gd")
@@ -522,6 +523,12 @@ var _graphics_vsync := false
 ## drawn into before being scaled to the window. The one graphics lever that
 ## scales the entire frame cost at once.
 var _graphics_resolution := RenderResolution.default_option()
+## Master volume [0, 1] -- see docs/concept/soundscape.md's own named gap
+## (no player-facing way to turn the ambient soundscape down). Applied to
+## the whole game's Master bus, not per-system: today the soundscape is
+## the only sound in the game, but the control belongs to the player's
+## ears, not to any one system that happens to make noise.
+var _audio_volume := AudioSettings.DEFAULT_VOLUME
 var _death_label: Label
 var _creature_panels_container: VBoxContainer
 var _hover_tooltip: Label
@@ -785,6 +792,8 @@ func _ready() -> void:
 	_apply_keybindings()
 	_load_graphics()
 	_apply_graphics()
+	_load_audio_settings()
+	_apply_audio_volume()
 
 	_build_hotbar_slots()
 	_build_spell_bar()
@@ -1562,7 +1571,7 @@ func _build_settings_overlay() -> void:
 	# pauses the world, see _toggle_settings_menu).
 	_settings_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
 	_settings_overlay.setup(
-		_keybindings, _graphics_fullscreen, _graphics_vsync, _graphics_resolution
+		_keybindings, _graphics_fullscreen, _graphics_vsync, _graphics_resolution, _audio_volume
 	)
 	_settings_overlay.set_anchors_preset(Control.PRESET_CENTER)
 	_settings_overlay.offset_left = -210.0
@@ -1574,6 +1583,7 @@ func _build_settings_overlay() -> void:
 	_settings_overlay.reset_requested.connect(_on_bindings_reset)
 	_settings_overlay.graphics_changed.connect(_on_graphics_changed)
 	_settings_overlay.graphics_option_changed.connect(_on_graphics_option_changed)
+	_settings_overlay.audio_volume_changed.connect(_on_audio_volume_changed)
 	_settings_overlay.resume_requested.connect(_toggle_settings_menu)
 	_settings_overlay.license_code_submitted.connect(_on_settings_license_code_submitted)
 
@@ -1659,6 +1669,43 @@ func _save_graphics() -> void:
 	config.set_value("graphics", "fullscreen", _graphics_fullscreen)
 	config.set_value("graphics", "vsync", _graphics_vsync)
 	config.set_value("graphics", "render_resolution", _graphics_resolution)
+	config.save(KEYBINDINGS_PATH)
+
+
+## The settings menu's volume slider moved -- persists immediately, same
+## "every change saves right away, no separate Apply step" convention
+## _on_graphics_changed already uses.
+func _on_audio_volume_changed(value: float) -> void:
+	_audio_volume = AudioSettings.sanitize_volume(value)
+	_apply_audio_volume()
+	_save_audio_settings()
+
+
+## Master bus, not a per-layer scale inside NatureSoundscapePlayer --
+## see _audio_volume's own doc comment for why this belongs to the whole
+## game rather than to any one system.
+func _apply_audio_volume() -> void:
+	AudioServer.set_bus_volume_db(
+		AudioServer.get_bus_index("Master"), AudioSettings.volume_to_bus_db(_audio_volume)
+	)
+
+
+## Audio settings persist alongside key bindings/graphics in KEYBINDINGS_PATH
+## (one small local config file, not the player's save -- a volume
+## preference isn't part of any character's progress).
+func _load_audio_settings() -> void:
+	var config := ConfigFile.new()
+	if config.load(KEYBINDINGS_PATH) != OK:
+		return
+	_audio_volume = AudioSettings.sanitize_volume(
+		config.get_value("audio", "master_volume", _audio_volume)
+	)
+
+
+func _save_audio_settings() -> void:
+	var config := ConfigFile.new()
+	config.load(KEYBINDINGS_PATH)  # preserve the [bindings]/[graphics] sections
+	config.set_value("audio", "master_volume", _audio_volume)
 	config.save(KEYBINDINGS_PATH)
 
 
