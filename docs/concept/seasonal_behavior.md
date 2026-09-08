@@ -282,7 +282,17 @@ Reads real warmth via the SAME optional `_world.ambient_warmth()` this
 marker already has wired for leaf-litter foraging (`EarthChunkManager`
 already calls `.setup(self)` on every spawned decomposer) — no new
 production wiring needed, only the marker's own behavior changed.
-⬜ Herbivore winter-forage-realism fix
+✅ Herbivore winter-forage-realism fix — new `EarthChunkManager.
+current_growth_modifier()` (mirrors `current_season()`'s exact shape,
+reusing `SeasonCycle.growth_modifier` — the SAME signal `step_tall_grass`
+already throttles real grass maturation with). `CreatureMarker._take_
+forage_bite`'s `FOOD_UNDERFOOT` case now scales `feed_hunger_relief` by
+it instead of granting a flat full day's BMR regardless of season — the
+hunger DRIVE is still fully satisfied (the animal did spend a real bout
+grazing), but the real caloric/mass yield now honestly reflects how
+little is actually growing right now. The highest-leverage change in
+this whole doc: every herbivore, present and future, gets real winter
+hardship for free, no per-species code.
 ⬜ Squirrel/mouse cache-preference
 ⬜ Alpaca as a real, live grazer
 ⬜ Bear hibernation / snake brumation
