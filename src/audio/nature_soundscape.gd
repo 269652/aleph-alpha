@@ -54,6 +54,12 @@ const FULL_BED_VOLUME := 1.0
 const RAIN_OVERLAY_VOLUME := 0.7
 const STORM_OVERLAY_VOLUME := 0.9
 
+## Occasional, not continuous -- same "vanishingly rare" register as every
+## other chance_per_check-gated cameo in this project family (see
+## KrakenTrigger.CHANCE_PER_CHECK), just far less rare since this is
+## ambient flavor, not a headline Easter egg.
+const HAWK_CALL_CHANCE_PER_CHECK := 0.05
+
 
 ## The complete set of layers that should be audible right now, as
 ## {layer_name: volume}. Omits anything that should NOT be playing entirely
@@ -128,11 +134,14 @@ func _biome_bed(biome: String, season: String, is_night: bool) -> Dictionary:
 			return {}
 
 
-## STUB -- not yet implemented.
-func hawk_call_eligible(_biome: String, _is_night: bool) -> bool:
-	return false
+## Raptors are diurnal -- a hawk cry at night would be wrong, not
+## atmospheric (see docs/concept/soundscape.md's real-world grounding).
+func hawk_call_eligible(biome: String, is_night: bool) -> bool:
+	return biome == "mountain" and not is_night
 
 
-## STUB -- not yet implemented.
-func check_hawk_call(_biome: String, _is_night: bool, _roll: float) -> bool:
-	return false
+## is_eligible plus the rarity roll -- same split as KrakenTrigger.check.
+func check_hawk_call(biome: String, is_night: bool, roll: float) -> bool:
+	if not hawk_call_eligible(biome, is_night):
+		return false
+	return roll < HAWK_CALL_CHANCE_PER_CHECK

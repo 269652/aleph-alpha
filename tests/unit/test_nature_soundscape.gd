@@ -179,3 +179,41 @@ func test_rain_overlay_volume_and_storm_overlay_volume_are_real_distinct_probabi
 	assert_lt(NatureSoundscape.RAIN_OVERLAY_VOLUME, 1.0)
 	assert_gt(NatureSoundscape.STORM_OVERLAY_VOLUME, NatureSoundscape.RAIN_OVERLAY_VOLUME)
 	assert_lt(NatureSoundscape.STORM_OVERLAY_VOLUME, 1.0)
+
+
+# -- hawk_call_eligible / check_hawk_call: occasional mountain accent --------
+# Same is_eligible/check split as KrakenTrigger -- raptors are diurnal, so
+# this is gated to mountain daylight only (see docs/concept/soundscape.md's
+# real-world grounding), then a chance_per_check roll like every other
+# cameo in this project family.
+
+func test_hawk_call_eligible_true_for_mountain_by_day():
+	assert_true(soundscape.hawk_call_eligible("mountain", false))
+
+
+func test_hawk_call_eligible_false_for_mountain_at_night():
+	assert_false(soundscape.hawk_call_eligible("mountain", true))
+
+
+func test_hawk_call_eligible_false_for_any_other_biome_even_by_day():
+	for biome in ["ocean", "forest", "grassland", "rainforest", "desert", "tundra"]:
+		assert_false(soundscape.hawk_call_eligible(biome, false), biome)
+
+
+func test_check_hawk_call_false_when_not_eligible_even_with_a_guaranteed_roll():
+	assert_false(soundscape.check_hawk_call("mountain", true, 0.0))
+	assert_false(soundscape.check_hawk_call("forest", false, 0.0))
+
+
+func test_check_hawk_call_false_when_roll_does_not_clear_the_chance_threshold():
+	# A roll of exactly 1.0 clears no threshold in [0, 1).
+	assert_false(soundscape.check_hawk_call("mountain", false, 1.0))
+
+
+func test_check_hawk_call_true_when_eligible_and_roll_clears_the_threshold():
+	assert_true(soundscape.check_hawk_call("mountain", false, 0.0))
+
+
+func test_hawk_call_chance_per_check_is_a_real_probability():
+	assert_gt(NatureSoundscape.HAWK_CALL_CHANCE_PER_CHECK, 0.0)
+	assert_lt(NatureSoundscape.HAWK_CALL_CHANCE_PER_CHECK, 1.0)
