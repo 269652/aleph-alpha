@@ -16530,3 +16530,45 @@ console.gd` 10/10 (unaffected).
 never a player-set waypoint), and the other four instruments' own in-world
 UI (map render, forecast label, etc. — unchanged, separate gaps named in
 that doc's own Status section).
+
+## New Game's intro splash is now the world reveal, not a pre-loading bumper (2026-09-08)
+
+Requested live: *"make it so the intro scene plays before the world
+starts? So you click new game; start; then it loads and when it loaded
+it shows the earth intro scene."* The intro-splash system itself
+(`docs/concept/intro_splash.md`) already shipped in full a day earlier
+— a rotating pixel-art Earth with the "ALEPH ALPHA" wordmark building
+in, played as a skippable bumper — but for New Game/Host Game it fired
+BEFORE `_show_loading_overlay(...)`, i.e. before any of the real world
+setup had even started: a bumper nobody's new world was actually behind
+yet.
+
+`World._on_menu_start_requested()` reordered: `await
+_play_intro_splash()` moved from immediately after the pending-class/
+appearance bookkeeping to immediately after `await
+_spawn_local_singleplayer()` — i.e. after `_wipe_persisted_world` and
+the real chunk-loading spawn work have genuinely finished, right before
+`_dismiss_main_menu()` hands control to the player. The loading
+overlay's spinner is now explicitly hidden first (`if
+_loading_overlay.visible: _loading_overlay.hide_overlay()`, the same
+defensive guard `_run_initial_client_chunk_load` already used for this
+exact overlay), so the intro plays as a clean reveal over the freshly-
+spawned (still paused, so static) world, not over a stale "Preparing a
+new world..." label. The boot-time call site (`_show_main_menu()` then
+the intro, as a bumper over the already-built menu) is untouched —
+this request was specifically about the New Game/Host Game path.
+
+New dedicated fast file `test_world_intro_splash_after_load_fanout.gd`
+(5 tests), mirroring `test_world_compass_window_fanout.gd`'s own
+established technique for wiring inside `World`: `World` is too heavy
+(EarthChunkManager, MainMenu, multiplayer spawn, ...) to stand up for
+real just to prove one `await` moved, so the tests read `World`'s own
+source and assert on relative substring position within a named
+function's body — real-not-real-instance, but precise about execution
+order for a linear `await` sequence. Covers: real setup starts before
+the intro is awaited, the player is spawned before the intro plays, the
+loading overlay is hidden before the intro plays (and only after the
+player has spawned), the intro still finishes before the menu is
+dismissed, and — as a regression guard — the boot bumper's own
+ordering is untouched. `test_intro_splash.gd` (the `IntroSplash` node's
+own playback/skip behavior) re-verified unaffected, 5/5.

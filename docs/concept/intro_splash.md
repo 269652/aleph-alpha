@@ -128,11 +128,22 @@ built/underway, never before or during it:
   the instant it's skipped or finishes. This replaces the intro trigger
   that used to sit at the top of `_ready()`.
 - **`World._on_menu_start_requested()`** (New Game and Host Game both
-  route through this) `await`s `_play_intro_splash()` before
-  `_show_loading_overlay("Preparing a new world...")` — the same bumper,
-  now also on starting a run, and sequenced so it finishes (or is
-  skipped) before that overlay's own "shown and painted before the real
-  work starts" guarantee has to hold.
+  route through this) `await`s `_play_intro_splash()` — the same bumper,
+  now also on starting a run. **Revised (2026-09-08)**: this used to play
+  BEFORE `_show_loading_overlay(...)`, i.e. before any of the real world
+  setup even started — a bumper nobody's new world was actually behind
+  yet. Requested live: *"the intro scene plays before the world starts?
+  So you click new game; start; then it loads and when it loaded it
+  shows the earth intro scene"* — the intro is now the REVEAL once the
+  real work (`_wipe_persisted_world`, `_spawn_local_singleplayer`) has
+  actually finished, not a bumper played in front of a loading screen
+  nobody watched it for. The loading overlay is explicitly hidden first
+  (`if _loading_overlay.visible: _loading_overlay.hide_overlay()`, the
+  same guard `_run_initial_client_chunk_load` already uses for this
+  overlay) so the intro plays over the freshly-spawned, still-paused
+  world it is actually revealing, not over a stale "Preparing a new
+  world..." label. Still fully skippable, still finishes before
+  `_dismiss_main_menu()` hands control to the player.
 
 `_play_intro_splash()` itself no longer needs to persist the intro node
 across anything external: both call sites `await` it fully before doing
@@ -354,6 +365,18 @@ looking anywhere else.
   override): the intro plays its full natural ~3.2s cleanly, with
   nothing competing with it for the render thread, immediately visible
   on top of the already-built menu.
+- ✅ **Revised (2026-09-08): the New Game/Host Game intro is now the
+  reveal, not a pre-loading bumper.** See "Wiring" above for the full
+  before/after — `World._on_menu_start_requested()` now awaits
+  `_play_intro_splash()` AFTER `_wipe_persisted_world`/
+  `_spawn_local_singleplayer` have actually finished (with the loading
+  overlay explicitly hidden first), not before either. Locked down by
+  `test_world_intro_splash_after_load_fanout.gd`'s source-level
+  ordering assertions (the same "read World's own source, assert on
+  function-body text" technique `test_world_compass_window_fanout.gd`
+  established, since a real `World` is too heavy to stand up just to
+  prove one `await` moved) — the boot bumper's own ordering is
+  unaffected and separately pinned by the same file.
 - ⬜ The heavy per-boot setup's own freeze (a real, separately-measured
   ~43-54s on this machine, on top of which `_show_main_menu()` itself
   measured a further ~11s) is untouched by any of the three passes on
