@@ -248,7 +248,12 @@ other decorative-but-real presences.
 
 ## Status
 
-⬜ Ant/honeybee forager cold-gate
+✅ Ant/honeybee forager cold-gate — `should_forage()` in both `AntColony`
+and `BeeColony` now scales `FORAGE_CHANCE` by `dormancy_multiplier_at`,
+closing the gap where a fully dormant mound/hive still sent foragers out
+at the ordinary rate. New tests confirm cold sends measurably fewer
+forage attempts than warm from the identical PixelNoise roll (a
+deterministic-by-construction comparison, not a statistical one).
 ⬜ Wild bee die-off / re-hatch
 ⬜ True butterfly season-gated spawn window
 ⬜ Decomposer "bug" cold-slowdown

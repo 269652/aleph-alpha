@@ -17106,3 +17106,34 @@ genuinely interact at the engine level. `test_intro_splash.gd` 6/6,
 `test_world_play_intro_splash_frame_gate.gd` 3/3, `test_world_intro_
 splash_after_load_fanout.gd` 5/5, all re-verified directly against the
 merged `main` state.
+
+### Seasonal behavior, phase 1: ant/honeybee forager cold-gate (2026-09-08)
+
+Requested live: *"revisit every animal/species and wire/implement proper
+season behaviour/activity... just make it realistic and biologically
+motivated."* See `docs/concept/seasonal_behavior.md` for the full,
+multi-phase spec this opens (every live species, organized by real-world
+winter strategy) — this entry covers phase 1 only.
+
+✅ **`AntColony`/`BeeColony` foragers now actually stay home in winter, not
+just eat their stores slower.** Both files already throttled food/honey
+depletion via `dormancy_multiplier_at()` (floored at `DORMANCY_FLOOR :=
+0.2`), a real, tested mechanism — but `should_forage()` in both was a flat
+`PixelNoise`/`FORAGE_CHANCE` roll with no warmth term at all, so a fully
+dormant mound/hive still dispatched foragers at the ordinary rate: the
+literal opposite of "cluster deep in the mound and barely feed at all."
+Fixed by scaling `FORAGE_CHANCE` by `dormancy_multiplier_at(cell)` in both
+`should_forage()` implementations. New tests in `test_ant_colony.gd`/
+`test_bee_colony.gd` build two colonies from the identical seed (so
+`should_forage`'s PixelNoise roll is byte-identical at every step for
+both) and confirm the cold instance's forage-attempt count is measurably
+lower than the warm one's — a deterministic-by-construction comparison
+(cold's effective threshold is always ≤ warm's against the same roll), not
+a statistical one. Confirmed red first (both counts equal, since the
+un-fixed code ignores warmth entirely), green after.
+`test_ant_colony.gd` 98/98, `test_bee_colony.gd` 48/48. Does not touch
+`_deplete_food` at all, so the existing extinction-prevention fix this
+file's own "cold soil: real dormancy" section already documents (a
+reported live "no ant mounds at all, fresh start, winter" bug) is
+unaffected — this only gates whether a forage WAVE is dispatched
+(`EarthChunkManager.step_ants`), never the upkeep math.
