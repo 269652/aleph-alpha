@@ -849,7 +849,32 @@ const MENU_BACKGROUND_PATH := "res://assets/backgrounds/main.png"
 ## is chosen, before that flow's own loading overlay). Never runs for
 ## --solo/--server/join launches (those are dev/diagnostic or straight-to-
 ## multiplayer paths that should stay instant).
+##
+## A fourth pass (2026-09-08, reported live a third time: "the intro is
+## still not showing... immediately after a fresh relaunch"): the third
+## pass moved the boot trigger past world._ready()'s own ~58s heavy setup,
+## which genuinely fixed what it targeted -- but a real, timestamped,
+## non-headless launch then measured _show_main_menu() ITSELF costing a
+## further 13.5 real seconds of fully synchronous, unyielded work right
+## before this function ever ran (7 procedural class-icon portraits, a live
+## diorama SubViewport scene, the skill web, the menu backdrop image -- see
+## MainMenu._ready()/_build_create_screen()). Nothing between the end of
+## that and IntroSplash.new() below ever gave the engine a single presented
+## frame -- the exact same risk _show_loading_overlay already identified and
+## fixed for itself ("two frames, not one... a single await isn't
+## guaranteed to have been presented by", verified against a real running
+## instance) but which this function never applied to the menu-then-intro
+## handoff sitting right next to it. Without this gate, the menu's own
+## freshly-built first frame -- and this bumper's own first frame right
+## after it -- were both still at risk of never actually reaching the
+## screen before Windows' "Not Responding" grey placeholder cleared,
+## reproducing the identical complaint via a shorter (but still real, and
+## measured LARGER than this doc's own previous "~11s" estimate) freeze
+## immediately upstream of the intro. See test_world_play_intro_splash_
+## frame_gate.gd for real, run-for-real coverage of this exact gate.
 func _play_intro_splash() -> void:
+	await _ui.get_tree().process_frame
+	await _ui.get_tree().process_frame
 	var intro := IntroSplash.new()
 	_ui.add_child(intro)
 	await intro.finished
