@@ -2997,6 +2997,40 @@ inserted nearby, not over it. A live `--solo` boot against the same
 real-save snapshot every round in this investigation has used confirmed
 a clean start with no script errors from the new call site.
 
+**Round 6 follow-up: the fix moved the cost, and moving it created a
+worse, more visible symptom (fixed same week, see docs/concept/
+intro_splash.md's "A third pass").** Paying this cost predictably,
+before any decomposer can reach a mushroom, was correct -- but "before"
+meant one uninterrupted synchronous block inside `World._ready()`,
+measured live at ~52 real seconds (8 species x up to 3 real sheet loads
+each, none of them yielding). Long enough that Windows marks the whole
+boot window "Not Responding" and paints it grey for the entire stretch,
+regardless of anything shown before or after it -- this call alone
+turned out to be the dominant cost (~93%) of the whole boot freeze the
+intro-splash saga kept fighting. `warm_cache()` now takes an optional
+`on_progress: Callable` and yields via `await Engine.get_main_loop().
+process_frame` after every real sheet load (bitten stages unrolled into
+their own per-sheet loop, since a single species can deliver up to 3
+full-resolution bitten sheets -- yielding only around the whole
+`bitten_frame_for()` call would still leave that as one multi-second
+block). `MushroomMarker.warm_art_cache()` and `World._ready()`'s call
+site both now `await` it. `frame_for()`/`crushed_frame_for()`/
+`bitten_frame_for()` themselves are untouched and still fully
+synchronous -- they're called from live gameplay (`_rebuild_sprite()`)
+and must keep returning a real texture immediately, not a coroutine;
+only the warming PASS learned to yield, not the underlying loads.
+Verified two ways: GUT's own `test_warm_cache_reports_real_progress_
+from_zero_to_the_true_total` (mirrors `EarthChunkManager.
+update_with_progress`'s own progress-callback contract exactly), and,
+because a passing test doesn't prove the OS stops marking the window
+unresponsive, a live, isolated `--solo` launch polled every 0.5s via
+`(Get-Process -Id <pid>).Responding` for its own external, objective
+confirmation -- `True` for the entire ~55s run, zero drops, in a clean
+environment with nothing else competing for the machine (an earlier,
+contended attempt with several other Godot processes running
+concurrently DID show `Responding=False` stretches, which is why the
+clean re-run mattered rather than trusting the first result).
+
 **Real, confirmed, explicitly still open**: even in a CALM window (no
 mushroom spike, no other known bug active), the aggregate `_process`
 cost summed across every marker class -- `ambient_flyer_marker`,

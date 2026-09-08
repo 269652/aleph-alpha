@@ -383,14 +383,54 @@ func _bitten_stages_from(species_id: String) -> Array:
 ## through the exact same _frames_from cache-check every ordinary call
 ## already uses), so calling this more than once -- or a species some
 ## earlier lazy call already warmed -- is a cheap no-op, not a reload.
-func warm_cache() -> void:
-	for species_id in _SHEETS:
+##
+## A SECOND real bug found live, later: this whole pass used to run as one
+## uninterrupted synchronous loop, which measured at ~52 real seconds on
+## this session's own machine -- 8 species x up to 3 real sheet loads
+## each, none of them yielding. Long enough that Windows marks the whole
+## boot window "Not Responding" and paints it grey for the entire stretch,
+## regardless of anything World._ready() shows before or after it
+## (reported directly, a third time, about the boot logo intro that plays
+## right after: "it hangs for a minute or two when starting and just
+## shows a grey window"). Now yields via `await Engine.get_main_loop().
+## process_frame` after every real sheet load -- the same "one real unit
+## of work, then give the engine a frame back" shape EarthChunkManager.
+## update_with_progress already established for the equally-long cold
+## chunk load, right down to the optional `on_progress` callback (unused
+## by any caller yet, wired for the same reason update_with_progress's
+## is: a future boot-time loading readout, not invented here). The bitten
+## stages are unrolled into their own per-sheet loop rather than calling
+## bitten_frame_for()/_load_bitten_stages() as one opaque call -- a single
+## species can deliver up to 3 full-resolution bitten sheets, which would
+## otherwise still be one uninterrupted multi-second block even with a
+## yield on either side of it. frame_for()/crushed_frame_for() stay single
+## calls: each is already exactly one sheet load, as fine-grained as this
+## can usefully get without touching _load_one_sheet itself (which live
+## gameplay calls synchronously and must keep returning a real texture
+## immediately, not a coroutine).
+func warm_cache(on_progress: Callable = Callable()) -> void:
+	var species_ids: Array = _SHEETS.keys()
+	var total := species_ids.size()
+	var done := 0
+	if on_progress.is_valid():
+		on_progress.call(0, total)
+	for species_id in species_ids:
 		if has_variants(species_id):
 			frame_for(species_id, 0)
+			await Engine.get_main_loop().process_frame
 		if has_crushed_variant(species_id):
 			crushed_frame_for(species_id, 0)
-		if has_bitten_variant(species_id):
-			bitten_frame_for(species_id, 0)
+			await Engine.get_main_loop().process_frame
+		if has_bitten_variant(species_id) and not _bitten_stage_frames_cache.has(species_id):
+			var sheet: Dictionary = _BITTEN_SHEETS[species_id]
+			var stages: Array = []
+			for path in _stage_paths_for(sheet):
+				stages.append(_load_one_sheet(path, sheet))
+				await Engine.get_main_loop().process_frame
+			_bitten_stage_frames_cache[species_id] = stages
+		done += 1
+		if on_progress.is_valid():
+			on_progress.call(done, total)
 
 
 func _pick_frame(frames: Array, seed_value: int) -> ImageTexture:
@@ -449,11 +489,17 @@ func _load_one_sheet(path: String, sheet: Dictionary) -> Array[ImageTexture]:
 ## this does NOT flatten them together, since each one is now a genuinely
 ## different look, not interchangeable variety on the same look.
 func _load_bitten_stages(sheet: Dictionary) -> Array:
-	var paths: Array = sheet["path"] if sheet["path"] is Array else [sheet["path"]]
 	var stages: Array = []
-	for path in paths:
+	for path in _stage_paths_for(sheet):
 		stages.append(_load_one_sheet(path, sheet))
 	return stages
+
+
+## Shared with warm_cache(), which needs the same per-stage path list but
+## loads each one across its own yielded frame instead of in one
+## uninterrupted loop -- see that function's own doc comment for why.
+func _stage_paths_for(sheet: Dictionary) -> Array:
+	return sheet["path"] if sheet["path"] is Array else [sheet["path"]]
 
 
 ## A copy of `image` with every pixel within `tolerance` of `key` (each of

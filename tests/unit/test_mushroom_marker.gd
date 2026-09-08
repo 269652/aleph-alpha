@@ -424,7 +424,7 @@ func test_warm_art_cache_warms_the_shared_illustrated_generator():
 	IllustratedMushroomSprite._frames_cache = {}
 	IllustratedMushroomSprite._crushed_frames_cache = {}
 	IllustratedMushroomSprite._bitten_stage_frames_cache = {}
-	MushroomMarker.warm_art_cache()
+	await MushroomMarker.warm_art_cache()
 	for id in MushroomSpecies.IDS:
 		assert_true(
 			IllustratedMushroomSprite._bitten_stage_frames_cache.has(id), "%s bitten cache should be warm" % id

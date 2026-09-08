@@ -377,15 +377,24 @@ looking anywhere else.
   established, since a real `World` is too heavy to stand up just to
   prove one `await` moved) — the boot bumper's own ordering is
   unaffected and separately pinned by the same file.
-- ⬜ The heavy per-boot setup's own freeze (a real, separately-measured
-  ~43-54s on this machine, on top of which `_show_main_menu()` itself
-  measured a further ~11s) is untouched by any of the three passes on
-  this doc — a known, deliberately deferred, much larger architectural
-  gap (yield-splitting `EarthChunkManager`/shader setup/UI construction,
-  mirroring `update_with_progress`'s coroutine pattern) that this doc's
-  fixes work around rather than close. Windows greys out the window for
-  that whole stretch either way; this doc's only claim is that the
-  intro no longer has to share that stretch to be seen playing.
+- ✅ **Revised, separately (2026-09-08): the heavy per-boot setup's own
+  freeze is now mostly fixed, not merely worked around.** Live, per-step
+  timing across the whole setup found the freeze was never evenly spread
+  across `EarthChunkManager`/shader setup/UI construction — one call,
+  `MushroomMarker.warm_art_cache()`, accounted for ~93% of it (~52 of
+  ~56 real seconds measured), with every other step under a few hundred
+  milliseconds except `EarthChunkManager.new()` (~3s). See
+  `docs/concept/soil_fauna.md`'s "Round 6 follow-up" for the full fix:
+  `warm_cache()` now yields via `await Engine.get_main_loop().
+  process_frame` after every real sheet load, mirroring
+  `update_with_progress`'s own established coroutine shape, instead of
+  running as one uninterrupted block. Confirmed live via
+  `(Get-Process -Id <pid>).Responding` polled externally through a whole
+  clean, isolated boot: `True` throughout, zero drops — the first
+  objective, OS-level (not GDScript-internal) confirmation this exact
+  symptom has had. The remaining ~3-4s (chunk manager construction, a
+  handful of shader-layer setters) stayed comfortably within that same
+  clean run and did not need splitting.
 - ⬜ `_show_main_menu()`'s own ~11s cost (measured, not previously
   recorded anywhere) is a real, separate, likely-fixable slow spot
   (background image load, `MainMenu` construction, or both) that this
