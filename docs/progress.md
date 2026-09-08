@@ -15308,6 +15308,43 @@ the first fix (a statement-ordering change with no natural unit-test
 seam) -- verified via real, timestamped, flushed-to-disk launches
 instead.
 
+**Third follow-up fix, same day (2026-09-08):** reported a third time
+anyway, directly: "it hangs for a minute or two when starting and just
+shows a grey window... play it once the main menu is actually loaded
+and visible... and play it when you click new game so the freeze time
+doesn't matter." The second fix's own claim was genuinely re-verified
+(three more timestamped launches, two checkouts, with and without an
+explicit `--rendering-driver` override, all showing `elapsed=3.210`, no
+skip) -- the intro really does play its full 3.2s. The gap was in what
+those diagnostics could see: all of them were internal to the same
+process that goes unresponsive, and none could observe that Windows
+marks an unresponsive top-level window "Not Responding" -- a flat grey
+placeholder, not whatever was last actually rendered -- for the entire
+~43-54s the heavy setup's own single-threaded freeze always runs,
+independent of the intro, independent of either fix (measured 80+
+seconds on 2026-09-07, ~51-54s on later runs, same machine throughout).
+A 3.2s animation immediately followed by a minute of grey "hung" window
+does not read as "an intro played."
+
+Fixed as a design change rather than a race to win: the intro no longer
+triggers anywhere near the heavy setup at all. Two call sites now, both
+deliberately AFTER whatever they're a bumper for is already built or
+underway -- `World._show_main_menu()` (menu built and interactive
+first, intro plays on top of it) and `World._on_menu_start_requested()`
+(New Game/Host Game: intro plays before that flow's own pre-existing
+loading overlay). `_play_intro_splash()` no longer needs to persist the
+intro node externally -- both call sites `await` it fully before
+proceeding, so it went back to a self-contained add/await/free shape
+(the `World._intro` field the second fix introduced is gone). The heavy
+setup's own freeze is untouched and still real -- a known, deliberately
+deferred, much larger yield-splitting rearchitecture, unrelated to this
+fix -- but the intro no longer has to share it to be watched. Also
+surfaced a new, previously unmeasured, unfixed finding: `_show_main_menu()`
+itself costs a further ~11s on this machine, separate from the heavy
+setup. See `concept/intro_splash.md`'s "A third pass" section for the
+full writeup. Same verification discipline as both prior fixes (no
+natural unit-test seam) -- real, timestamped, flushed-to-disk launches.
+
 ### Mushrooms now fruit at their own real-world-timed windows within autumn (`concept/mushrooms.md`, 2026-09-07)
 
 Asked directly: *"mushrooms should fruit at their respective times ...
