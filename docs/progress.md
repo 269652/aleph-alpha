@@ -16722,3 +16722,31 @@ this pass only guarantees a presented frame exists between the end of that
 freeze and the intro appearing, it does not make the freeze itself shorter
 or the window responsive during it. Windows still greys the window out for
 the same real duration either way.
+
+## Beehive minimum/starting size doubled (2026-09-08)
+
+Requested live: *"minimum / starting beehive size should be double of
+current."* `BeePopulationModel.STARTING_POPULATION` (a hive's population
+the instant it is founded or re-founded by a swarm/absconding move) and
+`BeePopulationModel.BASE_CAPACITY` (its unfed baseline capacity ceiling
+— deliberately kept equal to `STARTING_POPULATION`, see that constant's
+own doc comment) both moved from 20 to 40. `MAX_REFERENCE_POPULATION`
+(the ceiling `growth_fraction_at`/growth-stage art normalizes against)
+is computed from `BASE_CAPACITY`, so it followed automatically, 40 → 80.
+Scoped to honeybee hives only (`BeeColony`/`BeePopulationModel`) — wild
+bee nests (`WildBeePatch`) have no comparable numeric population at all
+("a lone resident," never a headcount, see `docs/concept/bees.md`), so
+"beehive" unambiguously meant the honeybee system here.
+
+`test_bee_population_model.gd`'s two literal-pinned tests re-pinned at
+the new values; `test_base_capacity_matches_the_starting_population`
+made symbolic (asserts `BASE_CAPACITY == STARTING_POPULATION` directly
+rather than two independently-pinned literals that happened to agree)
+so it keeps proving the actual invariant regardless of the number
+chosen, and `test_step_grows_population_toward_capacity`'s own hardcoded
+`40.0` ceiling replaced with `MAX_REFERENCE_POPULATION` for the same
+reason. 14/14. Regression-checked (all green, unaffected by the value
+change since every consumer already reads the constants symbolically):
+`test_bee_colony.gd` 44/44, `test_bee_hive_marker.gd` 24/24,
+`test_bee_forager_marker.gd` 29/29, `test_earth_chunk_manager_bees.gd`
+17/17.
