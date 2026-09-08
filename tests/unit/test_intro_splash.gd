@@ -100,3 +100,32 @@ func test_size_fills_the_viewport_once_ready_settles():
 		intro.size, intro.get_viewport_rect().size,
 		"a zero-size intro draws nothing, even while fully visible/in-tree"
 	)
+
+
+## Reported live: "make it smaller, about the size of the new character
+## panel... otherwise it looks pixelated and wobbly" -- the root Control
+## (backdrop included) stays full-viewport (see the test above), but the
+## actual animated TextureRect is deliberately NOT stretched across all of
+## it any more, so a much smaller upscale factor reaches the screen. See
+## IntroSplash.DISPLAY_SIZE's own doc comment for why that constant is a
+## plain literal (matching MainMenu.PANEL_SIZE) rather than a live
+## reference to it.
+func test_display_is_sized_and_centered_to_the_character_panel_size():
+	var intro := _splash()
+	await wait_process_frames(2)
+	# Same pre-existing, expected warning test_size_fills_the_viewport_
+	# once_ready_settles already documents and consumes -- `self`'s own
+	# set_deferred("size", ...) write (unrelated to _display, untouched by
+	# this pass) fires it on every settle, not just that one test.
+	assert_engine_error_count(
+		1, "the top-level Control's own set_deferred(\"size\", ...) write"
+	)
+	var expected_position := (intro.get_viewport_rect().size - IntroSplash.DISPLAY_SIZE) / 2.0
+	assert_eq(
+		intro.display_rect().size, IntroSplash.DISPLAY_SIZE,
+		"the animation itself should be shrunk, not stretched across the full viewport"
+	)
+	assert_eq(
+		intro.display_rect().position, expected_position,
+		"a shrunk display should stay centered, not pinned to a corner"
+	)
