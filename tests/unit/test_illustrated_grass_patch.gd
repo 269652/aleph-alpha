@@ -1273,6 +1273,95 @@ func test_split_cards_by_snow_overlay_splits_a_real_mix_at_a_mid_depth_without_l
 	assert_gt(split.winter.size(), 0, "precondition: a real mid-depth split must overlay some cards")
 
 
+# -- turn_threshold_for_seed must spread within ONE CELL's own real 8 cards,
+# not just across arbitrary sequential integers (the existing "spreads
+# across many seeds" test above only ever fed it 0..199 directly). Reported
+# live: "The long grass sprites don't change season color per blade but
+# instead per entity... each entity should progress its blades individually
+# ... it should transition per blade." Root cause: card_specs_for_seed's own
+# atlas_seed is `hash("%d_grass_card_%d" % [seed_value, index])` for
+# index 0..7 -- a shared prefix with only a single trailing digit varying --
+# and Godot's String hash does NOT avalanche on that shape (confirmed by a
+# throwaway probe: it returned seed_value_hash+0, +1, +2, ... +7, an exactly
+# LINEAR sequence, not a hash at all). turn_threshold_for_seed then re-hashes
+# that already-near-sequential atlas_seed through ANOTHER string built the
+# same vulnerable way ("%d_grass_turn" % atlas_seed), which does not recover
+# independence either -- so a cell's 8 real cards land suspiciously close
+# together and tend to cross any given progress threshold together, reading
+# as the whole tuft ("entity") turning at once instead of blade by blade.
+
+
+## One real cell's 8 real card atlas_seeds, via the exact same production
+## path _sync_grass_sprites uses (card_specs_for_seed/cards_for_cell) --
+## not a hand-built list of arbitrary integers, so this test can only pass
+## if the REAL pipeline decorrelates, not just the threshold function in
+## isolation.
+func _real_cell_turn_thresholds(tile: Vector2i) -> Array:
+	var seed_value := hash("%d_%d_grass_tuft" % [tile.x, tile.y])
+	var cell_spec := {"seed": seed_value, "ground_position": Vector2.ZERO, "growth": 1.0}
+	var thresholds := []
+	for card in IllustratedGrassPatch.cards_for_cell(cell_spec):
+		thresholds.append(IllustratedGrassPatch.turn_threshold_for_seed(card.atlas_seed))
+	return thresholds
+
+
+## Across many real cells, the count of "how many of this cell's 8 cards
+## have turned" at a mid progress must show REAL variance -- true
+## independent [0,1) thresholds make an extreme split (0, 1, 7 or 8 of 8
+## below 0.5) happen ~7% of the time (Binomial(8, 0.5)'s own two-tail mass),
+## so at least one among 100 real, deterministically-seeded cells finding
+## one is expected with overwhelming probability. A correlated/clustered
+## hash (the actual bug, confirmed empirically: 0 extreme splits found
+## across 500 real cells against the CURRENT implementation) makes this
+## essentially never happen -- every cell instead lands its cards in a
+## narrow 2-4 band every time.
+func test_turn_threshold_for_seed_shows_real_per_cell_variance_not_a_suspiciously_narrow_band():
+	var saw_an_extreme_split := false
+	for tile_index in range(100):
+		var tile := Vector2i(tile_index * 3 + 1000, tile_index * 7 + 2000)
+		var thresholds := _real_cell_turn_thresholds(tile)
+		var below := 0
+		for t in thresholds:
+			if t <= 0.5:
+				below += 1
+		if below <= 1 or below >= 7:
+			saw_an_extreme_split = true
+			break
+	assert_true(
+		saw_an_extreme_split,
+		"across 100 real cells, none showed an extreme (<=1 or >=7 of 8) split at a mid " +
+		"progress -- turn_threshold_for_seed's own output looks correlated within a cell, " +
+		"not independent, which is exactly why whole tufts turn together instead of blade by blade"
+	)
+
+
+## The concrete visual complaint, pinned directly: a real cell's own 8 cards
+## must not all sit on the SAME side of a mid-transition progress -- if they
+## do, that one tuft still turns as a single all-or-nothing unit no matter
+## how independent OTHER cells' thresholds are, which is indistinguishable
+## from "per entity" to a player watching that one tuft.
+func test_a_real_cells_eight_cards_are_not_all_on_the_same_side_of_a_mid_transition():
+	var any_cell_actually_split := false
+	for tile_index in range(20):
+		var tile := Vector2i(tile_index * 5 + 4000, tile_index * 11 + 6000)
+		var thresholds := _real_cell_turn_thresholds(tile)
+		var below := 0
+		var above := 0
+		for t in thresholds:
+			if t <= 0.5:
+				below += 1
+			else:
+				above += 1
+		if below > 0 and above > 0:
+			any_cell_actually_split = true
+			break
+	assert_true(
+		any_cell_actually_split,
+		"across 20 real cells, none had its own 8 cards straddle a mid progress -- at least " +
+		"one real tuft should show SOME of its own blades turned and some not yet turned"
+	)
+
+
 ## As depth climbs, a card can only move from "base" to "winter", never back
 ## -- mirrors split_cards_by_turn's own one-way sweep exactly.
 func test_split_cards_by_snow_overlay_only_ever_moves_cards_from_base_to_winter_as_depth_climbs():

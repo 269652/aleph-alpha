@@ -411,6 +411,17 @@ static func card_specs_for_seed(seed_value: int) -> Array[Dictionary]:
 	return specs
 
 
+## Large, arbitrary odd ints mixed into a card's own atlas_seed BEFORE
+## hashing, one per independent threshold this file derives from that same
+## seed -- see turn_threshold_for_seed's own doc comment for why a plain
+## string-salted re-hash (the previous approach) is not enough on its own.
+## Two DIFFERENT constants, not one reused: mixing in the same salt for both
+## thresholds would make them the same number, defeating the whole point of
+## keeping a card's calendar-turn speed and its snow-overlay speed
+## independent (see snow_overlay_threshold_for_seed's own doc comment).
+const _TURN_THRESHOLD_SALT := 0x9E3779B1
+const _SNOW_OVERLAY_THRESHOLD_SALT := 0x85EBCA77
+
 ## A stable [0, 1) pseudo-random threshold derived from a card's own atlas
 ## seed -- a SEPARATE hash from the one that already picks its column/variant
 ## (atlas_region_for), so the two never correlate: two cards sharing a column
@@ -422,8 +433,30 @@ static func card_specs_for_seed(seed_value: int) -> Array[Dictionary]:
 ## ProceduralTreeSprite's per-pixel _sweep_rank turns a canopy with, at card
 ## granularity instead of per-pixel (see docs/concept/long_grass.md's
 ## "Seasonal art").
+##
+## Hashes atlas_seed as an INT (`hash(atlas_seed + salt)`), not a STRING
+## (`hash("%d_..." % atlas_seed)`, the previous approach) -- a real bug,
+## found and fixed the same day this doc comment was written: a cell's own
+## CARD_COUNT cards all come from card_specs_for_seed's `hash("%d_grass_
+## card_%d" % [seed_value, index])` for index 0..7, a shared prefix with
+## only a single trailing digit varying, and Godot's String hash does NOT
+## avalanche on that shape -- confirmed directly, it returned exactly
+## `base+0, base+1, base+2, ... base+7`, a linear sequence, not a hash at
+## all. Re-hashing that already-near-sequential atlas_seed through ANOTHER
+## string built the same vulnerable way ("%d_grass_turn" % atlas_seed) does
+## not recover independence either (confirmed the same way: also a near-
+## constant step between consecutive cards). The practical effect: a cell's
+## 8 real cards landed suspiciously close together and tended to cross any
+## given progress threshold together, reading as a whole tuft ("entity")
+## turning at once rather than blade by blade -- reported live: "The long
+## grass sprites don't change season color per blade but instead per
+## entity." `hash(int)` does not share this weakness (confirmed the same
+## way: consecutive integers hash to wildly different, well-spread values) --
+## see test_turn_threshold_for_seed_shows_real_per_cell_variance_not_a_
+## suspiciously_narrow_band, which pins this against the REAL card-generation
+## path (card_specs_for_seed/cards_for_cell), not arbitrary sequential seeds.
 static func turn_threshold_for_seed(atlas_seed: int) -> float:
-	return float(posmod(hash("%d_grass_turn" % atlas_seed), 10000)) / 10000.0
+	return float(posmod(hash(atlas_seed + _TURN_THRESHOLD_SALT), 10000)) / 10000.0
 
 
 ## Splits `card_specs` (each {atlas_seed:int, position:Vector2, growth:float},
@@ -471,13 +504,17 @@ static func base_render_season(season: String) -> String:
 
 ## A stable [0, 1) pseudo-random threshold derived from a card's own atlas
 ## seed, for the snow-overlay split below -- mirrors `turn_threshold_for_seed`
-## exactly but hashes a DIFFERENT salt, so a card's calendar-turn speed and
-## its snow-overlay speed never correlate (the same reasoning
+## exactly but mixes in a DIFFERENT salt constant, so a card's calendar-turn
+## speed and its snow-overlay speed never correlate (the same reasoning
 ## `turn_threshold_for_seed`'s own doc comment gives for staying independent
 ## of the seed/column hash: two conceptually unrelated mechanisms sharing one
-## hash would silently move in lockstep).
+## hash would silently move in lockstep). Hashes atlas_seed as an INT, not a
+## STRING, for the identical real-bug reason `turn_threshold_for_seed`'s own
+## doc comment now documents in full -- this function had the exact same
+## vulnerability (a shared-prefix, single-trailing-digit string salt that
+## Godot's String hash does not avalanche on).
 static func snow_overlay_threshold_for_seed(atlas_seed: int) -> float:
-	return float(posmod(hash("%d_grass_snow_overlay" % atlas_seed), 10000)) / 10000.0
+	return float(posmod(hash(atlas_seed + _SNOW_OVERLAY_THRESHOLD_SALT), 10000)) / 10000.0
 
 
 ## Splits `card_specs` into `{"base": [...], "winter": [...]}` by comparing
