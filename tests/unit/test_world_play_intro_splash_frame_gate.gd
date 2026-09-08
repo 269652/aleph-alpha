@@ -98,6 +98,12 @@ func test_the_intro_is_not_added_before_any_real_frame_has_elapsed():
 	# Let the still-pending intro.finished await resolve so it doesn't leak
 	# into the next test.
 	await wait_process_frames(3)
+	# The real IntroSplash._ready() that ran during those 3 frames now
+	# unavoidably fires its own known/expected engine warning (see
+	# test_intro_splash.gd's test_size_fills_the_viewport_once_ready_
+	# settles for why) -- consumed here so it doesn't also auto-fail this
+	# test as an "Unexpected Error" unrelated to what this test covers.
+	assert_engine_error_count(1, "IntroSplash's own set_deferred(\"size\", ...) write")
 	if world._ui.get_child_count() > 0:
 		(world._ui.get_child(0) as IntroSplash)._finish()
 	await wait_process_frames(1)
@@ -120,6 +126,8 @@ func test_the_intro_is_showing_once_the_gate_has_actually_elapsed():
 		world._ui.get_child_count() > 0 and world._ui.get_child(0) is IntroSplash,
 		"the one child added should be the real IntroSplash node, not a stand-in"
 	)
+	# See the sibling test above for why this is expected, not a regression.
+	assert_engine_error_count(1, "IntroSplash's own set_deferred(\"size\", ...) write")
 	world._ui.get_child(0)._finish()
 	await wait_process_frames(1)
 
