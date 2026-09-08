@@ -16865,3 +16865,37 @@ transition`. 74/74 in `test_illustrated_grass_patch.gd` (72 pre-existing +
 visibly shows a genuine mix of green (summer) and orange/red (autumn)
 blades at 33%, 50% and 67% progress, not a hard snap between one uniform
 color and another.
+
+### Ambient soundscape: a volume slider, and "I can't hear any sounds" investigated (2026-09-08)
+
+Asked directly for a settings volume slider, alongside a live report that
+no sound was audible at all.
+
+**Volume slider shipped**: `src/audio/audio_settings.gd`
+(`sanitize_volume`/`volume_to_bus_db`, TDD, same guard-a-hand-edited-
+config shape as `RenderResolution.sanitize`) + a new Audio tab in
+`settings_overlay.gd`'s pause menu (one `HSlider`, same tab pattern as Key
+Bindings/Graphics/License), applied to the whole game's `Master` bus via
+`AudioServer` — the control belongs to the player's ears, not to the one
+system that happens to make noise today. Persists alongside key bindings/
+graphics in the same config file.
+
+**"No sound" investigated end to end, root-caused as NOT a code bug.** A
+real `--solo` session (two false starts first, both environment/tooling
+issues rather than game bugs, worth remembering: a backgrounded shell can
+take its child Godot process down with it before the ~58s boot even
+finishes, and PowerShell's `-ArgumentList` as an array can silently drop a
+bare `--` separator, launching without the flags after it — `--solo`
+never reached the process at all the first real attempt), instrumented
+with a temporary flushed-file diagnostic (removed after use, per this
+project's own "stdout fully buffers for a non-headless process" gotcha),
+showed: the correct biome/season/weather detected, `forest_day` ramped to
+`volume_db: 0.0` (full unity gain) and `playing: true` within the first
+refresh cycle and stayed there for the rest of the session, a real WASAPI
+driver connected to the "Default" output device, `Master` bus at `0.0`dB
+and not muted. Every layer of the system — from biome detection through
+the actual live `AudioStreamPlayer` state — is provably correct. The
+remaining candidates for why sound still might not be heard are outside
+this system's control entirely: Windows' actual default playback device,
+this game's own per-executable entry in the Windows Volume Mixer, or the
+system volume itself.

@@ -141,9 +141,24 @@ sub-second reaction). Each step:
   system this frame already reacts to — see `test_world_nature_soundscape_
   fanout.gd`). Ambient sound now actually plays while the game runs, not just
   in `test_nature_soundscape_player.gd`.
-- ⬜ **An audio bus / master-volume-slider settings hook** — today the only
-  volume control is per-layer inside `layer_mix`'s own constants; there is no
-  player-facing way to turn this down or off.
+- ✅ **A master volume slider, Settings > Audio** — `AudioSettings.
+  sanitize_volume`/`volume_to_bus_db` (TDD), applied to the whole game's
+  `Master` bus (`AudioServer.set_bus_volume_db`) rather than scaled per-layer,
+  since the control belongs to the player's ears, not to any one system that
+  happens to make noise. Persists alongside key bindings/graphics.
+- **"I can't hear any sounds" (2026-09-08), investigated and root-caused: not
+  a code bug.** A real `--solo` session, instrumented with a temporary
+  flushed-file diagnostic (removed after use), showed `forest_day` correctly
+  detected, ramped to `volume_db: 0.0` (full unity gain) and `playing: true`
+  within the first refresh cycle, and staying that way for the rest of the
+  session — a real WASAPI driver connected to the "Default" output device,
+  `Master` bus at `0.0`dB, not muted. Every layer of this system, from biome
+  detection through the actual `AudioStreamPlayer` state, is provably correct.
+  If sound still isn't audible, the remaining candidates are outside this
+  system's control: Windows' actual default playback device (is it the
+  speakers/headphones actually in use?), the per-application entry for this
+  game's `.exe` in the Windows Volume Mixer (a persisted, per-executable
+  setting independent of the game's own bus), or the system volume itself.
 - ⬜ **Proximity layers** (running water near a river/lake, per
   [hydrology_field.gd](../../src/world/hydrology_field.gd)) — a real, already-
   named future extension, not built here to keep this pass's asset list from
