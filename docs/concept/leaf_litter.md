@@ -336,6 +336,26 @@ any real sync lag would hide the fall animation entirely rather than merely
 delay it the way a slow-growing flower can tolerate -- a chunk that IS
 changing still refills the very same tick it changes.
 
+**Visible-area filtering, on top of dirty-tracking (2026-09-08).** Reported
+live: "make it so that it only computes leaf litter ... to the current
+visible area." Dirty-tracking alone only ever gated WHETHER a chunk
+refills -- it always rebuilt EVERY leaf that chunk held, however far from
+the camera, which `soil_fauna.md`'s own investigation had already flagged
+as "architecturally unavoidable at this fix's per-chunk (not per-leaf)
+granularity." `LeafLitterRenderer.leaves_in_view` is that finer-grained
+filter: when a refill does happen, only the leaves within the player's own
+tile-precise camera window are actually pushed to the MultiMesh -- the SAME
+per-tile cutoff (`DecorationLod.keeps_decoration_tile`) and buffer
+(`EarthChunkManager.LEAF_LITTER_VIEW_BUFFER_TILES`, reusing
+`GRASS_VIEW_BUFFER_TILES`'s own exact value) grass's own view sync already
+established, applied here to individual leaves rather than grass cells.
+Checks both a leaf's settled position and its current transition's own
+start point, not the target alone, so a leaf actively blown toward or away
+from the window still renders for its whole transition instead of popping
+at the boundary. See "Status" below for the real measured numbers -- this
+is a RENDERING restriction only; `LeafLitterField.advance()` keeps
+simulating every loaded chunk exactly as before, regardless of visibility.
+
 **Falling and swaying are computed continuously in a shared vertex shader**,
 ported by hand from the first pass's own already-tested `DroppedItem._step_
 fall`/`_step_ground_sway` formulas -- the same "GDScript mirror kept in sync
@@ -813,6 +833,55 @@ See that entry for the full investigation, numbers, and the separate,
 still-open `LeafLitterField.advance()` baseline-cost finding it surfaced
 but did not fix.
 
+**Rendering bounded by nearby litter, not by a chunk's total accumulated
+count (2026-09-08).** Closes the "per-chunk (not per-leaf) granularity"
+gap the two entries above both named but left open: a chunk with one
+persistently-dirty floating leaf (the case that must always look dirty --
+see `generation()`'s own doc comment) used to rebuild its ENTIRE leaf set
+every frame regardless of how far that set was from the camera.
+`LeafLitterRenderer.leaves_in_view` (see "Rendering" above) now filters
+what actually reaches `fill()` down to the player's own tile-precise view
+window first. `LeafLitterField.advance()` itself is untouched -- every
+loaded chunk's litter keeps aging/decaying/dispersing exactly as before,
+on screen or not (see docs/concept/ecosystem_dynamics.md's own "real,
+running simulation... whether or not you're watching" pillar) -- this is a
+rendering-only bound.
+
+Measured directly with a real timing harness built inside
+`EarthChunkManager` (not a played `--solo` session this time -- see the
+commit history for why a controlled, reproducible harness at the exact
+documented real-play scale gave a cleaner signal than a live session would
+have), reproducing the "hot chunk" scenario the entry above found still
+costly: ~2,000 settled leaves scattered across a full 32-tile chunk span,
+player standing at the chunk's own corner (`DecorationLod`'s own named
+worst case), one leaf continuously floating at the far corner. `fill()`'s
+own share of `step_leaf_litter`'s per-call cost dropped from ~14.6ms to
+~1.8ms (roughly 8x; an isolated fill()-only comparison at a more skewed
+real/visible leaf ratio measured up to ~40x). `LeafLitterField.advance()`'s
+own share stayed flat (~18.8ms → ~21.5ms, within this shared machine's own
+run-to-run contention noise, per this doc's own established caveat) --
+confirming the simulation itself is genuinely untouched, not merely
+assumed so. Combined `step_leaf_litter` cost for this worst-case scenario:
+~33.4ms → ~23.3ms per call, about 30% -- smaller than fill()'s own
+improvement because `advance()`'s own separate, still-open baseline cost
+(named two entries above) now dominates the total even more than before.
+
+Strict TDD: 7 new tests (`leaves_in_view`'s own pure-function coverage in
+`test_leaf_litter_renderer.gd`: inclusion at the player's own tile,
+exclusion far outside the window, both transition-in-progress directions,
+a mixed near/far set, the empty case, and the pixel-to-tile unit
+conversion; `step_leaf_litter` integration coverage in
+`test_earth_chunk_manager.gd`: excluding an out-of-view leaf, revealing a
+leaf once the player walks close enough with nothing about the leaf itself
+changing, and a dedicated regression test proving an off-screen chunk's
+simulation keeps advancing -- LIFETIME pruning -- while its rendering is
+skipped). 3 pre-existing tests needed a `_disturbance_center_tile` poke
+(their leaf sat far from that field's default `Vector2i.ZERO`, so the new
+filter would have -- correctly -- excluded it). Zero regressions: 49/49
+`test_leaf_litter_renderer.gd`, 82/82 `test_leaf_litter_field.gd`, 13/13
+`test_decoration_lod.gd`, 34/34 `test_earth_chunk_manager.gd`'s "leaf"
+substring sweep.
+
 **Back on by default (2026-09-05).** Was briefly off (requested directly:
 "deactivate leaf littering", right after the GPU rewrite below shipped),
 then reported live as the real cost of that: "ants and beetles just walk
@@ -988,16 +1057,33 @@ fix had only partly addressed. 7 new tests in `test_leaf_litter_field.gd`
 `test_leaf_litter_renderer.gd` (42/42) or `test_earth_chunk_manager.gd`'s
 own "leaf" substring sweep (31/31).
 
+✅ **`fill()`'s own rebuild is now bounded by nearby litter, not by a
+chunk's total accumulated count (2026-09-08)** (see "Rendering"/"Status"
+above) -- reported live: "make it so that it only computes leaf litter ...
+to the current visible area." `LeafLitterRenderer.leaves_in_view` filters
+to the player's own tile-precise camera window (reusing `DecorationLod.
+keeps_decoration_tile`/`GRASS_VIEW_BUFFER_TILES`, grass's own established
+convention for the identical report) before a dirty chunk's leaves ever
+reach `fill()`. Closes the "architecturally unavoidable ... without a
+finer-grained per-leaf ... update" gap the dirty-tracking and waterlog/sink
+entries above both named but left open -- measured directly: `fill()`'s own
+share of the "hot chunk" scenario above dropped from ~14.6ms to ~1.8ms per
+call (~8x). `LeafLitterField.advance()` itself is deliberately untouched
+(confirmed flat, ~18.8ms → ~21.5ms, within measurement noise) -- a
+rendering-only restriction, not a simulation one.
+
 ⬜ **`LeafLitterField.advance()`'s own baseline per-leaf cost, independent
 of on_water status, scales with every LOADED chunk's total leaf population
 (not just decorating/visible chunks)** -- a real, separate, previously-
 unattributed cost surfaced (not fixed) by the investigation above:
 measured as consistently 2-4x LARGER than `LeafLitterRenderer.fill()`'s
 own cost in both the stationary and wandering measurements, and untouched
-by both the dirty-tracking fix (which only ever gated `fill()`) and the
-waterlog/sink fix just above (which only bounds on_water's own extra
-per-leaf cost). Worth a dedicated future pass if it is ever found to
-dominate a real session's own frame budget.
+by the dirty-tracking fix (which only ever gated `fill()`), the
+waterlog/sink fix (which only bounds on_water's own extra per-leaf cost),
+and the visible-area filter just above (which, by design, bounds fill()'s
+own rebuild cost without changing what or how often advance() itself
+simulates). Worth a dedicated future pass if it is ever found to dominate
+a real session's own frame budget.
 
 ⬜ Invisible `AntColony` windfall foraging extended to leaves (see
 "Consumption" above) -- unchanged gap from the first pass.
