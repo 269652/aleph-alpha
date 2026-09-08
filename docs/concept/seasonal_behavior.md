@@ -254,7 +254,15 @@ closing the gap where a fully dormant mound/hive still sent foragers out
 at the ordinary rate. New tests confirm cold sends measurably fewer
 forage attempts than warm from the identical PixelNoise roll (a
 deterministic-by-construction comparison, not a statistical one).
-⬜ Wild bee die-off / re-hatch
+✅ Wild bee die-off / re-hatch — `WildBeePatch` gains `record_warmth`/
+`_step_dormancy`: crossing below `EarthwormPatch.COLD_CUTOFF` banks the
+current resident count as hidden `brood` and zeroes visible residents
+(no foragers dispatched, `should_forage` short-circuits); crossing back
+above it re-hatches residents directly from that banked brood, inheriting
+last season's real success rather than a fixed reset. Wired into the
+real running game via `EarthChunkManager._refresh_bee_warmth`, extended
+to also feed `_wild_bee_patches` the same real climate+season signal
+honeybee hives already get.
 ⬜ True butterfly season-gated spawn window
 ⬜ Decomposer "bug" cold-slowdown
 ⬜ Herbivore winter-forage-realism fix

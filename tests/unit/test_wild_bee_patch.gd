@@ -193,3 +193,80 @@ func test_should_forage_rolls_both_outcomes_across_many_nests():
 			results[patch.should_forage(cell)] += 1
 	assert_gt(results[true], 0)
 	assert_gt(results[false], 0)
+
+
+# -- winter die-off / spring re-hatch (see docs/concept/seasonal_behavior.md,
+# "Wild bee die-off / re-hatch") -- real solitary bees' adults do not survive
+# freezing winters; the population overwinters as brood sealed in the nest's
+# own cells, and a NEW generation of adults emerges the following spring. A
+# genuinely different mechanism shape than AntColony/BeeColony's smooth
+# dormancy_multiplier_at throttle: this is a population EVENT tied to
+# actually crossing EarthwormPatch.COLD_CUTOFF, not an ongoing rate. --------
+
+const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
+
+
+func test_a_freshly_seeded_nest_is_not_dormant():
+	var patch := _patch_with_one_nest()
+	var cell: Vector2i = patch.nest_cells()[0]
+	assert_false(patch.is_dormant_at(cell))
+
+
+func test_cold_soil_sends_a_grown_nest_dormant_and_banks_its_residents_as_brood():
+	var patch := _patch_with_one_nest()
+	var cell: Vector2i = patch.nest_cells()[0]
+	# Grow the nest to a real, non-founding resident count first (mirrors
+	# test_residents_never_exceed_the_per_nest_cap's own drive-to-cap
+	# pattern) so banking-as-brood is observably different from the
+	# STARTING_RESIDENTS default.
+	for i in 4000:
+		patch.record_forage_result(cell, true)
+		patch.advance(WildBeePatch.SECONDS_PER_SIMULATED_DAY)
+	var grown_residents := patch.residents_at(cell)
+	assert_almost_eq(grown_residents, WildBeePatch.MAX_RESIDENTS_PER_NEST, 0.01)
+	# 20 repeated readings, the same EMA warm-up convention AntColony/
+	# BeeColony's own cold-soil tests already use, so the reading has
+	# actually settled below COLD_CUTOFF rather than still sitting near
+	# the "no reading yet" default.
+	for i in 20:
+		patch.record_warmth(cell, 0.05)
+	patch.advance(1.0)
+	assert_true(patch.is_dormant_at(cell), "a real winter crossing should send the nest dormant")
+	assert_almost_eq(patch.residents_at(cell), 0.0, 0.01, "a dormant nest reads empty -- no adults left to see or catch")
+	assert_almost_eq(
+		patch.brood_at(cell), grown_residents, 0.01,
+		"the banked brood should be exactly what the nest had grown to, not a fixed reset"
+	)
+
+
+func test_a_dormant_nest_never_sends_foragers_out():
+	var patch := _patch_with_one_nest()
+	var cell: Vector2i = patch.nest_cells()[0]
+	for i in 20:
+		patch.record_warmth(cell, 0.05)
+	patch.advance(1.0)
+	assert_true(patch.is_dormant_at(cell))
+	for i in 500:
+		patch.advance(1.0)
+		assert_false(patch.should_forage(cell), "an empty, dormant nest has no one home to send out")
+
+
+func test_warming_soil_rehatches_a_dormant_nests_residents_from_its_banked_brood():
+	var patch := _patch_with_one_nest()
+	var cell: Vector2i = patch.nest_cells()[0]
+	for i in 4000:
+		patch.record_forage_result(cell, true)
+		patch.advance(WildBeePatch.SECONDS_PER_SIMULATED_DAY)
+	var grown_residents := patch.residents_at(cell)
+	for i in 20:
+		patch.record_warmth(cell, 0.05)
+	patch.advance(1.0)
+	assert_true(patch.is_dormant_at(cell))
+	for i in 20:
+		patch.record_warmth(cell, EarthwormPatch.MILD_WARMTH)
+	patch.advance(1.0)
+	assert_false(patch.is_dormant_at(cell), "warming soil should end the dormant state")
+	assert_almost_eq(
+		patch.residents_at(cell), grown_residents, 0.01,
+		"spring re-hatch should inherit exactly how good last season was, not a fixed reset"
+	)

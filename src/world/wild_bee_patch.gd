@@ -22,6 +22,7 @@ extends RefCounted
 
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const BeeColony = preload("res://src/world/bee_colony.gd")
+const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 
 ## Real cavity-nesting solitary bees need a real tree/deadwood source
 ## for their hole -- the same tree-bearing biome set BeeColony.
@@ -108,6 +109,21 @@ var _nests: Dictionary = {}
 var _residents: Dictionary = {}
 var _forage_success: Dictionary = {}
 
+## Per-cell warmth EMA, mirroring AntColony/BeeColony.record_warmth
+## exactly -- see record_warmth's own doc comment for the weight.
+var _warmth: Dictionary = {}
+## Whether this nest is CURRENTLY in its winter die-off state -- tracked
+## explicitly (not re-derived from warmth alone) so the residents-to-brood
+## and brood-to-residents transitions in advance() each fire exactly ONCE
+## per real crossing of EarthwormPatch.COLD_CUTOFF, not every tick while
+## warmth stays on one side of it.
+var _dormant: Dictionary = {}
+## The hidden overwintering brood a nest banked the moment it last went
+## dormant -- what residents_at() re-hatches FROM in spring (see
+## advance()'s own die-off/re-hatch block). Not a literal egg/larva
+## count, the same abstraction level `_residents` already sits at.
+var _brood: Dictionary = {}
+
 ## Mirrors AntColony/BeeColony.SECONDS_PER_SIMULATED_DAY exactly.
 const SECONDS_PER_SIMULATED_DAY := 60.0
 
@@ -136,6 +152,24 @@ func forage_success_at(cell: Vector2i) -> float:
 	return _forage_success.get(cell, STARTING_FORAGE_SUCCESS)
 
 
+func brood_at(cell: Vector2i) -> float:
+	return _brood.get(cell, 0.0)
+
+
+func is_dormant_at(cell: Vector2i) -> bool:
+	return _dormant.get(cell, false)
+
+
+## Mirrors AntColony/BeeColony.record_warmth exactly -- same soil, same
+## real climate+season signal (see EarthChunkManager._refresh_bee_warmth,
+## which now drives both). Same weight as FORAGE_SUCCESS_EMA_RATE (see
+## that constant's own doc comment): warmth is not structurally twitchier
+## or sluggisher than forage success either.
+func record_warmth(cell: Vector2i, warmth: float) -> void:
+	var current: float = _warmth.get(cell, 1.0)
+	_warmth[cell] = lerpf(current, clampf(warmth, 0.0, 1.0), FORAGE_SUCCESS_EMA_RATE)
+
+
 ## Records whether one resident's real foraging trip actually found
 ## nectar -- mirrors AntColony/BeeColony.record_forage_result's own EMA
 ## shape exactly, without a honey deposit: a wild nest has nowhere to
@@ -154,6 +188,9 @@ func record_forage_result(cell: Vector2i, succeeded: bool) -> void:
 func advance(delta_seconds: float) -> void:
 	_step_count += 1
 	for cell in _nests:
+		_step_dormancy(cell)
+		if is_dormant_at(cell):
+			continue
 		# Growth needs a real, actually-recorded trip -- the neutral
 		# forage_success_at default (see STARTING_FORAGE_SUCCESS) answers
 		# "is this nest failing" honestly for should_relocate_at, but must
@@ -168,10 +205,48 @@ func advance(delta_seconds: float) -> void:
 			_residents[cell] = minf(MAX_RESIDENTS_PER_NEST, residents_at(cell) + 1.0)
 
 
+## The seasonal die-off/re-hatch transition (see docs/concept/
+## seasonal_behavior.md, "Wild bee die-off / re-hatch"): a genuinely
+## different mechanism shape from AntColony/BeeColony's smooth dormancy_
+## multiplier_at throttle -- real solitary bees' adults do not survive a
+## freezing winter at all, so this is a population EVENT fired exactly
+## once per real crossing of EarthwormPatch.COLD_CUTOFF (using _dormant to
+## remember which side of it a nest was on last tick, rather than
+## re-deriving it from warmth alone, which would re-fire every tick while
+## warmth stays on one side).
+func _step_dormancy(cell: Vector2i) -> void:
+	var warmth: float = _warmth.get(cell, 1.0)
+	var cold := warmth <= EarthwormPatch.COLD_CUTOFF
+	var was_dormant := is_dormant_at(cell)
+	if cold and not was_dormant:
+		# Going into winter: the current resident count IS this year's
+		# brood -- what carries to spring is exactly how many cells they
+		# provisioned. No overwinter brood mortality modelled (a real,
+		# named simplification, see seasonal_behavior.md's deferred
+		# follow-ups) -- residents never drops below STARTING_RESIDENTS
+		# except via this exact transition, so what gets banked here is
+		# always >= it, and re-hatching directly from it below needs no
+		# separate floor.
+		_brood[cell] = residents_at(cell)
+		_residents[cell] = 0.0
+		_dormant[cell] = true
+	elif not cold and was_dormant:
+		# Coming out of winter: a fresh generation of adults emerges from
+		# last year's brood, inheriting how good last season was rather
+		# than resetting to a fixed seed every year.
+		_residents[cell] = brood_at(cell)
+		_dormant[cell] = false
+
+
 ## Whether a resident forages nearby THIS step -- mirrors
 ## AntColony/BeeColony.should_forage exactly, a pure PixelNoise-seeded
-## roll.
+## roll. A dormant nest has no one home to send out at all (see
+## _step_dormancy) -- residents_at already reads 0.0 for one, but this
+## short-circuits before even rolling, the same "cluster and barely feed
+## at all" reasoning AntColony/BeeColony's own should_forage fix used.
 func should_forage(cell: Vector2i) -> bool:
+	if is_dormant_at(cell):
+		return false
 	return PixelNoise.unit(_seed_value + _step_count + _FORAGE_SALT, cell.x, cell.y) < FORAGE_CHANCE
 
 
