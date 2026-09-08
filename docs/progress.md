@@ -16654,6 +16654,34 @@ nothing yet calling it from the live scene tree. Also deferred: a
 proximity/river-water layer, dedicated (rather than shared) desert/tundra
 recordings, and a settings volume slider.
 
+**Follow-up (2026-09-08): `NatureSoundscapePlayer` wired in — sound now
+actually plays.** `src/audio/nature_soundscape_player.gd`, mirroring
+`RainOverlay`'s own "RefCounted controller, `build()` returns a real node
+the caller adds to the scene" shape: one `AudioStreamPlayer` per
+`NatureSoundscape.LAYERS` entry (looping for beds/overlays, one-shot for
+the hawk call — `.ogg`/`.mp3` `.loop`, `.wav` `.loop_mode`, three different
+properties for the three formats this project's 11 assets actually use),
+`update()` recomputing the mix on a throttled cadence and ramping every
+layer's linear volume toward its target every call so a change crossfades
+rather than snaps, starting/stopping the real player as volume rises off/
+settles back at silence. Built once in `World._ready()`, fed real state
+(the player's own tile via `biome_at_global`, the same real sun-elevation
+`is_night` and `raw_weather`/`snowing` every other system this frame
+already reacts to) every `_client_process` frame — nothing here re-derives
+a second, independently-computed answer. `test_world_nature_soundscape_
+fanout.gd` verifies the wiring itself (same source-reading technique as
+`test_world_torch_glow_fanout.gd`), 42/42 across the whole underlying
+logic stays green, and `test_world_play_intro_splash_frame_gate.gd`
+(the one test that actually instantiates a bare `World.new()`) confirms
+`world.gd` still compiles clean. Hit and fixed the exact `:=`-on-untyped-
+Dictionary-key parse error this session's own memory already documented
+— GUT silently dropped the whole test file rather than reporting the real
+error, caught immediately because all 13 tests in the file went from
+green-stub-trivial to a suspicious "Nonexistent function in base Nil"
+rather than the expected specific failures. Still deferred: proximity/
+river-water layer, dedicated desert/tundra recordings, a settings volume
+slider.
+
 ## New Game's intro splash is now the world reveal, not a pre-loading bumper (2026-09-08)
 
 Requested live: *"make it so the intro scene plays before the world
