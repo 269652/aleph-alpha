@@ -704,6 +704,43 @@ framebuffer), so several of these needed a real, non-headless, off-screen
     `test_shader_discards_a_fragment_that_bends_past_its_own_regions_edge`
     and a real render before/after (probe deleted after use) confirming
     the artifact gone on all four seasons.
+14. **"The long grass sprites don't change season color per blade but
+    instead per entity... each entity should progress its blades
+    individually... it should transition per blade."** A real bug, not a
+    misreading of the design (the "staggered per-blade turn" mechanism
+    above was already built and already the intent) -- the mechanism's own
+    two threshold functions did not actually decorrelate a cell's own
+    `CARD_COUNT` cards from each other. `card_specs_for_seed`'s per-card
+    `atlas_seed` is `hash("%d_grass_card_%d" % [seed_value, index])` for
+    index 0..7 -- a shared prefix with only a single trailing digit varying
+    -- and confirmed directly with a throwaway probe: Godot's String hash
+    does NOT avalanche on that shape, it returned exactly `base+0, base+1,
+    base+2, ... base+7`, a linear sequence, not a hash at all.
+    `turn_threshold_for_seed`'s own re-hash (`"%d_grass_turn" % atlas_seed`)
+    inherited the same vulnerability instead of correcting it -- also
+    confirmed directly, it returned a near-constant step between
+    consecutive cards too. The practical effect, confirmed empirically
+    against 500 real cells (not assumed): the current implementation
+    produced ZERO cells whose 8 cards split anywhere near evenly at a mid
+    transition (every one landed 3-5/8 or tighter -- true independence
+    predicts roughly 7% would land 0-1 or 7-8 of 8) -- a whole tuft crossed
+    a given progress step together, reading as "per entity" exactly as
+    reported. Fixed by hashing `atlas_seed` as an INT with a salt constant
+    (`hash(atlas_seed + salt)`) instead of building a STRING to hash --
+    confirmed the same way, `hash(int)` avalanches cleanly even on
+    consecutive inputs. `snow_overlay_threshold_for_seed` had the identical
+    vulnerability (a different string salt, same shared-prefix-plus-small-
+    suffix shape) and got the identical fix, with its own distinct salt
+    constant so the two thresholds stay independent of each other. Pinned
+    by `test_turn_threshold_for_seed_shows_real_per_cell_variance_not_a_
+    suspiciously_narrow_band`, which drives the real `card_specs_for_seed`/
+    `cards_for_cell` production path rather than arbitrary sequential
+    seeds (the gap that let this ship in the first place -- the pre-existing
+    spread test only ever exercised `range(200)` directly). Confirmed with
+    a real render (`tools/probe_grass_per_blade_turn.gd`, kept): the same
+    real cell visibly shows a genuine mix of green (summer) and orange/red
+    (autumn) blades at 33%, 50% and 67% progress, not a hard snap between
+    one uniform color and another.
 
 ## Status
 
@@ -754,6 +791,11 @@ framebuffer), so several of these needed a real, non-headless, off-screen
   gd`'s `split_cards_by_turn`/`turn_threshold_for_seed` tests. The
   calendar's own "winter" now renders as this same turn's "autumn" base
   (`IllustratedGrassPatch.base_render_season`) — see the next entry.
+  `turn_threshold_for_seed`/`snow_overlay_threshold_for_seed` now hash
+  `atlas_seed` as an INT with a salt constant, not a shared-prefix STRING —
+  see History #14: the string form did not actually decorrelate a cell's
+  own 8 cards from each other, so this bullet's own "staggered per card"
+  claim did not hold in practice until that fix.
 - ✅ Winter's own dedicated sheet (`grass_blades_winter.png`) is a snow-
   triggered per-card overlay, not a calendar destination — see "Winter's
   own sheet is a snow overlay, not a calendar destination" above for the
