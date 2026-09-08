@@ -119,6 +119,14 @@ file's test body). Not a bug to fix before merging; when iterating, scope
 to one test with `-gconfig= -gtest=res://tests/unit/test_earth_chunk_manager.gd
 -gunit_test_name=<substring>` instead of waiting on the whole file.
 
+A full pass also runs in CI (`.github/workflows/tests.yml`) — but nightly
+plus manual dispatch, not on every push, for exactly the reason above: this
+repo sees many pushes a day, and a from-scratch multi-hour run on each one
+would be an unbounded, ever-growing backlog of runners rather than useful
+signal. The README's "Unit Tests" badge reflects the most recent nightly
+run's real pass/total count (`badges/tests.json`, refreshed by the workflow
+itself), not a live per-commit number.
+
 ### Concept docs are the spec
 
 Before implementing a mechanic, read the relevant `docs/concept/*.md` file

@@ -1,7 +1,8 @@
 # Aleph Alpha
 
 [![Latest Release](https://img.shields.io/github/v/release/269652/aleph-alpha?label=latest%20release)](https://github.com/269652/aleph-alpha/releases/latest)
-[![Unit Tests](https://img.shields.io/badge/unit%20tests-12%2C231-brightgreen)](docs/progress.md)
+[![Tests](https://github.com/269652/aleph-alpha/actions/workflows/tests.yml/badge.svg)](https://github.com/269652/aleph-alpha/actions/workflows/tests.yml)
+[![Unit Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/269652/aleph-alpha/main/badges/tests.json)](https://github.com/269652/aleph-alpha/actions/workflows/tests.yml)
 [![Godot Engine](https://img.shields.io/badge/Godot-4.7-478cbf?logo=godotengine&logoColor=white)](https://godotengine.org)
 [![Platform](https://img.shields.io/badge/platform-Windows-informational)](#playing-the-game)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey)](#license)

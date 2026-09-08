@@ -1,0 +1,126 @@
+name: Tests
+
+# Not run on every push: CONTRIBUTING.md documents that a complete GUT pass
+# can legitimately run for hours (test_earth_chunk_manager.gd's own
+# EarthChunkManager.update() cost, ~100s/call, times ~237 tests that call
+# it -- see that file's own header). Pushes here happen many times a day
+# across concurrent sessions, so "every push" would mean an unbounded
+# backlog of multi-hour runners. A nightly run plus an on-demand button
+# gives a real, periodically-refreshed number without that cost.
+on:
+  schedule:
+    - cron: "17 3 * * *" # nightly, off the exact hour on purpose
+  workflow_dispatch: {}
+
+# The badge-commit step below needs to push badges/tests.json back to main.
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: "4.7.2-stable"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Generous on purpose (see the header comment above) -- comfortably
+    # under GitHub's own 360-minute hard ceiling for a standard runner,
+    # leaving headroom for the Godot download/import steps too.
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot download
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: godot-bin
+          key: godot-${{ env.GODOT_VERSION }}-linux
+
+      - name: Download Godot (headless-capable Linux build)
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p godot-bin
+          curl -fsSL -o godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip"
+          unzip -q godot.zip -d godot-bin
+          mv "godot-bin/Godot_v${GODOT_VERSION}_linux.x86_64" godot-bin/godot
+          chmod +x godot-bin/godot
+
+      - name: Cache .godot import cache
+        uses: actions/cache@v4
+        with:
+          path: .godot
+          key: godot-import-${{ env.GODOT_VERSION }}-${{ hashFiles('project.godot') }}
+          restore-keys: |
+            godot-import-${{ env.GODOT_VERSION }}-
+
+      - name: Import project (one-time per fresh/changed checkout)
+        run: ./godot-bin/godot --headless --import
+
+      - name: Run the full GUT suite
+        id: run_tests
+        run: |
+          set -o pipefail
+          ./godot-bin/godot --headless -s addons/gut/gut_cmdln.gd -gexit 2>&1 | tee gut_output.txt
+
+      - name: Parse results and write the badge JSON
+        if: always()
+        run: |
+          # GUT's own summary block looks like:
+          #   Tests                12231
+          #   Passing Tests        12180
+          total=$(grep -oP 'Tests\s+\K[0-9]+' gut_output.txt | tail -1)
+          passing=$(grep -oP 'Passing Tests\s+\K[0-9]+' gut_output.txt | tail -1)
+          total=${total:-0}
+          passing=${passing:-0}
+          color="brightgreen"
+          if [ "$total" = "0" ]; then
+            color="lightgrey"
+          elif [ "$passing" != "$total" ]; then
+            color="red"
+          fi
+          mkdir -p badges
+          cat > badges/tests.json <<JSON
+          {
+            "schemaVersion": 1,
+            "label": "unit tests",
+            "message": "$passing/$total passing",
+            "color": "$color"
+          }
+          JSON
+          cat badges/tests.json
+
+      - name: Commit the refreshed badge
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          git rebase origin/main
+          if git diff --quiet -- badges/tests.json 2>/dev/null && [ -f badges/tests.json ]; then
+            : # working tree already matches what's committed -- nothing to do
+          fi
+          git add badges/tests.json
+          if git diff --cached --quiet; then
+            echo "Badge unchanged, nothing to commit."
+          else
+            git commit -m "chore(ci): refresh unit-test badge [skip ci]"
+            git push origin HEAD:main
+          fi
+
+      - name: Upload full test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gut-output
+          path: gut_output.txt
+          retention-days: 14
+
+      - name: Fail the job if any test failed
+        if: always()
+        run: |
+          if grep -q "failing tests" gut_output.txt || ! grep -q "All tests passed" gut_output.txt; then
+            echo "Not every test passed -- see the gut-output artifact and the job log above."
+            exit 1
+          fi
