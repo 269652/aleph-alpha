@@ -3720,6 +3720,16 @@ func current_season() -> String:
 	return _season_cycle.season_at(_world_age_seconds)
 
 
+## [0.2, 1.0]: how vigorously vegetation is growing right now (see
+## SeasonCycle.growth_modifier) -- for CreatureMarker's own real winter-
+## forage-realism fix (see docs/concept/seasonal_behavior.md, "Herbivore
+## winter-forage-realism fix"). The SAME signal step_tall_grass already
+## feeds real grass maturation with, reused directly rather than a second,
+## independent reading of the identical season.
+func current_growth_modifier() -> float:
+	return _season_cycle.growth_modifier(_world_age_seconds)
+
+
 ## The world clock, in seconds since this world began.
 func world_age_seconds() -> float:
 	return _world_age_seconds

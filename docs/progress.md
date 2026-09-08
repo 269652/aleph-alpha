@@ -17309,3 +17309,54 @@ decomposer with no `_world` set at all keeps its exact prior speed (the
 same "safe default preserves old behavior" guard this session's other
 phases already added). Confirmed red first (`activity_multiplier_for()`
 did not exist), green after. `test_decomposer_marker.gd` 55/55.
+
+### Seasonal behavior, phase 5: herbivore winter-forage-realism fix (2026-09-08)
+
+✅ **The highest-leverage change in the whole seasonal-behavior pass:**
+`SeasonCycle.growth_modifier` already throttles real tall-grass
+maturation in winter (`EarthChunkManager.step_tall_grass`), and a real
+grass/fruit/seed/worm search already only returns mature, genuinely
+present food — so that half of the chain was already seasonally honest.
+The break: when a hungry grazer finds nothing via that real search,
+`CreatureMarker._look_for_a_bite()`'s `FOOD_UNDERFOOT` fallback ("nothing
+specific in sight, crop whatever is underfoot") granted a full day's BMR
+(`feed_hunger_relief(1.0)`) on ANY food-capable biome tile regardless of
+season — silently defeating the seasonal throttle the rest of the chain
+was already built to produce.
+
+New `EarthChunkManager.current_growth_modifier()` mirrors `current_
+season()`'s exact shape, reusing the identical `SeasonCycle.growth_
+modifier` reading `step_tall_grass` already computes. `_take_forage_
+bite()`'s `FOOD_UNDERFOOT` case is now split out from the other flat-
+relief forage kinds: the hunger DRIVE is still fully satisfied
+(`_needs.feed()` — the animal did spend a real head-down bout), but the
+real caloric/mass yield now scales by the current growth modifier, so
+grazing bare winter ground genuinely gains less real mass than a lush
+summer meadow.
+
+This one change gives every herbivore species — present (deer, boar,
+sheep, horse, goat, camel, reindeer, tapir, mouse, squirrel...) and any
+added later (see phase 7's alpaca below) — real winter hardship for free,
+with zero per-species code, since `FOOD_UNDERFOOT` is the shared generic
+fallback every species' foraging already funnels through when nothing
+specific is in sight.
+
+**Explicit scope cut** (named in `docs/concept/seasonal_behavior.md`, not
+silently decided): no starvation-death path added here. Mass already
+drops under sustained deficit (pre-existing `Metabolism`/
+`current_mass_kg()` behavior) — a real, if quiet, consequence. Whether
+hunger should ever kill a creature outright is a separate, bigger design
+decision than "seasonal behavior."
+
+TDD: new `StubWorldWithGrowthModifier` (mirrors the file's own
+`StubWorldWithSlope`/`StubWorldWithFreshWater` "extend StubWorld, answer
+one more optional method" convention) plus a shared `_underfoot_bite_
+mass_gain` helper reusing the existing grazing-loop shape from
+`test_hungry_herbivore_grazes_when_standing_on_a_food_biome`. Confirms a
+winter world (`growth_modifier = 0.2`, `SeasonCycle`'s own real floor)
+gains measurably less mass from one landed underfoot bite than a summer
+one (`1.0`), and that a plain `StubWorld` answering no growth-modifier
+signal at all (every pre-existing caller) keeps the exact old flat
+behavior. Confirmed red first (winter and summer gained identical mass —
+`0.2199 == 0.2199`, the exact bypass being fixed), green after.
+`test_creature_marker.gd` 231/231.
