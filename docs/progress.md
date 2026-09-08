@@ -17212,3 +17212,34 @@ itself (mirroring `update_with_progress`'s coroutine shape, or gating it
 behind the two-`process_frame` convention `_play_intro_splash()`/
 `_show_loading_overlay()` already use) is a real, deliberately deferred
 follow-up, not attempted here.
+
+### Seasonal behavior, phase 2: wild bee die-off / re-hatch (2026-09-08)
+
+✅ **`WildBeePatch` now models the real generational cycle solitary bees
+actually have**, not a smooth activity throttle like its honeybee/ant
+siblings — real solitary bees' adults die off before a freezing winter;
+the population survives as brood sealed in the nest's own cells, and a
+NEW generation of adults emerges the following spring. `WildBeePatch` had
+zero season awareness at all before this (no warmth tracking, no
+`COLD_CUTOFF` reference).
+
+Added `record_warmth`/`brood_at`/`is_dormant_at` plus a `_step_dormancy`
+transition in `advance()`: crossing below `EarthwormPatch.COLD_CUTOFF`
+banks the nest's current resident count as hidden brood and zeroes
+visible residents (no overwinter brood mortality modelled — a named
+simplification); crossing back above it re-hatches residents directly
+from that banked brood — inheriting exactly how good last season was,
+not a fixed reset. `should_forage` now also short-circuits false while
+dormant (an empty nest has no one home to send out), mirroring phase 1's
+ant/bee fix. Wired into the real game via
+`EarthChunkManager._refresh_bee_warmth`, extended with a second loop
+feeding `_wild_bee_patches` the identical real climate+season warmth
+signal honeybee hives already get (no existing wiring-level test covers
+this for ant/bee's own identical wiring either, so none was added here —
+verified by direct reading plus a live sanity launch instead).
+
+New tests grow a nest to its real cap via the existing forage-success
+drive-to-cap pattern, then confirm: dormancy banks that exact count as
+brood and zeroes residents; a dormant nest never forages across 500
+ticks; warming re-hatches residents to exactly the banked value.
+`test_wild_bee_patch.gd` 24/24.
