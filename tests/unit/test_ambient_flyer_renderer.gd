@@ -213,6 +213,58 @@ func test_scent_never_raises_the_bird_half_of_the_ceiling():
 	)
 
 
+# -- true butterflies stop flying once winter genuinely arrives -------------
+#
+# See docs/concept/seasonal_behavior.md, "True butterfly season-gated spawn
+# window": real adult monarchs/swallowtails/blue morphos do not survive a
+# freezing winter -- the population overwinters as pupae. Mirrors
+# CaterpillarRenderer.ACTIVE_SEASONS's own spawn-time gate exactly (checked
+# once at chunk load, not per-frame -- see that class's own doc comment for
+# why). `season` is a new, trailing, defaulted parameter (same "every
+# pre-existing call site keeps compiling" convention robin_population/
+# sparrow_population already established above) so it is exercised
+# explicitly here rather than everywhere else in this file.
+
+func test_true_butterflies_spawn_in_an_active_season():
+	var chunk := _make_chunk("grassland")
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 0.0, 0.0, "summer"
+	)
+	var butterflies := 0
+	for flyer in spawned:
+		if AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL.has(flyer.species):
+			butterflies += 1
+	assert_gt(
+		butterflies, 0,
+		"a qualifying chunk always shows its guaranteed minimum in an active season"
+	)
+
+
+func test_true_butterflies_do_not_spawn_in_winter():
+	var chunk := _make_chunk("grassland")
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 0.0, 0.0, "winter"
+	)
+	var butterflies := 0
+	for flyer in spawned:
+		if AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL.has(flyer.species):
+			butterflies += 1
+	assert_eq(butterflies, 0, "no live adult butterfly should be flying over a winter meadow")
+
+
+func test_omitting_season_still_spawns_butterflies_for_pre_existing_callers():
+	var chunk := _make_chunk("grassland")
+	var spawned := renderer.spawn_ambient_flyers(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland")
+	var butterflies := 0
+	for flyer in spawned:
+		if AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL.has(flyer.species):
+			butterflies += 1
+	assert_gt(
+		butterflies, 0,
+		"omitting season must not silently stop a pre-existing caller from spawning butterflies"
+	)
+
+
 # -- birds are promoted from their aggregate population, not a flat cap ------
 #
 # robin/sparrow used to fill up to a flat MIN..MAX range with no relation to

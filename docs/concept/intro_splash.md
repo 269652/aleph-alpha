@@ -493,7 +493,94 @@ auto-fail as an "Unexpected Error" -- a real, useful signal that the two
 passes' fixes genuinely interact at the engine level, not just adjacent
 lines of GDScript.
 
-### A sixth pass: shrunk to the character panel's own footprint (2026-09-08)
+### A sixth pass: `MainMenu`'s own construction deferred until navigated to (2026-09-08)
+
+The fourth pass's own live measurement (see above) found `_show_main_
+menu()` costing a further 13,534ms of fully synchronous work, right after
+the heavy setup's own ~58s -- flagged there as "a real, separate,
+likely-fixable slow spot" but not investigated further in that pass. This
+is that follow-up, dispatched as its own task rather than reported live
+like the bugs above.
+
+**Where the cost actually was, confirmed by reading `MainMenu._ready()`
+(`scenes/main_menu.gd`), not just re-measuring it:** it eagerly built all
+four of its screens -- root, character creator, join, overwrite-confirm
+-- every single boot, regardless of which one (if any) the player would
+ever open. The character creator alone accounts for nearly all of it: 7
+procedural class-icon portraits (`_build_class_icon_row` ->
+`_class_icon_texture` -> `ProceduralCharacterSprite.generate_hero_
+portrait_texture`, once per `ClassArchetype`), a live diorama
+`SubViewport` scene (`_build_diorama_view` -> `CharacterPreviewDiorama`),
+and the skill web preview (`_build_skills_tab` -> `SkillWebView`). A
+player who lands on the root screen and clicks Load Game or Quit never
+needed any of it built at all.
+
+**The fix: build the creator lazily, the first time the player actually
+navigates toward it**, not during `_ready()`. `MainMenu._ready()` now
+only builds the root and join screens (both cheap: labels, buttons, one
+`LineEdit`). A new `_ensure_create_screen_built()` builds `_create_screen`
+and `_overwrite_confirm_screen` together (the second depends on the first
+already existing -- see its own doc comment, unchanged from before) the
+first time either is needed; `_open_create_screen()` wraps it with the
+`_show()` call the New Game/Host Game buttons already made directly.
+Idempotent: `_create_screen` being non-null is the guard against
+rebuilding it on a later visit -- the same shape `_class_icon_texture`'s
+own per-archetype cache already uses. `_screens()` (the one list
+`_show()`/`_ready()` both already shared, precisely so a screen could
+never be added to one and not the other) now filters out the two screens
+that may still be null, since `_ready()`'s own closing
+`_show(_root_screen)` call runs well before either is ever built.
+
+**Strict TDD, per this repo's own mandate.** Four new tests in
+`test_main_menu.gd` drove this: confirmed red against the unmodified
+eager-build code first (`_create_screen`, `_diorama`, `_skills_web_view`
+and the class-icon cache were all already populated the instant after
+`_ready()`, with zero navigation), green after. The other ~60 pre-existing
+tests in that file exercise the creator's own mechanics (class pick, DNA,
+appearance, skills preview, starting kit) and all assumed it was already
+open -- rather than rewrite them, `before_each`/`_rebuild_menu_with_a_
+save` now call `_ensure_create_screen_built()` explicitly right after
+construction, so their fixture does exactly what `_ready()` itself used
+to guarantee, and every one of them keeps the exact coverage it had
+before. 71/72 in the file pass; the one failure
+(`test_the_diorama_fits_within_the_first_unscrolled_view_of_the_character_
+tab`) is confirmed pre-existing and unrelated (identical failure, unmoved
+except for this file's own added line count) -- flagged separately rather
+than folded into this fix.
+
+**Measured, not guessed -- real, timestamped, non-headless, before AND
+after, matching the exact methodology the fourth pass itself used to find
+this cost in the first place.** An isolated, apples-to-apples pair
+(`MainMenu.new()` + `add_child()` alone, no navigation): **12,713ms
+before this fix, 4ms after** -- the pre-fix number lands right next to
+the fourth pass's own 13,534ms `_show_main_menu()` figure, confirming the
+creator really was nearly the entire cost of that function. A real,
+non-headless, full interactive boot (no `--solo`, the ordinary launch
+path, `--rendering-driver opengl3`), instrumented the same
+flushed-timestamp way as every prior pass in this doc, confirmed the fix
+IN SITU rather than only in isolation -- the same "isolated fixes aren't
+sufficient evidence of composition" discipline the fifth pass's own
+verification already insisted on: `_show_main_menu()` itself now costs
+**38ms** in a real boot sequence (down from the fourth pass's measured
+13,534ms), and a scripted "New Game" click immediately afterward measured
+the now-deferred build at **11,787ms**, with the resulting creator
+confirmed fully built and functional -- `_create_screen`/`_diorama`/
+`_skills_web_view` all non-null, the class-icon cache populated, the
+screen actually visible -- not just constructed in name.
+
+**Honest scope note:** clicking New Game/Host Game still incurs this
+~10-12s cost fully synchronously -- no yield-splitting was added to the
+build itself, only a deferral of WHEN it runs. A player who does click
+through still meets a real, unyielded pause at that point (long enough,
+on this same class of machine, to plausibly earn its own "Not Responding"
+window state, exactly like the heavy setup this doc has already
+documented twice over). Yield-splitting `_build_create_screen()` itself
+(mirroring `update_with_progress`'s coroutine shape, or gating it behind
+the same two-`process_frame` convention `_play_intro_splash()`/
+`_show_loading_overlay()` already use) is a real, deliberately deferred
+follow-up, not attempted in this pass.
+
+### A seventh pass: shrunk to the character panel's own footprint (2026-09-08)
 
 Every prior pass fixed a real timing/gating/sizing bug that stopped the
 intro from being *seen* at all. Once it reliably was, a new, different
@@ -610,11 +697,17 @@ that class of false confidence.
   symptom has had. The remaining ~3-4s (chunk manager construction, a
   handful of shader-layer setters) stayed comfortably within that same
   clean run and did not need splitting.
-- ⬜ `_show_main_menu()`'s own ~11s cost (measured, not previously
-  recorded anywhere) is a real, separate, likely-fixable slow spot
-  (background image load, `MainMenu` construction, or both) that this
-  pass found but did not investigate further — flagged, not fixed.
-- ✅ **Revised (2026-09-08, "A sixth pass"): the animation itself is
+- ✅ **Revised (2026-09-08, "A sixth pass"): `_show_main_menu()`'s own
+  cost is fixed, not just measured.** The fourth pass's own 13,534ms
+  figure was nearly entirely `MainMenu` eagerly building its character
+  creator (7 class portraits, the live diorama, the skill web) every
+  boot, whether or not the player ever opened it. Now built lazily, the
+  first time the player actually navigates toward it. Real, non-headless,
+  before/after: `_show_main_menu()` measured 38ms after the fix (down
+  from 13,534ms), with the deferred ~11.8s now falling only on a New
+  Game/Host Game click. See "A sixth pass" below and
+  `docs/progress.md`'s matching entry.
+- ✅ **Revised (2026-09-08, "A seventh pass"): the animation itself is
   shrunk to `MainMenu.PANEL_SIZE`'s footprint (880x620), centered on a
   still-full-viewport black backdrop, rather than stretched full-screen.**
   Reported live as looking "pixelated and wobbly" at full-viewport size;

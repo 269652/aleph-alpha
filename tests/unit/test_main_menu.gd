@@ -26,6 +26,15 @@ func before_each():
 	menu.save_path = TEST_SAVE_PATH
 	menu.reroll_save_path = TEST_REROLL_SAVE_PATH
 	add_child(menu)
+	# Most of this file exercises the character creator itself (class pick,
+	# appearance, DNA, skills preview) -- it is now built lazily, the first
+	# time the player navigates to it (see MainMenu._ensure_create_screen_
+	# built), so tests that don't specifically care about that deferral need
+	# it open from the start, exactly as _ready() itself used to guarantee.
+	# The deferred-construction behavior is covered by its own dedicated
+	# tests further down, each using its own fresh, un-navigated instance
+	# rather than this shared one.
+	menu._ensure_create_screen_built()
 
 
 func after_each():
@@ -138,6 +147,87 @@ func test_pressing_load_game_emits_load_requested():
 	watch_signals(menu)
 	_root_load_button().pressed.emit()
 	assert_signal_emitted(menu, "load_requested")
+
+
+# -- deferred character-creator construction ---------------------------------
+#
+# Measured live (docs/concept/intro_splash.md, "A fourth pass"): building the
+# character creator -- 7 procedural class-icon portraits, the live diorama
+# SubViewport scene, the skill web -- inside _ready() cost ~13.5s of fully
+# synchronous, unyielded work on every ordinary boot, paid even by a player
+# who only ever clicks Load Game or Quit from the root screen. It is now
+# built lazily, the first time the player actually navigates toward it (see
+# MainMenu._ensure_create_screen_built). These tests each use their own
+# fresh, un-navigated instance rather than the shared `menu` -- `before_each`
+# forces `menu`'s own creator open already, since that is what the REST of
+# this file needs (see its own comment).
+
+func test_the_character_creator_is_not_built_until_the_player_navigates_to_it():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+
+	assert_null(fresh._create_screen, "the creator screen should not exist yet")
+	assert_null(fresh._overwrite_confirm_screen, "nor its overwrite guard")
+	assert_null(fresh._diorama, "nor the live diorama scene it holds")
+	assert_null(fresh._skills_web_view, "nor the skills web")
+	assert_true(
+		fresh._class_icon_textures.is_empty(),
+		"no class portrait should have been rendered yet"
+	)
+
+
+func test_pressing_new_game_builds_the_character_creator():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+
+	_find_button(fresh._root_screen, "New Game").pressed.emit()
+
+	assert_not_null(fresh._create_screen, "New Game should build the creator")
+	assert_true(fresh._create_screen.visible, "and show it")
+	assert_not_null(fresh._overwrite_confirm_screen)
+	assert_not_null(fresh._diorama)
+	assert_not_null(fresh._skills_web_view)
+	assert_false(
+		fresh._class_icon_textures.is_empty(),
+		"the class icon row should have rendered real portraits"
+	)
+
+
+## Host Game routes through the exact same creator screen as New Game (see
+## _begin_pressed's own doc comment on why both are equally destructive) --
+## the lazy build must not be wired to only one of the two buttons that reach
+## it.
+func test_pressing_host_game_also_builds_the_character_creator():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+
+	_find_button(fresh._root_screen, "Host Game (LAN)").pressed.emit()
+
+	assert_not_null(fresh._create_screen, "Host Game should build the creator")
+	assert_true(fresh._create_screen.visible)
+
+
+func test_navigating_to_the_creator_twice_does_not_rebuild_it():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+
+	_find_button(fresh._root_screen, "New Game").pressed.emit()
+	var first_screen := fresh._create_screen
+	var first_diorama := fresh._diorama
+
+	_find_button(fresh._create_screen, "Back").pressed.emit()
+	_find_button(fresh._root_screen, "New Game").pressed.emit()
+
+	assert_eq(fresh._create_screen, first_screen, "should reuse the already-built screen")
+	assert_eq(fresh._diorama, first_diorama, "should not rebuild the diorama")
 
 
 func test_every_axis_is_cyclable_and_stays_in_its_pool():
@@ -841,6 +931,9 @@ func _rebuild_menu_with_a_save() -> void:
 	menu.save_path = TEST_SAVE_PATH
 	menu.reroll_save_path = TEST_REROLL_SAVE_PATH
 	add_child(menu)
+	# See before_each's own comment -- every caller of this helper goes on to
+	# reach the creator (Begin lives on it).
+	menu._ensure_create_screen_built()
 
 
 func _find_button(screen: Control, label: String) -> Button:

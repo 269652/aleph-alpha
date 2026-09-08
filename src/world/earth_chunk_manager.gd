@@ -3720,6 +3720,16 @@ func current_season() -> String:
 	return _season_cycle.season_at(_world_age_seconds)
 
 
+## [0.2, 1.0]: how vigorously vegetation is growing right now (see
+## SeasonCycle.growth_modifier) -- for CreatureMarker's own real winter-
+## forage-realism fix (see docs/concept/seasonal_behavior.md, "Herbivore
+## winter-forage-realism fix"). The SAME signal step_tall_grass already
+## feeds real grass maturation with, reused directly rather than a second,
+## independent reading of the identical season.
+func current_growth_modifier() -> float:
+	return _season_cycle.growth_modifier(_world_age_seconds)
+
+
 ## The world clock, in seconds since this world began.
 func world_age_seconds() -> float:
 	return _world_age_seconds
@@ -9062,6 +9072,22 @@ func _refresh_bee_warmth() -> void:
 		var warmth := EarthwormPatch.soil_warmth(climate, season_warmth)
 		for cell in colony.hive_cells():
 			colony.record_warmth(cell, warmth)
+	# Wild bee nests get the identical real climate+season warmth signal --
+	# same soil, same real mechanism -- driving WildBeePatch's own
+	# die-off/re-hatch transition (see docs/concept/seasonal_behavior.md,
+	# "Wild bee die-off / re-hatch"). A separate loop rather than folding
+	# into the one above: _bee_colonies and _wild_bee_patches are two
+	# independently-keyed dictionaries, a chunk can hold either, both, or
+	# neither.
+	for chunk_coord in _wild_bee_patches:
+		var patch: WildBeePatch = _wild_bee_patches[chunk_coord]
+		var centre_tile: Vector2i = chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
+		var climate := clampf(
+			generator.temperature_at_global(centre_tile.x, centre_tile.y), 0.0, 1.0
+		)
+		var warmth := EarthwormPatch.soil_warmth(climate, season_warmth)
+		for cell in patch.nest_cells():
+			patch.record_warmth(cell, warmth)
 
 
 ## Inches every surfaced worm along, every frame, and keeps its animation
@@ -11521,7 +11547,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_pollinator_multiplier_for(chunk_coord),
 		self,
 		_ecosystem.robin_population(chunk_coord),
-		_ecosystem.sparrow_population(chunk_coord)
+		_ecosystem.sparrow_population(chunk_coord),
+		current_season()
 	)
 	_loaded_piscivore_birds[chunk_coord] = _piscivore_bird_renderer.spawn_piscivore_birds(
 		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self,

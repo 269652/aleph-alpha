@@ -2562,6 +2562,19 @@ func _visible_food(kind: String) -> Array:
 ## a mushroom in place, the same real primitive the crushed/bitten-art
 ## pass already gave a decomposer's own bite (see docs/concept/
 ## mushrooms.md "Animals can find and eat wild mushrooms").
+## How vigorously anything is actually growing right now, [0.2, 1.0] -- see
+## EarthChunkManager.current_growth_modifier, docs/concept/
+## seasonal_behavior.md's "Herbivore winter-forage-realism fix". Guarded
+## the same way _process's own ambient_warmth read is: a world that can't
+## answer (most of this file's own tests, and every real caller that
+## predates this feature) reads as full, undiminished growth, so nothing
+## already relying on FOOD_UNDERFOOT's old flat behavior changes.
+func _current_growth_modifier() -> float:
+	if _world == null or not _world.has_method("current_growth_modifier"):
+		return 1.0
+	return _world.current_growth_modifier()
+
+
 func _take_forage_bite() -> void:
 	if not _has_forage_target:
 		return
@@ -2608,6 +2621,21 @@ func _take_forage_bite() -> void:
 			_apply_nutrient_bite(species)
 		elif _forage_kind == GrazerForaging.FOOD_MUSHROOM:
 			_apply_nutrient_bite(species, float(mushroom_stages_applied) / float(MushroomBiting.MAX_BITE_STAGES))
+		elif _forage_kind == GrazerForaging.FOOD_UNDERFOOT:
+			# See docs/concept/seasonal_behavior.md, "Herbivore winter-
+			# forage-realism fix": unlike a real, specific grass tuft/
+			# fruit/seed/worm (each already gated by its own real
+			# seasonal presence), FOOD_UNDERFOOT is "nothing specific in
+			# sight, crop whatever is underfoot" -- and used to grant a
+			# full day's BMR regardless of season, silently defeating the
+			# real seasonal throttle SeasonCycle.growth_modifier already
+			# applies to tall-grass maturation elsewhere. The hunger
+			# DRIVE is still fully satisfied (_needs.feed()) -- the
+			# animal did just spend a real bout with its head down -- but
+			# the real caloric/mass yield of that bout now scales with
+			# how vigorously anything is actually growing right now.
+			_needs.feed()
+			_ensure_metabolism().feed_hunger_relief(_current_growth_modifier())
 		else:
 			_needs.feed()
 			# A real intake event for the SAME unified mass the crush

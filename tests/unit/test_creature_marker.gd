@@ -1163,6 +1163,87 @@ func test_hungry_herbivore_grazes_when_standing_on_a_food_biome():
 	assert_false(marker._needs.is_hungry(), "grazing on food terrain should sate hunger")
 
 
+## A StubWorld that also answers current_growth_modifier (see
+## EarthChunkManager.current_growth_modifier) -- the same real seasonal
+## signal step_tall_grass already throttles real grass maturation with.
+class StubWorldWithGrowthModifier:
+	extends StubWorld
+	var growth_modifier := 1.0
+	func current_growth_modifier() -> float:
+		return growth_modifier
+
+
+func _herbivore_on(world) -> CreatureMarker:
+	var m := CreatureMarker.new()
+	m.home = Vector2(100, 100)
+	m.position = Vector2(100, 100)
+	m.wander_seed = 5
+	m.info = CreatureInfo.new("herbivore")
+	add_child_autofree(m)
+	m.setup(world, TILE_SIZE)
+	return m
+
+
+## Grazes a fresh hungry herbivore to exactly one landed FOOD_UNDERFOOT
+## bite (same "commit frame, then process until fed" shape as
+## test_hungry_herbivore_grazes_when_standing_on_a_food_biome" above) and
+## returns how much real mass that one bite actually gained.
+func _underfoot_bite_mass_gain(world) -> float:
+	var creature := _herbivore_on(world)
+	creature._needs.hunger = 1.0
+	var mass_before := creature.current_mass_kg()
+	creature._process(0.2)
+	for _i in 600:
+		creature._process(1.0 / 60.0)
+		if not creature._needs.is_hungry():
+			break
+	return creature.current_mass_kg() - mass_before
+
+
+## See docs/concept/seasonal_behavior.md, "Herbivore winter-forage-realism
+## fix": SeasonCycle.growth_modifier already throttles real tall-grass
+## maturation in winter, and a real grass/fruit/seed/worm search already
+## honestly reflects that -- but the FOOD_UNDERFOOT fallback (an animal
+## standing on living ground with nothing specific in sight) used to grant
+## a full day's BMR regardless of season, silently defeating the seasonal
+## throttle the rest of the chain was already built to produce. This test
+## is the real, previously-missing consequence: bare winter ground should
+## feed less than a lush summer one.
+func test_underfoot_grazing_gains_less_mass_in_a_low_growth_season():
+	var winter := StubWorldWithGrowthModifier.new()
+	winter.biome = "grassland"
+	winter.growth_modifier = 0.2  # SeasonCycle.growth_modifier's own real floor
+	var summer := StubWorldWithGrowthModifier.new()
+	summer.biome = "grassland"
+	summer.growth_modifier = 1.0
+
+	var winter_gain := _underfoot_bite_mass_gain(winter)
+	var summer_gain := _underfoot_bite_mass_gain(summer)
+
+	assert_lt(
+		winter_gain, summer_gain,
+		"grazing bare winter ground should gain less real mass than a lush summer meadow"
+	)
+
+
+## A world that answers no growth-modifier signal at all (a plain
+## StubWorld, and every real caller that predates this feature) must keep
+## every pre-existing herbivore's exact old feeding behavior -- the same
+## "safe default preserves old behavior" convention this session's other
+## seasonal-behavior phases already established.
+func test_underfoot_grazing_is_unaffected_when_the_world_reports_no_growth_modifier():
+	var plain := StubWorld.new()
+	plain.biome = "grassland"
+	var full := StubWorldWithGrowthModifier.new()
+	full.biome = "grassland"
+	full.growth_modifier = 1.0
+
+	assert_almost_eq(
+		_underfoot_bite_mass_gain(plain), _underfoot_bite_mass_gain(full), 0.001,
+		"omitting the growth-modifier signal entirely must not silently change a pre-existing caller's feeding"
+	)
+
+
 ## "search_water"/"search_food" (roaming to LOOK for a resource, nothing
 ## sensed yet) used to bypass caution-radius avoidance entirely -- only
 ## ordinary idle wander routed through it (see _wander_step/ThreatAvoidant-

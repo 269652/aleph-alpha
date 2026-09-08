@@ -16789,7 +16789,10 @@ both still real, both still fully synchronous, and neither is yield-split —
 this pass only guarantees a presented frame exists between the end of that
 freeze and the intro appearing, it does not make the freeze itself shorter
 or the window responsive during it. Windows still greys the window out for
-the same real duration either way.
+the same real duration either way. **Both since addressed:** see "The boot
+freeze is mostly fixed" below for the heavy setup, and "MainMenu's own
+construction deferred until navigated to" further below for
+`_show_main_menu()`'s own cost.
 
 ## Beehive minimum/starting size doubled (2026-09-08)
 
@@ -17045,7 +17048,10 @@ too.
 **Honest remaining gap:** `_show_main_menu()`'s own ~11-19s cost
 (flagged, not fixed, in the prior intro-splash pass) is untouched here —
 a separate, likely-fixable slow spot (background image load or
-`MainMenu` construction) for a future pass, not this one.
+`MainMenu` construction) for a future pass, not this one. **Fixed since:**
+see "MainMenu's own construction deferred until navigated to" below —
+`MainMenu` construction, specifically its character creator, was the
+whole cost; the background image load was not.
 
 ## A fifth pass on the intro: its own Control was stuck at size=(0,0) (`concept/intro_splash.md`, 2026-09-08)
 
@@ -17107,7 +17113,255 @@ genuinely interact at the engine level. `test_intro_splash.gd` 6/6,
 splash_after_load_fanout.gd` 5/5, all re-verified directly against the
 merged `main` state.
 
-## A sixth pass on the intro: shrunk to the character panel's footprint (`concept/intro_splash.md`, 2026-09-08)
+### Seasonal behavior, phase 1: ant/honeybee forager cold-gate (2026-09-08)
+
+Requested live: *"revisit every animal/species and wire/implement proper
+season behaviour/activity... just make it realistic and biologically
+motivated."* See `docs/concept/seasonal_behavior.md` for the full,
+multi-phase spec this opens (every live species, organized by real-world
+winter strategy) — this entry covers phase 1 only.
+
+✅ **`AntColony`/`BeeColony` foragers now actually stay home in winter, not
+just eat their stores slower.** Both files already throttled food/honey
+depletion via `dormancy_multiplier_at()` (floored at `DORMANCY_FLOOR :=
+0.2`), a real, tested mechanism — but `should_forage()` in both was a flat
+`PixelNoise`/`FORAGE_CHANCE` roll with no warmth term at all, so a fully
+dormant mound/hive still dispatched foragers at the ordinary rate: the
+literal opposite of "cluster deep in the mound and barely feed at all."
+Fixed by scaling `FORAGE_CHANCE` by `dormancy_multiplier_at(cell)` in both
+`should_forage()` implementations. New tests in `test_ant_colony.gd`/
+`test_bee_colony.gd` build two colonies from the identical seed (so
+`should_forage`'s PixelNoise roll is byte-identical at every step for
+both) and confirm the cold instance's forage-attempt count is measurably
+lower than the warm one's — a deterministic-by-construction comparison
+(cold's effective threshold is always ≤ warm's against the same roll), not
+a statistical one. Confirmed red first (both counts equal, since the
+un-fixed code ignores warmth entirely), green after.
+`test_ant_colony.gd` 98/98, `test_bee_colony.gd` 48/48. Does not touch
+`_deplete_food` at all, so the existing extinction-prevention fix this
+file's own "cold soil: real dormancy" section already documents (a
+reported live "no ant mounds at all, fresh start, winter" bug) is
+unaffected — this only gates whether a forage WAVE is dispatched
+(`EarthChunkManager.step_ants`), never the upkeep math.
+
+## MainMenu's own construction deferred until navigated to (`concept/intro_splash.md`, 2026-09-08)
+
+Follow-up to the fourth pass's own finding, above: `_show_main_menu()`
+cost a further 13,534ms of fully synchronous work on top of the (since
+mostly-fixed) heavy setup, flagged there but not investigated. This pass
+is that investigation.
+
+**Where the cost was, confirmed by reading `MainMenu._ready()`
+(`scenes/main_menu.gd`), not just re-measuring it:** it eagerly built all
+four of its screens -- root, character creator, join, overwrite-confirm
+-- every boot, regardless of which one (if any) the player would ever
+open. The creator alone accounts for nearly all of it: 7 procedural
+class-icon portraits (one `ProceduralCharacterSprite.generate_hero_
+portrait_texture` call per `ClassArchetype`), a live diorama `SubViewport`
+scene (`CharacterPreviewDiorama`), and the skill web preview
+(`SkillWebView`). A player who lands on the root screen and clicks Load
+Game or Quit never needed any of it built at all.
+
+**The fix:** build the creator lazily, the first time the player actually
+navigates toward it, instead of during `_ready()`. `_ready()` now only
+builds the root and join screens (both cheap). A new `_ensure_create_
+screen_built()` builds `_create_screen`/`_overwrite_confirm_screen`
+together the first time either is needed -- idempotent, `_create_screen`
+being non-null is its own guard -- and `_open_create_screen()` wraps it
+with the `_show()` call the New Game/Host Game buttons already made
+directly. `_screens()` (the one list `_show()`/`_ready()` both already
+share) now filters out the two screens that may still be null, since
+`_ready()`'s own closing `_show(_root_screen)` runs before either is ever
+built.
+
+**Strict TDD.** Four new tests in `test_main_menu.gd` drove this,
+confirmed red against the unmodified eager-build code first (the creator,
+diorama, skill web and class-icon cache were all already populated
+immediately after `_ready()`, with no navigation), green after. The
+file's other ~60 pre-existing tests exercise the creator's own mechanics
+and all assumed it was already open; rather than rewrite them,
+`before_each`/`_rebuild_menu_with_a_save` now call `_ensure_create_
+screen_built()` explicitly, so their fixture does exactly what `_ready()`
+itself used to guarantee and every one keeps the coverage it had before.
+71/72 in the file pass; the one failure
+(`test_the_diorama_fits_within_the_first_unscrolled_view_of_the_
+character_tab`) is confirmed pre-existing and unrelated -- identical
+failure, unmoved by anything this pass touched -- flagged separately
+rather than folded into this fix.
+
+**Measured, not guessed -- real, timestamped, before AND after, both in
+isolation and live.** Isolated (`MainMenu.new()` + `add_child()` alone,
+headless GUT, no navigation): **12,713ms before this fix, 4ms after** --
+landing right next to the fourth pass's own 13,534ms `_show_main_menu()`
+figure, confirming the creator really was nearly the entire cost. A real,
+non-headless, full interactive boot (ordinary launch path, no `--solo`,
+`--rendering-driver opengl3`), instrumented the same flushed-timestamp way
+as every prior pass in this doc, confirmed the fix in situ: `_show_main_
+menu()` itself now costs **38ms** in a real boot sequence, and a scripted
+New Game click immediately afterward measured the now-deferred build at
+**11,787ms**, with the resulting creator confirmed fully built and
+visible (`_create_screen`/`_diorama`/`_skills_web_view` all non-null, the
+class-icon cache populated) -- not merely constructed in name. The cost
+is real and has not vanished; it now falls only on a player who actually
+asks for it, off the boot path every player pays regardless.
+
+**Honest scope note:** clicking New Game/Host Game still incurs this
+~10-12s cost fully synchronously -- this pass deferred WHEN the build
+runs, not how long it takes. Yield-splitting `_build_create_screen()`
+itself (mirroring `update_with_progress`'s coroutine shape, or gating it
+behind the two-`process_frame` convention `_play_intro_splash()`/
+`_show_loading_overlay()` already use) is a real, deliberately deferred
+follow-up, not attempted here.
+
+### Seasonal behavior, phase 2: wild bee die-off / re-hatch (2026-09-08)
+
+✅ **`WildBeePatch` now models the real generational cycle solitary bees
+actually have**, not a smooth activity throttle like its honeybee/ant
+siblings — real solitary bees' adults die off before a freezing winter;
+the population survives as brood sealed in the nest's own cells, and a
+NEW generation of adults emerges the following spring. `WildBeePatch` had
+zero season awareness at all before this (no warmth tracking, no
+`COLD_CUTOFF` reference).
+
+Added `record_warmth`/`brood_at`/`is_dormant_at` plus a `_step_dormancy`
+transition in `advance()`: crossing below `EarthwormPatch.COLD_CUTOFF`
+banks the nest's current resident count as hidden brood and zeroes
+visible residents (no overwinter brood mortality modelled — a named
+simplification); crossing back above it re-hatches residents directly
+from that banked brood — inheriting exactly how good last season was,
+not a fixed reset. `should_forage` now also short-circuits false while
+dormant (an empty nest has no one home to send out), mirroring phase 1's
+ant/bee fix. Wired into the real game via
+`EarthChunkManager._refresh_bee_warmth`, extended with a second loop
+feeding `_wild_bee_patches` the identical real climate+season warmth
+signal honeybee hives already get (no existing wiring-level test covers
+this for ant/bee's own identical wiring either, so none was added here —
+verified by direct reading plus a live sanity launch instead).
+
+New tests grow a nest to its real cap via the existing forage-success
+drive-to-cap pattern, then confirm: dormancy banks that exact count as
+brood and zeroes residents; a dormant nest never forages across 500
+ticks; warming re-hatches residents to exactly the banked value.
+`test_wild_bee_patch.gd` 24/24.
+
+### Seasonal behavior, phase 3: true butterflies stop flying in winter (2026-09-08)
+
+✅ **Monarchs/swallowtails/blue morphos no longer spawn once winter
+genuinely arrives.** Real adult butterflies of these species do not
+survive a freezing winter; the population overwinters as pupae. Mirrors
+`CaterpillarRenderer.ACTIVE_SEASONS`'s own proven spawn-time gate exactly
+(checked once at chunk load, not per-frame) rather than building a new
+population model — true butterflies stay purely decorative, a separate,
+already-named gap in `ecosystem_dynamics.md`.
+
+`AmbientFlyerRenderer.spawn_ambient_flyers` gains a trailing
+`season: String = "summer"` parameter and a new `BUTTERFLY_ACTIVE_
+SEASONS := {"spring": true, "summer": true, "autumn": true}` table (autumn
+included — real adult butterflies fly well into it; only winter genuinely
+grounds them), gating the existing butterfly-spawn branch alongside its
+biome check. The default value follows the exact "safe default preserves
+old behavior" convention `robin_population`/`sparrow_population` already
+established on this same function — every one of the ~25 pre-existing call
+sites across `test_ambient_flyer_renderer.gd` keeps compiling and keeps
+spawning butterflies unchanged. Wired into the real game: `EarthChunkManager`'s
+spawn call now passes `current_season()`.
+
+New tests confirm a qualifying chunk spawns its guaranteed minimum in an
+active season, spawns zero true butterflies in winter, and that omitting
+`season` entirely (the pre-existing call shape) still spawns butterflies —
+confirmed red first (`Too many arguments for "spawn_ambient_flyers()"
+call` — the same "GUT swallows this as a discovery warning, not a
+failure" trap this session already documented, caught immediately here
+via `--check-only` rather than a silent skip), green after.
+`test_ambient_flyer_renderer.gd` 56/56.
+
+### Seasonal behavior, phase 4: decomposer "bug" cold-slowdown (2026-09-08)
+
+✅ **Ants/carrion bugs (`DecomposerMarker`) now genuinely slow down in cold
+soil**, mirroring real ground beetles sheltering and moving far less in
+winter. Unlike `AntColony`/`BeeColony`, this marker has no aggregate
+population/economy at all to throttle a food-store depletion rate against
+(stateless per-chunk spawn, confirmed zero warmth/season code beforehand)
+— so the individual marker's own wander/approach speed is what responds
+instead, the same "activity toggles with cold, headcount doesn't" shape
+`EarthwormPatch` already established.
+
+New static `activity_multiplier_for(warmth)` reuses `EarthwormPatch.
+COLD_CUTOFF`/`MILD_WARMTH`'s exact ramp and `DORMANCY_FLOOR := 0.2` — the
+same value AntColony/BeeColony/WildBeePatch all already use for the
+identical "never literally zero" reasoning, restated locally since this
+marker has no shared economy base class to import a constant from (see
+its own class doc comment on why it is deliberately not built on
+`CreatureMarker`'s stack either). Applied post-hoc to the computed wander
+and approach deltas in `_step_seeking`/`_step_approaching`, the exact
+same "don't touch the shared `AmbientFlyerMovement` algorithm" technique
+the toxic-mushroom Weakened effect already uses on this same marker.
+Reads real warmth via the SAME optional `_world.ambient_warmth()` this
+marker already has wired for leaf-litter foraging — `EarthChunkManager`
+already calls `.setup(self)` on every spawned decomposer, so this needed
+**no new production wiring at all**, only the marker's own behavior.
+
+TDD: new tests confirm the multiplier is undiminished at full warmth and
+never reaches a hard zero, a cold decomposer wanders measurably slower
+than a warm one from the identical setup (mirroring the existing
+Weakened-mushroom wander-speed comparison test's own shape), and a
+decomposer with no `_world` set at all keeps its exact prior speed (the
+same "safe default preserves old behavior" guard this session's other
+phases already added). Confirmed red first (`activity_multiplier_for()`
+did not exist), green after. `test_decomposer_marker.gd` 55/55.
+
+### Seasonal behavior, phase 5: herbivore winter-forage-realism fix (2026-09-08)
+
+✅ **The highest-leverage change in the whole seasonal-behavior pass:**
+`SeasonCycle.growth_modifier` already throttles real tall-grass
+maturation in winter (`EarthChunkManager.step_tall_grass`), and a real
+grass/fruit/seed/worm search already only returns mature, genuinely
+present food — so that half of the chain was already seasonally honest.
+The break: when a hungry grazer finds nothing via that real search,
+`CreatureMarker._look_for_a_bite()`'s `FOOD_UNDERFOOT` fallback ("nothing
+specific in sight, crop whatever is underfoot") granted a full day's BMR
+(`feed_hunger_relief(1.0)`) on ANY food-capable biome tile regardless of
+season — silently defeating the seasonal throttle the rest of the chain
+was already built to produce.
+
+New `EarthChunkManager.current_growth_modifier()` mirrors `current_
+season()`'s exact shape, reusing the identical `SeasonCycle.growth_
+modifier` reading `step_tall_grass` already computes. `_take_forage_
+bite()`'s `FOOD_UNDERFOOT` case is now split out from the other flat-
+relief forage kinds: the hunger DRIVE is still fully satisfied
+(`_needs.feed()` — the animal did spend a real head-down bout), but the
+real caloric/mass yield now scales by the current growth modifier, so
+grazing bare winter ground genuinely gains less real mass than a lush
+summer meadow.
+
+This one change gives every herbivore species — present (deer, boar,
+sheep, horse, goat, camel, reindeer, tapir, mouse, squirrel...) and any
+added later (see phase 7's alpaca below) — real winter hardship for free,
+with zero per-species code, since `FOOD_UNDERFOOT` is the shared generic
+fallback every species' foraging already funnels through when nothing
+specific is in sight.
+
+**Explicit scope cut** (named in `docs/concept/seasonal_behavior.md`, not
+silently decided): no starvation-death path added here. Mass already
+drops under sustained deficit (pre-existing `Metabolism`/
+`current_mass_kg()` behavior) — a real, if quiet, consequence. Whether
+hunger should ever kill a creature outright is a separate, bigger design
+decision than "seasonal behavior."
+
+TDD: new `StubWorldWithGrowthModifier` (mirrors the file's own
+`StubWorldWithSlope`/`StubWorldWithFreshWater` "extend StubWorld, answer
+one more optional method" convention) plus a shared `_underfoot_bite_
+mass_gain` helper reusing the existing grazing-loop shape from
+`test_hungry_herbivore_grazes_when_standing_on_a_food_biome`. Confirms a
+winter world (`growth_modifier = 0.2`, `SeasonCycle`'s own real floor)
+gains measurably less mass from one landed underfoot bite than a summer
+one (`1.0`), and that a plain `StubWorld` answering no growth-modifier
+signal at all (every pre-existing caller) keeps the exact old flat
+behavior. Confirmed red first (winter and summer gained identical mass —
+`0.2199 == 0.2199`, the exact bypass being fixed), green after.
+`test_creature_marker.gd` 231/231.
+
+## A seventh pass on the intro: shrunk to the character panel's footprint (`concept/intro_splash.md`, 2026-09-08)
 
 Every prior pass fixed a real bug that stopped the intro from rendering at
 all. Once it reliably did, reported live as a new, different complaint:
@@ -17126,11 +17380,12 @@ constant (`Vector2(880, 620)`, centered), matching `MainMenu.PANEL_SIZE`
 (`CharacterPreviewDiorama` and the rest of the create-screen's build
 machinery) just to read one constant isn't worth risking on the intro's
 own boot-critical load path, given how expensive this exact area has
-already proven to be (see "The boot freeze is mostly fixed" above).
-`_display` also dropped `PRESET_FULL_RECT` in favor of plain default
-anchors with a direct size/position write, sidestepping the fifth pass's
-whole "non-equal opposite anchors get overridden after `_ready()`" bug
-class entirely rather than extending it with a second `set_deferred`.
+already proven to be (see the sixth pass immediately above, which fixed
+exactly that expensive path for a different reason). `_display` also
+dropped `PRESET_FULL_RECT` in favor of plain default anchors with a
+direct size/position write, sidestepping the fifth pass's whole
+"non-equal opposite anchors get overridden after `_ready()`" bug class
+entirely rather than extending it with a second `set_deferred`.
 
 Covered by a new `test_display_is_sized_and_centered_to_the_character_
 panel_size` in `test_intro_splash.gd` (confirmed red against a missing
@@ -17140,4 +17395,4 @@ same-frame read. `test_intro_splash.gd` 7/7, plus
 `test_intro_splash_sheet.gd`, `test_intro_splash_sequencer.gd`,
 `test_world_play_intro_splash_frame_gate.gd`, and
 `test_world_intro_splash_after_load_fanout.gd` all re-run clean —
-no regression in the timing/gating mechanics the prior five passes fixed.
+no regression in the timing/gating mechanics the prior six passes fixed.
