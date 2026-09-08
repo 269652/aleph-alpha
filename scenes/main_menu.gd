@@ -226,11 +226,19 @@ var _skill_tree := SkillTree.new()
 ## creator, re-framed onto whichever class is picked rather than rebuilt.
 var _skill_web := SkillWeb.new()
 
+## The shared parent every screen in _screens() is added to, side by side
+## (see _ready/_ensure_create_screen_built) -- kept as a field, not a local
+## of _ready() alone, since _ensure_create_screen_built adds to it later too.
+var _stack: Control
+
 var _root_screen: Control
+## Deliberately left null by _ready() -- built the first time the player
+## navigates toward it (New Game/Host Game). See _ensure_create_screen_built.
 var _create_screen: Control
 var _join_screen: Control
 ## Shown instead of starting whenever Begin would overwrite an existing save
-## -- see _begin_pressed.
+## -- see _begin_pressed. Built together with _create_screen, for the same
+## deferred-construction reason (see _ensure_create_screen_built).
 var _overwrite_confirm_screen: Control
 
 var _pending_mode := "single"
@@ -326,20 +334,23 @@ func _ready() -> void:
 		margin.add_theme_constant_override("margin_" + side, 22)
 	add_child(margin)
 
-	var stack := Control.new()
-	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	margin.add_child(stack)
+	_stack = Control.new()
+	_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.add_child(_stack)
 
+	# _create_screen/_overwrite_confirm_screen are deliberately NOT built here
+	# -- see _ensure_create_screen_built's own doc comment. Measured live
+	# (docs/concept/intro_splash.md, "A fourth pass"): building the character
+	# creator eagerly -- 7 procedural class-icon portraits, the live diorama
+	# SubViewport scene, the skill web -- cost ~13.5s of fully synchronous,
+	# unyielded work on every ordinary boot, paid even by a player who only
+	# ever clicks Load Game or Quit from this root screen.
 	_root_screen = _build_root_screen()
-	_create_screen = _build_create_screen()
 	_join_screen = _build_join_screen()
-	# Built after _create_screen: "Keep my save" goes back to it, so it has to
-	# exist first.
-	_overwrite_confirm_screen = _build_overwrite_confirm_screen()
 	for s in _screens():
 		s.set_anchors_preset(Control.PRESET_FULL_RECT)
-		stack.add_child(s)
+		_stack.add_child(s)
 	_show(_root_screen)
 
 	# PRESET_CENTER alone only re-anchors the reference point to 0.5/0.5/0.5/
@@ -380,10 +391,10 @@ func _build_root_screen() -> Control:
 
 	buttons.add_child(_menu_button("New Game", func():
 		_pending_mode = "single"
-		_show(_create_screen), true))
+		_open_create_screen(), true))
 	buttons.add_child(_menu_button("Host Game (LAN)", func():
 		_pending_mode = "host"
-		_show(_create_screen)))
+		_open_create_screen()))
 	buttons.add_child(_menu_button("Join Game", func(): _show(_join_screen)))
 	# Only offered when there's actually something to load -- no disabled
 	# button pointing nowhere (see docs/concept/persistence.md). Bypasses the
@@ -395,6 +406,45 @@ func _build_root_screen() -> Control:
 
 
 # -- character creation -------------------------------------------------------
+
+## The New Game/Host Game seam (see _build_root_screen): builds the creator
+## on first use, then shows it -- every subsequent call just shows the
+## already-built screen. Kept separate from _ensure_create_screen_built so a
+## future caller that needs the screen built WITHOUT also switching to it
+## (none exists yet) has a seam to call instead.
+func _open_create_screen() -> void:
+	_ensure_create_screen_built()
+	_show(_create_screen)
+
+
+## Builds the character creator and its overwrite-confirm screen the first
+## time the player actually navigates toward them, rather than during
+## _ready(). Measured live (docs/concept/intro_splash.md, "A fourth pass"):
+## building this eagerly cost ~13.5s of fully synchronous, unyielded work on
+## every ordinary boot -- 7 procedural class-icon portraits
+## (_build_class_icon_row), the live diorama SubViewport scene
+## (_build_diorama_view), and the skill web (_build_skills_tab) -- paid even
+## by a player who only ever clicks Load Game or Quit from the root screen.
+## Idempotent: a second New Game/Host Game click, or returning from the
+## overwrite-confirm screen, must not rebuild it -- _create_screen itself is
+## the guard, exactly like _class_icon_texture's own per-archetype cache.
+func _ensure_create_screen_built() -> void:
+	if _create_screen != null:
+		return
+	_create_screen = _build_create_screen()
+	# Built after _create_screen: "Keep my save" goes back to it, so it has to
+	# exist first.
+	_overwrite_confirm_screen = _build_overwrite_confirm_screen()
+	for s in [_create_screen, _overwrite_confirm_screen]:
+		s.set_anchors_preset(Control.PRESET_FULL_RECT)
+		# Explicitly hidden, matching every other screen's state the instant
+		# after _ready()'s own _show(_root_screen) call -- _open_create_screen
+		# shows _create_screen right after calling this, but a caller that
+		# only needs the screen built (a test fixture, see test_main_menu.gd's
+		# before_each) must not leave two screens simultaneously visible.
+		s.visible = false
+		_stack.add_child(s)
+
 
 func _build_create_screen() -> Control:
 	var box := VBoxContainer.new()
@@ -1560,8 +1610,14 @@ func _style_tabs(tabs: TabContainer) -> void:
 ## them to the stack. ONE list, read by both _ready and _show: while each kept
 ## its own hardcoded copy, adding a screen to one and not the other either
 ## never put it in the tree or left it visible on top of whatever came next.
+## Filters out nulls: _create_screen/_overwrite_confirm_screen are built
+## lazily (see _ensure_create_screen_built) and stay null until the player
+## first navigates toward them -- _show(_root_screen) at the end of _ready()
+## runs well before that, and must not choke on the two not built yet.
 func _screens() -> Array:
-	return [_root_screen, _create_screen, _join_screen, _overwrite_confirm_screen]
+	return [_root_screen, _create_screen, _join_screen, _overwrite_confirm_screen].filter(
+		func(s): return s != null
+	)
 
 
 func _show(screen: Control) -> void:

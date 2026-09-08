@@ -16789,7 +16789,10 @@ both still real, both still fully synchronous, and neither is yield-split —
 this pass only guarantees a presented frame exists between the end of that
 freeze and the intro appearing, it does not make the freeze itself shorter
 or the window responsive during it. Windows still greys the window out for
-the same real duration either way.
+the same real duration either way. **Both since addressed:** see "The boot
+freeze is mostly fixed" below for the heavy setup, and "MainMenu's own
+construction deferred until navigated to" further below for
+`_show_main_menu()`'s own cost.
 
 ## Beehive minimum/starting size doubled (2026-09-08)
 
@@ -17045,7 +17048,10 @@ too.
 **Honest remaining gap:** `_show_main_menu()`'s own ~11-19s cost
 (flagged, not fixed, in the prior intro-splash pass) is untouched here —
 a separate, likely-fixable slow spot (background image load or
-`MainMenu` construction) for a future pass, not this one.
+`MainMenu` construction) for a future pass, not this one. **Fixed since:**
+see "MainMenu's own construction deferred until navigated to" below —
+`MainMenu` construction, specifically its character creator, was the
+whole cost; the background image load was not.
 
 ## A fifth pass on the intro: its own Control was stuck at size=(0,0) (`concept/intro_splash.md`, 2026-09-08)
 
@@ -17137,3 +17143,72 @@ file's own "cold soil: real dormancy" section already documents (a
 reported live "no ant mounds at all, fresh start, winter" bug) is
 unaffected — this only gates whether a forage WAVE is dispatched
 (`EarthChunkManager.step_ants`), never the upkeep math.
+
+## MainMenu's own construction deferred until navigated to (`concept/intro_splash.md`, 2026-09-08)
+
+Follow-up to the fourth pass's own finding, above: `_show_main_menu()`
+cost a further 13,534ms of fully synchronous work on top of the (since
+mostly-fixed) heavy setup, flagged there but not investigated. This pass
+is that investigation.
+
+**Where the cost was, confirmed by reading `MainMenu._ready()`
+(`scenes/main_menu.gd`), not just re-measuring it:** it eagerly built all
+four of its screens -- root, character creator, join, overwrite-confirm
+-- every boot, regardless of which one (if any) the player would ever
+open. The creator alone accounts for nearly all of it: 7 procedural
+class-icon portraits (one `ProceduralCharacterSprite.generate_hero_
+portrait_texture` call per `ClassArchetype`), a live diorama `SubViewport`
+scene (`CharacterPreviewDiorama`), and the skill web preview
+(`SkillWebView`). A player who lands on the root screen and clicks Load
+Game or Quit never needed any of it built at all.
+
+**The fix:** build the creator lazily, the first time the player actually
+navigates toward it, instead of during `_ready()`. `_ready()` now only
+builds the root and join screens (both cheap). A new `_ensure_create_
+screen_built()` builds `_create_screen`/`_overwrite_confirm_screen`
+together the first time either is needed -- idempotent, `_create_screen`
+being non-null is its own guard -- and `_open_create_screen()` wraps it
+with the `_show()` call the New Game/Host Game buttons already made
+directly. `_screens()` (the one list `_show()`/`_ready()` both already
+share) now filters out the two screens that may still be null, since
+`_ready()`'s own closing `_show(_root_screen)` runs before either is ever
+built.
+
+**Strict TDD.** Four new tests in `test_main_menu.gd` drove this,
+confirmed red against the unmodified eager-build code first (the creator,
+diorama, skill web and class-icon cache were all already populated
+immediately after `_ready()`, with no navigation), green after. The
+file's other ~60 pre-existing tests exercise the creator's own mechanics
+and all assumed it was already open; rather than rewrite them,
+`before_each`/`_rebuild_menu_with_a_save` now call `_ensure_create_
+screen_built()` explicitly, so their fixture does exactly what `_ready()`
+itself used to guarantee and every one keeps the coverage it had before.
+71/72 in the file pass; the one failure
+(`test_the_diorama_fits_within_the_first_unscrolled_view_of_the_
+character_tab`) is confirmed pre-existing and unrelated -- identical
+failure, unmoved by anything this pass touched -- flagged separately
+rather than folded into this fix.
+
+**Measured, not guessed -- real, timestamped, before AND after, both in
+isolation and live.** Isolated (`MainMenu.new()` + `add_child()` alone,
+headless GUT, no navigation): **12,713ms before this fix, 4ms after** --
+landing right next to the fourth pass's own 13,534ms `_show_main_menu()`
+figure, confirming the creator really was nearly the entire cost. A real,
+non-headless, full interactive boot (ordinary launch path, no `--solo`,
+`--rendering-driver opengl3`), instrumented the same flushed-timestamp way
+as every prior pass in this doc, confirmed the fix in situ: `_show_main_
+menu()` itself now costs **38ms** in a real boot sequence, and a scripted
+New Game click immediately afterward measured the now-deferred build at
+**11,787ms**, with the resulting creator confirmed fully built and
+visible (`_create_screen`/`_diorama`/`_skills_web_view` all non-null, the
+class-icon cache populated) -- not merely constructed in name. The cost
+is real and has not vanished; it now falls only on a player who actually
+asks for it, off the boot path every player pays regardless.
+
+**Honest scope note:** clicking New Game/Host Game still incurs this
+~10-12s cost fully synchronously -- this pass deferred WHEN the build
+runs, not how long it takes. Yield-splitting `_build_create_screen()`
+itself (mirroring `update_with_progress`'s coroutine shape, or gating it
+behind the two-`process_frame` convention `_play_intro_splash()`/
+`_show_loading_overlay()` already use) is a real, deliberately deferred
+follow-up, not attempted here.
