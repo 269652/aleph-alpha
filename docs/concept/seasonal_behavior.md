@@ -271,7 +271,17 @@ established) and a new `BUTTERFLY_ACTIVE_SEASONS := {"spring": true,
 "summer": true, "autumn": true}` table, mirroring `CaterpillarRenderer.
 ACTIVE_SEASONS`'s exact spawn-time-gate shape. Wired into the real game
 via `EarthChunkManager`'s spawn call now passing `current_season()`.
-⬜ Decomposer "bug" cold-slowdown
+✅ Decomposer "bug" cold-slowdown — `DecomposerMarker` gains a static
+`activity_multiplier_for(warmth)` (same `EarthwormPatch.COLD_CUTOFF`/
+`MILD_WARMTH` ramp, same `DORMANCY_FLOOR := 0.2` value as AntColony/
+BeeColony/WildBeePatch, restated locally since this marker has no shared
+economy base class to import it from) applied post-hoc to both wander and
+approach movement, the same way toxic-mushroom Weakened already scales
+movement without touching the shared `AmbientFlyerMovement` algorithm.
+Reads real warmth via the SAME optional `_world.ambient_warmth()` this
+marker already has wired for leaf-litter foraging (`EarthChunkManager`
+already calls `.setup(self)` on every spawned decomposer) — no new
+production wiring needed, only the marker's own behavior changed.
 ⬜ Herbivore winter-forage-realism fix
 ⬜ Squirrel/mouse cache-preference
 ⬜ Alpaca as a real, live grazer

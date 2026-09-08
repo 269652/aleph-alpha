@@ -56,6 +56,7 @@ const CreatureMass = preload("res://src/world/creature_mass.gd")
 const MushroomEffect = preload("res://src/gameplay/mushroom_effect.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
 const Metabolism = preload("res://src/gameplay/metabolism.gd")
+const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 
 const GROUP_NAME := "decomposer"
 
@@ -73,6 +74,31 @@ const WANDER_SPEED_FRACTION := 0.35
 ## How much decompose/consume health one bite removes -- see
 ## Carcass.DECOMPOSE_HEALTH / CarcassGuts.CONSUME_HEALTH.
 const BITE_AMOUNT := 1.0
+
+## How much residual walking activity a decomposer keeps at the coldest
+## real soil reading (see docs/concept/seasonal_behavior.md, "Decomposer
+## 'bug' cold-slowdown") -- a real ground beetle shelters and slows
+## drastically in cold soil, it does not vanish. Deliberately matches
+## AntColony/BeeColony/WildBeePatch's own DORMANCY_FLOOR value exactly,
+## the same "never literally zero" reasoning, not a coincidence -- this
+## marker has no aggregate economy for a shared base class to hang a real
+## constant off of (see this file's own class doc comment on why it is
+## deliberately not built on that stack), so the value is restated here
+## rather than imported from an unrelated colony class.
+const DORMANCY_FLOOR := 0.2
+
+## [DORMANCY_FLOOR, 1.0]: how much of full wander/approach speed this
+## decomposer keeps at the given real soil/air warmth reading. Reuses
+## EarthwormPatch's own COLD_CUTOFF/MILD_WARMTH ramp exactly -- same soil,
+## same real signal every other cold-weather mechanism in this game
+## already reads (AntColony/BeeColony.dormancy_multiplier_at,
+## EarthwormPatch.surface_drive).
+static func activity_multiplier_for(warmth: float) -> float:
+	var cold_gate := clampf(
+		(warmth - EarthwormPatch.COLD_CUTOFF) / (EarthwormPatch.MILD_WARMTH - EarthwormPatch.COLD_CUTOFF),
+		0.0, 1.0
+	)
+	return DORMANCY_FLOOR + (1.0 - DORMANCY_FLOOR) * cold_gate
 
 ## How long the illustrated walk/idle cycle holds each frame -- a flat
 ## elapsed-time cadence (mirrors CreatureMarker._animation_step's own
@@ -377,6 +403,20 @@ func _mushroom_affected_delta(delta_vec: Vector2) -> Vector2:
 	return delta_vec
 
 
+## Real soil/air warmth at this decomposer's own position, the same signal
+## CreatureMarker._process already reads for body-temperature regulation
+## (see World.ambient_warmth) -- reused directly rather than a second,
+## independent reading of the identical world. A decomposer with no
+## `_world` set (most of this file's own tests, and every caller that
+## predates this feature) reads full warmth and so keeps its ordinary
+## undiminished speed, the same "no world means no chunk-specific data"
+## convention _nearest_food's own leaf-litter branch already uses.
+func _current_activity_multiplier() -> float:
+	if _world == null or not _world.has_method("ambient_warmth"):
+		return 1.0
+	return activity_multiplier_for(_world.ambient_warmth(position))
+
+
 ## Cheap: the player group holds one node in solo play. Cached per frame by
 ## the caller rather than scanned per creature would be better still, but
 ## this is already off the hot path for everything nearby.
@@ -441,8 +481,12 @@ func _step_seeking(delta: float) -> void:
 	var stepped := _movement.step_position(home, position, _elapsed_time, delta, wander_seed)
 	# Toxic mushroom effects (see _mushroom_affected_delta's own doc
 	# comment) wobble/slow the actual step, rather than touching
-	# AmbientFlyerMovement itself.
-	position = position_before_wander + _mushroom_affected_delta(stepped - position_before_wander)
+	# AmbientFlyerMovement itself. Cold soil (see _current_activity_
+	# multiplier) scales the resulting distance the same post-hoc way,
+	# for the identical "don't touch the shared movement algorithm"
+	# reason.
+	var wander_delta := _mushroom_affected_delta(stepped - position_before_wander)
+	position = position_before_wander + wander_delta * _current_activity_multiplier()
 	_behavior.advance(delta)  # no-op outside FEEDING, just ticks the rehunt clock
 	if _behavior.can_commit():
 		var found := _nearest_food()
@@ -664,8 +708,14 @@ func _step_approaching(delta: float) -> void:
 	# comment) wobble/slow this step too -- a disoriented decomposer
 	# stumbles toward its target rather than beelining for it, re-aiming
 	# fresh from wherever it actually ends up each frame (move_toward
-	# recomputes to_target live), so it still eventually arrives.
-	var approach_step := position.move_toward(_target.position, WALK_SPEED * delta) - position
+	# recomputes to_target live), so it still eventually arrives. Cold
+	# soil (see _current_activity_multiplier) slows the approach the same
+	# way it slows ambient wander -- a real committed trip still takes
+	# longer in winter, not just the undirected searching.
+	var approach_step := (
+		position.move_toward(_target.position, WALK_SPEED * delta * _current_activity_multiplier())
+		- position
+	)
 	position += _mushroom_affected_delta(approach_step)
 
 

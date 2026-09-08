@@ -41,6 +41,19 @@ class LeafLitterWorld:
 	func consume_leaf_litter_at(pixel_position: Vector2) -> bool:
 		return field.consume_leaf_at(pixel_position)
 
+
+## Minimal duck-typed `_world` exposing only ambient_warmth (see
+## DecomposerMarker._current_activity_multiplier) -- CreatureMarker's own
+## body-temperature regulation already reads the identical method on the
+## real World/EarthChunkManager; a decomposer test needs nothing else
+## from it.
+class WarmthWorld:
+	extends RefCounted
+	var warmth := 1.0
+
+	func ambient_warmth(_position: Vector2) -> float:
+		return warmth
+
 var marker: DecomposerMarker
 var carcass: Carcass
 
@@ -704,6 +717,62 @@ func test_decomposer_never_dies_from_a_mushroom_effect_even_with_a_huge_delta():
 	marker.apply_mushroom_effect("death_cap")
 	marker._mushroom_effect_step(1000.0)
 	assert_false(marker.is_queued_for_deletion())
+
+
+# -- cold soil slows a decomposer's own real activity (see docs/concept/
+# seasonal_behavior.md, "Decomposer 'bug' cold-slowdown") -- real ground
+# beetles shelter and slow drastically in cold soil. This marker has no
+# aggregate population/economy at all (unlike AntColony/BeeColony), so the
+# individual marker's own wander/approach speed is what responds instead,
+# mirroring EarthwormPatch's "activity toggles with cold, headcount
+# doesn't" shape. Same "compare with/without, same setup otherwise" idiom
+# as the mushroom-effect wander tests just above. --------------------------
+
+func test_activity_multiplier_is_undiminished_at_full_warmth():
+	assert_almost_eq(DecomposerMarker.activity_multiplier_for(1.0), 1.0, 0.001)
+
+
+func test_activity_multiplier_never_reaches_a_hard_zero():
+	assert_gt(DecomposerMarker.activity_multiplier_for(0.0), 0.0)
+
+
+func test_a_cold_decomposer_wanders_measurably_slower_than_a_warm_one():
+	var cold_world := WarmthWorld.new()
+	cold_world.warmth = 0.05
+	var warm_world := WarmthWorld.new()
+	warm_world.warmth = 1.0
+
+	marker.setup(cold_world)
+	marker._elapsed_time = 3.0
+	var start := marker.position
+	marker._step_seeking(0.5)
+	var cold_distance := marker.position.distance_to(start)
+
+	marker.position = start
+	marker._elapsed_time = 3.0
+	marker.setup(warm_world)
+	marker._step_seeking(0.5)
+	var warm_distance := marker.position.distance_to(start)
+
+	assert_lt(cold_distance, warm_distance)
+
+
+func test_a_decomposer_with_no_world_wanders_at_the_ordinary_undiminished_rate():
+	marker._elapsed_time = 3.0
+	var start := marker.position
+	marker._step_seeking(0.5)
+	var no_world_distance := marker.position.distance_to(start)
+
+	marker.position = start
+	marker._elapsed_time = 3.0
+	marker.setup(WarmthWorld.new())  # defaults to warmth = 1.0
+	marker._step_seeking(0.5)
+	var warm_distance := marker.position.distance_to(start)
+
+	assert_almost_eq(
+		no_world_distance, warm_distance, 0.01,
+		"omitting _world entirely must not silently slow a pre-existing caller's decomposer"
+	)
 
 
 func test_ignores_a_dropped_item_that_is_not_food():
