@@ -280,6 +280,38 @@ func test_cold_soil_depletes_honey_slower_than_mild_soil():
 	)
 
 
+## The other real half of dormancy (see docs/concept/seasonal_behavior.md,
+## "Ant/honeybee forager cold-gate"), mirroring AntColony's identical fix:
+## should_forage() read no warmth signal at all before this, so a
+## fully-dormant hive still sent foragers out at the ordinary FORAGE_CHANCE.
+## Same determinism argument as the honey-depletion test above: two
+## colonies from the identical seed-retry loop share a seed and hive cell,
+## so should_forage's PixelNoise roll is IDENTICAL at every step for both --
+## only the dormancy multiplier on the effective threshold differs.
+func test_cold_soil_reduces_forage_attempts_not_just_depletion():
+	const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
+	var cold := _colony_with_one_hive()
+	var warm := _colony_with_one_hive()
+	var cold_cell: Vector2i = cold.hive_cells()[0]
+	var warm_cell: Vector2i = warm.hive_cells()[0]
+	for i in 20:
+		cold.record_warmth(cold_cell, 0.0)
+		warm.record_warmth(warm_cell, EarthwormPatch.MILD_WARMTH)
+	var cold_attempts := 0
+	var warm_attempts := 0
+	for i in 500:
+		cold.advance(1.0)
+		warm.advance(1.0)
+		if cold.should_forage(cold_cell):
+			cold_attempts += 1
+		if warm.should_forage(warm_cell):
+			warm_attempts += 1
+	assert_lt(
+		cold_attempts, warm_attempts,
+		"a dormant, cold-clustered hive should send foragers out far less often than an active one"
+	)
+
+
 func test_dormancy_never_reaches_a_hard_zero():
 	var colony := _colony_with_one_hive()
 	var cell: Vector2i = colony.hive_cells()[0]

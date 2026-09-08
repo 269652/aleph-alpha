@@ -427,8 +427,17 @@ func is_valid_hive_site(cell: Vector2i) -> bool:
 ## Whether this hive's colony sends a forager out to check for real
 ## nearby nectar THIS step -- mirrors AntColony.should_forage exactly, a
 ## pure PixelNoise-seeded roll, never Godot's string hash.
+##
+## Scaled by dormancy_multiplier_at (see docs/concept/seasonal_behavior.md,
+## "Ant/honeybee forager cold-gate"): a dormant hive's own workers stay
+## home, not just draw down the honey reserve slower -- before this, a
+## hive at DORMANCY_FLOOR still sent foragers out at the ordinary
+## FORAGE_CHANCE, the opposite of a real winter cluster.
 func should_forage(cell: Vector2i) -> bool:
-	return PixelNoise.unit(_seed_value + _step_count + _FORAGE_SALT, cell.x, cell.y) < FORAGE_CHANCE
+	return (
+		PixelNoise.unit(_seed_value + _step_count + _FORAGE_SALT, cell.x, cell.y)
+		< FORAGE_CHANCE * dormancy_multiplier_at(cell)
+	)
 
 
 ## This hive's own current colony strength -- an abstract number, not a

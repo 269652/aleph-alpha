@@ -647,6 +647,39 @@ func test_cold_soil_depletes_food_slower_than_warm_soil():
 	)
 
 
+## The other real half of dormancy (see docs/concept/seasonal_behavior.md,
+## "Ant/honeybee forager cold-gate"): a torpid colony's own workers stay
+## home, not just draw down the reserve slower. Before this fix,
+## should_forage() read no warmth signal at all, so a mound at
+## DORMANCY_FLOOR still sent foragers out at the ordinary FORAGE_CHANCE --
+## the literal opposite of "cluster deep in the mound and barely feed at
+## all" from this section's own header comment. Same seed on both
+## colonies so should_forage's PixelNoise roll is IDENTICAL at every step
+## for both -- only the dormancy multiplier applied to the effective
+## threshold differs, so cold's attempt count can never exceed warm's,
+## making this an exact comparison rather than merely a likely one.
+func test_cold_soil_reduces_forage_attempts_not_just_depletion():
+	var cold := _colony("grassland", 42)
+	var warm := _colony("grassland", 42)
+	var cell: Vector2i = cold.mound_cells()[0]
+	for i in 20:
+		cold.record_warmth(cell, 0.05)
+		warm.record_warmth(cell, 1.0)
+	var cold_attempts := 0
+	var warm_attempts := 0
+	for i in 500:
+		cold.advance(1.0)
+		warm.advance(1.0)
+		if cold.should_forage(cell):
+			cold_attempts += 1
+		if warm.should_forage(cell):
+			warm_attempts += 1
+	assert_lt(
+		cold_attempts, warm_attempts,
+		"a dormant, cold-clustered mound should send foragers out far less often than an active one"
+	)
+
+
 ## Never all the way to zero -- a genuinely dormant colony still needs
 ## SOME food to survive winter on stored fat. A hard 0.0 floor here would
 ## just move the identical permanent-death bug to "a sufficiently long or

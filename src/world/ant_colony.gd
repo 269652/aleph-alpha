@@ -576,10 +576,17 @@ func bud_new_mound(from_cell: Vector2i, to_cell: Vector2i) -> void:
 ## seed THIS step. A pure, PixelNoise-seeded roll against the mound's own
 ## position and the colony's current step -- never Godot's string hash,
 ## which correlates neighbouring inputs instead of spreading them.
+##
+## Scaled by dormancy_multiplier_at (see docs/concept/seasonal_behavior.md,
+## "Ant/honeybee forager cold-gate"): a dormant mound's own workers stay
+## home, not just draw down the food reserve slower -- before this, a
+## mound at DORMANCY_FLOOR still sent foragers out at the ordinary
+## FORAGE_CHANCE, the opposite of "cluster deep in the mound and barely
+## feed at all."
 func should_forage(cell: Vector2i) -> bool:
 	return PixelNoise.unit(
 		_seed_value + _step_count + _FORAGE_SALT, cell.x, cell.y
-	) < FORAGE_CHANCE
+	) < FORAGE_CHANCE * dormancy_multiplier_at(cell)
 
 
 ## A deterministic seed for "the carry this mound's forager makes right now",
