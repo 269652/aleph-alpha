@@ -16416,6 +16416,25 @@ has two pre-existing failures on `main`,
 separate background task rather than fixed here, to keep this change
 scoped to the ant queen.
 
+**Follow-up (2026-09-08): the flagged decomposer-sprite failures were the
+art, not the slicer.** Root-caused with a new `tools/probe_decomposer_
+sheets.gd` (referenced by name in `illustrated_decomposer_sprite.gd`'s own
+doc comment since it was first written, but never actually committed
+until now): the CURRENT `ant.png`/`beetle.png` idle bands both hold 6
+real, evenly-spaced, substantial frames, matching their own walk/carry
+rows' pitch exactly — not a false split. Checked against history to be
+sure: the pre-edit blobs (`git show e25d52b6^:...ant.png`, `git show
+30d47d90^:...beetle.png`, both predating this class's own code, last
+touched 2026-09-05) fed through the identical `detect_frames` call still
+slice to exactly 4 idle frames each. The Sep 6/7 "commit outstanding
+working-tree changes" sweeps captured genuine art edits that filled in 2
+more hand-drawn idle poses per sheet, catching idle up to walk/carry's
+cadence — `SpriteSheetSlicer` never changed and was never wrong. Fixed by
+updating the two assertions (and their now-misleading `_four_` names) to
+`test_generate_textures_returns_six_idle_frames_for_ant`/`_bug`, expecting
+6. `-gselect=illustrated_decomposer` 24/24 green;
+`-gselect=decomposer` (all 4 decomposer-family test files) 90/90 green.
+
 ### Compass in-world UI (`concept/wayfinding.md`, 2026-09-08)
 
 Asked directly, alongside the torch: "the compass when in hand should

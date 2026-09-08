@@ -57,16 +57,22 @@ func test_generate_textures_returns_six_carry_frames_for_ant():
 	assert_eq(sprite.generate_textures("ant", "carry").size(), 6)
 
 
-func test_generate_textures_returns_four_idle_frames_for_ant():
-	assert_eq(sprite.generate_textures("ant", "idle").size(), 4)
+## Pinned at 4 until the art itself grew a real second pair of idle poses --
+## see tools/probe_decomposer_sheets.gd's own doc comment for the git-
+## history proof (pre-2026-09-06 ant.png/beetle.png blobs both still slice
+## to 4 idle frames under this identical detect_frames call): not a slicer
+## regression, the sheets' idle rows were deliberately extended from 4
+## poses to 6, matching their own walk/carry rows' already-6-frame cadence.
+func test_generate_textures_returns_six_idle_frames_for_ant():
+	assert_eq(sprite.generate_textures("ant", "idle").size(), 6)
 
 
 func test_generate_textures_returns_six_walk_frames_for_bug():
 	assert_eq(sprite.generate_textures("bug", "walk").size(), 6)
 
 
-func test_generate_textures_returns_four_idle_frames_for_bug():
-	assert_eq(sprite.generate_textures("bug", "idle").size(), 4)
+func test_generate_textures_returns_six_idle_frames_for_bug():
+	assert_eq(sprite.generate_textures("bug", "idle").size(), 6)
 
 
 func test_generate_textures_returns_empty_for_an_action_with_no_art():
