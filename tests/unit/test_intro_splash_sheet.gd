@@ -89,6 +89,42 @@ func test_frames_are_cached_not_rebuilt_per_call():
 	assert_same(a[0], b[0])
 
 
+## Bug #6 (2026-09-09): every one of the 32 frames must be the exact same
+## pixel size. IntroSplash's own TextureRect (EXPAND_IGNORE_SIZE +
+## STRETCH_KEEP_ASPECT_COVERED, see scenes/intro_splash.gd) scales and
+## re-centers EACH frame independently, driven by that frame's own size --
+## so if frame sizes differ even by a couple pixels, the effective
+## on-screen scale factor and crop-center shift frame to frame, magnified
+## by the real ~5.5x this sheet gets stretched by at the project's default
+## 1280x720 viewport (project.godot). That reads as visible "wobble".
+##
+## Confirmed red against the unfixed per-frame CONTENT-based crop
+## (SpriteSheetSlicer.detect_frames called once per frame, independently):
+## real measured widths ranged 232-234px and heights stepped 181/183/182/
+## 182px across the 32 frames (throwaway verification probe, since
+## deleted -- mirroring how the prior 5 intro-splash bugs in this file's
+## own git history were each verified against real numbers, not trusted
+## from a code trace alone). Left edges were separately confirmed to
+## already be a stable, fixed 8-column grid (row 0, 2, and 3 independently
+## re-detect the IDENTICAL lefts array; only row 1 -- the one row with
+## both the light-streak sweep and the first wordmark letters already
+## present -- drifted by 1px at a single column), so the crop instability
+## was real but entirely in the RIGHT edge/width (content-driven) and, at
+## the 3 row-transition points, in height (hand-measured _ROW_BANDS
+## differing by 1-2px row to row) -- never in the left edge/column grid
+## itself.
+func test_every_frame_is_the_same_size():
+	var frames := sheet.generate_textures()
+	var first_size := frames[0].get_image().get_size()
+	for i in frames.size():
+		var size := frames[i].get_image().get_size()
+		assert_eq(
+			size,
+			first_size,
+			"frame %d is %s, expected %s (frame 0's size) -- unstable geometry reads as wobble once stretched to fill a real viewport" % [i, size, first_size]
+		)
+
+
 func _has_opaque_pixels(texture: Texture2D) -> bool:
 	var image := texture.get_image()
 	for y in image.get_height():
