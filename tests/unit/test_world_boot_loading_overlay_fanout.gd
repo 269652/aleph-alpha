@@ -115,6 +115,31 @@ func test_mushroom_art_progress_updates_the_loading_overlay_with_a_real_unit():
 
 # -- the overlay must not linger, covering (or racing) whatever comes next --
 
+## Reported live (a screenshot): the boot overlay stuck forever on screen,
+## showing its own last real progress text ("Starting Aleph Alpha... (8 / 8
+## species)"), with the actual game world already fully loaded and running
+## underneath it. Traced to source: `_build_loading_overlay()` is called a
+## SECOND time later in `_ready()` (inside the same batch as `_build_hotbar_
+## slots`/`_build_dev_console`/etc.) -- each call assigns a BRAND NEW
+## `LoadingOverlay` to `_loading_overlay`, so the second call silently
+## orphans the FIRST instance (the one actually shown, and actually on
+## screen) while the class field now points at a second, never-shown
+## instance. `hide_overlay()` later in this same function then hides the
+## WRONG (second) instance -- the real, visible one is never told to hide
+## at all, and sits there forever. None of this file's own existing
+## ordering tests would have caught this: they all assert relative ORDER
+## between two DIFFERENT substrings, never that a given call appears only
+## once.
+func test_the_loading_overlay_is_built_only_once():
+	var body := _ready_body()
+	assert_eq(
+		body.count("_build_loading_overlay()"), 1,
+		"a second _build_loading_overlay() call would silently orphan the first, " +
+		"already-shown overlay instance -- see this test's own doc comment for the " +
+		"exact live bug that shape causes"
+	)
+
+
 func test_the_loading_overlay_is_hidden_once_the_heavy_boot_setup_finishes():
 	var body := _ready_body()
 	var warm_at := body.find("MushroomMarker.warm_art_cache(")

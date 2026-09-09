@@ -731,6 +731,18 @@ func _ready() -> void:
 	# the three possible launch paths below proceed (see the hide_overlay()
 	# call further down for why unconditionally, not just on the ordinary
 	# menu path).
+	#
+	# Called EXACTLY ONCE, here -- never again later in this function.
+	# Reported live (a screenshot): the overlay stuck on screen forever,
+	# showing its own last real progress text, with the game world already
+	# fully loaded and running underneath it. Root cause: a second call to
+	# this same function used to sit later in _ready() (in the batch with
+	# _build_hotbar_slots/_build_dev_console/etc.) -- each call assigns a
+	# BRAND NEW LoadingOverlay to _loading_overlay, so that second call
+	# silently orphaned THIS instance (the one actually shown) while the
+	# class field moved on to point at a second, never-shown one; the real
+	# hide_overlay() call further down then hid the wrong instance. See
+	# test_the_loading_overlay_is_built_only_once.
 	_build_loading_overlay()
 	await _show_loading_overlay("Starting Aleph Alpha...")
 
@@ -876,7 +888,6 @@ func _ready() -> void:
 	_build_crafting_window()
 	_build_skill_window()
 	_build_settings_overlay()
-	_build_loading_overlay()
 	_build_creature_panels_container()
 	_build_hover_tooltip()
 	_build_death_label()

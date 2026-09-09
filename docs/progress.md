@@ -19021,3 +19021,32 @@ than an eyeballed comment, per this repo's own CLAUDE.md.
 test script together (`-gselect=intro`, 6 scripts) 44/44, including
 `test_intro_splash.gd`'s own Node-level display-sizing/pixel-
 perfectness checks, unaffected with no code changes of their own.
+
+## The boot loading overlay was getting rebuilt mid-`_ready()`, orphaning the visible instance (`concept/persistence.md`, 2026-09-09)
+
+Reported live via a screenshot: the boot-time "Starting Aleph Alpha..."
+overlay stuck on screen forever, showing its own last real progress text
+("(8 / 8 species)"), with the actual game world already fully loaded and
+running underneath it — a populated HUD, real creature panels, a real
+minimap, all live.
+
+Root cause: `World._build_loading_overlay()` was still being called a
+SECOND time later in `_ready()` (inside the pre-existing `_build_hotbar_
+slots`/`_build_dev_console`/etc. batch) — a leftover from before the
+boot-loading-overlay feature moved the overlay's own build/show to the
+top of `_ready()`, never removed once that made the later call redundant.
+Each call assigns a BRAND NEW `LoadingOverlay` to `_loading_overlay`, so
+the second call silently orphaned the FIRST instance (the one actually
+shown on screen) while the class field moved on to point at a second,
+never-shown one — the real `hide_overlay()` call later in `_ready()` then
+hid the WRONG instance, leaving the genuinely visible one stuck forever.
+
+Fixed by deleting the redundant second call. New regression test,
+`test_the_loading_overlay_is_built_only_once` (confirmed red first: 2
+occurrences found, 1 expected) — none of the boot-loading-overlay
+feature's own five original tests would have caught this, since all of
+them assert relative ORDER between two different substrings, never that a
+given call appears only once. `test_world_boot_loading_overlay_fanout.gd`
+6/6, `test_world_intro_splash_after_load_fanout.gd` 5/5, `test_world_play_
+intro_splash_frame_gate.gd` 3/3, `test_loading_overlay.gd` 2/2 — no
+regression in any adjacent system.

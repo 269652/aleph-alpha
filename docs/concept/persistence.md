@@ -418,6 +418,28 @@ load_fanout.gd`/`test_world_play_intro_splash_frame_gate.gd`/
 `test_loading_overlay.gd` re-run clean — this pass only adds calls, it
 doesn't reorder anything either of those already pins.
 
+**A real regression, found and fixed the same day (2026-09-09):** reported
+live via a screenshot — the boot overlay stuck on screen forever, still
+showing its own last real progress text ("Starting Aleph Alpha... (8 / 8
+species)"), with the actual game world already fully loaded and running
+underneath it (a populated HUD, real creature panels, a real minimap).
+Root cause: `_build_loading_overlay()` was ALSO still being called a
+second time later in `_ready()`, inside the pre-existing batch with
+`_build_hotbar_slots`/`_build_dev_console`/etc. — a leftover from before
+this pass moved the overlay's build/show to the top of `_ready()`, never
+removed once it became redundant there. Each call to
+`_build_loading_overlay()` assigns a BRAND NEW `LoadingOverlay` to
+`_loading_overlay`, so the second call silently orphaned the FIRST
+instance (the one actually shown on screen) while the class field moved
+on to point at a second, never-shown one — the real `hide_overlay()` call
+later in `_ready()` then hid the WRONG instance, leaving the genuinely
+visible one stuck forever. Fixed by deleting the redundant second call.
+New regression test, `test_the_loading_overlay_is_built_only_once`
+(confirmed red first: 2 occurrences found, 1 expected) — none of this
+pass's own five original tests would have caught this, since all of them
+assert relative ORDER between two different substrings, never that a
+given call appears only once.
+
 ## Status / mechanisms
 
 - ✅ `Player.appearance` field + `to_save_dict()`/`apply_save_dict()`, tested
