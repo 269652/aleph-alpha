@@ -17434,3 +17434,60 @@ same-frame read. `test_intro_splash.gd` 7/7, plus
 `test_world_play_intro_splash_frame_gate.gd`, and
 `test_world_intro_splash_after_load_fanout.gd` all re-run clean —
 no regression in the timing/gating mechanics the prior six passes fixed.
+
+### Seasonal behavior, phase 7: alpaca as a real, live grazer (2026-09-09)
+
+✅ **Alpaca joins the roster** — `assets/sprites/animals/alpaca.png`
+existed with zero code references at all before this. Reused 100% of the
+existing generic quadruped machinery (no new architecture), wired into
+every table sheep/goat/camel already sit in, mirroring sheep as the
+closest real-world/mechanical analog (real illustrated art, cold-hardy
+grassland+mountain grazer):
+
+- `CreatureRenderer.HERBIVORE_SPECIES_POOL_BY_BIOME` — grassland + mountain
+  (real Andean puna/grassland range), not forest/desert/tundra/rainforest.
+- `AnimalAnatomy.SPECIES`/`_PROFILES` — own profile: a real camelid trait
+  (notably longer neck than sheep/goat, `neck_length 0.22` vs sheep's
+  `0.10`), no shoulder hump (unlike camel), no headgear, taller legs.
+- `CreatureMass._REAL_MASS_KG` — `65.0` kg, a commonly-cited real adult
+  alpaca average (48-90kg range).
+- `IllustratedAnimalSprite._SHEETS` — real walk/eat art. `alpaca.png`
+  (1536x1024) measured independently via a probe script (not assumed) and
+  found to land on the exact same band positions (`walk_bands (5,509)`,
+  `eat_bands (513,1018)`) `wolf.png`'s own independently-measured entry
+  already uses — strong evidence both sheets share one generation
+  template. Faces left, like wolf (verified from the actual pixels), not
+  sheep's own implicit right-facing default.
+- `ProceduralAnimalSprite` — fallback color (a distinct warm golden fawn)
+  and shape family (`deer_shape`, shared with every other upright grazer).
+- `CreatureInfo`'s five stat/diet/temperament tables (health/stamina/
+  mana/diet/temperament) — a calm, non-predator Grazer, alongside sheep.
+
+No bespoke seasonal code needed: alpaca inherits phases 5/6's real winter
+hardship automatically once spawnable, since `FOOD_UNDERFOOT` is the
+shared generic fallback every herbivore's foraging already funnels
+through when nothing specific is in sight.
+
+**Verified with a real rendered frame, not just a code trace** (this
+project's own established "measure/render, don't assume" convention) —
+a temporary probe rendered actual sliced alpaca walk/eat frames to PNG
+and visually confirmed a clean chroma-key cutout, correct left-facing
+orientation, and real wool-colored content; the probe and its output
+were deleted immediately after, nothing committed.
+
+TDD: new/updated tests across all 5 affected files confirm alpaca
+appears in grassland/mountain pools and nowhere else, has its own
+distinct (long-necked, hornless) anatomy profile, is a calm non-predator
+Grazer, is a fully registered illustrated species (left-facing, 8-frame
+walk/eat cycles, no leftover magenta, real content, consistent apparent
+size across actions), and is covered by the procedural fallback's own
+generic distinctness loops. Confirmed a broad red state first (7 failing
+tests across `test_illustrated_animal_sprite.gd`/
+`test_procedural_animal_sprite.gd`, plus one each in
+`test_creature_info.gd`/`test_creature_renderer.gd`/
+`test_animal_anatomy.gd`) before any production entry existed, green
+after. `test_creature_info.gd` 60/60, `test_creature_renderer.gd` 46/46,
+`test_animal_anatomy.gd` 43/43, `test_illustrated_animal_sprite.gd`
+67/67, `test_procedural_animal_sprite.gd` 72/72; `test_creature_mass.gd`
+11/11 and `test_console_species.gd` 6/6 re-confirmed unaffected (both
+drive purely generic loops over `AnimalAnatomy.SPECIES`).

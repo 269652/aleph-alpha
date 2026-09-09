@@ -94,7 +94,7 @@ func test_lynx_is_an_aggressive_predator():
 
 # -- biome-specific species (see CreatureRenderer's per-biome species pools) --
 
-const NEW_HERBIVORE_SPECIES := ["camel", "reindeer", "tapir", "goat", "mouse", "horse", "deer", "nonvenomous_snake", "sheep", "squirrel"]
+const NEW_HERBIVORE_SPECIES := ["camel", "reindeer", "tapir", "goat", "mouse", "horse", "deer", "nonvenomous_snake", "sheep", "squirrel", "alpaca"]
 const NEW_PREDATOR_SPECIES := ["jackal", "arctic_fox", "jaguar", "mountain_lion", "bear", "lion", "venomous_snake", "wolf"]
 
 
@@ -102,6 +102,16 @@ func test_camel_is_a_calm_herbivore_that_is_not_a_predator():
 	var camel_info := CreatureInfo.new("camel")
 	assert_eq(camel_info.temperament, "calm")
 	assert_false(camel_info.is_predator)
+
+
+## Real alpacas are cold-hardy Andean grazers with no special
+## hibernation/migration behaviour (see docs/concept/seasonal_behavior.md,
+## "Alpaca as a real, live grazer") -- a calm, non-predator herbivore
+## exactly like sheep/goat/camel.
+func test_alpaca_is_a_calm_herbivore_that_is_not_a_predator():
+	var alpaca_info := CreatureInfo.new("alpaca")
+	assert_eq(alpaca_info.temperament, "calm")
+	assert_false(alpaca_info.is_predator)
 
 
 func test_reindeer_is_a_calm_herbivore_that_is_not_a_predator():

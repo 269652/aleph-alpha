@@ -457,6 +457,80 @@ func test_wolf_actions_render_at_the_same_apparent_size():
 	assert_almost_eq(eat, walk, walk * 0.05)
 
 
+# -- alpaca: same 8x2-grid-on-magenta layout family as wolf, own sheet ------
+#
+# alpaca.png (1536x1024) is a SEPARATE file, same resolution as wolf.png
+# and, measured independently, the SAME landmark positions (top border
+# 0-4, walk band 5-509, divider 510-513, eat band 514-1018, bottom border
+# 1019-1023) -- strong evidence both sheets share one generation template,
+# not a coincidence copied without checking. Faces LEFT like wolf (verified
+# from the actual pixels: muzzle at the left edge of every cell in both
+# rows), unlike sheep's own unmarked (implicitly right-facing) entry.
+
+func test_alpaca_is_a_registered_illustrated_species():
+	assert_true(sprite.has_species("alpaca"))
+
+
+func test_alpaca_sheet_is_drawn_facing_left():
+	assert_true(sprite.faces_left("alpaca"), "alpaca art is drawn facing left")
+
+
+func test_alpaca_has_walk_and_eat_art_but_no_dedicated_idle():
+	assert_true(sprite.has_action("alpaca", "walk"))
+	assert_true(sprite.has_action("alpaca", "eat"))
+	# No idle_bands registered -- falls back to the eat cycle's own frame 0
+	# (see has_action's fallback-chain doc comment).
+	assert_true(sprite.has_action("alpaca", "idle"))
+	assert_eq(sprite.generate_textures("alpaca", "idle").size(), 1)
+
+
+func test_alpaca_walk_and_eat_are_each_a_full_eight_frame_cycle():
+	assert_eq(sprite.generate_textures("alpaca", "walk").size(), 8)
+	assert_eq(sprite.generate_textures("alpaca", "eat").size(), 8)
+
+
+## The whole point of chroma-keying: the magenta ground must not survive into
+## the sliced frame as either opaque magenta pixels or a magenta-tinted
+## fringe -- corners of the normalized canvas (always background, whichever
+## species) must read fully transparent.
+func test_alpaca_frames_have_no_leftover_magenta_background():
+	var frame: Image = sprite.generate_textures("alpaca", "walk")[0].get_image()
+	assert_almost_eq(frame.get_pixel(0, 0).a, 0.0, 0.01, "top-left corner should be transparent, not magenta")
+	assert_almost_eq(
+		frame.get_pixel(frame.get_width() - 1, 0).a, 0.0, 0.01, "top-right corner should be transparent"
+	)
+	# No pixel anywhere in the frame should still read as the chroma-key
+	# color -- a leftover fringe would show up as scattered magenta pixels.
+	var magenta_survivors := 0
+	for y in frame.get_height():
+		for x in frame.get_width():
+			var c := frame.get_pixel(x, y)
+			if c.a > 0.5 and absf(c.r - 0.95) <= 0.05 and absf(c.g - 0.02) <= 0.05 and absf(c.b - 0.96) <= 0.05:
+				magenta_survivors += 1
+	assert_eq(magenta_survivors, 0, "no opaque magenta pixel should survive chroma-keying")
+
+
+func test_alpaca_frame_has_real_wool_colored_content():
+	var frame: Image = sprite.generate_textures("alpaca", "walk")[0].get_image()
+	var found_content := false
+	for y in frame.get_height():
+		for x in frame.get_width():
+			if frame.get_pixel(x, y).a > 0.5:
+				found_content = true
+				break
+		if found_content:
+			break
+	assert_true(found_content, "the alpaca drawing itself must survive chroma-keying, not just its background")
+
+
+func test_alpaca_actions_render_at_the_same_apparent_size():
+	var walk := (
+		_content_width(sprite.generate_textures("alpaca", "walk")[0]) * sprite.marker_scale("alpaca", "walk")
+	)
+	var eat := _content_width(sprite.generate_textures("alpaca", "eat")[0]) * sprite.marker_scale("alpaca", "eat")
+	assert_almost_eq(eat, walk, walk * 0.05)
+
+
 # -- fallback actions reuse the cache, they don't re-slice (perf) -----------
 #
 # Reported live symptom: the game got stuck on a "Loading..." screen. Every

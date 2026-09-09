@@ -83,12 +83,12 @@ const PREDATOR_SPECIES_POOL := ["lynx", "lynx", "lynx", "jackal"]
 ## where the nut trees they depend on (TreeSpecies.is_nut) actually grow
 ## (see docs/concept/flora.md's disperser-vs-predator tension).
 const HERBIVORE_SPECIES_POOL_BY_BIOME := {
-	"grassland": ["deer", "deer", "deer", "boar", "horse", "mouse", "mouse", "nonvenomous_snake", "sheep"],
+	"grassland": ["deer", "deer", "deer", "boar", "horse", "mouse", "mouse", "nonvenomous_snake", "sheep", "alpaca"],
 	"forest": ["boar", "boar", "boar", "mouse", "mouse", "deer", "sheep", "nonvenomous_snake", "squirrel", "squirrel"],
 	"desert": ["camel", "camel", "camel", "horse", "mouse", "nonvenomous_snake"],
 	"tundra": ["reindeer", "reindeer", "reindeer", "mouse", "deer"],
 	"rainforest": ["tapir", "tapir", "tapir", "mouse", "mouse", "nonvenomous_snake"],
-	"mountain": ["goat", "goat", "goat", "mouse", "sheep", "sheep"],
+	"mountain": ["goat", "goat", "goat", "mouse", "sheep", "sheep", "alpaca"],
 }
 ## Wolf joins forest only (real wolves are the classic temperate/boreal
 ## forest apex predator, and this project's own dominant-species-per-biome
