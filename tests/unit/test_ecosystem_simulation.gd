@@ -564,6 +564,7 @@ func test_add_region_starts_robin_and_sparrow_population_at_zero():
 	simulation.add_region(Vector2i(0, 0), _make_chunk("forest", 0.7, 0.7))
 	assert_eq(simulation.robin_population(Vector2i(0, 0)), 0.0)
 	assert_eq(simulation.sparrow_population(Vector2i(0, 0)), 0.0)
+	assert_eq(simulation.blackbird_population(Vector2i(0, 0)), 0.0)
 
 
 func test_add_region_seeds_kingfisher_population_from_existing_fish_equilibrium():
@@ -576,6 +577,17 @@ func test_update_worm_density_raises_robin_capacity():
 	assert_eq(simulation.robin_capacity_at(Vector2i(0, 0)), 0.0)
 	simulation.update_worm_density(Vector2i(0, 0), 12.0)
 	assert_gt(simulation.robin_capacity_at(Vector2i(0, 0)), 0.0)
+
+
+## Blackbird shares robin's own real capacity signal (see
+## BlackbirdPopulationModel's own doc comment for why: both are real
+## worm-hunting thrushes) -- the SAME reported worm density raises both,
+## no separate density-reporting call needed for blackbird.
+func test_update_worm_density_raises_blackbird_capacity_too():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("forest", 0.7, 0.7))
+	assert_eq(simulation.blackbird_capacity_at(Vector2i(0, 0)), 0.0)
+	simulation.update_worm_density(Vector2i(0, 0), 12.0)
+	assert_gt(simulation.blackbird_capacity_at(Vector2i(0, 0)), 0.0)
 
 
 func test_update_seed_density_raises_sparrow_capacity():
@@ -604,6 +616,18 @@ func test_step_grows_sparrow_population_toward_its_seed_linked_capacity():
 	assert_gt(simulation.sparrow_population(Vector2i(0, 0)), 0.0)
 	assert_lte(
 		simulation.sparrow_population(Vector2i(0, 0)), simulation.sparrow_capacity_at(Vector2i(0, 0)) + 0.001
+	)
+
+
+func test_step_grows_blackbird_population_toward_its_worm_linked_capacity():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("forest", 0.7, 0.7))
+	simulation.update_worm_density(Vector2i(0, 0), 12.0)
+	for i in 30:
+		simulation.step(1.0)
+	assert_gt(simulation.blackbird_population(Vector2i(0, 0)), 0.0)
+	assert_lte(
+		simulation.blackbird_population(Vector2i(0, 0)),
+		simulation.blackbird_capacity_at(Vector2i(0, 0)) + 0.001
 	)
 
 
@@ -639,6 +663,18 @@ func test_record_bird_birth_raises_sparrow_population():
 	assert_almost_eq(simulation.sparrow_population(Vector2i(0, 0)), 2.0, 0.001)
 
 
+func test_record_bird_birth_raises_blackbird_population():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("forest", 0.7, 0.7))
+	# Higher than the robin-population test's own 12.0 -- blackbird supports
+	# FEWER birds per worm cell than robin by design (see
+	# BlackbirdPopulationModel.BLACKBIRDS_PER_WORM_CELL's own doc comment),
+	# so this needs more real headroom to clear 2.0 without capping.
+	simulation.update_worm_density(Vector2i(0, 0), 20.0)
+	simulation.seed_blackbird_population(Vector2i(0, 0), 1.0)
+	simulation.record_bird_birth(Vector2i(0, 0), "blackbird", 1.0)
+	assert_almost_eq(simulation.blackbird_population(Vector2i(0, 0)), 2.0, 0.001)
+
+
 func test_record_bird_birth_never_exceeds_carrying_capacity():
 	simulation.add_region(Vector2i(0, 0), _make_chunk("forest", 0.7, 0.7))
 	simulation.update_worm_density(Vector2i(0, 0), 12.0)
@@ -648,14 +684,18 @@ func test_record_bird_birth_never_exceeds_carrying_capacity():
 	assert_almost_eq(simulation.robin_population(Vector2i(0, 0)), capacity, 0.001)
 
 
-## Blackbird has no aggregate population model yet (see IllustratedBird
-## Sprite's own Phase 2 note) -- a harmless no-op, not an error, same
-## contract every other unrecognized-input path in this file already has.
+## Blackbird now HAS a real aggregate population model (see
+## docs/concept/seasonal_behavior.md, "Blackbird: new species, real
+## population, real diet shift") -- this instead pins the harmless no-op
+## contract against a genuinely unmodeled species, the same one
+## test_record_bird_birth_on_an_unknown_region_is_a_harmless_no_op below
+## uses for an unknown REGION.
 func test_record_bird_birth_for_an_unmodeled_species_is_a_harmless_no_op():
 	simulation.add_region(Vector2i(0, 0), _make_chunk("forest", 0.7, 0.7))
-	simulation.record_bird_birth(Vector2i(0, 0), "blackbird", 1.0)
+	simulation.record_bird_birth(Vector2i(0, 0), "not_a_real_bird", 1.0)
 	assert_eq(simulation.robin_population(Vector2i(0, 0)), 0.0)
 	assert_eq(simulation.sparrow_population(Vector2i(0, 0)), 0.0)
+	assert_eq(simulation.blackbird_population(Vector2i(0, 0)), 0.0)
 
 
 func test_record_bird_birth_on_an_unknown_region_is_a_harmless_no_op():

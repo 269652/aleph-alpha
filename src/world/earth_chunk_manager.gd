@@ -9668,7 +9668,8 @@ func _reconcile_chunk_ambient_flyers(chunk_coord: Vector2i) -> void:
 		_loaded_ambient_flyers.get(chunk_coord, []),
 		_ecosystem.robin_population(chunk_coord),
 		_ecosystem.sparrow_population(chunk_coord),
-		self
+		self,
+		_ecosystem.blackbird_population(chunk_coord)
 	)
 
 
@@ -11586,7 +11587,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		self,
 		_ecosystem.robin_population(chunk_coord),
 		_ecosystem.sparrow_population(chunk_coord),
-		current_season()
+		current_season(),
+		_ecosystem.blackbird_population(chunk_coord)
 	)
 	_loaded_piscivore_birds[chunk_coord] = _piscivore_bird_renderer.spawn_piscivore_birds(
 		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self,
@@ -11626,6 +11628,7 @@ func _apply_ecology_catchup(chunk_coord: Vector2i) -> void:
 		"fish_capacity": _ecosystem.fish_capacity_at(chunk_coord),
 		"robin_capacity": _ecosystem.robin_capacity_at(chunk_coord),
 		"sparrow_capacity": _ecosystem.sparrow_capacity_at(chunk_coord),
+		"blackbird_capacity": _ecosystem.blackbird_capacity_at(chunk_coord),
 	}
 	var advanced: Dictionary = _ecology_catchup.advance(record["state"], elapsed, capacity)
 	# Land health (docs/concept/world.md "Land health: overharvesting leaves a
@@ -11644,6 +11647,7 @@ func _apply_ecology_catchup(chunk_coord: Vector2i) -> void:
 	_ecosystem.seed_robin_population(chunk_coord, float(advanced.get("robins", 0.0)))
 	_ecosystem.seed_sparrow_population(chunk_coord, float(advanced.get("sparrows", 0.0)))
 	_ecosystem.seed_kingfisher_population(chunk_coord, float(advanced.get("kingfishers", 0.0)))
+	_ecosystem.seed_blackbird_population(chunk_coord, float(advanced.get("blackbirds", 0.0)))
 
 
 # -- withering: decay as a bounded, closed-form catch-up (see
@@ -12123,6 +12127,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 				"robins": _ecosystem.robin_population(chunk_coord),
 				"sparrows": _ecosystem.sparrow_population(chunk_coord),
 				"kingfishers": _ecosystem.kingfisher_population(chunk_coord),
+				"blackbirds": _ecosystem.blackbird_population(chunk_coord),
 			},
 		}
 		DirAccess.make_dir_recursive_absolute(FISH_POPULATION_DIR)
@@ -12146,6 +12151,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 				"robins": _ecosystem.robin_population(chunk_coord),
 				"sparrows": _ecosystem.sparrow_population(chunk_coord),
 				"kingfishers": _ecosystem.kingfisher_population(chunk_coord),
+				"blackbirds": _ecosystem.blackbird_population(chunk_coord),
 			},
 			_ecology_path(chunk_coord)
 		)
@@ -12299,6 +12305,7 @@ func _apply_persisted_ecology(chunk_coord: Vector2i) -> void:
 			"robins": float(saved.get("robins", 0.0)),
 			"sparrows": float(saved.get("sparrows", 0.0)),
 			"kingfishers": float(saved.get("kingfishers", 0.0)),
+			"blackbirds": float(saved.get("blackbirds", 0.0)),
 		},
 		elapsed,
 		{
@@ -12307,6 +12314,7 @@ func _apply_persisted_ecology(chunk_coord: Vector2i) -> void:
 			"fish_capacity": _ecosystem.fish_capacity_at(chunk_coord),
 			"robin_capacity": _ecosystem.robin_capacity_at(chunk_coord),
 			"sparrow_capacity": _ecosystem.sparrow_capacity_at(chunk_coord),
+			"blackbird_capacity": _ecosystem.blackbird_capacity_at(chunk_coord),
 		}
 	)
 	_ecosystem.seed_populations(
@@ -12326,6 +12334,7 @@ func _apply_persisted_ecology(chunk_coord: Vector2i) -> void:
 	_ecosystem.seed_robin_population(chunk_coord, float(caught_up.get("robins", 0.0)))
 	_ecosystem.seed_sparrow_population(chunk_coord, float(caught_up.get("sparrows", 0.0)))
 	_ecosystem.seed_kingfisher_population(chunk_coord, float(caught_up.get("kingfishers", 0.0)))
+	_ecosystem.seed_blackbird_population(chunk_coord, float(caught_up.get("blackbirds", 0.0)))
 	# Fish parity: the raw last-known count was already installed (by the
 	# load_fish_population call at this function's own call site, before this
 	# runs), but `advance()` above steps it forward for the elapsed away-time

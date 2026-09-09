@@ -111,7 +111,7 @@ const BUTTERFLY_ACTIVE_SEASONS := {"spring": true, "summer": true, "autumn": tru
 ## second pool this once needed to union together), kept as its own
 ## name since callers already refer to "the pollinator pool" by it.
 const BUTTERFLY_SPECIES_POOL: Array[String] = ["monarch", "swallowtail", "blue_morpho"]
-const BIRD_SPECIES_POOL: Array[String] = ["sparrow", "robin"]
+const BIRD_SPECIES_POOL: Array[String] = ["sparrow", "robin", "blackbird"]
 ## Single-species pools for the population-driven spawn calls below -- robin
 ## and sparrow each get their own aggregate population (see
 ## EcosystemSimulation.robin_population/sparrow_population), so unlike
@@ -119,6 +119,7 @@ const BIRD_SPECIES_POOL: Array[String] = ["sparrow", "robin"]
 ## random from a shared pool.
 const ROBIN_SPECIES_POOL: Array[String] = ["robin"]
 const SPARROW_SPECIES_POOL: Array[String] = ["sparrow"]
+const BLACKBIRD_SPECIES_POOL: Array[String] = ["blackbird"]
 
 ## Real butterflies/songbirds are a warm/flowering-habitat presence --
 ## excluded from desert/tundra/mountain/ocean as implausible. This is the
@@ -167,6 +168,12 @@ const FLYER_RANGE := {
 	"blue_morpho": {"biomes": ["rainforest"], "abs_latitude": Vector2(0.0, 25.0)},
 	"sparrow": {"biomes": ["grassland", "forest", "rainforest"], "abs_latitude": Vector2(0.0, 70.0)},
 	"robin": {"biomes": ["grassland", "forest"], "abs_latitude": Vector2(20.0, 70.0)},
+	# Real Eurasian blackbirds (Turdus merula) share robin's own real
+	# temperate range almost exactly -- both common European garden/
+	# woodland thrushes, not a tropical rainforest bird (see
+	# BlackbirdPopulationModel's own doc comment for why robin is this
+	# species' closest real ecological analog throughout).
+	"blackbird": {"biomes": ["grassland", "forest"], "abs_latitude": Vector2(20.0, 70.0)},
 }
 
 ## Sparse, decorative caps -- much sparser than fish/creatures since these
@@ -195,6 +202,7 @@ const MAX_BUTTERFLIES_PER_CHUNK := 4
 ## flock.
 const MAX_ROBINS_PER_CHUNK := 4
 const MAX_SPARROWS_PER_CHUNK := 4
+const MAX_BLACKBIRDS_PER_CHUNK := 4
 
 ## Butterflies render at half size -- a real scale difference from songbirds
 ## (butterflies really are much smaller), and reads better against tall
@@ -275,6 +283,12 @@ func _abs_latitude_for(chunk: Chunk, chunk_origin_tiles: Vector2i) -> float:
 ## compiling AND keeps spawning butterflies exactly as before, the same
 ## "safe default preserves old behavior" reasoning robin_population/
 ## sparrow_population already established just above.
+##
+## `blackbird_population` is this chunk's live aggregate population (see
+## EcosystemSimulation.blackbird_population, docs/concept/
+## seasonal_behavior.md's "Blackbird: new species, real population, real
+## diet shift") -- default 0.0, the identical convention robin/sparrow's
+## own populations already use.
 func spawn_ambient_flyers(
 	parent: Node2D,
 	chunk: Chunk,
@@ -285,7 +299,8 @@ func spawn_ambient_flyers(
 	scent_world = null,
 	robin_population: float = 0.0,
 	sparrow_population: float = 0.0,
-	season: String = "summer"
+	season: String = "summer",
+	blackbird_population: float = 0.0
 ) -> Array[Node2D]:
 	var spawned: Array[Node2D] = []
 	# Which SPECIES this chunk can hold, not just whether the tier can be here
@@ -357,6 +372,21 @@ func spawn_ambient_flyers(
 				scent_world
 			)
 		)
+		# Blackbird: a third real aggregate population (see
+		# EcosystemSimulation.blackbird_population), promoted exactly like
+		# robin/sparrow -- its own single-species pool/range, not folded
+		# into either.
+		var blackbird_count := marker_count_for(blackbird_population, MAX_BLACKBIRDS_PER_CHUNK)
+		spawned.append_array(
+			_spawn_species(
+				parent, chunk, chunk_origin_tiles, tile_size, "blackbird_spawn",
+				_in_range_pool(BLACKBIRD_SPECIES_POOL, biome_name, abs_latitude),
+				blackbird_count, blackbird_count,
+				AmbientFlyerMovement.new(BIRD_SPEED, BIRD_RADIUS, BIRD_INTERVAL),
+				_bird_sprite_generator_for("blackbird"),
+				scent_world
+			)
+		)
 	return spawned
 
 
@@ -389,11 +419,13 @@ func reconcile_bird_markers(
 	existing: Array,
 	robin_population: float,
 	sparrow_population: float,
-	scent_world = null
+	scent_world = null,
+	blackbird_population: float = 0.0
 ) -> Array:
 	var kept: Array = []
 	var robins: Array = []
 	var sparrows: Array = []
+	var blackbirds: Array = []
 	for marker in existing:
 		if not is_instance_valid(marker) or marker.is_queued_for_deletion():
 			continue
@@ -401,6 +433,8 @@ func reconcile_bird_markers(
 			robins.append(marker)
 		elif marker.species == "sparrow":
 			sparrows.append(marker)
+		elif marker.species == "blackbird":
+			blackbirds.append(marker)
 		else:
 			kept.append(marker)
 
@@ -408,6 +442,8 @@ func reconcile_bird_markers(
 		for marker in robins:
 			marker.queue_free()
 		for marker in sparrows:
+			marker.queue_free()
+		for marker in blackbirds:
 			marker.queue_free()
 		return kept
 
@@ -426,6 +462,14 @@ func reconcile_bird_markers(
 			_in_range_pool(SPARROW_SPECIES_POOL, biome_name, abs_latitude),
 			sparrows, sparrow_population, MAX_SPARROWS_PER_CHUNK,
 			_bird_sprite_generator_for("sparrow"), scent_world
+		)
+	)
+	kept.append_array(
+		_reconcile_one_species(
+			parent, chunk, chunk_origin_tiles, tile_size, "blackbird_spawn",
+			_in_range_pool(BLACKBIRD_SPECIES_POOL, biome_name, abs_latitude),
+			blackbirds, blackbird_population, MAX_BLACKBIRDS_PER_CHUNK,
+			_bird_sprite_generator_for("blackbird"), scent_world
 		)
 	)
 	return kept

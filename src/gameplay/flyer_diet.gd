@@ -64,6 +64,10 @@ const GROUND_FOODS := [FOOD_WORMS, FOOD_SEEDS, FOOD_FRUIT, FOOD_CATERPILLARS, FO
 const FRUIT_SPECIES_BY_FLYER := {
 	"robin": ["cherry", "walnut", "apple"],
 	"sparrow": ["walnut"],
+	# Real blackbirds take soft fruit just like a robin does (both real
+	# thrushes -- see docs/concept/seasonal_behavior.md, "Blackbird: new
+	# species, real population, real diet shift").
+	"blackbird": ["cherry", "walnut", "apple"],
 }
 
 
@@ -81,11 +85,14 @@ static func eats_fruit_species(species: String, fruit_species: String) -> bool:
 ## Real robins are famous caterpillar-hunters -- caterpillars are what a
 ## robin feeds its own chicks more than almost anything else, right
 ## alongside worms (see docs/concept/soil_fauna.md's own bird-diet
-## follow-up: "some birds eat caterpillars too"). Deliberately robin-only,
-## the same "only the robin" shape FOOD_WORMS already has: a sparrow's
-## granivore bill and a kingfisher's fish-only diet are both a poor real-
-## world fit, so this stays narrow rather than spreading it across every
-## songbird just because the mechanism now exists. Ground-based
+## follow-up: "some birds eat caterpillars too"). Originally robin-only; a
+## sparrow's granivore bill and a kingfisher's fish-only diet are both a
+## poor real-world fit for it, so it stayed narrow rather than spreading
+## across every songbird just because the mechanism existed -- but later
+## widened to blackbird too (see docs/concept/seasonal_behavior.md,
+## "Blackbird: new species, real population, real diet shift"): a second
+## real thrush with the identical genuine specialism, not spreading it
+## further "just because". Ground-based
 ## caterpillars only (see EarthChunkManager.caterpillars_near) -- a
 ## caterpillar up a tree, mid-climb, is a real gap this pass names rather
 ## than silently drops: gleaning prey off foliage is a genuinely different
@@ -112,6 +119,13 @@ static func eats_fruit_species(species: String, fruit_species: String) -> bool:
 const DIET_BY_SPECIES := {
 	"robin": [FOOD_WORMS, FOOD_FRUIT, FOOD_CATERPILLARS, FOOD_ANTS],
 	"sparrow": [FOOD_SEEDS, FOOD_FRUIT, FOOD_ANTS],
+	# Real Eurasian blackbirds (Turdus merula) are genuine omnivorous
+	# thrushes with essentially the same real broad diet as robin (see
+	# docs/concept/seasonal_behavior.md's "Blackbird: new species, real
+	# population, real diet shift") -- worms/caterpillars/ants/fruit
+	# year-round, but see eats_now() below for the real winter shift
+	# toward fruit that robin/sparrow deliberately do NOT get in this pass.
+	"blackbird": [FOOD_WORMS, FOOD_FRUIT, FOOD_CATERPILLARS, FOOD_ANTS],
 	"kingfisher": [FOOD_FISH],
 	"monarch": [FOOD_NECTAR],
 	"swallowtail": [FOOD_NECTAR],
@@ -134,6 +148,33 @@ static func foods_for(species: String) -> Array:
 
 static func eats(species: String, food: String) -> bool:
 	return foods_for(species).has(food)
+
+
+## Species whose diet genuinely shifts by season -- real blackbirds are
+## year-round residents that lean on insects/worms in the warmer months and
+## shift toward fruit once insects thin out in winter (see docs/concept/
+## seasonal_behavior.md, "Blackbird: new species, real population, real
+## diet shift"). Robin/sparrow deliberately keep their existing flat diet
+## weighting -- retrofitting the same shift onto them is a named, separate
+## follow-up, not done here.
+const WINTER_EXCLUDED_FOODS_BY_SPECIES := {
+	"blackbird": [FOOD_WORMS, FOOD_CATERPILLARS, FOOD_ANTS],
+}
+
+
+## Whether `species` pursues `food` RIGHT NOW, given the real current
+## season -- eats() unless this exact species+food pair is one this species
+## seasonally stops pursuing in winter (see WINTER_EXCLUDED_FOODS_BY_
+## SPECIES). Every species not in that table, and every season but winter,
+## behaves exactly as eats() already did -- the same "safe default
+## preserves old behavior" convention this session's other seasonal-
+## behavior phases already established.
+static func eats_now(species: String, food: String, season: String) -> bool:
+	if not eats(species, food):
+		return false
+	if season == "winter":
+		return not WINTER_EXCLUDED_FOODS_BY_SPECIES.get(species, []).has(food)
+	return true
 
 
 ## Whether this species feeds on things lying on the ground, and so needs to

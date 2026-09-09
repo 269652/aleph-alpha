@@ -995,6 +995,28 @@ func test_refresh_creatures_promotes_sparrows_once_population_rises_after_load()
 	assert_eq(sparrows, 3, "a chunk's sparrow markers must track its live population without a reload")
 
 
+## Blackbird's own food signal (worm density) is structural, already in
+## place at spawn time (see AmbientFlyerRenderer.reconcile_bird_markers'
+## own doc comment) -- unlike sparrow, it never strictly hits this gap. But
+## it is wired into the SAME reconciliation path regardless, for
+## consistency and because its population can still legitimately grow
+## after spawn via ordinary logistic growth/migration -- this pins that.
+func test_refresh_creatures_promotes_blackbirds_once_population_rises_after_load():
+	var chunk_coord: Vector2i = _berlin_tile / EarthChunkManager.CHUNK_SIZE
+	manager._load_chunk(chunk_coord)
+	for flyer in manager._loaded_ambient_flyers.get(chunk_coord, []):
+		assert_ne(flyer.species, "blackbird")
+
+	manager._ecosystem.seed_blackbird_population(chunk_coord, 2.0)
+	manager._refresh_creatures()
+
+	var blackbirds := 0
+	for flyer in manager._loaded_ambient_flyers[chunk_coord]:
+		if flyer.species == "blackbird":
+			blackbirds += 1
+	assert_eq(blackbirds, 2, "a chunk's blackbird markers must track its live population without a reload")
+
+
 # -- piscivore birds: kingfishers dive for fish (see PiscivoreBirdRenderer,
 # PiscivoreBirdMarker) and actually decrement the aquatic population --------
 
