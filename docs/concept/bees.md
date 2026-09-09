@@ -635,6 +635,14 @@ protects `AntColony` on unload either. This is a real, separate,
 not-yet-fixed gap on the ant side — named here rather than silently
 left for a future bug report to rediscover, out of scope for this pass.
 
+**Update (2026-09-09): closed.** `AntColony`/`AntForagerMarker` now
+carry the identical `mark_retired()`/`is_retired()` guard described
+above — see `docs/concept/soil_fauna.md`'s own "In-flight foragers
+survive an unload; their trip's outcome does not" section for the
+ant-specific details, including one real extra half bees don't have (a
+retired colony's forager also never plants/caches the seed/nut it was
+carrying, not just the food-reserve deposit).
+
 ### Growth-stage and destruction art — `IllustratedBeehiveSprite`
 
 Rows 1-2 of `beehive.png` (16 frames, tiny exposed cluster → full sealed
