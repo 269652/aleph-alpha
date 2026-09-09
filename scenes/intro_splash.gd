@@ -17,23 +17,40 @@ signal finished
 const IntroSplashSheet = preload("res://src/rendering/intro_splash_sheet.gd")
 const IntroSplashSequencer = preload("res://src/rendering/intro_splash_sequencer.gd")
 
-## The animation's own on-screen footprint -- deliberately NOT the full
-## viewport (see docs/concept/intro_splash.md's "A sixth pass"). Reported
-## live: "make it smaller, about the size of the new character panel...
-## otherwise it looks pixelated and wobbly" -- intro.png's frames are a
-## modest native resolution (see IntroSplashSheet), so stretching them
-## across the whole screen meant a much bigger upscale than shrinking the
-## display box alone does, with the same STRETCH_KEEP_ASPECT_COVERED.
-##
-## The value matches MainMenu.PANEL_SIZE (the character creator panel the
-## reporter pointed at) as of this writing -- a plain literal, NOT a live
-## preload() reference to it: MainMenu's own preload chain pulls in
-## CharacterPreviewDiorama and the rest of the create-screen's build
-## machinery, exactly the kind of front-loaded cost this file's own
-## multi-pass boot-freeze history (see the concept doc) has repeatedly
-## found expensive on this exact load path -- not worth risking just to
-## read one constant. Re-sync by hand if MainMenu.PANEL_SIZE ever changes.
-const DISPLAY_SIZE := Vector2(880, 620)
+## The sheet's own per-frame pixel footprint -- measured directly
+## (tools/probe_intro_sheet.gd), not assumed from the 1983/8 x 793/4
+## arithmetic (see IntroSplashSheet's own doc comment for why that's not
+## exact for this sheet). Real per-frame rects vary by a pixel or two from
+## this across the 32 real sliced frames (232-234 wide, 181-183 tall) --
+## 233x182 is simply the single most common exact size among them. This is
+## the ONE reference size DISPLAY_SIZE scales from, not a per-frame live
+## measurement, so the on-screen box itself never resizes as playback
+## moves between frames of very slightly different native size -- only
+## STRETCH_KEEP_ASPECT_CENTERED's own letterboxing absorbs that tiny
+## variance (see _ready's own comment).
+const _NATIVE_FRAME_SIZE := Vector2(233, 182)
+
+## Reported live: "make it smaller, about the size of the new character
+## panel... otherwise it looks pixelated and wobbly" (see docs/concept/
+## intro_splash.md's "A seventh pass"). That pass shrank the display box to
+## an arbitrary literal (880x620, matching MainMenu.PANEL_SIZE) while
+## keeping STRETCH_KEEP_ASPECT_COVERED -- smaller than full-screen, but
+## still an arbitrary non-integer upscale of the sheet's own modest native
+## resolution, which is exactly what "pixelated and wobbly" describes:
+## Godot's default (effectively linear) filter softens/shimmers hard
+## pixel-art edges at any scale that doesn't land on whole pixels.
+## Reported again, live, on top of that already-shipped fix: "it should be
+## much smaller." This pass ("An eighth pass") replaces the arbitrary
+## literal with a genuine pixel-perfect integer scale instead, mirroring
+## MainMenu.STANDARD_PORTRAIT_SCALE's own established "roundi a target
+## against the real native size" pattern -- see that constant's own doc
+## comment. 3x keeps the box comfortably smaller than the seventh pass's
+## own 880x620 in both dimensions (699x546) while staying a legible,
+## deliberate multiple -- a tested, named constant, not an eyeballed one
+## (see test_display_size_is_a_clean_integer_multiple_of_the_native_frame_
+## size and test_display_is_pixel_perfect in test_intro_splash.gd).
+const DISPLAY_SCALE := 3
+const DISPLAY_SIZE := _NATIVE_FRAME_SIZE * DISPLAY_SCALE
 
 var _frames: Array[ImageTexture] = []
 var _display: TextureRect
@@ -86,7 +103,23 @@ func _ready() -> void:
 	_display.size = DISPLAY_SIZE
 	_display.position = (get_viewport_rect().size - DISPLAY_SIZE) / 2.0
 	_display.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_display.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	# KEEP_ASPECT_CENTERED, not COVERED: COVERED crops overflow to fill the
+	# box exactly, which would crop away a sliver of real content on
+	# whichever frames run a pixel or two larger than _NATIVE_FRAME_SIZE
+	# (see that constant's own doc comment). CENTERED letterboxes instead --
+	# since DISPLAY_SIZE is an exact integer multiple of the reference frame
+	# size, the common case lands on an exact 1:1 fit with zero letterbox at
+	# all, and the rare ±1-2px outlier frame just gets an imperceptible
+	# sliver of backdrop at one edge rather than a crop.
+	_display.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	# NEAREST, not Godot's default filter: the other half of "pixelated and
+	# wobbly", not fixed by shrinking the box alone -- a smooth filter
+	# blurs/shimmers hard pixel-art edges at any non-1:1 scale, independent
+	# of how big or small the box is. Matches this game's established
+	# "16-bit house style" nearest-neighbor convention for every other
+	# generated/sliced texture scaled up to a deliberate integer multiple
+	# (e.g. MainMenu._standard_portrait at STANDARD_PORTRAIT_SCALE).
+	_display.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_display.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(_display)
 
@@ -135,3 +168,15 @@ func _finish() -> void:
 ## TextureRect node itself (same rationale as CharacterView.slot_texture).
 func display_rect() -> Rect2:
 	return Rect2(_display.position, _display.size)
+
+
+## Whether the animation is rendering with crisp, unfiltered integer-scale
+## pixel art rather than Godot's default smooth filter -- see DISPLAY_
+## SCALE's own doc comment for why that distinction is the actual fix for
+## "pixelated and wobbly", not just the box shrinking alone. Same "let a
+## test verify without reaching past this class" rationale as display_rect.
+func display_is_pixel_perfect() -> bool:
+	return (
+		_display.texture_filter == CanvasItem.TEXTURE_FILTER_NEAREST
+		and _display.stretch_mode == TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	)
