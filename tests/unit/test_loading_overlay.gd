@@ -8,6 +8,7 @@ extends GutTest
 ## parameter.
 
 const LoadingOverlay = preload("res://scenes/loading_overlay.gd")
+const LoadingTips = preload("res://src/ui/loading_tips.gd")
 
 
 func _overlay() -> LoadingOverlay:
@@ -39,3 +40,40 @@ func test_set_progress_accepts_a_different_unit_for_non_chunk_callers():
 	overlay.set_progress(2, 7, "portraits")
 
 	assert_eq(overlay.status_text(), "Building character creator... (2 / 7 portraits)")
+
+
+# -- witty tips: "SIMS 4 style loading descriptions" ------------------------
+
+## Requested live: "make the loading screens use SIMS 4 style loading
+## descriptions (funny witty progress lines) and put the real progress in
+## the bottom right corner." The tip is the new primary readout, real
+## progress moves to the corner (see status_text's own tests above, which
+## still pass unchanged -- proving the corner readout kept its exact prior
+## content contract even though the Control it lives on moved).
+func test_shows_a_real_tip_from_the_pool_after_show_with_text():
+	var overlay := _overlay()
+	overlay.show_with_text("Loading your world...")
+	assert_true(LoadingTips.TIPS.has(overlay.tip_text()))
+
+
+func test_tip_changes_once_the_rotation_interval_elapses():
+	var overlay := _overlay()
+	overlay.show_with_text("Loading your world...")
+	var first_tip := overlay.tip_text()
+
+	overlay._process(LoadingTips.TIP_INTERVAL_SECONDS + 0.01)
+
+	assert_ne(overlay.tip_text(), first_tip)
+	assert_true(LoadingTips.TIPS.has(overlay.tip_text()))
+
+
+## The tip rotation and the corner's real progress are two independent
+## readouts -- advancing one must never disturb the other.
+func test_tip_rotation_does_not_disturb_the_corner_progress_text():
+	var overlay := _overlay()
+	overlay.show_with_text("Loading your world...")
+	overlay.set_progress(3, 10)
+
+	overlay._process(LoadingTips.TIP_INTERVAL_SECONDS + 0.01)
+
+	assert_eq(overlay.status_text(), "Loading your world... (3 / 10 chunks)")
