@@ -93,6 +93,7 @@ const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd"
 const FootstepGait = preload("res://src/gameplay/footstep_gait.gd")
 const FootprintField = preload("res://src/world/footprint_field.gd")
 const FootprintRenderer = preload("res://src/rendering/footprint_renderer.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
@@ -804,12 +805,12 @@ var _footprint_filled_generation: Dictionary = {}
 ## cross-chunk accumulator" shape: a stride is inherently a single-walker
 ## concern that must not reset at a chunk (or even a tile) boundary,
 ## unlike _footprint_fields/_footprint_mmis above which are genuinely
-## per-chunk.
+## per-chunk. Owns its own last-known position and teleport detection
+## internally now too (see FootstepGait.step_at) -- there is no separate
+## _last_footstep_position field any more; this object IS the player's
+## whole footstep record, the same "one object, one walker" shape a
+## CreatureMarker's own lazily-built FootstepGait now also has.
 var _player_footstep_gait := FootstepGait.new()
-## The player's own pixel position as of the last record_footstep call --
-## Vector2(INF, INF) means "no prior call yet" (see that function's own
-## doc comment), not a real position ever actually reachable in-world.
-var _last_footstep_position := Vector2(INF, INF)
 
 ## Vector2i chunk_coord -> Array[AntMoundMarker] -- the visible counterpart
 ## to _ant_colonies' own mound_cells(), one static marker per mound, spawned
@@ -4886,19 +4887,22 @@ static func footstep_surface_for(biome: String, snow_lying: bool, underwater: bo
 ## footprint sprite's, so audio must not silently inherit the narrower
 ## visual gap (reported live: "we need footsteps", a general ask, not
 ## just for the biomes that already draw a print).
-func record_footstep(pixel_position: Vector2, heading: Vector2) -> Dictionary:
-	if is_inf(_last_footstep_position.x):
-		_last_footstep_position = pixel_position
-		return {}
-	var distance := pixel_position.distance_to(_last_footstep_position)
-	_last_footstep_position = pixel_position
-	if distance > _FOOTSTEP_TELEPORT_GAP_PX:
-		# A real jump, not real walking -- re-baselined above already;
-		# also reset the gait accumulator so the far side of the jump
-		# doesn't inherit a stride debt built up before it.
-		_player_footstep_gait = FootstepGait.new()
-		return {}
-	var side := _player_footstep_gait.step_if_due(distance)
+##
+## `gait`/`mass_kg` (added for real per-CreatureMarker footprints, see
+## docs/concept/snow_cover.md's "Footprints depend on real mass, not just
+## surface") default to the PLAYER's own existing single continuous
+## accumulator and real mass -- every pre-existing 2-arg call site across
+## the whole project keeps resolving to EXACTLY today's behavior and print
+## size. A caller with its own walker (a CreatureMarker's own lazily-built
+## FootstepGait, see that class's own footstep_gait() doc comment) passes
+## both explicitly instead, so this one function serves every walker in
+## the game, not a player-only special case duplicated elsewhere.
+func record_footstep(
+	pixel_position: Vector2, heading: Vector2,
+	gait: FootstepGait = null, mass_kg: float = CreatureMass.PLAYER_MASS_KG
+) -> Dictionary:
+	var walker_gait := gait if gait != null else _player_footstep_gait
+	var side := walker_gait.step_at(pixel_position, _FOOTSTEP_TELEPORT_GAP_PX)
 	if side.is_empty():
 		return {}
 	var tile := _world_tile_for_pixel(pixel_position)
@@ -4926,7 +4930,8 @@ func record_footstep(pixel_position: Vector2, heading: Vector2) -> Dictionary:
 	var field: FootprintField = _footprint_fields.get(chunk_coord)
 	if field == null:
 		return result
-	field.add_print(print_position, side, surface, heading, _world_age_seconds)
+	var size_scale := CreatureMass.linear_scale_for_mass_ratio(mass_kg, CreatureMass.PLAYER_MASS_KG)
+	field.add_print(print_position, side, surface, heading, _world_age_seconds, size_scale)
 	return result
 
 
