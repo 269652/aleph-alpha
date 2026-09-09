@@ -76,6 +76,9 @@ const SPECIES_BASE_COLORS := {
 	"wolf": Color(0.42, 0.40, 0.38),
 	# Creamy wool tan, distinct from arctic_fox's near-white coat.
 	"sheep": Color(0.82, 0.76, 0.62),
+	# Warm golden fawn -- a real, common alpaca fleece color, distinct from
+	# sheep's grayer cream-tan and camel's deeper, more saturated tan.
+	"alpaca": Color(0.85, 0.72, 0.52),
 	# -- Easter-egg cameo creatures (docs/concept/easter_eggs.md) -----------
 	# Squallmaw: a stormy deep blue-green sea dragon. Coilnecca: a calm
 	# slate-green loch color. Champ: a murkier warm brown-grey lake color --
@@ -137,6 +140,7 @@ const SPECIES_SHAPE_FAMILY := {
 	# named and real.
 	"wolf": "wolf_shape",
 	"sheep": "deer_shape",
+	"alpaca": "deer_shape",
 	# Easter-egg cameo creatures (docs/concept/easter_eggs.md) -- legless
 	# serpentine bodies, same family as the two snakes above (see
 	# AnimalAnatomy.SERPENT_SPECIES).

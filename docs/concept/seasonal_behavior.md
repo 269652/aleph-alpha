@@ -325,7 +325,21 @@ gets scarcer, grounded in this module's own pre-existing "caching becomes
 common once hunger is satisfied" reasoning. Mouse gets no analogous
 change (no eat-vs-cache branch exists for it); its seasonal hardship
 already comes from the shared herbivore forage-realism fix above.
-⬜ Alpaca as a real, live grazer
+✅ Alpaca as a real, live grazer — wired into every table sheep/goat/camel
+already sit in: `CreatureRenderer.HERBIVORE_SPECIES_POOL_BY_BIOME`
+(grassland + mountain, real Andean range), `AnimalAnatomy.SPECIES`/
+`_PROFILES` (own profile: longer neck than sheep, like a camelid, but no
+hump and no headgear), `CreatureMass._REAL_MASS_KG` (65.0kg, a real cited
+average), `IllustratedAnimalSprite._SHEETS` (real walk/eat art, measured
+independently and landing on the same band positions wolf.png's own
+measured entry uses — same generation template), `ProceduralAnimalSprite`
+(fallback color + shape family), and `CreatureInfo`'s five stat/diet/
+temperament tables. No bespoke seasonal code of its own — inherits
+phases 5/6's real winter hardship automatically once spawnable, since
+`FOOD_UNDERFOOT` is the shared generic fallback every herbivore already
+funnels through. Verified with a real rendered frame (chroma-key cutout
+confirmed clean via the existing "no leftover magenta" test), not just a
+code trace.
 ⬜ Bear hibernation / snake brumation
 ⬜ Blackbird: real population + real diet shift
 ⬜ Grass frog: brumating, decorative-but-real presence

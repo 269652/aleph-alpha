@@ -77,6 +77,20 @@ func test_a_sheep_has_no_headgear_unlike_the_horned_goat_it_shares_a_shape_famil
 	assert_gt(sheep.body_height, goat.body_height, "a sheep's wool reads as a stockier, bulkier body than a goat's")
 
 
+## Real alpacas are camelids -- like camels, notably long-necked relative
+## to a sheep/goat, despite sharing sheep's own "woolly grazer, no
+## headgear" build otherwise (see docs/concept/seasonal_behavior.md,
+## "Alpaca as a real, live grazer").
+func test_an_alpaca_has_a_longer_neck_than_a_sheep_but_no_headgear():
+	assert_true(
+		AnimalAnatomy.has_profile("alpaca"), "alpaca should have its own profile, not the herbivore fallback"
+	)
+	var alpaca := AnimalAnatomy.profile_for("alpaca")
+	var sheep := AnimalAnatomy.profile_for("sheep")
+	assert_eq(alpaca.headgear, AnimalAnatomy.HEADGEAR_NONE)
+	assert_gt(alpaca.neck_length, sheep.neck_length, "a camelid's neck should read as notably longer than a sheep's")
+
+
 ## A boar is the low, bulky, humped one -- the opposite build to a deer.
 func test_a_boar_is_low_slung_and_humped_unlike_a_deer():
 	var boar := AnimalAnatomy.profile_for("boar")

@@ -43,7 +43,7 @@ const NECK_LOW := "low"
 ## Every species with a hand-tuned profile. Anything else falls back to the
 ## generic herbivore build (see profile_for).
 const SPECIES := [
-	"herbivore", "deer", "horse", "goat", "camel", "reindeer", "sheep",
+	"herbivore", "deer", "horse", "goat", "camel", "reindeer", "sheep", "alpaca",
 	"boar", "tapir", "bear",
 	"wolf", "lynx", "jaguar", "predator",
 	"jackal", "arctic_fox", "mountain_lion", "lion",
@@ -189,6 +189,21 @@ const _PROFILES := {
 		"head_length": 0.14, "head_height": 0.12, "muzzle": 0.4, "ear_size": 0.26,
 		"leg_length": 0.18, "leg_thickness": 0.055,
 		"tail": TAIL_STUB, "tail_length": 0.05,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
+	},
+	# Also rendered with real illustrated art (see IllustratedAnimalSprite),
+	# for the same reason sheep's own comment above gives. Real alpacas are
+	# camelids -- like camel below, a notably longer neck than sheep/goat,
+	# but a much smaller, leaner build (no hump at all) and taller legs,
+	# hornless, with a small tufted tail rather than camel's own.
+	"alpaca": {
+		"barrel_squareness": 0.45,
+		"world_scale": 0.85,
+		"body_length": 0.42, "body_height": 0.30, "body_y": 0.46, "shoulder_hump": 0.0,
+		"neck_length": 0.22, "neck_thickness": 0.09, "neck_carriage": NECK_UPRIGHT,
+		"head_length": 0.13, "head_height": 0.11, "muzzle": 0.35, "ear_size": 0.30,
+		"leg_length": 0.30, "leg_thickness": 0.05,
+		"tail": TAIL_STUB, "tail_length": 0.04,
 		"headgear": HEADGEAR_NONE, "has_mane": false,
 	},
 	# Defined by the hump and a long neck on long legs.

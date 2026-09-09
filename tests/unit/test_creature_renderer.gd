@@ -312,7 +312,7 @@ func test_grassland_is_deer_and_jackal_dominant():
 	assert_true(herbivore_species.has("boar"))
 	for species in herbivore_species:
 		assert_true(
-			species in ["boar", "mouse", "horse", "deer", "nonvenomous_snake", "sheep"],
+			species in ["boar", "mouse", "horse", "deer", "nonvenomous_snake", "sheep", "alpaca"],
 			"unexpected herbivore-role species: %s" % species
 		)
 	assert_true(predator_species.has("jackal"))
@@ -416,11 +416,28 @@ func test_mountain_biome_promotes_goats_and_mountain_lions():
 	assert_true(herbivore_species.has("goat"), "mountain should promote goats")
 	for species in herbivore_species:
 		assert_true(
-			species in ["goat", "mouse", "sheep"], "unexpected herbivore-role species: %s" % species
+			species in ["goat", "mouse", "sheep", "alpaca"], "unexpected herbivore-role species: %s" % species
 		)
 	assert_true(predator_species.has("mountain_lion"), "mountain should promote mountain lions")
 	for species in predator_species:
 		assert_true(species in ["mountain_lion"], "unexpected predator-role species: %s" % species)
+
+
+## Real alpacas are a cold-hardy Andean grassland/puna grazer (see
+## docs/concept/seasonal_behavior.md, "Alpaca as a real, live grazer") --
+## grassland and mountain, not forest/desert/tundra/rainforest, mirroring
+## sheep's own real-world-grounded biome membership.
+func test_alpacas_appear_in_grassland_and_mountain_pools():
+	assert_true(_species_seen_across_chunks(1.0, 0.0, "grassland").has("alpaca"))
+	assert_true(_species_seen_across_chunks(1.0, 0.0, "mountain").has("alpaca"))
+
+
+func test_alpacas_do_not_appear_outside_their_real_range():
+	for biome_name in ["forest", "desert", "tundra", "rainforest"]:
+		assert_false(
+			_species_seen_across_chunks(1.0, 0.0, biome_name).has("alpaca"),
+			"alpaca should not appear in %s" % biome_name
+		)
 
 
 # -- mice and horses (see docs/concept/ecosystem_dynamics.md's Species roster) --

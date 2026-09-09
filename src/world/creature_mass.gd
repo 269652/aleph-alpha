@@ -54,6 +54,11 @@ const _REAL_MASS_KG := {
 	"predator": 40.0,  # generic predator build -- wolf-scale reference
 	"goat": 60.0,
 	"mountain_lion": 60.0,
+	# A commonly-cited adult alpaca average -- real alpacas typically range
+	# roughly 48-90kg, with 55-65kg cited most often; sits just below sheep
+	# despite reading taller/leaner in AnimalAnatomy's own profile (a real
+	# alpaca's build is lankier, not heavier, than a wool-dense sheep).
+	"alpaca": 65.0,
 	"deer": 70.0,
 	"herbivore": 70.0,  # generic herbivore build -- deer-scale reference
 	"sheep": 80.0,
