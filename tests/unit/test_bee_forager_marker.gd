@@ -529,3 +529,59 @@ func test_returning_with_no_colony_wired_up_still_frees_itself_without_crashing(
 	marker.position = Vector2(3, 0)
 	add_child_autofree(marker)
 	assert_true(_run_until_freed())
+
+
+# -- a retired hive/nest: the outcome of an in-flight trip is honestly -----
+# -- lost, never silently deposited into an orphaned colony/patch ----------
+#
+# A forager holds a direct reference to its own BeeColony/WildBeePatch,
+# set once at dispatch (see _colony's own doc comment) -- unlike this
+# marker itself, EarthChunkManager._unload_chunk cannot free that object
+# just by erasing its own dictionary entry; a forager already in flight
+# keeps it alive and keeps flying regardless (this marker is parented on
+# the persistent _entities_parent node, not chunk-scoped -- correct, see
+# EarthChunkManager._unload_chunk's own doc comment). Without this guard,
+# a successful trip would resolve against that exact same, now-orphaned
+# object once the forager gets home -- see docs/concept/bees.md's
+# "In-flight foragers survive an unload; their trip's outcome does not".
+
+func test_a_retired_colonys_returning_forager_deposits_nothing_and_frees_itself():
+	var colony := _colony_with_one_hive()
+	var cell: Vector2i = colony.hive_cells()[0]
+	var world := _world_with_one_flower(Vector2(4, 0))
+	marker.setup(world, colony, cell)
+	marker.target_position = Vector2(4, 0)
+	marker.hive_position = Vector2.ZERO
+	marker.position = Vector2(3, 0)
+	add_child_autofree(marker)
+	colony.mark_retired()  # its own hive's chunk unloaded mid-flight
+	var before := colony.honey_stored_at(cell)
+	assert_true(_run_until_freed())
+	assert_almost_eq(
+		colony.honey_stored_at(cell), before, 0.001,
+		"a retired colony must never receive a deposit from an orphaned forager"
+	)
+
+
+func test_a_retired_wild_bee_patchs_returning_forager_touches_nothing():
+	const WildBeePatch = preload("res://src/world/wild_bee_patch.gd")
+	var biome := _all_grassland()
+	var patch: WildBeePatch = null
+	for seed_value in range(1, 200):
+		patch = WildBeePatch.new(seed_value, WIDTH, HEIGHT, biome)
+		if patch.nest_cells().size() > 0:
+			break
+	var cell: Vector2i = patch.nest_cells()[0]
+	var world := _world_with_one_flower(Vector2(4, 0))
+	marker.setup(world, patch, cell)
+	marker.target_position = Vector2(4, 0)
+	marker.hive_position = Vector2.ZERO
+	marker.position = Vector2(3, 0)
+	add_child_autofree(marker)
+	patch.mark_retired()  # its own nest's chunk unloaded mid-flight
+	var before := patch.forage_success_at(cell)
+	assert_true(_run_until_freed())
+	assert_almost_eq(
+		patch.forage_success_at(cell), before, 0.001,
+		"a retired patch's forage-success record must never be touched by an orphaned forager"
+	)
