@@ -19287,3 +19287,74 @@ whirl-pair issue already on `main`), `test_ambient_flyer_renderer.gd`
 list (seed granivory, worm/seed population dynamics — both were already
 done). See [soil_fauna.md](concept/soil_fauna.md#sparrows-flock-robins-dont-2026-09-09)
 for the full mechanism.
+
+## The witty tip (and spinner) were actually frozen in real play: Godot's delta smoothing, not the rotation logic (`concept/persistence.md`, 2026-09-09)
+
+Reported live, same day as the feature above shipped: *"The new witty
+loading screen texts should change every few seconds not stay the same
+for 1 min loading."* The rotation logic itself tested green in isolation
+(`test_loading_tips.gd`, `test_loading_overlay.gd`) — those tests drove
+`_process` directly with hand-picked delta values, which never exercised
+the real gap between how `_process` actually gets called during a heavy,
+mostly-synchronous load and what `_elapsed_seconds` was really being
+computed from.
+
+**Measured, not assumed** — a temporary diagnostic GUT test (not
+committed): a real `LoadingOverlay` plus a concurrent frame-sampling
+coroutine, both driven by the real boot-time
+`MushroomMarker.warm_art_cache()` call. Over **~144 real seconds**
+(`Time.get_ticks_msec()`), `_elapsed_seconds` — accumulated as
+`_elapsed_seconds += delta` inside `_process(delta)` — only reached
+**~4.9 "seconds."** A ~29x gap. Only 2 of the 30 pooled tips were ever
+shown across the entire real load; the spinner glyph shares the exact
+same bug (`LoadingSpinner.frame_for_elapsed` also reads
+`_elapsed_seconds`), so it was effectively frozen too, just less
+noticeable than static text for a full minute-plus.
+
+**Root cause: Godot's own delta smoothing**
+(`application/run/delta_smoothing`, confirmed ON by default in this
+project via `OS.is_delta_smoothing_enabled()` returning `true`, no
+`project.godot` override). It exists to iron out ordinary V-sync jitter
+by replacing a frame's real `delta` with a smoothed estimate close to
+the expected refresh-rate delta — which silently discards the real,
+large `delta` a genuine multi-second synchronous stretch produces
+(exactly what happens between `MushroomMarker.warm_art_cache()`'s own
+internal `await Engine.get_main_loop().process_frame` yields under real
+load).
+
+**Fix:** `LoadingOverlay` no longer accumulates `_process`'s own `delta`
+for this bookkeeping at all. `show_with_text` records
+`_start_ticks_msec := Time.get_ticks_msec()`; a new `_advance_to(now_ms)`
+recomputes `_elapsed_seconds` fresh each call as real elapsed wall-clock
+time and refreshes both the tip and spinner from it; `_process(_delta)`
+just calls `_advance_to(Time.get_ticks_msec())`, ignoring its own `delta`
+argument entirely. `_advance_to` takes `now_ms` explicitly (rather than
+reading the clock itself) so tests can simulate real time passing
+without literally waiting — the same "caller supplies the real input,
+this just computes" split `LoadingTips.tip_for_elapsed`/`LoadingSpinner.
+frame_for_elapsed` already use one level up.
+
+**TDD:** the two pre-existing tests driving `_process(delta)` directly
+with a hand-picked large delta moved to `_advance_to` instead — calling
+`_process` with a synthetic delta stopped being a meaningful way to
+simulate elapsed time once delta itself stopped driving anything. A new
+regression test calls `_process(100.0)` immediately after
+`show_with_text` (near-zero real time actually elapsed) and asserts the
+tip does NOT change — red against the pre-fix code (which blindly
+trusted that 100.0 and jumped straight past `TIP_INTERVAL_SECONDS`),
+green after; this guards the same trust-delta-blindly shape as the live
+bug, in the opposite direction (a misleadingly LARGE delta here vs.
+Godot's real misleadingly SMALL smoothed one) — proving elapsed-time
+bookkeeping is now fully decoupled from whatever `delta` claims either
+way. `test_loading_overlay.gd` 6/6; re-run clean:
+`test_loading_spinner.gd`, `test_world_boot_loading_overlay_fanout.gd`,
+`test_world_intro_splash_after_load_fanout.gd`,
+`test_world_play_intro_splash_frame_gate.gd` (25/25 across the five
+files), and the full `test_main_menu.gd` (79/80 — the one failure,
+`test_the_diorama_fits_within_the_first_unscrolled_view_of_the_
+character_tab`, is a real but entirely unrelated diorama/scroll-layout
+geometry issue with no connection to `LoadingOverlay`'s elapsed-time
+bookkeeping; flagged separately rather than folded into this fix).
+
+Branched from fresh `origin/main` (which already carried the witty-tips
+merge above), pushed immediately.

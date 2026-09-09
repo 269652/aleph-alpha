@@ -25,8 +25,20 @@ extends Control
 ## cause (it awaits a frame between each chunk instead of loading the whole
 ## radius in one uninterrupted loop), which is what makes both the
 ## spinner's own animation AND the real percentage visible for the first
-## time -- and, now, what makes the tip rotation itself actually advance
-## rather than freezing on its opening line for the whole load.
+## time.
+##
+## Getting a real frame to present is NOT enough on its own, though --
+## reported live a second time, specifically about the tip: "the new witty
+## loading screen texts should change every few seconds not stay the same
+## for 1 min loading." Even across genuinely-presented frames, Godot's
+## delta smoothing (ON by default in this project) can replace a real,
+## large single-frame `delta` -- exactly what a heavy synchronous stretch
+## like MushroomMarker.warm_art_cache() produces between its own internal
+## yields -- with a much smaller smoothed estimate, so accumulating
+## `_process`'s own `delta` badly undercounts real elapsed time. Both the
+## tip AND the spinner now derive _elapsed_seconds from real wall-clock
+## time instead (Time.get_ticks_msec(), see _advance_to's own doc comment
+## for the full measured story), immune to whatever `delta` claims.
 ##
 ## PROCESS_MODE_ALWAYS (set by World, matching every other paused-but-live
 ## overlay in this file -- SettingsOverlay/MainMenu) so both the spinner
@@ -54,6 +66,11 @@ var _tip_label: Label
 var _corner_spinner_label: Label
 var _corner_status_label: Label
 var _elapsed_seconds := 0.0
+## Real wall-clock start time (Time.get_ticks_msec(), set by show_with_text)
+## that _elapsed_seconds is derived FROM every _process call -- see
+## _advance_to's own doc comment for why this reads the real clock instead
+## of accumulating _process's own `delta` argument.
+var _start_ticks_msec := 0
 ## Rolled fresh each show_with_text call (see that function) so different
 ## loading screens open on a different witty tip rather than always the
 ## same one -- LoadingTips.tip_for_elapsed's own "caller rolls the start,
@@ -152,6 +169,7 @@ func show_with_text(text: String) -> void:
 	_base_status_text = text
 	_corner_status_label.text = text
 	_elapsed_seconds = 0.0
+	_start_ticks_msec = Time.get_ticks_msec()
 	_tip_start_offset = randi() % LoadingTips.TIPS.size()
 	_tip_label.text = LoadingTips.tip_for_elapsed(0.0, _tip_start_offset)
 	_corner_spinner_label.text = LoadingSpinner.frame_for_elapsed(0.0)
@@ -196,9 +214,41 @@ func tip_text() -> String:
 	return _tip_label.text
 
 
-func _process(delta: float) -> void:
-	if not visible:
-		return
-	_elapsed_seconds += delta
+## Recomputes _elapsed_seconds from REAL elapsed wall-clock time
+## (`now_ms - _start_ticks_msec`) and refreshes both readouts that depend
+## on it, rather than accumulating `_process`'s own `delta` argument the
+## way this used to work.
+##
+## Reported live: "the new witty loading screen texts should change every
+## few seconds not stay the same for 1 min loading." Real, measured cause:
+## Godot's delta smoothing (`application/run/delta_smoothing`, ON by
+## default in this project -- confirmed via `OS.is_delta_smoothing_enabled()`
+## returning true with no project.godot override) silently replaces the
+## real, large `delta` a genuine multi-second synchronous stall produces
+## with a much smaller smoothed estimate, since it's designed to iron out
+## ordinary frame-to-frame V-sync jitter, not survive a multi-second
+## outlier. Measured live against the real boot-time
+## `MushroomMarker.warm_art_cache()` call (the dominant, ~52-144s+
+## real-machine-dependent boot cost this overlay covers, see
+## docs/progress.md): ~144 real seconds elapsed (Time.get_ticks_msec) while
+## the old `_elapsed_seconds += delta` accumulation only reached ~4.9
+## "seconds" -- a ~29x gap. Since both the tip AND the spinner glyph
+## (LoadingSpinner.frame_for_elapsed also reads _elapsed_seconds) advanced
+## only by that accumulated delta, both froze on their opening frame for
+## nearly the entire real load -- not a coincidence limited to the tip.
+##
+## Takes `now_ms` explicitly instead of calling Time.get_ticks_msec()
+## itself so a test can simulate real elapsed time passing without
+## literally waiting for it -- the same "caller supplies the real input,
+## this just computes" split LoadingTips.tip_for_elapsed/LoadingSpinner.
+## frame_for_elapsed already use one level up (see test_loading_overlay.gd).
+func _advance_to(now_ms: int) -> void:
+	_elapsed_seconds = float(now_ms - _start_ticks_msec) / 1000.0
 	_corner_spinner_label.text = LoadingSpinner.frame_for_elapsed(_elapsed_seconds)
 	_tip_label.text = LoadingTips.tip_for_elapsed(_elapsed_seconds, _tip_start_offset)
+
+
+func _process(_delta: float) -> void:
+	if not visible:
+		return
+	_advance_to(Time.get_ticks_msec())
