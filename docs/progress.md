@@ -18207,13 +18207,85 @@ relocates does not retarget foragers already in flight for it -- they
 keep flying toward/returning to the old, now-marker-free site, and
 `_active_bee_foragers`'s dictionary key never migrates to the new site
 either, so the per-hive concurrent-forager cap can be briefly exceeded
-across the old+new keys; (2) a chunk unloading while one of its bees is
-mid-flight orphans that bee's own `BeeColony` reference (a real object
-kept alive only by the forager's own reference count) -- the forager's
-eventual `record_forage_result`/`deposit_food` call lands on that
-abandoned colony instead of the fresh one `_load_chunk` built on
-re-entry, a silent economy-state leak with no visible symptom on its
-own.
+across the old+new keys -- **fixed later the same day, see "Beehive
+relocation now retargets its own already-active foragers" below**;
+(2) a chunk unloading while one of its bees is mid-flight orphans that
+bee's own `BeeColony` reference (a real object kept alive only by the
+forager's own reference count) -- the forager's eventual
+`record_forage_result`/`deposit_food` call lands on that abandoned
+colony instead of the fresh one `_load_chunk` built on re-entry, a
+silent economy-state leak with no visible symptom on its own. **Still
+open** -- out of scope for the (1) fix above, a genuinely different
+mechanism (chunk lifecycle, not relocation).
+
+## Beehive relocation now retargets its own already-active foragers (2026-09-09)
+
+Confirmed bug, flagged the same day investigating the "bees draw above
+ground scenery" report above: `EarthChunkManager._maybe_abscond_bee_
+colony` (absconding) and `relocate_bee_hive_after_harvest` (the harvest
+hand-off) both called `colony.abscond_to(from_cell, to_cell)` then
+`_replace_bee_hive_marker(...)`, but neither touched `_active_bee_
+foragers` (keyed by the hive's own global tile) or any already-
+dispatched `BeeForagerMarker`. A forager already scouting/approaching/
+returning for that hive at the moment it relocated kept flying toward
+(or lingering near) the OLD site's marker forever -- `hive_position`/
+`_hive_cell` were set exactly once, at dispatch time in `setup()`, and
+never updated afterward. Worse, its eventual arrival still resolved
+successfully: `_resolve_arrival_at_hive` calls `colony.
+record_forage_result(_hive_cell, ...)`, and because the colony OBJECT
+itself is not recreated by relocation (only its internal dictionaries
+are), this silently resurrected `_forage_success`/`_food_stored`
+entries for a cell with no live hive behind it at all, via those
+methods' own `.get(cell, default)` fallback pattern. Separately,
+`_active_bee_foragers`'s own dictionary key never migrated off the old
+global tile, so the per-hive concurrent-forager cap
+(`colony.active_forager_cap_at`, checked by `_dispatch_bee_forager`)
+could be briefly exceeded: stale foragers under the old key and
+freshly-dispatched ones under the new key were both alive at once,
+uncounted against each other.
+
+**Three-part fix, matching docs/concept/bees.md's own "Absconding"
+section (now updated):**
+
+1. New `BeeForagerMarker.retarget_hive(new_hive_position,
+   new_hive_cell)` -- the one place either field is now allowed to
+   change mid-trip. Both `_step_scouting`'s own home-anchor wander and
+   `_current_leg_target`'s RETURNING-leg branch already read
+   `hive_position` fresh every step (never a cached snapshot), and
+   `_resolve_arrival_at_hive` reads `_hive_cell` fresh on arrival, so
+   reassigning both is sufficient to redirect a forager wherever it
+   currently is in its own trip.
+2. New `EarthChunkManager._retarget_active_bee_foragers(chunk_coord,
+   from_cell, to_cell)`, called from both relocation sites right
+   alongside `_replace_bee_hive_marker`: looks up every still-active
+   forager under the OLD global tile (pruning any that already freed
+   themselves, mirroring `_dispatch_bee_forager`'s own `is_instance_
+   valid`/`is_queued_for_deletion` filter), calls `retarget_hive` on
+   each, and migrates the survivors onto the NEW global tile -- merging
+   into whatever is already tracked there rather than overwriting it,
+   so the concurrent-forager cap is enforced against the real, current
+   site.
+3. `BeeColony.record_forage_result`/`deposit_food` now guard on
+   `has_hive(cell)` as a defensive backstop -- not expected to fire in
+   ordinary play now that (1)+(2) retarget every active forager before
+   this could ever happen, but belt-and-braces against a forager that
+   somehow still resolves against a truly-gone cell (e.g. the colony
+   itself lost outright after a failed relocation search).
+
+TDD, three red/green cycles: `test_bee_forager_marker.gd` +3
+(`retarget_hive` updates both fields; redirects a RETURNING forager's
+leg target; a retargeted forager credits the NEW hive cell on arrival,
+not the old one) -- red with "Nonexistent function 'retarget_hive'"
+before the method existed, green after, 33/33 overall. `test_bee_
+colony.gd` +2 (`record_forage_result`/`deposit_food` no-op for a cell
+`abscond_to` already erased) -- red (honey figure moved from 120 to
+121/125) before the guard existed, green after, 50/50 overall.
+`test_earth_chunk_manager_bees.gd` +3 (absconding retargets an
+already-active forager; harvest-relocation does too; an already-freed
+forager is pruned during migration, not carried over) -- red (stale
+`hive_cell`, stale `hive_position`, old key still populated, new key
+missing the forager) before `_retarget_active_bee_foragers` existed and
+was wired in, green after, 26/26 overall.
 
 ## A tenth pass on the intro: the character creator's icon build learned to yield (`concept/intro_splash.md`, 2026-09-09)
 

@@ -483,6 +483,64 @@ func test_max_scout_seconds_is_derived_not_eyeballed():
 	assert_almost_eq(BeeForagerMarker.MAX_SCOUT_SECONDS, expected, 0.01)
 
 
+# -- retarget_hive: a hive that relocates while this forager is still --------
+# -- active (see docs/concept/bees.md's own "Absconding") must not leave -----
+# -- it flying toward a site whose marker is already torn down ---------------
+#
+# hive_position/_hive_cell are otherwise set exactly once, in setup()/by
+# real dispatch, and never updated afterward (see hive_position's own doc
+# comment) -- retarget_hive is the ONE place either is allowed to change
+# mid-trip, called by EarthChunkManager the moment its hive actually
+# relocates out from under an already-dispatched forager.
+
+func test_retarget_hive_updates_both_the_position_and_the_cell():
+	add_child_autofree(marker)
+	marker.hive_position = Vector2(10, 0)
+	marker._hive_cell = Vector2i(1, 1)
+	marker.retarget_hive(Vector2(500, 500), Vector2i(9, 9))
+	assert_eq(marker.hive_position, Vector2(500, 500))
+	assert_eq(marker._hive_cell, Vector2i(9, 9))
+
+
+## Mirrors _current_leg_target's own "not APPROACHING -> hive_position"
+## branch: a RETURNING forager reads hive_position fresh every step (see
+## that function's own doc comment), so retargeting mid-flight must
+## actually redirect it, not just update a value nothing reads again.
+func test_retarget_hive_redirects_a_returning_forager_mid_flight():
+	marker.setup(null, null, Vector2i.ZERO)
+	marker.hive_position = Vector2(1000, 0)  # the OLD, now-gone site
+	marker.position = Vector2(500, 0)
+	marker._behavior.arrive_at_food(true)  # -> RETURNING, homeward leg
+	add_child_autofree(marker)
+	marker.retarget_hive(Vector2(500, 100), Vector2i(2, 2))
+	assert_eq(marker._current_leg_target(), Vector2(500, 100))
+
+
+## The real, observable consequence (see docs/concept/bees.md's
+## "Absconding"): a forager retargeted mid-trip must credit the NEW hive
+## cell on arrival, not the stale one it was originally dispatched to.
+func test_a_retargeted_forager_credits_the_new_hive_cell_on_arrival():
+	var colony := _colony_with_one_hive()
+	var old_cell: Vector2i = colony.hive_cells()[0]
+	var new_cell := Vector2i(0, 0) if old_cell != Vector2i(0, 0) else Vector2i(1, 1)
+	colony.abscond_to(old_cell, new_cell)
+	var old_cell_honey_before := colony.honey_stored_at(old_cell)
+	var world := _world_with_one_flower(Vector2(4, 0))
+	marker.setup(world, colony, old_cell)
+	marker.target_position = Vector2(4, 0)
+	marker.hive_position = Vector2.ZERO
+	marker.position = Vector2(3, 0)
+	add_child_autofree(marker)
+	marker.retarget_hive(Vector2.ZERO, new_cell)
+	var new_cell_honey_before := colony.honey_stored_at(new_cell)
+	assert_true(_run_until_freed())
+	assert_gt(colony.honey_stored_at(new_cell), new_cell_honey_before, "the NEW, real hive cell should be credited")
+	assert_almost_eq(
+		colony.honey_stored_at(old_cell), old_cell_honey_before, 0.001,
+		"the old, gone cell must not be resurrected"
+	)
+
+
 # -- no world / no colony: graceful, never a crash ---------------------------
 
 func test_scouting_with_no_world_never_crashes_and_still_wanders():
