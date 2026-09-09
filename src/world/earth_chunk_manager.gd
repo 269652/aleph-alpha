@@ -914,17 +914,22 @@ var _spread_tick := 0
 ## throttle, so a sapling's age tracks real elapsed time, not spread ticks.
 var _world_age_seconds := 0.0
 
-## How wide a range a brand new world may start at within the year (see
-## randomize_world_age below, and docs/concept/seasons.md).
+## Where a brand new world's clock always starts (see
+## reset_world_age_to_mid_spring below, and docs/concept/seasons.md).
 ##
 ## Every fresh save used to start at world-age 0 exactly, and SeasonCycle's
 ## own phase formula puts that moment at warmth ~0.1465 -- just under
 ## Snowfall.FREEZING_WARMTH (0.15) -- so every new game began mid-winter-
 ## adjacent and reliably snowed within the first few minutes (reported: "it
-## starts to snow deterministically"). A full year of possible starting
-## points is the whole point: any season is a valid place for a new world to
-## begin.
-const NEW_GAME_WORLD_AGE_RANGE_SECONDS := SeasonCycle.SECONDS_PER_YEAR
+## starts to snow deterministically"). That was first fixed by rolling a
+## uniformly random starting point across the whole year -- since superseded
+## by a direct, explicit request ("make starting season always mid spring"):
+## every new world now begins at this SAME deliberately-chosen instant
+## instead, rather than either the original accidental-winter bug or an
+## arbitrary unchosen season.
+const MID_SPRING_WORLD_AGE_SECONDS := (
+	SeasonCycle.SECONDS_PER_YEAR * SeasonCycle.MID_SPRING_YEAR_FRACTION
+)
 
 
 func _init(
@@ -3743,36 +3748,38 @@ func world_age_seconds() -> float:
 
 
 ## Sets the world clock, and keeps every OTHER clock-tracking mark that reads
-## against it in step -- the shared plumbing under both randomize_world_age
-## (a brand new world) and load_world_clock (a resumed one).
+## against it in step -- the shared plumbing under both
+## reset_world_age_to_mid_spring (a brand new world) and load_world_clock (a
+## resumed one).
 ##
 ## Without this, a mark like _last_fruiting_time/_snow_world_age would still
-## read 0 the instant the real clock jumped to a random or loaded value, and
-## the NEXT step_fruiting/step_snow call would see the whole jump as elapsed
-## time -- the same "two clocks that have to agree" trap jump_to_season's own
-## doc comment describes, just at world-creation/load time instead of a
-## /season skip.
+## read 0 the instant the real clock jumped to its new-game or loaded value,
+## and the NEXT step_fruiting/step_snow call would see the whole jump as
+## elapsed time -- the same "two clocks that have to agree" trap
+## jump_to_season's own doc comment describes, just at world-creation/load
+## time instead of a /season skip.
 func set_world_age_seconds(value: float) -> void:
 	_world_age_seconds = value
 	_last_fruiting_time = value
 	_snow_world_age = value
 	# The canopies are one of those readers, and this is the earliest moment
-	# they can possibly be right: both randomize_world_age (New Game) and
-	# load_world_clock (Load Game) come through here BEFORE the first chunk
-	# load, so a world that opens in winter opens with bare trees instead of
-	# summer ones that correct themselves a tick later (see sync_tree_season).
+	# they can possibly be right: both reset_world_age_to_mid_spring (New
+	# Game) and load_world_clock (Load Game) come through here BEFORE the
+	# first chunk load, so a world that opens in winter opens with bare trees
+	# instead of summer ones that correct themselves a tick later (see
+	# sync_tree_season).
 	sync_tree_season()
 	sync_grass_season()
 
 
-## Rolls a brand new world's starting point in the year, once (see
-## NEW_GAME_WORLD_AGE_RANGE_SECONDS) -- called only at New Game/Host Game
+## Sets a brand new world's starting point in the year, once (see
+## MID_SPRING_WORLD_AGE_SECONDS) -- called only at New Game/Host Game
 ## creation (see World._wipe_persisted_world), never on Load Game (see
-## load_world_clock, which restores the persisted value instead of rerolling
-## it -- a load must resume exactly where the save left off, not time-travel
-## on every session).
-func randomize_world_age() -> void:
-	set_world_age_seconds(randf() * NEW_GAME_WORLD_AGE_RANGE_SECONDS)
+## load_world_clock, which restores the persisted value instead of
+## overwriting it -- a load must resume exactly where the save left off, not
+## time-travel to mid-spring on every session).
+func reset_world_age_to_mid_spring() -> void:
+	set_world_age_seconds(MID_SPRING_WORLD_AGE_SECONDS)
 
 
 ## Persists the world clock, following the same store_var convention

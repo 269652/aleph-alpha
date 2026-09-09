@@ -159,8 +159,8 @@ func _canopy_season() -> String:
 	return manager._tree_renderer.canopy_state()["season"]
 
 
-## Both randomize_world_age (New Game) and load_world_clock (Load Game) go
-## through set_world_age_seconds, and both run BEFORE the first
+## Both reset_world_age_to_mid_spring (New Game) and load_world_clock (Load
+## Game) go through set_world_age_seconds, and both run BEFORE the first
 ## update()/update_with_progress call -- so dressing the trees here is what
 ## makes a chunk that loads in winter load bare trees, rather than summer
 ## ones that correct themselves a moment later.

@@ -9445,61 +9445,66 @@ func test_jumping_with_progress_never_moves_the_clock_backwards():
 		assert_gte(manager.world_age_seconds(), before)
 
 
-# -- a new world starts at a random point in the year -------------------------
+# -- a new world always starts in mid-spring -----------------------------------
 #
 # _world_age_seconds used to start at a hardcoded 0.0 for every new game, and
 # SeasonCycle's own phase formula puts that exact moment at warmth ~0.1465 --
 # just under Snowfall.FREEZING_WARMTH (0.15) -- so every fresh save began
 # mid-winter-adjacent and reliably snowed within minutes (reported: "it starts
-# to snow deterministically"). A brand new world should be free to start
-# anywhere in the year; a LOADED world must resume exactly where it left off
-# (see the persistence tests further down, and World._on_menu_start_requested
-# / _spawn_local_singleplayer_from_save for the real call sites).
+# to snow deterministically"). That was first fixed by letting a new world
+# start anywhere in the year at random (EarthChunkManager.randomize_world_age,
+# see git history) -- since superseded by a direct, explicit request ("make
+# starting season always mid spring"): a new world now always begins at the
+# SAME deliberately-chosen instant, `SeasonCycle.MID_SPRING_YEAR_FRACTION`
+# through the year, rather than either the original accidental-winter bug or
+# a season nobody chose. A LOADED world still must resume exactly where it
+# left off regardless (see the persistence tests further down, and
+# World._on_menu_start_requested / _spawn_local_singleplayer_from_save for the
+# real call sites).
 
 func test_a_freshly_constructed_manager_starts_at_world_age_zero():
-	# The precondition the randomization tests below lean on: only an
-	# explicit randomize_world_age()/set_world_age_seconds() call should ever
+	# The precondition the tests below lean on: only an explicit
+	# reset_world_age_to_mid_spring()/set_world_age_seconds() call should ever
 	# move this away from zero.
 	assert_eq(manager.world_age_seconds(), 0.0)
 
 
-func test_randomize_world_age_lands_within_one_year():
-	for i in 20:
-		var other := EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
-		other.randomize_world_age()
-		assert_gte(other.world_age_seconds(), 0.0)
-		assert_lt(other.world_age_seconds(), SeasonCycle.SECONDS_PER_YEAR)
+func test_reset_world_age_to_mid_spring_lands_in_spring():
+	manager.reset_world_age_to_mid_spring()
+	assert_eq(manager.current_season(), "spring")
 
 
-## The actual bug, restated: every new game landing on the SAME moment.
-func test_randomize_world_age_does_not_always_land_on_the_same_moment():
+## Pins the exact tuned instant (see CLAUDE.md: tuned values must be tested,
+## never eyeballed) -- not just "somewhere in spring", but precisely halfway
+## through it, matching the test suite's own established MID_SPRING (0.125)
+## convention (test_seasonal_foliage.gd/test_season_transition.gd).
+func test_reset_world_age_to_mid_spring_lands_exactly_halfway_through_spring():
+	manager.reset_world_age_to_mid_spring()
+	assert_eq(
+		SeasonCycle.new().year_fraction(manager.world_age_seconds()),
+		SeasonCycle.MID_SPRING_YEAR_FRACTION
+	)
+
+
+## The opposite of the old randomize_world_age contract: every new game must
+## now land on the exact SAME moment, not a different one each time.
+func test_reset_world_age_to_mid_spring_always_lands_on_the_same_moment():
 	var ages := {}
-	for i in 20:
+	for i in 5:
 		var other := EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
-		other.randomize_world_age()
+		other.reset_world_age_to_mid_spring()
 		ages[other.world_age_seconds()] = true
-	assert_gt(ages.size(), 1, "every new game landing on the same world-age is the bug this exists to fix")
+	assert_eq(ages.size(), 1, "every new game must start at the exact same mid-spring moment")
 
 
-## The report's own terms: a fresh world should not always start in the same
-## SEASON either -- this is the direct, real-world-visible symptom.
-func test_randomize_world_age_can_start_in_more_than_one_season():
-	var seasons := {}
-	for i in 40:
-		var other := EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
-		other.randomize_world_age()
-		seasons[other.current_season()] = true
-	assert_gt(seasons.size(), 1, "40 fresh worlds should not all start in the same season")
-
-
-## set_world_age_seconds (used by both randomize_world_age and
+## set_world_age_seconds (used by both reset_world_age_to_mid_spring and
 ## load_world_clock) has to move every OTHER mark that measures itself
 ## against the clock too -- the same "two clocks that have to agree" trap
 ## jump_to_season's own doc comment already describes, just at world-creation
 ## time rather than a /season skip. Proven against snow: if _snow_world_age
-## were left behind at 0 while the real clock jumped to a random mid-year
-## start, the very first step_snow call would see the WHOLE random offset as
-## elapsed time and dump a season's worth of accumulation into one step.
+## were left behind at 0 while the real clock jumped to a later starting
+## point, the very first step_snow call would see the WHOLE jump as elapsed
+## time and dump a season's worth of accumulation into one step.
 func test_set_world_age_seconds_does_not_fake_a_catch_up_on_the_first_snow_step():
 	manager.set_world_age_seconds(20000.0)
 	manager.advance_world_age(1.0)
@@ -10052,10 +10057,10 @@ func test_wipe_event_store_clears_both_memory_and_disk():
 
 # -- the world clock persists like everything else world-scoped -------------
 #
-# A LOADED game must resume from exactly where it stopped, not re-randomize
-# (see randomize_world_age's own doc comment) -- proven end to end here, the
-# same real-call-site convention PlayerSave/EventStorePersistence already
-# established (see WorldClockPersistence).
+# A LOADED game must resume from exactly where it stopped, not reset back to
+# mid-spring (see reset_world_age_to_mid_spring's own doc comment) -- proven
+# end to end here, the same real-call-site convention PlayerSave/
+# EventStorePersistence already established (see WorldClockPersistence).
 
 func test_save_world_clock_then_load_world_clock_round_trips():
 	var path := "user://test_ecm_world_clock.bin"
