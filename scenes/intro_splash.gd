@@ -17,18 +17,20 @@ signal finished
 const IntroSplashSheet = preload("res://src/rendering/intro_splash_sheet.gd")
 const IntroSplashSequencer = preload("res://src/rendering/intro_splash_sequencer.gd")
 
-## The sheet's own per-frame pixel footprint -- measured directly
-## (tools/probe_intro_sheet.gd), not assumed from the 1983/8 x 793/4
-## arithmetic (see IntroSplashSheet's own doc comment for why that's not
-## exact for this sheet). Real per-frame rects vary by a pixel or two from
-## this across the 32 real sliced frames (232-234 wide, 181-183 tall) --
-## 233x182 is simply the single most common exact size among them. This is
-## the ONE reference size DISPLAY_SIZE scales from, not a per-frame live
-## measurement, so the on-screen box itself never resizes as playback
-## moves between frames of very slightly different native size -- only
-## STRETCH_KEEP_ASPECT_CENTERED's own letterboxing absorbs that tiny
-## variance (see _ready's own comment).
-const _NATIVE_FRAME_SIZE := Vector2(233, 182)
+## The sheet's own per-frame pixel footprint. Was Vector2(233, 182) -- the
+## single most common size among the 32 real sliced frames back when
+## IntroSplashSheet cropped each frame to its OWN content and the real size
+## varied by a pixel or two frame to frame. The eleventh pass (docs/concept/
+## intro_splash.md) replaced that with ONE fixed crop window
+## (IntroSplashSheet._FRAME_WIDTH/_FRAME_HEIGHT, 240x183) applied identically
+## to every frame -- this constant went stale the moment that shipped, and
+## the mismatch is what a twelfth pass's "not stabilized again" report
+## traced back to (see that pass's own note on DISPLAY_SCALE below).
+## test_native_frame_size_matches_the_sheets_own_real_fixed_crop_size pins
+## this against IntroSplashSheet's own constants directly, not a
+## hand-copied literal, so a future re-measurement can't silently desync
+## this again.
+const _NATIVE_FRAME_SIZE := Vector2(IntroSplashSheet._FRAME_WIDTH, IntroSplashSheet._FRAME_HEIGHT)
 
 ## Reported live: "make it smaller, about the size of the new character
 ## panel... otherwise it looks pixelated and wobbly" (see docs/concept/
@@ -38,18 +40,21 @@ const _NATIVE_FRAME_SIZE := Vector2(233, 182)
 ## still an arbitrary non-integer upscale of the sheet's own modest native
 ## resolution, which is exactly what "pixelated and wobbly" describes:
 ## Godot's default (effectively linear) filter softens/shimmers hard
-## pixel-art edges at any scale that doesn't land on whole pixels.
-## Reported again, live, on top of that already-shipped fix: "it should be
-## much smaller." This pass ("An eighth pass") replaces the arbitrary
-## literal with a genuine pixel-perfect integer scale instead, mirroring
-## MainMenu.STANDARD_PORTRAIT_SCALE's own established "roundi a target
-## against the real native size" pattern -- see that constant's own doc
-## comment. 3x keeps the box comfortably smaller than the seventh pass's
-## own 880x620 in both dimensions (699x546) while staying a legible,
-## deliberate multiple -- a tested, named constant, not an eyeballed one
-## (see test_display_size_is_a_clean_integer_multiple_of_the_native_frame_
-## size and test_display_is_pixel_perfect in test_intro_splash.gd).
-const DISPLAY_SCALE := 3
+## pixel-art edges at any scale that doesn't land on whole pixels. An eighth
+## pass replaced the arbitrary literal with a pixel-perfect 3x integer
+## scale instead (699x546).
+##
+## A twelfth pass (2026-09-09) sets this to 1 -- reported live, twice in
+## the same message: "not stabilized again" (see _NATIVE_FRAME_SIZE's own
+## doc comment -- that constant going stale after the eleventh pass is the
+## real cause, not a genuine wobble regression) and "still too big.. make
+## it native size / resolution", the second an explicit, unambiguous ask
+## for NO upscaling at all, not merely a smaller multiple. DISPLAY_SCALE=1
+## also makes the exact _NATIVE_FRAME_SIZE-staleness class of bug
+## structurally harmless going forward: at a true 1:1 scale there is no
+## scale factor left for a mismatched reference size to distort into a
+## non-integer, shimmer-inducing one.
+const DISPLAY_SCALE := 1
 const DISPLAY_SIZE := _NATIVE_FRAME_SIZE * DISPLAY_SCALE
 
 var _frames: Array[ImageTexture] = []

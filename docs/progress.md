@@ -18513,3 +18513,34 @@ fire-and-forget-plus-`wait_process_frames` coroutine-timing technique
 `test_pressing_new_game_builds_the_character_creator` already established,
 not private-state reaching. Full `test_main_menu.gd` re-run clean, no
 regression in any of the ten prior passes on this screen.
+
+## The intro drops to native size, no upscaling at all (`concept/intro_splash.md`, "A twelfth pass", 2026-09-09)
+
+Reported live, twice in the same message: "Now it's not stabilized again
+anymore and still too big.. make it native size / resolution."
+
+"Not stabilized again" traced back to the eleventh pass's own fix going
+stale one file away, not a real regression in it: that pass made every
+frame a uniform 240x183 (`IntroSplashSheet._FRAME_WIDTH`/`_FRAME_HEIGHT`),
+but `scenes/intro_splash.gd`'s `_NATIVE_FRAME_SIZE` was still pinned to the
+OLD `Vector2(233, 182)` — the "most common size among the old, varying
+per-frame crops," meaningless once every frame became uniform. The
+resulting `DISPLAY_SIZE` no longer shared the real texture's own aspect
+ratio, so `STRETCH_KEEP_ASPECT_CENTERED` silently picked a non-integer
+effective scale (699/240 ≈ 2.9125 vs 546/183 ≈ 2.9836) — the same
+fractional-scale filter shimmer the eighth pass fixed, from a new cause.
+
+Fix: `DISPLAY_SCALE` 3 → 1 (native size, the explicit ask — also
+structurally closes off this whole bug class, since at true 1:1 there's no
+scale factor left for a stale reference to distort into a fractional one).
+`_NATIVE_FRAME_SIZE` now reads directly from `IntroSplashSheet._FRAME_
+WIDTH`/`_FRAME_HEIGHT` instead of a hand-copied literal, so this exact
+staleness can't silently recur a third time.
+
+TDD: two new tests in `test_intro_splash.gd`, both confirmed red first —
+`test_display_scale_is_native_no_upscaling` and `test_native_frame_size_
+matches_the_sheets_own_real_fixed_crop_size`. `test_intro_splash.gd`
+15/15, `test_intro_splash_sheet.gd` 7/7, `test_intro_splash_sequencer.gd`
+7/7, `test_world_play_intro_splash_frame_gate.gd` 3/3, `test_world_intro_
+splash_after_load_fanout.gd` 5/5 — no regression in any of the eleven
+prior passes.

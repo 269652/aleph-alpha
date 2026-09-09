@@ -896,6 +896,55 @@ Full `test_intro_splash_sheet.gd` (7/7) and `test_intro_splash.gd`
 (13/13) pass -- no regression in the eighth pass's own sizing/filtering
 fix or the ninth pass's modifier-key handling.
 
+### A twelfth pass: native size, no upscaling at all (2026-09-09)
+
+Reported live, twice in the same message: "Now it's not stabilized again
+anymore and still too big.. make it native size / resolution."
+
+**"not stabilized again" was NOT a regression in the eleventh pass's own
+fix -- it was that fix silently going stale one file away.** The eleventh
+pass replaced `IntroSplashSheet`'s per-frame CONTENT-based crop with ONE
+fixed `_FRAME_WIDTH`/`_FRAME_HEIGHT` window (240x183) applied identically
+to every frame -- genuinely fixed, confirmed by that pass's own tests. But
+`scenes/intro_splash.gd`'s own `_NATIVE_FRAME_SIZE` was still pinned to
+`Vector2(233, 182)` -- the "single most common size among the OLD, varying
+per-frame crops," a number that stopped meaning anything the moment every
+frame became uniformly 240x183. `DISPLAY_SIZE` (computed from that stale
+reference times `DISPLAY_SCALE`) no longer shared the real texture's own
+aspect ratio, so `STRETCH_KEEP_ASPECT_CENTERED` silently picked a
+non-integer effective scale to fit it (699/240 ≈ 2.9125 vs 546/183 ≈
+2.9836 -- not equal, so neither axis lands on a clean whole number) --
+exactly the fractional-scale filter shimmer the eighth pass fixed, just
+from a newly-introduced cause rather than that pass's original arbitrary-
+literal one. The underlying frame geometry itself was never unstable again
+-- the DISPLAYED result was, for an unrelated, adjacent reason.
+
+**"still too big"**: a direct, unambiguous ask -- native size, not merely
+a smaller integer multiple. `DISPLAY_SCALE` (3 since the eighth pass) is
+now `1`. This fixes both complaints in the same stroke: the on-screen box
+is now genuinely tiny (exactly `_NATIVE_FRAME_SIZE`, 240x183) as asked,
+and at a true 1:1 scale there is no scale factor left for a mismatched
+reference size to distort into a shimmer-inducing fractional one --
+structurally closing off the exact bug class that caused "not stabilized
+again," not just this one instance of it.
+
+`_NATIVE_FRAME_SIZE` itself is fixed too, and in a way meant to prevent
+this exact staleness from recurring a third time: it now reads directly
+from `IntroSplashSheet._FRAME_WIDTH`/`_FRAME_HEIGHT` (`Vector2(
+IntroSplashSheet._FRAME_WIDTH, IntroSplashSheet._FRAME_HEIGHT)`) instead of
+a hand-copied literal, so a future re-measurement of the sheet can never
+silently desync this file's own reference again.
+
+**TDD.** Two new tests in `test_intro_splash.gd`, both confirmed red
+first: `test_display_scale_is_native_no_upscaling` (`DISPLAY_SCALE == 1`,
+not merely smaller) and `test_native_frame_size_matches_the_sheets_own_
+real_fixed_crop_size` (`_NATIVE_FRAME_SIZE == Vector2(IntroSplashSheet.
+_FRAME_WIDTH, IntroSplashSheet._FRAME_HEIGHT)` directly, not a literal).
+`test_intro_splash.gd` 15/15, `test_intro_splash_sheet.gd` 7/7,
+`test_intro_splash_sequencer.gd` 7/7, `test_world_play_intro_splash_frame_
+gate.gd` 3/3, `test_world_intro_splash_after_load_fanout.gd` 5/5 -- no
+regression in any of the eleven prior passes.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
@@ -983,12 +1032,12 @@ fix or the ninth pass's modifier-key handling.
   the same `STRETCH_KEEP_ASPECT_COVERED` now covers a smaller box, a real
   reduction in upscale factor. See `IntroSplash.DISPLAY_SIZE`.
 - ✅ **Revised (2026-09-09, "An eighth pass"): that box shrank again, to a
-  genuine pixel-perfect integer scale (699x546 = `_NATIVE_FRAME_SIZE`
-  `Vector2(233, 182)` x `DISPLAY_SCALE` 3) with `TEXTURE_FILTER_NEAREST`,
-  not an arbitrary literal with Godot's default filter.** Reported live
-  again: "it should be much smaller." Fixes the OTHER half of "pixelated
-  and wobbly" the seventh pass's box-shrink alone didn't touch -- the
-  missing `NEAREST` filter. See "An eighth pass" above.
+  genuine pixel-perfect integer scale with `TEXTURE_FILTER_NEAREST`, not an
+  arbitrary literal with Godot's default filter** (superseded again by the
+  twelfth pass below, which drops the scale to 1 -- native size). Reported
+  live again: "it should be much smaller." Fixes the OTHER half of
+  "pixelated and wobbly" the seventh pass's box-shrink alone didn't touch
+  -- the missing `NEAREST` filter. See "An eighth pass" above.
 - ✅ **Revised (2026-09-09, "A ninth pass"): skip-on-any-key ignores a
   lone `KEY_SHIFT`/`KEY_CTRL`/`KEY_ALT`/`KEY_META` press.** Flagged since
   the fifth pass, actioned once the intro's own visual stability was
@@ -1017,6 +1066,14 @@ fix or the ninth pass's modifier-key handling.
   `IntroSplashSheet`'s per-frame `detect_frames` crop, which
   `STRETCH_KEEP_ASPECT_CENTERED` letterboxing alone didn't fully absorb.
   See "An eleventh pass" above.
+- ✅ **Revised (2026-09-09, "A twelfth pass"): `DISPLAY_SCALE` is now 1 --
+  native size, no upscaling at all.** Reported live as "not stabilized
+  again" (a stale `_NATIVE_FRAME_SIZE` left over from the eleventh pass,
+  not a real geometry regression) and "still too big.. make it native
+  size" in the same message. `_NATIVE_FRAME_SIZE` now reads directly from
+  `IntroSplashSheet._FRAME_WIDTH`/`_FRAME_HEIGHT` instead of a hand-copied
+  literal, so this exact staleness can't silently recur. See "A twelfth
+  pass" above.
 - ⬜ No audio. A logo intro without a sting/whoosh is a real, honest gap
   (this project has no music/SFX system wired up to hook into yet at
   all), not something this pass attempts.

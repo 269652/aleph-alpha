@@ -12,6 +12,7 @@ extends GutTest
 
 const IntroSplash = preload("res://scenes/intro_splash.gd")
 const IntroSplashSequencer = preload("res://src/rendering/intro_splash_sequencer.gd")
+const IntroSplashSheet = preload("res://src/rendering/intro_splash_sheet.gd")
 
 
 func _splash() -> IntroSplash:
@@ -156,12 +157,50 @@ func test_display_size_is_a_clean_integer_multiple_of_the_native_frame_size():
 
 
 ## A regression guard, not just a restatement of the constant: the whole
-## point of this pass was "smaller than the seventh pass's already-shipped
-## 880x620 box", not merely "some other integer-scaled size that happens to
-## be bigger".
+## point of the eighth/twelfth passes was "smaller than the seventh pass's
+## already-shipped 880x620 box", not merely "some other integer-scaled size
+## that happens to be bigger".
 func test_display_size_is_smaller_than_the_prior_character_panel_sized_box():
 	assert_lt(IntroSplash.DISPLAY_SIZE.x, 880.0)
 	assert_lt(IntroSplash.DISPLAY_SIZE.y, 620.0)
+
+
+## A twelfth pass (2026-09-09): reported live, twice in the same message --
+## "not stabilized again" (the eleventh pass's fixed-crop-window fix DID
+## hold; what regressed was THIS reference constant going stale the moment
+## that fix shipped -- see the next test) and "still too big.. make it
+## native size / resolution". DISPLAY_SCALE=1 pins the second, explicit ask
+## directly: the on-screen box is exactly _NATIVE_FRAME_SIZE, no upscaling
+## at all, so there is no scale factor left for a filter-driven artifact to
+## ride on regardless of how carefully _NATIVE_FRAME_SIZE itself is kept in
+## sync.
+func test_display_scale_is_native_no_upscaling():
+	assert_eq(
+		IntroSplash.DISPLAY_SCALE, 1,
+		"native size means no upscaling at all, not merely a smaller multiple"
+	)
+
+
+## The eleventh pass (see docs/concept/intro_splash.md) replaced
+## IntroSplashSheet's own per-frame CONTENT-based crop with ONE fixed
+## _FRAME_WIDTH/_FRAME_HEIGHT window -- 240x183, not the OLD 233x182
+## "single most common size among the varying old crops" this file's own
+## _NATIVE_FRAME_SIZE was still pinned to. That mismatch is the real root
+## cause of "not stabilized again": DISPLAY_SIZE (computed from the STALE
+## 233x182 reference) no longer shared the real, now-uniform texture's own
+## aspect ratio, so STRETCH_KEEP_ASPECT_CENTERED silently reintroduced a
+## non-integer effective scale (699/240 != 546/183) -- exactly the
+## fractional-scale shimmer the eighth pass fixed, just from a different
+## cause than that pass's own arbitrary-literal one. A direct equality
+## check against IntroSplashSheet's own real constants, not a hand-copied
+## literal, so a FUTURE re-measurement of the sheet can never silently
+## desync this file's own reference again the same way.
+func test_native_frame_size_matches_the_sheets_own_real_fixed_crop_size():
+	assert_eq(
+		IntroSplash._NATIVE_FRAME_SIZE,
+		Vector2(IntroSplashSheet._FRAME_WIDTH, IntroSplashSheet._FRAME_HEIGHT),
+		"the display's own reference size must track the sheet's real, current fixed-crop size, not a stale copy"
+	)
 
 
 ## The other half of "pixelated and wobbly", not fixed by shrinking the box
