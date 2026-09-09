@@ -499,6 +499,73 @@ tests exercising `LoadingOverlay` directly (scoped via
 `-gunit_test_name=loading_overlay` per that file's own documented slow-
 suite cost).
 
+### The tip (and spinner) were frozen in real play: Godot's delta smoothing, not a rotation-logic bug (2026-09-09)
+
+Reported live, same day: *"The new witty loading screen texts should
+change every few seconds not stay the same for 1 min loading."* The
+rotation logic above tested green in isolation (`test_loading_tips.gd`,
+`test_loading_overlay.gd`) because those tests drove `_process` directly
+with hand-picked delta values — they never exercised the actual gap
+between how `_process` gets called in a real, heavy, mostly-synchronous
+load and what `_elapsed_seconds` was actually being computed from.
+
+**Measured, not assumed** (a temporary diagnostic GUT test, not
+committed — a real `LoadingOverlay` + a concurrent frame-sampling
+coroutine, both driven by the real `MushroomMarker.warm_art_cache()`
+boot call): over **~144 real seconds** (`Time.get_ticks_msec()`),
+`_elapsed_seconds` — accumulated as `_elapsed_seconds += delta` inside
+`_process(delta)` — only reached **~4.9 "seconds."** A ~29x gap. Only 2
+of the 30 pooled tips were ever shown across the entire real load.
+
+**Root cause: Godot's own delta smoothing**
+(`application/run/delta_smoothing`, confirmed ON by default in this
+project — no `project.godot` override — via
+`OS.is_delta_smoothing_enabled()` returning `true`). It exists to iron
+out ordinary frame-to-frame V-sync jitter, and does so by replacing the
+`delta` a frame actually took with a smoothed estimate close to the
+expected refresh-rate delta — which silently discards the real, large
+`delta` a genuine multi-second synchronous stretch produces (exactly
+what happens between `MushroomMarker.warm_art_cache()`'s own internal
+`await Engine.get_main_loop().process_frame` yields under real load).
+The spinner glyph shares the identical bug — `LoadingSpinner.
+frame_for_elapsed` also reads `_elapsed_seconds` — so it was ALSO
+effectively frozen for the whole load, just less noticeable than static
+witty text for a full minute-plus.
+
+**Fix:** `LoadingOverlay` no longer accumulates `_process`'s own
+`delta` for this bookkeeping at all. `show_with_text` records
+`_start_ticks_msec := Time.get_ticks_msec()`; a new `_advance_to(now_ms)`
+recomputes `_elapsed_seconds` fresh each call as real elapsed wall-clock
+time (`(now_ms - _start_ticks_msec) / 1000.0`) and refreshes both the
+tip and spinner from it; `_process(_delta)` just calls
+`_advance_to(Time.get_ticks_msec())`, ignoring its own `delta` argument
+entirely. `_advance_to` takes `now_ms` explicitly (rather than reading
+the clock itself) so tests can simulate real time passing without
+literally waiting — the same "caller supplies the real input, this just
+computes" split `LoadingTips.tip_for_elapsed`/`LoadingSpinner.
+frame_for_elapsed` already use one level up.
+
+TDD: the two pre-existing tests that drove `_process(delta)` directly
+with a hand-picked large delta (`test_tip_changes_once_the_rotation_
+interval_elapses`, `test_tip_rotation_does_not_disturb_the_corner_
+progress_text`) moved to `_advance_to` instead — calling `_process` with
+a synthetic delta stopped being a meaningful way to simulate elapsed
+time once delta itself stopped driving anything. A new regression test,
+`test_a_misleading_process_delta_does_not_advance_the_tip_without_real_
+time_passing`, calls `_process(100.0)` immediately after `show_with_text`
+(near-zero real time actually elapsed) and asserts the tip does NOT
+change — red against the pre-fix code (which blindly trusted that 100.0
+and jumped straight past `TIP_INTERVAL_SECONDS`), green after; this is
+the same trust-delta-blindly shape as the live bug, guarded in the
+opposite direction (a misleadingly LARGE delta here vs. Godot's real
+misleadingly SMALL smoothed one), which is what actually proves elapsed-
+time bookkeeping is now fully decoupled from whatever `delta` claims
+either way. `test_loading_overlay.gd` 6/6, no regression in
+`test_loading_spinner.gd`/`test_world_boot_loading_overlay_fanout.gd`/
+`test_world_intro_splash_after_load_fanout.gd`/`test_world_play_intro_
+splash_frame_gate.gd` (25/25 across the five files); `test_main_menu.gd`
+re-run in full separately (see docs/progress.md for the confirmed count).
+
 ## Status / mechanisms
 
 - ✅ `Player.appearance` field + `to_save_dict()`/`apply_save_dict()`, tested
@@ -585,6 +652,15 @@ suite cost).
   for the full mechanism. `show_with_text`/`set_progress`/`hide_overlay`
   kept their exact prior signatures, so none of the five entry points'
   own call sites changed.
+- ✅ **Revised again, same day: the tip (and spinner) actually rotate
+  during a real load now**, not just in a hand-fed unit test. Real
+  elapsed wall-clock time (`Time.get_ticks_msec()`) drives both readouts
+  instead of accumulating `_process`'s own `delta`, which Godot's
+  default-on delta smoothing can silently shrink to a fraction of real
+  time during a genuine multi-second synchronous stall (measured live: a
+  ~144s real boot load only accumulated ~4.9 "elapsed" seconds the old
+  way) — see "The tip (and spinner) were frozen in real play" above for
+  the full measured story.
 - 🚧 The pre-menu terrain-atlas bake (`TerrainRenderer.build_tile_set`,
   triggered unconditionally in `World._ready()` via `EarthChunkManager`'s
   constructor, before the main menu itself is even shown) is a real,

@@ -61,7 +61,7 @@ func test_tip_changes_once_the_rotation_interval_elapses():
 	overlay.show_with_text("Loading your world...")
 	var first_tip := overlay.tip_text()
 
-	overlay._process(LoadingTips.TIP_INTERVAL_SECONDS + 0.01)
+	overlay._advance_to(Time.get_ticks_msec() + int((LoadingTips.TIP_INTERVAL_SECONDS + 0.01) * 1000.0))
 
 	assert_ne(overlay.tip_text(), first_tip)
 	assert_true(LoadingTips.TIPS.has(overlay.tip_text()))
@@ -74,6 +74,45 @@ func test_tip_rotation_does_not_disturb_the_corner_progress_text():
 	overlay.show_with_text("Loading your world...")
 	overlay.set_progress(3, 10)
 
-	overlay._process(LoadingTips.TIP_INTERVAL_SECONDS + 0.01)
+	overlay._advance_to(Time.get_ticks_msec() + int((LoadingTips.TIP_INTERVAL_SECONDS + 0.01) * 1000.0))
 
 	assert_eq(overlay.status_text(), "Loading your world... (3 / 10 chunks)")
+
+
+## Reported live: "the new witty loading screen texts should change every
+## few seconds not stay the same for 1 min loading." Real, measured cause
+## (a temporary diagnostic test, not committed): Godot's delta smoothing
+## (application/run/delta_smoothing, ON by default -- OS.
+## is_delta_smoothing_enabled() confirmed true with no project.godot
+## override) silently replaces the real, large `delta` a genuine multi-
+## second synchronous stall produces with a much smaller smoothed estimate.
+## Measured live against the real boot-time MushroomMarker.warm_art_cache()
+## call: ~144 real seconds elapsed (Time.get_ticks_msec) while _process's
+## OWN accumulated delta only reached ~4.9 "seconds" -- a ~29x gap. Since
+## the tip (and the spinner glyph, which reads the same _elapsed_seconds)
+## both advanced by accumulating `delta` every _process call, both froze on
+## their opening frame for nearly the entire real load.
+##
+## This is a direct regression guard, inverted: `_process`'s own `delta`
+## argument must never be trusted for this bookkeeping AT ALL -- only real
+## elapsed wall-clock time (Time.get_ticks_msec(), via _advance_to below)
+## may move the tip. A single misleadingly LARGE delta, called essentially
+## the instant after show_with_text (near-zero real time actually passed),
+## proves this: the pre-fix code did `_elapsed_seconds += delta` directly,
+## so this exact call would have jumped straight past TIP_INTERVAL_SECONDS
+## and changed the tip immediately -- the same trust-delta-blindly shape
+## that (in the opposite direction, with Godot's real smoothed-too-SMALL
+## deltas during a genuine stall) caused the live bug. Guarding both
+## directions is what actually proves elapsed-time bookkeeping is now
+## fully decoupled from whatever `delta` claims.
+func test_a_misleading_process_delta_does_not_advance_the_tip_without_real_time_passing():
+	var overlay := _overlay()
+	overlay.show_with_text("Loading your world...")
+	var first_tip := overlay.tip_text()
+
+	overlay._process(100.0)  # would have blown past TIP_INTERVAL_SECONDS pre-fix
+
+	assert_eq(
+		overlay.tip_text(), first_tip,
+		"a delta value alone, with no real wall-clock time actually passing, must not rotate the tip"
+	)
