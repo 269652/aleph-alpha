@@ -35,15 +35,26 @@ extends RefCounted
 ## design pillar 2, "diet is a property of the species, not of the code
 ## path") -- flocking follows the same rule.
 
-const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
-
-## Real average house sparrow body length (bill to tail), meters --
-## converted via GroundSlide.PX_PER_METER, the same real-world-to-world-px
-## idiom this codebase already uses for every other body-scale constant
-## (see that class's own doc comment), rather than borrowing FishSchooling's
-## own FISH_BODY_LENGTH_PX, an unrelated species' scale.
-const SPARROW_BODY_LENGTH_METERS := 0.15
-const SPARROW_BODY_LENGTH_PX := SPARROW_BODY_LENGTH_METERS * GroundSlide.PX_PER_METER
+## A sparrow's own body length, in world px -- sized to how big a sparrow
+## actually RENDERS, mirroring FishSchooling.FISH_BODY_LENGTH_PX's own
+## precedent exactly ("FishMarker.CLEARANCE_PX... roughly the sprite's
+## half-extent"), restated here rather than imported (importing
+## IllustratedBirdSprite here would tie a pure gameplay module to a
+## rendering one for one number) and cross-checked directly by
+## test_bird_flocking.gd's test_body_length_constant_matches_the_sparrows_
+## real_rendered_width, not left to drift as an unchecked comment.
+##
+## A real-meters conversion (GroundSlide.PX_PER_METER) was tried first and
+## measured WRONG: a real 0.15m sparrow converts to ~1.68 world px, under
+## a third of this sprite's own real rendered width -- GroundSlide.
+## PX_PER_METER calibrates the PLAYER's own real-world height against the
+## world, and AmbientFlyerRenderer.FLYER_WORLD_SCALE sizes a bird against
+## a completely independent reference (a fish, per that constant's own
+## doc comment): the two scales are not calibrated to agree, and
+## empirically don't -- IllustratedBirdSprite.CANVAS_SIZE.x (220) *
+## IllustratedBirdSprite.new().marker_scale("sparrow") (~0.0236) is the
+## real rendered width this restates.
+const SPARROW_BODY_LENGTH_PX := 5.1857142857
 
 ## The same three zonal multiples FishSchooling uses -- the zonal model's
 ## own 1/4/10 body-length ratios are a general result of the schooling/

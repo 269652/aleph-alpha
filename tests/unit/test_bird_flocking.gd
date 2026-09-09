@@ -9,6 +9,7 @@ extends GutTest
 ## flourish, not part of the zonal model itself).
 
 const BirdFlocking = preload("res://src/gameplay/bird_flocking.gd")
+const IllustratedBirdSprite = preload("res://src/rendering/illustrated_bird_sprite.gd")
 
 
 # -- the three zones, purely by distance (identical shape to FishSchooling,
@@ -70,16 +71,26 @@ func test_zone_radii_are_ordered_repulsion_lt_orientation_lt_attraction():
 	assert_lt(BirdFlocking.ORIENTATION_RADIUS_PX, BirdFlocking.ATTRACTION_RADIUS_PX)
 
 
-## The zones are stated in real BODY LENGTHS, converted via GroundSlide.
-## PX_PER_METER -- the same real-world-to-world-px idiom this codebase
-## already uses for every other body-scale constant (see that class's own
-## doc comment), rather than borrowing FishSchooling's own FISH_BODY_
-## LENGTH_PX, an unrelated species' scale.
-func test_body_length_constant_is_a_real_sparrow_length_in_meters():
-	assert_between(
-		BirdFlocking.SPARROW_BODY_LENGTH_METERS, 0.12, 0.18,
-		"a house sparrow is roughly 14-16cm bill to tail"
+## The zones are stated in BODY LENGTHS, sized to how big a sparrow
+## actually RENDERS in world px -- mirrors FishSchooling.FISH_BODY_
+## LENGTH_PX's own precedent exactly ("FishMarker.CLEARANCE_PX... roughly
+## the sprite's half-extent"), not a real-world-meters conversion.
+##
+## A real-meters conversion (GroundSlide.PX_PER_METER) was tried first and
+## measured wrong: a real 0.15m sparrow converts to ~1.68 world px, under
+## a THIRD of this sprite's own real rendered width (~5.19px, computed
+## below) -- GroundSlide.PX_PER_METER calibrates the PLAYER's own
+## real-world height against the world, and FLYER_WORLD_SCALE sizes a
+## bird against a completely independent reference (a fish, per
+## AmbientFlyerRenderer.FLYER_WORLD_SCALE's own doc comment) -- the two
+## scales are not calibrated to agree, and empirically don't. Cross-
+## checked directly against the real render, the same reason FishSchooling
+## doesn't trust its own body-length comment unchecked either.
+func test_body_length_constant_matches_the_sparrows_real_rendered_width():
+	var real_width := (
+		float(IllustratedBirdSprite.CANVAS_SIZE.x) * IllustratedBirdSprite.new().marker_scale("sparrow")
 	)
+	assert_almost_eq(BirdFlocking.SPARROW_BODY_LENGTH_PX, real_width, 0.01)
 
 
 # -- species gate: sparrows flock, robins don't ------------------------------
