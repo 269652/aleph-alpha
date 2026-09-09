@@ -266,13 +266,53 @@ A frog's real winter strategy (bury into mud/leaf litter, inactive) is
 architecturally closer to `EarthwormPatch`'s "activity toggles with cold,
 headcount is fixed" shape than to a hunting/grazing `CreatureMarker` or a
 population-tracked bird — so it is built as a lightweight, per-chunk
-capped presence near water/damp ground (the same proven shape
-`AmbientFlyerRenderer` already uses for butterflies), whose
-visibility/catchability toggles with the same cold-gate signal
-`EarthwormPatch` established, rather than a full predation-fed aggregate
-population. Graduating it to a real population later is named as a
-follow-up, the same honest scope cut this project already keeps for
-other decorative-but-real presences.
+capped presence near water/damp ground, whose existence toggles with
+season rather than a full predation-fed aggregate population. Graduating
+it to a real population later is named as a follow-up, the same honest
+scope cut this project already keeps for other decorative-but-real
+presences.
+
+**Implemented differently from the paragraph above, on reading the real
+code, in two ways worth naming explicitly:**
+
+1. The season gate is `CaterpillarRenderer.ACTIVE_SEASONS`'s exact
+   "checked once at spawn time" shape (spring/summer/autumn active, no
+   winter presence at all), not `EarthwormPatch`'s live warmth-threshold
+   EMA that phase 8's hibernation/brumation work uses — a grass frog has
+   no per-frame warmth reading to smooth at all in this pass, only a
+   spawn-time roll, the same accepted "existing markers don't re-validate
+   their own season eligibility" approximation caterpillar/true-butterflies
+   already carry. "Visibility toggles with cold" above is therefore real
+   but coarser than it first reads: a chunk already loaded when winter
+   arrives keeps whatever frogs it already had until it next unloads.
+2. A real, independent WATER-PRESENCE gate reusing `WaterAreaSurvey.
+   interior_water_cell_count` — the exact same signal the aquatic fish
+   population model already uses (see `fishing.md`) — rather than folding
+   "near water" into a biome name the way every other species group in
+   this doc does. A grass frog needs an actual river/lake/ocean-adjacent
+   cell in its own chunk, not just a grassland/forest/rainforest label.
+
+New `GrassFrogRenderer`/`GrassFrogMarker` (not built on
+`AmbientFlyerRenderer`/`AmbientFlyerMarker` despite the similar per-chunk-
+capped shape): `AmbientFlyerMovement`'s continuous smooth roam is the
+wrong gait for a real frog, which sits still far longer than it moves.
+`GrassFrogMarker` instead drives a small bespoke hop-burst state machine
+(long idle holds, short fixed-distance hops), reusing only
+`AmbientFlyerMovement.direction_at` as the home-anchored heading picker at
+the start of each hop — which also makes idle-vs-hop a real discrete
+state rather than a proxy read off a continuous roam's own tiny per-frame
+delta. A real, if decorative, croak plays on its own per-instance-jittered
+timer while idle. The sheet's fourth row ("eat" — a real tongue-catches-
+a-fly animation) is deliberately left unwired: this game's own ambient
+"insects" (butterflies) are themselves a decorative flat-cap presence
+with no population count to decrement, so a frog "eating" one would still
+be decorative underneath, not an actual mechanism — named as a follow-up
+rather than faked. Grass frog is also not yet wired into the capture-tool
+system (`CaptureTool.is_ambient_flyer_species` only recognizes
+`AmbientFlyerRenderer`'s own species pools, a deliberately separate,
+lighter architecture) — "catchability" in the paragraph above reads, in
+this first pass, as "a real, visible, tangible presence," not yet as a
+literal net/trap interaction; wiring that in is a named follow-up too.
 
 ## Explicit deferred follow-ups (named, not silently dropped)
 
@@ -283,6 +323,14 @@ other decorative-but-real presences.
   that does not exist yet).
 - Grass frog graduating from decorative-but-real to a full predation-fed
   aggregate population.
+- Grass frog's "eat" animation wired to a real interaction (needs
+  butterflies, or some other real insect presence, to carry an actual
+  population count first — see above).
+- Grass frog wired into the capture-tool system (`CaptureTool`).
+- Grass frog re-validating its own season eligibility continuously (a
+  chunk already loaded when winter arrives keeps its frogs until it next
+  unloads, the same accepted approximation caterpillar/true-butterflies
+  already carry).
 - Starvation-as-a-death-path for any herbivore.
 - Distinguishing true hibernation from brumation at the physiological
   level (occasional warm-day rousing for brumators).
@@ -383,4 +431,17 @@ caterpillars/ants in winter (still eats fruit), read live in
 `AmbientFlyerMarker._look_for_worms`/`_look_for_caterpillars`/
 `_look_for_ants` via the world's own `current_season()`. Robin/sparrow
 keep their existing flat diet weighting untouched.
-⬜ Grass frog: brumating, decorative-but-real presence
+✅ Grass frog: brumating, decorative-but-real presence — new `GrassFrog
+Renderer`/`GrassFrogMarker`/`IllustratedGrassFrogSprite`, spawned via
+`EarthChunkManager` alongside caterpillar/millipede. Gated on a real
+water-presence signal (`WaterAreaSurvey.interior_water_cell_count`, the
+same one fish's aquatic population model already uses) AND a season gate
+mirroring caterpillar's exact "spawn-time only" shape (spring/summer/
+autumn active, brumates through winter). A bespoke hop-burst state
+machine, not `AmbientFlyerMovement`'s continuous roam (see this section's
+own "implemented differently" note above for why) — caught and fixed its
+own real bug pre-ship: a hop that only started stepping on the FOLLOWING
+frame was silently skipped whenever a frame's delta exceeded the hop's own
+duration, which this game's distance-based LOD throttling can easily
+produce. "Eat" left unwired and capture-tool integration deferred, both
+named explicitly above rather than silently dropped.
