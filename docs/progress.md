@@ -18962,3 +18962,62 @@ plus extensions to `test_creature_call_sound.gd` and `test_world_
 creature_and_footstep_audio_wiring.gd` — all confirmed red first (the two
 new files failed to even compile against not-yet-existing classes, the
 extensions failed their specific new assertions).
+
+## Intro splash: a fifth row, a sparkle flourish, and a ninth column (`concept/intro_splash.md`, 2026-09-09)
+
+Requested live: *"I added a new intro sprite with a 5th row.. wire it
+pls."* `assets/sprites/intro.png` got a real new final beat — a pure
+sparkle/starburst flourish, no globe at all — closing the sequence
+after the wordmark completes, and grew from 8 to 9 columns per row in
+the same pass, not just a taller canvas.
+
+Verified rather than assumed at every step, which mattered here: the
+first two "it's replaced now" checks both still measured exactly
+1983×793 (the original, untouched size) — only the third actually
+differed, and even then the canvas never grew taller; the real 8×4/32-
+frame grid was re-packed into 5 shorter rows within the SAME 793px
+height alongside 9 (not 8) columns per row, confirmed by opening and
+visually inspecting the sheet directly rather than trusting a
+byte-size/timestamp change alone to mean "done."
+
+`tools/probe_intro_sheet.gd` (already fully generic — detects real row/
+column boundaries from the image itself, never hardcoding a row/column
+count) needed zero code changes to re-measure the new layout. Real
+measured facts: 5 row bands (a spurious 6th — a 1px sliver at the very
+bottom edge, 0 real frames in it — correctly excluded, not blindly
+trusted), 9 identical column lefts independently re-detected across
+every one of the 5 real rows. `_FRAME_WIDTH` tightened 240 → 195: the
+new sheet's own tightest real column pitch (202px) is narrower than
+its widest per-frame detected content (226px), a genuine geometric
+conflict the original sheet never had (there, widest-content-plus-
+margin comfortably undercut the tightest pitch). Resolved by rendering
+actual candidate cropped swatches at 195px for the widest/narrowest
+columns on multiple rows and looking at them directly: the globe,
+every sparkle point, and the wordmark text all sit comfortably inside
+with real margin — the wider `detect_frames` numbers were measuring
+antialiasing/glow fringe past the meaningful content, not real content
+a tighter crop would actually clip. `_FRAME_HEIGHT` tightened 183 →
+151 (the new tallest real row band). `IntroSplashSequencer.
+FRAME_COUNT`: 32 → 45, duration ~3.2s → ~4.5s. `IntroSplash`'s own
+display sizing reads these constants live, so it picked up the new
+frame size with no separate code change — the exact staleness class of
+bug the earlier twelfth pass's own fix was built to make structurally
+impossible.
+
+TDD: `test_frame_count_matches_the_sequencer` changed from a hardcoded
+literal to a real cross-check against `IntroSplashSequencer.
+FRAME_COUNT` (matching what the test's own name already claimed but
+never actually did). Confirmed red first against the `FRAME_COUNT`
+change alone, before touching `IntroSplashSheet`'s own constants —
+swapping only the asset in first produced no useful red at all, since
+the old hardcoded 4×8 grid still structurally emits exactly 32 frames
+regardless of the real image underneath, and every content-level check
+still passed against those now-misaligned crops. Two new tests pin the
+real safety margins directly (frame width against the tightest real
+column pitch, frame height against the tightest real row gap) rather
+than an eyeballed comment, per this repo's own CLAUDE.md.
+`test_intro_splash_sheet.gd` 9/9, `test_intro_splash_sequencer.gd` 7/7
+(needed no changes at all). Regression-checked: every `intro`-matching
+test script together (`-gselect=intro`, 6 scripts) 44/44, including
+`test_intro_splash.gd`'s own Node-level display-sizing/pixel-
+perfectness checks, unaffected with no code changes of their own.
