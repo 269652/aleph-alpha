@@ -59,6 +59,7 @@ const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
 const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
 const CaterpillarRenderer = preload("res://src/rendering/caterpillar_renderer.gd")
 const MillipedeRenderer = preload("res://src/rendering/millipede_renderer.gd")
+const GrassFrogRenderer = preload("res://src/rendering/grass_frog_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
@@ -362,6 +363,7 @@ var _wild_crop_renderer := WildCropRenderer.new()
 var _decomposer_renderer := DecomposerRenderer.new()
 var _caterpillar_renderer := CaterpillarRenderer.new()
 var _millipede_renderer := MillipedeRenderer.new()
+var _grass_frog_renderer := GrassFrogRenderer.new()
 ## "an NPC moves in" (see docs/concept/timber_construction.md's NPC
 ## section) -- no dedicated renderer class needed (spawning one
 ## LumberjackMarker per Sägewerk tile is simple enough to do directly, see
@@ -623,6 +625,11 @@ var _caterpillar_markers: Dictionary = {}
 ## (see docs/concept/soil_fauna.md "Millipedes: a dedicated autumn
 ## leaf-litter decomposer").
 var _millipede_markers: Dictionary = {}
+## Vector2i chunk_coord -> Array[GrassFrogMarker], same per-chunk-array
+## shape as _caterpillar_markers/_millipede_markers immediately above, for
+## the same reason (see docs/concept/seasonal_behavior.md's phase 10,
+## "Grass frog: new species, brumating, decorative-but-real").
+var _grass_frog_markers: Dictionary = {}
 
 ## The Sägewerk's own Lumberjack -- "an NPC moves in" the moment a
 ## "sagewerk" modification tile exists (see
@@ -11365,6 +11372,18 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for caterpillar_marker in _caterpillar_markers[chunk_coord]:
 		caterpillar_marker.setup(self)
 
+	# Seasonal-behavior epic, phase 10 (docs/concept/seasonal_behavior.md):
+	# a grass frog needs real water nearby, not just the right land biome --
+	# see GrassFrogRenderer's own doc comment for the water-presence gate
+	# (WaterAreaSurvey.interior_water_cell_count) -- and brumates through
+	# winter, the same "season read once, at spawn time" shape caterpillar
+	# immediately above already established.
+	_grass_frog_markers[chunk_coord] = _grass_frog_renderer.spawn_grass_frogs(
+		_entities_parent, chunk, _biome_classifier.dominant_biome(chunk.biome), current_season(),
+		chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		hash("%d_%d_grass_frogs" % [chunk_coord.x, chunk_coord.y])
+	)
+
 	# Requested live, after a screenshot of an autumn floor carpeted in
 	# leaves: "what else decomposes leaves I could add into the ecosystem
 	# to increase decomposition rate?" (see docs/concept/soil_fauna.md
@@ -12029,6 +12048,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for marker in _millipede_markers.get(chunk_coord, []):
 		marker.free()
 	_millipede_markers.erase(chunk_coord)
+
+	for marker in _grass_frog_markers.get(chunk_coord, []):
+		marker.free()
+	_grass_frog_markers.erase(chunk_coord)
 
 	for marker in _sagewerk_lumberjacks.get(chunk_coord, {}).values():
 		marker.free()
