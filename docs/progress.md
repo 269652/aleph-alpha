@@ -18513,3 +18513,86 @@ fire-and-forget-plus-`wait_process_frames` coroutine-timing technique
 `test_pressing_new_game_builds_the_character_creator` already established,
 not private-state reaching. Full `test_main_menu.gd` re-run clean, no
 regression in any of the ten prior passes on this screen.
+
+## In-flight ant foragers no longer corrupt an orphaned colony after their chunk unloads (`concept/soil_fauna.md`, 2026-09-09)
+
+Ports the fix shipped for bees earlier the same day (see "In-flight bee
+foragers no longer corrupt an orphaned colony after their chunk
+unloads" above) to the ant side that entry named directly but left
+open: *"`AntForagerMarker._resolve_arrival_at_mound` has the identical
+unguarded `_colony.record_forage_result(...)` call, and
+`EarthChunkManager._unload_chunk` neither retires nor otherwise
+protects `AntColony` on unload either... a known, not-yet-fixed
+parallel gap."*
+
+Same real bug, same real cause: a chunk unloading while one of its
+ants is mid-flight orphans that ant's own `AntColony` reference (a
+real object kept alive only by the forager's own reference count) —
+the forager's eventual `record_forage_result` call landed on that
+abandoned object instead of the fresh one `_load_chunk` built if the
+player returned, a silent economy-state leak with no visible symptom
+on its own. Ants carry one real extra half bees don't: a successful
+trip also caches whatever it was carrying into the WORLD
+(`plant_grass_at`/`try_plant_seed_at`), *after* the
+`record_forage_result` call — a guard that only shielded that first
+call would still leak a real, visible ground effect (a seed planted at
+a mound position nobody can reach any more), so the fix guards the
+WHOLE function, not just the deposit.
+
+**Fix:** `AntColony` gets the identical `mark_retired()`/`is_retired()`
+flag pair `BeeColony`/`WildBeePatch` already have.
+`EarthChunkManager._unload_chunk` calls `mark_retired()` on it,
+immediately before erasing its own `_ant_colonies` entry.
+`AntForagerMarker._resolve_arrival_at_mound` checks `is_retired()`
+before touching the colony at all — before even the
+`record_forage_result` call — and quietly frees itself without
+depositing or caching anything if it reads true.
+
+**TDD, three sound steps, each its own commit**, mirroring the bee
+fix's own shape: (1) `mark_retired()`/`is_retired()` added to
+`AntColony` alone, driven by two direct unit tests in
+`test_ant_colony.gd`, confirmed red against the un-implemented methods
+first; (2) `AntForagerMarker._resolve_arrival_at_mound`'s own guard,
+driven by two new `test_ant_forager_marker.gd` tests — confirmed red
+first against step (1) alone (a real deposit, 45→46 food, and a real
+seed actually planted, exactly the bug); (3)
+`EarthChunkManager._unload_chunk`'s own wiring, driven by three new
+`test_earth_chunk_manager.gd` tests — fewer than bees' own five: ants
+have no duck-typed `WildBeePatch` equivalent, so there is no second
+"home" kind for `AntForagerMarker` to serve and nothing to mirror
+those two extra tests against — including a full dispatch-unload-
+resolve end-to-end regression, confirmed red against steps (1)+(2)
+alone (a real 45→46 deposit landing on the orphaned colony). One of
+the three, proving an in-flight forager is NOT freed by its own
+chunk's unload, was already green throughout (and stays green) —
+mirroring bees' own identical already-green test.
+
+One real wrinkle specific to this file, not present in
+`test_earth_chunk_manager_bees.gd`: `test_earth_chunk_manager.gd`'s
+own `before_each` never adds `entities_parent` to a live SceneTree
+(the bee file's does), so a freshly-dispatched scout's `_ready()`
+never actually fires and `_ensure_initialized()`'s own
+`begin_scouting()` call ends up firing lazily inside the new
+regression test's own `_process()` call instead — silently
+overwriting the `_behavior.phase` the test had just forced to
+`RETURNING` a moment earlier, and making the test pass for the wrong
+reason (it never reached `_resolve_arrival_at_mound` at all). Caught
+by re-deriving the count from bee's own `_dispatch_forager` source
+directly rather than trusting the by-inspection assumption, and fixed
+by calling `forager._ensure_initialized()` explicitly first —
+`AntForagerMarker`'s own documented, sanctioned escape hatch for
+exactly this synthetic-test-double timing gap.
+
+`test_ant_colony.gd` 113/113 (111 pre-existing + 2 new),
+`test_ant_forager_marker.gd` 76/76 (74 + 2 new); the three new
+`test_earth_chunk_manager.gd` tests confirmed green individually (this
+file's own ~500-test, hours-long full pass is a nice-to-have checkpoint
+per its own CONTRIBUTING.md note, not a hard per-change gate — the one
+directly adjacent pre-existing test,
+`test_evicting_old_chunks_frees_ant_mound_markers`, was re-run directly
+and stays green).
+
+`docs/concept/soil_fauna.md` gets the ant-side mirror of `bees.md`'s
+own "In-flight foragers survive an unload; their trip's outcome does
+not" section; `bees.md` itself gets an appended "closed" note rather
+than being left stale now that the gap it named no longer exists.
