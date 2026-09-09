@@ -12115,11 +12115,32 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		marker.free()
 	_ant_mound_markers.erase(chunk_coord)
 
+	# A BeeForagerMarker already in flight for one of this chunk's hives
+	# holds a direct reference to this exact BeeColony (see that class's
+	# own _colony doc comment) -- it is parented on the persistent
+	# _entities_parent node, not chunk-scoped, so unloading correctly does
+	# NOT free it (the world keeps living while nobody's watching -- see
+	# _loaded_ambient_flyers/etc. just above for the chunk-scoped things
+	# that DO get freed here). Erasing this dictionary's own entry alone
+	# cannot free an object the forager itself still references, so it
+	# must be explicitly retired -- see BeeColony.mark_retired's own doc
+	# comment, docs/concept/bees.md's "In-flight foragers survive an
+	# unload; their trip's outcome does not".
+	var retiring_bee_colony: BeeColony = _bee_colonies.get(chunk_coord)
+	if retiring_bee_colony != null:
+		retiring_bee_colony.mark_retired()
 	_bee_colonies.erase(chunk_coord)
 	for marker in _bee_hive_markers.get(chunk_coord, {}).values():
 		marker.free()
 	_bee_hive_markers.erase(chunk_coord)
 
+	# Mirrors the honeybee-hive retirement immediately above, for the
+	# OTHER role BeeForagerMarker serves (a solitary WildBeePatch
+	# resident's own trip) -- see WildBeePatch.mark_retired's own doc
+	# comment.
+	var retiring_wild_bee_patch: WildBeePatch = _wild_bee_patches.get(chunk_coord)
+	if retiring_wild_bee_patch != null:
+		retiring_wild_bee_patch.mark_retired()
 	_wild_bee_patches.erase(chunk_coord)
 	for marker in _wild_bee_nest_markers.get(chunk_coord, {}).values():
 		marker.free()
