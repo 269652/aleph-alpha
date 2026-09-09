@@ -177,3 +177,54 @@ func test_display_is_pixel_perfect():
 		intro.display_is_pixel_perfect(),
 		"the animation should render with NEAREST filtering at a non-cropping integer scale"
 	)
+
+
+## Flagged, not yet fixed, back when the fifth pass shipped: the skip-on-
+## any-key handler is triggered by a lone Alt press -- very plausibly an
+## incidental alt-tab during the long boot wait, not a deliberate "skip
+## this" gesture from the player. Godot reports the modifier itself as an
+## ordinary InputEventKey the instant it's pressed (keycode == KEY_ALT),
+## indistinguishable at that point from a real skip key, since the window-
+## manager combo it's actually part of (Alt+Tab) is consumed by Windows
+## before a second, unrelated key event would ever reach this game at all --
+## there is no "wait and see if another key follows" signal available here
+## to tell the two apart after the fact. The same reasoning applies
+## symmetrically to Ctrl/Shift/Meta: a lone modifier press, with nothing
+## else, is essentially never how a player expresses "skip the intro" on
+## its own -- it is how EVERY other OS-level combo (Ctrl+Tab, Win+D, ...) a
+## long unattended wait might provoke begins.
+func _modifier_key_press(code: Key) -> InputEventKey:
+	var event := InputEventKey.new()
+	event.pressed = true
+	event.keycode = code
+	return event
+
+
+func test_a_lone_alt_press_does_not_skip_the_intro():
+	var intro := _splash()
+	intro._input(_modifier_key_press(KEY_ALT))
+	assert_signal_not_emitted(
+		intro, "finished",
+		"a lone Alt press is very plausibly an incidental alt-tab during the long boot wait, not a deliberate skip"
+	)
+
+
+func test_a_lone_ctrl_shift_or_meta_press_does_not_skip_the_intro():
+	var intro := _splash()
+	for code in [KEY_CTRL, KEY_SHIFT, KEY_META]:
+		intro._input(_modifier_key_press(code))
+	assert_signal_not_emitted(
+		intro, "finished",
+		"pure modifier keys are how OS-level combos begin, not a deliberate skip gesture on their own"
+	)
+
+
+func test_a_real_key_still_skips_even_with_a_modifier_held():
+	var intro := _splash()
+	var event := _key_press()
+	event.alt_pressed = true
+	intro._input(event)
+	assert_signal_emitted(
+		intro, "finished",
+		"a real key with a modifier held (e.g. Alt+Space) is still a genuine keypress, not a lone modifier"
+	)

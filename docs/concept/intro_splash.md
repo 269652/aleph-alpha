@@ -702,6 +702,48 @@ updating to stop claiming a size this pass no longer uses).
 gate.gd` 3/3, `test_world_intro_splash_after_load_fanout.gd` 5/5 -- no
 regression in any prior pass's timing/gating/sizing fixes.
 
+### A ninth pass: a lone Alt press no longer skips the intro (2026-09-09)
+
+Flagged, not yet fixed, back when the fifth pass shipped (see its own
+writeup above): the skip-on-any-key handler treated a bare Alt press
+exactly like a real "skip this" key -- very plausibly an incidental
+alt-tab during the long boot wait rather than a deliberate gesture.
+Actioned as an explicit follow-up once the intro's own visual stability
+was independently re-confirmed live on the current (eighth-pass) build.
+
+**Why this can't be told apart after the fact.** Godot reports the
+modifier key itself as an ordinary `InputEventKey` the instant it's
+pressed (`keycode == KEY_ALT`) -- indistinguishable, at that point, from
+a real skip key. The window-manager combo the player actually meant
+(Alt+Tab) is consumed by Windows before any second, unrelated key event
+would ever reach this game at all, so there is no "wait and see if
+another key follows" signal available here to disambiguate the two after
+the fact -- the fix has to treat a LONE modifier specially, not try to
+detect the combo it was part of.
+
+**The fix:** `_input` now ignores an `InputEventKey` whose `keycode` is
+one of `KEY_SHIFT`/`KEY_CTRL`/`KEY_ALT`/`KEY_META` -- applied
+symmetrically to all four, not just Alt, since the identical reasoning
+holds for every one of them: a lone modifier press, with nothing else, is
+how every OS-level combo a long unattended wait might provoke (Ctrl+Tab,
+Win+D, ...) BEGINS, not how a player expresses "skip the intro" on its
+own. A real key pressed WHILE a modifier is held (Alt+Space, say) is
+untouched and still skips immediately -- only a modifier arriving with
+nothing else is excluded.
+
+**TDD, three new tests in `test_intro_splash.gd`:**
+`test_a_lone_alt_press_does_not_skip_the_intro` and
+`test_a_lone_ctrl_shift_or_meta_press_does_not_skip_the_intro` confirmed
+red against the unfixed handler first (the exact live bug, reproduced
+directly by simulating the keycode rather than needing a real alt-tab),
+green after; `test_a_real_key_still_skips_even_with_a_modifier_held`
+(Alt+Space) was already green even pre-fix, kept as an explicit
+regression guard so a future, over-broad "ignore anything with a modifier
+flag set" rewrite can't quietly reintroduce a different unresponsiveness
+bug. `test_intro_splash.gd` 13/13, `test_world_play_intro_splash_frame_
+gate.gd` 3/3, `test_world_intro_splash_after_load_fanout.gd` 5/5 -- no
+regression in any of the eight prior passes' timing/gating/sizing fixes.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not

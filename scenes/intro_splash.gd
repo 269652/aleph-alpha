@@ -142,6 +142,24 @@ func _process(delta: float) -> void:
 		_finish()
 
 
+## A lone modifier keycode -- pressed on its own, with nothing else --
+## does not count as a "skip this" gesture. Reported live: the intro kept
+## getting skipped by an incidental Alt press, very plausibly from
+## alt-tabbing away during the long boot wait, not a deliberate press.
+## Godot reports the modifier itself as an ordinary InputEventKey the
+## instant it's pressed (keycode == KEY_ALT), indistinguishable at that
+## point from a real skip key -- the window-manager combo it's actually
+## part of (Alt+Tab) is consumed by Windows before any second key event
+## would reach this game at all, so there is no "wait and see" signal
+## available here to tell the two apart after the fact. Applied
+## symmetrically to Ctrl/Shift/Meta for the same reason: a lone modifier
+## press is how every OS-level combo a long unattended wait might provoke
+## BEGINS, not how a player expresses "skip the intro" on its own. A real
+## key pressed WHILE a modifier is held (e.g. Alt+Space) still skips --
+## only a modifier with nothing else is excluded.
+const _MODIFIER_ONLY_KEYCODES := [KEY_SHIFT, KEY_CTRL, KEY_ALT, KEY_META]
+
+
 ## Plain _input, not _unhandled_input/_gui_input: this Control covers the
 ## full screen, so a Control-level mouse_filter would otherwise let a click
 ## get consumed as GUI input before ever reaching an _unhandled_input
@@ -151,6 +169,8 @@ func _input(event: InputEvent) -> void:
 	if _finished:
 		return
 	if not event.is_pressed():
+		return
+	if event is InputEventKey and event.keycode in _MODIFIER_ONLY_KEYCODES:
 		return
 	if event is InputEventKey or event is InputEventMouseButton or event is InputEventJoypadButton:
 		_finish()
