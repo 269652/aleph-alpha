@@ -17,6 +17,7 @@ const SeedEndozoochory = preload("res://src/gameplay/seed_endozoochory.gd")
 const AntPopulationModel = preload("res://src/world/ant_population_model.gd")
 const PheromoneField = preload("res://src/world/pheromone_field.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 const SIZE := 32
 
@@ -554,12 +555,18 @@ func test_capacity_drops_below_baseline_once_food_runs_out():
 ## stuck at exactly 0.0 can never grow itself back out of that reading.
 ## Pinned directly so this exact false-healthy-reading regression can't
 ## come back unnoticed.
+##
+## *(2026-09-09: ordinary starvation alone can no longer reach a literal
+## 0.0 population now that QUEEN_PROTECTED_POPULATION_FLOOR exists -- see
+## AntPopulationModel.step's own doc comment -- so this constructs a
+## genuine 0.0 directly instead of via 10 days of ordinary decline,
+## mirroring a real crushing/predation wipeout, which still can. This test
+## is about food_availability_fraction's own read AT population 0, not
+## about whether ordinary starvation reaches it.)*
 func test_a_fully_starved_colony_reads_zero_food_availability_not_full():
 	var colony := _colony("grassland", 42)
 	var cell: Vector2i = colony.mound_cells()[0]
-	for i in 10:
-		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
-	assert_almost_eq(colony.population_at(cell), 0.0, 0.001, "precondition: colony should have fully starved by now")
+	colony._population[cell] = 0.0
 	assert_almost_eq(colony.food_availability_fraction(cell), 0.0, 0.001)
 
 
@@ -733,12 +740,18 @@ func test_a_colony_kept_cold_and_foodless_survives_far_longer_than_a_warm_one():
 ## REFOUNDING_FOOD_THRESHOLD and trigger REAL recovery -- see the
 ## refounding tests below, which are what actually lifts this) -- this
 ## test is isolated to prove growth math ALONE never does it.
+##
+## *(2026-09-09: forced directly to a real 0.0 rather than reached via 10
+## days of ordinary decline -- QUEEN_PROTECTED_POPULATION_FLOOR means
+## ordinary starvation alone no longer reaches a literal zero; this test
+## is about growth math's own behaviour once genuinely AT zero, which a
+## real crushing/predation wipeout can still produce, not about how a
+## colony gets there.)*
 func test_a_starved_colony_does_not_recover_through_ordinary_growth_alone():
 	var colony := _colony("grassland", 42)
 	var cell: Vector2i = colony.mound_cells()[0]
-	for i in 10:
-		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
-	assert_almost_eq(colony.population_at(cell), 0.0, 0.001, "precondition: colony should have fully starved")
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
 	for i in 2:
 		colony.record_forage_result(cell, true)
 		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
@@ -756,12 +769,16 @@ func test_a_starved_colony_does_not_recover_through_ordinary_growth_alone():
 ## at 1 forager regardless of population -- a fresh colony re-founds
 ## there, the same real recolonization a wiped-out nest site actually gets
 ## once conditions genuinely improve.
+##
+## *(2026-09-09: forced directly to a real 0.0/0.0 -- see
+## test_a_starved_colony_does_not_recover_through_ordinary_growth_alone's
+## own doc comment on why ordinary starvation alone no longer reaches this
+## state since QUEEN_PROTECTED_POPULATION_FLOOR exists.)*
 func test_a_starved_mound_refounds_once_a_full_reserve_genuinely_accumulates():
 	var colony := _colony("grassland", 42)
 	var cell: Vector2i = colony.mound_cells()[0]
-	for i in 10:
-		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
-	assert_almost_eq(colony.population_at(cell), 0.0, 0.001, "precondition: colony should have fully starved")
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
 	colony.deposit_food(cell, 10000.0)  # a real, large surplus -- not a special-cased amount
 	colony.advance(0.01)
 	assert_gt(colony.population_at(cell), 0.0, "a genuinely refounded mound should have real population again")
@@ -786,12 +803,16 @@ func test_refounding_food_threshold_is_far_smaller_than_a_full_founding_reserve(
 
 ## The actual fix: far less than a full founding reserve is now enough --
 ## a handful of successful trips' worth, not 45 of them.
+##
+## *(2026-09-09: forced directly to a real 0.0/0.0 -- see
+## test_a_starved_colony_does_not_recover_through_ordinary_growth_alone's
+## own doc comment on why ordinary starvation alone no longer reaches this
+## state since QUEEN_PROTECTED_POPULATION_FLOOR exists.)*
 func test_a_starved_mound_refounds_with_far_less_than_a_full_founding_reserve():
 	var colony := _colony("grassland", 42)
 	var cell: Vector2i = colony.mound_cells()[0]
-	for i in 10:
-		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
-	assert_almost_eq(colony.population_at(cell), 0.0, 0.001, "precondition: colony should have fully starved")
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
 	colony.deposit_food(cell, AntColony.REFOUNDING_FOOD_THRESHOLD)
 	colony.advance(0.01)
 	assert_gt(
@@ -800,11 +821,15 @@ func test_a_starved_mound_refounds_with_far_less_than_a_full_founding_reserve():
 	)
 
 
+## *(2026-09-09: forced directly to a real 0.0 -- see
+## test_a_starved_colony_does_not_recover_through_ordinary_growth_alone's
+## own doc comment on why ordinary starvation alone no longer reaches this
+## state since QUEEN_PROTECTED_POPULATION_FLOOR exists.)*
 func test_refounding_lands_at_the_same_starting_population_a_brand_new_mound_gets():
 	var colony := _colony("grassland", 42)
 	var cell: Vector2i = colony.mound_cells()[0]
-	for i in 10:
-		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
 	colony.deposit_food(cell, 10000.0)
 	colony.advance(0.01)
 	assert_almost_eq(colony.population_at(cell), AntPopulationModel.STARTING_POPULATION, 0.001)
@@ -822,6 +847,254 @@ func test_refounding_never_triggers_for_a_colony_that_still_has_any_real_populat
 		colony.population_at(cell), AntPopulationModel.STARTING_POPULATION, 0.5,
 		"a colony that never actually went extinct should follow ordinary growth, not silently reset"
 	)
+
+
+# -- the real live-reported bug: "Both ant mounds near the spawn show
+# queenless when changing from winter to spring... they then refound; but
+# it collapses again because there's still no queen" -- root-caused and
+# reproduced directly (see docs/concept/soil_fauna.md's "Winter->spring
+# repeat-collapse: root cause and fix"): _maybe_refound reset population
+# straight to the FULL STARTING_POPULATION the instant food crossed the
+# tiny REFOUNDING_FOOD_THRESHOLD, but never gave the colony a matching
+# food reserve the way a genuinely brand-new mound gets (_founding_food_
+# reserve) -- so a just-refounded colony was instantly ~93% food-insecure
+# (3.0 stored against the 45.0 a 15-strong colony needs), which crushed
+# capacity_at, which crashed population right back toward zero within
+# days. Confirmed live via a throwaway diagnostic probe (deleted once its
+# job was done, per this file's own established convention): starve to a
+# real 0.0, trickle home exactly REFOUNDING_FOOD_THRESHOLD worth of food
+# (matching a lone still-active forager finally finding food as spring
+# odds improve, NOT a giant windfall), and population that "refounded" at
+# 15.0 was back to a literal 0.0 within 10 simulated days, every time,
+# repeatably. Two real, separate fixes close this: (1) refounding/adoption
+# now also tops up the food reserve, not just population, and (2) the
+# QUEEN_PROTECTED_POPULATION_FLOOR above means even an under-resourced
+# colony can no longer be driven all the way back to a literal 0.0 by
+# ordinary starvation alone while she's alive. ------------------------
+
+## The precise mismatch: right after refounding, food_stored_at must be at
+## least a real _founding_food_reserve() -- the same standard a genuinely
+## brand-new mound starts at -- not just whatever bare minimum happened to
+## cross REFOUNDING_FOOD_THRESHOLD.
+func test_refounding_gives_the_colony_a_real_food_reserve_not_just_a_population_number():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
+	colony.deposit_food(cell, AntColony.REFOUNDING_FOOD_THRESHOLD)
+	colony.advance(0.01)
+	assert_gt(colony.population_at(cell), 0.0, "precondition: should have refounded")
+	assert_gte(
+		colony.food_stored_at(cell), colony._founding_food_reserve(),
+		"a refounded colony must start as food-secure as a genuinely brand-new mound, not instantly starving"
+	)
+
+
+## Never DECREASES an existing reserve either -- test_a_starved_mound_
+## refounds_once_a_full_reserve_genuinely_accumulates already deposits a
+## real 10000.0 surplus before refounding; topping up must take the max,
+## never clobber a reserve that was already ample.
+func test_refounding_never_reduces_an_already_ample_food_reserve():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
+	colony.deposit_food(cell, 10000.0)
+	colony.advance(0.01)
+	assert_almost_eq(colony.food_stored_at(cell), 10000.0, 1.0)
+
+
+## The actual regression test for the live-reported cycle: a colony forced
+## to a real 0.0, refounded off a realistic small trickle (not a windfall),
+## must not collapse back to queenless again over a realistic stretch of
+## subsequent time -- and, even in a worst-case follow-up famine (no more
+## food at all), must settle at the protected floor rather than zero.
+func test_a_refounded_colony_does_not_collapse_back_to_queenless_again():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
+
+	for i in 3:
+		colony.record_forage_result(cell, true)
+	colony.advance(0.01)
+	assert_gt(colony.population_at(cell), 0.0, "precondition: should have refounded")
+
+	# No further deposits at all -- the realistic worst case a spring
+	# transition can still look like (early-season forage odds still
+	# recovering). Advance a full month of simulated days and check EVERY
+	# step along the way, not just the end -- the reported bug was a
+	# collapse ALONG THE WAY, not necessarily at a single final instant.
+	for day in 30:
+		colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+		assert_true(
+			colony.has_queen_at(cell),
+			"day %d: a refounded colony should never fall back to queenless from ordinary starvation alone" % day
+		)
+
+
+## Same scenario, run twice in a row (the user's own literal report: it
+## refounds, THEN collapses, and -- implicitly -- would keep doing so) --
+## proves this is not merely fixed for one cycle by coincidence.
+func test_a_refounded_colony_stays_alive_across_two_consecutive_lean_stretches():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
+
+	for cycle in 2:
+		for i in 3:
+			colony.record_forage_result(cell, true)
+		colony.advance(0.01)
+		assert_true(colony.has_queen_at(cell), "cycle %d: should have (re)gained a queen" % cycle)
+		for day in 20:
+			colony.advance(AntColony.SECONDS_PER_SIMULATED_DAY)
+			assert_true(
+				colony.has_queen_at(cell),
+				"cycle %d, day %d: should not have collapsed back to queenless" % [cycle, day]
+			)
+
+
+# -- a new queen, over real time: real ant queen succession by adoption --
+# an already-mated, dealate queen from a nuptial flight wandering onto a
+# queenless nest and being accepted into it ("secondary polygyny... by
+# adoption", real, documented ant biology -- pleometrosis/colony adoption,
+# distinct from _maybe_refound's own food-gated "a wholly fresh colony
+# happens to colonize the empty site" story). Requested live: "If they
+# have no queen; they should make a new one... It should take time thoug
+# for a new queen to hatch" -- and, on being asked directly to research the
+# real biology rather than invent a game-y mechanic: real nuptial flights
+# are seasonal (once, or a handful of times, per year for a given species/
+# region), so "the next real opportunity for a wandering queen to find
+# this exact site" is honestly a SEASON-scale wait, not a food-stockpile-
+# scale one -- a second, independent, deliberately much SLOWER path to a
+# new queen than the food-gated one, gated purely on real elapsed queenless
+# time regardless of food (a founding queen's own histolysed flight muscles
+# are her first real food reserve, not the site's own stockpile -- see
+# docs/concept/soil_fauna.md's "A new queen, over real time: adoption").
+# ---------------------------------------------------------------------
+
+func test_a_queenless_mound_does_not_adopt_a_new_queen_before_the_real_wait_elapses():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
+	colony.advance(AntColony.NEW_QUEEN_ADOPTION_SECONDS * 0.5)
+	assert_almost_eq(
+		colony.population_at(cell), 0.0, 0.001,
+		"half the real wait should not be enough for a new queen to have found this site yet"
+	)
+
+
+func test_a_queenless_mound_adopts_a_new_queen_once_the_real_wait_elapses():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
+	colony.advance(AntColony.NEW_QUEEN_ADOPTION_SECONDS + 1.0)
+	assert_gt(colony.population_at(cell), 0.0, "a new queen should have adopted this genuinely queenless site by now")
+
+
+## The explicit ask, proven directly: this must NOT resolve quickly or
+## immediately -- nowhere near as fast as the food-gated path (which can
+## fire within moments of a lucky trickle of successful trips).
+func test_new_queen_adoption_does_not_resolve_quickly_or_immediately():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
+	# A generous few real minutes -- comfortably longer than any realistic
+	# food-gated refound -- with NO food at all deposited.
+	colony.advance(600.0)
+	assert_almost_eq(
+		colony.population_at(cell), 0.0, 0.001,
+		"a few real minutes must not be anywhere near enough for adoption to fire"
+	)
+
+
+func test_new_queen_adoption_seconds_is_meaningfully_slower_than_the_food_gated_path():
+	# The food-gated path's own worst documented case before it was fixed
+	# down (REFOUNDING_FOOD_THRESHOLD's own doc comment) was 22 real
+	# minutes; its TYPICAL case today is a handful of successful trips,
+	# on the order of real minutes. Adoption must comfortably exceed even
+	# that old worst case, not just the fast common case.
+	assert_gt(AntColony.NEW_QUEEN_ADOPTION_SECONDS, 22.0 * 60.0)
+
+
+## Real grounding, checked directly rather than left an eyeballed comment
+## (CLAUDE.md's own rule): pinned against a real SeasonCycle season, since
+## real nuptial flights are seasonal events.
+func test_new_queen_adoption_seconds_matches_a_real_season():
+	assert_almost_eq(AntColony.NEW_QUEEN_ADOPTION_SECONDS, SeasonCycle.SECONDS_PER_YEAR / 4.0, 0.001)
+
+
+## An adopted queen must be exactly as food-secure as a food-refounded one
+## -- the same real fix as test_refounding_gives_the_colony_a_real_food_
+## reserve_not_just_a_population_number, for the same reason: an adopted
+## colony must never be born back into the exact bug this whole pass fixes.
+func test_adoption_also_gives_the_colony_a_real_food_reserve():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
+	colony.advance(AntColony.NEW_QUEEN_ADOPTION_SECONDS + 1.0)
+	assert_gte(colony.food_stored_at(cell), colony._founding_food_reserve())
+
+
+## The queenless clock must reset once a queen returns (whichever path got
+## her there) -- a LATER extinction starts counting from zero again, not
+## from a stale accumulated duration that would let a second adoption fire
+## suspiciously fast.
+func test_queenless_timer_resets_once_a_queen_returns_via_the_food_gated_path():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
+	colony.advance(AntColony.NEW_QUEEN_ADOPTION_SECONDS * 0.9)  # most of the way through the real wait
+	for i in 3:
+		colony.record_forage_result(cell, true)
+	colony.advance(0.01)
+	assert_gt(colony.population_at(cell), 0.0, "precondition: should have refounded via the food-gated path")
+
+	# Wipe her out again directly (mirrors forager_crushed/forager_eaten's
+	# own real effect) and confirm adoption does NOT fire suspiciously
+	# fast off the old, stale accumulated duration.
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
+	colony.advance(AntColony.NEW_QUEEN_ADOPTION_SECONDS * 0.5)
+	assert_almost_eq(
+		colony.population_at(cell), 0.0, 0.001,
+		"the queenless timer should have reset -- half the real wait should not be enough on its own again"
+	)
+
+
+## Mirrors BeeColony.requeening_progress_at's own hover-facing contract --
+## now genuinely TWO real paths to report progress on, so this reads
+## whichever is actually further along.
+func test_refounding_progress_reflects_whichever_path_is_further_along():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	colony._population[cell] = 0.0
+	colony._food_stored[cell] = 0.0
+
+	# No time elapsed yet, but food is already most of the way to the
+	# threshold -- the food path should dominate.
+	colony.deposit_food(cell, AntColony.REFOUNDING_FOOD_THRESHOLD * 0.5)
+	var food_led := colony.refounding_progress_at(cell)
+	assert_almost_eq(food_led, 0.5, 0.01)
+
+	# Now let real time pass well past the food path's own progress,
+	# with no further food -- the time path should take over.
+	colony.advance(AntColony.NEW_QUEEN_ADOPTION_SECONDS * 0.9)
+	var time_led := colony.refounding_progress_at(cell)
+	assert_almost_eq(time_led, 0.9, 0.01)
+	assert_gt(time_led, food_led)
+
+
+func test_refounding_progress_is_zero_while_a_queen_is_genuinely_present():
+	var colony := _colony("grassland", 42)
+	var cell: Vector2i = colony.mound_cells()[0]
+	assert_almost_eq(colony.refounding_progress_at(cell), 0.0, 0.001)
 
 
 # -- colony budding: a mound at its own maximum capacity founds a new one
