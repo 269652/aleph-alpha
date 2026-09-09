@@ -115,6 +115,31 @@ const FOOD_PER_ANT_PER_DAY := 1.0
 ## could never actually bite.
 const FOOD_BUFFER_DAYS := 3.0
 
+## Workers protect their queen: real worker ants genuinely prioritize
+## feeding/tending the queen over their own survival during scarcity (see
+## docs/concept/soil_fauna.md's "Workers protect their queen" for the full
+## real-world grounding) -- reported live, directly after a real
+## winter->spring repeat-collapse bug: "make sure the workers care for
+## their queen and make sure it doesn't die". A colony that is genuinely
+## ALIVE (population > 0.0, a real queen present) at the START of a step
+## has its own ordinary starvation/dormancy decline floored here, so it can
+## shrink toward this minimal surviving nucleus but never below it while
+## she lives -- see `step`'s own doc comment for the exact mechanism, and
+## AntColony's own `has_queen_at`/`_maybe_refound`/`_maybe_adopt_new_queen`
+## for why this must NEVER apply to a colony that starts a step already at
+## a genuine 0.0 (no queen to protect at all).
+##
+## 3.0 -- matching CLUSTER_THRESHOLD's/REFOUNDING_FOOD_THRESHOLD's own
+## identical "3, a real minimum, not 1, not a fluke" reasoning already used
+## twice in ant_colony.gd: a minimal nucleus of nurse workers whose whole
+## job is keeping the queen fed, not a real population in its own right.
+## Pinned by test_queen_protected_population_floor_is_pinned, and checked
+## directly to stay a genuinely SMALL fraction of STARTING_POPULATION by
+## test_queen_protected_population_floor_is_a_small_fraction_of_starting_
+## population -- a floor big enough to read as "starvation does nothing"
+## would defeat the whole real mechanism this exists to model.
+const QUEEN_PROTECTED_POPULATION_FLOOR := 3.0
+
 var _population_model := PopulationModel.new(GROWTH_RATE_PER_DAY)
 
 
@@ -133,5 +158,19 @@ func capacity(recent_forage_success: float, recent_moisture: float) -> float:
 	)
 
 
+## Wraps PopulationModel.step with the real "workers protect their queen"
+## floor (see QUEEN_PROTECTED_POPULATION_FLOOR's own doc comment): if a real
+## queen was present going INTO this step (`population > 0.0`), the result
+## can never read below the protected floor, however severe the famine
+## (PopulationModel.step's own hard "carrying_capacity <= 0.0 -> population
+## immediately 0.0" rule included) -- ordinary starvation/dormancy pressure
+## can still reduce her colony DOWN TOWARD that floor, just never past it
+## while she lives. A colony that starts this step already queenless
+## (`population <= 0.0`) is deliberately left untouched -- the floor
+## protects an existing queen, it must never itself resurrect one; that
+## stays AntColony's own explicit, separately-gated job.
 func step(population: float, carrying_capacity: float, delta_days: float) -> float:
-	return _population_model.step(population, carrying_capacity, delta_days)
+	var stepped := _population_model.step(population, carrying_capacity, delta_days)
+	if population > 0.0:
+		stepped = maxf(stepped, QUEEN_PROTECTED_POPULATION_FLOOR)
+	return stepped

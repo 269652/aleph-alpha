@@ -7,6 +7,7 @@ extends GutTest
 
 const AntPopulationModel = preload("res://src/world/ant_population_model.gd")
 const PredatorPopulationModel = preload("res://src/world/predator_population_model.gd")
+const PopulationModel = preload("res://src/world/population_model.gd")
 
 var model: AntPopulationModel
 
@@ -135,3 +136,65 @@ func test_starting_population_matches_the_unfed_baseline_capacity():
 	assert_almost_eq(
 		AntPopulationModel.STARTING_POPULATION, AntPopulationModel.new().capacity(0.0, 0.0), 0.001
 	)
+
+
+# -- workers protect their queen: a small population floor a LIVE colony's
+# own decline cannot cross (reported live, directly after the winter->spring
+# repeat-collapse bug: "make sure the workers care for their queen and make
+# sure it doesn't die") -- real ant workers genuinely prioritize feeding/
+# tending the queen over their own survival during scarcity, so ordinary
+# famine/dormancy pressure should be able to reduce a colony TOWARD a
+# minimal surviving nucleus without being able to fully extinguish it while
+# she is still alive. See docs/concept/soil_fauna.md's "Workers protect
+# their queen" for the full grounding. -------------------------------------
+
+## 3.0 -- matching CLUSTER_THRESHOLD's/REFOUNDING_FOOD_THRESHOLD's own
+## identical "3, a real minimum, not 1, not a fluke" reasoning (see those
+## constants' own doc comments in ant_colony.gd) -- a minimal nucleus of
+## nurse workers whose whole job is keeping the queen fed, not a real
+## population in its own right. Pinned directly rather than left an
+## eyeballed comment (CLAUDE.md's own rule).
+func test_queen_protected_population_floor_is_pinned():
+	assert_almost_eq(AntPopulationModel.QUEEN_PROTECTED_POPULATION_FLOOR, 3.0, 0.001)
+
+
+## "Small" -- checked directly, not just asserted: the floor must stay a
+## minor fraction of a founding colony's own starting strength, or it stops
+## reading as "a protected nucleus" and starts reading as "starvation does
+## nothing."
+func test_queen_protected_population_floor_is_a_small_fraction_of_starting_population():
+	assert_lt(AntPopulationModel.QUEEN_PROTECTED_POPULATION_FLOOR, AntPopulationModel.STARTING_POPULATION * 0.5)
+
+
+## The actual mechanism: a total famine (carrying_capacity 0.0) would
+## ordinarily snap population straight to a literal 0.0 (PopulationModel.
+## step's own hard "capacity <= 0.0 -> 0.0" rule) -- but a colony that was
+## genuinely ALIVE at the start of this step (population > 0, a real queen
+## present) has that floored at QUEEN_PROTECTED_POPULATION_FLOOR instead.
+func test_step_protects_a_live_colonys_decline_from_reaching_zero():
+	var next := model.step(AntPopulationModel.STARTING_POPULATION, 0.0, 30.0)
+	assert_almost_eq(next, AntPopulationModel.QUEEN_PROTECTED_POPULATION_FLOOR, 0.001)
+
+
+## The floor protects an ALREADY-alive queen -- it must never itself act as
+## a second, silent requeening path that resurrects a colony which starts
+## this step at a genuine 0.0 (no queen to protect). That stays AntColony's
+## own explicit _maybe_refound/_maybe_adopt_new_queen's job, gated on real
+## food evidence or real elapsed time -- never an unconditional side effect
+## of ordinary population stepping.
+func test_step_does_not_resurrect_a_population_that_starts_at_zero():
+	var next := model.step(0.0, 0.0, 30.0)
+	assert_almost_eq(next, 0.0, 0.001)
+
+
+## Above the floor, protection must not distort ordinary decline at all --
+## a moderate famine that would settle somewhere comfortably above the
+## floor anyway should read exactly as PopulationModel's own unmodified
+## math says, not silently pulled up toward the floor.
+func test_step_floor_does_not_affect_decline_that_stays_above_it():
+	var raw := PopulationModel.new(AntPopulationModel.GROWTH_RATE_PER_DAY).step(
+		AntPopulationModel.STARTING_POPULATION, 10.0, 1.0
+	)
+	assert_gt(raw, AntPopulationModel.QUEEN_PROTECTED_POPULATION_FLOOR, "precondition: this famine should stay well above the floor")
+	var next := model.step(AntPopulationModel.STARTING_POPULATION, 10.0, 1.0)
+	assert_almost_eq(next, raw, 0.001)
