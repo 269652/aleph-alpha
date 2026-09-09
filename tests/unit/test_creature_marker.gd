@@ -15,6 +15,7 @@ const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const MushroomEffect = preload("res://src/gameplay/mushroom_effect.gd")
+const FootstepGait = preload("res://src/gameplay/footstep_gait.gd")
 
 const TILE_SIZE := 16
 
@@ -2541,6 +2542,58 @@ func test_current_mass_kg_drops_after_prolonged_time_with_nothing_eaten():
 	assert_lt(deer.current_mass_kg(), seed_mass)
 	assert_almost_eq(CreatureMass.mass_kg_for("deer"), seed_mass, 0.0001,
 		"CreatureMass itself must stay the untouched species reference table")
+
+
+# -- footstep_gait / facing_direction: a real, mass-scaled footprint of ---
+# -- this creature's own (see EarthChunkManager.record_footstep, ----------
+# -- docs/concept/snow_cover.md's "Footprints depend on real mass, not ----
+# -- just surface") ---------------------------------------------------------
+
+func test_footstep_gait_is_a_real_footstep_gait():
+	assert_true(marker.footstep_gait() is FootstepGait)
+
+
+## Lazily built the first time anything asks (mirrors _ensure_metabolism's
+## own identical "one object per creature, built on first real use" shape
+## exactly) -- one FootstepGait per creature, not a fresh one every call,
+## which would reset the stride accumulator every single frame and never
+## let a real step actually fire.
+func test_footstep_gait_returns_the_same_instance_every_call():
+	assert_eq(marker.footstep_gait(), marker.footstep_gait())
+
+
+## Real per-instance state, not shared -- two different creatures must
+## never accidentally track the same stride.
+func test_two_creatures_have_independent_footstep_gaits():
+	var other := CreatureMarker.new()
+	add_child(other)
+	_extra.append(other)
+	assert_ne(marker.footstep_gait(), other.footstep_gait())
+
+
+## facing_direction() (a new public accessor, mirroring Player.facing_
+## direction()'s own identical role for record_footstep) reads
+## _last_gated_heading -- "the heading this creature last actually
+## advanced along" (see that field's own doc comment) -- the real,
+## current movement direction a footprint needs to orient its own
+## left/right offset perpendicular to.
+## _advance (not _advance_gated) is the LOWER-level mover -- it just walks
+## along whatever heading it's given; _last_gated_heading is set by
+## _advance_gated, the real obstacle/threat-aware decision layer normal
+## wander AI actually calls (see that function's own doc comment), which
+## is what this needs to drive.
+func test_facing_direction_reflects_the_creatures_own_last_real_heading():
+	marker._advance_gated(Vector2.RIGHT, 50.0, 0.016, true)
+	assert_gt(marker.facing_direction().x, 0.0, "should reflect the direction this creature actually just moved")
+
+
+func test_facing_direction_before_any_movement_never_crashes():
+	var fresh := CreatureMarker.new()
+	add_child(fresh)
+	_extra.append(fresh)
+	var direction := fresh.facing_direction()
+	assert_false(is_nan(direction.x))
+	assert_false(is_nan(direction.y))
 
 
 # -- active foraging: a grazer walks to its food (see GrazerForaging) ---------
