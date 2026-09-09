@@ -1,9 +1,9 @@
 # Ambient soundscape audio credits
 
-All 11 files in this directory are sourced from [Wikimedia Commons](https://commons.wikimedia.org)
-(direct `upload.wikimedia.org` links, downloaded 2026-09-08). Four are public
-domain / CC0 and need no attribution; the other seven are CC BY-SA and are
-credited here to satisfy that license.
+All 12 files in this directory are sourced from [Wikimedia Commons](https://commons.wikimedia.org)
+(direct `upload.wikimedia.org` links, downloaded 2026-09-08/09). Five are
+public domain / CC0 and need no attribution; the other seven are CC BY-SA
+and are credited here to satisfy that license.
 
 See `docs/concept/soundscape.md` for what each file is used for.
 
@@ -27,6 +27,15 @@ See `docs/concept/soundscape.md` for what each file is used for.
 | `temperate_night.ogg` | [Country night noise.ogg](https://commons.wikimedia.org/wiki/File:Country_night_noise.ogg) | via PDSounds.org (Taiwanese village at night) | Public domain |
 | `wind.ogg` | [Howling wind.ogg](https://commons.wikimedia.org/wiki/File:Howling_wind.ogg) | Tvabutzku1234 | CC0 1.0 |
 | `storm.ogg` | [Rain and thunder.ogg](https://commons.wikimedia.org/wiki/File:Rain_and_thunder.ogg) | (released into the public domain by its author) | Public domain |
+| `river.ogg` | [Shallow small river with stony riverbed.ogg](https://commons.wikimedia.org/wiki/File:Shallow_small_river_with_stony_riverbed.ogg) | Stephan | Public domain |
+
+## Note on `river.ogg`
+
+Added 2026-09-09 for the river/lake-proximity overlay (see `docs/concept/
+soundscape.md`'s "Proximity layers" section) -- reported live: "fully
+build the soundscape out of individual nearby animals and environment."
+A genuine flowing-stream field recording, not a repurposed ocean/rain
+asset (a river reads distinctly from waves or falling rain in reality).
 
 ## Note on `rainforest_day.wav`
 

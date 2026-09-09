@@ -81,3 +81,19 @@ func test_the_soundscape_update_reuses_the_same_snowing_flag_as_the_rain_overlay
 	assert_gt(rain_call, -1, "sanity: the rain overlay's own snowing call should still exist")
 	assert_gt(soundscape_call, -1)
 	assert_string_contains(body.substr(soundscape_call), "snowing")
+
+
+## "fully build the soundscape out of individual nearby animals and
+## environment" -- the "environment" half. The river-proximity overlay
+## (see docs/concept/soundscape.md) needs the player's own real distance
+## to the nearest water, from the SAME EarthChunkManager the biome lookup
+## right above already reads, not a second, independent water check.
+func test_the_soundscape_update_passes_the_real_water_distance():
+	var body := _function_body("_client_process")
+	var soundscape_call := body.find("_nature_soundscape.update(")
+	assert_gt(soundscape_call, -1)
+	assert_string_contains(
+		body.substr(soundscape_call),
+		"_chunk_manager.nearest_water_distance_tiles(player_tile.x, player_tile.y)",
+		"must pass the player's own real water distance through to the soundscape"
+	)

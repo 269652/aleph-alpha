@@ -106,9 +106,24 @@ const VOLUME_RAMP_PER_SECOND := 0.2
 ## module only decides" split every chance_per_check cameo in
 ## scenes/world.gd already uses (e.g. EasterEggCreatures.check_one(...,
 ## randf())), so this stays fully deterministic to test.
+##
+## `water_distance_tiles` defaults to INF (no river layer) so every
+## pre-existing 7-arg call site keeps its exact prior behavior -- see
+## NatureSoundscape.layer_mix's own doc comment for the same convention.
+## Deliberately NOT part of the `inputs` immediate-recompute comparison
+## below: unlike biome/season/weather/is_night/is_snowing (discrete values
+## that only change at real transition moments), a real distance to water
+## changes continuously as the player simply walks -- folding it into
+## that comparison would defeat REFRESH_INTERVAL_SECONDS' own throttle
+## entirely for anyone anywhere near water, recomputing on literally every
+## call instead of the intended "ambient audio doesn't need sub-second
+## reaction" cadence. It still refreshes on the same regular throttled
+## cadence as everything else, and _advance_ramp's own per-frame (never
+## throttled) smoothing means the audible volume still climbs/falls
+## continuously between those refreshes either way.
 func update(
 	biome: String, season: String, weather: String, is_night: bool, is_snowing: bool,
-	roll: float, delta: float
+	roll: float, delta: float, water_distance_tiles: float = INF
 ) -> void:
 	# A real input change also re-rolls the hawk-call cameo a little early
 	# (rather than teaching this function to recompute the mix without
@@ -121,15 +136,16 @@ func update(
 	if _refresh_accumulator >= REFRESH_INTERVAL_SECONDS or inputs != _last_inputs:
 		_refresh_accumulator = 0.0
 		_last_inputs = inputs
-		_refresh_targets(biome, season, weather, is_night, is_snowing)
+		_refresh_targets(biome, season, weather, is_night, is_snowing, water_distance_tiles)
 		_maybe_play_hawk_call(biome, is_night, roll)
 	_advance_ramp(delta)
 
 
 func _refresh_targets(
-	biome: String, season: String, weather: String, is_night: bool, is_snowing: bool
+	biome: String, season: String, weather: String, is_night: bool, is_snowing: bool,
+	water_distance_tiles: float = INF
 ) -> void:
-	var mix := _mixer.layer_mix(biome, season, weather, is_night, is_snowing)
+	var mix := _mixer.layer_mix(biome, season, weather, is_night, is_snowing, water_distance_tiles)
 	for layer_name in _target_volume:
 		_target_volume[layer_name] = mix.get(layer_name, 0.0)
 

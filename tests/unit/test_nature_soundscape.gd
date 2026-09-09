@@ -17,10 +17,13 @@ func before_each():
 
 # -- LAYERS: every asset this system can play, and where from ---------------
 
-func test_layers_has_all_eleven_registered_files():
+## 12, not 11, since RIVER_LAYER's own real recording (river.ogg) joined
+## the set -- see "river proximity" tests below for the layer itself.
+func test_layers_has_all_twelve_registered_files():
 	var expected_keys := [
 		"ocean", "forest_day", "forest_winter", "grassland_day", "rainforest_day",
 		"rainforest_night", "temperate_night", "wind", "rain", "storm", "mountain_hawk_call",
+		"river",
 	]
 	for key in expected_keys:
 		assert_true(NatureSoundscape.LAYERS.has(key), key)
@@ -217,3 +220,50 @@ func test_check_hawk_call_true_when_eligible_and_roll_clears_the_threshold():
 func test_hawk_call_chance_per_check_is_a_real_probability():
 	assert_gt(NatureSoundscape.HAWK_CALL_CHANCE_PER_CHECK, 0.0)
 	assert_lt(NatureSoundscape.HAWK_CALL_CHANCE_PER_CHECK, 1.0)
+
+
+# -- river proximity: the "environment" half of "compose the sound from ---
+# -- what's actually around you" -------------------------------------------
+
+## Every pre-existing 5-arg call site across the whole project (dozens,
+## see every test above) must keep behaving exactly as before -- no river
+## layer at all when the caller doesn't know/care about water distance.
+func test_omitting_water_distance_adds_no_river_layer():
+	var mix := soundscape.layer_mix("forest", "summer", "clear", false, false)
+	assert_false(mix.has(NatureSoundscape.RIVER_LAYER))
+
+
+func test_standing_on_water_gives_the_river_layer_its_full_volume():
+	var mix := soundscape.layer_mix("grassland", "summer", "clear", false, false, 0.0)
+	assert_almost_eq(mix[NatureSoundscape.RIVER_LAYER], NatureSoundscape.RIVER_OVERLAY_MAX_VOLUME, 0.001)
+
+
+func test_river_volume_fades_out_linearly_with_distance():
+	var half_radius := NatureSoundscape.RIVER_AUDIBLE_RADIUS_TILES / 2.0
+	var mix := soundscape.layer_mix("grassland", "summer", "clear", false, false, half_radius)
+	assert_almost_eq(
+		mix[NatureSoundscape.RIVER_LAYER], NatureSoundscape.RIVER_OVERLAY_MAX_VOLUME * 0.5, 0.001
+	)
+
+
+func test_river_layer_is_absent_once_beyond_the_audible_radius():
+	var mix := soundscape.layer_mix(
+		"grassland", "summer", "clear", false, false, NatureSoundscape.RIVER_AUDIBLE_RADIUS_TILES
+	)
+	assert_false(mix.has(NatureSoundscape.RIVER_LAYER))
+
+
+func test_infinite_water_distance_adds_no_river_layer():
+	var mix := soundscape.layer_mix("grassland", "summer", "clear", false, false, INF)
+	assert_false(mix.has(NatureSoundscape.RIVER_LAYER))
+
+
+## Additive, independent of the biome bed -- a river running through a
+## desert should still add its own layer on top, the same "weather
+## overlay never clobbers the bed" shape _add_weather_overlay already
+## established.
+func test_river_layer_coexists_with_the_biome_bed_and_weather_overlay():
+	var mix := soundscape.layer_mix("desert", "summer", "rain", false, false, 0.0)
+	assert_true(mix.has("wind"), "the biome bed must still be present")
+	assert_true(mix.has("rain"), "the weather overlay must still be present")
+	assert_true(mix.has(NatureSoundscape.RIVER_LAYER), "the river layer must be present too")

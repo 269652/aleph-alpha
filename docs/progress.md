@@ -17544,3 +17544,71 @@ locks in the new behavior, not just its presence).
 Still not attempted: the environment/river-lake-proximity half of the
 same ask (see the concept doc's own Status list), and the remaining 13
 unsourced species.
+
+## The environment half: a real river/lake-proximity ambient layer (`concept/soundscape.md`, same day)
+
+The animal half of "fully build the soundscape out of individual nearby
+animals and environment" landed above; this is the environment half.
+`docs/concept/soundscape.md` already named "proximity layers (running
+water near a river/lake)" as a real, deliberately-deferred gap since the
+ambient system first shipped — this closes it.
+
+**New pure module** `src/world/water_proximity.gd`: a ring-by-ring
+(Chebyshev square rings, not a filled disk) scan returning the real
+Euclidean tile-distance to the nearest tile a caller-supplied `is_water`
+Callable accepts, or `INF` if nothing qualifies within a given radius.
+Takes the predicate as a Callable rather than hard-coding `is_river_at_
+global`/`is_lake_at_global` specifically, so it's fully testable against
+synthetic, known coordinates instead of unpredictable real generated
+terrain — 6 tests cover standing on water, an adjacent tile, a real 3-4-5
+Euclidean triangle (not a taxicab count), picking the nearest of several
+candidates, nothing in range, and a hit exactly at the radius edge.
+
+**`EarthChunkManager.nearest_water_distance_tiles(global_x, global_y)`**
+delegates to it with the real `is_river_at_global(x,y) or is_lake_at_
+global(x,y)` predicate and a new `WATER_PROXIMITY_SCAN_RADIUS_TILES` (24
+tiles, ~34 real metres — the same order of magnitude as `CreatureCallSound.
+AUDIBLE_RADIUS_PX`'s own ~35m creature-call scope, not a second,
+unrelated distance convention). A raw geometric fact, not an audio
+decision — mirrors `record_footstep`'s own "world computes facts, audio
+decides" split exactly.
+
+**`NatureSoundscape.layer_mix` gained an optional `water_distance_tiles`
+parameter** (default `INF` — every pre-existing 5-arg call site keeps its
+exact prior behavior), adding a new `river` layer (a real flowing-stream
+field recording, `assets/audio/soundscape/river.ogg`, public domain, see
+CREDITS.md) that ramps linearly from full volume at distance 0 to silent
+at the same 24-tile radius, additive on top of whatever biome bed/weather
+overlay already apply. `NatureSoundscapePlayer.update()`/`_refresh_
+targets()` grew the matching optional parameter and pass it straight
+through -- deliberately kept OUT of the "did a real input change?"
+immediate-recompute comparison the prior responsiveness fix added,
+since (unlike biome/season/weather) real water distance changes
+continuously while walking and would defeat that throttle entirely near
+any water; it still refreshes on the same regular cadence, with the
+existing per-frame ramp keeping the audible result smooth regardless.
+`World._client_process` passes `_chunk_manager.nearest_water_distance_
+tiles(player_tile.x, player_tile.y)` through as the 8th argument to the
+existing `_nature_soundscape.update(...)` call.
+
+TDD throughout, each piece confirmed red first: the ring-scan geometry,
+`EarthChunkManager`'s wiring (cross-checked against a manual scan using
+the same real predicates rather than a hard-coded expected distance,
+since a river/lake at any specific test coordinate isn't guaranteed),
+`layer_mix`'s own river-overlay math (6 new tests), `NatureSoundscapePlayer`
+passthrough (3 tests against real `AudioStreamPlayer` state), and a new
+source-text assertion in `test_world_nature_soundscape_fanout.gd` that
+the real distance actually reaches the call. One pre-existing test
+(`test_layers_has_all_eleven_registered_files`) needed its hard-coded
+count updated from 11 to 12 -- a correct consequence of a new real layer
+joining the registry, not a regression. `test_water_proximity.gd` 6/6,
+`test_earth_chunk_manager_water_proximity.gd` 2/2, `test_nature_
+soundscape.gd` 35/35, `test_nature_soundscape_player.gd` 18/18, `test_
+world_nature_soundscape_fanout.gd` 6/6.
+
+Both halves of "individual nearby animals and environment" now have a
+real, tested, wired mechanism. Still open: the 13 unsourced creature
+species named above, the ring-scan's own accepted Euclidean-precision
+approximation at certain ring boundaries (named, harmless for this use),
+the linear (not perceptually-curved) volume ramp, and `ocean.ogg`'s own
+unrelated rough loop seam.

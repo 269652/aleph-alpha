@@ -18,6 +18,12 @@ const HAWK_CALL_LAYER := "mountain_hawk_call"
 ## a "layer" is an independent, separately-volumed thing that can be active
 ## at once alongside any other -- see docs/concept/soundscape.md's own
 ## "Layered composition, not a lookup table" pillar.
+## The river-proximity overlay -- see RIVER_AUDIBLE_RADIUS_TILES/
+## RIVER_OVERLAY_MAX_VOLUME's own doc comments below. Named here (like
+## HAWK_CALL_LAYER above) so a caller can tell it apart from every other
+## LAYERS entry without a second, duplicated string literal.
+const RIVER_LAYER := "river"
+
 const LAYERS := {
 	"ocean": "res://assets/audio/soundscape/ocean.ogg",
 	"forest_day": "res://assets/audio/soundscape/forest_day.mp3",
@@ -30,6 +36,7 @@ const LAYERS := {
 	"rain": "res://assets/audio/soundscape/rain.ogg",
 	"storm": "res://assets/audio/soundscape/storm.ogg",
 	HAWK_CALL_LAYER: "res://assets/audio/soundscape/mountain_hawk_call.ogg",
+	RIVER_LAYER: "res://assets/audio/soundscape/river.ogg",
 }
 
 ## Real tuned constants (design decisions from docs/concept/soundscape.md's
@@ -66,18 +73,70 @@ const STORM_OVERLAY_VOLUME := 0.9
 ## ambient flavor, not a headline Easter egg.
 const HAWK_CALL_CHANCE_PER_CHECK := 0.05
 
+## Reported live: "fully build the soundscape out of individual nearby
+## animals and environment" -- the "environment" half, alongside
+## CreatureCallSound's own proximity-gated "individual nearby animals"
+## half. Matches EarthChunkManager.WATER_PROXIMITY_SCAN_RADIUS_TILES
+## exactly (see that constant's own doc comment for the real-world
+## grounding) -- a documented relationship, not a shared code constant:
+## this pure audio module should not import EarthChunkManager (the whole
+## world simulation) just to read one sibling radius, the same reasoning
+## CreatureCallSound.AUDIBLE_RADIUS_PX's own doc comment already gives for
+## not importing World.
+const RIVER_AUDIBLE_RADIUS_TILES := 24.0
+
+## Sub-full, like every other overlay (RAIN_OVERLAY_VOLUME/
+## STORM_OVERLAY_VOLUME above) -- a river reads as ON TOP of the biome
+## bed even standing right beside it, not as replacing/drowning it out.
+const RIVER_OVERLAY_MAX_VOLUME := 0.6
+
 
 ## The complete set of layers that should be audible right now, as
 ## {layer_name: volume}. Omits anything that should NOT be playing entirely
 ## (never lists a layer at 0.0) so a caller can crossfade toward exactly this
 ## set and stop everything else -- see docs/concept/soundscape.md's
 ## "Playback" section.
+##
+## `water_distance_tiles` defaults to INF (no river layer at all) so every
+## pre-existing 5-arg call site across the whole project keeps its exact
+## prior behavior unchanged -- the same "safe default preserves old
+## behavior" convention this codebase's other optional-parameter additions
+## already established (see EarthChunkManager.footstep_surface_for's own
+## `underwater` parameter). A caller that DOES know the real distance to
+## the nearest river/lake (see EarthChunkManager.nearest_water_distance_
+## tiles) gets a real proximity-scaled overlay on top of whatever biome
+## bed/weather overlay already apply.
 func layer_mix(
-	biome: String, season: String, weather: String, is_night: bool, is_snowing: bool
+	biome: String, season: String, weather: String, is_night: bool, is_snowing: bool,
+	water_distance_tiles: float = INF
 ) -> Dictionary:
 	var mix := _biome_bed(biome, season, is_night)
 	_add_weather_overlay(mix, weather, is_snowing)
+	_add_river_overlay(mix, water_distance_tiles)
 	return mix
+
+
+## Additive and independent of both the biome bed and the weather overlay
+## -- a river running through a desert during a storm should still add its
+## own layer on top of both, mirroring _add_weather_overlay's own
+## "mutates in place, never clobbers a louder existing entry" shape (not
+## that a collision is expected here -- RIVER_LAYER's own key can't
+## already be present from either of the other two -- but the same
+## defensive shape costs nothing and stays consistent).
+##
+## Linear falloff from RIVER_OVERLAY_MAX_VOLUME at distance 0 to silent at
+## RIVER_AUDIBLE_RADIUS_TILES -- the simplest real ramp that reads as
+## "fades in as you approach, fades out as you leave" rather than an
+## abrupt on/off; no perceptual-loudness curve research went into
+## `linear` specifically (unlike e.g. this project's real anthropometric
+## constants), so this is a real, deliberate compromise, not eyeballed
+## noise -- worth revisiting with a genuine loudness curve if it ever
+## reads as too abrupt in practice.
+func _add_river_overlay(mix: Dictionary, water_distance_tiles: float) -> void:
+	if water_distance_tiles >= RIVER_AUDIBLE_RADIUS_TILES:
+		return
+	var closeness := 1.0 - (water_distance_tiles / RIVER_AUDIBLE_RADIUS_TILES)
+	_layer_at_least(mix, RIVER_LAYER, closeness * RIVER_OVERLAY_MAX_VOLUME)
 
 
 ## Additive, independent of the biome bed -- mutates `mix` in place rather

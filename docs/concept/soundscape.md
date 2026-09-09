@@ -110,6 +110,68 @@ is_night` (see grounding above), then a `roll < HAWK_CALL_CHANCE_PER_CHECK`
 draw exactly like every other `chance_per_check`-gated cameo in this project
 family.
 
+### Proximity layer: `river` (2026-09-09)
+
+Requested live, following straight on from "compose the sound from what's
+actually around you": *"fully build the soundscape out of individual
+nearby animals and environment please."* [creature_and_footstep_audio.md](creature_and_footstep_audio.md)
+already made creature CALLS genuinely proximity-based; this is the
+"environment" half of the same ask.
+
+`layer_mix` gained an optional `water_distance_tiles` parameter
+(defaulting to `INF` — every pre-existing 5-arg call site keeps its exact
+prior behavior). `EarthChunkManager.nearest_water_distance_tiles(global_x,
+global_y)` supplies the real fact: a ring-by-ring scan (pure geometry,
+[water_proximity.gd](../../src/world/water_proximity.gd), tested against
+synthetic coordinates rather than unpredictable real generated terrain)
+out to `WATER_PROXIMITY_SCAN_RADIUS_TILES` (24 tiles, ~34 real metres —
+the same order of magnitude as `CreatureCallSound.AUDIBLE_RADIUS_PX`'s own
+~35m "nearby" scope for creature calls), reusing the exact
+`is_river_at_global`/`is_lake_at_global` predicates `record_footstep`'s
+own underwater check already calls — never a second, independently
+invented water check.
+
+`RIVER_LAYER` (`river.ogg`, a real flowing-stream field recording, see
+`assets/audio/soundscape/CREDITS.md`) ramps linearly from
+`RIVER_OVERLAY_MAX_VOLUME` at distance 0 to silent at
+`RIVER_AUDIBLE_RADIUS_TILES`, additive on top of whatever biome bed/
+weather overlay already apply — the same "never clobbers, only adds"
+shape `_add_weather_overlay` already established. Deliberately NOT part
+of `NatureSoundscapePlayer`'s "did a real input change?" immediate-
+recompute comparison (see that file's own `update()` doc comment): unlike
+biome/season/weather, a real distance to water changes continuously while
+walking, and folding it into that comparison would defeat the throttle
+entirely near any water. It still refreshes on the same regular cadence
+as everything else, with `_advance_ramp`'s own per-frame (never
+throttled) smoothing keeping the audible volume climbing/falling
+continuously in between.
+
+TDD throughout: `water_proximity.gd`'s ring-scan geometry (6 tests against
+synthetic coordinates — standing on water, an adjacent tile, a real 3-4-5
+Euclidean triangle not a taxicab count, several candidates picking the
+nearest, nothing within radius, a hit exactly at the radius edge);
+`EarthChunkManager.nearest_water_distance_tiles`'s wiring (cross-checked
+against a manual scan using the same real predicates, since a river/lake
+at any SPECIFIC coordinate isn't guaranteed by real generated terrain);
+`layer_mix`'s own river-overlay math (6 new tests: omitted parameter adds
+nothing, full volume at zero distance, half volume at half radius, gone
+at/beyond the radius, coexists with bed+weather); `NatureSoundscapePlayer`
+passthrough (3 tests using real `AudioStreamPlayer.playing`/`volume_db`);
+and a new `test_world_nature_soundscape_fanout.gd` source-text assertion
+that `_client_process` actually passes the real distance through.
+`test_water_proximity.gd` 6/6, `test_earth_chunk_manager_water_proximity.gd`
+2/2, `test_nature_soundscape.gd` 35/35, `test_nature_soundscape_player.gd`
+18/18, `test_world_nature_soundscape_fanout.gd` 6/6.
+
+**Not attempted here:** the linear volume ramp is a real, deliberate
+compromise (see `_add_river_overlay`'s own doc comment), not a genuine
+perceptual-loudness curve; the ring-scan's own known, accepted Euclidean
+imprecision at certain ring boundaries (see `water_proximity.gd`'s own doc
+comment — never matters for a smooth ambient ramp over dozens of tiles);
+and `ocean.ogg`'s own rough loop seam (a raw field recording, would need
+real audio-editing tooling this environment doesn't have) is unrelated
+and still unfixed.
+
 ### Playback (`src/rendering/nature_soundscape_player.gd`)
 
 A `Node` owning one `AudioStreamPlayer` per `LAYERS` entry (looping for beds/
@@ -159,10 +221,11 @@ sub-second reaction). Each step:
   speakers/headphones actually in use?), the per-application entry for this
   game's `.exe` in the Windows Volume Mixer (a persisted, per-executable
   setting independent of the game's own bus), or the system volume itself.
-- ⬜ **Proximity layers** (running water near a river/lake, per
-  [hydrology_field.gd](../../src/world/hydrology_field.gd)) — a real, already-
-  named future extension, not built here to keep this pass's asset list from
-  growing past what was actually researched and licensed.
+- ✅ **Revised (2026-09-09): a real river/lake-proximity layer.** A new
+  `river` overlay ramps in as the player nears real water (`EarthChunkManager.
+  nearest_water_distance_tiles`, a ring-scan out to ~34 real metres), fading
+  linearly to silent beyond that — see "Proximity layer: `river`" above for
+  the full mechanism and TDD coverage.
 - ⬜ **Dedicated desert/tundra recordings** — both currently share one `wind`
   bed at different volumes (see grounding above); a real desert-specific
   recording (sand hiss, distinct insect) would be a genuine upgrade if
@@ -175,15 +238,20 @@ sub-second reaction). Each step:
   waiting out the full `REFRESH_INTERVAL_SECONDS` throttle first —
   reported live as "it takes a while before the sound is played... then
   it fades out and takes a while again," up to ~10 real seconds of
-  latency on ANY discrete transition, water included (though there is
-  still no dedicated river/lake-proximity layer — see the unchanged
-  bullet just above). See [creature_and_footstep_audio.md](creature_and_footstep_audio.md#a-real-separate-ambient-audio-responsiveness-fix-same-pass)
-  for the full diagnosis and fix.
-- ⬜ **"Compose the sound from what's actually around you"** — reported
+  latency on ANY discrete transition. Water specifically also got its own
+  dedicated proximity layer in a later pass — see "Proximity layer:
+  `river`" above. See [creature_and_footstep_audio.md](creature_and_footstep_audio.md#a-real-separate-ambient-audio-responsiveness-fix-same-pass)
+  for the full diagnosis and fix behind this bullet.
+- **"Compose the sound from what's actually around you"** — reported
   live: ambient beds are decorative field recordings with birds baked in,
-  independent of the real simulated bird population nearby. Not
-  re-architected in this pass (would need re-recording or real audio-
-  editing tooling neither available here) — see
+  independent of the real simulated bird population nearby. Real, direct
+  progress since: proximity-gated creature calls (see
+  [creature_and_footstep_audio.md](creature_and_footstep_audio.md#compose-the-sound-from-whats-actually-around-you))
+  and the `river` proximity layer above both compose real, live nearby
+  state into what's heard. ⬜ Still not attempted: re-architecting the
+  BEDS themselves (`forest_day.mp3` etc.) to scale with real nearby
+  population counts — would need re-recording or real audio-editing
+  tooling neither available here — see
   [creature_and_footstep_audio.md](creature_and_footstep_audio.md#compose-the-sound-from-whats-actually-around-you)
   for the real, if partial, step taken instead (real per-creature calls,
   a separate system from this file's own ambient beds).

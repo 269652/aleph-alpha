@@ -199,3 +199,35 @@ func test_hawk_call_does_not_play_when_the_roll_misses_the_threshold():
 	player.update("mountain", "summer", "clear", false, false, 1.0, 100.0)
 	var hawk: AudioStreamPlayer = root.get_node(NatureSoundscape.HAWK_CALL_LAYER)
 	assert_false(hawk.playing)
+
+
+# -- river proximity: passthrough for the "environment" half of ------------
+# -- "compose the sound from what's actually around you" -------------------
+
+## Omitting water_distance_tiles entirely (every pre-existing 7-arg call
+## site above) must keep behaving exactly as before -- no river layer.
+func test_omitting_water_distance_targets_no_river_volume_at_all():
+	var root := _live_root()
+	player.update("grassland", "summer", "clear", false, false, 1.0, 100.0)
+	var river: AudioStreamPlayer = root.get_node(NatureSoundscape.RIVER_LAYER)
+	assert_false(river.playing)
+
+
+func test_standing_on_water_ramps_the_river_layer_up_and_plays_it():
+	var root := _live_root()
+	player.update("grassland", "summer", "clear", false, false, 1.0, 100.0, 0.0)
+	var river: AudioStreamPlayer = root.get_node(NatureSoundscape.RIVER_LAYER)
+	assert_true(river.playing)
+	assert_almost_eq(
+		db_to_linear(river.volume_db), NatureSoundscape.RIVER_OVERLAY_MAX_VOLUME, 0.01
+	)
+
+
+func test_walking_away_from_water_ramps_the_river_layer_back_down():
+	var root := _live_root()
+	player.update("grassland", "summer", "clear", false, false, 1.0, 100.0, 0.0)  # settle fully, close
+	player.update(
+		"grassland", "summer", "clear", false, false, 1.0, 100.0, NatureSoundscape.RIVER_AUDIBLE_RADIUS_TILES
+	)  # settle fully, far
+	var river: AudioStreamPlayer = root.get_node(NatureSoundscape.RIVER_LAYER)
+	assert_false(river.playing)

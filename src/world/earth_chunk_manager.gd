@@ -53,6 +53,7 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropRenderer = preload("res://src/rendering/wild_crop_renderer.gd")
 const WildMushroomPatch = preload("res://src/world/wild_mushroom_patch.gd")
+const WaterProximity = preload("res://src/world/water_proximity.gd")
 const MushroomRenderer = preload("res://src/rendering/mushroom_renderer.gd")
 const MushroomFlush = preload("res://src/world/mushroom_flush.gd")
 const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
@@ -9752,6 +9753,34 @@ func is_river_at_global(global_x: int, global_y: int) -> bool:
 ## overlay flag on land biome exactly like is_river_at_global.
 func is_lake_at_global(global_x: int, global_y: int) -> bool:
 	return generator.is_lake_at_global(global_x, global_y)
+
+
+## How far (tiles) the ambient river-proximity layer scans outward before
+## giving up on finding any river/lake at all -- see docs/concept/
+## soundscape.md's "Proximity layers" gap this closes. 24 tiles is a real,
+## deliberate compromise, not a precise citation: TILE_SIZE (16px) and
+## GroundSlide.PX_PER_METER put it around 34 real metres, the same order
+## of magnitude as CreatureCallSound.AUDIBLE_RADIUS_PX's own ~35m "nearby"
+## scope for creature calls -- flowing water is a louder, more constant
+## real-world sound than a bird chirp and could real-world-honestly carry
+## further, but this stays consistent with the sibling system's own
+## "nearby, not the whole loaded chunk radius" scope rather than
+## introducing a second, unrelated distance convention.
+const WATER_PROXIMITY_SCAN_RADIUS_TILES := 24
+
+## The real tile-distance to the nearest river/lake tile, or INF if
+## nothing qualifies within WATER_PROXIMITY_SCAN_RADIUS_TILES -- a raw
+## geometric fact for NatureSoundscape to turn into a volume, not an audio
+## decision itself (see docs/concept/creature_and_footstep_audio.md's own
+## design pillar 4: world state must never depend on audio, only the other
+## way around). Delegates the actual ring-scan geometry to WaterProximity
+## (pure, tested against synthetic coordinates in test_water_proximity.gd
+## rather than unpredictable real generated terrain).
+func nearest_water_distance_tiles(global_x: int, global_y: int) -> float:
+	return WaterProximity.nearest_distance_tiles(
+		global_x, global_y, WATER_PROXIMITY_SCAN_RADIUS_TILES,
+		func(x: int, y: int) -> bool: return is_river_at_global(x, y) or is_lake_at_global(x, y)
+	)
 
 
 ## The water current at a tile, as {direction: Vector2 (tile-space unit

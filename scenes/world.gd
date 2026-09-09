@@ -5322,7 +5322,8 @@ func _client_process(delta: float) -> void:
 		elevation <= 0.0,
 		snowing,
 		randf(),
-		delta
+		delta,
+		_chunk_manager.nearest_water_distance_tiles(player_tile.x, player_tile.y)
 	)
 	# Depth, tracks and repaint all live behind one call now, and it reads the
 	# WORLD clock rather than this frame's delta -- see step_snow. Accumulating
