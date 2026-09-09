@@ -18056,3 +18056,45 @@ over-broad "ignore anything with a modifier held" rewrite.
 `test_intro_splash.gd` 13/13, `test_world_play_intro_splash_frame_gate.gd`
 3/3, `test_world_intro_splash_after_load_fanout.gd` 5/5 — no regression
 in any of the eight prior passes.
+
+## Bees now draw above ground scenery, closing a real "materializes mid-air" bug (2026-09-09)
+
+Reported live: *"I saw a hive where streams of bees are flying in that
+appear out of nowhere."* Root cause: `BeeForagerMarker` is a plain
+Y-sorted sibling of trees under the shared `Entities` node (see
+`EarthChunkManager._dispatch_bee_forager`), and every hive is required
+to sit within a couple of tiles of a real tree
+(`_has_real_hive_anchor`, shipped the day before). A tree's own Y-sort
+position is where it is *rooted*, not how tall its canopy draws -- a
+bee flying at a screen position Y-sorting placed "behind" that root was
+drawn hidden underneath the whole canopy sprite, then popped into view
+the instant it crossed the sort boundary, reading as a bee
+materializing mid-air rather than the continuous flight it actually
+was. `AmbientFlyerMarker.AIRBORNE_Z_INDEX` already exists for this
+exact reason -- butterflies hovering at a flower hit the identical bug
+years earlier in this doc's own history -- but `BeeForagerMarker` was
+never built on `AmbientFlyerMarker` and never inherited the fix.
+New `BeeForagerMarker.AIRBORNE_Z_INDEX := 1`, set once in `_ready()`
+(`z_index = AIRBORNE_Z_INDEX`), mirroring `AmbientFlyerMarker`'s own
+constant name/value/placement exactly.
+
+`test_bee_forager_marker.gd` 30/30 (29 + 1 new: `z_index` reads the
+constant once added to the tree). Regression-checked: `test_bee_hive_
+marker.gd` 24/24, `test_bee_population_model.gd` 14/14, `test_wild_bee_
+patch.gd` 20/20, `test_wild_bee_nest_marker.gd` 11/11, `test_bee_
+colony.gd` 47/47.
+
+**Two other real, distinct bugs surfaced investigating this, both
+flagged rather than fixed here** (out of scope for this specific report
+-- see the spawned follow-up tasks): (1) a hive that absconds/harvest-
+relocates does not retarget foragers already in flight for it -- they
+keep flying toward/returning to the old, now-marker-free site, and
+`_active_bee_foragers`'s dictionary key never migrates to the new site
+either, so the per-hive concurrent-forager cap can be briefly exceeded
+across the old+new keys; (2) a chunk unloading while one of its bees is
+mid-flight orphans that bee's own `BeeColony` reference (a real object
+kept alive only by the forager's own reference count) -- the forager's
+eventual `record_forage_result`/`deposit_food` call lands on that
+abandoned colony instead of the fresh one `_load_chunk` built on
+re-entry, a silent economy-state leak with no visible symptom on its
+own.

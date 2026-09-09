@@ -141,6 +141,26 @@ func test_has_a_real_sprite_texture():
 	assert_not_null(sprite.texture)
 
 
+## Reported live: "I saw a hive where streams of bees are flying in that
+## appear out of nowhere." A bee is a plain Y-sorted sibling of trees
+## under the same Entities node (see EarthChunkManager._dispatch_bee_
+## forager/_entities_parent) -- and every hive is required to sit within
+## a couple of tiles of a real tree (see _has_real_hive_anchor). A tree's
+## OWN sort position is where it is rooted, not how tall its canopy
+## draws; a bee flying at a screen position the Y-sort places "behind"
+## that anchor gets hidden under the canopy sprite entirely, then pops
+## into view the instant it crosses the sort boundary -- reading exactly
+## as "materializing mid-air," not the continuous flight it actually is.
+## Y-sorting cannot resolve that on its own: the tree answers "where is
+## it rooted", the bee answers "where is it flying", and those are
+## different questions (mirrors AmbientFlyerMarker.AIRBORNE_Z_INDEX's own
+## doc comment almost verbatim -- butterflies hovering at a flower had
+## the identical bug, fixed the identical way; bees never got it).
+func test_draws_above_ground_scenery_like_a_flying_thing_should():
+	add_child_autofree(marker)
+	assert_eq(marker.z_index, BeeForagerMarker.AIRBORNE_Z_INDEX)
+
+
 # -- APPROACHING/RETURNING in isolation (direct construction, matching --
 # -- test_ant_forager_marker.gd's own "phase defaults to APPROACHING" ---
 # -- backward-compatible contract) ------------------------------------------

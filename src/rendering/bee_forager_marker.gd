@@ -52,6 +52,23 @@ const TreeSpecies = preload("res://src/world/tree_species.gd")
 
 const GROUP_NAME := "bee_forager"
 
+## Flying things draw above ground scenery -- mirrors AmbientFlyerMarker.
+## AIRBORNE_Z_INDEX exactly, and for the identical reason (see that
+## constant's own doc comment): every hive is required to sit within a
+## couple of tiles of a real tree (see EarthChunkManager.
+## _has_real_hive_anchor), and a bee is Y-sorted as a plain sibling of
+## that tree under the same Entities node. A tree's OWN sort position is
+## where it is ROOTED, not how tall its canopy draws; a bee flying at a
+## screen position Y-sorting places "behind" that root gets hidden under
+## the whole canopy sprite, then pops into view the instant it crosses
+## the sort boundary -- reading as a bee materializing mid-air, not the
+## continuous flight it actually is (reported live: "streams of bees...
+## flying in that appear out of nowhere"). AmbientFlyerMarker already
+## hit and fixed this exact bug for butterflies hovering at a flower;
+## bees never inherited the fix because they are not built on
+## AmbientFlyerMarker at all.
+const AIRBORNE_Z_INDEX := 1
+
 ## Real honeybees are considerably faster fliers than an ant's own
 ## walking pace (AntForagerMarker.WALK_SPEED, 12.0) -- flight, not a
 ## crawl.
@@ -202,6 +219,7 @@ func setup(world, colony, hive_cell: Vector2i) -> void:
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
 	add_to_group(HoverTargetFinder.GROUP_NAME)
+	z_index = AIRBORNE_Z_INDEX
 	_ensure_initialized()
 
 

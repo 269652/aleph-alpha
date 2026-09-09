@@ -522,6 +522,23 @@ guaranteed sensing range, rather than the scout only ever finding one by
 wandering into it by chance — the missing half of "blossom scent should
 attract bees."
 
+**A bee draws above ground scenery, the same fix `AmbientFlyerMarker`
+already needed for butterflies** (2026-09-09, reported live: *"I saw a
+hive where streams of bees are flying in that appear out of nowhere"*).
+`BeeForagerMarker` is a plain Y-sorted sibling of trees under the same
+`Entities` node, and every hive is required to sit within a couple of
+tiles of a real tree (`_has_real_hive_anchor` — see "Absconding"
+above). A tree's own sort position is where it is *rooted*, not how
+tall its canopy draws; a bee flying at a screen position Y-sorting
+places "behind" that root was drawn hidden underneath the whole canopy
+sprite, then popped into view the instant it crossed the sort boundary
+— reading as a bee materializing mid-air, not the continuous flight it
+actually was. `AmbientFlyerMarker.AIRBORNE_Z_INDEX` already exists for
+this identical reason (butterflies hovering at a flower had the same
+bug); `BeeForagerMarker` was never built on `AmbientFlyerMarker` and
+never inherited the fix, so it gets its own identical `z_index = 1`,
+set once in `_ready()`.
+
 ### Growth-stage and destruction art — `IllustratedBeehiveSprite`
 
 Rows 1-2 of `beehive.png` (16 frames, tiny exposed cluster → full sealed
@@ -678,6 +695,14 @@ a small, tight radius. **Wild bee nests have the identical claim
 ("needs real deadwood/an old stem nearby") and no equivalent
 enforcement — a known, named, not-yet-fixed parallel gap**, since this
 pass was specifically asked about honeybee hives.
+
+✅ **A bee draws above ground scenery** (2026-09-09, see "Foraging"
+above) — `BeeForagerMarker.AIRBORNE_Z_INDEX`, mirroring
+`AmbientFlyerMarker`'s own identical fix for butterflies. Fixes a real
+reported symptom ("streams of bees... flying in that appear out of
+nowhere"): a bee sorting behind a nearby required-anchor tree's own
+root position was drawn hidden under its canopy, then popped into view
+crossing the sort boundary.
 
 ✅ **Wild bee nests** (`src/world/wild_bee_patch.gd`, `src/rendering/
 wild_bee_nest_marker.gd`, `src/rendering/
