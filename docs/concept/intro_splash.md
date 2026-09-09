@@ -1070,6 +1070,63 @@ own history well before this pass. `test_intro_splash.gd`,
 `test_weather_command_clarity.gd`, `test_console_command_parser.gd`,
 and `test_dev_console.gd` all re-run clean.
 
+### A sixteenth pass: the 45-frame sheet reverted -- a real row-boundary jump (2026-09-09)
+
+A "fifteenth pass" (a fifth row -- pure sparkle/starburst, no globe -- and
+a ninth column, 32 frames -> 45) shipped here briefly, then was reverted
+in full. Reported live: "now the intro is not stabilized anymore and
+jumps left to right."
+
+**Investigated with real pixel measurement, not guessed.** The fixed-
+crop-window mechanism (the eleventh pass, still in place) was working
+correctly against the new sheet -- every one of the 45 frames a clean,
+uniform 195x151, confirmed directly. The actual problem: the globe's own
+SILHOUETTE -- isolated via each frame's own dominant/mode color as the
+real background reference, not just its brightest pixels (which can
+legitimately swing non-monotonically as a lit sphere rotates, the same
+"moon-phase-crescent" effect that made an earlier brightness-only
+measurement look falsely reassuring) -- genuinely jumps 11-26px at EVERY
+one of the 4 row boundaries, growing larger each time (11.5, 14.3, 17.1,
+26.3px), while drifting smoothly within each row.
+
+Two real alternate explanations were tested and ruled out before
+concluding this was an art problem, not a code one:
+
+1. **A different reading order** (serpentine/boustrophedon -- row 0
+   left-to-right, row 1 right-to-left, alternating) only cut the total
+   measured drift by ~21% (231.9 -> 183.3 summed |delta|), nowhere near
+   eliminating it -- inconsistent with a simple reading-order bug, which
+   a correct alternate order should fix cleanly.
+2. **A compensating per-row crop-position shift** (re-registering each
+   row's crop window by a measured offset, the same idea as video
+   stabilization) would need up to ~69px of shift by the last row --
+   more than the source image has margin for; the crop window would run
+   off the sheet's own left edge for later columns.
+
+Neither of the sheet's two authoring passes (the original 32-frame
+"fourteenth pass" era work, or the eleventh pass's own fixed-crop-window
+fix) is at fault -- this is a genuine inter-row continuity gap in the
+NEWLY REGENERATED art itself, not something reachable from this file's
+own crop/reading-order code.
+
+**The fix: reverted, not patched.** Given the user's own explicit choice
+(offered both options directly) was to revert, both commits (`aad16cff`
+the code+art, `28d1e463` the matching docs) were reverted via `git
+revert`, restoring the previous, already-verified-stable 32-frame sheet
+in full (`_FRAME_WIDTH` 195 -> 240, `_FRAME_HEIGHT` 151 -> 183,
+`IntroSplashSequencer.FRAME_COUNT` 45 -> 32, `assets/sprites/intro.png`
+back to its original 2,338,456-byte version). The 45-frame art is not
+lost -- fully recoverable from `aad16cff` whenever a version with
+genuinely continuous inter-row rotation exists; this pass reverts the
+INTEGRATION, not a judgment that a richer sheet is unwanted.
+
+Verification: a straightforward revert of a previously-green commit, so
+the full pre-existing `test_intro_splash_sheet.gd`/`test_intro_splash_
+sequencer.gd`/`test_intro_splash.gd` suites (already-passing tests for
+the 32-frame sheet, unchanged by this revert) are the real regression
+coverage here rather than new tests -- there is no NEW behavior to pin,
+only old, already-tested behavior restored.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
@@ -1218,3 +1275,11 @@ and `test_dev_console.gd` all re-run clean.
   never runs while the menu has the tree paused), the button only from
   the menu — genuinely complementary reaches, not two paths to the
   identical moment.
+- ⬜/✅ **The sheet is back to 32 frames (8x4), not 45.** A ninth-column/
+  fifth-row art pass ("A fifteenth pass") shipped briefly, then was
+  reverted ("A sixteenth pass" — see above) after real pixel measurement
+  confirmed the new art's own inter-row continuity, not this file's crop/
+  reading-order code, was the cause of a genuine, reported "jumps left to
+  right" instability. The richer sheet isn't lost, just not integrated —
+  recoverable from commit `aad16cff` whenever a version with genuinely
+  continuous inter-row rotation exists.

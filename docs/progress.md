@@ -18991,3 +18991,34 @@ given call appears only once. `test_world_boot_loading_overlay_fanout.gd`
 6/6, `test_world_intro_splash_after_load_fanout.gd` 5/5, `test_world_play_
 intro_splash_frame_gate.gd` 3/3, `test_loading_overlay.gd` 2/2 — no
 regression in any adjacent system.
+
+## The 45-frame intro sheet reverted: a real, measured row-boundary jump (`concept/intro_splash.md`, 2026-09-09)
+
+Reported live: "now the intro is not stabilized anymore and jumps left to
+right." The 45-frame sheet (a real, separate addition — a new sparkle/
+starburst final row plus a ninth column) shipped with a genuine
+instability its own author's tests never caught, because none of them
+measured actual on-screen content position.
+
+Investigated with real pixel measurement, not guessed: the fixed-crop-
+window mechanism itself was working correctly (every frame a clean,
+uniform 195×151, confirmed) — the globe's own SILHOUETTE (isolated via
+each frame's own dominant/mode color as the background reference, not
+just its brightest pixels, which can legitimately swing non-monotonically
+as a lit sphere rotates) genuinely jumps 11-26px at every one of the 4
+row boundaries, growing each time, while drifting smoothly within each
+row. Two alternate explanations were tested and ruled out: a serpentine
+(alternating-direction) reading order only cut total drift ~21%, far from
+eliminating it (ruling out a simple reading-order bug); a compensating
+per-row crop-position shift would need up to ~69px by the last row,
+which runs off the source image's own edge (ruling out a viable crop-
+level registration fix). Conclusion: a real seam in the newly-regenerated
+art's own inter-row continuity, not a code bug.
+
+Reverted both the 45-frame commits (`aad16cff`, `28d1e463`) back to the
+previous, already-verified-stable 32-frame sheet (`_FRAME_WIDTH` 195 →
+240, `_FRAME_HEIGHT` 151 → 183, `FRAME_COUNT` 45 → 32, `intro.png` back
+to its original 2,338,456-byte version) — the user's own explicit choice
+between reverting and keeping the new art with the known jump. The
+45-frame art (extra row/column) is not lost -- recoverable from `aad16cff`
+whenever a version with genuinely continuous inter-row rotation exists.
