@@ -365,6 +365,59 @@ frames`, the same technique `test_pressing_new_game_builds_the_character_
 creator` already established) rather than reaching past the class into
 private state.
 
+### A fifth entry point: the boot sequence itself (2026-09-09)
+
+Reported live, via a screenshot: the FIRST thing a fresh launch shows looks
+"stuck" and "not professional" — a dark screen with a plain, unstyled
+"Loading..." label top-left, a solid green bar under it, and a stray yellow
+square top-right. Traced to source, not guessed: none of that is `LoadingOverlay`
+at all (which is centered, a small gold spinner glyph plus status text, no
+bar — confirmed by actually rendering it, see `tools/probe_compass_window.gd`'s
+own "code tracing alone is not enough evidence" precedent). It's
+`scenes/world.tscn`'s own raw, never-yet-updated default UI: `UI/DebugLabel`'s
+literal `.tscn`-authored placeholder text IS `"Loading..."`,
+`UI/PlayerHealthBar/Fill` is a green `ColorRect` sitting at its authored
+default (unset) width since the player's real HP hasn't been assigned yet,
+and `UI/Minimap/PlayerDot` is a yellow `ColorRect` floating with no minimap
+texture behind it yet. None of it was ever a designed loading screen — it's
+what's left showing through when nothing covers the still-substantial real
+boot cost (`EarthChunkManager` construction, and especially
+`MushroomMarker.warm_art_cache()`, measured ~52s dominant contributor — see
+"Boot freeze" in `docs/concept/soil_fauna.md`'s "FPS regression round 6") that
+runs in `World._ready()` *before* the main menu — and therefore before
+`_build_loading_overlay()`/`_show_loading_overlay` — ever existed at all.
+
+Fixed the same way the fourth entry point was: `_build_loading_overlay()`/
+`await _show_loading_overlay("Starting Aleph Alpha...")` now run first thing
+in `_ready()` (right after the license/identity checks, before
+`EarthChunkManager.new(...)`), and `MushroomMarker.warm_art_cache` — which
+already accepted an optional `on_progress` callback, built for exactly this
+and left unused ("a future boot-time loading readout, not invented here",
+see that function's own doc comment) — is finally wired to it via a new
+`World._on_mushroom_art_progress(loaded, total)`, mirroring
+`_on_chunk_load_progress` exactly but with `set_progress`'s `unit` parameter
+honestly set to `"species"` rather than the default `"chunks"`. Hidden again
+unconditionally right after `_world_ready = true`, before any of the three
+post-setup launch paths (`--solo`, `--server`/join, or the ordinary menu) —
+not just the ordinary menu path, since the dev/diagnostic launches pay the
+exact same heavy setup cost and deserve the exact same real cover for it.
+
+TDD: `test_world_boot_loading_overlay_fanout.gd` (new), same "read
+`World._ready()` straight from source and assert on ordering" technique as
+the intro-splash/torch-glow/compass-window fanout files above — `World` is
+still too heavy to stand up a real instance just to prove a few calls got
+reordered, and `LoadingOverlay`'s own render/progress behavior is already
+covered by `test_loading_overlay.gd`. Five tests, all confirmed red first
+against the un-wired code (the overlay build/show calls, the progress
+callback, and the hide call all absent): the overlay is built before the
+chunk manager, shown before `warm_art_cache`, `warm_art_cache` is called
+WITH its progress callback (not bare), the callback reaches `set_progress`
+with the real `"species"` unit, and the overlay is hidden after the setup
+finishes but before any launch-mode branch. `test_world_intro_splash_after_
+load_fanout.gd`/`test_world_play_intro_splash_frame_gate.gd`/
+`test_loading_overlay.gd` re-run clean — this pass only adds calls, it
+doesn't reorder anything either of those already pins.
+
 ## Status / mechanisms
 
 - ✅ `Player.appearance` field + `to_save_dict()`/`apply_save_dict()`, tested
@@ -408,7 +461,12 @@ private state.
   the rest of `World`.
 - ✅ Loading screen (`LoadingOverlay`, `src/ui/loading_spinner.gd`) covering
   New Game/Host, Load Game, and Join's real world-setup stall, now with REAL
-  chunk-by-chunk progress (see Loading screens above) —
+  chunk-by-chunk progress (see Loading screens above), the character
+  creator's own first-time build (real portrait-count progress, "A fourth
+  entry point" above), AND the boot sequence itself (real species-count
+  progress, "A fifth entry point" above) — every real synchronous/yielding
+  stall in the game now shows the SAME designed overlay rather than the raw,
+  unstyled scene underneath it —
   `EarthChunkManager.pending_load_chunks`/`update_with_progress` are pure
   chunk-manager methods, tested (`test_earth_chunk_manager.gd`: total-matches-
   chunks-in-radius, same chunks loaded as `update()`, progress calls run

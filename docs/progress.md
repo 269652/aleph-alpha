@@ -18839,3 +18839,72 @@ play_intro_splash_frame_gate.gd`, `test_mushroom_command_clarity.gd`,
 `test_season_command_clarity.gd`, `test_weather_command_clarity.gd`,
 `test_console_command_parser.gd`, `test_dev_console.gd` — 8 scripts,
 67/67, plus the 3 `World`-level intro files, 13/13, all clean.
+
+## The boot sequence finally gets a real loading screen too (`concept/persistence.md`, "A fifth entry point", 2026-09-09)
+
+Reported live, via a screenshot: the very FIRST thing a fresh launch
+displays looks "stuck" and "not professional" — a dark screen, a plain
+unstyled "Loading..." label top-left, a solid green bar right under it,
+a stray yellow square top-right, no spinner anywhere. Not obvious from
+the screenshot alone which system produced it — the user confirmed it
+was Aleph Alpha, on current `main`, and that it's the very first thing
+shown (before the main menu). Traced to source, not guessed, after
+first ruling out `LoadingOverlay` by actually RENDERING it for real
+(`SubViewport` + `RenderingServer.force_draw()`, the same "code tracing
+alone is not enough evidence" discipline `tools/probe_compass_window.gd`
+already established) — that class is centered, a small gold spinner
+glyph plus text, no bar at all, definitively not a match. Grepped for
+`ProgressBar` (zero hits outside GUT's own internal test-runner UI) and
+for a green `Color` literal anywhere in `src/` (zero hits — the game's
+whole UI theme is gold-accented, no green) before finding the real
+match: `scenes/world.tscn`'s own raw, never-yet-updated default UI.
+`UI/DebugLabel`'s literal `.tscn`-authored placeholder text IS
+`"Loading..."`; `UI/PlayerHealthBar/Fill` is a green `ColorRect`
+(`Color(0.15, 0.75, 0.2, 1)`) sitting at its authored default (unset,
+full) width since the player's real HP hasn't been assigned yet;
+`UI/Minimap/PlayerDot` is a yellow `ColorRect` floating with no minimap
+texture behind it yet, positioned top-right. None of it was ever a
+designed loading screen — it's what stays on screen, completely frozen,
+for however long `World._ready()`'s own real, still-substantial boot
+cost (`EarthChunkManager` construction, and especially
+`MushroomMarker.warm_art_cache()`, measured ~52s dominant contributor —
+see "Boot freeze" / "FPS regression round 6" in
+`docs/concept/soil_fauna.md`) takes, because `_build_loading_overlay`/
+`_show_loading_overlay` were never called until deep inside `_ready()`,
+well after that cost already starts — there had never been a main menu,
+let alone a New Game click, for the existing loading-screen entry
+points to hang off of.
+
+**Fix:** `_build_loading_overlay()`/`await _show_loading_overlay(
+"Starting Aleph Alpha...")` now run first thing in `_ready()`, right
+after the license/GitHub-identity checks and before
+`EarthChunkManager.new(...)`. `MushroomMarker.warm_art_cache` already
+accepted an optional `on_progress` callback — built for exactly this,
+explicitly documented as "a future boot-time loading readout, not
+invented here", and never actually wired to anything — now wired via a
+new `World._on_mushroom_art_progress(loaded, total)`, mirroring
+`_on_chunk_load_progress` exactly but honestly labeled `"species"`
+rather than inheriting `set_progress`'s `"chunks"` default. Hidden
+again unconditionally right after `_world_ready = true`, before any of
+the three post-setup launch paths (`--solo`, `--server`/join, or the
+ordinary menu) — not just the ordinary menu path, since a dev/
+diagnostic `--solo`/`--server` launch pays the exact same heavy setup
+cost and deserves the exact same real cover for it.
+
+**TDD:** `test_world_boot_loading_overlay_fanout.gd` (new, 5 tests),
+the same "read `World._ready()` straight from source and assert on
+ordering" technique `test_world_intro_splash_after_load_fanout.gd`/
+`test_world_torch_glow_fanout.gd`/`test_world_compass_window_fanout.gd`
+already established — `World` is still too heavy to stand up a real
+instance just to prove a few calls got reordered (license/GitHub-
+identity checks, multiplayer spawn, `EarthChunkManager`... — the exact
+same reasoning `test_world_intro_splash_after_load_fanout.gd`'s own
+header already gives), and `LoadingOverlay`'s own render/progress
+behavior is already covered directly by `test_loading_overlay.gd`. All
+5 confirmed red first against the unmodified source (overlay build/show
+calls absent, `warm_art_cache` called bare, no progress callback, no
+hide call), green after. Regression-checked:
+`test_world_intro_splash_after_load_fanout.gd` 5/5,
+`test_world_play_intro_splash_frame_gate.gd` 3/3, `test_loading_
+overlay.gd` 2/2 — this pass only adds calls to `_ready()`, it never
+reorders anything either of those already pins.

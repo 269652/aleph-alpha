@@ -710,6 +710,29 @@ func _ready() -> void:
 		if not identity_ok:
 			return
 
+	# The boot-time counterpart to _show_loading_overlay's own reasoning for
+	# New Game/Load Game/Join (see that function's own doc comment): the
+	# heavy, still-substantial synchronous/yielding setup below
+	# (EarthChunkManager construction, and especially MushroomMarker.
+	# warm_art_cache -- measured ~52s dominant cost, see that function's own
+	# doc comment) had NO real UI in front of it at all until now. Whatever
+	# it takes was spent staring at scenes/world.tscn's own raw, never-yet-
+	# updated default state instead of a real loading screen --
+	# UI/DebugLabel's literal .tscn-authored placeholder text ("Loading...",
+	# top-left), UI/PlayerHealthBar/Fill's green ColorRect sitting at its
+	# authored default (unset) width, and UI/Minimap/PlayerDot's yellow
+	# square floating with no minimap texture behind it yet -- reported live,
+	# via a screenshot, as a "stuck"/"not professional"-looking loading
+	# screen that was never a designed loading screen at all. Built and
+	# shown here, before ANY of that heavy setup starts (mirrors
+	# _on_menu_start_requested's own "shown and PAINTED before the real work
+	# starts" ordering exactly); hidden again once it's done, before any of
+	# the three possible launch paths below proceed (see the hide_overlay()
+	# call further down for why unconditionally, not just on the ordinary
+	# menu path).
+	_build_loading_overlay()
+	await _show_loading_overlay("Starting Aleph Alpha...")
+
 	# Boot logo intro (see docs/concept/intro_splash.md): deliberately NOT
 	# triggered here. Two earlier passes both tried to run it somewhere in
 	# this function -- first at the very end (bug: its first frame couldn't
@@ -816,7 +839,7 @@ func _ready() -> void:
 	# doc comment), and it now yields internally across many real engine
 	# frames instead of running as one uninterrupted block, so the rest of
 	# _ready() must genuinely wait for it, not race it.
-	await MushroomMarker.warm_art_cache()
+	await MushroomMarker.warm_art_cache(_on_mushroom_art_progress)
 	_player_spawner.spawn_path = _players.get_path()
 	_player_spawner.add_spawnable_scene(PlayerScene.resource_path)
 	WorldItemBus.item_dropped.connect(_on_item_dropped)
@@ -870,6 +893,17 @@ func _ready() -> void:
 	# see this flag's own doc comment, up near where it used to be set, for
 	# why this moved here.
 	_world_ready = true
+
+	# The heavy setup the boot-time loading overlay (built/shown just above
+	# the license/identity checks) was covering for is genuinely done now --
+	# hidden unconditionally, before ANY of the three paths below (--solo,
+	# --server-or-join, or the ordinary menu), not just the menu path: a
+	# dev/diagnostic --solo or --server launch pays the exact same heavy
+	# setup cost above and deserves the exact same real cover for it, and
+	# leaving the overlay showing (even harmlessly covered by whatever comes
+	# next) would keep its own _process() ticking for the rest of the
+	# session for no reason.
+	_loading_overlay.hide_overlay()
 
 	if "--solo" in args:
 		# Dev/instrumentation launch: skip the menu and drop straight into a
@@ -1229,6 +1263,17 @@ func _show_loading_overlay(text: String) -> void:
 ## which entry point is loading (see LoadingOverlay.set_progress).
 func _on_chunk_load_progress(loaded: int, total: int) -> void:
 	_loading_overlay.set_progress(loaded, total)
+
+
+## Mirrors _on_chunk_load_progress exactly, for the boot-time MushroomMarker.
+## warm_art_cache call above -- passed as ITS OWN on_progress Callable
+## (already built for exactly this, see that function's own doc comment: "a
+## future boot-time loading readout, not invented here"). "species", not the
+## default "chunks" -- an honest unit word for what is actually being
+## counted, the same real-vs-lying-unit reasoning set_progress's own third
+## parameter exists for at all (see that function's own doc comment).
+func _on_mushroom_art_progress(loaded: int, total: int) -> void:
+	_loading_overlay.set_progress(loaded, total, "species")
 
 
 ## The joining-client (and New Game/Load Game's own second, now-cheap) chunk
