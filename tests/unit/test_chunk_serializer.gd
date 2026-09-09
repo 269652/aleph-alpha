@@ -227,4 +227,45 @@ func test_an_old_ecology_file_without_bird_populations_defaults_them_to_zero():
 	assert_almost_eq(float(loaded["robins"]), 0.0, 0.001)
 	assert_almost_eq(float(loaded["sparrows"]), 0.0, 0.001)
 	assert_almost_eq(float(loaded["kingfishers"]), 0.0, 0.001)
+
+
+# -- blackbird persistence (see docs/concept/seasonal_behavior.md, "Blackbird:
+# new species, real population, real diet shift") -- a NEW field generation,
+# appended AFTER kingfishers (the previous generation's own last field), same
+# backward-compat convention every prior generation already established.
+
+func test_blackbird_population_round_trips_through_the_ecology_file():
+	var path := "user://test_ecology_blackbird.bin"
+	var state := {
+		"herbivores": 1.0, "predators": 0.0, "vegetation": 0.5,
+		"saved_at_unix": 1700000000.0, "land_health": 0.9,
+		"robins": 3.5, "sparrows": 7.25, "kingfishers": 0.75, "blackbirds": 2.5,
+	}
+	serializer.save_ecology(state, path)
+	var loaded := serializer.load_ecology(path)
+	assert_almost_eq(float(loaded["blackbirds"]), 2.5, 0.001)
+	DirAccess.remove_absolute(path)
+
+
+## Backward compatibility: an ecology file written before blackbird
+## persistence existed (8-field format, robin/sparrow/kingfisher but no
+## blackbird) must still load cleanly, defaulting blackbirds to 0.0 rather
+## than reading past end-of-file.
+func test_an_old_ecology_file_without_blackbird_defaults_it_to_zero():
+	var path := "user://test_ecology_old_format_no_blackbird.bin"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_float(2.0)  # herbivores
+	file.store_float(1.0)  # predators
+	file.store_float(0.6)  # vegetation
+	file.store_double(1700000000.0)  # saved_at_unix
+	file.store_float(0.8)  # land_health
+	file.store_float(3.5)  # robins
+	file.store_float(7.25)  # sparrows
+	file.store_float(0.75)  # kingfishers
+	file.close()
+
+	var loaded := serializer.load_ecology(path)
+
+	assert_almost_eq(float(loaded["kingfishers"]), 0.75, 0.001)
+	assert_almost_eq(float(loaded["blackbirds"]), 0.0, 0.001)
 	DirAccess.remove_absolute(path)

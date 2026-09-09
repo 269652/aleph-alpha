@@ -17586,3 +17586,73 @@ exactly as active as before. Confirmed red first ("Invalid access to
 property or key '_dormant'" — the field didn't exist), green after.
 `test_creature_marker.gd` 237/237 (231 pre-existing + 6 new), full file
 re-run clean.
+
+### Seasonal behavior, phase 9: blackbird — real population, real diet shift (2026-09-09)
+
+✅ **A second new species this pass, not a reskin.**
+`assets/sprites/birds/blackbird.png` already had full illustrated art and
+a `FLYER_WORLD_SCALE` entry sitting unused — commented out of
+`BIRD_SPECIES_POOL` pending exactly this work. Rather than the now-
+retired flat decorative-cap shape bees used to have, this mirrors Robin/
+`SparrowPopulationModel`'s exact proven shape: new
+`BlackbirdPopulationModel` (`GROWTH_RATE_PER_DAY` shared with robin,
+`MIGRATION_RATE_PER_DAY := 0.5`, its own lower `BLACKBIRDS_PER_WORM_
+CELL`) deliberately reuses robin's OWN worm-density signal as its
+carrying-capacity input rather than inventing a parallel "fruit density"
+metric — real blackbirds and robins are both worm-hunting thrushes
+sharing the identical niche, so sharing the signal is the biologically
+honest choice, not a shortcut.
+
+Wired through the full chain sparrow's own persistence-bug history
+already proved necessary: `EcosystemSimulation` (population/capacity
+dicts seeded in `add_region`/erased in `remove_region`,
+`update_worm_density` feeding both robin's and blackbird's capacity from
+the same reading, a full migrate+step block in `step()`, new
+`blackbird_population`/`blackbird_capacity_at`/`seed_blackbird_
+population` accessors, `record_bird_birth`'s species match gaining a
+`"blackbird"` case), `ChunkEcologyCatchup.advance` (state/capacity
+unpacking, step, `"blackbirds"` in the return dict), `ChunkSerializer.
+save_ecology`/`load_ecology` (a 9th appended float, behind the same
+`file.get_position() < file.get_length()` backward-compat guard robin/
+sparrow/kingfisher already use, so old saves default it to 0.0), and
+`AmbientFlyerRenderer` (`BIRD_SPECIES_POOL`, new `BLACKBIRD_SPECIES_
+POOL`, a `FLYER_RANGE` entry mirroring robin's own latitude/biome band
+exactly, `MAX_BLACKBIRDS_PER_CHUNK := 4`, a promotion block in
+`spawn_ambient_flyers` and a reconciliation block in
+`reconcile_bird_markers`, both mirroring robin/sparrow's own).
+`EarthChunkManager` gained five call-site edits threading the new
+population through load/unload/catchup/reconcile.
+
+**Real diet shift, the other genuinely new mechanism this phase:**
+blackbirds are year-round residents that shift toward fruit when insects
+thin out in winter. New `FlyerDiet.eats_now(species, food, season)` gate
+— checked live inside `AmbientFlyerMarker._look_for_worms`/
+`_look_for_caterpillars`/`_look_for_ants` via the world's own
+`current_season()` — stops a blackbird pursuing worms/caterpillars/ants
+in winter while it keeps eating fruit. Robin/sparrow deliberately keep
+their current flat diet weighting; retrofitting the same shift onto them
+is a named follow-up, not done here. Along the way, two pre-existing
+tests asserting robin-exclusivity (`test_only_the_robin_hunts_worms_
+among_the_songbirds`, `test_only_the_robin_eats_caterpillars_among_the_
+songbirds`) were deliberately widened and renamed
+(`test_only_real_thrushes_...`) rather than left as an accidental
+constraint — blackbird is a second genuine thrush with the identical
+niche, and the file already had an in-place precedent (ants were
+similarly widened from robin-only to both songbirds).
+
+TDD: `test_blackbird_population_model.gd` (new, 6/6) drove the model
+itself; `test_ecosystem_simulation.gd` (74/74), `test_chunk_ecology_
+catchup.gd` (27/27), and `test_chunk_serializer.gd` (19/19, including a
+fresh round-trip test and an old-file-defaults-to-zero test) drove the
+persistence chain; `test_ambient_flyer_renderer.gd` (60/60, including a
+fixed shared helper that wasn't passing the new trailing population
+parameter) and `test_ambient_flyer_marker.gd` (a new
+`StubWormWorldWithSeason`, confirmed red first — a blackbird kept
+hunting worms in winter before the gate existed — green after; full file
+186 tests, 184 passing, the other 2 the pre-existing unrelated whirling-
+pair-easing failures already tracked as a known clean-`main` gap) drove
+the spawn/diet wiring; `test_flyer_diet.gd` (37/37) drove `eats_now`
+itself. `test_earth_chunk_manager.gd` gained a targeted blackbird
+reconciliation regression test mirroring sparrow's own bug-history test
+exactly, run via `-gunit_test_name=` scoping to avoid the file's
+documented full-suite cost.

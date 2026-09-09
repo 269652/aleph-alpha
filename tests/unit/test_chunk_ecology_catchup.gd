@@ -14,7 +14,7 @@ func before_each():
 
 func _state(
 	herbivores: float, predators: float, fruit_stock: float, vegetation: float, fish: float = 0.0,
-	robins: float = 0.0, sparrows: float = 0.0, kingfishers: float = 0.0
+	robins: float = 0.0, sparrows: float = 0.0, kingfishers: float = 0.0, blackbirds: float = 0.0
 ) -> Dictionary:
 	return {
 		"herbivores": herbivores,
@@ -25,12 +25,13 @@ func _state(
 		"robins": robins,
 		"sparrows": sparrows,
 		"kingfishers": kingfishers,
+		"blackbirds": blackbirds,
 	}
 
 
 func _capacity(
 	herbivore_capacity: float, fruit_growth_rate: float, fish_capacity: float = 0.0,
-	robin_capacity: float = 0.0, sparrow_capacity: float = 0.0
+	robin_capacity: float = 0.0, sparrow_capacity: float = 0.0, blackbird_capacity: float = 0.0
 ) -> Dictionary:
 	return {
 		"herbivore_capacity": herbivore_capacity,
@@ -38,6 +39,7 @@ func _capacity(
 		"fish_capacity": fish_capacity,
 		"robin_capacity": robin_capacity,
 		"sparrow_capacity": sparrow_capacity,
+		"blackbird_capacity": blackbird_capacity,
 	}
 
 
@@ -237,6 +239,17 @@ func test_small_sparrow_pop_grows_toward_but_not_past_capacity():
 	var out := catchup.advance(start, 100000.0, cap)
 	assert_gt(out["sparrows"], 1.0, "sparrows should grow")
 	assert_lte(out["sparrows"], 20.0, "logistic must not overshoot capacity")
+
+
+## Blackbird's capacity is a supplied input, exactly like robin/sparrow's --
+## its food-density signal (worm density, shared with robin) lives outside
+## this pure function.
+func test_small_blackbird_pop_grows_toward_but_not_past_capacity():
+	var start := _state(1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+	var cap := _capacity(20.0, 0.0, 20.0, 0.0, 0.0, 20.0)
+	var out := catchup.advance(start, 100000.0, cap)
+	assert_gt(out["blackbirds"], 1.0, "blackbirds should grow")
+	assert_lte(out["blackbirds"], 20.0, "logistic must not overshoot capacity")
 
 
 func test_sparrow_growth_is_logistic_no_overshoot_repeated():

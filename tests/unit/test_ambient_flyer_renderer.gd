@@ -277,7 +277,9 @@ func test_spawns_no_robins_or_sparrows_without_population():
 	var chunk := _make_chunk("grassland")
 	var spawned := renderer.spawn_ambient_flyers(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland")
 	for flyer in spawned:
-		assert_false(flyer.species == "robin" or flyer.species == "sparrow")
+		assert_false(
+			flyer.species == "robin" or flyer.species == "sparrow" or flyer.species == "blackbird"
+		)
 
 
 func test_spawns_one_robin_per_rounded_unit_of_robin_population():
@@ -327,7 +329,52 @@ func test_caps_sparrow_count_for_a_very_large_population():
 		if flyer.species == "sparrow":
 			sparrows += 1
 	assert_lte(sparrows, AmbientFlyerRenderer.MAX_SPARROWS_PER_CHUNK)
-	assert_gt(sparrows, 0)
+
+
+## Blackbird's population parameter is the trailing one, appended after
+## `season` (see docs/concept/seasonal_behavior.md, "Blackbird: new
+## species, real population, real diet shift") -- same "safe default
+## preserves old behavior" convention `season` itself established.
+
+func test_spawns_one_blackbird_per_rounded_unit_of_blackbird_population():
+	var chunk := _make_chunk("grassland")
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 0.0, 0.0, "summer", 4.4
+	)
+	var blackbirds := 0
+	for flyer in spawned:
+		if flyer.species == "blackbird":
+			blackbirds += 1
+	assert_eq(blackbirds, 4)
+
+
+func test_caps_blackbird_count_for_a_very_large_population():
+	var chunk := _make_chunk("grassland")
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 0.0, 0.0, "summer", 500.0
+	)
+	var blackbirds := 0
+	for flyer in spawned:
+		if flyer.species == "blackbird":
+			blackbirds += 1
+	assert_lte(blackbirds, AmbientFlyerRenderer.MAX_BLACKBIRDS_PER_CHUNK)
+	assert_gt(blackbirds, 0)
+
+
+## Real blackbirds share robin's own real temperate range (see
+## BlackbirdPopulationModel's own doc comment on why: the closest real
+## ecological analog already modeled) -- grassland/forest, not a tropical
+## rainforest bird.
+func test_blackbird_does_not_spawn_outside_its_real_range():
+	var chunk := _make_chunk("rainforest")
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "rainforest", 1.0, null, 0.0, 0.0, "summer", 500.0
+	)
+	var blackbirds := 0
+	for flyer in spawned:
+		if flyer.species == "blackbird":
+			blackbirds += 1
+	assert_eq(blackbirds, 0, "blackbird should not appear outside its real temperate range")
 
 
 # -- reconciling bird markers against a population that grows AFTER spawn ---
@@ -369,6 +416,24 @@ func test_reconcile_adds_sparrows_once_population_rises_after_spawn():
 		if flyer.species == "sparrow":
 			sparrows += 1
 	assert_eq(sparrows, 3)
+
+
+func test_reconcile_adds_blackbirds_once_population_rises_after_spawn():
+	var chunk := _make_chunk("grassland")
+	var existing := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 0.0, 0.0
+	)
+	for flyer in existing:
+		assert_ne(flyer.species, "blackbird")
+
+	var reconciled := renderer.reconcile_bird_markers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", existing, 0.0, 0.0, null, 2.6
+	)
+	var blackbirds := 0
+	for flyer in reconciled:
+		if flyer.species == "blackbird":
+			blackbirds += 1
+	assert_eq(blackbirds, 3)
 
 
 func test_reconcile_removes_robins_as_population_falls():
@@ -745,7 +810,8 @@ func _species_seen_along_row(
 		var chunk := _make_chunk(biome_name)
 		var origin := Vector2i(coord_x * CHUNK_SIZE, row)
 		for flyer in renderer.spawn_ambient_flyers(
-			parent, chunk, origin, TILE_SIZE, biome_name, 1.0, null, bird_population, bird_population
+			parent, chunk, origin, TILE_SIZE, biome_name, 1.0, null,
+			bird_population, bird_population, "summer", bird_population
 		):
 			seen[flyer.species] = true
 	return seen

@@ -367,5 +367,20 @@ intent. New `CreatureMarker._step_dormancy()`, `HIBERNATING_SPECIES`/
 settling against `EarthwormPatch.COLD_CUTOFF`. `_process()` early-returns
 immediately after `is_rooted()` while dormant — no movement, no AI
 decision, sprite frozen on its last frame, exactly like being rooted.
-⬜ Blackbird: real population + real diet shift
+✅ Blackbird: real population + real diet shift — new `BlackbirdPopulationModel`
+(mirrors Robin/SparrowPopulationModel's exact shape; reuses robin's OWN
+worm-density signal rather than inventing a new "fruit density" metric,
+since real blackbirds and robins are both worm-hunting thrushes). Wired
+through `EcosystemSimulation` (population/capacity/seed/record_bird_birth),
+`ChunkEcologyCatchup.advance`, `ChunkSerializer.save_ecology`/
+`load_ecology` (9th appended field), and `AmbientFlyerRenderer`
+(`BIRD_SPECIES_POOL`/`BLACKBIRD_SPECIES_POOL`/`FLYER_RANGE`/
+`MAX_BLACKBIRDS_PER_CHUNK`, both `spawn_ambient_flyers` and
+`reconcile_bird_markers`) — the full chain sparrow's own persistence bug
+history already proved necessary. Real diet shift: new `FlyerDiet.
+eats_now(species, food, season)` — blackbird stops pursuing worms/
+caterpillars/ants in winter (still eats fruit), read live in
+`AmbientFlyerMarker._look_for_worms`/`_look_for_caterpillars`/
+`_look_for_ants` via the world's own `current_season()`. Robin/sparrow
+keep their existing flat diet weighting untouched.
 ⬜ Grass frog: brumating, decorative-but-real presence

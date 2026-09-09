@@ -127,6 +127,7 @@ func save_ecology(state: Dictionary, path: String) -> void:
 	file.store_float(float(state.get("robins", 0.0)))
 	file.store_float(float(state.get("sparrows", 0.0)))
 	file.store_float(float(state.get("kingfishers", 0.0)))
+	file.store_float(float(state.get("blackbirds", 0.0)))
 	file.close()
 
 
@@ -168,6 +169,10 @@ func load_ecology(path: String) -> Dictionary:
 		state["robins"] = 0.0
 		state["sparrows"] = 0.0
 		state["kingfishers"] = 0.0
+	if file.get_position() < file.get_length():
+		state["blackbirds"] = file.get_float()
+	else:
+		state["blackbirds"] = 0.0
 	file.close()
 	return state
 

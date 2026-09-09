@@ -30,6 +30,7 @@ const PredatorPopulationModel = preload("res://src/world/predator_population_mod
 const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
 const RobinPopulationModel = preload("res://src/world/robin_population_model.gd")
 const SparrowPopulationModel = preload("res://src/world/sparrow_population_model.gd")
+const BlackbirdPopulationModel = preload("res://src/world/blackbird_population_model.gd")
 const KingfisherPopulationModel = preload("res://src/world/kingfisher_population_model.gd")
 const WaterAreaSurvey = preload("res://src/world/water_area_survey.gd")
 
@@ -39,6 +40,7 @@ var _predator_model := PredatorPopulationModel.new()
 var _aquatic_model := AquaticPopulationModel.new()
 var _robin_model := RobinPopulationModel.new()
 var _sparrow_model := SparrowPopulationModel.new()
+var _blackbird_model := BlackbirdPopulationModel.new()
 var _kingfisher_model := KingfisherPopulationModel.new()
 var _water_survey := WaterAreaSurvey.new()
 
@@ -70,6 +72,10 @@ var _seed_density: Dictionary = {}  # Vector2i chunk_coord -> float
 ## reason herbivore/predator/fish are three separate models rather than one.
 var _robin_population: Dictionary = {}  # Vector2i chunk_coord -> float
 var _sparrow_population: Dictionary = {}  # Vector2i chunk_coord -> float
+## Blackbird deliberately reads the SAME _worm_density robin already does
+## (see BlackbirdPopulationModel's own doc comment: both are real
+## worm-hunting thrushes) -- no separate density-reporting call needed.
+var _blackbird_population: Dictionary = {}  # Vector2i chunk_coord -> float
 var _kingfisher_population: Dictionary = {}  # Vector2i chunk_coord -> float
 ## Vegetation harvested (via record_vegetation_harvest) since the last step()
 ## call, per region -- consumed and reset to 0.0 by step() itself, which
@@ -126,6 +132,7 @@ func add_region(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	_seed_density[chunk_coord] = 0.0
 	_robin_population[chunk_coord] = 0.0
 	_sparrow_population[chunk_coord] = 0.0
+	_blackbird_population[chunk_coord] = 0.0
 	# Kingfisher is the exception: its prey signal IS the fish population just
 	# seeded above, so it can start at equilibrium the same way predator does
 	# from herbivores.
@@ -152,6 +159,7 @@ func remove_region(chunk_coord: Vector2i) -> void:
 	_seed_density.erase(chunk_coord)
 	_robin_population.erase(chunk_coord)
 	_sparrow_population.erase(chunk_coord)
+	_blackbird_population.erase(chunk_coord)
 	_kingfisher_population.erase(chunk_coord)
 
 
@@ -195,6 +203,11 @@ func update_worm_density(chunk_coord: Vector2i, worm_cell_count: float) -> void:
 	_worm_density[chunk_coord] = maxf(0.0, worm_cell_count)
 	if _robin_population.get(chunk_coord, 0.0) <= 0.0:
 		_robin_population[chunk_coord] = _robin_model.carrying_capacity(_worm_density[chunk_coord])
+	# Blackbird reads this SAME worm density (see BlackbirdPopulationModel's
+	# own doc comment: both are real worm-hunting thrushes) -- no separate
+	# update_blackbird_density call needed.
+	if _blackbird_population.get(chunk_coord, 0.0) <= 0.0:
+		_blackbird_population[chunk_coord] = _blackbird_model.carrying_capacity(_worm_density[chunk_coord])
 
 
 ## Reports this region's current combined ground-seed-cell count
@@ -330,6 +343,22 @@ func step(delta_days: float) -> void:
 	for chunk_coord in _sparrow_population.keys():
 		_sparrow_population[chunk_coord] = _sparrow_model.step(
 			_sparrow_population[chunk_coord], sparrow_capacities.get(chunk_coord, 0.0), delta_days
+		)
+
+	# Blackbird: carrying capacity from the SAME worm density robin reads
+	# (see BlackbirdPopulationModel's own doc comment) -- an independent
+	# population/model, not a share of robin's, the same "each real niche
+	# gets its own model" reasoning robin/sparrow/kingfisher already follow.
+	var blackbird_capacities: Dictionary = {}
+	for chunk_coord in _blackbird_population.keys():
+		blackbird_capacities[chunk_coord] = _blackbird_model.carrying_capacity(
+			_worm_density.get(chunk_coord, 0.0)
+		)
+	if not _blackbird_population.is_empty():
+		_blackbird_population = _blackbird_model.migrate(_blackbird_population, blackbird_capacities, delta_days)
+	for chunk_coord in _blackbird_population.keys():
+		_blackbird_population[chunk_coord] = _blackbird_model.step(
+			_blackbird_population[chunk_coord], blackbird_capacities.get(chunk_coord, 0.0), delta_days
 		)
 
 	# Kingfisher: carrying capacity from the FRESHLY-STEPPED fish population
@@ -479,6 +508,26 @@ func seed_sparrow_population(chunk_coord: Vector2i, sparrows: float) -> void:
 		_sparrow_population[chunk_coord] = maxf(0.0, sparrows)
 
 
+func blackbird_population(chunk_coord: Vector2i) -> float:
+	return _blackbird_population.get(chunk_coord, 0.0)
+
+
+## This region's blackbird carrying capacity K -- from the SAME worm
+## density robin_capacity_at reads (see BlackbirdPopulationModel's own
+## doc comment). 0.0 for an unknown region.
+func blackbird_capacity_at(chunk_coord: Vector2i) -> float:
+	if not _worm_density.has(chunk_coord):
+		return 0.0
+	return _blackbird_model.carrying_capacity(_worm_density[chunk_coord])
+
+
+## Overrides a region's blackbird population -- seed_robin_population's
+## counterpart for the third real bird niche.
+func seed_blackbird_population(chunk_coord: Vector2i, blackbirds: float) -> void:
+	if _blackbird_population.has(chunk_coord):
+		_blackbird_population[chunk_coord] = maxf(0.0, blackbirds)
+
+
 func kingfisher_population(chunk_coord: Vector2i) -> float:
 	return _kingfisher_population.get(chunk_coord, 0.0)
 
@@ -556,8 +605,8 @@ func record_birth(chunk_coord: Vector2i, count: float) -> void:
 ## marker_count_for), and a chick that never incremented it was never
 ## really there as far as that count is concerned.
 ##
-## Silently a no-op for a species with no matching aggregate yet
-## (blackbird, before its own population model exists) or an unknown
+## Silently a no-op for a species with no matching aggregate at all (any
+## real bird not yet promoted to a real population model) or an unknown
 ## chunk, the same "an unrecognized input does nothing" contract
 ## record_birth/record_catch already use above.
 func record_bird_birth(chunk_coord: Vector2i, species: String, count: float = 1.0) -> void:
@@ -571,6 +620,11 @@ func record_bird_birth(chunk_coord: Vector2i, species: String, count: float = 1.
 			if _sparrow_population.has(chunk_coord):
 				_sparrow_population[chunk_coord] = minf(
 					sparrow_capacity_at(chunk_coord), _sparrow_population[chunk_coord] + count
+				)
+		"blackbird":
+			if _blackbird_population.has(chunk_coord):
+				_blackbird_population[chunk_coord] = minf(
+					blackbird_capacity_at(chunk_coord), _blackbird_population[chunk_coord] + count
 				)
 
 

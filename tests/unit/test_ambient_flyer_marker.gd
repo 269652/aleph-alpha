@@ -749,6 +749,17 @@ func _world_with_one_worm(at: Vector2 = Vector2(80, 0)) -> StubWormWorld:
 	return world
 
 
+## A StubWormWorld that also answers current_season -- the live signal
+## FlyerDiet.eats_now checks for blackbird's own real winter diet shift
+## (see docs/concept/seasonal_behavior.md, "Blackbird: new species, real
+## population, real diet shift").
+class StubWormWorldWithSeason:
+	extends StubWormWorld
+	var season := "summer"
+	func current_season() -> String:
+		return season
+
+
 func test_a_robin_flies_to_a_worm_and_eats_it():
 	var world := _world_with_one_worm()
 	_make_robin(world)
@@ -756,6 +767,41 @@ func test_a_robin_flies_to_a_worm_and_eats_it():
 		marker._process(0.05)
 	assert_gt(world.taken.size(), 0, "a robin should actually take a worm")
 	assert_eq(world.worms.size(), 0, "and the worm should be gone from the world")
+
+
+func test_a_blackbird_does_not_hunt_worms_in_winter():
+	var world := StubWormWorldWithSeason.new()
+	world.worms = [{"position": Vector2(80, 0)}]
+	world.season = "winter"
+	_make_robin(world)
+	marker.species = "blackbird"
+	for i in 1200:
+		marker._process(0.05)
+	assert_eq(world.taken.size(), 0, "a blackbird should not hunt worms in winter")
+	assert_eq(world.worms.size(), 1, "the worm should still be there, untouched")
+
+
+func test_a_blackbird_still_hunts_worms_outside_winter():
+	var world := StubWormWorldWithSeason.new()
+	world.worms = [{"position": Vector2(80, 0)}]
+	world.season = "summer"
+	_make_robin(world)
+	marker.species = "blackbird"
+	for i in 1200:
+		marker._process(0.05)
+	assert_gt(world.taken.size(), 0, "a blackbird should still hunt worms outside winter")
+
+
+## Robin deliberately keeps its existing flat diet weighting -- only
+## blackbird gets the real winter diet shift in this pass.
+func test_a_robin_still_hunts_worms_in_winter_unaffected():
+	var world := StubWormWorldWithSeason.new()
+	world.worms = [{"position": Vector2(80, 0)}]
+	world.season = "winter"
+	_make_robin(world)
+	for i in 1200:
+		marker._process(0.05)
+	assert_gt(world.taken.size(), 0, "robin's diet should not be affected by season in this pass")
 
 
 ## The per-species diet made structural: a sparrow is spawned without a
