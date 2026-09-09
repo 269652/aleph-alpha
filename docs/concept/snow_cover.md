@@ -393,6 +393,99 @@ mistake `HillshadeFx`/`SnowFx` had already been fixed for against
 EARLIER sibling: a river footprint now sits under the current's own
 visible motion, matching the request's own words exactly.
 
+### Footprints depend on real mass, not just surface (2026-09-09)
+
+Asked directly: *"change the footprint mechanics so that any animal
+produces footsteps depending on their actual mass and ground... it
+should physically produce footprints much like all other mechanics
+do."* Two real, separate gaps, both closed here: prints were surface-
+dependent already (see "Real left/right footprint stamps" above) but
+PLAYER-ONLY (that section's own words: "Player-only (reported live
+scope: 'real footstep prints')"), and every print — player or otherwise
+— rendered at the identical fixed size regardless of who made it. "Much
+like all other mechanics do" names the precedent directly:
+`EarthChunkManager.crush_worm_at`/`crush_caterpillars_near`/etc. already
+run once for the player and once per `CreatureMarker` in `World`'s own
+per-frame loop, each creature's own real `momentum := marker.
+current_mass_kg() * PebbleDispersion.FOOTSTEP_SPEED_MPS` deciding the
+outcome — a real, well-fed deer already hits harder underfoot than a
+mouse (see `docs/concept/soil_fauna.md`'s "Crushed underfoot"). This
+mirrors that exact shape for a different real consequence of the same
+real weight: how big a mark a creature's own foot leaves, not what it
+kills underfoot.
+
+**Every animal, not just the player.** `World._client_process` now
+calls `EarthChunkManager.record_footstep` a second time, in its own
+loop over `CreatureMarker.GROUP_NAME` — the identical group `tread_snow_
+at`'s own creature loop and the crush pass already iterate, right
+alongside them. Each creature passes its own real `facing_direction()`
+(a new public accessor mirroring `Player.facing_direction()`'s own
+identical role: "the heading this creature last actually advanced
+along," read from `_last_gated_heading`) and its own lazily-built
+`footstep_gait()` (mirrors `current_mass_kg()`'s own lazily-built
+`Metabolism` exactly — "one object, built on first real use," per
+creature, never shared: a shared `FootstepGait` would make every
+creature's own stride interfere with every other's). Visual only — no
+footstep SOUND per creature; a real per-creature spatial audio system
+is separate, out-of-scope work this doesn't open, unlike the player's
+own single `_interaction_sfx` emitter.
+
+**`FootstepGait` now owns its own last-known position and teleport
+detection internally too** (`step_at`, alongside the pre-existing
+`step_if_due`), not just the stride accumulator — the real reason one
+instance can now BE a whole walker's own footstep record on its own,
+the same "one object per walker" shape this class's own header doc
+comment already named as the intent. `EarthChunkManager.
+record_footstep` takes an optional `gait` (default: the player's own
+existing single continuous accumulator, `_player_footstep_gait`) so
+every pre-existing 2-arg call site keeps resolving to exactly today's
+behavior.
+
+**Real mass, not an eyeballed size slider.** `CreatureMass.
+linear_scale_for_mass_ratio(mass_kg, reference_mass_kg)` is the INVERSE
+of `_mass_from_world_scale`'s own already-established real relationship
+("mass follows volume, which follows the cube of a linear dimension") —
+given a mass ratio, it returns the cube-root LINEAR scale ratio, the
+same real geometric relationship this exact file already uses in the
+other direction, not a second, independently-tuned "how big should
+prints be" knob. `record_footstep` takes an optional `mass_kg` (default:
+`CreatureMass.PLAYER_MASS_KG`, the SAME 70kg human reference the
+existing fixed print art was implicitly sized for) and threads the
+resulting `size_scale` through `FootprintField.add_print`'s new optional
+parameter into `FootprintRenderer._transform_for`, which multiplies it
+straight into the render transform's own scale on top of the fixed
+`PRINT_WORLD_SCALE` — the SAME shared per-surface texture, rendered at a
+different real size, never a texture per mass bucket. A mouse (0.02kg)
+reads at roughly 7% of the player's own print length (still a real,
+visible mark, matching a real mouse's own genuinely tiny but real
+tracks); a horse (500kg) reads at very nearly double it.
+
+**"And ground" was already real** — surface (snow/grass/forest/
+underwater) and mass are orthogonal, composed dimensions of the same
+print: a heavy creature's print in snow reads as both large (mass) and
+snow-toned (ground) at once, neither overriding the other. This pass
+adds the mass dimension on top of the existing surface one; it does not
+change what already gated whether a print appears at all (still no
+print on desert/mountain/tundra/rainforest/ocean, regardless of how
+heavy the walker is).
+
+**Scope, named rather than silently extended past what was asked.**
+Only `CreatureMarker.GROUP_NAME` — the same roster the crush mechanic's
+own per-creature loop already covers (deer, wolf, boar, sheep, horse,
+squirrel, alpaca, and the rest) — leaves a print, mirroring that
+precedent's own exact boundary rather than inventing a wider one. Ants/
+caterpillars/decomposers (separate marker classes, never in this group)
+stay out of scope, the same way they stay out of the crush loop's own
+creature iteration; a real ant's mass is roughly 4×10⁻⁸ of the player's
+own reference, well past invisible at any real screen scale, so nothing
+of substance would be gained by wiring the mechanism into them anyway.
+A serpentine mover (a snake, still `CreatureMarker`-based) gets ordinary
+alternating left/right stamps like every other creature in the group,
+not a real slither trail — a genuine, honest, minor art-fidelity gap
+named here rather than silently accepted as correct, not a functional
+one this pass's own real ask (mass-dependent economy realism) needed to
+solve.
+
 ### What the CPU still does
 
 Per frame: push one float (`depth`), and the trail mask only when a
@@ -717,3 +810,15 @@ for, and why both exist.
   of canopy pixels changing at a time (wind sway isolated out for the
   canopy measurement), with the canopy's own glints spatially confined to
   the tree's drawn silhouette and never landing on its pink blossom.
+- ✅ **Footprints depend on real mass, not just surface** (2026-09-09) —
+  see "Footprints depend on real mass, not just surface" above. Every
+  `CreatureMarker`, not just the player, now leaves a real print (mirrors
+  the crush mechanic's own identical per-creature loop and real
+  `current_mass_kg()` reads); `CreatureMass.linear_scale_for_mass_ratio`
+  (the real inverse of `_mass_from_world_scale`'s own cube relationship)
+  sizes each print against the player's own 70kg reference, threaded
+  through `FootstepGait.step_at`/`FootprintField.add_print`/
+  `FootprintRenderer._transform_for`'s new optional parameters — every
+  pre-existing 2-arg `record_footstep` call site unaffected. A known,
+  named, minor gap: a serpentine mover still gets ordinary alternating
+  footprint stamps, not a real slither trail.

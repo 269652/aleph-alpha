@@ -18570,3 +18570,120 @@ reorder (menu-dismiss timing, the separate boot bumper) stayed green
 throughout. `test_intro_splash.gd`, `test_world_play_intro_splash_frame_
 gate.gd`, `test_world_persistence.gd`, `test_world_backup_paths.gd` all
 re-run clean.
+
+## Footprints depend on real mass, not just surface, and cover every animal (`concept/snow_cover.md`, 2026-09-09)
+
+Asked directly: *"change the footprint mechanics so that any animal
+produces footsteps depending on their actual mass and ground... it
+should physically produce footprints much like all other mechanics
+do."* Two real, separate gaps: real left/right footprint stamps
+(shipped 2026-09-07) were surface-dependent but explicitly PLAYER-ONLY,
+and every print — whoever made it — rendered at the identical fixed
+size regardless of who left it. "Much like all other mechanics do"
+named its own precedent directly: the crush mechanic
+(`crush_worm_at`/`crush_caterpillars_near`/etc.) already runs once for
+the player and once per `CreatureMarker` in `World`'s own per-frame
+loop, each creature's real `current_mass_kg() * PebbleDispersion.
+FOOTSTEP_SPEED_MPS` momentum deciding the outcome — a well-fed deer
+already hits harder underfoot than a mouse. This mirrors that exact
+shape for a different real consequence of the same real weight: how big
+a mark a creature's own foot leaves, not what it kills underfoot.
+
+**Every animal.** `World._client_process` now calls `EarthChunkManager.
+record_footstep` a second time, in its own loop over `CreatureMarker.
+GROUP_NAME` — the identical group `tread_snow_at`'s own creature loop
+and the crush pass already iterate. Each creature passes its own real
+`facing_direction()` (a new public accessor, mirroring `Player.
+facing_direction()`'s own identical role, reading `_last_gated_
+heading`) and its own lazily-built `footstep_gait()` (mirrors
+`current_mass_kg()`'s own lazily-built `Metabolism` exactly — one
+object per creature, built on first real use, never shared). Visual
+only, deliberately — no footstep SOUND per creature; a real per-creature
+spatial audio system is separate, out-of-scope work this doesn't open.
+
+**Real mass, not an eyeballed slider.** `FootstepGait` now owns its own
+last-known position and teleport detection internally too (`step_at`,
+alongside the pre-existing `step_if_due`) — the real reason one instance
+can now BE a whole walker's own complete footstep record, not needing a
+second, external position tracker the way `EarthChunkManager` used to
+keep alongside its own single `_player_footstep_gait`.
+`record_footstep` takes optional `gait`/`mass_kg` parameters (defaulting
+to the player's own existing accumulator and `CreatureMass.
+PLAYER_MASS_KG`, so every pre-existing 2-arg call site keeps resolving
+to exactly today's behavior). `CreatureMass.linear_scale_for_mass_
+ratio(mass_kg, reference_mass_kg)` is the literal INVERSE of
+`_mass_from_world_scale`'s own already-established real relationship
+("mass follows volume, which follows the cube of a linear dimension") —
+a cube-root linear scale ratio, the identical real geometric rule this
+exact file already uses in the other direction, not a second,
+independently-tuned "how big should prints be" knob. Threaded through
+`FootprintField.add_print`'s new optional `size_scale` parameter into
+`FootprintRenderer._transform_for`, which multiplies it into the render
+transform's own scale on top of the fixed `PRINT_WORLD_SCALE` — the SAME
+shared per-surface texture at a different real size, never a texture
+per mass bucket. A mouse (0.02kg) reads at ~7% of the player's own print
+length (a real, small, visible mark — matching a real mouse's own
+genuinely tiny tracks, not an invisible one); a horse (500kg) reads at
+very nearly double it.
+
+**"And ground" was already real** (surface/snow/grass/forest/
+underwater, shipped 2026-09-07) — mass composes with it rather than
+replacing it: a heavy creature's print in snow reads as both large
+(mass) and snow-toned (ground) at once. What already gated whether a
+print appears at all (desert/mountain/tundra/rainforest/ocean draw
+none, regardless of weight) is unchanged.
+
+**Scope, named rather than silently widened past what was asked.** Only
+`CreatureMarker.GROUP_NAME` leaves a print — the identical roster the
+crush mechanic's own per-creature loop already covers, mirroring that
+precedent's own exact boundary. Ants/caterpillars/decomposers (separate
+marker classes, never in this group, and never in the crush loop's own
+creature iteration either) stay out of scope — a real ant's mass is
+roughly 4×10⁻⁸ of the player's own reference, well past invisible at
+any real screen scale, so nothing of substance would be gained by
+wiring the mechanism into them regardless. A serpentine mover (a snake,
+still `CreatureMarker`-based) gets ordinary alternating left/right
+stamps like every other creature in the group, not a real slither
+trail — a genuine, honest, minor art-fidelity gap, named rather than
+silently accepted as correct.
+
+TDD, four sound steps, each its own commit: (1)
+`CreatureMass.linear_scale_for_mass_ratio`/`FootstepGait.step_at`/
+`FootprintField.add_print`'s new `size_scale` param/`FootprintRenderer.
+_transform_for`'s own scale read, four independent pure additions with
+no cross-wiring yet — one genuine test-side bug surfaced and fixed along
+the way: an exact-stride-length position delta computed via
+`Vector2.distance_to()` (a real sqrt) doesn't bit-exactly invert the way
+passing the constant straight into `step_if_due` does, landing a hair
+under the stride threshold; fixed with the same "+1.0" margin
+`test_earth_chunk_manager_footprints.gd`'s own pre-existing tests
+already used for the identical reason. (2) `record_footstep`'s own
+`gait`/`mass_kg` parameters and size-scale threading, confirmed red
+against a compile error (too many arguments) first. (3)
+`CreatureMarker.footstep_gait()`/`facing_direction()`, confirmed red
+against a real implementation bug this time: the first draft drove
+`_advance` (the lower-level, ungated mover) instead of `_advance_gated`
+(the real obstacle/threat-aware decision layer that actually sets
+`_last_gated_heading`) — fixed by driving the right function. (4) the
+new creature loop in `world.gd`, confirmed red against
+`test_world_footstep_wiring.gd`'s own renamed/re-asserted "exactly once"
+test (now "once for the player, once more per creature") — the call was
+first written multi-line, which broke that test's established
+"search to the next newline" source-text convention (matching the
+player's own single-line call); reformatted to one line rather than
+complicating the test's own parsing.
+
+`test_creature_mass.gd` 16/16 (12 + 4 new), `test_footstep_gait.gd`
+16/16 (10 + 6 new), `test_footprint_field.gd` 12/12 (10 + 2 new),
+`test_footprint_renderer.gd` 8/8 (5 + 3 new), `test_earth_chunk_manager_
+footprints.gd` 25/25 (21 + 4 new), `test_creature_marker.gd` 242/242 (237
++ 5 new, one genuine implementation-bug red survived along the way, see
+above), `test_world_footstep_wiring.gd` 6/6 (5 pre-existing, one of
+which renamed/re-asserted for the reversed scope, + 1 new).
+Regression-checked: every `foot`-matching test script together
+(`-gselect=foot`, 9 scripts) 103/103 passing, the remaining 5 correctly
+pending (real-GPU-only transform readback tests, unaffected — the exact
+same `_transform_for` logic they exercise already has direct, passing,
+headless-safe pure-function coverage for the new size_scale behavior in
+`test_footprint_renderer.gd`, added specifically so this didn't need a
+real GPU window to verify).
