@@ -12179,6 +12179,22 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	_aquatic_invertebrates_sprites.erase(chunk_coord)
 	_aquatic_invertebrates.erase(chunk_coord)
 
+	# An AntForagerMarker already in flight for one of this chunk's mounds
+	# holds a direct reference to this exact AntColony (see that class's
+	# own _colony doc comment) -- it is parented on the persistent
+	# _entities_parent node, not chunk-scoped, so unloading correctly does
+	# NOT free it (the world keeps living while nobody's watching -- see
+	# _loaded_ambient_flyers/etc. just above for the chunk-scoped things
+	# that DO get freed here). Erasing this dictionary's own entry alone
+	# cannot free an object the forager itself still references, so it
+	# must be explicitly retired -- see AntColony.mark_retired's own doc
+	# comment, docs/concept/soil_fauna.md's "In-flight foragers survive an
+	# unload; their trip's outcome does not" (mirrors BeeColony's own
+	# identical fix just below, see docs/concept/bees.md's own section of
+	# that name -- this is the ant side of the same fix).
+	var retiring_ant_colony: AntColony = _ant_colonies.get(chunk_coord)
+	if retiring_ant_colony != null:
+		retiring_ant_colony.mark_retired()
 	_ant_colonies.erase(chunk_coord)
 	for marker in _ant_mound_markers.get(chunk_coord, []):
 		marker.free()
