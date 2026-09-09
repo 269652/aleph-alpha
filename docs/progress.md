@@ -19097,3 +19097,46 @@ above (the boot-loading-overlay regression) was introduced by this same
 session's own earlier work and caught/fixed by a concurrent session
 before this pass started — already on `main` by the time this branch was
 cut, no action needed here beyond acknowledging it.
+
+## `LoadingOverlay` gets Sims-4-style witty tips, real progress moves to a corner (`concept/persistence.md`, 2026-09-09)
+
+Requested live: *"make the loading screens use SIMS 4 style loading
+descriptions (funny witty progress lines) and put the real progress in
+the bottom right corner."* `LoadingOverlay` now covers all five real
+entry points documented in `concept/persistence.md` (New Game/Load/Join,
+the character creator's first build, and the boot sequence itself), so
+this one change reaches every loading stall in the game at once.
+
+**Two real, separate readouts, where there was one.** New
+`src/ui/loading_tips.gd` (`LoadingTips`) owns a pool of 30 original,
+this-game-flavored witty one-liners (ants, mushrooms, karma, bees, world
+bosses, cicadas...) and pure rotation logic —
+`tip_for_elapsed(elapsed_seconds, start_offset)` mirrors `LoadingSpinner.
+frame_for_elapsed`'s exact shape: a tested `TIP_INTERVAL_SECONDS` (4.5s)
+advances through the pool, wrapping around a long real load rather than
+freezing on one line; a caller-rolled random `start_offset` means
+repeated loads don't always open on the same tip. This becomes the new
+big, centered, primary readout. The OLD center content (the caller's own
+status text plus any `set_progress` count) moves — unchanged in
+substance — to a small technical corner readout, bottom-right, paired
+with the spinner glyph.
+
+The public API is completely unchanged: `show_with_text`/`set_progress`/
+`hide_overlay` kept their exact prior signatures and contracts, so none
+of the five entry points' own call sites needed touching. `status_text()`
+(the pre-existing test getter) now reads the relocated corner label
+instead of the old center one; a new `tip_text()` mirrors it for the tip.
+
+TDD: `test_loading_tips.gd` (new, 10/10) — stays on one tip within an
+interval, advances after it, wraps past the end of the pool, a different
+start offset opens on a different tip, the interval is a real tested
+duration not an eyeballed guess, every tip is non-empty/reasonably
+short/unique, and the pool has real variety (>14 lines). 3 new tests
+added to the pre-existing `test_loading_overlay.gd` (now 5/5, including
+the 2 pre-existing `set_progress`-unit tests confirming the content
+contract held across the relocation). Re-run clean: `test_loading_
+spinner.gd`, `test_world_intro_splash_after_load_fanout.gd`, `test_
+world_boot_loading_overlay_fanout.gd`, and the 4 `test_main_menu.gd`
+tests exercising `LoadingOverlay` directly (scoped via
+`-gunit_test_name=loading_overlay` per that file's own documented
+slow-suite cost) — no regression in any of the five entry points.

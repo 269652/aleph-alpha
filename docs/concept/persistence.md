@@ -440,6 +440,65 @@ pass's own five original tests would have caught this, since all of them
 assert relative ORDER between two different substrings, never that a
 given call appears only once.
 
+### `LoadingOverlay` gets Sims-4-style witty tips, real progress moves to a corner (2026-09-09)
+
+Requested live: *"make the loading screens use SIMS 4 style loading
+descriptions (funny witty progress lines) and put the real progress in
+the bottom right corner."* By this point `LoadingOverlay` covers all five
+entry points above, so this one change reaches every real stall in the
+game at once, not just one caller.
+
+**Two real, separate readouts now, where there was one.** The old design
+put the caller's own status text (`show_with_text`'s `text` argument, plus
+any `set_progress` suffix) front and center next to the spinner — the
+only thing a player had to read. That's now split:
+
+- A big, centered, rotating witty tip (new `src/ui/loading_tips.gd`,
+  `LoadingTips`) — original lines written in the dry, self-aware spirit of
+  that genre's own loading humor (not reproduced from any specific game),
+  flavored with THIS project's own real systems (ants, mushrooms, karma,
+  bees, world bosses, cicadas...) rather than generic filler, so a
+  returning player recognizes the joke as being about its own world. Pure
+  rotation logic — `tip_for_elapsed(elapsed_seconds, start_offset)` —
+  mirrors `LoadingSpinner.frame_for_elapsed`'s exact "pure model, thin
+  Node" shape: a fixed `TIP_INTERVAL_SECONDS` (4.5s, tested, not
+  eyeballed) advances through the pool, wrapping around a long real load
+  rather than erroring or freezing on one line; a caller-rolled
+  `start_offset` (`show_with_text` rolls `randi() % TIPS.size()` once per
+  appearance) means repeated loads don't always open on the same tip,
+  without needing a second random draw every interval that could
+  unluckily repeat a line back-to-back.
+- A small technical corner readout, bottom-right, pairing the spinner
+  glyph with the caller's own status text and any real `set_progress`
+  count — exactly the old center content, relocated rather than removed,
+  so a player who wants the actual number (not the joke) still has it.
+
+**The public API is completely unchanged.** `show_with_text`/
+`set_progress`/`hide_overlay` keep their exact prior signatures and
+contracts — this is a pure internal layout/content change, so every one
+of the five entry points above (World's three, MainMenu's character
+creator, the boot sequence) needed zero call-site changes. `status_text()`
+(added for `test_loading_overlay.gd`'s own pre-existing tests) now reads
+the relocated corner label instead of the old center one — both of those
+tests pass unchanged, proving the content contract held across the move.
+A new `tip_text()` getter mirrors it for the tip itself.
+
+TDD: `test_loading_tips.gd` (new, 10/10) drove the pure rotation module —
+stays on one tip within an interval, advances after it, wraps past the
+end of the pool, a different start offset opens on a different tip, the
+interval itself is a real tested duration (not eyeballed), every tip is
+non-empty/reasonably short/unique, and the pool has real variety (>14
+lines) so a long load doesn't just loop a handful immediately. 3 new
+tests added to the pre-existing `test_loading_overlay.gd` (now 5/5): a
+real tip from the pool shows after `show_with_text`, it changes once the
+rotation interval elapses, and the corner's real progress text is
+unaffected by the tip rotating underneath it. Re-run clean, no regression:
+`test_loading_spinner.gd`, `test_world_intro_splash_after_load_fanout.gd`,
+`test_world_boot_loading_overlay_fanout.gd`, and the 4 `test_main_menu.gd`
+tests exercising `LoadingOverlay` directly (scoped via
+`-gunit_test_name=loading_overlay` per that file's own documented slow-
+suite cost).
+
 ## Status / mechanisms
 
 - ✅ `Player.appearance` field + `to_save_dict()`/`apply_save_dict()`, tested
@@ -517,6 +576,15 @@ given call appears only once.
   test coverage: `test_loading_overlay.gd` (new) plus four tests in
   `test_main_menu.gd` exercising the real coroutine timing, not just
   reasoned from source.
+- ✅ **Revised (2026-09-09): Sims-4-style witty tips, real progress moved
+  to a corner.** Every entry point above now shows a big, centered,
+  rotating, this-game-flavored witty tip (`LoadingTips`) as the primary
+  readout, with the old status-text-plus-progress content relocated
+  (unchanged in substance) to a small bottom-right corner readout next to
+  the spinner — see "`LoadingOverlay` gets Sims-4-style witty tips" above
+  for the full mechanism. `show_with_text`/`set_progress`/`hide_overlay`
+  kept their exact prior signatures, so none of the five entry points'
+  own call sites changed.
 - 🚧 The pre-menu terrain-atlas bake (`TerrainRenderer.build_tile_set`,
   triggered unconditionally in `World._ready()` via `EarthChunkManager`'s
   constructor, before the main menu itself is even shown) is a real,
