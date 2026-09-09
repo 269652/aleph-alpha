@@ -1492,3 +1492,31 @@ func test_forager_eaten_at_an_unrelated_cell_does_not_touch_a_real_mound():
 		colony.population_at(cell), population_before, 0.001,
 		"eating a forager at an unrelated cell must not touch a real mound"
 	)
+
+
+# -- retirement: EarthChunkManager._unload_chunk marks a colony retired, ---
+# -- so a still-in-flight AntForagerMarker can notice its own mound's -----
+# -- chunk is gone rather than silently depositing into an orphaned object -
+#
+# A forager holds a direct RefCounted reference to its own AntColony (see
+# AntForagerMarker._colony's own doc comment), set once at dispatch --
+# unlike the marker itself, a chunk unloading does NOT free this object
+# (EarthChunkManager._unload_chunk only erases its OWN _ant_colonies
+# dictionary entry; the forager's own reference count keeps the object
+# alive regardless). Without a real signal to notice this, the forager's
+# eventual record_forage_result call would resolve against this exact
+# same, now-abandoned object -- see docs/concept/soil_fauna.md's
+# "In-flight foragers survive an unload; their trip's outcome does not"
+# (mirrors BeeColony's own identical fix, see docs/concept/bees.md's own
+# section of that name -- confirmed as the real, not-yet-fixed parallel
+# gap that section itself named at the time).
+
+func test_a_fresh_colony_is_not_retired():
+	var colony := _colony()
+	assert_false(colony.is_retired())
+
+
+func test_mark_retired_makes_is_retired_true():
+	var colony := _colony()
+	colony.mark_retired()
+	assert_true(colony.is_retired())
