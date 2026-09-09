@@ -8,10 +8,12 @@ extends RefCounted
 ## stays fully headless-testable the same way LeafLitterRenderer's own
 ## static timing functions are (see that file's own doc comment).
 
-## 32 frames: an 8-column x 4-row illustrated sheet (see IntroSplashSheet),
-## the same grid shape as this project's other illustrated animation
-## sheets (e.g. worm.png).
-const FRAME_COUNT := 32
+## 45 frames: a 9-column x 5-row illustrated sheet (see IntroSplashSheet) --
+## a fifth row (a pure sparkle/starburst flourish, no globe) added on top
+## of the original 8x4/32-frame sheet's own layout, which also grew from
+## 8 to 9 columns in the same pass (see docs/concept/intro_splash.md's
+## own "A fifteenth pass" for the real, measured grid this reflects).
+const FRAME_COUNT := 45
 
 ## Deliberately chunky, not smooth -- a fast 24-30fps readback would fight
 ## the sheet's own hand-illustrated pixel-art style (see

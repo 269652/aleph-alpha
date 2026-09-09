@@ -4,8 +4,8 @@ extends GutTest
 ## -- see docs/concept/intro_splash.md. Same "hand/AI-illustrated sheet ->
 ## SpriteSheetSlicer -> cached frames" shape as IllustratedWormSprite, but
 ## the sheet's own grid is NOT perfectly regular (AI-generated at
-## 1983x793, not evenly divisible by the prompted 8 columns x 4 rows --
-## confirmed with tools/probe_intro_sheet.gd), so this hand-measures the 4
+## 1983x793, not evenly divisible by its own 9 columns x 5 rows --
+## confirmed with tools/probe_intro_sheet.gd), so this hand-measures the 5
 ## ROW bands (pinned constants) and reuses SpriteSheetSlicer.detect_frames
 ## for the columns within each band, rather than assuming arithmetic
 ## division the way the worm sheet's own (genuinely regular) grid can.
@@ -22,6 +22,7 @@ extends GutTest
 ## regions instead.
 
 const IntroSplashSheet = preload("res://src/rendering/intro_splash_sheet.gd")
+const IntroSplashSequencer = preload("res://src/rendering/intro_splash_sequencer.gd")
 
 var sheet: IntroSplashSheet
 
@@ -30,8 +31,13 @@ func before_each():
 	sheet = IntroSplashSheet.new()
 
 
+## A real cross-check, not two independently-hardcoded numbers that could
+## silently drift apart -- IntroSplashSequencer.FRAME_COUNT is what
+## actually decides how many frames get shown; this proves the sheet
+## really produces exactly that many, not a number this test also has to
+## remember to update by hand every time the sheet's own real grid changes.
 func test_frame_count_matches_the_sequencer():
-	assert_eq(sheet.generate_textures().size(), 32)
+	assert_eq(sheet.generate_textures().size(), IntroSplashSequencer.FRAME_COUNT)
 
 
 func test_every_frame_has_real_content():
@@ -63,11 +69,14 @@ func test_frames_have_no_leftover_magenta_background():
 
 
 ## The first frame (no wordmark yet) and the last frame (full wordmark,
-## globe rotated) must genuinely differ -- a real 32-frame animation, not
-## 32 copies of one drawing.
+## sparkle flourish) must genuinely differ -- a real multi-frame animation,
+## not FRAME_COUNT copies of one drawing.
 func test_first_and_last_frames_differ():
 	var frames := sheet.generate_textures()
-	assert_ne(frames[0].get_image().get_data(), frames[31].get_image().get_data())
+	assert_ne(
+		frames[0].get_image().get_data(),
+		frames[IntroSplashSequencer.FRAME_COUNT - 1].get_image().get_data()
+	)
 
 
 ## Every one of the 32 frames must differ from its own immediate neighbour
@@ -123,6 +132,49 @@ func test_every_frame_is_the_same_size():
 			first_size,
 			"frame %d is %s, expected %s (frame 0's size) -- unstable geometry reads as wobble once stretched to fill a real viewport" % [i, size, first_size]
 		)
+
+
+## Real, measured safety margins -- see this file's own header doc comment
+## and docs/concept/intro_splash.md's own pass history for why a SINGLE
+## fixed crop window (not per-frame content detection) is the whole point
+## here: _FRAME_WIDTH/_FRAME_HEIGHT must both comfortably contain every
+## real column/row's own measured content AND stay comfortably inside the
+## tightest real gap to the next column/row, or a crop would either clip
+## real content or bleed into a neighbour. Confirmed against a rendered
+## swatch at the width chosen (a real visual check, not just these
+## numbers alone -- tools/probe_intro_sheet.gd's own crop-preview pass,
+## since deleted, mirroring how the eleventh pass's own numbers were
+## verified).
+func test_frame_width_fits_within_the_tightest_real_column_pitch():
+	var tightest_pitch := 999999
+	for i in IntroSplashSheet._COLUMN_LEFTS.size():
+		var next_left: int = (
+			IntroSplashSheet._COLUMN_LEFTS[i + 1] if i + 1 < IntroSplashSheet._COLUMN_LEFTS.size()
+			else _sheet_width()
+		)
+		var pitch: int = next_left - IntroSplashSheet._COLUMN_LEFTS[i]
+		tightest_pitch = mini(tightest_pitch, pitch)
+	assert_lt(
+		IntroSplashSheet._FRAME_WIDTH, tightest_pitch,
+		"a frame width at or past the tightest real column pitch would bleed into the next column"
+	)
+
+
+func test_frame_height_fits_within_the_tightest_real_row_gap():
+	for i in IntroSplashSheet._ROW_BANDS.size() - 1:
+		var this_row_top: int = IntroSplashSheet._ROW_BANDS[i].x
+		var next_row_top: int = IntroSplashSheet._ROW_BANDS[i + 1].x
+		assert_lt(
+			this_row_top + IntroSplashSheet._FRAME_HEIGHT, next_row_top,
+			"row %d's own fixed-height crop would bleed into row %d's content" % [i, i + 1]
+		)
+
+
+func _sheet_width() -> int:
+	return SpriteSheetLoader.load_image("res://assets/sprites/intro.png").get_width()
+
+
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 
 func _has_opaque_pixels(texture: Texture2D) -> bool:

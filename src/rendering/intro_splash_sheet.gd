@@ -6,37 +6,43 @@ extends RefCounted
 ## -> cached frames" shape as IllustratedWormSprite, IllustratedDecomposer
 ## Sprite etc.
 ##
-## assets/sprites/intro.png is 1983x793 -- AI-generated against an 8-column
-## x 4-row prompt, but NOT evenly divisible by that grid (1983/8=247.875,
-## 793/4=198.25), unlike worm.png's genuinely regular grid. Rather than
-## assume arithmetic division (would misalign later frames by several
-## pixels, compounding row to row), both the row bands AND the column left
-## edges below were measured directly with tools/probe_intro_sheet.gd and
-## a dedicated verification probe (throwaway, since deleted -- see bug #6
-## below) and are pinned here as real, confirmed constants.
+## assets/sprites/intro.png is 1983x793 -- AI-generated, currently a
+## 9-column x 5-row grid (a fifth row -- a pure sparkle/starburst
+## flourish, no globe -- and a ninth column, added in the same real-art
+## pass on top of the original 8x4/32-frame layout: see docs/concept/
+## intro_splash.md's "A fifteenth pass"), NOT evenly divisible by that
+## grid (1983/9=220.3, 793/5=158.6), unlike worm.png's genuinely regular
+## grid. Rather than assume arithmetic division (would misalign later
+## frames by several pixels, compounding row to row), both the row bands
+## AND the column left edges below were measured directly with
+## tools/probe_intro_sheet.gd (fully generic -- detects row/column
+## boundaries from the real image rather than assuming a row/column count,
+## so it needed no changes at all to re-measure the new 5-row layout) and
+## are pinned here as real, confirmed constants.
 ##
-## Every one of the 32 frames is cropped to the SAME fixed-size window
+## Every one of the 45 frames is cropped to the SAME fixed-size window
 ## (_FRAME_WIDTH x _FRAME_HEIGHT), anchored at its own row's top and its
 ## own column's left edge -- deliberately NOT SpriteSheetSlicer.
 ## detect_frames' own per-frame CONTENT-based crop, which this file used
 ## until bug #6 (2026-09-09, see docs/concept/intro_splash.md). That
 ## crop measured each frame's own left/right content boundary
-## independently, and while the underlying 8-column GRID itself turned out
-## to already be fixed (row 0, 2 and 3 each independently re-detect the
-## identical column lefts pinned below), the RIGHT edge drifted by up to
-## 2px frame to frame -- driven by the light-streak sweep and the growing
-## "ALEPH ALPHA" wordmark's own ink extent, both of which are real content
-## that varies in exactly the columns detect_frames scans, even though the
+## independently, and while the underlying column GRID itself turned out
+## to already be fixed (multiple rows independently re-detect the
+## identical column lefts pinned below), the RIGHT edge drifted frame to
+## frame -- driven by the light-streak sweep and the growing "ALEPH
+## ALPHA" wordmark's own ink extent, both of which are real content that
+## varies in exactly the columns detect_frames scans, even though the
 ## globe itself sits at a consistent position/size in every frame by
 ## construction (see the intro-generation prompt). IntroSplash's own
 ## TextureRect (STRETCH_KEEP_ASPECT_COVERED + EXPAND_IGNORE_SIZE) scales
 ## and re-centers each frame independently based on that frame's own size,
-## so a couple pixels of source-crop instability, magnified by the ~5.5x
-## this sheet gets stretched by at the project's default 1280x720
+## so a couple pixels of source-crop instability, magnified by the real
+## stretch factor this sheet gets at the project's default 1280x720
 ## viewport, read as visible on-screen "wobble" -- confirmed both by
-## direct measurement (widths ranged 232-234px, heights stepped
-## 181/183/182/182px across the 32 frames) and by rendering the actual
-## STRETCH_KEEP_ASPECT_COVERED transform for a consecutive run of frames.
+## direct measurement of the original 32-frame sheet (widths ranged
+## 232-234px, heights stepped 181/183/182/182px) and by rendering the
+## actual STRETCH_KEEP_ASPECT_COVERED transform for a consecutive run of
+## frames.
 ##
 ## A single fixed crop window per frame -- same width, same height, no
 ## per-frame content detection at all -- removes that instability at the
@@ -64,43 +70,51 @@ const _SHEET_PATH := "res://assets/sprites/intro.png"
 ## not eyeballed (see this file's own doc comment above). Only top_y (each
 ## band's own `.x`) is actually used as a crop anchor now; bottom_y still
 ## documents the real measured row extent and drives _FRAME_HEIGHT's own
-## derivation below.
+## derivation below. 5 real bands -- tools/probe_intro_sheet.gd's own row
+## detector found a 6th, (792, 793), a single stray 1px sliver at the very
+## bottom edge with 0 real column frames in it (not a real row -- excluded
+## here, the same "sanity-check the detector, don't trust it blindly"
+## discipline this sheet's own history already established).
 const _ROW_BANDS: Array[Vector2i] = [
-	Vector2i(12, 193),
-	Vector2i(206, 389),
-	Vector2i(402, 584),
-	Vector2i(598, 780),
+	Vector2i(10, 157),
+	Vector2i(165, 311),
+	Vector2i(319, 467),
+	Vector2i(475, 626),
+	Vector2i(634, 783),
 ]
 
-## Left edge (source-image space) of each of the 8 columns, identical
-## across all 4 rows by construction -- the AI drew one consistent column
-## grid, reused for every row. Measured from row 0 (SpriteSheetSlicer.
-## detect_frames on its own row band): the one row with neither the
-## light-streak sweep nor any wordmark ink yet, so nothing biases a
-## content-based measurement. Rows 2 and 3 independently re-detect this
-## EXACT same array; only row 1 (mid-sequence, both streak and the first
-## wordmark letters already present) drifts by 1px at a single column --
-## see test_column_lefts_match_a_content_free_measurement for the
-## regression check against the real image.
-const _COLUMN_LEFTS: Array[int] = [13, 259, 506, 752, 998, 1245, 1492, 1739]
+## Left edge (source-image space) of each of the 9 columns, identical
+## across all 5 rows by construction -- the AI drew one consistent column
+## grid, reused for every row (re-measured directly with tools/
+## probe_intro_sheet.gd: every one of the 5 real row bands independently
+## detects this exact same array).
+const _COLUMN_LEFTS: Array[int] = [10, 244, 470, 696, 922, 1148, 1365, 1578, 1780]
 
-## ONE fixed crop size, used for every one of the 32 frames -- no
+## ONE fixed crop size, used for every one of the 45 frames -- no
 ## per-frame content cropping (see this file's own doc comment above for
-## why). _FRAME_WIDTH is comfortably larger than the widest content any
-## frame's own OLD per-frame detect_frames crop ever measured (234px,
-## across all 32 frames) and comfortably smaller than the tightest real
-## column pitch (246px, the minimum left-to-left gap among _COLUMN_LEFTS)
-## so it can never bleed into the next column. _FRAME_HEIGHT is the
-## tallest of the 4 hand-measured _ROW_BANDS (row 1, 183px) -- already
-## the height every row-1 frame used even before this fix, so this only
-## extends the other 3 rows a further 1-2px down into their own real,
-## measured inter-row gutter (13-14px, see _ROW_BANDS), never into
-## another row's content. Both bounds are re-verified against the real
-## sheet by test_frame_size_has_real_safety_margins, not just claimed in
-## this comment (see CLAUDE.md: tuned thresholds must be tested, not
-## eyeballed).
-const _FRAME_WIDTH := 240
-const _FRAME_HEIGHT := 183
+## why). Real per-frame content width ranged 194-226px across the sheet
+## (widest at column 0, narrowest at columns 7-8 -- tools/probe_intro_
+## sheet.gd's own detect_frames pass) and the tightest real column pitch
+## is 202px (columns 7->8; the sheet's own right edge leaves column 8
+## slightly more, 203px) -- so _FRAME_WIDTH sits below BOTH the tightest
+## pitch (never bleeds into the next column) and, confirmed by rendering
+## actual cropped swatches at 195px for the widest/narrowest columns on
+## every row (a real visual check, not just these numbers -- the globe,
+## every sparkle point, and the wordmark text all sit comfortably inside
+## 195px with real margin to spare; a shorter crop than the raw 226px
+## widest-content number is genuinely safe here, unlike the original
+## 32-frame sheet where widest-content-plus-margin comfortably UNDERCUT
+## the tightest pitch instead). _FRAME_HEIGHT is the tallest of the 5
+## hand-measured _ROW_BANDS (row 3, 151px) -- already the height every
+## row-3 frame used even before this fix, so this only extends the other
+## 4 rows a further few px down into their own real, measured inter-row
+## gutter, never into another row's content. Both bounds are re-verified
+## against the real sheet by test_frame_width_fits_within_the_tightest_
+## real_column_pitch/test_frame_height_fits_within_the_tightest_real_row_
+## gap, not just claimed in this comment (see CLAUDE.md: tuned thresholds
+## must be tested, not eyeballed).
+const _FRAME_WIDTH := 195
+const _FRAME_HEIGHT := 151
 
 ## Chroma-keyed opaque magenta -- identical thresholds to every other
 ## illustrated sheet in this codebase (e.g. IllustratedWormSprite),
