@@ -18770,3 +18770,72 @@ same `_transform_for` logic they exercise already has direct, passing,
 headless-safe pure-function coverage for the new size_scale behavior in
 `test_footprint_renderer.gd`, added specifically so this didn't need a
 real GPU window to verify).
+
+## Replaying the intro splash on demand: a menu button and a `/intro` console command (`concept/intro_splash.md`, 2026-09-09)
+
+Asked directly: *"make a intro button in the menu where i can play it
+again or a console cmd."* Every one of the intro splash's 13 prior
+passes was about WHEN it plays automatically (boot, New Game/Host Game)
+or fixing how it looks doing so — this is the first pass (the doc's own
+"fourteenth") adding a genuinely new, on-demand trigger. Shipped both
+requested options rather than picking one, since they reach different
+moments and neither duplicates any real logic: each is just one more
+caller of the exact same, still-unmodified `World._play_intro_splash()`
+every existing automatic trigger already uses (the hard-won two-
+`process_frame` gate, the self-contained add/await/free lifecycle —
+untouched, not re-derived).
+
+**The menu button.** `MainMenu` gets a new `replay_intro_requested`
+signal and a "Replay Intro" root-screen button, right before Quit —
+always present (no precondition to gate it on, unlike Load Game just
+above it). `MainMenu` still knows nothing about `IntroSplash` itself —
+only `World` preloads it and owns the `CanvasLayer` it needs — so the
+button only emits, mirroring `load_requested`/`join_requested`'s own
+"emit and let `World` answer" shape exactly;
+`_on_menu_replay_intro_requested` is a one-line `await
+_play_intro_splash()`.
+
+**The console command.** A new `/intro` `DevConsole` command
+(`_handle_intro_command`), registered in the dispatch table and
+`/help`'s own text. No args, no usage message, no player/local-state
+check — unlike nearly every other command here, nothing about it can
+fail: the intro sheet is a static cached asset, not real, mutable game
+state.
+
+**Reachable mid-game only, not from the main menu itself** — a real,
+narrower reach than the button, not an oversight: `DevConsole`'s own
+input never runs while the tree is paused, and `_show_main_menu()`
+pauses it for exactly as long as the menu is up; nothing gives
+`World`/`DevConsole` `PROCESS_MODE_ALWAYS` the way `SettingsOverlay`
+explicitly does. The two triggers are genuinely complementary because
+of this — the button replays it from the menu, before a run starts; the
+command replays it once you're already playing, without returning to
+the menu at all — not two paths to the identical moment.
+
+TDD: `test_pressing_replay_intro_emits_replay_intro_requested`
+(`test_main_menu.gd`) and a new `test_world_replay_intro_wiring.gd` (5
+tests: menu signal connected, handler plays the real intro, console
+command registered in the dispatch table, its own handler plays the
+real intro, `/help` mentions it) written first, confirmed red (a real
+runtime crash for the not-yet-existing button — "Invalid access to
+property or key 'pressed' on a base object of type 'Nil'" — and clean
+"should still exist"/dispatch-table/help-text misses for the not-yet-
+written `World` functions), now green. Pinned from source text rather
+than a live `World`/console session — the same established shape
+`test_mushroom_command_clarity.gd` (individual command wiring) and
+`test_world_intro_splash_after_load_fanout.gd` (`World`'s own internal
+call-site wiring) already use.
+
+`test_world_replay_intro_wiring.gd` 5/5. Full `test_main_menu.gd`
+re-run: 79/80 — the one failure
+(`test_the_diorama_fits_within_the_first_unscrolled_view_of_the_
+character_tab`) a known, pre-existing, already-documented issue in a
+completely separate screen (the character creator tab, not the root
+screen this pass touches), confirmed present in this file's own history
+well before this branch. Regression-checked together: `test_intro_
+splash.gd`, `test_intro_splash_sequencer.gd`, `test_intro_splash_
+sheet.gd`, `test_world_intro_splash_after_load_fanout.gd`, `test_world_
+play_intro_splash_frame_gate.gd`, `test_mushroom_command_clarity.gd`,
+`test_season_command_clarity.gd`, `test_weather_command_clarity.gd`,
+`test_console_command_parser.gd`, `test_dev_console.gd` — 8 scripts,
+67/67, plus the 3 `World`-level intro files, 13/13, all clean.

@@ -988,6 +988,88 @@ of this change. `test_intro_splash.gd`, `test_world_play_intro_splash_
 frame_gate.gd`, `test_world_persistence.gd`, and `test_world_backup_
 paths.gd` all re-run clean -- no regression in any adjacent system.
 
+### A fourteenth pass: replaying the intro on demand (2026-09-09)
+
+Asked directly: *"make a intro button in the menu where i can play it
+again or a console cmd."* Every pass so far has been about WHEN the
+intro plays automatically (boot, New Game/Host Game -- see "Wiring"
+above) or fixing something about how it looks doing so; this is the
+first pass adding a genuinely NEW way to trigger it at all, on demand,
+rather than automatically. Both requested options shipped rather than
+picking one -- they're complementary, not redundant, since they reach
+different moments (see below), and both are free: neither duplicates
+`_play_intro_splash()`'s own shape at all, each is one more caller of
+the exact same, still-unmodified function every existing trigger
+already uses (the hard-won two-`process_frame` gate, the self-contained
+add/await/free lifecycle -- see "A fourth pass" above for why that gate
+exists at all).
+
+**The menu button.** `MainMenu` gets a new `replay_intro_requested`
+signal and a "Replay Intro" root-screen button, right before Quit --
+always present, unlike Load Game just above it (no precondition to
+gate replaying the intro on: there's always an intro to replay).
+`MainMenu` still has zero knowledge of `IntroSplash` itself -- only
+`World` preloads it and owns `_ui` (the `CanvasLayer`
+`_play_intro_splash()` needs) -- so the button only emits, the same
+"emit and let `World` answer" shape `load_requested`/`join_requested`
+already use; `World._on_menu_replay_intro_requested()` is a one-line
+`await _play_intro_splash()`, mirroring `_on_menu_load_requested`'s own
+shape. The menu itself stays up underneath (still paused-but-
+interactive), and control returns to it the instant the replay
+resolves -- nothing else needs undoing.
+
+**The console command.** A new `/intro` `DevConsole` command
+(`World._handle_intro_command`), registered in `_on_console_command`'s
+dispatch table and `/help`'s own text, alongside every other real
+command in this file (`/day`, `/gold`, `/ecotest`, ...). No arguments,
+no usage message, no player/local-state check needed -- unlike almost
+every other command here, there is nothing that could fail: the intro
+sheet is a static asset cached at first build, not real, mutable game
+state.
+
+**Reachable mid-game only, not from the main menu itself** -- a real,
+narrower reach than the button, not an oversight. `DevConsole`'s own
+input (`World._unhandled_input`, gating the backtick toggle) never runs
+while the tree is paused, and `_show_main_menu()` sets
+`get_tree().paused = true` for exactly as long as the menu is up;
+nothing gives `World`/`DevConsole` `PROCESS_MODE_ALWAYS` the way
+`SettingsOverlay` explicitly does (that overlay needs to keep working
+while paused; the console was never built to). The two triggers this
+pass ships are genuinely complementary because of this, not two paths
+to the identical moment: the button is how you replay it from the
+menu, before a run has started; the command is how you replay it once
+you're already playing and want to see it again, without returning to
+the menu at all.
+
+TDD: `test_pressing_replay_intro_emits_replay_intro_requested`
+(`test_main_menu.gd`) and a new `test_world_replay_intro_wiring.gd`
+(five tests -- the menu signal is connected, the handler plays the
+real intro, the console command is registered in the dispatch table
+and its own handler plays the real intro, `/help` mentions it) all
+written first, confirmed red (a real runtime crash for the not-yet-
+existing button -- "Invalid access to property or key 'pressed' on a
+base object of type 'Nil'" -- and clean "should still exist"/dispatch-
+table/help-text assertion misses for the not-yet-written `World`
+functions), now green. Pinned from source text rather than a live
+`World`/console session, the same established shape
+`test_mushroom_command_clarity.gd` (individual command wiring) and
+`test_world_intro_splash_after_load_fanout.gd` (this exact file's own
+prior pass, for `World`'s own internal call-site wiring) already use --
+`World` is too heavy (chunk manager, multiplayer, `MainMenu`) to stand
+up live just to prove one new call exists. Full `test_main_menu.gd`
+re-run: 79/80, the one failure
+(`test_the_diorama_fits_within_the_first_unscrolled_view_of_the_
+character_tab`) a known, pre-existing, already-documented issue in a
+completely separate screen (the character creator tab, not the root
+screen this pass touches), confirmed present in `docs/progress.md`'s
+own history well before this pass. `test_intro_splash.gd`,
+`test_intro_splash_sequencer.gd`, `test_intro_splash_sheet.gd`,
+`test_world_intro_splash_after_load_fanout.gd`,
+`test_world_play_intro_splash_frame_gate.gd`,
+`test_mushroom_command_clarity.gd`, `test_season_command_clarity.gd`,
+`test_weather_command_clarity.gd`, `test_console_command_parser.gd`,
+and `test_dev_console.gd` all re-run clean.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
@@ -1126,3 +1208,13 @@ paths.gd` all re-run clean -- no regression in any adjacent system.
   Game/Host Game) — a real, deliberately deferred convenience gap, not
   attempted here (the skip-on-any-key path already makes repeat viewings
   cheap).
+- ✅ **Replaying the intro on demand** (2026-09-09, "A fourteenth
+  pass") — see that section above. A "Replay Intro" `MainMenu` root-
+  screen button (`replay_intro_requested`, answered by `World.
+  _on_menu_replay_intro_requested`) and a new `/intro` `DevConsole`
+  command (`World._handle_intro_command`), both calling the exact same,
+  unmodified `_play_intro_splash()` the two automatic triggers already
+  use. The command is reachable mid-game only (the console's own input
+  never runs while the menu has the tree paused), the button only from
+  the menu — genuinely complementary reaches, not two paths to the
+  identical moment.
