@@ -103,15 +103,29 @@ func hide_overlay() -> void:
 	visible = false
 
 
-## Updates the status line with REAL, determinate chunk-load progress -- the
-## one piece show_with_text's original indeterminate-only design assumed was
-## unknowable (see this script's own doc comment above). `total` of 0 is
-## shown as-is (matching EarthChunkManager.pending_load_chunks' own
-## "nothing left to load" contract) rather than attempting a divide -- this
-## only ever formats already-computed counts, so there's no division here to
-## guard.
-func set_progress(loaded: int, total: int) -> void:
-	_status_label.text = "%s (%d / %d chunks)" % [_base_status_text, loaded, total]
+## Updates the status line with REAL, determinate progress -- the one piece
+## show_with_text's original indeterminate-only design assumed was unknowable
+## (see this script's own doc comment above). `total` of 0 is shown as-is
+## (matching EarthChunkManager.pending_load_chunks' own "nothing left to
+## load" contract) rather than attempting a divide -- this only ever formats
+## already-computed counts, so there's no division here to guard.
+##
+## `unit` defaults to "chunks" -- World's own chunk-loading callers (New
+## World/Load Game/Join, via _on_chunk_load_progress) pass none at all, so
+## their existing "N / M chunks" wording is unchanged. Added when MainMenu's
+## own character-creator build (a different real cost -- class-icon
+## portraits, not chunks) needed this same real-progress treatment: "N / M
+## chunks" would have been a real, honest-sounding lie about what was
+## actually being counted.
+func set_progress(loaded: int, total: int, unit: String = "chunks") -> void:
+	_status_label.text = "%s (%d / %d %s)" % [_base_status_text, loaded, total, unit]
+
+
+## Lets a test verify what's actually shown without reaching past this class
+## into `_status_label` itself -- same rationale as IntroSplash.display_rect/
+## display_is_pixel_perfect.
+func status_text() -> String:
+	return _status_label.text
 
 
 func _process(delta: float) -> void:
