@@ -18544,3 +18544,29 @@ matches_the_sheets_own_real_fixed_crop_size`. `test_intro_splash.gd`
 7/7, `test_world_play_intro_splash_frame_gate.gd` 3/3, `test_world_intro_
 splash_after_load_fanout.gd` 5/5 — no regression in any of the eleven
 prior passes.
+
+## New Game/Host's intro moves back to playing first (`concept/intro_splash.md`, "A thirteenth pass", 2026-09-09)
+
+Requested live, precisely: "Can you play the intro right after overwrite
+and start / right before the world creation loading screen." A SECOND
+reversal of this same ordering — it used to play as a pure bumper before
+any real work, then moved (an earlier live request) to be the reveal once
+the freshly-spawned world was actually ready. Both orderings were real,
+deliberate responses to what was actually asked at the time; this pass is
+a second change of mind, not a correction.
+
+Fix: `await _play_intro_splash()` moved in `World._on_menu_start_
+requested` from after `_spawn_local_singleplayer` (right before
+`_dismiss_main_menu`) to immediately after the `_pending_*` fields are
+set, before `_show_loading_overlay` is ever called — the intro now plays
+first, then the "Preparing a new world..." loading overlay covers the
+real wipe/spawn work, exactly the original pre-reversal shape.
+
+TDD: `test_world_intro_splash_after_load_fanout.gd` rewritten to assert
+the new ordering (intro finishes before the overlay shows, before the
+wipe starts, before the player spawns) — 3 tests confirmed red against
+the pre-reorder code first, green after; the 2 tests unaffected by the
+reorder (menu-dismiss timing, the separate boot bumper) stayed green
+throughout. `test_intro_splash.gd`, `test_world_play_intro_splash_frame_
+gate.gd`, `test_world_persistence.gd`, `test_world_backup_paths.gd` all
+re-run clean.

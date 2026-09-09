@@ -134,16 +134,22 @@ built/underway, never before or during it:
   setup even started — a bumper nobody's new world was actually behind
   yet. Requested live: *"the intro scene plays before the world starts?
   So you click new game; start; then it loads and when it loaded it
-  shows the earth intro scene"* — the intro is now the REVEAL once the
-  real work (`_wipe_persisted_world`, `_spawn_local_singleplayer`) has
+  shows the earth intro scene"* — the intro became the REVEAL once the
+  real work (`_wipe_persisted_world`, `_spawn_local_singleplayer`) had
   actually finished, not a bumper played in front of a loading screen
-  nobody watched it for. The loading overlay is explicitly hidden first
-  (`if _loading_overlay.visible: _loading_overlay.hide_overlay()`, the
-  same guard `_run_initial_client_chunk_load` already uses for this
-  overlay) so the intro plays over the freshly-spawned, still-paused
-  world it is actually revealing, not over a stale "Preparing a new
-  world..." label. Still fully skippable, still finishes before
-  `_dismiss_main_menu()` hands control to the player.
+  nobody watched it for.
+  **Revised again (2026-09-09, a thirteenth pass — see below):** requested
+  live a second time, precisely: *"play the intro right after overwrite
+  and start / right before the world creation loading screen"* — back to
+  playing FIRST, immediately once the player commits (Begin/"Overwrite
+  and start"), before `_show_loading_overlay` ever shows. The prior
+  "reveal" framing (playing over the freshly-spawned, still-paused world)
+  no longer applies -- the intro now plays over the still-visible
+  character creator, before any wipe/spawn work has even begun. Still
+  fully skippable, still finishes before `_dismiss_main_menu()` hands
+  control to the player -- only WHERE in the sequence it sits changed,
+  not the "always skippable, always finishes before the menu is
+  dismissed" guarantees around it.
 
 `_play_intro_splash()` itself no longer needs to persist the intro node
 across anything external: both call sites `await` it fully before doing
@@ -945,6 +951,43 @@ _FRAME_WIDTH, IntroSplashSheet._FRAME_HEIGHT)` directly, not a literal).
 gate.gd` 3/3, `test_world_intro_splash_after_load_fanout.gd` 5/5 -- no
 regression in any of the eleven prior passes.
 
+### A thirteenth pass: New Game/Host's intro moves back to playing first (2026-09-09)
+
+A SECOND reversal of `World._on_menu_start_requested`'s own intro
+placement (see "Wiring" above for the full before/after). Requested live,
+precisely: *"Can you play the intro right after overwrite and start /
+right before the world creation loading screen"*.
+
+The prior ordering (intro as the reveal, played after `_wipe_persisted_
+world`/`_spawn_local_singleplayer` finish, loading overlay hidden first)
+was itself a direct response to an earlier live request -- both orderings
+are real, deliberate, and each was exactly what was asked for at the time.
+This pass is not a correction of a mistake, just a second explicit change
+of mind about where in the sequence the moment should sit.
+
+**The fix:** `await _play_intro_splash()` moved from its old position
+(after `_spawn_local_singleplayer`, before `_dismiss_main_menu()`) to
+immediately after the `_pending_*` fields are set, before `await
+_show_loading_overlay(...)` is ever called. The `if _loading_overlay.
+visible: _loading_overlay.hide_overlay()` guard right before
+`_dismiss_main_menu()` is untouched -- it still exists purely to cover
+`_run_initial_client_chunk_load`'s own possible early hide of the same
+shared overlay, unrelated to the intro's own position.
+
+**TDD.** `test_world_intro_splash_after_load_fanout.gd` -- the same "read
+World's own source and assert on function-body text" technique this file
+has used since the fourth pass -- rewritten to assert the NEW ordering:
+the intro finishes before the loading overlay ever shows, before the
+world wipe starts, and before the player spawns; the menu is still only
+dismissed once the overlay is hidden and the player has actually spawned,
+unaffected by where the intro sits. All 3 ordering assertions confirmed
+red against the pre-reorder code first, green after; the two tests
+unaffected by the reorder (menu-dismissed timing, the separate boot-path
+bumper) stayed green throughout, proving they were genuinely independent
+of this change. `test_intro_splash.gd`, `test_world_play_intro_splash_
+frame_gate.gd`, `test_world_persistence.gd`, and `test_world_backup_
+paths.gd` all re-run clean -- no regression in any adjacent system.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
@@ -985,12 +1028,13 @@ regression in any of the eleven prior passes.
   override): the intro plays its full natural ~3.2s cleanly, with
   nothing competing with it for the render thread, immediately visible
   on top of the already-built menu.
-- ✅ **Revised (2026-09-08): the New Game/Host Game intro is now the
-  reveal, not a pre-loading bumper.** See "Wiring" above for the full
-  before/after — `World._on_menu_start_requested()` now awaits
-  `_play_intro_splash()` AFTER `_wipe_persisted_world`/
-  `_spawn_local_singleplayer` have actually finished (with the loading
-  overlay explicitly hidden first), not before either. Locked down by
+- ✅ **Revised (2026-09-08, then reversed again 2026-09-09 by "A thirteenth
+  pass" below): the New Game/Host Game intro's own position in the
+  sequence.** See "Wiring" above for the full before/after history —
+  `World._on_menu_start_requested()` now awaits `_play_intro_splash()`
+  FIRST, immediately once the player commits (Begin/"Overwrite and
+  start"), before `_show_loading_overlay`/`_wipe_persisted_world`/
+  `_spawn_local_singleplayer` ever run. Locked down by
   `test_world_intro_splash_after_load_fanout.gd`'s source-level
   ordering assertions (the same "read World's own source, assert on
   function-body text" technique `test_world_compass_window_fanout.gd`
