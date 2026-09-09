@@ -539,6 +539,58 @@ bug); `BeeForagerMarker` was never built on `AmbientFlyerMarker` and
 never inherited the fix, so it gets its own identical `z_index = 1`,
 set once in `_ready()`.
 
+### In-flight foragers survive an unload; their trip's outcome does not
+
+A dispatched `BeeForagerMarker` is a plain child of the persistent
+`Entities` node (see `EarthChunkManager._dispatch_bee_forager`/
+`_dispatch_wild_bee_forager`), never chunk-scoped the way a
+`BeeHiveMarker`/`WildBeeNestMarker` is — so unloading its own hive's
+chunk correctly leaves it flying: the world keeps living while nobody's
+watching, the same standing rule every other unloaded-but-still-
+simulated system in this game already follows. What it must NOT do is
+keep silently mutating the `BeeColony`/`WildBeePatch` object its hive's
+chunk used to own: `_colony` (see that field's own doc comment) is a
+direct `RefCounted` reference set once, at dispatch —
+`EarthChunkManager._unload_chunk` erasing its own `_bee_colonies`/
+`_wild_bee_patches` dictionary entry cannot free an object a live
+forager still references, and if the player later walks back into that
+chunk, `_load_chunk` constructs a brand new colony there, completely
+separate from the one still in the returning forager's own hand.
+Without a real signal to notice this, a successful trip's
+`record_forage_result` call would resolve against that exact orphaned
+object instead — a silent economy-state leak with no symptom a player
+could ever observe (no honey anywhere they can reach, no forage-success
+signal reaching the hive they actually see).
+
+`BeeColony`/`WildBeePatch` each get an identical `mark_retired()`/
+`is_retired()` flag pair (a per-OBJECT flag, not per-hive-cell — the
+real event this tracks, a chunk unloading, tears down every hive/nest
+the object owns at once). `EarthChunkManager._unload_chunk` calls
+`mark_retired()` the moment it erases its own tracking entry;
+`BeeForagerMarker._resolve_arrival_at_hive` checks `is_retired()` before
+ever depositing, and quietly frees itself without depositing if it
+reads true — the honest "this trip's outcome is lost" consequence, the
+same real cost as everything else that happens while unloaded, never a
+papered-over guaranteed deposit.
+
+Whether a forager's OWN current position, mid-flight, is in the same
+chunk as its hive turns out not to matter to this fix, though it's
+worth checking explicitly rather than assuming: `BeeColony.
+FORAGE_RADIUS_TILES` (18 tiles) exceeds half of `EarthChunkManager.
+CHUNK_SIZE` (32), so a forager genuinely can and does range into a
+neighboring chunk mid-trip — but the forager itself is never
+chunk-scoped regardless of where it is currently flying (only markers
+like `BeeHiveMarker` are), so the only chunk whose load state is ever
+actually relevant to this bug is the hive's own.
+
+No ant precedent exists for this, checked directly per this doc's own
+header promise: `AntForagerMarker._resolve_arrival_at_mound` has the
+identical unguarded `_colony.record_forage_result(...)` call, and
+`EarthChunkManager._unload_chunk` neither retires nor otherwise
+protects `AntColony` on unload either. This is a real, separate,
+not-yet-fixed gap on the ant side — named here rather than silently
+left for a future bug report to rediscover, out of scope for this pass.
+
 ### Growth-stage and destruction art — `IllustratedBeehiveSprite`
 
 Rows 1-2 of `beehive.png` (16 frames, tiny exposed cluster → full sealed
@@ -712,6 +764,23 @@ procedural hole (no illustrated art supplied for this one — a real,
 named gap for future art), relocates on sustained lost forage (the one
 absconding trigger it keeps). `BeeForagerMarker` serves it too (a lone
 resident's own real forage trip), not a separate near-duplicate marker.
+
+✅ **In-flight foragers survive an unload; their trip's outcome does
+not** (2026-09-09, see "In-flight foragers survive an unload" above) —
+`BeeColony`/`WildBeePatch.mark_retired()`/`is_retired()`, called by
+`EarthChunkManager._unload_chunk`, checked by `BeeForagerMarker.
+_resolve_arrival_at_hive` before ever depositing. Fixes a real, silent
+economy-state leak: a forager already in flight for a hive correctly
+survives its own chunk unloading (the world keeps living while
+nobody's watching), but was still holding a live reference to the
+exact `BeeColony`/`WildBeePatch` object `EarthChunkManager` had
+already abandoned — its eventual successful-trip deposit landed on
+that orphaned object instead of whatever fresh colony a returning
+player actually sees. Covers both roles `BeeForagerMarker` serves (a
+honeybee hive's own worker and a solitary `WildBeePatch` resident). No
+ant precedent existed to mirror — `AntForagerMarker`/`AntColony` have
+the identical unguarded gap, named but not fixed here (out of scope
+for this pass).
 
 ✅ **`EarthChunkManager` wiring** — `step_bees` (chunk load/unload,
 advancing, swarming, absconding, forage dispatch for both hives and

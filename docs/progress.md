@@ -18098,3 +18098,77 @@ eventual `record_forage_result`/`deposit_food` call lands on that
 abandoned colony instead of the fresh one `_load_chunk` built on
 re-entry, a silent economy-state leak with no visible symptom on its
 own.
+
+## In-flight bee foragers no longer corrupt an orphaned colony after their chunk unloads (2026-09-09)
+
+Closes gap (2) named, but deliberately not fixed, in the entry directly
+above: a chunk unloading while one of its bees is mid-flight orphans
+that bee's own `BeeColony`/`WildBeePatch` reference (a real object kept
+alive only by the forager's own reference count) -- the forager's
+eventual `record_forage_result` call landed on that abandoned object
+instead of the fresh one `_load_chunk` built if the player returned, a
+silent economy-state leak with no visible symptom on its own (no honey
+deposited anywhere reachable, no forage-success signal reaching the
+hive the player actually sees).
+
+`BeeForagerMarker` is deliberately NOT chunk-scoped -- it's a plain
+child of the persistent `Entities` node, so it correctly keeps flying
+its whole real round trip regardless of what happens to the chunk
+beneath it (the world keeps living while nobody's watching, the
+standing rule every other unloaded-but-simulated system here already
+follows). The bug was never that it kept flying; it was what it kept a
+live reference to. Checked whether the forager's OWN current position
+(mid-flight) can differ from its hive's own chunk before deciding this
+mattered: `BeeColony.FORAGE_RADIUS_TILES` (18) exceeds half of
+`EarthChunkManager.CHUNK_SIZE` (32), so yes, a forager genuinely ranges
+into neighboring chunks -- but since the forager itself is never
+chunk-scoped regardless of where it currently is, only the HIVE's own
+chunk load state is ever actually relevant.
+
+Checked the ant side first for an equivalent already-solved precedent to
+mirror, per this doc's own standing "read the ant version first"
+practice (see `bees.md`'s header) -- none exists:
+`AntForagerMarker._resolve_arrival_at_mound` has the identical unguarded
+`_colony.record_forage_result(...)` call, and
+`EarthChunkManager._unload_chunk` neither retires nor otherwise protects
+`AntColony` on unload either. Ants carry the same real bug, named here
+as a known, not-yet-fixed parallel gap rather than silently left for a
+future report to rediscover -- out of scope for this pass, which was
+specifically about bees.
+
+Fix: `BeeColony`/`WildBeePatch` each get an identical `mark_retired()`/
+`is_retired()` flag pair (a per-OBJECT flag -- the real event this
+tracks, a chunk unloading, tears down every hive/nest the object owns
+at once, not one cell at a time). `EarthChunkManager._unload_chunk`
+calls `mark_retired()` on both, immediately before erasing its own
+`_bee_colonies`/`_wild_bee_patches` entries.
+`BeeForagerMarker._resolve_arrival_at_hive` checks `is_retired()`
+before ever calling `record_forage_result`, and quietly frees itself
+without depositing if it reads true -- an honest "this trip's outcome
+is lost" consequence, mirroring exactly what already happens to every
+other unloaded-but-simulated system's own in-flight state, never a
+silently guaranteed deposit. Covers both roles `BeeForagerMarker`
+serves (a real honeybee hive's own worker and a solitary `WildBeePatch`
+resident's own trip) via the identical `is_retired()` signature both
+classes now share.
+
+TDD, three sound steps, each its own commit: (1) `mark_retired()`/
+`is_retired()` added to `BeeColony`/`WildBeePatch` alone, driven by
+direct unit tests; (2) `BeeForagerMarker._resolve_arrival_at_hive`'s own
+guard, driven by two new `test_bee_forager_marker.gd` tests -- confirmed
+red first against step (1) alone (a real deposit/EMA update still
+happening: honey 120->121, forage_success 0.5->0.65, exactly the bug);
+(3) `EarthChunkManager._unload_chunk`'s own wiring, driven by four new
+`test_earth_chunk_manager_bees.gd` tests including a full dispatch-
+unload-resolve end-to-end regression for both a honeybee hive and a
+wild bee patch -- confirmed red against steps (1)+(2) alone. A fifth
+new test in that file, proving an in-flight forager is NOT freed by its
+own chunk's unload, was already green throughout (and stays green) --
+pinning the "the world keeps living" half of this behavior as a real,
+protected invariant, not just an assumption.
+
+`test_bee_colony.gd` 50/50 (48 pre-existing + 2 new), `test_wild_bee_
+patch.gd` 26/26 (24 + 2 new), `test_bee_forager_marker.gd` 32/32
+(30 + 2 new), `test_earth_chunk_manager_bees.gd` 28/28 (23 + 5 new --
+one of which was already green beforehand). Regression-checked: every
+bee-related test script together (`-gselect=bee`, 11 scripts) 230/230.
