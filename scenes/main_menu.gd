@@ -205,6 +205,15 @@ signal join_requested(address: String)
 ## creator entirely; World restores the saved class/appearance/state itself.
 signal load_requested()
 
+## Emitted from the root screen's Replay Intro button (see docs/concept/
+## intro_splash.md's "Replaying the intro on demand" -- asked directly: a
+## way to watch the boot intro splash again). MainMenu has no idea what
+## IntroSplash even is -- only World preloads it and owns _ui (the
+## CanvasLayer _play_intro_splash() needs) -- so this only emits, the same
+## "emit and let World answer" shape load_requested/join_requested above
+## already use.
+signal replay_intro_requested()
+
 ## Path PlayerSave checks for "does a save exist" when deciding whether to
 ## offer Load Game -- overridable so tests never touch the real save file.
 var save_path := PlayerSave.SAVE_PATH
@@ -414,6 +423,9 @@ func _build_root_screen() -> Control:
 	# character creator: a load restores a character, it doesn't author one.
 	if _player_save.has_save(save_path):
 		buttons.add_child(_menu_button("Load Game", func(): load_requested.emit()))
+	# Always offered -- unlike Load Game above, there's no precondition to
+	# gate this on: there's always an intro to replay.
+	buttons.add_child(_menu_button("Replay Intro", func(): replay_intro_requested.emit()))
 	buttons.add_child(_menu_button("Quit", func(): get_tree().quit()))
 	return box
 

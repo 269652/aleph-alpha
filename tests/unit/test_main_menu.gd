@@ -151,6 +151,19 @@ func test_pressing_load_game_emits_load_requested():
 	assert_signal_emitted(menu, "load_requested")
 
 
+## Asked directly: a way to replay the boot intro splash on demand (see
+## docs/concept/intro_splash.md's "Replaying the intro on demand") --
+## always present on the root screen, unlike Load Game above (no
+## precondition to gate it on: there's always an intro to replay).
+## MainMenu has no idea what IntroSplash even is (see that section's own
+## doc comment on the split) -- it only emits, the same signal-and-let-
+## World-answer shape every other root button already uses.
+func test_pressing_replay_intro_emits_replay_intro_requested():
+	watch_signals(menu)
+	_find_button(menu._root_screen, "Replay Intro").pressed.emit()
+	assert_signal_emitted(menu, "replay_intro_requested")
+
+
 # -- deferred character-creator construction ---------------------------------
 #
 # Measured live (docs/concept/intro_splash.md, "A fourth pass"): building the
