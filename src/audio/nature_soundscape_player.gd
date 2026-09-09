@@ -27,6 +27,21 @@ var _target_volume: Dictionary = {}
 ## SECONDS first.
 var _refresh_accumulator := REFRESH_INTERVAL_SECONDS
 
+## The exact 5 update() inputs as of the last recompute -- null until the
+## first call. Reported live: "when I walk into the water it takes a
+## while before the river wading sound is played then it fades out and
+## takes a while again" -- REFRESH_INTERVAL_SECONDS throttled the target-
+## mix recompute UNCONDITIONALLY, so a real, discrete change (the player
+## stepping into/out of a biome, a storm starting) could sit for up to a
+## full 5s before the ramp toward the new target even started, on top of
+## the ramp's own several real seconds. Comparing against this lets
+## update() recompute the instant something REAL changed, while still
+## throttling the (much more common) case of nothing changing at all --
+## the whole reason REFRESH_INTERVAL_SECONDS exists (ambient audio doesn't
+## need sub-second reaction to STATE THAT ISN'T MOVING) stays true for
+## that case; it just never was true for a real transition.
+var _last_inputs = null
+
 ## Effectively inaudible -- real silence (-inf dB) is a real float value
 ## AudioStreamPlayer accepts, but linear_to_db(0.0) IS -inf, and comparing
 ## against -inf elsewhere is a real footgun; a large real finite floor sidesteps
@@ -95,9 +110,17 @@ func update(
 	biome: String, season: String, weather: String, is_night: bool, is_snowing: bool,
 	roll: float, delta: float
 ) -> void:
+	# A real input change also re-rolls the hawk-call cameo a little early
+	# (rather than teaching this function to recompute the mix without
+	# touching the roll) -- a small, accepted looseness on
+	# HAWK_CALL_CHANCE_PER_CHECK's own intended rarity for the edge case of
+	# rapidly crossing in and out of mountain biome, not a real balance
+	# concern for ordinary play.
+	var inputs := [biome, season, weather, is_night, is_snowing]
 	_refresh_accumulator += delta
-	if _refresh_accumulator >= REFRESH_INTERVAL_SECONDS:
+	if _refresh_accumulator >= REFRESH_INTERVAL_SECONDS or inputs != _last_inputs:
 		_refresh_accumulator = 0.0
+		_last_inputs = inputs
 		_refresh_targets(biome, season, weather, is_night, is_snowing)
 		_maybe_play_hawk_call(biome, is_night, roll)
 	_advance_ramp(delta)

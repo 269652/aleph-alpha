@@ -17396,3 +17396,103 @@ same-frame read. `test_intro_splash.gd` 7/7, plus
 `test_world_play_intro_splash_frame_gate.gd`, and
 `test_world_intro_splash_after_load_fanout.gd` all re-run clean —
 no regression in the timing/gating mechanics the prior six passes fixed.
+
+## Footstep, mushroom-crush, and creature-call SFX shipped (`concept/creature_and_footstep_audio.md`, 2026-09-09)
+
+Reported live: *"we need footsteps; twigs cracking in forest wood; walking
+over a mushroom should produce a correct sound... each animal should have
+an individual sound.. (horse, robin, boar, sparrow) etc... can you
+download more sounds and make it better?"* — a real, multi-part audio
+feature, not a single fix. See the concept doc's own "Design pillars" for
+the full shape; summarized here.
+
+✅ **14 new real, licensed recordings sourced from Wikimedia Commons**
+(same sourcing convention `assets/audio/soundscape/CREDITS.md` already
+established) — 3 footstep clips (snow, forest — audibly including twigs,
+and one shared generic default) and 12 creature calls (horse, boar/pig,
+sheep, wolf, bear, squirrel, deer, robin, sparrow, kingfisher, honeybee/
+wild_bee sharing one bumblebee recording). A real, hard-won lesson from
+this pass: Commons is thin on isolated Foley-style "footstep on X" or
+"squish" SFX (its strength is longer nature/wildlife field recordings,
+which is why the ambient system sourced so cleanly) — a genuine search
+effort did not turn up a mushroom-crush recording or distinct grass/sand/
+rock/underwater footstep sounds; left as an honest, named gap rather than
+a mismatched stand-in (see `assets/audio/footsteps/CREDITS.md`).
+
+✅ **A second real, hard-won lesson: not every `.ogg`-named Commons upload
+is Ogg Vorbis.** The forest footstep recording's original upload is Ogg
+**FLAC**, which Godot's `ResourceImporterOggVorbis` silently fails to
+decode — confirmed empirically (no `.import` sidecar, no error message
+either) before finding Wikimedia's own auto-generated Vorbis transcode
+(`.../transcoded/.../<file>.ogg.ogg`) and using that instead. Also hit
+Wikimedia's own rate limiting (HTTP 429) mid-batch-download, and a stale
+Godot import-cache state (scan detected 7 changed files but the actual
+reimport step silently no-op'd until both the `.md5` AND `.import`
+sidecars were deleted) — both real, reproducible gotchas worth knowing for
+next time.
+
+✅ **New pure modules, fully TDD'd**: `FootstepSound` (surface
+classification + clip lookup, wider coverage than the visual footprint's
+own `_SURFACE_BY_FOOTSTEP_BIOME`), `CreatureCallSound` (species → clip +
+chance-per-check gate), `InteractionSfxPlayer` (two round-robin voice
+pools — plain `AudioStreamPlayer` for footstep/crush, positional
+`AudioStreamPlayer2D` for creature calls). `EarthChunkManager.
+record_footstep` now returns the real biome/snow/underwater facts behind
+a step (`{}` when none landed) instead of `void`, deliberately NOT an
+audio surface key — world state must not depend on audio, the same
+direction `NatureSoundscapePlayer` already reads world state, never the
+reverse. Confirmed red first for every new module/function (missing
+member/parse errors), green after. `test_footstep_sound.gd` 11/11,
+`test_creature_call_sound.gd` 6/6, `test_interaction_sfx_player.gd` 9/9,
+`test_earth_chunk_manager_footprints.gd` 21/21 (2 new, plus fixed a
+brittle pre-existing comma-count source-text assertion my own refactor
+broke), `test_world_creature_and_footstep_audio_wiring.gd` 6/6 (new
+source-contract file, same shape `test_world_footstep_wiring.gd` already
+uses — `World` is too heavy to stand up live for this).
+
+✅ **Wired into `World._client_process`**: footstep sound rides
+`record_footstep`'s own returned facts (no second gait accumulator);
+mushroom-crush sound fires in the exact same branch that already applies
+the Karma penalty; a new throttled `_maybe_play_creature_calls`
+(`CREATURE_CALL_REFRESH_INTERVAL` := 1s) scans both real species-bearing
+populations — every `CreatureMarker` (land mammals, `.info.species`) and
+every `AmbientFlyerMarker` (birds, reusing its own pre-existing
+`FLOCK_GROUP`, plain `.species`) — no `creature_marker.gd`/
+`ambient_flyer_marker.gd` changes needed at all, honoring this project's
+one explicit rule that a marker's own `_world` reference must never reach
+audio (confirmed via a dedicated research pass before writing any of
+this: every existing marker→world callback lands on plain simulation
+bookkeeping, none reach further into an audio system, and the intended
+direction is the caller — `World`'s own per-frame loop — deciding and
+triggering sound, mirroring `_nature_soundscape.update()` exactly).
+
+✅ **A real, separate ambient-audio responsiveness bug, found and fixed
+in the same pass** (reported live alongside the ask above: "when I walk
+into the water it takes a while before the river wading sound is played
+then it fades out and takes a while again before it loops"). Investigated
+rather than assumed: no dedicated river-proximity ambient layer exists at
+all (already a named gap in `concept/soundscape.md`'s own Status list) —
+the real, confirmed bug was `NatureSoundscapePlayer.update` throttling
+its target-mix recompute UNCONDITIONALLY behind a flat 5-second
+`REFRESH_INTERVAL_SECONDS`, on top of several more real seconds to
+cross-fade, meaning ANY discrete biome/weather transition (not just
+water) could take up to ~10 real seconds to be heard or to fade. Fixed by
+recomputing immediately whenever any of the 5 real inputs actually
+differ from last call, keeping the normal throttle only for genuinely
+unchanged state. `test_nature_soundscape_player.gd` 15/15 (2 new).
+
+⬜ **Honest gaps, named not hidden** (see the concept doc's own Status
+list for the full set): no dedicated grass/sand/rock/underwater footstep
+recording; no mushroom-crush recording (wiring is real, the clip is a
+silent no-op); 13 more real, live species with no call sourced yet
+(camel, reindeer, tapir, goat, lynx, jackal, arctic_fox, jaguar,
+mountain_lion, lion, alpaca, both snake species) — `CreatureCallSound.
+has_call` already gates them to silent, not broken, so this list grows
+without touching the wiring again; no river/lake-proximity ambient layer;
+no fix to `ocean.ogg`'s own rough loop seam (a raw field recording, would
+need real audio-editing tooling this environment doesn't have); and no
+re-architecture of the ambient beds themselves to scale with real nearby
+population counts ("compose the sound from what's actually around you" —
+the new creature-call system is a real, direct step in that exact
+direction for `robin`/`sparrow` specifically, not a full solution to the
+ambient beds' own baked-in decorative bird chorus).
