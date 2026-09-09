@@ -36,6 +36,7 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
+const CicadaMarker = preload("res://src/rendering/cicada_marker.gd")
 const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const BeeHiveMarker = preload("res://src/rendering/bee_hive_marker.gd")
 const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
@@ -2878,6 +2879,15 @@ func _maybe_play_creature_calls(local_player: Player, delta: float) -> void:
 		var distance := local_player.position.distance_to(flyer.position)
 		if CreatureCallSound.check_call(flyer.species, randf(), distance):
 			_interaction_sfx.play_creature_call(flyer.species, flyer.position)
+	# "add them please as real ecosystem member and produce cicada sounds
+	# for each individual" -- a third real, species-bearing population
+	# (tree-anchored, see CicadaMarker/CicadaPopulation), scanned exactly
+	# like the two above rather than a decorative loop bolted on
+	# separately.
+	for cicada in get_tree().get_nodes_in_group(CicadaMarker.GROUP_NAME):
+		var distance := local_player.position.distance_to(cicada.position)
+		if CreatureCallSound.check_call(cicada.species, randf(), distance):
+			_interaction_sfx.play_creature_call(cicada.species, cicada.position)
 
 
 ## Throttled (see CREATURE_PANELS_REFRESH_INTERVAL) rebuild of one HUD panel

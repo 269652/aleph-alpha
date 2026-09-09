@@ -15,7 +15,7 @@ const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 
 
 func test_a_sourced_species_has_a_real_clip_path():
-	for species in ["horse", "robin", "boar", "sparrow"]:
+	for species in ["horse", "robin", "boar", "sparrow", "cicada"]:
 		assert_true(
 			CreatureCallSound.has_call(species), "%s should have a sourced call" % species
 		)

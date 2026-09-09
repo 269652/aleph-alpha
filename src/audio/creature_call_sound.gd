@@ -16,6 +16,11 @@ const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 ## human in reality, so they get no entry here rather than a fabricated
 ## sound just for uniform coverage -- see docs/concept/creature_and_
 ## footstep_audio.md for the species survey this is scoped from.
+## `cicada` is the deliberate exception among insects: real cicadas are
+## among the loudest insects on Earth, easily audible at real distance --
+## exactly the OPPOSITE of the silent-insects reasoning above, not a
+## contradiction of it (see CicadaMarker/CicadaPopulation for the real,
+## tree-anchored, summer-only population this species-key belongs to).
 ##
 ## A species with no real recording sourced yet simply never calls
 ## (silent, not an error) -- graceful partial coverage, matching
@@ -41,6 +46,12 @@ const _CLIP_BY_SPECIES := {
 	# wild bees at this game's scale (see CREDITS.md).
 	"honeybee": "res://assets/audio/creatures/bee.ogg",
 	"wild_bee": "res://assets/audio/creatures/bee.ogg",
+	# A real Cicada orni field recording, NOT one of this table's usual
+	# CreatureMarker/AmbientFlyerMarker populations -- see CicadaMarker/
+	# CicadaPopulation (docs/concept/creature_and_footstep_audio.md's
+	# "Cicadas" section) for the real, tree-anchored, summer-only
+	# population this species-key now belongs to as well.
+	"cicada": "res://assets/audio/creatures/cicada.ogg",
 }
 
 ## Real bird/mammal calls are occasional events, not continuous -- the

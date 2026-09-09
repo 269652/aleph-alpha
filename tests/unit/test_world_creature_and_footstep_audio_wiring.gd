@@ -69,6 +69,16 @@ func test_creature_call_scan_covers_both_creature_and_flyer_populations():
 	assert_true(body.contains("_interaction_sfx.play_creature_call("))
 
 
+## "you can hear cicadas in the environment which don't exist... add them
+## please as real ecosystem member and produce cicada sounds for each
+## individual" -- a third real, species-bearing population (tree-anchored
+## cicadas, see CicadaMarker/CicadaPopulation) must be scanned exactly like
+## the two that already exist, not a decorative loop bolted on separately.
+func test_creature_call_scan_covers_cicadas_too():
+	var body := _function_body("_maybe_play_creature_calls")
+	assert_true(body.contains("CicadaMarker.GROUP_NAME"), "cicadas must be scanned too")
+
+
 func test_creature_call_scan_is_throttled_not_run_every_frame():
 	var body := _function_body("_maybe_play_creature_calls")
 	assert_true(body.contains("CREATURE_CALL_REFRESH_INTERVAL"))

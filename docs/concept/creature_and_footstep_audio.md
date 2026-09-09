@@ -59,7 +59,11 @@ a call) rather than a continuous looping mix.
 - **Which animals get a call is a biology question, not a completeness
   checklist.** Every species that got a real recording here genuinely
   vocalizes; every species left out (insects, fish, butterflies) genuinely
-  doesn't, at a range a nearby player would hear.
+  doesn't, at a range a nearby player would hear. **Cicadas are the
+  deliberate exception among insects** (see "Cicadas" below): among the
+  loudest insects on Earth, easily audible at real distance -- the same
+  biology-first reasoning that excludes ants/decomposer bugs is what
+  includes this one.
 - **A real boar/pig substitution, named, not hidden.** Wild boar and
   domestic pig are the same species (*Sus scrofa*); a clean domestic pig
   grunt stands in for the wild boar call this project doesn't have an
@@ -136,6 +140,90 @@ No distance pre-filter: the call voices are real `AudioStreamPlayer2D`
 instances, so a distant creature already reads quieter via Godot's own
 positional falloff, and the low `CALL_CHANCE_PER_CHECK` already keeps
 this rare regardless of how many creatures are loaded.
+
+### Cicadas
+
+Reported live: *"you can hear cicadas in the environment which don't
+exist... add them please as real ecosystem member and produce cicada
+sounds for each individual."* Investigated rather than assumed: what was
+actually audible was `grassland_day.mp3`, honestly credited in
+`assets/audio/soundscape/CREDITS.md` as "Atmo -- Grillen mit Hummeln"
+(German: crickets with bumblebees) -- a real, correctly-working ambient
+recording doing exactly its documented job, not a bug and not a fake
+cicada sound. But the underlying ask stands on its own real merits: a
+genuine cicada is a real, distinct, famously loud insect this game didn't
+have at all, and `CreatureCallSound`'s own pillar 2 (real vocalizing
+species get a call) applies to it directly -- cicadas are among the
+loudest insects on Earth, the deliberate exception to "insects are
+inaudible to a nearby human" among this doc's own excluded species.
+
+**Real-world grounding decided the shape, not just whether it exists.**
+Nymphs spend years underground; adults emerge for only a few summer weeks
+specifically to cling to one spot on a tree trunk/branch and call loudly
+for a mate, then die -- a real adult cicada never leaves its tree and has
+no other behavior worth simulating. This is genuinely different from
+every other species in this doc: it needed a NEW real population, not
+just a new row in `CreatureCallSound`'s existing table, since no existing
+population (`CreatureMarker` land creatures, `AmbientFlyerMarker` birds/
+butterflies) is stationary/tree-anchored the way a cicada actually is.
+
+**`src/world/cicada_population.gd`** (pure) decides which of a chunk's
+real trees host a calling cicada right now:
+
+- `is_active_in(season) -> bool` -- summer only, the real definitive
+  cicada season.
+- `cicada_tree_indices(tree_count, season, roll_per_tree) -> Array[int]`
+  -- one caller-supplied roll per tree (the same "caller rolls, this pure
+  function decides" split `CreatureCallSound.check_call` already uses),
+  gated first by season then by `TREE_DENSITY` (0.15 -- deliberately
+  sparse: a chorus of dozens of trees at once would be a wall of noise,
+  not the real "your ear picks out an individual cicada or two nearby"
+  experience).
+
+Deliberately NO growth/starvation/persistence economy the way
+`AntColony`/`BeeColony` get: a real adult cicada's whole calling window
+is short enough, and this game's own chunk load/unload cycle frequent
+enough, that a FRESH roll every time a chunk loads is an honest
+simplification of that same short-windowed real presence, not a missing
+feature or a corner cut.
+
+**`src/rendering/cicada_marker.gd`** (`CicadaMarker`, a plain `Node2D`) is
+the real per-individual presence -- `species := "cicada"`, joins the
+`"cicadas"` group on `_ready()`, exactly the shape `World._maybe_play_
+creature_calls` already scans `CreatureMarker.GROUP_NAME`/
+`AmbientFlyerMarker.FLOCK_GROUP` through. No movement, no behavior state
+machine at all -- mirrors `AntQueenMarker`'s own precedent for "a real
+creature that genuinely never moves gets no state machine", rather than
+inheriting `AmbientFlyerMarker`'s flight/foraging machinery a cicada would
+never use. **No dedicated visual art in this pass** -- a real, named,
+deliberately scoped gap: real adult cicadas are famously heard far more
+than seen (excellent bark camouflage), so an audio-only presence this
+pass is an honest match for the real thing, not merely a corner cut. A
+visible cicada (or its real, well-known molted exoskeleton shell) would
+be a welcome, separate visual follow-up.
+
+`EarthChunkManager._dispatch_cicadas(chunk_coord)` rolls once per real
+tree in `_loaded_trees[chunk_coord]` right after that chunk's trees
+finish spawning, and `_spawn_cicadas_for_indices` (split out so a test can
+drive it with a deterministic index list, bypassing the roll --
+mirroring `test_earth_chunk_manager_bees.gd`'s own direct-injection
+precedent for hive/nest placement's identical real-probabilism problem)
+spawns one `CicadaMarker` per qualifying tree, tracked in a new
+`_cicada_markers` dict keyed by chunk coordinate exactly like
+`_loaded_trees`/`_loaded_stones` already are. `_unload_chunk` frees every
+cicada marker for that chunk the identical `for marker in ...get(
+chunk_coord, []): marker.free()` / `...erase(chunk_coord)` discipline
+every other per-chunk marker collection already gets.
+
+`World._maybe_play_creature_calls` gained a third scan loop, over
+`CicadaMarker.GROUP_NAME`, identical in shape to the two that already
+exist -- a real third population, not a decorative loop bolted on
+separately. `CreatureCallSound._CLIP_BY_SPECIES` gained a `"cicada"` entry
+(`assets/audio/creatures/cicada.ogg`, a real *Cicada orni* field recording
+from Southern France, CC BY-SA 2.5 -- see that directory's own
+CREDITS.md), so calling a cicada individual reuses the exact same
+`check_call`/`play_creature_call` proximity-gated mechanism every other
+species already does, not a parallel one invented for this species.
 
 ### Playback
 
@@ -275,10 +363,22 @@ independent recording described above.
 - ⬜ **No mushroom-crush recording** -- wiring is real and complete
   (`InteractionSfxPlayer.play_mushroom_crush()` fires on every real
   crush), but the clip path is honestly empty; a real, silent no-op today.
-- ✅ **12 real, licensed creature calls sourced and wired**: horse, boar
+- ✅ **13 real, licensed creature calls sourced and wired**: horse, boar
   (domestic pig standing in, named above), sheep, wolf, bear, squirrel,
   deer, robin, sparrow, kingfisher, honeybee, wild_bee (the last two share
-  one bumblebee recording).
+  one bumblebee recording), cicada.
+- ✅ **Cicadas are a real, new tree-anchored population, not just a
+  `CreatureCallSound` table row** (see "Cicadas" above) -- reported live:
+  "you can hear cicadas in the environment which don't exist... add them
+  please as real ecosystem member and produce cicada sounds for each
+  individual." `CicadaPopulation` (pure, season+density-gated) +
+  `CicadaMarker` (a real, minimal, per-individual presence, no movement/
+  behavior) + `EarthChunkManager._dispatch_cicadas`/`_spawn_cicadas_for_
+  indices`, scanned by `World._maybe_play_creature_calls`'s new third
+  loop exactly like the two existing populations. **No dedicated visual
+  art in this pass** -- a real, named, deliberately scoped gap (real
+  adult cicadas are famously heard far more than seen), not silently
+  decided.
 - ⬜ **Remaining implemented-but-unsourced species**: camel, reindeer,
   tapir, goat, lynx, jackal, arctic_fox, jaguar, mountain_lion, lion,
   alpaca, nonvenomous_snake, venomous_snake -- real, live species in the

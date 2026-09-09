@@ -18908,3 +18908,57 @@ hide call), green after. Regression-checked:
 `test_world_play_intro_splash_frame_gate.gd` 3/3, `test_loading_
 overlay.gd` 2/2 — this pass only adds calls to `_ready()`, it never
 reorders anything either of those already pins.
+
+## Cicadas: a real, tree-anchored population with real per-individual calls (`concept/creature_and_footstep_audio.md`, "Cicadas", 2026-09-09)
+
+Reported live: "you can hear cicadas in the environment which don't
+exist... add them please as real ecosystem member and produce cicada
+sounds for each individual." Investigated first: what was actually
+audible was `grassland_day.mp3`, honestly credited as "Grillen mit
+Hummeln" (crickets with bumblebees) — a real, correctly-working ambient
+recording, not a bug or a fake cicada. The underlying ask stands on its
+own real merits regardless: cicadas are among the loudest insects on
+Earth, the deliberate exception to `CreatureCallSound`'s own "insects are
+inaudible to a human" exclusion rule.
+
+Real-world grounding decided the shape: adults emerge only in summer, and
+a real adult clings to one spot on its tree for its whole (few-week) life
+and never leaves — genuinely different from every other species here,
+needing a NEW tree-anchored population rather than just a new
+`CreatureCallSound` row, since neither existing population
+(`CreatureMarker` land creatures, `AmbientFlyerMarker` birds) is
+stationary the way a cicada actually is.
+
+**New:** `CicadaPopulation` (pure — season+density gate, `TREE_DENSITY`
+0.15, deliberately sparse), `CicadaMarker` (a real per-individual
+presence, `species := "cicada"`, no movement/behavior state machine at
+all — mirrors `AntQueenMarker`'s "never moves, no state machine"
+precedent). `EarthChunkManager._dispatch_cicadas`/`_spawn_cicadas_for_
+indices` spawn one marker per qualifying real tree on chunk load, tracked
+in a new `_cicada_markers` dict and freed on unload — the identical
+discipline `_loaded_trees`/`_loaded_stones` already get. `World._maybe_
+play_creature_calls` gained a third scan loop (`CicadaMarker.GROUP_NAME`)
+identical in shape to the two that already exist.
+
+Real audio sourced, not fabricated: `cicada.ogg`, a genuine *Cicada orni*
+field recording (Southern France, CC BY-SA 2.5, via Wikimedia Commons —
+this project's established sourcing convention), added to
+`CreatureCallSound._CLIP_BY_SPECIES` so a cicada individual reuses the
+exact same `check_call`/`play_creature_call` proximity-gated mechanism
+every other species already does.
+
+**No dedicated visual art in this pass** — a real, named, deliberately
+scoped gap: real adult cicadas are famously heard far more than seen
+(excellent bark camouflage), so an audio-only presence is an honest match
+for the real thing here, not a corner cut silently taken.
+
+TDD: `test_cicada_population.gd` (6/6, pure density/season logic),
+`test_cicada_marker.gd` (2/2), `test_earth_chunk_manager_cicadas.gd`
+(3/3, using `_load_chunk` directly per this file's own known-slow-`
+update()` convention, with the real per-tree roll bypassed via a
+deterministic direct call mirroring `test_earth_chunk_manager_bees.gd`'s
+own hive-placement precedent for the identical real-probabilism problem),
+plus extensions to `test_creature_call_sound.gd` and `test_world_
+creature_and_footstep_audio_wiring.gd` — all confirmed red first (the two
+new files failed to even compile against not-yet-existing classes, the
+extensions failed their specific new assertions).

@@ -88,6 +88,8 @@ const BeeHiveMarker = preload("res://src/rendering/bee_hive_marker.gd")
 const BeeForagerMarker = preload("res://src/rendering/bee_forager_marker.gd")
 const WildBeePatch = preload("res://src/world/wild_bee_patch.gd")
 const WildBeeNestMarker = preload("res://src/rendering/wild_bee_nest_marker.gd")
+const CicadaPopulation = preload("res://src/world/cicada_population.gd")
+const CicadaMarker = preload("res://src/rendering/cicada_marker.gd")
 const LeafLitterField = preload("res://src/world/leaf_litter_field.gd")
 const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd")
 const FootstepGait = preload("res://src/gameplay/footstep_gait.gd")
@@ -486,6 +488,11 @@ var _decoration_radius := 1
 var _decoration_dirty := true
 var _loaded_trees: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_stones: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
+## See CicadaPopulation/CicadaMarker (docs/concept/creature_and_footstep_
+## audio.md's "Cicadas" section) -- one CicadaMarker per real tree that
+## rolled a hit this chunk load, tree-anchored the same way _loaded_trees
+## itself is keyed.
+var _cicada_markers: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 
 # -- geology (see docs/concept/geology.md) -----------------------------------
 # Per-chunk topsoil/regolith Strata sim (kept for the chunk's lifetime, so a
@@ -7231,6 +7238,42 @@ func trees_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 	return out
 
 
+## Rolls, once per real tree this chunk just loaded, whether it hosts a
+## calling cicada right now (see CicadaPopulation's own doc comment for
+## why a fresh roll per load -- not a persisted, growing/starving
+## population like AntColony/BeeColony -- is an honest match for a real
+## adult cicada's own short calling window). One roll per tree, same index
+## order _loaded_trees[chunk_coord] already uses.
+func _dispatch_cicadas(chunk_coord: Vector2i) -> void:
+	var trees: Array = _loaded_trees.get(chunk_coord, [])
+	var rolls: Array[float] = []
+	for i in trees.size():
+		rolls.append(randf())
+	_spawn_cicadas_for_indices(
+		chunk_coord, trees, CicadaPopulation.cicada_tree_indices(trees.size(), current_season(), rolls)
+	)
+
+
+## The real spawn glue -- separated from _dispatch_cicadas so a test can
+## drive it with a deterministic index list, bypassing the roll entirely
+## (mirrors test_earth_chunk_manager_bees.gd's own direct-injection
+## precedent for hive/nest placement's identical real-probabilism problem).
+## Skips a felled tree (a stump is not a perch, the same real distinction
+## trees_near's own felled-tree filter already draws) rather than anchoring
+## a cicada to one.
+func _spawn_cicadas_for_indices(chunk_coord: Vector2i, trees: Array, indices: Array[int]) -> void:
+	var markers: Array = []
+	for i in indices:
+		var tree = trees[i]
+		if not is_instance_valid(tree) or tree.is_felled():
+			continue
+		var marker := CicadaMarker.new()
+		marker.position = tree.position
+		_entities_parent.add_child(marker)
+		markers.append(marker)
+	_cicada_markers[chunk_coord] = markers
+
+
 ## Records a bee's visit to the blossoming tree at `tree_position` (see
 ## ChoppableTree.record_pollination_visit / FruitingModel.pollination_factor)
 ## -- the tree-side counterpart of drink_nectar_at. Returns whether a tree was
@@ -11342,6 +11385,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_loaded_trees[chunk_coord].append(
 			_tree_renderer.spawn_tree_at(_entities_parent, record.position, sapling_age)
 		)
+	_dispatch_cicadas(chunk_coord)
 
 	_loaded_stones[chunk_coord] = _stone_renderer.spawn_stones(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
@@ -12077,6 +12121,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for tree in _loaded_trees.get(chunk_coord, []):
 		tree.free()
 	_loaded_trees.erase(chunk_coord)
+
+	for marker in _cicada_markers.get(chunk_coord, []):
+		marker.free()
+	_cicada_markers.erase(chunk_coord)
 
 	for stone in _loaded_stones.get(chunk_coord, []):
 		stone.free()

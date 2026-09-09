@@ -1,11 +1,12 @@
 # Creature call SFX credits
 
-All 11 files in this directory are sourced from [Wikimedia Commons](https://commons.wikimedia.org)
+All 12 files in this directory are sourced from [Wikimedia Commons](https://commons.wikimedia.org)
 (direct `upload.wikimedia.org` links, downloaded 2026-09-09), the same
 sourcing convention `assets/audio/soundscape/CREDITS.md` already
-established. Six (deer/robin/sparrow -- the British Library's own Wildlife
-Sounds collection) are CC BY-SA and credited here to satisfy that license;
-horse/wolf are public domain; the rest are CC BY / CC0. See
+established. Five (deer/robin/sparrow/kingfisher -- the British Library's
+own Wildlife Sounds collection, plus cicada) are CC BY-SA and credited
+here to satisfy that license; horse/wolf are public domain; the rest are
+CC BY / CC0. See
 `docs/concept/creature_and_footstep_audio.md` for the species this covers,
 which species were deliberately left out (silent-to-a-human-in-reality
 insects/fish/butterflies), and the real substitutions noted below.
@@ -23,6 +24,7 @@ insects/fish/butterflies), and the real substitutions noted below.
 | `sparrow.ogg` | sparrow | [House Sparrows (Passer domesticus) (W1CDR0001537 BD13).ogg](https://commons.wikimedia.org/wiki/File:House_Sparrows_(Passer_domesticus)_(W1CDR0001537_BD13).ogg) | Aubrey John Williams / British Library | CC BY-SA 4.0 |
 | `kingfisher.mp3` | kingfisher | [Alcedo atthis - Common Kingfisher XC476785.mp3](https://commons.wikimedia.org/wiki/File:Alcedo_atthis_-_Common_Kingfisher_XC476785.mp3) | Marie-Lan Taÿ Pamart (via xeno-canto) | CC BY-SA 4.0 |
 | `bee.ogg` | honeybee, wild_bee | [Hummel bee.ogg](https://commons.wikimedia.org/wiki/File:Hummel_bee.ogg) | soerena | Public domain |
+| `cicada.ogg` | cicada | [Cicada orni (Singing).ogg](https://commons.wikimedia.org/wiki/File:Cicada_orni_(Singing).ogg) | Travus | CC BY-SA 2.5 |
 
 ## Real-world substitutions (named, not silent)
 
