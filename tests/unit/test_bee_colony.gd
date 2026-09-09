@@ -548,3 +548,28 @@ func test_should_forage_rolls_both_outcomes_across_many_hives():
 			results[colony.should_forage(cell)] += 1
 	assert_gt(results[true], 0)
 	assert_gt(results[false], 0)
+
+
+# -- retirement: EarthChunkManager._unload_chunk marks a colony retired, ---
+# -- so a still-in-flight BeeForagerMarker can notice its own hive's ------
+# -- chunk is gone rather than silently depositing into an orphaned object -
+#
+# A forager holds a direct RefCounted reference to its own BeeColony (see
+# BeeForagerMarker._colony's own doc comment), set once at dispatch --
+# unlike the marker itself, a chunk unloading does NOT free this object
+# (EarthChunkManager._unload_chunk only erases its OWN _bee_colonies
+# dictionary entry; the forager's own reference count keeps the object
+# alive regardless). Without a real signal to notice this, the forager's
+# eventual record_forage_result call would resolve against this exact
+# same, now-abandoned object -- see docs/concept/bees.md's "In-flight
+# foragers survive an unload; their trip's outcome does not".
+
+func test_a_fresh_colony_is_not_retired():
+	var colony := _colony_with_one_hive()
+	assert_false(colony.is_retired())
+
+
+func test_mark_retired_makes_is_retired_true():
+	var colony := _colony_with_one_hive()
+	colony.mark_retired()
+	assert_true(colony.is_retired())

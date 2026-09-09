@@ -270,3 +270,25 @@ func test_warming_soil_rehatches_a_dormant_nests_residents_from_its_banked_brood
 		patch.residents_at(cell), grown_residents, 0.01,
 		"spring re-hatch should inherit exactly how good last season was, not a fixed reset"
 	)
+
+
+# -- retirement: EarthChunkManager._unload_chunk marks a patch retired, ----
+# -- so a still-in-flight BeeForagerMarker can notice its own nest's ------
+# -- chunk is gone rather than silently touching an orphaned object --------
+#
+# Mirrors test_bee_colony.gd's own identical "retirement" section exactly
+# -- see that section's own doc comment, and docs/concept/bees.md's
+# "In-flight foragers survive an unload; their trip's outcome does not".
+# WildBeePatch gets its own duplicate flag/methods rather than sharing
+# BeeColony's, the same "no shared base class" choice this whole file's
+# own header doc comment already makes for every other mechanism.
+
+func test_a_fresh_patch_is_not_retired():
+	var patch := _patch_with_one_nest()
+	assert_false(patch.is_retired())
+
+
+func test_mark_retired_makes_is_retired_true():
+	var patch := _patch_with_one_nest()
+	patch.mark_retired()
+	assert_true(patch.is_retired())
