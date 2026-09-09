@@ -15,6 +15,7 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const FootstepGait = preload("res://src/gameplay/footstep_gait.gd")
 const FootprintField = preload("res://src/world/footprint_field.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
 
 var manager: EarthChunkManager
 var tile_map_layer: TileMapLayer
@@ -330,3 +331,101 @@ func test_step_footprints_ages_a_field_towards_pruning():
 	manager._world_age_seconds = FootprintField.LIFETIME_SECONDS + 1.0
 	manager.step_footprints()
 	assert_eq(field.count(), 0)
+
+
+# -- record_footstep: an optional per-walker gait + real mass, so a real ---
+# -- CreatureMarker (not just the player) can leave a real, mass-scaled ---
+# -- print of its own -- see docs/concept/snow_cover.md's "Footprints -----
+# -- depend on real mass, not just surface" --------------------------------
+
+## A real grass/forest, snow-free centre-chunk pixel to stamp a print into
+## -- shared by every size_scale test below, all of which need a REAL
+## print actually written (not just footstep_surface_for's own pure
+## logic) to inspect its own size_scale. Vector2(NAN, NAN) if this run's
+## real biome/season doesn't cooperate -- callers pass_test() out
+## honestly, mirroring test_walking_a_full_stride_places_one_print's own
+## established acceptance of real, probabilistic terrain in this exact
+## file.
+func _real_footprint_pixel_or_nan() -> Vector2:
+	var centre_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + Vector2i(
+		EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2
+	)
+	var biome := manager.biome_at_global(centre_tile.x, centre_tile.y)
+	if not ["grassland", "forest"].has(biome) or manager.snow_depth() > 0.0:
+		return Vector2(NAN, NAN)
+	return _pixel_for(centre_tile)
+
+
+## The default (no gait/mass arguments at all) must keep matching TODAY's
+## own fixed player print size exactly -- every pre-existing 2-arg call
+## site across the whole project (this file's own tests above included)
+## is unaffected by this feature.
+func test_record_footstep_with_no_gait_or_mass_matches_the_players_own_default_size():
+	manager._load_chunk(_berlin_chunk)
+	var pixel := _real_footprint_pixel_or_nan()
+	if is_nan(pixel.x):
+		pass_test("precondition unmet (this chunk's real biome/season this run isn't grass/forest snow-free) -- nothing to check")
+		return
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	manager.record_footstep(pixel + step, Vector2.UP)
+	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
+	assert_almost_eq(
+		field.prints()[0].size_scale, 1.0, 0.001,
+		"the default (no gait/mass args) must still match today's own player-sized print exactly"
+	)
+
+
+func test_record_footstep_accepts_an_external_gait_and_scales_by_the_real_mass_given():
+	manager._load_chunk(_berlin_chunk)
+	var pixel := _real_footprint_pixel_or_nan()
+	if is_nan(pixel.x):
+		pass_test("precondition unmet (this chunk's real biome/season this run isn't grass/forest snow-free) -- nothing to check")
+		return
+	var creature_gait := FootstepGait.new()
+	manager.record_footstep(pixel, Vector2.UP, creature_gait, 500.0)  # horse-scale mass, baseline
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	manager.record_footstep(pixel + step, Vector2.UP, creature_gait, 500.0)
+	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
+	assert_eq(field.count(), 1)
+	var expected := CreatureMass.linear_scale_for_mass_ratio(500.0, CreatureMass.PLAYER_MASS_KG)
+	assert_almost_eq(field.prints()[0].size_scale, expected, 0.001)
+
+
+## Two different gait objects (the player's own internal one, and a
+## creature's own external one passed in) must never share stride-
+## accumulator state -- a real second walker's own steps are completely
+## independent of the player's own.
+func test_a_second_gait_tracks_its_own_independent_stride_state():
+	manager._load_chunk(_berlin_chunk)
+	var pixel := _pixel_for(_berlin_tile)
+	# The player's own internal gait already walked most of a stride (its
+	# own accumulator is now mid-stride) -- a FRESH creature gait right
+	# after must still need its OWN full stride before its first step, not
+	# inherit the player's own partial progress.
+	manager.record_footstep(pixel, Vector2.UP)
+	manager.record_footstep(pixel + Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX * 0.9), Vector2.UP)
+	var creature_gait := FootstepGait.new()
+	var result := manager.record_footstep(pixel, Vector2.UP, creature_gait, CreatureMass.PLAYER_MASS_KG)
+	assert_eq(result, {}, "a fresh creature gait's own first call is only a baseline, regardless of the player's own progress")
+
+
+func test_a_heavier_creature_leaves_a_larger_print_than_a_lighter_one():
+	manager._load_chunk(_berlin_chunk)
+	var pixel := _real_footprint_pixel_or_nan()
+	if is_nan(pixel.x):
+		pass_test("precondition unmet (this chunk's real biome/season this run isn't grass/forest snow-free) -- nothing to check")
+		return
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	var mouse_gait := FootstepGait.new()
+	manager.record_footstep(pixel, Vector2.UP, mouse_gait, 0.02)
+	manager.record_footstep(pixel + step, Vector2.UP, mouse_gait, 0.02)
+	var horse_gait := FootstepGait.new()
+	manager.record_footstep(pixel, Vector2.UP, horse_gait, 500.0)
+	manager.record_footstep(pixel + step, Vector2.UP, horse_gait, 500.0)
+	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
+	assert_eq(field.count(), 2)
+	assert_lt(
+		field.prints()[0].size_scale, field.prints()[1].size_scale,
+		"the horse's own print should read larger than the mouse's"
+	)

@@ -98,3 +98,33 @@ func test_a_caterpillar_is_tiny_and_lighter_than_a_mouse():
 	assert_gt(CreatureMass.mass_kg_for("caterpillar"), 0.0)
 	assert_gt(CreatureMass.mass_kg_for("caterpillar"), CreatureMass.mass_kg_for("ant"))
 	assert_lt(CreatureMass.mass_kg_for("caterpillar"), CreatureMass.mass_kg_for("mouse"))
+
+
+# -- linear_scale_for_mass_ratio: the inverse of _mass_from_world_scale's --
+# -- own real cube-of-a-linear-dimension relationship, applied to a --------
+# -- different consequence of mass -- how big a mark a creature's own -----
+# -- foot leaves (see docs/concept/snow_cover.md's "Footprints depend on --
+# -- real mass, not just surface") -----------------------------------------
+
+func test_linear_scale_for_mass_ratio_is_one_at_the_reference_mass():
+	assert_almost_eq(CreatureMass.linear_scale_for_mass_ratio(70.0, 70.0), 1.0, 0.001)
+
+
+## 8x the reference mass should read as exactly 2x the LINEAR scale --
+## 2^3 = 8 -- the real cube relationship, not a linear or arbitrary one.
+func test_linear_scale_for_mass_ratio_is_the_cube_root_of_the_mass_ratio():
+	assert_almost_eq(CreatureMass.linear_scale_for_mass_ratio(560.0, 70.0), 2.0, 0.001)
+
+
+func test_linear_scale_for_mass_ratio_shrinks_for_a_lighter_creature():
+	assert_lt(CreatureMass.linear_scale_for_mass_ratio(1.0, 70.0), 1.0)
+
+
+func test_linear_scale_for_mass_ratio_grows_for_a_heavier_creature():
+	assert_gt(CreatureMass.linear_scale_for_mass_ratio(500.0, 70.0), 1.0)
+
+
+func test_linear_scale_for_mass_ratio_never_crashes_on_a_zero_or_negative_input():
+	assert_eq(CreatureMass.linear_scale_for_mass_ratio(0.0, 70.0), 0.0)
+	assert_eq(CreatureMass.linear_scale_for_mass_ratio(-5.0, 70.0), 0.0)
+	assert_eq(CreatureMass.linear_scale_for_mass_ratio(70.0, 0.0), 0.0)

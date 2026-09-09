@@ -5366,6 +5366,23 @@ func _client_process(delta: float) -> void:
 	# last-processed creature happens to be standing.
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		_chunk_manager.tread_snow_at(creature.position, false)
+	# Every individually-simulated creature leaves a real, mass-scaled
+	# footprint of its own too -- asked directly: footprints should depend
+	# on an animal's real mass and the ground, "much like all other
+	# mechanics do" (see docs/concept/snow_cover.md's "Footprints depend
+	# on real mass, not just surface"). Reverses this feature's own
+	# original player-only scope, the same way the crush pass below it
+	# already covers every creature, not just the player. Each creature's
+	# OWN lazily-built FootstepGait (never shared -- see that accessor's
+	# own doc comment) keeps its stride accumulator independent of every
+	# other walker's, and its OWN real, live current_mass_kg() (see
+	# docs/concept/metabolism.md) is what actually sizes the print --
+	# visual-only, no footstep SOUND per creature (a real, separate,
+	# spatial per-creature audio system this doesn't open, unlike the
+	# player's own single _interaction_sfx emitter above).
+	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		var footstep_marker := creature as CreatureMarker
+		_chunk_manager.record_footstep(footstep_marker.position, footstep_marker.facing_direction(), footstep_marker.footstep_gait(), footstep_marker.current_mass_kg())
 	# Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
 	# weight-emergent worm mortality" and its "Generalized to caterpillars
 	# too"/"Generalized to millipedes too"/"Generalized to ants too"/

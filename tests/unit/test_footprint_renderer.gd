@@ -12,6 +12,7 @@ extends GutTest
 ## packing has to be (see test_leaf_litter_renderer.gd's own doc comment).
 
 const FootprintRenderer = preload("res://src/rendering/footprint_renderer.gd")
+const ProceduralFootprintSprite = preload("res://src/rendering/procedural_footprint_sprite.gd")
 
 var renderer: FootprintRenderer
 var parent: Node2D
@@ -25,6 +26,12 @@ func before_each():
 
 func _print(position: Vector2, side: String, surface: String, heading: Vector2) -> Dictionary:
 	return {"position": position, "side": side, "surface": surface, "heading": heading, "spawned_at": 0.0}
+
+
+func _print_sized(position: Vector2, side: String, surface: String, heading: Vector2, size_scale: float) -> Dictionary:
+	var p := _print(position, side, surface, heading)
+	p["size_scale"] = size_scale
+	return p
 
 
 func test_build_multimeshes_makes_one_per_real_surface():
@@ -74,3 +81,35 @@ func test_refilling_replaces_the_previous_contents_rather_than_appending():
 	renderer.fill(mmis, [_print(Vector2.ZERO, "right", "snow", Vector2.UP)])
 	renderer.fill(mmis, [_print(Vector2.ZERO, "right", "snow", Vector2.UP), _print(Vector2(1, 1), "left", "snow", Vector2.UP)])
 	assert_eq(mmis["snow"].multimesh.instance_count, 2)
+
+
+# -- size_scale: a heavier creature's print renders larger, a lighter -----
+# -- one's smaller (see docs/concept/snow_cover.md's "Footprints depend ---
+# -- on real mass, not just surface") -- pure transform math, directly ----
+# -- testable headlessly without the real-GPU MultiMesh readback ----------
+# -- test_footprint_renderer_smoke.gd's own position/rotation/mirror ------
+# -- tests need (see that file's own doc comment on why: this reads the ---
+# -- Transform2D _transform_for itself RETURNS, never round-tripping it ---
+# -- through a MultiMesh at all).
+
+func test_transform_for_scales_by_the_prints_own_size_scale():
+	var p := _print_sized(Vector2.ZERO, "right", "snow", Vector2.UP, 2.0)
+	var xform: Transform2D = renderer._transform_for(p)
+	var expected := ProceduralFootprintSprite.PRINT_WORLD_SCALE * 2.0
+	assert_almost_eq(xform.basis_xform(Vector2.RIGHT).length(), expected, 0.001)
+
+
+func test_transform_for_shrinks_for_a_smaller_size_scale():
+	var p := _print_sized(Vector2.ZERO, "right", "snow", Vector2.UP, 0.25)
+	var xform: Transform2D = renderer._transform_for(p)
+	var expected := ProceduralFootprintSprite.PRINT_WORLD_SCALE * 0.25
+	assert_almost_eq(xform.basis_xform(Vector2.RIGHT).length(), expected, 0.001)
+
+
+## Every pre-existing print dict (no "size_scale" key at all, like every
+## helper call above this section) must keep rendering at exactly today's
+## fixed size.
+func test_transform_for_defaults_size_scale_to_one_with_no_size_scale_key():
+	var p := _print(Vector2.ZERO, "right", "snow", Vector2.UP)
+	var xform: Transform2D = renderer._transform_for(p)
+	assert_almost_eq(xform.basis_xform(Vector2.RIGHT).length(), ProceduralFootprintSprite.PRINT_WORLD_SCALE, 0.001)

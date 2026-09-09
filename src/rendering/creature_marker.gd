@@ -30,6 +30,7 @@ const GrazerForaging = preload("res://src/gameplay/grazer_foraging.gd")
 const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
 const Metabolism = preload("res://src/gameplay/metabolism.gd")
+const FootstepGait = preload("res://src/gameplay/footstep_gait.gd")
 const MushroomEffect = preload("res://src/gameplay/mushroom_effect.gd")
 const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
@@ -578,6 +579,36 @@ func setup(world, tile_size: int) -> void:
 ## instance exists.
 func current_mass_kg() -> float:
 	return _ensure_metabolism().current_mass_kg
+
+
+## This creature's own real, currently-facing travel direction -- reads
+## _last_gated_heading (see that field's own doc comment: "the heading
+## this creature last actually advanced along... ZERO whenever it last
+## stood still"), a new public accessor mirroring Player.facing_
+## direction()'s own identical role, added FOR the identical reason: see
+## EarthChunkManager.record_footstep, which needs a real travel heading to
+## orient a footprint's own left/right offset perpendicular to (see
+## FootstepGait.print_offset). A fresh/stationary creature reads
+## Vector2.ZERO -- print_offset's own existing fallback already handles
+## that safely, the same contract the player's own facing_direction()
+## already has.
+func facing_direction() -> Vector2:
+	return _last_gated_heading
+
+
+## This creature's own lazily-built FootstepGait -- one per creature (see
+## _ensure_metabolism's own identical "one object, built on first real
+## use" shape for mass), so a real per-CreatureMarker footprint (see
+## EarthChunkManager.record_footstep) tracks its OWN continuous stride
+## accumulator, completely independent of the player's own or any other
+## creature's -- never a fresh FootstepGait per call, which would reset
+## the stride accumulator every frame and never let a real step fire.
+var _footstep_gait: FootstepGait = null
+
+func footstep_gait() -> FootstepGait:
+	if _footstep_gait == null:
+		_footstep_gait = FootstepGait.new()
+	return _footstep_gait
 
 
 ## Builds this creature's own Metabolism instance the first time anything
