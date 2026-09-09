@@ -744,6 +744,102 @@ bug. `test_intro_splash.gd` 13/13, `test_world_play_intro_splash_frame_
 gate.gd` 3/3, `test_world_intro_splash_after_load_fanout.gd` 5/5 -- no
 regression in any of the eight prior passes' timing/gating/sizing fixes.
 
+### A tenth pass: the character creator's class-icon build learned to yield (2026-09-09)
+
+The sixth pass deferred WHEN `MainMenu`'s character creator gets built
+(first navigation, not eager `_ready()`), cutting `_show_main_menu()`
+from 13.5s to 38ms, but said so explicitly at the time: "no
+yield-splitting was added to the build itself, only a deferral of WHEN it
+runs... a player who does click through still meets a real, unyielded
+pause." This pass closes the largest of the three named costs that
+deferral left untouched.
+
+**Scoped deliberately, not a full rewrite.** The sixth pass named three
+costs inside the creator build: 7 procedural class-icon portraits, the
+live diorama `SubViewport` scene, and the skill web. Rather than
+restructure the whole 5-level `_open_create_screen` ->
+`_ensure_create_screen_built` -> `_build_create_screen` ->
+`_build_character_tab` -> `_build_hero_column` call chain into a
+cascading coroutine (touching every UI-construction function and risking
+all ~75 of `test_main_menu.gd`'s existing structural assertions), this
+pass targets ONLY the icon generation -- the one cost with both a clean
+existing seam (`_class_icon_texture`'s own per-archetype cache, already
+idempotent) and a decomposable shape (7 independent units of real work,
+exactly the pattern `IllustratedMushroomSprite.warm_cache` and
+`EarthChunkManager.update_with_progress` already established for). The
+diorama and skill web are honestly NOT yield-split by this pass -- see
+Status below.
+
+**The fix:** a new `_warm_class_icon_cache(on_progress: Callable =
+Callable())`, called and `await`ed by `_ensure_create_screen_built`
+BEFORE the existing, UNCHANGED, fully-synchronous `_build_create_screen`
+runs -- by the time that synchronous build reaches each archetype's own
+`_class_icon_texture` call, the cache is already warm, so that portion of
+the build is a fast hit rather than a fresh `generate_hero_portrait_
+texture` call. `_class_icon_texture` itself stays untouched and
+synchronous (the live `_build_class_card` caller still needs a texture
+back immediately) -- only the warming PASS yields, the same "cache-check
+identical either way, only warming learns to wait" split this codebase's
+other two warm-cache passes already used.
+
+**Coroutine-ifying `_ensure_create_screen_built`/`_open_create_screen`
+had a real, bounded blast radius, checked before writing a single line:**
+grep confirmed exactly 5 call sites in the whole codebase -- the New
+Game/Host Game button callbacks (fire-and-forget already; calling a
+coroutine without awaiting it is valid GDScript and needs no change) and
+`test_main_menu.gd`'s own `before_each`/`_rebuild_menu_with_a_save`
+fixtures (GUT already awaits `before_each` internally -- confirmed by
+reading `gut.gd` directly rather than assuming -- so async lifecycle
+hooks are natively supported). The one real risk found: several tests
+fired a button's `pressed` signal and asserted on `_create_screen`
+immediately, same line, no yield -- correct against the old synchronous
+function, but `.pressed.emit()` only runs a coroutine handler up to its
+first real suspension point, not to completion. Fixed by inserting
+`await wait_process_frames(10)` (a safe margin over the 7 real yields a
+cold cache needs) after every such emit.
+
+**Verified two ways.** GUT: 3 new tests in `test_main_menu.gd` --
+`test_warm_class_icon_cache_fills_a_cold_cache_for_every_archetype`,
+`test_warm_class_icon_cache_reports_real_progress_from_zero_to_the_true_
+total` (the same "0 before any work, one call per unit done, ending at
+(total, total)" contract `warm_cache`'s own test already pins), and
+`test_warm_class_icon_cache_skips_an_already_warm_archetype` (a FRESH
+menu instance, not the shared fixture -- `before_each` already warms
+every archetype in full, so isolating "only one archetype starts warm"
+needed its own un-navigated instance rather than an incidental fixture
+side effect). All 75 tests in the file re-run clean, including the one
+pre-existing, already-documented, unrelated failure (`test_the_diorama_
+fits_within_the_first_unscrolled_view_of_the_character_tab`) staying
+exactly as it was.
+
+Live: an env-var-gated autopilot (mirroring the fourth pass's own
+technique) drove a real, non-headless New Game click, external `(Get-
+Process -Id <pid>).Responding` polling every 300ms throughout. Result:
+~8.1s of `False` (the boot's own still-real, separately-tracked heavy
+setup, unrelated to this pass), then **`True` continuously for the
+entire remaining ~37s window this pass's own observation covered** --
+long enough to include not just the yield-split icon warming but the
+UNTOUCHED, still-fully-synchronous diorama and skill-web construction
+after it. Windows' own unresponsive-window timeout is a rolling
+no-message-pumped clock, not a total-time budget -- breaking up the
+LARGEST cost into yielded chunks is enough to keep resetting that clock
+through the smaller, still-synchronous costs sitting right after it,
+even without yield-splitting those too. A screenshot taken 2 frames after
+the build finished confirmed the creator itself: all 7 class icons real
+and distinct, the live diorama rendering, the appearance panel fully
+populated -- not just "didn't freeze," genuinely correct.
+
+**Honest scope note, same discipline as the sixth pass's own:** the
+diorama `SubViewport` scene and skill web construction are NOT
+yield-split by this pass -- the live measurement above suggests they may
+not currently need to be (the window never actually flagged unresponsive
+across the whole observed build), but that is a fact about THIS
+machine's relative timing between "icon warming resets the clock" and
+"remaining synchronous work completes," not a structural guarantee. A
+slower machine, or either of those two costs growing independently in
+the future, could reopen exactly the gap this pass closes for the icon
+row specifically.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
@@ -837,6 +933,26 @@ regression in any of the eight prior passes' timing/gating/sizing fixes.
   again: "it should be much smaller." Fixes the OTHER half of "pixelated
   and wobbly" the seventh pass's box-shrink alone didn't touch -- the
   missing `NEAREST` filter. See "An eighth pass" above.
+- ✅ **Revised (2026-09-09, "A ninth pass"): skip-on-any-key ignores a
+  lone `KEY_SHIFT`/`KEY_CTRL`/`KEY_ALT`/`KEY_META` press.** Flagged since
+  the fifth pass, actioned once the intro's own visual stability was
+  independently re-confirmed live: an incidental alt-tab during the long
+  boot wait used to skip the intro just like a real key. A real key
+  pressed while a modifier is held (Alt+Space) is untouched. See "A ninth
+  pass" above.
+- ✅ **Revised (2026-09-09, "A tenth pass"): the sixth pass's own
+  remaining ~11.8s New Game/Host Game cost is partially yield-split, not
+  just deferred.** The largest of its three named costs (7 procedural
+  class-icon portraits) now warms via a yielded pass
+  (`MainMenu._warm_class_icon_cache`) before the existing synchronous
+  build runs, mirroring `warm_cache`/`update_with_progress`'s own
+  established shape. Live: `(Get-Process).Responding` stayed `True`
+  continuously through the ENTIRE observed creator-build window (~37s),
+  including the still-untouched, still-synchronous diorama/skill-web
+  construction after it — breaking up the largest cost was enough to
+  keep resetting Windows' own unresponsive-window clock through the
+  smaller costs sitting right after. See "A tenth pass" above for why the
+  diorama/skill web are honestly NOT yield-split by this pass.
 - ⬜ No audio. A logo intro without a sting/whoosh is a real, honest gap
   (this project has no music/SFX system wired up to hook into yet at
   all), not something this pass attempts.

@@ -411,9 +411,12 @@ func _build_root_screen() -> Control:
 ## on first use, then shows it -- every subsequent call just shows the
 ## already-built screen. Kept separate from _ensure_create_screen_built so a
 ## future caller that needs the screen built WITHOUT also switching to it
-## (none exists yet) has a seam to call instead.
+## (none exists yet) has a seam to call instead. A coroutine now (see that
+## function's own doc comment on why) -- fine to fire-and-forget from the
+## New Game/Host Game button callbacks exactly as before, since neither
+## needs anything back from it.
 func _open_create_screen() -> void:
-	_ensure_create_screen_built()
+	await _ensure_create_screen_built()
 	_show(_create_screen)
 
 
@@ -428,9 +431,19 @@ func _open_create_screen() -> void:
 ## Idempotent: a second New Game/Host Game click, or returning from the
 ## overwrite-confirm screen, must not rebuild it -- _create_screen itself is
 ## the guard, exactly like _class_icon_texture's own per-archetype cache.
+##
+## Now AWAITS _warm_class_icon_cache() first (see that function's own doc
+## comment): the sixth pass deferred WHEN this whole cost runs but left it
+## "no yield-splitting was added to the build itself" as an explicit,
+## named, deliberately-deferred gap -- a real, non-headless, before/after
+## measurement of the largest of the three named costs (the 7 procedural
+## portraits) is what this pass closes. The diorama/skill-web costs are
+## NOT yield-split by this pass -- see Status below for why, honestly,
+## this isn't a complete close of the gap.
 func _ensure_create_screen_built() -> void:
 	if _create_screen != null:
 		return
+	await _warm_class_icon_cache()
 	_create_screen = _build_create_screen()
 	# Built after _create_screen: "Keep my save" goes back to it, so it has to
 	# exist first.
@@ -1570,6 +1583,41 @@ func _class_icon_texture(archetype: String) -> ImageTexture:
 			_appearance_maker.appearance_for(archetype, 0)
 		)
 	return _class_icon_textures[archetype]
+
+
+## Yield-split cache warming, mirroring IllustratedMushroomSprite.
+## warm_cache's own already-established shape (docs/concept/soil_fauna.
+## md's "Round 6 follow-up") -- one real unit of work (one archetype's own
+## generate_hero_portrait_texture call), then `await Engine.get_main_loop
+## ().process_frame`, instead of the 7 real procedural-sprite generations
+## `_build_class_icon_row` triggers (via `_class_icon_texture`, one per
+## archetype) running as a single uninterrupted synchronous block --
+## measured as the largest of the three costs `_ensure_create_screen_
+## built` still had left after the sixth pass deferred WHEN it runs (see
+## that pass's own "honest scope note": "no yield-splitting was added to
+## the build itself, only a deferral of WHEN it runs"). `_class_icon_
+## texture` itself stays fully synchronous and untouched -- the live
+## `_build_class_card` caller still needs a real texture back
+## immediately, not a coroutine -- only this warming PASS, called BEFORE
+## `_build_create_screen` (see `_ensure_create_screen_built`), learned to
+## yield; by the time the synchronous build actually calls `_class_icon_
+## texture` per archetype, every one of them is already a cache hit. The
+## optional `on_progress` callback mirrors `warm_cache`'s own convention,
+## unused by any caller yet, wired for the same eventual "boot-time
+## loading readout" reason.
+func _warm_class_icon_cache(on_progress: Callable = Callable()) -> void:
+	var names: Array = _archetypes.archetype_names()
+	var total := names.size()
+	var done := 0
+	if on_progress.is_valid():
+		on_progress.call(0, total)
+	for archetype in names:
+		if not _class_icon_textures.has(archetype):
+			_class_icon_texture(archetype)
+			await Engine.get_main_loop().process_frame
+		done += 1
+		if on_progress.is_valid():
+			on_progress.call(done, total)
 
 
 ## Themes Godot's default (flat grey) TabContainer to match the rest of the
