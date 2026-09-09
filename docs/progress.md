@@ -19097,3 +19097,98 @@ above (the boot-loading-overlay regression) was introduced by this same
 session's own earlier work and caught/fixed by a concurrent session
 before this pass started — already on `main` by the time this branch was
 cut, no action needed here beyond acknowledging it.
+
+## Grass now has a real, distinct footstep recording (`concept/creature_and_footstep_audio.md`, "Footsteps"/Status, 2026-09-09)
+
+Reported live: *"also please fix the grass footstep sound"*, then,
+once asked what was actually wrong with it: *"It sounds like a drum,
+not like walking on grass."* `FootstepSound.clip_path_for("grass")` had
+been silently falling through to `default.ogg` since the footstep
+system first shipped — a known, honestly-documented gap, not a hidden
+bug.
+
+**Sourcing was the real work here, across three dead ends before a
+fourth source actually worked:**
+
+1. **Wikimedia Commons** (this project's established convention) — a
+   fresh multi-angle search (English, German, category browsing)
+   corroborated the existing CREDITS.md note: nothing usable turns up
+   for isolated grass-footstep Foley.
+2. **Freesound.org** — two real candidates existed. One (CC0, "footsteps
+   grass.wav") turned out on closer inspection to be recorded on
+   *artificial* turf — a genuine content mismatch, not just a gating
+   problem, caught before it could be used. The other (CC BY 4.0,
+   genuinely natural-sounding) was real but sits behind Freesound's
+   login-gated download — this project does not create accounts to
+   bypass that, so both were dead ends.
+3. **Pixabay** — "Walking on grass" (gabytoledosci) looked like a clean
+   match and was downloaded with explicit permission (filename/source/
+   size stated first, per this session's safety rules), but the actual
+   download button never completed in the automated browser session —
+   console showed a Cloudflare Turnstile bot-check failing
+   (`[Cloudflare Turnstile] Error: 600010` / `TurnstileError`) alongside
+   a failed identity-provider sign-in attempt. This project does not
+   attempt to bypass CAPTCHAs/bot-detection, so this was abandoned as
+   soon as the cause was confirmed, not retried or worked around.
+4. **OpenGameArt.org** — a new source for this project, one step removed
+   from Commons' usual clean provenance, but it hosts plain, ungated
+   static file downloads (no login, no CAPTCHA) and had already done the
+   "download the real Freesound recording and rehost it" step itself for
+   a pack (`congusbongus`'s "Footsteps on different surfaces") used in a
+   real shipped open-source game (C-Dogs SDL). **Caught one mismatch
+   before trusting it**: a different, CC0-licensed OpenGameArt pack
+   ("Fantozzi's Footsteps") titled itself "Grass/Sand & Stone" and its
+   page description claimed grass content — downloaded (476KB .7z,
+   extracted with Windows' built-in `tar.exe`/bsdtar, which reads 7z
+   fine despite `--help` only listing tar-native write formats) and the
+   real archive held zero grass files, only sand and stone. Measuring
+   the actual extracted file list instead of trusting the page
+   description caught this before it was wired in as "grass." The
+   `congusbongus` pack, downloaded next, held a real `footsteps/grass/`
+   folder with 9 numbered `.ogg` variations and its own `license.txt`:
+   derived from `footstep-grass.wav` by
+   [swuing on Freesound](https://freesound.org/people/swuing/sounds/38874/),
+   CC BY 3.0. Verified directly before trusting it: real `OggS` magic
+   bytes, ~5.2-5.8KB each (sane for a single footstep), and confirmed to
+   actually decode as `AudioStreamOggVorbis` after Godot's import pass —
+   not the FLAC-in-Ogg trap `forest_twigs.ogg` hit previously.
+
+`0.ogg` (of the 9 available) was copied in as
+`assets/audio/footsteps/grass.ogg` — this codebase's per-surface clip
+lookup is a single path per surface, not a variation pool, so the other
+8 weren't copied in but remain available in the same pack if per-step
+variation is ever added later.
+
+**Fix:** `FootstepSound._CLIP_BY_SURFACE["grass"]` now points at
+`res://assets/audio/footsteps/grass.ogg`, alongside the existing
+`"forest"`/`"snow"`/`"underwater"` entries. `_SURFACE_BY_BIOME`
+unchanged — `"grassland"` already mapped to `"grass"`, this pass only
+gave that surface key a real recording instead of falling through to
+`_DEFAULT_CLIP_PATH`.
+
+**TDD:** `test_grass_clip_path_points_at_the_real_sourced_recording`
+written first (mirroring the mushroom-crush entry's own exact-path-pin
+convention, the most recent sibling addition in this file), confirmed
+red against the unmodified dict (`clip_path_for("grass")` returned
+`default.ogg`, not `grass.ogg`) via a real
+`godot --headless -gconfig= -gtest=res://tests/unit/test_footstep_sound.gd`
+run, then green after the one-line dict addition. `test_footstep_sound.gd`
+13/13 — no regression to the 12 pre-existing tests.
+
+`assets/audio/footsteps/CREDITS.md` gained a `grass.ogg` row plus its own
+"Why `grass.ogg` breaks the Commons-only pattern" section (mirroring the
+existing `mushroom_crush.mp3` one), documenting the full sourcing trail
+above including the caught mismatch, so a future re-fetch of this file
+doesn't have to redo the same search. `docs/concept/
+creature_and_footstep_audio.md`'s Status section, "Real-world grounding"
+bullet, and `clip_path_for` mechanism bullet all updated — grass moved
+from the "no dedicated recording" gap list to its own ✅ entry; the
+gap bullet now correctly names only sand/rock as still open.
+
+Branched from fresh `origin/main` (which already carried the
+mushroom-crush merge above), pushed immediately, merged to `main` via
+a fresh temporary worktree (clean fast-forward, no conflicts), re-run
+directly against `main` after a one-time `--headless --import` pass
+(13/13), re-fetched immediately before the final push (`origin/main`
+unchanged since branching), pushed, confirmed `origin/main`'s rev
+matches the tested commit.
