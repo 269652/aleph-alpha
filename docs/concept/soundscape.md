@@ -170,3 +170,20 @@ sub-second reaction). Each step:
 - ⬜ **A settings volume slider / mute** — `AudioServer` bus wiring for this
   system specifically; today the only volume control is per-layer inside
   `layer_mix`'s own constants.
+- ✅ **Revised (2026-09-09): a real transition (biome, weather, season,
+  day/night) now refreshes the target mix immediately** instead of
+  waiting out the full `REFRESH_INTERVAL_SECONDS` throttle first —
+  reported live as "it takes a while before the sound is played... then
+  it fades out and takes a while again," up to ~10 real seconds of
+  latency on ANY discrete transition, water included (though there is
+  still no dedicated river/lake-proximity layer — see the unchanged
+  bullet just above). See [creature_and_footstep_audio.md](creature_and_footstep_audio.md#a-real-separate-ambient-audio-responsiveness-fix-same-pass)
+  for the full diagnosis and fix.
+- ⬜ **"Compose the sound from what's actually around you"** — reported
+  live: ambient beds are decorative field recordings with birds baked in,
+  independent of the real simulated bird population nearby. Not
+  re-architected in this pass (would need re-recording or real audio-
+  editing tooling neither available here) — see
+  [creature_and_footstep_audio.md](creature_and_footstep_audio.md#compose-the-sound-from-whats-actually-around-you)
+  for the real, if partial, step taken instead (real per-creature calls,
+  a separate system from this file's own ambient beds).

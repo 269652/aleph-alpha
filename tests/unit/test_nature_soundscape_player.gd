@@ -138,6 +138,48 @@ func test_switching_biome_fades_out_and_stops_the_previous_layer():
 	assert_true(wind.playing)
 
 
+## Reported live: "when I walk into the water it takes a while before the
+## river wading sound is played then it fades out and takes a while again"
+## -- REFRESH_INTERVAL_SECONDS (5s) throttled the target-mix recompute
+## UNCONDITIONALLY, so a real, discrete state change (the player stepping
+## into/out of a biome, a storm starting) could sit for up to a full 5s
+## BEFORE the ramp toward the new target even starts -- on top of the
+## ramp's own several real seconds. Any real INPUT change now recomputes
+## immediately; only repeated calls with the exact same inputs stay
+## throttled (nothing changed to react to yet, so there is nothing to
+## gain from recomputing every single frame).
+func test_an_input_change_refreshes_immediately_not_after_the_throttle():
+	var root := _live_root()
+	player.update("desert", "summer", "clear", false, false, 1.0, 100.0)  # settle fully
+	var wind: AudioStreamPlayer = root.get_node("wind")
+	assert_true(wind.playing, "sanity: wind should be settled in before the switch")
+	# A tiny delta, far short of REFRESH_INTERVAL_SECONDS -- under the OLD
+	# throttle-everything behavior this would sit un-refreshed.
+	player.update("ocean", "summer", "clear", false, false, 1.0, 0.01)
+	var ocean: AudioStreamPlayer = root.get_node("ocean")
+	assert_gt(
+		ocean.volume_db, NatureSoundscapePlayer.SILENT_VOLUME_DB,
+		"a genuine biome change should start ramping in immediately, not wait out the throttle"
+	)
+
+
+## The flip side: repeated calls with EVERY input unchanged must stay
+## throttled exactly as before -- this fix targets real transitions
+## specifically, not a blanket "always refresh every call" regression that
+## would defeat REFRESH_INTERVAL_SECONDS (and the hawk-call roll's own
+## intended rarity, which rides the same throttle) entirely.
+func test_unchanged_inputs_still_only_refresh_on_the_normal_throttle():
+	var root := _live_root()
+	player.update("mountain", "summer", "clear", false, false, 1.0, 100.0)  # settle fully
+	var wind: AudioStreamPlayer = root.get_node("wind")
+	var settled_volume_db := wind.volume_db
+	# Same inputs, tiny delta -- nothing changed, so this should still be
+	# a no-op recompute (the ramp has nothing left to do either, already
+	# fully settled from the call above).
+	player.update("mountain", "summer", "clear", false, false, 1.0, 0.01)
+	assert_almost_eq(wind.volume_db, settled_volume_db, 0.01)
+
+
 func test_hawk_call_plays_when_eligible_and_the_roll_clears_the_threshold():
 	var root := _live_root()
 	player.update("mountain", "summer", "clear", false, false, 0.0, 100.0)

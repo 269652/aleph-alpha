@@ -9,6 +9,9 @@ const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 const RainOverlay = preload("res://src/rendering/rain_overlay.gd")
 const NatureSoundscapePlayer = preload("res://src/audio/nature_soundscape_player.gd")
 const AudioSettings = preload("res://src/audio/audio_settings.gd")
+const InteractionSfxPlayer = preload("res://src/audio/interaction_sfx_player.gd")
+const FootstepSound = preload("res://src/audio/footstep_sound.gd")
+const CreatureCallSound = preload("res://src/audio/creature_call_sound.gd")
 const Snowfall = preload("res://src/world/snowfall.gd")
 const ConsoleSpecies = preload("res://src/gameplay/console_species.gd")
 const EasterEggSightings = preload("res://src/gameplay/easter_egg_sightings.gd")
@@ -32,6 +35,7 @@ const SolarPosition = preload("res://src/world/solar_position.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const AntMoundMarker = preload("res://src/rendering/ant_mound_marker.gd")
 const BeeHiveMarker = preload("res://src/rendering/bee_hive_marker.gd")
 const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
@@ -224,6 +228,17 @@ const MESSAGE_STACK_WIDTH := 460.0
 ## panels a couple times a second is trivial, but this still avoids doing it
 ## every frame (same reasoning as the minimap/forage/spread throttling).
 const CREATURE_PANELS_REFRESH_INTERVAL := 0.5
+
+## How often live creatures/birds get a chance to vocalize (see docs/concept/
+## creature_and_footstep_audio.md, CreatureCallSound) -- "each animal should
+## have an individual sound", reported live. A dedicated accumulator, not a
+## reuse of CREATURE_PANELS_REFRESH_INTERVAL above -- an unrelated HUD concern
+## that happens to share the same "scan live creatures" shape, not a reason
+## to couple their cadences. 1s keeps the scan cheap (CreatureCallSound.
+## check_call is a plain float compare) while still feeling responsive
+## against CALL_CHANCE_PER_CHECK's own low per-check rarity.
+const CREATURE_CALL_REFRESH_INTERVAL := 1.0
+var _creature_call_accumulator := 0.0
 ## Caps how many panels are shown at once (closest first) so a crowded area
 ## doesn't fill the whole screen with panels.
 const MAX_CREATURE_PANELS := 6
@@ -301,6 +316,11 @@ var _rain_overlay := RainOverlay.new()
 ## once in _ready(), fed fresh already-computed state every frame" shape as
 ## _rain_overlay just above.
 var _nature_soundscape := NatureSoundscapePlayer.new()
+
+## Footstep/mushroom-crush/creature-call one-shot SFX (see docs/concept/
+## creature_and_footstep_audio.md) -- same "RefCounted controller, build()
+## once in _ready(), driven every frame" shape as _nature_soundscape.
+var _interaction_sfx := InteractionSfxPlayer.new()
 
 ## Held only to avoid allocating one per frame -- the material it pushes to is
 ## static and shared (see GroundTint._shared_material, pinned by
@@ -808,6 +828,11 @@ func _ready() -> void:
 	# Ambient nature soundscape (docs/concept/soundscape.md) -- built once
 	# here, fed fresh state every _client_process frame below.
 	add_child(_nature_soundscape.build())
+	# Footstep/mushroom-crush/creature-call one-shot SFX (docs/concept/
+	# creature_and_footstep_audio.md) -- built once here, triggered from
+	# the same real per-step/per-crush/per-creature events _client_process
+	# already reacts to below, not a second periodic poll of its own.
+	add_child(_interaction_sfx.build())
 
 	# Bind every action to the InputMap up front (loading any saved overrides
 	# first), before Player spawns and starts polling -- Player's own
@@ -2748,6 +2773,39 @@ func _build_death_label() -> void:
 	_death_label.offset_right = 120.0
 	_death_label.offset_bottom = 10.0
 	_ui.add_child(_death_label)
+
+
+## Throttled (see CREATURE_CALL_REFRESH_INTERVAL) chance for a live creature
+## or bird to vocalize (see docs/concept/creature_and_footstep_audio.md,
+## CreatureCallSound) -- reported live: "each animal should have an
+## individual sound.. (horse, robin, boar, sparrow) etc." Scans BOTH real
+## populations that carry a `species` string today: CreatureMarker (land
+## mammals/reptiles -- `.info.species`) and AmbientFlyerMarker (birds,
+## plus the true-butterfly species that share this same class -- plain
+## `.species`). No distance pre-filter -- CreatureCallSound.check_call's
+## own low CALL_CHANCE_PER_CHECK already keeps this rare, and
+## InteractionSfxPlayer's call voices are real AudioStreamPlayer2D
+## instances, so a creature far from the player already reads quieter via
+## Godot's own positional falloff rather than needing a second, redundant
+## radius check here.
+##
+## `CreatureCallSound.has_call` silently gates species with nothing
+## sourced yet (every insect, fish, butterfly -- inaudible to a nearby
+## human in reality anyway, see that file's own doc comment) -- iterating
+## every flyer/creature unconditionally here is exactly as cheap as
+## checking each one's species first, so there is no reason to duplicate
+## that gate at the call site.
+func _maybe_play_creature_calls(delta: float) -> void:
+	_creature_call_accumulator += delta
+	if _creature_call_accumulator < CREATURE_CALL_REFRESH_INTERVAL:
+		return
+	_creature_call_accumulator = 0.0
+	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		if CreatureCallSound.check_call(creature.info.species, randf()):
+			_interaction_sfx.play_creature_call(creature.info.species, creature.position)
+	for flyer in get_tree().get_nodes_in_group(AmbientFlyerMarker.FLOCK_GROUP):
+		if CreatureCallSound.check_call(flyer.species, randf()):
+			_interaction_sfx.play_creature_call(flyer.species, flyer.position)
 
 
 ## Throttled (see CREATURE_PANELS_REFRESH_INTERVAL) rebuild of one HUD panel
@@ -5080,6 +5138,7 @@ func _client_process(delta: float) -> void:
 	_update_player_health_bar(local_player)
 	_update_hotbar(local_player)
 	_update_creature_panels(local_player, delta)
+	_maybe_play_creature_calls(delta)
 	# Hover tooltip is throttled (~30 Hz): recomputing which of potentially
 	# thousands of hoverables is under the cursor every single frame was a top
 	# CPU cost. 30 Hz is imperceptible for a tooltip.
@@ -5268,7 +5327,19 @@ func _client_process(delta: float) -> void:
 	# neither of which this touches at all. Player-only (reported live
 	# scope: "real footstep prints"), unlike tread_snow_at/the crush pass
 	# below which both also run per-creature.
-	_chunk_manager.record_footstep(local_player.position, local_player.facing_direction())
+	#
+	# Footstep SOUND rides the exact same real per-step event (reported
+	# live: "we need footsteps"), fed by record_footstep's own returned
+	# facts rather than a second, re-derived surface check -- see that
+	# function's own doc comment on why it returns raw biome/snow/
+	# underwater facts, not an audio surface key (EarthChunkManager must
+	# not depend on FootstepSound). Empty when no real step landed this
+	# call (baseline/teleport/no stride due yet).
+	var footstep := _chunk_manager.record_footstep(local_player.position, local_player.facing_direction())
+	if not footstep.is_empty():
+		_interaction_sfx.play_footstep(
+			FootstepSound.surface_for(footstep.biome, footstep.snow_lying, footstep.underwater)
+		)
 	# Individually-simulated creatures pack it down too, reusing the exact
 	# same SnowTrail data and shared GPU mask the player's own tread does
 	# (see EarthChunkManager.tread_snow_at's own doc comment) -- but never
@@ -5326,6 +5397,10 @@ func _client_process(delta: float) -> void:
 	# Karma (see docs/concept/soil_fauna.md).
 	if _chunk_manager.crush_mushroom_at(local_player.position, player_step_momentum_kg_m_s):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
+		# "Walking over a mushroom should produce a correct sound" -- a real,
+		# honest no-op today (see FootstepSound.MUSHROOM_CRUSH_CLIP_PATH's
+		# own doc comment: no genuine squish recording sourced yet).
+		_interaction_sfx.play_mushroom_crush()
 	_chunk_manager.crush_walnut_near(local_player.position, player_step_momentum_kg_m_s)
 	# A wild creature's own step still crushes what's underfoot (a real,
 	# weight-emergent ecosystem effect -- a deer's own hoof kills the worm

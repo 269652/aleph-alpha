@@ -4854,10 +4854,27 @@ static func footstep_surface_for(biome: String, snow_lying: bool, underwater: bo
 ## as before (see snow_depth()/tread_snow_at, PathScarring.step_on); this
 ## is a purely additive VISUAL layer stamped on top of whatever those
 ## mechanisms already do underneath.
-func record_footstep(pixel_position: Vector2, heading: Vector2) -> void:
+## Returns the raw biome/snow/underwater facts behind a real step (empty
+## Dictionary when nothing happened this call -- baseline, teleport, or no
+## stride due yet) so a caller can trigger a footstep SOUND at the exact
+## same real per-step cadence the visual print already uses, without
+## re-deriving FootstepGait's own accumulator a second time. Deliberately
+## NOT an audio surface key -- EarthChunkManager (world state) must not
+## depend on FootstepSound (audio); that dependency runs the other way,
+## the same direction NatureSoundscapePlayer already reads real world
+## state rather than World reading audio state. The caller feeds these
+## facts into FootstepSound.surface_for itself.
+##
+## Populated even when the VISUAL footprint has no art for this biome
+## (see footstep_surface_for's own narrower `_SURFACE_BY_FOOTSTEP_BIOME`)
+## -- FootstepSound's own surface coverage is deliberately wider than the
+## footprint sprite's, so audio must not silently inherit the narrower
+## visual gap (reported live: "we need footsteps", a general ask, not
+## just for the biomes that already draw a print).
+func record_footstep(pixel_position: Vector2, heading: Vector2) -> Dictionary:
 	if is_inf(_last_footstep_position.x):
 		_last_footstep_position = pixel_position
-		return
+		return {}
 	var distance := pixel_position.distance_to(_last_footstep_position)
 	_last_footstep_position = pixel_position
 	if distance > _FOOTSTEP_TELEPORT_GAP_PX:
@@ -4865,21 +4882,37 @@ func record_footstep(pixel_position: Vector2, heading: Vector2) -> void:
 		# also reset the gait accumulator so the far side of the jump
 		# doesn't inherit a stride debt built up before it.
 		_player_footstep_gait = FootstepGait.new()
-		return
+		return {}
 	var side := _player_footstep_gait.step_if_due(distance)
 	if side.is_empty():
-		return
+		return {}
 	var tile := _world_tile_for_pixel(pixel_position)
 	var underwater := is_river_at_global(tile.x, tile.y) or is_lake_at_global(tile.x, tile.y)
-	var surface := footstep_surface_for(biome_at_global(tile.x, tile.y), _snow_depth > 0.0, underwater)
+	var snow_lying := _snow_depth > 0.0
+	# biome_at_global(tile.x, tile.y) stays INLINE in the footstep_surface_for
+	# call below (not hoisted into a shared variable) -- test_record_
+	# footstep_passes_a_third_argument_to_footstep_surface_for's own source-
+	# text assertion counts commas across exactly that call expression,
+	# nested call included; hoisting would silently drop it below the
+	# comma count that test pins. A second, cheap lookup call here (for the
+	# returned Dictionary) is a small, deliberate price for not weakening
+	# that existing regression check.
+	var result := {
+		"side": side,
+		"biome": biome_at_global(tile.x, tile.y),
+		"snow_lying": snow_lying,
+		"underwater": underwater,
+	}
+	var surface := footstep_surface_for(biome_at_global(tile.x, tile.y), snow_lying, underwater)
 	if surface.is_empty():
-		return
+		return result
 	var print_position := pixel_position + FootstepGait.print_offset(heading, side)
 	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(print_position))
 	var field: FootprintField = _footprint_fields.get(chunk_coord)
 	if field == null:
-		return
+		return result
 	field.add_print(print_position, side, surface, heading, _world_age_seconds)
+	return result
 
 
 ## Ages/prunes every loaded chunk's FootprintField and refreshes its

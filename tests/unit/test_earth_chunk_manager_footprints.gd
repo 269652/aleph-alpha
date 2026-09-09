@@ -232,6 +232,75 @@ func biome_to_surface(biome: String) -> String:
 	return "grass" if biome == "grassland" else biome
 
 
+## Reported live: "we need footsteps" -- World needs to know a real step
+## just landed to trigger a footstep SOUND at the exact same real per-step
+## cadence the visual print already uses, without re-deriving FootstepGait's
+## own accumulator a second time. record_footstep stayed `-> void` until
+## now; every pre-existing caller/test above ignores its return value
+## already (GDScript doesn't require using one), so this is a pure
+## addition, not a behavior change.
+##
+## Returns the raw biome/snow/underwater facts, NOT an audio surface key --
+## EarthChunkManager (world state) must not depend on FootstepSound (audio);
+## that dependency runs the other way, same as NatureSoundscapePlayer
+## already reads real world state rather than World reading audio state.
+## The caller (World) feeds these into FootstepSound.surface_for itself.
+## Deliberately independent of whether a VISUAL footprint was actually
+## drawn (see the next test) -- FootstepSound's own surface coverage is
+## wider than the footprint sprite's (see that file's own doc comment), so
+## audio must not silently inherit the narrower visual gap.
+func test_record_footstep_returns_the_real_facts_when_a_real_step_lands():
+	manager._load_chunk(_berlin_chunk)
+	var centre_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + Vector2i(
+		EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2
+	)
+	var biome := manager.biome_at_global(centre_tile.x, centre_tile.y)
+	var pixel := _pixel_for(centre_tile)
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	var result: Dictionary = manager.record_footstep(pixel + step, Vector2.UP)
+	assert_eq(result.get("biome"), biome)
+	assert_eq(result.get("snow_lying"), manager.snow_depth() > 0.0)
+	assert_true(result.has("underwater"))
+	# The baseline call never reaches step_if_due at all (it returns early
+	# on the is_inf(...) first-ever-call check) -- this second call is the
+	# actual FIRST real call into FootstepGait, which starts _next_is_left
+	# true, so "left" is correct here, not an alternation off some prior
+	# step that never really happened.
+	assert_eq(result.get("side"), "left")
+
+
+## A biome with no VISUAL footprint art (e.g. desert/tundra/mountain --
+## see footstep_surface_for's own narrower _SURFACE_BY_FOOTSTEP_BIOME) must
+## still report the real step facts, not an empty Dictionary -- a real
+## step happened even though nothing got drawn, and FootstepSound's own
+## wider coverage means it should still make SOME sound.
+func test_record_footstep_returns_facts_even_when_the_biome_has_no_footprint_art():
+	manager._load_chunk(_berlin_chunk)
+	var centre_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + Vector2i(
+		EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2
+	)
+	var biome := manager.biome_at_global(centre_tile.x, centre_tile.y)
+	if ["grassland", "forest"].has(biome) and manager.snow_depth() == 0.0:
+		pass_test("precondition unmet (this chunk's real biome/season this run DOES have footprint art) -- nothing to check")
+		return
+	var pixel := _pixel_for(centre_tile)
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	var result: Dictionary = manager.record_footstep(pixel + step, Vector2.UP)
+	assert_eq(result.get("biome"), biome)
+
+
+## The baseline call (no real step due yet) and a jump both leave nothing
+## to react to -- an empty Dictionary, not a missing key crash, so a
+## caller can safely do `result.get("biome", "")` unconditionally.
+func test_record_footstep_returns_empty_when_no_step_is_due():
+	manager._load_chunk(_berlin_chunk)
+	var pixel := _pixel_for(_berlin_tile)
+	var result: Dictionary = manager.record_footstep(pixel, Vector2.UP)
+	assert_eq(result, {})
+
+
 ## A teleport (dev command, respawn, save load) must not bridge a stray
 ## print across the gap, and must not crash on a huge distance value.
 func test_a_huge_position_jump_is_treated_as_a_teleport_not_a_stride():
