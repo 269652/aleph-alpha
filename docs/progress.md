@@ -18479,3 +18479,37 @@ confirmed red against the old shared-default behavior first, green after.
 `test_world_creature_and_footstep_audio_wiring.gd` re-run clean (neither
 needed changes — both already exercised `clip_path_for`/`play_footstep`
 generically rather than asserting a specific surface's clip).
+
+## The character creator's first build now shows a real loading overlay (`concept/persistence.md`, 2026-09-09)
+
+Reported live: "when you click new game it hangs.. but it should show a
+spinner or progress feedback somehow." Real bug — `MainMenu.
+_open_create_screen()`'s own first-time cost (7 class-icon portraits, the
+live diorama `SubViewport`, the skill web) had no loading feedback
+whatsoever, unlike every other heavy entry point in the game (New World,
+Load Game, Join — all wired through `World`'s `LoadingOverlay`).
+
+Fixed by giving `MainMenu` its own `LoadingOverlay` instance — same class,
+same `_build_loading_overlay`/`_show_loading_overlay` shape as `World`'s
+own two functions of those names. Shown ("Building character creator...")
+only when `_create_screen == null` (the genuine first-time cost) — a
+second New Game/Host Game click still reaches `_show` synchronously with
+no overlay flash, preserving `_ensure_create_screen_built`'s existing
+idempotency. Real progress, not just an indeterminate spinner:
+`_warm_class_icon_cache`'s existing `(loaded, total)` reporting is now
+wired to `LoadingOverlay.set_progress(loaded, total, "portraits")` —
+`set_progress` gained a third, optional `unit` parameter for this
+(defaults to `"chunks"`, so `World`'s three existing callers are
+unchanged) rather than showing a real, honest-sounding lie ("3 / 7
+chunks") about what's actually being counted.
+
+TDD: `test_loading_overlay.gd` (new, `LoadingOverlay`'s first-ever direct
+test file) pins `set_progress`'s two-wording contract (2/2). Four new
+tests in `test_main_menu.gd` confirmed red first (`_loading_overlay`
+didn't exist), green after: the overlay shows during a fresh build, hides
+once the creator is shown, stays hidden on the already-built fast path,
+and shows real `"N / M portraits"` progress mid-build — using the same
+fire-and-forget-plus-`wait_process_frames` coroutine-timing technique
+`test_pressing_new_game_builds_the_character_creator` already established,
+not private-state reaching. Full `test_main_menu.gd` re-run clean, no
+regression in any of the ten prior passes on this screen.

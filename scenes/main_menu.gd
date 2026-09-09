@@ -26,6 +26,7 @@ const UiTheme = preload("res://src/ui/ui_theme.gd")
 const StarterKit = preload("res://src/gameplay/starter_kit.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+const LoadingOverlay = preload("res://scenes/loading_overlay.gd")
 
 ## Shared look, reusing UiTheme's palette (the same dark/rounded/gold-accent
 ## theme World assigns to every other menu/window -- see World._ui_theme) so
@@ -241,6 +242,17 @@ var _join_screen: Control
 ## deferred-construction reason (see _ensure_create_screen_built).
 var _overwrite_confirm_screen: Control
 
+## "The game is working, not hung" cover for _ensure_create_screen_built's
+## own real first-time cost (class-icon portraits, the diorama SubViewport,
+## the skill web) -- reported live: "when you click new game it hangs.. but
+## it should show a spinner or progress feedback somehow". The SAME
+## LoadingOverlay class World's own New World/Load Game/Join entry points
+## already use (see World._loading_overlay/_show_loading_overlay), not a
+## second one invented for this screen -- see _build_loading_overlay/
+## _show_loading_overlay below, which mirror World's own two functions of
+## the same name exactly.
+var _loading_overlay: LoadingOverlay
+
 var _pending_mode := "single"
 var _selected_class := "warrior"
 ## The Starting Kit tab's current picks (see StarterKit, current_starter_items).
@@ -352,6 +364,7 @@ func _ready() -> void:
 		s.set_anchors_preset(Control.PRESET_FULL_RECT)
 		_stack.add_child(s)
 	_show(_root_screen)
+	_build_loading_overlay()
 
 	# PRESET_CENTER alone only re-anchors the reference point to 0.5/0.5/0.5/
 	# 0.5 -- Godot's set_anchor recomputes offsets to PRESERVE the control's
@@ -407,6 +420,27 @@ func _build_root_screen() -> Control:
 
 # -- character creation -------------------------------------------------------
 
+## Builds the loading overlay (see LoadingOverlay) once, hidden, ready to be
+## shown/hidden repeatedly by _show_loading_overlay -- mirrors World.
+## _build_loading_overlay exactly (same class, same "build once in _ready,
+## toggle visibility thereafter" shape).
+func _build_loading_overlay() -> void:
+	_loading_overlay = LoadingOverlay.new()
+	_loading_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_loading_overlay)
+
+
+## Shows the overlay and awaits two real process frames so it's genuinely
+## PAINTED before returning -- mirrors World._show_loading_overlay exactly,
+## including its own reasoning: a single `await process_frame` isn't
+## guaranteed to have been presented by (Godot can defer that first draw one
+## frame further).
+func _show_loading_overlay(text: String) -> void:
+	_loading_overlay.show_with_text(text)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+
 ## The New Game/Host Game seam (see _build_root_screen): builds the creator
 ## on first use, then shows it -- every subsequent call just shows the
 ## already-built screen. Kept separate from _ensure_create_screen_built so a
@@ -415,8 +449,24 @@ func _build_root_screen() -> Control:
 ## function's own doc comment on why) -- fine to fire-and-forget from the
 ## New Game/Host Game button callbacks exactly as before, since neither
 ## needs anything back from it.
+##
+## Reported live: "when you click new game it hangs.. but it should show a
+## spinner or progress feedback somehow" -- _ensure_create_screen_built's own
+## real first-time cost (class-icon portraits, the diorama SubViewport, the
+## skill web) had no visible feedback at all, unlike every other heavy
+## World-owned entry point. `first_build` is computed BEFORE awaiting
+## _ensure_create_screen_built (which is what actually decides whether real
+## work happens) so the overlay only ever shows for the genuine first-time
+## cost -- an already-built creator (a second New Game/Host Game click, or
+## returning from the overwrite-confirm screen) reaches _show synchronously,
+## exactly as before, with no needless flash-and-hide.
 func _open_create_screen() -> void:
+	var first_build := _create_screen == null
+	if first_build:
+		await _show_loading_overlay("Building character creator...")
 	await _ensure_create_screen_built()
+	if first_build:
+		_loading_overlay.hide_overlay()
 	_show(_create_screen)
 
 
@@ -443,7 +493,7 @@ func _open_create_screen() -> void:
 func _ensure_create_screen_built() -> void:
 	if _create_screen != null:
 		return
-	await _warm_class_icon_cache()
+	await _warm_class_icon_cache(_on_class_icon_warm_progress)
 	_create_screen = _build_create_screen()
 	# Built after _create_screen: "Keep my save" goes back to it, so it has to
 	# exist first.
@@ -1605,6 +1655,16 @@ func _class_icon_texture(archetype: String) -> ImageTexture:
 ## optional `on_progress` callback mirrors `warm_cache`'s own convention,
 ## unused by any caller yet, wired for the same eventual "boot-time
 ## loading readout" reason.
+## Passed as the on_progress Callable to _warm_class_icon_cache so the
+## loading overlay's status line shows real "N / M portraits" progress
+## while the creator's own first-time build is underway -- mirrors World.
+## _on_chunk_load_progress's identical role for chunk loading, with its own
+## unit word (see LoadingOverlay.set_progress) rather than that one's
+## "chunks" wording.
+func _on_class_icon_warm_progress(loaded: int, total: int) -> void:
+	_loading_overlay.set_progress(loaded, total, "portraits")
+
+
 func _warm_class_icon_cache(on_progress: Callable = Callable()) -> void:
 	var names: Array = _archetypes.archetype_names()
 	var total := names.size()
