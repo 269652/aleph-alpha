@@ -929,6 +929,100 @@ func test_warm_class_icon_cache_skips_an_already_warm_archetype():
 	)
 
 
+## Reported live: "when you click new game it hangs.. but it should show a
+## spinner or progress feedback somehow" -- _ensure_create_screen_built's own
+## real cost (class-icon warming, the diorama SubViewport, the skill web) was
+## real, but unlike every OTHER heavy World-owned entry point (New World,
+## Load Game, Join -- all wired through World._show_loading_overlay), the
+## FIRST-ever "New Game"/"Host Game" click showed nothing at all while it
+## built: no spinner, no status line, nothing on screen to distinguish a
+## genuinely-working creator from a frozen one. Mirrors World's own
+## `_loading_overlay`/`_show_loading_overlay` shape exactly (same
+## LoadingOverlay class, same show_with_text/2-frame-settle/hide_overlay
+## contract) rather than inventing a second one.
+func test_the_loading_overlay_shows_while_the_create_screen_first_builds():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+	assert_false(fresh._loading_overlay.visible, "should start hidden, same as World's own")
+
+	# Fire-and-forget, exactly like the real "New Game"/"Host Game" button
+	# callbacks (_build_root_screen) -- neither awaits _open_create_screen.
+	fresh._open_create_screen()
+	await wait_process_frames(2)  # matches _show_loading_overlay's own settle gate
+
+	assert_true(
+		fresh._loading_overlay.visible,
+		"the overlay should be showing while the creator's real first-time cost runs"
+	)
+	# Drains the rest of _warm_class_icon_cache's own remaining yields (see
+	# test_pressing_new_game_builds_the_character_creator's identical 10-
+	# frame margin) before this test ends and add_child_autofree frees
+	# `fresh` -- otherwise the still-suspended coroutine resumes against an
+	# already-freed object.
+	await wait_process_frames(10)
+
+
+## The overlay must not still be sitting there, visible, once the creator is
+## actually shown -- mirrors the identical `if _loading_overlay.visible:
+## _loading_overlay.hide_overlay()` discipline World's own call sites use.
+func test_the_loading_overlay_is_hidden_once_the_create_screen_is_shown():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+
+	await fresh._open_create_screen()
+
+	assert_false(fresh._loading_overlay.visible, "the overlay should be hidden once the creator is shown")
+	assert_true(fresh._create_screen.visible, "the creator itself should be showing")
+
+
+## _ensure_create_screen_built is idempotent (a second New Game/Host Game
+## click, or returning from the overwrite-confirm screen, must not rebuild)
+## -- the overlay must respect that same fast path, not flash on screen for
+## an already-built creator that opens instantly.
+func test_the_loading_overlay_does_not_reshow_for_an_already_built_creator():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+	await fresh._open_create_screen()
+	fresh._show(fresh._root_screen)
+
+	fresh._open_create_screen()
+
+	assert_false(
+		fresh._loading_overlay.visible,
+		"a second, already-built call should reach _show synchronously, never touching the overlay"
+	)
+	assert_true(fresh._create_screen.visible)
+
+
+## Real, correctly-worded progress (see test_loading_overlay.gd's own
+## set_progress coverage) -- "N / M portraits", not the chunk-loading
+## wording LoadingOverlay's other caller uses, and not just a static label
+## the whole time either.
+func test_the_loading_overlay_shows_real_portrait_warming_progress():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+	var total := fresh._archetypes.archetype_names().size()
+
+	fresh._open_create_screen()
+	await wait_process_frames(2)
+
+	assert_string_contains(
+		fresh._loading_overlay.status_text(), "/ %d portraits)" % total,
+		"the overlay should show real class-icon warming progress while it's underway"
+	)
+	# Same drain-before-teardown reason as the "shows while first builds"
+	# test above.
+	await wait_process_frames(10)
+
+
 ## New sixth customization axis: an independent accent/trim color, per the
 ## follow-up ask for "more character customization options" -- previously
 ## trim was always fixed by the class palette with no player choice at all.

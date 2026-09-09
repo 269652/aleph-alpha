@@ -312,6 +312,59 @@ call keeps working exactly as before; only the three loading-screen entry
 points (plus Join's `_client_process` tick) now go through the chunked
 variant.
 
+### A fourth entry point: the character creator's own first-time build
+
+Reported live: "when you click new game it hangs.. but it should show a
+spinner or progress feedback somehow." A real, distinct gap from everything
+above -- `MainMenu._open_create_screen()` (New Game/Host Game's first click
+of a session) has its OWN real, first-time-only cost
+(`_ensure_create_screen_built`: 7 procedural class-icon portraits, the live
+diorama `SubViewport` scene, the skill web -- see `docs/concept/
+intro_splash.md`'s sixth/tenth passes for that cost's own history), but
+unlike New Game/Host's actual world-setup (above), Load Game, and Join, it
+had never been wired through `LoadingOverlay` at all -- clicking New Game
+for the first time in a session showed nothing: no spinner, no status line,
+nothing to distinguish a genuinely-working build from a frozen one.
+
+Fixed by giving `MainMenu` its own `LoadingOverlay` instance -- the SAME
+class `World` already uses, not a second one invented for this screen --
+with `_build_loading_overlay()`/`_show_loading_overlay(text)` mirroring
+`World`'s own two functions of the same name exactly, including the
+identical two-`process_frame`-await settle reasoning. `_open_create_screen`
+shows it ("Building character creator...") only when `_create_screen ==
+null` -- i.e. only for the genuine first-time cost; a second New Game/Host
+Game click, or returning from the overwrite-confirm screen, still reaches
+`_show` synchronously with no overlay flash, exactly as
+`_ensure_create_screen_built`'s own existing idempotency already
+guaranteed.
+
+Real progress, not just an indeterminate spinner: `_warm_class_icon_cache`
+already reported `(loaded, total)` (added for the sixth/tenth passes'
+yield-splitting, previously with nowhere to display it), now wired to
+`_on_class_icon_warm_progress` -> `LoadingOverlay.set_progress(loaded,
+total, "portraits")`. `set_progress` gained a third, optional `unit`
+parameter for this -- defaulting to `"chunks"` so `World`'s three existing
+callers are completely unchanged -- rather than the overlay showing a real,
+honest-sounding lie ("3 / 7 chunks") about what's actually being counted.
+The diorama/skill-web portion of the build (still fully synchronous, per
+the tenth pass's own honestly-scoped gap) has no further granular progress
+of its own -- the overlay's spinner glyph animates through it regardless,
+and it stays up until `_ensure_create_screen_built` returns in full, not
+just once the icon warming finishes.
+
+Unlike the original spinner-only `World` design and its later progress
+follow-up (both noted above as reasoned-from-code / screenshot-verified
+respectively, not test-covered), this pass got real, direct GUT coverage:
+`test_loading_overlay.gd` (new -- `LoadingOverlay`'s first dedicated test
+file) pins `set_progress`'s own two-wording contract, and four new tests in
+`test_main_menu.gd` cover the overlay actually showing during a fresh
+build, hiding once the creator is shown, staying hidden on the idempotent
+already-built fast path, and showing real portrait-count progress --
+exercising the real coroutine timing (fire-and-forget + `wait_process_
+frames`, the same technique `test_pressing_new_game_builds_the_character_
+creator` already established) rather than reaching past the class into
+private state.
+
 ## Status / mechanisms
 
 - ✅ `Player.appearance` field + `to_save_dict()`/`apply_save_dict()`, tested
@@ -375,6 +428,15 @@ variant.
   reasoned from the code and the passing chunk-manager tests, not
   screenshot-confirmed — the same honestly-scoped gap this doc's own Join
   entry already had.
+- ✅ **A fourth `LoadingOverlay` entry point: `MainMenu`'s own character
+  creator build** (see "A fourth entry point" above) — its own instance,
+  shown only for the genuine first-time cost, with real `(N / M portraits)`
+  progress via `LoadingOverlay.set_progress`'s new optional `unit`
+  parameter (defaults to `"chunks"`, so `World`'s three existing callers are
+  unchanged). Unlike the `World`-side entries above, this one has direct
+  test coverage: `test_loading_overlay.gd` (new) plus four tests in
+  `test_main_menu.gd` exercising the real coroutine timing, not just
+  reasoned from source.
 - 🚧 The pre-menu terrain-atlas bake (`TerrainRenderer.build_tile_set`,
   triggered unconditionally in `World._ready()` via `EarthChunkManager`'s
   constructor, before the main menu itself is even shown) is a real,
