@@ -1191,3 +1191,56 @@ func test_an_unforaged_corpse_eventually_decomposes_on_its_own():
 		forager.is_queued_for_deletion(),
 		"nobody ever foraged it -- it decomposes eventually, same as an unfed worm corpse recovering"
 	)
+
+
+# -- a retired colony: the outcome of an in-flight trip is honestly lost, --
+# -- never silently deposited into (or cached via) an orphaned AntColony --
+#
+# A forager holds a direct reference to its own AntColony, set once at
+# dispatch (see _colony's own doc comment) -- unlike this marker itself,
+# EarthChunkManager._unload_chunk cannot free that object just by erasing
+# its own dictionary entry; a forager already in flight for a mound whose
+# chunk just unloaded keeps flying (it's parented on the persistent
+# _entities_parent node, not chunk-scoped -- correct, the world keeps
+# living while nobody's watching). Without this guard, a successful trip
+# would resolve against that exact same, now-orphaned object once the
+# forager gets home -- see docs/concept/soil_fauna.md's "In-flight
+# foragers survive an unload; their trip's outcome does not" (mirrors
+# BeeForagerMarker._resolve_arrival_at_hive's own identical guard).
+
+func test_a_retired_colonys_returning_forager_deposits_nothing_and_frees_itself():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var mound := Vector2(5000, 5000)
+	var before := colony.food_stored_at(MOUND_CELL)
+	var f := _spawned(mound + Vector2(2, 0), mound, world, colony)
+	colony.mark_retired()  # its own mound's chunk unloaded mid-flight
+	f._process(1.0)  # arrive at the seed, take it, start returning
+	f._process(1.0)  # arrive back at the mound
+	assert_almost_eq(
+		colony.food_stored_at(MOUND_CELL), before, 0.001,
+		"a retired colony must never receive a deposit from an orphaned forager"
+	)
+	assert_true(f.is_queued_for_deletion(), "the forager still resolves its trip and frees itself either way")
+
+
+## The extra half ants have that bees don't (see AntForagerMarker.
+## _resolve_arrival_at_mound's own doc comment): a successful trip also
+## caches whatever it was carrying into the WORLD (plant_grass_at/
+## try_plant_seed_at), AFTER the record_forage_result call. A guard that
+## only shielded that first call would still leak a real, visible ground
+## effect -- a seed planted at a mound position nobody can reach any more
+## -- so the whole function must return before either half runs, not just
+## the colony half.
+func test_a_retired_colonys_returning_forager_never_plants_a_cached_seed():
+	var world := StubWorld.new()
+	var colony := _new_colony()
+	var mound := Vector2(5000, 5000)
+	var f := _spawned(mound + Vector2(2, 0), mound, world, colony)
+	colony.mark_retired()  # its own mound's chunk unloaded mid-flight
+	f._process(1.0)  # arrive at the seed, take it, start returning
+	f._process(1.0)  # arrive back at the mound
+	assert_eq(
+		world.planted_grass.size(), 0,
+		"a retired colony's forager must never cache a seed at a mound nobody can reach any more"
+	)

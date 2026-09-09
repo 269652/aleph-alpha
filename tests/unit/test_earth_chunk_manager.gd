@@ -7769,6 +7769,84 @@ func test_evicting_old_chunks_frees_ant_mound_markers():
 	assert_false(manager._ant_mound_markers.has(old_chunk))
 
 
+# -- in-flight foragers survive a chunk unload; their trip's outcome -------
+# -- does not (see docs/concept/soil_fauna.md) ------------------------------
+#
+# An AntForagerMarker is parented on the persistent _entities_parent node,
+# not chunk-scoped (see that class's own header doc comment) -- unloading
+# its mound's chunk correctly leaves it walking (the world keeps living
+# while nobody's watching), but must retire the AntColony object it still
+# references so its eventual record_forage_result call can never land on
+# an orphaned colony nobody can reach any more. Mirrors
+# test_earth_chunk_manager_bees.gd's own identical section exactly, minus
+# the two WildBeePatch-only tests -- ants have no duck-typed second "home"
+# kind for AntForagerMarker to serve, so there is nothing else to mirror.
+
+func test_unloading_a_chunk_does_not_free_an_in_flight_ant_forager():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var colony := _ant_colony_with_one_mound()
+	manager._ant_colonies[chunk_coord] = colony
+	var cell: Vector2i = colony.mound_cells()[0]
+	var origin: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE
+	manager._dispatch_ant_scout(colony, origin, cell)
+	var forager: AntForagerMarker = manager._active_ant_foragers[origin + cell][0]
+	manager._unload_chunk(chunk_coord)
+	assert_true(
+		is_instance_valid(forager) and not forager.is_queued_for_deletion(),
+		"the world keeps living while its chunk is unloaded -- an in-flight forager must not be freed by this"
+	)
+
+
+func test_unloading_a_chunk_retires_its_ant_colony():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var colony := _ant_colony_with_one_mound()
+	manager._ant_colonies[chunk_coord] = colony
+	manager._unload_chunk(chunk_coord)
+	assert_true(colony.is_retired())
+
+
+## The full real regression: dispatch a real forager, unload its mound's
+## chunk mid-flight (orphaning its own _colony reference, exactly like a
+## player walking away while it's out), drive it home, and confirm the
+## abandoned colony never receives the deposit -- reproduces the exact
+## scenario this whole fix exists for. Forces a real successful RETURNING
+## arrival directly on _behavior (already positioned exactly at
+## mound_position by dispatch, so the very next _process() call resolves
+## it) rather than driving a full scout->approach->return cycle through
+## real world data this test deliberately doesn't set up -- mirrors
+## test_earth_chunk_manager_bees.gd's own identical technique.
+func test_an_ant_forager_orphaned_by_an_unload_does_not_deposit_into_the_old_colony():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var colony := _ant_colony_with_one_mound()
+	manager._ant_colonies[chunk_coord] = colony
+	var cell: Vector2i = colony.mound_cells()[0]
+	var origin: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE
+	manager._dispatch_ant_scout(colony, origin, cell)
+	var forager: AntForagerMarker = manager._active_ant_foragers[origin + cell][0]
+	manager._unload_chunk(chunk_coord)
+	# entities_parent is never added to a live tree in this file's own
+	# before_each (unlike test_earth_chunk_manager_bees.gd's), so _ready()
+	# never runs on dispatch -- _ensure_initialized() must be called
+	# explicitly first (its own documented, sanctioned use for a synthetic
+	# test-double parent, see that function's own doc comment), or the
+	# scout-dispatch begin_scouting() call it makes internally would fire
+	# lazily inside the _process() call below instead and clobber the
+	# forced phase the instant it runs.
+	forager._ensure_initialized()
+	forager._behavior.found_food = true
+	forager._behavior.phase = AntForageBehavior.Phase.RETURNING
+	var before := colony.food_stored_at(cell)
+	forager._process(0.05)
+	assert_almost_eq(
+		colony.food_stored_at(cell), before, 0.001,
+		"an orphaned colony must never receive a deposit from a forager whose mound's chunk already unloaded"
+	)
+	assert_true(
+		forager.is_queued_for_deletion(),
+		"the forager still resolves its trip and frees itself, it just can't deposit anywhere real any more"
+	)
+
+
 # -- leaf litter rendering: one MultiMeshInstance2D per chunk (see
 # LeafLitterRenderer, docs/concept/leaf_litter.md) -- mirrors the ant-mound-
 # marker lifecycle tests just above, but _load_chunk/_unload_chunk directly

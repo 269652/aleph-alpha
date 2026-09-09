@@ -3476,6 +3476,78 @@ each time, without changing the underlying shape of "a long-played
 save accumulates enough live entities that even bug-free per-instance
 costs sum to something real."
 
+### In-flight foragers survive an unload; their trip's outcome does not (2026-09-09)
+
+The ant side of `bees.md`'s own identical section, by that exact name --
+that section named this gap on the ant side directly and left it
+unfixed ("No ant precedent exists for this... a real, separate,
+not-yet-fixed gap"); this closes it, and `bees.md` itself now links
+back here.
+
+A dispatched `AntForagerMarker` is a plain child of the persistent
+`Entities` node (see `EarthChunkManager._dispatch_forager`), never
+chunk-scoped the way an `AntMoundMarker` is -- so unloading its own
+mound's chunk correctly leaves it walking: the world keeps living
+while nobody's watching, the same standing rule every other
+unloaded-but-still-simulated system in this game already follows. What
+it must NOT do is keep silently mutating the `AntColony` object its
+mound's chunk used to own: `_colony` (see that field's own doc
+comment) is a direct `RefCounted` reference set once, at dispatch --
+`EarthChunkManager._unload_chunk` erasing its own `_ant_colonies`
+dictionary entry cannot free an object a live forager still
+references, and if the player later walks back into that chunk,
+`_load_chunk` constructs a brand new colony there, completely separate
+from the one still in the returning forager's own hand. Without a real
+signal to notice this, a successful trip's `record_forage_result` call
+-- and, the extra half ants have that bees don't, the real seed/nut it
+then caches into the world via `plant_grass_at`/`try_plant_seed_at` --
+would resolve against that exact orphaned object instead: a silent
+economy-state leak with no symptom a player could ever observe (no
+food anywhere they can reach, no forage-success signal reaching the
+mound they actually see, and a seed planted at a mound position nobody
+can reach any more).
+
+`AntColony` gets the identical `mark_retired()`/`is_retired()` flag
+pair `BeeColony`/`WildBeePatch` already have (a per-OBJECT flag, not
+per-mound-cell -- the real event this tracks, a chunk unloading, tears
+down every mound the object owns at once). `EarthChunkManager.
+_unload_chunk` calls `mark_retired()` the moment it erases its own
+`_ant_colonies` tracking entry; `AntForagerMarker._resolve_arrival_at_
+mound` checks `is_retired()` before touching the colony at all -- before
+even the `record_forage_result` call, so the world-caching half never
+runs either -- and quietly frees itself without depositing or caching
+anything if it reads true. The honest "this trip's outcome is lost"
+consequence, the same real cost as everything else that happens while
+unloaded, never a papered-over guaranteed deposit.
+
+Whether a forager's own current position, mid-flight, is in a
+different chunk than its mound turns out not to matter here either
+(checked directly, mirroring `bees.md`'s own identical check): unlike
+bees, `AntColony.FORAGE_RADIUS_TILES` (2 tiles) is far SMALLER than
+half of `EarthChunkManager.CHUNK_SIZE` (32), so an ant forager never
+even ranges out of its own mound's chunk mid-trip in the first place --
+but the fix is identical regardless, since the forager itself is still
+never chunk-scoped either way.
+
+TDD, three sound steps mirroring `bees.md`'s own commit shape exactly:
+(1) `mark_retired()`/`is_retired()` added to `AntColony` alone, driven
+by two direct unit tests in `test_ant_colony.gd`, confirmed red first
+against the un-implemented methods; (2) `AntForagerMarker._resolve_
+arrival_at_mound`'s own guard, driven by two new `test_ant_forager_
+marker.gd` tests -- confirmed red against step (1) alone (a real
+deposit, 45->46 food, and a real planted seed, exactly the bug); (3)
+`EarthChunkManager._unload_chunk`'s own wiring, driven by three new
+`test_earth_chunk_manager.gd` tests -- fewer than bees' own five: ants
+have no duck-typed `WildBeePatch` equivalent, so there is no second
+"home" kind for `AntForagerMarker` to serve and nothing to mirror
+those two extra tests against -- including a full dispatch-unload-
+resolve end-to-end regression, confirmed red against steps (1)+(2)
+alone. One of the three, proving an in-flight forager is NOT freed by
+its own chunk's unload, was already green throughout (and stays
+green) -- pinning the "the world keeps living" half of this behavior
+as a real, protected invariant, mirroring bees' own identical
+already-green test.
+
 ## Illustrated worm sprite: crawl, emerge, retreat, die
 
 A real, hand-illustrated sheet (`assets/sprites/animals/worm.png`) replaces

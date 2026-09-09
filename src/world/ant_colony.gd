@@ -411,6 +411,49 @@ func has_mound(cell: Vector2i) -> bool:
 	return _mounds.has(cell)
 
 
+## Whether this WHOLE colony object has been retired (see mark_retired) --
+## a per-OBJECT flag, not a per-cell one like _queenless_seconds/_warmth:
+## the real-world event this tracks (EarthChunkManager._unload_chunk
+## erasing this object from _ant_colonies) tears down every mound this
+## colony owns at once, not one cell at a time. Mirrors BeeColony's own
+## identical _retired flag exactly (see that class's own doc comment) --
+## the ant-side half of a fix first shipped for bees alone, see
+## docs/concept/bees.md's "In-flight foragers survive an unload; their
+## trip's outcome does not".
+var _retired := false
+
+
+## Marks this colony as no longer the one EarthChunkManager tracks for its
+## chunk -- called exactly once, by _unload_chunk, at the moment its own
+## _ant_colonies[chunk_coord] entry is erased (see docs/concept/
+## soil_fauna.md's "In-flight foragers survive an unload; their trip's
+## outcome does not"). Unloading a chunk does NOT by itself free this
+## object -- an AntForagerMarker already in flight for one of this
+## colony's mounds holds its own direct RefCounted reference (set once,
+## at dispatch -- see AntForagerMarker._colony's own doc comment), and a
+## forager is parented on the persistent _entities_parent node, not
+## chunk-scoped, so it keeps walking and will eventually try to resolve
+## its real trip against whatever `_colony` it still holds. A retired
+## colony is never un-retired or reused: _load_chunk always constructs a
+## brand new AntColony for a chunk it reloads, never resurrects this one.
+func mark_retired() -> void:
+	_retired = true
+
+
+## Whether mark_retired has been called -- what AntForagerMarker.
+## _resolve_arrival_at_mound checks before ever depositing into this
+## colony's real food reserve, touching its forage-success record, or
+## caching whatever it was carrying into the world: a mound whose chunk
+## unloaded out from under a forager mid-flight is gone from the player's
+## own reachable world exactly like everything else that keeps
+## existing-but-unwatched while unloaded (see EarthChunkManager.
+## _unload_chunk's own many other per-chunk teardowns) -- the honest
+## consequence is that this one trip's outcome is lost, not a silent
+## deposit into an object nobody can ever see or interact with again.
+func is_retired() -> bool:
+	return _retired
+
+
 ## Advances the colony's own step count (see _step_count), decays every
 ## mound's pheromone trail by real elapsed time, and grows/stalls every
 ## mound's own population toward its current capacity (see AntPopulationModel).
