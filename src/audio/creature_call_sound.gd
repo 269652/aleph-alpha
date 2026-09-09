@@ -1,5 +1,7 @@
 extends RefCounted
 
+const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
+
 ## Per-species vocalizations (see docs/concept/creature_and_footstep_audio.md).
 ## Reported live: "each animal should have an individual sound.. (horse,
 ## robin, boar, sparrow) etc." Pure species->clip lookup + an occasional
@@ -52,6 +54,32 @@ const _CLIP_BY_SPECIES := {
 ## drift toward "constant noise" or "never happens" unnoticed.
 const CALL_CHANCE_PER_CHECK := 0.01
 
+## How far (world px) a creature must be from the player to even be
+## considered for a call at all -- "nearby", not anywhere in the loaded
+## world. Reported live: "you hear a lot of birds even though there
+## aren't any... compose the sound from what's actually around you" --
+## scanning every loaded creature regardless of distance (the pre-fix
+## behavior) is the literal bug that complaint describes.
+##
+## 35 real metres: further than World.CREATURE_PANELS_RADIUS's own ~20m
+## ("wider than melee range... visibly on screen") since sound carries a
+## little further than clear sight -- you can hear a bird or a distant
+## howl before you can make out what it is -- but still a real, bounded
+## "nearby" scope, not the whole loaded chunk radius. A documented
+## relationship, not a shared code constant: World is a much heavier
+## preload (the whole game orchestrator) than this pure audio module
+## should ever pull in just to read one sibling radius.
+##
+## Converted via GroundSlide.PX_PER_METER, this project's one shared
+## px/metre yardstick, rather than a second, independently-invented pixel
+## count -- the same idiom every other real-world distance in this
+## codebase already uses. This is an ELIGIBILITY gate, not a volume curve:
+## actual loudness within this radius still varies continuously via
+## Godot's own positional attenuation (see InteractionSfxPlayer's own
+## max_distance wiring, tuned to match).
+const AUDIBLE_RADIUS_METERS := 35.0
+const AUDIBLE_RADIUS_PX := AUDIBLE_RADIUS_METERS * GroundSlide.PX_PER_METER
+
 
 static func has_call(species: String) -> bool:
 	return _CLIP_BY_SPECIES.has(species)
@@ -61,13 +89,17 @@ static func clip_path_for(species: String) -> String:
 	return String(_CLIP_BY_SPECIES.get(species, ""))
 
 
-## `roll` is caller-supplied (the same "caller rolls, this decides"
-## split every other chance-gated cameo in this codebase already uses)
-## so this stays pure and deterministically testable. A species with no
-## sourced call can never fire regardless of how favorable the roll is --
-## checked first, before spending the roll on a threshold compare, so a
-## silent species reads as "nothing to play," not "always misses."
-static func check_call(species: String, roll: float) -> bool:
+## `roll`/`distance_px` are caller-supplied (the same "caller measures the
+## real world, this decides" split every other chance-gated cameo in this
+## codebase already uses) so this stays pure and deterministically
+## testable. A species with no sourced call, or a distance beyond
+## AUDIBLE_RADIUS_PX, can never fire regardless of how favorable the roll
+## is -- both checked before spending the roll on a threshold compare, so
+## a silent/too-far creature reads as "nothing to play," not "always
+## misses."
+static func check_call(species: String, roll: float, distance_px: float) -> bool:
+	if distance_px > AUDIBLE_RADIUS_PX:
+		return false
 	if not has_call(species):
 		return false
 	return roll < CALL_CHANCE_PER_CHECK

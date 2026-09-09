@@ -47,6 +47,13 @@ func build() -> Node:
 	for i in CALL_POOL_SIZE:
 		var voice := AudioStreamPlayer2D.new()
 		voice.name = "CallVoice%d" % i
+		# Godot's own default (2000px) barely attenuates at all within
+		# CreatureCallSound.AUDIBLE_RADIUS_PX (~35 real metres) -- matched
+		# here so a call already reads near-silent right around the same
+		# real distance it stops being eligible at all, instead of full
+		# volume up to a cutoff eight times further out (see that
+		# constant's own doc comment).
+		voice.max_distance = CreatureCallSound.AUDIBLE_RADIUS_PX
 		_root.add_child(voice)
 		_call_pool.append(voice)
 	return _root

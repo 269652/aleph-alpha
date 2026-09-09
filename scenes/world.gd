@@ -2782,29 +2782,40 @@ func _build_death_label() -> void:
 ## populations that carry a `species` string today: CreatureMarker (land
 ## mammals/reptiles -- `.info.species`) and AmbientFlyerMarker (birds,
 ## plus the true-butterfly species that share this same class -- plain
-## `.species`). No distance pre-filter -- CreatureCallSound.check_call's
-## own low CALL_CHANCE_PER_CHECK already keeps this rare, and
-## InteractionSfxPlayer's call voices are real AudioStreamPlayer2D
-## instances, so a creature far from the player already reads quieter via
-## Godot's own positional falloff rather than needing a second, redundant
-## radius check here.
+## `.species`).
+##
+## Real distance to `local_player` gates every check (see
+## CreatureCallSound.AUDIBLE_RADIUS_PX) -- reported live a second time,
+## more pointedly: "you hear a lot of birds even though there aren't
+## any... compose the sound from what's actually around you." The
+## original pass reasoned positional AudioStreamPlayer2D falloff alone
+## would make this unnecessary; it doesn't, on its own, bound WHICH
+## creatures are even eligible to be picked from in the first place --
+## scanning every creature in every loaded chunk regardless of distance
+## and only relying on the mix to quiet the far ones is exactly the
+## "hear things that aren't really around you" bug that complaint
+## describes. `check_call` itself does the compare (this function only
+## measures the one real distance and hands it over), keeping the
+## eligibility rule in one pure, tested place rather than duplicated here.
 ##
 ## `CreatureCallSound.has_call` silently gates species with nothing
 ## sourced yet (every insect, fish, butterfly -- inaudible to a nearby
 ## human in reality anyway, see that file's own doc comment) -- iterating
-## every flyer/creature unconditionally here is exactly as cheap as
+## every nearby flyer/creature unconditionally here is exactly as cheap as
 ## checking each one's species first, so there is no reason to duplicate
 ## that gate at the call site.
-func _maybe_play_creature_calls(delta: float) -> void:
+func _maybe_play_creature_calls(local_player: Player, delta: float) -> void:
 	_creature_call_accumulator += delta
 	if _creature_call_accumulator < CREATURE_CALL_REFRESH_INTERVAL:
 		return
 	_creature_call_accumulator = 0.0
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
-		if CreatureCallSound.check_call(creature.info.species, randf()):
+		var distance := local_player.position.distance_to(creature.position)
+		if CreatureCallSound.check_call(creature.info.species, randf(), distance):
 			_interaction_sfx.play_creature_call(creature.info.species, creature.position)
 	for flyer in get_tree().get_nodes_in_group(AmbientFlyerMarker.FLOCK_GROUP):
-		if CreatureCallSound.check_call(flyer.species, randf()):
+		var distance := local_player.position.distance_to(flyer.position)
+		if CreatureCallSound.check_call(flyer.species, randf(), distance):
 			_interaction_sfx.play_creature_call(flyer.species, flyer.position)
 
 
@@ -5138,7 +5149,7 @@ func _client_process(delta: float) -> void:
 	_update_player_health_bar(local_player)
 	_update_hotbar(local_player)
 	_update_creature_panels(local_player, delta)
-	_maybe_play_creature_calls(delta)
+	_maybe_play_creature_calls(local_player, delta)
 	# Hover tooltip is throttled (~30 Hz): recomputing which of potentially
 	# thousands of hoverables is under the cursor every single frame was a top
 	# CPU cost. 30 Hz is imperceptible for a tooltip.

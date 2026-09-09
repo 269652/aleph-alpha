@@ -9,6 +9,7 @@ extends GutTest
 ## AudioStreamPlayer.play()/.playing need a real, live tree.
 
 const FootstepSound = preload("res://src/audio/footstep_sound.gd")
+const CreatureCallSound = preload("res://src/audio/creature_call_sound.gd")
 const InteractionSfxPlayer = preload("res://src/audio/interaction_sfx_player.gd")
 
 var player: InteractionSfxPlayer
@@ -49,6 +50,23 @@ func test_build_creates_the_call_voice_pool_as_positional_2d_players():
 		if child is AudioStreamPlayer2D:
 			voices += 1
 	assert_eq(voices, InteractionSfxPlayer.CALL_POOL_SIZE)
+	root.free()
+
+
+## Left at Godot's own default (2000px), a call voice would barely
+## attenuate at all within CreatureCallSound.AUDIBLE_RADIUS_PX (~35 real
+## metres -- see that constant's own doc comment), undermining the whole
+## "eligibility gate at a real, bounded distance" point of that radius:
+## a creature right at the edge of being heard AT ALL should already read
+## as quiet, not full volume up to a cutoff eight times further out.
+func test_call_voices_attenuate_over_the_same_radius_calls_are_eligible_within():
+	var root := player.build()
+	for voice in player._call_pool:
+		# almost_eq, not eq: max_distance round-trips through Godot's own
+		# real_t (32-bit float on most builds), a tiny precision loss
+		# GDScript's 64-bit float literal on the right-hand side doesn't
+		# have -- not a real behavioral difference worth chasing further.
+		assert_almost_eq(voice.max_distance, CreatureCallSound.AUDIBLE_RADIUS_PX, 0.01)
 	root.free()
 
 

@@ -17496,3 +17496,51 @@ population counts ("compose the sound from what's actually around you" —
 the new creature-call system is a real, direct step in that exact
 direction for `robin`/`sparrow` specifically, not a full solution to the
 ambient beds' own baked-in decorative bird chorus).
+
+## Creature calls: a real "nearby," not "anywhere in the loaded world" (`concept/creature_and_footstep_audio.md`, same day)
+
+Requested live, following straight on from "compose the sound from what's
+actually around you": *"fully build the soundscape out of individual
+nearby animals and environment please."* The creature-call pass above
+already reads real live creature positions instead of a decorative
+backing track, but its own `_maybe_play_creature_calls` scanned every
+`CreatureMarker`/`AmbientFlyerMarker` in the ENTIRE loaded world (every
+loaded chunk, not just ones near the player), reasoning that positional
+`AudioStreamPlayer2D` falloff alone would make a distance check redundant.
+On inspection that reasoning didn't hold: nothing bounded which creatures
+were even eligible to be picked from, and the call voices' own
+`max_distance` was left at Godot's default (2000px, ~178 real metres at
+this project's scale) -- too wide to meaningfully quiet a distant hit
+even when one did land.
+
+**The fix:** `CreatureCallSound.check_call` gained a `distance_px`
+parameter and now rejects anything beyond a new `AUDIBLE_RADIUS_PX` (35
+real metres, converted via `GroundSlide.PX_PER_METER` -- further than
+`World.CREATURE_PANELS_RADIUS`'s own ~20m "visibly on screen" range since
+sound carries a little further than sight, but still a real, bounded
+scope) before spending the roll on the chance compare at all.
+`InteractionSfxPlayer`'s call-voice pool now sets `max_distance` to that
+same radius, so a call that does fire fades to near-silence right around
+the same distance it stops being eligible, instead of staying loud most
+of the way to a cutoff eight times further out. `World.
+_maybe_play_creature_calls` now takes `local_player` and measures
+`local_player.position.distance_to(...)` per creature/flyer -- the one
+real fact this whole fix hinges on, mirroring the exact
+`distance <= RADIUS` shape `_update_creature_panels` already established
+for "nearby" elsewhere in this same file.
+
+No new species/asset work -- a pure eligibility/attenuation fix over the
+same 12 sourced calls. TDD: confirmed red against the old 2-argument
+`check_call(species, roll)` call sites first; new tests pin "fires right
+at the radius edge," "never fires one px beyond it," and the metres→px
+conversion itself; `test_world_creature_and_footstep_audio_wiring.gd`
+gained a source-text assertion that the scan actually measures and
+forwards a real distance (the pre-fix code would have passed a weaker
+"check_call is called at all" assertion already, so this specifically
+locks in the new behavior, not just its presence).
+`test_creature_call_sound.gd` 9/9, `test_interaction_sfx_player.gd`
+10/10, `test_world_creature_and_footstep_audio_wiring.gd` 7/7.
+
+Still not attempted: the environment/river-lake-proximity half of the
+same ask (see the concept doc's own Status list), and the remaining 13
+unsourced species.

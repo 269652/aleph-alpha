@@ -72,3 +72,22 @@ func test_creature_call_scan_covers_both_creature_and_flyer_populations():
 func test_creature_call_scan_is_throttled_not_run_every_frame():
 	var body := _function_body("_maybe_play_creature_calls")
 	assert_true(body.contains("CREATURE_CALL_REFRESH_INTERVAL"))
+
+
+## "you hear a lot of birds even though there aren't any... compose the
+## sound from what's actually around you" -- reported live a second time.
+## The scan must measure a REAL distance to the player and hand it to
+## check_call (which does the actual eligibility compare -- see
+## CreatureCallSound.AUDIBLE_RADIUS_PX), not just roll for every creature
+## in every loaded chunk regardless of how far away it is.
+func test_creature_call_scan_measures_real_distance_to_the_player():
+	var body := _function_body("_maybe_play_creature_calls")
+	assert_true(
+		body.contains("local_player.position.distance_to("),
+		"must measure a real distance from the player, not skip straight to check_call"
+	)
+	assert_true(
+		body.contains("check_call(creature.info.species, randf(), distance)")
+		or body.contains("check_call(flyer.species, randf(), distance)"),
+		"the measured distance must actually reach check_call, not be computed and discarded"
+	)

@@ -196,10 +196,54 @@ backing track -- if the doc's Status list below shows creature calls
 shipped, walking through an area with genuinely zero real birds nearby now
 means genuinely zero robin/sparrow CALLS (the ambient bed's own baked-in
 chorus is a separate, unchanged layer, not eliminated by this pass).
-Fully re-architecting the ambient beds themselves to scale with real
+
+**Second pass (same day): the call scan itself wasn't actually "nearby."**
+Reported live a second time, more pointedly: "you hear a lot of birds even
+though there aren't any... compose the sound from what's actually around
+you." The first pass's own reasoning -- that `AudioStreamPlayer2D`'s
+positional falloff alone would make a distance check redundant -- was
+wrong on inspection: `_maybe_play_creature_calls` scanned EVERY
+`CreatureMarker`/`AmbientFlyerMarker` in the entire loaded world (every
+loaded chunk, not just ones near the player) and only relied on the mix to
+quiet the far ones. Two real bugs compounded that: (1) nothing bounded
+WHICH creatures were even eligible to be picked from in the first place,
+so a creature many chunks away could still roll a hit; (2) `max_distance`
+on the call voices was left at Godot's own default (2000px, ~178 real
+metres at this project's scale) -- far too wide to meaningfully quiet
+anything within a sane "nearby" range even when a distant creature did
+roll a hit.
+
+**The fix:** `CreatureCallSound.check_call` now takes the real distance
+from the player and rejects anything beyond `AUDIBLE_RADIUS_PX` (35 real
+metres -- see that constant's own doc comment for why: further than
+`World.CREATURE_PANELS_RADIUS`'s own ~20m "visibly on screen" range, since
+sound carries a little further than sight, but still a real, bounded
+scope, not the whole loaded chunk radius) BEFORE spending the roll on the
+chance-per-check compare. `InteractionSfxPlayer`'s call voices now set
+`max_distance` to that same radius, so a call that does fire attenuates to
+near-silence right around the same distance it stops being eligible at
+all, rather than staying at full volume most of the way to a cutoff eight
+times further out. `_maybe_play_creature_calls` now takes `local_player`
+and measures `local_player.position.distance_to(...)` per creature/flyer
+-- the one real fact the whole fix hinges on.
+
+No new species/asset work needed -- this is a pure eligibility/attenuation
+fix over the exact same sourced calls the first pass shipped. TDD:
+`check_call`'s signature grew a `distance_px` parameter (confirmed red
+against the old 2-argument call sites first), new tests pin "fires right
+at the radius edge" and "never fires one px beyond it";
+`test_world_creature_and_footstep_audio_wiring.gd` gained a source-text
+assertion that the scan actually measures and forwards a real distance,
+not just that `check_call` is called at all (the pre-fix code would have
+passed that weaker assertion already).
+
+Fully re-architecting the ambient BEDS themselves to scale with real
 nearby population counts (e.g. muting/thinning the bird-heavy portion of
 a forest bed when the real simulated bird count nearby is low) is a real,
-substantially larger follow-up, not attempted in this pass.
+substantially larger follow-up, not attempted in this pass -- the fix
+above makes the discrete CALL layer honestly proximity-based; the
+continuous bed underneath it is still the same decorative, population-
+independent recording described above.
 
 ## Status
 
@@ -227,6 +271,14 @@ substantially larger follow-up, not attempted in this pass.
 - ✅ **A real, separate ambient-audio responsiveness fix**: any biome/
   weather transition now starts ramping immediately instead of waiting
   out a flat 5-second throttle -- see its own section above.
+- ✅ **Creature calls are now genuinely proximity-gated, not "anywhere in
+  the loaded world."** Reported live: "you hear a lot of birds even
+  though there aren't any... compose the sound from what's actually
+  around you." `check_call` rejects anything beyond
+  `CreatureCallSound.AUDIBLE_RADIUS_PX` (35 real metres) before rolling at
+  all, and the call voices' own `max_distance` now matches that radius
+  instead of Godot's much wider (~178m) default -- see "Second pass"
+  above.
 - ⬜ **No river/lake-proximity ambient layer, no `ocean.ogg` loop-seam
   fix, no "ambient beds scale with real nearby population" rearchitecture**
   -- all real, named, deliberately-deferred follow-ups (see their own
