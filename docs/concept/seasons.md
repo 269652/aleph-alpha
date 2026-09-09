@@ -41,33 +41,36 @@ Elapsed game-time is divided into a year of four equal seasons. From it we deriv
 The year length is a tuned constant (compressed so a play session spans multiple
 seasons), pinned by tests, not eyeballed.
 
-## A new world starts at a random point in the year
+## A new world always starts in mid-spring
 
-**New Game rolls a random starting moment in the year; Load Game resumes its
-own.** The world clock (`EarthChunkManager._world_age_seconds`, what
-`season_at`/`warmth_modifier` above are pure functions of) used to start at a
-hardcoded `0.0` for every fresh save, with no persistence at all — and `0.0`
-is not a neutral moment: `warmth_modifier`'s own phase formula puts it at
-warmth ≈0.1465, just under [weather.md](weather.md)'s snow threshold
+**New Game always sets the same starting moment in the year; Load Game
+resumes its own.** The world clock (`EarthChunkManager._world_age_seconds`,
+what `season_at`/`warmth_modifier` above are pure functions of) used to start
+at a hardcoded `0.0` for every fresh save, with no persistence at all — and
+`0.0` is not a neutral moment: `warmth_modifier`'s own phase formula puts it
+at warmth ≈0.1465, just under [weather.md](weather.md)'s snow threshold
 (`Snowfall.FREEZING_WARMTH`, 0.15). Every new game therefore began mid-
 winter-adjacent and reliably snowed within the first few minutes (reported:
 "it starts to snow deterministically") — one hardcoded starting instant
 masquerading as "a fresh world," identical every single time.
 
-A new world should be free to begin in any season, the way a real save
-started "whenever" would. `EarthChunkManager.randomize_world_age()` rolls a
-uniform offset in `[0, SeasonCycle.SECONDS_PER_YEAR)` — Godot's own default-
-seeded `randf()`, not a fixed seed — **once**, at New Game/Host Game creation
-(`World._wipe_persisted_world`), and immediately re-syncs every other mark
-that measures itself against the clock (`_last_fruiting_time`,
-`_snow_world_age` — see `set_world_age_seconds`) so the jump doesn't read as a
-fake elapsed span the next time fruiting or snow steps. **Load Game never
-re-rolls**: it restores the clock's own persisted value
-(`EarthChunkManager.load_world_clock`, `WorldClockPersistence`, the same
-`user://`-backed convention `PlayerSave`/`EventStorePersistence` already
+That was first fixed by rolling a uniform random offset across the whole
+year, so a new world could begin in any season — since superseded by a
+direct, explicit request: **"make starting season always mid spring."**
+`EarthChunkManager.reset_world_age_to_mid_spring()` sets the clock to exactly
+`SeasonCycle.MID_SPRING_YEAR_FRACTION` (`0.125`, halfway through the spring
+quarter) through the year — a fixed, deliberately-chosen instant, not either
+the original accidental-winter bug or an unchosen random season — **once**,
+at New Game/Host Game creation (`World._wipe_persisted_world`), and
+immediately re-syncs every other mark that measures itself against the clock
+(`_last_fruiting_time`, `_snow_world_age` — see `set_world_age_seconds`) so
+the jump doesn't read as a fake elapsed span the next time fruiting or snow
+steps. **Load Game never resets**: it restores the clock's own persisted
+value (`EarthChunkManager.load_world_clock`, `WorldClockPersistence`, the
+same `user://`-backed convention `PlayerSave`/`EventStorePersistence` already
 established — see [persistence.md](persistence.md)) before its first chunk
 load, so a resumed session picks up exactly where it stopped rather than
-time-travelling on every launch.
+time-travelling back to mid-spring on every launch.
 
 ## The ground carries the season too
 
@@ -188,10 +191,11 @@ moment, each read the way its own schedule reads it. The empty case is gone
 upstream: `TreeRenderer` cannot be in it.
 
 **Every path that establishes or moves the clock dresses the trees**:
-`set_world_age_seconds` (so both `randomize_world_age` and `load_world_clock`
-land *before* the first chunk load), `advance_world_age`, `jump_to_season`
-(`/season`), and `World._client_process` once a frame beside the existing
-ground-tint push — the ungated path every peer runs, host and client alike.
+`set_world_age_seconds` (so both `reset_world_age_to_mid_spring` and
+`load_world_clock` land *before* the first chunk load), `advance_world_age`,
+`jump_to_season` (`/season`), and `World._client_process` once a frame beside
+the existing ground-tint push — the ungated path every peer runs, host and
+client alike.
 It is cheap: `EarthChunkManager.sync_tree_season` keeps the quantised
 season/turn signature guard it already had, so a rebuild costs a handful of
 canopy textures per in-game year, not one per frame.
@@ -387,12 +391,12 @@ at ~0.65 in-game days of early pink, and costs no extra cached images.
 - ✅ Season + current weather shown in the HUD (reuses the existing
   `weather_model.gd`; `EarthChunkManager.current_season`/`current_weather`,
   rendered in `World`'s debug readout as "Season · Weather").
-- ✅ A new world starts at a random point in the year, a loaded one resumes
-  its own — `EarthChunkManager.randomize_world_age`/`set_world_age_seconds`/
+- ✅ A new world always starts in mid-spring, a loaded one resumes its own —
+  `EarthChunkManager.reset_world_age_to_mid_spring`/`set_world_age_seconds`/
   `save_world_clock`/`load_world_clock`/`wipe_world_clock`,
   `WorldClockPersistence`, tested; wired at `World._wipe_persisted_world`
   (New Game) and `_spawn_local_singleplayer_from_save` (Load Game). See "A
-  new world starts at a random point in the year" above.
+  new world always starts in mid-spring" above.
 - ✅ Seasonal tint on living green — the terrain ground cover and the
   illustrated tall grass — `src/rendering/seasonal_foliage.gd`, applied via
   `GroundTint.set_season_tint` / `IllustratedGrassPatch.set_season_tint`,

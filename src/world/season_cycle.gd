@@ -45,6 +45,17 @@ func season_at(elapsed_seconds: float) -> String:
 	return SEASONS[clampi(index, 0, SEASONS.size() - 1)]
 
 
+## The exact midpoint of the "spring" quarter, as a year_fraction [0,1) --
+## halfway through the first of the four equal quarters season_at divides the
+## year into. Requested directly: "make starting season always mid spring"
+## (see EarthChunkManager.reset_world_age_to_mid_spring, the one production
+## reader) -- also matches the test suite's own pre-existing local MID_SPRING
+## (0.125) convention (test_seasonal_foliage.gd/test_season_transition.gd),
+## exposed here as the one shared, tested definition rather than a value
+## re-derived independently wherever "mid-spring" is needed.
+const MID_SPRING_YEAR_FRACTION := 0.125
+
+
 ## How far [0,1) through the CURRENT season this moment sits -- the same
 ## raw fraction season_at's own index is truncated from, exposed directly.
 ##

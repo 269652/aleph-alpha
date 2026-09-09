@@ -17977,3 +17977,51 @@ die-off/re-hatch, true butterflies stop flying in winter, decomposer
 cold-slowdown, herbivore winter-forage-realism, squirrel scarcity-shifts-
 eat-vs-cache, alpaca, bear hibernation/snake brumation, blackbird, and
 grass frog.
+
+### A new world always starts in mid-spring (2026-09-09)
+
+✅ Requested directly: "make starting season always mid spring." A new
+world's starting point in the year used to be a genuine, deliberate
+design decision from an earlier pass (see `concept/seasons.md`): every
+fresh save originally started at a hardcoded world-age `0.0`, which
+`SeasonCycle`'s own phase formula puts at warmth ≈0.1465 — just under the
+snow threshold — so every new game began mid-winter-adjacent and reliably
+snowed within minutes (reported then: "it starts to snow
+deterministically"). That was fixed by rolling a uniform random offset
+across the whole year, so a new world could begin in any season. This
+pass supersedes that random start with a fixed one: `EarthChunkManager.
+randomize_world_age()` is renamed `reset_world_age_to_mid_spring()` and
+now always sets the clock to exactly `SeasonCycle.MID_SPRING_YEAR_
+FRACTION` (a new tested constant, `0.125` — halfway through the spring
+quarter) through the year, rather than rolling `randf()`. Load Game is
+untouched: it still restores the clock's own persisted value and never
+resets it.
+
+New `SeasonCycle.MID_SPRING_YEAR_FRACTION` is the one shared, tested
+definition of "mid-spring" — matching, not duplicating, the test suite's
+own pre-existing local `MID_SPRING := 0.125` convention already used by
+`test_seasonal_foliage.gd`/`test_season_transition.gd`. `EarthChunkManager.
+MID_SPRING_WORLD_AGE_SECONDS := SeasonCycle.SECONDS_PER_YEAR *
+SeasonCycle.MID_SPRING_YEAR_FRACTION` replaces the old
+`NEW_GAME_WORLD_AGE_RANGE_SECONDS`.
+
+TDD: the three tests asserting the OLD random-start contract
+(`test_randomize_world_age_lands_within_one_year`, `..._does_not_always_
+land_on_the_same_moment`, `..._can_start_in_more_than_one_season`) are
+replaced with three asserting the new deterministic one —
+`test_reset_world_age_to_mid_spring_lands_in_spring`, `..._lands_exactly_
+halfway_through_spring` (pins the exact tuned fraction, not just "some
+day in spring"), and `..._always_lands_on_the_same_moment` (the literal
+opposite of the old "does not always land on the same moment" test).
+Confirmed red first (`MID_SPRING_YEAR_FRACTION`/`reset_world_age_to_mid_
+spring` didn't exist), green after. Every other reader of the old
+`randomize_world_age` name — `scenes/world.gd` (both the New Game call
+site and a save-related doc comment), `world_clock_persistence.gd`,
+`test_world_season_fanout.gd`, `test_npc_seen_ledger.gd` — updated to the
+new name; `docs/concept/seasons.md`'s own "A new world starts at a random
+point in the year" section rewritten to "...always starts in mid-spring"
+throughout. `test_earth_chunk_manager.gd` (world_age/world_clock/season-
+scoped, 36/36), `test_world_season_fanout.gd` (13/13),
+`test_npc_seen_ledger.gd` (21/21), `test_season_cycle.gd` (23/23), and
+`test_world_backup_paths.gd` (the fast source-text drift-pin covering
+`World._wipe_persisted_world`, 8/8) all re-confirmed green.

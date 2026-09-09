@@ -195,9 +195,10 @@ func test_decay_never_falls_back_as_the_world_ages():
 
 ## A rewound clock must clamp to a full burn, never to a NEGATIVE multiplier.
 ## The world clock really can move backwards under this ledger: New Game
-## calls EarthChunkManager.randomize_world_age, so a ledger restored beside a
-## younger world would otherwise multiply salience by a negative number and
-## inverse-sort every topic -- the least interesting thing said first.
+## calls EarthChunkManager.reset_world_age_to_mid_spring, so a ledger
+## restored beside a younger world would otherwise multiply salience by a
+## negative number and inverse-sort every topic -- the least interesting
+## thing said first.
 func test_a_rewound_world_clock_clamps_to_a_burn_rather_than_going_negative():
 	ledger.mark_told("npc:1", "village", 500.0)
 	assert_eq(ledger.decay("npc:1", "village", 100.0), 0.0)

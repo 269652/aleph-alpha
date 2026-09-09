@@ -11,10 +11,11 @@ extends RefCounted
 ##
 ## Why this needs to exist at all: the clock previously wasn't persisted in
 ## ANY form -- a fresh EarthChunkManager always starts at world-age 0, and
-## nothing ever wrote or read it back. New Game rolling a random starting
-## point (see EarthChunkManager.randomize_world_age) is only meaningful if
-## Load Game can resume that same point rather than landing back on the
-## hardcoded 0 default -- see docs/concept/seasons.md.
+## nothing ever wrote or read it back. New Game setting a mid-spring starting
+## point (see EarthChunkManager.reset_world_age_to_mid_spring) is only
+## meaningful if Load Game can resume where play actually left off rather
+## than landing back on the hardcoded 0 default (or re-resetting to
+## mid-spring) every session -- see docs/concept/seasons.md.
 
 const SAVE_PATH := "user://world_clock.bin"
 
