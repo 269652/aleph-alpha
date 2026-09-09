@@ -17686,3 +17686,125 @@ population counts ("compose the sound from what's actually around you" —
 the new creature-call system is a real, direct step in that exact
 direction for `robin`/`sparrow` specifically, not a full solution to the
 ambient beds' own baked-in decorative bird chorus).
+
+## Ant queen: a real winter->spring repeat-collapse bug fixed, plus two new real mechanics (2026-09-09)
+
+Reported live: *"Both ant mounds near the spawn show queenless when
+changing from winter to spring... they then refound; but it collapses
+again because there's still no queen.. can you fix this and make sure the
+workers care for their queen and make sure it doesn't die? If they have
+no queen; they should make a new one..."*, followed by two clarifying
+follow-ups: *"It should take time thoug for a new queen to hatch"* and,
+inviting real research rather than a game-y mechanic: *"idk how it's in
+the real world when the ant queen dies?"* Full grounding in
+[soil_fauna.md](concept/soil_fauna.md)'s "Winter->spring repeat-collapse:
+root cause and fix", "Workers protect their queen: a population floor",
+and "A new queen, over real time: adoption".
+
+✅ **Root cause, found by real reproduction, not guessed at.** A
+throwaway diagnostic probe (deleted once its job was done) starved a real
+`AntColony` mound to a literal 0.0 population (matching a real winter's
+near-total lack of forage success), trickled home exactly
+`REFOUNDING_FOOD_THRESHOLD` worth of food (3 successful trips — a
+realistic lone-forager recovery, not a windfall), and watched it
+"refound" at the full `STARTING_POPULATION` (15) while sitting on barely
+3.0 stored food against the 45.0 a colony that size actually needs
+(`food_availability_fraction` ≈ 0.067) — `PopulationModel.step`'s own
+logistic decline then crashed it back to a literal 0.0 within 10
+simulated days, repeatably, matching the live report exactly. Concentrates
+at the winter->spring boundary because that is precisely when a queenless
+mound's food first has a realistic chance to cross the threshold at all;
+confirmed (not assumed) this is not a spawn-location-specific mechanic —
+`TallGrass.shed_seed` has no hard winter cutoff and `capacity_at`'s own
+moisture/food terms are identical at every mound regardless of biome —
+the two spawn-adjacent mounds are simply the ones `MAX_MOUNDS`(2 per
+chunk) puts in front of the player every session.
+
+✅ **Fix 1: refounding/adoption now gives a real, matching food reserve,
+not just a population number.** New shared `AntColony._found_new_queen_at`
+helper (used by both re-founding paths below) tops `food_stored_at` up to
+`_founding_food_reserve()` via `maxf` (never reducing an already-ample
+reserve) at the same moment population resets to `STARTING_POPULATION` —
+a (re)founded colony is now exactly as food-secure as a genuinely
+brand-new one.
+
+✅ **Fix 2 / new mechanic: "workers protect their queen" — a real
+population floor.** `AntPopulationModel.step` now floors a LIVE colony's
+(`population > 0.0` going into the step) ordinary starvation/dormancy
+decline at `QUEEN_PROTECTED_POPULATION_FLOOR` (3.0, pinned — mirrors
+`CLUSTER_THRESHOLD`'s/`REFOUNDING_FOOD_THRESHOLD`'s own "3, a real
+minimum" reasoning) rather than letting it hit `PopulationModel.step`'s
+own hard "`capacity <= 0` → 0.0" rule — grounded in real worker-ant
+behaviour (queens are preferentially fed via trophallaxis during
+scarcity). Deliberately scoped to ordinary economic decline only —
+`forager_crushed`/`forager_eaten`/`bud_new_mound` all bypass it, so
+predation and player action remain real causes of death. Never a
+backdoor resurrection: a colony that starts a step already at a genuine
+0.0 gets no floor at all.
+
+✅ **New mechanic: a new queen, over real time — adoption.** A
+genuinely queenless mound (population truly 0.0) now has a SECOND,
+independent, deliberately much slower path to a new queen alongside the
+existing food-gated one: `AntColony._maybe_adopt_new_queen`, gated purely
+on real elapsed queenless time (`_queenless_seconds`, reset whenever a
+queen returns by either path) crossing `NEW_QUEEN_ADOPTION_SECONDS` —
+pinned at one real `SeasonCycle` season (`SECONDS_PER_YEAR / 4.0`,
+cross-checked by test so the two can't drift apart), and checked directly
+to be far slower than even the food-gated path's own old 22-real-minute
+worst case. Real research, done specifically because the user asked for
+it: grounded in pleometrosis / secondary polygyny by adoption (a
+newly-mated, dealate queen from a nuptial flight finding and being
+accepted into an existing queenless nest — real, documented ant biology,
+distinct from both honeybee in-place requeening AND this game's own
+existing food-gated "wholly fresh colony" refounding), with real nuptial
+flight seasonality (synchronised, genus-dependent, a few days per season)
+as the timescale's own grounding — see the concept doc for full sources.
+This deliberately extends, and partially revises the closing framing of,
+"A real ant queen, and why she cannot requeen like a bee" (2026-09-08) —
+that section's core finding (no worker-side path to rear a replacement
+queen) stands completely unchanged; what's added is a real, distinct,
+non-worker path (an OUTSIDE queen arriving) the original pass hadn't yet
+researched. `AntColony.refounding_progress_at` now reports whichever of
+the two real paths (food or time) is genuinely further along.
+
+✅ **TDD, strict.** 19 new tests across `test_ant_colony.gd`/
+`test_ant_population_model.gd` (food-reserve fix, the repro-turned-
+regression tests proving the repeat-collapse cycle is fixed across two
+consecutive lean stretches, adoption timing/grounding/food-reserve/
+timer-reset, `refounding_progress_at`), including an explicit
+`test_new_queen_adoption_does_not_resolve_quickly_or_immediately` per the
+live "it should take time" ask. 5 pre-existing tests updated to
+construct a genuine population-0.0 precondition directly (mirroring a
+real crushing/predation wipeout) now that ordinary starvation alone can
+no longer reach literal zero. `test_ant_colony.gd` 111/111,
+`test_ant_population_model.gd` 21/21, `test_ant_mound_marker.gd` 16/16,
+`test_ant_forager_marker.gd` 74/74, `test_ant_forage_behavior.gd` 8/8,
+`test_ant_scout_wander.gd` 10/10, and every ant-tagged test in
+`test_earth_chunk_manager.gd` (`step_ants`/dispatch/budding/weather/
+season-driven capacity and dormancy) all green — re-run directly against
+`main` after merge, not just on the feature branch.
+
+✅ **Live/simulated re-check against the real spawn point, not just unit
+tests.** A second throwaway probe drove the real, production
+`EarthChunkManager` (same "Berlin", 52.52°N 13.405°E, spawn coordinate
+`world.gd`/`test_earth_chunk_manager.gd` already use) through a real,
+live-computed winter→spring→summer stretch via the actual season/weather
+pipeline (`step_ants`, `advance_world_age`) — found 10 real mounds across
+the chunks around spawn, forced every one genuinely queenless deep in
+winter, and confirmed all 10 regained a queen (all via the new adoption
+path in this run — the food path never naturally crossed its threshold
+across a full season of real deep-winter conditions, a real finding in
+its own right about how load-bearing adoption actually is) and NONE
+cycled back to queenless again over the remaining stretch (settling at
+the protected floor, not zero, when the post-adoption economy stayed
+weak) — 20/20 assertions passed.
+
+⬜ **Honest gaps, named not hidden.** No UI distinction between "the food
+path is close" and "the time path is close" beyond `refounding_progress_
+at`'s own single merged number (mirrors the existing tooltip's own
+"queenless, awaiting refounding (NN%)" — still one number, now just a
+smarter one). No real ant queen art still exists (`AntQueenMarker` still
+falls back to the procedural silhouette, unrelated to this pass). No
+distinct visual/audio cue when adoption specifically (vs. the food path)
+is what brings a queen back — a player reads the same "she's there again"
+signal either way.
