@@ -17434,3 +17434,50 @@ same-frame read. `test_intro_splash.gd` 7/7, plus
 `test_world_play_intro_splash_frame_gate.gd`, and
 `test_world_intro_splash_after_load_fanout.gd` all re-run clean —
 no regression in the timing/gating mechanics the prior six passes fixed.
+
+## An eighth pass on the intro: genuinely pixel-perfect integer scaling (`concept/intro_splash.md`, 2026-09-09)
+
+Reported live again, on top of the seventh pass's own already-shipped fix
+above: "the intro is still full window... it should be much smaller."
+Both reports real — the seventh pass's 880x620 box is smaller than the
+full viewport, but still large on an ordinary window, and — asked
+directly how it should be sized instead, rather than guessed at — still
+an arbitrary target size rather than anything derived from the sheet's
+own resolution.
+
+**Two real, independent problems, not one:** (1) 880x620 was picked
+because the reporter pointed at the character panel, with no relationship
+to `intro.png`'s own native resolution — not "much smaller" by any
+principled measure. (2) `_display.texture_filter` had never been set at
+all (Godot's default, effectively linear) — a second, independent cause
+of "pixelated and wobbly" that shrinking the box alone never touched,
+since a smooth filter blurs/shimmers pixel-art edges at any non-1:1 scale
+regardless of box size.
+
+**The fix:** `IntroSplash._NATIVE_FRAME_SIZE` (`Vector2(233, 182)`) is the
+sheet's real per-frame pixel footprint, measured directly with
+`tools/probe_intro_sheet.gd` (the 32 real sliced frames land at 232-234
+wide, 181-183 tall — 233x182 is simply the modal exact size, and the one
+fixed reference the box scales from, so it never resizes frame to frame
+across that natural variance). `DISPLAY_SCALE := 3` gives `DISPLAY_SIZE :=
+_NATIVE_FRAME_SIZE * DISPLAY_SCALE` = 699x546 — comfortably smaller than
+the seventh pass's 880x620 in both dimensions — mirroring `MainMenu.
+STANDARD_PORTRAIT_SCALE`'s own established "integer scale of a real
+native size" pattern rather than an arbitrary literal. `stretch_mode`
+changed `STRETCH_KEEP_ASPECT_COVERED` → `STRETCH_KEEP_ASPECT_CENTERED`
+(no cropping) and `texture_filter` is now explicitly `TEXTURE_FILTER_
+NEAREST` — the missing other half of the fix. A new `display_is_pixel_
+perfect()` getter reports both are actually set, without a test reaching
+into the `TextureRect` node directly.
+
+**Strict TDD.** Three new tests confirmed red first — a parse error
+against the not-yet-existing `_NATIVE_FRAME_SIZE`/`DISPLAY_SCALE`/
+`display_is_pixel_perfect` (GUT silently skips a file that fails to
+compile, so the file's other 7 pre-existing tests didn't run at all until
+the fix landed, not just these 3) — green after. The seventh pass's own
+size/position test is renamed (its assertions read the live `DISPLAY_
+SIZE` constant, so they kept passing unchanged through its redefinition —
+only the name/doc comment needed updating). `test_intro_splash.gd` 10/10,
+`test_intro_splash_sequencer.gd` 7/7, `test_intro_splash_sheet.gd` 6/6,
+`test_world_play_intro_splash_frame_gate.gd` 3/3, `test_world_intro_
+splash_after_load_fanout.gd` 5/5 — no regression in any prior pass.

@@ -627,6 +627,81 @@ test verify what's shown without reaching past the class into its
 own established caution given how many of its prior bugs were exactly
 that class of false confidence.
 
+### An eighth pass: genuinely pixel-perfect integer scaling (2026-09-09)
+
+Reported live again, on top of the seventh pass's own already-shipped,
+tested fix: "the intro is still full window... it should be much
+smaller." Both reports are real -- the seventh pass genuinely did shrink
+`_display` from the full viewport down to 880x620, but that is still a
+large box on an ordinary window, and -- more to the point -- it was still
+an ARBITRARY target size (`MainMenu.PANEL_SIZE`, picked because the
+reporter pointed at the character panel, not because it bears any
+relationship to the sheet's own resolution), stretched into with the same
+`STRETCH_KEEP_ASPECT_COVERED` the full-screen version used. Asked
+directly how it should be sized instead, rather than guessed at: a
+pixel-perfect integer scale, centered -- the same crisp, unfiltered,
+whole-number-multiple treatment this game already gives every other
+generated/sliced texture it scales up (see `pixel_art_engine.md`'s house
+rules, and `MainMenu.STANDARD_PORTRAIT_SCALE`/`STANDARD_PORTRAIT_DISPLAY_
+SIZE` for the established pattern this pass mirrors directly), rather
+than an arbitrary fraction of the screen or a corner badge.
+
+**Where the remaining "pixelated and wobbly" was actually coming from,
+confirmed by reading `_display`'s own construction, not just resizing it
+again:** the seventh pass's fix only ever addressed the UPSCALE FACTOR
+(a smaller box needs less magnification) -- it never touched `_display.
+texture_filter`, which had never been set at all and so fell back to
+Godot's default (effectively linear) filter. A linear filter blurs and
+shimmers hard pixel-art edges at any scale that isn't a clean 1:1 -- the
+other, independent half of "pixelated and wobbly", present at ANY box
+size, including the already-shrunk 880x620 one.
+
+**The fix, two parts:**
+1. `IntroSplash._NATIVE_FRAME_SIZE` (`Vector2(233, 182)`) -- the sheet's
+   own real per-frame pixel footprint, measured directly with
+   `tools/probe_intro_sheet.gd` rather than assumed (see "The sheet"
+   above for why 1983/8 x 793/4 isn't exact for this sheet in the first
+   place). The 32 real sliced frames land at 232-234 wide and 181-183
+   tall -- 233x182 is simply the single most common exact size among
+   them, and the ONE fixed reference `DISPLAY_SIZE` scales from, so the
+   on-screen box itself never resizes frame to frame as playback moves
+   across that tiny natural variance (the literal meaning of "wobbly" if
+   it had: `STRETCH_KEEP_ASPECT_CENTERED`'s own letterboxing absorbs it
+   as an imperceptible sliver instead).
+2. `DISPLAY_SCALE := 3`, `DISPLAY_SIZE := _NATIVE_FRAME_SIZE *
+   DISPLAY_SCALE` (699x546) -- comfortably smaller than the seventh
+   pass's 880x620 in both dimensions, a real "much smaller" rather than a
+   cosmetic rename of the same box. `_display.stretch_mode` changed from
+   `STRETCH_KEEP_ASPECT_COVERED` to `STRETCH_KEEP_ASPECT_CENTERED` (no
+   cropping -- COVERED would crop a sliver of real content on any frame
+   landing a pixel or two over the reference size) and `_display.
+   texture_filter` is now explicitly `CanvasItem.TEXTURE_FILTER_NEAREST` --
+   the missing other half of the actual fix.
+
+A new `display_is_pixel_perfect()` getter (same "let a test verify
+without reaching past the class" rationale as `display_rect()`) reports
+whether both the filter and stretch mode are actually set correctly,
+rather than a test reaching into the `TextureRect` node directly.
+
+**Strict TDD.** `test_display_size_is_a_clean_integer_multiple_of_the_
+native_frame_size`, `test_display_size_is_smaller_than_the_prior_
+character_panel_sized_box`, and `test_display_is_pixel_perfect` in
+`test_intro_splash.gd` all confirmed red first (a parse error against the
+not-yet-existing `_NATIVE_FRAME_SIZE`/`DISPLAY_SCALE`/`display_is_pixel_
+perfect` -- GUT silently skips a file that fails to compile rather than
+reporting a normal failure, so this also meant the file's other 7
+pre-existing tests didn't run at all until the fix landed), green after.
+The seventh pass's own `test_display_is_sized_and_centered_to_the_
+character_panel_size` is renamed to `test_display_is_sized_and_centered_
+to_a_pixel_perfect_box` (its assertions read the live `DISPLAY_SIZE`
+constant rather than a hardcoded literal, so they kept passing unchanged
+through the value's own redefinition -- only the name/doc comment needed
+updating to stop claiming a size this pass no longer uses).
+`test_intro_splash.gd` 10/10, `test_intro_splash_sequencer.gd` 7/7,
+`test_intro_splash_sheet.gd` 6/6, `test_world_play_intro_splash_frame_
+gate.gd` 3/3, `test_world_intro_splash_after_load_fanout.gd` 5/5 -- no
+regression in any prior pass's timing/gating/sizing fixes.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
@@ -713,6 +788,13 @@ that class of false confidence.
   Reported live as looking "pixelated and wobbly" at full-viewport size;
   the same `STRETCH_KEEP_ASPECT_COVERED` now covers a smaller box, a real
   reduction in upscale factor. See `IntroSplash.DISPLAY_SIZE`.
+- ✅ **Revised (2026-09-09, "An eighth pass"): that box shrank again, to a
+  genuine pixel-perfect integer scale (699x546 = `_NATIVE_FRAME_SIZE`
+  `Vector2(233, 182)` x `DISPLAY_SCALE` 3) with `TEXTURE_FILTER_NEAREST`,
+  not an arbitrary literal with Godot's default filter.** Reported live
+  again: "it should be much smaller." Fixes the OTHER half of "pixelated
+  and wobbly" the seventh pass's box-shrink alone didn't touch -- the
+  missing `NEAREST` filter. See "An eighth pass" above.
 - ⬜ No audio. A logo intro without a sting/whoosh is a real, honest gap
   (this project has no music/SFX system wired up to hook into yet at
   all), not something this pass attempts.

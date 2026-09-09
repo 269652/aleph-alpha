@@ -106,11 +106,17 @@ func test_size_fills_the_viewport_once_ready_settles():
 ## panel... otherwise it looks pixelated and wobbly" -- the root Control
 ## (backdrop included) stays full-viewport (see the test above), but the
 ## actual animated TextureRect is deliberately NOT stretched across all of
-## it any more, so a much smaller upscale factor reaches the screen. See
-## IntroSplash.DISPLAY_SIZE's own doc comment for why that constant is a
-## plain literal (matching MainMenu.PANEL_SIZE) rather than a live
-## reference to it.
-func test_display_is_sized_and_centered_to_the_character_panel_size():
+## it any more, so a much smaller upscale factor reaches the screen.
+## Revised (2026-09-09, "An eighth pass"): the box itself shrank again, to
+## a genuine pixel-perfect integer multiple of the sheet's own native frame
+## size rather than an arbitrary literal -- see IntroSplash.DISPLAY_SIZE's
+## own doc comment. This test reads the live constant rather than a
+## hardcoded literal, so it keeps proving "centered, not cropped/stretched
+## across the viewport" regardless of which pass last changed the exact
+## size -- test_display_size_is_a_clean_integer_multiple_of_the_native_
+## frame_size and test_display_is_pixel_perfect below cover the size/
+## filtering specifics this test deliberately doesn't.
+func test_display_is_sized_and_centered_to_a_pixel_perfect_box():
 	var intro := _splash()
 	await wait_process_frames(2)
 	# Same pre-existing, expected warning test_size_fills_the_viewport_
@@ -128,4 +134,46 @@ func test_display_is_sized_and_centered_to_the_character_panel_size():
 	assert_eq(
 		intro.display_rect().position, expected_position,
 		"a shrunk display should stay centered, not pinned to a corner"
+	)
+
+
+## Reported live, again, on top of the seventh pass's already-shipped fix:
+## "the intro is still full window... it should be much smaller." The
+## seventh pass's own 880x620 (matching MainMenu.PANEL_SIZE) was smaller
+## than full-screen but still an ARBITRARY target size -- the same
+## STRETCH_KEEP_ASPECT_COVERED just covering a smaller box, not a clean
+## integer scale of the sheet's own native resolution. Pins the actual
+## fix: DISPLAY_SIZE must be exactly the sheet's own measured native frame
+## size times a whole number, the same "roundi/whole-number scale of a
+## real source size" discipline MainMenu.STANDARD_PORTRAIT_DISPLAY_SIZE
+## already established (see test_standard_portrait_display_size_is_a_
+## whole_number_scale_of_the_source_texture in test_main_menu.gd).
+func test_display_size_is_a_clean_integer_multiple_of_the_native_frame_size():
+	assert_eq(
+		IntroSplash.DISPLAY_SIZE, IntroSplash._NATIVE_FRAME_SIZE * IntroSplash.DISPLAY_SCALE,
+		"DISPLAY_SIZE must be derived from the native frame size times a whole number, not a separately hand-picked literal"
+	)
+
+
+## A regression guard, not just a restatement of the constant: the whole
+## point of this pass was "smaller than the seventh pass's already-shipped
+## 880x620 box", not merely "some other integer-scaled size that happens to
+## be bigger".
+func test_display_size_is_smaller_than_the_prior_character_panel_sized_box():
+	assert_lt(IntroSplash.DISPLAY_SIZE.x, 880.0)
+	assert_lt(IntroSplash.DISPLAY_SIZE.y, 620.0)
+
+
+## The other half of "pixelated and wobbly", not fixed by shrinking the box
+## alone: Godot's default TextureRect filter is smooth/linear, which blurs
+## and shimmers hard pixel-art edges at any non-1:1 scale -- exactly the
+## "wobbly" look reported, independent of how big or small the box is. This
+## game's other generated/sliced pixel art (e.g. MainMenu._standard_
+## portrait) already renders via TEXTURE_FILTER_NEAREST at a whole-number
+## scale for exactly this reason; the intro never did until now.
+func test_display_is_pixel_perfect():
+	var intro := _splash()
+	assert_true(
+		intro.display_is_pixel_perfect(),
+		"the animation should render with NEAREST filtering at a non-cropping integer scale"
 	)
