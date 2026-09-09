@@ -986,6 +986,7 @@ func _show_main_menu() -> void:
 	_main_menu.start_requested.connect(_on_menu_start_requested)
 	_main_menu.join_requested.connect(_on_menu_join_requested)
 	_main_menu.load_requested.connect(_on_menu_load_requested)
+	_main_menu.replay_intro_requested.connect(_on_menu_replay_intro_requested)
 	get_tree().paused = true
 
 
@@ -1168,6 +1169,16 @@ func _on_menu_join_requested(address: String) -> void:
 	await _show_loading_overlay("Connecting to host...")
 	_start_client_to(address)
 	_dismiss_main_menu()
+
+
+## Watch it again, on demand (see docs/concept/intro_splash.md's "Replaying
+## the intro on demand" -- asked directly). Calls the exact same, unmodified
+## _play_intro_splash() the two existing automatic triggers (boot, New
+## Game/Host Game) already use -- the menu itself stays up underneath
+## (still paused-but-interactive, see _show_main_menu), and control returns
+## to it the instant this call resolves; nothing else here needs undoing.
+func _on_menu_replay_intro_requested() -> void:
+	await _play_intro_splash()
 
 
 func _dismiss_main_menu() -> void:
@@ -3142,7 +3153,7 @@ func _on_console_command(command: String, args: Array) -> void:
 					+ "  /craft <recipe_id>  /gold <amount>  /village  /species  /help"
 					+ "  /compass  /map  /weatherglass  /almanac  /deed"
 					+ "  /ledger propose|accept|fulfill|breach ...  /charter found <type> <counterparty_id>"
-					+ "  /journal <entity_id>  /flowdebug [strokes|off]"
+					+ "  /journal <entity_id>  /flowdebug [strokes|off]  /intro"
 				)
 			)
 		"flowdebug":
@@ -3224,6 +3235,8 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_compass_command(local_player)
 		"map":
 			_handle_map_command(local_player)
+		"intro":
+			await _handle_intro_command()
 		"weatherglass":
 			_handle_weatherglass_command(local_player)
 		"almanac":
@@ -3819,6 +3832,18 @@ func _handle_map_command(local_player: Player) -> void:
 	for landmark in visible:
 		ids.append(landmark.get("id"))
 	_dev_console.log_line("Settlements visible: %s" % ", ".join(ids))
+
+
+## /intro -- watch the boot intro splash again, on demand (see docs/concept/
+## intro_splash.md's "Replaying the intro on demand" -- asked directly).
+## Calls the exact same, unmodified _play_intro_splash() the two existing
+## automatic triggers (boot, New Game/Host Game) already use. No args, no
+## usage message, no player/local-state check -- unlike every command
+## above/below that reads something a player carries or a chunk holds,
+## there is nothing here that could fail: the intro sheet is a static
+## asset cached at first build, not real, mutable game state.
+func _handle_intro_command() -> void:
+	await _play_intro_splash()
 
 
 ## /weatherglass -- requires "weather_glass" (docs/concept/wayfinding.md's
