@@ -93,3 +93,21 @@ func test_only_the_actually_expired_print_is_pruned_not_everything():
 	field.advance(FootprintField.LIFETIME_SECONDS + 1.5)
 	assert_eq(field.count(), 1, "the fresh second print should survive even though the first one just expired")
 	assert_eq(field.prints()[0].side, "right")
+
+
+# -- size_scale: how big a mark THIS print's own creature left, driven by --
+# -- its real mass (see EarthChunkManager.record_footstep/CreatureMass. ----
+# -- linear_scale_for_mass_ratio, docs/concept/snow_cover.md's ------------
+# -- "Footprints depend on real mass, not just surface") -------------------
+
+func test_add_print_records_a_real_size_scale():
+	field.add_print(Vector2.ZERO, "left", "snow", Vector2.UP, 0.0, 2.5)
+	assert_almost_eq(field.prints()[0].size_scale, 2.5, 0.001)
+
+
+## Every pre-existing 5-arg call site across the whole project (this test
+## file's own helpers above included) must keep rendering at exactly
+## today's size -- a fresh optional 6th parameter, not a behavior change.
+func test_add_print_defaults_size_scale_to_one_for_every_pre_existing_caller():
+	field.add_print(Vector2.ZERO, "left", "snow", Vector2.UP, 0.0)
+	assert_almost_eq(field.prints()[0].size_scale, 1.0, 0.001)

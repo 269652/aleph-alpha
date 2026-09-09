@@ -30,6 +30,13 @@ extends RefCounted
 ##                  orients each print's toe along this.
 ##   spawned_at -- world_age_seconds when this print was stamped. Drives
 ##                  LIFETIME_SECONDS pruning only.
+##   size_scale -- how big a mark THIS print's own walker left, driven by
+##                  its real mass (CreatureMass.linear_scale_for_mass_
+##                  ratio against the player's own reference mass -- see
+##                  EarthChunkManager.record_footstep). 1.0 is today's
+##                  existing fixed print size (the player's own, by
+##                  construction); FootprintRenderer multiplies this
+##                  straight into the render transform's own scale.
 
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
@@ -49,13 +56,16 @@ var _prints: Array[Dictionary] = []
 var _generation := 0
 
 
-func add_print(position: Vector2, side: String, surface: String, heading: Vector2, now: float) -> void:
+func add_print(
+	position: Vector2, side: String, surface: String, heading: Vector2, now: float, size_scale: float = 1.0
+) -> void:
 	_prints.append({
 		"position": position,
 		"side": side,
 		"surface": surface,
 		"heading": heading,
 		"spawned_at": now,
+		"size_scale": size_scale,
 	})
 	_generation += 1
 

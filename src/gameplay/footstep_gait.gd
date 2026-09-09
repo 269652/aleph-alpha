@@ -50,6 +50,17 @@ const STANCE_WIDTH_PX := STANCE_WIDTH_METERS * GroundSlide.PX_PER_METER
 
 var _distance_since_last_step := 0.0
 var _next_is_left := true
+## This walker's own last-known real position -- Vector2(INF, INF) means
+## "no prior call yet" (see step_at), the same sentinel EarthChunkManager.
+## _last_footstep_position used to carry externally before this. Owning it
+## HERE, not on the caller, is what makes one FootstepGait instance the
+## WHOLE per-walker footstep record (see this file's own header doc
+## comment: "one FootstepGait per walker") -- a CreatureMarker (or the
+## player) needs no second, external position tracker alongside its own
+## lazily-built FootstepGait, the same "one object, everything about this
+## walker's own footfalls" contract current_mass_kg()'s lazily-built
+## Metabolism already has for mass.
+var _last_position := Vector2(INF, INF)
 
 
 ## Consumes `distance_travelled` (real world px moved since the last call)
@@ -92,3 +103,28 @@ static func print_offset(heading: Vector2, side: String) -> Vector2:
 	var perpendicular := Vector2(-direction.y, direction.x)
 	var sign := -1.0 if side == "left" else 1.0
 	return perpendicular * sign * (STANCE_WIDTH_PX / 2.0)
+
+
+## The complete per-walker entry point: consumes this walker's CURRENT real
+## `position` and returns "left"/"right"/"" exactly like step_if_due, but
+## owning the distance-since-last-call AND teleport detection internally
+## too (see _last_position's own doc comment) rather than needing a caller
+## to track a separate last-position and pre-compute a distance itself.
+## Mirrors EarthChunkManager.record_footstep's own original inline shape
+## exactly (see that function's prior revision): the very first call
+## establishes a baseline and reports no step yet; a jump past
+## `teleport_gap_px` (a real dev-command/respawn/save-load discontinuity,
+## not real walking) resets the stride accumulator AND restarts the
+## left/right alternation from "left" -- the same full reset a brand new
+## FootstepGait() used to give by being thrown away and replaced wholesale.
+func step_at(position: Vector2, teleport_gap_px: float) -> String:
+	if is_inf(_last_position.x):
+		_last_position = position
+		return ""
+	var distance := position.distance_to(_last_position)
+	_last_position = position
+	if distance > teleport_gap_px:
+		_distance_since_last_step = 0.0
+		_next_is_left = true
+		return ""
+	return step_if_due(distance)

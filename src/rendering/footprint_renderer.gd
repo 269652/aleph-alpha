@@ -102,6 +102,15 @@ func fill(mmis: Dictionary, prints: Array) -> void:
 ## points along the real heading it was stamped with instead. "Left" is
 ## a horizontal mirror of the same shape (negative local x-scale) rather
 ## than a second texture.
+##
+## Scaled by the print's own "size_scale" (see FootprintField.add_print's
+## own doc comment) on top of the fixed PRINT_WORLD_SCALE -- a heavier
+## creature's own print reads larger, a lighter one's smaller (see
+## docs/concept/snow_cover.md's "Footprints depend on real mass, not just
+## surface"), the SAME shared texture just rendered at a different real
+## size rather than a texture per mass bucket. Defaults to 1.0 (today's
+## existing fixed size) for any print dict with no such key at all --
+## every pre-existing caller is unaffected.
 func _transform_for(p: Dictionary) -> Transform2D:
 	var heading: Vector2 = p.get("heading", Vector2.UP)
 	var direction := heading.normalized()
@@ -116,7 +125,7 @@ func _transform_for(p: Dictionary) -> Transform2D:
 	# difference between the two, not `direction.angle()` alone.
 	var rotation := direction.angle() - Vector2.UP.angle()
 	var side_scale := -1.0 if p.get("side", "right") == "left" else 1.0
-	var scale := ProceduralFootprintSprite.PRINT_WORLD_SCALE
+	var scale := ProceduralFootprintSprite.PRINT_WORLD_SCALE * float(p.get("size_scale", 1.0))
 	# Basis vectors built directly (rotation composed with scale, mirror
 	# included) rather than via Transform2D(rotation, origin).scaled_local
 	# -- that chained call was silently discarding the origin in practice,

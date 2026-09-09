@@ -104,3 +104,28 @@ static func _mass_from_world_scale(species: String) -> float:
 	var anchor_mass: float = _REAL_MASS_KG[_FALLBACK_ANCHOR_SPECIES]
 	var reference_mass_at_scale_one := anchor_mass / (anchor_scale * anchor_scale * anchor_scale)
 	return reference_mass_at_scale_one * (species_scale * species_scale * species_scale)
+
+
+## The INVERSE of _mass_from_world_scale's own real relationship above
+## ("mass follows volume, which follows the cube of a linear dimension") --
+## given a real mass and a real reference mass, returns the corresponding
+## LINEAR scale ratio (the cube root of the mass ratio), not an area or
+## volume ratio. Applied to a genuinely different real consequence of mass
+## than mass_kg_for itself is: how big a mark a creature's own foot leaves
+## in the ground, not how much it weighs in the first place -- see
+## EarthChunkManager.record_footstep, docs/concept/snow_cover.md's
+## "Footprints depend on real mass, not just surface". A deer-sized print
+## at deer-sized mass already reads as today's existing footprint art (see
+## PLAYER_MASS_KG's own doc comment -- 70kg is the SAME human reference
+## that art was implicitly sized for), so this is a real physical scaling
+## rule, not a second, independently-tuned "how big should prints be" knob.
+##
+## Zero (never a negative or NaN result) for a non-positive mass or
+## reference -- the same "narrows, never crashes" contract every other
+## defensive numeric guard in this codebase already follows, not a real
+## situation this table's own real species masses could ever produce on
+## their own.
+static func linear_scale_for_mass_ratio(mass_kg: float, reference_mass_kg: float) -> float:
+	if reference_mass_kg <= 0.0 or mass_kg <= 0.0:
+		return 0.0
+	return pow(mass_kg / reference_mass_kg, 1.0 / 3.0)
