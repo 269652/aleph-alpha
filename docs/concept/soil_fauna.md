@@ -244,10 +244,18 @@ watched the bird peck at them.
   `perched` folded-wing state, which nothing in `src/` had ever set before this.
 - ✅ Live wiring end to end — `EarthChunkManager` (`worms_near`, `take_worm_at`,
   `step_worms`, chunk load/unload lifecycle) called from `World._process`.
-- ⬜ Seeds + sparrow granivory (next pass — same shape, see above).
+- ✅ Seeds + sparrow granivory — `FlyerDiet.DIET_BY_SPECIES["sparrow"]`
+  includes `FOOD_SEEDS`; this list was stale, not the code (this entry
+  was already done by the time this bullet was next touched).
 - ⬜ Fruit as a diet entry for robins (waits on fruit trees).
-- ⬜ Worm population dynamics / bird carrying capacity from worm density.
+- ✅ Worm/seed population dynamics / bird carrying capacity —
+  `RobinPopulationModel`/`SparrowPopulationModel`, each wrapping the
+  shared `PopulationModel` (logistic growth + regional migration) against
+  real worm-burrow/ground-seed-cell density (`EcosystemSimulation`). This
+  list was stale, not the code, same as the bullet above.
 - ⬜ Persistence and catch-up integration of eaten burrows (deliberate, above).
+- ✅ Sparrows flock, robins don't (`BirdFlocking`, `src/gameplay/
+  bird_flocking.gd`) — see "Sparrows flock, robins don't" below.
 - ✅ Crushed underfoot: weight-emergent worm mortality (`CreatureMass`,
   `EarthwormPatch.CRUSH_MOMENTUM_THRESHOLD_KG_M_S`/`is_crushed_by`,
   `EarthChunkManager.crush_worm_at`, wired for the player and every
@@ -3746,6 +3754,94 @@ Both now guard with `is_instance_valid` first, erasing the stale entry
 instead of touching it — the exact pattern `crush_ants_near`/
 `_crush_markers_near` already established for the identical shape of bug
 (see "FPS regression round 3" above).
+
+## Sparrows flock, robins don't (2026-09-09)
+
+Reported live, directly: *"Can you make sparrows build flocks and hang
+around in groups? maybe increase their number slightly"* — then, once the
+population half was already in flight, revised directly again: *"Raise
+sparrows to 14."*
+
+**Why sparrow, and not robin too.** `AmbientFlyerMarker` is one shared
+class for both — `BEHAVIOR_TREE_SPECIES` already has robin and sparrow
+running the literal identical parsed behavior tree
+(`"ground_foraging_songbird"`), and diet/range/population are already
+species-keyed data lookups on that one class, never a code branch (this
+doc's own design pillar 2: *"diet is a property of the species, not of
+the code path"*). Flocking follows the same rule — a data set
+(`BirdFlocking.FLOCKS`), not a new marker subclass — but the real-world
+grounding for WHICH species is in it matters: a house sparrow is a
+genuinely, famously flocking bird (foraging groups, communal roosts), a
+European robin is famously the opposite (solitary and territorial outside
+a mated pair — the same bird whose UK folklore is built on it fighting
+other robins over territory). Robin and blackbird stay un-flocked.
+
+**The population half.** `AmbientFlyerRenderer.MAX_SPARROWS_PER_CHUNK`
+was a flat perf cap shared with robin/blackbird, its own doc comment
+explicit that this was deliberate: *"kept modest — ambient birds are
+still meant to read as a light presence, not a flock."* Raised `4 → 14`
+for sparrow alone (robin/blackbird stay at their original 4 — species-
+accurate for them, not just a perf choice, per the paragraph above) —
+pinned by test, not merely read back symbolically: a saturating
+population now spawns exactly 14.
+
+**The movement half — `BirdFlocking`** (`src/gameplay/bird_flocking.gd`).
+Mirrors `FishSchooling`'s own ZONAL MODEL exactly (Aoki 1982; Huth &
+Wissel 1992) — repulsion (too close: peel away), orientation (a
+comfortable middle distance: match heading, i.e. follow), attraction (far
+but noticed: fly toward) — by distance to the single nearest SAME-SPECIES
+neighbour, no coordination needed (the same point this doc's fish
+sibling, `ecosystem_dynamics.md`'s "A shoal finds its shape", already
+makes: *"give every individual the same independent reaction and the
+group behaviour emerges for free"*). Deliberately without
+`FishSchooling`'s own play-chase extra — not asked for here, and a
+fish-specific flourish rather than part of the zonal model itself.
+
+The body-length constant this scales from was measured, not guessed
+twice over. First attempt: a real 0.15m house sparrow converted via
+`GroundSlide.PX_PER_METER` (the same real-world-to-world-px idiom
+`FootstepGait`'s stride/stance already use) — landed at ~1.68 world px.
+Checked against the sparrow's OWN real rendered width before trusting
+it (`IllustratedBirdSprite.CANVAS_SIZE.x * marker_scale("sparrow")`,
+~5.19px) and found genuinely wrong: under a third of the sprite's real
+size. `GroundSlide.PX_PER_METER` calibrates the PLAYER's own real height
+against the world; `AmbientFlyerRenderer.FLYER_WORLD_SCALE` sizes a bird
+against a completely independent reference (a fish, per that constant's
+own doc comment) — the two scales were never calibrated to agree, and
+empirically don't. Corrected to mirror `FishSchooling.FISH_BODY_
+LENGTH_PX`'s own precedent instead: sized to the sprite's real rendered
+extent (~5.19px), restated as a plain constant and cross-checked directly
+by test rather than left to drift as an unchecked comment — the same
+"a genuinely wrong measurement, caught and corrected within this same
+pass rather than shipped" discipline this file's own canopy-snow section
+already names for a different mechanism.
+
+Neighbour lookup reuses `EarthChunkManager.flyers_near` — the identical
+bounded 3x3-chunk query `AmbientFlyerMarker._scan_for_partners` already
+uses for courtship, via a new `flock_world` field wired the same way
+`courtship_world` is (*"every caller passes the chunk manager... needed
+for a different reason, so it is named for what it is used for"*), with
+the identical whole-tree-group fallback for a standalone/test marker. The
+resulting steering blends into ordinary wander (`FLOCK_STEER_WEIGHT =
+0.5`, same "lean, don't beeline" reasoning `SCENT_STEER_WEIGHT` already
+documents) rather than replacing it — a sparrow still forages and
+wanders, just leaning toward its flockmate while it does. A new
+`current_heading()` accessor (mirrors `FishMarker`'s own) lets one
+flocking bird read another's real travel heading for the orientation
+zone's heading-match.
+
+**A real, independent test bug caught in the same pass, not shipped
+silently fixed.** The end-to-end regression test (two otherwise-identical
+sparrows, only one given a real flockmate, proving the blend actually
+moves the real `_process` heading and not just an internal field) first
+failed with BOTH twins reporting a heading of exactly zero. Root cause:
+three sparrows placed close together for the test are also real
+`BirdCourtship` candidates for each other, via the IDENTICAL `FLOCK_
+GROUP` whole-tree fallback flocking itself uses — courtship paired and
+perched them before the wander tier this test actually measures was ever
+reached. Fixed by isolating courtship with an empty `courtship_world` for
+the stepped birds, the same "give a test double that returns nothing" the
+existing courtship-scan tests already use for the opposite case.
 
 ## Caterpillars: on trees, on the ground, green leaves only
 

@@ -7,6 +7,7 @@ extends GutTest
 
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
+const BirdFlocking = preload("res://src/gameplay/bird_flocking.gd")
 const PollinatorForaging = preload("res://src/gameplay/pollinator_foraging.gd")
 const LifeCycle = preload("res://src/gameplay/life_cycle.gd")
 
@@ -2152,6 +2153,151 @@ func test_scan_for_partners_does_not_fall_back_to_the_whole_tree_group():
 	assert_eq(
 		a._courting_with, 0,
 		"must not fall back to scanning the whole tree group once a courtship_world is wired"
+	)
+
+
+# -- flocking (see BirdFlocking, docs/concept/soil_fauna.md's "Sparrows -----
+# -- flock, robins don't") ---------------------------------------------------
+# Reported live: "make sparrows build flocks and hang around in groups? maybe
+# increase their number slightly" (see AmbientFlyerRenderer.MAX_SPARROWS_
+# PER_CHUNK for the population half). Mirrors the courtship scan tests just
+# above exactly -- same _CountingFlyerWorld double, same "uses only what
+# flyers_near returns" / "does not fall back to the whole tree group" pair,
+# since _nearest_flockmate is the identical shape as _scan_for_partners'
+# own candidate lookup.
+
+func test_flocking_finds_a_flockmate_using_only_what_flyers_near_returns():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("sparrow", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("sparrow", Vector2(100, 100) + Vector2(BirdFlocking.ATTRACTION_RADIUS_PX / 2.0, 0), parent)
+	var world := _CountingFlyerWorld.new()
+	world.result = [a, b]
+	a.flock_world = world
+
+	a._step_flocking(BirdFlocking.SCAN_INTERVAL + 0.01)
+	assert_eq(a._flock_neighbor, b, "must find the real flockmate using only what flyers_near returns")
+	assert_gt(world.call_count, 0, "flyers_near must actually be consulted when a flock_world offers it")
+
+
+func test_flocking_does_not_fall_back_to_the_whole_tree_group():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("sparrow", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("sparrow", Vector2(105, 100), parent)  # 5px away, well inside every zone
+	var world := _CountingFlyerWorld.new()
+	world.result = []  # nobody -- even though b is right there in the group
+	a.flock_world = world
+
+	a._step_flocking(BirdFlocking.SCAN_INTERVAL + 0.01)
+	assert_eq(a._flock_neighbor, null, "must not fall back to scanning the whole tree group once flock_world is wired")
+	assert_eq(a._flock_direction, Vector2.ZERO)
+
+
+func test_flocking_falls_back_to_the_group_when_no_world_is_wired():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("sparrow", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("sparrow", Vector2(105, 100), parent)
+	# a.flock_world deliberately left null -- a standalone/legacy marker.
+	a._step_flocking(BirdFlocking.SCAN_INTERVAL + 0.01)
+	assert_eq(a._flock_neighbor, b, "with no flock_world wired, the old whole-group scan should still work")
+
+
+func test_flocking_ignores_a_different_species_neighbor():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var sparrow := _flyer_in_tree("sparrow", Vector2(100, 100), parent)
+	var robin := _flyer_in_tree("robin", Vector2(105, 100), parent)
+	var world := _CountingFlyerWorld.new()
+	world.result = [sparrow, robin]
+	sparrow.flock_world = world
+
+	sparrow._step_flocking(BirdFlocking.SCAN_INTERVAL + 0.01)
+	assert_eq(sparrow._flock_neighbor, null, "a sparrow must not flock with a nearby robin")
+
+
+func test_robins_never_flock_even_with_a_flockmate_right_there():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("robin", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("robin", Vector2(105, 100), parent)
+	var world := _CountingFlyerWorld.new()
+	world.result = [a, b]
+	a.flock_world = world
+
+	a._step_flocking(BirdFlocking.SCAN_INTERVAL + 0.01)
+	assert_eq(a._flock_neighbor, null, "a real European robin does not flock")
+	assert_eq(world.call_count, 0, "a non-flocking species should not even pay the scan cost")
+
+
+func test_a_flockmate_just_inside_repulsion_is_avoided():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("sparrow", Vector2(100, 100), parent)
+	var too_close := BirdFlocking.REPULSION_RADIUS_PX / 2.0
+	var b := _flyer_in_tree("sparrow", Vector2(100, 100) + Vector2(too_close, 0), parent)
+	var world := _CountingFlyerWorld.new()
+	world.result = [a, b]
+	a.flock_world = world
+
+	a._step_flocking(BirdFlocking.SCAN_INTERVAL + 0.01)
+	assert_almost_eq(a._flock_direction.x, -1.0, 1e-6, "too close: should peel away from its flockmate")
+
+
+func test_a_distant_flockmate_is_approached():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("sparrow", Vector2(100, 100), parent)
+	var mid_attraction := (BirdFlocking.ORIENTATION_RADIUS_PX + BirdFlocking.ATTRACTION_RADIUS_PX) / 2.0
+	var b := _flyer_in_tree("sparrow", Vector2(100, 100) + Vector2(mid_attraction, 0), parent)
+	var world := _CountingFlyerWorld.new()
+	world.result = [a, b]
+	a.flock_world = world
+
+	a._step_flocking(BirdFlocking.SCAN_INTERVAL + 0.01)
+	assert_almost_eq(a._flock_direction.x, 1.0, 1e-6, "far but noticed: should fly toward its flockmate")
+
+
+## The real end-to-end proof this codebase's own history says matters (see
+## the courtship tests' own class-level doc comment: "a rule can be right
+## and still produce nothing observable because nothing drove it through
+## real frames"). Two otherwise-IDENTICAL sparrows (same seed, position,
+## home -- so pure wander alone would give them the exact same heading);
+## only ONE has a flockmate due east within the attraction zone. If the
+## blend into _process really works, that one alone should end up leaning
+## measurably further east than its flockmate-less twin.
+func test_flocking_measurably_bends_the_real_process_heading_toward_a_flockmate():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var lone := _flyer_in_tree("sparrow", Vector2(300, 300), parent)
+	var flocked := _flyer_in_tree("sparrow", Vector2(300, 300), parent)
+	var mid_attraction := (BirdFlocking.ORIENTATION_RADIUS_PX + BirdFlocking.ATTRACTION_RADIUS_PX) / 2.0
+	var flockmate := _flyer_in_tree("sparrow", Vector2(300, 300) + Vector2(mid_attraction, 0), parent)
+	# Three real sparrows this close together would otherwise also be real
+	# BirdCourtship candidates for each other (same species-eligibility,
+	# same FLOCK_GROUP fallback flocking itself uses) -- isolate that
+	# UNRELATED mechanism with an empty courtship_world for both stepped
+	# birds, so a courtship pairing/freeze can never be mistaken for (or
+	# interfere with) the flocking blend this test actually exercises.
+	var no_courtship := _CountingFlyerWorld.new()
+	lone.courtship_world = no_courtship
+	flocked.courtship_world = no_courtship
+	var world := _CountingFlyerWorld.new()
+	world.result = [flocked, flockmate]
+	flocked.flock_world = world
+	# `lone` deliberately gets no flock_world/result including itself, so it
+	# can never find a flockmate at all -- the one real difference between
+	# the two otherwise-identical twins.
+
+	for i in 60:
+		lone._process(FRAME)
+		flocked._process(FRAME)
+
+	var due_east := Vector2.RIGHT
+	assert_gt(
+		flocked.current_heading().dot(due_east), lone.current_heading().dot(due_east),
+		"the sparrow with a real flockmate due east should end up heading further east than its twin"
 	)
 
 

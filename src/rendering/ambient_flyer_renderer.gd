@@ -197,11 +197,19 @@ const MAX_BUTTERFLIES_PER_CHUNK := 4
 ## docs/concept/ecosystem_dynamics.md's Open questions). These are perf caps
 ## only, mirroring CreatureRenderer.MAX_MARKERS_PER_SPECIES's exact role: a
 ## region's aggregate population can be arbitrarily large, so promotion is
-## capped rather than spawning one marker per unit unconditionally. Kept
-## modest -- ambient birds are still meant to read as a light presence, not a
-## flock.
+## capped rather than spawning one marker per unit unconditionally.
+##
+## Robin (and blackbird) stay modest -- a real European robin is famously
+## territorial and solitary outside a mated pair, so reading as a light,
+## scattered presence is species-accurate, not just a perf choice. Sparrow
+## is deliberately NOT modest any more (reported live: "make sparrows
+## build flocks and hang around in groups? maybe increase their number
+## slightly", then revised directly to "raise sparrows to 14"): a real
+## house sparrow flock is a loose, visible group, and BirdFlocking
+## (src/gameplay/bird_flocking.gd) gives sparrows the cohesive movement to
+## actually read as one once there are enough on screen to form it.
 const MAX_ROBINS_PER_CHUNK := 4
-const MAX_SPARROWS_PER_CHUNK := 4
+const MAX_SPARROWS_PER_CHUNK := 14
 const MAX_BLACKBIRDS_PER_CHUNK := 4
 
 ## Butterflies render at half size -- a real scale difference from songbirds
@@ -800,6 +808,10 @@ func _build_marker(
 	# same object, but for spawning rather than for smelling, so it is named
 	# for what it is used for.
 	marker.courtship_world = scent_world
+	# Who to ask for nearby same-species flockmates (see BirdFlocking) --
+	# the same object again, for a third, different reason (mirrors
+	# courtship_world's own precedent exactly).
+	marker.flock_world = scent_world
 	# Remembered before anything shrinks it, so a juvenile grows toward this
 	# species' own adult size (see AmbientFlyerMarker._step_growing).
 	marker.set_adult_scale(marker.scale)

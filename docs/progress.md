@@ -19235,3 +19235,55 @@ world_boot_loading_overlay_fanout.gd`, and the 4 `test_main_menu.gd`
 tests exercising `LoadingOverlay` directly (scoped via
 `-gunit_test_name=loading_overlay` per that file's own documented
 slow-suite cost) — no regression in any of the five entry points.
+
+### Sparrows flock, robins don't; sparrow count raised 4 → 14 (2026-09-09)
+
+✅ Reported live, directly: *"Can you make sparrows build flocks and hang
+around in groups? maybe increase their number slightly"* — the population
+number then revised directly, mid-turn: *"Raise sparrows to 14."*
+
+- **`AmbientFlyerRenderer.MAX_SPARROWS_PER_CHUNK`** `4 → 14`. Its own doc
+  comment used to say this cap was deliberately modest, "not a flock" —
+  now true only for robin/blackbird, which stay at 4 (species-accurate:
+  a real European robin is territorial and solitary outside a mated pair,
+  not just a perf choice). Pinned by test, not read back symbolically: a
+  saturating population now spawns exactly 14.
+- **`BirdFlocking`** (`src/gameplay/bird_flocking.gd`, NEW) — mirrors
+  `FishSchooling`'s zonal model exactly (repulsion/orientation/attraction
+  by distance to the nearest same-species neighbour), gated by species
+  (`FLOCKS`, currently `["sparrow"]` only — robin and sparrow share the
+  literal identical `AmbientFlyerMarker` class and behavior tree, so this
+  is a data set, not a new marker subclass). A real scale bug caught
+  before shipping: the body-length constant, first derived from a real
+  0.15m sparrow via `GroundSlide.PX_PER_METER`, measured under a third of
+  the sprite's own real rendered width once checked against the render —
+  `GroundSlide.PX_PER_METER` calibrates the player's height, `FLYER_
+  WORLD_SCALE` sizes a bird against an unrelated reference (a fish); the
+  two aren't calibrated to agree. Corrected to mirror `FishSchooling.
+  FISH_BODY_LENGTH_PX`'s own precedent: sized to the real render, not
+  real-world meters.
+- **`AmbientFlyerMarker._step_flocking`** — re-scans for the nearest
+  flockmate on `BirdFlocking.SCAN_INTERVAL`'s cadence via the same bounded
+  `EarthChunkManager.flyers_near` query `_scan_for_partners` already uses
+  for courtship (new `flock_world` field, wired the same way
+  `courtship_world` is), falling back to the whole-tree group only when
+  no world is wired. Blends into ordinary wander (`FLOCK_STEER_WEIGHT =
+  0.5`) rather than replacing it. New `current_heading()` accessor
+  (mirrors `FishMarker`'s own) lets one flocking bird read another's real
+  heading for the orientation zone's heading-match.
+
+Real test bug caught in the same pass: the end-to-end proof (two
+otherwise-identical sparrows, only one given a real flockmate) first
+failed with both reporting a zero heading — three sparrows that close
+together are also real `BirdCourtship` candidates for each other via the
+identical `FLOCK_GROUP` fallback flocking itself uses, so courtship
+paired and froze them before the wander tier the test measures was ever
+reached. Fixed with an isolated (empty) `courtship_world`.
+
+`test_bird_flocking.gd` 12/12, `test_ambient_flyer_marker.gd` 192/194 (8
+new, all green — the 2 failures are the same pre-existing, unrelated
+whirl-pair issue already on `main`), `test_ambient_flyer_renderer.gd`
+61/61. Also corrected two stale `⬜` items in this doc's own bird status
+list (seed granivory, worm/seed population dynamics — both were already
+done). See [soil_fauna.md](concept/soil_fauna.md#sparrows-flock-robins-dont-2026-09-09)
+for the full mechanism.
