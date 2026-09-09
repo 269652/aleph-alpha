@@ -17886,3 +17886,94 @@ itself. `test_earth_chunk_manager.gd` gained a targeted blackbird
 reconciliation regression test mirroring sparrow's own bug-history test
 exactly, run via `-gunit_test_name=` scoping to avoid the file's
 documented full-suite cost.
+
+### Seasonal behavior, phase 10 of 10: grass frog — the epic's last new species (2026-09-09)
+
+✅ **The most novel "new species from nothing" piece in the whole
+seasonal-behavior pass, built last so every earlier phase's pattern was
+proven first — and the epic's tenth and final phase.**
+`assets/sprites/frogs/grass_frog.png` had zero code references before
+this: a perfectly regular 8-column x 4-row grid (1536x1024, 192x256 per
+cell — dimension-identical to caterpillar.png/worm.png), confirmed via a
+temporary probe script (dumped every one of the 32 cells to disk,
+measured real opaque-pixel counts in a comfortable 9000-14500 range, none
+blank; deleted after use, never committed) rather than assumed. Four
+real, biologically distinct rows: idle (sitting, slight turn), hop
+(crouch/leap/land — frogs hop, they don't walk), eat (tongue shoots out
+and catches a fly mid-sequence), croak (throat/vocal sac visibly
+inflates). New `IllustratedGrassFrogSprite` mirrors
+`IllustratedCaterpillarSprite`'s exact shape (no `CreatureMarker`/
+`AnimalAnatomy` stack, single species keyed by action alone).
+
+**Two real gates, not one.** New `GrassFrogRenderer` mirrors
+`CaterpillarRenderer`'s minimal per-chunk-capped shape, plus: (1) a season
+gate identical in shape to caterpillar's own `ACTIVE_SEASONS` (spring/
+summer/autumn active, brumates through winter — a spawn-time gate, not a
+per-frame one, the same accepted approximation every ambient decoration
+in this codebase already carries), and (2) a real WATER-PRESENCE gate
+caterpillar's identical shape never needed: `WaterAreaSurvey.
+interior_water_cell_count`, the exact same "how much water is in this
+chunk" signal the aquatic fish population model already uses (reused, not
+reinvented) — a grassland/forest/rainforest chunk with no real river/lake/
+ocean cell in it has no pond to sit beside, and spawns nothing regardless
+of season.
+
+**A genuinely different movement model than every other ambient
+creature, because the biology demanded it.** Every other decorative
+presence in this doc (butterflies, caterpillars, decomposers) drives
+`AmbientFlyerMovement.step_position` continuously — a smooth, always-
+drifting roam. A real frog's gait is the opposite: long still periods
+between short, sudden hops. New `GrassFrogMarker` therefore does NOT
+extend `AmbientFlyerRenderer`/`AmbientFlyerMarker` despite the similar
+per-chunk-capped shape — it drives a small bespoke hop-burst state
+machine instead, reusing only `AmbientFlyerMovement.direction_at` as the
+already-tested, home-anchored heading picker at the start of each hop.
+This also solves a real design problem for free: idle-vs-hop becomes a
+genuine discrete state (mid-hop-burst or not) rather than a proxy read
+off a continuously-roaming creature's own meaningless tiny per-frame
+delta. A real, if decorative, croak plays on its own per-instance-
+jittered timer while idle, so a pond full of frogs doesn't call in
+lockstep. The sheet's fourth row ("eat") is deliberately left unwired:
+this game's own ambient "insects" (butterflies) are themselves a
+decorative flat-cap presence with no population count to decrement, so a
+frog "eating" one would still be decorative underneath, not an actual
+mechanism — named as a follow-up in `docs/concept/seasonal_behavior.md`
+rather than faked. Grass frog is likewise not yet wired into the
+capture-tool system, also named there rather than silently assumed.
+
+**Caught its own real bug before shipping, the way strict TDD is supposed
+to.** A hop that only started actually stepping position on the
+FOLLOWING `_process` call — rather than the same tick it began — was
+silently skipped in its entirety whenever a frame's delta exceeded
+`HOP_DURATION_SECONDS` (0.4s), which this game's own distance-based LOD
+throttling (`SimulationLod`, the same mechanism every other small
+creature marker already uses) can easily produce for a frog far from the
+player: `test_hops_instead_of_sitting_frozen_forever` failed for exactly
+this reason (position never moved across 15 simulated seconds), fixed by
+stepping the same tick a hop begins rather than waiting a frame.
+
+Wired into `EarthChunkManager` mirroring `Caterpillar`/`MillipedeRenderer`'s
+exact shape: a preload, an instance var, a per-chunk `Vector2i ->
+Array[GrassFrogMarker]` dict, a spawn call in `_load_chunk` right after
+caterpillar's own (same season-read-once-at-spawn convention), a
+free+erase loop in `_unload_chunk`.
+
+TDD: `test_illustrated_grass_frog_sprite.gd` (new, 10/10, confirmed red
+first — the sheet file didn't exist), `test_grass_frog_renderer.gd` (new,
+9/9, including the water-gate and season-gate cases), `test_grass_frog_
+marker.gd` (new, 9/9, confirmed the LOD-interaction bug above red first
+before the same-tick fix), and two new `test_earth_chunk_manager.gd`
+cases reusing the exact "near Berlin's real water" fixture `test_update_
+spawns_fish_markers_near_berlins_water`/`test_update_may_spawn_a_
+kingfisher_near_berlins_water` already established — confirmed real frogs
+spawn near Berlin's water and are freed on eviction (2/2), with no
+collateral regression in the immediately-adjacent caterpillar (11/11) and
+millipede (6/6) `_load_chunk`/`_unload_chunk` wiring.
+
+**All 10 phases of the seasonal-behavior epic are now merged to `main`**
+(see `docs/concept/seasonal_behavior.md` for the full status list and
+every named deferred follow-up): ant/honeybee forager cold-gate, wild bee
+die-off/re-hatch, true butterflies stop flying in winter, decomposer
+cold-slowdown, herbivore winter-forage-realism, squirrel scarcity-shifts-
+eat-vs-cache, alpaca, bear hibernation/snake brumation, blackbird, and
+grass frog.

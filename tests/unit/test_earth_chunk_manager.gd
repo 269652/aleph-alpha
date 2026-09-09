@@ -61,6 +61,7 @@ const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd"
 const CrushMechanic = preload("res://src/world/crush_mechanic.gd")
 const CaterpillarMarker = preload("res://src/rendering/caterpillar_marker.gd")
 const MillipedeMarker = preload("res://src/rendering/millipede_marker.gd")
+const GrassFrogMarker = preload("res://src/rendering/grass_frog_marker.gd")
 const DecomposerMarker = preload("res://src/rendering/decomposer_marker.gd")
 
 var tile_map_layer: TileMapLayer
@@ -1070,6 +1071,39 @@ func test_evicting_old_chunks_frees_their_kingfishers():
 
 	for bird in birds_near_berlin:
 		assert_false(is_instance_valid(bird), "Berlin's kingfishers should be freed once out of range")
+
+
+## Seasonal-behavior epic, phase 10 (docs/concept/seasonal_behavior.md):
+## grass frogs need real water nearby (see GrassFrogRenderer's own water-
+## presence gate) -- reuses the exact same "near Berlin's water" fixture
+## test_update_spawns_fish_markers_near_berlins_water/test_update_may_
+## spawn_a_kingfisher_near_berlins_water already established, rather than
+## a synthetic chunk, since GrassFrogRenderer's gate reads a real Chunk's
+## own water cells (WaterAreaSurvey), not just a biome name a synthetic
+## fixture could fake.
+func _loaded_grass_frog_markers() -> Array:
+	var markers := []
+	for child in entities_parent.get_children():
+		if child is GrassFrogMarker:
+			markers.append(child)
+	return markers
+
+
+func test_update_spawns_grass_frogs_near_berlins_water():
+	manager.update(_berlin_tile)
+	assert_gt(_loaded_grass_frog_markers().size(), 0)
+
+
+func test_evicting_old_chunks_frees_their_grass_frogs():
+	manager.update(_berlin_tile)
+	var frogs_near_berlin := _loaded_grass_frog_markers()
+	assert_gt(frogs_near_berlin.size(), 0)
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+
+	for frog in frogs_near_berlin:
+		assert_false(is_instance_valid(frog), "Berlin's grass frogs should be freed once out of range")
 
 
 ## See docs/concept/fishing.md#aquatic-population-model.
