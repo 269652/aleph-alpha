@@ -21,6 +21,7 @@ const WildBeePatch = preload("res://src/world/wild_bee_patch.gd")
 const BeeHiveMarker = preload("res://src/rendering/bee_hive_marker.gd")
 const WildBeeNestMarker = preload("res://src/rendering/wild_bee_nest_marker.gd")
 const BeeForagerMarker = preload("res://src/rendering/bee_forager_marker.gd")
+const BeeForageBehavior = preload("res://src/gameplay/bee_forage_behavior.gd")
 
 var manager: EarthChunkManager
 var tile_map_layer: TileMapLayer
@@ -423,3 +424,95 @@ func test_load_chunk_passes_the_real_anchor_check_into_bee_colony_seeding():
 		_load_chunk_body().contains("_has_real_hive_anchor("),
 		"initial chunk-load seeding must also refuse to seed a free-floating hive"
 	)
+
+
+# -- in-flight foragers survive a chunk unload; their trip's outcome -------
+# -- does not (see docs/concept/bees.md) -------------------------------------
+#
+# A BeeForagerMarker is parented on the persistent _entities_parent node,
+# not chunk-scoped (see that class's own header doc comment) -- unloading
+# its hive's chunk correctly leaves it flying (the world keeps living
+# while nobody's watching), but must retire the BeeColony/WildBeePatch
+# object it still references so its eventual record_forage_result call
+# can never land on an orphaned colony nobody can reach any more.
+
+func test_unloading_a_chunk_does_not_free_an_in_flight_bee_forager():
+	var colony := _bee_colony_with_one_hive()
+	manager._bee_colonies[_berlin_chunk] = colony
+	var cell: Vector2i = colony.hive_cells()[0]
+	var origin: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE
+	manager._dispatch_bee_forager(colony, origin, cell)
+	var forager: BeeForagerMarker = manager._active_bee_foragers[origin + cell][0]
+	manager._unload_chunk(_berlin_chunk)
+	assert_true(
+		is_instance_valid(forager) and not forager.is_queued_for_deletion(),
+		"the world keeps living while its chunk is unloaded -- an in-flight forager must not be freed by this"
+	)
+
+
+func test_unloading_a_chunk_retires_its_bee_colony():
+	var colony := _bee_colony_with_one_hive()
+	manager._bee_colonies[_berlin_chunk] = colony
+	manager._unload_chunk(_berlin_chunk)
+	assert_true(colony.is_retired())
+
+
+func test_unloading_a_chunk_retires_its_wild_bee_patch():
+	var patch := _wild_bee_patch_with_one_nest()
+	manager._wild_bee_patches[_berlin_chunk] = patch
+	manager._unload_chunk(_berlin_chunk)
+	assert_true(patch.is_retired())
+
+
+## The full real regression: dispatch a real forager, unload its hive's
+## chunk mid-flight (orphaning its own _colony reference, exactly like a
+## player walking away while it's out), drive it home, and confirm the
+## abandoned colony never receives the deposit -- reproduces the exact
+## scenario this whole fix exists for. Forces a real successful RETURNING
+## arrival directly on _behavior (already positioned exactly at
+## hive_position by dispatch, so the very next _process() call resolves
+## it) rather than driving a full scout->approach->return cycle through
+## real flower data this test deliberately doesn't set up.
+func test_a_forager_orphaned_by_an_unload_does_not_deposit_into_the_old_colony():
+	var colony := _bee_colony_with_one_hive()
+	manager._bee_colonies[_berlin_chunk] = colony
+	var cell: Vector2i = colony.hive_cells()[0]
+	var origin: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE
+	manager._dispatch_bee_forager(colony, origin, cell)
+	var forager: BeeForagerMarker = manager._active_bee_foragers[origin + cell][0]
+	manager._unload_chunk(_berlin_chunk)
+	forager._behavior.found_food = true
+	forager._behavior.phase = BeeForageBehavior.Phase.RETURNING
+	var before := colony.honey_stored_at(cell)
+	forager._process(0.05)
+	assert_almost_eq(
+		colony.honey_stored_at(cell), before, 0.001,
+		"an orphaned colony must never receive a deposit from a forager whose hive's chunk already unloaded"
+	)
+	assert_true(
+		forager.is_queued_for_deletion(),
+		"the forager still resolves its trip and frees itself, it just can't deposit anywhere real any more"
+	)
+
+
+## Mirrors the honeybee-hive regression above exactly, for the OTHER role
+## this same marker class serves (see BeeForagerMarker._colony's own
+## duck-typing doc comment) -- a solitary WildBeePatch resident's own
+## forage trip.
+func test_a_wild_bee_forager_orphaned_by_an_unload_does_not_touch_the_old_patch():
+	var patch := _wild_bee_patch_with_one_nest()
+	manager._wild_bee_patches[_berlin_chunk] = patch
+	var cell: Vector2i = patch.nest_cells()[0]
+	var origin: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE
+	manager._dispatch_wild_bee_forager(patch, origin, cell)
+	var forager: BeeForagerMarker = manager._active_wild_bee_foragers[origin + cell][0]
+	manager._unload_chunk(_berlin_chunk)
+	forager._behavior.found_food = true
+	forager._behavior.phase = BeeForageBehavior.Phase.RETURNING
+	var before := patch.forage_success_at(cell)
+	forager._process(0.05)
+	assert_almost_eq(
+		patch.forage_success_at(cell), before, 0.001,
+		"an orphaned wild bee patch must never receive a forage-result record from a forager whose nest's chunk already unloaded"
+	)
+	assert_true(forager.is_queued_for_deletion())

@@ -144,6 +144,27 @@ func has_nest(cell: Vector2i) -> bool:
 	return _nests.has(cell)
 
 
+## Mirrors BeeColony's own _retired/mark_retired/is_retired trio exactly
+## (see that class's own doc comments for the full reasoning) -- a
+## per-OBJECT flag, set once by EarthChunkManager._unload_chunk the moment
+## this patch's own _wild_bee_patches[chunk_coord] entry is erased, so a
+## still-in-flight BeeForagerMarker resolving a lone resident's real trip
+## (_resolve_arrival_at_hive) can notice its own nest's chunk is gone
+## rather than silently touching an object nobody can reach any more.
+## WildBeePatch gets its own duplicate flag/methods rather than sharing
+## BeeColony's, the same "no shared base class" choice this whole file's
+## own header doc comment already makes for every other mechanism.
+var _retired := false
+
+
+func mark_retired() -> void:
+	_retired = true
+
+
+func is_retired() -> bool:
+	return _retired
+
+
 func residents_at(cell: Vector2i) -> float:
 	return _residents.get(cell, STARTING_RESIDENTS)
 

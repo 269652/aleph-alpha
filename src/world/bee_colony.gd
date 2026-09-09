@@ -217,6 +217,45 @@ func has_hive(cell: Vector2i) -> bool:
 	return _hives.has(cell)
 
 
+## Whether this WHOLE colony object has been retired (see mark_retired) --
+## a per-OBJECT flag, not a per-cell one like _has_queen/_dormant: the
+## real-world event this tracks (EarthChunkManager._unload_chunk erasing
+## this object from _bee_colonies) tears down every hive this colony owns
+## at once, not one cell at a time.
+var _retired := false
+
+
+## Marks this colony as no longer the one EarthChunkManager tracks for its
+## chunk -- called exactly once, by _unload_chunk, at the moment its own
+## _bee_colonies[chunk_coord] entry is erased (see docs/concept/bees.md's
+## "In-flight foragers survive an unload; their trip's outcome does not").
+## Unloading a chunk does NOT by itself free this object -- a
+## BeeForagerMarker already in flight for one of this colony's hives holds
+## its own direct RefCounted reference (set once, at dispatch -- see
+## BeeForagerMarker._colony's own doc comment), and a forager is parented
+## on the persistent _entities_parent node, not chunk-scoped, so it keeps
+## flying and will eventually try to resolve its real trip against
+## whatever `_colony` it still holds. A retired colony is never un-retired
+## or reused: _load_chunk always constructs a brand new BeeColony for a
+## chunk it reloads, never resurrects this one.
+func mark_retired() -> void:
+	_retired = true
+
+
+## Whether mark_retired has been called -- what BeeForagerMarker.
+## _resolve_arrival_at_hive checks before ever depositing into this
+## colony's real honey reserve or touching its forage-success record: a
+## hive whose chunk unloaded out from under a forager mid-flight is gone
+## from the player's own reachable world exactly like everything else
+## that keeps existing-but-unwatched while unloaded (see
+## EarthChunkManager._unload_chunk's own many other per-chunk teardowns) --
+## the honest consequence is that this one trip's outcome is lost, not a
+## silent deposit into an object nobody can ever see or interact with
+## again.
+func is_retired() -> bool:
+	return _retired
+
+
 ## Mirrors AntColony.advance exactly in shape: grows/stalls every hive's
 ## population toward its current capacity, and depletes real honey for
 ## real upkeep. Deliberately does NOT contain AntColony's own

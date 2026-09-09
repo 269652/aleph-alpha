@@ -492,7 +492,23 @@ func _resolve_arrival_at_food() -> void:
 ## see BeeColony.record_forage_result); an empty-handed trip still
 ## records the failure (feeds the recent-success EMA) but deposits
 ## nothing.
+##
+## Re-checked here, not just at dispatch: _colony is a direct object
+## reference set once, at dispatch (see setup()) -- this marker is
+## parented on the persistent _entities_parent node, not chunk-scoped
+## (see this file's own header doc comment), so it keeps flying its whole
+## real round trip even after its own hive's chunk unloads out from under
+## it. EarthChunkManager._unload_chunk erases the manager's OWN
+## dictionary entry, but that alone cannot free an object this forager
+## itself still references -- without is_retired(), a successful trip
+## would silently resolve against that now-orphaned colony instead of
+## whatever fresh one _load_chunk built if the player later returns (see
+## docs/concept/bees.md's "In-flight foragers survive an unload; their
+## trip's outcome does not"). BeeColony.is_retired/WildBeePatch.is_retired
+## share the identical signature (mirrors this whole class's own
+## is_wild_bee duck-typing), so this one check covers both homes this
+## marker serves.
 func _resolve_arrival_at_hive() -> void:
-	if _colony == null:
+	if _colony == null or _colony.is_retired():
 		return
 	_colony.record_forage_result(_hive_cell, _behavior.found_food)
