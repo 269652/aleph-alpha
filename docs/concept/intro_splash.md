@@ -62,20 +62,16 @@ that reads differently than it did through this doc's first two passes.
 
 `assets/sprites/intro.png`, AI-generated from a prompt describing this
 exact beat structure (rotate → light-streak sweep → wordmark builds in
-→ sparkle flourish), 1983×793px. **Not** a perfectly regular arithmetic
-grid the way `worm.png` is (1983/9 and 793/5 are not whole numbers) — a
-real consequence of generating art with an external AI tool rather than
-hand-placing it on an exact canvas, and the reason `IntroSplashSheet`
-measures its own row bands directly (`tools/probe_intro_sheet.gd`,
-fully generic — detects real row/column boundaries from the image
-itself rather than assuming a row/column count) rather than assuming
-even division. 9 columns × 5 rows = 45 frames (grew from the original
-8×4/32, a fifth row — a pure sparkle/starburst flourish, no globe —
-added in the same pass a ninth column did too; see "A fifteenth pass"
-below), magenta-keyed and despilled exactly like every other
-illustrated sheet in this codebase (`IllustratedWormSprite` etc. — the
-identical technique, duplicated rather than shared, matching how this
-codebase already treats that small utility).
+→ hold), 1983×793px. **Not** a perfectly regular arithmetic grid the way
+`worm.png` is (1983/8 and 793/4 are not whole numbers) — a real
+consequence of generating art with an external AI tool rather than hand-
+placing it on an exact canvas, and the reason `IntroSplashSheet` measures
+its own row bands directly (`tools/probe_intro_sheet.gd`) rather than
+assuming even division. 8 columns × 4 rows = 32 frames, magenta-keyed and
+despilled exactly like every other illustrated sheet in this codebase
+(`IllustratedWormSprite` etc. — the identical technique, duplicated rather
+than shared, matching how this codebase already treats that small
+utility).
 
 Frames are extracted as plain, un-rescaled regions — **not** run through
 `SpriteSheetSlicer.normalize_frames`, unlike every other illustrated sheet
@@ -95,9 +91,9 @@ size), applied uncritically here.
 ### Sequencing
 
 `IntroSplashSequencer` (`src/rendering/intro_splash_sequencer.gd`, pure,
-headlessly tested) is the entire timing model: `FRAME_COUNT` (45) over
+headlessly tested) is the entire timing model: `FRAME_COUNT` (32) over
 `FPS` (10, a deliberately chunky pixel-art rate rather than a smooth 24-
-30fps readback — see that constant's own doc comment) gives a ~4.5s
+30fps readback — see that constant's own doc comment) gives a ~3.2s
 one-shot playback, `frame_index_at(elapsed_seconds)` clamped at the final
 frame rather than looping (this is a logo, never a loop).
 
@@ -1074,78 +1070,6 @@ own history well before this pass. `test_intro_splash.gd`,
 `test_weather_command_clarity.gd`, `test_console_command_parser.gd`,
 and `test_dev_console.gd` all re-run clean.
 
-### A fifteenth pass: a fifth row, a sparkle flourish, and a ninth column (2026-09-09)
-
-Requested live: *"I added a new intro sprite with a 5th row.. wire it
-pls."* `assets/sprites/intro.png` was regenerated with a real new final
-beat — a pure sparkle/starburst flourish (no globe at all) closing the
-sequence after the wordmark completes — and, in the same pass, grew
-from 8 to 9 columns per row too, not just a taller canvas. Checked
-directly rather than assumed at every step, matching this whole file's
-own standing "measure, don't guess" discipline: the first two "it's
-replaced now" reports both turned out to still be exactly 1983×793,
-byte-identical or near-identical to the untouched original — only the
-third actually differed, and even then the canvas itself never grew
-taller; the real 8×4/32-frame grid was re-packed into 5 shorter rows
-within the SAME 793px height, alongside 9 (not 8) columns per row.
-Confirmed with the exact same technique the eleventh pass already
-established for this file: real pixel dimensions checked directly
-(never trusted from what the file was expected to contain), the sheet
-opened and visually inspected, not just measured.
-
-`tools/probe_intro_sheet.gd` needed zero code changes to re-measure the
-new layout — it was already written generically (detects real row/
-column boundaries from the image itself, never hardcoding a row/column
-count), the same reason it survived from the original 32-frame sheet's
-own measurement pass unchanged. Real measured facts: 5 row bands (a
-spurious 6th — a 1px sliver at the very bottom edge with 0 real column
-frames detected in it — correctly excluded, not blindly trusted), 9
-identical column lefts independently re-detected across every one of
-the 5 real rows. `_FRAME_WIDTH` tightened from 240 to 195 — the new
-sheet's own tightest real column pitch (202px) is narrower than its
-widest per-frame detected content (226px), a genuine geometric
-difference from the original sheet (where widest-content-plus-margin
-comfortably undercut the tightest pitch) that made a naive "just widen
-to fit the widest content" choice impossible without risking bleed into
-the next column. Resolved by actually rendering candidate cropped
-swatches at 195px for the widest and narrowest columns on multiple rows
-and looking at them directly (a real visual check, not just the raw
-detect_frames numbers): the globe, every sparkle point, and the
-wordmark text all sit comfortably inside 195px with real margin to
-spare — the wider `detect_frames` numbers were measuring some
-antialiasing/glow fringe past the meaningful content, not real content
-that a tighter crop would actually clip. `_FRAME_HEIGHT` tightened from
-183 to 151 (the new tallest real row band, no comparable conflict).
-`IntroSplashSequencer.FRAME_COUNT`: 32 → 45 (9×5), duration ~3.2s →
-~4.5s. `IntroSplash`'s own display sizing (`_NATIVE_FRAME_SIZE`) reads
-`IntroSplashSheet`'s constants live, so it picked up the new frame size
-automatically — no separate code change needed there, the exact
-staleness class of bug the twelfth pass's own fix was specifically
-designed to make structurally impossible.
-
-TDD: `test_frame_count_matches_the_sequencer` changed from a hardcoded
-literal to a real cross-check against `IntroSplashSequencer.FRAME_
-COUNT` (matching what the test's own name already claimed but never
-actually did) — confirmed red first against the `FRAME_COUNT` change
-alone, BEFORE touching `IntroSplashSheet`'s own constants: swapping
-only the asset in first produced no useful red at all, since the old
-hardcoded 4×8 grid still structurally emits exactly 32 frames
-regardless of what the real image underneath actually contains, and
-every content-level check (real content, no leftover magenta, frames
-differ, uniform size) still passed against those now-misaligned crops.
-Two new tests pin the real safety margins directly — frame width
-against the tightest real column pitch, frame height against the
-tightest real row gap — rather than leaving them as an eyeballed
-comment, per this repo's own CLAUDE.md ("tuned values/thresholds must
-be tested... never eyeballed comments"). `test_intro_splash_sheet.gd`
-9/9, `test_intro_splash_sequencer.gd` 7/7 (needed no changes at all —
-every existing test there already reads `FRAME_COUNT` live rather than
-a hardcoded number). Regression-checked: every `intro`-matching test
-script together (`-gselect=intro`, 6 scripts) 44/44, including
-`test_intro_splash.gd`'s own Node-level display-sizing/pixel-
-perfectness checks, which picked up the new dimensions correctly with
-no code changes of their own.
-
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
@@ -1294,10 +1218,3 @@ no code changes of their own.
   never runs while the menu has the tree paused), the button only from
   the menu — genuinely complementary reaches, not two paths to the
   identical moment.
-- ✅ **A fifth row (sparkle flourish) and a ninth column** (2026-09-09,
-  "A fifteenth pass") — see that section above. `assets/sprites/
-  intro.png` re-measured with `tools/probe_intro_sheet.gd` (needed zero
-  code changes — already fully generic) to a real 9×5/45-frame grid,
-  `IntroSplashSheet`'s crop constants and `IntroSplashSequencer.
-  FRAME_COUNT` updated to match, both new safety-margin bounds
-  test-pinned rather than eyeballed.
