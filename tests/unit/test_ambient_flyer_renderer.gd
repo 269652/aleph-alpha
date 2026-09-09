@@ -319,6 +319,13 @@ func test_caps_robin_count_for_a_very_large_population():
 	assert_gt(robins, 0)
 
 
+## The literal pin CLAUDE.md requires for a tuned constant: a real spawn at
+## an overwhelmingly large population saturates at exactly 14, not merely
+## "some capped number" -- raised from the original 4 (reported live:
+## "make sparrows build flocks and hang around in groups? maybe increase
+## their number slightly", then revised directly to "raise sparrows to
+## 14"). Robin/blackbird stay at their own original, still-modest 4 --
+## see MAX_SPARROWS_PER_CHUNK's own doc comment for why only sparrow moved.
 func test_caps_sparrow_count_for_a_very_large_population():
 	var chunk := _make_chunk("grassland")
 	var spawned := renderer.spawn_ambient_flyers(
@@ -328,7 +335,8 @@ func test_caps_sparrow_count_for_a_very_large_population():
 	for flyer in spawned:
 		if flyer.species == "sparrow":
 			sparrows += 1
-	assert_lte(sparrows, AmbientFlyerRenderer.MAX_SPARROWS_PER_CHUNK)
+	assert_eq(sparrows, 14)
+	assert_eq(AmbientFlyerRenderer.MAX_SPARROWS_PER_CHUNK, 14)
 
 
 ## Blackbird's population parameter is the trailing one, appended after
