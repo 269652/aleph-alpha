@@ -49,12 +49,21 @@ a call) rather than a continuous looping mix.
   nature/wildlife field recordings but thin on isolated Foley-style
   "footstep on X" clips. Real, licensed recordings exist for snow and for
   a real forest-floor walk (audibly including twigs/undergrowth); no
-  equally distinct one was found for grass/sand/rock despite a real
-  search effort -- see "Footsteps" below for how that gap is handled
-  without inventing a fake recording. `underwater` is a real exception,
-  not a gap: it reuses the ambient river-proximity layer's own genuine
-  flowing-water recording (`river.ogg`) rather than needing a fourth
-  isolated Foley clip at all.
+  equally distinct one was found for sand/rock despite a real search
+  effort -- see "Footsteps" below for how that gap is handled without
+  inventing a fake recording. **Revised (2026-09-09): grass now has a
+  real, distinct recording too** -- reported live: "it sounds like a
+  drum, not like walking on grass" about the `default.ogg` it used to
+  silently share. Wikimedia Commons and Freesound.org (login-gated
+  downloads) and Pixabay (this download specifically hit a Cloudflare
+  bot-check) were all real dead ends; OpenGameArt.org's plain, ungated
+  static downloads turned up a genuine Freesound grass-footstep field
+  recording, already rehosted there for a real shipped open-source game
+  -- see `assets/audio/footsteps/CREDITS.md`'s own "Why `grass.ogg`
+  breaks the Commons-only pattern" for the full sourcing trail. `underwater`
+  is a real exception, not a gap: it reuses the ambient river-proximity
+  layer's own genuine flowing-water recording (`river.ogg`) rather than
+  needing a separately-licensed isolated Foley clip at all.
 - **A mushroom crushed underfoot is a real, distinct event** (see
   `docs/concept/mushrooms.md`'s `CrushMechanic`). No genuine squish/splat
   recording ever turned up on Commons -- left honestly silent for a
@@ -90,11 +99,11 @@ classification and clip lookup:
   footprint sprite has art for. Priority mirrors that function's own
   (snow, then underwater, then biome) for intuitive consistency even
   though the two functions' surface SETS differ on purpose.
-- `clip_path_for(surface) -> String` -- `"snow"`, `"forest"`, and
-  `"underwater"` get their own real recordings; everything else (grass/
-  sand/rock, or an unrecognized surface) falls back to one shared, genuine
-  walking recording (`default.ogg`) rather than silence -- the same
-  "reuse where a distinct recording isn't available" shape
+- `clip_path_for(surface) -> String` -- `"snow"`, `"forest"`, `"grass"`,
+  and `"underwater"` get their own real recordings; everything else
+  (sand/rock, or an unrecognized surface) falls back to one shared,
+  genuine walking recording (`default.ogg`) rather than silence -- the
+  same "reuse where a distinct recording isn't available" shape
   `NatureSoundscape`'s own wind bed already established for desert/
   tundra/mountain. **Revised (2026-09-09):** `"underwater"` reuses
   `river.ogg` from `NatureSoundscape`'s own asset directory rather than a
@@ -368,11 +377,23 @@ independent recording described above.
 ## Status
 
 - ✅ **Footstep SFX wired end to end**, one real distinct recording each
-  for snow and forest (audibly including twigs/undergrowth), every other
-  biome sharing one real generic walking recording rather than silence.
-- ⬜ **No dedicated grass/sand/rock footstep recording** -- a real search
-  effort on Wikimedia Commons did not turn up usable, correctly-licensed
-  isolated candidates; they share the default clip for now (see
+  for snow, forest (audibly including twigs/undergrowth), and grass,
+  every other biome sharing one real generic walking recording rather
+  than silence.
+- ✅ **Revised (2026-09-09): grass now has a real, distinct footstep
+  recording**, not the shared default. Reported live: "it sounds like a
+  drum, not like walking on grass." Wikimedia Commons, Freesound.org
+  (login-gated), and Pixabay (Cloudflare-bot-check-gated on the actual
+  download) were all real dead ends; sourced instead from
+  OpenGameArt.org's ungated static downloads, a genuine Freesound field
+  recording rehosted there for a real shipped open-source game -- see
+  `assets/audio/footsteps/CREDITS.md`'s own "Why `grass.ogg` breaks the
+  Commons-only pattern" for the full trail, including a caught-before-use
+  mismatch (a differently-named CC0 pack titled itself "grass" but its
+  real archive held none).
+- ⬜ **No dedicated sand/rock footstep recording** -- a real search
+  effort did not turn up usable, correctly-licensed isolated candidates;
+  they share the default clip for now (see
   `assets/audio/footsteps/CREDITS.md`). A real upgrade if sourced later,
   not a gap in the mixing logic itself.
 - ✅ **Revised (2026-09-09): `underwater` now has a real, distinct water

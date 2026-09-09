@@ -49,20 +49,24 @@ static func surface_for(biome: String, snow_lying: bool, underwater: bool) -> St
 
 const _DEFAULT_CLIP_PATH := "res://assets/audio/footsteps/default.ogg"
 
-## Real, distinct recordings exist (see CREDITS.md) for exactly 3 surfaces
+## Real, distinct recordings exist (see CREDITS.md) for exactly 4 surfaces
 ## beyond the generic default: snow (a real snow-walking field recording),
 ## forest (a real footsteps-in-forest recording -- "twigs cracking in
-## forest wood", reported live, is genuinely audible in it), and
-## underwater (see below). Wikimedia Commons -- this project's established
-## sourcing convention (see assets/audio/soundscape/CREDITS.md) -- turned
-## out to have very little isolated Foley-style "footstep on X" material
-## for the remaining surfaces (grass/sand/rock); rather than force a
-## mismatched clip onto each just to fill the dict, they honestly share
-## the one general walking recording below. A real, distinct recording for
-## any of them is a welcome upgrade whenever one turns up -- not a gap in
-## the mixing logic itself, the same "reuse where a distinct recording
-## isn't available" shape `NatureSoundscape`'s own wind bed already
-## established for desert/tundra/mountain.
+## forest wood", reported live, is genuinely audible in it), grass (a real
+## footstep-on-grass field recording -- "it sounds like a drum, not like
+## walking on grass", reported live about the default it used to silently
+## share), and underwater (see below). Wikimedia Commons -- this project's
+## established sourcing convention (see assets/audio/soundscape/CREDITS.md)
+## -- turned out to have very little isolated Foley-style "footstep on X"
+## material for the remaining surfaces (sand/rock), and neither did
+## Freesound.org (login-gated downloads) or Pixabay (this particular
+## grass search hit a bot-check on the actual download, see CREDITS.md);
+## rather than force a mismatched clip onto sand/rock just to fill the
+## dict, they honestly share the one general walking recording below. A
+## real, distinct recording for either is a welcome upgrade whenever one
+## turns up -- not a gap in the mixing logic itself, the same "reuse where
+## a distinct recording isn't available" shape `NatureSoundscape`'s own
+## wind bed already established for desert/tundra/mountain.
 ##
 ## `underwater` reuses `river.ogg` from the AMBIENT soundscape's own asset
 ## directory rather than a second, separately-licensed file -- reported
@@ -73,6 +77,7 @@ const _DEFAULT_CLIP_PATH := "res://assets/audio/footsteps/default.ogg"
 ## real reasons to be heard, not a duplicated file/license entry for the
 ## same water. A cross-directory reference by design, not an accident.
 const _CLIP_BY_SURFACE := {
+	"grass": "res://assets/audio/footsteps/grass.ogg",
 	"forest": "res://assets/audio/footsteps/forest_twigs.ogg",
 	"snow": "res://assets/audio/footsteps/snow.mp3",
 	"underwater": "res://assets/audio/soundscape/river.ogg",

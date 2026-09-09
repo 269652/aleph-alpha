@@ -84,3 +84,17 @@ func test_mushroom_crush_clip_path_points_at_the_real_sourced_recording():
 	assert_eq(
 		FootstepSound.MUSHROOM_CRUSH_CLIP_PATH, "res://assets/audio/footsteps/mushroom_crush.mp3"
 	)
+
+
+## "It sounds like a drum, not like walking on grass" (reported live) --
+## grass was silently sharing the generic default.ogg recording, which this
+## pins against regressing back to. A real grass-footstep recording now
+## exists (see CREDITS.md: a genuine Freesound field recording, rehosted
+## ungated on OpenGameArt.org -- both Wikimedia Commons and Freesound.org's
+## own direct downloads were real dead ends, and a Pixabay candidate turned
+## out to be login/CAPTCHA-gated in practice). Pinned to the real sourced
+## path, not just "non-default", mirroring the mushroom-crush test above --
+## the current convention in this file now that both departures from the
+## Commons-only pattern are real, named sources rather than a gap.
+func test_grass_clip_path_points_at_the_real_sourced_recording():
+	assert_eq(FootstepSound.clip_path_for("grass"), "res://assets/audio/footsteps/grass.ogg")
