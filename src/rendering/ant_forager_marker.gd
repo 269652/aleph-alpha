@@ -722,10 +722,30 @@ func _maybe_deposit_trail_tile() -> void:
 ## where a real ant would leave its find: at the mound, not out in the
 ## field where it was picked up (see docs/concept/soil_fauna.md's geometry
 ## note on this).
+##
+## Re-checked here, not just at dispatch: _colony is a direct object
+## reference set once, at dispatch (see setup()) -- this marker is
+## parented on the persistent _entities_parent node, not chunk-scoped (see
+## this file's own header doc comment), so it keeps walking its whole real
+## round trip even after its own mound's chunk unloads out from under it.
+## EarthChunkManager._unload_chunk erases the manager's OWN dictionary
+## entry, but that alone cannot free an object this forager itself still
+## references -- without is_retired(), a successful trip would silently
+## resolve against that now-orphaned colony (both the record_forage_result
+## deposit AND, below, the real seed/nut cached into the world) instead of
+## whatever fresh one _load_chunk built if the player later returns (see
+## docs/concept/soil_fauna.md's "In-flight foragers survive an unload;
+## their trip's outcome does not", mirroring BeeForagerMarker.
+## _resolve_arrival_at_hive's own identical guard). The whole function
+## returns before either half runs -- not just the record_forage_result
+## call -- so a retired colony's forager also never plants/caches what it
+## was carrying: the honest "this trip's outcome is lost" consequence,
+## same as bees, not a partial effect landing on a mound nobody can reach.
 func _resolve_arrival_at_mound() -> void:
-	if _colony != null:
-		_colony.record_forage_result(_mound_cell, _behavior.found_food)
-	if not _behavior.found_food or _world == null or _colony == null:
+	if _colony == null or _colony.is_retired():
+		return
+	_colony.record_forage_result(_mound_cell, _behavior.found_food)
+	if not _behavior.found_food or _world == null:
 		return
 	if forage_kind == "windfall" and AntColony.windfall_is_consumed(_colony.windfall_carrier_seed_for(_mound_cell)):
 		return  # eaten on the spot at the mound -- no cache leg
