@@ -216,6 +216,27 @@ func setup(world, colony, hive_cell: Vector2i) -> void:
 	_hive_cell = hive_cell
 
 
+## Redirects this ALREADY-DISPATCHED forager to a hive that just relocated
+## out from under it (absconding, or a harvest hand-off -- see docs/concept/
+## bees.md's "Absconding") -- called by EarthChunkManager, never by this
+## marker itself. hive_position/_hive_cell are otherwise set exactly once,
+## at dispatch time in setup()/by the caller directly (see hive_position's
+## own doc comment); this is the ONE place either is allowed to change
+## mid-trip. Both _step_scouting's own home-anchor wander and
+## _current_leg_target's RETURNING-leg branch read hive_position fresh
+## every step (never a cached snapshot taken at dispatch time), and
+## _resolve_arrival_at_hive reads _hive_cell fresh on arrival -- so simply
+## reassigning both here is sufficient to redirect a forager wherever it
+## currently is in its own trip (SCOUTING, APPROACHING, or RETURNING):
+## without this, a forager already in flight kept flying toward the OLD
+## site's now-torn-down marker forever, and its eventual arrival would
+## have credited the colony's own now-gone `_hive_cell` instead of the
+## real, current one.
+func retarget_hive(new_hive_position: Vector2, new_hive_cell: Vector2i) -> void:
+	hive_position = new_hive_position
+	_hive_cell = new_hive_cell
+
+
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
 	add_to_group(HoverTargetFinder.GROUP_NAME)

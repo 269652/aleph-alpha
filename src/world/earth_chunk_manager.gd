@@ -8828,6 +8828,7 @@ func _maybe_abscond_bee_colony(chunk_coord: Vector2i, colony: BeeColony, from_ce
 		return
 	colony.abscond_to(from_cell, to_cell)
 	_replace_bee_hive_marker(chunk_coord, colony, from_cell, to_cell)
+	_retarget_active_bee_foragers(chunk_coord, from_cell, to_cell)
 
 
 ## Called by BeeHiveMarker.harvest's own final hit (see that method's own
@@ -8856,6 +8857,7 @@ func relocate_bee_hive_after_harvest(colony: BeeColony, cell: Vector2i) -> void:
 		return
 	colony.abscond_to(cell, to_cell)
 	_replace_bee_hive_marker(chunk_coord, colony, cell, to_cell)
+	_retarget_active_bee_foragers(chunk_coord, cell, to_cell)
 
 
 ## The real site-selection half of both swarming and absconding (see
@@ -9042,6 +9044,44 @@ func _replace_bee_hive_marker(chunk_coord: Vector2i, colony: BeeColony, from_cel
 		markers.erase(from_cell)
 	markers[to_cell] = _spawn_bee_hive_marker(colony, chunk_coord, to_cell)
 	_bee_hive_markers[chunk_coord] = markers
+
+
+## Called by both real relocation call sites (_maybe_abscond_bee_colony,
+## relocate_bee_hive_after_harvest), right alongside _replace_bee_hive_
+## marker -- the real forager-side half of relocation _replace_bee_hive_
+## marker alone never covered (confirmed bug): a forager already
+## scouting/approaching/returning for `from_cell`'s hive at the moment it
+## relocates otherwise keeps flying toward the OLD site's now-torn-down
+## marker forever (see BeeForagerMarker.retarget_hive's own doc comment),
+## and _active_bee_foragers' own dictionary key never migrates off the
+## old global tile, silently letting the per-hive concurrent-forager cap
+## (colony.active_forager_cap_at, checked by _dispatch_bee_forager) go
+## uncounted against the real, current site.
+##
+## Merges into whatever the new global tile already tracks rather than
+## overwriting it -- defensive, not reachable in ordinary play today
+## (`to_cell` was, by construction, not a hive a moment ago, so nothing
+## could have been dispatched there yet), but cheap and matches the
+## "narrows, doesn't break" contract every other optional-world accessor
+## in this codebase already keeps.
+func _retarget_active_bee_foragers(chunk_coord: Vector2i, from_cell: Vector2i, to_cell: Vector2i) -> void:
+	var origin: Vector2i = chunk_coord * CHUNK_SIZE
+	var old_global_tile: Vector2i = origin + from_cell
+	var relocating: Array = _active_bee_foragers.get(old_global_tile, [])
+	_active_bee_foragers.erase(old_global_tile)
+	if relocating.is_empty():
+		return
+	var new_global_tile: Vector2i = origin + to_cell
+	var new_hive_pixel := (
+		Vector2(new_global_tile) + Vector2(0.5, 0.5)
+	) * float(TerrainRenderer.TILE_SIZE)
+	var still_active: Array = _active_bee_foragers.get(new_global_tile, [])
+	for forager in relocating:
+		if not is_instance_valid(forager) or forager.is_queued_for_deletion():
+			continue
+		forager.retarget_hive(new_hive_pixel, to_cell)
+		still_active.append(forager)
+	_active_bee_foragers[new_global_tile] = still_active
 
 
 ## Mirrors _replace_bee_hive_marker exactly, for WildBeeNestMarker.

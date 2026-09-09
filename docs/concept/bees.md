@@ -444,6 +444,50 @@ second wiring point, every hive placed by ordinary world generation
 (the most common way a hive appears at all) would have stayed
 unconstrained even after site-search relocation was fixed.
 
+**A relocating hive must also retarget any forager already out on a real
+trip for it, not just its own visible marker** (2026-09-09, a confirmed
+bug). `_maybe_abscond_bee_colony` and `relocate_bee_hive_after_harvest`
+both called `colony.abscond_to` then `_replace_bee_hive_marker`, but
+neither touched `_active_bee_foragers` (keyed by the hive's own global
+tile, `origin + cell`) or any already-dispatched `BeeForagerMarker`.
+`hive_position`/`_hive_cell` are otherwise set exactly once, at dispatch
+time in `setup()`, and never updated afterward -- so a forager already
+scouting/approaching/returning when its hive relocated kept flying
+toward (or lingering near) the OLD site's now-`queue_free()`d marker
+forever. Worse, its eventual arrival still resolved successfully:
+`_resolve_arrival_at_hive` calls `colony.record_forage_result(
+_hive_cell, ...)`, and since the colony OBJECT itself is not recreated
+by relocation (only its internal dictionaries are), this silently
+resurrected `_forage_success`/`_food_stored` entries for a cell with no
+live hive behind it at all. Separately, `_active_bee_foragers`'s own
+dictionary key never migrated off the old global tile, so the per-hive
+concurrent-forager cap (`active_forager_cap_at`, checked by
+`_dispatch_bee_forager`) could be briefly exceeded: stale foragers under
+the old key and freshly-dispatched ones under the new key were both
+alive at once, uncounted against each other.
+
+The fix is three real parts, all called from both relocation sites: (1)
+`BeeForagerMarker.retarget_hive(new_hive_position, new_hive_cell)` --
+the one place either field is now allowed to change mid-trip; both the
+SCOUTING home-anchor wander and the RETURNING leg target already read
+`hive_position` fresh every step (never a cached snapshot), and
+`_resolve_arrival_at_hive` reads `_hive_cell` fresh on arrival, so
+reassigning both redirects a forager wherever it currently is in its
+own trip. (2) `EarthChunkManager._retarget_active_bee_foragers`, called
+right alongside `_replace_bee_hive_marker`, looks up every still-active
+forager under the OLD global tile, retargets each, and migrates the
+survivors onto the NEW global tile (merging, not overwriting, so the
+concurrent-forager cap is enforced against the real, current site). (3)
+`BeeColony.record_forage_result`/`deposit_food` now guard on
+`has_hive(cell)` as a defensive backstop, in case a forager somehow
+still resolves against a truly-gone cell (e.g. the colony itself lost
+outright after a failed relocation search) -- belt-and-braces, since (1)
++(2) already retarget every active forager before this could fire.
+**A known, named, not-yet-fixed parallel gap:** wild bee nest relocation
+(`_maybe_relocate_wild_bee_nest`/`_replace_wild_bee_nest_marker`,
+`_active_wild_bee_foragers`) has the identical shape and was out of
+scope for this pass, which was specifically about honeybee hives.
+
 ### Harvesting honey — the one genuinely new player-interaction mechanic
 
 No existing harvest mechanic fits a "take a partial resource from a
@@ -730,6 +774,20 @@ old decorative bee's `TREE_POLLINATING_SPECIES` was the ONLY code path
 pollinating blossoming fruit trees at all — `BeeForagerMarker` now
 covers that too (see "Foraging" above), so tree pollination did not
 silently disappear along with the decorative species.
+
+✅ **A relocating hive retargets its own already-active foragers, not
+just its visible marker** (2026-09-09, see "Absconding" above) --
+`EarthChunkManager._retarget_active_bee_foragers` (called from both
+relocation sites) redirects every forager already dispatched for the
+old site via the new `BeeForagerMarker.retarget_hive`, and migrates the
+`_active_bee_foragers` cap-tracking entry to the new site instead of
+leaving it stale. `BeeColony.record_forage_result`/`deposit_food` also
+guard on `has_hive` as a defensive backstop. Fixes a real, confirmed
+bug: a forager mid-trip when its hive absconded or was harvest-relocated
+kept flying toward the old, torn-down site forever, and its arrival
+still silently credited that cell's now-gone economy. **A known,
+not-yet-fixed parallel gap:** wild bee nest relocation has the identical
+shape and was out of scope for this pass.
 
 ⬜ **Pheromone-trail recruitment for honeybees** (the real waggle dance)
 — named explicitly as out of scope this pass, not silently dropped (see

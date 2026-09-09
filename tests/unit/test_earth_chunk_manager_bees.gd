@@ -325,6 +325,100 @@ func test_relocate_bee_hive_after_harvest_at_an_unknown_colony_does_nothing():
 	assert_true(orphan_colony.has_hive(from_cell), "an unregistered colony must be left untouched, not crash")
 
 
+# -- active foragers must follow their hive when it relocates ---------------
+#
+# Confirmed bug: neither absconding nor harvest-relocation used to touch
+# _active_bee_foragers or any already-dispatched BeeForagerMarker at all --
+# a forager mid-trip kept flying toward the OLD site's now-torn-down
+# marker forever (see BeeForagerMarker.retarget_hive), and the per-hive
+# concurrent-forager cap (BeeColony.active_forager_cap_at) could be
+# exceeded since stale foragers under the old _active_bee_foragers key
+# were never counted against freshly-dispatched ones under the new key.
+
+func _global_tile(cell: Vector2i) -> Vector2i:
+	return _berlin_chunk * EarthChunkManager.CHUNK_SIZE + cell
+
+
+func test_step_bees_absconding_retargets_an_already_active_forager():
+	var colony := _load_berlin_with_guaranteed_hive_colony()
+	var from_cell: Vector2i = colony.hive_cells()[0]
+	var from_global_tile := _global_tile(from_cell)
+	var forager := BeeForagerMarker.new()
+	forager.setup(manager, colony, from_cell)
+	forager.hive_position = _tile_pixel(from_global_tile)
+	entities_parent.add_child(forager)
+	manager._active_bee_foragers[from_global_tile] = [forager]
+	colony._population[from_cell] = 0.0
+	manager.step_bees(1.0)
+	if colony.has_hive(from_cell):
+		pending("no real site with real nearby nectar existed in Berlin's own live chunk this run")
+		return
+	var to_cell: Vector2i = colony.hive_cells()[0]
+	var to_global_tile := _global_tile(to_cell)
+	assert_eq(forager._hive_cell, to_cell, "a stale forager's hive_cell must follow the colony to its new site")
+	assert_lt(
+		forager.hive_position.distance_to(_tile_pixel(to_global_tile)), 0.01,
+		"a stale forager's hive_position must follow the colony to its new site"
+	)
+	assert_true(
+		manager._active_bee_foragers.get(from_global_tile, []).is_empty(),
+		"the old key must not still be tracking a forager that no longer belongs to it"
+	)
+	assert_has(manager._active_bee_foragers.get(to_global_tile, []), forager)
+
+
+func test_relocate_bee_hive_after_harvest_retargets_an_already_active_forager():
+	var colony := _load_berlin_with_guaranteed_hive_colony()
+	var from_cell: Vector2i = colony.hive_cells()[0]
+	var from_global_tile := _global_tile(from_cell)
+	var forager := BeeForagerMarker.new()
+	forager.setup(manager, colony, from_cell)
+	forager.hive_position = _tile_pixel(from_global_tile)
+	entities_parent.add_child(forager)
+	manager._active_bee_foragers[from_global_tile] = [forager]
+	manager.relocate_bee_hive_after_harvest(colony, from_cell)
+	if colony.has_hive(from_cell):
+		pending("no real site with real nearby nectar existed in Berlin's own live chunk this run")
+		return
+	var to_cell: Vector2i = colony.hive_cells()[0]
+	var to_global_tile := _global_tile(to_cell)
+	assert_eq(forager._hive_cell, to_cell, "a stale forager's hive_cell must follow the colony to its new site")
+	assert_lt(
+		forager.hive_position.distance_to(_tile_pixel(to_global_tile)), 0.01,
+		"a stale forager's hive_position must follow the colony to its new site"
+	)
+	assert_true(manager._active_bee_foragers.get(from_global_tile, []).is_empty())
+	assert_has(manager._active_bee_foragers.get(to_global_tile, []), forager)
+
+
+## Mirrors _dispatch_bee_forager's own is_instance_valid/is_queued_for_
+## deletion filter exactly -- a forager that already freed itself (e.g.
+## it happened to resolve its own trip the same step the hive relocates)
+## must be pruned during the migration, not carried over as a dangling
+## reference under the new key.
+func test_absconding_prunes_an_already_freed_forager_during_migration():
+	var colony := _load_berlin_with_guaranteed_hive_colony()
+	var from_cell: Vector2i = colony.hive_cells()[0]
+	var from_global_tile := _global_tile(from_cell)
+	var alive := BeeForagerMarker.new()
+	alive.setup(manager, colony, from_cell)
+	entities_parent.add_child(alive)
+	var freed := BeeForagerMarker.new()
+	freed.setup(manager, colony, from_cell)
+	entities_parent.add_child(freed)
+	freed.queue_free()
+	manager._active_bee_foragers[from_global_tile] = [alive, freed]
+	colony._population[from_cell] = 0.0
+	manager.step_bees(1.0)
+	if colony.has_hive(from_cell):
+		pending("no real site with real nearby nectar existed in Berlin's own live chunk this run")
+		return
+	var to_global_tile := _global_tile(colony.hive_cells()[0])
+	var migrated: Array = manager._active_bee_foragers.get(to_global_tile, [])
+	assert_has(migrated, alive)
+	assert_eq(migrated.size(), 1, "an already-freed forager must be pruned, not carried over")
+
+
 # -- _has_real_hive_anchor: a hive must be on a real tree or structure, ------
 # -- never free-floating over open ground or a river -------------------------
 #
