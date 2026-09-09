@@ -33,6 +33,7 @@ const FlowerSpecies = preload("res://src/world/flower_species.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const Courtship = preload("res://src/gameplay/courtship.gd")
 const SpiralFlight = preload("res://src/gameplay/spiral_flight.gd")
+const BirdFlocking = preload("res://src/gameplay/bird_flocking.gd")
 const LifeCycle = preload("res://src/gameplay/life_cycle.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 ## For FLIGHT_CRUISE_HEIGHT_PX's own derivation only -- IllustratedBirdSprite
@@ -359,6 +360,38 @@ const CARRY_STEER_WEIGHT := 0.9
 const SCENT_SNIFF_INTERVAL := 0.5
 var _scent_accumulator := 0.0
 var _scent_direction := Vector2.ZERO
+
+## How strongly a flocking bird leans into _flock_direction, 0 = pure
+## wander, 1 = fly straight at/away from its flockmate. Similar in spirit
+## to SCENT_STEER_WEIGHT's own "a bird that beelines looks scripted"
+## reasoning -- flocking should read as hanging around together while
+## still wandering/foraging, not a rigid formation-snap.
+const FLOCK_STEER_WEIGHT := 0.5
+
+## Re-scanned only every BirdFlocking.SCAN_INTERVAL (see _step_flocking),
+## mirroring FishMarker._school_scan_accumulator's own cadence and
+## reasoning exactly.
+var _flock_scan_accumulator := 0.0
+## The nearest same-species flockmate within BirdFlocking.ATTRACTION_
+## RADIUS_PX as of the last scan (null if none, or if this species does
+## not flock at all -- see BirdFlocking.flocks).
+var _flock_neighbor: Node = null
+## Which way this bird leans because of _flock_neighbor, blended into
+## ordinary wander in _process -- a unit vector, or ZERO while nobody is
+## near enough to matter (see BirdFlocking.steering_for_neighbor/
+## FLOCK_STEER_WEIGHT).
+var _flock_direction := Vector2.ZERO
+
+## This bird's own current travel heading -- read by OTHER flocking birds
+## scanning for a flockmate to react to (see BirdFlocking.steering_for_
+## neighbor's own neighbor_heading parameter). Mirrors FishMarker.
+## current_heading()'s exact precedent and reasoning: the one field that
+## needed a real accessor rather than direct access, since it is
+## otherwise treated as this instance's own private turn-smoothing state.
+var _current_heading := Vector2.ZERO
+
+func current_heading() -> Vector2:
+	return _current_heading
 
 ## Foraging state (see PollinatorForaging). Steering alone has a stable
 ## attractor at the strongest bloom, so a pollinator that only steered just
@@ -797,6 +830,13 @@ var _adult_scale := Vector2.ONE
 ## Set by the renderer so a mating can tell the world about its offspring.
 var courtship_world = null
 
+## Who to ask for nearby same-species flockmates (see BirdFlocking). Every
+## caller passes the chunk manager as `scent_world`; flocking needs the
+## same object, but for finding a flockmate rather than a courtship
+## partner or a smell, so it is named for what it is used for (mirrors
+## courtship_world's own naming precedent exactly).
+var flock_world = null
+
 ## Distance-based update rate (see SimulationLod). Returns the time to advance
 ## by, or NEGATIVE when this frame should be skipped entirely.
 ##
@@ -872,6 +912,7 @@ func _process(frame_delta: float) -> void:
 
 	_step_growing(delta)
 	_step_flight_height(delta)
+	_step_flocking(delta)
 
 	# THE PRECEDENCE ORDER, highest first. Six things can move a flyer now,
 	# and they must not fight:
@@ -1082,6 +1123,23 @@ func _process(frame_delta: float) -> void:
 		# "butterflies should only stop moving when they sit down on a
 		# flower... not during wandering"). Keeping the wander heading is the
 		# fallback: only drinking may ever hold a flyer still.
+	if _flock_direction != Vector2.ZERO:
+		# Blend the wander heading with the flock pull rather than
+		# replacing it, so a sparrow still wanders/forages while leaning
+		# toward its flockmate (see FLOCK_STEER_WEIGHT) -- the same
+		# "residual of two opposing vectors is ill-conditioned" reasoning
+		# the scent blend just above already documents.
+		var flocked := heading.lerp(_flock_direction, FLOCK_STEER_WEIGHT)
+		if flocked.length() > 0.001:
+			heading = flocked.normalized()
+	# This bird's own real travel heading for THIS frame, after every blend
+	# above has been applied -- what another flocking bird reads via
+	# current_heading() when it scans and finds this one as its nearest
+	# flockmate (see BirdFlocking.steering_for_neighbor's own neighbor_
+	# heading parameter). Set here, before the flutter/exit-turn noise
+	# below, so a flockmate matches this bird's INTENDED direction rather
+	# than one frame's worth of jitter on top of it.
+	_current_heading = heading
 	# Just off one of the three aerial figures: turn off the tangent it was
 	# flying rather than snapping onto a heading unrelated to it (see
 	# _turned_off_the_exit). A no-op at every other moment of a flyer's life.
@@ -2835,6 +2893,76 @@ func _scan_for_partners(wants_courtship: bool, wants_bird_court: bool, wants_spi
 		):
 			break
 	return found
+
+
+## -- flocking (see BirdFlocking, docs/concept/soil_fauna.md's "Sparrows ----
+## flock, robins don't") -----------------------------------------------------
+
+## Re-scans for a same-species flockmate on BirdFlocking.SCAN_INTERVAL's own
+## cadence -- mirrors FishMarker._step_schooling exactly, for the same
+## performance reason: a full neighbour scan every frame for every bird is
+## exactly the shape of cost that caused this project's own fish/
+## is_river_at_global and _scan_for_partners performance regressions (see
+## project history). A no-op for any species BirdFlocking.flocks() says
+## doesn't flock at all -- a robin never even pays the scan cost, let alone
+## the steering.
+func _step_flocking(delta: float) -> void:
+	if not BirdFlocking.flocks(species):
+		return
+	_flock_scan_accumulator += delta
+	if _flock_scan_accumulator < BirdFlocking.SCAN_INTERVAL:
+		return
+	_flock_scan_accumulator = 0.0
+	if not _flock_leash_allows():
+		_flock_neighbor = null
+		_flock_direction = Vector2.ZERO
+		return
+	_flock_neighbor = _nearest_flockmate()
+	if _flock_neighbor == null:
+		_flock_direction = Vector2.ZERO
+		return
+	var neighbor_heading := Vector2.ZERO
+	if _flock_neighbor.has_method("current_heading"):
+		neighbor_heading = _flock_neighbor.current_heading()
+	_flock_direction = BirdFlocking.steering_for_neighbor(position, _flock_neighbor.position, neighbor_heading)
+
+
+## The closest OTHER same-species flyer within BirdFlocking.ATTRACTION_
+## RADIUS_PX, or null if none is that close. Mirrors _scan_for_partners'
+## own flyers_near-first, whole-tree-group-fallback shape exactly (see
+## that function's own doc comment for the round-4 FPS regression this
+## avoids repeating) -- the fallback keeps a standalone marker (built
+## directly in a test, or before a real flock_world is wired) working
+## rather than simply doing nothing.
+func _nearest_flockmate() -> Node:
+	if not is_inside_tree():
+		return null
+	var candidates: Array
+	if flock_world != null and flock_world.has_method("flyers_near"):
+		candidates = flock_world.flyers_near(position, BirdFlocking.ATTRACTION_RADIUS_PX)
+	else:
+		candidates = get_tree().get_nodes_in_group(FLOCK_GROUP)
+	var nearest: Node = null
+	var nearest_distance := BirdFlocking.ATTRACTION_RADIUS_PX
+	for other in candidates:
+		if other == self or not is_instance_valid(other) or other.get("species") != species:
+			continue
+		var distance: float = position.distance_to(other.position)
+		if distance <= nearest_distance:
+			nearest = other
+			nearest_distance = distance
+	return nearest
+
+
+## Whether this bird is close enough to home to still let a flockmate steer
+## it at all -- mirrors FishMarker._school_leash_allows's own reasoning
+## exactly: without this, a bird could in principle keep closing on a
+## flockmate that itself keeps drifting, indefinitely, away from where
+## either of them actually lives.
+func _flock_leash_allows() -> bool:
+	if _movement == null:
+		return true
+	return position.distance_to(home) <= _movement.radius * BirdFlocking.FLOCK_LEASH_RADIUS_FACTOR
 
 
 func _begin_courtship(partner) -> void:
