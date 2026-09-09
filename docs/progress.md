@@ -19050,3 +19050,78 @@ given call appears only once. `test_world_boot_loading_overlay_fanout.gd`
 6/6, `test_world_intro_splash_after_load_fanout.gd` 5/5, `test_world_play_
 intro_splash_frame_gate.gd` 3/3, `test_loading_overlay.gd` 2/2 — no
 regression in any adjacent system.
+
+## The mushroom-crush sound is sourced: crushed styrofoam (`concept/creature_and_footstep_audio.md`, "Mushroom crush", 2026-09-09)
+
+Requested directly: *"can you find a styrofoam crushing sound and use it
+for the mushroom crushing sound?"* Closes a real, honestly-documented gap
+this doc's own "Real-world grounding"/Status sections have named since
+the footstep/mushroom-crush/creature-call system first shipped:
+`FootstepSound.MUSHROOM_CRUSH_CLIP_PATH` was an intentional empty string
+— `InteractionSfxPlayer.play_mushroom_crush()` already fired on every
+real crush (`World._client_process`, same branch as the existing Karma
+penalty), a real, silent no-op rather than a missing wire, because a
+genuine mushroom squish/splat recording never turned up on Wikimedia
+Commons despite a real search effort, and this project's own real-world-
+grounding discipline argued against reaching for an UNASKED-FOR
+mismatched stand-in (a knife-chop, a door-chime) just to fill the slot.
+
+A direct request for a SPECIFIC stand-in is a different case: crushed
+styrofoam's crunchy, slightly-compressible quality is a real, established
+Foley substitute technique (the same reason film Foley artists reach for
+it for snow-crunch/bone-break/organic-crush sounds), not an invented
+mismatch — the grounding discipline cares about never claiming a sound is
+the genuine article when it isn't, not about banning Foley technique
+outright.
+
+**Sourcing:** checked Wikimedia Commons again first, specifically for
+this ("styrofoam crushing sound" / "polystyrene crush sound") — still
+nothing, confirming the existing CREDITS.md note that Commons' Foley/SFX
+coverage is thin. Found on Pixabay instead: ["Crinkling styrofoam;
+close"](https://pixabay.com/sound-effects/film-special-effects-crinkling-styrofoam-close-79974/)
+(TylerAM, via Freesound, rehosted on Pixabay), 8 seconds, tagged
+Break/Crunch/Styrofoam — the closest match to a single crush impact among
+11 styrofoam-tagged candidates (others: a 10s continuous "grinding" — more
+friction than impact; a 43s multi-step "footsteps on styrofoam" field
+recording — too long for a one-shot, would need real audio-editing
+tooling to trim, which this session doesn't have). Pixabay Content
+License: free to embed in a commercial project, modify, redistribute (not
+resell standalone/unmodified), no attribution legally required — credited
+in `assets/audio/footsteps/CREDITS.md` anyway, matching this directory's
+own convention of citing every file's real source regardless of what the
+license strictly requires.
+
+**Downloaded with explicit permission** (filename, source, and size
+stated before downloading, per this session's own safety rules) — the
+CDN download URL Pixabay's page embeds is session/referrer-scoped (a
+plain `curl`, even with a matching `Referer` header, got a 403), so the
+actual bytes were fetched via `fetch()` executed IN the browser session
+that legitimately loaded the page (same-origin, real cookies), base64-
+encoded, and decoded back to a real file on disk via a small Node
+script — 150,720 bytes, confirmed as a genuine MPEG audio stream by its
+own frame-sync header bytes (`0xFFF3...`), not just a byte count.
+
+**Fix:** `FootstepSound.MUSHROOM_CRUSH_CLIP_PATH` now points at
+`res://assets/audio/footsteps/mushroom_crush.mp3` — no other code change;
+the existing `InteractionSfxPlayer`/`World` wiring was already real and
+complete, only ever gated on this one constant being non-empty.
+
+**TDD:** two existing tests updated (their own premises changed, not
+just their assertions) — `test_footstep_sound.gd`'s own empty-path pin
+now asserts the real sourced path instead (confirmed red against the
+unmodified constant first); `test_interaction_sfx_player.gd`'s "does not
+error while unsourced" test dropped its now-inaccurate framing, plus a
+new `test_play_mushroom_crush_loads_and_plays_the_real_clip` (mirrors
+`test_play_footstep_loads_and_plays_the_surface_clip`'s own shape
+exactly) confirmed red first (no voice found playing the clip — the path
+was still empty), green after. `test_footstep_sound.gd` 12/12,
+`test_interaction_sfx_player.gd` 11/11,
+`test_world_creature_and_footstep_audio_wiring.gd` 8/8 (unaffected — this
+pass only changes a constant's value, never the wiring that test already
+covers) — no regression.
+
+**Also noted, not this pass's own bug:** the immediately preceding entry
+above (the boot-loading-overlay regression) was introduced by this same
+session's own earlier work and caught/fixed by a concurrent session
+before this pass started — already on `main` by the time this branch was
+cut, no action needed here beyond acknowledging it.

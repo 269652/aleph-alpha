@@ -21,8 +21,12 @@ a call) rather than a continuous looping mix.
    states for ambient layers applies here: ants, decomposer bugs,
    millipedes, caterpillars, earthworms, fish, and butterflies are all
    inaudible to a nearby human in reality, so none of them get a
-   fabricated call. A genuinely unsourceable sound (see "Mushroom crush"
-   below) stays an honest, named gap rather than a mismatched stand-in.
+   fabricated call. A genuinely unsourceable sound stays an honest, named
+   gap rather than an UNASKED-FOR mismatched stand-in -- a real, named
+   Foley substitute, requested directly by name, is a different case (see
+   "Mushroom crush" below): the grounding this pillar cares about is
+   never claiming a sound is the genuine article when it isn't, not a
+   blanket ban on Foley technique.
 3. **Ship what's actually sourced and licensed, flag the rest.** Mirrors
    `soundscape.md`'s own status-list honesty: partial species/surface
    coverage is the norm for a first pass, not a defect to hide. A species
@@ -52,10 +56,13 @@ a call) rather than a continuous looping mix.
   flowing-water recording (`river.ogg`) rather than needing a fourth
   isolated Foley clip at all.
 - **A mushroom crushed underfoot is a real, distinct event** (see
-  `docs/concept/mushrooms.md`'s `CrushMechanic`), but no genuine squish/
-  splat recording turned up on Commons either -- left honestly silent
-  (see "Mushroom crush" below) rather than reached for a mismatched
-  stand-in (a knife-chop, a door-chime).
+  `docs/concept/mushrooms.md`'s `CrushMechanic`). No genuine squish/splat
+  recording ever turned up on Commons -- left honestly silent for a
+  while (see "Mushroom crush" below) rather than reached for an
+  unasked-for mismatched stand-in (a knife-chop, a door-chime). Now
+  sourced: a crushed-styrofoam recording, requested directly by name, a
+  real Foley substitute technique rather than an invented mismatch (see
+  "Mushroom crush" below for the full reasoning).
 - **Which animals get a call is a biology question, not a completeness
   checklist.** Every species that got a real recording here genuinely
   vocalizes; every species left out (insects, fish, butterflies) genuinely
@@ -107,15 +114,30 @@ surface_for` and triggers `InteractionSfxPlayer.play_footstep`.
 
 ### Mushroom crush
 
-`FootstepSound.MUSHROOM_CRUSH_CLIP_PATH` is an honest empty string today
--- no genuine recording sourced (see "Real-world grounding" above).
-`World._client_process` still calls `InteractionSfxPlayer.
-play_mushroom_crush()` in the same branch that already applies the Karma
-penalty for `_chunk_manager.crush_mushroom_at(...)`, so the wiring is
-real and complete; it is simply a silent no-op (`InteractionSfxPlayer`
-skips an empty clip path cleanly) until a real recording -- or a session
-with real audio-editing tooling to cut one down from a longer source --
-turns up.
+Left an honest empty string for a while (see "Real-world grounding"
+above) -- `World._client_process` already called `InteractionSfxPlayer.
+play_mushroom_crush()` in the same branch that applies the Karma penalty
+for `_chunk_manager.crush_mushroom_at(...)`, so the wiring was real and
+complete from the start; it was simply a silent no-op
+(`InteractionSfxPlayer` skips an empty clip path cleanly) until a real
+recording turned up.
+
+Requested directly (2026-09-09): *"can you find a styrofoam crushing
+sound and use it for the mushroom crushing sound?"* `FootstepSound.
+MUSHROOM_CRUSH_CLIP_PATH` now points at `assets/audio/footsteps/
+mushroom_crush.mp3` -- "Crinkling styrofoam; close" (TylerAM, via
+Freesound, rehosted on Pixabay under the Pixabay Content License; see
+`assets/audio/footsteps/CREDITS.md` for the full citation and why this
+is the one file in that directory NOT sourced from Wikimedia Commons).
+Crushed styrofoam is a real, established Foley substitute for a
+crunchy/organic crush -- the technique itself is real-world-grounded
+(pillar 2 above), even though the recorded material isn't literally a
+mushroom; a genuinely unsourceable sound stays an honest gap by default,
+but a specific requested stand-in is a deliberate choice, not an
+invented mismatch. No code change beyond the constant's own value and
+the `InteractionSfxPlayer`/`World` wiring already in place -- the
+no-op-when-empty guard in `InteractionSfxPlayer._play_footstep_clip`
+simply stops triggering now that the path is real.
 
 ### Creature calls
 
@@ -360,9 +382,10 @@ independent recording described above.
   `soundscape.md`) rather than a fourth, separately-licensed file --
   walking through water no longer sounds identical to walking on dry
   land.
-- ⬜ **No mushroom-crush recording** -- wiring is real and complete
-  (`InteractionSfxPlayer.play_mushroom_crush()` fires on every real
-  crush), but the clip path is honestly empty; a real, silent no-op today.
+- ✅ **Mushroom-crush sound** (`assets/audio/footsteps/mushroom_crush.mp3`,
+  2026-09-09) -- a crushed-styrofoam Foley stand-in, requested directly by
+  name; see "Mushroom crush" above for the full reasoning and
+  `assets/audio/footsteps/CREDITS.md` for the citation.
 - ✅ **13 real, licensed creature calls sourced and wired**: horse, boar
   (domestic pig standing in, named above), sheep, wolf, bear, squirrel,
   deer, robin, sparrow, kingfisher, honeybee, wild_bee (the last two share
