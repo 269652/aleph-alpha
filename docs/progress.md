@@ -18098,3 +18098,39 @@ eventual `record_forage_result`/`deposit_food` call lands on that
 abandoned colony instead of the fresh one `_load_chunk` built on
 re-entry, a silent economy-state leak with no visible symptom on its
 own.
+
+## A tenth pass on the intro: every frame cropped to the same fixed window (`concept/intro_splash.md`, 2026-09-09)
+
+Reported live again, after the eighth pass's pixel-perfect integer-scale
+fix had already shipped: "stabilize the intro video, it's wobbly." A
+real, distinct bug — the eighth pass fixed the upscale factor and the
+missing `NEAREST` filter, but `IntroSplashSheet` still cropped each of
+the 32 frames independently to ITS OWN content via `SpriteSheetSlicer.
+detect_frames`, and real measurement found that crop genuinely varied:
+232-234px wide, 181/183/182/182px tall across the 4 rows, driven by the
+light-streak sweep and the growing "ALEPH ALPHA" wordmark's own ink
+extent. `STRETCH_KEEP_ASPECT_CENTERED` letterboxing (from the eighth
+pass) re-fits each frame's own best scale within the fixed display box,
+but doesn't make frame-to-frame content land at an identical on-screen
+position/scale — small in absolute pixels, still real, still visible as
+wobble. The underlying 8-column grid itself was confirmed stable (row 0,
+2, 3 independently re-detect the identical 8 column left-edges;
+`_COLUMN_LEFTS := [13, 259, 506, 752, 998, 1245, 1492, 1739]`); only the
+content-driven right/bottom edges ever moved.
+
+Fix: every frame now crops to ONE fixed window (`_FRAME_WIDTH := 240`,
+`_FRAME_HEIGHT := 183`) at its own row's measured top and column's fixed
+left edge — no more per-frame content detection, `SpriteSheetSlicer.
+detect_frames` no longer called by this file at all. Both bounds carry a
+real, tested safety margin (comfortably bigger than the widest content
+any old per-frame crop ever measured, comfortably smaller than the
+tightest real column pitch). Frames still deliberately skip
+`normalize_frames` — this removes crop-WINDOW instability, not per-frame
+rescaling, so the "globe appears to grow with the wordmark" problem
+`normalize_frames` would cause stays avoided.
+
+TDD: `test_every_frame_is_the_same_size` in `test_intro_splash_sheet.gd`
+confirmed red against the unfixed per-frame crop (real measured sizes
+varied as above), green after. `test_intro_splash_sheet.gd` 7/7,
+`test_intro_splash.gd` 13/13 — no regression in the eighth pass's sizing/
+filtering fix or the ninth pass's modifier-key handling.

@@ -744,8 +744,72 @@ bug. `test_intro_splash.gd` 13/13, `test_world_play_intro_splash_frame_
 gate.gd` 3/3, `test_world_intro_splash_after_load_fanout.gd` 5/5 -- no
 regression in any of the eight prior passes' timing/gating/sizing fixes.
 
+### A tenth pass: every frame cropped to the same fixed window, not its own content (2026-09-09)
+
+Reported live again, after the eighth pass's own pixel-perfect
+integer-scale fix had already shipped: "stabilize the intro video, it's
+wobbly." A real, distinct bug from everything the eighth pass fixed --
+that pass addressed the UPSCALE factor and the FILTER (both real, both
+fixed), but never touched WHERE each of the 32 source frames' own crop
+rect actually sits or how big it is. `IntroSplashSheet` was still calling
+`SpriteSheetSlicer.detect_frames` once per frame, independently -- a
+CONTENT-based crop that measures each frame's own left/right/top/bottom
+ink boundary on its own. Real measurement (a throwaway probe, since
+deleted -- same "hand-measure and verify before touching code" discipline
+every earlier pass in this doc used) found the source frames genuinely
+varied: 232-234px wide, and 181/183/182/182px tall across the 4 rows. The
+eighth pass's own writeup even named this as the "literal meaning of
+'wobbly'" and judged it adequately absorbed by `STRETCH_KEEP_ASPECT_
+CENTERED`'s letterboxing within the fixed `DISPLAY_SIZE` box -- but
+letterboxing only re-centers each frame's OWN best-fit scale within that
+box; it does not make frame-to-frame content land at the identical
+on-screen position/scale, since two frames of very slightly different
+aspect ratio still get very slightly different effective scale factors.
+Small in absolute pixels, but real, and directly visible as wobble once
+each frame is independently re-fit.
+
+**Root cause, confirmed (not guessed):** the crop instability was
+entirely in the CONTENT-driven right edge and bottom edge -- driven by
+the light-streak sweep and the growing "ALEPH ALPHA" wordmark's own ink
+extent, both genuine content that a content-based crop legitimately
+measures differently frame to frame. The underlying 8-column grid itself
+was NOT unstable: row 0, 2, and 3 each independently re-detect the exact
+same 8 column left-edges (`[13, 259, 506, 752, 998, 1245, 1492, 1739]`);
+only row 1 (the one row with both the streak and the first wordmark
+letters already present) drifted by 1px at a single column.
+
+**The fix:** stop cropping each frame to its own content entirely. Every
+one of the 32 frames is now cropped to ONE fixed-size window
+(`_FRAME_WIDTH := 240`, `_FRAME_HEIGHT := 183`) anchored at its own row's
+measured top and its own column's fixed left edge (`_COLUMN_LEFTS`) --
+both bounds sized with a real, tested safety margin (comfortably larger
+than the widest real content any frame's old crop ever measured,
+comfortably smaller than the tightest real column pitch, so it can never
+bleed into an adjacent frame). `SpriteSheetSlicer.detect_frames` is no
+longer called by this file at all. Frames still are NOT run through
+`normalize_frames` -- unchanged from every prior pass, still avoided for
+the same reason ("The sheet" above): this fix removes crop-WINDOW
+instability, not per-frame rescaling, so it doesn't reintroduce the
+"globe appears to grow as the wordmark grows" problem `normalize_frames`
+would cause.
+
+**Strict TDD.** `test_every_frame_is_the_same_size` in
+`test_intro_splash_sheet.gd` confirmed red against the unfixed per-frame
+`detect_frames` crop (real measured sizes varied as above), green after.
+Full `test_intro_splash_sheet.gd` (7/7) and `test_intro_splash.gd`
+(13/13) pass -- no regression in the eighth pass's own sizing/filtering
+fix or the ninth pass's modifier-key handling.
+
 ## Status
 
+- ✅ **Revised (2026-09-09, "A tenth pass"): every one of the 32 frames is
+  now cropped to one fixed-size window, not its own content.** Reported
+  live as "wobbly" again even after the eighth pass's pixel-perfect
+  scaling shipped -- the remaining cause was real, measured frame-to-frame
+  crop-size variance (232-234px wide, 181-183px tall) in
+  `IntroSplashSheet`'s per-frame `detect_frames` crop, which
+  `STRETCH_KEEP_ASPECT_CENTERED` letterboxing alone didn't fully absorb.
+  See "A tenth pass" above.
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
   arithmetic-grid-assumed — see "The sheet" above), chroma-keyed and
   despilled — `IntroSplashSheet`, `tools/probe_intro_sheet.gd`.
