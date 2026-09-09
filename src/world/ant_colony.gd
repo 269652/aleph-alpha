@@ -42,6 +42,10 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const AntPopulationModel = preload("res://src/world/ant_population_model.gd")
 const PheromoneField = preload("res://src/world/pheromone_field.gd")
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
+## Read only for its own real SECONDS_PER_YEAR (see NEW_QUEEN_ADOPTION_SECONDS
+## below) -- no circularity risk: SeasonCycle is a pure calendar utility that
+## imports nothing from this file or EarthChunkManager.
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 ## Biomes with real organic soil an ant can excavate -- the same set
 ## EarthwormPatch uses, and for the same reasons (ocean has no soil, desert
@@ -343,6 +347,17 @@ const WARMTH_EMA_RATE := MOISTURE_EMA_RATE
 ## the colony's own population actually eats from it.
 var _food_stored: Dictionary = {}
 
+## Per-mound real, accumulated real seconds spent genuinely queenless
+## (population_at(cell) <= 0.0) SINCE the last time a queen was present --
+## see advance()'s own accumulation and _maybe_adopt_new_queen/
+## NEW_QUEEN_ADOPTION_SECONDS below. Reset to absent (not merely 0.0) the
+## instant a queen returns by EITHER path (_found_new_queen_at), so a
+## later extinction always starts counting from a genuine zero, never a
+## stale carried-over duration. Not present at all for a mound that has
+## never gone queenless, the same "unset reads as the untouched default"
+## fallback shape every other per-mound dictionary here already uses.
+var _queenless_seconds: Dictionary = {}
+
 var _population_model := AntPopulationModel.new()
 
 ## Per-mound trail pheromone (see PheromoneField) -- Vector2i cell ->
@@ -410,7 +425,11 @@ func advance(delta_seconds: float) -> void:
 		field.decay(delta_seconds)
 	var delta_days := delta_seconds / SECONDS_PER_SIMULATED_DAY
 	for cell in _mounds:
+		if population_at(cell) <= 0.0:
+			_queenless_seconds[cell] = _queenless_seconds.get(cell, 0.0) + delta_seconds
 		if _maybe_refound(cell):
+			continue
+		if _maybe_adopt_new_queen(cell):
 			continue
 		_population[cell] = _population_model.step(population_at(cell), capacity_at(cell), delta_days)
 		_deplete_food(cell, delta_days)
@@ -446,13 +465,49 @@ func advance(delta_seconds: float) -> void:
 ## re-founding here IS the real "a new queen/swarm founds again" moment
 ## already named above, not a second mechanism running in parallel with a
 ## queen concept that used to be prose only.
+##
+## *(2026-09-09 -- see docs/concept/soil_fauna.md's "Winter->spring
+## repeat-collapse: root cause and fix".)* This alone used to be
+## incomplete: it reset POPULATION to STARTING_POPULATION but never gave
+## the colony a matching FOOD reserve the way a genuinely brand-new mound
+## gets (_founding_food_reserve) -- so a mound that had just crossed the
+## tiny REFOUNDING_FOOD_THRESHOLD "refounded" at a full 15-strong
+## population sitting on as little as 3.0 stored food (which a 15-strong
+## colony needs 45.0 of to read as secure), instantly crushing capacity_at
+## and, live-reported directly: "they then refound; but it collapses again
+## because there's still no queen" -- a real, reproducible repeat cycle,
+## confirmed via a throwaway diagnostic probe. Now delegates to
+## _found_new_queen_at, shared with _maybe_adopt_new_queen below, which
+## tops food up to a real reserve too -- see that function's own doc
+## comment. (QUEEN_PROTECTED_POPULATION_FLOOR, added the same pass, is the
+## second half of this fix: even an under-resourced colony can no longer
+## be driven all the way back to a literal 0.0 by ordinary starvation
+## alone while she's alive.)
 func _maybe_refound(cell: Vector2i) -> bool:
 	if population_at(cell) > 0.0:
 		return false
 	if food_stored_at(cell) < REFOUNDING_FOOD_THRESHOLD:
 		return false
-	_population[cell] = AntPopulationModel.STARTING_POPULATION
+	_found_new_queen_at(cell)
 	return true
+
+
+## Shared by _maybe_refound (food-gated) and _maybe_adopt_new_queen
+## (time-gated) below -- whichever path actually fires, a mound that just
+## gained a queen must land in EXACTLY the same real state a genuinely
+## brand-new mound starts in: STARTING_POPULATION, and (2026-09-09 fix --
+## see _maybe_refound's own doc comment) a real, matching food reserve, not
+## just a population number sitting on whatever bare minimum happened to
+## trigger the transition. `maxf`, never a plain overwrite: an already
+## ample reserve (e.g. a real windfall surplus already sitting at the
+## site) must never be reduced back down to the mere founding minimum.
+## Also clears _queenless_seconds -- a queen is present again, so any
+## FUTURE extinction must start counting real elapsed time from zero, not
+## from a stale duration accumulated before this one.
+func _found_new_queen_at(cell: Vector2i) -> void:
+	_population[cell] = AntPopulationModel.STARTING_POPULATION
+	_food_stored[cell] = maxf(food_stored_at(cell), _founding_food_reserve())
+	_queenless_seconds.erase(cell)
 
 
 ## How much real, on-hand food counts as "enough evidence this site is
@@ -472,6 +527,60 @@ func _maybe_refound(cell: Vector2i) -> bool:
 ## a full mature colony's own reserve -- mirroring CLUSTER_THRESHOLD's own
 ## identical "3, not 1, not a fluke" reasoning.
 const REFOUNDING_FOOD_THRESHOLD := FOOD_PER_SUCCESSFUL_FORAGE * 3.0
+
+
+## A second, independent, deliberately much SLOWER path to a new queen for
+## a genuinely queenless mound (population truly 0.0), alongside
+## _maybe_refound's own food-gated one -- see docs/concept/soil_fauna.md's
+## "A new queen, over real time: adoption" for the full real-world
+## grounding. Requested live, directly after the winter->spring
+## repeat-collapse fix: "If they have no queen; they should make a new
+## one... It should take time thoug for a new queen to hatch" -- and, when
+## asked to ground this in the real biology rather than invent a game-y
+## mechanic: real ant queen succession by adoption is a genuine, documented
+## phenomenon (pleometrosis / secondary polygyny by adoption) -- an
+## already-mated, dealate queen from a nuptial flight wandering onto a
+## queenless nest and being accepted into it, distinct from _maybe_
+## refound's own "a wholly fresh, independently-founded colony happens to
+## colonize the empty site once food evidence looks good" story. Real
+## nuptial flights are SEASONAL -- typically once, or a handful of times, a
+## year for any given species/region -- so "the next real opportunity for
+## a wandering queen to find this exact site" is honestly a season-scale
+## wait, not a food-stockpile-scale one.
+##
+## Pinned directly at a real SeasonCycle season (SECONDS_PER_YEAR / 4.0 --
+## the same real calendar every other seasonal system in this game reads,
+## restated as a literal value rather than importing SeasonCycle, mirroring
+## SECONDS_PER_SIMULATED_DAY's own identical "restate + cross-check" choice
+## just above this file's own advance() -- cross-checked directly by
+## test_new_queen_adoption_seconds_matches_a_real_season so the two can
+## never silently drift apart). Deliberately, and checked directly
+## (test_new_queen_adoption_seconds_is_meaningfully_slower_than_the_food_
+## gated_path), far slower than the food-gated path's own worst
+## documented case (22 real minutes, REFOUNDING_FOOD_THRESHOLD's own doc
+## comment) -- let alone its ordinary, much faster typical case -- since
+## this is meant as the guaranteed, unconditional fallback for a site food
+## alone may never bring back, not a race against it.
+##
+## Unlike _maybe_refound, deliberately NOT gated on food at all: a real
+## founding queen's first eggs are fed from her OWN histolysed flight
+## muscle, not a pre-existing site stockpile, so an adopting queen owes
+## nothing to whatever food this exact mound does or does not have on
+## hand -- see _found_new_queen_at for what she DOES still get once she
+## arrives (the same real founding food reserve either path lands her at).
+const NEW_QUEEN_ADOPTION_SECONDS := SeasonCycle.SECONDS_PER_YEAR / 4.0
+
+
+## The actual adoption check: real elapsed queenless time (see advance()'s
+## own _queenless_seconds accumulation), nothing else. Mirrors _maybe_
+## refound's own shape exactly, just gated on time instead of food.
+func _maybe_adopt_new_queen(cell: Vector2i) -> bool:
+	if population_at(cell) > 0.0:
+		return false
+	if _queenless_seconds.get(cell, 0.0) < NEW_QUEEN_ADOPTION_SECONDS:
+		return false
+	_found_new_queen_at(cell)
+	return true
 
 
 ## Colony budding (reported live: "ant mounds should have a maximum
@@ -875,16 +984,23 @@ func has_queen_at(cell: Vector2i) -> bool:
 ## requeening_progress_at's own hover-facing contract, but reads the REAL
 ## existing gate this mechanic already used before it had a name for it
 ## (_maybe_refound/REFOUNDING_FOOD_THRESHOLD) rather than a bee-style
-## fixed-day clock: ants have no timer to report progress against here --
-## real recovery time depends entirely on how quickly food happens to
-## pile back up, which can vary hugely (REFOUNDING_FOOD_THRESHOLD's own
-## doc comment names a real 22-real-minute worst case this constant
-## already had to fix once; there is no equivalent fixed upper bound the
-## way BeeColony.REQUEENING_DAYS gives bees).
+## fixed-day clock: ants have no SINGLE timer to report progress against
+## here -- real recovery time depends on whichever of TWO independent real
+## paths is closer to firing (see _maybe_refound/_maybe_adopt_new_queen):
+## food happening to pile back up (can vary hugely -- REFOUNDING_FOOD_
+## THRESHOLD's own doc comment names a real 22-real-minute worst case this
+## constant already had to fix once), or real elapsed time alone crossing
+## NEW_QUEEN_ADOPTION_SECONDS (2026-09-09, "a new queen, over real time" --
+## see that constant's own doc comment) -- a real, fixed upper bound
+## neither path had before this pass. Reports whichever is genuinely
+## further along, the same way a player only cares about whichever real
+## path is actually about to pay off.
 func refounding_progress_at(cell: Vector2i) -> float:
 	if has_queen_at(cell):
 		return 0.0
-	return clampf(food_stored_at(cell) / REFOUNDING_FOOD_THRESHOLD, 0.0, 1.0)
+	var food_progress := clampf(food_stored_at(cell) / REFOUNDING_FOOD_THRESHOLD, 0.0, 1.0)
+	var time_progress := clampf(_queenless_seconds.get(cell, 0.0) / NEW_QUEEN_ADOPTION_SECONDS, 0.0, 1.0)
+	return maxf(food_progress, time_progress)
 
 
 ## How many foragers this mound may have concurrently active -- always at

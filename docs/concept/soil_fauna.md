@@ -310,7 +310,15 @@ watched the bird peck at them.
   procedural `"queen"` silhouette (`ProceduralDecomposerSprite`, no real
   art delivered yet) is visibly larger with a far more pronounced
   abdomen than a worker. See "A real ant queen, and why she cannot
-  requeen like a bee" below for the full grounding.
+  requeen like a bee" below for the full grounding. *(2026-09-09 —
+  extended with two real, separate mechanics: a protected population
+  floor so ordinary starvation alone can no longer crash a living colony
+  to literal zero ("Workers protect their queen"), and a second,
+  deliberately much slower, real-time-gated path to a new queen for a
+  genuinely queenless mound, grounded in real ant colony adoption/
+  pleometrosis ("A new queen, over real time: adoption") — see those
+  sections and "Winter->spring repeat-collapse: root cause and fix"
+  below for the live-reported bug this pass also fixed.)*
 - ✅ Caterpillars (requested live: "wire caterpillars which live on trees
   and on the ground around them; they should also do groundforaging and
   eat green leaves (spring, summer only)") — real illustrated crawl/climb/
@@ -918,6 +926,167 @@ parked for a real waiting window" reasoning `BeeQueenMarker` already
 established — except for ants this window is exactly "population 0, not
 yet re-founded," which (unlike bees' own fixed `REQUEENING_DAYS`) could
 be brief or could be open-endedly long, depending on food luck alone.
+*(2026-09-09 -- no longer open-endedly long: see "Workers protect their
+queen" and "A new queen, over real time: adoption" below, which add a
+real, fixed, season-scale upper bound even with no food luck at all.)*
+
+### Workers protect their queen: a population floor (2026-09-09)
+
+Reported live, directly alongside a real bug (see "Winter->spring
+repeat-collapse: root cause and fix" below): *"can you fix this and make
+sure the workers care for their queen and make sure it doesn't die?"*
+
+**Real-world grounding.** Worker ants genuinely prioritize feeding and
+tending the queen over their own survival during scarcity -- she is
+preferentially fed via trophallaxis (mouth-to-mouth food sharing) even as
+ordinary foragers go hungry, because her egg-laying is the one thing the
+whole colony's future depends on. A colony experiencing real famine does
+not starve uniformly; the queen is the LAST thing a colony lets go of,
+not an equal share of a shrinking pie.
+
+**The mechanism.** `AntPopulationModel.step` now takes the ordinary
+logistic-decline result `PopulationModel.step` computes and floors it at
+`QUEEN_PROTECTED_POPULATION_FLOOR` (3.0) whenever a real queen was
+present at the START of that step (`population > 0.0` going in) --
+ordinary starvation/dormancy pressure can still reduce a colony DOWN
+TOWARD this minimal surviving nucleus, including through
+`PopulationModel.step`'s own hard "`carrying_capacity <= 0.0` ->
+population immediately 0.0" rule (the floor is applied AFTER that rule
+fires, overriding its result), but can never push her colony's
+population past it to a literal 0.0 while she lives. 3.0 -- not 1.0 --
+mirrors `CLUSTER_THRESHOLD`'s/`REFOUNDING_FOOD_THRESHOLD`'s own identical
+"3, a real minimum, not a fluke" reasoning already used twice in
+`ant_colony.gd`: a minimal nucleus of nurse workers whose whole job is
+keeping the queen fed, not a real population in its own right (checked
+directly to stay a genuinely small fraction of `STARTING_POPULATION`, not
+large enough to read as "starvation does nothing").
+
+**Deliberately scoped to ordinary economic decline only.** The floor
+lives entirely inside `AntPopulationModel.step`, called only from
+`AntColony.advance`'s own per-tick economy loop -- `forager_crushed`/
+`forager_eaten` (a real forager crushed underfoot or eaten by a bird
+predator) and `bud_new_mound`'s own population split bypass it entirely,
+subtracting directly. This is deliberate, not an oversight: predation and
+player action are real, additional causes of death this mechanism was
+never meant to protect against -- only the passive famine/dormancy spiral
+is. A colony reduced below the floor by crushing still reads as genuinely
+queenless (`population_at(cell) <= 0.0` is still reachable, just not from
+starvation alone), and is still eligible for both re-founding paths
+below.
+
+**Never a backdoor resurrection.** The floor only ever applies to a
+population that STARTS a step above 0.0 -- a colony already at a genuine
+0.0 going into a step gets `maxf(0.0, ...)`, i.e. no floor at all
+(`test_step_does_not_resurrect_a_population_that_starts_at_zero`).
+Gaining a queen back from a genuine 0.0 stays exactly `_maybe_refound`'s
+and `_maybe_adopt_new_queen`'s own explicit, separately-gated job (see
+below) -- never an unconditional side effect of ordinary population
+stepping.
+
+### A new queen, over real time: adoption (2026-09-09)
+
+Requested live, in three parts across one report: *"If they have no
+queen; they should make a new one..."*, then, immediately after -- *"It
+should take time thoug for a new queen to hatch"* -- and then, explicitly
+inviting real research rather than a game-y invention: *"idk how it's in
+the real world when the ant queen dies?"*
+
+**This deliberately extends -- and partially revises the closing framing
+of -- "A real ant queen, and why she cannot requeen like a bee" above,
+without undoing its core finding.** That section's central claim stands
+completely unchanged and is NOT what this extends: the overwhelming
+majority of ant workers genuinely cannot rear a replacement queen
+in-place from an egg or larva the way honeybee workers can -- there is
+still no worker-side path to a new queen for an ant colony, and
+`_maybe_adopt_new_queen` below does not give workers one. What this DOES
+revise is that section's own closing line that "neither case is 'an
+existing queenless colony gets repaired in place.'" Real research (done
+specifically because the user asked for it rather than a hand-waved
+mechanic) turned up a real, well-documented ant phenomenon that DOES land
+close to that outcome, distinct from both cases the original section
+named:
+
+**Real-world grounding: pleometrosis and secondary polygyny by
+adoption.** A newly-mated, dealate (wing-shed) queen from a nuptial
+flight, searching for a nest site, can find and be accepted into an
+EXISTING colony rather than founding her own from scratch -- "in
+secondary pleometrosis, queens are accepted into the adult colony after
+the nuptial flight," and more generally "polygyny can be secondary, in
+which the colony is started by a single queen and supernumerary queens
+are added later by adoption" (see
+[AntWiki: Polygyny](https://www.antwiki.org/wiki/Polygyny)). Adoption of
+a queenless nest specifically by a wandering dealate queen is a real,
+recurring outcome documented across numerous genera -- a genuinely
+different real mechanism from both cases the original section named (a
+wholly independent new nest built from scratch; an existing mated queen
+leaving her OWN colony with a swarm of workers): here, an outside queen
+who was never part of this colony finds ITS empty nest and takes it
+over, continuing the same physical site under new leadership without
+requiring the workers to have manufactured anything. See also [Fecundity
+determines the outcome of founding queen associations in
+ants](https://www.nature.com/articles/s41598-021-82559-9) and [Queens
+Survival during Pleometrosis in Monogynous and Polygynous Ant
+Species](https://ojs.akademperiodyka.org.ua/index.php/Zoodiversity/article/view/618)
+for the broader documented phenomenon.
+
+**How this maps onto what this game already models.** `AntColony` has no
+state finer-grained than a single `population_at` number per mound --
+there is no separate "queenless nest with surviving workers" state
+distinct from "population 0, colony gone" for a wandering queen to be
+adopted INTO the way real secondary pleometrosis describes (workers
+already present, welcoming her in). The honest translation into this
+game's existing abstraction is therefore mechanically similar in SHAPE to
+`_maybe_refound` -- population jumps from 0.0 to `STARTING_POPULATION` --
+but is a genuinely distinct mechanism in its GATING and its real-world
+story: `_maybe_refound` represents food evidence proving a wholly fresh,
+independently-founded colony has moved in; adoption represents THIS site
+specifically being found and claimed by an outside queen, gated on
+nothing but real elapsed time.
+
+**Real-world grounding for the timescale: nuptial flights are seasonal,
+not continuous.** "Ant nuptial flights are naturally infrequent and
+highly synchronised events, typically occurring only on a few days each
+season for a given species," with strong genus-level seasonal
+preferences (*Camponotus* flying at the start of summer, *Myrmica* at
+the end of summer or in early autumn) -- see [AntWiki: Nuptial Flights
+and Mating](https://www.antwiki.org/wiki/Nuptial_Flights_and_Mating) and
+the seasonal-periodicity literature it surveys. Because this game does
+not model individual ant species separately, and because real genera
+favor different seasons, "roughly once a season, some real species'
+flight window passes near this site" is the honest aggregate translation
+-- not once a year (too slow: some genus is on the wing most seasons
+somewhere), and nowhere near continuous (too fast: any GIVEN species' own
+window is a rare, synchronised burst, not a standing opportunity).
+
+**The mechanism.** `AntColony` now accumulates real elapsed seconds spent
+genuinely queenless per mound (`_queenless_seconds`, incremented in
+`advance()` only while `population_at(cell) <= 0.0`, reset to absent the
+instant a queen returns by EITHER path). `_maybe_adopt_new_queen(cell)`
+fires once that accumulated duration crosses `NEW_QUEEN_ADOPTION_SECONDS`
+-- pinned directly at one real `SeasonCycle` season
+(`SeasonCycle.SECONDS_PER_YEAR / 4.0`, cross-checked by
+`test_new_queen_adoption_seconds_matches_a_real_season` so the two can
+never silently drift apart) -- **deliberately, and checked directly
+(`test_new_queen_adoption_seconds_is_meaningfully_slower_than_the_food_
+gated_path`, `test_new_queen_adoption_does_not_resolve_quickly_or_
+immediately`), far slower than the food-gated path**, including that
+path's own worst documented case before it was fixed down (22 real
+minutes -- `REFOUNDING_FOOD_THRESHOLD`'s own doc comment) -- since
+adoption is meant as the guaranteed, unconditional fallback for a site
+food alone may never bring back, not a race against the fast path.
+Deliberately NOT gated on food at all, unlike `_maybe_refound`: a real
+founding queen's first eggs are fed from her OWN histolysed flight
+muscle tissue, not a pre-existing site stockpile, so she owes nothing to
+whatever food this exact mound does or does not have on hand. Whichever
+path fires first, both land the colony in exactly the same state via the
+shared `_found_new_queen_at` helper (see "Winter->spring repeat-collapse:
+root cause and fix" below for why that now matters) -- `STARTING_
+POPULATION` and a real, topped-up food reserve, never a bare population
+number sitting on an unmatched stockpile.
+
+`AntColony.refounding_progress_at(cell)` now reports whichever of the two
+real paths -- food or time -- is genuinely further along, rather than
+only ever reading the food path as before.
 
 ### Water, not just food: a second real growth driver
 
@@ -1773,6 +1942,11 @@ relative to that fresh population's own upkeep) rather than instantly
 "safe" — the same real vulnerability any newly-founded colony already
 has, resolved by the ordinary food economy catching up over subsequent
 ticks, not a special case.
+*(2026-09-09 -- this turned out to be wrong, not merely optimistic: see
+"Winter->spring repeat-collapse: root cause and fix" below. The ordinary
+food economy did NOT catch up on its own; a real, separate bug in this
+exact re-founding step meant it reliably collapsed the colony straight
+back to zero instead.)*
 
 **What this does NOT include**: no seasonal reduction in FORAGE_CHANCE
 or dispatch itself (a dormant colony still sends its usual foragers out;
@@ -1787,6 +1961,76 @@ comment already names ants as the one regional population in this game
 with no `migrate()` at all, mounds being sessile) — re-founding here is
 a single mound's own site recovering, never population moving in from
 elsewhere.
+
+### Winter->spring repeat-collapse: root cause and fix (2026-09-09)
+
+Reported live, at the two ant mounds near the player's own spawn point:
+*"Both ant mounds near the spawn show queenless when changing from
+winter to spring... they then refound; but it collapses again because
+there's still no queen."* A genuine repeating cycle, not the intended
+one-shot "colony died, eventually re-founds, stays alive" behaviour --
+and specifically tied to the winter->spring transition.
+
+**Root-caused directly, not guessed at** -- reproduced live via a
+throwaway diagnostic probe (deleted once its job was done, preserved as
+`test_a_refounded_colony_does_not_collapse_back_to_queenless_again`/
+`test_a_refounded_colony_stays_alive_across_two_consecutive_lean_
+stretches` in `tests/unit/test_ant_colony.gd`): starve a colony to a real
+0.0 (matching a real winter's near-total lack of forage success, exactly
+the precondition "Winter dormancy" above already establishes), then
+trickle home exactly `REFOUNDING_FOOD_THRESHOLD` worth of food -- 3
+successful trips, matching a lone still-active forager finally finding
+food as spring odds improve, NOT a giant windfall deposit. Population
+"refounded" at the full 15.0 `STARTING_POPULATION`, exactly as designed
+-- but was back to a literal 0.0 within 10 simulated days, EVERY time,
+repeatably (confirmed by re-running the same trickle a second time
+afterward and watching it collapse again).
+
+**The precise mechanism.** `_maybe_refound` reset `population_at` to
+`STARTING_POPULATION` the instant `food_stored_at` crossed the tiny
+`REFOUNDING_FOOD_THRESHOLD` (3.0) -- but never gave the colony a matching
+FOOD reserve the way a genuinely brand-new mound gets
+(`_founding_food_reserve`, 45.0 for a 15-strong colony). A colony that
+just "refounded" was therefore instantly ~93% food-insecure
+(`food_availability_fraction` reading a mere 3.0 / 45.0 ≈ 0.067) --
+which crushed `capacity_at` down to a small fraction of what 15
+population actually needs, which `PopulationModel.step`'s own logistic
+decline (asymmetric: growth is capped from overshooting capacity in one
+step, decline is bounded only by zero) then spiralled down to a real
+0.0 within days, not weeks. Specifically tied to the winter->spring
+boundary because that is exactly when a queenless mound's food FIRST has
+a realistic chance to cross `REFOUNDING_FOOD_THRESHOLD` at all -- forage
+success stays genuinely near-zero through the depth of winter (see
+"Winter dormancy" above), so the trigger for this whole broken sequence
+disproportionately fires right at the season boundary, and (checked
+directly: no location-specific mechanism was found -- `TallGrass.
+shed_seed` has no hard winter cutoff, only `SeasonCycle.growth_modifier`
+scaling growth speed, and `capacity_at`'s own moisture/food terms are
+identical at every mound regardless of biome) applies uniformly to every
+mound in the world, not something specific to the two spawn-adjacent
+ones -- they are simply the two the player actually revisits across
+seasons with `MAX_MOUNDS` capped at 2 per chunk.
+
+**The fix -- two real, complementary changes:**
+
+1. **A refounded (or adopted, see "A new queen, over real time: adoption"
+   above) colony now also gets a real, matching food reserve, not just a
+   population number.** The new shared `_found_new_queen_at(cell)` helper
+   tops `food_stored_at` up to `_founding_food_reserve()` (via `maxf`,
+   never reducing an already-ample reserve) at the same moment it sets
+   population to `STARTING_POPULATION` -- a refounded/adopted colony is
+   now precisely as food-secure as a genuinely brand-new one, closing the
+   root cause directly.
+2. **"Workers protect their queen" (above) is the second, complementary
+   half** -- even under a worse famine than the fix above anticipates,
+   `QUEEN_PROTECTED_POPULATION_FLOOR` now means ordinary starvation alone
+   can no longer drive a living colony's population all the way back to
+   the literal 0.0 that makes it read as queenless in the first place.
+
+Together: the specific reported trigger (an under-resourced refound) no
+longer happens, AND the general class of "ordinary starvation crashes a
+colony to literal zero" it belongs to is now structurally harder to
+reach at all.
 
 ### Colony budding: overpopulation founds a new mound (2026-09-06)
 
