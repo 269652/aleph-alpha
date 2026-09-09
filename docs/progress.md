@@ -17785,9 +17785,17 @@ season-driven capacity and dormancy) all green — re-run directly against
 `main` after merge, not just on the feature branch.
 
 ✅ **Live/simulated re-check against the real spawn point, not just unit
-tests.** A second throwaway probe drove the real, production
-`EarthChunkManager` (same "Berlin", 52.52°N 13.405°E, spawn coordinate
-`world.gd`/`test_earth_chunk_manager.gd` already use) through a real,
+tests.** A throwaway probe first ran against `test_earth_chunk_manager.
+gd`'s own "Berlin" fixture (52.52°N 13.405°E), whose comment claims it
+matches `world.gd`'s spawn point — checked directly and found stale
+(current `World.SPAWN_LATITUDE`/`SPAWN_LONGITUDE` read 47.2031/-1.5469,
+nowhere near Berlin; per this doc's own much earlier "Earth as shared
+starting planet" entry, spawn has moved more than once and the Berlin
+fixture is deliberately independent of it by design, not a bug — only
+the one comment's wording is now inaccurate). Re-run at `World.SPAWN_
+LATITUDE`/`SPAWN_LONGITUDE` read directly rather than a hardcoded
+place name, so this stays accurate regardless of future spawn moves.
+Both runs drove the real, production `EarthChunkManager` through a real,
 live-computed winter→spring→summer stretch via the actual season/weather
 pipeline (`step_ants`, `advance_world_age`) — found 10 real mounds across
 the chunks around spawn, forced every one genuinely queenless deep in
