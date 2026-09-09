@@ -201,25 +201,43 @@ eat-vs-cache branch to nudge); a mouse's own seasonal hardship already
 comes from the shared `FOOD_UNDERFOOT`/`FOOD_SEED` forage-realism fix
 above, the same as every other `CreatureMarker` species.
 
-### Bear hibernation / snake brumation (new decision-ladder state)
+### Bear hibernation / snake brumation (new total-override state)
 
-The one genuinely new architecture piece. `CreatureMarker`/
-`CreatureBehavior` have no dormant/sleeping state at all today — `decide()`
-returns an `intent` string consumed by `_apply_decision`'s match
-statement, with priority order carried as DATA
-(`Ethogram.BODY_PLANS[...]["wirings"]`), never as nested ifs. A new
-`"dormant"` intent slots into that same ladder at top priority for a
-gated species once `ambient_warmth()` (the SAME call `CreatureMarker`
-already makes for body-temperature regulation — no second warmth source)
-drops below a threshold for a sustained window; `_apply_decision` gains a
-branch that halts movement and foraging in place. Species are gated via a
-new house-style Dictionary (mirroring the existing `VENOMOUS_SPECIES`
-pattern) — `bear` for mammalian hibernation, `venomous_snake`/
-`nonvenomous_snake` for brumation. **Deliberate simplification**: both
-are modeled as the same observable "inactive and sheltered" mechanic
-rather than distinguishing true hibernation from brumation at the
-physiological level (e.g. a brumating snake occasionally rousing on a
-warm winter day) — the distinction real biology draws is finer than this
+The one genuinely new architecture piece. **Implemented differently from
+this section's own first draft, on reading the real decision code**:
+`CreatureBehavior.decide()` doesn't return an intent picked from a plain
+ordered if-chain a new case could slot into — it delegates to
+`BehaviorKernel.decide()` running `Ethogram.BODY_PLANS["mammal"]`'s
+wirings, a scored competition between drives (hunger/thirst/fear/
+courtship), with its own dedicated ladder-order test coverage
+(`test_ethogram.gd`). Dormancy is not another drive competing for
+priority inside that kernel — it's "is this creature even active right
+now at all," the same KIND of question `CreatureMarker.is_rooted()`
+already answers for a frozen/rooted creature. So it's built at that exact
+precedence instead: a new `_step_dormancy()` runs every `_process()`
+frame (in both directions, so a dormant creature can also wake), and a
+dormant creature early-returns immediately after the existing
+`is_rooted()` check — before `_behavior.decide()` is ever called, the
+same "total override, no AI decision this frame" precedence rooted/
+knockback already have. This never touches the ethogram kernel or its
+pinned ladder-order test at all.
+
+Species are gated via a new house-style Dictionary (mirroring the
+existing `VENOMOUS_SPECIES` pattern) — `bear` for mammalian hibernation,
+`venomous_snake`/`nonvenomous_snake` for brumation. The warmth signal is
+this creature's OWN smoothed reading of `ambient_warmth()` (the SAME call
+`CreatureMarker` already makes for body-temperature regulation — no
+second warmth source), settled via a delta-scaled exponential time
+constant (not a fixed-rate-per-call EMA like `AntColony.record_warmth` --
+that's called on a fixed real-time refresh interval, already effectively
+time-based; this runs once per variable-length frame, so the blend factor
+itself must scale with delta to stay framerate-independent) against
+`EarthwormPatch.COLD_CUTOFF`, the same real winter-soil reading every
+other cold-weather mechanism in this game already keys off. **Deliberate
+simplification**: both are modeled as the same observable "inactive and
+sheltered" mechanic rather than distinguishing true hibernation from
+brumation at the physiological level (e.g. a brumating snake occasionally
+rousing on a warm winter day) — the distinction real biology draws is finer than this
 pass implements, named here rather than silently assumed identical.
 
 ### Blackbird: new species, real population, real diet shift
@@ -340,6 +358,14 @@ phases 5/6's real winter hardship automatically once spawnable, since
 funnels through. Verified with a real rendered frame (chroma-key cutout
 confirmed clean via the existing "no leftover magenta" test), not just a
 code trace.
-⬜ Bear hibernation / snake brumation
+✅ Bear hibernation / snake brumation — implemented as a total-override
+early-return at `is_rooted()`'s exact precedence (see this section's own
+revised writeup above for why, corrected from the original ethogram-
+wiring plan on reading the real decision code), not a new ethogram
+intent. New `CreatureMarker._step_dormancy()`, `HIBERNATING_SPECIES`/
+`BRUMATING_SPECIES` tables, and a delta-scaled exponential warmth EMA
+settling against `EarthwormPatch.COLD_CUTOFF`. `_process()` early-returns
+immediately after `is_rooted()` while dormant — no movement, no AI
+decision, sprite frozen on its last frame, exactly like being rooted.
 ⬜ Blackbird: real population + real diet shift
 ⬜ Grass frog: brumating, decorative-but-real presence

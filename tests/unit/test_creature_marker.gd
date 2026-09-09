@@ -1244,6 +1244,107 @@ func test_underfoot_grazing_is_unaffected_when_the_world_reports_no_growth_modif
 	)
 
 
+# -- winter dormancy: bear hibernation, snake brumation (see docs/concept/
+# seasonal_behavior.md, "Bear hibernation / snake brumation") -- the one
+# genuinely new architecture piece in the seasonal-behavior pass.
+# CreatureMarker/CreatureBehavior had no dormant/sleeping state at all
+# before this. Modelled as a total override at the SAME precedence as
+# is_rooted() (early-return before any AI decision runs this frame), not
+# as an ethogram wiring: dormancy is "is this creature even active right
+# now," not a drive competing with hunger/thirst/fear for priority.
+
+class StubWorldWithAmbientWarmth:
+	extends StubWorld
+	var warmth := 1.0
+	func ambient_warmth(_position: Vector2) -> float:
+		return warmth
+
+
+func _dormancy_creature(species: String, world) -> CreatureMarker:
+	var m := CreatureMarker.new()
+	m.home = Vector2(100, 100)
+	m.position = Vector2(100, 100)
+	m.wander_seed = 5
+	m.info = CreatureInfo.new(species)
+	add_child_autofree(m)
+	m.setup(world, TILE_SIZE)
+	return m
+
+
+func test_a_hibernating_species_goes_dormant_in_sustained_cold():
+	var cold := StubWorldWithAmbientWarmth.new()
+	cold.biome = "forest"
+	cold.warmth = 0.0
+	var bear := _dormancy_creature("bear", cold)
+	assert_false(bear._dormant, "a bear should not start already dormant")
+	for _i in 30:
+		bear._process(600.0)  # 30 x 10min = 5 real hours, several onset time constants
+	assert_true(bear._dormant, "sustained deep cold should send a hibernating species dormant")
+
+
+func test_a_dormant_creature_does_not_move_even_when_hungry():
+	var cold := StubWorldWithAmbientWarmth.new()
+	cold.biome = "forest"
+	cold.warmth = 0.0
+	var bear := _dormancy_creature("bear", cold)
+	bear._needs.hunger = 1.0
+	for _i in 30:
+		bear._process(600.0)
+	assert_true(bear._dormant)
+	var position_before := bear.position
+	for _i in 20:
+		bear._process(1.0)
+	assert_eq(bear.position, position_before, "a dormant creature should not move at all, hungry or not")
+
+
+func test_a_non_hibernating_species_never_goes_dormant_in_the_same_cold():
+	var cold := StubWorldWithAmbientWarmth.new()
+	cold.biome = "forest"
+	cold.warmth = 0.0
+	var deer := _dormancy_creature("deer", cold)
+	for _i in 30:
+		deer._process(600.0)
+	assert_false(deer._dormant, "a species with no real hibernation biology should never go dormant")
+
+
+func test_a_dormant_creature_wakes_once_warmth_returns():
+	var world := StubWorldWithAmbientWarmth.new()
+	world.biome = "forest"
+	world.warmth = 0.0
+	var bear := _dormancy_creature("bear", world)
+	for _i in 30:
+		bear._process(600.0)
+	assert_true(bear._dormant, "should be dormant after sustained cold")
+	world.warmth = 1.0
+	for _i in 30:
+		bear._process(600.0)
+	assert_false(bear._dormant, "sustained real warmth should end dormancy")
+
+
+func test_a_brumating_snake_also_goes_dormant_in_sustained_cold():
+	var cold := StubWorldWithAmbientWarmth.new()
+	cold.biome = "grassland"
+	cold.warmth = 0.0
+	var snake := _dormancy_creature("venomous_snake", cold)
+	for _i in 30:
+		snake._process(600.0)
+	assert_true(snake._dormant, "sustained deep cold should send a brumating species dormant too")
+
+
+## A world that answers no ambient_warmth signal at all (a plain StubWorld,
+## and every real caller that predates this feature) must keep every
+## pre-existing hibernating-species creature exactly as active as before --
+## the same "safe default preserves old behavior" convention this session's
+## other seasonal-behavior phases already established.
+func test_a_hibernating_species_never_goes_dormant_without_a_warmth_signal():
+	var world := StubWorld.new()
+	world.biome = "forest"
+	var bear := _dormancy_creature("bear", world)
+	for _i in 30:
+		bear._process(600.0)
+	assert_false(bear._dormant, "no warmth signal at all must not change a pre-existing caller's behavior")
+
+
 ## "search_water"/"search_food" (roaming to LOOK for a resource, nothing
 ## sensed yet) used to bypass caution-radius avoidance entirely -- only
 ## ordinary idle wander routed through it (see _wander_step/ThreatAvoidant-

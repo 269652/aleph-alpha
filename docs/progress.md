@@ -17538,3 +17538,51 @@ only the name/doc comment needed updating). `test_intro_splash.gd` 10/10,
 `test_intro_splash_sequencer.gd` 7/7, `test_intro_splash_sheet.gd` 6/6,
 `test_world_play_intro_splash_frame_gate.gd` 3/3, `test_world_intro_
 splash_after_load_fanout.gd` 5/5 — no regression in any prior pass.
+
+### Seasonal behavior, phase 8: bear hibernation, snake brumation (2026-09-09)
+
+✅ **The one genuinely new architecture piece in the seasonal-behavior
+pass — implemented differently from its own first draft, on reading the
+real decision code.** `CreatureBehavior.decide()` doesn't return an
+intent picked from a plain ordered if-chain a new case could slot into:
+it delegates to `BehaviorKernel.decide()` running `Ethogram.BODY_
+PLANS["mammal"]`'s wirings, a scored competition between drives (hunger/
+thirst/fear/courtship) with its own dedicated, pinned ladder-order test
+coverage. Dormancy isn't another drive competing for priority in that
+kernel — it's "is this creature even active right now at all," the same
+kind of question `CreatureMarker.is_rooted()` already answers. Built at
+that exact precedence instead: a new `_step_dormancy()` runs every
+`_process()` frame regardless of the current dormant state (so a dormant
+creature can also wake back up), and a dormant creature early-returns
+immediately after the existing `is_rooted()` check — before `_behavior.
+decide()` is ever called, the same "total override, no AI decision this
+frame" precedence rooted/knockback already have. Never touches the
+ethogram kernel or its pinned test at all.
+
+New `HIBERNATING_SPECIES := {"bear": true}` / `BRUMATING_SPECIES :=
+{"venomous_snake": true, "nonvenomous_snake": true}` (house-style
+Dictionaries, mirroring the existing `VENOMOUS_SPECIES` pattern). The
+warmth signal is this creature's own smoothed reading of the SAME
+`ambient_warmth()` call `CreatureMarker` already makes for body-
+temperature regulation, settled via a delta-scaled exponential time
+constant (3600s) against `EarthwormPatch.COLD_CUTOFF` — deliberately NOT
+a fixed-rate-per-call EMA like `AntColony.record_warmth` (that's called
+on a fixed real-time refresh interval, already effectively time-based;
+this runs once per variable-length `_process()` frame, so the blend
+factor itself must scale with delta to stay framerate-independent).
+**Deliberate simplification**, named not silently assumed: both
+hibernation and brumation are modeled as the same observable "inactive
+and sheltered" mechanic, not distinguished at the physiological level
+(e.g. a brumating snake occasionally rousing on a warm winter day).
+
+TDD: new `StubWorldWithAmbientWarmth` (mirrors the file's own established
+stub-per-optional-method convention) confirms a hibernating species goes
+dormant under sustained deep cold, a dormant creature genuinely does not
+move even when hungry, a non-hibernating species (deer) never goes
+dormant in the identical cold, dormancy ends once real warmth returns,
+a brumating snake goes dormant too, and a world with no `ambient_warmth`
+signal at all (every pre-existing caller) leaves a hibernating species
+exactly as active as before. Confirmed red first ("Invalid access to
+property or key '_dormant'" — the field didn't exist), green after.
+`test_creature_marker.gd` 237/237 (231 pre-existing + 6 new), full file
+re-run clean.

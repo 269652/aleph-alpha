@@ -58,6 +58,7 @@ const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
 const CreatureMovementGate = preload("res://src/gameplay/creature_movement_gate.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
+const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
@@ -816,6 +817,16 @@ func _process(frame_delta: float) -> void:
 	if is_rooted():
 		_sync_grounded_children()
 		return  # frozen/rooted: no movement or AI decisions this frame, same precedence as a knockback
+
+	# Real winter dormancy (see _step_dormancy's own doc comment) -- runs
+	# every frame regardless of the CURRENT _dormant value, so a dormant
+	# creature can also wake back up, then early-returns at the same
+	# precedence as is_rooted() just above: no movement or AI decisions
+	# this frame for a species genuinely hibernating/brumating right now.
+	_step_dormancy(delta)
+	if _dormant:
+		_sync_grounded_children()
+		return
 
 	if _world == null or info == null:
 		_wander_step(delta)
@@ -2825,6 +2836,63 @@ func is_rooted() -> bool:
 		_debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.FREEZE) > 0
 		or _debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.ROOT) > 0
 	)
+
+
+## Real per-species winter dormancy (see docs/concept/seasonal_behavior.md,
+## "Bear hibernation / snake brumation") -- true hibernation for a bear,
+## brumation for a snake. Both are modelled as the same observable
+## "inactive and sheltered" mechanic -- a deliberate simplification, not
+## distinguishing the two at the physiological level (named in the concept
+## doc's own deferred follow-ups).
+const HIBERNATING_SPECIES := {"bear": true}
+const BRUMATING_SPECIES := {"venomous_snake": true, "nonvenomous_snake": true}
+
+## How cold this creature's own smoothed warmth reading must sit before a
+## hibernating/brumating species actually goes dormant -- reuses
+## EarthwormPatch's own COLD_CUTOFF exactly (see docs/concept/
+## seasonal_behavior.md's "reuse the real signal that already exists"
+## pillar), the same real winter-soil reading every other cold-weather
+## mechanism in this game already keys off.
+const DORMANCY_WARMTH_THRESHOLD := EarthwormPatch.COLD_CUTOFF
+
+## The exponential time constant (real seconds) this creature's own warmth
+## reading settles toward the world's live ambient_warmth with -- smooths
+## out a single cold/warm tile so crossing a biome boundary mid-stride
+## can't flicker dormancy on and off every frame, and gives onset/waking a
+## real, gradual feel rather than an instant switch. Delta-scaled (see
+## _step_dormancy), unlike AntColony/BeeColony's own fixed-rate-per-call
+## record_warmth EMA -- theirs is called on a fixed real-time refresh
+## interval, so a fixed rate per call already IS time-based; this runs
+## once per _process() frame, a variable real interval, so the blend
+## factor itself must scale with delta to stay framerate-independent.
+const DORMANCY_WARMTH_TIME_CONSTANT_SECONDS := 3600.0
+
+var _dormancy_warmth := 1.0
+var _dormant := false
+
+
+func _can_go_dormant() -> bool:
+	if info == null:
+		return false
+	return HIBERNATING_SPECIES.has(info.species) or BRUMATING_SPECIES.has(info.species)
+
+
+## Updates this creature's own smoothed warmth reading and its dormant
+## state from it -- called every _process() frame, in BOTH directions, so
+## a currently-dormant creature can also wake back up. A species that can
+## never go dormant, or a world that cannot answer ambient_warmth at all
+## (most of this file's own tests, and every real caller that predates
+## this feature), skips entirely -- _dormant stays false forever for
+## either, the same "safe default preserves old behavior" convention this
+## session's other seasonal-behavior phases already established.
+func _step_dormancy(delta: float) -> void:
+	if not _can_go_dormant():
+		return
+	if _world == null or not _world.has_method("ambient_warmth"):
+		return
+	var alpha := 1.0 - exp(-delta / DORMANCY_WARMTH_TIME_CONSTANT_SECONDS)
+	_dormancy_warmth = lerpf(_dormancy_warmth, clampf(_world.ambient_warmth(position), 0.0, 1.0), alpha)
+	_dormant = _dormancy_warmth <= DORMANCY_WARMTH_THRESHOLD
 
 
 ## `fear`/`calm` don't touch creature_behavior.gd's own pure decide() at all
