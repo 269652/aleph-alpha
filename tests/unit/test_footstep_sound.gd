@@ -60,6 +60,20 @@ func test_an_unknown_surface_falls_back_to_the_default_clip():
 	assert_eq(FootstepSound.clip_path_for("lava"), FootstepSound.clip_path_for("default"))
 
 
+## Reported live: "so river wading should be used for 'underwater walks'"
+## -- a real, distinct water sound, not the same generic dry-land walking
+## clip every other unsourced surface shares. Reuses river.ogg (the
+## ambient river-proximity layer's own real flowing-water recording, see
+## docs/concept/soundscape.md) rather than a second, separately-licensed
+## file -- the same water, the same real reason to be heard, whether it's
+## the continuous bed nearby or the one-shot underfoot when you're
+## actually standing in it.
+func test_underwater_gets_a_real_distinct_water_clip_not_the_default():
+	var path := FootstepSound.clip_path_for("underwater")
+	assert_ne(path, FootstepSound.clip_path_for("default"))
+	assert_true(path.begins_with("res://"))
+
+
 ## No genuine mushroom-squish recording has been sourced yet (see
 ## MUSHROOM_CRUSH_CLIP_PATH's own doc comment for why forcing a mismatched
 ## stand-in would be worse than an honest gap) -- pinned as empty, not a

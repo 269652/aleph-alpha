@@ -18308,3 +18308,28 @@ confirmed red against the unfixed per-frame crop (real measured sizes
 varied as above), green after. `test_intro_splash_sheet.gd` 7/7,
 `test_intro_splash.gd` 13/13 — no regression in the eighth pass's sizing/
 filtering fix or the ninth pass's modifier-key handling.
+
+## Underwater footsteps get a real water sound, not the generic default (`concept/creature_and_footstep_audio.md`, same day)
+
+Reported live, immediately after the river-proximity layer shipped: "so
+river wading should be used for 'underwater walks'." A real, precise
+follow-up catch — `FootstepSound._CLIP_BY_SURFACE` had real distinct
+recordings for snow and forest but `underwater` was still silently
+sharing the generic dry-land `default.ogg`, so wading through a river
+sounded identical to walking across grass.
+
+**The fix:** `underwater` now maps to `res://assets/audio/soundscape/
+river.ogg` — the exact same flowing-water recording the ambient river-
+proximity layer already uses, referenced directly rather than copied into
+`assets/audio/footsteps/` as a second file. One real, licensed asset now
+serves two real purposes (a continuous bed when water is nearby, a
+one-shot underfoot cue when you're actually standing in it) instead of
+needing a fourth separately-sourced/credited clip for what is, physically,
+the same water.
+
+TDD: `test_underwater_gets_a_real_distinct_water_clip_not_the_default`
+confirmed red against the old shared-default behavior first, green after.
+`test_footstep_sound.gd` 12/12; `test_interaction_sfx_player.gd` and
+`test_world_creature_and_footstep_audio_wiring.gd` re-run clean (neither
+needed changes — both already exercised `clip_path_for`/`play_footstep`
+generically rather than asserting a specific surface's clip).
