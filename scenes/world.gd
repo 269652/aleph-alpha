@@ -1131,14 +1131,17 @@ func _wipe_persisted_world() -> void:
 	_chunk_manager.wipe_institution_store()
 	_chunk_manager.wipe_world_boss_store()
 	# And a brand new world clock: any previous run's persisted clock must not
-	# leak into this one either, then a fresh random starting point is rolled
-	# for THIS world (see EarthChunkManager.randomize_world_age/
-	# docs/concept/seasons.md) -- every save used to start at world-age 0
-	# exactly, which reliably began mid-winter-adjacent and snowed within
-	# minutes of every single new game (reported: "it starts to snow
-	# deterministically").
+	# leak into this one either, then THIS world's clock is set to always the
+	# same starting instant (see EarthChunkManager.
+	# reset_world_age_to_mid_spring/docs/concept/seasons.md) -- requested
+	# directly: "make starting season always mid spring". Every save used to
+	# start at world-age 0 exactly, which reliably began mid-winter-adjacent
+	# and snowed within minutes of every single new game (reported: "it
+	# starts to snow deterministically") -- first fixed by rolling a random
+	# starting point across the whole year, since superseded by this fixed
+	# mid-spring instant instead.
 	_chunk_manager.wipe_world_clock()
-	_chunk_manager.randomize_world_age()
+	_chunk_manager.reset_world_age_to_mid_spring()
 
 
 ## Restores a previously saved character exactly where they left off (see
@@ -4465,10 +4468,11 @@ func _save_local_player(player: Player) -> void:
 	_chunk_manager.save_market_store()
 	_chunk_manager.save_institution_store()
 	_chunk_manager.save_world_boss_store()
-	# The world clock too -- without this, New Game's random starting point
-	# (see EarthChunkManager.randomize_world_age) would never actually reach
-	# disk, and a Load Game would fall back to the pre-persistence default of
-	# world-age 0 instead of resuming where the session left off.
+	# The world clock too -- without this, New Game's mid-spring starting
+	# point (see EarthChunkManager.reset_world_age_to_mid_spring) would never
+	# actually reach disk, and a Load Game would fall back to the pre-
+	# persistence default of world-age 0 instead of resuming where the
+	# session left off.
 	_chunk_manager.save_world_clock()
 
 

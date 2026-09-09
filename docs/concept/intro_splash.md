@@ -627,6 +627,219 @@ test verify what's shown without reaching past the class into its
 own established caution given how many of its prior bugs were exactly
 that class of false confidence.
 
+### An eighth pass: genuinely pixel-perfect integer scaling (2026-09-09)
+
+Reported live again, on top of the seventh pass's own already-shipped,
+tested fix: "the intro is still full window... it should be much
+smaller." Both reports are real -- the seventh pass genuinely did shrink
+`_display` from the full viewport down to 880x620, but that is still a
+large box on an ordinary window, and -- more to the point -- it was still
+an ARBITRARY target size (`MainMenu.PANEL_SIZE`, picked because the
+reporter pointed at the character panel, not because it bears any
+relationship to the sheet's own resolution), stretched into with the same
+`STRETCH_KEEP_ASPECT_COVERED` the full-screen version used. Asked
+directly how it should be sized instead, rather than guessed at: a
+pixel-perfect integer scale, centered -- the same crisp, unfiltered,
+whole-number-multiple treatment this game already gives every other
+generated/sliced texture it scales up (see `pixel_art_engine.md`'s house
+rules, and `MainMenu.STANDARD_PORTRAIT_SCALE`/`STANDARD_PORTRAIT_DISPLAY_
+SIZE` for the established pattern this pass mirrors directly), rather
+than an arbitrary fraction of the screen or a corner badge.
+
+**Where the remaining "pixelated and wobbly" was actually coming from,
+confirmed by reading `_display`'s own construction, not just resizing it
+again:** the seventh pass's fix only ever addressed the UPSCALE FACTOR
+(a smaller box needs less magnification) -- it never touched `_display.
+texture_filter`, which had never been set at all and so fell back to
+Godot's default (effectively linear) filter. A linear filter blurs and
+shimmers hard pixel-art edges at any scale that isn't a clean 1:1 -- the
+other, independent half of "pixelated and wobbly", present at ANY box
+size, including the already-shrunk 880x620 one.
+
+**The fix, two parts:**
+1. `IntroSplash._NATIVE_FRAME_SIZE` (`Vector2(233, 182)`) -- the sheet's
+   own real per-frame pixel footprint, measured directly with
+   `tools/probe_intro_sheet.gd` rather than assumed (see "The sheet"
+   above for why 1983/8 x 793/4 isn't exact for this sheet in the first
+   place). The 32 real sliced frames land at 232-234 wide and 181-183
+   tall -- 233x182 is simply the single most common exact size among
+   them, and the ONE fixed reference `DISPLAY_SIZE` scales from, so the
+   on-screen box itself never resizes frame to frame as playback moves
+   across that tiny natural variance (the literal meaning of "wobbly" if
+   it had: `STRETCH_KEEP_ASPECT_CENTERED`'s own letterboxing absorbs it
+   as an imperceptible sliver instead).
+2. `DISPLAY_SCALE := 3`, `DISPLAY_SIZE := _NATIVE_FRAME_SIZE *
+   DISPLAY_SCALE` (699x546) -- comfortably smaller than the seventh
+   pass's 880x620 in both dimensions, a real "much smaller" rather than a
+   cosmetic rename of the same box. `_display.stretch_mode` changed from
+   `STRETCH_KEEP_ASPECT_COVERED` to `STRETCH_KEEP_ASPECT_CENTERED` (no
+   cropping -- COVERED would crop a sliver of real content on any frame
+   landing a pixel or two over the reference size) and `_display.
+   texture_filter` is now explicitly `CanvasItem.TEXTURE_FILTER_NEAREST` --
+   the missing other half of the actual fix.
+
+A new `display_is_pixel_perfect()` getter (same "let a test verify
+without reaching past the class" rationale as `display_rect()`) reports
+whether both the filter and stretch mode are actually set correctly,
+rather than a test reaching into the `TextureRect` node directly.
+
+**Strict TDD.** `test_display_size_is_a_clean_integer_multiple_of_the_
+native_frame_size`, `test_display_size_is_smaller_than_the_prior_
+character_panel_sized_box`, and `test_display_is_pixel_perfect` in
+`test_intro_splash.gd` all confirmed red first (a parse error against the
+not-yet-existing `_NATIVE_FRAME_SIZE`/`DISPLAY_SCALE`/`display_is_pixel_
+perfect` -- GUT silently skips a file that fails to compile rather than
+reporting a normal failure, so this also meant the file's other 7
+pre-existing tests didn't run at all until the fix landed), green after.
+The seventh pass's own `test_display_is_sized_and_centered_to_the_
+character_panel_size` is renamed to `test_display_is_sized_and_centered_
+to_a_pixel_perfect_box` (its assertions read the live `DISPLAY_SIZE`
+constant rather than a hardcoded literal, so they kept passing unchanged
+through the value's own redefinition -- only the name/doc comment needed
+updating to stop claiming a size this pass no longer uses).
+`test_intro_splash.gd` 10/10, `test_intro_splash_sequencer.gd` 7/7,
+`test_intro_splash_sheet.gd` 6/6, `test_world_play_intro_splash_frame_
+gate.gd` 3/3, `test_world_intro_splash_after_load_fanout.gd` 5/5 -- no
+regression in any prior pass's timing/gating/sizing fixes.
+
+### A ninth pass: a lone Alt press no longer skips the intro (2026-09-09)
+
+Flagged, not yet fixed, back when the fifth pass shipped (see its own
+writeup above): the skip-on-any-key handler treated a bare Alt press
+exactly like a real "skip this" key -- very plausibly an incidental
+alt-tab during the long boot wait rather than a deliberate gesture.
+Actioned as an explicit follow-up once the intro's own visual stability
+was independently re-confirmed live on the current (eighth-pass) build.
+
+**Why this can't be told apart after the fact.** Godot reports the
+modifier key itself as an ordinary `InputEventKey` the instant it's
+pressed (`keycode == KEY_ALT`) -- indistinguishable, at that point, from
+a real skip key. The window-manager combo the player actually meant
+(Alt+Tab) is consumed by Windows before any second, unrelated key event
+would ever reach this game at all, so there is no "wait and see if
+another key follows" signal available here to disambiguate the two after
+the fact -- the fix has to treat a LONE modifier specially, not try to
+detect the combo it was part of.
+
+**The fix:** `_input` now ignores an `InputEventKey` whose `keycode` is
+one of `KEY_SHIFT`/`KEY_CTRL`/`KEY_ALT`/`KEY_META` -- applied
+symmetrically to all four, not just Alt, since the identical reasoning
+holds for every one of them: a lone modifier press, with nothing else, is
+how every OS-level combo a long unattended wait might provoke (Ctrl+Tab,
+Win+D, ...) BEGINS, not how a player expresses "skip the intro" on its
+own. A real key pressed WHILE a modifier is held (Alt+Space, say) is
+untouched and still skips immediately -- only a modifier arriving with
+nothing else is excluded.
+
+**TDD, three new tests in `test_intro_splash.gd`:**
+`test_a_lone_alt_press_does_not_skip_the_intro` and
+`test_a_lone_ctrl_shift_or_meta_press_does_not_skip_the_intro` confirmed
+red against the unfixed handler first (the exact live bug, reproduced
+directly by simulating the keycode rather than needing a real alt-tab),
+green after; `test_a_real_key_still_skips_even_with_a_modifier_held`
+(Alt+Space) was already green even pre-fix, kept as an explicit
+regression guard so a future, over-broad "ignore anything with a modifier
+flag set" rewrite can't quietly reintroduce a different unresponsiveness
+bug. `test_intro_splash.gd` 13/13, `test_world_play_intro_splash_frame_
+gate.gd` 3/3, `test_world_intro_splash_after_load_fanout.gd` 5/5 -- no
+regression in any of the eight prior passes' timing/gating/sizing fixes.
+
+### A tenth pass: the character creator's class-icon build learned to yield (2026-09-09)
+
+The sixth pass deferred WHEN `MainMenu`'s character creator gets built
+(first navigation, not eager `_ready()`), cutting `_show_main_menu()`
+from 13.5s to 38ms, but said so explicitly at the time: "no
+yield-splitting was added to the build itself, only a deferral of WHEN it
+runs... a player who does click through still meets a real, unyielded
+pause." This pass closes the largest of the three named costs that
+deferral left untouched.
+
+**Scoped deliberately, not a full rewrite.** The sixth pass named three
+costs inside the creator build: 7 procedural class-icon portraits, the
+live diorama `SubViewport` scene, and the skill web. Rather than
+restructure the whole 5-level `_open_create_screen` ->
+`_ensure_create_screen_built` -> `_build_create_screen` ->
+`_build_character_tab` -> `_build_hero_column` call chain into a
+cascading coroutine (touching every UI-construction function and risking
+all ~75 of `test_main_menu.gd`'s existing structural assertions), this
+pass targets ONLY the icon generation -- the one cost with both a clean
+existing seam (`_class_icon_texture`'s own per-archetype cache, already
+idempotent) and a decomposable shape (7 independent units of real work,
+exactly the pattern `IllustratedMushroomSprite.warm_cache` and
+`EarthChunkManager.update_with_progress` already established for). The
+diorama and skill web are honestly NOT yield-split by this pass -- see
+Status below.
+
+**The fix:** a new `_warm_class_icon_cache(on_progress: Callable =
+Callable())`, called and `await`ed by `_ensure_create_screen_built`
+BEFORE the existing, UNCHANGED, fully-synchronous `_build_create_screen`
+runs -- by the time that synchronous build reaches each archetype's own
+`_class_icon_texture` call, the cache is already warm, so that portion of
+the build is a fast hit rather than a fresh `generate_hero_portrait_
+texture` call. `_class_icon_texture` itself stays untouched and
+synchronous (the live `_build_class_card` caller still needs a texture
+back immediately) -- only the warming PASS yields, the same "cache-check
+identical either way, only warming learns to wait" split this codebase's
+other two warm-cache passes already used.
+
+**Coroutine-ifying `_ensure_create_screen_built`/`_open_create_screen`
+had a real, bounded blast radius, checked before writing a single line:**
+grep confirmed exactly 5 call sites in the whole codebase -- the New
+Game/Host Game button callbacks (fire-and-forget already; calling a
+coroutine without awaiting it is valid GDScript and needs no change) and
+`test_main_menu.gd`'s own `before_each`/`_rebuild_menu_with_a_save`
+fixtures (GUT already awaits `before_each` internally -- confirmed by
+reading `gut.gd` directly rather than assuming -- so async lifecycle
+hooks are natively supported). The one real risk found: several tests
+fired a button's `pressed` signal and asserted on `_create_screen`
+immediately, same line, no yield -- correct against the old synchronous
+function, but `.pressed.emit()` only runs a coroutine handler up to its
+first real suspension point, not to completion. Fixed by inserting
+`await wait_process_frames(10)` (a safe margin over the 7 real yields a
+cold cache needs) after every such emit.
+
+**Verified two ways.** GUT: 3 new tests in `test_main_menu.gd` --
+`test_warm_class_icon_cache_fills_a_cold_cache_for_every_archetype`,
+`test_warm_class_icon_cache_reports_real_progress_from_zero_to_the_true_
+total` (the same "0 before any work, one call per unit done, ending at
+(total, total)" contract `warm_cache`'s own test already pins), and
+`test_warm_class_icon_cache_skips_an_already_warm_archetype` (a FRESH
+menu instance, not the shared fixture -- `before_each` already warms
+every archetype in full, so isolating "only one archetype starts warm"
+needed its own un-navigated instance rather than an incidental fixture
+side effect). All 75 tests in the file re-run clean, including the one
+pre-existing, already-documented, unrelated failure (`test_the_diorama_
+fits_within_the_first_unscrolled_view_of_the_character_tab`) staying
+exactly as it was.
+
+Live: an env-var-gated autopilot (mirroring the fourth pass's own
+technique) drove a real, non-headless New Game click, external `(Get-
+Process -Id <pid>).Responding` polling every 300ms throughout. Result:
+~8.1s of `False` (the boot's own still-real, separately-tracked heavy
+setup, unrelated to this pass), then **`True` continuously for the
+entire remaining ~37s window this pass's own observation covered** --
+long enough to include not just the yield-split icon warming but the
+UNTOUCHED, still-fully-synchronous diorama and skill-web construction
+after it. Windows' own unresponsive-window timeout is a rolling
+no-message-pumped clock, not a total-time budget -- breaking up the
+LARGEST cost into yielded chunks is enough to keep resetting that clock
+through the smaller, still-synchronous costs sitting right after it,
+even without yield-splitting those too. A screenshot taken 2 frames after
+the build finished confirmed the creator itself: all 7 class icons real
+and distinct, the live diorama rendering, the appearance panel fully
+populated -- not just "didn't freeze," genuinely correct.
+
+**Honest scope note, same discipline as the sixth pass's own:** the
+diorama `SubViewport` scene and skill web construction are NOT
+yield-split by this pass -- the live measurement above suggests they may
+not currently need to be (the window never actually flagged unresponsive
+across the whole observed build), but that is a fact about THIS
+machine's relative timing between "icon warming resets the clock" and
+"remaining synchronous work completes," not a structural guarantee. A
+slower machine, or either of those two costs growing independently in
+the future, could reopen exactly the gap this pass closes for the icon
+row specifically.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
@@ -713,6 +926,33 @@ that class of false confidence.
   Reported live as looking "pixelated and wobbly" at full-viewport size;
   the same `STRETCH_KEEP_ASPECT_COVERED` now covers a smaller box, a real
   reduction in upscale factor. See `IntroSplash.DISPLAY_SIZE`.
+- ✅ **Revised (2026-09-09, "An eighth pass"): that box shrank again, to a
+  genuine pixel-perfect integer scale (699x546 = `_NATIVE_FRAME_SIZE`
+  `Vector2(233, 182)` x `DISPLAY_SCALE` 3) with `TEXTURE_FILTER_NEAREST`,
+  not an arbitrary literal with Godot's default filter.** Reported live
+  again: "it should be much smaller." Fixes the OTHER half of "pixelated
+  and wobbly" the seventh pass's box-shrink alone didn't touch -- the
+  missing `NEAREST` filter. See "An eighth pass" above.
+- ✅ **Revised (2026-09-09, "A ninth pass"): skip-on-any-key ignores a
+  lone `KEY_SHIFT`/`KEY_CTRL`/`KEY_ALT`/`KEY_META` press.** Flagged since
+  the fifth pass, actioned once the intro's own visual stability was
+  independently re-confirmed live: an incidental alt-tab during the long
+  boot wait used to skip the intro just like a real key. A real key
+  pressed while a modifier is held (Alt+Space) is untouched. See "A ninth
+  pass" above.
+- ✅ **Revised (2026-09-09, "A tenth pass"): the sixth pass's own
+  remaining ~11.8s New Game/Host Game cost is partially yield-split, not
+  just deferred.** The largest of its three named costs (7 procedural
+  class-icon portraits) now warms via a yielded pass
+  (`MainMenu._warm_class_icon_cache`) before the existing synchronous
+  build runs, mirroring `warm_cache`/`update_with_progress`'s own
+  established shape. Live: `(Get-Process).Responding` stayed `True`
+  continuously through the ENTIRE observed creator-build window (~37s),
+  including the still-untouched, still-synchronous diorama/skill-web
+  construction after it — breaking up the largest cost was enough to
+  keep resetting Windows' own unresponsive-window clock through the
+  smaller costs sitting right after. See "A tenth pass" above for why the
+  diorama/skill web are honestly NOT yield-split by this pass.
 - ⬜ No audio. A logo intro without a sting/whoosh is a real, honest gap
   (this project has no music/SFX system wired up to hook into yet at
   all), not something this pass attempts.

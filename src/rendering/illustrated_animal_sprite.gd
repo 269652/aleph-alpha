@@ -173,6 +173,22 @@ const _SHEETS := {
 		"chroma_key": Color(0.95, 0.02, 0.96),
 		"chroma_key_tolerance": 0.25,
 	},
+	# Same 1536x1024 canvas as wolf.png -- measured independently (scanning
+	# for the same "background vs. solid divider/border" row-content jump
+	# wolf's own bands were found with) and landing on the SAME numbers to
+	# within a couple of pixels, strong evidence both sheets share one
+	# generation template rather than the values being copied unchecked.
+	# Faces left, like wolf (muzzle at the left edge of every cell in both
+	# rows) -- unlike sheep's own unmarked (implicitly right-facing) entry.
+	"alpaca": {
+		"faces_left": true,
+		"path": "res://assets/sprites/animals/alpaca.png",
+		"walk_bands": [Vector2i(5, 509)],
+		"eat_bands": [Vector2i(513, 1018)],
+		"alpha_threshold": 0.3,
+		"chroma_key": Color(0.95, 0.02, 0.96),
+		"chroma_key_tolerance": 0.25,
+	},
 
 	# -- Germany-region world bosses (docs/concept/worldbosses.md) ----------
 	# Walk-only sheets generated from docs/art/ai_sprite_prompts.md section

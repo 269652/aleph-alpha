@@ -45,12 +45,19 @@ func test_robins_also_eat_fallen_fruit():
 	assert_true(FlyerDiet.eats("robin", FlyerDiet.FOOD_FRUIT))
 
 
-func test_only_the_robin_hunts_worms_among_the_songbirds():
+## Widened to include blackbird (see docs/concept/seasonal_behavior.md,
+## "Blackbird: new species, real population, real diet shift") -- a real,
+## deliberate second real thrush with the same genuine worm-hunting
+## specialism as robin, the same kind of widening this file's own ants
+## already went through (robin-only, then deliberately given to both
+## ground-foraging songbirds once a second real fit existed). Sparrow's
+## granivore bill still makes it a poor real-world fit, so it stays out.
+func test_only_real_thrushes_hunt_worms_among_the_songbirds():
 	var worm_eaters: Array = []
 	for species in AmbientFlyerRenderer.BIRD_SPECIES_POOL:
 		if FlyerDiet.eats(species, FlyerDiet.FOOD_WORMS):
 			worm_eaters.append(species)
-	assert_eq(worm_eaters, ["robin"])
+	assert_eq(worm_eaters, ["robin", "blackbird"])
 
 
 ## Real robins are famous caterpillar-hunters -- caterpillars are what a
@@ -62,15 +69,18 @@ func test_robins_also_eat_caterpillars():
 	assert_true(FlyerDiet.eats("robin", FlyerDiet.FOOD_CATERPILLARS))
 
 
-## Sparrows are granivores, not the insectivorous specialist a robin is --
-## caterpillar-hunting stays a robin-only trait, the same "only the robin"
-## shape FOOD_WORMS already has.
-func test_only_the_robin_eats_caterpillars_among_the_songbirds():
+## Sparrow's granivore bill still makes it a poor real-world fit here, but
+## widened to include blackbird -- a real, deliberate second real thrush
+## caterpillar-hunter (see docs/concept/seasonal_behavior.md, "Blackbird:
+## new species, real population, real diet shift"), the same "started
+## narrow, later widened for a real reason" precedent this file's own ants
+## already went through.
+func test_only_real_thrushes_eat_caterpillars_among_the_songbirds():
 	var caterpillar_eaters: Array = []
 	for species in AmbientFlyerRenderer.BIRD_SPECIES_POOL:
 		if FlyerDiet.eats(species, FlyerDiet.FOOD_CATERPILLARS):
 			caterpillar_eaters.append(species)
-	assert_eq(caterpillar_eaters, ["robin"])
+	assert_eq(caterpillar_eaters, ["robin", "blackbird"])
 
 
 func test_caterpillars_are_a_ground_food():
@@ -148,6 +158,57 @@ func test_every_spawnable_flyer_has_a_diet():
 func test_an_unknown_species_eats_nothing_rather_than_crashing():
 	assert_eq(FlyerDiet.foods_for("pterodactyl"), [])
 	assert_false(FlyerDiet.eats("pterodactyl", FlyerDiet.FOOD_WORMS))
+
+
+# -- blackbird: real thrush omnivore, plus a real winter diet shift ---------
+#
+# See docs/concept/seasonal_behavior.md, "Blackbird: new species, real
+# population, real diet shift". Real Eurasian blackbirds eat worms/
+# caterpillars/insects and soft fruit year-round, same broad diet as robin
+# (both thrushes) -- but shift toward fruit specifically once insects thin
+# out in winter, unlike robin/sparrow, which keep their existing flat diet
+# weighting (a named, separate follow-up, not done here).
+
+func test_blackbirds_eat_worms_fruit_caterpillars_and_ants_like_robins():
+	for food in [FlyerDiet.FOOD_WORMS, FlyerDiet.FOOD_FRUIT, FlyerDiet.FOOD_CATERPILLARS, FlyerDiet.FOOD_ANTS]:
+		assert_true(FlyerDiet.eats("blackbird", food), food)
+
+
+func test_a_blackbird_takes_every_tree_fruit_like_a_robin():
+	for fruit in ["cherry", "walnut", "apple"]:
+		assert_true(FlyerDiet.eats_fruit_species("blackbird", fruit))
+
+
+## eats_now() is eats() unless the real season has genuinely shut that food
+## off for this species -- every existing caller/species keeps its exact
+## old, season-blind behavior (the same "safe default preserves old
+## behavior" convention this session's other seasonal-behavior phases
+## already established).
+func test_eats_now_matches_eats_for_every_species_outside_winter():
+	for season in ["spring", "summer", "autumn"]:
+		assert_true(FlyerDiet.eats_now("blackbird", FlyerDiet.FOOD_WORMS, season))
+		assert_true(FlyerDiet.eats_now("robin", FlyerDiet.FOOD_WORMS, season))
+
+
+func test_eats_now_matches_eats_for_robin_and_sparrow_even_in_winter():
+	# Robin/sparrow deliberately keep their flat diet weighting -- only
+	# blackbird gets the new seasonal shift in this pass.
+	assert_true(FlyerDiet.eats_now("robin", FlyerDiet.FOOD_WORMS, "winter"))
+	assert_true(FlyerDiet.eats_now("sparrow", FlyerDiet.FOOD_SEEDS, "winter"))
+
+
+func test_a_blackbird_stops_pursuing_insects_in_winter():
+	for food in [FlyerDiet.FOOD_WORMS, FlyerDiet.FOOD_CATERPILLARS, FlyerDiet.FOOD_ANTS]:
+		assert_false(FlyerDiet.eats_now("blackbird", food, "winter"), food)
+
+
+func test_a_blackbird_still_pursues_fruit_in_winter():
+	assert_true(FlyerDiet.eats_now("blackbird", FlyerDiet.FOOD_FRUIT, "winter"))
+
+
+func test_eats_now_is_false_for_a_food_this_species_never_eats_regardless_of_season():
+	assert_false(FlyerDiet.eats_now("blackbird", FlyerDiet.FOOD_SEEDS, "summer"))
+	assert_false(FlyerDiet.eats_now("blackbird", FlyerDiet.FOOD_SEEDS, "winter"))
 
 
 # -- ground foraging --------------------------------------------------------

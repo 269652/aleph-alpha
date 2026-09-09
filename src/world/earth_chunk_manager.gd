@@ -60,6 +60,7 @@ const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
 const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
 const CaterpillarRenderer = preload("res://src/rendering/caterpillar_renderer.gd")
 const MillipedeRenderer = preload("res://src/rendering/millipede_renderer.gd")
+const GrassFrogRenderer = preload("res://src/rendering/grass_frog_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
@@ -363,6 +364,7 @@ var _wild_crop_renderer := WildCropRenderer.new()
 var _decomposer_renderer := DecomposerRenderer.new()
 var _caterpillar_renderer := CaterpillarRenderer.new()
 var _millipede_renderer := MillipedeRenderer.new()
+var _grass_frog_renderer := GrassFrogRenderer.new()
 ## "an NPC moves in" (see docs/concept/timber_construction.md's NPC
 ## section) -- no dedicated renderer class needed (spawning one
 ## LumberjackMarker per Sägewerk tile is simple enough to do directly, see
@@ -624,6 +626,11 @@ var _caterpillar_markers: Dictionary = {}
 ## (see docs/concept/soil_fauna.md "Millipedes: a dedicated autumn
 ## leaf-litter decomposer").
 var _millipede_markers: Dictionary = {}
+## Vector2i chunk_coord -> Array[GrassFrogMarker], same per-chunk-array
+## shape as _caterpillar_markers/_millipede_markers immediately above, for
+## the same reason (see docs/concept/seasonal_behavior.md's phase 10,
+## "Grass frog: new species, brumating, decorative-but-real").
+var _grass_frog_markers: Dictionary = {}
 
 ## The Sägewerk's own Lumberjack -- "an NPC moves in" the moment a
 ## "sagewerk" modification tile exists (see
@@ -908,17 +915,22 @@ var _spread_tick := 0
 ## throttle, so a sapling's age tracks real elapsed time, not spread ticks.
 var _world_age_seconds := 0.0
 
-## How wide a range a brand new world may start at within the year (see
-## randomize_world_age below, and docs/concept/seasons.md).
+## Where a brand new world's clock always starts (see
+## reset_world_age_to_mid_spring below, and docs/concept/seasons.md).
 ##
 ## Every fresh save used to start at world-age 0 exactly, and SeasonCycle's
 ## own phase formula puts that moment at warmth ~0.1465 -- just under
 ## Snowfall.FREEZING_WARMTH (0.15) -- so every new game began mid-winter-
 ## adjacent and reliably snowed within the first few minutes (reported: "it
-## starts to snow deterministically"). A full year of possible starting
-## points is the whole point: any season is a valid place for a new world to
-## begin.
-const NEW_GAME_WORLD_AGE_RANGE_SECONDS := SeasonCycle.SECONDS_PER_YEAR
+## starts to snow deterministically"). That was first fixed by rolling a
+## uniformly random starting point across the whole year -- since superseded
+## by a direct, explicit request ("make starting season always mid spring"):
+## every new world now begins at this SAME deliberately-chosen instant
+## instead, rather than either the original accidental-winter bug or an
+## arbitrary unchosen season.
+const MID_SPRING_WORLD_AGE_SECONDS := (
+	SeasonCycle.SECONDS_PER_YEAR * SeasonCycle.MID_SPRING_YEAR_FRACTION
+)
 
 
 func _init(
@@ -3737,36 +3749,38 @@ func world_age_seconds() -> float:
 
 
 ## Sets the world clock, and keeps every OTHER clock-tracking mark that reads
-## against it in step -- the shared plumbing under both randomize_world_age
-## (a brand new world) and load_world_clock (a resumed one).
+## against it in step -- the shared plumbing under both
+## reset_world_age_to_mid_spring (a brand new world) and load_world_clock (a
+## resumed one).
 ##
 ## Without this, a mark like _last_fruiting_time/_snow_world_age would still
-## read 0 the instant the real clock jumped to a random or loaded value, and
-## the NEXT step_fruiting/step_snow call would see the whole jump as elapsed
-## time -- the same "two clocks that have to agree" trap jump_to_season's own
-## doc comment describes, just at world-creation/load time instead of a
-## /season skip.
+## read 0 the instant the real clock jumped to its new-game or loaded value,
+## and the NEXT step_fruiting/step_snow call would see the whole jump as
+## elapsed time -- the same "two clocks that have to agree" trap
+## jump_to_season's own doc comment describes, just at world-creation/load
+## time instead of a /season skip.
 func set_world_age_seconds(value: float) -> void:
 	_world_age_seconds = value
 	_last_fruiting_time = value
 	_snow_world_age = value
 	# The canopies are one of those readers, and this is the earliest moment
-	# they can possibly be right: both randomize_world_age (New Game) and
-	# load_world_clock (Load Game) come through here BEFORE the first chunk
-	# load, so a world that opens in winter opens with bare trees instead of
-	# summer ones that correct themselves a tick later (see sync_tree_season).
+	# they can possibly be right: both reset_world_age_to_mid_spring (New
+	# Game) and load_world_clock (Load Game) come through here BEFORE the
+	# first chunk load, so a world that opens in winter opens with bare trees
+	# instead of summer ones that correct themselves a tick later (see
+	# sync_tree_season).
 	sync_tree_season()
 	sync_grass_season()
 
 
-## Rolls a brand new world's starting point in the year, once (see
-## NEW_GAME_WORLD_AGE_RANGE_SECONDS) -- called only at New Game/Host Game
+## Sets a brand new world's starting point in the year, once (see
+## MID_SPRING_WORLD_AGE_SECONDS) -- called only at New Game/Host Game
 ## creation (see World._wipe_persisted_world), never on Load Game (see
-## load_world_clock, which restores the persisted value instead of rerolling
-## it -- a load must resume exactly where the save left off, not time-travel
-## on every session).
-func randomize_world_age() -> void:
-	set_world_age_seconds(randf() * NEW_GAME_WORLD_AGE_RANGE_SECONDS)
+## load_world_clock, which restores the persisted value instead of
+## overwriting it -- a load must resume exactly where the save left off, not
+## time-travel to mid-spring on every session).
+func reset_world_age_to_mid_spring() -> void:
+	set_world_age_seconds(MID_SPRING_WORLD_AGE_SECONDS)
 
 
 ## Persists the world clock, following the same store_var convention
@@ -6467,8 +6481,13 @@ func _step_squirrel_nut_caching(creature) -> void:
 	# fitter individual forager is a slightly more efficient predator (see
 	# SquirrelNutCaching.NUT_FITNESS_CHANCE_SWING), threaded through the same
 	# way AmbientFlyerMarker._step_seed_carrying threads its own wander_seed
-	# into SeedEndozoochory.seed_is_consumed.
-	if not SquirrelNutCaching.nut_is_consumed(creature.wander_seed, creature.wander_seed):
+	# into SeedEndozoochory.seed_is_consumed. current_growth_modifier() (see
+	# docs/concept/seasonal_behavior.md, "Squirrel/mouse cache-preference")
+	# pushes a real scarce season toward eating now over caching for later --
+	# the same signal phase 5's herbivore forage-realism fix already reuses.
+	if not SquirrelNutCaching.nut_is_consumed(
+		creature.wander_seed, creature.wander_seed, current_growth_modifier()
+	):
 		try_plant_seed_at(creature.position, creature.carried_nut_species)
 	creature.carried_nut_species = ""
 	creature.carried_nut_direction = Vector2.ZERO
@@ -9664,7 +9683,8 @@ func _reconcile_chunk_ambient_flyers(chunk_coord: Vector2i) -> void:
 		_loaded_ambient_flyers.get(chunk_coord, []),
 		_ecosystem.robin_population(chunk_coord),
 		_ecosystem.sparrow_population(chunk_coord),
-		self
+		self,
+		_ecosystem.blackbird_population(chunk_coord)
 	)
 
 
@@ -11388,6 +11408,18 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for caterpillar_marker in _caterpillar_markers[chunk_coord]:
 		caterpillar_marker.setup(self)
 
+	# Seasonal-behavior epic, phase 10 (docs/concept/seasonal_behavior.md):
+	# a grass frog needs real water nearby, not just the right land biome --
+	# see GrassFrogRenderer's own doc comment for the water-presence gate
+	# (WaterAreaSurvey.interior_water_cell_count) -- and brumates through
+	# winter, the same "season read once, at spawn time" shape caterpillar
+	# immediately above already established.
+	_grass_frog_markers[chunk_coord] = _grass_frog_renderer.spawn_grass_frogs(
+		_entities_parent, chunk, _biome_classifier.dominant_biome(chunk.biome), current_season(),
+		chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		hash("%d_%d_grass_frogs" % [chunk_coord.x, chunk_coord.y])
+	)
+
 	# Requested live, after a screenshot of an autumn floor carpeted in
 	# leaves: "what else decomposes leaves I could add into the ecosystem
 	# to increase decomposition rate?" (see docs/concept/soil_fauna.md
@@ -11610,7 +11642,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		self,
 		_ecosystem.robin_population(chunk_coord),
 		_ecosystem.sparrow_population(chunk_coord),
-		current_season()
+		current_season(),
+		_ecosystem.blackbird_population(chunk_coord)
 	)
 	_loaded_piscivore_birds[chunk_coord] = _piscivore_bird_renderer.spawn_piscivore_birds(
 		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self,
@@ -11650,6 +11683,7 @@ func _apply_ecology_catchup(chunk_coord: Vector2i) -> void:
 		"fish_capacity": _ecosystem.fish_capacity_at(chunk_coord),
 		"robin_capacity": _ecosystem.robin_capacity_at(chunk_coord),
 		"sparrow_capacity": _ecosystem.sparrow_capacity_at(chunk_coord),
+		"blackbird_capacity": _ecosystem.blackbird_capacity_at(chunk_coord),
 	}
 	var advanced: Dictionary = _ecology_catchup.advance(record["state"], elapsed, capacity)
 	# Land health (docs/concept/world.md "Land health: overharvesting leaves a
@@ -11668,6 +11702,7 @@ func _apply_ecology_catchup(chunk_coord: Vector2i) -> void:
 	_ecosystem.seed_robin_population(chunk_coord, float(advanced.get("robins", 0.0)))
 	_ecosystem.seed_sparrow_population(chunk_coord, float(advanced.get("sparrows", 0.0)))
 	_ecosystem.seed_kingfisher_population(chunk_coord, float(advanced.get("kingfishers", 0.0)))
+	_ecosystem.seed_blackbird_population(chunk_coord, float(advanced.get("blackbirds", 0.0)))
 
 
 # -- withering: decay as a bounded, closed-form catch-up (see
@@ -12050,6 +12085,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		marker.free()
 	_millipede_markers.erase(chunk_coord)
 
+	for marker in _grass_frog_markers.get(chunk_coord, []):
+		marker.free()
+	_grass_frog_markers.erase(chunk_coord)
+
 	for marker in _sagewerk_lumberjacks.get(chunk_coord, {}).values():
 		marker.free()
 	_sagewerk_lumberjacks.erase(chunk_coord)
@@ -12147,6 +12186,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 				"robins": _ecosystem.robin_population(chunk_coord),
 				"sparrows": _ecosystem.sparrow_population(chunk_coord),
 				"kingfishers": _ecosystem.kingfisher_population(chunk_coord),
+				"blackbirds": _ecosystem.blackbird_population(chunk_coord),
 			},
 		}
 		DirAccess.make_dir_recursive_absolute(FISH_POPULATION_DIR)
@@ -12170,6 +12210,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 				"robins": _ecosystem.robin_population(chunk_coord),
 				"sparrows": _ecosystem.sparrow_population(chunk_coord),
 				"kingfishers": _ecosystem.kingfisher_population(chunk_coord),
+				"blackbirds": _ecosystem.blackbird_population(chunk_coord),
 			},
 			_ecology_path(chunk_coord)
 		)
@@ -12323,6 +12364,7 @@ func _apply_persisted_ecology(chunk_coord: Vector2i) -> void:
 			"robins": float(saved.get("robins", 0.0)),
 			"sparrows": float(saved.get("sparrows", 0.0)),
 			"kingfishers": float(saved.get("kingfishers", 0.0)),
+			"blackbirds": float(saved.get("blackbirds", 0.0)),
 		},
 		elapsed,
 		{
@@ -12331,6 +12373,7 @@ func _apply_persisted_ecology(chunk_coord: Vector2i) -> void:
 			"fish_capacity": _ecosystem.fish_capacity_at(chunk_coord),
 			"robin_capacity": _ecosystem.robin_capacity_at(chunk_coord),
 			"sparrow_capacity": _ecosystem.sparrow_capacity_at(chunk_coord),
+			"blackbird_capacity": _ecosystem.blackbird_capacity_at(chunk_coord),
 		}
 	)
 	_ecosystem.seed_populations(
@@ -12350,6 +12393,7 @@ func _apply_persisted_ecology(chunk_coord: Vector2i) -> void:
 	_ecosystem.seed_robin_population(chunk_coord, float(caught_up.get("robins", 0.0)))
 	_ecosystem.seed_sparrow_population(chunk_coord, float(caught_up.get("sparrows", 0.0)))
 	_ecosystem.seed_kingfisher_population(chunk_coord, float(caught_up.get("kingfishers", 0.0)))
+	_ecosystem.seed_blackbird_population(chunk_coord, float(caught_up.get("blackbirds", 0.0)))
 	# Fish parity: the raw last-known count was already installed (by the
 	# load_fish_population call at this function's own call site, before this
 	# runs), but `advance()` above steps it forward for the elapsed away-time

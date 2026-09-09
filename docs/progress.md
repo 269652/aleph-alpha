@@ -17361,6 +17361,44 @@ behavior. Confirmed red first (winter and summer gained identical mass —
 `0.2199 == 0.2199`, the exact bypass being fixed), green after.
 `test_creature_marker.gd` 231/231.
 
+### Seasonal behavior, phase 6: squirrel scarcity shifts eat-vs-cache (2026-09-08)
+
+✅ **Revised on implementation, not as originally scoped** — see
+`docs/concept/seasonal_behavior.md`'s own updated mechanism-spec section
+for the full reasoning, summarized here: "squirrel/mouse cache
+preference" assumed a personal, retrievable food store either species
+could draw from in winter. Reading `SquirrelNutCaching`/`SeedCaching` in
+full showed neither is that — "caching" here means real scatter-hoarding
+SEED DISPERSAL (a picked-up nut/seed is carried a short distance and
+either eaten outright or buried as a brand new planting site), never a
+stockpile the same animal returns to later. `SeedCaching` (mouse)
+additionally has no eat-vs-cache branch at all — a mouse's grass seed is
+ALWAYS re-cached, a deliberate pre-existing design choice. Building a
+genuine per-individual "remembers and returns to its own cache" mechanic
+would be a materially larger, new feature, not a cheap extension — not
+attempted here.
+
+The real, still-genuinely-seasonal mechanism actually shipped: this
+module's own pre-existing doc comment already implies the reasoning
+("caching becomes common mainly once immediate hunger is satisfied...");
+the inverse holds too, so `SquirrelNutCaching.nut_consumption_chance_for`/
+`nut_is_consumed` gain an optional `growth_modifier` term (defaulting to
+1.0, no effect — every pre-existing call site keeps its exact prior
+chance) that nudges consumption UP as real forage gets scarcer, via a new
+`SCARCITY_CHANCE_SWING := 0.15`. Wired into the real game:
+`EarthChunkManager._step_squirrel_nut_caching` now passes
+`current_growth_modifier()` (phase 5's same signal) through. Mouse is
+explicitly out of scope for this specific mechanism; its own seasonal
+hardship already comes from phase 5's shared `FOOD_UNDERFOOT`/`FOOD_SEED`
+forage-realism fix, the same as every other `CreatureMarker` species.
+
+TDD: new tests confirm consumption chance rises measurably as
+`growth_modifier` drops toward its real winter floor, never reaches
+certainty even at the bleakest reading, and defaults to the exact
+pre-existing chance when omitted. Confirmed red first ("Too many
+arguments" — the new parameter didn't exist), green after.
+`test_squirrel_nut_caching.gd` 24/24.
+
 ## A seventh pass on the intro: shrunk to the character panel's footprint (`concept/intro_splash.md`, 2026-09-08)
 
 Every prior pass fixed a real bug that stopped the intro from rendering at
@@ -17396,6 +17434,158 @@ same-frame read. `test_intro_splash.gd` 7/7, plus
 `test_world_play_intro_splash_frame_gate.gd`, and
 `test_world_intro_splash_after_load_fanout.gd` all re-run clean —
 no regression in the timing/gating mechanics the prior six passes fixed.
+
+### Seasonal behavior, phase 7: alpaca as a real, live grazer (2026-09-09)
+
+✅ **Alpaca joins the roster** — `assets/sprites/animals/alpaca.png`
+existed with zero code references at all before this. Reused 100% of the
+existing generic quadruped machinery (no new architecture), wired into
+every table sheep/goat/camel already sit in, mirroring sheep as the
+closest real-world/mechanical analog (real illustrated art, cold-hardy
+grassland+mountain grazer):
+
+- `CreatureRenderer.HERBIVORE_SPECIES_POOL_BY_BIOME` — grassland + mountain
+  (real Andean puna/grassland range), not forest/desert/tundra/rainforest.
+- `AnimalAnatomy.SPECIES`/`_PROFILES` — own profile: a real camelid trait
+  (notably longer neck than sheep/goat, `neck_length 0.22` vs sheep's
+  `0.10`), no shoulder hump (unlike camel), no headgear, taller legs.
+- `CreatureMass._REAL_MASS_KG` — `65.0` kg, a commonly-cited real adult
+  alpaca average (48-90kg range).
+- `IllustratedAnimalSprite._SHEETS` — real walk/eat art. `alpaca.png`
+  (1536x1024) measured independently via a probe script (not assumed) and
+  found to land on the exact same band positions (`walk_bands (5,509)`,
+  `eat_bands (513,1018)`) `wolf.png`'s own independently-measured entry
+  already uses — strong evidence both sheets share one generation
+  template. Faces left, like wolf (verified from the actual pixels), not
+  sheep's own implicit right-facing default.
+- `ProceduralAnimalSprite` — fallback color (a distinct warm golden fawn)
+  and shape family (`deer_shape`, shared with every other upright grazer).
+- `CreatureInfo`'s five stat/diet/temperament tables (health/stamina/
+  mana/diet/temperament) — a calm, non-predator Grazer, alongside sheep.
+
+No bespoke seasonal code needed: alpaca inherits phases 5/6's real winter
+hardship automatically once spawnable, since `FOOD_UNDERFOOT` is the
+shared generic fallback every herbivore's foraging already funnels
+through when nothing specific is in sight.
+
+**Verified with a real rendered frame, not just a code trace** (this
+project's own established "measure/render, don't assume" convention) —
+a temporary probe rendered actual sliced alpaca walk/eat frames to PNG
+and visually confirmed a clean chroma-key cutout, correct left-facing
+orientation, and real wool-colored content; the probe and its output
+were deleted immediately after, nothing committed.
+
+TDD: new/updated tests across all 5 affected files confirm alpaca
+appears in grassland/mountain pools and nowhere else, has its own
+distinct (long-necked, hornless) anatomy profile, is a calm non-predator
+Grazer, is a fully registered illustrated species (left-facing, 8-frame
+walk/eat cycles, no leftover magenta, real content, consistent apparent
+size across actions), and is covered by the procedural fallback's own
+generic distinctness loops. Confirmed a broad red state first (7 failing
+tests across `test_illustrated_animal_sprite.gd`/
+`test_procedural_animal_sprite.gd`, plus one each in
+`test_creature_info.gd`/`test_creature_renderer.gd`/
+`test_animal_anatomy.gd`) before any production entry existed, green
+after. `test_creature_info.gd` 60/60, `test_creature_renderer.gd` 46/46,
+`test_animal_anatomy.gd` 43/43, `test_illustrated_animal_sprite.gd`
+67/67, `test_procedural_animal_sprite.gd` 72/72; `test_creature_mass.gd`
+11/11 and `test_console_species.gd` 6/6 re-confirmed unaffected (both
+drive purely generic loops over `AnimalAnatomy.SPECIES`).
+
+## An eighth pass on the intro: genuinely pixel-perfect integer scaling (`concept/intro_splash.md`, 2026-09-09)
+
+Reported live again, on top of the seventh pass's own already-shipped fix
+above: "the intro is still full window... it should be much smaller."
+Both reports real — the seventh pass's 880x620 box is smaller than the
+full viewport, but still large on an ordinary window, and — asked
+directly how it should be sized instead, rather than guessed at — still
+an arbitrary target size rather than anything derived from the sheet's
+own resolution.
+
+**Two real, independent problems, not one:** (1) 880x620 was picked
+because the reporter pointed at the character panel, with no relationship
+to `intro.png`'s own native resolution — not "much smaller" by any
+principled measure. (2) `_display.texture_filter` had never been set at
+all (Godot's default, effectively linear) — a second, independent cause
+of "pixelated and wobbly" that shrinking the box alone never touched,
+since a smooth filter blurs/shimmers pixel-art edges at any non-1:1 scale
+regardless of box size.
+
+**The fix:** `IntroSplash._NATIVE_FRAME_SIZE` (`Vector2(233, 182)`) is the
+sheet's real per-frame pixel footprint, measured directly with
+`tools/probe_intro_sheet.gd` (the 32 real sliced frames land at 232-234
+wide, 181-183 tall — 233x182 is simply the modal exact size, and the one
+fixed reference the box scales from, so it never resizes frame to frame
+across that natural variance). `DISPLAY_SCALE := 3` gives `DISPLAY_SIZE :=
+_NATIVE_FRAME_SIZE * DISPLAY_SCALE` = 699x546 — comfortably smaller than
+the seventh pass's 880x620 in both dimensions — mirroring `MainMenu.
+STANDARD_PORTRAIT_SCALE`'s own established "integer scale of a real
+native size" pattern rather than an arbitrary literal. `stretch_mode`
+changed `STRETCH_KEEP_ASPECT_COVERED` → `STRETCH_KEEP_ASPECT_CENTERED`
+(no cropping) and `texture_filter` is now explicitly `TEXTURE_FILTER_
+NEAREST` — the missing other half of the fix. A new `display_is_pixel_
+perfect()` getter reports both are actually set, without a test reaching
+into the `TextureRect` node directly.
+
+**Strict TDD.** Three new tests confirmed red first — a parse error
+against the not-yet-existing `_NATIVE_FRAME_SIZE`/`DISPLAY_SCALE`/
+`display_is_pixel_perfect` (GUT silently skips a file that fails to
+compile, so the file's other 7 pre-existing tests didn't run at all until
+the fix landed, not just these 3) — green after. The seventh pass's own
+size/position test is renamed (its assertions read the live `DISPLAY_
+SIZE` constant, so they kept passing unchanged through its redefinition —
+only the name/doc comment needed updating). `test_intro_splash.gd` 10/10,
+`test_intro_splash_sequencer.gd` 7/7, `test_intro_splash_sheet.gd` 6/6,
+`test_world_play_intro_splash_frame_gate.gd` 3/3, `test_world_intro_
+splash_after_load_fanout.gd` 5/5 — no regression in any prior pass.
+
+### Seasonal behavior, phase 8: bear hibernation, snake brumation (2026-09-09)
+
+✅ **The one genuinely new architecture piece in the seasonal-behavior
+pass — implemented differently from its own first draft, on reading the
+real decision code.** `CreatureBehavior.decide()` doesn't return an
+intent picked from a plain ordered if-chain a new case could slot into:
+it delegates to `BehaviorKernel.decide()` running `Ethogram.BODY_
+PLANS["mammal"]`'s wirings, a scored competition between drives (hunger/
+thirst/fear/courtship) with its own dedicated, pinned ladder-order test
+coverage. Dormancy isn't another drive competing for priority in that
+kernel — it's "is this creature even active right now at all," the same
+kind of question `CreatureMarker.is_rooted()` already answers. Built at
+that exact precedence instead: a new `_step_dormancy()` runs every
+`_process()` frame regardless of the current dormant state (so a dormant
+creature can also wake back up), and a dormant creature early-returns
+immediately after the existing `is_rooted()` check — before `_behavior.
+decide()` is ever called, the same "total override, no AI decision this
+frame" precedence rooted/knockback already have. Never touches the
+ethogram kernel or its pinned test at all.
+
+New `HIBERNATING_SPECIES := {"bear": true}` / `BRUMATING_SPECIES :=
+{"venomous_snake": true, "nonvenomous_snake": true}` (house-style
+Dictionaries, mirroring the existing `VENOMOUS_SPECIES` pattern). The
+warmth signal is this creature's own smoothed reading of the SAME
+`ambient_warmth()` call `CreatureMarker` already makes for body-
+temperature regulation, settled via a delta-scaled exponential time
+constant (3600s) against `EarthwormPatch.COLD_CUTOFF` — deliberately NOT
+a fixed-rate-per-call EMA like `AntColony.record_warmth` (that's called
+on a fixed real-time refresh interval, already effectively time-based;
+this runs once per variable-length `_process()` frame, so the blend
+factor itself must scale with delta to stay framerate-independent).
+**Deliberate simplification**, named not silently assumed: both
+hibernation and brumation are modeled as the same observable "inactive
+and sheltered" mechanic, not distinguished at the physiological level
+(e.g. a brumating snake occasionally rousing on a warm winter day).
+
+TDD: new `StubWorldWithAmbientWarmth` (mirrors the file's own established
+stub-per-optional-method convention) confirms a hibernating species goes
+dormant under sustained deep cold, a dormant creature genuinely does not
+move even when hungry, a non-hibernating species (deer) never goes
+dormant in the identical cold, dormancy ends once real warmth returns,
+a brumating snake goes dormant too, and a world with no `ambient_warmth`
+signal at all (every pre-existing caller) leaves a hibernating species
+exactly as active as before. Confirmed red first ("Invalid access to
+property or key '_dormant'" — the field didn't exist), green after.
+`test_creature_marker.gd` 237/237 (231 pre-existing + 6 new), full file
+re-run clean.
 
 ## Footstep, mushroom-crush, and creature-call SFX shipped (`concept/creature_and_footstep_audio.md`, 2026-09-09)
 
@@ -17612,3 +17802,473 @@ species named above, the ring-scan's own accepted Euclidean-precision
 approximation at certain ring boundaries (named, harmless for this use),
 the linear (not perceptually-curved) volume ramp, and `ocean.ogg`'s own
 unrelated rough loop seam.
+
+## Ant queen: a real winter->spring repeat-collapse bug fixed, plus two new real mechanics (2026-09-09)
+
+Reported live: *"Both ant mounds near the spawn show queenless when
+changing from winter to spring... they then refound; but it collapses
+again because there's still no queen.. can you fix this and make sure the
+workers care for their queen and make sure it doesn't die? If they have
+no queen; they should make a new one..."*, followed by two clarifying
+follow-ups: *"It should take time thoug for a new queen to hatch"* and,
+inviting real research rather than a game-y mechanic: *"idk how it's in
+the real world when the ant queen dies?"* Full grounding in
+[soil_fauna.md](concept/soil_fauna.md)'s "Winter->spring repeat-collapse:
+root cause and fix", "Workers protect their queen: a population floor",
+and "A new queen, over real time: adoption".
+
+✅ **Root cause, found by real reproduction, not guessed at.** A
+throwaway diagnostic probe (deleted once its job was done) starved a real
+`AntColony` mound to a literal 0.0 population (matching a real winter's
+near-total lack of forage success), trickled home exactly
+`REFOUNDING_FOOD_THRESHOLD` worth of food (3 successful trips — a
+realistic lone-forager recovery, not a windfall), and watched it
+"refound" at the full `STARTING_POPULATION` (15) while sitting on barely
+3.0 stored food against the 45.0 a colony that size actually needs
+(`food_availability_fraction` ≈ 0.067) — `PopulationModel.step`'s own
+logistic decline then crashed it back to a literal 0.0 within 10
+simulated days, repeatably, matching the live report exactly. Concentrates
+at the winter->spring boundary because that is precisely when a queenless
+mound's food first has a realistic chance to cross the threshold at all;
+confirmed (not assumed) this is not a spawn-location-specific mechanic —
+`TallGrass.shed_seed` has no hard winter cutoff and `capacity_at`'s own
+moisture/food terms are identical at every mound regardless of biome —
+the two spawn-adjacent mounds are simply the ones `MAX_MOUNDS`(2 per
+chunk) puts in front of the player every session.
+
+✅ **Fix 1: refounding/adoption now gives a real, matching food reserve,
+not just a population number.** New shared `AntColony._found_new_queen_at`
+helper (used by both re-founding paths below) tops `food_stored_at` up to
+`_founding_food_reserve()` via `maxf` (never reducing an already-ample
+reserve) at the same moment population resets to `STARTING_POPULATION` —
+a (re)founded colony is now exactly as food-secure as a genuinely
+brand-new one.
+
+✅ **Fix 2 / new mechanic: "workers protect their queen" — a real
+population floor.** `AntPopulationModel.step` now floors a LIVE colony's
+(`population > 0.0` going into the step) ordinary starvation/dormancy
+decline at `QUEEN_PROTECTED_POPULATION_FLOOR` (3.0, pinned — mirrors
+`CLUSTER_THRESHOLD`'s/`REFOUNDING_FOOD_THRESHOLD`'s own "3, a real
+minimum" reasoning) rather than letting it hit `PopulationModel.step`'s
+own hard "`capacity <= 0` → 0.0" rule — grounded in real worker-ant
+behaviour (queens are preferentially fed via trophallaxis during
+scarcity). Deliberately scoped to ordinary economic decline only —
+`forager_crushed`/`forager_eaten`/`bud_new_mound` all bypass it, so
+predation and player action remain real causes of death. Never a
+backdoor resurrection: a colony that starts a step already at a genuine
+0.0 gets no floor at all.
+
+✅ **New mechanic: a new queen, over real time — adoption.** A
+genuinely queenless mound (population truly 0.0) now has a SECOND,
+independent, deliberately much slower path to a new queen alongside the
+existing food-gated one: `AntColony._maybe_adopt_new_queen`, gated purely
+on real elapsed queenless time (`_queenless_seconds`, reset whenever a
+queen returns by either path) crossing `NEW_QUEEN_ADOPTION_SECONDS` —
+pinned at one real `SeasonCycle` season (`SECONDS_PER_YEAR / 4.0`,
+cross-checked by test so the two can't drift apart), and checked directly
+to be far slower than even the food-gated path's own old 22-real-minute
+worst case. Real research, done specifically because the user asked for
+it: grounded in pleometrosis / secondary polygyny by adoption (a
+newly-mated, dealate queen from a nuptial flight finding and being
+accepted into an existing queenless nest — real, documented ant biology,
+distinct from both honeybee in-place requeening AND this game's own
+existing food-gated "wholly fresh colony" refounding), with real nuptial
+flight seasonality (synchronised, genus-dependent, a few days per season)
+as the timescale's own grounding — see the concept doc for full sources.
+This deliberately extends, and partially revises the closing framing of,
+"A real ant queen, and why she cannot requeen like a bee" (2026-09-08) —
+that section's core finding (no worker-side path to rear a replacement
+queen) stands completely unchanged; what's added is a real, distinct,
+non-worker path (an OUTSIDE queen arriving) the original pass hadn't yet
+researched. `AntColony.refounding_progress_at` now reports whichever of
+the two real paths (food or time) is genuinely further along.
+
+✅ **TDD, strict.** 19 new tests across `test_ant_colony.gd`/
+`test_ant_population_model.gd` (food-reserve fix, the repro-turned-
+regression tests proving the repeat-collapse cycle is fixed across two
+consecutive lean stretches, adoption timing/grounding/food-reserve/
+timer-reset, `refounding_progress_at`), including an explicit
+`test_new_queen_adoption_does_not_resolve_quickly_or_immediately` per the
+live "it should take time" ask. 5 pre-existing tests updated to
+construct a genuine population-0.0 precondition directly (mirroring a
+real crushing/predation wipeout) now that ordinary starvation alone can
+no longer reach literal zero. `test_ant_colony.gd` 111/111,
+`test_ant_population_model.gd` 21/21, `test_ant_mound_marker.gd` 16/16,
+`test_ant_forager_marker.gd` 74/74, `test_ant_forage_behavior.gd` 8/8,
+`test_ant_scout_wander.gd` 10/10, and every ant-tagged test in
+`test_earth_chunk_manager.gd` (`step_ants`/dispatch/budding/weather/
+season-driven capacity and dormancy) all green — re-run directly against
+`main` after merge, not just on the feature branch.
+
+✅ **Live/simulated re-check against the real spawn point, not just unit
+tests.** A throwaway probe first ran against `test_earth_chunk_manager.
+gd`'s own "Berlin" fixture (52.52°N 13.405°E), whose comment claims it
+matches `world.gd`'s spawn point — checked directly and found stale
+(current `World.SPAWN_LATITUDE`/`SPAWN_LONGITUDE` read 47.2031/-1.5469,
+nowhere near Berlin; per this doc's own much earlier "Earth as shared
+starting planet" entry, spawn has moved more than once and the Berlin
+fixture is deliberately independent of it by design, not a bug — only
+the one comment's wording is now inaccurate). Re-run at `World.SPAWN_
+LATITUDE`/`SPAWN_LONGITUDE` read directly rather than a hardcoded
+place name, so this stays accurate regardless of future spawn moves.
+Both runs drove the real, production `EarthChunkManager` through a real,
+live-computed winter→spring→summer stretch via the actual season/weather
+pipeline (`step_ants`, `advance_world_age`) — found 10 real mounds across
+the chunks around spawn, forced every one genuinely queenless deep in
+winter, and confirmed all 10 regained a queen (all via the new adoption
+path in this run — the food path never naturally crossed its threshold
+across a full season of real deep-winter conditions, a real finding in
+its own right about how load-bearing adoption actually is) and NONE
+cycled back to queenless again over the remaining stretch (settling at
+the protected floor, not zero, when the post-adoption economy stayed
+weak) — 20/20 assertions passed.
+
+⬜ **Honest gaps, named not hidden.** No UI distinction between "the food
+path is close" and "the time path is close" beyond `refounding_progress_
+at`'s own single merged number (mirrors the existing tooltip's own
+"queenless, awaiting refounding (NN%)" — still one number, now just a
+smarter one). No real ant queen art still exists (`AntQueenMarker` still
+falls back to the procedural silhouette, unrelated to this pass). No
+distinct visual/audio cue when adoption specifically (vs. the food path)
+is what brings a queen back — a player reads the same "she's there again"
+signal either way.
+
+### Seasonal behavior, phase 9: blackbird — real population, real diet shift (2026-09-09)
+
+✅ **A second new species this pass, not a reskin.**
+`assets/sprites/birds/blackbird.png` already had full illustrated art and
+a `FLYER_WORLD_SCALE` entry sitting unused — commented out of
+`BIRD_SPECIES_POOL` pending exactly this work. Rather than the now-
+retired flat decorative-cap shape bees used to have, this mirrors Robin/
+`SparrowPopulationModel`'s exact proven shape: new
+`BlackbirdPopulationModel` (`GROWTH_RATE_PER_DAY` shared with robin,
+`MIGRATION_RATE_PER_DAY := 0.5`, its own lower `BLACKBIRDS_PER_WORM_
+CELL`) deliberately reuses robin's OWN worm-density signal as its
+carrying-capacity input rather than inventing a parallel "fruit density"
+metric — real blackbirds and robins are both worm-hunting thrushes
+sharing the identical niche, so sharing the signal is the biologically
+honest choice, not a shortcut.
+
+Wired through the full chain sparrow's own persistence-bug history
+already proved necessary: `EcosystemSimulation` (population/capacity
+dicts seeded in `add_region`/erased in `remove_region`,
+`update_worm_density` feeding both robin's and blackbird's capacity from
+the same reading, a full migrate+step block in `step()`, new
+`blackbird_population`/`blackbird_capacity_at`/`seed_blackbird_
+population` accessors, `record_bird_birth`'s species match gaining a
+`"blackbird"` case), `ChunkEcologyCatchup.advance` (state/capacity
+unpacking, step, `"blackbirds"` in the return dict), `ChunkSerializer.
+save_ecology`/`load_ecology` (a 9th appended float, behind the same
+`file.get_position() < file.get_length()` backward-compat guard robin/
+sparrow/kingfisher already use, so old saves default it to 0.0), and
+`AmbientFlyerRenderer` (`BIRD_SPECIES_POOL`, new `BLACKBIRD_SPECIES_
+POOL`, a `FLYER_RANGE` entry mirroring robin's own latitude/biome band
+exactly, `MAX_BLACKBIRDS_PER_CHUNK := 4`, a promotion block in
+`spawn_ambient_flyers` and a reconciliation block in
+`reconcile_bird_markers`, both mirroring robin/sparrow's own).
+`EarthChunkManager` gained five call-site edits threading the new
+population through load/unload/catchup/reconcile.
+
+**Real diet shift, the other genuinely new mechanism this phase:**
+blackbirds are year-round residents that shift toward fruit when insects
+thin out in winter. New `FlyerDiet.eats_now(species, food, season)` gate
+— checked live inside `AmbientFlyerMarker._look_for_worms`/
+`_look_for_caterpillars`/`_look_for_ants` via the world's own
+`current_season()` — stops a blackbird pursuing worms/caterpillars/ants
+in winter while it keeps eating fruit. Robin/sparrow deliberately keep
+their current flat diet weighting; retrofitting the same shift onto them
+is a named follow-up, not done here. Along the way, two pre-existing
+tests asserting robin-exclusivity (`test_only_the_robin_hunts_worms_
+among_the_songbirds`, `test_only_the_robin_eats_caterpillars_among_the_
+songbirds`) were deliberately widened and renamed
+(`test_only_real_thrushes_...`) rather than left as an accidental
+constraint — blackbird is a second genuine thrush with the identical
+niche, and the file already had an in-place precedent (ants were
+similarly widened from robin-only to both songbirds).
+
+TDD: `test_blackbird_population_model.gd` (new, 6/6) drove the model
+itself; `test_ecosystem_simulation.gd` (74/74), `test_chunk_ecology_
+catchup.gd` (27/27), and `test_chunk_serializer.gd` (19/19, including a
+fresh round-trip test and an old-file-defaults-to-zero test) drove the
+persistence chain; `test_ambient_flyer_renderer.gd` (60/60, including a
+fixed shared helper that wasn't passing the new trailing population
+parameter) and `test_ambient_flyer_marker.gd` (a new
+`StubWormWorldWithSeason`, confirmed red first — a blackbird kept
+hunting worms in winter before the gate existed — green after; full file
+186 tests, 184 passing, the other 2 the pre-existing unrelated whirling-
+pair-easing failures already tracked as a known clean-`main` gap) drove
+the spawn/diet wiring; `test_flyer_diet.gd` (37/37) drove `eats_now`
+itself. `test_earth_chunk_manager.gd` gained a targeted blackbird
+reconciliation regression test mirroring sparrow's own bug-history test
+exactly, run via `-gunit_test_name=` scoping to avoid the file's
+documented full-suite cost.
+
+### Seasonal behavior, phase 10 of 10: grass frog — the epic's last new species (2026-09-09)
+
+✅ **The most novel "new species from nothing" piece in the whole
+seasonal-behavior pass, built last so every earlier phase's pattern was
+proven first — and the epic's tenth and final phase.**
+`assets/sprites/frogs/grass_frog.png` had zero code references before
+this: a perfectly regular 8-column x 4-row grid (1536x1024, 192x256 per
+cell — dimension-identical to caterpillar.png/worm.png), confirmed via a
+temporary probe script (dumped every one of the 32 cells to disk,
+measured real opaque-pixel counts in a comfortable 9000-14500 range, none
+blank; deleted after use, never committed) rather than assumed. Four
+real, biologically distinct rows: idle (sitting, slight turn), hop
+(crouch/leap/land — frogs hop, they don't walk), eat (tongue shoots out
+and catches a fly mid-sequence), croak (throat/vocal sac visibly
+inflates). New `IllustratedGrassFrogSprite` mirrors
+`IllustratedCaterpillarSprite`'s exact shape (no `CreatureMarker`/
+`AnimalAnatomy` stack, single species keyed by action alone).
+
+**Two real gates, not one.** New `GrassFrogRenderer` mirrors
+`CaterpillarRenderer`'s minimal per-chunk-capped shape, plus: (1) a season
+gate identical in shape to caterpillar's own `ACTIVE_SEASONS` (spring/
+summer/autumn active, brumates through winter — a spawn-time gate, not a
+per-frame one, the same accepted approximation every ambient decoration
+in this codebase already carries), and (2) a real WATER-PRESENCE gate
+caterpillar's identical shape never needed: `WaterAreaSurvey.
+interior_water_cell_count`, the exact same "how much water is in this
+chunk" signal the aquatic fish population model already uses (reused, not
+reinvented) — a grassland/forest/rainforest chunk with no real river/lake/
+ocean cell in it has no pond to sit beside, and spawns nothing regardless
+of season.
+
+**A genuinely different movement model than every other ambient
+creature, because the biology demanded it.** Every other decorative
+presence in this doc (butterflies, caterpillars, decomposers) drives
+`AmbientFlyerMovement.step_position` continuously — a smooth, always-
+drifting roam. A real frog's gait is the opposite: long still periods
+between short, sudden hops. New `GrassFrogMarker` therefore does NOT
+extend `AmbientFlyerRenderer`/`AmbientFlyerMarker` despite the similar
+per-chunk-capped shape — it drives a small bespoke hop-burst state
+machine instead, reusing only `AmbientFlyerMovement.direction_at` as the
+already-tested, home-anchored heading picker at the start of each hop.
+This also solves a real design problem for free: idle-vs-hop becomes a
+genuine discrete state (mid-hop-burst or not) rather than a proxy read
+off a continuously-roaming creature's own meaningless tiny per-frame
+delta. A real, if decorative, croak plays on its own per-instance-
+jittered timer while idle, so a pond full of frogs doesn't call in
+lockstep. The sheet's fourth row ("eat") is deliberately left unwired:
+this game's own ambient "insects" (butterflies) are themselves a
+decorative flat-cap presence with no population count to decrement, so a
+frog "eating" one would still be decorative underneath, not an actual
+mechanism — named as a follow-up in `docs/concept/seasonal_behavior.md`
+rather than faked. Grass frog is likewise not yet wired into the
+capture-tool system, also named there rather than silently assumed.
+
+**Caught its own real bug before shipping, the way strict TDD is supposed
+to.** A hop that only started actually stepping position on the
+FOLLOWING `_process` call — rather than the same tick it began — was
+silently skipped in its entirety whenever a frame's delta exceeded
+`HOP_DURATION_SECONDS` (0.4s), which this game's own distance-based LOD
+throttling (`SimulationLod`, the same mechanism every other small
+creature marker already uses) can easily produce for a frog far from the
+player: `test_hops_instead_of_sitting_frozen_forever` failed for exactly
+this reason (position never moved across 15 simulated seconds), fixed by
+stepping the same tick a hop begins rather than waiting a frame.
+
+Wired into `EarthChunkManager` mirroring `Caterpillar`/`MillipedeRenderer`'s
+exact shape: a preload, an instance var, a per-chunk `Vector2i ->
+Array[GrassFrogMarker]` dict, a spawn call in `_load_chunk` right after
+caterpillar's own (same season-read-once-at-spawn convention), a
+free+erase loop in `_unload_chunk`.
+
+TDD: `test_illustrated_grass_frog_sprite.gd` (new, 10/10, confirmed red
+first — the sheet file didn't exist), `test_grass_frog_renderer.gd` (new,
+9/9, including the water-gate and season-gate cases), `test_grass_frog_
+marker.gd` (new, 9/9, confirmed the LOD-interaction bug above red first
+before the same-tick fix), and two new `test_earth_chunk_manager.gd`
+cases reusing the exact "near Berlin's real water" fixture `test_update_
+spawns_fish_markers_near_berlins_water`/`test_update_may_spawn_a_
+kingfisher_near_berlins_water` already established — confirmed real frogs
+spawn near Berlin's water and are freed on eviction (2/2), with no
+collateral regression in the immediately-adjacent caterpillar (11/11) and
+millipede (6/6) `_load_chunk`/`_unload_chunk` wiring.
+
+**All 10 phases of the seasonal-behavior epic are now merged to `main`**
+(see `docs/concept/seasonal_behavior.md` for the full status list and
+every named deferred follow-up): ant/honeybee forager cold-gate, wild bee
+die-off/re-hatch, true butterflies stop flying in winter, decomposer
+cold-slowdown, herbivore winter-forage-realism, squirrel scarcity-shifts-
+eat-vs-cache, alpaca, bear hibernation/snake brumation, blackbird, and
+grass frog.
+
+### A new world always starts in mid-spring (2026-09-09)
+
+✅ Requested directly: "make starting season always mid spring." A new
+world's starting point in the year used to be a genuine, deliberate
+design decision from an earlier pass (see `concept/seasons.md`): every
+fresh save originally started at a hardcoded world-age `0.0`, which
+`SeasonCycle`'s own phase formula puts at warmth ≈0.1465 — just under the
+snow threshold — so every new game began mid-winter-adjacent and reliably
+snowed within minutes (reported then: "it starts to snow
+deterministically"). That was fixed by rolling a uniform random offset
+across the whole year, so a new world could begin in any season. This
+pass supersedes that random start with a fixed one: `EarthChunkManager.
+randomize_world_age()` is renamed `reset_world_age_to_mid_spring()` and
+now always sets the clock to exactly `SeasonCycle.MID_SPRING_YEAR_
+FRACTION` (a new tested constant, `0.125` — halfway through the spring
+quarter) through the year, rather than rolling `randf()`. Load Game is
+untouched: it still restores the clock's own persisted value and never
+resets it.
+
+New `SeasonCycle.MID_SPRING_YEAR_FRACTION` is the one shared, tested
+definition of "mid-spring" — matching, not duplicating, the test suite's
+own pre-existing local `MID_SPRING := 0.125` convention already used by
+`test_seasonal_foliage.gd`/`test_season_transition.gd`. `EarthChunkManager.
+MID_SPRING_WORLD_AGE_SECONDS := SeasonCycle.SECONDS_PER_YEAR *
+SeasonCycle.MID_SPRING_YEAR_FRACTION` replaces the old
+`NEW_GAME_WORLD_AGE_RANGE_SECONDS`.
+
+TDD: the three tests asserting the OLD random-start contract
+(`test_randomize_world_age_lands_within_one_year`, `..._does_not_always_
+land_on_the_same_moment`, `..._can_start_in_more_than_one_season`) are
+replaced with three asserting the new deterministic one —
+`test_reset_world_age_to_mid_spring_lands_in_spring`, `..._lands_exactly_
+halfway_through_spring` (pins the exact tuned fraction, not just "some
+day in spring"), and `..._always_lands_on_the_same_moment` (the literal
+opposite of the old "does not always land on the same moment" test).
+Confirmed red first (`MID_SPRING_YEAR_FRACTION`/`reset_world_age_to_mid_
+spring` didn't exist), green after. Every other reader of the old
+`randomize_world_age` name — `scenes/world.gd` (both the New Game call
+site and a save-related doc comment), `world_clock_persistence.gd`,
+`test_world_season_fanout.gd`, `test_npc_seen_ledger.gd` — updated to the
+new name; `docs/concept/seasons.md`'s own "A new world starts at a random
+point in the year" section rewritten to "...always starts in mid-spring"
+throughout. `test_earth_chunk_manager.gd` (world_age/world_clock/season-
+scoped, 36/36), `test_world_season_fanout.gd` (13/13),
+`test_npc_seen_ledger.gd` (21/21), `test_season_cycle.gd` (23/23), and
+`test_world_backup_paths.gd` (the fast source-text drift-pin covering
+`World._wipe_persisted_world`, 8/8) all re-confirmed green.
+
+## A ninth pass on the intro: a lone Alt press no longer skips it (`concept/intro_splash.md`, 2026-09-09)
+
+Flagged, not fixed, back when the fifth pass shipped: the skip-on-any-key
+handler treated a bare Alt press exactly like a real "skip this" key —
+very plausibly an incidental alt-tab during the long boot wait, not a
+deliberate gesture. Actioned as an explicit follow-up once the intro's
+own current (eighth-pass) visual state was independently re-confirmed
+stable live.
+
+Godot reports the modifier itself as an ordinary `InputEventKey` the
+instant it's pressed — indistinguishable, at that point, from a real skip
+key, and the Alt+Tab combo it's actually part of is consumed by Windows
+before any second key event would reach this game at all, so there's no
+"wait and see" signal available to disambiguate the two after the fact.
+Fix: `_input` now ignores an `InputEventKey` whose `keycode` is one of
+`KEY_SHIFT`/`KEY_CTRL`/`KEY_ALT`/`KEY_META` — applied to all four, not
+just Alt, since the identical reasoning holds for each (a lone modifier
+press is how every OS-level combo a long wait might provoke begins, not
+how a player expresses "skip"). A real key pressed while a modifier is
+held (Alt+Space) is untouched and still skips immediately.
+
+TDD: `test_a_lone_alt_press_does_not_skip_the_intro` and
+`test_a_lone_ctrl_shift_or_meta_press_does_not_skip_the_intro` confirmed
+red against the unfixed handler first, green after;
+`test_a_real_key_still_skips_even_with_a_modifier_held` was already green
+pre-fix, kept as an explicit regression guard against a future
+over-broad "ignore anything with a modifier held" rewrite.
+`test_intro_splash.gd` 13/13, `test_world_play_intro_splash_frame_gate.gd`
+3/3, `test_world_intro_splash_after_load_fanout.gd` 5/5 — no regression
+in any of the eight prior passes.
+
+## Bees now draw above ground scenery, closing a real "materializes mid-air" bug (2026-09-09)
+
+Reported live: *"I saw a hive where streams of bees are flying in that
+appear out of nowhere."* Root cause: `BeeForagerMarker` is a plain
+Y-sorted sibling of trees under the shared `Entities` node (see
+`EarthChunkManager._dispatch_bee_forager`), and every hive is required
+to sit within a couple of tiles of a real tree
+(`_has_real_hive_anchor`, shipped the day before). A tree's own Y-sort
+position is where it is *rooted*, not how tall its canopy draws -- a
+bee flying at a screen position Y-sorting placed "behind" that root was
+drawn hidden underneath the whole canopy sprite, then popped into view
+the instant it crossed the sort boundary, reading as a bee
+materializing mid-air rather than the continuous flight it actually
+was. `AmbientFlyerMarker.AIRBORNE_Z_INDEX` already exists for this
+exact reason -- butterflies hovering at a flower hit the identical bug
+years earlier in this doc's own history -- but `BeeForagerMarker` was
+never built on `AmbientFlyerMarker` and never inherited the fix.
+New `BeeForagerMarker.AIRBORNE_Z_INDEX := 1`, set once in `_ready()`
+(`z_index = AIRBORNE_Z_INDEX`), mirroring `AmbientFlyerMarker`'s own
+constant name/value/placement exactly.
+
+`test_bee_forager_marker.gd` 30/30 (29 + 1 new: `z_index` reads the
+constant once added to the tree). Regression-checked: `test_bee_hive_
+marker.gd` 24/24, `test_bee_population_model.gd` 14/14, `test_wild_bee_
+patch.gd` 20/20, `test_wild_bee_nest_marker.gd` 11/11, `test_bee_
+colony.gd` 47/47.
+
+**Two other real, distinct bugs surfaced investigating this, both
+flagged rather than fixed here** (out of scope for this specific report
+-- see the spawned follow-up tasks): (1) a hive that absconds/harvest-
+relocates does not retarget foragers already in flight for it -- they
+keep flying toward/returning to the old, now-marker-free site, and
+`_active_bee_foragers`'s dictionary key never migrates to the new site
+either, so the per-hive concurrent-forager cap can be briefly exceeded
+across the old+new keys; (2) a chunk unloading while one of its bees is
+mid-flight orphans that bee's own `BeeColony` reference (a real object
+kept alive only by the forager's own reference count) -- the forager's
+eventual `record_forage_result`/`deposit_food` call lands on that
+abandoned colony instead of the fresh one `_load_chunk` built on
+re-entry, a silent economy-state leak with no visible symptom on its
+own.
+
+## A tenth pass on the intro: the character creator's icon build learned to yield (`concept/intro_splash.md`, 2026-09-09)
+
+The sixth pass deferred WHEN `MainMenu`'s character creator gets built
+(first navigation, not eager `_ready()`) but said so honestly at the
+time: "no yield-splitting was added to the build itself, only a
+deferral of WHEN it runs." This closes the largest of the three costs
+that left open — 7 procedural class-icon portraits — without touching
+the diorama or skill-web construction sitting next to it.
+
+Deliberately scoped rather than a full rewrite: coroutine-ifying the
+whole 5-level `_open_create_screen` → `_build_hero_column` call chain
+would have risked all ~75 of `test_main_menu.gd`'s structural
+assertions. Instead, a new `MainMenu._warm_class_icon_cache(on_progress
+:= Callable())` warms the existing `_class_icon_texture` per-archetype
+cache across 7 yielded frames (`await Engine.get_main_loop().
+process_frame`, mirroring `warm_cache`/`update_with_progress`'s own
+shape) BEFORE the existing, unchanged, synchronous `_build_create_screen`
+runs — every icon it needs is already a cache hit by then.
+
+`_ensure_create_screen_built`/`_open_create_screen` becoming coroutines
+had a checked, bounded blast radius: exactly 5 call sites codebase-wide
+(grep, not assumed) — the New Game/Host Game buttons (fire-and-forget
+already, no change needed) and two test fixtures (GUT already awaits
+`before_each` internally, confirmed by reading `gut.gd`, so async
+lifecycle hooks are natively supported). The one real risk: several
+tests fired a button's `pressed` signal and asserted on `_create_screen`
+same-line, no yield — `.pressed.emit()` only runs a coroutine handler to
+its first suspension point, not to completion. Fixed with `await
+wait_process_frames(10)` after each such emit.
+
+TDD: 3 new tests (`test_warm_class_icon_cache_fills_a_cold_cache_for_
+every_archetype`, `..._reports_real_progress_from_zero_to_the_true_
+total`, `..._skips_an_already_warm_archetype`) confirmed red against the
+nonexistent function first, green after. All 75 tests in
+`test_main_menu.gd` re-run clean, including the one pre-existing,
+already-documented, unrelated diorama-scroll failure staying exactly as
+it was.
+
+Live, not just headless: an env-var-gated autopilot (mirroring the
+fourth pass's own technique) drove a real New Game click, `(Get-Process
+-Id <pid>).Responding` polled externally every 300ms. ~8.1s `False`
+(the boot's own separately-tracked heavy setup), then **`True`
+continuously for the entire remaining ~37s window observed** — long
+enough to cover the yielded icon warming AND the still-fully-synchronous
+diorama/skill-web construction right after it. Windows' unresponsive
+timeout is a rolling no-message-pumped clock, not a total-time budget:
+breaking up the largest cost kept resetting that clock through the
+smaller, untouched costs sitting next to it. A screenshot 2 frames after
+the build finished confirmed the creator itself — all 7 class icons
+real and distinct, live diorama rendering, appearance panel fully
+populated.
+
+Honest scope note: the diorama and skill web are NOT yield-split by this
+pass. The live result suggests they may not currently need to be on this
+machine, but that's a fact about relative timing today, not a structural
+guarantee — a slower machine or either cost growing independently could
+reopen the gap for real.

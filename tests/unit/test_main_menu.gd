@@ -33,8 +33,10 @@ func before_each():
 	# it open from the start, exactly as _ready() itself used to guarantee.
 	# The deferred-construction behavior is covered by its own dedicated
 	# tests further down, each using its own fresh, un-navigated instance
-	# rather than this shared one.
-	menu._ensure_create_screen_built()
+	# rather than this shared one. Awaited: _ensure_create_screen_built is
+	# a coroutine now (see its own doc comment) -- GUT awaits before_each
+	# itself, so this just needs the same treatment any other await does.
+	await menu._ensure_create_screen_built()
 
 
 func after_each():
@@ -185,6 +187,12 @@ func test_pressing_new_game_builds_the_character_creator():
 	add_child_autofree(fresh)
 
 	_find_button(fresh._root_screen, "New Game").pressed.emit()
+	# _ensure_create_screen_built is a coroutine now (see its own doc
+	# comment) -- .pressed.emit() only runs it up to its first real
+	# suspension point, not to completion, so the button callback itself
+	# can stay a plain fire-and-forget call. 10 frames is a safe margin
+	# over the 7 real yields _warm_class_icon_cache needs for a cold cache.
+	await wait_process_frames(10)
 
 	assert_not_null(fresh._create_screen, "New Game should build the creator")
 	assert_true(fresh._create_screen.visible, "and show it")
@@ -208,6 +216,8 @@ func test_pressing_host_game_also_builds_the_character_creator():
 	add_child_autofree(fresh)
 
 	_find_button(fresh._root_screen, "Host Game (LAN)").pressed.emit()
+	# See test_pressing_new_game_builds_the_character_creator's own comment.
+	await wait_process_frames(10)
 
 	assert_not_null(fresh._create_screen, "Host Game should build the creator")
 	assert_true(fresh._create_screen.visible)
@@ -220,11 +230,18 @@ func test_navigating_to_the_creator_twice_does_not_rebuild_it():
 	add_child_autofree(fresh)
 
 	_find_button(fresh._root_screen, "New Game").pressed.emit()
+	# See test_pressing_new_game_builds_the_character_creator's own comment.
+	await wait_process_frames(10)
 	var first_screen := fresh._create_screen
 	var first_diorama := fresh._diorama
 
 	_find_button(fresh._create_screen, "Back").pressed.emit()
 	_find_button(fresh._root_screen, "New Game").pressed.emit()
+	# The already-warm-cache path (_create_screen != null) returns before
+	# ever reaching a real yield, so this second call resolves within the
+	# same frame -- waited anyway, for the same robustness-over-cleverness
+	# reason every other await here is generous rather than exact.
+	await wait_process_frames(2)
 
 	assert_eq(fresh._create_screen, first_screen, "should reuse the already-built screen")
 	assert_eq(fresh._diorama, first_diorama, "should not rebuild the diorama")
@@ -832,6 +849,86 @@ func test_class_icons_are_cached_not_regenerated_every_call():
 	assert_eq(first, second)
 
 
+## _warm_class_icon_cache -- yield-split cache warming, mirroring
+## IllustratedMushroomSprite.warm_cache's own already-established shape
+## (see docs/concept/intro_splash.md's "A sixth pass" and docs/concept/
+## soil_fauna.md's "Round 6 follow-up"): one real unit of work (one
+## archetype's portrait), then `await Engine.get_main_loop().
+## process_frame`, so the 7 real procedural-sprite generations this pass
+## measured at nearly all of `_ensure_create_screen_built`'s remaining
+## ~10-12s cost (docs/concept/intro_splash.md's own "A sixth pass" already
+## named this as the single largest of the three costs it found) never
+## run as one uninterrupted synchronous block again. `_class_icon_texture`
+## itself is UNCHANGED and stays fully synchronous -- live callers
+## (`_build_class_card`) still need a real texture back immediately, not
+## a coroutine -- only this warming PASS learned to yield, exactly the
+## same "the cache-check is the same either way, only warming yields"
+## split `warm_cache`/`frame_for` already established.
+func test_warm_class_icon_cache_fills_a_cold_cache_for_every_archetype():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+	assert_true(fresh._class_icon_textures.is_empty(), "cache should start cold")
+
+	await fresh._warm_class_icon_cache()
+
+	for archetype in fresh._archetypes.archetype_names():
+		assert_true(
+			fresh._class_icon_textures.has(archetype),
+			"%s should be warmed" % archetype
+		)
+
+
+## Same contract test_update_with_progress_reports_real_progress_from_
+## zero_to_the_true_total and test_warm_cache_reports_real_progress_from_
+## zero_to_the_true_total already pin for their own warming passes: one
+## call at (0, total) before any work, one call per unit of real work
+## completed, ending at (total, total) -- not an approximation, the exact
+## shape a future boot-time loading readout would need.
+func test_warm_class_icon_cache_reports_real_progress_from_zero_to_the_true_total():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+	var total := fresh._archetypes.archetype_names().size()
+	var calls: Array = []
+
+	await fresh._warm_class_icon_cache(func(done, t): calls.append([done, t]))
+
+	assert_eq(calls.size(), total + 1, "one call at 0, plus one per archetype warmed")
+	assert_eq(calls[0], [0, total], "the first call should report zero done, before any work")
+	assert_eq(calls[-1], [total, total], "the last call should report every archetype done")
+
+
+## An already-warm archetype must be a fast, real no-op -- not just
+## idempotent in its RESULT, but genuinely skipping THAT archetype's own
+## generate_hero_portrait_texture call and yield, since that's the actual
+## expensive part this whole pass exists to avoid paying twice. Uses a
+## fresh, un-navigated menu (not the shared `menu` fixture, which
+## before_each already warms in full) so exactly one archetype starts
+## warm and the rest genuinely don't -- an isolated premise, not an
+## incidental side effect of fixture setup.
+func test_warm_class_icon_cache_skips_an_already_warm_archetype():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+	var pre_warmed: ImageTexture = fresh._class_icon_texture("warrior")
+	assert_eq(fresh._class_icon_textures.size(), 1, "only warrior should be warm before this call")
+
+	await fresh._warm_class_icon_cache()
+
+	assert_eq(
+		fresh._class_icon_textures["warrior"], pre_warmed,
+		"an already-cached texture should not be regenerated by warming"
+	)
+	assert_eq(
+		fresh._class_icon_textures.size(), fresh._archetypes.archetype_names().size(),
+		"every OTHER archetype should still have been warmed"
+	)
+
+
 ## New sixth customization axis: an independent accent/trim color, per the
 ## follow-up ask for "more character customization options" -- previously
 ## trim was always fixed by the class palette with no player choice at all.
@@ -932,8 +1029,10 @@ func _rebuild_menu_with_a_save() -> void:
 	menu.reroll_save_path = TEST_REROLL_SAVE_PATH
 	add_child(menu)
 	# See before_each's own comment -- every caller of this helper goes on to
-	# reach the creator (Begin lives on it).
-	menu._ensure_create_screen_built()
+	# reach the creator (Begin lives on it). Awaited for the same reason
+	# before_each's own call is -- this helper is a coroutine now too, so
+	# every caller below needs `await _rebuild_menu_with_a_save()` in turn.
+	await menu._ensure_create_screen_built()
 
 
 func _find_button(screen: Control, label: String) -> Button:
@@ -951,7 +1050,7 @@ func _find_button(screen: Control, label: String) -> Button:
 ## player_save.bin so even undeleting is gone. Begin must not be able to
 ## trigger that without the player saying so.
 func test_begin_does_not_start_immediately_when_a_save_would_be_overwritten():
-	_rebuild_menu_with_a_save()
+	await _rebuild_menu_with_a_save()
 	watch_signals(menu)
 
 	_find_button(menu._create_screen, "Begin").pressed.emit()
@@ -975,7 +1074,7 @@ func test_begin_starts_immediately_when_there_is_no_save_to_lose():
 
 
 func test_confirming_the_overwrite_starts_the_game():
-	_rebuild_menu_with_a_save()
+	await _rebuild_menu_with_a_save()
 	watch_signals(menu)
 
 	_find_button(menu._create_screen, "Begin").pressed.emit()
@@ -985,7 +1084,7 @@ func test_confirming_the_overwrite_starts_the_game():
 
 
 func test_keeping_the_save_returns_to_the_creator_without_starting():
-	_rebuild_menu_with_a_save()
+	await _rebuild_menu_with_a_save()
 	watch_signals(menu)
 
 	_find_button(menu._create_screen, "Begin").pressed.emit()
@@ -999,8 +1098,12 @@ func test_keeping_the_save_returns_to_the_creator_without_starting():
 ## same creator and the same Begin button, so a confirmation placed only on
 ## the root screen's "New Game" would miss it entirely.
 func test_hosting_a_game_is_confirmed_too():
-	_rebuild_menu_with_a_save()
+	await _rebuild_menu_with_a_save()
 	_find_button(menu._root_screen, "Host Game (LAN)").pressed.emit()
+	# The creator is already warm via _rebuild_menu_with_a_save above, so
+	# this hits the idempotent fast path -- waited anyway for the same
+	# robustness reason every other post-emit wait in this file is.
+	await wait_process_frames(2)
 	watch_signals(menu)
 
 	_find_button(menu._create_screen, "Begin").pressed.emit()
@@ -1013,7 +1116,7 @@ func test_hosting_a_game_is_confirmed_too():
 ## (root/create/join), so _show hides it like any other -- a screen missing
 ## from _show's list stays visible on top of whatever comes next.
 func test_the_confirmation_screen_is_hidden_by_showing_another_screen():
-	_rebuild_menu_with_a_save()
+	await _rebuild_menu_with_a_save()
 	_find_button(menu._create_screen, "Begin").pressed.emit()
 
 	menu._show(menu._root_screen)

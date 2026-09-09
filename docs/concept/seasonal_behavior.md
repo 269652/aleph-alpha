@@ -168,35 +168,76 @@ which is a real, if quiet, consequence; whether hunger should ever kill a
 creature outright is a separate, bigger design decision than "seasonal
 behavior," named here rather than decided by default.
 
-### Squirrel/mouse cache-preference
+### Squirrel scarcity-driven eat-vs-cache shift (revised from "cache preference")
 
-Both species already cache real food (`SquirrelNutCaching`,
-`SeedCaching`, surfaced via `CreatureMarker.carried_nut_species`/
-`carried_grass_seed`) — the real winter-survival strategy for
-non-hibernating rodents. The one missing piece: reusing the SAME
-`growth_modifier` signal from the fix above so a squirrel/mouse prefers
-drawing from its own cache over a fresh foraging attempt when fresh
-forage is cold/scarce, rather than treating the cache as pure flavor.
+**Corrected on implementation, not as originally scoped.** Both species
+have a "caching" mechanic, but reading `SquirrelNutCaching`/`SeedCaching`
+in full shows neither is a personal, retrievable food store an animal
+could later "prefer" over fresh foraging: caching here means real
+scatter-hoarding SEED DISPERSAL — a picked-up nut/seed is carried a short
+distance and either eaten outright or buried as a new planting site
+(`try_plant_seed_at`), never as a stockpile the same animal returns to
+draw down. `SeedCaching` (mouse) additionally has no eat-vs-cache branch
+at all — a mouse's grass seed is ALWAYS re-cached (redistributed onto the
+same ground-seed pool foraging already reads from), never eaten in place,
+a deliberate existing design choice, not a gap. Building a genuine
+per-individual "remembers and returns to its own cache" mechanic would be
+a materially larger, new feature — spatial cache-location tracking this
+file's own pure, stateless functions were never built for — not a cheap
+extension, and not attempted here.
 
-### Bear hibernation / snake brumation (new decision-ladder state)
+The real, buildable, still-genuinely-seasonal mechanism this file's own
+existing doc comment already implies: *"caching becomes common mainly
+once immediate hunger is satisfied... or a mast glut exceeds what can be
+eaten right away."* The inverse holds too — real forage scarcity should
+push a forager toward eating what it finds right now rather than
+investing effort in a cache for later. `SquirrelNutCaching.
+nut_consumption_chance_for`/`nut_is_consumed` gain an optional
+`growth_modifier` term (the same signal the herbivore forage-realism fix
+above reuses) that nudges consumption UP as real forage gets scarcer —
+real, cheap, and grounded in this module's own pre-existing reasoning.
+**Mouse is explicitly out of scope for this specific mechanism** (no
+eat-vs-cache branch to nudge); a mouse's own seasonal hardship already
+comes from the shared `FOOD_UNDERFOOT`/`FOOD_SEED` forage-realism fix
+above, the same as every other `CreatureMarker` species.
 
-The one genuinely new architecture piece. `CreatureMarker`/
-`CreatureBehavior` have no dormant/sleeping state at all today — `decide()`
-returns an `intent` string consumed by `_apply_decision`'s match
-statement, with priority order carried as DATA
-(`Ethogram.BODY_PLANS[...]["wirings"]`), never as nested ifs. A new
-`"dormant"` intent slots into that same ladder at top priority for a
-gated species once `ambient_warmth()` (the SAME call `CreatureMarker`
-already makes for body-temperature regulation — no second warmth source)
-drops below a threshold for a sustained window; `_apply_decision` gains a
-branch that halts movement and foraging in place. Species are gated via a
-new house-style Dictionary (mirroring the existing `VENOMOUS_SPECIES`
-pattern) — `bear` for mammalian hibernation, `venomous_snake`/
-`nonvenomous_snake` for brumation. **Deliberate simplification**: both
-are modeled as the same observable "inactive and sheltered" mechanic
-rather than distinguishing true hibernation from brumation at the
-physiological level (e.g. a brumating snake occasionally rousing on a
-warm winter day) — the distinction real biology draws is finer than this
+### Bear hibernation / snake brumation (new total-override state)
+
+The one genuinely new architecture piece. **Implemented differently from
+this section's own first draft, on reading the real decision code**:
+`CreatureBehavior.decide()` doesn't return an intent picked from a plain
+ordered if-chain a new case could slot into — it delegates to
+`BehaviorKernel.decide()` running `Ethogram.BODY_PLANS["mammal"]`'s
+wirings, a scored competition between drives (hunger/thirst/fear/
+courtship), with its own dedicated ladder-order test coverage
+(`test_ethogram.gd`). Dormancy is not another drive competing for
+priority inside that kernel — it's "is this creature even active right
+now at all," the same KIND of question `CreatureMarker.is_rooted()`
+already answers for a frozen/rooted creature. So it's built at that exact
+precedence instead: a new `_step_dormancy()` runs every `_process()`
+frame (in both directions, so a dormant creature can also wake), and a
+dormant creature early-returns immediately after the existing
+`is_rooted()` check — before `_behavior.decide()` is ever called, the
+same "total override, no AI decision this frame" precedence rooted/
+knockback already have. This never touches the ethogram kernel or its
+pinned ladder-order test at all.
+
+Species are gated via a new house-style Dictionary (mirroring the
+existing `VENOMOUS_SPECIES` pattern) — `bear` for mammalian hibernation,
+`venomous_snake`/`nonvenomous_snake` for brumation. The warmth signal is
+this creature's OWN smoothed reading of `ambient_warmth()` (the SAME call
+`CreatureMarker` already makes for body-temperature regulation — no
+second warmth source), settled via a delta-scaled exponential time
+constant (not a fixed-rate-per-call EMA like `AntColony.record_warmth` --
+that's called on a fixed real-time refresh interval, already effectively
+time-based; this runs once per variable-length frame, so the blend factor
+itself must scale with delta to stay framerate-independent) against
+`EarthwormPatch.COLD_CUTOFF`, the same real winter-soil reading every
+other cold-weather mechanism in this game already keys off. **Deliberate
+simplification**: both are modeled as the same observable "inactive and
+sheltered" mechanic rather than distinguishing true hibernation from
+brumation at the physiological level (e.g. a brumating snake occasionally
+rousing on a warm winter day) — the distinction real biology draws is finer than this
 pass implements, named here rather than silently assumed identical.
 
 ### Blackbird: new species, real population, real diet shift
@@ -225,13 +266,53 @@ A frog's real winter strategy (bury into mud/leaf litter, inactive) is
 architecturally closer to `EarthwormPatch`'s "activity toggles with cold,
 headcount is fixed" shape than to a hunting/grazing `CreatureMarker` or a
 population-tracked bird — so it is built as a lightweight, per-chunk
-capped presence near water/damp ground (the same proven shape
-`AmbientFlyerRenderer` already uses for butterflies), whose
-visibility/catchability toggles with the same cold-gate signal
-`EarthwormPatch` established, rather than a full predation-fed aggregate
-population. Graduating it to a real population later is named as a
-follow-up, the same honest scope cut this project already keeps for
-other decorative-but-real presences.
+capped presence near water/damp ground, whose existence toggles with
+season rather than a full predation-fed aggregate population. Graduating
+it to a real population later is named as a follow-up, the same honest
+scope cut this project already keeps for other decorative-but-real
+presences.
+
+**Implemented differently from the paragraph above, on reading the real
+code, in two ways worth naming explicitly:**
+
+1. The season gate is `CaterpillarRenderer.ACTIVE_SEASONS`'s exact
+   "checked once at spawn time" shape (spring/summer/autumn active, no
+   winter presence at all), not `EarthwormPatch`'s live warmth-threshold
+   EMA that phase 8's hibernation/brumation work uses — a grass frog has
+   no per-frame warmth reading to smooth at all in this pass, only a
+   spawn-time roll, the same accepted "existing markers don't re-validate
+   their own season eligibility" approximation caterpillar/true-butterflies
+   already carry. "Visibility toggles with cold" above is therefore real
+   but coarser than it first reads: a chunk already loaded when winter
+   arrives keeps whatever frogs it already had until it next unloads.
+2. A real, independent WATER-PRESENCE gate reusing `WaterAreaSurvey.
+   interior_water_cell_count` — the exact same signal the aquatic fish
+   population model already uses (see `fishing.md`) — rather than folding
+   "near water" into a biome name the way every other species group in
+   this doc does. A grass frog needs an actual river/lake/ocean-adjacent
+   cell in its own chunk, not just a grassland/forest/rainforest label.
+
+New `GrassFrogRenderer`/`GrassFrogMarker` (not built on
+`AmbientFlyerRenderer`/`AmbientFlyerMarker` despite the similar per-chunk-
+capped shape): `AmbientFlyerMovement`'s continuous smooth roam is the
+wrong gait for a real frog, which sits still far longer than it moves.
+`GrassFrogMarker` instead drives a small bespoke hop-burst state machine
+(long idle holds, short fixed-distance hops), reusing only
+`AmbientFlyerMovement.direction_at` as the home-anchored heading picker at
+the start of each hop — which also makes idle-vs-hop a real discrete
+state rather than a proxy read off a continuous roam's own tiny per-frame
+delta. A real, if decorative, croak plays on its own per-instance-jittered
+timer while idle. The sheet's fourth row ("eat" — a real tongue-catches-
+a-fly animation) is deliberately left unwired: this game's own ambient
+"insects" (butterflies) are themselves a decorative flat-cap presence
+with no population count to decrement, so a frog "eating" one would still
+be decorative underneath, not an actual mechanism — named as a follow-up
+rather than faked. Grass frog is also not yet wired into the capture-tool
+system (`CaptureTool.is_ambient_flyer_species` only recognizes
+`AmbientFlyerRenderer`'s own species pools, a deliberately separate,
+lighter architecture) — "catchability" in the paragraph above reads, in
+this first pass, as "a real, visible, tangible presence," not yet as a
+literal net/trap interaction; wiring that in is a named follow-up too.
 
 ## Explicit deferred follow-ups (named, not silently dropped)
 
@@ -242,6 +323,14 @@ other decorative-but-real presences.
   that does not exist yet).
 - Grass frog graduating from decorative-but-real to a full predation-fed
   aggregate population.
+- Grass frog's "eat" animation wired to a real interaction (needs
+  butterflies, or some other real insect presence, to carry an actual
+  population count first — see above).
+- Grass frog wired into the capture-tool system (`CaptureTool`).
+- Grass frog re-validating its own season eligibility continuously (a
+  chunk already loaded when winter arrives keeps its frogs until it next
+  unloads, the same accepted approximation caterpillar/true-butterflies
+  already carry).
 - Starvation-as-a-death-path for any herbivore.
 - Distinguishing true hibernation from brumation at the physiological
   level (occasional warm-day rousing for brumators).
@@ -293,8 +382,66 @@ grazing), but the real caloric/mass yield now honestly reflects how
 little is actually growing right now. The highest-leverage change in
 this whole doc: every herbivore, present and future, gets real winter
 hardship for free, no per-species code.
-⬜ Squirrel/mouse cache-preference
-⬜ Alpaca as a real, live grazer
-⬜ Bear hibernation / snake brumation
-⬜ Blackbird: real population + real diet shift
-⬜ Grass frog: brumating, decorative-but-real presence
+✅ Squirrel scarcity-driven eat-vs-cache shift (revised scope — see the
+mechanism spec section above for why "mouse cache-preference" as
+originally worded does not map onto either species' real mechanism).
+`SquirrelNutCaching.nut_consumption_chance_for`/`nut_is_consumed` gain an
+optional `growth_modifier` term pushing consumption up as real forage
+gets scarcer, grounded in this module's own pre-existing "caching becomes
+common once hunger is satisfied" reasoning. Mouse gets no analogous
+change (no eat-vs-cache branch exists for it); its seasonal hardship
+already comes from the shared herbivore forage-realism fix above.
+✅ Alpaca as a real, live grazer — wired into every table sheep/goat/camel
+already sit in: `CreatureRenderer.HERBIVORE_SPECIES_POOL_BY_BIOME`
+(grassland + mountain, real Andean range), `AnimalAnatomy.SPECIES`/
+`_PROFILES` (own profile: longer neck than sheep, like a camelid, but no
+hump and no headgear), `CreatureMass._REAL_MASS_KG` (65.0kg, a real cited
+average), `IllustratedAnimalSprite._SHEETS` (real walk/eat art, measured
+independently and landing on the same band positions wolf.png's own
+measured entry uses — same generation template), `ProceduralAnimalSprite`
+(fallback color + shape family), and `CreatureInfo`'s five stat/diet/
+temperament tables. No bespoke seasonal code of its own — inherits
+phases 5/6's real winter hardship automatically once spawnable, since
+`FOOD_UNDERFOOT` is the shared generic fallback every herbivore already
+funnels through. Verified with a real rendered frame (chroma-key cutout
+confirmed clean via the existing "no leftover magenta" test), not just a
+code trace.
+✅ Bear hibernation / snake brumation — implemented as a total-override
+early-return at `is_rooted()`'s exact precedence (see this section's own
+revised writeup above for why, corrected from the original ethogram-
+wiring plan on reading the real decision code), not a new ethogram
+intent. New `CreatureMarker._step_dormancy()`, `HIBERNATING_SPECIES`/
+`BRUMATING_SPECIES` tables, and a delta-scaled exponential warmth EMA
+settling against `EarthwormPatch.COLD_CUTOFF`. `_process()` early-returns
+immediately after `is_rooted()` while dormant — no movement, no AI
+decision, sprite frozen on its last frame, exactly like being rooted.
+✅ Blackbird: real population + real diet shift — new `BlackbirdPopulationModel`
+(mirrors Robin/SparrowPopulationModel's exact shape; reuses robin's OWN
+worm-density signal rather than inventing a new "fruit density" metric,
+since real blackbirds and robins are both worm-hunting thrushes). Wired
+through `EcosystemSimulation` (population/capacity/seed/record_bird_birth),
+`ChunkEcologyCatchup.advance`, `ChunkSerializer.save_ecology`/
+`load_ecology` (9th appended field), and `AmbientFlyerRenderer`
+(`BIRD_SPECIES_POOL`/`BLACKBIRD_SPECIES_POOL`/`FLYER_RANGE`/
+`MAX_BLACKBIRDS_PER_CHUNK`, both `spawn_ambient_flyers` and
+`reconcile_bird_markers`) — the full chain sparrow's own persistence bug
+history already proved necessary. Real diet shift: new `FlyerDiet.
+eats_now(species, food, season)` — blackbird stops pursuing worms/
+caterpillars/ants in winter (still eats fruit), read live in
+`AmbientFlyerMarker._look_for_worms`/`_look_for_caterpillars`/
+`_look_for_ants` via the world's own `current_season()`. Robin/sparrow
+keep their existing flat diet weighting untouched.
+✅ Grass frog: brumating, decorative-but-real presence — new `GrassFrog
+Renderer`/`GrassFrogMarker`/`IllustratedGrassFrogSprite`, spawned via
+`EarthChunkManager` alongside caterpillar/millipede. Gated on a real
+water-presence signal (`WaterAreaSurvey.interior_water_cell_count`, the
+same one fish's aquatic population model already uses) AND a season gate
+mirroring caterpillar's exact "spawn-time only" shape (spring/summer/
+autumn active, brumates through winter). A bespoke hop-burst state
+machine, not `AmbientFlyerMovement`'s continuous roam (see this section's
+own "implemented differently" note above for why) — caught and fixed its
+own real bug pre-ship: a hop that only started stepping on the FOLLOWING
+frame was silently skipped whenever a frame's delta exceeded the hop's own
+duration, which this game's distance-based LOD throttling can easily
+produce. "Eat" left unwired and capture-tool integration deferred, both
+named explicitly above rather than silently dropped.

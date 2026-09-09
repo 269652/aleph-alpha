@@ -1669,6 +1669,15 @@ func _take_targeted_fruit() -> void:
 func _look_for_worms(delta: float) -> void:
 	if worm_world == null:
 		return
+	# Real winter diet shift (see FlyerDiet.eats_now, docs/concept/
+	# seasonal_behavior.md's "Blackbird: new species, real population,
+	# real diet shift") -- a species whose insect-hunting genuinely stops
+	# in winter (blackbird today) simply skips this tick; every other
+	# species reads exactly as eats() already did, season-blind.
+	if worm_world.has_method("current_season") and not FlyerDiet.eats_now(
+		species, FlyerDiet.FOOD_WORMS, worm_world.current_season()
+	):
+		return
 	_worm_sniff_accumulator += delta
 	if _worm_sniff_accumulator < WORM_SNIFF_INTERVAL:
 		return
@@ -1749,6 +1758,11 @@ func _take_targeted_caterpillar() -> void:
 func _look_for_caterpillars(delta: float) -> void:
 	if caterpillar_world == null:
 		return
+	# Real winter diet shift -- see _look_for_worms' own identical guard.
+	if caterpillar_world.has_method("current_season") and not FlyerDiet.eats_now(
+		species, FlyerDiet.FOOD_CATERPILLARS, caterpillar_world.current_season()
+	):
+		return
 	_caterpillar_sniff_accumulator += delta
 	if _caterpillar_sniff_accumulator < WORM_SNIFF_INTERVAL:
 		return
@@ -1816,6 +1830,11 @@ func _take_targeted_ant() -> void:
 ## not the older tile-radius one worms/caterpillars/fruit/seeds all share.
 func _look_for_ants(delta: float) -> void:
 	if ant_world == null:
+		return
+	# Real winter diet shift -- see _look_for_worms' own identical guard.
+	if ant_world.has_method("current_season") and not FlyerDiet.eats_now(
+		species, FlyerDiet.FOOD_ANTS, ant_world.current_season()
+	):
 		return
 	_ant_sniff_accumulator += delta
 	if _ant_sniff_accumulator < WORM_SNIFF_INTERVAL:

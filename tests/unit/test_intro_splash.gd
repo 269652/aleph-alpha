@@ -106,11 +106,17 @@ func test_size_fills_the_viewport_once_ready_settles():
 ## panel... otherwise it looks pixelated and wobbly" -- the root Control
 ## (backdrop included) stays full-viewport (see the test above), but the
 ## actual animated TextureRect is deliberately NOT stretched across all of
-## it any more, so a much smaller upscale factor reaches the screen. See
-## IntroSplash.DISPLAY_SIZE's own doc comment for why that constant is a
-## plain literal (matching MainMenu.PANEL_SIZE) rather than a live
-## reference to it.
-func test_display_is_sized_and_centered_to_the_character_panel_size():
+## it any more, so a much smaller upscale factor reaches the screen.
+## Revised (2026-09-09, "An eighth pass"): the box itself shrank again, to
+## a genuine pixel-perfect integer multiple of the sheet's own native frame
+## size rather than an arbitrary literal -- see IntroSplash.DISPLAY_SIZE's
+## own doc comment. This test reads the live constant rather than a
+## hardcoded literal, so it keeps proving "centered, not cropped/stretched
+## across the viewport" regardless of which pass last changed the exact
+## size -- test_display_size_is_a_clean_integer_multiple_of_the_native_
+## frame_size and test_display_is_pixel_perfect below cover the size/
+## filtering specifics this test deliberately doesn't.
+func test_display_is_sized_and_centered_to_a_pixel_perfect_box():
 	var intro := _splash()
 	await wait_process_frames(2)
 	# Same pre-existing, expected warning test_size_fills_the_viewport_
@@ -128,4 +134,97 @@ func test_display_is_sized_and_centered_to_the_character_panel_size():
 	assert_eq(
 		intro.display_rect().position, expected_position,
 		"a shrunk display should stay centered, not pinned to a corner"
+	)
+
+
+## Reported live, again, on top of the seventh pass's already-shipped fix:
+## "the intro is still full window... it should be much smaller." The
+## seventh pass's own 880x620 (matching MainMenu.PANEL_SIZE) was smaller
+## than full-screen but still an ARBITRARY target size -- the same
+## STRETCH_KEEP_ASPECT_COVERED just covering a smaller box, not a clean
+## integer scale of the sheet's own native resolution. Pins the actual
+## fix: DISPLAY_SIZE must be exactly the sheet's own measured native frame
+## size times a whole number, the same "roundi/whole-number scale of a
+## real source size" discipline MainMenu.STANDARD_PORTRAIT_DISPLAY_SIZE
+## already established (see test_standard_portrait_display_size_is_a_
+## whole_number_scale_of_the_source_texture in test_main_menu.gd).
+func test_display_size_is_a_clean_integer_multiple_of_the_native_frame_size():
+	assert_eq(
+		IntroSplash.DISPLAY_SIZE, IntroSplash._NATIVE_FRAME_SIZE * IntroSplash.DISPLAY_SCALE,
+		"DISPLAY_SIZE must be derived from the native frame size times a whole number, not a separately hand-picked literal"
+	)
+
+
+## A regression guard, not just a restatement of the constant: the whole
+## point of this pass was "smaller than the seventh pass's already-shipped
+## 880x620 box", not merely "some other integer-scaled size that happens to
+## be bigger".
+func test_display_size_is_smaller_than_the_prior_character_panel_sized_box():
+	assert_lt(IntroSplash.DISPLAY_SIZE.x, 880.0)
+	assert_lt(IntroSplash.DISPLAY_SIZE.y, 620.0)
+
+
+## The other half of "pixelated and wobbly", not fixed by shrinking the box
+## alone: Godot's default TextureRect filter is smooth/linear, which blurs
+## and shimmers hard pixel-art edges at any non-1:1 scale -- exactly the
+## "wobbly" look reported, independent of how big or small the box is. This
+## game's other generated/sliced pixel art (e.g. MainMenu._standard_
+## portrait) already renders via TEXTURE_FILTER_NEAREST at a whole-number
+## scale for exactly this reason; the intro never did until now.
+func test_display_is_pixel_perfect():
+	var intro := _splash()
+	assert_true(
+		intro.display_is_pixel_perfect(),
+		"the animation should render with NEAREST filtering at a non-cropping integer scale"
+	)
+
+
+## Flagged, not yet fixed, back when the fifth pass shipped: the skip-on-
+## any-key handler is triggered by a lone Alt press -- very plausibly an
+## incidental alt-tab during the long boot wait, not a deliberate "skip
+## this" gesture from the player. Godot reports the modifier itself as an
+## ordinary InputEventKey the instant it's pressed (keycode == KEY_ALT),
+## indistinguishable at that point from a real skip key, since the window-
+## manager combo it's actually part of (Alt+Tab) is consumed by Windows
+## before a second, unrelated key event would ever reach this game at all --
+## there is no "wait and see if another key follows" signal available here
+## to tell the two apart after the fact. The same reasoning applies
+## symmetrically to Ctrl/Shift/Meta: a lone modifier press, with nothing
+## else, is essentially never how a player expresses "skip the intro" on
+## its own -- it is how EVERY other OS-level combo (Ctrl+Tab, Win+D, ...) a
+## long unattended wait might provoke begins.
+func _modifier_key_press(code: Key) -> InputEventKey:
+	var event := InputEventKey.new()
+	event.pressed = true
+	event.keycode = code
+	return event
+
+
+func test_a_lone_alt_press_does_not_skip_the_intro():
+	var intro := _splash()
+	intro._input(_modifier_key_press(KEY_ALT))
+	assert_signal_not_emitted(
+		intro, "finished",
+		"a lone Alt press is very plausibly an incidental alt-tab during the long boot wait, not a deliberate skip"
+	)
+
+
+func test_a_lone_ctrl_shift_or_meta_press_does_not_skip_the_intro():
+	var intro := _splash()
+	for code in [KEY_CTRL, KEY_SHIFT, KEY_META]:
+		intro._input(_modifier_key_press(code))
+	assert_signal_not_emitted(
+		intro, "finished",
+		"pure modifier keys are how OS-level combos begin, not a deliberate skip gesture on their own"
+	)
+
+
+func test_a_real_key_still_skips_even_with_a_modifier_held():
+	var intro := _splash()
+	var event := _key_press()
+	event.alt_pressed = true
+	intro._input(event)
+	assert_signal_emitted(
+		intro, "finished",
+		"a real key with a modifier held (e.g. Alt+Space) is still a genuine keypress, not a lone modifier"
 	)

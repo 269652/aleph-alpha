@@ -82,6 +82,23 @@ const NUT_CONSUMED_CHANCE := 0.7
 ## test_nut_consumption_chance_stays_a_modest_nudge_around_the_base_chance).
 const NUT_FITNESS_CHANCE_SWING := 0.06
 
+## How far real forage scarcity (see EarthChunkManager.current_growth_
+## modifier, docs/concept/seasonal_behavior.md's "Squirrel/mouse cache-
+## preference") can additionally nudge the consumption chance UP, on top
+## of NUT_FITNESS_CHANCE_SWING's own per-individual nudge -- grounded in
+## this file's own real-world note above ("caching becomes common mainly
+## once immediate hunger is satisfied... or a mast glut exceeds what can
+## be eaten right away"): the inverse holds too, and is what this
+## constant models -- a hungrier, scarcer season pushes a forager toward
+## eating what it finds right now rather than investing in a cache for
+## later. Applied over growth_modifier's real [0.2, 1.0] range (scarcity
+## = 1.0 - growth_modifier, so the real winter floor contributes the full
+## swing), sized so the coldest real reading raises consumption by a
+## real, visible margin (see test_nut_consumption_chance_increases_as_
+## real_forage_gets_scarcer) without ever approaching certainty (see
+## test_scarcity_never_pushes_consumption_chance_to_certainty).
+const SCARCITY_CHANCE_SWING := 0.15
+
 
 func _init() -> void:
 	pass
@@ -120,14 +137,25 @@ static func carry_direction(carrier_seed: int) -> Vector2:
 
 
 ## This forager's own personal consumption chance: NUT_CONSUMED_CHANCE
-## nudged by its AnimalFitness.fitness_score (see NUT_FITNESS_CHANCE_SWING).
+## nudged by its AnimalFitness.fitness_score (see NUT_FITNESS_CHANCE_SWING)
+## AND by how scarce real forage is right now (see SCARCITY_CHANCE_SWING).
 ## `forager_seed` is the squirrel's own per-individual identity seed (see
 ## CreatureMarker.wander_seed) -- fixed for that squirrel's whole life,
 ## unlike the per-pick `carrier_seed` nut_is_consumed itself rolls against.
-## Mirrors SeedEndozoochory.consumption_chance_for exactly.
-static func nut_consumption_chance_for(forager_seed: int) -> float:
+## `growth_modifier` defaults to 1.0 (no scarcity effect) so every
+## pre-existing call site keeps compiling and keeps its exact prior
+## chance, the same "safe default preserves old behavior" convention this
+## session's other seasonal-behavior phases already established. Mirrors
+## SeedEndozoochory.consumption_chance_for's own fitness-nudge shape,
+## extended with the one additional real term this module alone needs.
+static func nut_consumption_chance_for(forager_seed: int, growth_modifier: float = 1.0) -> float:
 	var fitness_score: float = _fitness.fitness_score(_fitness.phenotype_for(forager_seed))
-	return NUT_CONSUMED_CHANCE + (fitness_score - 0.5) * NUT_FITNESS_CHANCE_SWING
+	var scarcity := 1.0 - clampf(growth_modifier, 0.0, 1.0)
+	return (
+		NUT_CONSUMED_CHANCE
+		+ (fitness_score - 0.5) * NUT_FITNESS_CHANCE_SWING
+		+ scarcity * SCARCITY_CHANCE_SWING
+	)
 
 
 ## Whether THIS particular carried nut is eaten outright rather than
@@ -141,6 +169,10 @@ static func nut_consumption_chance_for(forager_seed: int) -> float:
 ## `carrier_seed` for callers that don't distinguish the two) decides WHOSE
 ## fitness nudges the chance; `carrier_seed` decides the actual roll -- kept
 ## separate so the same squirrel rolls independently for each nut it handles
-## while still using its own fixed fitness every time.
-static func nut_is_consumed(carrier_seed: int, forager_seed: int = carrier_seed) -> bool:
-	return PixelNoise.unit(carrier_seed, 0, 1) < nut_consumption_chance_for(forager_seed)
+## while still using its own fixed fitness every time. `growth_modifier`
+## defaults to 1.0 (no scarcity effect, see nut_consumption_chance_for's
+## own doc comment) so every pre-existing call site is unaffected.
+static func nut_is_consumed(
+	carrier_seed: int, forager_seed: int = carrier_seed, growth_modifier: float = 1.0
+) -> bool:
+	return PixelNoise.unit(carrier_seed, 0, 1) < nut_consumption_chance_for(forager_seed, growth_modifier)

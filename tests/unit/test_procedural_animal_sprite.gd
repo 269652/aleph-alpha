@@ -10,7 +10,7 @@ const SPECIES := ["boar", "lynx", "herbivore", "predator"]
 ## color, per CreatureRenderer's per-biome species pools.
 const NEW_SPECIES := [
 	"camel", "jackal", "reindeer", "arctic_fox", "tapir", "jaguar", "goat", "mountain_lion", "horse",
-	"deer", "bear", "lion", "wolf", "sheep"
+	"deer", "bear", "lion", "wolf", "sheep", "alpaca"
 ]
 
 ## Maps each new species to the one of the original 4 species it should share
@@ -34,6 +34,7 @@ const SHAPE_MATE := {
 	"horse": "herbivore",
 	"deer": "herbivore",
 	"sheep": "herbivore",
+	"alpaca": "herbivore",
 	"jackal": "predator",
 	"mountain_lion": "predator",
 	"wolf": "predator",
