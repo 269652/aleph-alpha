@@ -45,9 +45,12 @@ a call) rather than a continuous looping mix.
   nature/wildlife field recordings but thin on isolated Foley-style
   "footstep on X" clips. Real, licensed recordings exist for snow and for
   a real forest-floor walk (audibly including twigs/undergrowth); no
-  equally distinct one was found for grass/sand/rock/underwater despite a
-  real search effort -- see "Footsteps" below for how that gap is handled
-  without inventing a fake recording.
+  equally distinct one was found for grass/sand/rock despite a real
+  search effort -- see "Footsteps" below for how that gap is handled
+  without inventing a fake recording. `underwater` is a real exception,
+  not a gap: it reuses the ambient river-proximity layer's own genuine
+  flowing-water recording (`river.ogg`) rather than needing a fourth
+  isolated Foley clip at all.
 - **A mushroom crushed underfoot is a real, distinct event** (see
   `docs/concept/mushrooms.md`'s `CrushMechanic`), but no genuine squish/
   splat recording turned up on Commons either -- left honestly silent
@@ -76,12 +79,19 @@ classification and clip lookup:
   footprint sprite has art for. Priority mirrors that function's own
   (snow, then underwater, then biome) for intuitive consistency even
   though the two functions' surface SETS differ on purpose.
-- `clip_path_for(surface) -> String` -- `"snow"` and `"forest"` get their
-  own real recordings; everything else (including an unrecognized
-  surface) falls back to one shared, genuine walking recording
-  (`default.ogg`) rather than silence -- the same "reuse where a distinct
-  recording isn't available" shape `NatureSoundscape`'s own wind bed
-  already established for desert/tundra/mountain.
+- `clip_path_for(surface) -> String` -- `"snow"`, `"forest"`, and
+  `"underwater"` get their own real recordings; everything else (grass/
+  sand/rock, or an unrecognized surface) falls back to one shared, genuine
+  walking recording (`default.ogg`) rather than silence -- the same
+  "reuse where a distinct recording isn't available" shape
+  `NatureSoundscape`'s own wind bed already established for desert/
+  tundra/mountain. **Revised (2026-09-09):** `"underwater"` reuses
+  `river.ogg` from `NatureSoundscape`'s own asset directory rather than a
+  fourth, separately-licensed file -- reported live: "river wading should
+  be used for 'underwater walks'". The same real flowing-water recording
+  now backs both the continuous ambient river-proximity bed (heard
+  nearby) and this one-shot footstep (heard when actually standing in
+  it) -- one real asset, two real reasons to be heard.
 
 `EarthChunkManager.record_footstep` returns `{"side", "biome",
 "snow_lying", "underwater"}` (empty `Dictionary` when no real step landed
@@ -250,11 +260,18 @@ independent recording described above.
 - ✅ **Footstep SFX wired end to end**, one real distinct recording each
   for snow and forest (audibly including twigs/undergrowth), every other
   biome sharing one real generic walking recording rather than silence.
-- ⬜ **No dedicated grass/sand/rock/underwater footstep recording** --
-  a real search effort on Wikimedia Commons did not turn up usable,
-  correctly-licensed isolated candidates; they share the default clip
-  for now (see `assets/audio/footsteps/CREDITS.md`). A real upgrade if
-  sourced later, not a gap in the mixing logic itself.
+- ⬜ **No dedicated grass/sand/rock footstep recording** -- a real search
+  effort on Wikimedia Commons did not turn up usable, correctly-licensed
+  isolated candidates; they share the default clip for now (see
+  `assets/audio/footsteps/CREDITS.md`). A real upgrade if sourced later,
+  not a gap in the mixing logic itself.
+- ✅ **Revised (2026-09-09): `underwater` now has a real, distinct water
+  clip.** Reported live: "river wading should be used for 'underwater
+  walks'." Reuses `river.ogg` (the ambient river-proximity layer's own
+  genuine flowing-water recording, see "Proximity layer: `river`" in
+  `soundscape.md`) rather than a fourth, separately-licensed file --
+  walking through water no longer sounds identical to walking on dry
+  land.
 - ⬜ **No mushroom-crush recording** -- wiring is real and complete
   (`InteractionSfxPlayer.play_mushroom_crush()` fires on every real
   crush), but the clip path is honestly empty; a real, silent no-op today.

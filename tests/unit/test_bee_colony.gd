@@ -449,6 +449,39 @@ func test_abscond_to_is_a_no_op_at_an_invalid_destination():
 	assert_almost_eq(colony.population_at(from_cell), before, 0.01)
 
 
+# -- defensive backstop: a cell with no real hive must never have its own ---
+# -- honey/forage-success economy resurrected --------------------------------
+#
+# Ordinarily EarthChunkManager retargets every already-dispatched forager
+# the instant its hive relocates (see BeeForagerMarker.retarget_hive), so
+# this is not expected to fire in ordinary play -- but a forager that
+# somehow still resolves against a cell abscond_to already erased (a
+# colony lost outright after a failed relocation search, or any other
+# edge this doc has not named) must not silently bring a gone site's own
+# economy back from the dead via record_forage_result/deposit_food's own
+# `.get(cell, default)` fallback pattern.
+
+func test_record_forage_result_does_nothing_for_a_cell_with_no_real_hive():
+	var colony := _colony_with_one_hive()
+	var from_cell: Vector2i = colony.hive_cells()[0]
+	var to_cell := _a_free_cell(colony)
+	colony.abscond_to(from_cell, to_cell)
+	assert_false(colony.has_hive(from_cell), "precondition: the old site is genuinely gone")
+	var before := colony.honey_stored_at(from_cell)
+	colony.record_forage_result(from_cell, true)
+	assert_almost_eq(colony.honey_stored_at(from_cell), before, 0.001, "a gone cell's honey must not be resurrected")
+
+
+func test_deposit_food_does_nothing_for_a_cell_with_no_real_hive():
+	var colony := _colony_with_one_hive()
+	var from_cell: Vector2i = colony.hive_cells()[0]
+	var to_cell := _a_free_cell(colony)
+	colony.abscond_to(from_cell, to_cell)
+	var before := colony.honey_stored_at(from_cell)
+	colony.deposit_food(from_cell, 5.0)
+	assert_almost_eq(colony.honey_stored_at(from_cell), before, 0.001, "a gone cell's honey must not be resurrected")
+
+
 # -- swarming: overpopulation buds a new hive, mirroring AntColony ----------
 
 func test_is_overpopulated_is_false_for_a_freshly_seeded_hive():

@@ -503,7 +503,18 @@ func capacity_at(cell: Vector2i) -> float:
 ## found nectar -- mirrors AntColony.record_forage_result exactly: feeds
 ## the recent-success signal capacity_at reads, AND (a successful trip
 ## only) the real honey reserve that same capacity is now also gated by.
+##
+## Guarded on has_hive: a defensive backstop against resurrecting a gone
+## cell's own economy state (see docs/concept/bees.md's "Absconding") --
+## normally EarthChunkManager retargets every already-dispatched forager
+## the instant its hive relocates (see BeeForagerMarker.retarget_hive),
+## so this should not fire in ordinary play, but a forager that somehow
+## still resolves against a cell abscond_to already erased must not
+## silently bring its old honey/forage-success state back from the dead
+## via this method's own `.get(cell, default)` fallback pattern.
 func record_forage_result(cell: Vector2i, succeeded: bool) -> void:
+	if not has_hive(cell):
+		return
 	var current: float = _forage_success.get(cell, 0.0)
 	var target := 1.0 if succeeded else 0.0
 	_forage_success[cell] = lerpf(current, target, FORAGE_SUCCESS_EMA_RATE)
@@ -521,8 +532,14 @@ func honey_stored_at(cell: Vector2i) -> float:
 
 
 ## Adds real honey to this hive's own reserve -- mirrors
-## AntColony.deposit_food exactly.
+## AntColony.deposit_food exactly. Guarded on has_hive for the identical
+## defensive reason record_forage_result is (see that method's own doc
+## comment) -- record_forage_result's own internal call never reaches a
+## gone cell in the first place (it returns first), so this guard exists
+## for any OTHER real or future caller of deposit_food directly.
 func deposit_food(cell: Vector2i, amount: float) -> void:
+	if not has_hive(cell):
+		return
 	_food_stored[cell] = honey_stored_at(cell) + amount
 
 
