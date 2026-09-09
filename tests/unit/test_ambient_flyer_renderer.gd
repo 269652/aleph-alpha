@@ -294,6 +294,25 @@ func test_spawns_one_robin_per_rounded_unit_of_robin_population():
 	assert_eq(robins, 2)
 
 
+## A spawned sparrow must actually be wired to find flockmates (see
+## BirdFlocking, AmbientFlyerMarker.flock_world) -- the same object as
+## `scent_world`, mirroring courtship_world's own "every caller passes the
+## chunk manager... needed for a different reason, so it is named for what
+## it is used for" precedent exactly.
+func test_a_spawned_sparrow_is_wired_to_flock_with_the_scent_world():
+	var chunk := _make_chunk("grassland")
+	var world := RefCounted.new()
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, world, 0.0, 3.2
+	)
+	var checked := 0
+	for flyer in spawned:
+		if flyer.species == "sparrow":
+			assert_same(flyer.flock_world, world)
+			checked += 1
+	assert_gt(checked, 0, "precondition: at least one sparrow was spawned")
+
+
 func test_spawns_one_sparrow_per_rounded_unit_of_sparrow_population():
 	var chunk := _make_chunk("grassland")
 	var spawned := renderer.spawn_ambient_flyers(

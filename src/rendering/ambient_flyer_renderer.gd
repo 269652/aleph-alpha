@@ -808,6 +808,10 @@ func _build_marker(
 	# same object, but for spawning rather than for smelling, so it is named
 	# for what it is used for.
 	marker.courtship_world = scent_world
+	# Who to ask for nearby same-species flockmates (see BirdFlocking) --
+	# the same object again, for a third, different reason (mirrors
+	# courtship_world's own precedent exactly).
+	marker.flock_world = scent_world
 	# Remembered before anything shrinks it, so a juvenile grows toward this
 	# species' own adult size (see AmbientFlyerMarker._step_growing).
 	marker.set_adult_scale(marker.scale)
