@@ -89,15 +89,23 @@ static func clip_path_for(surface: String) -> String:
 ## A mushroom crushed underfoot (see `World`'s own `crush_mushroom_at`
 ## call site) asks for its own distinct one-shot, not the ordinary surface
 ## step sound -- "walking over a mushroom should produce a correct sound",
-## reported live as its own explicit case. A real, honest gap for now:
-## no genuine squish/crush recording turned up on Wikimedia Commons despite
-## a real search effort (its Foley/SFX coverage is thin generally -- see
-## `_CLIP_BY_SURFACE`'s own doc comment above), and forcing a mismatched
-## stand-in (a knife-chopping or door-chime sound, say) would violate this
-## project's own real-world-grounding discipline (see docs/concept/
-## soundscape.md's pillar 3) worse than leaving it silent until a genuine
-## recording -- or a session with real audio-editing tooling to cut one
-## down from a longer source -- turns up. Empty, not a placeholder path,
-## so `_play()` skips it cleanly rather than failing to load a
-## nonexistent resource.
-const MUSHROOM_CRUSH_CLIP_PATH := ""
+## reported live as its own explicit case. Left an honest empty gap for a
+## while: no genuine squish/crush recording turned up on Wikimedia Commons
+## despite a real search effort (its Foley/SFX coverage is thin generally --
+## see `_CLIP_BY_SURFACE`'s own doc comment above), and this project's own
+## real-world-grounding discipline (see docs/concept/soundscape.md's
+## pillar 3) argues against forcing an UNASKED-FOR mismatched stand-in (a
+## knife-chop, a door-chime) just to fill the slot.
+##
+## A deliberate Foley stand-in, requested directly by name ("find a
+## styrofoam crushing sound and use it for the mushroom crushing sound"),
+## is a different case -- crushed styrofoam's crunchy, slightly-compressible
+## quality is a real, established Foley substitute technique (the same
+## reasoning Foley artists reach for it in film for snow-crunch/bone-break/
+## organic-crush sounds), not an arbitrary invented mismatch. Sourced from
+## Pixabay (Pixabay Content License -- free to embed in a commercial
+## project, no attribution legally required; credited anyway in
+## assets/audio/footsteps/CREDITS.md matching this project's own
+## convention), not Wikimedia Commons -- Commons genuinely had nothing
+## for this, checked directly, not assumed.
+const MUSHROOM_CRUSH_CLIP_PATH := "res://assets/audio/footsteps/mushroom_crush.mp3"

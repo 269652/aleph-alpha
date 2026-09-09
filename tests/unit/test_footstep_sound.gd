@@ -74,11 +74,13 @@ func test_underwater_gets_a_real_distinct_water_clip_not_the_default():
 	assert_true(path.begins_with("res://"))
 
 
-## No genuine mushroom-squish recording has been sourced yet (see
-## MUSHROOM_CRUSH_CLIP_PATH's own doc comment for why forcing a mismatched
-## stand-in would be worse than an honest gap) -- pinned as empty, not a
-## nonexistent placeholder path, so a real future recording is a one-line
-## change and callers can rely on the empty-string "not sourced yet"
-## contract rather than a `load()` failure.
-func test_mushroom_crush_is_honestly_empty_until_a_real_recording_is_sourced():
-	assert_eq(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH, "")
+## Requested directly ("find a styrofoam crushing sound and use it for the
+## mushroom crushing sound") once a real Wikimedia Commons search for a
+## genuine mushroom squish/splat came up empty (see MUSHROOM_CRUSH_CLIP_
+## PATH's own doc comment) -- a deliberate, named Foley stand-in, not a
+## silent gap anymore. Pinned to the real sourced path, not just "non-empty",
+## so a future accidental revert back to "" fails loudly here.
+func test_mushroom_crush_clip_path_points_at_the_real_sourced_recording():
+	assert_eq(
+		FootstepSound.MUSHROOM_CRUSH_CLIP_PATH, "res://assets/audio/footsteps/mushroom_crush.mp3"
+	)

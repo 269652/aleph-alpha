@@ -86,13 +86,21 @@ func test_play_footstep_with_an_unheard_of_surface_still_plays_the_default_clip(
 	assert_not_null(playing_voice, "an unknown surface should still make SOME footstep sound")
 
 
-## Mushroom crush is a real, honest no-op today (see FootstepSound.
-## MUSHROOM_CRUSH_CLIP_PATH's own doc comment) -- must not error just
-## because there is nothing to play yet.
-func test_play_mushroom_crush_does_not_error_while_unsourced():
+func test_play_mushroom_crush_does_not_error():
 	add_child_autofree(player.build())
 	player.play_mushroom_crush()
-	assert_engine_error_count(0, "an unsourced one-shot should be a silent no-op, not an error")
+	assert_engine_error_count(0)
+
+
+## Mirrors test_play_footstep_loads_and_plays_the_surface_clip's own shape
+## exactly -- a real, sourced clip (see FootstepSound.MUSHROOM_CRUSH_
+## CLIP_PATH's own doc comment) must actually load and play, not just fail
+## to error.
+func test_play_mushroom_crush_loads_and_plays_the_real_clip():
+	add_child_autofree(player.build())
+	player.play_mushroom_crush()
+	var playing_voice := _find_playing_voice(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH)
+	assert_not_null(playing_voice, "expected some footstep voice to be playing the mushroom-crush clip")
 
 
 func test_play_creature_call_positions_the_voice_at_the_creatures_world_position():
