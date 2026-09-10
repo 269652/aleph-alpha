@@ -11398,6 +11398,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_sync_piece_collision(global_cell, chunk.modifications[local_cell])
 	if _roof_layer != null:
 		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
+	_TEMP_log_spawn_gap("_load_chunk %s: terrain/paint done, starting trees" % [chunk_coord])
 	_loaded_trees[chunk_coord] = _tree_renderer.spawn_trees(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	)
@@ -11410,12 +11411,14 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 			_tree_renderer.spawn_tree_at(_entities_parent, record.position, sapling_age)
 		)
 	_dispatch_cicadas(chunk_coord)
+	_TEMP_log_spawn_gap("_load_chunk %s: trees/cicadas done, starting stones" % [chunk_coord])
 
 	_loaded_stones[chunk_coord] = _stone_renderer.spawn_stones(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	) + _stone_renderer.spawn_mountain_veins(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
 	)
+	_TEMP_log_spawn_gap("_load_chunk %s: stones done, starting geology" % [chunk_coord])
 
 	# Geology (see docs/concept/geology.md): a real per-chunk topsoil/
 	# regolith Strata sim, plus the surface markers for whichever cave
@@ -11463,6 +11466,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_aquatic_invertebrates_sprites[chunk_coord] = {}
 		_sync_aquatic_invertebrate_sprites(chunk_coord)
 
+	_TEMP_log_spawn_gap("_load_chunk %s: geology/grass/aquatic done, starting crops/mushrooms" % [chunk_coord])
 	var crop_sims := {}
 	var crop_markers := {}
 	for crop_id in WILD_CROP_IDS:
@@ -11553,6 +11557,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for millipede_marker in _millipede_markers[chunk_coord]:
 		millipede_marker.setup(self)
 
+	_TEMP_log_spawn_gap("_load_chunk %s: crops/mushrooms/decomposers/caterpillars/frogs/millipedes done, starting lumberjacks/flowers" % [chunk_coord])
 	# Re-staff every Sägewerk this chunk already had persisted, before this
 	# load, with a fresh Lumberjack -- "an NPC moves in" applies just as much
 	# to a revisited worksite as a freshly-placed one (see
@@ -11665,6 +11670,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		nest_markers[nest_cell] = _spawn_wild_bee_nest_marker(_wild_bee_patches[chunk_coord], chunk_coord, nest_cell)
 	_wild_bee_nest_markers[chunk_coord] = nest_markers
 
+	_TEMP_log_spawn_gap("_load_chunk %s: lumberjacks/flowers/scrub/lichen/worms/ants/bees done, starting litter/creatures" % [chunk_coord])
 	# Fallen-leaf litter (see docs/concept/leaf_litter.md). Empty at
 	# creation -- unlike the ant mounds/earthworm burrows above, litter is
 	# never seeded up front; step_fruiting's own leaf-fall block populates it
@@ -11763,6 +11769,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_ecosystem.kingfisher_population(chunk_coord)
 	)
 
+	_TEMP_log_spawn_gap("_load_chunk %s: creatures/fish/village/flyers/piscivores done, starting settlement/rest" % [chunk_coord])
 	# Settlement build decision (see _apply_settlement_build_decision's own
 	# doc comment) runs BEFORE construction labor catch-up -- a project this
 	# call decides to abandon (double-fix cancellation) or start is resolved
