@@ -230,3 +230,70 @@ func test_loading_a_sheet_does_not_log_an_engine_warning():
 	IllustratedStoneSprite._frame_cache.clear()
 	generator.frame_for(StoneSize.CLASS_PEBBLE, 7)
 	assert_engine_error_count(0, "loading a stone sheet should not warn")
+
+
+# -- _prepared_for_slicing / _scrub_magenta_fringe performance (mirrors
+# IllustratedAnimalSprite's/IllustratedMushroomSprite's own budgeted-timing
+# tests; see docs/progress.md's "Still at 1fps" per-pixel art-loading
+# investigation, 2026-09-10, and its own "separate, unaddressed ~44s" spawn-
+# gap follow-up) -- this class's own despill loops are a SEPARATE,
+# never-fixed duplicate of the exact naive per-pixel Image.get_pixel/
+# set_pixel technique already fixed in SpriteSheetSlicer/
+# IllustratedMushroomSprite/IllustratedAnimalSprite; nothing about THOSE
+# fixes touches this file's own local reimplementation. Live-measured (a
+# --solo launch, flushed FileAccess checkpoints around World._load_chunk's
+# own phases) as a real, non-trivial slice of the first chunk a fresh game
+# loads: ~1.9s of a ~17s first-chunk cost, spent inside StoneRenderer.
+# spawn_stones/spawn_mountain_veins the moment a stone CLASS is drawn for
+# the first time anywhere in the session (_frame_cache is a `static var`,
+# keyed by sheet path -- every later stone of the same class is a cache
+# hit).
+
+## Real sheet resolution (pebbles.png, 1254x1254 -- see _SHEETS' own doc
+## comment) -- format RGB8, no alpha channel, which is the path every real
+## stone sheet takes today (see _prepared_for_slicing's own doc comment on
+## why the "already has alpha" shortcut does not apply to them). Uniform
+## non-magenta fill: this loop has no early-out or bounding box, every pixel
+## costs the same fixed handful of comparisons regardless of content, so a
+## solid fill is a faithful worst case, not an artificially easy one
+## (mirrors test_apply_chroma_key_completes_quickly_at_real_sheet_
+## resolution's own "no shortcut" reasoning in test_illustrated_animal_
+## sprite.gd).
+func test_prepared_for_slicing_completes_quickly_at_real_sheet_resolution():
+	var width := 1254
+	var height := 1254
+	var image := Image.create(width, height, false, Image.FORMAT_RGB8)
+	image.fill(Color(0.5, 0.5, 0.5))
+	var start_usec := Time.get_ticks_usec()
+	generator._prepared_for_slicing(image)
+	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
+	# 900ms: a comfortable margin above the fixed (byte-array, inlined)
+	# implementation and below the naive get_pixel/set_pixel-per-Color
+	# implementation it replaces -- see this test's own git history for the
+	# real paired measurement both sides were calibrated from.
+	assert_lt(
+		elapsed_ms, 900.0,
+		(
+			"despilling one %dx%d sheet took %.0fms -- a naive per-pixel get_pixel/set_pixel loop regressed back in"
+			% [width, height, elapsed_ms]
+		)
+	)
+
+
+## CANVAS_SIZE (32x32) -- the per-FRAME cleanup pass, called once per sliced
+## frame (up to 20 per sheet, one per variant).
+func test_scrub_magenta_fringe_completes_quickly_at_real_frame_resolution():
+	var image := Image.create(
+		IllustratedStoneSprite.CANVAS_SIZE.x, IllustratedStoneSprite.CANVAS_SIZE.y, false, Image.FORMAT_RGBA8
+	)
+	image.fill(Color(0.5, 0.5, 0.5, 1.0))
+	var start_usec := Time.get_ticks_usec()
+	generator._scrub_magenta_fringe(image)
+	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
+	assert_lt(
+		elapsed_ms, 5.0,
+		(
+			"scrubbing one %dx%d frame took %.2fms -- a naive per-pixel get_pixel/set_pixel loop regressed back in"
+			% [IllustratedStoneSprite.CANVAS_SIZE.x, IllustratedStoneSprite.CANVAS_SIZE.y, elapsed_ms]
+		)
+	)

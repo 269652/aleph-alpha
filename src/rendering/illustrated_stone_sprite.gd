@@ -240,6 +240,35 @@ func _scrub_magenta_fringe(image: Image) -> void:
 ## sheet loaded with NO alpha channel at all (FORMAT_RGB8 and similar) is,
 ## by construction, the opaque-magenta convention (see MAGENTA_RED_MIN's own
 ## doc comment) -- every near-magenta pixel in it gets punched to alpha=0.
+## Reported live (see docs/progress.md's "Still at 1fps" per-pixel
+## art-loading investigation, 2026-09-10, and its own "separate,
+## unaddressed ~44s" spawn-gap follow-up): this was a plain GDScript double
+## `for` calling `Image.get_pixel`/`set_pixel` once per pixel -- for a real
+## 1254x1254 sheet (pebbles.png/boulders.png), well over 1.5 million
+## interpreted per-pixel calls, each allocating/comparing a Color object.
+## SpriteSheetSlicer.chroma_keyed/_clear_background and
+## IllustratedAnimalSprite._apply_chroma_key already carried this exact fix
+## for their own separate duplicates of this same technique; this is that
+## same fix ported to THIS class's own copy, which had been missed (it does
+## not go through SpriteSheetSlicer at all, so their fix never reached it).
+## Rewritten as one pass over the image's own raw PackedByteArray (RGBA8 is
+## exactly 4 bytes/pixel, in R,G,B,A order): comparing/computing in scaled
+## byte space (every 0.0-1.0 float threshold/margin constant here is used
+## as `constant * 255.0`) is exact, since linear comparison/subtraction/
+## clamping all commute with a uniform positive scale -- and reproduces
+## `_despilled`'s own float math exactly, just computed on 0-255 values
+## instead of 0.0-1.0 ones. The magenta branch only zeroes the ALPHA byte
+## (matching `Color(pixel.r, pixel.g, pixel.b, 0.0)` below -- r/g/b are
+## deliberately preserved, unlike `_scrub_magenta_fringe`'s own magenta
+## branch, which zeroes all four). The whole per-pixel check stays inlined
+## directly in the loop, calling only cheap built-in globals (`roundi`/
+## `clampi`/`minf`) -- NOT factored into a separate per-pixel helper
+## function, which measures SLOWER than the original get_pixel version at
+## this project's real sheet sizes, not faster (see
+## SpriteSheetSlicer._clear_background's own doc comment). See
+## test_prepared_for_slicing_completes_quickly_at_real_sheet_resolution
+## (tests/unit/test_illustrated_stone_sprite.gd) for the budgeted timing pin
+## this now has to keep passing.
 func _prepared_for_slicing(image: Image) -> Image:
 	var had_alpha_channel := image.get_format() in [
 		Image.FORMAT_RGBA8, Image.FORMAT_RGBAF, Image.FORMAT_RGBAH, Image.FORMAT_LA8
@@ -252,19 +281,32 @@ func _prepared_for_slicing(image: Image) -> Image:
 		prepared.convert(Image.FORMAT_RGBA8)
 	if had_alpha_channel:
 		return prepared
-	for y in prepared.get_height():
-		for x in prepared.get_width():
-			var pixel := prepared.get_pixel(x, y)
-			if _is_magenta(pixel):
-				prepared.set_pixel(x, y, Color(pixel.r, pixel.g, pixel.b, 0.0))
-			else:
-				# Despill BEFORE the slicer crops/resizes: cleaning the
-				# source first means far less magenta-tinted colour is left
-				# for the later crop+Lanczos resize to blend/ring at edges
-				# in the first place (see MAGENTA_CAST_MARGIN's own doc
-				# comment).
-				prepared.set_pixel(x, y, _despilled(pixel))
-	return prepared
+	# Despill BEFORE the slicer crops/resizes: cleaning the source first
+	# means far less magenta-tinted colour is left for the later
+	# crop+Lanczos resize to blend/ring at edges in the first place (see
+	# MAGENTA_CAST_MARGIN's own doc comment).
+	var width := prepared.get_width()
+	var height := prepared.get_height()
+	var data := prepared.get_data()
+	var red_min_byte := MAGENTA_RED_MIN * 255.0
+	var blue_min_byte := MAGENTA_BLUE_MIN * 255.0
+	var green_max_byte := MAGENTA_GREEN_MAX * 255.0
+	var cast_margin_byte := MAGENTA_CAST_MARGIN * 255.0
+	var i := 0
+	for _pixel in width * height:
+		var r := float(data[i])
+		var g := float(data[i + 1])
+		var b := float(data[i + 2])
+		if r >= red_min_byte and b >= blue_min_byte and g <= green_max_byte:
+			data[i + 3] = 0
+		else:
+			var cast: float = minf(r - g, b - g)
+			if cast > cast_margin_byte:
+				var removed := cast - cast_margin_byte
+				data[i] = clampi(roundi(r - removed), 0, 255)
+				data[i + 2] = clampi(roundi(b - removed), 0, 255)
+		i += 4
+	return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
 
 
 static func _is_magenta(color: Color) -> bool:

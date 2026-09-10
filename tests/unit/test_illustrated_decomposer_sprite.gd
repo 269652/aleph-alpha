@@ -178,3 +178,80 @@ func _opaque_width(image: Image) -> float:
 				min_x = mini(min_x, x)
 				max_x = maxi(max_x, x)
 	return float(max_x - min_x + 1)
+
+
+# -- _prepared_for_slicing / _despill_image performance (mirrors
+# IllustratedStoneSprite's own budgeted-timing tests; see docs/progress.md's
+# "Still at 1fps" per-pixel art-loading investigation, 2026-09-10, and its
+# own "separate, unaddressed ~44s" spawn-gap follow-up) -- this class's own
+# despill loops are a SEPARATE, never-fixed duplicate of the exact naive
+# per-pixel Image.get_pixel/set_pixel technique already fixed in
+# SpriteSheetSlicer/IllustratedMushroomSprite/IllustratedAnimalSprite/
+# IllustratedStoneSprite; nothing about THOSE fixes touches this file's own
+# local reimplementation. Live-measured as a real, non-trivial slice of the
+# first chunk a fresh game loads, inside the crops/mushrooms/decomposers/
+# caterpillars/frogs/millipedes bundle of World._load_chunk -- and
+## _despill_image's own CANVAS_SIZE (340x300) is ~100x IllustratedStoneSprite's
+# (32x32), so this is plausibly the LARGER of the two per-frame costs despite
+# sharing the same technique.
+
+## Real sheet resolution (ant.png, 1698x926 -- see _SHEETS' own doc comment).
+## Both sheets measure fully OPAQUE (alpha channel present but always 1.0,
+## see _MAGENTA_RED_MIN's own doc comment) -- unlike IllustratedStoneSprite,
+## there is no "already has real alpha" shortcut here, every pixel is always
+## checked. Uniform non-magenta fill: no early-out or bounding box, so a
+## solid fill is a faithful worst case (same reasoning as
+## IllustratedStoneSprite's own equivalent test).
+func test_prepared_for_slicing_completes_quickly_at_real_sheet_resolution():
+	var width := 1698
+	var height := 926
+	var image := Image.create(width, height, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0.5, 0.5, 0.5, 1.0))
+	var start_usec := Time.get_ticks_usec()
+	sprite._prepared_for_slicing(image)
+	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
+	# 850ms: this dev machine showed real contention noise wide enough that
+	# a single-run absolute number alone was not trustworthy (the SAME fixed
+	# code measured 220-786ms across separate isolated runs) -- calibrated
+	# instead from 3 paired naive-vs-fixed rounds run back-to-back in one
+	# process each (canceling cross-run contention, same technique
+	# IllustratedAnimalSprite's own fix used): naive 1939-1975ms, fixed
+	# 722-786ms every round. 850ms sits above every fixed round and below
+	# every naive one, including this file's own earlier isolated-run
+	# outliers (fixed as low as 220ms; naive as low as 899ms) on both sides.
+	assert_lt(
+		elapsed_ms, 850.0,
+		(
+			"despilling one %dx%d sheet took %.0fms -- a naive per-pixel get_pixel/set_pixel loop regressed back in"
+			% [width, height, elapsed_ms]
+		)
+	)
+
+
+## CANVAS_SIZE (340x300 -- far larger than IllustratedStoneSprite's 32x32,
+## since decomposer art normalizes onto a bigger native canvas, see
+## CANVAS_SIZE's own doc comment) -- the per-FRAME cleanup pass, called once
+## per sliced frame across every action band (walk/carry/idle for ant,
+## walk/idle for bug; 6 frames per band, see test_generate_textures_
+## returns_six_walk_frames_for_ant).
+func test_despill_image_completes_quickly_at_real_frame_resolution():
+	var image := Image.create(
+		IllustratedDecomposerSprite.CANVAS_SIZE.x, IllustratedDecomposerSprite.CANVAS_SIZE.y, false, Image.FORMAT_RGBA8
+	)
+	image.fill(Color(0.5, 0.5, 0.5, 1.0))
+	var start_usec := Time.get_ticks_usec()
+	sprite._despill_image(image)
+	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
+	# 65ms: same paired-measurement calibration as
+	# test_prepared_for_slicing_completes_quickly_at_real_sheet_resolution
+	# above -- 3 paired rounds measured naive 74.6-87.7ms, fixed 21.4-27.8ms
+	# every round, comfortably clearing this budget on both sides even
+	# against this file's own noisier single-run outliers (fixed as high as
+	# 62.5ms in one contended full-suite run).
+	assert_lt(
+		elapsed_ms, 65.0,
+		(
+			"despilling one %dx%d frame took %.1fms -- a naive per-pixel get_pixel/set_pixel loop regressed back in"
+			% [IllustratedDecomposerSprite.CANVAS_SIZE.x, IllustratedDecomposerSprite.CANVAS_SIZE.y, elapsed_ms]
+		)
+	)
