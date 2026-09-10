@@ -3484,6 +3484,120 @@ each time, without changing the underlying shape of "a long-played
 save accumulates enough live entities that even bug-free per-instance
 costs sum to something real."
 
+### FPS regression round 9: World._client_process's own fourfold redundant creature-group fetch -- real, but honestly NOT confirmed as the dominant cost (2026-09-10)
+
+Reported live: *"Can you fix the 10fps issue and bring it back to 30+?"*
+A materially different investigation from rounds 3-8 above, and said so
+honestly rather than dressed up to match them: those rounds each used
+real, live `PerfProbe`-style instrumentation inside an actual running
+session to get a percentage breakdown BEFORE naming a root cause. This
+round could not -- the one live instance available to check against
+(launched moments before the report) accumulated CPU extremely fast
+(161s of CPU time across ~35s of wall clock -- genuinely working, not
+hung) and then vanished entirely before a second check, most likely
+closed by whoever was watching it rather than a crash; the machine was
+also independently confirmed, at the exact time of the report, to be
+running several OTHER concurrent Claude sessions each having already
+burned 100-638+ CPU-seconds of their own -- exactly the "a live fps
+number is meaningless while another run shares the machine" condition
+this doc's own FPS-regression investigations have hit before (see
+[[fps-regression-investigation-and-fixes]]). No clean, isolated repro
+was available, so this round is source-reading plus targeted
+measurement, not a live percentage breakdown -- and its own conclusion
+reflects that lower confidence rather than overstating it.
+
+**A real, concrete finding from reading `_client_process` directly:**
+FOUR separate, un-throttled calls to `get_tree().get_nodes_in_group(
+CreatureMarker.GROUP_NAME)` in one frame -- one each for the river-wader
+position scan, the per-creature snow-tread pass, the per-creature
+footstep pass (added in an earlier session this same day), and the
+per-creature crush pass -- each independently re-fetching the identical
+list of every loaded creature. Structurally the same "many call sites
+redundantly repeat an identical whole-population fetch, accumulated one
+small addition at a time across many sessions" shape rounds 4/5/7/8
+above already closed elsewhere, here spread across four call sites
+within a single function instead of hiding inside one marker class's
+own `_process`. `EarthChunkManager.crush_ants_near`'s own doc comment
+(see that function directly) already documents a directly analogous,
+CONFIRMED prior regression in this exact neighbourhood -- an unscoped
+whole-world mound scan inside this same creature-crush pass, measured
+at 25-31ms/frame before being fixed -- which is what made this specific
+redundancy worth chasing down at all, even without a fresh live
+measurement of its own.
+
+**The hypothesis this most directly suggested was checked and ruled
+out.** `crush_ants_near`'s own historical fix (bounding the scan to a
+3x3 chunk neighbourhood around the stepped-on tile) and
+`_crush_markers_near`'s shared body (a direct chunk-keyed dictionary
+lookup, scanning only that one chunk's own tracked markers) are BOTH
+already correctly bounded -- read directly, not assumed. Neither the
+worm/caterpillar/millipede/ant/decomposer crush path does an unscoped
+whole-world scan today; that specific historical bug shape is not
+what's happening here.
+
+**The fourfold group-fetch itself was measured, not assumed to be
+expensive -- and turned out NOT to be the dominant cost.** A synthetic
+probe (real `SceneTree.get_nodes_in_group`, a realistic 100-1000 node
+population in the right group, 200 timed iterations each) measured a
+single fetch at ~0.2-0.4us even at 1000 nodes, and four redundant
+fetches back to back at ~0.8-1.6us -- so eliminating the redundancy
+saves roughly **0.6-1.2 microseconds per frame**. Nowhere close to the
+~66ms/frame a genuine 30fps-to-10fps drop needs. Reported plainly
+rather than quietly dropped: this round's own headline fix does not, by
+itself, explain the reported symptom's full magnitude.
+
+**Fixed anyway -- a real, safe, well-tested redundancy, just not
+(alone) THE fix.** `loaded_creature_markers` is now fetched exactly
+once per `_client_process` call and reused by all three remaining
+consumers (the fourth, the wader-position scan, was always going to be
+one of the three anyway). The snow-tread and footstep loops -- already
+textually adjacent with nothing between them, neither reading the
+other's output -- are merged into one shared iteration, a zero-
+reordering-risk consolidation. The crush loop's own POSITION is
+deliberately left untouched, still after the player-only crush block:
+merging it in too would mean reordering across that block, which
+`test_world_crush_wiring.gd`'s own Karma-charging tests depend on
+staying exactly where it is -- a small, real behavioural risk this
+round chose not to take for an already-measured-negligible gain.
+
+**Strict TDD**, and note that several existing tests' own POSITION-
+FINDING technique had to change, not just the tests' expected values:
+`test_world_crush_wiring.gd`'s Karma-ordering tests used `rfind` to
+locate the LAST of what used to be four separate `get_nodes_in_group`
+occurrences, as a proxy for "the crush loop's own position" -- a
+technique that inherently depends on the exact redundancy this round
+removes. Updated to anchor on the loop's own header text
+(`for creature in loaded_creature_markers:`) instead, which still
+correctly resolves to the crush loop specifically (the last such
+occurrence) without depending on a now-fixed duplication to count.
+`test_world_footstep_wiring.gd` needed zero changes -- none of its own
+tests happened to reference `get_nodes_in_group` text directly. New
+`test_world_creature_scan_consolidation.gd` (4/4) is the direct
+regression guard: exactly one real fetch, the cached list reused by
+exactly three loops, snow-tread/footstep genuinely merged, and the
+crush loop's position relative to the player-only block unchanged.
+35/35 across the four affected `test_world_*.gd` files combined.
+
+**Also found, unrelated, flagged rather than fixed here**: a full
+`test_world_*.gd` sweep (36 files, 259 tests) surfaced exactly one
+pre-existing, unrelated failure in `test_world_nature_soundscape_
+fanout.gd` -- a source-text test broken by a call it searches for
+having been reformatted across multiple lines elsewhere, the same
+class of bug this project has hit and fixed before. Confirmed (by
+diffing this round's own change against the function in question) to
+be completely untouched by this round's edits; spun off as its own
+follow-up rather than folded in here.
+
+**Honestly open**: whether this round's fix, combined with whatever
+else is running on a real, uncontended machine, actually closes the
+reported 10fps-to-30fps gap is NOT confirmed -- the evidence points
+more toward machine contention being a real, possibly dominant factor
+at the moment of the report than toward a single remaining code bug.
+A genuine next step, if the symptom recurs on a quiet machine: a live
+`--solo` session with real `PerfProbe`-style instrumentation added to
+`_client_process` itself (mirroring rounds 3-8's own method exactly),
+which this round did not have a clean opportunity to run.
+
 ### In-flight foragers survive an unload; their trip's outcome does not (2026-09-09)
 
 The ant side of `bees.md`'s own identical section, by that exact name --
