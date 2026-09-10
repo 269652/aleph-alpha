@@ -88,12 +88,31 @@ func test_the_soundscape_update_reuses_the_same_snowing_flag_as_the_rain_overlay
 ## (see docs/concept/soundscape.md) needs the player's own real distance
 ## to the nearest water, from the SAME EarthChunkManager the biome lookup
 ## right above already reads, not a second, independent water check.
+##
+## The raw scan is throttled: cached into _cached_water_distance_tiles
+## BEFORE _nature_soundscape.update() is ever called, not evaluated as a
+## live call-argument (see WATER_PROXIMITY_REFRESH_INTERVAL's own doc
+## comment -- a real "Still at 1fps" fix). So this checks both halves
+## separately instead of expecting the raw call inline in update()'s own
+## argument list: the cache is fed by the chunk manager's own real scan
+## (tolerating that call's args wrapping across lines, the same as
+## test_world_footstep_wiring.gd's multi-arg calls do), and update()
+## actually consumes that cache rather than re-deriving it.
 func test_the_soundscape_update_passes_the_real_water_distance():
 	var body := _function_body("_client_process")
+	var cache_assignment := body.find(
+		"_cached_water_distance_tiles = _chunk_manager.nearest_water_distance_tiles("
+	)
+	assert_gt(cache_assignment, -1, "the cached water distance must come from the chunk manager's own real scan")
+	var scan_call := body.substr(cache_assignment)
+	var scan_args := scan_call.substr(0, scan_call.find(")"))
+	assert_string_contains(scan_args, "player_tile.x")
+	assert_string_contains(scan_args, "player_tile.y")
+
 	var soundscape_call := body.find("_nature_soundscape.update(")
 	assert_gt(soundscape_call, -1)
 	assert_string_contains(
 		body.substr(soundscape_call),
-		"_chunk_manager.nearest_water_distance_tiles(player_tile.x, player_tile.y)",
-		"must pass the player's own real water distance through to the soundscape"
+		"_cached_water_distance_tiles",
+		"must pass the player's own real (cached) water distance through to the soundscape"
 	)
