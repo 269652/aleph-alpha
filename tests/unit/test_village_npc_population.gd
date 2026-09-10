@@ -148,8 +148,16 @@ func test_villagers_are_not_visually_identical_clones():
 ## producer, which schedule entry happens to be active, or what the
 ## freshly-empty VillageMarket holds -- no eyeballed number, pinned directly
 ## against the real tested constants it depends on.
+##
+## _MAX_SAFE_SIMULATED_SECONDS can't be a `const`: since ethogram.md slice 3
+## (docs/concept/ethogram.md), NpcNeeds.HUNGRY_THRESHOLD/START_STAGGER/
+## HUNGER_RATE_PER_SECOND are `static var`s computed from Ethogram.drive_
+## profile(), not compile-time constants, so folding them into a const here
+## fails to parse ("Assigned value for constant ... isn't a constant
+## expression"). `static var` mirrors NpcNeeds' own fix for the identical
+## problem: still computed once and shared, just not compile-time.
 const SIMULATED_SECONDS := 1.5
-const _MAX_SAFE_SIMULATED_SECONDS := (NpcNeeds.HUNGRY_THRESHOLD - NpcNeeds.START_STAGGER) / NpcNeeds.HUNGER_RATE_PER_SECOND
+static var _MAX_SAFE_SIMULATED_SECONDS: float = (NpcNeeds.HUNGRY_THRESHOLD - NpcNeeds.START_STAGGER) / NpcNeeds.HUNGER_RATE_PER_SECOND
 const STEPS := 15
 const STEP_DELTA := SIMULATED_SECONDS / STEPS
 
