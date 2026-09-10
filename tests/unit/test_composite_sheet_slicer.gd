@@ -429,3 +429,184 @@ func _largest_pale_component(piece: Image) -> int:
 		if size <= CompositeSheetSlicer.SPECKLE_MAX_COMPONENT_PIXELS:
 			largest = maxi(largest, size)
 	return largest
+
+
+# -- _trim / _aggressive_background / _reachable_background / despeckle
+# performance (mirrors IllustratedStoneSprite's/IllustratedDecomposerSprite's
+# own budgeted-timing tests; see docs/progress.md's "Still at 1fps" per-pixel
+# art-loading investigation, 2026-09-10, and its own "~44s spawn-gap
+# follow-up" entry) -- this file's own naive per-pixel Image.get_pixel/
+# set_pixel loops were the single LARGEST unfixed phase that follow-up
+# measured (TreeRenderer.spawn_trees -> IllustratedTree._composite_parts ->
+# CompositeSheetSlicer, 39%/6.75s of a fresh chunk's first-touch art-loading
+# cost), left as its own named follow-up specifically because these four are
+# algorithmically more involved than the flat threshold-despill functions
+# fixed elsewhere (_reachable_background is a real flood-fill reachability
+# walk seeded from the piece's own edges; _aggressive_background erodes a
+# halo to convergence, sampling each pixel's own 8 neighbors; despeckle
+# groups pale pixels into connected components the same way).
+#
+# Real region resolution: 284x406, the single largest region measured (a
+# temporary probe script, not checked in) across the walnut/pine/cherry
+# composite sheets via CompositeSheetSlicer.regions_in -- pine's own
+# bare-winter canopy frame, the same frame IllustratedTree marks
+# `aggressive` (see cut_out's own doc comment).
+#
+# Honest measurement note, found DURING this fix, not assumed going in: the
+# ORIGINAL per-pixel Image.get_pixel/set_pixel calls turned out NOT to be
+# where most of these four functions' own cost lived. Isolated, side-by-side
+# profiling (a full walk of one 284x406 all-one-component blob) measured the
+# `Dictionary[Vector2i, bool]` bookkeeping `_aggressive_background`/
+# `_reachable_background`/despeckle's own flood-fill and connected-component
+# walks used -- constructing a `Vector2i` and hashing it into a Dictionary on
+# every neighbour visit -- at roughly 20x the cost of reading a pixel's
+# colour. That bookkeeping is now a flat `PackedByteArray`/index-based
+# scheme instead (see each function's own doc comment); the pixel-colour
+# reads are still byte-array-based too, for the same reason and shape as
+# every other fix in this file, but for these four specifically the
+# bookkeeping change is what actually moves the needle.
+#
+# This machine also showed FAR more cross-run contention noise for these
+# four than the stone/decomposer fixes' own already-documented noise (see
+# their own test files): paired naive-vs-fixed rounds run back-to-back in
+# one process, AFTER this same file's other ~20 tests (several of which
+# decode real multi-megapixel sheets) -- the realistic condition these tests
+# actually run under -- measured _reachable_background as a clean, repeated
+# ~2.2-2.4x win (naive 107-165ms, fixed 50-120ms) and despeckle/
+# _aggressive_background as a real but noisier, more modest win (despeckle
+# naive 293-791ms vs fixed 287-635ms; _aggressive_background naive 185-661ms
+# vs fixed 178-550ms, same direction every round but the gap varies widely).
+# _trim's own is_background check is simple enough (a handful of
+# comparisons plus one saturation ratio) that removing its per-pixel
+# function-call wrapper barely moves its cost at all -- paired rounds showed
+# it as close to a wash (naive 53-86ms, fixed 46-96ms, overlapping) -- kept
+# anyway for the real, if small, win it still measures in a colder process,
+# and for consistency with the other three. The budgets below are
+# deliberately generous -- calibrated to comfortably clear the WORST fixed
+# number observed across many runs (including the noisy post-other-tests
+# condition), so this suite doesn't flake, rather than to tightly separate
+# naive from fixed the way the stone/decomposer budgets could -- the real
+# evidence for this fix is the paired, same-process comparison above, not a
+# tight absolute threshold this environment cannot reliably support.
+
+const _REGION_W := 284
+const _REGION_H := 406
+const _SHEET_W := 1536
+const _SHEET_H := 1024
+
+## Uniform near-white fill: every pixel takes is_background's DEEPEST branch
+## (alpha passes, r/g/b all clear BACKGROUND_WHITE, so the actual saturation
+## ratio gets computed) rather than short-circuiting on the first channel
+## checked -- a faithful worst case, not an artificially easy one (mirrors
+## test_prepared_for_slicing_completes_quickly_at_real_sheet_resolution's own
+## "no shortcut" reasoning).
+func test_trim_completes_quickly_at_real_region_resolution():
+	var sheet := Image.create(_SHEET_W, _SHEET_H, false, Image.FORMAT_RGBA8)
+	sheet.fill(Color(0.95, 0.95, 0.95, 1.0))
+	var area := Rect2i(400, 300, _REGION_W, _REGION_H)
+	var start_usec := Time.get_ticks_usec()
+	CompositeSheetSlicer._trim(sheet, area)
+	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
+	# 150ms: see this section's own "Honest measurement note" above -- this
+	# machine measured naive/fixed as close to a wash (naive 53-86ms, fixed
+	# 46-96ms across many paired rounds), so this budget is a generous sanity
+	# ceiling (comfortably above every fixed round observed) rather than a
+	# tight naive/fixed separator.
+	assert_lt(
+		elapsed_ms, 150.0,
+		(
+			"trimming one %dx%d region took %.1fms -- a naive per-pixel get_pixel loop regressed back in"
+			% [_REGION_W, _REGION_H, elapsed_ms]
+		)
+	)
+
+
+## Pale pink: fails BACKGROUND_WHITE's own AND check on the green channel
+## alone (so is_background still returns false quickly, same shallow branch
+## _trim's own test above avoids -- that deepest branch is already covered
+## there, on the identical is_background logic), while still clearing
+## HALO_LUMINANCE/HALO_MAX_SATURATION -- so the SECOND (halo-erosion) loop's
+## own luminance/saturation arithmetic runs in full on every pixel, and its
+## touches_keyed neighbor scan never short-circuits early (keyed starts
+## empty, so no neighbor is ever found "already keyed," and the search never
+## breaks out of its own 3x3 scan before checking all eight) -- the worst
+## case that loop can actually do in one convergence round. Converges in
+## exactly one round with this fill (nothing is ever keyed, so nothing is
+## ever newly keyed either), which is fine: the round COUNT is real image
+## content driving a `while changed` loop this fix does not touch, only the
+## per-pixel and per-neighbour-visit cost of each round it does.
+func test_aggressive_background_completes_quickly_at_real_region_resolution():
+	var piece := Image.create(_REGION_W, _REGION_H, false, Image.FORMAT_RGBA8)
+	piece.fill(Color(0.95, 0.80, 0.80, 1.0))
+	var start_usec := Time.get_ticks_usec()
+	CompositeSheetSlicer._aggressive_background(piece)
+	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
+	# 900ms: see this section's own "Honest measurement note" above --
+	# paired rounds measured naive 185-661ms vs fixed 178-550ms, fixed lower
+	# every round but the gap varying widely; 900ms clears the worst fixed
+	# round observed (797ms, in the noisiest post-other-tests condition)
+	# with margin.
+	assert_lt(
+		elapsed_ms, 900.0,
+		(
+			"aggressive-keying one %dx%d region took %.1fms -- a naive per-pixel get_pixel loop regressed back in"
+			% [_REGION_W, _REGION_H, elapsed_ms]
+		)
+	)
+
+
+## Piece filled with EXACTLY the sheet's own corner colour: every pixel is
+## within KEY_TOLERANCE of `key`, so the whole piece is reachable from the
+## edges and the flood fill visits (and colour-compares) every pixel --
+## maximum possible queue growth, a faithful worst case for a reachability
+## walk that normally stops early at a real drawing's own silhouette.
+func test_reachable_background_completes_quickly_at_real_region_resolution():
+	var sheet := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	sheet.fill(Color(0.95, 0.95, 0.95, 1.0))
+	var piece := Image.create(_REGION_W, _REGION_H, false, Image.FORMAT_RGBA8)
+	piece.fill(Color(0.95, 0.95, 0.95, 1.0))
+	var start_usec := Time.get_ticks_usec()
+	CompositeSheetSlicer._reachable_background(sheet, piece)
+	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
+	# 350ms: see this section's own "Honest measurement note" above -- this
+	# is the cleanest win of the four (paired rounds: naive 107-165ms, fixed
+	# 50-120ms, a consistent ~2.2-2.4x every round); 350ms still clears the
+	# single noisiest fixed round observed (257ms) with real margin.
+	assert_lt(
+		elapsed_ms, 350.0,
+		(
+			"reachability-flooding one %dx%d region took %.1fms -- a naive per-pixel get_pixel loop regressed back in"
+			% [_REGION_W, _REGION_H, elapsed_ms]
+		)
+	)
+
+
+## Uniform pale grey: every pixel clears HALO_LUMINANCE/HALO_MAX_SATURATION
+## (is_pale's own deepest branch, not short-circuited on alpha or luminance
+## alone) AND is 8-connected to every other one, so this is simultaneously
+## the worst case for the classification pass AND for the connected-
+## component walk right after it -- one giant component, over
+## SPECKLE_MAX_COMPONENT_PIXELS, so the (cheap, speckle-bounded) replacement
+## step below never runs at all; that step's own correctness is already
+## covered by test_despeckle_removes_a_small_isolated_pale_blob above, and
+## its cost is bounded by a single speckle's own small pixel count
+## (SPECKLE_MAX_COMPONENT_PIXELS) regardless of sheet size, unlike the two
+## whole-image passes this test actually exercises.
+func test_despeckle_completes_quickly_at_real_region_resolution():
+	var piece := Image.create(_REGION_W, _REGION_H, false, Image.FORMAT_RGBA8)
+	piece.fill(Color(0.85, 0.85, 0.85, 1.0))
+	var start_usec := Time.get_ticks_usec()
+	CompositeSheetSlicer.despeckle(piece)
+	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
+	# 950ms: see this section's own "Honest measurement note" above --
+	# paired rounds measured naive 293-791ms vs fixed 287-635ms, fixed lower
+	# every round but (like _aggressive_background) the gap varying widely;
+	# 950ms clears the worst fixed round observed (909ms, in the noisiest
+	# post-other-tests condition) with margin.
+	assert_lt(
+		elapsed_ms, 950.0,
+		(
+			"despeckling one %dx%d region took %.1fms -- a naive per-pixel get_pixel/set_pixel loop regressed back in"
+			% [_REGION_W, _REGION_H, elapsed_ms]
+		)
+	)

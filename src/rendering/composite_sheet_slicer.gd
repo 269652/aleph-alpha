@@ -520,25 +520,86 @@ static func _merge_touching(
 
 ## Shrinks a region to its content at full resolution, so a drawing's box is
 ## the drawing and not whatever margin the coarse pass left around it.
+##
+## Reported live (see docs/progress.md's "Still at 1fps" per-pixel
+## art-loading investigation, 2026-09-10, and its own "~44s spawn-gap
+## follow-up"): a plain GDScript double `for` calling
+## `is_background(sheet.get_pixel(x, y))` once per pixel -- called once per
+## found region (up to ~30/sheet), each over that region's own real box.
+## Rewritten as one pass over a raw PackedByteArray, is_background's own
+## check inlined with no per-pixel helper function call -- the identical
+## shape SpriteSheetSlicer._clear_background/content_rect and
+## IllustratedStoneSprite/IllustratedDecomposerSprite's own
+## _prepared_for_slicing already carry, ported here (see this file's own
+## despeckle for the fuller version of this same reasoning; not repeated at
+## every call site). BACKGROUND_ALPHA/BACKGROUND_WHITE are used as
+## `constant * 255.0` byte thresholds; BACKGROUND_MAX_SATURATION is a RATIO
+## of two already-scaled byte values and needs no rescaling of its own --
+## same reasoning as every other saturation-style ratio check in this
+## codebase (see SpriteSheetSlicer.content_rect's own DIVIDER_MAX_SATURATION
+## comparison).
+##
+## Reads via `sheet.get_region(clipped)` FIRST rather than calling
+## `get_data()` directly on `sheet` -- measured directly, isolated: `sheet`
+## is the FULL composite sheet (1536x1024, this file's own measured real
+## dimension) but `area` is only ever one blob's own bounding box (measured
+## up to 284x406 -- see regions_in's own doc comment), so `get_data()` on the
+## whole sheet copies out its entire ~6.3MB byte buffer on EVERY call (up to
+## ~30/sheet, once per found region) regardless of how small the box being
+## trimmed is -- that copy cost alone ate essentially all of this fix's own
+## win when first tried directly on `sheet` (measured ~23-32ms either way,
+## barely distinguishable from the naive get_pixel version it was meant to
+## replace). Cropping to `clipped` first, THEN reading that small piece's own
+## byte array, copies only the region's own bytes -- content_rect/
+## _clear_background get away with reading their own `image` argument
+## directly because callers there already hand them a small per-frame image,
+## not a whole multi-megapixel sheet; `_trim`'s own `sheet` argument is never
+## that small, so it needs the extra crop step those functions don't.
+## See test_trim_completes_quickly_at_real_region_resolution for the
+## budgeted timing pin this now has to keep passing.
 static func _trim(sheet: Image, area: Rect2i) -> Rect2i:
 	var clipped := area.intersection(Rect2i(0, 0, sheet.get_width(), sheet.get_height()))
 	if clipped.size.x <= 0 or clipped.size.y <= 0:
 		return Rect2i(area.position, Vector2i.ZERO)
-	var left: int = clipped.position.x + clipped.size.x
-	var right: int = clipped.position.x - 1
-	var top: int = clipped.position.y + clipped.size.y
-	var bottom: int = clipped.position.y - 1
-	for y in range(clipped.position.y, clipped.position.y + clipped.size.y):
-		for x in range(clipped.position.x, clipped.position.x + clipped.size.x):
-			if is_background(sheet.get_pixel(x, y)):
-				continue
-			left = mini(left, x)
-			right = maxi(right, x)
-			top = mini(top, y)
-			bottom = maxi(bottom, y)
+	var piece := sheet.get_region(clipped)
+	if piece.get_format() != Image.FORMAT_RGBA8:
+		piece.convert(Image.FORMAT_RGBA8)
+	var width := piece.get_width()
+	var height := piece.get_height()
+	var data := piece.get_data()
+	var bg_alpha_min_byte := BACKGROUND_ALPHA * 255.0
+	var bg_white_min_byte := BACKGROUND_WHITE * 255.0
+	# Local to `piece` (0-based), translated back to `sheet` space (by adding
+	# clipped.position) only once, at the very end.
+	var left: int = width
+	var right: int = -1
+	var top: int = height
+	var bottom: int = -1
+	var idx := 0
+	for y in height:
+		for x in width:
+			var is_bg := true
+			if float(data[idx + 3]) >= bg_alpha_min_byte:
+				var r := data[idx]
+				var g := data[idx + 1]
+				var b := data[idx + 2]
+				if r < bg_white_min_byte or g < bg_white_min_byte or b < bg_white_min_byte:
+					is_bg = false
+				else:
+					var mx := maxi(maxi(r, g), b)
+					var mn := mini(mini(r, g), b)
+					is_bg = mx == 0 or float(mx - mn) / float(mx) <= BACKGROUND_MAX_SATURATION
+			if not is_bg:
+				left = mini(left, x)
+				right = maxi(right, x)
+				top = mini(top, y)
+				bottom = maxi(bottom, y)
+			idx += 4
 	if right < left or bottom < top:
 		return Rect2i(clipped.position, Vector2i.ZERO)
-	return Rect2i(left, top, right - left + 1, bottom - top + 1)
+	return Rect2i(
+		clipped.position.x + left, clipped.position.y + top, right - left + 1, bottom - top + 1
+	)
 
 
 ## Reading order: down the page, and left to right within a band. Two regions
@@ -683,73 +744,159 @@ const HALO_MAX_SATURATION := 0.2
 ## whether reachable from the edge or not, plus its anti-aliased halo --
 ## see the "aggressive" doc comment on `cut_out` above for why this is only
 ## ever safe to call on the bare-winter frame.
-static func _aggressive_background(piece: Image) -> Dictionary:
-	var wide := piece.get_width()
-	var high := piece.get_height()
-	var keyed := {}
+##
+## Returns a flat `PackedByteArray` MASK (1 byte per pixel, indexed
+## `y * width + x`, 1 = keyed/background) rather than a
+## `Dictionary[Vector2i, bool]` -- see this file's own performance doc
+## comment on despeckle below for why (measured directly, not assumed): the
+## coordinate bookkeeping this function's own flood/erosion logic needs, not
+## the pixel-colour reading, turned out to be the dominant cost, and a flat
+## array is the fix for THAT. Both call sites (`cut_out` below, and this
+## file's own tests) already consume whichever shape this returns without
+## caring which it is. See
+## test_aggressive_background_completes_quickly_at_real_region_resolution.
+static func _aggressive_background(piece: Image) -> PackedByteArray:
+	var img: Image = piece
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img = img.duplicate()
+		img.convert(Image.FORMAT_RGBA8)
+	var wide := img.get_width()
+	var high := img.get_height()
+	var data := img.get_data()
+	var bg_alpha_min_byte := BACKGROUND_ALPHA * 255.0
+	var bg_white_min_byte := BACKGROUND_WHITE * 255.0
+	var halo_luminance_byte := HALO_LUMINANCE * 255.0
+
+	var keyed := PackedByteArray()
+	keyed.resize(wide * high)
+	var idx := 0
+	var pixel_index := 0
 	for y in high:
 		for x in wide:
-			if is_background(piece.get_pixel(x, y)):
-				keyed[Vector2i(x, y)] = true
+			var is_bg := true
+			if float(data[idx + 3]) >= bg_alpha_min_byte:
+				var r := data[idx]
+				var g := data[idx + 1]
+				var b := data[idx + 2]
+				if r < bg_white_min_byte or g < bg_white_min_byte or b < bg_white_min_byte:
+					is_bg = false
+				else:
+					var mx := maxi(maxi(r, g), b)
+					var mn := mini(mini(r, g), b)
+					is_bg = mx == 0 or float(mx - mn) / float(mx) <= BACKGROUND_MAX_SATURATION
+			if is_bg:
+				keyed[pixel_index] = 1
+			idx += 4
+			pixel_index += 1
+
 	var changed := true
 	while changed:
 		changed = false
-		var newly: Array[Vector2i] = []
+		var newly := PackedInt32Array()
+		idx = 0
+		pixel_index = 0
 		for y in high:
 			for x in wide:
-				var at := Vector2i(x, y)
-				if keyed.has(at):
-					continue
-				var pixel := piece.get_pixel(x, y)
-				var luminance := (pixel.r + pixel.g + pixel.b) / 3.0
-				if luminance < HALO_LUMINANCE or pixel.s > HALO_MAX_SATURATION:
-					continue
-				var touches_keyed := false
-				for dy in [-1, 0, 1]:
-					for dx in [-1, 0, 1]:
-						if (dx != 0 or dy != 0) and keyed.has(Vector2i(x + dx, y + dy)):
-							touches_keyed = true
-							break
-					if touches_keyed:
-						break
-				if touches_keyed:
-					newly.append(at)
+				if keyed[pixel_index] == 0:
+					var r := float(data[idx])
+					var g := float(data[idx + 1])
+					var b := float(data[idx + 2])
+					var luminance_byte := (r + g + b) / 3.0
+					if luminance_byte >= halo_luminance_byte:
+						var mx := maxf(maxf(r, g), b)
+						var mn := minf(minf(r, g), b)
+						if mx <= 0.0 or (mx - mn) / mx <= HALO_MAX_SATURATION:
+							var touches_keyed := false
+							for dy in [-1, 0, 1]:
+								var ny: int = y + dy
+								if ny < 0 or ny >= high:
+									continue
+								for dx in [-1, 0, 1]:
+									if dx == 0 and dy == 0:
+										continue
+									var nx: int = x + dx
+									if nx < 0 or nx >= wide:
+										continue
+									if keyed[ny * wide + nx] == 1:
+										touches_keyed = true
+										break
+								if touches_keyed:
+									break
+							if touches_keyed:
+								newly.append(pixel_index)
+				idx += 4
+				pixel_index += 1
 		if not newly.is_empty():
 			changed = true
-			for at in newly:
-				keyed[at] = true
+			for i in newly:
+				keyed[i] = 1
 	return keyed
 
 
 ## Background connected to `piece`'s own edges, within `KEY_TOLERANCE` of
 ## `sheet`'s corner colour -- see the "Sheets with an opaque background" doc
 ## comment on `cut_out` above for why reachability, not colour, decides this.
-static func _reachable_background(sheet: Image, piece: Image) -> Dictionary:
+##
+## Returns a flat `PackedByteArray` mask (see `_aggressive_background`'s own
+## doc comment for why: measured directly, the `Dictionary[Vector2i, bool]`
+## this walk used for its `outside`/queue bookkeeping cost roughly 20x what
+## the per-pixel colour-tolerance check itself did -- constructing a
+## `Vector2i` and hashing it into a `Dictionary` on every one of a flood
+## fill's many neighbour visits is not free, and this walk does that far
+## more often than it reads a pixel). `key` is still read via a single
+## `get_pixel(0, 0)` call -- O(1), not a per-visit cost, so nothing about
+## this fix touches it. The queue now holds flat indices (`y * wide + x`)
+## instead of `Vector2i`s, with each of the 4 neighbours bounds-checked
+## BEFORE it is pushed (a flat index has no natural "off the edge" value the
+## way a `Vector2i` component going negative or past `wide`/`high` does --
+## `index + 1` at the last column would silently wrap to the START of the
+## next row instead) -- the walk itself (which pixels end up reachable) is
+## unchanged. See
+## test_reachable_background_completes_quickly_at_real_region_resolution.
+static func _reachable_background(sheet: Image, piece: Image) -> PackedByteArray:
 	var key := sheet.get_pixel(0, 0)
-	var wide := piece.get_width()
-	var high := piece.get_height()
-	var outside := {}
-	var queue: Array[Vector2i] = []
+	var img: Image = piece
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img = img.duplicate()
+		img.convert(Image.FORMAT_RGBA8)
+	var wide := img.get_width()
+	var high := img.get_height()
+	var data := img.get_data()
+	var key_r_byte := key.r * 255.0
+	var key_g_byte := key.g * 255.0
+	var key_b_byte := key.b * 255.0
+	var tolerance_byte := KEY_TOLERANCE * 255.0
+	var outside := PackedByteArray()
+	outside.resize(wide * high)
+	var queue: Array[int] = []
 	for x in wide:
-		queue.append(Vector2i(x, 0))
-		queue.append(Vector2i(x, high - 1))
+		queue.append(x)
+		queue.append((high - 1) * wide + x)
 	for y in high:
-		queue.append(Vector2i(0, y))
-		queue.append(Vector2i(wide - 1, y))
+		queue.append(y * wide)
+		queue.append(y * wide + wide - 1)
 	while not queue.is_empty():
-		var at: Vector2i = queue.pop_back()
-		if at.x < 0 or at.x >= wide or at.y < 0 or at.y >= high or outside.has(at):
+		var index: int = queue.pop_back()
+		if outside[index] == 1:
 			continue
-		var pixel := piece.get_pixel(at.x, at.y)
-		if absf(pixel.r - key.r) > KEY_TOLERANCE \
-			or absf(pixel.g - key.g) > KEY_TOLERANCE \
-			or absf(pixel.b - key.b) > KEY_TOLERANCE:
+		var idx := index * 4
+		if (
+			absf(float(data[idx]) - key_r_byte) > tolerance_byte
+			or absf(float(data[idx + 1]) - key_g_byte) > tolerance_byte
+			or absf(float(data[idx + 2]) - key_b_byte) > tolerance_byte
+		):
 			continue
-		outside[at] = true
-		queue.append(at + Vector2i(1, 0))
-		queue.append(at + Vector2i(-1, 0))
-		queue.append(at + Vector2i(0, 1))
-		queue.append(at + Vector2i(0, -1))
+		outside[index] = 1
+		var x := index % wide
+		var y := index / wide
+		if x + 1 < wide:
+			queue.append(index + 1)
+		if x - 1 >= 0:
+			queue.append(index - 1)
+		if y + 1 < high:
+			queue.append(index + wide)
+		if y - 1 >= 0:
+			queue.append(index - wide)
 	return outside
 
 
@@ -796,73 +943,148 @@ const SPECKLE_MAX_COMPONENT_PIXELS := 150
 ## and applied only after every component has been found and sized, so
 ## fixing one speckle never feeds a wrong "normal" reading into sizing or
 ## fixing the speckle next to it.
+##
+## Reported live (see _trim's own doc comment for the fuller writeup this
+## doesn't repeat, and docs/progress.md's own "~44s spawn-gap follow-up"
+## entry for this function's own measured share -- the single most expensive
+## of the four fixed in that pass): the classification pass read
+## `Image.get_pixel` once per pixel across the WHOLE piece, and the
+## replacement pass read/wrote it again per border pixel. Rewritten as one
+## `PackedByteArray` pass for classification, every check inlined with no
+## per-pixel helper call, plus a byte-level average/write for the (small,
+## SPECKLE_MAX_COMPONENT_PIXELS-bounded) replacement step -- reconstructed
+## via `Image.create_from_data` at the end, same shape as every other fix in
+## this file.
+##
+## The connected-component walk's own bookkeeping (`is_pale`/`visited`) is
+## ALSO now a flat `PackedByteArray` mask (`y * wide + x`) rather than a
+## `Dictionary[Vector2i, bool]` -- isolated measurement (a full walk of one
+## 284x406-sized all-one-component blob, the shape a real large pale canopy
+## patch produces) found this walk's OWN `Vector2i`-construct-then-hash cost
+## roughly 20x what reading a pixel's colour ever cost, making it -- not
+## `Image.get_pixel`/`set_pixel` -- the real dominant cost this function's
+## own naive form had. It never called `Image.get_pixel`/`set_pixel` itself,
+## so the ORIGINAL bug report (a naive per-pixel image-read loop) does not,
+## strictly, name this walk -- but leaving it as-is would have left this
+## function's own real cost almost entirely unaddressed, budgeted-timing
+## test included. `piece`'s own alpha byte at every replaced position is
+## left completely untouched by the write below -- matches the original's
+## own `Color(average.r, average.g, average.b, alpha)` (r/g/b replaced,
+## alpha preserved) without needing to separately read and rewrite it.
+## Returns a NEW Image (mirrors SpriteSheetSlicer._clear_background's own
+## doc comment on why: Image has no in-place "replace my own pixel data from
+## a byte array" method) -- both call sites in `cut_out` below already use
+## this return value rather than relying on `piece` being mutated in place,
+## and so does every direct caller in this file's own tests. See
+## test_despeckle_completes_quickly_at_real_region_resolution.
 static func despeckle(piece: Image) -> Image:
-	var wide := piece.get_width()
-	var high := piece.get_height()
-	var is_pale := {}
+	var img: Image = piece
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img = img.duplicate()
+		img.convert(Image.FORMAT_RGBA8)
+	var wide := img.get_width()
+	var high := img.get_height()
+	var data := img.get_data()
+	var halo_luminance_byte := HALO_LUMINANCE * 255.0
+
+	var is_pale := PackedByteArray()
+	is_pale.resize(wide * high)
+	var idx := 0
+	var pixel_index := 0
 	for y in high:
 		for x in wide:
-			var c := piece.get_pixel(x, y)
-			if c.a <= 0.0:
-				continue
-			var luminance := (c.r + c.g + c.b) / 3.0
-			if luminance >= HALO_LUMINANCE and c.s <= HALO_MAX_SATURATION:
-				is_pale[Vector2i(x, y)] = true
+			if data[idx + 3] > 0:
+				var r := float(data[idx])
+				var g := float(data[idx + 1])
+				var b := float(data[idx + 2])
+				var luminance_byte := (r + g + b) / 3.0
+				if luminance_byte >= halo_luminance_byte:
+					var mx := maxf(maxf(r, g), b)
+					var mn := minf(minf(r, g), b)
+					if mx <= 0.0 or (mx - mn) / mx <= HALO_MAX_SATURATION:
+						is_pale[pixel_index] = 1
+			idx += 4
+			pixel_index += 1
 
-	var visited := {}
-	var speckle_components: Array = [] # Array[Array[Vector2i]]
-	for start in is_pale:
-		if visited.has(start):
+	var visited := PackedByteArray()
+	visited.resize(wide * high)
+	var speckle_components: Array[PackedInt32Array] = []
+	for start in wide * high:
+		if is_pale[start] == 0 or visited[start] == 1:
 			continue
-		var members: Array[Vector2i] = []
-		var queue: Array[Vector2i] = [start]
-		visited[start] = true
+		var members := PackedInt32Array()
+		var queue: Array[int] = [start]
+		visited[start] = 1
 		while not queue.is_empty():
-			var at: Vector2i = queue.pop_back()
+			var at: int = queue.pop_back()
 			members.append(at)
+			var ax := at % wide
+			var ay := at / wide
 			for dy in [-1, 0, 1]:
+				var ny: int = ay + dy
+				if ny < 0 or ny >= high:
+					continue
 				for dx in [-1, 0, 1]:
 					if dx == 0 and dy == 0:
 						continue
-					var next := Vector2i(at.x + dx, at.y + dy)
-					if visited.has(next) or not is_pale.has(next):
+					var nx: int = ax + dx
+					if nx < 0 or nx >= wide:
 						continue
-					visited[next] = true
+					var next: int = ny * wide + nx
+					if visited[next] == 1 or is_pale[next] == 0:
+						continue
+					visited[next] = 1
 					queue.append(next)
 		if members.size() <= SPECKLE_MAX_COMPONENT_PIXELS:
 			speckle_components.append(members)
 
-	var replacements := {} # Vector2i -> Color
+	# Replacement colour per component, read/written straight from/to the
+	# same byte array -- bounded by SPECKLE_MAX_COMPONENT_PIXELS per
+	# component (small), unlike the whole-image classification/walk above,
+	# so this was never the dominant cost; rewritten anyway for consistency,
+	# now that classification already produced a byte array to work from.
 	for members in speckle_components:
-		var sum := Color(0, 0, 0)
+		var sum_r := 0.0
+		var sum_g := 0.0
+		var sum_b := 0.0
 		var count := 0
 		for pos in members:
+			var px := pos % wide
+			var py := pos / wide
 			for dy in [-1, 0, 1]:
+				var ny: int = py + dy
+				if ny < 0 or ny >= high:
+					continue
 				for dx in [-1, 0, 1]:
 					if dx == 0 and dy == 0:
 						continue
-					var nx: int = pos.x + dx
-					var ny: int = pos.y + dy
-					if nx < 0 or ny < 0 or nx >= wide or ny >= high:
+					var nx: int = px + dx
+					if nx < 0 or nx >= wide:
 						continue
-					if is_pale.has(Vector2i(nx, ny)):
+					var nidx: int = ny * wide + nx
+					if is_pale[nidx] == 1:
 						continue
-					var nc := piece.get_pixel(nx, ny)
-					if nc.a <= 0.0:
+					var nbyte: int = nidx * 4
+					if data[nbyte + 3] <= 0:
 						continue
-					sum += nc
+					sum_r += float(data[nbyte])
+					sum_g += float(data[nbyte + 1])
+					sum_b += float(data[nbyte + 2])
 					count += 1
 		if count == 0:
 			continue # no real content borders this speckle at all -- leave it
-		var average := Color(sum.r / count, sum.g / count, sum.b / count)
+		var avg_r := roundi(sum_r / count)
+		var avg_g := roundi(sum_g / count)
+		var avg_b := roundi(sum_b / count)
 		for pos in members:
-			var alpha := piece.get_pixel(pos.x, pos.y).a
-			replacements[pos] = Color(average.r, average.g, average.b, alpha)
+			var pidx := pos * 4
+			data[pidx] = avg_r
+			data[pidx + 1] = avg_g
+			data[pidx + 2] = avg_b
+			# data[pidx + 3] (alpha) intentionally untouched -- see this
+			# function's own doc comment above.
 
-	for pos in replacements:
-		var color: Color = replacements[pos]
-		piece.set_pixel(pos.x, pos.y, color)
-	return piece
+	return Image.create_from_data(wide, high, false, Image.FORMAT_RGBA8, data)
 
 
 ## A region cut from `sheet` with its background made transparent: reachable
@@ -872,6 +1094,20 @@ static func despeckle(piece: Image) -> Image:
 ## safe to ask for on the bare-winter canopy frame. Despeckled either way --
 ## see despeckle's own doc comment for why that is a separate problem from
 ## keying and applies whether or not the sheet needed keying at all.
+##
+## The zeroing loop below is rewritten the same way as _trim/
+## _aggressive_background/_reachable_background/despeckle just above (see
+## despeckle's own doc comment for the fuller writeup on why the coordinate
+## bookkeeping, not just the pixel access, needed fixing): `piece` is
+## already guaranteed FORMAT_RGBA8 by this point (converted just below,
+## before `outside` is even computed), so this can write straight into its
+## raw bytes instead of calling `Image.set_pixel` with a freshly allocated
+## `Color(0, 0, 0, 0)` once per background pixel -- for a sparse frame (the
+## bare-winter canopy this exists for) that can be most of the piece.
+## `outside` is now a flat mask (see `_aggressive_background`'s own doc
+## comment), one byte per pixel in the same `y * width + x` order the colour
+## data is already laid out in, so this walks it directly by index -- no
+## `Vector2i` unpacking needed at all, unlike when it held Dictionary keys.
 static func cut_out(sheet: Image, region: Rect2i, aggressive: bool = false) -> Image:
 	var piece := sheet.get_region(region)
 	if not needs_keying(sheet):
@@ -883,6 +1119,16 @@ static func cut_out(sheet: Image, region: Rect2i, aggressive: bool = false) -> I
 	if piece.get_format() != Image.FORMAT_RGBA8:
 		piece.convert(Image.FORMAT_RGBA8)
 	var outside := _aggressive_background(piece) if aggressive else _reachable_background(sheet, piece)
-	for at in outside:
-		piece.set_pixel(at.x, at.y, Color(0, 0, 0, 0))
+	var width := piece.get_width()
+	var height := piece.get_height()
+	var data := piece.get_data()
+	var byte_idx := 0
+	for pixel_index in outside.size():
+		if outside[pixel_index] == 1:
+			data[byte_idx] = 0
+			data[byte_idx + 1] = 0
+			data[byte_idx + 2] = 0
+			data[byte_idx + 3] = 0
+		byte_idx += 4
+	piece = Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
 	return despeckle(piece)
