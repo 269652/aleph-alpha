@@ -19614,3 +19614,44 @@ load sequence (`_compute_dry_land_spawn_tile`/`_find_dry_land_spawn`),
 which this fix does not touch and which may still dominate total boot
 feel -- worth its own follow-up investigation if "still slow to start"
 is reported again after this lands.
+
+## `IllustratedAnimalSprite` carried the same unfixed chroma-key loop (2026-09-10)
+
+The pass above fixed `SpriteSheetSlicer` and `IllustratedMushroomSprite`'s
+own duplicates of the naive per-pixel `_apply_chroma_key`/`chroma_keyed`
+technique, but missed a **third**, separate duplicate: `IllustratedAnimalSprite`
+(sheep/wolf/alpaca/the four Germany-region world-boss sheets -- see
+`concept/worldbosses.md`) carries its own copy of the exact same
+`Image.get_pixel`/`set_pixel`-per-pixel loop, never ported to the
+byte-array fix. Not a live-reported bug at the time this was found --
+flagged proactively while fixing the mushroom/slicer copies, since this
+class's first-touch art warm-up (via `generate_textures`, called the
+first time any creature of a chroma-keyed species is rendered) pays the
+exact same per-sheet cost the mushroom fix targeted.
+
+Fixed with the identical proven technique: one pass over the image's own
+raw `PackedByteArray` (`get_data`/`create_from_data`, 4 bytes/pixel), the
+whole per-pixel tolerance check inlined directly in the loop -- no
+per-pixel helper function (see `SpriteSheetSlicer.chroma_keyed`'s own doc
+comment: an earlier attempt at exactly this class of fix measured
+*slower* through a helper function than the original `get_pixel` loop,
+not faster -- GDScript's per-call overhead for a user-defined function,
+not `get_pixel` itself, was the real cost).
+
+TDD: `test_apply_chroma_key_completes_quickly_at_real_sheet_resolution`
+(new, `test_illustrated_animal_sprite.gd`, now 68/68) confirmed red
+against the naive implementation first. Real-machine timing proved
+noisier than the mushroom/slicer pass's own budgets could assume (this
+session's dev machine had another live ~2GB Godot process running
+throughout, and single-run naive measurements swung 342-1253ms) -- so
+the budget was calibrated from **time-matched** naive-vs-fixed pairs run
+back-to-back in one process instead of trusting isolated cross-run
+numbers: naive measured 436-590ms across 3 paired rounds, the fix
+141-194ms across the same 3 rounds, a consistent ~2.7-3.4x speedup
+regardless of ambient machine load. Budget set to 300ms. Full
+`test_illustrated_animal_sprite.gd` suite (68/68) plus real dependents --
+`test_creature_marker.gd` (242/242), `test_creature_renderer.gd` (46/46),
+`test_animal_anatomy.gd` (43/43), `test_sprite_sheet_slicer.gd` (11/11),
+`test_sprite_sheet_loader.gd` (5/5), `test_procedural_animal_animation.gd`
+(28/28), `test_earth_elevation_source.gd` (11/11) -- all green, zero
+behavior change. Merged to `main` and re-confirmed green there.
