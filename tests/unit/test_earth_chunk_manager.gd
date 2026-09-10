@@ -1327,6 +1327,71 @@ func test_nearest_npc_near_picks_the_closer_of_two_candidates():
 	far.free()
 
 
+# -- npc_identities_near (see DialogueContext's own `co_present_identities`
+# source -- "who else is standing here" for the neighbour/contradiction
+# dialogue topics) -----------------------------------------------------------
+#
+# Same shape and same _loaded_villages scan as nearest_npc_near, plural and
+# identity-only: a dialogue topic reads identities, never markers.
+
+func test_npc_identities_near_returns_every_villager_in_range():
+	manager.update(_berlin_tile)
+	var near := _add_fake_npc(Vector2(100, 100), 1)
+	var also_near := _add_fake_npc(Vector2(110, 100), 2)
+	manager._loaded_villages[Vector2i(0, 0)] = [near, also_near]
+
+	var identities := manager.npc_identities_near(Vector2(100, 100), 50.0)
+	assert_eq(identities.size(), 2)
+	assert_true(identities.has(near.identity))
+	assert_true(identities.has(also_near.identity))
+	near.free()
+	also_near.free()
+
+
+func test_npc_identities_near_excludes_the_named_exclude_marker():
+	manager.update(_berlin_tile)
+	var talker := _add_fake_npc(Vector2(100, 100), 1)
+	var neighbour := _add_fake_npc(Vector2(110, 100), 2)
+	manager._loaded_villages[Vector2i(0, 0)] = [talker, neighbour]
+
+	var identities := manager.npc_identities_near(Vector2(100, 100), 50.0, talker)
+	assert_eq(identities.size(), 1)
+	assert_eq(identities[0], neighbour.identity)
+	talker.free()
+	neighbour.free()
+
+
+func test_npc_identities_near_excludes_anyone_out_of_range():
+	manager.update(_berlin_tile)
+	var near := _add_fake_npc(Vector2(100, 100), 1)
+	var far := _add_fake_npc(Vector2(5000, 5000), 2)
+	manager._loaded_villages[Vector2i(0, 0)] = [near, far]
+
+	var identities := manager.npc_identities_near(Vector2(100, 100), 50.0)
+	assert_eq(identities.size(), 1)
+	assert_eq(identities[0], near.identity)
+	near.free()
+	far.free()
+
+
+func test_npc_identities_near_returns_empty_when_no_settlement_loaded():
+	assert_true(manager.npc_identities_near(Vector2(100, 100), 10000.0).is_empty())
+
+
+# -- seen_ledger (see NpcSeenLedger, DialogueMove's "talk twice, get the
+# second most salient thing") ------------------------------------------------
+#
+# One real instance for the manager's whole lifetime, the same "colocated
+# with the world clock and every other piece of shared world state" shape
+# event_store()/memory_store() already use immediately above -- a fresh
+# ledger returned per call would forget every burned topic the moment a
+# caller asked again.
+
+func test_seen_ledger_is_the_same_real_instance_across_calls():
+	manager.seen_ledger().mark_told("npc:1", "hunger", 12.0)
+	assert_true(manager.seen_ledger().has_told("npc:1", "hunger"))
+
+
 # -- nearest_liftable_stone_near / liftable_stones_near (see PebbleDispersion,
 # World._update_interaction_prompt's "Pick (key)" prompt) -------------------
 #

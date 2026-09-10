@@ -128,6 +128,7 @@ const HouseholdStorePersistence = preload("res://src/emergence/household_store_p
 const Contract = preload("res://src/emergence/contract.gd")
 const ContractStore = preload("res://src/emergence/contract_store.gd")
 const ContractStorePersistence = preload("res://src/emergence/contract_store_persistence.gd")
+const NpcSeenLedger = preload("res://src/dialogue/npc_seen_ledger.gd")
 const Market = preload("res://src/emergence/market.gd")
 const MarketStore = preload("res://src/emergence/market_store.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
@@ -1457,6 +1458,27 @@ var _memory_store := MemoryStore.new()
 
 func memory_store() -> MemoryStore:
 	return _memory_store
+
+
+## What each villager has already told the player, and when (see
+## docs/concept/dialogue.md's pipeline, fourth stage) -- colocated here
+## alongside the world clock and the event/memory stores above for the same
+## reason those are: a conversation needs all four together to build a real
+## frame and pick a real move. One real instance for the manager's whole
+## lifetime (see NpcSeenLedger's own doc comment on why a marker cannot hold
+## this itself: it is freed with its chunk).
+##
+## Deliberately NOT wired into save/load in this pass -- unlike the stores
+## above, this ledger only affects which of several true things a villager
+## says first within one play session, never what is true, so losing it on
+## reload costs a repeated line, not incorrect state. Threading it through
+## the save-file schema is a real, separate, honestly-scoped follow-up (see
+## docs/progress.md's own note on this).
+var _seen_ledger := NpcSeenLedger.new()
+
+
+func seen_ledger() -> NpcSeenLedger:
+	return _seen_ledger
 
 
 ## Persistence, reset, and wipe for the memory store -- same four-function
@@ -10594,6 +10616,27 @@ func nearest_npc_near(pixel_position: Vector2, max_distance: float) -> NpcMarker
 				nearest = node
 				nearest_distance = distance
 	return nearest
+
+
+## Every OTHER villager within `max_distance` of `pixel_position` -- the
+## "who else is standing here" DialogueContext's own `co_present_identities`
+## source wants (see that module's doc comment), so NpcVoice/DialogueTopic's
+## neighbour/contradiction topics have real people to be about rather than
+## an always-empty list. Same scan as nearest_npc_near, plural and
+## identity-only: a dialogue topic reads identities, never markers.
+##
+## `exclude` drops one marker from the result (the villager the player is
+## actually talking to, so a conversation never lists its own speaker as
+## their own neighbour).
+func npc_identities_near(pixel_position: Vector2, max_distance: float, exclude: NpcMarker = null) -> Array:
+	var identities: Array = []
+	for node_list in _loaded_villages.values():
+		for node in node_list:
+			if not (node is NpcMarker) or node == exclude:
+				continue
+			if pixel_position.distance_to(node.position) <= max_distance:
+				identities.append(node.identity)
+	return identities
 
 
 ## The nearest LOOSE, LIFTABLE stone within `max_distance` of `pixel_position`
