@@ -77,20 +77,67 @@ static func is_empty(
 ## distance, so a saturated key can use a generous tolerance for the
 ## anti-aliased blend at a drawing's silhouette without also swallowing a
 ## pale, low-saturation drawing colour of similar overall brightness.
+## Reported live, repeatedly, as "Still at 1fps": a --solo boot instrumented
+## end to end traced its own ~52-88s real cost to functions in THIS file --
+## every one of them a plain GDScript double for calling Image.get_pixel/
+## set_pixel once per pixel. Fixed as one pass over the image's own raw
+## PackedByteArray (get_data/create_from_data, 4 bytes/pixel, R,G,B,A
+## order) -- comparing/writing raw 0-255 byte values has the exact same
+## tolerance semantics as the original 0.0-1.0 float compare (both sides
+## scaled by the same 255).
+##
+## A real trap along the way, worth naming so it isn't repeated: a first
+## pass at this factored the "is this pixel empty" check (see is_empty()
+## above) into its own small helper function and called it once per pixel
+## from the byte-array loop -- and measured SLOWER than the original
+## get_pixel version, not faster. Isolated directly (see this fix's own
+## commit): a 1254x1254 get_pixel loop measured ~220ms; the SAME loop
+## reading raw bytes but still calling a per-pixel helper function measured
+## ~1070ms; the same loop again with that helper's body INLINED (no
+## function call at all) measured ~170ms. The bottleneck was never
+## get_pixel vs. byte-array access -- it is GDScript's own per-call
+## overhead for a user-defined function, which a tight per-pixel loop pays
+## a huge number of times regardless of what that function does internally.
+## get_pixel/set_pixel are single C++ builtin calls with no such overhead,
+## which is exactly why the ORIGINAL naive version, despite calling
+## is_empty() once per pixel too, wasn't dramatically slower on its own
+## pixel-access side -- its real cost was elsewhere (the sheer number of
+## get_pixel+is_empty call PAIRS). The fix that actually works is this
+## function's own shape below: inline the whole per-pixel check directly
+## in the loop, calling only built-in global functions (absf/mini/maxi --
+## themselves cheap VM builtins, not user function calls) rather than a
+## project-defined helper. detect_frames/content_rect/_clear_background
+## below repeat this same inlined check three times rather than sharing one
+## helper function for exactly this reason -- a deliberate, measured DRY
+## violation, not an oversight. See test_sprite_sheet_slicer.gd's own
+## "-- performance --" section for the budgeted timing pins this now has to
+## keep passing, and illustrated_mushroom_sprite.gd's own identical fix
+## (same reported bug, found first in that file's own duplicate of this
+## exact technique) for the fuller live-measurement writeup.
 static func chroma_keyed(image: Image, key: Color, tolerance: float) -> Image:
-	var keyed := image.duplicate()
+	var keyed: Image = image.duplicate()
 	if keyed.get_format() != Image.FORMAT_RGBA8:
 		keyed.convert(Image.FORMAT_RGBA8)
-	for y in keyed.get_height():
-		for x in keyed.get_width():
-			var c: Color = keyed.get_pixel(x, y)
-			if (
-				absf(c.r - key.r) <= tolerance
-				and absf(c.g - key.g) <= tolerance
-				and absf(c.b - key.b) <= tolerance
-			):
-				keyed.set_pixel(x, y, Color(0, 0, 0, 0))
-	return keyed
+	var width := keyed.get_width()
+	var height := keyed.get_height()
+	var data := keyed.get_data()
+	var key_r := key.r * 255.0
+	var key_g := key.g * 255.0
+	var key_b := key.b * 255.0
+	var byte_tolerance := tolerance * 255.0
+	var i := 0
+	for _pixel in width * height:
+		if (
+			absf(float(data[i]) - key_r) <= byte_tolerance
+			and absf(float(data[i + 1]) - key_g) <= byte_tolerance
+			and absf(float(data[i + 2]) - key_b) <= byte_tolerance
+		):
+			data[i] = 0
+			data[i + 1] = 0
+			data[i + 2] = 0
+			data[i + 3] = 0
+		i += 4
+	return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
 
 
 ## The frames in the band of rows between `top_y` and `bottom_y`.
@@ -116,22 +163,53 @@ func detect_frames(
 	if bottom <= top:
 		return frames
 
+	# Byte-array pass, inlined check, no per-pixel helper function call --
+	# see this file's own performance doc comment on chroma_keyed for why
+	# both of those matter, not just the first one. data/width are fetched
+	# ONCE here, not once per column.
+	var img: Image = image
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img = img.duplicate()
+		img.convert(Image.FORMAT_RGBA8)
+	var width := img.get_width()
+	var data := img.get_data()
+	var alpha_threshold_byte := alpha_threshold * 255.0
+	var divider_gray_min_byte := divider_gray_min * 255.0
+
 	var start := -1
 	var empty_run := 0
-	for x in image.get_width():
-		if _column_is_empty(image, x, top, bottom, alpha_threshold, divider_gray_min):
+	for x in width:
+		var column_is_empty := true
+		for y in range(top, bottom):
+			var idx := (y * width + x) * 4
+			if float(data[idx + 3]) < alpha_threshold_byte:
+				continue  # transparent -- still empty, keep scanning the column
+			var r := data[idx]
+			var g := data[idx + 1]
+			var b := data[idx + 2]
+			if r < divider_gray_min_byte or g < divider_gray_min_byte or b < divider_gray_min_byte:
+				column_is_empty = false
+				break
+			var mx := maxi(maxi(r, g), b)
+			if mx == 0:
+				continue  # opaque black -- matches is_empty()'s own zero-max case
+			var mn := mini(mini(r, g), b)
+			if float(mx - mn) / float(mx) > DIVIDER_MAX_SATURATION:
+				column_is_empty = false
+				break
+		if column_is_empty:
 			empty_run += 1
 			continue
 		if start >= 0 and empty_run >= min_divider_width:
-			var width := x - empty_run - start
-			if width >= min_frame_width:
-				frames.append(Rect2i(start, top, width, bottom - top))
+			var frame_width := x - empty_run - start
+			if frame_width >= min_frame_width:
+				frames.append(Rect2i(start, top, frame_width, bottom - top))
 			start = -1
 		empty_run = 0
 		if start < 0:
 			start = x
 	if start >= 0:
-		var last_width := image.get_width() - empty_run - start
+		var last_width := width - empty_run - start
 		if last_width >= min_frame_width:
 			frames.append(Rect2i(start, top, last_width, bottom - top))
 	return frames
@@ -182,13 +260,13 @@ func normalize_frames(
 		var content: Rect2i = contents[index]
 		if content.size.x <= 0 or content.size.y <= 0:
 			continue
-		var drawing := image.get_region(content)
+		var drawing: Image = image.get_region(content)
 		# The canvas below is RGBA8, and blit_rect refuses to mix formats --
 		# a sheet loaded as anything else (RGB8, indexed) fails at the last
 		# step otherwise.
 		if drawing.get_format() != Image.FORMAT_RGBA8:
 			drawing.convert(Image.FORMAT_RGBA8)
-		_clear_background(drawing, alpha_threshold, divider_gray_min)
+		drawing = _clear_background(drawing, alpha_threshold, divider_gray_min)
 
 		var width := maxi(1, int(round(float(content.size.x) * scale)))
 		var height := maxi(1, int(round(float(content.size.y) * scale)))
@@ -216,13 +294,40 @@ func content_rect(
 	var clipped := rect.intersection(Rect2i(0, 0, image.get_width(), image.get_height()))
 	if clipped.size.x <= 0 or clipped.size.y <= 0:
 		return Rect2i(rect.position, Vector2i.ZERO)
+	# Byte-array pass, inlined check, no per-pixel helper function call --
+	# see this file's own performance doc comment on chroma_keyed for why
+	# both of those matter, not just the first one. Called once per FRAME
+	# (up to 25/sheet) by normalize_frames, so this is exactly as hot a
+	# path as chroma_keyed's own whole-sheet pass.
+	var img: Image = image
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img = img.duplicate()
+		img.convert(Image.FORMAT_RGBA8)
+	var width := img.get_width()
+	var data := img.get_data()
+	var alpha_threshold_byte := alpha_threshold * 255.0
+	var divider_gray_min_byte := divider_gray_min * 255.0
 	var left: int = clipped.position.x + clipped.size.x
 	var right: int = clipped.position.x - 1
 	var top: int = clipped.position.y + clipped.size.y
 	var bottom: int = clipped.position.y - 1
 	for y in range(clipped.position.y, clipped.position.y + clipped.size.y):
+		var row_base := y * width
 		for x in range(clipped.position.x, clipped.position.x + clipped.size.x):
-			if is_empty(image.get_pixel(x, y), alpha_threshold, divider_gray_min):
+			var idx := (row_base + x) * 4
+			var pixel_is_empty := true
+			if float(data[idx + 3]) >= alpha_threshold_byte:
+				var r := data[idx]
+				var g := data[idx + 1]
+				var b := data[idx + 2]
+				if r < divider_gray_min_byte or g < divider_gray_min_byte or b < divider_gray_min_byte:
+					pixel_is_empty = false
+				else:
+					var mx := maxi(maxi(r, g), b)
+					if mx > 0:
+						var mn := mini(mini(r, g), b)
+						pixel_is_empty = float(mx - mn) / float(mx) <= DIVIDER_MAX_SATURATION
+			if pixel_is_empty:
 				continue
 			left = mini(left, x)
 			right = maxi(right, x)
@@ -238,19 +343,46 @@ func content_rect(
 ## The sheets are drawn on a pale ground rather than on nothing, so a frame cut
 ## straight out carries that ground with it and composites as a pale box around
 ## the drawing.
+##
+## Returns a NEW Image rather than mutating `drawing` in place (its one call
+## site, normalize_frames, now reassigns its own `drawing` local from this
+## return value) -- see this file's own performance doc comment on
+## chroma_keyed: reconstructing via Image.create_from_data after a raw byte-
+## array pass is the same shape that function and content_rect already use,
+## and Image has no in-place "replace my own pixel data" method to mutate
+## through instead.
 func _clear_background(
 	drawing: Image, alpha_threshold: float, divider_gray_min: float
-) -> void:
-	for y in drawing.get_height():
-		for x in drawing.get_width():
-			if is_empty(drawing.get_pixel(x, y), alpha_threshold, divider_gray_min):
-				drawing.set_pixel(x, y, Color(0, 0, 0, 0))
-
-
-func _column_is_empty(
-	image: Image, x: int, top: int, bottom: int, alpha_threshold: float, divider_gray_min: float
-) -> bool:
-	for y in range(top, bottom):
-		if not is_empty(image.get_pixel(x, y), alpha_threshold, divider_gray_min):
-			return false
-	return true
+) -> Image:
+	var img: Image = drawing
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img = img.duplicate()
+		img.convert(Image.FORMAT_RGBA8)
+	var width := img.get_width()
+	var height := img.get_height()
+	var data := img.get_data()
+	var alpha_threshold_byte := alpha_threshold * 255.0
+	var divider_gray_min_byte := divider_gray_min * 255.0
+	# Inlined check, no per-pixel helper function call -- see this file's
+	# own performance doc comment on chroma_keyed for why.
+	var i := 0
+	for _pixel in width * height:
+		var pixel_is_empty := true
+		if float(data[i + 3]) >= alpha_threshold_byte:
+			var r := data[i]
+			var g := data[i + 1]
+			var b := data[i + 2]
+			if r < divider_gray_min_byte or g < divider_gray_min_byte or b < divider_gray_min_byte:
+				pixel_is_empty = false
+			else:
+				var mx := maxi(maxi(r, g), b)
+				if mx > 0:
+					var mn := mini(mini(r, g), b)
+					pixel_is_empty = float(mx - mn) / float(mx) <= DIVIDER_MAX_SATURATION
+		if pixel_is_empty:
+			data[i] = 0
+			data[i + 1] = 0
+			data[i + 2] = 0
+			data[i + 3] = 0
+		i += 4
+	return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)

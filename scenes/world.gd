@@ -270,11 +270,6 @@ var _water_proximity_accumulator := 0.0
 ## than a misleading 0.0 ("standing on water") nobody has actually
 ## measured yet.
 var _cached_water_distance_tiles := INF
-## TEMP DIAGNOSTIC -- not committed, see the 1fps water-proximity
-## investigation's own note at its actual use site.
-var _TEMP_fps_log_accumulator := 0.0
-var _TEMP_chunk_update_usec := 0
-var _TEMP_process_start_usec := 0
 ## Caps how many panels are shown at once (closest first) so a crowded area
 ## doesn't fill the whole screen with panels.
 const MAX_CREATURE_PANELS := 6
@@ -5239,7 +5234,6 @@ func _server_process() -> void:
 
 
 func _client_process(delta: float) -> void:
-	_TEMP_process_start_usec = Time.get_ticks_usec()  # TEMP DIAGNOSTIC
 	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 	if local_player == null:
 		return
@@ -5273,9 +5267,7 @@ func _client_process(delta: float) -> void:
 			_initial_client_chunk_load_task_running = true
 			_run_initial_client_chunk_load(local_player.current_tile())
 	else:
-		var _TEMP_t0 := Time.get_ticks_usec()
 		_chunk_manager.update(local_player.current_tile())
-		_TEMP_chunk_update_usec = Time.get_ticks_usec() - _TEMP_t0
 
 	var player_tile := local_player.current_tile()
 	_update_minimap(player_tile, delta)
@@ -5634,36 +5626,6 @@ func _client_process(delta: float) -> void:
 	# (any peer) instead of paying a redraw nobody can see.
 	_chunk_manager.sync_tree_season(local_player.position)
 	_chunk_manager.sync_grass_season()
-	# TEMP DIAGNOSTIC -- not committed, see the 1fps water-proximity
-	# investigation. Flushed explicitly: plain print() fully buffers once
-	# stdout is redirected to a file, so nothing would show up until the
-	# process exits otherwise.
-	_TEMP_fps_log_accumulator += delta
-	if _TEMP_fps_log_accumulator >= 1.0:
-		_TEMP_fps_log_accumulator = 0.0
-		var f := FileAccess.open("user://TEMP_fps_log.txt", FileAccess.READ_WRITE if FileAccess.file_exists("user://TEMP_fps_log.txt") else FileAccess.WRITE)
-		if f:
-			f.seek_end()
-			var client_process_usec := Time.get_ticks_usec() - _TEMP_process_start_usec
-			# NOTE: group names verified against each marker's own GROUP_NAME
-			# constant -- decomposer/millipede/caterpillar are SINGULAR, and
-			# WormMarker joins no per-species group at all (only
-			# DroppedItem.GROUP_NAME, shared with every other pickup), so
-			# there is no live worm population count to report here.
-			f.store_line(
-				"t=%.1f fps=%d client_process_us=%d chunk_update_us=%d rest_us=%d creatures=%d flyers=%d fish=%d cicadas=%d decomposers=%d millipedes=%d caterpillars=%d" % [
-					Time.get_ticks_msec() / 1000.0, Engine.get_frames_per_second(),
-					client_process_usec, _TEMP_chunk_update_usec, client_process_usec - _TEMP_chunk_update_usec,
-					get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME).size(),
-					get_tree().get_nodes_in_group(AmbientFlyerMarker.FLOCK_GROUP).size(),
-					get_tree().get_nodes_in_group("fish").size(),
-					get_tree().get_nodes_in_group(CicadaMarker.GROUP_NAME).size(),
-					get_tree().get_nodes_in_group("decomposer").size(),
-					get_tree().get_nodes_in_group("millipede").size(),
-					get_tree().get_nodes_in_group("caterpillar").size(),
-				]
-			)
-			f.flush()
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (
 		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"

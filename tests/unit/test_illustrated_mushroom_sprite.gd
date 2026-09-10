@@ -279,6 +279,72 @@ func test_crushed_and_bitten_frames_differ_from_the_normal_frame():
 		assert_ne(normal, bitten, "%s bitten should look different from normal" % id)
 
 
+# -- _apply_chroma_key performance (reported live, again: "Still at 1fps" --
+# a --solo boot instrumented end to end traced it to THIS function, not
+# anything per-frame: warm_cache() (below) was already known to cost ~52-56s
+# total, but a live per-species progress log this time showed ~10s PER
+# SPECIES (~75-88s total across all 8) -- i.e. genuinely regressed further
+# past its own already-bad documented baseline, not merely restating it.
+# Root cause: _apply_chroma_key is a pure-GDScript double for loop calling
+# Image.get_pixel/set_pixel once per pixel -- for a real ~1254x1254 sheet
+# that is >1.5 million interpreted calls, each allocating/comparing a
+# Color object, for what a raw PackedByteArray pass (get_data/set_data,
+# 4 bytes/pixel, no per-pixel function-call/object overhead) does in a
+# tiny fraction of the time with byte-for-byte identical results.) --
+
+## Correctness pin BEFORE the byte-array rewrite below: an exact 2x2 image
+## with one pixel inside tolerance, one just outside on each channel, and
+## one fully opaque non-matching pixel -- small enough to hand-verify, but
+## exercising the same per-channel-independent/alpha-ignoring compare the
+## real despill relies on, so a rewrite that changes those semantics (e.g.
+## treating channels jointly, or reading/writing bytes in the wrong order)
+## fails this even though it might still pass the large/fast test below.
+func test_apply_chroma_key_matches_within_tolerance_per_channel_ignoring_alpha():
+	var image := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	var key := Color(0.98, 0.01, 0.98)
+	var tolerance := 0.25
+	image.set_pixel(0, 0, key)  # exact match -> keyed out
+	image.set_pixel(1, 0, Color(key.r - 0.24, key.g, key.b, 1.0))  # inside tolerance -> keyed out
+	image.set_pixel(0, 1, Color(key.r - 0.30, key.g, key.b, 1.0))  # outside tolerance on R -> kept
+	image.set_pixel(1, 1, Color(1.0, 1.0, 1.0, 0.5))  # unrelated color, translucent -> kept as-is
+	var keyed: Image = sprite._apply_chroma_key(image, key, tolerance)
+	assert_eq(keyed.get_pixel(0, 0).a, 0.0, "exact key match must become fully transparent")
+	assert_eq(keyed.get_pixel(1, 0).a, 0.0, "within-tolerance match must become fully transparent")
+	var kept := keyed.get_pixel(0, 1)
+	assert_gt(kept.a, 0.0, "outside-tolerance pixel must be left alone")
+	# RGBA8 quantizes each channel to 8 bits (0.5 round-trips as ~0.498),
+	# so this compares components with a one-quantization-step tolerance
+	# rather than exact Color equality -- a real behavioral change would
+	# miss by far more than a single 1/255 rounding step.
+	var untouched := keyed.get_pixel(1, 1)
+	var quantization_step := 1.0 / 255.0
+	assert_almost_eq(untouched.r, 1.0, quantization_step, "non-matching pixel's R must be untouched")
+	assert_almost_eq(untouched.g, 1.0, quantization_step, "non-matching pixel's G must be untouched")
+	assert_almost_eq(untouched.b, 1.0, quantization_step, "non-matching pixel's B must be untouched")
+	assert_almost_eq(untouched.a, 0.5, quantization_step, "non-matching pixel's alpha must be untouched")
+
+
+## Reported live, twice now: a --solo boot's own per-species progress log
+## showed ~10s PER SPECIES (~75-88s total) inside warm_cache(), traced to
+## THIS function -- see the section header above. A real, budgeted upper
+## bound (not an eyeballed comment) on a REAL-SCALE canvas is the only way
+## to pin "fast" as a fact a future change can't silently regress back to
+## the ~2s/call the naive get_pixel/set_pixel loop measured at this size --
+## 500ms is generous for a byte-array pass (should complete in low tens of
+## ms) while still clearly catching a reversion to the naive version.
+func test_apply_chroma_key_completes_quickly_at_real_sheet_resolution():
+	var size := 1254
+	var image := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0.5, 0.5, 0.5, 1.0))  # uniformly outside tolerance of the key below
+	var start_usec := Time.get_ticks_usec()
+	sprite._apply_chroma_key(image, Color(0.98, 0.01, 0.98), 0.25)
+	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
+	assert_lt(
+		elapsed_ms, 500.0,
+		"chroma-keying one %dx%d sheet took %.0fms -- a naive per-pixel get_pixel/set_pixel loop regressed back in" % [size, size, elapsed_ms]
+	)
+
+
 # -- warm_cache (see docs/concept/soil_fauna.md's fps round 6 write-up) --
 # frame_for/crushed_frame_for/bitten_frame_for are each lazily cached on
 # first use per species -- real, measured, whole-image chroma-key+slice
