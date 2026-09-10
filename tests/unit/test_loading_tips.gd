@@ -82,3 +82,56 @@ func test_every_tip_is_unique():
 	for tip in LoadingTips.TIPS:
 		assert_false(seen.has(tip), "duplicate tip: %s" % tip)
 		seen[tip] = true
+
+
+## Requested live: "can you increase the number of tips to 1000?" A flat
+## 1000-line literal would be unmaintainable (and, hand-written one at a
+## time, would run out of genuinely distinct jokes long before genuinely
+## distinct WORDING) -- see _generated_tips's own doc comment for the
+## template x subject combinator this drives instead. The hand-curated
+## originals stay too, so the real total is comfortably OVER 1000, not
+## trimmed down to exactly it.
+func test_pool_reaches_at_least_a_thousand_tips():
+	assert_gt(LoadingTips.TIPS.size(), 999)
+
+
+## Every generated (template, subject) combination must be a real,
+## non-degenerate sentence -- catches a malformed template (a stray `%s`
+## left in, or a missing one so the subject never gets substituted at
+## all) that per-item length/uniqueness checks alone wouldn't necessarily
+## flag.
+func test_generated_tips_have_no_leftover_placeholder_or_missing_substitution():
+	for tip in LoadingTips.TIPS:
+		assert_false(tip.contains("%s"), "unsubstituted template: %s" % tip)
+
+
+## The combinator's own arithmetic should be exact and boring -- template
+## count times subject count, no silent dedup shrinkage from an
+## accidental duplicate template or subject slipping in (that class of
+## bug would otherwise only show up as "count is a bit low," easy to miss
+## next to the >=1000 threshold above).
+func test_generated_tip_count_matches_templates_times_subjects_exactly():
+	assert_eq(
+		LoadingTips._generated_tips().size(),
+		LoadingTips._TEMPLATES.size() * LoadingTips._SUBJECTS.size()
+	)
+
+
+## Confirmed to actually happen while spot-checking real generated output:
+## "Making sure the kingfisher haven't wandered off again." -- `_SUBJECTS`
+## deliberately mixes singular ("the kingfisher", "karma", "the world
+## boss") and plural ("the ants", "the wolves") real nouns, so an
+## auxiliary verb that conjugates for the SUBJECT'S number (haven't/
+## hasn't, and the same family) can never safely follow `%s` in a
+## template -- every template must route around needing one at all (see
+## `_TEMPLATES`' own doc comment for how). Pins the class of bug, not just
+## the one instance, so a future template addition can't reintroduce it a
+## different way.
+func test_no_template_uses_a_subject_number_agreeing_auxiliary_verb():
+	var hazards := ["haven't", "hasn't", "have wandered", "has wandered"]
+	for template in LoadingTips._TEMPLATES:
+		for hazard in hazards:
+			assert_false(
+				template.contains(hazard),
+				"'%s' risks singular/plural agreement in: %s" % [hazard, template]
+			)

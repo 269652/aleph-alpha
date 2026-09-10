@@ -513,6 +513,49 @@ moved with it (was `(2.0, 8.0)`, now `(1.0, 4.0)`) — confirmed red against
 the unmodified 4.5s constant first, green after the one-line change.
 `test_loading_tips.gd` 10/10, `test_loading_overlay.gd` 5/5.
 
+**Revised (2026-09-10): the pool grew from 30 curated tips to 1029.**
+Requested live: *"can you increase the number of tips to 1000?"*
+Hand-writing a thousand individually distinct jokes was never realistic
+— real wit runs out long before real wording does, and a flat thousand-
+line literal would be unmaintainable and unreviewable besides. Instead: a
+small combinator. `_TEMPLATES` (20 generic "verb-ing + subject" frames,
+e.g. `"Convincing %s to cooperate, just this once."`) crossed with
+`_SUBJECTS` (50 real in-game nouns, from `"the ants"` to `"the chunk
+loader"`) via `_generated_tips()` produces every combination —
+`_TEMPLATES.size() * _SUBJECTS.size()` = 1000 sentences, pinned exactly
+by test. `TIPS` itself is now `_deduplicated(_CURATED_TIPS +
+_generated_tips())` — a `static var`, not `const`, since building it
+runs real loops that `const` folding can't evaluate at parse time.
+
+Every template was deliberately built around a present-participle opener
+(`"Convincing"`, `"Reminding"`, `"Untangling"`...) specifically so it
+never needs a conjugated verb agreeing with the subject's own
+grammatical number — `_SUBJECTS` deliberately mixes plural nouns (`"the
+ants"`) with singular ones (`"the kingfisher"`, `"karma"`, `"the world
+boss"`), and a cross product at this scale makes an agreement mismatch
+inevitable if any template isn't immune to it by construction. Caught for
+real, not just reasoned about: a `Making sure %s haven't wandered off
+again.` template produced `"Making sure the kingfisher haven't wandered
+off again."` — grammatically broken for that singular subject. Fixed by
+rewording to `"Keeping an eye on %s so nothing wanders off."` (the
+verb now agrees with the fixed word "nothing", never with `%s`), and a
+new `test_no_template_uses_a_subject_number_agreeing_auxiliary_verb`
+pins the whole CLASS of bug, not just this one instance. A second, real
+duplicate also turned up this way: `"Warning the boars that footsteps are
+getting closer."` is both a hand-curated tip and the `"Warning %s that
+footsteps are getting closer."` x `"the boars"` combination —
+`_deduplicated` handles this structurally (curated tips take priority)
+rather than needing every future template/subject pairing hand-checked
+for collisions.
+
+TDD: `test_pool_reaches_at_least_a_thousand_tips`,
+`test_generated_tip_count_matches_templates_times_subjects_exactly`,
+`test_generated_tips_have_no_leftover_placeholder_or_missing_
+substitution`, and the agreement-hazard test above are all new;
+`test_every_tip_is_unique`/`test_every_tip_is_non_empty_and_reasonably_
+short` (pre-existing, generic over the whole list) now validate the
+1029-tip pool for free. `test_loading_tips.gd` 14/14.
+
 ## Status / mechanisms
 
 - ✅ `Player.appearance` field + `to_save_dict()`/`apply_save_dict()`, tested
