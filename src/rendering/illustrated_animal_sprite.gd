@@ -417,20 +417,63 @@ func _slice_bands(sheet: Dictionary, bands: Array, path: String = "") -> Array[I
 ## (e.g. magenta) can use a generous tolerance for anti-aliased edge blending
 ## without also swallowing a pale, low-saturation drawing color that happens
 ## to sit at a similar overall brightness.
+## Reported live, repeatedly, as "Still at 1fps" (see docs/progress.md's "The
+## real 'Still at 1fps' cause: a per-pixel art-loading loop, not a per-frame
+## system", 2026-09-10): this was a plain GDScript double for loop calling
+## Image.get_pixel/set_pixel once per pixel -- for a real ~1.5-2M-pixel sheet
+## (sheep/wolf/alpaca/the four Germany-region bosses all fall in that range),
+## that is well over a million interpreted per-pixel calls, each allocating/
+## comparing a Color object. SpriteSheetSlicer.chroma_keyed and
+## IllustratedMushroomSprite._apply_chroma_key already carried this exact fix
+## for their own separate duplicates of this same technique; this is that
+## same fix finally ported to THIS class's own copy, which had been missed.
+## Rewritten as one pass over the image's own raw PackedByteArray (RGBA8 is
+## exactly 4 bytes/pixel, in R,G,B,A order) instead -- comparing/writing raw
+## 0-255 byte values has the exact same tolerance semantics as the original
+## 0.0-1.0 float compare (both sides scaled up by the same 255), and zeroing
+## all 4 bytes reproduces the original Color(0,0,0,0) result byte-for-byte.
+## The whole per-pixel check is inlined directly in the loop below, calling
+## only a cheap built-in global (absf) -- NOT factored into a separate
+## per-pixel helper function, which SpriteSheetSlicer.chroma_keyed's own doc
+## comment documents measuring SLOWER than the original get_pixel version at
+## this project's real sheet sizes, not faster: GDScript's own per-call
+## overhead for a user-defined function dominates a tight per-pixel loop
+## regardless of what that function does internally. See
+## test_apply_chroma_key_completes_quickly_at_real_sheet_resolution
+## (tests/unit/test_illustrated_animal_sprite.gd) for the budgeted timing
+## pin this now has to keep passing.
 func _apply_chroma_key(image: Image, key: Color, tolerance: float) -> Image:
-	var keyed := image.duplicate()
+	# Explicitly typed, not `:=` -- Resource.duplicate()'s declared return
+	# type is the base Resource, not the covariant Image, so leaving this
+	# inferred makes every `:=` chained off keyed below (width/height/data)
+	# fail to compile ("Cannot infer the type of ... variable") even though
+	# calling a method on keyed directly (not chained through a second `:=`)
+	# resolves fine dynamically -- see illustrated_mushroom_sprite.gd's own
+	# identical fix for the same gotcha, hit and fixed there first.
+	var keyed: Image = image.duplicate()
 	if keyed.get_format() != Image.FORMAT_RGBA8:
 		keyed.convert(Image.FORMAT_RGBA8)
-	for y in keyed.get_height():
-		for x in keyed.get_width():
-			var c: Color = keyed.get_pixel(x, y)
-			if (
-				absf(c.r - key.r) <= tolerance
-				and absf(c.g - key.g) <= tolerance
-				and absf(c.b - key.b) <= tolerance
-			):
-				keyed.set_pixel(x, y, Color(0, 0, 0, 0))
-	return keyed
+	var width := keyed.get_width()
+	var height := keyed.get_height()
+	var data := keyed.get_data()
+	var key_r := key.r * 255.0
+	var key_g := key.g * 255.0
+	var key_b := key.b * 255.0
+	var byte_tolerance := tolerance * 255.0
+	var i := 0
+	var pixel_count := width * height
+	for _pixel in pixel_count:
+		if (
+			absf(float(data[i]) - key_r) <= byte_tolerance
+			and absf(float(data[i + 1]) - key_g) <= byte_tolerance
+			and absf(float(data[i + 2]) - key_b) <= byte_tolerance
+		):
+			data[i] = 0
+			data[i + 1] = 0
+			data[i + 2] = 0
+			data[i + 3] = 0
+		i += 4
+	return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
 
 
 ## Local-space Y offset (from the marker's own origin, i.e. canvas center) to

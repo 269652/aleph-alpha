@@ -672,3 +672,58 @@ func test_germany_bosses_do_not_log_an_engine_warning():
 		sprite.generate_textures(species, "walk")
 	assert_engine_error_count(0, "loading a Germany-boss sheet should not warn")
 
+
+# -- _apply_chroma_key performance (see docs/progress.md's "The real 'Still
+# at 1fps' cause: a per-pixel art-loading loop, not a per-frame system",
+# 2026-09-10) -- this class carries its OWN separate duplicate of the exact
+# naive per-pixel Image.get_pixel/set_pixel technique that SpriteSheetSlicer.
+# chroma_keyed and IllustratedMushroomSprite._apply_chroma_key were already
+# fixed for (same reported "Still at 1fps" boot-freeze bug, same root cause,
+# just never ported to THIS file's own copy): every chroma-keyed sheet this
+# class loads (sheep/wolf/alpaca/the four Germany-region bosses) sits around
+# 1.57-2.08 million pixels, the same order of magnitude as the mushroom
+# sheets' own 1254x1254 (1,572,516px) that IllustratedMushroomSprite's
+# equivalent test already budgets at 500ms -- the same budget applies here.
+
+## A real budgeted upper bound (not an eyeballed comment) at real-sheet
+## resolution -- sheep.png's own real 1774x887 (1,573,438px), the largest by
+## area of this class's chroma-keyed sheets (wolf.png/alpaca.png are
+## 1536x1024; the four Germany-region bosses measure 1.57-2.08M px each --
+## all comparable, so sheep's is a representative real worst case, not an
+## arbitrary round number). Uniform non-matching fill, not a mixed content/
+## background split: unlike detect_frames/content_rect (see
+## test_sprite_sheet_slicer.gd's own "an all-opaque-fill is an unrealistic
+## worst case" lesson, which applies to functions with an early-out or a
+## bounding box that a full fill either skips past or forces to grow on
+## every pixel), _apply_chroma_key's loop has no such shortcut -- every
+## pixel costs the same fixed handful of comparisons whether it matches the
+## key or not, so a solid fill is a faithful worst case here, not an
+## artificially easy or artificially hard one. Mirrors SpriteSheetSlicer.
+## chroma_keyed's own test_chroma_keyed_completes_quickly_at_real_sheet_
+## resolution and IllustratedMushroomSprite's test_apply_chroma_key_
+## completes_quickly_at_real_sheet_resolution, both built the same way for
+## the same reason (tests/unit/test_sprite_sheet_slicer.gd,
+## tests/unit/test_illustrated_mushroom_sprite.gd).
+func test_apply_chroma_key_completes_quickly_at_real_sheet_resolution():
+	var width := 1774
+	var height := 887
+	var image := Image.create(width, height, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0.5, 0.5, 0.5, 1.0))  # uniformly outside tolerance of sheep's own key below
+	var start_usec := Time.get_ticks_usec()
+	sprite._apply_chroma_key(image, Color(0.95, 0.02, 0.96), 0.25)
+	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
+	# 300ms: comfortable margin on both sides of what was actually measured on
+	# this project's own dev machine, time-matched (naive and fixed run
+	# back-to-back in the same process, canceling out cross-run contention
+	# from other live Godot processes sharing the machine) rather than
+	# eyeballed or copied unchecked from a different file's own budget --
+	# naive measured 436-590ms across 3 paired rounds, the byte-array fix
+	# 141-194ms across the same 3 rounds, a consistent ~2.7-3.4x speedup.
+	assert_lt(
+		elapsed_ms, 300.0,
+		(
+			"chroma-keying one %dx%d sheet took %.0fms -- a naive per-pixel get_pixel/set_pixel loop regressed back in"
+			% [width, height, elapsed_ms]
+		)
+	)
+
