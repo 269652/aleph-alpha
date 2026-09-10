@@ -9,10 +9,50 @@ extends GutTest
 
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const NpcPlanner = preload("res://src/world/npc_planner.gd")
 const CharacterViewScene = preload("res://scenes/character_view.tscn")
 const CharacterView = preload("res://scenes/character_view.gd")
 
 const TILE_SIZE := 16
+
+
+## Counts real plan_day calls -- the FakeNpcPlanner in production returns the
+## SAME schedule regardless of day_index, so a test can't tell "replanned
+## and got the same answer" from "never replanned at all" by inspecting the
+## resulting schedule alone. Records every day_index it was asked for.
+class CountingPlanner:
+	extends NpcPlanner.Planner
+	var call_count := 0
+	var days_asked_for: Array = []
+
+	func plan_day(_identity: NpcIdentity, day_index: int) -> Array:
+		call_count += 1
+		days_asked_for.append(day_index)
+		return [
+			{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+			{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+			{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+			{"time_block": "night", "location_tag": "home", "activity": "sleep"},
+		]
+
+
+## Always returns the same caller-supplied schedule, regardless of day_index
+## -- for a test whose own real travel time (see WALK_SPEED vs. the distance
+## being crossed) unavoidably spans a real day rollover, but whose actual
+## intent has nothing to do with day-rollover replanning at all (e.g.
+## resolving a location tag). The default FakeNpcPlanner would otherwise
+## silently replace the test's own injected schedule the moment a rollover
+## fires, now that day-rollover replanning is real (see this file's own
+## "day-rollover replanning" section).
+class FixedPlanner:
+	extends NpcPlanner.Planner
+	var _schedule: Array
+
+	func _init(fixed_schedule: Array) -> void:
+		_schedule = fixed_schedule
+
+	func plan_day(_identity: NpcIdentity, _day_index: int) -> Array:
+		return _schedule
 
 
 ## Duck-typed world: every tile is the same biome unless overridden, same
@@ -71,6 +111,55 @@ func test_lazily_generates_a_schedule_on_first_process():
 	assert_gt(marker.schedule.size(), 0)
 
 
+# -- day-rollover replanning (docs/progress.md's Interrupt/Replan Handling
+# row: "today's schedule always runs to completion and only re-plans on day
+# rollover") -- that claim was actually FALSE: _day_index was declared but
+# never incremented anywhere, and `schedule` was only ever computed once,
+# the first time it was empty, and never cleared again -- so a real NPC's
+# plan_day() was called exactly ONCE per NPC for their entire existence,
+# not once per in-game day as every doc comment in this file claims. -----
+
+func test_plan_day_is_called_again_after_a_full_simulated_day_elapses():
+	var planner := CountingPlanner.new()
+	marker.set_planner(planner)
+
+	marker._process(1.0)  # first-ever plan (schedule starts empty)
+	assert_eq(planner.call_count, 1, "the premise: the very first process() call must plan once")
+
+	# Advance past one full simulated day (NpcMarker.SECONDS_PER_SIMULATED_DAY)
+	# without crossing a second one.
+	marker._process(NpcMarker.SECONDS_PER_SIMULATED_DAY + 1.0)
+
+	assert_eq(planner.call_count, 2, "a full simulated day passing must trigger exactly one real re-plan")
+	assert_eq(planner.days_asked_for, [0, 1], "the second plan must ask for day 1, not repeat day 0")
+
+
+func test_plan_day_is_not_called_again_within_the_same_simulated_day():
+	var planner := CountingPlanner.new()
+	marker.set_planner(planner)
+
+	marker._process(1.0)
+	assert_eq(planner.call_count, 1)
+
+	# Several more process() calls, still comfortably inside day 0.
+	for _i in 10:
+		marker._process(1.0)
+
+	assert_eq(planner.call_count, 1, "must not re-plan every frame -- only on an actual day rollover")
+
+
+func test_multiple_day_rollovers_each_trigger_exactly_one_replan():
+	var planner := CountingPlanner.new()
+	marker.set_planner(planner)
+	marker._process(1.0)
+
+	marker._process(NpcMarker.SECONDS_PER_SIMULATED_DAY)  # -> day 1
+	marker._process(NpcMarker.SECONDS_PER_SIMULATED_DAY)  # -> day 2
+
+	assert_eq(planner.call_count, 3)
+	assert_eq(planner.days_asked_for, [0, 1, 2])
+
+
 func test_position_moves_toward_the_resolved_target():
 	# Force a schedule where "night" (a reachable hour) sends the NPC home,
 	# and start away from home so movement is observable.
@@ -105,12 +194,20 @@ func test_resolves_a_landmark_tag_to_the_shared_landmark_position():
 ## "field") falls back to the NPC's own personal workspot rather than
 ## crashing on a missing landmark.
 func test_resolves_a_non_landmark_work_tag_to_the_personal_workspot():
-	marker.schedule = [
+	var fixed_schedule := [
 		{"time_block": "morning", "location_tag": "field", "activity": "work"},
 		{"time_block": "midday", "location_tag": "field", "activity": "work"},
 		{"time_block": "evening", "location_tag": "field", "activity": "work"},
 		{"time_block": "night", "location_tag": "field", "activity": "work"},
 	]
+	marker.schedule = fixed_schedule
+	# The 200s loop below unavoidably spans a real day rollover (WALK_SPEED
+	# vs. the distance from (0,0) to workspot_position alone takes ~72s --
+	# already past SECONDS_PER_SIMULATED_DAY) -- pin the planner so that
+	# real, now-correctly-firing rollover replan keeps returning this exact
+	# schedule instead of the default FakeNpcPlanner's occupation-based one
+	# (see FixedPlanner's own doc comment).
+	marker.set_planner(FixedPlanner.new(fixed_schedule))
 	marker.position = Vector2(0, 0)
 	for i in 200:
 		marker._process(1.0)
@@ -236,6 +333,80 @@ func test_process_advances_hunger_through_the_bound_economy():
 	var before: float = marker.economy.needs.hunger
 	marker._process(1.0)
 	assert_gt(marker.economy.needs.hunger, before)
+
+
+# -- urgent hunger interrupts the schedule (docs/progress.md's Interrupt/
+# Replan Handling row: "a need crossing a threshold") -- NpcEconomy.step
+# already reacts to is_hungry() by transacting food through the market
+# (see test_process_advances_hunger_through_the_bound_economy's own
+# neighbors), but that is a pure background abstraction: `pixel_position`
+# isn't checked against anywhere specific, so a starving NPC still just
+# visibly walks wherever their ORDINARY schedule says (e.g. standing at a
+# workspot all day) while their hunger silently resolves off-screen. This
+# makes the VISIBLE behavior react too -- an NPC reads as ignoring their
+# own urgent need otherwise.
+
+func test_urgent_hunger_redirects_the_npc_toward_the_well_regardless_of_schedule():
+	var market := VillageMarket.new()
+	marker.setup_economy(market)
+	# Scheduled to be at the (distant) workspot all day -- with no interrupt,
+	# the NPC would walk there and stay, ignoring hunger entirely.
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "workspot", "activity": "work"},
+		{"time_block": "midday", "location_tag": "workspot", "activity": "work"},
+		{"time_block": "evening", "location_tag": "workspot", "activity": "work"},
+		{"time_block": "night", "location_tag": "workspot", "activity": "work"},
+	]
+	marker.economy.needs.hunger = 1.0  # unambiguously past HUNGRY_THRESHOLD
+	assert_true(marker.economy.needs.is_hungry(), "the premise: hunger must actually read as urgent")
+	var well: Vector2 = marker.landmarks["well"]
+	var before_distance := marker.position.distance_to(well)
+
+	marker._process(0.5)
+
+	assert_lt(
+		marker.position.distance_to(well), before_distance,
+		"an urgently hungry NPC must move toward the well, not their scheduled workspot"
+	)
+
+
+func test_hunger_below_the_urgent_threshold_does_not_interrupt_the_schedule():
+	var market := VillageMarket.new()
+	marker.setup_economy(market)
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "workspot", "activity": "work"},
+		{"time_block": "midday", "location_tag": "workspot", "activity": "work"},
+		{"time_block": "evening", "location_tag": "workspot", "activity": "work"},
+		{"time_block": "night", "location_tag": "workspot", "activity": "work"},
+	]
+	marker.economy.needs.hunger = 0.0  # freshly fed, not urgent
+	var workspot: Vector2 = marker.workspot_position
+	var before_distance := marker.position.distance_to(workspot)
+
+	marker._process(0.5)
+
+	assert_lt(
+		marker.position.distance_to(workspot), before_distance,
+		"an NPC who isn't urgently hungry must still follow their ordinary schedule"
+	)
+
+
+func test_an_npc_with_no_economy_is_unaffected_by_the_hunger_interrupt():
+	# economy is null until setup_economy is called (see NpcMarker's own doc
+	# comment) -- must not crash, and must fall back to the ordinary schedule.
+	assert_null(marker.economy)
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "workspot", "activity": "work"},
+		{"time_block": "midday", "location_tag": "workspot", "activity": "work"},
+		{"time_block": "evening", "location_tag": "workspot", "activity": "work"},
+		{"time_block": "night", "location_tag": "workspot", "activity": "work"},
+	]
+	var workspot: Vector2 = marker.workspot_position
+	var before_distance := marker.position.distance_to(workspot)
+
+	marker._process(0.5)
+
+	assert_lt(marker.position.distance_to(workspot), before_distance)
 
 
 ## The full real production loop through NpcMarker's own _process: a hunter

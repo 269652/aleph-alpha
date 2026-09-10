@@ -96,10 +96,34 @@ func setup_economy(market) -> void:
 
 func _process(delta: float) -> void:
 	_elapsed_time += delta
-	if schedule.is_empty():
+	# Real day-rollover replanning (docs/progress.md's Interrupt/Replan
+	# Handling row: "today's schedule always runs to completion and only
+	# re-plans on day rollover"). That claim was previously FALSE in code:
+	# _day_index was declared but never incremented, and `schedule` was
+	# only ever computed once, the first time it was empty, and never
+	# cleared again -- so plan_day() ran exactly ONCE per NPC for their
+	# entire existence, not once per in-game day as every doc comment in
+	# this file already claimed. current_day is derived the same way
+	# _current_hour() already derives hour-of-day, from this NPC's own
+	# local _elapsed_time clock -- no dependency on the world's real clock.
+	var current_day := int(_elapsed_time / SECONDS_PER_SIMULATED_DAY)
+	if schedule.is_empty() or current_day != _day_index:
+		_day_index = current_day
 		schedule = _planner.plan_day(identity, _day_index)
 
 	var entry := NpcSchedule.current_entry(schedule, _current_hour())
+	# A real, urgent need overrides wherever today's ordinary schedule says
+	# to be right now (docs/progress.md's Interrupt/Replan Handling row: "a
+	# need crossing a threshold") -- without this, hunger only ever
+	# resolved through NpcEconomy.step's own background market transaction
+	# (see that function), which never checks WHERE the NPC actually is, so
+	# a starving villager kept visibly standing at/walking to their
+	# scheduled spot the whole time, reading as oblivious to their own
+	# need. Checked BEFORE instruction_script below so an explicit,
+	# player-authored standing instruction still has the final say when it
+	# actually produces an action -- this is only ever the fallback default.
+	if economy != null and economy.needs.is_hungry():
+		entry = {"time_block": entry.get("time_block", ""), "location_tag": "well", "activity": "eat"}
 	if instruction_script != null:
 		var action: Variant = NpcInstructionEvaluator.evaluate(instruction_script, _instruction_frame())
 		if action != null:
