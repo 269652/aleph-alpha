@@ -66,20 +66,41 @@ func play_footstep(surface: String) -> void:
 	_play_footstep_clip(FootstepSound.clip_path_for(surface))
 
 
+## How long (seconds) a mushroom-crush one-shot is allowed to keep
+## playing before being cut short. Reported live: "Can you make the
+## mushroom crush sound only 0.3s long? It plays long after you stepped
+## on it." Unlike footsteps -- naturally cut short by the very next
+## step's own restart, since they repeat every stride -- a mushroom crush
+## is a rare, one-off event that otherwise plays out its source
+## recording's full native length. Real audio-editing tooling to trim the
+## FILE itself isn't available in this environment (see assets/audio/
+## footsteps/CREDITS.md's own note on the same constraint elsewhere), so
+## this caps PLAYBACK instead of the asset.
+const MUSHROOM_CRUSH_MAX_DURATION_SECONDS := 0.3
+
 ## A mushroom crushed underfoot -- see FootstepSound.MUSHROOM_CRUSH_
-## CLIP_PATH's own doc comment on why this can be a real, silent no-op
-## today (empty path, no recording sourced yet) rather than an error.
+## CLIP_PATH's own doc comment for the real, sourced clip this plays.
+## Capped at MUSHROOM_CRUSH_MAX_DURATION_SECONDS above; every other
+## one-shot (footsteps) plays its clip out in full.
 func play_mushroom_crush() -> void:
-	_play_footstep_clip(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH)
-
-
-func _play_footstep_clip(clip_path: String) -> void:
-	if clip_path.is_empty():
+	var voice := _play_footstep_clip(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH)
+	if voice == null:
 		return
+	voice.get_tree().create_timer(MUSHROOM_CRUSH_MAX_DURATION_SECONDS).timeout.connect(voice.stop)
+
+
+## Returns the voice that started playing, or null for a real, silent
+## no-op (an empty clip path -- see e.g. FootstepSound.MUSHROOM_CRUSH_
+## CLIP_PATH's own doc comment for when that's still the case) rather
+## than an error.
+func _play_footstep_clip(clip_path: String) -> AudioStreamPlayer:
+	if clip_path.is_empty():
+		return null
 	var voice := _footstep_pool[_next_footstep_voice]
 	_next_footstep_voice = (_next_footstep_voice + 1) % _footstep_pool.size()
 	voice.stream = load(clip_path)
 	voice.play()
+	return voice
 
 
 ## A creature's own occasional vocalization, at its real world position

@@ -19408,3 +19408,32 @@ TDD: 4 new tests (pool size, exact combinator arithmetic, no leftover
 2 pre-existing generic tests (uniqueness, length) now validating the full
 1029-tip pool for free. `test_loading_tips.gd` 14/14, `test_loading_
 overlay.gd` 5/5 unaffected.
+
+## Mushroom-crush sound capped at 0.3s (`concept/creature_and_footstep_audio.md`, 2026-09-10)
+
+Reported live: *"Can you make the mushroom crush sound only 0.3s long?
+It plays long after you stepped on it."* Real audio-editing tooling to
+trim the styrofoam-crush source recording itself isn't available in this
+environment (the same constraint already named elsewhere for this audio
+system) -- capped in playback instead. `InteractionSfxPlayer.
+play_mushroom_crush()` now schedules a one-shot `SceneTreeTimer`
+(`MUSHROOM_CRUSH_MAX_DURATION_SECONDS`, 0.3) that stops the specific
+voice that started playing. Footsteps stay uncapped and unaffected --
+they naturally cut themselves short every stride via the same round-robin
+pool, so only a rare, one-off event like a crush ever plays its source
+recording out to the end uninterrupted. `_play_footstep_clip` now returns
+the `AudioStreamPlayer` it started (`null` for the empty-path no-op) so
+the stop-timer has the exact voice instance to attach to.
+
+TDD: `test_mushroom_crush_stops_itself_after_its_own_max_duration` (a
+real wall-clock `await wait_seconds`, not a simulated delta) confirmed
+red against the uncapped code first, green after. Also caught and fixed
+in the same pass: `mushroom_crush.mp3` needed a fresh `--headless
+--import` pass in this worktree (added by a concurrent session, the same
+stale-import-cache pattern this project has hit repeatedly — see
+`concept/godot-stale-import-cache-in-shared-checkout` line of work) —
+three unrelated `test_interaction_sfx_player.gd` tests failed with
+resource-load errors until the reimport, none of it caused by this pass's
+own code change. `test_interaction_sfx_player.gd` 12/12, `test_
+footstep_sound.gd` and `test_world_creature_and_footstep_audio_
+wiring.gd` re-run clean.

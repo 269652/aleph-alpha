@@ -132,6 +132,27 @@ func test_repeated_footsteps_advance_through_the_pool_round_robin():
 	)
 
 
+## Reported live: "Can you make the mushroom crush sound only 0.3s long?
+## It plays long after you stepped on it." Real audio-editing tooling to
+## trim the FILE itself isn't available in this environment (see
+## assets/audio/footsteps/CREDITS.md's own note on why forest_twigs.ogg
+## needed a transcode swap for the same underlying reason) -- capped in
+## PLAYBACK instead. A real wall-clock wait (not a fake-delta trick).
+func test_mushroom_crush_stops_itself_after_its_own_max_duration():
+	add_child_autofree(player.build())
+	player.play_mushroom_crush()
+	var voice := _find_playing_voice(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH)
+	assert_not_null(voice, "the premise: it must actually be playing right after triggering")
+	assert_true(voice.playing)
+
+	await wait_seconds(InteractionSfxPlayer.MUSHROOM_CRUSH_MAX_DURATION_SECONDS + 0.15)
+
+	assert_false(
+		voice.playing,
+		"should have been cut short at MUSHROOM_CRUSH_MAX_DURATION_SECONDS, not left to play out"
+	)
+
+
 func _find_playing_voice(expected_clip_path: String) -> AudioStreamPlayer:
 	for voice in player._footstep_pool:
 		if voice.playing and voice.stream != null and voice.stream.resource_path == expected_clip_path:

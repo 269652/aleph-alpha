@@ -148,6 +148,28 @@ the `InteractionSfxPlayer`/`World` wiring already in place -- the
 no-op-when-empty guard in `InteractionSfxPlayer._play_footstep_clip`
 simply stops triggering now that the path is real.
 
+**Revised (2026-09-10): capped at 0.3s, not the source recording's full
+native length.** Reported live: *"Can you make the mushroom crush sound
+only 0.3s long? It plays long after you stepped on it."* Real audio-
+editing tooling to trim the FILE itself isn't available in this
+environment (the same constraint `assets/audio/footsteps/CREDITS.md`
+already names elsewhere), so this caps PLAYBACK instead:
+`InteractionSfxPlayer.play_mushroom_crush()` now schedules a one-shot
+`SceneTreeTimer` (`MUSHROOM_CRUSH_MAX_DURATION_SECONDS`, 0.3) that stops
+the specific voice that started playing. Footsteps are unaffected and
+deliberately not capped the same way -- they naturally cut themselves
+short every stride (the very next step restarts the same round-robin
+voice pool), so only a rare, one-off event like a mushroom crush ever
+plays its source recording out to the end uninterrupted.
+`_play_footstep_clip` now returns the `AudioStreamPlayer` it started
+(`null` for the empty-path no-op) so `play_mushroom_crush` has the exact
+voice instance to attach the stop-timer to -- `play_footstep` ignores the
+return value, unaffected. TDD:
+`test_mushroom_crush_stops_itself_after_its_own_max_duration` (a real
+wall-clock `await wait_seconds`, not a simulated delta) confirmed red
+against the uncapped code first, green after. `test_interaction_sfx_
+player.gd` 12/12.
+
 ### Creature calls
 
 `src/audio/creature_call_sound.gd` (pure) owns a flat `species -> clip
