@@ -38,6 +38,7 @@ const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const StarterKit = preload("res://src/gameplay/starter_kit.gd")
 const BeeHiveMarker = preload("res://src/rendering/bee_hive_marker.gd")
 const BeeColony = preload("res://src/world/bee_colony.gd")
+const LivesTracker = preload("res://src/gameplay/lives_tracker.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -1119,6 +1120,132 @@ func test_heal_does_nothing_to_a_dead_player():
 	player.heal(10.0)
 
 	assert_true(player.is_dead, "healing must not resurrect a dead player")
+
+
+# -- death stakes: nine lives (docs/concept/death.md) ------------------------
+#
+# "Death is somewhat permanent: a player has nine lives. When they're gone,
+# the character is gone forever." LivesTracker (src/gameplay/lives_tracker.gd)
+# already existed, tested in isolation, but was never wired to Player's own
+# death/respawn flow -- dying cost nothing but a 3-second freeze, forever
+# repeatable (see _respawn's own prior doc comment: "no death-stakes system
+# yet"). Deliberately scoped to just the nine-lives counter and what happens
+# once it hits zero -- the much larger ghost/graveyard/corpse-run/PvP-loot
+# mechanism this same concept doc describes is NOT built here (see this
+# feature's own commit/docs note for the explicit line drawn).
+
+func test_dying_decrements_a_life():
+	assert_eq(player.lives_remaining(), LivesTracker.DEFAULT_LIVES, "the premise: a fresh player starts with the full count")
+
+	player.take_damage(9999.0)
+
+	assert_eq(player.lives_remaining(), LivesTracker.DEFAULT_LIVES - 1)
+
+
+func test_healing_a_dead_player_does_not_double_charge_a_life():
+	player.take_damage(9999.0)
+	assert_eq(player.lives_remaining(), LivesTracker.DEFAULT_LIVES - 1)
+
+	# take_damage no-ops once already dead (see its own is_dead guard) --
+	# further hits on the same corpse must not tick the counter down again.
+	player.take_damage(9999.0)
+	player.heal(10.0)
+
+	assert_eq(player.lives_remaining(), LivesTracker.DEFAULT_LIVES - 1)
+
+
+func test_respawning_after_death_restores_the_player_and_costs_no_extra_life():
+	player.take_damage(9999.0)
+	player._authority_step(Player.RESPAWN_DELAY + 0.1)
+
+	assert_false(player.is_dead)
+	assert_eq(player.health, player.max_health)
+	assert_eq(player.lives_remaining(), LivesTracker.DEFAULT_LIVES - 1, "one death, one life spent -- respawning itself must not spend another")
+
+
+func test_running_out_of_lives_marks_the_player_permanently_dead():
+	for _life in LivesTracker.DEFAULT_LIVES:
+		player.take_damage(9999.0)
+		player._authority_step(Player.RESPAWN_DELAY + 0.1)
+
+	assert_eq(player.lives_remaining(), 0)
+	assert_true(player.is_permanently_dead())
+
+
+func test_a_permanently_dead_player_never_auto_respawns():
+	for _life in LivesTracker.DEFAULT_LIVES:
+		player.take_damage(9999.0)
+		player._authority_step(Player.RESPAWN_DELAY + 0.1)
+	assert_true(player.is_permanently_dead())
+
+	# Advance the would-be respawn timer several times over -- a permanently
+	# dead player must stay dead regardless of how long real time passes.
+	player._authority_step(Player.RESPAWN_DELAY * 5.0)
+
+	assert_true(player.is_dead, "a permanently dead player must never respawn")
+
+
+func test_permanently_dying_emits_a_signal_exactly_once():
+	watch_signals(player)
+	for _life in LivesTracker.DEFAULT_LIVES:
+		player.take_damage(9999.0)
+		player._authority_step(Player.RESPAWN_DELAY + 0.1)
+
+	# The dead-but-frozen branch of _authority_step runs every physics frame
+	# once permanently dead (see is_dead's own early-out) -- the signal must
+	# fire once, on the transition, not once per frame it stays true.
+	player._authority_step(Player.RESPAWN_DELAY)
+	player._authority_step(Player.RESPAWN_DELAY)
+
+	assert_signal_emit_count(player, "permanently_died", 1)
+
+
+func test_lives_remaining_persists_through_save_and_load():
+	player.take_damage(9999.0)
+	player._authority_step(Player.RESPAWN_DELAY + 0.1)
+	assert_eq(player.lives_remaining(), LivesTracker.DEFAULT_LIVES - 1)
+	var save_data := player.to_save_dict()
+
+	var reloaded := PlayerScene.instantiate()
+	add_child(reloaded)
+	reloaded.apply_save_dict(save_data)
+
+	assert_eq(reloaded.lives_remaining(), LivesTracker.DEFAULT_LIVES - 1)
+	remove_child(reloaded)
+	reloaded.free()
+
+
+func test_loading_a_permanently_dead_save_keeps_the_character_dead():
+	for _life in LivesTracker.DEFAULT_LIVES:
+		player.take_damage(9999.0)
+		player._authority_step(Player.RESPAWN_DELAY + 0.1)
+	assert_true(player.is_permanently_dead())
+	var save_data := player.to_save_dict()
+
+	# A fresh Player defaults is_dead=false -- without restoring it for the
+	# permanently-dead case specifically, loading this exact save would
+	# silently un-kill a character whose nine lives are already spent.
+	var reloaded := PlayerScene.instantiate()
+	add_child(reloaded)
+	reloaded.apply_save_dict(save_data)
+
+	assert_true(reloaded.is_permanently_dead())
+	assert_true(reloaded.is_dead, "a reloaded permanently-dead character must still show as dead")
+	remove_child(reloaded)
+	reloaded.free()
+
+
+func test_a_save_written_before_lives_existed_defaults_to_the_full_count():
+	var save_data := player.to_save_dict()
+	save_data.erase("lives_remaining")
+
+	var reloaded := PlayerScene.instantiate()
+	add_child(reloaded)
+	reloaded.apply_save_dict(save_data)
+
+	assert_eq(reloaded.lives_remaining(), LivesTracker.DEFAULT_LIVES)
+	remove_child(reloaded)
+	reloaded.free()
 
 
 # -- casting a spell (docs/concept/spell_runtime.md) -------------------------

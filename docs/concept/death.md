@@ -5,6 +5,19 @@ the character is gone forever and the player has to create a new one. See
 [pvp.md](pvp.md) for how these stakes apply (or don't) to player-vs-player
 combat specifically.
 
+**Status (2026-09-10):** the nine-lives counter itself is real and live
+(`LivesTracker`/`Player._lives_tracker`) -- dying spends exactly one life,
+survives save/reload, and once the ninth is spent the character freezes
+permanently (`Player.is_permanently_dead()`/`permanently_died` signal,
+shown in the HUD's death label) rather than ever respawning again.
+Deliberately NOT built yet, all still exactly as described below: ghost
+mode, graveyards, the corpse-run (gear stays where you fell, at risk,
+lootable), other-player resurrection, and soul stones (buy or find). A
+permanently-dead character today simply stays frozen in place forever with
+a "your journey has ended" message -- there is no in-game path back to the
+main menu from that state yet (only quitting and choosing New Game from
+there), and no cleanup of the dead save file.
+
 ### Earning extra lives
 
 Players can buy more lives/soul stones with [premium

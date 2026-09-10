@@ -38,6 +38,7 @@ const MushroomBiting = preload("res://src/gameplay/mushroom_biting.gd")
 const Metabolism = preload("res://src/gameplay/metabolism.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
 const MushroomToxin = preload("res://src/gameplay/mushroom_toxin.gd")
+const LivesTracker = preload("res://src/gameplay/lives_tracker.gd")
 const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
 const Sickness = preload("res://src/gameplay/sickness.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
@@ -285,6 +286,25 @@ const DEAD_MODULATE := Color(0.35, 0.35, 0.35, 1.0)
 var respawn_position := Vector2.ZERO
 const RESPAWN_DELAY := 3.0
 var _respawn_accumulator := 0.0
+
+## Death stakes (docs/concept/death.md): "a player has nine lives. When
+## they're gone, the character is gone forever." Deliberately scoped to just
+## the counter and what happens at zero -- the concept doc's much larger
+## ghost/graveyard/corpse-run/PvP-loot mechanism is NOT built here (that
+## needs graveyards as real world features, a ghost movement mode, corpse
+## persistence with loot decay, and other-player resurrection, none of which
+## exist yet, and the doc's own "Open questions" leave several of its rules
+## still undecided -- ordinary respawn below is untouched otherwise: same
+## instant reset at respawn_position, no corpse).
+var _lives_tracker := LivesTracker.new()
+## Guards `permanently_died` so it fires once on the transition into
+## permanent death, not every physics frame the dead-and-frozen branch of
+## _authority_step keeps running afterward.
+var _permanently_died_emitted := false
+## Emitted exactly once, the moment the last life is spent -- World listens
+## to show the player their character's journey has ended (see
+## _authority_step).
+signal permanently_died
 
 ## How often actively swimming spawns a water-ripple disturbance (see
 ## EarthChunkManager.record_water_disturbance) -- once per stroke, not every
@@ -940,6 +960,23 @@ func take_damage(amount: float) -> void:
 	if _health.is_dead(health):
 		is_dead = true
 		modulate = DEAD_MODULATE
+		# Spends exactly one life PER DEATH -- guarded by is_dead's own
+		# no-op-once-dead check at the top of this function, so a second hit
+		# on the same corpse (or a heal, which never clears is_dead -- see
+		# heal()'s own guard) can never reach here again for this death.
+		_lives_tracker.lose_life()
+
+
+## How many of the character's nine lives remain (docs/concept/death.md).
+func lives_remaining() -> int:
+	return _lives_tracker.lives_remaining
+
+
+## True once the last life is spent -- this character's journey has ended
+## for good (see _authority_step, which stops auto-respawning once this is
+## true, and the `permanently_died` signal that fires on the transition).
+func is_permanently_dead() -> bool:
+	return _lives_tracker.is_permanently_dead()
 
 
 ## Spends `amount` mana, all-or-nothing -- mirrors Wallet.spend's own "never
@@ -1087,6 +1124,10 @@ func to_save_dict() -> Dictionary:
 		# {species} dicts, not the live BondedCompanionMarker nodes -- see
 		# apply_save_dict, which respawns a marker per entry on load.
 		"bonded_companions": bonded_companions.duplicate(true),
+		# Death stakes (docs/concept/death.md) -- must survive reload, the
+		# same as karma above, or the nine-lives count could be reset by
+		# quitting and reloading right after a death.
+		"lives_remaining": _lives_tracker.lives_remaining,
 	}
 
 
@@ -1115,6 +1156,19 @@ func apply_save_dict(data: Dictionary) -> void:
 	mushrooms_eaten = data.get("mushrooms_eaten", mushrooms_eaten)
 	karma = data.get("karma", karma)
 	accepted_quest_ids = (data.get("accepted_quest_ids", accepted_quest_ids) as Array).duplicate()
+	_lives_tracker = LivesTracker.new(data.get("lives_remaining", _lives_tracker.lives_remaining))
+	# is_dead itself is deliberately NOT part of this save dict (an ordinary
+	# mid-respawn-countdown death reloading as alive-at-respawn-position is
+	# an acceptable simplification -- matches this project's pre-existing
+	# "no death-stakes system" baseline for that case). PERMANENT death is
+	# different: without this line, a freshly-instantiated Player's own
+	# is_dead default (false) would silently un-kill a permanently-dead
+	# character on reload -- health/lives restore correctly, but nothing
+	# would show them as dead, and they'd be fully playable again despite
+	# having zero lives left. That would defeat this whole feature's point.
+	if _lives_tracker.is_permanently_dead():
+		is_dead = true
+		modulate = DEAD_MODULATE
 	# Rebuilds the genome net from the seed BEFORE anything reads the web, so a
 	# reloaded character's own unique nodes are grafted again rather than
 	# silently missing from a save that still lists them as allocated. A save
@@ -1985,6 +2039,13 @@ func _authority_step(delta: float) -> void:
 	if _chunk_manager == null:
 		return
 	if is_dead:
+		if is_permanently_dead():
+			# The last life is spent -- docs/concept/death.md: "the character
+			# is gone forever." Never respawns; frozen here for good.
+			if not _permanently_died_emitted:
+				_permanently_died_emitted = true
+				permanently_died.emit()
+			return
 		_respawn_accumulator += delta
 		if _respawn_accumulator >= RESPAWN_DELAY:
 			_respawn()
