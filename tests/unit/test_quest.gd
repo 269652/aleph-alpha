@@ -33,6 +33,20 @@ func test_a_household_missing_a_recipe_input_produces_a_quest():
 	assert_eq(quests[0]["recipe_id"], "stone_pickaxe")
 
 
+## Occupation is already a real input to this function (it's the very key
+## driving which recipe/shortage gets checked) but was discarded rather than
+## returned -- a player-facing quest display (docs/concept/quests.md) needs
+## something better than a raw household_id to show ("The Blacksmith needs
+## ..." rather than exposing an internal id), and this is the one real,
+## already-known fact that gets it there for free, no new lookup needed.
+func test_the_quest_names_the_households_own_occupation():
+	var market := Market.new()
+	var quests := Quest.production_shortfall_quests_for(
+		"settlement:0_0", {"household:1": "blacksmith"}, market, recipe_book
+	)
+	assert_eq(quests[0]["occupation"], "blacksmith")
+
+
 func test_the_quest_names_the_specific_missing_items_and_amounts():
 	var market := Market.new()
 	market.add_stock("stick", 2)  # has sticks, still missing rock

@@ -53,6 +53,7 @@ const DevConsole = preload("res://scenes/dev_console.gd")
 const InventoryWindow = preload("res://scenes/inventory_window.gd")
 const CompassWindow = preload("res://scenes/compass_window.gd")
 const CraftingWindow = preload("res://scenes/crafting_window.gd")
+const QuestLogWindow = preload("res://scenes/quest_log_window.gd")
 const SkillTreeWindow = preload("res://scenes/skill_tree_window.gd")
 const CreaturePanel = preload("res://scenes/creature_panel.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
@@ -314,6 +315,7 @@ const NO_FORCED_HOUR := -1.0
 const CONSOLE_TOGGLE_ACTION := "toggle_console"
 const INVENTORY_TOGGLE_ACTION := "toggle_inventory"
 const CRAFTING_TOGGLE_ACTION := "toggle_crafting"
+const QUEST_LOG_TOGGLE_ACTION := "toggle_quest_log"
 const SKILLS_TOGGLE_ACTION := "toggle_skills"
 const SETTINGS_TOGGLE_ACTION := "toggle_settings"
 
@@ -510,6 +512,7 @@ var _inventory_window: PanelContainer
 ## keybind like the console/inventory windows above.
 var _compass_window: PanelContainer
 var _crafting_window: CraftingWindow
+var _quest_log_window: QuestLogWindow
 var _skill_window: SkillTreeWindow
 var _settings_overlay: SettingsOverlay
 var _license_gate_overlay: LicenseGateOverlay
@@ -916,6 +919,7 @@ func _ready() -> void:
 	_build_inventory_window()
 	_build_compass_window()
 	_build_crafting_window()
+	_build_quest_log_window()
 	_build_skill_window()
 	_build_settings_overlay()
 	_build_creature_panels_container()
@@ -1510,6 +1514,43 @@ func _build_crafting_window() -> void:
 	_crafting_window.offset_bottom = 280.0
 	_ui.add_child(_crafting_window)
 	_crafting_window.craft_requested.connect(_on_craft_requested)
+
+
+## Builds the quest log (see QuestLogWindow), hidden until toggled with
+## toggle_quest_log (default U). Player-facing surface for the real, live
+## production-shortfall quest system -- see that window's own doc comment
+## for the reported gap this closes (QuestLog.reconcile already ran every
+## frame below, via _step_quest_reconciliation, but nothing ever called
+## accept/abandon and there was no UI at all).
+func _build_quest_log_window() -> void:
+	_quest_log_window = QuestLogWindow.new()
+	_quest_log_window.theme = _ui_theme
+	_quest_log_window.set_anchors_preset(Control.PRESET_CENTER)
+	# QuestLogWindow's own custom_minimum_size is 480x420 -- same +20px
+	# margin convention _build_crafting_window's own offsets already use.
+	_quest_log_window.offset_left = -260.0
+	_quest_log_window.offset_top = -230.0
+	_quest_log_window.offset_right = 260.0
+	_quest_log_window.offset_bottom = 230.0
+	_ui.add_child(_quest_log_window)
+	_quest_log_window.accept_requested.connect(_on_quest_accept_requested)
+	_quest_log_window.abandon_requested.connect(_on_quest_abandon_requested)
+
+
+func _on_quest_accept_requested(offer_id: String) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		return
+	QuestLog.accept(local_player, offer_id)
+	_quest_log_window.refresh(_chunk_manager.all_production_shortfall_quests(), local_player.accepted_quest_ids)
+
+
+func _on_quest_abandon_requested(offer_id: String) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		return
+	QuestLog.abandon(local_player, offer_id)
+	_quest_log_window.refresh(_chunk_manager.all_production_shortfall_quests(), local_player.accepted_quest_ids)
 
 
 func _on_craft_requested(recipe_id: String) -> void:
@@ -2986,6 +3027,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_inventory_window.toggle()
 	elif event.is_action_pressed(CRAFTING_TOGGLE_ACTION):
 		_crafting_window.toggle()
+	elif event.is_action_pressed(QUEST_LOG_TOGGLE_ACTION):
+		_quest_log_window.toggle()
 	elif event.is_action_pressed(SKILLS_TOGGLE_ACTION):
 		_skill_window.toggle()
 		var lp := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
@@ -3184,7 +3227,10 @@ func _step_quest_reconciliation(local_player: Player, delta: float) -> void:
 
 
 func _any_gameplay_window_open() -> bool:
-	return _inventory_window.visible or _crafting_window.is_open() or _skill_window.is_open()
+	return (
+		_inventory_window.visible or _crafting_window.is_open() or _skill_window.is_open()
+		or _quest_log_window.is_open()
+	)
 
 
 ## Whether a WORLD-SPACE floating hint -- the "Talk (G)"/"Pick (E)" prompt,
@@ -3214,6 +3260,7 @@ func _close_gameplay_windows() -> void:
 	_inventory_window.visible = false
 	_crafting_window.visible = false
 	_skill_window.visible = false
+	_quest_log_window.visible = false
 
 
 ## Number keys 1..HOTBAR_SLOT_COUNT (rebindable hotbar_N actions) activate the
@@ -4168,6 +4215,18 @@ func _update_crafting_window(local_player: Player) -> void:
 	if not _crafting_window.visible:
 		return
 	_crafting_window.refresh(local_player.inventory_counts())
+
+
+## Refreshes the quest log (see QuestLogWindow) from the real, live
+## production-shortfall projection -- only while it's actually open, same
+## "don't rebuild for nothing" reasoning _update_crafting_window's own doc
+## comment gives. Every known settlement's quests, same scope
+## _step_quest_reconciliation already reconciles against -- this window has
+## no separate, narrower "nearby" concept of its own.
+func _update_quest_log_window(local_player: Player) -> void:
+	if not _quest_log_window.visible:
+		return
+	_quest_log_window.refresh(_chunk_manager.all_production_shortfall_quests(), local_player.accepted_quest_ids)
 
 
 func _update_player_health_bar(local_player: Player) -> void:

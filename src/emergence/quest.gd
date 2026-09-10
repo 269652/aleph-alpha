@@ -57,6 +57,7 @@ static func production_shortfall_quests_for(
 		quests.append({
 			"settlement_id": settlement_id,
 			"household_id": household_id,
+			"occupation": occupation,
 			"recipe_id": recipe_id,
 			"missing": missing,
 		})

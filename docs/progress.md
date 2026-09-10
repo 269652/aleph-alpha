@@ -2805,18 +2805,20 @@ fire/oil, and layered elevation remain unstarted.
 
 ### Phase 4 — Emergent quests
 
-Goal per roadmap: replace "kill 10 boars" with need-driven requests. **Nothing
-in this phase has been implemented** (depends entirely on Phase 2's NPCs and
-Phase 1's ecosystem/evolution sim, both themselves partial); the mechanism
-itself is now fully specified in [concept/quests.md](concept/quests.md)
-(2026-08-13 design pass) — see this doc's own new Quests section below for
-the mechanism-by-mechanism breakdown.
+Goal per roadmap: replace "kill 10 boars" with need-driven requests. **This
+table's own "nothing implemented" framing predates a separate, later track**
+that partially delivers it a different way: `docs/emergence/07-
+implementation-roadmap.md`'s Phase 12 treats quests as live PROJECTIONS of
+real state rather than authored templates -- see this doc's own Quests
+section below (now corrected) for the full breakdown, and
+[concept/quests.md](concept/quests.md) (2026-08-13 design pass) for the
+original, still-mostly-unbuilt full vision this table was written against.
 
 | Mechanism | Status | Note | Complexity |
 |---|---|---|---|
-| Need-Driven Quest Templates | ⬜ Not started | Spec'd in concept/quests.md: safety/production/social need sources resolving into fetch/protect/deliver/join-the-defense shapes. | large |
+| Need-Driven Quest Templates | 🚧 Partial (2026-09-10) | The PRODUCTION need source is real and player-facing (`src/emergence/quest.gd`/`quest_log.gd`, `scenes/quest_log_window.gd` toggle U -- accept/abandon/auto-fulfil all genuinely work). Safety/social need sources and the fetch/protect/deliver/join-the-defense shapes remain unbuilt -- see the Quests section below. | large |
 | LLM Quest Flavor Text | ⬜ Not started | | medium |
-| Quest Reward/Consequence Hooks | ⬜ Not started | Spec'd in concept/quests.md's Consequences section (reputation/discounts/skill rewards; settlement destruction on failure). | small |
+| Quest Reward/Consequence Hooks | 🚧 Partial (2026-09-10) | Karma-only: accepting/abandoning/fulfilling a production quest moves real Karma (+1/-1, see karma_and_luck.md). Reputation/discount/skill rewards and settlement-destruction-on-failure (spec'd in concept/quests.md's Consequences section) remain unbuilt. | small |
 
 ### Phase 5+ — Post-MVP expansion
 
@@ -6860,9 +6862,23 @@ Still no lifecycle/aging, no faction/festival wiring yet.
 ### Quests (`concept/quests.md`)
 
 New concept doc (2026-08-13), resolving `overview.md`'s former "quest
-template design" open question. No code exists yet — depends entirely on
-Phase 2's NPC daily-planner/replan architecture and Phase 1's ecosystem/
-evolution sim, both still partial. All ⬜ Not started:
+template design" open question. **"No code exists yet" below is stale** as
+of a separate, later track: `docs/emergence/07-implementation-roadmap.md`'s
+own Phase 12 ("refactor quests into projections of household/institution/
+settlement/... problems, never new authoritative content") is a real,
+narrower, already-partially-built reinterpretation of quests -- see
+`src/emergence/quest.gd`/`quest_log.gd`, and the Phase 4 roadmap table's own
+Need-Driven Quest Templates row above. Concretely: the **Production** need
+source below is real (a household short a recipe input generates a live,
+recomputed-every-query quest naming the exact missing item(s), grounded in
+real Market/CraftingRecipeBook state) and now has a real player-facing
+window (2026-09-10, `scenes/quest_log_window.gd`, toggle U) -- accept,
+abandon, and auto-fulfil (+1/-1 Karma) all genuinely work end to end.
+Everything else below this note is still accurate: safety/social need
+sources, settlement promotion/quorum, representative selection, village-
+endangerment, autonomous defense, and quest consequences are all still
+unbuilt, and this narrower production slice deliberately does not attempt
+any of them (see quest.gd's own doc comment on its scope).
 
 - **Need Source Taxonomy (safety/production/social)** (medium)
 - **Individual-to-Settlement Quest Promotion** (medium) — exact-target
