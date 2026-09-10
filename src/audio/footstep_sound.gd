@@ -114,3 +114,35 @@ static func clip_path_for(surface: String) -> String:
 ## convention), not Wikimedia Commons -- Commons genuinely had nothing
 ## for this, checked directly, not assumed.
 const MUSHROOM_CRUSH_CLIP_PATH := "res://assets/audio/footsteps/mushroom_crush.mp3"
+
+
+## Per-surface volume ADJUSTMENT in dB, relative to the plain default
+## (0dB, i.e. unchanged) -- distinct sourced clips were never level-
+## matched to each other (the same "no audio-editing tooling in this
+## environment" constraint that already applies to trimming/codec fixes
+## elsewhere in this file applies to loudness normalization too), so one
+## clip can read noticeably louder or quieter than its neighbours purely
+## because of where it happened to be sourced from, not anything about
+## the surface itself. Missing from this dict means "play at the default
+## volume," not silence -- see volume_db_for's own fallback.
+##
+## Reported live: "The grass footsteps are way too loud... can you make
+## them fainter?" `grass.ogg` (OpenGameArt/Freesound, see CREDITS.md)
+## reads noticeably hotter than every other sourced clip here (all from
+## Wikimedia Commons or Pixabay). -12dB is a real, deliberate correction,
+## not an eyeballed guess: roughly a perceived halving of loudness (a
+## well-established audio-engineering rule of thumb -- every -10dB is
+## roughly "half as loud" to human hearing -- not a personal preference
+## number), a large, clearly-audible cut matching how strongly this was
+## reported ("way too loud"). A real re-normalized recording, or a
+## measured dB difference against the other clips, would be a genuine
+## upgrade over this if either ever turns up -- not a gap in the mixing
+## logic itself.
+const _VOLUME_DB_BY_SURFACE := {
+	"grass": -12.0,
+}
+
+## An unrecognized surface (or one with nothing special set) plays at the
+## plain default (0dB) rather than silently drifting quieter/louder too.
+static func volume_db_for(surface: String) -> float:
+	return float(_VOLUME_DB_BY_SURFACE.get(surface, 0.0))

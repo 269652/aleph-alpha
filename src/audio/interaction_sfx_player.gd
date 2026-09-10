@@ -61,9 +61,12 @@ func build() -> Node:
 
 ## The footstep sound for `surface` (see FootstepSound.surface_for) --
 ## always at the listener, non-positional. Reported live: "we need
-## footsteps."
+## footsteps." Applies that surface's own volume adjustment (see
+## FootstepSound.volume_db_for's own doc comment -- grass specifically
+## reads noticeably hotter than every other sourced clip, reported live
+## as "way too loud").
 func play_footstep(surface: String) -> void:
-	_play_footstep_clip(FootstepSound.clip_path_for(surface))
+	_play_footstep_clip(FootstepSound.clip_path_for(surface), FootstepSound.volume_db_for(surface))
 
 
 ## How long (seconds) a mushroom-crush one-shot is allowed to keep
@@ -93,12 +96,23 @@ func play_mushroom_crush() -> void:
 ## no-op (an empty clip path -- see e.g. FootstepSound.MUSHROOM_CRUSH_
 ## CLIP_PATH's own doc comment for when that's still the case) rather
 ## than an error.
-func _play_footstep_clip(clip_path: String) -> AudioStreamPlayer:
+##
+## `volume_db` defaults to 0.0 (the plain default, i.e. unchanged) and is
+## set UNCONDITIONALLY on every call, not just when a caller has a real
+## adjustment to apply -- the round-robin pool REUSES voices across
+## different surfaces/sounds over time, so a voice left at a previous
+## call's quieter volume (e.g. grass's own -12dB, see FootstepSound.
+## volume_db_for) must never bleed into whatever plays next on that same
+## voice. play_mushroom_crush deliberately relies on this default rather
+## than passing 0.0 explicitly -- always full volume regardless of
+## whichever surface last used this voice.
+func _play_footstep_clip(clip_path: String, volume_db: float = 0.0) -> AudioStreamPlayer:
 	if clip_path.is_empty():
 		return null
 	var voice := _footstep_pool[_next_footstep_voice]
 	_next_footstep_voice = (_next_footstep_voice + 1) % _footstep_pool.size()
 	voice.stream = load(clip_path)
+	voice.volume_db = volume_db
 	voice.play()
 	return voice
 

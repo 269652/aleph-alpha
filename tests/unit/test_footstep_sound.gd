@@ -98,3 +98,26 @@ func test_mushroom_crush_clip_path_points_at_the_real_sourced_recording():
 ## Commons-only pattern are real, named sources rather than a gap.
 func test_grass_clip_path_points_at_the_real_sourced_recording():
 	assert_eq(FootstepSound.clip_path_for("grass"), "res://assets/audio/footsteps/grass.ogg")
+
+
+# -- per-surface volume: distinct sourced clips were never level-matched --
+
+## Reported live: "The grass footsteps are way too loud... can you make
+## them fainter?" Real audio-editing tooling to re-normalize the source
+## recording's own level isn't available in this environment (the same
+## constraint already named elsewhere in this file for trimming/codec
+## fixes) -- corrected in PLAYBACK instead, the same "cap it in code, not
+## the asset" shape MUSHROOM_CRUSH_MAX_DURATION_SECONDS already
+## established for the crush sound's own length.
+func test_grass_footsteps_play_quieter_than_the_default_volume():
+	assert_lt(FootstepSound.volume_db_for("grass"), 0.0)
+
+
+## Every OTHER surface's clip was sourced from the same two places
+## (Wikimedia Commons, Pixabay) at a level nobody has reported as
+## mismatched -- only grass gets an adjustment; everything else,
+## including an unrecognized surface, stays at the plain default (0dB,
+## i.e. unchanged) rather than silently drifting too.
+func test_every_other_surface_plays_at_the_default_volume():
+	for surface in ["snow", "forest", "underwater", "default", "sand", "rock", "lava"]:
+		assert_eq(FootstepSound.volume_db_for(surface), 0.0, surface)

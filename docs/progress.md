@@ -19437,3 +19437,32 @@ resource-load errors until the reimport, none of it caused by this pass's
 own code change. `test_interaction_sfx_player.gd` 12/12, `test_
 footstep_sound.gd` and `test_world_creature_and_footstep_audio_
 wiring.gd` re-run clean.
+
+## Grass footsteps play quieter than every other surface (`concept/creature_and_footstep_audio.md`, 2026-09-10)
+
+Reported live: *"The grass footsteps are way too loud... can you make
+them fainter?"* `grass.ogg` (OpenGameArt/Freesound) reads noticeably
+hotter than every other sourced footstep clip (all Wikimedia Commons or
+Pixabay) -- distinct sourced clips were never level-matched, the same
+"no audio-editing tooling here" constraint already named elsewhere for
+this audio system. Corrected in playback rather than the asset: new
+`FootstepSound.volume_db_for(surface)` returns a real, deliberate
+`-12.0` for grass (`0.0`/unchanged for every other surface) -- roughly a
+perceived halving of loudness, a well-established audio-engineering rule
+of thumb, not a personal-preference number.
+
+`InteractionSfxPlayer._play_footstep_clip` gained a `volume_db`
+parameter (default `0.0`, applied unconditionally on every call) since
+the round-robin voice pool reuses the same `AudioStreamPlayer` across
+different surfaces over time -- a voice left at grass's own quieter
+volume must never bleed into whatever plays next on it. `play_footstep`
+passes the surface's own value through; `play_mushroom_crush`
+deliberately relies on the `0.0` default so a crush always plays at full
+volume regardless of which surface last used that voice.
+
+TDD: 2 new tests in `test_footstep_sound.gd` (now 15/15); 3 new tests in
+`test_interaction_sfx_player.gd` (now 15/15) -- applying the adjustment,
+plus two reuse-guard tests that cycle the FULL voice pool with grass
+first so the next call is guaranteed to land on a voice actually left at
+-12dB, proving neither a later footstep nor a mushroom crush inherits it
+by accident.

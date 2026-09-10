@@ -153,6 +153,45 @@ func test_mushroom_crush_stops_itself_after_its_own_max_duration():
 	)
 
 
+# -- per-surface volume: reported live, "grass footsteps are way too --
+# -- loud... make them fainter" -----------------------------------------
+
+func test_play_footstep_applies_the_surfaces_own_volume_adjustment():
+	add_child_autofree(player.build())
+	player.play_footstep("grass")
+	var voice := _find_playing_voice(FootstepSound.clip_path_for("grass"))
+	assert_not_null(voice)
+	assert_eq(voice.volume_db, FootstepSound.volume_db_for("grass"))
+
+
+## The round-robin pool REUSES voices across different surfaces over
+## time -- a voice left at grass's own quieter volume_db must not bleed
+## into whatever surface plays next on that same voice. Cycles the full
+## pool with the quieter surface first so the next call is GUARANTEED to
+## land on a voice that was actually left at -12dB, not just a fresh one
+## that happened to already read 0dB by coincidence.
+func test_play_footstep_does_not_inherit_a_previous_surfaces_quieter_volume():
+	add_child_autofree(player.build())
+	for i in InteractionSfxPlayer.FOOTSTEP_POOL_SIZE:
+		player.play_footstep("grass")
+	player.play_footstep("snow")
+	var voice := _find_playing_voice(FootstepSound.clip_path_for("snow"))
+	assert_not_null(voice)
+	assert_eq(voice.volume_db, 0.0)
+
+
+## Same reuse hazard, the other direction: a mushroom crush landing on a
+## voice grass just left quiet must still play at full volume.
+func test_play_mushroom_crush_does_not_inherit_a_previous_surfaces_quieter_volume():
+	add_child_autofree(player.build())
+	for i in InteractionSfxPlayer.FOOTSTEP_POOL_SIZE:
+		player.play_footstep("grass")
+	player.play_mushroom_crush()
+	var voice := _find_playing_voice(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH)
+	assert_not_null(voice)
+	assert_eq(voice.volume_db, 0.0, "must not inherit grass's quieter volume from a reused pool voice")
+
+
 func _find_playing_voice(expected_clip_path: String) -> AudioStreamPlayer:
 	for voice in player._footstep_pool:
 		if voice.playing and voice.stream != null and voice.stream.resource_path == expected_clip_path:

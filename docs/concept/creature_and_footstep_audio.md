@@ -121,6 +121,36 @@ isn't silently capped by the footprint sprite's narrower one.
 `World._client_process` feeds those facts through `FootstepSound.
 surface_for` and triggers `InteractionSfxPlayer.play_footstep`.
 
+**Revised (2026-09-10): grass plays quieter than every other surface.**
+Reported live: *"The grass footsteps are way too loud... can you make
+them fainter?"* `grass.ogg` (OpenGameArt/Freesound, see CREDITS.md) reads
+noticeably hotter than every other sourced clip here (all Wikimedia
+Commons or Pixabay) -- distinct sourced clips were never level-matched to
+each other, the same "no audio-editing tooling in this environment"
+constraint that already applies to trimming/codec fixes elsewhere in this
+doc. New `FootstepSound.volume_db_for(surface) -> float` (a per-surface
+dB adjustment dict, `0.0`/unchanged for anything not listed) supplies a
+real, deliberate `-12.0` for grass -- roughly a perceived halving of
+loudness (a well-established audio-engineering rule of thumb, not a
+personal-preference number), matching how strongly this was reported.
+`InteractionSfxPlayer._play_footstep_clip` gained a `volume_db`
+parameter, defaulting to `0.0` and applied UNCONDITIONALLY on every
+call -- the round-robin voice pool reuses the same `AudioStreamPlayer`
+across different surfaces over time, so a voice left at grass's own
+quieter volume must never bleed into whatever plays next on it (footstep
+or mushroom crush alike). `play_footstep` passes the surface's own value
+through; `play_mushroom_crush` deliberately relies on the `0.0` default
+rather than passing it explicitly, so a crush always plays at full volume
+regardless of which surface last used that voice.
+
+TDD: `test_grass_footsteps_play_quieter_than_the_default_volume` /
+`test_every_other_surface_plays_at_the_default_volume` in `test_
+footstep_sound.gd` (now 15/15); `test_interaction_sfx_player.gd` gained
+3 tests (now 15/15) -- applying the adjustment, and two reuse-guard tests
+that deliberately cycle the FULL voice pool with grass first so the next
+call is guaranteed to land on a voice actually left at `-12dB`, proving
+neither a later footstep nor a mushroom crush inherits it by accident.
+
 ### Mushroom crush
 
 Left an honest empty string for a while (see "Real-world grounding"
