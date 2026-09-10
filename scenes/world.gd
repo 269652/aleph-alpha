@@ -4176,9 +4176,22 @@ func _update_player_health_bar(local_player: Player) -> void:
 	_player_health_label.text = "HP %d / %d" % [int(local_player.health), int(local_player.max_health)]
 
 	_death_label.visible = local_player.is_dead
-	if local_player.is_dead:
+	if local_player.is_permanently_dead():
+		# docs/concept/death.md: "the character is gone forever" -- no
+		# countdown, because there is nothing left to respawn into. Actually
+		# starting a new character (main menu navigation, save cleanup) is a
+		# separate, larger piece deliberately not built this pass -- see
+		# this feature's own commit/docs note.
+		_death_label.text = "Your journey has ended.\nThis character's nine lives are spent."
+	elif local_player.is_dead:
 		var remaining := Player.RESPAWN_DELAY - local_player._respawn_accumulator
-		_death_label.text = "You Died\nRespawning in %d..." % ceili(maxf(remaining, 0.0))
+		_death_label.text = (
+			"You Died (%d %s left)\nRespawning in %d..." % [
+				local_player.lives_remaining(),
+				"life" if local_player.lives_remaining() == 1 else "lives",
+				ceili(maxf(remaining, 0.0)),
+			]
+		)
 
 
 ## The reserve left of a meter SurvivalMeters stores as a DEFICIT.
