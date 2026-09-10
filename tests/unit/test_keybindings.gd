@@ -134,3 +134,25 @@ func test_cast_action_exists_and_does_not_collide_with_any_other_default():
 			bindings.default_keycode_for("cast"), bindings.default_keycode_for(action),
 			"cast's default collides with %s" % action
 		)
+
+
+## Block moves off Shift onto Ctrl to make room for sprint (see below) --
+## the same "move the other one off the key rather than share" precedent
+## kick/toggle_skills already set above.
+func test_block_action_moved_off_shift_onto_ctrl():
+	assert_eq(bindings.default_keycode_for("block"), KEY_CTRL)
+
+
+## See docs/concept/input.md's "Level actions" -- sprint is a held state
+## (am I sprinting right now), the same shape block/pickup/fish/lasso/mount
+## already are, not a one-shot tap.
+func test_sprint_action_defaults_to_shift_and_does_not_collide_with_any_other_default():
+	assert_true(bindings.action_names().has("sprint"))
+	assert_eq(bindings.default_keycode_for("sprint"), KEY_SHIFT)
+	for action in bindings.action_names():
+		if action == "sprint":
+			continue
+		assert_ne(
+			bindings.default_keycode_for("sprint"), bindings.default_keycode_for(action),
+			"sprint's default collides with %s" % action
+		)

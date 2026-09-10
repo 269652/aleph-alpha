@@ -83,6 +83,7 @@ func after_each():
 	Input.action_release("talk")
 	Input.action_release("fish")
 	Input.action_release("block")
+	Input.action_release("sprint")
 
 
 # -- a new player's starting kit (Player._ready()) --------------------------
@@ -2710,6 +2711,50 @@ func test_a_horse_tamed_through_the_real_catch_and_feed_flow_follows_its_owner()
 	assert_lt(
 		horse.position.distance_to(player.position), start_distance,
 		"a horse tamed by hand should come to its owner, exactly as one ordered to FOLLOW directly does"
+	)
+
+
+# -- walking and sprinting (see docs/concept/input.md's "Level actions") ----
+#
+# BASE_SPEED was halved (2026-09-10) so ordinary movement has two real paces:
+# an everyday walk, and a deliberate, held-key sprint back to what used to be
+# the only speed a player ever had (now SPRINT_SPEED, unchanged in value).
+
+func test_sprint_speed_is_the_old_flat_speed_and_base_speed_is_exactly_half():
+	assert_eq(Player.SPRINT_SPEED, 80.0, "the old flat constant, unchanged")
+	assert_eq(Player.BASE_SPEED, Player.SPRINT_SPEED / 2.0)
+
+
+func test_a_player_walks_at_base_speed_with_sprint_not_held():
+	assert_false(player.is_sprinting())
+	assert_eq(player.current_speed(), Player.BASE_SPEED)
+
+
+func test_holding_sprint_moves_the_player_at_sprint_speed():
+	Input.action_press("sprint")
+	assert_true(player.is_sprinting())
+	assert_eq(player.current_speed(), Player.SPRINT_SPEED)
+
+
+func test_releasing_sprint_returns_the_player_to_base_speed():
+	Input.action_press("sprint")
+	Input.action_release("sprint")
+	assert_false(player.is_sprinting())
+	assert_eq(player.current_speed(), Player.BASE_SPEED)
+
+
+## A mount already has its own real, per-individual speed model (see the
+## riding tests below) -- sprint is an on-foot pace, not a second multiplier
+## stacked on top of a horse's own fitness-derived speed.
+func test_sprint_has_no_effect_while_mounted():
+	var horse := _tamed_horse_at(Vector2(12, 0))
+	player._try_mount()
+	var mounted_speed := player.current_speed()
+
+	Input.action_press("sprint")
+	assert_eq(
+		player.current_speed(), mounted_speed,
+		"a mount's own speed model must be untouched by the sprint key"
 	)
 
 

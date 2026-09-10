@@ -90,7 +90,16 @@ const ImpactResolver = preload("res://src/gameplay/impact_resolver.gd")
 const StoneRenderer = preload("res://src/rendering/stone_renderer.gd")
 const CollapsedPassage = preload("res://src/rendering/collapsed_passage.gd")
 
-const BASE_SPEED := 80.0
+## Halved (2026-09-10) from the old flat 80.0, which is now SPRINT_SPEED --
+## ordinary movement has two real paces now: an everyday walk, and a
+## deliberate, held-key sprint back to what used to be the only speed a
+## player ever had. See current_speed()/is_sprinting().
+const BASE_SPEED := 40.0
+## The old flat on-foot speed, reachable only by holding the "sprint" action
+## (docs/concept/input.md's "Level actions" -- default Shift, see
+## Keybindings). Exactly double BASE_SPEED by construction, not a
+## separately-tuned number of its own.
+const SPRINT_SPEED := BASE_SPEED * 2.0
 const PLAYER_SIZE := 12
 
 ## Taming reach (see docs/concept/taming.md). The throw is deliberately short:
@@ -695,6 +704,7 @@ var _pending_input_direction := Vector2.ZERO
 var _pending_attack_pressed := false
 var _pending_cast_pressed := false
 var _pending_block_pressed := false
+var _pending_sprint_pressed := false
 var _pending_build_pressed := false
 var _pending_destroy_pressed := false
 var _pending_pickup_pressed := false
@@ -902,7 +912,8 @@ func _bind_wasd_movement() -> void:
 	_bind_key_action("move_up", KEY_W)
 	_bind_key_action("move_down", KEY_S)
 	_bind_key_action("attack", KEY_SPACE)
-	_bind_key_action("block", KEY_SHIFT)
+	_bind_key_action("block", KEY_CTRL)
+	_bind_key_action("sprint", KEY_SHIFT)
 	_bind_key_action("pickup", KEY_E)
 	_bind_key_action("fish", KEY_F)
 	_bind_key_action("lasso", KEY_R)
@@ -3805,7 +3816,20 @@ func _draw_rope() -> void:
 ## not one flat speed shared by every horse regardless of which one is
 ## actually under the saddle.
 func current_speed() -> float:
-	return Taming.mounted_speed_for(_mount_fitness_score()) if is_mounted() else BASE_SPEED
+	if is_mounted():
+		return Taming.mounted_speed_for(_mount_fitness_score())
+	return SPRINT_SPEED if is_sprinting() else BASE_SPEED
+
+
+## Whether the sprint key is held right now -- a LEVEL, not an edge (see
+## docs/concept/input.md), same poll shape is_blocking() already uses:
+## `Input.is_action_pressed` for the locally-controlled instance, the
+## replicated `_pending_sprint_pressed` level for a remote one. Has no
+## effect while mounted (see current_speed) -- a mount already has its own
+## real, per-individual speed model, and sprint is an on-foot pace, not a
+## second multiplier stacked on top of it.
+func is_sprinting() -> bool:
+	return Input.is_action_pressed("sprint") if _controlled_locally() else _pending_sprint_pressed
 
 
 ## The current mount's fitness_score (see AnimalFitness), read from its own

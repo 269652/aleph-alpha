@@ -16,7 +16,15 @@ const ACTIONS := [
 	{"action": "move_left", "label": "Move Left", "default": KEY_A},
 	{"action": "move_right", "label": "Move Right", "default": KEY_D},
 	{"action": "attack", "label": "Attack / Use Tool", "default": KEY_SPACE},
-	{"action": "block", "label": "Block", "default": KEY_SHIFT},
+	# Moved off Shift (2026-09-10) to make room for sprint, which took Shift
+	# instead -- the same "move the other one off the key rather than share"
+	# precedent kick/toggle_skills already set below.
+	{"action": "block", "label": "Block", "default": KEY_CTRL},
+	# See docs/concept/input.md's "Level actions": sprint is a held state (am
+	# I sprinting right now), not a one-shot tap, the same shape block/pickup/
+	# fish/lasso/mount already are. Doubles Player.BASE_SPEED back to the old
+	# flat SPRINT_SPEED while held (see Player.current_speed).
+	{"action": "sprint", "label": "Sprint", "default": KEY_SHIFT},
 	{"action": "pickup", "label": "Pick Up Nearby Items", "default": KEY_E},
 	{"action": "kick", "label": "Kick Nearby Stone", "default": KEY_K},
 	# The "put this down" complement to E's "pick this up into hand" (see
