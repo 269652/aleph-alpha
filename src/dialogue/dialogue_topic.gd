@@ -66,8 +66,9 @@ extends RefCounted
 ## substrate bug to surface: `boss` (world_boss_promoted/defeated name only
 ## the creature as actor and set no witnesses, so the two most IMPORTANT
 ## events in the game -- 0.6 and 0.7, the highest importance anything
-## writes -- reach no villager's bank), `path` (path_worn/path_reclaimed
-## name only the path), and `player_deed` (player_claimed_property is held
+## writes -- reach no villager's bank), `path` (path_worn/path_reclaimed and
+## their trail-tier siblings trail_formed/trail_reclaimed all name only the
+## path), and `player_deed` (player_claimed_property is held
 ## by the PLAYER's own household). Each lights up for free the day its
 ## emitter grows witnesses; none of them is a dialogue problem to fix here.
 ##
@@ -168,7 +169,7 @@ const MEMORY_TOPIC_EVENT_TYPES := {
 		"contract_fulfilled", "contract_breached", "contract_defaulted", "contract_cancelled",
 	],
 	TOPIC_BOSS: ["world_boss_promoted", "world_boss_defeated"],
-	TOPIC_PATH: ["path_worn", "path_reclaimed"],
+	TOPIC_PATH: ["path_worn", "path_reclaimed", "trail_formed", "trail_reclaimed"],
 	TOPIC_PLAYER_DEED: ["player_claimed_property"],
 }
 
