@@ -54,6 +54,14 @@ const InventoryWindow = preload("res://scenes/inventory_window.gd")
 const CompassWindow = preload("res://scenes/compass_window.gd")
 const CraftingWindow = preload("res://scenes/crafting_window.gd")
 const QuestLogWindow = preload("res://scenes/quest_log_window.gd")
+const ConversationWindow = preload("res://scenes/conversation_window.gd")
+const NpcMarker = preload("res://src/rendering/npc_marker.gd")
+const NpcInteraction = preload("res://src/dialogue/npc_interaction.gd")
+const NpcVoice = preload("res://src/dialogue/npc_voice.gd")
+const NpcRecognition = preload("res://src/dialogue/npc_recognition.gd")
+const DialogueTopic = preload("res://src/dialogue/dialogue_topic.gd")
+const DialogueMove = preload("res://src/dialogue/dialogue_move.gd")
+const DialogueBeat = preload("res://src/dialogue/dialogue_beat.gd")
 const SkillTreeWindow = preload("res://scenes/skill_tree_window.gd")
 const CreaturePanel = preload("res://scenes/creature_panel.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
@@ -318,6 +326,15 @@ const CRAFTING_TOGGLE_ACTION := "toggle_crafting"
 const QUEST_LOG_TOGGLE_ACTION := "toggle_quest_log"
 const SKILLS_TOGGLE_ACTION := "toggle_skills"
 const SETTINGS_TOGGLE_ACTION := "toggle_settings"
+## Not a *_TOGGLE_ACTION -- "talk" already exists (Keybindings, default G)
+## for Player._talk_step's own bare NpcGreeting banner (docs/concept/npc.md's
+## "Minimal talk interaction" placeholder). This is the SAME key opening the
+## real ConversationWindow instead, per docs/concept/dialogue.md's own
+## Status section ("ConversationWindow... opens on the existing talk key").
+## _talk_step's banner still fires on the same press too -- a harmless,
+## transient overlap while the two systems share one key, not a second
+## source of truth for what is actually said (see docs/progress.md).
+const TALK_ACTION := "talk"
 
 ## Where the player's key-binding overrides persist between sessions. Only
 ## overrides are stored (see Keybindings.to_dict); defaults live in code.
@@ -513,6 +530,13 @@ var _inventory_window: PanelContainer
 var _compass_window: PanelContainer
 var _crafting_window: CraftingWindow
 var _quest_log_window: QuestLogWindow
+var _conversation_window: ConversationWindow
+## Which villager the currently open (or most recently open) conversation is
+## with -- ConversationWindow's own topic_chosen signal carries only the
+## topic_id (the one thing only the window knows; World already knows which
+## NPC it opened the conversation with, so the window does not need to hand
+## that back).
+var _conversation_npc_id := ""
 var _skill_window: SkillTreeWindow
 var _settings_overlay: SettingsOverlay
 var _license_gate_overlay: LicenseGateOverlay
@@ -920,6 +944,7 @@ func _ready() -> void:
 	_build_compass_window()
 	_build_crafting_window()
 	_build_quest_log_window()
+	_build_conversation_window()
 	_build_skill_window()
 	_build_settings_overlay()
 	_build_creature_panels_container()
@@ -1551,6 +1576,110 @@ func _on_quest_abandon_requested(offer_id: String) -> void:
 		return
 	QuestLog.abandon(local_player, offer_id)
 	_quest_log_window.refresh(_chunk_manager.all_production_shortfall_quests(), local_player.accepted_quest_ids)
+
+
+## Builds the conversation window (see ConversationWindow), hidden until a
+## real conversation opens on the talk key (see _on_talk_pressed). Same
+## PRESET_CENTER + margin convention every other gameplay window already
+## uses -- ConversationWindow's own custom_minimum_size is 480x380.
+func _build_conversation_window() -> void:
+	_conversation_window = ConversationWindow.new()
+	_conversation_window.theme = _ui_theme
+	_conversation_window.set_anchors_preset(Control.PRESET_CENTER)
+	_conversation_window.offset_left = -260.0
+	_conversation_window.offset_top = -210.0
+	_conversation_window.offset_right = 260.0
+	_conversation_window.offset_bottom = 210.0
+	_ui.add_child(_conversation_window)
+	_conversation_window.topic_chosen.connect(_on_conversation_topic_chosen)
+
+
+## The talk key's real handler (docs/concept/dialogue.md's own Status
+## section: "ConversationWindow... opens on the existing talk key"). A
+## second press while already open closes it -- the same one-key-does-the-
+## obvious-thing shape every other gameplay window's toggle already has.
+## Player._talk_step's own bare NpcGreeting banner still fires on the same
+## press too (see TALK_ACTION's own doc comment) -- a harmless, transient
+## overlap, not a second source of truth for what is actually said.
+func _on_talk_pressed(local_player: Player) -> void:
+	if _conversation_window.is_open():
+		_conversation_window.visible = false
+		return
+	if _any_gameplay_window_open():
+		return
+	var npc := _chunk_manager.nearest_npc_near(local_player.position, Player.TALK_RADIUS)
+	if npc == null:
+		return
+	_open_conversation_with(npc, local_player)
+
+
+## Runs the real pipeline (docs/concept/dialogue.md: DialogueContext.build
+## -> frame -> NpcVoice -> DialogueTopic -> DialogueMove -> DialogueBeat)
+## and hands ConversationWindow the finished Beats -- this is the ONE call
+## site in scenes/ for the whole pipeline; the window itself never reaches
+## for any of these modules except OfflineRenderer (see that window's own
+## doc comment).
+##
+## `sources` deliberately omits household_count/active_institutions/
+## production_counts/market/village_market -- EarthChunkManager keys those
+## by settlement_id, which only DialogueContext's own private
+## _settlement_id helper can recover from an npc_id, and duplicating that
+## logic here risked silently mis-deriving it. So the settlement-aggregate
+## topics (village_status/tier/specialization/food, wage, work) have no
+## live data yet -- a real, named follow-up (see docs/progress.md), not a
+## silent gap: hunger, wallet, household_ask (the doc's own flagship "Bren
+## asking you for three rock" example), neighbour, contradiction, weather
+## and all eleven memory-backed topics all work today.
+func _open_conversation_with(npc: NpcMarker, local_player: Player) -> void:
+	var npc_id := EntityRef.for_npc(npc.identity.seed_value)
+	var sources := {
+		"identity": npc.identity,
+		"economy": npc.economy,
+		"event_store": _chunk_manager.event_store(),
+		"memory_store": _chunk_manager.memory_store(),
+		"contract_store": _chunk_manager.contract_store(),
+		"shortfalls": _chunk_manager.all_production_shortfall_quests(),
+		"co_present_identities": _chunk_manager.npc_identities_near(npc.position, Player.TALK_RADIUS * 2.0, npc),
+		"season": _chunk_manager.current_season(),
+		"weather": _chunk_manager.current_weather(npc.position),
+		"snow_depth": _chunk_manager.snow_depth(),
+		"world_age_seconds": _chunk_manager.world_age_seconds(),
+		"seconds_per_simulated_day": EarthChunkManager.SECONDS_PER_SIMULATED_DAY,
+		"player_inventory": local_player.inventory,
+		"player_wallet": local_player.wallet,
+	}
+
+	var result := NpcInteraction.talk(npc.identity, sources)
+	var frame: Dictionary = result["frame"]
+	var voice_register := NpcVoice.register_for(npc.identity.genome.traits)
+	var recognition := NpcRecognition.tier_for({
+		"npc_id": npc_id,
+		"event_store": _chunk_manager.event_store(),
+		"contract_store": _chunk_manager.contract_store(),
+		"memories": frame.get("memories", []),
+	})
+
+	var topics := DialogueTopic.available_for(frame)
+	var moves := DialogueMove.select(
+		topics, _chunk_manager.seen_ledger(), npc_id, frame.get("world_age_seconds", 0.0),
+		npc.identity.seed_value, 3
+	)
+	var beats: Array = []
+	for move in moves:
+		beats.append(DialogueBeat.build(move, frame, voice_register, recognition))
+	if beats.is_empty():
+		beats.append(DialogueBeat.build({}, frame, voice_register, recognition))
+
+	_conversation_npc_id = npc_id
+	_conversation_window.open_for(npc_id, npc.identity.npc_name, result["greeting"], beats)
+
+
+## Burns the chosen topic in the real, persistent ledger (see
+## EarthChunkManager.seen_ledger) so the SAME line is not the top pick again
+## until dialogue.md's own one-villager-day decay -- ConversationWindow
+## itself holds no ledger of its own (see that window's own doc comment).
+func _on_conversation_topic_chosen(topic_id: String) -> void:
+	_chunk_manager.seen_ledger().mark_told(_conversation_npc_id, topic_id, _chunk_manager.world_age_seconds())
 
 
 func _on_craft_requested(recipe_id: String) -> void:
@@ -3029,6 +3158,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_crafting_window.toggle()
 	elif event.is_action_pressed(QUEST_LOG_TOGGLE_ACTION):
 		_quest_log_window.toggle()
+	elif event.is_action_pressed(TALK_ACTION):
+		var talker := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+		if talker != null:
+			_on_talk_pressed(talker)
 	elif event.is_action_pressed(SKILLS_TOGGLE_ACTION):
 		_skill_window.toggle()
 		var lp := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
@@ -3229,7 +3362,7 @@ func _step_quest_reconciliation(local_player: Player, delta: float) -> void:
 func _any_gameplay_window_open() -> bool:
 	return (
 		_inventory_window.visible or _crafting_window.is_open() or _skill_window.is_open()
-		or _quest_log_window.is_open()
+		or _quest_log_window.is_open() or _conversation_window.is_open()
 	)
 
 
@@ -3261,6 +3394,7 @@ func _close_gameplay_windows() -> void:
 	_crafting_window.visible = false
 	_skill_window.visible = false
 	_quest_log_window.visible = false
+	_conversation_window.visible = false
 
 
 ## Number keys 1..HOTBAR_SLOT_COUNT (rebindable hotbar_N actions) activate the

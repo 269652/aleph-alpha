@@ -234,13 +234,52 @@ to keep.
 
 ## Status
 
-- ⬜ Everything below is being built now; this doc is the spec, written first.
-- ⬜ Substrate: witness wiring, `production_failed` change-guard, `VillageWages`,
+**Updated (2026-09-10):** the whole pure pipeline is now real, tested and
+wired to a player-facing window. This section is corrected against the live
+code (each module read directly), not assumed from the checklist above.
+
+- ✅ Substrate: witness wiring, `production_failed` change-guard, `VillageWages`,
   `SettlementFood`, 8-occupation recipe map.
-- ⬜ `NpcVoice`, `DialogueContext`, `DialogueTopic`, `DialogueMove`,
-  `NpcSeenLedger`, `DialogueBeat`, `OfflineRenderer`.
-- ⬜ `ConversationWindow` + typewriter; opens on the existing talk key.
-- ⬜ `NpcRecognition`, player-conversation events, the rumor-vector loop.
-- ⬜ `QuestOffer`, `QuestReward`, `NpcAsk`, contract propose/accept/fulfil/lapse.
+- ✅ `NpcVoice`, `DialogueContext`, `DialogueTopic`, `DialogueMove`,
+  `NpcSeenLedger`, `NpcRecognition` -- all real, real tests, no gaps found.
+- ✅ `DialogueBeat`, `OfflineRenderer` -- the two pieces this doc itself named
+  as the last gap. `DialogueBeat.build` carries three fields beyond this
+  doc's own literal beat contract (documented in `dialogue_beat.gd`):
+  `variant_seed`/`repeat` (both already computed by `DialogueMove`, carried
+  through rather than re-derived) and `voice_bands` (all five axis bands,
+  not just the one `voice_key` names -- `NpcVoice.register_for`'s own doc
+  comment says the renderer needs two axes at once for its slot-dropping
+  rule). `OfflineRenderer` is the real five-slot plan this doc describes,
+  including the HEDGE-by-source-type-and-confidence wording and the
+  `template`/`offline_text` split the AI seam depends on.
+- ✅ `ConversationWindow` -- opens on the existing talk key (default G),
+  built in-code following the same `*_window.gd` shape as every other
+  gameplay window. **No typewriter effect** -- named in this doc's own
+  earlier checklist, deliberately not built this pass (a real, separate,
+  purely-presentational follow-up with no bearing on the pipeline itself).
+- 🚧 **Known gap, honestly scoped rather than silent:** `World._open_conversation_with`
+  does not resolve a villager's `settlement_id` (that requires duplicating
+  `DialogueContext`'s own private recovery-from-`event_store` logic, which
+  was judged too easy to get subtly wrong to reimplement from outside), so
+  it cannot pass `household_count`/`production_counts`/`market`/
+  `village_market` sources. The `village_status`/`village_tier`/
+  `village_specialization`/`village_food`/`wage`/`work` topics therefore
+  have no live data in a real conversation yet, even though every one of
+  them is real and tested at the `DialogueTopic`/`DialogueBeat`/
+  `OfflineRenderer` layer. `hunger`, `wallet`, `household_ask` (this doc's
+  own flagship "Bren asking you for three rock" example), `neighbour`,
+  `contradiction`, `weather`, and all eleven memory-backed topics all work
+  in a real conversation today. A follow-up needs either a new
+  `EarthChunkManager.settlement_id_for_npc`-style public accessor, or for
+  `DialogueContext` to expose its own recovery function directly.
+- ⬜ The ledger (`NpcSeenLedger`, via `EarthChunkManager.seen_ledger()`) is
+  real and live within one play session, but is NOT wired into save/load --
+  it only affects which of several true things a villager says FIRST, never
+  what is true, so this is a real, separate, low-stakes follow-up.
+- ⬜ `QuestOffer`, `QuestReward`, `NpcAsk`, contract propose/accept/fulfil/lapse
+  -- this document's own "Emergent quests, no LLM" section above. Not
+  attempted this pass; `household_ask`'s dialogue topic already surfaces the
+  same underlying shortfall data this section describes turning into a
+  quest, but nothing here yet proposes/accepts/fulfils a contract from it.
 - ⬜ **Not planned in this pass:** any LLM provider, settings tab, network code
   or baked phrasing pack. The seam above is documented, not implemented.
