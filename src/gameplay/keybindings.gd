@@ -73,6 +73,7 @@ const ACTIONS := [
 	{"action": "hotbar_5", "label": "Hotbar Slot 5", "default": KEY_5},
 	{"action": "toggle_inventory", "label": "Toggle Inventory", "default": KEY_I},
 	{"action": "toggle_crafting", "label": "Toggle Crafting", "default": KEY_C},
+	{"action": "toggle_quest_log", "label": "Toggle Quest Log", "default": KEY_U},
 	# Moved off K (the very next key over, an easy muscle-memory shift) to
 	# make room for "kick" -- see docs/concept/stone.md.
 	{"action": "toggle_skills", "label": "Toggle Skill Tree", "default": KEY_L},
