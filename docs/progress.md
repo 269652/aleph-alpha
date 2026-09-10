@@ -19466,3 +19466,77 @@ plus two reuse-guard tests that cycle the FULL voice pool with grass
 first so the next call is guaranteed to land on a voice actually left at
 -12dB, proving neither a later footstep nor a mushroom crush inherits it
 by accident.
+
+## The 1029-tip loading pool was itself the "same pattern" bug: shuffled playback + a real 160-tip hand-written floor (`concept/persistence.md`, 2026-09-10)
+
+Reported live: *"it seems the tips are in alphabetical order and also a
+lot follow the same pattern just replacing some word ... every of the
+1000 tips should be unique, humorous and witty."*
+
+**Root cause, read from the code directly, not guessed:** `TIPS` was
+`_CURATED_TIPS + _generated_tips()` with no shuffle step at all.
+`_generated_tips()` nests `for template: for subject`, appending every
+one of ~50 subject-variations of ONE template consecutively before
+moving to the next — and playback (`tip_for_elapsed`) just walks `TIPS`
+in that exact array order. A real load showed dozens of "same shape, one
+word changed" lines in a row (literally true, by construction), which
+also read as loosely alphabetical since `_SUBJECTS` happened to
+topically cluster.
+
+**Two real fixes:**
+
+1. `_CURATED_TIPS` grew 30 → 160 — genuinely hand-written, and
+   deliberately varied in grammatical FORM this time (gerund openers,
+   colon fragments, short declaratives, rhetorical questions, two-clause
+   punchlines), not just topic. The original 30 were *all* gerund
+   openers — the same "same pattern" complaint, just smaller-scale and
+   less visible. Drew on a lot of material this session's own work had
+   just made real: Krampus/Lindwurm/Nyx/Rübezahl by name, the Sea Cave
+   Guardian/Joust, the retro handheld, the Bridgekeeper, the character
+   diorama/skill web, the new exploration items (compass/map/spyglass/
+   star chart/weather glass/field journal/ledger), land health, sparrow
+   flocking, "grass footsteps used to sound like a drum" and "the
+   mushroom-crush sound is technically crushed styrofoam."
+2. `_TEMPLATES` grew 20 → 45, `_SUBJECTS` grew 50 → 68 (still every
+   template number-agreement-safe — the hazard test's blacklist widened
+   too), but the decisive fix is a genuine **shuffle**: `_tagged_pool`
+   pairs each generated line with its originating template index (`-1`
+   for curated); `_deduplicated_tagged` runs FIRST (curated-wins
+   priority, unchanged from before, decided before any shuffling so it
+   can't depend on where a shuffle happens to land either entry); then
+   `_shuffled` — a deterministic, fixed-seed Fisher-Yates — reorders the
+   result into what `TIPS` actually holds. Deterministic on purpose (same
+   seed every rebuild) rather than reseeded from the engine's global RNG
+   each launch, so the tests stay reproducible; per-load variety already
+   comes from `tip_for_elapsed`'s own caller-rolled `start_offset`, not
+   from `TIPS`'s own storage order changing run to run.
+
+   The seed itself wasn't eyeballed: the first arbitrary value
+   (`20260910`) left two runs of exactly 3 consecutive same-template
+   tips in the real 3220-entry pool — caught by a new test, not spotted
+   by eye. A temporary probe script (not committed) searched seeds 1-200
+   for ones producing zero such runs; `97` (the first clean hit) is
+   pinned.
+
+**Real numbers:** 160 curated + 45×68 = 3060 generated, deduplicated to
+**3220 total tips**. Sampled real playback directly (two different
+`start_offset` windows, 25 and 15 consecutive tips each) rather than
+just trusting the tests — genuinely varied, no adjacent repeats, no
+discernible alphabetical drift.
+
+**TDD:** `test_tips_are_shuffled_not_left_in_raw_generation_order` (red
+against the pre-fix code, which had no shuffle to differ from — `TIPS`
+literally equaled the raw concatenation); `test_no_long_run_of_the_same_
+template_in_playback_order` (the precise, measurable version of "a lot
+follow the same pattern": no 3+ run of consecutive playback entries may
+share a template — this is the test that actually caught the bad first
+seed); `test_shuffle_is_deterministic_across_rebuilds`; `test_curated_
+pool_is_a_substantial_hand_written_floor` (pins `_CURATED_TIPS.size() >
+99` so a future edit can't quietly shrink the hand-written floor while
+still passing the aggregate ≥1000 check) — all new and confirmed red
+first. `test_loading_tips.gd` 18/18 (16,755 real assertions, mostly the
+per-tip checks now running over 3220 entries instead of 1029); no
+regression in `test_loading_overlay.gd`/`test_loading_spinner.gd`/
+`test_world_boot_loading_overlay_fanout.gd` (17/17 across the three).
+
+Branched from fresh `origin/main`, pushed immediately.

@@ -128,10 +128,85 @@ func test_generated_tip_count_matches_templates_times_subjects_exactly():
 ## the one instance, so a future template addition can't reintroduce it a
 ## different way.
 func test_no_template_uses_a_subject_number_agreeing_auxiliary_verb():
-	var hazards := ["haven't", "hasn't", "have wandered", "has wandered"]
+	var hazards := [
+		"haven't", "hasn't", "have wandered", "has wandered",
+		"%s is ", "%s are ", "%s was ", "%s were ", "%s has ", "%s have ",
+		"%s does ", "%s doesn't ", "%s don't ",
+	]
 	for template in LoadingTips._TEMPLATES:
 		for hazard in hazards:
 			assert_false(
 				template.contains(hazard),
 				"'%s' risks singular/plural agreement in: %s" % [hazard, template]
 			)
+
+
+# -- reported live: "it seems the tips are in alphabetical order and also a
+# -- lot follow the same pattern just replacing some word ... every of the
+# -- 1000 tips should be unique, humorous and witty" -----------------------
+#
+# Root cause, confirmed by reading the pre-fix source directly rather than
+# guessed: TIPS was `_CURATED_TIPS + _generated_tips()` with NO shuffle at
+# all, and `_generated_tips()` nests `for template: for subject`, appending
+# every one of _SUBJECTS.size() subject-variations of the SAME template
+# consecutively before moving to the next template. Playback
+# (`tip_for_elapsed`) just walks TIPS in that exact array order, so a real
+# load showed dozens of near-identical "same shape, one word changed" lines
+# in a row -- reading as both "patterned" (literally true, by construction)
+# and loosely "alphabetical" (subjects were topically clustered, e.g. every
+# ant-related noun adjacent).
+
+
+## Direct regression guard for the exact bug: the pre-fix code shipped TIPS
+## in raw generation order (curated tips, then every subject for template 0,
+## then every subject for template 1, ...) with no shuffle step at all.
+func test_tips_are_shuffled_not_left_in_raw_generation_order():
+	var raw := LoadingTips._deduplicated(LoadingTips._CURATED_TIPS + LoadingTips._generated_tips())
+	assert_ne(LoadingTips.TIPS, raw, "TIPS must not equal the raw, unshuffled generation order")
+
+
+## The precise, measurable version of "a lot follow the same pattern just
+## replacing some word": no run of 3 or more CONSECUTIVE tips in actual
+## playback order (TIPS itself) may share the same generating template --
+## that run length is what a player actually experiences as "it's just
+## swapping one word over and over." Built from the exact same pipeline
+## TIPS itself uses (_tagged_pool -> _deduplicated_tagged -> _shuffled), so
+## this tests the real shuffle, not a reimplementation of it.
+func test_no_long_run_of_the_same_template_in_playback_order():
+	var shuffled := LoadingTips._shuffled(LoadingTips._deduplicated_tagged(LoadingTips._tagged_pool()))
+	var run_length := 1
+	for i in range(1, shuffled.size()):
+		var prev_template: int = shuffled[i - 1]["template"]
+		var cur_template: int = shuffled[i]["template"]
+		if prev_template != -1 and prev_template == cur_template:
+			run_length += 1
+			assert_lt(
+				run_length, 3,
+				"3+ consecutive tips share template %d in playback order" % cur_template
+			)
+		else:
+			run_length = 1
+
+
+## The shuffle must be deterministic (same fixed seed every time this file
+## loads) -- a `static var` computed once at class-load already makes TIPS
+## itself stable for the life of one game process, but this pins that
+## rebuilding the pool from scratch (e.g. in a fresh test run, or a future
+## caller) always produces the identical order, not a different shuffle
+## every launch. Real reproducibility, not just "happens to look shuffled
+## once."
+func test_shuffle_is_deterministic_across_rebuilds():
+	var first := LoadingTips._shuffled(LoadingTips._deduplicated_tagged(LoadingTips._tagged_pool()))
+	var second := LoadingTips._shuffled(LoadingTips._deduplicated_tagged(LoadingTips._tagged_pool()))
+	assert_eq(first.size(), second.size())
+	for i in first.size():
+		assert_eq(first[i]["text"], second[i]["text"])
+
+
+## "every of the 1000 tips should be unique, humorous and witty" -- taken
+## seriously as a real floor on genuinely HAND-WRITTEN (not combinatorially
+## generated) content, not just a bigger _TEMPLATES x _SUBJECTS product.
+## Pinned well above the pre-fix pool's 30, so a future edit can't quietly
+## shrink the curated set back down while still passing the >1000 total.
+func test_curated_pool_is_a_substantial_hand_written_floor():
+	assert_gt(LoadingTips._CURATED_TIPS.size(), 99)
