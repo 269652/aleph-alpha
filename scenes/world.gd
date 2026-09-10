@@ -240,6 +240,41 @@ const CREATURE_PANELS_REFRESH_INTERVAL := 0.5
 ## against CALL_CHANCE_PER_CHECK's own low per-check rarity.
 const CREATURE_CALL_REFRESH_INTERVAL := 1.0
 var _creature_call_accumulator := 0.0
+
+## Reported live, severe: "Still at 1fps." Real regression, found by
+## reading the source: `EarthChunkManager.nearest_water_distance_tiles`
+## (the ambient river-proximity layer's own real ring-scan, see
+## WaterProximity/docs/concept/soundscape.md) was passed straight into
+## `_nature_soundscape.update(...)` as a plain function ARGUMENT --
+## GDScript evaluates arguments eagerly, before the callee ever runs, so
+## this real, non-trivial scan (up to WATER_PROXIMITY_SCAN_RADIUS_TILES
+## rings around the player) fired every single frame regardless of
+## whatever throttle `update()` applies internally to what it actually
+## DOES with the value. Worse than a typical unthrottled call: the
+## per-tile `is_river_at_global`/`is_lake_at_global` cache barely helps
+## here, since the scanned window is centred on the player and shifts
+## with every step -- most tile checks are cache MISSES on any frame the
+## player is moving, not hits.
+##
+## Fixed the same shape CREATURE_CALL_REFRESH_INTERVAL above already
+## uses: a dedicated accumulator, recomputed (and cached) only once every
+## this many seconds. 1s: ambient water-proximity volume doesn't need
+## sub-second reaction (it's a smooth fade, not a discrete event like a
+## creature call), and matches the existing creature-call cadence above
+## rather than inventing a third, unrelated interval.
+const WATER_PROXIMITY_REFRESH_INTERVAL := 1.0
+var _water_proximity_accumulator := 0.0
+## INF (not 0.0) as the starting value -- "no water known nearby yet"
+## before the first real scan ever runs, matching NatureSoundscape.
+## layer_mix's own "INF means no river layer" contract exactly, rather
+## than a misleading 0.0 ("standing on water") nobody has actually
+## measured yet.
+var _cached_water_distance_tiles := INF
+## TEMP DIAGNOSTIC -- not committed, see the 1fps water-proximity
+## investigation's own note at its actual use site.
+var _TEMP_fps_log_accumulator := 0.0
+var _TEMP_chunk_update_usec := 0
+var _TEMP_process_start_usec := 0
 ## Caps how many panels are shown at once (closest first) so a crowded area
 ## doesn't fill the whole screen with panels.
 const MAX_CREATURE_PANELS := 6
@@ -5204,6 +5239,7 @@ func _server_process() -> void:
 
 
 func _client_process(delta: float) -> void:
+	_TEMP_process_start_usec = Time.get_ticks_usec()  # TEMP DIAGNOSTIC
 	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 	if local_player == null:
 		return
@@ -5237,7 +5273,9 @@ func _client_process(delta: float) -> void:
 			_initial_client_chunk_load_task_running = true
 			_run_initial_client_chunk_load(local_player.current_tile())
 	else:
+		var _TEMP_t0 := Time.get_ticks_usec()
 		_chunk_manager.update(local_player.current_tile())
+		_TEMP_chunk_update_usec = Time.get_ticks_usec() - _TEMP_t0
 
 	var player_tile := local_player.current_tile()
 	_update_minimap(player_tile, delta)
@@ -5412,6 +5450,15 @@ func _client_process(delta: float) -> void:
 	# figure -- what the PLAYER stands on, not the chunk's overall mix).
 	# season is fetched fresh here rather than reusing the `season` local
 	# above, which is already .capitalize()'d for the HUD.
+	# Real, non-trivial scan (see WATER_PROXIMITY_REFRESH_INTERVAL's own
+	# doc comment on why this must never be a live call-argument again) --
+	# recomputed and cached at most once a second, never evaluated inline.
+	_water_proximity_accumulator += delta
+	if _water_proximity_accumulator >= WATER_PROXIMITY_REFRESH_INTERVAL:
+		_water_proximity_accumulator = 0.0
+		_cached_water_distance_tiles = _chunk_manager.nearest_water_distance_tiles(
+			player_tile.x, player_tile.y
+		)
 	_nature_soundscape.update(
 		_chunk_manager.biome_at_global(player_tile.x, player_tile.y),
 		_chunk_manager.current_season(),
@@ -5420,7 +5467,7 @@ func _client_process(delta: float) -> void:
 		snowing,
 		randf(),
 		delta,
-		_chunk_manager.nearest_water_distance_tiles(player_tile.x, player_tile.y)
+		_cached_water_distance_tiles
 	)
 	# Depth, tracks and repaint all live behind one call now, and it reads the
 	# WORLD clock rather than this frame's delta -- see step_snow. Accumulating
@@ -5587,6 +5634,36 @@ func _client_process(delta: float) -> void:
 	# (any peer) instead of paying a redraw nobody can see.
 	_chunk_manager.sync_tree_season(local_player.position)
 	_chunk_manager.sync_grass_season()
+	# TEMP DIAGNOSTIC -- not committed, see the 1fps water-proximity
+	# investigation. Flushed explicitly: plain print() fully buffers once
+	# stdout is redirected to a file, so nothing would show up until the
+	# process exits otherwise.
+	_TEMP_fps_log_accumulator += delta
+	if _TEMP_fps_log_accumulator >= 1.0:
+		_TEMP_fps_log_accumulator = 0.0
+		var f := FileAccess.open("user://TEMP_fps_log.txt", FileAccess.READ_WRITE if FileAccess.file_exists("user://TEMP_fps_log.txt") else FileAccess.WRITE)
+		if f:
+			f.seek_end()
+			var client_process_usec := Time.get_ticks_usec() - _TEMP_process_start_usec
+			# NOTE: group names verified against each marker's own GROUP_NAME
+			# constant -- decomposer/millipede/caterpillar are SINGULAR, and
+			# WormMarker joins no per-species group at all (only
+			# DroppedItem.GROUP_NAME, shared with every other pickup), so
+			# there is no live worm population count to report here.
+			f.store_line(
+				"t=%.1f fps=%d client_process_us=%d chunk_update_us=%d rest_us=%d creatures=%d flyers=%d fish=%d cicadas=%d decomposers=%d millipedes=%d caterpillars=%d" % [
+					Time.get_ticks_msec() / 1000.0, Engine.get_frames_per_second(),
+					client_process_usec, _TEMP_chunk_update_usec, client_process_usec - _TEMP_chunk_update_usec,
+					get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME).size(),
+					get_tree().get_nodes_in_group(AmbientFlyerMarker.FLOCK_GROUP).size(),
+					get_tree().get_nodes_in_group("fish").size(),
+					get_tree().get_nodes_in_group(CicadaMarker.GROUP_NAME).size(),
+					get_tree().get_nodes_in_group("decomposer").size(),
+					get_tree().get_nodes_in_group("millipede").size(),
+					get_tree().get_nodes_in_group("caterpillar").size(),
+				]
+			)
+			f.flush()
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (
 		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"

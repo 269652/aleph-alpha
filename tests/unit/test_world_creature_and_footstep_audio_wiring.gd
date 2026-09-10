@@ -101,3 +101,56 @@ func test_creature_call_scan_measures_real_distance_to_the_player():
 		or body.contains("check_call(flyer.species, randf(), distance)"),
 		"the measured distance must actually reach check_call, not be computed and discarded"
 	)
+
+
+## Reported live: "Still at 1fps." Real, severe regression found by
+## reading the source, not guessing: `_nature_soundscape.update(...)`'s
+## own call in `_client_process` passed `_chunk_manager.
+## nearest_water_distance_tiles(...)` (EarthChunkManager.
+## WATER_PROXIMITY_SCAN_RADIUS_TILES's own real ring-scan, see
+## WaterProximity) as a plain function ARGUMENT -- GDScript evaluates
+## call arguments eagerly, BEFORE the callee ever runs, so this expensive
+## scan fired every single frame regardless of whatever throttle
+## `_nature_soundscape.update` might apply internally to what it actually
+## DOES with the value. Worse than a typical unthrottled scan: the
+## per-tile `is_river_at_global`/`is_lake_at_global` cache barely helps
+## here, since the scanned window is centred on the player and shifts
+## with every step -- most of the ~2,000+ tile checks per call are cache
+## MISSES, not hits, on any frame the player is moving.
+##
+## Must be throttled the same shape CREATURE_CALL_REFRESH_INTERVAL already
+## uses: a dedicated accumulator, recomputed only every WATER_PROXIMITY_
+## REFRESH_INTERVAL seconds and cached, with the CACHED value (never a
+## live call) reaching `_nature_soundscape.update`.
+func test_water_proximity_scan_is_throttled_not_run_every_frame():
+	var body := _function_body("_client_process")
+	assert_true(body.contains("WATER_PROXIMITY_REFRESH_INTERVAL"))
+	var update_call := _full_call_text(body, "_nature_soundscape.update(")
+	assert_false(
+		update_call.contains("nearest_water_distance_tiles("),
+		"nearest_water_distance_tiles must never be evaluated as a live call argument: %s" % update_call
+	)
+
+
+## Returns the full text of a call starting at `needle` (an opening-paren-
+## terminated prefix, e.g. "foo(") through its OWN matching closing paren
+## -- real paren-depth tracking, not a naive find(")") that would stop at
+## the first nested call's own close-paren instead of the outer call's,
+## since the real call this test cares about spans several lines and
+## multiple arguments.
+func _full_call_text(body: String, needle: String) -> String:
+	var start := body.find(needle)
+	assert_gt(start, -1, "the premise: %s must still be called here" % needle)
+	var depth := 0
+	var i := start + needle.length() - 1  # the opening "(" itself
+	while i < body.length():
+		var c := body[i]
+		if c == "(":
+			depth += 1
+		elif c == ")":
+			depth -= 1
+			if depth == 0:
+				return body.substr(start, i - start + 1)
+		i += 1
+	fail_test("never found a matching close-paren for %s" % needle)
+	return ""
