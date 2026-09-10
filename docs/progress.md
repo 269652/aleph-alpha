@@ -2747,15 +2747,19 @@ gaps noted per mechanism below.
 Known simplification shared by the land side of the above (documented in
 `ecosystem_simulation.gd`): only chunks currently loaded (i.e. within the
 existing player-proximity streaming radius) are simulated at all; there is no
-whole-planet background simulation, and herbivore/predator/vegetation state is
-not persisted across unload/reload (regenerated at fresh equilibrium on
-revisit, same as terrain chunks already do). A real "catch-up pass" for
-unloaded regions is the separate, larger "Variable-Fidelity Chunk Simulation"
-item below. **Fish population is the one exception**: it now survives a real
-game restart via `ChunkSerializer.save_fish_population`/`load_fish_population`
-(see the Fishing section) -- a deliberate, scoped fix for the specific case
-that most needed it (angler/kingfisher depletion should stay felt), not yet
-backported to herbivores/predators/vegetation.
+whole-planet background simulation. A real "catch-up pass" for unloaded
+regions is the separate, larger "Variable-Fidelity Chunk Simulation" item
+below -- that gap is still real. **Persistence itself, however, is no longer
+a gap**: this row previously said herbivore/predator/vegetation state was
+"not yet backported" from fish's own real-game-restart persistence -- stale
+as of a concurrent pass building `ChunkSerializer.save_ecology`/
+`load_ecology`, real, wired (`EarthChunkManager`'s own unload/reload path)
+and tested (`test_land_ecology_round_trips_through_a_file` and siblings,
+`test_unloading_a_chunk_writes_its_land_ecology_to_disk`): herbivores,
+predators, vegetation, land health, and four aggregate bird populations
+(robin/sparrow/kingfisher/blackbird) all now survive a real game restart,
+not just an in-session unload/reload, mirroring fish's own bar exactly. A
+region a player hunted down or watched recover stays that way next launch.
 
 ### Phase 2 — NPC AI MVP
 
