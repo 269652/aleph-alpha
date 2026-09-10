@@ -108,6 +108,8 @@ const _NEWS_LINE_BY_EVENT_TYPE := {
 	"world_boss_defeated": "I hear something fearsome was put down.",
 	"path_worn": "A path's been worn through, from what I hear.",
 	"path_reclaimed": "I hear a path's gone back to the wild.",
+	"trail_formed": "A path's been worn into a proper trail, from what I hear.",
+	"trail_reclaimed": "I hear that trail's thinned back down to an ordinary path.",
 	"player_claimed_property": "I hear someone's staked a claim nearby.",
 }
 

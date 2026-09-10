@@ -20025,3 +20025,34 @@ bird bundle (8%) the entry above measured only in aggregate, never
 attributed to individual functions -- unexamined, plausibly more
 instances of the same widespread historical pattern in yet other
 `illustrated_*_sprite.gd` files.
+
+### `trail_formed`/`trail_reclaimed` reach dialogue too (2026-09-11)
+
+Same shape as "`player_settled` reaches dialogue too" above: the
+path-scarring Trail tier's two events
+(`EarthChunkManager.record_trail_formed_if_new`/`record_trail_reclaimed`,
+live since the Trail tier itself shipped -- see `concept/infrastructure.md`)
+landed in the event graph but were never added to
+`DialogueTopic.MEMORY_TOPIC_EVENT_TYPES`.
+`test_every_event_type_the_substrate_really_emits_is_claimed_by_some_topic`
+(`test_dialogue_topic.gd`) caught it via the same emitter-scanning census
+that caught the `player_settled` gap.
+
+Read `scenes/world.gd._step_path_scarring` to confirm neither pair is
+dead code before touching the table: `path_worn`/`path_reclaimed` are
+the base Path tier, `trail_formed`/`trail_reclaimed` are the same tile
+escalating to/de-escalating from the deeper Trail tier, all four firing
+under distinct real conditions (`path_reclaimed`'s own
+`_CURRENTLY_WORN_EVENTS` guard already treats a last-seen `trail_formed`
+as a valid worn predecessor). Fix adds the new pair to `TOPIC_PATH`
+alongside the existing one rather than replacing it.
+
+`OfflineRenderer._NEWS_LINE_BY_EVENT_TYPE` needed matching entries for
+the same two keys -- without them, a conversation touching either event
+would have silently rendered the generic `_FALLBACK_CORE` line
+("There's word of it, but I couldn't tell you more.") instead of real
+news. `test_offline_renderer.gd`'s
+`test_every_declared_memory_event_type_renders_real_non_empty_text` did
+not catch this on its own (the fallback is non-empty, and non-empty was
+all it checked), so it was strengthened first, to a real red for exactly
+these two event types, before the two bespoke lines were added.

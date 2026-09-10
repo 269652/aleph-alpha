@@ -128,6 +128,20 @@ func test_every_declared_memory_event_type_renders_real_non_empty_text():
 			})
 			var text := OfflineRenderer.render(beat)
 			assert_ne(text, "", "event type '%s' rendered no text at all" % event_type)
+			# Non-empty alone would also pass silently on the generic
+			# _FALLBACK_CORE filler -- _NEWS_LINE_BY_EVENT_TYPE.get() falls
+			# back to it for any key it doesn't recognize. "Real" text (this
+			# test's own name, and this file's header: "every specially-
+			# worded topic produces real ... text") means a bespoke entry, so
+			# a declared event type that only reaches the fallback is exactly
+			# the gap this asserts against.
+			assert_false(
+				text.contains(OfflineRenderer._FALLBACK_CORE),
+				(
+					"event type '%s' has no bespoke line in _NEWS_LINE_BY_EVENT_TYPE -- "
+					+ "it fell through to the generic fallback"
+				) % event_type
+			)
 
 
 func test_high_bluntness_with_low_verbosity_drops_the_opener_and_the_aside():
