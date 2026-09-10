@@ -1731,6 +1731,26 @@ func test_vegetation_density_near_matches_the_chunks_average_density():
 	assert_gt(manager.vegetation_density_near(pixel), 0.0)
 
 
+## vegetation_density_at_global is the real per-TILE sibling of the whole-
+## chunk average above (see CreaturePerception's own food-sensing, docs/
+## progress.md's Vegetation Growth Model row) -- _load_chunk, not the much
+## slower update() (see gut-earth-chunk-manager-slow-tests own memory:
+## ~101s vs ~20s), is enough to populate one real chunk's ecosystem region.
+func test_vegetation_density_at_global_reads_a_real_per_tile_value():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE
+
+	assert_gt(manager.vegetation_density_at_global(origin.x, origin.y), -1.0)
+
+
+func test_vegetation_density_at_global_is_negative_one_for_an_unloaded_tile():
+	# Far outside anything _load_chunk above touches -- must read as "no
+	# data" (-1.0), not silently return a fabricated 0.0 that would read as
+	# genuinely bare ground rather than simply unknown.
+	assert_eq(manager.vegetation_density_at_global(999999, 999999), -1.0)
+
+
 func test_herbivore_population_near_matches_herbivore_population_at_chunk():
 	manager.update(_berlin_tile)
 	var center_chunk := _chunk_coord_for_tile(_berlin_tile)

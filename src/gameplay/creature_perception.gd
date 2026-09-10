@@ -16,6 +16,16 @@ const WATER_BIOME := "ocean"
 ## A biome counts as grazing food if its vegetation ceiling is at least this;
 ## picks out grassland/forest/rainforest and excludes sparse desert/tundra.
 const MIN_FOOD_CAPACITY := 0.5
+## Below this REAL, live per-tile density (see vegetation_density_at_global),
+## a tile of an otherwise-food biome no longer counts -- a freshly grazed-
+## bare grassland cell reads identically to a lush one on biome alone, since
+## both are just "grassland" (reported gap, docs/progress.md's Vegetation
+## Growth Model row: "food-seeking is biome-granularity ... the two aren't
+## wired together yet"). No real-world citation for this exact cutoff (unlike
+## most tuned constants in this codebase) -- picked as "clearly regrown past
+## freshly-stripped-bare, comfortably below a biome's own lowest FOOD
+## ceiling" and pinned by test so it can't silently drift.
+const MIN_FOOD_DENSITY := 0.2
 
 var _vegetation_model := VegetationGrowthModel.new()
 
@@ -79,6 +89,16 @@ func _matches(world, tile: Vector2i, kind: String) -> bool:
 		"water":
 			return biome == WATER_BIOME
 		"food":
-			return _vegetation_model.carrying_capacity_for_biome(biome) >= MIN_FOOD_CAPACITY
+			if _vegetation_model.carrying_capacity_for_biome(biome) < MIN_FOOD_CAPACITY:
+				return false
+			# Optional: a duck-typed world that doesn't expose live density
+			# (any stub/caller besides EarthChunkManager) keeps the exact
+			# old ceiling-only behavior -- see this class's own doc comment
+			# on staying unit-testable against a stub.
+			if world.has_method("vegetation_density_at_global"):
+				var density: float = world.vegetation_density_at_global(tile.x, tile.y)
+				if density >= 0.0:  # negative = no data for this tile -- fall through to ceiling-only
+					return density >= MIN_FOOD_DENSITY
+			return true
 		_:
 			return false

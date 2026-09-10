@@ -47,6 +47,42 @@ func test_add_region_stays_empty_for_an_inhospitable_biome():
 	assert_eq(simulation.predator_population(Vector2i(0, 0)), 0.0)
 
 
+# -- per-tile density (not just the whole-chunk average) --------------------
+#
+# average_vegetation_density collapses a whole chunk to one number -- no way
+# to tell a grazed-bare corner from a lush one. CreaturePerception's own
+# food-sensing needs the real per-cell value (docs/progress.md's Vegetation
+# Growth Model row: "food-seeking is biome-granularity ... the two aren't
+# wired together yet").
+
+func test_vegetation_density_at_reads_a_real_per_cell_value_not_the_chunk_average():
+	# A 2x2 chunk, one hospitable cell and three ocean (zero-capacity) cells
+	# -- the average is dragged down by the three zeros, but the one real
+	# cell's own density must still read as its own genuine, higher value.
+	var chunk := Chunk.new()
+	chunk.width = 2
+	chunk.height = 2
+	chunk.elevation = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
+	chunk.biome = PackedStringArray(["rainforest", "ocean", "ocean", "ocean"])
+	chunk.temperature = PackedFloat32Array([0.9, 0.9, 0.9, 0.9])
+	chunk.moisture = PackedFloat32Array([0.9, 0.9, 0.9, 0.9])
+	simulation.add_region(Vector2i(0, 0), chunk)
+
+	var whole_chunk_average := simulation.average_vegetation_density(Vector2i(0, 0))
+	var the_one_real_cell := simulation.vegetation_density_at(Vector2i(0, 0), 0)  # index 0 = (x=0, y=0) = the rainforest cell
+
+	assert_gt(the_one_real_cell, whole_chunk_average, "the one real cell's own density must be higher than an average dragged down by three zeros")
+	assert_almost_eq(the_one_real_cell, 0.9 * 0.9 * 1.0, 0.01, "a freshly-added region starts AT its own effective_capacity (rainforest ceiling 1.0 x temp x moisture)")
+
+
+func test_vegetation_density_at_is_negative_one_for_an_unloaded_chunk():
+	# The same "no data" sentinel EarthChunkManager.biome_at_global already
+	# uses ("") for an unloaded chunk -- -1.0 here, since 0.0 is itself a
+	# real, valid density (e.g. bare ground) and would be indistinguishable
+	# from "no data at all" if reused as the sentinel.
+	assert_eq(simulation.vegetation_density_at(Vector2i(99, 99), 0), -1.0)
+
+
 func test_has_region_reflects_add_and_remove():
 	var coord := Vector2i(3, 3)
 	assert_false(simulation.has_region(coord))

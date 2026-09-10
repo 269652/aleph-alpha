@@ -10438,6 +10438,19 @@ func vegetation_density_near(pixel_position: Vector2) -> float:
 	return _ecosystem.average_vegetation_density(chunk_coord)
 
 
+## The real, live density at this exact global TILE -- unlike
+## vegetation_density_near's own whole-chunk average, lets a caller (see
+## CreaturePerception's food-sensing) tell a freshly grazed-bare cell apart
+## from a lush one right next to it, both possibly the same biome. Mirrors
+## biome_at_global's own exact "" -> not-loaded contract, just with -1.0
+## (0.0 is itself a real, valid density) as the sentinel instead.
+func vegetation_density_at_global(global_x: int, global_y: int) -> float:
+	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
+	if not _loaded_chunks.has(chunk_coord):
+		return -1.0
+	return _ecosystem.vegetation_density_at(chunk_coord, _local_index(global_x, global_y))
+
+
 ## This pixel's chunk's aggregate herbivore population -- the same regional-
 ## game number wildlife density already runs on, exposed for a hunter NPC's
 ## production yield to read (docs/concept/npc.md). Mirrors
