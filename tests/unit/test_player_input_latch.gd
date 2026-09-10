@@ -26,11 +26,12 @@ const Keybindings = preload("res://src/gameplay/keybindings.gd")
 const MOMENTARY_ACTIONS := ["attack", "build", "destroy", "kick", "stash", "talk", "trade"]
 
 ## Deliberately NOT latched: these are read as a LEVEL, not an edge --
-## `block` is "am I holding guard up right now", and `pickup`/`fish`/`lasso`/
-## `mount` drive press-and-hold cycles (the charge meter, the cast/reel, the
-## rope) that genuinely need to know the key is still down. Latching them
-## would turn a hold into a single tap.
-const CONTINUOUS_ACTIONS := ["block", "pickup", "fish", "lasso", "mount"]
+## `block` is "am I holding guard up right now", `sprint` is "am I holding
+## the sprint key right now" (see docs/concept/input.md), and
+## `pickup`/`fish`/`lasso`/`mount` drive press-and-hold cycles (the charge
+## meter, the cast/reel, the rope) that genuinely need to know the key is
+## still down. Latching any of them would turn a hold into a single tap.
+const CONTINUOUS_ACTIONS := ["block", "sprint", "pickup", "fish", "lasso", "mount"]
 
 var player: Player
 var _keybindings := Keybindings.new()

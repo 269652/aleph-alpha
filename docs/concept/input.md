@@ -56,14 +56,31 @@ between them is unobservable.
 latch remembers "this was pressed since you last looked", which is a question
 the frame rate cannot change the answer to.
 
-**Level actions** — `block`, `pickup`, `fish`, `lasso`, `mount`, and
+**Level actions** — `block`, `sprint`, `pickup`, `fish`, `lasso`, `mount`, and
 movement — keep polling `Input.is_action_pressed`, deliberately. `block` is
-"is guard up right now"; `pickup` drives the charge meter
+"is guard up right now"; `sprint` is "is the sprint key down right now"
+(doubles `Player.BASE_SPEED` to `SPRINT_SPEED` for exactly as long as it is
+held, see the Movement section below); `pickup` drives the charge meter
 ([stone.md](stone.md)), `fish` the cast-and-reel ([fishing.md](fishing.md)),
 `lasso` and `mount` the rope and the saddle ([taming.md](taming.md)). All of
 those genuinely need to know the key is *still* down, and latching them would
 collapse a hold into one tap. A level action can still be *late* at a low
 frame rate; it cannot be erased, because there is no edge to miss.
+
+### Movement: two real paces, not one flat speed
+
+Ordinary movement used to have exactly one speed. `Player.BASE_SPEED` is now
+half of what it was, and holding `sprint` (default Shift) doubles it back to
+`SPRINT_SPEED` — exactly the old flat constant, unchanged, so nothing about
+how fast a sprinting player moves is new; what is new is that it now costs
+holding a key rather than being the only option. Sprint has no effect while
+mounted: a mount already has its own real, per-individual speed
+(`Taming.mounted_speed_for`, keyed off that horse's own fitness), and
+stacking a second multiplier on top of it is a different, unscoped feature.
+
+`block`'s own default moved off Shift onto Ctrl to make room — the same
+"move the other one off the key rather than share" precedent `kick`/
+`toggle_skills` already set in `Keybindings.ACTIONS`.
 
 ### Context slots: one key that does the obvious thing
 
@@ -157,9 +174,9 @@ since it only ever reads the current level.
   `tests/unit/test_player_input_latch.gd` — including the reported bug
   itself (a tap delivered as events with the poll never true still acts) and
   the two no-double-fire guards.
-- ✅ The five level actions are pinned as *deliberately not latched* by the
-  same test file, so converting one is a decision someone has to make on
-  purpose.
+- ✅ The level actions (now six, since `sprint` joined them 2026-09-10) are
+  pinned as *deliberately not latched* by the same test file, so converting
+  one is a decision someone has to make on purpose.
 - ✅ A latched press the world never got to act on is dropped rather than
   banked, on both the authority read (`_rising_edge`) and the client's
   forwarded read (`_local_momentary_input`), pinned by
