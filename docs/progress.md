@@ -19614,3 +19614,174 @@ load sequence (`_compute_dry_land_spawn_tile`/`_find_dry_land_spawn`),
 which this fix does not touch and which may still dominate total boot
 feel -- worth its own follow-up investigation if "still slow to start"
 is reported again after this lands.
+
+
+## The ~44s spawn-gap follow-up: first-chunk art loading again, not the dry-land search (2026-09-10)
+
+Follow-up to the entry directly above, dispatched as its own named
+investigation. This session's own environment reproduced meaningful
+contention too (a stray already-running `--solo` process on this shared
+machine disappeared mid-measurement with no crash trace, and a fresh
+`--solo` launch died silently within 5s on a first attempt -- both
+consistent with this project's own established "process vanishes under
+environment-level contention, not a code bug" pattern; a Git-Bash/MSYS
+`$!` PID not matching the real Win32 child process was the actual cause
+of the second scare, not a real crash -- `Get-CimInstance`/`tasklist`
+ground truth is what to trust, not bash's own job-control PID).
+
+**Instrumented, not guessed, end to end** (temporary flushed
+`FileAccess` checkpoints, the same `user://TEMP_*_log.txt` pattern as
+the entry above, across `World._ready`/`_compute_dry_land_spawn_tile`/
+`_find_dry_land_spawn`/`_spawn_local_singleplayer` and
+`EarthChunkManager.update_with_progress`/`_load_chunk`'s own internal
+phases -- removed before this landed). Two real findings, live-measured
+via `--solo`:
+
+1. **The task's own original premise was stale**: `_world_ready` flips
+   `true` inside `World._ready()` *before* `_spawn_local_singleplayer`
+   is even called in the `--solo` dispatch order (see the entry above's
+   own fix, which moved that flip to the true end of the heavy setup) --
+   so `_compute_dry_land_spawn_tile` cannot literally sit "between
+   `warm_art_cache` finishing and `_world_ready` flipping," as a now-
+   removed TEMP diagnostic from the investigation above was apparently
+   read to mean. Worth recording as another instance of this project's
+   own "verify a dispatched bug against a fresh read, don't trust a
+   secondhand description of removed diagnostics" lesson -- it didn't
+   change the measurement plan, but the framing was off.
+2. **`_find_dry_land_spawn` is not a real cost**: measured 0.7-0.8ms
+   end to end (radius=3, 78 tile checks) across every live run. Its
+   redundant full-square-per-ring rescan (checking the same inner cells
+   again at every larger radius, instead of only the new outer ring) is
+   real, but at these costs-per-check (all O(1)/cached lookups) it is
+   not worth touching -- left alone, deliberately, per this project's
+   own "fix what's measured, not what merely could be slow" discipline
+   (see round 3's `AntForagerMarker` LOD note in that other investigation
+   thread for the same call).
+
+**The real cost is entirely inside `EarthChunkManager.update_with_progress`**,
+and almost entirely inside ONE chunk: across 3 separate live `--solo`
+runs, the FIRST chunk of the initial 25-chunk cold load (`LOAD_RADIUS`
+2, a 5x5 square) alone cost 17-20s, while every one of the other 24
+chunks cost 0.25-1.5s -- the classic one-time-first-touch-cache-fill
+shape this project has now seen repeatedly (mushrooms, then
+`IllustratedAnimalSprite`), not a cost proportional to loading 25
+chunks. Bisecting `_load_chunk`'s own dozen-plus spawner calls with the
+same checkpoint technique (chunk 1, most granular run):
+
+| Phase | Time | Share |
+|---|---:|---:|
+| terrain paint + water/hillshade/river-flow/snow overlays | 0.14s | 1% |
+| **`TreeRenderer.spawn_trees` (+ cicada dispatch)** | **6.75s** | **39%** |
+| `StoneRenderer.spawn_stones` + `spawn_mountain_veins` | 1.94s | 11% |
+| geology (topsoil strata, cave markers) + grass + aquatic sims | 0.01s | ~0% |
+| crops + mushrooms + decomposers + caterpillars + grass frogs + millipedes | 4.74s | 27% |
+| lumberjack restaffing + flowers + scrub + lichen + worms + ant mounds + bee hives/nests | 2.31s | 13% |
+| creatures + fish + village + ambient flyers + piscivore birds | 1.37s | 8% |
+| settlement build decision + construction labor catch-up + rest | ~0s | ~0% |
+
+**Root cause, confirmed by reading (not assumed from the shape alone):**
+the exact same bug as the entry above and `IllustratedAnimalSprite`'s
+own fix (landed on `main` *during* this investigation, by a concurrent
+session -- see `436f46c0`/`7535d0a3`) -- a naive per-pixel
+`Image.get_pixel`/`set_pixel` double `for`, calling separate
+`_is_magenta`/`_despilled` helper functions once per pixel -- but living
+OUTSIDE `SpriteSheetSlicer` entirely, as each illustrated-art class's
+own separately-written despill/chroma-key duplicate, so neither that
+class's fix nor this file's own earlier `SpriteSheetSlicer` fix ever
+reached them. This is now confirmed present (at least) four times
+across the codebase, independently:
+
+- `SpriteSheetSlicer.chroma_keyed`/`detect_frames`/`normalize_frames`/
+  `content_rect` -- fixed (entry above).
+- `IllustratedAnimalSprite._apply_chroma_key` -- fixed (concurrent
+  session, `436f46c0`, landed on `main` mid-investigation here).
+- `IllustratedStoneSprite._prepared_for_slicing`/`_scrub_magenta_fringe`
+  -- **fixed here.** `_prepared_for_slicing` (the real sheet, once per
+  stone class) measured 958ms naive -> 283ms fixed, isolated. Its
+  32x32-per-frame `_scrub_magenta_fringe` measured only 1.37ms naive,
+  isolated -- genuinely not a problem at that canvas size, so
+  deliberately left untouched (no red test to drive a change).
+- `IllustratedDecomposerSprite._prepared_for_slicing`/`_despill_image`
+  -- **fixed here.** This dev machine showed real contention noise wide
+  enough that single-run absolute numbers were not trustworthy on their
+  own (the same fixed code measured 220-786ms across separate isolated
+  runs) -- calibrated instead from paired naive-vs-fixed rounds run
+  back-to-back in one process (same technique `IllustratedAnimalSprite`'s
+  own fix used, see its commit message): `_prepared_for_slicing`
+  (1698x926, the real ant.png resolution) measured naive 1939-1975ms ->
+  fixed 722-786ms every round (~2.5-2.7x); `_despill_image` (340x300,
+  the per-FRAME canvas, ~100x `IllustratedStoneSprite`'s own 32x32, and
+  called up to 18 times per species across its walk/carry/idle bands)
+  measured naive 74.6-87.7ms -> fixed 21.4-27.8ms every round
+  (~3.0-3.5x).
+
+TDD throughout: `test_prepared_for_slicing_completes_quickly_at_real_sheet_resolution`
+(both files) and `test_despill_image_completes_quickly_at_real_frame_resolution`
+(decomposer) each confirmed red against the naive implementation first,
+with the real measured number in the failure message, before the fix
+landed; `test_scrub_magenta_fringe_completes_quickly_at_real_frame_resolution`
+(stone) confirmed GREEN already and was left as a pure regression guard,
+no implementation touched. Both fixed functions follow the identical,
+already-proven shape (`SpriteSheetSlicer._clear_background`,
+`IllustratedAnimalSprite._apply_chroma_key`): one pass over the image's
+raw `PackedByteArray`, every 0.0-1.0 threshold/margin constant used
+pre-scaled by 255.0, the whole per-pixel check inlined with no
+per-pixel helper call (a separate helper call, even reading bytes
+instead of `get_pixel`, measures *slower* than the original -- this
+project's own re-confirmed lesson, not re-litigated here). Full suite
+re-run after: `test_illustrated_stone_sprite.gd` (26/26),
+`test_illustrated_decomposer_sprite.gd` (26/26), plus every real
+dependent -- `test_ant_forager_marker.gd` (76/76),
+`test_decomposer_marker.gd` (55/55), `test_illustrated_ant_mound_sprite.gd`
+(10/10), `test_illustrated_caterpillar_sprite.gd` (10/10),
+`test_illustrated_millipede_sprite.gd` (10/10),
+`test_illustrated_terrain_sprite.gd` (12/12),
+`test_illustrated_worm_sprite.gd` (10/10),
+`test_procedural_ore_sprite.gd` (14/14), `test_sprite_sheet_loader.gd`
+(5/5), `test_squash_crush_effect.gd` (5/5), `test_stone_renderer.gd`
+(34/34), `test_terrain_relief.gd` (24/24), `test_terrain_renderer.gd`
+(161/161), `test_sprite_sheet_slicer.gd` (11/11),
+`test_decomposer_renderer.gd` (5/5) -- 494/494 total, zero behavior
+change.
+
+**Honest scope note:** this fixes two of the (at least) five phases
+measured above -- stones (11%) and a real share of the crops/mushroom/
+decomposer/caterpillar/frog/millipede bundle (27%, decomposer's own
+piece of it). It deliberately does NOT fix:
+
+- **Trees, the single LARGEST phase (39%, 6.75s of chunk 1) --
+  `TreeRenderer.spawn_trees` -> `IllustratedTree._composite_parts` ->
+  `CompositeSheetSlicer.cut_out`/`despeckle`/`_aggressive_background`/
+  `_reachable_background`/`_trim`.** Confirmed (by reading, not
+  measured live in isolation this round) to carry the same naive
+  per-pixel-call anti-pattern, but algorithmically more involved than a
+  flat threshold despill -- `_reachable_background` is a real flood-fill
+  reachability walk and `despeckle` samples each pixel's own neighbors,
+  neither of which inlines as directly or as safely under time pressure
+  as a simple magenta-threshold check. `_composite_parts` also calls
+  `cut_out` many times per species (once per canopy frame, trunk,
+  on-tree region, harvest region -- plausibly dozens per tree species),
+  so the real cost is likely spread across many smaller calls rather
+  than one big one, unlike the stone/decomposer fixes above. This is
+  the single most valuable remaining target and deserves its own
+  focused investigation+fix, not a rushed addition here.
+- **The lumberjack/flower/scrub/lichen/worm/ant-mound/bee-hive bundle
+  (13%) and the creature/fish/village/flyer/piscivore-bird bundle (8%)**
+  -- measured only as bundles this round (see the phase table above),
+  not attributed to individual functions. Plausibly more instances of
+  the same widespread pattern in yet other `illustrated_*_sprite.gd`
+  files (bee/bird/ant-mound art all exist as separate classes, per this
+  file's own earlier "SpriteSheetSlicer is shared by ~30 files" note --
+  the fixes to trunk `SpriteSheetSlicer` help THOSE call sites, but any
+  class with its own local despill duplicate, the way stone/decomposer/
+  animal all independently turned out to have, would not be helped by
+  it), unexamined.
+- A later, real-time gap observed in the raw log between the second
+  post-spawn `update_with_progress` call finishing and a third batch of
+  `_load_chunk` calls starting (`t=66.20` -> `t=85.19` in one run) is
+  almost certainly ordinary idle real time before the player's regular
+  per-frame chunk-streaming radius (`EarthChunkManager.update`, a
+  DIFFERENT, unthrottled-by-this-investigation code path) reached a new
+  chunk in an unattended `--solo` run with no one pressing movement
+  keys -- not a cost inside the spawn sequence this investigation
+  covers, and not established as a real bug.

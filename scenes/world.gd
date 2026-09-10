@@ -883,7 +883,6 @@ func _ready() -> void:
 	# frames instead of running as one uninterrupted block, so the rest of
 	# _ready() must genuinely wait for it, not race it.
 	await MushroomMarker.warm_art_cache(_on_mushroom_art_progress)
-	_TEMP_log_spawn_gap("_ready: warm_art_cache done")
 	_player_spawner.spawn_path = _players.get_path()
 	_player_spawner.add_spawnable_scene(PlayerScene.resource_path)
 	WorldItemBus.item_dropped.connect(_on_item_dropped)
@@ -900,7 +899,6 @@ func _ready() -> void:
 	# the same real per-step/per-crush/per-creature events _client_process
 	# already reacts to below, not a second periodic poll of its own.
 	add_child(_interaction_sfx.build())
-	_TEMP_log_spawn_gap("_ready: overlays/soundscape/sfx built")
 
 	# Bind every action to the InputMap up front (loading any saved overrides
 	# first), before Player spawns and starts polling -- Player's own
@@ -936,7 +934,6 @@ func _ready() -> void:
 	# NOW everything _process()/_unhandled_input() touch actually exists --
 	# see this flag's own doc comment, up near where it used to be set, for
 	# why this moved here.
-	_TEMP_log_spawn_gap("_ready: _build_* calls done, about to flip _world_ready")
 	_world_ready = true
 
 	# The heavy setup the boot-time loading overlay (built/shown just above
@@ -4493,7 +4490,6 @@ func _spawn_local_singleplayer() -> void:
 	# EarthChunkManager.register_scent_carrier).
 	_chunk_manager.register_scent_carrier(player)
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
-	_TEMP_log_spawn_gap("_spawn_local_singleplayer: done")
 
 
 ## Restores a previously saved character (see docs/concept/persistence.md):
@@ -4632,31 +4628,13 @@ func _start_client_to(address: String) -> void:
 	print("[client] connecting to %s:%d" % [address, PORT])
 
 
-## TEMP DIAGNOSTIC -- not meant to survive to the final commit, see the
-## ~44s post-warm_art_cache boot-gap investigation (docs/progress.md /
-## the "Not Responding"/"1fps" boot-freeze saga this joins). Flushed
-## explicitly: plain print() fully buffers once stdout is redirected to a
-## file, so nothing would show up until the process exits otherwise --
-## same pattern as the earlier TEMP_fps_log.txt investigation.
-func _TEMP_log_spawn_gap(label: String) -> void:
-	var path := "user://TEMP_spawn_gap_log.txt"
-	var f := FileAccess.open(path, FileAccess.READ_WRITE if FileAccess.file_exists(path) else FileAccess.WRITE)
-	if f:
-		f.seek_end()
-		f.store_line("t=%.2f %s" % [Time.get_ticks_msec() / 1000.0, label])
-		f.flush()
-
-
 func _compute_dry_land_spawn_tile() -> Vector2i:
-	_TEMP_log_spawn_gap("compute_dry_land_spawn_tile: start")
 	var spawn_tile := Vector2i(
 		_geo_coordinates.tile_for_longitude(SPAWN_LONGITUDE, EarthChunkGenerator.WORLD_WIDTH_TILES),
 		_geo_coordinates.tile_for_latitude(SPAWN_LATITUDE, EarthChunkGenerator.WORLD_HEIGHT_TILES)
 	)
 	await _chunk_manager.update_with_progress(spawn_tile, _on_chunk_load_progress)
-	_TEMP_log_spawn_gap("compute_dry_land_spawn_tile: update_with_progress done")
 	var dry_land_tile := _find_dry_land_spawn(spawn_tile)
-	_TEMP_log_spawn_gap("compute_dry_land_spawn_tile: find_dry_land_spawn done")
 	# The real dry-land spawn tile is also the center of the EASY-difficulty
 	# region (see RegionDifficulty / docs/concept/ecosystem_dynamics.md's
 	# Region difficulty section) -- dangerous species (bear/lion/venomous
@@ -5726,28 +5704,14 @@ func _update_compass_window(local_player: Player) -> void:
 ## an eighth biome), so it's asked separately here rather than folded into
 ## the biome check above.
 func _find_dry_land_spawn(candidate: Vector2i) -> Vector2i:
-	# TEMP DIAGNOSTIC -- see _TEMP_log_spawn_gap's own doc comment.
-	var _TEMP_t0 := Time.get_ticks_usec()
-	var _TEMP_checks := 0
 	for radius in range(SPAWN_SEARCH_RADIUS + 1):
 		for dy in range(-radius, radius + 1):
 			for dx in range(-radius, radius + 1):
 				var tile := candidate + Vector2i(dx, dy)
-				_TEMP_checks += 1
 				if (
 					_chunk_manager.biome_at_global(tile.x, tile.y) != "ocean"
 					and not _chunk_manager.is_river_at_global(tile.x, tile.y)
 					and not _chunk_manager.is_lake_at_global(tile.x, tile.y)
 				):
-					_TEMP_log_spawn_gap(
-						"find_dry_land_spawn: found at radius=%d after %d checks, %d us" % [
-							radius, _TEMP_checks, Time.get_ticks_usec() - _TEMP_t0
-						]
-					)
 					return tile
-	_TEMP_log_spawn_gap(
-		"find_dry_land_spawn: EXHAUSTED after %d checks, %d us, falling back to candidate" % [
-			_TEMP_checks, Time.get_ticks_usec() - _TEMP_t0
-		]
-	)
 	return candidate

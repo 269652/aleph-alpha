@@ -208,18 +208,48 @@ func _build_textures(species: String, action: String) -> Array[ImageTexture]:
 ## IllustratedStoneSprite._prepared_for_slicing, minus its "already has
 ## real alpha" shortcut (see _MAGENTA_RED_MIN's own doc comment on why that
 ## shortcut does not apply to these two sheets).
+## Reported live (see docs/progress.md's "Still at 1fps" per-pixel
+## art-loading investigation, 2026-09-10, and its own "separate,
+## unaddressed ~44s" spawn-gap follow-up): a plain GDScript double `for`
+## calling `Image.get_pixel`/`set_pixel` once per pixel -- for a real
+## ant.png/beetle.png sheet (~1.6-2M pixels), well over a million
+## interpreted per-pixel calls, each allocating/comparing a Color object.
+## Mirrors IllustratedStoneSprite's own identical fix (see its
+## _prepared_for_slicing's own doc comment for the full reasoning: byte-
+## array access, every threshold/margin constant used pre-scaled by 255.0,
+## the whole check inlined with no per-pixel helper call). The magenta
+## branch only zeroes the ALPHA byte here too (matching
+## `Color(pixel.r, pixel.g, pixel.b, 0.0)` below), unlike `_despill_image`'s
+## own magenta branch just below, which zeroes all four. See
+## test_prepared_for_slicing_completes_quickly_at_real_sheet_resolution
+## (tests/unit/test_illustrated_decomposer_sprite.gd) for the budgeted
+## timing pin this now has to keep passing.
 func _prepared_for_slicing(image: Image) -> Image:
 	var prepared := image.duplicate() as Image
 	if prepared.get_format() != Image.FORMAT_RGBA8:
 		prepared.convert(Image.FORMAT_RGBA8)
-	for y in prepared.get_height():
-		for x in prepared.get_width():
-			var pixel := prepared.get_pixel(x, y)
-			if _is_magenta(pixel):
-				prepared.set_pixel(x, y, Color(pixel.r, pixel.g, pixel.b, 0.0))
-			else:
-				prepared.set_pixel(x, y, _despilled(pixel))
-	return prepared
+	var width := prepared.get_width()
+	var height := prepared.get_height()
+	var data := prepared.get_data()
+	var red_min_byte := _MAGENTA_RED_MIN * 255.0
+	var blue_min_byte := _MAGENTA_BLUE_MIN * 255.0
+	var green_max_byte := _MAGENTA_GREEN_MAX * 255.0
+	var cast_margin_byte := _MAGENTA_CAST_MARGIN * 255.0
+	var i := 0
+	for _pixel in width * height:
+		var r := float(data[i])
+		var g := float(data[i + 1])
+		var b := float(data[i + 2])
+		if r >= red_min_byte and b >= blue_min_byte and g <= green_max_byte:
+			data[i + 3] = 0
+		else:
+			var cast: float = minf(r - g, b - g)
+			if cast > cast_margin_byte:
+				var removed := cast - cast_margin_byte
+				data[i] = clampi(roundi(r - removed), 0, 255)
+				data[i + 2] = clampi(roundi(b - removed), 0, 255)
+		i += 4
+	return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
 
 
 ## Two passes over an already-cropped-and-resized frame, in place: pixels
@@ -228,14 +258,51 @@ func _prepared_for_slicing(image: Image) -> Image:
 ## magenta pixel is not); anything left with a softer cast is despilled
 ## rather than deleted, so a genuine soft shadow/outline survives as a
 ## shadow instead of being punched into a hard-edged hole.
+##
+## Same naive-per-pixel-call bug as _prepared_for_slicing above (see its own
+## doc comment), separately fixed here since this loop runs on a DIFFERENT
+## canvas -- CANVAS_SIZE (340x300) is ~100x IllustratedStoneSprite's own
+## (32x32), so at this class's scale the per-FRAME cost alone (measured
+## 100.5ms naive per call, isolated -- see
+## test_despill_image_completes_quickly_at_real_frame_resolution) is real,
+## unlike IllustratedStoneSprite._scrub_magenta_fringe's own equivalent
+## (measured 1.37ms at 32x32, deliberately left unfixed: not a measured
+## problem at that size). `-> void`, mutating `image` in place (its callers
+## never use a return value) -- Image has no in-place "replace my own pixel
+## data from a byte array" method (see SpriteSheetSlicer._clear_background's
+## own doc comment), but `copy_from` DOES copy another Image's data into an
+## existing instance in place, which is what the reconstructed byte-array
+## image is copied through here instead of being returned.
 func _despill_image(image: Image) -> void:
-	for y in image.get_height():
-		for x in image.get_width():
-			var pixel := image.get_pixel(x, y)
-			if _is_magenta(pixel):
-				image.set_pixel(x, y, Color(0, 0, 0, 0))
-			else:
-				image.set_pixel(x, y, _despilled(pixel))
+	var prepared := image
+	if prepared.get_format() != Image.FORMAT_RGBA8:
+		prepared = prepared.duplicate() as Image
+		prepared.convert(Image.FORMAT_RGBA8)
+	var width := prepared.get_width()
+	var height := prepared.get_height()
+	var data := prepared.get_data()
+	var red_min_byte := _MAGENTA_RED_MIN * 255.0
+	var blue_min_byte := _MAGENTA_BLUE_MIN * 255.0
+	var green_max_byte := _MAGENTA_GREEN_MAX * 255.0
+	var cast_margin_byte := _MAGENTA_CAST_MARGIN * 255.0
+	var i := 0
+	for _pixel in width * height:
+		var r := float(data[i])
+		var g := float(data[i + 1])
+		var b := float(data[i + 2])
+		if r >= red_min_byte and b >= blue_min_byte and g <= green_max_byte:
+			data[i] = 0
+			data[i + 1] = 0
+			data[i + 2] = 0
+			data[i + 3] = 0
+		else:
+			var cast: float = minf(r - g, b - g)
+			if cast > cast_margin_byte:
+				var removed := cast - cast_margin_byte
+				data[i] = clampi(roundi(r - removed), 0, 255)
+				data[i + 2] = clampi(roundi(b - removed), 0, 255)
+		i += 4
+	image.copy_from(Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data))
 
 
 static func _is_magenta(color: Color) -> bool:

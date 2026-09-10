@@ -1106,19 +1106,6 @@ func pending_load_chunks(player_global_tile: Vector2i) -> Array[Vector2i]:
 ## _client_process, and the whole existing update() test suite -- keeps
 ## calling the synchronous update() completely unchanged; this is purely
 ## additive.
-## TEMP DIAGNOSTIC -- not meant to survive to the final commit, see the
-## ~44s post-warm_art_cache boot-gap investigation. Same pattern (and same
-## log FILE) as World._TEMP_log_spawn_gap, so both scripts' checkpoints
-## interleave in one chronological timeline instead of two separate files.
-func _TEMP_log_spawn_gap(label: String) -> void:
-	var path := "user://TEMP_spawn_gap_log.txt"
-	var f := FileAccess.open(path, FileAccess.READ_WRITE if FileAccess.file_exists(path) else FileAccess.WRITE)
-	if f:
-		f.seek_end()
-		f.store_line("t=%.2f %s" % [Time.get_ticks_msec() / 1000.0, label])
-		f.flush()
-
-
 func update_with_progress(player_global_tile: Vector2i, on_progress: Callable = Callable()) -> void:
 	_disturbance_center_tile = player_global_tile
 	var center_chunk := _chunk_coord_for_tile(player_global_tile)
@@ -1126,30 +1113,19 @@ func update_with_progress(player_global_tile: Vector2i, on_progress: Callable = 
 
 	var pending := pending_load_chunks(player_global_tile)
 	var total := pending.size()
-	_TEMP_log_spawn_gap("update_with_progress: start, %d chunks pending" % total)
 	if on_progress.is_valid():
 		on_progress.call(0, total)
 	var loaded := 0
 	for chunk_coord in pending:
-		var _TEMP_chunk_t0 := Time.get_ticks_usec()
 		_load_chunk(chunk_coord)
-		var _TEMP_load_usec := Time.get_ticks_usec() - _TEMP_chunk_t0
 		loaded += 1
 		if on_progress.is_valid():
 			on_progress.call(loaded, total)
-		var _TEMP_frame_t0 := Time.get_ticks_usec()
 		await Engine.get_main_loop().process_frame
-		var _TEMP_frame_usec := Time.get_ticks_usec() - _TEMP_frame_t0
-		_TEMP_log_spawn_gap(
-			"update_with_progress: chunk %d/%d load_us=%d frame_wait_us=%d" % [
-				loaded, total, _TEMP_load_usec, _TEMP_frame_usec
-			]
-		)
 
 	_evict_far_chunks(center_chunk)
 	_update_roof_visibility(player_global_tile)
 	_update_geology_reveal(player_global_tile)
-	_TEMP_log_spawn_gap("update_with_progress: done (evict/roof/geology)")
 
 
 func is_chunk_loaded(chunk_coord: Vector2i) -> bool:
@@ -11398,7 +11374,6 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_sync_piece_collision(global_cell, chunk.modifications[local_cell])
 	if _roof_layer != null:
 		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
-	_TEMP_log_spawn_gap("_load_chunk %s: terrain/paint done, starting trees" % [chunk_coord])
 	_loaded_trees[chunk_coord] = _tree_renderer.spawn_trees(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	)
@@ -11411,14 +11386,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 			_tree_renderer.spawn_tree_at(_entities_parent, record.position, sapling_age)
 		)
 	_dispatch_cicadas(chunk_coord)
-	_TEMP_log_spawn_gap("_load_chunk %s: trees/cicadas done, starting stones" % [chunk_coord])
 
 	_loaded_stones[chunk_coord] = _stone_renderer.spawn_stones(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	) + _stone_renderer.spawn_mountain_veins(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
 	)
-	_TEMP_log_spawn_gap("_load_chunk %s: stones done, starting geology" % [chunk_coord])
 
 	# Geology (see docs/concept/geology.md): a real per-chunk topsoil/
 	# regolith Strata sim, plus the surface markers for whichever cave
@@ -11466,7 +11439,6 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_aquatic_invertebrates_sprites[chunk_coord] = {}
 		_sync_aquatic_invertebrate_sprites(chunk_coord)
 
-	_TEMP_log_spawn_gap("_load_chunk %s: geology/grass/aquatic done, starting crops/mushrooms" % [chunk_coord])
 	var crop_sims := {}
 	var crop_markers := {}
 	for crop_id in WILD_CROP_IDS:
@@ -11557,7 +11529,6 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for millipede_marker in _millipede_markers[chunk_coord]:
 		millipede_marker.setup(self)
 
-	_TEMP_log_spawn_gap("_load_chunk %s: crops/mushrooms/decomposers/caterpillars/frogs/millipedes done, starting lumberjacks/flowers" % [chunk_coord])
 	# Re-staff every Sägewerk this chunk already had persisted, before this
 	# load, with a fresh Lumberjack -- "an NPC moves in" applies just as much
 	# to a revisited worksite as a freshly-placed one (see
@@ -11670,7 +11641,6 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		nest_markers[nest_cell] = _spawn_wild_bee_nest_marker(_wild_bee_patches[chunk_coord], chunk_coord, nest_cell)
 	_wild_bee_nest_markers[chunk_coord] = nest_markers
 
-	_TEMP_log_spawn_gap("_load_chunk %s: lumberjacks/flowers/scrub/lichen/worms/ants/bees done, starting litter/creatures" % [chunk_coord])
 	# Fallen-leaf litter (see docs/concept/leaf_litter.md). Empty at
 	# creation -- unlike the ant mounds/earthworm burrows above, litter is
 	# never seeded up front; step_fruiting's own leaf-fall block populates it
@@ -11769,7 +11739,6 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_ecosystem.kingfisher_population(chunk_coord)
 	)
 
-	_TEMP_log_spawn_gap("_load_chunk %s: creatures/fish/village/flyers/piscivores done, starting settlement/rest" % [chunk_coord])
 	# Settlement build decision (see _apply_settlement_build_decision's own
 	# doc comment) runs BEFORE construction labor catch-up -- a project this
 	# call decides to abandon (double-fix cancellation) or start is resolved
