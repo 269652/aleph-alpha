@@ -1106,6 +1106,19 @@ func pending_load_chunks(player_global_tile: Vector2i) -> Array[Vector2i]:
 ## _client_process, and the whole existing update() test suite -- keeps
 ## calling the synchronous update() completely unchanged; this is purely
 ## additive.
+## TEMP DIAGNOSTIC -- not meant to survive to the final commit, see the
+## ~44s post-warm_art_cache boot-gap investigation. Same pattern (and same
+## log FILE) as World._TEMP_log_spawn_gap, so both scripts' checkpoints
+## interleave in one chronological timeline instead of two separate files.
+func _TEMP_log_spawn_gap(label: String) -> void:
+	var path := "user://TEMP_spawn_gap_log.txt"
+	var f := FileAccess.open(path, FileAccess.READ_WRITE if FileAccess.file_exists(path) else FileAccess.WRITE)
+	if f:
+		f.seek_end()
+		f.store_line("t=%.2f %s" % [Time.get_ticks_msec() / 1000.0, label])
+		f.flush()
+
+
 func update_with_progress(player_global_tile: Vector2i, on_progress: Callable = Callable()) -> void:
 	_disturbance_center_tile = player_global_tile
 	var center_chunk := _chunk_coord_for_tile(player_global_tile)
@@ -1113,19 +1126,30 @@ func update_with_progress(player_global_tile: Vector2i, on_progress: Callable = 
 
 	var pending := pending_load_chunks(player_global_tile)
 	var total := pending.size()
+	_TEMP_log_spawn_gap("update_with_progress: start, %d chunks pending" % total)
 	if on_progress.is_valid():
 		on_progress.call(0, total)
 	var loaded := 0
 	for chunk_coord in pending:
+		var _TEMP_chunk_t0 := Time.get_ticks_usec()
 		_load_chunk(chunk_coord)
+		var _TEMP_load_usec := Time.get_ticks_usec() - _TEMP_chunk_t0
 		loaded += 1
 		if on_progress.is_valid():
 			on_progress.call(loaded, total)
+		var _TEMP_frame_t0 := Time.get_ticks_usec()
 		await Engine.get_main_loop().process_frame
+		var _TEMP_frame_usec := Time.get_ticks_usec() - _TEMP_frame_t0
+		_TEMP_log_spawn_gap(
+			"update_with_progress: chunk %d/%d load_us=%d frame_wait_us=%d" % [
+				loaded, total, _TEMP_load_usec, _TEMP_frame_usec
+			]
+		)
 
 	_evict_far_chunks(center_chunk)
 	_update_roof_visibility(player_global_tile)
 	_update_geology_reveal(player_global_tile)
+	_TEMP_log_spawn_gap("update_with_progress: done (evict/roof/geology)")
 
 
 func is_chunk_loaded(chunk_coord: Vector2i) -> bool:
