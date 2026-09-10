@@ -136,7 +136,14 @@ func _count_occurrences(haystack: String, needle: String) -> int:
 ## somewhere in the function.
 func test_the_creature_crush_calls_are_inside_a_creaturemarker_group_loop():
 	var body := _client_process_body()
-	var group_loop_at := body.find("get_nodes_in_group(CreatureMarker.GROUP_NAME)")
+	# The scene-tree group lookup itself is now fetched once, cached as
+	# loaded_creature_markers, and reused by several loops (2026-09-10 perf
+	# consolidation, see test_world_creature_scan_consolidation.gd) -- the
+	# crush loop's own header is the LAST such loop in this function (see
+	# that file's own class doc comment for why its position is pinned),
+	# so this anchors on the loop header text directly rather than the
+	# (now single, early, no-longer-position-specific) group-fetch call.
+	var group_loop_at := body.rfind("for creature in loaded_creature_markers:")
 	var worm_crush_at := body.rfind("crush_worm_at(")
 	var caterpillar_crush_at := body.rfind("crush_caterpillars_near(")
 	var millipede_crush_at := body.rfind("crush_millipedes_near(")
@@ -187,11 +194,14 @@ func test_only_the_players_own_crush_calls_apply_the_karma_penalty():
 ## charged only when a crush actually happened.
 func test_the_players_own_karma_penalty_is_only_charged_when_a_crush_actually_happens():
 	var body := _client_process_body()
-	# rfind, not find: an EARLIER, unrelated CreatureMarker.GROUP_NAME loop
-	# (snow-treading, see the tread_snow_at pairing this block's own doc
-	# comment mirrors) sits before the crush block entirely -- the crush
-	# pass's own creature loop is the LAST such loop in this function.
-	var group_loop_at := body.rfind("get_nodes_in_group(CreatureMarker.GROUP_NAME)")
+	# rfind, not find: EARLIER, unrelated loops over the same cached
+	# loaded_creature_markers list (wader positions, then the merged snow-
+	# tread/footstep pass -- see test_world_creature_scan_consolidation.gd)
+	# sit before the crush block entirely -- the crush pass's own creature
+	# loop is the LAST such loop in this function, and its POSITION here
+	# is deliberately unchanged by that consolidation (see this test's own
+	# premise).
+	var group_loop_at := body.rfind("for creature in loaded_creature_markers:")
 	assert_gt(group_loop_at, -1)
 	for call_name in ["crush_worm_at(", "crush_caterpillars_near(", "crush_millipedes_near(", "crush_ants_near(", "crush_decomposers_near(", "crush_mushroom_at("]:
 		var at := body.find(call_name)
@@ -211,7 +221,7 @@ func test_the_players_own_karma_penalty_is_only_charged_when_a_crush_actually_ha
 func test_a_creatures_own_crush_never_applies_the_karma_penalty():
 	var body := _client_process_body()
 	# rfind, not find -- see the sibling test above's own comment on why.
-	var group_loop_at := body.rfind("get_nodes_in_group(CreatureMarker.GROUP_NAME)")
+	var group_loop_at := body.rfind("for creature in loaded_creature_markers:")
 	assert_gt(group_loop_at, -1)
 	for call_name in ["crush_worm_at(", "crush_caterpillars_near(", "crush_millipedes_near(", "crush_ants_near(", "crush_decomposers_near(", "crush_mushroom_at(", "crush_walnut_near("]:
 		var at := body.rfind(call_name)
@@ -258,7 +268,10 @@ func test_crush_mushroom_at_is_called_for_both_the_player_and_creatures():
 
 func test_the_creature_mushroom_crush_call_is_inside_a_creaturemarker_group_loop():
 	var body := _client_process_body()
-	var group_loop_at := body.find("get_nodes_in_group(CreatureMarker.GROUP_NAME)")
+	# See test_the_creature_crush_calls_are_inside_a_creaturemarker_group_
+	# loop's own comment above on why this anchors on the loop header text
+	# rather than the (now single, cached) group-fetch call.
+	var group_loop_at := body.rfind("for creature in loaded_creature_markers:")
 	var mushroom_crush_at := body.rfind("crush_mushroom_at(")
 	assert_gt(group_loop_at, -1)
 	assert_gt(mushroom_crush_at, -1)
@@ -279,7 +292,10 @@ func test_crush_walnut_near_is_called_for_both_the_player_and_creatures():
 
 func test_the_creature_walnut_crush_call_is_inside_a_creaturemarker_group_loop():
 	var body := _client_process_body()
-	var group_loop_at := body.find("get_nodes_in_group(CreatureMarker.GROUP_NAME)")
+	# See test_the_creature_crush_calls_are_inside_a_creaturemarker_group_
+	# loop's own comment above on why this anchors on the loop header text
+	# rather than the (now single, cached) group-fetch call.
+	var group_loop_at := body.rfind("for creature in loaded_creature_markers:")
 	var walnut_crush_at := body.rfind("crush_walnut_near(")
 	assert_gt(group_loop_at, -1)
 	assert_gt(walnut_crush_at, -1)

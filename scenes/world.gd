@@ -5393,8 +5393,23 @@ func _client_process(delta: float) -> void:
 	# clock (which follows the real clock) holds evening players in
 	# permanent night. Real rivers gleam after dark: they reflect the sky.
 	_chunk_manager.set_river_flow_night_lift(sunlight)
+	# Fetched ONCE per frame and reused by every consumer below (the wader-
+	# position scan here, the merged snow-tread/footstep loop, and the
+	# crush loop) -- reported live: "Can you fix the 10fps issue and bring
+	# it back to 30+?" `get_tree().get_nodes_in_group` allocates and copies
+	# the group's member list on every call (O(loaded creature count) just
+	# to fetch it), and this same list used to be independently re-fetched
+	# FOUR separate times a frame for the exact same creatures -- the same
+	# "redundant per-frame full-population work, accumulated one small
+	# addition at a time across many sessions" shape that already caused a
+	# previously-measured, previously-fixed 25-31ms/frame regression in
+	# EarthChunkManager.crush_ants_near (see that function's own doc
+	# comment), just spread across four call sites instead of hiding
+	# inside one. See test_world_creature_scan_consolidation.gd for the
+	# direct regression coverage.
+	var loaded_creature_markers: Array = get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME)
 	var wader_candidates: Array = [local_player.position]
-	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+	for creature in loaded_creature_markers:
 		wader_candidates.append(creature.position)
 	# The player/animal half of wader_candidates, captured before fish are
 	# appended below -- a fish is always "in water" by definition, so
@@ -5507,23 +5522,27 @@ func _client_process(delta: float) -> void:
 	# move the trail window (move_trail_window = false), which has to keep
 	# following the player rather than snapping to wherever the
 	# last-processed creature happens to be standing.
-	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+	# Merged with the footstep loop below (2026-09-10, see this function's
+	# own "loaded_creature_markers" doc comment above) -- the two were
+	# already textually adjacent with nothing between them, and neither
+	# reads the other's output, so sharing one iteration of the cached
+	# list is a zero-reordering-risk consolidation, not a behavior change.
+	for creature in loaded_creature_markers:
 		_chunk_manager.tread_snow_at(creature.position, false)
-	# Every individually-simulated creature leaves a real, mass-scaled
-	# footprint of its own too -- asked directly: footprints should depend
-	# on an animal's real mass and the ground, "much like all other
-	# mechanics do" (see docs/concept/snow_cover.md's "Footprints depend
-	# on real mass, not just surface"). Reverses this feature's own
-	# original player-only scope, the same way the crush pass below it
-	# already covers every creature, not just the player. Each creature's
-	# OWN lazily-built FootstepGait (never shared -- see that accessor's
-	# own doc comment) keeps its stride accumulator independent of every
-	# other walker's, and its OWN real, live current_mass_kg() (see
-	# docs/concept/metabolism.md) is what actually sizes the print --
-	# visual-only, no footstep SOUND per creature (a real, separate,
-	# spatial per-creature audio system this doesn't open, unlike the
-	# player's own single _interaction_sfx emitter above).
-	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		# Every individually-simulated creature leaves a real, mass-scaled
+		# footprint of its own too -- asked directly: footprints should depend
+		# on an animal's real mass and the ground, "much like all other
+		# mechanics do" (see docs/concept/snow_cover.md's "Footprints depend
+		# on real mass, not just surface"). Reverses this feature's own
+		# original player-only scope, the same way the crush pass below it
+		# already covers every creature, not just the player. Each creature's
+		# OWN lazily-built FootstepGait (never shared -- see that accessor's
+		# own doc comment) keeps its stride accumulator independent of every
+		# other walker's, and its OWN real, live current_mass_kg() (see
+		# docs/concept/metabolism.md) is what actually sizes the print --
+		# visual-only, no footstep SOUND per creature (a real, separate,
+		# spatial per-creature audio system this doesn't open, unlike the
+		# player's own single _interaction_sfx emitter above).
 		var footstep_marker := creature as CreatureMarker
 		_chunk_manager.record_footstep(footstep_marker.position, footstep_marker.facing_direction(), footstep_marker.footstep_gait(), footstep_marker.current_mass_kg())
 	# Crushed underfoot (see docs/concept/soil_fauna.md "Crushed underfoot:
@@ -5586,8 +5605,13 @@ func _client_process(delta: float) -> void:
 	# call here is a bare statement, exactly the shape crush_walnut_near
 	# (never Karma-eligible for anyone) already used on the line right
 	# below them. See this block's own doc comment above for the report
-	# that reversed this from the earlier "any creature's" design.
-	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+	# that reversed this from the earlier "any creature's" design. Reuses
+	# the SAME cached loaded_creature_markers list every other creature
+	# loop above does (see this function's own doc comment on it) --
+	# deliberately left at this exact POSITION, still after the player-
+	# only crush block above, rather than merged into it: the Karma-
+	# charging tests in test_world_crush_wiring.gd depend on that order.
+	for creature in loaded_creature_markers:
 		var marker := creature as CreatureMarker
 		# Reads this creature's OWN real, live, unified mass (see
 		# docs/concept/metabolism.md) rather than a flat CreatureMass.
