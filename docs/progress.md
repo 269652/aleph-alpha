@@ -19358,3 +19358,53 @@ bookkeeping; flagged separately rather than folded into this fix).
 
 Branched from fresh `origin/main` (which already carried the witty-tips
 merge above), pushed immediately.
+
+## Witty-tip rotation sped up 4.5s -> 2.0s after actually watching a real launch (`concept/persistence.md`, 2026-09-10)
+
+Reported live, immediately after relaunching to see the previous pass's
+own tips: "it shows the tip but it doesn't rotate / change... it should
+change the tip every 2s or so." Not a rotation bug — `LoadingOverlay.
+_process` drives the tip and the spinner off the identical
+`_elapsed_seconds` accumulator, and the spinner was visibly animating —
+the real cause was a loading screen visible for less than one 4.5s
+interval on that run, so the rotation genuinely never got to fire even
+once. `LoadingTips.TIP_INTERVAL_SECONDS` dropped to 2.0, matching the
+requested cadence directly; its own pinned-duration test bounds moved
+with it. `test_loading_tips.gd` confirmed red against the unmodified 4.5s
+constant first (bounds tightened to `(1.0, 4.0)`, which 4.5 fails), green
+after. `test_loading_tips.gd` 10/10, `test_loading_overlay.gd` 5/5 — no
+other change.
+
+## Loading-tip pool grows from 30 to 1029 via a template x subject combinator (`concept/persistence.md`, 2026-09-10)
+
+Requested live, immediately after confirming the rotation-speed fix
+worked: *"can you increase the number of tips to 1000?"* Hand-writing a
+thousand individually distinct jokes was never realistic, so
+`src/ui/loading_tips.gd` gained a small combinator instead: 20 generic
+present-participle-opener templates (`"Convincing %s to cooperate, just
+this once."`) crossed with 50 real in-game subjects (`"the ants"` through
+`"the chunk loader"`) via `_generated_tips()` — exactly 1000 sentences,
+pinned by test. `TIPS` is now `_deduplicated(_CURATED_TIPS +
+_generated_tips())`, a `static var` (building it runs real loops `const`
+folding can't).
+
+Two real bugs, both caught by actually running the generator and reading
+the output rather than trusting the design on paper: (1) every template
+was deliberately built to never need a conjugated verb agreeing with the
+subject's own grammatical number (`_SUBJECTS` mixes plural "the ants"
+with singular "the kingfisher"/"karma"/"the world boss") — except one,
+`"Making sure %s haven't wandered off again."`, which produced "Making
+sure the kingfisher haven't wandered off again." for singular subjects.
+Fixed by rewording to `"Keeping an eye on %s so nothing wanders off."`
+(the verb now agrees with the fixed word "nothing," never `%s`); a new
+test pins the whole class, not just this instance. (2) a real duplicate:
+`"Warning the boars that footsteps are getting closer."` is both a
+hand-curated tip and a generated combination — `_deduplicated` handles
+this structurally (curated tips win) rather than needing every future
+template/subject pairing hand-checked.
+
+TDD: 4 new tests (pool size, exact combinator arithmetic, no leftover
+`%s` placeholder, no agreement-hazard auxiliary in any template) plus the
+2 pre-existing generic tests (uniqueness, length) now validating the full
+1029-tip pool for free. `test_loading_tips.gd` 14/14, `test_loading_
+overlay.gd` 5/5 unaffected.
