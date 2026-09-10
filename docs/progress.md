@@ -19540,3 +19540,77 @@ regression in `test_loading_overlay.gd`/`test_loading_spinner.gd`/
 `test_world_boot_loading_overlay_fanout.gd` (17/17 across the three).
 
 Branched from fresh `origin/main`, pushed immediately.
+
+## The real "Still at 1fps" cause: a per-pixel art-loading loop, not a per-frame system (2026-09-10)
+
+Reported live, again, plainly: *"Can you now try to fix performance
+again? Still at 1fps atm."* Two separate real bugs, found in sequence --
+the first was a real, valid fix that turned out NOT to be the dominant
+cause, confirmed only by live-verifying it and finding FPS still pinned
+at 1-2 afterward, not by trusting the fix in isolation.
+
+**Fix 1 (real, kept, but insufficient alone):** `_client_process`'s call
+to `_nature_soundscape.update(...)` passed `_chunk_manager.
+nearest_water_distance_tiles(...)` (a real ring-scan, see
+`WaterProximity`/`concept/soundscape.md`) as a plain function argument --
+GDScript evaluates call arguments eagerly, so this fired every single
+frame regardless of whatever throttle `update()` applies internally to
+the *value*. Fixed with a dedicated `WATER_PROXIMITY_REFRESH_INTERVAL`
+accumulator/cache, the same shape `CREATURE_CALL_REFRESH_INTERVAL`
+already uses.
+
+**Fix 2 (the real dominant cause):** instrumenting `World._ready()`'s
+entire heavy-setup sequence end to end (after fix 1 alone proved
+insufficient) traced the actual cost to `MushroomMarker.warm_art_cache()`
+-- already documented at ~52-88s in an earlier pass -- now measuring
+~10-13s **per species** live (~75-97s total), i.e. regressed further
+past its own already-bad baseline. Root cause: `SpriteSheetSlicer`'s
+`chroma_keyed`/`detect_frames`/`normalize_frames`/`content_rect` and
+`IllustratedMushroomSprite`'s own duplicate `_apply_chroma_key` are each
+a plain GDScript double `for` calling `Image.get_pixel`/`set_pixel` once
+per pixel -- over 1.5 million interpreted calls per real 1254x1254 sheet.
+
+A real trap along the way, worth recording: the first attempt at a fix
+factored the per-pixel check into a shared helper function, still called
+once per pixel from a byte-array loop -- and measured **slower** than
+the original, not faster. Isolated directly: a `get_pixel` loop measured
+~220ms; the same loop reading raw bytes but still calling a per-pixel
+helper measured ~1070ms; the same loop again with that helper's body
+inlined (no function call at all) measured ~170ms. The bottleneck was
+never `get_pixel` vs. byte-array access -- it is GDScript's own per-call
+overhead for a *user-defined* function, paid millions of times, which
+`get_pixel` (a single C++ builtin) never pays. Fixed for real by inlining
+the whole per-pixel check directly in each hot loop, calling only cheap
+built-in globals (`absf`/`mini`/`maxi`) rather than a project helper -- a
+deliberate, documented DRY violation across three call sites, not an
+oversight.
+
+Real-sheet measurement (`test_illustrated_mushroom_sprite.gd`'s own full
+suite, real asset files, not synthetic): ~3-6s per sheet before -> ~0.7-
+1.1s per sheet after, both fixes together. `SpriteSheetSlicer` is shared
+by every illustrated sprite class in the game (~30 files), so this same
+fix benefits bee/bird/stone/tree/ant-mound art warm-up too, not just
+mushrooms.
+
+TDD: `test_water_proximity_scan_is_throttled_not_run_every_frame` (new,
+`test_world_creature_and_footstep_audio_wiring.gd`, now 9/9); 2 new
+budgeted-timing tests in `test_illustrated_mushroom_sprite.gd` (now
+29/29); 4 new budgeted-timing tests in `test_sprite_sheet_slicer.gd`
+(now 11/11) -- each confirmed red against the naive implementation
+first (with a real, measured naive number in its own failure message),
+then green after the fix, per this project's own strict-TDD rule for
+tuned thresholds.
+
+**Honest scope note:** this fixes `warm_art_cache`'s own real cost,
+confirmed via rigorous, isolated, function-level measurement -- not
+assumed from the fix's shape. A live end-to-end `--solo` boot-time
+confirmation was attempted repeatedly but was not conclusive in this
+session's own sandboxed environment (~34 other active sessions sharing
+the machine at the time, matching this project's own established "a
+live fps number is meaningless while another process shares the
+machine" lesson). One run also suggested a **separate, unaddressed**
+~44s cost in the post-warm-cache dry-land-spawn-search/initial-chunk-
+load sequence (`_compute_dry_land_spawn_tile`/`_find_dry_land_spawn`),
+which this fix does not touch and which may still dominate total boot
+feel -- worth its own follow-up investigation if "still slow to start"
+is reported again after this lands.

@@ -240,6 +240,36 @@ const CREATURE_PANELS_REFRESH_INTERVAL := 0.5
 ## against CALL_CHANCE_PER_CHECK's own low per-check rarity.
 const CREATURE_CALL_REFRESH_INTERVAL := 1.0
 var _creature_call_accumulator := 0.0
+
+## Reported live, severe: "Still at 1fps." Real regression, found by
+## reading the source: `EarthChunkManager.nearest_water_distance_tiles`
+## (the ambient river-proximity layer's own real ring-scan, see
+## WaterProximity/docs/concept/soundscape.md) was passed straight into
+## `_nature_soundscape.update(...)` as a plain function ARGUMENT --
+## GDScript evaluates arguments eagerly, before the callee ever runs, so
+## this real, non-trivial scan (up to WATER_PROXIMITY_SCAN_RADIUS_TILES
+## rings around the player) fired every single frame regardless of
+## whatever throttle `update()` applies internally to what it actually
+## DOES with the value. Worse than a typical unthrottled call: the
+## per-tile `is_river_at_global`/`is_lake_at_global` cache barely helps
+## here, since the scanned window is centred on the player and shifts
+## with every step -- most tile checks are cache MISSES on any frame the
+## player is moving, not hits.
+##
+## Fixed the same shape CREATURE_CALL_REFRESH_INTERVAL above already
+## uses: a dedicated accumulator, recomputed (and cached) only once every
+## this many seconds. 1s: ambient water-proximity volume doesn't need
+## sub-second reaction (it's a smooth fade, not a discrete event like a
+## creature call), and matches the existing creature-call cadence above
+## rather than inventing a third, unrelated interval.
+const WATER_PROXIMITY_REFRESH_INTERVAL := 1.0
+var _water_proximity_accumulator := 0.0
+## INF (not 0.0) as the starting value -- "no water known nearby yet"
+## before the first real scan ever runs, matching NatureSoundscape.
+## layer_mix's own "INF means no river layer" contract exactly, rather
+## than a misleading 0.0 ("standing on water") nobody has actually
+## measured yet.
+var _cached_water_distance_tiles := INF
 ## Caps how many panels are shown at once (closest first) so a crowded area
 ## doesn't fill the whole screen with panels.
 const MAX_CREATURE_PANELS := 6
@@ -5412,6 +5442,15 @@ func _client_process(delta: float) -> void:
 	# figure -- what the PLAYER stands on, not the chunk's overall mix).
 	# season is fetched fresh here rather than reusing the `season` local
 	# above, which is already .capitalize()'d for the HUD.
+	# Real, non-trivial scan (see WATER_PROXIMITY_REFRESH_INTERVAL's own
+	# doc comment on why this must never be a live call-argument again) --
+	# recomputed and cached at most once a second, never evaluated inline.
+	_water_proximity_accumulator += delta
+	if _water_proximity_accumulator >= WATER_PROXIMITY_REFRESH_INTERVAL:
+		_water_proximity_accumulator = 0.0
+		_cached_water_distance_tiles = _chunk_manager.nearest_water_distance_tiles(
+			player_tile.x, player_tile.y
+		)
 	_nature_soundscape.update(
 		_chunk_manager.biome_at_global(player_tile.x, player_tile.y),
 		_chunk_manager.current_season(),
@@ -5420,7 +5459,7 @@ func _client_process(delta: float) -> void:
 		snowing,
 		randf(),
 		delta,
-		_chunk_manager.nearest_water_distance_tiles(player_tile.x, player_tile.y)
+		_cached_water_distance_tiles
 	)
 	# Depth, tracks and repaint all live behind one call now, and it reads the
 	# WORLD clock rather than this frame's delta -- see step_snow. Accumulating

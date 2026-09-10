@@ -508,20 +508,51 @@ func _stage_paths_for(sheet: Dictionary) -> Array:
 ## IllustratedAntMoundSprite's cast-removal despill quartet: these are
 ## fresh single-pass renders with no resize-induced magenta-cast bleed to
 ## clean up afterward, so one pass before slicing is enough.
+## Reported live, twice: a --solo boot instrumented end to end traced
+## warm_cache()'s ~52-88s real cost (see that function's own doc comment)
+## to THIS loop specifically -- a plain double for over Image.get_pixel/
+## set_pixel is >1.5 million interpreted per-pixel calls at a real
+## ~1254x1254 sheet's resolution, each allocating/comparing a Color object.
+## Rewritten as one pass over the image's own raw PackedByteArray (RGBA8 is
+## exactly 4 bytes/pixel, in R,G,B,A order) instead -- comparing/writing
+## raw 0-255 byte values has the exact same tolerance semantics as the
+## original 0.0-1.0 float compare (both sides scaled up by the same 255),
+## and zeroing all 4 bytes reproduces the original Color(0,0,0,0) result
+## byte-for-byte; see test_apply_chroma_key_matches_within_tolerance_per_
+## channel_ignoring_alpha for the correctness pin and test_apply_chroma_
+## key_completes_quickly_at_real_sheet_resolution for the budgeted timing
+## pin (tests/unit/test_illustrated_mushroom_sprite.gd).
 func _apply_chroma_key(image: Image, key: Color, tolerance: float) -> Image:
-	var keyed := image.duplicate()
+	# Explicitly typed, not `:=` -- Resource.duplicate()'s declared return
+	# type is the base Resource, not the covariant Image, so leaving this
+	# inferred makes every `:=` chained off keyed below (width/height/data)
+	# fail to compile ("Cannot infer the type of ... variable") even though
+	# the exact same untyped-`keyed` shape this replaced ran fine (it never
+	# chained a SECOND `:=` off a method call on keyed).
+	var keyed: Image = image.duplicate()
 	if keyed.get_format() != Image.FORMAT_RGBA8:
 		keyed.convert(Image.FORMAT_RGBA8)
-	for y in keyed.get_height():
-		for x in keyed.get_width():
-			var c: Color = keyed.get_pixel(x, y)
-			if (
-				absf(c.r - key.r) <= tolerance
-				and absf(c.g - key.g) <= tolerance
-				and absf(c.b - key.b) <= tolerance
-			):
-				keyed.set_pixel(x, y, Color(0, 0, 0, 0))
-	return keyed
+	var width := keyed.get_width()
+	var height := keyed.get_height()
+	var data := keyed.get_data()
+	var key_r := key.r * 255.0
+	var key_g := key.g * 255.0
+	var key_b := key.b * 255.0
+	var byte_tolerance := tolerance * 255.0
+	var i := 0
+	var pixel_count := width * height
+	for _pixel in pixel_count:
+		if (
+			absf(float(data[i]) - key_r) <= byte_tolerance
+			and absf(float(data[i + 1]) - key_g) <= byte_tolerance
+			and absf(float(data[i + 2]) - key_b) <= byte_tolerance
+		):
+			data[i] = 0
+			data[i + 1] = 0
+			data[i + 2] = 0
+			data[i + 3] = 0
+		i += 4
+	return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
 
 
 ## How much to scale a CANVAS_SIZE-normalized frame so it reads at
