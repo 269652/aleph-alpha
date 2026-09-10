@@ -383,6 +383,24 @@ func average_vegetation_density(chunk_coord: Vector2i) -> float:
 	return _average(_vegetation_density.get(chunk_coord, PackedFloat32Array()))
 
 
+## The real per-CELL density at `local_index` within `chunk_coord`'s own
+## grid (same flat y*width+x indexing VegetationGrowthModel.step_grid and
+## Chunk's own biome/temperature/moisture arrays already use) -- unlike
+## average_vegetation_density's whole-chunk average, this tells a grazed-
+## bare cell apart from a lush one right next to it. -1.0 (never a real
+## density, which is always >= 0.0) for a chunk not currently loaded, or an
+## index outside its grid -- distinguishable from a genuine 0.0 (bare
+## ground), the same "no data" contract EarthChunkManager.biome_at_global
+## expresses with "" for its own string return.
+func vegetation_density_at(chunk_coord: Vector2i, local_index: int) -> float:
+	if not _vegetation_density.has(chunk_coord):
+		return -1.0
+	var density: PackedFloat32Array = _vegetation_density[chunk_coord]
+	if local_index < 0 or local_index >= density.size():
+		return -1.0
+	return density[local_index]
+
+
 ## This region's persistent land health (docs/concept/world.md "Land health:
 ## overharvesting leaves a lasting mark, not just a slower respawn"), in
 ## [0.0, 1.0]. Fail-open to 1.0 (pristine) for an unknown/unloaded region --
