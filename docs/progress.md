@@ -19809,7 +19809,11 @@ piece of it). It deliberately does NOT fix:
   so the real cost is likely spread across many smaller calls rather
   than one big one, unlike the stone/decomposer fixes above. This is
   the single most valuable remaining target and deserves its own
-  focused investigation+fix, not a rushed addition here.
+  focused investigation+fix, not a rushed addition here. **Fixed as its
+  own follow-up** -- see "CompositeSheetSlicer's own naive per-pixel
+  loops fixed" below, which found the real dominant cost was NOT the
+  per-pixel colour read this paragraph assumed, but the flood-fill/
+  connected-component bookkeeping instead.
 - **The lumberjack/flower/scrub/lichen/worm/ant-mound/bee-hive bundle
   (13%) and the creature/fish/village/flyer/piscivore-bird bundle (8%)**
   -- measured only as bundles this round (see the phase table above),
@@ -19898,3 +19902,110 @@ the moment of the report) points at least as strongly toward machine
 contention as toward remaining code cost. A live `--solo` session with
 real `PerfProbe` instrumentation on a quiet machine is the genuine next
 step if the symptom recurs.
+
+## `CompositeSheetSlicer`'s own naive per-pixel loops fixed: the tree-loading follow-up (2026-09-10)
+
+The named follow-up spawned by the "~44s spawn-gap follow-up" entry
+above: trees, `TreeRenderer.spawn_trees -> IllustratedTree.
+_composite_parts -> CompositeSheetSlicer.cut_out/despeckle/
+_aggressive_background/_reachable_background/_trim`, the single LARGEST
+unfixed phase that entry measured (39%, 6.75s of chunk 1). TDD
+throughout: each of the four functions got its own
+`test_<function>_completes_quickly_at_real_region_resolution` test in
+`test_composite_sheet_slicer.gd`, confirmed red against the naive
+implementation with real measured numbers (23.7/185.1/118.7/318.5ms at
+this section's own 284x406 real-region resolution -- the single largest
+region measured across the walnut/pine/cherry sheets, pine's own
+bare-winter canopy frame) before any implementation change, then fixed,
+then green.
+
+**The real finding, measured rather than assumed going in**: the
+naive per-pixel `Image.get_pixel`/`set_pixel` colour reads that entry
+correctly identified as the same anti-pattern were NOT where most of
+these four functions' own cost actually lived. Isolated, side-by-side
+profiling (a full connected-component walk of one 284x406 all-one-
+component blob, the shape a real large pale canopy patch or fully-
+reachable background piece produces) found the
+`Dictionary[Vector2i, bool]` coordinate bookkeeping
+`_aggressive_background`'s halo erosion, `_reachable_background`'s
+flood fill, and `despeckle`'s connected-component walk all used --
+constructing a `Vector2i` and hashing it into a `Dictionary` on every
+neighbour visit -- cost roughly **20x** what reading a pixel's colour
+ever did (~2120ns per BFS node against ~15ns per `get_pixel` call,
+isolated). `_trim`'s own `is_background` check, by contrast, is simple
+enough (a handful of comparisons plus one saturation ratio) that its
+per-pixel function-call wrapper was never a big fraction of its own
+cost -- removing it barely moved the needle.
+
+**Fixed, both halves**: every pixel-colour read is now raw
+`PackedByteArray` access with every 0.0-1.0 threshold/margin constant
+used pre-scaled by 255.0 and each check inlined with no per-pixel
+helper function call -- the same shape `SpriteSheetSlicer.
+_clear_background`, `IllustratedAnimalSprite._apply_chroma_key`, and
+`IllustratedStoneSprite`/`IllustratedDecomposerSprite`'s own
+`_prepared_for_slicing` already established. The coordinate bookkeeping
+is now a flat `PackedByteArray`/index-based scheme (`y * width + x`)
+instead of `Dictionary[Vector2i, bool]`, with the exact same flood-
+fill/erosion/connected-component ALGORITHMS otherwise unchanged --
+only the container holding "which pixels are already keyed/visited"
+changed. `_aggressive_background`/`_reachable_background`'s own return
+type changed from `Dictionary` to a flat `PackedByteArray` mask to
+match (verified first: neither has any caller outside this file).
+`cut_out`'s own zeroing loop is rewritten the same way, now that
+`piece` is guaranteed `FORMAT_RGBA8` before it runs, walking the flat
+mask directly instead of unpacking `Vector2i` dictionary keys.
+
+**Honest scope note on the actual speedup, found DURING this fix**:
+this machine showed far more cross-run contention noise for these four
+than the stone/decomposer fixes' own already-documented noise. Paired
+naive-vs-fixed rounds run back-to-back in one process, immediately
+AFTER this same test file's other ~20 tests (several of which decode
+real multi-megapixel sheets) -- the realistic condition these tests
+actually run under, not an artificially clean isolated process --
+measured:
+
+- `_reachable_background`: a clean, repeated **~2.2-2.4x** win every
+  round (naive 107-165ms, fixed 50-120ms) -- the flat-array bookkeeping
+  change clearly earns its keep here.
+- `despeckle` and `_aggressive_background`: a real but noisier, more
+  modest win, same direction every round but the gap varying widely
+  (despeckle naive 293-791ms vs fixed 287-635ms; `_aggressive_background`
+  naive 185-661ms vs fixed 178-550ms).
+- `_trim`: close to a wash (naive 53-86ms, fixed 46-96ms, overlapping)
+  -- kept anyway for the real, if small, win it still measures in a
+  colder process, and for consistency with the other three.
+
+The budgeted-timing tests' own thresholds (150/900/350/950ms) are
+deliberately generous -- calibrated to comfortably clear the WORST
+fixed number observed across many runs so this suite does not flake,
+rather than to tightly separate naive from fixed the way the stone/
+decomposer budgets could. The real evidence for this fix is the paired,
+same-process comparison above (and in each function's own doc comment
+in `composite_sheet_slicer.gd`), not a tight absolute threshold this
+environment cannot reliably support -- the same "fix what's measured,
+not what merely could be slow" discipline this project has applied
+before, extended here to being equally honest about a fix's own
+measured LIMITS, not just its wins.
+
+Zero behaviour change: 20/20 in `test_composite_sheet_slicer.gd`
+(every existing correctness test -- region-finding, background
+detection, aggressive/default keying, despeckling, the real-pine-frame
+speckle regression -- passes unmodified), plus the full dependent
+suite (`test_illustrated_tree.gd`, `test_choppable_tree.gd`,
+`test_leaf_litter_atlas.gd`, `test_procedural_tree_sprite.gd`,
+`test_seasonal_foliage.gd`, `test_snow_sparkle_shader.gd`,
+`test_sprite_sheet_loader.gd`, `test_tree_growth.gd`,
+`test_tree_phenology.gd`, `test_tree_renderer.gd`,
+`test_world_season_fanout.gd`, `test_sprite_sheet_slicer.gd`,
+`test_illustrated_glass_bottle_sprite.gd` -- 389 tests, 388 passing
+plus one pre-existing, unrelated pending art-content gap
+(`test_pine_is_an_evergreen_in_its_art_and_not_only_in_its_data`,
+already `pending()` before this change) -- re-run directly against
+`main` after merging, not just in the feature branch.
+
+**Still open**: the lumberjack/flower/scrub/lichen/worm/ant-mound/
+bee-hive bundle (13%) and the creature/fish/village/flyer/piscivore-
+bird bundle (8%) the entry above measured only in aggregate, never
+attributed to individual functions -- unexamined, plausibly more
+instances of the same widespread historical pattern in yet other
+`illustrated_*_sprite.gd` files.
