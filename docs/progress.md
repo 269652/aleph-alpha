@@ -19140,3 +19140,19 @@ world_boot_loading_overlay_fanout.gd`, and the 4 `test_main_menu.gd`
 tests exercising `LoadingOverlay` directly (scoped via
 `-gunit_test_name=loading_overlay` per that file's own documented
 slow-suite cost) — no regression in any of the five entry points.
+
+## Witty-tip rotation sped up 4.5s -> 2.0s after actually watching a real launch (`concept/persistence.md`, 2026-09-10)
+
+Reported live, immediately after relaunching to see the previous pass's
+own tips: "it shows the tip but it doesn't rotate / change... it should
+change the tip every 2s or so." Not a rotation bug — `LoadingOverlay.
+_process` drives the tip and the spinner off the identical
+`_elapsed_seconds` accumulator, and the spinner was visibly animating —
+the real cause was a loading screen visible for less than one 4.5s
+interval on that run, so the rotation genuinely never got to fire even
+once. `LoadingTips.TIP_INTERVAL_SECONDS` dropped to 2.0, matching the
+requested cadence directly; its own pinned-duration test bounds moved
+with it. `test_loading_tips.gd` confirmed red against the unmodified 4.5s
+constant first (bounds tightened to `(1.0, 4.0)`, which 4.5 fails), green
+after. `test_loading_tips.gd` 10/10, `test_loading_overlay.gd` 5/5 — no
+other change.

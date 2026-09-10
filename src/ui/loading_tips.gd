@@ -47,13 +47,16 @@ const TIPS: Array[String] = [
 	"Letting the grass frogs know the pond is ready.",
 ]
 
-## How long (seconds) each tip stays on screen before the next one shows
-## -- long enough to comfortably read a short line, short enough that a
-## long real load (measured 39-90s+, see this doc's own "Loading screens"
-## section) shows several different ones rather than staring at just one.
-## A real, deliberate UX choice, pinned by test_tip_interval_is_a_real_
-## reasonable_reading_duration rather than left an eyeballed guess.
-const TIP_INTERVAL_SECONDS := 4.5
+## How long (seconds) each tip stays on screen before the next one shows.
+## Revised (2026-09-10), reported live after actually watching a real
+## launch: the original 4.5s read as "it doesn't rotate" -- a load short
+## enough not to reach even one full interval never shows a second tip at
+## all, so the rotation itself was invisible, not broken. 2.0s is short
+## enough that rotation is visible even on a brief load, still long enough
+## to comfortably read a short line without feeling rushed. A real,
+## deliberate UX choice, pinned by test_tip_interval_is_a_real_reasonable_
+## reading_duration rather than left an eyeballed guess.
+const TIP_INTERVAL_SECONDS := 2.0
 
 
 ## `start_offset` is rolled ONCE per loading-screen appearance (a caller-

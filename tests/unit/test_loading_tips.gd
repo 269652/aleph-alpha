@@ -53,11 +53,14 @@ func test_start_offset_wraps_too():
 
 ## A real, deliberate UX choice, not an eyeballed guess left untested --
 ## CLAUDE.md: tuned values/thresholds must be tested, never an eyeballed
-## comment. Long enough to read a short line without feeling rushed, short
-## enough that even a modest real load shows more than one.
+## comment. Revised (2026-09-10), reported live after actually watching a
+## real launch: the original 4.5s read as "it doesn't rotate" on a load
+## short enough not to reach even one full interval -- 2.0s is short
+## enough that rotation is visible even on a brief load, still long
+## enough to read a short line without feeling rushed.
 func test_tip_interval_is_a_real_reasonable_reading_duration():
-	assert_gt(LoadingTips.TIP_INTERVAL_SECONDS, 2.0)
-	assert_lt(LoadingTips.TIP_INTERVAL_SECONDS, 8.0)
+	assert_gt(LoadingTips.TIP_INTERVAL_SECONDS, 1.0)
+	assert_lt(LoadingTips.TIP_INTERVAL_SECONDS, 4.0)
 
 
 func test_every_tip_is_non_empty_and_reasonably_short():

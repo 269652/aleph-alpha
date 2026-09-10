@@ -461,13 +461,13 @@ only thing a player had to read. That's now split:
   returning player recognizes the joke as being about its own world. Pure
   rotation logic — `tip_for_elapsed(elapsed_seconds, start_offset)` —
   mirrors `LoadingSpinner.frame_for_elapsed`'s exact "pure model, thin
-  Node" shape: a fixed `TIP_INTERVAL_SECONDS` (4.5s, tested, not
-  eyeballed) advances through the pool, wrapping around a long real load
-  rather than erroring or freezing on one line; a caller-rolled
-  `start_offset` (`show_with_text` rolls `randi() % TIPS.size()` once per
-  appearance) means repeated loads don't always open on the same tip,
-  without needing a second random draw every interval that could
-  unluckily repeat a line back-to-back.
+  Node" shape: a fixed `TIP_INTERVAL_SECONDS` (2.0s as of the revision
+  below; tested, not eyeballed) advances through the pool, wrapping
+  around a long real load rather than erroring or freezing on one line; a
+  caller-rolled `start_offset` (`show_with_text` rolls `randi() %
+  TIPS.size()` once per appearance) means repeated loads don't always
+  open on the same tip, without needing a second random draw every
+  interval that could unluckily repeat a line back-to-back.
 - A small technical corner readout, bottom-right, pairing the spinner
   glyph with the caller's own status text and any real `set_progress`
   count — exactly the old center content, relocated rather than removed,
@@ -498,6 +498,20 @@ unaffected by the tip rotating underneath it. Re-run clean, no regression:
 tests exercising `LoadingOverlay` directly (scoped via
 `-gunit_test_name=loading_overlay` per that file's own documented slow-
 suite cost).
+
+**Revised (2026-09-10): the rotation interval dropped from 4.5s to 2.0s.**
+Reported live, after actually watching a real launch: "it shows the tip
+but it doesn't rotate / change." Not a rotation bug — `_process` drives
+the tip and the spinner off the exact same `_elapsed_seconds`, and the
+spinner was visibly animating — the real cause was a loading screen
+visible for less than one 4.5s interval on that run, so the rotation
+genuinely never got the chance to fire even once. 2.0s makes a first
+rotation visible even on a brief load, while staying long enough to read
+a short line without feeling rushed.
+`test_tip_interval_is_a_real_reasonable_reading_duration`'s own bounds
+moved with it (was `(2.0, 8.0)`, now `(1.0, 4.0)`) — confirmed red against
+the unmodified 4.5s constant first, green after the one-line change.
+`test_loading_tips.gd` 10/10, `test_loading_overlay.gd` 5/5.
 
 ## Status / mechanisms
 
