@@ -19830,3 +19830,71 @@ piece of it). It deliberately does NOT fix:
   chunk in an unattended `--solo` run with no one pressing movement
   keys -- not a cost inside the spawn sequence this investigation
   covers, and not established as a real bug.
+
+## FPS regression round 9: `_client_process`'s fourfold redundant creature-group fetch, consolidated -- honestly NOT confirmed as the whole story (`concept/soil_fauna.md`, 2026-09-10)
+
+Reported live: *"Can you fix the 10fps issue and bring it back to 30+?"*
+No clean, isolated repro was available (the one live instance checked
+vanished within ~35s of launching, most likely closed by whoever was
+watching it; the machine was independently confirmed to be running
+several OTHER concurrent Claude sessions, each already having burned
+100-638+ CPU-seconds of their own at the moment of the report) -- so
+unlike rounds 3-8 in `soil_fauna.md`, this is source-reading plus
+targeted measurement, not a live `PerfProbe` percentage breakdown, and
+says so plainly rather than dressed up to match them.
+
+**Found by reading `World._client_process` directly**: four separate,
+un-throttled `get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME)`
+calls in one frame (river-wader positions, per-creature snow-tread,
+per-creature footstep, per-creature crush) -- each independently
+re-fetching the identical whole-creature-population list. The
+neighbouring `EarthChunkManager.crush_ants_near` already documents a
+directly analogous, CONFIRMED prior regression in this exact code
+(an unscoped whole-world mound scan, measured 25-31ms/frame before
+being fixed) -- which is what made this worth chasing, even without a
+fresh live measurement.
+
+**That specific historical bug shape was checked and ruled out**:
+`crush_ants_near`'s existing 3x3-chunk-neighbourhood bound and
+`_crush_markers_near`'s direct chunk-keyed dictionary lookup are both
+already correctly scoped, read directly rather than assumed.
+
+**The fourfold fetch itself was measured, not assumed expensive --
+and wasn't the dominant cost.** A synthetic probe (real `SceneTree.
+get_nodes_in_group`, 100-1000 nodes, 200 timed iterations) measured a
+single fetch at ~0.2-0.4us even at 1000 nodes; eliminating the
+redundancy saves roughly **0.6-1.2 microseconds per frame** -- nowhere
+close to the ~66ms/frame a genuine 30-to-10fps drop needs. Said plainly
+rather than quietly dropped.
+
+**Fixed anyway**, as a real, safe, well-tested redundancy in its own
+right: `loaded_creature_markers` is now fetched once per frame and
+reused by all three remaining consumers; the snow-tread and footstep
+loops (already adjacent, neither reading the other's output) are
+merged into one shared iteration. The crush loop's own POSITION is
+deliberately left untouched relative to the player-only crush block --
+`test_world_crush_wiring.gd`'s Karma-ordering tests depend on it, and
+the already-measured-negligible gain wasn't worth that behavioural
+risk.
+
+**TDD**: new `test_world_creature_scan_consolidation.gd` (4/4) is the
+direct regression guard. Several existing `test_world_crush_wiring.gd`
+tests needed their POSITION-FINDING technique updated (not just
+expected values) -- they used to `rfind` the last of four redundant
+`get_nodes_in_group` occurrences as a proxy for "the crush loop's own
+position," which inherently depended on the exact redundancy this
+round removes; now anchored on the loop's own header text instead,
+which still resolves to the crush loop specifically.
+`test_world_footstep_wiring.gd` needed zero changes. 35/35 across the
+four affected files. A full 36-file `test_world_*.gd` sweep (259
+tests) surfaced one pre-existing, unrelated failure in
+`test_world_nature_soundscape_fanout.gd` (a source-text test broken by
+an unrelated multi-line reformat) -- confirmed untouched by this
+round's own diff, flagged separately rather than folded in.
+
+**Honestly open**: whether this closes the reported gap is not
+confirmed -- the evidence (concurrent-session contention measured at
+the moment of the report) points at least as strongly toward machine
+contention as toward remaining code cost. A live `--solo` session with
+real `PerfProbe` instrumentation on a quiet machine is the genuine next
+step if the symptom recurs.
