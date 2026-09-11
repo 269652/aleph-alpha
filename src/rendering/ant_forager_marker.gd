@@ -431,11 +431,12 @@ func _lod_step(delta: float) -> float:
 	if player == null:
 		return _lod_clock.take_full_rate_step()  # nobody to be far from: always full rate
 	var step := _lod_clock.take_step(position.distance_to(player))
-	# A distant creature skips its next frames anyway -- park it so those
-	# frames cost it nothing at all (FPS regression round 11, see
-	# SimulationScheduler). A no-op when no scheduler is current.
+	# After a real step, hand this marker to the SimulationScheduler (FPS
+	# regression round 11): from its first step on, the scheduler steps it
+	# instead of the engine -- every frame while near, only on its due frame
+	# while far. A no-op when no scheduler is current.
 	if step >= 0.0:
-		SimulationScheduler.park_if_far(self, _lod_clock)
+		SimulationScheduler.adopt_or_park(self, _lod_clock)
 	return step
 
 

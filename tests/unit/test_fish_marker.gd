@@ -1328,43 +1328,61 @@ func test_growth_scales_the_sprite_below_full_size_while_young():
 	)
 
 
-# -- parking with the SimulationScheduler (FPS regression round 11) ----------
+# -- adoption by the SimulationScheduler (FPS regression round 11) ----------
 #
-# A fish far from the player parks itself with the current SimulationScheduler
-# after a real step -- no _process at all until its clock's skip is up -- and is
-# processing again once woken on its due frame. Nothing parks when no scheduler
-# is current, which is every other test in this file (see after_each).
+# After its first real step a fish hands itself to the current
+# SimulationScheduler (see that class): its own engine _process is switched
+# off for good, and the scheduler steps it instead -- every frame while near
+# the player, on its due frame while far. Observed through _elapsed_time,
+# which every real step advances by exactly the time it was handed. Nothing
+# is adopted when no scheduler is current, which is every other test in this
+# file (see after_each).
 
 
-func test_a_far_fish_parks_itself_after_its_step_and_is_woken_on_its_due_frame():
+func test_a_far_fish_is_adopted_after_its_first_step_and_stepped_only_when_due():
 	var scheduler = SimulationScheduler.new()
 	SimulationScheduler.set_current(scheduler)
 	var far := 100000.0
 	_add_stub_player(marker.position + Vector2(far, 0.0))
 	# A fresh clock is due every frame until the first real step lands (the
-	# far interval must accumulate first); the fish parks right after it.
-	var frames_until_parked := 0
-	while marker.is_processing() and frames_until_parked < 120:
+	# far interval must accumulate first); adoption happens right after it.
+	var engine_frames := 0
+	while marker.is_processing() and engine_frames < 120:
 		marker._process(1.0 / 60.0)
-		frames_until_parked += 1
-	assert_false(marker.is_processing(), "far: parked after its first real step")
+		engine_frames += 1
+	assert_false(marker.is_processing(), "far: adopted after its first real step, engine _process off for good")
+	assert_gt(engine_frames, 1, "it stepped once first (the far interval had to elapse)")
 	assert_eq(scheduler.parked_count(), 1)
-	assert_gt(frames_until_parked, 1, "it stepped once first (the far interval had to elapse)")
+	assert_eq(scheduler.active_count(), 0)
 
 	var skip: int = SimulationLod.frames_between_updates(far)
+	var elapsed_before: float = marker._elapsed_time
 	for frame in skip - 1:
 		scheduler.advance(1.0 / 60.0)
-	assert_false(marker.is_processing(), "still parked one frame before it is due")
-	scheduler.advance(1.0 / 60.0)
-	assert_true(marker.is_processing(), "woken on its due frame")
-	assert_eq(scheduler.parked_count(), 0)
+	assert_eq(marker._elapsed_time, elapsed_before, "untouched until its due frame")
+	# Its due frame -- plus, at most, one more: 30 x 1/60 can land a hair
+	# under 0.5 in float, and the seconds gate rightly waits it out.
+	var frames := 0
+	while marker._elapsed_time == elapsed_before and frames < 2:
+		scheduler.advance(1.0 / 60.0)
+		frames += 1
+	assert_almost_eq(
+		marker._elapsed_time - elapsed_before, 0.5, 0.03,
+		"stepped by the scheduler with the time it waited -- its full far interval, never a giant step"
+	)
+	assert_false(marker.is_processing(), "the engine still stays out of it")
+	assert_eq(scheduler.parked_count(), 1, "still far: back on the wheel for the next skip")
 
 
-func test_a_near_fish_keeps_processing_every_frame():
+func test_a_near_fish_is_adopted_and_stepped_every_frame_by_the_scheduler():
 	var scheduler = SimulationScheduler.new()
 	SimulationScheduler.set_current(scheduler)
 	_add_stub_player(marker.position + Vector2(10.0, 0.0))
-	for frame in 10:
-		marker._process(1.0 / 60.0)
-	assert_true(marker.is_processing(), "on screen: never parked")
+	marker._process(1.0 / 60.0)  # near: the first step is immediate, and with it the adoption
+	assert_false(marker.is_processing(), "adopted")
+	assert_eq(scheduler.active_count(), 1, "near: in hand, stepped every frame")
 	assert_eq(scheduler.parked_count(), 0)
+	var elapsed_before: float = marker._elapsed_time
+	for frame in 10:
+		scheduler.advance(1.0 / 60.0)
+	assert_almost_eq(marker._elapsed_time - elapsed_before, 10.0 / 60.0, 0.0001, "ten frames, ten steps, each the frame's own delta")

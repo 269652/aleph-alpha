@@ -10640,7 +10640,10 @@ func merchant_market_near(pixel_position: Vector2, max_distance: float):
 func nearest_npc_near(pixel_position: Vector2, max_distance: float) -> NpcMarker:
 	var nearest: NpcMarker = null
 	var nearest_distance := max_distance
-	for node_list in _loaded_villages.values():
+	# Only the chunks a max_distance square can touch (FPS regression round
+	# 11, see chunk_coords_within) -- not every loaded chunk's village nodes.
+	for chunk_coord in chunk_coords_within(pixel_position, max_distance):
+		var node_list: Array = _loaded_villages.get(chunk_coord, [])
 		for node in node_list:
 			if not (node is NpcMarker):
 				continue
@@ -10672,6 +10675,31 @@ func npc_identities_near(pixel_position: Vector2, max_distance: float, exclude: 
 	return identities
 
 
+## The chunk coords a square of `radius_px` around `pixel_position` can touch
+## -- the pure heart of every "nearest X within reach" scan, so a reach of a
+## few tiles visits one to four chunks instead of every loaded one (FPS
+## regression round 11: nearest_npc_near and nearest_liftable_stone_near
+## walked all 30 loaded chunks' lists, ~4 ms per interaction-prompt refresh,
+## every frame at low fps). The same min/max-chunk math trees_near and
+## flyers_near already inline. Pinned by
+## test_earth_chunk_manager_prompt_scans.gd.
+static func chunk_coords_within(pixel_position: Vector2, radius_px: float) -> Array[Vector2i]:
+	var chunk_px := float(CHUNK_SIZE) * TerrainRenderer.TILE_SIZE
+	var min_chunk := Vector2i(
+		floori((pixel_position.x - radius_px) / chunk_px),
+		floori((pixel_position.y - radius_px) / chunk_px)
+	)
+	var max_chunk := Vector2i(
+		floori((pixel_position.x + radius_px) / chunk_px),
+		floori((pixel_position.y + radius_px) / chunk_px)
+	)
+	var out: Array[Vector2i] = []
+	for chunk_y in range(min_chunk.y, max_chunk.y + 1):
+		for chunk_x in range(min_chunk.x, max_chunk.x + 1):
+			out.append(Vector2i(chunk_x, chunk_y))
+	return out
+
+
 ## The nearest LOOSE, LIFTABLE stone within `max_distance` of `pixel_position`
 ## -- same shape as nearest_npc_near, for the "Pick (<key>)" interaction
 ## prompt (see World._update_interaction_prompt). Duck-typed on has_method
@@ -10682,7 +10710,11 @@ func npc_identities_near(pixel_position: Vector2, max_distance: float, exclude: 
 func nearest_liftable_stone_near(pixel_position: Vector2, max_distance: float) -> Node2D:
 	var nearest: Node2D = null
 	var nearest_distance := max_distance
-	for node_list in _loaded_stones.values():
+	# Only the chunks a max_distance square can touch -- one to four for a
+	# few-tile reach, not every loaded chunk's stones (FPS regression round
+	# 11, see chunk_coords_within).
+	for chunk_coord in chunk_coords_within(pixel_position, max_distance):
+		var node_list: Array = _loaded_stones.get(chunk_coord, [])
 		for node in node_list:
 			if not is_instance_valid(node) or not node.has_method("pick_up"):
 				continue

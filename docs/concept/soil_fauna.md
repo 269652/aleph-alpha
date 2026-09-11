@@ -3752,6 +3752,92 @@ it), and `test_world_interaction_prompt_throttle.gd` failing on
 conversation windows `_any_gameplay_window_open` now reads -- flagged as
 its own task).
 
+### FPS regression round 11: markers leave the engine's _process entirely; far chunks and prompt scans stop paying per frame (2026-09-12)
+
+Direct follow-up to round 10's own closing list ("keep going with the
+scheduler so we get closer to 60fps"), working down that list in its own
+order, measured the same way (idle machine, the same `override.cfg`
+snapshot -- which autosaves, so every run starts a little heavier than the
+last).
+
+**1. `SimulationScheduler` (`src/gameplay/simulation_scheduler.gd`) -- and
+a first cut that measured WORSE, kept here because the lesson is the
+point.** Round 10 named the flat ~7 us per marker per frame that an
+engine `_process` callback costs even when the clock skips it -- x ~2,500
+live markers, 10-17 ms of every frame. The first cut parked a marker for
+exactly the frames its clock would skip -- `set_process(false)`, an entry
+in a due-frame bucket, `set_process(true)` on the due frame -- and its
+clean live run came out at **median 6 fps against round 10's 9** (max 7
+against 13). The mechanism, once looked for, is the SceneTree's process
+groups: every `set_process` toggle is an O(nodes) erase or insert in the
+group's node vector plus a re-sort of that ~24,000-node group on any frame
+in which anything toggled -- and with ~170 park/wake toggles a frame,
+that was every frame, dwarfing the dispatch it saved. The shipped design
+toggles once: a marker is ADOPTED on its first real step (`set_process(
+false)`, never switched back on), and from then on the scheduler calls its
+`_process` itself -- every frame while its clock says "due next frame",
+otherwise only on the frame it is due, with the clock primed with the real
+time it waited (`SimulationLodClock.resume`), so round 10's whole contract
+(the cap, the distance re-read on wake) holds exactly as if the engine had
+ticked it. A woken marker whose seconds gate is not open yet (above the
+reference frame rate) stays in hand and is retried every frame, never
+lost; a marker freed while adopted is dropped when next met -- keyed by
+instance id, and never comparing a possibly-freed reference to null (a
+freed Object stored as a Dictionary value comes back as a "previously
+freed" Variant, which `== null` does NOT catch). One static current
+scheduler, published by `World._ready` before `_world_ready`, advanced
+first thing in `World._process` (World is the scene root, so what it
+steps there is stepped this frame), withdrawn on `NOTIFICATION_EXIT_TREE`;
+each of the nine LOD-throttled markers gains one line after its step
+(`SimulationScheduler.adopt_or_park(self, _lod_clock)`). Nothing is
+adopted when no scheduler is current -- every existing unit test, and a
+world with nobody to be far from.
+
+**2. Far chunks advance their leaf litter and footprints once per second,
+not every frame** (`EarthChunkManager.FAR_CHUNK_ADVANCE_SECONDS`). Both
+steps advanced every LOADED chunk's field every frame -- 30 chunks, 9 of
+them visible -- measured in round 10 at ~8 ms (litter, 6 of it
+`LeafLitterField.advance`) + ~2-4 ms (prints) per frame, fps-independent:
+the "structurally distinct, still entirely open" cost the floating-leaf
+entry above named. A chunk inside decoration range still advances every
+frame; one outside accumulates its delta and advances only once the
+pending time reaches the interval, handing all of it over (no time is ever
+lost) and flushing whatever is pending the frame it comes back into range.
+Footprints take an absolute clock, so advancing them rarely is lossless by
+construction. The same fewer-larger-steps shape `SimulationLod` gives
+creatures, for two per-chunk fields. Also fixed a pre-existing typing
+landmine the new test exposed (`var mmis: Dictionary = _footprint_mmis.
+get(chunk_coord)` assigns Nil to a typed Dictionary for a chunk without
+renderers).
+
+**3. The interaction prompt's scans visit only the chunks a reach can
+touch** (`EarthChunkManager.chunk_coords_within`). `nearest_npc_near` and
+`nearest_liftable_stone_near` walked every loaded chunk's list -- every
+stone, every village node in 30 chunks -- for a 34-48 px reach, ~4 ms per
+13 Hz refresh (every frame at low fps). Their registries were already
+keyed by chunk (the shape `trees_near`/`flyers_near` inline), so they now
+iterate the one to four chunks a `max_distance` square can touch. The
+hover walk (24 marker classes, no per-chunk registry) is NOT scoped this
+round; its idle gate from round 10 already keeps it at 4 Hz while the
+mouse rests.
+
+**Result (clean `--print-fps`, same snapshot, idle machine):** _round 10
+build 5-13 fps, median 9; first-cut scheduler median 6; shipped build --
+see `progress.md`'s entry for this round for the run-6 figure._
+
+**Honestly still open, with round 10's numbers:** fish steps at ~0.5 ms
+EACH (17 ms/frame at 20 % stepped -- split `fish._process` the way round
+7 did), ant foragers at ~0.12 ms and pollinators at ~0.2 ms per step
+(~815 and ~495 live, from ~90 ant mounds within 30 chunks -- population
+caps are the other lever), the hover walk itself while the mouse moves,
+the remaining per-chunk ecology steps (~11 ms), and the ~129 s boot
+(40 s mushroom art warm-up, 73 s of spawn chunks at ~2.4 s each). The
+arithmetic is worth stating plainly: with ~2,500 GDScript-simulated
+creatures at 0.1-0.5 ms per step, the near ones alone (every frame, ~5 %)
+plus the far ones (1/30 of the rest) come to ~30 ms of real work per frame
+at 60 fps -- twice the whole budget -- so 60 fps at this population needs
+cheaper steps or fewer stepping creatures, not more scheduling.
+
 ### In-flight foragers survive an unload; their trip's outcome does not (2026-09-09)
 
 The ant side of `bees.md`'s own identical section, by that exact name --
