@@ -57,17 +57,7 @@ func setup(world, _tile_size: int) -> void:
 	_world = world
 
 
-const PerfProbe = preload("res://src/rendering/perf_probe.gd")
-
-
 func _process(delta: float) -> void:
-	PerfProbe.begin("bonded_companion._process")
-	PerfProbe.count_instance("bonded_companion (live)")
-	_process_impl(delta)
-	PerfProbe.end("bonded_companion._process")
-
-
-func _process_impl(delta: float) -> void:
 	step(delta)
 
 

@@ -327,17 +327,7 @@ func _nearest_player_position():
 	return _cached_player.position
 
 
-const PerfProbe = preload("res://src/rendering/perf_probe.gd")
-
-
 func _process(frame_delta: float) -> void:
-	PerfProbe.begin("bee_forager._process")
-	PerfProbe.count_instance("bee_forager (live)")
-	_process_impl(frame_delta)
-	PerfProbe.end("bee_forager._process")
-
-
-func _process_impl(frame_delta: float) -> void:
 	var delta := _lod_step(frame_delta)
 	if delta < 0.0:
 		return

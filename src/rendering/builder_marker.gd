@@ -111,17 +111,7 @@ func _ready() -> void:
 	add_child(sprite)
 
 
-const PerfProbe = preload("res://src/rendering/perf_probe.gd")
-
-
 func _process(delta: float) -> void:
-	PerfProbe.begin("builder._process")
-	PerfProbe.count_instance("builder (live)")
-	_process_impl(delta)
-	PerfProbe.end("builder._process")
-
-
-func _process_impl(delta: float) -> void:
 	match _behavior.phase:
 		BuilderBehavior.Phase.SEEKING:
 			_step_seeking(delta)

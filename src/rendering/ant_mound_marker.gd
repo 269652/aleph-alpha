@@ -101,17 +101,7 @@ func _apply_growth(growth_fraction: float) -> void:
 ## Nothing to do without a real colony wired up -- skipped entirely
 ## rather than accumulating toward a check that would always read the
 ## same 0.0 default anyway.
-const PerfProbe = preload("res://src/rendering/perf_probe.gd")
-
-
 func _process(delta: float) -> void:
-	PerfProbe.begin("ant_mound._process")
-	PerfProbe.count_instance("ant_mound (live)")
-	_process_impl(delta)
-	PerfProbe.end("ant_mound._process")
-
-
-func _process_impl(delta: float) -> void:
 	if _colony == null:
 		return
 	_resize_accumulator += delta

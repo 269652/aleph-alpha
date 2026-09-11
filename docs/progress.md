@@ -20056,3 +20056,67 @@ news. `test_offline_renderer.gd`'s
 not catch this on its own (the fallback is non-empty, and non-empty was
 all it checked), so it was strengthened first, to a real red for exactly
 these two event types, before the two bespoke lines were added.
+
+### FPS regression round 10: LOD throttle inverted under load, crush-as-a-step, hover idle gate (2026-09-11)
+
+Reported live: "profile and fix the performance issue so we can get back
+to 60fps+". Full write-up, numbers and the measured remaining budget in
+`concept/soil_fauna.md` "FPS regression round 10"; the LOD clock's spec in
+`concept/ecosystem_dynamics.md` "Per-creature update rate inside loaded
+chunks (`SimulationLod`)".
+
+**Baseline** (snapshot of the real save via `override.cfg` -- note
+`--user-data-dir`, which rounds 5-9's write-ups cite, is not a flag this
+Godot has; idle machine; round-5 `PerfProbe` re-applied and extended):
+**2-7 fps, mode 4-5, ~226 ms/frame at ~23,500 nodes**, after a ~129 s boot
+that itself runs at 1 fps (40 s mushroom art warm-up, 73 s of spawn-chunk
+loads at ~2.4 s each -- measured, named, not fixed this round).
+
+**Shipped, all strict TDD:**
+
+- ✅ `SimulationLodClock` (`src/gameplay/simulation_lod_clock.gd`, 9/9 in
+  `test_simulation_lod_clock.gd`): the seconds-only LOD interval that
+  every one of nine marker classes carried as its own `_lod_step` copy
+  elapsed every second frame at 4 fps instead of every thirtieth (40-50%
+  of all foragers/fish/pollinators stepping every frame, vs ~8% at 60).
+  Now gated on seconds AND frames at a 60 fps reference; frame-for-frame
+  identical to the old rule at 60 fps (proved against a restatement of it
+  in the test), bounded below it; each update capped at interval + one
+  frame. All nine markers re-expressed on it, `_take_lod_step`/
+  `_lod_accumulated` gone: ambient_flyer 194 (2 pre-existing failures,
+  A/B-verified), ant_forager 76/76, bee_forager 35/35, caterpillar 22/22,
+  creature 243/243, decomposer 55/55, fish 65/66 (pre-existing risky),
+  millipede 14/14, piscivore_bird 18/18. One take-off test's precondition
+  updated to the documented "notices the player at its next scheduled
+  update" contract.
+- ✅ Creature crush loop debounced on `CreatureMarker.last_crush_step_tile`
+  -- seven neighbourhood scans per creature per frame, moved or not,
+  measured 26 ms/frame -> 2. A crush is a step event; a standing creature
+  no longer re-crushes its own tile every frame. 18/18
+  `test_world_crush_wiring.gd` (+1 source-contract test), field pinned in
+  `test_creature_marker.gd`. Player's own crush block untouched.
+- ✅ Hover tooltip idle gate (`World._hover_rescan_due`,
+  `HOVER_IDLE_REFRESH_INTERVAL` 0.25 s, 5/5 in
+  `test_world_hover_tooltip_throttle.gd`): the every-hoverable-node walk
+  (6.7-7.9 ms/call, 30 Hz wall-clock -> every frame at 4 fps) now only
+  runs at that cadence while the mouse moves.
+
+**Result: 6-14 fps, mode 10 (~2.3x), instrumented; clean figure below.**
+Not 60 -- and honestly not reachable this round. The remaining frame is
+measured, not guessed (soil_fauna.md has the per-item numbers): the flat
+~7 us-per-marker cost of `_process` existing at all across ~2,500 live
+markers (10-17 ms; next lever is `set_process(false)` + a due-frame
+scheduler the clock already has the data for), fish steps at ~0.5 ms
+each (17 ms), `step_leaf_litter`'s per-LOADED-chunk advance (8 ms,
+fps-independent), the hover/prompt O(all-entities) scans (8 + 4 ms per
+call), and ~11 ms of per-chunk ecology steps. 🚧 60 fps remains open,
+with that list as the order of attack.
+
+**Clean re-measurement (no instrumentation, `--print-fps` only, same
+snapshot, idle machine): steady state 5-13 fps, median 9, mode 7-11**
+(97 one-second samples after boot) against the baseline's 2-7 (mode
+4-5) -- ~2x, and conservative: the probe save autosaves, so every run
+started from the previous run's slightly heavier world (ant foragers
+675 -> 815 live between runs 1 and 3, leaves 45 -> 170). Boot unchanged
+(~130 s wall-clock; multi-second single frames print at most one sample
+each, which is why only ~70 boot samples appear).

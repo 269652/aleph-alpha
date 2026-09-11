@@ -105,17 +105,7 @@ func get_hover_actions() -> Array:
 	return []
 
 
-const PerfProbe = preload("res://src/rendering/perf_probe.gd")
-
-
 func _process(delta: float) -> void:
-	PerfProbe.begin("lumberjack._process")
-	PerfProbe.count_instance("lumberjack (live)")
-	_process_impl(delta)
-	PerfProbe.end("lumberjack._process")
-
-
-func _process_impl(delta: float) -> void:
 	_step_production(delta)
 	match _behavior.phase:
 		LumberjackBehavior.Phase.SEEKING:

@@ -43,8 +43,14 @@ func test_the_idle_refresh_interval_is_exactly_pinned():
 	assert_gt(World.HOVER_IDLE_REFRESH_INTERVAL, World.HOVER_REFRESH_INTERVAL, "idle must be the slower of the two cadences")
 
 
-func test_the_very_first_frame_always_scans():
-	assert_true(world._hover_rescan_due(FRAME, MOUSE), "nothing has ever been scanned, so there is nothing to be stale relative to")
+func test_the_first_hover_cadence_frame_always_scans():
+	# The hover cadence itself is unchanged (a scan lands on the first frame
+	# HOVER_REFRESH_INTERVAL has elapsed, as before); what must never happen
+	# is the idle gate mistaking "never scanned" for "already up to date".
+	var scanned := false
+	for frame in 3:
+		scanned = world._hover_rescan_due(FRAME, MOUSE) or scanned
+	assert_true(scanned, "nothing has ever been scanned, so there is nothing to be stale relative to")
 
 
 func test_a_stationary_mouse_rescans_at_the_idle_rate_not_the_hover_rate():

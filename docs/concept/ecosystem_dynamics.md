@@ -1611,6 +1611,52 @@ This catch-up is the honest, bounded version of a full always-on planetary
 simulation: correct in aggregate, deterministic, and O(chunks-revisited) rather
 than O(all-chunks-per-frame).
 
+### Per-creature update rate inside loaded chunks (`SimulationLod`)
+
+Within the loaded chunks, every creature marker is still a live node with its
+own `_process` — but what the player can see updates every frame, and what
+they cannot see updates only as often as it needs to stay believable
+(`src/gameplay/simulation_lod.gd`: full rate inside `FULL_RATE_RADIUS_PX`,
+easing out to one update per `MAX_INTERVAL_SECONDS` beyond `FALLOFF_PX`).
+Each update is handed the time accumulated since the last one, so a distant
+butterfly still ages, forages and flies as far as a near one — in fewer,
+larger steps. The full-rate radius deliberately exceeds what the camera can
+show, so nothing visible ever steps.
+
+**The interval is enforced in frames as well as seconds** (`SimulationLod.
+REFERENCE_FPS`, `frames_between_updates`, and `src/gameplay/
+simulation_lod_clock.gd`, which every LOD-throttled marker now shares instead
+of carrying its own copy of the gate). A seconds-only interval inverts under
+load: at 4 fps a frame is 0.25 s, so a distant creature's 0.5 s interval
+elapses every *second* frame instead of every thirtieth — the throttle meant
+to keep ~1,500 off-screen creatures cheap collapses to a 2× saving exactly
+when the frame needs it most, and every slow frame makes the next one slower
+(measured live, soil_fauna.md "FPS regression round 10"). A creature therefore
+updates only once *both* its seconds interval and that interval expressed in
+frames at 60 fps have elapsed: at or above 60 fps the seconds gate is the
+stricter one and behaviour is exactly the original; below it the frame gate
+takes over and per-frame work stays bounded regardless of frame rate.
+
+Two consequences, both deliberate:
+
+- **Under load, a distant creature's simulated time runs slower than the
+  wall clock.** Each update hands over at most its own interval plus one
+  frame — the most the old gate ever handed over — so a stretch skipped at
+  4 fps is time the creature does not live through, rather than one giant
+  step no behaviour was written to survive. Nothing visible is affected: on
+  screen the interval is zero and every frame's full delta arrives as
+  before. The chunk-level population models above, not marker `_process`,
+  carry the ecology's real numbers, so this degrades motion far from the
+  player, not the ecosystem.
+- **A distant creature notices the player's approach at its next scheduled
+  update, not the next frame.** Its distance is re-read only when its frame
+  gate opens — that is what makes a skipped frame cost two additions and an
+  integer compare instead of a player lookup and a distance — so the
+  reaction lag is at most its previous skip (≤ 0.5 s at 60 fps, and that
+  only beyond 1,300 px, well off screen). A player closing that distance on
+  foot takes seconds, over which the skip shrinks to two frames; only a
+  teleport can arrive inside one skip.
+
 ## Status / mechanisms
 
 - ✅ Look-before-you-step locomotion — `creature_movement_gate.gd` (pure:

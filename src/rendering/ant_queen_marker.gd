@@ -84,17 +84,7 @@ func _ready() -> void:
 	_refresh_visibility()
 
 
-const PerfProbe = preload("res://src/rendering/perf_probe.gd")
-
-
 func _process(delta: float) -> void:
-	PerfProbe.begin("ant_queen._process")
-	PerfProbe.count_instance("ant_queen (live)")
-	_process_impl(delta)
-	PerfProbe.end("ant_queen._process")
-
-
-func _process_impl(delta: float) -> void:
 	if _colony == null:
 		return
 	_refresh_accumulator += delta

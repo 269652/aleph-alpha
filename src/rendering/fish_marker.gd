@@ -677,24 +677,13 @@ func _nearest_player_position():
 var _cached_player: Node = null
 
 
-const PerfProbe = preload("res://src/rendering/perf_probe.gd")
-
-
 func _process(frame_delta: float) -> void:
-	PerfProbe.begin("fish._process")
-	PerfProbe.count_instance("fish (live)")
-	_process_impl(frame_delta)
-	PerfProbe.end("fish._process")
-
-
-func _process_impl(frame_delta: float) -> void:
 	_ensure_mass_initialized()
 	# Fish far from the player advance in fewer, larger steps (see
 	# SimulationLod) -- same time passes, fewer updates to pay for.
 	var delta := _lod_step(frame_delta)
 	if delta < 0.0:
 		return
-	PerfProbe.count_instance("fish (stepped)")
 	if _bolt_remaining > 0.0:
 		_bolt_remaining -= delta
 

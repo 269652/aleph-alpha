@@ -3598,6 +3598,160 @@ A genuine next step, if the symptom recurs on a quiet machine: a live
 `_client_process` itself (mirroring rounds 3-8's own method exactly),
 which this round did not have a clean opportunity to run.
 
+### FPS regression round 10: the LOD throttle inverted under load, plus two fps-independent World costs (2026-09-11)
+
+Reported live: "profile and fix the performance issue so we can get back to
+60fps+". Investigated the way rounds 3-9 established, with one correction
+to their own write-ups: **`--user-data-dir` is not a Godot 4.7.2 flag** (the
+engine's `--help` lists no user-dir option at all). What actually isolates a
+run from the live save is an `override.cfg` in the project root setting
+`application/config/use_custom_user_dir=true` +
+`custom_user_dir_name="AlephAlphaPerfProbe"`, with the real save's `*.bin`
+and `chunk_*` state copied into `%APPDATA%\AlephAlphaPerfProbe\` -- verified
+by the probe dir growing its own `logs/` while the live `player_save.bin`'s
+mtime stayed untouched. Round 5's `PerfProbe` instrumentation (`7d1e8fe1`)
+was re-applied onto current `main` (three conflicts, resolved to keep the
+player-step momentum crush block, fish `_ensure_mass_initialized` and the
+view-scoped leaf-litter fill), then extended: brackets around every top-level
+step inside `World._process_impl`, per-call splits of the `_client_process`
+UI batch and of `_step_ecology_batch`'s 27 steps, the six marker classes
+that post-date round 5 (`bee_forager`, `bee_hive`, `wild_bee_nest`,
+`grass_frog`, `ant_queen`, `bee_queen`), a "(stepped)" counter after each
+of the three costliest classes' LOD gate, and timestamped boot checkpoints.
+Machine idle for every measurement (`tasklist` showed no other Godot
+process at launch; Intel integrated GPU, vsync on).
+
+**Baseline, honestly measured: 2-7 fps (mode 4-5), ~226 ms/frame, at a
+steady ~23,500 nodes** on a snapshot of the real save -- and the baseline
+run's first 170 s never left loading (see "Boot" below), which is likely the
+"1 fps" a player sees first. Per frame at 4 fps: `ant_forager._process`
+38 ms (~675 live foragers), `fish` 29 (120), `ambient_flyer` 26 (370),
+**the creature crush loop 26**, `creature` 16 (28), `decomposer` 15 (43),
+`_step_ecology_batch` 11, the UI batch 11, leaf-litter queries ~10,
+caterpillar 5, and ~35 ms uninstrumented (engine, plus the probe's own
+overhead). No single culprit, unlike rounds 3-9 -- three distinct shapes:
+
+1. **`SimulationLod`'s seconds-only interval inverts under load** -- the
+   feedback loop round 7 suspected, now measured. At 4 fps a frame is
+   0.25 s, so a distant creature's 0.5 s interval elapses every SECOND
+   frame instead of every thirtieth: the "(stepped)" counters showed 40-50%
+   of all ant foragers, fish and pollinators doing full work every frame,
+   against ~8% at 60 fps. The throttle meant to keep ~1,500 off-screen
+   creatures cheap collapses to a 2x saving exactly when the frame needs
+   it, and every slow frame makes the next one slower. **Fixed with
+   `SimulationLodClock`** (`src/gameplay/simulation_lod_clock.gd`), the one
+   shared home for the rule all nine LOD-throttled markers used to carry as
+   their own copy of `_lod_step`/`_take_lod_step`/`_lod_accumulated`:
+   a creature updates only once BOTH its seconds interval AND that interval
+   in frames at `SimulationLod.REFERENCE_FPS` (60) have elapsed -- identical
+   behaviour at or above 60 fps (pinned frame-for-frame against the old
+   rule in `test_simulation_lod_clock.gd`), bounded per-frame work below
+   it. Each update hands over at most `interval + one frame` (the most the
+   old gate ever handed over), so a skipped stretch is time a distant
+   creature does not live through rather than one giant step; skipped
+   frames pay two additions and an integer compare, no player lookup --
+   which means a distant creature notices the player's approach at its
+   next scheduled update, not the next frame (at most 0.5 s at 60 fps, and
+   only beyond 1,300 px). One test in `test_ambient_flyer_marker.gd`
+   teleported a player from 700 px to 6 px and expected a flush on the very
+   next frame; its real subject (the open-winged take-off frame) is
+   unchanged, its precondition now waits out one far skip. Spec'd in
+   `ecosystem_dynamics.md` "Per-creature update rate inside loaded chunks".
+
+2. **A crush is a STEP event (creatures).** `World._client_process` ran all
+   seven crush scans for every creature every frame, moved or not -- 28
+   creatures x 7 neighbourhood scans, dominated by `crush_ants_near`'s walk
+   of every forager list in the 3x3 chunk neighbourhood (~200 foragers per
+   call) and `crush_walnut_near`'s unscoped dropped-item group walk.
+   26 ms/frame, the single largest cost inside World's own `_process`, and
+   fps-INdependent: it would have capped even a frame with nothing else in
+   it at ~38 fps. The block comment there had explicitly chosen "every
+   removal is idempotent" over per-entity last-tile tracking -- true, but
+   idempotent never meant free. Now `CreatureMarker.last_crush_step_tile`
+   (the same per-stepper debounce `_last_scar_step_tile` gives the player's
+   path scarring) skips a creature still standing on the tile it last
+   crushed from: measured 26 -> 2 ms/frame. A small, real semantic change:
+   a millipede that walks under a STANDING deer now lives until the deer
+   takes a step, rather than dying the next frame -- which is what a step
+   does and a stance does not. The player's own crush block (1.5-2 ms/frame,
+   the same seven scans every frame) is deliberately untouched this round:
+   `test_world_crush_wiring.gd`'s Karma-ordering contracts sit on it.
+
+3. **The hover tooltip walks every hoverable node in the world** -- 24
+   marker classes, thousands of nodes, one distance check each, 6.7-7.9 ms
+   per call -- on a 33 ms wall-clock cadence that, at 4 fps, is every frame.
+   The scan only has anything new to say when the mouse has moved, or when
+   something may have walked under a still one: `World._hover_rescan_due`
+   keeps the ~30 Hz cadence while the mouse moves and otherwise rescans at
+   `HOVER_IDLE_REFRESH_INTERVAL` (0.25 s, pinned by
+   `test_world_hover_tooltip_throttle.gd`). The walk itself is unchanged and
+   still worth scoping (see below).
+
+**Result, same snapshot, same machine: 6-14 fps (mode 10) with the
+instrumentation still on, and 5-13 fps (median 9, mode 7-11) in the clean
+re-measurement without it -- ~2x.** Conservative, if anything: the probe
+save autosaves, so each run started from the previous run's slightly
+heavier world (ant foragers 675 -> 815 live, leaves 45 -> 170 between runs
+1 and 3), and the instrumentation's own overhead is real (~50,000
+bracketed calls per 3 s window, an estimated ~15 ms/frame) so the
+instrumented breakdowns below overstate every bracketed cost a little. Not
+60 fps, and the remaining budget is now measured rather than guessed --
+per frame in a slow post-fix window (19 frames/3 s):
+
+- **The flat cost of `_process` existing at all, ~7 us per marker per frame
+  even when the LOD gate skips it** (engine dispatch into GDScript, the
+  wrapper, the gate) x ~2,500 live markers (815 ant foragers, 495
+  pollinators, 129 fish, 275 bee foragers, 711 wild crops, ...) = 10-17 ms.
+  The LOD clock bounds the WORK per frame; it cannot make an idle callback
+  free. The next lever is architectural: `set_process(false)` on distant
+  markers and a due-frame scheduler (the clock already knows each
+  creature's next due frame) that steps only what is due. This is round 6's
+  "population-scale question", now with a number on it.
+- **Fish steps cost ~0.5 ms each** (479 steps = ~250 ms): `fish._process`
+  17 ms/frame at 20% stepped. Round 7 fixed the schooling scan; the rest of
+  a step (`_first_clear_heading`'s five water checks, foraging) has never
+  been split. A concentrated-cost round like 7, not population.
+- **`step_leaf_litter` 8 ms/frame, fps-independent** -- 6 of it
+  `LeafLitterField.advance` over all 30 LOADED chunks every frame while only
+  9 decorate; the "structurally distinct, still entirely open cost" the
+  floating-leaf entry above named. `step_footprints` (1.8-3.9 ms) has the
+  same shape and takes an absolute time, so calling it rarely is lossless.
+- **Two O(all-entities) UI scans**: the hover walk above (7.9 ms whenever it
+  does run) and `_update_interaction_prompt` (3.9 ms: `nearest_npc_near`
+  over every village node, `nearest_liftable_stone_near` over every loaded
+  stone, `nearest_kickable_dropped_item_near` over every dropped item), on a
+  13 Hz wall-clock cadence that is also every frame at low fps. Both want
+  the 3x3-chunk scoping every round since 4 has applied elsewhere, and the
+  same frame-robust cadence the clock now gives creatures.
+- **`_step_ecology_batch`'s other fixed costs** ~11 ms/frame: `step_tree_
+  growth` 2.0, `step_bees` 1.8, `step_footprints` 1.8, `step_ants` 1.7,
+  `step_ground_food` 1.4, `step_flowers` 1.3 -- each a per-loaded-chunk
+  walk every frame, none individually large, all fps-independent.
+
+**Boot, measured for the first time end to end (checkpoints in
+`World._ready` and both progress callbacks): ~129 s to a playable world,
+all of it at 1 fps** -- 11 s to `_ready`, 3.5 s constructing
+`EarthChunkManager`, **40 s in `MushroomMarker.warm_art_cache`** (8 species
+at ~5 s each: round 6's fix made it yield per sheet so the window stays
+responsive, and round 4's `SpriteSheetSlicer` fix was meant to make each
+sheet cheap -- the per-sheet cost has clearly not held, and
+`IllustratedMushroomSprite._load_frames`/`_apply_chroma_key` is the next
+place to look), 1 s of UI, then **73 s loading the spawn area's chunks**:
+the first chunk 32.5 s (first-touch art, the "~44 s spawn gap" entry's
+territory, not closed), every later one 1.9-3.5 s. That per-chunk cost is
+also what a player pays as a ~2 s hitch each time streaming loads a chunk
+mid-play. Neither is fixed this round -- named here with numbers so the
+next one starts from them.
+
+Found and left alone, pre-existing on `main` at the branch point:
+`test_ambient_flyer_marker.gd`'s two courtship "whirl" geometry tests
+(identical failures with the pre-refactor file, verified by A/B),
+`test_fish_marker.gd`'s one no-assert "risky" test (round 7 already noted
+it), and `test_world_interaction_prompt_throttle.gd` failing on
+`'is_open' in base 'Nil'` (its `before_each` predates the quest-log and
+conversation windows `_any_gameplay_window_open` now reads -- flagged as
+its own task).
+
 ### In-flight foragers survive an unload; their trip's outcome does not (2026-09-09)
 
 The ant side of `bees.md`'s own identical section, by that exact name --

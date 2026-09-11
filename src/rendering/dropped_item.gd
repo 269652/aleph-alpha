@@ -128,17 +128,7 @@ func _ready() -> void:
 	add_child(click_area)
 
 
-const PerfProbe = preload("res://src/rendering/perf_probe.gd")
-
-
 func _process(delta: float) -> void:
-	PerfProbe.begin("dropped_item._process")
-	PerfProbe.count_instance("dropped_item (live)")
-	_process_impl(delta)
-	PerfProbe.end("dropped_item._process")
-
-
-func _process_impl(delta: float) -> void:
 	# World-time items are aged by the ecology step instead (see advance).
 	if ages_on_world_time:
 		return

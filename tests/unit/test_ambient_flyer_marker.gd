@@ -9,6 +9,7 @@ const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd"
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const BirdFlocking = preload("res://src/gameplay/bird_flocking.gd")
 const PollinatorForaging = preload("res://src/gameplay/pollinator_foraging.gd")
+const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const LifeCycle = preload("res://src/gameplay/life_cycle.gd")
 
 const TILE_SIZE := 16.0
@@ -4644,8 +4645,21 @@ func test_a_butterfly_takes_off_from_the_open_winged_frame():
 	assert_true(shy.settled_frames.has(shy.texture), "precondition: it is settled on the bloom")
 
 	player.position = shy.position + Vector2(6.0, 0.0)
-	shy._process(FRAME)
-	assert_true(shy.flap_frames.has(shy.texture), "precondition: the flush puts it back in the air")
+	# A creature that was far only notices the player's approach at its next
+	# scheduled update -- SimulationLodClock re-reads the distance when its
+	# frame gate opens, at most SimulationLod.frames_between_updates(<how far
+	# it was>) frames later -- and reacts on that same frame. (A real player
+	# closing 700 px on foot takes seconds, over which that skip shrinks to two
+	# frames; only a teleport like this one can arrive inside a single skip.)
+	# So drive it up to one full skip and pin the first frame it takes off on.
+	var far_skip: int = SimulationLod.frames_between_updates(Vector2(200, 900).distance_to(Vector2(200, 200)))
+	var flushed := false
+	for i in far_skip + 1:
+		shy._process(FRAME)
+		if shy.flap_frames.has(shy.texture):
+			flushed = true
+			break
+	assert_true(flushed, "precondition: the flush puts it back in the air within one far skip")
 	assert_eq(
 		shy.texture, shy.flap_frames[0],
 		"it opens its wings and beats, rather than resuming mid-stroke"
