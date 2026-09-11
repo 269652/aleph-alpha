@@ -1657,6 +1657,21 @@ Two consequences, both deliberate:
   foot takes seconds, over which the skip shrinks to two frames; only a
   teleport can arrive inside one skip.
 
+**A distant creature does not receive `_process` at all while it waits**
+(`src/gameplay/simulation_scheduler.gd`, FPS regression round 11). The
+clock bounds the *work* a creature does per frame, but an engine callback
+that only ticks a clock and returns still costs ~7 µs — and across ~2,500
+live markers that idle dispatch alone was 10–17 ms of every frame. So a
+marker that has just stepped and knows it will skip the next N frames
+parks itself: `set_process(false)`, and an entry in the scheduler's bucket
+for frame now + N. `World` advances the scheduler once per frame, first
+thing in its own `_process`, and only the markers in *that* frame's bucket
+are touched — switched back on and their clock primed with the real time
+they spent parked, so every guarantee above (the cap, the distance re-read
+on wake) holds exactly as if they had ticked every frame. Nothing is parked
+when no scheduler is current: every unit test that never publishes one, or
+a world with nobody to be far from, behaves exactly as before.
+
 ## Status / mechanisms
 
 - ✅ Look-before-you-step locomotion — `creature_movement_gate.gd` (pure:

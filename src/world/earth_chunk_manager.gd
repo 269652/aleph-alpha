@@ -793,6 +793,23 @@ var _leaf_litter_view_synced_tile := Vector2i.ZERO
 ## infrastructure.md's path-scarring framing). Same create-at-load/
 ## erase-at-unload lifecycle as _leaf_litter_fields above.
 var _footprint_fields: Dictionary = {}
+
+## How often a chunk OUTSIDE decoration range advances its leaf litter and
+## footprints, in seconds of (world) time -- every frame inside it, exactly
+## as before. FPS regression round 11 (docs/concept/soil_fauna.md): both
+## steps used to advance every LOADED chunk's field every frame -- 30
+## chunks, of which only the 9 inside decoration range can be seen --
+## measured live at ~8 ms (litter) + ~2-4 ms (prints) per frame, fps-
+## independent. A far chunk's litter hands over everything it accumulated
+## when it does advance (no time is ever lost, and a chunk coming back into
+## range flushes whatever is pending on that very frame); footprints take an
+## absolute clock, so advancing them rarely is lossless by construction.
+## Pinned by test_earth_chunk_manager_far_chunk_advance.gd.
+const FAR_CHUNK_ADVANCE_SECONDS := 1.0
+## Chunk coord -> seconds of litter time accumulated but not yet advanced.
+var _leaf_litter_far_pending: Dictionary = {}
+## Chunk coord -> world age at which its footprints last advanced.
+var _footprint_far_advanced_at: Dictionary = {}
 ## Vector2i chunk_coord -> {surface: MultiMeshInstance2D} (see
 ## FootprintRenderer.SURFACES) -- the visible counterpart to
 ## _footprint_fields, three plain MultiMeshInstance2D per chunk (one per
@@ -4973,11 +4990,19 @@ func record_footstep(
 func step_footprints() -> void:
 	for chunk_coord in _footprint_fields:
 		var field: FootprintField = _footprint_fields[chunk_coord]
-		field.advance(_world_age_seconds)
-		var mmis: Dictionary = _footprint_mmis.get(chunk_coord)
-		if mmis == null:
-			continue
 		var visible := _decorates(chunk_coord)
+		# Far-chunk gate (see FAR_CHUNK_ADVANCE_SECONDS): advance() takes the
+		# absolute world clock, so a chunk nobody can see loses nothing by
+		# advancing once per interval instead of every frame.
+		if visible or _world_age_seconds - float(_footprint_far_advanced_at.get(chunk_coord, -INF)) >= FAR_CHUNK_ADVANCE_SECONDS:
+			field.advance(_world_age_seconds)
+			_footprint_far_advanced_at[chunk_coord] = _world_age_seconds
+		# A typed Dictionary cannot hold the Nil a missing entry returns --
+		# every real chunk has its renderers, but a field injected on its own
+		# (tests) does not, and the old `= .get(chunk_coord)` blew up on it.
+		var mmis: Dictionary = _footprint_mmis.get(chunk_coord, {})
+		if mmis.is_empty():
+			continue
 		for surface in FootprintRenderer.SURFACES:
 			if mmis.has(surface):
 				mmis[surface].visible = visible
@@ -8703,18 +8728,26 @@ func step_leaf_litter(delta_seconds: float) -> void:
 	var view_moved := _disturbance_center_tile != _leaf_litter_view_synced_tile
 	for chunk_coord in _leaf_litter_fields:
 		var field: LeafLitterField = _leaf_litter_fields[chunk_coord]
-		var region_seed := hash("%d_%d" % [chunk_coord.x, chunk_coord.y])
-		field.set_wind(
-			_weather_model.wind_direction_for(weather_day, region_seed),
-			_weather_model.dispersal_strength_for(
-				_weather_model.weather_at(weather_day, region_seed)
+		var decorating := _decorates(chunk_coord)
+		# Far-chunk gate (see FAR_CHUNK_ADVANCE_SECONDS): a chunk nobody can
+		# see advances only once its pending time reaches the interval, and
+		# hands all of it over; one back in range flushes on this very frame.
+		var pending: float = float(_leaf_litter_far_pending.get(chunk_coord, 0.0)) + delta_seconds
+		if decorating or pending >= FAR_CHUNK_ADVANCE_SECONDS:
+			var region_seed := hash("%d_%d" % [chunk_coord.x, chunk_coord.y])
+			field.set_wind(
+				_weather_model.wind_direction_for(weather_day, region_seed),
+				_weather_model.dispersal_strength_for(
+					_weather_model.weather_at(weather_day, region_seed)
+				)
 			)
-		)
-		field.advance(delta_seconds, _world_age_seconds)
+			field.advance(pending, _world_age_seconds)
+			pending = 0.0
+		_leaf_litter_far_pending[chunk_coord] = pending
 		var mmi: MultiMeshInstance2D = _leaf_litter_mmis.get(chunk_coord)
 		if mmi == null:
 			continue
-		mmi.visible = _decorates(chunk_coord)
+		mmi.visible = decorating
 		# Explicitly typed, not := -- Dictionary.get's Variant return compared
 		# against field.generation()'s int makes static := inference bail
 		# ("cannot infer the type... doesn't have a set type"), the same
@@ -12345,12 +12378,14 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_leaf_litter_mmis[chunk_coord].free()
 		_leaf_litter_mmis.erase(chunk_coord)
 	_leaf_litter_filled_generation.erase(chunk_coord)
+	_leaf_litter_far_pending.erase(chunk_coord)
 
 	_footprint_fields.erase(chunk_coord)
 	for mmi in _footprint_mmis.get(chunk_coord, {}).values():
 		mmi.free()
 	_footprint_mmis.erase(chunk_coord)
 	_footprint_filled_generation.erase(chunk_coord)
+	_footprint_far_advanced_at.erase(chunk_coord)
 
 	# Snapshot the aggregate ecology before dropping the region, so revisiting
 	# this chunk catch-up integrates from where it left off (see

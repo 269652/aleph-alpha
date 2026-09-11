@@ -354,7 +354,14 @@ start point, not the target alone, so a leaf actively blown toward or away
 from the window still renders for its whole transition instead of popping
 at the boundary. See "Status" below for the real measured numbers -- this
 is a RENDERING restriction only; `LeafLitterField.advance()` keeps
-simulating every loaded chunk exactly as before, regardless of visibility.
+simulating every loaded chunk regardless of visibility -- every frame for
+a chunk inside decoration range, and, since FPS regression round 11
+(`EarthChunkManager.FAR_CHUNK_ADVANCE_SECONDS`, see soil_fauna.md), once
+per second of accumulated time for one outside it, handing over everything
+it accumulated and flushing whatever is pending the frame it comes back
+into range. What you cannot see still ages, decays and disperses; it just
+does so in fewer, larger steps, the same shape `SimulationLod` already
+gives distant creatures.
 
 **Falling and swaying are computed continuously in a shared vertex shader**,
 ported by hand from the first pass's own already-tested `DroppedItem._step_
