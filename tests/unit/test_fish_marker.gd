@@ -6,6 +6,8 @@ extends GutTest
 ## small pond's fish don't wander up onto the grass.
 
 const FishMarker = preload("res://src/rendering/fish_marker.gd")
+const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const SimulationScheduler = preload("res://src/gameplay/simulation_scheduler.gd")
 const CreatureWander = preload("res://src/rendering/creature_wander.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
 const FishSchooling = preload("res://src/gameplay/fish_schooling.gd")
@@ -259,6 +261,10 @@ func after_each():
 		if is_instance_valid(node):
 			node.free()
 	_extra = []
+	# The scheduler is static shared state (see SimulationScheduler); the
+	# two hand-off tests below publish one, and nothing else here must ever
+	# see it -- same reset-in-after_each shape as the fish-group cache above.
+	SimulationScheduler.set_current(null)
 
 
 func _add_stub_player(at: Vector2) -> StubPlayer:
@@ -1320,3 +1326,45 @@ func test_growth_scales_the_sprite_below_full_size_while_young():
 		marker.scale.x, 0.05 * FishGrowth.visual_scale_fraction(marker.mass_kg, FishMass.mass_kg_for("goldfish")),
 		0.0001
 	)
+
+
+# -- parking with the SimulationScheduler (FPS regression round 11) ----------
+#
+# A fish far from the player parks itself with the current SimulationScheduler
+# after a real step -- no _process at all until its clock's skip is up -- and is
+# processing again once woken on its due frame. Nothing parks when no scheduler
+# is current, which is every other test in this file (see after_each).
+
+
+func test_a_far_fish_parks_itself_after_its_step_and_is_woken_on_its_due_frame():
+	var scheduler = SimulationScheduler.new()
+	SimulationScheduler.set_current(scheduler)
+	var far := 100000.0
+	_add_stub_player(marker.position + Vector2(far, 0.0))
+	# A fresh clock is due every frame until the first real step lands (the
+	# far interval must accumulate first); the fish parks right after it.
+	var frames_until_parked := 0
+	while marker.is_processing() and frames_until_parked < 120:
+		marker._process(1.0 / 60.0)
+		frames_until_parked += 1
+	assert_false(marker.is_processing(), "far: parked after its first real step")
+	assert_eq(scheduler.parked_count(), 1)
+	assert_gt(frames_until_parked, 1, "it stepped once first (the far interval had to elapse)")
+
+	var skip: int = SimulationLod.frames_between_updates(far)
+	for frame in skip - 1:
+		scheduler.advance(1.0 / 60.0)
+	assert_false(marker.is_processing(), "still parked one frame before it is due")
+	scheduler.advance(1.0 / 60.0)
+	assert_true(marker.is_processing(), "woken on its due frame")
+	assert_eq(scheduler.parked_count(), 0)
+
+
+func test_a_near_fish_keeps_processing_every_frame():
+	var scheduler = SimulationScheduler.new()
+	SimulationScheduler.set_current(scheduler)
+	_add_stub_player(marker.position + Vector2(10.0, 0.0))
+	for frame in 10:
+		marker._process(1.0 / 60.0)
+	assert_true(marker.is_processing(), "on screen: never parked")
+	assert_eq(scheduler.parked_count(), 0)

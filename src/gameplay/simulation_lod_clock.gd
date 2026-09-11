@@ -70,4 +70,22 @@ func take_full_rate_step() -> float:
 	return step
 
 
+## The skip the last take_step() committed to, in frames; 1 means "due next
+## frame". Read by SimulationScheduler.park_if_far to know how long a marker
+## can go without _process at all (FPS regression round 11).
+func frames_until_next() -> int:
+	return _frames_until_next
+
+
+## The scheduler's wake-up: a parked marker ticked nothing while parked, so
+## this hands the clock the REAL time that passed (the frames before the
+## wake-up frame -- that frame's own delta arrives through the marker's
+## ordinary tick()). Afterwards the clock is indistinguishable from one that
+## ticked every one of those frames: the gate opens on the next tick, and
+## take_step() applies its usual cap to what accumulated.
+func resume(elapsed_seconds: float) -> void:
+	_accumulated_seconds = elapsed_seconds
+	_frames_waited = _frames_until_next
+
+
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")

@@ -140,6 +140,37 @@ func test_a_creature_that_came_close_is_back_to_every_frame_after_its_next_updat
 		assert_almost_eq(clock.take_step(0.0), SLOW_FRAME, 0.0001)
 
 
+## The scheduler's side of the contract (FPS regression round 11, see
+## test_simulation_scheduler.gd): a parked marker ticks nothing, so on
+## wake-up the clock is primed with the real time it was parked and must
+## then behave exactly as if it had ticked every one of those frames.
+func test_frames_until_next_is_the_skip_the_last_step_committed_to():
+	var clock = SimulationLodClock.new()
+	assert_eq(clock.frames_until_next(), 1, "fresh: due next frame")
+	clock.tick(SimulationLod.MAX_INTERVAL_SECONDS)  # enough for the seconds gate at any distance
+	assert_gte(clock.take_step(FAR_PX), 0.0, "precondition: a real step")
+	assert_eq(clock.frames_until_next(), SimulationLod.frames_between_updates(FAR_PX))
+	clock.tick(REFERENCE_FRAME)  # gate closed, but the commitment stands
+	assert_eq(clock.frames_until_next(), SimulationLod.frames_between_updates(FAR_PX))
+
+
+func test_a_resumed_clock_is_indistinguishable_from_one_that_ticked_every_parked_frame():
+	var ticked = SimulationLodClock.new()
+	var parked = SimulationLodClock.new()
+	for clock in [ticked, parked]:
+		clock.tick(SimulationLod.MAX_INTERVAL_SECONDS)  # enough for the seconds gate
+		assert_gte(clock.take_step(FAR_PX), 0.0, "precondition: both took a real step")
+	var skip: int = ticked.frames_until_next()
+	assert_gt(skip, 1, "precondition: a real skip to be parked for")
+	# One clock lives through the skip frame by frame; the other is parked
+	# for skip - 1 frames (the scheduler's wake-up frame is ticked normally).
+	for frame in skip - 1:
+		assert_false(ticked.tick(SLOW_FRAME))
+	parked.resume((skip - 1) * SLOW_FRAME)
+	assert_eq(ticked.tick(SLOW_FRAME), parked.tick(SLOW_FRAME), "both gates open on the same frame")
+	assert_almost_eq(ticked.take_step(FAR_PX), parked.take_step(FAR_PX), 0.0001, "and hand over the same (capped) time")
+
+
 func test_with_nobody_to_be_far_from_the_clock_runs_at_full_rate():
 	var clock = SimulationLodClock.new()
 	assert_true(clock.tick(SLOW_FRAME))

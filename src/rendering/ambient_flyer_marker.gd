@@ -32,6 +32,7 @@ const FlyerDiet = preload("res://src/gameplay/flyer_diet.gd")
 const FlowerSpecies = preload("res://src/world/flower_species.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const SimulationLodClock = preload("res://src/gameplay/simulation_lod_clock.gd")
+const SimulationScheduler = preload("res://src/gameplay/simulation_scheduler.gd")
 const Courtship = preload("res://src/gameplay/courtship.gd")
 const SpiralFlight = preload("res://src/gameplay/spiral_flight.gd")
 const BirdFlocking = preload("res://src/gameplay/bird_flocking.gd")
@@ -859,7 +860,13 @@ func _lod_step(delta: float) -> float:
 	_player_position = _nearest_player_position()
 	if _player_position == null:
 		return _lod_clock.take_full_rate_step()  # nobody to be far from: always full rate
-	return _lod_clock.take_step(position.distance_to(_player_position))
+	var step := _lod_clock.take_step(position.distance_to(_player_position))
+	# A distant creature skips its next frames anyway -- park it so those
+	# frames cost it nothing at all (FPS regression round 11, see
+	# SimulationScheduler). A no-op when no scheduler is current.
+	if step >= 0.0:
+		SimulationScheduler.park_if_far(self, _lod_clock)
+	return step
 
 
 ## Where the player was as of this frame's _lod_step, or null when there is

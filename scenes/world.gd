@@ -444,6 +444,14 @@ var _torch_glow_mesh: MeshInstance2D
 
 var _chunk_manager: EarthChunkManager
 var _path_scarring := PathScarring.new()
+
+## The due-frame scheduler distant creature markers park themselves in
+## (FPS regression round 11, docs/concept/soil_fauna.md): published as the
+## current one in _ready, advanced first thing every frame in _process so a
+## marker woken this frame is processed this frame, withdrawn when this
+## world leaves the tree. See SimulationScheduler's own doc comment.
+const SimulationScheduler = preload("res://src/gameplay/simulation_scheduler.gd")
+var _simulation_scheduler := SimulationScheduler.new()
 var _scarred_tiles: Dictionary = {}  # Vector2i global tile -> true, tiles we've painted as trampled earth
 var _trailed_tiles: Dictionary = {}  # Vector2i global tile -> true, tiles currently painted as the deeper Trail tier
 ## Sentinel far outside any reachable tile, so the first real tile always
@@ -978,6 +986,9 @@ func _ready() -> void:
 	# NOW everything _process()/_unhandled_input() touch actually exists --
 	# see this flag's own doc comment, up near where it used to be set, for
 	# why this moved here.
+	# Markers only park themselves when a scheduler is current, so it must be
+	# current before the first frame the world runs.
+	SimulationScheduler.set_current(_simulation_scheduler)
 	_world_ready = true
 
 	# The heavy setup the boot-time loading overlay (built/shown just above
@@ -4843,6 +4854,12 @@ func _save_local_player(player: Player) -> void:
 ## A no-op if no local player has spawned yet (e.g. quitting from the main
 ## menu) or on a dedicated server (no single "local" player to speak of).
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_EXIT_TREE:
+		# A scheduler outliving its world would hand stale wake-ups to the
+		# next one; withdraw ours (and only ours) on the way out.
+		if SimulationScheduler.current() == _simulation_scheduler:
+			SimulationScheduler.set_current(null)
+		return
 	if what != NOTIFICATION_WM_CLOSE_REQUEST:
 		return
 	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
@@ -4890,6 +4907,11 @@ const MAX_GROUND_ITEMS := 80
 func _process(delta: float) -> void:
 	if not _world_ready:
 		return
+	# Wake every parked creature marker that is due this frame BEFORE
+	# anything else (FPS regression round 11, see SimulationScheduler):
+	# World is the scene root, so its descendants' own _process runs after
+	# this, and a marker switched back on here is processed this same frame.
+	_simulation_scheduler.advance(delta)
 	# Ages every recorded water disturbance (fish/player/animal ripples) so
 	# its ring actually expands and fades -- every frame, every client, not
 	# gated behind _owns_ecosystem_simulation() like the simulation steps

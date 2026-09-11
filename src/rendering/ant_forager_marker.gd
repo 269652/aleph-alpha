@@ -53,6 +53,7 @@ const TreeSpecies = preload("res://src/world/tree_species.gd")
 const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const SimulationLodClock = preload("res://src/gameplay/simulation_lod_clock.gd")
+const SimulationScheduler = preload("res://src/gameplay/simulation_scheduler.gd")
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 
 const GROUP_NAME := "ant_forager"
@@ -429,7 +430,13 @@ func _lod_step(delta: float) -> float:
 	var player = _nearest_player_position()
 	if player == null:
 		return _lod_clock.take_full_rate_step()  # nobody to be far from: always full rate
-	return _lod_clock.take_step(position.distance_to(player))
+	var step := _lod_clock.take_step(position.distance_to(player))
+	# A distant creature skips its next frames anyway -- park it so those
+	# frames cost it nothing at all (FPS regression round 11, see
+	# SimulationScheduler). A no-op when no scheduler is current.
+	if step >= 0.0:
+		SimulationScheduler.park_if_far(self, _lod_clock)
+	return step
 
 
 ## Cheap: the player group holds one node in solo play. Cached per frame by
