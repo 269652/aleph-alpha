@@ -79,7 +79,17 @@ func _ready() -> void:
 	add_child(sprite)
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(delta: float) -> void:
+	PerfProbe.begin("logistics._process")
+	PerfProbe.count_instance("logistics (live)")
+	_process_impl(delta)
+	PerfProbe.end("logistics._process")
+
+
+func _process_impl(delta: float) -> void:
 	match _behavior.phase:
 		LogisticsBehavior.Phase.SEEKING:
 			_step_seeking(delta)

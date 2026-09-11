@@ -94,7 +94,17 @@ func setup_economy(market) -> void:
 	economy = NpcEconomy.new(identity.seed_value, identity.occupation, market)
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(delta: float) -> void:
+	PerfProbe.begin("npc._process")
+	PerfProbe.count_instance("npc (live)")
+	_process_impl(delta)
+	PerfProbe.end("npc._process")
+
+
+func _process_impl(delta: float) -> void:
 	_elapsed_time += delta
 	# Real day-rollover replanning (docs/progress.md's Interrupt/Replan
 	# Handling row: "today's schedule always runs to completion and only

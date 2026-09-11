@@ -140,7 +140,17 @@ func _nearest_player_position():
 	return _cached_player.position
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(frame_delta: float) -> void:
+	PerfProbe.begin("piscivore_bird._process")
+	PerfProbe.count_instance("piscivore_bird (live)")
+	_process_impl(frame_delta)
+	PerfProbe.end("piscivore_bird._process")
+
+
+func _process_impl(frame_delta: float) -> void:
 	var delta := _lod_step(frame_delta)
 	if delta < 0.0:
 		return

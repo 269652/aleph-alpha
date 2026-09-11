@@ -89,7 +89,17 @@ func _ready() -> void:
 	add_child(_sprite)
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(delta: float) -> void:
+	PerfProbe.begin("carcass._process")
+	PerfProbe.count_instance("carcass (live)")
+	_process_impl(delta)
+	PerfProbe.end("carcass._process")
+
+
+func _process_impl(delta: float) -> void:
 	_age += delta
 	_step_flies(delta)
 	if not _was_rotten and is_rotten():

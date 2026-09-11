@@ -4854,14 +4854,32 @@ func _compute_dry_land_spawn_tile() -> Vector2i:
 const MAX_GROUND_ITEMS := 80
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(delta: float) -> void:
+	PerfProbe.set_gauge("frame.fps", int(Engine.get_frames_per_second()))
+	PerfProbe.set_gauge("frame.time_process_ms", int(Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0))
+	PerfProbe.set_gauge("frame.time_physics_ms", int(Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0))
+	PerfProbe.set_gauge("frame.node_count", int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)))
+	PerfProbe.set_gauge("frame.render_objects", int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)))
+	PerfProbe.count_instance("frames")
+	PerfProbe.maybe_report()
+	PerfProbe.begin("world._process")
+	_process_impl(delta)
+	PerfProbe.end("world._process")
+
+
+func _process_impl(delta: float) -> void:
 	if not _world_ready:
 		return
 	# Ages every recorded water disturbance (fish/player/animal ripples) so
 	# its ring actually expands and fades -- every frame, every client, not
 	# gated behind _owns_ecosystem_simulation() like the simulation steps
 	# below (a visual effect, not shared world state).
+	PerfProbe.begin("world.step_water_disturbances")
 	_chunk_manager.step_water_disturbances(delta)
+	PerfProbe.end("world.step_water_disturbances")
 	var focus_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 	# Grass parting under a walker is the SAME kind of purely-cosmetic,
 	# per-client-only effect as the water disturbances above -- it was
@@ -4878,15 +4896,19 @@ func _process(delta: float) -> void:
 		# ripening and tree growth all read the clock, and they are what
 		# /ecotest exists to let someone watch. At normal speed this is
 		# exactly the frame's own delta, so nothing changes off the lapse.
+		PerfProbe.begin("world.advance_world_age")
 		_chunk_manager.advance_world_age(
 			TimeLapse.calendar_seconds(delta, _ecology_time_scale)
 		)
+		PerfProbe.end("world.advance_world_age")
 		# Real in-flight regional-trade caravans (see docs/concept/trade.md)
 		# read the clock rather than a delta, so they belong with the clock:
 		# once, right after it moves. They used to run per slice, back when
 		# each slice moved the clock -- now every slice within a frame would
 		# see the same world age and redo identical work.
+		PerfProbe.begin("world.step_caravans")
 		_chunk_manager.step_caravans()
+		PerfProbe.end("world.step_caravans")
 		# The STEPPING keeps its measured per-frame budget (see TimeLapse):
 		# normally one slice carrying the frame's own delta, several when
 		# /ecotest is running the year fast, never more than the frame can
@@ -4897,18 +4919,30 @@ func _process(delta: float) -> void:
 		var simulated := 0.0
 		for slice in slices:
 			simulated += slice
+			PerfProbe.begin("world.step_ecology_fine")
 			_step_ecology_fine(slice, focus_player)
+			PerfProbe.end("world.step_ecology_fine")
 		if simulated > 0.0:
+			PerfProbe.begin("world.step_ecology_batch")
 			_step_ecology_batch(simulated, focus_player)
+			PerfProbe.end("world.step_ecology_batch")
+		PerfProbe.begin("world.step_path_scarring")
 		_step_path_scarring(delta)
+		PerfProbe.end("world.step_path_scarring")
 		if focus_player != null:
+			PerfProbe.begin("world.step_pebble_dispersion")
 			_step_pebble_dispersion(focus_player)
+			PerfProbe.end("world.step_pebble_dispersion")
+			PerfProbe.begin("world.step_leaf_litter_dispersion")
 			_step_leaf_litter_dispersion(focus_player)
+			PerfProbe.end("world.step_leaf_litter_dispersion")
 
 	if _is_dedicated_server:
 		_server_process()
 	else:
+		PerfProbe.begin("world._client_process")
 		_client_process(delta)
+		PerfProbe.end("world._client_process")
 
 
 ## How often worn/recovered path tiles are diffed against the rendered
@@ -5468,13 +5502,16 @@ func _client_process(delta: float) -> void:
 	# reaches here only after their own update_with_progress call already
 	# finished, so this one-shot task just re-confirms nothing is pending and
 	# completes without ever needing to await a frame.
+	PerfProbe.begin("client.chunk_update")
 	if not _initial_client_chunk_load_done:
 		if not _initial_client_chunk_load_task_running:
 			_initial_client_chunk_load_task_running = true
 			_run_initial_client_chunk_load(local_player.current_tile())
 	else:
 		_chunk_manager.update(local_player.current_tile())
+	PerfProbe.end("client.chunk_update")
 
+	PerfProbe.begin("client.ui_updates")
 	var player_tile := local_player.current_tile()
 	_update_minimap(player_tile, delta)
 	_update_inventory_window(local_player)
@@ -5506,6 +5543,7 @@ func _client_process(delta: float) -> void:
 	_update_charge_meter(local_player)
 	_refresh_skill_window(local_player)
 	_autosave_step(local_player, delta)
+	PerfProbe.end("client.ui_updates")
 	var latitude := _geo_coordinates.latitude_for_tile(player_tile.y, EarthChunkGenerator.WORLD_HEIGHT_TILES)
 	var longitude := _geo_coordinates.longitude_for_tile(player_tile.x, EarthChunkGenerator.WORLD_WIDTH_TILES)
 
@@ -5768,6 +5806,7 @@ func _client_process(delta: float) -> void:
 	# event it represents is identical (see karma.gd's own doc comment) --
 	# it just only ever lands on local_player for local_player's OWN step.
 	var player_step_momentum_kg_m_s := _player_step_momentum_kg_m_s(local_player)
+	PerfProbe.begin("crush.player")
 	if _chunk_manager.crush_worm_at(local_player.position, player_step_momentum_kg_m_s):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
 	if _chunk_manager.crush_caterpillars_near(local_player.position, player_step_momentum_kg_m_s):
@@ -5792,6 +5831,7 @@ func _client_process(delta: float) -> void:
 		# own doc comment: no genuine squish recording sourced yet).
 		_interaction_sfx.play_mushroom_crush()
 	_chunk_manager.crush_walnut_near(local_player.position, player_step_momentum_kg_m_s)
+	PerfProbe.end("crush.player")
 	# A wild creature's own step still crushes what's underfoot (a real,
 	# weight-emergent ecosystem effect -- a deer's own hoof kills the worm
 	# the same as a player's boot would) but never touches Karma: every
@@ -5804,7 +5844,9 @@ func _client_process(delta: float) -> void:
 	# deliberately left at this exact POSITION, still after the player-
 	# only crush block above, rather than merged into it: the Karma-
 	# charging tests in test_world_crush_wiring.gd depend on that order.
+	PerfProbe.begin("crush.creature_loop")
 	for creature in loaded_creature_markers:
+		PerfProbe.count_instance("crush.creature_loop.creatures")
 		var marker := creature as CreatureMarker
 		# Reads this creature's OWN real, live, unified mass (see
 		# docs/concept/metabolism.md) rather than a flat CreatureMass.
@@ -5821,6 +5863,7 @@ func _client_process(delta: float) -> void:
 		_chunk_manager.crush_decomposers_near(marker.position, momentum)
 		_chunk_manager.crush_mushroom_at(marker.position, momentum)
 		_chunk_manager.crush_walnut_near(marker.position, momentum)
+	PerfProbe.end("crush.creature_loop")
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).

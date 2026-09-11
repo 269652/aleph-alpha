@@ -34,7 +34,17 @@ func _ready() -> void:
 	add_child(sprite)
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(delta: float) -> void:
+	PerfProbe.begin("carcass_guts._process")
+	PerfProbe.count_instance("carcass_guts (live)")
+	_process_impl(delta)
+	PerfProbe.end("carcass_guts._process")
+
+
+func _process_impl(delta: float) -> void:
 	_age += delta
 	if _age >= ROT_SECONDS:
 		queue_free()

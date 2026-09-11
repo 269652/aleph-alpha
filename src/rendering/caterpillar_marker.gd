@@ -280,7 +280,17 @@ func _nearest_player_position():
 var _cached_player: Node = null
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(frame_delta: float) -> void:
+	PerfProbe.begin("caterpillar._process")
+	PerfProbe.count_instance("caterpillar (live)")
+	_process_impl(frame_delta)
+	PerfProbe.end("caterpillar._process")
+
+
+func _process_impl(frame_delta: float) -> void:
 	var delta := _lod_step(frame_delta)
 	if delta < 0.0:
 		return
