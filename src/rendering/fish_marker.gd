@@ -12,6 +12,7 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const CreatureWander = preload("res://src/rendering/creature_wander.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const SimulationLodClock = preload("res://src/gameplay/simulation_lod_clock.gd")
 const FishSchooling = preload("res://src/gameplay/fish_schooling.gd")
 const FishForaging = preload("res://src/gameplay/fish_foraging.gd")
 const FishDiet = preload("res://src/gameplay/fish_diet.gd")
@@ -643,23 +644,15 @@ func _school_leash_allows() -> bool:
 ## The accumulated time is handed to the update when it does run, so a
 ## skipped frame is never LOST time -- a fish far from the player still lives
 ## at exactly the same rate, just in fewer, larger steps.
-var _lod_accumulated := 0.0
+var _lod_clock := SimulationLodClock.new()
 
 func _lod_step(delta: float) -> float:
-	_lod_accumulated += delta
+	if not _lod_clock.tick(delta):
+		return -1.0
 	var player = _nearest_player_position()
 	if player == null:
-		return _take_lod_step()  # nobody to be far from: always full rate
-	var interval := SimulationLod.update_interval(position.distance_to(player))
-	if _lod_accumulated < interval:
-		return -1.0
-	return _take_lod_step()
-
-
-func _take_lod_step() -> float:
-	var step := _lod_accumulated
-	_lod_accumulated = 0.0
-	return step
+		return _lod_clock.take_full_rate_step()  # nobody to be far from: always full rate
+	return _lod_clock.take_step(position.distance_to(player))
 
 
 ## Cheap: the player group holds one node in solo play. Cached per frame by
@@ -701,6 +694,7 @@ func _process_impl(frame_delta: float) -> void:
 	var delta := _lod_step(frame_delta)
 	if delta < 0.0:
 		return
+	PerfProbe.count_instance("fish (stepped)")
 	if _bolt_remaining > 0.0:
 		_bolt_remaining -= delta
 

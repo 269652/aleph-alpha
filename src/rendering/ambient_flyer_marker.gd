@@ -31,6 +31,7 @@ const SeedEndozoochory = preload("res://src/gameplay/seed_endozoochory.gd")
 const FlyerDiet = preload("res://src/gameplay/flyer_diet.gd")
 const FlowerSpecies = preload("res://src/world/flower_species.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const SimulationLodClock = preload("res://src/gameplay/simulation_lod_clock.gd")
 const Courtship = preload("res://src/gameplay/courtship.gd")
 const SpiralFlight = preload("res://src/gameplay/spiral_flight.gd")
 const BirdFlocking = preload("res://src/gameplay/bird_flocking.gd")
@@ -755,7 +756,7 @@ func boldness() -> float:
 	return FlyerPersonality.boldness_of(personality())
 
 
-var _lod_accumulated := 0.0
+var _lod_clock := SimulationLodClock.new()
 
 ## Courtship (see Courtship / concept/ecosystem_dynamics.md): who this flyer
 ## is dancing with, how far into the dance they are, and how long until it is
@@ -850,29 +851,21 @@ var flock_world = null
 ## the same rate, it just does so in fewer, larger steps that nobody is close
 ## enough to see.
 func _lod_step(delta: float) -> float:
-	_lod_accumulated += delta
+	if not _lod_clock.tick(delta):
+		return -1.0
 	# Cached for _step_player_reaction rather than looked up a second time.
 	# This is the hot path -- hundreds of flyers, every frame -- and the
 	# personality steering needs the exact same answer the LOD does.
 	_player_position = _nearest_player_position()
 	if _player_position == null:
-		return _take_lod_step()  # nobody to be far from: always full rate
-	var interval := SimulationLod.update_interval(position.distance_to(_player_position))
-	if _lod_accumulated < interval:
-		return -1.0
-	return _take_lod_step()
+		return _lod_clock.take_full_rate_step()  # nobody to be far from: always full rate
+	return _lod_clock.take_step(position.distance_to(_player_position))
 
 
 ## Where the player was as of this frame's _lod_step, or null when there is
 ## none. See _lod_step: this exists so the personality steering below is free
 ## rather than a second walk of the player group per flyer per frame.
 var _player_position = null  # Vector2, or null
-
-
-func _take_lod_step() -> float:
-	var step := _lod_accumulated
-	_lod_accumulated = 0.0
-	return step
 
 
 ## Cheap: the player group holds one node in solo play. Cached per frame by
@@ -913,6 +906,7 @@ func _process_impl(frame_delta: float) -> void:
 	var delta := _lod_step(frame_delta)
 	if delta < 0.0:
 		return
+	PerfProbe.count_instance("ambient_flyer (stepped)")
 	_elapsed_time += delta
 	# Runs regardless of ground-forage/wander state -- a carried seed keeps
 	# digesting whether the bird is mid-flight, hunting its next meal, or

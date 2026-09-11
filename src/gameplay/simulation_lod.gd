@@ -43,6 +43,17 @@ const FULL_RATE_RADIUS_PX := 420.0
 const FALLOFF_PX := 900.0
 const MAX_INTERVAL_SECONDS := 0.5
 
+## The frame rate the intervals above are DEFINED against, so they can also be
+## enforced in frames (frames_between_updates / SimulationLodClock). Seconds
+## alone invert under load: at 4 fps a 0.25s frame means a 0.5s interval
+## elapses every SECOND frame instead of every thirtieth, so the throttle
+## meant to keep ~1,500 off-screen creatures cheap collapses to a 2x saving
+## exactly when the frame needs it most, and every slow frame makes the next
+## one slower (FPS regression round 10, docs/concept/soil_fauna.md). Counting
+## frames at this reference rate bounds per-frame work regardless of the
+## real frame rate; at or above it nothing changes.
+const REFERENCE_FPS := 60.0
+
 
 ## Seconds between updates for a creature `distance_px` from the player.
 ## Zero means "every frame".
@@ -55,3 +66,16 @@ static func update_interval(distance_px: float) -> float:
 	# speeds up smoothly instead of visibly changing gear at a threshold --
 	# the same reason the flee and caution radii are ramps and not switches.
 	return lerpf(1.0 / 30.0, MAX_INTERVAL_SECONDS, fraction)
+
+
+## `interval_seconds` expressed in frames at REFERENCE_FPS -- never fewer than
+## one, so "every frame" stays every frame.
+static func frames_for_interval(interval_seconds: float) -> int:
+	return maxi(1, roundi(interval_seconds * REFERENCE_FPS))
+
+
+## Frames between updates for a creature `distance_px` from the player: the
+## same curve as update_interval, in frames instead of seconds (see
+## REFERENCE_FPS for why both are needed).
+static func frames_between_updates(distance_px: float) -> int:
+	return frames_for_interval(update_interval(distance_px))

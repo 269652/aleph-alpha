@@ -118,7 +118,17 @@ func _apply_growth(growth_fraction: float) -> void:
 		_sprite.scale = Vector2.ONE * ProceduralBeehiveSprite.world_scale_for(growth_fraction)
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(delta: float) -> void:
+	PerfProbe.begin("bee_hive._process")
+	PerfProbe.count_instance("bee_hive (live)")
+	_process_impl(delta)
+	PerfProbe.end("bee_hive._process")
+
+
+func _process_impl(delta: float) -> void:
 	if _colony == null or _harvest_hits_landed > 0:
 		return
 	_resize_accumulator += delta

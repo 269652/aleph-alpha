@@ -37,6 +37,7 @@ const Olfaction = preload("res://src/gameplay/olfaction.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
 const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const SimulationLodClock = preload("res://src/gameplay/simulation_lod_clock.gd")
 const RopeTether = preload("res://src/gameplay/rope_tether.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 const CreatureBehavior = preload("res://src/gameplay/creature_behavior.gd")
@@ -234,6 +235,15 @@ static func coat_tint_for(coat_vibrancy: float) -> Color:
 
 var home := Vector2.ZERO
 var wander_seed := 0
+
+## The tile this creature last ran World's crush scans from -- a crush is a
+## STEP event, so World._client_process's creature crush loop skips a creature
+## still standing on this tile (FPS regression round 10, docs/concept/
+## soil_fauna.md: seven neighbourhood scans per creature per frame, moved or
+## not, measured at ~26ms a frame). World-owned bookkeeping kept on the marker
+## itself so it dies with the creature, no registry to prune. Starts on a tile
+## no creature can stand on, so the very first step counts.
+var last_crush_step_tile := Vector2i(-2147483648, -2147483648)
 var info: CreatureInfo
 
 ## This individual's genome (docs/concept/animal_genetics.md §1, docs/concept/
@@ -750,7 +760,7 @@ func get_display_name() -> String:
 	return info.display_name if info != null else ""
 
 
-var _lod_accumulated := 0.0
+var _lod_clock := SimulationLodClock.new()
 
 ## Distance-based update rate (see SimulationLod). Returns the time to advance
 ## by, or NEGATIVE when this frame should be skipped entirely.
@@ -765,20 +775,12 @@ var _lod_accumulated := 0.0
 ## the same rate, it just does so in fewer, larger steps that nobody is close
 ## enough to see.
 func _lod_step(delta: float) -> float:
-	_lod_accumulated += delta
+	if not _lod_clock.tick(delta):
+		return -1.0
 	var player = _nearest_player_position()
 	if player == null:
-		return _take_lod_step()  # nobody to be far from: always full rate
-	var interval := SimulationLod.update_interval(position.distance_to(player))
-	if _lod_accumulated < interval:
-		return -1.0
-	return _take_lod_step()
-
-
-func _take_lod_step() -> float:
-	var step := _lod_accumulated
-	_lod_accumulated = 0.0
-	return step
+		return _lod_clock.take_full_rate_step()  # nobody to be far from: always full rate
+	return _lod_clock.take_step(position.distance_to(player))
 
 
 ## Cheap: the player group holds one node in solo play. Cached per frame by

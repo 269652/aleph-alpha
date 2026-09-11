@@ -47,6 +47,7 @@ const BeeColony = preload("res://src/world/bee_colony.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const SimulationLodClock = preload("res://src/gameplay/simulation_lod_clock.gd")
 const ScentField = preload("res://src/world/scent_field.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 
@@ -164,7 +165,7 @@ var is_wild_bee := false
 var wander_seed := 0
 var _elapsed_time := 0.0
 var _sense_accumulator := SENSE_INTERVAL_SECONDS
-var _lod_accumulated := 0.0
+var _lod_clock := SimulationLodClock.new()
 var _cached_player: Node = null
 var _movement: AmbientFlyerMovement
 
@@ -302,25 +303,17 @@ func _current_leg_target() -> Vector2:
 	return hive_position
 
 
-## Mirrors AntForagerMarker._lod_step/_take_lod_step/_nearest_player_
+## Mirrors AntForagerMarker._lod_step/_nearest_player_
 ## position exactly -- see that class's own doc comment: a real, hard-
 ## learned FPS-regression lesson (round 3) applied here from the start
 ## rather than retrofitted after the fact a second time.
 func _lod_step(delta: float) -> float:
-	_lod_accumulated += delta
+	if not _lod_clock.tick(delta):
+		return -1.0
 	var player = _nearest_player_position()
 	if player == null:
-		return _take_lod_step()
-	var interval := SimulationLod.update_interval(position.distance_to(player))
-	if _lod_accumulated < interval:
-		return -1.0
-	return _take_lod_step()
-
-
-func _take_lod_step() -> float:
-	var step := _lod_accumulated
-	_lod_accumulated = 0.0
-	return step
+		return _lod_clock.take_full_rate_step()
+	return _lod_clock.take_step(position.distance_to(player))
 
 
 func _nearest_player_position():
@@ -334,7 +327,17 @@ func _nearest_player_position():
 	return _cached_player.position
 
 
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(frame_delta: float) -> void:
+	PerfProbe.begin("bee_forager._process")
+	PerfProbe.count_instance("bee_forager (live)")
+	_process_impl(frame_delta)
+	PerfProbe.end("bee_forager._process")
+
+
+func _process_impl(frame_delta: float) -> void:
 	var delta := _lod_step(frame_delta)
 	if delta < 0.0:
 		return

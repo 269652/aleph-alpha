@@ -31,6 +31,7 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const IllustratedMillipedeSprite = preload("res://src/rendering/illustrated_millipede_sprite.gd")
 const CaterpillarForageBehavior = preload("res://src/gameplay/caterpillar_forage_behavior.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const SimulationLodClock = preload("res://src/gameplay/simulation_lod_clock.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 
 const GROUP_NAME := "millipede"
@@ -182,26 +183,18 @@ func _update_sprite(moved: Vector2) -> void:
 		_sprite.flip_h = moved.x > 0.0
 
 
-var _lod_accumulated := 0.0
+var _lod_clock := SimulationLodClock.new()
 
 
 ## Distance-based update rate -- mirrors CaterpillarMarker/DecomposerMarker/
 ## CreatureMarker's own _lod_step exactly.
 func _lod_step(delta: float) -> float:
-	_lod_accumulated += delta
+	if not _lod_clock.tick(delta):
+		return -1.0
 	var player = _nearest_player_position()
 	if player == null:
-		return _take_lod_step()
-	var interval := SimulationLod.update_interval(position.distance_to(player))
-	if _lod_accumulated < interval:
-		return -1.0
-	return _take_lod_step()
-
-
-func _take_lod_step() -> float:
-	var step := _lod_accumulated
-	_lod_accumulated = 0.0
-	return step
+		return _lod_clock.take_full_rate_step()
+	return _lod_clock.take_step(position.distance_to(player))
 
 
 func _nearest_player_position():

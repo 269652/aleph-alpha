@@ -52,6 +52,7 @@ const AntScoutWander = preload("res://src/gameplay/ant_scout_wander.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const SimulationLodClock = preload("res://src/gameplay/simulation_lod_clock.gd")
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 
 const GROUP_NAME := "ant_forager"
@@ -186,7 +187,7 @@ var _elapsed_time := 0.0
 ## constant's own doc comment: the very first scouting step always senses
 ## immediately, and this field only gates REPEATED re-checks after that.
 var _sense_accumulator := SENSE_INTERVAL_SECONDS
-var _lod_accumulated := 0.0
+var _lod_clock := SimulationLodClock.new()
 var _cached_player: Node = null
 ## Built only for a scouting forager (see _ready) -- home-anchored at
 ## mound_position, radius AntColony.FORAGE_RADIUS_TILES: the mound's own
@@ -421,22 +422,14 @@ func _current_leg_target() -> Vector2:
 ## despite every sibling creature marker in this codebase already using
 ## it). Returns the delta to advance by when this frame should actually
 ## process, or NEGATIVE when it should be skipped (accumulated, not lost --
-## see _take_lod_step).
+## see SimulationLodClock).
 func _lod_step(delta: float) -> float:
-	_lod_accumulated += delta
+	if not _lod_clock.tick(delta):
+		return -1.0
 	var player = _nearest_player_position()
 	if player == null:
-		return _take_lod_step()  # nobody to be far from: always full rate
-	var interval := SimulationLod.update_interval(position.distance_to(player))
-	if _lod_accumulated < interval:
-		return -1.0
-	return _take_lod_step()
-
-
-func _take_lod_step() -> float:
-	var step := _lod_accumulated
-	_lod_accumulated = 0.0
-	return step
+		return _lod_clock.take_full_rate_step()  # nobody to be far from: always full rate
+	return _lod_clock.take_step(position.distance_to(player))
 
 
 ## Cheap: the player group holds one node in solo play. Cached per frame by
@@ -468,6 +461,7 @@ func _process_impl(frame_delta: float) -> void:
 	var delta := _lod_step(frame_delta)
 	if delta < 0.0:
 		return
+	PerfProbe.count_instance("ant_forager (stepped)")
 	_ensure_initialized()
 	if _dying:
 		_dying_elapsed += delta

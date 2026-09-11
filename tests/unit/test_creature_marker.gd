@@ -4013,3 +4013,14 @@ func test_a_population_median_marker_still_flees_the_same_predator():
 	marker.genome = {"boldness": EthogramForMarker.NEUTRAL_BOLDNESS_GENE}
 	marker._process(0.2)
 	assert_true(marker._is_fleeing, "an ordinary individual still flees a sensed predator")
+
+
+## FPS regression round 10 (docs/concept/soil_fauna.md): World's creature
+## crush loop debounces on the tile a creature last crushed from. A fresh
+## marker has never crushed anywhere, so its first step onto ANY real tile
+## must count -- the sentinel can equal no tile a creature can stand on.
+func test_a_fresh_marker_has_no_last_crush_step_tile_so_its_first_step_counts():
+	var marker := CreatureMarker.new()
+	autofree(marker)
+	assert_eq(marker.last_crush_step_tile, Vector2i(-2147483648, -2147483648))
+	assert_ne(marker.last_crush_step_tile, Vector2i.ZERO)

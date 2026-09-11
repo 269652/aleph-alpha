@@ -143,6 +143,21 @@ const MINIMAP_REFRESH_INTERVAL := 1.0
 const HOVER_REFRESH_INTERVAL := 0.033
 var _hover_accumulator := 0.0
 
+## How often the hover scan re-runs while the mouse is NOT moving (FPS
+## regression round 10, docs/concept/soil_fauna.md). _update_hover_tooltip
+## walks every hoverable node in the world -- 24 marker classes, thousands
+## of nodes, one distance check each -- measured live at ~6.7ms per call,
+## and HOVER_REFRESH_INTERVAL is a wall-clock cadence, so at 4 fps it ran on
+## every single frame. The scan only has anything new to report when the
+## mouse has moved, or when something may have walked under a still mouse:
+## the first is caught on the ~30 Hz cadence as before, the second now only
+## at this rate. Pinned by test_world_hover_tooltip_throttle.gd.
+const HOVER_IDLE_REFRESH_INTERVAL := 0.25
+var _hover_idle_accumulator := 0.0
+## Where the mouse was at the last hover scan; INF until one has happened,
+## so the very first scan is never mistaken for "already up to date".
+var _last_hover_scan_mouse := Vector2(INF, INF)
+
 ## Interaction-prompt ("Talk"/"Pick") recompute cadence (~13 Hz) -- same
 ## reasoning and shape as HOVER_REFRESH_INTERVAL just above: this scan chains
 ## through up to three unbounded linear scans (EarthChunkManager.
@@ -728,6 +743,7 @@ func _apply_streaming_budget(manager: EarthChunkManager) -> void:
 
 
 func _ready() -> void:
+	print("[boot %.1fs] _ready begin" % (Time.get_ticks_msec() / 1000.0))
 	# Second, independent integrity + license check (see docs/licensing.md,
 	# src/licensing/self_integrity.gd, src/licensing/license_gate.gd) --
 	# the SelfIntegrity/LicenseGate autoloads already check at boot, before
@@ -754,6 +770,7 @@ func _ready() -> void:
 	if not OS.has_feature("editor"):
 		SelfIntegrity.require_verified()
 	var license_result: Dictionary = LicenseGate.check_licensed()
+	print("[boot %.1fs] license checked" % (Time.get_ticks_msec() / 1000.0))
 	if not license_result.licensed:
 		_show_license_gate()
 		return
@@ -802,6 +819,7 @@ func _ready() -> void:
 	# test_the_loading_overlay_is_built_only_once.
 	_build_loading_overlay()
 	await _show_loading_overlay("Starting Aleph Alpha...")
+	print("[boot %.1fs] loading overlay shown" % (Time.get_ticks_msec() / 1000.0))
 
 	# Boot logo intro (see docs/concept/intro_splash.md): deliberately NOT
 	# triggered here. Two earlier passes both tried to run it somewhere in
@@ -867,6 +885,7 @@ func _ready() -> void:
 	get_viewport().physics_object_picking = true
 
 	_chunk_manager = EarthChunkManager.new(_terrain, _entities, _creatures, _ground_decor)
+	print("[boot %.1fs] EarthChunkManager constructed" % (Time.get_ticks_msec() / 1000.0))
 	# Streams at most one chunk per frame from here on, so stepping over a
 	# chunk boundary stops generating a whole column inside one frame (see
 	# _apply_streaming_budget). The cold initial load below still runs
@@ -910,6 +929,7 @@ func _ready() -> void:
 	# frames instead of running as one uninterrupted block, so the rest of
 	# _ready() must genuinely wait for it, not race it.
 	await MushroomMarker.warm_art_cache(_on_mushroom_art_progress)
+	print("[boot %.1fs] mushroom art cache warmed" % (Time.get_ticks_msec() / 1000.0))
 	_player_spawner.spawn_path = _players.get_path()
 	_player_spawner.add_spawnable_scene(PlayerScene.resource_path)
 	WorldItemBus.item_dropped.connect(_on_item_dropped)
@@ -959,11 +979,13 @@ func _ready() -> void:
 	_build_handheld_view()
 	_build_interaction_prompt()
 	_build_charge_meter()
+	print("[boot %.1fs] ui built" % (Time.get_ticks_msec() / 1000.0))
 
 	# NOW everything _process()/_unhandled_input() touch actually exists --
 	# see this flag's own doc comment, up near where it used to be set, for
 	# why this moved here.
 	_world_ready = true
+	print("[boot %.1fs] world_ready" % (Time.get_ticks_msec() / 1000.0))
 
 	# The heavy setup the boot-time loading overlay (built/shown just above
 	# the license/identity checks) was covering for is genuinely done now --
@@ -1334,6 +1356,7 @@ func _show_loading_overlay(text: String) -> void:
 ## which entry point is loading (see LoadingOverlay.set_progress).
 func _on_chunk_load_progress(loaded: int, total: int) -> void:
 	_loading_overlay.set_progress(loaded, total)
+	print("[boot %.1fs] chunks %d/%d" % [Time.get_ticks_msec() / 1000.0, loaded, total])
 
 
 ## Mirrors _on_chunk_load_progress exactly, for the boot-time MushroomMarker.
@@ -1345,6 +1368,7 @@ func _on_chunk_load_progress(loaded: int, total: int) -> void:
 ## parameter exists for at all (see that function's own doc comment).
 func _on_mushroom_art_progress(loaded: int, total: int) -> void:
 	_loading_overlay.set_progress(loaded, total, "species")
+	print("[boot %.1fs] art species %d/%d" % [Time.get_ticks_msec() / 1000.0, loaded, total])
 
 
 ## The joining-client (and New Game/Load Game's own second, now-cheap) chunk
@@ -1355,6 +1379,7 @@ func _on_mushroom_art_progress(loaded: int, total: int) -> void:
 func _run_initial_client_chunk_load(player_tile: Vector2i) -> void:
 	await _chunk_manager.update_with_progress(player_tile, _on_chunk_load_progress)
 	_initial_client_chunk_load_done = true
+	print("[boot %.1fs] initial client chunk load done" % (Time.get_ticks_msec() / 1000.0))
 	if _loading_overlay.visible:
 		_loading_overlay.hide_overlay()
 
@@ -2912,6 +2937,24 @@ func _build_hover_tooltip() -> void:
 ## is asked for by position separately, only once nothing else claimed the
 ## cursor. Flowers go first of the two: a bloom stands IN grass, so whichever
 ## is asked second could never answer.
+## Whether the hover scan is due this frame: on the HOVER_REFRESH_INTERVAL
+## cadence, and then only if the mouse has moved since the last scan or
+## HOVER_IDLE_REFRESH_INTERVAL has passed (see that constant). Pure state
+## machine over its own accumulators, so it is testable without a tree
+## (test_world_hover_tooltip_throttle.gd); the caller passes the mouse in.
+func _hover_rescan_due(delta: float, mouse: Vector2) -> bool:
+	_hover_accumulator += delta
+	_hover_idle_accumulator += delta
+	if _hover_accumulator < HOVER_REFRESH_INTERVAL:
+		return false
+	_hover_accumulator = 0.0
+	if mouse == _last_hover_scan_mouse and _hover_idle_accumulator < HOVER_IDLE_REFRESH_INTERVAL:
+		return false
+	_last_hover_scan_mouse = mouse
+	_hover_idle_accumulator = 0.0
+	return true
+
+
 func _update_hover_tooltip() -> void:
 	# A tooltip about whatever is behind an open window is noise -- and worse,
 	# it draws ON TOP of that window (see world_hint_visible_for). Skipping
@@ -3235,29 +3278,49 @@ func _step_ecology_fine(delta: float, focus_player: Player) -> void:
 ## Once a frame, carrying the whole frame's simulated time: the heavy periodic
 ## work, and everything that adds to the world.
 func _step_ecology_batch(delta: float, focus_player: Player) -> void:
+	PerfProbe.begin("eco.step_ecosystem")
 	_chunk_manager.step_ecosystem(delta)
+	PerfProbe.end("eco.step_ecosystem")
+	PerfProbe.begin("eco.step_forage")
 	_chunk_manager.step_forage(delta)
+	PerfProbe.end("eco.step_forage")
+	PerfProbe.begin("eco.step_tree_spread")
 	_chunk_manager.step_tree_spread(delta)
+	PerfProbe.end("eco.step_tree_spread")
 	# Saplings age in place (see EarthChunkManager.step_tree_growth).
+	PerfProbe.begin("eco.step_tree_growth")
 	_chunk_manager.step_tree_growth()
+	PerfProbe.end("eco.step_tree_growth")
 	# Ground food rots on world time (see EarthChunkManager.step_ground_food).
+	PerfProbe.begin("eco.step_ground_food")
 	_chunk_manager.step_ground_food(delta)
+	PerfProbe.end("eco.step_ground_food")
 	# Flies breeding on whatever has gone over (see FlyColony).
+	PerfProbe.begin("eco.step_flies")
 	_chunk_manager.step_flies(delta)
+	PerfProbe.end("eco.step_flies")
 	# Food goes off in the pack too, on the same clock (see ItemStack.age).
+	PerfProbe.begin("eco.step_carried_food")
 	_chunk_manager.step_carried_food(delta)
+	PerfProbe.end("eco.step_carried_food")
+	PerfProbe.begin("eco.step_tall_grass")
 	_chunk_manager.step_tall_grass(delta)
+	PerfProbe.end("eco.step_tall_grass")
 	# Real aquatic vegetation (see EarthChunkManager.step_aquatic_vegetation,
 	# docs/concept/aquatic_foraging.md) -- mirrors step_tall_grass's own
 	# batched, GRASS_REFRESH_INTERVAL-throttled cadence immediately above,
 	# right next to it for the same reason step_wild_crops sits next to its
 	# own land-plant-growth cousin below.
+	PerfProbe.begin("eco.step_aquatic_vegetation")
 	_chunk_manager.step_aquatic_vegetation(delta)
+	PerfProbe.end("eco.step_aquatic_vegetation")
 	# The second real aquatic food layer (see EarthChunkManager.
 	# step_aquatic_invertebrates, docs/concept/aquatic_foraging.md's
 	# "Revised (2026-09-07)") -- mirrors step_aquatic_vegetation's own
 	# cadence immediately above.
+	PerfProbe.begin("eco.step_aquatic_invertebrates")
 	_chunk_manager.step_aquatic_invertebrates(delta)
+	PerfProbe.end("eco.step_aquatic_invertebrates")
 	# Wild carrot/potato growth + spread (see EarthChunkManager.step_wild_crops,
 	# docs/concept/wild_crops.md) -- mirrors step_tall_grass's own throttled
 	# cadence immediately above. This line was simply missing: the step
@@ -3267,15 +3330,21 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	# and spread never fired once. Same trap the ownership gate fell into (see
 	# test_world_simulation_ownership.gd's header), one call level further
 	# out. Independently found and fixed on both this branch and main.
+	PerfProbe.begin("eco.step_wild_crops")
 	_chunk_manager.step_wild_crops(delta)
+	PerfProbe.end("eco.step_wild_crops")
 	# Wild mushrooms (see EarthChunkManager.step_wild_mushrooms,
 	# docs/concept/mushrooms.md) -- same throttled cadence as its wild-crop
 	# cousin just above.
+	PerfProbe.begin("eco.step_wild_mushrooms")
 	_chunk_manager.step_wild_mushrooms(delta)
+	PerfProbe.end("eco.step_wild_mushrooms")
 	# Player-tilled farm plots (see EarthChunkManager.step_farm_plots,
 	# docs/concept/farming.md) -- same tick this crop's wild cousin grows on
 	# just above.
+	PerfProbe.begin("eco.step_farm_plots")
 	_chunk_manager.step_farm_plots(delta)
+	PerfProbe.end("eco.step_farm_plots")
 	# Ant mounds foraging (see AntColony, myrmecochory) -- fallen grass seed
 	# in grassland, or windfall fruit/nut in forest/rainforest where grass
 	# doesn't grow -- a background per-chunk population effect, batched here
@@ -3283,35 +3352,53 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	# group, since it reads grass_seeds_near/fruit_near and plants new
 	# grass/saplings the same way the mouse's/squirrel's own scatter-hoarding
 	# does.
+	PerfProbe.begin("eco.step_ants")
 	_chunk_manager.step_ants(delta)
+	PerfProbe.end("eco.step_ants")
 	# Honeybee hives and wild bee nests (see docs/concept/bees.md) -- the
 	# same batched cadence ant mounds already step at, for the identical
 	# reason: population/forage economy moves over simulated days, not
 	# something that needs the fine per-time-lapse-slice cadence.
+	PerfProbe.begin("eco.step_bees")
 	_chunk_manager.step_bees(delta)
+	PerfProbe.end("eco.step_bees")
 	# Fallen-leaf litter ages/prunes on the same batched cadence ant mounds do
 	# (see EarthChunkManager.step_leaf_litter, docs/concept/leaf_litter.md).
+	PerfProbe.begin("eco.step_leaf_litter")
 	_chunk_manager.step_leaf_litter(delta)
+	PerfProbe.end("eco.step_leaf_litter")
 	# Footprint stamps age/prune on the same batched cadence (see
 	# EarthChunkManager.step_footprints, FootprintField.LIFETIME_SECONDS --
 	# far shorter than leaf litter's own, but nothing here needs a finer
 	# cadence than this batch already runs at).
+	PerfProbe.begin("eco.step_footprints")
 	_chunk_manager.step_footprints()
+	PerfProbe.end("eco.step_footprints")
+	PerfProbe.begin("eco.step_flowers")
 	_chunk_manager.step_flowers(delta)
+	PerfProbe.end("eco.step_flowers")
+	PerfProbe.begin("eco.step_desert_scrub")
 	_chunk_manager.step_desert_scrub(delta)
+	PerfProbe.end("eco.step_desert_scrub")
+	PerfProbe.begin("eco.step_tundra_lichen")
 	_chunk_manager.step_tundra_lichen(delta)
+	PerfProbe.end("eco.step_tundra_lichen")
 	# Every founded settlement is reassessed against its own food stock (see
 	# EarthChunkManager.step_settlements/SettlementState) -- population
 	# growth/decline pressure, throttled the same way tree spread is, so a
 	# real session actually produces settlement_growing/settlement_declining
 	# events without a console command.
+	PerfProbe.begin("eco.step_settlements")
 	_chunk_manager.step_settlements(delta)
+	PerfProbe.end("eco.step_settlements")
 	# NPCs sharing a real landmark on their real daily schedule exchange
 	# memories automatically (see EarthChunkManager.step_npc_encounters,
 	# docs/concept/npc.md "Memory, beliefs, and rumor propagation") -- the
 	# one gap that section itself named, now closed the same way
 	# step_settlements already is.
+	PerfProbe.begin("eco.step_npc_encounters")
 	_chunk_manager.step_npc_encounters(delta)
+	PerfProbe.end("eco.step_npc_encounters")
 	# A settlement's own real production shortfall (see
 	# EarthChunkManager.production_shortfall_quests_for_settlement, Phase
 	# 12) can be resupplied by the nearest other real settlement's genuine
@@ -3321,9 +3408,15 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	# accumulator shape as step_settlements above; delivery is now a real
 	# caravan trip (see step_caravans, docs/concept/trade.md), not an
 	# instant credit.
+	PerfProbe.begin("eco.step_regional_trade")
 	_chunk_manager.step_regional_trade(delta)
+	PerfProbe.end("eco.step_regional_trade")
+	PerfProbe.begin("eco._step_herbivore_food_consumption")
 	_step_herbivore_food_consumption(delta)
+	PerfProbe.end("eco._step_herbivore_food_consumption")
+	PerfProbe.begin("eco._step_reproduction")
 	_step_reproduction(delta)
+	PerfProbe.end("eco._step_reproduction")
 	# Quest fulfilment is DERIVED, never a separate mutator (see
 	# QuestLog.reconcile, docs/concept/karma_and_luck.md's "Quest lifecycle")
 	# -- runs last in this batch so it sees the freshest possible production/
@@ -3334,7 +3427,9 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	# call site guards it, same as _process already guards
 	# _step_pebble_dispersion/_step_leaf_litter_dispersion.
 	if focus_player != null:
+		PerfProbe.begin("eco._step_quest_reconciliation")
 		_step_quest_reconciliation(focus_player, delta)
+		PerfProbe.end("eco._step_quest_reconciliation")
 
 
 ## How often accepted quests are checked against the live projection they
@@ -4637,6 +4732,7 @@ func _on_peer_connected(peer_id: int) -> void:
 	var player := PlayerScene.instantiate()
 	player.name = str(peer_id)
 	player.position = _spawn_position_for_tile(await _compute_dry_land_spawn_tile())
+	print("[boot %.1fs] dry-land spawn tile computed (spawn-area chunks loaded)" % (Time.get_ticks_msec() / 1000.0))
 	player.respawn_position = player.position
 	_players.add_child(player)
 	# So its pack ages and, once something in it turns, smells (see
@@ -5513,36 +5609,76 @@ func _client_process(delta: float) -> void:
 
 	PerfProbe.begin("client.ui_updates")
 	var player_tile := local_player.current_tile()
+	PerfProbe.begin("ui._update_minimap")
 	_update_minimap(player_tile, delta)
+	PerfProbe.end("ui._update_minimap")
+	PerfProbe.begin("ui._update_inventory_window")
 	_update_inventory_window(local_player)
+	PerfProbe.end("ui._update_inventory_window")
+	PerfProbe.begin("ui._update_crafting_window")
 	_update_crafting_window(local_player)
+	PerfProbe.end("ui._update_crafting_window")
+	PerfProbe.begin("ui._update_player_health_bar")
 	_update_player_health_bar(local_player)
+	PerfProbe.end("ui._update_player_health_bar")
+	PerfProbe.begin("ui._update_hotbar")
 	_update_hotbar(local_player)
+	PerfProbe.end("ui._update_hotbar")
+	PerfProbe.begin("ui._update_creature_panels")
 	_update_creature_panels(local_player, delta)
+	PerfProbe.end("ui._update_creature_panels")
+	PerfProbe.begin("ui._maybe_play_creature_calls")
 	_maybe_play_creature_calls(local_player, delta)
+	PerfProbe.end("ui._maybe_play_creature_calls")
 	# Hover tooltip is throttled (~30 Hz): recomputing which of potentially
 	# thousands of hoverables is under the cursor every single frame was a top
 	# CPU cost. 30 Hz is imperceptible for a tooltip.
-	_hover_accumulator += delta
-	if _hover_accumulator >= HOVER_REFRESH_INTERVAL:
-		_hover_accumulator = 0.0
+	if _hover_rescan_due(delta, get_viewport().get_mouse_position()):
+		PerfProbe.begin("ui._update_hover_tooltip")
 		_update_hover_tooltip()
+		PerfProbe.end("ui._update_hover_tooltip")
+	PerfProbe.begin("ui._update_survival_bar")
 	_update_survival_bar(local_player)
+	PerfProbe.end("ui._update_survival_bar")
+	PerfProbe.begin("ui._update_xp_bar")
 	_update_xp_bar(local_player)
+	PerfProbe.end("ui._update_xp_bar")
+	PerfProbe.begin("ui._update_land_sense_label")
 	_update_land_sense_label(local_player)
+	PerfProbe.end("ui._update_land_sense_label")
+	PerfProbe.begin("ui._update_karma_display")
 	_update_karma_display(local_player)
+	PerfProbe.end("ui._update_karma_display")
+	PerfProbe.begin("ui._update_fishing_label")
 	_update_fishing_label(local_player)
+	PerfProbe.end("ui._update_fishing_label")
+	PerfProbe.begin("ui._update_lasso_label")
 	_update_lasso_label(local_player)
+	PerfProbe.end("ui._update_lasso_label")
+	PerfProbe.begin("ui._update_trade_label")
 	_update_trade_label(local_player)
+	PerfProbe.end("ui._update_trade_label")
+	PerfProbe.begin("ui._update_talk_label")
 	_update_talk_label(local_player)
+	PerfProbe.end("ui._update_talk_label")
+	PerfProbe.begin("ui._update_cast_label")
 	_update_cast_label(local_player)
+	PerfProbe.end("ui._update_cast_label")
 	# The banners keep their own text; the whole stack steps aside while a
 	# window is open (see world_hint_visible_for).
 	_message_stack.visible = world_hint_visible_for(true, _any_gameplay_window_open())
+	PerfProbe.begin("ui._maybe_update_interaction_prompt")
 	_maybe_update_interaction_prompt(local_player, delta)
+	PerfProbe.end("ui._maybe_update_interaction_prompt")
+	PerfProbe.begin("ui._update_charge_meter")
 	_update_charge_meter(local_player)
+	PerfProbe.end("ui._update_charge_meter")
+	PerfProbe.begin("ui._refresh_skill_window")
 	_refresh_skill_window(local_player)
+	PerfProbe.end("ui._refresh_skill_window")
+	PerfProbe.begin("ui._autosave_step")
 	_autosave_step(local_player, delta)
+	PerfProbe.end("ui._autosave_step")
 	PerfProbe.end("client.ui_updates")
 	var latitude := _geo_coordinates.latitude_for_tile(player_tile.y, EarthChunkGenerator.WORLD_HEIGHT_TILES)
 	var longitude := _geo_coordinates.longitude_for_tile(player_tile.x, EarthChunkGenerator.WORLD_WIDTH_TILES)
@@ -5848,6 +5984,19 @@ func _client_process(delta: float) -> void:
 	for creature in loaded_creature_markers:
 		PerfProbe.count_instance("crush.creature_loop.creatures")
 		var marker := creature as CreatureMarker
+		# A crush is a STEP event (FPS regression round 10, docs/concept/
+		# soil_fauna.md): seven neighbourhood scans per creature per frame,
+		# moved or not, measured live at ~26ms a frame -- the single largest
+		# cost inside World's own _process. A creature only crushes what is
+		# under a tile it has just moved onto, so one still standing on the
+		# tile it last crushed from skips every scan -- the same per-stepper
+		# "last tile" debounce _last_scar_step_tile gives the player's own
+		# path scarring. (The idempotency argument in the block comment above
+		# still holds; it just never made the redundant scans free.)
+		var creature_tile := _tile_for_position(marker.position)
+		if creature_tile == marker.last_crush_step_tile:
+			continue
+		marker.last_crush_step_tile = creature_tile
 		# Reads this creature's OWN real, live, unified mass (see
 		# docs/concept/metabolism.md) rather than a flat CreatureMass.
 		# mass_kg_for(species) lookup -- a real, well-fed deer now hits

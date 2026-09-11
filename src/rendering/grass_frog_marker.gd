@@ -133,7 +133,17 @@ func get_display_name() -> String:
 ## own _lod_step), so waiting for a follow-up call to actually move would
 ## let a slow-ticking frog schedule hop after hop while never once visibly
 ## moving, each one instantly stale before its next tick ever arrives.
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(delta: float) -> void:
+	PerfProbe.begin("grass_frog._process")
+	PerfProbe.count_instance("grass_frog (live)")
+	_process_impl(delta)
+	PerfProbe.end("grass_frog._process")
+
+
+func _process_impl(delta: float) -> void:
 	_elapsed_time += delta
 	_last_moved = Vector2.ZERO
 	if _is_hopping():

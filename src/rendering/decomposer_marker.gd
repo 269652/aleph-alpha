@@ -47,6 +47,7 @@ const Carcass = preload("res://src/rendering/carcass.gd")
 const CarcassGuts = preload("res://src/rendering/carcass_guts.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const SimulationLodClock = preload("res://src/gameplay/simulation_lod_clock.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
@@ -325,7 +326,7 @@ func _update_sprite(moved: Vector2) -> void:
 		_sprite.flip_h = false
 
 
-var _lod_accumulated := 0.0
+var _lod_clock := SimulationLodClock.new()
 
 ## Distance-based update rate (see SimulationLod) -- mirrors CreatureMarker/
 ## AmbientFlyerMarker's own _lod_step exactly. Without this, the SEEKING
@@ -344,20 +345,12 @@ var _lod_accumulated := 0.0
 ## lives at exactly the same rate, it just does so in fewer, larger steps
 ## that nobody is close enough to see.
 func _lod_step(delta: float) -> float:
-	_lod_accumulated += delta
+	if not _lod_clock.tick(delta):
+		return -1.0
 	var player = _nearest_player_position()
 	if player == null:
-		return _take_lod_step()  # nobody to be far from: always full rate
-	var interval := SimulationLod.update_interval(position.distance_to(player))
-	if _lod_accumulated < interval:
-		return -1.0
-	return _take_lod_step()
-
-
-func _take_lod_step() -> float:
-	var step := _lod_accumulated
-	_lod_accumulated = 0.0
-	return step
+		return _lod_clock.take_full_rate_step()  # nobody to be far from: always full rate
+	return _lod_clock.take_step(position.distance_to(player))
 
 
 ## Applies the real effect `species_id` causes (see MushroomEffect.

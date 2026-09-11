@@ -134,6 +134,30 @@ func _count_occurrences(haystack: String, needle: String) -> int:
 ## in the group" shape -- BOTH creature crush calls must sit inside a real
 ## loop over CreatureMarker.GROUP_NAME, not just be textually present
 ## somewhere in the function.
+## FPS regression round 10 (docs/concept/soil_fauna.md): this loop used to run
+## all seven crush scans for EVERY creature EVERY frame, moved or not -- 28
+## creatures x 7 neighbourhood scans, measured live at ~26ms per frame, the
+## single largest cost inside World's own _process. A crush is a STEP event:
+## a creature only crushes what is under a tile it has just moved onto, so
+## the loop skips any creature still standing on the tile it last crushed
+## from (CreatureMarker.last_crush_step_tile -- the same per-stepper "last
+## tile" debounce _last_scar_step_tile already gives the player's own path
+## scarring). The player's own crush block above is deliberately untouched.
+func test_a_creature_only_crushes_when_it_has_stepped_onto_a_new_tile():
+	var body := _client_process_body()
+	var group_loop_at := body.rfind("for creature in loaded_creature_markers:")
+	var first_scan_at := body.find("crush_worm_at(", group_loop_at)
+	var guard_at := body.find("if creature_tile == marker.last_crush_step_tile:", group_loop_at)
+	assert_gt(guard_at, -1, "the loop must debounce on the creature's own last crush tile")
+	assert_lt(guard_at, first_scan_at, "the debounce must come before the first crush scan")
+	var skip_at := body.find("continue", guard_at)
+	assert_gt(skip_at, -1)
+	assert_lt(skip_at, first_scan_at, "a creature still on its last crush tile skips every scan")
+	var record_at := body.find("marker.last_crush_step_tile = creature_tile", guard_at)
+	assert_gt(record_at, -1, "the tile it stepped onto becomes its last crush tile")
+	assert_lt(record_at, first_scan_at)
+
+
 func test_the_creature_crush_calls_are_inside_a_creaturemarker_group_loop():
 	var body := _client_process_body()
 	# The scene-tree group lookup itself is now fetched once, cached as

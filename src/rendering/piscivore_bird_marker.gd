@@ -26,6 +26,7 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const FlapGlide = preload("res://src/rendering/flap_glide.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+const SimulationLodClock = preload("res://src/gameplay/simulation_lod_clock.gd")
 
 ## How far below cruise altitude the sprite visibly drops at the bottom of a
 ## dive -- a simple vertical offset "descent" (a kingfisher dives essentially
@@ -61,7 +62,7 @@ var _movement: AmbientFlyerMovement
 var _behavior := PiscivoreBirdBehavior.new()
 var _elapsed_time := 0.0
 var _dive_attempts := 0
-var _lod_accumulated := 0.0
+var _lod_clock := SimulationLodClock.new()
 var _cached_player: Node = null
 ## The fish currently in this bird's beak, shown while it carries its catch.
 var _carried_fish: Sprite2D = null
@@ -113,20 +114,12 @@ func get_display_name() -> String:
 ## to advance by when this frame should actually process, or NEGATIVE when
 ## it should be skipped (accumulated, not lost).
 func _lod_step(delta: float) -> float:
-	_lod_accumulated += delta
+	if not _lod_clock.tick(delta):
+		return -1.0
 	var player = _nearest_player_position()
 	if player == null:
-		return _take_lod_step()  # nobody to be far from: always full rate
-	var interval := SimulationLod.update_interval(position.distance_to(player))
-	if _lod_accumulated < interval:
-		return -1.0
-	return _take_lod_step()
-
-
-func _take_lod_step() -> float:
-	var step := _lod_accumulated
-	_lod_accumulated = 0.0
-	return step
+		return _lod_clock.take_full_rate_step()  # nobody to be far from: always full rate
+	return _lod_clock.take_step(position.distance_to(player))
 
 
 func _nearest_player_position():

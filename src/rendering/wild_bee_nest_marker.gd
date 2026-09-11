@@ -65,7 +65,17 @@ func _ready() -> void:
 ## purely so a caller/test can invoke _process directly without a
 ## "nonexistent function" engine error -- GDScript's virtual dispatch
 ## only resolves a direct call against what the SCRIPT itself defines.
+const PerfProbe = preload("res://src/rendering/perf_probe.gd")
+
+
 func _process(_delta: float) -> void:
+	PerfProbe.begin("wild_bee_nest._process")
+	PerfProbe.count_instance("wild_bee_nest (live)")
+	_process_impl(_delta)
+	PerfProbe.end("wild_bee_nest._process")
+
+
+func _process_impl(_delta: float) -> void:
 	pass
 
 
