@@ -795,13 +795,14 @@ func test_a_second_flee_episode_does_not_reuse_a_stale_heading_from_the_first():
 	assert_lt(marker.position.x, 100.0, "first episode: should have fled west, away from the eastern threat")
 	assert_gt(marker._flee_commit_remaining, 0.0, "commit window should still be running, not expired")
 
-	# Far enough to leave SENSE_RADIUS (which ends the flee episode -- the
-	# point of this step) but still inside SimulationLod.FULL_RATE_RADIUS_PX,
-	# so the creature keeps updating every frame. Teleporting the player to
-	# the far side of the world also parked this creature at the lowest
-	# update rate, which is correct behaviour and simply not what this test
-	# is about.
-	player.position = marker.position + Vector2(300, 0)  # threat leaves sense range
+	# Far enough to leave SENSE_RADIUS and FLEE_RELEASE_RADIUS (which ends
+	# the flee episode -- the point of this step) but still inside
+	# SimulationLod.FULL_RATE_RADIUS_PX (200 px since round 13; this used to
+	# be 300 px against a 420 px radius), so the creature keeps updating
+	# every frame. Teleporting the player to the far side of the world also
+	# parked this creature at the lowest update rate, which is correct
+	# behaviour and simply not what this test is about.
+	player.position = marker.position + Vector2(160, 0)  # threat leaves sense range
 	marker._process(0.3)
 
 	# New threat WEST of the creature's current (already-fled-west) position

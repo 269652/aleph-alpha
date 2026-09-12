@@ -65,3 +65,40 @@ func test_the_full_rate_radius_covers_more_than_the_visible_screen():
 
 
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
+
+
+## FPS regression round 13 (docs/concept/soil_fauna.md): the full-rate set
+## was ~5x the visible area -- 420 px against a 184 px half-diagonal at the
+## design zoom -- so ~105 creatures stepped every frame for a screen that
+## shows a fraction of them. Full rate must cover the screen (the pin above)
+## and not much more: a quarter's margin past the half-diagonal, so a
+## creature stepping onto the screen is already at full rate.
+func test_the_full_rate_radius_stays_close_to_the_visible_screen():
+	var half_width_px := DisplayScaling.visible_tiles_across(1280.0, 720.0) * 0.5 * 16.0
+	var half_height_px := half_width_px * 720.0 / 1280.0
+	var half_diagonal_px := sqrt(half_width_px * half_width_px + half_height_px * half_height_px)
+	assert_lte(
+		SimulationLod.FULL_RATE_RADIUS_PX, half_diagonal_px * 1.25,
+		"the full-rate radius must not reach far beyond what the camera shows"
+	)
+
+
+## The far population is the real cost: ~1,800 parked creatures each woken
+## every MAX_INTERVAL_SECONDS is a per-frame wake count that no frame rate
+## changes (the interval is enforced in frames). At 0.5 s that was ~60 full
+## steps a frame, ~30 ms of any frame. The budget: the far population must
+## cost at most fifteen wakes a frame.
+func test_far_wakes_stay_within_a_per_frame_budget():
+	var parked_population := 1800
+	var far_frames := SimulationLod.frames_between_updates(
+		SimulationLod.FULL_RATE_RADIUS_PX + SimulationLod.FALLOFF_PX
+	)
+	assert_lte(
+		float(parked_population) / float(far_frames), 15.0,
+		"far wakes per frame at the reference frame rate"
+	)
+
+
+func test_the_far_interval_is_exactly_pinned():
+	assert_eq(SimulationLod.MAX_INTERVAL_SECONDS, 2.0)
+	assert_eq(SimulationLod.FULL_RATE_RADIUS_PX, 200.0)

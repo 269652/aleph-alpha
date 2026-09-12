@@ -4981,6 +4981,11 @@ func _process(delta: float) -> void:
 	var perf_started := Time.get_ticks_usec()
 	if _perf_report != null:
 		_perf_report.mark_frame_start(perf_started)
+	var focus_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	# The proximity sweep (SimulationScheduler.WAKE_RADIUS_PX) wakes parked
+	# creatures the local player walks up to; null before anyone has spawned,
+	# so nothing is woken for no one.
+	_simulation_scheduler.set_focus_position(focus_player.position if focus_player != null else null)
 	_simulation_scheduler.advance(delta)
 	# --perf-report only (null otherwise): the scheduler's whole creature pass
 	# is one section, World's own ecology steps and the client pass below are
@@ -5001,7 +5006,6 @@ func _process(delta: float) -> void:
 	# gated behind _owns_ecosystem_simulation() like the simulation steps
 	# below (a visual effect, not shared world state).
 	_chunk_manager.step_water_disturbances(delta)
-	var focus_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 	# Grass parting under a walker is the SAME kind of purely-cosmetic,
 	# per-client-only effect as the water disturbances above -- it was
 	# previously gated behind _owns_ecosystem_simulation(), which is false for

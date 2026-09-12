@@ -48,7 +48,7 @@ func test_frames_between_updates_is_the_seconds_interval_at_the_reference_frame_
 	assert_eq(SimulationLod.frames_between_updates(0.0), 1, "on screen: every frame")
 	var far_frames: int = SimulationLod.frames_between_updates(FAR_PX)
 	assert_eq(far_frames, roundi(SimulationLod.MAX_INTERVAL_SECONDS * SimulationLod.REFERENCE_FPS))
-	assert_eq(far_frames, 30, "0.5s at 60fps is thirty frames -- pinned so the size of the saving stays visible")
+	assert_eq(far_frames, 120, "2s at 60fps is 120 frames (round 13; was 30) -- pinned so the size of the saving stays visible")
 
 
 func test_frames_between_updates_never_shortens_with_distance():
@@ -64,13 +64,14 @@ func test_at_the_reference_frame_rate_a_distant_creature_updates_exactly_as_befo
 	# update on the first frame the accumulated seconds reach the interval,
 	# hand over everything accumulated. Frame for frame, the clock must be
 	# indistinguishable from it at the reference rate -- including the
-	# floating-point detail that 30 x (1/60) lands just short of 0.5.
+	# floating-point detail that 120 x (1/60) lands just short of 2.
 	var interval := SimulationLod.update_interval(FAR_PX)
 	var seconds_only_accumulated := 0.0
 	var seconds_only_steps: Array[float] = []
 	var clock = SimulationLodClock.new()
 	var clock_steps: Array[float] = []
-	for frame in 300:
+	var ten_intervals := roundi(SimulationLod.MAX_INTERVAL_SECONDS * SimulationLod.REFERENCE_FPS * 10.0)
+	for frame in ten_intervals:
 		seconds_only_accumulated += REFERENCE_FRAME
 		if seconds_only_accumulated >= interval:
 			seconds_only_steps.append(seconds_only_accumulated)
@@ -79,37 +80,41 @@ func test_at_the_reference_frame_rate_a_distant_creature_updates_exactly_as_befo
 			var step: float = clock.take_step(FAR_PX)
 			if step >= 0.0:
 				clock_steps.append(step)
-	assert_gt(seconds_only_steps.size(), 5, "the premise: several updates over five seconds")
+	assert_gt(seconds_only_steps.size(), 5, "the premise: several updates over ten far intervals")
 	assert_eq(clock_steps.size(), seconds_only_steps.size(), "the same number of updates as the seconds-only gate")
 	for i in clock_steps.size():
 		assert_almost_eq(clock_steps[i], seconds_only_steps[i], 0.0001, "update %d must hand over the same time" % i)
 
 
 func test_above_the_reference_frame_rate_the_seconds_gate_still_rules():
-	# 150 frames at 144fps: the frame gate opens after 30 frames (0.21s), but
-	# the creature still waits out its full 0.5s -- never MORE updates than
-	# the seconds interval alone ever allowed.
-	var steps := _updates_over(SimulationLodClock.new(), 150, 1.0 / 144.0, FAR_PX)
+	# Two far intervals plus a little at 144fps: the frame gate opens after
+	# 120 frames (0.83s), but the creature still waits out its full 2s --
+	# never MORE updates than the seconds interval alone ever allowed.
+	var frames := roundi(SimulationLod.MAX_INTERVAL_SECONDS * 144.0 * 2.0) + 10
+	var steps := _updates_over(SimulationLodClock.new(), frames, 1.0 / 144.0, FAR_PX)
 	assert_eq(steps.size(), 2)
 
 
 func test_a_slow_frame_rate_does_not_update_a_distant_creature_more_often_per_frame():
-	# 60 frames at 4fps. The seconds gate alone would fire every second
-	# frame (30 updates); the frame gate holds it to the same per-frame
-	# share the reference rate gets: once every thirty frames.
-	var steps := _updates_over(SimulationLodClock.new(), 60, SLOW_FRAME, FAR_PX)
+	# Two far intervals' worth of frames at 4fps. The seconds gate alone
+	# would fire every eighth frame (30 updates over 240 frames); the frame
+	# gate holds it to the same per-frame share the reference rate gets:
+	# once every 120 frames -- the first at frame 8, the second at 128.
+	var far_frames := SimulationLod.frames_between_updates(FAR_PX)
+	var steps := _updates_over(SimulationLodClock.new(), 2 * far_frames, SLOW_FRAME, FAR_PX)
 	assert_eq(steps.size(), 2)
 
 
 func test_a_skipped_stretch_is_never_handed_over_as_one_giant_step():
 	# The clock starts open, so the first update lands as soon as the seconds
-	# interval is reached (frame 2 at 4fps); it is the SECOND update that
-	# follows a full thirty-frame skip -- 7.5 real seconds.
-	var steps := _updates_over(SimulationLodClock.new(), 32, SLOW_FRAME, FAR_PX)
+	# interval is reached (frame 8 at 4fps); it is the SECOND update that
+	# follows a full far-interval skip -- 120 frames, 30 real seconds.
+	var far_frames := SimulationLod.frames_between_updates(FAR_PX)
+	var steps := _updates_over(SimulationLodClock.new(), far_frames + 8, SLOW_FRAME, FAR_PX)
 	assert_eq(steps.size(), 2)
 	assert_almost_eq(
 		steps[1], SimulationLod.update_interval(FAR_PX) + SLOW_FRAME, 0.0001,
-		"7.5 real seconds were skipped, but the creature simulates at most its own interval plus one frame -- the most the seconds-only gate ever handed over"
+		"30 real seconds were skipped, but the creature simulates at most its own interval plus one frame -- the most the seconds-only gate ever handed over"
 	)
 
 
@@ -126,14 +131,14 @@ func test_a_creature_on_screen_still_gets_every_frames_full_delta():
 
 func test_a_creature_that_came_close_is_back_to_every_frame_after_its_next_update():
 	var clock = SimulationLodClock.new()
-	_updates_over(clock, 30, SLOW_FRAME, FAR_PX)  # one far update; its next skip is thirty frames
+	_updates_over(clock, 30, SLOW_FRAME, FAR_PX)  # one far update (frame 8); its next skip is a full far interval
 	# Distance is only re-read when the frame gate opens (that is exactly
 	# what makes a skipped frame cheap), so the creature finishes the skip
 	# it already committed to -- and then, being close, steps every frame.
 	var skipped := 0
 	while not clock.tick(SLOW_FRAME):
 		skipped += 1
-		assert_lt(skipped, 60, "the gate must reopen within one far skip")
+		assert_lt(skipped, SimulationLod.frames_between_updates(FAR_PX) + 1, "the gate must reopen within one far skip")
 	assert_almost_eq(clock.take_step(0.0), SLOW_FRAME, 0.0001)
 	for frame in 3:
 		assert_true(clock.tick(SLOW_FRAME))

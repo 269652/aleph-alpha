@@ -40,8 +40,27 @@ extends RefCounted
 
 static var _current = null
 
+const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
+
+## The proximity sweep (FPS regression round 13). With
+## SimulationLod.MAX_INTERVAL_SECONDS at two seconds a parked creature could
+## sit frozen for two seconds after the player walked up to it. So every
+## frame the scheduler looks at the parked buckets whose due frame is
+## congruent to this frame modulo PARKED_SWEEP_FRAMES -- each bucket exactly
+## once per sweep, never this frame's own -- and any marker now within
+## WAKE_RADIUS_PX of the focus (the local player) is moved into this
+## frame's bucket, where the ordinary wake path (resume with the real time
+## it waited, then a step at its new, near distance) takes it in hand. A
+## bounded cost (a tenth of the wheel per frame, one distance each) for a
+## bounded reaction lag (at most PARKED_SWEEP_FRAMES frames). Without a
+## focus nothing is swept: no player, nobody to be near.
+const WAKE_RADIUS_PX := SimulationLod.FULL_RATE_RADIUS_PX * 1.5
+const PARKED_SWEEP_FRAMES := 10
+
 var _frame := 0
 var _elapsed_seconds := 0.0
+## Vector2 of the local player, or null when nobody is there to be near.
+var _focus = null
 ## Instance id -> marker, for everything currently stepped every frame: near
 ## markers, and woken ones until their own next real step re-places them.
 var _in_hand: Dictionary = {}
@@ -116,6 +135,7 @@ func advance(delta: float) -> void:
 	_frame += 1
 	var elapsed_before_this_frame := _elapsed_seconds
 	_elapsed_seconds += delta
+	_sweep_parked()
 	if _due.has(_frame):
 		var bucket: Array = _due[_frame]
 		_due.erase(_frame)
@@ -153,6 +173,39 @@ func advance(delta: float) -> void:
 
 static func _alive(marker) -> bool:
 	return is_instance_valid(marker) and not marker.is_queued_for_deletion()
+
+
+## Where the local player is this frame (Vector2), or null.
+func set_focus_position(position) -> void:
+	_focus = position
+
+
+func _sweep_parked() -> void:
+	if _focus == null or _due.is_empty():
+		return
+	var slice := _frame % PARKED_SWEEP_FRAMES
+	var woken: Array = []
+	for due_frame in _due.keys():
+		if due_frame == _frame or due_frame % PARKED_SWEEP_FRAMES != slice:
+			continue
+		var bucket: Array = _due[due_frame]
+		var kept: Array = []
+		for entry in bucket:
+			var marker = entry[0]
+			if _alive(marker) and marker is Node2D and _focus.distance_to(marker.position) <= WAKE_RADIUS_PX:
+				woken.append(entry)
+			else:
+				kept.append(entry)
+		if kept.size() != bucket.size():
+			if kept.is_empty():
+				_due.erase(due_frame)
+			else:
+				_due[due_frame] = kept
+	if woken.is_empty():
+		return
+	if not _due.has(_frame):
+		_due[_frame] = []
+	_due[_frame].append_array(woken)
 
 
 ## How many markers are stepped every frame right now (near, or woken and

@@ -2705,7 +2705,7 @@ func _player_at(at: Vector2, parent: Node2D) -> Node2D:
 
 
 ## Close enough that SimulationLod runs the pair at full rate
-## (FULL_RATE_RADIUS_PX is 420), far enough that neither butterfly reacts to
+## (FULL_RATE_RADIUS_PX is 200 since round 13), far enough that neither butterfly reacts to
 ## the player at all (FlyerPersonality / SpiralFlight.NOTICE_RADIUS_PX is
 ## about 50). This used to stand the player ON one of the pair, which stopped
 ## being a neutral place to put them the moment butterflies started noticing
@@ -2715,7 +2715,7 @@ func _player_at(at: Vector2, parent: Node2D) -> Node2D:
 func test_a_pair_right_next_to_the_player_still_whirls():
 	var parent := Node2D.new()
 	add_child_autofree(parent)
-	_player_at(Vector2(100, 400), parent)
+	_player_at(Vector2(100, 250), parent)  # 150 px off: full rate, out of notice range
 	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
 	var b := _flyer_in_tree("monarch", Vector2(124, 100), parent)
 	a._courting_cooldown = Courtship.COOLDOWN_SECONDS

@@ -47,6 +47,15 @@ func test_process_advances_the_scheduler_once_per_frame_before_any_creature_step
 	assert_eq(body.count("_simulation_scheduler.advance("), 1, "exactly once per frame")
 
 
+## The proximity sweep (round 13) needs to know where the local player is,
+## every frame, before the wheel is advanced.
+func test_process_hands_the_scheduler_the_local_players_position_before_advancing():
+	var body := _body_of("_process")
+	var focus_at := body.find("_simulation_scheduler.set_focus_position(")
+	assert_gt(focus_at, -1, "the sweep wakes parked creatures the player walks up to")
+	assert_lt(focus_at, body.find("_simulation_scheduler.advance(delta)"), "set before the sweep runs")
+
+
 func test_the_scheduler_is_withdrawn_when_the_world_goes_away():
 	var body := _body_of("_notification")
 	assert_true(

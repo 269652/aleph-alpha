@@ -1652,10 +1652,18 @@ Two consequences, both deliberate:
   update, not the next frame.** Its distance is re-read only when its frame
   gate opens — that is what makes a skipped frame cost two additions and an
   integer compare instead of a player lookup and a distance — so the
-  reaction lag is at most its previous skip (≤ 0.5 s at 60 fps, and that
-  only beyond 1,300 px, well off screen). A player closing that distance on
+  reaction lag is at most its previous skip (≤ 2 s, and that only beyond
+  ~1,100 px, well off screen). A player closing that distance on
   foot takes seconds, over which the skip shrinks to two frames; only a
-  teleport can arrive inside one skip.
+  teleport can arrive inside one skip. **Since round 13 a walk-up is caught
+  sooner than that:** every frame the scheduler sweeps one tenth of the
+  parked wheel (`SimulationScheduler.PARKED_SWEEP_FRAMES`) and wakes
+  anything now within `WAKE_RADIUS_PX` (1.5× the full-rate radius) of the
+  local player, so the lag is at most ten frames however long the nap was.
+  The full-rate radius itself is 200 px (was 420) and the far interval two
+  seconds (was 0.5): round 13 measured ~105 creatures at full rate for a
+  screen showing a fraction of them, and ~60 far wakes every frame at any
+  frame rate -- see `soil_fauna.md` "FPS regression round 13".
 
 **A distant creature does not receive `_process` at all while it waits**
 (`src/gameplay/simulation_scheduler.gd`, FPS regression round 11). The
