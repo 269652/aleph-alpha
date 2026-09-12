@@ -8257,10 +8257,14 @@ func test_step_leaf_litter_refills_once_the_player_walks_close_enough_to_see_a_l
 ## whether or not you're watching" pillar, and README's identical framing):
 ## a chunk that never decorates at all -- so step_leaf_litter never even
 ## calls fill, let alone leaves_in_view -- must still age its own real leaf
-## litter exactly as if it were on screen. field.advance() runs
-## UNCONDITIONALLY at the top of the per-chunk loop, before the _decorates
-## gate is even read; this proves it with LIFETIME pruning, an unambiguous
-## real state change nothing about rendering could fake.
+## litter. Since FPS regression round 11 (EarthChunkManager.FAR_CHUNK_
+## ADVANCE_SECONDS, see docs/concept/leaf_litter.md) it does so in fewer,
+## larger steps rather than every frame: field.advance() runs for an
+## off-screen chunk once its accumulated time reaches the interval, handing
+## ALL of it over -- so nothing is ever lost, it just arrives at most a
+## second late. This proves it with LIFETIME pruning, an unambiguous real
+## state change nothing about rendering could fake -- and pins the deferral
+## too, so the gate cannot quietly become "every frame" again.
 func test_step_leaf_litter_still_advances_an_off_screen_chunks_simulation():
 	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
 	manager._load_chunk(chunk_coord)
@@ -8274,8 +8278,12 @@ func test_step_leaf_litter_still_advances_an_off_screen_chunks_simulation():
 
 	manager.set_world_age_seconds(LeafLitterField.LIFETIME + 1.0)
 	manager.step_leaf_litter(0.016)
+	assert_eq(field.leaves().size(), 1, "off-screen, one frame is not yet a full far interval: the aging is pending, not skipped")
+	# Four quarter-second steps sum to exactly the interval in binary.
+	for i in 4:
+		manager.step_leaf_litter(0.25)
 
-	assert_eq(field.leaves().size(), 0, "a leaf past LIFETIME must still be pruned even while off-screen")
+	assert_eq(field.leaves().size(), 0, "a leaf past LIFETIME must still be pruned even while off-screen, within one far interval")
 
 
 ## Scouting now (see docs/concept/soil_fauna.md "Scouting: real search, not
