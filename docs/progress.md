@@ -13380,9 +13380,36 @@ intermediate "loaded, undecided" state at all.
   `enchant`/`instruct` unwired against its own executor in its first pass,
   rather than risk regressing a system with 20+ existing tests for a
   rewrite nobody asked for this pass.
-- ⬜ **Release does not respawn a live creature** — it only empties the net
-  with a message. Symmetrical and arguably more honest physically, but not
-  asked for and not built.
+- ✅ **(2026-09-12) "Give it back": release respawns a real, newly wary
+  individual.** `EarthChunkManager.release_captive(species, pixel_position)`
+  branches on the same two rosters every other spawn path in the file
+  already keys off (`FishRenderer.SPECIES_POOL` vs `AmbientFlyerRenderer`'s
+  bird/butterfly pools), never a third species list. A fish only goes back
+  where `fish_capacity_at(chunk_coord) > 0.0` says there is real water
+  (dry land refuses silently), restoring the region's aggregate through
+  `seed_fish_population` — the exact inverse of `record_catch`. A flyer/bird
+  goes back into the loaded chunk's own `_loaded_ambient_flyers` bucket via
+  `build_flyer`/`build_bird`. `Player._release_net` calls this right after
+  its existing `free(from: bag)` effect, with the species read before that
+  effect clears `Item.captive_species`. Honest, not a resurrection: the
+  original individual was already `queue_free`'d the instant it was
+  confined (`_attempt_net_catch`), so what comes back is a new individual
+  of the same species — and a genuinely warier one, via
+  `FlyerPersonality.boldness_after_release` (pinned
+  `RELEASE_BOLDNESS_PENALTY := 0.2`, grounded in real post-handling
+  flight-initiation-distance literature, tested at its clamp boundaries
+  rather than at the raw number). A fish has no personality trait to sour,
+  so only the flyer/bird branch touches boldness. See
+  `docs/concept/capture_dsl.md`'s "Release: a warier individual comes back"
+  section for the full mechanism and grounding. Tests:
+  `tests/unit/test_earth_chunk_manager.gd`
+  (`test_releasing_a_flyer_spawns_a_live_marker_in_the_flock_group`,
+  `test_releasing_a_fish_onto_dry_land_does_nothing`,
+  `test_releasing_a_fish_where_there_is_water_restores_its_population`),
+  `tests/unit/test_flyer_personality.gd` (three tests pinning
+  `boldness_after_release` at its clamp boundaries), and
+  `tests/unit/test_player.gd`
+  (`test_releasing_a_loaded_net_puts_a_live_flyer_back_in_the_world`).
 - ✅ **Update (same day):** reported "give the player a glass bottle and
   butterfly net from the start" — `Player._ready()`'s existing hardcoded
   starting-kit grant (sword equipped, axe, two leather pieces, fishing
