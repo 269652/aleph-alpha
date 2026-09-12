@@ -3526,7 +3526,7 @@ func _on_console_command(command: String, args: Array) -> void:
 					+ "  /institution <entity_id>  /settlement <entity_id>  /boss <entity_id>"
 					+ "  /quests <entity_id>  /emergence"
 					+ "  /spawn <species> [count]  /give <item_id> [count]"
-					+ "  /craft <recipe_id>  /gold <amount>  /village  /species  /help"
+					+ "  /craft <recipe_id>  /gold <amount>  /village  /river  /species  /help"
 					+ "  /compass  /map  /weatherglass  /almanac  /deed"
 					+ "  /ledger propose|accept|fulfill|breach ...  /charter found <type> <counterparty_id>"
 					+ "  /journal <entity_id>  /flowdebug [strokes|off]  /intro"
@@ -3607,6 +3607,8 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_gold_command(args, local_player)
 		"village":
 			_handle_village_command(local_player)
+		"river":
+			_handle_river_command(local_player)
 		"compass":
 			_handle_compass_command(local_player)
 		"map":
@@ -4127,6 +4129,36 @@ func _handle_village_command(local_player: Player) -> void:
 
 	local_player.position = destination
 	_dev_console.log_line("Teleported to the nearest village.")
+
+
+## /river -- teleports to a random point on a random curated river, reusing
+## the exact machinery a new game's own spawn already uses (docs/concept/
+## rivers.md "Spawn: a random curated river"): SpawnRiverPicker draws a
+## river and an interior course point, World's own _spawn_candidate_
+## acceptable filters it (real river tile, between sea and mountain, no
+## colder than the old Berlin spawn climate), and _find_dry_land_spawn
+## nudges to the nearest dry bank tile so the teleport doesn't drop the
+## player straight into the current. A fresh, randomized RNG every call --
+## unlike the spawn's own seeded one, a console command run twice should
+## not always land in the same place.
+func _handle_river_command(local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to teleport.")
+		return
+
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var pick: Dictionary = SpawnRiverPicker.pick(
+		RiverCatalog.tile_polylines(EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES),
+		rng, _spawn_candidate_acceptable, SPAWN_PICK_ATTEMPTS
+	)
+	if pick.is_empty():
+		_dev_console.log_line("No river bank turned up in range -- try again.")
+		return
+
+	var bank_tile := _find_dry_land_spawn(pick["tile"])
+	local_player.position = _spawn_position_for_tile(bank_tile)
+	_dev_console.log_line("Teleported to the %s." % pick["river"])
 
 
 ## /rolld20 (docs/concept/easter_eggs.md's d20 Easter egg, undocumented on

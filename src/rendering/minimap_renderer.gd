@@ -29,6 +29,14 @@ var _last_built_image: Image
 const RIVER_MEMO_TILE_CAP := 250_000
 var _river_memo := {}
 
+## Same memo, same cap, for lakes (see is_lake_at_global below). Reported
+## live: "there's a giant river on the map but not on the minimap" -- the
+## ground itself renders a river and a lake as the same unified water
+## surface (docs/concept/hydrology.md), but this file only ever asked
+## is_river_at_global, so a baked lake painted nothing here and showed as
+## whatever land biome sat under it instead.
+var _lake_memo := {}
+
 
 func build_image(biome_source, center_tile: Vector2i) -> Image:
 	if _has_built_before and center_tile == _last_built_tile:
@@ -40,6 +48,9 @@ func build_image(biome_source, center_tile: Vector2i) -> Image:
 	# minimap"). The lookup stays optional -- build_image is duck-typed on
 	# purpose, and plenty of sources (tests, tools) carry only biomes.
 	var knows_rivers: bool = biome_source.has_method("is_river_at_global")
+	# Lakes ride the same unified water surface as rivers on the ground, so
+	# they read as water here too, the same duck-typed-optional way.
+	var knows_lakes: bool = biome_source.has_method("is_lake_at_global")
 	var water_color: Color = TerrainRenderer.BIOME_COLORS["ocean"]
 
 	# FORMAT_RGBA8 packs 4 bytes per pixel, R/G/B/A in that order, row-major --
@@ -56,13 +67,22 @@ func build_image(biome_source, center_tile: Vector2i) -> Image:
 			var global_x := center_tile.x - SAMPLE_RADIUS_TILES + local_x
 			var biome_name: String = biome_source.biome_at_global(global_x, global_y)
 			var color := _color_for_biome(biome_name)
-			if knows_rivers:
+			if knows_rivers or knows_lakes:
 				var tile := Vector2i(global_x, global_y)
-				var is_river = _river_memo.get(tile)
-				if is_river == null:
-					is_river = biome_source.is_river_at_global(global_x, global_y)
-					_river_memo[tile] = is_river
-				if is_river:
+				var is_water := false
+				if knows_rivers:
+					var is_river = _river_memo.get(tile)
+					if is_river == null:
+						is_river = biome_source.is_river_at_global(global_x, global_y)
+						_river_memo[tile] = is_river
+					is_water = is_river
+				if not is_water and knows_lakes:
+					var is_lake = _lake_memo.get(tile)
+					if is_lake == null:
+						is_lake = biome_source.is_lake_at_global(global_x, global_y)
+						_lake_memo[tile] = is_lake
+					is_water = is_lake
+				if is_water:
 					color = water_color
 			var idx := (row_offset + local_x) * 4
 			bytes[idx] = _channel_byte(color.r)
@@ -72,6 +92,8 @@ func build_image(biome_source, center_tile: Vector2i) -> Image:
 
 	if _river_memo.size() > RIVER_MEMO_TILE_CAP:
 		_river_memo.clear()
+	if _lake_memo.size() > RIVER_MEMO_TILE_CAP:
+		_lake_memo.clear()
 
 	var image := Image.create_from_data(size, size, false, Image.FORMAT_RGBA8, bytes)
 
