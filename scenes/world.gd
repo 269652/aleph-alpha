@@ -6138,6 +6138,15 @@ func _update_torch_glow(local_player: Player) -> void:
 		add_child(_torch_glow_mesh)
 	var equipped := local_player.equipped_item
 	var lit := equipped != null and TorchGlow.is_lit_item_id(equipped.id)
+	if lit:
+		# Storm Lantern (docs/concept/lighting.md): a bare torch is doused
+		# by real rain/storm weather; the lantern is the weatherproof
+		# upgrade that stays lit through the same weather. current_weather
+		# is already called this cheaply/deterministically multiple other
+		# times per frame nearby (season/debug-label/river-flow), so this
+		# is not a new scan.
+		var weather := _chunk_manager.current_weather(local_player.position)
+		lit = not TorchGlow.is_extinguished_by_weather(equipped.id, weather)
 	_torch_glow_mesh.visible = lit
 	if lit:
 		_torch_glow_mesh.global_position = local_player.global_position

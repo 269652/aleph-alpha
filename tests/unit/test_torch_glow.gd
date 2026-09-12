@@ -93,3 +93,37 @@ func test_material_is_built_once_and_cached():
 	var second := glow.material()
 	assert_eq(first, second)
 	assert_eq(first.shader.code, TorchGlow.SHADER_CODE)
+
+
+## Storm Lantern (docs/concept/lighting.md): a bare torch is an open flame
+## and gets doused by real weather, but the whole point of a weatherproof
+## second light source is that IT does not. Kept as its own pure static
+## function (rather than folded into is_lit_item_id, which means "equipped
+## and it glows") so the two concerns -- "is this a light source" vs. "does
+## weather turn this particular one off" -- can't drift into each other.
+func test_is_extinguished_by_weather_doses_a_torch_in_rain_and_storm():
+	assert_true(TorchGlow.is_extinguished_by_weather("torch", "rain"))
+	assert_true(TorchGlow.is_extinguished_by_weather("torch", "storm"))
+
+
+## Clear/cloudy weather never douses a torch -- only WeatherModel.STATES'
+## own "rain"/"storm" entries do.
+func test_is_extinguished_by_weather_leaves_a_torch_lit_in_clear_or_cloudy_weather():
+	assert_false(TorchGlow.is_extinguished_by_weather("torch", "clear"))
+	assert_false(TorchGlow.is_extinguished_by_weather("torch", "cloudy"))
+
+
+## The lantern is the weatherproof light source Storm Lantern actually adds
+## -- it must stay lit through the exact same rain/storm that douses a
+## torch, or the feature has no point.
+func test_is_extinguished_by_weather_never_douses_a_lantern():
+	assert_false(TorchGlow.is_extinguished_by_weather("lantern", "rain"))
+	assert_false(TorchGlow.is_extinguished_by_weather("lantern", "storm"))
+	assert_false(TorchGlow.is_extinguished_by_weather("lantern", "clear"))
+
+
+## A lantern is a second real light source, not just a weatherproof torch
+## alias -- it has to actually count as "lit" through is_lit_item_id, the
+## exact seam that doc comment on is_lit_item_id names for this.
+func test_is_lit_item_id_is_also_true_for_a_lantern():
+	assert_true(TorchGlow.is_lit_item_id("lantern"))

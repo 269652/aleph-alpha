@@ -122,7 +122,21 @@ const _ITEMS := {
 	"wooden_club": ["Wooden Club", "weapon", 1, 8.0],
 	"iron_sword": ["Iron Sword", "weapon", 1, 15.0],
 	"iron_axe": ["Iron Axe", "tool", 1, 0.0],
-	"torch": ["Torch", "material", 10, 0.0],
+	# "tool" (not "material") -- a torch is carried and equipped like any
+	# other hand-held tool. It used to be listed as "material", which meant
+	# Player.equip_item (gated on "weapon"/"tool") silently rejected it: a
+	# torch could never actually be equipped, so TorchGlow.is_lit_item_id's
+	# own equip-gated glow was dead code in practice. Fixed alongside the
+	# Storm Lantern feature (see docs/concept/lighting.md) as its real
+	# prerequisite bug -- tests/unit/test_player.gd's
+	# test_equipping_a_torch_actually_works pins this.
+	"torch": ["Torch", "tool", 10, 0.0],
+	# Storm Lantern (docs/concept/lighting.md): a weatherproof second light
+	# source, crafted from a torch (see crafting_recipe_book.gd) rather than
+	# raw wood/hide again. Stack size 1, matching iron_axe's own tool shape
+	# -- a carried tool, not a stackable consumable like the torch it is
+	# built from.
+	"lantern": ["Lantern", "tool", 1, 0.0],
 	# Structures you build into the world (see HotbarAction.PLACE), not inert
 	# materials -- selecting one from the hotbar/inventory arms it for the next
 	# build-input press instead of equipping/using it.

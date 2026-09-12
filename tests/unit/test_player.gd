@@ -495,6 +495,24 @@ func test_equipping_a_tool_updates_the_paperdolls_weapon_slot():
 	assert_eq(player.equipment.equipped_in("weapon"), rod)
 
 
+## A torch is carried and held like any other tool -- but item_catalog.gd
+## lists it as kind "material" (see item_catalog.gd:125's own entry), and
+## Player.equip_item only accepts "weapon"/"tool". That mismatch means a
+## torch genuinely cannot be equipped today: docs/concept/lighting.md's own
+## TorchGlow mechanism is gated on `Player.equipped_item.id == "torch"`, but
+## nothing can ever reach that state through the real equip path. Storm
+## Lantern's own prerequisite fix (item_catalog.gd's torch kind -> "tool")
+## is pinned here, not folded into a TorchGlow test, since it is a real
+## standalone bug independent of the lantern feature itself.
+func test_equipping_a_torch_actually_works():
+	var torch := _item_catalog.make("torch")
+	player.inventory.add(torch, 1)
+
+	assert_true(player.equip_item(torch))
+
+	assert_eq(player.equipped_item, torch)
+
+
 func test_equipping_a_weapon_via_activate_item_id_updates_the_paperdoll():
 	player.inventory.add(_item_catalog.make("iron_sword"), 1)
 

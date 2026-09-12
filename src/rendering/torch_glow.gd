@@ -27,17 +27,30 @@ static var SHADER_CODE: String = _build_shader_code()
 
 var _material: ShaderMaterial
 
-## Which equipped item ids count as a lit light source -- currently just
-## "torch". Equipping IS being lit: a torch has no fuel/ignition state
-## modeled (item_catalog.gd never lists it in _WEAPON_MATERIAL_AND_VOLUME,
-## so ItemWear.condition_for always reports it "pristine" -- it cannot
-## even model "broken" today), so a separate ignite/extinguish toggle
-## would be a second mechanic nobody asked for. A named, testable function
-## rather than an inline string comparison at each call site, so a future
-## second light source (a lantern, say) has exactly one place to add
-## itself.
+## Which equipped item ids count as a lit light source -- "torch" and, as
+## of Storm Lantern (docs/concept/lighting.md), "lantern" too. Equipping IS
+## being lit: a torch has no fuel/ignition state modeled (item_catalog.gd
+## never lists it in _WEAPON_MATERIAL_AND_VOLUME, so ItemWear.condition_for
+## always reports it "pristine" -- it cannot even model "broken" today), so
+## a separate ignite/extinguish toggle would be a second mechanic nobody
+## asked for. A named, testable function rather than an inline string
+## comparison at each call site -- this was the one seam a future second
+## light source would need to grow, and now has.
 static func is_lit_item_id(item_id: String) -> bool:
-	return item_id == "torch"
+	return item_id == "torch" or item_id == "lantern"
+
+
+## Storm Lantern (docs/concept/lighting.md): a bare torch is an open flame
+## and real rain/storm weather douses it, same as it would in life -- but
+## the weatherproof lantern (its own housed-glass upgrade, see
+## crafting_recipe_book.gd's "lantern" recipe) does not. Kept separate from
+## is_lit_item_id (which only answers "does equipping this item mean
+## light") so the two concerns can't drift into each other: this one
+## answers "does CURRENT WEATHER turn an otherwise-lit item's glow off".
+## `weather` is one of WeatherModel.STATES ("clear", "cloudy", "rain",
+## "storm").
+static func is_extinguished_by_weather(item_id: String, weather: String) -> bool:
+	return item_id == "torch" and (weather == "rain" or weather == "storm")
 
 
 ## Lazily builds and caches a real ShaderMaterial running SHADER_CODE --
