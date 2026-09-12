@@ -47,20 +47,33 @@ const _MAX_REQUEST_BYTES := 4096
 const _POLL_ATTEMPTS := 20
 const _POLL_DELAY_MSEC := 1
 
+## The port _ready() binds. The autoload leaves it at CompanionRouter.PORT;
+## a test instance sets it to 0 BEFORE entering the tree to get an
+## OS-assigned ephemeral port instead (see bound_port()), so it never
+## races the real autoload for 8731 the way a second hand-made copy on the
+## same port would (tools/probe_companion_server.gd's header).
+var listen_port: int = CompanionRouter.PORT
+
 var _tcp_server: TCPServer
 
 
 func _ready() -> void:
 	_tcp_server = TCPServer.new()
-	var err := _tcp_server.listen(CompanionRouter.PORT, "127.0.0.1")
+	var err := _tcp_server.listen(listen_port, "127.0.0.1")
 	if err != OK:
 		# Most likely another running instance (a second dev/test run)
 		# already bound this port -- the companion server is optional and
 		# must never take the game down for a reason this unrelated.
-		push_warning("CompanionServer: could not bind 127.0.0.1:%d (err %d) -- companion server disabled this session." % [CompanionRouter.PORT, err])
+		push_warning("CompanionServer: could not bind 127.0.0.1:%d (err %d) -- companion server disabled this session." % [listen_port, err])
 		_tcp_server = null
 		return
-	print("Companion server: http://127.0.0.1:%d/" % CompanionRouter.PORT)
+	print("Companion server: http://127.0.0.1:%d/" % bound_port())
+
+
+## The port actually being served this session -- the OS-assigned one when
+## listen_port was 0 -- or 0 when the bind failed and the server is off.
+func bound_port() -> int:
+	return 0 if _tcp_server == null else _tcp_server.get_local_port()
 
 
 func _process(_delta: float) -> void:
