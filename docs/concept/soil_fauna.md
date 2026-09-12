@@ -4227,6 +4227,105 @@ that had genuinely removed the one small pond this test's `+0,+1` chunk
 depended on. Repointed at a real nearby river instead -- test-only, no
 production code changed, 77/77 since.
 
+### FPS regression round 14's second follow-up: bounding step_regional_trade's own per-tick cost (2026-09-13)
+
+Closes the sibling the follow-up directly above flagged but deliberately
+left unconfirmed: `EarthChunkManager.step_regional_trade` has the same
+structural shape as `step_settlements` did -- its outer loop calls
+`production_shortfall_quests_for_settlement` for every settlement the world
+has EVER founded, every `REGIONAL_TRADE_INTERVAL` tick, with no cap. This
+round confirms it directly and fixes it the same way.
+
+**Worse than step_settlements' own shape, not just a copy of it.** For
+every settlement the outer loop finds with a real shortfall,
+`_attempt_regional_resupply` loops over every OTHER known settlement AGAIN,
+as a nearest-supplier candidate search. So the true per-tick cost is at
+least O(N) in total founded-settlement count, and once more than a handful
+of settlements have a real unmet shortfall at the same time, closer to
+O(N²).
+
+**Measured directly** (a throwaway GUT probe -- `EarthChunkManager.new()`,
+N settlements founded via `record_settlement_founded_if_new`,
+`step_regional_trade` timed with `Time.get_ticks_usec()`, same methodology
+as the follow-up above), at two deliberately bounding scenarios:
+
+- **Worst case:** every settlement is a single-household blacksmith against
+  an empty market -- a genuine, maximal shortfall (`stone_pickaxe` needs 3
+  rock + 2 stick, both fully missing) -- and nowhere has real surplus, so
+  `_attempt_regional_resupply`'s own inner search never short-circuits
+  early. The most expensive possible outcome, every single call.
+- **Best case:** every settlement's own recipe is pre-stocked far past what
+  any shortfall math could need, so no shortfall is ever found and the
+  inner search never runs at all -- isolates the OUTER loop's unconditional
+  per-settlement cost on its own.
+
+| settlements | worst case, unfixed | best case, unfixed | worst case, fixed | best case, fixed |
+|---:|---:|---:|---:|---:|
+| 20  | 15.1 ms   | 2.6 ms  | 3.9-6.8 ms   | 1.8-2.7 ms |
+| 50  | 29.7 ms   | 4.6 ms  | 8.3-8.8 ms   | 2.8-3.8 ms |
+| 100 | 67.7 ms   | 10.5 ms | 11.8-15.6 ms | 2.4 ms     |
+| 200 | 322.8 ms  | 25.1 ms | 18.2-27.7 ms | 3.5-3.9 ms |
+| 400 | 1163.9 ms | 51.8 ms | 63.8-102.6 ms| 6.4-8.2 ms |
+
+(Fixed-branch cells span two independent runs -- this machine has the same
+concurrent-Godot-process timing noise earlier rounds already documented;
+the SHAPE is the reliable takeaway, not the exact millisecond.) Even the
+BEST case alone already cost as much at 400 settlements unfixed (51.8ms) as
+the magnitude the original round 14 fix was written to eliminate --
+confirming this was a real bug regardless of how many settlements in a
+given session actually carry an unmet shortfall at once. The worst case is
+unambiguous: over a full second per tick, every `REGIONAL_TRADE_INTERVAL`
+(30s), at 400 settlements.
+
+**Why not cap the INNER search too -- read docs/concept/regional_trade.md
+first.** "The NEAREST other real settlement holding genuine surplus"
+(regional_trade.md's own design pillar) is a single cross-settlement
+comparison that has to see the whole real candidate set in one pass to
+answer correctly. Spreading THAT search across several ticks the way
+step_settlements' independent per-settlement assessments can be paginated
+would silently risk shipping from a settlement that is not actually
+nearest, or missing a real supplier that exists entirely -- a correctness
+regression dressed up as a perf fix, ruled out for exactly the same reason
+round 14's own "near vs far split" was ruled out for step_settlements.
+`_attempt_regional_resupply`'s inner loop is untouched: every resupply
+attempt that runs still scans 100% of real candidates, exactly as before.
+
+**Fix: pagination of the OUTER loop only**, reusing round 14's own shape
+(`MAX_UNLOADED_SETTLEMENTS_PER_STEP`/`_settlement_ids_due_this_step`) but
+NOT its cursor: a new `MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP` (20) and
+`_settlement_ids_due_for_trade_this_step`/`_unloaded_trade_step_cursor`
+throttle how many BACKGROUND settlements get checked as the SHORTAGE side
+each `REGIONAL_TRADE_INTERVAL` tick, round-robin, with a loaded settlement
+always exempt -- the same "near is never throttled" rule. Deliberately a
+SEPARATE cursor from step_settlements' own: two callers sharing one cursor
+would make each one's own assessment cadence depend on how often the OTHER
+happens to also run that tick, silently invalidating the cadence math
+step_settlements' own doc comment already states. The cost of this choice
+is a second, structurally-identical ~20-line method rather than one shared
+one -- an honest, deliberate duplication, not an oversight; worth
+revisiting only if a third consumer of this exact shape ever appears.
+
+**Honestly, what this costs.** Once background-settlement count exceeds the
+cap, a background settlement's own chance to REQUEST a resupply is
+throttled the same proportional way step_settlements' own assessments
+already are -- nothing ever stops, every settlement's shortfall is still
+checked eventually, just less often once the world has founded more of
+them than one tick's budget affords. Whatever resupply search DOES run
+remains fully, genuinely correct across every real settlement that exists
+at that moment; only the RATE of asking is throttled, never the answer.
+
+**Tests** (`tests/unit/test_earth_chunk_manager.gd`, TDD red-first: a
+behavior-preserving stub landed first so the new tests could compile and
+genuinely fail, then the real cap/round-robin logic went in to make them
+green): 5 unit tests mirroring round 14's own set exactly (no-op under the
+cap, hard cap above it, eventual full coverage, round-robin fairness,
+loaded-settlement exemption) plus 2 `step_regional_trade`-level integration
+tests (only the paginated slice is evaluated each tick; the second tick
+picks up the other half, not a repeat). All pre-existing
+`step_regional_trade`/caravan/probe tests in this file pass unmodified --
+below the cap (the common case) this is a byte-identical no-op, the same
+guarantee round 14's own fix already established.
+
 ### In-flight foragers survive an unload; their trip's outcome does not (2026-09-09)
 
 The ant side of `bees.md`'s own identical section, by that exact name --

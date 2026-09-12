@@ -60,6 +60,18 @@ See Status below for what's actually built of it.
 - ✅ Trade networks: nearest-supplier resupply is real
   (`regional_trade.gd`, `EarthChunkManager.step_regional_trade`),
   automatic, and live-verified.
+- ✅ `step_regional_trade`'s own per-tick cost is bounded regardless of
+  total founded-settlement count: background (chunk-not-loaded)
+  settlements' shortage-side shortfall check is throttled round-robin once
+  there are more of them than a single tick can afford
+  (`EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP`), the same
+  pagination-not-exclusion shape `docs/concept/soil_fauna.md`'s FPS
+  regression round 14 already established for `step_settlements`. This is
+  a per-tick cost fix, not a change to WHO qualifies as the nearest
+  real-surplus supplier above -- `_attempt_regional_resupply`'s own
+  candidate search still scans every real settlement, every time it runs,
+  completely unbounded. See soil_fauna.md's "FPS regression round 14's
+  second follow-up" for the full measurement and reasoning.
 - ✅ The resupply itself is no longer instant — see
   [trade.md](trade.md), which builds directly on top of this doc's own
   supplier-selection/surplus math to give a dispatched resupply a real
