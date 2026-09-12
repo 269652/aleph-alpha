@@ -88,4 +88,16 @@ molecules, what emits them, and how a smell thins with range.
 - ✅ Animals following the gradient: boars and deer by smell rather than sight,
   birds preferring ripe fruit and leaving the rot
 - ✅ Flies: how many a thing draws, and how a swarm hangs over it
-- ⬜ Carrion, smoke and musk emitting into the same field
+- ✅ Carrion emitting into the field: a nearby `Carcass`/`CarcassGuts` reads as
+  a real CARRION stimulus to a predator/omnivore's own hunger wiring (see
+  [carrion.md](carrion.md)'s "opportunistic predator/omnivore" entry)
+- ✅ Smoke emitting into the field: a lit campfire or furnace
+  (`EarthChunkManager.campfires_near`) reads as a real SMOKE stimulus to
+  every mammal (`CreatureMarker._scan_smoke_stimuli`), wired to the same
+  fear gate a predator or the player already drives — a lit fire empties
+  the meadow around it. Strength follows `Olfaction.dilution` like any
+  other smell. Species without their own `Ethogram.SPECIES` smell record
+  (most of them) react through the mammal body plan's own SMOKE default
+  (sensitivity 1.0, valence -1.0 — the same severity as PREDATOR/PLAYER),
+  not a per-species nose.
+- ⬜ Musk emitting into the field

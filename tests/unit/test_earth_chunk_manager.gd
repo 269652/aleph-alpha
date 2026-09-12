@@ -3189,6 +3189,53 @@ func test_nearby_structure_positions_ignores_a_different_structure_id():
 	assert_eq(found.size(), 0)
 
 
+# -- campfires_near (docs/concept/olfaction.md's "smoke... emitting into the -
+# -- same field" -- a creature's nose needs WHERE a lit fire is, in tiles, ---
+# -- not the pixel-space max_distance nearby_structure_positions itself -----
+# -- takes; reuses that same chunk-Chebyshev-radius-1 scan for both real -----
+# -- fire-producing structures, "campfire" and "furnace") --------------------
+
+func test_campfires_near_finds_a_lit_campfire_within_radius_tiles():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "campfire")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found: Array = manager.campfires_near(origin_pixel, 5.0)
+
+	assert_eq(found.size(), 1)
+
+
+## A furnace burns too -- both real fire-producing structures should read as
+## "smoke" to a creature's nose, not just campfire.
+func test_campfires_near_also_finds_a_furnace():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "furnace")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found: Array = manager.campfires_near(origin_pixel, 5.0)
+
+	assert_eq(found.size(), 1)
+
+
+func test_campfires_near_excludes_a_campfire_beyond_radius_tiles():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 15, _berlin_tile.y, "campfire")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found: Array = manager.campfires_near(origin_pixel, 5.0)
+
+	assert_eq(found.size(), 0)
+
+
+func test_campfires_near_returns_empty_array_when_nothing_is_lit():
+	manager.update(_berlin_tile)
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found: Array = manager.campfires_near(origin_pixel, 5.0)
+
+	assert_eq(found.size(), 0)
+
+
 # -- structure stock (Storage's real inventory, and any future producer's ----
 # -- accumulated-output queue -- see StructureStock/StructureStockStore's ----
 # -- own doc comments) --------------------------------------------------------

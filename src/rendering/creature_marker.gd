@@ -981,6 +981,7 @@ func _process(frame_delta: float) -> void:
 		for player in _nearby_in_group(PLAYER_GROUP, threat_radius):
 			_cached_stimuli.append(_stimulus_for(player, Ethogram.PLAYER))
 		_cached_stimuli.append_array(_scan_carrion_stimuli())
+		_cached_stimuli.append_array(_scan_smoke_stimuli())
 		_append_tile_stimuli(_cached_stimuli)
 		_cached_threats = _nodes_of(_behavior.threats(_decision_context(null)))
 		_cached_caution_threats = (
@@ -2854,6 +2855,28 @@ func _scan_carrion_stimuli() -> Array:
 			"features": {Ethogram.CARRION: 1.0},
 			"node": node,
 			"strength": Affinity.proximity(effective),
+		})
+	return stimuli
+
+
+## Nearby lit fires as SMOKE stimuli (docs/concept/olfaction.md's "smoke...
+## emitting into the same field", now driving the mammal fear gate --
+## Ethogram.wirings_for("mammal")'s fear wiring carries SMOKE alongside
+## PREDATOR/PLAYER). Unlike _scan_carrion_stimuli's Affinity.proximity
+## discount (a fly-swarm-visibility rule specific to carrion), smoke is an
+## ordinary smell and its strength follows Olfaction's own distance law --
+## Olfaction.dilution -- the same one every other smell already obeys, over
+## the same Olfaction.MAX_RANGE_TILES every nose reaches.
+func _scan_smoke_stimuli() -> Array:
+	if _world == null or not _world.has_method("campfires_near"):
+		return []
+	var stimuli: Array = []
+	for fire_position in _world.campfires_near(position, Olfaction.MAX_RANGE_TILES):
+		var distance_tiles := position.distance_to(fire_position) / _tile_size
+		stimuli.append({
+			"position": fire_position,
+			"features": {Ethogram.SMOKE: 1.0},
+			"strength": Olfaction.dilution(distance_tiles),
 		})
 	return stimuli
 

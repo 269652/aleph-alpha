@@ -2052,7 +2052,9 @@ Progress is quantised to 6 steps because every distinct value is a whole tree pi
 The verdict lives in the ANIMAL: sensitivity (how well it detects a molecule) and response (whether that draws or repels) are separate numbers, so an animal can be keenly aware of something it wants nothing to do with -- which is what makes a repellent work rather than merely invisible. A boar and a fly meet the same rotting apple and disagree. Distance dilutes faster than light, so an animal casts about and closes in rather than reading a beacon.
 
 ⬜ Animals do not yet FOLLOW the gradient -- the model is built and tested, nothing consumes it.
-⬜ Flies as a creature; carrion, smoke and musk emitting into the same field.
+✅ Carrion emitting into the same field: a nearby `Carcass`/`CarcassGuts` reads as a real CARRION stimulus to a predator/omnivore's hunger wiring (opportunistic scavenging, see this doc's Carrion section).
+✅ Smoke emitting into the same field: a lit campfire or furnace (`EarthChunkManager.campfires_near`) reads as a real SMOKE stimulus to every mammal (`CreatureMarker._scan_smoke_stimuli`), wired to the same fear gate a predator or the player already drives -- a lit fire empties the meadow around it. Species without their own smell record react through a mammal-body-plan-level SMOKE default (sensitivity 1.0, valence -1.0, the same severity as PREDATOR/PLAYER) rather than a per-species nose, since most CreatureMarker species have none.
+⬜ Flies as a creature; musk emitting into the field.
 
 
 ### Animals follow their noses; flies
