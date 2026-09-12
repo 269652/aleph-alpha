@@ -216,6 +216,15 @@ const _ITEMS := {
 	# like campfire/furnace, not an inert material -- holds its own real
 	# item_id -> count stock (StructureStock) once built.
 	"storage": ["Storage", "placeable", 5, 0.0],
+	# The Farm (see docs/concept/npc_farm_production.md): a small tilled,
+	# fenced plot a Farmer moves into and works forever -- same placeable
+	# family as sagewerk/storage.
+	"farm": ["Farm", "placeable", 5, 0.0],
+	# Wheat -- harvested grain a Farm's Farmer produces (see
+	# docs/concept/npc_farm_production.md). A raw material like log/wood/
+	# stone, not "food" like carrot/potato: it feeds a downstream product
+	# (flour, then bread) rather than being eaten as-is.
+	"wheat": ["Wheat", "material", 40, 0.0],
 	# A stone check dam (see docs/concept/rivers.md). The id is deliberately
 	# the SAME string as its BuildingPiece id: build_at_global writes
 	# whatever id it is handed into chunk.modifications, so sharing one

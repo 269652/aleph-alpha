@@ -777,6 +777,11 @@ what's ACTUALLY real right now:
 
 ## Interaction with other docs
 
+- **[npc_farm_production.md](npc_farm_production.md)** — the second real
+  proof of this doc's own claim that `StructureStock`/`LogisticsMarker`
+  were built generic, not Sägewerk-specific: a Farm/Farmer pair mirrors
+  Sägewerk/Lumberjack's shape and reuses this doc's Storage/Logistics
+  infrastructure with zero changes to either class.
 - **[building.md](building.md)** — this doc adds sourcing, physics, decay,
   and incremental/autonomous building on top of its piece/placement/room/
   persistence mechanism; it does not replace any of it. It also closes

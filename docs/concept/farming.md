@@ -29,6 +29,15 @@ wild-plant/seed-dispersal system, not a lookalike parallel one — see below.
   there, rather than farming being a wholly separate mechanic layered on
   top of unrelated terrain.
 
+### NPC-built farms
+
+See [npc_farm_production.md](npc_farm_production.md) — a real, NPC-built and
+NPC-staffed counterpart to this doc's player-tilled loop: a placeable Farm
+structure, worked forever by an autonomous Farmer, producing wheat into a
+real `StructureStock`. Reuses `FarmPlot`/`FarmPlotMarker` exactly rather
+than forking them; wheat does not yet participate in the DNA/breeding
+vision below.
+
 ### Resolved: farmed and wild genetics are one shared model
 
 See [flora.md](flora.md) — a discarded/escaped farm seed can establish as
