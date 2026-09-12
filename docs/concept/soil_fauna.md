@@ -4213,18 +4213,19 @@ due, present even when nobody actually gets paginated away. Small,
 constant, and dwarfed by the linear growth it eliminates everywhere above
 the cap.
 
-**Incidentally found, confirmed unrelated.** While regression-testing the
-full `test_earth_chunk_manager.gd` "settlement"-named test set (76/77
-passing),
+**Incidentally found, confirmed unrelated, since fixed by a separate
+follow-up.** While regression-testing the full `test_earth_chunk_manager.gd`
+"settlement"-named test set (76/77 passing),
 `test_an_unloaded_settlement_really_declines_by_eating_through_its_stores`
 failed -- and failed identically in a clean `origin/main` checkout too
-(verified in an isolated worktree, in complete isolation), so it predates
-this round's change and is not caused by it. Its own first precondition
-(a real fish catch near Berlin, via `_seeded_region_for`) reads exactly
-0.0 -- a worldgen-precondition-reads-empty failure shape this project has
-hit before in a fresh-worktree checkout (a sibling case is documented
-in-line above `test_try_plant_seed_at_fails_outside_forest_or_rainforest`).
-Flagged as a separate follow-up, not diagnosed further or fixed here.
+(verified in an isolated worktree, in complete isolation), so it predated
+this round's change and was not caused by it. Flagged as a follow-up
+rather than diagnosed further here; a separate session picked it up and
+found the real cause (`04b494f9`): not an environment artifact, but a real
+upstream fix (`8e3a8436`, the fine-detail-noise coastal-speckle correction)
+that had genuinely removed the one small pond this test's `+0,+1` chunk
+depended on. Repointed at a real nearby river instead -- test-only, no
+production code changed, 77/77 since.
 
 ### In-flight foragers survive an unload; their trip's outcome does not (2026-09-09)
 
