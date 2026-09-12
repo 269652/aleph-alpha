@@ -519,6 +519,19 @@ const GREENWICH_TILE := Vector2i(19980, 4284)
 ## Longitude 51.4W, latitude 25.7S: inside the synthetic crater, on real land.
 const PARANA_TILE := Vector2i(14271, 12842)
 
+## Must sit BETWEEN the sea row (0.2) and the crater floor (0.3) -- the
+## same ordering constraint test_drainage_network.gd's own SEA_LEVEL
+## documents. At 0.5 the crater was ALSO below "sea level" in the raw
+## grid, so its 9 cells outnumbered the sea row's 7 and
+## DrainageNetwork._label_inland_seas's "the largest below-sea-level
+## component is the ocean" rule (safe for the real ~40,000x20,000 asset,
+## where the true ocean dwarfs every lake by cell count) picked the
+## crater as the ocean and relabelled the sea row as an inland lake --
+## backwards from every comment in this fixture. Verified live: Greenland
+## (in the sea row) probed as a "lake" with surface at this constant, not
+## as sea.
+const _SYNTHETIC_SEA_LEVEL := 0.25
+
 
 func _synthetic_field() -> HydrologyField:
 	var heights := PackedFloat32Array()
@@ -531,7 +544,7 @@ func _synthetic_field() -> HydrologyField:
 			heights[y * 7 + x] = 0.3
 	heights[1 * 7 + 3] = 0.7
 	heights[2 * 7 + 3] = 0.7
-	var network = DrainageNetwork.new().build(heights, 7, 7, 0.5)
+	var network = DrainageNetwork.new().build(heights, 7, 7, _SYNTHETIC_SEA_LEVEL)
 	var weights := PackedFloat32Array()
 	weights.resize(49)
 	weights.fill(1.0)
