@@ -3429,7 +3429,19 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 		labels.assign(_ecology_steps.keys())
 		_ecology_cadence = StepCadence.new(labels)
 	for due in _ecology_cadence.advance(delta):
-		_ecology_steps[due[0]].call(due[1])
+		# Settlements alone get their own perf-report section (FPS regression
+		# round 14's residual finding, EarthChunkManager.MAX_UNLOADED_
+		# SETTLEMENTS_PER_STEP's own doc comment): its own per-tick cost used
+		# to grow with total lifetime settlement count, invisible inside the
+		# whole-ecology-batch total alongside ~25 other cadence steps. Zero
+		# cost when no report is running, the same guard every other section
+		# already uses.
+		if _perf_report != null and due[0] == "settlements":
+			var settlements_started := Time.get_ticks_usec()
+			_ecology_steps[due[0]].call(due[1])
+			_perf_report.add_section("settlements", Time.get_ticks_usec() - settlements_started)
+		else:
+			_ecology_steps[due[0]].call(due[1])
 	# Quest fulfilment is DERIVED, never a separate mutator (see
 	# QuestLog.reconcile, docs/concept/karma_and_luck.md's "Quest lifecycle")
 	# -- runs last in this batch so it sees the freshest possible production/

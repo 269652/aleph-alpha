@@ -2350,6 +2350,73 @@ func _household_occupations_for_settlement(settlement_id: String) -> Dictionary:
 ## so it runs in every real session without a console command.
 const SETTLEMENT_STEP_INTERVAL := 30.0
 var _settlement_step_accumulator := 0.0
+
+## FPS regression round 14's residual finding (docs/concept/soil_fauna.md
+## "FPS regression round 14"): the loop below used to run
+## _step_settlement_granary/_production/_trade/_institution_health/
+## _classification for EVERY settlement the world has EVER founded, with no
+## cap and no chunk-scoping -- so its own per-tick cost grew with total
+## lifetime settlement count and never shrank, for the rest of the session
+## (a live run measured this stepping from 4-8 ms to 80-113 ms once founded-
+## settlement count crossed some threshold, and staying there).
+##
+## Read the code before reaching for "skip settlements outside some radius"
+## -- it is the wrong fix here. Every one of the five per-settlement calls
+## is deliberately, explicitly built to keep working for an UNLOADED
+## settlement (see _villagers_in_settlement's own doc comment: "step_
+## settlements assesses every settlement that has ever been founded, and at
+## any moment almost none of them have live NpcMarker nodes" -- and
+## _step_settlement_granary's own much longer one: "without it a village
+## only lives while the player is standing in it, which is the difference
+## between a world and a stage set"). None of the five is a near-player-only
+## nicety; production, trade, institution health and classification all
+## read and write PERSISTED state precisely so a settlement the player has
+## never been near still has a real, discoverable history. Splitting them
+## into a "near" set and a "far" set would silently break that guarantee
+## for the whole far set, not just slim it down.
+##
+## So the fix is PAGINATION, not exclusion -- the same shape this project
+## already uses for a growing population it cannot afford to step in full
+## every frame (SimulationLod: "Creatures still keep living out there --
+## this changes the RATE, never the behaviour"). A settlement whose chunk
+## is currently LOADED (the player is there or nearby) is always assessed
+## in full, every tick, exactly as before -- the same "near is never
+## throttled" rule SimulationLod's own FULL_RATE_RADIUS_PX already applies
+## to creatures. The rest -- almost the whole world, at any moment, per
+## _villagers_in_settlement's own doc comment -- are paginated: at most
+## this many of them get a full assessment in any one tick, chosen round-
+## robin (see _settlement_ids_due_this_step) so every one of them keeps
+## getting turns and none is ever left out forever.
+##
+## BE HONEST ABOUT WHAT THIS COSTS, the same discipline _step_settlement_
+## granary's own doc comment already applies to itself: once total
+## unloaded-settlement count exceeds this cap, a background settlement's
+## own assessment cadence stretches from SETTLEMENT_STEP_INTERVAL to
+## roughly SETTLEMENT_STEP_INTERVAL times (unloaded count / this cap) --
+## gathering, eating, production and trade all slow down together,
+## proportionally, for that settlement, rather than any one of them
+## drifting out of balance with the others (each per-settlement call is
+## left completely unchanged; only how OFTEN a background settlement gets a
+## turn at all is throttled). Nothing ever stops: every settlement still
+## gets a full, ordinary assessment eventually, just less often once the
+## world has founded enough of them that stepping all of them every 30
+## seconds would itself be the performance bug again.
+##
+## Pinned in tests/unit/test_earth_chunk_manager.gd: a no-op under the cap
+## (existing behaviour, unchanged, for every session that never founds this
+## many), a hard cap above it, eventual full coverage, round-robin fairness
+## (no repeat before every other background settlement has had its own
+## turn), and a loaded settlement never deferred.
+const MAX_UNLOADED_SETTLEMENTS_PER_STEP := 20
+
+## Where the next tick's round-robin slice of BACKGROUND (chunk-not-loaded)
+## settlements starts -- an index into whatever _known_settlement_ids()
+## returns with loaded ones filtered out, not a per-settlement bookkeeping
+## entry, so a settlement founded or unloaded mid-session simply joins the
+## rotation wherever this currently points rather than needing its own
+## ledger row. Session-lifetime only, the same scope every other cache in
+## this file's settlement-assessment machinery already accepts.
+var _unloaded_settlement_step_cursor := 0
 ## settlement_id -> last recorded SettlementState status, so a status is
 ## only ever event-sourced on a real CHANGE -- "do not event-source every
 ## low-level movement," the same principle every other coordinator in this
@@ -2462,6 +2529,51 @@ func _recorded_settlement_specialization(settlement_id: String) -> String:
 	return ""
 
 
+## Every settlement id step_settlements should fully assess THIS tick (see
+## MAX_UNLOADED_SETTLEMENTS_PER_STEP for why this exists at all): every
+## LOADED settlement, always, plus -- once there are more BACKGROUND
+## settlements than the cap -- a round-robin slice of exactly that many of
+## them. Below the cap this returns _known_settlement_ids() completely
+## unchanged (same settlements, same order), which is what makes this a
+## pure no-op for every existing step_settlements test and every real
+## session that never founds this many settlements at once.
+##
+## "Loaded" is read the cheap way -- a settlement's own chunk coordinate
+## (RegionalTrade.chunk_coord_of, a plain string parse) is a key of
+## _loaded_villages -- rather than resolving all the way to a live
+## VillageMarket the way village_market_for does: this only needs to know
+## WHETHER the player is near, not read anything out of what is there once
+## they are.
+##
+## Skipped background settlements are tracked as who to LEAVE OUT, not who
+## is due, so the ids actually returned keep _known_settlement_ids()'s own
+## founding order -- a loaded settlement interleaved between two skipped
+## background ones stays exactly where it always was, and every downstream
+## per-settlement call sees the same relative ordering it always has.
+func _settlement_ids_due_this_step() -> Array[String]:
+	var all_ids := _known_settlement_ids()
+	var background_ids: Array[String] = []
+	for settlement_id in all_ids:
+		if not _loaded_villages.has(RegionalTrade.chunk_coord_of(settlement_id)):
+			background_ids.append(settlement_id)
+
+	if background_ids.size() <= MAX_UNLOADED_SETTLEMENTS_PER_STEP:
+		_unloaded_settlement_step_cursor = 0
+		return all_ids
+
+	var start := _unloaded_settlement_step_cursor % background_ids.size()
+	var skipped := {}
+	for i in range(MAX_UNLOADED_SETTLEMENTS_PER_STEP, background_ids.size()):
+		skipped[background_ids[(start + i) % background_ids.size()]] = true
+	_unloaded_settlement_step_cursor = (start + MAX_UNLOADED_SETTLEMENTS_PER_STEP) % background_ids.size()
+
+	var due: Array[String] = []
+	for settlement_id in all_ids:
+		if not skipped.has(settlement_id):
+			due.append(settlement_id)
+	return due
+
+
 func step_settlements(delta_seconds: float) -> void:
 	_settlement_step_accumulator += delta_seconds
 	if _settlement_step_accumulator < SETTLEMENT_STEP_INTERVAL:
@@ -2470,7 +2582,7 @@ func step_settlements(delta_seconds: float) -> void:
 	if _settlement_step_accumulator >= SETTLEMENT_STEP_INTERVAL:
 		_settlement_step_accumulator = fmod(_settlement_step_accumulator, SETTLEMENT_STEP_INTERVAL)
 
-	for settlement_id in _known_settlement_ids():
+	for settlement_id in _settlement_ids_due_this_step():
 		var market := _market_store.market_for(settlement_id)
 		var household_ids := _households_in_settlement(settlement_id)
 		# BOTH markets, not just the persisted emergence one (see

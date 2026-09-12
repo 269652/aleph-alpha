@@ -11528,6 +11528,155 @@ func test_step_settlements_does_not_dissolve_an_institution_still_actively_tradi
 	assert_eq(manager.event_store().events_of_type("institution_dissolved").size(), 0)
 
 
+# -- FPS regression round 14's residual: step_settlements' own per-tick cost
+# is bounded regardless of total founded-settlement count (docs/concept/
+# soil_fauna.md "FPS regression round 14", EarthChunkManager.
+# MAX_UNLOADED_SETTLEMENTS_PER_STEP's own doc comment for the full reasoning)
+
+
+## Below the cap, pagination must be a complete no-op: every settlement the
+## world has ever founded is still due every single tick, in the exact
+## order _known_settlement_ids() already returns them in -- the common case
+## (most sessions never found anywhere near this many settlements), and
+## what keeps every existing step_settlements test above passing unmodified.
+func test_settlement_ids_due_this_step_is_a_no_op_under_the_unloaded_cap():
+	var expected: Array[String] = []
+	for i in EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_STEP:
+		var chunk_coord := Vector2i(200 + i, 200 + i)
+		manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1000 + i)])
+		expected.append(EntityRef.for_settlement(chunk_coord))
+	assert_eq(manager._settlement_ids_due_this_step(), expected)
+
+
+## One settlement over the cap is enough to trigger pagination -- exactly
+## MAX_UNLOADED_SETTLEMENTS_PER_STEP of them are due, never the whole set,
+## which is the entire point: the root-cause finding this round was that
+## the loop's per-tick cost had NO cap at all.
+func test_settlement_ids_due_this_step_caps_unloaded_settlements():
+	for i in EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_STEP + 1:
+		manager.record_settlement_founded_if_new(Vector2i(210 + i, 210 + i), [NpcIdentity.new(2000 + i)])
+	assert_eq(manager._settlement_ids_due_this_step().size(), EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_STEP)
+
+
+## The living-world guarantee this file already documents extensively
+## (_villagers_in_settlement's own doc comment: "step_settlements assesses
+## every settlement that has ever been founded") must still hold once
+## pagination is in play -- nothing is ever left out FOREVER, only
+## deferred. Over enough consecutive calls, the round-robin must visit
+## every founded settlement at least once.
+func test_settlement_ids_due_this_step_eventually_covers_every_settlement():
+	var total := EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_STEP * 3 + 7
+	var all_ids: Array[String] = []
+	for i in total:
+		var chunk_coord := Vector2i(300 + i, 300 + i)
+		manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(3000 + i)])
+		all_ids.append(EntityRef.for_settlement(chunk_coord))
+
+	var covered := {}
+	# One extra round trip's worth of calls guards against an off-by-one at
+	# the wrap boundary without weakening what the test actually pins.
+	var rounds := ceili(float(total) / float(EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_STEP)) + 1
+	for i in rounds:
+		for settlement_id in manager._settlement_ids_due_this_step():
+			covered[settlement_id] = true
+
+	for settlement_id in all_ids:
+		assert_true(covered.has(settlement_id), "%s must eventually be assessed" % settlement_id)
+
+
+## And it must be FAIR, not just eventually complete: the round-robin must
+## not re-visit a settlement it has already given a turn to before every
+## other one has had its own -- otherwise a handful of settlements could
+## hog every tick's whole budget while the rest starve indefinitely as the
+## world keeps founding new ones.
+func test_settlement_ids_due_this_step_does_not_repeat_before_the_round_completes():
+	var cap := EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_STEP
+	for i in cap * 2:
+		manager.record_settlement_founded_if_new(Vector2i(400 + i, 400 + i), [NpcIdentity.new(4000 + i)])
+
+	var first_batch := manager._settlement_ids_due_this_step()
+	var second_batch := manager._settlement_ids_due_this_step()
+	assert_eq(first_batch.size(), cap)
+	assert_eq(second_batch.size(), cap)
+	for settlement_id in second_batch:
+		assert_false(first_batch.has(settlement_id), "the second batch must not repeat the first's settlements")
+
+
+## A settlement whose chunk is currently LOADED is never subject to the cap
+## or the round-robin delay -- the player is there or nearby, and this
+## project's own established pattern (SimulationLod.FULL_RATE_RADIUS_PX)
+## always keeps what is actually near the player at full fidelity. Proven
+## by founding enough BACKGROUND settlements to overflow the cap on their
+## own, then marking one more settlement's chunk loaded and requiring it to
+## be due on every single call, never deferred.
+func test_settlement_ids_due_this_step_never_defers_a_loaded_settlement():
+	for i in EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_STEP + 5:
+		manager.record_settlement_founded_if_new(Vector2i(500 + i, 500 + i), [NpcIdentity.new(5000 + i)])
+
+	var loaded_chunk_coord := Vector2i(999, 999)
+	manager.record_settlement_founded_if_new(loaded_chunk_coord, [NpcIdentity.new(5999)])
+	var loaded_settlement_id := EntityRef.for_settlement(loaded_chunk_coord)
+	manager._loaded_villages[loaded_chunk_coord] = []
+
+	for i in 5:
+		assert_true(
+			manager._settlement_ids_due_this_step().has(loaded_settlement_id),
+			"a loaded settlement must be assessed on every single tick"
+		)
+
+	manager._loaded_villages.erase(loaded_chunk_coord)
+
+
+## step_settlements itself must actually route through the pagination
+## helper above, not just have it sitting unused. A settlement's FIRST
+## assessment always emits exactly one settlement_<status> event regardless
+## of WHICH status it lands on (see step_settlements' own "first assessed
+## status is news" comment) -- so counting all three status types together
+## proves how many settlements were actually assessed this tick, with no
+## dependency on any settlement's occupation or live food stock.
+func test_step_settlements_only_fully_assesses_the_paginated_ids():
+	var total := EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_STEP + 5
+	for i in total:
+		manager.record_settlement_founded_if_new(Vector2i(600 + i, 600 + i), [NpcIdentity.new(6000 + i)])
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var status_events := 0
+	for status in ["declining", "growing", "stable"]:
+		status_events += manager.event_store().events_of_type("settlement_%s" % status).size()
+	assert_eq(
+		status_events, EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_STEP,
+		"only the paginated slice's settlements should have received their first assessment this tick"
+	)
+
+
+## And the SECOND real tick, not just a second raw helper call, must pick up
+## where the first left off -- proving the cursor genuinely persists across
+## step_settlements' own throttled cadence, not just across direct calls to
+## the pagination helper in isolation.
+func test_step_settlements_moves_on_to_the_next_batch_on_the_following_tick():
+	var total := EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_STEP * 2
+	for i in total:
+		manager.record_settlement_founded_if_new(Vector2i(700 + i, 700 + i), [NpcIdentity.new(7000 + i)])
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	var first_tick_events := (
+		manager.event_store().events_of_type("settlement_declining").size()
+		+ manager.event_store().events_of_type("settlement_growing").size()
+		+ manager.event_store().events_of_type("settlement_stable").size()
+	)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	var both_ticks_events := (
+		manager.event_store().events_of_type("settlement_declining").size()
+		+ manager.event_store().events_of_type("settlement_growing").size()
+		+ manager.event_store().events_of_type("settlement_stable").size()
+	)
+
+	assert_eq(first_tick_events, EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_STEP)
+	assert_eq(both_ticks_events, total, "the second tick's batch must be the OTHER half, not a repeat of the first")
+
+
 # -- gap-closing: rumor auto-propagation at real NPC meetings (Phase 2) -----
 
 func _add_scheduled_npc(seed_value: int, location_tag: String) -> NpcMarker:
