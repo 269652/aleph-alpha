@@ -11,12 +11,14 @@ extends GutTest
 ## unfiltered, paginated list is the honest default -- search narrows it,
 ## it never replaces the full reference.
 ##
-## Three of these tests used to assert on an item found by scanning the
-## WHOLE unpaginated table (fish/leather_chest/a crafted id) -- now that the
-## table only ever renders one page, those three pass an explicit `q` filter
-## so they find their target on page 1 regardless of the catalog's raw
-## insertion order or its length, rather than depending on insertion-order
-## luck the way the pre-pagination versions accidentally did.
+## These tests used to assert on an item found by scanning the WHOLE
+## unpaginated table (fish/leather_chest/a crafted id, then later
+## iron_sword/wood once the authored catalog grew past ITEMS_PER_PAGE and
+## pushed them off page 1 too) -- now that the table only ever renders one
+## page, every one of them passes an explicit `q` filter so it finds its
+## target on page 1 regardless of the catalog's raw insertion order or its
+## length, rather than depending on insertion-order luck the way the
+## pre-pagination versions accidentally did.
 
 const CompanionItemCatalogView = preload("res://src/companion_server/companion_item_catalog_view.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
@@ -66,24 +68,30 @@ func _data_row_count(html: String) -> int:
 
 
 func test_lists_a_known_authored_items_display_name():
-	var html := CompanionItemCatalogView.render(_fixture_save_dict(), ItemCatalog.new())
+	var html := CompanionItemCatalogView.render(
+		_fixture_save_dict(), ItemCatalog.new(), {"q": "iron_sword"}
+	)
 	assert_true(html.contains("Iron Sword"))
 
 
 func test_shows_a_weapons_real_damage_and_mass():
-	var html := CompanionItemCatalogView.render(_fixture_save_dict(), ItemCatalog.new())
+	var html := CompanionItemCatalogView.render(
+		_fixture_save_dict(), ItemCatalog.new(), {"q": "iron_sword"}
+	)
 	var row := _row_containing(html, "Iron Sword")
 	assert_true(row.contains("15"))  # iron_sword's weapon_damage, item_catalog.gd
 	assert_true(row.contains("1.2"))  # iron_sword's real mass_kg (~1.2), item_catalog.gd
 
 
 func test_marks_an_item_held_in_the_hotbar_as_had():
-	var html := CompanionItemCatalogView.render(_fixture_save_dict(), ItemCatalog.new())
+	var html := CompanionItemCatalogView.render(
+		_fixture_save_dict(), ItemCatalog.new(), {"q": "iron_sword"}
+	)
 	assert_true(_row_containing(html, "Iron Sword").contains("have"))
 
 
 func test_marks_an_item_held_only_in_inventory_as_had():
-	var html := CompanionItemCatalogView.render(_fixture_save_dict(), ItemCatalog.new())
+	var html := CompanionItemCatalogView.render(_fixture_save_dict(), ItemCatalog.new(), {"q": "wood"})
 	assert_true(_row_containing(html, "Wood").contains("have"))
 
 
@@ -116,7 +124,9 @@ func test_a_crafted_item_from_this_saves_registry_also_appears():
 
 
 func test_an_items_name_links_to_its_detail_page():
-	var html := CompanionItemCatalogView.render(_fixture_save_dict(), ItemCatalog.new())
+	var html := CompanionItemCatalogView.render(
+		_fixture_save_dict(), ItemCatalog.new(), {"q": "iron_sword"}
+	)
 	assert_true(html.contains('<a href="/items/iron_sword">Iron Sword</a>'))
 
 
