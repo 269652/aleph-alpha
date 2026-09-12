@@ -457,6 +457,10 @@ var _simulation_scheduler := SimulationScheduler.new()
 ## nothing -- not even the accumulator tick.
 const PerfReport = preload("res://src/gameplay/perf_report.gd")
 const PerfFrameSentinel = preload("res://src/gameplay/perf_frame_sentinel.gd")
+## The batched ecology steps' round-robin clock (see _step_ecology_batch).
+const StepCadence = preload("res://src/gameplay/step_cadence.gd")
+var _ecology_cadence: StepCadence = null
+var _ecology_steps: Dictionary = {}
 var _perf_report: PerfReport = null
 var _scarred_tiles: Dictionary = {}  # Vector2i global tile -> true, tiles we've painted as trampled earth
 var _trailed_tiles: Dictionary = {}  # Vector2i global tile -> true, tiles currently painted as the deeper Trail tier
@@ -3343,98 +3347,67 @@ func _step_ecology_fine(delta: float, focus_player: Player) -> void:
 		_chunk_manager.step_fruiting(delta, focus_player.position)
 
 
-## Once a frame, carrying the whole frame's simulated time: the heavy periodic
-## work, and everything that adds to the world.
+## The batched ecology steps -- population, growth and economy, each moving
+## on world time -- run on a StepCadence (FPS regression round 13; see
+## docs/concept/ecosystem_dynamics.md "Ecology steps run at a cadence, not a
+## frame rate"): each once per StepCadence.INTERVAL_SECONDS with the seconds
+## it waited, staggered across the interval's frames, instead of every one
+## of them every frame. Round 13 measured them at ~25 ms of a 6 fps frame --
+## and at 60 fps the same 25 ms of EVERY frame -- for walks over every
+## loaded chunk that change nothing anyone can see sixty times a second. At
+## or below 4 fps a frame is already an interval and every step runs every
+## frame, exactly as before. The table is built on first use (the chunk
+## manager exists only after _ready) in the order the steps used to run;
+## quest reconciliation stays after it, every frame, on its own accumulator.
 func _step_ecology_batch(delta: float, focus_player: Player) -> void:
-	_chunk_manager.step_ecosystem(delta)
-	_chunk_manager.step_forage(delta)
-	_chunk_manager.step_tree_spread(delta)
-	# Saplings age in place (see EarthChunkManager.step_tree_growth).
-	_chunk_manager.step_tree_growth()
-	# Ground food rots on world time (see EarthChunkManager.step_ground_food).
-	_chunk_manager.step_ground_food(delta)
-	# Flies breeding on whatever has gone over (see FlyColony).
-	_chunk_manager.step_flies(delta)
-	# Food goes off in the pack too, on the same clock (see ItemStack.age).
-	_chunk_manager.step_carried_food(delta)
-	_chunk_manager.step_tall_grass(delta)
-	# Real aquatic vegetation (see EarthChunkManager.step_aquatic_vegetation,
-	# docs/concept/aquatic_foraging.md) -- mirrors step_tall_grass's own
-	# batched, GRASS_REFRESH_INTERVAL-throttled cadence immediately above,
-	# right next to it for the same reason step_wild_crops sits next to its
-	# own land-plant-growth cousin below.
-	_chunk_manager.step_aquatic_vegetation(delta)
-	# The second real aquatic food layer (see EarthChunkManager.
-	# step_aquatic_invertebrates, docs/concept/aquatic_foraging.md's
-	# "Revised (2026-09-07)") -- mirrors step_aquatic_vegetation's own
-	# cadence immediately above.
-	_chunk_manager.step_aquatic_invertebrates(delta)
-	# Wild carrot/potato growth + spread (see EarthChunkManager.step_wild_crops,
-	# docs/concept/wild_crops.md) -- mirrors step_tall_grass's own throttled
-	# cadence immediately above. This line was simply missing: the step
-	# existed, its own unit tests called it directly and passed, and nothing
-	# in a real session ever did -- so a wild crop patch only ever showed the
-	# maturity _seed_initial_patches handed it at chunk creation (1.0, mature)
-	# and spread never fired once. Same trap the ownership gate fell into (see
-	# test_world_simulation_ownership.gd's header), one call level further
-	# out. Independently found and fixed on both this branch and main.
-	_chunk_manager.step_wild_crops(delta)
-	# Wild mushrooms (see EarthChunkManager.step_wild_mushrooms,
-	# docs/concept/mushrooms.md) -- same throttled cadence as its wild-crop
-	# cousin just above.
-	_chunk_manager.step_wild_mushrooms(delta)
-	# Player-tilled farm plots (see EarthChunkManager.step_farm_plots,
-	# docs/concept/farming.md) -- same tick this crop's wild cousin grows on
-	# just above.
-	_chunk_manager.step_farm_plots(delta)
-	# Ant mounds foraging (see AntColony, myrmecochory) -- fallen grass seed
-	# in grassland, or windfall fruit/nut in forest/rainforest where grass
-	# doesn't grow -- a background per-chunk population effect, batched here
-	# alongside the other content-adding steps rather than the cheap fine
-	# group, since it reads grass_seeds_near/fruit_near and plants new
-	# grass/saplings the same way the mouse's/squirrel's own scatter-hoarding
-	# does.
-	_chunk_manager.step_ants(delta)
-	# Honeybee hives and wild bee nests (see docs/concept/bees.md) -- the
-	# same batched cadence ant mounds already step at, for the identical
-	# reason: population/forage economy moves over simulated days, not
-	# something that needs the fine per-time-lapse-slice cadence.
-	_chunk_manager.step_bees(delta)
-	# Fallen-leaf litter ages/prunes on the same batched cadence ant mounds do
-	# (see EarthChunkManager.step_leaf_litter, docs/concept/leaf_litter.md).
-	_chunk_manager.step_leaf_litter(delta)
-	# Footprint stamps age/prune on the same batched cadence (see
-	# EarthChunkManager.step_footprints, FootprintField.LIFETIME_SECONDS --
-	# far shorter than leaf litter's own, but nothing here needs a finer
-	# cadence than this batch already runs at).
-	_chunk_manager.step_footprints()
-	_chunk_manager.step_flowers(delta)
-	_chunk_manager.step_desert_scrub(delta)
-	_chunk_manager.step_tundra_lichen(delta)
-	# Every founded settlement is reassessed against its own food stock (see
-	# EarthChunkManager.step_settlements/SettlementState) -- population
-	# growth/decline pressure, throttled the same way tree spread is, so a
-	# real session actually produces settlement_growing/settlement_declining
-	# events without a console command.
-	_chunk_manager.step_settlements(delta)
-	# NPCs sharing a real landmark on their real daily schedule exchange
-	# memories automatically (see EarthChunkManager.step_npc_encounters,
-	# docs/concept/npc.md "Memory, beliefs, and rumor propagation") -- the
-	# one gap that section itself named, now closed the same way
-	# step_settlements already is.
-	_chunk_manager.step_npc_encounters(delta)
-	# A settlement's own real production shortfall (see
-	# EarthChunkManager.production_shortfall_quests_for_settlement, Phase
-	# 12) can be resupplied by the nearest other real settlement's genuine
-	# surplus (see step_regional_trade, docs/concept/regional_trade.md) --
-	# the region's own most basic trade network, running automatically.
-	# Dispatch is throttled by REGIONAL_TRADE_INTERVAL internally, same
-	# accumulator shape as step_settlements above; delivery is now a real
-	# caravan trip (see step_caravans, docs/concept/trade.md), not an
-	# instant credit.
-	_chunk_manager.step_regional_trade(delta)
-	_step_herbivore_food_consumption(delta)
-	_step_reproduction(delta)
+	if _ecology_steps.is_empty():
+		_ecology_steps = {
+			"ecosystem": _chunk_manager.step_ecosystem,
+			"forage": _chunk_manager.step_forage,
+			"tree_spread": _chunk_manager.step_tree_spread,
+			# Saplings age in place on world time (see EarthChunkManager.
+			# step_tree_growth) -- nothing to hand over.
+			"tree_growth": func(_elapsed: float) -> void: _chunk_manager.step_tree_growth(),
+			# Ground food rots on world time (see EarthChunkManager.step_ground_food).
+			"ground_food": _chunk_manager.step_ground_food,
+			# Flies breeding on whatever has gone over (see FlyColony).
+			"flies": _chunk_manager.step_flies,
+			# Food goes off in the pack too, on the same clock (see ItemStack.age).
+			"carried_food": _chunk_manager.step_carried_food,
+			"tall_grass": _chunk_manager.step_tall_grass,
+			# Real aquatic vegetation and the invertebrate layer on it (see
+			# docs/concept/aquatic_foraging.md).
+			"aquatic_vegetation": _chunk_manager.step_aquatic_vegetation,
+			"aquatic_invertebrates": _chunk_manager.step_aquatic_invertebrates,
+			# Wild carrot/potato growth + spread (docs/concept/wild_crops.md):
+			# this line was once simply missing, and its own unit tests never
+			# noticed -- see test_world_simulation_ownership.gd.
+			"wild_crops": _chunk_manager.step_wild_crops,
+			"wild_mushrooms": _chunk_manager.step_wild_mushrooms,
+			"farm_plots": _chunk_manager.step_farm_plots,
+			# Ant mounds and bee colonies forage as populations (AntColony,
+			# docs/concept/bees.md) -- economies that move over simulated days.
+			"ants": _chunk_manager.step_ants,
+			"bees": _chunk_manager.step_bees,
+			"leaf_litter": _chunk_manager.step_leaf_litter,
+			# Footprint stamps age on absolute world time (see FootprintField).
+			"footprints": func(_elapsed: float) -> void: _chunk_manager.step_footprints(),
+			"flowers": _chunk_manager.step_flowers,
+			"desert_scrub": _chunk_manager.step_desert_scrub,
+			"tundra_lichen": _chunk_manager.step_tundra_lichen,
+			# Settlements, then the NPC memory exchange, then regional trade
+			# (docs/concept/regional_trade.md) -- the order they always ran in.
+			"settlements": _chunk_manager.step_settlements,
+			"npc_encounters": _chunk_manager.step_npc_encounters,
+			"regional_trade": _chunk_manager.step_regional_trade,
+			"herbivore_food": _step_herbivore_food_consumption,
+			"reproduction": _step_reproduction,
+		}
+		var labels: Array[String] = []
+		labels.assign(_ecology_steps.keys())
+		_ecology_cadence = StepCadence.new(labels)
+	for due in _ecology_cadence.advance(delta):
+		_ecology_steps[due[0]].call(due[1])
 	# Quest fulfilment is DERIVED, never a separate mutator (see
 	# QuestLog.reconcile, docs/concept/karma_and_luck.md's "Quest lifecycle")
 	# -- runs last in this batch so it sees the freshest possible production/

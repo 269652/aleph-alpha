@@ -1712,6 +1712,38 @@ turn over. Values are sanitised the way `AudioSettings` sanitises volume
 (NaN falls back to the default, out-of-range clamps), pinned by
 `test_simulation_settings.gd`.
 
+### Ecology steps run at a cadence, not a frame rate (`StepCadence`)
+
+**Pillar:** a population, growth or economy step moves on world time and
+takes the seconds that passed; nothing in it needs a frame's freshness.
+Running it sixty times a second walks every loaded chunk sixty times for
+no change anyone could see.
+
+**What was measured (round 13, `soil_fauna.md`):** `World._step_ecology_
+batch` called ~23 chunk-manager steps every frame -- tall grass, leaf
+litter, tree growth, ants, bees, flowers, footprints, ground food, the
+rest -- at 1-5 ms each, ~25 ms of a 6 fps frame. At 60 fps that is the
+same 25 ms of *every* frame: more than the whole 16.7 ms budget, before a
+single creature has stepped.
+
+**Mechanism.** `src/gameplay/step_cadence.gd`: each labelled step runs once
+per `INTERVAL_SECONDS` (0.25 s, test-pinned) and is handed the seconds
+accumulated since it last ran, so its simulated time depends only on the
+wall clock, exactly the contract every step already had. Labels are
+staggered so one interval spreads them across its frames rather than
+stacking them on one; within a frame they keep the order given. At or
+below 4 fps a frame is already an interval and every step runs every
+frame, as before -- the cadence only ever removes work, at high frame
+rates. Quest reconciliation stays outside it, after it, every frame: it is
+the one step that must see the others' freshest state, and it early-outs
+when nothing is accepted. `_step_ecology_fine` (worms, fruiting) still
+runs per time-lapse slice.
+
+**Status:** ✅ `StepCadence` + `World._step_ecology_batch` on it
+(`test_step_cadence.gd`, `test_world_ecology_cadence_wiring.gd`; the four
+`test_world_ecology_batch_*.gd` files keep passing unchanged because each
+hands the batch a whole refresh interval).
+
 ### Frame budget accounting: `--perf-report` (`PerfReport`)
 
 **Pillar:** a frame is script + physics + rendering + engine overhead, and
