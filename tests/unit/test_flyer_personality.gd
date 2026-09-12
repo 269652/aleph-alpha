@@ -404,3 +404,48 @@ func test_only_the_true_butterflies_react_to_the_player():
 		assert_true(FlyerPersonality.reacts_to_player(species), "%s should react" % species)
 	for species in ["bee", "fly", "sparrow", "robin", "kingfisher"]:
 		assert_false(FlyerPersonality.reacts_to_player(species), "%s should not" % species)
+
+
+# -- release: handling leaves an individual warier (docs/concept/ -----------
+# -- capture_dsl.md's "Give it back" section, answering its own former ------
+# -- Open Question) -----------------------------------------------------
+
+## "Should release actually respawn a live creature back into the world?" --
+## capture_dsl.md's own Open Questions used to leave this unanswered. It
+## does now (EarthChunkManager.release_captive), and the individual that
+## comes back out is not identical to the one that went in: a real handling
+## event measurably raises an animal's flight-initiation distance on its
+## next approach (see boldness_after_release's own doc comment for the
+## grounding), so the released individual reads WARIER than an unhandled one
+## of the same starting boldness.
+func test_a_released_individual_is_shyer_than_an_unhandled_one():
+	var rolled := FlyerPersonality.MIDDLING_BOLDNESS
+	var released := FlyerPersonality.boldness_after_release(rolled)
+	assert_lt(
+		released, rolled,
+		"a handled-and-released individual should read warier than one that was never caught"
+	)
+
+
+## The clamp, not the raw subtraction, is what actually stops a released
+## individual going shyer than the shyest possible animal -- pinned at the
+## boundary itself rather than at the tuned penalty's raw number, matching
+## this file's own "no eyeballed numbers" discipline (CLAUDE.md).
+func test_release_never_pushes_boldness_below_the_shyest_possible():
+	assert_eq(
+		FlyerPersonality.boldness_after_release(0.0), 0.0,
+		"already the shyest possible animal -- handling cannot make FLEE any more certain than certain"
+	)
+
+
+## An individual that started closer to the floor than the penalty itself
+## loses LESS than the full penalty once clamped, never a negative trait --
+## exercises the clamp's other real boundary (an input strictly between the
+## floor and a full penalty's worth above it), again against the named
+## constant rather than a second raw number.
+func test_release_penalty_is_bounded_by_the_clamp_not_by_the_input():
+	var half_penalty := FlyerPersonality.RELEASE_BOLDNESS_PENALTY / 2.0
+	assert_eq(
+		FlyerPersonality.boldness_after_release(half_penalty), 0.0,
+		"an individual already near the shy end loses less than the full penalty once clamped"
+	)

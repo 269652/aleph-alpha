@@ -147,6 +147,45 @@ static func inherit(parent_a: Dictionary, parent_b: Dictionary, child_seed: int)
 	return DnaCrossover.new().crossover(parent_a, parent_b, child_seed)
 
 
+# -- release: handling leaves an individual warier (docs/concept/ -----------
+# -- capture_dsl.md's "Give it back" section) --------------------------------
+
+## How much one capture-and-release event costs an individual's boldness.
+##
+## Grounded in the real escape-behaviour literature this whole file already
+## draws on for FID (see SHYEST_FLUSH_DISTANCE_M/BOLDEST_FLUSH_DISTANCE_M
+## above): a single aversive handling event is a well-documented "one-shot"
+## sensitiser of flight-initiation distance -- a handled-and-released animal
+## reliably flushes sooner on its NEXT approach than a naive individual of
+## the same species does, without needing to have been handled more than
+## once. This is that shift, expressed on the same [0, 1] boldness scale
+## every other trait number in this file already uses.
+##
+## Pinned at a FIFTH of the full trait range: big enough that a released
+## middling individual (MIDDLING_BOLDNESS, 0.5) visibly reads warier
+## afterward -- a real, noticeable behavioural change, not a rounding
+## error -- without being so large that a single release could zero out
+## even the boldest possible individual's whole trait (see
+## test_release_never_pushes_boldness_below_the_shyest_possible for the
+## floor that actually stops that, since 1.0 - 0.2 alone would not).
+const RELEASE_BOLDNESS_PENALTY := 0.2
+
+
+## The trait an individual carries out of a net, given the boldness it went
+## in with. This is the ONLY place in the codebase that ever writes a LOWER
+## boldness than an individual was born with -- every other consumer of this
+## trait only ever reads it (see the file-level doc comment's "who calls
+## this" section) or crosses two existing values (inherit); this one place
+## is release_captive's own release-time write.
+##
+## Clamped exactly like boldness_of itself: an already-shyest individual
+## cannot be made shyer than 0.0 by having been handled -- FLEE cannot get
+## any more certain than certain -- so the penalty is bounded by the clamp
+## for anything already close to the floor, not applied in full.
+static func boldness_after_release(rolled_boldness: float) -> float:
+	return clampf(rolled_boldness - RELEASE_BOLDNESS_PENALTY, 0.0, 1.0)
+
+
 static func _bell(seed_value: int, trait_name: String) -> float:
 	var total := 0.0
 	for half in BELL_HALVES:

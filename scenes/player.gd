@@ -3590,9 +3590,15 @@ func _as_sentence(reason: String) -> String:
 
 
 ## Empties a loaded net, letting its catch go (docs/concept/capture_dsl.md's
-## "on release" -- free(from: bag)). Deliberately does not respawn a live
-## creature back into the world -- a documented, honest gap, not attempted
-## here (see capture_dsl.md's Open questions).
+## "on release" -- free(from: bag)) -- AND puts a real, new individual back
+## into the world (EarthChunkManager.release_captive), the honest answer to
+## capture_dsl.md's former Open Question ("Should release actually respawn a
+## live creature back into the world?"). Honest because the original
+## individual is genuinely gone by the time this runs: a non-fish catch was
+## already queue_free'd the moment _attempt_net_catch confined it, and only
+## the species string survived on the item (Item.captive_species) -- so what
+## this spawns is a new individual wearing the caught one's species, not a
+## resurrection.
 func _release_net() -> void:
 	if equipped_item == null or not equipped_item.is_holding_captive():
 		return
@@ -3603,6 +3609,7 @@ func _release_net() -> void:
 		return
 	for effect in result["effects"]:
 		_capture_atom_effects.apply_to_target(effect["atom"], effect["params"], equipped_item, {})
+	_chunk_manager.release_captive(species, position)
 	_capture_result_message = "Released the %s." % species.capitalize()
 	_capture_result_timer = CAPTURE_RESULT_MESSAGE_DURATION
 

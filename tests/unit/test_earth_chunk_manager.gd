@@ -9284,6 +9284,55 @@ func test_a_flyer_birth_is_reported_to_the_regions_population():
 	)
 
 
+# -- "Give it back": release spawns a real, newly wary individual -----------
+#
+# docs/concept/capture_dsl.md's own Open Questions used to leave this
+# unanswered ("Should release actually respawn a live creature back into the
+# world?"). It does now: EarthChunkManager.release_captive is what Player.
+# _release_net calls once its own free(from: bag) effect has run, branching
+# on the SAME two rosters the rest of the codebase already keys spawning off
+# (FishRenderer.SPECIES_POOL vs AmbientFlyerRenderer.BIRD_SPECIES_POOL/
+# butterfly pools) rather than inventing a third species list.
+
+func test_releasing_a_flyer_spawns_a_live_marker_in_the_flock_group():
+	var chunk_coord := Vector2i(0, 0)
+	manager._loaded_ambient_flyers[chunk_coord] = []
+	var position := Vector2(chunk_coord * EarthChunkManager.CHUNK_SIZE) * TerrainRenderer.TILE_SIZE
+	manager.release_captive("sparrow", position)
+	var flyers: Array = manager._loaded_ambient_flyers[chunk_coord]
+	assert_eq(flyers.size(), 1, "release should add exactly one live flyer to this chunk")
+	assert_eq(flyers[0].species, "sparrow", "the released individual keeps the species it went in with")
+
+
+## Fish are net targets too (capture_dsl.md's "Fish are net targets"), and a
+## released fish goes back into a real body of water, never dry land --
+## fish_capacity_at (ecosystem_simulation.gd) is this region's own real
+## "is there water here at all" fact, the same one an unloaded chunk's
+## catch-up integrates toward.
+func test_releasing_a_fish_onto_dry_land_does_nothing():
+	var chunk_coord := Vector2i(500, 500)  # never surveyed -- fish_capacity_at is 0.0 for an unknown region
+	manager._loaded_fish[chunk_coord] = []
+	var position := Vector2(chunk_coord * EarthChunkManager.CHUNK_SIZE) * TerrainRenderer.TILE_SIZE
+	manager.release_captive("goldfish", position)
+	assert_eq(manager._loaded_fish[chunk_coord].size(), 0, "no water here -- releasing a fish must do nothing")
+
+
+func test_releasing_a_fish_where_there_is_water_restores_its_population():
+	var chunk_coord := Vector2i(0, 0)
+	manager._loaded_fish[chunk_coord] = []
+	manager._ecosystem._water_area_cells[chunk_coord] = 50.0
+	manager._ecosystem._water_temperature[chunk_coord] = 0.5
+	manager._ecosystem._fish_population[chunk_coord] = 2.0
+	var before_population: float = manager._ecosystem.fish_population(chunk_coord)
+	var position := Vector2(chunk_coord * EarthChunkManager.CHUNK_SIZE) * TerrainRenderer.TILE_SIZE
+	manager.release_captive("goldfish", position)
+	assert_eq(manager._loaded_fish[chunk_coord].size(), 1, "release should add exactly one live fish")
+	assert_almost_eq(
+		manager._ecosystem.fish_population(chunk_coord), before_population + 1.0, 0.0001,
+		"a released fish restores the region's aggregate, the exact inverse of record_catch"
+	)
+
+
 # -- land ecology survives a real restart ------------------------------------
 #
 # Fish already persisted; herbivores, predators and vegetation lived only in

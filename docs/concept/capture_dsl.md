@@ -253,8 +253,19 @@ Mirrors [spell_runtime.md](spell_runtime.md)'s own resolution-order section:
    "Missed!" — the flyer's own existing `FlyerPersonality` flee/dance
    reaction keeps running exactly as it already does, untouched.
 5. `on release`: no guard, no roll — `free(from: bag)` clears
-   `captive_species`. Does **not** respawn a live creature back into the
-   world (⬜, an honest, named gap — see Open questions).
+   `captive_species`, and **now also** puts a real, new individual back into
+   the world *(2026-09-12 — "Give it back")*:
+   `EarthChunkManager.release_captive(species, pixel_position)`, called by
+   `Player._release_net` right after the effect loop. It branches on the
+   same two rosters every other spawn path in the file already keys off
+   (`FishRenderer.SPECIES_POOL` vs `AmbientFlyerRenderer`'s bird/butterfly
+   pools) — never a third, invented species list. A fish goes back through
+   `spawn_fish_at` only where `fish_capacity_at(chunk_coord) > 0.0` (dry
+   land, silently, otherwise), restoring the region's aggregate through
+   `seed_fish_population`, the exact inverse of `record_catch`. A flyer/bird
+   goes back through `build_flyer`/`build_bird` into the loaded chunk's own
+   `_loaded_ambient_flyers` bucket. See "Release: a warier individual comes
+   back" below for what makes this honest rather than a resurrection.
 6. `on transfer(CONTAINER)`: matched by `event_arg == CONTAINER`.
    `move_captive` reports the species that moved; Player consumes one
    `CONTAINER` from inventory and grants it loaded.
@@ -323,6 +334,13 @@ Mirrors [spell_runtime.md](spell_runtime.md)'s own resolution-order section:
   `_release_net`, `_bottle_captive`, `_perform_context_action` (the
   hover-verb-then-tool-self-action fallback). Menagerie bonding keeps its
   exact shape — the roll only gates whether the catch happens at all.
+- ✅ *(2026-09-12)* **"Give it back": release respawns a real, newly wary
+  individual.** `EarthChunkManager.release_captive`, called from
+  `Player._release_net` right after its `free(from: bag)` effect;
+  `FlyerPersonality.boldness_after_release` (pinned `RELEASE_BOLDNESS_
+  PENALTY := 0.2`, tested at its clamp boundaries, not at the raw number).
+  See "Release: a warier individual comes back" above for the mechanism and
+  its real-world grounding.
 - ✅ `bottled_creature_wander.gd` (confined fly/rest state)
 - ✅ `illustrated_glass_bottle_sprite.gd` (the fixed 3×2 sheet reader)
 - ✅ `bottled_creature_view.gd` and its `DroppedItem` wiring — a dropped,
@@ -399,11 +417,42 @@ loaded bottle set down in the world gets a small child view
 (`bottled_creature_view.gd`: back sprite → creature sprite → front sprite)
 instead of `DroppedItem`'s ordinary single flat texture.
 
+## Release: a warier individual comes back *(2026-09-12 — "Give it back")*
+
+Answered: yes, `release` respawns a live creature — `EarthChunkManager.
+release_captive`, wired from `Player._release_net` — and it is honest
+precisely because it does **not** pretend to be the same individual. By the
+time `_release_net` runs, the one that was caught is already gone: a
+non-fish catch was `queue_free`'d the instant `_attempt_net_catch` confined
+it (`Item.captive_species` is the only thing that survived the trip), so
+what comes back out wearing that species is necessarily a new individual,
+not a resurrection.
+
+That new individual is not a blank slate either. A real captured-and-
+released animal is measurably warier on its next approach than one that was
+never handled — capture-and-release studies across taxa report a
+handling-stress effect on flight-initiation distance (FID) that this file's
+own `SHYEST_FLUSH_DISTANCE_M`/`BOLDEST_FLUSH_DISTANCE_M` axis already
+models: a single aversive handling event is a well-documented one-shot
+sensitiser, not something that requires being caught twice to show up.
+`FlyerPersonality.boldness_after_release(rolled_boldness)` is that shift,
+expressed on the same `[0, 1]` boldness scale as every other trait number
+in the file: `clampf(rolled_boldness - RELEASE_BOLDNESS_PENALTY, 0.0,
+1.0)`, with `RELEASE_BOLDNESS_PENALTY := 0.2` (a fifth of the full trait
+range — enough that a released middling individual visibly reads warier
+afterward, without a single release ever being able to zero out the
+boldest possible individual's whole trait). Applied exactly once, at
+`release_captive`'s own flyer/bird spawn site, to the individual's own
+freshly-rolled seed-derived boldness — nowhere else in the codebase ever
+writes a *lower* boldness than an individual was born with.
+
+A fish has no personality trait to sour (`FlyerPersonality` only ever
+covers flyers), so only the flyer/bird branch of `release_captive` touches
+this; a released fish is exactly as bold (i.e. exactly as un-modeled) as
+any other fish in the pond.
+
 ## Open questions
 
-- Should `release` actually respawn a live creature back into the world,
-  rather than just emptying the tool? Symmetrical and arguably more honest
-  physically, but not asked for and not built here.
 - Does `struggle_roll` (the restrain tier) ever get ported into this same
   grammar, or do the two tiers stay permanently separate because they are
   genuinely different physical acts — an instant swing versus a multi-minute
