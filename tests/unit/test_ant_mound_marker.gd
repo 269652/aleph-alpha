@@ -251,3 +251,21 @@ func test_process_with_no_colony_set_up_does_not_crash_or_change_size():
 	var before := sprite.scale.x
 	marker._process(AntMoundMarker.RESIZE_INTERVAL_SECONDS + 1.0)
 	assert_almost_eq(sprite.scale.x, before, 0.0001)
+
+
+## FPS regression round 13: the RESIZE_INTERVAL_SECONDS-second tick comes from a Timer
+## child now, not from an engine _process paying ~7 us of dispatch every
+## frame to add a delta and return; the timer drives the same _process.
+func test_the_tick_comes_from_a_timer_not_from_engine_frames():
+	assert_false(marker.is_processing(), "no per-frame dispatch")
+	var timer := marker.get_node_or_null("TickTimer") as Timer
+	assert_not_null(timer, "the Timer child that stands in for the frames")
+	assert_almost_eq(timer.wait_time, AntMoundMarker.RESIZE_INTERVAL_SECONDS, 0.0001)
+	assert_true(timer.autostart, "started the moment the marker is in the tree")
+	assert_false(timer.one_shot, "and it keeps ticking")
+
+
+func test_a_tick_without_a_colony_is_the_same_harmless_no_op_as_before():
+	var timer := marker.get_node("TickTimer") as Timer
+	timer.timeout.emit()
+	pass_test("no colony: _process returns before touching anything, exactly as a direct call does")
