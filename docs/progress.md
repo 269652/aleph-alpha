@@ -20430,8 +20430,11 @@ Closes round 14's own flagged residual above. Write-up in
   `test_earth_chunk_manager.gd` still pass unmodified -- below the cap
   this is a byte-identical no-op. The 77th
   (`test_an_unloaded_settlement_really_declines_by_eating_through_its_stores`)
-  fails identically on a clean `origin/main` checkout too -- pre-existing,
-  confirmed unrelated, flagged separately.
+  failed identically on a clean `origin/main` checkout too -- pre-existing,
+  confirmed unrelated, flagged separately as a follow-up. A separate
+  session picked it up same-day (`04b494f9`): a real upstream fix had
+  removed the one small pond this test's chunk depended on; repointed at a
+  real nearby river instead, test-only. 77/77 since.
 - ✅ Confirmed two ways: a live `--perf-report` run (~8.3 continuous
   minutes post-boot, real save with real history, no crash) held
   `s_settlements` at 0.0-0.1 ms across all 248 printed lines (this save's
