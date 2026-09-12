@@ -20450,3 +20450,43 @@ restored snapshot.
   founded, never scoped to loaded chunks or capped -- a second, real,
   slower-growing session-length cost. Flagged for a follow-up.
 
+### FPS regression round 14's follow-up: step_settlements' per-tick cost bounded (2026-09-13)
+
+Closes round 14's own flagged residual above. Write-up in
+`concept/soil_fauna.md`'s "FPS regression round 14's follow-up".
+
+- ✅ `EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_STEP` (20):
+  `step_settlements` now assesses every LOADED settlement every tick plus
+  a round-robin slice of at most this many BACKGROUND ones
+  (`_settlement_ids_due_this_step`) -- not a "skip unloaded settlements"
+  fix, which the code's own doc comments (`_villagers_in_settlement`,
+  `_step_settlement_granary`) rule out: every one of the five
+  per-settlement calls is built to keep a settlement's history alive
+  whether or not anyone is near it.
+- ✅ New `s_settlements` perf-report section (`World._step_ecology_batch`)
+  isolates this cost from the whole-ecology-batch total.
+- Tests: 7 new (`test_earth_chunk_manager.gd`) pin the cap, round-robin
+  fairness/coverage, and loaded-settlement exemption; 1 new
+  (`test_world_perf_report_wiring.gd`) pins the new section. TDD
+  red-first: a behavior-preserving stub landed first so the new tests
+  could compile and genuinely fail, then the real logic went in.
+  76 of 77 pre-existing "settlement"-named tests in
+  `test_earth_chunk_manager.gd` still pass unmodified -- below the cap
+  this is a byte-identical no-op. The 77th
+  (`test_an_unloaded_settlement_really_declines_by_eating_through_its_stores`)
+  fails identically on a clean `origin/main` checkout too -- pre-existing,
+  confirmed unrelated, flagged separately.
+- ✅ Confirmed two ways: a live `--perf-report` run (~10 continuous
+  minutes post-boot, real save with real history) held `s_settlements` at
+  0.0-0.1 ms throughout (this save's real settlement count sits under the
+  cap, so mainly a no-regression/no-crash confirmation); a direct,
+  controlled probe (N settlements founded via
+  `record_settlement_founded_if_new`, `step_settlements` timed) run
+  identically against `origin/main` and this branch shows the asymptotic
+  story directly -- unfixed steady-state cost 3.0/11.7/23.7/56.1 ms at
+  20/50/100/200 settlements (linear, as the root cause predicts) vs.
+  fixed 5.6/5.2/5.6/5.7 ms (flat, ~10x cheaper by 200 and the gap only
+  widens). At exactly the cap (20) the fix costs marginally more --
+  honest, small, constant classification overhead with nothing yet to
+  paginate away.
+

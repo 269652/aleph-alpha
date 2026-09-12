@@ -71,6 +71,29 @@ func test_process_folds_the_schedulers_per_class_step_profile_into_the_sections(
 	assert_true(body.contains("_perf_report.add_count(key, step_profile[key][\"steps\"])"), "and its step count rides along, so ms per step is readable")
 
 
+## FPS regression round 14's residual finding (docs/concept/soil_fauna.md):
+## step_settlements' own per-tick cost used to be invisible inside the
+## whole-ecology-batch total, indistinguishable from ~25 other cadence
+## steps sharing the same "ecology" section. Isolating it here is what lets
+## a live run actually confirm EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_
+## PER_STEP's pagination fix holds, rather than reading it off a total that
+## also moves for unrelated reasons.
+func test_step_ecology_batch_gives_settlements_its_own_perf_section():
+	var body := _body_of("_step_ecology_batch")
+	assert_true(
+		body.contains("_perf_report.add_section(\"settlements\", "),
+		"step_settlements needs its own section, not just the whole-ecology total"
+	)
+	assert_true(
+		body.contains("due[0] == \"settlements\""),
+		"only the settlements cadence label is singled out for its own timing"
+	)
+	assert_true(
+		body.contains("if _perf_report != null and due[0] == \"settlements\":"),
+		"zero cost when no report is running, the same guard every other section already uses"
+	)
+
+
 func test_ready_adds_the_frame_end_sentinel_and_process_opens_the_span():
 	var ready := _body_of("_ready")
 	var gate_at := ready.find("if PerfReport.requested(args):")
