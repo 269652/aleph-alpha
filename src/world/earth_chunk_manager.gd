@@ -125,6 +125,7 @@ const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
+const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_renderer.gd")
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
@@ -10495,6 +10496,66 @@ func catch_nearest_fish(pixel_position: Vector2, max_distance: float) -> Diction
 	nearest.free()
 	_ecosystem.record_catch(chunk_coord, 1.0)
 	return {"species": species, "mass_kg": mass_kg}
+
+
+## "Give it back" (docs/concept/capture_dsl.md's release section, answering
+## its own former Open Question): a net's `free(from: bag)` effect only ever
+## cleared Item.captive_species -- the individual that went in was already
+## gone (Player._attempt_net_catch queue_frees a non-fish catch the moment it
+## is confined), so emptying the net alone put nothing back into the world.
+## This is Player._release_net's other half: a REAL, NEW individual re-enters
+## the world at the release point, branching on the same two species rosters
+## every other spawn path in this file already keys off
+## (FishRenderer.SPECIES_POOL vs AmbientFlyerRenderer's bird/butterfly
+## pools) rather than a third, invented species list.
+##
+## A fish goes back into water it actually fits in, or nowhere: releasing a
+## goldfish onto dry land does nothing, silently, the same "no water here, no
+## crash" contract fish_capacity_at's own doc comment already holds catch-up
+## to. A flyer/bird has no such physical gate here (there is no "no air"
+## case) -- it only refuses if this position's chunk has no ambient-flyer
+## bucket loaded at all, mirroring spawn_flyer_offspring's own identical
+## guard immediately above.
+##
+## The released individual is not the one that was caught -- it is a NEW one
+## wearing the same species, warier for having just been handled
+## (FlyerPersonality.boldness_after_release; see docs/concept/capture_dsl.md
+## and FlyerPersonality's own doc comment for the real-world grounding). A
+## fish has no personality to sour, so only the flyer branch touches it.
+func release_captive(species: String, pixel_position: Vector2) -> void:
+	if species.is_empty():
+		return
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	if FishRenderer.SPECIES_POOL.has(species):
+		if _ecosystem.fish_capacity_at(chunk_coord) <= 0.0:
+			return  # dry land (or an unsurveyed region) -- nowhere to put a fish back
+		var fish := _fish_renderer.spawn_fish_at(
+			_entities_parent, species, pixel_position,
+			hash("%d_%d_released_fish" % [int(pixel_position.x), int(pixel_position.y)])
+		)
+		if not _loaded_fish.has(chunk_coord):
+			_loaded_fish[chunk_coord] = []
+		_loaded_fish[chunk_coord].append(fish)
+		# The exact inverse of record_catch above -- a released fish restores
+		# the region's aggregate by one, the same population it was
+		# subtracted from at the moment it was caught.
+		_ecosystem.seed_fish_population(chunk_coord, _ecosystem.fish_population(chunk_coord) + 1.0)
+		return
+	if not _loaded_ambient_flyers.has(chunk_coord):
+		return  # no flyer bucket loaded here -- nothing to add this individual to
+	var seed_value := hash("%d_%d_released_flyer" % [int(pixel_position.x), int(pixel_position.y)])
+	var flyer
+	if AmbientFlyerRenderer.BIRD_SPECIES_POOL.has(species):
+		flyer = _ambient_flyer_renderer.build_bird(_creatures_parent, species, pixel_position, seed_value)
+	else:
+		flyer = _ambient_flyer_renderer.build_flyer(_creatures_parent, species, pixel_position, seed_value)
+	# personality() lazily rolls this individual's seed-derived boldness the
+	# first time it is read (see AmbientFlyerMarker.personality) -- reading it
+	# here, once, at spawn is what lets the release penalty be applied to the
+	# real rolled value rather than to the middling default.
+	var rolled_boldness := FlyerPersonality.boldness_of(flyer.personality())
+	flyer.traits[FlyerPersonality.TRAIT_BOLDNESS] = FlyerPersonality.boldness_after_release(rolled_boldness)
+	_loaded_ambient_flyers[chunk_coord].append(flyer)
 
 
 ## This pixel's chunk's aggregate fish population -- the duck-typed hook
