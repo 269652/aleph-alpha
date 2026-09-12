@@ -194,7 +194,7 @@ const BODY_PLANS := {
 			DRIVE_THIRST: {"rise_seconds": 1.0 / 0.03, "threshold": 0.5, "meal": 1.0, "stagger": 0.45},
 		},
 		"wirings": [
-			{"gate": DRIVE_FEAR, "channels": [PREDATOR, PLAYER], "approach": "attack", "avoid": "flee"},
+			{"gate": DRIVE_FEAR, "channels": [PREDATOR, PLAYER, SMOKE], "approach": "attack", "avoid": "flee"},
 			{"gate": DRIVE_THIRST, "channels": [WATER], "approach": "seek_water", "search": "search_water"},
 			{"gate": DRIVE_HUNGER, "channels": [FLESH], "approach": "hunt"},
 			{"gate": DRIVE_HUNGER, "channels": [CARRION], "approach": "scavenge"},

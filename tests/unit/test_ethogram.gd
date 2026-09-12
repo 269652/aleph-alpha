@@ -255,9 +255,24 @@ func test_the_fear_wiring_listens_on_predator_and_player():
 		if wiring["gate"] == "fear":
 			fear.append(wiring)
 	assert_eq(fear.size(), 1)
-	assert_eq(fear[0]["channels"], ["predator", "player"])
+	assert_eq(fear[0]["channels"], ["predator", "player", "smoke"])
 	assert_eq(fear[0]["approach"], "attack")
 	assert_eq(fear[0]["avoid"], "flee")
+
+
+## Smoke is a universal-negative-valence smell (see SPECIES' own per-species
+## SMOKE valence, all -1.0/-0.8/-0.4) but until now nothing actually WIRED it
+## to a behavior -- a mammal could smell a lit fire and do nothing about it.
+## A lit fire is the same kind of "get away from this" signal a predator or
+## the player is, so it rides the SAME fear gate/flee approach, not a new one
+## (docs/concept/olfaction.md's "smoke... emitting into the same field").
+func test_the_fear_wiring_also_flees_a_lit_fires_smoke():
+	var fear := []
+	for wiring in Ethogram.wirings_for("mammal"):
+		if wiring["gate"] == "fear":
+			fear.append(wiring)
+	assert_eq(fear.size(), 1)
+	assert_has(fear[0]["channels"], Ethogram.SMOKE, "smoke should join predator/player on the flee gate")
 
 
 ## The smell wiring carries the interest floor ScentForaging used to keep
