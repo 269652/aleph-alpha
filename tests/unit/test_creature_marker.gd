@@ -71,6 +71,16 @@ class DiseaseCapableStubWorld:
 		return 1.0
 
 
+## A StubWorld that also answers campfires_near -- the WHERE a lit fire is
+## that _scan_smoke_stimuli needs (see docs/concept/olfaction.md's smoke
+## molecule, now wired to the mammal fear gate alongside PREDATOR/PLAYER).
+class StubWorldWithCampfire:
+	extends StubWorld
+	var campfire_positions: Array[Vector2] = []
+	func campfires_near(_pixel_position: Vector2, _radius_tiles: float) -> Array[Vector2]:
+		return campfire_positions
+
+
 class StubPlayer:
 	extends Node2D
 	var damage_taken := 0.0
@@ -737,6 +747,29 @@ func test_herbivore_flees_away_from_a_nearby_player():
 	marker._process(0.2)
 
 	assert_lt(marker.position.x, 100.0, "herbivore should move away from the player")
+
+
+## A lit campfire's smoke reads as the same kind of "get away from this"
+## signal a predator or the player already does (docs/concept/olfaction.md's
+## universal-negative SMOKE valence, now wired to the fear gate) -- so a
+## herbivore standing near a lit fire should flee it exactly the way it
+## flees a nearby predator, through _scan_smoke_stimuli -> the shared fear
+## wiring, not a bespoke fire-avoidance system.
+##
+## wander_seed overridden to 41: the fixture's default 5 happens to drift
+## west on its own at this short a step (plain unforced wander, no world at
+## all), which would let this assertion pass even with no smoke wired --
+## 41 drifts EAST by default at the same step, so only a real flee response
+## (forced west, away from the fire) can land x below home.
+func test_herbivore_flees_a_nearby_lit_campfires_smoke():
+	marker.wander_seed = 41
+	var world := StubWorldWithCampfire.new()
+	world.campfire_positions = [Vector2(120, 100)]  # to the east, within nose range
+	marker.setup(world, TILE_SIZE)
+
+	marker._process(0.2)
+
+	assert_lt(marker.position.x, 100.0, "herbivore should move west, away from the campfire's smoke")
 
 
 ## End-to-end soak test with realistic per-frame deltas (not the big 0.2-0.3s

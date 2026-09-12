@@ -184,9 +184,11 @@ const BODY_PLANS := {
 		"receptors": {
 			"sensitivity": {
 				PREDATOR: 1.0, PLAYER: 1.0, FLESH: 1.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0, CARRION: 1.0,
+				SMOKE: 1.0,
 			},
 			"valence": {
 				PREDATOR: -1.0, PLAYER: -1.0, FLESH: 0.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0, CARRION: 0.0,
+				SMOKE: -1.0,
 			},
 		},
 		"drives": {
@@ -194,7 +196,7 @@ const BODY_PLANS := {
 			DRIVE_THIRST: {"rise_seconds": 1.0 / 0.03, "threshold": 0.5, "meal": 1.0, "stagger": 0.45},
 		},
 		"wirings": [
-			{"gate": DRIVE_FEAR, "channels": [PREDATOR, PLAYER], "approach": "attack", "avoid": "flee"},
+			{"gate": DRIVE_FEAR, "channels": [PREDATOR, PLAYER, SMOKE], "approach": "attack", "avoid": "flee"},
 			{"gate": DRIVE_THIRST, "channels": [WATER], "approach": "seek_water", "search": "search_water"},
 			{"gate": DRIVE_HUNGER, "channels": [FLESH], "approach": "hunt"},
 			{"gate": DRIVE_HUNGER, "channels": [CARRION], "approach": "scavenge"},

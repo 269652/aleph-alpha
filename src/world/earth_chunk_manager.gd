@@ -11486,6 +11486,24 @@ func nearby_structure_positions(pixel_position: Vector2, structure_id: String, m
 	return found
 
 
+## Every lit fire's pixel-space tile center within `radius_tiles` of
+## `pixel_position` -- "campfire" and "furnace" both, the two real
+## fire-producing placeable structures (see ItemCatalog), so a creature's
+## nose doesn't need to know there are two kinds of fire, just that
+## something is burning nearby (docs/concept/olfaction.md's smoke molecule).
+## `radius_tiles` matches every other olfaction range (Olfaction.
+## MAX_RANGE_TILES), unlike nearby_structure_positions' own pixel-space
+## `max_distance` -- converted here so a caller never has to multiply by
+## TILE_SIZE itself. Reuses nearby_structure_positions' own chunk-Chebyshev-
+## radius-1 scan for each structure id and concatenates the two results.
+func campfires_near(pixel_position: Vector2, radius_tiles: float) -> Array[Vector2]:
+	var radius_pixels := radius_tiles * TerrainRenderer.TILE_SIZE
+	var found: Array[Vector2] = []
+	found.append_array(nearby_structure_positions(pixel_position, "campfire", radius_pixels))
+	found.append_array(nearby_structure_positions(pixel_position, "furnace", radius_pixels))
+	return found
+
+
 ## The stock key a structure's own tile position resolves to -- position, not
 ## structure id, is the identity (see StructureStockStore's own doc comment:
 ## two structures never share a stock).
