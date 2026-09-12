@@ -50,8 +50,10 @@ var _section_frames := 0
 var _frame_started_usec := -1
 var _last_frame_started_usec := -1
 ## Label -> how many times it happened since the last take_counts()
-## (scheduler steps per class); reported per frame like the sections.
+## (scheduler steps per class); reported per frame like the sections, on
+## its own frame count so the two takes are independent of each other.
 var _counts: Dictionary = {}
+var _count_frames := 0
 
 
 static func requested(args: PackedStringArray) -> bool:
@@ -64,6 +66,7 @@ static func requested(args: PackedStringArray) -> bool:
 func tick(delta: float) -> bool:
 	_accumulator += delta
 	_section_frames += 1
+	_count_frames += 1
 	if _accumulator < REPORT_INTERVAL_SECONDS:
 		return false
 	_accumulator = 0.0
@@ -107,14 +110,17 @@ func add_count(label: String, count: int) -> void:
 
 
 ## Every count as an average per frame over the ticks since the last take;
-## taking resets. Read the counts BEFORE the sections: take_sections is
-## what resets the shared frame count.
+## taking resets. Independent of take_sections: World reads the two in one
+## expression, sections first, and the first wiring had the counts dividing
+## by a frame count the sections had just reset -- every c_ field printed
+## as nothing for three runs.
 func take_counts() -> Dictionary:
 	var counts := {}
-	if _section_frames > 0:
+	if _count_frames > 0:
 		for label in _counts:
-			counts[label] = float(_counts[label]) / float(_section_frames)
+			counts[label] = float(_counts[label]) / float(_count_frames)
 	_counts = {}
+	_count_frames = 0
 	return counts
 
 

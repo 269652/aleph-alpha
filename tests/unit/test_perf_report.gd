@@ -256,3 +256,17 @@ func test_consecutive_frame_starts_record_the_loop_period():
 
 	assert_almost_eq(sections["loop"], 20.0, 0.001, "one 20 ms period over one frame that had a predecessor")
 	assert_almost_eq(sections["tree"], 1.5, 0.001, "two closed spans, 2 ms and 1 ms, over one tick")
+
+
+## World reads the sections and then the counts in one expression; the
+## counts must not depend on the frame count the sections just reset.
+func test_taking_the_sections_first_does_not_empty_the_counts():
+	var report := PerfReport.new()
+	report.add_count("fish_marker", 4)
+	report.add_section("step_fish_marker", 2000)
+	report.tick(INTERVAL * 2.0)
+	report.take_sections()
+
+	var counts: Dictionary = report.take_counts()
+
+	assert_almost_eq(counts.get("fish_marker", 0.0), 4.0, 0.001, "four steps over one frame, sections or no sections")
