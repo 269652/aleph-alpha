@@ -80,7 +80,28 @@ if ([string]::IsNullOrWhiteSpace($KeyPath)) {
 function Invoke-Checked {
     param([string]$Description, [scriptblock]$Action)
     Write-Host "-> $Description" -ForegroundColor Cyan
-    & $Action
+    Invoke-NativeChecked -Description $Description -Action $Action
+}
+
+# Runs a native command and judges it by its EXIT CODE alone. Windows
+# PowerShell 5.1 wraps every stderr line a native program prints in an
+# ErrorRecord, and under $ErrorActionPreference = 'Stop' (or a caller
+# merging the error stream) that record terminates the script even when the
+# program exited 0. Three real rebuilds of v0.0.1 died this way after the
+# real work was done: git's "Everything up-to-date" on push, and Godot's
+# harmless "CompanionServer: could not bind 127.0.0.1:8731" warning during
+# signing. Both are stderr chatter with exit code 0.
+function Invoke-NativeChecked {
+    param([string]$Description, [scriptblock]$Action)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $global:LASTEXITCODE = 0
+    try {
+        & $Action 2>&1 | ForEach-Object { Write-Host ("$_") }
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "$Description failed (exit code $LASTEXITCODE)"
     }
@@ -162,12 +183,12 @@ try {
     # point at is actually reachable on origin -- otherwise a customer (or
     # GitHub's own UI) following the tag to "compare" or browse history
     # could land on a commit that only ever existed locally.
-    git push
+    Invoke-NativeChecked "Pushing the current branch" { git push }
 
     $tagExistsLocally = git tag --list $tag
     if (-not $tagExistsLocally) {
-        git tag -a $tag -m "Release $tag"
-        git push origin $tag
+        Invoke-NativeChecked "Tagging $tag" { git tag -a $tag -m "Release $tag" }
+        Invoke-NativeChecked "Pushing tag $tag" { git push origin $tag }
         Write-Host "Created and pushed tag $tag"
     }
     else {
