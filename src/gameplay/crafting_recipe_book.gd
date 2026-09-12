@@ -228,6 +228,16 @@ const _RECIPES := {
 		"inputs": [{"item_id": "wood", "count": 12}, {"item_id": "plank", "count": 4}],
 		"output": {"item_id": "storage", "count": 1},
 	},
+	# The Farm (see docs/concept/npc_farm_production.md): a small tilled,
+	# fenced plot a Farmer moves into and works forever. Cheaper than
+	# Storage's own enclosed lumber shed -- there's no roof or walls to
+	# raise, just ground to till and a simple fence: wood (6) for rails/
+	# posts, plant_fibre (4) lashing them together. No skill gate, matching
+	# Storage's own reachability.
+	"farm": {
+		"inputs": [{"item_id": "wood", "count": 6}, {"item_id": "plant_fibre", "count": 4}],
+		"output": {"item_id": "farm", "count": 1},
+	},
 	# A stone check dam (see docs/concept/rivers.md's "Dams"). Costs `rock`
 	# -- what picking up a pebble and smashing a boulder both yield -- and
 	# NOT mined `stone`, so damming a stream needs only what its own banks
