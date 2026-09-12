@@ -162,6 +162,23 @@ every run, and `--spawn-seed=N` overrides either way
 (`World.spawn_seed_for`). Pinned by `test_spawn_river_picker.gd` and the
 new cases in `test_world_spawn_location.gd`.
 
+### `/river`: teleport to a random curated river, on demand (2026-09-12)
+
+"Can you make a /river command which teleports you to a random river?"
+`World._handle_river_command` reuses the exact machinery above rather
+than a second implementation: `SpawnRiverPicker.pick` against
+`RiverCatalog.tile_polylines`, filtered by the same `_spawn_candidate_
+acceptable`, landed on dry ground by the same `_find_dry_land_spawn`. The
+one difference from the spawn path: a fresh, randomized RNG every call
+(spawn's seeding is about making ONE session's start reproducible for
+measurement; a console command a player types twice should not always
+answer the same). No qualifying bank within the picker's attempt budget
+logs a clear refusal rather than silently doing nothing. Pinned from
+source text by `test_river_command_clarity.gd`, the same shape every
+other console command in this file uses (see e.g. `/village`,
+`/mushroom`) since driving a live `World` needs a full generator with
+hydrology loaded.
+
 ## Rendering: overlay, not a new biome
 
 `TerrainRenderer` already has an extensive corner/edge blend system keyed
@@ -1354,6 +1371,18 @@ for 81×81 queries per rebuild, so the renderer memoises answers per tile
 — rivers never move — re-querying only the freshly exposed edge when the
 window steps (`test_river_lookups_are_remembered_across_builds`), with a
 250k-tile cap so a cross-country hike cannot hold the world in memory.
+
+**Lakes did not get the same treatment (2026-09-12).** Reported live:
+"there's a giant river on the map but not on the minimap." The ground
+renders a river and a baked lake as the same unified water surface
+(`hydrology.md`'s one-water-surface overlay), so a wide lake looks exactly
+like a river to a player standing in it — but `MinimapRenderer` only ever
+asked `is_river_at_global`, never `is_lake_at_global`, so a lake painted
+nothing and showed as whatever land biome sat under it. Fixed with the
+identical duck-typed, memoised, capped shape the river lookup already
+uses (`is_lake_at_global` optional, its own `_lake_memo`); a tile is water
+if either lookup says so. `test_lake_tiles_paint_water_blue_over_their_biome`
+/ `test_lake_lookups_are_remembered_across_builds_the_same_as_river_lookups`.
 
 ## The full bilinear frame, forward drift, round obstacles (2026-09-01)
 

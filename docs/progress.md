@@ -20251,6 +20251,32 @@ data finding instead: the elevation asset has the North Sea as low land
 (Hoek van Holland and the open sea at 55N 3E both read grassland), so
 that coast does not exist in this world.
 
+### Minimap lakes, and a `/river` teleport command (2026-09-12)
+
+Reported live: "Somehow there's a giant river on the map but not on the
+minimap." **Correction to the entry directly above:** that survey checked
+whether any water bypasses the GROUND's own one-water-surface overlay
+(none does) but never checked the minimap's own separate code path --
+which is exactly where this bug lived. A lake renders on the ground as
+the same unified water surface as a river (so a wide one reads as "a
+giant river" to a player standing in it), but `MinimapRenderer.build_image`
+only ever asked `is_river_at_global`, never `is_lake_at_global` -- a real,
+one-line omission, not a data gap. ✅ Fixed with the identical duck-typed,
+memoised, capped shape the river lookup already used; TDD red-first
+(`test_lake_tiles_paint_water_blue_over_their_biome` and two more in
+`test_minimap_renderer.gd`), green after. Spec: `concept/rivers.md`
+"Rivers on the minimap".
+
+Also asked: "Can you make a /river command which teleports you to a
+random river?" ✅ `World._handle_river_command` (`/river`), reusing the
+same-day spawn machinery above rather than a second implementation:
+`SpawnRiverPicker.pick` + `RiverCatalog.tile_polylines`, filtered by
+`_spawn_candidate_acceptable`, landed by `_find_dry_land_spawn` -- a
+fresh randomized RNG per call, unlike spawn's own seeded one. Pinned
+source-contract style (the shape every console command in this codebase
+uses) by `test_river_command_clarity.gd`. Spec: `concept/rivers.md`
+"/river: teleport to a random curated river, on demand".
+
 ### FPS regression round 13: the whole frame measured, five structural cuts, 6 -> 23 fps (2026-09-12)
 
 "Can you fix the performance issues and get FPS back to 60+?" Write-up in

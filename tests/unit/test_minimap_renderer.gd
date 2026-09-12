@@ -205,3 +205,58 @@ func test_a_source_without_the_river_lookup_still_builds():
 	var source := StubBiomeSource.new("grassland")
 	var image := renderer.build_image(source, Vector2i(0, 0))
 	assert_not_null(image, "the river lookup must stay optional -- duck-typed sources vary")
+
+
+## Reported live: "there's a giant river on the map but not on the
+## minimap" -- a LAKE (rendered as the same unified water surface as a
+## river on the ground, docs/concept/hydrology.md) painted nothing on the
+## minimap, because build_image only ever asked is_river_at_global, never
+## is_lake_at_global. Same duck-typed-optional shape as the river lookup
+## above: plenty of sources (tests, tools) carry only biomes.
+class LakeBiomeSource extends StubBiomeSource:
+	var _lake_tiles: Dictionary  # Vector2i -> true
+	func _init(default_biome: String, lake_tiles: Array) -> void:
+		super._init(default_biome)
+		for tile in lake_tiles:
+			_lake_tiles[tile] = true
+	func is_lake_at_global(x: int, y: int) -> bool:
+		return _lake_tiles.has(Vector2i(x, y))
+
+
+func test_lake_tiles_paint_water_blue_over_their_biome():
+	var source := LakeBiomeSource.new("forest", [Vector2i(-2, 0)])
+	var image := renderer.build_image(source, Vector2i(0, 0))
+	var radius := MinimapRenderer.SAMPLE_RADIUS_TILES
+	var lake_pixel := image.get_pixel(radius - 2, radius)
+	var land_pixel := image.get_pixel(radius, radius)
+	var water: Color = TerrainRenderer.BIOME_COLORS["ocean"]
+	assert_almost_eq(lake_pixel.b, water.b, 0.01, "a lake tile must read as water, the same as a river")
+	assert_almost_eq(lake_pixel.r, water.r, 0.01)
+	assert_ne(lake_pixel.b, land_pixel.b, "the lake must stand out from the forest around it")
+
+
+func test_a_source_without_the_lake_lookup_still_builds():
+	var source := RiverBiomeSource.new("grassland", [Vector2i(3, 0)])
+	var image := renderer.build_image(source, Vector2i(0, 0))
+	assert_not_null(image, "the lake lookup must stay optional too -- duck-typed sources vary")
+
+
+class CountingLakeSource extends LakeBiomeSource:
+	var lake_call_count := 0
+	func is_lake_at_global(x: int, y: int) -> bool:
+		lake_call_count += 1
+		return super.is_lake_at_global(x, y)
+
+
+func test_lake_lookups_are_remembered_across_builds_the_same_as_river_lookups():
+	var source := CountingLakeSource.new("forest", [Vector2i(3, 0)])
+	renderer.build_image(source, Vector2i(0, 0))
+	var first_build_calls := source.lake_call_count
+	renderer.build_image(source, Vector2i(1, 0))
+	var second_build_calls := source.lake_call_count - first_build_calls
+	var size := MinimapRenderer.SAMPLE_RADIUS_TILES * 2 + 1
+	assert_eq(first_build_calls, size * size, "every tile must be looked up once")
+	assert_lte(
+		second_build_calls, size * 2,
+		"a one-tile step must only look up the newly-exposed edge, not the whole window"
+	)
