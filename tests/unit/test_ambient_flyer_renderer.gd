@@ -1160,3 +1160,24 @@ func test_a_built_bird_simply_has_no_settled_frames():
 	var bird := renderer.build_bird(parent, "sparrow", Vector2.ZERO, 4)
 	assert_true(bird.settled_frames.is_empty(), "a songbird has no nectaring pose")
 	assert_not_null(bird.perched_frame, "it has a perched one, which is a different thing")
+
+
+# -- the player's pollinator density knob (docs/concept/ecosystem_dynamics.md
+# "Simulation density: the player's own knobs") ------------------------------
+
+
+func test_a_pollinator_density_scales_the_butterfly_budget_but_never_the_birds():
+	var full := AmbientFlyerRenderer.max_flyers_per_chunk(1.0)
+	var halved := AmbientFlyerRenderer.max_flyers_per_chunk(1.0, 0.5)
+	var birds := AmbientFlyerRenderer.MAX_ROBINS_PER_CHUNK + AmbientFlyerRenderer.MAX_SPARROWS_PER_CHUNK
+	assert_eq(full - birds, AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK, "precondition: full density is the design ceiling")
+	assert_eq(halved - birds, roundi(AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK * 0.5))
+	assert_eq(AmbientFlyerRenderer.max_flyers_per_chunk(1.0, 0.0), birds, "at zero the butterflies are gone and the birds untouched")
+
+
+func test_the_scented_budget_takes_the_density_as_a_second_multiplier():
+	assert_eq(AmbientFlyerRenderer.scented_budget(4, 1.0, 1.0), 4)
+	assert_eq(AmbientFlyerRenderer.scented_budget(4, 1.0, 0.5), 2)
+	assert_eq(AmbientFlyerRenderer.scented_budget(4, 2.0, 0.5), 4, "scent and density compose")
+	assert_eq(AmbientFlyerRenderer.scented_budget(4, 1.0, 0.0), 0)
+	assert_eq(AmbientFlyerRenderer.scented_budget(4, 1.0), 4, "omitted, the density is full: every existing caller unchanged")

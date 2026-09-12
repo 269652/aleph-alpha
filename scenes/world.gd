@@ -630,6 +630,13 @@ var _graphics_resolution := RenderResolution.default_option()
 ## the only sound in the game, but the control belongs to the player's
 ## ears, not to any one system that happens to make noise.
 var _audio_volume := AudioSettings.DEFAULT_VOLUME
+
+## The player's own simulation-density knobs (SimulationSettings, docs/
+## concept/ecosystem_dynamics.md "Simulation density"): loaded beside the
+## audio settings, applied to the chunk manager, saved on change, driven by
+## the Settings overlay's "Simulation" sliders.
+const SimulationSettings = preload("res://src/gameplay/simulation_settings.gd")
+var _simulation_densities: Dictionary = SimulationSettings.default_densities()
 var _death_label: Label
 var _creature_panels_container: VBoxContainer
 var _hover_tooltip: Label
@@ -959,6 +966,8 @@ func _ready() -> void:
 	_apply_graphics()
 	_load_audio_settings()
 	_apply_audio_volume()
+	_load_simulation_settings()
+	_apply_simulation_settings()
 
 	_build_hotbar_slots()
 	_build_spell_bar()
@@ -1924,7 +1933,8 @@ func _build_settings_overlay() -> void:
 	# pauses the world, see _toggle_settings_menu).
 	_settings_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
 	_settings_overlay.setup(
-		_keybindings, _graphics_fullscreen, _graphics_vsync, _graphics_resolution, _audio_volume
+		_keybindings, _graphics_fullscreen, _graphics_vsync, _graphics_resolution, _audio_volume,
+		_simulation_densities
 	)
 	_settings_overlay.set_anchors_preset(Control.PRESET_CENTER)
 	_settings_overlay.offset_left = -210.0
@@ -1937,6 +1947,7 @@ func _build_settings_overlay() -> void:
 	_settings_overlay.graphics_changed.connect(_on_graphics_changed)
 	_settings_overlay.graphics_option_changed.connect(_on_graphics_option_changed)
 	_settings_overlay.audio_volume_changed.connect(_on_audio_volume_changed)
+	_settings_overlay.simulation_density_changed.connect(_on_simulation_density_changed)
 	_settings_overlay.resume_requested.connect(_toggle_settings_menu)
 	_settings_overlay.license_code_submitted.connect(_on_settings_license_code_submitted)
 
@@ -2060,6 +2071,46 @@ func _save_audio_settings() -> void:
 	config.load(KEYBINDINGS_PATH)  # preserve the [bindings]/[graphics] sections
 	config.set_value("audio", "master_volume", _audio_volume)
 	config.save(KEYBINDINGS_PATH)
+
+
+## The simulation-density knobs, the exact shape of the audio settings
+## above: loaded from the shared settings file's `[simulation]` section (a
+## missing file or section leaves the defaults; a garbage value reads as the
+## default through SimulationSettings' own sanitising), pushed into the
+## chunk manager, saved on change. `path` is a parameter so a test can round
+## trip through a file of its own instead of the player's real one.
+func _load_simulation_settings(path: String = KEYBINDINGS_PATH) -> void:
+	var config := ConfigFile.new()
+	if config.load(path) != OK:
+		return
+	var raw := {}
+	for knob in SimulationSettings.KNOBS:
+		var value = config.get_value("simulation", knob, SimulationSettings.DEFAULT_DENSITY)
+		raw[knob] = float(value) if (value is float or value is int) else NAN
+	_simulation_densities = SimulationSettings.sanitize_densities(raw)
+
+
+func _save_simulation_settings(path: String = KEYBINDINGS_PATH) -> void:
+	var config := ConfigFile.new()
+	config.load(path)  # preserve the other sections
+	for knob in SimulationSettings.KNOBS:
+		config.set_value("simulation", knob, _simulation_densities[knob])
+	config.save(path)
+
+
+func _apply_simulation_settings() -> void:
+	if _chunk_manager == null:
+		return
+	for knob in SimulationSettings.KNOBS:
+		_chunk_manager.set_population_density(knob, _simulation_densities[knob])
+
+
+func _on_simulation_density_changed(knob: String, value: float) -> void:
+	if not SimulationSettings.KNOBS.has(knob):
+		return
+	_simulation_densities[knob] = SimulationSettings.sanitize_density(value)
+	_apply_simulation_settings()
+	_save_simulation_settings()
 
 
 func _on_binding_changed(action_name: String, keycode: int) -> void:

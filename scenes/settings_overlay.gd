@@ -27,6 +27,9 @@ signal graphics_option_changed(setting: String, value: String)
 ## place a value that DIDN'T come from this slider, a loaded config file,
 ## still gets guarded).
 signal audio_volume_changed(value: float)
+## One of SimulationSettings.KNOBS and its new density (0-1) -- the
+## "Simulation" section's sliders (see _build_simulation_section).
+signal simulation_density_changed(knob: String, value: float)
 signal resume_requested()
 signal license_code_submitted(code: String)
 
@@ -34,6 +37,7 @@ var _bindings: Keybindings
 var _key_section: VBoxContainer
 var _graphics_section: VBoxContainer
 var _audio_section: VBoxContainer
+var _simulation_section: VBoxContainer
 var _license_section: VBoxContainer
 var _license_edit: TextEdit
 var _license_status_label: Label
@@ -46,10 +50,10 @@ var _listening_button: Button
 ## the menu renders from the same source of truth World applies.
 func setup(
 	bindings: Keybindings, fullscreen: bool, vsync: bool, resolution: String = "",
-	audio_volume: float = AudioSettings.DEFAULT_VOLUME
+	audio_volume: float = AudioSettings.DEFAULT_VOLUME, simulation_densities: Dictionary = {}
 ) -> void:
 	_bindings = bindings
-	_build(fullscreen, vsync, resolution, audio_volume)
+	_build(fullscreen, vsync, resolution, audio_volume, simulation_densities)
 
 
 func _ready() -> void:
@@ -67,7 +71,7 @@ func is_open() -> bool:
 	return visible
 
 
-func _build(fullscreen: bool, vsync: bool, resolution: String, audio_volume: float) -> void:
+func _build(fullscreen: bool, vsync: bool, resolution: String, audio_volume: float, simulation_densities: Dictionary = {}) -> void:
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 6)
 	add_child(root)
@@ -92,6 +96,10 @@ func _build(fullscreen: bool, vsync: bool, resolution: String, audio_volume: flo
 	audio_tab.text = "Audio"
 	audio_tab.pressed.connect(func(): _show_section("audio"))
 	tabs.add_child(audio_tab)
+	var simulation_tab := Button.new()
+	simulation_tab.text = "Simulation"
+	simulation_tab.pressed.connect(func(): _show_section("simulation"))
+	tabs.add_child(simulation_tab)
 	var license_tab := Button.new()
 	license_tab.text = "License"
 	license_tab.pressed.connect(func(): _show_section("license"))
@@ -103,6 +111,8 @@ func _build(fullscreen: bool, vsync: bool, resolution: String, audio_volume: flo
 	root.add_child(_graphics_section)
 	_audio_section = _build_audio_section(audio_volume)
 	root.add_child(_audio_section)
+	_simulation_section = _build_simulation_section(simulation_densities)
+	root.add_child(_simulation_section)
 	_license_section = _build_license_section()
 	root.add_child(_license_section)
 
@@ -241,6 +251,55 @@ func _build_audio_section(volume: float) -> VBoxContainer:
 	return section
 
 
+## The player's own simulation-density knobs (docs/concept/
+## ecosystem_dynamics.md "Simulation density: the player's own knobs"): one
+## slider per SimulationSettings knob, the exact shape of the master-volume
+## row above, each feeding simulation_density_changed with its knob. A knob
+## missing from `densities` (a settings file from before the knobs existed)
+## shows the default, full density.
+func _build_simulation_section(densities: Dictionary) -> VBoxContainer:
+	var section := VBoxContainer.new()
+	section.add_theme_constant_override("separation", 6)
+	var hint := Label.new()
+	hint.text = "How much of the living world to simulate at once. Lower is lighter on the machine; new trips and spawns thin out, nothing alive is culled."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.modulate = Color(1, 1, 1, 0.6)
+	section.add_child(hint)
+	for knob in SimulationSettings.KNOBS:
+		var row := HBoxContainer.new()
+		var caption := Label.new()
+		caption.text = _SIMULATION_KNOB_CAPTIONS.get(knob, knob)
+		caption.custom_minimum_size = Vector2(120, 0)
+		row.add_child(caption)
+		var slider := HSlider.new()
+		slider.min_value = 0.0
+		slider.max_value = 1.0
+		slider.step = 0.05
+		slider.value = SimulationSettings.sanitize_density(float(densities.get(knob, SimulationSettings.DEFAULT_DENSITY)))
+		slider.custom_minimum_size = Vector2(160, 0)
+		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(slider)
+		var percent_label := Label.new()
+		percent_label.text = "%d%%" % roundi(slider.value * 100.0)
+		percent_label.custom_minimum_size = Vector2(44, 0)
+		row.add_child(percent_label)
+		var this_knob: String = knob
+		slider.value_changed.connect(func(value: float):
+			percent_label.text = "%d%%" % roundi(value * 100.0)
+			simulation_density_changed.emit(this_knob, value)
+		)
+		section.add_child(row)
+	return section
+
+
+const _SIMULATION_KNOB_CAPTIONS := {
+	"ant_foragers": "Ant foragers",
+	"bee_foragers": "Bee foragers",
+	"pollinators": "Pollinators",
+}
+const SimulationSettings = preload("res://src/gameplay/simulation_settings.gd")
+
+
 ## Lets a player replace their current key without leaving the game or
 ## hand-editing license.txt (see docs/licensing.md's "In-game license
 ## entry"). Distinct from LicenseGateOverlay: that one blocks play
@@ -288,6 +347,7 @@ func _show_section(which: String) -> void:
 	_key_section.visible = which == "keys"
 	_graphics_section.visible = which == "graphics"
 	_audio_section.visible = which == "audio"
+	_simulation_section.visible = which == "simulation"
 	_license_section.visible = which == "license"
 
 

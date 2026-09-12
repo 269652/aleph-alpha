@@ -1672,6 +1672,38 @@ on wake) holds exactly as if they had ticked every frame. Nothing is parked
 when no scheduler is current: every unit test that never publishes one, or
 a world with nobody to be far from, behaves exactly as before.
 
+### Simulation density: the player's own knobs (`SimulationSettings`)
+
+The three populations that dominate a long-played save's frame are not bugs
+but design ceilings: up to `AntColony.MAX_CONCURRENT_FORAGERS` (15) walking
+foragers per mound, `BeeColony.MAX_CONCURRENT_FORAGERS` (10) per hive, and
+`AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK` pollinators per chunk (times
+its scent multiplier). At ~90 mounds in 30 loaded chunks that is ~800 live
+ant foragers alone; round 11 (`soil_fauna.md`) worked out that at 0.1-0.5 ms
+per creature step, no amount of scheduling gets that population to 60 fps.
+How much of that liveliness a given machine can afford is the player's call,
+not a constant's -- so those ceilings are scaled by three persisted knobs
+(`src/gameplay/simulation_settings.gd`, saved in the `[simulation]` section
+of the same `user://keybindings.cfg` the graphics and audio settings share,
+exposed as sliders in the Settings overlay's "Simulation" tab):
+
+- `ant_foragers`, `bee_foragers`: a multiplier on each colony's concurrent
+  forager cap. A colony never drops below one forager (the model's own
+  floor: even an unfed colony sends its first scout), so the ecology keeps
+  running at any setting; lower density means fewer trips at once, so a
+  colony fills its capacity more slowly -- fewer walkers, same rules.
+- `pollinators`: a multiplier on the per-chunk butterfly budget, both the
+  spawn pass and the offspring cap. Birds are never scaled (a robin is not
+  a pollinator; its numbers come from its own aggregate population).
+
+Defaults are 1.0 -- exactly today's behaviour -- and the range is 0.0-1.0:
+the knobs only ever lower a ceiling, never raise one past what the design
+already allows. Live populations are not culled when a knob drops; caps gate
+NEW dispatches and spawns, so the world thins out as trips end and chunks
+turn over. Values are sanitised the way `AudioSettings` sanitises volume
+(NaN falls back to the default, out-of-range clamps), pinned by
+`test_simulation_settings.gd`.
+
 ## Status / mechanisms
 
 - ✅ Look-before-you-step locomotion — `creature_movement_gate.gd` (pure:

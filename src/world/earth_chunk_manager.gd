@@ -96,6 +96,25 @@ const FootstepGait = preload("res://src/gameplay/footstep_gait.gd")
 const FootprintField = preload("res://src/world/footprint_field.gd")
 const FootprintRenderer = preload("res://src/rendering/footprint_renderer.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
+const SimulationSettings = preload("res://src/gameplay/simulation_settings.gd")
+
+## The player's own simulation-density knobs (SimulationSettings, docs/
+## concept/ecosystem_dynamics.md "Simulation density"), one fraction per
+## knob, read by the ant and bee forager dispatch gates and the pollinator
+## spawn/offspring budgets. World loads and applies them (see World.
+## _apply_simulation_settings); a knob never culls what is already alive,
+## it only gates new dispatches and spawns.
+var _population_density: Dictionary = SimulationSettings.default_densities()
+
+
+func set_population_density(knob: String, density: float) -> void:
+	if not SimulationSettings.KNOBS.has(knob):
+		return
+	_population_density[knob] = SimulationSettings.sanitize_density(density)
+
+
+func population_density(knob: String) -> float:
+	return float(_population_density.get(knob, SimulationSettings.DEFAULT_DENSITY))
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
@@ -7123,7 +7142,7 @@ func spawn_flyer_offspring(
 	# withered lowers it.
 	if (
 		_loaded_ambient_flyers[chunk_coord].size()
-		>= AmbientFlyerRenderer.max_flyers_per_chunk(_pollinator_multiplier_for(chunk_coord))
+		>= AmbientFlyerRenderer.max_flyers_per_chunk(_pollinator_multiplier_for(chunk_coord), _population_density["pollinators"])
 	):
 		return
 	var offspring := _ambient_flyer_renderer.spawn_offspring(
@@ -8841,7 +8860,9 @@ func _dispatch_forager(
 	var global_tile: Vector2i = origin + cell
 	var active: Array = _active_ant_foragers.get(global_tile, [])
 	active = active.filter(func(f): return is_instance_valid(f) and not f.is_queued_for_deletion())
-	if active.size() >= colony.active_forager_cap_at(cell):
+	# The colony's own cap, scaled by the player's ant-forager density knob
+	# (never below the colony's floor of one -- see SimulationSettings).
+	if active.size() >= SimulationSettings.scaled_cap(colony.active_forager_cap_at(cell), _population_density["ant_foragers"], 1):
 		_active_ant_foragers[global_tile] = active
 		return
 	var mound_pixel := Vector2(
@@ -9212,7 +9233,9 @@ func _dispatch_bee_forager(colony: BeeColony, origin: Vector2i, cell: Vector2i) 
 	var global_tile: Vector2i = origin + cell
 	var active: Array = _active_bee_foragers.get(global_tile, [])
 	active = active.filter(func(f): return is_instance_valid(f) and not f.is_queued_for_deletion())
-	if active.size() >= colony.active_forager_cap_at(cell):
+	# The hive's own cap, scaled by the player's bee-forager density knob
+	# (never below the hive's floor of one -- see SimulationSettings).
+	if active.size() >= SimulationSettings.scaled_cap(colony.active_forager_cap_at(cell), _population_density["bee_foragers"], 1):
 		_active_bee_foragers[global_tile] = active
 		return
 	var hive_pixel := (Vector2(global_tile) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
@@ -11853,7 +11876,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_ecosystem.robin_population(chunk_coord),
 		_ecosystem.sparrow_population(chunk_coord),
 		current_season(),
-		_ecosystem.blackbird_population(chunk_coord)
+		_ecosystem.blackbird_population(chunk_coord),
+		_population_density["pollinators"]
 	)
 	_loaded_piscivore_birds[chunk_coord] = _piscivore_bird_renderer.spawn_piscivore_birds(
 		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self,

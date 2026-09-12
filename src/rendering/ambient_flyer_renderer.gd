@@ -308,7 +308,8 @@ func spawn_ambient_flyers(
 	robin_population: float = 0.0,
 	sparrow_population: float = 0.0,
 	season: String = "summer",
-	blackbird_population: float = 0.0
+	blackbird_population: float = 0.0,
+	pollinator_density: float = 1.0
 ) -> Array[Node2D]:
 	var spawned: Array[Node2D] = []
 	# Which SPECIES this chunk can hold, not just whether the tier can be here
@@ -324,8 +325,8 @@ func spawn_ambient_flyers(
 		#
 		# Bees no longer spawn from a separate pool/budget here at all -- see
 		# BUTTERFLY_SPECIES_POOL's own retirement note above.
-		var scented_butterfly_min := scented_budget(MIN_BUTTERFLIES_PER_CHUNK, scent_multiplier)
-		var scented_butterfly_max := scented_budget(MAX_BUTTERFLIES_PER_CHUNK, scent_multiplier)
+		var scented_butterfly_min := scented_budget(MIN_BUTTERFLIES_PER_CHUNK, scent_multiplier, pollinator_density)
+		var scented_butterfly_max := scented_budget(MAX_BUTTERFLIES_PER_CHUNK, scent_multiplier, pollinator_density)
 		spawned.append_array(
 			_spawn_species(
 				parent, chunk, chunk_origin_tiles, tile_size, "butterfly_spawn",
@@ -621,8 +622,12 @@ func _spawn_species(
 ## result was a meadow that spawned 24 flyers against a ceiling reporting 14.
 ## Sharing the formula makes that particular disagreement unrepresentable
 ## rather than merely fixed.
-static func scented_budget(base_count: int, scent_multiplier: float) -> int:
-	return int(round(float(base_count) * scent_multiplier))
+static func scented_budget(base_count: int, scent_multiplier: float, pollinator_density: float = 1.0) -> int:
+	# `pollinator_density` is the player's own knob (SimulationSettings, see
+	# docs/concept/ecosystem_dynamics.md "Simulation density") -- a second
+	# multiplier composed with the scent one, 1.0 for every caller that does
+	# not pass it, so nothing changes unless the player asks.
+	return int(round(float(base_count) * scent_multiplier * pollinator_density))
 
 
 ## The most flyers one chunk is ever meant to carry, for a chunk whose blooms
@@ -648,9 +653,9 @@ static func scented_budget(base_count: int, scent_multiplier: float) -> int:
 ## Birds are deliberately NOT scaled, mirroring the spawn pass exactly: a
 ## robin is not a pollinator, and its numbers come from its own aggregate
 ## population (see MAX_ROBINS_PER_CHUNK), not from how much nectar is around.
-static func max_flyers_per_chunk(scent_multiplier: float = 1.0) -> int:
+static func max_flyers_per_chunk(scent_multiplier: float = 1.0, pollinator_density: float = 1.0) -> int:
 	return (
-		scented_budget(MAX_BUTTERFLIES_PER_CHUNK, scent_multiplier)
+		scented_budget(MAX_BUTTERFLIES_PER_CHUNK, scent_multiplier, pollinator_density)
 		+ MAX_ROBINS_PER_CHUNK + MAX_SPARROWS_PER_CHUNK
 	)
 
