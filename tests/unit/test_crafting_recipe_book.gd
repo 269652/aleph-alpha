@@ -35,9 +35,10 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# + starting kit (docs/concept/starting_kit.md): iron_sword, iron_axe
 	# (2 more) -- both previously had NO recipe at all, reachable only via
 	# /give, the shop, or the old hardcoded starting-kit grant.
-	# + NPC farm production (docs/concept/npc_farm_production.md): farm (1
-	# more) -- a Farmer moves in and works it, mirroring the Sagewerk.
-	assert_eq(ids.size(), 41)
+	# + NPC farm production (docs/concept/npc_farm_production.md): farm and
+	# wooden_fence (2 more) -- a Farmer moves in and works the farm once a
+	# real fence stands nearby, mirroring the Sagewerk.
+	assert_eq(ids.size(), 42)
 
 
 func test_iron_sword_is_craftable_from_ingots_and_a_stick():
@@ -243,6 +244,15 @@ func test_farm_recipe_uses_wood_and_plant_fibre():
 	assert_eq(book.recipe_output("farm")["item_id"], "farm")
 	assert_false(book.can_craft("farm", {"wood": 6, "plant_fibre": 3}))
 	assert_true(book.can_craft("farm", {"wood": 6, "plant_fibre": 4}))
+
+
+## The wooden fence (docs/concept/npc_farm_production.md): cheap -- just
+## fence rails and posts, wood only, no skill gate.
+func test_wooden_fence_recipe_uses_wood_only():
+	assert_true(book.recipe_ids().has("wooden_fence"), "wooden_fence must be craftable")
+	assert_eq(book.recipe_output("wooden_fence")["item_id"], "wooden_fence")
+	assert_false(book.can_craft("wooden_fence", {"wood": 2}))
+	assert_true(book.can_craft("wooden_fence", {"wood": 3}))
 
 
 ## The lasso is the entry point to taming (docs/concept/taming.md) and is

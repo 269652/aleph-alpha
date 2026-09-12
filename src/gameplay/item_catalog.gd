@@ -225,6 +225,9 @@ const _ITEMS := {
 	# stone, not "food" like carrot/potato: it feeds a downstream product
 	# (flour, then bread) rather than being eaten as-is.
 	"wheat": ["Wheat", "material", 40, 0.0],
+	# The wooden fence (see docs/concept/npc_farm_production.md): gates a
+	# Farm's Farmer -- no Farmer moves in until a real fence stands nearby.
+	"wooden_fence": ["Wooden Fence", "placeable", 5, 0.0],
 	# A stone check dam (see docs/concept/rivers.md). The id is deliberately
 	# the SAME string as its BuildingPiece id: build_at_global writes
 	# whatever id it is handed into chunk.modifications, so sharing one

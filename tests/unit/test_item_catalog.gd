@@ -159,6 +159,13 @@ func test_wheat_is_a_material():
 	assert_eq(item.kind, "material")
 
 
+## The wooden fence (docs/concept/npc_farm_production.md) gates a Farm's
+## Farmer -- the same placeable kind as farm/sagewerk/storage.
+func test_wooden_fence_is_placeable():
+	assert_true(catalog.has("wooden_fence"))
+	assert_eq(catalog.make("wooden_fence").kind, "placeable")
+
+
 ## Named fruit tree species (see docs/concept/flora.md#named-fruit-and-nut-tree-species)
 ## drop their OWN item id -- cherry/apple/walnut -- rather than the generic
 ## "fruit"/"nut" every tree used to drop regardless of species.
