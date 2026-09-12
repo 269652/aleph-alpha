@@ -4094,6 +4094,131 @@ shrinks across a session. Flagged as a follow-up, not attempted this
 round: scoping that loop to nearby/loaded settlements (or paginating it)
 is a real design decision, not a drop-in index like this round's fix.
 
+### FPS regression round 14's follow-up: bounding step_settlements' own per-tick cost (2026-09-13)
+
+Closes the residual flagged directly above. `step_settlements`'s
+per-settlement loop (granary, production, trade, institution health,
+classification) ran for every settlement the world had EVER founded, with
+no cap and no chunk-scoping, so its own per-tick cost grew with total
+lifetime settlement count and never shrank.
+
+**Why not just skip unloaded settlements -- read the code first.** Every
+one of the five per-settlement calls is deliberately built to keep working
+for a settlement nobody is near. `_villagers_in_settlement`'s own doc
+comment: "step_settlements assesses every settlement that has ever been
+founded, and at any moment almost none of them have live NpcMarker nodes
+... Reading `_loaded_villages` instead would mean a settlement's own
+history stops being witnessed by anyone the moment the player walks away
+from it -- exactly the settlements whose news is worth hearing later."
+`_step_settlement_granary`'s own, longer one: "without it a village only
+lives while the player is standing in it, which is the difference between
+a world and a stage set." Production, trade, institution health and
+classification all read and write PERSISTED state for exactly this reason
+-- none of the five is a near-player-only nicety. A "near vs far" split of
+the five calls, one of round 14's own candidate fix shapes, would have
+silently broken the living-world guarantee for the whole far set, not
+slimmed it down; ruled out once the code was actually read rather than
+assumed.
+
+**Fix: pagination, not exclusion**, following this project's own
+established shape for a population it cannot step in full every frame
+(`SimulationLod`: "Creatures still keep living out there -- this changes
+the RATE, never the behaviour"). `EarthChunkManager.
+MAX_UNLOADED_SETTLEMENTS_PER_STEP` (20) caps how many BACKGROUND
+(chunk-not-loaded) settlements get a full assessment in any one
+`SETTLEMENT_STEP_INTERVAL` tick; a LOADED settlement (the player is there
+or nearby) is always assessed in full, every tick, unthrottled -- the same
+"near is never throttled" rule `SimulationLod.FULL_RATE_RADIUS_PX` already
+applies to creatures. The background majority is paginated round-robin
+(`_settlement_ids_due_this_step`), tracked by one rotating cursor rather
+than any per-settlement bookkeeping, so a settlement founded or unloaded
+mid-session simply joins the rotation wherever it currently points. Below
+the cap this is a byte-identical no-op -- same settlements, same order --
+which is what keeps every one of this file's existing settlement tests
+(76 of the 77 "settlement"-named tests in `test_earth_chunk_manager.gd`;
+see the honest note below on the 77th) passing unmodified.
+
+**Honestly, what this costs.** Once total unloaded-settlement count
+exceeds the cap, a background settlement's own assessment cadence
+stretches from `SETTLEMENT_STEP_INTERVAL` (30s) to roughly
+`SETTLEMENT_STEP_INTERVAL` times (unloaded count / cap) -- gathering,
+eating, production and trade all slow down together, proportionally, for
+that settlement, since every per-settlement call itself is completely
+unchanged; only how often a background settlement gets a turn at all is
+throttled. Nothing ever stops: every settlement still gets a full,
+ordinary assessment eventually, exactly the guarantee this file's other
+coordinators already keep, just at a throttled rate once the world has
+founded more of them than a single tick can afford.
+
+**A new perf-report section.** `s_settlements` (`World._step_ecology_batch`,
+`PerfReport`) times `step_settlements` on its own now, isolated from
+`s_ecology`'s whole-batch total alongside ~25 unrelated cadence steps --
+what makes reading the confirming numbers below possible at all, rather
+than inferring them from a bucket that also moves for unrelated reasons.
+
+**Tests** (`tests/unit/test_earth_chunk_manager.gd`, TDD red-first: a
+behavior-preserving stub landed first so the new tests could compile and
+genuinely fail, then the real cap/round-robin logic went in to make them
+green): a no-op under the cap, a hard cap above it, eventual full coverage,
+round-robin fairness (no settlement repeats before every other one has had
+a turn), a loaded settlement never deferred, and two `step_settlements`-
+level integration checks (only the paginated slice is assessed each tick;
+the second tick picks up the other half, not a repeat). Plus one new test
+in `test_world_perf_report_wiring.gd` pinning the new section.
+
+**Confirmed, two ways.** The existing `--perf-report` harness (a live
+`--solo` run against a real save with real accumulated history, restored
+via the project's `override.cfg` recipe) ran for a continuous ~10 minutes
+post-boot on the fixed branch: `s_settlements` stayed at 0.0-0.1ms
+throughout -- this particular save's real settlement count sits comfortably
+under the cap, so this run mainly confirms no live regression and no
+crash, not the asymptotic story (a save that never approaches the cap
+can't demonstrate what happens above it).
+
+For the asymptotic story itself -- the actual point of this round -- a
+direct, controlled measurement beats waiting on a save to happen to grow
+large enough: a throwaway probe (`EarthChunkManager.new()`, N settlements
+founded via `record_settlement_founded_if_new`, then `step_settlements`
+timed with `Time.get_ticks_usec()`) run identically against `origin/main`
+(unfixed) and this branch (fixed), reporting both the cold first tick
+(includes one-time chunk generation for any newly-touched producer
+settlement) and the steady-state cost once every touched settlement's
+region is cached (`_seeded_region_for` is session-lifetime -- the number a
+real long session actually pays tick after tick):
+
+| settlements | unfixed steady-state | fixed steady-state |
+|---:|---:|---:|
+| 20  | 3.0 ms  | 5.6 ms (small, expected classification overhead -- see below) |
+| 50  | 11.7 ms | 5.2 ms |
+| 100 | 23.7 ms | 5.6 ms |
+| 200 | 56.1 ms | 5.7 ms |
+
+Unfixed scales linearly with settlement count, as the root cause predicts.
+Fixed stays flat at ~5-6 ms regardless of settlement count, from 20 all the
+way to 200 -- because it is genuinely doing the same bounded amount of work
+every time (at most `MAX_UNLOADED_SETTLEMENTS_PER_STEP` full assessments),
+not a smaller multiple of a still-growing one. The gap is already ~10x at
+200 settlements and only widens as a session founds more; at 20 settlements
+(exactly at the cap, where pagination has nothing to skip) the fixed
+version costs slightly MORE than unfixed -- the honest overhead of
+classifying every settlement as loaded/background before deciding who is
+due, present even when nobody actually gets paginated away. Small,
+constant, and dwarfed by the linear growth it eliminates everywhere above
+the cap.
+
+**Incidentally found, confirmed unrelated.** While regression-testing the
+full `test_earth_chunk_manager.gd` "settlement"-named test set (76/77
+passing),
+`test_an_unloaded_settlement_really_declines_by_eating_through_its_stores`
+failed -- and failed identically in a clean `origin/main` checkout too
+(verified in an isolated worktree, in complete isolation), so it predates
+this round's change and is not caused by it. Its own first precondition
+(a real fish catch near Berlin, via `_seeded_region_for`) reads exactly
+0.0 -- a worldgen-precondition-reads-empty failure shape this project has
+hit before in a fresh-worktree checkout (a sibling case is documented
+in-line above `test_try_plant_seed_at_fails_outside_forest_or_rainforest`).
+Flagged as a separate follow-up, not diagnosed further or fixed here.
+
 ### In-flight foragers survive an unload; their trip's outcome does not (2026-09-09)
 
 The ant side of `bees.md`'s own identical section, by that exact name --
