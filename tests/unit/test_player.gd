@@ -2401,6 +2401,30 @@ func test_the_capture_key_catches_when_empty_and_releases_when_loaded():
 	assert_eq(player.equipped_item.captive_species, "", "the same key released the loaded net")
 
 
+## "Give it back" (docs/concept/capture_dsl.md's release section): the
+## individual that went into the net is genuinely gone (queue_free'd the
+## moment it was confined, see _attempt_net_catch) -- what comes back out on
+## release is a real, NEW individual of the same species, not a memory of
+## the old one. _release_net wires this straight to EarthChunkManager.
+## release_captive, the same real chunk_manager test_player.gd already
+## exercises everywhere else.
+func test_releasing_a_loaded_net_puts_a_live_flyer_back_in_the_world():
+	_hold_tool("butterfly_net")
+	var monarch := _flyer_at("monarch", Vector2(8, 0))
+	_net_until_caught(monarch)
+	var chunk_coord: Vector2i = chunk_manager._chunk_coord_for_tile(
+		chunk_manager._world_tile_for_pixel(player.position)
+	)
+	if not chunk_manager._loaded_ambient_flyers.has(chunk_coord):
+		chunk_manager._loaded_ambient_flyers[chunk_coord] = []
+	var before: int = chunk_manager._loaded_ambient_flyers[chunk_coord].size()
+	player._throw_capture_tool()  # the SAME key, now loaded -> releases instead of throwing
+	assert_eq(
+		chunk_manager._loaded_ambient_flyers[chunk_coord].size(), before + 1,
+		"releasing a loaded net should put a real, new flyer back into the world"
+	)
+
+
 func test_releasing_an_empty_net_does_nothing():
 	_hold_tool("butterfly_net")
 	player._release_net()
