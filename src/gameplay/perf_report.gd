@@ -41,6 +41,13 @@ var _accumulator := 0.0
 ## of ticks (frames) they span, so a section reads as ms PER FRAME.
 var _section_usec: Dictionary = {}
 var _section_frames := 0
+## The usec stamp World took at the top of its own _process this frame, or
+## -1 when no frame is open; closed by PerfFrameSentinel into the "tree"
+## section (the whole idle-process span across every node).
+var _frame_started_usec := -1
+## Label -> how many times it happened since the last take_counts()
+## (scheduler steps per class); reported per frame like the sections.
+var _counts: Dictionary = {}
 
 
 static func requested(args: PackedStringArray) -> bool:
@@ -67,6 +74,38 @@ func add_section(label: String, usec: int) -> void:
 	_section_usec[label] = int(_section_usec.get(label, 0)) + usec
 
 
+## World stamps the top of its _process (the scene root runs first)...
+func mark_frame_start(usec: int) -> void:
+	_frame_started_usec = usec
+
+
+## ...and the PerfFrameSentinel, processed last, closes the span. Without an
+## open frame the stamp is ignored rather than inventing a span.
+func mark_frame_end(usec: int) -> void:
+	if _frame_started_usec < 0:
+		return
+	add_section("tree", usec - _frame_started_usec)
+	_frame_started_usec = -1
+
+
+## How many times something happened this frame -- with the matching
+## section's ms, the cost of ONE occurrence becomes readable.
+func add_count(label: String, count: int) -> void:
+	_counts[label] = int(_counts.get(label, 0)) + count
+
+
+## Every count as an average per frame over the ticks since the last take;
+## taking resets. Read the counts BEFORE the sections: take_sections is
+## what resets the shared frame count.
+func take_counts() -> Dictionary:
+	var counts := {}
+	if _section_frames > 0:
+		for label in _counts:
+			counts[label] = float(_counts[label]) / float(_section_frames)
+	_counts = {}
+	return counts
+
+
 ## Every section as ms per frame, averaged over the ticks since the last
 ## take; taking resets both the totals and the frame count.
 func take_sections() -> Dictionary:
@@ -83,11 +122,12 @@ func take_sections() -> Dictionary:
 ## RenderingServer.viewport_set_measure_render_time(viewport, true) must
 ## have been called for the render_* fields to be anything but 0. `census`
 ## is SimulationScheduler.census(); missing keys read as 0.
-static func sample(viewport: RID, census: Dictionary, sections: Dictionary = {}, processing: Dictionary = {}) -> Dictionary:
+static func sample(viewport: RID, census: Dictionary, sections: Dictionary = {}, processing: Dictionary = {}, counts: Dictionary = {}) -> Dictionary:
 	var fps := Engine.get_frames_per_second()
 	return {
 		"sections": sections,
 		"processing": processing,
+		"counts": counts,
 		"fps": int(fps),
 		"frame_ms": 1000.0 / fps if fps > 0.0 else 0.0,
 		"process_ms": Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
@@ -125,6 +165,11 @@ static func format_line(s: Dictionary) -> String:
 	labels.sort()
 	for label in labels:
 		line += " s_%s=%.1fms" % [label, sections[label]]
+	var counts: Dictionary = s.get("counts", {})
+	var count_labels := counts.keys()
+	count_labels.sort()
+	for label in count_labels:
+		line += " c_%s=%.1f" % [label, counts[label]]
 	var processing: Dictionary = s.get("processing", {})
 	var ranked: Array = []
 	for key in processing:

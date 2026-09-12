@@ -45,7 +45,7 @@ func test_process_prints_one_line_per_due_tick_from_the_schedulers_census():
 	var body := _body_of("_process")
 	assert_true(body.contains("_perf_report.tick(delta)"), "the report is advanced once per frame")
 	assert_true(
-		body.contains("print(PerfReport.format_line(PerfReport.sample(get_viewport().get_viewport_rid(), _simulation_scheduler.census(), _perf_report.take_sections(), PerfReport.processing_census(get_tree().root))))"),
+		body.contains("print(PerfReport.format_line(PerfReport.sample(get_viewport().get_viewport_rid(), _simulation_scheduler.census(), _perf_report.take_sections(), PerfReport.processing_census(get_tree().root), _perf_report.take_counts())))"),
 		"one printed line: live scheduler census, the frame's section split, and who the engine still processes"
 	)
 	assert_eq(body.count("_perf_report.tick("), 1, "exactly once per frame")
@@ -68,3 +68,15 @@ func test_process_folds_the_schedulers_per_class_step_profile_into_the_sections(
 	assert_gt(taken_at, -1, "the per-class step costs are read once per frame")
 	assert_lt(taken_at, body.find("_perf_report.tick(delta)"), "before the line is built, so they land in this report")
 	assert_true(body.contains("_perf_report.add_section(\"step_\" + "), "each class becomes its own step_<class> section")
+	assert_true(body.contains("_perf_report.add_count(key, step_profile[key][\"steps\"])"), "and its step count rides along, so ms per step is readable")
+
+
+func test_ready_adds_the_frame_end_sentinel_and_process_opens_the_span():
+	var ready := _body_of("_ready")
+	var gate_at := ready.find("if PerfReport.requested(args):")
+	assert_gt(ready.find("add_child(PerfFrameSentinel.new(_perf_report))", gate_at), gate_at,
+		"the sentinel that closes the tree span is added inside the gate")
+	var body := _body_of("_process")
+	var opened_at := body.find("_perf_report.mark_frame_start(perf_started)")
+	assert_gt(opened_at, -1, "World stamps the top of its own _process as the frame start")
+	assert_lt(opened_at, body.find("_simulation_scheduler.advance(delta)"), "before any work, so the span covers the scheduler too")

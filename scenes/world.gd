@@ -456,6 +456,7 @@ var _simulation_scheduler := SimulationScheduler.new()
 ## doc comment): null unless the launch asked for it, so a plain launch pays
 ## nothing -- not even the accumulator tick.
 const PerfReport = preload("res://src/gameplay/perf_report.gd")
+const PerfFrameSentinel = preload("res://src/gameplay/perf_frame_sentinel.gd")
 var _perf_report: PerfReport = null
 var _scarred_tiles: Dictionary = {}  # Vector2i global tile -> true, tiles we've painted as trampled earth
 var _trailed_tiles: Dictionary = {}  # Vector2i global tile -> true, tiles currently painted as the deeper Trail tier
@@ -869,6 +870,9 @@ func _ready() -> void:
 		_perf_report = PerfReport.new()
 		RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
 		_simulation_scheduler.set_step_profiling(true)
+		# Processed last every frame (see its PROCESS_PRIORITY): closes the
+		# span _process opens below, so "tree" = every node's own _process.
+		add_child(PerfFrameSentinel.new(_perf_report))
 
 	# Real bug found live: _process()/_unhandled_input() run every frame
 	# regardless of whether _ready() returned early above -- before this
@@ -4975,6 +4979,8 @@ func _process(delta: float) -> void:
 	# World is the scene root, so its descendants' own _process runs after
 	# this, and a marker switched back on here is processed this same frame.
 	var perf_started := Time.get_ticks_usec()
+	if _perf_report != null:
+		_perf_report.mark_frame_start(perf_started)
 	_simulation_scheduler.advance(delta)
 	# --perf-report only (null otherwise): the scheduler's whole creature pass
 	# is one section, World's own ecology steps and the client pass below are
@@ -4986,8 +4992,9 @@ func _process(delta: float) -> void:
 		var step_profile := _simulation_scheduler.take_step_profile()
 		for key in step_profile:
 			_perf_report.add_section("step_" + key, step_profile[key]["usec"])
+			_perf_report.add_count(key, step_profile[key]["steps"])
 		if _perf_report.tick(delta):
-			print(PerfReport.format_line(PerfReport.sample(get_viewport().get_viewport_rid(), _simulation_scheduler.census(), _perf_report.take_sections(), PerfReport.processing_census(get_tree().root))))
+			print(PerfReport.format_line(PerfReport.sample(get_viewport().get_viewport_rid(), _simulation_scheduler.census(), _perf_report.take_sections(), PerfReport.processing_census(get_tree().root), _perf_report.take_counts())))
 		perf_started = Time.get_ticks_usec()
 	# Ages every recorded water disturbance (fish/player/animal ripples) so
 	# its ring actually expands and fades -- every frame, every client, not

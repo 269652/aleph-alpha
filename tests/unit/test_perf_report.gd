@@ -181,3 +181,62 @@ func test_format_line_prints_at_most_the_top_processing_classes():
 func test_sample_carries_the_processing_census_it_is_handed():
 	var sample: Dictionary = PerfReport.sample(get_viewport().get_viewport_rid(), {}, {}, {"npc_marker": 3})
 	assert_eq(sample["processing"], {"npc_marker": 3})
+
+
+## The "tree" section: the whole idle-process span from World's own _process
+## (the scene root, processed first) to a lowest-priority sentinel processed
+## last -- so tree - sched - ecology - client is every OTHER node's own
+## _process plus the engine's dispatch into them, and TIME_PROCESS - tree -
+## render_cpu is what the engine does outside any node (deferred calls, the
+## delete queue, the render sync).
+func test_marking_a_frames_start_and_end_records_the_span_as_the_tree_section():
+	var report := PerfReport.new()
+	report.mark_frame_start(1_000)
+	report.mark_frame_end(4_500)
+	report.tick(INTERVAL * 2.0)
+
+	assert_almost_eq(report.take_sections()["tree"], 3.5, 0.001, "3,500 usec over one frame")
+
+
+func test_a_frame_end_without_a_start_records_nothing():
+	var report := PerfReport.new()
+	report.mark_frame_end(4_500)
+	report.tick(INTERVAL * 2.0)
+
+	assert_false(report.take_sections().has("tree"))
+
+
+## Counts: how many times something happened per frame (scheduler steps
+## per class), printed as c_<label>=<per-frame average> -- so a section's
+## ms divided by its count is the cost of ONE step, the number an
+## optimisation actually needs.
+func test_counts_average_per_frame_and_reset_on_take():
+	var report := PerfReport.new()
+	report.add_count("fish_marker", 30)
+	report.tick(INTERVAL * 0.6)
+	report.add_count("fish_marker", 10)
+	report.tick(INTERVAL * 0.6)
+
+	var counts: Dictionary = report.take_counts()
+
+	assert_almost_eq(counts["fish_marker"], 20.0, 0.001, "40 steps over 2 frames")
+	assert_eq(report.take_counts(), {}, "taking resets")
+
+
+func test_format_line_appends_counts_after_the_sections():
+	var sample := {
+		"fps": 1, "frame_ms": 1.0, "process_ms": 1.0, "physics_ms": 1.0, "nav_ms": 0.0,
+		"render_cpu_ms": 1.0, "render_gpu_ms": 1.0, "nodes": 1, "orphans": 0, "draw_calls": 1,
+		"objects": 1, "primitives": 1, "phys_active": 0, "phys_pairs": 0, "mem_static_mb": 1.0,
+		"sched_adopted": 0, "sched_in_hand": 0, "sched_parked": 0,
+		"sections": {"step_fish_marker": 8.5}, "counts": {"fish_marker": 20.0},
+	}
+	assert_true(
+		PerfReport.format_line(sample).ends_with(" s_step_fish_marker=8.5ms c_fish_marker=20.0"),
+		PerfReport.format_line(sample)
+	)
+
+
+func test_sample_carries_the_counts_it_is_handed():
+	var sample: Dictionary = PerfReport.sample(get_viewport().get_viewport_rid(), {}, {}, {}, {"fish_marker": 2.0})
+	assert_eq(sample["counts"], {"fish_marker": 2.0})
