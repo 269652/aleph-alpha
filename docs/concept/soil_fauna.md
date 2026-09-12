@@ -4168,12 +4168,19 @@ in `test_world_perf_report_wiring.gd` pinning the new section.
 
 **Confirmed, two ways.** The existing `--perf-report` harness (a live
 `--solo` run against a real save with real accumulated history, restored
-via the project's `override.cfg` recipe) ran for a continuous ~10 minutes
-post-boot on the fixed branch: `s_settlements` stayed at 0.0-0.1ms
-throughout -- this particular save's real settlement count sits comfortably
-under the cap, so this run mainly confirms no live regression and no
-crash, not the asymptotic story (a save that never approaches the cap
-can't demonstrate what happens above it).
+via the project's `override.cfg` recipe) ran continuously for ~8.3 minutes
+post-boot on the fixed branch with no crash: `s_settlements` stayed at
+0.0-0.1ms across all 248 printed lines -- this particular save's real
+settlement count sits comfortably under the cap, so this run mainly
+confirms no live regression and no crash, not the asymptotic story (a
+save that never approaches the cap can't demonstrate what happens above
+it). Two earlier attempts against the same save were noisier -- a
+near-empty probe copy first (killed deliberately once a richer save was
+found), then one run that exited under heavy load from several other
+concurrent Godot processes sharing this machine at the time (`s_ecology`
+and `s_tree` spiked into the hundreds of ms while `s_settlements` stayed
+flat at 0.0ms right up to the exit -- exonerating settlements as the
+cause before the retry that completed cleanly).
 
 For the asymptotic story itself -- the actual point of this round -- a
 direct, controlled measurement beats waiting on a save to happen to grow

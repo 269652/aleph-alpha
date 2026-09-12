@@ -20432,10 +20432,14 @@ Closes round 14's own flagged residual above. Write-up in
   (`test_an_unloaded_settlement_really_declines_by_eating_through_its_stores`)
   fails identically on a clean `origin/main` checkout too -- pre-existing,
   confirmed unrelated, flagged separately.
-- ✅ Confirmed two ways: a live `--perf-report` run (~10 continuous
-  minutes post-boot, real save with real history) held `s_settlements` at
-  0.0-0.1 ms throughout (this save's real settlement count sits under the
-  cap, so mainly a no-regression/no-crash confirmation); a direct,
+- ✅ Confirmed two ways: a live `--perf-report` run (~8.3 continuous
+  minutes post-boot, real save with real history, no crash) held
+  `s_settlements` at 0.0-0.1 ms across all 248 printed lines (this save's
+  real settlement count sits under the cap, so mainly a no-regression/
+  no-crash confirmation -- an earlier attempt against the same save
+  exited under heavy load from other concurrent Godot processes sharing
+  the machine, with `s_settlements` still flat at 0.0 ms right up to the
+  exit); a direct,
   controlled probe (N settlements founded via
   `record_settlement_founded_if_new`, `step_settlements` timed) run
   identically against `origin/main` and this branch shows the asymptotic
