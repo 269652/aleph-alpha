@@ -20201,3 +20201,39 @@ density: the player's own knobs".
 🚧 60 fps remains open; with the knobs the player can now trade
 liveliness for frame time on their own machine, and every further round
 can be measured at a fixed setting.
+
+### FPS regression round 13: the whole frame measured, five structural cuts, 6 -> 23 fps (2026-09-12)
+
+"Can you fix the performance issues and get FPS back to 60+?" Write-up in
+`concept/soil_fauna.md` "FPS regression round 13"; the instrument's spec
+in `concept/ecosystem_dynamics.md` "Frame budget accounting"; the
+cadence's in "Ecology steps run at a cadence, not a frame rate"; the LOD
+section there updated for the new radius, interval and sweep.
+
+- ✅ `--perf-report` (`PerfReport`, `PerfFrameSentinel`,
+  `SimulationScheduler.census/step profile`): a permanent, opt-in
+  whole-frame split from the engine's own monitors -- script/physics/
+  render CPU+GPU, sections, per-class step cost and count, the classes
+  the engine still ticks, the exact frame period. First run: script was
+  191 ms of a 167 ms (6 fps) frame; render CPU 13, GPU 8, physics 3.
+- ✅ `SimulationLod.FULL_RATE_RADIUS_PX` 420 -> 200, `MAX_INTERVAL_
+  SECONDS` 0.5 -> 2.0, `SimulationScheduler` proximity sweep
+  (`WAKE_RADIUS_PX`, `PARKED_SWEEP_FRAMES`): scheduler pass 74 -> 15 ms.
+- ✅ `StepCadence` (0.25 s, staggered) under `World._step_ecology_batch`,
+  worms and fruiting included; quest reconciliation still last every
+  frame: ecology 24 -> 16 ms at 12 fps (far more at 60).
+- ✅ Idle-bodied markers off engine `_process` (crops, nests via
+  `set_process(false)`; mounds/hives/queens via a `TickTimer` child):
+  12 -> 18 fps.
+- ✅ `World._player_step_momentum_kg_m_s` is zero while the player's
+  velocity is zero: the seven per-frame crush walks return before walking.
+- 🚧 **60 fps not reached.** Final run of the session (same contended machine, ~2 other cores busy, medians of 32 steady lines): 23 fps, 45 ms frames -- node scripts 32 ms (scheduler 11.5, client 10.6, ecology 5.1, others ~5), render CPU 8, physics 2, engine outside nodes ~4; render GPU 28 ms, which by itself would cap the frame near 36 fps. From 6 fps and 167 ms frames at the start of the round: 3.8x. Next, in measured order: creature
+  per-step costs (land creatures ~1.1 ms a step), the hover-tooltip
+  whole-world walk, per-chunk visibility for the y-sorted `Entities`
+  layer (render CPU), the GPU (28 ms/frame in the last run, run-dependent),
+  the 150-230 s boot.
+- ⚠️ Tests: paused by the user mid-round. Commits from the idle-marker
+  change on carry tests that were written but not run, and four
+  batch-body contract files were not re-run after the cadence landed.
+  Re-verify before trusting.
+
