@@ -4044,6 +4044,42 @@ NOT run, and four batch-body contract files were not re-run after the
 cadence. Re-verify before trusting -- the branch's own commit messages say
 which.
 
+### FPS regression round 14: the frame that gets slower the longer you play (2026-09-12)
+
+"The performance gets worse the longer you play." Every prior round
+measured a fresh or restored save, never a long CONTINUOUS session --
+this is the first round to actually watch one age in real time. A
+background `--perf-report` run left going for ~7 minutes (unfixed code)
+showed `s_ecology` climb from 6 ms to 142 ms and fps fall from 17 to 4
+before the process crashed under the accumulated load (GL resource leak
+errors at exit -- a real crash, not a clean stop).
+
+**Root cause:** `EarthChunkManager.step_settlements` calls
+`_known_settlement_ids()` every `SETTLEMENT_STEP_INTERVAL`, which called
+`EventStore.events_of_type("settlement_founded")` -- a full linear scan
+over **every event the world has ever recorded**, not just settlement
+foundings: every trade, crush, birth, market tick, memory exchange,
+everything any system has ever appended. The scan gets slower with the
+total volume of everything that has ever happened in the session, and it
+runs for the rest of that session, on a periodic timer, forever. This is
+unrelated to round 13's cadence work (which only reduced how often the
+whole ecology batch runs, not what any single step costs) and predates
+it.
+
+**Fix:** `EventStore` gets a type index (`_by_type`, the same
+"append indexes, read reads the index" shape `_by_entity` already uses
+for `events_for_entity`/`/history`), maintained in both `append()` and
+`from_dicts()` (a restored save must see events recorded before it was
+saved). `events_of_type` now reads the index instead of scanning `_order`
+-- cost scales with how many events of the type asked for exist, not
+with the store's total size. `events_in_window` has the same shape but
+zero live callers (dead code) and was left alone. Tests pin the
+observable contract (order preserved, correct after `from_dicts`, no
+cross-type contamination) rather than complexity itself -- GDScript/GUT
+has no reliable way to assert Big-O directly; the real evidence for the
+FIX is a second long-session run, not a unit test (see progress.md's
+ledger entry for that number once taken).
+
 ### In-flight foragers survive an unload; their trip's outcome does not (2026-09-09)
 
 The ant side of `bees.md`'s own identical section, by that exact name --

@@ -177,6 +177,56 @@ func test_events_of_type_filters_by_type():
 	assert_eq(store.events_of_type("drought").size(), 2)
 
 
+## Reported live: "the performance gets worse the longer you play."
+## EarthChunkManager._known_settlement_ids() calls events_of_type
+## every SETTLEMENT_STEP_INTERVAL for the rest of the session, and a naive
+## implementation scans the WHOLE store -- every trade, crush, birth,
+## market tick, memory exchange, every event of every kind ever recorded,
+## not just settlement foundings -- so this one query gets slower with
+## every unrelated thing that has ever happened, forever. Fixed with a
+## type index (_by_type, the same "append indexes, read reads the index"
+## shape _by_entity already uses for events_for_entity) so this scales
+## with how many events of THIS type exist, not the store's total size.
+## These pin the observable contract the index must preserve, not the
+## complexity itself (GDScript/GUT has no reliable way to assert Big-O
+## directly) -- the real before/after evidence is a live long-session
+## --perf-report run, not a unit test.
+func test_events_of_type_is_unaffected_by_unrelated_event_volume():
+	for i in 200:
+		store.append(_event("noise_%d" % (i % 11)))
+	store.append(_event("drought"))
+	for i in 200:
+		store.append(_event("noise_%d" % (i % 11)))
+	store.append(_event("drought"))
+	assert_eq(store.events_of_type("drought").size(), 2)
+	assert_eq(store.events_of_type("nonexistent_type"), [])
+
+
+func test_events_of_type_preserves_insertion_order():
+	var first := _event("drought", 1.0)
+	var second := _event("drought", 2.0)
+	store.append(_event("noise"))
+	store.append(first)
+	store.append(_event("noise"))
+	store.append(second)
+	var result := store.events_of_type("drought")
+	assert_eq(result[0].tick, 1.0)
+	assert_eq(result[1].tick, 2.0)
+
+
+## The type index must be rebuilt on load, not just on live append -- a
+## save restored mid-session and then queried (e.g. the very next
+## step_settlements tick) must see every settlement founded before the
+## save, not just ones founded after it.
+func test_events_of_type_reflects_events_restored_via_from_dicts():
+	store.append(_event("drought"))
+	store.append(_event("crop_failure"))
+	store.append(_event("drought"))
+	var restored := EventStore.from_dicts(store.to_dicts())
+	assert_eq(restored.events_of_type("drought").size(), 2)
+	assert_eq(restored.events_of_type("crop_failure").size(), 1)
+
+
 func test_events_in_window_filters_by_tick_inclusive():
 	store.append(_event("a", 10.0))
 	store.append(_event("b", 20.0))
