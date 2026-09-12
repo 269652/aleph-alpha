@@ -64,6 +64,7 @@ const GrassFrogRenderer = preload("res://src/rendering/grass_frog_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
+const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
 ## Well under 1: a clump of grass sits ON the ground, it is not the ground.
@@ -707,6 +708,18 @@ const _SAGEWERK_LOGISTICS_ITEM_IDS := ["beam", "plank"]
 ## whose own search radius could never reach the Storage it was paired for
 ## would be a real worker that can never actually find its destination.
 const SAGEWERK_STORAGE_PAIR_RADIUS_TILES := 20
+
+## Real illustrated-art overlay Sprite2D per placed structure this codebase
+## has real art for (see IllustratedStructureSprite -- farm/sagewerk/
+## storage/wooden_fence today, docs/concept/npc_farm_production.md).
+## chunk_coord -> {local_cell -> Sprite2D}. Purely visual: the underlying
+## ground tile is unchanged (bare earth, same as any other prop-bearing
+## tile -- a tree or mushroom doesn't change its own ground tile either).
+## Every other placeable (campfire/furnace/stone_dam) has no real art wired
+## yet and keeps rendering via its existing baked-into-the-tile-atlas
+## ProceduralStructureSprite look, unaffected by this dict.
+var _structure_art_sprites: Dictionary = {}
+var _illustrated_structure_sprite := IllustratedStructureSprite.new()
 
 var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
 var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
@@ -10883,6 +10896,7 @@ func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 	_sync_piece_collision(Vector2i(global_x, global_y), tile_id)
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, tile_id)
 	_sync_logistics_workers(chunk_coord, local, previous_tile_id, tile_id)
+	_sync_structure_art(chunk_coord, local, previous_tile_id, tile_id)
 	if previous_tile_id != tile_id:
 		# A different piece now occupies this cell (build_at_global doesn't
 		# check occupancy, see _sync_piece_collision's own doc comment) --
@@ -10912,6 +10926,7 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 	_remove_piece_collision(Vector2i(global_x, global_y))
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, "")
 	_sync_logistics_workers(chunk_coord, local, previous_tile_id, "")
+	_sync_structure_art(chunk_coord, local, previous_tile_id, "")
 	_sync_flow_boulder(Vector2i(global_x, global_y))
 	# This cell no longer holds a piece at all -- its own statics tracking
 	# (if any) belonged to whatever WAS here, not to bare ground. Clear it
@@ -11283,6 +11298,59 @@ func _despawn_logistics_workers_at(chunk_coord: Vector2i, local_cell: Vector2i) 
 	for by_item in by_storage.values():
 		for marker in by_item.values():
 			marker.free()
+	by_cell.erase(local_cell)
+
+
+## Keeps `_structure_art_sprites` in sync with a modification change at
+## `local_cell` (see IllustratedStructureSprite, docs/concept/
+## npc_farm_production.md): a tile that just became a real-art subject
+## (farm/sagewerk/storage/wooden_fence) gets a real overlay Sprite2D
+## standing on it; a tile that just stopped being one (overwritten by
+## something else, or destroyed -- `new_tile_id` is "" for a destroy) has
+## its overlay freed. A tile going from one non-art id to another, or
+## staying the SAME art id (a redundant build_at_global call on an already-
+## built tile), is a no-op either way.
+func _sync_structure_art(
+	chunk_coord: Vector2i, local_cell: Vector2i, previous_tile_id: String, new_tile_id: String
+) -> void:
+	if previous_tile_id != new_tile_id and _illustrated_structure_sprite.has_subject(previous_tile_id):
+		_despawn_structure_art_at(chunk_coord, local_cell)
+	if previous_tile_id != new_tile_id and _illustrated_structure_sprite.has_subject(new_tile_id):
+		_spawn_structure_art_for(chunk_coord, local_cell, new_tile_id)
+
+
+## Spawns exactly one real-art overlay Sprite2D for `subject` at
+## `local_cell`, or does nothing if one already exists there. Sized via
+## IllustratedStructureSprite.footprint_texture (width matches the tile,
+## height scales by the same factor) and bottom-anchored: the sprite's own
+## bottom edge sits at the tile's bottom edge, the same way any
+## bottom-anchored placed-art sprite already would (see
+## IllustratedArtLoader's own "footprint" anchor doc comment).
+func _spawn_structure_art_for(chunk_coord: Vector2i, local_cell: Vector2i, subject: String) -> void:
+	if not _structure_art_sprites.has(chunk_coord):
+		_structure_art_sprites[chunk_coord] = {}
+	var by_cell: Dictionary = _structure_art_sprites[chunk_coord]
+	if by_cell.has(local_cell):
+		return
+	var texture := _illustrated_structure_sprite.footprint_texture(subject, TerrainRenderer.TILE_SIZE)
+	if texture == null:
+		return
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	var tile_center := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var tile_bottom := tile_center.y + TerrainRenderer.TILE_SIZE * 0.5
+	var sprite := Sprite2D.new()
+	sprite.texture = texture
+	sprite.position = Vector2(tile_center.x, tile_bottom - float(texture.get_height()) * 0.5)
+	_entities_parent.add_child(sprite)
+	by_cell[local_cell] = sprite
+
+
+func _despawn_structure_art_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	var by_cell: Dictionary = _structure_art_sprites.get(chunk_coord, {})
+	var sprite: Node = by_cell.get(local_cell)
+	if sprite == null:
+		return
+	sprite.free()
 	by_cell.erase(local_cell)
 
 
@@ -11741,6 +11809,16 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for local_cell in chunk.modifications:
 		if chunk.modifications[local_cell] == "sagewerk":
 			_spawn_lumberjack_for(chunk_coord, local_cell)
+
+	# Re-spawn every real-art overlay sprite this chunk already had
+	# persisted, before this load -- a revisited farm/sagewerk/storage/
+	# wooden_fence looks the same as a freshly-placed one, the same
+	# "re-staffing applies just as much to a revisited worksite" reasoning
+	# as the Lumberjack loop just above.
+	for local_cell in chunk.modifications:
+		var subject: String = chunk.modifications[local_cell]
+		if _illustrated_structure_sprite.has_subject(subject):
+			_spawn_structure_art_for(chunk_coord, local_cell, subject)
 
 	# A freshly (re)loaded chunk can bring either a Sägewerk or a Storage
 	# into range of a Sägewerk that was already staffed -- re-decide every
@@ -12404,6 +12482,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for sagewerk_chunk_coord in _sagewerk_lumberjacks:
 		for sagewerk_local_cell in _sagewerk_lumberjacks[sagewerk_chunk_coord]:
 			_resync_logistics_for_sagewerk(sagewerk_chunk_coord, sagewerk_local_cell)
+
+	for art_sprite in _structure_art_sprites.get(chunk_coord, {}).values():
+		art_sprite.free()
+	_structure_art_sprites.erase(chunk_coord)
 
 	for sprite in _flower_sprites.get(chunk_coord, {}).values():
 		sprite.free()
