@@ -13457,10 +13457,33 @@ func test_an_unloaded_settlement_can_grow_on_its_own_gathering():
 ## the wrong way round; that guard's premise is weaker now that an unloaded
 ## settlement's granary is a real reading, and narrowing it is its own
 ## change.
+##
+## Investigated 2026-09-13 after this precondition started failing at its
+## original +0,+1 offset on a completely clean checkout (catch reading
+## exactly 0.0). NOT the stale-import-cache/worldgen-precondition-artifact
+## class documented on the sibling test below (see
+## test_try_plant_seed_at_fails_outside_forest_or_rainforest's own note) --
+## ruled that out directly: a fresh --headless --import still reproduced it,
+## and the hydrology bake files on disk hash-match their git blobs exactly.
+## The real explanation is a real, correct upstream change: +0,+1 was
+## authored (061c379d, 2026-08-28) before curated rivers (b90b1aee, the next
+## day) or the hydrology bake (Sept 3) existed, when "water" for fish
+## purposes meant literally ocean-biome cells only. 8e3a8436 (Sept 3) then
+## fixed a real reported bug where fine-detail noise (+-432m) flipped
+## isolated coastal-plain tiles below sea level into spurious ocean-biome
+## "pond" speckles ("dozens of small ponds beside rivers") -- see its own
+## pinning test, test_fine_detail_never_flips_land_to_sea_or_sea_to_land,
+## which still passes clean today. +0,+1 was almost certainly one of those
+## speckles: the elevation asset and the fish-population formula are both
+## provably unchanged since before this test existed (git log on each is
+## empty across that whole span), so its water simply isn't there to find
+## anymore, correctly. +0,-1 is a real, small baked river (14 interior-water
+## cells) giving the same "thin catch" property today -- verified green,
+## 6/6 asserts, in isolation.
 func test_an_unloaded_settlement_really_declines_by_eating_through_its_stores():
-	# +0,+1: real water, but a THIN catch by comparison, which is what makes
+	# +0,-1: real water, but a THIN catch by comparison, which is what makes
 	# the deficit small enough to watch.
-	var chunk_coord := _berlin_chunk() + Vector2i(0, 1)
+	var chunk_coord := _berlin_chunk() + Vector2i(0, -1)
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
 	var region = manager._seeded_region_for(settlement_id)
 	var catch: float = float(
