@@ -16552,12 +16552,73 @@ test_world_torch_glow_fanout.gd` 3/3, `tests/unit/
 test_world_daylight_default.gd` 19/19 and `tests/unit/
 test_world_season_fanout.gd` 13/13 (regression check, unaffected).
 
-⬜ Not attempted: a second light source (e.g. a lantern -- `is_lit_
-item_id` is the one seam that would need to grow), and a real fuel/
-ignition toggle separate from equip state. The user's other named
-example ("the compass, when in hand, should spawn a UI window with a
-compass pointing to north") is a separate, comparably-sized feature --
+⬜ At the time this entry was written: a second light source (e.g. a
+lantern -- `is_lit_item_id` is the one seam that would need to grow), and
+a real fuel/ignition toggle separate from equip state. The user's other
+named example ("the compass, when in hand, should spawn a UI window with
+a compass pointing to north") is a separate, comparably-sized feature --
 tracked and built separately, not folded into this entry.
+
+#### Storm Lantern (`concept/lighting.md`, 2026-09-13) -- the second light
+source above, plus the torch-equip bug it forced a fix for
+
+Picking up this entry's own named gap. Before touching anything, verified
+the claim was still real against current `main`: `item_catalog.gd:125`
+still listed `"torch": ["Torch", "material", 10, 0.0]`, and `Player.
+equip_item` (`scenes/player.gd`) still gates on `item.kind != "weapon" and
+item.kind != "tool"` -- meaning a torch, despite `TorchGlow.
+is_lit_item_id` being gated on `Player.equipped_item.id == "torch"`,
+could never actually reach that state through the real equip path. No
+code anywhere in the repo branches on `kind == "material"` (grepped
+first), so this was a real, safely-fixable bug, not a load-bearing
+assumption elsewhere.
+
+✅ **Bug fix, red-green**: `tests/unit/test_player.gd`'s new
+`test_equipping_a_torch_actually_works` failed against current `main`
+(`player.equip_item(torch)` returned `false`, `equipped_item` stayed
+`null`) -- fixed by changing the torch's catalog kind `"material"` ->
+`"tool"`. A torch can now actually be equipped, which is what makes the
+glow it already had (and the lantern below) reachable in a real game at
+all, not just in `TorchGlow`'s own unit tests.
+
+✅ **The lantern itself**: `"lantern"` is a `"tool"`-kind item
+(`item_catalog.gd`), craftable from `2x iron_ingot + 1x torch`
+(`crafting_recipe_book.gd`'s `_RECIPES.size()` pinned constant bumped
+40 -> 41, a real recount, not eyeballed) -- an upgrade off an
+already-carried torch, not a second from-scratch build. `TorchGlow.
+is_lit_item_id` grew to accept `"lantern"` alongside `"torch"`, finally
+using the seam this doc's own prior entry named for exactly this.
+
+✅ **A real reason for the second light source to exist, not a palette
+swap**: a bare torch is an open flame; new pure static `TorchGlow.
+is_extinguished_by_weather(item_id, weather) -> bool` returns true only
+for `("torch", "rain"/"storm")` (`WeatherModel.STATES`), false for every
+other combination including every `"lantern"` case -- kept deliberately
+separate from `is_lit_item_id` (which only answers "does equipping this
+item mean light") so the two concerns can't drift into each other.
+`World._update_torch_glow` reads `_chunk_manager.current_weather` (an
+existing call, already made this cheaply/deterministically multiple
+other times per frame nearby -- not a new scan) and ANDs the equip-gated
+`lit` flag with `not is_extinguished_by_weather(equipped.id, weather)`.
+Pinned by `tests/unit/test_world_torch_glow_fanout.gd`'s new
+`test_the_torch_glow_update_reads_current_weather_and_gates_on_it`, the
+same "read the real per-frame function body" technique the rest of that
+file already uses.
+
+One-line icon/shape scaffolding added for `"lantern"` in
+`illustrated_art_registry.gd`/`procedural_item_sprite.gd`, mirroring
+torch's own entries -- no real art drawn yet, same as most of that
+registry's ~100 icon-only items.
+
+Tests: `tests/unit/test_player.gd` (torch-equip fix, full file green),
+`tests/unit/test_torch_glow.gd` 14/14 (was 10/10),
+`tests/unit/test_world_torch_glow_fanout.gd` 4/4 (was 3/3),
+`tests/unit/test_item_catalog.gd` 81/81,
+`tests/unit/test_crafting_recipe_book.gd` 54/54.
+
+⬜ Still not attempted: a real fuel/ignition toggle separate from equip
+state (a torch/lantern cannot model "broken" or "empty" under today's
+wear system -- a plausible later mechanic, not this pass's).
 
 ## A real ant queen, deliberately NOT shaped like the bee one (2026-09-08)
 

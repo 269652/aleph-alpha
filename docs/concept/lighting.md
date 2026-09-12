@@ -107,9 +107,26 @@ in the gating logic.
   tinted background while preserving the underlying texture (true
   additive blending). `tests/unit/test_torch_glow.gd` (10/10),
   `tests/unit/test_world_torch_glow_fanout.gd` (3/3).
-- ⬜ **A second light source** (a lantern, say) — `TorchGlow.
-  is_lit_item_id` is the one seam that would need to grow a second id;
-  not asked for, not attempted here.
+- ✅ **A second light source** (Storm Lantern, 2026-09-13) — `TorchGlow.
+  is_lit_item_id` grew the second id this doc's own Status entry named as
+  the seam: `"lantern"`, a `"tool"`-kind item (`item_catalog.gd`) crafted
+  from `2x iron_ingot + 1x torch` (`crafting_recipe_book.gd`) -- an
+  upgrade off an already-carried torch, not a second from-scratch build.
+  Given a real reason to exist rather than being a decorative palette
+  swap: a bare torch is an open flame, and real rain/storm weather
+  (`WeatherModel.STATES`) douses it -- a new pure static `TorchGlow.
+  is_extinguished_by_weather(item_id, weather) -> bool` returns true only
+  for `("torch", "rain"/"storm")`, kept deliberately separate from
+  `is_lit_item_id` (which only answers "does equipping this mean light")
+  so the two concerns can't drift into each other. The lantern is
+  weatherproof: `is_extinguished_by_weather("lantern", ...)` is always
+  false. `World._update_torch_glow` reads `_chunk_manager.current_weather`
+  (already called this cheaply/deterministically multiple other times per
+  frame nearby) and ANDs the equip-gated `lit` flag with `not
+  is_extinguished_by_weather(...)`. Tests: `tests/unit/test_torch_glow.gd`
+  14/14, `tests/unit/test_world_torch_glow_fanout.gd` 4/4. The torch-equip
+  bug this feature's own prerequisite forced a fix for is documented in
+  `docs/progress.md`'s "Torch light source" entry.
 - ⬜ **A real ignite/extinguish toggle** — today, equipping a torch IS
   being lit (see `is_lit_item_id`'s own doc comment for why: a torch
   cannot even model "broken" under the current wear system). A separate
