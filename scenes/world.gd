@@ -82,6 +82,15 @@ const QuestLog = preload("res://src/emergence/quest_log.gd")
 ## seed mass (nothing has fed or starved them yet), proven by
 ## test_player_current_mass_kg_starts_at_the_seed_mass.
 func _player_step_momentum_kg_m_s(player: Player) -> float:
+	# A footstep carries momentum; standing still carries none. With a
+	# constant walking momentum every crush walk -- walnuts over the whole
+	# dropped-item group (which also holds every liftable stone, mushroom and
+	# seed), ants, decomposers, caterpillars, millipedes -- ran every frame for
+	# a player who had not moved: ~2 ms of each frame in the round-13
+	# measurement (docs/concept/soil_fauna.md). The walks all gate on the
+	# momentum threshold first, so zero here is what makes them free.
+	if player.velocity.length_squared() <= 0.0:
+		return 0.0
 	return player.current_mass_kg() * PebbleDispersion.FOOTSTEP_SPEED_MPS
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const Courtship = preload("res://src/gameplay/courtship.gd")
