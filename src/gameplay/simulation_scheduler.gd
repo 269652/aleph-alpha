@@ -154,5 +154,13 @@ func parked_count() -> int:
 	return _parked
 
 
+## A point-in-time census for PerfReport (src/gameplay/perf_report.gd):
+## everything this scheduler has taken over and still tracks, split into
+## stepped-every-frame ("in_hand") and parked-on-the-wheel -- the one place
+## the live creature population is actually known per frame.
+func census() -> Dictionary:
+	return {"adopted": _adopted.size(), "in_hand": _in_hand.size(), "parked": _parked}
+
+
 func frame() -> int:
 	return _frame

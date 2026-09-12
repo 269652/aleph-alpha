@@ -207,3 +207,14 @@ func test_nothing_is_adopted_when_no_scheduler_is_current():
 	marker._process(SimulationLod.MAX_INTERVAL_SECONDS)
 	assert_eq(marker.steps, 1)
 	assert_true(marker.is_processing(), "no scheduler: the engine keeps driving it, exactly as before")
+
+
+## PerfReport's census (src/gameplay/perf_report.gd): a point-in-time count
+## of everything this scheduler has taken over, split into stepped-every-
+## frame and parked-on-the-wheel -- the one place the live creature
+## population is actually known per frame.
+func test_census_counts_adopted_in_hand_and_parked():
+	_adopted_marker(0.0)
+	_adopted_marker(FAR_PX)
+
+	assert_eq(scheduler.census(), {"adopted": 2, "in_hand": 1, "parked": 1})
