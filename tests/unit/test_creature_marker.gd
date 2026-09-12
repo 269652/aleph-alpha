@@ -890,6 +890,83 @@ func test_sated_predator_does_not_chase_prey():
 	assert_lt(predator.position.distance_to(predator.home), CreatureWander.WANDER_RADIUS)
 
 
+# -- behavior: opportunistic scavenging (docs/concept/carrion.md) -------------
+#
+# A predator/omnivore with no live prey in reach should still walk to and eat
+# a nearby carcass/guts through the ethogram's new CARRION wiring -- closing
+# carrion.md's own named Status gap ("the take_bite contract is already
+# shaped to support this, but wiring it into CreatureBehavior's decision
+# tree is a real, separate AI change, deliberately deferred").
+
+
+func test_a_hungry_predator_with_no_live_prey_walks_to_and_bites_a_nearby_carcass():
+	var predator := _make_predator(Vector2(100, 100))
+	predator._needs.hunger = 1.0
+	var carcass := Carcass.new()
+	carcass.species = "herbivore"
+	carcass.position = Vector2(160, 100)  # sensed, not yet in bite range
+	carcass._process(Carcass.ROT_SECONDS + 1.0)  # rotten: biteable
+	add_child(carcass)
+	_extra.append(carcass)
+
+	predator._process(0.2)
+	assert_gt(
+		predator.position.x, 100.0,
+		"a hungry predator with no live prey should walk toward a nearby carcass"
+	)
+
+	for i in 40:
+		predator._process(0.2)
+
+	assert_false(
+		predator._needs.is_hungry(),
+		"closing the distance and biting a rotten carcass should feed the predator"
+	)
+
+
+## The is_predator scan gate (mirrors _nearby_herbivore_creatures' own gate,
+## just the other direction): a herbivore never even looks for carrion, so a
+## nearby carcass can never distract it from ordinary foraging.
+func test_a_herbivore_never_scans_for_carcasses():
+	marker.info = CreatureInfo.new("herbivore")
+	var carcass := Carcass.new()
+	carcass.species = "herbivore"
+	carcass.position = Vector2(120, 100)
+	carcass._process(Carcass.ROT_SECONDS + 1.0)
+	add_child(carcass)
+	_extra.append(carcass)
+
+	assert_eq(
+		marker._scan_carrion_stimuli(), [],
+		"a herbivore should never publish a carrion stimulus, however close the carcass"
+	)
+
+
+## _try_eat's own free-feed exploit (calling _needs.feed() after only
+## checking has_method("take_damage"), which Carcass/CarcassGuts do not
+## implement) is deliberately NOT reused for scavenging -- _try_scavenge
+## must only feed when target.take_bite() actually returns true. A FRESH
+## (not yet rotten) carcass's take_bite always returns false.
+func test_scavenging_only_feeds_the_predator_when_the_bite_actually_lands():
+	var predator := _make_predator(Vector2(100, 100))
+	predator._needs.hunger = 1.0
+	var fresh_carcass := Carcass.new()
+	fresh_carcass.species = "herbivore"
+	fresh_carcass.position = Vector2(105, 100)  # already in bite range
+	add_child(fresh_carcass)
+	_extra.append(fresh_carcass)
+
+	predator._process(0.2)
+
+	assert_true(
+		predator._needs.is_hungry(),
+		"a bite that does not land (carcass not yet rotten) must not free-feed the predator"
+	)
+	assert_false(
+		fresh_carcass.is_queued_for_deletion(), "a failed bite must not touch the carcass either"
+	)
+
+
 # -- behavior: predator vs player (strong attacks, weak flees) -----------------
 
 func test_strong_aggressive_predator_attacks_a_nearby_player():

@@ -174,6 +174,7 @@ space, which is what lets one kernel compare them.
 | `forage` | plant food at that tile, or the bite the grazer has committed to | `CreaturePerception.nearest_tile_offset` / `GrazerForaging` (✅ slice 2) |
 | `water` | drinkable water at that tile | `CreaturePerception.nearest_tile_offset` (✅ slice 2) |
 | `mate` | my courtship partner | `MammalCourtship` pairing (✅ slice 2) |
+| `carrion` | a nearby `Carcass`/`CarcassGuts` | `CreatureMarker._scan_carrion_stimuli` (✅ carrion.md's opportunistic-scavenging slice) |
 
 `Ethogram.CHANNELS` is the ordered list; `Ethogram.SMELL_CHANNELS` is the
 first five and is what `Olfaction.MOLECULES` now aliases. The molecule
@@ -278,6 +279,7 @@ The mammal defaults, and why each is what it is:
 | `forage` | 1.0 | +1.0 | plant food is food |
 | `water` | 1.0 | +1.0 | |
 | `mate` | 1.0 | +1.0 | |
+| `carrion` | 1.0 | 0.0 | same shape as `flesh`: every mammal can sense a nearby carcass, but a herbivore wants nothing from it; the adapter sets +1.0 for a predator/omnivore, reusing `is_predator` (carrion.md's opportunistic-scavenging slice) |
 
 The adapter overrides are species and state facts that reach `decide()` as
 context flags (`temperament`, `health_fraction`, `is_mature`, `is_predator`,
@@ -475,6 +477,7 @@ hunted, dying of thirst, starving or mid-hunt):
     {"gate": "fear",      "channels": ["predator", "player"], "approach": "attack", "avoid": "flee"},
     {"gate": "thirst",    "channels": ["water"],      "approach": "seek_water", "search": "search_water"},
     {"gate": "hunger",    "channels": ["flesh"],      "approach": "hunt"},
+    {"gate": "hunger",    "channels": ["carrion"],    "approach": "scavenge"},
     {"gate": "hunger",    "channels": SMELL_CHANNELS, "approach": "seek_food", "floor": SMELL_INTEREST_FLOOR},
     {"gate": "hunger",    "channels": ["forage"],     "approach": "seek_food", "search": "search_food"},
     {"gate": "courtship", "channels": ["mate"],       "approach": "court"},
@@ -493,6 +496,18 @@ commitment to a bite, so it ranks smells with the same kernel
 motor program and hands the winner to `GrazerForaging` -- pillar 4, the
 caller commits. The wiring's live readers are the body plans that hunt by
 nose without a grazing bout (§9, slice 5).
+
+The `carrion` wiring is `docs/concept/carrion.md`'s own opportunistic-
+scavenging slice, sitting between live-prey `hunt` and the smell ladder
+for exactly the reason its position implies: a predator/omnivore with no
+live prey in reach falls back to a nearby carcass before it ever falls
+back to ranging by nose for plant food. `CreatureMarker._scan_carrion_
+stimuli` publishes it (gated on `is_predator`, so a herbivore never
+scans), and `_apply_decision`'s new `"scavenge"` branch drives it at
+`HUNT_SPEED` into `_try_scavenge` -- deliberately not `_try_eat`'s shape,
+since `Carcass`/`CarcassGuts` don't answer `take_damage`, and `_try_eat`'s
+own contract (feed unconditionally once that check passes) would be a
+free-feed exploit on an object that instead answers `take_bite`.
 
 Order is priority in slice 1. The roadmap's version (§9, slice 4) scores
 across wirings with fear's gain large enough that the ladder falls out of the

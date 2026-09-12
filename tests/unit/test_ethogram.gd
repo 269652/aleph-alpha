@@ -202,6 +202,20 @@ func test_the_mammal_ladder_hunts_by_nose_through_one_shared_wiring():
 	assert_eq(by_nose[0]["approach"], "seek_food")
 
 
+## A predator/omnivore with no live prey in reach should still be able to
+## walk to and eat a nearby carcass (docs/concept/carrion.md's "opportunistic
+## predator/omnivore" Status gap) -- through the same wiring ladder every
+## other mammal drive already runs through, not a special-cased side system.
+func test_a_predator_body_plan_wires_carrion_to_a_scavenge_approach():
+	var scavenge := []
+	for wiring in Ethogram.wirings_for("mammal"):
+		if wiring["channels"] == [Ethogram.CARRION]:
+			scavenge.append(wiring)
+	assert_eq(scavenge.size(), 1, "exactly one wiring should listen for carrion")
+	assert_eq(scavenge[0]["gate"], "hunger")
+	assert_eq(scavenge[0]["approach"], "scavenge")
+
+
 func test_a_body_plan_without_wirings_yet_returns_none_rather_than_pretending():
 	assert_eq(Ethogram.wirings_for("bird"), [])
 	assert_eq(Ethogram.wirings_for("nonesuch"), [])
