@@ -35,6 +35,10 @@ const FIELDS: Array[String] = [
 ]
 
 var _accumulator := 0.0
+## Label -> usec accumulated since the last take_sections(), and the number
+## of ticks (frames) they span, so a section reads as ms PER FRAME.
+var _section_usec: Dictionary = {}
+var _section_frames := 0
 
 
 static func requested(args: PackedStringArray) -> bool:
@@ -46,19 +50,41 @@ static func requested(args: PackedStringArray) -> bool:
 ## the interval fires), never firing twice for one crossing.
 func tick(delta: float) -> bool:
 	_accumulator += delta
+	_section_frames += 1
 	if _accumulator < REPORT_INTERVAL_SECONDS:
 		return false
 	_accumulator = 0.0
 	return true
 
 
+## World brackets its own top-level script blocks with this -- the creature
+## scheduler, its ecology steps, the per-client UI pass -- so the report can
+## split TIME_PROCESS into the pieces game code actually owns. Zero cost
+## when no report is running: the caller guards on the report being null.
+func add_section(label: String, usec: int) -> void:
+	_section_usec[label] = int(_section_usec.get(label, 0)) + usec
+
+
+## Every section as ms per frame, averaged over the ticks since the last
+## take; taking resets both the totals and the frame count.
+func take_sections() -> Dictionary:
+	var sections := {}
+	if _section_frames > 0:
+		for label in _section_usec:
+			sections[label] = float(_section_usec[label]) / 1000.0 / float(_section_frames)
+	_section_usec = {}
+	_section_frames = 0
+	return sections
+
+
 ## Reads every monitor once. `viewport` is the RID the renderer measured --
 ## RenderingServer.viewport_set_measure_render_time(viewport, true) must
 ## have been called for the render_* fields to be anything but 0. `census`
 ## is SimulationScheduler.census(); missing keys read as 0.
-static func sample(viewport: RID, census: Dictionary) -> Dictionary:
+static func sample(viewport: RID, census: Dictionary, sections: Dictionary = {}) -> Dictionary:
 	var fps := Engine.get_frames_per_second()
 	return {
+		"sections": sections,
 		"fps": int(fps),
 		"frame_ms": 1000.0 / fps if fps > 0.0 else 0.0,
 		"process_ms": Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
@@ -81,7 +107,7 @@ static func sample(viewport: RID, census: Dictionary) -> Dictionary:
 
 
 static func format_line(s: Dictionary) -> String:
-	return (
+	var line := (
 		"PERF fps=%d frame=%.1fms process=%.1fms physics=%.1fms nav=%.1fms render_cpu=%.1fms "
 		+ "render_gpu=%.1fms nodes=%d orphans=%d draw_calls=%d objects=%d primitives=%d "
 		+ "phys_active=%d phys_pairs=%d mem=%.1fMB sched_adopted=%d sched_in_hand=%d sched_parked=%d"
@@ -91,3 +117,9 @@ static func format_line(s: Dictionary) -> String:
 		s["phys_active"], s["phys_pairs"], s["mem_static_mb"], s["sched_adopted"], s["sched_in_hand"],
 		s["sched_parked"],
 	]
+	var sections: Dictionary = s.get("sections", {})
+	var labels := sections.keys()
+	labels.sort()
+	for label in labels:
+		line += " s_%s=%.1fms" % [label, sections[label]]
+	return line

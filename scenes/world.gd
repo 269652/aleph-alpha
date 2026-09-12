@@ -4973,12 +4973,18 @@ func _process(delta: float) -> void:
 	# anything else (FPS regression round 11, see SimulationScheduler):
 	# World is the scene root, so its descendants' own _process runs after
 	# this, and a marker switched back on here is processed this same frame.
+	var perf_started := Time.get_ticks_usec()
 	_simulation_scheduler.advance(delta)
-	# One PERF line per report interval, read AFTER the wake-ups above so the
-	# census reflects this frame's own wheel; every other field is the
-	# engine's own last-frame monitor. Null unless --perf-report was given.
-	if _perf_report != null and _perf_report.tick(delta):
-		print(PerfReport.format_line(PerfReport.sample(get_viewport().get_viewport_rid(), _simulation_scheduler.census())))
+	# --perf-report only (null otherwise): the scheduler's whole creature pass
+	# is one section, World's own ecology steps and the client pass below are
+	# the other two. One PERF line per report interval, read AFTER the
+	# wake-ups above so the census reflects this frame's own wheel; every
+	# other field is the engine's own last-frame monitor.
+	if _perf_report != null:
+		_perf_report.add_section("sched", Time.get_ticks_usec() - perf_started)
+		if _perf_report.tick(delta):
+			print(PerfReport.format_line(PerfReport.sample(get_viewport().get_viewport_rid(), _simulation_scheduler.census(), _perf_report.take_sections())))
+		perf_started = Time.get_ticks_usec()
 	# Ages every recorded water disturbance (fish/player/animal ripples) so
 	# its ring actually expands and fades -- every frame, every client, not
 	# gated behind _owns_ecosystem_simulation() like the simulation steps
@@ -5026,11 +5032,16 @@ func _process(delta: float) -> void:
 		if focus_player != null:
 			_step_pebble_dispersion(focus_player)
 			_step_leaf_litter_dispersion(focus_player)
+	if _perf_report != null:
+		_perf_report.add_section("ecology", Time.get_ticks_usec() - perf_started)
+		perf_started = Time.get_ticks_usec()
 
 	if _is_dedicated_server:
 		_server_process()
 	else:
 		_client_process(delta)
+		if _perf_report != null:
+			_perf_report.add_section("client", Time.get_ticks_usec() - perf_started)
 
 
 ## How often worn/recovered path tiles are diffed against the rendered

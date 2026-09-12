@@ -43,7 +43,18 @@ func test_process_prints_one_line_per_due_tick_from_the_schedulers_census():
 	var body := _body_of("_process")
 	assert_true(body.contains("_perf_report.tick(delta)"), "the report is advanced once per frame")
 	assert_true(
-		body.contains("print(PerfReport.format_line(PerfReport.sample(get_viewport().get_viewport_rid(), _simulation_scheduler.census())))"),
-		"one printed line, built from the live scheduler census"
+		body.contains("print(PerfReport.format_line(PerfReport.sample(get_viewport().get_viewport_rid(), _simulation_scheduler.census(), _perf_report.take_sections())))"),
+		"one printed line, built from the live scheduler census and the frame's section split"
 	)
 	assert_eq(body.count("_perf_report.tick("), 1, "exactly once per frame")
+
+
+func test_process_brackets_its_three_top_level_script_blocks_as_sections():
+	var body := _body_of("_process")
+	for label in ["sched", "ecology", "client"]:
+		assert_eq(
+			body.count("_perf_report.add_section(\"%s\", " % label), 1,
+			"the %s block is timed exactly once per frame" % label
+		)
+	assert_lt(body.find("_perf_report.add_section(\"sched\", "), body.find("_perf_report.tick(delta)"),
+		"the scheduler bracket closes before the report line is built, so it counts this frame")

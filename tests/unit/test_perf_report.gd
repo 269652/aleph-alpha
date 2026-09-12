@@ -80,3 +80,41 @@ func test_a_missing_census_reads_as_zero_not_a_crash():
 	assert_eq(sample["sched_adopted"], 0)
 	assert_eq(sample["sched_in_hand"], 0)
 	assert_eq(sample["sched_parked"], 0)
+
+
+## Sections: World brackets its own top-level script blocks (the creature
+## scheduler, its ecology steps, the per-client UI pass) with
+## add_section(label, usec) and the report averages each over the frames
+## since the last line -- the split TIME_PROCESS alone cannot give.
+func test_sections_average_per_frame_over_the_ticks_since_the_last_report():
+	var report := PerfReport.new()
+	report.add_section("sched", 3000)
+	report.tick(INTERVAL * 0.6)
+	report.add_section("sched", 5000)
+	report.add_section("client", 1000)
+	assert_true(report.tick(INTERVAL * 0.6), "precondition: the second tick fires the report")
+
+	var sections: Dictionary = report.take_sections()
+
+	assert_almost_eq(sections["sched"], 4.0, 0.001, "8 ms over 2 frames")
+	assert_almost_eq(sections["client"], 0.5, 0.001, "1 ms over 2 frames")
+	assert_eq(report.take_sections(), {}, "taking the sections resets them and their frame count")
+
+
+func test_format_line_appends_sections_in_label_order():
+	var sample := {
+		"fps": 12, "frame_ms": 83.3, "process_ms": 40.26, "physics_ms": 1.5, "nav_ms": 0.0,
+		"render_cpu_ms": 9.76, "render_gpu_ms": 3.0, "nodes": 23456, "orphans": 2,
+		"draw_calls": 1234, "objects": 5678, "primitives": 90123, "phys_active": 11,
+		"phys_pairs": 5, "mem_static_mb": 512.6, "sched_adopted": 2500, "sched_in_hand": 300,
+		"sched_parked": 2200, "sections": {"sched": 4.0, "client": 0.5},
+	}
+	assert_true(
+		PerfReport.format_line(sample).ends_with(" sched_parked=2200 s_client=0.5ms s_sched=4.0ms"),
+		"sections follow the fixed fields, sorted by label: %s" % PerfReport.format_line(sample)
+	)
+
+
+func test_sample_carries_the_sections_it_is_handed():
+	var sample: Dictionary = PerfReport.sample(get_viewport().get_viewport_rid(), {}, {"sched": 4.0})
+	assert_eq(sample["sections"], {"sched": 4.0})
