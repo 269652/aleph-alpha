@@ -218,3 +218,29 @@ func test_census_counts_adopted_in_hand_and_parked():
 	_adopted_marker(FAR_PX)
 
 	assert_eq(scheduler.census(), {"adopted": 2, "in_hand": 1, "parked": 1})
+
+
+## Step profiling for PerfReport: with profiling on, advance() times every
+## marker step it makes and take_step_profile() hands back usec and step
+## counts per marker class since the last take -- off by default, so a
+## plain game pays nothing for it.
+func test_step_profile_is_empty_unless_profiling_is_on():
+	_adopted_marker(0.0)
+	scheduler.advance(FRAME)
+
+	assert_eq(scheduler.take_step_profile(), {})
+
+
+func test_step_profile_counts_and_times_every_step_per_class_then_resets():
+	scheduler.set_step_profiling(true)
+	_adopted_marker(0.0)
+	_adopted_marker(0.0)
+	scheduler.advance(FRAME)
+
+	var profile: Dictionary = scheduler.take_step_profile()
+
+	assert_eq(profile.size(), 1, "both markers share one class")
+	var entry: Dictionary = profile.values()[0]
+	assert_eq(entry["steps"], 2, "one step per in-hand marker this frame")
+	assert_true(entry["usec"] >= 0, "wall time is recorded, never negative")
+	assert_eq(scheduler.take_step_profile(), {}, "taking resets the profile")

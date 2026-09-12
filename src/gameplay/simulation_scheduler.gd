@@ -54,6 +54,13 @@ var _due: Dictionary = {}
 var _parked := 0
 ## Instance id -> true for every marker taken over from the engine.
 var _adopted: Dictionary = {}
+## Step profiling for PerfReport (off by default, so a plain game pays
+## nothing): while on, every marker step advance() makes is timed and
+## summed per marker class -- script basename, cached per instance id --
+## as {"usec": int, "steps": int}, handed out by take_step_profile().
+var _profiling := false
+var _step_profile: Dictionary = {}
+var _class_key_by_id: Dictionary = {}
 
 
 static func current():
@@ -136,7 +143,12 @@ func advance(delta: float) -> void:
 			_adopted.erase(id)
 			_in_hand_dirty = true
 			continue
-		marker._process(delta)
+		if _profiling:
+			var started := Time.get_ticks_usec()
+			marker._process(delta)
+			_record_step(id, marker, Time.get_ticks_usec() - started)
+		else:
+			marker._process(delta)
 
 
 static func _alive(marker) -> bool:
@@ -164,3 +176,30 @@ func census() -> Dictionary:
 
 func frame() -> int:
 	return _frame
+
+
+func set_step_profiling(enabled: bool) -> void:
+	_profiling = enabled
+
+
+## Usec and step counts per marker class since the last take; taking
+## resets. Empty unless set_step_profiling(true) was called.
+func take_step_profile() -> Dictionary:
+	var profile := _step_profile
+	_step_profile = {}
+	return profile
+
+
+func _record_step(id: int, marker: Node, usec: int) -> void:
+	var key = _class_key_by_id.get(id)
+	if key == null:
+		var script = marker.get_script()
+		if script != null and not script.resource_path.is_empty():
+			key = script.resource_path.get_file().get_basename()
+		else:
+			key = marker.get_class()
+		_class_key_by_id[id] = key
+	var entry: Dictionary = _step_profile.get(key, {"usec": 0, "steps": 0})
+	entry["usec"] += usec
+	entry["steps"] += 1
+	_step_profile[key] = entry

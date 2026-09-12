@@ -868,6 +868,7 @@ func _ready() -> void:
 		# render_* field of the report reads 0 forever.
 		_perf_report = PerfReport.new()
 		RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
+		_simulation_scheduler.set_step_profiling(true)
 
 	# Real bug found live: _process()/_unhandled_input() run every frame
 	# regardless of whether _ready() returned early above -- before this
@@ -4982,6 +4983,9 @@ func _process(delta: float) -> void:
 	# other field is the engine's own last-frame monitor.
 	if _perf_report != null:
 		_perf_report.add_section("sched", Time.get_ticks_usec() - perf_started)
+		var step_profile := _simulation_scheduler.take_step_profile()
+		for key in step_profile:
+			_perf_report.add_section("step_" + key, step_profile[key]["usec"])
 		if _perf_report.tick(delta):
 			print(PerfReport.format_line(PerfReport.sample(get_viewport().get_viewport_rid(), _simulation_scheduler.census(), _perf_report.take_sections(), PerfReport.processing_census(get_tree().root))))
 		perf_started = Time.get_ticks_usec()
