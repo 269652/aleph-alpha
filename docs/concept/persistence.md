@@ -712,6 +712,53 @@ entries instead of 1029); no regression in `test_loading_overlay.gd`/
 `test_loading_spinner.gd`/`test_world_boot_loading_overlay_fanout.gd`
 (17/17 across the three).
 
+### The 2026-09-10 shuffle fixed ORDER; the WORDING was still the complaint (2026-09-12)
+
+Reported live: *"Can you make the witty tips more funny and original?
+Thought through and natural humour; it feels so forced."* The prior pass
+fixed playback order (no repeated template runs) but never revisited
+what it was shuffling: most of `_CURATED_TIPS` still opened with the
+same "[Gerund]-ing a game system through a workplace-sitcom verb" shape
+(unionizing, filing tax records, negotiating rent) — a real joke once,
+worn down to a template by repetition; `_TEMPLATES` was safe and
+grammar-correct but almost entirely unfunny ("Double-checking %s one
+more time.", "%s: pending review.") — filler wearing the shape of a
+joke rather than being one.
+
+**Both arrays rewritten from scratch.** `_CURATED_TIPS` (161 lines) now
+deliberately mixes joke MECHANISMS — deadpan escalation, one-sided
+argument, ironic reversal, absurdly specific detail, a flat non-answer,
+a quoted denial — not just sentence openers, still grounded throughout
+in this project's own real systems. `_TEMPLATES` gives every line an
+actual per-line turn instead of a generic status update, while
+tightening the grammar discipline further: `%s` never becomes the
+subject of ANY later verb, relative-clause verb, reflexive pronoun, or
+possessive either ("..., who is...", "...its own...", "%s's") — each
+would silently misagree for roughly half of `_SUBJECTS` ("the ants",
+"the wolves", "the sparrows"...) the exact same way a bare "%s is"
+already couldn't, just past where the existing hazard-substring test
+could catch it.
+
+**A live spot-check (printing 40 consecutive playback tips) found a
+second, structural problem the wording fix alone didn't touch:** with
+only 45 templates spread across ~3,200 total tips, the SAME exact frame
+recurred within about ten to fifteen tips — precisely the "same
+pattern, different word" shape this file already diagnosed once, just
+relocated from the curated set to the template set rather than actually
+gone. `_TEMPLATES` doubled to 90 (same grammar discipline throughout) so
+any one shape recurs roughly half as often in a given stretch — a
+structural fix to repetition FREQUENCY, not just fresher words inside
+each repeat. `_SUBJECTS` untouched: the complaint was about the joke,
+not which real system it names.
+
+**Real numbers after this pass:** 161 curated + 90×68 = 6120 generated =
+6281 total tips. `_SHUFFLE_SEED` re-searched from scratch against the
+new content (a different pool shuffles differently at the same seed,
+since Fisher-Yates's own swap range depends on array size); `1` is the
+first seed checked, from 1 upward, that clears the zero-3+-run bar.
+`test_loading_tips.gd` 18/18 again; no regression in
+`test_loading_overlay.gd`.
+
 ## Status / mechanisms
 
 - ✅ `Player.appearance` field + `to_save_dict()`/`apply_save_dict()`, tested

@@ -20291,6 +20291,24 @@ location.gd` rewritten to pin the Dreisam by name and coordinate (its
 own header now carries the full history). Spec: `concept/rivers.md`
 "Spawn: a random curated river".
 
+### Loading tips rewritten: sharper jokes, and a structural fix to how often one shape repeats (2026-09-12)
+
+"Can you make the witty tips more funny and original? Thought through
+and natural humour; it feels so forced." ✅ `_CURATED_TIPS` (161) and
+`_TEMPLATES` (45 -> 90, doubled) rewritten from scratch in
+`src/ui/loading_tips.gd` -- real joke mechanisms throughout (deadpan
+escalation, one-sided argument, ironic reversal, a flat non-answer)
+instead of one repeated sentence shape with the noun swapped, still
+grounded in this project's own real systems. A live spot-check of the
+first rewrite caught a second, structural problem no amount of better
+wording alone would fix: with only 45 templates the same exact frame
+recurred every ten to fifteen tips: `_TEMPLATES` doubled so any one
+shape now repeats about half as often. `_SHUFFLE_SEED` re-searched
+against the new ~6,281-tip pool. `test_loading_tips.gd` 18/18,
+`test_loading_overlay.gd` unaffected. Spec: `concept/persistence.md`
+"The 2026-09-10 shuffle fixed ORDER; the WORDING was still the
+complaint".
+
 ### FPS regression round 13: the whole frame measured, five structural cuts, 6 -> 23 fps (2026-09-12)
 
 "Can you fix the performance issues and get FPS back to 60+?" Write-up in
