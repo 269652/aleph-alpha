@@ -82,6 +82,19 @@ func _ready() -> void:
 		_sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 	add_child(_sprite)
 	_refresh_visibility()
+	# Visibility is refreshed every REFRESH_INTERVAL_SECONDS seconds from a Timer child (C++, a fraction
+	# of a microsecond a frame), not from an engine _process that cost ~7 us
+	# of dispatch every frame only to add a delta and return -- FPS
+	# regression round 13 counted these among ~970 idle-bodied nodes worth
+	# ~7 ms of every frame. _process stays as the one driver: the timer and
+	# every test go through it, so nothing about WHAT happens changed.
+	set_process(false)
+	var tick_timer := Timer.new()
+	tick_timer.name = "TickTimer"
+	tick_timer.wait_time = REFRESH_INTERVAL_SECONDS
+	tick_timer.autostart = true
+	tick_timer.timeout.connect(_process.bind(REFRESH_INTERVAL_SECONDS))
+	add_child(tick_timer)
 
 
 func _process(delta: float) -> void:

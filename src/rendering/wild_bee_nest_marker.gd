@@ -52,6 +52,11 @@ func setup(patch: WildBeePatch, cell: Vector2i) -> void:
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
 	add_to_group(HoverTargetFinder.GROUP_NAME)
+	# _process below is deliberately empty (the patch simulates itself); an
+	# empty callback still costs the engine ~7 us of dispatch per nest per
+	# frame (FPS regression round 13), so it is switched off here and kept
+	# only as the hook its tests already call.
+	set_process(false)
 	_sprite = Sprite2D.new()
 	_sprite.texture = _generator.generate_texture()
 	_sprite.scale = Vector2.ONE * ProceduralWildBeeNestSprite.WORLD_SCALE

@@ -3953,6 +3953,97 @@ population_density.gd`, `test_settings_overlay_simulation.gd`,
 `test_ambient_flyer_renderer.gd`. Where a given machine lands is now a
 setting, and can be measured against itself.
 
+### FPS regression round 13: the whole frame measured at last, and five structural cuts (2026-09-12)
+
+"Can you fix the performance issues and get FPS back to 60+?" Twelve
+rounds had timed GDScript brackets; none had ever said how much of a frame
+was NOT script. This round built that instrument first and let it choose
+the cuts.
+
+**The instrument.** `--perf-report` (`src/gameplay/perf_report.gd`,
+spec in `ecosystem_dynamics.md` "Frame budget accounting") prints one
+line every 2 s from the engine's own monitors -- script/physics time, the
+renderer's measured CPU and GPU time, node/draw-call/object counts -- plus
+`SimulationScheduler.census()`, World's three top-level script sections
+(`s_sched`/`s_ecology`/`s_client`), a lowest-priority sentinel that
+closes the whole idle-process span (`s_tree`), an exact frame period
+(`s_loop`), the scheduler's per-class step cost and count (`s_step_*`,
+`c_*`), and a census of the classes the engine still dispatches
+`_process` to (`p_*`). Permanent and opt-in: a plain launch pays nothing.
+Two lessons it taught about itself: Godot's `TIME_PROCESS` is the WORST
+frame of the last second, not the last frame (an "engine other" inferred
+from it was bogus for several runs; use `s_loop - s_tree - physics -
+render_cpu`), and an inner test class has no script path (key the census
+on real file-level scripts).
+
+**What the first honest split said (contended machine, ~2-3 other cores
+busy throughout, medians of 32 steady lines):** 6 fps, 167 ms frames;
+script 191 ms of it -- scheduler creature pass 74 (ants 25, butterflies 14,
+fish 8.5, decomposers 7, land creatures 6), World's ecology steps 26,
+client pass 27, ~65 in nodes the engine ticks itself; render CPU 13, GPU
+8; physics 3. Script was the frame, and render CPU alone was near the
+whole 16.7 ms budget.
+
+**The five cuts, each measured on the same restored, re-stamped save:**
+
+1. *LOD radius, far interval, proximity sweep* (`SimulationLod`,
+   `SimulationScheduler`). `FULL_RATE_RADIUS_PX` 420 -> 200 (~5x the
+   visible area to just past the 184 px half-diagonal; ~105 creatures were
+   at full rate for a screen showing a fraction of them);
+   `MAX_INTERVAL_SECONDS` 0.5 -> 2 s (the interval is enforced in frames,
+   so ~1,800 parked creatures woke ~60 times a frame at ANY frame rate,
+   ~30 ms of every frame; now ~15). The scheduler sweeps a tenth of the
+   parked wheel every frame and wakes anything within `WAKE_RADIUS_PX`
+   (1.5x full rate) of the local player, so a walk-up is caught within ten
+   frames however long the nap. Scheduler pass 74 -> 15 ms, in hand 132 ->
+   16; 6 -> 11 fps.
+2. *Ecology steps on a staggered cadence* (`StepCadence`, spec in
+   `ecosystem_dynamics.md`). ~25 chunk-manager steps ran every frame,
+   each walking every loaded chunk; every one moves on world time. Each
+   now runs once per 0.25 s with the time it waited, staggered across the
+   interval, quest reconciliation still last every frame. Ecology 24 ->
+   16 ms at 12 fps (2 of 3 frames skipped; at 60 fps 14 of 15); worms and
+   fruiting, the old per-slice "fine" group, joined it afterwards.
+3. *Idle-bodied markers off engine `_process`.* The census named them:
+   711 wild crops, 90 wild bee nests, 60 mounds, 60 ant queens, 25 hives,
+   25 bee queens -- ~970 nodes paying ~7 us of dispatch a frame to
+   early-return. Crops and nests `set_process(false)` (a pull switches a
+   crop's frames on); mounds, hives and queens tick from a C++ Timer child
+   that calls the same `_process`. 12 -> 18 fps, 59 ms frames: node
+   scripts 39 (scheduler 12, client 12, ecology 8, others 6), render CPU 8,
+   engine ~11.
+4. *A standing player carries no step momentum.* The "step momentum" was
+   mass x walking speed unconditionally, so seven crush walks ran every
+   frame for a player who had not moved -- the walnut walk alone 1.9 ms,
+   over a dropped-item group that also holds every liftable stone,
+   mushroom and seed. Zero momentum while velocity is zero; every walker
+   gates on the threshold first.
+5. *Worms and fruiting on the cadence, s_loop in the report* -- see 2.
+
+**Where it stands:** final run of the session (same contended machine, ~2 other cores busy, medians of 32 steady lines): 23 fps, 45 ms frames -- node scripts 32 ms (scheduler 11.5: butterflies 9.5 steps/frame at ~250 us, ants 11 at ~220 us, fish 11 at ~160 us, land creatures 1.5 at ~1,130 us; client 10.6; ecology 5.1; others ~5), render CPU 8, physics 2, engine outside nodes ~4; render GPU 28 ms, which by itself would cap the frame near 36 fps. From 6 fps and 167 ms frames at the start of the round: 3.8x.
+
+**What the report still says, in order:** per-step cost of the creature
+classes (butterflies ~2.7 ms/frame, ants ~2.5, fish 1.5, land creatures
+1.4); the client pass (the hover tooltip walks EVERY hoverable in the
+loaded world per rescan, ~7 ms a call, 30 Hz while the mouse moves; the
+interaction-prompt scans ~2 ms a call); render CPU (the y-sorted
+`Entities` layer holds every tree and stone of 30 chunks as direct
+children -- per-chunk containers hidden off screen are the fix, a
+visibility experiment is scripted); ~11 ms of engine work outside any
+node (message flush, delete queue, uploads); the GPU at 8-34 ms a frame
+depending on the run (Intel iGPU, nothing else heavy on it -- to be
+re-measured once the CPU side is under budget); and a boot of 170-230 s
+to the first frame. 60 fps is not reached; the path to it is now
+measured rather than guessed.
+
+**Verification, honestly:** every change up to the cadence was TDD
+red-then-green with its contract tests re-run; mid-round the user paused
+test runs ("skip tests for now"), so the idle-marker, crush-gate,
+worms/fruiting and counts-fix commits carry tests that were written but
+NOT run, and four batch-body contract files were not re-run after the
+cadence. Re-verify before trusting -- the branch's own commit messages say
+which.
+
 ### In-flight foragers survive an unload; their trip's outcome does not (2026-09-09)
 
 The ant side of `bees.md`'s own identical section, by that exact name --

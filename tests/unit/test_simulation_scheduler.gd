@@ -33,14 +33,14 @@ const SimulationScheduler = preload("res://src/gameplay/simulation_scheduler.gd"
 const FRAME := 1.0 / 60.0
 const SLOW_FRAME := 0.25
 const FAR_PX := 100000.0
-const MID_PX := 700.0  # inside the falloff: an 11-frame skip at 60fps
+const MID_PX := 700.0  # inside the falloff: a multi-frame skip at 60fps
 
 
 ## The smallest thing that behaves like a LOD-throttled marker: ticks its
 ## clock in _process, steps when the gate opens, and hands itself to the
 ## scheduler after every real step -- the exact shape every marker's
 ## _lod_step now has.
-class _Marker extends Node:
+class _Marker extends Node2D:
 	var clock = SimulationLodClock.new()
 	var distance_px := 0.0
 	var steps := 0
@@ -157,7 +157,8 @@ func test_a_marker_that_comes_close_moves_from_the_wheel_to_every_frame_and_back
 	# (it is stepped -- and refused -- every frame until then, never lost),
 	# and only that step puts it back on the wheel.
 	var frames_until_parked := 0
-	while scheduler.active_count() > 0 and frames_until_parked < 60:
+	var far_interval_frames := SimulationLod.frames_between_updates(FAR_PX)
+	while scheduler.active_count() > 0 and frames_until_parked < far_interval_frames + 2:
 		scheduler.advance(FRAME)
 		frames_until_parked += 1
 	assert_eq(scheduler.active_count(), 0, "far again: back on the wheel")
@@ -207,3 +208,92 @@ func test_nothing_is_adopted_when_no_scheduler_is_current():
 	marker._process(SimulationLod.MAX_INTERVAL_SECONDS)
 	assert_eq(marker.steps, 1)
 	assert_true(marker.is_processing(), "no scheduler: the engine keeps driving it, exactly as before")
+
+
+## PerfReport's census (src/gameplay/perf_report.gd): a point-in-time count
+## of everything this scheduler has taken over, split into stepped-every-
+## frame and parked-on-the-wheel -- the one place the live creature
+## population is actually known per frame.
+func test_census_counts_adopted_in_hand_and_parked():
+	_adopted_marker(0.0)
+	_adopted_marker(FAR_PX)
+
+	assert_eq(scheduler.census(), {"adopted": 2, "in_hand": 1, "parked": 1})
+
+
+## Step profiling for PerfReport: with profiling on, advance() times every
+## marker step it makes and take_step_profile() hands back usec and step
+## counts per marker class since the last take -- off by default, so a
+## plain game pays nothing for it.
+func test_step_profile_is_empty_unless_profiling_is_on():
+	_adopted_marker(0.0)
+	scheduler.advance(FRAME)
+
+	assert_eq(scheduler.take_step_profile(), {})
+
+
+func test_step_profile_counts_and_times_every_step_per_class_then_resets():
+	scheduler.set_step_profiling(true)
+	_adopted_marker(0.0)
+	_adopted_marker(0.0)
+	scheduler.advance(FRAME)
+
+	var profile: Dictionary = scheduler.take_step_profile()
+
+	assert_eq(profile.size(), 1, "both markers share one class")
+	var entry: Dictionary = profile.values()[0]
+	assert_eq(entry["steps"], 2, "one step per in-hand marker this frame")
+	assert_true(entry["usec"] >= 0, "wall time is recorded, never negative")
+	assert_eq(scheduler.take_step_profile(), {}, "taking resets the profile")
+
+
+
+## The proximity sweep (FPS regression round 13): with the far interval at
+## two seconds, a creature the player walks up to must not sit frozen until
+## its due frame. Every frame the scheduler looks at one slice of the parked
+## wheel and wakes anything now within WAKE_RADIUS_PX of the focus (the
+## local player), so the whole wheel is swept every PARKED_SWEEP_FRAMES
+## frames -- a bounded, small cost, and a bounded reaction lag.
+func test_the_wake_radius_covers_the_full_rate_radius_with_a_margin():
+	assert_gt(SimulationScheduler.WAKE_RADIUS_PX, SimulationLod.FULL_RATE_RADIUS_PX)
+	assert_lte(SimulationScheduler.WAKE_RADIUS_PX, SimulationLod.FULL_RATE_RADIUS_PX * 2.0)
+	assert_eq(SimulationScheduler.PARKED_SWEEP_FRAMES, 10)
+
+
+func test_a_parked_marker_the_focus_reaches_is_woken_within_one_sweep():
+	scheduler.set_focus_position(Vector2.ZERO)
+	var far := _adopted_marker(FAR_PX)
+	far.position = Vector2(FAR_PX, 0.0)
+	var due_in: int = far.clock.frames_until_next()
+	assert_gt(due_in, SimulationScheduler.PARKED_SWEEP_FRAMES + 1, "precondition: parked well beyond one sweep")
+
+	far.position = Vector2(SimulationScheduler.WAKE_RADIUS_PX * 0.5, 0.0)  # the player walked up
+	far.distance_px = far.position.length()
+	var frames_until_step := 0
+	for frame in SimulationScheduler.PARKED_SWEEP_FRAMES + 1:
+		scheduler.advance(FRAME)
+		frames_until_step += 1
+		if far.steps == 2:
+			break
+
+	assert_eq(far.steps, 2, "woken and stepped before its original due frame")
+	assert_lte(frames_until_step, SimulationScheduler.PARKED_SWEEP_FRAMES + 1)
+	assert_eq(scheduler.active_count(), 1, "now near, it stays in hand")
+
+
+func test_a_parked_marker_still_far_from_the_focus_is_left_parked():
+	scheduler.set_focus_position(Vector2.ZERO)
+	var far := _adopted_marker(FAR_PX)
+	far.position = Vector2(FAR_PX, 0.0)
+	for frame in SimulationScheduler.PARKED_SWEEP_FRAMES + 1:
+		scheduler.advance(FRAME)
+	assert_eq(far.steps, 1, "no wake without proximity")
+	assert_eq(scheduler.parked_count(), 1)
+
+
+func test_without_a_focus_the_sweep_wakes_nothing():
+	var far := _adopted_marker(FAR_PX)
+	far.position = Vector2.ZERO
+	for frame in SimulationScheduler.PARKED_SWEEP_FRAMES + 1:
+		scheduler.advance(FRAME)
+	assert_eq(far.steps, 1)

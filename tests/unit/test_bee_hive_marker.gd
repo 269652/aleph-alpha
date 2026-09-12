@@ -295,3 +295,21 @@ func test_hits_short_of_the_final_one_never_ask_the_world_to_relocate():
 ## honey").
 func test_harvest_hits_to_destroy_matches_the_real_destruction_frame_count():
 	assert_eq(BeeHiveMarker.HARVEST_HITS_TO_DESTROY, IllustratedBeehiveSprite.new().harvest_frame_count())
+
+
+## FPS regression round 13: the RESIZE_INTERVAL_SECONDS-second tick comes from a Timer
+## child now, not from an engine _process paying ~7 us of dispatch every
+## frame to add a delta and return; the timer drives the same _process.
+func test_the_tick_comes_from_a_timer_not_from_engine_frames():
+	assert_false(marker.is_processing(), "no per-frame dispatch")
+	var timer := marker.get_node_or_null("TickTimer") as Timer
+	assert_not_null(timer, "the Timer child that stands in for the frames")
+	assert_almost_eq(timer.wait_time, BeeHiveMarker.RESIZE_INTERVAL_SECONDS, 0.0001)
+	assert_true(timer.autostart, "started the moment the marker is in the tree")
+	assert_false(timer.one_shot, "and it keeps ticking")
+
+
+func test_a_tick_without_a_colony_is_the_same_harmless_no_op_as_before():
+	var timer := marker.get_node("TickTimer") as Timer
+	timer.timeout.emit()
+	pass_test("no colony: _process returns before touching anything, exactly as a direct call does")

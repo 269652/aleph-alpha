@@ -30,6 +30,7 @@ extends GutTest
 ## treatment.
 
 const World = preload("res://scenes/world.gd")
+const PlayerScene = preload("res://scenes/player.tscn")
 
 
 func _client_process_body() -> String:
@@ -348,3 +349,28 @@ func test_crushing_a_walnut_never_applies_a_karma_penalty():
 		checked += 1
 		search_from = at + 1
 	assert_eq(checked, 2, "should still have exactly 2 call sites")
+
+
+## FPS regression round 13: a player who is not moving carries no step
+## momentum, so every crush walk (all gated on the momentum threshold first)
+## returns before walking anything. The moving case keeps the real-mass
+## formula the test above pins; this pins the standing case, and that the
+## standing check comes first.
+func test_a_player_who_is_not_moving_carries_no_step_momentum():
+	var world := World.new()
+	autofree(world)
+	var player := PlayerScene.instantiate()
+	add_child_autofree(player)
+	player.velocity = Vector2.ZERO
+
+	assert_eq(world._player_step_momentum_kg_m_s(player), 0.0)
+
+
+func test_the_standing_check_comes_before_the_mass_formula():
+	var source := FileAccess.get_file_as_string("res://scenes/world.gd")
+	var start := source.find("func _player_step_momentum_kg_m_s(")
+	assert_gt(start, -1, "the premise")
+	var body := source.substr(start, source.find("\nfunc ", start + 1) - start)
+	var gate_at := body.find("velocity")
+	assert_gt(gate_at, -1, "the gate reads the player's real velocity")
+	assert_lt(gate_at, body.find("current_mass_kg()"), "and it comes before the formula, so standing costs nothing")

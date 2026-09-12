@@ -84,6 +84,19 @@ func _ready() -> void:
 	_sprite = Sprite2D.new()
 	add_child(_sprite)
 	_apply_growth(_growth_fraction())
+	# Growth is re-applied every RESIZE_INTERVAL_SECONDS seconds from a Timer child (C++, a fraction
+	# of a microsecond a frame), not from an engine _process that cost ~7 us
+	# of dispatch every frame only to add a delta and return -- FPS
+	# regression round 13 counted these among ~970 idle-bodied nodes worth
+	# ~7 ms of every frame. _process stays as the one driver: the timer and
+	# every test go through it, so nothing about WHAT happens changed.
+	set_process(false)
+	var tick_timer := Timer.new()
+	tick_timer.name = "TickTimer"
+	tick_timer.wait_time = RESIZE_INTERVAL_SECONDS
+	tick_timer.autostart = true
+	tick_timer.timeout.connect(_process.bind(RESIZE_INTERVAL_SECONDS))
+	add_child(tick_timer)
 	# The queen's own real, minimal visual presence -- see BeeQueenMarker's
 	# own doc comment. Only for a real, wired-up hive (mirrors this file's
 	# own "graceful no-op without a colony" contract): a marker built

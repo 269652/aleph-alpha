@@ -29,19 +29,32 @@ extends RefCounted
 ## so a butterfly that updates six times a second still ages, forages and
 ## flies exactly as far as one updating sixty times a second.
 
-## Inside this radius a creature updates every frame. Comfortably larger than
-## the half-diagonal of what the camera can show (see
-## test_the_full_rate_radius_covers_more_than_the_visible_screen), because a
-## creature stepping visibly is far worse than a creature costing a little
-## more -- and things just off screen walk on screen a moment later.
-const FULL_RATE_RADIUS_PX := 420.0
+## Inside this radius a creature updates every frame. Just larger than the
+## half-diagonal of what the camera can show at the design zoom (184 px; see
+## the two radius pins in test_simulation_lod.gd), because a creature
+## stepping visibly is far worse than a creature costing a little more --
+## and a creature one step off screen is already at full rate before it
+## walks on. Not the 420 px this used to be: that put ~105 creatures at
+## full rate, every frame, for a screen that showed a fraction of them
+## (docs/concept/soil_fauna.md "FPS regression round 13").
+const FULL_RATE_RADIUS_PX := 200.0
 
 ## How much further out the rate falls away over, and the floor it lands on.
 ## The cap matters: a creature that stopped updating entirely would be a
 ## creature that had stopped existing, and this world is supposed to keep
 ## living while nobody is watching.
+##
+## Two seconds (round 13; was 0.5 s). The far population's wake rate is what
+## this sets, and the interval is enforced in frames, so it is a per-frame
+## cost no frame rate changes: ~1,800 parked creatures at 0.5 s were ~60
+## full steps -- ~30 ms -- of EVERY frame. Each far step still hands over
+## the whole time it waited (fish scale their shore probe by the step, ants
+## walk toward a target), so a creature lives just as far in one 2 s step
+## as in four 0.5 s ones. What keeps a two-second nap from being a
+## two-second freeze when the player walks up is the scheduler's proximity
+## sweep (SimulationScheduler.WAKE_RADIUS_PX).
 const FALLOFF_PX := 900.0
-const MAX_INTERVAL_SECONDS := 0.5
+const MAX_INTERVAL_SECONDS := 2.0
 
 ## The frame rate the intervals above are DEFINED against, so they can also be
 ## enforced in frames (frames_between_updates / SimulationLodClock). Seconds

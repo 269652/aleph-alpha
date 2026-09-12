@@ -72,6 +72,12 @@ var _pull_elapsed := 0.0
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
 	add_to_group(HoverTargetFinder.GROUP_NAME)
+	# A crop that is not being pulled has nothing to do per frame, and there
+	# are ~700 of them loaded at once: the engine's ~7 us of dispatch into
+	# an early-returning _process, times that many, every frame, was ~5 ms
+	# of every frame (FPS regression round 13). Frames are switched on for
+	# the pull animation only (begin_pull) and off again when it finishes.
+	set_process(false)
 
 	_soil = Sprite2D.new()
 	_soil.texture = ProceduralSoilSprite.new().generate_texture(false)
@@ -199,6 +205,7 @@ func begin_pull() -> bool:
 		return false
 	_pulling = true
 	_pull_elapsed = 0.0
+	set_process(true)
 	# The ground only shows once something has actually been yanked out of
 	# it -- see _ready for why it stays hidden while the plant just grows.
 	_soil.visible = true
@@ -236,4 +243,5 @@ func _finish_pull() -> void:
 		else Item.new(crop_id, crop_id.capitalize(), "food", 20)
 	)
 	WorldItemBus.item_dropped.emit(ItemStack.new(item, 1), position)
+	set_process(false)
 	queue_free()

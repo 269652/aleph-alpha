@@ -122,3 +122,10 @@ func test_size_never_changes_regardless_of_resident_count():
 func test_process_with_no_patch_set_up_does_not_crash():
 	marker._process(1.0)
 	assert_not_null(marker)
+
+
+## FPS regression round 13: an empty _process still costs the engine ~7 us
+## of dispatch per nest per frame; the hook stays for these tests, the
+## engine no longer calls it.
+func test_a_nest_asks_the_engine_for_no_frames():
+	assert_false(marker.is_processing())

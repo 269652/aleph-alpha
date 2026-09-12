@@ -386,3 +386,18 @@ func test_a_refused_pull_leaves_the_ground_undisturbed():
 	add_child_autofree(marker)
 	assert_false(marker.begin_pull(), "an immature crop cannot be pulled")
 	assert_false(marker._soil.visible, "a refused pull must not tear up the ground")
+
+
+## FPS regression round 13: ~700 loaded crops each cost the engine ~7 us of
+## _process dispatch per frame to early-return. Frames are only asked for
+## while a pull animates.
+func test_an_idle_crop_asks_the_engine_for_no_frames():
+	add_child_autofree(marker)
+	assert_false(marker.is_processing(), "nothing to do per frame until a pull starts")
+
+
+func test_a_pull_switches_frames_on_and_direct_calls_still_drive_it():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	assert_true(marker.begin_pull(), "precondition: mature, so the pull starts")
+	assert_true(marker.is_processing(), "the pull animation needs every frame")
