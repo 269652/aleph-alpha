@@ -4983,7 +4983,7 @@ func _process(delta: float) -> void:
 	if _perf_report != null:
 		_perf_report.add_section("sched", Time.get_ticks_usec() - perf_started)
 		if _perf_report.tick(delta):
-			print(PerfReport.format_line(PerfReport.sample(get_viewport().get_viewport_rid(), _simulation_scheduler.census(), _perf_report.take_sections())))
+			print(PerfReport.format_line(PerfReport.sample(get_viewport().get_viewport_rid(), _simulation_scheduler.census(), _perf_report.take_sections(), PerfReport.processing_census(get_tree().root))))
 		perf_started = Time.get_ticks_usec()
 	# Ages every recorded water disturbance (fish/player/animal ripples) so
 	# its ring actually expands and fades -- every frame, every client, not

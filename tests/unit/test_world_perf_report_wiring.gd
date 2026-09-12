@@ -43,8 +43,8 @@ func test_process_prints_one_line_per_due_tick_from_the_schedulers_census():
 	var body := _body_of("_process")
 	assert_true(body.contains("_perf_report.tick(delta)"), "the report is advanced once per frame")
 	assert_true(
-		body.contains("print(PerfReport.format_line(PerfReport.sample(get_viewport().get_viewport_rid(), _simulation_scheduler.census(), _perf_report.take_sections())))"),
-		"one printed line, built from the live scheduler census and the frame's section split"
+		body.contains("print(PerfReport.format_line(PerfReport.sample(get_viewport().get_viewport_rid(), _simulation_scheduler.census(), _perf_report.take_sections(), PerfReport.processing_census(get_tree().root))))"),
+		"one printed line: live scheduler census, the frame's section split, and who the engine still processes"
 	)
 	assert_eq(body.count("_perf_report.tick("), 1, "exactly once per frame")
 

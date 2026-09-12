@@ -118,3 +118,66 @@ func test_format_line_appends_sections_in_label_order():
 func test_sample_carries_the_sections_it_is_handed():
 	var sample: Dictionary = PerfReport.sample(get_viewport().get_viewport_rid(), {}, {"sched": 4.0})
 	assert_eq(sample["sections"], {"sched": 4.0})
+
+
+## Processing census: every node the ENGINE still dispatches _process to,
+## keyed by class -- the scheduler adopts nine marker classes and switches
+## their engine _process off, so this is exactly the population behind
+## "TIME_PROCESS minus the three sections". A real marker script stands in
+## for "a scripted node": an inner test class has no resource path of its
+## own, so it would (correctly) fall back to its engine class.
+const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
+
+
+func test_processing_census_counts_only_nodes_the_engine_still_processes_keyed_by_class():
+	var root := Node.new()
+	add_child_autofree(root)
+	var on := Node2D.new()
+	root.add_child(on)
+	on.set_process(true)
+	var off := Node2D.new()
+	root.add_child(off)
+	off.set_process(false)
+	var ticker := BondedCompanionMarker.new()
+	root.add_child(ticker)
+
+	var census: Dictionary = PerfReport.processing_census(root)
+
+	assert_eq(census.get("Node2D", 0), 1, "only the Node2D whose processing is on")
+	assert_eq(census.get("bonded_companion_marker", 0), 1, "a scripted node is keyed by its script file, not its engine class")
+	assert_false(census.has("Node"), "the plain root is not processing")
+
+
+func test_format_line_appends_the_busiest_processing_classes_after_the_sections():
+	var sample := {
+		"fps": 12, "frame_ms": 83.3, "process_ms": 40.26, "physics_ms": 1.5, "nav_ms": 0.0,
+		"render_cpu_ms": 9.76, "render_gpu_ms": 3.0, "nodes": 23456, "orphans": 2,
+		"draw_calls": 1234, "objects": 5678, "primitives": 90123, "phys_active": 11,
+		"phys_pairs": 5, "mem_static_mb": 512.6, "sched_adopted": 2500, "sched_in_hand": 300,
+		"sched_parked": 2200, "sections": {"sched": 4.0},
+		"processing": {"npc_marker": 12, "wild_crop_marker": 900, "dropped_item": 40},
+	}
+	assert_true(
+		PerfReport.format_line(sample).ends_with(" s_sched=4.0ms p_wild_crop_marker=900 p_dropped_item=40 p_npc_marker=12"),
+		"busiest first, after the sections: %s" % PerfReport.format_line(sample)
+	)
+
+
+func test_format_line_prints_at_most_the_top_processing_classes():
+	var processing := {}
+	for i in range(PerfReport.PROCESSING_TOP_N + 5):
+		processing["class_%02d" % i] = 100 - i
+	var line := PerfReport.format_line({
+		"fps": 1, "frame_ms": 1.0, "process_ms": 1.0, "physics_ms": 1.0, "nav_ms": 0.0,
+		"render_cpu_ms": 1.0, "render_gpu_ms": 1.0, "nodes": 1, "orphans": 0, "draw_calls": 1,
+		"objects": 1, "primitives": 1, "phys_active": 0, "phys_pairs": 0, "mem_static_mb": 1.0,
+		"sched_adopted": 0, "sched_in_hand": 0, "sched_parked": 0, "processing": processing,
+	})
+	assert_eq(line.count(" p_class_"), PerfReport.PROCESSING_TOP_N)
+	assert_true(line.contains(" p_class_00=100"), "the busiest survives the cut")
+	assert_false(line.contains(" p_class_%02d=" % (PerfReport.PROCESSING_TOP_N + 4)), "the quietest does not")
+
+
+func test_sample_carries_the_processing_census_it_is_handed():
+	var sample: Dictionary = PerfReport.sample(get_viewport().get_viewport_rid(), {}, {}, {"npc_marker": 3})
+	assert_eq(sample["processing"], {"npc_marker": 3})

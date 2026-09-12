@@ -26,6 +26,8 @@ extends RefCounted
 
 const FLAG := "--perf-report"
 const REPORT_INTERVAL_SECONDS := 2.0
+## How many classes the processing census prints, busiest first.
+const PROCESSING_TOP_N := 8
 
 ## Every key a sample carries, in the exact order format_line prints them.
 const FIELDS: Array[String] = [
@@ -81,10 +83,11 @@ func take_sections() -> Dictionary:
 ## RenderingServer.viewport_set_measure_render_time(viewport, true) must
 ## have been called for the render_* fields to be anything but 0. `census`
 ## is SimulationScheduler.census(); missing keys read as 0.
-static func sample(viewport: RID, census: Dictionary, sections: Dictionary = {}) -> Dictionary:
+static func sample(viewport: RID, census: Dictionary, sections: Dictionary = {}, processing: Dictionary = {}) -> Dictionary:
 	var fps := Engine.get_frames_per_second()
 	return {
 		"sections": sections,
+		"processing": processing,
 		"fps": int(fps),
 		"frame_ms": 1000.0 / fps if fps > 0.0 else 0.0,
 		"process_ms": Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
@@ -122,4 +125,40 @@ static func format_line(s: Dictionary) -> String:
 	labels.sort()
 	for label in labels:
 		line += " s_%s=%.1fms" % [label, sections[label]]
+	var processing: Dictionary = s.get("processing", {})
+	var ranked: Array = []
+	for key in processing:
+		ranked.append([key, int(processing[key])])
+	ranked.sort_custom(func(a, b): return a[1] > b[1] if a[1] != b[1] else a[0] < b[0])
+	for i in mini(ranked.size(), PROCESSING_TOP_N):
+		line += " p_%s=%d" % [ranked[i][0], ranked[i][1]]
 	return line
+
+
+## Every node under `root` the ENGINE still dispatches _process to, counted
+## by class -- a scripted node by its script file's basename (what a marker
+## class is called in this codebase), anything else by its engine class.
+## The scheduler adopts nine marker classes and switches their engine
+## _process off, so this is exactly the population behind "TIME_PROCESS
+## minus the three sections": whatever it lists is paying ~7us of dispatch
+## per node per frame plus its own step, outside every LOD throttle. A
+## plain walk of the whole tree (~24k nodes) once per report interval --
+## only while --perf-report is on.
+static func processing_census(root: Node) -> Dictionary:
+	var census := {}
+	var stack: Array = [root]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		if node.is_processing():
+			var key := _class_key(node)
+			census[key] = int(census.get(key, 0)) + 1
+		for child in node.get_children():
+			stack.append(child)
+	return census
+
+
+static func _class_key(node: Node) -> String:
+	var script = node.get_script()
+	if script != null and not script.resource_path.is_empty():
+		return script.resource_path.get_file().get_basename()
+	return node.get_class()
