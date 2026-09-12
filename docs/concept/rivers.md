@@ -136,6 +136,32 @@ western France's strongest channels, the flag went on and the spawn moved
 onto the Loire at Nantes (an emergent river, no curated course near it).
 Curated rivers remain authoritative wherever they reach.
 
+### Spawn: a random curated river (2026-09-12)
+
+"Can you set the spawn to a random river?" A new game now begins on a
+random point along a random **curated** river -- the Dreisam, Rhine,
+Danube, Elbe, Weser, Main, Mosel, Neckar, Oder, Spree or Isar -- rather
+than always at Nantes. `src/world/spawn_river_picker.gd` is pure: given
+`RiverCatalog.tile_polylines`, a seeded `RandomNumberGenerator` and an
+acceptance check, it draws a river by name (sorted, so a seed means the
+same place on every machine) and an interior point of its smoothed
+course -- never the first or last point, since a spring is a mountain and
+a mouth is the sea -- and asks the check; after `World.SPAWN_PICK_
+ATTEMPTS` (64) rejections the pick is empty and World falls back to the
+Loire at Nantes (`SPAWN_LATITUDE`/`SPAWN_LONGITUDE`, still pinned by
+`test_world_spawn_location.gd`). World's check needs no chunk loading: the
+tile must really be a river tile, sit above sea level and below the
+mountain line, and be no colder than the old Berlin spawn
+(`SPAWN_CLIMATE_FLOOR`, the climate floor the spawn tests always applied,
+now the rule the picker applies). The pick is made once per session, so
+every peer a dedicated server spawns shares the river; the existing bank
+nudge (`_find_dry_land_spawn`) then puts the player on dry land beside
+the channel exactly as before. A real new game randomizes; a dev launch
+(`--solo`) fixes the seed at 0 so a measurement lands in the same place
+every run, and `--spawn-seed=N` overrides either way
+(`World.spawn_seed_for`). Pinned by `test_spawn_river_picker.gd` and the
+new cases in `test_world_spawn_location.gd`.
+
 ## Rendering: overlay, not a new biome
 
 `TerrainRenderer` already has an extensive corner/edge blend system keyed

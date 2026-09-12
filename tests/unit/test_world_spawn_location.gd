@@ -21,6 +21,7 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const ClimateModel = preload("res://src/world/climate_model.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
 
 
 func test_spawn_is_the_loire_at_nantes():
@@ -120,3 +121,65 @@ func test_find_dry_land_spawn_does_not_land_in_the_river_at_the_spawn_point():
 	tile_map_layer.free()
 	entities_parent.free()
 	creatures_parent.free()
+
+
+## A new game now starts on a random curated river (docs/concept/rivers.md
+## "Spawn: a random curated river", src/world/spawn_river_picker.gd); the
+## Loire at Nantes pinned above is the FALLBACK when no river bank
+## qualifies. A dev launch (--solo) fixes the seed so a measurement lands
+## in the same place every run; --spawn-seed=N overrides either way.
+func test_a_real_game_randomizes_its_spawn_and_a_dev_launch_fixes_it():
+	assert_eq(World.spawn_seed_for(PackedStringArray([])), -1, "a real new game: randomize")
+	assert_eq(World.spawn_seed_for(PackedStringArray(["--solo"])), 0, "a dev launch: the same river every time")
+	assert_eq(World.spawn_seed_for(PackedStringArray(["--solo", "--spawn-seed=7"])), 7)
+	assert_eq(World.spawn_seed_for(PackedStringArray(["--spawn-seed=3"])), 3, "an explicit seed wins for a real game too")
+
+
+func test_the_climate_floor_is_the_old_berlin_spawn():
+	assert_almost_eq(World.SPAWN_CLIMATE_FLOOR, 0.41228199135992, 0.000001)
+
+
+func test_a_spawn_candidate_must_be_a_warm_river_tile_between_sea_and_mountain():
+	var world := World.new()
+	var tile_map_layer := TileMapLayer.new()
+	var entities_parent := Node2D.new()
+	var creatures_parent := Node2D.new()
+	var manager := EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
+	world._chunk_manager = manager
+	var geo := GeoCoordinates.new()
+	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
+	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
+	# The smoothed Rhine course does not pass exactly through the city
+	# centre (corners are cut, RiverCatalog._chaikin_smoothed), so take the
+	# course point nearest Cologne -- a river tile by construction.
+	var cologne_centre := geo.tile_for_coordinate(50.93639, 6.95278, width, height)
+	var cologne := Vector2i.ZERO
+	var nearest := INF
+	for point in RiverCatalog.tile_polylines(width, height)["Rhine"]:
+		var distance: float = Vector2(cologne_centre).distance_to(point)
+		if distance < nearest:
+			nearest = distance
+			cologne = Vector2i(point)
+	assert_true(manager.generator.is_river_at_global(cologne.x, cologne.y), "precondition: a point of the curated Rhine course is a river tile")
+	assert_true(world._spawn_candidate_acceptable(cologne), "a warm river bank on land qualifies")
+	var atlantic := geo.tile_for_coordinate(46.0, -8.0, width, height)
+	assert_false(world._spawn_candidate_acceptable(atlantic), "open sea does not")
+	var not_a_river := cologne + Vector2i(40, 40)
+	if not manager.generator.is_river_at_global(not_a_river.x, not_a_river.y):
+		assert_false(world._spawn_candidate_acceptable(not_a_river), "dry land off any river does not")
+	world.free()
+	tile_map_layer.free()
+	entities_parent.free()
+	creatures_parent.free()
+
+
+func test_the_spawn_is_picked_from_the_curated_rivers_and_falls_back_to_nantes():
+	var source := FileAccess.get_file_as_string("res://scenes/world.gd")
+	var start := source.find("func _compute_dry_land_spawn_tile(")
+	assert_gt(start, -1, "the premise")
+	var body := source.substr(start, source.find("\nfunc ", start + 1) - start)
+	assert_true(body.contains("SpawnRiverPicker.pick("), "a random curated river")
+	assert_true(body.contains("RiverCatalog.tile_polylines("), "drawn from the catalogue's real courses")
+	assert_true(body.contains("_spawn_candidate_acceptable"), "filtered by the bank check")
+	assert_true(body.contains("SPAWN_LATITUDE") and body.contains("SPAWN_LONGITUDE"), "Nantes remains the fallback")
+	assert_true(body.contains("_session_spawn_picked"), "picked once per session, so every peer of a server shares it")

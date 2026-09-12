@@ -20231,6 +20231,26 @@ density: the player's own knobs".
 liveliness for frame time on their own machine, and every further round
 can be measured at a fixed setting.
 
+### Spawn on a random curated river (2026-09-12)
+
+"Can you set the spawn to a random river?" Spec in `concept/rivers.md`
+"Spawn: a random curated river". ✅ `SpawnRiverPicker` (pure, seeded,
+never a source or mouth, caller's acceptance check, empty pick on
+exhaustion) + `World._compute_dry_land_spawn_tile` picks once per session
+from the eleven curated rivers with a no-chunk-load bank check (river
+tile, between sea and mountain, warmer than the old Berlin climate floor)
+and keeps Nantes as the fallback and the existing dry-bank nudge;
+`--solo` is seeded (0) so perf runs stay comparable, `--spawn-seed=N`
+overrides. Tests red-first and green: `test_spawn_river_picker.gd` (8),
+`test_world_spawn_location.gd` (+4). Also asked: "there are still lakes /
+ponds which don't use the river water system?" -- surveyed with the new
+`tools/probe_inland_ponds.gd`: around the player's save (the Loire at
+Nantes) and six real places there is NO water that bypasses the
+one-water-surface overlay; baked lakes ride it (still path); one real
+data finding instead: the elevation asset has the North Sea as low land
+(Hoek van Holland and the open sea at 55N 3E both read grassland), so
+that coast does not exist in this world.
+
 ### FPS regression round 13: the whole frame measured, five structural cuts, 6 -> 23 fps (2026-09-12)
 
 "Can you fix the performance issues and get FPS back to 60+?" Write-up in

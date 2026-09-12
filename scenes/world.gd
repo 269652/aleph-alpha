@@ -33,6 +33,8 @@ const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SolarPosition = preload("res://src/world/solar_position.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
+const SpawnRiverPicker = preload("res://src/world/spawn_river_picker.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
@@ -318,8 +320,25 @@ const MAX_CREATURE_PANELS := 6
 ## that the point is dry, non-mountain land at least as climate-warm as
 ## the old Berlin spawn (so mechanics tuned against Berlin's real measured
 ## climate, e.g. EarthwormPatch.MILD_WARMTH, are not silently re-broken).
+## The FALLBACK spawn (the Loire at Nantes) -- a new game now starts on a
+## random curated river (docs/concept/rivers.md "Spawn: a random curated
+## river", SpawnRiverPicker); these coordinates are where it goes when no
+## river bank qualifies, and what every test that pins them still proves.
 const SPAWN_LATITUDE := 47.2031
 const SPAWN_LONGITUDE := -1.5469
+## The coldest place a new game may start: the climate value of the old
+## Berlin spawn (test_world_spawn_location.gd's own floor, promoted from a
+## test constant to the rule the picker applies), so a random river never
+## drops a new player into a tundra or an alpine spring.
+const SPAWN_CLIMATE_FLOOR := 0.41228199135992
+## How many random (river, point) draws the picker gets before the
+## fallback -- eleven curated rivers with hundreds of course points each,
+## so a handful of rejections is normal and sixty-four never runs out.
+const SPAWN_PICK_ATTEMPTS := 64
+## Picked once per session: every peer a dedicated server spawns shares
+## the same river, exactly as they all shared Nantes before.
+var _session_spawn_picked := false
+var _session_spawn_candidate := Vector2i.ZERO
 const SPAWN_SEARCH_RADIUS := 5
 
 const PORT := 8910
@@ -4921,12 +4940,32 @@ func _start_client_to(address: String) -> void:
 
 
 func _compute_dry_land_spawn_tile() -> Vector2i:
-	var spawn_tile := Vector2i(
-		_geo_coordinates.tile_for_longitude(SPAWN_LONGITUDE, EarthChunkGenerator.WORLD_WIDTH_TILES),
-		_geo_coordinates.tile_for_latitude(SPAWN_LATITUDE, EarthChunkGenerator.WORLD_HEIGHT_TILES)
-	)
-	await _chunk_manager.update_with_progress(spawn_tile, _on_chunk_load_progress)
-	var dry_land_tile := _find_dry_land_spawn(spawn_tile)
+	if not _session_spawn_picked:
+		_session_spawn_picked = true
+		var rng := RandomNumberGenerator.new()
+		var seed_value := spawn_seed_for(OS.get_cmdline_user_args())
+		if seed_value < 0:
+			rng.randomize()
+		else:
+			rng.seed = seed_value
+		var pick: Dictionary = SpawnRiverPicker.pick(
+			RiverCatalog.tile_polylines(EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES),
+			rng, _spawn_candidate_acceptable, SPAWN_PICK_ATTEMPTS
+		)
+		if pick.is_empty():
+			_session_spawn_candidate = Vector2i(
+				_geo_coordinates.tile_for_longitude(SPAWN_LONGITUDE, EarthChunkGenerator.WORLD_WIDTH_TILES),
+				_geo_coordinates.tile_for_latitude(SPAWN_LATITUDE, EarthChunkGenerator.WORLD_HEIGHT_TILES)
+			)
+			print("[spawn] no curated river bank qualified -- falling back to the Loire at Nantes")
+		else:
+			_session_spawn_candidate = pick["tile"]
+			print("[spawn] the %s at tile %s" % [pick["river"], pick["tile"]])
+	# The same bank nudge as before: chunks around the candidate are loaded
+	# (with loading-overlay progress), then the nearest tile that is neither
+	# river, lake nor ocean is the spawn.
+	await _chunk_manager.update_with_progress(_session_spawn_candidate, _on_chunk_load_progress)
+	var dry_land_tile := _find_dry_land_spawn(_session_spawn_candidate)
 	# The real dry-land spawn tile is also the center of the EASY-difficulty
 	# region (see RegionDifficulty / docs/concept/ecosystem_dynamics.md's
 	# Region difficulty section) -- dangerous species (bear/lion/venomous
@@ -4934,6 +4973,33 @@ func _compute_dry_land_spawn_tile() -> Vector2i:
 	_chunk_manager.set_spawn_tile(dry_land_tile)
 	return dry_land_tile
 
+
+## -1 means "randomize": a real new game lands somewhere new every time. A
+## dev launch (--solo) fixes the seed at 0 so a measurement lands in the
+## same place every run (the perf rounds compare runs against each other);
+## --spawn-seed=N overrides either way.
+static func spawn_seed_for(args: PackedStringArray) -> int:
+	for arg in args:
+		if arg.begins_with("--spawn-seed="):
+			return int(arg.substr("--spawn-seed=".length()))
+	if "--solo" in args:
+		return 0
+	return -1
+
+
+## Whether a person could start here: a real river tile (the curated
+## course through a city can still run over a mountain spring or into the
+## sea at its ends), above sea level and below the mountain line, and no
+## colder than the old Berlin spawn. All generator queries, no chunk
+## loading -- so sixty-four candidates cost nothing at boot.
+func _spawn_candidate_acceptable(tile: Vector2i) -> bool:
+	var generator = _chunk_manager.generator
+	if not generator.is_river_at_global(tile.x, tile.y):
+		return false
+	var elevation: float = generator.elevation_at_global(tile.x, tile.y)
+	if elevation <= EarthChunkGenerator.EARTH_SEA_LEVEL or elevation >= EarthChunkGenerator.EARTH_MOUNTAIN_LEVEL:
+		return false
+	return generator.temperature_at_global(tile.x, tile.y) >= SPAWN_CLIMATE_FLOOR
 
 ## Safety cap so ground items can't accumulate without bound (they'd leak CPU
 ## and memory over a long session). Oldest is removed when the cap is hit.
