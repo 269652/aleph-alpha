@@ -1704,6 +1704,57 @@ turn over. Values are sanitised the way `AudioSettings` sanitises volume
 (NaN falls back to the default, out-of-range clamps), pinned by
 `test_simulation_settings.gd`.
 
+### Frame budget accounting: `--perf-report` (`PerfReport`)
+
+**Pillar:** a frame is script + physics + rendering + engine overhead, and
+only the engine can say how much of it was not script. Twelve
+FPS-regression rounds (`soil_fauna.md`) timed GDScript brackets and
+nothing else; their closing arithmetic (~2,500 scripted creatures at
+0.1-0.5 ms a step) could never explain a whole frame, and no round ever
+knew whether the renderer or the scene tree was the other half.
+
+**Mechanism.** Launch with `--perf-report` (alongside `--solo`, from the
+console binary so stdout is readable) and `World` prints one `PERF` line
+every `PerfReport.REPORT_INTERVAL_SECONDS` (2 s, test-pinned), built from
+the engine's own monitors, never from brackets in game code:
+
+- `fps` / `frame`: `Engine.get_frames_per_second()` and its reciprocal.
+- `process` / `physics` / `nav`: `Performance.TIME_PROCESS`,
+  `TIME_PHYSICS_PROCESS`, `TIME_NAVIGATION_PROCESS` -- last frame's script
+  step, physics step and navigation step, in ms.
+- `render_cpu` / `render_gpu`: `RenderingServer.viewport_get_measured_
+  render_time_cpu/gpu` for the main viewport, which the flag switches on
+  (`viewport_set_measure_render_time`); without the flag they read 0 and
+  the renderer pays nothing for measuring.
+- `nodes` / `orphans` / `draw_calls` / `objects` / `primitives` /
+  `phys_active` / `phys_pairs` / `mem`: the matching `Performance`
+  monitors, for scale rather than time.
+- `sched_adopted` / `sched_in_hand` / `sched_parked`:
+  `SimulationScheduler.census()` -- every marker the scheduler has taken
+  over, how many it steps every frame (near the player, or woken and
+  waiting on their seconds gate) and how many sit parked on the wheel. The
+  one place the live creature population is actually known per frame.
+
+**How to read it.** `frame - process - physics - render_cpu` is "everything
+else": tree notifications, canvas-item bookkeeping, the engine's own
+per-node dispatch. GPU time runs on its own timeline and overlaps the CPU
+work, so it is never added to the others; if `render_gpu` alone exceeds the
+frame budget the GPU is the wall, otherwise the CPU is. Every field is a
+last-frame or point-in-time reading, never a window average: take the
+median of many lines, on a machine with no other Godot process running,
+exactly as the perf rounds' own A/B methodology already demands.
+
+**Why a real feature, not another temporary probe.** Every earlier round
+re-applied and then stripped a bracket harness before merging; the numbers
+lived only in the write-up and could not be re-taken by the next session
+without re-instrumenting. A plain launch pays nothing for this one (the
+report object is null unless the flag asks), so it can stay.
+
+**Status:** ✅ `PerfReport` + `World` wiring + `SimulationScheduler.census`
+(`test_perf_report.gd`, `test_world_perf_report_wiring.gd`,
+`test_simulation_scheduler.gd`). Findings per round live in
+`soil_fauna.md`'s "FPS regression round N" sections.
+
 ## Status / mechanisms
 
 - ✅ Look-before-you-step locomotion — `creature_movement_gate.gd` (pure:
