@@ -52,10 +52,15 @@ const FLESH := "flesh"  # an animal that is not a hunter: something a hunter eat
 const FORAGE := "forage"  # plant food there
 const WATER := "water"  # drinkable water there
 const MATE := "mate"  # my courtship partner
+## A nearby Carcass/CarcassGuts (docs/concept/carrion.md) -- "something here
+## is carrion," the same either-object contract `take_bite` already gives a
+## decomposer, now also read by a predator/omnivore's own hunger wiring
+## (§9's "opportunistic scavenging" gap).
+const CARRION := "carrion"
 
 const SMELL_CHANNELS: Array[String] = [SUGAR, DECAY, GREEN, MUSK, SMOKE]
 const CHANNELS: Array[String] = [
-	SUGAR, DECAY, GREEN, MUSK, SMOKE, PREDATOR, PLAYER, FLESH, FORAGE, WATER, MATE
+	SUGAR, DECAY, GREEN, MUSK, SMOKE, PREDATOR, PLAYER, FLESH, FORAGE, WATER, MATE, CARRION
 ]
 
 # -- drives ------------------------------------------------------------------
@@ -177,8 +182,12 @@ const SPECIES := {
 const BODY_PLANS := {
 	"mammal": {
 		"receptors": {
-			"sensitivity": {PREDATOR: 1.0, PLAYER: 1.0, FLESH: 1.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0},
-			"valence": {PREDATOR: -1.0, PLAYER: -1.0, FLESH: 0.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0},
+			"sensitivity": {
+				PREDATOR: 1.0, PLAYER: 1.0, FLESH: 1.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0, CARRION: 1.0,
+			},
+			"valence": {
+				PREDATOR: -1.0, PLAYER: -1.0, FLESH: 0.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0, CARRION: 0.0,
+			},
 		},
 		"drives": {
 			DRIVE_HUNGER: {"rise_seconds": 1.0 / 0.02, "threshold": 0.5, "meal": 1.0, "stagger": 0.45},
@@ -188,6 +197,7 @@ const BODY_PLANS := {
 			{"gate": DRIVE_FEAR, "channels": [PREDATOR, PLAYER], "approach": "attack", "avoid": "flee"},
 			{"gate": DRIVE_THIRST, "channels": [WATER], "approach": "seek_water", "search": "search_water"},
 			{"gate": DRIVE_HUNGER, "channels": [FLESH], "approach": "hunt"},
+			{"gate": DRIVE_HUNGER, "channels": [CARRION], "approach": "scavenge"},
 			{
 				"gate": DRIVE_HUNGER, "channels": SMELL_CHANNELS, "approach": "seek_food",
 				"floor": SMELL_INTEREST_FLOOR,
