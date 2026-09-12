@@ -159,6 +159,7 @@ func _receptors(context: Dictionary) -> Dictionary:
 	else:
 		valence[Ethogram.PREDATOR] = 1.0 if fight else -1.0
 	valence[Ethogram.FLESH] = 1.0 if is_predator else 0.0
+	valence[Ethogram.CARRION] = 1.0 if is_predator else 0.0
 	return _expressed
 
 

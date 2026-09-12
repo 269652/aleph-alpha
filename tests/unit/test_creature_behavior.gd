@@ -444,6 +444,10 @@ func _sheep(at: Vector2) -> Dictionary:
 	return {"position": at, "features": {Ethogram.FLESH: 1.0}, "node": "sheep"}
 
 
+func _carcass(at: Vector2) -> Dictionary:
+	return {"position": at, "features": {Ethogram.CARRION: 1.0}, "node": "carcass"}
+
+
 ## The scan reports what the other creature IS; the species decides what
 ## that means. A calm herbivore flees a predator it is handed as a stimulus.
 func test_a_calm_creature_flees_a_predator_stimulus():
@@ -481,6 +485,22 @@ func test_a_hungry_predator_hunts_a_flesh_stimulus_and_names_the_node():
 func test_a_herbivore_ignores_a_flesh_stimulus():
 	var decision := behavior.decide(_context({"hungry": true, "stimuli": [_sheep(Vector2(10, 0))]}))
 	assert_eq(decision.intent, "search_food")
+
+
+## Same shape as the FLESH valence above: carrion is only worth anything to
+## a predator/omnivore. A hungry herbivore handed a carrion stimulus wants
+## nothing from it and falls through to ordinary foraging; a hungry predator
+## with no live prey in reach walks to it (docs/concept/carrion.md's
+## "opportunistic predator/omnivore" Status gap).
+func test_carrion_valence_is_positive_only_for_predators():
+	var herbivore := behavior.decide(_context({"hungry": true, "stimuli": [_carcass(Vector2(10, 0))]}))
+	assert_eq(herbivore.intent, "search_food")
+	var predator := behavior.decide(_context({
+		"temperament": "aggressive", "is_predator": true, "hungry": true,
+		"stimuli": [_carcass(Vector2(10, 0))],
+	}))
+	assert_eq(predator.intent, "scavenge")
+	assert_eq(predator["stimulus"]["node"], "carcass")
 
 
 ## A tamed animal does not perceive people as anything: sensitivity, not valence.
