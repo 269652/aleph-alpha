@@ -35,7 +35,9 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# + starting kit (docs/concept/starting_kit.md): iron_sword, iron_axe
 	# (2 more) -- both previously had NO recipe at all, reachable only via
 	# /give, the shop, or the old hardcoded starting-kit grant.
-	assert_eq(ids.size(), 40)
+	# + Storm Lantern (docs/concept/lighting.md): lantern (1 more) -- the
+	# weatherproof second light source, upgraded from a torch.
+	assert_eq(ids.size(), 41)
 
 
 func test_iron_sword_is_craftable_from_ingots_and_a_stick():
@@ -255,6 +257,17 @@ func _input_item_ids(recipe_id: String) -> Array:
 	for i in book.recipe_inputs(recipe_id):
 		ids.append(i["item_id"])
 	return ids
+
+
+## Storm Lantern (docs/concept/lighting.md): built from a torch plus real
+## iron working, not raw wood/hide again -- an upgrade path, not a second
+## way to make the same base item.
+func test_lantern_is_craftable_from_iron_ingots_and_a_torch():
+	var ids := _input_item_ids("lantern")
+	assert_true(ids.has("iron_ingot"), "lantern should require iron_ingot")
+	assert_true(ids.has("torch"), "lantern should require a torch")
+	assert_eq(book.recipe_output("lantern")["item_id"], "lantern")
+	assert_true(book.can_craft("lantern", {"iron_ingot": 2, "torch": 1}))
 
 
 func test_wayfinding_and_citizenship_recipes_exist_and_are_craftable():

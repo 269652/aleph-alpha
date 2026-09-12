@@ -72,3 +72,22 @@ func test_the_torch_glow_update_follows_the_local_players_own_position():
 		"local_player.global_position",
 		"the glow's position is never set from the player's own real position"
 	)
+
+
+## Storm Lantern (docs/concept/lighting.md): a real torch is doused by real
+## weather in the running game, not just in TorchGlow's own pure-logic unit
+## test -- the wiring has to actually read the chunk manager's current
+## weather and gate on TorchGlow.is_extinguished_by_weather, same "read the
+## real per-frame function body" reasoning as the rest of this file.
+func test_the_torch_glow_update_reads_current_weather_and_gates_on_it():
+	var body := _function_body("_update_torch_glow")
+	assert_string_contains(
+		body,
+		"_chunk_manager.current_weather(",
+		"the torch glow never learns the current weather"
+	)
+	assert_string_contains(
+		body,
+		"TorchGlow.is_extinguished_by_weather(",
+		"the wiring never checks whether weather should douse the equipped light"
+	)

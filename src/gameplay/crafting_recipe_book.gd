@@ -22,6 +22,13 @@ const _RECIPES := {
 		"inputs": [{"item_id": "wood", "count": 1}, {"item_id": "hide", "count": 1}],
 		"output": {"item_id": "torch", "count": 2},
 	},
+	# Storm Lantern (docs/concept/lighting.md): a real upgrade path off an
+	# already-carried torch plus real iron working, not a second way to
+	# build the same base light source from scratch.
+	"lantern": {
+		"inputs": [{"item_id": "iron_ingot", "count": 2}, {"item_id": "torch", "count": 1}],
+		"output": {"item_id": "lantern", "count": 1},
+	},
 	"wooden_club": {
 		"inputs": [{"item_id": "wood", "count": 3}],
 		"output": {"item_id": "wooden_club", "count": 1},

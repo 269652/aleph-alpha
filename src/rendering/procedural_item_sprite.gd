@@ -88,6 +88,10 @@ const _ITEM_LOOKS := {
 	"iron_sword": {"color": Color(0.75, 0.78, 0.82), "shape": "sword"},
 	"iron_axe": {"color": Color(0.7, 0.73, 0.78), "shape": "axe"},
 	"torch": {"color": Color(0.65, 0.4, 0.15), "shape": "sword"},
+	# Storm Lantern (docs/concept/lighting.md) -- a cool metal-and-glass
+	# housing, not the torch's own warm bare wood, so the two read as
+	# visually distinct tools even in this procedural fallback art.
+	"lantern": {"color": Color(0.55, 0.58, 0.5), "shape": "sword"},
 	"campfire": {"color": Color(0.85, 0.45, 0.1), "shape": "campfire"},
 	"cooked_meat": {"color": Color(0.45, 0.22, 0.12), "shape": "round"},
 	"rock": {"color": Color(0.55, 0.55, 0.58), "shape": "round"},

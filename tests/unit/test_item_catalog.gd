@@ -62,6 +62,16 @@ func test_catalog_knows_the_craftable_output_items():
 		assert_true(catalog.has(item_id), "expected the catalog to know %s" % item_id)
 
 
+## Storm Lantern (docs/concept/lighting.md): the weatherproof second light
+## source. A carried/equipped tool, same as the torch it is crafted from --
+## not a "material" (see the torch-equip bug this whole feature starts
+## from, tests/unit/test_player.gd's test_equipping_a_torch_actually_works).
+func test_lantern_is_a_tool():
+	var item := catalog.make("lantern")
+	assert_eq(item.id, "lantern")
+	assert_eq(item.kind, "tool")
+
+
 func test_cooked_meat_is_food():
 	var item := catalog.make("cooked_meat")
 	assert_eq(item.kind, "food")
