@@ -148,8 +148,12 @@ same place on every machine) and an interior point of its smoothed
 course -- never the first or last point, since a spring is a mountain and
 a mouth is the sea -- and asks the check; after `World.SPAWN_PICK_
 ATTEMPTS` (64) rejections the pick is empty and World falls back to the
-Loire at Nantes (`SPAWN_LATITUDE`/`SPAWN_LONGITUDE`, still pinned by
-`test_world_spawn_location.gd`). World's check needs no chunk loading: the
+Freiburg Gaskugel on the curated Dreisam (`SPAWN_LATITUDE`/
+`SPAWN_LONGITUDE`, still pinned by `test_world_spawn_location.gd`) --
+reinstated 2026-09-12 ("also set the future spawn point to dreisam") in
+place of the Loire at Nantes: a real, named curated river is a better
+place for a session to land when the random pick fell all the way back
+than an unnamed emergent hydrology channel. World's check needs no chunk loading: the
 tile must really be a river tile, sit above sea level and below the
 mountain line, and be no colder than the old Berlin spawn
 (`SPAWN_CLIMATE_FLOOR`, the climate floor the spawn tests always applied,

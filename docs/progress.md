@@ -20277,6 +20277,20 @@ source-contract style (the shape every console command in this codebase
 uses) by `test_river_command_clarity.gd`. Spec: `concept/rivers.md`
 "/river: teleport to a random curated river, on demand".
 
+### Spawn fallback reinstated to the Dreisam (2026-09-12)
+
+"Also set the future spawn point to dreisam." The random curated-river
+spawn's own FALLBACK (used when no river bank qualifies within
+`SpawnRiverPicker`'s attempt budget) moves from the Loire at Nantes
+(an emergent hydrology channel with no curated course near it) back to
+the Freiburg Gaskugel on the curated Dreisam -- `RiverCatalog`'s own
+"this game's own spawn point" via-point, and this project's original,
+oldest-standing spawn (Berlin -> Dreisam -> Nantes -> Dreisam). ✅
+`World.SPAWN_LATITUDE`/`SPAWN_LONGITUDE` updated; `test_world_spawn_
+location.gd` rewritten to pin the Dreisam by name and coordinate (its
+own header now carries the full history). Spec: `concept/rivers.md`
+"Spawn: a random curated river".
+
 ### FPS regression round 13: the whole frame measured, five structural cuts, 6 -> 23 fps (2026-09-12)
 
 "Can you fix the performance issues and get FPS back to 60+?" Write-up in

@@ -320,12 +320,19 @@ const MAX_CREATURE_PANELS := 6
 ## that the point is dry, non-mountain land at least as climate-warm as
 ## the old Berlin spawn (so mechanics tuned against Berlin's real measured
 ## climate, e.g. EarthwormPatch.MILD_WARMTH, are not silently re-broken).
-## The FALLBACK spawn (the Loire at Nantes) -- a new game now starts on a
-## random curated river (docs/concept/rivers.md "Spawn: a random curated
-## river", SpawnRiverPicker); these coordinates are where it goes when no
-## river bank qualifies, and what every test that pins them still proves.
-const SPAWN_LATITUDE := 47.2031
-const SPAWN_LONGITUDE := -1.5469
+## The FALLBACK spawn -- a new game now starts on a random curated river
+## (docs/concept/rivers.md "Spawn: a random curated river",
+## SpawnRiverPicker); these coordinates are where it goes when no river
+## bank qualifies, and what every test that pins them still proves. The
+## Freiburg Gaskugel on the curated Dreisam ("this game's own spawn
+## point", RiverCatalog's own words) -- reinstated 2026-09-12 as the
+## fallback in place of the Loire at Nantes (an emergent hydrology
+## channel with no curated course near it): a real, named river is a
+## better place to land a session that fell back at all than an unnamed
+## one. See test_world_spawn_location.gd's own header for the full
+## history (Berlin -> Dreisam -> Nantes -> Dreisam).
+const SPAWN_LATITUDE := 48.007669
+const SPAWN_LONGITUDE := 7.805657
 ## The coldest place a new game may start: the climate value of the old
 ## Berlin spawn (test_world_spawn_location.gd's own floor, promoted from a
 ## test constant to the rule the picker applies), so a random river never
