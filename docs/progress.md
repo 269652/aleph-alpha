@@ -14585,6 +14585,23 @@ after accepting, so a client that yields a frame between connecting and
 sending always misses it — the test connects and sends synchronously
 inside one frame, as a real browser/curl effectively does.
 
+✅ **Item Catalog page-1 test drift fixed (2026-09-12).** Reported live:
+`test_companion_item_catalog_view.gd` failing 5/16 on `origin/main`. Root
+cause confirmed by printing the actual page-1 row ids: the authored
+`ItemCatalog` had simply grown past `ITEMS_PER_PAGE` (20) since those 5
+tests were written with no `q`/`page` filter — `iron_sword` and `wood` now
+land on page 2 (item #30 and #28 respectively in `_ITEMS` insertion
+order), so page 1's HTML never contains them, exactly as the pagination
+feature is supposed to behave. Not a real regression in the view or the
+catalog. Fixed in the tests, not the implementation: `ITEMS_PER_PAGE` is
+deliberately test-pinned (`test_a_page_shows_at_most_items_per_page_rows`,
+this doc's pagination bullet above), and 3 sibling tests already carried
+an explicit `q` filter for this exact reason (fish/leather_chest/a crafted
+id had been pushed off page 1 earlier) — extended that same pattern to the
+remaining 5 (`q: "iron_sword"` / `q: "wood"`) so every assertion finds its
+fixture item on page 1 regardless of the catalog's insertion order or
+length. 16/16 green after.
+
 ⬜ **Settlement dashboard.** Blocked on a real design decision, not a
 missing view: the live `VillageMarket`/`NpcEconomy` purse (what a player
 actually sees) is never persisted (recreated empty on every chunk load),
