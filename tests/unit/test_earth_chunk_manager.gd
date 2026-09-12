@@ -12194,6 +12194,175 @@ func test_step_regional_trade_does_nothing_before_its_interval_elapses():
 	assert_eq(manager.event_store().events_of_type("regional_trade_shipped").size(), 0)
 
 
+# -- FPS regression round 14's second follow-up: step_regional_trade's own
+# outer per-tick cost is bounded regardless of total founded-settlement count
+# (docs/concept/soil_fauna.md "FPS regression round 14's second follow-up",
+# EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP's own doc comment
+# for the full reasoning, including why this is a SEPARATE cursor/method from
+# step_settlements' own _settlement_ids_due_this_step rather than a shared one)
+
+
+## A seed whose NpcIdentity.occupation is really "blacksmith", found by
+## search rather than hardcoded (NpcIdentity._index picks an occupation by a
+## modulo of a hash -- see _seeds_covering_every_occupation's own identical
+## reasoning above). Blacksmith's own recipe (stone_pickaxe: 3 rock + 2
+## stick) is already the fixture every existing step_regional_trade test in
+## this file uses, so a settlement founded from `count` of these, against an
+## empty market, always shows the exact same two-item shortfall -- a
+## predictable, countable unit for the pagination tests below.
+func _blacksmith_seeds(count: int) -> Array[int]:
+	var seeds: Array[int] = []
+	var candidate := 0
+	while seeds.size() < count:
+		if NpcIdentity.new(candidate).occupation == "blacksmith":
+			seeds.append(candidate)
+		candidate += 1
+	return seeds
+
+
+## Below the cap, pagination must be a complete no-op -- the common case,
+## and what keeps every existing step_regional_trade/caravan test above
+## passing unmodified (same "no-op under the cap" guarantee
+## _settlement_ids_due_this_step already established for step_settlements).
+func test_settlement_ids_due_for_trade_this_step_is_a_no_op_under_the_unloaded_cap():
+	var expected: Array[String] = []
+	for i in EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP:
+		var chunk_coord := Vector2i(1500 + i, 1500 + i)
+		manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1000 + i)])
+		expected.append(EntityRef.for_settlement(chunk_coord))
+	assert_eq(manager._settlement_ids_due_for_trade_this_step(), expected)
+
+
+## One settlement over the cap is enough to trigger pagination -- exactly
+## MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP of them are due, never the whole
+## set.
+func test_settlement_ids_due_for_trade_this_step_caps_unloaded_settlements():
+	for i in EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP + 1:
+		manager.record_settlement_founded_if_new(Vector2i(1600 + i, 1600 + i), [NpcIdentity.new(2000 + i)])
+	assert_eq(
+		manager._settlement_ids_due_for_trade_this_step().size(),
+		EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP
+	)
+
+
+## Nothing is ever left out FOREVER, only deferred -- over enough consecutive
+## calls, the round-robin must visit every founded settlement at least once.
+func test_settlement_ids_due_for_trade_this_step_eventually_covers_every_settlement():
+	var total := EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP * 3 + 7
+	var all_ids: Array[String] = []
+	for i in total:
+		var chunk_coord := Vector2i(1700 + i, 1700 + i)
+		manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(3000 + i)])
+		all_ids.append(EntityRef.for_settlement(chunk_coord))
+
+	var covered := {}
+	# One extra round trip's worth of calls guards against an off-by-one at
+	# the wrap boundary without weakening what the test actually pins.
+	var rounds := ceili(float(total) / float(EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP)) + 1
+	for i in rounds:
+		for settlement_id in manager._settlement_ids_due_for_trade_this_step():
+			covered[settlement_id] = true
+
+	for settlement_id in all_ids:
+		assert_true(covered.has(settlement_id), "%s must eventually be assessed" % settlement_id)
+
+
+## And it must be FAIR, not just eventually complete: the round-robin must
+## not re-visit a settlement it has already given a turn to before every
+## other one has had its own.
+func test_settlement_ids_due_for_trade_this_step_does_not_repeat_before_the_round_completes():
+	var cap := EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP
+	for i in cap * 2:
+		manager.record_settlement_founded_if_new(Vector2i(1800 + i, 1800 + i), [NpcIdentity.new(4000 + i)])
+
+	var first_batch := manager._settlement_ids_due_for_trade_this_step()
+	var second_batch := manager._settlement_ids_due_for_trade_this_step()
+	assert_eq(first_batch.size(), cap)
+	assert_eq(second_batch.size(), cap)
+	for settlement_id in second_batch:
+		assert_false(first_batch.has(settlement_id), "the second batch must not repeat the first's settlements")
+
+
+## A settlement whose chunk is currently LOADED is never subject to the cap
+## or the round-robin delay -- same "near is never throttled" rule as
+## step_settlements' own identical guarantee.
+func test_settlement_ids_due_for_trade_this_step_never_defers_a_loaded_settlement():
+	for i in EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP + 5:
+		manager.record_settlement_founded_if_new(Vector2i(1900 + i, 1900 + i), [NpcIdentity.new(5000 + i)])
+
+	var loaded_chunk_coord := Vector2i(1999, 1999)
+	manager.record_settlement_founded_if_new(loaded_chunk_coord, [NpcIdentity.new(5999)])
+	var loaded_settlement_id := EntityRef.for_settlement(loaded_chunk_coord)
+	manager._loaded_villages[loaded_chunk_coord] = []
+
+	for i in 5:
+		assert_true(
+			manager._settlement_ids_due_for_trade_this_step().has(loaded_settlement_id),
+			"a loaded settlement must be assessed on every single tick"
+		)
+
+	manager._loaded_villages.erase(loaded_chunk_coord)
+
+
+## step_regional_trade itself must actually route through the pagination
+## helper, not just have it sitting unused (same "not just a unit-level fix"
+## concern as step_settlements' own integration pair). Every checked
+## blacksmith settlement's shortfall is IDENTICAL (stone_pickaxe: 3 rock + 2
+## stick, both fully missing against an empty market) and there is exactly
+## one real supplier with abundant surplus of both -- so
+## regional_trade_departed's count is a precise proxy for how many shortage
+## settlements were actually evaluated this tick: 2 caravans (rock, stick)
+## per checked settlement, never more than the trade-side cap's worth. The
+## supplier's own chunk is marked loaded so it never competes with the
+## blacksmiths for the same background budget (see the "never defers a
+## loaded settlement" test above).
+func test_step_regional_trade_only_checks_the_paginated_shortage_settlements():
+	var cap := EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP
+	var supplier_coord := Vector2i(-100, -100)
+	manager.record_settlement_founded_if_new(supplier_coord, [])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 999999)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 999999)
+	manager._loaded_villages[supplier_coord] = []
+
+	var blacksmith_seeds := _blacksmith_seeds(cap + 5)
+	for i in blacksmith_seeds.size():
+		manager.record_settlement_founded_if_new(Vector2i(i, 2000), [NpcIdentity.new(blacksmith_seeds[i])])
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+
+	assert_eq(manager.event_store().events_of_type("regional_trade_departed").size(), cap * 2)
+	manager._loaded_villages.erase(supplier_coord)
+
+
+## And the SECOND real tick must pick up where the first left off -- proving
+## the trade-side cursor genuinely persists across step_regional_trade's own
+## throttled cadence, not just across direct calls to the pagination helper
+## in isolation.
+func test_step_regional_trade_moves_on_to_the_next_batch_on_the_following_tick():
+	var cap := EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP
+	var supplier_coord := Vector2i(-101, -101)
+	manager.record_settlement_founded_if_new(supplier_coord, [])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 999999)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 999999)
+	manager._loaded_villages[supplier_coord] = []
+
+	var blacksmith_seeds := _blacksmith_seeds(cap * 2)
+	for i in blacksmith_seeds.size():
+		manager.record_settlement_founded_if_new(Vector2i(i, 2100), [NpcIdentity.new(blacksmith_seeds[i])])
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+	var first_tick: int = manager.event_store().events_of_type("regional_trade_departed").size()
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+	var both_ticks: int = manager.event_store().events_of_type("regional_trade_departed").size()
+
+	assert_eq(first_tick, cap * 2)
+	assert_eq(both_ticks, cap * 2 * 2, "the second tick must evaluate the OTHER half, not repeat the first")
+	manager._loaded_villages.erase(supplier_coord)
+
+
 # -- a building piece occupies its tile against vegetation -------------------
 #
 # Reported: a village house stamped straight over a standing tree -- trunk

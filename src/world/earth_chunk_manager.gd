@@ -3149,6 +3149,97 @@ func legitimacy_for_settlement(settlement_id: String) -> String:
 const REGIONAL_TRADE_INTERVAL := 30.0
 var _regional_trade_accumulator := 0.0
 
+## FPS regression round 14's second follow-up (docs/concept/soil_fauna.md
+## "FPS regression round 14's second follow-up"): step_regional_trade's own
+## outer loop called production_shortfall_quests_for_settlement for EVERY
+## settlement the world has ever founded, every REGIONAL_TRADE_INTERVAL
+## tick, with no cap -- the exact same unbounded-growth shape
+## MAX_UNLOADED_SETTLEMENTS_PER_STEP already fixed for step_settlements,
+## just not yet confirmed to have caused an observed regression when that
+## round shipped. A direct probe confirmed it independently: at 400
+## founded settlements, one step_regional_trade tick cost 1164ms in the
+## worst case (every settlement genuinely short, no real surplus anywhere,
+## so _attempt_regional_resupply's own inner search never short-circuits)
+## and 52ms even in the BEST case (every settlement's own recipe already
+## amply stocked, so no resupply search ever runs at all) -- that second
+## number is the honest floor: pure per-settlement shortfall-checking cost,
+## present even in a world where regional trade never actually has
+## anything to do, and it alone already matches the magnitude round 14's
+## own step_settlements fix was written to eliminate.
+##
+## Fix: the SAME pagination-not-exclusion shape, applied to the SHORTAGE
+## side only. A LOADED settlement is always checked in full, every tick;
+## the BACKGROUND majority is paginated round-robin, at most this many per
+## tick. Deliberately a SEPARATE cursor/method from step_settlements' own
+## _settlement_ids_due_this_step/_unloaded_settlement_step_cursor, not a
+## shared one -- two callers sharing one cursor would make each caller's
+## own cadence depend on how often the OTHER caller also happens to run
+## this tick, silently invalidating step_settlements' own documented
+## cadence math. A short-lived structural duplication of that method's
+## shape is the honest tradeoff against that entanglement risk; worth
+## revisiting only if a third consumer of this exact pattern ever appears.
+##
+## What this does NOT touch: _attempt_regional_resupply's own INNER
+## nearest-supplier search still scans EVERY real settlement as a
+## candidate, every single time it runs, completely unbounded --
+## deliberately. "Nearest real-surplus settlement" (docs/concept/
+## regional_trade.md's own design pillar) is a single cross-settlement
+## comparison that has to see the WHOLE real candidate set in one pass to
+## answer correctly; spreading that comparison across several ticks the
+## way step_settlements' independent per-settlement assessments can be
+## paginated would silently risk shipping from a settlement that is not
+## actually nearest, or missing a real supplier that exists -- a
+## correctness regression, not a perf one. Only HOW OFTEN a background
+## settlement gets to ask the question at all is throttled; the answer,
+## once asked, is always genuinely correct across every real settlement
+## that exists at that moment.
+##
+## Pinned in tests/unit/test_earth_chunk_manager.gd: a no-op under the cap,
+## a hard cap above it, eventual full coverage, round-robin fairness (no
+## repeat before every other background settlement has had its own turn),
+## and a loaded settlement never deferred -- the exact same guarantees
+## _settlement_ids_due_this_step's own tests already pin for
+## step_settlements.
+const MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP := 20
+## Session-lifetime rotation cursor for the trade-side pagination above --
+## deliberately its OWN field, not step_settlements'
+## _unloaded_settlement_step_cursor (see this constant's own doc comment for
+## why sharing one would be wrong).
+var _unloaded_trade_step_cursor := 0
+
+
+## Every settlement id step_regional_trade should check as the SHORTAGE side
+## THIS tick -- structurally identical to _settlement_ids_due_this_step
+## (same background/loaded split, same round-robin slice-selection math),
+## kept as its own method/cursor rather than factored into a shared one (see
+## MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP's own doc comment). Below the cap
+## this returns _known_settlement_ids() completely unchanged, the same
+## byte-identical no-op guarantee that keeps every pre-existing
+## step_regional_trade/caravan test in this file passing unmodified.
+func _settlement_ids_due_for_trade_this_step() -> Array[String]:
+	var all_ids := _known_settlement_ids()
+	var background_ids: Array[String] = []
+	for settlement_id in all_ids:
+		if not _loaded_villages.has(RegionalTrade.chunk_coord_of(settlement_id)):
+			background_ids.append(settlement_id)
+
+	if background_ids.size() <= MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP:
+		_unloaded_trade_step_cursor = 0
+		return all_ids
+
+	var start := _unloaded_trade_step_cursor % background_ids.size()
+	var skipped := {}
+	for i in range(MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP, background_ids.size()):
+		skipped[background_ids[(start + i) % background_ids.size()]] = true
+	_unloaded_trade_step_cursor = (start + MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP) % background_ids.size()
+
+	var due: Array[String] = []
+	for settlement_id in all_ids:
+		if not skipped.has(settlement_id):
+			due.append(settlement_id)
+	return due
+
+
 ## Real in-flight regional-trade shipments (docs/concept/trade.md, the
 ## "supply really in transit, real risk" layer this builds on top of
 ## step_regional_trade's own dispatch decision above). Array of
@@ -3181,11 +3272,15 @@ func step_regional_trade(delta_seconds: float) -> void:
 	if _regional_trade_accumulator >= REGIONAL_TRADE_INTERVAL:
 		_regional_trade_accumulator = fmod(_regional_trade_accumulator, REGIONAL_TRADE_INTERVAL)
 
-	var settlement_ids := _known_settlement_ids()
-	for settlement_id in settlement_ids:
+	# Supplier candidates are ALWAYS the full, unpaginated list (see
+	# MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP's own doc comment) -- only
+	# which settlements get checked as the SHORTAGE side this tick is
+	# paginated.
+	var all_settlement_ids := _known_settlement_ids()
+	for settlement_id in _settlement_ids_due_for_trade_this_step():
 		for quest in production_shortfall_quests_for_settlement(settlement_id):
 			for entry in quest["missing"]:
-				_attempt_regional_resupply(settlement_id, entry["item_id"], entry["need"], settlement_ids)
+				_attempt_regional_resupply(settlement_id, entry["item_id"], entry["need"], all_settlement_ids)
 
 
 ## Dispatches a real caravan carrying `need` units of `item_id` from the

@@ -20562,3 +20562,48 @@ Closes round 14's own flagged residual above. Write-up in
   honest, small, constant classification overhead with nothing yet to
   paginate away.
 
+### FPS regression round 14's second follow-up: step_regional_trade's per-tick cost bounded (2026-09-13)
+
+Confirms and closes the sibling the follow-up directly above flagged but
+left unconfirmed. Write-up in `concept/soil_fauna.md`'s "FPS regression
+round 14's second follow-up"; design cross-reference in
+`concept/regional_trade.md`'s Status section.
+
+- ✅ Found by direct measurement, not by waiting for a regression report: a
+  throwaway probe (N settlements founded, `step_regional_trade` timed)
+  showed a worst case (every settlement genuinely short, no real surplus
+  anywhere) of 15.1/29.7/67.7/322.8/1163.9 ms at 20/50/100/200/400
+  settlements, and a best case (every settlement's own recipe already
+  amply stocked, no resupply search ever runs) of 2.6/4.6/10.5/25.1/51.8 ms
+  at the same counts -- the best case alone already matches the magnitude
+  the original round 14 fix was written to eliminate, confirming this was
+  real regardless of a given session's actual shortfall density.
+- ✅ `EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_PER_TRADE_STEP` (20):
+  `step_regional_trade`'s outer loop now checks every LOADED settlement
+  every tick plus a round-robin slice of at most this many BACKGROUND ones
+  (`_settlement_ids_due_for_trade_this_step`) as the shortage side -- a
+  SEPARATE cursor from step_settlements' own `_settlement_ids_due_this_step`
+  (sharing one would entangle both systems' cadences; see the constant's
+  own doc comment).
+- ✅ `_attempt_regional_resupply`'s own inner nearest-supplier search is
+  deliberately UNTOUCHED and still unbounded -- "nearest real-surplus
+  settlement" (`docs/concept/regional_trade.md`'s own design pillar) needs
+  the whole real candidate set in one pass to answer correctly, so only
+  how often a background settlement gets to ASK is throttled, never the
+  correctness of the answer once asked.
+- Tests: 5 new (mirroring round 14's own set exactly: no-op under the cap,
+  hard cap, eventual coverage, round-robin fairness, loaded-settlement
+  exemption) plus 2 new `step_regional_trade`-level integration tests.
+  TDD red-first: a behavior-preserving stub landed first so the new tests
+  could compile and genuinely fail, then the real logic went in. All
+  pre-existing `step_regional_trade`/caravan/probe tests pass unmodified --
+  below the cap this is a byte-identical no-op.
+- ✅ Confirmed fixed, same probe: worst case drops to roughly
+  4-7/8-9/12-16/18-28/64-103 ms at 20/50/100/200/400 settlements (range
+  across two runs -- this machine's own documented concurrent-process
+  timing noise, see soil_fauna.md), best case drops to a flat 2-8 ms
+  regardless of settlement count. Both at least an order of magnitude
+  better by 400 settlements, and the best case in particular now shows no
+  growth with settlement count at all -- the same qualitative shape
+  change round 14's own fix produced for step_settlements.
+
