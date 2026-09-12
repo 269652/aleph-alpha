@@ -585,6 +585,25 @@ func _play_chase_heading() -> Vector2:
 ## own scan can ever observe data staler than it already tolerates.
 const FISH_GROUP_REFRESH_SECONDS := FishSchooling.SCAN_INTERVAL
 static var _fish_group_refresh_at_msec: int = -1000000
+
+## How long one tile's "is this swimmable water" answer is trusted before it
+## is asked of the world again (FPS regression round 12, docs/concept/
+## soil_fauna.md). Every _is_water(pixel) answer is a pure function of the
+## TILE -- biome, river and lake flags for it and its four neighbours, up to
+## ~15 world queries per call -- and one step asks for up to ~75 of them
+## across its shore lookahead and two deflection passes: measured live at
+## ~0.6 of a ~0.75 ms fish step, five times any other marker's. Water
+## topology changes on the scale of a player building a dam, so the answers
+## are shared across every fish (the same static-shared-cache shape round
+## 5's carrion lists and round 7's fish group above use) and re-asked per
+## tile once this old -- per entry, not as one global flush, so no frame
+## ever pays for every tile at once. Keyed to the world that answered
+## (_water_tile_cache_world): a different world -- every other test, the
+## character-preview diorama's own pond -- never sees another's truth.
+const WATER_TILE_CACHE_REFRESH_SECONDS := 1.0
+static var _water_tile_cache: Dictionary = {}  # Vector2i tile -> bool
+static var _water_tile_cache_at: Dictionary = {}  # Vector2i tile -> msec answered
+static var _water_tile_cache_world = null
 static var _cached_fish: Array = []
 
 
@@ -856,8 +875,33 @@ const _CARDINAL_TILE_OFFSETS: Array[Vector2i] = [
 
 
 func _is_water(pixel_position: Vector2) -> bool:
-	var tile_x := int(floor(pixel_position.x / _tile_size))
-	var tile_y := int(floor(pixel_position.y / _tile_size))
+	var tile := Vector2i(int(floor(pixel_position.x / _tile_size)), int(floor(pixel_position.y / _tile_size)))
+	return _is_water_at_tile(tile, Time.get_ticks_msec())
+
+
+## The cached, tile-keyed heart of _is_water (see WATER_TILE_CACHE_REFRESH_
+## SECONDS). `now_msec` is injected rather than read here so a test can age
+## the cache without waiting -- the same call-observing idiom round 7's
+## _refresh_fish_group_if_stale uses.
+func _is_water_at_tile(tile: Vector2i, now_msec: int) -> bool:
+	if _water_tile_cache_world != _world:
+		_water_tile_cache.clear()
+		_water_tile_cache_at.clear()
+		_water_tile_cache_world = _world
+	if (
+		_water_tile_cache.has(tile)
+		and now_msec - int(_water_tile_cache_at[tile]) < int(WATER_TILE_CACHE_REFRESH_SECONDS * 1000.0)
+	):
+		return _water_tile_cache[tile]
+	var answer := _compute_is_water_tile(tile.x, tile.y)
+	_water_tile_cache[tile] = answer
+	_water_tile_cache_at[tile] = now_msec
+	return answer
+
+
+## The real answer, asked of the world: ocean, or fresh water on this tile
+## AND every cardinal neighbour (the shore rule below).
+func _compute_is_water_tile(tile_x: int, tile_y: int) -> bool:
 	if _world.biome_at_global(tile_x, tile_y) == "ocean":
 		return true
 	if not _is_fresh_water_tile(tile_x, tile_y):

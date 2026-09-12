@@ -252,6 +252,11 @@ func before_each():
 	# test's first call, same static-state reset DecomposerMarker's own
 	# tests already use for _food_group_refresh_at_msec.
 	FishMarker._fish_group_refresh_at_msec = -1000000
+	# Round 12's shared per-tile water cache is static state in the same way;
+	# start every test with it cold and unowned.
+	FishMarker._water_tile_cache_world = null
+	FishMarker._water_tile_cache.clear()
+	FishMarker._water_tile_cache_at.clear()
 
 
 func after_each():
@@ -1386,3 +1391,71 @@ func test_a_near_fish_is_adopted_and_stepped_every_frame_by_the_scheduler():
 	for frame in 10:
 		scheduler.advance(1.0 / 60.0)
 	assert_almost_eq(marker._elapsed_time - elapsed_before, 10.0 / 60.0, 0.0001, "ten frames, ten steps, each the frame's own delta")
+
+
+# -- shared per-tile water cache (FPS regression round 12) ------------------
+#
+# Every _is_water(pixel) answer is a pure function of the TILE: biome, river
+# and lake flags for it and its four neighbours -- up to ~15 world queries per
+# call, and a single step asks for up to ~75 of them across its shore
+# lookahead and two deflection passes, measured live at ~0.5 ms per fish step
+# (5x any other marker's). Water topology changes on the scale of a player
+# building a dam, so the answers are shared across every fish and refreshed
+# once per WATER_TILE_CACHE_REFRESH_SECONDS of real time, the same
+# static-shared-cache shape round 5's carrion lists and round 7's fish group
+# already use. Keyed to the world that answered, so a different world (every
+# other test in this file, the character-preview diorama's own pond) never
+# sees another's truth.
+
+
+## A river-everywhere world that counts how often it is actually asked.
+class CountingWaterWorld:
+	var queries := 0
+	func biome_at_global(_x: int, _y: int) -> String:
+		queries += 1
+		return "grassland"
+	func is_river_at_global(_x: int, _y: int) -> bool:
+		queries += 1
+		return true
+	func is_lake_at_global(_x: int, _y: int) -> bool:
+		queries += 1
+		return false
+
+
+func test_the_water_cache_refresh_interval_is_pinned():
+	assert_eq(FishMarker.WATER_TILE_CACHE_REFRESH_SECONDS, 1.0)
+
+
+func test_repeated_water_checks_on_one_tile_ask_the_world_once_per_refresh_window():
+	var world := CountingWaterWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var tile := Vector2i(6, 6)
+	assert_true(marker._is_water_at_tile(tile, 1000), "precondition: river everywhere is water")
+	var first_batch := world.queries
+	assert_gt(first_batch, 0, "the first answer had to come from the world")
+	for i in 50:
+		assert_true(marker._is_water_at_tile(tile, 1000 + i))
+	assert_eq(world.queries, first_batch, "fifty more answers inside the window cost the world nothing")
+	var window_ms := int(FishMarker.WATER_TILE_CACHE_REFRESH_SECONDS * 1000.0)
+	marker._is_water_at_tile(tile, 1000 + window_ms + 1)
+	assert_gt(world.queries, first_batch, "once the window has elapsed the world is asked again")
+
+
+func test_a_different_world_never_sees_another_worlds_cached_answer():
+	var river := CountingWaterWorld.new()
+	marker.setup(river, TILE_SIZE)
+	assert_true(marker._is_water_at_tile(Vector2i(6, 6), 1000))
+	var other := FishMarker.new()
+	add_child(other)
+	_extra.append(other)
+	other.setup(SinglePondWorld.new(), TILE_SIZE)  # land everywhere except its own home tile (unset here)
+	assert_false(other._is_water_at_tile(Vector2i(6, 6), 1000), "the pond world's own truth, not the river's cached one")
+	assert_true(marker._is_water_at_tile(Vector2i(6, 6), 1000), "and the river fish still gets the river's")
+
+
+func test_the_cached_answer_is_the_real_one_including_the_shore_rule():
+	var world := RiverBankWorld.new()  # river on x 10..12 only, land beyond
+	marker.setup(world, TILE_SIZE)
+	assert_true(marker._is_water_at_tile(Vector2i(11, 6), 1000), "the fully-covered column")
+	assert_false(marker._is_water_at_tile(Vector2i(10, 6), 1000), "the bank column borders land: not swimmable, cached or not")
+	assert_false(marker._is_water_at_tile(Vector2i(11, 6), 1000) == false, "and asking again does not flip it")
