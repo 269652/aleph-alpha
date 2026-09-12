@@ -3884,6 +3884,75 @@ plus the far ones (1/30 of the rest) come to ~30 ms of real work per frame
 at 60 fps -- twice the whole budget -- so 60 fps at this population needs
 cheaper steps or fewer stepping creatures, not more scheduling.
 
+### FPS regression round 12: the fish step's water checks, and the population knobs handed to the player (2026-09-12)
+
+"Go ahead with the fish step cost, then population caps" -- and, mid-way,
+"can you make these knobs configurable?" Round 11's own closing arithmetic
+named both: fish steps at ~0.5 ms each, five times any other marker's, and
+a population (~800 ant foragers, ~500 pollinators) that no scheduling can
+make cheap.
+
+**1. A fish step was ~78 % water checks.** A temporary per-sub-step timer
+over 34 live windows put a fish step at 0.73-0.80 ms (contended machine):
+`clearance_lookahead` ~0.38 ms, `clearance_move` ~0.23 ms, `current_at`
+~0.08, schooling ~0.06, foraging and ripple negligible. The two clearance
+passes each probe five points, each point a pure function of its TILE --
+biome, river and lake flags for it and its four cardinal neighbours (the
+shore rule), up to ~15 world queries -- so one step asked the world for up
+to ~75 tile answers it had mostly asked the frame before. `FishMarker.
+_is_water` now keys by tile into a cache shared across every fish (the
+static-shared-cache shape rounds 5 and 7 established), re-asked per tile
+once `WATER_TILE_CACHE_REFRESH_SECONDS` (1.0 s) old -- per entry, never as
+one global flush, so no frame pays for every tile at once -- and keyed to
+the world that answered, so a different world (every other test, the
+character-preview pond) never sees another's truth. Water topology changes
+on the scale of a player building a dam; a one-second-stale answer is
+invisible. Strict TDD: a counting world proves fifty answers inside the
+window cost the world nothing and one outside it does, world isolation,
+and the shore rule surviving the cache; every existing shoreline test
+unchanged, 71/72 (the risky one pre-existing). Live after, same timer, same
+contended machine, 35 windows: 0.23-0.78 ms/step, median 0.295 (from
+0.789); `clearance_lookahead` 0.37 -> 0.10 ms, `clearance_move` 0.26 ->
+0.05 ms. The water checks fell from ~78 % of a step to ~50 %, the step
+itself by ~63 %.
+
+**1b. The river current, the same way.** With the water answers shared,
+`_current_at` was the largest slice left (0.074 of 0.295 ms): every tile a
+fish crossed re-asked `river_current_at_global` -- a fish dithering on a
+tile edge re-asked it every step, a shoal asked for the same few tiles --
+even though the per-fish tile memo already spared the frames in between.
+The current is a property of the tile, so `_current_at_tile` now goes
+through a second world-keyed static cache, `RIVER_CURRENT_CACHE_REFRESH_
+SECONDS` (1.0 s) per entry, the per-fish memo kept as the fast path in
+front of it. Three tests (interval pinned; one hydrology query per tile per
+window, shared across two fish and re-asked after it; the current still
+drives swimming through the cache); 74/75. Live, 29 windows: `current_at`
+0.074 -> 0.056 ms, step median 0.295 -> 0.260 ms -- modest, within a
+contended machine's run-to-run noise, because most crossings are a shoal's
+first visit to a tile in that second; what remains is the hydrology query
+itself, once per tile per second, and a longer window is the obvious lever
+if it ever measures as mattering. Over the round a fish step went 0.79 ->
+0.26 ms median, -67 %.
+
+**2. The population ceilings are now the player's knobs, not constants.**
+Rather than lowering `AntColony.MAX_CONCURRENT_FORAGERS` (15),
+`BeeColony.MAX_CONCURRENT_FORAGERS` (10) or `AmbientFlyerRenderer.
+MAX_BUTTERFLIES_PER_CHUNK` for everyone, `SimulationSettings`
+(`src/gameplay/simulation_settings.gd`) scales each by a persisted
+density in [0, 1] -- `ant_foragers`, `bee_foragers`, `pollinators` --
+saved in the `[simulation]` section of the shared settings file, exposed
+as three sliders in the Settings overlay's new "Simulation" tab, defaulting
+to 1.0 (today's behaviour exactly). A colony never drops below one forager
+(its model's own floor), butterflies may go to zero, birds are never
+scaled, and nothing alive is culled when a knob drops: the caps gate new
+dispatches and spawns, so the world thins out as trips end. Spec in
+`ecosystem_dynamics.md` "Simulation density: the player's own knobs";
+pinned by `test_simulation_settings.gd`, `test_earth_chunk_manager_
+population_density.gd`, `test_settings_overlay_simulation.gd`,
+`test_world_simulation_settings_wiring.gd` and two budget tests in
+`test_ambient_flyer_renderer.gd`. Where a given machine lands is now a
+setting, and can be measured against itself.
+
 ### In-flight foragers survive an unload; their trip's outcome does not (2026-09-09)
 
 The ant side of `bees.md`'s own identical section, by that exact name --

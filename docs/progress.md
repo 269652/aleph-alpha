@@ -20171,3 +20171,33 @@ GDScript-simulated creatures at 0.1-0.5 ms per step come to ~30 ms of
 real work per frame at 60 fps even with perfect scheduling -- the next
 levers are cheaper steps (fish first, at ~0.5 ms each) and population
 caps, then the ~129 s boot.
+
+### FPS regression round 12: fish water-check cache; simulation-density knobs in Settings (2026-09-12)
+
+"Go ahead with the fish step cost, then population caps" / "make these
+knobs configurable". Write-up in `concept/soil_fauna.md` "FPS regression
+round 12"; the knobs' spec in `concept/ecosystem_dynamics.md` "Simulation
+density: the player's own knobs".
+
+- ✅ `FishMarker` shared per-tile water cache (`WATER_TILE_CACHE_REFRESH_
+  SECONDS` 1.0 s, per-entry refresh, world-keyed): a fish step measured
+  0.73-0.80 ms live (median 0.79), ~78 % of it the two water-clearance
+  passes (up to ~75 tile answers a step, each up to ~15 world queries);
+  after, median 0.295 ms, the two passes 0.63 -> 0.15 ms. 4 new tests.
+- ✅ `FishMarker` shared per-tile river-current cache (`RIVER_CURRENT_CACHE_
+  REFRESH_SECONDS` 1.0 s, same shape, the per-fish tile memo kept in
+  front): `current_at` 0.074 -> 0.056 ms, step median 0.295 -> 0.260 ms --
+  modest, within a contended machine's noise; what remains is the hydrology
+  query itself once per tile per second. 3 new tests; `test_fish_marker.gd`
+  74/75 (the risky one pre-existing). Over the round a fish step is
+  0.79 -> 0.26 ms median, -67 %.
+- ✅ `SimulationSettings` + Settings > Simulation: three persisted sliders
+  (ant foragers, bee foragers, pollinators; 0-100 %, default 100 %) scaling
+  the three design ceilings through `EarthChunkManager.set_population_
+  density`; colonies keep their one-scout floor, butterflies may reach
+  zero, birds untouched, nothing alive is culled. 6 + 6 + 3 + 6 + 2 new
+  tests across five suites.
+
+🚧 60 fps remains open; with the knobs the player can now trade
+liveliness for frame time on their own machine, and every further round
+can be measured at a fixed setting.
