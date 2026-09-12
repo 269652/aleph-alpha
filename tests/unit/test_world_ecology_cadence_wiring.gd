@@ -11,6 +11,7 @@ extends GutTest
 const World = preload("res://scenes/world.gd")
 const StepCadence = preload("res://src/gameplay/step_cadence.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+const PlayerScene = preload("res://scenes/player.tscn")
 
 const FRAME := 1.0 / 60.0
 
@@ -27,6 +28,8 @@ class CountingManager extends EarthChunkManager:
 		calls[name] = int(calls.get(name, 0)) + 1
 		seconds[name] = float(seconds.get(name, 0.0)) + elapsed
 
+	func step_worms(d: float) -> void: _note("worms", d)
+	func step_fruiting(d: float, _player_pixel: Vector2) -> void: _note("fruiting", d)
 	func step_ecosystem(d: float) -> void: _note("ecosystem", d)
 	func step_forage(d: float) -> void: _note("forage", d)
 	func step_tree_spread(d: float) -> void: _note("tree_spread", d)
@@ -68,7 +71,7 @@ class TestWorld extends World:
 const WORLD_STEPS: Array[String] = ["herbivore_food", "reproduction"]
 
 const CHUNK_MANAGER_STEPS: Array[String] = [
-	"ecosystem", "forage", "tree_spread", "tree_growth", "ground_food", "flies", "carried_food",
+	"worms", "ecosystem", "forage", "tree_spread", "tree_growth", "ground_food", "flies", "carried_food",
 	"tall_grass", "aquatic_vegetation", "aquatic_invertebrates", "wild_crops", "wild_mushrooms",
 	"farm_plots", "ants", "bees", "leaf_litter", "footprints", "flowers", "desert_scrub",
 	"tundra_lichen", "settlements", "npc_encounters", "regional_trade",
@@ -139,3 +142,15 @@ func test_the_steps_are_spread_over_the_intervals_frames_not_stacked_on_one():
 		busiest = maxi(busiest, total - before)
 		before = total
 	assert_lte(busiest, ceili(float(CHUNK_MANAGER_STEPS.size()) / float(frames)) + 1, "no single frame carries the whole batch")
+
+
+## Fruiting details trees around the player, so it needs one: with none it
+## is skipped, with one it runs on the same cadence as everything else.
+func test_fruiting_runs_on_the_cadence_only_when_there_is_a_player_to_detail_around():
+	_frames(roundi(StepCadence.INTERVAL_SECONDS / FRAME))
+	assert_eq(manager.calls.get("fruiting", 0), 0, "no player, nothing to detail around")
+	var player := PlayerScene.instantiate()
+	add_child_autofree(player)
+	for frame in roundi(StepCadence.INTERVAL_SECONDS / FRAME):
+		world._step_ecology_batch(FRAME, player)
+	assert_eq(manager.calls.get("fruiting", 0), 1, "one interval, one fruiting pass")

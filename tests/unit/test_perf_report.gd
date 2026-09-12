@@ -240,3 +240,19 @@ func test_format_line_appends_counts_after_the_sections():
 func test_sample_carries_the_counts_it_is_handed():
 	var sample: Dictionary = PerfReport.sample(get_viewport().get_viewport_rid(), {}, {}, {}, {"fish_marker": 2.0})
 	assert_eq(sample["counts"], {"fish_marker": 2.0})
+
+
+## The "loop" section: consecutive frame starts are one whole main-loop
+## iteration apart, so their spacing is the exact frame period.
+func test_consecutive_frame_starts_record_the_loop_period():
+	var report := PerfReport.new()
+	report.mark_frame_start(10_000)
+	report.mark_frame_end(12_000)
+	report.mark_frame_start(30_000)
+	report.mark_frame_end(31_000)
+	report.tick(INTERVAL * 2.0)
+
+	var sections: Dictionary = report.take_sections()
+
+	assert_almost_eq(sections["loop"], 20.0, 0.001, "one 20 ms period over one frame that had a predecessor")
+	assert_almost_eq(sections["tree"], 1.5, 0.001, "two closed spans, 2 ms and 1 ms, over one tick")

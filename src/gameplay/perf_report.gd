@@ -18,9 +18,12 @@ extends RefCounted
 ## added to the others.
 ##
 ## Usage: `<godot> --path . --rendering-driver opengl3 -- --solo --perf-report`
-## and read the PERF lines from stdout (the console binary). Every field is
-## a point-in-time or last-frame value, never a window average -- take the
-## median of many lines, as the perf rounds' own methodology already does.
+## and read the PERF lines from stdout (the console binary). The fixed fields
+## are point-in-time readings -- and note that Godot's TIME_PROCESS and
+## TIME_PHYSICS_PROCESS are the WORST frame of the last second, not the last
+## frame -- while every section (s_*) is an average per frame over the
+## report window; take medians of many lines, as the perf rounds' own
+## methodology already does. s_loop is the exact frame period.
 ## Pinned by tests/unit/test_perf_report.gd; World's wiring by
 ## tests/unit/test_world_perf_report_wiring.gd.
 
@@ -45,6 +48,7 @@ var _section_frames := 0
 ## -1 when no frame is open; closed by PerfFrameSentinel into the "tree"
 ## section (the whole idle-process span across every node).
 var _frame_started_usec := -1
+var _last_frame_started_usec := -1
 ## Label -> how many times it happened since the last take_counts()
 ## (scheduler steps per class); reported per frame like the sections.
 var _counts: Dictionary = {}
@@ -76,6 +80,14 @@ func add_section(label: String, usec: int) -> void:
 
 ## World stamps the top of its _process (the scene root runs first)...
 func mark_frame_start(usec: int) -> void:
+	# Consecutive starts are one whole main-loop iteration apart: script,
+	# physics, render AND the engine's own work -- the exact frame period,
+	# reported as the "loop" section (ms/frame) so the engine's share is
+	# loop - tree - physics - render_cpu, not inferred from TIME_PROCESS
+	# (which Godot reports as the WORST frame of the last second).
+	if _last_frame_started_usec >= 0:
+		add_section("loop", usec - _last_frame_started_usec)
+	_last_frame_started_usec = usec
 	_frame_started_usec = usec
 
 

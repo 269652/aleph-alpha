@@ -470,6 +470,9 @@ const PerfFrameSentinel = preload("res://src/gameplay/perf_frame_sentinel.gd")
 const StepCadence = preload("res://src/gameplay/step_cadence.gd")
 var _ecology_cadence: StepCadence = null
 var _ecology_steps: Dictionary = {}
+## The player the fruiting step details trees around, captured per batch
+## because the cadence table's callables are built once.
+var _ecology_focus_player: Player = null
 var _perf_report: PerfReport = null
 var _scarred_tiles: Dictionary = {}  # Vector2i global tile -> true, tiles we've painted as trampled earth
 var _trailed_tiles: Dictionary = {}  # Vector2i global tile -> true, tiles currently painted as the deeper Trail tier
@@ -3344,33 +3347,17 @@ func _handle_escape() -> void:
 
 ## Per slice: cheap, and the things the lapse exists to show.
 ##
-## The world CLOCK is deliberately not advanced here any more. It used to be,
-## once per slice, which tied the calendar to the per-FRAME slice budget --
-## and a lapse runs at a few frames a second, so the year came out several
-## times slower than the rate asked for. The clock now runs at the rate asked
-## for, once a frame, independently of how many slices a frame can afford
-## (see TimeLapse.calendar_seconds and _process).
-func _step_ecology_fine(delta: float, focus_player: Player) -> void:
-	_chunk_manager.step_worms(delta)
-	if focus_player != null:
-		_chunk_manager.step_fruiting(delta, focus_player.position)
-
-
-## The batched ecology steps -- population, growth and economy, each moving
-## on world time -- run on a StepCadence (FPS regression round 13; see
-## docs/concept/ecosystem_dynamics.md "Ecology steps run at a cadence, not a
-## frame rate"): each once per StepCadence.INTERVAL_SECONDS with the seconds
-## it waited, staggered across the interval's frames, instead of every one
-## of them every frame. Round 13 measured them at ~25 ms of a 6 fps frame --
-## and at 60 fps the same 25 ms of EVERY frame -- for walks over every
-## loaded chunk that change nothing anyone can see sixty times a second. At
-## or below 4 fps a frame is already an interval and every step runs every
-## frame, exactly as before. The table is built on first use (the chunk
-## manager exists only after _ready) in the order the steps used to run;
-## quest reconciliation stays after it, every frame, on its own accumulator.
 func _step_ecology_batch(delta: float, focus_player: Player) -> void:
+	_ecology_focus_player = focus_player
 	if _ecology_steps.is_empty():
 		_ecology_steps = {
+			# Worms and fruiting used to be the "fine" group, stepped once per
+			# time-lapse slice every frame (~5 ms of an 18 fps frame in round
+			# 13); both move on world time and now run on the same cadence.
+			"worms": _chunk_manager.step_worms,
+			"fruiting": func(elapsed: float) -> void:
+				if _ecology_focus_player != null:
+					_chunk_manager.step_fruiting(elapsed, _ecology_focus_player.position),
 			"ecosystem": _chunk_manager.step_ecosystem,
 			"forage": _chunk_manager.step_forage,
 			"tree_spread": _chunk_manager.step_tree_spread,
@@ -5022,7 +5009,6 @@ func _process(delta: float) -> void:
 		var simulated := 0.0
 		for slice in slices:
 			simulated += slice
-			_step_ecology_fine(slice, focus_player)
 		if simulated > 0.0:
 			_step_ecology_batch(simulated, focus_player)
 		_step_path_scarring(delta)
