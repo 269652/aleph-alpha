@@ -20338,4 +20338,12 @@ restored snapshot.
   (order, restored-store correctness, no cross-type bleed) -- GDScript/
   GUT cannot assert Big-O directly, so the real evidence is the live
   before/after measurement above, not a unit test.
+- ✅ Confirmed live: a second ~8-minute run with the fix held
+  `s_ecology` flat at 4-8 ms for the first ~5 minutes (vs the unfixed
+  run's climb to 142 ms over a comparable window).
+- 🚧 **Honest residual, not fixed this round:** the same run still
+  stepped up to 80-113 ms after ~5.5 minutes. `step_settlements`'s own
+  per-settlement loop runs for every settlement the world has EVER
+  founded, never scoped to loaded chunks or capped -- a second, real,
+  slower-growing session-length cost. Flagged for a follow-up.
 

@@ -4078,7 +4078,21 @@ observable contract (order preserved, correct after `from_dicts`, no
 cross-type contamination) rather than complexity itself -- GDScript/GUT
 has no reliable way to assert Big-O directly; the real evidence for the
 FIX is a second long-session run, not a unit test (see progress.md's
-ledger entry for that number once taken).
+ledger entry for the numbers).
+
+**Confirmed live.** A second ~8-minute run with the fix: `s_ecology`
+stayed flat at 4-8 ms for the first ~5 minutes (vs the unfixed run's
+smooth climb to 142 ms over a comparable window) -- the pathological,
+unbounded, all-history scan is gone. **Honest residual finding, not
+fixed here:** around the 5.5-minute mark `s_ecology` still stepped up to
+80-113 ms and stayed there. The fixed index only sped up GATHERING the
+settlement id list; `step_settlements`'s own per-settlement loop
+(production, trade, institution health, classification) still runs for
+**every settlement the world has ever founded**, never scoped to loaded
+chunks or capped -- a second, real, slower-growing cost that also never
+shrinks across a session. Flagged as a follow-up, not attempted this
+round: scoping that loop to nearby/loaded settlements (or paginating it)
+is a real design decision, not a drop-in index like this round's fix.
 
 ### In-flight foragers survive an unload; their trip's outcome does not (2026-09-09)
 
