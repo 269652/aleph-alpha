@@ -48,6 +48,9 @@ const Health = preload("res://src/gameplay/health.gd")
 const BossAggro = preload("res://src/gameplay/boss_aggro.gd")
 const LootTable = preload("res://src/gameplay/loot_table.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
+const CarcassGuts = preload("res://src/rendering/carcass_guts.gd")
+const CarrionForageBehavior = preload("res://src/gameplay/carrion_forage_behavior.gd")
+const Affinity = preload("res://src/gameplay/affinity.gd")
 const Knockback = preload("res://src/gameplay/knockback.gd")
 const HealthBar = preload("res://src/gameplay/health_bar.gd")
 const AnimalReproduction = preload("res://src/gameplay/animal_reproduction.gd")
@@ -184,6 +187,13 @@ const ATTACK_COOLDOWN := 0.8
 ## (one-shot-lethal) damage it deals on catching.
 const PREDATION_RANGE := 12.0
 const PREDATION_DAMAGE := 1000.0
+
+## A scavenging predator's bite against a Carcass/CarcassGuts (see
+## _try_scavenge). Deliberately much bigger than a decomposer's own
+## DecomposerMarker.BITE_AMOUNT (1.0) -- a bear or wolf tearing into a
+## carcass strips it far faster than an ant or beetle does, so a fresh
+## Carcass.DECOMPOSE_HEALTH pool goes in a handful of visits, not dozens.
+const SCAVENGE_BITE_AMOUNT := 5.0
 
 ## How long a knockback shove plays out over, in seconds (Hammerwatch-style
 ## slide, not an instant teleport -- see Knockback.step).
@@ -970,6 +980,7 @@ func _process(frame_delta: float) -> void:
 		_cached_stimuli = _scan_stimuli.duplicate()
 		for player in _nearby_in_group(PLAYER_GROUP, threat_radius):
 			_cached_stimuli.append(_stimulus_for(player, Ethogram.PLAYER))
+		_cached_stimuli.append_array(_scan_carrion_stimuli())
 		_append_tile_stimuli(_cached_stimuli)
 		_cached_threats = _nodes_of(_behavior.threats(_decision_context(null)))
 		_cached_caution_threats = (
@@ -2083,6 +2094,10 @@ func _apply_decision(decision: Dictionary, delta: float) -> void:
 			_advance(decision.direction, HUNT_SPEED, delta)
 			_try_eat(_stimulus_node(decision))
 			_current_action = "attack"
+		"scavenge":
+			_advance(decision.direction, HUNT_SPEED, delta)
+			_try_scavenge(_stimulus_node(decision))
+			_current_action = "attack"
 		"seek_water":
 			_advance_gated(decision.direction, SEEK_SPEED, delta, false)
 		"seek_food":
@@ -2174,6 +2189,26 @@ func _try_eat(target: Node) -> void:
 		target.take_damage(PREDATION_DAMAGE)
 	_needs.feed()
 	_gain_energy()
+
+
+## A predator/omnivore's bite into a nearby Carcass/CarcassGuts (docs/concept/
+## carrion.md). Deliberately NOT _try_eat's shape: _try_eat calls
+## _needs.feed() unconditionally after only checking has_method("take_
+## damage"), which neither Carcass nor CarcassGuts implements -- reusing it
+## here would silently free-feed a predator standing next to a carcass with
+## nothing landing. take_bite() is the real, shared "did anything actually
+## happen" answer (false on a not-yet-rotten Carcass, always true on
+## CarcassGuts), so feeding only follows a bite that returns true.
+func _try_scavenge(target: Node) -> void:
+	if target == null:
+		return
+	if position.distance_to(target.position) > PREDATION_RANGE:
+		return
+	if not target.has_method("take_bite"):
+		return
+	if target.take_bite(SCAVENGE_BITE_AMOUNT):
+		_needs.feed()
+		_gain_energy()
 
 
 ## Strips any component of `step` that points toward the nearest CAUTION_
@@ -2796,6 +2831,31 @@ func _nearby_herbivore_creatures() -> Array:
 	if info.is_predator:
 		return []
 	return _scan_nonpredator_candidates
+
+
+## Nearby Carcass/CarcassGuts as CARRION stimuli (docs/concept/carrion.md's
+## "opportunistic predator/omnivore" Status gap) -- gated on is_predator the
+## same way _nearby_herbivore_creatures is gated the other direction: only a
+## predator/omnivore ever looks for carrion, so a herbivore never publishes
+## this regardless of what is rotting nearby. A fly-blown carcass reads as
+## closer than its real distance, the same discount DecomposerMarker's own
+## _nearest_food already gives it (CarrionForageBehavior.effective_distance),
+## so a predator is drawn to it exactly the way a decomposer already is.
+func _scan_carrion_stimuli() -> Array:
+	if not info.is_predator:
+		return []
+	var stimuli: Array = []
+	for node in _nearby_in_group(Carcass.GROUP_NAME) + _nearby_in_group(CarcassGuts.GROUP_NAME):
+		var distance := position.distance_to(node.position)
+		var fly_count: int = node.fly_count() if node.has_method("fly_count") else 0
+		var effective := CarrionForageBehavior.effective_distance(distance, fly_count)
+		stimuli.append({
+			"position": node.position,
+			"features": {Ethogram.CARRION: 1.0},
+			"node": node,
+			"strength": Affinity.proximity(effective),
+		})
+	return stimuli
 
 
 ## Cached node lists can span several frames (see SENSE_INTERVAL); a cached
