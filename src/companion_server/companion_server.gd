@@ -2,13 +2,16 @@ extends Node
 
 ## The companion webserver's real socket glue -- owns a TCPServer bound to
 ## 127.0.0.1, accepts connections, and dispatches each request through the
-## pure parser/router/view/response modules. Deliberately NOT unit-tested
-## (no GUT test file): real socket I/O isn't something a headless test
-## suite should exercise, the same "engine side effects aren't unit-tested"
-## boundary src/licensing/github_device_auth.gd already draws for its own
-## real HTTPRequest glue -- every branch/decision that CAN be pure already
-## is (companion_http_request.gd, companion_router.gd, the three view
-## renderers), leaving this file as thin as possible on purpose.
+## pure parser/router/view/response modules. Every branch/decision that
+## CAN be pure already is (companion_http_request.gd, companion_router.gd,
+## the view renderers), leaving this file as thin as possible on purpose.
+## The glue itself is covered by tests/unit/test_companion_server.gd over a
+## real loopback socket on an OS-assigned port (listen_port below). It
+## started out deliberately untested -- the same "engine side effects
+## aren't unit-tested" boundary src/licensing/github_device_auth.gd draws
+## for its real HTTPRequest glue -- until a live bug (the pause hang, see
+## _ready) proved the one thing that can go wrong here, the Node
+## lifecycle, is exactly what no pure test ever sees.
 ##
 ## Registered as an autoload (project.godot's [autoload]), not instanced
 ## from scenes/world.gd: world.gd's _ready() re-runs on
@@ -47,20 +50,42 @@ const _MAX_REQUEST_BYTES := 4096
 const _POLL_ATTEMPTS := 20
 const _POLL_DELAY_MSEC := 1
 
+## The port _ready() binds. The autoload leaves it at CompanionRouter.PORT;
+## a test instance sets it to 0 BEFORE entering the tree to get an
+## OS-assigned ephemeral port instead (see bound_port()), so it never
+## races the real autoload for 8731 the way a second hand-made copy on the
+## same port would (tools/probe_companion_server.gd's header).
+var listen_port: int = CompanionRouter.PORT
+
 var _tcp_server: TCPServer
 
 
 func _ready() -> void:
+	# scenes/world.gd pauses the whole SceneTree while the main menu is up
+	# (_show_main_menu), while the settings overlay is open
+	# (_toggle_settings_menu) and for the joust/handheld Easter eggs. A node
+	# that inherits that pause state never runs _process, so every
+	# connection was accepted by the OS listen backlog and then hung with
+	# no response for as long as the menu was up (live, 2026-09-12). The
+	# server has nothing to respect in a pause: it reads a saved file,
+	# never live world state.
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_tcp_server = TCPServer.new()
-	var err := _tcp_server.listen(CompanionRouter.PORT, "127.0.0.1")
+	var err := _tcp_server.listen(listen_port, "127.0.0.1")
 	if err != OK:
 		# Most likely another running instance (a second dev/test run)
 		# already bound this port -- the companion server is optional and
 		# must never take the game down for a reason this unrelated.
-		push_warning("CompanionServer: could not bind 127.0.0.1:%d (err %d) -- companion server disabled this session." % [CompanionRouter.PORT, err])
+		push_warning("CompanionServer: could not bind 127.0.0.1:%d (err %d) -- companion server disabled this session." % [listen_port, err])
 		_tcp_server = null
 		return
-	print("Companion server: http://127.0.0.1:%d/" % CompanionRouter.PORT)
+	print("Companion server: http://127.0.0.1:%d/" % bound_port())
+
+
+## The port actually being served this session -- the OS-assigned one when
+## listen_port was 0 -- or 0 when the bind failed and the server is off.
+func bound_port() -> int:
+	return 0 if _tcp_server == null else _tcp_server.get_local_port()
 
 
 func _process(_delta: float) -> void:

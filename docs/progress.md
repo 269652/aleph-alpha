@@ -14529,6 +14529,35 @@ survive) — confirmed red for the expected reason before the fix, green
 (58/58, `test_hero_sprite.gd` + `test_procedural_character_sprite.gd`)
 after.
 
+✅ **Serves while the SceneTree is paused (main menu, settings overlay).**
+Reported live 2026-09-12 on a plain relaunch: `CompanionServer` printed its
+boot line, one GET during the still-loading boot phase was served
+normally, and every connection after the main menu appeared was accepted
+by the OS listen backlog and then hung forever with no response (curl >
+300 s, a browser navigate timed out) while the game itself stayed fully
+responsive. Root cause, confirmed in code: the autoload never set a
+`process_mode`, so it inherited the tree's pause state, and
+`scenes/world.gd` pauses the whole tree behind the main menu
+(`_show_main_menu`), while the settings overlay is open
+(`_toggle_settings_menu`) and for the joust/handheld Easter eggs — a paused
+node never runs `_process`, and `_process` is the only place a pending
+connection is ever taken. Fixed with `process_mode = PROCESS_MODE_ALWAYS`
+in its `_ready()`; world.gd's pause logic is intentional and untouched.
+The transport glue had been deliberately untested (its own header said
+so); this bug lives entirely in that glue, so it now has
+`tests/unit/test_companion_server.gd`: a structural pin on the registered
+autoload's `process_mode`, plus real loopback round trips against an
+instance told to listen on an OS-assigned port (`listen_port = 0` /
+`bound_port()`, so it never races the autoload or a running game for
+8731) — a control with the tree running, and the bug itself with
+`get_tree().paused = true`. Red first for the expected reason (control
+200, paused request never answered, autoload `process_mode` INHERIT), 4/4
+green after. Test-client gotcha worth keeping: the server's
+`_read_request` blocks the main thread for its ~20 ms poll window right
+after accepting, so a client that yields a frame between connecting and
+sending always misses it — the test connects and sends synchronously
+inside one frame, as a real browser/curl effectively does.
+
 ⬜ **Settlement dashboard.** Blocked on a real design decision, not a
 missing view: the live `VillageMarket`/`NpcEconomy` purse (what a player
 actually sees) is never persisted (recreated empty on every chunk load),

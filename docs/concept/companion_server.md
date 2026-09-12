@@ -259,6 +259,22 @@ survives that. A failed bind (port already taken by another running
 instance) is caught, logged, and never takes the game down — the companion
 server is optional by construction.
 
+**It serves while the SceneTree is paused, too** (`process_mode =
+PROCESS_MODE_ALWAYS`, set in its `_ready()`). `scenes/world.gd` pauses the
+whole tree behind the main menu, while the settings overlay is open, and
+during the joust/handheld Easter eggs; a server that merely inherited that
+pause state never ran its `_process`, so every connection was accepted by
+the OS listen backlog and then hung with no response for exactly as long as
+the menu was up (confirmed live, 2026-09-12: one request served during
+boot, every one after the menu appeared hung, game itself fully
+responsive). Nothing the server reads is live world state — a pause is not
+something it has any reason to observe. `tests/unit/test_companion_server.gd`
+pins this over a real loopback round trip with `get_tree().paused = true`,
+against an instance told to listen on an OS-assigned port (`listen_port =
+0`, read back via `bound_port()`) — never a second copy on 8731, which
+would only race the real autoload (and, on a dev machine, a running game)
+for the same port.
+
 Tier 2 writes (unbuilt): a minimal local endpoint the running Godot process
 exposes for proposals only, validated by the same core the rest of the sim
 calls.
