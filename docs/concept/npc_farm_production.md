@@ -86,18 +86,43 @@ fenced plot costs meaningfully less than Storage's own enclosed lumber shed
 (12 wood + 4 plank), since there is no roof or walls to raise, just ground
 to till and fence.
 
+### The fence gate: a Farm needs a real wooden_fence before anyone works it
+
+Reported directly: "buildings like the farm require a fence and then an NPC
+can get hired." A placed `"farm"` does NOT automatically get a Farmer the
+way a Sägewerk automatically gets a Lumberjack — a real `"wooden_fence"`
+placeable (`ItemCatalog`, `wood` x3, no skill gate — the least
+technological construction here alongside `stone_dam`) must stand within
+`FARM_FENCE_GATE_RADIUS_TILES` (matches `SAGEWERK_STORAGE_PAIR_RADIUS_TILES`'s
+own magnitude — "the same worksite," not a farm-specific number) before a
+Farmer moves in. This is real-world grounded (a tilled plot left unfenced
+invites deer/rabbits to eat the crop before it's ever harvested) and gives
+the Farm a genuine two-step build order a player discovers rather than
+being told: build the plot, then fence it, then it comes alive.
+
+Reconciliation runs both directions and retroactively: building the fence
+AFTER the farm still staffs it (`EarthChunkManager._reconcile_all_known_
+farmers` re-checks every real farm tile in every loaded chunk whenever a
+wooden_fence appears or disappears anywhere — not just already-staffed
+farms, since an unfenced farm has no Farmer yet to re-pair), and destroying
+the only nearby fence sends the Farmer away (despawns it) rather than
+leaving an orphaned worker with no gate condition left to satisfy. A
+reloaded chunk re-evaluates the gate fresh rather than trusting whatever
+was staffed before the unload, so a fence destroyed while its farm's chunk
+was unloaded is honored correctly on the next visit.
+
 ### The Farmer
 
-The moment a `"farm"` tile is placed (or reloaded from a persisted
-modification, mirroring the Sägewerk's own re-staffing-on-load behavior),
-exactly one `FarmerMarker` spawns there — "an NPC moves in", the same
-framing [timber_construction.md](timber_construction.md) already
-established for the Lumberjack. Deliberately NOT the full
-`NpcMarker`/`NpcIdentity` occupation stack (no daily schedule, no
-hunger/wallet economy) — the same narrow-purpose-walker shape
-`LumberjackMarker`/`DecomposerMarker`/`LogisticsMarker` already use, for the
-same reason: a single fixed loop over a few owned plots is the wrong shape
-for that machinery.
+The moment a `"farm"` tile is placed WITH a real fence already in reach (or
+reloaded from a persisted modification that still satisfies the gate,
+mirroring the Sägewerk's own re-staffing-on-load behavior), exactly one
+`FarmerMarker` spawns there — "an NPC moves in", the same framing
+[timber_construction.md](timber_construction.md) already established for
+the Lumberjack. Deliberately NOT the full `NpcMarker`/`NpcIdentity`
+occupation stack (no daily schedule, no hunger/wallet economy) — the same
+narrow-purpose-walker shape `LumberjackMarker`/`DecomposerMarker`/
+`LogisticsMarker` already use, for the same reason: a single fixed loop
+over a few owned plots is the wrong shape for that machinery.
 
 The Farmer owns a small, fixed number of real `FarmPlotMarker` instances
 (reusing the exact same tilled-soil/crop-art rendering a player's own farm
@@ -131,6 +156,33 @@ A player with no Storage/Logistics built yet still has a direct way to
 collect: mirroring `Player._collect_step`'s exact shape, standing near a
 Farm and swinging withdraws whatever real wheat stock has piled up straight
 into inventory.
+
+### Real art
+
+Farm, Sägewerk, and Storage (plus the wooden_fence that gates a Farm) now
+render with real illustrated art (`IllustratedStructureSprite`) instead of
+the crude procedural tile look — a real user-supplied reference sheet per
+subject (farmhouse/sawmill/warehouse/wooden_fence), sliced with a known
+fixed grid, chroma-keyed and despilled, mirroring
+`illustrated_beehive_sprite.gd`'s established precedent. Rendered as a real
+overlay `Sprite2D` standing on the structure's own tile (`EarthChunkManager.
+_structure_art_sprites`), scaled via a "footprint" anchor (width matches
+the tile, height scales by the same factor, so a structure taller than one
+tile — Sägewerk/Storage's own portrait-oriented art — stays taller, and one
+wider than tall — Farm/wooden_fence's own landscape-oriented art — stays
+wider) rather than squashed into a single small tile texture, per
+`IllustratedArtLoader`'s own documented "footprint" anchor contract. The
+underlying ground tile is unchanged (bare earth) — purely additive, and
+every placeable with no real art yet (campfire/furnace/stone_dam) keeps
+rendering exactly as before.
+
+Each sheet is a genuine construction → idle → damaged → ruined progression
+(farmhouse/sawmill/warehouse: 5 rows; wooden_fence: 4 rows) — real, useful
+content for a future pass — but only the row that reads "freshly built,
+currently in use" is wired to anything today, since nothing in this
+codebase yet tracks a single-tile placeable's build progress or condition
+the way `BuildingPiece` walls do. Animating through those states is a real,
+deliberately out-of-scope follow-up (see "Open questions").
 
 ### Persistence and the two fidelities
 
@@ -188,11 +240,14 @@ pillar 3 promised.
 
 ## Status
 
-✅ Farm placeable + recipe, Farmer worker (till/water/harvest loop over a
-fixed small plot cluster), StructureStock crediting, Storage/Logistics
-pairing (reusing `LogisticsMarker` unmodified), and a direct player
-collection fallback — see `docs/progress.md`'s Farming section for the
-exact real/tested account.
+✅ Farm placeable + recipe, the wooden_fence gate (retroactive both
+directions, survives reload), Farmer worker (till/water/harvest loop over a
+fixed small plot cluster, real tested end-to-end wheat yield, no owned plot
+ever left to wither over a long run), StructureStock crediting, Storage/
+Logistics pairing (reusing `LogisticsMarker` unmodified), a direct player
+collection fallback, and real illustrated art (farm/sagewerk/storage/
+wooden_fence, replacing the crude procedural look) — see `docs/progress.md`'s
+Farming section for the exact real/tested account.
 
 ## Open questions
 
@@ -212,3 +267,8 @@ exact real/tested account.
 - **Milling and baking.** Wheat → flour → bread is the obvious next
   production-chain link (real-world grounding above) and is deliberately
   not built here — this pass ships the grain, not the chain past it.
+- **Construction/damage/ruin art states.** Each real art sheet already
+  draws a full construction → idle → damaged → ruined progression (see
+  "Real art" above) — wiring it to a real build-progress/condition system
+  for single-tile placeables (today none exists) is a genuine, deliberately
+  deferred follow-up, not a missing asset.

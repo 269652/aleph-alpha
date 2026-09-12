@@ -2261,6 +2261,7 @@ func _perform_attack() -> void:
 	_pull_wild_crop_step()
 	_butcher_step()
 	_collect_step()
+	_collect_farm_step()
 	_harvest_farm_plot_step()
 
 
@@ -2535,6 +2536,34 @@ func _collect_step() -> void:
 			continue
 		_chunk_manager.withdraw_from_structure_at(sagewerk_tile.x, sagewerk_tile.y, item_id, available)
 		inventory.add(_item_catalog.make(item_id), available)
+
+
+## Collecting: the Farm's own direct-collection counterpart to
+## _collect_step above (see docs/concept/npc_farm_production.md) -- a swing
+## near a real, nearby Farm withdraws whatever real wheat stock its Farmer
+## has piled up (StructureStock, credited by FarmerMarker._perform_action)
+## straight into the player's own inventory. Reuses SAGEWERK_COLLECT_RADIUS_
+## TILES rather than inventing a farm-specific number -- the same "standing
+## near a placed structure" proximity every collection step here uses.
+func _collect_farm_step() -> void:
+	if _chunk_manager == null:
+		return
+	var tile := current_tile()
+	if not _chunk_manager.has_structure_near(tile.x, tile.y, "farm", SAGEWERK_COLLECT_RADIUS_TILES):
+		return
+	var farm_pixel = _chunk_manager.nearest_structure_position(
+		position, "farm", float(SAGEWERK_COLLECT_RADIUS_TILES) * TerrainRenderer.TILE_SIZE
+	)
+	if farm_pixel == null:
+		return
+	var farm_tile := Vector2i(
+		floori(farm_pixel.x / TerrainRenderer.TILE_SIZE), floori(farm_pixel.y / TerrainRenderer.TILE_SIZE)
+	)
+	var available: int = _chunk_manager.structure_stock_at(farm_tile.x, farm_tile.y, "wheat")
+	if available <= 0:
+		return
+	_chunk_manager.withdraw_from_structure_at(farm_tile.x, farm_tile.y, "wheat", available)
+	inventory.add(_item_catalog.make("wheat"), available)
 
 
 ## Harvesting: on an attack swing, if the tile the player is FACING carries
