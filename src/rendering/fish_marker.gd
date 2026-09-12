@@ -604,6 +604,16 @@ const WATER_TILE_CACHE_REFRESH_SECONDS := 1.0
 static var _water_tile_cache: Dictionary = {}  # Vector2i tile -> bool
 static var _water_tile_cache_at: Dictionary = {}  # Vector2i tile -> msec answered
 static var _water_tile_cache_world = null
+## The river current, cached the same way (FPS regression round 12, second
+## piece): with the water answers shared, `_current_at` was the largest slice
+## left in a fish step -- every tile a fish crossed re-asked the hydrology,
+## a fish dithering on a tile edge re-asked it every step, and a whole shoal
+## asked for the same few tiles. The current is a property of the tile, so
+## one answer per tile per refresh window serves every fish on it.
+const RIVER_CURRENT_CACHE_REFRESH_SECONDS := 1.0
+static var _river_current_cache: Dictionary = {}  # Vector2i tile -> {direction, speed_m_s}
+static var _river_current_cache_at: Dictionary = {}  # Vector2i tile -> msec answered
+static var _river_current_cache_world = null
 static var _cached_fish: Array = []
 
 
@@ -962,9 +972,11 @@ const CURRENT_FULL_M_S := 0.8
 const UPSTREAM_FLAP_SHORTENING := 0.7
 
 var _upstream_effort := 0.0
-## The current is a property of the TILE, so it is asked once per tile the
-## fish crosses, not once per frame per fish -- found live as a collapse
-## to a few frames per second with a few dozen fish in view.
+## The current is a property of the TILE, so it is looked up once per tile
+## the fish crosses, not once per frame per fish -- found live as a collapse
+## to a few frames per second with a few dozen fish in view. The lookup
+## itself goes through the shared per-tile cache above, so a crossing only
+## reaches the hydrology when nobody has asked for that tile this window.
 var _current_tile := Vector2i(2147483647, 2147483647)
 var _current_cached := {"direction": Vector2.ZERO, "speed_m_s": 0.0}
 
@@ -978,8 +990,25 @@ func _current_at(pixel_position: Vector2) -> Dictionary:
 	var tile := Vector2i(int(floor(pixel_position.x / _tile_size)), int(floor(pixel_position.y / _tile_size)))
 	if tile != _current_tile:
 		_current_tile = tile
-		_current_cached = _world.river_current_at_global(tile.x, tile.y)
+		_current_cached = _current_at_tile(tile, Time.get_ticks_msec())
 	return _current_cached
+
+
+## The shared answer for one tile: served from the cache while it is younger
+## than RIVER_CURRENT_CACHE_REFRESH_SECONDS, asked of the world otherwise.
+## `now_msec` is injected for the same reason the water cache's is.
+func _current_at_tile(tile: Vector2i, now_msec: int) -> Dictionary:
+	if _river_current_cache_world != _world:
+		_river_current_cache.clear()
+		_river_current_cache_at.clear()
+		_river_current_cache_world = _world
+	if (_river_current_cache.has(tile)
+		and now_msec - int(_river_current_cache_at[tile]) < int(RIVER_CURRENT_CACHE_REFRESH_SECONDS * 1000.0)):
+		return _river_current_cache[tile]
+	var answer: Dictionary = _world.river_current_at_global(tile.x, tile.y)
+	_river_current_cache[tile] = answer
+	_river_current_cache_at[tile] = now_msec
+	return answer
 
 
 ## Multiplier on swim speed for a heading against/with a current.

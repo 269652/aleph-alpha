@@ -257,6 +257,9 @@ func before_each():
 	FishMarker._water_tile_cache_world = null
 	FishMarker._water_tile_cache.clear()
 	FishMarker._water_tile_cache_at.clear()
+	FishMarker._river_current_cache_world = null
+	FishMarker._river_current_cache.clear()
+	FishMarker._river_current_cache_at.clear()
 
 
 func after_each():
@@ -1459,3 +1462,50 @@ func test_the_cached_answer_is_the_real_one_including_the_shore_rule():
 	assert_true(marker._is_water_at_tile(Vector2i(11, 6), 1000), "the fully-covered column")
 	assert_false(marker._is_water_at_tile(Vector2i(10, 6), 1000), "the bank column borders land: not swimmable, cached or not")
 	assert_false(marker._is_water_at_tile(Vector2i(11, 6), 1000) == false, "and asking again does not flip it")
+
+
+# -- shared per-tile river-current cache (FPS regression round 12, second
+# piece): with the water checks cached, current_at became the largest
+# remaining slice of a fish step (~0.09 ms of ~0.29): a fish crossing into a
+# new tile every step re-asked the hydrology for that tile's current, and
+# every fish in the same shoal asked for the same tiles. Same shared, world-
+# keyed, per-entry-refreshed cache as the water answers.
+
+
+## A river-everywhere world that counts how often its current is asked.
+class CountingCurrentWorld extends RiverWorld:
+	var current_queries := 0
+	func river_current_at_global(x: int, y: int) -> Dictionary:
+		current_queries += 1
+		return super.river_current_at_global(x, y)
+
+
+func test_the_river_current_cache_refresh_interval_is_pinned():
+	assert_eq(FishMarker.RIVER_CURRENT_CACHE_REFRESH_SECONDS, 1.0)
+
+
+func test_a_tiles_river_current_is_asked_once_per_window_and_shared_across_fish():
+	var world := CountingCurrentWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var other := FishMarker.new()
+	add_child(other)
+	_extra.append(other)
+	other.setup(world, TILE_SIZE)
+	var tile := Vector2i(6, 6)
+	var first: Dictionary = marker._current_at_tile(tile, 1000)
+	assert_eq(world.current_queries, 1, "the first answer comes from the hydrology")
+	var shared: Dictionary = other._current_at_tile(tile, 1050)
+	assert_eq(world.current_queries, 1, "a schoolmate on the same tile reads the shared answer")
+	assert_eq(shared, first)
+	var window_ms := int(FishMarker.RIVER_CURRENT_CACHE_REFRESH_SECONDS * 1000.0)
+	other._current_at_tile(tile, 1000 + window_ms + 1)
+	assert_eq(world.current_queries, 2, "once the window has elapsed the hydrology is asked again")
+
+
+func test_the_current_still_drives_swimming_speed_through_the_cache():
+	var world := RiverWorld.new()
+	world.current_speed = 0.8
+	marker.setup(world, TILE_SIZE)
+	var current: Dictionary = marker._current_at(marker.position)
+	assert_eq(current["direction"], Vector2.RIGHT)
+	assert_eq(current["speed_m_s"], 0.8)
