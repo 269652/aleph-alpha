@@ -3821,9 +3821,55 @@ hover walk (24 marker classes, no per-chunk registry) is NOT scoped this
 round; its idle gate from round 10 already keeps it at 4 Hz while the
 mouse rests.
 
-**Result (clean `--print-fps`, same snapshot, idle machine):** _round 10
-build 5-13 fps, median 9; first-cut scheduler median 6; shipped build --
-see `progress.md`'s entry for this round for the run-6 figure._
+**Result -- measured properly, and honestly a wash at today's operating
+point.** The first three clean runs (round 10 -> scheduler v1 -> shipped
+build, each from the previous run's autosave) read 9 -> 6 -> 6 median fps
+and looked like a regression; the controlled A/B/A/B below, both builds
+from the SAME refreshed snapshot, says otherwise:
+
+| run | build | steady-state fps (n) | other processes' share of the machine |
+|---|---|---|---|
+| 1 | round 10 (`6ea55fe3`) | median 5, mean 4.4 (70) | 23.1 % |
+| 2 | round 11 (`a7854b5d`) | median 5, mean 4.8 (61) | 25.6 % |
+| 3 | round 10 | median 4, mean 4.5 (142) | 21.7 % |
+| 4 | round 11 | median 4, mean 4.4 (106) | 22.3 % |
+
+No measurable difference between the builds, and every run ran with a
+fifth to a quarter of the machine taken by other processes (Docker,
+Teams, several concurrent Claude sessions) -- which is also why today's
+absolute numbers sit at 4-5 fps where yesterday's sat at 9. The three
+costs this round removes are real and were each measured in round 10
+(~10 ms of idle dispatch, ~8 ms of far-chunk litter, ~4 ms per prompt
+refresh), but together they are ~4-5 % of a 220 ms frame: below the
+noise of a contended machine, and only decisive once the frame is small
+enough for 10 ms to matter. The machinery stays (it is tested end to end
+and is what a small frame needs); the gain is not claimed until it can be
+seen.
+
+**Found on the way, measured, not fixed: a save left alone for a day
+reloads at carrying capacity, and the A/B methodology had to change
+because of it.** Every chunk's persisted ecology carries `saved_at_unix`
+(`EarthChunkManager._apply_persisted_ecology`), and on load the catch-up
+is fed the REAL seconds since -- capped at `MAX_CATCHUP_DAYS` (120) x
+`ChunkEcologyCatchup.SECONDS_PER_DAY` (3600 s), i.e. a save older than
+five real days converges every region to its equilibrium in one step.
+That is the design ("the world keeps living"), and the step itself is
+closed-form and cheap -- but its RESULT is the heaviest world the save
+can express: every population at capacity, every chunk's fruit stock at
+its ceiling, so the next launch pays a far heavier boot (the first A/B
+attempt, from a ~27-hour-old snapshot, never left loading in 330 s:
+51 frames at ~6.5 s each) and then runs the heaviest steady state. The
+player's own save is in exactly this state after any night away. Two
+consequences for measurement: a round-to-round comparison must start
+both builds from the SAME snapshot with the SAME save age (the ecology
+timestamps were refreshed to "now", a plain 8-byte write at offset 12 of
+each 40-byte record, to get a representative, non-saturated base), and
+this machine's background load varies by the minute (several concurrent
+Claude sessions, Docker, Teams in the process table), so the interleaved
+A/B/A/B runs below each record the CPU-seconds other processes consumed
+during the run. Worth its own round: a catch-up that lands a region at
+capacity should not also spawn every last creature the moment the chunk
+loads.
 
 **Honestly still open, with round 10's numbers:** fish steps at ~0.5 ms
 EACH (17 ms/frame at 20 % stepped -- split `fish._process` the way round

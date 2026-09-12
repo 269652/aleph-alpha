@@ -20120,3 +20120,54 @@ started from the previous run's slightly heavier world (ant foragers
 675 -> 815 live between runs 1 and 3, leaves 45 -> 170). Boot unchanged
 (~130 s wall-clock; multi-second single frames print at most one sample
 each, which is why only ~70 boot samples appear).
+
+### FPS regression round 11: the scheduler, far-chunk advance, scoped prompt scans (2026-09-12)
+
+"Keep going with the scheduler so we get closer to 60fps." Full write-up,
+including the first cut that measured WORSE and why, in
+`concept/soil_fauna.md` "FPS regression round 11"; the scheduler's spec in
+`concept/ecosystem_dynamics.md` "Per-creature update rate inside loaded
+chunks (`SimulationLod`)"; the far-chunk gate in `concept/leaf_litter.md`.
+
+**Shipped, all strict TDD:**
+
+- ✅ `SimulationScheduler` (`src/gameplay/simulation_scheduler.gd`, 8/8 in
+  `test_simulation_scheduler.gd`; World wiring 4/4; fish hand-off 2 in
+  `test_fish_marker.gd`; `SimulationLodClock` +2, 11/11): every LOD-
+  throttled marker is adopted on its first real step -- its engine
+  `_process` switched off once, for good -- and stepped by the scheduler
+  instead: every frame while near the player, only on its due frame while
+  far, with its clock primed with the real time it waited. **The first cut
+  (park/wake by toggling `set_process`) was measured live at median 6 fps
+  against round 10's 9** -- each toggle is an O(nodes) process-group
+  erase/insert plus a re-sort of the ~24k-node group on any frame that
+  toggled, i.e. every frame -- and was replaced before merging, not after.
+- ✅ `EarthChunkManager.FAR_CHUNK_ADVANCE_SECONDS` (7/7 in
+  `test_earth_chunk_manager_far_chunk_advance.gd`): leaf litter and
+  footprints in chunks outside decoration range advance once per second
+  of accumulated time (all of it handed over, flushed on return) instead of
+  every frame -- the ~8 + ~2-4 ms/frame round 10 measured. A pre-existing
+  Nil-into-typed-Dictionary landmine in `step_footprints` fixed on the way.
+- ✅ `EarthChunkManager.chunk_coords_within` + scoped `nearest_npc_near` /
+  `nearest_liftable_stone_near` (8/8 in
+  `test_earth_chunk_manager_prompt_scans.gd`): the interaction prompt's
+  scans visit the one to four chunks a 34-48 px reach can touch, not all
+  30 loaded chunks' lists (~4 ms per refresh before).
+
+**Result: no measurable steady-state change at today's operating point,
+established by a controlled A/B/A/B** (both builds from the same
+refreshed snapshot; round 10 vs round 11: median 5 vs 5 and 4 vs 4 fps,
+means 4.4 vs 4.8 and 4.5 vs 4.4) -- with 21-26 % of the machine consumed
+by other processes during every run, which is why today's absolute
+numbers are 4-5 fps against yesterday's 9. The three removed costs
+(~10 + ~8 + ~4 ms) are real but ~4-5 % of a 220 ms frame; the gain is
+not claimed until the frame is small enough to show it. Also found and
+documented in soil_fauna.md: a save left alone for a day reloads every
+region at carrying capacity (`saved_at_unix` catch-up), the heaviest
+world the save can express -- the player's own save after any night
+away. 🚧 60 fps remains open;
+the arithmetic in soil_fauna.md's round-11 entry says why: ~2,500
+GDScript-simulated creatures at 0.1-0.5 ms per step come to ~30 ms of
+real work per frame at 60 fps even with perfect scheduling -- the next
+levers are cheaper steps (fish first, at ~0.5 ms each) and population
+caps, then the ~129 s boot.
