@@ -9237,12 +9237,39 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   the traffic it actually sent out), and it never encoded a direction or
   a stop signal into the pheromone field the way the replacement does.
   Full writeup: [soil_fauna.md](concept/soil_fauna.md#a-real-food-stock-number-not-just-a-percentage-on-hover).
-- ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
-  jackal actually walking to and eating a fresh carcass/guts instead of
-  only hunting live prey) — `take_bite`'s contract is already shaped to
-  support this, but wiring it into `CreatureBehavior`'s decision tree is a
-  real, separate AI change, deliberately deferred rather than folded into
-  this already-large pass.
+- **Opportunistic scavenging by existing predators/omnivores** (medium) —
+  ✅ Done — a predator with no live prey in reach now actually walks to
+  and eats a nearby carcass/guts, through the ethogram kernel
+  (`docs/concept/ethogram.md`) rather than a bespoke side system, closing
+  the gap this exact bullet named. New `Ethogram.CARRION` channel; mammal
+  body-plan default sensitivity/valence mirroring `FLESH`'s own shape
+  (sensitivity 1.0, valence 0.0 — every mammal senses a carcass, only a
+  predator wants it); one new hunger-gated wiring slotted between the
+  live-prey `hunt` wiring and the smell-channel `seek_food` one:
+  `{"gate": "hunger", "channels": [CARRION], "approach": "scavenge"}`.
+  `CreatureBehavior`'s adapter gets one more line identical in shape to
+  the existing `FLESH` override (`valence[CARRION] = 1.0 if is_predator
+  else 0.0`), reusing `CreatureInfo.PREDATOR_SPECIES` — no new
+  per-species table. `CreatureMarker._scan_carrion_stimuli` is gated on
+  `info.is_predator` the same way `_nearby_herbivore_creatures` is gated
+  the other direction (a herbivore never scans), scans the
+  `carcass`/`carcass_guts` groups within `SENSE_RADIUS`, and discounts a
+  fly-blown carcass's distance through the same `CarrionForageBehavior.
+  effective_distance` a `DecomposerMarker` already reads. A new
+  `_apply_decision` `"scavenge"` branch advances at `HUNT_SPEED` into a
+  new `_try_scavenge` — deliberately NOT `_try_eat`'s shape: `_try_eat`
+  calls `_needs.feed()` unconditionally once `has_method("take_damage")`
+  passes, which neither `Carcass` nor `CarcassGuts` implements, so reusing
+  it would be a free-feed exploit; `_try_scavenge` instead calls
+  `target.take_bite(SCAVENGE_BITE_AMOUNT)` and only feeds when that bite
+  actually lands (false on a carcass not yet rotten, always true on
+  guts). Pinned by `test_a_predator_body_plan_wires_carrion_to_a_
+  scavenge_approach` (`test_ethogram.gd`), `test_carrion_valence_is_
+  positive_only_for_predators` (`test_creature_behavior.gd`), and
+  `test_a_hungry_predator_with_no_live_prey_walks_to_and_bites_a_nearby_
+  carcass` / `test_a_herbivore_never_scans_for_carcasses` /
+  `test_scavenging_only_feeds_the_predator_when_the_bite_actually_lands`
+  (`test_creature_marker.gd`).
 - ⬜ Species-specific butcher yields (a bear's hide vs. a boar's hide) —
   every carcass-eligible species shares one part order/quantity today,
   mirroring `LootTable`'s own existing flat-by-role shape.
