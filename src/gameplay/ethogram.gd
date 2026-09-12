@@ -184,9 +184,11 @@ const BODY_PLANS := {
 		"receptors": {
 			"sensitivity": {
 				PREDATOR: 1.0, PLAYER: 1.0, FLESH: 1.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0, CARRION: 1.0,
+				SMOKE: 1.0,
 			},
 			"valence": {
 				PREDATOR: -1.0, PLAYER: -1.0, FLESH: 0.0, FORAGE: 1.0, WATER: 1.0, MATE: 1.0, CARRION: 0.0,
+				SMOKE: -1.0,
 			},
 		},
 		"drives": {

@@ -245,6 +245,19 @@ func test_a_body_plan_override_expresses_that_plans_defaults_for_any_species():
 	)
 
 
+## Most CreatureMarker species (bear, wolf, sheep, alpaca, squirrel, ...)
+## have no SPECIES record of their own -- only boar/deer/horse/robin/fly/
+## kingfisher do -- and run entirely on the mammal body plan's own receptor
+## defaults, exactly like `lynx` above. Those defaults already give
+## PREDATOR/PLAYER a -1.0 valence for that exact reason; SMOKE needs the
+## same body-plan-level default or a lit fire is undetectable to every
+## mammal that isn't one of the handful of species with its own nose.
+func test_the_mammal_body_plan_defaults_react_to_smoke_for_any_species():
+	var lynx := Ethogram.express("lynx", {}, "mammal")
+	assert_gt(lynx["sensitivity"]["smoke"], 0.0, "even a species with no record should smell smoke")
+	assert_lt(lynx["valence"]["smoke"], 0.0, "and want to get away from it")
+
+
 # -- slice 2: danger is no longer a verdict ------------------------------------
 
 ## The fear wiring listens on what the OTHER thing is; the species valence
