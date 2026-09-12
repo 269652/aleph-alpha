@@ -13,6 +13,13 @@ const Event = preload("res://src/emergence/event.gd")
 var _events: Dictionary = {}          # id -> Event
 var _order: Array[String] = []        # insertion order -- the deterministic read order
 var _by_entity: Dictionary = {}       # entity_id -> Array[String] (event ids, in order)
+## type -> Array[String] (event ids, in order) -- same shape as _by_entity,
+## same reason: events_of_type used to scan the WHOLE store (see that
+## function's own doc comment), so it got slower with every event of every
+## kind ever recorded, not just the type being asked for. A session that
+## keeps running -- more trades, more crushes, more market ticks -- made
+## every later settlement-step query pay for all of it.
+var _by_type: Dictionary = {}
 var _next_ordinal := 0
 
 
@@ -32,6 +39,7 @@ func append(event: Event) -> String:
 		_index_entity(entity_id, id)
 	for entity_id in event.witnesses:
 		_index_entity(entity_id, id)
+	_index_type(event.type, id)
 	return id
 
 
@@ -39,6 +47,12 @@ func _index_entity(entity_id: String, event_id: String) -> void:
 	if not _by_entity.has(entity_id):
 		_by_entity[entity_id] = []
 	_by_entity[entity_id].append(event_id)
+
+
+func _index_type(type: String, event_id: String) -> void:
+	if not _by_type.has(type):
+		_by_type[type] = []
+	_by_type[type].append(event_id)
 
 
 ## Records that `effect_id` was caused by `cause_id`: adds the cause to the
@@ -150,9 +164,8 @@ func cause_chain(event_id: String, max_depth: int = 16) -> Array[Event]:
 
 func events_of_type(type: String) -> Array[Event]:
 	var out: Array[Event] = []
-	for id in _order:
-		if _events[id].type == type:
-			out.append(_events[id])
+	for id in _by_type.get(type, []):
+		out.append(_events[id])
 	return out
 
 
@@ -192,6 +205,7 @@ static func from_dicts(dicts: Array) -> RefCounted:
 			store._index_entity(entity_id, event.id)
 		for entity_id in event.witnesses:
 			store._index_entity(entity_id, event.id)
+		store._index_type(event.type, event.id)
 		var ordinal := _ordinal_of(event.id)
 		if ordinal > highest_ordinal:
 			highest_ordinal = ordinal

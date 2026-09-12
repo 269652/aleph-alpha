@@ -20312,3 +20312,30 @@ section there updated for the new radius, interval and sweep.
   batch-body contract files were not re-run after the cadence landed.
   Re-verify before trusting.
 
+### FPS regression round 14: the frame that gets slower the longer you play (2026-09-12)
+
+"The performance gets worse the longer you play." Write-up in
+`concept/soil_fauna.md` "FPS regression round 14". The first round to
+watch a single continuous session age rather than measuring a fresh or
+restored snapshot.
+
+- ✅ Found live before touching code: a ~7-minute unattended
+  `--perf-report` run (unfixed) showed `s_ecology` climb 6 -> 142 ms and
+  fps fall 17 -> 4, ending in a real crash under the accumulated load.
+  Root cause: `EarthChunkManager._known_settlement_ids()` (called every
+  `step_settlements` tick, forever) scanned `EventStore`'s ENTIRE event
+  history to filter for settlement foundings -- every trade, crush,
+  birth, market tick, anything ever appended -- so the cost grew with
+  total session activity, not with the number of settlements. Predates
+  round 13; unrelated to the cadence work there.
+- ✅ `EventStore` gets a `_by_type` index (the same shape `_by_entity`
+  already provides for `/history`), kept in sync by both `append()` and
+  `from_dicts()` (a restored save must see events recorded before it was
+  saved). `events_of_type` reads the index; cost now scales with matches
+  of that type, not the store's total size. `events_in_window` has the
+  same shape but zero live callers and was left alone.
+- Tests (`test_event_store.gd`, +3): correctness of the indexed result
+  (order, restored-store correctness, no cross-type bleed) -- GDScript/
+  GUT cannot assert Big-O directly, so the real evidence is the live
+  before/after measurement above, not a unit test.
+
