@@ -1,17 +1,24 @@
 extends GutTest
 
-## Where a fresh single-player game (and a fresh multiplayer host) starts.
+## Where a fresh single-player game (and a fresh multiplayer host) starts
+## when no random curated-river bank qualifies (see SpawnRiverPicker,
+## docs/concept/rivers.md "Spawn: a random curated river") -- the FALLBACK
+## point, not the common case.
 ##
-## The Loire at Nantes (47.2031N, 1.5469W): an EMERGENT river -- a channel
-## of the baked drainage network (docs/concept/hydrology.md), not a curated
-## RiverCatalog course. Chosen from tools/probe_hydrology.gd's output on
-## 2026-09-03: the strongest baked channel in western France more than 400
-## tiles from every curated river, at the asset cell whose centre the
-## channel's centreline passes through. Previously the Freiburg Gaskugel
-## on the curated Dreisam (48.007669N, 7.805657E, 2026-08-29) and before
-## that Berlin (52.52N, 13.405E). Nothing else reads these two numbers
-## except World._compute_dry_land_spawn_tile(); the test files that
-## hardcode the literal 52.52/13.405 (test_earth_chunk_manager.gd,
+## The Freiburg Gaskugel on the curated Dreisam (48.007669N, 7.805657E),
+## RiverCatalog's own "this game's own spawn point" via-point. Reinstated
+## 2026-09-12 ("also set the future spawn point to dreisam") as the
+## fallback: a curated river with a real, named course beats an emergent
+## hydrology channel with no name at all as the point a session falls
+## back to when nothing else works out, and it's this project's own
+## original, oldest-standing spawn. History: Berlin (52.52N, 13.405E,
+## before 2026-08-29) -> Dreisam (2026-08-29) -> the Loire at Nantes, an
+## emergent channel with no curated course near it (47.2031N, 1.5469W,
+## 2026-09-03, chosen from tools/probe_hydrology.gd's own output as the
+## strongest baked channel in western France) -> back to Dreisam
+## (2026-09-12). Nothing else reads these two numbers except World.
+## _compute_dry_land_spawn_tile(); the test files that hardcode the
+## literal 52.52/13.405 (test_earth_chunk_manager.gd,
 ## test_world_ecology_batch_wild_crops.gd) use Berlin as a known-good
 ## REFERENCE chunk independent of the live spawn and are left alone.
 
@@ -24,15 +31,16 @@ const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 
 
-func test_spawn_is_the_loire_at_nantes():
-	assert_almost_eq(World.SPAWN_LATITUDE, 47.2031, 0.0001)
-	assert_almost_eq(World.SPAWN_LONGITUDE, -1.5469, 0.0001)
+func test_spawn_fallback_is_the_dreisam_at_freiburg():
+	assert_almost_eq(World.SPAWN_LATITUDE, 48.007669, 0.0001)
+	assert_almost_eq(World.SPAWN_LONGITUDE, 7.805657, 0.0001)
 
 
-## The spawn is on an EMERGENT river: a baked hydrology channel, which the
-## generator reports as a river with an empty name (no curated course
-## anywhere near it), fed by the shipped bake in assets/data/hydrology.
-func test_spawn_is_on_an_emergent_river_not_a_curated_one():
+## The fallback spawn is on a CURATED river -- the Dreisam, by name, the
+## exact via-point RiverCatalog's own doc comment already calls out as
+## "this game's own spawn point" -- not an emergent hydrology channel with
+## no name.
+func test_spawn_fallback_is_on_the_curated_dreisam_by_name():
 	var generator := EarthChunkGenerator.new()
 	assert_true(generator.has_hydrology(), "the shipped bake must load")
 	var geo := GeoCoordinates.new()
@@ -42,7 +50,7 @@ func test_spawn_is_on_an_emergent_river_not_a_curated_one():
 	)
 	assert_true(generator.is_river_at_global(spawn_tile.x, spawn_tile.y))
 	var nearest := generator.nearest_river_at(spawn_tile.x, spawn_tile.y)
-	assert_eq(nearest.name, "", "no curated river reaches Nantes")
+	assert_eq(nearest.name, "Dreisam", "the fallback sits on the curated Dreisam, by name")
 	assert_gt(generator.river_depth_meters_at_global(spawn_tile.x, spawn_tile.y), 0.0)
 
 
@@ -77,11 +85,12 @@ func test_spawn_climate_is_at_least_as_warm_as_the_old_berlin_spawn():
 	assert_gt(temperature, OLD_BERLIN_CLIMATE)
 
 
-## Real integration check (docs/concept/rivers.md, hydrology.md): the spawn
-## point sits ON the Loire's baked channel -- the whole reason this location
-## was picked. A dry-land search that didn't know about rivers would happily
-## accept the literal spawn tile even though it's the middle of the river;
-## _find_dry_land_spawn must search past it to real dry land instead.
+## Real integration check (docs/concept/rivers.md, hydrology.md): the
+## fallback spawn point sits ON the Dreisam's curated course -- the whole
+## reason this location was picked. A dry-land search that didn't know
+## about rivers would happily accept the literal spawn tile even though
+## it's the middle of the river; _find_dry_land_spawn must search past it
+## to real dry land instead.
 ##
 ## Not add_child()'d, same convention test_world_streaming_budget.gd/
 ## test_world_inventory_wiring.gd already use for a bare World.new() that
@@ -105,12 +114,13 @@ func test_find_dry_land_spawn_does_not_land_in_the_river_at_the_spawn_point():
 	)
 	manager.update(spawn_tile)
 
-	# Sanity: the literal spawn tile really is on the Loire's baked channel
-	# (the whole premise of this test) -- if this ever stops being true the
-	# test itself needs re-examining, not just the fix it's checking.
+	# Sanity: the literal spawn tile really is on the Dreisam's curated
+	# course (the whole premise of this test) -- if this ever stops being
+	# true the test itself needs re-examining, not just the fix it's
+	# checking.
 	assert_true(
 		manager.is_river_at_global(spawn_tile.x, spawn_tile.y),
-		"expected the raw spawn tile to be on the Loire's emergent channel"
+		"expected the raw spawn tile to be on the Dreisam's curated course"
 	)
 
 	var result := world._find_dry_land_spawn(spawn_tile)
@@ -125,9 +135,9 @@ func test_find_dry_land_spawn_does_not_land_in_the_river_at_the_spawn_point():
 
 ## A new game now starts on a random curated river (docs/concept/rivers.md
 ## "Spawn: a random curated river", src/world/spawn_river_picker.gd); the
-## Loire at Nantes pinned above is the FALLBACK when no river bank
-## qualifies. A dev launch (--solo) fixes the seed so a measurement lands
-## in the same place every run; --spawn-seed=N overrides either way.
+## Dreisam pinned above is the FALLBACK when no river bank qualifies. A
+## dev launch (--solo) fixes the seed so a measurement lands in the same
+## place every run; --spawn-seed=N overrides either way.
 func test_a_real_game_randomizes_its_spawn_and_a_dev_launch_fixes_it():
 	assert_eq(World.spawn_seed_for(PackedStringArray([])), -1, "a real new game: randomize")
 	assert_eq(World.spawn_seed_for(PackedStringArray(["--solo"])), 0, "a dev launch: the same river every time")
@@ -173,7 +183,7 @@ func test_a_spawn_candidate_must_be_a_warm_river_tile_between_sea_and_mountain()
 	creatures_parent.free()
 
 
-func test_the_spawn_is_picked_from_the_curated_rivers_and_falls_back_to_nantes():
+func test_the_spawn_is_picked_from_the_curated_rivers_and_falls_back_to_the_dreisam():
 	var source := FileAccess.get_file_as_string("res://scenes/world.gd")
 	var start := source.find("func _compute_dry_land_spawn_tile(")
 	assert_gt(start, -1, "the premise")
@@ -181,5 +191,5 @@ func test_the_spawn_is_picked_from_the_curated_rivers_and_falls_back_to_nantes()
 	assert_true(body.contains("SpawnRiverPicker.pick("), "a random curated river")
 	assert_true(body.contains("RiverCatalog.tile_polylines("), "drawn from the catalogue's real courses")
 	assert_true(body.contains("_spawn_candidate_acceptable"), "filtered by the bank check")
-	assert_true(body.contains("SPAWN_LATITUDE") and body.contains("SPAWN_LONGITUDE"), "Nantes remains the fallback")
+	assert_true(body.contains("SPAWN_LATITUDE") and body.contains("SPAWN_LONGITUDE"), "the Dreisam remains the fallback")
 	assert_true(body.contains("_session_spawn_picked"), "picked once per session, so every peer of a server shares it")
