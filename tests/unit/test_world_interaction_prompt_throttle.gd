@@ -21,6 +21,8 @@ const World = preload("res://scenes/world.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const CraftingWindow = preload("res://scenes/crafting_window.gd")
 const SkillTreeWindow = preload("res://scenes/skill_tree_window.gd")
+const QuestLogWindow = preload("res://scenes/quest_log_window.gd")
+const ConversationWindow = preload("res://scenes/conversation_window.gd")
 const PlayerScene = preload("res://scenes/player.tscn")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
@@ -53,6 +55,8 @@ var interaction_prompt: Label
 var inventory_window: PanelContainer
 var crafting_window: CraftingWindow
 var skill_window: SkillTreeWindow
+var quest_log_window: QuestLogWindow
+var conversation_window: ConversationWindow
 
 
 func before_each():
@@ -61,6 +65,12 @@ func before_each():
 	# their own local vars (rather than only reachable via world._foo) so
 	# after_each can free them explicitly -- world.free() does not cascade
 	# to them, since they were never actually added as its children.
+	#
+	# EVERY window World._any_gameplay_window_open reads must be wired here,
+	# each explicitly hidden: a window left unassigned is a Nil whose
+	# is_open() call is a script error (not a quiet "closed"), and one left
+	# at its default visibility counts as open -- their _ready() is what
+	# normally hides them, and _ready() never runs on a bare .new().
 	world = World.new()
 	interaction_prompt = Label.new()
 	world._interaction_prompt = interaction_prompt
@@ -73,6 +83,12 @@ func before_each():
 	skill_window = SkillTreeWindow.new()
 	skill_window.visible = false
 	world._skill_window = skill_window
+	quest_log_window = QuestLogWindow.new()
+	quest_log_window.visible = false
+	world._quest_log_window = quest_log_window
+	conversation_window = ConversationWindow.new()
+	conversation_window.visible = false
+	world._conversation_window = conversation_window
 
 	tile_map_layer = TileMapLayer.new()
 	entities_parent = Node2D.new()
@@ -98,6 +114,8 @@ func after_each():
 	inventory_window.free()
 	crafting_window.free()
 	skill_window.free()
+	quest_log_window.free()
+	conversation_window.free()
 	tile_map_layer.free()
 	entities_parent.free()
 	creatures_parent.free()
