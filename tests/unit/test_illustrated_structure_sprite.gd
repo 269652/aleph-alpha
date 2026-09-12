@@ -86,3 +86,43 @@ func test_subjects_lists_all_four():
 	for subject in ["farm", "sagewerk", "storage", "wooden_fence"]:
 		assert_true(subjects.has(subject))
 	assert_eq(subjects.size(), 4)
+
+
+# -- footprint scaling: a placed structure's art as a Sprite2D standing on --
+# -- its own tile, per IllustratedArtLoader's own documented "footprint" ----
+# -- anchor -- width matches the tile, height scales by the SAME factor so --
+# -- a structure taller than one tile (every one of these four is) stays ----
+# -- taller than one tile rather than being squashed to fit a square. -------
+
+
+func test_footprint_texture_is_null_for_an_unknown_subject():
+	assert_null(sprite.footprint_texture("not_a_real_subject", 16))
+
+
+func test_footprint_texture_width_matches_the_tile_size():
+	for subject in ["farm", "sagewerk", "storage", "wooden_fence"]:
+		var texture := sprite.footprint_texture(subject, 16)
+		assert_eq(texture.get_width(), 16, "%s footprint width should match tile_size" % subject)
+
+
+## sagewerk/storage's own source cells are visibly taller than wide (192
+## wide x ~205 tall) -- a uniform scale-by-width factor should therefore
+## leave the scaled height GREATER than tile_size, not squashed down to it,
+## the whole point of the footprint anchor over a plain square resize.
+## farm/wooden_fence's own cells are wider than tall (a landscape house
+## scene; a horizontal fence rail) -- their footprint height legitimately
+## comes out smaller than tile_size, a real difference in the source art,
+## not a bug (see test_footprint_texture_height_matches_the_idle_images_
+## own_aspect_ratio for the actual scaling contract that covers all four).
+func test_footprint_texture_preserves_aspect_ratio_taller_than_the_tile():
+	for subject in ["sagewerk", "storage"]:
+		var texture := sprite.footprint_texture(subject, 16)
+		assert_gt(texture.get_height(), 16, "%s footprint height should stay taller than one tile" % subject)
+
+
+func test_footprint_texture_height_matches_the_idle_images_own_aspect_ratio():
+	for subject in ["farm", "sagewerk", "storage", "wooden_fence"]:
+		var idle_image := sprite.idle_texture(subject).get_image()
+		var expected_height := int(round(16.0 * float(idle_image.get_height()) / float(idle_image.get_width())))
+		var texture := sprite.footprint_texture(subject, 16)
+		assert_eq(texture.get_height(), expected_height, "%s footprint height should scale by the same factor as width" % subject)

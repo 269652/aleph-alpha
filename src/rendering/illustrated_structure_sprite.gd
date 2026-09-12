@@ -98,6 +98,27 @@ func idle_texture(subject: String) -> ImageTexture:
 	return _cache[subject]
 
 
+## The subject's idle art scaled for use as a Sprite2D standing on its own
+## placed tile -- width scaled to exactly `tile_size`, height scaled by the
+## SAME factor (mirrors IllustratedArtLoader's own documented "footprint"
+## anchor: "a structure taller than one tile... stays taller than one tile
+## rather than being squashed to fit a fixed canvas"). The caller anchors
+## the returned texture's own bottom edge at the tile's bottom edge, the
+## same way any bottom-anchored sprite already does. Null for an unknown
+## subject.
+func footprint_texture(subject: String, tile_size: int) -> ImageTexture:
+	var idle := idle_texture(subject)
+	if idle == null:
+		return null
+	var source := idle.get_image()
+	var scale := float(tile_size) / float(source.get_width())
+	var width := maxi(1, int(round(float(source.get_width()) * scale)))
+	var height := maxi(1, int(round(float(source.get_height()) * scale)))
+	var scaled := source.duplicate() as Image
+	scaled.resize(width, height, Image.INTERPOLATE_LANCZOS)
+	return ImageTexture.create_from_image(scaled)
+
+
 func _build_idle_image(subject: String) -> Image:
 	var entry: Dictionary = _SUBJECTS[subject]
 	var image := SpriteSheetLoader.load_image(entry["path"])
