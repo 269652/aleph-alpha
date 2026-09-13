@@ -22,6 +22,15 @@ const CATEGORY_ROOF := "roof"
 ## water rather than on buildable ground, it holds back a real hydraulic
 ## head, and it must stay out of the building span solver.
 const CATEGORY_DAM := "dam"
+## Interior dressing (see docs/concept/housing.md's "Interior furniture"
+## section) -- its own category, not a wall/floor variant, because the
+## question it answers is different again: it never encloses a room, it
+## carries no support capacity (decorative, not structural), and unlike
+## every other real category above it does not block movement (see
+## is_walkable's own doc comment for why). Placement rules (real interior
+## floor only, via RoomDetector) live in FurniturePlacement, matching this
+## file's own "pure data, never placement rules" framing.
+const CATEGORY_FURNITURE := "furniture"
 
 ## Materials, in progression order along the existing gather -> craft ->
 ## smelt chain.
@@ -44,6 +53,9 @@ const PIECE_IDS: Array[String] = [
 	# interleaved, per this file's existing convention.
 	"stone_dam",
 	"boulder",
+	# Interior furniture (see docs/concept/housing.md). Appended, not
+	# interleaved, per this file's existing convention.
+	"wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf",
 ]
 
 ## Per-piece definition.
@@ -173,6 +185,44 @@ const _PIECES := {
 		"category": CATEGORY_DAM, "material": MATERIAL_STONE,
 		"encloses": false, "walkable": false, "durability": 180.0,
 		"cost": {"rock": 4}, "support_capacity": 0.0,
+	},
+	# Interior furniture (see docs/concept/housing.md's "Interior furniture"
+	# section). All wood-tier for now, the same "no new material invented"
+	# convention every piece above already follows -- a rug/bookshelf isn't
+	# literally solid lumber, but this catalog already costs finished goods
+	# (a door, a window) in the same "wood" unit as raw framing, so a
+	# second material for decor would be inventing a distinction this file
+	# has never drawn anywhere else. walkable is deliberately true for
+	# every entry here (see CATEGORY_FURNITURE's own doc comment): unlike
+	# every other real piece, furniture never blocks movement. Bigger/more
+	# complex pieces cost and survive more, the same progression the
+	# structural tiers already establish -- a bed is the largest and most
+	# durable real piece furnished here, a rug the cheapest and most
+	# fragile.
+	"wood_chair": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 20.0,
+		"cost": {"wood": 2}, "support_capacity": 0.0,
+	},
+	"wood_table": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 30.0,
+		"cost": {"wood": 4}, "support_capacity": 0.0,
+	},
+	"wood_bookshelf": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 25.0,
+		"cost": {"wood": 5}, "support_capacity": 0.0,
+	},
+	"wood_bed": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 35.0,
+		"cost": {"wood": 6}, "support_capacity": 0.0,
+	},
+	"wood_rug": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 15.0,
+		"cost": {"wood": 1}, "support_capacity": 0.0,
 	},
 }
 

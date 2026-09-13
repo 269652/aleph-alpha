@@ -258,3 +258,49 @@ func test_the_droppable_boulder_is_a_dam_category_stone_piece():
 	var cost := BuildingPiece.cost_of("boulder")
 	assert_true(cost.has("rock"))
 	assert_lt(int(cost["rock"]), int(BuildingPiece.cost_of("stone_dam")["rock"]))
+
+
+# -- interior furniture (docs/concept/housing.md's "Interior furniture" ------
+# -- section): its own category, not a wall/dam variant, because the ---------
+# -- question it answers is different -- it never encloses a room and, -------
+# -- unlike every other piece here, deliberately never blocks movement ------
+# -- (see its own doc comment for why). Placement rules (real interior -------
+# -- floor only) live in FurniturePlacement, not here, matching this file's --
+# -- own "pure data" framing exactly. ----------------------------------------
+
+func test_every_furniture_piece_id_is_a_real_piece_in_the_furniture_category():
+	for piece_id in ["wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf"]:
+		assert_true(BuildingPiece.has_piece(piece_id), piece_id)
+		assert_true(BuildingPiece.PIECE_IDS.has(piece_id), piece_id)
+		assert_eq(BuildingPiece.category_of(piece_id), BuildingPiece.CATEGORY_FURNITURE, piece_id)
+
+
+## Furniture neither encloses a room (it never substitutes for a wall) nor
+## carries any support capacity (decorative, not structural) -- unlike
+## every other real piece in this catalog, it also does not block
+## movement: a chair or a rug you can't walk over/around in a house-sized
+## room would make furnishing a small house actively worse to live in, and
+## nothing in housing.md's own spec asks for collision.
+func test_furniture_does_not_enclose_or_support_and_stays_walkable():
+	for piece_id in ["wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf"]:
+		assert_false(BuildingPiece.encloses(piece_id), piece_id)
+		assert_true(BuildingPiece.is_walkable(piece_id), piece_id)
+		assert_false(BuildingPiece.is_load_bearing(piece_id), piece_id)
+		assert_eq(BuildingPiece.support_capacity_of(piece_id), 0.0, piece_id)
+
+
+func test_furniture_pieces_cost_real_wood():
+	for piece_id in ["wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf"]:
+		var cost := BuildingPiece.cost_of(piece_id)
+		assert_true(cost.has("wood"), piece_id)
+		assert_gt(int(cost["wood"]), 0, piece_id)
+		assert_eq(BuildingPiece.material_of(piece_id), BuildingPiece.MATERIAL_WOOD, piece_id)
+
+
+## A bed is the biggest real piece of furniture furnished here -- costed and
+## made more durable accordingly, the same "bigger/more complex costs and
+## survives more" progression the wood/stone/timber piece tiers already
+## establish for structural pieces.
+func test_a_bed_costs_and_survives_more_than_a_chair():
+	assert_gt(int(BuildingPiece.cost_of("wood_bed")["wood"]), int(BuildingPiece.cost_of("wood_chair")["wood"]))
+	assert_gt(BuildingPiece.durability_of("wood_bed"), BuildingPiece.durability_of("wood_chair"))

@@ -301,6 +301,16 @@ const _ITEMS := {
 	# procedural village generator already builds for NPCs, unlocked for
 	# the player's own construction.
 	"blueprint_cottage": ["Blueprint: Cottage", "blueprint", 1, 0.0],
+	# Interior furniture (see docs/concept/housing.md's "Interior furniture"
+	# section) -- the SAME id as its BuildingPiece entry, the same
+	# "one string, no new plumbing on either side" convention "stone_dam"
+	# above already established. max_stack 5, matching every other
+	# placeable item's own stack size (campfire/sagewerk/storage above).
+	"wood_chair": ["Wooden Chair", "furniture", 5, 0.0],
+	"wood_table": ["Wooden Table", "furniture", 5, 0.0],
+	"wood_bookshelf": ["Wooden Bookshelf", "furniture", 5, 0.0],
+	"wood_bed": ["Wooden Bed", "furniture", 5, 0.0],
+	"wood_rug": ["Rug", "furniture", 5, 0.0],
 }
 
 
