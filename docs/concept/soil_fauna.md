@@ -4388,17 +4388,31 @@ by one to `Player` -- to find the one or two players in it, every frame.
 Players already join the "player" group in `Player._ready`, so both the
 client and the server loop read that group now.
 
-**What the sub-step timers say about a land creature's step, measured
-not fixed.** `_animation_step` is ~1 ms per step steady (the sense block
-1.1 ms per sense, every 0.25 s), with first-touch sprite-sheet slices of
-100-400 ms whenever a species first needs an action -- the same
-boot-warm-up class `MushroomMarker.warm_art_cache` exists for. And the
-SENSE_INTERVAL block spiked to 0.2-2.4 s inside single two-second
-windows in 4 of 30 -- a real hitch a player feels, not a frame-rate
-number. Per-statement timers for that block are written (scratchpad,
-`temp_sense_substeps.js`) but the run could not be taken this session: a
-live game from the main checkout held the machine. That is the first
-thing the next round runs.
+**What the sub-step timers say about a land creature's step.** Three
+diagnostic runs (per-statement timers inside `_process`, then inside the
+SENSE_INTERVAL block, then inside `_animation_step`) attributed it:
+
+- `_animation_step`, the largest steady slice, was two things. Its
+  `_apply_submersion` asked the world for the river AND lake depth under
+  a swimming creature on every step -- the river answer is a hydraulics
+  solve plus the dam backwater walk -- ~0.3 ms per creature step
+  averaged, up to ~1 ms per swimming step (50-98 ms of some two-second
+  windows at the river spawn). **Cut 4:** the answer is now a per-tile
+  cache shared across every creature and refreshed once per second
+  (`CreatureMarker.FRESH_WATER_DEPTH_CACHE_REFRESH_SECONDS`), the same
+  static-shared-cache shape FishMarker's water and current checks use.
+  The rest is the frame-cache miss branch: 0.0-0.2 ms a window normally,
+  **570-740 ms in the window a species first needs an action** -- the
+  first-touch sprite-sheet slice, the same class `MushroomMarker.
+  warm_art_cache` exists for, and a hitch a player feels. Not fixed: a
+  creature-art warm-up at boot is its own feature (measured 100-400 ms
+  per species/action, spread across the loading overlay).
+- The sense block is ~1.8 ms per sense (every 0.25 s per creature):
+  `_append_tile_stimuli` 960 us (169 biome reads in a 13x13 window) and
+  `_blockers_near` 490 us are the two halves worth anything; the
+  creature/carrion/smoke/player scans are all under 120 us. The 0.2-2.4 s
+  spikes the first run saw did not recur in the attributed run; the
+  first-touch slices above are the likeliest owner.
 
 **Cut 3 -- trees and stones hide beyond the decoration radius**, the
 gate grass, flowers, worms, litter and footprints already used. Honest

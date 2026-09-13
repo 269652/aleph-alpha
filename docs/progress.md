@@ -20852,13 +20852,21 @@ specced in `concept/rivers.md` "The river surface at snap resolution".
   1.2, engine ~4, GPU 3.7. Skipping the scheduler outright measured 19-20
   ms loops at 51-55 fps: **the creature pass is now most of the gap to
   60**.
-- ⬜ **Open, measured:** a land creature's `_animation_step` costs ~1 ms
-  per step steady (plus first-touch sheet slices of 100-400 ms), and its
-  SENSE_INTERVAL block spiked to 0.2-2.4 s in 4 of 30 two-second windows
-  -- a real hitch a player feels. Per-statement timers for that block are
-  written (scratchpad) but the run could not be taken: a live game from
-  the main checkout held the machine for the rest of the session. The
-  hover scan (~0.6-1.2 ms a frame) still walks every hoverable.
+- ✅ **Creature submersion depth cached** (`CreatureMarker.
+  FRESH_WATER_DEPTH_CACHE_REFRESH_SECONDS`): three per-statement timer
+  runs attributed a land creature's `_animation_step` -- its
+  `_apply_submersion` asked the world for river+lake depth (a hydraulics
+  solve plus the backwater walk) on every swimming step, ~0.3 ms per
+  creature step averaged, up to ~1 ms per swimming step. Now a per-tile
+  answer shared across every creature, refreshed once per second (the
+  FishMarker cache shape, clock injected for tests; 4 new tests).
+- ⬜ **Open, measured:** the window in which a species first needs an
+  action pays a 570-740 ms sprite-sheet slice inside `_animation_step` --
+  a felt hitch; a creature-art warm-up at boot (the `MushroomMarker.
+  warm_art_cache` shape) is the fix and its own feature. The sense block
+  is ~1.8 ms per sense, `_append_tile_stimuli` (169 biome reads) and
+  `_blockers_near` being the two halves worth anything. The hover scan
+  (~0.6-1.2 ms a frame) still walks every hoverable.
 - **Honestly:** 60 fps is not reached on the reference machine, which
   carried 2-3 busy cores from other sessions in every run; the GPU is no
   longer a wall at any river, and the remaining cost is named per class
