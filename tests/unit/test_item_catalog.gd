@@ -155,7 +155,10 @@ func test_blueprint_cottage_is_a_real_non_stackable_blueprint_kind_item():
 ## reach it with no new item-side machinery.
 func test_furniture_items_share_their_building_piece_ids_and_are_placeable_like():
 	const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
-	for piece_id in ["wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf"]:
+	for piece_id in [
+		"wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf",
+		"couch", "photo_frame"
+	]:
 		assert_true(catalog.has(piece_id), piece_id)
 		assert_eq(catalog.kind_of(piece_id), "furniture", piece_id)
 		var item := catalog.make(piece_id)
