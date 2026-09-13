@@ -137,13 +137,47 @@ func refresh(inventory_counts: Dictionary) -> void:
 			_add_section(kind, groups[kind], inventory_counts)
 
 
-## Every recipe_id, grouped by its output item's kind (weapon/tool/armor/
-## placeable/food/material -- see ItemCatalog), for the section headers.
+## The recipe_ids this bench menu lists: every CraftingRecipeBook recipe a
+## player can actually hand-craft here and walk away with. Two classes of
+## recipe live in the book that are NOT that and must never get a card:
+##
+## - "automated" recipes (CraftingRecipeBook.recipe_is_automated, e.g.
+##   grow_wheat): a structure's own production, kept as resolver data;
+##   can_craft refuses them outright, so a card could only ever render
+##   permanently dimmed.
+## - house blueprints (small_house, cottage, manor, the two-story tiers --
+##   docs/concept/workforce.md "Blueprint tiers"): their "output" is symbolic
+##   of the structure the construction ledger tracks and deliberately NOT an
+##   ItemCatalog entry (see the small_house recipe's own doc comment). They
+##   are placed in-world through Player._try_build_house_from_blueprint,
+##   which calls craft() only as its atomic material+skill gate and then
+##   stamps the house itself -- clicked from HERE, craft() would consume the
+##   wood and hand back nothing. ItemCatalog.make() on such an id also fails
+##   loudly by design, so before this filter the first house recipe took the
+##   whole grid down with it (0 cards for every recipe).
+##
+## The same has() guard _display_name/_sprite_id_for/Player.craft already
+## apply, moved up front where the recipe list is decided.
+func bench_recipe_ids() -> Array:
+	var ids: Array = []
+	for recipe_id in _recipe_book.recipe_ids():
+		if _recipe_book.recipe_is_automated(recipe_id):
+			continue
+		var output := _recipe_book.recipe_output(recipe_id)
+		if not _item_catalog.has(output.get("item_id", "")):
+			continue
+		ids.append(recipe_id)
+	return ids
+
+
+## Every bench recipe_id (see bench_recipe_ids), grouped by its output
+## item's kind (weapon/tool/armor/placeable/food/material -- see
+## ItemCatalog.kind_of), for the section headers.
 func _grouped_recipe_ids() -> Dictionary:
 	var groups := {}
-	for recipe_id in _recipe_book.recipe_ids():
+	for recipe_id in bench_recipe_ids():
 		var output := _recipe_book.recipe_output(recipe_id)
-		var kind := _item_catalog.make(output["item_id"]).kind
+		var kind := _item_catalog.kind_of(output["item_id"])
 		if not groups.has(kind):
 			groups[kind] = []
 		groups[kind].append(recipe_id)
