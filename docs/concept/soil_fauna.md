@@ -4326,6 +4326,106 @@ picks up the other half, not a repeat). All pre-existing
 below the cap (the common case) this is a byte-identical no-op, the same
 guarantee round 14's own fix already established.
 
+### FPS regression round 15: the GPU wall was the river, and measuring inside one run (2026-09-13)
+
+"Can you do another performance pass and use cool optimization tricks
+that will finally get it to 60fps." Round 13 had left the frame
+measured: 23 fps, with a 28 ms GPU figure it called noise "until the CPU
+side is under budget". This round found the noise was a wall, and that
+the way rounds were being compared could not have seen it.
+
+**Method first: run-to-run comparison was broken.** Two `--solo` runs of
+the same restored, re-stamped snapshot differed by ~20% in live creature
+population, and after the solo spawn relocates to a random curated river
+~80 s in they ended in different places altogether (2,225 vs 5,200 drawn
+objects) -- so a "before" and an "after" run were never the same world,
+on top of the 2-3 other busy cores this machine always carries. This
+round measured INSIDE one process instead: a temporary, never-committed
+patch flips one thing every five `--perf-report` windows and returns to
+control windows in between (a layer hidden, the cull forced off, a node
+class switched off, the scheduler or the ecology skipped), so adjacent
+windows share the world and the load. That is how every number below
+was taken; the two-run comparison that started the round is recorded
+only as the thing not to repeat.
+
+**The instrument, extended (committed):** the client pass is split into
+`cli_<group>` sections (chunk update, minimap, windows, panels, hover,
+labels, prompt, tail, sky, weather, footsteps, crush, season) and every
+ecology cadence step into its own `eco_<label>` -- round 14's one-off
+settlements section generalised. Same null guard as before; a plain
+launch pays nothing.
+
+**What the split said first (initial spawn, river on screen, ~2.2 other
+cores busy):** 22 fps, 45 ms loops; node scripts 30 = client 9.4
+(chunk update 3.8, hover 1.2, crush 0.9, weather 0.8) + scheduler 7.5 +
+ecology 4.4 + ~8.7 in nodes the engine ticks itself; render CPU 6.6;
+render GPU 17 median but bimodal -- **24 ms whenever a river was on
+screen**, 8 when not. Physics 1.3.
+
+**Cut 1 -- the river surface at snap resolution (the GPU wall).** Hiding
+`RiverFlowFx` alone took GPU time from 24 ms to 3 (hiding the water,
+hillshade or snow layers changed nothing); a 640x360 window ran the same
+scene at 8, so the cost was fragment-bound. The shader's own first line
+quantises every fragment's world position to `PIXEL_SNAP` (half a world
+pixel), so at the fixed 4x camera each 2x2 block of screen fragments was
+computed four times over. `RiverFlowPass` (spec: `rivers.md` "The river
+surface at snap resolution") renders the layer once per snap cell into
+its own SubViewport and composites it back as one nearest-filtered
+sprite in the layer's exact draw slot -- the same image by construction,
+proven by a real-GPU readback test. With the river on screen: **3.6 ms**.
+That phase's frame went from 45 ms loops at 22 fps to 32 ms at 30-38.
+
+**Cut 2 -- `update()` answers from a cache.** The chunk manager's
+per-frame `update()` re-ran a GDScript room flood-fill over the chunk's
+piece grid and a nine-tile cave-entrance scan for a player who had not
+moved. Both memoised on exactly what they read (chunk + cell +
+`modifications.hash()`; the tile) so the stationary-stamp case still
+re-checks: 3.8 -> 2.2 ms a frame. Sub-step timers then put `update()`'s
+own work at ~0.1 ms a frame (`_budgeted_load_order` 54 us, eviction 22,
+roof 17, geology 5): the other 2 ms was `_client_process` walking every
+child of `$Entities` -- thousands of trees, stones and markers, cast one
+by one to `Player` -- to find the one or two players in it, every frame.
+Players already join the "player" group in `Player._ready`, so both the
+client and the server loop read that group now.
+
+**What the sub-step timers say about a land creature's step, measured
+not fixed.** `_animation_step` is ~1 ms per step steady (the sense block
+1.1 ms per sense, every 0.25 s), with first-touch sprite-sheet slices of
+100-400 ms whenever a species first needs an action -- the same
+boot-warm-up class `MushroomMarker.warm_art_cache` exists for. And the
+SENSE_INTERVAL block spiked to 0.2-2.4 s inside single two-second
+windows in 4 of 30 -- a real hitch a player feels, not a frame-rate
+number. Per-statement timers for that block are written (scratchpad,
+`temp_sense_substeps.js`) but the run could not be taken this session: a
+live game from the main checkout held the machine. That is the first
+thing the next round runs.
+
+**Cut 3 -- trees and stones hide beyond the decoration radius**, the
+gate grass, flowers, worms, litter and footprints already used. Honest
+result: inside one run, forcing every tree visible moved drawn objects
+(+2,100 counted) but render CPU and the frame only within the noise --
+the renderer already rect-culls off-screen canvas items before its
+y-sort, so the visible flag saves a transform and a rect test per item,
+not a sort. Kept because it is correct, tested and free, not because it
+measured.
+
+**Where it stands (control windows, same phase, same load):** 32 ms
+loops at ~32 fps; node scripts 22 = scheduler 9.3 (butterflies 15 steps a
+frame at ~165 us, ants 10 at ~210, fish 7 at ~115, land creatures 0.9 at
+~1.2 ms, decomposers 0.9 at ~670 us) + client 5.4 + ecology 3.8 + ~3
+other (grass frogs 0.3; every remaining engine-processed marker class
+together ~2); render CPU ~5; physics 1.2; engine outside nodes ~4; GPU
+3.7. Skipping the scheduler outright measured 19-20 ms loops at 51-55
+fps in the same run -- **the creature pass is now the frame's largest
+item and most of the remaining gap to 60**; skipping the whole ecology
+batch was worth ~3.5 ms.
+
+**Honestly:** 60 fps is not reached on the reference machine, which had
+2-3 other cores busy in every run of this round; what changed is that
+the GPU is no longer a wall at any river, and the frame no longer has a
+part that was being called noise. The path is now the creature step
+costs, and it is measured per class per step.
+
 ### In-flight foragers survive an unload; their trip's outcome does not (2026-09-09)
 
 The ant side of `bees.md`'s own identical section, by that exact name --

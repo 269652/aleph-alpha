@@ -20803,6 +20803,67 @@ round 14's second follow-up"; design cross-reference in
   growth with settlement count at all -- the same qualitative shape
   change round 14's own fix produced for step_settlements.
 
+### FPS regression round 15: the river was the GPU wall, and measuring inside one run (2026-09-13)
+
+Branch `perf/fps-round-14` (the branch name predates the count; this is
+round 15 -- round 14 was the settlement-scan aging fix). Write-up in
+`concept/soil_fauna.md` "FPS regression round 15"; the river pass is
+specced in `concept/rivers.md` "The river surface at snap resolution".
+
+- ✅ **Method: within-run A/B.** Two `--solo` runs of the same restored,
+  re-stamped snapshot differed by ~20% in live creatures and, after the
+  solo spawn relocates to a random curated river ~80 s in, ended in
+  different places entirely (2,225 vs 5,200 drawn objects) -- run-to-run
+  "before/after" was never the same world. Every number this round was
+  taken inside one process: a temporary, never-committed patch flips one
+  thing every five report windows and returns to control windows
+  between (recipe in the memory note). Do not compare two runs again.
+- ✅ **`--perf-report` split further** (`scenes/world.gd`): `cli_<group>`
+  per client group and `eco_<label>` per ecology cadence step (round 14's
+  settlements-only section generalised). `test_world_perf_report_wiring.gd`.
+- ✅ **RiverFlowPass** (`src/rendering/river_flow_pass.gd`): the river
+  shader snaps every fragment to `PIXEL_SNAP` (0.5 world px) before doing
+  anything, so at the fixed 4x camera each 2x2 screen block was computed
+  four times. Hiding the layer measured GPU 24 → 3 ms with a river on
+  screen (water/hillshade/snow layers: no change; a 640x360 window: 8 ms,
+  so fragment-bound). The layer now renders once per snap cell into its
+  own SubViewport and is composited back as one nearest-filtered sprite
+  in its exact draw slot -- **3.6 ms**, the same image by construction,
+  real-GPU readback test `test_river_flow_pass_render_smoke.gd` (skips
+  headless), 12 unit tests, World wiring contract. That phase of the frame
+  went from 45 ms at 22 fps to 32 ms at 30-38.
+- ✅ **`EarthChunkManager.update()` caches** its room lookup (chunk +
+  cell + `modifications.hash()`, so a hut stamped around a standing
+  player still hides its roof) and its cave-entrance scan (by tile):
+  3.8 → 2.2 ms a frame. Sub-step timers then put update()'s own work at
+  ~0.1 ms -- the remaining 2 ms was `_client_process` walking every child
+  of `$Entities` (thousands of trees, stones and markers) to find the
+  players; ✅ **both loops now read the "player" group**
+  (`test_world_player_lookup_scoping.gd`).
+- ✅ **Trees and stones hide beyond the decoration radius** like grass,
+  flowers, worms, litter and footprints already did. Honest: inside one
+  run, forcing them all visible moved drawn objects (+2,100) but render
+  CPU only within noise -- the renderer rect-culls off-screen items before
+  its y-sort anyway. Kept as correct and free, not as a measured win.
+- **Where it stands** (control windows, initial-spawn phase, ~2.2 other
+  cores busy): 32 ms loops at ~32 fps -- scheduler 9.3 (butterflies 15
+  steps/frame @ ~165 us, ants 10 @ ~210, fish 7 @ ~115, land creatures
+  ~1 @ ~1.2 ms), client 5.4, ecology 3.8, other ~3, render CPU ~5, physics
+  1.2, engine ~4, GPU 3.7. Skipping the scheduler outright measured 19-20
+  ms loops at 51-55 fps: **the creature pass is now most of the gap to
+  60**.
+- ⬜ **Open, measured:** a land creature's `_animation_step` costs ~1 ms
+  per step steady (plus first-touch sheet slices of 100-400 ms), and its
+  SENSE_INTERVAL block spiked to 0.2-2.4 s in 4 of 30 two-second windows
+  -- a real hitch a player feels. Per-statement timers for that block are
+  written (scratchpad) but the run could not be taken: a live game from
+  the main checkout held the machine for the rest of the session. The
+  hover scan (~0.6-1.2 ms a frame) still walks every hoverable.
+- **Honestly:** 60 fps is not reached on the reference machine, which
+  carried 2-3 busy cores from other sessions in every run; the GPU is no
+  longer a wall at any river, and the remaining cost is named per class
+  per step.
+
 ### Workforce: blueprints, real construction tiers, and interior furniture -- foundation slices (2026-09-13)
 
 Requested directly: NPCs should sell building blueprints; a player's own
