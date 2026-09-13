@@ -229,6 +229,119 @@ func test_spread_children_inherit_the_parents_vigor_nudged_by_mutation():
 	)
 
 
+## THE multi-generation payoff, adapted from test_flyer_personality.gd's own
+## test_a_meadow_the_player_nets_the_bold_out_of_grows_shy_over_generations
+## to this population's own shape: there is no discrete "generation" or
+## crossover here, just an ongoing spatial population that grows, spreads,
+## and (in the pressured twin) gets its single best patch pulled every
+## round -- but the SAME selection-pressure idea applies. Removing the
+## highest-vigor mature patch before each spread tick means the pool of
+## patches actually eligible to seed a NEW cell (WildCropPatch._step_spread
+## picks uniformly among MATURE patches, blind to vigor) is, on average, a
+## slightly lower-vigor pool than an unpressured meadow's -- so the
+## population should drift toward lower mean vigor over enough rounds,
+## the same qualitative shape as netting bold butterflies shrinking a
+## meadow's mean boldness. The control (an identical, never-pulled twin
+## from the same seed) is what makes the number mean anything: if the
+## untouched meadow drifted just as far, the drop would be an artifact of
+## the mutation/spread machinery, not a response to always pulling the
+## biggest patch.
+func test_always_pulling_the_biggest_patches_trends_the_meadow_smaller():
+	var width := 60
+	var height := 60
+	var biome := PackedStringArray()
+	biome.resize(width * height)
+	biome.fill("grassland")
+
+	var pressured := WildCropPatch.new("carrot", 21, width, height, biome)
+	var undisturbed := WildCropPatch.new("carrot", 21, width, height, biome)
+
+	var start := _mean_vigor(pressured)
+	assert_almost_eq(start, _mean_vigor(undisturbed), 0.0001, "precondition: identical twins")
+
+	# A successful spread only lands roughly every several rounds (half of
+	# all candidate targets fall in the OTHER crop's territory, see
+	# _in_this_crops_territory, and a newly-spread cell then needs several
+	# more rounds of growth before it is mature enough to be harvestable
+	# itself) -- harvesting the single best patch EVERY round outpaces
+	# regrowth entirely and wipes the meadow out (measured: it hits zero
+	# patches by round ~19 and stays there, which would make the "meadow"
+	# being measured an empty one). MIN_MATURE_TO_HARVEST leaves at least a
+	# couple of mature patches standing at all times -- a real forager
+	# leaves some crop in the ground, not the botanical fact of it -- so
+	# there is always a surviving population left for regrowth to work
+	# from, the same way _worked_meadow's own
+	# `assert_gt(survivors.size(), 1, "the meadow must not be wiped out")`
+	# keeps its population alive.
+	const ROUNDS := 400
+	const MIN_MATURE_TO_HARVEST := 4
+	for round in ROUNDS:
+		pressured.advance(WildCropPatch.SPREAD_INTERVAL, 1.0)
+		undisturbed.advance(WildCropPatch.SPREAD_INTERVAL, 1.0)
+		if _mature_cell_count(pressured) >= MIN_MATURE_TO_HARVEST:
+			var biggest := _highest_vigor_mature_cell(pressured)
+			if biggest != Vector2i(-1, -1):
+				pressured.graze(biggest)
+
+	assert_gt(
+		pressured.get_patch_cells().size(), 0,
+		"the meadow must not be wiped out (MIN_MATURE_TO_HARVEST should have prevented this)"
+	)
+
+	var drift: float = absf(_mean_vigor(undisturbed) - start)
+	var shift: float = start - _mean_vigor(pressured)
+
+	gut.p(
+		"pressured meadow mean vigor: %f -> %f (shift %f, %d patches)" %
+		[start, _mean_vigor(pressured), shift, pressured.get_patch_cells().size()]
+	)
+	# Measured, not assumed: the undisturbed twin drifts EXACTLY 0 -- it
+	# starts already at MAX_PATCHES (the cap this seed/grid combination
+	# reaches at initial seeding) and, never being grazed, never frees a
+	# slot for _step_spread to fill (see _step_spread's own `_patches.size()
+	# >= MAX_PATCHES: return` guard) -- so its founding population, and
+	# therefore its mean vigor, is genuinely static for the entire run, not
+	# a rounding artifact. That is the correct, honest baseline for "nobody
+	# ever touches this meadow" in a sim with no natural cell death: real
+	# turnover here only ever comes from a cell being grazed.
+	gut.p(
+		"undisturbed meadow drifted %f over the same %d rounds (%d patches)" %
+		[drift, ROUNDS, undisturbed.get_patch_cells().size()]
+	)
+
+	assert_gt(
+		shift, 0.0,
+		"always pulling the biggest patch must lower the meadow's mean vigor"
+	)
+	assert_gt(shift, drift, "and by more than an untouched meadow drifts on its own")
+
+
+func _mean_vigor(patch) -> float:
+	var cells: Array = patch.get_patch_cells()
+	var total := 0.0
+	for cell in cells:
+		total += patch.get_vigor(cell)
+	return total / float(cells.size())
+
+
+func _highest_vigor_mature_cell(patch) -> Vector2i:
+	var best := Vector2i(-1, -1)
+	var best_vigor := -1.0
+	for cell in patch.get_patch_cells():
+		if patch.get_growth(cell) >= 1.0 and patch.get_vigor(cell) > best_vigor:
+			best_vigor = patch.get_vigor(cell)
+			best = cell
+	return best
+
+
+func _mature_cell_count(patch) -> int:
+	var count := 0
+	for cell in patch.get_patch_cells():
+		if patch.get_growth(cell) >= 1.0:
+			count += 1
+	return count
+
+
 # -- disjoint territory: two crops sharing a chunk must never claim the same
 # cell -- reported live: "carrots render potatoes as crop" -- two markers
 # stacked on the exact same tile (one carrot, one potato, each independently
