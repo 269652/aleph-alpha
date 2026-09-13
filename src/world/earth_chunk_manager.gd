@@ -158,6 +158,7 @@ const ConstructionProject = preload("res://src/emergence/construction_project.gd
 const ConstructionProjectStore = preload("res://src/emergence/construction_project_store.gd")
 const HouseBlueprint = preload("res://src/gameplay/house_blueprint.gd")
 const SettlementSpareCapacity = preload("res://src/emergence/settlement_spare_capacity.gd")
+const NpcProduction = preload("res://src/world/npc_production.gd")
 const SettlementBuildDecision = preload("res://src/emergence/settlement_build_decision.gd")
 const Institution = preload("res://src/emergence/institution.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
@@ -1836,6 +1837,179 @@ func settle_resident_if_new(recipe_id: String, origin_tile: Vector2i) -> String:
 	_memory_store.witness_event(settled, _world_age_seconds)
 
 	return resident_household.id
+
+
+## Worker slots and assignment (docs/concept/workforce.md's "Workforce: a
+## real, spendable resource" section) -- resident_household_id ->
+## workplace_position (a global tile, the same coordinate space build_at_
+## global/modification_at_global already use), a plain Dictionary rather
+## than a new store: an assignment is exactly one fact, not a collection
+## needing its own lifecycle.
+var _workforce_assignments: Dictionary = {}
+
+## The Sägewerk's own worker_slots (see that section: "this doc turns that
+## fixed 'one' into worker_slots := 1" -- today's ALREADY-real behavior,
+## one LumberjackMarker per placed Sägewerk, made an inspectable number
+## rather than an assumption).
+const SAGEWERK_WORKER_SLOTS := 1
+
+
+## How many of workplace_position's own worker_slots are not currently
+## filled -- read fresh from _workforce_assignments every call (pillar 5:
+## "workforce is derived, never stored"), never a synced counter.
+func open_worker_slots_at(workplace_position: Vector2i) -> int:
+	var filled := 0
+	for resident_id in _workforce_assignments:
+		if _workforce_assignments[resident_id] == workplace_position:
+			filled += 1
+	return maxi(0, SAGEWERK_WORKER_SLOTS - filled)
+
+
+## Assigns resident_household_id to work at workplace_position -- false, no
+## mutation, if that resident already holds a job (reassignment/layoffs stay
+## exactly as open a question as docs/concept/workforce.md's own Open
+## Questions already leave them) or the workplace has no open slot left.
+func assign_resident_to_workplace(resident_household_id: String, workplace_position: Vector2i) -> bool:
+	if _workforce_assignments.has(resident_household_id):
+		return false
+	if open_worker_slots_at(workplace_position) <= 0:
+		return false
+	_workforce_assignments[resident_household_id] = workplace_position
+	return true
+
+
+func is_resident_assigned(resident_household_id: String) -> bool:
+	return _workforce_assignments.has(resident_household_id)
+
+
+## A direct way to end an assignment (a workplace destroyed, a resident's
+## house gone) -- false for a resident who was never assigned.
+func unassign_resident(resident_household_id: String) -> bool:
+	if not _workforce_assignments.has(resident_household_id):
+		return false
+	_workforce_assignments.erase(resident_household_id)
+	return true
+
+
+## Population (docs/concept/workforce.md's own "Workforce" section):
+## residents of player-built houses in chunk_coord who are NOT currently
+## assigned to a worker slot -- the same "spare capacity" idiom
+## SettlementSpareCapacity.for_settlement already established one layer
+## down for construction, generalized here to any worker slot.
+func free_workforce_in_chunk(chunk_coord: Vector2i) -> int:
+	var free := 0
+	for project: ConstructionProject in _construction_project_store.projects_with_resident_in_chunk(chunk_coord):
+		if not _workforce_assignments.has(project.resident_household_id):
+			free += 1
+	return free
+
+
+## The build-vs-hire fork's own hire-half query (docs/concept/workforce.md
+## section 3): is there a spare household in settlement_id whose own NPC
+## clears recipe_id's required_skill? Returns that household's id, or "" if
+## none qualify -- a pure query, never mutates anything, the same "just
+## answer the question" contract can_build_house_from_blueprint itself
+## already keeps for the build-it-yourself half.
+##
+## "Spare" mirrors SettlementSpareCapacity.for_settlement's OWN filter
+## exactly (excludes any household whose real occupation is a survival
+## one), but returns the actual household ids rather than just a count --
+## no existing function does this today (SettlementSpareCapacity/
+## SettlementBuildDecision only ever pass a bare int upward). A household's
+## own NPC is reconstructed the same deterministic-from-seed way
+## _occupation_of_household already does -- no live NpcMarker/registry
+## needed, so this works identically whether or not that household's chunk
+## is even loaded right now.
+##
+## "" (no filter applied) for a recipe with no carpentry-shaped
+## required_skill -- this function is specifically the CARPENTRY hire
+## fork, not a general "find someone with skill X" search.
+func find_spare_carpenter_household(settlement_id: String, recipe_id: String) -> String:
+	var requirement := _recipe_book.recipe_required_skill(recipe_id)
+	if requirement.is_empty() or String(requirement.get("stat_name", "")) != "carpentry_level":
+		return ""
+	var required_level: float = requirement["level"]
+
+	for household_id in _households_in_settlement(settlement_id):
+		var occupation := _occupation_of_household(household_id)
+		if NpcProduction.PRODUCER_ITEM_BY_OCCUPATION.has(occupation):
+			continue  # already working a real survival job -- not spare
+		var household := _household_store.get_household(household_id)
+		if household == null or household.members.is_empty():
+			continue
+		var founder_id: String = household.members[0]
+		if EntityRef.kind_of(founder_id) != "npc":
+			continue
+		var carpenter := NpcIdentity.new(int(EntityRef.key_of(founder_id)))
+		if carpenter.carpentry_level >= required_level:
+			return household_id
+	return ""
+
+
+## The same real, derived GROWING/STABLE/DECLINING classification
+## legitimacy_for_settlement already reads (see that function's own doc
+## comment for why SettlementFood, not the emergence Market alone, is the
+## real source here) -- lifted out as its own small helper so
+## step_workforce_economy's rent gate (below) reads the identical status a
+## settlement's own governance/legitimacy already does, rather than a
+## second, subtly different derivation.
+func _settlement_status_for(settlement_id: String) -> String:
+	var market := _market_store.market_for(settlement_id)
+	var household_count := _households_in_settlement(settlement_id).size()
+	var capacity := SettlementFood.carrying_capacity(
+		market, SettlementFood.village_market_for(settlement_id, _loaded_villages)
+	)
+	return SettlementState.status_for(household_count, capacity)
+
+
+## Wages and Rent (docs/concept/workforce.md's own "Wages"/"Rent" sections)
+## -- one periodic tick settling the player's whole tenant/employer ledger,
+## the same accumulator-gated cadence step_regional_trade already uses.
+## `player_wallet`: the live Player's own Wallet (injected by the caller,
+## the same "caller supplies the real dependency" shape advance_project_
+## labor's own recipe_book/household_store parameters already use).
+const WORKFORCE_ECONOMY_INTERVAL := 30.0
+## Real, tuned constants (per this project's Development-process rule
+## against eyeballed values) -- deliberately equal for now, so a resident
+## who is both employed and housed nets exactly zero; see workforce.md's own
+## Open Questions for whether that net should differ.
+const WAGE_PER_TICK := 5
+const RENT_PER_TICK := 5
+var _workforce_economy_accumulator := 0.0
+
+
+func step_workforce_economy(delta_seconds: float, player_wallet) -> void:
+	_workforce_economy_accumulator += delta_seconds
+	if _workforce_economy_accumulator < WORKFORCE_ECONOMY_INTERVAL:
+		return
+	_workforce_economy_accumulator -= WORKFORCE_ECONOMY_INTERVAL
+	if _workforce_economy_accumulator >= WORKFORCE_ECONOMY_INTERVAL:
+		_workforce_economy_accumulator = fmod(_workforce_economy_accumulator, WORKFORCE_ECONOMY_INTERVAL)
+
+	# Wages: every FILLED worker slot draws real gold from the player.
+	# Simply skipped (no debt, no eviction) if the player can't afford it
+	# this tick -- see workforce.md's own "Wages" section.
+	for resident_id in _workforce_assignments:
+		var household: Household = _household_store.get_household(resident_id)
+		if household == null:
+			continue
+		if player_wallet.spend(WAGE_PER_TICK):
+			household.wallet.add(WAGE_PER_TICK)
+
+	# Rent: every resident of a player-built house, working or not, pays
+	# for the roof -- capped by Wallet.spend's own all-or-nothing contract,
+	# and suspended entirely (needs v1) for a DECLINING settlement's own
+	# residents, the same real, already-tested classification governance/
+	# legitimacy already reads.
+	for project: ConstructionProject in _construction_project_store.projects_with_resident():
+		var resident_household: Household = _household_store.get_household(project.resident_household_id)
+		if resident_household == null:
+			continue
+		var settlement_id := EntityRef.for_settlement(project.chunk_coord)
+		if _settlement_status_for(settlement_id) == SettlementState.DECLINING:
+			continue
+		if resident_household.wallet.spend(RENT_PER_TICK):
+			player_wallet.add(RENT_PER_TICK)
 
 
 ## Contracts and their lifecycle (see docs/emergence/03-contracts-property-

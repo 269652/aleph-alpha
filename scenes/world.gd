@@ -3422,6 +3422,12 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 			"settlements": _chunk_manager.step_settlements,
 			"npc_encounters": _chunk_manager.step_npc_encounters,
 			"regional_trade": _chunk_manager.step_regional_trade,
+			# Wages/rent (docs/concept/workforce.md's own "Wages"/"Rent"
+			# sections) -- needs the focus player's own real Wallet, the same
+			# reason "fruiting" above needs their position.
+			"workforce_economy": func(elapsed: float) -> void:
+				if _ecology_focus_player != null:
+					_chunk_manager.step_workforce_economy(elapsed, _ecology_focus_player.wallet),
 			"herbivore_food": _step_herbivore_food_consumption,
 			"reproduction": _step_reproduction,
 		}
@@ -3548,7 +3554,8 @@ func _on_console_command(command: String, args: Array) -> void:
 					+ "  /craft <recipe_id>  /gold <amount>  /village  /river  /species  /help"
 					+ "  /compass  /map  /weatherglass  /almanac  /deed"
 					+ "  /ledger propose|accept|fulfill|breach ...  /charter found <type> <counterparty_id>"
-					+ "  /journal <entity_id>  /flowdebug [strokes|off]  /intro"
+					+ "  /journal <entity_id>  /workforce assign|slots|free ..."
+					+ "  /flowdebug [strokes|off]  /intro"
 				)
 			)
 		"flowdebug":
@@ -3646,6 +3653,8 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_charter_command(args, local_player)
 		"journal":
 			_handle_journal_command(args, local_player)
+		"workforce":
+			_handle_workforce_command(args)
 		"globalthermonuclearwar":
 			# docs/concept/easter_eggs.md's WarGames Easter egg -- deliberately
 			# NOT listed in /help's output above (pillar 3, undocumented on
@@ -4460,6 +4469,47 @@ func _handle_journal_command(args: Array, local_player: Player) -> void:
 	for line in FieldJournal.entry_for(entity_id, stores).split("
 "):
 		_dev_console.log_line(line)
+
+
+## /workforce assign|slots|free -- docs/concept/workforce.md's "Workforce: a
+## real, spendable resource" section. The dev console is a real, honest
+## interim call site here (the same choice player_citizenship.md's own Deed/
+## Ledger/Charter commands already made): the real bookkeeping (worker
+## slots, assignment, wages, rent) is live and wired into the per-frame
+## ecology batch regardless of how a slot gets filled; only a proper
+## in-world "assign this resident" interaction/UI is still missing.
+func _handle_workforce_command(args: Array) -> void:
+	if args.is_empty():
+		_dev_console.log_line(
+			"Usage: /workforce assign <resident_household_id> <x> <y>"
+			+ "  |  /workforce slots <x> <y>  |  /workforce free <chunk_x> <chunk_y>"
+		)
+		return
+
+	var sub: String = args[0]
+	match sub:
+		"assign":
+			if args.size() < 4:
+				_dev_console.log_line("Usage: /workforce assign <resident_household_id> <x> <y>")
+				return
+			var resident_household_id: String = args[1]
+			var workplace_position := Vector2i(str(args[2]).to_int(), str(args[3]).to_int())
+			var assigned := _chunk_manager.assign_resident_to_workplace(resident_household_id, workplace_position)
+			_dev_console.log_line("Assigned: %s" % assigned)
+		"slots":
+			if args.size() < 3:
+				_dev_console.log_line("Usage: /workforce slots <x> <y>")
+				return
+			var workplace_position := Vector2i(str(args[1]).to_int(), str(args[2]).to_int())
+			_dev_console.log_line("Open slots: %d" % _chunk_manager.open_worker_slots_at(workplace_position))
+		"free":
+			if args.size() < 3:
+				_dev_console.log_line("Usage: /workforce free <chunk_x> <chunk_y>")
+				return
+			var chunk_coord := Vector2i(str(args[1]).to_int(), str(args[2]).to_int())
+			_dev_console.log_line("Free workforce: %d" % _chunk_manager.free_workforce_in_chunk(chunk_coord))
+		_:
+			_dev_console.log_line("Unknown /workforce action '%s'. Try: assign, slots, free" % sub)
 
 
 ## Spawns a clickable ground item where a creature died or a tree dropped

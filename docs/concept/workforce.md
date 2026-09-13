@@ -7,16 +7,23 @@ house gains a resident. A resident who isn't already working is real,
 spendable **workforce** — a workplace (starting with the Sägewerk) has a
 fixed number of worker slots, and assigning a resident to one occupies that
 slot and reduces the settlement's free workforce by one, the same shape
-Anno's population/workforce economy uses.
+Anno's population/workforce economy uses. Closing the loop, the same way
+Anno's own economy closes it: the player pays a real **wage** out of their
+own gold for every filled worker slot, and every resident of a player-built
+house — working or not — pays the player real **rent** in return for the
+roof over their head. Gold flows both ways for the first time in this
+codebase; `economy.md`'s existing shop-selling faucet is no longer the
+player's only real income.
 
 This doc is the whole pipeline end to end: blueprint → unlock → build-or-hire
-→ resident → workforce. Every piece downstream of "obtain a blueprint" reuses
-a REAL, already-built or already-designed mechanism from another doc
-wherever one exists — this doc's own new material is the blueprint-as-item
-unlock, the build-vs-hire fork's skill comparison, a real NPC Carpentry
-number to compare against, the first live Builder spawner, a narrow
-directly-triggered move-in, and the workforce/worker-slot layer itself. None
-of the other six pieces below duplicate an existing system; each says
+→ resident → workforce → wages ⇄ rent. Every piece downstream of "obtain a
+blueprint" reuses a REAL, already-built or already-designed mechanism from
+another doc wherever one exists — this doc's own new material is the
+blueprint-as-item unlock, the build-vs-hire fork's skill comparison, a real
+NPC Carpentry number to compare against, the first live Builder spawner, a
+narrow directly-triggered move-in, the workforce/worker-slot layer itself,
+and the wage/rent gold loop that makes that workforce actually cost and earn
+something. None of the pieces below duplicate an existing system; each says
 exactly which one it reuses.
 
 ## Say this once: "blueprint" already means three other things here
@@ -54,6 +61,52 @@ small module, `src/emergence/construction_unlocks.gd`. Every doc comment
 introduced by this feature says "ConstructionUnlock (displayed as
 'Blueprint')" on first mention in a file, so a future reader grep-ing for
 "blueprint" lands on this disambiguation instead of guessing.
+
+## Say this once, too: "wage" and "rent" already mean other things here
+
+The same discipline the blueprint disambiguation above applies: before any
+mechanism spec, name what "wage" and "rent" already mean in this codebase, so
+this doc's new gold flow reads as one more real, narrow thing rather than a
+collision with four adjacent, already-real-or-designed concepts:
+
+1. **`VillageWages`/`NpcEconomy`'s "subsistence wage"** (`npc.md`'s own
+   Needs section) is a REAL, live, but purely NPC-internal safety net — a
+   producing household's income is levied into a shared settlement purse, a
+   hungry non-producer draws exactly one meal's worth back out. `npc.md`'s
+   own doc comment is explicit: *"It is not hiring: nobody negotiates,
+   nobody chooses an employer."* The player is never a party to it, and this
+   doc's wage does not touch that purse or that mechanism at all — it is a
+   second, separate, player-funded gold flow.
+2. **`HiringGate.can_hire`/`NpcTrust`** (`npc_instructions.md`) is a real,
+   tested, but entirely inert PURE COMPARISON (`trust >= threshold and
+   wage_offered >= minimum_wage`) for a different feature altogether — hiring
+   an NPC to run scripted instructions. No live NPC carries the `trust`
+   field it reads, and — per that doc's own Status section — *"nothing pays
+   [a wage] out even though `hiring_gate.gd`'s check is real."* This doc's
+   wage is a separate, narrower mechanism (pay for filling a real workforce
+   slot) and does not attempt to also solve the instruction-hiring gate's
+   still-open trust/negotiation design.
+3. **`Contract.TYPES` already lists `"rent"`** as a valid contract type
+   (`player_citizenship.md`'s "Ledger" item can propose one), but
+   `obligations`/`consideration` are deliberately free-form strings with no
+   real currency wired in — that doc's own reasoning: *"inventing one just
+   to give a contract a number to hold would be exactly the premature
+   complexity the master brief warns against."* This doc's rent is the real
+   number that reasoning was waiting for, but it is deliberately its OWN
+   small, direct gold transfer, not a retrofit of `Contract`'s general
+   (and much more broadly used) consideration field — generalizing rent
+   into a structured `Contract` payload is a real, separate, explicitly
+   out-of-scope follow-up (see Open Questions).
+4. **`governance.md`'s "taxation"** is a much larger, civic-government
+   vision — *"Later governments can tax property, trade, production,
+   transactions, or households"* (`docs/emergence/03-contracts-property-
+   economy.md`), gated there on "a real currency/wealth-flow system that
+   doesn't exist yet." This doc's rent is exactly one narrow instance of
+   that missing wealth-flow (a landlord collecting rent from their own
+   tenants), not the general civic taxation system `governance.md` still
+   leaves entirely unbuilt — a settlement's own government taxing the
+   player, or taxing NPC-to-NPC trade, stays exactly as unimplemented as it
+   already was.
 
 ## Design pillars
 
@@ -213,20 +266,50 @@ built; it needs no separate "NPC sophistication" work of its own.
 
 ### 2. Starting a real player-owned construction project
 
-A new player action (e.g. bound alongside the existing build cursor) that,
-given a placement footprint and a known (unlocked) house recipe:
+**✅ Shipped, one deliberate simplification from the original sketch.**
+`Player._try_build_house_from_blueprint(recipe_id)` — bound to the same
+facing-tile targeting every other placement verb already uses
+(`_tile_targeting.facing_tile(current_tile(), _last_facing_direction)`) —
+given a known (unlocked) house recipe:
 
-1. Checks `ConstructionUnlock.has_unlocked` for that recipe — refuses with
-   "you don't know how to build this yet" if not.
-2. Checks `BuildingPlacement.can_place` — the exact same call the village
-   generator and every existing player placeable already use, per
-   `building_placement.gd`'s own doc comment ("the player's build cursor
-   and the village generator ask the same question of the same code").
-3. Checks the recipe's material cost is affordable (same `CraftingRecipeBook`
-   input-count check `Player.craft` already runs for every other recipe).
-4. Calls `ConstructionProjectStore.start_project` with the player's own
-   household id — a real `PLANNED` project, indistinguishable in the store
-   from a settlement's own, because pillar 2 says it should be.
+1. Checks `EarthChunkManager.can_build_house_from_blueprint(recipe_id,
+   target)` — a pure query refusing if the recipe isn't unlocked, doesn't
+   map to a real `HouseBlueprint` shape, the target chunk isn't loaded, or
+   any cell the shape would occupy is already `modification_at_global`-
+   occupied. Terrain buildability (water/cliff) is deliberately NOT checked
+   yet, the same simplification `BuilderMarker._buildable_ground` itself
+   already accepts (a bare `return true`) — a named, honest gap, not a
+   silent one.
+2. Only once that already holds does it call `Player.craft(recipe_id)`
+   UNCHANGED — the existing atomic `required_skill`/material gate (the same
+   one the `sagewerk` recipe already exercises) both refuses an under-
+   skilled or under-supplied attempt AND, on success, consumes the real
+   material. This ordering is what guarantees material is never wasted on a
+   placement that was always going to fail.
+3. On a successful craft, forms the player's household
+   (`HouseholdStore.form_household(PlayerIdentity.PLAYER_ENTITY_ID)`,
+   idempotent — a second house never creates a second household) and calls
+   `EarthChunkManager.stamp_house_and_grant_ownership(recipe_id, target,
+   household.id)`, which stamps the real ground+roof pieces
+   (`stamp_structure_at_global`) and creates-and-immediately-completes a
+   real, owned `ConstructionProject` (`ConstructionProjectStore.
+   start_project` + `complete_project`, granting the house's
+   `property_id()` to the household for real).
+
+One deliberate divergence from this section's original sketch: there is no
+separate `BuildingPlacement.can_place` call — `can_build_house_from_blueprint`
+checks occupancy directly against `modification_at_global` (the same
+per-cell check `stamp_structure_at_global`'s own callers already rely on),
+since `BuildingPlacement.can_place` today has exactly one real caller
+(`BuilderMarker`) and pulls in enclosure/support concerns a house-blueprint
+placement doesn't need yet. Revisit if a future tier needs real support/
+enclosure validation before landing.
+
+The build-vs-hire skill fork (section 3) and the hire-a-carpenter path are
+NOT part of this slice — today `_try_build_house_from_blueprint` only
+succeeds when the player's own Carpentry already clears the recipe's
+`required_skill` (exactly what `craft()`'s existing gate already checks);
+an under-skilled player is simply refused, with no hire offer yet.
 
 ### 3. The fork: build it yourself, or hire someone who can
 
@@ -321,13 +404,30 @@ Logistics-worker auto-spawn already is for occupation-pull — *"a directly-
 triggered shortcut for one specific case, not an implementation of the full
 mechanism"*: the moment a player-owned house `ConstructionProject` reaches
 `COMPLETE` and its house has no resident household, directly form one new
-resident household there (`HouseholdStore.form_household`, the same call
-`record_settlement_founded_if_new` already uses) and record it with a real
-event (a new `player_house_settled` type, siblings of the existing
-`npc_settled`/`player_settled` pair). One new resident per completed house,
-immediately, silently (pillar 6) — not a probability, not a pull mechanic,
-not eligible for the general migration system's own future floor/pull
-logic, which this doc leaves exactly where it already was.
+resident household there and record it with a real event (a new
+`player_house_settled` type, siblings of the existing `npc_settled`/
+`player_settled` pair). One new resident per completed house, immediately,
+silently (pillar 6) — not a probability, not a pull mechanic, not eligible
+for the general migration system's own future floor/pull logic, which this
+doc leaves exactly where it already was.
+
+**Where the resident's own identity comes from.** There is no registry
+anywhere mapping an id to a live `NpcIdentity` (confirmed absent) — the one
+real, existing pattern for "a household's own NPC" is deterministic
+reconstruction from a seed, exactly `EarthChunkManager._occupation_of_
+household`'s own body: `NpcIdentity.new(int(EntityRef.key_of(founder_id)))`.
+This doc's resident is seeded the SAME way `_house_site_seed` already seeds
+the house's own door/window placement — a real, deterministic function of
+the house's own site (`chunk_coord` + local `origin` + `recipe_id`) — so the
+household is formed via `HouseholdStore.form_household(EntityRef.for_npc(
+resident_seed))` (the same helper `NpcIdentity`'s own seed already keys
+into), not a bare, undifferentiated id. Two calls
+describing the same completed house always resolve to the same resident,
+the same "deterministic from a real key, not a random roll" philosophy this
+whole file already applies everywhere else. This resident's `NpcIdentity` is
+reconstructed on demand (never stored as a live node) exactly the way
+`_occupation_of_household` already reconstructs any OTHER household's
+founder today — no new registry, no new persistence burden.
 
 ### 7. Workforce: a real, spendable resource
 
@@ -371,6 +471,101 @@ lets `worker_slots` exceed 1 is what makes partial staffing a real,
 distinct state worth its own production-scaling rule — out of scope here,
 named for later).
 
+### 8. Wages: the player pays for a filled slot
+
+A filled worker slot (section 7) is not free — the moment a resident is
+assigned, the player owes that resident's household a real, periodic wage,
+paid out of the player's own `Wallet` (`scenes/player.gd`'s existing
+`wallet` field — the SAME class `NpcEconomy`'s own villagers already use, so
+"gold" means one thing everywhere in this codebase, not a second currency
+type invented for this doc).
+
+**Where the gold lands.** A resident household needs somewhere real to hold
+gold that survives its own house's chunk unloading — a live `NpcMarker`/
+`NpcEconomy` instance is exactly the wrong place (per `village_wages.gd`'s
+own doc comment, its shared village purse "is not persisted — a chunk
+reload resets it to zero," and an ephemeral per-frame `NpcEconomy` step
+would inherit the same problem). `Household` (`src/emergence/household.gd`)
+is the right place instead: a small, new `wallet: Wallet` field alongside
+its existing `members`/`property`, since `Household` already IS this
+project's real, persistent-in-`HouseholdStore` unit for exactly this kind
+of durable per-family state — no new store, one more field on an existing
+one.
+
+**A periodic tick, not a per-frame one.** Mirrors `step_regional_trade`'s
+own `_accumulator >= INTERVAL` gating exactly (`EarthChunkManager.
+step_regional_trade`), a new `EarthChunkManager.step_workforce_economy
+(delta_seconds)` called from `World`'s own ecology-step batch alongside
+`step_settlements`/`step_regional_trade`. On each due tick, for every real
+`WorkforceAssignment`: `player_wallet.spend(WAGE_PER_TICK)` (a real, tested,
+tuned constant, not an eyeballed comment, per this project's own
+Development-process rule) credited into that resident's `Household.wallet`.
+If the player can't afford it, the wage is simply not paid THIS tick — no
+debt, no eviction, a resident whose wage went unpaid stays assigned (see
+Open Questions: whether an unpaid resident should eventually walk off the
+job is a real, separate, un-answered question, the same shape section 7's
+own "reassignment and layoffs" open question already left open).
+
+### 9. Rent: the player as landlord
+
+Independent of employment — a resident owes rent for the ROOF, not the JOB
+— every resident household of a player-built house (section 6) pays the
+player rent on the SAME periodic tick section 8 already introduces. Reusing
+one `step_workforce_economy` tick for both directions (wage out, rent in)
+rather than two separate cadences, since both are the same "settle the
+player's tenant/employer ledger" moment.
+
+**Rent is capped by what the household actually has.** `resident_household.
+wallet.spend(RENT_PER_TICK)` — Wallet's own existing `spend` contract is
+already exactly "all-or-nothing, never goes negative" (`wallet.gd`), so an
+empty-walleted resident simply pays nothing that tick rather than the
+player's own wallet ever going negative or a household going into debt.
+**Deliberately no eviction, no arrears tracking, no black-market/evasion
+consequence this pass** — `docs/emergence/03-contracts-property-economy.md`'s
+own fuller taxation vision names exactly these as real future mechanics
+("tax changes can cause evasion... migration... black markets"), and this
+doc leaves all of them exactly that unbuilt, the same honest-simplification
+shape section 2's skipped terrain-buildability check already set.
+
+**A resident who is also an assigned worker nets out for real** — they earn
+`WAGE_PER_TICK` from the player and immediately owe `RENT_PER_TICK` back;
+whether the constants make working-and-living net positive, negative, or
+zero for a resident is a real, tunable, test-pinned relationship (see Open
+Questions), not an accident of two unrelated numbers.
+
+### 10. Needs, v1: reusing what's already real, not inventing a happiness stat
+
+Anno's own genre touchstone models multi-tier citizen needs (food, then
+goods, then luxuries) gating growth and satisfaction. Building that at real
+depth needs a general goods-consumption system that doesn't exist anywhere
+in this codebase yet — confirmed absent everywhere (no "happiness" concept
+exists under any name in any file; the only per-NPC need modeled anywhere
+is hunger, `npc.md`'s own Needs section, and that hunger is driven by a
+live, PER-FRAME `NpcEconomy`/`Drives` instance tied to a loaded chunk's
+`NpcMarker` — exactly the ephemeral, chunk-unload-losable kind of state
+section 8 already named as the wrong place for a resident's own wallet).
+
+**This pass's real, honest v1: a resident's needs are read off the
+SAME real, persistent, already-tested signal `SettlementState.
+carrying_capacity`/`status_for` already derive** — a settlement whose real
+food stock is `DECLINING` (per that module's own existing 15%-band
+classification) is a settlement that cannot feed its own residents, player-
+built houses included. A `DECLINING` settlement's resident households pay
+**no rent** that tick (their needs are unmet — asking rent from someone
+your own settlement can't feed is the one behavior this doc refuses to
+model as "fine"), while wages are unaffected (the player is not the one
+failing to feed anyone). `GROWING`/`STABLE` settlements collect rent
+normally. This is real, live, derived from data that already exists and is
+already tested — not a new number invented to sound like "needs," and not
+a stub that always reports "satisfied."
+
+**Named honestly as a v1, matching this doc's own carpentry-MVP precedent
+(section 4).** Multi-good consumption, a real happiness/satisfaction scalar,
+migration or productivity effects tied to it, and hooking an INDIVIDUAL
+resident's own hunger (rather than the whole settlement's food stock) into
+this — all stay exactly as unbuilt as they already were, named in Open
+Questions rather than silently implied solved.
+
 ## Status
 
 Updated here and in `docs/progress.md` as slices land:
@@ -389,26 +584,83 @@ Updated here and in `docs/progress.md` as slices land:
 - ✅ `NpcIdentity.carpentry_level` from a new `"carpentry_aptitude"`
   `NpcGenome` trait (a separate skill genome, confirmed not to perturb
   `personality_trait`/`dominant_trait()`)
-- ⬜ A Cottage tier (`cottage_bright`, level 2.0) — spec'd above, not yet
-  implemented
+- ✅ Cottage tier (`cottage_bright`, level 2.0 — `blueprint_cottage` item,
+  `Shop.CATALOG` entry, `cottage` recipe)
 - ⬜ A Manor tier — blocked on a real `carpentry_3` node (see Open
   Questions), not attempted
-- ⬜ Player-facing "start a house project" action (checks: unlock,
-  placement, material) creating a real player-owned `ConstructionProject`
-- ⬜ Build-it-yourself path wired to the player's own `SkillTree.
-  total_bonus` check (reuses existing hand-placement/`ConstructionLabor`)
-- ⬜ Hire-a-Builder path: spare-capacity filter by `carpentry_level`, gold
-  cost, settlement-side capacity reduction for the hire's duration
-- ⬜ The first live `BuilderMarker` spawner (player-hired projects only)
-- ⬜ Move-in: `player_house_settled` event + household formation on project
-  completion
-- ⬜ `worker_slots` on the Sägewerk (starts at the existing implicit 1)
-- ⬜ Workforce assignment record + free-workforce derivation + daily-
-  schedule routing to the workplace
+- ✅ Player-facing "start a house project" action
+  (`Player._try_build_house_from_blueprint`: checks unlock+placement via
+  `EarthChunkManager.can_build_house_from_blueprint`, then material+skill
+  via the existing `craft()`) creating a real player-owned, immediately
+  `COMPLETE` `ConstructionProject`
+  (`EarthChunkManager.stamp_house_and_grant_ownership`)
+- ✅ Build-it-yourself path — `craft()`'s existing `required_skill` gate
+  (`SkillTree.total_bonus`) IS the fork's "is the player's own skill
+  enough" half; the stamped pieces land already `COMPLETE` (instant, like
+  every other player craft action) rather than accruing
+  `ConstructionLabor` hours over time
+- ✅ The hire-a-carpenter half of the fork (section 3):
+  `EarthChunkManager.find_spare_carpenter_household` (a pure query,
+  comparing the SAME `required_skill` against a spare household's
+  `NpcIdentity.carpentry_level`) + `Player._try_hire_carpenter_for_house`
+  (real gold via a real, explicit `HIRE_A_CARPENTER_GOLD_COST` placeholder
+  constant, plus the same real material cost `craft()` would have charged —
+  only the skill requirement is waived). 🚧 **Simplified**: lands the house
+  INSTANTLY once paid for, the same way the self-build path already does,
+  rather than a real `BuilderMarker` walking over and taking real time.
+- 🚧 Hire-a-Builder path: the spare-capacity/`carpentry_level` filter and
+  gold cost are real (above); settlement-side capacity reduction for the
+  hire's duration is NOT implemented (the hire completes instantly, so
+  there is no real "duration" yet to reduce capacity for).
+- ⬜ The first live `BuilderMarker` spawner (player-hired projects only) —
+  still not needed by anything real, since the hire path above is instant
+- ✅ Move-in: `player_house_settled` event + household formation
+  (deterministic resident identity via `EntityRef.for_npc`, section 6),
+  wired automatically into `stamp_house_and_grant_ownership` on project
+  completion — a real, separate `resident_household_id` field on
+  `ConstructionProject`, joining a real settlement's own household census
+  only when one has real founding history at that chunk
+- ✅ `SAGEWERK_WORKER_SLOTS := 1` — an inspectable number, not a behavior
+  change from the existing always-exactly-one Lumberjack
+- ✅ Workforce assignment record (`EarthChunkManager._workforce_assignments`
+  + `assign_resident_to_workplace`/`open_worker_slots_at`/
+  `is_resident_assigned`/`unassign_resident`) + `free_workforce_in_chunk`
+  derivation. 🚧 **Simplified**: no daily-schedule routing to the
+  workplace's position yet — these residents are bookkeeping-only
+  households (see section 6), not live `NpcMarker`s with a schedule to
+  route; a real `/workforce assign|slots|free` dev-console command is the
+  only player-facing surface today (the same "dev console is a real,
+  honest interim call site" choice `player_citizenship.md`'s own Deed/
+  Ledger/Charter commands already made)
+- ✅ `Household.wallet` (the field sections 8/9 both depend on), persisted
+  through `HouseholdStore.to_dicts`/`from_dicts`
+- ✅ Wages: `EarthChunkManager.step_workforce_economy`, wired into `World`'s
+  own per-frame ecology batch (the same cadence `step_settlements`/
+  `step_regional_trade` already run on) — pays every filled worker slot
+  from the focus player's own real `Wallet` on a periodic tick, skipped
+  (no debt) if unaffordable
+- ✅ Rent: the same tick collects rent from every player-built-house
+  resident, capped by `Wallet.spend`'s existing all-or-nothing contract
+- ✅ Needs v1: rent suspended for residents of a `DECLINING`
+  (`SettlementState.status_for`, via a new `_settlement_status_for` helper
+  mirroring `legitimacy_for_settlement`'s own derivation) settlement
 - 🚧 Interior furniture (see `housing.md`'s own Status list, cross-
   referenced from here rather than duplicated) -- real pieces and a real
   placement rule exist; the live chunk layer/rendering/player verb do not
   yet
+
+**A real, explicit caveat on everything marked ✅ above from "Move-in"
+onward**: written directly, WITHOUT the strict TDD red-first cycle this
+project's own `CLAUDE.md` otherwise mandates, and without running the test
+suite at all — an explicit, direct user instruction ("skip tests") mid-
+session, honored as this project's actual maintainer's call to make. Every
+piece above is a careful, deliberate design grounded in real, verified
+existing APIs (confirmed by direct reads, not guesses), but **none of it
+has been run even once**. Treat it as unverified until a real GUT pass
+(and, before merging, a full regression run) actually confirms it —
+this is flagged here precisely so that verification is not silently
+skipped a second time by a future reader trusting this Status list at
+face value.
 
 ## Open questions
 
@@ -446,3 +698,27 @@ Updated here and in `docs/progress.md` as slices land:
 - **Should `worker_slots` ever exceed 1 for the Sägewerk itself**, and if
   so what does partial staffing do to `SagewerkProduction`'s own rate —
   named in section 7 as future work, not answered here.
+- **The exact `WAGE_PER_TICK`/`RENT_PER_TICK`/tick-interval numbers**, and
+  whether they should net a working resident positive, negative, or exactly
+  zero (section 9's own "nets out for real" paragraph) — real, tested,
+  test-pinned constants once chosen (per this project's own Development-
+  process rule against eyeballed values), not chosen here.
+- **An unpaid wage or an unpaid rent, repeated over time** — does either
+  ever become "debt," trigger eviction, cause a resident to quit, or stay a
+  purely momentary, forgiven-next-tick miss forever? This pass deliberately
+  ships the second (simplest, honest) answer; the richer one is
+  `docs/emergence/03-contracts-property-economy.md`'s own already-named
+  "evasion... migration... black markets" territory.
+- **Generalizing rent into `Contract`'s own structured `consideration`**
+  (see the "wage/rent" disambiguation section above) rather than a direct
+  `Wallet`-to-`Wallet` transfer — real future unification work, deliberately
+  not attempted this pass to avoid touching `Contract`'s many other,
+  unrelated callers.
+- **Needs v2**: an individual resident's own hunger (not just the
+  settlement's aggregate food stock), multi-good consumption, and a real
+  happiness/satisfaction scalar with actual gameplay consequences (migration,
+  productivity, unrest) — section 10's own named, deliberate scope boundary.
+- **Civic/government taxation** (`governance.md`'s own much larger vision —
+  a settlement's government taxing property, trade, or the player) stays
+  exactly as unbuilt as it already was; this doc's "rent" is a landlord
+  collecting from their own tenants, never a government levying on anyone.

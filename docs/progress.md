@@ -20557,16 +20557,39 @@ commit):
   rather than a branch in `BuildingPlacement`: furniture needs genuine
   room enclosure, which is a different question than a roof's "just needs
   a floor beneath it."
+- A real player-owned `ConstructionProject`, end to end:
+  `EarthChunkManager.can_build_house_from_blueprint` (pure query: unlocked?
+  real shape? chunk loaded? every cell actually free via
+  `modification_at_global`?) and `stamp_house_and_grant_ownership` (stamps
+  the real ground+roof pieces via the existing `stamp_structure_at_global`,
+  then creates-and-immediately-completes a real, owned `ConstructionProject`
+  -- today's ledger had never had a live caller pass a player household id
+  before this, though nothing stopped it). Deliberately skips
+  `BuildingPlacement.can_place` (that call's only real caller today is
+  `BuilderMarker`; a house blueprint's own occupancy check against
+  `modification_at_global` is the same per-cell question
+  `stamp_structure_at_global`'s other callers already rely on, without
+  pulling in enclosure/support concerns this placement doesn't need yet).
+- `Player._try_build_house_from_blueprint(recipe_id)`, the player-facing
+  action tying the above together: checks placement validity BEFORE
+  calling the existing, unchanged `craft()` (so an under-skilled or
+  under-supplied attempt never wastes material), and only forms the
+  player's household (`HouseholdStore.form_household`, idempotent) and
+  stamps the house once `craft()` has actually succeeded. This IS the
+  build-it-yourself half of the build-or-hire fork -- `craft()`'s existing
+  `required_skill` gate against the player's own `SkillTree.total_bonus`
+  is what makes "Carpentry too low" refuse in practice, the same gate the
+  `sagewerk` recipe already exercises.
 
 **⬜ Explicitly not shipped yet** (named in both concept docs' own Status
 lists, not silently implied done):
 
-- Starting a real player-owned `ConstructionProject` at all (today's
-  ledger has never had a live caller pass a player household id, though
-  nothing stops it -- this pass didn't need it yet).
-- The build-it-yourself vs. hire-an-NPC-carpenter fork, and the first
-  live `BuilderMarker` spawner (`timber_construction.md`'s own long-
-  flagged gap) -- scoped to player-hired projects only when it lands.
+- The hire-an-NPC-carpenter half of the fork (comparing the same
+  `required_skill` against a spare household's `NpcIdentity.
+  carpentry_level`, routing there when the player's own falls short) and
+  the first live `BuilderMarker` spawner (`timber_construction.md`'s own
+  long-flagged gap) -- scoped to player-hired projects only when it lands.
+  Today an under-skilled player is simply refused, with no hire offered.
 - Move-in (a narrow, directly-triggered shortcut, explicitly NOT
   `quests.md`'s full migration system, which stays exactly as unbuilt as
   it already was).
@@ -20583,6 +20606,75 @@ lists, not silently implied done):
 Every new/changed file re-run directly (item_catalog, shop,
 crafting_recipe_book, npc_identity, earth_chunk_manager (scoped),
 building_piece, building_statics, room_detector, building_placement,
-furniture_placement, player (scoped)) -- all green, no regressions found
-in any neighboring suite.
+furniture_placement, player (scoped, full suite green)) -- all green, no
+regressions found in any neighboring suite.
+
+### Workforce: the hire fork, move-in, worker slots, wages, rent, needs v1 (2026-09-13) -- UNTESTED, written without GUT
+
+Continuing directly from the pass above (same day): the player's own
+in-conversation request expanded mid-session to "fully implement
+everything" plus a full Anno-1806-style economy (player gold, player-to-
+NPC wages, NPC-to-player rent, citizen needs). Two research passes read
+every adjacent doc (`economy.md`, `player_citizenship.md`, `governance.md`,
+`trade.md`/`player_trade.md`, `labor_skills.md`, `production_chains.md`,
+`npc.md`) and the real source (`Wallet`, `village_wages.gd`,
+`npc_economy.gd`, `hiring_gate.gd`, `settlement_state.gd`) before any of
+this was written, confirmed real and cited in `workforce.md`'s own new
+"Say this once, too" disambiguation section (rent/wages already meant three
+OTHER things here) and its new sections 8-10.
+
+**Shipped this pass** (all real code, see `workforce.md`'s own Status list
+for the full account with file/function names):
+
+- The hire-a-carpenter half of the build-vs-hire fork, end to end: a pure
+  household-finder (comparing a spare household's real `NpcIdentity.
+  carpentry_level` against a recipe's `required_skill`) plus a real,
+  gold-and-material-charging `Player` action -- simplified to land the
+  house instantly once paid for (the same simplification the self-build
+  path already uses), rather than waiting on a real `BuilderMarker`
+  spawner that still does not exist anywhere in this codebase.
+- Move-in: a real, deterministic, distinct-from-the-owner resident
+  household, joining a real settlement's household census only where one
+  genuinely exists.
+- A real worker-slot/assignment record for the Sägewerk (`worker_slots :=
+  1`, matching its own already-real single-Lumberjack behavior) and a
+  `free_workforce_in_chunk` derivation -- reachable today only via a new
+  `/workforce assign|slots|free` dev-console command (the same "dev
+  console is a real, honest interim call site" choice
+  `player_citizenship.md`'s own item commands already made); no live
+  daily-schedule routing for these bookkeeping-only residents yet.
+- `Household.wallet`, persisted -- the one new piece of real "currency"
+  infrastructure `governance.md`'s own taxation section named as the
+  missing prerequisite for any real wealth-flow mechanic.
+- Wages and Rent: one real periodic tick (`EarthChunkManager.
+  step_workforce_economy`, wired into `World`'s existing per-frame ecology
+  batch alongside `step_settlements`/`step_regional_trade`) that pays every
+  filled worker slot from the player's own Wallet and collects rent from
+  every player-built-house resident into it.
+- Needs v1: rent is suspended for residents of a settlement `SettlementState.
+  status_for` already classifies `DECLINING` -- real, derived from data
+  this project already has and already tests elsewhere, not an invented
+  "happiness" stat (confirmed nothing of the kind exists anywhere in this
+  codebase before this pass).
+
+**Explicitly NOT this pass, named rather than silently implied done**: a
+live `BuilderMarker` spawner (the hire path is instant instead); settlement-
+side capacity reduction for a hire's duration (nothing to reduce capacity
+FOR while the hire is instant); reassignment/layoffs; a resident's daily
+schedule actually routing to their workplace; multi-good consumption or a
+real happiness/satisfaction scalar (needs v2); civic/government taxation
+(`governance.md`'s own much larger, separate vision -- this pass is a
+landlord collecting rent from their own tenants, never a government
+levying on anyone).
+
+**The honest caveat this entry exists to record**: per a direct,
+explicit user instruction mid-session ("skip tests"), every item in this
+section was written directly against real, independently-verified existing
+APIs (no guessed signatures), WITHOUT the strict TDD red-first cycle this
+project's `CLAUDE.md` otherwise mandates, and the test suite was not run
+even once for any of it -- a previously-running full `test_earth_chunk_
+manager.gd` regression pass was itself stopped by the user mid-session for
+the same reason. Nothing here should be treated as verified, and this
+branch (`feat/blueprints-and-workforce`) should not be merged to `main`
+without a real GUT pass first.
 
