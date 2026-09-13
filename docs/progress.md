@@ -19863,6 +19863,25 @@ regression in `test_loading_overlay.gd`/`test_loading_spinner.gd`/
 
 Branched from fresh `origin/main`, pushed immediately.
 
+## Loading-tip rotation lengthened 2.0s -> 5.0s (`concept/persistence.md`, 2026-09-13)
+
+Requested directly: "Make the loading screen tips stay for 5s" — the
+2.0s interval (see the round above) was too fast to actually read a tip
+before it rotated, the mirror-image complaint of the 4.5s-too-slow
+report that had motivated dropping it to 2.0s in the first place.
+`LoadingTips.TIP_INTERVAL_SECONDS` is now `5.0`.
+`test_tip_interval_is_a_real_reasonable_reading_duration` moved from an
+open `(1.0, 4.0)` range to an exact `assert_eq(..., 5.0)` — a direct,
+explicit user-requested number is pinned exactly rather than left as a
+UX-judgment range, per CLAUDE.md's no-eyeballed-constants rule. Confirmed
+red against the unmodified 2.0s constant first, green after the one-line
+change. `test_loading_tips.gd` 18/18, `test_loading_overlay.gd` 6/6 — no
+other file needed touching, since every other assertion in both files
+already reads `TIP_INTERVAL_SECONDS` symbolically rather than a
+hardcoded 2.0.
+
+Branched from fresh `origin/main`, pushed immediately.
+
 ## The real "Still at 1fps" cause: a per-pixel art-loading loop, not a per-frame system (2026-09-10)
 
 Reported live, again, plainly: *"Can you now try to fix performance
