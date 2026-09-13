@@ -151,18 +151,41 @@ read-only:
   nothing about *which* creatures a player has met ever stored. What IS
   real and persisted is `Player.to_save_dict()`'s `bonded_companions`: a
   plain `[{"species": String}, ...]` list, nothing richer. This view shows
-  exactly that and no more, honestly scoped rather than reusing the
-  "Bestiary" name for something thinner than it implies.
+  exactly that, plus (below) the real per-individual stats `KeptAnimals`
+  already tracks for the animals a player has actually tied up or tamed —
+  honestly scoped to what's real rather than reusing the "Bestiary" name
+  for a full every-creature-ever-seen encounter log this codebase has no
+  data source for at all (that remains a real, larger follow-up: it would
+  mean designing and building a new persisted tracking mechanism first, a
+  concept-doc-sized decision of its own, not a view-sized addition).
   `companion_companions_view.gd`.
-  - Two real, larger follow-ups this is NOT: (1) `KeptAnimals`
-    (`src/world/kept_animals.gd`) DOES persist trust/order/`wander_seed`
-    (→ live-rederivable fitness) for tied/tamed animals, but **per chunk**
-    (`_kept_animals_path(chunk_coord)`) — showing those means scanning
-    every chunk's save file on disk, real additional plumbing, not a
-    same-file read like the three shipped views. (2) A full
-    every-creature-ever-seen bestiary has no data source at all and would
-    mean designing and building a new persisted tracking mechanism first —
-    a concept-doc-sized decision of its own, not a view-sized addition.
+  - **The Stable Ledger (2026-09-13).** `KeptAnimals`
+    (`src/world/kept_animals.gd`) persists real trust/order/`is_tied`/
+    `tied_to`/`wander_seed` (→ live-rederivable `AnimalFitness` phenotype)
+    per tied/tamed individual, but **per chunk**
+    (`_kept_animals_path(chunk_coord)`) — one `.bin` file per chunk that
+    has any. New `CompanionKeptAnimalsReader.read_all(dir_path)`
+    (`src/companion_server/companion_kept_animals_reader.gd`) is the
+    scanning plumbing that used to be missing: `DirAccess.open`/
+    `list_dir_begin` every `*.bin` in the directory (the same idiom
+    `world_reset.gd`'s `backup_directory`/`wipe_directory` already use),
+    `KeptAnimals.load_all()` per file, each record tagged with the
+    `Vector2i` chunk coordinate its filename encoded. A missing directory
+    returns `[]`, never an error. `CompanionCompanionsView.render` grew a
+    second parameter, `kept_animals: Array = []` (the default keeps every
+    existing single-argument call site green), and renders one row per
+    kept animal: species, chunk coordinate, tied/loose, order
+    (Follow/Stay), a `_trust_stage_for(trust, is_tied)` stage that reuses
+    `Taming.TAME_TRUST`/`is_tame()` — the same threshold real gameplay
+    already gates taming on, not a new eyeballed display-only scale — and
+    a live fitness score from `AnimalFitness.new().phenotype_for
+    (wander_seed)`/`.fitness_score()`, computed fresh per request with no
+    new stored field. `companion_server.gd`'s `"companions"` route calls
+    `CompanionKeptAnimalsReader.read_all()` once and passes the result
+    through. This is Tier 1's first read that isn't a single `PlayerSave`
+    file: the tier's "reads only the save file" boundary is now, precisely,
+    "reads the save file plus the bounded `chunk_kept_animals` directory" —
+    still zero live `Player`/scene-tree hook, and still read-only.
 - ⬜ **Settlement dashboard** — deferred, not built. `VillageWages`
   (`src/world/village_wages.gd`) turned out to be a stateless static
   module; the real live numbers (a settlement's gold purse) are `Object`
@@ -241,10 +264,14 @@ a rephrased string for Voice — never a decision.
 `PlayerSave.new().load_data()` fresh per request — persistence.md's existing
 `user://player_save.bin` `FileAccess.store_var`/`get_var` convention, reused
 directly rather than a second one invented for this server ("one
-convention, reused," persistence.md's own pillar 4). There is no live
-`Player`/scene-tree hook anywhere in `companion_server.gd`: a request only
-ever sees what's actually been saved, the same staleness a manual reload
-would show, and the server needs no wiring into `scenes/world.gd` at all.
+convention, reused," persistence.md's own pillar 4). The Companions route
+additionally reads `EarthChunkManager.KEPT_ANIMALS_DIR`'s bounded set of
+per-chunk `.bin` files (see the Stable Ledger note above) — Tier 1's "one
+file" boundary is now "the save file plus that one bounded directory,"
+still nothing else. There is no live `Player`/scene-tree hook anywhere in
+`companion_server.gd`: a request only ever sees what's actually been
+saved, the same staleness a manual reload would show, and the server needs
+no wiring into `scenes/world.gd` at all.
 
 HTTP itself is hand-rolled: Godot has no built-in HTTP server class (only
 `HTTPClient`/`HTTPRequest` for the client side), so `companion_server.gd`
@@ -321,8 +348,8 @@ Mirrors [overview.md](overview.md)'s own Non-goals section:
   chosen, showing it likely means this view is the first Tier 1 exception
   to "reads only `PlayerSave.load_data()`" — worth deciding deliberately,
   not by default.
-- **A full "every creature encountered" bestiary** and **richer
-  `KeptAnimals`-backed companion stats** (trust, per-chunk tied-animal
-  locations, live fitness numbers) are real, wanted follow-ups with no
-  tracking mechanism (bestiary) or same-file read (KeptAnimals is
-  per-chunk) to build them from yet — see the Companions bullet above.
+- **A full "every creature encountered" bestiary** is a real, wanted
+  follow-up with no tracking mechanism to build it from yet — see the
+  Companions bullet above. (Richer `KeptAnimals`-backed companion stats —
+  trust, tied-animal location, live fitness numbers — shipped 2026-09-13
+  as the Stable Ledger, see above; this bullet no longer covers that.)
