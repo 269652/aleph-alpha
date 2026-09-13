@@ -21890,3 +21890,89 @@ which `furnish_house_at_global` correctly refuses (the same enclosed-room
 fixture lesson that entry had already learned once, on the upper side).
 Fixed in the test, not the code -- the reconciled production code was
 right as merged.
+
+### Milling and baking: a hungry village raises farm -> mill -> bakery on its own (`concept/milling_and_baking.md`, 2026-09-13)
+
+Requested directly right after the two-story fix: *"The NPCs also need to
+produce food; so building a Wheat Farm should become an emergent need
+pretty soon."* Asked which way to close the loop, the user chose the full
+chain over a "wheat counts as food" shortcut. New concept doc first, then
+built TDD red-first on `feat/bread-chain`, every module with its own fast
+unit file; per a standing "skip tests" instruction the multi-minute
+`test_earth_chunk_manager.gd`/`test_player.gd` files were deliberately not
+re-run -- every directly affected neighbouring suite was.
+
+**Research before code changed the plan in five places** (an Explore agent
+traced the whole build pipeline; all five recorded in the doc): the
+resolver picks the SHALLOWEST missing structure (a bakery first), not the
+farm the first draft assumed; the Sägewerk's Lumberjack was never wired to
+the world (every beam/plank ever shaped in live play silently discarded);
+`SettlementConstruction` draws materials via a `Market.remove_stock` that
+did not exist; autonomous projects were sited at `Vector2i.ZERO` with no
+terrain check and no fence; and no village ever has wood/stone in its
+Market, so the pipeline could only ever end in SHORTFALL. Plus: nothing
+counted Storage-held food or let a villager eat it.
+
+Shipped, in commit order:
+- `StockConversionProduction` (SagewerkProduction's single-lane form) +
+  `MillProduction`/`BakeryProduction`, constants pinned (8/8, 3/3, 2/2).
+- `mill`/`bakery` recipes and `grow_wheat`/`mill_flour`/`bake_bread` as
+  resolver data, plus the new `"automated"` recipe field (`can_craft`/
+  `craft` refuse it) so free hand-crafted wheat is impossible -- the
+  exploit `npc_farm_production.md` had refused to paper over; recipe count
+  57 -> 62 (`test_crafting_recipe_book.gd` 66/66; `production_chains.md`
+  aligned). `mill`/`bakery`/`flour`/`bread` in `ItemCatalog` (90/90).
+- Two latent bugs fixed with pinning tests: the Lumberjack's `earth`
+  (`test_earth_chunk_manager_structure_workers.gd`) and `Market.
+  remove_stock` (`test_market.gd` 13/13).
+- `ConstructionPriority.deepest_missing_structure_id` (the walk's last
+  structure need -- the chain's root) used by `SettlementBuildDecision`:
+  a bread shortfall starts a farm, then a mill, then a bakery, and is not
+  actionable once all three stand (23/23, 15/15). City Hall demands now
+  show the chain's three links with no new code (`test_settlement_
+  demand.gd` 8/8, its "every gated structure present" list widened).
+- `SettlementFood` counts food on the village's own shelves
+  (`structure_stocks`) and `food_shortfall_for` asks for exactly the
+  loaves that lift a settlement out of DECLINING (28/28).
+- `StructureConversionMarker` -> `MillMarker` "Miller" / `BakeryMarker`
+  "Baker": one worker per tile, spawned/despawned/reloaded like the
+  Lumberjack/Farmer via `_conversion_workers`, converting the BUILDING's
+  own StructureStock so a hauler can feed it (9/9).
+- `CHAIN_LOGISTICS_LEGS`: the existing `LogisticsMarker` with a consumer
+  as destination -- farm->mill and storage->mill (wheat), mill->bakery
+  (flour), bakery->storage (bread) -- reconciled on tile change/load/
+  unload in its own `_chain_logistics_workers`; a wooden_fence change now
+  also re-pairs the Farms it staffs (pre-existing gap); one real end-to-
+  end Farm->Mill haul (12/12).
+- Villagers eat the bread: `NpcEconomy._try_eat` falls back from a bare
+  stall to `EarthChunkManager.buy_structure_meal_near` (nearest Bakery/
+  Storage shelf within the village, VillageMarket's own meal price,
+  all-or-nothing), and the subsistence wage counts that shelf (43/43).
+- `SettlementGathering`: spare hands gather wood/stone/fibre into the
+  Market every assessment, pinned daily rates, sub-unit carry (6/6).
+- The wiring, `test_earth_chunk_manager_bread_chain.gd` 9/9 end to end
+  against Berlin's real terrain: the food shortfall joins the decision's
+  inputs; projects get a real site (`_settlement_build_origin_for`: the
+  first clear, buildable cell with buildable, unmodified terrain on all
+  eight sides, spiralling out from the settlement centre -- the first
+  version checked only the centre cell and sited a Farm in a one-cell
+  forest hole with nowhere for its fence, caught by the test), re-checked
+  at completion; a completed Farm is placed fenced so its Farmer moves
+  in; `step_settlements` gathers material for every settlement and, for
+  a loaded one, re-decides and advances labor every 30 s (the same
+  closed-form math as the reload catch-up, factored into
+  `_advance_construction_labor`); every capacity read goes through one
+  `_settlement_capacity` that includes shelf food.
+
+**Named honestly**: the first draft's claim that a still-DECLINING village
+would raise a second Farm was wrong -- the resolver reports missing
+producers, not throughput -- and is now an Open Question; a visited
+merchant's 20 shop-stocked cooked meat counts as settlement food and keeps
+a five-villager village with a merchant from ever declining (the existing
+food model's quirk, named in the doc, not worked around); mill/bakery/
+flour/bread use procedural art fallbacks; oven fuel is not modeled; and no
+real village was watched walking the chain on the clock in this pass --
+the integration test drives the same functions the game's own
+`step_settlements` calls. Also found in passing, not fixed here:
+`tests/unit/test_crafting_window.gd` fails 0/16 on `main` itself
+(flagged as its own task).

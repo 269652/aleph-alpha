@@ -142,21 +142,35 @@ silent omission. Production is independent of any worker's own phase
 (pillar 2): a Mill grinds whatever wheat has reached it whether or not a
 hauler is mid-trip.
 
-### Hauling between the links: Logistics, generalized by one field
+### Hauling between the links: the existing hauler, a consumer as its destination
 
-`LogisticsMarker`/`LogisticsBehavior` today move finished goods *out of* a
-producer *into* the nearest Storage (`source_structure_id`, `item_id`).
-The chain needs the same walker to also feed a consumer: wheat from a Farm
-(or a Storage holding wheat) into a Mill, flour from a Mill into a Bakery,
-bread from a Bakery into Storage. That is one additional notion — a
-**destination structure id** — on the existing walker, not a new one: a
-logistics leg is (source structure, item, destination structure), where
-today's behaviour is the special case "destination = storage". Legs are
-reconciled the same way the Sägewerk's and Farm's Storage pairing already
-is (`_sync_logistics_workers`, on build/destroy/load), one walker per real
-(source, destination) pair within the same pairing radius. See the
-implementation notes in Status for exactly how far the existing code
-reached and what was added.
+`LogisticsMarker`/`LogisticsBehavior` move goods *out of* a source
+structure *into* a destination structure — and, it turned out, the marker
+was already generic in both ids (`source_structure_id`, `storage_structure_
+id`, `preferred_storage_position`); only its *spawner* was hard-wired to
+"destination = storage". So the chain needed no change to the walker at
+all, only a second pairing table: `EarthChunkManager.CHAIN_LOGISTICS_LEGS`
+— farm → mill (wheat), storage → mill (wheat), mill → bakery (flour),
+bakery → storage (bread) — reconciled exactly the way the Sägewerk's and
+Farm's Storage pairing already is (one hauler per item per real
+destination within the same pairing radius, re-decided on every relevant
+tile change, on load and on unload), kept in its own
+`_chain_logistics_workers` dict so a Farm's Mill legs and its Storage legs
+never prune each other. The storage → mill leg is what keeps wheat from
+stranding: the pre-existing farm → storage hauler keeps running, the two
+haulers on one Farm simply race for a pickup and the loser aborts, and
+whatever reaches the Storage is carried on to the Mill from there.
+
+**Who works the Mill and the Bakery.** The Sägewerk's shaping runs off its
+Lumberjack's *private* log stock, credited only by that Lumberjack's own
+fell-and-carry loop — nothing external can ever feed it. A Mill has to be
+fed by a hauler, so its worker (`StructureConversionMarker` → `MillMarker`
+"Miller" / `BakeryMarker` "Baker", one per tile, spawned/despawned/
+reloaded like the Lumberjack and Farmer) reads its input from the
+building's *real* `StructureStock` and credits its product back to the
+same stock, where the next hauler picks it up. Production is
+`StockConversionProduction.advance()` every frame the marker exists; the
+marker's presence itself is "staffed", the Lumberjack's own rule.
 
 ### The resolver's view: three recipes, one new flag
 
@@ -185,19 +199,45 @@ player use for the two buildings beyond watching them work.
 
 `NeedResolver` needs no change: asked for bread with no bakery, mill or
 farm nearby, it reports a structure need for each and a material need for
-nothing — the whole chain's inputs are produced, not gathered.
+nothing — the whole chain's inputs are produced, not gathered. One thing
+did need to change beside it: `ConstructionPriority.missing_structure_id`
+returns the *first* structure need of the walk, which for a chain is the
+**shallowest** link (the bakery) — this doc's own first draft assumed the
+opposite. A settlement raising a chain must start from its root, so
+`ConstructionPriority.deepest_missing_structure_id` (the walk's *last*
+structure need — pre-order, so the deepest along the chain, pinned against
+the real recipe book) exists alongside it, and `SettlementBuildDecision`
+uses that one; `missing_structure_id` keeps its shallowest answer for the
+double-fix cancellation re-check, where "what blocks this recipe directly"
+is the right question.
 
-### Food that counts: `SettlementFood` sees Storage
+### Food that counts: `SettlementFood` sees the village's own shelves
 
-`SettlementFood` today sums two containers — the persisted emergence
+`SettlementFood` summed two containers — the persisted emergence
 `Market` and the live `VillageMarket` — filtered to `kind == "food"`.
 Bread lives in a third: a structure's own `StructureStock` (the Bakery's,
-then a Storage's once hauled). So `SettlementFood` gains the sum of
-`kind == "food"` stock across the settlement chunk's own Storage
-structures (and any producer's own stock — a loaf still in the Bakery is
-food the village owns). Nothing about the classification itself changes:
-`SettlementState.status_for` reads the same `carrying_capacity =
-food_stock / FOOD_PER_HOUSEHOLD` and the same `STABLE_BAND`.
+then a Storage's once hauled). So `SettlementFood.food_stock`/`carrying_
+capacity` take an optional list of the settlement chunk's own structure
+stocks (`EarthChunkManager._settlement_structure_stocks`, every stock
+keyed to a tile in that chunk), and every capacity read in the world —
+`step_settlements`, `_settlement_status_for`, `legitimacy_for_settlement`
+— goes through one `_settlement_capacity` helper that passes them.
+Nothing about the classification itself changes: `SettlementState.
+status_for` reads the same `carrying_capacity = food_stock /
+FOOD_PER_HOUSEHOLD` and the same `STABLE_BAND`.
+
+**And villagers eat it.** Individual hunger buys meals from the
+`VillageMarket` (`NpcEconomy._try_eat` → `buy_meal`), which no Storage or
+Bakery ever stocks. So a hungry villager who finds the stall bare now
+"walks to the bakehouse": `EarthChunkManager.buy_structure_meal_near` sells
+one whole unit of any real food off the nearest Bakery/Storage shelf
+within the villager's own village (`STRUCTURE_MEAL_RADIUS_TILES`, one
+chunk), at `VillageMarket`'s own meal price, all-or-nothing exactly like
+`buy_meal`; and the purse-funded subsistence wage counts that shelf as
+somewhere a wage buys a meal (`has_structure_meal_near`), so nobody
+starves next to a full bakehouse because the stall happened to be empty.
+Bread is therefore consumed as well as counted — the shelf goes down as
+the village eats, and the need can genuinely return.
 
 ### The emergent need: a food shortfall the build decision can act on
 
@@ -218,10 +258,10 @@ From there the existing pipeline does the rest:
 
 1. `recipe_for_output("bread")` → `bake_bread`; `ConstructionPriority.
    decide` → `NeedResolver` walks it and finds, with none of the three
-   built, three structure needs; `missing_structure_id` names the one to
-   build first — the **deepest** (`farm`), because a Bakery with no flour
-   coming is a dead building; the walk's own leaf-first order already
-   yields this, pinned by test rather than assumed.
+   built, three structure needs; `deepest_missing_structure_id` names the
+   one to build first — the **root** (`farm`), because a Bakery with no
+   flour coming is a dead building (see "The resolver's view" for why the
+   older picker would have said the opposite).
 2. `SettlementConstruction.advance("farm", ...)` starts a real
    `ConstructionProject` if the settlement's own stock covers the cost
    (`ConstructionStartHysteresis`), labor catches up across chunk loads,
@@ -240,31 +280,86 @@ From there the existing pipeline does the rest:
    `DECLINING`; `food_shortfall_for` returns nothing; the decision has
    nothing to act on. No cap needed (pillar 5).
 
-Where a settlement lacks the wood and stone for the next building, the
-decision reports `SHORTFALL` exactly as it would for any other project,
-and the existing production-shortfall quest path is what surfaces "this
-village wants to raise a farm and is short of wood" to the player — an
-emergent request, not a scripted one. What a procedurally generated
-village actually has in its own Market in live play is recorded honestly
-in Status below.
+**Where the wood and stone come from.** Research before building this
+found that nothing in live play ever puts wood, stone or plant fibre into
+a settlement's persisted Market — the Shop stocks trade goods, the granary
+food, regional trade whatever is short elsewhere — so every autonomous
+construction decision could only ever have ended in `SHORTFALL`, and the
+chain above would have been dead on arrival. `SettlementGathering` closes
+that: a settlement's spare hands (the same `SettlementSpareCapacity` the
+build decision already uses — households beyond farmer/hunter/fisher)
+cut timber, pick fieldstone and pull fibre into the Market every
+assessment, at pinned per-household-per-day rates (wood the most
+plentiful, stone the slowest), with a sub-unit carry so short steps lose
+nothing. Grounded, not invented: a village has always cut its own timber
+and picked its own stone; it is the unglamorous work of whoever is not
+busy surviving. A settlement short of material for the *next* link still
+reports `SHORTFALL` and simply waits for its own gathering to catch up.
+
+**Cadence.** The decision used to run only at chunk load, and labor only
+caught up on a reload after an unload — a village would only ever have
+built while the player was away. Now `step_settlements` (every
+`SETTLEMENT_STEP_INTERVAL`, 30 s) also gathers material for every
+settlement and, for a *loaded* one, re-takes the build decision and
+advances its projects' labor by the interval — the same closed-form
+`ConstructionCatchup` math the reload path applies, so how fast a village
+builds never depends on whether anyone is watching. Illustrative pacing at
+today's constants (a one-hour day, 8 builder-hours per spare household per
+day, 1.5 labor-hours per unit of material): a village with three spare
+households has a Farm's material on hand in ~15 minutes and the Farm
+standing ~40 minutes later; the Mill and Bakery follow at the same pace.
+
+**A known interaction, named rather than hidden**: a visited merchant's
+Shop stocks 20 cooked meat into the emergence Market, and that counts as
+settlement food — enough capacity for five households on its own. A
+five-villager village with a merchant therefore never classifies
+`DECLINING` today and never wants a farm; villages without one do. That
+is the existing food model's own quirk (nothing ever consumes shop
+stock), not something this chain changes or works around.
 
 ### Placement
 
-A settlement-raised structure goes where the existing completion path
-puts it, checked against the same real terrain rule every house already
-obeys (`is_buildable_terrain_at`: not water, not forest, no standing tree)
-and against existing structures — see Status for the exact placement rule
-the implementation reached.
+The existing pipeline sited every autonomous project at local cell
+`Vector2i.ZERO` — bookkeeping, honestly named as such, never real siting
+— and `build_at_global` overwrites whatever stands at a cell, so three
+chain buildings would have stamped over each other in the chunk's corner.
+`EarthChunkManager._settlement_build_origin_for` gives a project a real
+site when it starts: the first local cell, spiralling outward from the
+chunk's own centre (where `SettlementGenerator` lays its ring of houses),
+that is real buildable terrain *and unmodified, together with all eight of
+its neighbours* — the same `is_buildable_terrain_at` rule every house
+obeys (no water, no forest, no standing tree), plus a lane of clear ground
+around every structure so a Farm's fence always has somewhere to stand and
+a hauler is never boxed in (the first version required only the centre
+cell to be buildable, and promptly sited a Farm in a one-cell hole in a
+forest with nowhere for its fence — caught by the end-to-end test).
+Deterministic, and deliberately not skipping a live project's own site: a
+repeated decision lands on the same still-empty cell, finds its own earlier
+project there, and never queues a second copy; a placed structure modifies
+its cell, so the next link goes to the next clear site. The site is
+re-checked at completion (`_place_completed_construction_project`) and
+the structure moved to the next clear cell if something was built there
+meanwhile. A settlement whose chunk offers nowhere decides nothing and
+waits.
+
+A completed Farm is placed **fenced**: a `wooden_fence` on its first clear
+cardinal neighbour, at no further charge — the Farm recipe's own stated
+cost already *is* the fence ("wood (6) for fence rails/posts and
+plant_fibre (4) lashing them", [npc_farm_production.md](npc_farm_production.md)),
+and the Farm's own gate rule admits no Farmer until one stands nearby.
 
 ## Interaction with other docs
 
 - **[npc_farm_production.md](npc_farm_production.md)** — the Farm and its
   Farmer are reused unmodified; this doc resolves that doc's "Milling and
-  baking", "Settlement-autonomous build a farm decision" and, in passing,
-  its "Capacity and a second Farmer" open questions (a still-`DECLINING`
-  settlement with one Farm of three plots simply raises another Farm next,
-  since the deepest unmet need is still wheat volume — the same signal, no
-  second-farm rule).
+  baking" and "Settlement-autonomous build a farm decision" open questions.
+  Its "Capacity and a second Farmer" question stays open: this doc's own
+  first draft claimed a still-`DECLINING` village would simply raise a
+  second Farm, but the resolver reports *missing* structures, not
+  insufficient throughput — once all three links stand, a bread shortfall
+  is no longer actionable by construction (pinned by test), and the
+  village's only lever is time. Scaling the chain to the need is Open
+  Questions below.
 - **[timber_construction.md](timber_construction.md)** — the direct
   template for production (`SagewerkProduction`), stock
   (`StructureStock`), hauling (`LogisticsMarker`) and the construction
@@ -296,12 +391,63 @@ decision, asked again on the next load, finds nothing to build.
 
 ## Status
 
-⬜ Everything above is specified, not yet built. Implementation notes and
-the honest account of what each piece actually reached are recorded here
-as the work lands, per `docs/progress.md`'s ledger convention.
+Built TDD red-first throughout on `feat/bread-chain` (2026-09-13), every
+module with its own fast unit file; the full slow `test_earth_chunk_
+manager.gd`/`test_player.gd` files were deliberately not re-run per a
+"skip tests" instruction to not block on multi-minute suites — the
+directly affected neighbouring suites were.
+
+- ✅ `flour` (material) / `bread` (food), `mill` / `bakery` placeables
+  (`ItemCatalog`, 90/90; procedural art fallbacks — see Open questions).
+- ✅ `StockConversionProduction` + `MillProduction`/`BakeryProduction`
+  (8/8, 3/3, 2/2, constants pinned).
+- ✅ `mill`/`bakery` recipes; `grow_wheat`/`mill_flour`/`bake_bread` as
+  resolver data; the `automated` recipe flag refused by `can_craft`/`craft`
+  (`test_crafting_recipe_book.gd` 66/66; [production_chains.md](production_chains.md)
+  aligned). City Hall demands surface the three links with no new code
+  (`test_settlement_demand.gd` 8/8).
+- ✅ `ConstructionPriority.deepest_missing_structure_id` and
+  `SettlementBuildDecision` using it — farm, then mill, then bakery (23/23,
+  15/15).
+- ✅ `MillMarker`/`BakeryMarker` via `StructureConversionMarker`,
+  `EarthChunkManager._conversion_workers` (build/destroy/load/unload; 9/9).
+- ✅ `CHAIN_LOGISTICS_LEGS` haulers between the links, one real end-to-end
+  Farm → Mill haul (12/12).
+- ✅ `SettlementFood` counts structure-held food; `food_shortfall_for`
+  (28/28). Villagers eat from the bakehouse (`test_npc_economy.gd` 43/43).
+- ✅ `SettlementGathering` (6/6). Real siting, fenced Farm placement, live
+  cadence — `test_earth_chunk_manager_bread_chain.gd` 9/9 end to end
+  against Berlin's real terrain: a hungry village starts a Farm at a real
+  clear cell, completes and fences it, a Farmer moves in, the chain climbs
+  farm → mill → bakery at distinct cells and stops, material and labor
+  accrue in real time while loaded, bread on a shelf lifts the village out
+  of `DECLINING`.
+- ✅ Three pre-existing bugs found by the research and fixed on the way:
+  the Sägewerk's Lumberjack was never wired to the world (every beam/plank
+  ever shaped in live play was silently discarded); `Market` had no
+  `remove_stock` for `SettlementConstruction` to draw materials through (a
+  crash the first time any village could afford anything); a Farm staffed
+  by a newly built fence never got its Storage haulers re-paired.
+- ⬜ Not exercised live in this pass: a real village visited in play
+  walking the whole chain end to end on the clock (the integration test
+  drives the same functions the game's own `step_settlements` calls).
 
 ## Open questions
 
+- **Scaling the chain to the need.** One Farm of three plots feeds only so
+  many; a village still `DECLINING` with every link standing has no
+  construction it can take, because the resolver reports missing
+  producers, not insufficient throughput. A real "throughput shortfall"
+  (loaves needed per day versus what the chain can bake) would let the
+  decision raise a second Farm — this is also
+  [npc_farm_production.md](npc_farm_production.md)'s own "Capacity and a
+  second Farmer" question.
+- **The stall and the shelf are still two containers.** A hungry villager
+  now eats from a Bakery/Storage shelf directly, but nothing ever moves
+  baked bread into the `VillageMarket` a player sells food into, and the
+  merchant's shop stock counts as settlement food without ever being eaten
+  (see "A known interaction" above) — unifying the three food containers
+  is real, separate work.
 - **Oven fuel.** A real bakehouse burns wood per batch; modeling it means
   a second input the resolver would surface as a `wood` need — correct,
   and cheap once the destination-logistics leg exists, but deliberately

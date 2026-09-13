@@ -915,6 +915,30 @@ shape a real abandoned timber building decays into.
 
 ## Status
 
+**Three real bugs in this doc's own machinery, found and fixed by
+[milling_and_baking.md](milling_and_baking.md)'s research (2026-09-13),
+named here because this is where their mechanisms live**: (1)
+`EarthChunkManager._spawn_lumberjack_for` never set the Lumberjack's
+`earth`, so `LumberjackMarker._step_production` bailed every frame and
+every beam/plank the Sägewerk ever shaped in live play was silently
+discarded — its Logistics haulers and `Player._collect_step` never found
+any stock (only the unit test set `earth`, which is exactly why it
+passed; now pinned for every structure worker in `test_earth_chunk_
+manager_structure_workers.gd`). (2) `SettlementConstruction._handle_ready`
+draws a started project's materials via `market.remove_stock`, and the
+live caller hands it the emergence `Market` — which had no such method;
+unreachable only because no live shortfall had ever reached READY, so the
+first village that could afford anything would have crashed. (3) A Farm
+staffed by a *newly built* fence never had its Storage haulers re-paired
+(`_sync_logistics_workers` ignored fence changes). Also: autonomous
+projects were sited at `Vector2i.ZERO` with no terrain check — real
+siting now lives in `EarthChunkManager._settlement_build_origin_for`, and
+the "Deciding what to build" section's own honest "bookkeeping, not real
+siting" caveat is closed by that doc, along with its "only ever ends in
+SHORTFALL" limitation (`SettlementGathering`) and its "decides only at
+chunk load" cadence (`step_settlements` now re-decides and advances labor
+for a loaded settlement in real time).
+
 🚧 A scoped MVP slice is real: the Sägewerk worksite, its Lumberjack NPC,
 real timber building pieces, a real, generic, now-live end-to-end
 Storage/Logistics/dependency-chain-priority layer, real statics — a support
