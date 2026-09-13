@@ -49,6 +49,9 @@ var modifications: Dictionary = {}
 ## hidden while the player is indoors without touching the floor/wall layer.
 var roof_modifications: Dictionary = {}
 
+## Furniture pieces (see BuildingPiece.CATEGORY_FURNITURE, docs/concept/housing.md's "Interior furniture" section), keyed by local tile coordinate like `modifications` -- the SAME "own layer, not merged" reasoning roof_modifications' own doc comment already gives: a table sits ON a floor the same way a roof sits above a room, and one modification dict can only ever hold one piece per cell. Painted onto its own TileMapLayer (see EarthChunkManager.set_furniture_layer).
+var furniture_modifications: Dictionary = {}
+
 ## Trees that spread into this chunk since it was generated (see TreeSpread/
 ## EarthChunkManager.step_tree_spread), each {position: Vector2, planted_at:
 ## float} -- planted_at is the world-age (seconds) it was planted at, used to

@@ -191,6 +191,12 @@ const _RECIPES := {
 		"output": {"item_id": "cottage", "count": 1},
 		"required_skill": {"stat_name": "carpentry_level", "level": 2.0},
 	},
+	# The third tier (docs/concept/workforce.md's "Blueprint tiers" section) -- reuses the real "manor_wide" HouseBlueprint shape (7x5, 3 windows), same framing/format as small_house/cottage above. required_skill 3.0 is genuinely reachable, not an invented ceiling above what the skill web can reach: skill_web.gd's own Artisan wedge ring 3 already carries a real "master_joiner" notable (stat carpentry_level, bonus 1.0), one full node beyond carpentry_1/carpentry_2 -- workforce.md's own earlier "0.0/1.0/2.0, no third node" note was a real research gap (it only checked skill_tree.gd's smaller NODES dict, not skill_web.gd's own larger ring structure, which is what Player._meets_required_skill actually reads via skill_bonus()) -- corrected there, not silently left standing. inputs pinned to agree with manor_wide's real cost -- ground pieces (16 wood_wall*2 + 15 wood_floor*1 + 1 wood_door*3 + 3 wood_window*2 = 56) plus roof pieces (28 wood_roof*2 = 56, since 7 of the shape's 35 cells are its own uncovered facade) = 112, the SAME ground+roof-inclusive convention small_house(30)/cottage(82) already both independently verify against their own real shapes.
+	"manor": {
+		"inputs": [{"item_id": "wood", "count": 112}],
+		"output": {"item_id": "manor", "count": 1},
+		"required_skill": {"stat_name": "carpentry_level", "level": 3.0},
+	},
 	# The Sägewerk's own log -> Balken/Planke shaping, mirrored here ONLY so
 	# NeedResolver (docs/concept/production_chains.md) can reason about
 	# beam/plank's real dependency chain -- the Sägewerk's actual, already-

@@ -18,6 +18,8 @@ extends RefCounted
 ## inheritance pass would need, not a placeholder.
 
 const NpcGenome = preload("res://src/world/npc_genome.gd")
+const SkillWeb = preload("res://src/gameplay/skill_web.gd")
+const NpcSkillAllocation = preload("res://src/world/npc_skill_allocation.gd")
 
 ## "hunter" and "nurse" (docs/concept/npc.md "Needs and the local production
 ## economy") joined this pass: hunter is a producer occupation distinct from
@@ -62,17 +64,21 @@ const PERSONALITY_TRAITS: Array[String] = [
 	"friendly", "gruff", "curious", "stoic", "greedy", "kind", "cautious", "bold"
 ]
 
-## A real NPC Carpentry number (docs/concept/workforce.md's "A real NPC
-## Carpentry number" section) -- deliberately a SEPARATE genome from
-## `genome`/PERSONALITY_TRAITS above, never added to that list: a carpentry
-## gene must never be eligible to become an NPC's own dominant PERSONALITY
-## trait (dominant_trait() picks whichever gene in ITS OWN genome rolled
-## highest, with no concept of "this one doesn't count"). An innate,
-## fixed-at-birth aptitude, not a skill that grows from doing carpentry
-## work -- labor_skills.md's own larger "NPCs accrue skill from real work"
-## vision stays exactly as unbuilt as it already was; this is honestly an
-## MVP, not that finished design.
-const SKILL_TRAITS: Array[String] = ["carpentry_aptitude"]
+## Drives how many real skill-web points this NPC ever invests (see
+## NpcSkillAllocation.allocate) -- deliberately a SEPARATE genome from
+## `genome`/PERSONALITY_TRAITS above, never added to that list: this gene
+## must never be eligible to become an NPC's own dominant PERSONALITY trait
+## (dominant_trait() picks whichever gene in ITS OWN genome rolled highest,
+## with no concept of "this one doesn't count"). Renamed from this field's
+## own first-pass name, `carpentry_aptitude`: it now drives investment in
+## WHICHEVER archetype this NPC's own occupation walks (see
+## NpcSkillAllocation.ARCHETYPE_BY_OCCUPATION), not carpentry specifically
+## -- a guard or merchant "specializing" reads this same trait, just into a
+## different wedge. An innate, fixed-at-birth dedication, not a skill that
+## grows from doing real work -- labor_skills.md's own larger "NPCs accrue
+## skill from real work" vision stays exactly as unbuilt as it already was;
+## this is honestly an MVP, not that finished design.
+const SKILL_TRAITS: Array[String] = ["vocational_dedication"]
 
 ## A villager's driving need/goal (npc.md: "NPCs generate requests from
 ## their actual current needs... rather than a fixed quest-giver script") --
@@ -103,11 +109,30 @@ var occupation: String
 var genome: NpcGenome
 var personality_trait: String
 var need: String
-## Real, deterministic, in the same [0, 2) range carpentry_1/carpentry_2 put
-## the player's own SkillTree stat in, so the small_house recipe's
-## required_skill threshold means the same thing on either side of the
-## build-or-hire fork (see SKILL_TRAITS' own doc comment for why this is a
-## separate genome from `genome`/personality_trait above).
+## Which SkillWeb archetype this NPC's own occupation walks (docs/concept/
+## workforce.md: "the Skill Web should also be available for NPCs...
+## preference... based on personality and class") -- see
+## NpcSkillAllocation.ARCHETYPE_BY_OCCUPATION for the full reasoning.
+var archetype: String
+## This NPC's own real allocated_nodes for that archetype, on the SAME
+## SkillWeb graph the player uses (see NpcSkillAllocation.allocate) --
+## exposed generally, not just for carpentry, so any other real stat this
+## project already wires a skill-web node to (mining_yield, wound_
+## recovery, trade_margin, ...) already has a real per-NPC number to read
+## the same way carpentry_level does below.
+var allocated_nodes: Dictionary
+## Real, deterministic, read straight off allocated_nodes via the SAME
+## SkillWeb.total_bonus the player's own Carpentry stat reads (empty
+## resonance -- NPCs have no DNA-resonance system of their own, so every
+## node pays/grants exactly its face-value cost/bonus). An NPC who
+## specializes here (see NpcSkillAllocation) reaches the EXACT SAME numbers
+## a player would, including the Artisan wedge's own real `master_joiner`
+## notable -- no separate, lower ceiling for NPCs than for the player, and
+## in particular no fixed [0, 2) cap: this field's own first-pass formula
+## (`skill_genome.traits["carpentry_aptitude"] * 2.0`) was replaced outright
+## once a real NPC skill web made that cap unnecessary, per a direct
+## request ("make it so it's not capped... there should be NPCs
+## specializing in Carpentry").
 var carpentry_level: float
 
 
@@ -120,7 +145,12 @@ func _init(a_seed_value: int) -> void:
 	personality_trait = genome.dominant_trait()
 	need = NEEDS[_index(seed_value, "need", NEEDS.size())]
 	var skill_genome := NpcGenome.new(seed_value, SKILL_TRAITS)
-	carpentry_level = skill_genome.traits["carpentry_aptitude"] * 2.0
+	archetype = String(NpcSkillAllocation.ARCHETYPE_BY_OCCUPATION.get(occupation, "artisan"))
+	var skill_web = SkillWeb.shared()
+	allocated_nodes = NpcSkillAllocation.allocate(
+		skill_web, archetype, seed_value, skill_genome.traits["vocational_dedication"]
+	)
+	carpentry_level = skill_web.total_bonus("carpentry_level", allocated_nodes, {}, seed_value)
 
 
 ## Seeded pick, routed through a % 10000 reduction first -- Godot's String

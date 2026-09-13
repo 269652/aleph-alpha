@@ -14,11 +14,19 @@ extends RefCounted
 ## partnership mechanic exists to trigger it.
 
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
+const Wallet = preload("res://src/gameplay/wallet.gd")
 
 ## An entity reference (see EntityRef) for every member of this household.
 var members: Array[String] = []
 ## Entity references (see EntityRef) for everything this household owns.
 var property: Array[String] = []
+## Real gold this household holds -- the SAME Wallet class Player/NpcEconomy
+## already use, not a second currency type (see docs/concept/workforce.md's
+## "Wages: the player pays for a filled slot" section). Lives here, not on
+## an ephemeral per-frame NpcEconomy/NpcMarker instance, because a
+## Household is this project's real, persistent-in-HouseholdStore unit --
+## the same reason property lives here rather than on a live node.
+var wallet := Wallet.new()
 ## Keyed by its founder's own entity ref -- the same "deterministic key, not
 ## an allocated ID" idiom EntityRef itself uses, so no new counter has to be
 ## persisted or protected from collision just to hand out household ids.

@@ -154,10 +154,21 @@ to, and are left for a later pass.
   entirely real, already-tracked signals (`SettlementState`, `Governance`,
   the already-declared-but-untriggered `criminal_group` type,
   [trade.md](trade.md)'s `CaravanRaid`, [pvp.md](pvp.md)'s zone flagging).
-- ⬜ Policies, taxation, and representation — real, separate mechanisms
-  this doc's own governance-forms list implies, none built. Taxation
-  specifically needs a real currency/wealth-flow system that doesn't exist
-  yet (Phase 4/5's own documented gap).
+- 🚧 Policies, taxation, and representation — real, separate mechanisms
+  this doc's own governance-forms list implies. **Taxation, narrowly**:
+  the "real currency/wealth-flow system" this line used to say didn't
+  exist yet now does (`Household.wallet`, see `workforce.md`'s own
+  "Wages"/"Rent" sections) -- `EarthChunkManager._levy_civic_tax`
+  (`docs/emergence/03-contracts-property-economy.md`'s own "Taxation"
+  section) taxes the PLAYER's own property within a settlement that has a
+  real government (any `governance_form_for_settlement` other than
+  `Governance.NONE`), paid into that settlement's own real shared purse
+  (`NpcEconomy.PURSE_META`) — the SAME real form/legitimacy classification
+  this file already derives, now actually changing a real resource flow,
+  not just a label. Policies and representation, and taxing anything
+  OTHER than the player (NPC-to-NPC trade/production/households, or a
+  government's own spending) stay exactly as unbuilt as this line already
+  said.
 - ⬜ Legitimacy's other seven real-world inputs (protection, justice,
   tradition, wealth distribution, religious authority, military success,
   popular trust) — all wait on systems (crime, currency, trust/reputation,

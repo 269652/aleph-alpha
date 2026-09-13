@@ -110,6 +110,7 @@ func test_to_dicts_and_from_dicts_round_trip_a_whole_store():
 	project.labor_hours_accumulated = 6.5
 	project.reserved_material = {"wood": 12.0, "plank": 4.0}
 	project.status = ConstructionProject.Status.IN_PROGRESS
+	project.resident_household_id = "household:2"
 
 	var restored := ConstructionProjectStore.from_dicts(store.to_dicts())
 	var found: ConstructionProject = restored.get_project(project.id)
@@ -122,6 +123,7 @@ func test_to_dicts_and_from_dicts_round_trip_a_whole_store():
 	assert_eq(found.status, ConstructionProject.Status.IN_PROGRESS)
 	assert_eq(found.labor_hours_accumulated, 6.5)
 	assert_eq(found.reserved_material, {"wood": 12.0, "plank": 4.0})
+	assert_eq(found.resident_household_id, "household:2")
 
 
 func test_find_project_still_works_after_a_round_trip():

@@ -41,9 +41,10 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# wooden_fence (2 more) -- a Farmer moves in and works the farm once a
 	# real fence stands nearby, mirroring the Sagewerk.
 	# + workforce (docs/concept/workforce.md): small_house, the first
-	# blueprint-gated, multi-piece construction-ledger recipe, and cottage,
-	# its second tier (2 more).
-	assert_eq(ids.size(), 45)
+	# blueprint-gated, multi-piece construction-ledger recipe, cottage, its
+	# second tier, and manor, the third tier reached via carpentry_1/
+	# carpentry_2/master_joiner (3 more).
+	assert_eq(ids.size(), 46)
 
 
 func test_iron_sword_is_craftable_from_ingots_and_a_stick():

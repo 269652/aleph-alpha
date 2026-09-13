@@ -12,6 +12,7 @@ extends RefCounted
 const EQUIP := "equip"
 const USE := "use"
 const PLACE := "place"
+const FURNISH := "furnish"
 const NONE := "none"
 
 const _ACTION_BY_KIND := {
@@ -21,6 +22,7 @@ const _ACTION_BY_KIND := {
 	"food": USE,
 	"potion": USE,
 	"placeable": PLACE,
+	"furniture": FURNISH,
 }
 
 

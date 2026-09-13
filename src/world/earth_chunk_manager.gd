@@ -62,6 +62,7 @@ const CaterpillarRenderer = preload("res://src/rendering/caterpillar_renderer.gd
 const MillipedeRenderer = preload("res://src/rendering/millipede_renderer.gd")
 const GrassFrogRenderer = preload("res://src/rendering/grass_frog_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
+const BuilderMarker = preload("res://src/rendering/builder_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
@@ -158,7 +159,10 @@ const MarketStorePersistence = preload("res://src/emergence/market_store_persist
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 const ConstructionProject = preload("res://src/emergence/construction_project.gd")
 const ConstructionProjectStore = preload("res://src/emergence/construction_project_store.gd")
+const HouseBlueprint = preload("res://src/gameplay/house_blueprint.gd")
 const SettlementSpareCapacity = preload("res://src/emergence/settlement_spare_capacity.gd")
+const NpcProduction = preload("res://src/world/npc_production.gd")
+const FurniturePlacement = preload("res://src/gameplay/furniture_placement.gd")
 const SettlementBuildDecision = preload("res://src/emergence/settlement_build_decision.gd")
 const Institution = preload("res://src/emergence/institution.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
@@ -178,6 +182,7 @@ const WorldBossFitness = preload("res://src/gameplay/world_boss_fitness.gd")
 const NpcEncounter = preload("res://src/emergence/npc_encounter.gd")
 const Quest = preload("res://src/emergence/quest.gd")
 const Governance = preload("res://src/emergence/governance.gd")
+const NpcEconomy = preload("res://src/world/npc_economy.gd")
 const RegionalTrade = preload("res://src/emergence/regional_trade.gd")
 const CaravanTrip = preload("res://src/emergence/caravan_trip.gd")
 const CaravanRaid = preload("res://src/emergence/caravan_raid.gd")
@@ -266,6 +271,9 @@ const GROWING_JUVENILES_DIR := "user://chunk_growing_juveniles"
 ## `modifications`, just a separate directory since a roof shares its cell
 ## with the floor beneath it and can't live in that same dict.
 const ROOF_MODIFICATIONS_DIR := "user://chunk_roof_modifications"
+
+## Where furniture pieces are persisted (see Chunk.furniture_modifications, docs/concept/housing.md) -- the same generic Dictionary save/load ChunkSerializer already uses for `modifications`/`roof_modifications`, just its own directory since furniture shares its cell with the floor beneath it.
+const FURNITURE_MODIFICATIONS_DIR := "user://chunk_furniture_modifications"
 
 const CHUNK_SIZE := 32
 ## Chunks within this many chunks of the player are generated/painted.
@@ -1679,6 +1687,7 @@ func record_player_settled_if_new(settlement_id: String) -> bool:
 const BLUEPRINT_RECIPE_BY_ITEM_ID := {
 	"blueprint_small_house": "small_house",
 	"blueprint_cottage": "cottage",
+	"blueprint_manor": "manor",
 }
 
 
@@ -1717,6 +1726,542 @@ func record_blueprint_learned_if_new(recipe_id: String) -> bool:
 	_event_store.append(learned)
 	_memory_store.witness_event(learned, _world_age_seconds)
 	return true
+
+
+## recipe_id -> the HouseBlueprint shape id it stamps (docs/concept/
+## workforce.md's "Starting a real player-owned construction project"
+## section) -- a plain lookup table, the same "explicit and small"
+## convention BLUEPRINT_RECIPE_BY_ITEM_ID/NpcIdentity.WORK_LOCATION_BY_
+## OCCUPATION already set, rather than parsing the recipe id itself or
+## reflecting over HouseBlueprint's own catalog.
+const HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID := {
+	"small_house": "hut_tiny",
+	"cottage": "cottage_bright",
+	"manor": "manor_wide",
+}
+
+
+## A pure query: could `recipe_id`'s house actually be built at
+## `origin_tile` (its global top-left) right now? Never mutates anything
+## and never wastes material -- the caller (Player._try_build_house_from_
+## blueprint) only calls Player.craft's own atomic skill+material gate
+## once this already holds, so nothing is ever consumed on a placement
+## that was going to be refused anyway.
+##
+## Checks, in order: the blueprint must be unlocked, the recipe must map
+## to a real HouseBlueprint shape, the target chunk must be loaded, and
+## every cell the shape would occupy must be genuinely free (no existing
+## `modifications` entry there -- you cannot build over an existing
+## structure or terrain feature). Terrain buildability (water/cliff) is
+## deliberately NOT checked yet -- the same simplification BuilderMarker's
+## own `_buildable_ground` already accepts (a bare `return true`), a
+## named, honest gap rather than a silent one; see workforce.md's own
+## Open Questions.
+func can_build_house_from_blueprint(recipe_id: String, origin_tile: Vector2i) -> bool:
+	if not has_unlocked_blueprint(recipe_id):
+		return false
+	var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(recipe_id, "")
+	if shape_id == "":
+		return false
+	var chunk_coord := _chunk_coord_for_tile(origin_tile)
+	if not _loaded_chunks.has(chunk_coord):
+		return false
+	var ground_pieces := HouseBlueprint.new().build(shape_id, _house_site_seed(chunk_coord, origin_tile, recipe_id))
+	if ground_pieces.is_empty():
+		return false
+	for local_cell in ground_pieces:
+		var global_cell: Vector2i = origin_tile + local_cell
+		if modification_at_global(global_cell.x, global_cell.y) != "":
+			return false
+	return true
+
+
+## A real, deterministic seed for `recipe_id`'s house AT this exact site --
+## the same "deterministic from a real key, not a random roll" philosophy
+## this whole file already applies everywhere else (NpcIdentity, tree/
+## flower placement, ...). Reusing ConstructionProject.id_for_site's own
+## key (chunk_coord + LOCAL origin + recipe_id) rather than inventing a
+## second site key, so two calls describing the same site+blueprint always
+## resolve to the exact same door/window placement.
+func _house_site_seed(chunk_coord: Vector2i, origin_tile: Vector2i, recipe_id: String) -> int:
+	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
+	return absi(hash(ConstructionProject.id_for_site(chunk_coord, local_origin, recipe_id)))
+
+
+## A real, deterministic seed for `recipe_id`'s house's RESIDENT at this
+## exact site (docs/concept/workforce.md's "Move-in" section) -- the same
+## "deterministic from a real key, not a random roll" philosophy
+## _house_site_seed itself already applies one function up, but a
+## DIFFERENT, distinctly-salted string (not just the bare site key) so a
+## resident's own genome/traits are never numerically identical to their
+## own house's geometry seed.
+func _house_resident_seed(chunk_coord: Vector2i, origin_tile: Vector2i, recipe_id: String) -> int:
+	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
+	return absi(hash(ConstructionProject.id_for_site(chunk_coord, local_origin, recipe_id) + "_resident"))
+
+
+## The real work, assuming can_build_house_from_blueprint already held --
+## the same "just do it" contract stamp_structure_at_global itself already
+## carries one layer down. Stamps the real shape into the world (ground +
+## roof pieces), then creates and immediately completes a real, player-
+## owned ConstructionProject (docs/concept/workforce.md: instant, like
+## every other player craft action -- the player already has the skill
+## and has already paid the material by the time this is called; contrast
+## the not-yet-built hire-a-carpenter path, which genuinely takes real
+## time because someone else has to walk there and do the work).
+##
+## Returns the real project id, or "" without touching anything if
+## `recipe_id` doesn't resolve to a real shape (the one check worth
+## repeating here rather than trusting a caller that skipped can_build_
+## house_from_blueprint entirely).
+func stamp_house_and_grant_ownership(recipe_id: String, origin_tile: Vector2i, household_id: String) -> String:
+	var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(recipe_id, "")
+	if shape_id == "":
+		return ""
+	var chunk_coord := _chunk_coord_for_tile(origin_tile)
+	var seed_value := _house_site_seed(chunk_coord, origin_tile, recipe_id)
+	var house_blueprint := HouseBlueprint.new()
+	var ground_pieces := house_blueprint.build(shape_id, seed_value)
+	var roof_pieces := house_blueprint.build_roofs(shape_id, seed_value)
+	stamp_structure_at_global(chunk_coord, origin_tile, ground_pieces, roof_pieces)
+
+	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
+	var project := _construction_project_store.start_project(chunk_coord, local_origin, recipe_id, household_id)
+	_construction_project_store.complete_project(project.id, _household_store)
+	settle_resident_if_new(recipe_id, origin_tile)
+	return project.id
+
+
+## Move-in (docs/concept/workforce.md's "Move-in" section): the moment a
+## player-owned house reaches COMPLETE, directly form one new resident
+## household there -- a narrow, directly-triggered shortcut, explicitly NOT
+## quests.md's full migration system (habitability pull, replan-interrupt,
+## active player-invite all stay exactly as unbuilt as they already were).
+##
+## Idempotent on the house's own ConstructionProject, not a session-lifetime
+## flag: a house that already has a real resident_household_id is left
+## alone, so calling this twice (or reloading a chunk that already settled
+## its houses) never conjures a second resident. "" for a site with no real
+## ConstructionProject yet (nothing to attach a resident to).
+##
+## The resident is deliberately its OWN household, distinct from
+## household_id (the OWNER, see ConstructionProject's own resident_
+## household_id doc comment) -- seeded from the site itself (_house_
+## resident_seed), so the same house always settles the same resident.
+## Joins a REAL settlement's own household census (SETTLING_EVENT_TYPES)
+## ONLY when one already has real founding history at this chunk --
+## record_player_settled_if_new's own established reasoning applies
+## unchanged: "a settlement with no history is not a settlement." Built far
+## from any real settlement, the house still gets a real resident (pillar 4:
+## "a house is population, not scenery"); it simply never joins a household
+## census that does not exist.
+func settle_resident_if_new(recipe_id: String, origin_tile: Vector2i) -> String:
+	var chunk_coord := _chunk_coord_for_tile(origin_tile)
+	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
+	var project: ConstructionProject = _construction_project_store.find_project(chunk_coord, local_origin, recipe_id)
+	if project == null:
+		return ""
+	if project.resident_household_id != "":
+		return project.resident_household_id
+
+	var resident_id := EntityRef.for_npc(_house_resident_seed(chunk_coord, origin_tile, recipe_id))
+	var resident_household := _household_store.form_household(resident_id)
+	project.resident_household_id = resident_household.id
+
+	var settled := Event.new("player_house_settled", _world_age_seconds)
+	settled.actors = [resident_id]
+	settled.tags = [project.id]
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	if not _event_store.events_for_entity(settlement_id).is_empty():
+		settled.witnesses = [settlement_id]
+	_event_store.append(settled)
+	_memory_store.witness_event(settled, _world_age_seconds)
+
+	return resident_household.id
+
+
+## Worker slots and assignment (docs/concept/workforce.md's "Workforce: a
+## real, spendable resource" section) -- resident_household_id ->
+## workplace_position (a global tile, the same coordinate space build_at_
+## global/modification_at_global already use), a plain Dictionary rather
+## than a new store: an assignment is exactly one fact, not a collection
+## needing its own lifecycle.
+var _workforce_assignments: Dictionary = {}
+
+## The Sägewerk's own worker_slots (see that section: "this doc turns that
+## fixed 'one' into worker_slots := 1" -- today's ALREADY-real behavior,
+## one LumberjackMarker per placed Sägewerk, made an inspectable number
+## rather than an assumption).
+const SAGEWERK_WORKER_SLOTS := 1
+
+
+## How many of workplace_position's own worker_slots are not currently
+## filled -- read fresh from _workforce_assignments every call (pillar 5:
+## "workforce is derived, never stored"), never a synced counter.
+func open_worker_slots_at(workplace_position: Vector2i) -> int:
+	var filled := 0
+	for resident_id in _workforce_assignments:
+		if _workforce_assignments[resident_id] == workplace_position:
+			filled += 1
+	return maxi(0, SAGEWERK_WORKER_SLOTS - filled)
+
+
+## Assigns resident_household_id to work at workplace_position -- false, no
+## mutation, if that resident already holds a job (reassignment/layoffs stay
+## exactly as open a question as docs/concept/workforce.md's own Open
+## Questions already leave them) or the workplace has no open slot left.
+func assign_resident_to_workplace(resident_household_id: String, workplace_position: Vector2i) -> bool:
+	if _workforce_assignments.has(resident_household_id):
+		return false
+	if open_worker_slots_at(workplace_position) <= 0:
+		return false
+	_workforce_assignments[resident_household_id] = workplace_position
+	return true
+
+
+func is_resident_assigned(resident_household_id: String) -> bool:
+	return _workforce_assignments.has(resident_household_id)
+
+
+## A direct way to end an assignment (a workplace destroyed, a resident's
+## house gone) -- false for a resident who was never assigned.
+func unassign_resident(resident_household_id: String) -> bool:
+	if not _workforce_assignments.has(resident_household_id):
+		return false
+	_workforce_assignments.erase(resident_household_id)
+	return true
+
+
+## Population (docs/concept/workforce.md's own "Workforce" section):
+## residents of player-built houses in chunk_coord who are NOT currently
+## assigned to a worker slot -- the same "spare capacity" idiom
+## SettlementSpareCapacity.for_settlement already established one layer
+## down for construction, generalized here to any worker slot.
+func free_workforce_in_chunk(chunk_coord: Vector2i) -> int:
+	var free := 0
+	for project: ConstructionProject in _construction_project_store.projects_with_resident_in_chunk(chunk_coord):
+		if not _workforce_assignments.has(project.resident_household_id):
+			free += 1
+	return free
+
+
+## The build-vs-hire fork's own hire-half query (docs/concept/workforce.md
+## section 3): is there a spare household in settlement_id whose own NPC
+## clears recipe_id's required_skill? Returns that household's id, or "" if
+## none qualify -- a pure query, never mutates anything, the same "just
+## answer the question" contract can_build_house_from_blueprint itself
+## already keeps for the build-it-yourself half.
+##
+## "Spare" mirrors SettlementSpareCapacity.for_settlement's OWN filter
+## exactly (excludes any household whose real occupation is a survival
+## one), but returns the actual household ids rather than just a count --
+## no existing function does this today (SettlementSpareCapacity/
+## SettlementBuildDecision only ever pass a bare int upward). A household's
+## own NPC is reconstructed the same deterministic-from-seed way
+## _occupation_of_household already does -- no live NpcMarker/registry
+## needed, so this works identically whether or not that household's chunk
+## is even loaded right now.
+##
+## "" (no filter applied) for a recipe with no carpentry-shaped
+## required_skill -- this function is specifically the CARPENTRY hire
+## fork, not a general "find someone with skill X" search.
+func find_spare_carpenter_household(settlement_id: String, recipe_id: String) -> String:
+	var requirement := _recipe_book.recipe_required_skill(recipe_id)
+	if requirement.is_empty() or String(requirement.get("stat_name", "")) != "carpentry_level":
+		return ""
+	var required_level: float = requirement["level"]
+
+	for household_id in _households_in_settlement(settlement_id):
+		var occupation := _occupation_of_household(household_id)
+		if NpcProduction.PRODUCER_ITEM_BY_OCCUPATION.has(occupation):
+			continue  # already working a real survival job -- not spare
+		if _is_household_on_loan(household_id):
+			continue  # already off building someone else's hired house
+		var household := _household_store.get_household(household_id)
+		if household == null or household.members.is_empty():
+			continue
+		var founder_id: String = household.members[0]
+		if EntityRef.kind_of(founder_id) != "npc":
+			continue
+		var carpenter := NpcIdentity.new(int(EntityRef.key_of(founder_id)))
+		if carpenter.carpentry_level >= required_level:
+			return household_id
+	return ""
+
+
+## Real Builders spawned for a player's hired carpenter (docs/concept/
+## workforce.md section 5) -- project_id -> {"marker": BuilderMarker,
+## "carpenter_household_id": String}, the same tracked-dict shape
+## _sagewerk_lumberjacks already establishes for a different marker's own
+## lifecycle, extended with which household is on loan.
+var _hired_builders: Dictionary = {}
+
+
+## True while household_id is already off building a hired house --
+## find_spare_carpenter_household's own real "spare" filter, so the SAME
+## household is never offered for a second hire while its first is still
+## in progress (the settlement-side "capacity reduction for the hire's
+## duration" workforce.md's own Status list names -- narrowly scoped to
+## "don't double-book the same household," not a change to
+## SettlementSpareCapacity's own settlement-internal construction-decision
+## consumers).
+func _is_household_on_loan(household_id: String) -> bool:
+	for entry in _hired_builders.values():
+		if entry["carpenter_household_id"] == household_id:
+			return true
+	return false
+
+
+## The build-vs-hire fork's real hire execution (docs/concept/workforce.md
+## sections 3/5) -- called ONLY once Player has already found a qualifying
+## carpenter household, verified a real nearby Storage, and paid+consumed
+## the real gold/material cost (see Player._try_hire_carpenter_for_house).
+## Deposits the ALREADY-consumed material into that real Storage (so the
+## real BuilderMarker below can withdraw it exactly the way every other
+## real construction worker in this codebase already does -- see
+## BuilderMarker._step_withdrawing), starts a real IN_PROGRESS
+## ConstructionProject owned by `owner_household_id` (the PLAYER -- see
+## ConstructionProject's own household_id/resident_household_id
+## disambiguation; `carpenter_household_id` is never the owner), and spawns
+## a real BuilderMarker to build it piece by piece over real time -- the
+## first live BuilderMarker spawner (timber_construction.md's own
+## long-named gap), scoped to this player-hired path only. Returns the
+## real project id.
+func hire_builder_for_house(
+	recipe_id: String, origin_tile: Vector2i, owner_household_id: String, carpenter_household_id: String,
+	consumed_items: Dictionary, storage_pixel: Vector2
+) -> String:
+	var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(recipe_id, "")
+	if shape_id == "":
+		return ""
+	var chunk_coord := _chunk_coord_for_tile(origin_tile)
+	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
+	var seed_value := _house_site_seed(chunk_coord, origin_tile, recipe_id)
+	var ground_pieces := HouseBlueprint.new().build(shape_id, seed_value)
+
+	var storage_tile := Vector2i(
+		floori(storage_pixel.x / TerrainRenderer.TILE_SIZE), floori(storage_pixel.y / TerrainRenderer.TILE_SIZE)
+	)
+	for item_id in consumed_items:
+		deposit_to_structure_at(storage_tile.x, storage_tile.y, item_id, int(consumed_items[item_id]))
+
+	var project := _construction_project_store.start_project(chunk_coord, local_origin, recipe_id, owner_household_id)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	var marker := BuilderMarker.new()
+	marker.earth = self
+	marker.project_store = _construction_project_store
+	marker.household_store = _household_store
+	marker.target_project = project
+	marker.target_pieces = ground_pieces
+	marker.position = (Vector2(origin_tile) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	_entities_parent.add_child(marker)
+	_hired_builders[project.id] = {"marker": marker, "carpenter_household_id": carpenter_household_id}
+
+	return project.id
+
+
+## Once a hired project actually reaches COMPLETE (the real BuilderMarker
+## placed every real piece -- see ConstructionProjectStore.advance_project_
+## labor_for_piece), this: (1) settles a real resident, the SAME move-in
+## stamp_house_and_grant_ownership's own self-build path already triggers
+## automatically (a hired house is exactly as real a dwelling as a
+## self-built one -- pillar 4), and (2) frees the now-idle BuilderMarker
+## (its own SEEKING phase would otherwise no-op forever once every real
+## piece is placed) and releases its carpenter household back to
+## _is_household_on_loan's own "spare" pool. Called from step_workforce_
+## economy's own periodic tick -- a resident/cleanup landing up to one tick
+## late is a real, harmless, purely cosmetic delay, not a correctness gap.
+func _despawn_completed_hired_builders() -> void:
+	for project_id in _hired_builders.keys():
+		var project: ConstructionProject = _construction_project_store.get_project(project_id)
+		if project == null or project.status != ConstructionProject.Status.COMPLETE:
+			continue
+		settle_resident_if_new(project.blueprint_id, project.chunk_coord * CHUNK_SIZE + project.origin)
+		var marker = _hired_builders[project_id]["marker"]
+		if marker != null:
+			marker.free()
+		_hired_builders.erase(project_id)
+
+
+## The same real, derived GROWING/STABLE/DECLINING classification
+## legitimacy_for_settlement already reads (see that function's own doc
+## comment for why SettlementFood, not the emergence Market alone, is the
+## real source here) -- lifted out as its own small helper so
+## step_workforce_economy's rent gate (below) reads the identical status a
+## settlement's own governance/legitimacy already does, rather than a
+## second, subtly different derivation.
+func _settlement_status_for(settlement_id: String) -> String:
+	var market := _market_store.market_for(settlement_id)
+	var household_count := _households_in_settlement(settlement_id).size()
+	var capacity := SettlementFood.carrying_capacity(
+		market, SettlementFood.village_market_for(settlement_id, _loaded_villages)
+	)
+	return SettlementState.status_for(household_count, capacity)
+
+
+## Wages and Rent (docs/concept/workforce.md's own "Wages"/"Rent" sections)
+## -- one periodic tick settling the player's whole tenant/employer ledger,
+## the same accumulator-gated cadence step_regional_trade already uses.
+## `player_wallet`: the live Player's own Wallet (injected by the caller,
+## the same "caller supplies the real dependency" shape advance_project_
+## labor's own recipe_book/household_store parameters already use).
+const WORKFORCE_ECONOMY_INTERVAL := 30.0
+## Real, tuned constants (per this project's Development-process rule
+## against eyeballed values) -- deliberately equal for now, so a resident
+## who is both employed and housed nets exactly zero; see workforce.md's own
+## Open Questions for whether that net should differ.
+const WAGE_PER_TICK := 5
+const RENT_PER_TICK := 5
+var _workforce_economy_accumulator := 0.0
+
+
+func step_workforce_economy(delta_seconds: float, player_wallet) -> void:
+	_workforce_economy_accumulator += delta_seconds
+	if _workforce_economy_accumulator < WORKFORCE_ECONOMY_INTERVAL:
+		return
+	_workforce_economy_accumulator -= WORKFORCE_ECONOMY_INTERVAL
+	if _workforce_economy_accumulator >= WORKFORCE_ECONOMY_INTERVAL:
+		_workforce_economy_accumulator = fmod(_workforce_economy_accumulator, WORKFORCE_ECONOMY_INTERVAL)
+
+	_despawn_completed_hired_builders()
+
+	# Wages: every FILLED worker slot draws real gold from the player.
+	# Simply skipped (no debt, no eviction) if the player can't afford it
+	# this tick -- see workforce.md's own "Wages" section.
+	for resident_id in _workforce_assignments:
+		var household: Household = _household_store.get_household(resident_id)
+		if household == null:
+			continue
+		if player_wallet.spend(WAGE_PER_TICK):
+			household.wallet.add(WAGE_PER_TICK)
+
+	# Rent: every resident of a player-built house, working or not, pays
+	# for the roof -- capped by Wallet.spend's own all-or-nothing contract,
+	# and suspended entirely (needs v1) for a DECLINING settlement's own
+	# residents, the same real, already-tested classification governance/
+	# legitimacy already reads.
+	for project: ConstructionProject in _construction_project_store.projects_with_resident():
+		var resident_household: Household = _household_store.get_household(project.resident_household_id)
+		if resident_household == null:
+			continue
+		var settlement_id := EntityRef.for_settlement(project.chunk_coord)
+		if _settlement_status_for(settlement_id) == SettlementState.DECLINING:
+			continue
+		if resident_household.wallet.spend(RENT_PER_TICK):
+			player_wallet.add(RENT_PER_TICK)
+
+	# Needs v2 (see resident_happiness's own doc comment): a genuinely
+	# unhappy assigned resident quits -- deterministic, not a probability
+	# roll, matching this whole codebase's "no RNG" convention (see
+	# crafting_recipe_book.gd's own file header) -- closing workforce.md's
+	# own "does a resident ever leave voluntarily" Open Question with a
+	# real, honest yes.
+	for resident_id in _workforce_assignments.keys():
+		if resident_happiness(resident_id) == "unhappy":
+			unassign_resident(resident_id)
+
+	_levy_civic_tax(player_wallet)
+
+
+## Needs v2 (docs/emergence/03-contracts-property-economy.md and
+## housing.md's own already-shipped `appeal_score` formula, extended into a
+## real gameplay consequence rather than a purely cosmetic number) --
+## deliberately a NARROW, two-factor MVP, not Anno's own full multi-tier
+## luxury-goods happiness system (no such system, or anything resembling
+## "happiness," existed anywhere in this codebase before this pass).
+##
+## "unhappy" only when BOTH real signals are bad at once: the resident's
+## own settlement is genuinely food-short (`SettlementState.DECLINING`,
+## needs v1's own already-real signal) AND their own house has zero real
+## furniture in it (housing.md's own `appeal_score` formula, `furniture_
+## ids.size()`, read directly off this house's own real footprint rather
+## than a second, competing formula). Deliberately conjunctive, not either
+## alone: a bare house in a thriving settlement is merely undecorated, not
+## a real hardship, and a furnished house in a starving settlement is still
+## genuinely fed. "content" for a resident with no real house on record, or
+## whose house's own chunk isn't currently loaded (furniture data is real
+## and persisted, but this reads it live off the loaded chunk rather than
+## paying disk I/O in what may be a hot per-tick loop -- a named, honest
+## simplification, not a silent one).
+func resident_happiness(resident_household_id: String) -> String:
+	var project: ConstructionProject = _construction_project_store.project_for_resident(resident_household_id)
+	if project == null:
+		return "content"
+	var settlement_id := EntityRef.for_settlement(project.chunk_coord)
+	if _settlement_status_for(settlement_id) != SettlementState.DECLINING:
+		return "content"
+	if _house_furniture_count(project) > 0:
+		return "content"
+	return "unhappy"
+
+
+## How many real furniture pieces sit inside this ONE house's own footprint
+## -- the SAME real count housing.md's own appeal_score already is
+## (`furniture_ids.size()`), scoped to just this house rather than a whole
+## settlement. 0 for an unloaded chunk or a recipe with no real house shape
+## (see resident_happiness's own doc comment on why this stays live-only).
+func _house_furniture_count(project: ConstructionProject) -> int:
+	var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(project.blueprint_id, "")
+	if shape_id == "":
+		return 0
+	var chunk: Chunk = _loaded_chunks.get(project.chunk_coord)
+	if chunk == null:
+		return 0
+	var footprint := HouseBlueprint.new().footprint_for(shape_id)
+	var count := 0
+	for x in footprint.x:
+		for y in footprint.y:
+			if chunk.furniture_modifications.has(project.origin + Vector2i(x, y)):
+				count += 1
+	return count
+
+
+## Civic taxation (`docs/emergence/03-contracts-property-economy.md`'s own
+## "## Taxation" section: "governments can tax property... Later
+## governments can tax property, trade, production, transactions, or
+## households" -- and `governance.md`'s own Open Questions, which names
+## taxation as needing exactly "a real currency/wealth-flow system that
+## doesn't exist yet," now real via Household.wallet). Deliberately the
+## OTHER direction from Rent (the "Rent" section above): rent is the player,
+## as a landlord, collecting from their own tenants; this is a settlement's
+## own real government taxing the PLAYER's own property within it --
+## a settlement with no real government (`Governance.NONE`, the SAME
+## classification `governance_form_for_settlement` already derives from
+## real institution history) has no one to collect a tax, so it simply
+## doesn't. Paid into the SAME shared settlement purse `VillageWages`/
+## `NpcEconomy` already read/write (`NpcEconomy.PURSE_META`) via the
+## generic `Object.set_meta`/`get_meta` Godot already provides on any
+## `VillageMarket` -- a taxed player's gold becomes real, spendable
+## settlement wealth (more subsistence wages the purse can afford), not a
+## number that vanishes into nothing. A real, explicit, flat placeholder
+## rate -- differentiating it by governance form (a merchant oligarchy
+## taxing harder than a cooperative, say) is a real, named follow-up (see
+## Open Questions), not invented here without real grounding.
+const CIVIC_TAX_PER_TICK := 4
+
+
+func _levy_civic_tax(player_wallet) -> void:
+	var player_household := _household_store.household_for(PlayerIdentity.PLAYER_ENTITY_ID)
+	if player_household == null:
+		return
+	for project: ConstructionProject in _construction_project_store.projects_owned_by(player_household.id):
+		var settlement_id := EntityRef.for_settlement(project.chunk_coord)
+		if governance_form_for_settlement(settlement_id) == Governance.NONE:
+			continue
+		# The REAL purse lives on the older VillageMarket (NpcEconomy.
+		# PURSE_META), a different object from _market_store's own newer
+		# Market -- SettlementFood.village_market_for is the SAME resolver
+		# _settlement_status_for already uses to reach it. Only findable
+		# while a live NpcEconomy is loaded in this settlement's own chunk
+		# (a real, honest "nobody's home to collect it" gap for a far-away
+		# settlement, not a silent write to the wrong object).
+		var village_market = SettlementFood.village_market_for(settlement_id, _loaded_villages)
+		if village_market == null:
+			continue
+		if not player_wallet.spend(CIVIC_TAX_PER_TICK):
+			continue
+		village_market.set_meta(NpcEconomy.PURSE_META, NpcEconomy.purse_of(village_market) + CIVIC_TAX_PER_TICK)
 
 
 ## Contracts and their lifecycle (see docs/emergence/03-contracts-property-
@@ -3672,15 +4217,18 @@ func _known_settlement_ids() -> Array[String]:
 ## it. household_for returns null for an npc with no household yet, which
 ## this simply skips.
 ##
-## Both settling types count. `player_settled` is the player's own (see
-## record_player_settled_if_new); it is a separate type because the player is
-## not an NPC, but it means exactly the same thing HERE, which is why the two
-## are read together rather than every caller learning the difference.
+## All three settling types count. `player_settled` is the player's own (see
+## record_player_settled_if_new); `player_house_settled` is a resident who
+## moved into a player-built house (see settle_resident_if_new) -- both are
+## separate types because neither the player nor a player-house resident's
+## own move-in is an ordinary procedural npc_settled, but all three mean
+## exactly the same thing HERE, which is why they are read together rather
+## than every caller learning the difference.
 ##
 ## Deduped by household id: one household is one member however many times it
 ## was witnessed settling, and without this a household that settled twice
 ## would inflate the settlement's own tier and institution thresholds.
-const SETTLING_EVENT_TYPES := ["npc_settled", "player_settled"]
+const SETTLING_EVENT_TYPES := ["npc_settled", "player_settled", "player_house_settled"]
 
 
 func _households_in_settlement(settlement_id: String) -> Array[String]:
@@ -4590,6 +5138,89 @@ func set_roof_layer(roof_layer: TileMapLayer) -> void:
 		_terrain_renderer.paint_roofs(
 			_roof_layer, _loaded_chunks[chunk_coord], chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord)
 		)
+
+
+## Registers the furniture overlay layer (docs/concept/housing.md's
+## "Interior furniture" section): a furniture piece shares its cell with the
+## floor beneath it, exactly the reason roof pieces already needed their own
+## TileMapLayer (see set_roof_layer just above) rather than sharing
+## `_tile_map_layer`'s single-tile-per-cell `modifications`. No shape
+## classification needed here (unlike roofs' own RoofShape banding) --
+## furniture tiles already live in the SAME shared atlas every other
+## BuildingPiece uses (TerrainRenderer.atlas_coords_for_modification already
+## resolves any BuildingPiece.has_piece id, furniture included, since
+## furniture pieces are already real entries in BuildingPiece.PIECE_IDS).
+## Optional: a caller that never sets this simply never sees furniture
+## rendered, the same fail-open shape _roof_layer/_water_layer already use.
+var _furniture_layer: TileMapLayer = null
+
+
+func set_furniture_layer(furniture_layer: TileMapLayer) -> void:
+	_furniture_layer = furniture_layer
+	furniture_layer.tile_set = _tile_map_layer.tile_set
+	furniture_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
+	for chunk_coord in _loaded_chunks:
+		_paint_furniture(chunk_coord, _loaded_chunks[chunk_coord])
+
+
+## Paints every real furniture cell already recorded for `chunk` -- a no-op
+## if no furniture layer has been registered (fail-open, see set_furniture_
+## layer's own doc comment).
+func _paint_furniture(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	if _furniture_layer == null:
+		return
+	for local in chunk.furniture_modifications:
+		var global: Vector2i = chunk_coord * CHUNK_SIZE + local
+		var piece_id: String = chunk.furniture_modifications[local]
+		_furniture_layer.set_cell(global, 0, _terrain_renderer.atlas_coords_for_modification(piece_id))
+
+
+## The player-facing place verb for furniture (docs/concept/housing.md),
+## mirroring build_at_global's own shape but writing to chunk.furniture_
+## modifications -- its own layer, the same reason roof_modifications needs
+## one -- and gated by FurniturePlacement.can_place (real interior floor,
+## nothing invented) rather than the general placeable-anywhere-buildable
+## rule build_at_global itself applies. False, no mutation, for an unloaded
+## chunk or a placement FurniturePlacement itself refuses.
+func build_furniture_at_global(global_x: int, global_y: int, piece_id: String) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return false
+	var local := _local_coord(global_x, global_y)
+	if not FurniturePlacement.new().can_place(piece_id, local, chunk.modifications, chunk.furniture_modifications):
+		return false
+	chunk.furniture_modifications[local] = piece_id
+	if _furniture_layer != null:
+		_furniture_layer.set_cell(
+			Vector2i(global_x, global_y), 0, _terrain_renderer.atlas_coords_for_modification(piece_id)
+		)
+	return true
+
+
+## Removes a placed furniture piece -- false, no mutation, if there wasn't
+## one there. Mirrors destroy_at_global's own split: this only touches the
+## world model + rendering; whether/what comes back to an inventory is the
+## caller's own decision, the same way destroy_at_global leaves it.
+func destroy_furniture_at_global(global_x: int, global_y: int) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return false
+	var local := _local_coord(global_x, global_y)
+	if not chunk.furniture_modifications.has(local):
+		return false
+	chunk.furniture_modifications.erase(local)
+	if _furniture_layer != null:
+		_furniture_layer.erase_cell(Vector2i(global_x, global_y))
+	return true
+
+
+func furniture_at_global(global_x: int, global_y: int) -> String:
+	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
+	if chunk == null:
+		return ""
+	return chunk.furniture_modifications.get(_local_coord(global_x, global_y), "")
 
 
 ## World's own ground-item container (see World._ground_items /
@@ -12051,6 +12682,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	var chunk := generator.generate_chunk(chunk_coord, CHUNK_SIZE)
 	chunk.modifications = _chunk_serializer.load_modifications(_modifications_path(chunk_coord))
 	chunk.roof_modifications = _chunk_serializer.load_modifications(_roof_modifications_path(chunk_coord))
+	chunk.furniture_modifications = _chunk_serializer.load_modifications(_furniture_modifications_path(chunk_coord))
 	chunk.planted_trees = _chunk_serializer.load_planted_trees(_planted_trees_path(chunk_coord))
 	_loaded_chunks[chunk_coord] = chunk
 	# Withering catch-up BEFORE the first paint/collision pass below, so a
@@ -12082,6 +12714,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_sync_piece_collision(global_cell, chunk.modifications[local_cell])
 	if _roof_layer != null:
 		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
+	_paint_furniture(chunk_coord, chunk)
 	_loaded_trees[chunk_coord] = _tree_renderer.spawn_trees(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	)
@@ -12805,6 +13438,9 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	if chunk != null and not chunk.roof_modifications.is_empty():
 		DirAccess.make_dir_recursive_absolute(ROOF_MODIFICATIONS_DIR)
 		_chunk_serializer.save_modifications(chunk.roof_modifications, _roof_modifications_path(chunk_coord))
+	if chunk != null and not chunk.furniture_modifications.is_empty():
+		DirAccess.make_dir_recursive_absolute(FURNITURE_MODIFICATIONS_DIR)
+		_chunk_serializer.save_modifications(chunk.furniture_modifications, _furniture_modifications_path(chunk_coord))
 
 	# Withering (see _apply_piece_condition_catchup above): snapshot this
 	# chunk's real per-piece condition state and the world-age it was taken
@@ -13189,6 +13825,10 @@ func _modifications_path(chunk_coord: Vector2i) -> String:
 
 func _roof_modifications_path(chunk_coord: Vector2i) -> String:
 	return "%s/%d_%d.bin" % [ROOF_MODIFICATIONS_DIR, chunk_coord.x, chunk_coord.y]
+
+
+func _furniture_modifications_path(chunk_coord: Vector2i) -> String:
+	return "%s/%d_%d.bin" % [FURNITURE_MODIFICATIONS_DIR, chunk_coord.x, chunk_coord.y]
 
 
 func _planted_trees_path(chunk_coord: Vector2i) -> String:

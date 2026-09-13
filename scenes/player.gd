@@ -80,6 +80,8 @@ const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
+const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
 const InputLatch = preload("res://src/gameplay/input_latch.gd")
@@ -337,6 +339,13 @@ var equipped_item: Item
 ## _build_step's doc comment. Null == nothing armed, i.e. build does today's
 ## plain bare-earth terraforming.
 var _selected_placeable_item: Item
+
+## The armed "furniture"-kind item (docs/concept/housing.md) -- its OWN
+## field, not reusing _selected_placeable_item above, since furniture needs
+## a genuinely different world-write (build_furniture_at_global, gated by
+## FurniturePlacement's real interior-floor rule) than a placeable's own
+## build_at_global. Null == nothing armed, same convention as above.
+var _selected_furniture_item: Item
 var survival := SurvivalMeters.new()
 ## The player's own real, live, unified body mass -- see docs/concept/
 ## metabolism.md's "one real mass per creature" pillar, applied to the
@@ -1435,6 +1444,8 @@ func activate_item_id(item_id: String) -> bool:
 					return _use_food(stack.item.id)
 				HotbarAction.PLACE:
 					return _arm_placeable(stack.item)
+				HotbarAction.FURNISH:
+					return _arm_furniture(stack.item)
 				_:
 					return false
 	return false
@@ -1447,6 +1458,19 @@ func activate_item_id(item_id: String) -> bool:
 ## for kind "placeable".
 func _arm_placeable(item) -> bool:
 	_selected_placeable_item = item
+	_selected_furniture_item = null  # arming replaces whatever was armed, any kind
+	return true
+
+
+## Arms `item` (a "furniture" kind -- wood_chair/table/bookshelf/bed/rug) so
+## the next build-input press furnishes it into the world instead of doing
+## plain bare-earth terraforming OR placing an armed placeable (see
+## _build_step's own priority order) -- docs/concept/housing.md's own
+## "Interior furniture" section. Always succeeds -- HotbarAction.action_for
+## already gated the caller to only reach here for kind "furniture".
+func _arm_furniture(item) -> bool:
+	_selected_furniture_item = item
+	_selected_placeable_item = null  # arming replaces whatever was armed, any kind
 	return true
 
 
@@ -1533,6 +1557,121 @@ func _try_learn_blueprint(item_id: String) -> bool:
 	if inventory.remove(item_id, 1) <= 0:
 		return false
 	_chunk_manager.record_blueprint_learned_if_new(recipe_id)
+	return true
+
+
+## Builds `recipe_id`'s house for real, facing tile by facing tile, the way
+## every other placement verb already targets (see BuilderMarker/the simple
+## structure-build flow) -- docs/concept/workforce.md's "Starting a real
+## player-owned construction project" and "The fork" sections.
+##
+## Ordered so the player's material is never wasted on a placement that was
+## always going to fail: EarthChunkManager.can_build_house_from_blueprint is
+## a pure query, checked BEFORE either the atomic, material-consuming
+## craft() call (unchanged -- its own required_skill/inventory gate is
+## exactly what makes "carpentry too low" or "not enough wood" refuse here
+## too, the same sagewerk gate already exercises) or the hire fallback
+## below. Only once one of the two has actually succeeded does the house
+## really land, via stamp_house_and_grant_ownership -- into the player's
+## own household, formed on demand the same idempotent way HouseholdStore.
+## form_household already promises (a second house never creates a second
+## household).
+##
+## The fork itself: build it yourself first (unchanged craft() gate); only
+## if that refuses does this fall back to _try_hire_carpenter_for_house,
+## which needs its own real, spare, sufficiently-skilled household and its
+## own real gold+material cost -- see that function's own doc comment.
+func _try_build_house_from_blueprint(recipe_id: String) -> bool:
+	var target := _tile_targeting.facing_tile(current_tile(), _last_facing_direction)
+	if not _chunk_manager.can_build_house_from_blueprint(recipe_id, target):
+		return false
+	if not craft(recipe_id):
+		return _try_hire_carpenter_for_house(recipe_id, target)
+	var household := _chunk_manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	_chunk_manager.stamp_house_and_grant_ownership(recipe_id, target, household.id)
+	return true
+
+
+## A real, explicit, tunable placeholder (docs/concept/workforce.md's own
+## Open Questions: "Hiring cost formula -- flat, distance-scaled, or
+## reputation-scaled? Left exactly as open as timber_construction.md's own
+## hiring design already leaves it") -- a real number the fork can actually
+## charge today, not a blocker on that still-open design question.
+const HIRE_A_CARPENTER_GOLD_COST := 100
+
+
+## The build-vs-hire fork's hire half (docs/concept/workforce.md sections
+## 3/5) -- called ONLY once the player's own Carpentry has already refused
+## (see _try_build_house_from_blueprint). Needs a REAL, spare, sufficiently-
+## skilled household in the target site's own settlement
+## (EarthChunkManager.find_spare_carpenter_household -- a pure query, no
+## live BuilderMarker/instruction-DSL trust gate involved); a settlement
+## with real spare capacity but nobody skilled enough correctly refuses
+## here, same as the doc's own "Both paths" section already specifies.
+##
+## Still charges the real material cost -- a hired carpenter still needs
+## real wood to build with, only the SKILL requirement is waived -- so this
+## deliberately does NOT call craft() (which would re-apply the very skill
+## gate this fork exists to route around); instead it mirrors craft()'s own
+## material-only check-then-consume halves directly, leaving craft() itself
+## completely unchanged for every other caller.
+##
+## A real Builder withdraws its material from a real Storage, the same way
+## every other real construction worker in this codebase already does (see
+## BuilderMarker._step_withdrawing) -- so this ALSO needs a real Storage
+## within the site's own real search radius, checked BEFORE anything is
+## spent, the same "never waste material on a placement that was always
+## going to fail" ordering the whole build-vs-hire fork already keeps. A
+## site with no Storage in reach correctly has no hire to offer, the same
+## shape an under-skilled settlement's own refusal already takes.
+##
+## Once paid, hands off to EarthChunkManager.hire_builder_for_house, which
+## spawns a real BuilderMarker to build the house piece by piece over real
+## time -- the first live BuilderMarker spawner (docs/concept/workforce.md
+## section 5), no longer the instant stand-in this fork originally shipped
+## with.
+const HIRE_STORAGE_SEARCH_RADIUS_TILES := 20
+
+
+func _try_hire_carpenter_for_house(recipe_id: String, target: Vector2i) -> bool:
+	# The same floori(tile / CHUNK_SIZE) EarthChunkManager._chunk_coord_for_tile
+	# itself uses -- inlined rather than reaching into that private method
+	# cross-class, since CHUNK_SIZE is already a real public const.
+	var chunk_coord := Vector2i(
+		floori(float(target.x) / EarthChunkManager.CHUNK_SIZE), floori(float(target.y) / EarthChunkManager.CHUNK_SIZE)
+	)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var carpenter_household_id := _chunk_manager.find_spare_carpenter_household(settlement_id, recipe_id)
+	if carpenter_household_id == "":
+		return false
+
+	var site_pixel := (Vector2(target) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var storage_pixel = _chunk_manager.nearest_structure_position(
+		site_pixel, "storage", float(HIRE_STORAGE_SEARCH_RADIUS_TILES) * TerrainRenderer.TILE_SIZE
+	)
+	if storage_pixel == null:
+		return false
+
+	if not wallet.can_afford(HIRE_A_CARPENTER_GOLD_COST):
+		return false
+
+	var counts := _inventory_counts()
+	var result := _crafting_recipe_book.craft(recipe_id, counts)
+	if not result.success:
+		return false
+
+	wallet.spend(HIRE_A_CARPENTER_GOLD_COST)
+	var consumed_items := {}
+	for item_id in counts:
+		var consumed: int = counts[item_id] - int(result.remaining_counts.get(item_id, 0))
+		if consumed > 0:
+			inventory.remove(item_id, consumed)
+			consumed_items[item_id] = consumed
+
+	var owner_household := _chunk_manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	_chunk_manager.hire_builder_for_house(
+		recipe_id, target, owner_household.id, carpenter_household_id, consumed_items, storage_pixel
+	)
 	return true
 
 
@@ -4209,6 +4348,19 @@ func _build_step() -> void:
 			inventory_changed.emit()
 		return
 
+	if _selected_furniture_item != null:
+		# A furniture piece is armed (docs/concept/housing.md) -- the SAME
+		# "keep holding it until it actually runs out" contract the
+		# placeable branch above already keeps, but through build_furniture_
+		# at_global (gated by FurniturePlacement's real interior-floor rule)
+		# rather than the general placeable build_at_global.
+		if _inventory_counts().get(_selected_furniture_item.id, 0) <= 0:
+			return
+		if _chunk_manager.build_furniture_at_global(target.x, target.y, _selected_furniture_item.id):
+			inventory.remove(_selected_furniture_item.id, 1)
+			inventory_changed.emit()
+		return
+
 	_chunk_manager.build_at_global(target.x, target.y, TerrainRenderer.EARTH_TILE_ID)
 
 
@@ -4230,6 +4382,19 @@ func _destroy_step() -> void:
 		return
 
 	var target := _tile_targeting.facing_tile(current_tile(), _last_facing_direction)
+
+	# Furniture first (docs/concept/housing.md): it sits ON TOP of the floor
+	# beneath it, its own separate layer, so a facing tile that has both a
+	# floor and a piece of furniture destroys the furniture, not the floor
+	# under it -- the same "topmost thing first" reading a table sitting on
+	# a floor already implies.
+	var furniture_id := _chunk_manager.furniture_at_global(target.x, target.y)
+	if furniture_id != "":
+		if _chunk_manager.destroy_furniture_at_global(target.x, target.y) and _item_catalog.has(furniture_id):
+			inventory.add(_item_catalog.make(furniture_id), 1)
+			inventory_changed.emit()
+		return
+
 	var tile_id := _chunk_manager.modification_at_global(target.x, target.y)
 	if not _chunk_manager.destroy_at_global(target.x, target.y):
 		return

@@ -44,6 +44,25 @@ const KIND_GATEWAY := "gateway"
 ## grafted in per character rather than declared in the tables below.
 const KIND_SIGNATURE := "signature"
 
+## A shared, cached instance (docs/concept/workforce.md: "the Skill Web
+## should also be available for NPCs") -- the graph structure (_nodes/
+## _edges/_starts/_rings) is identical for everyone; only allocated/
+## resonance/dna_seed (plain arguments to this class's own methods) vary
+## per character. Building the graph is _init's one real cost (looping
+## every wedge/ring/gateway); NpcSkillAllocation calls this far more often
+## than the Player's own single, once-per-session SkillWeb ever would
+## (every NpcIdentity construction, which itself already happens far more
+## than once per session -- see that file's own doc comment), so sharing
+## one already-built graph instead of rebuilding it per NPC is load-bearing
+## for performance, not just tidiness.
+static var _shared = null
+
+
+static func shared():
+	if _shared == null:
+		_shared = new()
+	return _shared
+
 ## How many wedges the circle is divided into. A const (rather than a call into
 ## ClassArchetype) because WEDGE_SPAN has to be one too; the two are pinned as
 ## agreeing by test_the_layout_declares_one_wedge_per_archetype_the_class_table_holds.

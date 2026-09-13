@@ -191,6 +191,63 @@ func active_projects_in_chunk(chunk_coord: Vector2i) -> Array:
 	return out
 
 
+## Every real project with a real resident household (docs/concept/
+## workforce.md's "Move-in"/"Rent" sections) -- by construction, only a
+## house-recipe project can ever have one (only settle_resident_if_new ever
+## sets resident_household_id), so this needs no separate "is this a house"
+## filter of its own. The wage/rent tick's own real caller: it has to reach
+## every player-built house's resident regardless of which chunk it's in.
+func projects_with_resident() -> Array:
+	var out: Array = []
+	for id in _projects:
+		var project: ConstructionProject = _projects[id]
+		if project.resident_household_id != "":
+			out.append(project)
+	return out
+
+
+## The one real project resident_household_id lives in, or null if it isn't
+## anyone's resident (or was never a real key at all) -- the needs-v2
+## happiness read's own real caller (EarthChunkManager.resident_happiness):
+## it has to find a SPECIFIC resident's own house, not every resident's.
+func project_for_resident(resident_household_id: String) -> ConstructionProject:
+	for id in _projects:
+		var project: ConstructionProject = _projects[id]
+		if project.resident_household_id == resident_household_id:
+			return project
+	return null
+
+
+## Every real, COMPLETE project owned by household_id -- civic taxation's
+## own real caller (EarthChunkManager -- docs/emergence/03-contracts-
+## property-economy.md's own "## Taxation" section): a settlement taxes the
+## PLAYER's real property within it, so this has to enumerate exactly what
+## the player owns, the same way projects_with_resident enumerates every
+## real resident. COMPLETE only -- an abandoned or still-PLANNED/IN_PROGRESS
+## project is not yet real taxable property.
+func projects_owned_by(household_id: String) -> Array:
+	var out: Array = []
+	for id in _projects:
+		var project: ConstructionProject = _projects[id]
+		if project.household_id == household_id and project.status == ConstructionProject.Status.COMPLETE:
+			out.append(project)
+	return out
+
+
+## The SAME filter as projects_with_resident, narrowed to one chunk -- the
+## real workforce-availability caller's own need (EarthChunkManager.
+## free_workforce_in_chunk): a settlement only ever asks about its own
+## chunk's residents, the same "look up by a real key" narrowing
+## in_progress_projects_in_chunk already applies to active_projects_in_chunk's
+## own broader query.
+func projects_with_resident_in_chunk(chunk_coord: Vector2i) -> Array:
+	var out: Array = []
+	for project in projects_with_resident():
+		if project.chunk_coord == chunk_coord:
+			out.append(project)
+	return out
+
+
 ## For a future ConstructionProjectStorePersistence -- pure serialization,
 ## no FileAccess (same split EventStore/HouseholdStore already use).
 func to_dicts() -> Array:
@@ -206,6 +263,7 @@ func to_dicts() -> Array:
 			"status": project.status,
 			"labor_hours_accumulated": project.labor_hours_accumulated,
 			"reserved_material": project.reserved_material,
+			"resident_household_id": project.resident_household_id,
 		})
 	return out
 
@@ -223,6 +281,7 @@ static func from_dicts(dicts: Array) -> RefCounted:
 		project.household_id = d.get("household_id", "")
 		project.status = int(d.get("status", ConstructionProject.Status.PLANNED))
 		project.labor_hours_accumulated = float(d.get("labor_hours_accumulated", 0.0))
+		project.resident_household_id = str(d.get("resident_household_id", ""))
 		var restored_material: Dictionary = d.get("reserved_material", {})
 		for item_id in restored_material:
 			project.reserved_material[str(item_id)] = float(restored_material[item_id])
