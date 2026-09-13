@@ -3439,17 +3439,16 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 		labels.assign(_ecology_steps.keys())
 		_ecology_cadence = StepCadence.new(labels)
 	for due in _ecology_cadence.advance(delta):
-		# Settlements alone get their own perf-report section (FPS regression
-		# round 14's residual finding, EarthChunkManager.MAX_UNLOADED_
-		# SETTLEMENTS_PER_STEP's own doc comment): its own per-tick cost used
-		# to grow with total lifetime settlement count, invisible inside the
-		# whole-ecology-batch total alongside ~25 other cadence steps. Zero
-		# cost when no report is running, the same guard every other section
-		# already uses.
-		if _perf_report != null and due[0] == "settlements":
-			var settlements_started := Time.get_ticks_usec()
+		# Every cadence step is its own eco_<label> perf-report section. Round
+		# 14 singled out settlements alone (its per-tick cost grew with
+		# lifetime settlement count, invisible inside the whole-ecology total
+		# alongside ~25 other steps); round 15 ranks all of them instead of
+		# guessing one at a time. Zero cost when no report is running, the
+		# same guard every other section already uses.
+		if _perf_report != null:
+			var step_started := Time.get_ticks_usec()
 			_ecology_steps[due[0]].call(due[1])
-			_perf_report.add_section("settlements", Time.get_ticks_usec() - settlements_started)
+			_perf_report.add_section("eco_" + due[0], Time.get_ticks_usec() - step_started)
 		else:
 			_ecology_steps[due[0]].call(due[1])
 	# Quest fulfilment is DERIVED, never a separate mutator (see
@@ -5802,10 +5801,24 @@ func _server_process() -> void:
 			streamed = true
 
 
+## --perf-report only: closes the section `label` opened at `started_usec`
+## and hands back the stamp the next section opens at, so _client_process's
+## ~14 groups bracket back to back with one guarded line each. Callers guard
+## on the report being non-null; a plain launch never reaches this.
+func _perf_section(label: String, started_usec: int) -> int:
+	var now := Time.get_ticks_usec()
+	_perf_report.add_section(label, now - started_usec)
+	return now
+
+
 func _client_process(delta: float) -> void:
 	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 	if local_player == null:
 		return
+	# The cli_<group> sections (FPS regression round 15): this pass was one
+	# opaque 10.6 ms "client" total across ~25 calls; each group below closes
+	# its own section so the report ranks them.
+	var perf_started := Time.get_ticks_usec() if _perf_report != null else 0
 
 	# Every locally-visible player (including remote players' proxies) needs a
 	# chunk_manager reference so its own visual water-state lookup works.
@@ -5837,20 +5850,30 @@ func _client_process(delta: float) -> void:
 			_run_initial_client_chunk_load(local_player.current_tile())
 	else:
 		_chunk_manager.update(local_player.current_tile())
+	if _perf_report != null:
+		perf_started = _perf_section("cli_chunk_update", perf_started)
 
 	var player_tile := local_player.current_tile()
 	_update_minimap(player_tile, delta)
+	if _perf_report != null:
+		perf_started = _perf_section("cli_minimap", perf_started)
 	_update_inventory_window(local_player)
 	_update_crafting_window(local_player)
 	_update_player_health_bar(local_player)
 	_update_hotbar(local_player)
+	if _perf_report != null:
+		perf_started = _perf_section("cli_windows", perf_started)
 	_update_creature_panels(local_player, delta)
 	_maybe_play_creature_calls(local_player, delta)
+	if _perf_report != null:
+		perf_started = _perf_section("cli_panels", perf_started)
 	# Hover tooltip is throttled (~30 Hz): recomputing which of potentially
 	# thousands of hoverables is under the cursor every single frame was a top
 	# CPU cost. 30 Hz is imperceptible for a tooltip.
 	if _hover_rescan_due(delta, get_viewport().get_mouse_position()):
 		_update_hover_tooltip()
+	if _perf_report != null:
+		perf_started = _perf_section("cli_hover", perf_started)
 	_update_survival_bar(local_player)
 	_update_xp_bar(local_player)
 	_update_land_sense_label(local_player)
@@ -5863,10 +5886,16 @@ func _client_process(delta: float) -> void:
 	# The banners keep their own text; the whole stack steps aside while a
 	# window is open (see world_hint_visible_for).
 	_message_stack.visible = world_hint_visible_for(true, _any_gameplay_window_open())
+	if _perf_report != null:
+		perf_started = _perf_section("cli_labels", perf_started)
 	_maybe_update_interaction_prompt(local_player, delta)
+	if _perf_report != null:
+		perf_started = _perf_section("cli_prompt", perf_started)
 	_update_charge_meter(local_player)
 	_refresh_skill_window(local_player)
 	_autosave_step(local_player, delta)
+	if _perf_report != null:
+		perf_started = _perf_section("cli_tail", perf_started)
 	var latitude := _geo_coordinates.latitude_for_tile(player_tile.y, EarthChunkGenerator.WORLD_HEIGHT_TILES)
 	var longitude := _geo_coordinates.longitude_for_tile(player_tile.x, EarthChunkGenerator.WORLD_WIDTH_TILES)
 
@@ -5947,6 +5976,8 @@ func _client_process(delta: float) -> void:
 	# clock (which follows the real clock) holds evening players in
 	# permanent night. Real rivers gleam after dark: they reflect the sky.
 	_chunk_manager.set_river_flow_night_lift(sunlight)
+	if _perf_report != null:
+		perf_started = _perf_section("cli_sky", perf_started)
 	# Fetched ONCE per frame and reused by every consumer below (the wader-
 	# position scan here, the merged snow-tread/footstep loop, and the
 	# crush loop) -- reported live: "Can you fix the 10fps issue and bring
@@ -6065,6 +6096,8 @@ func _client_process(delta: float) -> void:
 	# underwater facts, not an audio surface key (EarthChunkManager must
 	# not depend on FootstepSound). Empty when no real step landed this
 	# call (baseline/teleport/no stride due yet).
+	if _perf_report != null:
+		perf_started = _perf_section("cli_weather", perf_started)
 	var footstep := _chunk_manager.record_footstep(local_player.position, local_player.facing_direction())
 	if not footstep.is_empty():
 		_interaction_sfx.play_footstep(
@@ -6128,6 +6161,8 @@ func _client_process(delta: float) -> void:
 	# charges the same constant -- its name predates all three, but the
 	# event it represents is identical (see karma.gd's own doc comment) --
 	# it just only ever lands on local_player for local_player's OWN step.
+	if _perf_report != null:
+		perf_started = _perf_section("cli_footsteps", perf_started)
 	var player_step_momentum_kg_m_s := _player_step_momentum_kg_m_s(local_player)
 	if _chunk_manager.crush_worm_at(local_player.position, player_step_momentum_kg_m_s):
 		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
@@ -6195,6 +6230,8 @@ func _client_process(delta: float) -> void:
 		_chunk_manager.crush_decomposers_near(marker.position, momentum)
 		_chunk_manager.crush_mushroom_at(marker.position, momentum)
 		_chunk_manager.crush_walnut_near(marker.position, momentum)
+	if _perf_report != null:
+		perf_started = _perf_section("cli_crush", perf_started)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).
@@ -6246,6 +6283,8 @@ func _client_process(delta: float) -> void:
 			local_player.current_speed_multiplier * 100,
 		]
 	)
+	if _perf_report != null:
+		_perf_section("cli_season", perf_started)
 
 
 ## Pushes the torch glow's own position/visibility every frame -- see

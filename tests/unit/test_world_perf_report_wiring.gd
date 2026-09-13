@@ -71,27 +71,41 @@ func test_process_folds_the_schedulers_per_class_step_profile_into_the_sections(
 	assert_true(body.contains("_perf_report.add_count(key, step_profile[key][\"steps\"])"), "and its step count rides along, so ms per step is readable")
 
 
-## FPS regression round 14's residual finding (docs/concept/soil_fauna.md):
-## step_settlements' own per-tick cost used to be invisible inside the
-## whole-ecology-batch total, indistinguishable from ~25 other cadence
-## steps sharing the same "ecology" section. Isolating it here is what lets
-## a live run actually confirm EarthChunkManager.MAX_UNLOADED_SETTLEMENTS_
-## PER_STEP's pagination fix holds, rather than reading it off a total that
-## also moves for unrelated reasons.
-func test_step_ecology_batch_gives_settlements_its_own_perf_section():
+## FPS regression round 14's residual finding (docs/concept/soil_fauna.md)
+## singled out step_settlements for its own section, because its per-tick
+## cost was invisible inside the whole-ecology-batch total alongside ~25
+## other cadence steps. Round 15 generalises that: EVERY cadence step is its
+## own eco_<label> section, so the report ranks them instead of one being
+## guessed at a time. Settlements keeps its own line by the same rule.
+func test_step_ecology_batch_gives_every_cadence_step_its_own_eco_section():
 	var body := _body_of("_step_ecology_batch")
 	assert_true(
-		body.contains("_perf_report.add_section(\"settlements\", "),
-		"step_settlements needs its own section, not just the whole-ecology total"
+		body.contains("_perf_report.add_section(\"eco_\" + due[0], "),
+		"each due cadence step is timed under its own eco_<label> section"
 	)
-	assert_true(
-		body.contains("due[0] == \"settlements\""),
-		"only the settlements cadence label is singled out for its own timing"
-	)
-	assert_true(
-		body.contains("if _perf_report != null and due[0] == \"settlements\":"),
-		"zero cost when no report is running, the same guard every other section already uses"
-	)
+	assert_eq(body.count("_ecology_steps[due[0]].call(due[1])"), 2,
+		"the step is called exactly once on either side of the report guard")
+	assert_false(body.contains("due[0] == \"settlements\""),
+		"no cadence label is special-cased any more -- settlements is eco_settlements like every other")
+
+
+## Round 15: the client pass was one 10.6 ms "client" section holding the
+## chunk-manager update, the minimap, every window/label refresh, the hover
+## scan and the interaction prompt -- the second-largest script cost with no
+## way to tell which of ~25 calls it was. Each group gets its own cli_<group>
+## section, closed by _perf_section behind the same null guard.
+func test_client_process_brackets_its_per_frame_groups_as_cli_sections():
+	var body := _body_of("_client_process")
+	for label in ["chunk_update", "minimap", "windows", "panels", "hover", "prompt", "labels", "sky"]:
+		assert_eq(
+			body.count("_perf_section(\"cli_%s\", " % label), 1,
+			"the %s group is timed exactly once per frame" % label
+		)
+	assert_true(body.contains("if _perf_report != null:"), "zero cost when no report is running")
+	var helper := _body_of("_perf_section")
+	assert_true(helper.contains("_perf_report.add_section(label, now - started_usec)"),
+		"the helper closes the section from the stamp the previous one returned")
+	assert_true(helper.contains("return now"), "and hands back the stamp the next section opens at")
 
 
 func test_ready_adds_the_frame_end_sentinel_and_process_opens_the_span():
