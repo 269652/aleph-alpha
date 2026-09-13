@@ -171,18 +171,24 @@ ties break by candidate id, ascending (deterministic, no
 `RandomNumberGenerator`, the same discipline `tall_grass.gd`'s own hash-seed
 convention already requires everywhere in this codebase).
 
-### City Hall: a real civic building surfacing a real demand (named follow-up, not this pass)
+### City Hall: a real civic building surfacing a real demand
 
-`civic_construction.md`'s already-speced Meeting Hall (unimplemented)
-becomes the real, discoverable place this decision happens: once built, it
-reads `ConstructionPriority`/`NeedResolver`'s real recipe-graph walk (the
-SAME one `SettlementBuildDecision` already calls, see pillar 4) to name a
-concrete missing role — e.g. "beam"/"plank" resolving `missing_structure_id
-== "sagewerk"` means the settlement's real demand is a `wood` role. Where
-that walk still can't find an actionable shortfall in today's real recipe
-book (see pillar 4's own honest inheritance of that gap), the Meeting Hall
-simply has nothing to convene about yet — a silent, discoverable absence,
-not an invented placeholder demand.
+**The demand computation itself is real and tested** (`src/emergence/
+settlement_demand.gd`, `SettlementDemand.demands_for`): reads
+`ConstructionPriority`/`NeedResolver`'s real recipe-graph walk (the SAME
+one `SettlementBuildDecision` already calls, see pillar 4) over every real
+recipe the book itself declares `requires_structure` for, and reports
+every one currently blocked as a real demand — e.g. "beam"/"plank"
+resolving `missing_structure_id == "sagewerk"` names the settlement's real
+demand as a `wood` role. Where that walk still can't find an actionable
+shortfall in today's real recipe book (see pillar 4's own honest
+inheritance of that gap), `demands_for` simply returns an empty list — a
+silent, discoverable absence, not an invented placeholder demand.
+
+**Still not built**: `civic_construction.md`'s already-speced Meeting Hall
+itself (construction trigger, physical footprint) stays unimplemented, so
+nothing yet gates `demands_for` behind "a City Hall must exist first," and
+nothing yet calls it from live settlement-tick code — see Status.
 
 ### Redirecting a real villager into the winning role (named follow-up, not this pass)
 
@@ -254,10 +260,17 @@ consensus, walks to the Sägewerk, and starts working it.
 (self-preference, believed-preference, consensus score, deterministic
 tie-break) — real and tested.
 
-⬜ City Hall / Meeting Hall construction and its own real "compute a
-demand" reading of `NeedResolver` — [civic_construction.md](civic_construction.md)'s
-own Meeting Hall stays unimplemented; this doc's City Hall section is a
-real spec for its next step, not yet built.
+✅ `SettlementDemand.demands_for` — City Hall's own real "compute demands"
+step, reusing `ConstructionPriority`/`NeedResolver` over every real
+`requires_structure`-gated recipe in the book — real and tested (7/7),
+including the real "wood" (sagewerk) case and the abstract "heat_source"
+case, honestly reported rather than resolved.
+
+⬜ City Hall / Meeting Hall construction itself —
+[civic_construction.md](civic_construction.md)'s own Meeting Hall stays
+unimplemented (no physical structure, no institution-formation trigger),
+so nothing yet gates `demands_for` behind a real built City Hall, and
+nothing in live settlement-tick code calls it yet.
 
 ⬜ Redirecting the winning candidate into an actual real `NpcIdentity`/
 `NpcMarker` doing the job — blocked on the same not-yet-real

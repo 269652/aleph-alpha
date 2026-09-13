@@ -6437,14 +6437,28 @@ never a redirected existing villager).
     from the real `MemoryStore`/`NpcEncounter` system (neither currently
     tracks a queryable pairwise "how well do these two specific NPCs know
     each other" number — a real, named follow-up).
-- **City Hall / Meeting Hall computing a real demand** (medium) — ⬜ Not
-  started — Civic Construction's own Meeting Hall (above) stays
-  unimplemented; reading a real demand out of it would reuse
-  `NeedResolver`/`ConstructionPriority`'s existing recipe-graph walk
-  rather than a new needs computation, inheriting that walk's own
-  already-documented "essentially never finds an actionable shortfall in
-  live play yet" limitation (see Timber Construction above) rather than
-  papering over it.
+- **`SettlementDemand.demands_for`** (medium) — ✅ Done — City Hall's own
+  real "compute demands" step (`src/emergence/settlement_demand.gd`):
+  scans every real recipe in `CraftingRecipeBook` that names a
+  `requires_structure` and reports the ones currently blocked
+  (`ConstructionPriority.Priority.BUILD_PRODUCER_FIRST`) as real demands,
+  each naming its own real output item and missing structure — no new
+  needs computation, a thin reuse of `ConstructionPriority`/`NeedResolver`
+  exactly per the concept doc's own "reuse, don't fork" pillar. Against
+  today's real recipe book this surfaces two real, live cases:
+  `log_to_balken`/`log_to_planke` → `sagewerk` (the doc's own "wood"
+  worked example) and `iron_ingot`/`copper_ingot` → the abstract
+  `heat_source` category (reported as that same honest abstract name, an
+  already-documented `ConstructionPriority` limitation this wrapper
+  doesn't paper over). A pure material shortfall with the structure
+  already present is deliberately excluded — that stays the existing
+  shortfall/regional-trade path's own job. 7/7 green.
+  - 🚧 Civic Construction's own Meeting Hall (above) stays unimplemented,
+    so nothing yet gates `demands_for` behind a real built City Hall, and
+    no live settlement-tick code calls it yet — a real, callable function
+    with no caller, the same honest state `NeedResolver`/
+    `ConstructionPriority` themselves were in before `SettlementBuildDecision`
+    gave them one.
 - **Redirecting the winning candidate into a real, named worker** (large)
   — ⬜ Not started — the genuinely hard piece: making `NpcRoleConsensus`'s
   winner be an existing `NpcIdentity`/`NpcMarker` who leaves their normal
