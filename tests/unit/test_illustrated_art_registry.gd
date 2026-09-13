@@ -207,6 +207,82 @@ func test_saw_held_is_condition_tied():
 		assert_true(entry.states.has(state), "saw should have the %s state" % state)
 
 
+# -- 2026-09-08 batch, second pass: the remaining 12 real catalog items.
+# Same "hand-verify per item" discipline -- held-row pose count and
+# condition-vs-pose-variety semantics vary per item, confirmed by direct
+# visual inspection, not assumed uniform.
+
+func _assert_standard_item_shape(item_id: String, held_pose_count: int) -> void:
+	var entry := registry.entry_for(item_id)
+	for context in ["icon", "held", "equipped", "ground"]:
+		assert_true(entry.contexts.has(context), "%s should declare a %s context" % [item_id, context])
+	for state in ["pristine", "used", "worn", "broken"]:
+		assert_true(entry.states.has(state), "%s should have the %s state" % [item_id, state])
+	var pose_names := ["still", "pose_b", "pose_c", "pose_d", "pose_e", "pose_f", "pose_g", "pose_h"]
+	for i in held_pose_count:
+		assert_true(
+			entry.animations.has(pose_names[i]),
+			"%s should declare the %s held animation" % [item_id, pose_names[i]]
+		)
+
+
+func test_charter_held_is_pose_variety_with_seven_poses():
+	_assert_standard_item_shape("charter", 7)
+
+
+func test_deed_held_is_pose_variety_with_four_poses():
+	_assert_standard_item_shape("deed", 4)
+
+
+func test_field_journal_held_is_pose_variety_with_six_poses():
+	_assert_standard_item_shape("field_journal", 6)
+
+
+func test_ledger_held_is_pose_variety_with_six_poses():
+	_assert_standard_item_shape("ledger", 6)
+
+
+func test_fishing_rod_held_is_pose_variety_with_eight_poses():
+	_assert_standard_item_shape("fishing_rod", 8)
+
+
+func test_spyglass_held_is_pose_variety_with_six_poses():
+	_assert_standard_item_shape("spyglass", 6)
+
+
+func test_star_chart_held_is_pose_variety_with_six_poses():
+	_assert_standard_item_shape("star_chart", 6)
+
+
+func test_iron_axe_held_is_pose_variety_with_six_poses():
+	_assert_standard_item_shape("iron_axe", 6)
+
+
+func test_iron_sword_held_is_pose_variety_with_six_poses():
+	# Supersedes the old 3-state (pristine/worn/broken) icon-only entry --
+	# no real attack-swing art exists in this batch, so unlike wooden_club
+	# this entry gains no "attack" animation.
+	_assert_standard_item_shape("iron_sword", 6)
+
+
+func test_torch_held_is_pose_variety_with_six_poses():
+	_assert_standard_item_shape("torch", 6)
+
+
+func test_worm_held_is_pose_variety_with_eight_poses():
+	_assert_standard_item_shape("worm", 8)
+
+
+func test_map_held_is_condition_tied():
+	# The map visibly tears/splits by the "broken" column -- condition-tied,
+	# unlike this batch's other scroll/document items.
+	var entry := registry.entry_for("map")
+	for context in ["icon", "held", "equipped", "ground"]:
+		assert_true(entry.contexts.has(context), "map should declare a %s context" % context)
+	for state in ["pristine", "used", "worn", "broken"]:
+		assert_true(entry.states.has(state), "map should have the %s state" % state)
+
+
 func test_wooden_club_held_is_pose_variety_with_eight_poses():
 	# 8 real pose variants of the pristine state (verified: none show wear,
 	# unlike the icon/equipped/ground rows' own real broken-state art) --
