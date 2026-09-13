@@ -33,6 +33,7 @@ const CompanionCharacterSheetView = preload("res://src/companion_server/companio
 const CompanionItemCatalogView = preload("res://src/companion_server/companion_item_catalog_view.gd")
 const CompanionItemDetailView = preload("res://src/companion_server/companion_item_detail_view.gd")
 const CompanionCompanionsView = preload("res://src/companion_server/companion_companions_view.gd")
+const CompanionKeptAnimalsReader = preload("res://src/companion_server/companion_kept_animals_reader.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CraftedItemRegistry = preload("res://src/gameplay/crafted_item_registry.gd")
@@ -131,6 +132,7 @@ func _response_for(parsed: Dictionary) -> PackedByteArray:
 			var recipe_book := CraftingRecipeBook.new()
 			return CompanionHttpResponse.build(200, "text/html", CompanionItemDetailView.render(routed.item_id, catalog, recipe_book))
 		"companions":
-			return CompanionHttpResponse.build(200, "text/html", CompanionCompanionsView.render(save_dict))
+			var kept_animals := CompanionKeptAnimalsReader.read_all()
+			return CompanionHttpResponse.build(200, "text/html", CompanionCompanionsView.render(save_dict, kept_animals))
 		_:
 			return CompanionHttpResponse.build(404, "text/html", "<p>not found</p>")
