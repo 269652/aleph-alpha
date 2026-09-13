@@ -1446,6 +1446,8 @@ func activate_item_id(item_id: String) -> bool:
 					return _arm_placeable(stack.item)
 				HotbarAction.FURNISH:
 					return _arm_furniture(stack.item)
+				HotbarAction.LEARN:
+					return _try_learn_blueprint(stack.item.id)
 				_:
 					return false
 	return false
