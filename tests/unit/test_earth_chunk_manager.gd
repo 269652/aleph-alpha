@@ -32,6 +32,7 @@ const SeedCaching = preload("res://src/gameplay/seed_caching.gd")
 const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
 const SquirrelNutCaching = preload("res://src/gameplay/squirrel_nut_caching.gd")
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
+const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
 const DecorationLod = preload("res://src/rendering/decoration_lod.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const ProceduralGrassSprite = preload("res://src/rendering/procedural_grass_sprite.gd")
@@ -756,6 +757,20 @@ func test_set_wind_strength_also_drives_tree_bloom_and_grass_sway():
 	)
 	assert_eq(manager._tree_renderer._wind_sway.shared_material().get_shader_parameter("wind_strength"), 1.8)
 	assert_eq(manager._illustrated_grass.material().get_shader_parameter("wind_strength"), 1.8)
+	assert_eq(
+		IllustratedWheatPatch.material().get_shader_parameter("wind_strength"), 1.8,
+		"a farm's own wheat crops share the same live wind concept as long grass"
+	)
+
+
+## set_grass_walker_position must also reach IllustratedWheatPatch's own
+## shared material -- one write updates every wheat crop's own bending on
+## every farm at once, the same "one shared uniform" shape long grass's
+## own single call already uses.
+func test_set_grass_walker_position_also_reaches_wheats_shared_material():
+	manager.set_grass_walker_position(Vector2(30.0, 40.0))
+	assert_eq(manager._illustrated_grass.material().get_shader_parameter("player_world_position"), Vector2(30.0, 40.0))
+	assert_eq(IllustratedWheatPatch.material().get_shader_parameter("player_world_position"), Vector2(30.0, 40.0))
 
 
 ## set_snow_depth must also reach TreeRenderer, mirroring set_wind_strength's

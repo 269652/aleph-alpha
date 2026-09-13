@@ -41,6 +41,7 @@ const DecorationLod = preload("res://src/rendering/decoration_lod.gd")
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 const ProceduralGrassSprite = preload("res://src/rendering/procedural_grass_sprite.gd")
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
+const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
 const FlowerPatch = preload("res://src/world/flower_patch.gd")
 const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
 const SeedCaching = preload("res://src/gameplay/seed_caching.gd")
@@ -6146,6 +6147,7 @@ func set_wind_strength(strength: float) -> void:
 	_wind_sway.set_wind_strength(strength)
 	_tree_renderer.set_wind_strength(strength)
 	_illustrated_grass.set_wind_strength(strength)
+	IllustratedWheatPatch.set_wind_strength(strength)
 
 
 ## The season's tint on living green (see SeasonalFoliage, forwarded from
@@ -7049,10 +7051,15 @@ func harvest_farm_plot_at_global(global_x: int, global_y: int) -> Dictionary:
 ## unlike step_wild_crops/step_tall_grass, this deliberately does NOT scale
 ## by SeasonCycle's growth_modifier -- farming.md frames a tilled, tended
 ## plot as the player's own override of the ambient vegetation model, not a
-## wild population subject to the same seasonal modulation.
+## wild population subject to the same seasonal modulation. Also forwards
+## current_season() to every plot -- only a WHEAT crop's own art actually
+## reads it (FarmPlotMarker._redraw_wheat picks which of its three real
+## sheets to sample from), but it costs nothing to pass unconditionally,
+## the same way delta_seconds itself is.
 func step_farm_plots(delta_seconds: float) -> void:
+	var season := current_season()
 	for marker in _farm_plots.values():
-		marker.advance(delta_seconds)
+		marker.advance(delta_seconds, season)
 
 
 func _build_farm_plot_marker(tile: Vector2i) -> FarmPlotMarker:
@@ -7065,9 +7072,14 @@ func _build_farm_plot_marker(tile: Vector2i) -> FarmPlotMarker:
 
 
 ## One shared shader-uniform write per frame makes nearby blades yield to a
-## walker; individual cards intentionally have no process callbacks.
+## walker; individual cards intentionally have no process callbacks. Also
+## pushes to IllustratedWheatPatch's own shared material (see docs/concept/
+## long_grass.md's "A second atlas family: farmed wheat") -- one write here
+## updates every wheat crop on every farm at once, the same "one shared
+## uniform" shape grass's own single call already uses.
 func set_grass_walker_position(world_position: Vector2) -> void:
 	_illustrated_grass.set_walker_position(world_position)
+	IllustratedWheatPatch.set_walker_position(world_position)
 
 
 ## How grown the tall-grass patch at `pixel_position` is (0..1, 1 mature), or
