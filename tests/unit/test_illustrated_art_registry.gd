@@ -85,14 +85,14 @@ func test_campfires_burn_and_glow_animations_loop():
 # apply is a function of item kind, not universal.
 
 func test_stone_pickaxe_entry_has_the_documented_shape():
-	# A melee-swung tool: icon, held, ground -- no equipped (a pickaxe is
-	# not worn on the body the way armor or a sheathed blade is).
+	# A tool: the full icon/held/equipped/ground row set -- ANY carryable
+	# weapon or tool has a carried-but-not-in-hand look (strapped to a
+	# belt/back), whether or not it is ever swung (corrected same-day: the
+	# first draft of this mapping wrongly dropped "equipped" for tools).
 	var entry := registry.entry_for("stone_pickaxe")
-	assert_true(entry.contexts.has("icon"))
-	assert_true(entry.contexts.has("held"))
+	for context in ["icon", "held", "equipped", "ground"]:
+		assert_true(entry.contexts.has(context), "stone_pickaxe should declare a %s context" % context)
 	assert_eq(entry.contexts.held.anchor, "pivot")
-	assert_true(entry.contexts.has("ground"))
-	assert_false(entry.contexts.has("equipped"), "a pickaxe is not worn on the body")
 	assert_eq(entry.base_state, "pristine")
 	for state in ["pristine", "used", "worn", "broken"]:
 		assert_true(entry.states.has(state), "stone_pickaxe should have the %s state" % state)

@@ -246,11 +246,19 @@ rows (contexts) apply to an item's static composite sheet is a function of
 its `kind` (`item_catalog.gd`), not universal. Default per kind — override
 per item only where it genuinely differs:
 
+**Correction (same day):** the first draft of this table split "tool" into
+melee-swung vs. utility sub-kinds and dropped `equipped` from both — wrong.
+Any carryable weapon or tool has a carried-but-not-in-hand look (strapped to
+a belt/back/hip, the same "equipped" row the reference sheet shows for a
+net) whether or not it is ever actually swung, so `equipped` is part of
+every weapon/tool's row set, not just weapons'. The real split is
+held-vs-worn (worn = armor, which is never gripped in the hand), not
+melee-vs-utility:
+
 | Kind | Static composite rows | Columns (states) | Separate animation file(s) |
 |---|---|---|---|
-| **weapon** | icon, held (idle pose), equipped (sheathed/holstered), ground | pristine/used/worn/broken | `attack` (the swing cycle, **pristine state only** — worn/broken reuse pristine's attack frames per this doc's own already-established club rule) |
-| **tool, melee-swung** (pickaxe, axe) | icon, held (idle), ground | pristine/used/worn/broken | none yet — swing art stays catalog-wide Deferred, below |
-| **tool, utility** (compass, map, spyglass, ledger, deed, charter, field_journal, star_chart, weather_glass, snare, trap, rope, net, lasso, fishing_rod) | icon, held (idle), ground | pristine/used/worn/broken | none |
+| **weapon** | icon, held (idle pose), equipped (strapped/holstered), ground | pristine/used/worn/broken | `attack` (the swing cycle, **pristine state only** — worn/broken reuse pristine's attack frames per this doc's own already-established club rule) |
+| **tool** (pickaxe, axe, compass, map, spyglass, ledger, deed, charter, field_journal, star_chart, weather_glass, snare, trap, rope, net, lasso, fishing_rod — melee-swung or utility alike) | icon, held (idle), equipped (strapped/holstered), ground | pristine/used/worn/broken | none yet — swing art stays catalog-wide Deferred, below, for the melee-swung subset |
 | **armor** | icon, equipped (worn on the rig slot), ground | pristine/used/worn/broken | none |
 | **placeable** (campfire, furnace, sagewerk, storage, stone_dam) | icon, ground (pre-placement, dropped) | whatever fire/operational states the item itself has (e.g. campfire's own `unlit`/`lit`/`embers` — furnace shares that exact vocabulary, not durability) | `placed` is its OWN surface entirely (already named above, "Placed structures" — a seeded-variant grid, not part of this icon sheet), animated per state where the state itself moves (a lit furnace's flicker) |
 | **material / food** | icon only | `default` (no durability, no wear) | none |
