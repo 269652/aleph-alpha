@@ -164,6 +164,23 @@ func test_activate_hotbar_slot_arms_a_placeable_item():
 	assert_eq(player._selected_placeable_item.id, "furnace")
 
 
+## The real, previously-missing trigger (see docs/concept/workforce.md's
+## Status list): _try_learn_blueprint was real and tested on its own, but
+## nothing outside tests ever called it -- a real gap found live ("the user
+## relaunched and could not see any new buildings at all"), closed by
+## giving the "blueprint" item kind a real HotbarAction.LEARN mapping. This
+## is the first test of that specific wiring, not of _try_learn_blueprint's
+## own already-covered logic above.
+func test_activate_item_id_learns_a_known_blueprint():
+	player.inventory.add(_item_catalog.make("blueprint_small_house"), 1)
+
+	var handled := player.activate_item_id("blueprint_small_house")
+
+	assert_true(handled)
+	assert_eq(player.inventory_counts().get("blueprint_small_house", 0), 0, "learning consumes the real item")
+	assert_true(chunk_manager.has_unlocked_blueprint("small_house"))
+
+
 # -- build-input: placement, consumption, and the unarmed regression path -----
 
 func test_build_step_places_bare_earth_when_nothing_is_armed():
