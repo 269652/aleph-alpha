@@ -373,6 +373,21 @@ cell. All of the above is resolved at PAINT time from the neighbouring
 cells and the player's own position, exactly like terrain blending, so no
 new piece ids and no save-format change are involved.
 
+**7. Real illustrated art, per piece id, replacing the procedural pattern
+where a real sheet exists.** The same "hand-drawn sheet wins, procedural is
+the fallback" seam `IllustratedTerrainSprite` already established for
+biome ground tiles: `IllustratedBuildingPieceSprite.has_piece_art(piece_id)`
+gates whether `TerrainRenderer._piece_image` draws from a real
+user-supplied illustration (`assets/sprites/buildings/wood_wall.png`/
+`stone_wall.png`, a 6-column sheet — door, window, wall, a spare wall
+variant, two spare narrow corner-post variants, only the first three wired
+so far; `wood_floor.png`, a single image) or falls through to
+`ProceduralBuildingPieceSprite.generate_image` exactly as before. A piece
+with no real sheet yet (stone floor, the timber tier, roofs) is untouched.
+This is additive art only — it changes no piece id, no placement rule, and
+no save data, the same guarantee point 6's facade family and the roof
+pitch family (point 3) already keep.
+
 ### Persistence
 
 Pieces persist through the existing per-chunk modification system (see
@@ -500,6 +515,12 @@ modification like any other.
   - *The facade family* (see "How a house reads from above", point 6).
   [housing.md](housing.md)'s Status carries the household side of the same
   pass.
+- ✅ Real illustrated wall/door/window/floor art (see "How a house reads
+  from above", point 7) — `IllustratedBuildingPieceSprite` replaces the
+  procedural pattern for wood/stone wall, door, window and wood floor with
+  a real user-supplied illustration; every other piece (stone floor, the
+  timber tier, roofs) is unaffected. `ATLAS_VERSION` bumped to
+  `art_resolution_v26_illustrated_building_pieces`.
 - ✅ The same rule for boulders and ore, closed on **both** sides.
   `StoneRenderer.spawn_stones` had the identical bug with the identical
   shape — it iterated its cells over `chunk.biome` and never consulted
