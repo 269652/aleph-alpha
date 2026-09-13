@@ -147,6 +147,82 @@ func test_furnace_entry_shares_campfires_fire_status_vocabulary():
 	assert_true(entry.animations.burn.loop)
 
 
+# -- 2026-09-08 batch integration (2026-09-13): real art for these six was
+# sitting uncommitted in the main checkout since 2026-09-08. Held-row
+# semantics were hand-verified per item, NOT assumed uniform (automated
+# SpriteSheetSlicer.detect_frames boundary detection proved unreliable on
+# this real, imperfectly-dividered dataset) -- some items' held row is pure
+# pose variety of the pristine state (a tool with nothing that visibly
+# wears), others show real condition progression exactly like icon/
+# equipped/ground (a tool with a blade/net/cord that visibly damages).
+
+func test_compass_held_is_pose_variety_not_condition():
+	var entry := registry.entry_for("compass")
+	for context in ["icon", "held", "equipped", "ground"]:
+		assert_true(entry.contexts.has(context), "compass should declare a %s context" % context)
+	for state in ["pristine", "used", "worn", "broken"]:
+		assert_true(entry.states.has(state), "compass should have the %s state" % state)
+	for animation in ["still", "pose_b", "pose_c", "pose_d"]:
+		assert_true(entry.animations.has(animation), "compass should declare the %s animation" % animation)
+
+
+func test_rough_compass_held_is_condition_tied():
+	# Unlike plain compass: rough_compass's held row shows a visibly
+	# fraying/broken cord by the "broken" column -- real condition
+	# progression, not pose variety, so held needs no extra animations
+	# beyond "still" (one frame per state, same as icon/equipped/ground).
+	var entry := registry.entry_for("rough_compass")
+	for context in ["icon", "held", "equipped", "ground"]:
+		assert_true(entry.contexts.has(context), "rough_compass should declare a %s context" % context)
+	for state in ["pristine", "used", "worn", "broken"]:
+		assert_true(entry.states.has(state), "rough_compass should have the %s state" % state)
+
+
+func test_weather_glass_held_is_condition_tied():
+	# The glass orb visibly cracks by the "broken" column -- condition-tied.
+	var entry := registry.entry_for("weather_glass")
+	for context in ["icon", "held", "equipped", "ground"]:
+		assert_true(entry.contexts.has(context), "weather_glass should declare a %s context" % context)
+	for state in ["pristine", "used", "worn", "broken"]:
+		assert_true(entry.states.has(state), "weather_glass should have the %s state" % state)
+
+
+func test_butterfly_net_held_is_condition_tied():
+	# The net visibly tears/drips by the "broken" column -- condition-tied.
+	# Supersedes the old 3-state (pristine/worn/broken) icon-only entry.
+	var entry := registry.entry_for("butterfly_net")
+	for context in ["icon", "held", "equipped", "ground"]:
+		assert_true(entry.contexts.has(context), "butterfly_net should declare a %s context" % context)
+	for state in ["pristine", "used", "worn", "broken"]:
+		assert_true(entry.states.has(state), "butterfly_net should have the %s state" % state)
+
+
+func test_saw_held_is_condition_tied():
+	# The blade visibly chips by the "broken" column -- condition-tied.
+	# Supersedes the old 3-state (pristine/worn/broken) icon-only entry.
+	var entry := registry.entry_for("saw")
+	for context in ["icon", "held", "equipped", "ground"]:
+		assert_true(entry.contexts.has(context), "saw should declare a %s context" % context)
+	for state in ["pristine", "used", "worn", "broken"]:
+		assert_true(entry.states.has(state), "saw should have the %s state" % state)
+
+
+func test_wooden_club_held_is_pose_variety_with_eight_poses():
+	# 8 real pose variants of the pristine state (verified: none show wear,
+	# unlike the icon/equipped/ground rows' own real broken-state art) --
+	# adds to, does not replace, the pilot's own existing attack/block/still
+	# animations and pristine/worn/broken states.
+	var entry := registry.entry_for("wooden_club")
+	for context in ["equipped", "ground"]:
+		assert_true(entry.contexts.has(context), "wooden_club should declare a %s context" % context)
+	assert_true(entry.states.has("used"), "wooden_club should gain the used state")
+	for animation in ["still", "pose_b", "pose_c", "pose_d", "pose_e", "pose_f", "pose_g", "pose_h"]:
+		assert_true(entry.animations.has(animation), "wooden_club should declare the %s animation" % animation)
+	# the pilot's own original shape must still hold
+	assert_true(entry.animations.has("attack"))
+	assert_true(entry.animations.has("block"))
+
+
 # -- self-consistency: every subject's own declared defaults must be real -
 #
 # The resolver's own base-case (mask=0, zero axes relaxed) and its base-
