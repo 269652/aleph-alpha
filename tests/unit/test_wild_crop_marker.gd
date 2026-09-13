@@ -332,6 +332,58 @@ func test_a_marker_nobody_told_about_the_season_renders_exactly_as_before():
 	assert_eq(marker._leaves.modulate, Color.WHITE)
 
 
+# -- Root Vigor: a heritable size/quality trait (docs/concept/wild_crops.md)
+# --------------------------------------------------------------------------
+
+
+## Pins the MIN/MAX_VIGOR_MASS_MULTIPLIER range's own symmetry: the
+## population's own mean vigor (0.5) must be the range's exact identity
+## (1.0x), not an eyeballed pair of endpoints that merely happen to look
+## symmetric in a comment.
+func test_vigor_mass_multiplier_is_the_identity_at_the_populations_own_mean():
+	assert_almost_eq(WildCropMarker.vigor_mass_multiplier(0.5), 1.0, 0.0001)
+
+
+## The population's own mean vigor (0.5, see WildCropPatch.get_vigor's own
+## default) must draw at exactly the ordinary, un-nudged leaf size -- so
+## every marker built before vigor existed (every caller in every OTHER
+## test in this file, none of which set `vigor`) keeps rendering exactly as
+## before.
+func test_default_vigor_renders_leaves_at_their_ordinary_base_scale():
+	add_child_autofree(marker)
+	var illustrated := IllustratedCropSprite.new()
+	assert_almost_eq(marker._leaves.scale.x, illustrated.leaf_world_scale("carrot"), 0.0001)
+
+
+func test_higher_vigor_grows_visibly_bigger_leaves_than_lower_vigor():
+	var runt := WildCropMarker.new()
+	runt.crop_id = "carrot"
+	runt.vigor = 0.0
+	add_child_autofree(runt)
+
+	var giant := WildCropMarker.new()
+	giant.crop_id = "carrot"
+	giant.vigor = 1.0
+	add_child_autofree(giant)
+
+	assert_gt(giant._leaves.scale.x, runt._leaves.scale.x)
+
+
+## A vigor set before add_child (the renderer's own calling convention --
+## see spawn_markers/_build_marker) must still land on the leaves, the same
+## "catches up a value set before _ready" contract season_tint/growth honor.
+func test_a_vigor_set_before_ready_still_lands_on_the_leaves():
+	var runt := WildCropMarker.new()
+	runt.crop_id = "carrot"
+	var default_scale: float
+	# vigor==0.5 default -> base scale, so compare against a set()-before-
+	# ready 0.0 draw for a real, unambiguous difference.
+	runt.vigor = 0.0
+	add_child_autofree(runt)
+	default_scale = IllustratedCropSprite.new().leaf_world_scale("carrot")
+	assert_lt(runt._leaves.scale.x, default_scale)
+
+
 # -- a WILD plant grows in grass, not on a tilled mound -----------------------
 #
 # Reported live: "the potatoes and carrots still render a brown blob which is

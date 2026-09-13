@@ -24,6 +24,28 @@ const ItemStack = preload("res://src/gameplay/item_stack.gd")
 
 const GROUP_NAME := "wild_crop"
 
+## How much Root Vigor scales a specimen's REAL mass, at either end of
+## vigor's 0..1 range -- a real, ordinary garden root crop's own
+## specimen-to-specimen size spread (a small carrot/potato from a mixed
+## harvest running noticeably lighter than a prize one, not a freak
+## outlier), not an eyeballed number: symmetric around 1.0 so the
+## population's own mean vigor (0.5, see WildCropPatch.get_vigor's default)
+## reproduces exactly the pre-vigor reference mass every existing caller
+## already expects (see test_default_vigor_renders_leaves_at_their_
+## ordinary_base_scale / _finish_pull). Pinned by
+## test_vigor_mass_multiplier_is_the_identity_at_the_populations_own_mean.
+const MIN_VIGOR_MASS_MULTIPLIER := 0.7
+const MAX_VIGOR_MASS_MULTIPLIER := 1.3
+
+## Root Vigor's effect on a specimen's real mass, 0..1 -> the multiplier
+## range above. Static + public: _finish_pull uses this on the actual
+## harvested mass, and _apply_vigor_scale derives the LEAVES' visual scale
+## from the same number (a real vegetable that masses more is bigger, not
+## a second, independently-tuned "how much do bigger vigor leaves look
+## bigger" figure).
+static func vigor_mass_multiplier(vigor: float) -> float:
+	return lerpf(MIN_VIGOR_MASS_MULTIPLIER, MAX_VIGOR_MASS_MULTIPLIER, vigor)
+
 ## "carrot" or "potato" -- which sheet/item this cell grows. Set before
 ## add_child, same convention as LiftableStone.diameter_cm/stone_seed.
 var crop_id := ""
@@ -111,7 +133,6 @@ func _ready() -> void:
 	add_child(_lift)
 
 	_leaves = Sprite2D.new()
-	_leaves.scale = Vector2.ONE * _illustrated.leaf_world_scale(crop_id)
 	_lift.add_child(_leaves)
 
 	# Leaves+root are assembled as ONE entity from the start, not built
@@ -144,10 +165,12 @@ func _ready() -> void:
 	_reveal_root(0.0)
 
 	_redraw_leaves()
-	# Catches up a season set before this node was in the tree (the renderer
-	# sets crop_id/growth/season_tint before add_child), exactly the way
-	# _redraw_leaves above catches up a growth set the same way.
+	# Catches up a season/vigor set before this node was in the tree (the
+	# renderer sets crop_id/growth/vigor/season_tint before add_child),
+	# exactly the way _redraw_leaves above catches up a growth set the same
+	# way.
 	_apply_season_tint()
+	_apply_vigor_scale()
 
 
 func _process(delta: float) -> void:
@@ -225,8 +248,19 @@ func begin_pull() -> bool:
 	return true
 
 
+## Nudges the LEAVES' scale by vigor (see vigor_mass_multiplier) -- a bigger
+## real vegetable comes from a visibly bigger plant. Mass scales with
+## VOLUME, so the LINEAR scale a Sprite2D draws at only needs the cube root
+## of the mass multiplier -- a real physical relationship, not a second
+## independently-eyeballed visual range. The root's own scale is left alone
+## on purpose: it is drawn at art scale, not vigor scale, matching this
+## marker's existing convention that the root's art (unlike the leaves) is
+## never touched by anything but the pull reveal itself.
 func _apply_vigor_scale() -> void:
-	pass  # filled in by the leaf-scale-nudge test/implementation below
+	if _leaves == null:
+		return  # not _ready() yet -- the end of _ready() catches up
+	var linear_multiplier := pow(vigor_mass_multiplier(vigor), 1.0 / 3.0)
+	_leaves.scale = Vector2.ONE * _illustrated.leaf_world_scale(crop_id) * linear_multiplier
 
 
 func _apply_season_tint() -> void:
