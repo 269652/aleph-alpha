@@ -155,6 +155,33 @@ func test_get_vigor_defaults_to_a_middling_value_for_an_unplanted_cell():
 	assert_eq(patch.get_vigor(Vector2i(99, 99)), 0.5)
 
 
+## A real seeding-distribution test, mirroring test_boldness_is_always_a_
+## real_fraction / test_different_butterflies_have_different_personalities
+## in test_flyer_personality.gd: every seeded patch must get a real
+## in-range vigor, and a real sample of patches must not collapse onto a
+## handful of shared values. A big grid (MAX_PATCHES caps the actual patch
+## count regardless of grid size, so this is about sample size, not more
+## seeded patches than the cap allows).
+func test_seeded_vigor_is_a_real_fraction_that_varies_across_patches():
+	var width := 200
+	var height := 200
+	var biome := PackedStringArray()
+	biome.resize(width * height)
+	biome.fill("grassland")
+	var crop := WildCropPatch.new("carrot", 1, width, height, biome)
+	var cells := crop.get_patch_cells()
+	assert_gt(cells.size(), 10, "precondition: a real sample of seeded patches")
+	var distinct := {}
+	for cell in cells:
+		var vigor: float = crop.get_vigor(cell)
+		assert_between(vigor, 0.0, 1.0)
+		distinct[vigor] = true
+	assert_gt(
+		distinct.size(), cells.size() * 0.8,
+		"seeded patches must not share a handful of vigor values"
+	)
+
+
 # -- disjoint territory: two crops sharing a chunk must never claim the same
 # cell -- reported live: "carrots render potatoes as crop" -- two markers
 # stacked on the exact same tile (one carrot, one potato, each independently
