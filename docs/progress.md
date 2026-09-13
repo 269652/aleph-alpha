@@ -20501,3 +20501,88 @@ Closes round 14's own flagged residual above. Write-up in
   honest, small, constant classification overhead with nothing yet to
   paginate away.
 
+### Workforce: blueprints, real construction tiers, and interior furniture -- foundation slices (2026-09-13)
+
+Requested directly: NPCs should sell building blueprints; a player's own
+Carpentry (or a hired NPC's) should gate building them; a completed house
+should house an NPC and feed a real Anno-style workforce economy; houses
+need interior furniture. Full spec in `concept/workforce.md` (new) and
+`concept/housing.md` (its "Interior furniture" section, newly real).
+Researched thoroughly before writing any spec line: "blueprint" already
+meant three different, unrelated things in this codebase
+(`ConstructionProject.blueprint_id`, `HouseBlueprint`, the superseded
+`BuildingBlueprint`), none of them an Item -- disambiguated up front
+rather than colliding silently.
+
+**✅ Shipped this pass** (TDD red-first throughout, every slice its own
+commit):
+
+- The first blueprint end to end: `blueprint_small_house` (`ItemCatalog`,
+  new `"blueprint"` kind), `Shop.CATALOG` stocks it, a `small_house`
+  `CraftingRecipeBook` recipe (`required_skill` carpentry_level 1.0,
+  reusing the real `hut_tiny` `HouseBlueprint` shape, inputs pinned to
+  that shape's own real piece cost), `EarthChunkManager.record_blueprint_
+  learned_if_new`/`has_unlocked_blueprint` (event-sourced, mirrors
+  `record_player_settled_if_new`'s own shape), `Player._try_learn_
+  blueprint` (mirrors `items.md`'s own spell-scroll "consumed only on a
+  successful learn" pattern).
+- A real NPC Carpentry number: `NpcIdentity.carpentry_level`, from a NEW,
+  separate skill genome (`SKILL_TRAITS`/`"carpentry_aptitude"`) reusing
+  `NpcGenome`'s already-generalized "continuous trait for any name the
+  caller passes in" mechanism -- confirmed NOT to perturb
+  `PERSONALITY_TRAITS`/`dominant_trait()`. Scaled to the same `[0, 2)`
+  range the player's own `carpentry_1`/`carpentry_2` nodes put their stat
+  in, so one recipe threshold means the same thing on either side of the
+  (not yet built) build-or-hire fork.
+- A second blueprint tier, Cottage (`blueprint_cottage`/`cottage` recipe,
+  reusing the real `cottage_bright` shape) at `carpentry_level` 2.0 -- the
+  SAME ceiling the `sagewerk` recipe already uses, not an invented harder
+  number. Along the way, found and documented a real constraint: the
+  player's own carpentry stat is only ever exactly 0.0/1.0/2.0 today (two
+  nodes, no third), so anything above 2.0 would be permanently
+  un-self-buildable -- a Manor tier is deliberately NOT shipped this pass
+  rather than faked at the same ceiling or placed unreachably above it
+  (see workforce.md's own Open Questions: a real `carpentry_3` node,
+  `skills.md`'s own unused ring-3 Artisan slot, is the honest way to earn
+  a genuine third tier).
+- Interior furniture, first slice: `BuildingPiece.CATEGORY_FURNITURE` +
+  five real pieces (wood_chair/table/bookshelf/bed/rug, wood-tier costed,
+  no new material invented, deliberately the one category that never
+  blocks movement), matching `ItemCatalog` entries (sharing their
+  `BuildingPiece` ids, the same convention `stone_dam` already
+  established), and a new `FurniturePlacement` module (real interior-
+  floor-only placement rule via `RoomDetector.is_indoors`, on its own
+  layer -- mirrors `Chunk.roof_modifications`' own "sits on top of the
+  floor, needs its own dict" reasoning). Deliberately its own module
+  rather than a branch in `BuildingPlacement`: furniture needs genuine
+  room enclosure, which is a different question than a roof's "just needs
+  a floor beneath it."
+
+**⬜ Explicitly not shipped yet** (named in both concept docs' own Status
+lists, not silently implied done):
+
+- Starting a real player-owned `ConstructionProject` at all (today's
+  ledger has never had a live caller pass a player household id, though
+  nothing stops it -- this pass didn't need it yet).
+- The build-it-yourself vs. hire-an-NPC-carpenter fork, and the first
+  live `BuilderMarker` spawner (`timber_construction.md`'s own long-
+  flagged gap) -- scoped to player-hired projects only when it lands.
+- Move-in (a narrow, directly-triggered shortcut, explicitly NOT
+  `quests.md`'s full migration system, which stays exactly as unbuilt as
+  it already was).
+- The workforce/worker-slot layer itself -- the actual Anno-style
+  mechanic requested (a resident becomes available workforce; a
+  workplace declares worker slots; assignment is the first case of an
+  NPC's job becoming mutable after spawn). Everything shipped this pass
+  is the foundation it will sit on, not the mechanic itself.
+- `Chunk.furniture_modifications` (the live chunk layer, its
+  `TileMapLayer`/render pass, the player-facing place/remove verb, and
+  save/load persistence) -- comparable in scope to what roofs themselves
+  needed as their own follow-up pass.
+
+Every new/changed file re-run directly (item_catalog, shop,
+crafting_recipe_book, npc_identity, earth_chunk_manager (scoped),
+building_piece, building_statics, room_detector, building_placement,
+furniture_placement, player (scoped)) -- all green, no regressions found
+in any neighboring suite.
+

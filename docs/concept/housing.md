@@ -85,12 +85,16 @@ simplification trees/creatures already accept.
 ### Status
 
 - ✅ Night lighting (ambient), above.
-- ⬜ `Chunk.furniture_modifications` + its own `TileMapLayer`/paint pass
-- ⬜ `ItemCatalog` furniture-kind items (wooden_table, wooden_chair,
-  wooden_bed, rug, bookshelf)
-- ⬜ `FurniturePlacement.can_place` (interior-floor rule)
+- ✅ `BuildingPiece.CATEGORY_FURNITURE` + five real pieces (wood_chair/
+  table/bookshelf/bed/rug) and their matching `ItemCatalog` entries
+- ✅ `FurniturePlacement.can_place`/`refusal_reason` (interior-floor rule,
+  its own layer, tested against a real enclosed-room fixture)
+- ⬜ `Chunk.furniture_modifications` + its own `TileMapLayer`/paint pass --
+  the pieces and the placement RULE are real; nothing yet writes a
+  furniture piece into a live chunk or renders one
 - ⬜ Placing/removing furniture in the world (the player-facing verb,
-  mirroring `build_at_global`/`destroy_at_global`)
+  mirroring `build_at_global`/`destroy_at_global`, once the layer above
+  exists for it to write into)
 - ⬜ `appeal_score` (the honest placeholder above)
 - ⬜ NPC visits / opinions from a home's appeal
 - ⬜ Multiplayer visiting/rating

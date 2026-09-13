@@ -405,8 +405,10 @@ Updated here and in `docs/progress.md` as slices land:
 - ⬜ `worker_slots` on the Sägewerk (starts at the existing implicit 1)
 - ⬜ Workforce assignment record + free-workforce derivation + daily-
   schedule routing to the workplace
-- ⬜ Interior furniture (see `housing.md`'s own newly-real mechanism spec,
-  cross-referenced from here rather than duplicated)
+- 🚧 Interior furniture (see `housing.md`'s own Status list, cross-
+  referenced from here rather than duplicated) -- real pieces and a real
+  placement rule exist; the live chunk layer/rendering/player verb do not
+  yet
 
 ## Open questions
 
