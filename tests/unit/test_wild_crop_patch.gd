@@ -182,6 +182,53 @@ func test_seeded_vigor_is_a_real_fraction_that_varies_across_patches():
 	)
 
 
+## Isolates the "a spread child inherits its parent's vigor, nudged by
+## mutation" mechanism from seeding's own randomness by forcing a single,
+## precisely known founder directly (bypassing _seed_initial_patches's own
+## hash roll -- GDScript's underscore convention is not real privacy, and
+## test_territory_partition_is_exhaustively_disjoint below already calls a
+## private-by-convention method directly for the same reason: a focused,
+## deterministic check the public API alone can't isolate). With only one
+## founder, EVERY spread child over these few ticks is provably that
+## founder's own child -- no other candidate parent exists to be coincidentally
+## close in vigor -- so comparing each child directly against the founder's
+## known vigor is an exact check, not a statistical one.
+func test_spread_children_inherit_the_parents_vigor_nudged_by_mutation():
+	var crop := WildCropPatch.new("carrot", 1, WIDTH, HEIGHT, _biome_all("grassland"))
+	crop._patches.clear()
+	crop._vigor.clear()
+	var founder := Vector2i(WIDTH / 2, HEIGHT / 2)
+	var parent_vigor := 0.4
+	crop._patches[founder] = 1.0
+	crop._vigor[founder] = parent_vigor
+
+	# Four ticks, never letting a child mature (GROWTH_RATE is slow enough
+	# that the oldest possible child -- born on the very first tick -- only
+	# reaches 3 * SPREAD_INTERVAL * GROWTH_RATE growth by the end, well
+	# under 1.0), so the founder is the ONLY mature cell, and therefore the
+	# only possible parent, for the entire run.
+	for i in 4:
+		crop.advance(WildCropPatch.SPREAD_INTERVAL, 1.0)
+
+	var children := crop.get_patch_cells().duplicate()
+	children.erase(founder)
+	assert_gt(children.size(), 0, "precondition: at least one spread child must have appeared")
+
+	var mutated := false
+	for cell in children:
+		var child_vigor: float = crop.get_vigor(cell)
+		var diff := absf(child_vigor - parent_vigor)
+		assert_lte(
+			diff, WildCropPatch.VIGOR_MUTATION_AMOUNT + 0.0001,
+			"child vigor must stay within one mutation step of its single parent"
+		)
+		if diff > 0.0001:
+			mutated = true
+	assert_true(
+		mutated, "at least one spread child must actually mutate away from its parent's exact vigor"
+	)
+
+
 # -- disjoint territory: two crops sharing a chunk must never claim the same
 # cell -- reported live: "carrots render potatoes as crop" -- two markers
 # stacked on the exact same tile (one carrot, one potato, each independently
