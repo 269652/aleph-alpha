@@ -6,6 +6,20 @@ extends GutTest
 ## fence and then an NPC can get hired." Mirrors test_earth_chunk_manager_
 ## bees.gd's own dedicated-file shape -- uses `_load_chunk` directly, never
 ## the slow real `update()`.
+##
+## This file's own reload test calls `_unload_chunk`, which persists REAL
+## modifications to user://chunk_modifications/<chunk>.bin for the exact
+## real-world Berlin tile every test here anchors on -- state that is NEVER
+## cleared between separate Godot process invocations, and (user:// is keyed
+## only by the Godot project name, not by checkout path) is the SAME real
+## directory every git worktree on this machine shares (see
+## test_builder_marker.gd's own header for the fuller account of this class
+## of bug, and docs/progress.md's "Godot tests share one real user:// dir
+## across worktrees" note). before_each/after_each below scrub exactly this
+## file's own real chunk_coord (never the whole shared directory) before
+## trusting/leaving a fresh EarthChunkManager, so an earlier run of this
+## exact file (or a concurrent session/worktree) can never leak a stale
+## "farm"/"wooden_fence" tile into these assertions.
 
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
@@ -37,6 +51,7 @@ func before_each():
 		floori(float(_berlin_tile.x) / EarthChunkManager.CHUNK_SIZE),
 		floori(float(_berlin_tile.y) / EarthChunkManager.CHUNK_SIZE)
 	)
+	_forget_persisted_berlin_chunk()
 	manager._load_chunk(_berlin_chunk)
 
 
@@ -44,6 +59,22 @@ func after_each():
 	tile_map_layer.free()
 	entities_parent.free()
 	creatures_parent.free()
+	_forget_persisted_berlin_chunk()
+
+
+## Removes REAL persisted modifications/roof_modifications/planted_trees
+## for the real-world Berlin chunk this whole file anchors on -- narrow ON
+## PURPOSE (never the whole shared user://chunk_modifications directory),
+## mirrors test_builder_marker.gd's own identically-named helper exactly.
+func _forget_persisted_berlin_chunk() -> void:
+	for dir in [
+		EarthChunkManager.MODIFICATIONS_DIR,
+		EarthChunkManager.ROOF_MODIFICATIONS_DIR,
+		EarthChunkManager.PLANTED_TREES_DIR,
+	]:
+		var path := "%s/%d_%d.bin" % [dir, _berlin_chunk.x, _berlin_chunk.y]
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
 
 
 func _farmers_in_entities_parent() -> Array:
