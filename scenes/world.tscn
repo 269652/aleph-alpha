@@ -24,6 +24,9 @@ z_index = -1
 [node name="RiverFlowFx" type="TileMapLayer" parent="."]
 z_index = -1
 
+[node name="Furniture" type="TileMapLayer" parent="."]
+z_index = -1
+
 [node name="Entities" type="Node2D" parent="."]
 y_sort_enabled = true
 

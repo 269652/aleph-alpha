@@ -449,6 +449,7 @@ var _ground_tint := GroundTint.new()
 @onready var _creatures: Node2D = $Creatures
 @onready var _ground_items: Node2D = $GroundItems
 @onready var _roof: TileMapLayer = $Roof
+@onready var _furniture: TileMapLayer = $Furniture
 ## Players are spawned directly into $Entities (not a separate sibling
 ## container) so they Y-sort against trees/grass/stones -- tall grass or a
 ## tree in front of the player must be able to draw over them, which two
@@ -979,6 +980,9 @@ func _ready() -> void:
 	# a separate layer above the player/entities so a house reads as a real
 	# building from outside, hidden per-room while the player is inside it.
 	_chunk_manager.set_roof_layer(_roof)
+	# Interior furniture (docs/concept/housing.md's "Interior furniture"
+	# section): its own layer for the same reason roofs needed one above.
+	_chunk_manager.set_furniture_layer(_furniture)
 	# Lets fruit-eating birds (see AmbientFlyerMarker.fruit_world /
 	# docs/concept/flora.md#bird-endozoochory) see and eat the same real,
 	# already-rendered fallen-fruit ground items the player can click on --
@@ -3555,7 +3559,7 @@ func _on_console_command(command: String, args: Array) -> void:
 					+ "  /compass  /map  /weatherglass  /almanac  /deed"
 					+ "  /ledger propose|accept|fulfill|breach ...  /charter found <type> <counterparty_id>"
 					+ "  /journal <entity_id>  /workforce assign|slots|free ..."
-					+ "  /flowdebug [strokes|off]  /intro"
+					+ "  /furniture place|remove ...  /flowdebug [strokes|off]  /intro"
 				)
 			)
 		"flowdebug":
@@ -3655,6 +3659,8 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_journal_command(args, local_player)
 		"workforce":
 			_handle_workforce_command(args)
+		"furniture":
+			_handle_furniture_command(args, local_player)
 		"globalthermonuclearwar":
 			# docs/concept/easter_eggs.md's WarGames Easter egg -- deliberately
 			# NOT listed in /help's output above (pillar 3, undocumented on
@@ -4510,6 +4516,54 @@ func _handle_workforce_command(args: Array) -> void:
 			_dev_console.log_line("Free workforce: %d" % _chunk_manager.free_workforce_in_chunk(chunk_coord))
 		_:
 			_dev_console.log_line("Unknown /workforce action '%s'. Try: assign, slots, free" % sub)
+
+
+## /furniture place <piece_id> <x> <y>  |  /furniture remove <x> <y> --
+## docs/concept/housing.md's "Interior furniture" section. The dev console
+## is a real, honest interim call site here (the same choice /workforce
+## above, and player_citizenship.md's own Deed/Ledger/Charter commands,
+## already made): the real world model (its own chunk layer, real
+## persistence, FurniturePlacement's real interior-floor rule, real
+## rendering on its own TileMapLayer) is live and correct regardless of how
+## a cell gets written to; only a proper hotbar-armed in-world placement
+## verb (mirroring _build_step/_destroy_step for the existing "placeable"
+## kind) is still missing for this NEW "furniture" kind.
+func _handle_furniture_command(args: Array, local_player: Player) -> void:
+	if args.is_empty():
+		_dev_console.log_line("Usage: /furniture place <piece_id> <x> <y>  |  /furniture remove <x> <y>")
+		return
+
+	var sub: String = args[0]
+	match sub:
+		"place":
+			if args.size() < 4:
+				_dev_console.log_line("Usage: /furniture place <piece_id> <x> <y>")
+				return
+			var piece_id: String = args[1]
+			var x := str(args[2]).to_int()
+			var y := str(args[3]).to_int()
+			if local_player != null and not local_player.inventory.has(piece_id):
+				_dev_console.log_line("You don't have any %s." % piece_id)
+				return
+			var placed := _chunk_manager.build_furniture_at_global(x, y, piece_id)
+			if placed and local_player != null:
+				local_player.inventory.remove(piece_id, 1)
+				local_player.inventory_changed.emit()
+			_dev_console.log_line("Placed: %s" % placed)
+		"remove":
+			if args.size() < 3:
+				_dev_console.log_line("Usage: /furniture remove <x> <y>")
+				return
+			var x := str(args[1]).to_int()
+			var y := str(args[2]).to_int()
+			var piece_id := _chunk_manager.furniture_at_global(x, y)
+			var removed := _chunk_manager.destroy_furniture_at_global(x, y)
+			if removed and piece_id != "" and local_player != null and _item_catalog.has(piece_id):
+				local_player.inventory.add(_item_catalog.make(piece_id), 1)
+				local_player.inventory_changed.emit()
+			_dev_console.log_line("Removed: %s" % removed)
+		_:
+			_dev_console.log_line("Unknown /furniture action '%s'. Try: place, remove" % sub)
 
 
 ## Spawns a clickable ground item where a creature died or a tree dropped

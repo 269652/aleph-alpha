@@ -159,6 +159,7 @@ const ConstructionProjectStore = preload("res://src/emergence/construction_proje
 const HouseBlueprint = preload("res://src/gameplay/house_blueprint.gd")
 const SettlementSpareCapacity = preload("res://src/emergence/settlement_spare_capacity.gd")
 const NpcProduction = preload("res://src/world/npc_production.gd")
+const FurniturePlacement = preload("res://src/gameplay/furniture_placement.gd")
 const SettlementBuildDecision = preload("res://src/emergence/settlement_build_decision.gd")
 const Institution = preload("res://src/emergence/institution.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
@@ -266,6 +267,9 @@ const GROWING_JUVENILES_DIR := "user://chunk_growing_juveniles"
 ## `modifications`, just a separate directory since a roof shares its cell
 ## with the floor beneath it and can't live in that same dict.
 const ROOF_MODIFICATIONS_DIR := "user://chunk_roof_modifications"
+
+## Where furniture pieces are persisted (see Chunk.furniture_modifications, docs/concept/housing.md) -- the same generic Dictionary save/load ChunkSerializer already uses for `modifications`/`roof_modifications`, just its own directory since furniture shares its cell with the floor beneath it.
+const FURNITURE_MODIFICATIONS_DIR := "user://chunk_furniture_modifications"
 
 const CHUNK_SIZE := 32
 ## Chunks within this many chunks of the player are generated/painted.
@@ -4791,6 +4795,89 @@ func set_roof_layer(roof_layer: TileMapLayer) -> void:
 		_terrain_renderer.paint_roofs(
 			_roof_layer, _loaded_chunks[chunk_coord], chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord)
 		)
+
+
+## Registers the furniture overlay layer (docs/concept/housing.md's
+## "Interior furniture" section): a furniture piece shares its cell with the
+## floor beneath it, exactly the reason roof pieces already needed their own
+## TileMapLayer (see set_roof_layer just above) rather than sharing
+## `_tile_map_layer`'s single-tile-per-cell `modifications`. No shape
+## classification needed here (unlike roofs' own RoofShape banding) --
+## furniture tiles already live in the SAME shared atlas every other
+## BuildingPiece uses (TerrainRenderer.atlas_coords_for_modification already
+## resolves any BuildingPiece.has_piece id, furniture included, since
+## furniture pieces are already real entries in BuildingPiece.PIECE_IDS).
+## Optional: a caller that never sets this simply never sees furniture
+## rendered, the same fail-open shape _roof_layer/_water_layer already use.
+var _furniture_layer: TileMapLayer = null
+
+
+func set_furniture_layer(furniture_layer: TileMapLayer) -> void:
+	_furniture_layer = furniture_layer
+	furniture_layer.tile_set = _tile_map_layer.tile_set
+	furniture_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
+	for chunk_coord in _loaded_chunks:
+		_paint_furniture(chunk_coord, _loaded_chunks[chunk_coord])
+
+
+## Paints every real furniture cell already recorded for `chunk` -- a no-op
+## if no furniture layer has been registered (fail-open, see set_furniture_
+## layer's own doc comment).
+func _paint_furniture(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	if _furniture_layer == null:
+		return
+	for local in chunk.furniture_modifications:
+		var global: Vector2i = chunk_coord * CHUNK_SIZE + local
+		var piece_id: String = chunk.furniture_modifications[local]
+		_furniture_layer.set_cell(global, 0, _terrain_renderer.atlas_coords_for_modification(piece_id))
+
+
+## The player-facing place verb for furniture (docs/concept/housing.md),
+## mirroring build_at_global's own shape but writing to chunk.furniture_
+## modifications -- its own layer, the same reason roof_modifications needs
+## one -- and gated by FurniturePlacement.can_place (real interior floor,
+## nothing invented) rather than the general placeable-anywhere-buildable
+## rule build_at_global itself applies. False, no mutation, for an unloaded
+## chunk or a placement FurniturePlacement itself refuses.
+func build_furniture_at_global(global_x: int, global_y: int, piece_id: String) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return false
+	var local := _local_coord(global_x, global_y)
+	if not FurniturePlacement.new().can_place(piece_id, local, chunk.modifications, chunk.furniture_modifications):
+		return false
+	chunk.furniture_modifications[local] = piece_id
+	if _furniture_layer != null:
+		_furniture_layer.set_cell(
+			Vector2i(global_x, global_y), 0, _terrain_renderer.atlas_coords_for_modification(piece_id)
+		)
+	return true
+
+
+## Removes a placed furniture piece -- false, no mutation, if there wasn't
+## one there. Mirrors destroy_at_global's own split: this only touches the
+## world model + rendering; whether/what comes back to an inventory is the
+## caller's own decision, the same way destroy_at_global leaves it.
+func destroy_furniture_at_global(global_x: int, global_y: int) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return false
+	var local := _local_coord(global_x, global_y)
+	if not chunk.furniture_modifications.has(local):
+		return false
+	chunk.furniture_modifications.erase(local)
+	if _furniture_layer != null:
+		_furniture_layer.erase_cell(Vector2i(global_x, global_y))
+	return true
+
+
+func furniture_at_global(global_x: int, global_y: int) -> String:
+	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
+	if chunk == null:
+		return ""
+	return chunk.furniture_modifications.get(_local_coord(global_x, global_y), "")
 
 
 ## World's own ground-item container (see World._ground_items /
@@ -12055,6 +12142,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	var chunk := generator.generate_chunk(chunk_coord, CHUNK_SIZE)
 	chunk.modifications = _chunk_serializer.load_modifications(_modifications_path(chunk_coord))
 	chunk.roof_modifications = _chunk_serializer.load_modifications(_roof_modifications_path(chunk_coord))
+	chunk.furniture_modifications = _chunk_serializer.load_modifications(_furniture_modifications_path(chunk_coord))
 	chunk.planted_trees = _chunk_serializer.load_planted_trees(_planted_trees_path(chunk_coord))
 	_loaded_chunks[chunk_coord] = chunk
 	# Withering catch-up BEFORE the first paint/collision pass below, so a
@@ -12086,6 +12174,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_sync_piece_collision(global_cell, chunk.modifications[local_cell])
 	if _roof_layer != null:
 		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
+	_paint_furniture(chunk_coord, chunk)
 	_loaded_trees[chunk_coord] = _tree_renderer.spawn_trees(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	)
@@ -12787,6 +12876,9 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	if chunk != null and not chunk.roof_modifications.is_empty():
 		DirAccess.make_dir_recursive_absolute(ROOF_MODIFICATIONS_DIR)
 		_chunk_serializer.save_modifications(chunk.roof_modifications, _roof_modifications_path(chunk_coord))
+	if chunk != null and not chunk.furniture_modifications.is_empty():
+		DirAccess.make_dir_recursive_absolute(FURNITURE_MODIFICATIONS_DIR)
+		_chunk_serializer.save_modifications(chunk.furniture_modifications, _furniture_modifications_path(chunk_coord))
 
 	# Withering (see _apply_piece_condition_catchup above): snapshot this
 	# chunk's real per-piece condition state and the world-age it was taken
@@ -13157,6 +13249,10 @@ func _modifications_path(chunk_coord: Vector2i) -> String:
 
 func _roof_modifications_path(chunk_coord: Vector2i) -> String:
 	return "%s/%d_%d.bin" % [ROOF_MODIFICATIONS_DIR, chunk_coord.x, chunk_coord.y]
+
+
+func _furniture_modifications_path(chunk_coord: Vector2i) -> String:
+	return "%s/%d_%d.bin" % [FURNITURE_MODIFICATIONS_DIR, chunk_coord.x, chunk_coord.y]
 
 
 func _planted_trees_path(chunk_coord: Vector2i) -> String:

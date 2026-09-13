@@ -89,15 +89,36 @@ simplification trees/creatures already accept.
   table/bookshelf/bed/rug) and their matching `ItemCatalog` entries
 - ✅ `FurniturePlacement.can_place`/`refusal_reason` (interior-floor rule,
   its own layer, tested against a real enclosed-room fixture)
-- ⬜ `Chunk.furniture_modifications` + its own `TileMapLayer`/paint pass --
-  the pieces and the placement RULE are real; nothing yet writes a
-  furniture piece into a live chunk or renders one
-- ⬜ Placing/removing furniture in the world (the player-facing verb,
-  mirroring `build_at_global`/`destroy_at_global`, once the layer above
-  exists for it to write into)
+- ✅ `Chunk.furniture_modifications` + its own `TileMapLayer`/paint pass
+  (`EarthChunkManager.set_furniture_layer`/`_paint_furniture`, a new
+  `Furniture` node in `world.tscn` mirroring `Roof`'s own shape) --
+  persisted the same generic way `roof_modifications` already is, and
+  rendered via the ALREADY-real shared atlas (`TerrainRenderer.
+  atlas_coords_for_modification` already resolves any `BuildingPiece`,
+  furniture included, since furniture pieces are real `PIECE_IDS` entries)
+- 🚧 Placing/removing furniture in the world: `EarthChunkManager.
+  build_furniture_at_global`/`destroy_furniture_at_global`/
+  `furniture_at_global` are real and gated by `FurniturePlacement` (real
+  interior-floor rule). **Reachable today only via a new `/furniture
+  place|remove` dev-console command** -- the same "dev console is a real,
+  honest interim call site" choice `player_citizenship.md`'s own item
+  commands already made; a proper hotbar-armed in-world verb (mirroring
+  `_build_step`/`_destroy_step` for the existing `"placeable"` kind) for
+  this NEW `"furniture"` kind is still missing.
 - ⬜ `appeal_score` (the honest placeholder above)
 - ⬜ NPC visits / opinions from a home's appeal
 - ⬜ Multiplayer visiting/rating
+
+**The same explicit caveat as `workforce.md`'s own Status list**: the two
+✅/🚧 items above (the layer/paint pass and the place/remove verb) were
+written directly per an explicit, direct mid-session user instruction
+("skip tests"), without this project's own mandatory strict-TDD red-first
+cycle and without running the test suite at all. Grounded in real,
+independently-verified existing APIs (`TerrainRenderer.atlas_coords_for_
+modification`, `ChunkSerializer.save_modifications`/`load_modifications`,
+`FurniturePlacement`'s own already-tested rule) -- but genuinely unverified
+until a real GUT pass confirms it. Do not merge to `main` on the strength
+of this Status list alone.
 
 ### Open questions
 

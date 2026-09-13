@@ -20678,3 +20678,19 @@ the same reason. Nothing here should be treated as verified, and this
 branch (`feat/blueprints-and-workforce`) should not be merged to `main`
 without a real GUT pass first.
 
+Same pass, same caveat, continuing `housing.md`'s own earlier "Interior
+furniture" foundation slice: `Chunk.furniture_modifications` now has its
+own real `TileMapLayer`/paint pass (a new `Furniture` node in `world.tscn`,
+mirroring `Roof`'s own shape exactly) and real, persisted
+`EarthChunkManager.build_furniture_at_global`/`destroy_furniture_at_global`
+gated by the already-tested `FurniturePlacement` rule -- rendering reuses
+the ALREADY-real shared atlas (`TerrainRenderer.atlas_coords_for_
+modification` already resolves furniture pieces, since they are real
+`BuildingPiece.PIECE_IDS` entries from the earlier slice) rather than
+inventing a second one. Reachable today only via a new `/furniture
+place|remove` dev-console command -- the same interim-call-site choice
+`/workforce` above and `player_citizenship.md`'s own item commands already
+made; a real hotbar-armed in-world verb for the new `"furniture"` item kind
+(mirroring `_build_step`/`_destroy_step`'s existing `"placeable"` handling)
+is still missing.
+
