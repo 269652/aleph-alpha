@@ -497,6 +497,14 @@ produces, and a Builder doesn't produce an item, it consumes real material
 and produces a placed structure; it is its own category, not a fourth
 producer row.
 
+**Picking WHICH idle NPC**, once several are eligible: see
+[npc_role_consensus.md](npc_role_consensus.md)'s real, tested
+`NpcRoleConsensus.decide` — a theory-of-mind consensus function built for
+exactly this "several idle candidates, one demanding communal role" shape,
+first specced for a Farm/Sägewerk worker role but equally applicable here.
+Not yet wired to Builder assignment (that doc's own Status is explicit this
+stays unconnected until the replan-interrupt architecture below is real).
+
 **Multiple Builders may pool effort on one project.** Unlike one-
 Lumberjack-per-Sägewerk, a large project may be worth more than one pair
 of hands. This needs less new mechanism than it sounds: each Builder's own

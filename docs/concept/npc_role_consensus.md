@@ -1,0 +1,292 @@
+# NPC Role Consensus: Theory of Mind, Not a Dice Roll
+
+Reported directly: "as soon as they build a city hall the city hall should
+compute demands and NPCs determine through a consensus mechanism who is
+going to be in charge of e.g. wood. Then one player gets selected and he's
+going to work in the sawmill." Follow-up: "use theory of mind algorithms."
+
+This doc specs the full pipeline that request describes — a civic building
+surfacing a real settlement need, villagers reaching a real social consensus
+about who takes it on, and that villager actually going to work the
+building — and is explicit about which piece of it this pass actually
+builds versus which pieces stay honestly unimplemented. See "Status" at the
+end. It does not replace anything: it is new synthesis across three
+existing, currently-separate concept docs (their own gaps, not invented
+here) —
+[civic_construction.md](civic_construction.md)'s unbuilt Meeting Hall,
+[timber_construction.md](timber_construction.md)/[npc.md](npc.md)'s named
+but unbuilt "who becomes a Builder"/replan-interrupt reassignment gap, and
+[governance.md](governance.md)'s explicitly NPC-decision-free aggregate
+stat.
+
+**Naming note**: nothing in this codebase or its docs is called "City
+Hall" — the existing (design-only) civic-building concept is
+[civic_construction.md](civic_construction.md)'s "Meeting Hall". This doc
+treats "City Hall" as that same building; a future pass can rename the
+user-facing string if the two names should diverge, but they name one
+building here.
+
+## Design pillars
+
+1. **A belief about someone else is only as good as how well you know
+   them.** This is the actual content of "theory of mind" here, not a
+   buzzword: an NPC's model of what ANOTHER npc wants is never a peek at
+   that NPC's real internal state. It degrades toward an uninformative
+   population-average prior the less the two have actually interacted,
+   grounded in the same real familiarity/confidence-decay shape
+   [dialogue.md](dialogue.md)'s recognition ladder and the memory/rumor
+   system already use elsewhere — never omniscient, and never a flat
+   coin-flip either.
+2. **Consensus is what most people's models converge on, not a vote
+   tally.** No NPC casts a ballot. Each candidate has a real self-preference
+   (grounded in their own real DNA-derived personality, per
+   `NpcGenome`/`NpcIdentity`); every OTHER candidate separately models what
+   THAT candidate's preference probably is; the candidate whose own
+   preference and the group's collective belief about them align highest
+   is who the settlement converges on — the same "a role tends to go to
+   whoever obviously wants it and is visibly known to want it" social
+   dynamic real small communities actually show, not an authored dice roll.
+3. **One shared reusable mechanism, not a wood-specific one.** The
+   consensus function takes a role id and a candidate pool; it has no
+   sawmill-specific logic. The Sägewerk/Farm case is its first real
+   caller, not its only conceivable one — any future "settlement needs a
+   volunteer for X" moment (a Builder, a Watchtower guard) is the same
+   function with a different candidate pool.
+4. **Reuse the existing demand machinery; do not fork it.** A City
+   Hall's own "compute demands" step is not a new needs system — it is
+   `NeedResolver`/`ConstructionPriority`'s already-real recipe-graph walk
+   ([production_chains.md](production_chains.md)), read by a new civic
+   building the same way `SettlementBuildDecision` already reads it. Where
+   that walk still can't find an actionable real shortfall (the
+   already-documented "essentially never finds one in live play yet" gap
+   — see [timber_construction.md](timber_construction.md)'s own "What's
+   honestly still a stand-in here" section), a City Hall inherits that same
+   honest limitation rather than inventing a second, parallel needs
+   computation to paper over it.
+5. **Tuned values are tested functions, not eyeballed comments** — every
+   trait weight below is illustrative, grounded in the real-world reasoning
+   that produced it, and pinned by a calibration test, per this project's
+   no-manual-tuning rule.
+
+## Real-world grounding
+
+- **Theory of mind, the actual cognitive-science term.** Humans routinely
+  reason not just about what they themselves want, but about what OTHER
+  people want and believe — and that second-order modeling is what lets a
+  group informally converge on "obviously, Astrid should run the mill, she's
+  been wanting a real trade to learn" without anyone holding a vote. Nobody
+  has direct access to another person's actual mental state; the model is
+  always inferred from observed behavior and history, and is more accurate
+  for people you actually know well.
+- **A stranger is modeled as average, not as unknown-therefore-zero.** A
+  villager with no real history with a given candidate doesn't assume that
+  candidate wants nothing — they fall back to "probably about as keen as
+  anyone else," the same reasoning a real person uses about someone they've
+  never spoken to. This grounds the population-average fallback below.
+- **Willingness to take on demanding new communal work.** Someone who
+  volunteers for a new, visible role tends to be bold enough to put
+  themselves forward, motivated by what the role visibly earns them, and
+  not so change-averse that leaving their routine feels threatening. This
+  grounds the three real personality traits the self-preference formula
+  below actually uses (of `NpcGenome`'s existing eight).
+- **A civic building as a real, physical seat for a settlement's own
+  decisions** — the same real-world grounding
+  [civic_construction.md](civic_construction.md) already gives its Meeting
+  Hall: a town doesn't compute its own needs and pick its own worker inside
+  someone's head, it does so at a real, discoverable place other residents
+  (and a curious player) can find.
+
+## Mechanism
+
+### NpcRoleConsensus: the pure theory-of-mind decision (this pass builds this)
+
+A new pure-logic module, `src/emergence/npc_role_consensus.gd` (no engine
+dependency, unit-testable headlessly, matching this project's "pure logic +
+thin Node glue" split everywhere else):
+
+```
+static func decide(candidates: Array, familiarity: Dictionary) -> String
+```
+
+- `candidates`: `[{"id": String, "traits": Dictionary (trait_name -> float
+  in [0,1], the SAME shape NpcGenome.traits already is)}, ...]`.
+- `familiarity`: `observer_id -> {subject_id -> float in [0,1]}` — how well
+  `observer_id` actually knows `subject_id`. Missing entries default to
+  `0.0` (a total stranger) rather than erroring, the same
+  fail-open-to-the-least-informed-case convention `NpcProduction.
+  yield_per_second` already uses for a missing world accessor. Injected by
+  the caller exactly like `NpcProduction.yield_per_second` takes a
+  duck-typed `world` — this pass does not yet wire it to the real
+  `MemoryStore`/`NpcEncounter` system (see "Open questions").
+
+**Self-preference** (`self_preference(traits) -> float`): grounded in
+three of `NpcGenome`'s existing eight traits (`bold`, `greedy`, `cautious`)
+— weights sum to 1.0 so a uniformly-random genome's expected
+self-preference is exactly 0.5, which is what makes 0.5 the mathematically
+correct "average stranger" prior below, not an arbitrary round number:
+
+```
+self_preference := clamp(0.4*bold + 0.35*greedy + 0.25*(1.0 - cautious), 0, 1)
+```
+
+Real-world reasoning per trait: `bold` — willing to put yourself forward
+for a new, visible role. `greedy` — motivated by what running a production
+building visibly earns. `cautious`, inverted — the LESS change-averse
+someone is, the more open to leaving their routine for a new job. The other
+five traits (`friendly`, `gruff`, `curious`, `stoic`, `kind`) are
+deliberately not in this pass's formula — see "Open questions" for why a
+single shared formula rather than five is today's real scope.
+
+**Believed preference** (`believed_preference(observer_id, subject_id,
+subject_true_preference, familiarity) -> float`): the theory-of-mind step
+itself — never the subject's real preference, always this lerp toward the
+population-average prior:
+
+```
+believed := lerp(0.5, subject_true_preference, familiarity.get(observer_id, {}).get(subject_id, 0.0))
+```
+
+A total stranger (`familiarity == 0.0`) is modeled as exactly the
+population average (`0.5`); a perfectly well-known neighbor
+(`familiarity == 1.0`) is modeled with their real, true preference; anyone
+between blends proportionally. This is the one formula in this doc that IS
+"theory of mind" in the literal sense — it is a real, fallible model of
+another mind, not a read of it.
+
+**Consensus score** (`consensus_score(candidate_id, candidates,
+familiarity) -> float`): the candidate's own self-preference, averaged
+evenly with what every OTHER candidate's own theory-of-mind model believes
+about them:
+
+```
+consensus_score := 0.5 * self_preference(candidate.traits)
+    + 0.5 * mean_over_other_candidates(believed_preference(other.id, candidate.id, self_preference(candidate.traits), familiarity))
+```
+
+With zero other candidates, `consensus_score := self_preference(candidate.
+traits)` (no one else exists to hold a belief about them).
+
+**Decide**: the candidate with the highest `consensus_score` wins;
+ties break by candidate id, ascending (deterministic, no
+`RandomNumberGenerator`, the same discipline `tall_grass.gd`'s own hash-seed
+convention already requires everywhere in this codebase).
+
+### City Hall: a real civic building surfacing a real demand (named follow-up, not this pass)
+
+`civic_construction.md`'s already-speced Meeting Hall (unimplemented)
+becomes the real, discoverable place this decision happens: once built, it
+reads `ConstructionPriority`/`NeedResolver`'s real recipe-graph walk (the
+SAME one `SettlementBuildDecision` already calls, see pillar 4) to name a
+concrete missing role — e.g. "beam"/"plank" resolving `missing_structure_id
+== "sagewerk"` means the settlement's real demand is a `wood` role. Where
+that walk still can't find an actionable shortfall in today's real recipe
+book (see pillar 4's own honest inheritance of that gap), the Meeting Hall
+simply has nothing to convene about yet — a silent, discoverable absence,
+not an invented placeholder demand.
+
+### Redirecting a real villager into the winning role (named follow-up, not this pass)
+
+The genuinely hard, still-unspecified-in-detail piece: today, `_spawn_
+lumberjack_for`/`_spawn_farmer_for` (`earth_chunk_manager.gd`) spawn a
+fresh, anonymous, purpose-built Marker with no identity, no household, no
+personality — "an NPC moves in" is a figure of speech today, not a real
+named villager leaving their normal schedule. Making `NpcRoleConsensus`'s
+winning candidate ACTUALLY be a real `NpcIdentity`/`NpcMarker` who then
+works the sawmill needs the "replan-interrupt" architecture
+[npc.md](npc.md)'s migration section and
+[timber_construction.md](timber_construction.md)'s own "Builder is ad hoc"
+section both already name as the right shape and both already confirm is
+genuinely unimplemented (not even stubbed) anywhere in this codebase today
+— see `docs/progress.md`'s own "Who becomes a Builder" gap note. This doc
+does not attempt to build that architecture; `NpcRoleConsensus.decide`
+returns a winning candidate id, and wiring that id to a real schedule
+override is the concrete, scoped follow-up this doc's Status section names.
+
+## Interaction with other docs
+
+- **[civic_construction.md](civic_construction.md)** — this doc's City
+  Hall section is the concrete "what happens once a Meeting Hall exists"
+  payoff that doc's own Meeting Hall spec left unaddressed (it covers the
+  building's construction trigger, not what it DOES once built).
+- **[npc.md](npc.md)** — the replan-interrupt reassignment section above is
+  the same mechanism that doc's migration section already names as the
+  right shape for pulling an NPC out of its ordinary schedule; this doc
+  does not build it, only names it as the concrete next real consumer for
+  it, alongside Builder assignment.
+- **[timber_construction.md](timber_construction.md)** — `NpcRoleConsensus`
+  is a real, reusable answer to that doc's own still-open "who becomes a
+  Builder?" question (settled there by design as "ad hoc, not a fixed
+  occupation" — this doc's consensus mechanism is a real candidate for HOW
+  that ad hoc pick gets made, once the replan-interrupt wiring above
+  exists), not a competing mechanism.
+- **[governance.md](governance.md)** — deliberately distinct: that doc's
+  own pillar 1 is explicit that a settlement's governance FORM is inferred
+  from history, never chosen by anyone. `NpcRoleConsensus` is the opposite
+  kind of decision — a concrete, real choice about who does a specific
+  job — and the two are not meant to merge into one mechanism.
+- **[dialogue.md](dialogue.md)** / memory-and-rumor (`memory_record.gd`,
+  `memory_store.gd`, `npc_encounter.gd`) — the real, tested source
+  `familiarity` is meant to eventually read from (see "Open questions");
+  this pass injects `familiarity` directly rather than wiring that read,
+  the same "duck-typed dependency, wire the real source later" shape
+  `NpcProduction.yield_per_second`'s own `world` parameter already
+  established.
+
+## Worked example
+
+A settlement's Meeting Hall names a real "wood" demand. Three villagers are
+idle: Astrid (bold 0.9, greedy 0.7, cautious 0.1 — self-preference ≈ 0.86),
+Bram (bold 0.2, greedy 0.3, cautious 0.8 — self-preference ≈ 0.29), and
+Corvin (bold 0.5, greedy 0.5, cautious 0.5 — self-preference = 0.5, exactly
+the population average by construction). Astrid and Bram have worked
+alongside each other for years (familiarity 0.9 both ways); Corvin is new
+to the settlement and barely known to either (familiarity 0.1 both ways).
+Astrid's real desire is highly visible to Bram (who correctly models her at
+≈0.83, close to her true 0.86) but barely legible to Corvin (who,
+barely knowing her, models her near the 0.5 average). Astrid's own
+self-preference alone already leads the field, and what Bram — who
+actually knows her — believes about her only reinforces it; she wins the
+consensus, walks to the Sägewerk, and starts working it.
+
+## Status
+
+✅ `NpcRoleConsensus.decide` — the pure theory-of-mind consensus function
+(self-preference, believed-preference, consensus score, deterministic
+tie-break) — real and tested.
+
+⬜ City Hall / Meeting Hall construction and its own real "compute a
+demand" reading of `NeedResolver` — [civic_construction.md](civic_construction.md)'s
+own Meeting Hall stays unimplemented; this doc's City Hall section is a
+real spec for its next step, not yet built.
+
+⬜ Redirecting the winning candidate into an actual real `NpcIdentity`/
+`NpcMarker` doing the job — blocked on the same not-yet-real
+replan-interrupt architecture [npc.md](npc.md)/[timber_construction.md](timber_construction.md)
+already named as unimplemented before this doc existed. `NpcRoleConsensus`
+returns a winning id; nothing yet acts on it.
+
+⬜ `familiarity` wired to the real `MemoryStore`/`NpcEncounter`
+confidence/co-location system — injected directly for now (see "Open
+questions").
+
+## Open questions
+
+- **Wiring real familiarity.** The real, live source should be some
+  function of `NpcEncounter.group_by_shared_landmark`'s own co-location
+  history and `MemoryStore`'s confidence decay — but neither currently
+  tracks "how well do these two specific NPCs know EACH OTHER" as a
+  queryable pairwise number; both track events/gossip content instead. A
+  real accumulation model (co-location count/recency -> a real familiarity
+  score) is a genuine follow-up, not attempted here.
+- **One shared formula versus per-role formulas.** Today's three-trait
+  self-preference formula is deliberately generic ("willing to take on
+  demanding new communal work"), not specific to running a sawmill versus,
+  say, standing guard. A future pass giving each role its own trait
+  weighting (a Watchtower guard formula favoring `stoic`/`gruff` over
+  `greedy`, say) is a real, named extension, not required for this pass's
+  own worked example.
+- **What happens to a losing candidate's own visible desire.** Today's
+  mechanism produces exactly one winner and no other observable effect —
+  a real "Bram is visibly disappointed he didn't get picked" follow-on
+  (feeding the real event/memory system this doc's pillar 1 already leans
+  on) is a natural, unbuilt extension.

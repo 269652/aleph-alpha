@@ -6399,6 +6399,63 @@ on: `ConstructionProjectStore.complete_project` gains an injected
 `HouseholdStore.grant_property` call — everything else composes from
 already-real primitives with no new foundational mechanism.
 
+### NPC Role Consensus (`concept/npc_role_consensus.md`)
+
+New doc (2026-09-13), from a direct request: a City Hall should compute a
+settlement's real demands and NPCs should reach consensus — via theory-of-
+mind reasoning, not a dice roll — about who takes charge of a role (e.g.
+wood), with the winner then working the relevant production building. A
+background survey confirmed none of this existed anywhere: no "City Hall"
+(the closest real concept is Civic Construction's own still-unimplemented
+Meeting Hall, above), no NPC-NPC negotiation/consensus primitive of any
+kind (memory/rumor is facts-and-events only, never negotiation outcomes),
+and no occupation-reassignment mechanism at all (occupation is set once,
+deterministically, at `NpcIdentity` construction; every production worker
+today — `LumberjackMarker`, `FarmerMarker` — is a fresh anonymous spawn,
+never a redirected existing villager).
+
+- **`NpcRoleConsensus.decide`** (small) — ✅ Done — the real, tested
+  theory-of-mind consensus function itself
+  (`src/emergence/npc_role_consensus.gd`): `self_preference` grounds a
+  candidate's own willingness to take on a demanding new role in three of
+  `NpcGenome`'s eight real traits (`bold`, `greedy`, `cautious` inverted —
+  weights sum to 1.0, so a uniformly-random genome's expected
+  self-preference is exactly 0.5, the population-average prior).
+  `believed_preference` is the actual theory-of-mind step: a real,
+  fallible model of what ANOTHER candidate wants, lerping from that same
+  population-average prior toward the subject's real preference by real
+  familiarity — never a peek at their true internal state. `consensus_score`
+  blends a candidate's own preference evenly with what every other
+  candidate's own model believes about them; `decide` picks the highest
+  score, ties broken by id ascending (deterministic, no
+  `RandomNumberGenerator`). 16/16 green, including the doc's own worked
+  example (Astrid, bold/greedy/uncautious, beats a timid candidate and an
+  exactly-average newcomer regardless of who knows whom).
+  - 🚧 Not yet wired to anything live — `familiarity` is injected directly
+    (the same duck-typed-dependency shape `NpcProduction.
+    yield_per_second`'s own `world` parameter already uses), not yet read
+    from the real `MemoryStore`/`NpcEncounter` system (neither currently
+    tracks a queryable pairwise "how well do these two specific NPCs know
+    each other" number — a real, named follow-up).
+- **City Hall / Meeting Hall computing a real demand** (medium) — ⬜ Not
+  started — Civic Construction's own Meeting Hall (above) stays
+  unimplemented; reading a real demand out of it would reuse
+  `NeedResolver`/`ConstructionPriority`'s existing recipe-graph walk
+  rather than a new needs computation, inheriting that walk's own
+  already-documented "essentially never finds an actionable shortfall in
+  live play yet" limitation (see Timber Construction above) rather than
+  papering over it.
+- **Redirecting the winning candidate into a real, named worker** (large)
+  — ⬜ Not started — the genuinely hard piece: making `NpcRoleConsensus`'s
+  winner be an existing `NpcIdentity`/`NpcMarker` who leaves their normal
+  schedule to work the sawmill, rather than a fresh anonymous
+  `LumberjackMarker` spawning out of nowhere. Blocked on the
+  "replan-interrupt" architecture `npc.md`'s migration section and Timber
+  Construction's "Builder is ad hoc" section both already name as the
+  right shape and both already confirm is genuinely unimplemented —
+  confirmed again by this pass's own survey: not even stubbed anywhere in
+  this codebase today.
+
 ### Production Chains (`concept/production_chains.md`)
 
 New doc (2026-08-25). The general recipe-gating/dependency-resolution
