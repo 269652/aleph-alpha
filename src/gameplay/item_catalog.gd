@@ -346,6 +346,10 @@ const _ITEMS := {
 	"wood_bookshelf": ["Wooden Bookshelf", "furniture", 5, 0.0],
 	"wood_bed": ["Wooden Bed", "furniture", 5, 0.0],
 	"wood_rug": ["Rug", "furniture", 5, 0.0],
+	# Two more furniture pieces (docs/concept/housing.md's "Occupation-
+	# themed decor" section) -- same id-sharing/max-stack convention above.
+	"couch": ["Couch", "furniture", 5, 0.0],
+	"photo_frame": ["Photo Frame", "furniture", 5, 0.0],
 }
 
 

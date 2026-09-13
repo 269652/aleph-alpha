@@ -28,6 +28,7 @@ const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
 const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
+const HouseDecor = preload("res://src/gameplay/house_decor.gd")
 
 ## Villagers are rendered with the player's own CharacterView (see
 ## _build_npc), so there are deliberately no villager-specific body size
@@ -281,6 +282,17 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 		if stamped_pieces.size() < pieces.size():
 			stamped_roofs = {}
 	world.stamp_structure_at_global(chunk_coord, origin_tile, stamped_pieces, stamped_roofs)
+	# Occupation-themed decor (docs/concept/housing.md's "Occupation-themed
+	# decor" section): furnished against the SAME stamped_pieces just given
+	# to stamp_structure_at_global above, never a second floor-detection
+	# pass -- a partially-built house (fraction < 1.0 above) is only ever
+	# furnished against the floor cells that are actually there. Duck-typed
+	# exactly like record_settlement_founded_if_new above: a world stub that
+	# only implements stamp_structure_at_global is skipped, not broken.
+	if world.has_method("furnish_house_at_global"):
+		world.furnish_house_at_global(
+			chunk_coord, origin_tile, stamped_pieces, HouseDecor.furniture_set_for(npc.occupation)
+		)
 
 	# Windows are read off `stamped_pieces`, never the full `pieces` -- a
 	# still-under-construction house (fraction < 1.0 above) only lights the

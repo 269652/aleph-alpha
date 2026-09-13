@@ -5230,6 +5230,50 @@ func furniture_at_global(global_x: int, global_y: int) -> String:
 	return chunk.furniture_modifications.get(_local_coord(global_x, global_y), "")
 
 
+## Furnishes a just-stamped house with a real, occupation-linked furniture
+## set (see HouseDecor, docs/concept/housing.md's "Occupation-themed decor"
+## section). Called by VillageRenderer right after stamp_structure_at_global
+## has already written the house's own floor/wall pieces into this same
+## chunk -- FurniturePlacement's real interior-floor rule needs those pieces
+## already on the chunk to answer RoomDetector.is_indoors truthfully, the
+## same ordering build_furniture_at_global's own caller already has to
+## respect. `ground_pieces` is the SAME local-cell dict stamp_structure_at_
+## global was given for this house -- never a second floor-detection pass --
+## and `furniture_ids` is tried in order against that house's own real floor
+## cells (in the order they appear in `ground_pieces`), skipping (not
+## aborting on) any cell FurniturePlacement itself refuses, so an odd-shaped
+## or too-small floor still gets partially furnished rather than emptied.
+## Returns how many pieces actually landed, 0 for an unloaded chunk.
+func furnish_house_at_global(
+	chunk_coord: Vector2i, origin_tile: Vector2i, ground_pieces: Dictionary, furniture_ids: Array
+) -> int:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return 0
+	var floor_cells: Array[Vector2i] = []
+	for local_cell in ground_pieces:
+		if BuildingPiece.category_of(ground_pieces[local_cell]) != BuildingPiece.CATEGORY_FLOOR:
+			continue
+		var global_cell: Vector2i = origin_tile + local_cell
+		if _chunk_coord_for_tile(global_cell) == chunk_coord:
+			floor_cells.append(global_cell)
+	var placer := FurniturePlacement.new()
+	var placed := 0
+	var cell_index := 0
+	for piece_id in furniture_ids:
+		while cell_index < floor_cells.size():
+			var global_cell: Vector2i = floor_cells[cell_index]
+			cell_index += 1
+			var local := _local_coord(global_cell.x, global_cell.y)
+			if placer.can_place(piece_id, local, chunk.modifications, chunk.furniture_modifications):
+				chunk.furniture_modifications[local] = piece_id
+				placed += 1
+				break
+	if placed > 0:
+		_paint_furniture(chunk_coord, chunk)
+	return placed
+
+
 ## World's own ground-item container (see World._ground_items /
 ## _on_item_dropped) -- registered so fruit_near/take_fruit_at (bird
 ## endozoochory, see SeedEndozoochory) can see and consume real, already-
