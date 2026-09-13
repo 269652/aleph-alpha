@@ -76,6 +76,10 @@ var _seed_value: int
 
 ## Vector2i cell -> growth float (0..1; 1 is mature).
 var _patches: Dictionary = {}
+## Vector2i cell -> vigor float (0..1) -- Root Vigor, a heritable size/quality
+## trait, independent of growth (see docs/concept/wild_crops.md's "Root
+## Vigor" section and get_vigor's own doc comment for the default).
+var _vigor: Dictionary = {}
 var _spread_accumulator := 0.0
 var _spread_tick := 0
 
@@ -99,6 +103,16 @@ func has_crop(cell: Vector2i) -> bool:
 
 func get_growth(cell: Vector2i) -> float:
 	return _patches.get(cell, 0.0)
+
+
+## Root Vigor for `cell`, 0..1 -- a heritable size/quality trait, distinct
+## from growth (how far along THIS specimen is) the same way FlyerPersonality
+## keeps boldness distinct from age. Defaults to 0.5, the unremarkable
+## middle, for any cell not in `_vigor` -- an unplanted cell, or a save from
+## before vigor existed -- same convention FlyerPersonality.boldness_of
+## already uses for an empty trait dictionary.
+func get_vigor(cell: Vector2i) -> float:
+	return _vigor.get(cell, 0.5)
 
 
 ## Advances growth on every patch and, on a throttled interval, lets mature
