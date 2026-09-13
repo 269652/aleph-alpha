@@ -175,6 +175,7 @@ const InstitutionFormation = preload("res://src/emergence/institution_formation.
 const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
 const SettlementFood = preload("res://src/emergence/settlement_food.gd")
+const SettlementGathering = preload("res://src/emergence/settlement_gathering.gd")
 const SettlementGranary = preload("res://src/emergence/settlement_granary.gd")
 const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
@@ -2370,10 +2371,38 @@ func _despawn_completed_hired_builders() -> void:
 func _settlement_status_for(settlement_id: String) -> String:
 	var market := _market_store.market_for(settlement_id)
 	var household_count := _households_in_settlement(settlement_id).size()
-	var capacity := SettlementFood.carrying_capacity(
-		market, SettlementFood.village_market_for(settlement_id, _loaded_villages)
+	var capacity := _settlement_capacity(
+		settlement_id, market, SettlementFood.village_market_for(settlement_id, _loaded_villages)
 	)
 	return SettlementState.status_for(household_count, capacity)
+
+
+## The one carrying-capacity read every settlement assessment shares (see
+## step_settlements, _settlement_status_for, legitimacy_for_settlement):
+## SettlementFood over BOTH markets AND the food on the village's own
+## shelves (docs/concept/milling_and_baking.md, "Food that counts") -- the
+## bread its Bakery bakes and its Storage holds.
+func _settlement_capacity(settlement_id: String, market, village_market) -> int:
+	return SettlementFood.carrying_capacity(
+		market, village_market, _item_catalog, _settlement_structure_stocks(settlement_id)
+	)
+
+
+## Every StructureStock standing in `settlement_id`'s own chunk (a settlement
+## IS its chunk -- EntityRef.for_settlement) -- the third food container
+## SettlementFood counts. Keys are "%d_%d" global tiles (see
+## _structure_stock_key), so the chunk each belongs to is a plain divide.
+func _settlement_structure_stocks(settlement_id: String) -> Array:
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	var stocks: Array = []
+	for instance_key in _structure_stocks.instance_keys():
+		var parts: PackedStringArray = str(instance_key).split("_")
+		if parts.size() != 2:
+			continue
+		var tile := Vector2i(int(parts[0]), int(parts[1]))
+		if _chunk_coord_for_tile(tile) == chunk_coord:
+			stocks.append(_structure_stocks.stock_for(instance_key))
+	return stocks
 
 
 ## Wages and Rent (docs/concept/workforce.md's own "Wages"/"Rent" sections)
@@ -3497,7 +3526,13 @@ func step_settlements(delta_seconds: float) -> void:
 		# BEFORE capacity is read, because this is what finally puts a real
 		# number in front of it (see _step_settlement_granary).
 		_step_settlement_granary(settlement_id, market, village_market, household_ids)
-		var capacity := SettlementFood.carrying_capacity(market, village_market)
+		# The village's spare hands gather building material and keep raising
+		# whatever the settlement decided to build (docs/concept/milling_and_
+		# baking.md) -- the SAME interval, so a village near the player builds
+		# in real time rather than only on a reload after an unload.
+		_step_settlement_gathering(settlement_id, market, household_ids)
+		_step_settlement_construction(settlement_id, household_ids)
+		var capacity := _settlement_capacity(settlement_id, market, village_market)
 		var status := SettlementState.status_for(household_ids.size(), capacity)
 
 		# Emergence Phase 5/4/6's own automatic triggers, closing the gap
@@ -3737,6 +3772,47 @@ func _step_settlement_granary(
 ## settlement_id -> the sub-unit gathering remainder carried into its next
 ## assessment (see _step_settlement_granary).
 var _settlement_gather_carry: Dictionary = {}
+
+## settlement_id -> SettlementGathering's own sub-unit carry for building
+## material (see _step_settlement_gathering).
+var _settlement_material_carry: Dictionary = {}
+
+
+## A settlement's spare hands cut timber, pick stone and pull fibre into its
+## own persisted Market every assessment (SettlementGathering, docs/concept/
+## milling_and_baking.md) -- loaded or not, since nothing else ever stocks
+## building material there and every autonomous construction decision
+## used to end in SHORTFALL for that reason alone.
+func _step_settlement_gathering(settlement_id: String, market, household_ids: Array[String]) -> void:
+	if household_ids.is_empty():
+		return
+	var spare_capacity := SettlementSpareCapacity.for_settlement(
+		household_ids.size(), _household_occupations_for_settlement(settlement_id)
+	)
+	var result: Dictionary = SettlementGathering.material_delta(
+		spare_capacity, SETTLEMENT_STEP_INTERVAL, _settlement_material_carry.get(settlement_id, {})
+	)
+	_settlement_material_carry[settlement_id] = result["carry"]
+	var stock_delta: Dictionary = result["stock_delta"]
+	for item_id in stock_delta:
+		market.add_stock(str(item_id), int(stock_delta[item_id]))
+
+
+## While a settlement's chunk is loaded, its construction keeps going in
+## real time: re-take the build decision (a need may have appeared or a
+## link may have just been placed) and advance every IN_PROGRESS project
+## by the assessment interval -- the SAME closed-form labor math
+## _apply_construction_labor_catchup applies to unloaded time, so nothing
+## about how fast a village builds depends on whether the player is
+## watching. An unloaded settlement is left to the reload catch-up.
+func _step_settlement_construction(settlement_id: String, household_ids: Array[String]) -> void:
+	if household_ids.is_empty():
+		return
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	if not _loaded_chunks.has(chunk_coord):
+		return
+	_apply_settlement_build_decision(chunk_coord)
+	_advance_construction_labor(chunk_coord, SETTLEMENT_STEP_INTERVAL)
 ## settlement_id -> SettlementGranary.SeededRegion, cached for the session.
 var _settlement_seeded_region: Dictionary = {}
 
@@ -4034,8 +4110,8 @@ func legitimacy_for_settlement(settlement_id: String) -> String:
 	# SettlementFood): Governance reads this status as legitimacy, so
 	# leaving this one on the emergence market alone would report a
 	# settlement illegitimate that step_settlements calls GROWING.
-	var capacity := SettlementFood.carrying_capacity(
-		market, SettlementFood.village_market_for(settlement_id, _loaded_villages)
+	var capacity := _settlement_capacity(
+		settlement_id, market, SettlementFood.village_market_for(settlement_id, _loaded_villages)
 	)
 	return Governance.legitimacy_for(SettlementState.status_for(household_count, capacity))
 
@@ -14234,7 +14310,16 @@ func _apply_construction_labor_catchup(chunk_coord: Vector2i) -> void:
 	var elapsed := maxf(0.0, _world_age_seconds - float(record["unloaded_at"]))
 	if elapsed <= 0.0:
 		return
+	_advance_construction_labor(chunk_coord, elapsed)
 
+
+## Advances every IN_PROGRESS project sited at `chunk_coord` by `elapsed`
+## seconds of real spare-capacity labor and places whatever completes --
+## the one body both the reload catch-up above and the loaded-settlement
+## step (_step_settlement_construction) share.
+func _advance_construction_labor(chunk_coord: Vector2i, elapsed: float) -> void:
+	if elapsed <= 0.0:
+		return
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
 	var household_occupations := _household_occupations_for_settlement(settlement_id)
 	var spare_capacity := SettlementSpareCapacity.for_settlement(
@@ -14302,11 +14387,72 @@ func _apply_settlement_build_decision(chunk_coord: Vector2i) -> void:
 	var market := _market_store.market_for(settlement_id)
 	var present_structure_ids := _present_structure_ids_for_settlement_chunk(chunk_coord)
 	var shortfalls := production_shortfall_quests_for_settlement(settlement_id)
+	# The second source of shortfall (docs/concept/milling_and_baking.md,
+	# "The emergent need"): a DECLINING settlement is short of bread -- the
+	# one food it can raise by construction -- and says so in the SAME shape
+	# the occupation shortfalls already use, so the decision below reasons
+	# bread -> bakery -> flour -> mill -> wheat -> farm with no new code.
+	var food_shortfall := SettlementFood.food_shortfall_for(
+		household_ids.size(), market, SettlementFood.village_market_for(settlement_id, _loaded_villages),
+		_item_catalog, _settlement_structure_stocks(settlement_id)
+	)
+	if not food_shortfall.is_empty():
+		shortfalls.append(food_shortfall)
+
+	# A real site, not Vector2i.ZERO: the first free, buildable, clear cell
+	# spiralling out from the settlement's own centre (see _settlement_build_
+	# origin_for) -- a settlement with nowhere left to build decides nothing.
+	var origin = _settlement_build_origin_for(chunk_coord)
+	if origin == null:
+		return
 
 	SettlementBuildDecision.decide_and_advance(
-		_construction_project_store, market, chunk_coord, Vector2i.ZERO, household_ids[0],
+		_construction_project_store, market, chunk_coord, origin, household_ids[0],
 		present_structure_ids, _recipe_book, shortfalls, spare_capacity
 	)
+
+
+## Where a settlement raises its next structure: the first LOCAL cell,
+## spiralling outward from the chunk's own centre (where SettlementGenerator
+## lays its ring of houses), that is real buildable terrain (the SAME
+## is_buildable_terrain_at rule every house obeys: no water, no forest, no
+## standing tree) and unmodified, with all eight of its neighbours buildable
+## and unmodified too -- a lane of clear ground around every structure, so
+## a Farm's own fence always has somewhere to stand and a hauler's path is
+## never boxed in (a one-cell hole in a forest is not a building site).
+## null when the whole chunk offers nowhere -- the decision then simply
+## waits. Deterministic, and deliberately NOT skipping the site of a live
+## project: a repeated decision lands on the same still-empty cell, finds
+## its own earlier project there (SettlementConstruction's find_project),
+## and never queues a second copy somewhere else; a placed structure
+## modifies its cell, so the next link goes to the next clear site.
+func _settlement_build_origin_for(chunk_coord: Vector2i):
+	var centre := Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
+	for radius in range(0, CHUNK_SIZE / 2):
+		for dy in range(-radius, radius + 1):
+			for dx in range(-radius, radius + 1):
+				if maxi(absi(dx), absi(dy)) != radius:
+					continue  # only the ring at this radius -- inner rings were already tried
+				var local := centre + Vector2i(dx, dy)
+				if _is_clear_settlement_site(chunk_coord, local):
+					return local
+	return null
+
+
+## The site rule _settlement_build_origin_for applies to one local cell:
+## inside the chunk with a one-cell margin, and -- for the cell AND all
+## eight neighbours -- real buildable terrain carrying no modification.
+func _is_clear_settlement_site(chunk_coord: Vector2i, local: Vector2i) -> bool:
+	if local.x < 1 or local.y < 1 or local.x >= CHUNK_SIZE - 1 or local.y >= CHUNK_SIZE - 1:
+		return false
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var x := global_cell.x + dx
+			var y := global_cell.y + dy
+			if not is_buildable_terrain_at(x, y) or modification_at_global(x, y) != "":
+				return false
+	return true
 
 
 ## A City Hall's own real "compute demands" step (see docs/concept/
@@ -14352,8 +14498,33 @@ func _place_completed_construction_project(project) -> void:
 	var output_item_id: String = output["item_id"]
 	if _item_catalog.kind_of(output_item_id) != "placeable":
 		return
-	var global_cell: Vector2i = project.chunk_coord * CHUNK_SIZE + project.origin
+	# The site chosen when the project started (see _settlement_build_
+	# origin_for) is re-checked now that the work is done: if something was
+	# built there in the meantime (the player, another project), the
+	# structure goes to the next clear site instead of stamping over it.
+	var origin: Vector2i = project.origin
+	if not _is_clear_settlement_site(project.chunk_coord, origin):
+		var resited = _settlement_build_origin_for(project.chunk_coord)
+		if resited == null:
+			return
+		origin = resited
+	var global_cell: Vector2i = project.chunk_coord * CHUNK_SIZE + origin
 	build_at_global(global_cell.x, global_cell.y, output_item_id)
+	# A settlement raises a fenced plot in one go (docs/concept/milling_and_
+	# baking.md): the Farm's own gate rule (_reconcile_farmer_at) admits no
+	# Farmer until a real wooden_fence stands near, and the Farm recipe's own
+	# stated cost already IS the fence -- "wood (6) for fence rails/posts and
+	# plant_fibre (4) lashing them" (npc_farm_production.md) -- so the fence
+	# is placed on the first clear neighbouring cell at no further charge.
+	if output_item_id == "farm":
+		for offset in [Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(0, -1)]:
+			var fence_cell: Vector2i = global_cell + offset
+			if (
+				is_buildable_terrain_at(fence_cell.x, fence_cell.y)
+				and modification_at_global(fence_cell.x, fence_cell.y) == ""
+			):
+				build_at_global(fence_cell.x, fence_cell.y, "wooden_fence")
+				break
 
 
 ## A property_id convention for HouseholdStore.owner_of, keyed per PIECE
