@@ -195,7 +195,14 @@ state the simulation can't actually produce.
   swung at a tree accrues no wear today even once it has a real material.
 - ⬜ **Wear beyond the three modeled weapons** — tools/armor never wear until
   they get real `_WEAPON_MATERIAL_AND_VOLUME`-equivalent entries of their
-  own (already a named follow-up in `item_catalog.gd`).
+  own (already a named follow-up in `item_catalog.gd`). **Direction decided
+  2026-09-13** (`item_illustrations.md`'s own "Per-item composite sheet
+  mapping"): yes, durability generalizes to every tool/weapon/armor item,
+  and to a four-state `pristine`/`used`/`worn`/`broken` vocabulary (one
+  finer than `condition_for` returns today) — an art-addressing decision
+  made ahead of this mechanism, not yet a code change. `condition_for`'s own
+  threshold logic, material coverage, and a non-combat (mining/chopping)
+  wear trigger for tools all still need to be built.
 - ⬜ **A tooltip line.** [items.md](items.md)'s "Reading an item" fixed line
   order has no condition/wear row yet.
 - ⬜ **Rarity-driven wear resistance.** `rarity_tier.gd` has a real tier
@@ -210,5 +217,9 @@ state the simulation can't actually produce.
 - If repair is ever built: does it reset wear to 0, or only partially
   restore it (a repaired blade being permanently a little weaker than new is
   a real, common crafting-game convention)?
-- Does worn armor wear from absorbing hits the way a blocking weapon does,
-  or is armor exempt?
+- ~~Does worn armor wear from absorbing hits the way a blocking weapon does,
+  or is armor exempt?~~ **Decided 2026-09-13: armor wears, it is not
+  exempt** (`item_illustrations.md`'s "Per-item composite sheet mapping").
+  Still open: the actual trigger event — absorbing a hit while worn (mirrors
+  a weapon's block trigger) is the obvious candidate, but not chosen or
+  built yet.

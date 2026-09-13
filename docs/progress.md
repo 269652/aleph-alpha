@@ -21134,3 +21134,75 @@ carpentry lives in); widening that, and growing an NPC's own dedication
 from real work rather than fixing it at birth, are both real, separate
 follow-ups in `workforce.md`'s own updated section 4.
 
+### All 33 equipment-first items get real illustrated art (`concept/item_illustrations.md`, `concept/illustrated_art_addressing.md`, `concept/item_durability.md`, 2026-09-13)
+
+The 2026-09-08 icon-only scaffolding pass above deliberately left every
+one of these 33 (16 tools/weapons, 7 armor, 4 placeables, 5 more tools)
+bare, resolving through the procedural fallback. This pass replaces every
+one with real, generated art -- some from a pre-existing uncommitted
+2026-09-08 art batch discovered and integrated mid-session, the rest
+generated fresh via ChatGPT image generation (each prompted with an
+existing sibling item's own art attached as an explicit style reference,
+then hand-sliced with PowerShell/System.Drawing per item after automated
+`SpriteSheetSlicer.detect_frames` boundary detection proved unreliable on
+AI-rendered divider lines).
+
+✅ **Every tool/weapon** (icon/held/equipped/ground, `pristine`/`used`/
+`worn`/`broken`) and **every armor piece** (icon/equipped/ground, no
+held -- item_durability.md's "does armor wear too" question resolved:
+yes) now has real art on disk with a matching `illustrated_art_registry.gd`
+entry, TDD red-first per item/group (`tests/unit/test_illustrated_art_
+registry.gd` grew from 16 to 50 tests this session). Held-row semantics
+were hand-verified per item, never assumed uniform: some are pure pose
+variety of the pristine state (a tool with nothing that visibly wears --
+`compass`, `wooden_club`, `worm`...), others show real condition
+progression matching icon/equipped/ground exactly (a blade, a net, a
+rope -- `crude_blade`, `butterfly_net`, `lasso`...). `climbing_rope` is a
+brand-new registry entry; it had none at all before this pass.
+
+✅ **Fire-status placeables**: `campfire` gained the `ground` context
+(icon-only before) sharing `furnace`'s own already-real `unlit`/`lit`/
+`embers` vocabulary, plus a real **animated** `burn.png` filmstrip (8
+hand-verified frames at the registry's already-declared `fps=8, loop=true`
+-- the addressing doc's own "one file, one animation, one row" shape,
+needing no per-frame slicing unlike every composite grid this pass
+touched). `sagewerk`/`storage`/`stone_dam` (no fire, no wear mechanic of
+their own) get a plain icon+ground pair on their original single
+`"default"` state.
+
+**Known art-fidelity compromises, accepted rather than re-generated**
+(each a real judgment call, not an oversight):
+- `iron_legs`' generation came back as full knee-to-foot armored boots
+  rather than a hips-to-knee greave -- a common fantasy-art convention
+  for "leg armor," kept as-is.
+- `trap`'s generation came back as a bound double-spearhead-on-a-haft
+  tool rather than a hinged jaw trap -- reads as a primitive tool, not
+  literally what was asked for.
+- `snare`'s HELD row lost its hand mid-generation (ChatGPT's own image
+  tool silently revised the prompt to drop human anatomy after the first
+  pass); the pose is still a real, distinct image, just item-only where
+  every other tool's held row shows a gripping hand.
+- Two generations (`snare`, `climbing_rope`) came back on a transparent/
+  rough-alpha background instead of solid magenta; both composited onto
+  `#FF00FF` during download (canvas `fillRect` before `drawImage`) rather
+  than a regeneration round-trip.
+- `leather_chest`'s generation shows a small disembodied hand artifact in
+  one column despite the prompt saying "no body drawn."
+
+⬜ **Explicitly out of scope, not an oversight**:
+- `furnace`/`campfire`'s own `placed` context (the actual in-world built
+  structure) stays deferred -- confirmed genuinely unused today
+  (`earth_chunk_manager.gd`'s own comment: "no real art wired" for any
+  placeable). Only `icon`/`ground` were in scope this pass.
+- The 65 food/material items (this catalog's other, larger half) --
+  named as a likely "derive from existing world sprites" follow-up, not
+  started.
+- `item_wear.gd`'s actual mechanism still only covers the original three
+  weapons (item_durability.md's own tracked gap) -- every other item's
+  4-state art is genuinely ahead of the mechanism that would drive it,
+  a deliberate art-ahead-of-code decision made explicit in that doc.
+
+Full `test_illustrated_art_registry.gd` (50/50), `test_illustrated_art_
+resolver.gd` (11/11) and `test_illustrated_art_loader.gd` (9/9) all green
+after every commit; `--headless --import` re-run clean after each batch.
+

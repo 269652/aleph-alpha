@@ -221,6 +221,65 @@ carry). `Player` already computes both real inputs this needs:
 built in this pass — the same "needs real source pixels for a meaningful
 test" reason every other pending illustrated surface in this doc gives.
 
+### Per-item composite sheet mapping (2026-09-13)
+
+The "Combat sheets" section above scoped attack/defense/worn/broken to the
+three items `item_durability.md` happened to cover at the time
+(`wooden_club`/`iron_sword`/`crude_blade`). Decided now: durability art
+generalizes to every tool/weapon/armor item, not just those three, and to a
+**four**-state vocabulary — `pristine`/`used`/`worn`/`broken` — one more
+gradation than `item_wear.gd`'s current `condition_for` returns. This is an
+ART-ADDRESSING decision, authored ahead of the mechanism the same way this
+project already authors registry entries before a real caller exists
+(`illustrated_art_addressing.md`'s own campfire/wooden_club entries, `Not
+built (⬜)` in that doc's Status list). **Not decided here**: the actual
+`item_wear.gd`/`condition_for` code change (a new threshold between pristine
+and worn), broadening wear to materials beyond the three weapons, a
+non-combat wear trigger for tools (mining/chopping), or an armor wear
+trigger — all four stay open follow-ups, tracked in
+[item_durability.md](item_durability.md)'s own Status/Open-questions
+sections. Armor DOES wear (resolves that doc's own open question), by the
+same rule.
+
+**This also answers "depends on the item, so we need a mapping"**: which
+rows (contexts) apply to an item's static composite sheet is a function of
+its `kind` (`item_catalog.gd`), not universal. Default per kind — override
+per item only where it genuinely differs:
+
+**Correction (same day):** the first draft of this table split "tool" into
+melee-swung vs. utility sub-kinds and dropped `equipped` from both — wrong.
+Any carryable weapon or tool has a carried-but-not-in-hand look (strapped to
+a belt/back/hip, the same "equipped" row the reference sheet shows for a
+net) whether or not it is ever actually swung, so `equipped` is part of
+every weapon/tool's row set, not just weapons'. The real split is
+held-vs-worn (worn = armor, which is never gripped in the hand), not
+melee-vs-utility:
+
+| Kind | Static composite rows | Columns (states) | Separate animation file(s) |
+|---|---|---|---|
+| **weapon** | icon, held (idle pose), equipped (strapped/holstered), ground | pristine/used/worn/broken | `attack` (the swing cycle, **pristine state only** — worn/broken reuse pristine's attack frames per this doc's own already-established club rule) |
+| **tool** (pickaxe, axe, compass, map, spyglass, ledger, deed, charter, field_journal, star_chart, weather_glass, snare, trap, rope, net, lasso, fishing_rod — melee-swung or utility alike) | icon, held (idle), equipped (strapped/holstered), ground | pristine/used/worn/broken | none yet — swing art stays catalog-wide Deferred, below, for the melee-swung subset |
+| **armor** | icon, equipped (worn on the rig slot), ground | pristine/used/worn/broken | none |
+| **placeable** (campfire, furnace, sagewerk, storage, stone_dam) | icon, ground (pre-placement, dropped) | whatever fire/operational states the item itself has (e.g. campfire's own `unlit`/`lit`/`embers` — furnace shares that exact vocabulary, not durability) | `placed` is its OWN surface entirely (already named above, "Placed structures" — a seeded-variant grid, not part of this icon sheet), animated per state where the state itself moves (a lit furnace's flicker) |
+| **material / food** | icon only | `default` (no durability, no wear) | none |
+
+No "in-hand" row is reused-from-icon anymore for items that get this
+treatment — that convergence rule (this doc's own States table, "Ground"/
+"In-hand" rows: "No — reuse the icon") stays the fallback for any item that
+has NOT yet been authored under this mapping, exactly per pillar 4's
+"author the base, fill in the rest": an un-authored item keeps converging
+on its icon exactly as before; an authored one gets its own real held/
+equipped/ground art instead. Nothing here retroactively breaks an
+un-migrated item.
+
+Generation practice: draw every applicable STATIC cell for an item in one
+composite request (same identity held across states/rows reads more
+consistently from one generation than four independent ones), on solid
+chroma-key magenta; genuinely animated views (`attack`, a lit state's
+flicker) are separate generations/files per
+`illustrated_art_addressing.md`'s "one file, one animation" rule, never
+smuggled into the static grid as extra columns.
+
 ### Deferred: per-item use/swing art, catalog-wide
 
 Still out of scope for the **catalog as a whole**: `WeaponSwing`/`ToolSlot`'s
