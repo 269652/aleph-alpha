@@ -100,6 +100,39 @@ func test_every_occupation_appears_across_enough_samples():
 		assert_true(seen.has(occupation), "occupation never appeared: %s" % occupation)
 
 
+## docs/concept/workforce.md's "A real NPC Carpentry number" section: an
+## innate, seed-derived aptitude, deliberately NOT one of PERSONALITY_TRAITS
+## (a carpentry gene must never be eligible to become an NPC's own dominant
+## PERSONALITY trait -- see test_personality_trait_is_derived_from_the_npcs_
+## own_genome above, which this must not perturb). Scaled into the SAME
+## [0, 2) range carpentry_1/carpentry_2 already put the player's own
+## SkillTree stat in, so the small_house recipe's required_skill threshold
+## (level 1.0) means the same thing on either side of the build-or-hire
+## fork.
+func test_carpentry_level_is_deterministic_and_in_the_skill_web_range():
+	for seed_value in range(20):
+		var a := NpcIdentity.new(seed_value)
+		var b := NpcIdentity.new(seed_value)
+		assert_eq(a.carpentry_level, b.carpentry_level, "same seed must give the same carpentry_level")
+		assert_between(a.carpentry_level, 0.0, 2.0, "seed %d" % seed_value)
+
+
+func test_carpentry_level_varies_across_npcs_rather_than_being_a_constant():
+	var seen := {}
+	for seed_value in range(20):
+		seen[NpcIdentity.new(seed_value).carpentry_level] = true
+	assert_gt(seen.size(), 1)
+
+
+## Not a fifth personality trait: PERSONALITY_TRAITS/dominant_trait()/
+## personality_trait must be exactly as they were before this field existed.
+func test_carpentry_level_does_not_perturb_personality_trait_selection():
+	for seed_value in range(20):
+		var identity := NpcIdentity.new(seed_value)
+		assert_false(identity.genome.traits.has("carpentry_aptitude"))
+		assert_eq(identity.personality_trait, identity.genome.dominant_trait())
+
+
 ## docs/concept/npc.md "Needs and the local production economy": hunter
 ## (a producer, distinct from farmer) and nurse (a new non-producer
 ## village-care role) both join the occupation roster this pass.

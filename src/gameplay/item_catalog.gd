@@ -314,6 +314,29 @@ const _ITEMS := {
 	# "Harvesting honey", BeeHiveMarker.harvest) -- a stackable food item,
 	# the same "kind" as fruit/meat/mushrooms above.
 	"honey": ["Honey", "food", 20, 0.0],
+	# The first blueprint (see docs/concept/workforce.md). A NEW "blueprint"
+	# kind, deliberately unrelated to HouseBlueprint/BuildingBlueprint/
+	# ConstructionProject.blueprint_id -- none of those three is an Item at
+	# all (see that doc's own disambiguation section). Non-stackable like
+	# the other document/instrument tools above (deed, ledger,
+	# field_journal): read once via Player._try_learn_blueprint, not
+	# carried in bulk.
+	"blueprint_small_house": ["Blueprint: Small House", "blueprint", 1, 0.0],
+	# Second tier (see docs/concept/workforce.md's "Blueprint tiers"
+	# section) -- the same "cottage_bright" HouseBlueprint shape the
+	# procedural village generator already builds for NPCs, unlocked for
+	# the player's own construction.
+	"blueprint_cottage": ["Blueprint: Cottage", "blueprint", 1, 0.0],
+	# Interior furniture (see docs/concept/housing.md's "Interior furniture"
+	# section) -- the SAME id as its BuildingPiece entry, the same
+	# "one string, no new plumbing on either side" convention "stone_dam"
+	# above already established. max_stack 5, matching every other
+	# placeable item's own stack size (campfire/sagewerk/storage above).
+	"wood_chair": ["Wooden Chair", "furniture", 5, 0.0],
+	"wood_table": ["Wooden Table", "furniture", 5, 0.0],
+	"wood_bookshelf": ["Wooden Bookshelf", "furniture", 5, 0.0],
+	"wood_bed": ["Wooden Bed", "furniture", 5, 0.0],
+	"wood_rug": ["Rug", "furniture", 5, 0.0],
 }
 
 

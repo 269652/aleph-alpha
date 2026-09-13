@@ -1516,6 +1516,26 @@ func cook(item_id: String) -> bool:
 	return true
 
 
+## Attempts to permanently learn the recipe `item_id` (a real ItemCatalog
+## "blueprint" item -- see docs/concept/workforce.md) teaches, consuming it
+## ONLY on a successful learn -- mirrors items.md's own already-specified
+## spell-scroll pattern exactly ("reading one attempts to permanently learn
+## ... consumed only on a successful learn"). Fails, and keeps the item, for
+## a non-blueprint item, an item the player isn't carrying, or a recipe
+## already known -- an invalid transition does nothing, the same discipline
+## every other coordinator in this codebase already applies.
+func _try_learn_blueprint(item_id: String) -> bool:
+	if not EarthChunkManager.BLUEPRINT_RECIPE_BY_ITEM_ID.has(item_id):
+		return false
+	var recipe_id: String = EarthChunkManager.BLUEPRINT_RECIPE_BY_ITEM_ID[item_id]
+	if _chunk_manager.has_unlocked_blueprint(recipe_id):
+		return false
+	if inventory.remove(item_id, 1) <= 0:
+		return false
+	_chunk_manager.record_blueprint_learned_if_new(recipe_id)
+	return true
+
+
 ## True while a placed campfire (see EarthChunkManager.has_structure_near) is
 ## within HEAT_SOURCE_RADIUS_TILES of the player's current tile -- a real
 ## world-proximity check, not an inventory count: carrying an unplaced

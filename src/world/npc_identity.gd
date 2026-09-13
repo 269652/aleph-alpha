@@ -62,6 +62,18 @@ const PERSONALITY_TRAITS: Array[String] = [
 	"friendly", "gruff", "curious", "stoic", "greedy", "kind", "cautious", "bold"
 ]
 
+## A real NPC Carpentry number (docs/concept/workforce.md's "A real NPC
+## Carpentry number" section) -- deliberately a SEPARATE genome from
+## `genome`/PERSONALITY_TRAITS above, never added to that list: a carpentry
+## gene must never be eligible to become an NPC's own dominant PERSONALITY
+## trait (dominant_trait() picks whichever gene in ITS OWN genome rolled
+## highest, with no concept of "this one doesn't count"). An innate,
+## fixed-at-birth aptitude, not a skill that grows from doing carpentry
+## work -- labor_skills.md's own larger "NPCs accrue skill from real work"
+## vision stays exactly as unbuilt as it already was; this is honestly an
+## MVP, not that finished design.
+const SKILL_TRAITS: Array[String] = ["carpentry_aptitude"]
+
 ## A villager's driving need/goal (npc.md: "NPCs generate requests from
 ## their actual current needs... rather than a fixed quest-giver script") --
 ## flavor + a future quest-generation hook, not consumed by anything yet.
@@ -91,6 +103,12 @@ var occupation: String
 var genome: NpcGenome
 var personality_trait: String
 var need: String
+## Real, deterministic, in the same [0, 2) range carpentry_1/carpentry_2 put
+## the player's own SkillTree stat in, so the small_house recipe's
+## required_skill threshold means the same thing on either side of the
+## build-or-hire fork (see SKILL_TRAITS' own doc comment for why this is a
+## separate genome from `genome`/personality_trait above).
+var carpentry_level: float
 
 
 func _init(a_seed_value: int) -> void:
@@ -101,6 +119,8 @@ func _init(a_seed_value: int) -> void:
 	genome = NpcGenome.new(seed_value, PERSONALITY_TRAITS)
 	personality_trait = genome.dominant_trait()
 	need = NEEDS[_index(seed_value, "need", NEEDS.size())]
+	var skill_genome := NpcGenome.new(seed_value, SKILL_TRAITS)
+	carpentry_level = skill_genome.traits["carpentry_aptitude"] * 2.0
 
 
 ## Seeded pick, routed through a % 10000 reduction first -- Godot's String

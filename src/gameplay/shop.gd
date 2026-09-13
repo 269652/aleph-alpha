@@ -15,12 +15,20 @@ const Market = preload("res://src/emergence/market.gd")
 ## item_id -> gold price. A small, deliberately affordable starter selection
 ## spanning tool/weapon/armor/food so a new player has something to spend
 ## early gold on.
+##
+## blueprint_small_house (docs/concept/workforce.md's "Selling it" section)
+## is the first blueprint -- deliberately added to this SAME flat catalog
+## every merchant already sells from rather than a second merchant type or
+## stocking mechanism, matching this file's own "Phase 1 simplification"
+## above.
 const CATALOG := {
 	"fishing_rod": 15,
 	"torch": 5,
 	"cooked_meat": 4,
 	"leather_helm": 25,
 	"iron_sword": 60,
+	"blueprint_small_house": 80,
+	"blueprint_cottage": 220,
 }
 
 

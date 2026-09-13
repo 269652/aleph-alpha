@@ -124,6 +124,45 @@ func test_catalog_has_smelting_items_and_iron_armor():
 	assert_eq(catalog.make("iron_helm").equip_slot_name(), "head")
 
 
+## The first blueprint (docs/concept/workforce.md's "Blueprints: obtaining
+## one" section) -- a real ItemCatalog entry of a NEW "blueprint" kind,
+## deliberately unrelated to HouseBlueprint/BuildingBlueprint/
+## ConstructionProject.blueprint_id (see that doc's own disambiguation
+## section: none of those three is an Item at all). Non-stackable like the
+## other document/instrument tools (deed, ledger, field_journal) -- a
+## blueprint is read once, not carried in bulk.
+func test_blueprint_small_house_is_a_real_non_stackable_blueprint_kind_item():
+	assert_true(catalog.has("blueprint_small_house"))
+	assert_eq(catalog.kind_of("blueprint_small_house"), "blueprint")
+	var item := catalog.make("blueprint_small_house")
+	assert_eq(item.kind, "blueprint")
+	assert_eq(item.max_stack, 1)
+	assert_gt(item.display_name.length(), 0)
+
+
+## The second tier (docs/concept/workforce.md's "Blueprint tiers" section).
+func test_blueprint_cottage_is_a_real_non_stackable_blueprint_kind_item():
+	assert_true(catalog.has("blueprint_cottage"))
+	assert_eq(catalog.kind_of("blueprint_cottage"), "blueprint")
+	var item := catalog.make("blueprint_cottage")
+	assert_eq(item.max_stack, 1)
+
+
+## Interior furniture (docs/concept/housing.md's "Interior furniture"
+## section) -- the SAME id as its BuildingPiece entry, the same
+## "one string, no new plumbing on either side" convention stone_dam
+## already established, so the existing placeable-arming/build path can
+## reach it with no new item-side machinery.
+func test_furniture_items_share_their_building_piece_ids_and_are_placeable_like():
+	const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+	for piece_id in ["wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf"]:
+		assert_true(catalog.has(piece_id), piece_id)
+		assert_eq(catalog.kind_of(piece_id), "furniture", piece_id)
+		var item := catalog.make(piece_id)
+		assert_eq(item.max_stack, 5, piece_id)
+		assert_true(BuildingPiece.has_piece(piece_id), piece_id)
+
+
 func test_catalog_has_a_fishing_rod():
 	assert_true(catalog.has("fishing_rod"))
 	assert_eq(catalog.make("fishing_rod").kind, "tool")
