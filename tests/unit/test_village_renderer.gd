@@ -1561,6 +1561,34 @@ func test_a_shape_that_fits_nowhere_falls_back_to_a_smaller_one_before_skipping(
 	assert_true(manor.size() > chosen.pieces.size(), "sanity: the fallback really is smaller")
 
 
+## Two of the ten probed villages sit in chunks that are ~85% lake: their
+## only dry ground is a strip 15-25 tiles from most ring anchors, beyond
+## the old 12-tile search, so 3 of 5 houses in each were still skipped
+## with the fallbacks in place. A villager builds anywhere inside their own
+## chunk before being left homeless -- the chunk edge is the only bound.
+func test_a_house_is_sited_anywhere_in_its_own_chunk_before_being_skipped():
+	var chunk_coord := Vector2i(13, 13)
+	var world := StubWorld.new()
+	# Water everywhere in the chunk except one 5x6 pocket in the far corner.
+	var pocket_origin := chunk_coord * CHUNK_SIZE + Vector2i(1, 1)
+	for x in CHUNK_SIZE:
+		for y in CHUNK_SIZE:
+			var cell := chunk_coord * CHUNK_SIZE + Vector2i(x, y)
+			var in_pocket := cell.x >= pocket_origin.x and cell.x < pocket_origin.x + 5 and cell.y >= pocket_origin.y and cell.y < pocket_origin.y + 6
+			if not in_pocket:
+				world.water_cells[cell] = true
+	var pieces := renderer._house_blueprint.build("hut_tiny", 3)
+	var raw_origin := chunk_coord * CHUNK_SIZE + Vector2i(26, 26)  # 25 tiles from the pocket
+
+	var origin = renderer._find_clear_origin(raw_origin, pieces, world, chunk_coord)
+
+	assert_not_null(origin, "the only dry pocket in the chunk is 25 tiles away; the house belongs there, not nowhere")
+	if origin == null:
+		return
+	for cell in pieces:
+		assert_false(world.water_cells.has(origin + cell), "the far house still stands on dry ground")
+
+
 func test_a_shape_that_fits_is_kept_rather_than_shrunk():
 	var chunk_coord := Vector2i(11, 12)
 	var world := StubWorld.new()

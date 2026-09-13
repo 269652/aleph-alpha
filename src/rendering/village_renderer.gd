@@ -48,17 +48,18 @@ var _construction_catchup := ConstructionCatchup.new()
 ## visual variety, deterministic per house.
 const _STONE_HOUSE_CHANCE_DENOMINATOR := 4
 
-## How far a house's origin may be moved off its ring-layout anchor to find
-## a clear site (see _find_clear_origin) -- a chunk's dominant biome only
-## gates the whole CHUNK, not every cell (see BiomeClassifier.dominant_
-## biome), so a grassland village can still have a pond, a river bank or a
-## neighbour's house where a ring anchor lands. Was 6 tiles for water alone;
-## a probe over ten real villages near the player found 8 of 50 houses
-## skipped as "no dry ground" at that radius, so it now reaches across most
-## of the chunk (a house still has to stand entirely inside its own chunk,
-## which bounds the search on its own), and a shape that fits nowhere falls
-## back to a smaller one (see _fit_house) before a villager is left homeless.
-const _SITE_SEARCH_RADIUS_TILES := 12
+## A house's origin may be moved off its ring-layout anchor to ANY clear
+## site inside its own chunk (see _find_clear_origin) -- a chunk's dominant
+## biome only gates the whole CHUNK, not every cell (see BiomeClassifier.
+## dominant_biome), so a grassland village can still have a pond, a river
+## bank or a neighbour's house where a ring anchor lands. The search was 6
+## tiles for water alone, then 12: a probe over ten real villages near the
+## player still found two villages in chunks that are ~85% lake, whose only
+## dry ground lay 15-25 tiles from most anchors, with 3 of 5 houses each
+## left unbuilt. The chunk edge is now the only bound (a house has to stand
+## entirely inside its own chunk anyway), so the search reaches _chunk_size
+## tiles in every direction, and a shape that fits nowhere falls back to a
+## smaller one (see _fit_house) before a villager is left homeless.
 
 ## The shapes a house falls back to, smallest last, when the villager's own
 ## chosen shape fits nowhere near its anchor -- a cottage, then the hut. A
@@ -552,7 +553,7 @@ func _fit_house(
 
 
 ## The nearest origin to \`raw_origin\` at which \`pieces\` stand on a CLEAR
-## site, or null within _SITE_SEARCH_RADIUS_TILES. Clear means, for every
+## site anywhere inside the chunk, or null. Clear means, for every
 ## footprint cell AND the doorstep (the cell the door opens onto -- a door
 ## opening onto a river or a neighbour's wall is a house nobody can enter,
 ## both found in the probe): entirely inside \`chunk_coord\` (a footprint
@@ -567,24 +568,30 @@ func _find_clear_origin(raw_origin: Vector2i, pieces: Dictionary, world, chunk_c
 	var door_local := _door_cell(pieces)
 	var required: Array = pieces.keys()
 	required.append(door_local + _door_facing_direction(door_local, pieces))
-	for offset in _site_offsets():
+	for offset in _site_offsets(_chunk_size):
 		var candidate: Vector2i = raw_origin + offset
 		if _site_is_clear(candidate, required, world, chunk_coord):
 			return candidate
 	return null
 
 
-## Every offset within _SITE_SEARCH_RADIUS_TILES, nearest first -- built
-## once and reused by every house of every village.
+## Every offset within `radius` tiles, nearest first -- a raw origin lies in
+## (or a few cells off) its own chunk, so a radius of one chunk size reaches
+## every origin the chunk can hold. Built once per radius and reused by every
+## house of every village; a candidate that leaves the chunk fails on its
+## first cell, so the wide reach only costs anything in a cramped chunk.
 static var _cached_site_offsets: Array = []
+static var _cached_site_offsets_radius := -1
 
 
-static func _site_offsets() -> Array:
-	if _cached_site_offsets.is_empty():
-		for dy in range(-_SITE_SEARCH_RADIUS_TILES, _SITE_SEARCH_RADIUS_TILES + 1):
-			for dx in range(-_SITE_SEARCH_RADIUS_TILES, _SITE_SEARCH_RADIUS_TILES + 1):
+static func _site_offsets(radius: int) -> Array:
+	if _cached_site_offsets_radius != radius:
+		_cached_site_offsets = []
+		for dy in range(-radius, radius + 1):
+			for dx in range(-radius, radius + 1):
 				_cached_site_offsets.append(Vector2i(dx, dy))
 		_cached_site_offsets.sort_custom(func(a, b): return a.length_squared() < b.length_squared())
+		_cached_site_offsets_radius = radius
 	return _cached_site_offsets
 
 

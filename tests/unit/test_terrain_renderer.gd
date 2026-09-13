@@ -348,8 +348,12 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 		# pitched roof rather than one flat tile repeated across a rectangle.
 		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
 		# The trail tier's own single flat tile (see TRAIL_TILE_ID),
-		# appended last so it shifts no other family's index.
+		# appended after every family above so it shifts none of their indices.
 		+ 1
+		# The facade family (see ProceduralBuildingPieceSprite.generate_
+		# facade_variant_image): material x category x storey, appended after
+		# the trail tile for the same reason.
+		+ TerrainRenderer.FACADE_VARIANT_MATERIALS.size() * TerrainRenderer.FACADE_VARIANT_CATEGORIES.size() * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
 	)
 	assert_eq(source.get_tiles_count(), expected)
 
@@ -378,8 +382,12 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 		# pitched roof rather than one flat tile repeated across a rectangle.
 		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
 		# The trail tier's own single flat tile (see TRAIL_TILE_ID),
-		# appended last so it shifts no other family's index.
+		# appended after every family above so it shifts none of their indices.
 		+ 1
+		# The facade family (see ProceduralBuildingPieceSprite.generate_
+		# facade_variant_image): material x category x storey, appended after
+		# the trail tile for the same reason.
+		+ TerrainRenderer.FACADE_VARIANT_MATERIALS.size() * TerrainRenderer.FACADE_VARIANT_CATEGORIES.size() * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
 	)
 	assert_eq(
 		source.get_tiles_count() - tile_count_without_structures_or_pieces - BuildingPiece.PIECE_IDS.size(),
@@ -540,8 +548,12 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_building
 		# pitched roof rather than one flat tile repeated across a rectangle.
 		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
 		# The trail tier's own single flat tile (see TRAIL_TILE_ID),
-		# appended last so it shifts no other family's index.
+		# appended after every family above so it shifts none of their indices.
 		+ 1
+		# The facade family (see ProceduralBuildingPieceSprite.generate_
+		# facade_variant_image): material x category x storey, appended after
+		# the trail tile for the same reason.
+		+ TerrainRenderer.FACADE_VARIANT_MATERIALS.size() * TerrainRenderer.FACADE_VARIANT_CATEGORIES.size() * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
 	)
 	assert_eq(source.get_tiles_count() - tile_count_without_pieces, BuildingPiece.PIECE_IDS.size())
 
