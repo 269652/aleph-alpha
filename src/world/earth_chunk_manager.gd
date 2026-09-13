@@ -1746,6 +1746,18 @@ func _house_site_seed(chunk_coord: Vector2i, origin_tile: Vector2i, recipe_id: S
 	return absi(hash(ConstructionProject.id_for_site(chunk_coord, local_origin, recipe_id)))
 
 
+## A real, deterministic seed for `recipe_id`'s house's RESIDENT at this
+## exact site (docs/concept/workforce.md's "Move-in" section) -- the same
+## "deterministic from a real key, not a random roll" philosophy
+## _house_site_seed itself already applies one function up, but a
+## DIFFERENT, distinctly-salted string (not just the bare site key) so a
+## resident's own genome/traits are never numerically identical to their
+## own house's geometry seed.
+func _house_resident_seed(chunk_coord: Vector2i, origin_tile: Vector2i, recipe_id: String) -> int:
+	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
+	return absi(hash(ConstructionProject.id_for_site(chunk_coord, local_origin, recipe_id) + "_resident"))
+
+
 ## The real work, assuming can_build_house_from_blueprint already held --
 ## the same "just do it" contract stamp_structure_at_global itself already
 ## carries one layer down. Stamps the real shape into the world (ground +
@@ -1774,7 +1786,56 @@ func stamp_house_and_grant_ownership(recipe_id: String, origin_tile: Vector2i, h
 	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
 	var project := _construction_project_store.start_project(chunk_coord, local_origin, recipe_id, household_id)
 	_construction_project_store.complete_project(project.id, _household_store)
+	settle_resident_if_new(recipe_id, origin_tile)
 	return project.id
+
+
+## Move-in (docs/concept/workforce.md's "Move-in" section): the moment a
+## player-owned house reaches COMPLETE, directly form one new resident
+## household there -- a narrow, directly-triggered shortcut, explicitly NOT
+## quests.md's full migration system (habitability pull, replan-interrupt,
+## active player-invite all stay exactly as unbuilt as they already were).
+##
+## Idempotent on the house's own ConstructionProject, not a session-lifetime
+## flag: a house that already has a real resident_household_id is left
+## alone, so calling this twice (or reloading a chunk that already settled
+## its houses) never conjures a second resident. "" for a site with no real
+## ConstructionProject yet (nothing to attach a resident to).
+##
+## The resident is deliberately its OWN household, distinct from
+## household_id (the OWNER, see ConstructionProject's own resident_
+## household_id doc comment) -- seeded from the site itself (_house_
+## resident_seed), so the same house always settles the same resident.
+## Joins a REAL settlement's own household census (SETTLING_EVENT_TYPES)
+## ONLY when one already has real founding history at this chunk --
+## record_player_settled_if_new's own established reasoning applies
+## unchanged: "a settlement with no history is not a settlement." Built far
+## from any real settlement, the house still gets a real resident (pillar 4:
+## "a house is population, not scenery"); it simply never joins a household
+## census that does not exist.
+func settle_resident_if_new(recipe_id: String, origin_tile: Vector2i) -> String:
+	var chunk_coord := _chunk_coord_for_tile(origin_tile)
+	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
+	var project: ConstructionProject = _construction_project_store.find_project(chunk_coord, local_origin, recipe_id)
+	if project == null:
+		return ""
+	if project.resident_household_id != "":
+		return project.resident_household_id
+
+	var resident_id := EntityRef.for_npc(_house_resident_seed(chunk_coord, origin_tile, recipe_id))
+	var resident_household := _household_store.form_household(resident_id)
+	project.resident_household_id = resident_household.id
+
+	var settled := Event.new("player_house_settled", _world_age_seconds)
+	settled.actors = [resident_id]
+	settled.tags = [project.id]
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	if not _event_store.events_for_entity(settlement_id).is_empty():
+		settled.witnesses = [settlement_id]
+	_event_store.append(settled)
+	_memory_store.witness_event(settled, _world_age_seconds)
+
+	return resident_household.id
 
 
 ## Contracts and their lifecycle (see docs/emergence/03-contracts-property-
@@ -3635,15 +3696,18 @@ func _known_settlement_ids() -> Array[String]:
 ## it. household_for returns null for an npc with no household yet, which
 ## this simply skips.
 ##
-## Both settling types count. `player_settled` is the player's own (see
-## record_player_settled_if_new); it is a separate type because the player is
-## not an NPC, but it means exactly the same thing HERE, which is why the two
-## are read together rather than every caller learning the difference.
+## All three settling types count. `player_settled` is the player's own (see
+## record_player_settled_if_new); `player_house_settled` is a resident who
+## moved into a player-built house (see settle_resident_if_new) -- both are
+## separate types because neither the player nor a player-house resident's
+## own move-in is an ordinary procedural npc_settled, but all three mean
+## exactly the same thing HERE, which is why they are read together rather
+## than every caller learning the difference.
 ##
 ## Deduped by household id: one household is one member however many times it
 ## was witnessed settling, and without this a household that settled twice
 ## would inflate the settlement's own tier and institution thresholds.
-const SETTLING_EVENT_TYPES := ["npc_settled", "player_settled"]
+const SETTLING_EVENT_TYPES := ["npc_settled", "player_settled", "player_house_settled"]
 
 
 func _households_in_settlement(settlement_id: String) -> Array[String]:

@@ -21,6 +21,14 @@ func test_a_fresh_project_has_no_labor_hours_or_reserved_material_yet():
 	assert_eq(project.reserved_material, {})
 
 
+## resident_household_id (docs/concept/workforce.md's "Move-in" section) is
+## deliberately separate from household_id (who OWNS it) -- "" until a real
+## move-in happens, for either a house or a non-house project alike.
+func test_a_fresh_project_has_no_resident_yet():
+	var project := ConstructionProject.for_site(Vector2i(0, 0), Vector2i(0, 0), "small_house", "household:1")
+	assert_eq(project.resident_household_id, "")
+
+
 func test_a_project_records_its_own_site_blueprint_and_household():
 	var project := ConstructionProject.for_site(Vector2i(3, -2), Vector2i(1, 1), "storage", "household:1")
 	assert_eq(project.chunk_coord, Vector2i(3, -2))

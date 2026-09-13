@@ -206,6 +206,7 @@ func to_dicts() -> Array:
 			"status": project.status,
 			"labor_hours_accumulated": project.labor_hours_accumulated,
 			"reserved_material": project.reserved_material,
+			"resident_household_id": project.resident_household_id,
 		})
 	return out
 
@@ -223,6 +224,7 @@ static func from_dicts(dicts: Array) -> RefCounted:
 		project.household_id = d.get("household_id", "")
 		project.status = int(d.get("status", ConstructionProject.Status.PLANNED))
 		project.labor_hours_accumulated = float(d.get("labor_hours_accumulated", 0.0))
+		project.resident_household_id = str(d.get("resident_household_id", ""))
 		var restored_material: Dictionary = d.get("reserved_material", {})
 		for item_id in restored_material:
 			project.reserved_material[str(item_id)] = float(restored_material[item_id])

@@ -41,6 +41,15 @@ var blueprint_id: String
 ## The household this structure will belong to on completion (see
 ## property_id / HouseholdStore.grant_property).
 var household_id: String
+## The household that LIVES here -- deliberately separate from household_id
+## (who OWNS it) rather than reusing HouseholdStore's ownership-only model:
+## a player-built house's owner (the player) and its resident (whoever
+## moved in, see docs/concept/workforce.md's "Move-in" section) are
+## genuinely different households, unlike a procedurally-generated
+## villager's own house, where the same household both owns and lives in
+## it. "" until a real move-in happens; a non-house ConstructionProject
+## (a Sägewerk, storage) simply never sets this.
+var resident_household_id: String = ""
 var status: int = Status.PLANNED
 var labor_hours_accumulated: float = 0.0
 ## item_id -> float already drawn down from local stock and committed to

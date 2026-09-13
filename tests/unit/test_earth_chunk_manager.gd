@@ -14008,3 +14008,134 @@ func test_stamp_house_and_grant_ownership_stamps_real_pieces_and_grants_property
 	# walls, a real floor, not just ledger bookkeeping with nothing in the
 	# world to show for it.
 	assert_eq(manager.modification_at_global(2, 2), "wood_floor")
+
+
+# -- move-in: docs/concept/workforce.md's "Move-in" section -- a narrow, -----
+# -- directly-triggered shortcut, NOT quests.md's full migration system. ----
+# -- settle_resident_if_new forms a real, deterministic-from-site resident --
+# -- household distinct from the OWNING household stamp_house_and_grant_ ----
+# -- ownership already grants property to (see ConstructionProject.own -----
+# -- resident_household_id doc comment for why the two are kept separate). --
+
+func test_settle_resident_if_new_forms_a_real_household():
+	manager.update(Vector2i(0, 0))
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+
+	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+
+	assert_ne(resident_id, "")
+	assert_not_null(manager.household_store().get_household(resident_id))
+
+
+## Idempotent -- a house that already has a resident does not get a second
+## one just because move-in was asked about twice (the same reasoning
+## form_household/record_blueprint_learned_if_new already apply).
+func test_settle_resident_if_new_is_idempotent():
+	manager.update(Vector2i(0, 0))
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+
+	var first := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+	var second := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+
+	assert_eq(first, second)
+	assert_eq(manager.event_store().events_of_type("player_house_settled").size(), 1)
+
+
+## The resident is deliberately NOT the owner -- a player-built house's
+## owner (the player) and its resident are genuinely different households,
+## unlike a procedurally-generated villager's own house.
+func test_settle_resident_if_new_is_a_different_household_from_the_owner():
+	manager.update(Vector2i(0, 0))
+	var owner := manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), owner.id)
+
+	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+
+	assert_ne(resident_id, owner.id)
+
+
+## Two different sites resolve to two different residents -- deterministic
+## from the site, not a shared constant.
+func test_settle_resident_if_new_gives_different_sites_different_residents():
+	manager.update(Vector2i(0, 0))
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(6, 1), "household:owner")
+
+	var first := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+	var second := manager.settle_resident_if_new("small_house", Vector2i(6, 1))
+
+	assert_ne(first, second)
+
+
+func test_settle_resident_if_new_records_a_real_event_naming_its_own_project():
+	manager.update(Vector2i(0, 0))
+	var project_id := manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+
+	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+
+	var settled_events := manager.event_store().events_of_type("player_house_settled")
+	assert_eq(settled_events.size(), 1)
+	assert_eq(settled_events[0].actors, [manager.household_store().get_household(resident_id).members[0]])
+	assert_eq(settled_events[0].tags, [project_id])
+
+
+## The house's own ConstructionProject records who lives there, distinct
+## from who owns it (household_id).
+func test_settle_resident_if_new_sets_the_projects_own_resident_field():
+	manager.update(Vector2i(0, 0))
+	var project_id := manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+
+	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+
+	var project := manager.construction_project_store().get_project(project_id)
+	assert_eq(project.resident_household_id, resident_id)
+	assert_eq(project.household_id, "household:owner")
+
+
+func test_settle_resident_if_new_for_a_site_with_no_real_project_does_nothing():
+	assert_eq(manager.settle_resident_if_new("small_house", Vector2i(1, 1)), "")
+
+
+## A house built inside a REAL, already-founded settlement's chunk makes its
+## resident a real member of that settlement -- mirrors record_player_
+## settled_if_new's own household_count_for_settlement wiring exactly, so
+## every system that already asks "who lives here" (spare capacity,
+## institution thresholds, settlement tier) picks a player-house resident up
+## for free.
+func test_settle_resident_if_new_joins_a_real_settlements_household_count():
+	var chunk_coord := Vector2i(20, 20)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	manager.update(chunk_coord)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var before := manager.household_count_for_settlement(settlement_id)
+
+	manager.stamp_house_and_grant_ownership("small_house", chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(1, 1), "household:owner")
+	manager.settle_resident_if_new("small_house", chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(1, 1))
+
+	assert_eq(manager.household_count_for_settlement(settlement_id), before + 1)
+
+
+## Building far from any real, already-founded settlement still gives the
+## house a real resident (pillar 4: "a house is population, not scenery"
+## holds regardless) -- it just never joins a settlement that, per record_
+## player_settled_if_new's own established reasoning, does not really exist
+## ("a settlement with no history is not a settlement").
+func test_settle_resident_if_new_still_settles_far_from_any_real_settlement():
+	manager.update(Vector2i(0, 0))
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+
+	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+
+	assert_ne(resident_id, "")
+	var settlement_id := EntityRef.for_settlement(Vector2i(0, 0))
+	assert_eq(manager.household_count_for_settlement(settlement_id), 0)
+
+
+## stamp_house_and_grant_ownership itself triggers move-in automatically --
+## "the MOMENT a player-owned house ConstructionProject reaches COMPLETE,"
+## not a second manual step the player/caller could forget.
+func test_stamp_house_and_grant_ownership_settles_a_resident_automatically():
+	manager.update(Vector2i(0, 0))
+	var project_id := manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+	var project := manager.construction_project_store().get_project(project_id)
+	assert_ne(project.resident_household_id, "", "a completed house should already have a real resident")
