@@ -208,3 +208,11 @@ func test_shuffle_is_deterministic_across_rebuilds():
 ## shrink the curated set back down while still passing the >1000 total.
 func test_curated_pool_is_a_substantial_hand_written_floor():
 	assert_gt(LoadingTips._CURATED_TIPS.size(), 99)
+
+
+## Requested directly: add "Solving Navier-Stokes" to the loading tips.
+func test_the_navier_stokes_tip_is_in_the_curated_pool():
+	assert_true(
+		LoadingTips._CURATED_TIPS.has("Solving Navier-Stokes."),
+		"the requested tip must be present, verbatim plus the file's own trailing-period convention"
+	)
