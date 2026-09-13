@@ -266,6 +266,51 @@ const _RECIPES := {
 		"output": {"item_id": "plank", "count": 1},
 		"requires_structure": "sagewerk",
 	},
+	# Milling and baking (docs/concept/milling_and_baking.md): the two
+	# buildings that turn wheat into food, and the chain itself as resolver
+	# data. mill/bakery are skill-UNGATED on purpose -- a settlement cannot
+	# autonomously raise anything skill-gated today (SettlementBuildDecision
+	# passes an empty allocated_nodes; see timber_construction.md) and the
+	# whole point of this chain is that a settlement raises it on its own --
+	# and costed by what each is made of: a post mill is mostly timber on a
+	# stone base carrying the millstones; a bakehouse is a masonry oven under
+	# a timber roof (test_crafting_recipe_book.gd pins the relationships).
+	"mill": {
+		"inputs": [{"item_id": "wood", "count": 10}, {"item_id": "stone", "count": 4}],
+		"output": {"item_id": "mill", "count": 1},
+	},
+	"bakery": {
+		"inputs": [{"item_id": "stone", "count": 8}, {"item_id": "wood", "count": 6}],
+		"output": {"item_id": "bakery", "count": 1},
+	},
+	# The chain as resolver data -- the SAME role log_to_balken/log_to_planke
+	# play above for the Sägewerk: NeedResolver walks bread -> bakery ->
+	# flour -> mill -> wheat -> farm through these with zero chain-specific
+	# code. Input counts are pinned to MillProduction.WHEAT_PER_FLOUR /
+	# BakeryProduction.FLOUR_PER_BREAD so the two data sources never drift.
+	#
+	# grow_wheat is "automated": FarmPlot consumes no input, so without that
+	# flag anyone standing near a Farm could hand-craft free wheat forever
+	# (the exploit npc_farm_production.md refused to paper over). It exists
+	# purely so the resolver can reach the Farm. mill_flour/bake_bread are
+	# NOT automated -- real wheat carried to a real Mill, real flour to a real
+	# Bakery, is a fair hand craft and a real player use for both buildings.
+	"grow_wheat": {
+		"inputs": [],
+		"output": {"item_id": "wheat", "count": 1},
+		"requires_structure": "farm",
+		"automated": true,
+	},
+	"mill_flour": {
+		"inputs": [{"item_id": "wheat", "count": 1}],
+		"output": {"item_id": "flour", "count": 1},
+		"requires_structure": "mill",
+	},
+	"bake_bread": {
+		"inputs": [{"item_id": "flour", "count": 1}],
+		"output": {"item_id": "bread", "count": 1},
+		"requires_structure": "bakery",
+	},
 	# Wayfinding & citizenship instruments (see docs/concept/wayfinding.md,
 	# docs/concept/player_citizenship.md). Every input below is an existing
 	# raw-material item id already in item_catalog.gd's _ITEMS -- no new
@@ -460,6 +505,19 @@ func recipe_requires_structure(recipe_id: String) -> String:
 	return recipe.get("requires_structure", "")
 
 
+## A recipe's OPTIONAL "automated" flag (docs/concept/milling_and_baking.md,
+## docs/concept/production_chains.md): true for a recipe a structure's own
+## production performs -- it exists as resolver data so NeedResolver can
+## reach that structure -- and a player can never craft by hand (can_craft/
+## craft refuse it outright, before any input check). False for a recipe
+## with no flag (the common case) or an unknown recipe_id.
+func recipe_is_automated(recipe_id: String) -> bool:
+	if not _RECIPES.has(recipe_id):
+		return false
+	var recipe: Dictionary = _RECIPES[recipe_id]
+	return bool(recipe.get("automated", false))
+
+
 ## Reverse lookup: the recipe_id whose output produces `item_id`, or "" if
 ## nothing in this book produces it -- NeedResolver's own bottom case ("go
 ## get it from the world" for a raw/gathered item like log/stone/hide,
@@ -476,6 +534,8 @@ func recipe_for_output(item_id: String) -> String:
 func can_craft(recipe_id: String, inventory_counts: Dictionary) -> bool:
 	if not _RECIPES.has(recipe_id):
 		return false
+	if recipe_is_automated(recipe_id):
+		return false  # a structure's own production, never a hand craft (see recipe_is_automated)
 	for input in _RECIPES[recipe_id]["inputs"]:
 		if inventory_counts.get(input["item_id"], 0) < input["count"]:
 			return false
